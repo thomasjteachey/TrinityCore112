@@ -61,6 +61,38 @@ constexpr float VisibilityDistances[AsUnderlyingType(VisibilityDistanceType::Max
     MAX_VISIBILITY_DISTANCE
 };
 
+namespace
+{
+    enum class CustomArenaRosterRelation
+    {
+        None,
+        Teammate,
+        Opponent
+    };
+
+    CustomArenaRosterRelation GetCustomArenaRosterRelation(WorldObject const* left, WorldObject const* right)
+    {
+        Player const* leftPlayer = left ? left->GetAffectingPlayer() : nullptr;
+        Player const* rightPlayer = right ? right->GetAffectingPlayer() : nullptr;
+        if (!leftPlayer || !rightPlayer)
+            return CustomArenaRosterRelation::None;
+
+        Battleground const* battleground = leftPlayer->GetBattleground();
+        if (!battleground || !battleground->IsCustomGame() || !battleground->isArena() ||
+            battleground != rightPlayer->GetBattleground())
+            return CustomArenaRosterRelation::None;
+
+        uint32 const leftTeam = battleground->GetPlayerTeam(leftPlayer->GetGUID());
+        uint32 const rightTeam = battleground->GetPlayerTeam(rightPlayer->GetGUID());
+        bool const leftIsParticipant = leftTeam == ALLIANCE || leftTeam == HORDE;
+        bool const rightIsParticipant = rightTeam == ALLIANCE || rightTeam == HORDE;
+        if (!leftIsParticipant || !rightIsParticipant)
+            return CustomArenaRosterRelation::None;
+
+        return leftTeam == rightTeam ? CustomArenaRosterRelation::Teammate : CustomArenaRosterRelation::Opponent;
+    }
+}
+
 Object::Object()
 {
     m_objectTypeId      = TYPEID_OBJECT;
@@ -2804,6 +2836,35 @@ ReputationRank WorldObject::GetReactionTo(WorldObject const* target) const
                 if (selfPlayerOwner->duel && selfPlayerOwner->duel->Opponent == targetPlayerOwner && selfPlayerOwner->duel->State == DUEL_STATE_IN_PROGRESS)
                     return REP_HOSTILE;
 
+                // Battleground team assignment is authoritative while both
+                // affecting players are active participants in the same match.
+                // Temporary race factions, raid membership, zone PvP state and
+                // charm cleanup must not make teammates hostile or opponents
+                // friendly inside a battleground/arena.
+                if (Battleground* battleground = selfPlayerOwner->GetBattleground();
+                    battleground && battleground == targetPlayerOwner->GetBattleground())
+                {
+                    uint32 selfBattlegroundTeam = battleground->GetPlayerTeam(selfPlayerOwner->GetGUID());
+                    uint32 targetBattlegroundTeam = battleground->GetPlayerTeam(targetPlayerOwner->GetGUID());
+
+                    // Custom spectators are deliberately absent from m_Players,
+                    // but their assigned BG team is still their viewing side.
+                    // Include it here before raid and FFA checks can make both
+                    // participant teams appear friendly or hostile.
+                    if (battleground->IsCustomGame())
+                    {
+                        if (selfPlayerOwner->IsSpectator())
+                            selfBattlegroundTeam = selfPlayerOwner->GetBGTeam();
+                        if (targetPlayerOwner->IsSpectator())
+                            targetBattlegroundTeam = targetPlayerOwner->GetBGTeam();
+                    }
+
+                    bool const selfHasBattlegroundSide = selfBattlegroundTeam == ALLIANCE || selfBattlegroundTeam == HORDE;
+                    bool const targetHasBattlegroundSide = targetBattlegroundTeam == ALLIANCE || targetBattlegroundTeam == HORDE;
+                    if (selfHasBattlegroundSide && targetHasBattlegroundSide)
+                        return selfBattlegroundTeam == targetBattlegroundTeam ? REP_FRIENDLY : REP_HOSTILE;
+                }
+
                 // same group - checks dependant only on our faction - skip FFA_PVP for example
                 if (selfPlayerOwner->IsInRaidWith(targetPlayerOwner))
                     return REP_FRIENDLY; // return true to allow config option AllowTwoSide.Interaction.Group to work
@@ -3134,8 +3195,16 @@ bool WorldObject::IsValidAssistTarget(WorldObject const* target, SpellInfo const
             return false;
     }
 
-    // can't assist invisible
-    if ((!bySpell || !bySpell->HasAttribute(SPELL_ATTR6_CAN_TARGET_INVISIBLE)) && !CanSeeOrDetect(target, bySpell && bySpell->IsAffectingArea()))
+    CustomArenaRosterRelation const customArenaRelation = GetCustomArenaRosterRelation(this, target);
+    bool const isCustomArenaPositiveTeammate = customArenaRelation == CustomArenaRosterRelation::Teammate &&
+        (!bySpell || bySpell->IsPositive());
+
+    // Custom-arena teammates are visible through their authoritative lobby
+    // roster even if transient battleground raid linkage is momentarily stale.
+    // This is the same condition that otherwise makes their names turn blue.
+    if (!isCustomArenaPositiveTeammate &&
+        (!bySpell || !bySpell->HasAttribute(SPELL_ATTR6_CAN_TARGET_INVISIBLE)) &&
+        !CanSeeOrDetect(target, bySpell && bySpell->IsAffectingArea()))
         return false;
 
     // can't assist dead
@@ -3144,6 +3213,15 @@ bool WorldObject::IsValidAssistTarget(WorldObject const* target, SpellInfo const
 
     // can't assist untargetable
     if ((!bySpell || !bySpell->HasAttribute(SPELL_ATTR6_CAN_TARGET_UNTARGETABLE)) && unitTarget && unitTarget->HasUnitFlag(UNIT_FLAG_UNINTERACTIBLE))
+        return false;
+
+    // The custom-game roster is the final authority for positive assistance.
+    // Private arenas bypass the public queue/team machinery, so relying on a
+    // temporary faction, PvP flag, immunity flag or Group pointer here can
+    // reject a real teammate after the playerbot selector already chose it.
+    if (isCustomArenaPositiveTeammate)
+        return true;
+    if (customArenaRelation == CustomArenaRosterRelation::Opponent)
         return false;
 
     // check flags for negative spells

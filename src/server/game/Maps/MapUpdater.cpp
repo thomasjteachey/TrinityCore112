@@ -17,6 +17,7 @@
 
 #include "MapUpdater.h"
 #include "DatabaseEnv.h"
+#include "Errors.h"
 #include "Map.h"
 #include "Metric.h"
 
@@ -102,6 +103,8 @@ void MapUpdater::update_finished()
 
 void MapUpdater::WorkerThread()
 {
+    Trinity::InitCurrentThreadCrashSignalStack();
+
     LoginDatabase.WarnAboutSyncQueries(true);
     CharacterDatabase.WarnAboutSyncQueries(true);
     WorldDatabase.WarnAboutSyncQueries(true);

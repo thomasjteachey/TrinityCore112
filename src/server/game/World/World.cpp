@@ -27,6 +27,7 @@
 #include "ArenaTeamMgr.h"
 #include "AuctionHouseMgr.h"
 #include "BattlefieldMgr.h"
+#include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "CalendarMgr.h"
 #include "ChannelMgr.h"
@@ -65,6 +66,7 @@
 #include "MMapFactory.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
+#include "Opcodes.h"
 #include "Mail.h"
 #include "MapManager.h"
 #include "OutdoorPvPMgr.h"
@@ -97,6 +99,7 @@
 #include <array>
 #include <memory>
 #include <sstream>
+#include <vector>
 #include <boost/asio/ip/address.hpp>
 
 TC_GAME_API std::atomic<bool> World::m_stopEvent(false);
@@ -2687,9 +2690,7 @@ void World::SendGlobalMessage(WorldPacket const* packet, WorldSession* self, uin
             itr->second->GetPlayer()->IsInWorld() &&
             itr->second != self &&
             (team == 0 || itr->second->GetPlayer()->GetTeam() == team))
-        {
             itr->second->SendPacket(packet);
-        }
     }
 }
 
@@ -2836,6 +2837,14 @@ bool World::SendZoneMessage(uint32 zone, WorldPacket const* packet, WorldSession
             itr->second != self &&
             (team == 0 || itr->second->GetPlayer()->GetTeam() == team))
         {
+            // A custom battleground weather override is sent per instance and
+            // per player by Map. Do not let a normal zone-wide weather update
+            // overwrite it (zones can be shared by multiple map instances).
+            if (packet->GetOpcode() == SMSG_WEATHER)
+                if (Battleground const* bg = itr->second->GetPlayer()->GetBattleground())
+                    if (bg->HasCustomWeatherOverride())
+                        continue;
+
             itr->second->SendPacket(packet);
             foundPlayerToSend = true;
         }
@@ -3372,6 +3381,7 @@ namespace
 {
     constexpr uint32 WarchiefNpcEntry = 31412;
     constexpr uint32 WarchiefRunnerUpEntry = 110017;
+    constexpr uint32 WarchiefThirdPlaceEntry = 32666;
     constexpr uint32 WarchiefSpellId = 58553;
     constexpr uint32 WarchiefTitleId = 208;
     constexpr uint32 FormerWarchiefTitleId = 209;
@@ -3401,24 +3411,26 @@ namespace
         }
     }
 
-    bool UpdateHonorNpc(uint32 entry, ObjectGuid const& winnerGuid, std::string const& winnerName, std::string* previousName)
+    bool UpdateHonorNpc(uint32 entry, ObjectGuid const& winnerGuid, std::string const& winnerName, std::string* previousName, bool updateAllSpawns = false)
     {
-        ObjectGuid::LowType spawnId = 0;
-        uint32 mapId = MAPID_INVALID;
+        std::vector<std::pair<ObjectGuid::LowType, uint32>> spawns;
 
         for (auto const& [spawnGuid, creatureData] : sObjectMgr->GetAllCreatureData())
         {
             if (creatureData.id != entry)
                 continue;
 
-            spawnId = spawnGuid;
-            mapId = creatureData.mapId;
-
-            if (mapId == 0)
-                break;
+            if (updateAllSpawns)
+                spawns.emplace_back(spawnGuid, creatureData.mapId);
+            else
+            {
+                spawns.assign(1, { spawnGuid, creatureData.mapId });
+                if (creatureData.mapId == 0)
+                    break;
+            }
         }
 
-        if (!spawnId)
+        if (spawns.empty())
         {
             TC_LOG_ERROR("misc", "Weekly honor warchief: NPC entry {} not found in creature data.", entry);
             return false;
@@ -3428,60 +3440,65 @@ namespace
             if (previousName && previousName->empty())
                 *previousName = creatureTemplate->Name;
 
-        Map* map = sMapMgr->CreateBaseMap(mapId);
-        Creature* creature = map ? map->GetCreatureBySpawnId(spawnId) : nullptr;
-        std::unique_ptr<Creature> tempCreature;
-
-        if (!creature)
-        {
-            tempCreature = std::make_unique<Creature>();
-            if (!tempCreature->LoadFromDB(spawnId, map, false, true))
-            {
-                TC_LOG_ERROR("misc", "Weekly honor warchief: Failed to load NPC spawn {} from DB.", spawnId);
-                return false;
-        }
-
-        creature = tempCreature.get();
-        }
-
-        float const originalScale = creature->GetObjectScale();
-        UnitStandStateType const originalStandState = creature->GetStandState();
-
         bool useOnlineAppearance = true;
         if (Player* player = ObjectAccessor::FindConnectedPlayer(winnerGuid))
             if (player->GetShapeshiftForm() == FORM_MOONKIN)
                 useOnlineAppearance = false;
 
-        if (!creature->CopyAppearanceFromPlayerGuid(winnerGuid, true, true, true, useOnlineAppearance))
+        bool updatedAny = false;
+        for (auto const& [spawnId, mapId] : spawns)
         {
-            TC_LOG_ERROR("misc", "Weekly honor warchief: Failed to copy appearance from {}.", winnerGuid.ToString());
-            return false;
-        }
+            Map* map = sMapMgr->CreateBaseMap(mapId);
+            Creature* creature = map ? map->GetCreatureBySpawnId(spawnId) : nullptr;
+            std::unique_ptr<Creature> tempCreature;
 
-        creature->SetObjectScale(originalScale);
-        creature->SetStandState(originalStandState);
-
-        if (CreatureTemplate const* creatureTemplate = creature->GetCreatureTemplate())
-        {
-            CreatureTemplate* mutableTemplate = const_cast<CreatureTemplate*>(creatureTemplate);
-
-            if (mutableTemplate->Name != winnerName)
+            if (!creature)
             {
-                mutableTemplate->Name = winnerName;
-                mutableTemplate->InitializeQueryData();
-
-                if (WorldDatabasePreparedStatement* stmt = WorldDatabase.GetPreparedStatement(WORLD_UPD_CREATURE_TEMPLATE_NAME))
+                tempCreature = std::make_unique<Creature>();
+                if (!tempCreature->LoadFromDB(spawnId, map, false, true))
                 {
-                    stmt->setString(0, winnerName);
-                    stmt->setUInt32(1, mutableTemplate->Entry);
-                    WorldDatabase.Execute(stmt);
+                    TC_LOG_ERROR("misc", "Weekly honor warchief: Failed to load NPC spawn {} from DB.", spawnId);
+                    continue;
                 }
+
+                creature = tempCreature.get();
             }
 
-            BroadcastCreatureTemplateUpdate(mutableTemplate, map);
+            float const originalScale = creature->GetObjectScale();
+            UnitStandStateType const originalStandState = creature->GetStandState();
+
+            if (!creature->CopyAppearanceFromPlayerGuid(winnerGuid, true, true, true, useOnlineAppearance))
+            {
+                TC_LOG_ERROR("misc", "Weekly honor warchief: Failed to copy appearance from {} to NPC spawn {}.", winnerGuid.ToString(), spawnId);
+                continue;
+            }
+
+            creature->SetObjectScale(originalScale);
+            creature->SetStandState(originalStandState);
+            updatedAny = true;
+
+            if (CreatureTemplate const* creatureTemplate = creature->GetCreatureTemplate())
+            {
+                CreatureTemplate* mutableTemplate = const_cast<CreatureTemplate*>(creatureTemplate);
+
+                if (mutableTemplate->Name != winnerName)
+                {
+                    mutableTemplate->Name = winnerName;
+                    mutableTemplate->InitializeQueryData();
+
+                    if (WorldDatabasePreparedStatement* stmt = WorldDatabase.GetPreparedStatement(WORLD_UPD_CREATURE_TEMPLATE_NAME))
+                    {
+                        stmt->setString(0, winnerName);
+                        stmt->setUInt32(1, mutableTemplate->Entry);
+                        WorldDatabase.Execute(stmt);
+                    }
+                }
+
+                BroadcastCreatureTemplateUpdate(mutableTemplate, map);
+            }
         }
 
-        return true;
+        return updatedAny;
     }
 
 
@@ -3663,7 +3680,7 @@ namespace
 
 bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName, uint32* honorGain)
 {
-    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_WEEKLY_HONOR_TOP_TWO);
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_WEEKLY_HONOR_TOP_THREE);
     PreparedQueryResult result = CharacterDatabase.Query(stmt);
 
     if (!result)
@@ -3684,12 +3701,21 @@ bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName,
     uint32 weeklyHonor = fields[1].GetUInt32();
     ObjectGuid::LowType runnerUpLowGuid = 0;
     uint32 runnerUpHonor = 0;
+    ObjectGuid::LowType thirdPlaceLowGuid = 0;
+    uint32 thirdPlaceHonor = 0;
 
     if (result->NextRow())
     {
         fields = result->Fetch();
         runnerUpLowGuid = fields[0].GetUInt32();
         runnerUpHonor = fields[1].GetUInt32();
+    }
+
+    if (result->NextRow())
+    {
+        fields = result->Fetch();
+        thirdPlaceLowGuid = fields[0].GetUInt32();
+        thirdPlaceHonor = fields[1].GetUInt32();
     }
 
     if (!winnerLowGuid || weeklyHonor == 0)
@@ -3775,6 +3801,16 @@ bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName,
         MailDraft("second place", "if you're not first you're last.")
             .SendMailTo(runnerUpTrans, MailReceiver(runnerUpLowGuid), sender, MAIL_CHECK_MASK_HAS_BODY, 0);
         CharacterDatabase.CommitTransaction(runnerUpTrans);
+    }
+
+    if (thirdPlaceLowGuid && thirdPlaceLowGuid != winnerLowGuid && thirdPlaceLowGuid != runnerUpLowGuid && thirdPlaceHonor > 0)
+    {
+        ObjectGuid thirdPlaceGuid = ObjectGuid::Create<HighGuid::Player>(thirdPlaceLowGuid);
+        std::string thirdPlaceName;
+        if (!sCharacterCache->GetCharacterNameByGuid(thirdPlaceGuid, thirdPlaceName))
+            thirdPlaceName = "<unknown>";
+
+        UpdateHonorNpc(WarchiefThirdPlaceEntry, thirdPlaceGuid, thirdPlaceName, nullptr, true);
     }
 
     if (resetHonor)

@@ -43,6 +43,11 @@ bool IsPlayerInsideStockades(Player const* player)
 {
     return player && player->GetMapId() == 34;
 }
+
+bool IsPlayerInsideCustomGameLobby(Player const* player)
+{
+    return player && player->IsInCustomGameLobby();
+}
 }
 
 /* differeces from off:
@@ -106,6 +111,13 @@ void WorldSession::HandleGroupInviteOpcode(WorldPacket& recvData)
         return;
     }
 
+
+    if (IsPlayerInsideCustomGameLobby(invitedPlayer))
+    {
+        SendPartyResult(PARTY_OP_INVITE, membername, ERR_INVITE_RESTRICTED);
+        return;
+    }
+
     if (IsPlayerInsideStockades(invitedPlayer))
     {
         SendPartyResult(PARTY_OP_INVITE, membername, ERR_INVITE_RESTRICTED);
@@ -123,6 +135,26 @@ void WorldSession::HandleGroupInviteOpcode(WorldPacket& recvData)
     if (!sWorld->getBoolConfig(CONFIG_ALLOW_GM_GROUP) && !invitingPlayer->IsGameMaster() && invitedPlayer->IsGameMaster())
     {
         SendPartyResult(PARTY_OP_INVITE, membername, ERR_BAD_PLAYER_NAME_S);
+        return;
+    }
+
+    if (IsPlayerInsideCustomGameLobby(invitingPlayer))
+    {
+        if (invitedPlayer->GetSocial()->HasIgnore(invitingPlayer->GetGUID()) ||
+            !sScriptMgr->OnPlayerCustomGameInvite(invitingPlayer, invitedPlayer))
+        {
+            SendPartyResult(PARTY_OP_INVITE, membername, ERR_INVITE_RESTRICTED);
+            return;
+        }
+
+        // The summon request has its own response opcode carrying the
+        // summoner GUID, so it can coexist safely with ordinary party invites.
+        WorldPacket data(SMSG_SUMMON_REQUEST, 8 + 4 + 4);
+        data << uint64(invitingPlayer->GetGUID());
+        data << uint32(invitingPlayer->GetZoneId());
+        data << uint32(MAX_PLAYER_SUMMON_DELAY * IN_MILLISECONDS);
+        invitedPlayer->SendDirectMessage(&data);
+        SendPartyResult(PARTY_OP_INVITE, membername, ERR_PARTY_RESULT_OK);
         return;
     }
 
@@ -252,6 +284,12 @@ void WorldSession::HandleGroupAcceptOpcode(WorldPacket& recvData)
     if (!group)
         return;
 
+    if (IsPlayerInsideCustomGameLobby(GetPlayer()))
+    {
+        SendPartyResult(PARTY_OP_INVITE, "", ERR_INVITE_RESTRICTED);
+        return;
+    }
+
     if (IsPlayerInsideStockades(GetPlayer()))
     {
         SendPartyResult(PARTY_OP_INVITE, "", ERR_INVITE_RESTRICTED);
@@ -338,6 +376,12 @@ void WorldSession::HandleGroupUninviteGuidOpcode(WorldPacket& recvData)
     recvData >> guid;
     recvData >> reason;
 
+    if (IsPlayerInsideCustomGameLobby(GetPlayer()))
+    {
+        SendPartyResult(PARTY_OP_UNINVITE, "", ERR_INVITE_RESTRICTED);
+        return;
+    }
+
     //can't uninvite yourself
     if (guid == GetPlayer()->GetGUID())
     {
@@ -378,6 +422,12 @@ void WorldSession::HandleGroupUninviteOpcode(WorldPacket& recvData)
 
     std::string membername;
     recvData >> membername;
+
+    if (IsPlayerInsideCustomGameLobby(GetPlayer()))
+    {
+        SendPartyResult(PARTY_OP_UNINVITE, membername, ERR_INVITE_RESTRICTED);
+        return;
+    }
 
     // player not found
     if (!normalizePlayerName(membername))
@@ -424,6 +474,9 @@ void WorldSession::HandleGroupSetLeaderOpcode(WorldPacket& recvData)
     ObjectGuid guid;
     recvData >> guid;
 
+    if (IsPlayerInsideCustomGameLobby(GetPlayer()))
+        return;
+
     Player* player = ObjectAccessor::FindConnectedPlayer(guid);
     Group* group = GetPlayer()->GetGroup();
 
@@ -446,6 +499,12 @@ void WorldSession::HandleGroupDisbandOpcode(WorldPacket & /*recvData*/)
     Group* grpInvite = GetPlayer()->GetGroupInvite();
     if (!grp && !grpInvite)
         return;
+
+    if (IsPlayerInsideCustomGameLobby(GetPlayer()))
+    {
+        SendPartyResult(PARTY_OP_LEAVE, GetPlayer()->GetName(), ERR_INVITE_RESTRICTED);
+        return;
+    }
 
     if (IsPlayerInsideStockades(GetPlayer()))
     {
@@ -624,6 +683,9 @@ void WorldSession::HandleGroupRaidConvertOpcode(WorldPacket & /*recvData*/)
     if (!group)
         return;
 
+    if (IsPlayerInsideCustomGameLobby(GetPlayer()))
+        return;
+
     if (_player->InBattleground())
         return;
 
@@ -644,6 +706,9 @@ void WorldSession::HandleGroupChangeSubGroupOpcode(WorldPacket& recvData)
     // we will get correct pointer for group here, so we don't have to check if group is BG raid
     Group* group = GetPlayer()->GetGroup();
     if (!group)
+        return;
+
+    if (IsPlayerInsideCustomGameLobby(GetPlayer()))
         return;
 
     std::string name;
@@ -682,6 +747,9 @@ void WorldSession::HandleGroupAssistantLeaderOpcode(WorldPacket& recvData)
 
     Group* group = GetPlayer()->GetGroup();
     if (!group)
+        return;
+
+    if (IsPlayerInsideCustomGameLobby(GetPlayer()))
         return;
 
     if (!group->IsLeader(GetPlayer()->GetGUID()))

@@ -17,8 +17,11 @@
 
 #include "Player.h"
 #include <algorithm>
-#include <unordered_set>
+#include <iomanip>
+#include <initializer_list>
+#include <limits>
 #include <sstream>
+#include <unordered_set>
 #include "AccountMgr.h"
 #include "AccountBankMgr.h"
 #include "AchievementMgr.h"
@@ -90,6 +93,7 @@
 #include "Realm.h"
 #include "ReputationMgr.h"
 #include "SkillDiscovery.h"
+#include "SmartEnum.h"
 #include "SocialMgr.h"
 #include "Spell.h"
 #include "SpellAuraEffects.h"
@@ -119,24 +123,235 @@ namespace
     constexpr float MinStarfireSnareSpeedRate = 0.01f;
     constexpr float MaxStarfireSnareSpeedRate = 1.0f;
     constexpr uint8 StarfireSnareRemovalGraceUpdates = 2;
-    constexpr uint32 SpellResurrectionSickness = 15007;
+    constexpr uint32 CombatDiagnosticDelay = 5 * IN_MILLISECONDS;
+    constexpr uint32 CombatDiagnosticCheckInterval = 1 * IN_MILLISECONDS;
+    constexpr uint32 FeignTrapDiagnosticWindow = 1 * IN_MILLISECONDS;
+    constexpr uint32 FeignDeathSpell = 5384;
+    constexpr float CombatDiagnosticEnemyRange = 10.0f;
+    constexpr size_t CombatDiagnosticMaxReferences = 10;
+    constexpr uint32 SpellRogueNeilyoImmunity = 81439;
+    constexpr uint32 SpellRogueVanishImmunity = 89783;
     UnitMoveType const StarfireSnareMoveTypes[] = { MOVE_RUN, MOVE_RUN_BACK, MOVE_SWIM, MOVE_SWIM_BACK };
 
-    uint32 GetResurrectionSicknessSpellId(Player const* player)
+    bool IsRogueVanishImmunitySpell(uint32 spellId)
     {
-        ChrRacesEntry const* raceEntry = sChrRacesStore.LookupEntry(player->GetRace());
-        if (raceEntry && raceEntry->ResSicknessSpellID && sSpellMgr->GetSpellInfo(raceEntry->ResSicknessSpellID))
-            return raceEntry->ResSicknessSpellID;
+        return spellId == SpellRogueNeilyoImmunity || spellId == SpellRogueVanishImmunity;
+    }
 
-        // Classic data should point every playable race at this shared spell, but
-        // keep spirit-healer resurrects working if the DBC field is empty or stale.
-        return SpellResurrectionSickness;
+    void AdvanceCombatDiagnosticTimer(uint32& timer, uint32 diff)
+    {
+        if (timer > std::numeric_limits<uint32>::max() - diff)
+            timer = std::numeric_limits<uint32>::max();
+        else
+            timer += diff;
+    }
+
+    class CombatDiagnosticNearbyEnemyCheck
+    {
+    public:
+        explicit CombatDiagnosticNearbyEnemyCheck(Player const* player) : _player(player) { }
+
+        bool operator()(Unit* unit) const
+        {
+            if (unit == _player || !unit->IsAlive() || !_player->IsWithinDistInMap(unit, CombatDiagnosticEnemyRange))
+                return false;
+
+            return _player->IsInCombatWith(unit) || _player->IsHostileTo(unit) || unit->IsHostileTo(_player);
+        }
+
+    private:
+        Player const* _player;
+    };
+
+    bool HasCombatDiagnosticNearbyEnemy(Player const* player)
+    {
+        Unit* enemy = nullptr;
+        CombatDiagnosticNearbyEnemyCheck check(player);
+        Trinity::UnitSearcher<CombatDiagnosticNearbyEnemyCheck> searcher(player, enemy, check);
+        Cell::VisitAllObjects(player, searcher, CombatDiagnosticEnemyRange);
+        return enemy != nullptr;
+    }
+
+    bool IsHumanHunterFeignDiagnosticTarget(Player const* player)
+    {
+        if (!player || player->GetClass() != CLASS_HUNTER)
+            return false;
+
+        WorldSession const* session = player->GetSession();
+        return session && !session->IsVirtualSession() && !session->IsTransientPlayerSession();
+    }
+
+    bool IsHunterTrapSpellForCombatDiagnostic(SpellInfo const* spellInfo)
+    {
+        // The SpellFamilyFlags mask this used to check (0x18 on flags[0], plus
+        // 0x00024000 on flags[2]) is not trap-exclusive -- see Spell.cpp:2237's
+        // own comment: flags[0] & 0x18 also matches Freezing Arrow, a Survival
+        // Hunter shot with no relation to traps. Casting anything sharing
+        // those bits made this function report "a trap was cast" even when it
+        // was not, silently clearing the pending feign-death/no-trap
+        // diagnostic instead of firing it. Match by exact spell ID (rank-
+        // normalized) instead, same as IsHunterTrapSpell in
+        // PlayerbotPvpClassActions.cpp.
+        if (!spellInfo)
+            return false;
+
+        if (spellInfo->Id == 57879)
+            return true;
+
+        SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
+        uint32 const firstRankSpellId = firstRank ? firstRank->Id : spellInfo->Id;
+
+        switch (firstRankSpellId)
+        {
+            case 1499:  // Freezing Trap
+            case 13795: // Immolation Trap
+            case 13809: // Frost Trap
+            case 13813: // Explosive Trap
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    char const* DescribeFeignInterruptFlag(uint32 flag)
+    {
+        switch (flag)
+        {
+            case 0:                                            return "none";
+            case AURA_INTERRUPT_FLAG_HITBYSPELL:                return "hit by negative spell";
+            case AURA_INTERRUPT_FLAG_TAKE_DAMAGE:               return "took damage";
+            case AURA_INTERRUPT_FLAG_CAST:                      return "cast a spell";
+            case AURA_INTERRUPT_FLAG_MOVE:                      return "moved";
+            case AURA_INTERRUPT_FLAG_TURNING:                   return "turned";
+            case AURA_INTERRUPT_FLAG_JUMP:                      return "jumped";
+            case AURA_INTERRUPT_FLAG_NOT_MOUNTED:               return "dismounted";
+            case AURA_INTERRUPT_FLAG_NOT_ABOVEWATER:            return "entered water";
+            case AURA_INTERRUPT_FLAG_NOT_UNDERWATER:            return "left water";
+            case AURA_INTERRUPT_FLAG_NOT_SHEATHED:              return "unsheathed weapon";
+            case AURA_INTERRUPT_FLAG_TALK:                      return "talked to an npc";
+            case AURA_INTERRUPT_FLAG_LOOTING:                   return "used/looted an object";
+            case AURA_INTERRUPT_FLAG_MELEE_ATTACK:              return "attacked";
+            case AURA_INTERRUPT_FLAG_SPELL_ATTACK:              return "attacked with a spell";
+            case AURA_INTERRUPT_FLAG_TRANSFORM:                 return "transformed";
+            case AURA_INTERRUPT_FLAG_MOUNT:                     return "mounted";
+            case AURA_INTERRUPT_FLAG_NOT_SEATED:                return "stood up";
+            case AURA_INTERRUPT_FLAG_CHANGE_MAP:                return "changed map";
+            case AURA_INTERRUPT_FLAG_IMMUNE_OR_LOST_SELECTION:  return "gained immunity/lost selection";
+            case AURA_INTERRUPT_FLAG_TELEPORTED:                return "teleported";
+            case AURA_INTERRUPT_FLAG_ENTER_PVP_COMBAT:          return "entered pvp combat";
+            case AURA_INTERRUPT_FLAG_DIRECT_DAMAGE:             return "took direct damage";
+            case AURA_INTERRUPT_FLAG_LANDING:                   return "landed";
+            case AURA_INTERRUPT_FLAG_LEAVE_COMBAT:              return "left combat";
+            default:                                            return "multiple/unknown flag";
+        }
+    }
+
+    char const* DescribeFeignRemoveMode(uint8 removeMode)
+    {
+        if (removeMode == 0)
+            return "still applied";
+
+        switch (AuraRemoveMode(removeMode))
+        {
+            case AURA_REMOVE_BY_DEFAULT:     return "default (interrupt/scripted)";
+            case AURA_REMOVE_BY_CANCEL:      return "self-cancelled";
+            case AURA_REMOVE_BY_ENEMY_SPELL: return "dispelled/purged by enemy";
+            case AURA_REMOVE_BY_EXPIRE:      return "duration expired";
+            case AURA_REMOVE_BY_DEATH:       return "died";
+            default:                         return "unknown";
+        }
+    }
+
+    char const* DescribeFeignCombatMiss(uint8 missCondition)
+    {
+        switch (SpellMissInfo(missCondition))
+        {
+            case SPELL_MISS_NONE:    return "hit";
+            case SPELL_MISS_MISS:    return "missed";
+            case SPELL_MISS_RESIST:  return "resisted";
+            case SPELL_MISS_DODGE:   return "dodged";
+            case SPELL_MISS_PARRY:   return "parried";
+            case SPELL_MISS_BLOCK:   return "blocked";
+            case SPELL_MISS_EVADE:   return "evaded";
+            case SPELL_MISS_IMMUNE:
+            case SPELL_MISS_IMMUNE2: return "immune";
+            case SPELL_MISS_DEFLECT: return "deflected";
+            case SPELL_MISS_ABSORB:  return "absorbed";
+            case SPELL_MISS_REFLECT: return "reflected";
+            default:                 return "unknown";
+        }
+    }
+
+    uint32 ResolveKnownCombatDiagnosticSpell(Player const* player, uint32 baseSpellId)
+    {
+        if (!player)
+            return 0;
+
+        SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(baseSpellId);
+        if (!baseSpellInfo)
+            return 0;
+
+        uint32 knownSpellId = 0;
+        for (uint32 spellId = baseSpellInfo->GetFirstRankSpell()->Id; spellId; spellId = sSpellMgr->GetNextSpellInChain(spellId))
+            if (player->HasSpell(spellId))
+                knownSpellId = spellId;
+
+        return knownSpellId;
+    }
+
+    // Delivers a feign diagnostic line to every session that enabled the Feign
+    // category (.gm diagnostics on feign). Returns whether anyone received it,
+    // so callers can tell "fired but nobody listening" apart from "never fired".
+    bool BroadcastFeignDiagnostic(std::string const& message)
+    {
+        bool delivered = false;
+        for (SessionMap::value_type const& sessionPair : sWorld->GetAllSessions())
+        {
+            WorldSession* observerSession = sessionPair.second;
+            if (!observerSession || !observerSession->GetPlayer() ||
+                !observerSession->IsGmDiagnosticEnabled(GmDiagnosticCategory::Feign))
+                continue;
+
+            ChatHandler(observerSession).SendSysMessage(message);
+            delivered = true;
+        }
+
+        return delivered;
+    }
+
+    bool GetCustomArenaRosterTeam(Player const* player, Battleground const*& battleground, uint32& team)
+    {
+        battleground = player ? player->GetBattleground() : nullptr;
+        if (!battleground || !battleground->IsCustomGame() || !battleground->isArena() ||
+            !battleground->IsPlayerInBattleground(player->GetGUID()))
+            return false;
+
+        team = battleground->GetPlayerTeam(player->GetGUID());
+        return team == ALLIANCE || team == HORDE;
+    }
+
+    bool AreCustomArenaRosterTeammates(Player const* left, Player const* right, Battleground const** battlegroundOut = nullptr,
+        uint32* teamOut = nullptr)
+    {
+        Battleground const* leftBattleground = nullptr;
+        Battleground const* rightBattleground = nullptr;
+        uint32 leftTeam = 0;
+        uint32 rightTeam = 0;
+        if (!GetCustomArenaRosterTeam(left, leftBattleground, leftTeam) ||
+            !GetCustomArenaRosterTeam(right, rightBattleground, rightTeam) ||
+            leftBattleground != rightBattleground || leftTeam != rightTeam)
+            return false;
+
+        if (battlegroundOut)
+            *battlegroundOut = leftBattleground;
+        if (teamOut)
+            *teamOut = leftTeam;
+        return true;
     }
 }
 #include "ArenaSpectator.h"
 
 #include <array>
-#include <initializer_list>
 
 namespace DireMaulBeads
 {
@@ -160,7 +375,7 @@ namespace
     bool IsBattlegroundEquipChangeAllowed(Player const* player, uint8 slot)
     {
         if (Battleground const* battleground = player->GetBattleground())
-            if (battleground->GetTypeID(true) == BATTLEGROUND_SCM || battleground->GetTypeID(true) == BATTLEGROUND_BRT)
+            if (battleground->GetTypeID(true) == BATTLEGROUND_SCM || battleground->GetTypeID(true) == BATTLEGROUND_BRT || battleground->GetTypeID(true) == BATTLEGROUND_OBC)
                 return true;
 
         switch (slot)
@@ -257,6 +472,8 @@ Player::Player(WorldSession* session) : Unit(true)
     m_sharedQuestId = 0;
 
     m_ExtraFlags = 0;
+    m_worldSubMapId = MAPID_INVALID;
+    m_worldSubMapInstanceId = 0;
 
     m_spellModTakingSpell = nullptr;
     //m_pad = 0;
@@ -335,6 +552,29 @@ Player::Player(WorldSession* session) : Unit(true)
     m_drunkTimer = 0;
     m_deathTimer = 0;
     m_deathExpireTime = 0;
+    m_combatDiagnosticCombatTimer = 0;
+    m_combatDiagnosticDirectSpellTimer = CombatDiagnosticDelay;
+    m_combatDiagnosticCheckTimer = 0;
+    m_combatDiagnosticFeignTrapTimer = 0;
+    m_combatDiagnosticFeignHealth = 0;
+    m_combatDiagnosticFeignLastDirectSpellId = 0;
+    m_combatDiagnosticFeignFailedSpellId = 0;
+    m_combatDiagnosticFeignFailedResult = 0;
+    m_combatDiagnosticFeignInterruptFlag = 0;
+    m_combatDiagnosticFeignRemoveMode = 0;
+    m_combatDiagnosticFeignDamageSourceGuid = ObjectGuid::Empty;
+    m_combatDiagnosticFeignDamageSourceSpell = 0;
+    m_combatDiagnosticFeignDamageAmount = 0;
+    m_combatDiagnosticFeignCombatSourceGuid = ObjectGuid::Empty;
+    m_combatDiagnosticFeignCombatSpellId = 0;
+    m_combatDiagnosticFeignCombatMissCondition = 0;
+    m_combatDiagnosticFeignCombatInheritedFromGuid = ObjectGuid::Empty;
+    m_combatDiagnosticFeignCombatInheritedSpellId = 0;
+    m_combatDiagnosticSent = false;
+    m_combatDiagnosticHasDirectSpellCast = false;
+    m_combatDiagnosticFeignTrapPending = false;
+    m_combatDiagnosticFeignSawAura = false;
+    m_combatDiagnosticFeignSawOutOfCombat = false;
 
     m_swingErrorMsg = 0;
 
@@ -548,7 +788,8 @@ void Player::CleanupsBeforeDelete(bool finalCleanup)
             itr->second.save->RemovePlayer(this);
 }
 
-bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo)
+bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo, bool createStarterItems,
+    bool validateAppearanceAsNewCharacter)
 {
     //FIXME: outfitId not used in player creating
     /// @todo need more checks against packet modifications
@@ -593,7 +834,8 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
         return false;
     }
 
-    if (!ValidateAppearance(createInfo->Race, createInfo->Class, createInfo->Gender, createInfo->HairStyle, createInfo->HairColor, createInfo->Face, createInfo->FacialHair, createInfo->Skin, true))
+    if (!ValidateAppearance(createInfo->Race, createInfo->Class, createInfo->Gender, createInfo->HairStyle, createInfo->HairColor,
+        createInfo->Face, createInfo->FacialHair, createInfo->Skin, validateAppearanceAsNewCharacter))
     {
         TC_LOG_ERROR("entities.player.cheat", "Player::Create: Possible hacking attempt: Account {} tried to create a character named '{}' with invalid appearance attributes - refusing to do so",
             GetSession()->GetAccountId(), m_name);
@@ -687,75 +929,78 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
         addActionButton(action_itr->button, action_itr->action, action_itr->type);
 
     // original items
-    if (CharStartOutfitEntry const* oEntry = GetCharStartOutfitEntry(createInfo->Race, createInfo->Class, createInfo->Gender))
+    if (createStarterItems)
     {
-        for (int j = 0; j < MAX_OUTFIT_ITEMS; ++j)
+        if (CharStartOutfitEntry const* oEntry = GetCharStartOutfitEntry(createInfo->Race, createInfo->Class, createInfo->Gender))
         {
-            if (oEntry->ItemID[j] <= 0)
-                continue;
-
-            uint32 itemId = oEntry->ItemID[j];
-
-            // just skip, reported in ObjectMgr::LoadItemTemplates
-            ItemTemplate const* iProto = sObjectMgr->GetItemTemplate(itemId);
-            if (!iProto)
-                continue;
-
-            // BuyCount by default
-            uint32 count = iProto->BuyCount;
-
-            // special amount for food/drink
-            if (iProto->Class == ITEM_CLASS_CONSUMABLE && iProto->SubClass == ITEM_SUBCLASS_FOOD)
+            for (int j = 0; j < MAX_OUTFIT_ITEMS; ++j)
             {
-                switch (iProto->Spells[0].SpellCategory)
+                if (oEntry->ItemID[j] <= 0)
+                    continue;
+
+                uint32 itemId = oEntry->ItemID[j];
+
+                // just skip, reported in ObjectMgr::LoadItemTemplates
+                ItemTemplate const* iProto = sObjectMgr->GetItemTemplate(itemId);
+                if (!iProto)
+                    continue;
+
+                // BuyCount by default
+                uint32 count = iProto->BuyCount;
+
+                // special amount for food/drink
+                if (iProto->Class == ITEM_CLASS_CONSUMABLE && iProto->SubClass == ITEM_SUBCLASS_FOOD)
                 {
-                case SPELL_CATEGORY_FOOD:                                // food
-                    count = GetClass() == CLASS_DEATH_KNIGHT ? 10 : 4;
-                    break;
-                case SPELL_CATEGORY_DRINK:                                // drink
-                    count = 2;
-                    break;
+                    switch (iProto->Spells[0].SpellCategory)
+                    {
+                    case SPELL_CATEGORY_FOOD:                                // food
+                        count = GetClass() == CLASS_DEATH_KNIGHT ? 10 : 4;
+                        break;
+                    case SPELL_CATEGORY_DRINK:                                // drink
+                        count = 2;
+                        break;
+                    }
+                    if (iProto->GetMaxStackSize() < count)
+                        count = iProto->GetMaxStackSize();
                 }
-                if (iProto->GetMaxStackSize() < count)
-                    count = iProto->GetMaxStackSize();
+                StoreNewItemInBestSlots(itemId, count);
             }
-            StoreNewItemInBestSlots(itemId, count);
         }
-    }
 
-    for (PlayerCreateInfoItems::const_iterator item_id_itr = info->item.begin(); item_id_itr != info->item.end(); ++item_id_itr)
-        StoreNewItemInBestSlots(item_id_itr->item_id, item_id_itr->item_amount);
+        for (PlayerCreateInfoItems::const_iterator item_id_itr = info->item.begin(); item_id_itr != info->item.end(); ++item_id_itr)
+            StoreNewItemInBestSlots(item_id_itr->item_id, item_id_itr->item_amount);
 
-    // bags and main-hand weapon must equipped at this moment
-    // now second pass for not equipped (offhand weapon/shield if it attempt equipped before main-hand weapon)
-    // or ammo not equipped in special bag
-    for (uint8 i = INVENTORY_SLOT_ITEM_START; i < INVENTORY_SLOT_ITEM_END; i++)
-    {
-        if (Item* pItem = GetItemByPos(INVENTORY_SLOT_BAG_0, i))
+        // bags and main-hand weapon must equipped at this moment
+        // now second pass for not equipped (offhand weapon/shield if it attempt equipped before main-hand weapon)
+        // or ammo not equipped in special bag
+        for (uint8 i = INVENTORY_SLOT_ITEM_START; i < INVENTORY_SLOT_ITEM_END; i++)
         {
-            uint16 eDest;
-            // equip offhand weapon/shield if it attempt equipped before main-hand weapon
-            InventoryResult msg = CanEquipItem(NULL_SLOT, eDest, pItem, false);
-            if (msg == EQUIP_ERR_OK)
+            if (Item* pItem = GetItemByPos(INVENTORY_SLOT_BAG_0, i))
             {
-                RemoveItem(INVENTORY_SLOT_BAG_0, i, true);
-                EquipItem(eDest, pItem, true);
-            }
-            // move other items to more appropriate slots (ammo not equipped in special bag)
-            else
-            {
-                ItemPosCountVec sDest;
-                msg = CanStoreItem(NULL_BAG, NULL_SLOT, sDest, pItem, false);
+                uint16 eDest;
+                // equip offhand weapon/shield if it attempt equipped before main-hand weapon
+                InventoryResult msg = CanEquipItem(NULL_SLOT, eDest, pItem, false);
                 if (msg == EQUIP_ERR_OK)
                 {
                     RemoveItem(INVENTORY_SLOT_BAG_0, i, true);
-                    StoreItem(sDest, pItem, true);
+                    EquipItem(eDest, pItem, true);
                 }
+                // move other items to more appropriate slots (ammo not equipped in special bag)
+                else
+                {
+                    ItemPosCountVec sDest;
+                    msg = CanStoreItem(NULL_BAG, NULL_SLOT, sDest, pItem, false);
+                    if (msg == EQUIP_ERR_OK)
+                    {
+                        RemoveItem(INVENTORY_SLOT_BAG_0, i, true);
+                        StoreItem(sDest, pItem, true);
+                    }
 
-                // if  this is ammo then use it
-                msg = CanUseAmmo(pItem->GetEntry());
-                if (msg == EQUIP_ERR_OK)
-                    SetAmmo(pItem->GetEntry());
+                    // if  this is ammo then use it
+                    msg = CanUseAmmo(pItem->GetEntry());
+                    if (msg == EQUIP_ERR_OK)
+                        SetAmmo(pItem->GetEntry());
+                }
             }
         }
     }
@@ -831,6 +1076,25 @@ uint32 Player::EnvironmentalDamage(EnviromentalDamage type, uint32 damage)
 {
     if (IsImmuneToEnvironmentalDamage())
         return 0;
+
+    // Environmental liquid damage is not backed by a SpellInfo, so it does
+    // not pass through the spell damage immunity checks. Respect the matching
+    // school immunity explicitly before absorb/resist processing. This makes
+    // standard lava obey Fire immunity (including Spirit of Redemption 27827)
+    // just like a periodic Fire-damage spell does.
+    if ((type == DAMAGE_LAVA && IsImmunedToDamage(SPELL_SCHOOL_MASK_FIRE)) ||
+        (type == DAMAGE_SLIME && IsImmunedToDamage(SPELL_SCHOOL_MASK_NATURE)))
+        return 0;
+
+    if (type == DAMAGE_LAVA || type == DAMAGE_SLIME)
+    {
+        WorldSession const* session = GetSession();
+        // Managed playerbots and transient dark clones both use virtual
+        // sessions. Reduce damaging liquid terrain for either kind of bot
+        // without coupling core Player code to the playerbot script library.
+        if (session && session->IsVirtualSession())
+            damage = (damage + 1) / 2;
+    }
 
     // Absorb, resist some environmental damage type
     uint32 absorb = 0;
@@ -1130,6 +1394,7 @@ void Player::Update(uint32 p_time)
     Unit::Update(p_time);
     SetCanDelayTeleport(false);
     sScriptMgr->OnPlayerUpdate(this, p_time);
+    UpdateCombatDiagnostic(p_time);
 
     UpdateStarfireSnare();
     VerifyStarfireSnare();
@@ -1309,9 +1574,23 @@ void Player::Update(uint32 p_time)
             else
             {
                 // use area updates as well
-                // needed for free far all arenas for example
+                // needed for free for all arenas for example
                 if (m_areaUpdateId != newarea)
+                {
                     UpdateArea(newarea);
+                }
+                else
+                {
+                    bool const isCustomGurubashiArea = GetMapId() == 0 && m_zoneUpdateId == 33 && newarea == 30232;
+                    bool const isCustomGurubashiFFAArea = isCustomGurubashiArea && GetPositionZ() <= 27.0f;
+
+                    // Repair stale FFA state when vertical movement keeps the same Battle Ring area id
+                    // but moves between the FFA floor and safe ramp/outer geometry above it.
+                    if (isCustomGurubashiArea &&
+                        ((isCustomGurubashiFFAArea && (!pvpInfo.IsInFFAPvPArea || !IsFFAPvP())) ||
+                         (!isCustomGurubashiFFAArea && (pvpInfo.IsInFFAPvPArea || IsFFAPvP()))))
+                        UpdateArea(newarea);
+                }
 
                 m_zoneUpdateTimer = ZONE_UPDATE_INTERVAL;
             }
@@ -1391,13 +1670,21 @@ void Player::Update(uint32 p_time)
 
     if (!_instanceResetTimes.empty())
     {
-        for (InstanceTimeMap::iterator itr = _instanceResetTimes.begin(); itr != _instanceResetTimes.end();)
+        // Rebuild the instance reset map instead of erasing while iterating.
+        // Player::Update can run after spell/aura processing that may trigger
+        // map or instance state changes; rebuilding avoids depending on an
+        // iterator that can be invalidated before unordered_map::erase walks
+        // the bucket chain.
+        InstanceTimeMap activeInstanceResetTimes;
+        activeInstanceResetTimes.reserve(_instanceResetTimes.size());
+
+        for (InstanceTimeMap::value_type const& instanceResetTime : _instanceResetTimes)
         {
-            if (itr->second < now)
-                itr = _instanceResetTimes.erase(itr);
-            else
-                ++itr;
+            if (instanceResetTime.second >= now)
+                activeInstanceResetTimes.insert(instanceResetTime);
         }
+
+        _instanceResetTimes.swap(activeInstanceResetTimes);
     }
 
     if (GetClass() == CLASS_DEATH_KNIGHT)
@@ -1784,13 +2071,25 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
             transport->RemovePassenger(this);
     }
 
-    // The player was ported to another map and loses the duel immediately.
+    uint32 const targetWorldSubMapInstanceId = GetWorldSubMapInstanceId(mapid);
+    Map const* currentMap = FindMap();
+    bool const currentIsWorldSubMap = currentMap && currentMap->IsServerOnlyWorldSubMap();
+    bool const targetIsWorldSubMap = targetWorldSubMapInstanceId != 0;
+
+    // Entering, leaving, or changing a server-only world sub-map requires a far
+    // transfer. Ordinary same-map teleports inside an instance (such as releasing
+    // to a battleground graveyard) must remain near teleports.
+    bool const crossesWorldSubMapBoundary = currentIsWorldSubMap != targetIsWorldSubMap ||
+        (currentIsWorldSubMap && GetInstanceId() != targetWorldSubMapInstanceId);
+    bool const isNearTeleport = GetMapId() == mapid && !crossesWorldSubMapBoundary;
+
+    // The player was ported to another map/instance and loses the duel immediately.
     // We have to perform this check before the teleport, otherwise the
     // ObjectAccessor won't find the flag.
-    if (duel && GetMapId() != mapid && GetMap()->GetGameObject(GetGuidValue(PLAYER_DUEL_ARBITER)))
+    if (duel && !isNearTeleport && GetMap()->GetGameObject(GetGuidValue(PLAYER_DUEL_ARBITER)))
         DuelComplete(DUEL_FLED);
 
-    if (GetMapId() == mapid)
+    if (isNearTeleport)
     {
         //lets reset far teleport flag if it wasn't reset during chained teleport
         SetSemaphoreTeleportFar(false);
@@ -2586,6 +2885,13 @@ void Player::SetGMVisible(bool on)
 
 bool Player::IsGroupVisibleFor(Player const* p) const
 {
+    // Custom arenas are assembled directly from a private-lobby roster. That
+    // roster remains authoritative even if the transient battleground raid
+    // pointer is briefly missing or replaced while clones are added. Without
+    // this, teammates can lose party visibility and turn blue mid-match.
+    if (AreCustomArenaRosterTeammates(this, p))
+        return true;
+
     switch (sWorld->getIntConfig(CONFIG_GROUP_VISIBILITY))
     {
     default: return IsInSameGroupWith(p);
@@ -2597,14 +2903,31 @@ bool Player::IsGroupVisibleFor(Player const* p) const
 
 bool Player::IsInSameGroupWith(Player const* p) const
 {
-    return p == this || (GetGroup() != nullptr &&
-        GetGroup() == p->GetGroup() &&
-        GetGroup()->SameSubGroup(this, p));
+    if (p == this)
+        return true;
+
+    Battleground const* battleground = nullptr;
+    uint32 team = 0;
+    if (AreCustomArenaRosterTeammates(this, p, &battleground, &team))
+    {
+        // Party-only spells still respect the battleground raid subgroup. Use
+        // the roster-owned raid rather than the players' possibly stale group
+        // pointers.
+        if (Group const* battlegroundRaid = battleground->GetBgRaid(team))
+            return battlegroundRaid->IsMember(GetGUID()) && battlegroundRaid->IsMember(p->GetGUID()) &&
+                battlegroundRaid->SameSubGroup(GetGUID(), p->GetGUID());
+        return false;
+    }
+
+    return GetGroup() != nullptr && GetGroup() == p->GetGroup() && GetGroup()->SameSubGroup(this, p);
 }
 
 bool Player::IsInSameRaidWith(Player const* p) const
 {
-    return p == this || (GetGroup() != nullptr && GetGroup() == p->GetGroup());
+    if (p == this || AreCustomArenaRosterTeammates(this, p))
+        return true;
+
+    return GetGroup() != nullptr && GetGroup() == p->GetGroup();
 }
 
 ///- If the player is invited, remove him. If the group if then only 1 person, disband the group.
@@ -7056,6 +7379,8 @@ void Player::UpdateHonorFields()
 ///An exact honor value can also be given (overriding the calcs)
 bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvptoken)
 {
+    if (Battleground const* bg = GetBattleground(); bg && bg->IsCustomGame())
+        return false;
 
     // 'Inactive' this aura prevents the player from gaining honor points and battleground tokens
     if (HasAura(SPELL_AURA_PLAYER_INACTIVE))
@@ -7282,6 +7607,9 @@ void Player::ModifyHonorPoints(int32 value, CharacterDatabaseTransaction trans, 
     if (value > 0)
         AddWeeklyHonorPoints(uint32(value), trans);
 
+    if (GetSession() && GetSession()->IsTransientPlayerSession())
+        return;
+
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_HONOR_POINTS);
     stmt->setUInt32(0, newValue);
     stmt->setUInt32(1, GetGUID().GetCounter());
@@ -7318,6 +7646,9 @@ void Player::ModifyArenaPoints(int32 value, CharacterDatabaseTransaction trans)
     if (newValue < 0)
         newValue = 0;
     SetArenaPoints(uint32(newValue));
+
+    if (GetSession() && GetSession()->IsTransientPlayerSession())
+        return;
 
     if (trans)
     {
@@ -7411,38 +7742,34 @@ void Player::UpdateArea(uint32 newArea)
     AreaTableEntry const* area = sAreaTableStore.LookupEntry(newArea);
     bool oldFFAPvPArea = pvpInfo.IsInFFAPvPArea;
 
-    bool isFFAArea = false;
+    bool const isGurubashiBattleRing = GetMapId() == 0 && m_zoneUpdateId == 33 && newArea == 30232 && GetPositionZ() <= 27.0f;
+    bool const isGurubashiSafeArea = GetMapId() == 0 && m_zoneUpdateId == 33 && !isGurubashiBattleRing;
+
+    static std::array<uint32, 1> const customFFAAreas = { 3217 }; // The Maul
+    bool const isCustomFFAArea = std::find(customFFAAreas.begin(), customFFAAreas.end(), newArea) != customFFAAreas.end();
+
+    bool isFFAArea = isCustomFFAArea || isGurubashiBattleRing;
     // Walk the area hierarchy in case the arena flag is defined on a parent zone.
-    for (AreaTableEntry const* currentArea = area; currentArea;)
+    // Gurubashi has safe ramp/outer areas under the same parent arena hierarchy, so
+    // do not let parent AREA_FLAG_ARENA bleed FFA PvP into non-Battle Ring areas.
+    if (!isFFAArea && !isGurubashiSafeArea)
     {
-        if (currentArea->Flags & AREA_FLAG_ARENA)
+        for (AreaTableEntry const* currentArea = area; currentArea;)
         {
-            isFFAArea = true;
-            break;
-        }
-
-        if (!currentArea->ParentAreaID)
-            break;
-
-        currentArea = sAreaTableStore.LookupEntry(currentArea->ParentAreaID);
-    }
-
-    if (!isFFAArea)
-    {
-        static std::array<uint32, 1> const customFFAAreas = { 3217 }; // The Maul (Dire Maul arena)
-
-        for (uint32 customArea : customFFAAreas)
-        {
-            if (newArea == customArea || m_zoneUpdateId == customArea)
+            if (currentArea->Flags & AREA_FLAG_ARENA)
             {
                 isFFAArea = true;
                 break;
             }
+
+            if (!currentArea->ParentAreaID)
+                break;
+
+            currentArea = sAreaTableStore.LookupEntry(currentArea->ParentAreaID);
         }
     }
 
     pvpInfo.IsInFFAPvPArea = isFFAArea;
-    UpdatePvPState(true);
 
     // check if we were in ffa arena and we left
     if (oldFFAPvPArea && !pvpInfo.IsInFFAPvPArea)
@@ -7473,6 +7800,9 @@ void Player::UpdateArea(uint32 newArea)
         SetRestFlag(REST_FLAG_IN_FACTION_AREA);
     else
         RemoveRestFlag(REST_FLAG_IN_FACTION_AREA);
+
+    // Re-apply FFA PvP after sanctuary/no-PvP state has been recalculated.
+    UpdatePvPState(true);
 }
 
 void Player::HandleAttackStopAfterTaunt()
@@ -9338,6 +9668,12 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
         packet.Worldstates.emplace_back(2491, 15); // NA_UI_GUARDS_LEFT
     }
 
+    // Custom-game spectators may enter copied maps or spawn positions whose
+    // reported zone/area does not match the battleground type. The active
+    // BG object is authoritative for their initial WorldStateUI data.
+    if (battleground && battleground->IsCustomGame() && IsSpectator())
+        battleground->FillInitialWorldStates(packet);
+    else
     switch (zoneId)
     {
     case 1: // Dun Morogh
@@ -9749,6 +10085,16 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
             packet.Worldstates.emplace_back(3002, 0); // BATTELGROUND_RUINS_OF_LORDAERNON_SHOW
         }
         break;
+    case 30231: // Nefarian's Arena
+        if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_NL)
+            battleground->FillInitialWorldStates(packet);
+        else
+        {
+            packet.Worldstates.emplace_back(3601, 0); // ARENA_WORLD_STATE_ALIVE_PLAYERS_GOLD
+            packet.Worldstates.emplace_back(3600, 0); // ARENA_WORLD_STATE_ALIVE_PLAYERS_GREEN
+            packet.Worldstates.emplace_back(3002, 0); // BATTLEGROUND_NEFARIAN_ARENA_SHOW
+        }
+        break;
     case 4378: // Dalaran Sewers
         if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_DS)
             battleground->FillInitialWorldStates(packet);
@@ -9946,6 +10292,9 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
             battleground->FillInitialWorldStates(packet);
         // Blackrock Throne can report stock BRD zone IDs; initialize from battleground type.
         else if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_BRT)
+            battleground->FillInitialWorldStates(packet);
+        // Obsidian Colosseum reports the stock Obsidian Sanctum zone ID (4493); initialize from battleground type.
+        else if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_OBC)
             battleground->FillInitialWorldStates(packet);
         break;
     }
@@ -17865,7 +18214,7 @@ bool Player::IsLoading() const
     return GetSession()->PlayerLoading();
 }
 
-bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& holder)
+bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& holder, bool loadRuntimeAuras)
 {
     //                                                       0     1        2     3     4      5       6      7   8      9     10    11         12         13           14         15         16
     //QueryResult* result = CharacterDatabase.PQuery("SELECT guid, account, name, race, class, gender, level, xp, money, skin, face, hairStyle, hairColor, facialStyle, bankSlots, restState, playerFlags, "
@@ -18068,6 +18417,15 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     _LoadBGData(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_BG_DATA));
 
     GetSession()->SetPlayer(this);
+
+    // Give scripts one last chance to repair a stale saved login location
+    // before any map is created or any initial world packets are sent. This
+    // is intentionally earlier than PlayerScript::OnLogin: a cross-map
+    // TeleportTo from the login hook can race the client's initial object and
+    // item data stream and leave the client showing "Unknown" names or
+    // "Retrieving item information" until another relog.
+    sScriptMgr->OnPlayerBeforeMapLoad(this, mapId, instanceId);
+
     MapEntry const* mapEntry = sMapStore.LookupEntry(mapId);
     Map* map = nullptr;
     bool player_at_bg = false;
@@ -18453,12 +18811,14 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     _LoadSpells(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_SPELLS));
 
     _LoadGlyphs(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_GLYPHS));
-    _LoadAuras(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_AURAS), time_diff);
+    if (loadRuntimeAuras)
+        _LoadAuras(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_AURAS), time_diff);
 
     // SPECTATOR_SPELL_SPEED should never persist across sessions
     if (HasAura(SPECTATOR_SPELL_SPEED))
         SetIsSpectator(false);
-    _LoadGlyphAuras();
+    if (loadRuntimeAuras)
+        _LoadGlyphAuras();
     // add ghost flag (must be after aura load: PLAYER_FLAGS_GHOST set in aura)
     if (HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         m_deathState = DEAD;
@@ -20017,6 +20377,11 @@ bool Player::_LoadHomeBind(PreparedQueryResult result)
 
 void Player::SaveToDB(bool create /*=false*/)
 {
+    // In-memory server actors deliberately have no character row. This guard
+    // also protects them from periodic ObjectAccessor::SaveAllPlayers calls.
+    if (GetSession() && GetSession()->IsTransientPlayerSession())
+        return;
+
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
 
     SaveToDB(trans, create);
@@ -20026,6 +20391,9 @@ void Player::SaveToDB(bool create /*=false*/)
 
 void Player::SaveToDB(CharacterDatabaseTransaction trans, bool create /* = false */)
 {
+    if (GetSession() && GetSession()->IsTransientPlayerSession())
+        return;
+
     // delay auto save at any saves (manual, in code, or autosave)
     m_nextSave = sWorld->getIntConfig(CONFIG_INTERVAL_SAVE);
 
@@ -21337,6 +21705,18 @@ void Player::ResetContestedPvP()
 
 void Player::UpdatePvPFlag(time_t currTime)
 {
+    // A battleground or arena is itself an authoritative PvP context. Area
+    // metadata may still describe the arena as friendly (custom maps are a
+    // common example), but that must never allow the normal five-minute PvP
+    // toggle-off timer to turn a live participant non-PvP mid-match.
+    if (InBattleground() && !IsGameMaster())
+    {
+        if (!IsPvP() || pvpInfo.EndTimer || HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_PVP_TIMER))
+            UpdatePvP(true, true);
+        RemoveFlag(PLAYER_FLAGS, PLAYER_FLAGS_PVP_TIMER);
+        return;
+    }
+
     if (!IsPvP())
         return;
 
@@ -22781,6 +23161,17 @@ void Player::UpdatePvPState(bool onlyFFA)
     if (onlyFFA)
         return;
 
+    // Do not derive battleground PvP state from the current AreaTable entry.
+    // Participants are PvP-enabled for the lifetime of the match even when a
+    // custom arena reports a friendly/non-PvP zone.
+    if (InBattleground() && !IsGameMaster())
+    {
+        if (!IsPvP() || pvpInfo.EndTimer || HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_PVP_TIMER))
+            UpdatePvP(true, true);
+        RemoveFlag(PLAYER_FLAGS, PLAYER_FLAGS_PVP_TIMER);
+        return;
+    }
+
     if (pvpInfo.IsHostile)                                  // in hostile area
     {
         if (!IsPvP() || pvpInfo.EndTimer)
@@ -22795,6 +23186,17 @@ void Player::UpdatePvPState(bool onlyFFA)
 
 void Player::SetPvP(bool state)
 {
+    // A few teleport-completion paths call UpdatePvP(false, false) after
+    // UpdateZone() when the destination AreaTable entry is friendly. That can
+    // happen after Battleground::AddPlayer() has already enabled PvP, and it
+    // directly clears UNIT_BYTE2_FLAG_PVP instead of starting the normal timer.
+    // Once cleared, UpdatePvPFlag() cannot repair it because it returns early
+    // for non-PvP players. Keep the invariant at the lowest player-level entry
+    // point so no worldport, near-teleport, or playerbot fallback can turn an
+    // active battleground/arena participant blue.
+    if (!state && InBattleground() && !IsGameMaster())
+        state = true;
+
     Unit::SetPvP(state);
     for (ControlList::iterator itr = m_Controlled.begin(); itr != m_Controlled.end(); ++itr)
         (*itr)->SetPvP(state);
@@ -23295,6 +23697,12 @@ void Player::LeaveBattleground(bool teleportToEntryPoint)
 
 bool Player::CanJoinToBattleground(Battleground const* bg) const
 {
+    // Server-only map 1 sub-instances are private custom-game lobbies. Their
+    // participants are admitted directly by the lobby and must never enter a
+    // public battleground or arena queue through another code path.
+    if (IsInCustomGameLobby())
+        return false;
+
     uint32 perm = rbac::RBAC_PERM_JOIN_NORMAL_BG;
     if (bg->isArena())
         perm = rbac::RBAC_PERM_JOIN_ARENAS;
@@ -23321,7 +23729,7 @@ namespace
 
     bool QueueAfkReportedPlayerbot(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
     {
-        if (!player || player->InBattleground())
+        if (!player || player->InBattleground() || player->IsInCustomGameLobby())
             return false;
 
         player->RemoveAurasDueToSpell(SPELL_BATTLEGROUND_DESERTER);
@@ -23400,6 +23808,9 @@ void Player::ReportedAfkBy(Player* reporter)
         return;
 
     WorldSession const* session = GetSession();
+    if (session && session->IsTransientPlayerSession())
+        return;
+
     if (session && session->IsVirtualSession())
     {
         if (!HasAura(SPELL_BATTLEGROUND_IDLE) && !HasAura(SPELL_BATTLEGROUND_INACTIVE))
@@ -25373,24 +25784,19 @@ void Player::MovementInform(uint32 type, uint32 id)
 {
     if (type == EFFECT_MOTION_TYPE && id == EVENT_JUMP)
     {
-        if (GetShapeshiftForm() == FORM_GHOSTWOLF)
+        // Rehgar's Fury can remove Ghost Wolf as its jump finishes, before
+        // MovementInform is delivered.  The pending target is the authoritative
+        // indication that this EVENT_JUMP belongs to the charge; requiring the
+        // form to still be active skips CompleteGhostWolfCharge and therefore
+        // skips Ghost Wolf's post-charge cooldown.
+        ObjectGuid targetGuid = _pendingGhostWolfChargeTarget;
+        _pendingGhostWolfChargeTarget.Clear();
+
+        if (targetGuid)
         {
-            ObjectGuid targetGuid = _pendingGhostWolfChargeTarget;
-            _pendingGhostWolfChargeTarget.Clear();
-
-            if (!targetGuid)
-            {
-                if (Unit* victim = GetVictim())
-                    targetGuid = victim->GetGUID();
-                else if (ObjectGuid selection = GetTarget())
-                    targetGuid = selection;
-            }
-
-            Unit* target = targetGuid ? ObjectAccessor::GetUnit(*this, targetGuid) : nullptr;
+            Unit* target = ObjectAccessor::GetUnit(*this, targetGuid);
             CompleteGhostWolfCharge(target);
         }
-        else
-            _pendingGhostWolfChargeTarget.Clear();
     }
 }
 
@@ -25663,6 +26069,9 @@ void Player::ProcessTerrainStatusUpdate(ZLiquidStatus oldLiquidStatus, Optional<
 void Player::AtExitCombat()
 {
     Unit::AtExitCombat();
+    m_combatDiagnosticCombatTimer = 0;
+    m_combatDiagnosticCheckTimer = 0;
+    m_combatDiagnosticSent = false;
     UpdatePotionCooldown();
 
     if (GetClass() == CLASS_DEATH_KNIGHT)
@@ -25671,6 +26080,442 @@ void Player::AtExitCombat()
             SetRuneTimer(i, 0xFFFFFFFF);
             SetLastRuneGraceTimer(i, 0);
         }
+}
+
+void Player::AtEnterCombat()
+{
+    Unit::AtEnterCombat();
+    m_combatDiagnosticCombatTimer = 0;
+    m_combatDiagnosticCheckTimer = 0;
+    m_combatDiagnosticSent = false;
+}
+
+void Player::NotifyDirectSpellCast(uint32 spellId)
+{
+    m_combatDiagnosticDirectSpellTimer = 0;
+    m_combatDiagnosticCheckTimer = 0;
+    m_combatDiagnosticHasDirectSpellCast = true;
+
+    if (!IsHumanHunterFeignDiagnosticTarget(this))
+        return;
+
+    // Feign Death (5384) never arrives here: HandleFeignDeath pre-finishes the
+    // feign spell itself with ok=false ("prevent interrupt message") while its
+    // aura is applied, so the later Spell::finish(true) is a no-op for it. The
+    // feign/trap watcher arms in NotifyFeignDeathApplied from the aura instead.
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!m_combatDiagnosticFeignTrapPending)
+        return;
+
+    m_combatDiagnosticFeignLastDirectSpellId = spellId;
+    if (IsHunterTrapSpellForCombatDiagnostic(spellInfo) &&
+        m_combatDiagnosticFeignTrapTimer <= FeignTrapDiagnosticWindow)
+    {
+        m_combatDiagnosticFeignTrapPending = false;
+
+        std::ostringstream resolved;
+        resolved << "[Feign diagnostic] trap cast completed " << m_combatDiagnosticFeignTrapTimer
+                 << "ms after feign: spell=" << spellId << "; no report will follow.";
+        BroadcastFeignDiagnostic(resolved.str());
+    }
+}
+
+void Player::NotifyFeignDeathApplied()
+{
+    if (!IsHumanHunterFeignDiagnosticTarget(this))
+    {
+        WorldSession const* session = GetSession();
+        // Bot feigns land here constantly; only surface the reject for real
+        // sessions (e.g. testing via .cast 5384 on a non-hunter character).
+        if (session && !session->IsVirtualSession() && !session->IsTransientPlayerSession())
+        {
+            std::ostringstream rejected;
+            rejected << "[Feign diagnostic] feign aura on " << GetName()
+                     << " ignored: class=" << uint32(GetClass()) << " is not a hunter.";
+            BroadcastFeignDiagnostic(rejected.str());
+            TC_LOG_WARN("combat.diagnostic", "{}", rejected.str());
+        }
+        return;
+    }
+
+    m_combatDiagnosticFeignTrapTimer = 0;
+    m_combatDiagnosticFeignHealth = GetHealth();
+    m_combatDiagnosticFeignLastDirectSpellId = 0;
+    m_combatDiagnosticFeignFailedSpellId = 0;
+    m_combatDiagnosticFeignFailedResult = 0;
+    m_combatDiagnosticFeignInterruptFlag = 0;
+    m_combatDiagnosticFeignRemoveMode = 0;
+    m_combatDiagnosticFeignDamageSourceGuid = ObjectGuid::Empty;
+    m_combatDiagnosticFeignDamageSourceSpell = 0;
+    m_combatDiagnosticFeignDamageAmount = 0;
+    m_combatDiagnosticFeignCombatSourceGuid = ObjectGuid::Empty;
+    m_combatDiagnosticFeignCombatSpellId = 0;
+    m_combatDiagnosticFeignCombatMissCondition = 0;
+    m_combatDiagnosticFeignCombatInheritedFromGuid = ObjectGuid::Empty;
+    m_combatDiagnosticFeignCombatInheritedSpellId = 0;
+    m_combatDiagnosticFeignTrapPending = true;
+    m_combatDiagnosticFeignSawAura = true;
+    m_combatDiagnosticFeignSawOutOfCombat = !IsInCombat();
+
+    std::ostringstream armed;
+    armed << "[Feign diagnostic] armed: player=" << GetName()
+          << ", combatNow=" << (IsInCombat() ? 1 : 0)
+          << "; reporting in " << FeignTrapDiagnosticWindow << "ms unless a trap cast completes.";
+    BroadcastFeignDiagnostic(armed.str());
+    TC_LOG_WARN("combat.diagnostic", "{}", armed.str());
+}
+
+void Player::NotifyCombatDiagnosticSpellFailure(uint32 spellId, SpellCastResult result)
+{
+    if (!m_combatDiagnosticFeignTrapPending || !IsHumanHunterFeignDiagnosticTarget(this))
+        return;
+
+    if (!IsHunterTrapSpellForCombatDiagnostic(sSpellMgr->GetSpellInfo(spellId)))
+        return;
+
+    m_combatDiagnosticFeignFailedSpellId = spellId;
+    m_combatDiagnosticFeignFailedResult = uint32(result);
+}
+
+// Fires from Unit::RemoveAurasWithInterruptFlags right before the feign aura is
+// actually removed, with whichever AURA_INTERRUPT_FLAG_* bit triggered it. This
+// is the generic choke point every interrupt-driven removal funnels through
+// (movement, damage, casting, standing up, ...), so it names the mechanism
+// definitively instead of being inferred from before/after polling.
+void Player::NotifyFeignDeathInterrupted(uint32 interruptFlag)
+{
+    if (!m_combatDiagnosticFeignTrapPending || !IsHumanHunterFeignDiagnosticTarget(this))
+        return;
+
+    if (!m_combatDiagnosticFeignInterruptFlag)
+        m_combatDiagnosticFeignInterruptFlag = interruptFlag;
+}
+
+// Fires from AuraEffect::HandleFeignDeath's removal branch with the aura's
+// actual AuraRemoveMode (default/interrupt, cancel, enemy spell, expire,
+// death). Independent of NotifyFeignDeathInterrupted: this still fires even
+// when removal did not go through RemoveAurasWithInterruptFlags at all (e.g.
+// an explicit RemoveAurasByType(SPELL_AURA_FEIGN_DEATH) call from opening the
+// bank/mail/vendor, or a dispel).
+void Player::NotifyFeignDeathRemoved(uint8 removeMode)
+{
+    if (!m_combatDiagnosticFeignTrapPending || !IsHumanHunterFeignDiagnosticTarget(this))
+        return;
+
+    if (!m_combatDiagnosticFeignRemoveMode)
+        m_combatDiagnosticFeignRemoveMode = removeMode;
+}
+
+// Fires from Unit::DealDamage for the first hit landed on the player while the
+// feign/trap watch is pending, regardless of whether that hit ends up being
+// what breaks the aura -- names who kept attacking through the feign.
+void Player::NotifyCombatDiagnosticDamageTaken(Unit* attacker, uint32 spellId, uint32 damage)
+{
+    if (!m_combatDiagnosticFeignTrapPending || !IsHumanHunterFeignDiagnosticTarget(this))
+        return;
+
+    if (!m_combatDiagnosticFeignDamageSourceGuid.IsEmpty())
+        return;
+
+    m_combatDiagnosticFeignDamageSourceGuid = attacker ? attacker->GetGUID() : ObjectGuid::Empty;
+    m_combatDiagnosticFeignDamageSourceSpell = spellId;
+    m_combatDiagnosticFeignDamageAmount = damage;
+}
+
+// Fires from CombatManager::SetInCombatWith for whichever unit put the player
+// back into a combat reference while the feign/trap watch is pending.
+void Player::NotifyCombatDiagnosticCombatSource(Unit* source)
+{
+    if (!m_combatDiagnosticFeignTrapPending || !IsHumanHunterFeignDiagnosticTarget(this))
+        return;
+
+    if (!m_combatDiagnosticFeignCombatSourceGuid.IsEmpty())
+        return;
+
+    m_combatDiagnosticFeignCombatSourceGuid = source ? source->GetGUID() : ObjectGuid::Empty;
+}
+
+// Fires from Spell::TargetInfo::PreprocessTarget, the exact point that decides
+// a hostile spell should start combat (SpellInfo::HasInitialAggro() or already
+// engaged) and calls target->SetInCombatWith(caster) -- unconditionally on
+// MissCondition except EVADE. This is why a missed/resisted/dodged attack can
+// still re-enter combat with zero damage recorded: this line runs before any
+// hit/damage resolution even happens.
+void Player::NotifyCombatDiagnosticSpellEngage(uint32 spellId, uint8 missCondition)
+{
+    if (!m_combatDiagnosticFeignTrapPending || !IsHumanHunterFeignDiagnosticTarget(this))
+        return;
+
+    if (m_combatDiagnosticFeignCombatSpellId)
+        return;
+
+    m_combatDiagnosticFeignCombatSpellId = spellId;
+    m_combatDiagnosticFeignCombatMissCondition = missCondition;
+}
+
+// Fires from CombatManager::InheritCombatStatesFrom, which runs when a
+// player-controlled unit (e.g. a totem, flagged UNIT_FLAG_PLAYER_CONTROLLED)
+// casts an initial-aggro spell on a friendly ally who is already in combat
+// (Spell.cpp's friendly-assist branch) -- the caster then inherits ALL of
+// that ally's combat opponents onto itself, including us, with zero action
+// on our part or the caster's. This is why a totem/pet that never touched
+// you can still clip your combat: it assisted someone who was already
+// fighting you, and the game forwards your fight onto the assister.
+void Player::NotifyCombatDiagnosticCombatInherited(Unit const* assistedAlly, uint32 causeSpellId)
+{
+    if (!m_combatDiagnosticFeignTrapPending || !IsHumanHunterFeignDiagnosticTarget(this))
+        return;
+
+    if (!m_combatDiagnosticFeignCombatInheritedFromGuid.IsEmpty())
+        return;
+
+    m_combatDiagnosticFeignCombatInheritedFromGuid = assistedAlly ? assistedAlly->GetGUID() : ObjectGuid::Empty;
+    m_combatDiagnosticFeignCombatInheritedSpellId = causeSpellId;
+}
+
+void Player::UpdateCombatDiagnostic(uint32 diff)
+{
+    UpdateFeignTrapDiagnostic(diff);
+
+    WorldSession const* session = GetSession();
+    if (!session || !session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Combat))
+        return;
+
+    AdvanceCombatDiagnosticTimer(m_combatDiagnosticDirectSpellTimer, diff);
+
+    if (!IsInCombat())
+    {
+        m_combatDiagnosticCombatTimer = 0;
+        m_combatDiagnosticCheckTimer = 0;
+        m_combatDiagnosticSent = false;
+        return;
+    }
+
+    AdvanceCombatDiagnosticTimer(m_combatDiagnosticCombatTimer, diff);
+
+    if (m_combatDiagnosticSent || m_combatDiagnosticCombatTimer < CombatDiagnosticDelay ||
+        m_combatDiagnosticDirectSpellTimer < CombatDiagnosticDelay)
+        return;
+
+    if (m_combatDiagnosticCheckTimer > diff)
+    {
+        m_combatDiagnosticCheckTimer -= diff;
+        return;
+    }
+
+    m_combatDiagnosticCheckTimer = CombatDiagnosticCheckInterval;
+    if (HasCombatDiagnosticNearbyEnemy(this))
+        return;
+
+    SendCombatDiagnostic();
+    m_combatDiagnosticSent = true;
+}
+
+void Player::UpdateFeignTrapDiagnostic(uint32 diff)
+{
+    if (!m_combatDiagnosticFeignTrapPending)
+        return;
+
+    if (!IsHumanHunterFeignDiagnosticTarget(this))
+    {
+        m_combatDiagnosticFeignTrapPending = false;
+        return;
+    }
+
+    m_combatDiagnosticFeignSawAura = m_combatDiagnosticFeignSawAura || HasAura(FeignDeathSpell);
+    m_combatDiagnosticFeignSawOutOfCombat = m_combatDiagnosticFeignSawOutOfCombat || !IsInCombat();
+    AdvanceCombatDiagnosticTimer(m_combatDiagnosticFeignTrapTimer, diff);
+    if (m_combatDiagnosticFeignTrapTimer < FeignTrapDiagnosticWindow)
+        return;
+
+    SendFeignTrapDiagnostic();
+    m_combatDiagnosticFeignTrapPending = false;
+}
+
+void Player::SendFeignTrapDiagnostic()
+{
+    Spell const* generic = GetCurrentSpell(CURRENT_GENERIC_SPELL);
+    Spell const* channel = GetCurrentSpell(CURRENT_CHANNELED_SPELL);
+    Spell const* autoRepeat = GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+    auto currentSpellId = [](Spell const* spell) -> uint32
+    {
+        return spell && spell->GetSpellInfo() ? spell->GetSpellInfo()->Id : 0;
+    };
+
+    auto describeUnit = [this](ObjectGuid const& guid) -> std::string
+    {
+        if (!guid)
+            return "none";
+
+        Unit* unit = ObjectAccessor::GetUnit(*this, guid);
+        if (!unit)
+            return guid.ToString();
+
+        std::ostringstream out;
+        out << unit->GetName();
+        if (Player const* asPlayer = unit->ToPlayer())
+        {
+            WorldSession const* unitSession = asPlayer->GetSession();
+            bool const isBot = unitSession && (unitSession->IsVirtualSession() || unitSession->IsTransientPlayerSession());
+            out << (isBot ? " (bot)" : " (player)");
+        }
+        else
+            out << " (creature " << unit->GetEntry() << ")";
+        return out.str();
+    };
+
+    std::ostringstream diagnostic;
+    diagnostic << "[Feign diagnostic] player=" << GetName()
+               << " guid=" << GetGUID().ToString()
+               << " class=" << uint32(GetClass())
+               << "; no trap completed within 1000ms"
+               << "; feignAuraNow=" << (HasAura(FeignDeathSpell) ? 1 : 0)
+               << ", sawFeignAura=" << (m_combatDiagnosticFeignSawAura ? 1 : 0)
+               << ", combatNow=" << (IsInCombat() ? 1 : 0)
+               << ", sawOutOfCombat=" << (m_combatDiagnosticFeignSawOutOfCombat ? 1 : 0)
+               << ", alive=" << (IsAlive() ? 1 : 0)
+               << ", hp=" << m_combatDiagnosticFeignHealth << "->" << GetHealth()
+               << ", moving=" << (isMoving() ? 1 : 0)
+               << ", stand=" << uint32(GetStandState())
+               << ", generic=" << currentSpellId(generic)
+               << ", channel=" << currentSpellId(channel)
+               << ", autoRepeat=" << currentSpellId(autoRepeat)
+               << ", lastCompletedDirectSpell=" << m_combatDiagnosticFeignLastDirectSpellId
+               << ", failedTrapSpell=" << m_combatDiagnosticFeignFailedSpellId
+               << ", failedTrapResult=" << m_combatDiagnosticFeignFailedResult;
+    if (m_combatDiagnosticFeignFailedSpellId)
+    {
+        EnumText const failedResult = EnumUtils::ToString(SpellCastResult(m_combatDiagnosticFeignFailedResult));
+        diagnostic << '(' << failedResult.Title << ')';
+    }
+
+    auto appendTrapReadiness = [this, &diagnostic](char const* label, uint32 baseSpellId)
+    {
+        uint32 const knownSpellId = ResolveKnownCombatDiagnosticSpell(this, baseSpellId);
+        SpellInfo const* spellInfo = knownSpellId ? sSpellMgr->GetSpellInfo(knownSpellId) : nullptr;
+        diagnostic << ", " << label << "Known=" << knownSpellId;
+        if (spellInfo)
+            diagnostic << ", " << label << "CooldownMs=" << GetSpellHistory()->GetRemainingCooldown(spellInfo)
+                       << ", " << label << "Gcd=" << (GetSpellHistory()->HasGlobalCooldown(spellInfo) ? 1 : 0);
+    };
+
+    appendTrapReadiness("freezing", 14311);
+    appendTrapReadiness("frost", 13809);
+
+    // Definitive break-cause block: captured live at the moment each event
+    // happened, not inferred from the snapshot fields above.
+    diagnostic << ", feignBrokenBy=" << DescribeFeignInterruptFlag(m_combatDiagnosticFeignInterruptFlag)
+               << ", feignRemoveMode=" << DescribeFeignRemoveMode(m_combatDiagnosticFeignRemoveMode)
+               << ", hitBy=" << describeUnit(m_combatDiagnosticFeignDamageSourceGuid)
+               << ", hitSpell=" << m_combatDiagnosticFeignDamageSourceSpell
+               << ", hitDmg=" << m_combatDiagnosticFeignDamageAmount
+               << ", combatReenterBy=" << describeUnit(m_combatDiagnosticFeignCombatSourceGuid)
+               << ", combatSpell=" << m_combatDiagnosticFeignCombatSpellId
+               << ", combatSpellResult=" << (m_combatDiagnosticFeignCombatSpellId ? DescribeFeignCombatMiss(m_combatDiagnosticFeignCombatMissCondition) : "n/a")
+               << ", combatInheritedFrom=" << describeUnit(m_combatDiagnosticFeignCombatInheritedFromGuid)
+               << ", combatInheritedSpell=" << m_combatDiagnosticFeignCombatInheritedSpellId;
+    diagnostic << '.';
+
+    std::string const message = diagnostic.str();
+    bool const delivered = BroadcastFeignDiagnostic(message);
+
+    // Log even with no enabled observer session: an undelivered report must
+    // still leave a trace, otherwise "mask not enabled" and "never fired" are
+    // indistinguishable after the fact.
+    TC_LOG_WARN("combat.diagnostic", "{} (delivered={})", message, delivered ? 1 : 0);
+}
+
+void Player::SendCombatDiagnostic()
+{
+    CombatManager const& combatManager = GetCombatManager();
+
+    size_t activePveReferences = 0;
+    size_t activePvpReferences = 0;
+    for (auto const& pair : combatManager.GetPvECombatRefs())
+        if (!pair.second->IsSuppressedFor(this))
+            ++activePveReferences;
+    for (auto const& pair : combatManager.GetPvPCombatRefs())
+        if (!pair.second->IsSuppressedFor(this))
+            ++activePvpReferences;
+
+    uint32 activeAuraReasons = 0;
+    for (uint32 spellId : { 29131u, 5229u })
+        if (HasAura(spellId))
+            ++activeAuraReasons;
+
+    std::ostringstream summary;
+    summary << "[Combat diagnostic] You have been in combat for " << std::fixed << std::setprecision(1)
+        << (m_combatDiagnosticCombatTimer / 1000.0f) << " seconds with no enemy within "
+        << CombatDiagnosticEnemyRange << " yards; ";
+    if (m_combatDiagnosticHasDirectSpellCast)
+        summary << "your last direct spell cast was " << (m_combatDiagnosticDirectSpellTimer / 1000.0f) << " seconds ago. ";
+    else
+        summary << "no direct spell cast has been recorded. ";
+    summary << "Active reasons: PvE refs " << activePveReferences << '/' << combatManager.GetPvECombatRefs().size() << ", PvP refs "
+        << activePvpReferences << '/' << combatManager.GetPvPCombatRefs().size() << ", combat auras "
+        << activeAuraReasons << ".";
+    sWorld->SendServerMessage(SERVER_MSG_STRING, summary.str(), this);
+
+    size_t referencesReported = 0;
+    auto reportReference = [this, &referencesReported](char const* type, CombatReference const* reference)
+    {
+        if (reference->IsSuppressedFor(this) || referencesReported >= CombatDiagnosticMaxReferences)
+            return;
+
+        ++referencesReported;
+        Unit* target = reference->GetOther(this);
+        bool const sameMap = target->GetMap() == GetMap();
+
+        std::ostringstream reason;
+        reason << "[Combat diagnostic] " << type << " ref: " << target->GetName() << " ["
+            << target->GetGUID().ToString();
+        if (Creature const* creature = target->ToCreature())
+            reason << ", entry=" << creature->GetEntry() << ", spawn=" << creature->GetSpawnId();
+        reason << "] distance=";
+        if (sameMap)
+            reason << std::fixed << std::setprecision(1) << GetDistance(target) << " yd";
+        else
+            reason << "n/a";
+        reason << ", alive=" << (target->IsAlive() ? "yes" : "no")
+            << ", inWorld=" << (target->IsInWorld() ? "yes" : "no")
+            << ", sameMap=" << (sameMap ? "yes" : "no")
+            << ", samePhase=" << (WorldObject::InSamePhase(this, target) ? "yes" : "no")
+            << ", hostile=" << ((IsHostileTo(target) || target->IsHostileTo(this)) ? "yes" : "no")
+            << ", yourVictim=" << (GetVictim() == target ? "yes" : "no")
+            << ", theirVictim=" << (target->GetVictim() == this ? "yes" : "no");
+        if (target->CanHaveThreatList())
+            reason << ", targetHasYourThreat=" << (target->IsThreatenedBy(this) ? "yes" : "no");
+        if (Unit* owner = target->GetCharmerOrOwner())
+            reason << ", owner=" << owner->GetName() << " [" << owner->GetGUID().ToString() << ']';
+        reason << '.';
+        sWorld->SendServerMessage(SERVER_MSG_STRING, reason.str(), this);
+    };
+
+    for (auto const& pair : combatManager.GetPvECombatRefs())
+        reportReference("PvE", pair.second);
+    for (auto const& pair : combatManager.GetPvPCombatRefs())
+        reportReference("PvP", pair.second);
+
+    size_t const omittedReferences = activePveReferences + activePvpReferences - referencesReported;
+    if (omittedReferences)
+        sWorld->SendServerMessage(SERVER_MSG_STRING,
+            Trinity::StringFormat("[Combat diagnostic] {} additional active combat references omitted.", omittedReferences), this);
+
+    for (uint32 spellId : { 29131u, 5229u })
+    {
+        if (!HasAura(spellId))
+            continue;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+        std::string const spellName = spellInfo && spellInfo->SpellName[DEFAULT_LOCALE]
+            ? spellInfo->SpellName[DEFAULT_LOCALE] : "unknown";
+        sWorld->SendServerMessage(SERVER_MSG_STRING,
+            Trinity::StringFormat("[Combat diagnostic] Combat aura: {} (spell {}).", spellName, spellId), this);
+    }
+
+    if (!activePveReferences && !activePvpReferences && !activeAuraReasons)
+        sWorld->SendServerMessage(SERVER_MSG_STRING,
+            "[Combat diagnostic] No active combat reference or combat-forcing aura was found; the unit combat flag and combat manager state disagree.", this);
 }
 
 void Player::SetCanParry(bool value)
@@ -25799,15 +26644,50 @@ bool Player::CanUseBattlegroundObject(GameObject* gameobject) const
 
     // BUG: sometimes when player clicks on flag in AB - client won't send gameobject_use, only gameobject_report_use packet
     // Note: Mount, stealth and invisibility will be removed when used
-    return (!isTotalImmune() &&                            // Damage immune
+    // Vanish protection is consumed when flag use resolves.
+    return ((!isTotalImmune() || CanBypassBattlegroundObjectImmunity(gameobject)) &&
         !HasAura(SPELL_RECENTLY_DROPPED_FLAG) &&       // Still has recently held flag debuff
+        !IsSpectator() &&                              // Spectators cannot interact with BG objects
         IsAlive());                                    // Alive
+}
+
+bool Player::CanBypassBattlegroundObjectImmunity(GameObject const* gameobject) const
+{
+    if (!gameobject ||
+        (gameobject->GetGoType() != GAMEOBJECT_TYPE_FLAGSTAND && gameobject->GetGoType() != GAMEOBJECT_TYPE_FLAGDROP))
+        return false;
+
+    // These are the short stealth-protection immunities applied by Vanish and
+    // Neilyo's talent. Do not bypass if a real immunity is active alongside
+    // them: Ice Block, Divine Shield, and similar effects still block flags.
+    if (!HasAura(SpellRogueNeilyoImmunity) && !HasAura(SpellRogueVanishImmunity))
+        return false;
+
+    for (AuraEffect const* effect : GetAuraEffectsByType(SPELL_AURA_SCHOOL_IMMUNITY))
+        if (!IsRogueVanishImmunitySpell(effect->GetSpellInfo()->Id))
+            return false;
+
+    for (AuraEffect const* effect : GetAuraEffectsByType(SPELL_AURA_DAMAGE_IMMUNITY))
+        if (!IsRogueVanishImmunitySpell(effect->GetSpellInfo()->Id))
+            return false;
+
+    return true;
+}
+
+void Player::BreakBattlegroundFlagVanishProtection(GameObject const* gameobject)
+{
+    if (!CanBypassBattlegroundObjectImmunity(gameobject))
+        return;
+
+    RemoveAurasByType(SPELL_AURA_MOD_STEALTH);
+    RemoveAurasByType(SPELL_AURA_MOD_INVISIBILITY);
 }
 
 bool Player::CanCaptureTowerPoint() const
 {
     return (!HasStealthAura() &&                            // not stealthed
         !HasInvisibilityAura() &&                       // not invisible
+        !IsSpectator() &&                               // not a spectator
         IsAlive());                                     // live player
 }
 
@@ -26515,6 +27395,8 @@ bool Player::HasAchieved(uint32 achievementId) const
 
 void Player::StartTimedAchievement(AchievementCriteriaTimedTypes type, uint32 entry, uint32 timeLost/* = 0*/)
 {
+    if (Battleground const* bg = GetBattleground(); bg && bg->IsCustomGame())
+        return;
     m_achievementMgr->StartTimedAchievement(type, entry, timeLost);
 }
 
@@ -26525,11 +27407,15 @@ void Player::RemoveTimedAchievement(AchievementCriteriaTimedTypes type, uint32 e
 
 void Player::ResetAchievementCriteria(AchievementCriteriaCondition condition, uint32 value, bool evenIfCriteriaComplete /* = false*/)
 {
+    if (Battleground const* bg = GetBattleground(); bg && bg->IsCustomGame())
+        return;
     m_achievementMgr->ResetAchievementCriteria(condition, value, evenIfCriteriaComplete);
 }
 
 void Player::UpdateAchievementCriteria(AchievementCriteriaTypes type, uint32 miscValue1 /*= 0*/, uint32 miscValue2 /*= 0*/, WorldObject* ref /*= nullptr*/)
 {
+    if (Battleground const* bg = GetBattleground(); bg && bg->IsCustomGame())
+        return;
     m_achievementMgr->UpdateAchievementCriteria(type, miscValue1, miscValue2, ref);
 }
 
@@ -26548,7 +27434,7 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
     if (InBattleground())
     {
         Battleground const* battleground = GetBattleground();
-        if (!battleground || (battleground->GetTypeID(true) != BATTLEGROUND_SCM && battleground->GetTypeID(true) != BATTLEGROUND_BRT))
+        if (!battleground || (battleground->GetTypeID(true) != BATTLEGROUND_SCM && battleground->GetTypeID(true) != BATTLEGROUND_BRT && battleground->GetTypeID(true) != BATTLEGROUND_OBC))
             return;
     }
 
@@ -28129,10 +29015,36 @@ bool Player::IsInWhisperWhiteList(ObjectGuid guid)
     return false;
 }
 
+namespace
+{
+// Socketless player sessions (managed playerbots, transient OBC clones) are
+// rendered by observer clients as server/spline-driven movers. Broadcasting a
+// player-style MSG_MOVE_* packet -- which embeds a full MovementInfo block --
+// switches those clients to a client-movement stream that never receives a
+// follow-up: the model freezes at the packet position, active spline playback
+// is cancelled, and the next SMSG_MONSTER_MOVE snaps it forward, rendered as
+// sporadic back-and-forth porting. Publish their movement-state toggles with
+// the spline-family opcodes (GUID only) instead, exactly like creatures do.
+// See MovementPacketSender::SendSpeedChangeToObservers for the same idiom.
+bool IsServerDrivenBotSession(Player const* player)
+{
+    WorldSession const* session = player->GetSession();
+    return session && (session->IsVirtualSession() || session->IsTransientPlayerSession());
+}
+}
+
 bool Player::SetDisableGravity(bool disable, bool packetOnly /*= false*/, bool updateAnimTier /*= true*/)
 {
     if (!packetOnly && !Unit::SetDisableGravity(disable, packetOnly, updateAnimTier))
         return false;
+
+    if (IsServerDrivenBotSession(this))
+    {
+        WorldPacket data(disable ? SMSG_SPLINE_MOVE_GRAVITY_DISABLE : SMSG_SPLINE_MOVE_GRAVITY_ENABLE, 9);
+        data << GetPackGUID();
+        SendMessageToSet(&data, false);
+        return true;
+    }
 
     WorldPacket data(disable ? SMSG_MOVE_GRAVITY_DISABLE : SMSG_MOVE_GRAVITY_ENABLE, 12);
     data << GetPackGUID();
@@ -28150,6 +29062,17 @@ bool Player::SetCanFly(bool apply, bool packetOnly /*= false*/)
 {
     if (!apply)
         SetFallInformation(0, GetPositionZ());
+
+    if (IsServerDrivenBotSession(this))
+    {
+        if (!packetOnly && !Unit::SetCanFly(apply))
+            return false;
+
+        WorldPacket data(apply ? SMSG_SPLINE_MOVE_SET_FLYING : SMSG_SPLINE_MOVE_UNSET_FLYING, 9);
+        data << GetPackGUID();
+        SendMessageToSet(&data, false);
+        return true;
+    }
 
     WorldPacket data(apply ? SMSG_MOVE_SET_CAN_FLY : SMSG_MOVE_UNSET_CAN_FLY, 12);
     data << GetPackGUID();
@@ -28173,6 +29096,14 @@ bool Player::SetHover(bool apply, bool packetOnly /*= false*/, bool updateAnimTi
     if (!packetOnly && !Unit::SetHover(apply, packetOnly, updateAnimTier))
         return false;
 
+    if (IsServerDrivenBotSession(this))
+    {
+        WorldPacket data(apply ? SMSG_SPLINE_MOVE_SET_HOVER : SMSG_SPLINE_MOVE_UNSET_HOVER, 9);
+        data << GetPackGUID();
+        SendMessageToSet(&data, false);
+        return true;
+    }
+
     WorldPacket data(apply ? SMSG_MOVE_SET_HOVER : SMSG_MOVE_UNSET_HOVER, 12);
     data << GetPackGUID();
     data << uint32(0);          //! movement counter
@@ -28185,10 +29116,35 @@ bool Player::SetHover(bool apply, bool packetOnly /*= false*/, bool updateAnimTi
     return true;
 }
 
+bool Player::SetSwim(bool enable)
+{
+    if (!Unit::SetSwim(enable))
+        return false;
+
+    // Real clients decide to swim locally and relay MSG_MOVE_START/STOP_SWIM
+    // to the server themselves. This override only ever runs for virtual (bot)
+    // sessions -- see Unit::ProcessTerrainStatusUpdate -- and observers render
+    // those as spline-driven movers, so relay the state with the spline-family
+    // opcode (GUID only, no MovementInfo). The old MSG_MOVE_START/STOP_SWIM
+    // relay stomped observers out of spline playback and read as porting.
+    WorldPacket data(enable ? SMSG_SPLINE_MOVE_START_SWIM : SMSG_SPLINE_MOVE_STOP_SWIM, 9);
+    data << GetPackGUID();
+    SendMessageToSet(&data, false);
+    return true;
+}
+
 bool Player::SetWaterWalking(bool apply, bool packetOnly /*= false*/)
 {
     if (!packetOnly && !Unit::SetWaterWalking(apply))
         return false;
+
+    if (IsServerDrivenBotSession(this))
+    {
+        WorldPacket data(apply ? SMSG_SPLINE_MOVE_WATER_WALK : SMSG_SPLINE_MOVE_LAND_WALK, 9);
+        data << GetPackGUID();
+        SendMessageToSet(&data, false);
+        return true;
+    }
 
     WorldPacket data(apply ? SMSG_MOVE_WATER_WALK : SMSG_MOVE_LAND_WALK, 12);
     data << GetPackGUID();
@@ -28206,6 +29162,14 @@ bool Player::SetFeatherFall(bool apply, bool packetOnly /*= false*/)
 {
     if (!packetOnly && !Unit::SetFeatherFall(apply))
         return false;
+
+    if (IsServerDrivenBotSession(this))
+    {
+        WorldPacket data(apply ? SMSG_SPLINE_MOVE_FEATHER_FALL : SMSG_SPLINE_MOVE_NORMAL_FALL, 9);
+        data << GetPackGUID();
+        SendMessageToSet(&data, false);
+        return true;
+    }
 
     WorldPacket data(apply ? SMSG_MOVE_FEATHER_FALL : SMSG_MOVE_NORMAL_FALL, 12);
     data << GetPackGUID();

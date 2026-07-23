@@ -35,6 +35,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "OutdoorPvPMgr.h"
+#include "Player.h"
 #include "PoolMgr.h"
 #include "QueryPackets.h"
 #include "ScriptMgr.h"
@@ -46,6 +47,30 @@
 #include <G3D/Box.h>
 #include <G3D/CoordinateFrame.h>
 #include <G3D/Quat.h>
+
+namespace
+{
+bool IsArenaShadowSightObject(uint32 entry)
+{
+    return entry == 184663 || entry == 184664;
+}
+
+class NonSpectatorPlayerInObjectRangeCheck
+{
+public:
+    NonSpectatorPlayerInObjectRangeCheck(WorldObject const* object, float range) : _object(object), _range(range) { }
+
+    bool operator()(Player* player) const
+    {
+        return player && player->IsAlive() && !player->IsSpectator() &&
+            _object->IsWithinDistInMap(player, _range);
+    }
+
+private:
+    WorldObject const* _object;
+    float _range;
+};
+}
 
 void GameObjectTemplate::InitializeQueryData()
 {
@@ -698,10 +723,14 @@ void GameObject::Update(uint32 diff)
                     }
                     else
                     {
-                        // Environmental trap: Any player
+                        // Environmental battleground/arena traps include
+                        // powerups and Shadow Sight. Spectators and replay
+                        // viewers share PLAYER_EXTRA_SPECTATOR_ON and must not
+                        // trigger or consume those objects merely by flying
+                        // through their activation radius.
                         Player* player = nullptr;
-                        Trinity::AnyPlayerInObjectRangeCheck checker(this, radius);
-                        Trinity::PlayerSearcher<Trinity::AnyPlayerInObjectRangeCheck> searcher(this, player, checker);
+                        NonSpectatorPlayerInObjectRangeCheck checker(this, radius);
+                        Trinity::PlayerSearcher<NonSpectatorPlayerInObjectRangeCheck> searcher(this, player, checker);
                         Cell::VisitWorldObjects(this, searcher, radius);
                         target = player;
                     }
@@ -772,6 +801,12 @@ void GameObject::Update(uint32 diff)
                     }
                     else if (Unit* target = ObjectAccessor::GetUnit(*this, m_lootStateUnitGUID))
                     {
+                        if (Player* targetPlayer = target->ToPlayer(); targetPlayer && targetPlayer->IsSpectator())
+                        {
+                            SetLootState(GO_READY);
+                            break;
+                        }
+
                         // Some traps do not have a spell but should be triggered
                         // Trap spells should still activate even if their owner is in a state
                         // that normally prevents casting (for example Feign Death).  Ignore
@@ -821,9 +856,19 @@ void GameObject::Update(uint32 diff)
 
                         // Battleground gameobjects have data2 == 0 && data5 == 3
                         if (!goInfo->trap.diameter && goInfo->trap.cooldown == 3)
+                        {
+                            Battleground* bg = nullptr;
                             if (Player* player = target->ToPlayer())
-                                if (Battleground* bg = player->GetBattleground())
-                                    bg->HandleTriggerBuff(GetGUID());
+                                bg = player->GetBattleground();
+
+                            if (bg)
+                                bg->HandleTriggerBuff(GetGUID());
+                            else if (IsArenaShadowSightObject(GetEntry()))
+                            {
+                                DespawnOrUnsummon();
+                                break;
+                            }
+                        }
                     }
                     break;
                 }
@@ -1646,7 +1691,11 @@ void GameObject::Use(Unit* user)
     if (Player* playerUser = user->ToPlayer())
     {
         if (m_goInfo->CannotBeUsedUnderImmunity() && playerUser->HasUnitFlag(UNIT_FLAG_IMMUNE))
-            return;
+        {
+            playerUser->BreakBattlegroundFlagVanishProtection(this);
+            if (playerUser->HasUnitFlag(UNIT_FLAG_IMMUNE))
+                return;
+        }
 
         if (!m_goInfo->IsUsableMounted())
             playerUser->RemoveAurasByType(SPELL_AURA_MOUNTED);
@@ -1685,6 +1734,9 @@ void GameObject::Use(Unit* user)
         }
         case GAMEOBJECT_TYPE_TRAP:                          //6
         {
+            if (Player* player = user->ToPlayer(); player && player->IsSpectator())
+                return;
+
             GameObjectTemplate const* goInfo = GetGOInfo();
             if (goInfo->trap.spellId)
                 CastSpell(user, goInfo->trap.spellId);
@@ -1693,6 +1745,17 @@ void GameObject::Use(Unit* user)
 
             if (goInfo->trap.type == 1)         // Deactivate after trigger
                 SetLootState(GO_JUST_DEACTIVATED);
+            else if (IsArenaShadowSightObject(GetEntry()))
+            {
+                Battleground* bg = nullptr;
+                if (Player* player = user->ToPlayer())
+                    bg = player->GetBattleground();
+
+                if (bg)
+                    bg->HandleTriggerBuff(GetGUID());
+                else
+                    DespawnOrUnsummon();
+            }
 
             return;
         }
@@ -2213,7 +2276,7 @@ void GameObject::Use(Unit* user)
                                 bg->EventPlayerClickedOnFlag(player, this);
                             break;
                         case 184142:                        // Netherstorm Flag
-                            if (bg->GetTypeID(true) == BATTLEGROUND_EY)
+                            if (bg->GetTypeID(true) == BATTLEGROUND_EY || bg->GetTypeID(true) == BATTLEGROUND_OBC)
                                 bg->EventPlayerClickedOnFlag(player, this);
                             break;
                     }

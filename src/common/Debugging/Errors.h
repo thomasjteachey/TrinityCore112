@@ -42,9 +42,13 @@ namespace Trinity
     TC_COMMON_API void ClearCrashContext();
 
     [[noreturn]] TC_COMMON_API void AbortHandler(int sigval);
+    // On Unix this installs the calling thread's alternate fatal-signal stack.
+    // It is a no-op on Windows so worker entry points can call it portably.
+    TC_COMMON_API void InitCurrentThreadCrashSignalStack();
 #if TRINITY_PLATFORM != TRINITY_PLATFORM_WINDOWS
     TC_COMMON_API void FatalSignalHandler(int sigval);
     TC_COMMON_API void InitCrashSignalHandlers();
+    TC_COMMON_API void InitializeEmergencyCrashLog(std::string const& filename);
 #endif
 
 } // namespace Trinity

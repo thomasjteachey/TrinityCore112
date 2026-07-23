@@ -75,6 +75,9 @@ void Arena::AddPlayer(Player* player)
 {
     bool const isInBattleground = IsPlayerInBattleground(player->GetGUID());
     Battleground::AddPlayer(player);
+    if (IsCustomGame())
+        _customGameEliminatedPlayers.erase(player->GetGUID());
+
     if (!isInBattleground)
         PlayerScores[player->GetGUID().GetCounter()] = new ArenaScore(player->GetGUID(), player->GetBGTeam());
 
@@ -96,8 +99,11 @@ void Arena::AddPlayer(Player* player)
     UpdateArenaWorldState();
 }
 
-void Arena::RemovePlayer(Player* player, ObjectGuid /*guid*/, uint32 /*team*/)
+void Arena::RemovePlayer(Player* player, ObjectGuid guid, uint32 /*team*/)
 {
+    if (IsCustomGame())
+        _customGameEliminatedPlayers.erase(guid);
+
     if (GetStatus() == STATUS_WAIT_LEAVE)
         return;
 
@@ -107,20 +113,23 @@ void Arena::RemovePlayer(Player* player, ObjectGuid /*guid*/, uint32 /*team*/)
 
 void Arena::FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet)
 {
-    packet.Worldstates.emplace_back(ARENA_WORLD_STATE_ALIVE_PLAYERS_GREEN, GetAlivePlayersCountByTeam(HORDE));
-    packet.Worldstates.emplace_back(ARENA_WORLD_STATE_ALIVE_PLAYERS_GOLD, GetAlivePlayersCountByTeam(ALLIANCE));
+    packet.Worldstates.emplace_back(ARENA_WORLD_STATE_ALIVE_PLAYERS_GREEN, GetArenaAlivePlayersCountByTeam(HORDE));
+    packet.Worldstates.emplace_back(ARENA_WORLD_STATE_ALIVE_PLAYERS_GOLD, GetArenaAlivePlayersCountByTeam(ALLIANCE));
 }
 
 void Arena::UpdateArenaWorldState()
 {
-    UpdateWorldState(ARENA_WORLD_STATE_ALIVE_PLAYERS_GREEN, GetAlivePlayersCountByTeam(HORDE));
-    UpdateWorldState(ARENA_WORLD_STATE_ALIVE_PLAYERS_GOLD, GetAlivePlayersCountByTeam(ALLIANCE));
+    UpdateWorldState(ARENA_WORLD_STATE_ALIVE_PLAYERS_GREEN, GetArenaAlivePlayersCountByTeam(HORDE));
+    UpdateWorldState(ARENA_WORLD_STATE_ALIVE_PLAYERS_GOLD, GetArenaAlivePlayersCountByTeam(ALLIANCE));
 }
 
 void Arena::HandleKillPlayer(Player* player, Player* killer)
 {
     if (GetStatus() != STATUS_IN_PROGRESS)
         return;
+
+    if (IsCustomGame() && player)
+        _customGameEliminatedPlayers.insert(player->GetGUID());
 
     Battleground::HandleKillPlayer(player, killer);
 
@@ -162,10 +171,24 @@ void Arena::CheckWinConditions()
     {
         return;
     }
-    if (!GetAlivePlayersCountByTeam(ALLIANCE) && GetPlayersCountByTeam(HORDE))
+    if (!GetArenaAlivePlayersCountByTeam(ALLIANCE) && GetPlayersCountByTeam(HORDE))
         EndBattleground(HORDE);
-    else if (GetPlayersCountByTeam(ALLIANCE) && !GetAlivePlayersCountByTeam(HORDE))
+    else if (GetPlayersCountByTeam(ALLIANCE) && !GetArenaAlivePlayersCountByTeam(HORDE))
         EndBattleground(ALLIANCE);
+}
+
+uint32 Arena::GetArenaAlivePlayersCountByTeam(uint32 team) const
+{
+    if (!IsCustomGame())
+        return GetAlivePlayersCountByTeam(team);
+
+    uint32 aliveCount = 0;
+    for (auto const& [guid, participant] : m_Players)
+        if (participant.Team == team && !participant.OfflineRemoveTime &&
+            _customGameEliminatedPlayers.find(guid) == _customGameEliminatedPlayers.end())
+            ++aliveCount;
+
+    return aliveCount;
 }
 
 void Arena::EndBattleground(uint32 winner)
@@ -238,7 +261,7 @@ void Arena::EndBattleground(uint32 winner)
                 loserArenaTeam->FinishGame(ARENA_TIMELIMIT_POINTS_LOSS);
             }
 
-            uint8 aliveWinners = GetAlivePlayersCountByTeam(winner);
+            uint8 aliveWinners = GetArenaAlivePlayersCountByTeam(winner);
 
             for (auto const& i : GetPlayers())
             {

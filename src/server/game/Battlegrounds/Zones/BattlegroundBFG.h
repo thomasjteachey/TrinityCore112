@@ -325,6 +325,8 @@ public:
     bool UpdatePlayerScore(Player* player, uint32 type, uint32 value, bool doAddHonor = true) override;
     void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet) override;
     void EventPlayerClickedOnFlag(Player* source, GameObject* gameObject) override;
+    uint32 GetDynamicNodeCount() const override { return GILNEAS_BG_DYNAMIC_NODES_COUNT; }
+    bool GetDynamicNodeInfo(ObjectGuid playerGuid, uint32 nodeId, BattlegroundNodeObjective& node) const override;
 
     bool AllNodesConrolledByTeam(TeamId teamId) const;
     bool IsTeamScores500Disadvantage(TeamId teamId) const { return _teamScores500Disadvantage[teamId]; }

@@ -228,6 +228,13 @@ bool CombatManager::SetInCombatWith(Unit* who, bool addSecondUnitSuppressed)
     if (!who || who == _owner)
         return false;
 
+    // Combat diagnostic: names whichever unit put a pending feign/trap watch
+    // back into combat, regardless of which side initiated this call.
+    if (Player* feignOwner = _owner->ToPlayer())
+        feignOwner->NotifyCombatDiagnosticCombatSource(who);
+    if (Player* feignWho = who->ToPlayer())
+        feignWho->NotifyCombatDiagnosticCombatSource(_owner);
+
     // Are we already in combat? If yes, refresh pvp combat
     if (PvPCombatReference* existingPvpRef = Trinity::Containers::MapGetValuePtr(_pvpRefs, who->GetGUID()))
     {
@@ -304,7 +311,7 @@ bool CombatManager::IsInCombatWith(Unit const* who) const
     return IsInCombatWith(who->GetGUID());
 }
 
-void CombatManager::InheritCombatStatesFrom(Unit const* who)
+void CombatManager::InheritCombatStatesFrom(Unit const* who, uint32 causeSpellId)
 {
     CombatManager const& mgr = who->GetCombatManager();
     for (auto& ref : mgr._pveRefs)
@@ -315,6 +322,11 @@ void CombatManager::InheritCombatStatesFrom(Unit const* who)
             if ((_owner->IsImmuneToPC() && target->HasUnitFlag(UNIT_FLAG_PLAYER_CONTROLLED)) ||
                 (_owner->IsImmuneToNPC() && !target->HasUnitFlag(UNIT_FLAG_PLAYER_CONTROLLED)))
                 continue;
+            // Combat diagnostic: this pairing did not come from anything the
+            // target did -- _owner is only linked because `who` (an ally it
+            // assisted/healed/buffed) was already fighting `target`.
+            if (Player* feignTarget = target->ToPlayer())
+                feignTarget->NotifyCombatDiagnosticCombatInherited(who, causeSpellId);
             SetInCombatWith(target);
         }
     }
@@ -324,6 +336,8 @@ void CombatManager::InheritCombatStatesFrom(Unit const* who)
         if ((_owner->IsImmuneToPC() && target->HasUnitFlag(UNIT_FLAG_PLAYER_CONTROLLED)) ||
             (_owner->IsImmuneToNPC() && !target->HasUnitFlag(UNIT_FLAG_PLAYER_CONTROLLED)))
             continue;
+        if (Player* feignTarget = target->ToPlayer())
+            feignTarget->NotifyCombatDiagnosticCombatInherited(who, causeSpellId);
         SetInCombatWith(target);
     }
 }

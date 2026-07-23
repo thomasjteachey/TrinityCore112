@@ -84,6 +84,24 @@ void MovementPacketSender::SendSpeedChangeToObservers(Unit* unit, UnitMoveType m
 
     ASSERT(controller);
 
+    // Socketless player sessions (managed playerbots, transient OBC clones) move
+    // exclusively through server splines and have no client to acknowledge
+    // player-style movement changes. Their spline tick keeps m_movementInfo in
+    // sync, but publishing MSG_MOVE_SET_*_SPEED would still switch observers from
+    // spline playback to a client-movement stream that never follows. Keep the
+    // observer protocol server-driven as well by using the spline speed opcode,
+    // which carries no competing MovementInfo block.
+    if (WorldSession const* session = controller->GetWorldSession();
+        session && (session->IsVirtualSession() || session->IsTransientPlayerSession()))
+    {
+        WorldPacket data;
+        data.Initialize(moveTypeToOpcode[mtype][0], 8 + 4);
+        data << unit->GetPackGUID();
+        data << newSpeedFlat;
+        unit->SendMessageToSet(&data, controller->GetBasePlayer());
+        return;
+    }
+
     WorldPacket data;
     data.Initialize(moveTypeToOpcode[mtype][2], 8 + 30 + 4);
     WorldSession::WriteMovementInfo(&data, &unit->m_movementInfo);

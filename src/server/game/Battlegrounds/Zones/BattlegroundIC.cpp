@@ -417,7 +417,7 @@ void BattlegroundIC::HandleKillPlayer(Player* player, Player* killer)
 
     // we must end the battleground
     if (factionReinforcements[player->GetTeamId()] < 1)
-        EndBattleground(killer->GetTeam());
+        EndBattleground(GetOtherTeam(player->GetBGTeam()));
 }
 
 void BattlegroundIC::EventPlayerClickedOnFlag(Player* player, GameObject* target_obj)

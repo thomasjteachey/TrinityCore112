@@ -354,8 +354,8 @@ void BattlegroundSCM::UpdateTeamScoreWorldStates()
     UpdateWorldState(BG_SCM_WORLDSTATE_SHOW, 1);
     UpdateWorldState(BG_SCM_WORLDSTATE_ALLIANCE_SCORE, _allianceKills);
     UpdateWorldState(BG_SCM_WORLDSTATE_HORDE_SCORE, _hordeKills);
-    UpdateWorldState(BG_SCM_WORLDSTATE_MAX_SCORE, BG_SCM_KILL_LIMIT);
-    UpdateWorldState(BG_SCM_WORLDSTATE_MAX_KILLS_UI, BG_SCM_KILL_LIMIT);
+    UpdateWorldState(BG_SCM_WORLDSTATE_MAX_SCORE, GetDeathmatchKillLimit(BG_SCM_KILL_LIMIT));
+    UpdateWorldState(BG_SCM_WORLDSTATE_MAX_KILLS_UI, GetDeathmatchKillLimit(BG_SCM_KILL_LIMIT));
 }
 
 void BattlegroundSCM::AwardPointToTeam(uint32 team)
@@ -384,9 +384,9 @@ void BattlegroundSCM::AwardPointToTeam(uint32 team)
 
     UpdateTeamScoreWorldStates();
 
-    if (_allianceKills >= BG_SCM_KILL_LIMIT)
+    if (_allianceKills >= GetDeathmatchKillLimit(BG_SCM_KILL_LIMIT))
         EndBattleground(ALLIANCE);
-    else if (_hordeKills >= BG_SCM_KILL_LIMIT)
+    else if (_hordeKills >= GetDeathmatchKillLimit(BG_SCM_KILL_LIMIT))
         EndBattleground(HORDE);
 }
 
@@ -428,8 +428,8 @@ void BattlegroundSCM::FillInitialWorldStates(WorldPackets::WorldState::InitWorld
     packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_SHOW, 1);
     packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_ALLIANCE_SCORE, _allianceKills);
     packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_HORDE_SCORE, _hordeKills);
-    packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_MAX_SCORE, BG_SCM_KILL_LIMIT);
-    packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_MAX_KILLS_UI, BG_SCM_KILL_LIMIT);
+    packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_MAX_SCORE, GetDeathmatchKillLimit(BG_SCM_KILL_LIMIT));
+    packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_MAX_KILLS_UI, GetDeathmatchKillLimit(BG_SCM_KILL_LIMIT));
     packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_TIMER_ACTIVE, 0);
     packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_TIMER, 0);
 }

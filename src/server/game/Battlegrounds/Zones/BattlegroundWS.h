@@ -27,8 +27,7 @@ enum BG_WS_TimerOrScore
     BG_WS_FLAG_RESPAWN_TIME = 12000,
     BG_WS_FLAG_DROP_TIME    = 15000,
     BG_WS_SPELL_FORCE_TIME  = 600000,
-    BG_WS_SPELL_BRUTAL_TIME = 900000,
-    BG_WS_RESURRECTION_INTERVAL = 31500
+    BG_WS_SPELL_BRUTAL_TIME = 900000
 };
 
 enum BG_WS_BuffRespawnTimes
@@ -231,6 +230,8 @@ class BattlegroundWS : public Battleground
         void RespawnFlag(uint32 Team, bool captured);
         void RespawnFlagAfterDrop(uint32 Team);
         uint8 GetFlagState(uint32 team)             { return _flagState[GetTeamIndexByTeamId(team)]; }
+        ObjectGuid GetFlagPickupGUID(ObjectGuid playerGuid) const override;
+        bool GetFlagCapturePosition(ObjectGuid carrierGuid, Position& position) const override;
 
         /* Battleground Events */
         void EventPlayerDroppedFlag(Player* player) override;
@@ -240,7 +241,7 @@ class BattlegroundWS : public Battleground
         void SendWSGFlagAddonMessage(std::string const& payload);
         void BroadcastWSGFlagFullState();
         void SendWSGFlagFullStateTo(Player* player);
-        std::string BuildWSGFlagFullPayload() const;
+        std::string BuildWSGFlagFullPayload(Player const* viewer = nullptr) const;
 
         void RemovePlayer(Player* player, ObjectGuid guid, uint32 team) override;
         void HandleAreaTrigger(Player* player, uint32 trigger) override;
@@ -274,7 +275,6 @@ class BattlegroundWS : public Battleground
         bool CheckAchievementCriteriaMeet(uint32 criteriaId, Player const* source, Unit const* target = nullptr, uint32 miscvalue1 = 0) override;
 
     protected:
-        uint32 GetResurrectionInterval() const override;
         uint32 GetBuffRespawnTime(uint32 type) const override;
 
     private:

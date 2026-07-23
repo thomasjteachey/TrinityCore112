@@ -1,0 +1,3 @@
+extract "C:\Projects\Gamedev\wow\clients\centurion\Data\patch.MPQ" "spells\hordectfflag_spell00.skin" "C:\Users\broki\AppData\Local\Temp\codex-preview-crash-flags\patch" /fp
+extract "C:\Projects\Gamedev\wow\clients\centurion\Data\patch.MPQ" "spells\alliancectfflag_spell00.skin" "C:\Users\broki\AppData\Local\Temp\codex-preview-crash-flags\patch" /fp
+exit

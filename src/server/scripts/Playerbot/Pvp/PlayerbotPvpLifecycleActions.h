@@ -25,6 +25,9 @@ namespace playerbot
 {
 bool NormalizeLifecycleQueueState(Player* player);
 uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType);
+void NotifyHunterAutoShotFired(Player* player);
+bool IsHunterAutoShotPlantActive(Player* player);
+void ResyncPlayerbotSwimStateForMovementStop(Player* player);
 
 class BattlegroundLifecycleActions
 {
@@ -36,6 +39,7 @@ public:
     static bool AcceptInvitePrimitive(Player* player);
     static bool DeclineInvitePrimitive(Player* player);
     static bool HandleInProgressStatusPrimitive(Player* player);
+    static bool HandleDeathPrimitive(Player* player);
 };
 
 class BattlegroundTacticalActions
@@ -50,6 +54,7 @@ public:
     static bool UseBuffPrimitive(Player* player);
     static bool AttackEnemyFlagCarrierPrimitive(Player* player, BattlegroundTacticalContext const& context);
     static bool ProtectFlagCarrierPrimitive(Player* player, BattlegroundTacticalContext const& context);
+    static void DelayFlagPickup(Player* player, uint32 delayMs);
 };
 
 class ArenaLifecycleActions

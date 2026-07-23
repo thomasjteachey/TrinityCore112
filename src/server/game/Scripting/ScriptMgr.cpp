@@ -1949,6 +1949,24 @@ void ScriptMgr::OnPlayerDuelEnd(Player* winner, Player* loser, DuelCompleteType 
     FOREACH_SCRIPT(PlayerScript)->OnDuelEnd(winner, loser, type);
 }
 
+bool ScriptMgr::OnPlayerCustomGameInvite(Player* inviter, Player* invitee)
+{
+    FOR_SCRIPTS_RET(PlayerScript, itr, end, false)
+        if (itr->second->OnCustomGameInvite(inviter, invitee))
+            return true;
+
+    return false;
+}
+
+bool ScriptMgr::OnPlayerCustomGameSummonResponse(Player* invitee, ObjectGuid summonerGuid, bool agree)
+{
+    FOR_SCRIPTS_RET(PlayerScript, itr, end, false)
+        if (itr->second->OnCustomGameSummonResponse(invitee, summonerGuid, agree))
+            return true;
+
+    return false;
+}
+
 void ScriptMgr::OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg)
 {
     FOREACH_SCRIPT(PlayerScript)->OnChat(player, type, lang, msg);
@@ -1992,6 +2010,11 @@ void ScriptMgr::OnPlayerSpellCast(Player* player, Spell* spell, bool skipCheck)
 void ScriptMgr::OnPlayerLogin(Player* player, bool firstLogin)
 {
     FOREACH_SCRIPT(PlayerScript)->OnLogin(player, firstLogin);
+}
+
+void ScriptMgr::OnPlayerBeforeMapLoad(Player* player, uint32& mapId, uint32& instanceId)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnBeforeMapLoad(player, mapId, instanceId);
 }
 
 void ScriptMgr::OnPlayerLogout(Player* player)
@@ -2192,6 +2215,11 @@ void ScriptMgr::OnDamage(Unit* attacker, Unit* victim, uint32& damage)
 void ScriptMgr::ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage)
 {
     FOREACH_SCRIPT(UnitScript)->ModifyPeriodicDamageAurasTick(target, attacker, damage);
+}
+
+void ScriptMgr::ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* spellInfo)
+{
+    FOREACH_SCRIPT(UnitScript)->ModifyPeriodicDamageAurasTick(target, attacker, damage, spellInfo);
 }
 
 void ScriptMgr::ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage)
@@ -2475,6 +2503,11 @@ void UnitScript::OnDamage(Unit* /*attacker*/, Unit* /*victim*/, uint32& /*damage
 
 void UnitScript::ModifyPeriodicDamageAurasTick(Unit* /*target*/, Unit* /*attacker*/, uint32& /*damage*/)
 {
+}
+
+void UnitScript::ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* /*spellInfo*/)
+{
+    ModifyPeriodicDamageAurasTick(target, attacker, damage);
 }
 
 void UnitScript::ModifyMeleeDamage(Unit* /*target*/, Unit* /*attacker*/, uint32& /*damage*/)
@@ -2779,6 +2812,16 @@ void PlayerScript::OnDuelEnd(Player* /*winner*/, Player* /*loser*/, DuelComplete
 {
 }
 
+bool PlayerScript::OnCustomGameInvite(Player* /*inviter*/, Player* /*invitee*/)
+{
+    return false;
+}
+
+bool PlayerScript::OnCustomGameSummonResponse(Player* /*invitee*/, ObjectGuid /*summonerGuid*/, bool /*agree*/)
+{
+    return false;
+}
+
 void PlayerScript::OnChat(Player* /*player*/, uint32 /*type*/, uint32 /*lang*/, std::string& /*msg*/)
 {
 }
@@ -2812,6 +2855,10 @@ void PlayerScript::OnSpellCast(Player* /*player*/, Spell* /*spell*/, bool /*skip
 }
 
 void PlayerScript::OnLogin(Player* /*player*/, bool /*firstLogin*/)
+{
+}
+
+void PlayerScript::OnBeforeMapLoad(Player* /*player*/, uint32& /*mapId*/, uint32& /*instanceId*/)
 {
 }
 

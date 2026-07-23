@@ -1378,8 +1378,20 @@ void Spell::EffectJumpDest()
         else
             speedXY = 0.0f;
 
-        // Fire the client-side jump (you can spin in mid-air)
-        unitCaster->JumpTo(speedXY, speedZ, true, destPos);
+        // Real clients execute JumpTo from the knockback movement packet they
+        // receive. Virtual player sessions have no client movement loop to
+        // acknowledge that packet, so drive their jump from the server's
+        // MotionMaster instead. This also gives playerbot movement guards an
+        // EFFECT_MOTION_TYPE to protect until the leap finishes.
+        Player* playerCaster = unitCaster->ToPlayer();
+        WorldSession* session = playerCaster ? playerCaster->GetSession() : nullptr;
+        bool const serverDrivenPlayer = session &&
+            (session->IsVirtualSession() || session->IsTransientPlayerSession());
+        if (serverDrivenPlayer)
+            unitCaster->GetMotionMaster()->MoveJump(*destTarget, speedXY, speedZ, EVENT_JUMP,
+                !m_targets.GetObjectTargetGUID().IsEmpty());
+        else
+            unitCaster->JumpTo(speedXY, speedZ, true, destPos);
         return;
     }
     unitCaster->GetMotionMaster()->MoveJump(*destTarget, speedXY, speedZ, EVENT_JUMP, !m_targets.GetObjectTargetGUID().IsEmpty());
@@ -1953,6 +1965,16 @@ void Spell::EffectPersistentAA()
     if (Aura* aura = Aura::TryCreate(createInfo))
     {
         _dynObjAura = aura->ToDynObjAura();
+
+        // Channeled persistent area auras must use the same duration as the
+        // channel. The channel duration has already had haste and spell mods
+        // applied, while Aura::TryCreate starts from the raw spell duration.
+        if (m_spellInfo->IsChanneled() && m_channeledDuration > 0)
+        {
+            _dynObjAura->SetMaxDuration(m_channeledDuration);
+            _dynObjAura->SetDuration(m_channeledDuration);
+        }
+
         _dynObjAura->_RegisterForTargets();
     }
     else
@@ -2151,7 +2173,11 @@ void Spell::EffectOpenLock()
         GameObjectTemplate const* goInfo = gameObjTarget->GetGOInfo();
 
         if (goInfo->CannotBeUsedUnderImmunity() && player->HasUnitFlag(UNIT_FLAG_IMMUNE))
-            return;
+        {
+            player->BreakBattlegroundFlagVanishProtection(gameObjTarget);
+            if (player->HasUnitFlag(UNIT_FLAG_IMMUNE))
+                return;
+        }
 
         // Arathi Basin banner opening. /// @todo Verify correctness of this check
         if ((goInfo->type == GAMEOBJECT_TYPE_BUTTON && goInfo->button.noDamageImmune) ||
@@ -2171,7 +2197,7 @@ void Spell::EffectOpenLock()
             // in battleground check
             if (Battleground* bg = player->GetBattleground())
             {
-                if (bg->GetTypeID(true) == BATTLEGROUND_EY)
+                if (bg->GetTypeID(true) == BATTLEGROUND_EY || bg->GetTypeID(true) == BATTLEGROUND_OBC)
                     bg->EventPlayerClickedOnFlag(player, gameObjTarget);
                 return;
             }
@@ -4127,6 +4153,12 @@ void Spell::EffectDuel()
 
     Player* caster = m_caster->ToPlayer();
     Player* target = unitTarget->ToPlayer();
+
+    if (caster->IsInCustomGameLobby() || target->IsInCustomGameLobby())
+    {
+        SendCastResult(SPELL_FAILED_NO_DUELING);
+        return;
+    }
 
     // caster or target already have requested duel
     // bots may not have social data, so only enforce ignore checks when social data exists

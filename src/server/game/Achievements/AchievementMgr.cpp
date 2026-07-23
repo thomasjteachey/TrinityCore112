@@ -764,6 +764,9 @@ static const uint32 achievIdByArenaSlot[MAX_ARENA_SLOT] = { 1057, 1107, 1108, 0 
  */
 void AchievementMgr::UpdateAchievementCriteria(AchievementCriteriaTypes type, uint32 miscValue1 /*= 0*/, uint32 miscValue2 /*= 0*/, WorldObject* ref /*= nullptr*/)
 {
+    if (m_player->GetSession() && m_player->GetSession()->IsTransientPlayerSession())
+        return;
+
     if (type >= ACHIEVEMENT_CRITERIA_TYPE_TOTAL)
     {
         TC_LOG_DEBUG("achievement", "UpdateAchievementCriteria: Wrong criteria type {}", type);

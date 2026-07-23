@@ -278,7 +278,7 @@ GroupQueueInfo* BattlegroundQueue::AddGroup(Player* leader, Group* grp, Battlegr
     // Scarlet Chapel may explicitly request a side by temporarily setting the raw BG team override
     // before queueing. Do not use Player::GetBGTeam() here: it falls back to the player's real
     // faction when no override is set, which would make every SCM queue look forced.
-    uint32 const explicitBgTeam = ((BgTypeId == BATTLEGROUND_SCM) || (BgTypeId == BATTLEGROUND_BRT)) ? leader->GetBGTeamOverride() : 0;
+    uint32 const explicitBgTeam = ((BgTypeId == BATTLEGROUND_SCM) || (BgTypeId == BATTLEGROUND_BRT) || (BgTypeId == BATTLEGROUND_OBC)) ? leader->GetBGTeamOverride() : 0;
     bool const hasForcedQueueTeam = explicitBgTeam == ALLIANCE || explicitBgTeam == HORDE;
     if (!ArenaType && !hasForcedQueueTeam)
     {
@@ -323,7 +323,7 @@ GroupQueueInfo* BattlegroundQueue::AddGroup(Player* leader, Group* grp, Battlegr
 
         // SCM refill behavior: if there is already an active/free-slot SCM instance,
         // drive new solo entries to the side that currently has more free slots.
-        if (BgTypeId == BATTLEGROUND_SCM || BgTypeId == BATTLEGROUND_BRT)
+        if (BgTypeId == BATTLEGROUND_SCM || BgTypeId == BATTLEGROUND_BRT || BgTypeId == BATTLEGROUND_OBC)
         {
             BGFreeSlotQueueContainer& freeSlotQueue = sBattlegroundMgr->GetBGFreeSlotQueueStore(BgTypeId);
             for (Battleground* bg : freeSlotQueue)
@@ -1045,7 +1045,7 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
 
             if (!bg->HasFreeSlots())
                 bg->RemoveFromBGFreeSlotQueue();
-            else if (bgTypeId == BATTLEGROUND_SCM || bgTypeId == BATTLEGROUND_BRT)
+            else if (bgTypeId == BATTLEGROUND_SCM || bgTypeId == BATTLEGROUND_BRT || bgTypeId == BATTLEGROUND_OBC)
             {
                 // Keep SCM refill progressing even when no new external queue events
                 // occur. Without a follow-up update pulse, SCM can stall at an
@@ -1058,7 +1058,7 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
     // SCM should always saturate existing free-slot instances before creating another one.
     // This prevents queue fragmentation where late joiners get split into a second SCM while
     // the first instance still has open seats.
-    if (bgTypeId == BATTLEGROUND_SCM || bgTypeId == BATTLEGROUND_BRT)
+    if (bgTypeId == BATTLEGROUND_SCM || bgTypeId == BATTLEGROUND_BRT || bgTypeId == BATTLEGROUND_OBC)
     {
         for (Battleground* bg : bgQueues)
         {

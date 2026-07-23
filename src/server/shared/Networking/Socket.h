@@ -139,6 +139,18 @@ public:
 protected:
     virtual void OnClose() { }
 
+    virtual void OnSocketError(char const* operation, boost::system::error_code const& error)
+    {
+        TC_LOG_ERROR("network.disconnect", "Socket {} failure for {}:{}: {} ({})", operation,
+            GetRemoteIpAddress().to_string(), GetRemotePort(), error.value(), error.message());
+    }
+
+    virtual void OnSocketWriteZero(std::size_t attemptedBytes)
+    {
+        TC_LOG_ERROR("network.disconnect", "Socket write returned zero bytes for {}:{} (attempted {})",
+            GetRemoteIpAddress().to_string(), GetRemotePort(), attemptedBytes);
+    }
+
     virtual void ReadHandler() = 0;
 
     bool AsyncProcessQueue()
@@ -174,6 +186,7 @@ private:
     {
         if (error)
         {
+            OnSocketError("read", error);
             CloseSocket();
             return;
         }
@@ -199,7 +212,10 @@ private:
                 CloseSocket();
         }
         else
+        {
+            OnSocketError("asynchronous write", error);
             CloseSocket();
+        }
     }
 
 #else
@@ -227,6 +243,7 @@ private:
             if (error == boost::asio::error::would_block || error == boost::asio::error::try_again)
                 return AsyncProcessQueue();
 
+            OnSocketError("write", error);
             _writeQueue.pop();
             if (_closing && _writeQueue.empty())
                 CloseSocket();
@@ -234,6 +251,7 @@ private:
         }
         else if (bytesSent == 0)
         {
+            OnSocketWriteZero(bytesToSend);
             _writeQueue.pop();
             if (_closing && _writeQueue.empty())
                 CloseSocket();

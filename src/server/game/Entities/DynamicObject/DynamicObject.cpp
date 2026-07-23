@@ -16,6 +16,7 @@
  */
 
 #include "DynamicObject.h"
+#include "Chat.h"
 #include "Common.h"
 #include "GameTime.h"
 #include "Log.h"
@@ -28,6 +29,7 @@
 #include "Transport.h"
 #include "Unit.h"
 #include "UpdateData.h"
+#include "WorldSession.h"
 
 DynamicObject::DynamicObject(bool isWorldObject) : WorldObject(isWorldObject),
     _aura(nullptr), _removedAura(nullptr), _caster(nullptr), _duration(0), _isViewpoint(false)
@@ -169,6 +171,13 @@ void DynamicObject::Remove()
 {
     if (IsInWorld())
     {
+        if (Player* casterPlayer = _caster ? _caster->ToPlayer() : nullptr)
+            if (WorldSession* session = casterPlayer->GetSession())
+                if (session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Channel))
+                    ChatHandler(session).PSendSysMessage(
+                        "[Channel] DynamicObject::Remove spell=%u guid=%s",
+                        GetSpellId(), GetGUID().ToString().c_str());
+
         SendObjectDeSpawnAnim(GetGUID());
         RemoveFromWorld();
         AddObjectToRemoveList();

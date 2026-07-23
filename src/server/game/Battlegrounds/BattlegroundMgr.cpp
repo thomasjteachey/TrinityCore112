@@ -22,6 +22,7 @@
 #include "BattlegroundEY.h"
 #include "BattlegroundWS.h"
 #include "BattlegroundNA.h"
+#include "BattlegroundNL.h"
 #include "BattlegroundBE.h"
 #include "BattlegroundRL.h"
 #include "BattlegroundSA.h"
@@ -30,6 +31,7 @@
 #include "BattlegroundIC.h"
 #include "BattlegroundSCM.h"
 #include "BattlegroundBRT.h"
+#include "BattlegroundOBC.h"
 #include "BattlegroundSV.h"
 #include "BattlegroundTP.h"
 #include "BattlegroundBFG.h"
@@ -378,7 +380,7 @@ uint32 BattlegroundMgr::CreateClientVisibleInstanceId(BattlegroundTypeId bgTypeI
 }
 
 // create a new battleground that will really be used to play
-Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundTypeId originalBgTypeId, PvPDifficultyEntry const* bracketEntry, uint8 arenaType, bool isRated)
+Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundTypeId originalBgTypeId, PvPDifficultyEntry const* bracketEntry, uint8 arenaType, bool isRated, bool isPrivate)
 {
     BattlegroundTypeId bgTypeId = GetRandomBG(originalBgTypeId);
 
@@ -416,6 +418,9 @@ Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundTypeId original
         case BATTLEGROUND_RL:
             bg = new BattlegroundRL(*(BattlegroundRL*)bg_template);
             break;
+        case BATTLEGROUND_NL:
+            bg = new BattlegroundNL(*(BattlegroundNL*)bg_template);
+            break;
         case BATTLEGROUND_SA:
             bg = new BattlegroundSA(*(BattlegroundSA*)bg_template);
             break;
@@ -433,6 +438,9 @@ Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundTypeId original
             break;
         case BATTLEGROUND_BRT:
             bg = new BattlegroundBRT(*(BattlegroundBRT*)bg_template);
+            break;
+        case BATTLEGROUND_OBC:
+            bg = new BattlegroundOBC(*(BattlegroundOBC*)bg_template);
             break;
         case BATTLEGROUND_SV:
             bg = new BattlegroundSV(*(BattlegroundSV*)bg_template);
@@ -459,7 +467,10 @@ Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundTypeId original
 
     bg->SetBracket(bracketEntry);
     bg->SetInstanceID(sMapMgr->GenerateInstanceId());
-    bg->SetClientInstanceID(CreateClientVisibleInstanceId(originalBgTypeId, bracketEntry->GetBracketId()));
+    // Private matches still need a non-zero ID in status packets, but their
+    // ID is never inserted into m_ClientBattlegroundIds and therefore never
+    // appears in the public battleground list.
+    bg->SetClientInstanceID(isPrivate ? bg->GetInstanceID() : CreateClientVisibleInstanceId(originalBgTypeId, bracketEntry->GetBracketId()));
     bg->Reset();                     // reset the new bg (set status to status_wait_queue from status_none)
     bg->SetStatus(STATUS_WAIT_JOIN); // start the joining of the bg
     bg->SetArenaType(arenaType);
@@ -525,6 +536,9 @@ bool BattlegroundMgr::CreateBattleground(BattlegroundTemplate const* bgTemplate)
             case BATTLEGROUND_RL:
                 bg = new BattlegroundRL();
                 break;
+            case BATTLEGROUND_NL:
+                bg = new BattlegroundNL();
+                break;
             case BATTLEGROUND_SA:
                 bg = new BattlegroundSA();
                 break;
@@ -542,6 +556,9 @@ bool BattlegroundMgr::CreateBattleground(BattlegroundTemplate const* bgTemplate)
                 break;
             case BATTLEGROUND_BRT:
                 bg = new BattlegroundBRT();
+                break;
+            case BATTLEGROUND_OBC:
+                bg = new BattlegroundOBC();
                 break;
             case BATTLEGROUND_SV:
                 bg = new BattlegroundSV();
@@ -816,6 +833,7 @@ bool BattlegroundMgr::IsArenaType(BattlegroundTypeId bgTypeId)
         || bgTypeId == BATTLEGROUND_DS
         || bgTypeId == BATTLEGROUND_RV
         || bgTypeId == BATTLEGROUND_RL
+        || bgTypeId == BATTLEGROUND_NL
         || bgTypeId == BATTLEGROUND_TV
         || bgTypeId == BATTLEGROUND_TTP;
 }
@@ -842,6 +860,8 @@ BattlegroundQueueTypeId BattlegroundMgr::BGQueueTypeId(BattlegroundTypeId bgType
             return BATTLEGROUND_QUEUE_SCM;
         case BATTLEGROUND_BRT:
             return BATTLEGROUND_QUEUE_BRT;
+        case BATTLEGROUND_OBC:
+            return BATTLEGROUND_QUEUE_OBC;
         case BATTLEGROUND_TP:
             return BATTLEGROUND_QUEUE_TP;
         case BATTLEGROUND_BFG:
@@ -854,6 +874,7 @@ BattlegroundQueueTypeId BattlegroundMgr::BGQueueTypeId(BattlegroundTypeId bgType
         case BATTLEGROUND_NA:
         case BATTLEGROUND_RL:
         case BATTLEGROUND_RV:
+        case BATTLEGROUND_NL:
         case BATTLEGROUND_TV:
         case BATTLEGROUND_TTP:
             switch (arenaType)
@@ -896,6 +917,8 @@ BattlegroundTypeId BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId bgQueue
             return BATTLEGROUND_SCM;
         case BATTLEGROUND_QUEUE_BRT:
             return BATTLEGROUND_BRT;
+        case BATTLEGROUND_QUEUE_OBC:
+            return BATTLEGROUND_OBC;
         case BATTLEGROUND_QUEUE_TP:
             return BATTLEGROUND_TP;
         case BATTLEGROUND_QUEUE_BFG:

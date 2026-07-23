@@ -31,6 +31,7 @@
 #include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "Player.h"
+#include "ScriptMgr.h"
 #include "Transport.h"
 #include "Vehicle.h"
 #include "World.h"
@@ -274,12 +275,14 @@ void WorldSession::HandleMoveWorldportAck()
     }
 
     {
-        if (newMap->IsBattleArena() && ((BattlegroundMap*)newMap)->GetBG() && _player->HasPendingSpectatorForBG(((BattlegroundMap*)newMap)->GetInstanceId()))
+        Battleground* spectatorBg = newMap->IsBattlegroundOrArena() ? ((BattlegroundMap*)newMap)->GetBG() : nullptr;
+        if (spectatorBg && (newMap->IsBattleArena() || spectatorBg->IsCustomGame()) &&
+            _player->HasPendingSpectatorForBG(((BattlegroundMap*)newMap)->GetInstanceId()))
         {
             _player->ClearReceivedSpectatorResetFor();
             _player->SetIsSpectator(true);
             //ArenaSpectator::SendCommand(_player, "%sENABLE", SPECTATOR_ADDON_PREFIX);
-            ((BattlegroundMap*)newMap)->GetBG()->AddSpectator(_player);
+            spectatorBg->AddSpectator(_player);
             //ArenaSpectator::HandleResetCommand(_player);
         }
         else
@@ -1072,13 +1075,16 @@ void WorldSession::HandleMoveSetCollisionHgtAck(WorldPacket& recvData)
 
 void WorldSession::HandleSummonResponseOpcode(WorldPacket& recvData)
 {
-    if (!_player->IsAlive() || _player->IsInCombat())
-        return;
-
     ObjectGuid summoner_guid;
     bool agree;
     recvData >> summoner_guid;
     recvData >> agree;
+
+    if (sScriptMgr->OnPlayerCustomGameSummonResponse(_player, summoner_guid, agree))
+        return;
+
+    if (!_player->IsAlive() || _player->IsInCombat())
+        return;
 
     _player->SummonIfPossible(agree);
 }

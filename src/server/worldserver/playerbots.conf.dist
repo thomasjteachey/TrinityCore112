@@ -83,6 +83,18 @@ Playerbot.PvpLifecycle.QueueOnly.ArenaAccounts =
 
 Playerbot.PvpLifecycle.QueueOnly.BlackrockThroneBgTypeId = 0
 
+#    Playerbot.PvpLifecycle.ObsidianColosseum.Clone.Enable
+#        Description: Creates transient "Dark <name>" player clones entirely in memory when a real
+#                     player enters Obsidian Colosseum. No account or character database rows are used.
+#                     The legacy CloneAccountId setting is accepted only as an enable/disable fallback;
+#                     its numeric value is never used as an account ID.
+#        Default:     0 (disabled)
+
+Playerbot.PvpLifecycle.ObsidianColosseum.Clone.Enable = 0
+
+# Legacy enable fallback. Nonzero enables clones only when Clone.Enable is absent.
+Playerbot.PvpLifecycle.ObsidianColosseum.CloneAccountId = 0
+
 #    Playerbot.PvpClassSpells.Enable
 #        Description: Enables Phase-4 class/spec PvP spell decision slices.
 #                     Current implementation provides reference-aligned trigger/action vocabulary
@@ -93,6 +105,14 @@ Playerbot.PvpLifecycle.QueueOnly.BlackrockThroneBgTypeId = 0
 #                     1 - (Enabled)
 
 Playerbot.PvpClassSpells.Enable = 0
+
+#    Playerbot.PvpClassSpells.RehgarMovementDiagnostics
+#        Description: Sends Rehgar's Fury movement diagnostics as server system messages
+#                     to every online GM. Disable after capturing the live movement trace.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+
+Playerbot.PvpClassSpells.RehgarMovementDiagnostics = 1
 
 #    Playerbot.RandomPopulation.Enable
 #        Description: Enables random-bot population manager orchestration. When enabled and runtime started,
@@ -166,3 +186,79 @@ Playerbot.RandomPopulation.MaxOnlineBotsPerAccount = 0
 #        Default:     48
 
 Playerbot.RandomPopulation.SelectionHistorySize = 48
+
+###################################################################################################
+# RESOURCE GOVERNOR
+#
+#    Watches the average world update time and sheds custom-match bot load before the whole
+#    server degrades. Matches with human PARTICIPANTS are never throttled or ended by the
+#    governor; it only limits bot fill for custom games and, under sustained hard pressure,
+#    ends bot-only matches (unwatched ones first, then spectator-only ones).
+###################################################################################################
+
+#    Playerbot.Governor.Enable
+#        Description: Master switch for the resource governor.
+#        Default:     1
+
+Playerbot.Governor.Enable = 1
+
+#    Playerbot.Governor.SoftUpdateTimeMs
+#        Description: Average world update time (ms) above which the server is considered under
+#                     soft pressure: new custom-match bot additions are capped at
+#                     Playerbot.Governor.SoftMatchBotCap per match.
+#        Default:     110
+
+Playerbot.Governor.SoftUpdateTimeMs = 110
+
+#    Playerbot.Governor.HardUpdateTimeMs
+#        Description: Average world update time (ms) above which the server is under hard
+#                     pressure: no new custom-match bots may be added, bot-only matches may not
+#                     start, and sustained pressure culls running bot-only/spectator-only matches.
+#        Default:     180
+
+Playerbot.Governor.HardUpdateTimeMs = 180
+
+#    Playerbot.Governor.HardSustainSeconds
+#        Description: Hard pressure must persist this long before the first match is culled.
+#        Default:     10
+
+Playerbot.Governor.HardSustainSeconds = 10
+
+#    Playerbot.Governor.CullCooldownSeconds
+#        Description: Minimum time between two governor match culls, so the update-time average
+#                     can settle after each shed before deciding again.
+#        Default:     20
+
+Playerbot.Governor.CullCooldownSeconds = 20
+
+#    Playerbot.Governor.SoftMatchBotCap
+#        Description: Maximum bots/clones a single custom match may request while under soft
+#                     pressure. Has no effect at normal load.
+#        Default:     20
+
+Playerbot.Governor.SoftMatchBotCap = 20
+
+#    Playerbot.Governor.MaxTotalCustomMatchBots
+#        Description: Hard cap on bots/clones across all running custom matches plus the lobby
+#                     roster being edited, regardless of update time. 0 disables the cap.
+#        Default:     160
+
+Playerbot.Governor.MaxTotalCustomMatchBots = 160
+
+#    Playerbot.Governor.BotShedCooldownSeconds
+#        Description: Once no cullable bot-only/spectator-only match remains but hard pressure
+#                     persists, one bot is removed from the human-participant match with the
+#                     largest bot roster every this many seconds (dead bots and the larger team
+#                     are preferred) until the update-time average recovers.
+#        Default:     5
+
+Playerbot.Governor.BotShedCooldownSeconds = 5
+
+#    Playerbot.PvpDecision.GlobalLock
+#        Description: Diagnostic switch. 1 restores the old behavior of serializing every bot
+#                     decision tick through one global mutex instead of one lock per map
+#                     instance. Costs multi-battleground parallelism; use it to isolate whether
+#                     a crash or corruption comes from cross-map bot concurrency.
+#        Default:     0
+
+Playerbot.PvpDecision.GlobalLock = 0

@@ -86,9 +86,9 @@ void BattlegroundEY::PostUpdateImpl(uint32 diff)
         {
             m_PointAddingTimer = BG_EY_FPOINTS_TICK_TIME;
             if (m_TeamPointsCount[TEAM_ALLIANCE] > 0)
-                AddPoints(ALLIANCE, BG_EY_TickPoints[m_TeamPointsCount[TEAM_ALLIANCE] - 1]);
+                AddPoints(ALLIANCE, ScaleResourceGain(BG_EY_TickPoints[m_TeamPointsCount[TEAM_ALLIANCE] - 1]));
             if (m_TeamPointsCount[TEAM_HORDE] > 0)
-                AddPoints(HORDE, BG_EY_TickPoints[m_TeamPointsCount[TEAM_HORDE] - 1]);
+                AddPoints(HORDE, ScaleResourceGain(BG_EY_TickPoints[m_TeamPointsCount[TEAM_HORDE] - 1]));
         }
 
         if (m_FlagState == BG_EY_FLAG_STATE_WAIT_RESPAWN || m_FlagState == BG_EY_FLAG_STATE_ON_GROUND)
@@ -298,9 +298,9 @@ void BattlegroundEY::UpdateTeamScore(uint32 Team)
 {
     uint32 score = GetTeamScore(Team);
 
-    if (score >= BG_EY_MAX_TEAM_SCORE)
+    if (score >= GetResourceLimit(BG_EY_MAX_TEAM_SCORE))
     {
-        score = BG_EY_MAX_TEAM_SCORE;
+        score = GetResourceLimit(BG_EY_MAX_TEAM_SCORE);
         if (Team == TEAM_ALLIANCE)
             EndBattleground(ALLIANCE);
         else
@@ -363,7 +363,8 @@ void BattlegroundEY::AddPlayer(Player* player)
     if (!isInBattleground)
         PlayerScores[player->GetGUID().GetCounter()] = new BattlegroundEYScore(player->GetGUID());
 
-    m_PlayersNearPoint[EY_POINTS_MAX].push_back(player->GetGUID());
+    if (!player->IsSpectator())
+        m_PlayersNearPoint[EY_POINTS_MAX].push_back(player->GetGUID());
 }
 
 void BattlegroundEY::RemovePlayer(Player* player, ObjectGuid guid, uint32 /*team*/)
@@ -812,7 +813,7 @@ void BattlegroundEY::EventPlayerCapturedFlag(Player* player, uint32 BgObjectType
 
     uint8 team_id = player->GetTeam() == ALLIANCE ? TEAM_ALLIANCE : TEAM_HORDE;
     if (m_TeamPointsCount[team_id] > 0)
-        AddPoints(player->GetTeam(), BG_EY_FlagPoints[m_TeamPointsCount[team_id] - 1]);
+        AddPoints(player->GetTeam(), ScaleResourceGain(BG_EY_FlagPoints[m_TeamPointsCount[team_id] - 1]));
 
     UpdatePlayerScore(player, SCORE_FLAG_CAPTURES, 1);
 }

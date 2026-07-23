@@ -41,6 +41,9 @@ class ChaseMovementGenerator : public MovementGenerator, public AbstractFollower
         void Finalize(Unit*, bool, bool) override;
         MovementGeneratorType GetMovementGeneratorType() const override { return CHASE_MOTION_TYPE; }
 
+        Optional<ChaseRange> const& GetRange() const { return _range; }
+        Optional<ChaseAngle> const& GetAngle() const { return _angle; }
+
         void UnitSpeedChanged() override { _lastTargetPosition.reset(); }
 
     private:

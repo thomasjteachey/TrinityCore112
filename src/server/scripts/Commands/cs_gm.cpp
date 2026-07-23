@@ -35,6 +35,9 @@ EndScriptData */
 #include "World.h"
 #include "WorldSession.h"
 
+#include <algorithm>
+#include <cctype>
+
 using namespace Trinity::ChatCommands;
 
 class gm_commandscript : public CommandScript
@@ -52,6 +55,7 @@ public:
             { "list",       HandleGMListFullCommand,    rbac::RBAC_PERM_COMMAND_GM_LIST,        Console::Yes },
             { "visible",    HandleGMVisibleCommand,     rbac::RBAC_PERM_COMMAND_GM_VISIBLE,     Console::No },
             { "bgstart",    HandleGMBgStartCommand,     rbac::RBAC_PERM_COMMAND_GM,             Console::No },
+            { "diagnostics",HandleGMDiagnosticsCommand, rbac::RBAC_PERM_COMMAND_GM,             Console::No },
             { "on",         HandleGMOnCommand,          rbac::RBAC_PERM_COMMAND_GM,             Console::No },
             { "off",        HandleGMOffCommand,         rbac::RBAC_PERM_COMMAND_GM,             Console::No },
         };
@@ -220,6 +224,49 @@ public:
             handler->GetSession()->SendNotification(LANG_INVISIBLE_INVISIBLE);
         }
 
+        return true;
+    }
+
+    static bool HandleGMDiagnosticsCommand(ChatHandler* handler, bool enable, Optional<std::string> categoryArg)
+    {
+        WorldSession* session = handler->GetSession();
+        if (!session)
+            return false;
+
+        std::string category = categoryArg.value_or("all");
+        std::transform(category.begin(), category.end(), category.begin(),
+            [](unsigned char c) { return char(std::tolower(c)); });
+
+        GmDiagnosticCategory diagnosticCategory;
+        if (category == "all")
+            diagnosticCategory = GmDiagnosticCategory::All;
+        else if (category == "heartbeat")
+            diagnosticCategory = GmDiagnosticCategory::Heartbeat;
+        else if (category == "combat")
+            diagnosticCategory = GmDiagnosticCategory::Combat;
+        else if (category == "playerbot")
+            diagnosticCategory = GmDiagnosticCategory::Playerbot;
+        else if (category == "feign")
+            diagnosticCategory = GmDiagnosticCategory::Feign;
+        else if (category == "channel")
+            diagnosticCategory = GmDiagnosticCategory::Channel;
+        else
+        {
+            handler->SendSysMessage("Usage: .gm diagnostics on/off [all/heartbeat/combat/playerbot/feign/channel]");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        session->SetGmDiagnosticEnabled(diagnosticCategory, enable);
+
+        handler->PSendSysMessage(
+            "GM diagnostics %s for %s. Current: heartbeat=%s, combat=%s, playerbot=%s, feign=%s, channel=%s.",
+            enable ? "enabled" : "disabled", category.c_str(),
+            session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Heartbeat) ? "on" : "off",
+            session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Combat) ? "on" : "off",
+            session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Playerbot) ? "on" : "off",
+            session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Feign) ? "on" : "off",
+            session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Channel) ? "on" : "off");
         return true;
     }
 

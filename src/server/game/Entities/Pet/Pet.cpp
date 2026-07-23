@@ -472,6 +472,8 @@ void Pet::SavePetToDB(PetSaveMode mode)
         return;
 
     Player* owner = GetOwner();
+    if (owner && owner->GetSession() && owner->GetSession()->IsTransientPlayerSession())
+        return;
 
     // not save pet as current if another pet temporary unsummoned
     if (mode == PET_SAVE_AS_CURRENT && owner->GetTemporaryUnsummonedPetNumber() &&
@@ -1704,6 +1706,7 @@ namespace
         bool TrainerTaught = false;
         bool WildLearned = false;
         bool Enabled = false;
+        uint32 Cost = 0;
     };
 
     std::vector<ClassicPetTrainingTemplateRow> const& GetClassicPetTrainingTemplateRows()
@@ -1717,7 +1720,7 @@ namespace
         loaded = true;
         rows.clear();
 
-        QueryResult result = WorldDatabase.PQuery("SELECT source_spell, taught_spell, trainer_taught, wild_learned, enabled FROM classic_pet_training_template");
+        QueryResult result = WorldDatabase.PQuery("SELECT source_spell, taught_spell, trainer_taught, wild_learned, enabled, cost FROM classic_pet_training_template");
         if (!result)
             return rows;
 
@@ -1731,6 +1734,7 @@ namespace
             row.TrainerTaught = fields[2].GetUInt8() != 0;
             row.WildLearned = fields[3].GetUInt8() != 0;
             row.Enabled = fields[4].GetUInt8() != 0;
+            row.Cost = fields[5].GetUInt16();
             rows.push_back(row);
         }
         while (result->NextRow());
@@ -1782,12 +1786,16 @@ namespace
 
     uint32 GetClassicPetTrainingCost(uint32 spellId)
     {
-        uint32 trainPoints = 0;
-        SkillLineAbilityMapBounds bounds = sSpellMgr->GetSkillLineAbilityMapBounds(spellId);
-        for (SkillLineAbilityMap::const_iterator itr = bounds.first; itr != bounds.second; ++itr)
-            trainPoints = std::max(trainPoints, itr->second->NumSkillUps);
+        // Training point cost comes from the classic_pet_training_template DB
+        // table (the authority for this feature), not SkillLineAbility.dbc.
+        // NumSkillUps is only ever populated on the client-side dbc; the
+        // server's copy is stock Wrath data with the field zeroed out, which
+        // previously made every pet ability train for free.
+        for (ClassicPetTrainingTemplateRow const& row : GetClassicPetTrainingTemplateRows())
+            if (row.TaughtSpell == spellId)
+                return row.Cost;
 
-        return trainPoints;
+        return 0;
     }
 
     uint32 GetClassicPetTrainingTaughtSpell(uint32 sourceSpellId)

@@ -31,6 +31,8 @@ namespace playerbot
 class PvpClassActions
 {
 public:
+    static bool AreRehgarMovementDiagnosticsEnabled();
+
     static bool Execute(Player* player, PvpClassSpellContext const& context);
     static bool IsWarlockCurseTargetCooldownActive(Player const* player, Unit const* target, uint32 spellId);
     static void RegisterWarlockCurseTargetCooldown(Player const* player, Unit const* target, uint32 spellId, std::chrono::seconds cooldown);
@@ -40,7 +42,9 @@ public:
     static std::string GetLastExecutionStatus(Player const* player);
     static std::string GetLastMovementDebugStatus(Player const* player);
     static bool HasRecentTargetRelativeMovementOrder(Player const* player, Unit const* target, uint32 maxAgeMs = 1500);
+    static bool IsBattlegroundObjectInteractionInProgress(Player const* player);
     static bool IsPetSpellAction(Player const* player, PvpClassSpellContext const& context);
+    static bool TryIssueShadowWraithFleeMovement(Player* player, Unit* threat);
 };
 }
 

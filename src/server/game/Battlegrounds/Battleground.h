@@ -23,6 +23,7 @@
 #include "ObjectGuid.h"
 #include "Position.h"
 #include "SharedDefines.h"
+#include <algorithm>
 #include <deque>
 #include <map>
 
@@ -47,6 +48,50 @@ class WorldPacket;
 struct BattlegroundScore;
 struct PvPDifficultyEntry;
 struct WorldSafeLocsEntry;
+
+enum class BattlegroundNodeStatus : uint8
+{
+    Neutral = 0,
+    FriendlyControlled,
+    EnemyControlled,
+    FriendlyContested,
+    EnemyContested,
+    FriendlyUnderAttack
+};
+
+struct BattlegroundNodeObjective
+{
+    uint32 NodeId = 0;
+    BattlegroundNodeStatus Status = BattlegroundNodeStatus::Neutral;
+    Position Location;
+    ObjectGuid BannerGuid = ObjectGuid::Empty;
+};
+
+enum class BattlegroundCustomWeather : uint8
+{
+    Normal,
+    Clear,
+    Rain,
+    Snow,
+    Sandstorm,
+    Thunderstorm,
+    Fog,
+    Max
+};
+
+struct BattlegroundCustomRules
+{
+    uint32 FlagCaptureLimit = 0;
+    uint32 ResourceLimit = 0;
+    uint32 ResourceGainPercent = 100;
+    uint32 DeathmatchKillLimit = 0;
+    uint32 ResurrectionIntervalMs = 0;
+    uint32 NodeFlagCaptureTimeMs = 0;
+    uint32 NodeBaseCaptureTimeMs = 0;
+    bool ShowEnemyFlagOnMap = true;
+    bool ShowAllyFlagOnMap = true;
+    BattlegroundCustomWeather Weather = BattlegroundCustomWeather::Normal;
+};
 
 enum BattlegroundDesertionType
 {
@@ -353,6 +398,28 @@ class TC_GAME_API Battleground
         bool isArena() const        { return m_IsArena; }
         bool isBattleground() const { return !m_IsArena; }
         bool isRated() const        { return m_IsRated; }
+        bool IsCustomGame() const   { return m_IsCustomGame; }
+        void ConfigureCustomGame(BattlegroundCustomRules const& rules) { m_IsCustomGame = true; m_CustomRules = rules; }
+        void SetCustomGameBotOnlyPreparation(bool enabled) { m_CustomGameBotOnlyPreparation = enabled; }
+        bool HasCustomGameBotOnlyPreparation() const { return m_CustomGameBotOnlyPreparation; }
+        void SetCustomGamePendingCloneCount(uint32 count) { m_CustomGamePendingCloneCount = count; }
+        void ResolveCustomGamePendingClone()
+        {
+            if (m_CustomGamePendingCloneCount)
+                --m_CustomGamePendingCloneCount;
+        }
+        bool HasCustomGamePendingClones() const { return m_IsCustomGame && m_CustomGamePendingCloneCount != 0; }
+        BattlegroundCustomRules const& GetCustomRules() const { return m_CustomRules; }
+        void SendCustomGameRulesTo(Player* player) const;
+        void SendSpectatorBattlefieldStatusTo(Player* player);
+        bool HasCustomWeatherOverride() const { return m_IsCustomGame && m_CustomRules.Weather != BattlegroundCustomWeather::Normal; }
+        bool ShouldShowFlagOnMapTo(Player const* viewer, TeamId flagTeam) const;
+        uint32 GetFlagCaptureLimit(uint32 defaultValue) const { return m_IsCustomGame && m_CustomRules.FlagCaptureLimit ? m_CustomRules.FlagCaptureLimit : defaultValue; }
+        uint32 GetResourceLimit(uint32 defaultValue) const { return m_IsCustomGame && m_CustomRules.ResourceLimit ? m_CustomRules.ResourceLimit : defaultValue; }
+        uint32 GetDeathmatchKillLimit(uint32 defaultValue) const { return m_IsCustomGame && m_CustomRules.DeathmatchKillLimit ? m_CustomRules.DeathmatchKillLimit : defaultValue; }
+        uint32 GetNodeFlagCaptureTime(uint32 defaultValue) const { return m_IsCustomGame && m_CustomRules.NodeFlagCaptureTimeMs ? m_CustomRules.NodeFlagCaptureTimeMs : defaultValue; }
+        uint32 GetNodeBaseCaptureTime(uint32 defaultValue) const { return m_IsCustomGame && m_CustomRules.NodeBaseCaptureTimeMs ? m_CustomRules.NodeBaseCaptureTimeMs : defaultValue; }
+        uint32 ScaleResourceGain(uint32 value) const { return m_IsCustomGame ? std::max<uint32>(1, value * m_CustomRules.ResourceGainPercent / 100) : value; }
 
         typedef std::map<ObjectGuid, BattlegroundPlayer> BattlegroundPlayerMap;
         BattlegroundPlayerMap const& GetPlayers() const { return m_Players; }
@@ -516,6 +583,15 @@ class TC_GAME_API Battleground
 
         virtual ObjectGuid GetFlagPickerGUID(int32 /*team*/ = -1) const { return ObjectGuid::Empty; }
         virtual void SetDroppedFlagGUID(ObjectGuid /*guid*/, int32 /*team*/ = -1) { }
+        // Flag battlegrounds can expose their currently available pickup and
+        // the scoring destination for a specific carrier. Keeping
+        // this in the battleground contract lets objective consumers remain
+        // independent of individual battleground layouts.
+        virtual ObjectGuid GetFlagPickupGUID(ObjectGuid /*playerGuid*/) const { return ObjectGuid::Empty; }
+        virtual bool GetFlagCapturePosition(ObjectGuid /*carrierGuid*/, Position& /*position*/) const { return false; }
+        virtual uint32 GetDynamicNodeCount() const { return 0; }
+        virtual bool GetDynamicNodeInfo(ObjectGuid /*playerGuid*/, uint32 /*nodeId*/, BattlegroundNodeObjective& /*node*/) const { return false; }
+        bool GetNodeObjective(ObjectGuid playerGuid, BattlegroundNodeObjective& objective) const;
         virtual void HandleQuestComplete(uint32 /*questid*/, Player* /*player*/) { }
         virtual bool CanActivateGO(int32 /*entry*/, uint32 /*team*/) const { return true; }
         virtual bool IsSpellAllowed(uint32 /*spellId*/, Player const* /*player*/) const { return true; }
@@ -551,7 +627,8 @@ class TC_GAME_API Battleground
         void _ProcessJoin(uint32 diff);
         void _CheckSafePositions(uint32 diff);
 
-        virtual uint32 GetResurrectionInterval() const { return RESURRECTION_INTERVAL; }
+        uint32 GetConfiguredResurrectionInterval(uint32 defaultValue) const { return m_IsCustomGame && m_CustomRules.ResurrectionIntervalMs ? m_CustomRules.ResurrectionIntervalMs : defaultValue; }
+        virtual uint32 GetResurrectionInterval() const { return GetConfiguredResurrectionInterval(RESURRECTION_INTERVAL); }
         virtual uint32 GetBuffRespawnTime(uint32 type) const { return BUFF_RESPAWN_TIME; }
 
         // Scorekeeping
@@ -597,6 +674,10 @@ class TC_GAME_API Battleground
         uint8  m_ArenaType;                                 // 2=2v2, 3=3v3, 5=5v5
         bool   m_InBGFreeSlotQueue;                         // used to make sure that BG is only once inserted into the BattlegroundMgr.BGFreeSlotQueue[bgTypeId] deque
         bool   m_SetDeleteThis;                             // used for safe deletion of the bg after end / all players leave
+        bool   m_IsCustomGame;
+        bool   m_CustomGameBotOnlyPreparation;
+        uint32 m_CustomGamePendingCloneCount;
+        BattlegroundCustomRules m_CustomRules;
         bool   m_IsArena;
         PvPTeamId _winnerTeamId;
         int32  m_StartDelayTime;

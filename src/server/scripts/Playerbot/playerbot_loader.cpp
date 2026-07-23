@@ -24,20 +24,25 @@
 #include "MoveSpline.h"
 #include "Movement/AbstractFollower.h"
 #include "Player.h"
+#include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "BattlegroundQueue.h"
+#include "Playerbot/Pvp/PlayerbotObcClone.h"
 #include "Playerbot/Pvp/PlayerbotPvpClassActions.h"
 #include "Playerbot/Pvp/PlayerbotPvpCore.h"
 #include "Playerbot/Pvp/PlayerbotPvpLifecycleActions.h"
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
+#include "Playerbot/Pvp/PlayerbotResourceGovernor.h"
 #include "RBAC.h"
 #include "ScriptMgr.h"
+#include "Spell.h"
 #include "SpellInfo.h"
 #include "SpellHistory.h"
 #include "SpellMgr.h"
 
 #include <algorithm>
 #include <cctype>
+#include <mutex>
 #include <sstream>
 #include <unordered_map>
 #include <cmath>
@@ -48,6 +53,8 @@ using namespace Trinity::ChatCommands;
 
 namespace
 {
+constexpr uint32 PLAYERBOT_REDUCED_MAGMA_DAMAGE_SPELL_ID = 57634;
+
 bool IsChromieWhisperFacade(Player const* player)
 {
     if (!player)
@@ -114,6 +121,7 @@ char const* ToString(playerbot::PvpClassSpellContext::TargetMode mode)
         case playerbot::PvpClassSpellContext::TargetMode::Enemy: return "enemy";
         case playerbot::PvpClassSpellContext::TargetMode::Ally: return "ally";
         case playerbot::PvpClassSpellContext::TargetMode::Self: return "self";
+        case playerbot::PvpClassSpellContext::TargetMode::Pet: return "pet";
         case playerbot::PvpClassSpellContext::TargetMode::None:
         default: return "none";
     }
@@ -175,6 +183,7 @@ struct ManagedBotUpdatePulseState
 };
 
 std::unordered_map<uint64, ManagedBotUpdatePulseState> g_ManagedBotUpdatePulseByGuid;
+std::mutex g_ManagedBotUpdatePulseLock;
 
 Unit* GetCurrentMotionTarget(Player* bot)
 {
@@ -208,8 +217,16 @@ void AppendSplineSnapshot(std::ostringstream& os, Player const* bot, char const*
 
 void RecordManagedBotUpdatePulse(Player* bot, uint32 diff)
 {
+    // Pure diagnostics feeding the stall log and the whisper diag command:
+    // per-tick mutex + hash-map + spline bookkeeping for every player. Skip
+    // it entirely unless someone is actually watching the motion debug log.
+    if (!sLog->ShouldLog("playerbots.pvp.motion", LOG_LEVEL_DEBUG))
+        return;
+
     if (!bot || !playerbot::IsManagedRandomBot(bot))
         return;
+
+    std::lock_guard<std::mutex> pulseLock(g_ManagedBotUpdatePulseLock);
 
     uint32 const nowMs = GameTime::GetGameTimeMS();
     ManagedBotUpdatePulseState& state = g_ManagedBotUpdatePulseByGuid[bot->GetGUID().GetRawValue()];
@@ -291,11 +308,15 @@ std::string BuildManagedBotUpdateDiagnosticLine(Player* bot)
         return "PB update diag unavailable.";
 
     uint32 const nowMs = GameTime::GetGameTimeMS();
-    auto itr = g_ManagedBotUpdatePulseByGuid.find(bot->GetGUID().GetRawValue());
-    if (itr == g_ManagedBotUpdatePulseByGuid.end())
-        return "PB update diag: no-update-pulse-recorded";
+    ManagedBotUpdatePulseState state;
+    {
+        std::lock_guard<std::mutex> pulseLock(g_ManagedBotUpdatePulseLock);
+        auto itr = g_ManagedBotUpdatePulseByGuid.find(bot->GetGUID().GetRawValue());
+        if (itr == g_ManagedBotUpdatePulseByGuid.end())
+            return "PB update diag: no-update-pulse-recorded";
 
-    ManagedBotUpdatePulseState const& state = itr->second;
+        state = itr->second;
+    }
     uint32 const updateAgeMs = state.lastUpdateMs != 0 && nowMs >= state.lastUpdateMs ? nowMs - state.lastUpdateMs : 0;
     uint32 const progressAgeMs = state.lastProgressMs != 0 && nowMs >= state.lastProgressMs ? nowMs - state.lastProgressMs : 0;
     float const progressDx = bot->GetPositionX() - state.lastProgressX;
@@ -567,6 +588,8 @@ public:
         playerbot::PvpCore::LoadConfig();
         playerbot::RandomBotParticipationManager::ResetCadence();
         playerbot::RandomBotParticipationManager::LoadPopulationConfig();
+        playerbot::PlayerbotObcCloneManager::LoadConfig();
+        playerbot::ResourceGovernor::LoadConfig();
     }
 
     void OnStartup() override
@@ -575,6 +598,9 @@ public:
         playerbot::RandomBotParticipationManager::ResetCadence();
         playerbot::RandomBotParticipationManager::LoadPopulationConfig();
         playerbot::RandomBotParticipationManager::OnStartupBootstrap();
+        playerbot::PlayerbotObcCloneManager::LoadConfig();
+        playerbot::PlayerbotObcCloneManager::OnStartupSweep();
+        playerbot::ResourceGovernor::LoadConfig();
         playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
         playerbot::RandomBotPopulationSnapshot const population = playerbot::RandomBotParticipationManager::GetPopulationSnapshot();
 
@@ -591,7 +617,32 @@ public:
 
     void OnUpdate(uint32 diff) override
     {
+        playerbot::ResourceGovernor::NoteWorldUpdate(diff);
         playerbot::RandomBotParticipationManager::OnWorldUpdate(diff);
+        playerbot::PlayerbotObcCloneManager::OnWorldUpdate(diff);
+    }
+
+    void OnShutdown() override
+    {
+        playerbot::PlayerbotObcCloneManager::OnShutdown();
+    }
+};
+
+class PlayerbotDamageUnitScript final : public UnitScript
+{
+public:
+    PlayerbotDamageUnitScript() : UnitScript("PlayerbotDamageUnitScript") { }
+
+    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* /*attacker*/, uint32& damage, SpellInfo const* spellInfo) override
+    {
+        if (!spellInfo || spellInfo->Id != PLAYERBOT_REDUCED_MAGMA_DAMAGE_SPELL_ID)
+            return;
+
+        Player* player = target ? target->ToPlayer() : nullptr;
+        if (!playerbot::IsManagedRandomBot(player) && !playerbot::PlayerbotObcCloneManager::IsActiveClone(player))
+            return;
+
+        damage = 0;
     }
 };
 
@@ -606,9 +657,30 @@ public:
         playerbot::RandomBotParticipationManager::ProcessPlayerLifecycle(player);
     }
 
+    void OnSpellCast(Player* player, Spell* spell, bool) override
+    {
+        if (!player || !spell || !spell->IsTriggered())
+            return;
+
+        SpellInfo const* spellInfo = spell->GetSpellInfo();
+        if (!spellInfo || spellInfo->Id != 75)
+            return;
+
+        if (!playerbot::IsManagedRandomBot(player) && !playerbot::PlayerbotObcCloneManager::IsActiveClone(player))
+            return;
+
+        playerbot::NotifyHunterAutoShotFired(player);
+    }
+
     void OnLogout(Player* player) override
     {
         playerbot::RandomBotParticipationManager::OnPlayerLogout(player);
+        playerbot::PlayerbotObcCloneManager::OnPlayerLogout(player);
+    }
+
+    void OnPVPKill(Player* killer, Player* killed) override
+    {
+        playerbot::PlayerbotObcCloneManager::OnPvpKill(killer, killed);
     }
 
     void OnDuelRequest(Player* target, Player* challenger) override
@@ -653,8 +725,43 @@ public:
         if (IsChromieWhisperFacade(sender) || IsChromieWhisperFacade(receiver))
             return;
 
-        if (!playerbot::IsManagedRandomBot(receiver))
+        bool const senderIsPlayerbot = playerbot::IsManagedRandomBot(sender) ||
+            playerbot::PlayerbotObcCloneManager::IsActiveClone(sender);
+        bool const receiverIsPlayerbot = playerbot::IsManagedRandomBot(receiver) ||
+            playerbot::PlayerbotObcCloneManager::IsActiveClone(receiver);
+
+        // Diagnostic commands are human/GM -> bot only. A reply emitted by one
+        // bot must never be interpreted as a fresh command by another bot, or
+        // Whisper -> OnPlayerChat -> Whisper recursively re-enters forever.
+        if (!receiverIsPlayerbot || senderIsPlayerbot || sender == receiver)
             return;
+
+        std::string command = msg;
+        command.erase(command.begin(), std::find_if(command.begin(), command.end(), [](unsigned char character)
+        {
+            return !std::isspace(character);
+        }));
+        command.erase(std::find_if(command.rbegin(), command.rend(), [](unsigned char character)
+        {
+            return !std::isspace(character);
+        }).base(), command.end());
+        std::transform(command.begin(), command.end(), command.begin(), [](unsigned char character)
+        {
+            return static_cast<char>(std::tolower(character));
+        });
+
+        if (command == "drop")
+        {
+            bool const wasFlagCarrier = playerbot::PvpCore::IsBattlegroundFlagCarrier(receiver);
+            if (Battleground* battleground = receiver->GetBattleground())
+                battleground->EventPlayerDroppedFlag(receiver);
+
+            if (wasFlagCarrier)
+                playerbot::BattlegroundTacticalActions::DelayFlagPickup(receiver, 5 * IN_MILLISECONDS);
+
+            receiver->Whisper("Flag drop requested.", LANG_UNIVERSAL, sender);
+            return;
+        }
 
         receiver->Whisper(BuildManagedBotStatusLine(receiver), LANG_UNIVERSAL, sender);
         receiver->Whisper(std::string("PB move diag: ") + playerbot::PvpClassActions::GetLastMovementDebugStatus(receiver), LANG_UNIVERSAL, sender);
@@ -817,6 +924,7 @@ public:
 void AddPlayerbotScripts()
 {
     new PlayerbotBootstrapWorldScript();
+    new PlayerbotDamageUnitScript();
     new PlayerbotLifecyclePlayerScript();
     new PlayerbotLifecycleCommandScript();
 }

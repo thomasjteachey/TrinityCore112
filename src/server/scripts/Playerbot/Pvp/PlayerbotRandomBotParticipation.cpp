@@ -17,9 +17,11 @@
 
 #include "PlayerbotRandomBotParticipation.h"
 
+#include "PlayerbotObcClone.h"
 #include "PlayerbotPvpCore.h"
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotPvpLifecycleActions.h"
+#include "PlayerbotSharedStateGuard.h"
 
 #include "AccountMgr.h"
 #include "Battleground.h"
@@ -35,9 +37,12 @@
 #include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "MoveSpline.h"
 #include "Opcodes.h"
+#include "Pet.h"
 #include "Player.h"
 #include "Realm.h"
+#include "SpellAuras.h"
 #include "SpellDefines.h"
 #include "SpellHistory.h"
 #include "SpellInfo.h"
@@ -53,6 +58,7 @@
 #include <chrono>
 #include <deque>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <sstream>
@@ -83,7 +89,10 @@ bool IsCrowdControlledForLifecyclePause(Player const* player)
         (1u << MECHANIC_HORROR) |
         (1u << MECHANIC_SAPPED);
 
-    return player->HasUnitState(UNIT_STATE_LOST_CONTROL) ||
+    // UNIT_STATE_LOST_CONTROL also includes CHARGING and JUMPING. Those are
+    // legitimate effect-driven movement states, not crowd control; treating
+    // them as CC makes the 50 ms lifecycle tick clear charge/leap generators.
+    return player->HasUnitState(UNIT_STATE_CONTROLLED | UNIT_STATE_POSSESSED) ||
         player->HasUnitState(UNIT_STATE_CONFUSED) ||
         player->HasUnitState(UNIT_STATE_FLEEING) ||
         player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
@@ -107,6 +116,86 @@ void ClearActiveMovementForControlLoss(Player* player)
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
 }
 
+// A real client resolves interrupted airborne motion by falling under its own
+// gravity simulation: when a stun or root lands mid Heroic Leap / Feral Charge
+// jump, Unit::SetStunned/SetRooted stop the parabolic spline at an
+// interpolated point in the air and the client then drops the character to
+// the ground. Socketless bots have no gravity loop, so the same interrupt
+// leaves them suspended permanently -- and every later path request starts
+// from an off-mesh airborne position, which the server-driven pathing
+// resolves into "stay in place". Detect the stranded state (airborne with no
+// live spline) and drop the bot to the walkable surface below.
+bool RecoverAirborneStrandedBot(Player* player)
+{
+    if (!player || !player->IsAlive() || player->IsInFlight())
+        return false;
+
+    if (player->IsFlying()  || player->GetTransport() || player->GetVehicle())
+        return false;
+
+    // A pending or in-flight charge/leap/knockback keeps the bot airborne
+    // legitimately. The finalized generator is popped by the very next
+    // MotionMaster::Update (which runs even while stunned), so this defers
+    // recovery by at most one world tick.
+    MotionMaster const* motionMaster = player->GetMotionMaster();
+    if (motionMaster && motionMaster->GetCurrentMovementGeneratorType() == EFFECT_MOTION_TYPE)
+        return false;
+
+    if (player->movespline && player->movespline->Initialized() && !player->movespline->Finalized())
+        return false;
+
+    float const x = player->GetPositionX();
+    float const y = player->GetPositionY();
+    float allowedZ = player->GetPositionZ();
+    player->UpdateAllowedPositionZ(x, y, allowedZ);
+    float const airborneDelta = player->GetPositionZ() - allowedZ;
+    if (airborneDelta < 2.0f)
+        return false;
+
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+        "Airborne stranded bot recovery: guid={} dropped {:.1f}yd back to walkable surface.",
+        player->GetGUID().ToString(), airborneDelta);
+    // The lifecycle pre-check teleport finalizer acks this near teleport on
+    // the bot's next update, and the teleport broadcast keeps observing
+    // clients in sync (a bare position update would leave them rendering the
+    // bot mid-air until its next spline).
+    player->NearTeleportTo(x, y, allowedZ, player->GetOrientation());
+    return true;
+}
+
+bool TryMageBlinkOutOfControl(Player* player)
+{
+    if (!playerbot::PvpCore::CanMageBlinkOutOfControl(player))
+        return false;
+
+    playerbot::PvpValues const values = playerbot::PvpCore::CollectValues(player);
+    playerbot::PvpClassSpellContext const classContext = playerbot::PvpCore::BuildClassSpellContext(player, values);
+    if (!classContext.classSpellsEnabled || !classContext.shouldExecute || classContext.spellId != 1953)
+        return false;
+
+    return playerbot::PvpClassActions::Execute(player, classContext);
+}
+
+bool TryHunterBestialWrathOutOfControl(Player* player)
+{
+    if (!playerbot::PvpCore::CanHunterBestialWrathOutOfControl(player))
+        return false;
+
+    playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
+    if (!config.moduleEnabled || !config.pvpCoreEnabled || !config.pvpClassSpellsEnabled)
+        return false;
+
+    playerbot::PvpClassSpellContext context;
+    context.classSpellsEnabled = true;
+    context.shouldExecute = true;
+    context.actionName = "hunter bestial wrath";
+    context.reason = "fast-path break any removable crowd-control effect";
+    context.spellId = 81300;
+    context.selfCast = true;
+    context.targetMode = playerbot::PvpClassSpellContext::TargetMode::Self;
+    return playerbot::PvpClassActions::Execute(player, context);
+}
+
 bool IsLifecycleGateEnabled()
 {
     playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
@@ -117,12 +206,46 @@ using LifecycleCadenceClock = std::chrono::steady_clock;
 using LifecycleCadenceTimePoint = LifecycleCadenceClock::time_point;
 
 constexpr std::chrono::milliseconds RandomBotLifecycleCadenceInterval(500);
+constexpr std::chrono::milliseconds RandomBotBattlegroundFastTickInterval(100);
 constexpr std::chrono::milliseconds PlayerbotInsigniaCheckInterval(50);
 constexpr uint32 kPriestSpiritOfRedemptionSpellId = 81321;
 constexpr uint32 kHolyPriestProfileTalentSpellId = 724;
 
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextRandomBotLifecycleProcessTimeByGuid;
+std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextBattlegroundFastTickTimeByGuid;
 std::mutex g_RandomBotLifecycleCadenceLock;
+// Player::Update can run concurrently for different maps. Per-bot decision
+// state is only ever touched from the owning map's update thread, and the
+// shared by-GUID containers serialize their structural operations through
+// PlayerbotSharedStateGuard.h, so a decision tick only needs to exclude other
+// ticks on the same map instance. Locking per map instance lets concurrent
+// custom matches evaluate their bots in parallel instead of serializing every
+// battleground through one global mutex.
+std::mutex g_PlayerbotDecisionLockRegistryLock;
+std::unordered_map<uint64, std::unique_ptr<std::mutex>> g_PlayerbotDecisionLockByMapInstance;
+// Diagnostic kill switch (Playerbot.PvpDecision.GlobalLock): serializes every
+// decision tick through one mutex again, exactly like the pre-per-map-lock
+// build. Flipping this isolates whether a crash comes from cross-map bot
+// concurrency or from something unrelated.
+std::atomic<bool> g_UseGlobalDecisionLock{ false };
+std::mutex g_GlobalDecisionFallbackLock;
+
+std::mutex& GetDecisionTickLockForPlayer(Player const* player)
+{
+    if (g_UseGlobalDecisionLock.load(std::memory_order_relaxed))
+        return g_GlobalDecisionFallbackLock;
+
+    uint64 key = 0;
+    if (player)
+        if (Map const* map = player->FindMap())
+            key = (uint64(map->GetId()) << 32) | uint64(map->GetInstanceId());
+
+    std::lock_guard<std::mutex> registryGuard(g_PlayerbotDecisionLockRegistryLock);
+    std::unique_ptr<std::mutex>& lock = g_PlayerbotDecisionLockByMapInstance[key];
+    if (!lock)
+        lock = std::make_unique<std::mutex>();
+    return *lock;
+}
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextPlayerbotInsigniaCheckTimeByGuid;
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_PlayerbotInsigniaBreakableAuraFirstSeenTimeByGuid;
 std::mutex g_PlayerbotInsigniaCheckLock;
@@ -141,25 +264,27 @@ void EmitLifecycleGmDebug(Player const* player, std::string const& detail, uint3
 
 uint32 GetHumanInsigniaRacialSpell(uint8 classId)
 {
-    // Custom human racials mirror the five class-specific PvP insignia variants.
+    // Custom human racials mirror the five class-specific PvP insignia
+    // variants granted via character_action - keep this mapping in lockstep
+    // with the class-group CASE in that insert (Warrior/Hunter/Shaman = 89149,
+    // Rogue/Warlock = 89148, Paladin/Priest = 89150, Mage = 89151, everything
+    // else/Druid = 89152).
     switch (classId)
     {
+        case CLASS_ROGUE:
+        case CLASS_WARLOCK:
+            return 89148;
         case CLASS_WARRIOR:
         case CLASS_HUNTER:
         case CLASS_SHAMAN:
-            return 89148;
-        case CLASS_ROGUE:
-        case CLASS_WARLOCK:
             return 89149;
-        case CLASS_DRUID:
-            return 89150;
-        case CLASS_PRIEST:
         case CLASS_PALADIN:
-            return 89151;
+        case CLASS_PRIEST:
+            return 89150;
         case CLASS_MAGE:
+            return 89151;
+        default: // Druid and anything else
             return 89152;
-        default:
-            return 0;
     }
 }
 
@@ -184,24 +309,26 @@ bool HasClassInsigniaBreakableAura(Player const* player)
     bool const polymorphed = player->IsPolymorphed() ||
         player->HasAuraWithMechanic(1u << MECHANIC_POLYMORPH);
 
+    // Same per-class CC groupings as before, just re-keyed onto the five
+    // groups that actually match the character_action spell grant (see
+    // GetHumanInsigniaRacialSpell above) instead of a mismatched six-way
+    // split with no catch-all default.
     switch (player->GetClass())
     {
+        case CLASS_ROGUE:
+        case CLASS_WARLOCK:
+            return charmed || feared || polymorphed;
         case CLASS_WARRIOR:
         case CLASS_HUNTER:
         case CLASS_SHAMAN:
             return rooted || snared || stunned;
-        case CLASS_ROGUE:
-        case CLASS_WARLOCK:
-            return charmed || feared || polymorphed;
-        case CLASS_DRUID:
-            return charmed || feared || stunned;
-        case CLASS_PRIEST:
         case CLASS_PALADIN:
+        case CLASS_PRIEST:
             return feared || polymorphed || stunned;
         case CLASS_MAGE:
             return feared || polymorphed || snared;
-        default:
-            return false;
+        default: // Druid and anything else
+            return charmed || feared || stunned;
     }
 }
 
@@ -259,6 +386,50 @@ bool TryCastHumanInsigniaRacial(Player* player)
     TC_LOG_DEBUG("playerbots.pvp.class",
         "Playerbot PvP human insignia racial attempt: guid={} spell={} result={}.",
         player->GetGUID().ToString(), spellId, uint32(castResult));
+    return castResult == SPELL_CAST_OK;
+}
+
+// Unlike the insignia/Every Man for Himself fast path, Stoneform's trigger
+// condition is "has a poison-dispel effect" (Blind included, since it is
+// classified as poison-dispel here), not the generic loss-of-control mask -
+// it cleanses poison/disease/bleed rather than breaking CC outright. It still
+// needs the same triggered cast bypass to reliably go off while the poison
+// in question (Blind) is simultaneously confusing the dwarf.
+bool PlayerHasPoisonForDwarfStoneform(Player const* player)
+{
+    if (!player)
+        return false;
+
+    for (Unit::AuraApplicationMap::value_type const& appliedAura : player->GetAppliedAuras())
+    {
+        AuraApplication const* aurApp = appliedAura.second;
+        SpellInfo const* spellInfo = aurApp ? aurApp->GetBase()->GetSpellInfo() : nullptr;
+        if (spellInfo && (spellInfo->Dispel == DISPEL_POISON || spellInfo->Id == 2094)) // 2094 = Blind
+            return true;
+    }
+
+    return false;
+}
+
+bool TryCastDwarfStoneformRacial(Player* player)
+{
+    constexpr uint32 stoneformSpellId = 20594;
+    if (!player || !player->HasSpell(stoneformSpellId))
+        return false;
+
+    if (player->HasStealthAura())
+        return false;
+
+    if (player->GetSpellHistory()->HasCooldown(stoneformSpellId))
+        return false;
+
+    if (!PlayerHasPoisonForDwarfStoneform(player))
+        return false;
+
+    SpellCastResult const castResult = player->CastSpell(player, stoneformSpellId, CastSpellExtraArgs(TriggerCastFlags(TRIGGERED_IGNORE_GCD | TRIGGERED_IGNORE_CAST_IN_PROGRESS)));
+    TC_LOG_DEBUG("playerbots.pvp.class",
+        "Playerbot PvP dwarf stoneform racial attempt: guid={} spell={} result={}.",
+        player->GetGUID().ToString(), stoneformSpellId, uint32(castResult));
     return castResult == SPELL_CAST_OK;
 }
 
@@ -343,6 +514,10 @@ bool TryCastPriestSpiritOfRedemption(Player* player)
 void WhisperInsigniaDiagnostic(Player const* player, std::string const& detail)
 {
     if (!player || !player->duel || !player->duel->Opponent)
+        return;
+
+    WorldSession const* observerSession = player->duel->Opponent->GetSession();
+    if (!observerSession || !observerSession->IsGmDiagnosticEnabled(GmDiagnosticCategory::Playerbot))
         return;
 
     const_cast<Player*>(player)->Whisper("INSIGNIA DIAG: " + detail, LANG_UNIVERSAL, player->duel->Opponent);
@@ -483,6 +658,39 @@ bool TryUsePlayerbotInsigniaBreaker(Player* player)
         return TryCastHumanInsigniaRacial(player);
 
     return TryUseEquippedInsigniaTrinket(player);
+}
+
+// Stoneform's trigger (poison-dispel presence) does not overlap with the
+// generic loss-of-control mask HasClassInsigniaBreakableAura checks, so it
+// cannot share TryUsePlayerbotInsigniaBreaker's gate - a plain poison DoT
+// with no confuse component would never open that gate, and this needs to
+// fire for those too. This mirrors that function's own preamble instead.
+bool TryUsePlayerbotStoneformBreaker(Player* player)
+{
+    if (!player)
+        return false;
+
+    playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
+    if (!config.moduleEnabled || !config.pvpCoreEnabled || !config.pvpClassSpellsEnabled)
+        return false;
+
+    if (!playerbot::IsManagedRandomBot(player) || !player->IsInWorld() || !player->IsAlive())
+        return false;
+
+    if (player->GetRace() != RACE_DWARF)
+        return false;
+
+    bool const inActiveBattleground = player->InBattleground() &&
+        player->GetBattleground() &&
+        player->GetBattleground()->GetStatus() == STATUS_IN_PROGRESS;
+    bool const inActiveDuel = player->duel && player->duel->State == DUEL_STATE_IN_PROGRESS;
+    if (!inActiveBattleground && !inActiveDuel)
+        return false;
+
+    if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
+        return false;
+
+    return TryCastDwarfStoneformRacial(player);
 }
 
 enum class LifecycleObservationReason : uint8
@@ -686,16 +894,10 @@ bool CanProcessPlayerLifecycle(Player const* player)
     if (nextProcessTime > now)
     {
         ObserveLifecycleReason(LifecycleObservationReason::CadenceThrottled, guid);
-        auto const waitRemainingMs = std::chrono::duration_cast<std::chrono::milliseconds>(nextProcessTime - now).count();
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Lifecycle blocked: guid={} reason=cadence-throttled waitMs={} cadenceMs={} bgActive={}",
-            guid.ToString(), waitRemainingMs, cadenceInterval.count(), inActiveBattleground ? 1 : 0);
-        std::ostringstream cadenceDetail;
-        cadenceDetail << "can-process=no cadence-throttled wait_ms=" << waitRemainingMs
-                      << " cadence_ms=" << cadenceInterval.count()
-                      << " bg_active=" << (inActiveBattleground ? 1 : 0)
-                      << " model=bg-fasttick-v3";
-        EmitLifecycleGmDebug(player, cadenceDetail.str());
+            guid.ToString(), std::chrono::duration_cast<std::chrono::milliseconds>(nextProcessTime - now).count(),
+            cadenceInterval.count(), inActiveBattleground ? 1 : 0);
         return false;
     }
 
@@ -714,34 +916,150 @@ bool CanProcessPlayerLifecycle(Player const* player)
     return true;
 }
 
-void ProcessActiveBattlegroundTacticalTick(Player* player)
+bool ConsumeCloneClassDecisionCadence(Player const* player)
+{
+    if (!player)
+        return false;
+
+    LifecycleCadenceTimePoint const now = LifecycleCadenceClock::now();
+    std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
+    LifecycleCadenceTimePoint& nextProcessTime = g_NextRandomBotLifecycleProcessTimeByGuid[player->GetGUID().GetRawValue()];
+    if (nextProcessTime > now)
+        return false;
+
+    nextProcessTime = now + RandomBotLifecycleCadenceInterval;
+    return true;
+}
+
+// The in-progress battleground decision tick runs from every Player::Update.
+// Its values/tactical/class evaluation walks the map player list several
+// times (some checks with line-of-sight raycasts), so at 40v40 that is an
+// O(bots x players) cost on every world tick. 100ms keeps combat and
+// movement decisions visually indistinguishable from per-tick evaluation
+// while dividing that work by the tick-rate multiple. The first evaluation
+// is staggered by GUID so the bots do not all decide on the same world tick.
+bool ConsumeBattlegroundFastTickCadence(Player const* player)
+{
+    if (!player)
+        return false;
+
+    uint64 const rawGuid = player->GetGUID().GetRawValue();
+    LifecycleCadenceTimePoint const now = LifecycleCadenceClock::now();
+    std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
+    auto const [itr, inserted] = g_NextBattlegroundFastTickTimeByGuid.try_emplace(rawGuid, now);
+    if (inserted)
+    {
+        itr->second = now + std::chrono::milliseconds(rawGuid % uint64(RandomBotBattlegroundFastTickInterval.count()));
+        return false;
+    }
+
+    if (itr->second > now)
+        return false;
+
+    itr->second = now + RandomBotBattlegroundFastTickInterval;
+    return true;
+}
+
+void ProcessBattlegroundPlayerbotTick(Player* player)
 {
     if (!player || !IsLifecycleGateEnabled())
         return;
 
-    if (!playerbot::IsManagedRandomBot(player))
+    bool const activeClone = playerbot::PlayerbotObcCloneManager::IsActiveClone(player);
+    if (!playerbot::IsManagedRandomBot(player) && !activeClone)
         return;
 
     if (!player->IsInWorld() || !player->InBattleground())
         return;
 
     Battleground* battleground = player->GetBattleground();
-    if (!battleground || battleground->GetStatus() != STATUS_IN_PROGRESS)
+    if (!battleground)
         return;
 
     if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
         return;
 
+    if (battleground->GetStatus() == STATUS_WAIT_JOIN)
+    {
+        // The preparation aura prevents player damage, but an aggressive pet
+        // can still acquire an enemy or retain a command issued by a stale
+        // combat context. Enforce the closed-gates invariant on every bot tick.
+        if (Pet* pet = player->GetPet(); pet && pet->IsAlive() &&
+            (pet->GetVictim() || pet->IsInCombat() || pet->HasUnitState(UNIT_STATE_CHASE | UNIT_STATE_CHASE_MOVE)))
+        {
+            if (CharmInfo* charmInfo = pet->GetCharmInfo())
+            {
+                charmInfo->SetIsCommandAttack(false);
+                charmInfo->SetIsAtStay(false);
+                charmInfo->SetIsCommandFollow(true);
+                charmInfo->SetCommandState(COMMAND_FOLLOW);
+            }
+            pet->AttackStop();
+            pet->CombatStop(true);
+            if (MotionMaster* motionMaster = pet->GetMotionMaster())
+                motionMaster->Clear(MOTION_SLOT_ACTIVE);
+        }
+    }
+
+    // Persistent bots reach preparation through the normal lifecycle below.
+    // Transient custom-game copies return before that lifecycle ownership, so
+    // explicitly run their ordinary preparation decision graph while arena or
+    // battleground gates are closed. Do not run tactical/movement actions here.
+    if (battleground->GetStatus() == STATUS_WAIT_JOIN)
+    {
+        if (!activeClone || !ConsumeCloneClassDecisionCadence(player))
+            return;
+
+        playerbot::PvpValues const prepValues = playerbot::PvpCore::CollectValues(player);
+        playerbot::PvpClassSpellContext const prepContext = playerbot::PvpCore::BuildClassSpellContext(player, prepValues);
+        playerbot::PvpClassActions::Execute(player, prepContext);
+        return;
+    }
+
+    if (battleground->GetStatus() != STATUS_IN_PROGRESS)
+        return;
+
+    if (!ConsumeBattlegroundFastTickCadence(player))
+        return;
+
+    // Run before the crowd-control pause below: a stun that interrupted a
+    // leap/knockback arc is exactly when a bot is left hanging mid-air. When
+    // recovery fires it issues a near teleport; end this tick so no movement
+    // launches from the stale mid-air position before the teleport is acked.
+    if (RecoverAirborneStrandedBot(player))
+        return;
+
+    // Release the preparation-room movement root before selecting the first
+    // live tactical order. Previously the gate-opening tick could install a
+    // PointMovementGenerator while the persistent bot was still rooted, then
+    // unroot it only after tactical and class movement had already run.
+    playerbot::BattlegroundLifecycleContext inProgressContext;
+    inProgressContext.lifecycleEnabled = true;
+    inProgressContext.queueOperation = playerbot::QueueOperationType::None;
+    inProgressContext.invitationResponse = playerbot::InvitationResponseType::None;
+    inProgressContext.shouldHandleInProgressStatus = true;
+    playerbot::BattlegroundLifecycleActions::Execute(player, inProgressContext);
+
+    // The normal class decision graph is deliberately skipped while crowd
+    // controlled. Run the BM hunter's universal control break before that gate,
+    // including roots/snares that do not pause the lifecycle tick.
+    if (TryHunterBestialWrathOutOfControl(player))
+    {
+        EmitLifecycleGmDebug(player, "bg-fasttick escaped crowd-control with Bestial Wrath", 1000);
+        return;
+    }
+
     if (IsCrowdControlledForLifecyclePause(player))
     {
         ClearActiveMovementForControlLoss(player);
-        EmitLifecycleGmDebug(player, "bg-fasttick paused crowd-controlled", 1000);
+        bool const didBlink = TryMageBlinkOutOfControl(player);
+        EmitLifecycleGmDebug(player, didBlink ? "bg-fasttick escaped crowd-control with Blink" : "bg-fasttick paused crowd-controlled", 1000);
         return;
     }
 
     playerbot::PvpValues const values = playerbot::PvpCore::CollectValues(player);
     playerbot::BattlegroundTacticalContext const tacticalContext = playerbot::PvpCore::BuildBattlegroundTacticalContext(player, values);
-    bool const didExecuteTactical = playerbot::BattlegroundTacticalActions::Execute(player, tacticalContext);
+    playerbot::BattlegroundTacticalActions::Execute(player, tacticalContext);
     playerbot::PvpClassSpellContext const classContext = playerbot::PvpCore::BuildClassSpellContext(player, values);
     MotionMaster* motionMaster = player->GetMotionMaster();
     bool const movementIdle = !motionMaster || motionMaster->GetCurrentMovementGeneratorType() == IDLE_MOTION_TYPE;
@@ -752,44 +1070,28 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
     bool const shouldForcePetSpellTick = classContext.classSpellsEnabled &&
         classContext.shouldExecute &&
         playerbot::PvpClassActions::IsPetSpellAction(player, classContext);
-    bool const didExecuteClassSpell = (shouldForceClassMovementTick || shouldForcePetSpellTick) &&
+
+    // Persistent bots reach the full lifecycle below on its normal cadence.
+    // Transient custom-game copies deliberately return before queue/lifecycle
+    // ownership, so give only those copies an equivalent class-decision cadence
+    // here instead of limiting them to autoattacks and movement/pet actions.
+    bool const runCloneClassDecision = activeClone && ConsumeCloneClassDecisionCadence(player);
+
+    if (runCloneClassDecision || shouldForceClassMovementTick || shouldForcePetSpellTick)
         playerbot::PvpClassActions::Execute(player, classContext);
-
-    playerbot::BattlegroundLifecycleContext inProgressContext;
-    inProgressContext.lifecycleEnabled = true;
-    inProgressContext.queueOperation = playerbot::QueueOperationType::None;
-    inProgressContext.invitationResponse = playerbot::InvitationResponseType::None;
-    inProgressContext.shouldHandleInProgressStatus = true;
-    bool const didExecuteLifecycle = playerbot::BattlegroundLifecycleActions::Execute(player, inProgressContext);
-
-    std::ostringstream tickDetail;
-    uint32 const bgTeam = player->GetBGTeam();
-    uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
-    tickDetail << "bg-fasttick tactical=" << (didExecuteTactical ? 1 : 0)
-               << " class_force=" << (shouldForceClassMovementTick ? 1 : 0)
-               << " pet_spell_force=" << (shouldForcePetSpellTick ? 1 : 0)
-               << " class_exec=" << (didExecuteClassSpell ? 1 : 0)
-               << " class_directive=" << static_cast<uint32>(classContext.movementDirective)
-               << " class_spell=" << classContext.spellId
-               << " lifecycle=" << (didExecuteLifecycle ? 1 : 0)
-               << " alive=" << (player->IsAlive() ? 1 : 0)
-               << " rooted=" << (player->HasUnitState(UNIT_STATE_ROOT) ? 1 : 0)
-               << " stunned=" << (player->HasUnitState(UNIT_STATE_STUNNED) ? 1 : 0)
-               << " bgTeam=" << bgTeam
-               << " assignedTeam=" << assignedTeam
-               << " x=" << int32(player->GetPositionX())
-               << " y=" << int32(player->GetPositionY());
-    EmitLifecycleGmDebug(player, tickDetail.str(), 1500);
 }
 
-void TryFinalizePendingManagedBotTeleport(Player* player)
+bool TryFinalizePendingVirtualPlayerTeleport(Player* player)
 {
-    if (!player || !playerbot::IsManagedRandomBot(player))
-        return;
+    if (!player || (!playerbot::IsManagedRandomBot(player) &&
+        !playerbot::PlayerbotObcCloneManager::IsActiveClone(player)))
+        return false;
 
     WorldSession* session = player->GetSession();
-    if (!session || !session->IsVirtualSession())
-        return;
+    if (!session || (!session->IsVirtualSession() && !session->IsTransientPlayerSession()))
+        return false;
+
+    bool finalizedTeleport = false;
 
     if (player->IsBeingTeleportedFar())
     {
@@ -797,6 +1099,7 @@ void TryFinalizePendingManagedBotTeleport(Player* player)
             "Playerbot lifecycle pre-check teleport finalization: guid={} type=far.",
             player->GetGUID().ToString());
         session->HandleMoveWorldportAck();
+        finalizedTeleport = true;
     }
 
     if (player->IsBeingTeleportedNear())
@@ -804,6 +1107,11 @@ void TryFinalizePendingManagedBotTeleport(Player* player)
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot lifecycle pre-check teleport finalization: guid={} type=near.",
             player->GetGUID().ToString());
+
+        player->StopMoving();
+        if (MotionMaster* motionMaster = player->GetMotionMaster())
+            motionMaster->Clear();
+
         WorldPacket teleportAck(MSG_MOVE_TELEPORT_ACK, 20);
         teleportAck << player->GetPackGUID();
         teleportAck << uint32(0);
@@ -836,7 +1144,11 @@ void TryFinalizePendingManagedBotTeleport(Player* player)
             player->ResummonPetTemporaryUnSummonedIfAny();
             player->ProcessDelayedOperations();
         }
+
+        finalizedTeleport = true;
     }
+
+    return finalizedTeleport;
 }
 
 void RecoverManagedVirtualBotTeleports(ManagedBotAccountIds const& botAccounts)
@@ -853,7 +1165,11 @@ void RecoverManagedVirtualBotTeleports(ManagedBotAccountIds const& botAccounts)
             if (!session || !session->IsVirtualSession())
                 continue;
 
-            if (!player->IsBeingTeleported())
+            // Near teleports are completed by ProcessPlayerLifecycle on the
+            // player's map-update thread so no world-thread recovery can race
+            // the following combat/movement tick. Far transfers may remove the
+            // player from normal map updates and still require world recovery.
+            if (!player->IsBeingTeleportedFar())
                 continue;
 
             managedTeleportGuids.push_back(guid);
@@ -862,7 +1178,7 @@ void RecoverManagedVirtualBotTeleports(ManagedBotAccountIds const& botAccounts)
 
     for (ObjectGuid const& guid : managedTeleportGuids)
         if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
-            TryFinalizePendingManagedBotTeleport(player);
+            TryFinalizePendingVirtualPlayerTeleport(player);
 }
 
 void TryReviveManagedBotAfterStartup(Player* player)
@@ -915,8 +1231,19 @@ bool IsManagedRandomBotImpl(Player const* player, ManagedBotAccountIds const& bo
     if (IsChromieWhisperFacade(player))
         return false;
 
-    if (WorldSession const* session = player->GetSession(); session && session->IsVirtualSession())
-        return true;
+    if (WorldSession const* session = player->GetSession())
+    {
+        // In-memory clone players and temporary database-only clone sources
+        // deliberately use socketless sessions, but they are not managed
+        // playerbots.  Sending them through login/teleport recovery assumes
+        // account, social, and other runtime state that transient players do
+        // not own.
+        if (session->IsTransientPlayerSession())
+            return false;
+
+        if (session->IsVirtualSession())
+            return true;
+    }
 
     if (botAccounts.empty())
         return false;
@@ -937,6 +1264,9 @@ ManagedBotAccountIds GetManagedBotAccountIdsSnapshot()
 
 bool IsRandomBotCandidate(Player const* player, ManagedBotAccountIds const& botAccounts)
 {
+    if (playerbot::PlayerbotObcCloneManager::IsActiveClone(player))
+        return false;
+
     return IsManagedRandomBotImpl(player, botAccounts);
 }
 
@@ -976,7 +1306,8 @@ bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType, Mana
         if (isVirtualSession || IsManagedRandomBotImpl(participant, botAccounts))
             continue;
 
-        if (participant->InBattleground() && participant->GetBattlegroundTypeId() == targetBgType)
+        if (participant->InBattleground() && participant->GetBattlegroundTypeId() == targetBgType &&
+            participant->GetBattleground() && !participant->GetBattleground()->IsCustomGame())
         {
             TC_LOG_ERROR("playerbots.population",
                 "DIAG startup-hang: Human battleground interest found from active participant guid={} bgTypeId={} scanned={}.",
@@ -1089,7 +1420,7 @@ std::vector<RandomBotPoolCandidate> QueryOfflinePool(RandomBotPopulationConfig c
 
     QueryResult result = CharacterDatabase.PQuery(
         "SELECT guid, account, level, race FROM characters "
-        "WHERE online = 0 AND account IN ({}) AND level >= {} AND level <= {}",
+        "WHERE online = 0 AND account IN ({}) AND name NOT LIKE 'Obcc%' AND level >= {} AND level <= {}",
         accountList, config.minLevel, config.maxLevel);
 
     if (!result)
@@ -1313,33 +1644,12 @@ bool TryLoginBotCharacter(RandomBotPoolCandidate const& candidate)
     loginPacket << playerGuid;
     session->HandlePlayerLoginOpcode(loginPacket);
 
-    Player* loggedInPlayer = session->GetPlayer();
-    if (loggedInPlayer && loggedInPlayer->GetGUID() != playerGuid)
-    {
-        TC_LOG_WARN("playerbots.population",
-            "Random bot login failed post-dispatch verification: guid={} guidLow={} account={} hasPlayer={} guidMismatch=1.",
-            playerGuid.ToString(), candidate.lowGuid, candidate.account, loggedInPlayer ? 1 : 0,
-            1);
-
-        session->KickPlayer("Random bot login verification failed");
-        return false;
-    }
-
-    if (loggedInPlayer)
-    {
-        TC_LOG_INFO("playerbots.population", "Random bot login successful: guid={} guidLow={} account={} level={}.",
-            playerGuid.ToString(), candidate.lowGuid, candidate.account, candidate.level);
-    }
-    else
-    {
-        TC_LOG_WARN("playerbots.population",
-            "Random bot login failed post-dispatch verification: guid={} guidLow={} account={} level={} (no player materialized).",
-            playerGuid.ToString(), candidate.lowGuid, candidate.account, candidate.level);
-
-        session->KickPlayer("Random bot login verification failed (no player materialized)");
-        return false;
-    }
-
+    // HandlePlayerLoginOpcode loads the character through an asynchronous query
+    // holder. A null session player here means the login is pending, not that it
+    // failed. The session update will materialize the player on a later world
+    // tick; do not terminate the virtual session while that work is in flight.
+    TC_LOG_INFO("playerbots.population", "Random bot login dispatched: guid={} guidLow={} account={} level={}.",
+        playerGuid.ToString(), candidate.lowGuid, candidate.account, candidate.level);
     return true;
 }
 
@@ -1349,6 +1659,12 @@ bool TryLogoutRandomBot(ObjectGuid const& guid)
     if (!player)
     {
         TC_LOG_WARN("playerbots.population", "Random bot logout skipped: guid {} is no longer online.", guid.ToString());
+        return false;
+    }
+
+    if (playerbot::PlayerbotObcCloneManager::IsActiveClone(player))
+    {
+        TC_LOG_WARN("playerbots.population", "Random bot logout skipped: guid {} is an in-memory OBC clone.", guid.ToString());
         return false;
     }
 
@@ -1543,6 +1859,25 @@ namespace playerbot
 {
 bool IsManagedRandomBot(Player const* player)
 {
+    if (!player)
+        return false;
+
+    if (IsChromieWhisperFacade(player))
+        return false;
+
+    // Hot path: this runs several times per bot update and once per map player
+    // inside team scans. Managed bots always use virtual sessions and clones
+    // use transient sessions, so answer from session flags alone whenever
+    // possible instead of copying the account allow-list under its mutex.
+    if (WorldSession const* session = player->GetSession())
+    {
+        if (session->IsTransientPlayerSession())
+            return false;
+
+        if (session->IsVirtualSession())
+            return true;
+    }
+
     return IsManagedRandomBotImpl(player, GetManagedBotAccountIdsSnapshot());
 }
 
@@ -1550,6 +1885,7 @@ void RandomBotParticipationManager::ResetCadence()
 {
     std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
     g_NextRandomBotLifecycleProcessTimeByGuid.clear();
+    g_NextBattlegroundFastTickTimeByGuid.clear();
 
     std::lock_guard<std::mutex> startupReviveLock(g_StartupReviveLock);
     g_StartupRevivePending = false;
@@ -1558,6 +1894,9 @@ void RandomBotParticipationManager::ResetCadence()
 
 void RandomBotParticipationManager::LoadPopulationConfig()
 {
+    g_UseGlobalDecisionLock.store(sConfigMgr->GetBoolDefault("Playerbot.PvpDecision.GlobalLock", false),
+        std::memory_order_relaxed);
+
     std::lock_guard<std::mutex> lock(g_RandomPopulationLock);
     LoadPopulationConfigLocked(g_RandomPopulation);
 }
@@ -1632,6 +1971,7 @@ void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
     {
         std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
         g_NextRandomBotLifecycleProcessTimeByGuid.erase(rawGuid);
+        g_NextBattlegroundFastTickTimeByGuid.erase(rawGuid);
     }
 
     {
@@ -1641,18 +1981,90 @@ void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
     }
 }
 
+// Real players get an under-map recovery for free: MovementHandler.cpp's
+// CMSG_MOVE_* handler checks GetPositionZ() against GetMinHeight() on every
+// incoming movement packet and calls Battleground::HandlePlayerUnderMap()
+// (see e.g. BattlegroundBRT::HandlePlayerUnderMap, which teleports the
+// player back to their team's starting graveyard). Playerbots move via
+// server-side motion generators, never send real CMSG_MOVE_* packets, and so
+// never reach that check - nothing in this module calls HandlePlayerUnderMap
+// at all. A bot that clips through geometry (most likely on custom maps
+// whose navmesh has gaps a client's own collision would have caught) just
+// keeps falling forever with no recovery. Mirror the same check here on the
+// bot lifecycle tick so bots get the same safety net real players get.
+bool TryRecoverPlayerbotFromUnderMap(Player* player)
+{
+    if (!player || !player->IsInWorld() || !player->FindMap())
+        return false;
+
+    if (player->GetPositionZ() >= player->GetMap()->GetMinHeight(player->GetPositionX(), player->GetPositionY()))
+        return false;
+
+    if (Battleground* bg = player->GetBattleground())
+        if (bg->HandlePlayerUnderMap(player))
+            return true;
+
+    if (player->IsAlive())
+    {
+        player->SetFlag(PLAYER_FLAGS, PLAYER_FLAGS_IS_OUT_OF_BOUNDS);
+        player->EnvironmentalDamage(DAMAGE_FALL_TO_VOID, player->GetMaxHealth());
+        if (player->IsAlive())
+            player->KillPlayer();
+    }
+
+    return true;
+}
+
 void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
 {
+    if (!player)
+        return;
+
+    bool const isTransientClone = PlayerbotObcCloneManager::IsActiveClone(player);
+    if (!isTransientClone && !playerbot::IsManagedRandomBot(player))
+        return;
+
+    // PlayerScript::OnUpdate is invoked from Map::Update. With more than one
+    // map-update thread, bots on different maps reach the PvP modules at the
+    // same time. Serialize per map instance: same-map ticks stay coherent,
+    // while concurrent custom matches on other maps evaluate in parallel.
+    // Cross-map container safety is provided by PlayerbotSharedStateGuard.h.
+    std::lock_guard<std::mutex> decisionLock(GetDecisionTickLockForPlayer(player));
+
+    TryRecoverPlayerbotFromUnderMap(player);
     TryReviveManagedBotAfterStartup(player);
-    TryFinalizePendingManagedBotTeleport(player);
+    // A near teleport such as Blink must finish in its own player-update turn.
+    // Issuing combat movement immediately after the synthetic ACK can launch
+    // observer-visible movement from both the old and new positions.
+    if (TryFinalizePendingVirtualPlayerTeleport(player))
+        return;
     TryUsePlayerbotInsigniaBreaker(player);
+    TryUsePlayerbotStoneformBreaker(player);
     TryCastPriestSpiritOfRedemption(player);
-    ProcessActiveBattlegroundTacticalTick(player);
+
+    if (isTransientClone && player && player->InBattleground() &&
+        BattlegroundLifecycleActions::HandleDeathPrimitive(player))
+        return;
+
+    ProcessBattlegroundPlayerbotTick(player);
+
+    // Dark clones deliberately share the playerbot tactical implementation,
+    // but the clone manager alone owns their battleground membership and team.
+    // Their death/release/resurrection state is handled above, but do not let
+    // the normal persistent-bot lifecycle queue, leave, or rebalance these
+    // transient players after their tactical tick has run.
+    if (isTransientClone)
+        return;
 
     if (!CanProcessPlayerLifecycle(player))
         return;
 
     RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(player);
+}
+
+void RandomBotParticipationManager::FinalizePendingVirtualPlayerTeleport(Player* player)
+{
+    TryFinalizePendingVirtualPlayerTeleport(player);
 }
 
 void RandomBotParticipationManager::SetPopulationRuntimeEnabled(bool enabled)
@@ -1675,6 +2087,11 @@ bool RandomBotParticipationManager::TriggerImmediateRebalance()
     g_RandomPopulation.rebalanceRequested = true;
     g_RandomPopulation.rebalanceTimerMs = g_RandomPopulation.config.rebalanceIntervalMs;
     return RebalanceRandomPopulation(g_RandomPopulation);
+}
+
+std::vector<uint32> RandomBotParticipationManager::GetConfiguredBotAccountIds()
+{
+    return GetManagedBotAccountIdsSnapshot();
 }
 
 LifecycleObservationSnapshot RandomBotParticipationManager::GetLifecycleObservationSnapshot()
@@ -1741,9 +2158,11 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     if (IsCrowdControlledForLifecyclePause(player))
     {
         ClearActiveMovementForControlLoss(player);
+        bool const didBlink = TryMageBlinkOutOfControl(player);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Lifecycle paused: guid={} reason=crowd-control",
-            guidRaw);
+            "Lifecycle paused: guid={} reason=crowd-control blinkExecuted={}",
+            guidRaw,
+            didBlink ? 1 : 0);
         return;
     }
 
@@ -1774,6 +2193,15 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     if (didExecuteClassSpell &&
         (classSpellContext.spellId == 16166 ||
          classSpellContext.spellId == 17116 ||
+         // Amplify Curse (18288) precedes Curse of Agony, and Arcane Power
+         // (12042) / Presence of Mind (12043) precede the rest of the
+         // arcane burst chain (see SelectWarlockSpell / SelectMageSpell) -
+         // all four are off the global cooldown and are meant to land back
+         // to back with their follow-up cast rather than waiting a full
+         // cadence tick.
+         classSpellContext.spellId == 18288 ||
+         classSpellContext.spellId == 12042 ||
+         classSpellContext.spellId == 12043 ||
          PvpClassActions::IsPetSpellAction(player, classSpellContext)))
     {
         std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);

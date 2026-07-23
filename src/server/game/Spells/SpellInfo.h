@@ -427,6 +427,7 @@ class TC_GAME_API SpellInfo
         bool NeedsComboPoints() const;
         bool IsNextMeleeSwingSpell() const;
         bool IsBreakingStealth() const;
+        bool WouldDropBattlegroundFlag() const;
         bool IsRangedWeaponSpell() const;
         bool IsAutoRepeatRangedSpell() const;
         bool HasInitialAggro() const;

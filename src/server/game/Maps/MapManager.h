@@ -39,6 +39,13 @@ class TC_GAME_API MapManager
         Map* CreateMap(uint32 mapId, Player* player, uint32 loginInstanceId=0);
         Map* FindMap(uint32 mapId, uint32 instanceId) const;
 
+        // Creates an isolated copy of a regular world map. The copy has its
+        // own object/grid state but shares terrain, VMap, and MMap data with
+        // the base map. These instances are server-only and are never saved.
+        Map* CreateWorldSubMap(uint32 mapId);
+        bool DestroyWorldSubMap(uint32 mapId, uint32 instanceId);
+        bool IsWorldSubMap(uint32 mapId, uint32 instanceId) const;
+
         uint32 GetAreaId(uint32 phaseMask, uint32 mapid, float x, float y, float z) const
         {
             Map const* m = const_cast<MapManager*>(this)->CreateBaseMap(mapid);
@@ -148,6 +155,7 @@ class TC_GAME_API MapManager
 
     private:
         typedef std::unordered_map<uint32, Map*> MapMapType;
+        typedef std::unordered_map<uint64, Map*> WorldSubMapType;
         typedef boost::dynamic_bitset<size_t> InstanceIds;
 
         MapManager();
@@ -165,6 +173,7 @@ class TC_GAME_API MapManager
         std::mutex _mapsLock;
         uint32 i_gridCleanUpDelay;
         MapMapType i_maps;
+        WorldSubMapType i_worldSubMaps;
         IntervalTimer i_timer;
 
         InstanceIds _freeInstanceIds;
@@ -192,6 +201,9 @@ void MapManager::DoForAllMaps(Worker&& worker)
         else
             worker(map);
     }
+
+    for (auto& mapPair : i_worldSubMaps)
+        worker(mapPair.second);
 }
 
 template<typename Worker>
@@ -212,6 +224,11 @@ inline void MapManager::DoForAllMapsWithMapId(uint32 mapId, Worker&& worker)
         else
             worker(map);
     }
+
+
+    for (auto& mapPair : i_worldSubMaps)
+        if (mapPair.second->GetId() == mapId)
+            worker(mapPair.second);
 }
 
 #define sMapMgr MapManager::instance()

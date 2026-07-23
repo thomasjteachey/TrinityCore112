@@ -119,7 +119,7 @@ class TC_GAME_API CombatManager
         void RefreshPvPCombatTimer(Unit* who);
         bool IsInCombatWith(ObjectGuid const& who) const;
         bool IsInCombatWith(Unit const* who) const;
-        void InheritCombatStatesFrom(Unit const* who);
+        void InheritCombatStatesFrom(Unit const* who, uint32 causeSpellId = 0);
         void EndCombatBeyondRange(float range, bool includingPvP = false);
         // flags any pvp refs for suppression on owner's side - these refs will not generate combat until refreshed
         void SuppressPvPCombat();

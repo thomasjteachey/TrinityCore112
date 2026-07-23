@@ -16,13 +16,14 @@
  */
 
 #include "PlayerbotPvpLifecycleActions.h"
+#include "PlayerbotObcClone.h"
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotRandomBotParticipation.h"
+#include "PlayerbotSharedStateGuard.h"
 #include "SpellHistory.h"
 #include "BattlegroundMgr.h"
 #include "Battleground.h"
 #include "BattlegroundQueue.h"
-#include "BattlegroundEY.h"
 #include "BattlegroundTP.h"
 #include "BattlegroundWS.h"
 #include "DBCStores.h"
@@ -36,6 +37,8 @@
 #include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "Movement/AbstractFollower.h"
+#include "MoveSpline.h"
 #include "MovementTypedefs.h"
 #include "Opcodes.h"
 #include "ObjectAccessor.h"
@@ -61,6 +64,7 @@
 #include <cmath>
 #include <chrono>
 #include <limits>
+#include <mutex>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -75,18 +79,30 @@ namespace playerbot
     uint64 BuildBattlegroundInstanceKey(Battleground const* battleground);
     Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance, uint32* scannedPlayers = nullptr, uint32* attackableEnemies = nullptr);
     bool EngageNearestEnemyPlayer(Player* player, float scanDistance);
+    void ApplyDeterministicObjectiveOffset(Battleground const* battleground, Player const* player, Position& destination);
+    bool TryGetObjectivePosition(Battleground* battleground, Player* player, Position& destination);
+    void WhisperAutoShotDiagnosticToArena(Player* player, std::string const& message, uint32 throttleMs);
 }
 
 namespace
 {
+    using playerbot::WhisperAutoShotDiagnosticToArena;
+
+    bool WantsPlayerbotDiagnostics(Player const* observer)
+    {
+        WorldSession const* session = observer ? observer->GetSession() : nullptr;
+        return session && session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Playerbot);
+    }
+
     std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
-    std::unordered_map<uint64, uint32> g_HunterAutoShotPlantStartedMs;
-    std::unordered_map<uint64, uint32> g_HunterAutoShotPlantLastTimerMs;
+    std::unordered_map<uint64, uint32> g_HunterAutoShotPlantFireSequence;
+    std::mutex g_HunterAutoShotEventLock;
+    std::unordered_map<uint64, uint32> g_HunterAutoShotFireSequence;
     std::unordered_map<uint64, uint32> g_HunterForceFleeUntilMs;
     std::unordered_map<uint64, uint32> g_HunterLastFleeIssueMs;
     std::unordered_map<uint64, uint32> g_HunterKiteHoldUntilMs;
     std::unordered_map<uint64, int8> g_HunterKiteSideByGuid;
-    std::unordered_map<uint64, uint32> g_HunterAimedDiagLastMsByGuid;
+    // std::unordered_map<uint64, uint32> g_HunterAimedDiagLastMsByGuid; // Aimed Shot whisper diagnostics disabled.
 
     struct HunterFleeState
     {
@@ -98,21 +114,26 @@ namespace
     std::unordered_map<uint64, HunterFleeState> g_HunterFleeStateByGuid;
     constexpr uint32 PLAYERBOT_HUNTER_KITE_HOLD_MS = 3500;
     constexpr uint32 PLAYERBOT_HUNTER_FLEE_STICK_MS = 4200;
-    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_MIN_PLANT_MS = 434;
-    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_MAX_PLANT_MS = 1500;
+    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_MAX_PLANT_MS = 2200;
     constexpr uint32 PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS = 1150;
     constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS = 550;
-    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_FIRED_TIMER_MS = 900;
     constexpr uint32 PLAYERBOT_HUNTER_FLEE_REISSUE_MS = 350;
+    constexpr uint32 PLAYERBOT_PRIEST_ELUNES_GRACE_SPELL_ID = 81351;
+    constexpr uint32 PLAYERBOT_PRIEST_WISP_FORM_SPELL_ID = 81352;
 constexpr uint32 kHunterFeignDeathSpellId = 5384;
 constexpr uint32 kPlayerbotHunterStationaryCastLockToken = 900006;
 constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
+// Environmental Magma periodically damages units standing on hazardous ground.
+// Some custom terrain does not expose the matching liquid flags, so the aura is
+// also a generic signal that the bot is currently standing in a hazard.
+constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
     bool IsHunterKiteHoldActive(Player const* player, uint32 nowMs = GameTime::GetGameTimeMS())
     {
         if (!player || player->GetClass() != CLASS_HUNTER)
             return false;
 
+        std::lock_guard<std::mutex> stateGuard(playerbot::SharedBotStateStructureLock());
         auto itr = g_HunterKiteHoldUntilMs.find(player->GetGUID().GetRawValue());
         if (itr == g_HunterKiteHoldUntilMs.end())
             return false;
@@ -134,9 +155,19 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         uint32 const nowMs = GameTime::GetGameTimeMS();
         uint64 const guid = player->GetGUID().GetRawValue();
         uint32 const untilMs = nowMs + holdMs;
-        uint32& existingUntilMs = g_HunterKiteHoldUntilMs[guid];
+        uint32& existingUntilMs = playerbot::LockedGetOrCreate(g_HunterKiteHoldUntilMs, guid);
         if (existingUntilMs < untilMs)
             existingUntilMs = untilMs;
+    }
+
+    uint32 GetHunterAutoShotFireSequence(Player const* player)
+    {
+        if (!player)
+            return 0;
+
+        std::lock_guard<std::mutex> lock(g_HunterAutoShotEventLock);
+        auto itr = g_HunterAutoShotFireSequence.find(player->GetGUID().GetRawValue());
+        return itr != g_HunterAutoShotFireSequence.end() ? itr->second : 0;
     }
 
     std::unordered_map<uint64, uint32> g_BattlegroundNoHumanSinceMsByInstance;
@@ -149,6 +180,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
     constexpr uint32 PLAYERBOT_BG_HUMAN_INTEREST_REBALANCE_THROTTLE_MS = 5000;
     constexpr uint32 PLAYERBOT_BG_SCM_REFILL_THROTTLE_MS = 3000;
     constexpr uint32 PLAYERBOT_BG_QUEUE_REQUEUE_TIMEOUT_MS = 15000;
+    constexpr uint32 PLAYERBOT_BG_RELEASE_SPIRIT_DELAY_MS = 1000;
     constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
     constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
     constexpr uint32 SPELL_WAITING_FOR_RESURRECT = 2584;
@@ -156,6 +188,8 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
     std::unordered_map<uint64, uint32> g_BattlegroundOverstackRequeueCooldownUntilMsByGuid;
     std::unordered_map<uint64, uint32> g_BattlegroundOverstackInstanceNextDepartureMsByInstance;
     std::unordered_map<uint64, uint32> g_BattlegroundQueuedNoInviteSinceMsByGuid;
+    std::unordered_set<uint64> g_BattlegroundDeadBotGuids;
+    std::unordered_set<uint64> g_BattlegroundSpiritQueuedBotGuids;
     uint32 g_LastHumanInterestPopulationRebalanceAttemptMs = 0;
     uint32 g_LastScmSlotRefillAttemptMs = 0;
     bool BattlegroundHasAnyRealHumanPlayers(Player const* player);
@@ -165,6 +199,13 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
     bool IsScmManagedBotCandidate(Player const* player)
     {
         if (!player)
+            return false;
+
+        // OBC clones use virtual sessions so the shared tactical playerbot code
+        // controls them, but their team and lifetime are owned exclusively by
+        // PlayerbotObcCloneManager. They must never enter queue, slot-refill, or
+        // overstack rebalance paths intended for persistent managed bots.
+        if (playerbot::PlayerbotObcCloneManager::IsActiveClone(player))
             return false;
 
         if (playerbot::IsManagedRandomBot(player))
@@ -202,6 +243,9 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 
         if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.BlackrockThroneAccounts").count(accountId))
             return BATTLEGROUND_BRT;
+
+        if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.ObsidianColosseumAccounts").count(accountId))
+            return BATTLEGROUND_OBC;
 
         if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.BattleForGilneasAccounts").count(accountId))
             return BATTLEGROUND_BFG;
@@ -271,12 +315,12 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 
         uint32 const nowMs = GameTime::GetGameTimeMS();
         uint64 const botGuidRaw = player->GetGUID().GetRawValue();
-        uint32 const cooldownUntilMs = g_BattlegroundOverstackRequeueCooldownUntilMsByGuid[botGuidRaw];
+        uint32 const cooldownUntilMs = playerbot::LockedGetOrCreate(g_BattlegroundOverstackRequeueCooldownUntilMsByGuid, botGuidRaw);
         if (cooldownUntilMs && nowMs < cooldownUntilMs)
             return false;
 
         uint64 const instanceKey = playerbot::BuildBattlegroundInstanceKey(battleground);
-        uint32 const nextDepartureEarliestMs = g_BattlegroundOverstackInstanceNextDepartureMsByInstance[instanceKey];
+        uint32 const nextDepartureEarliestMs = playerbot::LockedGetOrCreate(g_BattlegroundOverstackInstanceNextDepartureMsByInstance, instanceKey);
         if (nextDepartureEarliestMs && nowMs < nextDepartureEarliestMs)
             return false;
 
@@ -284,8 +328,8 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         if (nowMs % PLAYERBOT_BG_OVERSTACK_INSTANCE_JITTER_WINDOW_MS < jitterMs)
             return false;
 
-        g_BattlegroundOverstackRequeueCooldownUntilMsByGuid[botGuidRaw] = nowMs + PLAYERBOT_BG_OVERSTACK_REQUEUE_COOLDOWN_MS;
-        g_BattlegroundOverstackInstanceNextDepartureMsByInstance[instanceKey] = nowMs + PLAYERBOT_BG_OVERSTACK_INSTANCE_DEPARTURE_SPACING_MS;
+        playerbot::LockedSet(g_BattlegroundOverstackRequeueCooldownUntilMsByGuid, botGuidRaw, nowMs + PLAYERBOT_BG_OVERSTACK_REQUEUE_COOLDOWN_MS);
+        playerbot::LockedSet(g_BattlegroundOverstackInstanceNextDepartureMsByInstance, instanceKey, nowMs + PLAYERBOT_BG_OVERSTACK_INSTANCE_DEPARTURE_SPACING_MS);
 
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP overstack rebalance trigger: guid={} bgTypeId={} instanceId={} assignedTeam={} teamCount={} otherTeamCount={} diff={}.",
@@ -399,7 +443,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         PositionFullTerrainStatus terrainStatus;
         map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
             terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
-        return player->IsOutdoors() || terrainStatus.outdoors;
+        return player->IsOutdoors() && terrainStatus.outdoors;
     }
 
     bool ShouldForceIndoorDismount(Player const* player, bool outdoors, uint32 lingerMs = 1500)
@@ -410,6 +454,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         static std::unordered_map<uint64, uint32> indoorSinceMsByGuid;
         uint64 const guid = player->GetGUID().GetRawValue();
 
+        std::lock_guard<std::mutex> stateGuard(playerbot::SharedBotStateStructureLock());
         if (outdoors)
         {
             indoorSinceMsByGuid.erase(guid);
@@ -468,12 +513,6 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         return battleground && battleground->GetMapId() == 489;
     }
 
-    bool IsScarletChapel(Player const* player)
-    {
-        Battleground const* battleground = player ? player->GetBattleground() : nullptr;
-        return battleground && battleground->GetTypeID(true) == BATTLEGROUND_SCM;
-    }
-
     TeamId ResolveTeamId(uint32 teamValue)
     {
         if (teamValue == TEAM_ALLIANCE || teamValue == ALLIANCE)
@@ -511,12 +550,12 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 
     bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance);
     float GetAggressiveCombatScanDistance(Player const* player, float fallbackDistance);
+    bool HasPlayerbotGapCloserInFlight(Player const* player);
     bool CanIssueBotMovement(Player* player);
     bool HunterIsHardCastingStationaryShot(Player const* player);
     void WhisperHunterAimedLifecycleDiagnostic(Player* player, Unit* target, char const* phase, char const* extra, uint32 throttleMs);
     bool BreakExpiredHunterFeignDeath(Player* player);
     bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000);
-    bool TryGetObjectivePosition(Battleground* battleground, Player* player, Position& destination);
     Position BuildFollowDestination(Player* player, Unit* target, float desiredDistance);
     bool IssueHumanLikeFollow(Player* player, Unit* target, float desiredDistance, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000);
     void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs);
@@ -538,7 +577,9 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             (1u << MECHANIC_HORROR) |
             (1u << MECHANIC_SAPPED);
 
-        bool const hasLostControlState = player->HasUnitState(UNIT_STATE_LOST_CONTROL);
+        // LOST_CONTROL includes the normal CHARGING/JUMPING states used by
+        // effect movement. Only the actual controlled/possessed subset is CC.
+        bool const hasControlState = player->HasUnitState(UNIT_STATE_CONTROLLED | UNIT_STATE_POSSESSED);
         bool const hasHardCcState = player->HasUnitState(UNIT_STATE_STUNNED) ||
             player->HasUnitState(UNIT_STATE_CONFUSED) ||
             player->HasUnitState(UNIT_STATE_FLEEING);
@@ -546,7 +587,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             player->HasAuraWithMechanic(ccMechanicMask) ||
             player->IsPolymorphed();
 
-        return hasLostControlState || hasHardCcState || hasCcAura;
+        return hasControlState || hasHardCcState || hasCcAura;
     }
 
     bool TryPursueNearestEnemyInBattleground(Player* player)
@@ -611,7 +652,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             return false;
 
         Position destination;
-        if (!TryGetObjectivePosition(battleground, player, destination))
+        if (!playerbot::TryGetObjectivePosition(battleground, player, destination))
             return false;
 
         if (player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
@@ -691,6 +732,48 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         (void)throttleMs;
     }
 
+    void EmitRehgarMovementGuardServerDiagnostic(Player* player, char const* phase, uint32 throttleMs = 100)
+    {
+        if (!playerbot::PvpClassActions::AreRehgarMovementDiagnosticsEnabled() ||
+            !player || player->GetClass() != CLASS_SHAMAN || player->GetShapeshiftForm() != FORM_GHOSTWOLF)
+            return;
+
+        if (throttleMs)
+        {
+            static std::mutex throttleLock;
+            static std::unordered_map<uint64, uint32> lastWhisperMsByGuid;
+            uint32 const nowMs = GameTime::GetGameTimeMS();
+            std::lock_guard<std::mutex> lock(throttleLock);
+            uint32& lastMs = lastWhisperMsByGuid[player->GetGUID().GetRawValue()];
+            if (lastMs && nowMs < lastMs + throttleMs)
+                return;
+            lastMs = nowMs;
+        }
+
+        MotionMaster const* motionMaster = player->GetMotionMaster();
+        bool const hasSpline = player->movespline != nullptr;
+        std::ostringstream os;
+        os << "REHGAR DIAG: lifecycle phase=" << (phase ? phase : "unknown")
+           << " bot=" << player->GetName()
+           << " guid=" << player->GetGUID().ToString()
+           << " motion=" << uint32(motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE)
+           << " spline=" << (hasSpline ? "yes" : "no")
+           << " initialized=" << (hasSpline && player->movespline->Initialized() ? "yes" : "no")
+           << " finalized=" << (hasSpline && player->movespline->Finalized() ? "yes" : "no")
+           << " moving=" << (player->isMoving() ? "yes" : "no")
+           << " charging=" << (player->HasUnitState(UNIT_STATE_CHARGING) ? "yes" : "no")
+           << " jumping=" << (player->HasUnitState(UNIT_STATE_JUMPING) ? "yes" : "no");
+
+        std::string const message = os.str();
+        for (SessionMap::value_type const& sessionPair : sWorld->GetAllSessions())
+        {
+            WorldSession* session = sessionPair.second;
+            Player* observer = session ? session->GetPlayer() : nullptr;
+            if (WantsPlayerbotDiagnostics(observer))
+                ChatHandler(session).SendSysMessage(message);
+        }
+    }
+
     void ClearMovementBeforeBattlegroundTeleport(Player* player)
     {
         if (!player)
@@ -723,7 +806,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         static std::unordered_map<uint64, uint32> nextAllowedMoveCommandMsByGuid;
         uint64 const botGuid = player->GetGUID().GetRawValue();
         uint32 const nowMs = GameTime::GetGameTimeMS();
-        uint32& nextAllowedMs = nextAllowedMoveCommandMsByGuid[botGuid];
+        uint32& nextAllowedMs = playerbot::LockedGetOrCreate(nextAllowedMoveCommandMsByGuid, botGuid);
         if (nowMs < nextAllowedMs)
             return false;
 
@@ -749,8 +832,12 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
                 adjustedZ + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight()))
             {
                 bool const canWalkOnWater = player->HasAuraType(SPELL_AURA_WATER_WALK);
+                // 0.5 below the surface keeps in-water endpoints inside the
+                // stably-swimming band of the virtual-session swim hysteresis
+                // (engages above 0.35 depth); anything shallower parks the bot
+                // in the dead band where its swim flag never settles.
                 if (!canWalkOnWater)
-                    adjustedZ = std::max(liquidData.depth_level + 0.05f, std::min(adjustedZ, liquidData.level - 0.25f));
+                    adjustedZ = std::max(liquidData.depth_level + 0.05f, std::min(adjustedZ, liquidData.level - 0.5f));
             }
         }
 
@@ -775,68 +862,13 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 
     bool IsForbiddenBattlegroundPathType(PathType pathType)
     {
-        uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_NOPATH;
+        uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_NOPATH |
+            PATHFIND_SHORT | PATHFIND_FARFROMPOLY;
         return (pathType & forbiddenPathFlags) != 0;
     }
 
     constexpr float PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT = 2400.0f;
     constexpr float PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE = 80.0f;
-
-    Position BuildDownhillEscapeDestination(Player* player, Position const& destination)
-    {
-        if (!player)
-            return destination;
-
-        float const dx = destination.GetPositionX() - player->GetPositionX();
-        float const dy = destination.GetPositionY() - player->GetPositionY();
-        float const planarDistance = std::sqrt(dx * dx + dy * dy);
-        if (planarDistance < 0.5f)
-            return BuildCollisionSafeDestination(player, destination);
-
-        float const stepDistance = std::min(12.0f, std::max(4.0f, planarDistance * 0.35f));
-        float const nx = dx / planarDistance;
-        float const ny = dy / planarDistance;
-
-        Position probe(
-            player->GetPositionX() + nx * stepDistance,
-            player->GetPositionY() + ny * stepDistance,
-            player->GetPositionZ() - 6.0f,
-            destination.GetOrientation());
-
-        return BuildCollisionSafeDestination(player, probe);
-    }
-
-    bool ShouldPreferDirectDropShortcut(Player* player, Position const& destination)
-    {
-        if (!player)
-            return false;
-
-        float const destinationDistance = player->GetDistance(destination);
-        if (destinationDistance < 15.0f || destinationDistance > 120.0f)
-            return false;
-
-        float const verticalDrop = player->GetPositionZ() - destination.GetPositionZ();
-        if (verticalDrop < 8.0f)
-            return false;
-
-        PathGenerator path(player);
-        path.SetPathLengthLimit(PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT);
-        if (!path.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), true))
-            return false;
-
-        if (IsForbiddenBattlegroundPathType(path.GetPathType()))
-            return false;
-
-        Movement::PointsArray const& points = path.GetPath();
-        if (points.size() < 2)
-            return false;
-
-        float pathLength = 0.0f;
-        for (std::size_t i = 1; i < points.size(); ++i)
-            pathLength += (points[i] - points[i - 1]).length();
-
-        return pathLength > destinationDistance * 1.35f;
-    }
 
     bool BuildNavPathSegmentDestination(Player const* player, Movement::PointsArray const& points, float orientation, Position& segmentDestination)
     {
@@ -844,7 +876,9 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             return false;
 
         G3D::Vector3 previous(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+        G3D::Vector3 lastRoutePoint = previous;
         float traversedDistance = 0.0f;
+        bool haveRoutePoint = false;
 
         for (std::size_t i = 1; i < points.size(); ++i)
         {
@@ -859,14 +893,20 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 
             if (traversedDistance + segmentLength >= PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE)
             {
-                float const fraction = (PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE - traversedDistance) / segmentLength;
-                G3D::Vector3 const selected = previous + delta * fraction;
+                // Keep the endpoint on a real Detour route vertex. Interpolating
+                // XYZ between corners is unsafe on vertically stacked maps: the
+                // intermediate Z can sit between floors and a later height query
+                // may resolve the lower surface. Prefer the previous vertex once
+                // it represents useful progress; otherwise advance to this one.
+                G3D::Vector3 const& selected = haveRoutePoint && traversedDistance >= 8.0f ? lastRoutePoint : point;
                 segmentDestination.Relocate(selected.x, selected.y, selected.z, orientation);
-                return true;
+                return player->GetDistance(segmentDestination) > 0.5f;
             }
 
             traversedDistance += segmentLength;
             previous = point;
+            lastRoutePoint = point;
+            haveRoutePoint = true;
         }
 
         G3D::Vector3 const& finalPoint = points.back();
@@ -888,25 +928,14 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             // meaningful navmesh progress toward distant enemies instead of
             // repeatedly selecting tiny local hops that catch on terrain.
             path.SetPathLengthLimit(PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT);
-            bool pathOk = path.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), true);
+            // Never force the requested endpoint. If Detour can only build an
+            // incomplete but connected route, its actual endpoint is useful
+            // progress around the obstacle; forcing the endpoint converts that
+            // route into a direct, non-navmesh shortcut.
+            bool const pathOk = path.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), false);
             PathType pathType = path.GetPathType();
             Movement::PointsArray points = path.GetPath();
             G3D::Vector3 actualEnd = path.GetActualEndPosition();
-
-            if ((pathType & PATHFIND_SHORTCUT) != 0)
-            {
-                PathGenerator retryPath(player);
-                retryPath.SetPathLengthLimit(PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT);
-                bool const retryOk = retryPath.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), false);
-                PathType const retryType = retryPath.GetPathType();
-                if (retryOk && (retryType & PATHFIND_SHORTCUT) == 0)
-                {
-                    points = retryPath.GetPath();
-                    pathType = retryType;
-                    pathOk = true;
-                    actualEnd = retryPath.GetActualEndPosition();
-                }
-            }
 
             if (!pathOk || IsForbiddenBattlegroundPathType(pathType))
                 return false;
@@ -931,7 +960,11 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             if (!haveResolvedDestination)
                 return false;
 
-            resolvedDestination = BuildCollisionSafeDestination(player, resolvedDestination);
+            // This endpoint already came from the accepted Detour route. Do
+            // not run UpdateAllowedPositionZ over it again: on stacked geometry
+            // that generic map/VMap query can replace the navmesh floor with a
+            // lower one. MovePoint performs its normal generated-path validation
+            // against this exact route vertex.
             float const dx = resolvedDestination.GetPositionX() - player->GetPositionX();
             float const dy = resolvedDestination.GetPositionY() - player->GetPositionY();
             float const planarDelta = std::sqrt(dx * dx + dy * dy);
@@ -945,51 +978,218 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             return true;
         };
 
-        if (tryResolveDestination(safeDestination, segmentDestination, resolvedPathType))
-            return true;
+        // Do not probe points along the straight line to the tactical target.
+        // A probe on the bot's side of a wall is individually reachable but
+        // says nothing about reaching the real destination; repeatedly choosing
+        // it makes the bot run into the wall instead of following the full route.
+        return tryResolveDestination(safeDestination, segmentDestination, resolvedPathType);
+    }
 
-        float const dx = safeDestination.GetPositionX() - player->GetPositionX();
-        float const dy = safeDestination.GetPositionY() - player->GetPositionY();
-        float const dz = safeDestination.GetPositionZ() - player->GetPositionZ();
-        float const planarDistance = std::sqrt(dx * dx + dy * dy);
-        if (planarDistance < 1.0f)
+    bool IsInHazardousLiquid(Player const* player)
+    {
+        if (!player)
             return false;
 
-        std::array<float, 8> const probeDistances =
+        Map const* map = player->FindMap();
+        if (!map)
+            return false;
+
+        if (player->HasAura(kEnvironmentalMagmaDamageAuraId))
+            return true;
+
+        LiquidData liquidData{};
+        ZLiquidStatus const status = map->GetLiquidStatus(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(),
+            player->GetPositionZ() + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight());
+        if ((status & MAP_LIQUID_STATUS_IN_CONTACT) == 0)
+            return false;
+
+        return (liquidData.type_flags & (MAP_LIQUID_TYPE_MAGMA | MAP_LIQUID_TYPE_SLIME)) != 0;
+    }
+
+    bool IsHazardousLiquidDestination(Player const* player, Position const& destination)
+    {
+        if (!player)
+            return false;
+
+        Map const* map = player->FindMap();
+        if (!map)
+            return false;
+
+        LiquidData liquidData{};
+        ZLiquidStatus const status = map->GetLiquidStatus(player->GetPhaseMask(), destination.GetPositionX(), destination.GetPositionY(),
+            destination.GetPositionZ() + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight());
+        return (status & MAP_LIQUID_STATUS_IN_CONTACT) != 0 &&
+            (liquidData.type_flags & (MAP_LIQUID_TYPE_MAGMA | MAP_LIQUID_TYPE_SLIME)) != 0;
+    }
+
+    bool IsValidatedPathingHazardEgress(Player const* player, Position const& destination)
+    {
+        if (!player || IsHazardousLiquidDestination(player, destination))
+            return false;
+
+        float const dx = destination.GetPositionX() - player->GetPositionX();
+        float const dy = destination.GetPositionY() - player->GetPositionY();
+        float const planarDelta = std::sqrt(dx * dx + dy * dy);
+        float const verticalDelta = std::fabs(destination.GetPositionZ() - player->GetPositionZ());
+
+        // This is only an emergency egress for a bot whose liquid position is
+        // not represented by the navmesh. Keep it short, reject floor changes,
+        // and require collision LOS so it cannot become a wall/drop shortcut.
+        if (planarDelta < 0.5f || planarDelta > 24.0f ||
+            verticalDelta > std::max(8.0f, planarDelta * 0.75f + 2.0f))
+            return false;
+
+        return player->IsWithinLOS(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ() + 0.5f);
+    }
+
+    bool TryMoveOutOfHazardousLiquid(Player* player)
+    {
+        if (!player)
+            return false;
+
+        struct HazardEscapeState
         {
-            80.0f,
-            60.0f,
-            45.0f,
-            30.0f,
-            20.0f,
-            12.0f,
-            8.0f,
-            5.0f
+            Position lastSafePosition;
+            bool hasLastSafePosition = false;
         };
 
-        PathType probePathType = PathType(0);
-        for (float probeDistance : probeDistances)
+        static std::unordered_map<uint64, HazardEscapeState> stateByGuid;
+        HazardEscapeState& state = playerbot::LockedGetOrCreate(stateByGuid, player->GetGUID().GetRawValue());
+
+        if (!IsInHazardousLiquid(player))
         {
-            float const cappedDistance = std::min(planarDistance - 0.25f, probeDistance);
-            if (cappedDistance <= 0.5f)
-                continue;
+            state.lastSafePosition = player->GetPosition();
+            state.hasLastSafePosition = true;
+            return false;
+        }
 
-            float const fraction = cappedDistance / planarDistance;
-            Position probeDestination(
-                player->GetPositionX() + dx * fraction,
-                player->GetPositionY() + dy * fraction,
-                player->GetPositionZ() + dz * fraction,
-                safeDestination.GetOrientation());
+        // A charge/leap already owns the highest-priority movement slot and is
+        // moving the bot away from its current hazardous position. Do not wipe
+        // that effect generator to install an escape point, or its arrival
+        // MovementInform will never fire.
+        if (HasPlayerbotGapCloserInFlight(player))
+        {
+            EmitRehgarMovementGuardServerDiagnostic(player, "hazard_escape_deferred_effect", 0);
+            return true;
+        }
 
-            if (tryResolveDestination(probeDestination, segmentDestination, &probePathType))
+        MotionMaster* motionMaster = player->GetMotionMaster();
+        if (!motionMaster)
+            return true;
+
+        // Preserve an already-launched escape point. Recomputing from the bot's
+        // new position and clearing/reissuing every AI tick repeatedly resets
+        // the spline at its origin, which looks exactly like standing still.
+        if (motionMaster->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE)
+        {
+            bool const splineLaunched = player->movespline && player->movespline->Initialized();
+            if (!splineLaunched || !player->movespline->Finalized())
+                return true;
+        }
+
+        // A point route may cross hazardous ground when necessary. If it ends
+        // while the damage aura remains, backtrack to the last observed safe
+        // position instead of treating the hazardous endpoint as a place to
+        // stop and cast.
+        if (state.hasLastSafePosition && player->GetExactDist(state.lastSafePosition) > 1.0f)
+        {
+            Position segmentDestination;
+            if (TryBuildBattlegroundSegmentDestination(player, state.lastSafePosition, segmentDestination) ||
+                (!player->InBattleground() && player->GetDistance(state.lastSafePosition) > 0.5f))
             {
-                if (resolvedPathType)
-                    *resolvedPathType = probePathType;
+                motionMaster->Clear(MOTION_SLOT_ACTIVE);
+                motionMaster->MovePoint(0, player->InBattleground() ? segmentDestination : state.lastSafePosition, true);
+                return true;
+            }
+
+            if (IsValidatedPathingHazardEgress(player, state.lastSafePosition))
+            {
+                motionMaster->Clear(MOTION_SLOT_ACTIVE);
+                motionMaster->MovePoint(0, state.lastSafePosition, true);
                 return true;
             }
         }
 
-        return false;
+        float const baseAngle = player->GetOrientation();
+        std::array<float, 12> const probeAngles =
+        {
+            0.0f, float(M_PI), float(M_PI_2), -float(M_PI_2),
+            float(M_PI_4), -float(M_PI_4), float(3.0f * M_PI_4), -float(3.0f * M_PI_4),
+            float(M_PI / 6.0f), -float(M_PI / 6.0f), float(5.0f * M_PI / 6.0f), -float(5.0f * M_PI / 6.0f)
+        };
+        std::array<float, 4> const probeDistances = { 8.0f, 12.0f, 16.0f, 24.0f };
+
+        for (float distance : probeDistances)
+        {
+            for (float offset : probeAngles)
+            {
+                Position destination = player->GetPosition();
+                float const angle = baseAngle + offset;
+                destination.RelocateOffset({ std::cos(angle) * distance, std::sin(angle) * distance, 0.0f, 0.0f });
+                destination = BuildCollisionSafeDestination(player, destination);
+                if (IsHazardousLiquidDestination(player, destination))
+                    continue;
+
+                Position segmentDestination;
+                if (TryBuildBattlegroundSegmentDestination(player, destination, segmentDestination) ||
+                    (!player->InBattleground() && player->GetDistance(destination) > 0.5f))
+                {
+                    motionMaster->Clear(MOTION_SLOT_ACTIVE);
+                    motionMaster->MovePoint(0, player->InBattleground() ? segmentDestination : destination, true);
+                    return true;
+                }
+            }
+        }
+
+        // A strict path can fail when the bot's current liquid polygon is not
+        // present in the navmesh. In that case, permit only a short grounded,
+        // collision-visible move to a non-hazardous bank. This is deliberately
+        // a second pass so a fully navmeshed route always wins.
+        for (float distance : probeDistances)
+        {
+            for (float offset : probeAngles)
+            {
+                Position destination = player->GetPosition();
+                float const angle = baseAngle + offset;
+                destination.RelocateOffset({ std::cos(angle) * distance, std::sin(angle) * distance, 0.0f, 0.0f });
+                destination = BuildCollisionSafeDestination(player, destination);
+                if (!IsValidatedPathingHazardEgress(player, destination))
+                    continue;
+
+                motionMaster->Clear(MOTION_SLOT_ACTIVE);
+                motionMaster->MovePoint(0, destination, true);
+                return true;
+            }
+        }
+
+        // Being in magma/slime always retains movement ownership. Reporting
+        // false here used to hand the tick back to class logic, allowing a bot
+        // with no accepted probe to stand still and cast until it died.
+        return true;
+    }
+
+    bool HasActiveTargetRelativeMovementFor(Player const* player, Unit const* target)
+    {
+        if (!player || !target)
+            return false;
+
+        MotionMaster const* motionMaster = player->GetMotionMaster();
+        if (!motionMaster)
+            return false;
+
+        MovementGeneratorType const movementType = motionMaster->GetCurrentMovementGeneratorType();
+        if (movementType != CHASE_MOTION_TYPE && movementType != FOLLOW_MOTION_TYPE)
+            return false;
+
+        MovementGenerator const* movement = motionMaster->GetCurrentMovementGenerator();
+        AbstractFollower const* follower = movement ? dynamic_cast<AbstractFollower const*>(movement) : nullptr;
+        if (!follower || follower->GetTarget() != target)
+            return false;
+
+        bool const activeSpline = player->movespline && player->movespline->Initialized() &&
+            !player->movespline->Finalized();
+        return activeSpline || player->isMoving() ||
+            player->HasUnitState(UNIT_STATE_CHASE_MOVE | UNIT_STATE_FOLLOW_MOVE);
     }
 
     bool IssueHumanLikeFollow(Player* player, Unit* target, float desiredDistance, float destinationChangeThreshold, uint32 minReissueMs)
@@ -1005,10 +1205,18 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         if (!player)
             return false;
 
-        if (!CanIssueMovementCommand(player, 500))
+        MotionMaster* motionMaster = player->GetMotionMaster();
+        if (!motionMaster)
             return false;
 
-        ClearEatDrinkAurasForMovement(player);
+        MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
+        MovementGenerator const* currentGenerator = motionMaster->GetCurrentMovementGenerator();
+        bool const activePointSpline = currentMovement == POINT_MOTION_TYPE &&
+            player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
+        bool const pointGeneratorOwnsOrder = currentMovement == POINT_MOTION_TYPE && currentGenerator &&
+            !currentGenerator->HasFlag(MOVEMENTGENERATOR_FLAG_FINALIZED);
+        bool const botCurrentlyMoving = player->isMoving() || activePointSpline ||
+            player->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE);
 
         minReissueMs = std::max<uint32>(minReissueMs, 500);
 
@@ -1017,54 +1225,49 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             Position lastDestination;
             uint32 lastIssueMs = 0;
         };
-        struct DirectDropState
-        {
-            Position startPosition;
-            uint32 issueMs = 0;
-            uint32 suppressUntilMs = 0;
-            bool pending = false;
-        };
 
         static std::unordered_map<uint64, MoveOrderState> stateByGuid;
-        static std::unordered_map<uint64, uint8> stationaryReissueCountByGuid;
-        static std::unordered_map<uint64, DirectDropState> directDropStateByGuid;
-        uint64 const botGuid = player->GetGUID().GetRawValue();
-        MoveOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
-        uint8& stationaryReissueCount = stationaryReissueCountByGuid[botGuid];
-        DirectDropState& directDropState = directDropStateByGuid[botGuid];
+        MoveOrderState& state = playerbot::LockedGetOrCreate(stateByGuid, player->GetGUID().GetRawValue());
         uint32 const nowMs = GameTime::GetGameTimeMS();
 
         bool const destinationChanged = state.lastIssueMs == 0 ||
             state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
         bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
-        bool const botCurrentlyMoving = player->isMoving();
-        bool const forcedStationaryReissue = !destinationChanged && !canReissueByTime && !botCurrentlyMoving;
-        if (forcedStationaryReissue)
-            stationaryReissueCount = std::min<uint8>(uint8(stationaryReissueCount + 1), 20);
-        else
-            stationaryReissueCount = 0;
 
-        if (!destinationChanged && !canReissueByTime && botCurrentlyMoving)
-            return false;
-
-        uint32 bgStatus = 0;
-        if (Battleground* bg = player->GetBattleground())
-            bgStatus = uint32(bg->GetStatus());
-
-        if (forcedStationaryReissue)
-        {
-            EmitBattlegroundGmDebug(player,
-                "movepoint=forced-reissue reason=stationary-with-throttle lastIssueMs=" + std::to_string(state.lastIssueMs) +
-                " nowMs=" + std::to_string(nowMs) +
-                " motionType=" + std::to_string(uint32(player->GetMotionMaster()->GetCurrentMovementGeneratorType())) +
-                " bgStatus=" + std::to_string(bgStatus) +
-                " reissueCount=" + std::to_string(stationaryReissueCount), 1000);
-        }
-
-        MotionMaster* motionMaster = player->GetMotionMaster();
-        MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
-        if (player->InBattleground() && botCurrentlyMoving && currentMovement == EFFECT_MOTION_TYPE)
+        // The 50 ms tactical loop can revisit the same objective before a newly
+        // queued PointMovementGenerator has initialized its spline. During that
+        // window Player::isMoving(), unit movement state, and movespline can all
+        // still report false even though MotionMaster already owns the order.
+        // Reissuing here replaces the generator at the bot's newer authoritative
+        // position; nearby clients render each replacement as a teleport/snap.
+        // Preserve the existing point order until it naturally finalizes. This
+        // also covers a point generator temporarily interrupted by a cast/root;
+        // PointMovementGenerator will relaunch its own spline when movement is
+        // available again.
+        if (!destinationChanged && pointGeneratorOwnsOrder)
             return true;
+
+        // Never bypass the requested reissue cadence merely because the player
+        // movement flags have not caught up yet. The previous forced-stationary
+        // path could enqueue a replacement every fast tactical tick, which was
+        // especially visible when every OBC bot selected the fixed center flag.
+        if (!destinationChanged && !canReissueByTime)
+            return true;
+
+        // Consume the shared movement-command throttle only when this helper has
+        // actually decided that a new order may be required. Previously, calls
+        // that merely preserved an active spline still consumed the token and
+        // could starve a real destination change from another tactical action.
+        if (!CanIssueMovementCommand(player, 500))
+            return botCurrentlyMoving || pointGeneratorOwnsOrder || !destinationChanged;
+
+        ClearEatDrinkAurasForMovement(player);
+
+        if (player->InBattleground() && currentMovement == EFFECT_MOTION_TYPE && HasPlayerbotGapCloserInFlight(player))
+        {
+            EmitRehgarMovementGuardServerDiagnostic(player, "movepoint_blocked_effect");
+            return true;
+        }
 
         if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
         {
@@ -1074,9 +1277,11 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             currentMovement != IDLE_MOTION_TYPE &&
             currentMovement != CHASE_MOTION_TYPE &&
             currentMovement != POINT_MOTION_TYPE &&
-            // Charge/Intercept movement is issued through effect generators.
-            // Clear stale effect movement only once charge state has ended.
-            (currentMovement != EFFECT_MOTION_TYPE || !player->HasUnitState(UNIT_STATE_CHARGING)))
+            // Charge/Intercept/Rehgar's Fury movement is issued through effect
+            // generators. Clear stale effect movement only once its spline has
+            // actually ended; some jump-dest effects do not keep
+            // UNIT_STATE_CHARGING set for the full visual travel.
+            (currentMovement != EFFECT_MOTION_TYPE || !HasPlayerbotGapCloserInFlight(player)))
         {
             EmitBattlegroundGmDebug(player,
                 "movepoint=clear-stale-generator motionType=" + std::to_string(uint32(currentMovement)), 1000);
@@ -1088,90 +1293,22 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 
         if (generatePath && player->InBattleground())
         {
-            bool const allowDirectDrop = !IsScarletChapel(player);
-            if (!allowDirectDrop)
-                directDropState.pending = false;
-
-            if (allowDirectDrop && directDropState.pending &&
-                nowMs > directDropState.issueMs + 1200 &&
-                !player->isMoving())
-            {
-                // Two failure shapes:
-                // 1) Never launched from the start point.
-                // 2) Launched, then settled/stuck on terrain partway down.
-                float const fromStart = player->GetDistance(directDropState.startPosition);
-                float const toDestination = player->GetDistance(safeDestination);
-                if (fromStart < 3.0f || toDestination > 8.0f)
-                {
-                    directDropState.pending = false;
-                    directDropState.suppressUntilMs = nowMs + 8000;
-                    Position const escapeDestination = BuildDownhillEscapeDestination(player, safeDestination);
-                    motionMaster->MovePoint(0, escapeDestination, false);
-                    EmitBattlegroundGmDebug(player,
-                        "movepoint=direct-drop-stalled fallback=nav-segment fromStart=" + std::to_string(int32(fromStart)) +
-                        " toDest=" + std::to_string(int32(toDestination)) +
-                        " escapeDist=" + std::to_string(int32(player->GetDistance(escapeDestination))), 0);
-
-                    state.lastDestination = destination;
-                    state.lastIssueMs = nowMs;
-                    return true;
-                }
-            }
-
-            if (allowDirectDrop && nowMs >= directDropState.suppressUntilMs && ShouldPreferDirectDropShortcut(player, safeDestination))
-            {
-                Position const shortcutDestination = BuildDownhillEscapeDestination(player, safeDestination);
-                motionMaster->MovePoint(0, shortcutDestination, false);
-                EmitBattlegroundGmDebug(player,
-                    "movepoint=direct-drop-shortcut destDist=" + std::to_string(int32(player->GetDistance(safeDestination))) +
-                    " stepDist=" + std::to_string(int32(player->GetDistance(shortcutDestination))), 0);
-                directDropState.startPosition = player->GetPosition();
-                directDropState.issueMs = nowMs;
-                directDropState.pending = true;
-
-                state.lastDestination = destination;
-                state.lastIssueMs = nowMs;
-                return true;
-            }
-            else
-            {
-                directDropState.pending = false;
-            }
-
             Position segmentDestination;
             PathType pathType = PathType(0);
             if (!TryBuildBattlegroundSegmentDestination(player, safeDestination, segmentDestination, &pathType))
             {
-                if (!allowDirectDrop)
-                {
-                    motionMaster->MovePoint(0, safeDestination, true);
-                    EmitBattlegroundGmDebug(player,
-                        "movepoint=blocked-no-nav fallback=full-path directDrop=disabled-scarlet-chapel destDist=" +
-                        std::to_string(int32(player->GetDistance(safeDestination))), 0);
-
-                    state.lastDestination = destination;
-                    state.lastIssueMs = nowMs;
-                    return true;
-                }
-
-                // Recovery path for segmented-nav failures (for example, after a
-                // partial drop where local nav probing can't find a legal segment):
-                // issue a direct movement order so the bot keeps progressing
-                // instead of stalling in place waiting on nav segment recovery.
-                Position const fallbackDestination = BuildDownhillEscapeDestination(player, safeDestination);
-                motionMaster->MovePoint(0, fallbackDestination, false);
+                // Never replace a failed navmesh route with a direct spline.
+                // On multi-level battleground geometry, a height sample may
+                // belong to a disconnected room below the bot, and an unpathed
+                // MovePoint can cross both the intervening floor and walls.
+                // Preserve any movement already in progress and retry path
+                // generation on a later decision tick.
+                bool const stillMoving = player->isMoving();
                 EmitBattlegroundGmDebug(player,
-                    "movepoint=blocked-no-nav fallback=direct destDist=" + std::to_string(int32(player->GetDistance(safeDestination))) +
-                    " stepDist=" + std::to_string(int32(player->GetDistance(fallbackDestination))), 0);
-
-                directDropState.startPosition = player->GetPosition();
-                directDropState.issueMs = nowMs;
-                directDropState.pending = true;
-                directDropState.suppressUntilMs = std::max(directDropState.suppressUntilMs, nowMs + 2500);
-
-                state.lastDestination = destination;
-                state.lastIssueMs = nowMs;
-                return true;
+                    "movepoint=blocked-no-nav fallback=none preserveMoving=" +
+                    std::to_string(stillMoving ? 1 : 0) +
+                    " destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 0);
+                return stillMoving;
             }
 
             motionMaster->MovePoint(0, segmentDestination, true);
@@ -1241,7 +1378,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         // Managed random bots can run on disconnected virtual sessions where RBAC
         // battleground permissions are not always populated like live client sessions.
         // Gate queue eligibility by battleground level + free queue slots instead.
-        if (!player->GetBGAccessByLevel(bgTypeId) || !player->HasFreeBattlegroundQueueId())
+        if (player->IsInCustomGameLobby() || !player->GetBGAccessByLevel(bgTypeId) || !player->HasFreeBattlegroundQueueId())
             return false;
 
         BattlegroundQueueTypeId const bgQueueTypeId = BattlegroundMgr::BGQueueTypeId(bgTypeId, arenaType);
@@ -1477,12 +1614,12 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         uint64 const guidRaw = player->GetGUID().GetRawValue();
         if (player->InBattleground() || !player->InBattlegroundQueue() || HasPendingBattlegroundInvite(player))
         {
-            g_BattlegroundQueuedNoInviteSinceMsByGuid.erase(guidRaw);
+            playerbot::LockedErase(g_BattlegroundQueuedNoInviteSinceMsByGuid, guidRaw);
             return false;
         }
 
         uint32 const nowMs = GameTime::GetGameTimeMS();
-        uint32& queuedSinceMs = g_BattlegroundQueuedNoInviteSinceMsByGuid[guidRaw];
+        uint32& queuedSinceMs = playerbot::LockedGetOrCreate(g_BattlegroundQueuedNoInviteSinceMsByGuid, guidRaw);
         if (!queuedSinceMs)
         {
             queuedSinceMs = nowMs;
@@ -1499,6 +1636,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
     bool HandleBattlegroundDeathState(Player* player)
     {
         static std::unordered_map<uint64, uint32> queuedSinceMsByGuid;
+        static std::unordered_map<uint64, uint32> deadSinceMsByGuid;
         auto resolveSpiritGuide = [](Player* candidate, uint32 preferredEntry) -> Creature*
         {
             if (!candidate)
@@ -1546,17 +1684,70 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             return spiritGuide;
         };
 
-        if (!player || !player->InBattleground())
+        if (!player)
             return false;
 
-        if (player->IsAlive())
+        uint64 const playerGuidRaw = player->GetGUID().GetRawValue();
+        if (!player->InBattleground())
         {
-            queuedSinceMsByGuid.erase(player->GetGUID().GetRawValue());
+            playerbot::LockedErase(g_BattlegroundDeadBotGuids, playerGuidRaw);
+            playerbot::LockedErase(g_BattlegroundSpiritQueuedBotGuids, playerGuidRaw);
+            playerbot::LockedErase(deadSinceMsByGuid, playerGuidRaw);
             return false;
         }
 
+        if (player->IsAlive())
+        {
+            bool wasDead = false;
+            bool wasSpiritQueued = false;
+            {
+                std::lock_guard<std::mutex> stateGuard(playerbot::SharedBotStateStructureLock());
+                queuedSinceMsByGuid.erase(playerGuidRaw);
+                deadSinceMsByGuid.erase(playerGuidRaw);
+                wasDead = g_BattlegroundDeadBotGuids.erase(playerGuidRaw) != 0;
+                wasSpiritQueued = g_BattlegroundSpiritQueuedBotGuids.erase(playerGuidRaw) != 0;
+            }
+            if (wasDead && wasSpiritQueued && player->GetMapId() == 726)
+            {
+                // Twin Peaks' middle graveyards resurrect playerbots on cliff
+                // geometry that is disconnected from the useful downhill
+                // navmesh. Relocate only bots revived by the spirit queue, and
+                // use the explicit team exits supplied for this battleground.
+                TeamId const team = ResolveBotTeamId(player);
+                if (team == TEAM_NEUTRAL)
+                    return false;
+
+                Position const downhillExit = team == TEAM_HORDE ?
+                    Position(1827.342041f, 191.699814f, -19.907791f, 4.655410f) :
+                    Position(1874.352905f, 422.770020f, -17.006735f, 4.763416f);
+                if (MotionMaster* motionMaster = player->GetMotionMaster())
+                    motionMaster->Clear();
+                ForcePlayerbotDismount(player);
+                player->NearTeleportTo(downhillExit);
+                TC_LOG_INFO("playerbots.pvp.lifecycle",
+                    "Playerbot Twin Peaks graveyard exit relocation: guid={} team={} destination=({},{},{}).",
+                    player->GetGUID().ToString(), uint32(team), downhillExit.GetPositionX(), downhillExit.GetPositionY(),
+                    downhillExit.GetPositionZ());
+                return true;
+            }
+            return false;
+        }
+
+        playerbot::LockedInsert(g_BattlegroundDeadBotGuids, playerGuidRaw);
+
         if (!player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         {
+            uint32 const nowMs = GameTime::GetGameTimeMS();
+            uint32& deadSinceMs = playerbot::LockedGetOrCreate(deadSinceMsByGuid, playerGuidRaw);
+            if (!deadSinceMs)
+                deadSinceMs = nowMs;
+
+            // Give human-like reaction time before auto-releasing spirit so bots
+            // don't insta-release the instant they die in BGs/arenas.
+            if (nowMs < deadSinceMs + PLAYERBOT_BG_RELEASE_SPIRIT_DELAY_MS)
+                return true;
+
+            playerbot::LockedErase(deadSinceMsByGuid, playerGuidRaw);
             player->BuildPlayerRepop();
             player->RepopAtGraveyard();
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
@@ -1571,9 +1762,9 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 
         if (battleground->IsPlayerInResurrectQueue(player->GetGUID()))
         {
-            uint64 const playerGuidRaw = player->GetGUID().GetRawValue();
+            playerbot::LockedInsert(g_BattlegroundSpiritQueuedBotGuids, playerGuidRaw);
             uint32 const nowMs = GameTime::GetGameTimeMS();
-            uint32& queuedSinceMs = queuedSinceMsByGuid[playerGuidRaw];
+            uint32& queuedSinceMs = playerbot::LockedGetOrCreate(queuedSinceMsByGuid, playerGuidRaw);
             if (!queuedSinceMs)
                 queuedSinceMs = nowMs;
 
@@ -1614,7 +1805,8 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             return true;
 
         battleground->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), player->GetGUID());
-        queuedSinceMsByGuid[player->GetGUID().GetRawValue()] = GameTime::GetGameTimeMS();
+        playerbot::LockedInsert(g_BattlegroundSpiritQueuedBotGuids, playerGuidRaw);
+        playerbot::LockedSet(queuedSinceMsByGuid, player->GetGUID().GetRawValue(), GameTime::GetGameTimeMS());
         sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(player, battleground, spiritGuide->GetGUID());
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP death handling: guid={} action=queue-resurrect spiritGuide={}.",
@@ -1633,6 +1825,47 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         return actionName && expected && std::strcmp(actionName, expected) == 0;
     }
 
+    void StopVirtualPlayerbotMovement(Player* player);
+
+    bool TryAcquireHealthstoneFromSoulwell(Player* player)
+    {
+        if (!player || player->IsInCombat() || playerbot::PvpCore::HasHealthstone(player))
+            return false;
+
+        GameObject* soulwell = playerbot::PvpCore::FindUsableSoulwell(player, 60.0f);
+        if (!soulwell)
+            return false;
+
+        if (!soulwell->IsAtInteractDistance(player))
+            return IssueMovePointThrottled(player, soulwell->GetPosition(), 4.0f, 500) || player->isMoving();
+
+        Player* warlockOwner = soulwell->GetOwner() ? soulwell->GetOwner()->ToPlayer() : nullptr;
+        if (!warlockOwner)
+            return false;
+
+        // The level-60 Soulwell creates Major Healthstones. Select the exact
+        // create-item spell from the summoning warlock's Improved Healthstone
+        // rank so the resulting 9421/19012/19013 item matches normal gameplay.
+        uint32 createHealthstoneSpellId = 23819;
+        if (warlockOwner->HasSpell(18693) || warlockOwner->HasAura(18693))
+            createHealthstoneSpellId = 23821;
+        else if (warlockOwner->HasSpell(18692) || warlockOwner->HasAura(18692))
+            createHealthstoneSpellId = 23820;
+
+        ForcePlayerbotDismount(player);
+        StopVirtualPlayerbotMovement(player);
+        SpellCastResult const castResult = player->CastSpell(player, createHealthstoneSpellId, true);
+        if (castResult != SPELL_CAST_OK || !playerbot::PvpCore::HasHealthstone(player))
+            return false;
+
+        soulwell->AddUse();
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot acquired healthstone from Soulwell: guid={} owner={} createSpell={} uses={}",
+            player->GetGUID().ToString(), warlockOwner->GetGUID().ToString(), createHealthstoneSpellId,
+            soulwell->GetUseCount());
+        return true;
+    }
+
     void ClearActiveMovementForControlLoss(Player* player)
     {
         if (!player)
@@ -1649,7 +1882,31 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
     }
 
-    void StopVirtualPlayerbotMovement(Player* player);
+    // Volley, Rain of Fire, Blizzard, and Tranquility must be treated like Mind
+    // Flay/Drain Life for playerbot movement even on DBC/custom data where the
+    // generic channel flags look movable - none of these should have the bot
+    // walking (and cancelling the channel) mid-cast.
+    bool IsForcedStationaryChannelSpell(SpellInfo const* spellInfo)
+    {
+        if (!spellInfo)
+            return false;
+
+        SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
+        if (!firstRank)
+            return false;
+
+        switch (firstRank->Id)
+        {
+            case 15407: // Mind Flay
+            case 1510:  // Volley
+            case 5740:  // Rain of Fire
+            case 10:    // Blizzard
+            case 740:   // Tranquility
+                return true;
+            default:
+                return false;
+        }
+    }
 
     bool HasActiveStationaryChannel(Player const* player)
     {
@@ -1661,7 +1918,28 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             return false;
 
         SpellInfo const* spellInfo = channel->GetSpellInfo();
-        return spellInfo && spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel();
+        return spellInfo && spellInfo->IsChanneled() && (!spellInfo->IsMoveAllowedChannel() || IsForcedStationaryChannelSpell(spellInfo));
+    }
+
+    bool HasPlayerbotGapCloserInFlight(Player const* player)
+    {
+        if (!player)
+            return false;
+
+        MotionMaster const* motionMaster = player->GetMotionMaster();
+        if (!motionMaster || motionMaster->GetCurrentMovementGeneratorType() != EFFECT_MOTION_TYPE)
+            return false;
+
+        // MotionMaster installs an effect generator before its MoveSpline is
+        // initialized. The lifecycle loop runs in that window and used to see
+        // "not in flight", then replace the queued jump with Attack/MoveChase.
+        // Protect the generator from the moment it becomes current through the
+        // end of its spline. This is generic for every effect-driven gap closer.
+        bool const splineLaunched = player->movespline && player->movespline->Initialized();
+        bool const splineActive = splineLaunched && !player->movespline->Finalized();
+        bool const splinePendingLaunch = !splineLaunched;
+        return splineActive || splinePendingLaunch ||
+            player->HasUnitState(UNIT_STATE_CHARGING | UNIT_STATE_JUMPING) || player->isMoving();
     }
 
     bool CanIssueBotMovement(Player* player)
@@ -1692,11 +1970,34 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             return false;
         }
 
-        if (player->HasUnitState(UNIT_STATE_ROOT) ||
-            player->HasUnitState(UNIT_STATE_STUNNED) ||
+        if (player->HasUnitState(UNIT_STATE_STUNNED) ||
             player->HasUnitState(UNIT_STATE_CONFUSED) ||
             player->HasUnitState(UNIT_STATE_FLEEING))
         {
+            return false;
+        }
+
+        // Charge/Intercept/Heroic Leap travel through EFFECT_MOTION_TYPE. If
+        // combat-positioning logic issues MoveChase/MoveFollow while that spline
+        // is still in flight, it cancels the leap and replaces it with a normal
+        // chase - the bot's stun/damage effect still lands (that resolves at
+        // cast, independent of movement), but the bot never visibly performs the
+        // charge motion and just appears to run at the target. Withhold
+        // positioning movement until the charge spline itself completes.
+        if (HasPlayerbotGapCloserInFlight(player))
+        {
+            EmitRehgarMovementGuardServerDiagnostic(player, "movement_blocked_effect");
+            return false;
+        }
+
+        // Only roots forbid locomotion. Snares still permit pursuit and
+        // retreat; the class executor independently plants for cast-time
+        // spells and preserves movement for instant spells.
+        if (playerbot::PvpCore::IsMovementPreventedByRoot(player))
+        {
+            if (MotionMaster* motionMaster = player->GetMotionMaster())
+                motionMaster->Clear(MOTION_SLOT_ACTIVE);
+            StopVirtualPlayerbotMovement(player);
             return false;
         }
 
@@ -1776,12 +2077,168 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         if (!player)
             return;
 
+        if (TryMoveOutOfHazardousLiquid(player))
+            return;
+
         player->StopMoving();
-        if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+        // Both persistent managed bots (virtual session) and OBC/custom-game
+        // clone mirrors (transient session) are socketless and need the same
+        // synthetic movement-flag clear here -- a real client would send its
+        // own stop packet, but neither of these has one. Checking only
+        // IsVirtualSession() left clones with a stale MOVEMENTFLAG_MASK_MOVING
+        // bit after every stop, which made the engine treat them as still
+        // moving on the very next Auto Shot cast attempt and clip it.
+        WorldSession* session = player->GetSession();
+        bool const syntheticPlayerbotMover =
+            playerbot::IsManagedRandomBot(player) ||
+            playerbot::PlayerbotObcCloneManager::IsActiveClone(player) ||
+            (session && (session->IsVirtualSession() || session->IsTransientPlayerSession()));
+        if (syntheticPlayerbotMover)
         {
             player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
-            player->SendMovementFlagUpdate();
+            // Throttled/shared swim-state resync; see
+            // ResyncPlayerbotSwimStateForMovementStop for the full rationale.
+            playerbot::ResyncPlayerbotSwimStateForMovementStop(player);
         }
+    }
+
+    // StopMoving() only terminates the current spline. A POINT/CHASE/FOLLOW
+    // generator remains installed and can launch a new spline on the next
+    // MotionMaster update, which is fatal to Auto Shot's final 434ms stationary
+    // release window. Hunter planting/settling therefore needs to relinquish
+    // the active ordinary movement generator as well as clear movement flags.
+    // Effect movement (charges/leaps), knockbacks, and other high-priority
+    // generators are deliberately left alone.
+    void StopHunterTargetMovementForPlant(Player* player)
+    {
+        if (!player || player->GetClass() != CLASS_HUNTER)
+            return;
+
+        MotionMaster* motionMaster = player->GetMotionMaster();
+        if (motionMaster)
+        {
+            switch (motionMaster->GetCurrentMovementGeneratorType())
+            {
+                case POINT_MOTION_TYPE:
+                case CHASE_MOTION_TYPE:
+                case FOLLOW_MOTION_TYPE:
+                    motionMaster->Clear(MOTION_SLOT_ACTIVE);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        StopVirtualPlayerbotMovement(player);
+    }
+
+    bool IsHunterAutoShotPlantActiveInternal(Player* player, uint32 nowMs = GameTime::GetGameTimeMS())
+    {
+        if (!player || player->GetClass() != CLASS_HUNTER)
+            return false;
+
+        uint64 const guidRaw = player->GetGUID().GetRawValue();
+        uint32 plantUntilMs = 0;
+        uint32 plantFireSequence = 0;
+        bool hasPlantSequence = false;
+        {
+            std::lock_guard<std::mutex> stateGuard(playerbot::SharedBotStateStructureLock());
+            auto plantUntilItr = g_HunterAutoShotPauseUntilMs.find(guidRaw);
+            if (plantUntilItr == g_HunterAutoShotPauseUntilMs.end())
+                return false;
+            plantUntilMs = plantUntilItr->second;
+
+            auto plantSequenceItr = g_HunterAutoShotPlantFireSequence.find(guidRaw);
+            hasPlantSequence = plantSequenceItr != g_HunterAutoShotPlantFireSequence.end();
+            if (hasPlantSequence)
+                plantFireSequence = plantSequenceItr->second;
+        }
+
+        auto clearPlantState = [&]()
+        {
+            std::lock_guard<std::mutex> stateGuard(playerbot::SharedBotStateStructureLock());
+            g_HunterAutoShotPauseUntilMs.erase(guidRaw);
+            g_HunterAutoShotPlantFireSequence.erase(guidRaw);
+        };
+
+        // The triggered Auto Shot event occurs during Unit::Update, before the
+        // playerbot tactical/class passes. Release the cross-module lock on
+        // that very next pass rather than freezing until the safety deadline.
+        if (hasPlantSequence && GetHunterAutoShotFireSequence(player) != plantFireSequence)
+        {
+            clearPlantState();
+            return false;
+        }
+
+        if (plantUntilMs <= nowMs)
+        {
+            clearPlantState();
+            return false;
+        }
+
+        // Do not hold a blind 2.2-second freeze if the target moved out of the
+        // legal firing band during the 434ms release window. Clear the plant
+        // immediately so the same tactical pass can resume ideal-range movement.
+        Spell const* autoRepeat = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+        Unit* target = autoRepeat ? autoRepeat->m_targets.GetUnitTarget() : nullptr;
+        playerbot::HunterAutoShotRangeInfo rangeInfo;
+        bool const legalTarget = autoRepeat && autoRepeat->GetSpellInfo() && autoRepeat->GetSpellInfo()->Id == 75 &&
+            target && target->IsAlive() && !target->HasBreakableByDamageCrowdControlAura() &&
+            playerbot::PvpCore::GetHunterAutoShotRange(player, target, rangeInfo) &&
+            player->IsWithinLOSInMap(target) &&
+            rangeInfo.exactDistance > rangeInfo.minRange + playerbot::PLAYERBOT_HUNTER_AUTOSHOT_MIN_SAFETY_MARGIN &&
+            rangeInfo.exactDistance <= rangeInfo.maxRange;
+        if (!legalTarget)
+        {
+            clearPlantState();
+            return false;
+        }
+
+        // TEMPORARY diagnostic: this is the code that actually runs every pass
+        // while a plant is held (the kite loop is short-circuited upstream by
+        // the IsHunterAutoShotPlantActive guards). Player::Update runs
+        // Unit::Update -- and with it Unit::_UpdateAutoRepeatSpell -- right
+        // before these AI passes, and nothing in between touches this state.
+        // Sampling here, before the stop/face calls below re-clean movement
+        // flags, therefore reports the exact gate values the core's
+        // auto-repeat update just evaluated: its isMoving()/casting
+        // early-return inputs and the live CheckCast(true) verdict. For spell
+        // 75 a CheckCast failure neither interrupts nor resets the ranged
+        // timer, making it invisible for a socketless bot without this.
+        {
+            static std::unordered_map<uint64, uint32> coreGateDiagLastMsByGuid;
+            uint32& lastDiagMs = playerbot::LockedGetOrCreate(coreGateDiagLastMsByGuid, guidRaw);
+            if (!lastDiagMs || nowMs >= lastDiagMs + 750)
+            {
+                lastDiagMs = nowMs;
+
+                bool const engineSawMoving = player->isMoving();
+                uint32 const engineMoveFlags = player->GetUnitMovementFlags();
+                bool const engineSawCastBlock = player->IsNonMeleeSpellCast(false, false, true, true);
+                uint32 const engineTimerMs = player->getAttackTimer(RANGED_ATTACK);
+                Spell* autoRepeatMutable = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+                SpellCastResult const liveCheck = autoRepeatMutable ? autoRepeatMutable->CheckCast(true) : SPELL_CAST_OK;
+
+                std::ostringstream coreGateDiag;
+                coreGateDiag << "[AutoShot] core-gate moving=" << (engineSawMoving ? 1 : 0)
+                    << " flags=0x" << std::hex << engineMoveFlags << std::dec
+                    << " castBlock=" << (engineSawCastBlock ? 1 : 0)
+                    << " timer=" << engineTimerMs
+                    << " dist=" << rangeInfo.exactDistance
+                    << " check=" << (!autoRepeatMutable ? "NO_SPELL" : (liveCheck == SPELL_CAST_OK ? "OK" : EnumUtils::ToString(liveCheck).Title));
+                WhisperAutoShotDiagnosticToArena(player, coreGateDiag.str(), 0);
+            }
+        }
+
+        // Keep the hunter settled and facing a strafing target while every
+        // tactical/class movement source yields to this plant. Facing updates
+        // do not restart movement, but failing to track the target can make the
+        // core reject the release at the end of an otherwise valid plant.
+        StopHunterTargetMovementForPlant(player);
+        player->SetFacingToObject(target);
+        player->SetInFront(target);
+        StopHunterTargetMovementForPlant(player);
+        return true;
     }
 
     bool BreakExpiredHunterFeignDeath(Player* player)
@@ -1803,64 +2260,11 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         return true;
     }
 
-    bool GetHunterAutoShotRange(Player const* player, Unit const* target, float& exactDistance, float& minAutoShotRange, float& maxAutoShotRange)
+    bool GetHunterAutoShotRange(Player* player, Unit const* target, playerbot::HunterAutoShotRangeInfo& rangeInfo)
     {
-        exactDistance = 0.0f;
-        minAutoShotRange = 0.0f;
-        maxAutoShotRange = 0.0f;
-
-        if (!player || player->GetClass() != CLASS_HUNTER || !target || !target->IsAlive() || !player->HasSpell(75))
-            return false;
-
-        SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(75);
-        if (!autoShotInfo)
-            return false;
-
-        exactDistance = player->GetExactDist(target);
-        minAutoShotRange = autoShotInfo->GetMinRange(false);
-        maxAutoShotRange = autoShotInfo->GetMaxRange(false);
-        return maxAutoShotRange > 0.0f;
+        return playerbot::PvpCore::GetHunterAutoShotRange(player, target, rangeInfo);
     }
 
-    bool IsHunterAutoShotBand(Player const* player, Unit const* target)
-    {
-        float exactDistance = 0.0f;
-        float minAutoShotRange = 0.0f;
-        float maxAutoShotRange = 0.0f;
-        if (!GetHunterAutoShotRange(player, target, exactDistance, minAutoShotRange, maxAutoShotRange))
-            return false;
-
-        return player->IsWithinLOSInMap(target) &&
-            exactDistance > std::max(minAutoShotRange + 0.75f, 8.75f) &&
-            exactDistance <= maxAutoShotRange;
-    }
-
-    bool StopHunterAndStartAutoShot(Player* player, Unit* target, char const* logReason)
-    {
-        if (!player || player->GetClass() != CLASS_HUNTER || !target || !target->IsAlive() || !IsHunterAutoShotBand(player, target))
-            return false;
-
-        StopVirtualPlayerbotMovement(player);
-        if (MotionMaster* motionMaster = player->GetMotionMaster())
-            if (motionMaster->GetCurrentMovementGeneratorType() == CHASE_MOTION_TYPE ||
-                motionMaster->GetCurrentMovementGeneratorType() == FOLLOW_MOTION_TYPE)
-                motionMaster->Clear(MOTION_SLOT_ACTIVE);
-
-        player->SetFacingToObject(target);
-        player->SetInFront(target);
-        StopVirtualPlayerbotMovement(player);
-
-        Spell const* autoRepeatSpell = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
-        bool const autoShotActive = autoRepeatSpell && autoRepeatSpell->GetSpellInfo() && autoRepeatSpell->GetSpellInfo()->Id == 75;
-        if (!autoShotActive)
-            player->CastSpell(target, 75, false);
-
-        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP hunter movement: bot={} target={} decision={} distance={} exact={} autoActive={}",
-            player->GetGUID().ToString(), target->GetGUID().ToString(), logReason ? logReason : "stop-and-autoshot",
-            player->GetDistance(target), player->GetExactDist(target), autoShotActive ? 1 : 0);
-        return true;
-    }
 
     constexpr uint32 kPlayerbotWandShootSpellId = 5019;
     std::unordered_map<uint64, uint32> g_WandLifecycleDiagNextMs;
@@ -1919,11 +2323,13 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         if (MotionMaster* motionMaster = player->GetMotionMaster())
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
 
-        if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+        if (WorldSession* session = player->GetSession(); session && (session->IsVirtualSession() || session->IsTransientPlayerSession()))
         {
             player->ClearUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE);
             player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
-            player->SendMovementFlagUpdate();
+            // Throttled/shared swim-state resync; see
+            // ResyncPlayerbotSwimStateForMovementStop for the full rationale.
+            playerbot::ResyncPlayerbotSwimStateForMovementStop(player);
         }
 
         if (wasMoving || activeWand || recentWandStart)
@@ -1996,7 +2402,15 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 
         switch (player->GetClass())
         {
-        case CLASS_HUNTER: return { 8.0f, 28.0f, 38.0f, true, true, false, "hunter-ranged" };
+        case CLASS_HUNTER:
+            // The actual learned ability, not the detected talent profile, owns
+            // hunter spacing. Any hunter that knows Mongoose Bite should hold
+            // around 10 yards so it can step in and consume a Sting when the
+            // bite is ready; hunters without it hold five yards inside their
+            // true modified Auto Shot range in DriveHunterKiteLoop.
+            if (player->HasSpell(81285))
+                return { 8.0f, 10.0f, 15.0f, true, true, true, "hunter-mongoose-weave" };
+            return { 8.0f, 28.0f, 38.0f, true, true, false, "hunter-ranged" };
         case CLASS_MAGE: return { 12.0f, 27.0f, 36.0f, true, true, false, "mage-ranged" };
         case CLASS_PRIEST: return { 10.0f, 25.0f, 34.0f, true, true, false, "priest-ranged" };
         case CLASS_WARLOCK: return { 10.0f, 26.0f, 35.0f, true, true, false, "warlock-ranged" };
@@ -2011,9 +2425,13 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 
     bool MoveAwayFromUnit(Player* player, Unit* target, float desiredDistance)
     {
+        // Do not pre-check CanIssueMovementCommand here: IssueMovePointThrottled
+        // below performs the same throttle check internally. GameTime is a
+        // per-World::Update cache, not a live clock, so calling the gate twice
+        // in the same tick consumes the throttle token on the first call and
+        // guarantees the second (real) check fails -- silently turning this
+        // into a permanent no-op.
         if (!player || !target || !CanIssueBotMovement(player))
-            return false;
-        if (!CanIssueMovementCommand(player, 500))
             return false;
 
         float const angleAway = target->GetAbsoluteAngle(player);
@@ -2026,20 +2444,75 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         return IssueMovePointThrottled(player, destination, 4.0f, 500);
     }
 
+    bool TryDrivePlayerbotEscapeAura(Player* player, Unit* target)
+    {
+        if (!player)
+            return false;
+
+        // Preserve the completed Elune's Grace invisibility instead of
+        // immediately attacking and cancelling it on the next tactical tick.
+        if (player->HasInvisibilityAura())
+        {
+            player->AttackStop();
+            player->SetSelection(ObjectGuid::Empty);
+            return true;
+        }
+
+        bool const fadingFromElunesGrace = player->HasAura(PLAYERBOT_PRIEST_ELUNES_GRACE_SPELL_ID);
+        bool const inWispForm = player->GetClass() == CLASS_PRIEST &&
+            player->HasAura(PLAYERBOT_PRIEST_WISP_FORM_SPELL_ID);
+        if (!fadingFromElunesGrace && !inWispForm)
+            return false;
+
+        player->AttackStop();
+        if (target && target->IsAlive())
+            MoveAwayFromUnit(player, target, std::max(20.0f, playerbot::PvpCore::GetConfig().closeRange + 5.0f));
+
+        // The escape aura owns this tick even when movement is temporarily
+        // throttled; falling through to normal combat would replace its route.
+        return true;
+    }
+
     bool TryRecoverLineOfSight(Player* player, Unit* target, CombatPositioningProfile const& profile, char const* reason)
     {
+        // See MoveAwayFromUnit above: no outer CanIssueMovementCommand check --
+        // IssueMovePointThrottled already gates this call, and double-gating
+        // guaranteed failure every time this function was reached.
         if (!player || !target || !target->IsAlive() || !CanIssueBotMovement(player))
             return false;
-        if (!CanIssueMovementCommand(player, 500))
-            return false;
+
+        struct LosRecoveryState
+        {
+            ObjectGuid targetGuid;
+            float orbitAngle = 0.0f;
+            bool hasAngle = false;
+        };
+        static std::unordered_map<uint64, LosRecoveryState> stateByGuid;
+        uint64 const botGuid = player->GetGUID().GetRawValue();
+        LosRecoveryState& state = playerbot::LockedGetOrCreate(stateByGuid, botGuid);
 
         if (player->IsWithinLOSInMap(target))
+        {
+            state.hasAngle = false;
             return false;
+        }
 
-        float const orbitAngle = target->GetAbsoluteAngle(player) + frand(-0.85f, 0.85f);
+        // Pick the orbit angle once per LOS-loss episode instead of
+        // re-randomizing every call. A fresh +-0.85 rad jitter each time swings
+        // the destination by many yards -- comfortably past the reissue
+        // threshold below -- so every successful call looked like the
+        // destination changed, forcing a brand new segment every time instead
+        // of a smooth orbit toward line of sight.
+        if (!state.hasAngle || state.targetGuid != target->GetGUID())
+        {
+            state.orbitAngle = target->GetAbsoluteAngle(player) + frand(-0.85f, 0.85f);
+            state.targetGuid = target->GetGUID();
+            state.hasAngle = true;
+        }
+
         float const orbitRange = std::max(profile.preferredMinRange + 2.0f, profile.preferredIdealRange);
-        Position reposition(target->GetPositionX() + std::cos(orbitAngle) * orbitRange,
-            target->GetPositionY() + std::sin(orbitAngle) * orbitRange,
+        Position reposition(target->GetPositionX() + std::cos(state.orbitAngle) * orbitRange,
+            target->GetPositionY() + std::sin(state.orbitAngle) * orbitRange,
             target->GetPositionZ(), player->GetOrientation());
         if (!IssueMovePointThrottled(player, reposition, 4.0f, 500))
             return false;
@@ -2098,6 +2571,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             player->GetGUID().ToString(), target ? target->GetGUID().ToString() : ObjectGuid::Empty.ToString(), reason ? reason : "breakable-cc");
     }
 
+#if 0 // Temporary Aimed Shot whisper diagnostics disabled; retain for future troubleshooting.
     char const* GetSpellStateLabelForAimedDiag(Spell const* spell)
     {
         if (!spell)
@@ -2114,7 +2588,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         }
     }
 
-    void WhisperHunterAimedLifecycleDiagnostic(Player* player, Unit* target, char const* phase, char const* extra = nullptr, uint32 throttleMs = 0)
+    void WhisperHunterAimedLifecycleDiagnosticImpl(Player* player, Unit* target, char const* phase, char const* extra = nullptr, uint32 throttleMs = 0)
     {
         if (!player || player->GetClass() != CLASS_HUNTER)
             return;
@@ -2163,7 +2637,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         }
 
         std::string const message = os.str();
-        if (player->duel && player->duel->Opponent)
+        if (player->duel && WantsPlayerbotDiagnostics(player->duel->Opponent))
             player->Whisper(message, LANG_UNIVERSAL, player->duel->Opponent);
 
         Map* map = player->FindMap();
@@ -2173,12 +2647,23 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
         {
             Player* observer = itr->GetSource();
-            if (!observer || !observer->IsGameMaster())
+            if (!WantsPlayerbotDiagnostics(observer))
                 continue;
             if (player->duel && player->duel->Opponent && observer->GetGUID() == player->duel->Opponent->GetGUID())
                 continue;
             player->Whisper(message, LANG_UNIVERSAL, observer);
         }
+    }
+#endif
+
+    void WhisperHunterAimedLifecycleDiagnostic(Player* player, Unit* target, char const* phase, char const* extra = nullptr, uint32 throttleMs = 0)
+    {
+        (void)player;
+        (void)target;
+        (void)phase;
+        (void)extra;
+        (void)throttleMs;
+        // WhisperHunterAimedLifecycleDiagnosticImpl(player, target, phase, extra, throttleMs);
     }
 
     bool IsHunterAimedShotSpellId(uint32 spellId)
@@ -2322,10 +2807,20 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         // Do not let an already-queued Auto Shot live through Aimed Shot/Revive
         // Pet. The decision and movement layers can be held, but auto-repeat is
         // updated by the core independently.
+        //
+        // Only Aimed Shot/Revive Pet-style hard casts cancel Auto Shot.
+        // Multi-Shot still owns a real ~500ms stationary window, but it keeps
+        // CURRENT_AUTOREPEAT_SPELL queued and merely delays its release. The
+        // explicit residual lock prevents movement from clipping either shot.
         WhisperHunterAimedLifecycleDiagnostic(player, target, reason ? reason : "stationary_hold", activeCast ? "activeCast=1" : "activeCast=0", 250);
+        SpellInfo const* activeGenericInfo = nullptr;
         if (Spell const* generic = player->GetCurrentSpell(CURRENT_GENERIC_SPELL))
-            DelayHunterRangedTimerForStationaryShot(player, generic->GetSpellInfo());
-        StopHunterAutoShotForStationaryCast(player, "hunter_stationary_cast_hold_stop_autoshot");
+        {
+            activeGenericInfo = generic->GetSpellInfo();
+            DelayHunterRangedTimerForStationaryShot(player, activeGenericInfo);
+        }
+        if (activeCast && !IsHunterMultiShotSpell(activeGenericInfo))
+            StopHunterAutoShotForStationaryCast(player, "hunter_stationary_cast_hold_stop_autoshot");
 
         bool const movedDuringCast = player->isMoving() ||
             player->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE) ||
@@ -2373,7 +2868,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         return true;
     }
 
-    bool IssueHunterStutterFlee(Player* player, Unit* target, float desiredExactDistance, char const* reason, bool allowEmergencyPathFallback = false)
+    bool IssueHunterStutterFlee(Player* player, Unit* target, float desiredExactDistance, char const* reason)
     {
         if (player && player->GetClass() == CLASS_HUNTER && HunterIsHardCastingStationaryShot(player))
         {
@@ -2392,11 +2887,14 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         // that movement is success; if he is stopped, allow a forced flee issue
         // even if a recent stop/face/autoshot command just ran.
         bool const alreadyMoving = player->isMoving() || player->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE);
-        uint32& lastFleeIssueMs = g_HunterLastFleeIssueMs[guid];
-        if (alreadyMoving && nowMs < lastFleeIssueMs + PLAYERBOT_HUNTER_FLEE_REISSUE_MS)
+        uint32& lastFleeIssueMs = playerbot::LockedGetOrCreate(g_HunterLastFleeIssueMs, guid);
+        MotionMaster* motionMaster = player->GetMotionMaster();
+        bool const activeStutterPath = motionMaster &&
+            motionMaster->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE && alreadyMoving;
+        if (activeStutterPath && nowMs < lastFleeIssueMs + PLAYERBOT_HUNTER_FLEE_REISSUE_MS)
             return true;
 
-        int8& side = g_HunterKiteSideByGuid[guid];
+        int8& side = playerbot::LockedGetOrCreate(g_HunterKiteSideByGuid, guid);
         if (side == 0)
             side = (guid & 1) ? int8(1) : int8(-1);
 
@@ -2422,59 +2920,69 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         ClearEatDrinkAurasForMovement(player);
         Position const safeDestination = BuildCollisionSafeDestination(player, destination);
         bool issued = false;
-        char const* movementMode = "direct";
+        char const* movementMode = "none";
         PathType pathType = PathType(0);
-        if (MotionMaster* motionMaster = player->GetMotionMaster())
+        if (motionMaster)
         {
             MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
-            if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
+            if (currentMovement == CHASE_MOTION_TYPE || currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
                 motionMaster->Clear();
 
             bool const shouldUsePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
             Position pathDestination;
-            if (shouldUsePath && player->InBattleground() && TryBuildBattlegroundSegmentDestination(player, safeDestination, pathDestination, &pathType))
+            bool const hasRetreatPath = shouldUsePath &&
+                TryBuildBattlegroundSegmentDestination(player, safeDestination, pathDestination, &pathType);
+            float const retreatSeparation = hasRetreatPath ? target->GetExactDist(pathDestination) : currentDistance;
+            bool const retreatMakesProgress = hasRetreatPath && retreatSeparation >= currentDistance + 1.0f;
+            if (retreatMakesProgress)
             {
                 // Hunters were visually clipping through Blackrock Throne WMO
                 // walls because the stutter-flee loop used a raw direct spline.
-                // Always prefer a real mmap segment in battlegrounds; if mmaps
-                // cannot build a non-shortcut path, do not fall back to direct
-                // wall-crossing movement.
+                // Always prefer a real mmap segment, and only accept a retreat
+                // segment that actually creates separation from the attacker.
                 motionMaster->MovePoint(0, pathDestination, true);
                 movementMode = "mmap-segment";
                 issued = true;
             }
-            else if (!player->InBattleground())
+            else if (shouldUsePath && currentDistance <= 12.0f)
             {
-                // Outside battlegrounds keep the old lightweight behavior, but
-                // still request path generation when possible so we do not draw
-                // straight splines through nearby terrain.
-                motionMaster->MovePoint(0, safeDestination, shouldUsePath);
-                movementMode = shouldUsePath ? "path" : "direct";
-                issued = true;
-            }
-            else if (alreadyMoving)
-            {
-                // Existing movement is safer than issuing a direct no-path flee
-                // through WMO geometry. Let the current path continue and retry
-                // on the next flee tick.
-                movementMode = "preserve-existing";
-                issued = true;
-            }
-            else if (allowEmergencyPathFallback && shouldUsePath)
-            {
-                // If a hunter is inside melee/dead-zone, freezing in place is
-                // worse than taking a short normal pathing move. This still asks
-                // MotionMaster to generate a path; it does not use the old raw
-                // no-path spline that clipped through Blackrock Throne walls.
-                motionMaster->MovePoint(0, safeDestination, true);
-                movementMode = "emergency-path-fallback";
+                // If the hunter is cornered, continuing to request the blocked
+                // point behind it only pins it against the wall. Cross through
+                // the close attacker and finish well beyond them; after the
+                // crossing, the normal away vector points into open space and
+                // regular kiting resumes. Unit collision does not block this
+                // generated path, while terrain collision still does.
+                float const throughAngle = player->GetAbsoluteAngle(target->GetPosition());
+                float const throughDistance = currentDistance + 12.0f;
+                Position throughDestination(player->GetPositionX() + std::cos(throughAngle) * throughDistance,
+                    player->GetPositionY() + std::sin(throughAngle) * throughDistance,
+                    player->GetPositionZ(), player->GetOrientation());
+                Position const safeThroughDestination = BuildCollisionSafeDestination(player, throughDestination);
+                Position throughPathDestination;
+                PathType throughPathType = PathType(0);
+                if (TryBuildBattlegroundSegmentDestination(player, safeThroughDestination, throughPathDestination, &throughPathType))
+                {
+                    motionMaster->MovePoint(0, throughPathDestination, true);
+                    pathType = throughPathType;
+                    movementMode = "corner-run-through-mmap";
+                }
+                else
+                {
+                    motionMaster->MovePoint(0, safeThroughDestination, true);
+                    movementMode = "corner-run-through-generated";
+                }
                 issued = true;
             }
             else
             {
-                movementMode = "blocked-no-mmap";
+                // Strict segment probing can reject a short otherwise usable
+                // route. Fall back to normal generated pathing for every stutter
+                // phase, not only dead-zone emergencies, so Auto Shot charging
+                // never turns the hunter into a stationary turret.
+                motionMaster->MovePoint(0, safeDestination, true);
+                movementMode = "generated-path-fallback";
+                issued = true;
             }
-
             if (issued)
                 lastFleeIssueMs = nowMs;
         }
@@ -2487,33 +2995,135 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         return issued || alreadyMoving || player->isMoving();
     }
 
-    bool DriveHunterKiteLoop(Player* player, Unit* target, CombatPositioningProfile const& /*profile*/)
+    bool HasAuraFromSpellChainCastBy(Unit const* unit, uint32 baseSpellId, ObjectGuid casterGuid)
+    {
+        if (!unit || !baseSpellId || casterGuid.IsEmpty())
+            return false;
+
+        SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(baseSpellId);
+        if (!baseSpellInfo)
+            return false;
+
+        for (uint32 chainSpellId = baseSpellInfo->GetFirstRankSpell()->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
+            if (unit->HasAura(chainSpellId, casterGuid))
+                return true;
+
+        return false;
+    }
+
+    // Mirrors HasHunterDamagingStingFromCaster in PlayerbotPvpCore.cpp (a
+    // separate translation unit's anonymous namespace, not linkable from
+    // here) -- kept in sync manually if the sting spell list ever changes.
+    bool HasHunterDamagingStingFromThisCaster(Unit const* unit, ObjectGuid casterGuid)
+    {
+        return HasAuraFromSpellChainCastBy(unit, 1978, casterGuid) || // Serpent Sting
+            HasAuraFromSpellChainCastBy(unit, 3034, casterGuid) ||     // Viper Sting
+            HasAuraFromSpellChainCastBy(unit, 3043, casterGuid);       // Scorpid Sting
+    }
+
+    bool HunterKnowsMongooseBite(Player const* player)
+    {
+        // 81285 is the player-facing Mongoose Bite. 81286/81287 are the
+        // triggered main/off-hand effects handled by spell_hunter.cpp and
+        // must not independently make the AI think the ability is learned
+        // or ready while the real 81285 cooldown is active.
+        return player && player->HasSpell(81285);
+    }
+
+    bool IsHunterMongooseBiteReady(Player* player)
+    {
+        if (!HunterKnowsMongooseBite(player))
+            return false;
+
+        SpellHistory* history = player->GetSpellHistory();
+        return history && !history->HasCooldown(81285);
+    }
+
+    bool TryCastCommittedMongooseBite(Player* player, Unit* target)
+    {
+        if (!player || !target || !target->IsAlive() || !player->IsWithinMeleeRange(target) ||
+            !HasHunterDamagingStingFromThisCaster(target, player->GetGUID()))
+        {
+            return false;
+        }
+
+        SpellInfo const* mongooseInfo = sSpellMgr->GetSpellInfo(81285);
+        SpellHistory* history = player->GetSpellHistory();
+        if (!mongooseInfo || !history || history->HasCooldown(81285) || history->HasGlobalCooldown(mongooseInfo) ||
+            player->IsNonMeleeSpellCast(false, false, true))
+        {
+            return false;
+        }
+
+        StopHunterTargetMovementForPlant(player);
+        player->SetFacingToObject(target);
+        player->SetInFront(target);
+        StopHunterTargetMovementForPlant(player);
+
+        if (!player->GetVictim() || player->GetVictim()->GetGUID() != target->GetGUID() ||
+            !player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
+        {
+            player->Attack(target, true);
+        }
+
+        SpellCastResult const castResult = player->CastSpell(target, 81285, false);
+        std::ostringstream diag;
+        diag << "[MongooseBite] committed-cast dist=" << player->GetExactDist(target)
+             << " stung=" << (HasHunterDamagingStingFromThisCaster(target, player->GetGUID()) ? 1 : 0)
+             << " result=" << (castResult == SPELL_CAST_OK ? "OK" : EnumUtils::ToString(castResult).Title)
+             << " resultCode=" << uint32(castResult);
+        WhisperAutoShotDiagnosticToArena(player, diag.str(), 500);
+        return castResult == SPELL_CAST_OK;
+    }
+
+    bool DriveHunterKiteLoop(Player* player, Unit* target, CombatPositioningProfile const& profile)
     {
         if (!player || player->GetClass() != CLASS_HUNTER || !target || !target->IsAlive())
             return false;
 
-        float exactDistance = 0.0f;
-        float minAutoShotRange = 0.0f;
-        float maxAutoShotRange = 0.0f;
-        if (!GetHunterAutoShotRange(player, target, exactDistance, minAutoShotRange, maxAutoShotRange))
+        playerbot::HunterAutoShotRangeInfo rangeInfo;
+        if (!GetHunterAutoShotRange(player, target, rangeInfo))
             return false;
+
+        float const exactDistance = rangeInfo.exactDistance;
+        float const minAutoShotRange = rangeInfo.minRange;
+        float const maxAutoShotRange = rangeInfo.maxRange;
 
         uint32 const nowMs = GameTime::GetGameTimeMS();
         uint64 const hunterGuidRaw = player->GetGUID().GetRawValue();
-        uint32& plantUntilMs = g_HunterAutoShotPauseUntilMs[hunterGuidRaw];
-        uint32& forceFleeUntilMs = g_HunterForceFleeUntilMs[hunterGuidRaw];
+        uint32& plantUntilMs = playerbot::LockedGetOrCreate(g_HunterAutoShotPauseUntilMs, hunterGuidRaw);
 
         auto clearPlantState = [&]()
         {
             plantUntilMs = 0;
-            g_HunterAutoShotPlantStartedMs[hunterGuidRaw] = 0;
-            g_HunterAutoShotPlantLastTimerMs[hunterGuidRaw] = 0;
+            playerbot::LockedErase(g_HunterAutoShotPlantFireSequence, hunterGuidRaw);
         };
-        float const safeShootMin = std::max(minAutoShotRange + 0.75f, 8.75f);
+        float const safeShootMin = minAutoShotRange + playerbot::PLAYERBOT_HUNTER_AUTOSHOT_MIN_SAFETY_MARGIN;
+
+        // "Ideal range": a hunter that knows Mongoose Bite holds close
+        // (~10y) to weave it between shots. Otherwise it holds five yards
+        // inside its own fully modified Auto Shot range (Hawk Eye included).
+        bool const hasMongooseBite = HunterKnowsMongooseBite(player);
+        float const idealRange = hasMongooseBite
+            ? std::max(10.0f, safeShootMin + 1.0f)
+            : std::max(safeShootMin + 1.0f, maxAutoShotRange - 5.0f);
+
+        // If Mongoose Bite is actually off cooldown and the kill target is
+        // already stung, closing to melee to land the bite takes priority
+        // over holding the ranged ideal range.
+        bool const mongooseBiteReady = hasMongooseBite && IsHunterMongooseBiteReady(player);
+        bool const targetStung = mongooseBiteReady && HasHunterDamagingStingFromThisCaster(target, player->GetGUID());
+        bool const shouldCommitForBite = mongooseBiteReady && targetStung;
+        bool const shouldCloseForBite = shouldCommitForBite && !player->IsWithinMeleeRange(target);
+        // Stay committed at melee distance until the bite consumes the Sting.
+        // Switching back to the 10-yard ideal the instant melee range was
+        // reached made lifecycle movement retreat before the class tick could
+        // actually cast Mongoose Bite.
+        float const desiredDistance = shouldCommitForBite ? 3.0f : idealRange;
+
         bool const hasLos = player->IsWithinLOSInMap(target);
         bool const inAutoShotBand = hasLos && exactDistance > safeShootMin && exactDistance <= maxAutoShotRange;
         bool const tooClose = exactDistance <= safeShootMin;
-        bool const tooFar = exactDistance > maxAutoShotRange + 1.0f;
 
         if (target->HasBreakableByDamageCrowdControlAura())
         {
@@ -2524,14 +3134,12 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             // target is trapped/wyverned/scattered in the hunter's melee or
             // dead-zone band, use that CC window to reposition out to firing
             // range instead of standing still and waiting for the CC to end.
-            if (tooClose || exactDistance < safeShootMin + 6.0f)
+            if (!shouldCloseForBite && (tooClose || exactDistance < safeShootMin + 6.0f))
             {
-                forceFleeUntilMs = std::max(forceFleeUntilMs, nowMs + PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS);
                 MarkHunterKiteHold(player);
-                return IssueHunterStutterFlee(player, target, std::max(safeShootMin + 8.0f, 17.0f), "breakable-cc-reposition-too-close", true);
+                return IssueHunterStutterFlee(player, target, std::max(safeShootMin + 8.0f, 17.0f), "breakable-cc-reposition-too-close");
             }
 
-            forceFleeUntilMs = 0;
             return true;
         }
 
@@ -2543,150 +3151,191 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
                 return;
             }
 
-            StopVirtualPlayerbotMovement(player);
+            StopHunterTargetMovementForPlant(player);
             player->SetFacingToObject(target);
             player->SetInFront(target);
-            StopVirtualPlayerbotMovement(player);
+            StopHunterTargetMovementForPlant(player);
 
-            if (!HunterHasActiveAutoShot(player) && player->HasSpell(75))
-                player->CastSpell(target, 75, false);
+            Spell const* autoRepeat = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+            bool const autoShotActive = autoRepeat && autoRepeat->GetSpellInfo() && autoRepeat->GetSpellInfo()->Id == 75;
+            bool const autoShotOnTarget = autoShotActive && autoRepeat->m_targets.GetUnitTargetGUID() == target->GetGUID();
+            if (autoShotActive && !autoShotOnTarget)
+                player->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
+            if (!autoShotOnTarget && player->HasSpell(75))
+            {
+                SpellCastResult const castResult = player->CastSpell(target, 75, false);
+                std::ostringstream activationDiag;
+                activationDiag << "[AutoShot] activate dist=" << exactDistance
+                    << " effectiveMin=" << minAutoShotRange
+                    << " safeMin=" << safeShootMin
+                    << " max=" << maxAutoShotRange
+                    << " result=" << (castResult == SPELL_CAST_OK ? "OK" : EnumUtils::ToString(castResult).Title)
+                    << " resultCode=" << uint32(castResult);
+                WhisperAutoShotDiagnosticToArena(player, activationDiag.str(), 0);
+            }
+        };
+
+        // Actively pursue the current desired distance (ideal range, or
+        // melee range when closing for a ready Mongoose Bite). Moving does
+        // not reset the ranged attack timer -- it only clamps the last
+        // ~0.5s/0.434s of it until the hunter stands still for that long, so
+        // it is always safe to keep pursuing the desired distance whenever a
+        // shot is not actively planted/about to release (that case is
+        // handled separately below, before this is ever reached).
+        auto pursueDesiredDistance = [&](char const* reason) -> bool
+        {
+            if (std::fabs(exactDistance - desiredDistance) <= 2.0f)
+            {
+                StopHunterTargetMovementForPlant(player);
+                if (hasLos)
+                {
+                    player->SetFacingToObject(target);
+                    player->SetInFront(target);
+                }
+                return true;
+            }
+
+            bool const issued = IssueHumanLikeFollow(player, target, desiredDistance, 3.0f, 500);
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                "Playerbot PvP hunter ideal-range pursuit: bot={} target={} reason={} distance={} desired={} issued={}",
+                player->GetGUID().ToString(), target->GetGUID().ToString(), reason, exactDistance, desiredDistance, issued ? 1 : 0);
+            return issued || player->isMoving();
         };
 
         if (HoldHunterStationaryCast(player, target, "hunter-kite-loop"))
             return true;
 
+        // Once the ready/stung weave has reached true melee range, own the
+        // action here instead of waiting for the slower class selector. The
+        // selector and movement layers run on different cadences; previously
+        // lifecycle could reach melee, then another ranged decision or retreat
+        // won before spell 81285 was attempted. Hold melee and retry after the
+        // GCD until Mongoose Bite consumes the Sting.
+        if (shouldCommitForBite && player->IsWithinMeleeRange(target))
+        {
+            clearPlantState();
+            StopHunterTargetMovementForPlant(player);
+            if (hasLos)
+            {
+                player->SetFacingToObject(target);
+                player->SetInFront(target);
+            }
+
+            TryCastCommittedMongooseBite(player, target);
+            if (!player->GetVictim() || player->GetVictim()->GetGUID() != target->GetGUID() ||
+                !player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
+            {
+                player->Attack(target, true);
+            }
+            return true;
+        }
+
         if (!hasLos)
         {
             clearPlantState();
-            return TryRecoverLineOfSight(player, target, GetCombatPositioningProfile(player), "hunter-stutter-los");
+            return TryRecoverLineOfSight(player, target, profile, "hunter-stutter-los");
         }
 
-        if (tooClose)
+        if (tooClose && !shouldCommitForBite)
         {
             clearPlantState();
-            forceFleeUntilMs = std::max(forceFleeUntilMs, nowMs + PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS);
             MarkHunterKiteHold(player);
-            return IssueHunterStutterFlee(player, target, std::max(safeShootMin + 6.0f, 15.0f), "too-close-or-deadzone", true);
+            return IssueHunterStutterFlee(player, target, std::max(safeShootMin + 6.0f, 15.0f), "too-close-or-deadzone");
         }
+
+        // A ready, primed Mongoose Bite owns movement immediately. Do not let
+        // a plant established on the previous pass hold the hunter at range
+        // after the Sting/cooldown state has changed.
+        if (shouldCommitForBite && plantUntilMs != 0)
+            clearPlantState();
 
         if (plantUntilMs > nowMs)
         {
             stopFaceAndKeepAutoShot();
 
-            uint32 const currentAutoShotTimerMs = player->getAttackTimer(RANGED_ATTACK);
-            uint32& plantStartedMs = g_HunterAutoShotPlantStartedMs[hunterGuidRaw];
-            uint32& lastPlantTimerMs = g_HunterAutoShotPlantLastTimerMs[hunterGuidRaw];
-            uint32 const elapsedPlantMs = plantStartedMs ? nowMs - plantStartedMs : 0;
+            uint32 const fireSequence = GetHunterAutoShotFireSequence(player);
+            uint32 const* plantSequencePtr = playerbot::LockedFind(g_HunterAutoShotPlantFireSequence, hunterGuidRaw);
+            uint32 const plantFireSequence = plantSequencePtr ? *plantSequencePtr : fireSequence;
+            uint32 const rangedTimerMs = player->getAttackTimer(RANGED_ATTACK);
 
-            // Do not resume movement merely because a fixed 500ms window elapsed.
-            // In this core, Auto Shot actually fires inside Unit::_UpdateAutoRepeatSpell()
-            // when RANGED_ATTACK becomes ready, then resetAttackTimer(RANGED_ATTACK)
-            // bumps the timer back up to bow/gun speed.  Hold still until we observe
-            // that reset/increase, unless deadzone/melee already forced us out above.
-            bool const observedTimerReset = elapsedPlantMs >= PLAYERBOT_HUNTER_STUTTER_MIN_PLANT_MS &&
-                ((currentAutoShotTimerMs >= PLAYERBOT_HUNTER_STUTTER_FIRED_TIMER_MS) ||
-                    (lastPlantTimerMs != 0 && currentAutoShotTimerMs > lastPlantTimerMs + 250));
-
-            if (observedTimerReset)
+            // During the plant, tactical movement and the hunter class executor
+            // are both held. Therefore a reset above the plant lead cannot have
+            // come from Arcane Shot/Multi-Shot; it is a reliable second signal
+            // that the core launched Auto Shot even if the PlayerScript callback
+            // was not emitted for this auto-repeat path.
+            bool const fireEventObserved = fireSequence != plantFireSequence;
+            bool const rangedTimerReset = rangedTimerMs > PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS;
+            if (fireEventObserved || rangedTimerReset)
             {
-                plantUntilMs = 0;
-                plantStartedMs = 0;
-                lastPlantTimerMs = 0;
-                forceFleeUntilMs = std::max(forceFleeUntilMs, nowMs + PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS);
-                float const desiredFleeDistance = std::max(safeShootMin + 7.0f, maxAutoShotRange - 2.0f);
-                return IssueHunterStutterFlee(player, target, desiredFleeDistance, "autoshot-fired-resume-flee");
+                std::ostringstream releaseDiag;
+                releaseDiag << "[AutoShot] fired-detected timer=" << rangedTimerMs
+                    << " sequence=" << fireSequence
+                    << " event=" << (fireEventObserved ? 1 : 0)
+                    << " timerReset=" << (rangedTimerReset ? 1 : 0);
+                WhisperAutoShotDiagnosticToArena(player, releaseDiag.str(), 0);
+                clearPlantState();
+
+                // The shot landed. Never reflexively retreat -- a hunter must
+                // never move just because a shot succeeded; only pursue the
+                // desired distance, exactly like the normal between-shots
+                // state below. A stationary target within ideal range should
+                // see the hunter never move at all.
+                return pursueDesiredDistance("autoshot-fired-pursue-ideal");
             }
 
-            lastPlantTimerMs = currentAutoShotTimerMs;
             return true;
         }
 
-        // If we somehow reached the max plant deadline without seeing the ranged
-        // timer reset, resume fleeing anyway so the hunter never turns into a
-        // permanent turret because of a stale timer read.
+        // If we somehow reached the max plant deadline without seeing the
+        // triggered Auto Shot event, clear the stale plant state so the next tick
+        // re-evaluates fresh instead of holding on a stale read forever.
         if (plantUntilMs != 0 && plantUntilMs <= nowMs)
         {
             plantUntilMs = 0;
-            g_HunterAutoShotPlantStartedMs[hunterGuidRaw] = 0;
-            g_HunterAutoShotPlantLastTimerMs[hunterGuidRaw] = 0;
-            forceFleeUntilMs = std::max(forceFleeUntilMs, nowMs + PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS);
+            playerbot::LockedErase(g_HunterAutoShotPlantFireSequence, hunterGuidRaw);
         }
-
-        // After every completed plant window, force a flee window before another
-        // plant is allowed. Some core states report the ranged timer as 0/ready
-        // for more than one lifecycle tick, which previously made the hunter
-        // chain-plant forever and appear completely stuck.
-        if (forceFleeUntilMs > nowMs && inAutoShotBand)
-        {
-            float const desiredFleeDistance = std::max(safeShootMin + 7.0f, maxAutoShotRange - 2.0f);
-            return IssueHunterStutterFlee(player, target, desiredFleeDistance, "post-shot-force-flee");
-        }
-
-        if (forceFleeUntilMs <= nowMs)
-            forceFleeUntilMs = 0;
 
         uint32 const autoShotTimerMs = player->getAttackTimer(RANGED_ATTACK);
         bool const autoShotActive = HunterHasActiveAutoShot(player);
-        bool const shouldPlantForAutoShot = inAutoShotBand && (autoShotTimerMs == 0 || autoShotTimerMs <= PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS);
 
-        if (inAutoShotBand && !autoShotActive && !shouldPlantForAutoShot && player->HasSpell(75))
-        {
-            // Auto Shot can stay queued as an auto-repeat spell while the hunter
-            // is moving. Do not park early just because Auto Shot is inactive;
-            // start the auto-repeat and keep fleeing until the real shot window.
-            if (target->HasBreakableByDamageCrowdControlAura())
-            {
-                StopHunterAutoShotForBreakableCrowdControl(player, target, "activate-autoshot-suppressed-breakable-cc");
-                return false;
-            }
-            player->SetFacingToObject(target);
-            player->SetInFront(target);
-            player->CastSpell(target, 75, false);
-            float const desiredFleeDistance = std::max(safeShootMin + 7.0f, maxAutoShotRange - 2.0f);
-            return IssueHunterStutterFlee(player, target, desiredFleeDistance, "activate-autoshot-while-fleeing");
-        }
+        // Do not plant (stop and commit to firing) while committed to a
+        // Mongoose Bite opportunity. Closing to melee and remaining there
+        // long enough for the class action to consume the Sting takes priority.
+        bool const shouldPlantForAutoShot = inAutoShotBand && !shouldCommitForBite &&
+            (autoShotTimerMs == 0 || autoShotTimerMs <= PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS);
 
         if (shouldPlantForAutoShot)
         {
-            plantUntilMs = nowMs + PLAYERBOT_HUNTER_STUTTER_MAX_PLANT_MS;
-            g_HunterAutoShotPlantStartedMs[hunterGuidRaw] = nowMs;
-            g_HunterAutoShotPlantLastTimerMs[hunterGuidRaw] = autoShotTimerMs;
-            g_HunterFleeStateByGuid.erase(hunterGuidRaw);
+            uint32 const maxPlantMs = PLAYERBOT_HUNTER_STUTTER_MAX_PLANT_MS;
+            plantUntilMs = nowMs + maxPlantMs;
+            playerbot::LockedSet(g_HunterAutoShotPlantFireSequence, hunterGuidRaw, GetHunterAutoShotFireSequence(player));
+            playerbot::LockedErase(g_HunterFleeStateByGuid, hunterGuidRaw);
             stopFaceAndKeepAutoShot();
 
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                 "Playerbot PvP hunter stutter loop: bot={} target={} decision=plant-autoshot distance={} timer={} active={} maxPlantMs={}",
                 player->GetGUID().ToString(), target->GetGUID().ToString(), exactDistance, autoShotTimerMs,
-                autoShotActive ? 1 : 0, PLAYERBOT_HUNTER_STUTTER_MAX_PLANT_MS);
+                autoShotActive ? 1 : 0, maxPlantMs);
+
+            std::ostringstream plantDiag;
+            plantDiag << "[AutoShot] plant dist=" << exactDistance
+                      << " effectiveMin=" << minAutoShotRange
+                      << " safeMin=" << safeShootMin
+                      << " max=" << maxAutoShotRange
+                      << " timer=" << autoShotTimerMs
+                      << " active=" << (HunterHasActiveAutoShot(player) ? 1 : 0);
+            WhisperAutoShotDiagnosticToArena(player, plantDiag.str(), 250);
             return true;
         }
 
-        // Default state while Auto Shot is charging: keep moving away. Do not
-        // turret at the minimum ranged band, and do not run generic preferred
-        // range/chase logic.
-        if (inAutoShotBand)
-        {
-            float const desiredFleeDistance = std::max(safeShootMin + 7.0f, maxAutoShotRange - 2.0f);
-            return IssueHunterStutterFlee(player, target, desiredFleeDistance, "timer-filling");
-        }
-
-        if (tooFar)
-        {
-            // Only close if the hunter has genuinely drifted outside Auto Shot
-            // range. Close to the outer edge, never to preferred/ideal range.
-            if (!CanIssueMovementCommand(player, 500))
-                return true;
-
-            float const closeToRange = std::max(1.0f, maxAutoShotRange - 1.0f);
-            bool const issued = IssueHumanLikeFollow(player, target, closeToRange, 6.0f, 700);
-            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-                "Playerbot PvP hunter stutter loop: bot={} target={} decision=close-to-autoshot-edge distance={} followRange={} issued={}",
-                player->GetGUID().ToString(), target->GetGUID().ToString(), exactDistance, closeToRange, issued ? 1 : 0);
-            return issued || player->isMoving();
-        }
-
-        // Safety fallback for odd range gaps: flee rather than park.
-        return IssueHunterStutterFlee(player, target, std::max(safeShootMin + 6.0f, 15.0f), "range-gap");
+        // Not planting this tick (timer still has time left, out of band, or
+        // closing for a bite): actively pursue the desired distance instead
+        // of parking or fleeing. Moving is always safe here -- it only
+        // clamps the last fraction of the ranged timer, which the plant
+        // branch above already accounts for.
+        return pursueDesiredDistance(shouldCommitForBite
+            ? (shouldCloseForBite ? "closing-for-mongoose-bite" : "hold-for-mongoose-bite")
+            : "pursue-ideal-range");
     }
 
     Player* FindFlagCarrierForDirective(Player* player, playerbot::FlagCarrierDirective directive)
@@ -2729,9 +3378,8 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             return ObjectAccessor::FindConnectedPlayer(carrierGuid);
         }
 
-        if (BattlegroundEY* bgEy = dynamic_cast<BattlegroundEY*>(battleground))
+        auto findNeutralFlagCarrierForDirective = [&](ObjectGuid const& carrierGuid) -> Player*
         {
-            ObjectGuid const carrierGuid = bgEy->GetFlagPickerGUID();
             if (carrierGuid.IsEmpty())
                 return nullptr;
 
@@ -2739,13 +3387,16 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             if (!carrier)
                 return nullptr;
 
-            if (directive == playerbot::FlagCarrierDirective::AttackEnemyCarrier && carrier->GetTeamId() != botTeam)
+            TeamId const carrierTeam = ResolveBotTeamId(carrier);
+            if (directive == playerbot::FlagCarrierDirective::AttackEnemyCarrier && carrierTeam != botTeam)
                 return carrier;
-            if (directive == playerbot::FlagCarrierDirective::ProtectTeamCarrier && carrier->GetTeamId() == botTeam)
+            if (directive == playerbot::FlagCarrierDirective::ProtectTeamCarrier && carrierTeam == botTeam)
                 return carrier;
-        }
 
-        return nullptr;
+            return nullptr;
+        };
+
+        return findNeutralFlagCarrierForDirective(battleground->GetFlagPickerGUID());
     }
 
     bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
@@ -2781,12 +3432,184 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 
         if (!player->IsWithinDistInMap(target, desiredDistance))
         {
-            if (!CanIssueMovementCommand(player, 500))
-                return false;
+            // IssueHumanLikeFollow -> IssueMovePointThrottled already gates
+            // this via CanIssueMovementCommand; an outer pre-check here
+            // double-consumed the same-tick throttle token and made the
+            // follow call always fail.
             ClearEatDrinkAurasForMovement(player);
             return IssueHumanLikeFollow(player, target, desiredDistance, 6.0f, 500);
         }
 
+        return true;
+    }
+
+    struct DroppedFlagPickupDelay
+    {
+        ObjectGuid flagGuid = ObjectGuid::Empty;
+        uint32 pickupNotBeforeMs = 0;
+    };
+
+    std::unordered_map<uint64, DroppedFlagPickupDelay> g_DroppedFlagPickupDelayByBotGuid;
+    constexpr uint32 PLAYERBOT_DROPPED_FLAG_PICKUP_DELAY_MS = 1 * IN_MILLISECONDS;
+
+    bool TryAdvanceFlagObjective(Player* player, Battleground* battleground)
+    {
+        if (!player || !battleground || !player->FindMap())
+            return false;
+
+        uint64 const botGuidRaw = player->GetGUID().GetRawValue();
+
+        Position capturePosition;
+        if (battleground->GetFlagCapturePosition(player->GetGUID(), capturePosition))
+        {
+            playerbot::LockedErase(g_DroppedFlagPickupDelayByBotGuid, botGuidRaw);
+
+            // Playerbots move entirely on the server and do not send the
+            // client's CMSG_AREATRIGGER packet when they enter a CTF capture
+            // trigger. Reproduce the normal client path once the carrier is
+            // physically inside its team's real capture trigger.
+            uint32 captureTriggerId = 0;
+            uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
+            if (dynamic_cast<BattlegroundWS*>(battleground))
+                captureTriggerId = assignedTeam == ALLIANCE ? 3646 : assignedTeam == HORDE ? 3647 : 0;
+            else if (dynamic_cast<BattlegroundTP*>(battleground))
+                captureTriggerId = assignedTeam == ALLIANCE ? 5904 : assignedTeam == HORDE ? 5905 : 0;
+
+            if (captureTriggerId)
+            {
+                AreaTriggerEntry const* captureTrigger = sAreaTriggerStore.LookupEntry(captureTriggerId);
+                if (captureTrigger && player->IsInAreaTriggerRadius(captureTrigger))
+                {
+                    battleground->HandleAreaTrigger(player, captureTriggerId);
+                    return true;
+                }
+            }
+            else if (player->IsWithinDist3d(capturePosition.GetPositionX(), capturePosition.GetPositionY(), capturePosition.GetPositionZ(), 8.0f))
+                return true;
+
+            bool const moved = IssueMovePointThrottled(player, capturePosition, 6.0f, 500);
+            if (moved)
+            {
+                TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                    "Playerbot PvP flag capture path: guid={} destination=({}, {}, {}).",
+                    player->GetGUID().ToString(), capturePosition.GetPositionX(), capturePosition.GetPositionY(),
+                    capturePosition.GetPositionZ());
+            }
+            return moved || player->isMoving();
+        }
+
+        ObjectGuid const pickupGuid = battleground->GetFlagPickupGUID(player->GetGUID());
+        if (pickupGuid.IsEmpty())
+        {
+            std::lock_guard<std::mutex> stateGuard(playerbot::SharedBotStateStructureLock());
+            auto const delayItr = g_DroppedFlagPickupDelayByBotGuid.find(botGuidRaw);
+            if (delayItr == g_DroppedFlagPickupDelayByBotGuid.end() ||
+                GameTime::GetGameTimeMS() >= delayItr->second.pickupNotBeforeMs)
+                g_DroppedFlagPickupDelayByBotGuid.erase(botGuidRaw);
+            return false;
+        }
+
+        GameObject* flag = player->FindMap()->GetGameObject(pickupGuid);
+        if (!flag || !flag->IsInWorld())
+            return false;
+
+        bool const isDroppedFlag = flag->GetGoType() == GAMEOBJECT_TYPE_FLAGDROP;
+        if (isDroppedFlag)
+        {
+            uint32 const nowMs = GameTime::GetGameTimeMS();
+            DroppedFlagPickupDelay& delay = playerbot::LockedGetOrCreate(g_DroppedFlagPickupDelayByBotGuid, botGuidRaw);
+            if (delay.flagGuid != pickupGuid)
+            {
+                delay.flagGuid = pickupGuid;
+                // A whisper-requested drop installs its own longer deadline
+                // before the dropped GO necessarily exists. Preserve that
+                // deadline when the new object GUID becomes visible; ordinary
+                // dropped flags retain the short anti-instant-reclick delay.
+                if (nowMs >= delay.pickupNotBeforeMs)
+                    delay.pickupNotBeforeMs = nowMs + PLAYERBOT_DROPPED_FLAG_PICKUP_DELAY_MS;
+            }
+
+            if (flag->IsAtInteractDistance(player) && nowMs < delay.pickupNotBeforeMs)
+                return true;
+        }
+        else
+            playerbot::LockedErase(g_DroppedFlagPickupDelayByBotGuid, botGuidRaw);
+
+        if (!flag->IsAtInteractDistance(player))
+            return IssueMovePointThrottled(player, flag->GetPosition(), 6.0f, 500) || player->isMoving();
+
+        // Use the object through the normal interaction path so flag-drop
+        // cleanup, form/stealth handling, and battleground eligibility checks
+        // remain identical to a player click.
+        flag->Use(player);
+        playerbot::LockedErase(g_DroppedFlagPickupDelayByBotGuid, botGuidRaw);
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP flag pickup attempted: guid={} flag_guid={}.",
+            player->GetGUID().ToString(), pickupGuid.ToString());
+        return true;
+    }
+
+    bool TryAdvanceNodeObjective(Player* player, Battleground* battleground)
+    {
+        if (!player || !battleground || !player->FindMap())
+            return false;
+
+        BattlegroundNodeObjective objective;
+        if (!battleground->GetNodeObjective(player->GetGUID(), objective))
+            return false;
+
+        bool const isDefense = objective.Status == BattlegroundNodeStatus::FriendlyControlled ||
+            objective.Status == BattlegroundNodeStatus::FriendlyContested ||
+            objective.Status == BattlegroundNodeStatus::FriendlyUnderAttack;
+        bool const needsInteraction = !isDefense || objective.Status == BattlegroundNodeStatus::FriendlyUnderAttack;
+        Position destination = objective.Location;
+
+        // Friendly/claimed nodes are defended by holding nearby and engaging
+        // attackers.
+        if (!needsInteraction)
+        {
+            playerbot::ApplyDeterministicObjectiveOffset(battleground, player, destination);
+            if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
+                return IssueMovePointThrottled(player, destination, 6.0f, 500) || player->isMoving();
+
+            return true;
+        }
+
+        GameObject* banner = player->FindMap()->GetGameObject(objective.BannerGuid);
+        if (!banner || !banner->IsInWorld() || !banner->isSpawned())
+            return true;
+
+        // Node banners use their lock spell (normally the 10-second Opening
+        // spell), not GameObject::Use. Use the spell's real interaction range
+        // instead of stopping at an arbitrary eight-yard approximation.
+        SpellInfo const* interactionSpell = banner->GetSpellForLock(player);
+        bool const isAtInteractDistance = interactionSpell ? banner->IsAtInteractDistance(player, interactionSpell) :
+            banner->IsAtInteractDistance(player);
+        if (!isAtInteractDistance)
+            return IssueMovePointThrottled(player, banner->GetPosition(), 6.0f, 500) || player->isMoving();
+
+        if (playerbot::PvpClassActions::IsBattlegroundObjectInteractionInProgress(player))
+            return true;
+
+        // Mount auras prevent the node's interruptible OPEN_LOCK interaction.
+        // Dismount only after the bot has reached the banner so travel to the
+        // objective can still benefit from mount speed.
+        if (player->IsMounted())
+            ForcePlayerbotDismount(player);
+
+        StopVirtualPlayerbotMovement(player);
+        player->AttackStop();
+
+        SpellCastResult castResult = SPELL_FAILED_DONT_REPORT;
+        if (interactionSpell)
+            castResult = player->CastSpell(banner, interactionSpell->Id, false);
+        else
+            banner->Use(player);
+
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP node interaction attempted: guid={} node={} status={} banner_guid={} spell={} result={} fallback_use={}.",
+            player->GetGUID().ToString(), objective.NodeId, static_cast<uint8>(objective.Status), objective.BannerGuid.ToString(),
+            interactionSpell ? interactionSpell->Id : 0, static_cast<uint32>(castResult), interactionSpell == nullptr);
         return true;
     }
 
@@ -2978,9 +3801,89 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 
 namespace playerbot
 {
+    bool IsHunterAutoShotPlantActive(Player* player)
+    {
+        return IsHunterAutoShotPlantActiveInternal(player);
+    }
+
+    void NotifyHunterAutoShotFired(Player* player)
+    {
+        if (!player || player->GetClass() != CLASS_HUNTER)
+            return;
+
+        uint32 fireSequence = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_HunterAutoShotEventLock);
+            fireSequence = ++g_HunterAutoShotFireSequence[player->GetGUID().GetRawValue()];
+        }
+
+        std::ostringstream diag;
+        diag << "[AutoShot] fired timer=" << player->getAttackTimer(RANGED_ATTACK)
+             << " sequence=" << fireSequence;
+        WhisperAutoShotDiagnosticToArena(player, diag.str(), 0);
+    }
+
     uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType)
     {
         return ::QueueEligibleManagedBotsForBattleground(bgTypeId, arenaType, false);
+    }
+
+    void ResyncPlayerbotSwimStateForMovementStop(Player* player)
+    {
+        if (!player || !player->IsInWorld())
+            return;
+
+        // Several independent "freeze movement to cast/hold/plant" call sites
+        // (StopPlayerbotForStationaryCast, DriveCombatPositioning's hold-band
+        // stop, HoldPositionForWand, StopVirtualPlayerbotMovement) can all
+        // fire for the same bot on the same or adjacent decision ticks.
+        // Collapse their terrain/swim resyncs into one throttled pass per bot
+        // so a bot holding position in water is not resampled and rebroadcast
+        // several times per real tick.
+        static constexpr uint32 kMinResyncIntervalMs = 200;
+        static std::unordered_map<uint64, uint32> lastResyncMsByGuid;
+
+        uint64 const guidRaw = player->GetGUID().GetRawValue();
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        {
+            std::lock_guard<std::mutex> stateGuard(playerbot::SharedBotStateStructureLock());
+            uint32& lastResyncMs = lastResyncMsByGuid[guidRaw];
+            if (lastResyncMs != 0 && nowMs - lastResyncMs < kMinResyncIntervalMs)
+                return;
+            lastResyncMs = nowMs;
+        }
+
+        // A bot stopped over water usually sits with Z exactly at the liquid
+        // surface, because navmesh water polys ride the liquid level. That is
+        // simultaneously the knife edge of the IN_WATER/WATER_WALK liquid
+        // classification (Map::GetLiquidStatus flips at delta 0) and the
+        // "standing on top of the water" visual. When the water is too deep
+        // to stand in, sink the bot just below the surface -- the same idiom
+        // BuildCollisionSafeDestination applies to movement destinations --
+        // so it classifies stably as swimming and renders treading water.
+        // In standable water, settle it onto the bottom instead. Never raise
+        // the bot: one already below the stable band is left where it is.
+        if (Map const* map = player->FindMap(); map && player->IsAlive() && !player->HasAuraType(SPELL_AURA_WATER_WALK))
+        {
+            LiquidData liquidData{};
+            ZLiquidStatus const liquidStatus = map->GetLiquidStatus(player->GetPhaseMask(), player->GetPositionX(),
+                player->GetPositionY(), player->GetPositionZ() + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight());
+            if (liquidStatus & (LIQUID_MAP_WATER_WALK | LIQUID_MAP_IN_WATER | LIQUID_MAP_UNDER_WATER))
+            {
+                bool const tooDeepToStand = (liquidData.level - liquidData.depth_level) > player->GetCollisionHeight();
+                float const stableZ = tooDeepToStand ? liquidData.level - 0.5f : liquidData.depth_level + 0.05f;
+                if (player->GetPositionZ() - stableZ > 0.05f)
+                    player->UpdatePosition(player->GetPositionX(), player->GetPositionY(), stableZ, player->GetOrientation());
+            }
+        }
+
+        player->UpdatePositionData();
+        // No MSG_MOVE_HEARTBEAT here: observer clients render bots from
+        // splines, and a heartbeat kicks them into a client-movement stream
+        // that never follows (sporadic porting). The swim toggle above
+        // (UpdatePositionData -> ProcessTerrainStatusUpdate -> SetSwim)
+        // already publishes SMSG_SPLINE_MOVE_START/STOP_SWIM, and the small
+        // stabilization Z-sink reaches observers with the next spline launch.
     }
 
     void FinalizeManagedBotTeleportIfPending(Player* player)
@@ -3071,14 +3974,14 @@ namespace playerbot
             return;
 
         uint64 const botGuid = player->GetGUID().GetRawValue();
-        bool const alreadyLocked = g_WaitJoinLockedBots.find(botGuid) != g_WaitJoinLockedBots.end();
+        bool const alreadyLocked = playerbot::LockedContains(g_WaitJoinLockedBots, botGuid);
 
         if (!locked)
         {
             if (alreadyLocked)
             {
                 player->SetControlled(false, UNIT_STATE_ROOT);
-                g_WaitJoinLockedBots.erase(botGuid);
+                playerbot::LockedErase(g_WaitJoinLockedBots, botGuid);
             }
             return;
         }
@@ -3095,7 +3998,7 @@ namespace playerbot
         if (!alreadyLocked)
         {
             player->SetControlled(true, UNIT_STATE_ROOT);
-            g_WaitJoinLockedBots.insert(botGuid);
+            playerbot::LockedInsert(g_WaitJoinLockedBots, botGuid);
         }
     }
 
@@ -3114,29 +4017,7 @@ namespace playerbot
             return false;
         }
 
-        uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
-        TeamId const teamId = ResolveTeamId(assignedTeam ? assignedTeam : player->GetBGTeam());
-        TeamId const startTeam = (teamId == TEAM_NEUTRAL) ? player->GetTeamId() : teamId;
-        Position const* start = battleground->GetTeamStartPosition(startTeam);
-        if (!start)
-            return false;
-
         SetWaitJoinMovementLock(player, true);
-
-        float const dist = player->GetDistance(
-            start->GetPositionX(),
-            start->GetPositionY(),
-            start->GetPositionZ());
-
-        // Hard correction: they should not be moving at all before the battleground starts.
-        if (dist > 1.0f)
-        {
-            player->NearTeleportTo(
-                start->GetPositionX(),
-                start->GetPositionY(),
-                start->GetPositionZ(),
-                start->GetOrientation());
-        }
 
         if (player->isMoving())
             player->StopMoving();
@@ -3164,7 +4045,7 @@ namespace playerbot
 
         uint64 const botRawGuid = player->GetGUID().GetRawValue();
         uint32 const nowMs = GameTime::GetGameTimeMS();
-        uint32& attemptNotBeforeMs = g_WsgReturnAttemptNotBeforeMsByGuid[botRawGuid];
+        uint32& attemptNotBeforeMs = playerbot::LockedGetOrCreate(g_WsgReturnAttemptNotBeforeMsByGuid, botRawGuid);
 
         if (HumanTeammateNearDroppedFlag(player, droppedFlag, 7.0f))
         {
@@ -3230,6 +4111,8 @@ namespace playerbot
                 continue;
             if (!player->IsValidAttackTarget(candidate))
                 continue;
+            if (playerbot::PvpCore::IsEffectivelyImmuneTarget(player, candidate))
+                continue;
             if (attackableEnemies)
                 ++(*attackableEnemies);
 
@@ -3244,6 +4127,41 @@ namespace playerbot
         return nearestEnemy;
     }
 
+    void StopDamageAgainstEffectivelyImmuneTarget(Player* player, Unit* target)
+    {
+        if (!player || !target)
+            return;
+
+        auto interruptSpellTargeting = [target](Unit* attacker, CurrentSpellTypes spellType)
+        {
+            Spell const* spell = attacker ? attacker->GetCurrentSpell(spellType) : nullptr;
+            if (spell && spell->m_targets.GetUnitTargetGUID() == target->GetGUID())
+                attacker->InterruptSpell(spellType);
+        };
+
+        if (player->GetVictim() && player->GetVictim()->GetGUID() == target->GetGUID())
+            player->AttackStop();
+
+        interruptSpellTargeting(player, CURRENT_GENERIC_SPELL);
+        interruptSpellTargeting(player, CURRENT_CHANNELED_SPELL);
+        interruptSpellTargeting(player, CURRENT_AUTOREPEAT_SPELL);
+
+        if (Pet* pet = player->GetPet())
+        {
+            if (pet->GetVictim() && pet->GetVictim()->GetGUID() == target->GetGUID())
+                pet->AttackStop();
+            interruptSpellTargeting(pet, CURRENT_GENERIC_SPELL);
+            interruptSpellTargeting(pet, CURRENT_CHANNELED_SPELL);
+        }
+
+        if (player->GetTarget() == target->GetGUID())
+            player->SetSelection(ObjectGuid::Empty);
+
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP stopped damage against effectively immune target: bot={} target={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString());
+    }
+
     Unit* AcquireCombatTarget(Player* player, float scanDistance)
     {
         if (!player)
@@ -3251,12 +4169,26 @@ namespace playerbot
 
         auto isAttackableTarget = [player](Unit* candidate) -> bool
         {
-            return candidate && candidate->IsAlive() && player->IsValidAttackTarget(candidate);
+            return candidate && candidate->IsAlive() && player->IsValidAttackTarget(candidate) &&
+                !playerbot::PvpCore::IsEffectivelyImmuneTarget(player, candidate);
         };
 
         Unit* target = player->GetVictim();
+        if (target && playerbot::PvpCore::IsEffectivelyImmuneTarget(player, target))
+        {
+            StopDamageAgainstEffectivelyImmuneTarget(player, target);
+            target = nullptr;
+        }
         if (!isAttackableTarget(target))
             target = player->GetSelectedUnit();
+        if (target && playerbot::PvpCore::IsEffectivelyImmuneTarget(player, target))
+        {
+            StopDamageAgainstEffectivelyImmuneTarget(player, target);
+            target = nullptr;
+        }
+        if (Pet* pet = player->GetPet())
+            if (Unit* petVictim = pet->GetVictim(); petVictim && playerbot::PvpCore::IsEffectivelyImmuneTarget(player, petVictim))
+                StopDamageAgainstEffectivelyImmuneTarget(player, petVictim);
         if ((!target || !target->IsAlive()) && player->duel && player->duel->State == DUEL_STATE_IN_PROGRESS)
         {
             Unit* duelOpponent = player->duel->Opponent;
@@ -3280,6 +4212,19 @@ namespace playerbot
         if (!player || !target || !target->IsAlive())
             return false;
 
+        // Leaving a burning floor tile outranks every combat consideration.
+        // The stop-for-cast paths only run TryMoveOutOfHazardousLiquid when a
+        // bot is halting; a bot that is meleeing (or holding a recent chase
+        // order) never hit them and simply stood in hazardous ground taking
+        // periodic damage. Drive the escape here, before the
+        // movement gate and recent-order preservation below, so an in-combat
+        // bot actually walks out of the hazard.
+        if (TryMoveOutOfHazardousLiquid(player))
+            return true;
+
+        if (TryDrivePlayerbotEscapeAura(player, target))
+            return true;
+
         // Cast-time hunter actions such as Aimed Shot and Revive Pet must win
         // over every movement system. Check this before CanIssueBotMovement(),
         // recent-order preservation, LOS recovery, or distance-band movement so
@@ -3295,9 +4240,12 @@ namespace playerbot
         // was one cause of visible triangle/orbit movement.
         if (player->GetClass() == CLASS_HUNTER)
         {
-            float const exactDistance = player->GetExactDist(target);
+            playerbot::HunterAutoShotRangeInfo rangeInfo;
+            bool const hasHunterRange = GetHunterAutoShotRange(player, target, rangeInfo);
+            float const exactDistance = hasHunterRange ? rangeInfo.exactDistance : player->GetExactDist(target);
             bool const targetPressuringHunter = target->GetVictim() == player || player->IsWithinMeleeRange(target);
-            if ((targetPressuringHunter && exactDistance < 12.0f) || (exactDistance > 5.0f && exactDistance < 8.0f))
+            bool const inDeadZone = hasHunterRange && exactDistance > rangeInfo.meleeRange && exactDistance < rangeInfo.minRange;
+            if ((targetPressuringHunter && exactDistance < 12.0f) || inDeadZone)
                 MarkHunterKiteHold(player);
         }
 
@@ -3312,12 +4260,11 @@ namespace playerbot
             if (player->GetClass() != CLASS_HUNTER)
                 return true;
 
-            float exactDistance = 0.0f;
-            float minAutoShotRange = 0.0f;
-            float maxAutoShotRange = 0.0f;
-            bool const hasHunterRange = GetHunterAutoShotRange(player, target, exactDistance, minAutoShotRange, maxAutoShotRange);
+            playerbot::HunterAutoShotRangeInfo rangeInfo;
+            bool const hasHunterRange = GetHunterAutoShotRange(player, target, rangeInfo);
+            float const exactDistance = rangeInfo.exactDistance;
             bool const safeAutoShotBand = hasHunterRange && player->IsWithinLOSInMap(target) &&
-                exactDistance > std::max(minAutoShotRange + 0.75f, 8.75f) && exactDistance <= maxAutoShotRange;
+                exactDistance > rangeInfo.minRange + playerbot::PLAYERBOT_HUNTER_AUTOSHOT_MIN_SAFETY_MARGIN && exactDistance <= rangeInfo.maxRange;
             bool const shouldBreakRecentOrder = safeAutoShotBand || IsHunterKiteHoldActive(player) || exactDistance < 12.0f;
             if (!shouldBreakRecentOrder)
                 return true;
@@ -3335,9 +4282,7 @@ namespace playerbot
         {
             if (ShouldForceMeleeFallbackOnLowMana(player) && player->GetClass() != CLASS_HUNTER)
             {
-                if (!CanIssueMovementCommand(player, 500))
-                    return true;
-
+                // MoveTowardUnit gates internally; see MoveAwayFromUnit above.
                 return MoveTowardUnit(player, target, std::max(1.0f, playerbot::PvpCore::GetConfig().meleeRange - 1.0f));
             }
 
@@ -3370,44 +4315,14 @@ namespace playerbot
 
             if (distance > profile.preferredMaxPressureRange)
             {
+                // A hunter with valid Auto Shot range data is fully owned by
+                // DriveHunterKiteLoop above. Reaching this generic fallback
+                // means range metadata was unavailable, so do not invent a
+                // second stop/start policy that can fight the hunter loop.
                 if (player->GetClass() == CLASS_HUNTER)
-                {
-                    float exactDistance = 0.0f;
-                    float minAutoShotRange = 0.0f;
-                    float maxAutoShotRange = 0.0f;
-                    bool const hasHunterRange = GetHunterAutoShotRange(player, target, exactDistance, minAutoShotRange, maxAutoShotRange);
-
-                    if (IsHunterAutoShotBand(player, target))
-                        return StopHunterAndStartAutoShot(player, target, "hold-autoshot-over-preferred-max");
-
-                    if (hasHunterRange && exactDistance <= maxAutoShotRange + 1.0f)
-                    {
-                        StopVirtualPlayerbotMovement(player);
-                        if (hasLos)
-                        {
-                            player->SetFacingToObject(target);
-                            player->SetInFront(target);
-                        }
-                        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-                            "Playerbot PvP hunter range band: bot={} target={} decision=no-close-near-autoshot-max distance={} exact={} maxAuto={}.",
-                            player->GetGUID().ToString(), target->GetGUID().ToString(), distance, exactDistance, maxAutoShotRange);
-                        return true;
-                    }
-
-                    if (!CanIssueMovementCommand(player, 500))
-                        return true;
-
-                    float const closeToRange = hasHunterRange ? std::max(1.0f, maxAutoShotRange - 1.0f) : profile.preferredMaxPressureRange;
-                    if (!IssueHumanLikeFollow(player, target, closeToRange, 6.0f, 500))
-                        return true;
-                    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-                        "Playerbot PvP hunter range band: bot={} target={} decision=close-only-to-autoshot-max distance={} exact={} followRange={}.",
-                        player->GetGUID().ToString(), target->GetGUID().ToString(), distance, exactDistance, closeToRange);
                     return true;
-                }
 
-                if (!CanIssueMovementCommand(player, 500))
-                    return true;
+                // IssueHumanLikeFollow gates internally; see MoveAwayFromUnit above.
                 if (!IssueHumanLikeFollow(player, target, profile.preferredIdealRange, 6.0f, 500))
                     return true;
                 TC_LOG_DEBUG("playerbots.pvp.lifecycle",
@@ -3422,24 +4337,67 @@ namespace playerbot
                 player->GetGUID().ToString(), profile.label, distance, profile.preferredMinRange, profile.preferredIdealRange,
                 profile.preferredMaxPressureRange);
 
-            // Ranged bots should fully settle once they are inside their preferred
-            // firing band. Continuously following in-band keeps movement active and
-            // can suppress Auto Shot firing windows for hunters.
-            if (player->GetClass() == CLASS_HUNTER && IsHunterAutoShotBand(player, target))
-                return StopHunterAndStartAutoShot(player, target, "hold-band-autoshot");
+            // A hunter with usable range metadata was already handled by
+            // DriveHunterKiteLoop. Avoid a second in-band Auto Shot owner here.
+            if (player->GetClass() == CLASS_HUNTER)
+                return true;
 
             player->StopMoving();
-            if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+            if (WorldSession* session = player->GetSession(); session && (session->IsVirtualSession() || session->IsTransientPlayerSession()))
             {
                 player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
-                player->SendMovementFlagUpdate();
+                // Throttled/shared swim-state resync; see
+                // ResyncPlayerbotSwimStateForMovementStop for the full rationale.
+                playerbot::ResyncPlayerbotSwimStateForMovementStop(player);
             }
+            return true;
+        }
+
+        // An Assassination rogue's configured stealth opener is Garrote.  The
+        // normal melee distance-band code intentionally does not move a bot
+        // that is already in melee range, but Garrote cannot be used while the
+        // target still has the rogue in its frontal arc.  Relying exclusively
+        // on the class cast-failure recovery leaves a deadlock if that class
+        // tick is delayed or rejected: the hidden rogue has no victim and the
+        // enemy cannot detect it, so both units simply stand still.  Keep the
+        // lifecycle moving toward the required rear arc as a generic rogue
+        // opener invariant; the class action will cast Garrote once it arrives.
+        bool const isAssassinationStealthOpener =
+            player->GetClass() == CLASS_ROGUE &&
+            player->HasStealthAura() &&
+            player->HasTalent(81302, player->GetActiveSpec());
+        if (isAssassinationStealthOpener &&
+            player->IsWithinMeleeRange(target) &&
+            target->HasInArc(static_cast<float>(M_PI), player))
+        {
+            // The tactical loop runs every 50 ms. Replacing an angled Follow
+            // generator on every tick repeatedly initializes it (which calls
+            // StopMoving) and can overwrite the class action's rear-follow.
+            // Preserve the existing order long enough to initialize and move.
+            if (!CanIssueMovementCommand(player, 500))
+                return true;
+
+            ClearEatDrinkAurasForMovement(player);
+            player->GetMotionMaster()->MoveFollow(target, 1.5f, static_cast<float>(M_PI));
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                "Playerbot PvP distance band: bot={} target={} profile={} decision=assassination-opener-move-behind distance={}.",
+                player->GetGUID().ToString(), target->GetGUID().ToString(), profile.label, distance);
             return true;
         }
 
         if (distance > profile.preferredMaxPressureRange || !player->IsWithinMeleeRange(target))
         {
             bool const isStealthedMeleeOpener = IsStealthedMeleeOpener(player);
+
+            // Chase/Follow continuously repaths against a moving target. Do
+            // not replace an already-running generator on the lifecycle's
+            // 500 ms command cadence: MoveSplineInit synchronizes the server
+            // to the old spline before launching the replacement, while an
+            // observer may still be interpolating the prior packet. That
+            // discrepancy renders as a sporadic forward teleport.
+            if (HasActiveTargetRelativeMovementFor(player, target))
+                return true;
+
             if (!isStealthedMeleeOpener && !CanIssueMovementCommand(player, 500))
                 return true;
 
@@ -3447,6 +4405,12 @@ namespace playerbot
 
             if (isStealthedMeleeOpener)
             {
+                // Do not continually replace the same Follow generator. Each
+                // replacement initializes with StopMoving and can prevent the
+                // current target-relative spline from making progress.
+                if (!CanIssueMovementCommand(player, 500))
+                    return true;
+
                 // Stealth openers intentionally run without a committed victim for
                 // part of the engage. MoveChase can pause when victim linkage is
                 // absent, so use follow semantics to keep continuous closing.
@@ -3478,16 +4442,67 @@ namespace playerbot
         return true;
     }
 
+    // TEMPORARY, narrowly-scoped debugging aid for the Auto Shot investigation.
+    // It reaches opted-in playerbot diagnostic observers in the same
+    // battleground/arena instance without requiring active GM mode.
+    // Remove once Auto Shot is confirmed fixed.
+    std::unordered_map<uint64, uint32> g_AutoShotDiagLastMsByGuid;
+
+    void WhisperAutoShotDiagnosticToArena(Player* player, std::string const& message, uint32 throttleMs = 0)
+    {
+        if (!player || !player->InBattleground())
+            return;
+
+        if (throttleMs)
+        {
+            uint32 const nowMs = GameTime::GetGameTimeMS();
+            uint32& lastMs = playerbot::LockedGetOrCreate(g_AutoShotDiagLastMsByGuid, player->GetGUID().GetRawValue());
+            if (lastMs && nowMs < lastMs + throttleMs)
+                return;
+            lastMs = nowMs;
+        }
+
+        Map* map = player->FindMap();
+        if (!map)
+            return;
+
+        for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+        {
+            Player* observer = itr->GetSource();
+            bool const observerIsPlayerbot = observer &&
+                (playerbot::IsManagedRandomBot(observer) || playerbot::PlayerbotObcCloneManager::IsActiveClone(observer));
+            if (!observer || observer == player || observerIsPlayerbot ||
+                observer->GetBattlegroundId() != player->GetBattlegroundId() ||
+                !WantsPlayerbotDiagnostics(observer))
+                continue;
+
+            player->Whisper(message, LANG_UNIVERSAL, observer);
+        }
+    }
+
     bool EngageSelectedEnemyPlayer(Player* player, Unit* target, char const* reason)
     {
         if (!player || !player->IsAlive() || !target || !target->IsAlive() || !player->IsValidAttackTarget(target))
             return false;
+
+        if (playerbot::PvpCore::IsEffectivelyImmuneTarget(player, target))
+        {
+            StopDamageAgainstEffectivelyImmuneTarget(player, target);
+            target = player->InBattleground()
+                ? FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr)
+                : nullptr;
+            if (!target)
+                return false;
+        }
 
         if (IsCrowdControlledForAction(player))
         {
             player->AttackStop();
             return false;
         }
+
+        if (TryDrivePlayerbotEscapeAura(player, target))
+            return true;
 
         player->SetSelection(target->GetGUID());
 
@@ -3500,14 +4515,44 @@ namespace playerbot
         if (HoldHunterStationaryCast(player, target, "engage-selected-enemy"))
             return true;
 
-        // Ensure mounted bots immediately transition into combat posture once an
-        // enemy target is acquired. Without this, bots that don't cast right away
-        // (or rely on melee/auto attacks) can stay mounted and fail to engage.
+        // A map-wide objective (most visibly an enemy flag carrier) can select
+        // a target well beyond the range used by mount selection. Keep using
+        // mount speed for that travel instead of dismounting merely because a
+        // distant target exists; otherwise the mount selector sees a clear
+        // 100-yard area and remounts on the next class tick forever.
+        if (player->IsMounted() &&
+            !player->IsWithinDistInMap(target, playerbot::PLAYERBOT_MOUNT_ENEMY_AWARENESS_RANGE))
+        {
+            player->AttackStop();
+            return MoveTowardUnit(player, target, playerbot::PLAYERBOT_MOUNT_ENEMY_AWARENESS_RANGE) || player->isMoving();
+        }
+
+        // Inside the same awareness envelope that suppresses mounting, switch
+        // to combat posture for casts, melee attacks, and normal positioning.
         if (player->IsMounted())
             ForcePlayerbotDismount(player);
 
+        // Playerbots run tactical/lifecycle engagement every fast tick. That
+        // loop can select the same enemy immediately after a class gap-closer
+        // cast (Charge, Intercept, Rehgar's Fury, etc.) and call Attack() below
+        // before the EFFECT_MOTION_TYPE spline has delivered MovementInform.
+        // Attack() may install normal chase movement for virtual sessions,
+        // replacing the still-active leap/charge generator. Let the effect
+        // movement finish first; the class action code will start melee after
+        // the spline lands.
+        if (HasPlayerbotGapCloserInFlight(player))
+        {
+            EmitRehgarMovementGuardServerDiagnostic(player, "engage_blocked_effect");
+            return true;
+        }
+
         CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
-        bool const useMeleeAttack = !profile.primarilyRanged || profile.meleeFallbackAcceptable;
+        // "Melee fallback acceptable" means a ranged profile may fight back once
+        // an enemy has actually reached melee. It must not make a hunter begin
+        // a melee chase from its 10-yard Mongoose weave position, because that
+        // active chase generator immediately breaks the Auto Shot plant window.
+        bool const useMeleeAttack = !profile.primarilyRanged ||
+            (profile.meleeFallbackAcceptable && player->IsWithinMeleeRange(target));
         bool const isStealthedMeleeOpener = IsStealthedMeleeOpener(player);
         bool const targetInBreakableCrowdControl = target->HasBreakableByDamageCrowdControlAura();
         bool const alreadyAttackingTarget = player->GetVictim() && player->GetVictim()->GetGUID() == target->GetGUID();
@@ -3519,36 +4564,17 @@ namespace playerbot
             if (alreadyAttackingTarget)
                 player->AttackStop();
         }
-        else if (!alreadyAttackingTarget || !meleeAutoAttackActive)
+        else if (!alreadyAttackingTarget || meleeAutoAttackActive != useMeleeAttack)
             player->Attack(target, useMeleeAttack);
 
-        if (player->GetClass() == CLASS_HUNTER && profile.primarilyRanged && player->HasSpell(75))
+        // DriveHunterKiteLoop is the sole owner of Auto Shot activation,
+        // planting, range transitions, and Mongoose weave movement. Starting
+        // or canceling auto-repeat here runs before combat positioning and
+        // fought the plant state on every fast tactical tick.
+        if (player->GetClass() == CLASS_HUNTER && profile.primarilyRanged && targetInBreakableCrowdControl)
         {
-            Spell const* autoRepeatSpell = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
-            bool const autoShotActive = autoRepeatSpell && autoRepeatSpell->GetSpellInfo()->Id == 75;
-
-            if (targetInBreakableCrowdControl)
-            {
-                StopHunterAutoShotForBreakableCrowdControl(player, target, "engage-breakable-cc");
-                return DriveCombatPositioning(player, target, profile);
-            }
-
-            bool inAutoShotRange = false;
-            if (SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(75))
-            {
-                float const minAutoShotRange = autoShotInfo->GetMinRange(false);
-                float const maxAutoShotRange = autoShotInfo->GetMaxRange(false);
-                float const distance = player->GetDistance(target);
-                inAutoShotRange = player->IsWithinLOSInMap(target) && distance > minAutoShotRange && distance <= maxAutoShotRange;
-            }
-
-            if (!inAutoShotRange)
-            {
-                if (autoShotActive)
-                    player->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
-            }
-            else if (!autoShotActive)
-                player->CastSpell(target, 75, false);
+            StopHunterAutoShotForBreakableCrowdControl(player, target, "engage-breakable-cc");
+            return DriveCombatPositioning(player, target, profile);
         }
 
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
@@ -3594,6 +4620,14 @@ namespace playerbot
         if (!battleground || !player)
             return false;
 
+        BattlegroundNodeObjective nodeObjective;
+        if (battleground->GetNodeObjective(player->GetGUID(), nodeObjective))
+        {
+            destination = nodeObjective.Location;
+            ApplyDeterministicObjectiveOffset(battleground, player, destination);
+            return true;
+        }
+
         if (IsWarsongGulch(player))
         {
             // Midfield brawl behavior for WSG: collapse both teams toward center map.
@@ -3630,6 +4664,16 @@ namespace playerbot
 
 namespace playerbot
 {
+    void BattlegroundTacticalActions::DelayFlagPickup(Player* player, uint32 delayMs)
+    {
+        if (!player || !delayMs)
+            return;
+
+        DroppedFlagPickupDelay& delay = playerbot::LockedGetOrCreate(g_DroppedFlagPickupDelayByBotGuid, player->GetGUID().GetRawValue());
+        delay.flagGuid.Clear();
+        delay.pickupNotBeforeMs = GameTime::GetGameTimeMS() + delayMs;
+    }
+
     bool BattlegroundLifecycleActions::Execute(Player* player, BattlegroundLifecycleContext const& context)
     {
         if (!player || !context.lifecycleEnabled || !IsLifecycleGateEnabled())
@@ -3688,6 +4732,11 @@ namespace playerbot
             didExecute = HandleInProgressStatusPrimitive(player) || didExecute;
 
         return didExecute;
+    }
+
+    bool BattlegroundLifecycleActions::HandleDeathPrimitive(Player* player)
+    {
+        return HandleBattlegroundDeathState(player);
     }
 
     bool BattlegroundLifecycleActions::JoinQueuePrimitive(Player* player)
@@ -3773,12 +4822,16 @@ namespace playerbot
 
         if (battleground->GetStatus() == STATUS_WAIT_JOIN)
         {
-            ForceHoldPlayerAtStartDuringWaitJoin(player);
+            // Soulwell pickup temporarily owns prep-room movement; otherwise
+            // the ordinary start-position hold would drag bots away from the
+            // well every lifecycle tick.
+            if (!TryAcquireHealthstoneFromSoulwell(player))
+                ForceHoldPlayerAtStartDuringWaitJoin(player);
 
             if (!HasAnyRealHumanInterestInBattleground(battleground->GetTypeID()))
             {
                 battleground->EndBattleground(PVP_TEAM_NEUTRAL);
-                g_BattlegroundNoHumanSinceMsByInstance.erase(BuildBattlegroundInstanceKey(battleground));
+                playerbot::LockedErase(g_BattlegroundNoHumanSinceMsByInstance, BuildBattlegroundInstanceKey(battleground));
                 TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                     "Playerbot PvP lifecycle wait-join end due to no real human battleground interest: guid={} bgTypeId={} instanceId={}.",
                     player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
@@ -3789,14 +4842,14 @@ namespace playerbot
             if (!BattlegroundHasAnyRealHumanPlayers(player))
             {
                 uint32 const nowMs = GameTime::GetGameTimeMS();
-                uint32& noHumanSinceMs = g_BattlegroundNoHumanSinceMsByInstance[battlegroundInstanceKey];
+                uint32& noHumanSinceMs = playerbot::LockedGetOrCreate(g_BattlegroundNoHumanSinceMsByInstance, battlegroundInstanceKey);
                 if (!noHumanSinceMs)
                     noHumanSinceMs = nowMs;
 
                 if (nowMs >= noHumanSinceMs + PLAYERBOT_BG_WAIT_JOIN_NO_HUMAN_END_DELAY_MS && !ShouldDeferBattlegroundLeaveForTeleportAck(player))
                 {
                     battleground->EndBattleground(PVP_TEAM_NEUTRAL);
-                    g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
+                    playerbot::LockedErase(g_BattlegroundNoHumanSinceMsByInstance, battlegroundInstanceKey);
                     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                         "Playerbot PvP lifecycle wait-join end due to no real humans: guid={} bgTypeId={} instanceId={}.",
                         player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
@@ -3804,7 +4857,7 @@ namespace playerbot
                 }
             }
             else
-                g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
+                playerbot::LockedErase(g_BattlegroundNoHumanSinceMsByInstance, battlegroundInstanceKey);
 
             TryRefillManagedScmSlots(player, battleground);
             return true;
@@ -3813,7 +4866,7 @@ namespace playerbot
         if (battleground->GetStatus() == STATUS_WAIT_LEAVE)
         {
             SetWaitJoinMovementLock(player, false);
-            g_BattlegroundNoHumanSinceMsByInstance.erase(BuildBattlegroundInstanceKey(battleground));
+            playerbot::LockedErase(g_BattlegroundNoHumanSinceMsByInstance, BuildBattlegroundInstanceKey(battleground));
 
             if (ShouldDeferBattlegroundLeaveForTeleportAck(player))
                 return false;
@@ -3835,7 +4888,7 @@ namespace playerbot
 
         if (battleground->GetStatus() != STATUS_IN_PROGRESS)
         {
-            g_BattlegroundNoHumanSinceMsByInstance.erase(BuildBattlegroundInstanceKey(battleground));
+            playerbot::LockedErase(g_BattlegroundNoHumanSinceMsByInstance, BuildBattlegroundInstanceKey(battleground));
             return false;
         }
 
@@ -3846,7 +4899,7 @@ namespace playerbot
         if (!HasAnyRealHumanInterestInBattleground(battleground->GetTypeID()))
         {
             battleground->EndBattleground(PVP_TEAM_NEUTRAL);
-            g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
+            playerbot::LockedErase(g_BattlegroundNoHumanSinceMsByInstance, battlegroundInstanceKey);
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                 "Playerbot PvP lifecycle end due to no real human battleground interest: guid={} bgTypeId={} instanceId={}.",
                 player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
@@ -3856,14 +4909,14 @@ namespace playerbot
         if (!BattlegroundHasAnyRealHumanPlayers(player))
         {
             uint32 const nowMs = GameTime::GetGameTimeMS();
-            uint32& noHumanSinceMs = g_BattlegroundNoHumanSinceMsByInstance[battlegroundInstanceKey];
+            uint32& noHumanSinceMs = playerbot::LockedGetOrCreate(g_BattlegroundNoHumanSinceMsByInstance, battlegroundInstanceKey);
             if (!noHumanSinceMs)
                 noHumanSinceMs = nowMs;
 
             if (nowMs >= noHumanSinceMs + PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS && !ShouldDeferBattlegroundLeaveForTeleportAck(player))
             {
                 battleground->EndBattleground(PVP_TEAM_NEUTRAL);
-                g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
+                playerbot::LockedErase(g_BattlegroundNoHumanSinceMsByInstance, battlegroundInstanceKey);
                 TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                     "Playerbot PvP lifecycle end due to no real human participants: guid={} bgTypeId={} instanceId={}.",
                     player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
@@ -3871,7 +4924,7 @@ namespace playerbot
             }
         }
         else
-            g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
+            playerbot::LockedErase(g_BattlegroundNoHumanSinceMsByInstance, battlegroundInstanceKey);
 
         TryRefillManagedScmSlots(player, battleground);
 
@@ -3920,6 +4973,90 @@ namespace playerbot
 
         if (!player->IsAlive())
             return false;
+
+        // The battleground fast tactical tick runs every 50 ms and is a
+        // separate entry point from lifecycle combat positioning. It must
+        // yield at its top-level boundary while an effect-driven charge/leap
+        // owns movement; otherwise objective/pursuit actions can Clear() the
+        // effect generator before its arrival MovementInform is delivered.
+        if (HasPlayerbotGapCloserInFlight(player))
+        {
+            EmitRehgarMovementGuardServerDiagnostic(player, "tactical_tick_blocked_effect", 0);
+            return true;
+        }
+
+        // Tactical actions include buff use, pursuit, and objective movement;
+        // none should establish a stationary action position on hazardous
+        // ground. Continue an active crossing or escape before doing anything.
+        if (TryMoveOutOfHazardousLiquid(player))
+            return true;
+
+        // Lifecycle creates the Auto Shot plant after this fast tactical pass.
+        // On the next 50 ms pass, every tactical movement source must yield or
+        // the core sees movement again before the 434 ms release window ends.
+        if (playerbot::IsHunterAutoShotPlantActive(player))
+            return true;
+
+        // A root cannot execute objective, pursuit, or spacing movement. A
+        // snare can: melee still chases, while ranged retreat continues behind
+        // instant casts and is stopped by the class executor for hard casts.
+        if (playerbot::PvpCore::IsMovementPreventedByRoot(player))
+        {
+            if (MotionMaster* motionMaster = player->GetMotionMaster())
+                motionMaster->Clear(MOTION_SLOT_ACTIVE);
+            StopVirtualPlayerbotMovement(player);
+            return false;
+        }
+
+        // The node-capture OPEN_LOCK spell owns the bot until it completes or
+        // is interrupted by normal spell rules. Tactical movement and combat
+        // otherwise restart/cancel the ten-second interaction every fast tick.
+        if (playerbot::PvpClassActions::IsBattlegroundObjectInteractionInProgress(player))
+            return true;
+
+        // Combat does not make a nearby flag optional. Once an eligible flag
+        // is within ten yards, keep its approach/click route ahead of combat
+        // positioning. Class execution uses the matching nearby value to allow
+        // instant attacks while preventing range movement from replacing this
+        // short objective move.
+        if (Battleground* battleground = player->GetBattleground();
+            battleground && battleground->GetStatus() == STATUS_IN_PROGRESS &&
+            !playerbot::PvpCore::IsBattlegroundFlagCarrier(player))
+        {
+            ObjectGuid const pickupGuid = battleground->GetFlagPickupGUID(player->GetGUID());
+            if (!pickupGuid.IsEmpty())
+            {
+                GameObject* flag = player->FindMap() ? player->FindMap()->GetGameObject(pickupGuid) : nullptr;
+                if (flag && flag->IsInWorld() && player->IsWithinDistInMap(flag, 10.0f))
+                {
+                    TryAdvanceFlagObjective(player, battleground);
+                    return true;
+                }
+            }
+        }
+
+        // Stock up during the preparation window (or shortly afterward if a
+        // bot joined late). This uses the summoned object's owner, range, raid
+        // restriction, lifetime, and 25-charge counter.
+        if (TryAcquireHealthstoneFromSoulwell(player))
+            return true;
+
+        // Lightwell recovery owns movement for injured teammates, regardless of
+        // their current combat objective. Use the actual summoned spellcaster
+        // object so its party restriction, charges, and Renew cast stay in the
+        // normal GameObject::Use path. Class execution separately permits only
+        // instant spells while this path is active.
+        if (playerbot::PvpCore::ShouldSeekLightwell(player))
+        {
+            if (GameObject* lightwell = playerbot::PvpCore::FindUsableLightwell(player, 20.0f))
+            {
+                if (!lightwell->IsAtInteractDistance(player))
+                    return IssueMovePointThrottled(player, lightwell->GetPosition(), 4.0f, 500) || player->isMoving();
+
+                lightwell->Use(player);
+                return true;
+            }
+        }
 
         BreakExpiredHunterFeignDeath(player);
 
@@ -4010,6 +5147,37 @@ namespace playerbot
         }
         }
 
+        if (context.objective.type == BattlegroundObjectiveType::CaptureFlag)
+        {
+            bool const isFlagCarrier = playerbot::PvpCore::IsBattlegroundFlagCarrier(player);
+
+            // Carrying the flag is unconditional: never replace the capture
+            // route with midfield combat, even when enemies are nearby.
+            if (isFlagCarrier)
+            {
+                TryAdvanceFlagObjective(player, battleground);
+                return true;
+            }
+
+            // A non-carrier heading for a live flag fights local enemies first,
+            // but does not abandon the objective for a distant map-wide chase.
+            if (context.nearbyEnemyActive)
+            {
+                float const localCombatRange = std::max(playerbot::PvpCore::GetConfig().longRange, 35.0f);
+                if (Player* nearbyEnemy = FindNearestEnemyBattlegroundPlayer(player, localCombatRange, nullptr, nullptr))
+                {
+                    EngageSelectedEnemyPlayer(player, nearbyEnemy, "flag-runner-midfield-pressure");
+                    return true;
+                }
+            }
+
+            // With midfield clear, commit fluidly to the navmesh flag route.
+            // Class actions share the same nearby-enemy decision and therefore
+            // cannot replace this MovePoint with alternating combat movement.
+            if (TryAdvanceFlagObjective(player, battleground))
+                return true;
+        }
+
         if (player->IsInCombat())
         {
             if (context.flagCarrierDirective == FlagCarrierDirective::AttackEnemyCarrier)
@@ -4018,6 +5186,17 @@ namespace playerbot
                         return true;
 
             return EngageNearestEnemyPlayer(player, GetAggressiveCombatScanDistance(player, 100.0f));
+        }
+
+        if ((context.objective.type == BattlegroundObjectiveType::AssaultNode ||
+            context.objective.type == BattlegroundObjectiveType::DefendNode))
+        {
+            // Fight threats already near the assigned base, but do not let the
+            // generic map-wide enemy chase pull node attackers/defenders away.
+            if (EngageNearestEnemyPlayer(player, 35.0f))
+                return true;
+            if (TryAdvanceNodeObjective(player, battleground))
+                return true;
         }
 
         if (TryPursueNearestEnemyInBattleground(player))
@@ -4257,6 +5436,9 @@ namespace playerbot
             return false;
 
         BreakExpiredHunterFeignDeath(player);
+
+        if (playerbot::IsHunterAutoShotPlantActive(player))
+            return true;
 
         if (!CanIssueBotMovement(player))
             return false;

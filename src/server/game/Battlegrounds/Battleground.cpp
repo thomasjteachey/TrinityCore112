@@ -19,6 +19,7 @@
 #include "ArenaScore.h"
 #include "BattlegroundMgr.h"
 #include "BattlegroundScore.h"
+#include "Chat.h"
 #include "ChatTextBuilder.h"
 #include "Configuration/Config.h"
 #include "Creature.h"
@@ -40,12 +41,14 @@
 #include "TemporarySummon.h"
 #include "Transport.h"
 #include "Util.h"
+#include "Weather.h"
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
 #include "WorldSession.h"
 #include "Item.h"
 #include <algorithm>
 #include <cstdarg>
+#include <vector>
 
 namespace
 {
@@ -67,6 +70,20 @@ bool HasAnyNonVirtualHumanParticipant(Battleground const* battleground)
         if (session && !session->IsVirtualSession())
             return true;
     }
+
+    // A real custom-game spectator is still actively occupying and observing
+    // the match. Do not auto-end a bot-populated battleground merely because
+    // the only connected human is stored outside m_Players in m_Spectators.
+    if (battleground->IsCustomGame())
+        for (Player const* spectator : battleground->GetSpectators())
+        {
+            if (!spectator || !spectator->IsInWorld())
+                continue;
+
+            WorldSession const* session = spectator->GetSession();
+            if (session && !session->IsVirtualSession())
+                return true;
+        }
 
     return false;
 }
@@ -111,6 +128,14 @@ void Battleground::BroadcastWorker(Do& _do)
     for (BattlegroundPlayerMap::const_iterator itr = m_Players.begin(); itr != m_Players.end(); ++itr)
         if (Player* player = _GetPlayer(itr, "BroadcastWorker"))
             _do(player);
+
+    // Custom-game spectators are not members of m_Players, but they still
+    // need localized battleground announcements such as start countdowns
+    // and objective pickup/drop/capture messages.
+    if (m_IsCustomGame)
+        for (Player* spectator : m_Spectators)
+            if (spectator && spectator->IsInWorld() && spectator->GetBattlegroundId() == GetInstanceID())
+                _do(spectator);
 }
 
 Battleground::Battleground()
@@ -144,6 +169,10 @@ Battleground::Battleground()
     m_LevelMax          = 0;
     m_InBGFreeSlotQueue = false;
     m_SetDeleteThis     = false;
+    m_IsCustomGame      = false;
+    m_CustomGameBotOnlyPreparation = false;
+    m_CustomGamePendingCloneCount = 0;
+    m_CustomRules       = BattlegroundCustomRules();
 
     m_MaxPlayersPerTeam = 0;
     m_MaxPlayers        = 0;
@@ -221,6 +250,13 @@ void Battleground::Update(uint32 diff)
 
     if (!GetPlayersSize() && !IsReplay())
     {
+        // Bot-only custom matches create their transient combatants after the
+        // battleground map exists. Keep the empty shell alive while those
+        // asynchronous clone loads are pending instead of deleting it before
+        // the first participant can be inserted.
+        if (HasCustomGamePendingClones())
+            return;
+
         //BG is empty
         // if there are no players invited, delete BG
         // this will delete arena or bg object, where any player entered
@@ -239,7 +275,10 @@ void Battleground::Update(uint32 diff)
     switch (GetStatus())
     {
         case STATUS_WAIT_JOIN:
-            if (GetPlayersSize())
+            // Do not begin the countdown with a partially provisioned custom
+            // roster. In an arena, starting after only one team's first clone
+            // arrives can immediately satisfy the opposing-team win check.
+            if (GetPlayersSize() && !HasCustomGamePendingClones())
             {
                 _ProcessJoin(diff);
                 _CheckSafePositions(diff);
@@ -253,7 +292,7 @@ void Battleground::Update(uint32 diff)
                 else if ((m_NoNonVirtualHumanElapsed += diff) >= NO_NON_VIRTUAL_HUMAN_END_DELAY_MS)
                 {
                     TC_LOG_INFO("bg.battleground",
-                        "Battleground::Update ending map={} instance={} because no non-virtual participants remained for {} ms.",
+                        "Battleground::Update ending map={} instance={} because no non-virtual participants or custom-game spectators remained for {} ms.",
                         GetMapId(), GetInstanceID(), NO_NON_VIRTUAL_HUMAN_END_DELAY_MS);
                     EndNow();
                     return;
@@ -311,7 +350,12 @@ inline void Battleground::_CheckSafePositions(uint32 diff)
         {
             if (Player* player = ObjectAccessor::FindPlayer(itr->first))
             {
-                if (player->IsGameMaster())
+                // Spectators are not combatants and may intentionally move
+                // outside either team's closed-gate preparation area. They
+                // must never be snapped to a team start by the preparation
+                // anti-exploit check, even if stale state temporarily leaves
+                // one present in m_Players during a worldport transition.
+                if (player->IsGameMaster() || player->IsSpectator())
                     continue;
 
                 Position pos = player->GetPosition();
@@ -532,10 +576,29 @@ inline void Battleground::_ProcessJoin(uint32 diff)
             return;
         }
 
-        SetStartDelayTime(StartDelayTimes[BG_STARTING_EVENT_FIRST]);
-        // First start warning - 2 or 1 minute
-        if (StartMessageIds[BG_STARTING_EVENT_FIRST])
-            SendBroadcastText(StartMessageIds[BG_STARTING_EVENT_FIRST], CHAT_MSG_BG_SYSTEM_NEUTRAL);
+        if (IsCustomGame() && HasCustomGameBotOnlyPreparation())
+        {
+            // A custom match whose combat roster contains only playerbots or
+            // clones does not need the full human preparation window. Mark
+            // the longer warning stages complete so they cannot announce
+            // misleading 30/60-second countdowns on the following ticks.
+            m_Events |= BG_STARTING_EVENT_2;
+            m_Events |= BG_STARTING_EVENT_3;
+            SetStartDelayTime(BG_START_DELAY_10S);
+
+            // Arenas have an exact ten-second broadcast text. Battleground
+            // third-stage texts are commonly fifteen or thirty seconds, so
+            // suppress those rather than announce an incorrect duration.
+            if (isArena() && StartMessageIds[BG_STARTING_EVENT_THIRD])
+                SendBroadcastText(StartMessageIds[BG_STARTING_EVENT_THIRD], CHAT_MSG_BG_SYSTEM_NEUTRAL);
+        }
+        else
+        {
+            SetStartDelayTime(StartDelayTimes[BG_STARTING_EVENT_FIRST]);
+            // First start warning - 2 or 1 minute
+            if (StartMessageIds[BG_STARTING_EVENT_FIRST])
+                SendBroadcastText(StartMessageIds[BG_STARTING_EVENT_FIRST], CHAT_MSG_BG_SYSTEM_NEUTRAL);
+        }
     }
     // After 1 minute or 30 seconds, warning is signaled
     else if (GetStartDelayTime() <= StartDelayTimes[BG_STARTING_EVENT_SECOND] && !(m_Events & BG_STARTING_EVENT_2))
@@ -624,6 +687,14 @@ void Battleground::SendPacketToAll(WorldPacket const* packet)
     for (BattlegroundPlayerMap::const_iterator itr = m_Players.begin(); itr != m_Players.end(); ++itr)
         if (Player* player = _GetPlayer(itr, "SendPacketToAll"))
             player->SendDirectMessage(packet);
+
+    // Custom-game spectators live outside m_Players. Forward shared BG
+    // packets so their WorldStateUI, sounds, and other match-wide state
+    // remain synchronized with both custom arenas and custom battlegrounds.
+    if (m_IsCustomGame)
+        for (Player* spectator : m_Spectators)
+            if (spectator && spectator->IsInWorld() && spectator->GetBattlegroundId() == GetInstanceID())
+                spectator->SendDirectMessage(packet);
 }
 
 void Battleground::SendPacketToTeam(uint32 TeamID, WorldPacket const* packet, Player* sender, bool self)
@@ -686,6 +757,9 @@ void Battleground::RemoveAuraOnTeam(uint32 SpellID, uint32 TeamID)
 
 void Battleground::CenturionRewardHonorToTeam(uint32 Honor, uint32 TeamID)
 {
+    if (m_IsCustomGame)
+        return;
+
     for (BattlegroundPlayerMap::const_iterator itr = m_Players.begin(); itr != m_Players.end(); ++itr)
         if (Player* player = _GetPlayerForTeam(TeamID, itr, "CenturionRewardHonorToTeam"))
             player->ModifyHonorPoints(int32(Honor));
@@ -693,6 +767,9 @@ void Battleground::CenturionRewardHonorToTeam(uint32 Honor, uint32 TeamID)
 
 void Battleground::RewardHonorToTeam(uint32 Honor, uint32 TeamID)
 {
+    if (m_IsCustomGame)
+        return;
+
     for (BattlegroundPlayerMap::const_iterator itr = m_Players.begin(); itr != m_Players.end(); ++itr)
         if (Player* player = _GetPlayerForTeam(TeamID, itr, "RewardHonorToTeam"))
             UpdatePlayerScore(player, SCORE_BONUS_HONOR, Honor);
@@ -700,6 +777,9 @@ void Battleground::RewardHonorToTeam(uint32 Honor, uint32 TeamID)
 
 void Battleground::RewardReputationToTeam(uint32 faction_id, uint32 Reputation, uint32 TeamID)
 {
+    if (m_IsCustomGame)
+        return;
+
     FactionEntry const* factionEntry = sFactionStore.LookupEntry(faction_id);
     if (!factionEntry)
         return;
@@ -783,7 +863,7 @@ void Battleground::EndBattleground(uint32 winner)
 
     CharacterDatabasePreparedStatement* stmt = nullptr;
     uint64 battlegroundId = 1;
-    if (isBattleground() && sWorld->getBoolConfig(CONFIG_BATTLEGROUND_STORE_STATISTICS_ENABLE))
+    if (!m_IsCustomGame && isBattleground() && sWorld->getBoolConfig(CONFIG_BATTLEGROUND_STORE_STATISTICS_ENABLE))
     {
         stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_PVPSTATS_MAXID);
         PreparedQueryResult result = CharacterDatabase.Query(stmt);
@@ -838,7 +918,8 @@ void Battleground::EndBattleground(uint32 winner)
         uint32 loser_money = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_MONEY_LOSER);
         uint32 winner_arena = player->GetRandomWinner() ? sWorld->getIntConfig(CONFIG_BG_REWARD_WINNER_ARENA_LAST) : sWorld->getIntConfig(CONFIG_BG_REWARD_WINNER_ARENA_FIRST);
 
-        if (isBattleground() && sWorld->getBoolConfig(CONFIG_BATTLEGROUND_STORE_STATISTICS_ENABLE))
+        bool const transientPlayer = player->GetSession() && player->GetSession()->IsTransientPlayerSession();
+        if (!m_IsCustomGame && !transientPlayer && isBattleground() && sWorld->getBoolConfig(CONFIG_BATTLEGROUND_STORE_STATISTICS_ENABLE))
         {
             BattlegroundScoreMap::const_iterator score = PlayerScores.find(player->GetGUID().GetCounter());
             if (score == PlayerScores.end())
@@ -888,22 +969,28 @@ void Battleground::EndBattleground(uint32 winner)
         {
             if (team == winner)
             {
-                player->RewardHonor(nullptr, 1, winner_honor);
-                if (CanAwardArenaPoints())
-                    player->ModifyArenaPoints(winner_arena);
-                if (!player->GetRandomWinner())
-                    player->SetRandomWinner(true);
+                // Private custom games retain the normal gold payout, but
+                // never grant progression rewards that can be farmed.
+                if (!m_IsCustomGame)
+                {
+                    player->RewardHonor(nullptr, 1, winner_honor);
+                    if (CanAwardArenaPoints())
+                        player->ModifyArenaPoints(winner_arena);
+                    if (!player->GetRandomWinner())
+                        player->SetRandomWinner(true);
 
-                player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_WIN_BG, player->GetMapId());
+                    player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_WIN_BG, player->GetMapId());
+
+                    bool canRestoreMark = isArena() || GetTypeID(true) == BATTLEGROUND_WS || GetTypeID(true) == BATTLEGROUND_SCM || GetTypeID(true) == BATTLEGROUND_BRT || GetTypeID(true) == BATTLEGROUND_OBC;
+                    if (canRestoreMark && Trinity::Custom::ConsumeEligibleDepletedMarks(player, 1))
+                        player->AddItem(Trinity::Custom::ITEM_RESTORED_MARK_OF_HONOR, 1); // restored mark of honor
+                }
                 player->ModifyMoney(winner_money);
-
-                bool canRestoreMark = isArena() || GetTypeID(true) == BATTLEGROUND_WS || GetTypeID(true) == BATTLEGROUND_SCM || GetTypeID(true) == BATTLEGROUND_BRT;
-                if (canRestoreMark && Trinity::Custom::ConsumeEligibleDepletedMarks(player, 1))
-                    player->AddItem(Trinity::Custom::ITEM_RESTORED_MARK_OF_HONOR, 1); // restored mark of honor
             }
             else
             {
-                player->RewardHonor(nullptr, 1, loser_honor);
+                if (!m_IsCustomGame)
+                    player->RewardHonor(nullptr, 1, loser_honor);
                 player->ModifyMoney(loser_money);
             }
         }
@@ -917,9 +1004,31 @@ void Battleground::EndBattleground(uint32 winner)
         WorldPacket data;
         sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, this, player->GetBattlegroundQueueIndex(bgQueueTypeId), STATUS_IN_PROGRESS, TIME_TO_AUTOREMOVE, GetStartTime(), GetArenaType(), player->GetBGTeam());
         player->SendDirectMessage(&data);
-        player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_BATTLEGROUND, player->GetMapId());
+        if (!m_IsCustomGame)
+            player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_BATTLEGROUND, player->GetMapId());
         sScriptMgr->OnBattlegroundEnd(this, winner);
     }
+
+    // Custom-game spectators live outside m_Players, so the loop above never
+    // hands them the final scoreboard. Send it so their client pops the
+    // end-of-match score frame (the winner byte in the log packet drives it)
+    // just like it does for combatants. Arenas are excluded: see the isArena()
+    // guard in SendSpectatorBattlefieldStatusTo for why an ACTIVE-arena status
+    // packet breaks spectator nameplate coloring.
+    if (m_IsCustomGame && !isArena())
+        for (Player* spectator : m_Spectators)
+        {
+            if (!spectator || !spectator->IsInWorld() || spectator->GetBattlegroundId() != GetInstanceID())
+                continue;
+            if (!spectator->GetSession() || spectator->GetSession()->IsVirtualSession())
+                continue;
+
+            spectator->SendDirectMessage(&pvpLogData);
+
+            WorldPacket data;
+            sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, this, 0, STATUS_IN_PROGRESS, TIME_TO_AUTOREMOVE, GetStartTime(), GetArenaType(), spectator->GetBGTeam());
+            spectator->SendDirectMessage(&data);
+        }
 }
 
 uint32 Battleground::GetBonusHonorFromKill(uint32 kills) const
@@ -963,6 +1072,8 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
 
     if (player)
     {
+        RemoveSpectator(player);
+
         // should remove spirit of redemption
         if (player->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION))
             player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
@@ -1036,7 +1147,7 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
             !HasAnyNonVirtualHumanParticipant(this))
         {
             TC_LOG_DEBUG("bg.battleground",
-                "Battleground::RemovePlayerAtLeave forced end: map={} instance={} no non-virtual participants remain.",
+                "Battleground::RemovePlayerAtLeave forced end: map={} instance={} no non-virtual participants or custom-game spectators remain.",
                 GetMapId(), GetInstanceID());
             EndBattleground(PVP_TEAM_NEUTRAL);
         }
@@ -1048,6 +1159,9 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
         player->SetBattlegroundId(0, BATTLEGROUND_TYPE_NONE);  // We're not in BG.
         // reset destination bg team
         player->SetBGTeam(0);
+
+        if (HasCustomWeatherOverride())
+            Weather::SendFineWeatherUpdateToPlayer(player);
 
         // remove all criterias on bg leave
         player->ResetAchievementCriteria(ACHIEVEMENT_CRITERIA_CONDITION_BG_MAP, GetMapId(), true);
@@ -1099,7 +1213,8 @@ void Battleground::StartBattleground()
     SetStartTime(0);
     SetLastResurrectTime(0);
     // add BG to free slot queue
-    AddToBGFreeSlotQueue();
+    if (!m_IsCustomGame)
+        AddToBGFreeSlotQueue();
 
     // add bg to update list
     // This must be done here, because we need to have already invited some players when first BG::Update() method is executed
@@ -1203,6 +1318,18 @@ bool Battleground::SkipStartDelay()
 
 void Battleground::AddPlayer(Player* player)
 {
+    if (m_IsCustomGame && player->IsSpectator())
+    {
+        // Keep every custom-game spectator on one deterministic viewing side.
+        // This is not participation: spectators remain in m_Spectators only.
+        player->SetBGTeam(ALLIANCE);
+        player->SetFactionForRace(RACE_HUMAN);
+        AddSpectator(player);
+        player->SendInitWorldStates(player->GetZoneId(), player->GetAreaId());
+        SendSpectatorBattlefieldStatusTo(player);
+        return;
+    }
+
     // remove afk from player
     if (player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_AFK))
         player->ToggleAFK();
@@ -1215,6 +1342,12 @@ void Battleground::AddPlayer(Player* player)
     {
         player->SetFactionForRace(RACE_BLOODELF);
     }
+
+    // Battleground participation itself is authoritative PvP state. Do not
+    // rely on a later zone update to force the flag: transient playerbots and
+    // custom-game clones are inserted directly into the map, and a stale PvP
+    // end timer can otherwise turn their overhead names blue mid-match.
+    player->UpdatePvP(true, true);
 
     BattlegroundPlayer bp;
     bp.OfflineRemoveTime = 0;
@@ -1237,6 +1370,7 @@ void Battleground::AddPlayer(Player* player)
     {
         m_HasEverHadNonVirtualHumanParticipant = true;
         m_NoNonVirtualHumanElapsed = 0;
+        SendCustomGameRulesTo(player);
     }
 
     WorldPacket data;
@@ -1277,6 +1411,49 @@ void Battleground::AddPlayer(Player* player)
     // Relying only on zone-change driven updates can delay top-frame UI setup
     // on maps that report transitional/non-canonical zone ids near spawn.
     player->SendInitWorldStates(player->GetZoneId(), player->GetAreaId());
+}
+
+void Battleground::SendCustomGameRulesTo(Player* player) const
+{
+    if (!m_IsCustomGame || !player || !player->GetSession() || player->GetSession()->IsVirtualSession())
+        return;
+
+    uint32 const resurrectionSeconds = (GetResurrectionInterval() + IN_MILLISECONDS - 1) / IN_MILLISECONDS;
+    std::string const message = "CCGAME\tREZ:" + std::to_string(resurrectionSeconds);
+    WorldPacket data;
+    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message, 0);
+    player->SendDirectMessage(&data);
+}
+
+void Battleground::SendSpectatorBattlefieldStatusTo(Player* player)
+{
+    if (!player || !player->GetSession() || player->GetSession()->IsVirtualSession())
+        return;
+
+    // Arenas are excluded: telling a spectator's client the battlefield is an
+    // ACTIVE arena (rather than leaving it in its default not-active state)
+    // switches the client's nameplate coloring from plain faction-reaction
+    // (green/red, correct here since custom-arena participants keep real
+    // Horde/Alliance factions) to Green-Team/Gold-Team arena coloring, which
+    // it cannot resolve for a spectator who isn't in either raid group -- the
+    // observed symptom was every participant's name rendering blue. Regular
+    // (non-arena) custom games don't hit this: isArena() is already false, so
+    // the client never enters that coloring mode regardless of this packet.
+    if (isArena())
+        return;
+
+    // Spectators bypass the whole queue system, so none of the normal senders
+    // (queue invite, port opcode, CMSG_BATTLEFIELD_STATUS queue loop) ever tell
+    // their client the battleground is active. Without an ACTIVE status the
+    // client keeps the scoreboard toggle and the minimap battlefield icon
+    // disabled. Queue slot 0 is safe: a spectator holds no real queue entries.
+    WorldPacket data;
+    sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, this, 0, STATUS_IN_PROGRESS, GetEndTime(), GetStartTime(), GetArenaType(), player->GetBGTeam());
+    player->SendDirectMessage(&data);
+
+    // Seed the scoreboard so the first toggle isn't empty.
+    BuildPvPLogDataPacket(data);
+    player->SendDirectMessage(&data);
 }
 
 // this method adds player to his team's bg group, or sets his correct group if player is already in bg group
@@ -1370,7 +1547,7 @@ void Battleground::EventPlayerLoggedOut(Player* player)
 // This method should be called only once ... it adds pointer to queue
 void Battleground::AddToBGFreeSlotQueue()
 {
-    if (!m_InBGFreeSlotQueue && isBattleground())
+    if (!m_IsCustomGame && !m_InBGFreeSlotQueue && isBattleground())
     {
         sBattlegroundMgr->AddToBGFreeSlotQueue(m_TypeID, this);
         m_InBGFreeSlotQueue = true;
@@ -1485,7 +1662,17 @@ void Battleground::BuildPvPLogDataPacket(WorldPacket& data)
 {
     uint8 type = (isArena() ? 1 : 0);
 
-    data.Initialize(MSG_PVP_LOG_DATA, 1 + 1 + 4 + 40 * GetPlayerScoresSize());
+    // Battleground subclasses may create a score entry after the base AddPlayer
+    // rejected a spectator. Only active participants belong in the client
+    // scoreboard; custom-game spectators are deliberately kept outside
+    // m_Players.
+    std::vector<BattlegroundScore*> participantScores;
+    participantScores.reserve(PlayerScores.size());
+    for (auto const& score : PlayerScores)
+        if (m_Players.find(score.second->PlayerGuid) != m_Players.end())
+            participantScores.push_back(score.second);
+
+    data.Initialize(MSG_PVP_LOG_DATA, 1 + 1 + 4 + 40 * participantScores.size());
     data << uint8(type);                                // type (battleground = 0 / arena = 1)
 
     if (type)                                           // arena
@@ -1505,9 +1692,9 @@ void Battleground::BuildPvPLogDataPacket(WorldPacket& data)
     else
         data << uint8(0);                      // bg not ended
 
-    data << uint32(GetPlayerScoresSize());
-    for (auto const& score : PlayerScores)
-        score.second->AppendToPacket(data);
+    data << uint32(participantScores.size());
+    for (BattlegroundScore* score : participantScores)
+        score->AppendToPacket(data);
 }
 
 bool Battleground::UpdatePlayerScore(Player* player, uint32 type, uint32 value, bool doAddHonor)
@@ -1516,7 +1703,7 @@ bool Battleground::UpdatePlayerScore(Player* player, uint32 type, uint32 value, 
     if (itr == PlayerScores.end()) // player not found...
         return false;
 
-    if (type == SCORE_BONUS_HONOR && doAddHonor && isBattleground())
+    if (type == SCORE_BONUS_HONOR && doAddHonor && isBattleground() && !m_IsCustomGame)
         player->RewardHonor(nullptr, 1, value); // RewardHonor calls UpdatePlayerScore with doAddHonor = false
     else
     {
@@ -2017,7 +2204,8 @@ void Battleground::HandleKillPlayer(Player* victim, Player* killer)
     {
         // To be able to remove insignia -- ONLY IN Battlegrounds
         victim->SetUnitFlag(UNIT_FLAG_SKINNABLE);
-        RewardXPAtKill(killer, victim);
+        if (!m_IsCustomGame)
+            RewardXPAtKill(killer, victim);
     }
 }
 
@@ -2029,6 +2217,66 @@ uint32 Battleground::GetPlayerTeam(ObjectGuid guid) const
     if (itr != m_Players.end())
         return itr->second.Team;
     return 0;
+}
+
+bool Battleground::ShouldShowFlagOnMapTo(Player const* viewer, TeamId flagTeam) const
+{
+    if (!m_IsCustomGame || !viewer)
+        return true;
+
+    uint32 viewerTeam = viewer->GetBGTeam();
+    if (viewerTeam != ALLIANCE && viewerTeam != HORDE)
+        viewerTeam = viewer->GetTeam();
+
+    TeamId const viewerTeamId = TeamId(GetTeamIndexByTeamId(viewerTeam));
+    return flagTeam == viewerTeamId ? m_CustomRules.ShowAllyFlagOnMap : m_CustomRules.ShowEnemyFlagOnMap;
+}
+
+bool Battleground::GetNodeObjective(ObjectGuid playerGuid, BattlegroundNodeObjective& objective) const
+{
+    if (playerGuid.IsEmpty())
+        return false;
+
+    std::vector<BattlegroundNodeObjective> assaultNodes;
+    std::vector<BattlegroundNodeObjective> defenseNodes;
+    std::vector<BattlegroundNodeObjective> urgentDefenseNodes;
+    for (uint32 nodeId = 0; nodeId < GetDynamicNodeCount(); ++nodeId)
+    {
+        BattlegroundNodeObjective node;
+        if (!GetDynamicNodeInfo(playerGuid, nodeId, node))
+            continue;
+
+        if (node.Status == BattlegroundNodeStatus::FriendlyUnderAttack)
+            urgentDefenseNodes.push_back(node);
+        else if (node.Status == BattlegroundNodeStatus::FriendlyControlled ||
+            node.Status == BattlegroundNodeStatus::FriendlyContested)
+            defenseNodes.push_back(node);
+        else
+            assaultNodes.push_back(node);
+    }
+
+    // Keep a stable one-third of participants on defense. Stable role and
+    // node selection prevent every update from sending the same bot toward a
+    // different base as ownership changes elsewhere on the map.
+    uint64 const seed = playerGuid.GetRawValue();
+    bool const prefersDefense = (seed % 3) == 0;
+    std::vector<BattlegroundNodeObjective> const* candidates = nullptr;
+    if (prefersDefense && !urgentDefenseNodes.empty())
+        candidates = &urgentDefenseNodes;
+    else if (prefersDefense && !defenseNodes.empty())
+        candidates = &defenseNodes;
+    else if (!assaultNodes.empty())
+        candidates = &assaultNodes;
+    else if (!defenseNodes.empty())
+        candidates = &defenseNodes;
+    else if (!urgentDefenseNodes.empty())
+        candidates = &urgentDefenseNodes;
+
+    if (!candidates || candidates->empty())
+        return false;
+
+    objective = (*candidates)[(seed / 3) % candidates->size()];
+    return true;
 }
 
 uint32 Battleground::GetOtherTeam(uint32 teamId) const

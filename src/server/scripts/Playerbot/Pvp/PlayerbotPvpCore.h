@@ -23,9 +23,14 @@
 #include "SharedDefines.h"
 
 class Player;
+class GameObject;
+class Unit;
 
 namespace playerbot
 {
+constexpr float PLAYERBOT_MOUNT_ENEMY_AWARENESS_RANGE = 100.0f;
+constexpr float PLAYERBOT_HUNTER_AUTOSHOT_MIN_SAFETY_MARGIN = 0.50f;
+
 struct PvpCoreConfig
 {
     bool moduleEnabled = false;
@@ -48,6 +53,15 @@ enum class BattlegroundState : uint8
     Active
 };
 
+struct HunterAutoShotRangeInfo
+{
+    float exactDistance = 0.0f;
+    float dbcMinRange = 0.0f;
+    float meleeRange = 0.0f;
+    float minRange = 0.0f;
+    float maxRange = 0.0f;
+};
+
 struct PvpValues
 {
     BattlegroundState battlegroundState = BattlegroundState::None;
@@ -60,9 +74,15 @@ struct PvpValues
     bool hasArenaInvite = false;
     bool hasArenaTeamInvite = false;
     bool playerHasFlag = false;
+    bool flagPickupAvailable = false;
+    bool flagPickupNearby = false;
+    bool nearbyEnemyActive = false;
     bool enemyFlagCarrierActive = false;
     bool enemyFlagCarrierNear = false;
     bool teamFlagCarrierNear = false;
+    bool nodeAssaultAvailable = false;
+    bool nodeDefenseAvailable = false;
+    uint32 nodeObjectiveId = 0;
     uint32 battlegroundTeamHumanCount = 0;
     bool battlegroundTeamHasHumans = false;
 };
@@ -76,9 +96,12 @@ enum class PvpTrigger : uint8
     BgInviteActive,
     InBattlegroundWithoutFlag,
     PlayerHasFlag,
+    FlagPickupAvailable,
     EnemyFlagCarrierActive,
     EnemyFlagCarrierNear,
-    TeamFlagCarrierNear
+    TeamFlagCarrierNear,
+    NodeAssaultAvailable,
+    NodeDefenseAvailable
 };
 
 enum class BattlegroundObjectiveType : uint8
@@ -122,6 +145,7 @@ struct BattlegroundTacticalContext
     BattlegroundObjectiveSelection objective;
     BattlegroundMovementPrimitive movement = BattlegroundMovementPrimitive::None;
     FlagCarrierDirective flagCarrierDirective = FlagCarrierDirective::None;
+    bool nearbyEnemyActive = false;
 };
 
 enum class QueueOperationType : uint8
@@ -170,7 +194,8 @@ struct PvpClassSpellContext
         None = 0,
         Enemy,
         Self,
-        Ally
+        Ally,
+        Pet
     };
     TargetMode targetMode = TargetMode::None;
     ObjectGuid targetGuid = ObjectGuid::Empty;
@@ -179,6 +204,8 @@ struct PvpClassSpellContext
     ObjectGuid movementTargetGuid = ObjectGuid::Empty;
     float movementFollowRange = 0.0f;
     float movementPriority = 0.0f;
+    bool preserveFlagObjectiveMovement = false;
+    bool preserveFlagCarrierMovement = false;
     uint32 itemEntry = 0;
 };
 
@@ -209,8 +236,13 @@ class PvpCore
 public:
     static void LoadConfig();
     static PvpCoreConfig const& GetConfig();
+    static bool GetHunterAutoShotRange(Player const* player, Unit const* target, HunterAutoShotRangeInfo& rangeInfo);
 
     static PvpValues CollectValues(Player const* player);
+    static bool CanMageBlinkOutOfControl(Player const* player);
+    static bool CanHunterBestialWrathOutOfControl(Player const* player);
+    static bool IsEffectivelyImmuneTarget(Player const* player, Unit const* target);
+    static bool IsMovementPreventedByRoot(Player const* player);
     static bool IsTriggerActive(PvpTrigger trigger, PvpValues const& values);
     static BattlegroundTacticalContext BuildBattlegroundTacticalContext(Player const* player, PvpValues const& values);
     static BattlegroundLifecycleContext BuildBattlegroundLifecycleContext(Player const* player, PvpValues const& values);
@@ -218,6 +250,12 @@ public:
     static PvpClassSpellContext BuildClassSpellContext(Player const* player, PvpValues const& values);
     static RandomBotParticipationHooks BuildRandomBotParticipationHooks(Player const* player, PvpValues const& values);
     static uint32 CountHumanPlayersOnBattlegroundTeam(Player const* player);
+    static GameObject* FindUsableLightwell(Player const* player, float maxDistance);
+    static bool ShouldSeekLightwell(Player const* player);
+    static GameObject* FindUsableSoulwell(Player const* player, float maxDistance);
+    static bool HasHealthstone(Player const* player);
+    static bool IsBattlegroundFlagCarrier(Player const* player);
+    static bool SpellWouldBreakFlagCarry(uint32 spellId);
     static bool TeamHasHumanPlayers(Player const* player);
 
 private:

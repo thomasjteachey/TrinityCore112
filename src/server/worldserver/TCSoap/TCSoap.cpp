@@ -16,6 +16,7 @@
  */
 
 #include "TCSoap.h"
+#include "Errors.h"
 #include "soapH.h"
 #include "soapStub.h"
 #include "Realm.h"
@@ -25,6 +26,8 @@
 
 void TCSoapThread(const std::string& host, uint16 port)
 {
+    Trinity::InitCurrentThreadCrashSignalStack();
+
     struct soap soap;
     soap_init(&soap);
     soap_set_imode(&soap, SOAP_C_UTFSTRING);

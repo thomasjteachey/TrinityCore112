@@ -82,6 +82,60 @@ void BattlegroundWGScore::BuildObjectivesBlock(WorldPacket& data)
 
 BattlegroundWS::~BattlegroundWS() { }
 
+ObjectGuid BattlegroundWS::GetFlagPickupGUID(ObjectGuid playerGuid) const
+{
+    if (GetStatus() != STATUS_IN_PROGRESS || playerGuid.IsEmpty())
+        return ObjectGuid::Empty;
+
+    uint32 const playerTeam = GetPlayerTeam(playerGuid);
+    if (playerTeam != ALLIANCE && playerTeam != HORDE)
+        return ObjectGuid::Empty;
+
+    TeamId const ownFlagTeam = GetTeamIndexByTeamId(playerTeam);
+    TeamId const enemyFlagTeam = ownFlagTeam == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
+
+    // A carrier's objective is the capture point, not another interactable flag.
+    if (m_FlagKeepers[enemyFlagTeam] == playerGuid)
+        return ObjectGuid::Empty;
+
+    // Returning a friendly dropped flag is immediately useful and uses the
+    // same normal GameObject interaction path as taking an enemy flag.
+    if (_flagState[ownFlagTeam] == BG_WS_FLAG_STATE_ON_GROUND)
+        return m_DroppedFlagGUID[ownFlagTeam];
+
+    if (_flagState[enemyFlagTeam] == BG_WS_FLAG_STATE_ON_BASE)
+        return BgObjects[enemyFlagTeam == TEAM_ALLIANCE ? BG_WS_OBJECT_A_FLAG : BG_WS_OBJECT_H_FLAG];
+
+    if (_flagState[enemyFlagTeam] == BG_WS_FLAG_STATE_ON_GROUND)
+        return m_DroppedFlagGUID[enemyFlagTeam];
+
+    return ObjectGuid::Empty;
+}
+
+bool BattlegroundWS::GetFlagCapturePosition(ObjectGuid carrierGuid, Position& position) const
+{
+    if (GetStatus() != STATUS_IN_PROGRESS || carrierGuid.IsEmpty())
+        return false;
+
+    uint32 const carrierTeam = GetPlayerTeam(carrierGuid);
+    if (carrierTeam != ALLIANCE && carrierTeam != HORDE)
+        return false;
+
+    TeamId const carrierTeamId = GetTeamIndexByTeamId(carrierTeam);
+    TeamId const carriedFlagTeam = carrierTeamId == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
+    if (_flagState[carriedFlagTeam] != BG_WS_FLAG_STATE_ON_PLAYER || m_FlagKeepers[carriedFlagTeam] != carrierGuid)
+        return false;
+
+    // These are the same capture triggers used by HandleFlagRoomCapturePoint.
+    uint32 const areaTriggerId = carriedFlagTeam == TEAM_ALLIANCE ? 3647 : 3646;
+    AreaTriggerEntry const* areaTrigger = sAreaTriggerStore.LookupEntry(areaTriggerId);
+    if (!areaTrigger)
+        return false;
+
+    position.Relocate(areaTrigger->Pos.X, areaTrigger->Pos.Y, areaTrigger->Pos.Z, 0.0f);
+    return true;
+}
+
 char const* BattlegroundWS::GetWSGFlagStateToken(uint8 flagState)
 {
     switch (flagState)
@@ -137,7 +191,7 @@ bool BattlegroundWS::GetWSGFlagWorldPositionByIdentity(uint32 flagTeam, float& x
     return false;
 }
 
-std::string BattlegroundWS::BuildWSGFlagFullPayload() const
+std::string BattlegroundWS::BuildWSGFlagFullPayload(Player const* viewer) const
 {
     std::string allianceCarrier;
     std::string hordeCarrier;
@@ -146,13 +200,16 @@ std::string BattlegroundWS::BuildWSGFlagFullPayload() const
     std::string hordeX;
     std::string hordeY;
 
-    if (_flagState[TEAM_ALLIANCE] == BG_WS_FLAG_STATE_ON_PLAYER)
+    bool const showAllianceFlag = ShouldShowFlagOnMapTo(viewer, TEAM_ALLIANCE);
+    bool const showHordeFlag = ShouldShowFlagOnMapTo(viewer, TEAM_HORDE);
+
+    if (showAllianceFlag && _flagState[TEAM_ALLIANCE] == BG_WS_FLAG_STATE_ON_PLAYER)
     {
         if (Player* carrier = ObjectAccessor::FindPlayer(m_FlagKeepers[TEAM_ALLIANCE]))
             allianceCarrier = carrier->GetName();
     }
 
-    if (_flagState[TEAM_HORDE] == BG_WS_FLAG_STATE_ON_PLAYER)
+    if (showHordeFlag && _flagState[TEAM_HORDE] == BG_WS_FLAG_STATE_ON_PLAYER)
     {
         if (Player* carrier = ObjectAccessor::FindPlayer(m_FlagKeepers[TEAM_HORDE]))
             hordeCarrier = carrier->GetName();
@@ -160,14 +217,14 @@ std::string BattlegroundWS::BuildWSGFlagFullPayload() const
 
     float x = 0.0f;
     float y = 0.0f;
-    if (GetWSGFlagWorldPositionByIdentity(ALLIANCE, x, y))
+    if (showAllianceFlag && GetWSGFlagWorldPositionByIdentity(ALLIANCE, x, y))
     {
         Map2ZoneCoordinates(x, y, 3277);
         allianceX = FormatWSGCoord(x / 100.0f);
         allianceY = FormatWSGCoord(y / 100.0f);
     }
 
-    if (GetWSGFlagWorldPositionByIdentity(HORDE, x, y))
+    if (showHordeFlag && GetWSGFlagWorldPositionByIdentity(HORDE, x, y))
     {
         Map2ZoneCoordinates(x, y, 3277);
         hordeX = FormatWSGCoord(x / 100.0f);
@@ -184,11 +241,32 @@ void BattlegroundWS::SendWSGFlagAddonMessage(std::string const& payload)
     std::string message = "CWSG\t" + payload;
     WorldPacket data;
     ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message, 0);
-    SendPacketToAll(&data);
+
+    if (!IsCustomGame() || (payload.rfind("A:", 0) != 0 && payload.rfind("H:", 0) != 0))
+    {
+        SendPacketToAll(&data);
+        return;
+    }
+
+    TeamId const flagTeam = payload[0] == 'A' ? TEAM_ALLIANCE : TEAM_HORDE;
+    for (auto const& entry : GetPlayers())
+    {
+        Player* player = ObjectAccessor::FindPlayer(entry.first);
+        if (player && ShouldShowFlagOnMapTo(player, flagTeam))
+            player->SendDirectMessage(&data);
+    }
 }
 
 void BattlegroundWS::BroadcastWSGFlagFullState()
 {
+    if (IsCustomGame())
+    {
+        for (auto const& entry : GetPlayers())
+            if (Player* player = ObjectAccessor::FindPlayer(entry.first))
+                SendWSGFlagFullStateTo(player);
+        return;
+    }
+
     std::string payload = BuildWSGFlagFullPayload();
     std::string message = "CWSG\t" + payload;
     WorldPacket data;
@@ -201,7 +279,7 @@ void BattlegroundWS::SendWSGFlagFullStateTo(Player* player)
     if (!player || !player->GetSession())
         return;
 
-    std::string payload = BuildWSGFlagFullPayload();
+    std::string payload = BuildWSGFlagFullPayload(player);
     std::string message = "CWSG\t" + payload;
     WorldPacket data;
     ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message, 0);
@@ -212,26 +290,35 @@ void BattlegroundWS::PostUpdateImpl(uint32 diff)
 {
     if (GetStatus() == STATUS_IN_PROGRESS)
     {
-        bool hasHumanPlayer = false;
-        for (BattlegroundPlayerMap::const_iterator itr = m_Players.begin(); itr != m_Players.end(); ++itr)
+        // Public WSG instances retain the legacy empty-human shutdown, but a
+        // custom game is explicitly allowed to run entirely on virtual clones
+        // while one or more real players watch from m_Spectators. The old test
+        // examined only m_Players, so a 40v40 custom WSG ended on its very first
+        // in-progress update and the lobby manager immediately returned its
+        // spectator to the retained lobby.
+        if (!IsCustomGame())
         {
-            Player* player = ObjectAccessor::FindPlayer(itr->first);
-            if (!player)
-                continue;
+            bool hasHumanPlayer = false;
+            for (BattlegroundPlayerMap::const_iterator itr = m_Players.begin(); itr != m_Players.end(); ++itr)
+            {
+                Player* player = ObjectAccessor::FindPlayer(itr->first);
+                if (!player)
+                    continue;
 
-            WorldSession* session = player->GetSession();
-            if (!session || session->IsVirtualSession())
-                continue;
+                WorldSession* session = player->GetSession();
+                if (!session || session->IsVirtualSession())
+                    continue;
 
-            hasHumanPlayer = true;
-            break;
-        }
+                hasHumanPlayer = true;
+                break;
+            }
 
-        if (!hasHumanPlayer)
-        {
-            TC_LOG_INFO("bg.warsong", "BattlegroundWS::PostUpdateImpl: Ending WSG instance {} because no human players remain.", GetInstanceID());
-            EndNow();
-            return;
+            if (!hasHumanPlayer)
+            {
+                TC_LOG_INFO("bg.warsong", "BattlegroundWS::PostUpdateImpl: Ending WSG instance {} because no human players remain.", GetInstanceID());
+                EndNow();
+                return;
+            }
         }
 
         if (_flagState[TEAM_ALLIANCE] == BG_WS_FLAG_STATE_WAIT_RESPAWN)
@@ -462,7 +549,7 @@ void BattlegroundWS::EventPlayerCapturedFlag(Player* player)
         else if (_flagDebuffState == 2)
           player->RemoveAurasDueToSpell(WS_SPELL_BRUTAL_ASSAULT);
 
-        if (GetTeamScore(TEAM_ALLIANCE) < BG_WS_MAX_TEAM_SCORE)
+        if (GetTeamScore(TEAM_ALLIANCE) < GetFlagCaptureLimit(BG_WS_MAX_TEAM_SCORE))
             AddPoint(ALLIANCE, 1);
         PlaySoundToAll(BG_WS_SOUND_FLAG_CAPTURED_ALLIANCE);
         RewardReputationToTeam(890, m_ReputationCapture, ALLIANCE);
@@ -482,7 +569,7 @@ void BattlegroundWS::EventPlayerCapturedFlag(Player* player)
         else if (_flagDebuffState == 2)
           player->RemoveAurasDueToSpell(WS_SPELL_BRUTAL_ASSAULT);
 
-        if (GetTeamScore(TEAM_HORDE) < BG_WS_MAX_TEAM_SCORE)
+        if (GetTeamScore(TEAM_HORDE) < GetFlagCaptureLimit(BG_WS_MAX_TEAM_SCORE))
             AddPoint(HORDE, 1);
         PlaySoundToAll(BG_WS_SOUND_FLAG_CAPTURED_HORDE);
         RewardReputationToTeam(889, m_ReputationCapture, HORDE);
@@ -510,10 +597,10 @@ void BattlegroundWS::EventPlayerCapturedFlag(Player* player)
     // update last flag capture to be used if teamscore is equal
     SetLastFlagCapture(player->GetTeam());
 
-    if (GetTeamScore(TEAM_ALLIANCE) == BG_WS_MAX_TEAM_SCORE)
+    if (GetTeamScore(TEAM_ALLIANCE) >= GetFlagCaptureLimit(BG_WS_MAX_TEAM_SCORE))
         winner = ALLIANCE;
 
-    if (GetTeamScore(TEAM_HORDE) == BG_WS_MAX_TEAM_SCORE)
+    if (GetTeamScore(TEAM_HORDE) >= GetFlagCaptureLimit(BG_WS_MAX_TEAM_SCORE))
         winner = HORDE;
 
     if (winner)
@@ -1033,7 +1120,7 @@ void BattlegroundWS::FillInitialWorldStates(WorldPackets::WorldState::InitWorldS
     else
         packet.Worldstates.emplace_back(BG_WS_FLAG_UNK_HORDE, 0);
 
-    packet.Worldstates.emplace_back(BG_WS_FLAG_CAPTURES_MAX, BG_WS_MAX_TEAM_SCORE);
+    packet.Worldstates.emplace_back(BG_WS_FLAG_CAPTURES_MAX, GetFlagCaptureLimit(BG_WS_MAX_TEAM_SCORE));
 
     if (GetStatus() == STATUS_IN_PROGRESS)
     {
@@ -1076,11 +1163,6 @@ bool BattlegroundWS::CheckAchievementCriteriaMeet(uint32 criteriaId, Player cons
     }
 
     return Battleground::CheckAchievementCriteriaMeet(criteriaId, player, target, miscValue);
-}
-
-uint32 BattlegroundWS::GetResurrectionInterval() const
-{
-    return BG_WS_RESURRECTION_INTERVAL;
 }
 
 uint32 BattlegroundWS::GetBuffRespawnTime(uint32 type) const

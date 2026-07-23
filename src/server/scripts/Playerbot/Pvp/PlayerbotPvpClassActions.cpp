@@ -16,6 +16,10 @@
  */
 
 #include "PlayerbotPvpClassActions.h"
+#include "PlayerbotPvpLifecycleActions.h"
+#include "PlayerbotSharedStateGuard.h"
+#include "Chat.h"
+#include "Configuration/Config.h"
 #include "GameTime.h"
 #include "Item.h"
 #include "ObjectAccessor.h"
@@ -23,6 +27,7 @@
 #include "ObjectMgr.h"
 #include "Log.h"
 #include "Map.h"
+#include "Movement/AbstractFollower.h"
 #include "MovementDefines.h"
 #include "MoveSpline.h"
 #include "MotionMaster.h"
@@ -31,13 +36,13 @@
 #include "PathGenerator.h"
 #include "Pet.h"
 #include "Position.h"
-#include "Protocol/Opcodes.h"
 #include "Spell.h"
 #include "SpellAuras.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellHistory.h"
 #include "Unit.h"
+#include "World.h"
 #include "WorldSession.h"
 
 #include <array>
@@ -45,6 +50,7 @@
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#include <mutex>
 #include <sstream>
 #include <unordered_map>
 #include <vector>
@@ -53,6 +59,17 @@ namespace
 {
 void SetLastMovementDebugStatus(Player const* player, std::string const& status);
 void WhisperHunterCastDiagnostic(Player* player, Unit* target, char const* phase, uint32 spellId, char const* extra);
+bool HasActiveMovementEffectSpline(Player const* player);
+bool TryMoveOutOfHazardousLiquid(Player* player);
+constexpr uint32 kWarlockFirestoneItemEntry = 13701;
+constexpr uint32 kWarlockCreateSoulwellSpellId = 29886;
+constexpr uint32 kWarlockRitualOfSoulsSpellId = 29893;
+
+bool WantsPlayerbotDiagnostics(Player const* observer)
+{
+    WorldSession const* session = observer ? observer->GetSession() : nullptr;
+    return session && session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Playerbot);
+}
 
 bool IsLifeTapSpell(SpellInfo const* spellInfo)
 {
@@ -76,6 +93,52 @@ bool IsSpiritOfRedemptionFreeHeal(Player const* player, SpellInfo const* spellIn
 {
     return player && player->GetClass() == CLASS_PRIEST && IsPriestFlashHealSpell(spellInfo) &&
         player->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION);
+}
+
+bool SpellAppliesBreakableByDamageCrowdControl(SpellInfo const* spellInfo)
+{
+    if (!spellInfo || !(spellInfo->AuraInterruptFlags & AURA_INTERRUPT_FLAG_TAKE_DAMAGE))
+        return false;
+
+    for (SpellEffectInfo const& effectInfo : spellInfo->GetEffects())
+    {
+        if (effectInfo.Effect != SPELL_EFFECT_APPLY_AURA)
+            continue;
+
+        switch (effectInfo.ApplyAuraName)
+        {
+            case SPELL_AURA_MOD_CONFUSE:
+            case SPELL_AURA_MOD_FEAR:
+            case SPELL_AURA_MOD_STUN:
+            case SPELL_AURA_MOD_ROOT:
+            case SPELL_AURA_TRANSFORM:
+                return true;
+            default:
+                break;
+        }
+    }
+
+    return false;
+}
+
+bool HasAuraInSpellChain(Unit const* unit, uint32 baseSpellId)
+{
+    if (!unit || !baseSpellId)
+        return false;
+
+    SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(baseSpellId);
+    if (!baseSpellInfo)
+        return false;
+
+    SpellInfo const* firstRank = baseSpellInfo->GetFirstRankSpell();
+    if (!firstRank)
+        return unit->HasAura(baseSpellId);
+
+    for (uint32 chainSpellId = firstRank->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
+        if (unit->HasAura(chainSpellId))
+            return true;
+
+    return false;
 }
 
 bool IsDruidFeralMeleePositioning(Player const* player)
@@ -188,11 +251,11 @@ uint32 GetHunterStationaryCastTimeMs(SpellInfo const* spellInfo)
     if (spellInfo->Id == 982)
         return std::max<uint32>(castTimeMs, 1000);
 
-    // Multi-Shot is short, but it still has a stationary firing delay/cast
-    // window in this branch. It must be protected from stutter movement too;
-    // otherwise the hunter starts Multi-Shot, immediately resumes fleeing, and
-    // clips the shot before it launches. Use a short explicit guard even when
-    // custom DBC data reports zero cast time.
+    // Multi-Shot has a short stationary launch/cast window. Protect that
+    // window from playerbot movement even on custom data that reports zero,
+    // but do not treat it like Aimed Shot for Auto Shot cancellation: the two
+    // ranged attacks are allowed to coexist and the core delays Auto Shot as
+    // needed through m_AutoRepeatFirstCast.
     if (IsHunterMultiShotSpell(spellInfo))
         return std::max<uint32>(castTimeMs, 500);
 
@@ -299,6 +362,10 @@ constexpr uint32 kHunterRevivePetSpellId = 982;
 constexpr uint32 kPlayerbotHunterStationaryCastLockToken = 900006;
 constexpr uint32 kRacialNightElfShadowmeldSpellId = 20580;
 constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
+// Environmental Magma periodically damages units standing on hazardous ground.
+// Some custom terrain does not expose the matching liquid flags, so the aura is
+// also a generic signal that the bot is currently standing in a hazard.
+constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 constexpr std::chrono::seconds kPlayerbotDispelCooldown = std::chrono::seconds(5);
 constexpr std::chrono::seconds kDruidCasterFaerieFireCooldown = std::chrono::seconds(10);
 constexpr std::chrono::seconds kPlayerbotAutoRepeatRangedStartCooldown = std::chrono::seconds(2);
@@ -322,8 +389,15 @@ bool IsPlayerbotDispelSpell(uint32 spellId)
         case 4987: // Cleanse
             return true;
         default:
-            return false;
+            break;
     }
+
+    if (spellInfo)
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+            if (effect.Effect == SPELL_EFFECT_DISPEL)
+                return true;
+
+    return false;
 }
 
 SpellInfo const* GetFirstOnUseItemSpellInfo(Item const* item)
@@ -364,6 +438,7 @@ void SetLastMovementDebugStatus(Player const* player, std::string const& status)
 void RecordTargetRelativeMovementOrder(Player const* player, Unit const* target, float issuedRange, uint8 mode);
 void MarkTargetRelativeMovementLaunch(Player const* player);
 bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* target, float desiredRange, uint32 minRunMs, char const* label, std::string* reasonOut);
+bool HasActiveTargetRelativeMovementFor(Player const* player, Unit const* target);
 
 struct LastLosCastFailureState
 {
@@ -395,7 +470,7 @@ bool IsEffectivelyOutdoors(Player const* player)
     PositionFullTerrainStatus terrainStatus;
     map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
         terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
-    return player->IsOutdoors() || terrainStatus.outdoors;
+    return player->IsOutdoors() && terrainStatus.outdoors;
 }
 
 bool IsStrictlyOutdoorsForMount(Player const* player)
@@ -449,8 +524,12 @@ Position BuildCollisionSafeDestination(Player* player, Position const& destinati
                 adjustedZ + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight()))
         {
             bool const canWalkOnWater = player->HasAuraType(SPELL_AURA_WATER_WALK);
+            // 0.5 below the surface keeps in-water endpoints inside the
+            // stably-swimming band of the virtual-session swim hysteresis
+            // (engages above 0.35 depth); anything shallower parks the bot in
+            // the dead band where its swim flag never settles.
             if (!canWalkOnWater)
-                adjustedZ = std::max(liquidData.depth_level + 0.05f, std::min(adjustedZ, liquidData.level - 0.25f));
+                adjustedZ = std::max(liquidData.depth_level + 0.05f, std::min(adjustedZ, liquidData.level - 0.5f));
         }
     }
 
@@ -478,41 +557,59 @@ bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desir
     if (!player)
         return false;
 
+    constexpr float strictPathCalculationLengthLimit = 1024.0f;
+    constexpr float strictMovementSegmentDistance = 80.0f;
+
     auto const tryResolveDestination = [&](Position const& requestedDestination, Position& resolvedDestination) -> bool
     {
         Position const safeDestination = BuildCollisionSafeDestination(player, requestedDestination);
 
         PathGenerator path(player);
-        path.SetPathLengthLimit(90.0f);
-        bool pathOk = path.CalculatePath(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(), true);
-        PathType pathType = path.GetPathType();
-        Movement::PointsArray points = path.GetPath();
-        G3D::Vector3 actualEnd = path.GetActualEndPosition();
+        path.SetPathLengthLimit(strictPathCalculationLengthLimit);
+        bool const pathOk = path.CalculatePath(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(), false);
+        PathType const pathType = path.GetPathType();
+        Movement::PointsArray const& points = path.GetPath();
+        G3D::Vector3 const actualEnd = path.GetActualEndPosition();
 
-        if ((pathType & PATHFIND_SHORTCUT) != 0)
-        {
-            PathGenerator retryPath(player);
-            retryPath.SetPathLengthLimit(90.0f);
-            bool const retryOk = retryPath.CalculatePath(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(), false);
-            PathType const retryType = retryPath.GetPathType();
-            if (retryOk && (retryType & PATHFIND_SHORTCUT) == 0)
-            {
-                points = retryPath.GetPath();
-                pathType = retryType;
-                pathOk = true;
-                actualEnd = retryPath.GetActualEndPosition();
-            }
-        }
-
-        uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_NOPATH;
+        uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_NOPATH |
+            PATHFIND_SHORT | PATHFIND_FARFROMPOLY;
         if (!pathOk || (pathType & forbiddenPathFlags) != 0)
             return false;
 
         bool haveResolvedDestination = false;
         if (points.size() > 1)
         {
-            G3D::Vector3 const& lastPoint = points.back();
-            resolvedDestination.Relocate(lastPoint.x, lastPoint.y, lastPoint.z, safeDestination.GetOrientation());
+            G3D::Vector3 previous(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+            float traversedDistance = 0.0f;
+            for (std::size_t i = 1; i < points.size(); ++i)
+            {
+                G3D::Vector3 const& point = points[i];
+                G3D::Vector3 const delta = point - previous;
+                float const segmentLength = delta.length();
+                if (segmentLength <= 0.01f)
+                {
+                    previous = point;
+                    continue;
+                }
+
+                if (traversedDistance + segmentLength >= strictMovementSegmentDistance)
+                {
+                    float const fraction = (strictMovementSegmentDistance - traversedDistance) / segmentLength;
+                    G3D::Vector3 const selected = previous + delta * fraction;
+                    resolvedDestination.Relocate(selected.x, selected.y, selected.z, safeDestination.GetOrientation());
+                    haveResolvedDestination = true;
+                    break;
+                }
+
+                traversedDistance += segmentLength;
+                previous = point;
+            }
+
+            if (!haveResolvedDestination)
+            {
+                G3D::Vector3 const& lastPoint = points.back();
+                resolvedDestination.Relocate(lastPoint.x, lastPoint.y, lastPoint.z, safeDestination.GetOrientation());
+            }
             haveResolvedDestination = true;
         }
         else
@@ -535,50 +632,26 @@ bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desir
         float const dy = resolvedDestination.GetPositionY() - player->GetPositionY();
         float const planarDelta = std::sqrt(dx * dx + dy * dy);
         float const verticalDelta = std::fabs(resolvedDestination.GetPositionZ() - player->GetPositionZ());
+        float const downwardDelta = player->GetPositionZ() - resolvedDestination.GetPositionZ();
         if (planarDelta < 0.5f || verticalDelta > std::max(8.0f, planarDelta * 0.75f + 2.0f))
+            return false;
+
+        // Never accept a strict movement segment that snaps sharply below the
+        // bot. Battleground floors, bridges, and ramps can have map-height
+        // samples below the walkable surface; issuing a MovePoint to that lower
+        // sample makes bots dive through the floor instead of pathing like a
+        // player. Real descents still work by chaining short, path-generated
+        // segments whose Z changes are proportional to their horizontal travel.
+        if (!player->IsInWater() && downwardDelta > std::max(4.0f, planarDelta * 0.35f + 1.0f))
             return false;
 
         return true;
     };
 
-    if (tryResolveDestination(desiredDestination, segmentDestination))
-        return true;
-
-    float const dx = desiredDestination.GetPositionX() - player->GetPositionX();
-    float const dy = desiredDestination.GetPositionY() - player->GetPositionY();
-    float const dz = desiredDestination.GetPositionZ() - player->GetPositionZ();
-    float const planarDistance = std::sqrt(dx * dx + dy * dy);
-    if (planarDistance < 1.0f)
-        return false;
-
-    std::array<float, 6> const probeDistances =
-    {
-        24.0f,
-        18.0f,
-        12.0f,
-        8.0f,
-        5.0f,
-        3.0f
-    };
-
-    for (float probeDistance : probeDistances)
-    {
-        float const cappedDistance = std::min(planarDistance - 0.25f, probeDistance);
-        if (cappedDistance <= 0.5f)
-            continue;
-
-        float const fraction = cappedDistance / planarDistance;
-        Position probeDestination(
-            player->GetPositionX() + dx * fraction,
-            player->GetPositionY() + dy * fraction,
-            player->GetPositionZ() + dz * fraction,
-            desiredDestination.GetOrientation());
-
-        if (tryResolveDestination(probeDestination, segmentDestination))
-            return true;
-    }
-
-    return false;
+    // A point sampled along the straight line to the target can be reachable on
+    // this side of a wall while the real target is not reachable through that
+    // wall. Only accept a segment taken from the route to the real destination.
+    return tryResolveDestination(desiredDestination, segmentDestination);
 }
 
 bool IssueStrictHumanMove(Player* player, Position const& destination, float destinationChangeThreshold = 4.0f, uint32 minReissueMs = 350)
@@ -591,17 +664,25 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
 
     struct MoveOrderState
     {
+        Position lastRequestedDestination;
         Position lastDestination;
         uint32 lastIssueMs = 0;
     };
 
     static std::unordered_map<uint64, MoveOrderState> stateByGuid;
     uint64 const botGuid = player->GetGUID().GetRawValue();
-    MoveOrderState& state = stateByGuid[botGuid];
+    MoveOrderState& state = playerbot::LockedGetOrCreate(stateByGuid, botGuid);
     uint32 const nowMs = GameTime::GetGameTimeMS();
 
+    // Compare against the last *requested* destination (e.g. a follow point
+    // trailing a moving target), not the last *resolved* segment endpoint.
+    // The resolved segment is frequently shortened by the strict-pathing
+    // fallback below, so comparing against it made destinationChanged true on
+    // almost every call -- defeating the time throttle and causing the
+    // active spline to be cleared and reissued as a short MovePoint nearly
+    // every tick (visible as the bot inching instead of running smoothly).
     bool const destinationChanged = state.lastIssueMs == 0 ||
-        state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
+        state.lastRequestedDestination.GetExactDist(destination) >= destinationChangeThreshold;
     bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
 
     if (!destinationChanged && !canReissueByTime)
@@ -616,12 +697,14 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
     if (!motionMaster)
         return false;
 
-    if (!destinationChanged && !canReissueByTime)
+    if (destinationChanged && !canReissueByTime)
     {
-        // Do not suppress strict re-issue while stalled. Battleground pathing
-        // can occasionally leave a stale/idle generator active, which causes
-        // repeated "reach spell" directives to report success while the bot
-        // remains stationary.
+        // The requested destination drifted (e.g. a chased target kept
+        // moving) but we are still inside the reissue throttle window. Do
+        // not cancel an in-flight segment for that drift -- clearing and
+        // reissuing a fresh short MovePoint every tick is what produces the
+        // visible inch/stop stutter. Let the active point move continue; a
+        // fresh segment will be issued once the throttle window elapses.
         MovementGeneratorType const movementType = motionMaster->GetCurrentMovementGeneratorType();
         bool const hasActivePointMove = player->isMoving() && movementType == POINT_MOTION_TYPE;
         if (hasActivePointMove)
@@ -635,6 +718,7 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
     motionMaster->Clear(MOTION_SLOT_ACTIVE);
     motionMaster->MovePoint(0, segmentDestination, true);
 
+    state.lastRequestedDestination = destination;
     state.lastDestination = segmentDestination;
     state.lastIssueMs = nowMs;
     return true;
@@ -645,7 +729,14 @@ bool IssueStrictHumanFollow(Player* player, Unit* target, float desiredDistance)
     if (!player || !target)
         return false;
 
-    return IssueStrictHumanMove(player, BuildFollowDestination(player, target, desiredDistance));
+    // IssueStrictHumanMove's defaults (4y drift / 350ms) were tuned for a
+    // short reactive retreat, not for continuously chasing a live target.
+    // A moving PvP target routinely drifts more than 4y in under 350ms, so
+    // every call here was clearing the active spline and reissuing a fresh
+    // short segment before the previous one had time to actually execute -
+    // visible as a bot taking one short step, stopping, taking another step,
+    // stopping, etc. Give each segment room to run before reconsidering.
+    return IssueStrictHumanMove(player, BuildFollowDestination(player, target, desiredDistance), 8.0f, 900);
 }
 
 bool PrepareMotionMasterForExplicitBotMovement(Player* player)
@@ -694,7 +785,7 @@ bool IssueThrottledFollowMovement(Player* player, Unit* target, float desiredDis
     };
 
     static std::unordered_map<uint64, FollowOrderState> stateByGuid;
-    FollowOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
+    FollowOrderState& state = playerbot::LockedGetOrCreate(stateByGuid, player->GetGUID().GetRawValue());
     // Follow distance should allow true melee contact for stealth openers.
     // Clamping to >= 1.0f can leave bots hovering outside melee reach
     // depending on hitbox combinations.
@@ -762,7 +853,7 @@ void RecordTargetRelativeMovementOrder(Player const* player, Unit const* target,
     if (!player || !target)
         return;
 
-    TargetRelativeMoveOrderState& state = g_TargetRelativeMoveOrderByGuid[player->GetGUID().GetRawValue()];
+    TargetRelativeMoveOrderState& state = playerbot::LockedGetOrCreate(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue());
     state.targetGuid = target->GetGUID();
     state.issuedRange = issuedRange;
     state.lastDistance = player->GetDistance(target);
@@ -783,8 +874,8 @@ void MarkTargetRelativeMovementLaunch(Player const* player)
     if (!player)
         return;
 
-    auto itr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
-    if (itr == g_TargetRelativeMoveOrderByGuid.end())
+    TargetRelativeMoveOrderState* state = playerbot::LockedFind(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue());
+    if (!state)
         return;
 
     bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
@@ -795,7 +886,43 @@ void MarkTargetRelativeMovementLaunch(Player const* player)
     if (!launched)
         return;
 
-    itr->second.lastLaunchMs = GameTime::GetGameTimeMS();
+    state->lastLaunchMs = GameTime::GetGameTimeMS();
+}
+
+// A live CHASE/FOLLOW generator already actively targeting this exact unit
+// must never be replaced by a fresh MoveChase/MoveFollow call, even when a
+// distance/progress heuristic would otherwise justify reissuing one. Chase
+// and Follow already repath internally against a moving target; issuing a
+// new one on top of an already-running generator makes MoveSplineInit
+// resync the server position to the old spline before launching the
+// replacement, while the client may still be interpolating the prior
+// packet. That mismatch renders as a sporadic forward teleport/snap onto
+// the target -- most visible against a kiting target that a melee bot can
+// never fully close on, where distance-progress heuristics keep concluding
+// "not progressing" and approving a reissue every cadence tick. See the
+// matching fix/comment in PlayerbotPvpLifecycleActions.cpp.
+bool HasActiveTargetRelativeMovementFor(Player const* player, Unit const* target)
+{
+    if (!player || !target)
+        return false;
+
+    MotionMaster const* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return false;
+
+    MovementGeneratorType const movementType = motionMaster->GetCurrentMovementGeneratorType();
+    if (movementType != CHASE_MOTION_TYPE && movementType != FOLLOW_MOTION_TYPE)
+        return false;
+
+    MovementGenerator const* movement = motionMaster->GetCurrentMovementGenerator();
+    AbstractFollower const* follower = movement ? dynamic_cast<AbstractFollower const*>(movement) : nullptr;
+    if (!follower || follower->GetTarget() != target)
+        return false;
+
+    bool const activeSpline = player->movespline && player->movespline->Initialized() &&
+        !player->movespline->Finalized();
+    return activeSpline || player->isMoving() ||
+        player->HasUnitState(UNIT_STATE_CHASE_MOVE | UNIT_STATE_FOLLOW_MOVE);
 }
 
 bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* target, float desiredRange, uint32 minRunMs,
@@ -813,7 +940,7 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
     if (!activeTargetRelativeMotion)
         return false;
 
-    TargetRelativeMoveOrderState& state = g_TargetRelativeMoveOrderByGuid[player->GetGUID().GetRawValue()];
+    TargetRelativeMoveOrderState& state = playerbot::LockedGetOrCreate(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue());
     bool const sameTarget = state.targetGuid == target->GetGUID();
     if (!sameTarget)
         return false;
@@ -1047,8 +1174,8 @@ MotionPrimeResult PrimeTargetRelativeMotion(Player* player)
 
     result.attempted = true;
     // MotionMaster::HasFlag(...) is private in this TrinityCore branch, so do not
-    // introspect MOTIONMASTER_FLAG_* here. We still log the public current motion
-    // and the top MovementGenerator flags, then prime one motion tick.
+    // introspect MOTIONMASTER_FLAG_* here. Snapshot only public generator state;
+    // the map's normal MotionMaster update must own initialization and movement.
     result.mmSizeBefore = motionMaster->Size();
     result.motionBefore = motionMaster->GetCurrentMovementGeneratorType();
     result.movingBefore = player->isMoving();
@@ -1060,12 +1187,6 @@ MotionPrimeResult PrimeTargetRelativeMotion(Player* player)
         result.topInitPendingBefore = top->HasFlag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING);
         result.topDeactivatedBefore = top->HasFlag(MOVEMENTGENERATOR_FLAG_DEACTIVATED);
     }
-
-    // Force Initialize()+first Update() for freshly queued Chase/Follow.
-    // Without this, virtual-session playerbots can show motion=chase/follow
-    // for >1s while CHASE_MOVE/FOLLOW_MOVE never gets set.
-    motionMaster->Update(1);
-    result.updateCalled = true;
 
     result.mmSizeAfter = motionMaster->Size();
     result.motionAfter = motionMaster->GetCurrentMovementGeneratorType();
@@ -1365,10 +1486,9 @@ std::string BuildRangedMovementDiag(Player const* player, Unit const* target, ch
          << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
          << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no");
 
-    auto orderItr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
-    if (orderItr != g_TargetRelativeMoveOrderByGuid.end())
+    if (TargetRelativeMoveOrderState const* orderState = playerbot::LockedFind(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue()))
     {
-        TargetRelativeMoveOrderState const& order = orderItr->second;
+        TargetRelativeMoveOrderState const& order = *orderState;
         uint32 const nowMs = GameTime::GetGameTimeMS();
         uint32 const orderAgeMs = order.lastIssueMs != 0 && nowMs >= order.lastIssueMs ? nowMs - order.lastIssueMs : 0;
         uint32 const distanceProgressAgeMs = order.lastProgressMs != 0 && nowMs >= order.lastProgressMs ? nowMs - order.lastProgressMs : 0;
@@ -1397,73 +1517,26 @@ std::string BuildRangedMovementDiag(Player const* player, Unit const* target, ch
 
 bool IsHunterExactDeadZone(Player const* player, Unit const* target)
 {
-    if (!player || player->GetClass() != CLASS_HUNTER || !target || !target->IsAlive())
+    playerbot::HunterAutoShotRangeInfo rangeInfo;
+    if (!playerbot::PvpCore::GetHunterAutoShotRange(player, target, rangeInfo))
         return false;
 
-    float const distance = player->GetExactDist(target);
-    return distance > 5.0f && distance < 8.0f;
+    return rangeInfo.exactDistance > rangeInfo.meleeRange &&
+        rangeInfo.exactDistance < rangeInfo.minRange;
 }
 
 bool IsHunterAutoShotBand(Player const* player, Unit const* target)
 {
-    if (!player || player->GetClass() != CLASS_HUNTER || !target || !target->IsAlive() || !player->HasSpell(75))
+    playerbot::HunterAutoShotRangeInfo rangeInfo;
+    if (!playerbot::PvpCore::GetHunterAutoShotRange(player, target, rangeInfo))
         return false;
 
-    SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(75);
-    if (!autoShotInfo)
-        return false;
-
-    if (!player->IsWithinLOSInMap(target))
-        return false;
-
-    float const exactDistance = player->GetExactDist(target);
-    float const minAutoShotRange = autoShotInfo->GetMinRange(false);
-    float const maxAutoShotRange = autoShotInfo->GetMaxRange(false);
-    return exactDistance > std::max(minAutoShotRange + 0.75f, 8.75f) && exactDistance <= maxAutoShotRange;
+    return player->IsWithinLOSInMap(target) &&
+        rangeInfo.exactDistance > rangeInfo.minRange + playerbot::PLAYERBOT_HUNTER_AUTOSHOT_MIN_SAFETY_MARGIN &&
+        rangeInfo.exactDistance <= rangeInfo.maxRange;
 }
 
 void StopHunterDamageOnBreakableCrowdControl(Player* player, Unit* target, char const* reason);
-
-void StopHunterAndStartAutoShot(Player* player, Unit* target, char const* reason)
-{
-    if (!player || !target || !target->IsAlive())
-        return;
-
-    if (target->HasBreakableByDamageCrowdControlAura())
-    {
-        StopHunterDamageOnBreakableCrowdControl(player, target, "hunter_hold_autoshot_suppressed_breakable_cc");
-        return;
-    }
-
-    MotionMaster* motionMaster = player->GetMotionMaster();
-    MovementGeneratorType const motionBefore = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
-    if (motionMaster)
-        motionMaster->Clear(MOTION_SLOT_ACTIVE);
-
-    player->StopMoving();
-    if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
-    {
-        player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
-        player->SendMovementFlagUpdate();
-    }
-
-    player->SetFacingToObject(target);
-    player->SetInFront(target);
-
-    Spell const* autoRepeatSpell = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
-    bool const autoShotActive = autoRepeatSpell && autoRepeatSpell->GetSpellInfo() && autoRepeatSpell->GetSpellInfo()->Id == 75;
-    if (!autoShotActive && player->HasSpell(75))
-        player->CastSpell(target, 75, false);
-
-    std::ostringstream diag;
-    diag << (reason ? reason : "hunter_auto_shot_hold")
-         << " dist=" << player->GetDistance(target)
-         << " exact=" << player->GetExactDist(target)
-         << " motion_before=" << uint32(motionBefore)
-         << " motion_after=" << (motionMaster ? uint32(motionMaster->GetCurrentMovementGeneratorType()) : 0)
-         << " auto_active=" << (autoShotActive ? "yes" : "no");
-    SetLastMovementDebugStatus(player, diag.str());
-}
 
 float ComputeHunterDeadZoneRetreatStep(Player const* player, Unit const* target)
 {
@@ -1493,10 +1566,30 @@ void IssueHunterDeadZoneRetreatMovement(Player* player, Unit* target, char const
 
     MovementGeneratorType const motionBefore = motionMaster->GetCurrentMovementGeneratorType();
     bool issuedStrict = false;
-    if (RequiresStrictHumanPathing(player))
-        issuedStrict = IssueStrictHumanMove(player, destination, 2.0f, 150);
+    bool const strictPathingRequired = RequiresStrictHumanPathing(player);
+    if (strictPathingRequired)
+    {
+        // These were 2.0f/150ms - tight enough that a hunter kiting a live
+        // target reissued a fresh short segment several times a second,
+        // clearing the previous one before it had finished executing. Beyond
+        // the visible stutter, every reissue re-runs the segment's floor/
+        // height computation from scratch, and re-running that far more
+        // often than necessary meant far more chances to land on an
+        // ambiguous height sample on this map's stacked geometry. Loosened
+        // to still react quickly to being pushed into/out of the dead zone,
+        // but without re-triggering on every few hundred milliseconds of
+        // ordinary target movement.
+        issuedStrict = IssueStrictHumanMove(player, destination, 4.0f, 500);
+    }
 
-    if (!issuedStrict)
+    // If strict pathing was attempted and explicitly failed, PathGenerator
+    // has already determined this retreat destination is not safely
+    // reachable (wall, unnavigable geometry, etc). Falling back to a raw
+    // MovePoint here is exactly what was walking kiting hunters straight
+    // through walls and eventually below the map - do nothing instead and
+    // let the next tick re-evaluate. Outside a battleground (no strict
+    // pathing attempted at all) keep the simpler point move.
+    if (!issuedStrict && !strictPathingRequired)
     {
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
         motionMaster->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
@@ -1568,6 +1661,11 @@ bool IsSpellReadyAtCurrentPosition(Player* player, Unit* target, SpellInfo const
         if (!IsFriendlySupportTarget(player, target, spellInfo))
             return false;
     }
+    else if (targetMode == playerbot::PvpClassSpellContext::TargetMode::Pet)
+    {
+        if (target != player->GetPet())
+            return false;
+    }
     else if (targetMode != playerbot::PvpClassSpellContext::TargetMode::Self)
         return false;
 
@@ -1609,6 +1707,23 @@ void IssueStealthOpenerMovement(Player* player, Unit* target)
     SetLastMovementDebugStatus(player, diag.str());
 }
 
+bool IsGapCloserSpell(uint32 spellId)
+{
+    switch (spellId)
+    {
+        case 11578: // Charge
+        case 20617: // Intercept
+        case 81271: // Heroic Leap
+        case 82419: // Rehgar's Fury
+        case 83111: // Feral Charge - Moonkin
+        case 49376: // Feral Charge - Cat
+        case 16979: // Feral Charge - Bear
+            return true;
+        default:
+            return false;
+    }
+}
+
 void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDistance, bool forceMovementWhenAlreadyInRange = false, char const* forcedReason = nullptr)
 {
     if (!player || !target)
@@ -1616,6 +1731,14 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
 
     MotionMaster* motionMaster = player->GetMotionMaster();
     if (!motionMaster)
+        return;
+
+    // See the matching guard in IssueMeleeApproachMovement: a charge/leap
+    // effect (Rehgar's Fury included) drives its own EFFECT_MOTION_TYPE
+    // motion once cast, and the very next decision tick landing here would
+    // otherwise clear that in-flight spline and replace it with an ordinary
+    // chase/follow order before the charge has actually landed.
+    if (HasActiveMovementEffectSpline(player))
         return;
 
     struct RangedApproachStallState
@@ -1631,7 +1754,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     };
 
     static std::unordered_map<uint64, RangedApproachStallState> stallStateByGuid;
-    RangedApproachStallState& stallState = stallStateByGuid[player->GetGUID().GetRawValue()];
+    RangedApproachStallState& stallState = playerbot::LockedGetOrCreate(stallStateByGuid, player->GetGUID().GetRawValue());
 
     float const requestedSafeDistance = std::max(1.0f, desiredDistance);
     float const currentDistance = player->GetDistance(target);
@@ -1642,11 +1765,11 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     bool const strictPathing = RequiresStrictHumanPathing(player);
 
     // Hunters should not chase inward just because an instant shot is out of its
-    // shorter spell range. If Auto Shot is valid, hold ground and shoot; only
-    // close later when the target is actually beyond ranged-weapon range.
+    // shorter spell range. The lifecycle kite loop already owns ideal-range
+    // movement and the weapon-timer plant; class movement must neither replace
+    // that order nor stop early merely because Auto Shot is currently legal.
     if (!forceMovementWhenAlreadyInRange && targetAttackable && IsHunterAutoShotBand(player, target))
     {
-        StopHunterAndStartAutoShot(player, target, "hunter_ranged_approach_suppressed_autoshot_band");
         stallState.targetGuid = target->GetGUID();
         stallState.lastDistance = currentDistance;
         stallState.lastSampleMs = GameTime::GetGameTimeMS();
@@ -1654,12 +1777,6 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         stallState.lastIssuedMode = 0;
         return;
     }
-    bool const battleground = player->InBattleground();
-    float const verticalDeltaToTarget = player->GetPositionZ() - target->GetPositionZ();
-    float const dxToTarget = target->GetPositionX() - player->GetPositionX();
-    float const dyToTarget = target->GetPositionY() - player->GetPositionY();
-    float const planarDistanceToTarget = std::sqrt(dxToTarget * dxToTarget + dyToTarget * dyToTarget);
-
     // Important: SPELL_FAILED_LINE_OF_SIGHT is more authoritative than the
     // generic IsWithinLOSInMap() diagnostic. On custom BG maps/vmaps the simple
     // LOS check can say yes while Spell::CheckCast still rejects the cast. In
@@ -1725,6 +1842,27 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             SetLastMovementDebugStatus(player, resetDiag.str());
         }
 
+        // Same guard as IssueMeleeApproachMovement: a live spline already
+        // chasing/following this exact target must not be replaced just
+        // because ShouldPreserveTargetRelativeMovement's distance-progress
+        // heuristic gives up. Against a target the bot can never quite close
+        // on (a kiting caster, or a ranged bot straining to hold its own
+        // preferred range), currentDistance never shrinks enough to satisfy
+        // that heuristic, so it kept approving a reissue every cadence tick
+        // -- each one a MoveSplineInit resync that renders as a snap/teleport
+        // toward the target. The stale-recovery clears above still run first,
+        // so a genuinely stuck (unlaunched/finalized) generator is unaffected.
+        if (HasActiveTargetRelativeMovementFor(player, target))
+        {
+            SetLastMovementDebugStatus(player, BuildRangedMovementDiag(player, target, "ranged_active_target_relative_motion_preserved",
+                safeDistance, safeDistance, targetLos, targetAttackable, false, initialMotionType,
+                initialMotionType == FOLLOW_MOTION_TYPE ? "existing_follow" : "existing_chase"));
+            stallState.targetGuid = target->GetGUID();
+            stallState.lastDistance = currentDistance;
+            stallState.lastSampleMs = nowMs;
+            return;
+        }
+
         std::string preserveDiag;
         if (ShouldPreserveTargetRelativeMovement(player, target, safeDistance, 3000, "ranged_existing_motion_preserved", &preserveDiag))
         {
@@ -1753,48 +1891,6 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         TC_LOG_DEBUG("playerbots.pvp.classspell",
             "Ranged approach cleared stalled point movement: guid={} target={} desiredRange={} currentDistance={}.",
             player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, currentDistance);
-    }
-
-    // Battleground cliff descent recovery:
-    // When chasing a distant lower target from elevated terrain, repeatedly
-    // issuing CHASE/FOLLOW can route bots back uphill. Force a short direct
-    // downhill step toward the target to commit the descent before resuming
-    // target-relative pathing.
-    bool const shouldForceDownhillCommit =
-        battleground &&
-        strictPathing &&
-        verticalDeltaToTarget > 8.0f &&
-        planarDistanceToTarget > 30.0f &&
-        !currentlyMoving &&
-        !player->HasUnitState(UNIT_STATE_CHASE_MOVE) &&
-        !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
-    if (shouldForceDownhillCommit)
-    {
-        float const stepDistance = std::min(16.0f, std::max(6.0f, planarDistanceToTarget * 0.3f));
-        float const invPlanar = 1.0f / std::max(0.01f, planarDistanceToTarget);
-        Position downhillProbe(
-            player->GetPositionX() + dxToTarget * invPlanar * stepDistance,
-            player->GetPositionY() + dyToTarget * invPlanar * stepDistance,
-            player->GetPositionZ() - std::min(12.0f, std::max(4.0f, verticalDeltaToTarget * 0.5f)),
-            player->GetOrientation());
-        Position const downhillDestination = BuildCollisionSafeDestination(player, downhillProbe);
-        motionMaster->MovePoint(0, downhillDestination, false);
-
-        stallState.targetGuid = target->GetGUID();
-        stallState.lastDistance = currentDistance;
-        stallState.lastSampleMs = nowMs;
-        stallState.lastIssueMs = nowMs;
-        stallState.lastIssuedRange = safeDistance;
-        stallState.lastIssuedMode = 1;
-
-        std::ostringstream diag;
-        diag << BuildRangedMovementDiag(player, target, "bg_downhill_commit_direct",
-            safeDistance, safeDistance, targetLos, targetAttackable, true, initialMotionType, "direct")
-             << " vertical_delta=" << verticalDeltaToTarget
-             << " planar_delta=" << planarDistanceToTarget
-             << " commit_dist=" << player->GetDistance(downhillDestination);
-        SetLastMovementDebugStatus(player, diag.str());
-        return;
     }
 
     // For target-relative ranged approach, do NOT use MovePoint here.
@@ -1891,7 +1987,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         stallState.lastIssuedMode = shouldEscalateContactRescue ? 3 : (moveResult == TargetRelativeRangedMoveResult::FollowIssued ? 2 : 1);
         stallState.stagnantSamples = staleQueuedGenerator ? 1 : 0;
 
-        char const* label = "near_edge_chase_nudge";
+        char const* label = "near_edge_pathing_chase";
         if (staleQueuedGenerator)
         {
             if (shouldEscalateContactRescue)
@@ -1986,7 +2082,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         bool const strictIssued = IssueStrictHumanFollow(player, target, safeDistance);
         if (strictIssued)
         {
-            g_TargetRelativeMoveOrderByGuid.erase(player->GetGUID().GetRawValue());
+            playerbot::LockedErase(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue());
             stallState.targetGuid = target->GetGUID();
             stallState.lastDistance = currentDistance;
             stallState.lastSampleMs = nowMs;
@@ -2175,7 +2271,7 @@ void IssueBehindTargetMeleeMovement(Player* player, Unit* target)
     };
 
     static std::unordered_map<uint64, BehindFollowOrderState> stateByGuid;
-    BehindFollowOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
+    BehindFollowOrderState& state = playerbot::LockedGetOrCreate(stateByGuid, player->GetGUID().GetRawValue());
     uint32 const nowMs = GameTime::GetGameTimeMS();
     bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + 750;
     bool const targetChanged = state.targetGuid != target->GetGUID();
@@ -2226,6 +2322,17 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
     if (!motionMaster)
         return;
 
+    // A charge/leap-type spell (Charge, Intercept, Heroic Leap, Feral Charge,
+    // Rehgar's Fury, ...) drives its own EFFECT_MOTION_TYPE movement once
+    // cast. The spell itself goes on cooldown immediately, so the very next
+    // decision tick - often before the charge has actually landed - picks a
+    // different action and lands here wanting to close the same gap, which
+    // clears the in-flight charge spline and replaces it with an ordinary
+    // MoveChase/MoveFollow. That reads as the charge "getting hijacked"
+    // mid-flight. Let the native charge motion finish on its own.
+    if (HasActiveMovementEffectSpline(player))
+        return;
+
     if (player->HasStealthAura())
     {
         // For hostile stealth openers, always use default MoveChase.
@@ -2248,7 +2355,7 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
             {
                 if (IssueStrictHumanFollow(player, target, 3.0f))
                 {
-                    g_TargetRelativeMoveOrderByGuid.erase(player->GetGUID().GetRawValue());
+                    playerbot::LockedErase(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue());
 
                     std::ostringstream diag;
                     diag << "stealth_far_strict_segment_move"
@@ -2258,6 +2365,12 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
                     SetLastMovementDebugStatus(player, diag.str());
                     return;
                 }
+            }
+
+            if (HasActiveTargetRelativeMovementFor(player, target))
+            {
+                SetLastMovementDebugStatus(player, "stealth_melee_active_target_relative_motion_preserved");
+                return;
             }
 
             std::string preserveDiag;
@@ -2304,23 +2417,63 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
         return;
     }
 
-    if (RequiresStrictHumanPathing(player) && IssueStrictHumanFollow(player, target, 1.5f))
-        return;
-
-    if (RequiresStrictHumanPathing(player))
+    if (HasActiveTargetRelativeMovementFor(player, target))
     {
-        // Keep melee bots close to contact range instead of orbiting around a
-        // larger follow radius (which can look like "running away"). If strict
-        // pathing fails, fall back to regular chase so bots keep pressure.
-        TC_LOG_DEBUG("playerbots.pvp.classspell",
-            "Strict melee follow fallback to generic chase: guid={} target={}.",
-            player->GetGUID().ToString(), target->GetGUID().ToString());
+        SetLastMovementDebugStatus(player, "melee_active_target_relative_motion_preserved");
+        return;
     }
 
     std::string preserveDiag;
     if (ShouldPreserveTargetRelativeMovement(player, target, 1.5f, 2000, "melee_existing_motion_preserved", &preserveDiag))
     {
         SetLastMovementDebugStatus(player, preserveDiag);
+        return;
+    }
+
+    // Native Chase/Follow continuously updates its path against a moving
+    // target. The old battleground-first path ran every melee pursuit through
+    // an 80-yard MovePoint segment instead. When the target drifted 8 yards,
+    // that path cleared the active spline and installed a new segment; virtual
+    // players were consequently rendered snapping toward the target at the
+    // reissue cadence. This affected every melee profile (for example feral
+    // druids and retribution paladins), although it only became visible for
+    // particular target movement/tick timing.
+    //
+    // Preserve an already-running recovery segment, and use strict segmented
+    // pathing only when a native target-relative generator genuinely failed to
+    // launch. Normal pursuit remains a continuous Chase/Follow spline.
+    MovementGeneratorType const currentMotionType = motionMaster->GetCurrentMovementGeneratorType();
+    bool const activePointRecovery = currentMotionType == POINT_MOTION_TYPE &&
+        (player->isMoving() ||
+            (player->movespline && player->movespline->Initialized() && !player->movespline->Finalized()));
+    if (activePointRecovery)
+    {
+        SetLastMovementDebugStatus(player, "melee_strict_recovery_segment_preserved");
+        return;
+    }
+
+    bool useStrictRecovery = false;
+    if (RequiresStrictHumanPathing(player))
+    {
+        TargetRelativeMoveOrderState const* orderState = playerbot::LockedFind(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue());
+        if (orderState && orderState->targetGuid == target->GetGUID())
+        {
+            uint32 const nowMs = GameTime::GetGameTimeMS();
+            uint32 const orderAgeMs = orderState->lastIssueMs != 0 && nowMs >= orderState->lastIssueMs
+                ? nowMs - orderState->lastIssueMs
+                : 0;
+            bool const hasMovementSignal = player->isMoving() ||
+                player->HasUnitState(UNIT_STATE_CHASE_MOVE) ||
+                player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ||
+                (player->movespline && player->movespline->Initialized() && !player->movespline->Finalized());
+            bool const nativeTargetRelativeMotion = currentMotionType == CHASE_MOTION_TYPE || currentMotionType == FOLLOW_MOTION_TYPE;
+            useStrictRecovery = nativeTargetRelativeMotion && orderAgeMs >= 350 && !hasMovementSignal;
+        }
+    }
+
+    if (useStrictRecovery && IssueStrictHumanFollow(player, target, 1.5f))
+    {
+        SetLastMovementDebugStatus(player, "melee_native_chase_unlaunched_strict_recovery");
         return;
     }
 
@@ -2337,7 +2490,76 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
     }
 
     MotionPrimeResult meleePrimeResult = PrimeTargetRelativeMotion(player);
+    MarkTargetRelativeMovementLaunch(player);
     meleePrimeResult.addToWorldCalled = preparedMotionMaster;
+}
+
+
+void IssueGapCloserRangeApproachMovement(Player* player, Unit* target, float maxRange)
+{
+    if (!player || !target || maxRange <= 0.0f)
+        return;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return;
+
+    if (HasActiveMovementEffectSpline(player))
+        return;
+
+    struct GapCloserApproachOrderState
+    {
+        ObjectGuid targetGuid = ObjectGuid::Empty;
+        Position destination;
+        uint32 lastIssueMs = 0;
+    };
+
+    static std::unordered_map<uint64, GapCloserApproachOrderState> stateByGuid;
+    GapCloserApproachOrderState& state = playerbot::LockedGetOrCreate(stateByGuid, player->GetGUID().GetRawValue());
+
+    // Move to a stable point safely inside the gap-closer's real max range
+    // instead of chasing all the way to melee. Reusing the point for a short
+    // window prevents the cast retry loop from clearing and rebuilding the
+    // spline every tick, which is the visible inch/stop stutter reported for
+    // Charge at 25y while the warrior was still ~36y away.
+    float const desiredRange = std::max(1.0f, maxRange - 2.0f);
+    Position const destination = BuildFollowDestination(player, target, desiredRange);
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    bool const sameTarget = state.targetGuid == target->GetGUID();
+    bool const destinationStable = sameTarget && state.lastIssueMs != 0 && state.destination.GetExactDist(destination) < 6.0f;
+    bool const activePointMove = motionMaster->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE &&
+        (player->isMoving() || (player->movespline && player->movespline->Initialized() && !player->movespline->Finalized()));
+
+    if (destinationStable && activePointMove && nowMs < state.lastIssueMs + 1000)
+        return;
+
+    bool issued = false;
+    if (RequiresStrictHumanPathing(player))
+        issued = IssueStrictHumanMove(player, destination, 8.0f, 1000);
+    else
+    {
+        motionMaster->Clear(MOTION_SLOT_ACTIVE);
+        motionMaster->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
+        issued = true;
+    }
+
+    if (issued)
+    {
+        playerbot::LockedErase(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue());
+        state.targetGuid = target->GetGUID();
+        state.destination = destination;
+        state.lastIssueMs = nowMs;
+
+        std::ostringstream diag;
+        diag << "gapcloser_range_point_move"
+             << " desired_range=" << desiredRange
+             << " max_range=" << maxRange
+             << " dist=" << player->GetDistance(target)
+             << " strict=" << (RequiresStrictHumanPathing(player) ? "yes" : "no")
+             << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
+             << " moving_after=" << (player->isMoving() ? "yes" : "no");
+        SetLastMovementDebugStatus(player, diag.str());
+    }
 }
 
 float ComputeLosRecoveryRange(Player const* player, Unit const* target, float maxRange)
@@ -2383,7 +2605,9 @@ bool IsCrowdControlledForAction(Player const* player)
         (1u << MECHANIC_HORROR) |
         (1u << MECHANIC_SAPPED);
 
-    bool const hasLostControlState = player->HasUnitState(UNIT_STATE_LOST_CONTROL);
+    // LOST_CONTROL includes the normal CHARGING/JUMPING states used by
+    // effect movement. Only the actual controlled/possessed subset is CC.
+    bool const hasControlState = player->HasUnitState(UNIT_STATE_CONTROLLED | UNIT_STATE_POSSESSED);
     bool const hasHardCcState = player->HasUnitState(UNIT_STATE_STUNNED) ||
         player->HasUnitState(UNIT_STATE_CONFUSED) ||
         player->HasUnitState(UNIT_STATE_FLEEING);
@@ -2391,7 +2615,7 @@ bool IsCrowdControlledForAction(Player const* player)
         player->HasAuraWithMechanic(ccMechanicMask) ||
         player->IsPolymorphed();
 
-    return hasLostControlState || hasHardCcState || hasCcAura;
+    return hasControlState || hasHardCcState || hasCcAura;
 }
 
 
@@ -2440,6 +2664,14 @@ bool IsMageBlinkEscapeCast(Player const* player, playerbot::PvpClassSpellContext
     return !hardNonBlinkableControl;
 }
 
+bool IsHunterBestialWrathEscapeCast(Player const* player, playerbot::PvpClassSpellContext const& context,
+    uint32 resolvedSpellId)
+{
+    return player && player->GetClass() == CLASS_HUNTER &&
+        context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self &&
+        (context.spellId == 81300 || resolvedSpellId == 81300);
+}
+
 
 bool PlayerHasPoisonForStoneform(Player const* player)
 {
@@ -2450,7 +2682,17 @@ bool PlayerHasPoisonForStoneform(Player const* player)
     {
         AuraApplication const* aurApp = appliedAura.second;
         SpellInfo const* spellInfo = aurApp ? aurApp->GetBase()->GetSpellInfo() : nullptr;
-        if (spellInfo && spellInfo->Dispel == DISPEL_POISON)
+        if (!spellInfo)
+            continue;
+
+        // Blind (2094) is classified as a Poison-dispel effect, so Stoneform
+        // should be allowed to break it exactly like any other poison even if
+        // this server's spell data doesn't carry Dispel == DISPEL_POISON on it
+        // directly. Kept in sync with HasPoisonEffect in PlayerbotPvpCore.cpp,
+        // which gates whether the bot decides to cast Stoneform in the first
+        // place - this is the separate check that authorizes the cast to
+        // actually go through while the bot is flagged as crowd-controlled.
+        if (spellInfo->Dispel == DISPEL_POISON || spellInfo->Id == 2094)
             return true;
     }
 
@@ -2474,6 +2716,17 @@ bool IsControlBreakingRacialCast(Player const* player, playerbot::PvpClassSpellC
         }
         case 20594: // Stoneform
             return PlayerHasPoisonForStoneform(player);
+        // Custom trinket-equivalent Every Man for Himself abilities - still the
+        // Human racial, just implemented as five class-flavored variants
+        // granted via character_action. See the class-group mapping next to
+        // kEveryManForHimself*GroupSpellId in PlayerbotPvpCore.cpp.
+        case 89148: // Rogue/Warlock
+        case 89149: // Warrior/Hunter/Shaman
+        case 89150: // Paladin/Priest
+        case 89151: // Mage
+        case 89152: // Druid and anything else
+            return player->HasUnitState(UNIT_STATE_FLEEING) ||
+                player->HasAuraWithMechanic(IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK);
         default:
             return false;
     }
@@ -2484,13 +2737,16 @@ bool IsFriendlySupportTarget(Player const* player, Unit const* target, SpellInfo
     if (!player || !target || !target->IsAlive())
         return false;
 
+    Player const* targetPlayer = target->ToPlayer();
+    if (targetPlayer && targetPlayer->IsSpectator())
+        return false;
+
     if (target == player)
         return true;
 
     if (player->IsValidAssistTarget(target, spellInfo))
         return true;
 
-    Player const* targetPlayer = target->ToPlayer();
     if (!targetPlayer || !player->InBattleground() || !targetPlayer->InBattleground())
         return false;
 
@@ -2552,6 +2808,7 @@ std::unordered_map<CasterSpellCooldownKey, std::chrono::steady_clock::time_point
 
 std::unordered_map<uint64, std::string> g_LastClassExecutionStatusByGuid;
 std::unordered_map<uint64, std::string> g_LastMovementDebugStatusByGuid;
+std::mutex g_ClassDiagnosticStatusLock;
 struct LastDirectiveState
 {
     playerbot::PvpClassSpellContext::MovementDirective directive = playerbot::PvpClassSpellContext::MovementDirective::None;
@@ -2587,7 +2844,7 @@ bool ShouldThrottleDirective(Player const* player, playerbot::PvpClassSpellConte
             return false;
     }
 
-    auto& state = g_LastDirectiveByBot[player->GetGUID()];
+    auto& state = playerbot::LockedGetOrCreate(g_LastDirectiveByBot, player->GetGUID());
     std::chrono::steady_clock::time_point const now = GameTime::Now();
     if (state.directive == context.movementDirective &&
         state.targetGuid == context.movementTargetGuid &&
@@ -2607,6 +2864,7 @@ void SetLastExecutionStatus(Player const* player, std::string const& status)
     if (!player)
         return;
 
+    std::lock_guard<std::mutex> statusLock(g_ClassDiagnosticStatusLock);
     g_LastClassExecutionStatusByGuid[player->GetGUID().GetRawValue()] = status;
 }
 
@@ -2615,6 +2873,7 @@ void SetLastMovementDebugStatus(Player const* player, std::string const& status)
     if (!player)
         return;
 
+    std::lock_guard<std::mutex> statusLock(g_ClassDiagnosticStatusLock);
     g_LastMovementDebugStatusByGuid[player->GetGUID().GetRawValue()] = status;
 }
 
@@ -2744,7 +3003,29 @@ void CommandPetAttackTarget(Player* player, Unit* target)
     }
 
     Pet* pet = player->GetPet();
-    if (!pet || !pet->IsAlive() || !pet->IsValidAttackTarget(target))
+    if (!pet || !pet->IsAlive())
+        return;
+
+    bool const inBattlegroundPreparation = player->InBattleground() &&
+        (player->HasAura(SPELL_PREPARATION) || player->HasAura(SPELL_ARENA_PREPARATION) ||
+            player->HasUnitFlag(UNIT_FLAG_PREPARATION));
+    if (inBattlegroundPreparation)
+    {
+        if (CharmInfo* charmInfo = pet->GetCharmInfo())
+        {
+            charmInfo->SetIsCommandAttack(false);
+            charmInfo->SetIsAtStay(false);
+            charmInfo->SetIsCommandFollow(true);
+            charmInfo->SetCommandState(COMMAND_FOLLOW);
+        }
+        pet->AttackStop();
+        pet->CombatStop(true);
+        if (MotionMaster* motionMaster = pet->GetMotionMaster())
+            motionMaster->Clear(MOTION_SLOT_ACTIVE);
+        return;
+    }
+
+    if (!pet->IsValidAttackTarget(target))
         return;
 
     if (CharmInfo* charmInfo = pet->GetCharmInfo())
@@ -2780,7 +3061,7 @@ void NotifyDuelDecision(Player* player, playerbot::PvpClassSpellContext const& c
         return;
 
     Player* opponent = player->duel->Opponent;
-    if (opponent)
+    if (WantsPlayerbotDiagnostics(opponent))
     {
         std::string message = "Decision: ";
         message += context.actionName ? context.actionName : "none";
@@ -2806,7 +3087,7 @@ void NotifyDuelDecision(Player* player, playerbot::PvpClassSpellContext const& c
         failureReason.empty() ? "none" : failureReason);
 }
 
-void NotifySpellCastFailureToGameMasters(Player* bot, playerbot::PvpClassSpellContext const& context, SpellCastResult castResult)
+void NotifySpellCastFailureToDiagnosticObservers(Player* bot, playerbot::PvpClassSpellContext const& context, SpellCastResult castResult)
 {
     if (!bot || castResult == SPELL_CAST_OK || castResult == SPELL_FAILED_SPELL_IN_PROGRESS)
         return;
@@ -2829,42 +3110,11 @@ void NotifySpellCastFailureToGameMasters(Player* bot, playerbot::PvpClassSpellCo
     for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
     {
         Player* observer = itr->GetSource();
-        if (!observer || !observer->IsGameMaster())
+        if (!WantsPlayerbotDiagnostics(observer))
             continue;
 
         bot->Whisper(message, LANG_UNIVERSAL, observer);
     }
-}
-
-void FinalizeVirtualNearTeleport(Player* player)
-{
-    if (!player || !player->IsBeingTeleportedNear())
-        return;
-
-    uint32 const oldZone = player->GetZoneId();
-    WorldLocation dest = player->GetTeleportDest();
-    float safeDestZ = dest.GetPositionZ();
-    player->UpdateAllowedPositionZ(dest.GetPositionX(), dest.GetPositionY(), safeDestZ);
-    dest.Relocate(dest.GetPositionX(), dest.GetPositionY(), safeDestZ, dest.GetOrientation());
-
-    player->SetSemaphoreTeleportNear(false);
-    player->UpdatePosition(dest, true);
-
-    uint32 newZone = 0;
-    uint32 newArea = 0;
-    player->GetZoneAndAreaId(newZone, newArea);
-    player->UpdateZone(newZone, newArea);
-
-    if (oldZone != newZone)
-    {
-        if (player->pvpInfo.IsHostile)
-            player->CastSpell(player, 2479, true);
-        else if (player->IsPvP() && !player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_IN_PVP))
-            player->UpdatePvP(false, false);
-    }
-
-    player->ResummonPetTemporaryUnSummonedIfAny();
-    player->ProcessDelayedOperations();
 }
 
 char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode)
@@ -2874,6 +3124,7 @@ char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode)
         case playerbot::PvpClassSpellContext::TargetMode::Enemy: return "enemy";
         case playerbot::PvpClassSpellContext::TargetMode::Self: return "self";
         case playerbot::PvpClassSpellContext::TargetMode::Ally: return "ally";
+        case playerbot::PvpClassSpellContext::TargetMode::Pet: return "pet";
         case playerbot::PvpClassSpellContext::TargetMode::None:
         default: return "none";
     }
@@ -2919,7 +3170,7 @@ void WhisperPlayerbotDiagnostic(Player* bot, std::string const& message)
     if (!bot || message.empty())
         return;
 
-    if (bot->duel && bot->duel->Opponent)
+    if (bot->duel && WantsPlayerbotDiagnostics(bot->duel->Opponent))
         bot->Whisper(message, LANG_UNIVERSAL, bot->duel->Opponent);
 
     Map* map = bot->FindMap();
@@ -2929,13 +3180,83 @@ void WhisperPlayerbotDiagnostic(Player* bot, std::string const& message)
     for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
     {
         Player* observer = itr->GetSource();
-        if (!observer || !observer->IsGameMaster())
+        if (!WantsPlayerbotDiagnostics(observer))
             continue;
 
         if (bot->duel && bot->duel->Opponent && observer->GetGUID() == bot->duel->Opponent->GetGUID())
             continue;
 
         bot->Whisper(message, LANG_UNIVERSAL, observer);
+    }
+}
+
+std::string BuildRehgarsFuryMovementDiagnostic(Player const* player, Unit const* target, char const* phase, char const* extra = nullptr)
+{
+    std::ostringstream os;
+    os << "REHGAR DIAG: phase=" << (phase ? phase : "unknown");
+    if (extra && *extra)
+        os << " extra=" << extra;
+
+    if (!player)
+        return os.str();
+
+    MotionMaster const* motionMaster = player->GetMotionMaster();
+    bool const hasSpline = player->movespline != nullptr;
+    os << " bot=" << player->GetName()
+       << " guid=" << player->GetGUID().ToString()
+       << " motion=" << uint32(motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE)
+       << " spline=" << (hasSpline ? "yes" : "no")
+       << " initialized=" << (hasSpline && player->movespline->Initialized() ? "yes" : "no")
+       << " finalized=" << (hasSpline && player->movespline->Finalized() ? "yes" : "no")
+       << " moving=" << (player->isMoving() ? "yes" : "no")
+       << " charging=" << (player->HasUnitState(UNIT_STATE_CHARGING) ? "yes" : "no")
+       << " jumping=" << (player->HasUnitState(UNIT_STATE_JUMPING) ? "yes" : "no")
+       << " form=" << uint32(player->GetShapeshiftForm())
+       << " fury_cd=" << (player->GetSpellHistory()->HasCooldown(82419) ? "yes" : "no")
+       << " ghost_wolf_cd=" << (player->GetSpellHistory()->HasCooldown(2645) ? "yes" : "no")
+       << " pos=" << player->GetPositionX() << ',' << player->GetPositionY() << ',' << player->GetPositionZ();
+
+    if (target)
+        os << " target=" << target->GetGUID().ToString() << " dist=" << player->GetDistance(target);
+
+    return os.str();
+}
+
+void EmitRehgarsFuryServerDiagnostic(Player* player, Unit* target, char const* phase, char const* extra = nullptr)
+{
+    if (!playerbot::PvpClassActions::AreRehgarMovementDiagnosticsEnabled() ||
+        !player || player->GetClass() != CLASS_SHAMAN)
+        return;
+
+    std::string const message = BuildRehgarsFuryMovementDiagnostic(player, target, phase, extra);
+    for (SessionMap::value_type const& sessionPair : sWorld->GetAllSessions())
+    {
+        WorldSession* session = sessionPair.second;
+        Player* observer = session ? session->GetPlayer() : nullptr;
+        if (WantsPlayerbotDiagnostics(observer))
+            ChatHandler(session).SendSysMessage(message);
+    }
+}
+
+void ScheduleRehgarsFuryMovementDiagnostics(Player* player, Unit* target)
+{
+    if (!player)
+        return;
+
+    ObjectGuid const playerGuid = player->GetGUID();
+    ObjectGuid const targetGuid = target ? target->GetGUID() : ObjectGuid::Empty;
+    for (uint32 delayMs : { 1u, 50u, 250u, 750u, 1500u })
+    {
+        player->m_Events.AddEventAtOffset([playerGuid, targetGuid, delayMs]()
+        {
+            Player* shaman = ObjectAccessor::FindConnectedPlayer(playerGuid);
+            if (!shaman || !shaman->IsInWorld())
+                return;
+
+            Unit* chargeTarget = targetGuid ? ObjectAccessor::GetUnit(*shaman, targetGuid) : nullptr;
+            std::string const extra = "delay_ms=" + std::to_string(delayMs);
+            EmitRehgarsFuryServerDiagnostic(shaman, chargeTarget, "post_cast_snapshot", extra.c_str());
+        }, std::chrono::milliseconds(delayMs));
     }
 }
 
@@ -2946,6 +3267,7 @@ void NotifyWandDiagnostic(Player*, Unit*, std::string const&, uint32, char const
     // its call sites without producing player-visible diagnostics.
 }
 
+#if 0 // Temporary Aimed Shot whisper diagnostics disabled; retain for future troubleshooting.
 std::string BuildHunterCastDiagnostic(Player* player, Unit* target, char const* phase, uint32 spellId, char const* extra = nullptr)
 {
     std::ostringstream os;
@@ -3004,13 +3326,16 @@ std::string BuildHunterCastDiagnostic(Player* player, Unit* target, char const* 
 
     return os.str();
 }
+#endif
 
 void WhisperHunterCastDiagnostic(Player* player, Unit* target, char const* phase, uint32 spellId, char const* extra = nullptr)
 {
-    if (!player || player->GetClass() != CLASS_HUNTER || !IsHunterAimedShotSpellId(spellId))
-        return;
-
-    WhisperPlayerbotDiagnostic(player, BuildHunterCastDiagnostic(player, target, phase, spellId, extra));
+    (void)player;
+    (void)target;
+    (void)phase;
+    (void)spellId;
+    (void)extra;
+    // WhisperPlayerbotDiagnostic(player, BuildHunterCastDiagnostic(player, target, phase, spellId, extra));
 }
 
 
@@ -3085,6 +3410,45 @@ void ScheduleWandDiagnostics(Player*, Unit*, uint32)
     // Intentionally silent; delayed wand diagnostics were temporary.
 }
 
+// Volley, Rain of Fire, Blizzard, and Tranquility must be treated like Mind
+// Flay/Drain Life for playerbot movement even on DBC/custom data where the
+// generic channel flags look movable - none of these should have the bot
+// walking (and cancelling the channel) mid-cast.
+bool IsForcedStationaryChannelSpell(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return false;
+
+    SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
+    if (!firstRank)
+        return false;
+
+    switch (firstRank->Id)
+    {
+        case 15407: // Mind Flay
+        case 1510:  // Volley
+        case 5740:  // Rain of Fire
+        case 10:    // Blizzard
+        case 740:   // Tranquility
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool IsPlayerbotStationaryChannel(SpellInfo const* spellInfo)
+{
+    if (!spellInfo || !spellInfo->IsChanneled())
+        return false;
+
+    return !spellInfo->IsMoveAllowedChannel() || IsForcedStationaryChannelSpell(spellInfo);
+}
+
+bool IsPlayerbotMovableCastTimeSpell(Player const* player, SpellInfo const* spellInfo)
+{
+    return player && spellInfo && spellInfo->IsStarfire() && player->GetStarfireSnareSpeedRate() > 0.0f;
+}
+
 bool HasActiveStationaryChannel(Player const* player)
 {
     if (!player)
@@ -3094,8 +3458,201 @@ bool HasActiveStationaryChannel(Player const* player)
     if (!channel || channel->getState() == SPELL_STATE_FINISHED)
         return false;
 
-    SpellInfo const* spellInfo = channel->GetSpellInfo();
-    return spellInfo && spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel();
+    return IsPlayerbotStationaryChannel(channel->GetSpellInfo());
+}
+
+bool HasActiveMovementEffectSpline(Player const* player)
+{
+    if (!player)
+        return false;
+
+    MotionMaster const* motionMaster = player->GetMotionMaster();
+    if (!motionMaster || motionMaster->GetCurrentMovementGeneratorType() != EFFECT_MOTION_TYPE)
+        return false;
+
+    // The current generator is already known to be EFFECT_MOTION_TYPE (a charge
+    // / Heroic Leap / Rehgar's Fury jump). Treat it as active for its whole
+    // lifetime, including the brief window after MotionMaster::Add() queues the
+    // jump but before its spline is launched (movespline not yet Initialized).
+    // The old check only accepted an already-launched spline / charging / moving
+    // state, so during that pre-launch gap it returned false and the very next
+    // bot movement tick could Clear() the highest-priority jump before it ever
+    // moved the bot. For an enhancement shaman that stranded it in Ghost Wolf,
+    // re-casting Rehgar's Fury forever because the jump's arrival MovementInform
+    // (which drops Ghost Wolf and puts it on cooldown) never fired.
+    bool const splineLaunched = player->movespline && player->movespline->Initialized();
+    bool const splineActive = splineLaunched && !player->movespline->Finalized();
+    bool const splinePendingLaunch = !splineLaunched;
+    return splineActive || splinePendingLaunch ||
+        player->HasUnitState(UNIT_STATE_CHARGING | UNIT_STATE_JUMPING) || player->isMoving();
+}
+
+bool IsInHazardousLiquid(Player const* player)
+{
+    if (!player)
+        return false;
+
+    Map const* map = player->FindMap();
+    if (!map)
+        return false;
+
+    if (player->HasAura(kEnvironmentalMagmaDamageAuraId))
+        return true;
+
+    LiquidData liquidData{};
+    ZLiquidStatus const status = map->GetLiquidStatus(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(),
+        player->GetPositionZ() + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight());
+    if ((status & MAP_LIQUID_STATUS_IN_CONTACT) == 0)
+        return false;
+
+    return (liquidData.type_flags & (MAP_LIQUID_TYPE_MAGMA | MAP_LIQUID_TYPE_SLIME)) != 0;
+}
+
+bool IsHazardousLiquidDestination(Player const* player, Position const& destination)
+{
+    if (!player)
+        return false;
+
+    Map const* map = player->FindMap();
+    if (!map)
+        return false;
+
+    LiquidData liquidData{};
+    ZLiquidStatus const status = map->GetLiquidStatus(player->GetPhaseMask(), destination.GetPositionX(), destination.GetPositionY(),
+        destination.GetPositionZ() + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight());
+    return (status & MAP_LIQUID_STATUS_IN_CONTACT) != 0 &&
+        (liquidData.type_flags & (MAP_LIQUID_TYPE_MAGMA | MAP_LIQUID_TYPE_SLIME)) != 0;
+}
+
+bool IsValidatedPathingHazardEgress(Player const* player, Position const& destination)
+{
+    if (!player || IsHazardousLiquidDestination(player, destination))
+        return false;
+
+    float const dx = destination.GetPositionX() - player->GetPositionX();
+    float const dy = destination.GetPositionY() - player->GetPositionY();
+    float const planarDelta = std::sqrt(dx * dx + dy * dy);
+    float const verticalDelta = std::fabs(destination.GetPositionZ() - player->GetPositionZ());
+    if (planarDelta < 0.5f || planarDelta > 24.0f ||
+        verticalDelta > std::max(8.0f, planarDelta * 0.75f + 2.0f))
+        return false;
+
+    return player->IsWithinLOS(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ() + 0.5f);
+}
+
+bool IssueValidatedPathingHazardEgress(Player* player, Position const& destination, char const* debugStatus)
+{
+    if (!IsValidatedPathingHazardEgress(player, destination))
+        return false;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return false;
+
+    motionMaster->Clear(MOTION_SLOT_ACTIVE);
+    motionMaster->MovePoint(0, destination, true);
+    SetLastMovementDebugStatus(player, debugStatus);
+    return true;
+}
+
+bool TryMoveOutOfHazardousLiquid(Player* player)
+{
+    if (!player)
+        return false;
+
+    struct HazardEscapeState
+    {
+        Position lastSafePosition;
+        bool hasLastSafePosition = false;
+    };
+
+    static std::unordered_map<uint64, HazardEscapeState> stateByGuid;
+    HazardEscapeState& state = playerbot::LockedGetOrCreate(stateByGuid, player->GetGUID().GetRawValue());
+
+    if (!IsInHazardousLiquid(player))
+    {
+        state.lastSafePosition = player->GetPosition();
+        state.hasLastSafePosition = true;
+        return false;
+    }
+
+    // Effect-driven charges and leaps own the highest-priority movement slot
+    // and are already moving the bot away from its current position. Hazard
+    // escape must not Clear() that slot to install a point move; doing so drops
+    // the arrival MovementInform (notably Rehgar's Ghost Wolf completion).
+    if (HasActiveMovementEffectSpline(player))
+        return true;
+
+    // Preserve an already-launched escape point. Recomputing from the bot's
+    // new position and clearing/reissuing every AI tick repeatedly resets the
+    // spline at its origin, which looks exactly like standing still in magma.
+    if (MotionMaster const* motionMaster = player->GetMotionMaster())
+        if (motionMaster->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE)
+        {
+            bool const splineLaunched = player->movespline && player->movespline->Initialized();
+            if (!splineLaunched || !player->movespline->Finalized())
+                return true;
+        }
+
+    // If a route ended while the bot was still taking environmental damage,
+    // return to the last position observed without a hazard aura. Active point
+    // routes are preserved above, so a necessary crossing can still complete;
+    // this only prevents choosing the hazardous stopping point as a cast spot.
+    if (state.hasLastSafePosition && player->GetExactDist(state.lastSafePosition) > 1.0f &&
+        IssueStrictHumanMove(player, state.lastSafePosition, 2.0f, 750))
+    {
+        SetLastMovementDebugStatus(player, "hazardous_liquid_return_to_last_safe");
+        return true;
+    }
+
+    if (state.hasLastSafePosition && player->GetExactDist(state.lastSafePosition) > 1.0f &&
+        IssueValidatedPathingHazardEgress(player, state.lastSafePosition, "hazardous_liquid_pathing_return_to_last_safe"))
+        return true;
+
+    float const baseAngle = player->GetOrientation();
+    std::array<float, 12> const probeAngles =
+    {
+        0.0f, float(M_PI), float(M_PI_2), -float(M_PI_2),
+        float(M_PI_4), -float(M_PI_4), float(3.0f * M_PI_4), -float(3.0f * M_PI_4),
+        float(M_PI / 6.0f), -float(M_PI / 6.0f), float(5.0f * M_PI / 6.0f), -float(5.0f * M_PI / 6.0f)
+    };
+    std::array<float, 4> const probeDistances = { 8.0f, 12.0f, 16.0f, 24.0f };
+
+    for (float distance : probeDistances)
+    {
+        for (float offset : probeAngles)
+        {
+            Position destination = player->GetPosition();
+            float const angle = baseAngle + offset;
+            destination.RelocateOffset({ std::cos(angle) * distance, std::sin(angle) * distance, 0.0f, 0.0f });
+            destination = BuildCollisionSafeDestination(player, destination);
+            if (IsHazardousLiquidDestination(player, destination))
+                continue;
+
+            if (IssueStrictHumanMove(player, destination, 6.0f, 1500))
+            {
+                SetLastMovementDebugStatus(player, "hazardous_liquid_stop_prevented_move_out");
+                return true;
+            }
+        }
+    }
+
+    for (float distance : probeDistances)
+    {
+        for (float offset : probeAngles)
+        {
+            Position destination = player->GetPosition();
+            float const angle = baseAngle + offset;
+            destination.RelocateOffset({ std::cos(angle) * distance, std::sin(angle) * distance, 0.0f, 0.0f });
+            destination = BuildCollisionSafeDestination(player, destination);
+            if (IssueValidatedPathingHazardEgress(player, destination, "hazardous_liquid_pathing_move_out"))
+                return true;
+        }
+    }
+
+    // Never release class-action ownership while the bot remains in hazardous
+    // liquid, even if this tick could not find an acceptable escape endpoint.
+    return true;
 }
 
 void StopPlayerbotForStationaryCast(Player* player)
@@ -3103,8 +3660,29 @@ void StopPlayerbotForStationaryCast(Player* player)
     if (!player)
         return;
 
+    MotionMaster* motionMaster = player->GetMotionMaster();
+
+    // Unit::StopMoving() halts the movespline unconditionally, and Clear()
+    // below bypasses MotionMaster priority protection entirely -- neither
+    // checks what generator is actually driving movement. A charge/intercept
+    // spline runs through the effect motion slot at MOTION_PRIORITY_HIGHEST
+    // for ~1-1.5s; if the bot's next decision tick wants a stationary cast
+    // (target is already in range right after the charge lands) this used to
+    // rip the charge spline out mid-flight. Let the charge resolve first --
+    // the caller's SPELL_FAILED_MOVING retry path already handles waiting a
+    // tick for a stationary cast, so this is a short defer, not a stall.
+    if (HasActiveMovementEffectSpline(player))
+        return;
+
+    // Magma/slime is acceptable as a transit route when a path requires
+    // swimming through it, but it must never become a place where a bot plants
+    // for a stationary cast or ranged hold. If a stop request arrives while in
+    // hazardous liquid, convert that stop into a generic "get out" move.
+    if (TryMoveOutOfHazardousLiquid(player))
+        return;
+
     player->StopMoving();
-    if (MotionMaster* motionMaster = player->GetMotionMaster())
+    if (motionMaster)
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
 
     // Unit::StopMoving() only strips the spline forward flag when an active
@@ -3117,7 +3695,14 @@ void StopPlayerbotForStationaryCast(Player* player)
     // would send before casting.
     player->ClearUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE);
     player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
-    player->SendMovementFlagUpdate();
+
+    // StopMoving() above only re-syncs terrain/liquid status (and thus the
+    // swim flag) when it actually halts an in-flight movespline, and bots
+    // call this stop/prep path defensively on every cast attempt. The
+    // throttled shared helper forces that resync, and additionally sinks a
+    // surface-riding bot into the stable in-water band so it treads water
+    // instead of standing on top of it.
+    playerbot::ResyncPlayerbotSwimStateForMovementStop(player);
 }
 
 
@@ -3136,9 +3721,10 @@ void DelayHunterRangedTimerForStationaryShot(Player* player, SpellInfo const* sp
     // Mirror the core Auto Shot protection in Unit::_UpdateAutoRepeatSpell():
     // when a hunter has a generic/channel spell preparing and the ranged timer
     // gets inside the Auto Shot launch window, keep the ranged timer slightly
-    // delayed.  The playerbot cast guard intentionally suppresses CURRENT_AUTOREPEAT_SPELL
-    // during Aimed Shot/Multi-Shot, so the core's auto-repeat update does not
-    // get a chance to perform this delay itself.  Without this, RANGED_ATTACK
+    // delayed. Aimed Shot/Revive Pet suppress Auto Shot; Multi-Shot keeps the
+    // auto-repeat active, but publishing the same 434ms floor here makes the
+    // bot's plant logic observe the correct post-cast release window. Without
+    // this, RANGED_ATTACK
     // can hit 0 in the middle of Aimed Shot and the shot can be clipped/aborted
     // even though the bot did not move.
     player->setAttackTimer(RANGED_ATTACK, 434);
@@ -3241,7 +3827,8 @@ void ScheduleHunterStationaryCastGuard(Player* player, Unit* target, uint32 spel
             // The guard should only HOLD other systems out and delay the ranged
             // timer. If something actually made the hunter move, log it and
             // apply one emergency stop.
-            StopHunterAutoShotForStationaryCast(hunter, "hunter_stationary_cast_guard_stop_autoshot");
+            if (!IsHunterMultiShotSpell(currentInfo))
+                StopHunterAutoShotForStationaryCast(hunter, "hunter_stationary_cast_guard_stop_autoshot");
 
             bool const movedDuringCast = hunter->isMoving() ||
                 hunter->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE) ||
@@ -3264,6 +3851,11 @@ bool CanIssueFollowCommands(Player const* player)
     if (HasActiveStationaryChannel(player))
         return false;
 
+    // Roots prevent locomotion; snares only reduce its speed. A snared bot
+    // must remain able to chase an out-of-range target or retreat from melee.
+    if (playerbot::PvpCore::IsMovementPreventedByRoot(player))
+        return false;
+
     if (IsCrowdControlledForAction(player) ||
         player->HasUnitState(UNIT_STATE_ROOT) ||
         player->HasUnitState(UNIT_STATE_STUNNED) ||
@@ -3272,6 +3864,16 @@ bool CanIssueFollowCommands(Player const* player)
     {
         return false;
     }
+
+    // Charge/leap/jump movement is issued through the effect motion slot at
+    // MOTION_PRIORITY_HIGHEST, but that engine-side priority protection only
+    // stops other MotionMaster::Add() calls -- it does nothing against a bare
+    // Clear(), which follow/strict-move callers issue unconditionally. Without
+    // this guard the very next movement tick can wipe the in-flight effect
+    // spline, so leap-style abilities visibly apply spell effects without
+    // moving the bot.
+    if (HasActiveMovementEffectSpline(player))
+        return false;
 
     return true;
 }
@@ -3301,6 +3903,8 @@ Unit* ResolveTarget(Player* player, playerbot::PvpClassSpellContext const& conte
     {
         case playerbot::PvpClassSpellContext::TargetMode::Self:
             return player;
+        case playerbot::PvpClassSpellContext::TargetMode::Pet:
+            return player->GetPet();
         case playerbot::PvpClassSpellContext::TargetMode::Ally:
         case playerbot::PvpClassSpellContext::TargetMode::Enemy:
             if (!context.targetGuid.IsEmpty())
@@ -3320,12 +3924,14 @@ void FaceTargetForInstantCast(Player* player, Unit* target, SpellInfo const* spe
     if (spellInfo->CalcCastTime() > 0)
         return;
 
-    // Do not re-issue a facing packet for auto-repeat ranged spells when the
-    // target is already in front. Diagnostics showed SetFacingToObject can
-    // briefly restore stale forward/spline movement flags on virtual sessions
-    // after StopPlayerbotForStationaryCast cleared them, and that 100ms
-    // movement blip cancels wand Shoot before the first repeat tick lands.
-    if (spellInfo->IsAutoRepeatRangedSpell() && player->isInFront(target))
+    // SetFacingToObject launches a zero-distance facing spline. Do not let an
+    // instant-cast decision replace an active translational spline: doing so
+    // makes virtual-session bots snap back and forth as movement and class
+    // decisions alternately replace each other's spline.
+    if (!player->IsStopped() || (player->movespline && !player->movespline->Finalized()))
+        return;
+
+    if (player->isInFront(target))
         return;
 
     player->SetFacingToObject(target);
@@ -3401,10 +4007,9 @@ DruidShapeshiftMovementResumeState CaptureDruidShapeshiftMovementResume(Player* 
         (player->movespline && player->movespline->Initialized() && !player->movespline->Finalized());
 
     uint32 const nowMs = GameTime::GetGameTimeMS();
-    auto orderItr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
-    if (orderItr != g_TargetRelativeMoveOrderByGuid.end())
+    if (TargetRelativeMoveOrderState const* orderState = playerbot::LockedFind(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue()))
     {
-        TargetRelativeMoveOrderState const& order = orderItr->second;
+        TargetRelativeMoveOrderState const& order = *orderState;
         uint32 const orderAgeMs = order.lastIssueMs != 0 && nowMs >= order.lastIssueMs ? nowMs - order.lastIssueMs : 0;
         if (!order.targetGuid.IsEmpty() && orderAgeMs <= 6000)
         {
@@ -3497,6 +4102,13 @@ bool ShouldDeferStationaryCastForActiveMovement(Player* player, Unit* castTarget
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
         return false;
 
+    // A rooted caster cannot make progress on a stale chase order, so stop and
+    // cast whatever is usable from its current position. A snared caster can
+    // still chase when the spell is genuinely out of range; when it is ready,
+    // genericReady below plants the caster immediately.
+    if (playerbot::PvpCore::IsMovementPreventedByRoot(player))
+        return false;
+
     // If this spell is genuinely ready from the current position, stopping is
     // correct. The bug we are chasing is a cast-time/autorepeat spell stopping
     // an active range/LOS movement order before the bot can actually reach the
@@ -3514,8 +4126,7 @@ bool ShouldDeferStationaryCastForActiveMovement(Player* player, Unit* castTarget
     MovementGeneratorType const motionType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
     bool const activeTargetRelativeMotion = motionType == CHASE_MOTION_TYPE || motionType == FOLLOW_MOTION_TYPE;
 
-    auto orderItr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
-    TargetRelativeMoveOrderState const* order = orderItr != g_TargetRelativeMoveOrderByGuid.end() ? &orderItr->second : nullptr;
+    TargetRelativeMoveOrderState const* order = playerbot::LockedFind(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue());
 
     Unit* moveTarget = nullptr;
     if (order && !order->targetGuid.IsEmpty())
@@ -3610,7 +4221,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
-    uint32 resolvedSpellId = ResolveKnownSpellInChain(player, context.spellId);
+    bool const canUseRitualSoulwellEffect = player->GetClass() == CLASS_WARLOCK &&
+        context.spellId == kWarlockCreateSoulwellSpellId && player->HasSpell(kWarlockRitualOfSoulsSpellId);
+    uint32 resolvedSpellId = canUseRitualSoulwellEffect ? kWarlockCreateSoulwellSpellId :
+        ResolveKnownSpellInChain(player, context.spellId);
     bool castFromPet = false;
     Pet* petCaster = nullptr;
     if (!resolvedSpellId)
@@ -3640,6 +4254,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if ((!target || !target->IsAlive()))
     {
         failureReason = "target_invalid_or_dead";
+        return false;
+    }
+
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        target->HasBreakableByDamageCrowdControlAura() &&
+        SpellAppliesBreakableByDamageCrowdControl(spellInfo))
+    {
+        failureReason = "target_already_breakable_crowd_controlled";
         return false;
     }
 
@@ -3699,15 +4321,50 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return true;
     }
 
+    // Flag carriers must never choose an action whose resulting aura makes
+    // the battleground drop their flag. Apply the same target-side protection
+    // to immunity buffs such as Hand/Blessing of Protection before the cast
+    // path changes facing, attacks, forms, or movement.
+    if (playerbot::PvpCore::SpellWouldBreakFlagCarry(resolvedSpellId))
+    {
+        if (playerbot::PvpCore::IsBattlegroundFlagCarrier(player))
+        {
+            failureReason = "flag_carrier_forbidden_spell";
+            return false;
+        }
+
+        if (Player const* targetPlayer = target->ToPlayer())
+        {
+            if (playerbot::PvpCore::IsBattlegroundFlagCarrier(targetPlayer))
+            {
+                failureReason = "flag_carrier_forbidden_target_buff";
+                return false;
+            }
+        }
+    }
+
     if (IsCrowdControlledForAction(player) &&
         !IsMageBlinkEscapeCast(player, context, resolvedSpellId) &&
+        !IsHunterBestialWrathEscapeCast(player, context, resolvedSpellId) &&
         !IsControlBreakingRacialCast(player, context, resolvedSpellId))
     {
         // Hard crowd-control gate: polymorphed/confused actors must not start
         // attacks or cast attempts until control is restored. Mage Blink and
-        // specific control-breaking racials are explicit exceptions because
+        // Bestial Wrath and specific control-breaking racials are explicit exceptions because
         // they are intentionally usable while the corresponding control is active.
         failureReason = "crowd_controlled_polymorph";
+        return false;
+    }
+
+    // Rehgar's Fury is the only playerbot PvP action that should be attempted
+    // while a shaman is in Ghost Wolf. Other casts fail shapeshift validation
+    // (for example Lightning Shield reports SPELL_FAILED_NOT_SHAPESHIFT), so
+    // cancel the form immediately and suppress this cast attempt instead of
+    // spamming spell-fail logs until the next decision tick.
+    if (player->GetClass() == CLASS_SHAMAN && HasAuraInSpellChain(player, 2645) && resolvedSpellId != 82419)
+    {
+        player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
+        failureReason = "shaman_ghost_wolf_cancelled_for_non_rehgar_action";
         return false;
     }
 
@@ -3716,8 +4373,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // The random bot cadence evaluates roughly every 2 seconds, so waiting for
     // the next tick to leave form makes bots appear locked out. If the selected
     // spell is blocked only by current shapeshift state, immediately cancel the
-    // form and continue with the same cast attempt in this tick.
-    if (player->GetClass() == CLASS_DRUID && player->HasAuraType(SPELL_AURA_MOD_SHAPESHIFT))
+    // form and continue with the same cast attempt in this tick. This is also
+    // the mechanism that drops a shaman out of Ghost Wolf the moment nothing
+    // castable requires it (Ghost Wolf's only real use is charging with
+    // Rehgar's Fury). 82419 itself is exempted for the same reason as the
+    // matching check in IsDecisionImmediatelyCastable - it is specifically
+    // meant to be cast while shapeshifted into Ghost Wolf.
+    if (resolvedSpellId != 82419 && (player->GetClass() == CLASS_DRUID || player->GetClass() == CLASS_SHAMAN) && player->HasAuraType(SPELL_AURA_MOD_SHAPESHIFT))
         if (spellInfo->CheckShapeshift(player->GetShapeshiftForm()) == SPELL_FAILED_NOT_SHAPESHIFT)
             player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
 
@@ -3788,6 +4450,11 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         failureReason = "self_target_mismatch";
         return false;
     }
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Pet && target != player->GetPet())
+    {
+        failureReason = "pet_target_mismatch";
+        return false;
+    }
 
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
         target &&
@@ -3834,11 +4501,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (!target || !target->HasBreakableByDamageCrowdControlAura())
             CommandPetAttackTarget(player, target);
 
-        // Virtual sessions can visually "turn" while server-side facing checks
-        // still fail for the immediate cast tick. SetInFront updates orientation
-        // instantly, so facing-sensitive spells pass UNIT_NOT_INFRONT checks.
-        player->SetFacingToObject(target);
-        player->SetInFront(target);
+        // Facing is resolved only after movement/range admission below. Doing
+        // it here would replace an active movement spline even when the spell
+        // is subsequently rejected for range, line of sight, or movement.
     }
     else if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
     {
@@ -3862,8 +4527,25 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     bool const shouldMoveBehindForEnemySpell =
         shouldUseMeleeApproachForEnemySpell &&
         spellInfo->HasAttribute(SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET);
+    // TEMPORARY diagnostic: the warrior/shaman gap closers (Charge, Intercept,
+    // Heroic Leap, Rehgar's Fury) were reported as producing zero whisper output
+    // during live kiting tests. NotifyDuelDecision only fires after an actual
+    // CastSpell attempt below, but these no_los/out_of_range branches return
+    // early and substitute pure movement without ever reaching that point -
+    // so a genuinely out-of-range gap closer is indistinguishable from a
+    // misselected one from the whisper log alone. This makes that branch
+    // visible so the next test can tell them apart. Remove once confirmed.
+    bool const isGapCloserDiagnosticSpell = IsGapCloserSpell(resolvedSpellId);
+
     if (!itemTarget && !player->IsWithinLOSInMap(target))
     {
+        if (isGapCloserDiagnosticSpell)
+        {
+            std::ostringstream diag;
+            diag << "GAPCLOSE DIAG: spell=" << resolvedSpellId << " phase=no_los dist=" << player->GetDistance(target);
+            WhisperPlayerbotDiagnostic(player, diag.str());
+        }
+
         if (CanIssueFollowCommands(player))
         {
             if (shouldMoveBehindForEnemySpell)
@@ -3888,6 +4570,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     if (!itemTarget && maxRange > 0.0f && !player->IsWithinDistInMap(target, maxRange))
     {
+        if (isGapCloserDiagnosticSpell)
+        {
+            std::ostringstream diag;
+            diag << "GAPCLOSE DIAG: spell=" << resolvedSpellId << " phase=out_of_range dist=" << player->GetDistance(target) << " maxRange=" << maxRange;
+            WhisperPlayerbotDiagnostic(player, diag.str());
+        }
+
         if (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT))
             player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
         if (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK))
@@ -3895,16 +4584,19 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
         // When we are trying to cast but are still out of range, proactively
         // close the gap instead of idling and repeating failed cast attempts.
-        // Hunter exception: if ranged weapon Auto Shot is already valid, do not
-        // chase inward just to make Arcane/Concussive/Serpent range metadata happy.
+        // Hunter exception: if ranged weapon Auto Shot is already valid, leave
+        // movement untouched. DriveHunterKiteLoop owns both the ideal-range
+        // pursuit and the final weapon-timer plant.
         if (player->GetClass() == CLASS_HUNTER && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
             IsHunterAutoShotBand(player, target))
         {
-            StopHunterAndStartAutoShot(player, target, "hunter_cast_out_of_spell_range_hold_autoshot");
+            // No class-side movement or Auto Shot toggle here.
         }
         else if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
         {
-            if (shouldMoveBehindForEnemySpell)
+            if (isGapCloserDiagnosticSpell)
+                IssueGapCloserRangeApproachMovement(player, target, maxRange);
+            else if (shouldMoveBehindForEnemySpell)
                 IssueBehindTargetMeleeMovement(player, target);
             else if (shouldUseMeleeApproachForEnemySpell)
                 IssueMeleeApproachMovement(player, target);
@@ -3927,6 +4619,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     float const minRange = spellInfo->GetMinRange(false);
     if (!itemTarget && minRange > 0.0f && player->IsWithinDistInMap(target, minRange))
     {
+        if (isGapCloserDiagnosticSpell)
+        {
+            std::ostringstream diag;
+            diag << "GAPCLOSE DIAG: spell=" << resolvedSpellId << " phase=too_close dist=" << player->GetDistance(target) << " minRange=" << minRange;
+            WhisperPlayerbotDiagnostic(player, diag.str());
+        }
+
         if (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT))
             player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
         if (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK))
@@ -4085,10 +4784,24 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // failure mode: PB move diag had a live CHASE/FOLLOW order, then a
     // stop_moving_request reason=cast_time_or_autorepeat killed the spline and
     // left the bot inching or stuck.
+    // spellInfo->CalcCastTime() with no Spell* skips Unit::ModSpellCastTime
+    // entirely and only ever returns the raw DBC base cast time. Casters with
+    // a talent/aura that reduces a spell's effective cast time (including a
+    // flat -100% "instant cast" aura, which resolves through
+    // Unit::CanInstantCast() rather than changing the spell's own listed cast
+    // time) still got treated as needing a stationary cast here, forcing an
+    // unnecessary stop-to-cast for something that would have completed
+    // instantly while moving. Fold the caster's actual cast-speed mods in
+    // before deciding - ModSpellCastTime accepts a null Spell* for this kind
+    // of preview/dry-run calculation.
+    int32 effectiveCastTimeMs = static_cast<int32>(spellInfo->CalcCastTime());
+    player->ModSpellCastTime(spellInfo, effectiveCastTimeMs);
+
     bool const isFoodOrDrinkSpell = resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT || resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
     bool const isHunterStationaryCastTimeAction = player->GetClass() == CLASS_HUNTER && IsHunterCastTimeShot(player, spellInfo);
-    bool const requiresStationaryCast = spellInfo->CalcCastTime() > 0 || spellInfo->IsAutoRepeatRangedSpell() || isFoodOrDrinkSpell ||
-        isHunterStationaryCastTimeAction || (spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel());
+    bool const movableCastTimeSpell = IsPlayerbotMovableCastTimeSpell(player, spellInfo);
+    bool const requiresStationaryCast = (effectiveCastTimeMs > 0 && !movableCastTimeSpell) || spellInfo->IsAutoRepeatRangedSpell() || isFoodOrDrinkSpell ||
+        isHunterStationaryCastTimeAction || IsPlayerbotStationaryChannel(spellInfo);
 
     if (isHunterStationaryCastTimeAction)
     {
@@ -4114,8 +4827,17 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         // Aimed Shot/Revive Pet must not coexist with a queued Auto Shot.
         // Movement/decision locks are not enough: CURRENT_AUTOREPEAT_SPELL can
         // still update independently and clip the generic cast on this branch.
-        StopHunterAutoShotForStationaryCast(player, "hunter_pre_cast_stop_autoshot_for_stationary_cast");
-        WhisperHunterCastDiagnostic(player, target, "pre_cast_autoshot_suppressed", resolvedSpellId);
+        //
+        // Multi-Shot has its own ~500ms stationary launch window, but it does
+        // not cancel the hunter's Auto Shot toggle. Hold movement and let the
+        // core delay the pending ranged release through m_AutoRepeatFirstCast;
+        // interrupting CURRENT_AUTOREPEAT_SPELL here restarted the full swing
+        // after every Multi-Shot and could prevent Auto Shot from ever firing.
+        if (!IsHunterMultiShotSpell(spellInfo))
+        {
+            StopHunterAutoShotForStationaryCast(player, "hunter_pre_cast_stop_autoshot_for_stationary_cast");
+            WhisperHunterCastDiagnostic(player, target, "pre_cast_autoshot_suppressed", resolvedSpellId);
+        }
     }
 
     if (requiresStationaryCast)
@@ -4143,12 +4865,40 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         NotifyWandDiagnostic(player, target, "post_stationary_stop", resolvedSpellId);
     }
 
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        !context.preserveFlagObjectiveMovement && !player->isInFront(target))
+    {
+        bool const hasActiveMovementSpline = !player->IsStopped() ||
+            (player->movespline && !player->movespline->Finalized());
+        if (hasActiveMovementSpline)
+        {
+            if (requiresStationaryCast)
+            {
+                failureReason = "stationary_cast_still_moving_after_stop";
+                return false;
+            }
+
+            // Instant and explicitly move-allowed spells cast during the
+            // existing retreat/chase. Set the server orientation directly;
+            // SetFacingToObject would launch a zero-distance spline and cancel
+            // that movement. The cast is attempted immediately after this, so
+            // it observes the corrected facing without interrupting the path.
+            player->SetInFront(target);
+        }
+        else
+        {
+            player->SetFacingToObject(target);
+            player->SetInFront(target);
+        }
+    }
+
     // Blink (1953) is a leap-forward spell with a destination target
     // (TARGET_DEST_CASTER_FRONT_LEAP). For virtual bot sessions, casting only
     // on a unit target can leave relocation unresolved; provide an explicit
     // front destination to mirror client cast payload semantics.
     bool const isInstantCast = spellInfo->CalcCastTime() == 0 && !isHunterStationaryCastTimeAction;
-    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast &&
+        !context.preserveFlagObjectiveMovement)
     {
         FaceTargetForInstantCast(player, target, spellInfo);
 
@@ -4174,13 +4924,67 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     SpellCastResult castResult = SPELL_FAILED_ERROR;
     if (resolvedSpellId == 1953 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
     {
-        Position const dest = player->GetFirstCollisionPosition(20.0f, player->GetOrientation());
+        // Blink is a discontinuous relocation. Retaining a Chase/Follow/Point
+        // generator lets its pre-Blink spline relaunch before the virtual
+        // session's ACK is processed on the next player update, making remote
+        // clients alternate between the origin and destination. Land idle and
+        // let combat positioning calculate a fresh path afterward.
+        player->StopMoving();
+        if (MotionMaster* motionMaster = player->GetMotionMaster())
+            motionMaster->Clear();
+
+        // GetFirstCollisionPosition only raycasts for navmesh/VMap collision;
+        // it does not re-ground the resulting Z against actual terrain height.
+        // On multi-layer geometry (bridges, cliffs, caves) that can leave the
+        // destination floating or clipped into the ground, which reads as the
+        // bot falling through the map after the leap lands. Re-ground it the
+        // same way regular movement destinations already do.
+        Position const dest = BuildCollisionSafeDestination(player, player->GetFirstCollisionPosition(20.0f, player->GetOrientation()));
         castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
     }
     else if (resolvedSpellId == 89160 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && target)
     {
         Position dest = target->GetPosition();
         castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
+    }
+    // 81271 - Heroic Leap is a ground-targeted gap closer/escape (ranged like
+    // the gnome racial). Enemy mode leaps at the gap-close target; Self mode
+    // leaps away from the current melee threat to disengage.
+    else if (resolvedSpellId == 81271 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && target)
+    {
+        Position dest = target->GetPosition();
+        castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
+    }
+    else if (resolvedSpellId == 81271 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
+    {
+        Unit* threat = player->GetVictim();
+        float const awayAngle = threat ? player->GetAbsoluteAngle(threat->GetPosition()) + static_cast<float>(M_PI) : player->GetOrientation();
+        // See the Blink comment above: re-ground the raycast destination so the
+        // leap cannot land the warrior clipped into or floating above terrain.
+        Position dest = BuildCollisionSafeDestination(player, player->GetFirstCollisionPosition(20.0f, awayAngle));
+        castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
+    }
+    // 82419 - Rehgar's Fury uses the same SPELL_EFFECT_JUMP_DEST mechanic as
+    // Heroic Leap (Spell::EffectJumpDest requires m_targets.HasDst() or it
+    // silently no-ops). A plain unit-target cast never populates a
+    // destination, so without this the spell "casts" successfully but the
+    // charge never actually happens - it needs the same explicit dest cast.
+    else if (resolvedSpellId == 82419 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && target)
+    {
+        Position dest = target->GetPosition();
+        EmitRehgarsFuryServerDiagnostic(player, target, "pre_cast");
+        castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
+    }
+    // Feral Charge - Moonkin has both an explicit friendly unit effect and a
+    // destination-at-target jump effect. Supply both target forms so the dummy
+    // effect keeps its ally and EffectJumpDest always receives m_targets.Dst.
+    else if (resolvedSpellId == 83111 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally && target)
+    {
+        Position const landingPosition = BuildCollisionSafeDestination(player, target->GetPosition());
+        SpellCastTargets leapTargets;
+        leapTargets.SetUnitTarget(target);
+        leapTargets.SetDst(landingPosition);
+        castResult = player->CastSpell(CastSpellTargetArg(std::move(leapTargets)), resolvedSpellId);
     }
     else if (itemTarget)
         castResult = player->CastSpell(CastSpellTargetArg(itemTarget), resolvedSpellId);
@@ -4190,6 +4994,11 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (castResult == SPELL_CAST_OK)
     {
         NotifyWandDiagnostic(player, target, "cast_ok", resolvedSpellId);
+        if (resolvedSpellId == 82419)
+        {
+            EmitRehgarsFuryServerDiagnostic(player, target, "cast_ok");
+            ScheduleRehgarsFuryMovementDiagnostics(player, target);
+        }
         if (isHunterStationaryCastTimeAction)
         {
             WhisperHunterCastDiagnostic(player, target, "cast_ok", resolvedSpellId);
@@ -4204,6 +5013,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     {
         EnumText const wandCastResultText = EnumUtils::ToString(castResult);
         NotifyWandDiagnostic(player, target, "cast_failed", resolvedSpellId, wandCastResultText.Title);
+        if (resolvedSpellId == 82419)
+            EmitRehgarsFuryServerDiagnostic(player, target, "cast_failed", wandCastResultText.Title);
         if (isHunterStationaryCastTimeAction)
             WhisperHunterCastDiagnostic(player, target, "cast_failed", resolvedSpellId, wandCastResultText.Title);
     }
@@ -4288,7 +5099,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                     context.spellId == kHunterCallPetSpellId ? "call_pet_failed" : "revive_pet_failed", castResult));
             }
 
-            NotifySpellCastFailureToGameMasters(player, context, castResult);
+            NotifySpellCastFailureToDiagnosticObservers(player, context, castResult);
             EnumText const reasonText = EnumUtils::ToString(castResult);
             failureReason = reasonText.Title;
             return false;
@@ -4297,10 +5108,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     if (player->GetClass() == CLASS_HUNTER && IsHunterCastTimeShot(player, spellInfo))
     {
-        StopHunterAutoShotForStationaryCast(player, "hunter_cast_accepted_stop_autoshot_for_stationary_cast");
+        bool const isMultiShot = IsHunterMultiShotSpell(spellInfo);
+        if (!isMultiShot)
+            StopHunterAutoShotForStationaryCast(player, "hunter_cast_accepted_stop_autoshot_for_stationary_cast");
         DelayHunterRangedTimerForStationaryShot(player, spellInfo, "cast_accepted");
         uint32 const castTimeMs = GetHunterStationaryCastTimeMs(spellInfo);
-        uint32 const lockMs = std::clamp<uint32>(castTimeMs + 750, 750, 12000);
+        uint32 const lockMs = isMultiShot
+            ? std::clamp<uint32>(castTimeMs + 150, 500, 1200)
+            : std::clamp<uint32>(castTimeMs + 750, 750, 12000);
 
         // Hunter shots with a stationary launch window can be clipped by the
         // lifecycle stutter loop before CURRENT_GENERIC_SPELL is visible to the
@@ -4322,7 +5137,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (player->GetClass() == CLASS_HUNTER && IsHunterBreakableCrowdControlSpell(spellInfo))
         StopHunterDamageOnBreakableCrowdControl(player, target, "hunter_breakable_cc_cast_stop_autoshot");
 
-    if (spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel())
+    if (IsPlayerbotStationaryChannel(spellInfo))
         StopPlayerbotForStationaryCast(player);
 
     ResumeDruidShapeshiftMovement(player, shapeshiftMovementResume, resolvedSpellId);
@@ -4345,7 +5160,6 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         ScheduleHunterFeignDeathStandup(player);
     }
 
-    bool hasTeleportEffect = false;
     bool hasChargeEffect = false;
     for (uint8 effectIndex = 0; effectIndex < MAX_SPELL_EFFECTS; ++effectIndex)
     {
@@ -4359,45 +5173,27 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             case SPELL_EFFECT_LEAP_BACK:
             case SPELL_EFFECT_CHARGE:
             case SPELL_EFFECT_CHARGE_DEST:
-                hasTeleportEffect = true;
                 hasChargeEffect = true;
                 break;
             default:
                 break;
         }
 
-        if (hasTeleportEffect)
+        if (hasChargeEffect)
             break;
     }
 
-    // Bot players do not own a real game client to naturally ACK near teleports
-    // (for example Blink). If a teleport is still pending after cast, synthesize
-    // the teleport ACK immediately so other combat actions (like Charge) resolve
-    // against the post-Blink location.
-    if (hasTeleportEffect && player->IsBeingTeleportedNear())
-    {
-        WorldSession* session = player->GetSession();
-        if (session && session->IsVirtualSession())
-        {
-            TC_LOG_DEBUG("playerbots.pvp.class",
-                "Playerbot PvP teleport ACK synthesized: guid={} spell={} map={} x={} y={} z={}.",
-                player->GetGUID().ToString(), resolvedSpellId, player->GetMapId(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
-            WorldPacket teleportAck(MSG_MOVE_TELEPORT_ACK, 20);
-            teleportAck << player->GetPackGUID();
-            teleportAck << uint32(0);
-            teleportAck << uint32(0);
-            session->HandleMoveTeleportAck(teleportAck);
-
-            if (player->IsBeingTeleportedNear())
-                FinalizeVirtualNearTeleport(player);
-        }
-    }
+    // Virtual and transient players have no client to ACK a near teleport.
+    // Do not complete it inline with the spell cast: doing so lets the same AI
+    // update install movement against both the pre- and post-Blink positions.
+    // The lifecycle pre-check owns completion on the next player update and
+    // reserves that update exclusively for teleport synchronization.
 
     // Charge/Intercept target switching: preserve the intended enemy target in
-    // selection/combat context, but do not immediately override an active
-    // charge movement generator. For playerbot sessions an eager Attack() call
-    // can replace the charge spline with chase in the same tick, which looks
-    // like "charge debuff landed but the warrior never moved".
+    // selection/combat context, but do not override effect movement with the
+    // melee chase installed by Attack(). In particular, the old fixed 250 ms
+    // callback did not re-check the movement generator when it fired, so longer
+    // Rehgar's Fury jumps were consistently replaced mid-flight.
     if (hasChargeEffect &&
         context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
         target && target->IsAlive())
@@ -4405,7 +5201,15 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         player->SetSelection(target->GetGUID());
         if (player->GetVictim() != target || !player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
         {
-            if (player->HasUnitState(UNIT_STATE_CHARGING))
+            WorldSession* session = player->GetSession();
+            // Clone mirrors (transient session) need this same delayed-attack
+            // deferral as persistent managed bots (virtual session) -- both
+            // are socketless bot-controlled players where an eager immediate
+            // Attack() call below can replace an in-flight charge/leap spline
+            // in the same tick. Checking only IsVirtualSession() left clones
+            // taking the immediate-Attack() branch and reintroduced the charge
+            // hijack this deferral exists to prevent.
+            if (session && (session->IsVirtualSession() || session->IsTransientPlayerSession()))
             {
                 ObjectGuid const playerGuid = player->GetGUID();
                 ObjectGuid const targetGuid = target->GetGUID();
@@ -4419,9 +5223,23 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                     if (!delayedTarget || !delayedTarget->IsAlive())
                         return;
 
+                    // Arrival handlers and the normal playerbot lifecycle start
+                    // melee after the effect completes. Never replace a queued
+                    // or active effect generator just because this timer fired.
+                    if (HasActiveMovementEffectSpline(delayedAttacker))
+                    {
+                        EmitRehgarsFuryServerDiagnostic(delayedAttacker, delayedTarget,
+                            "delayed_attack_suppressed_active_effect");
+                        return;
+                    }
+
                     if (delayedAttacker->GetVictim() != delayedTarget || !delayedAttacker->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
+                    {
+                        EmitRehgarsFuryServerDiagnostic(delayedAttacker, delayedTarget,
+                            "delayed_attack_started_no_effect");
                         delayedAttacker->Attack(delayedTarget, true);
-                }, std::chrono::milliseconds(250));
+                    }
+                }, std::chrono::milliseconds(100));
             }
             else
                 player->Attack(target, true);
@@ -4488,10 +5306,19 @@ bool UseDirectItem(Player* player, playerbot::PvpClassSpellContext const& contex
         return false;
     }
 
-    Item* item = player->GetItemByEntry(context.itemEntry);
+    Item* item = nullptr;
+    if (context.itemEntry == kWarlockFirestoneItemEntry)
+    {
+        item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
+        if (item && item->GetEntry() != kWarlockFirestoneItemEntry)
+            item = nullptr;
+    }
+    else
+        item = player->GetItemByEntry(context.itemEntry);
+
     if (!item)
     {
-        failureReason = "item_missing";
+        failureReason = context.itemEntry == kWarlockFirestoneItemEntry ? "firestone_not_equipped_offhand" : "item_missing";
         return false;
     }
 
@@ -4516,26 +5343,61 @@ bool UseDirectItem(Player* player, playerbot::PvpClassSpellContext const& contex
         return false;
     }
 
+    Unit* target = ResolveTarget(player, context);
+    if (!target || !target->IsAlive())
+    {
+        failureReason = "item_target_invalid_or_dead";
+        return false;
+    }
+
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        !player->IsValidAttackTarget(target, itemSpellInfo))
+    {
+        failureReason = "item_enemy_target_invalid";
+        return false;
+    }
+
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally &&
+        target != player && !player->IsValidAssistTarget(target, itemSpellInfo))
+    {
+        failureReason = "item_ally_target_invalid";
+        return false;
+    }
+
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Pet && target != player->GetPet())
+    {
+        failureReason = "item_pet_target_invalid";
+        return false;
+    }
+
     SpellCastTargets targets;
-    targets.SetUnitTarget(player);
+    targets.SetUnitTarget(target);
     player->CastItemUseSpell(item, targets, 1, 0);
 
     // CastItemUseSpell queues the Spell and does not return the prepare result.
     // Give the PvP decision layer a tiny local throttle so this item action cannot
     // monopolize several AI ticks if the item spell was rejected internally.
     playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, context.spellId ? context.spellId : itemSpellInfo->Id, std::chrono::seconds(2));
+    if (IsPlayerbotDispelSpell(itemSpellInfo->Id))
+        playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kPlayerbotDispelCooldownToken, kPlayerbotDispelCooldown);
     return true;
 }
 }
 
 namespace playerbot
 {
+bool PvpClassActions::AreRehgarMovementDiagnosticsEnabled()
+{
+    return sConfigMgr->GetBoolDefault("Playerbot.PvpClassSpells.RehgarMovementDiagnostics", true);
+}
+
 bool PvpClassActions::IsWarlockCurseTargetCooldownActive(Player const* player, Unit const* target, uint32 spellId)
 {
     if (!player || !target || !spellId)
         return false;
 
     WarlockCurseCooldownKey const key{ player->GetGUID(), target->GetGUID(), spellId };
+    std::lock_guard<std::mutex> guard(playerbot::SharedBotStateStructureLock());
     auto const itr = g_WarlockCurseTargetCooldowns.find(key);
     if (itr == g_WarlockCurseTargetCooldowns.end())
         return false;
@@ -4554,7 +5416,7 @@ void PvpClassActions::RegisterWarlockCurseTargetCooldown(Player const* player, U
     if (!player || !target || !spellId || cooldown <= std::chrono::seconds::zero())
         return;
 
-    g_WarlockCurseTargetCooldowns[{ player->GetGUID(), target->GetGUID(), spellId }] = GameTime::Now() + cooldown;
+    playerbot::LockedSet(g_WarlockCurseTargetCooldowns, WarlockCurseCooldownKey{ player->GetGUID(), target->GetGUID(), spellId }, GameTime::Now() + cooldown);
 }
 
 bool PvpClassActions::IsCasterSpellCooldownActive(Player const* player, uint32 spellId)
@@ -4563,6 +5425,7 @@ bool PvpClassActions::IsCasterSpellCooldownActive(Player const* player, uint32 s
         return false;
 
     CasterSpellCooldownKey const key{ player->GetGUID(), spellId };
+    std::lock_guard<std::mutex> guard(playerbot::SharedBotStateStructureLock());
     auto const itr = g_CasterSpellCooldowns.find(key);
     if (itr == g_CasterSpellCooldowns.end())
         return false;
@@ -4581,7 +5444,7 @@ void PvpClassActions::RegisterCasterSpellCooldown(Player const* player, uint32 s
     if (!player || !spellId || cooldown <= std::chrono::seconds::zero())
         return;
 
-    g_CasterSpellCooldowns[{ player->GetGUID(), spellId }] = GameTime::Now() + cooldown;
+    playerbot::LockedSet(g_CasterSpellCooldowns, CasterSpellCooldownKey{ player->GetGUID(), spellId }, GameTime::Now() + cooldown);
 }
 
 void PvpClassActions::RegisterCasterSpellCooldown(Player const* player, uint32 spellId, std::chrono::milliseconds cooldown)
@@ -4589,7 +5452,7 @@ void PvpClassActions::RegisterCasterSpellCooldown(Player const* player, uint32 s
     if (!player || !spellId || cooldown <= std::chrono::milliseconds::zero())
         return;
 
-    g_CasterSpellCooldowns[{ player->GetGUID(), spellId }] = GameTime::Now() + cooldown;
+    playerbot::LockedSet(g_CasterSpellCooldowns, CasterSpellCooldownKey{ player->GetGUID(), spellId }, GameTime::Now() + cooldown);
 }
 
 std::string PvpClassActions::GetLastExecutionStatus(Player const* player)
@@ -4597,6 +5460,7 @@ std::string PvpClassActions::GetLastExecutionStatus(Player const* player)
     if (!player)
         return "none";
 
+    std::lock_guard<std::mutex> statusLock(g_ClassDiagnosticStatusLock);
     auto const itr = g_LastClassExecutionStatusByGuid.find(player->GetGUID().GetRawValue());
     if (itr == g_LastClassExecutionStatusByGuid.end())
         return "none";
@@ -4609,6 +5473,7 @@ std::string PvpClassActions::GetLastMovementDebugStatus(Player const* player)
     if (!player)
         return "none";
 
+    std::lock_guard<std::mutex> statusLock(g_ClassDiagnosticStatusLock);
     auto const itr = g_LastMovementDebugStatusByGuid.find(player->GetGUID().GetRawValue());
     if (itr == g_LastMovementDebugStatusByGuid.end())
         return "none";
@@ -4622,11 +5487,11 @@ bool PvpClassActions::HasRecentTargetRelativeMovementOrder(Player const* player,
     if (!player)
         return false;
 
-    auto orderItr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
-    if (orderItr == g_TargetRelativeMoveOrderByGuid.end())
+    TargetRelativeMoveOrderState const* orderState = playerbot::LockedFind(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue());
+    if (!orderState)
         return false;
 
-    TargetRelativeMoveOrderState const& order = orderItr->second;
+    TargetRelativeMoveOrderState const& order = *orderState;
     if (target && order.targetGuid != target->GetGUID())
         return false;
 
@@ -4640,10 +5505,202 @@ bool PvpClassActions::IsPetSpellAction(Player const* player, PvpClassSpellContex
     return player && context.spellId != 0 && ResolveKnownPetSpellInChain(player, context.spellId) != 0;
 }
 
+// 89784 - Shadow Wraith ("Fade"). Casting it roots the priest's own body
+// (see spell_pri_shadow_wraith_aura::OnApply in spell_priest.cpp) and hands
+// control to a summoned wraith creature via possession instead. A real
+// client automatically starts steering whatever it is possessing the moment
+// control transfers, but playerbot movement code only ever issues motion
+// orders to the Player* - the wraith itself never gets one, so it just sits
+// still, defeating the entire point of using Fade to escape melee pressure.
+// Move the possessed wraith away from the threat directly.
+bool PvpClassActions::TryIssueShadowWraithFleeMovement(Player* player, Unit* threat)
+{
+    if (!player || !player->HasAura(89784) || !threat)
+        return false;
+
+    Unit* wraith = player->GetCharmed();
+    if (!wraith || !wraith->IsAlive())
+        return false;
+
+    // Re-steering every tick would fight the wraith's own in-flight spline
+    // for no reason once it has already put real distance between itself
+    // and the threat. Only reissue while still uncomfortably close.
+    constexpr float kWraithFleeDistance = 15.0f;
+    if (wraith->GetDistance(threat) > kWraithFleeDistance)
+        return false;
+
+    float const awayAngle = wraith->GetAbsoluteAngle(threat->GetPosition()) + static_cast<float>(M_PI);
+    Position destination = wraith->GetPosition();
+    destination.RelocateOffset({ std::cos(awayAngle) * kWraithFleeDistance, std::sin(awayAngle) * kWraithFleeDistance, 0.0f, 0.0f });
+
+    float adjustedZ = destination.GetPositionZ();
+    wraith->UpdateAllowedPositionZ(destination.GetPositionX(), destination.GetPositionY(), adjustedZ);
+    destination.Relocate(destination.GetPositionX(), destination.GetPositionY(), adjustedZ, destination.GetOrientation());
+
+    MotionMaster* wraithMotionMaster = wraith->GetMotionMaster();
+    if (!wraithMotionMaster)
+        return false;
+
+    wraithMotionMaster->MovePoint(0, destination, true);
+    return true;
+}
+
+bool PvpClassActions::IsBattlegroundObjectInteractionInProgress(Player const* player)
+{
+    if (!player || !player->InBattleground())
+        return false;
+
+    Spell const* spell = player->GetCurrentSpell(CURRENT_GENERIC_SPELL);
+    if (!spell || spell->getState() == SPELL_STATE_FINISHED)
+        return false;
+
+    SpellInfo const* spellInfo = spell->GetSpellInfo();
+    return spellInfo && spellInfo->HasEffect(SPELL_EFFECT_OPEN_LOCK) && spell->m_targets.GetGOTarget();
+}
+
 bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& context)
 {
     if (!player || !context.classSpellsEnabled || !context.shouldExecute)
         return false;
+
+    // Auto Shot planting is a real short stationary commitment. Lifecycle
+    // establishes the plant after the tactical/class pass, so without this
+    // cross-module guard the next class tick can cast or issue movement before
+    // the core receives 434 ms of uninterrupted stationary time. Let the
+    // triggered Auto Shot event release the plant before selecting another
+    // hunter action.
+    bool const hunterPlantEmergencyOverride = player->GetClass() == CLASS_HUNTER && context.spellId == 81300; // Bestial Wrath CC break
+    if (player->GetClass() == CLASS_HUNTER && !hunterPlantEmergencyOverride && playerbot::IsHunterAutoShotPlantActive(player))
+    {
+        // Planting must hold the hunter's own movement/casts, not the pet. The
+        // previous early return occurred before every CommandPetAttackTarget()
+        // call, so a stalled Auto Shot plant also left a healthy hunter pet
+        // standing idle indefinitely.
+        Unit* petAttackTarget = nullptr;
+        if (Spell const* autoRepeat = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL))
+            if (SpellInfo const* autoRepeatInfo = autoRepeat->GetSpellInfo(); autoRepeatInfo && autoRepeatInfo->Id == 75)
+                petAttackTarget = autoRepeat->m_targets.GetUnitTarget();
+        if (!petAttackTarget)
+            petAttackTarget = player->GetVictim();
+        if (!petAttackTarget)
+            petAttackTarget = player->GetSelectedUnit();
+
+        if (petAttackTarget && petAttackTarget->IsAlive() && player->IsValidAttackTarget(petAttackTarget) &&
+            !petAttackTarget->HasBreakableByDamageCrowdControlAura())
+        {
+            CommandPetAttackTarget(player, petAttackTarget);
+        }
+
+        SetLastExecutionStatus(player, "hunter_autoshot_plant_in_progress");
+        return true;
+    }
+
+    // The context may have been selected just before a synchronous flag click
+    // in the tactical pass. Recheck live carrier state before any spell can
+    // stop, turn, or otherwise disturb the carrier's capture movement.
+    if (context.spellId && PvpCore::IsBattlegroundFlagCarrier(player))
+    {
+        uint32 const resolvedSpellId = ResolveKnownSpellInChain(player, context.spellId);
+        if (resolvedSpellId && PvpCore::SpellWouldBreakFlagCarry(resolvedSpellId))
+        {
+            SetLastExecutionStatus(player, "flag_carrier_forbidden_live_recheck");
+            return true;
+        }
+    }
+
+    // Hazard escape remains the movement owner, but instant spells that are
+    // already valid at the current position may still fire while the bot runs.
+    // Cast-time spells, channels, items, and movement directives must yield so
+    // they cannot stop or replace the escape route.
+    bool const escapingHazard = TryMoveOutOfHazardousLiquid(player);
+    bool allowInstantSpellWhileEscaping = false;
+    if (escapingHazard && context.spellId)
+    {
+        uint32 const resolvedSpellId = ResolveKnownSpellInChain(player, context.spellId);
+        SpellInfo const* spellInfo = resolvedSpellId ? sSpellMgr->GetSpellInfo(resolvedSpellId) : nullptr;
+        Unit* target = ResolveTarget(player, context);
+        MotionMaster const* motionMaster = player->GetMotionMaster();
+        bool const hasEscapeOrder = player->isMoving() ||
+            (motionMaster && motionMaster->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE) ||
+            (player->movespline && player->movespline->Initialized() && !player->movespline->Finalized());
+        allowInstantSpellWhileEscaping = hasEscapeOrder && spellInfo && spellInfo->CalcCastTime() <= 0 && !spellInfo->IsChanneled() &&
+            IsSpellReadyAtCurrentPosition(player, target, spellInfo, context.targetMode);
+    }
+
+    if (escapingHazard && !allowInstantSpellWhileEscaping)
+    {
+        SetLastExecutionStatus(player, "hazard_escape_before_class_action");
+        return true;
+    }
+
+    // Capturing a battleground node is a real interruptible OPEN_LOCK cast.
+    // Do not let routine class movement or spell selection cancel it every
+    // update; incoming damage and the spell system still interrupt it normally.
+    if (IsBattlegroundObjectInteractionInProgress(player))
+    {
+        SetLastExecutionStatus(player, "battleground_object_interaction_in_progress");
+        return true;
+    }
+
+    // Flag pickup/capture and injured-player Lightwell recovery own class movement.
+    // Preserve combat activity with spells that are already usable while
+    // moving, while cast times, channels, items, and class movement directives
+    // yield to the active route.
+    bool const seekingLightwell = PvpCore::ShouldSeekLightwell(player);
+    if (context.preserveFlagObjectiveMovement || seekingLightwell)
+    {
+        bool allowInstantSpell = false;
+        if (context.spellId)
+        {
+            uint32 const resolvedSpellId = ResolveKnownSpellInChain(player, context.spellId);
+            SpellInfo const* spellInfo = resolvedSpellId ? sSpellMgr->GetSpellInfo(resolvedSpellId) : nullptr;
+            Unit* target = ResolveTarget(player, context);
+            bool repositionsCaster = false;
+            if (spellInfo)
+            {
+                for (uint8 effectIndex = 0; effectIndex < MAX_SPELL_EFFECTS; ++effectIndex)
+                {
+                    switch (spellInfo->GetEffect(SpellEffIndex(effectIndex)).Effect)
+                    {
+                        case SPELL_EFFECT_TELEPORT_UNITS:
+                        case SPELL_EFFECT_TELEPORT_UNITS_FACE_CASTER:
+                        case SPELL_EFFECT_LEAP:
+                        case SPELL_EFFECT_JUMP:
+                        case SPELL_EFFECT_JUMP_DEST:
+                        case SPELL_EFFECT_LEAP_BACK:
+                        case SPELL_EFFECT_CHARGE:
+                        case SPELL_EFFECT_CHARGE_DEST:
+                            repositionsCaster = true;
+                            break;
+                        default:
+                            break;
+                    }
+
+                    if (repositionsCaster)
+                        break;
+                }
+            }
+
+            bool const stopsForHunterShot = spellInfo && player->GetClass() == CLASS_HUNTER && IsHunterCastTimeShot(player, spellInfo);
+            bool const stopsForRecovery = resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT ||
+                resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
+            allowInstantSpell = spellInfo && spellInfo->CalcCastTime() <= 0 && !spellInfo->IsChanneled() &&
+                !spellInfo->IsAutoRepeatRangedSpell() && !stopsForHunterShot && !stopsForRecovery && !repositionsCaster &&
+                resolvedSpellId != kRacialNightElfShadowmeldSpellId &&
+                (!context.preserveFlagCarrierMovement || !PvpCore::SpellWouldBreakFlagCarry(resolvedSpellId)) &&
+                (!context.preserveFlagObjectiveMovement ||
+                    context.targetMode != PvpClassSpellContext::TargetMode::Enemy ||
+                    (target && player->isInFront(target))) &&
+                IsSpellReadyAtCurrentPosition(player, target, spellInfo, context.targetMode);
+        }
+
+        if (!allowInstantSpell)
+        {
+            SetLastExecutionStatus(player, seekingLightwell ? "lightwell_recovery_movement_before_class_action" :
+                "flag_objective_movement_before_class_action");
+            return true;
+        }
+    }
 
     bool const hasCastIntent = context.spellId != 0 || context.itemEntry != 0;
     bool const shouldExecuteMovementBeforeCast =
@@ -4653,7 +5710,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
             context.movementDirective != PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell &&
             context.movementDirective != PvpClassSpellContext::MovementDirective::FaceSpellTarget);
 
-    if (context.movementDirective != PvpClassSpellContext::MovementDirective::None && shouldExecuteMovementBeforeCast)
+    if (!escapingHazard && context.movementDirective != PvpClassSpellContext::MovementDirective::None && shouldExecuteMovementBeforeCast)
     {
         if (ShouldThrottleDirective(player, context))
         {
@@ -4773,15 +5830,20 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                     std::sin(angleToTarget + static_cast<float>(M_PI)) * fleeDistance, 0.0f, 0.0f });
                 if (RequiresStrictHumanPathing(player))
                 {
-                    if (!IssueStrictHumanMove(player, destination))
-                    {
-                        // Strict segment pathing can fail to resolve around
-                        // battleground geometry. Fall back to a direct point
-                        // move so flee directives never devolve into idle.
-                        MotionMaster* fallbackMotionMaster = player->GetMotionMaster();
-                        if (fallbackMotionMaster)
-                            fallbackMotionMaster->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
-                    }
+                    // If strict segment pathing fails to resolve, PathGenerator
+                    // has already determined this flee destination is not
+                    // safely reachable. Do NOT fall back to a raw point move
+                    // here - that fallback was what let fleeing bots (hunters
+                    // especially, since they flee constantly) walk straight
+                    // through walls and eventually fall below the map.
+                    // Standing still for a tick is far cheaper than clipping
+                    // through geometry. Loosened reissue cadence for the same
+                    // reason as the hunter dead-zone retreat: the default
+                    // 4y/350ms throttle reissues a fresh segment (and re-runs
+                    // its floor computation) far more often than a fleeing
+                    // bot actually needs, which was contributing to both the
+                    // visible stutter and the floor-clip risk.
+                    IssueStrictHumanMove(player, destination, 5.0f, 500);
                 }
                 else
                 {
@@ -4792,6 +5854,14 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 break;
             }
             case PvpClassSpellContext::MovementDirective::FaceSpellTarget:
+                // A facing spline replaces the current movement spline. Let
+                // the active segment finish instead of alternating movement
+                // and zero-distance facing splines every decision tick.
+                if (!player->IsStopped() || (player->movespline && !player->movespline->Finalized()))
+                {
+                    SetLastExecutionStatus(player, "move_face_deferred_active_spline");
+                    return true;
+                }
                 player->SetFacingToObject(movementTarget);
                 player->SetInFront(movementTarget);
                 break;
@@ -4826,7 +5896,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
     // explicit re-positioning before retrying the same cast. Without this,
     // caster bots can repeatedly fail with LOS while remaining idle when
     // class-selection keeps returning a spell action without a move directive.
-    if (hasCastIntent &&
+    if (!escapingHazard && hasCastIntent &&
         context.movementDirective == PvpClassSpellContext::MovementDirective::None &&
         CanIssueFollowCommands(player))
     {

@@ -79,6 +79,8 @@ public:
 
 protected:
     void OnClose() override;
+    void OnSocketError(char const* operation, boost::system::error_code const& error) override;
+    void OnSocketWriteZero(std::size_t attemptedBytes) override;
     void ReadHandler() override;
     bool ReadHeaderHandler();
 

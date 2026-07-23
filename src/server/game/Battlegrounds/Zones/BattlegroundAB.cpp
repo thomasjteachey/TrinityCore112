@@ -65,6 +65,39 @@ BattlegroundAB::BattlegroundAB()
 
 BattlegroundAB::~BattlegroundAB() { }
 
+bool BattlegroundAB::GetDynamicNodeInfo(ObjectGuid playerGuid, uint32 nodeId, BattlegroundNodeObjective& node) const
+{
+    if (nodeId >= BG_AB_DYNAMIC_NODES_COUNT)
+        return false;
+
+    uint32 const playerTeam = GetPlayerTeam(playerGuid);
+    if (playerTeam != ALLIANCE && playerTeam != HORDE)
+        return false;
+
+    TeamId const teamId = GetTeamIndexByTeamId(playerTeam);
+    uint8 const state = m_Nodes[nodeId];
+
+    node.NodeId = nodeId;
+    node.Location = BG_AB_NodePositions[nodeId];
+    node.BannerGuid = BgObjects[nodeId * 8 + state];
+
+    if (state == BG_AB_NODE_TYPE_NEUTRAL)
+        node.Status = BattlegroundNodeStatus::Neutral;
+    else if (state == uint8(teamId) + BG_AB_NODE_TYPE_OCCUPIED)
+        node.Status = BattlegroundNodeStatus::FriendlyControlled;
+    else if (state == uint8(teamId) + BG_AB_NODE_TYPE_CONTESTED)
+        node.Status = BattlegroundNodeStatus::FriendlyContested;
+    else if (state < BG_AB_NODE_TYPE_OCCUPIED &&
+        m_prevNodes[nodeId] == uint8(teamId) + BG_AB_NODE_TYPE_OCCUPIED)
+        node.Status = BattlegroundNodeStatus::FriendlyUnderAttack;
+    else if (state >= BG_AB_NODE_TYPE_OCCUPIED)
+        node.Status = BattlegroundNodeStatus::EnemyControlled;
+    else
+        node.Status = BattlegroundNodeStatus::EnemyContested;
+
+    return true;
+}
+
 void BattlegroundAB::PostUpdateImpl(uint32 diff)
 {
     if (GetStatus() == STATUS_IN_PROGRESS)
@@ -135,8 +168,9 @@ void BattlegroundAB::PostUpdateImpl(uint32 diff)
             if (m_lastTick[team] > BG_AB_TickIntervals[points])
             {
                 m_lastTick[team] -= BG_AB_TickIntervals[points];
-                m_TeamScores[team] += BG_AB_TickPoints[points];
-                m_ReputationScoreTics[team] += BG_AB_TickPoints[points];
+                uint32 const gainedPoints = ScaleResourceGain(BG_AB_TickPoints[points]);
+                m_TeamScores[team] += gainedPoints;
+                m_ReputationScoreTics[team] += gainedPoints;
 
                 if (m_ReputationScoreTics[team] >= m_ReputationTics)
                 {
@@ -159,8 +193,8 @@ void BattlegroundAB::PostUpdateImpl(uint32 diff)
                     m_IsInformedNearVictory = true;
                 }
 
-                if (m_TeamScores[team] > BG_AB_MAX_TEAM_SCORE)
-                    m_TeamScores[team] = BG_AB_MAX_TEAM_SCORE;
+                if (m_TeamScores[team] > GetResourceLimit(BG_AB_MAX_TEAM_SCORE))
+                    m_TeamScores[team] = GetResourceLimit(BG_AB_MAX_TEAM_SCORE);
 
                 if (team == TEAM_ALLIANCE)
                     UpdateWorldState(BG_AB_OP_RESOURCES_ALLY, m_TeamScores[team]);
@@ -175,9 +209,9 @@ void BattlegroundAB::PostUpdateImpl(uint32 diff)
         }
 
         // Test win condition
-        if (m_TeamScores[TEAM_ALLIANCE] >= BG_AB_MAX_TEAM_SCORE)
+        if (m_TeamScores[TEAM_ALLIANCE] >= GetResourceLimit(BG_AB_MAX_TEAM_SCORE))
             EndBattleground(ALLIANCE);
-        else if (m_TeamScores[TEAM_HORDE] >= BG_AB_MAX_TEAM_SCORE)
+        else if (m_TeamScores[TEAM_HORDE] >= GetResourceLimit(BG_AB_MAX_TEAM_SCORE))
             EndBattleground(HORDE);
     }
 }
@@ -332,7 +366,7 @@ void BattlegroundAB::FillInitialWorldStates(WorldPackets::WorldState::InitWorldS
     packet.Worldstates.emplace_back(BG_AB_OP_OCCUPIED_BASES_HORDE, horde);
 
     // Team scores
-    packet.Worldstates.emplace_back(BG_AB_OP_RESOURCES_MAX, BG_AB_MAX_TEAM_SCORE);
+    packet.Worldstates.emplace_back(BG_AB_OP_RESOURCES_MAX, GetResourceLimit(BG_AB_MAX_TEAM_SCORE));
     packet.Worldstates.emplace_back(BG_AB_OP_RESOURCES_WARNING, BG_AB_WARNING_NEAR_VICTORY_SCORE);
     packet.Worldstates.emplace_back(BG_AB_OP_RESOURCES_ALLY, m_TeamScores[TEAM_ALLIANCE]);
     packet.Worldstates.emplace_back(BG_AB_OP_RESOURCES_HORDE, m_TeamScores[TEAM_HORDE]);
@@ -419,6 +453,9 @@ void BattlegroundAB::EventPlayerClickedOnFlag(Player* source, GameObject* /*targ
     if (GetStatus() != STATUS_IN_PROGRESS)
         return;
 
+    if (source->IsSpectator())
+        return;
+
     uint8 node = BG_AB_NODE_STABLES;
     GameObject* obj = GetBgMap()->GetGameObject(BgObjects[node*8+7]);
     while ((node < BG_AB_DYNAMIC_NODES_COUNT) && ((!obj) || (!source->IsWithinDistInMap(obj, 10))))
@@ -452,7 +489,7 @@ void BattlegroundAB::EventPlayerClickedOnFlag(Player* source, GameObject* /*targ
         // create new contested banner
         _CreateBanner(node, BG_AB_NODE_TYPE_CONTESTED, teamIndex, true);
         _SendNodeUpdate(node);
-        m_NodeTimers[node] = BG_AB_FLAG_CAPTURING_TIME;
+        m_NodeTimers[node] = GetNodeBaseCaptureTime(BG_AB_FLAG_CAPTURING_TIME);
 
         if (teamIndex == TEAM_ALLIANCE)
             SendBroadcastText(ABNodes[node].TextAllianceClaims, CHAT_MSG_BG_SYSTEM_ALLIANCE, source);
@@ -475,7 +512,7 @@ void BattlegroundAB::EventPlayerClickedOnFlag(Player* source, GameObject* /*targ
             // create new contested banner
             _CreateBanner(node, BG_AB_NODE_TYPE_CONTESTED, teamIndex, true);
             _SendNodeUpdate(node);
-            m_NodeTimers[node] = BG_AB_FLAG_CAPTURING_TIME;
+            m_NodeTimers[node] = GetNodeBaseCaptureTime(BG_AB_FLAG_CAPTURING_TIME);
 
             if (teamIndex == TEAM_ALLIANCE)
                 SendBroadcastText(ABNodes[node].TextAllianceAssaulted, CHAT_MSG_BG_SYSTEM_ALLIANCE, source);
@@ -515,7 +552,7 @@ void BattlegroundAB::EventPlayerClickedOnFlag(Player* source, GameObject* /*targ
         _CreateBanner(node, BG_AB_NODE_TYPE_CONTESTED, teamIndex, true);
         _SendNodeUpdate(node);
         _NodeDeOccupied(node);
-        m_NodeTimers[node] = BG_AB_FLAG_CAPTURING_TIME;
+        m_NodeTimers[node] = GetNodeBaseCaptureTime(BG_AB_FLAG_CAPTURING_TIME);
 
         if (teamIndex == TEAM_ALLIANCE)
             SendBroadcastText(ABNodes[node].TextAllianceAssaulted, CHAT_MSG_BG_SYSTEM_ALLIANCE, source);

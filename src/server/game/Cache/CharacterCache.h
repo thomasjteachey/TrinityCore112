@@ -23,6 +23,7 @@
 #include "ObjectGuid.h"
 #include "Optional.h"
 #include <string>
+#include <vector>
 
 struct CharacterCacheEntry
 {
@@ -45,7 +46,8 @@ class TC_GAME_API CharacterCache
         static CharacterCache* instance();
 
         void LoadCharacterCacheStorage();
-        void AddCharacterCacheEntry(ObjectGuid const& guid, uint32 accountId, std::string const& name, uint8 gender, uint8 race, uint8 playerClass, uint8 level);
+        void AddCharacterCacheEntry(ObjectGuid const& guid, uint32 accountId, std::string const& name, uint8 gender, uint8 race, uint8 playerClass, uint8 level,
+            bool indexByName = true);
         void DeleteCharacterCacheEntry(ObjectGuid const& guid, std::string const& name);
 
         void UpdateCharacterData(ObjectGuid const& guid, std::string const& name, Optional<uint8> gender = {}, Optional<uint8> race = {});
@@ -63,6 +65,7 @@ class TC_GAME_API CharacterCache
         uint32 GetCharacterTeamByGuid(ObjectGuid guid) const;
         uint32 GetCharacterAccountIdByGuid(ObjectGuid guid) const;
         uint32 GetCharacterAccountIdByName(std::string const& name) const;
+        std::vector<ObjectGuid> GetCharacterGuidsByAccountIds(std::vector<uint32> const& accountIds) const;
         uint8 GetCharacterLevelByGuid(ObjectGuid guid) const;
         ObjectGuid::LowType GetCharacterGuildIdByGuid(ObjectGuid guid) const;
         uint32 GetCharacterArenaTeamIdByGuid(ObjectGuid guid, uint8 type) const;

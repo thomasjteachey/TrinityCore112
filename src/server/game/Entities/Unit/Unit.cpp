@@ -100,6 +100,41 @@ bool IsIceFangSprintTurnRateAura(SpellInfo const* spellInfo)
 {
     return spellInfo->Id == SPELL_ICE_FANG_SPRINT;
 }
+
+bool IsSocketlessServerDrivenPlayer(Unit const* unit)
+{
+    Player const* player = unit ? unit->ToPlayer() : nullptr;
+    WorldSession const* session = player ? player->GetSession() : nullptr;
+    return session && (session->IsVirtualSession() || session->IsTransientPlayerSession());
+}
+
+void SyncSocketlessServerDrivenMovementInfo(Unit* unit, float x, float y, float z, float orientation)
+{
+    if (!IsSocketlessServerDrivenPlayer(unit))
+        return;
+
+    unit->m_movementInfo.pos.Relocate(x, y, z, orientation);
+    unit->m_movementInfo.time = GameTime::GetGameTimeMS();
+}
+
+bool HasActiveTranslationalSpline(Unit const* unit)
+{
+    if (!unit || !unit->movespline || !unit->movespline->Initialized() || unit->movespline->Finalized())
+        return false;
+
+    // A closed pure-vertical knock-up spline has the same start and final
+    // coordinates, but it is still active translational movement while its
+    // parabolic elevation is resolving.
+    if (unit->movespline->isParabolic())
+        return true;
+
+    Movement::Location const current = unit->movespline->ComputePosition();
+    G3D::Vector3 const destination = unit->movespline->FinalDestination();
+    float const dx = destination.x - current.x;
+    float const dy = destination.y - current.y;
+    float const dz = destination.z - current.z;
+    return dx * dx + dy * dy + dz * dz > 0.01f;
+}
 }
 
 float baseMoveSpeed[MAX_MOVE_TYPE] =
@@ -836,6 +871,12 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
         }
         else
             victim->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TAKE_DAMAGE, 0);
+
+        // Combat diagnostic: names who kept hitting the player through a pending
+        // feign/trap watch, independent of whether this particular hit is what
+        // stripped the aura (NotifyFeignDeathInterrupted records that part).
+        if (Player* feignVictim = victim->ToPlayer())
+            feignVictim->NotifyCombatDiagnosticDamageTaken(attacker, spellProto ? spellProto->Id : 0, damage);
 
         // interrupt spells with SPELL_INTERRUPT_FLAG_ABORT_ON_DMG on absorbed damage (no dots)
         if (!damage && damagetype != DOT && hasAbsorbedDamage)
@@ -3285,7 +3326,7 @@ void Unit::_UpdateAutoRepeatSpell()
     }
 
     //hunter autoshot change
-    if ((m_currentSpells[CURRENT_GENERIC_SPELL] || m_currentSpells[CURRENT_CHANNELED_SPELL]) && getAttackTimer(RANGED_ATTACK) < 500)
+    if ((m_currentSpells[CURRENT_GENERIC_SPELL] || m_currentSpells[CURRENT_CHANNELED_SPELL]) && getAttackTimer(RANGED_ATTACK) < 434)
     {
         setAttackTimer(RANGED_ATTACK, 434);
     }
@@ -3595,8 +3636,35 @@ void Unit::ProcessTerrainStatusUpdate(ZLiquidStatus /*oldLiquidStatus*/, Optiona
         return;
 
     if (Player* player = ToPlayer())
+    {
         if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
-            SetSwim(CanSwim() && IsInWater());
+        {
+            // Liquid classification is a hard step exactly at the surface
+            // (Map::GetLiquidStatus: delta > 0 is IN_WATER, delta > -0.1 is
+            // WATER_WALK). Bot pathing rides navmesh water polys whose Z sits
+            // exactly at the liquid level, so deriving the swim flag straight
+            // from IsInWater() flaps on centimeter-scale Z noise there and
+            // visibly bobs the bot between standing on the surface and
+            // swimming. Use a dead band instead: engage swim only when
+            // clearly below the surface of water too deep to stand in,
+            // disengage only when clearly at or above the surface (or the
+            // bot can stand on the bottom); keep the current state between.
+            bool const swimming = HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+            bool desiredSwimming = swimming;
+            if (!CanSwim() || !newLiquidData)
+                desiredSwimming = false;
+            else
+            {
+                float const depth = newLiquidData->level - GetPositionZ();
+                bool const tooDeepToStand = (newLiquidData->level - newLiquidData->depth_level) > GetCollisionHeight();
+                if (!tooDeepToStand || depth < 0.05f)
+                    desiredSwimming = false;
+                else if (depth > 0.35f)
+                    desiredSwimming = true;
+            }
+            SetSwim(desiredSwimming);
+        }
+    }
 
     // Remove appropriate auras if we are swimming/not swimming respectively.
     if (IsInWater())
@@ -3761,6 +3829,27 @@ AuraApplication* Unit::_CreateAuraApplication(Aura* aura, uint8 effMask)
     {
         TC_LOG_ERROR("spells", "Unit::_CreateAuraApplication() called with a removed aura. Check if OnEffectHitTarget() is triggering any spell with apply aura effect (that's not allowed!)\nUnit: {}\nAura: {}", GetDebugInfo(), aura->GetDebugInfo());
         return nullptr;
+    }
+
+    // Applying an aura can re-enter spell handling before the first application
+    // has finished applying all of its effects. In release builds the assertion
+    // below does not prevent a second AuraApplication from being created. The
+    // second application then overwrites Aura::m_applications while both remain
+    // in Unit::m_appliedAuras, eventually leaving a dangling application/base
+    // pointer for aura stacking or removal to dereference.
+    //
+    // Treat the Aura-side target map as the authoritative uniqueness check and
+    // merge any newly requested effects into the existing application, matching
+    // the normal existing-application path in Spell::EffectApplyAura.
+    if (AuraApplication* existingApplication = aura->GetApplicationOfTarget(GetGUID()))
+    {
+        TC_LOG_ERROR("spells",
+            "Unit::_CreateAuraApplication() prevented duplicate reentrant application. Unit: {}, spell: {}, aura: {}, existing application: {}, requested effect mask: {}.",
+            GetGUID().ToString(), aura->GetId(), static_cast<void const*>(aura),
+            static_cast<void const*>(existingApplication), uint32(effMask));
+
+        existingApplication->UpdateApplyEffectMask(existingApplication->GetEffectsToApply() | effMask, false);
+        return existingApplication;
     }
 
     // aura mustn't be already applied on target
@@ -3972,6 +4061,11 @@ void Unit::_UnapplyAura(AuraApplicationMap::iterator& i, AuraRemoveMode removeMo
     if (Player* player = ToPlayer())
         if (sConditionMgr->IsSpellUsedInSpellClickConditions(aurApp->GetBase()->GetId()))
             player->UpdateVisibleGameobjectsOrSpellClicks();
+
+    // The diagnostic above describes the operation currently in progress. Do
+    // not leave a successfully removed aura as the apparent cause of a later,
+    // unrelated allocator or map-update failure on the same thread.
+    Trinity::ClearCrashContext();
 
     i = m_appliedAuras.begin();
 }
@@ -4510,6 +4604,10 @@ void Unit::RemoveAurasWithInterruptFlags(uint32 flag, uint32 except, bool skipMo
                 if (flag & protectedFlags)
                     continue;
             }
+
+            if (aura->GetId() == 5384 /* Hunter Feign Death: combat-diagnostic break-cause capture */)
+                if (Player* feignPlayer = ToPlayer())
+                    feignPlayer->NotifyFeignDeathInterrupted(flag);
 
             uint32 removedAuras = m_removedAurasCount;
             RemoveAura(aura);
@@ -5670,6 +5768,18 @@ void Unit::RemoveDynObject(uint32 spellId)
 {
     if (m_dynObj.empty())
         return;
+
+    if (Player* casterPlayer = ToPlayer())
+        if (WorldSession* session = casterPlayer->GetSession())
+            if (session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Channel))
+            {
+                size_t matches = std::count_if(m_dynObj.begin(), m_dynObj.end(),
+                    [spellId](DynamicObject* dynObj) { return dynObj->GetSpellId() == spellId; });
+                ChatHandler(session).PSendSysMessage(
+                    "[Channel] RemoveDynObject spell=%u matches=%u (of %u tracked)",
+                    spellId, uint32(matches), uint32(m_dynObj.size()));
+            }
+
     for (DynObjectList::iterator i = m_dynObj.begin(); i != m_dynObj.end();)
     {
         DynamicObject* dynObj = *i;
@@ -9574,10 +9684,12 @@ void Unit::SetSpeedRate(UnitMoveType mtype, float rate)
     float newSpeedFlat = rate * (IsControlledByPlayer() ? playerBaseMoveSpeed[mtype] : baseMoveSpeed[mtype]);
     if (IsMovedByClient() && IsInWorld())
     {
-        // Virtual sessions (for example managed playerbots) do not emit client-side
-        // movement change ACKs. Apply speed updates immediately so server-side motion
-        // generators (MovePoint/MoveFollow/etc.) use the correct aura-adjusted speed.
-        if (GameClient* controller = GetGameClientMovingMe(); controller && controller->GetWorldSession() && controller->GetWorldSession()->IsVirtualSession())
+        // Socketless sessions (managed playerbots, transient OBC clones) do not emit
+        // client-side movement change ACKs. Apply speed updates immediately so
+        // server-side motion generators (MovePoint/MoveFollow/etc.) use the correct
+        // aura-adjusted speed, and never queue pending changes no client will ack.
+        if (GameClient* controller = GetGameClientMovingMe(); controller && controller->GetWorldSession() &&
+            (controller->GetWorldSession()->IsVirtualSession() || controller->GetWorldSession()->IsTransientPlayerSession()))
         {
             SetSpeedRateReal(mtype, rate);
             MovementPacketSender::SendSpeedChangeToObservers(this, mtype, newSpeedFlat);
@@ -11292,6 +11404,16 @@ void Unit::ResumeMovement(uint32 timer/* = 0*/, uint8 slot/* = 0*/)
 
 void Unit::SendMovementFlagUpdate(bool self /* = false */)
 {
+    // MSG_MOVE_HEARTBEAT carries a full MovementInfo block and observer
+    // clients treat it as an authoritative client-movement state: it cancels
+    // spline playback and freezes the model at the packet position until the
+    // next SMSG_MONSTER_MOVE snaps it forward. Socketless playerbot movers are
+    // rendered purely from splines (and have no own client that needs the
+    // heartbeat), so publishing it for them only produces sporadic porting;
+    // their observers learn flag changes through the spline-family opcodes.
+    if (IsSocketlessServerDrivenPlayer(this))
+        return;
+
     WorldPacket data;
     BuildHeartBeatMsg(&data);
     SendMessageToSet(&data, self);
@@ -12064,10 +12186,23 @@ bool Unit::InitTamedPet(Pet* pet, uint8 level, uint32 spell_id)
                 killerPlayer->GetCombatManager().RefreshPvPCombatTimer(killedPlayer);
 
             if (victim->IsTotem())
+            {
                 if (Unit* totemOwner = victim->GetCharmerOrOwner())
+                {
                     if (totemOwner->IsControlledByPlayer())
+                    {
                         // Keep the attacker in combat for the PvP timeout while not flagging the shaman owner
                         killerPlayer->GetCombatManager().SetInCombatWith(totemOwner, true);
+                    }
+                    else if (totemOwner->IsAlive())
+                    {
+                        // Killing an NPC shaman's totem must keep the shaman engaged with the killer.
+                        // Totems cannot own threat lists, so their death can otherwise leave the owner
+                        // with no selectable hostile and cause an immediate evade reset.
+                        totemOwner->EngageWithTarget(attacker);
+                    }
+                }
+            }
         }
     }
 
@@ -12187,17 +12322,19 @@ bool Unit::InitTamedPet(Pet* pet, uint8 level, uint32 spell_id)
     //    if (OutdoorPvP* pvp = victim->ToPlayer()->GetOutdoorPvP())
     //        pvp->HandlePlayerActivityChangedpVictim->ToPlayer();
 
-    // battleground things (do this at the end, so the death state flag will be properly set to handle in the bg->handlekill)
-    if (player && player->InBattleground())
+    // Battleground player deaths belong to the victim's battleground and must
+    // be reported even when no player killer exists (environment, creatures,
+    // or scripted deaths). Keep unit-kill dispatch tied to the player killer.
+    // Do this at the end so the death state is ready for battleground handling.
+    if (Player* playerVictim = victim->ToPlayer())
     {
-        if (Battleground* bg = player->GetBattleground())
-        {
-            if (Player* playerVictim = victim->ToPlayer())
+        if (playerVictim->InBattleground())
+            if (Battleground* bg = playerVictim->GetBattleground())
                 bg->HandleKillPlayer(playerVictim, player);
-            else
-                bg->HandleKillUnit(victim->ToCreature(), player);
-        }
     }
+    else if (player && player->InBattleground())
+        if (Battleground* bg = player->GetBattleground())
+            bg->HandleKillUnit(victim->ToCreature(), player);
 
     // achievement stuff
     if (attacker && victim->GetTypeId() == TYPEID_PLAYER)
@@ -12920,7 +13057,21 @@ void Unit::RemoveCharmedBy(Unit* charmer)
 void Unit::RestoreFaction()
 {
     if (GetTypeId() == TYPEID_PLAYER)
-        ToPlayer()->SetFactionForRace(GetRace());
+    {
+        Player* player = ToPlayer();
+        if (player->InBattleground())
+        {
+            uint32 const battlegroundTeam = player->GetBGTeam();
+            if (battlegroundTeam == ALLIANCE)
+                player->SetFactionForRace(RACE_HUMAN);
+            else if (battlegroundTeam == HORDE)
+                player->SetFactionForRace(RACE_BLOODELF);
+            else
+                player->SetFactionForRace(GetRace());
+        }
+        else
+            player->SetFactionForRace(GetRace());
+    }
     else
     {
         if (HasUnitTypeMask(UNIT_MASK_MINION))
@@ -13346,7 +13497,17 @@ void Unit::UpdateObjectVisibility(bool forced)
 
 void Unit::KnockbackFrom(float x, float y, float speedXY, float speedZ)
 {
-    if (IsMovedByServer())
+    // Socketless playerbot sessions (virtual/transient) own a GameClient, so
+    // IsMovedByServer() reports false for them, but there is no real client to
+    // execute the SMSG_MOVE_KNOCK_BACK packet: it would vanish into the null
+    // socket and the bot would never move. Drive their knockback through the
+    // server-side spline like any other server-moved unit.
+    bool serverDrivenPlayer = false;
+    if (Player const* player = ToPlayer())
+        if (WorldSession const* session = player->GetSession())
+            serverDrivenPlayer = session->IsVirtualSession() || session->IsTransientPlayerSession();
+
+    if (IsMovedByServer() || serverDrivenPlayer)
     {
         GetMotionMaster()->MoveKnockbackFrom(x, y, speedXY, speedZ);
     }
@@ -14050,6 +14211,14 @@ bool Unit::UpdatePosition(float x, float y, float z, float orientation, bool tel
         return false;
     }
 
+    // Real players refresh MovementInfo through client movement packets.
+    // Socketless playerbots never send those packets, so every authoritative
+    // server relocation (spline, teleport completion, knockback, or direct
+    // correction) must refresh the packet-facing position here as well. If it
+    // remains stale, a later player-style observer packet can pull clients back
+    // to the old coordinate until the next spline packet arrives.
+    SyncSocketlessServerDrivenMovementInfo(this, x, y, z, orientation);
+
     // Check if angular distance changed
     bool const turn = G3D::fuzzyGt(M_PI - fabs(fabs(GetOrientation() - orientation) - M_PI), 0.0f);
 
@@ -14087,6 +14256,7 @@ bool Unit::UpdatePosition(Position const& pos, bool teleport)
 void Unit::UpdateOrientation(float orientation)
 {
     SetOrientation(orientation);
+    SyncSocketlessServerDrivenMovementInfo(this, GetPositionX(), GetPositionY(), GetPositionZ(), GetOrientation());
     if (IsVehicle())
         GetVehicleKit()->RelocatePassengers();
 }
@@ -14421,6 +14591,18 @@ void Unit::SetFacingTo(float ori, bool force)
     if (!force && (!IsStopped() || !movespline->Finalized()))
         return;
 
+    // SetFacingTo normally launches a zero-distance spline. For a socketless
+    // playerbot that replaces the translational spline observers are currently
+    // interpolating, and the movement generator then launches another travel
+    // spline on its next update. The alternating packets render as a sporadic
+    // back-and-forth teleport. Preserve travel and update only the authoritative
+    // facing needed by the immediate server-side spell/arc check.
+    if (IsSocketlessServerDrivenPlayer(this) && HasActiveTranslationalSpline(this))
+    {
+        UpdateOrientation(ori);
+        return;
+    }
+
     Movement::MoveSplineInit init(this);
     init.MoveTo(GetPositionX(), GetPositionY(), GetPositionZ(), false);
     if (HasUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT) && GetTransGUID())
@@ -14439,6 +14621,12 @@ void Unit::SetFacingToObject(WorldObject const* object, bool force)
     // do not face when already moving
     if (!force && (!IsStopped() || !movespline->Finalized()))
         return;
+
+    if (IsSocketlessServerDrivenPlayer(this) && HasActiveTranslationalSpline(this))
+    {
+        UpdateOrientation(GetAbsoluteAngle(object));
+        return;
+    }
 
     /// @todo figure out under what conditions creature will move towards object instead of facing it where it currently is.
     Movement::MoveSplineInit init(this);

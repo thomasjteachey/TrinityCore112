@@ -391,6 +391,14 @@ void BattlegroundSV::HandleKillPlayer(Player *player, Player *killer)
 	if (GetStatus() != STATUS_IN_PROGRESS)
 		return;
 
+    // Killerless deaths are still battleground deaths, but they do not drive
+    // this battleground's custom killer-dependent score adjustments.
+    if (!killer)
+    {
+        Battleground::HandleKillPlayer(player, nullptr);
+        return;
+    }
+
 	// suicide gives no points
 	if (killer->GetTeamId() == player->GetTeamId())
 	{

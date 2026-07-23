@@ -2594,7 +2594,16 @@ void Spell::TargetInfo::PreprocessTarget(Spell* spell)
         _spellHitTarget = spell->m_caster->ToUnit();
 
     if (spell->m_originalCaster && MissCondition != SPELL_MISS_EVADE && !spell->m_originalCaster->IsFriendlyTo(unit) && (!spell->m_spellInfo->IsPositive() || spell->m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (spell->m_spellInfo->HasInitialAggro() || unit->IsEngaged()) && !spell->m_spellInfo->IsMindVision() && ShouldSpellStartCombat(spell->m_spellInfo, spell->m_originalCaster, spell->m_caster))
+    {
+        // Combat diagnostic: this is why a missed/resisted/dodged hostile cast
+        // can still re-enter combat with zero damage recorded -- combat entry
+        // here is unconditional on MissCondition (besides EVADE above), and
+        // runs before any hit/damage resolution.
+        if (Player* feignTarget = unit->ToPlayer())
+            feignTarget->NotifyCombatDiagnosticSpellEngage(spell->m_spellInfo->Id, uint8(MissCondition));
+
         unit->SetInCombatWith(spell->m_originalCaster);
+    }
 
     bool reportedNaturesGraspFailure = false;
     if (MissCondition != SPELL_MISS_NONE)
@@ -3037,8 +3046,20 @@ SpellMissInfo Spell::PreprocessSpellHit(Unit* unit, bool scaleAura, TargetInfo& 
 
             if (m_originalCaster && unit->IsInCombat() && m_spellInfo->HasInitialAggro() && !unit->IsPet())
             {
-                if (m_originalCaster->HasUnitFlag(UNIT_FLAG_PLAYER_CONTROLLED)) // only do explicit combat forwarding for PvP enabled units
-                    m_originalCaster->GetCombatManager().InheritCombatStatesFrom(unit);    // for creature v creature combat, the threat forward does it for us
+                // Utility totems (Tremor, Stoneskin, Mana Spring, ...) pulse
+                // their effect on friendly party members constantly; without
+                // this check, assisting/cleansing/buffing an ally who happens
+                // to already be fighting someone would drag that unrelated
+                // enemy into combat with the totem, even though the totem
+                // never targeted or touched them. Fire totems (Searing,
+                // Magma, Fire Nova, ...) do deal damage and should still
+                // forward combat -- matches the fire-totem-only rule already
+                // used for the reverse direction in ShouldPropagateCombatToOwner
+                // (CombatManager.cpp).
+                Totem const* originalCasterTotem = m_originalCaster->ToTotem();
+                if (m_originalCaster->HasUnitFlag(UNIT_FLAG_PLAYER_CONTROLLED) && // only do explicit combat forwarding for PvP enabled units
+                    (!originalCasterTotem || originalCasterTotem->IsFireTotem()))
+                    m_originalCaster->GetCombatManager().InheritCombatStatesFrom(unit, m_spellInfo->Id);    // for creature v creature combat, the threat forward does it for us
                 unit->GetThreatManager().ForwardThreatForAssistingMe(m_originalCaster, 0.0f, nullptr, true);
             }
         }
@@ -3429,6 +3450,17 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
     else
         m_casttime = m_spellInfo->CalcCastTime(this);
 
+    // AB/BFG node banners use the normal Opening spell for both clients and
+    // playerbots. Override that real cast here so the client cast bar, server
+    // completion, and bot interaction wait all stay on the same timer.
+    if (playerCaster && m_casttime)
+        if (Battleground* battleground = playerCaster->GetBattleground())
+            if (battleground->IsCustomGame() &&
+                (battleground->GetTypeID(true) == BATTLEGROUND_AB || battleground->GetTypeID(true) == BATTLEGROUND_BFG))
+                if (GameObject* gameObject = m_targets.GetGOTarget())
+                    if (gameObject->GetSpellForLock(playerCaster) == m_spellInfo)
+                        m_casttime = battleground->GetNodeFlagCaptureTime(m_casttime);
+
     bool const isStarfire = m_spellInfo->IsStarfire();
     bool const isHurricane = m_spellInfo->IsHurricane();
     bool const isArcaneMissiles = m_spellInfo->IsArcaneMissiles();
@@ -3586,6 +3618,27 @@ void Spell::cancel()
     SetReferencedFromCurrent(false);
     if (m_selfContainer && *m_selfContainer == this)
         *m_selfContainer = nullptr;
+
+    // SpellEvent::Abort can reach cancel() during teardown without a preceding
+    // Spell::update(). Refresh the cached original-caster pointer from its GUID
+    // before touching owned dynamic/game objects; pets, totems, and other
+    // transient original casters may already have been removed by this point.
+    if (m_originalCasterGUID == m_caster->GetGUID())
+        m_originalCaster = m_caster->ToUnit();
+    else
+    {
+        m_originalCaster = ObjectAccessor::GetUnit(*m_caster, m_originalCasterGUID);
+        if (m_originalCaster && !m_originalCaster->IsInWorld())
+            m_originalCaster = nullptr;
+    }
+
+    if (m_spellInfo->IsChanneled())
+        if (Player* casterPlayer = m_caster->ToPlayer())
+            if (WorldSession* session = casterPlayer->GetSession())
+                if (session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Channel))
+                    ChatHandler(session).PSendSysMessage(
+                        "[Channel] cancel() spell=%u oldState=%u originalCaster=%s",
+                        m_spellInfo->Id, oldState, m_originalCaster ? "resolved" : "NULL");
 
     // originalcaster handles gameobjects/dynobjects for gob caster
     if (m_originalCaster)
@@ -4171,6 +4224,21 @@ void Spell::update(uint32 difftime)
         bool const hasMovementInterruptFlag = m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT;
         bool const moveAllowedChannel = IsChannelActive() && m_spellInfo->IsMoveAllowedChannel() && !needsHurricaneMovementInterrupt && !needsArcaneMissilesMovementInterrupt;
 
+        // Movable Starfire lets virtual players keep their active movement
+        // spline, which can turn them away again after the cast began. Reface
+        // on the exact update that completes the cast so target-facing checks
+        // and the visible release orientation match a real client correction.
+        WorldSession const* session = playerCaster->GetSession();
+        if (isStarfire && snareMovementAllowed && session && session->IsVirtualSession() &&
+            difftime >= uint32(m_timer))
+        {
+            if (Unit* target = m_targets.GetUnitTarget())
+            {
+                playerCaster->SetFacingToObject(target);
+                playerCaster->SetInFront(target);
+            }
+        }
+
         if (playerMoved && !snareMovementAllowed &&
             (hasMovementInterruptFlag || needsStarfireMovementInterrupt || needsHurricaneMovementInterrupt || needsArcaneMissilesMovementInterrupt) &&
             (!m_spellInfo->HasEffect(SPELL_EFFECT_STUCK) || !playerCaster->HasUnitMovementFlag(MOVEMENTFLAG_FALLING_FAR)))
@@ -4294,6 +4362,10 @@ void Spell::finish(bool ok)
 
     if (!ok)
         return;
+
+    if (!IsTriggered() && !m_triggeredByAuraSpell)
+        if (Player* playerCaster = unitCaster->ToPlayer())
+            playerCaster->NotifyDirectSpellCast(m_spellInfo->Id);
 
     if (unitCaster->GetTypeId() == TYPEID_UNIT && unitCaster->IsSummon())
     {
@@ -4549,6 +4621,9 @@ void Spell::SendCastResult(SpellCastResult result, uint32* param1 /*= nullptr*/,
 
     if (m_caster->ToPlayer()->IsLoading())  // don't send cast results at loading time
         return;
+
+    if (!IsTriggered() && !m_triggeredByAuraSpell)
+        m_caster->ToPlayer()->NotifyCombatDiagnosticSpellFailure(m_spellInfo->Id, result);
 
     if (_triggeredCastFlags & TRIGGERED_DONT_REPORT_CAST_ERROR)
         result = SPELL_FAILED_DONT_REPORT;
@@ -5030,6 +5105,12 @@ void Spell::SendChannelUpdate(uint32 time)
     Unit* unitCaster = m_caster->ToUnit();
     if (!unitCaster)
         return;
+
+    if (Player* casterPlayer = unitCaster->ToPlayer())
+        if (WorldSession* session = casterPlayer->GetSession())
+            if (session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Channel))
+                ChatHandler(session).PSendSysMessage("[Channel] SendChannelUpdate spell=%u time=%u%s",
+                    m_spellInfo->Id, time, time == 0 ? " (STOP)" : " (delay/pushback)");
 
     if (time == 0)
     {
@@ -5533,6 +5614,13 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
     bool trapSuccessDebugPending = sWorld->getBoolConfig(CONFIG_TRAP_DEBUG_WHISPER_ON_SUCCESS) && IsTrapGameObject(trapCaster);
     bool deferAutoDismountForRunMount = false;
 
+    // The staging lobby uses battleground flag auras as team visuals. Reject
+    // every spell category that would normally force a WSG carrier to drop
+    // the flag, while leaving those spells unchanged inside the actual match.
+    if (Player* playerCaster = m_caster->ToPlayer())
+        if (playerCaster->IsInCustomGameLobby() && m_spellInfo->WouldDropBattlegroundFlag())
+            return SPELL_FAILED_NOT_HERE;
+
     // check death state
     if (m_caster->ToUnit() && !m_caster->ToUnit()->IsAlive() && !m_spellInfo->IsPassive() && !(m_spellInfo->HasAttribute(SPELL_ATTR0_CASTABLE_WHILE_DEAD) || (IsTriggered() && !m_triggeredByAuraSpell)))
         return SPELL_FAILED_CASTER_DEAD;
@@ -5540,7 +5628,9 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
     // Prevent cheating in case the player has an immunity effect and tries to interact with a non-allowed gameobject. The error message is handled by the client so we don't report anything here
     if (m_caster->ToPlayer() && m_targets.GetGOTarget())
     {
-        if (m_targets.GetGOTarget()->GetGOInfo()->CannotBeUsedUnderImmunity() && m_caster->ToUnit()->HasUnitFlag(UNIT_FLAG_IMMUNE))
+        if (m_targets.GetGOTarget()->GetGOInfo()->CannotBeUsedUnderImmunity() &&
+            m_caster->ToUnit()->HasUnitFlag(UNIT_FLAG_IMMUNE) &&
+            !m_caster->ToPlayer()->CanBypassBattlegroundObjectImmunity(m_targets.GetGOTarget()))
             return SPELL_FAILED_DONT_REPORT;
     }
 
@@ -7862,9 +7952,16 @@ void Spell::DelayedChannel()
             if (Unit* unit = (playerCaster->GetGUID() == targetInfo.TargetGUID) ? playerCaster : ObjectAccessor::GetUnit(*playerCaster, targetInfo.TargetGUID))
                 unit->DelayOwnedAuras(m_spellInfo->Id, m_originalCasterGUID, delaytime);
 
-    // partially interrupt persistent area auras
+    // Partially interrupt persistent area auras. If pushback consumed the
+    // entire remaining channel, remove the dynamic object now: the following
+    // update finishes the spell normally and does not run cancel() cleanup.
     if (DynamicObject* dynObj = playerCaster->GetDynObject(m_spellInfo->Id))
-        dynObj->Delay(delaytime);
+    {
+        if (m_timer == 0)
+            dynObj->Remove();
+        else
+            dynObj->Delay(delaytime);
+    }
 
     SendChannelUpdate(m_timer);
 }

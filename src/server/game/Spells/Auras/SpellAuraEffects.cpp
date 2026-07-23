@@ -55,6 +55,33 @@ namespace PolearmStaffInnerAuras
 
 namespace
 {
+    constexpr uint32 SpellRogueNeilyoImmunity = 81439;
+    constexpr uint32 SpellRogueVanishImmunity = 89783;
+
+    bool IsRogueVanishProtectionImmunity(SpellInfo const* spellInfo)
+    {
+        if (!spellInfo)
+            return false;
+
+        return spellInfo->Id == SpellRogueNeilyoImmunity || spellInfo->Id == SpellRogueVanishImmunity;
+    }
+
+    bool HasClientVisibleDamageImmunity(Unit const* unit)
+    {
+        if (!unit)
+            return false;
+
+        for (AuraEffect const* effect : unit->GetAuraEffectsByType(SPELL_AURA_SCHOOL_IMMUNITY))
+            if (!IsRogueVanishProtectionImmunity(effect->GetSpellInfo()))
+                return true;
+
+        for (AuraEffect const* effect : unit->GetAuraEffectsByType(SPELL_AURA_DAMAGE_IMMUNITY))
+            if (!IsRogueVanishProtectionImmunity(effect->GetSpellInfo()))
+                return true;
+
+        return false;
+    }
+
     bool IsFollowFearSpell(SpellInfo const* spellInfo)
     {
         if (!spellInfo)
@@ -2304,6 +2331,12 @@ void AuraEffect::HandleFeignDeath(AuraApplication const* aurApp, uint8 mode, boo
         target->SetDynamicFlag(UNIT_DYNFLAG_DEAD);         // blizz like 2.0.x
         target->AddUnitState(UNIT_STATE_DIED);
 
+        // The FinishSpell(..., false) above ends the feign cast before it can
+        // reach the Spell::finish(true) diagnostics hook, so the feign/trap
+        // watcher must be armed from the aura application itself.
+        if (Player* feignPlayer = target->ToPlayer())
+            feignPlayer->NotifyFeignDeathApplied();
+
         if (Creature* creature = target->ToCreature())
             creature->SetReactState(REACT_PASSIVE);
     }
@@ -2320,6 +2353,11 @@ void AuraEffect::HandleFeignDeath(AuraApplication const* aurApp, uint8 mode, boo
         target->RemoveUnitFlag2(UNIT_FLAG2_FEIGN_DEATH); // blizz like 2.0.x
         target->RemoveDynamicFlag(UNIT_DYNFLAG_DEAD);      // blizz like 2.0.x
         target->ClearUnitState(UNIT_STATE_DIED);
+
+        // Combat diagnostic: authoritative removal reason straight from the
+        // aura system (default/interrupt, cancel, enemy spell, expire, death).
+        if (Player* feignPlayer = target->ToPlayer())
+            feignPlayer->NotifyFeignDeathRemoved(uint8(aurApp->GetRemoveMode()));
 
         if (Creature* creature = target->ToCreature())
             creature->InitializeReactState();
@@ -3331,14 +3369,21 @@ void AuraEffect::HandleAuraModSchoolImmunity(AuraApplication const* aurApp, uint
 
     if (apply)
     {
-        target->SetUnitFlag(UNIT_FLAG_IMMUNE);
+        // Vanish's short protection still applies its server-side spell immunities, but it must not
+        // advertise the generic damage-immunity unit flag to the client. That flag makes the 3.3.5a
+        // client reject battleground flag interactions before the server can consume stealth.
+        if (!IsRogueVanishProtectionImmunity(m_spellInfo))
+            target->SetUnitFlag(UNIT_FLAG_IMMUNE);
+
         target->GetThreatManager().EvaluateSuppressed();
     }
     else
     {
-        // do not remove unit flag if there are more than this auraEffect of that kind on unit
-        if (target->HasAuraType(GetAuraType()) || target->HasAuraType(SPELL_AURA_DAMAGE_IMMUNITY))
+        // Only keep the client-visible flag for a real immunity. Vanish protection is deliberately
+        // excluded so an overlapping Divine Shield/Ice Block removal cannot leave the flag stuck.
+        if (HasClientVisibleDamageImmunity(target))
             return;
+
         target->RemoveUnitFlag(UNIT_FLAG_IMMUNE);
     }
 }
@@ -3353,14 +3398,18 @@ void AuraEffect::HandleAuraModDmgImmunity(AuraApplication const* aurApp, uint8 m
 
     if (apply)
     {
-        target->SetUnitFlag(UNIT_FLAG_IMMUNE);
+        // See HandleAuraModSchoolImmunity: Vanish protection must remain a server-side immunity
+        // without setting the client flag that blocks battleground flag use.
+        if (!IsRogueVanishProtectionImmunity(m_spellInfo))
+            target->SetUnitFlag(UNIT_FLAG_IMMUNE);
+
         target->GetThreatManager().EvaluateSuppressed();
     }
     else
     {
-        // do not remove unit flag if there are more than this auraEffect of that kind on unit
-        if (target->HasAuraType(GetAuraType()) || target->HasAuraType(SPELL_AURA_SCHOOL_IMMUNITY))
+        if (HasClientVisibleDamageImmunity(target))
             return;
+
         target->RemoveUnitFlag(UNIT_FLAG_IMMUNE);
     }
 }
@@ -5321,7 +5370,7 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
     uint32 damage = std::max(GetAmount(), 0);
 
     // Script Hook For HandlePeriodicDamageAurasTick -- Allow scripts to change the Damage pre class mitigation calculations
-    sScriptMgr->ModifyPeriodicDamageAurasTick(target, caster, damage);
+    sScriptMgr->ModifyPeriodicDamageAurasTick(target, caster, damage, GetSpellInfo());
 
     if (GetAuraType() == SPELL_AURA_PERIODIC_DAMAGE)
     {

@@ -253,52 +253,64 @@ namespace Movement
     {
         if (generatePath)
         {
+            bool const playerControlled = unit->IsControlledByPlayer() || unit->GetOwnerGUID().IsPlayer();
+            bool serverDrivenPlayer = false;
+            if (Player const* moverPlayer = unit->ToPlayer())
+                if (WorldSession const* session = moverPlayer->GetSession())
+                    serverDrivenPlayer = session->IsVirtualSession() || session->IsTransientPlayerSession();
+
+            auto const buildStayPath = [&]()
+            {
+                args.path_Idx_offset = 0;
+                args.path.resize(2);
+                TransportPathTransform transform(unit, args.TransformForTransport);
+                Vector3 stay(unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ());
+                args.path[1] = transform(stay);
+            };
+
             PathGenerator path(unit);
             bool result = path.CalculatePath(dest.x, dest.y, dest.z, forceDestination);
             if (result)
             {
                 PathType const pathType = path.GetPathType();
-                bool const playerControlled = unit->IsControlledByPlayer() || unit->GetOwnerGUID().IsPlayer();
-                bool virtualSessionControlled = false;
-                if (Player const* moverPlayer = unit->ToPlayer())
-                    if (WorldSession const* session = moverPlayer->GetSession())
-                        virtualSessionControlled = session->IsVirtualSession();
                 bool const navmeshAvailable = path.HasNavigationData();
                 bool const usesUnsafePathMode = navmeshAvailable && (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT));
 
                 if (!(pathType & PATHFIND_NOPATH))
                 {
-                    bool const strictPlayerRejectPath = playerControlled && !virtualSessionControlled &&
+                    bool const strictPlayerRejectPath = playerControlled && !serverDrivenPlayer &&
                         ((pathType & PATHFIND_INCOMPLETE) || usesUnsafePathMode);
-                    bool const virtualPlayerRejectPath = virtualSessionControlled && usesUnsafePathMode;
+                    bool const serverDrivenPlayerRejectPath = serverDrivenPlayer && usesUnsafePathMode;
 
-                    if (!(strictPlayerRejectPath || virtualPlayerRejectPath))
+                    if (!(strictPlayerRejectPath || serverDrivenPlayerRejectPath))
                     {
                         MovebyPath(path.GetPath());
                         return;
                     }
                 }
 
-                if (virtualSessionControlled && ((pathType & PATHFIND_NOPATH) || usesUnsafePathMode))
+                if (serverDrivenPlayer && ((pathType & PATHFIND_NOPATH) || usesUnsafePathMode))
                 {
-                    args.path_Idx_offset = 0;
-                    args.path.resize(2);
-                    TransportPathTransform transform(unit, args.TransformForTransport);
-                    Vector3 stay(unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ());
-                    args.path[1] = transform(stay);
+                    buildStayPath();
                     return;
                 }
 
-                if ((playerControlled && !virtualSessionControlled) && ((pathType & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE)) ||
+                if ((playerControlled && !serverDrivenPlayer) && ((pathType & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE)) ||
                     usesUnsafePathMode))
                 {
-                    args.path_Idx_offset = 0;
-                    args.path.resize(2);
-                    TransportPathTransform transform(unit, args.TransformForTransport);
-                    Vector3 stay(unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ());
-                    args.path[1] = transform(stay);
+                    buildStayPath();
                     return;
                 }
+            }
+            else if (serverDrivenPlayer)
+            {
+                // A server-controlled Player has no client movement input to
+                // repair a failed generated route. Falling through to the raw
+                // two-point spline below lets it cut through walls or descend
+                // between stacked floors. Hold position and let its movement
+                // owner retry a fresh navmesh order instead.
+                buildStayPath();
+                return;
             }
         }
 

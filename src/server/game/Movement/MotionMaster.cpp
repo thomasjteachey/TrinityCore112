@@ -32,7 +32,9 @@
 #include "ScriptSystem.h"
 #include "Unit.h"
 #include "WaypointDefines.h"
+#include "WorldSession.h"
 #include <algorithm>
+#include <cmath>
 #include <iterator>
 
 #include "ChaseMovementGenerator.h"
@@ -85,6 +87,143 @@ void LogPlayerbotMotionMasterTrace(Unit const* owner, char const* phase, Movemen
         player->movespline && player->movespline->Initialized(), player->movespline ? player->movespline->Finalized() : true,
         player->movespline && player->movespline->HasStarted(), player->movespline ? player->movespline->currentPathIdx() : -1,
         player->movespline ? player->movespline->Duration() : 0, player->movespline ? player->movespline->Velocity() : 0.0f);
+}
+
+namespace
+{
+bool IsSocketlessPlayerbotMover(Unit const* owner)
+{
+    Player const* player = owner ? owner->ToPlayer() : nullptr;
+    WorldSession const* session = player ? player->GetSession() : nullptr;
+    return session && (session->IsVirtualSession() || session->IsTransientPlayerSession());
+}
+
+bool NearlyEqual(float lhs, float rhs, float epsilon = 0.05f)
+{
+    return std::fabs(lhs - rhs) <= epsilon;
+}
+
+bool NearlyEqualRange(float lhs, float rhs)
+{
+    // Different spells commonly ask for neighboring pressure ranges on
+    // consecutive AI ticks. Rebuilding a live spline for a one- or two-yard
+    // preference change is visually much worse than letting the current
+    // generator finish/repath; truly different movement bands still replace it.
+    return NearlyEqual(lhs, rhs, 2.0f);
+}
+
+bool SameChaseAngle(ChaseAngle const& lhs, ChaseAngle const& rhs)
+{
+    return NearlyEqual(lhs.RelativeAngle, rhs.RelativeAngle) && NearlyEqual(lhs.Tolerance, rhs.Tolerance);
+}
+
+bool SameOptionalChaseAngle(Optional<ChaseAngle> const& lhs, Optional<ChaseAngle> const& rhs)
+{
+    if (bool(lhs) != bool(rhs))
+        return false;
+
+    return !lhs || SameChaseAngle(*lhs, *rhs);
+}
+
+bool SameOptionalChaseRange(Optional<ChaseRange> const& lhs, Optional<ChaseRange> const& rhs)
+{
+    if (bool(lhs) != bool(rhs))
+        return false;
+
+    return !lhs ||
+        (NearlyEqualRange(lhs->MinRange, rhs->MinRange) &&
+         NearlyEqualRange(lhs->MinTolerance, rhs->MinTolerance) &&
+         NearlyEqualRange(lhs->MaxTolerance, rhs->MaxTolerance) &&
+         NearlyEqualRange(lhs->MaxRange, rhs->MaxRange));
+}
+
+bool HasLiveTargetRelativeMotion(Unit const* owner, MovementGenerator const* movement, MovementGeneratorType type)
+{
+    if (!owner || !movement)
+        return false;
+
+    bool const activeSpline = owner->movespline && owner->movespline->Initialized() && !owner->movespline->Finalized();
+    bool const movementState = type == CHASE_MOTION_TYPE
+        ? owner->HasUnitState(UNIT_STATE_CHASE_MOVE)
+        : owner->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
+    bool const waitingToInitialize = movement->HasFlag(
+        MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
+    bool const temporarilyBlocked = owner->HasUnitState(UNIT_STATE_NOT_MOVE | UNIT_STATE_ROOT | UNIT_STATE_STUNNED) ||
+        owner->IsMovementPreventedByCasting();
+
+    return waitingToInitialize || activeSpline || owner->isMoving() || movementState || temporarilyBlocked;
+}
+
+bool ShouldPreserveEquivalentFollow(Unit const* owner, Unit const* target, float range, ChaseAngle const& angle)
+{
+    if (!IsSocketlessPlayerbotMover(owner) || !target)
+        return false;
+
+    MotionMaster const* motionMaster = owner->GetMotionMaster();
+    MovementGenerator const* movement = motionMaster ? motionMaster->GetCurrentMovementGenerator() : nullptr;
+    FollowMovementGenerator const* follow = movement ? dynamic_cast<FollowMovementGenerator const*>(movement) : nullptr;
+    if (!follow || follow->GetTarget() != target)
+        return false;
+
+    if (!NearlyEqualRange(follow->GetRange(), range) || !SameChaseAngle(follow->GetAngle(), angle))
+        return false;
+
+    return HasLiveTargetRelativeMotion(owner, movement, FOLLOW_MOTION_TYPE);
+}
+
+bool ShouldPreserveEquivalentChase(Unit const* owner, Unit const* target, Optional<ChaseRange> const& range, Optional<ChaseAngle> const& angle)
+{
+    if (!IsSocketlessPlayerbotMover(owner) || !target)
+        return false;
+
+    MotionMaster const* motionMaster = owner->GetMotionMaster();
+    MovementGenerator const* movement = motionMaster ? motionMaster->GetCurrentMovementGenerator() : nullptr;
+    ChaseMovementGenerator const* chase = movement ? dynamic_cast<ChaseMovementGenerator const*>(movement) : nullptr;
+    if (!chase || chase->GetTarget() != target)
+        return false;
+
+    if (!SameOptionalChaseRange(chase->GetRange(), range) || !SameOptionalChaseAngle(chase->GetAngle(), angle))
+        return false;
+
+    return HasLiveTargetRelativeMotion(owner, movement, CHASE_MOTION_TYPE);
+}
+
+bool SameOptionalOrientation(Optional<float> const& lhs, Optional<float> const& rhs)
+{
+    if (bool(lhs) != bool(rhs))
+        return false;
+
+    return !lhs || NearlyEqual(*lhs, *rhs);
+}
+
+bool ShouldPreserveEquivalentPoint(Unit const* owner, uint32 id, float x, float y, float z, bool generatePath,
+    Optional<float> const& finalOrient)
+{
+    if (!IsSocketlessPlayerbotMover(owner))
+        return false;
+
+    MotionMaster const* motionMaster = owner->GetMotionMaster();
+    MovementGenerator const* movement = motionMaster ? motionMaster->GetCurrentMovementGenerator() : nullptr;
+    PointMovementGenerator<Player> const* point = movement ? dynamic_cast<PointMovementGenerator<Player> const*>(movement) : nullptr;
+    if (!point || point->Priority != MOTION_PRIORITY_NORMAL || point->GetId() != id || point->GeneratesPath() != generatePath ||
+        !SameOptionalOrientation(point->GetFinalOrientation(), finalOrient))
+    {
+        return false;
+    }
+
+    float const dx = point->GetDestinationX() - x;
+    float const dy = point->GetDestinationY() - y;
+    float const dz = point->GetDestinationZ() - z;
+    if (dx * dx + dy * dy + dz * dz > 0.25f)
+        return false;
+
+    bool const waitingToInitialize = movement->HasFlag(
+        MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
+    bool const activeSpline = owner->movespline && owner->movespline->Initialized() && !owner->movespline->Finalized();
+    bool const temporarilyBlocked = owner->HasUnitState(UNIT_STATE_NOT_MOVE | UNIT_STATE_ROOT | UNIT_STATE_STUNNED) ||
+        owner->IsMovementPreventedByCasting();
+    return waitingToInitialize || activeSpline || temporarilyBlocked;
+}
 }
 
 inline void MovementGeneratorPointerDeleter(MovementGenerator* a)
@@ -639,6 +778,22 @@ void MotionMaster::MoveFollow(Unit* target, float dist, ChaseAngle angle, Moveme
     if (!target || target == _owner)
         return;
 
+    // Socketless playerbot AI has several independent movement owners (class
+    // casts, lifecycle positioning, stealth openers, and recovery paths). Some
+    // of them can request the exact same Follow order on a 250-500 ms cadence.
+    // DirectAdd replaces the current same-priority generator; Follow::Initialize
+    // then calls StopMoving(), so an otherwise healthy spline becomes a visible
+    // stop/snap/relaunch loop. Preserve an equivalent live order centrally so
+    // no caller can accidentally bypass the script-level throttles. A caller
+    // that intentionally needs a restart can Clear(MOTION_SLOT_ACTIVE) first.
+    if (slot == MOTION_SLOT_ACTIVE && ShouldPreserveEquivalentFollow(_owner, target, dist, angle))
+    {
+        TC_LOG_DEBUG("playerbots.pvp.motion",
+            "PB MotionMaster preserved equivalent Follow: owner={} target={} range={}.",
+            _owner->GetGUID().ToString(), target->GetGUID().ToString(), dist);
+        return;
+    }
+
     TC_LOG_DEBUG("movement.motionmaster", "MotionMaster::MoveFollow: '{}', starts following '{}'", _owner->GetGUID().ToString(), target->GetGUID().ToString());
     Add(new FollowMovementGenerator(target, dist, angle), slot);
 }
@@ -648,6 +803,17 @@ void MotionMaster::MoveChase(Unit* target, Optional<ChaseRange> dist, Optional<C
     // Ignore movement request if target not exist
     if (!target || target == _owner)
         return;
+
+    // Chase already repaths internally as its target moves. Replacing an
+    // equivalent live Chase generator merely resynchronizes/relaunches its
+    // spline, which is rendered by observers as a periodic micro-teleport.
+    if (ShouldPreserveEquivalentChase(_owner, target, dist, angle))
+    {
+        TC_LOG_DEBUG("playerbots.pvp.motion",
+            "PB MotionMaster preserved equivalent Chase: owner={} target={}.",
+            _owner->GetGUID().ToString(), target->GetGUID().ToString());
+        return;
+    }
 
     TC_LOG_DEBUG("movement.motionmaster", "MotionMaster::MoveChase: '{}', starts chasing '{}'", _owner->GetGUID().ToString(), target->GetGUID().ToString());
     Add(new ChaseMovementGenerator(target, dist, angle));
@@ -693,6 +859,20 @@ void MotionMaster::MovePoint(uint32 id, float x, float y, float z, bool generate
 {
     if (_owner->GetTypeId() == TYPEID_PLAYER)
     {
+        // Point orders are frequently issued by objective, LOS, and class
+        // movement layers with the same destination before the existing order
+        // has initialized or completed. Replacing that live generator restarts
+        // its spline from the server's newer position and makes observers snap.
+        // Preserve only genuinely equivalent normal-priority orders; charges and
+        // deliberate destination changes continue through the normal path.
+        if (ShouldPreserveEquivalentPoint(_owner, id, x, y, z, generatePath, finalOrient))
+        {
+            TC_LOG_DEBUG("playerbots.pvp.motion",
+                "PB MotionMaster preserved equivalent Point: owner={} id={} destination=({}, {}, {}).",
+                _owner->GetGUID().ToString(), id, x, y, z);
+            return;
+        }
+
         TC_LOG_DEBUG("movement.motionmaster", "MotionMaster::MovePoint: '{}', targeted point Id: {} (X: {}, Y: {}, Z: {})", _owner->GetGUID().ToString(), id, x, y, z);
         Add(new PointMovementGenerator<Player>(id, x, y, z, generatePath, 0.0f, finalOrient));
     }
@@ -792,27 +972,90 @@ void MotionMaster::MoveCharge(PathGenerator const& path, float speed /*= SPEED_C
 
 void MotionMaster::MoveKnockbackFrom(float srcX, float srcY, float speedXY, float speedZ)
 {
-    // This function may make players fall below map
-    if (_owner->GetTypeId() == TYPEID_PLAYER)
+    // This function may make players fall below map. Socketless playerbot
+    // sessions (virtual/transient) are the exception: they have no client to
+    // execute a knockback packet, so the server spline is their only way to
+    // be knocked around at all.
+    bool serverDrivenPlayer = false;
+    if (Player const* player = _owner->ToPlayer())
+        if (WorldSession const* session = player->GetSession())
+            serverDrivenPlayer = session->IsVirtualSession() || session->IsTransientPlayerSession();
+
+    if (_owner->GetTypeId() == TYPEID_PLAYER && !serverDrivenPlayer)
         return;
 
-    if (speedXY < 0.01f)
+    bool const pureVerticalServerKnockup = serverDrivenPlayer && speedXY < 0.01f;
+
+    if (!pureVerticalServerKnockup && speedXY < 0.01f)
         return;
+
+    float moveTimeHalf = speedZ / Movement::gravity;
+    float const airTime = 2.f * moveTimeHalf;
+    if (airTime <= 0.01f)
+        return;
+
+    float const max_height = -Movement::computeFallElevation(moveTimeHalf, false, -speedZ);
+
+    if (pureVerticalServerKnockup)
+    {
+        // A real client can resolve a zero-horizontal-speed knock-up directly,
+        // but MoveSpline needs a path with nonzero length to assign it a
+        // duration. Use a closed, imperceptibly small horizontal path whose
+        // total length is traversed in the client's ballistic airtime. The bot
+        // therefore follows the same gravity parabola and lands at its exact
+        // starting point instead of drifting or crawling across terrain.
+        static constexpr float VerticalKnockupSplineRadius = 0.05f;
+
+        Position const start = _owner->GetPosition();
+        float const awayAngle = _owner->GetAbsoluteAngle(srcX, srcY) + float(M_PI);
+        G3D::Vector3 const startPoint(start.GetPositionX(), start.GetPositionY(), start.GetPositionZ());
+        G3D::Vector3 const arcPoint(
+            start.GetPositionX() + VerticalKnockupSplineRadius * std::cos(awayAngle),
+            start.GetPositionY() + VerticalKnockupSplineRadius * std::sin(awayAngle),
+            start.GetPositionZ());
+        Movement::PointsArray const path = { startPoint, arcPoint, startPoint };
+        float const velocity = 2.f * VerticalKnockupSplineRadius / airTime;
+
+        std::function<void(Movement::MoveSplineInit&)> initializer = [=](Movement::MoveSplineInit& init)
+        {
+            init.MovebyPath(path);
+            init.SetParabolic(max_height, 0);
+            init.SetOrientationFixed(true);
+            init.SetVelocity(velocity);
+        };
+
+        GenericMovementGenerator* movement = new GenericMovementGenerator(std::move(initializer), EFFECT_MOTION_TYPE, 0);
+        movement->Priority = MOTION_PRIORITY_HIGHEST;
+        movement->AddFlag(MOVEMENTGENERATOR_FLAG_PERSIST_ON_DEATH);
+        Add(movement);
+        return;
+    }
 
     Position dest = _owner->GetPosition();
-    float moveTimeHalf = speedZ / Movement::gravity;
-    float dist = 2 * moveTimeHalf * speedXY;
-    float max_height = -Movement::computeFallElevation(moveTimeHalf, false, -speedZ);
+    float dist = airTime * speedXY;
 
     // Use a mmap raycast to get a valid destination.
     _owner->MovePositionToFirstCollision(dest, dist, _owner->GetRelativeAngle(srcX, srcY) + float(M_PI));
+
+    float velocity = speedXY;
+    if (serverDrivenPlayer)
+    {
+        // Spline duration is 3D path length / velocity. For a near-vertical
+        // knock-up the raycast's z-adjustment of the destination dominates
+        // that length, so the floored speedXY (~0.1 yd/s) stretched the arc
+        // to tens of seconds. A real client resolves any knockback in exactly
+        // 2 * speedZ / gravity seconds; derive the velocity from the actual
+        // path length so the bot's arc matches that timing.
+        if (airTime > 0.01f)
+            velocity = std::max(_owner->GetExactDist(&dest) / airTime, 0.01f);
+    }
 
     std::function<void(Movement::MoveSplineInit&)> initializer = [=](Movement::MoveSplineInit& init)
     {
         init.MoveTo(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), false);
         init.SetParabolic(max_height, 0);
         init.SetOrientationFixed(true);
-        init.SetVelocity(speedXY);
+        init.SetVelocity(velocity);
     };
 
     GenericMovementGenerator* movement = new GenericMovementGenerator(std::move(initializer), EFFECT_MOTION_TYPE, 0);

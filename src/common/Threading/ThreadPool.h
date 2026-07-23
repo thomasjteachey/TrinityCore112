@@ -18,6 +18,7 @@
 #ifndef TRINITY_THREAD_POOL_H
 #define TRINITY_THREAD_POOL_H
 
+#include "Errors.h"
 #include <boost/asio/post.hpp>
 #include <boost/asio/thread_pool.hpp>
 #include <thread>
@@ -32,7 +33,11 @@ public:
     template<typename T>
     decltype(auto) PostWork(T&& work)
     {
-        return boost::asio::post(_impl, std::forward<T>(work));
+        return boost::asio::post(_impl, [work = std::forward<T>(work)]() mutable
+        {
+            InitCurrentThreadCrashSignalStack();
+            work();
+        });
     }
 
     void Join()

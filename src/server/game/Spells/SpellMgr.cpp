@@ -3054,6 +3054,28 @@ void SpellMgr::LoadSpellInfoCorrections()
 {
     uint32 oldMSTime = getMSTime();
 
+    // Frost Trap and Freezing Trap are pure utility/CC (slow, root+disorient)
+    // with no direct damage component; classic-style combat rules say they
+    // must never drag a target into a brand new fight on their own the way a
+    // damaging trap (Immolation/Explosive) legitimately would. Clearing
+    // initial aggro here (rather than SPELL_ATTR1_NO_THREAT) still lets them
+    // generate normal threat within a fight the target is already in -- it
+    // only stops the spell attempt itself from being sufficient to start one.
+    // Matched by rank-normalized first-rank ID, same as
+    // IsHunterTrapSpellForCombatDiagnostic in Player.cpp: SpellFamilyFlags
+    // here are not trap-exclusive, so exact-ID matching per rank chain is the
+    // only reliable way to hit every rank.
+    for (SpellInfo* spellInfo : mSpellInfoMap)
+    {
+        if (!spellInfo)
+            continue;
+
+        SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
+        uint32 const firstRankSpellId = firstRank ? firstRank->Id : spellInfo->Id;
+        if (firstRankSpellId == 1499 /* Freezing Trap */ || firstRankSpellId == 13809 /* Frost Trap */)
+            spellInfo->AttributesEx3 |= SPELL_ATTR3_NO_INITIAL_AGGRO;
+    }
+
     // Some spells have no amplitude set
     {
         ApplySpellFix({

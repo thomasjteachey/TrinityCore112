@@ -930,13 +930,42 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         bool TeleportTo(WorldLocation const& loc, uint32 options = 0);
         bool TeleportToBGEntryPoint();
 
+        void SetWorldSubMap(uint32 mapId, uint32 instanceId)
+        {
+            m_worldSubMapId = mapId;
+            m_worldSubMapInstanceId = instanceId;
+        }
+        void ClearWorldSubMap()
+        {
+            m_worldSubMapId = MAPID_INVALID;
+            m_worldSubMapInstanceId = 0;
+        }
+        uint32 GetWorldSubMapInstanceId(uint32 mapId) const { return m_worldSubMapId == mapId ? m_worldSubMapInstanceId : 0; }
+        bool HasWorldSubMap() const { return m_worldSubMapInstanceId != 0; }
+        bool IsInCustomGameLobby() const { return GetMapId() == 1 && HasWorldSubMap(); }
+        bool IsInSameCustomGameLobby(Player const* other) const
+        {
+            return other && IsInCustomGameLobby() && other->IsInCustomGameLobby() &&
+                m_worldSubMapId == other->m_worldSubMapId && m_worldSubMapInstanceId == other->m_worldSubMapInstanceId;
+        }
+
         bool HasSummonPending() const;
         void SendSummonRequestFrom(Unit* summoner);
         void SummonIfPossible(bool agree);
 
-        bool Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo);
+        bool Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo, bool createStarterItems = true,
+            bool validateAppearanceAsNewCharacter = true);
 
         void Update(uint32 time) override;
+        void NotifyDirectSpellCast(uint32 spellId);
+        void NotifyFeignDeathApplied();
+        void NotifyFeignDeathInterrupted(uint32 interruptFlag);
+        void NotifyFeignDeathRemoved(uint8 removeMode);
+        void NotifyCombatDiagnosticSpellFailure(uint32 spellId, SpellCastResult result);
+        void NotifyCombatDiagnosticDamageTaken(Unit* attacker, uint32 spellId, uint32 damage);
+        void NotifyCombatDiagnosticCombatSource(Unit* source);
+        void NotifyCombatDiagnosticSpellEngage(uint32 spellId, uint8 missCondition);
+        void NotifyCombatDiagnosticCombatInherited(Unit const* assistedAlly, uint32 causeSpellId);
 
         static bool BuildEnumData(PreparedQueryResult result, WorldPacket* data);
 
@@ -1360,7 +1389,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         /***                   LOAD SYSTEM                     ***/
         /*********************************************************/
 
-        bool LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& holder);
+        bool LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& holder, bool loadRuntimeAuras = true);
         bool IsLoading() const override;
 
         void Initialize(ObjectGuid::LowType guid);
@@ -1501,6 +1530,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void LoadActions(PreparedQueryResult result);
 
         void InitGlyphsForLevel();
+        void ApplyGlyphAuras() { _LoadGlyphAuras(); }
         void SetGlyphSlot(uint8 slot, uint32 slottype) { SetUInt32Value(PLAYER_FIELD_GLYPH_SLOTS_1 + slot, slottype); }
         uint32 GetGlyphSlot(uint8 slot) { return GetUInt32Value(PLAYER_FIELD_GLYPH_SLOTS_1 + slot); }
         void SetGlyph(uint8 slot, uint32 glyph);
@@ -1733,6 +1763,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         bool UpdatePosition(float x, float y, float z, float orientation, bool teleport = false) override;
         bool UpdatePosition(Position const& pos, bool teleport = false) override { return UpdatePosition(pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), pos.GetOrientation(), teleport); }
         void ProcessTerrainStatusUpdate(ZLiquidStatus oldLiquidStatus, Optional<LiquidData> const& newLiquidData) override;
+        void AtEnterCombat() override;
         void AtExitCombat() override;
 
         void SendMessageToSet(WorldPacket const* data, bool self) const override { if (IsInWorld()) SendMessageToSetInRange(data, GetVisibilityRange(), self); }
@@ -2001,6 +2032,8 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
 
         bool GetBGAccessByLevel(BattlegroundTypeId bgTypeId) const;
         bool CanUseBattlegroundObject(GameObject* gameobject) const;
+        bool CanBypassBattlegroundObjectImmunity(GameObject const* gameobject) const;
+        void BreakBattlegroundFlagVanishProtection(GameObject const* gameobject);
         bool isTotalImmune() const;
         bool CanCaptureTowerPoint() const;
 
@@ -2251,6 +2284,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         bool SetWaterWalking(bool apply, bool packetOnly = false) override;
         bool SetFeatherFall(bool apply, bool packetOnly = false) override;
         bool SetHover(bool enable, bool packetOnly = false, bool updateAnimTier = true) override;
+        bool SetSwim(bool enable) override;
 
         bool CanFly() const override { return m_movementInfo.HasMovementFlag(MOVEMENTFLAG_CAN_FLY); }
         bool CanEnterWater() const override { return true; }
@@ -2412,6 +2446,8 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         bool m_itemUpdateQueueBlocked;
 
         uint32 m_ExtraFlags;
+        uint32 m_worldSubMapId;
+        uint32 m_worldSubMapInstanceId;
 
         QuestStatusMap m_QuestStatus;
         QuestStatusSaveMap m_QuestStatusSave;
@@ -2480,6 +2516,32 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         uint32 m_hostileReferenceCheckTimer;
         uint32 m_drunkTimer;
         uint32 m_weaponChangeTimer;
+        uint32 m_combatDiagnosticCombatTimer;
+        uint32 m_combatDiagnosticDirectSpellTimer;
+        uint32 m_combatDiagnosticCheckTimer;
+        uint32 m_combatDiagnosticFeignTrapTimer;
+        uint32 m_combatDiagnosticFeignHealth;
+        uint32 m_combatDiagnosticFeignLastDirectSpellId;
+        uint32 m_combatDiagnosticFeignFailedSpellId;
+        uint32 m_combatDiagnosticFeignFailedResult;
+        // Definitive break-cause capture: populated live by the code path that
+        // actually removed the feign aura / re-entered combat, not inferred
+        // after the fact from before/after snapshots.
+        uint32 m_combatDiagnosticFeignInterruptFlag;
+        uint8 m_combatDiagnosticFeignRemoveMode;
+        ObjectGuid m_combatDiagnosticFeignDamageSourceGuid;
+        uint32 m_combatDiagnosticFeignDamageSourceSpell;
+        uint32 m_combatDiagnosticFeignDamageAmount;
+        ObjectGuid m_combatDiagnosticFeignCombatSourceGuid;
+        uint32 m_combatDiagnosticFeignCombatSpellId;
+        uint8 m_combatDiagnosticFeignCombatMissCondition;
+        ObjectGuid m_combatDiagnosticFeignCombatInheritedFromGuid;
+        uint32 m_combatDiagnosticFeignCombatInheritedSpellId;
+        bool m_combatDiagnosticSent;
+        bool m_combatDiagnosticHasDirectSpellCast;
+        bool m_combatDiagnosticFeignTrapPending;
+        bool m_combatDiagnosticFeignSawAura;
+        bool m_combatDiagnosticFeignSawOutOfCombat;
 
         uint32 m_zoneUpdateId;
         uint32 m_zoneUpdateTimer;
@@ -2549,6 +2611,10 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
     private:
         void ApplyActiveStarfireSnare();
         void ApplyActiveStarfireSnare(UnitMoveType moveType);
+        void UpdateCombatDiagnostic(uint32 diff);
+        void UpdateFeignTrapDiagnostic(uint32 diff);
+        void SendCombatDiagnostic();
+        void SendFeignTrapDiagnostic();
 
         // internal common parts for CanStore/StoreItem functions
         InventoryResult CanStoreItem_InSpecificSlot(uint8 bag, uint8 slot, ItemPosCountVec& dest, ItemTemplate const* pProto, uint32& count, bool swap, Item* pSrcItem) const;

@@ -116,7 +116,9 @@ WorldSession::WorldSession(uint32 id, std::string&& name, std::shared_ptr<WorldS
     _player(nullptr),
     m_Socket(std::move(sock)),
     m_virtualSession(!m_Socket),
+    m_transientPlayerSession(false),
     _security(sec),
+    _gmDiagnosticMask(0),
     _accountId(id),
     m_sessionMapKey(id),
     _accountName(std::move(name)),
@@ -162,7 +164,7 @@ WorldSession::~WorldSession()
 {
     ///- unload player if not unloaded
     if (_player)
-        LogoutPlayer (true);
+        LogoutPlayer(!m_transientPlayerSession);
 
     /// - If have unclosed socket, close it
     if (m_Socket)
@@ -180,7 +182,8 @@ WorldSession::~WorldSession()
     while (_recvQueue.next(packet))
         delete packet;
 
-    LoginDatabase.PExecute("UPDATE account SET online = 0 WHERE id = {};", GetAccountId());     // One-time query
+    if (!m_transientPlayerSession)
+        LoginDatabase.PExecute("UPDATE account SET online = 0 WHERE id = {};", GetAccountId());     // One-time query
 }
 
 std::string const & WorldSession::GetPlayerName() const
@@ -287,6 +290,10 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
     /// (or they've been idling in character select)
     if (m_Socket && IsConnectionIdle() && !HasPermission(rbac::RBAC_PERM_IGNORE_IDLE_CONNECTION))
     {
+        TC_LOG_ERROR("network.disconnect",
+            "Closing idle world session: {} remote={} deadline={} now={} activeTimeoutSeconds={}",
+            GetPlayerInfo(), GetRemoteAddress(), m_timeOutTime, GameTime::GetGameTime(),
+            sWorld->getIntConfig(CONFIG_SOCKET_TIMEOUTTIME_ACTIVE));
         m_Socket->CloseSocket();
     }
 
@@ -546,7 +553,8 @@ void WorldSession::LogoutPlayer(bool save)
             if (BattlegroundQueueTypeId bgQueueTypeId = _player->GetBattlegroundQueueTypeId(i))
             {
                 // track if player logs out after invited to join BG
-                if (_player->IsInvitedForBattlegroundQueueType(bgQueueTypeId) && sWorld->getBoolConfig(CONFIG_BATTLEGROUND_TRACK_DESERTERS))
+                if (!m_transientPlayerSession && _player->IsInvitedForBattlegroundQueueType(bgQueueTypeId) &&
+                    sWorld->getBoolConfig(CONFIG_BATTLEGROUND_TRACK_DESERTERS))
                 {
                     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_DESERTER_TRACK);
                     stmt->setUInt32(0, _player->GetGUID().GetCounter());
@@ -633,9 +641,12 @@ void WorldSession::LogoutPlayer(bool save)
         TC_LOG_DEBUG("network", "SESSION: Sent SMSG_LOGOUT_COMPLETE Message");
 
         //! Since each account can only have one online character at any given time, ensure all characters for active account are marked as offline
-        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_ACCOUNT_ONLINE);
-        stmt->setUInt32(0, GetAccountId());
-        CharacterDatabase.Execute(stmt);
+        if (!m_transientPlayerSession)
+        {
+            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_ACCOUNT_ONLINE);
+            stmt->setUInt32(0, GetAccountId());
+            CharacterDatabase.Execute(stmt);
+        }
     }
 
     m_playerLogout = false;
@@ -649,10 +660,17 @@ void WorldSession::KickPlayer(std::string const& reason)
 {
     if (m_Socket)
     {
-        TC_LOG_INFO("network.kick", "Account: {} Character: '{}' {} kicked with reason: {}", GetAccountId(), _player ? _player->GetName() : "<none>",
-            _player ? _player->GetGUID().ToString() : "", reason);
+        TC_LOG_ERROR("network.disconnect", "Server kick: Account: {} Character: '{}' {} remote={} reason={}",
+            GetAccountId(), _player ? _player->GetName() : "<none>",
+            _player ? _player->GetGUID().ToString() : "", GetRemoteAddress(), reason);
 
         m_Socket->CloseSocket();
+        forceExit = true;
+    }
+    else if (m_virtualSession)
+    {
+        TC_LOG_INFO("network.kick", "Virtual account: {} Character: '{}' {} stopped with reason: {}", GetAccountId(), _player
+            ? _player->GetName() : "<none>", _player ? _player->GetGUID().ToString() : "", reason);
         forceExit = true;
     }
 }
@@ -1363,6 +1381,11 @@ rbac::RBACData* WorldSession::GetRBACData()
 
 bool WorldSession::HasPermission(uint32 permission)
 {
+    // Transient server-owned players have no account or RBAC row. Treat them
+    // as ordinary players without permissions and never query LoginDatabase.
+    if (m_transientPlayerSession)
+        return false;
+
     if (!_RBACData)
         LoadPermissions();
 
@@ -1678,9 +1701,19 @@ uint32 WorldSession::DosProtection::GetMaxPacketCounterAllowed(uint16 opcode) co
             maxPacketCounterAllowed = PLAYER_SLOTS_COUNT;
             break;
         }
+
+        // A client must acknowledge every server-issued root/unroot transition. Large
+        // battleground fights can legitimately generate more than the default 100 per second.
+        case CMSG_FORCE_MOVE_ROOT_ACK:
+        case CMSG_FORCE_MOVE_UNROOT_ACK:
+        {
+            maxPacketCounterAllowed = 512;
+            break;
+        }
+
         default:
         {
-            maxPacketCounterAllowed = 100;
+            maxPacketCounterAllowed = 512;
             break;
         }
     }

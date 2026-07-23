@@ -33,6 +33,7 @@ EndScriptData */
 #include "GameTime.h"
 #include "GossipDef.h"
 #include "GridNotifiersImpl.h"
+#include "Group.h"
 #include "InstanceScript.h"
 #include "Language.h"
 #include "Log.h"
@@ -47,6 +48,7 @@ EndScriptData */
 #include "Transport.h"
 #include "Warden.h"
 #include "World.h"
+#include "WorldSession.h"
 #include <fstream>
 #include <limits>
 #include <map>
@@ -110,6 +112,7 @@ public:
             { "areatriggers",       HandleDebugAreaTriggersCommand,        rbac::RBAC_PERM_COMMAND_DEBUG,   Console::No },
             { "los",                HandleDebugLoSCommand,                 rbac::RBAC_PERM_COMMAND_DEBUG,   Console::No },
             { "moveflags",          HandleDebugMoveflagsCommand,           rbac::RBAC_PERM_COMMAND_DEBUG,   Console::No },
+            { "pvpstate",           HandleDebugPvpStateCommand,            rbac::RBAC_PERM_COMMAND_DEBUG,   Console::No },
             { "transport",          HandleDebugTransportCommand,           rbac::RBAC_PERM_COMMAND_DEBUG,   Console::No },
             { "loadcells",          HandleDebugLoadCellsCommand,           rbac::RBAC_PERM_COMMAND_DEBUG,   Console::Yes },
             { "boundary",           HandleDebugBoundaryCommand,            rbac::RBAC_PERM_COMMAND_DEBUG,   Console::No },
@@ -1355,6 +1358,54 @@ public:
 
             handler->PSendSysMessage(LANG_MOVEFLAGS_SET, target->GetUnitMovementFlags(), target->GetExtraUnitMovementFlags());
         }
+
+        return true;
+    }
+
+    // Dumps every server-side state that drives overhead-name coloring for the
+    // selected player (or self). Built for hunting the "ally turns blue instead
+    // of green" reports in custom battlegrounds/arenas: target the blue-named
+    // unit and compare pvp/ffa/sanctuary flags, faction, BG team, and group
+    // membership against a green-named teammate.
+    static bool HandleDebugPvpStateCommand(ChatHandler* handler)
+    {
+        Player* target = handler->getSelectedPlayerOrSelf();
+        if (!target)
+        {
+            handler->SendSysMessage(LANG_PLAYER_NOT_FOUND);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        WorldSession const* session = target->GetSession();
+        char const* sessionType = !session ? "none" :
+            session->IsVirtualSession() ? "virtual" :
+            session->IsTransientPlayerSession() ? "transient" : "real";
+
+        handler->PSendSysMessage("PvP state of %s (%s, session=%s)", target->GetName().c_str(), target->GetGUID().ToString().c_str(), sessionType);
+        handler->PSendSysMessage("  bytes2: PVP=%u FFA=%u SANCTUARY=%u | playerFlags: IN_PVP=%u PVP_TIMER=%u",
+            uint32(target->IsPvP()), uint32(target->IsFFAPvP()), uint32(target->HasPvpFlag(UNIT_BYTE2_FLAG_SANCTUARY)),
+            uint32(target->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_IN_PVP)), uint32(target->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_PVP_TIMER)));
+        handler->PSendSysMessage("  pvpInfo: IsHostile=%u IsInHostileArea=%u IsInNoPvPArea=%u IsInFFAPvPArea=%u EndTimerAgeSec=%u",
+            uint32(target->pvpInfo.IsHostile), uint32(target->pvpInfo.IsInHostileArea), uint32(target->pvpInfo.IsInNoPvPArea),
+            uint32(target->pvpInfo.IsInFFAPvPArea),
+            uint32(target->pvpInfo.EndTimer ? (GameTime::GetGameTime() - target->pvpInfo.EndTimer) : 0));
+        handler->PSendSysMessage("  faction=%u race=%u | InBattleground=%u InArena=%u BGTeam=%u arenaFactionByte=%u zone=%u area=%u",
+            target->GetFaction(), uint32(target->GetRace()), uint32(target->InBattleground()), uint32(target->InArena()),
+            target->GetBGTeam(), uint32(target->GetByteValue(PLAYER_BYTES_3, PLAYER_BYTES_3_OFFSET_ARENA_FACTION)),
+            target->GetZoneId(), target->GetAreaId());
+
+        if (Group const* group = target->GetGroup())
+        {
+            bool sharedWithViewer = false;
+            if (Player const* viewer = handler->GetPlayer())
+                sharedWithViewer = viewer->GetGroup() == group;
+            handler->PSendSysMessage("  group: low=%u raid=%u bgGroup=%u subgroup=%u membersCount=%u sharedWithYou=%u",
+                group->GetGUID().GetCounter(), uint32(group->isRaidGroup()), uint32(group->isBGGroup()),
+                uint32(group->GetMemberGroup(target->GetGUID())), group->GetMembersCount(), uint32(sharedWithViewer));
+        }
+        else
+            handler->PSendSysMessage("  group: none");
 
         return true;
     }

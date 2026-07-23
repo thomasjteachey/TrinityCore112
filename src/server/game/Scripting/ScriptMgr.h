@@ -395,6 +395,7 @@ class TC_GAME_API UnitScript : public ScriptObject
 
         // Called when DoT's Tick Damage is being Dealt
         virtual void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage);
+        virtual void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* spellInfo);
 
         // Called when Melee Damage is being Dealt
         virtual void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage);
@@ -706,6 +707,11 @@ class TC_GAME_API PlayerScript : public ScriptObject
         // Called when a duel ends
         virtual void OnDuelEnd(Player* winner, Player* loser, DuelCompleteType type);
 
+        // Called by the group-invite opcodes so scripts can provide a
+        // non-group invitation flow.
+        virtual bool OnCustomGameInvite(Player* inviter, Player* invitee);
+        virtual bool OnCustomGameSummonResponse(Player* invitee, ObjectGuid summonerGuid, bool agree);
+
         // The following methods are called when a player sends a chat message.
         virtual void OnChat(Player* player, uint32 type, uint32 lang, std::string& msg);
 
@@ -727,6 +733,13 @@ class TC_GAME_API PlayerScript : public ScriptObject
 
         // Called when a player logs in.
         virtual void OnLogin(Player* player, bool firstLogin);
+
+        // Called while a character is loading, after its saved position and
+        // home bind are available but before its login map is created. Scripts
+        // may relocate the player and replace mapId/instanceId so the client
+        // enters the corrected map as part of the initial login instead of
+        // being far-teleported immediately afterward.
+        virtual void OnBeforeMapLoad(Player* player, uint32& mapId, uint32& instanceId);
 
         // Called when a player logs out.
         virtual void OnLogout(Player* player);
@@ -1073,6 +1086,8 @@ class TC_GAME_API ScriptMgr
         void OnPlayerDuelRequest(Player* target, Player* challenger);
         void OnPlayerDuelStart(Player* player1, Player* player2);
         void OnPlayerDuelEnd(Player* winner, Player* loser, DuelCompleteType type);
+        bool OnPlayerCustomGameInvite(Player* inviter, Player* invitee);
+        bool OnPlayerCustomGameSummonResponse(Player* invitee, ObjectGuid summonerGuid, bool agree);
         void OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg);
         void OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg, Player* receiver);
         void OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg, Group* group);
@@ -1082,6 +1097,7 @@ class TC_GAME_API ScriptMgr
         void OnPlayerTextEmote(Player* player, uint32 textEmote, uint32 emoteNum, ObjectGuid guid);
         void OnPlayerSpellCast(Player* player, Spell* spell, bool skipCheck);
         void OnPlayerLogin(Player* player, bool firstLogin);
+        void OnPlayerBeforeMapLoad(Player* player, uint32& mapId, uint32& instanceId);
         void OnPlayerLogout(Player* player);
         void OnPlayerCreate(Player* player);
         void OnPlayerDelete(ObjectGuid guid, uint32 accountId);
@@ -1133,6 +1149,7 @@ class TC_GAME_API ScriptMgr
         void OnHeal(Unit* healer, Unit* reciever, uint32& gain);
         void OnDamage(Unit* attacker, Unit* victim, uint32& damage);
         void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage);
+        void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* spellInfo);
         void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage);
         void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage);
 

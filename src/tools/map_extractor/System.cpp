@@ -68,6 +68,7 @@ enum Extract
 
 // Select data for extract
 int   CONF_extract = EXTRACT_MAP | EXTRACT_DBC | EXTRACT_CAMERA;
+int   CONF_single_map = -1;
 // This option allow limit minimum height to some value (Allow save some memory)
 bool  CONF_allow_height_limit = true;
 float CONF_use_minHeight = -500.0f;
@@ -115,6 +116,7 @@ void Usage(char* prg)
         "-i set input path (max %d characters)\n"\
         "-o set output path (max %d characters)\n"\
         "-e extract only MAP(1)/DBC(2)/Camera(4) - standard: all(7)\n"\
+        "-m extract only this map id when extracting maps, example: -m 617\n"\
         "-f height stored as int (less map size but lost some accuracy) 1 by default\n"\
         "Example: %s -f 0 -i \"c:\\games\\game\"", prg, MAX_PATH_LENGTH - 1, MAX_PATH_LENGTH - 1, prg);
     exit(1);
@@ -129,6 +131,7 @@ void HandleArgs(int argc, char * arg[])
         // e - extract only MAP(1)/DBC(2) - standard both(3)
         // f - use float to int conversion
         // h - limit minimum height
+        // m - extract only one map id
         if(arg[c][0] != '-')
             Usage(arg[0]);
 
@@ -163,6 +166,16 @@ void HandleArgs(int argc, char * arg[])
                 {
                     CONF_extract = atoi(arg[(c++) + 1]);
                     if (!(CONF_extract > 0 && CONF_extract < 8))
+                        Usage(arg[0]);
+                }
+                else
+                    Usage(arg[0]);
+                break;
+            case 'm':
+                if (c + 1 < argc)                            // all ok
+                {
+                    CONF_single_map = atoi(arg[(c++) + 1]);
+                    if (CONF_single_map < 0)
                         Usage(arg[0]);
                 }
                 else
@@ -939,8 +952,14 @@ void ExtractMapsFromMpq(uint32 build)
     CreateDir(path);
 
     printf("Convert map files\n");
+    if (CONF_single_map >= 0)
+        printf("Single-map mode: extracting map %d only\n", CONF_single_map);
+
     for(uint32 z = 0; z < map_count; ++z)
     {
+        if (CONF_single_map >= 0 && static_cast<uint32>(CONF_single_map) != map_ids[z].id)
+            continue;
+
         printf("Extract %s (%d/%u)                  \n", map_ids[z].name, z+1, map_count);
         // Loadup map grid data
 

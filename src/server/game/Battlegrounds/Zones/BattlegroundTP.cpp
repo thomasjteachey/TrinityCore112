@@ -87,6 +87,57 @@ BattlegroundTP::BattlegroundTP()
 
 BattlegroundTP::~BattlegroundTP() { }
 
+ObjectGuid BattlegroundTP::GetFlagPickupGUID(ObjectGuid playerGuid) const
+{
+    if (GetStatus() != STATUS_IN_PROGRESS || playerGuid.IsEmpty())
+        return ObjectGuid::Empty;
+
+    uint32 const playerTeam = GetPlayerTeam(playerGuid);
+    if (playerTeam != ALLIANCE && playerTeam != HORDE)
+        return ObjectGuid::Empty;
+
+    TeamId const ownFlagTeam = GetTeamIndexByTeamId(playerTeam);
+    TeamId const enemyFlagTeam = GetOtherTwinPeaksTeamId(ownFlagTeam);
+
+    if (_flagKeepers[enemyFlagTeam] == playerGuid)
+        return ObjectGuid::Empty;
+
+    if (_flagState[ownFlagTeam] == BG_TP_FLAG_STATE_ON_GROUND)
+        return _droppedFlagGUID[ownFlagTeam];
+
+    if (_flagState[enemyFlagTeam] == BG_TP_FLAG_STATE_ON_BASE)
+        return BgObjects[enemyFlagTeam == TEAM_ALLIANCE ? BG_TP_OBJECT_A_FLAG : BG_TP_OBJECT_H_FLAG];
+
+    if (_flagState[enemyFlagTeam] == BG_TP_FLAG_STATE_ON_GROUND)
+        return _droppedFlagGUID[enemyFlagTeam];
+
+    return ObjectGuid::Empty;
+}
+
+bool BattlegroundTP::GetFlagCapturePosition(ObjectGuid carrierGuid, Position& position) const
+{
+    if (GetStatus() != STATUS_IN_PROGRESS || carrierGuid.IsEmpty())
+        return false;
+
+    uint32 const carrierTeam = GetPlayerTeam(carrierGuid);
+    if (carrierTeam != ALLIANCE && carrierTeam != HORDE)
+        return false;
+
+    TeamId const carrierTeamId = GetTeamIndexByTeamId(carrierTeam);
+    TeamId const carriedFlagTeam = GetOtherTwinPeaksTeamId(carrierTeamId);
+    if (_flagState[carriedFlagTeam] != BG_TP_FLAG_STATE_ON_PLAYER || _flagKeepers[carriedFlagTeam] != carrierGuid)
+        return false;
+
+    // These are the same capture triggers used by HandleFlagRoomCapturePoint.
+    uint32 const areaTriggerId = carriedFlagTeam == TEAM_ALLIANCE ? 5905 : 5904;
+    AreaTriggerEntry const* areaTrigger = sAreaTriggerStore.LookupEntry(areaTriggerId);
+    if (!areaTrigger)
+        return false;
+
+    position.Relocate(areaTrigger->Pos.X, areaTrigger->Pos.Y, areaTrigger->Pos.Z, 0.0f);
+    return true;
+}
+
 char const* BattlegroundTP::GetCTFFlagStateToken(uint8 flagState) const
 {
     switch (flagState)
@@ -134,7 +185,7 @@ bool BattlegroundTP::GetCTFFlagWorldPositionByIdentity(TeamId flagTeam, float& x
     return false;
 }
 
-std::string BattlegroundTP::BuildCTFFlagFullPayload() const
+std::string BattlegroundTP::BuildCTFFlagFullPayload(Player const* viewer) const
 {
     std::string allianceCarrier;
     std::string hordeCarrier;
@@ -143,22 +194,25 @@ std::string BattlegroundTP::BuildCTFFlagFullPayload() const
     std::string hordeX;
     std::string hordeY;
 
-    if (_flagState[TEAM_ALLIANCE] == BG_TP_FLAG_STATE_ON_PLAYER)
+    bool const showAllianceFlag = ShouldShowFlagOnMapTo(viewer, TEAM_ALLIANCE);
+    bool const showHordeFlag = ShouldShowFlagOnMapTo(viewer, TEAM_HORDE);
+
+    if (showAllianceFlag && _flagState[TEAM_ALLIANCE] == BG_TP_FLAG_STATE_ON_PLAYER)
         if (Player* carrier = ObjectAccessor::FindPlayer(_flagKeepers[TEAM_ALLIANCE]))
             allianceCarrier = carrier->GetName();
-    if (_flagState[TEAM_HORDE] == BG_TP_FLAG_STATE_ON_PLAYER)
+    if (showHordeFlag && _flagState[TEAM_HORDE] == BG_TP_FLAG_STATE_ON_PLAYER)
         if (Player* carrier = ObjectAccessor::FindPlayer(_flagKeepers[TEAM_HORDE]))
             hordeCarrier = carrier->GetName();
 
     float x = 0.0f;
     float y = 0.0f;
-    if (GetCTFFlagWorldPositionByIdentity(TEAM_ALLIANCE, x, y))
+    if (showAllianceFlag && GetCTFFlagWorldPositionByIdentity(TEAM_ALLIANCE, x, y))
     {
         Map2ZoneCoordinates(x, y, 5031);
         allianceX = FormatCTFCoord(x / 100.0f);
         allianceY = FormatCTFCoord(y / 100.0f);
     }
-    if (GetCTFFlagWorldPositionByIdentity(TEAM_HORDE, x, y))
+    if (showHordeFlag && GetCTFFlagWorldPositionByIdentity(TEAM_HORDE, x, y))
     {
         Map2ZoneCoordinates(x, y, 5031);
         hordeX = FormatCTFCoord(x / 100.0f);
@@ -174,17 +228,41 @@ void BattlegroundTP::SendCTFFlagAddonMessage(std::string const& payload)
     std::string message = "CWSG\t" + payload;
     WorldPacket data;
     ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message, 0);
-    SendPacketToAll(&data);
+
+    if (!IsCustomGame() || (payload.rfind("A:", 0) != 0 && payload.rfind("H:", 0) != 0))
+    {
+        SendPacketToAll(&data);
+        return;
+    }
+
+    TeamId const flagTeam = payload[0] == 'A' ? TEAM_ALLIANCE : TEAM_HORDE;
+    for (auto const& entry : GetPlayers())
+    {
+        Player* player = ObjectAccessor::FindPlayer(entry.first);
+        if (player && ShouldShowFlagOnMapTo(player, flagTeam))
+            player->SendDirectMessage(&data);
+    }
 }
 
-void BattlegroundTP::BroadcastCTFFlagFullState() { SendCTFFlagAddonMessage(BuildCTFFlagFullPayload()); }
+void BattlegroundTP::BroadcastCTFFlagFullState()
+{
+    if (IsCustomGame())
+    {
+        for (auto const& entry : GetPlayers())
+            if (Player* player = ObjectAccessor::FindPlayer(entry.first))
+                SendCTFFlagFullStateTo(player);
+        return;
+    }
+
+    SendCTFFlagAddonMessage(BuildCTFFlagFullPayload());
+}
 
 void BattlegroundTP::SendCTFFlagFullStateTo(Player* player)
 {
     if (!player || !player->GetSession())
         return;
 
-    std::string message = "CWSG\t" + BuildCTFFlagFullPayload();
+    std::string message = "CWSG\t" + BuildCTFFlagFullPayload(player);
     WorldPacket data;
     ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message, 0);
     player->SendDirectMessage(&data);
@@ -364,10 +442,11 @@ void BattlegroundTP::EventPlayerCapturedFlag(Player* player)
     uint32 flagHonor = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP);
     RewardHonorToTeam(flagHonor, player->GetTeam());
 
-    if (GetTeamScore(TEAM_ALLIANCE) == BG_TP_MAX_TEAM_SCORE || GetTeamScore(TEAM_HORDE) == BG_TP_MAX_TEAM_SCORE)
+    uint32 const captureLimit = GetFlagCaptureLimit(BG_TP_MAX_TEAM_SCORE);
+    if (GetTeamScore(TEAM_ALLIANCE) >= captureLimit || GetTeamScore(TEAM_HORDE) >= captureLimit)
     {
         UpdateWorldState(BG_TP_STATE_TIMER_ACTIVE, 0);
-        EndBattleground(GetTeamScore(TEAM_HORDE) == BG_TP_MAX_TEAM_SCORE ? TEAM_HORDE : TEAM_ALLIANCE);
+        EndBattleground(GetTeamScore(TEAM_HORDE) >= captureLimit ? TEAM_HORDE : TEAM_ALLIANCE);
     }
     else
         _bgEvents.ScheduleEvent(BG_TP_EVENT_RESPAWN_BOTH_FLAGS, Milliseconds(BG_TP_FLAG_RESPAWN_TIME));
@@ -767,7 +846,7 @@ void BattlegroundTP::FillInitialWorldStates(WorldPackets::WorldState::InitWorldS
 {
   packet.Worldstates.emplace_back(BG_TP_FLAG_CAPTURES_ALLIANCE, GetTeamScore(TEAM_ALLIANCE));
   packet.Worldstates.emplace_back(BG_TP_FLAG_CAPTURES_HORDE, GetTeamScore(TEAM_HORDE));
-  packet.Worldstates.emplace_back(BG_TP_FLAG_CAPTURES_MAX, BG_TP_MAX_TEAM_SCORE);
+  packet.Worldstates.emplace_back(BG_TP_FLAG_CAPTURES_MAX, GetFlagCaptureLimit(BG_TP_MAX_TEAM_SCORE));
 
   packet.Worldstates.emplace_back(BG_TP_STATE_TIMER_ACTIVE, 0);
 

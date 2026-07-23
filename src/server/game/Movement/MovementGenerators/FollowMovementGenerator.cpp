@@ -145,7 +145,13 @@ bool FollowMovementGenerator::Update(Unit* owner, uint32 diff)
     if (!_lastTargetPosition || _lastTargetPosition->GetExactDistSq(target->GetPosition()) > 0.0f)
     {
         _lastTargetPosition = target->GetPosition();
-        bool const needsRepath = owner->HasUnitState(UNIT_STATE_FOLLOW_MOVE) || !PositionOkay(owner, target, _range + FOLLOW_RANGE_TOLERANCE);
+        // Distance alone is not enough for angled follows. A follower already
+        // inside the requested range but outside the requested arc (for
+        // example, an Assassination rogue in front of a Garrote target) still
+        // needs a path. Omitting _angle here left the generator initialized but
+        // motionless until the target physically changed position.
+        bool const needsRepath = owner->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ||
+            !PositionOkay(owner, target, _range + FOLLOW_RANGE_TOLERANCE, _angle);
         if (!needsRepath)
             LogPlayerbotFollowDiag(owner, target, "target_changed_position_ok_no_repath", _range + FOLLOW_RANGE_TOLERANCE, _angle);
 
