@@ -4760,6 +4760,12 @@ bool SendCustomBattlegroundWeather(Player* player)
     if (!bg || !bg->HasCustomWeatherOverride())
         return false;
 
+    // Grade is capped below the 0.9999 maximum: heavy weather at an extreme
+    // grade drives the client's camera-attached weather emitter past its first
+    // 80-vertex geometry batch, and the 3.3.5 client mis-pairs follow-up
+    // batches with their base vertex (crash at WoW.exe+0x41D559 walking
+    // particle triangles). 0.75 still selects the heavy visual tier (>= 0.70).
+    constexpr float CUSTOM_WEATHER_GRADE = 0.75f;
     WeatherState state = WEATHER_STATE_FINE;
     float intensity = 0.0f;
     switch (bg->GetCustomRules().Weather)
@@ -4768,23 +4774,23 @@ bool SendCustomBattlegroundWeather(Player* player)
             break;
         case BattlegroundCustomWeather::Rain:
             state = WEATHER_STATE_HEAVY_RAIN;
-            intensity = 0.9999f;
+            intensity = CUSTOM_WEATHER_GRADE;
             break;
         case BattlegroundCustomWeather::Snow:
             state = WEATHER_STATE_HEAVY_SNOW;
-            intensity = 0.9999f;
+            intensity = CUSTOM_WEATHER_GRADE;
             break;
         case BattlegroundCustomWeather::Sandstorm:
             state = WEATHER_STATE_HEAVY_SANDSTORM;
-            intensity = 0.9999f;
+            intensity = CUSTOM_WEATHER_GRADE;
             break;
         case BattlegroundCustomWeather::Thunderstorm:
             state = WEATHER_STATE_THUNDERS;
-            intensity = 0.9999f;
+            intensity = CUSTOM_WEATHER_GRADE;
             break;
         case BattlegroundCustomWeather::Fog:
             state = WEATHER_STATE_FOG;
-            intensity = 0.9999f;
+            intensity = CUSTOM_WEATHER_GRADE;
             break;
         case BattlegroundCustomWeather::Normal:
         case BattlegroundCustomWeather::Max:

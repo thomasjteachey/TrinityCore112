@@ -26,6 +26,7 @@
 #include "ScriptedGossip.h"
 #include "TemporarySummon.h"
 #include "Util.h"
+#include "Weather.h"
 #include "WorldSession.h"
 
 #include <algorithm>
@@ -1162,6 +1163,12 @@ public:
             if (player->IsSpectator())
                 player->SetIsSpectator(false);
 
+            // The staging box sits in a void zone with no weather record, so a
+            // custom-weather override from a finished match would otherwise
+            // persist on the client indefinitely. The lingering max-grade
+            // emitter is also what crashed clients here (WoW.exe+0x41D559).
+            Weather::SendFineWeatherUpdateToPlayer(player);
+
             player->RemoveAurasByType(SPELL_AURA_MOD_STEALTH);
 
             auto teamItr = lobby->Teams.find(player->GetGUID());
@@ -1587,6 +1594,11 @@ private:
                 player->RemoveUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
                 if (player->IsSpectator())
                     player->SetIsSpectator(false);
+                // Spectators and already-removed members never pass through
+                // RemovePlayerAtLeave, which is where the custom-weather
+                // override is normally cleared for the client.
+                if (bg && bg->HasCustomWeatherOverride())
+                    Weather::SendFineWeatherUpdateToPlayer(player);
             }
         };
 
