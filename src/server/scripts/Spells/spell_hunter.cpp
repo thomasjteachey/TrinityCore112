@@ -95,8 +95,8 @@ enum HunterSpells
     SPELL_TELEPORT_VISUAL_GURUBASHI = 64446,
     SPELL_HUNTER_WEAVING_R1 = 81288,
     SPELL_HUNTER_WEAVING_R2 = 81289,
-    SPELL_HUNTER_WEAVING_AUTOSHOT_R1 = 81290,
-    SPELL_HUNTER_WEAVING_AUTOSHOT_R2 = 81291
+    SPELL_HUNTER_WEAVING_MELEE_AP = 81948,
+    SPELL_HUNTER_WEAVING_RANGED_AP = 81949
 };
 
 enum HunterSpellIcons
@@ -1679,41 +1679,52 @@ class spell_hun_outmaneuver : public SpellScript
     }
 };
 
+// -81288 - Weaving (talent), 81298 / 81299 - Weaving - Auto Shot (learned passive)
 class spell_hun_weaving : public AuraScript
 {
     PrepareAuraScript(spell_hun_weaving);
+
+    static constexpr uint32 RangedProcMask = PROC_FLAG_DONE_RANGED_AUTO_ATTACK | PROC_FLAG_DONE_SPELL_RANGED_DMG_CLASS;
+    static constexpr uint32 MeleeProcMask = PROC_FLAG_DONE_MELEE_AUTO_ATTACK | PROC_FLAG_DONE_SPELL_MELEE_DMG_CLASS;
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo(
             {
-                SPELL_HUNTER_WEAVING_AUTOSHOT_R1,
-                SPELL_HUNTER_WEAVING_AUTOSHOT_R2
+                SPELL_HUNTER_WEAVING_MELEE_AP,
+                SPELL_HUNTER_WEAVING_RANGED_AP
             });
     }
 
-    void OnApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    bool CheckAttackProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
     {
-        uint8 rank = GetSpellInfo()->GetRank();
-        if (rank == 1)
-            GetCaster()->CastSpell(GetCaster(), SPELL_HUNTER_WEAVING_AUTOSHOT_R1);
-        else
-            GetCaster()->CastSpell(GetCaster(), SPELL_HUNTER_WEAVING_AUTOSHOT_R2);
+        return (eventInfo.GetTypeMask() & (RangedProcMask | MeleeProcMask)) != 0;
     }
 
-    void OnRemove(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
+    void HandleWeave(ProcEventInfo& eventInfo)
     {
-        uint8 rank = GetSpellInfo()->GetRank();
-        if (rank == 1)
-            GetCaster()->RemoveAurasDueToSpell(SPELL_HUNTER_WEAVING_AUTOSHOT_R1);
-        else
-            GetCaster()->RemoveAurasDueToSpell(SPELL_HUNTER_WEAVING_AUTOSHOT_R2);
+        uint32 const typeMask = eventInfo.GetTypeMask();
+
+        // EFFECT_0 triggers the Mongoose Bite cooldown reduction. Melee
+        // attacks only grant ranged attack power and must not reduce it.
+        if (typeMask & MeleeProcMask)
+            PreventDefaultAction();
+
+        DamageInfo* damageInfo = eventInfo.GetDamageInfo();
+        if (!damageInfo)
+            return;
+
+        Unit* target = GetTarget();
+        if (typeMask & RangedProcMask)
+            target->CastSpell(target, SPELL_HUNTER_WEAVING_MELEE_AP, true);
+        else if (typeMask & MeleeProcMask)
+            target->CastSpell(target, SPELL_HUNTER_WEAVING_RANGED_AP, true);
     }
 
     void Register() override
     {
-        AfterEffectApply += AuraEffectApplyFn(spell_hun_weaving::OnApply, EFFECT_1, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
-        AfterEffectRemove += AuraEffectRemoveFn(spell_hun_weaving::OnRemove, EFFECT_1, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
+        DoCheckEffectProc += AuraCheckEffectProcFn(spell_hun_weaving::CheckAttackProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+        OnProc += AuraProcFn(spell_hun_weaving::HandleWeave);
     }
 };
 
