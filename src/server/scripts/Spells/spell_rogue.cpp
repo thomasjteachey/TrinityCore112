@@ -802,28 +802,11 @@ class spell_rog_rupture : public SpellScriptLoader
                 return caster && caster->GetTypeId() == TYPEID_PLAYER;
             }
 
-            void CalculateAmount(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
+            void CalculateAmount(AuraEffect const* /*aurEff*/, int32& /*amount*/, bool& canBeRecalculated)
             {
-                if (Unit* caster = GetCaster())
-                {
-                    canBeRecalculated = false;
-
-                    float const attackpowerPerCombo[6] =
-                    {
-                        0.0f,
-                        0.015f,         // 1 point:  ${($m1 + $b1*1 + 0.015 * $AP) * 4} damage over 8 secs
-                        0.024f,         // 2 points: ${($m1 + $b1*2 + 0.024 * $AP) * 5} damage over 10 secs
-                        0.03f,          // 3 points: ${($m1 + $b1*3 + 0.03 * $AP) * 6} damage over 12 secs
-                        0.03428571f,    // 4 points: ${($m1 + $b1*4 + 0.03428571 * $AP) * 7} damage over 14 secs
-                        0.0375f         // 5 points: ${($m1 + $b1*5 + 0.0375 * $AP) * 8} damage over 16 secs
-                    };
-
-                    uint8 cp = caster->ToPlayer()->GetComboPoints();
-                    if (cp > 5)
-                        cp = 5;
-
-                    amount += int32(caster->GetTotalAttackPowerValue(BASE_ATTACK) * attackpowerPerCombo[cp]);
-                }
+                // No WotLK per-combo AP scaling here: classic AP scaling (4% AP
+                // per tick, flat) comes from spell_bonus_data ap_dot_bonus.
+                canBeRecalculated = false;
             }
 
             void ResetDuration(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)

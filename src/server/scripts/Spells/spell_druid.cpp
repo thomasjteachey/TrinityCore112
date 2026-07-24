@@ -1388,7 +1388,6 @@ class spell_dru_rip : public AuraScript
 
         if (Unit* caster = GetCaster())
         {
-            // 0.01 * $AP * cp
             uint8 cp = caster->ToPlayer()->GetComboPoints();
 
             // Idol of Feral Shadows. Can't be handled as SpellMod due its dependency from CPs
@@ -1398,7 +1397,8 @@ class spell_dru_rip : public AuraScript
             else if (AuraEffect const* auraEffIdolOfWorship = caster->GetAuraEffect(SPELL_DRUID_IDOL_OF_WORSHIP, EFFECT_0))
                 amount += cp * auraEffIdolOfWorship->GetAmount();
 
-            amount += int32(CalculatePct(caster->GetTotalAttackPowerValue(BASE_ATTACK), cp));
+            // No WotLK 1% AP per combo point here: classic AP scaling (4% AP
+            // per tick, flat) comes from spell_bonus_data ap_dot_bonus.
         }
     }
 

@@ -823,8 +823,8 @@ class spell_mage_fire_frost_ward : public spell_mage_incanters_absorbtion_base_A
         canBeRecalculated = false;
         if (Unit* caster = GetCaster())
         {
-            // +80.68% from sp bonus
-            float bonus = 0.8068f;
+            // Classic: +10% from sp bonus (WotLK used 80.68%)
+            float bonus = 0.10f;
 
             bonus *= caster->SpellBaseHealingBonusDone(GetSpellInfo()->GetSchoolMask());
             bonus *= caster->CalculateSpellpowerCoefficientLevelPenalty(GetSpellInfo());
@@ -1116,8 +1116,8 @@ class spell_mage_ice_barrier : public spell_mage_incanters_absorbtion_base_AuraS
         canBeRecalculated = false;
         if (Unit* caster = GetCaster())
         {
-            // +80.68% from sp bonus
-            float bonus = 0.8068f;
+            // Classic: +10% from sp bonus (WotLK used 80.68%)
+            float bonus = 0.10f;
 
             bonus *= caster->SpellBaseHealingBonusDone(GetSpellInfo()->GetSchoolMask());
 
@@ -1364,8 +1364,8 @@ class spell_mage_mana_shield : public spell_mage_incanters_absorbtion_base_AuraS
         canBeRecalculated = false;
         if (Unit* caster = GetCaster())
         {
-            // +80.53% from sp bonus
-            float bonus = 0.8053f;
+            // Classic: +10% from sp bonus (WotLK used 80.53%)
+            float bonus = 0.10f;
 
             bonus *= caster->SpellBaseHealingBonusDone(GetSpellInfo()->GetSchoolMask());
             bonus *= caster->CalculateSpellpowerCoefficientLevelPenalty(GetSpellInfo());

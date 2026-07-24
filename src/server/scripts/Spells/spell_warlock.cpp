@@ -1422,8 +1422,8 @@ class spell_warl_shadow_ward : public AuraScript
         canBeRecalculated = false;
         if (Unit* caster = GetCaster())
         {
-            // +80.68% from sp bonus
-            float bonus = 0.8068f;
+            // Classic: +10% from sp bonus (WotLK used 80.68%)
+            float bonus = 0.10f;
 
             bonus *= caster->SpellBaseHealingBonusDone(GetSpellInfo()->GetSchoolMask());
             bonus *= caster->CalculateSpellpowerCoefficientLevelPenalty(GetSpellInfo());
