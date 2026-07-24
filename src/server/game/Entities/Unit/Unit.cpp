@@ -3898,6 +3898,19 @@ void Unit::_ApplyAuraEffect(Aura* aura, uint8 effIndex)
         aurApp->_HandleEffect(effIndex, true);
 }
 
+// Same seal test as spell_pal_judgement: Seal of Justice (20164) sits outside
+// the seal family-flag collection and needs the explicit id check.
+static bool IsTwistableSeal(SpellInfo const* spellInfo)
+{
+    return spellInfo->GetSpellSpecific() == SPELL_SPECIFIC_SEAL || spellInfo->Id == 20164;
+}
+
+// Temporary weapon enchants applied by Windfury Totem Effect (8514/10607/10611).
+static bool IsWindfuryTotemEnchant(uint32 enchantId)
+{
+    return enchantId == 1783 || enchantId == 563 || enchantId == 564;
+}
+
 // handles effects of aura application
 // should be done after registering aura in lists
 void Unit::_ApplyAura(AuraApplication* aurApp, uint8 effMask)
@@ -3947,8 +3960,21 @@ void Unit::_ApplyAura(AuraApplication* aurApp, uint8 effMask)
         UpdateIceFangSprintTurnRate();
 
     if (Player* player = ToPlayer())
+    {
         if (sConditionMgr->IsSpellUsedInSpellClickConditions(aurApp->GetBase()->GetId()))
             player->UpdateVisibleGameobjectsOrSpellClicks();
+
+        // Seals and the Windfury Totem weapon buff are mutually exclusive: the
+        // totem pulse skips seal carriers (ExcludeTargetAuraState 5) and
+        // applying a seal strips an already-present Windfury Totem enchant.
+        if (!aurApp->GetRemoveMode() && IsTwistableSeal(aura->GetSpellInfo()))
+            if (Item* weapon = player->GetWeaponForAttack(BASE_ATTACK))
+                if (IsWindfuryTotemEnchant(weapon->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT)))
+                {
+                    player->ApplyEnchantment(weapon, TEMP_ENCHANTMENT_SLOT, false);
+                    weapon->ClearEnchantment(TEMP_ENCHANTMENT_SLOT);
+                }
+    }
 }
 
 // removes aura application from lists and unapplies effects
@@ -4087,13 +4113,6 @@ void Unit::_UnapplyAura(AuraApplication* aurApp, AuraRemoveMode removeMode)
             ++iter;
     }
     ABORT();
-}
-
-// Same seal test as spell_pal_judgement: Seal of Justice (20164) sits outside
-// the seal family-flag collection and needs the explicit id check.
-static bool IsTwistableSeal(SpellInfo const* spellInfo)
-{
-    return spellInfo->GetSpellSpecific() == SPELL_SPECIFIC_SEAL || spellInfo->Id == 20164;
 }
 
 void Unit::_RemoveNoStackAurasDueToAura(Aura* aura, bool owned)

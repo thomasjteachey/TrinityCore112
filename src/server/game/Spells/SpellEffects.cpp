@@ -541,7 +541,7 @@ void Spell::EffectSchoolDMG()
                     float multiple = ap / 410 + effectInfo->DamageMultiplier;
                     int32 energy = -(unitCaster->ModifyPower(POWER_ENERGY, -30));
                     damage += int32(energy * multiple);
-                    damage += int32(CalculatePct(unitCaster->ToPlayer()->GetComboPoints() * ap, 7));
+                    damage += int32(CalculatePct(unitCaster->ToPlayer()->GetComboPoints() * ap, 3)); // classic: 3% AP per combo point
                 }
                 // Wrath
                 else if (m_spellInfo->SpellFamilyFlags[0] & 0x00000001)
@@ -614,7 +614,7 @@ void Spell::EffectSchoolDMG()
                         if (uint32 combo = player->GetComboPoints())
                         {
                             float ap = unitCaster->GetTotalAttackPowerValue(BASE_ATTACK);
-                            damage += std::lroundf(ap * combo * 0.07f);
+                            damage += std::lroundf(ap * combo * 0.03f); // classic: 3% AP per combo point
 
                             // Eviscerate and Envenom Bonus Damage (item set effect)
                             if (unitCaster->HasAura(37169))
@@ -3711,6 +3711,13 @@ void Spell::EffectWeaponDmg()
             break;
         }
     }
+
+    // Weapon-damage effects never pass through SpellDamageBonusDone, so spell
+    // power coefficients for weapon-based special attacks (e.g. Seal of
+    // Command proc 20424) must be applied here from spell_bonus_data.
+    if (SpellBonusEntry const* bonusEntry = sSpellMgr->GetSpellBonusData(m_spellInfo->Id))
+        if (bonusEntry->direct_damage > 0.f)
+            spell_bonus += int32(bonusEntry->direct_damage * unitCaster->SpellBaseDamageBonusDone(m_spellInfo->GetSchoolMask()));
 
     bool normalized = false;
     float weaponDamagePercentMod = 1.0f;
