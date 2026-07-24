@@ -153,6 +153,19 @@ std::unordered_map<ObjectGuid, uint8> g_CombatNoTargetTicksByBot;
 std::mutex g_CombatNoTargetTicksByBotLock;
 std::unordered_map<ObjectGuid, std::unordered_map<ObjectGuid, bool>> g_HumanPerceptionStealthStateByBot;
 std::mutex g_HumanPerceptionStealthStateLock;
+// Per-bot interrupt reaction tracking (see ApplyHumanInterruptReaction): which
+// enemy cast the bot is currently "watching", when it noticed it, and the
+// randomized reaction time rolled for that cast.
+struct InterruptReactionState
+{
+    ObjectGuid castTargetGuid;
+    uint32 castSpellId = 0;
+    uint32 noticedAtMs = 0;
+    uint32 reactionDelayMs = 0;
+    uint32 lastSeenCastingMs = 0;
+};
+std::unordered_map<ObjectGuid, InterruptReactionState> g_InterruptReactionStateByBot;
+std::mutex g_InterruptReactionStateLock;
 thread_local ObjectGuid g_CurrentDecisionBotGuid = ObjectGuid::Empty;
 thread_local uint32 g_SuppressedDecisionSpellId = 0;
 
@@ -3210,6 +3223,112 @@ Unit const* SelectClosestEnemyTarget(Player const* player, bool requireReachable
     return nullptr;
 }
 
+uint32 GetCurrentCastSpellId(Unit const* unit)
+{
+    if (!unit)
+        return 0;
+
+    if (Spell const* spell = unit->GetCurrentSpell(CURRENT_GENERIC_SPELL))
+        if (SpellInfo const* spellInfo = spell->GetSpellInfo())
+            return spellInfo->Id;
+
+    if (Spell const* spell = unit->GetCurrentSpell(CURRENT_CHANNELED_SPELL))
+        if (SpellInfo const* spellInfo = spell->GetSpellInfo())
+            return spellInfo->Id;
+
+    return 0;
+}
+
+// How long a committed "button press" stays live waiting for a decision tick
+// to actually deliver it. Must cover at least one battleground fast tick, but
+// stay short enough that a stale press never fires visibly late.
+constexpr uint32 kInterruptPressSlopMs = 300;
+// Maximum unobserved gap after which a same-spell cast by the same enemy is
+// treated as a brand-new cast (fresh reaction roll) instead of a continuation.
+// Sized above the 500ms world decision cadence so coarse ticking alone never
+// splits one cast into two.
+constexpr uint32 kInterruptCastContinuityGapMs = 750;
+
+// Humanizes bot interrupt reflexes. A bot that notices an enemy cast does not
+// become interrupt-eligible until a per-cast randomized reaction time has
+// passed. Once that reaction time arrives the bot is treated as having
+// committed to pressing the button: if the cast vanishes within the commit
+// window just before the press, the interrupt still goes out at the now-idle
+// target and is wasted. A well-timed fake cast can therefore bait the
+// interrupt, while cancelling early just makes the bot hold it.
+Unit const* ApplyHumanInterruptReaction(Player const* player, Unit const* candidate, float maxDistance)
+{
+    uint32 const reactionMaxMs = g_PvpCoreConfig.interruptReactionMaxMs;
+    if (reactionMaxMs == 0)
+        return candidate; // humanization disabled: legacy instant reflexes
+
+    uint32 const now = GameTime::GetGameTimeMS();
+    std::lock_guard<std::mutex> lock(g_InterruptReactionStateLock);
+    auto stateItr = g_InterruptReactionStateByBot.find(player->GetGUID());
+
+    if (candidate)
+    {
+        uint32 const castSpellId = GetCurrentCastSpellId(candidate);
+        bool const continuesTrackedCast = stateItr != g_InterruptReactionStateByBot.end() &&
+            stateItr->second.castTargetGuid == candidate->GetGUID() &&
+            stateItr->second.castSpellId == castSpellId &&
+            now - stateItr->second.lastSeenCastingMs <= kInterruptCastContinuityGapMs;
+        if (!continuesTrackedCast)
+        {
+            uint32 const reactionMinMs = std::min(g_PvpCoreConfig.interruptReactionMinMs, reactionMaxMs);
+            InterruptReactionState& state = g_InterruptReactionStateByBot[player->GetGUID()];
+            state.castTargetGuid = candidate->GetGUID();
+            state.castSpellId = castSpellId;
+            state.noticedAtMs = now;
+            state.reactionDelayMs = urand(reactionMinMs, reactionMaxMs);
+            state.lastSeenCastingMs = now;
+            return nullptr;
+        }
+
+        InterruptReactionState& state = stateItr->second;
+        state.lastSeenCastingMs = now;
+        if (now - state.noticedAtMs >= state.reactionDelayMs)
+            return candidate;
+        return nullptr;
+    }
+
+    if (stateItr == g_InterruptReactionStateByBot.end())
+        return nullptr;
+
+    InterruptReactionState& state = stateItr->second;
+    Unit const* tracked = ObjectAccessor::GetUnit(*player, state.castTargetGuid);
+    if (tracked && GetCurrentCastSpellId(tracked) == state.castSpellId && IsInterruptibleCast(tracked))
+    {
+        // The tracked cast is still running, merely outside this particular
+        // ability's range/immunity filter. Keep watching without deciding.
+        state.lastSeenCastingMs = now;
+        return nullptr;
+    }
+
+    // The tracked cast is gone (finished or cancelled).
+    uint32 const elapsedMs = now - state.noticedAtMs;
+    uint32 const castVisibleMs = state.lastSeenCastingMs - state.noticedAtMs;
+    bool const reactionElapsed = elapsedMs >= state.reactionDelayMs;
+    bool const withinPressSlop = elapsedMs <= state.reactionDelayMs + kInterruptPressSlopMs;
+    bool const committedAtCastEnd = state.reactionDelayMs <= castVisibleMs + g_PvpCoreConfig.interruptCommitWindowMs;
+
+    if (reactionElapsed && withinPressSlop && committedAtCastEnd)
+    {
+        // The cast disappeared inside the commit window: the press happens
+        // anyway. Do not erase the state here - the enclosing context build
+        // may be one that never executes a decision, so keep answering until
+        // the press slop expires; spell cooldown gating prevents double casts.
+        if (tracked && HasHostileTarget(player, tracked) && !IsTargetInvalidByImmunity(player, tracked) &&
+            player->IsWithinLOSInMap(tracked) && player->IsWithinDistInMap(tracked, maxDistance))
+            return tracked;
+    }
+
+    if (!withinPressSlop || !committedAtCastEnd)
+        g_InterruptReactionStateByBot.erase(stateItr); // saw the cancel in time (hold it) or the moment passed
+
+    return nullptr;
+}
+
 Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Unit const* preferredTarget = nullptr)
 {
     if (!player || !player->FindMap())
@@ -3225,27 +3344,29 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
             player->IsWithinDistInMap(candidate, maxDistance);
     };
 
-    if (isCandidateUsable(preferredTarget))
-        return preferredTarget;
-
     Unit const* best = nullptr;
-    float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
-    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    if (isCandidateUsable(preferredTarget))
+        best = preferredTarget;
+    else
     {
-        Player* candidate = itr->GetSource();
-        if (!isCandidateUsable(candidate))
-            continue;
-
-        float const distance = player->GetDistance(candidate);
-        if (distance < bestDistance)
+        float bestDistance = std::numeric_limits<float>::max();
+        Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+        for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
         {
-            best = candidate;
-            bestDistance = distance;
+            Player* candidate = itr->GetSource();
+            if (!isCandidateUsable(candidate))
+                continue;
+
+            float const distance = player->GetDistance(candidate);
+            if (distance < bestDistance)
+            {
+                best = candidate;
+                bestDistance = distance;
+            }
         }
     }
 
-    return best;
+    return ApplyHumanInterruptReaction(player, best, maxDistance);
 }
 
 bool AnyEnemyPolymorphed(Player const* player, float maxDistance)
@@ -4432,6 +4553,8 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
 
     Unit const* enemyOnTopTarget = SelectNearbyEnemyTarget(player, activeTarget, 5.0f);
     Unit const* nearbyCastingTarget = SelectEnemyCastingTarget(player, 20.0f, activeTarget);
+    Unit const* scatterPointBlankTarget = IsSpellReady(player, 19503) ?
+        SelectEnemyCastingTarget(player, 5.0f, enemyOnTopTarget) : nullptr;
     Unit const* closeMeleeThreat = SelectNearbyMeleeTarget(player, enemyOnTopTarget, 5.0f);
     Unit const* trapSetupTarget = SelectNearbyEnemyTarget(player, enemyOnTopTarget ? enemyOnTopTarget : activeTarget, 8.0f);
     Unit const* rogueTarget = SelectEnemyClassTarget(player, CLASS_ROGUE, GetConfiguredLongRange());
@@ -4506,8 +4629,8 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         { "hunter call pet", "summon active stable pet when no living pet is present", kHunterCallPetSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, shouldRevivePet && IsSpellReady(player, kHunterRevivePetSpellId), 25.0f,
         { "hunter revive pet", "revive dead hunter pet instead of repeatedly calling it", kHunterRevivePetSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, isMarksmanshipHunter && enemyOnTop && enemyOnTopTarget->HasUnitState(UNIT_STATE_CASTING) && !HasBreakableCrowdControl(enemyOnTopTarget) && IsSpellReady(player, 19503), 23.0f,
-        { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, isMarksmanshipHunter && scatterPointBlankTarget && IsSpellReady(player, 19503), 23.0f,
+        { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, scatterPointBlankTarget ? scatterPointBlankTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isMarksmanshipHunter && nearbyCastingTarget && !HasBreakableCrowdControl(nearbyCastingTarget) && IsSpellReady(player, 19503), 23.0f,
         { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyCastingTarget ? nearbyCastingTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates,
@@ -5154,7 +5277,8 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target, Class
 
     bool const closePressure = player->IsWithinDistInMap(target, 8.0f);
     Unit const* fearTarget = IsSpellReady(player, 6215) ? SelectWarlockFearTarget(player, 20.0f) : nullptr;
-    Unit const* spellLockTarget = (isAfflictionWarlock && IsPetSpellReady(player, 19647)) ? SelectEnemyCastingTarget(player, 30.0f, target) : nullptr;
+    bool const petSpellLockReady = isAfflictionWarlock ? IsPetSpellReady(player, 19647) : IsPetSpellReady(player, 19244);
+    Unit const* spellLockTarget = petSpellLockReady ? SelectEnemyCastingTarget(player, 30.0f, target) : nullptr;
     Unit const* devourEnemyTarget = (isAfflictionWarlock && IsPetSpellReady(player, 19736)) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, 30.0f) : nullptr;
     Unit const* devourFriendlyTarget = (isAfflictionWarlock && IsPetSpellReady(player, 19736)) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 30.0f) : nullptr;
     Item const* equippedOffhand = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
@@ -5176,9 +5300,9 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target, Class
     std::vector<PrioritizedSpellDecision> candidates;
     AddDecisionCandidate(candidates, canUseVoidwalkerSacrifice, 70.0f,
         { "warlock sacrifice", "emergency voidwalker sacrifice at or below 25 percent health", 19443, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, !isAfflictionWarlock && target->HasUnitState(UNIT_STATE_CASTING) && IsPetSpellReady(player, 19244), 54.0f,
-        { "warlock spell lock", "pet interrupt when available", 19244, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, spellLockTarget, 57.0f,
+    AddDecisionCandidate(candidates, !isAfflictionWarlock && spellLockTarget && IsPetSpellReady(player, 19244), 54.0f,
+        { "warlock spell lock", "pet interrupt when available", 19244, playerbot::PvpClassSpellContext::TargetMode::Enemy, spellLockTarget ? spellLockTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, isAfflictionWarlock && spellLockTarget, 57.0f,
         { "warlock spell lock", "felhunter interrupt on any nearby caster", 19647, playerbot::PvpClassSpellContext::TargetMode::Enemy, spellLockTarget ? spellLockTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, devourFriendlyTarget, 56.5f,
         { "warlock devour magic ally", "felhunter dispels friendly magic debuffs", 19736, playerbot::PvpClassSpellContext::TargetMode::Ally, devourFriendlyTarget ? devourFriendlyTarget->GetGUID() : ObjectGuid::Empty });
@@ -5450,8 +5574,8 @@ SpellDecision SelectRogueSpell(Player const* player, Unit const* target, Classic
         { "rogue garrote", "assassination opener from stealth", 703, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, !isAssassinationRogue && player->HasStealthAura() && player->IsWithinMeleeRange(target) && IsSpellReady(player, 1833), 49.0f,
         { "rogue cheap shot", "default opener", 1833, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, ((isCombatRogue && nearbyCastingTarget) || (!isCombatRogue && target->HasUnitState(UNIT_STATE_CASTING))) && IsSpellReady(player, 1766), 48.0f,
-        { "rogue kick", isCombatRogue ? "interrupt nearby enemy cast" : "interrupt enemy cast", 1766, playerbot::PvpClassSpellContext::TargetMode::Enemy, isCombatRogue && nearbyCastingTarget ? nearbyCastingTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, nearbyCastingTarget && IsSpellReady(player, 1766), 48.0f,
+        { "rogue kick", isCombatRogue ? "interrupt nearby enemy cast" : "interrupt enemy cast", 1766, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyCastingTarget ? nearbyCastingTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, player->HealthBelowPct(40) && IsSpellReady(player, 5277), 47.0f,
         { "rogue evasion", "defensive survival in melee", 5277, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, (isCombatRogue ? rootedOrSnared : (!player->HealthBelowPct(50) && !player->IsWithinMeleeRange(target) && player->IsWithinDistInMap(target, 30.0f))) && IsSpellReady(player, 11305), 46.0f,
@@ -5558,12 +5682,15 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
         return decision;
     }
 
+    Unit const* earthShockCastingTarget = IsSpellReady(player, 10414) ?
+        SelectEnemyCastingTarget(player, 20.0f, target) : nullptr;
+
     std::vector<PrioritizedSpellDecision> candidates;
     // Disabled: auto-casting Windfury Weapon from PvP loop while investigating weapon-dependent aura crashes.
     AddDecisionCandidate(candidates, !player->IsInCombat() && !HasAuraFromSpellChain(player, 10432) && IsSpellReady(player, 10432), 34.0f,
         { "shaman lightning shield", "maintain shield buff out of combat", 10432, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, hasHostileTarget && target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 10414), 60.0f,
-        { "shaman earth shock", "interrupt enemy cast with shock", 10414, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, earthShockCastingTarget && IsSpellReady(player, 10414), 60.0f,
+        { "shaman earth shock", "interrupt enemy cast with shock", 10414, playerbot::PvpClassSpellContext::TargetMode::Enemy, earthShockCastingTarget ? earthShockCastingTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, inCombat && !isRestoShaman && !isEnhancementShaman && !partyBenefitsFromWindfury && hasHostileTarget && manaEnemyNearby && !HasActiveAirTotem(player) && IsSpellReady(player, 8177), 59.0f,
         { "shaman grounding totem", "counter incoming caster pressure from a mana user within 50 yards", 8177, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !isRestoShaman && IsSpellReady(player, 16166), 58.0f,
@@ -6122,6 +6249,14 @@ void PvpCore::LoadConfig()
     g_PvpCoreConfig.meleeRange = sConfigMgr->GetFloatDefault("Playerbot.PvpClassSpells.Range.Melee", 8.0f);
     g_PvpCoreConfig.closeRange = sConfigMgr->GetFloatDefault("Playerbot.PvpClassSpells.Range.Close", 15.0f);
     g_PvpCoreConfig.longRange = sConfigMgr->GetFloatDefault("Playerbot.PvpClassSpells.Range.Long", 35.0f);
+    g_PvpCoreConfig.interruptReactionMinMs = uint32(std::clamp(
+        sConfigMgr->GetIntDefault("Playerbot.PvpClassSpells.Interrupt.ReactionMinMs", 200), 0, 5000));
+    g_PvpCoreConfig.interruptReactionMaxMs = uint32(std::clamp(
+        sConfigMgr->GetIntDefault("Playerbot.PvpClassSpells.Interrupt.ReactionMaxMs", 1000), 0, 5000));
+    if (g_PvpCoreConfig.interruptReactionMaxMs < g_PvpCoreConfig.interruptReactionMinMs)
+        g_PvpCoreConfig.interruptReactionMaxMs = g_PvpCoreConfig.interruptReactionMinMs;
+    g_PvpCoreConfig.interruptCommitWindowMs = uint32(std::clamp(
+        sConfigMgr->GetIntDefault("Playerbot.PvpClassSpells.Interrupt.CommitWindowMs", 200), 0, 2000));
 }
 
 PvpCoreConfig const& PvpCore::GetConfig()

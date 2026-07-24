@@ -43,6 +43,9 @@ struct PvpCoreConfig
     float meleeRange = 5.0f;
     float closeRange = 15.0f;
     float longRange = 35.0f;
+    uint32 interruptReactionMinMs = 200;
+    uint32 interruptReactionMaxMs = 1000;
+    uint32 interruptCommitWindowMs = 200;
 };
 
 enum class BattlegroundState : uint8

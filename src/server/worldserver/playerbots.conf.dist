@@ -106,6 +106,33 @@ Playerbot.PvpLifecycle.ObsidianColosseum.CloneAccountId = 0
 
 Playerbot.PvpClassSpells.Enable = 0
 
+#    Playerbot.PvpClassSpells.Interrupt.ReactionMinMs
+#    Playerbot.PvpClassSpells.Interrupt.ReactionMaxMs
+#        Description: Humanized interrupt reflexes. When a bot notices an enemy cast it rolls
+#                     a uniform reaction delay in [Min, Max] milliseconds before its interrupt
+#                     (Counterspell, Kick, Pummel, Earth Shock, Spell Lock, Scatter Shot,
+#                     Hammer of Justice, Repentance, Rebuke, ...) becomes eligible. Short casts
+#                     can slip under a slow roll entirely. ReactionMaxMs = 0 restores the old
+#                     instant-reflex behavior. Values are clamped to [0, 5000] and Max is
+#                     raised to Min when configured lower.
+#        Default:     200 (ReactionMinMs)
+#                     1000 (ReactionMaxMs)
+
+Playerbot.PvpClassSpells.Interrupt.ReactionMinMs = 200
+Playerbot.PvpClassSpells.Interrupt.ReactionMaxMs = 1000
+
+#    Playerbot.PvpClassSpells.Interrupt.CommitWindowMs
+#        Description: Fake-cast bait window in milliseconds. Once a bot's rolled reaction time
+#                     arrives it has committed to pressing its interrupt: if the enemy cast
+#                     disappears within this window immediately before that moment, the
+#                     interrupt is fired anyway at the now-idle target and wasted. Cancelling
+#                     earlier than the window makes the bot hold the interrupt instead.
+#                     Larger values make bots easier to juke; 0 disables wasted presses
+#                     entirely. Clamped to [0, 2000].
+#        Default:     200
+
+Playerbot.PvpClassSpells.Interrupt.CommitWindowMs = 200
+
 #    Playerbot.PvpClassSpells.RehgarMovementDiagnostics
 #        Description: Sends Rehgar's Fury movement diagnostics as server system messages
 #                     to every online GM. Disable after capturing the live movement trace.
