@@ -1524,23 +1524,16 @@ private:
         if (hitUnit)
             caster->CastSpell(hitUnit, spellId2, true);
 
-        // Remove all seal spells.
-        caster->RemoveAurasDueToSpell(20164);
-
-        // Loop: during the seal-twist grace window two ranks of the same seal
-        // chain can be up at once and both must go.
-        auto removeRankedSeal = [caster](uint32 spellId)
+        // Remove all seal spells. Chain-independent on purpose: the Seal of
+        // Righteousness ranks are split across two chains in spell_ranks
+        // (20154 has no chain row, 21084 heads ranks 2+), so ranked lookups
+        // miss ranks 2+ and left SoR up after judging. This also catches a
+        // second seal lingering in the seal-twist grace window.
+        caster->RemoveAppliedAuras([](AuraApplication const* aurApp)
         {
-            while (AuraApplication* seal = caster->GetAuraApplicationOfRankedSpell(spellId))
-                caster->RemoveAurasDueToSpell(seal->GetBase()->GetId());
-        };
-
-        removeRankedSeal(20154); // Seal of Righteousness
-        removeRankedSeal(20165); // Seal of Light
-        removeRankedSeal(20166); // Seal of Wisdom
-        removeRankedSeal(21082); // Seal of the Crusader
-        removeRankedSeal(20375); // Seal of Command
-        removeRankedSeal(33127); // Seal of Command
+            SpellInfo const* sealInfo = aurApp->GetBase()->GetSpellInfo();
+            return sealInfo->GetSpellSpecific() == SPELL_SPECIFIC_SEAL || sealInfo->Id == 20164;
+        });
     }
 
     void Register() override
