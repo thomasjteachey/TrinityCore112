@@ -1836,6 +1836,41 @@ class spell_int_cd_reduce : public SpellScript
     }
 };
 
+// 89799 - Beast Rider
+class spell_hun_beast_rider : public SpellScript
+{
+    PrepareSpellScript(spell_hun_beast_rider);
+
+    static constexpr uint32 SPELL_SWIFT_WHITE_STEED = 23228;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_SWIFT_WHITE_STEED });
+    }
+
+    SpellCastResult CheckCast()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        if (!player || player->GetPet())
+            return SPELL_CAST_OK;
+
+        // No active pet: summon the trusty white steed instead. The cast is
+        // deferred through the event queue because we are still inside this
+        // spell's own cast pipeline here.
+        player->m_Events.AddEventAtOffset([player]()
+        {
+            player->CastSpell(player, SPELL_SWIFT_WHITE_STEED, false);
+        }, 1ms);
+
+        return SPELL_FAILED_DONT_REPORT;
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(spell_hun_beast_rider::CheckCast);
+    }
+};
+
 void AddSC_hunter_spell_scripts()
 {
     RegisterSpellScript(spell_hun_aspect_of_the_beast);
@@ -1883,4 +1918,5 @@ void AddSC_hunter_spell_scripts()
     RegisterSpellScript(spell_hun_weaving);
     RegisterSpellScript(spell_hun_trap_cd_reduce);
     RegisterSpellScript(spell_int_cd_reduce);
+    RegisterSpellScript(spell_hun_beast_rider);
 }
