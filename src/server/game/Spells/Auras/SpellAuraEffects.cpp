@@ -22,7 +22,6 @@
 #include "CellImpl.h"
 #include "Chat.h"
 #include "Common.h"
-#include "DatabaseEnv.h"
 #include "DBCStores.h"
 #include "GridNotifiersImpl.h"
 #include "Item.h"
@@ -48,7 +47,6 @@
 #include "World.h"
 #include "WorldPacket.h"
 #include <numeric>
-#include <unordered_map>
 
 namespace PolearmStaffInnerAuras
 {
@@ -60,42 +58,6 @@ namespace
     constexpr uint32 SpellRogueNeilyoImmunity = 81439;
     constexpr uint32 SpellRogueVanishImmunity = 89783;
     constexpr uint32 SpellHunterBeastRider = 89799;
-
-    // Beast Rider (89799) shapes its mount after the hunter's active pet.
-    // hunter_pet_mount maps a pet creature family to the mount creature whose
-    // model gets ridden; families without a row ride the pet's own model.
-    std::unordered_map<uint32, uint32> const& GetHunterPetMountOverrides()
-    {
-        static std::unordered_map<uint32, uint32> overrides;
-        static bool loaded = false;
-        if (loaded)
-            return overrides;
-
-        loaded = true;
-
-        QueryResult result = WorldDatabase.Query("SELECT family, mount_creature_entry FROM hunter_pet_mount");
-        if (!result)
-            return overrides;
-
-        do
-        {
-            Field* fields = result->Fetch();
-            uint32 family = fields[0].GetUInt16();
-            uint32 mountEntry = fields[1].GetUInt32();
-
-            if (!sObjectMgr->GetCreatureTemplate(mountEntry))
-            {
-                TC_LOG_ERROR("sql.sql", "hunter_pet_mount family {} references missing creature_template entry {}, skipped.", family, mountEntry);
-                continue;
-            }
-
-            overrides[family] = mountEntry;
-        }
-        while (result->NextRow());
-
-        TC_LOG_INFO("server.loading", "Loaded {} hunter pet mount family overrides.", uint32(overrides.size()));
-        return overrides;
-    }
 
     bool IsRogueVanishProtectionImmunity(SpellInfo const* spellInfo)
     {
@@ -2759,26 +2721,14 @@ void AuraEffect::HandleAuraMounted(AuraApplication const* aurApp, uint8 mode, bo
                 creatureEntry = 15665;
         }
 
-        // Beast Rider: the mount takes after the hunter's active pet. Mapped
-        // families ride a real mount creature; unmapped families ride the
-        // pet's own model. Without a pet the spell never reaches this point
-        // (its script reroutes the cast to Swift White Steed).
+        // Beast Rider: ride the active pet's own model. Without a pet the
+        // spell never reaches this point (its script reroutes the cast to
+        // Swift White Steed).
         uint32 petModelDisplayId = 0;
         if (GetId() == SpellHunterBeastRider)
-        {
             if (Player* player = target->ToPlayer())
-            {
                 if (Pet* pet = player->GetPet())
-                {
-                    std::unordered_map<uint32, uint32> const& overrides = GetHunterPetMountOverrides();
-                    auto overrideItr = overrides.find(uint32(pet->GetCreatureTemplate()->family));
-                    if (overrideItr != overrides.end())
-                        creatureEntry = overrideItr->second;
-                    else
-                        petModelDisplayId = pet->GetNativeDisplayId();
-                }
-            }
-        }
+                    petModelDisplayId = pet->GetNativeDisplayId();
 
         if (CreatureTemplate const* creatureInfo = sObjectMgr->GetCreatureTemplate(creatureEntry))
         {
