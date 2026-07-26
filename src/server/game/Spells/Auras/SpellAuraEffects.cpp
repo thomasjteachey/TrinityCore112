@@ -2750,6 +2750,26 @@ void AuraEffect::HandleAuraMounted(AuraApplication const* aurApp, uint8 mode, bo
             displayId = petModelDisplayId;
 
         target->Mount(displayId, vehicleId, creatureEntry);
+
+        // Beast Rider: some tameable pets (spiders, crabs, young/juvenile
+        // skins) have a native display scale well under a normal mount's
+        // size. Enforce a floor so the pet's own model never renders smaller
+        // than a typical creature would while ridden; never shrink a pet
+        // that is already at or above the floor.
+        if (petModelDisplayId)
+        {
+            float nativeScale = 1.0f;
+            if (CreatureDisplayInfoEntry const* displayEntry = sCreatureDisplayInfoStore.LookupEntry(petModelDisplayId))
+            {
+                nativeScale = displayEntry->CreatureModelScale;
+                if (CreatureModelDataEntry const* modelData = sCreatureModelDataStore.LookupEntry(displayEntry->ModelID))
+                    nativeScale *= modelData->ModelScale;
+            }
+
+            constexpr float MinBeastRiderScale = 1.0f;
+            target->SetObjectScale(nativeScale > 0.0f && nativeScale < MinBeastRiderScale
+                ? MinBeastRiderScale / nativeScale : 1.0f);
+        }
     }
     else
     {
@@ -2759,6 +2779,9 @@ void AuraEffect::HandleAuraMounted(AuraApplication const* aurApp, uint8 mode, bo
         // and never endless flying after using Headless Horseman's Mount
         if (mode & AURA_EFFECT_HANDLE_REAL)
             target->RemoveAurasByType(SPELL_AURA_MOUNTED);
+
+        if (GetId() == SpellHunterBeastRider)
+            target->RecalculateObjectScale();
     }
 
     // Mounted speed modifiers are only meant to apply while mounted, so always recalculate
