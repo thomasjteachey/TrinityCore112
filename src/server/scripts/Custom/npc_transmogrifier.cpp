@@ -124,7 +124,8 @@ void SendMainMenu(Player* player, Creature* creature)
     }
     else
         AddGossipItemFor(player, GOSSIP_ICON_CHAT,
-            "|cff808080Turn the display on to change your appearance.|r", GOSSIP_SENDER_MAIN, ACTION_MAIN);
+            "|cff808080While this is off you see everyone in their real gear, and nobody sees yours.|r",
+            GOSSIP_SENDER_MAIN, ACTION_MAIN);
 
     AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Nevermind", GOSSIP_SENDER_MAIN, ACTION_CLOSE);
     SendGossipMenuFor(player, player->GetGossipTextId(creature), creature);

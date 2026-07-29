@@ -1529,7 +1529,8 @@ void World::LoadConfigSettings(bool reload)
 
     // Transmogrification
     m_bool_configs[CONFIG_CENTURION_TRANSMOG_ENABLE] = sConfigMgr->GetBoolDefault("Centurion.Transmog.Enable", true);
-    m_bool_configs[CONFIG_CENTURION_TRANSMOG_DEFAULT_ENABLED] = sConfigMgr->GetBoolDefault("Centurion.Transmog.DefaultEnabled", true);
+    // Opt-in: a character sees (and shows) transmogs only after switching it on.
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_DEFAULT_ENABLED] = sConfigMgr->GetBoolDefault("Centurion.Transmog.DefaultEnabled", false);
     m_int_configs[CONFIG_CENTURION_TRANSMOG_TOKEN_ENTRY] = sConfigMgr->GetIntDefault("Centurion.Transmog.TokenEntry", 20558);
     m_int_configs[CONFIG_CENTURION_TRANSMOG_TOKEN_COST] = sConfigMgr->GetIntDefault("Centurion.Transmog.TokenCost", 1);
     // Bitmask over ItemQualities: bit N allows quality N. 28 = uncommon|rare|epic.

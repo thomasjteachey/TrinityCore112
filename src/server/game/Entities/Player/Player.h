@@ -2469,7 +2469,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         // cache so the packet-build path never touches the map.
         std::unordered_map<ObjectGuid, uint32> _transmogs;
         std::array<uint32, EQUIPMENT_SLOT_END> _transmogSlotCache{};
-        bool _transmogEnabled{ true };
+        bool _transmogEnabled{ false };
 
         std::vector<Item*> m_itemUpdateQueue;
         bool m_itemUpdateQueueBlocked;
