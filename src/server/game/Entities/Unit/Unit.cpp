@@ -8959,8 +8959,21 @@ uint32 Unit::MeleeDamageBonusTaken(Unit* attacker, uint32 pdamage, WeaponAttackT
 
     int32 TakenFlatBenefit = 0;
 
+    // School the damage actually lands as. For a melee-class SPELL this is the
+    // spell's school, not the weapon's: Holy Strike is DefenseType melee but
+    // SchoolMask holy, and looking the modifiers up under the attacker's
+    // weapon school (physical) meant holy-school debuffs never applied to it.
+    // Judgement of the Crusader is SPELL_AURA_MOD_DAMAGE_TAKEN with misc mask
+    // 2 (holy), so it was silently skipped for every holy melee ability.
+    // For a plain swing the caller passes the per-component school from
+    // damageInfo, which is finer-grained than the attacker's aggregate
+    // GetMeleeDamageSchoolMask() and is what the Sanctified Wrath block below
+    // already relied on.
+    SpellSchoolMask const attackSchoolMask = spellProto ? spellProto->GetSchoolMask()
+                                                        : damageSchoolMask;
+
     // ..taken
-    TakenFlatBenefit += GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_DAMAGE_TAKEN, attacker->GetMeleeDamageSchoolMask());
+    TakenFlatBenefit += GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_DAMAGE_TAKEN, attackSchoolMask);
 
     if (attType != RANGED_ATTACK)
         TakenFlatBenefit += GetTotalAuraModifier(SPELL_AURA_MOD_MELEE_DAMAGE_TAKEN);
@@ -8974,7 +8987,7 @@ uint32 Unit::MeleeDamageBonusTaken(Unit* attacker, uint32 pdamage, WeaponAttackT
     float TakenTotalMod = 1.0f;
 
     // ..taken
-    TakenTotalMod *= GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN, attacker->GetMeleeDamageSchoolMask());
+    TakenTotalMod *= GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN, attackSchoolMask);
 
     // .. taken pct (special attacks)
     if (spellProto)
@@ -9042,8 +9055,7 @@ uint32 Unit::MeleeDamageBonusTaken(Unit* attacker, uint32 pdamage, WeaponAttackT
     // Sanctified Wrath (bypass damage reduction)
     if (TakenTotalMod < 1.0f)
     {
-        SpellSchoolMask const attackSchoolMask = spellProto ? spellProto->GetSchoolMask() : damageSchoolMask;
-
+        // attackSchoolMask is now resolved once at the top of the function
         float damageReduction = 1.0f - TakenTotalMod;
         Unit::AuraEffectList const& casterIgnoreResist = attacker->GetAuraEffectsByType(SPELL_AURA_MOD_IGNORE_TARGET_RESIST);
         for (AuraEffect const* aurEff : casterIgnoreResist)
@@ -14861,6 +14873,14 @@ void Unit::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player const* t
                 }
                 else
                     fieldBuffer << m_uint32Values[index];
+            }
+            // transmogrification: the field holds the real item, the appearance the
+            // observer is entitled to see is resolved here (only the entry half of
+            // each entry/enchantment pair)
+            else if (index >= PLAYER_VISIBLE_ITEM_1_ENTRYID && index <= PLAYER_VISIBLE_ITEM_19_ENCHANTMENT &&
+                !((index - PLAYER_VISIBLE_ITEM_1_ENTRYID) & 1) && GetTypeId() == TYPEID_PLAYER)
+            {
+                fieldBuffer << ToPlayer()->GetVisibleItemEntryFor(target, uint8((index - PLAYER_VISIBLE_ITEM_1_ENTRYID) / 2));
             }
             else
             {

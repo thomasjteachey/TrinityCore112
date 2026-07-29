@@ -1527,6 +1527,22 @@ void World::LoadConfigSettings(bool reload)
     // another seal, letting one melee swing benefit from both. 0 disables.
     m_int_configs[CONFIG_CENTURION_PALADIN_SEAL_TWIST_WINDOW_MS] = sConfigMgr->GetIntDefault("Centurion.Paladin.SealTwistWindowMs", 400);
 
+    // Transmogrification
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_ENABLE] = sConfigMgr->GetBoolDefault("Centurion.Transmog.Enable", true);
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_DEFAULT_ENABLED] = sConfigMgr->GetBoolDefault("Centurion.Transmog.DefaultEnabled", true);
+    m_int_configs[CONFIG_CENTURION_TRANSMOG_TOKEN_ENTRY] = sConfigMgr->GetIntDefault("Centurion.Transmog.TokenEntry", 20558);
+    m_int_configs[CONFIG_CENTURION_TRANSMOG_TOKEN_COST] = sConfigMgr->GetIntDefault("Centurion.Transmog.TokenCost", 1);
+    // Bitmask over ItemQualities: bit N allows quality N. 28 = uncommon|rare|epic.
+    m_int_configs[CONFIG_CENTURION_TRANSMOG_QUALITY_MASK] = sConfigMgr->GetIntDefault("Centurion.Transmog.QualityMask", 28);
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_ALLOW_MIXED_ARMOR_TYPES] = sConfigMgr->GetBoolDefault("Centurion.Transmog.AllowMixedArmorTypes", false);
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_ALLOW_MIXED_WEAPON_TYPES] = sConfigMgr->GetBoolDefault("Centurion.Transmog.AllowMixedWeaponTypes", false);
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_ALLOW_FISHING_POLES] = sConfigMgr->GetBoolDefault("Centurion.Transmog.AllowFishingPoles", false);
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_IGNORE_REQ_CLASS] = sConfigMgr->GetBoolDefault("Centurion.Transmog.IgnoreReqClass", false);
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_IGNORE_REQ_RACE] = sConfigMgr->GetBoolDefault("Centurion.Transmog.IgnoreReqRace", false);
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_IGNORE_REQ_LEVEL] = sConfigMgr->GetBoolDefault("Centurion.Transmog.IgnoreReqLevel", false);
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_IGNORE_REQ_SKILL] = sConfigMgr->GetBoolDefault("Centurion.Transmog.IgnoreReqSkill", false);
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_IGNORE_REQ_SPELL] = sConfigMgr->GetBoolDefault("Centurion.Transmog.IgnoreReqSpell", false);
+
     // Max instances per hour
     m_int_configs[CONFIG_MAX_INSTANCES_PER_HOUR] = sConfigMgr->GetIntDefault("AccountInstancesPerHour", 5);
 

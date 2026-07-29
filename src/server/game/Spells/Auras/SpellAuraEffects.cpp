@@ -2728,25 +2728,7 @@ void AuraEffect::HandleAuraMounted(AuraApplication const* aurApp, uint8 mode, bo
         if (GetId() == SpellHunterBeastRider)
             if (Player* player = target->ToPlayer())
                 if (Pet* pet = player->GetPet())
-                {
                     petModelDisplayId = pet->GetNativeDisplayId();
-
-                    // TEMP DIAGNOSTIC (2026-07-26): print exactly what values are
-                    // in play at mount time -- remove once the size issue is solved.
-                    uint32 diagLiveDisplayId = pet->GetDisplayId();
-                    float diagPetObjectScale = pet->GetObjectScale();
-                    float diagDisplayScale = 0.0f;
-                    float diagModelScale = 0.0f;
-                    if (CreatureDisplayInfoEntry const* diagDisplay = sCreatureDisplayInfoStore.LookupEntry(petModelDisplayId))
-                    {
-                        diagDisplayScale = diagDisplay->CreatureModelScale;
-                        if (CreatureModelDataEntry const* diagModel = sCreatureModelDataStore.LookupEntry(diagDisplay->ModelID))
-                            diagModelScale = diagModel->ModelScale;
-                    }
-                    ChatHandler(player->GetSession()).PSendSysMessage(
-                        "|cff00ff00[BeastRiderDiag]|r nativeDisplayId=%u liveDisplayId=%u petObjectScale=%.3f displayScale=%.3f modelDataScale=%.3f",
-                        petModelDisplayId, diagLiveDisplayId, diagPetObjectScale, diagDisplayScale, diagModelScale);
-                }
 
         if (CreatureTemplate const* creatureInfo = sObjectMgr->GetCreatureTemplate(creatureEntry))
         {

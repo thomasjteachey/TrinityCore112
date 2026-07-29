@@ -13190,6 +13190,223 @@ void Player::SetVisibleItemSlot(uint8 slot, Item* pItem)
         SetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENTRYID + (slot * 2), 0);
         SetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENCHANTMENT + (slot * 2), 0);
     }
+
+    // Track the field, not m_items: several unequip paths null the slot only after
+    // calling this, and a cache built from a stale m_items would leave an
+    // appearance hanging on an empty slot.
+    if (slot < EQUIPMENT_SLOT_END)
+        _transmogSlotCache[slot] = pItem ? GetTransmogEntry(pItem->GetGUID()) : 0;
+}
+
+void Player::RefreshTransmogSlot(uint8 slot)
+{
+    if (slot >= EQUIPMENT_SLOT_END)
+        return;
+
+    _transmogSlotCache[slot] = 0;
+
+    if (_transmogs.empty())
+        return;
+
+    if (Item const* item = GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+    {
+        auto const itr = _transmogs.find(item->GetGUID());
+        if (itr != _transmogs.end())
+            _transmogSlotCache[slot] = itr->second;
+    }
+}
+
+void Player::RebuildTransmogCache()
+{
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        RefreshTransmogSlot(slot);
+}
+
+uint32 Player::GetTransmogEntry(ObjectGuid itemGuid) const
+{
+    auto const itr = _transmogs.find(itemGuid);
+    return itr != _transmogs.end() ? itr->second : 0;
+}
+
+void Player::SetTransmog(Item* item, uint32 fakeEntry)
+{
+    if (!item)
+        return;
+
+    _transmogs[item->GetGUID()] = fakeEntry;
+
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_REP_TRANSMOG);
+    stmt->setUInt32(0, item->GetGUID().GetCounter());
+    stmt->setUInt32(1, fakeEntry);
+    CharacterDatabase.Execute(stmt);
+
+    RebuildTransmogCache();
+    RefreshTransmogForObservers();
+}
+
+void Player::RemoveTransmog(Item* item)
+{
+    if (!item)
+        return;
+
+    if (!_transmogs.erase(item->GetGUID()))
+        return;
+
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_TRANSMOG);
+    stmt->setUInt32(0, item->GetGUID().GetCounter());
+    CharacterDatabase.Execute(stmt);
+
+    RebuildTransmogCache();
+    RefreshTransmogForObservers();
+}
+
+uint32 Player::RemoveAllTransmogs()
+{
+    if (_transmogs.empty())
+        return 0;
+
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    for (auto const& transmog : _transmogs)
+    {
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_TRANSMOG);
+        stmt->setUInt32(0, transmog.first.GetCounter());
+        trans->Append(stmt);
+    }
+    CharacterDatabase.CommitTransaction(trans);
+
+    uint32 const removed = uint32(_transmogs.size());
+    _transmogs.clear();
+
+    RebuildTransmogCache();
+    RefreshTransmogForObservers();
+    return removed;
+}
+
+void Player::SetTransmogEnabled(bool enabled)
+{
+    if (_transmogEnabled == enabled)
+        return;
+
+    _transmogEnabled = enabled;
+
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_REP_TRANSMOG_SETTINGS);
+    stmt->setUInt32(0, GetGUID().GetCounter());
+    stmt->setUInt8(1, enabled ? 1 : 0);
+    CharacterDatabase.Execute(stmt);
+
+    // The flag is a symmetric opt-out, so both directions have to be refreshed:
+    // what everyone else sees on me, and what I see on everyone else.
+    RefreshTransmogForObservers();
+    RefreshTransmogView();
+}
+
+uint32 Player::GetVisibleItemEntryFor(Player const* observer, uint8 slot) const
+{
+    if (slot >= EQUIPMENT_SLOT_END)
+        return 0;
+
+    uint32 const real = GetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENTRYID + (slot * 2));
+
+    uint32 const fake = _transmogSlotCache[slot];
+    if (!fake)
+        return real;
+
+    if (!sWorld->getBoolConfig(CONFIG_CENTURION_TRANSMOG_ENABLE))
+        return real;
+
+    // Either side opting out drops the whole pair back to real gear.
+    if (!_transmogEnabled || !observer || !observer->IsTransmogEnabled())
+        return real;
+
+    return fake;
+}
+
+void Player::SendVisibleItemUpdateTo(Player* receiver)
+{
+    if (!receiver || !receiver->GetSession() || !receiver->HaveAtClient(this))
+        return;
+
+    // Appearance changes never dirty the underlying field, so force the visible-item
+    // entry bits on for this one build, then put the change mask back exactly as it
+    // was: a real pending change must not be swallowed here.
+    std::array<bool, EQUIPMENT_SLOT_END> wasDirty{};
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        uint16 const index = PLAYER_VISIBLE_ITEM_1_ENTRYID + (slot * 2);
+        wasDirty[slot] = _changesMask.GetBit(index);
+        _changesMask.SetBit(index);
+    }
+
+    UpdateData updateData;
+    BuildValuesUpdateBlockForPlayer(&updateData, receiver);
+
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        if (!wasDirty[slot])
+            _changesMask.UnsetBit(PLAYER_VISIBLE_ITEM_1_ENTRYID + (slot * 2));
+
+    WorldPacket packet;
+    if (updateData.BuildPacket(&packet))
+        receiver->SendDirectMessage(&packet);
+}
+
+void Player::RefreshTransmogForObservers()
+{
+    if (!IsInWorld())
+        return;
+
+    SendVisibleItemUpdateTo(this);
+
+    std::list<Player*> nearby;
+    GetPlayerListInGrid(nearby, GetVisibilityRange(), false);
+
+    for (Player* observer : nearby)
+        if (observer != this)
+            SendVisibleItemUpdateTo(observer);
+}
+
+void Player::RefreshTransmogView()
+{
+    if (!IsInWorld())
+        return;
+
+    SendVisibleItemUpdateTo(this);
+
+    std::list<Player*> nearby;
+    GetPlayerListInGrid(nearby, GetVisibilityRange(), false);
+
+    for (Player* wearer : nearby)
+        if (wearer != this)
+            wearer->SendVisibleItemUpdateTo(this);
+}
+
+void Player::_LoadTransmogs(PreparedQueryResult transmogs, PreparedQueryResult settings)
+{
+    _transmogs.clear();
+    _transmogEnabled = sWorld->getBoolConfig(CONFIG_CENTURION_TRANSMOG_DEFAULT_ENABLED);
+
+    if (settings)
+        _transmogEnabled = (*settings)[0].GetUInt8() != 0;
+
+    if (transmogs)
+    {
+        do
+        {
+            Field* fields = transmogs->Fetch();
+            uint32 const itemGuid = fields[0].GetUInt32();
+            uint32 const fakeEntry = fields[1].GetUInt32();
+
+            if (!sObjectMgr->GetItemTemplate(fakeEntry))
+            {
+                TC_LOG_ERROR("entities.player.items", "Player::_LoadTransmogs: Player '{}' ({}) has a transmog to unknown item {} on item {}, ignored.",
+                    GetName(), GetGUID().ToString(), fakeEntry, itemGuid);
+                continue;
+            }
+
+            _transmogs[ObjectGuid::Create<HighGuid::Item>(itemGuid)] = fakeEntry;
+        } while (transmogs->NextRow());
+    }
+
+    RebuildTransmogCache();
 }
 
 void Player::VisualizeItem(uint8 slot, Item* pItem)
@@ -13379,6 +13596,9 @@ void Player::DestroyItem(uint8 bag, uint8 slot, bool update)
 
         RemoveEnchantmentDurations(pItem);
         RemoveItemDurations(pItem);
+
+        // the DB row goes with Item::DeleteFromDB, this just drops the cached appearance
+        _transmogs.erase(pItem->GetGUID());
 
         pItem->SetNotRefundable(this);
         pItem->ClearSoulboundTradeable(this);
@@ -18775,6 +18995,10 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
 
     _LoadInventory(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_INVENTORY), time_diff);
 
+    // must be after inventory: the slot cache is built from the equipped items
+    _LoadTransmogs(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_TRANSMOGS),
+        holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_TRANSMOG_SETTINGS));
+
     // update items with duration and realtime
     UpdateItemDuration(time_diff, true);
 
@@ -20444,9 +20668,11 @@ void Player::SaveToDB(CharacterDatabaseTransaction trans, bool create /* = false
         stmt->setString(index++, ss.str());
 
         ss.str("");
-        // cache equipment...
+        // cache equipment... (entry halves carry the appearance this character sees
+        // on itself, so the character select screen matches the in-world look)
         for (uint32 i = 0; i < EQUIPMENT_SLOT_END * 2; ++i)
-            ss << GetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENTRYID + i) << ' ';
+            ss << ((i & 1) ? GetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENTRYID + i)
+                           : GetVisibleItemEntryFor(this, uint8(i / 2))) << ' ';
 
         // ...and bags for enum opcode
         for (uint32 i = INVENTORY_SLOT_BAG_START; i < INVENTORY_SLOT_BAG_END; ++i)
@@ -20569,9 +20795,11 @@ void Player::SaveToDB(CharacterDatabaseTransaction trans, bool create /* = false
         stmt->setString(index++, ss.str());
 
         ss.str("");
-        // cache equipment...
+        // cache equipment... (entry halves carry the appearance this character sees
+        // on itself, so the character select screen matches the in-world look)
         for (uint32 i = 0; i < EQUIPMENT_SLOT_END * 2; ++i)
-            ss << GetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENTRYID + i) << ' ';
+            ss << ((i & 1) ? GetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENTRYID + i)
+                           : GetVisibleItemEntryFor(this, uint8(i / 2))) << ' ';
 
         // ...and bags for enum opcode
         for (uint32 i = INVENTORY_SLOT_BAG_START; i < INVENTORY_SLOT_BAG_END; ++i)

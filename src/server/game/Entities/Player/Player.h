@@ -744,6 +744,8 @@ enum PlayerLoginQueryIndex
     PLAYER_LOGIN_QUERY_LOAD_MONTHLY_QUEST_STATUS    = 32,
     PLAYER_LOGIN_QUERY_LOAD_CORPSE_LOCATION         = 33,
     PLAYER_LOGIN_QUERY_LOAD_PET_SLOTS               = 34,
+    PLAYER_LOGIN_QUERY_LOAD_TRANSMOGS               = 35,
+    PLAYER_LOGIN_QUERY_LOAD_TRANSMOG_SETTINGS       = 36,
     MAX_PLAYER_LOGIN_QUERY
 };
 
@@ -1188,6 +1190,26 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void QuickEquipItem(uint16 pos, Item* pItem);
         void VisualizeItem(uint8 slot, Item* pItem);
         void SetVisibleItemSlot(uint8 slot, Item* pItem);
+
+        // Transmogrification. The visible-item update fields always hold the real
+        // item entry; the fake entry is substituted per observer when the packet is
+        // built, so the display flag can be honoured on both sides at once.
+        bool IsTransmogEnabled() const { return _transmogEnabled; }
+        void SetTransmogEnabled(bool enabled);
+        uint32 GetTransmogEntry(ObjectGuid itemGuid) const;
+        void SetTransmog(Item* item, uint32 fakeEntry);
+        void RemoveTransmog(Item* item);
+        uint32 RemoveAllTransmogs();
+        // Entry the given observer should see in the given equipment slot.
+        uint32 GetVisibleItemEntryFor(Player const* observer, uint8 slot) const;
+        void RebuildTransmogCache();
+        void RefreshTransmogSlot(uint8 slot);
+        // Resend this player's visible-item fields to a single observer.
+        void SendVisibleItemUpdateTo(Player* receiver);
+        // My appearance changed: push it to everyone who can see me.
+        void RefreshTransmogForObservers();
+        // My display flag changed: pull everyone else's appearance back to me.
+        void RefreshTransmogView();
         Item* BankItem(ItemPosCountVec const& dest, Item* pItem, bool update);
         void RemoveItem(uint8 bag, uint8 slot, bool update);
         void MoveItemFromInventory(uint8 bag, uint8 slot, bool update);
@@ -2390,6 +2412,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void _LoadTalents(PreparedQueryResult result);
         void _LoadInstanceTimeRestrictions(PreparedQueryResult result);
         void _LoadPetStable(uint8 petStableSlots, PreparedQueryResult result);
+        void _LoadTransmogs(PreparedQueryResult transmogs, PreparedQueryResult settings);
 
         /*********************************************************/
         /***                   SAVE SYSTEM                     ***/
@@ -2441,6 +2464,12 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
 
         Item* m_items[PLAYER_SLOTS_COUNT];
         uint32 m_currentBuybackSlot;
+
+        // Transmogrification: appearance per owned item, plus a flat per-equipment-slot
+        // cache so the packet-build path never touches the map.
+        std::unordered_map<ObjectGuid, uint32> _transmogs;
+        std::array<uint32, EQUIPMENT_SLOT_END> _transmogSlotCache{};
+        bool _transmogEnabled{ true };
 
         std::vector<Item*> m_itemUpdateQueue;
         bool m_itemUpdateQueueBlocked;
