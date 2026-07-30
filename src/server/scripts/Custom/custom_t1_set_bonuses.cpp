@@ -14,6 +14,7 @@
 
 #include "ScriptMgr.h"
 #include "CellImpl.h"
+#include "SpellDefines.h"
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
 #include "Item.h"
@@ -235,7 +236,26 @@ class spell_t1_flare : public AuraScript
             return;
         if (!caster->IsValidAttackTarget(target))
             return;
-        caster->CastSpell(target, SPELL_T1_LESSER_MARK, true);
+
+        // Lesser Hunter's Mark mirrors the STRONGEST Hunter's Mark the hunter
+        // actually knows - the ranged-AP value is lifted off that rank rather
+        // than being a fixed number, so the bonus keeps up as they train.
+        int32 amount = 20;
+        if (Player* player = caster->ToPlayer())
+        {
+            static uint32 const hmRanks[] = { 53338, 14325, 14324, 14323, 1130 };
+            for (uint32 rank : hmRanks)
+                if (player->HasSpell(rank))
+                {
+                    if (SpellInfo const* info = sSpellMgr->GetSpellInfo(rank))
+                        amount = info->GetEffect(EFFECT_1).CalcValue(caster);
+                    break;
+                }
+        }
+
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        args.AddSpellBP0(amount);
+        caster->CastSpell(target, SPELL_T1_LESSER_MARK, args);
         if (Aura* mark = target->GetAura(SPELL_T1_LESSER_MARK, caster->GetGUID()))
         {
             mark->SetMaxDuration(45 * IN_MILLISECONDS);
@@ -346,7 +366,9 @@ class spell_t1_mind_control : public AuraScript
 
     void Register() override
     {
-        AfterEffectRemove += AuraEffectRemoveFn(spell_t1_mind_control::HandleRemove, EFFECT_0, SPELL_AURA_MOD_CHARM, AURA_EFFECT_HANDLE_REAL);
+        // Mind Control's EFFECT_0 is MOD_POSSESS on this core, not MOD_CHARM -
+        // matching a specific aura name made the hook silently never bind.
+        AfterEffectRemove += AuraEffectRemoveFn(spell_t1_mind_control::HandleRemove, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
@@ -446,7 +468,7 @@ class spell_t1_feral_charge : public SpellScript
 {
     PrepareSpellScript(spell_t1_feral_charge);
 
-    void HandleCharge(SpellEffIndex /*effIndex*/)
+    void HandleAfterHit()
     {
         Unit* caster = GetCaster();
         Unit* target = GetHitUnit();
@@ -458,7 +480,10 @@ class spell_t1_feral_charge : public SpellScript
 
     void Register() override
     {
-        OnEffectHitTarget += SpellEffectFn(spell_t1_feral_charge::HandleCharge, EFFECT_0, SPELL_EFFECT_CHARGE);
+        // AfterHit rather than an effect hook: bear charge is EFFECT_0
+        // SPELL_EFFECT_CHARGE but cat charge is a jump+triggers layout, and
+        // one effect-matched handler cannot fit both.
+        AfterHit += SpellHitFn(spell_t1_feral_charge::HandleAfterHit);
     }
 };
 
