@@ -4207,6 +4207,13 @@ void Unit::RemoveOwnedAura(AuraMap::iterator& i, AuraRemoveMode removeMode)
     Aura* aura = i->second;
     ASSERT(!aura->IsRemoved());
 
+    // TEMP DIAGNOSTIC: Lesser Hunter's Mark vanishes from earlier targets on
+    // each new application, yet nothing in code or data flags it single-target.
+    // Log every removal with its mode so the responsible path can be identified.
+    if (aura->GetId() == 90110)
+        TC_LOG_ERROR("entities.unit", "LHM-DIAG: 90110 removed from {} (mode {}, {} ms left, single-target flag {})",
+            GetName(), uint32(removeMode), aura->GetDuration(), uint32(aura->IsSingleTarget()));
+
     // if unit currently update aura list then make safe update iterator shift to next
     if (m_auraUpdateIterator == i)
         ++m_auraUpdateIterator;

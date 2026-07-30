@@ -83,6 +83,18 @@ namespace
         return main->GetTemplate()->InventoryType != INVTYPE_2HWEAPON
             && off->GetTemplate()->InventoryType != INVTYPE_2HWEAPON;
     }
+
+    // The Flurry buffs innately apply with their full 3 attack charges; the
+    // set bonus grants exactly one swing's worth, stacking up to that cap.
+    void GrantOneFlurryCharge(Player* player, uint32 buffId)
+    {
+        uint8 charges = 0;
+        if (Aura* existing = player->GetAura(buffId))
+            charges = existing->GetCharges();
+        player->CastSpell(player, buffId, true);
+        if (Aura* buff = player->GetAura(buffId))
+            buff->SetCharges(std::min<uint8>(charges + 1, 3));
+    }
 }
 
 // 90128 - Frenzied Rhythm (fury 5pc): off-hand hits 50% chance for 1 rage.
@@ -216,8 +228,10 @@ class spell_t1_hunters_mark : public AuraScript
 
     void Register() override
     {
-        AfterEffectApply += AuraEffectApplyFn(spell_t1_hunters_mark::HandleApply, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
-        AfterEffectRemove += AuraEffectRemoveFn(spell_t1_hunters_mark::HandleRemove, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+        // EFFECT_FIRST_FOUND, not EFFECT_0: this script also rides Lesser
+        // Hunter's Mark (90110), whose effect 0 (the stealth reveal) is empty.
+        AfterEffectApply += AuraEffectApplyFn(spell_t1_hunters_mark::HandleApply, EFFECT_FIRST_FOUND, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_t1_hunters_mark::HandleRemove, EFFECT_FIRST_FOUND, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
@@ -237,25 +251,11 @@ class spell_t1_flare : public AuraScript
         if (!caster->IsValidAttackTarget(target))
             return;
 
-        // Lesser Hunter's Mark mirrors the STRONGEST Hunter's Mark the hunter
-        // actually knows - the ranged-AP value is lifted off that rank rather
-        // than being a fixed number, so the bonus keeps up as they train.
-        int32 amount = 20;
-        if (Player* player = caster->ToPlayer())
-        {
-            static uint32 const hmRanks[] = { 53338, 14325, 14324, 14323, 1130 };
-            for (uint32 rank : hmRanks)
-                if (player->HasSpell(rank))
-                {
-                    if (SpellInfo const* info = sSpellMgr->GetSpellInfo(rank))
-                        amount = info->GetEffect(EFFECT_1).CalcValue(caster);
-                    break;
-                }
-        }
-
-        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
-        args.AddSpellBP0(amount);
-        caster->CastSpell(target, SPELL_T1_LESSER_MARK, args);
+        // Lesser Hunter's Mark IS Hunter's Mark rank 4 in the dbc - same
+        // values, same family mask (so anything that modifies Hunter's Mark
+        // modifies this too), minus the MOD_STALKED reveal. Nothing to
+        // compute here; the spell carries its own numbers.
+        caster->CastSpell(target, SPELL_T1_LESSER_MARK, true);
         if (Aura* mark = target->GetAura(SPELL_T1_LESSER_MARK, caster->GetGUID()))
         {
             mark->SetMaxDuration(45 * IN_MILLISECONDS);
@@ -326,7 +326,8 @@ class spell_t1_mind_flay : public SpellScript
         if (!caster || !target || !caster->HasAura(SPELL_T1_MINDFLAY_PASSIVE))
             return;
 
-        Aura* swp = target->GetAura(SPELL_SWP, caster->GetGUID());
+        // ranked lookup: the priest casts whatever SWP rank they know, not rank 1
+        Aura* swp = target->GetAuraOfRankedSpell(SPELL_SWP, caster->GetGUID());
         if (!swp)
             return;
 
@@ -422,7 +423,7 @@ class spell_t1_rehgar_flurry : public SpellScript
         for (uint8 i = 0; i < 5; ++i)
             if (player->HasSpell(talents[i]) || player->HasAura(talents[i]))
             {
-                player->CastSpell(player, buffs[i], true);
+                GrantOneFlurryCharge(player, buffs[i]);
                 break;
             }
 
