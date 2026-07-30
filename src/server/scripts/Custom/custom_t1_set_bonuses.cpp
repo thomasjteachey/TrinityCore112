@@ -70,6 +70,7 @@ namespace
         SPELL_PRIEST_SHADOW_WRAITH      = 89784,
         NPC_PRIEST_SHADOW_WRAITH        = 89784,
         SPELL_SWP                       = 589,
+        SPELL_HUNTERS_MARK              = 1130,
     };
 
     bool IsDualWielding1H(Player const* player)
@@ -209,11 +210,28 @@ class spell_t1_hunters_mark : public AuraScript
 
     void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
+        Unit* target = GetTarget();
+
+        // Mark hierarchy: the proper Hunter's Mark outranks the lesser one.
+        // A lesser mark landing on a properly-marked target backs off; a
+        // proper mark landing evicts any lesser mark (before the rider is
+        // cast, so the eviction cannot strip the fresh rider below).
+        if (GetId() == SPELL_T1_LESSER_MARK)
+        {
+            if (target->GetAuraOfRankedSpell(SPELL_HUNTERS_MARK))
+            {
+                GetAura()->Remove();
+                return;
+            }
+        }
+        else
+            target->RemoveAurasDueToSpell(SPELL_T1_LESSER_MARK);
+
         Unit* caster = GetCaster();
         if (!caster || !caster->HasAura(SPELL_T1_HM_PASSIVE))
             return;
-        caster->CastSpell(GetTarget(), SPELL_T1_HM_DEBUFF, true);
-        if (Aura* rider = GetTarget()->GetAura(SPELL_T1_HM_DEBUFF, caster->GetGUID()))
+        caster->CastSpell(target, SPELL_T1_HM_DEBUFF, true);
+        if (Aura* rider = target->GetAura(SPELL_T1_HM_DEBUFF, caster->GetGUID()))
         {
             rider->SetMaxDuration(GetAura()->GetDuration());
             rider->SetDuration(GetAura()->GetDuration());
@@ -249,6 +267,9 @@ class spell_t1_flare : public AuraScript
         if (!caster || !caster->HasAura(SPELL_T1_FLARE_PASSIVE))
             return;
         if (!caster->IsValidAttackTarget(target))
+            return;
+        // the proper Hunter's Mark outranks the lesser one - don't even cast
+        if (target->GetAuraOfRankedSpell(SPELL_HUNTERS_MARK))
             return;
 
         // Lesser Hunter's Mark IS Hunter's Mark rank 4 in the dbc - same
