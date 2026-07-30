@@ -784,6 +784,9 @@ class spell_t1_moonkin_speed : public AuraScript
         Unit* druid = GetTarget();
         if (druid->GetShapeshiftForm() != FORM_MOONKIN)
         {
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Celestial Momentum tick - not in Moonkin Form (form {}), no stacks",
+                druid->GetName(), uint32(druid->GetShapeshiftForm())));
             druid->RemoveAurasDueToSpell(SPELL_T1_MOONKIN_SPEED);
             return;
         }
@@ -859,13 +862,23 @@ class spell_t1_school_stacks : public AuraScript
             return false;
         if (Spell const* spell = eventInfo.GetProcSpell())
             if (spell->IsTriggered())
+            {
+                SendCustomAuraDiag(Trinity::StringFormat(
+                    "[CustomAuras] {}: Prismatic - {} ({}) is a triggered spell, ignored",
+                    GetTarget()->GetName(), info->SpellName[DEFAULT_LOCALE], info->Id));
                 return false;
+            }
 
         uint32 const now = getMSTime();
         // several targets hit by one cast arrive as separate procs - same
         // spell inside half a second is the same button press
         if (info->Id == _lastSpellId && now - _lastTimeMs < 500)
+        {
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Prismatic - {} again within 500ms, same cast, ignored",
+                GetTarget()->GetName(), info->SpellName[DEFAULT_LOCALE]));
             return false;
+        }
         _lastSpellId = info->Id;
         _lastTimeMs = now;
 
@@ -874,9 +887,15 @@ class spell_t1_school_stacks : public AuraScript
         _lastSchool = school;
         if (repeat)
         {
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Prismatic - {} repeats school mask {} - STACKS RESET",
+                GetTarget()->GetName(), info->SpellName[DEFAULT_LOCALE], school));
             GetTarget()->RemoveAurasDueToSpell(SPELL_T1_SCHOOL_STACK);
             return false;
         }
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Prismatic - {} (school mask {}) is a new school - stacking",
+            GetTarget()->GetName(), info->SpellName[DEFAULT_LOCALE], school));
         return true;
     }
 
@@ -887,6 +906,10 @@ class spell_t1_school_stacks : public AuraScript
             stack->ModStackAmount(1);   // refreshes duration, capped at 15
         else
             mage->CastSpell(mage, SPELL_T1_SCHOOL_STACK, true);
+        if (Aura* stack = mage->GetAura(SPELL_T1_SCHOOL_STACK))
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Prismatic Insight now at {} stack(s)",
+                mage->GetName(), uint32(stack->GetStackAmount())));
     }
 
     void Register() override
