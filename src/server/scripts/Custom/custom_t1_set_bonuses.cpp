@@ -685,7 +685,8 @@ class spell_t1_reckoning_heal : public SpellScript
             if (Aura* charges = caster->GetAura(id))
             {
                 charges->Remove();
-                SetHitHeal(AddPct(GetHitHeal(), 40));
+                int32 heal = GetHitHeal();
+                SetHitHeal(AddPct(heal, 40));
                 SendCustomAuraDiag(Trinity::StringFormat(
                     "[CustomAuras] {}: Righteous Reckoning consumed {} - heal +40%",
                     caster->GetName(), id));
@@ -939,7 +940,10 @@ class spell_t1_lightning_range : public SpellScript
         float const dist = std::min(caster->GetDistance(target), 36.0f);
         int32 const pct = int32(dist / 36.0f * 8.0f);
         if (pct > 0)
-            SetHitDamage(AddPct(GetHitDamage(), pct));
+        {
+            int32 damage = GetHitDamage();
+            SetHitDamage(AddPct(damage, pct));
+        }
     }
 
     void Register() override
