@@ -13465,10 +13465,21 @@ float Unit::MeleeSpellMissChance(Unit const* victim, WeaponAttackType attType, i
         {
             Item* main = player->GetWeaponForAttack(BASE_ATTACK);
             Item* off = player->GetWeaponForAttack(OFF_ATTACK);
-            if (main && off
+            bool const dualWield1H = main && off
                 && main->GetTemplate()->InventoryType != INVTYPE_2HWEAPON
-                && off->GetTemplate()->InventoryType != INVTYPE_2HWEAPON)
+                && off->GetTemplate()->InventoryType != INVTYPE_2HWEAPON;
+            if (dualWield1H)
                 missChance -= 3.0f;
+
+            // .gm diagnostics customauras
+            for (auto const& sessionPair : sWorld->GetAllSessions())
+                if (sessionPair.second && sessionPair.second->GetPlayer()
+                    && sessionPair.second->IsGmDiagnosticEnabled(GmDiagnosticCategory::CustomAuras))
+                    ChatHandler(sessionPair.second).PSendSysMessage(
+                        "[CustomAuras] %s: Ambidexterity %s off-hand %s (spell %u), miss now %.1f%%",
+                        player->GetName().c_str(),
+                        dualWield1H ? "-3 pct miss on" : "INACTIVE (needs two one-handers) for",
+                        spellId ? "ability" : "swing", spellId, missChance);
         }
 
     return std::max(missChance, 0.f);

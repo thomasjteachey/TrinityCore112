@@ -64,12 +64,13 @@ enum InventoryResult : uint8;
 
 enum class GmDiagnosticCategory : uint8
 {
-    Heartbeat = 0x01,
-    Combat    = 0x02,
-    Playerbot = 0x04,
-    Feign     = 0x08,
-    Channel   = 0x10,
-    All       = 0x1F
+    Heartbeat   = 0x01,
+    Combat      = 0x02,
+    Playerbot   = 0x04,
+    Feign       = 0x08,
+    Channel     = 0x10,
+    CustomAuras = 0x20,
+    All         = 0x3F
 };
 
 namespace lfg

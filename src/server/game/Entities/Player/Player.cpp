@@ -8806,12 +8806,32 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
             // is the attack type that delivered this proc.
             bool const isPoison = e_slot == TEMP_ENCHANTMENT_SLOT
                 && spellInfo->Dispel == DISPEL_POISON;
-            if (isPoison && damageInfo.GetAttackType() == OFF_ATTACK && HasAura(90119))
+            bool const coatedBlades = isPoison
+                && damageInfo.GetAttackType() == OFF_ATTACK && HasAura(90119);
+            if (coatedBlades)
                 chance += 12.0f;
+
+            // .gm diagnostics customauras
+            auto customAuraDiag = [](std::string const& msg)
+            {
+                for (auto const& sessionPair : sWorld->GetAllSessions())
+                    if (sessionPair.second && sessionPair.second->GetPlayer()
+                        && sessionPair.second->IsGmDiagnosticEnabled(GmDiagnosticCategory::CustomAuras))
+                        ChatHandler(sessionPair.second).SendSysMessage(msg.c_str());
+            };
+            if (isPoison)
+                customAuraDiag(Trinity::StringFormat("[CustomAuras] {}: {} poison attempt at {:.1f}%{}",
+                    GetName(),
+                    damageInfo.GetAttackType() == OFF_ATTACK ? "off-hand" : "main-hand",
+                    chance, coatedBlades ? " (includes +12% Coated Blades)" : ""));
 
             if (roll_chance_f(chance))
             {
                 Unit* target = spellInfo->IsPositive() ? this : damageInfo.GetVictim();
+
+                if (isPoison)
+                    customAuraDiag(Trinity::StringFormat("[CustomAuras] {}: poison APPLIED ({} {})",
+                        GetName(), spellInfo->SpellName[DEFAULT_LOCALE], spellInfo->Id));
 
                 // Assassination T1 8pc (Toxic Momentum, 90121): each poison
                 // application shaves 1 sec off whichever of Vanish, Blind or
@@ -8834,7 +8854,18 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
                         }
                     }
                     if (best)
+                    {
                         GetSpellHistory()->ModifyCooldown(best, -1000);
+                        SpellInfo const* bestInfo = sSpellMgr->GetSpellInfo(best);
+                        customAuraDiag(Trinity::StringFormat(
+                            "[CustomAuras] {}: Toxic Momentum -1.0s on {} ({}): {:.1f}s -> {:.1f}s left",
+                            GetName(), bestInfo->SpellName[DEFAULT_LOCALE], best,
+                            bestLeft / 1000.0f, std::max(int32(bestLeft) - 1000, 0) / 1000.0f));
+                    }
+                    else
+                        customAuraDiag(Trinity::StringFormat(
+                            "[CustomAuras] {}: Toxic Momentum - Vanish/Blind/Sprint all off cooldown, nothing to reduce",
+                            GetName()));
                 }
 
                 CastSpellExtraArgs args(item);

@@ -14,6 +14,7 @@
 
 #include "ScriptMgr.h"
 #include "CellImpl.h"
+#include "Chat.h"
 #include "SpellDefines.h"
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
@@ -27,6 +28,8 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "TemporarySummon.h"
+#include "World.h"
+#include "WorldSession.h"
 
 namespace
 {
@@ -85,6 +88,15 @@ namespace
             && off->GetTemplate()->InventoryType != INVTYPE_2HWEAPON;
     }
 
+    // .gm diagnostics customauras - broadcast to every opted-in GM session
+    void SendCustomAuraDiag(std::string const& msg)
+    {
+        for (auto const& sessionPair : sWorld->GetAllSessions())
+            if (sessionPair.second && sessionPair.second->GetPlayer()
+                && sessionPair.second->IsGmDiagnosticEnabled(GmDiagnosticCategory::CustomAuras))
+                ChatHandler(sessionPair.second).SendSysMessage(msg.c_str());
+    }
+
     // The Flurry buffs innately apply with their full 3 attack charges; the
     // set bonus grants exactly one swing's worth, stacking up to that cap.
     void GrantOneFlurryCharge(Player* player, uint32 buffId)
@@ -110,11 +122,21 @@ class spell_t1_fury_rage : public AuraScript
         if (!damageInfo || damageInfo->GetAttackType() != OFF_ATTACK)
             return false;
         Player* player = GetTarget()->ToPlayer();
-        return player && IsDualWielding1H(player);
+        if (!player)
+            return false;
+        bool const pass = IsDualWielding1H(player);
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Frenzied Rhythm off-hand hit {}",
+            player->GetName(),
+            pass ? "passed the gate - rolling 50%" : "gate FAILED (needs two one-handers)"));
+        return pass;
     }
 
     void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
     {
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Frenzied Rhythm proc SUCCESS - +1 rage",
+            GetTarget()->GetName()));
         GetTarget()->CastSpell(GetTarget(), SPELL_T1_FURY_RAGE_ENERGIZE, true);
     }
 
