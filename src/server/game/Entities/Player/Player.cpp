@@ -8820,10 +8820,13 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
                 {
                     static uint32 const cdSpells[] = { 1856, 1857, 26889, 2094, 2983, 8696, 11305 };
                     uint32 best = 0;
-                    Milliseconds bestLeft = Milliseconds::zero();
+                    uint32 bestLeft = 0;
                     for (uint32 cd : cdSpells)
                     {
-                        Milliseconds left = GetSpellHistory()->GetRemainingCooldown(sSpellMgr->AssertSpellInfo(cd));
+                        SpellInfo const* cdInfo = sSpellMgr->GetSpellInfo(cd);
+                        if (!cdInfo)
+                            continue;
+                        uint32 left = GetSpellHistory()->GetRemainingCooldown(cdInfo);
                         if (left > bestLeft)
                         {
                             bestLeft = left;
@@ -8831,7 +8834,7 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
                         }
                     }
                     if (best)
-                        GetSpellHistory()->ModifyCooldown(best, Milliseconds(-1000));
+                        GetSpellHistory()->ModifyCooldown(best, -1000);
                 }
 
                 CastSpellExtraArgs args(item);
