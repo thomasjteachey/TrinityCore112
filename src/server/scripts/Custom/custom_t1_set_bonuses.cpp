@@ -366,25 +366,56 @@ class spell_t1_mind_flay : public SpellScript
     {
         Unit* caster = GetCaster();
         Unit* target = GetHitUnit();
-        if (!caster || !target || !caster->HasAura(SPELL_T1_MINDFLAY_PASSIVE))
+        if (!caster || !target)
             return;
+        if (!caster->HasAura(SPELL_T1_MINDFLAY_PASSIVE))
+        {
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Gloom mind flay - no 8pc passive (90114), no extension",
+                caster->GetName()));
+            return;
+        }
 
         // ranked lookup: the priest casts whatever SWP rank they know, not rank 1
         Aura* swp = target->GetAuraOfRankedSpell(SPELL_SWP, caster->GetGUID());
         if (!swp)
+        {
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Gloom mind flay - no Shadow Word: Pain of yours on {}",
+                caster->GetName(), target->GetName()));
             return;
+        }
 
         int32 const base = swp->GetSpellInfo()->GetMaxDuration();
         int32 const cap = base + 6 * IN_MILLISECONDS;
         if (swp->GetMaxDuration() >= cap)
+        {
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Gloom mind flay - SWP already at cap ({:.1f}s max)",
+                caster->GetName(), swp->GetMaxDuration() / 1000.0f));
             return;
+        }
         int32 const extend = std::min(3 * IN_MILLISECONDS, cap - swp->GetMaxDuration());
         swp->SetMaxDuration(swp->GetMaxDuration() + extend);
         swp->SetDuration(swp->GetDuration() + extend);
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Gloom mind flay - SWP extended +{:.1f}s, now {:.1f}s left of {:.1f}s max",
+            caster->GetName(), extend / 1000.0f,
+            swp->GetDuration() / 1000.0f, swp->GetMaxDuration() / 1000.0f));
+    }
+
+    // fires on channel start regardless of gates - proves the script is bound
+    void HandleAfterCast()
+    {
+        if (Unit* caster = GetCaster())
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: mind flay cast (spell {}) - Gloom script is bound",
+                caster->GetName(), GetSpellInfo()->Id));
     }
 
     void Register() override
     {
+        AfterCast += SpellCastFn(spell_t1_mind_flay::HandleAfterCast);
         AfterHit += SpellHitFn(spell_t1_mind_flay::HandleAfterHit);
     }
 };
