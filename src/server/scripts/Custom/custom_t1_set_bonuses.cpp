@@ -74,6 +74,26 @@ namespace
         NPC_PRIEST_SHADOW_WRAITH        = 89784,
         SPELL_SWP                       = 589,
         SPELL_HUNTERS_MARK              = 1130,
+
+        // phase 3
+        SPELL_T1_SOW_MANA_PASSIVE       = 90139,
+        SPELL_T1_HOLY_SHIELD_PASSIVE    = 90140,
+        SPELL_T1_HOLY_SHIELD_WARD       = 90141,
+        SPELL_T1_RECKONING_PASSIVE      = 90142,
+        SPELL_T1_SOLSTICE_PASSIVE       = 90143,
+        SPELL_T1_SOLSTICE_DURATION      = 90144,
+        SPELL_T1_LUNAR_GRACE_PASSIVE    = 90145,
+        SPELL_T1_MOONKIN_SPEED_OFFENSE  = 90147,
+        SPELL_T1_MOONKIN_SPEED_DEFENSE  = 90148,
+        SPELL_T1_EVOCATION_PASSIVE      = 90149,
+        SPELL_T1_EVOCATION_WARD         = 90150,
+        SPELL_T1_SCHOOL_STACK           = 90152,
+        SPELL_T1_SOULFIRE_DAZE_PASSIVE  = 90156,
+        SPELL_T1_LB_RANGE_PASSIVE       = 90157,
+        SPELL_T1_ES_REFUND_PASSIVE      = 90158,
+        SPELL_DRUID_EMP_REGROWTH        = 81342,
+        SPELL_DRUID_EMP_REJUV           = 81343,
+        SPELL_WARLOCK_AFTERMATH_DAZE    = 18118,
     };
 
     bool IsDualWielding1H(Player const* player)
@@ -135,7 +155,7 @@ class spell_t1_fury_rage : public AuraScript
     void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
     {
         SendCustomAuraDiag(Trinity::StringFormat(
-            "[CustomAuras] {}: Frenzied Rhythm proc SUCCESS - +1 rage",
+            "[CustomAuras] {}: Frenzied Rhythm proc SUCCESS - +5 rage",
             GetTarget()->GetName()));
         GetTarget()->CastSpell(GetTarget(), SPELL_T1_FURY_RAGE_ENERGIZE, true);
     }
@@ -386,7 +406,11 @@ class spell_t1_mind_flay : public SpellScript
             return;
         }
 
-        int32 const base = swp->GetSpellInfo()->GetMaxDuration();
+        // CalcMaxDuration, not the raw spell duration: Improved SWP already
+        // stretches the applied aura (18s -> 24s), and diffing against the
+        // untalented base made the cap sit exactly where the talent put it -
+        // "+6 sec over base" must mean over what the priest actually applies.
+        int32 const base = swp->CalcMaxDuration(caster);
         int32 const cap = base + 6 * IN_MILLISECONDS;
         if (swp->GetMaxDuration() >= cap)
         {
@@ -600,8 +624,386 @@ class spell_t1_seal_damage : public SpellScript
     }
 };
 
+// 20351 \ 20350 \ 20168 - Seal of Wisdom mana procs, carrying the prot 3pc:
+// the restored mana is increased by 10%.
+class spell_t1_sow_mana : public SpellScript
+{
+    PrepareSpellScript(spell_t1_sow_mana);
+
+    void HandleEnergize(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        if (caster && caster->HasAura(SPELL_T1_SOW_MANA_PASSIVE))
+            SetEffectValue(CalculatePct(GetEffectValue(), 110));
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_t1_sow_mana::HandleEnergize, EFFECT_FIRST_FOUND, SPELL_EFFECT_ENERGIZE);
+    }
+};
+
+// 20925 - Holy Shield, carrying the prot 5pc: -3% spell damage taken while
+// the shield is up, via a hidden ward toggled with the shield itself.
+class spell_t1_holy_shield : public AuraScript
+{
+    PrepareAuraScript(spell_t1_holy_shield);
+
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* target = GetTarget();
+        if (target->HasAura(SPELL_T1_HOLY_SHIELD_PASSIVE))
+            target->CastSpell(target, SPELL_T1_HOLY_SHIELD_WARD, true);
+    }
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        GetTarget()->RemoveAurasDueToSpell(SPELL_T1_HOLY_SHIELD_WARD);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(spell_t1_holy_shield::HandleApply, EFFECT_FIRST_FOUND, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_t1_holy_shield::HandleRemove, EFFECT_FIRST_FOUND, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 19750 \ 635 - Flash of Light and Holy Light, carrying the prot 8pc: any
+// Reckoning charges are consumed and the heal grows by 40%.
+class spell_t1_reckoning_heal : public SpellScript
+{
+    PrepareSpellScript(spell_t1_reckoning_heal);
+
+    void HandleHit()
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !caster->HasAura(SPELL_T1_RECKONING_PASSIVE))
+            return;
+        // whichever Reckoning aura actually carries the charges on this core
+        static uint32 const reckoning[] = { 20178, 20177, 20179, 20180, 20181, 20182, 32746 };
+        for (uint32 id : reckoning)
+            if (Aura* charges = caster->GetAura(id))
+            {
+                charges->Remove();
+                SetHitHeal(AddPct(GetHitHeal(), 40));
+                SendCustomAuraDiag(Trinity::StringFormat(
+                    "[CustomAuras] {}: Righteous Reckoning consumed {} - heal +40%",
+                    caster->GetName(), id));
+                return;
+            }
+    }
+
+    void Register() override
+    {
+        OnHit += SpellHitFn(spell_t1_reckoning_heal::HandleHit);
+    }
+};
+
+// 81342 \ 81343 - Empowered Regrowth \ Rejuvenation, carrying the balance
+// 3pc: while either is up, Regrowth and Rejuvenation last 3 sec longer
+// (hidden duration spellmod, removed when the last empowered effect fades).
+class spell_t1_empowered_duration : public AuraScript
+{
+    PrepareAuraScript(spell_t1_empowered_duration);
+
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* target = GetTarget();
+        if (target->HasAura(SPELL_T1_SOLSTICE_PASSIVE))
+            target->CastSpell(target, SPELL_T1_SOLSTICE_DURATION, true);
+    }
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* target = GetTarget();
+        uint32 const other = GetId() == SPELL_DRUID_EMP_REGROWTH
+            ? SPELL_DRUID_EMP_REJUV : SPELL_DRUID_EMP_REGROWTH;
+        if (!target->HasAura(other))
+            target->RemoveAurasDueToSpell(SPELL_T1_SOLSTICE_DURATION);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(spell_t1_empowered_duration::HandleApply, EFFECT_FIRST_FOUND, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_t1_empowered_duration::HandleRemove, EFFECT_FIRST_FOUND, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 8921 - Moonfire, carrying the balance 5pc: each tick has a 15% chance to
+// grant Empowered Rejuvenation or Empowered Regrowth.
+class spell_t1_moonfire_empower : public AuraScript
+{
+    PrepareAuraScript(spell_t1_moonfire_empower);
+
+    void HandlePeriodic(AuraEffect const* /*aurEff*/)
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !caster->HasAura(SPELL_T1_LUNAR_GRACE_PASSIVE))
+            return;
+        if (!roll_chance_i(15))
+            return;
+        caster->CastSpell(caster, urand(0, 1) ? SPELL_DRUID_EMP_REJUV
+                                              : SPELL_DRUID_EMP_REGROWTH, true);
+    }
+
+    void Register() override
+    {
+        OnEffectPeriodic += AuraEffectPeriodicFn(spell_t1_moonfire_empower::HandlePeriodic, EFFECT_FIRST_FOUND, SPELL_AURA_PERIODIC_DAMAGE);
+    }
+};
+
+// 90146 - Celestial Momentum (balance 8pc): once a second, count this
+// druid's Moonfire\Insect Swarm on enemies and Regrowth\Rejuvenation on
+// allies within 100 yd, and mirror the counts into two stacking 4% speed
+// auras. Moonkin form only.
+class spell_t1_moonkin_speed : public AuraScript
+{
+    PrepareAuraScript(spell_t1_moonkin_speed);
+
+    static void SetStacks(Unit* druid, uint32 spellId, uint32 count)
+    {
+        if (!count)
+        {
+            druid->RemoveAurasDueToSpell(spellId);
+            return;
+        }
+        if (!druid->HasAura(spellId))
+            druid->CastSpell(druid, spellId, true);
+        if (Aura* aura = druid->GetAura(spellId))
+        {
+            aura->SetStackAmount(uint8(std::min<uint32>(count, 99)));
+            aura->RefreshDuration();
+        }
+    }
+
+    void HandlePeriodic(AuraEffect const* /*aurEff*/)
+    {
+        Unit* druid = GetTarget();
+        if (druid->GetShapeshiftForm() != FORM_MOONKIN)
+        {
+            druid->RemoveAurasDueToSpell(SPELL_T1_MOONKIN_SPEED_OFFENSE);
+            druid->RemoveAurasDueToSpell(SPELL_T1_MOONKIN_SPEED_DEFENSE);
+            return;
+        }
+        std::list<Unit*> units;
+        Trinity::AnyUnitInObjectRangeCheck check(druid, 100.0f);
+        Trinity::UnitListSearcher<Trinity::AnyUnitInObjectRangeCheck> searcher(druid, units, check);
+        Cell::VisitAllObjects(druid, searcher, 100.0f);
+        uint32 offense = 0, defense = 0;
+        for (Unit* unit : units)
+            for (auto const& pair : unit->GetAppliedAuras())
+            {
+                Aura const* aura = pair.second->GetBase();
+                if (aura->GetCasterGUID() != druid->GetGUID())
+                    continue;
+                SpellInfo const* info = aura->GetSpellInfo();
+                if (info->SpellFamilyName != SPELLFAMILY_DRUID)
+                    continue;
+                // moonfire 0x2, insect swarm 0x200000 - hostile side
+                if ((info->SpellFamilyFlags[0] & 0x200002) && druid->IsValidAttackTarget(unit))
+                    ++offense;
+                // regrowth 0x40, rejuvenation 0x10 - friendly side
+                else if ((info->SpellFamilyFlags[0] & 0x50) && !druid->IsValidAttackTarget(unit))
+                    ++defense;
+            }
+        SetStacks(druid, SPELL_T1_MOONKIN_SPEED_OFFENSE, offense);
+        SetStacks(druid, SPELL_T1_MOONKIN_SPEED_DEFENSE, defense);
+    }
+
+    void Register() override
+    {
+        OnEffectPeriodic += AuraEffectPeriodicFn(spell_t1_moonkin_speed::HandlePeriodic, EFFECT_FIRST_FOUND, SPELL_AURA_PERIODIC_DUMMY);
+    }
+};
+
+// 12051 - Evocation, carrying the mage 3pc: full pushback immunity for
+// exactly as long as the channel aura is on the mage.
+class spell_t1_evocation_pushback : public AuraScript
+{
+    PrepareAuraScript(spell_t1_evocation_pushback);
+
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* target = GetTarget();
+        if (target->HasAura(SPELL_T1_EVOCATION_PASSIVE))
+            target->CastSpell(target, SPELL_T1_EVOCATION_WARD, true);
+    }
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        GetTarget()->RemoveAurasDueToSpell(SPELL_T1_EVOCATION_WARD);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(spell_t1_evocation_pushback::HandleApply, EFFECT_FIRST_FOUND, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_t1_evocation_pushback::HandleRemove, EFFECT_FIRST_FOUND, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 90151 - Prismatic Insight (mage 5pc): damaging spell hits from a school
+// different to the previous CAST add a stack; repeating a school clears the
+// stacks. Triggered spells and extra targets of the same cast are ignored -
+// only deliberate casts move the tracker.
+class spell_t1_school_stacks : public AuraScript
+{
+    PrepareAuraScript(spell_t1_school_stacks);
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        SpellInfo const* info = eventInfo.GetSpellInfo();
+        DamageInfo* damageInfo = eventInfo.GetDamageInfo();
+        if (!info || !damageInfo || !damageInfo->GetDamage())
+            return false;
+        if (Spell const* spell = eventInfo.GetProcSpell())
+            if (spell->IsTriggered())
+                return false;
+
+        uint32 const now = getMSTime();
+        // several targets hit by one cast arrive as separate procs - same
+        // spell inside half a second is the same button press
+        if (info->Id == _lastSpellId && now - _lastTimeMs < 500)
+            return false;
+        _lastSpellId = info->Id;
+        _lastTimeMs = now;
+
+        uint32 const school = info->GetSchoolMask();
+        bool const repeat = _lastSchool && school == _lastSchool;
+        _lastSchool = school;
+        if (repeat)
+        {
+            GetTarget()->RemoveAurasDueToSpell(SPELL_T1_SCHOOL_STACK);
+            return false;
+        }
+        return true;
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
+    {
+        Unit* mage = GetTarget();
+        if (Aura* stack = mage->GetAura(SPELL_T1_SCHOOL_STACK))
+            stack->ModStackAmount(1);   // refreshes duration, capped at 15
+        else
+            mage->CastSpell(mage, SPELL_T1_SCHOOL_STACK, true);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(spell_t1_school_stacks::CheckProc);
+        OnEffectProc += AuraEffectProcFn(spell_t1_school_stacks::HandleProc, EFFECT_0, SPELL_AURA_ANY);
+    }
+
+private:
+    uint32 _lastSchool = 0;
+    uint32 _lastSpellId = 0;
+    uint32 _lastTimeMs = 0;
+};
+
+// 6353 - Soul Fire, carrying the destro 8pc: always dazes for 5 sec.
+class spell_t1_soul_fire : public SpellScript
+{
+    PrepareSpellScript(spell_t1_soul_fire);
+
+    void HandleAfterHit()
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target || !caster->HasAura(SPELL_T1_SOULFIRE_DAZE_PASSIVE))
+            return;
+        caster->CastSpell(target, SPELL_WARLOCK_AFTERMATH_DAZE, true);
+        if (Aura* daze = target->GetAura(SPELL_WARLOCK_AFTERMATH_DAZE, caster->GetGUID()))
+        {
+            daze->SetMaxDuration(5 * IN_MILLISECONDS);
+            daze->SetDuration(5 * IN_MILLISECONDS);
+        }
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(spell_t1_soul_fire::HandleAfterHit);
+    }
+};
+
+// 403 - Lightning Bolt, carrying the ele 5pc: up to +8% damage with
+// distance, maxing at 36 yards.
+class spell_t1_lightning_range : public SpellScript
+{
+    PrepareSpellScript(spell_t1_lightning_range);
+
+    void HandleHit()
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target || !caster->HasAura(SPELL_T1_LB_RANGE_PASSIVE))
+            return;
+        float const dist = std::min(caster->GetDistance(target), 36.0f);
+        int32 const pct = int32(dist / 36.0f * 8.0f);
+        if (pct > 0)
+            SetHitDamage(AddPct(GetHitDamage(), pct));
+    }
+
+    void Register() override
+    {
+        OnHit += SpellHitFn(spell_t1_lightning_range::HandleHit);
+    }
+};
+
+// 8042 - Earth Shock, carrying the ele 8pc: a successful interrupt refunds
+// the shock's mana cost. "Was casting before the hit, is not after" is what
+// a successful interrupt looks like from here.
+class spell_t1_earthshock_refund : public SpellScript
+{
+    PrepareSpellScript(spell_t1_earthshock_refund);
+
+    void HandleBeforeHit(SpellMissInfo /*missInfo*/)
+    {
+        if (Unit* target = GetHitUnit())
+            _wasCasting = target->IsNonMeleeSpellCast(false, false, true);
+    }
+
+    void HandleAfterHit()
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target || !_wasCasting)
+            return;
+        if (!caster->HasAura(SPELL_T1_ES_REFUND_PASSIVE))
+            return;
+        if (target->IsNonMeleeSpellCast(false, false, true))
+            return;   // still casting - nothing was interrupted
+        int32 const cost = GetSpellInfo()->CalcPowerCost(caster, GetSpellInfo()->GetSchoolMask());
+        if (cost > 0)
+        {
+            caster->EnergizeBySpell(caster, GetSpellInfo(), cost, POWER_MANA);
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Grounded Retort - interrupt refunded {} mana",
+                caster->GetName(), cost));
+        }
+    }
+
+    void Register() override
+    {
+        BeforeHit += BeforeSpellHitFn(spell_t1_earthshock_refund::HandleBeforeHit);
+        AfterHit += SpellHitFn(spell_t1_earthshock_refund::HandleAfterHit);
+    }
+
+private:
+    bool _wasCasting = false;
+};
+
 void AddSC_custom_t1_set_bonuses()
 {
+    RegisterSpellScript(spell_t1_sow_mana);
+    RegisterSpellScript(spell_t1_holy_shield);
+    RegisterSpellScript(spell_t1_reckoning_heal);
+    RegisterSpellScript(spell_t1_empowered_duration);
+    RegisterSpellScript(spell_t1_moonfire_empower);
+    RegisterSpellScript(spell_t1_moonkin_speed);
+    RegisterSpellScript(spell_t1_evocation_pushback);
+    RegisterSpellScript(spell_t1_school_stacks);
+    RegisterSpellScript(spell_t1_soul_fire);
+    RegisterSpellScript(spell_t1_lightning_range);
+    RegisterSpellScript(spell_t1_earthshock_refund);
     RegisterSpellScript(spell_t1_fury_rage);
     RegisterSpellScript(spell_t1_fury_speed);
     RegisterSpellScript(spell_t1_scorpid_r4);
