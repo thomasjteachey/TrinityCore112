@@ -83,8 +83,7 @@ namespace
         SPELL_T1_SOLSTICE_PASSIVE       = 90143,
         SPELL_T1_SOLSTICE_DURATION      = 90144,
         SPELL_T1_LUNAR_GRACE_PASSIVE    = 90145,
-        SPELL_T1_MOONKIN_SPEED_OFFENSE  = 90147,
-        SPELL_T1_MOONKIN_SPEED_DEFENSE  = 90148,
+        SPELL_T1_MOONKIN_SPEED          = 90147,
         SPELL_T1_EVOCATION_PASSIVE      = 90149,
         SPELL_T1_EVOCATION_WARD         = 90150,
         SPELL_T1_SCHOOL_STACK           = 90152,
@@ -782,15 +781,14 @@ class spell_t1_moonkin_speed : public AuraScript
         Unit* druid = GetTarget();
         if (druid->GetShapeshiftForm() != FORM_MOONKIN)
         {
-            druid->RemoveAurasDueToSpell(SPELL_T1_MOONKIN_SPEED_OFFENSE);
-            druid->RemoveAurasDueToSpell(SPELL_T1_MOONKIN_SPEED_DEFENSE);
+            druid->RemoveAurasDueToSpell(SPELL_T1_MOONKIN_SPEED);
             return;
         }
         std::list<Unit*> units;
         Trinity::AnyUnitInObjectRangeCheck check(druid, 100.0f);
         Trinity::UnitListSearcher<Trinity::AnyUnitInObjectRangeCheck> searcher(druid, units, check);
         Cell::VisitAllObjects(druid, searcher, 100.0f);
-        uint32 offense = 0, defense = 0;
+        uint32 count = 0;
         for (Unit* unit : units)
             for (auto const& pair : unit->GetAppliedAuras())
             {
@@ -800,15 +798,14 @@ class spell_t1_moonkin_speed : public AuraScript
                 SpellInfo const* info = aura->GetSpellInfo();
                 if (info->SpellFamilyName != SPELLFAMILY_DRUID)
                     continue;
-                // moonfire 0x2, insect swarm 0x200000 - hostile side
+                // one buff, both halves: moonfire 0x2 / insect swarm 0x200000
+                // on enemies, regrowth 0x40 / rejuvenation 0x10 on allies
                 if ((info->SpellFamilyFlags[0] & 0x200002) && druid->IsValidAttackTarget(unit))
-                    ++offense;
-                // regrowth 0x40, rejuvenation 0x10 - friendly side
+                    ++count;
                 else if ((info->SpellFamilyFlags[0] & 0x50) && !druid->IsValidAttackTarget(unit))
-                    ++defense;
+                    ++count;
             }
-        SetStacks(druid, SPELL_T1_MOONKIN_SPEED_OFFENSE, offense);
-        SetStacks(druid, SPELL_T1_MOONKIN_SPEED_DEFENSE, defense);
+        SetStacks(druid, SPELL_T1_MOONKIN_SPEED, count);
     }
 
     void Register() override

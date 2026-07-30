@@ -190,21 +190,17 @@ class spell_dru_bear_form_passive : public AuraScript
 
     void CalculateAmount(AuraEffect const* /*aurEff*/, int32& amount, bool& /*canBeRecalculated*/)
     {
-        if (!GetUnitOwner()->HasAura(SPELL_DRUID_ENRAGE) || GetUnitOwner()->HasAura(SPELL_DRUID_ITEM_T10_FERAL_4P_BONUS))
+        Unit* owner = GetUnitOwner();
+        if (!owner->HasAura(SPELL_DRUID_ENRAGE) || owner->HasAura(SPELL_DRUID_ITEM_T10_FERAL_4P_BONUS))
             return;
 
-        int32 mod = 0;
-        switch (GetId())
-        {
-            case SPELL_DRUID_BEAR_FORM_PASSIVE:
-                mod = -27;
-                break;
-            case SPELL_DRUID_DIRE_BEAR_FORM_PASSIVE:
-                mod = -16;
-                break;
-            default:
-                return;
-        }
+        // -27% base armor in Bear Form, -16% in Dire Bear Form - matching
+        // Enrage's own tooltip. Routed through Enrage's EFFECT2 spellmods,
+        // so Carnal Hide's 3pc (Tempered Rage, flat +5 on Enrage's second
+        // effect) lightens the penalty to -22 / -11.
+        int32 mod = GetId() == SPELL_DRUID_BEAR_FORM_PASSIVE ? -27 : -16;
+        if (Player* player = owner->ToPlayer())
+            player->ApplySpellMod(SPELL_DRUID_ENRAGE, SPELLMOD_EFFECT2, mod);
         amount += mod;
     }
 
@@ -378,8 +374,11 @@ class spell_dru_enrage : public AuraScript
         for (AuraEffect* aurEff : aurEffs)
         {
             SpellInfo const* spellInfo = aurEff->GetSpellInfo();
-            // Dire- / Bear Form (Passive)
-            if (spellInfo->SpellFamilyName == SPELLFAMILY_DRUID && spellInfo->SpellFamilyFlags.HasFlag(0x0, 0x0, 0x2))
+            // Bear / Dire Bear Form (Passive), matched by id: this server's
+            // passives carry SpellFamilyName 0, so the wrath family-mask
+            // match never fired and Enrage never touched armor at all.
+            if (spellInfo->Id == SPELL_DRUID_BEAR_FORM_PASSIVE
+                || spellInfo->Id == SPELL_DRUID_DIRE_BEAR_FORM_PASSIVE)
                 aurEff->RecalculateAmount();
         }
     }
