@@ -8801,9 +8801,38 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
             if (FindCurrentSpellBySpellId(5938) && e_slot == TEMP_ENCHANTMENT_SLOT)
                 chance = 100.0f;
 
+            // Assassination T1 3pc (Coated Blades, 90119): +12% chance to
+            // apply the OFF-HAND poison. Poisons are temp enchants, so hand
+            // is the attack type that delivered this proc.
+            bool const isPoison = e_slot == TEMP_ENCHANTMENT_SLOT
+                && spellInfo->Dispel == DISPEL_POISON;
+            if (isPoison && damageInfo.GetAttackType() == OFF_ATTACK && HasAura(90119))
+                chance += 12.0f;
+
             if (roll_chance_f(chance))
             {
                 Unit* target = spellInfo->IsPositive() ? this : damageInfo.GetVictim();
+
+                // Assassination T1 8pc (Toxic Momentum, 90121): each poison
+                // application shaves 1 sec off whichever of Vanish, Blind or
+                // Sprint has the most cooldown left.
+                if (isPoison && HasAura(90121))
+                {
+                    static uint32 const cdSpells[] = { 1856, 1857, 26889, 2094, 2983, 8696, 11305 };
+                    uint32 best = 0;
+                    Milliseconds bestLeft = Milliseconds::zero();
+                    for (uint32 cd : cdSpells)
+                    {
+                        Milliseconds left = GetSpellHistory()->GetRemainingCooldown(sSpellMgr->AssertSpellInfo(cd));
+                        if (left > bestLeft)
+                        {
+                            bestLeft = left;
+                            best = cd;
+                        }
+                    }
+                    if (best)
+                        GetSpellHistory()->ModifyCooldown(best, Milliseconds(-1000));
+                }
 
                 CastSpellExtraArgs args(item);
                 // reduce effect values if enchant is limited

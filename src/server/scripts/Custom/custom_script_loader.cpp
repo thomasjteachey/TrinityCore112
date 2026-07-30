@@ -34,6 +34,7 @@ void AddSC_npc_account_banker();
 void AddSC_go_lplus_jump_pad();
 void AddSC_custom_game_lobby();
 void AddSC_npc_transmogrifier();
+void AddSC_custom_t1_set_bonuses();
 
 void AddCustomScripts()
 {
@@ -51,4 +52,5 @@ void AddCustomScripts()
     AddSC_go_lplus_jump_pad();
     AddSC_custom_game_lobby();
     AddSC_npc_transmogrifier();
+    AddSC_custom_t1_set_bonuses();
 }

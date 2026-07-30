@@ -1486,6 +1486,11 @@ private:
         // can be up at once: judge only the one with the most time left (the
         // seal cast last), never the replaced seal that is about to expire.
         AuraEffect const* judgedSeal = nullptr;
+        // Ret T1 8pc (Zealot's Persistence, 90133): every active seal fires
+        // its judgement, not just the freshest. Collected here, cast after
+        // the iteration - casting inside would invalidate the list.
+        std::vector<uint32> extraSealJudgements;
+        bool const judgeAllSeals = caster->HasAura(90133);
         Unit::AuraEffectList const& auras = caster->GetAuraEffectsByType(SPELL_AURA_DUMMY);
         for (Unit::AuraEffectList::const_iterator i = auras.begin(); i != auras.end(); ++i)
         {
@@ -1500,6 +1505,10 @@ private:
             if ((auraSpellInfo->GetSpellSpecific() != SPELL_SPECIFIC_SEAL && auraSpellInfo->Id != 20164) ||
                 auraEffect->GetEffIndex() != EFFECT_2 || !sSpellMgr->GetSpellInfo(auraEffect->GetAmount()))
                 continue;
+
+            if (judgeAllSeals && judgedSeal)
+                extraSealJudgements.push_back(judgedSeal->GetBase()->GetDuration() > auraEffect->GetBase()->GetDuration()
+                    ? auraEffect->GetAmount() : judgedSeal->GetAmount());
 
             if (!judgedSeal || auraEffect->GetBase()->GetDuration() > judgedSeal->GetBase()->GetDuration())
                 judgedSeal = auraEffect;
@@ -1522,7 +1531,11 @@ private:
         }
 
         if (hitUnit)
+        {
             caster->CastSpell(hitUnit, spellId2, true);
+            for (uint32 extra : extraSealJudgements)
+                caster->CastSpell(hitUnit, extra, true);
+        }
 
         // Remove all seal spells. Chain-independent on purpose: the Seal of
         // Righteousness ranks are split across two chains in spell_ranks

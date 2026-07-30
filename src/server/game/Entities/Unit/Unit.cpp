@@ -4135,20 +4135,53 @@ void Unit::_RemoveNoStackAurasDueToAura(Aura* aura, bool owned)
     // against double judging even though Judgement is off-GCD: the Judgement
     // script unleashes only the freshest seal and then strips every seal
     // through direct removal, which never passes through this stacking path.
-    int32 const twistWindow = int32(sWorld->getIntConfig(CONFIG_CENTURION_PALADIN_SEAL_TWIST_WINDOW_MS));
+    int32 twistWindow = int32(sWorld->getIntConfig(CONFIG_CENTURION_PALADIN_SEAL_TWIST_WINDOW_MS));
+
+    // Ret T1 8pc (Zealot's Persistence, 90133): Seal of Command and Seal of
+    // Righteousness persist for a full 6 seconds after another seal is cast,
+    // instead of the ordinary twist grace. The "or until you cast a third
+    // Seal" half lives below: only the longest-remaining existing seal is
+    // kept, so a third cast always drops the oldest one. The 35% seal damage
+    // cut that pays for this is in spell_t1_seal_damage.
+    bool const zealotsPersistence = HasAura(90133);
+    auto isPersistableSeal = [](SpellInfo const* info)
+    {
+        // fam 10 wordA: 0x02000000 Seal of Command, 0x08000000 Seal of Righteousness
+        return info->SpellFamilyName == SPELLFAMILY_PALADIN
+            && (info->SpellFamilyFlags[0] & 0x0A000000) != 0;
+    };
+    Aura const* newestExistingSeal = nullptr;
+    if (zealotsPersistence && IsTwistableSeal(spellProto))
+    {
+        for (auto const& pair : GetOwnedAuras())
+            if (IsTwistableSeal(pair.second->GetSpellInfo()) && pair.second->GetSpellInfo()->Id != spellProto->Id)
+                if (!newestExistingSeal || pair.second->GetDuration() > newestExistingSeal->GetDuration())
+                    newestExistingSeal = pair.second;
+    }
+
     auto keepForSealTwist = [&](Aura const* existingAura)
     {
         if (!twistWindow || !IsTwistableSeal(spellProto) || !IsTwistableSeal(existingAura->GetSpellInfo()))
             return false;
 
+        int32 window = twistWindow;
+        if (zealotsPersistence && isPersistableSeal(existingAura->GetSpellInfo()))
+        {
+            // only the freshest existing seal survives; a third seal cast
+            // pushes the oldest out through the normal removal path
+            if (newestExistingSeal && existingAura != newestExistingSeal)
+                return false;
+            window = 6 * IN_MILLISECONDS;
+        }
+
         int32 const remaining = existingAura->GetDuration();
         if (remaining < 0) // permanent aura, must not outlive its replacement
             return false;
 
-        if (remaining > twistWindow)
+        if (remaining > window)
         {
             Aura* existing = const_cast<Aura*>(existingAura); // owned by this unit, only the duration is shortened
-            existing->SetDuration(twistWindow);
+            existing->SetDuration(window);
             existing->SetNeedClientUpdateForTargets();
         }
         return true;
@@ -13423,6 +13456,20 @@ float Unit::MeleeSpellMissChance(Unit const* victim, WeaponAttackType attType, i
         missChance -= victim->GetTotalAuraModifier(SPELL_AURA_MOD_ATTACKER_RANGED_HIT_CHANCE);
     else
         missChance -= victim->GetTotalAuraModifier(SPELL_AURA_MOD_ATTACKER_MELEE_HIT_CHANCE);
+
+    // Fury T1 3pc (Ambidexterity, 90127): +3% chance to hit with OFF-HAND
+    // attacks while dual-wielding one-handers. No aura type distinguishes
+    // hands, which is why this is a core rider rather than MOD_HIT_CHANCE.
+    if (attType == OFF_ATTACK && HasAura(90127))
+        if (Player const* player = ToPlayer())
+        {
+            Item* main = player->GetWeaponForAttack(BASE_ATTACK);
+            Item* off = player->GetWeaponForAttack(OFF_ATTACK);
+            if (main && off
+                && main->GetTemplate()->InventoryType != INVTYPE_2HWEAPON
+                && off->GetTemplate()->InventoryType != INVTYPE_2HWEAPON)
+                missChance -= 3.0f;
+        }
 
     return std::max(missChance, 0.f);
 }
