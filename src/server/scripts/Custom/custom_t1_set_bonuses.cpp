@@ -90,6 +90,9 @@ namespace
         SPELL_T1_SOULFIRE_DAZE_PASSIVE  = 90156,
         SPELL_T1_LB_RANGE_PASSIVE       = 90157,
         SPELL_T1_ES_REFUND_PASSIVE      = 90158,
+        SPELL_T1_HEALTHSTONE_PASSIVE    = 90160,
+        SPELL_T1_MANA_SHIELD_PASSIVE    = 90161,
+        SPELL_T1_PRISMATIC_5PC          = 90163,
         SPELL_DRUID_EMP_REGROWTH        = 81342,
         SPELL_DRUID_EMP_REJUV           = 81343,
         SPELL_WARLOCK_AFTERMATH_DAZE    = 18118,
@@ -685,9 +688,9 @@ class spell_t1_reckoning_heal : public SpellScript
             {
                 charges->Remove();
                 int32 heal = GetHitHeal();
-                SetHitHeal(AddPct(heal, 40));
+                SetHitHeal(AddPct(heal, 30));
                 SendCustomAuraDiag(Trinity::StringFormat(
-                    "[CustomAuras] {}: Righteous Reckoning consumed {} - heal +40%",
+                    "[CustomAuras] {}: Righteous Reckoning consumed {} - heal +30%",
                     caster->GetName(), id));
                 return;
             }
@@ -839,10 +842,11 @@ class spell_t1_evocation_pushback : public AuraScript
     }
 };
 
-// 90151 - Prismatic Insight (mage 5pc): damaging spell hits from a school
+// 90151 - Prismatic Insight (mage 3pc): damaging spell hits from a school
 // different to the previous CAST add a stack; repeating a school clears the
 // stacks. Triggered spells and extra targets of the same cast are ignored -
-// only deliberate casts move the tracker.
+// only deliberate casts move the tracker. The stacks themselves cut mana
+// costs; the 5pc (90163) upgrades them with damage - see the buff script.
 class spell_t1_school_stacks : public AuraScript
 {
     PrepareAuraScript(spell_t1_school_stacks);
@@ -992,8 +996,74 @@ private:
     bool _wasCasting = false;
 };
 
+// 5720 \ 23472 \ 23473 - Healthstone, carrying the second warlock set's
+// 5pc: a quarter of the healing comes back as mana.
+class spell_t1_healthstone_mana : public SpellScript
+{
+    PrepareSpellScript(spell_t1_healthstone_mana);
+
+    void HandleAfterHit()
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !caster->HasAura(SPELL_T1_HEALTHSTONE_PASSIVE))
+            return;
+        int32 const mana = CalculatePct(GetHitHeal(), 25);
+        if (mana > 0)
+            caster->EnergizeBySpell(caster, GetSpellInfo(), mana, POWER_MANA);
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(spell_t1_healthstone_mana::HandleAfterHit);
+    }
+};
+
+// 1463 - Mana Shield, carrying the second mage set's 5pc: a shield that
+// BREAKS from damage (absorb exhausted, not cancelled or expired) pays out
+// 280 mana.
+class spell_t1_mana_shield : public AuraScript
+{
+    PrepareAuraScript(spell_t1_mana_shield);
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (GetTargetApplication()->GetRemoveMode() != AURA_REMOVE_BY_ENEMY_SPELL)
+            return;
+        Unit* target = GetTarget();
+        if (target->HasAura(SPELL_T1_MANA_SHIELD_PASSIVE))
+            target->EnergizeBySpell(target, GetSpellInfo(), 280, POWER_MANA);
+    }
+
+    void Register() override
+    {
+        AfterEffectRemove += AuraEffectRemoveFn(spell_t1_mana_shield::HandleRemove, EFFECT_FIRST_FOUND, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 90152 - Prismatic Insight stack buff. The mana-cost cut (effect 1) is the
+// 3pc and always live; the +1% damage per stack (effect 2) belongs to the
+// 5pc, so it calculates to zero unless Prismatic Resonance is worn.
+class spell_t1_prismatic_buff : public AuraScript
+{
+    PrepareAuraScript(spell_t1_prismatic_buff);
+
+    void CalcDamage(AuraEffect const* /*aurEff*/, int32& amount, bool& /*canBeRecalculated*/)
+    {
+        if (!GetUnitOwner()->HasAura(SPELL_T1_PRISMATIC_5PC))
+            amount = 0;
+    }
+
+    void Register() override
+    {
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_t1_prismatic_buff::CalcDamage, EFFECT_1, SPELL_AURA_MOD_DAMAGE_PERCENT_DONE);
+    }
+};
+
 void AddSC_custom_t1_set_bonuses()
 {
+    RegisterSpellScript(spell_t1_healthstone_mana);
+    RegisterSpellScript(spell_t1_mana_shield);
+    RegisterSpellScript(spell_t1_prismatic_buff);
     RegisterSpellScript(spell_t1_sow_mana);
     RegisterSpellScript(spell_t1_holy_shield);
     RegisterSpellScript(spell_t1_reckoning_heal);
