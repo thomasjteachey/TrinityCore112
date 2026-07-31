@@ -165,7 +165,12 @@ class spell_t1_fury_rage : public AuraScript
         SendCustomAuraDiag(Trinity::StringFormat(
             "[CustomAuras] {}: Frenzied Rhythm proc SUCCESS - +5 rage",
             GetTarget()->GetName()));
-        GetTarget()->CastSpell(GetTarget(), SPELL_T1_FURY_RAGE_ENERGIZE, true);
+        // direct energize, like the healthstone mana: casting the helper
+        // spell went through the passive-cast path and never paid out.
+        // Rage is stored x10, so 50 raw = 5 rage in the combat log.
+        Unit* warrior = GetTarget();
+        warrior->EnergizeBySpell(warrior,
+            sSpellMgr->AssertSpellInfo(SPELL_T1_FURY_RAGE_ENERGIZE), 50, POWER_RAGE);
     }
 
     void Register() override
