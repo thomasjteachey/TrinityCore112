@@ -94,6 +94,7 @@ namespace
         SPELL_T1_HEALTHSTONE_PASSIVE    = 90160,
         SPELL_T1_MANA_SHIELD_PASSIVE    = 90161,
         SPELL_T1_PRISMATIC_5PC          = 90163,
+        SPELL_T1_OVERHEAL_SHIELD        = 90167,
         SPELL_DRUID_EMP_REGROWTH        = 81342,
         SPELL_DRUID_EMP_REJUV           = 81343,
         SPELL_WARLOCK_AFTERMATH_DAZE    = 18118,
@@ -352,22 +353,42 @@ class spell_t1_gloom_wraith : public AuraScript
         if (!player || !player->HasAura(SPELL_PRIEST_SHADOW_WRAITH))
             return;
 
+        // The wraith is charm-steered, so the charm slot is checked first;
+        // m_Controlled stays as the fallback for however the spawn path
+        // registers it.
         Creature* wraith = nullptr;
-        for (Unit* summon : player->m_Controlled)
-            if (summon->GetEntry() == NPC_PRIEST_SHADOW_WRAITH)
-            {
-                wraith = summon->ToCreature();
-                break;
-            }
+        if (Unit* charm = player->GetCharmed())
+            if (charm->GetEntry() == NPC_PRIEST_SHADOW_WRAITH)
+                wraith = charm->ToCreature();
         if (!wraith)
+            for (Unit* summon : player->m_Controlled)
+                if (summon->GetEntry() == NPC_PRIEST_SHADOW_WRAITH)
+                {
+                    wraith = summon->ToCreature();
+                    break;
+                }
+        if (!wraith)
+        {
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Grasp of Gloom tick - wraith aura up but no wraith "
+                "creature found (charmed: {}, controlled: {})",
+                player->GetName(),
+                player->GetCharmed() ? player->GetCharmed()->GetEntry() : 0,
+                uint32(player->m_Controlled.size())));
             return;
+        }
 
         // A real area aura on the wraith (Leader of the Pack style): the
         // core applies the slow to enemies entering the 5 yd ring and lifts
         // it as they leave. This periodic only maintains the aura's
         // presence; the old 1-second pulse of 2-second slows is gone.
         if (!wraith->HasAura(SPELL_T1_WRAITH_AREA))
+        {
             wraith->CastSpell(wraith, SPELL_T1_WRAITH_AREA, true);
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Grasp of Gloom - 5 yd slow aura placed on the wraith",
+                player->GetName()));
+        }
     }
 
     void Register() override
@@ -1080,11 +1101,61 @@ class spell_t1_prismatic_buff : public AuraScript
     }
 };
 
+// 90166 - Overflowing Life (second warlock set's 8pc): overheal from the
+// warlock's own self-healing accumulates into an absorb shield, capped at
+// 10% of maximum health, refreshed by each contribution.
+class spell_t1_overheal_shield : public AuraScript
+{
+    PrepareAuraScript(spell_t1_overheal_shield);
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        HealInfo* healInfo = eventInfo.GetHealInfo();
+        // ANY heal landing on the warlock counts, whoever cast it - only the
+        // overheal portion feeds the shield
+        if (!healInfo || healInfo->GetTarget() != GetTarget())
+            return false;
+        return healInfo->GetHeal() > healInfo->GetEffectiveHeal();
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    {
+        HealInfo* healInfo = eventInfo.GetHealInfo();
+        Unit* lock = GetTarget();
+        int32 const overheal = int32(healInfo->GetHeal())
+            - int32(healInfo->GetEffectiveHeal());
+        int32 const cap = int32(lock->CountPctFromMaxHealth(10));
+        if (overheal <= 0 || cap <= 0)
+            return;
+        if (!lock->HasAura(SPELL_T1_OVERHEAL_SHIELD))
+            lock->CastSpell(lock, SPELL_T1_OVERHEAL_SHIELD, true);
+        Aura* shield = lock->GetAura(SPELL_T1_OVERHEAL_SHIELD);
+        if (!shield)
+            return;
+        if (AuraEffect* eff = shield->GetEffect(EFFECT_0))
+        {
+            eff->SetAmount(std::min(cap, eff->GetAmount() + overheal));
+            shield->SetNeedClientUpdateForTargets();
+            shield->RefreshDuration();
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Overflowing Life +{} overheal - shield now {} (cap {})",
+                lock->GetName(), overheal, eff->GetAmount(), cap));
+        }
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(spell_t1_overheal_shield::CheckProc);
+        OnEffectProc += AuraEffectProcFn(spell_t1_overheal_shield::HandleProc, EFFECT_0, SPELL_AURA_ANY);
+    }
+};
+
 void AddSC_custom_t1_set_bonuses()
 {
     RegisterSpellScript(spell_t1_healthstone_mana);
     RegisterSpellScript(spell_t1_mana_shield);
     RegisterSpellScript(spell_t1_prismatic_buff);
+    RegisterSpellScript(spell_t1_overheal_shield);
     RegisterSpellScript(spell_t1_sow_mana);
     RegisterSpellScript(spell_t1_holy_shield);
     RegisterSpellScript(spell_t1_reckoning_heal);
