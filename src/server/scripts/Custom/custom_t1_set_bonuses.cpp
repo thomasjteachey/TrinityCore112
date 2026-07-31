@@ -385,14 +385,17 @@ class spell_t1_gloom_wraith : public AuraScript
 
         // A real area aura on the wraith (Leader of the Pack style): the
         // core applies the slow to enemies entering the 5 yd ring and lifts
-        // it as they leave. AddAura, NOT CastSpell: the wraith is flagged
-        // IMMUNE_TO_PC and non-attackable, so its own cast of the negative
-        // carrier was rejected by target validation on every single tick.
-        // AddAura skips cast validation while the slow itself keeps normal
-        // immunity behavior against the units it spreads to.
-        if (!wraith->HasAura(SPELL_T1_WRAITH_AREA))
+        // it as they leave. Two constraints shape this:
+        //  - the carrier only ever holds the area aura as an OWNED aura;
+        //    area effects never produce a self AuraApplication, so
+        //    HasAura() stays false while the aura works. Check owned auras.
+        //  - enemy selection validates caster->IsValidAttackTarget(target),
+        //    and the wraith (immune/non-attackable) fails it against
+        //    everything. The priest must be the aura's caster; the aura
+        //    still lives on and moves with the wraith.
+        if (!wraith->GetOwnedAura(SPELL_T1_WRAITH_AREA))
         {
-            if (wraith->AddAura(SPELL_T1_WRAITH_AREA, wraith))
+            if (player->AddAura(SPELL_T1_WRAITH_AREA, wraith))
                 SendCustomAuraDiag(Trinity::StringFormat(
                     "[CustomAuras] {}: Grasp of Gloom - 5 yd slow aura placed on the wraith",
                     player->GetName()));
