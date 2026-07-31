@@ -50,6 +50,7 @@ namespace
         // priest
         SPELL_T1_WRAITH_SLOW_PASSIVE    = 90112,
         SPELL_T1_WRAITH_SLOW            = 90113,
+        SPELL_T1_WRAITH_AREA            = 90164,
         SPELL_T1_MINDFLAY_PASSIVE       = 90114,
         SPELL_T1_MC_SNARE_PASSIVE       = 90116,
         SPELL_T1_MC_SNARE               = 90117,
@@ -147,10 +148,14 @@ class spell_t1_fury_rage : public AuraScript
         if (!player)
             return false;
         bool const pass = IsDualWielding1H(player);
+        float chance = 100.f;
+        if (SpellProcEntry const* procEntry = sSpellMgr->GetSpellProcEntry(GetId()))
+            chance = procEntry->Chance;
         SendCustomAuraDiag(Trinity::StringFormat(
             "[CustomAuras] {}: Frenzied Rhythm off-hand hit {}",
             player->GetName(),
-            pass ? "passed the gate - rolling 50%" : "gate FAILED (needs two one-handers)"));
+            pass ? Trinity::StringFormat("passed the gate - rolling {:.0f}% for 5 rage", chance)
+                 : std::string("gate FAILED (needs two one-handers)")));
         return pass;
     }
 
@@ -357,19 +362,12 @@ class spell_t1_gloom_wraith : public AuraScript
         if (!wraith)
             return;
 
-        std::list<Unit*> targets;
-        Trinity::AnyUnfriendlyUnitInObjectRangeCheck check(wraith, player, 5.0f);
-        Trinity::UnitListSearcher<Trinity::AnyUnfriendlyUnitInObjectRangeCheck> searcher(wraith, targets, check);
-        Cell::VisitAllObjects(wraith, searcher, 5.0f);
-        for (Unit* enemy : targets)
-        {
-            player->CastSpell(enemy, SPELL_T1_WRAITH_SLOW, true);
-            if (Aura* slow = enemy->GetAura(SPELL_T1_WRAITH_SLOW, player->GetGUID()))
-            {
-                slow->SetMaxDuration(2 * IN_MILLISECONDS);
-                slow->SetDuration(2 * IN_MILLISECONDS);
-            }
-        }
+        // A real area aura on the wraith (Leader of the Pack style): the
+        // core applies the slow to enemies entering the 5 yd ring and lifts
+        // it as they leave. This periodic only maintains the aura's
+        // presence; the old 1-second pulse of 2-second slows is gone.
+        if (!wraith->HasAura(SPELL_T1_WRAITH_AREA))
+            wraith->CastSpell(wraith, SPELL_T1_WRAITH_AREA, true);
     }
 
     void Register() override
