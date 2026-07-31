@@ -1044,8 +1044,13 @@ class spell_t1_healthstone_mana : public SpellScript
 {
     PrepareSpellScript(spell_t1_healthstone_mana);
 
-    void HandleAfterHit()
+    void HandleHit()
     {
+        // OnHit, NOT AfterHit: by AfterHit the hit heal has been overwritten
+        // with the EFFECTIVE heal, so a full-health warlock got 25% of the
+        // scraps left after overheal (189 of a 1511 stone). Here the value is
+        // still the full computed heal - healing-taken debuffs like Mortal
+        // Strike are already in it, overheal is not.
         Unit* caster = GetCaster();
         if (!caster || !caster->HasAura(SPELL_T1_HEALTHSTONE_PASSIVE))
             return;
@@ -1056,7 +1061,7 @@ class spell_t1_healthstone_mana : public SpellScript
 
     void Register() override
     {
-        AfterHit += SpellHitFn(spell_t1_healthstone_mana::HandleAfterHit);
+        OnHit += SpellHitFn(spell_t1_healthstone_mana::HandleHit);
     }
 };
 
