@@ -4610,6 +4610,13 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     // learned bite is ready; fillers remain available until melee is reached.
     bool const readyToBiteKillTarget = hasBitePrimerOnKillTarget && !IsRootedOrSnared(player) &&
         activeTarget && player->IsWithinMeleeRange(activeTarget);
+    // Outmaneuver is an opener as well as an escape. When the pet is already
+    // in melee with the kill target and the hunter is not, swapping places
+    // lands the hunter in melee range - which is exactly what Mongoose Bite
+    // needs. Cheaper and instant compared to running the gap down.
+    bool const bmSwapToReachBite = isBeastMasteryHunter && hasMongooseBite && activeTarget &&
+        IsSpellReady(player, 81285) && bmPetVictim == activeTarget &&
+        !player->IsWithinMeleeRange(activeTarget);
     Unit const* manaTarget = isSurvivalHunter
         ? SelectNearbyEnemyManaTarget(player, activeTarget, GetConfiguredLongRange(), 0.0f)
         : SelectNearbyEnemyTarget(player, activeTarget, GetConfiguredLongRange());
@@ -4699,8 +4706,12 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         { "hunter bestial wrath", "break any removable crowd-control effect", 81300, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isBeastMasteryHunter && bmPetAttacking && activeTarget && IsSpellReady(player, 19577), 28.5f,
         { "hunter intimidate", "stun the kill target whenever the pet is attacking", 19577, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, isBeastMasteryHunter && bmPetAtUsefulSwapPosition && bmPetOnDifferentEnemy &&
-        (enemyOnTop || activeTargetDeadZone || IsRootedOrSnared(player)) && IsSpellReady(player, 81297), 36.5f,
+    // Two reasons to swap, and they are different situations: get OUT (the pet
+    // holds someone else while we are pressured/stuck), or get IN (the pet is
+    // on our kill target and we want to be in melee for Mongoose Bite).
+    AddDecisionCandidate(candidates, isBeastMasteryHunter && bmPetAtUsefulSwapPosition &&
+        ((bmPetOnDifferentEnemy && (enemyOnTop || activeTargetDeadZone || IsRootedOrSnared(player))) ||
+            bmSwapToReachBite) && IsSpellReady(player, 81297), 36.5f,
         // TargetMode::Pet, NOT None: the castability check resolves a target
         // per mode and treats None as "no target -> not castable", so this
         // candidate was rejected before any of its conditions were even
