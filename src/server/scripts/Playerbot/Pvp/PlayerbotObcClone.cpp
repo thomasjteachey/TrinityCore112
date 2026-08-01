@@ -851,6 +851,17 @@ Player* CreateCustomGameLobbyClone(Player* source, uint32 mapId, uint32 lobbyIns
         UNIT_FLAG_NON_ATTACKABLE_2 | UNIT_FLAG_UNINTERACTIBLE);
     clone->ClearUnitState(UNIT_STATE_UNATTACKABLE);
     clone->AddUnitState(UNIT_STATE_ROOT);
+
+    // Attach the team flag visual BEFORE the mannequin becomes visible, so
+    // observers build the character and its attached flag model from a single
+    // update. Applying it after AddPlayerToMap made every client rebuild the
+    // composited model a second time, and a picking raycast landing inside
+    // that rebuild is the leading suspect for the lobby client crash at
+    // WoW.exe+0x41D559 (submesh index below its batch base vertex).
+    // AddAura, not CastSpell: the mannequin is not in the world yet.
+    uint32 const teamFlagSpell = team == ALLIANCE ? 32609 : 32610;
+    clone->AddAura(teamFlagSpell, clone);
+
     clone->SetWorldSubMap(mapId, lobbyInstanceId);
     clone->ResetMap();
     clone->Relocate(position);
@@ -867,7 +878,11 @@ Player* CreateCustomGameLobbyClone(Player* source, uint32 mapId, uint32 lobbyIns
         clone->GetClass(), clone->GetLevel(), false);
     ObjectAccessor::AddObject(clone);
     clone->SetInGameTime(GameTime::GetGameTimeMS());
-    clone->CastSpell(clone, team == ALLIANCE ? 32609 : 32610, true);
+    // Fallback only: the pre-map AddAura above is the normal path, so this
+    // fires just if applying the aura off-map was refused. Casting it here
+    // costs observers a second model rebuild, which is what we are avoiding.
+    if (!clone->HasAura(teamFlagSpell))
+        clone->CastSpell(clone, teamFlagSpell, true);
     // Reassert this after the flag aura is applied as well. Any aura-side
     // targeting state must not turn the roster mannequin into scenery.
     clone->RemoveUnitFlag(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_NOT_ATTACKABLE_1 |
@@ -879,6 +894,33 @@ Player* CreateCustomGameLobbyClone(Player* source, uint32 mapId, uint32 lobbyIns
         g_CloneSessions.emplace(cloneGuid, std::move(session));
         g_CustomGameLobbyClones.emplace(cloneGuid, CustomGameLobbyCloneRecord{
             cloneGuid, source->GetGUID(), mapId, lobbyInstanceId, rosterSlotId, team, isPlayerbot });
+    }
+
+    // Spawn record for the lobby crash hunt: client crash reports carry a
+    // wall-clock timestamp, so this is what lets a crash be matched to the
+    // exact mannequin that was materialising at that moment. Everything the
+    // client has to build a model from is listed.
+    {
+        std::string gear;
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        {
+            Item const* worn = clone->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+            if (!worn)
+                continue;
+            if (!gear.empty())
+                gear += ",";
+            gear += std::to_string(slot) + ":" + std::to_string(worn->GetEntry());
+        }
+
+        TC_LOG_INFO("custom.lobby", "MANNEQUIN spawn name='{}' source='{}' srcGuid={} "
+            "race={} gender={} class={} level={} team={} playerbot={} map={} inst={} "
+            "pos=({:.2f},{:.2f},{:.2f}) flagSpell={} flagApplied={} gear=[{}]",
+            displayName, source->GetName(), source->GetGUID().ToString(),
+            uint32(clone->GetRace()), uint32(clone->GetNativeGender()),
+            uint32(clone->GetClass()), uint32(clone->GetLevel()), team,
+            isPlayerbot ? 1 : 0, mapId, lobbyInstanceId,
+            position.GetPositionX(), position.GetPositionY(), position.GetPositionZ(),
+            teamFlagSpell, clone->HasAura(teamFlagSpell) ? 1 : 0, gear);
     }
 
     return clone;

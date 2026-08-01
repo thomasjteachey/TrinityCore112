@@ -1233,6 +1233,22 @@ public:
         if (!lobby)
             return;
 
+        // Crash telemetry: a client that crashes never sends a logout request,
+        // so its session is torn down with the logout timer unset. A clean exit
+        // (or a /logout) always goes through that timer. This is the closest
+        // the server gets to observing a client crash - correlate the DROP
+        // timestamp with a MANNEQUIN spawn line to identify what was being
+        // built when it died. Alt-F4 and genuine connection loss look the same
+        // as a crash here, so treat it as a signal, not proof.
+        WorldSession const* session = player->GetSession();
+        bool const graceful = session && session->isLogingOut();
+        TC_LOG_INFO("custom.lobby", "{} player='{}' guid={} lobbyOwner={} "
+            "members={} pos=({:.2f},{:.2f},{:.2f})",
+            graceful ? "LEAVE  graceful" : "DROP   ungraceful(crash suspect)",
+            player->GetName(), player->GetGUID().ToString(),
+            lobby->OwnerGuid.ToString(), uint32(lobby->Teams.size()),
+            player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+
         RemoveLobbyMember(player, *lobby, false);
     }
 

@@ -29,6 +29,8 @@
 #include "Util.h"
 #include "World.h"
 
+#include <algorithm>
+
 /// Create the Weather object
 Weather::Weather(uint32 zoneId, WeatherData const* weatherChances)
     : m_zone(zoneId), m_weatherChances(weatherChances)
@@ -127,7 +129,11 @@ bool Weather::ReGenerate()
 
         if (m_intensity < 0.33333334f)
         {
-            m_intensity = 0.9999f;                              // go nuts
+            // Capped like SendCustomBattlegroundWeather's override: a heavy
+            // state at extreme grade drives the client's camera-attached
+            // weather emitter past its first geometry batch and crashes at
+            // WoW.exe+0x41D559. 0.75 still renders the heavy visual tier.
+            m_intensity = 0.75f;                                // go nuts (safely)
             return true;
         }
         else
@@ -192,7 +198,9 @@ bool Weather::ReGenerate()
 
 void Weather::SendWeatherUpdateToPlayer(Player* player)
 {
-    WorldPackets::Misc::Weather weather(GetWeatherState(), m_intensity);
+    // same client-crash cap as UpdateWeather - never ship an extreme grade
+    WorldPackets::Misc::Weather weather(GetWeatherState(),
+                                        std::min(m_intensity, 0.75f));
     player->SendDirectMessage(weather.Write());
 }
 
@@ -206,8 +214,10 @@ void Weather::SendFineWeatherUpdateToPlayer(Player* player)
 bool Weather::UpdateWeather()
 {
     ///- Send the weather packet to all players in this zone
-    if (m_intensity >= 1)
-        m_intensity = 0.9999f;
+    // 0.75 cap, not 0.9999: extreme grades crash the 3.3.5 client's weather
+    // emitter (WoW.exe+0x41D559); 0.75 still selects every heavy visual tier
+    if (m_intensity >= 0.75f)
+        m_intensity = 0.75f;
     else if (m_intensity < 0)
         m_intensity = 0.0001f;
 
