@@ -4585,6 +4585,19 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     bool const bmPetAtUsefulSwapPosition = bmPetDistance >= 8.0f && bmPetDistance <= 30.0f &&
         player->IsWithinLOSInMap(bmPet) &&
         std::abs(player->GetPositionZ() - bmPet->GetPositionZ()) <= 20.0f;
+    // Outmaneuver (81297) has a MINIMUM range of 8 yd (SpellRange 163: 8-30),
+    // so the pet must be that far out for the swap to be castable at all. A BM
+    // pet normally sits on whatever is beating on the hunter - inside 8 yd -
+    // which is why pairing "enemy in melee on me" with "pet 8-30 yd away"
+    // practically never came true and the bot never got the spell off.
+    // Require instead that the pet is busy with a DIFFERENT enemy than the one
+    // pressuring us: only then is the pet standing somewhere worth porting to,
+    // rather than next to the very enemy we are trying to escape. The distance
+    // that matters is the PET's (already checked above, and it is what the
+    // spell actually ranges against) - where its victim happens to stand is
+    // irrelevant.
+    Unit const* bmPetVictim = bmPet && bmPet->IsAlive() ? bmPet->GetVictim() : nullptr;
+    bool const bmPetOnDifferentEnemy = bmPetVictim && bmPetVictim != enemyOnTopTarget;
     bool const bmCrowdControlled = isBeastMasteryHunter && IsHunterBestialWrathBreakableControl(player);
     bool const hasMongooseBite = ResolveKnownPlayerSpellInChain(player, 81285) != 0;
     bool const hasBitePrimerOnKillTarget = hasMongooseBite && activeTarget &&
@@ -4686,9 +4699,15 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         { "hunter bestial wrath", "break any removable crowd-control effect", 81300, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isBeastMasteryHunter && bmPetAttacking && activeTarget && IsSpellReady(player, 19577), 28.5f,
         { "hunter intimidate", "stun the kill target whenever the pet is attacking", 19577, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, isBeastMasteryHunter && bmPetAtUsefulSwapPosition &&
+    AddDecisionCandidate(candidates, isBeastMasteryHunter && bmPetAtUsefulSwapPosition && bmPetOnDifferentEnemy &&
         (enemyOnTop || activeTargetDeadZone || IsRootedOrSnared(player)) && IsSpellReady(player, 81297), 36.5f,
-        { "hunter outmaneuver", "swap to the pet's safe position under movement or melee pressure", 81297, playerbot::PvpClassSpellContext::TargetMode::None });
+        // TargetMode::Pet, NOT None: the castability check resolves a target
+        // per mode and treats None as "no target -> not castable", so this
+        // candidate was rejected before any of its conditions were even
+        // considered - the real reason the bot never got Outmaneuver off.
+        // Spell 81297 targets TARGET_UNIT_PET, which is exactly what Pet mode
+        // resolves to.
+        { "hunter outmaneuver", "swap out to the pet while it holds a different enemy", 81297, playerbot::PvpClassSpellContext::TargetMode::Pet });
     AddDecisionCandidate(candidates, hasMongooseBite && enemyOnTop && enemyOnTopTarget && player->IsWithinMeleeRange(enemyOnTopTarget) && IsSpellReady(player, 81285), 24.0f,
         { "hunter mongoose bite", "bite the nearest attacker under melee pressure", 81285, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
     // The old unconditional fallback candidate here (no melee-range check,
