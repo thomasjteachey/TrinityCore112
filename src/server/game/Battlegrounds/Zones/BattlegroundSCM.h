@@ -93,8 +93,15 @@ enum BG_SCM_ObjectEntries
 enum BG_SCM_Constants
 {
     BG_SCM_KILL_LIMIT        = 30,
-    BG_SCM_BUFF_RESPAWN_TIME = 60
+    BG_SCM_BUFF_RESPAWN_TIME = 60,
+    // The chapel floor sits far above this, so anything below has fallen out
+    // of the world. Checked on a timer rather than every tick: a fall takes
+    // far longer than the interval, so this cannot be missed.
+    BG_SCM_UNDER_MAP_CHECK_INTERVAL = 500
 };
+
+// Z below which a player is considered to have fallen through the map.
+constexpr float BG_SCM_MIN_SAFE_Z = 10.0f;
 
 struct BattlegroundSCMScore final : public BattlegroundScore
 {
@@ -150,6 +157,7 @@ private:
     bool _humanFaceoffEverHappened;
     bool _usePrimaryGraveyard;
     uint32 _graveyardSwapTimer;
+    uint32 _underMapCheckTimer;
 };
 
 #endif
