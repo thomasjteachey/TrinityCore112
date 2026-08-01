@@ -443,13 +443,37 @@ void SynchronizeHunterPetMirror(Player* human, Player* clone)
     if (sourcePet && sourcePet->getPetType() != HUNTER_PET)
         sourcePet = nullptr;
 
+    // Resolve the stable fallback FIRST, because it is a legitimate source of
+    // the mirror pet, not just a last resort at creation time.
+    PetStable const* stable = human->GetPetStable();
+    PetStable::PetInfo const* info = nullptr;
+    if (!sourcePet && stable)
+    {
+        std::pair<PetStable::PetInfo const*, PetSaveMode> const loadInfo =
+            Pet::GetLoadPetInfo(*stable, 0, 0, false);
+        info = loadInfo.first;
+        if (info && (info->Type != HUNTER_PET || info->Health == 0))
+            info = nullptr;
+    }
+
+    // Which pet SHOULD the clone have? Deciding this before touching the pet
+    // it already has is the whole point: the previous order removed the
+    // clone's pet whenever the source had none *summoned*, then recreated it
+    // from the stable on the very same pass. For a hunter whose pet lives in
+    // the stable (every playerbot that has not called its pet out) that meant
+    // destroy-and-respawn on every sync tick - which is exactly the pet
+    // blinking in and out of existence with a flickering unit frame.
+    uint32 const desiredEntry = sourcePet ? sourcePet->GetEntry()
+                                          : (info ? info->CreatureId : 0);
+
     Pet* clonePet = clone->GetPet();
-    if (clonePet && (!sourcePet || clonePet->GetEntry() != sourcePet->GetEntry()))
+    if (clonePet && clonePet->GetEntry() != desiredEntry)   // 0 => none wanted
     {
         clone->RemovePet(clonePet, PET_SAVE_AS_DELETED);
         clonePet = nullptr;
     }
 
+    // Already mirroring the right pet: leave it completely alone.
     if (clonePet)
         return;
 
@@ -459,17 +483,7 @@ void SynchronizeHunterPetMirror(Player* human, Player* clone)
         return;
     }
 
-    // The source has no pet summoned right now. Fall back to whatever their
-    // persisted pet stable still has on record (current or unslotted hunter
-    // pet) so the clone is not permanently petless just because the source
-    // hasn't called theirs out yet.
-    PetStable const* stable = human->GetPetStable();
-    if (!stable)
-        return;
-
-    std::pair<PetStable::PetInfo const*, PetSaveMode> const loadInfo = Pet::GetLoadPetInfo(*stable, 0, 0, false);
-    PetStable::PetInfo const* info = loadInfo.first;
-    if (!info || info->Type != HUNTER_PET || info->Health == 0)
+    if (!info)
         return;
 
     uint32 const sourcePetNumber = info->PetNumber;
