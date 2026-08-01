@@ -2323,6 +2323,11 @@ ObjectGuid SelectFriendlyWithoutAuraFromSpellChain(Player const* player, uint32 
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
+        // see the note in SelectFriendlyWithManaAndWithoutAuraFromSpellChain:
+        // includeSelf must gate this sweep too, or the caster (distance 0)
+        // always wins and the flag does nothing.
+        if (!includeSelf && candidate == player)
+            continue;
         if (!isEligible(candidate))
             continue;
 
@@ -2392,6 +2397,15 @@ ObjectGuid SelectFriendlyWithManaAndWithoutAuraFromSpellChain(Player const* play
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
+        // includeSelf gates the shortcut above, but this sweep walks every
+        // player on the map - the caster included, at distance 0, so it always
+        // wins "closest". Without this the flag is meaningless here: a ret
+        // paladin looking for a mana ally to bless picked HIMSELF, Wisdom
+        // replaced his own Might (one blessing per caster per target), the
+        // next pass saw Might missing and recast it over Wisdom, and the two
+        // buffs cycled forever during the buff phase.
+        if (!includeSelf && candidate == player)
+            continue;
         if (!isEligible(candidate))
             continue;
 
@@ -2434,6 +2448,9 @@ ObjectGuid SelectFriendlyWithoutAnyAuraFromSpellChain(Player const* player, std:
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
+        // same self-exclusion as the other spell-chain selectors
+        if (!includeSelf && candidate == player)
+            continue;
         if (!isEligible(candidate))
             continue;
 

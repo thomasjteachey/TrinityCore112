@@ -439,6 +439,18 @@ void SynchronizeHunterPetMirror(Player* human, Player* clone)
     if (!human || !clone || human->GetClass() != CLASS_HUNTER || clone->GetClass() != CLASS_HUNTER)
         return;
 
+    // A dead hunter keeps no pet. This runs on a timer, so a mirror that the
+    // core dismissed on death was simply resummoned on the next pass - a live
+    // pet standing over its owner's corpse, never despawning. Mirror the
+    // dismissal here and stay out until the clone is alive again; the normal
+    // path below then rebuilds the pet on res.
+    if (!clone->IsAlive())
+    {
+        if (Pet* orphanedPet = clone->GetPet())
+            clone->RemovePet(orphanedPet, PET_SAVE_NOT_IN_SLOT);
+        return;
+    }
+
     Pet* sourcePet = human->GetPet();
     if (sourcePet && sourcePet->getPetType() != HUNTER_PET)
         sourcePet = nullptr;
@@ -1176,6 +1188,16 @@ void PlayerbotObcCloneManager::OnPvpKill(Player* killer, Player* killed)
 {
     if (!killer || !killed || killer == killed)
         return;
+
+    // Dismiss a dead clone's mirror pet here rather than leaving it to the
+    // periodic mirror sync: that runs on a timer, so the pet would otherwise
+    // outlive its owner for up to a full tick, which is what left mirror pets
+    // standing around after the hunter died. SynchronizeHunterPetMirror also
+    // refuses to rebuild one while the clone is dead, so this stays dismissed
+    // until it actually resurrects.
+    if (IsActiveClone(killed))
+        if (Pet* mirrorPet = killed->GetPet())
+            killed->RemovePet(mirrorPet, PET_SAVE_NOT_IN_SLOT);
 
     bool areCounterparts = false;
     {
