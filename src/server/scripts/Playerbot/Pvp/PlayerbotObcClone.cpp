@@ -637,6 +637,16 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
         clone->GetClass(), clone->GetLevel());
     ObjectAccessor::AddObject(clone);
     bg->AddPlayer(clone);
+    // Battleground::AddPlayer runs UnsummonPetTemporaryIfAny() on everyone who
+    // enters, which records a "temporarily unsummoned" pet number for later
+    // restoration. That restore path (ResummonPetTemporaryUnSummonedIfAny) is
+    // DB-backed - it calls Pet::LoadPetFromDB - and a mirror pet only ever
+    // exists in memory under a clone GUID with no character_pet rows behind
+    // it. Leaving the number set makes the arena machinery chase a pet that
+    // cannot be loaded while SynchronizeHunterPetMirror independently builds
+    // the real mirror, so the two fight over one pet slot. The mirror is the
+    // only owner of this clone's pet: clear the core's claim on it.
+    clone->SetTemporaryUnsummonedPetNumber(0);
     clone->SetInGameTime(GameTime::GetGameTimeMS());
     SynchronizeHunterPetMirror(human, clone);
 
@@ -1300,6 +1310,16 @@ Player* PlayerbotObcCloneManager::CreateCustomGameClone(Player* source, Battlegr
     sCharacterCache->AddCharacterCacheEntry(cloneGuid, 0, displayName, clone->GetNativeGender(), clone->GetRace(), clone->GetClass(), clone->GetLevel(), false);
     ObjectAccessor::AddObject(clone);
     bg->AddPlayer(clone);
+    // Battleground::AddPlayer runs UnsummonPetTemporaryIfAny() on everyone who
+    // enters, which records a "temporarily unsummoned" pet number for later
+    // restoration. That restore path (ResummonPetTemporaryUnSummonedIfAny) is
+    // DB-backed - it calls Pet::LoadPetFromDB - and a mirror pet only ever
+    // exists in memory under a clone GUID with no character_pet rows behind
+    // it. Leaving the number set makes the arena machinery chase a pet that
+    // cannot be loaded while SynchronizeHunterPetMirror independently builds
+    // the real mirror, so the two fight over one pet slot. The mirror is the
+    // only owner of this clone's pet: clear the core's claim on it.
+    clone->SetTemporaryUnsummonedPetNumber(0);
     clone->SetInGameTime(GameTime::GetGameTimeMS());
     SynchronizeHunterPetMirror(source, clone);
 
