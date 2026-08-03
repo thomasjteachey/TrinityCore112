@@ -7862,10 +7862,35 @@ SpellCastResult Spell::CheckItems(uint32* param1 /*= nullptr*/, uint32* param2 /
     return SPELL_CAST_OK;
 }
 
+namespace
+{
+    // The four "big heal" chains are immune to damage pushback outright - their
+    // tooltips say so plainly - rather than relying on a talent for a percentage
+    // chance. Matched on the first spell in each rank chain so every rank is
+    // covered without listing 51 ids.
+    bool IsPushbackImmuneHeal(SpellInfo const* spellInfo)
+    {
+        SpellInfo const* first = spellInfo->GetFirstRankSpell();
+        switch (first ? first->Id : spellInfo->Id)
+        {
+            case 5185: // Healing Touch
+            case 331:  // Healing Wave
+            case 635:  // Holy Light
+            case 2060: // Greater Heal
+                return true;
+            default:
+                return false;
+        }
+    }
+}
+
 void Spell::Delayed() // only called in DealDamage()
 {
     Player* playerCaster = m_caster->ToPlayer();
     if (!playerCaster)
+        return;
+
+    if (IsPushbackImmuneHeal(m_spellInfo))
         return;
 
     // spells not losing casting time
