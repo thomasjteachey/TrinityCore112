@@ -933,6 +933,23 @@ class spell_pal_party_damage_redirect : public AuraScript
         redirectInfo.HitInfo = HITINFO_NORMALSWING;
 
         MeleeHitOutcome outcome = RollAvoidance(attacker, caster);
+
+        // Carry the ORIGINAL hit's crit through to the redirect. RollAvoidance
+        // only rolls dodge/parry/block and can never return a crit, so without
+        // this the redirect is always NORMAL or BLOCK - and Reckoning, which
+        // requires being crit, could never fire from it.
+        //
+        // Flag only, never re-doubled: the share was taken out of damage the
+        // original target had already received, so a crit's doubling is
+        // already baked into the number. An avoided or blocked roll wins over
+        // the flag, since those are outcomes for THIS swing.
+        bool const originalWasCrit = (dmgInfo.GetHitMask() & PROC_HIT_CRITICAL) != 0;
+        if (originalWasCrit && outcome == MELEE_HIT_NORMAL)
+        {
+            outcome = MELEE_HIT_CRIT;
+            redirectInfo.HitInfo |= HITINFO_CRITICALHIT;
+        }
+
         redirectInfo.HitOutCome = outcome;
 
         uint32 const preBlockDamage = redirectInfo.Damages[0].Damage;
@@ -1011,9 +1028,11 @@ class spell_pal_party_damage_redirect : public AuraScript
                 nullptr);
 
             SendSacrificialAuraDiag(Trinity::StringFormat(
-                "[SacrificialAura] {}: hit from {} | outcome {} | hitMask 0x{:X} | "
-                "redirected {} (blocked {}, absorbed {}) | Reckoning {} -> {}",
+                "[SacrificialAura] {}: hit from {} | origCrit {} | outcome {} | "
+                "hitMask 0x{:X} | redirected {} (blocked {}, absorbed {}) | "
+                "Reckoning {} -> {}",
                 caster->GetName(), attacker->GetName(),
+                originalWasCrit ? "YES" : "no",
                 MeleeOutcomeName(outcome), procDamage.GetHitMask(),
                 redirectInfo.Damages[0].Damage, redirectInfo.Blocked,
                 redirectInfo.Damages[0].Absorb,
