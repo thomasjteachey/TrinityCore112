@@ -820,6 +820,28 @@ namespace
             return reckoning->GetStackAmount() ? reckoning->GetStackAmount() : reckoning->GetCharges();
         return 0;
     }
+
+    // Which talent ranks are actually ACTIVE on the paladin right now. A
+    // talent that is known but disabled (character_spell.disabled = 1, which
+    // the talent-reset path leaves behind) applies no aura and cannot proc, so
+    // "no stacks" means nothing until this is known.
+    std::string ActiveTalentSummary(Unit* paladin)
+    {
+        uint32 reckRank = 0;
+        for (uint32 id : { 20177u, 20179u, 20180u, 20181u, 20182u })
+            if (paladin->HasAura(id))
+                reckRank = id;
+
+        uint32 redoubtRank = 0;
+        for (uint32 id : { 20127u, 20130u, 20135u, 20136u, 20137u })
+            if (paladin->HasAura(id))
+                redoubtRank = id;
+
+        return Trinity::StringFormat("Reck={} ImpReck={} Redoubt={}",
+            reckRank ? std::to_string(reckRank) : "NONE",
+            paladin->HasAura(83269) ? "yes" : "NO",
+            redoubtRank ? std::to_string(redoubtRank) : "NONE");
+    }
 }
 
 class spell_pal_party_damage_redirect : public AuraScript
@@ -1030,13 +1052,14 @@ class spell_pal_party_damage_redirect : public AuraScript
             SendSacrificialAuraDiag(Trinity::StringFormat(
                 "[SacrificialAura] {}: hit from {} | origCrit {} | outcome {} | "
                 "hitMask 0x{:X} | redirected {} (blocked {}, absorbed {}) | "
-                "Reckoning {} -> {}",
+                "Reckoning {} -> {} | talents [{}]",
                 caster->GetName(), attacker->GetName(),
                 originalWasCrit ? "YES" : "no",
                 MeleeOutcomeName(outcome), procDamage.GetHitMask(),
                 redirectInfo.Damages[0].Damage, redirectInfo.Blocked,
                 redirectInfo.Damages[0].Absorb,
-                reckoningBefore, ReckoningCharges(caster)));
+                reckoningBefore, ReckoningCharges(caster),
+                ActiveTalentSummary(caster)));
         }
     }
 
