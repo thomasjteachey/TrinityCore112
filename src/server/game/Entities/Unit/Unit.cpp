@@ -941,9 +941,20 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
             // from redirected hits even though the paladin genuinely lost the
             // health. Scoped to the custom redirect so stock SHARE_DAMAGE_PCT
             // users (Soul Link) keep their existing behaviour.
+            //
+            // The flags matter: Reckoning's ProcTypeMask (0x222A8) lists the
+            // TAKEN_* hit classes and does NOT include PROC_FLAG_TAKEN_DAMAGE,
+            // so proccing with that alone fires nothing. The redirect is a
+            // hostile effect with no damage class, which is exactly
+            // TAKEN_SPELL_NONE_DMG_CLASS_NEG; TAKEN_DAMAGE rides along for
+            // effects that do key off raw damage taken.
+            // Improved Reckoning (83269) is deliberately unaffected - it
+            // requires a block (spell_proc HitMask 64), and redirected damage
+            // is never an attack the paladin could have blocked.
             if (share && (*i)->GetId() == PARTY_DAMAGE_REDIRECT_SPELL_ID && shareDamageTarget->IsAlive())
-                Unit::ProcSkillsAndAuras(attacker, shareDamageTarget, PROC_FLAG_NONE, PROC_FLAG_TAKEN_DAMAGE,
-                    PROC_SPELL_TYPE_DAMAGE, PROC_SPELL_PHASE_HIT, PROC_HIT_NONE, nullptr, nullptr, nullptr);
+                Unit::ProcSkillsAndAuras(attacker, shareDamageTarget, PROC_FLAG_NONE,
+                    PROC_FLAG_TAKEN_SPELL_NONE_DMG_CLASS_NEG | PROC_FLAG_TAKEN_DAMAGE,
+                    PROC_SPELL_TYPE_DAMAGE, PROC_SPELL_PHASE_HIT, PROC_HIT_NORMAL, nullptr, nullptr, nullptr);
         }
     }
 

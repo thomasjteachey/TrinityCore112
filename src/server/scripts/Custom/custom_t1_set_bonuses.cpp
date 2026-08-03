@@ -640,11 +640,11 @@ class spell_t1_judgement_crusader : public AuraScript
         if (GetId() == SPELL_JUDGEMENT_OF_THE_CRUSADER)
             return;
 
-        // Already carrying our Crusader: re-casting would only refresh it and
-        // spam the target's aura updates every time a judgement reapplies.
-        if (GetTarget()->HasAura(SPELL_JUDGEMENT_OF_THE_CRUSADER, caster->GetGUID()))
-            return;
-
+        // Deliberately re-cast even when the target already carries our
+        // Crusader: that is what refreshes its duration when the paladin
+        // judges again. An earlier "skip if already applied" guard here
+        // stopped the spam but also stopped the refresh, so Crusader quietly
+        // ticked away to nothing while Light/Wisdom kept being renewed.
         caster->CastSpell(GetTarget(), SPELL_JUDGEMENT_OF_THE_CRUSADER, true);
     }
 
