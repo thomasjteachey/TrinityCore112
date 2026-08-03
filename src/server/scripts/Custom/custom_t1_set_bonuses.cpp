@@ -631,8 +631,21 @@ class spell_t1_judgement_crusader : public AuraScript
     void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
         Unit* caster = GetCaster();
-        if (caster && caster->HasAura(SPELL_T1_JUDGEMENT_PASSIVE))
-            caster->CastSpell(GetTarget(), SPELL_JUDGEMENT_OF_THE_CRUSADER, true);
+        if (!caster || !caster->HasAura(SPELL_T1_JUDGEMENT_PASSIVE))
+            return;
+
+        // Never fire off the Crusader application itself. The two judgements
+        // now coexist (see the Lawbender exception in Aura::CanStackWith), so
+        // a self-trigger would no longer be broken by one replacing the other.
+        if (GetId() == SPELL_JUDGEMENT_OF_THE_CRUSADER)
+            return;
+
+        // Already carrying our Crusader: re-casting would only refresh it and
+        // spam the target's aura updates every time a judgement reapplies.
+        if (GetTarget()->HasAura(SPELL_JUDGEMENT_OF_THE_CRUSADER, caster->GetGUID()))
+            return;
+
+        caster->CastSpell(GetTarget(), SPELL_JUDGEMENT_OF_THE_CRUSADER, true);
     }
 
     void Register() override
@@ -642,7 +655,7 @@ class spell_t1_judgement_crusader : public AuraScript
 };
 
 // 20424 / 25742 - Seal of Command / Righteousness proc damage: the ret 8pc
-// trades 35% of seal damage for the 6-second twist window (see Unit.cpp).
+// trades 10% of seal damage for the 6-second twist window (see Unit.cpp).
 class spell_t1_seal_damage : public SpellScript
 {
     PrepareSpellScript(spell_t1_seal_damage);
@@ -651,7 +664,7 @@ class spell_t1_seal_damage : public SpellScript
     {
         Unit* caster = GetCaster();
         if (caster && caster->HasAura(SPELL_T1_SEAL_PERSIST_PASSIVE))
-            SetHitDamage(CalculatePct(GetHitDamage(), 65));
+            SetHitDamage(CalculatePct(GetHitDamage(), 90));
     }
 
     void Register() override

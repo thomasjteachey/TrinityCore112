@@ -5488,6 +5488,14 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     if (interveneTarget == player || (interveneTarget && player->IsWithinMeleeRange(interveneTarget)))
         interveneTarget = nullptr;
     bool const revengeReady = isProtWarrior && player->IsWithinMeleeRange(activeTarget) && IsSpellReadyAndCasterAuraAllowed(player, 25288);
+    // Overpower: reactive, Battle Stance only, and usable only in the short
+    // window after the target dodges - IsSpellReadyAndCasterAuraAllowed is
+    // what tests that aura state, the same way Revenge does above. No stance
+    // dance for it: arms already fights in Battle Stance, and forcing fury or
+    // prot out of theirs to land a 5-rage hit is a losing trade.
+    bool const overpowerReady = inBattleStance && activeTarget &&
+        player->IsWithinMeleeRange(activeTarget) &&
+        IsSpellReadyAndCasterAuraAllowed(player, 7384);
     bool const executeReady = activeTarget && activeTarget->HealthBelowPct(20) && IsSpellReady(player, 20662) && player->GetPower(POWER_RAGE) >= 150;
     bool const hasNearbyMeleeThreat = HasHostileTarget(player, nearbyMeleeTarget);
     bool const nearbyMeleeThreatSnared = hasNearbyMeleeThreat && nearbyMeleeTarget->HasAuraWithMechanic(1 << MECHANIC_SNARE);
@@ -5566,6 +5574,11 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "warrior battle shout", "maintain attack power buff", 25289, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, revengeReady && inDefensiveStance, 40.5f,
         { "warrior revenge", "use reactive revenge whenever available", 25288, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
+    // Above Mortal Strike/Slam tier: the dodge window is only a few seconds
+    // and Overpower cannot be dodged, parried or blocked, so it is always the
+    // better rage spend while it is up.
+    AddDecisionCandidate(candidates, overpowerReady, 40.6f,
+        { "warrior overpower", "reactive strike in the window after the target dodges", 7384, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
     Unit const* concussionTarget = isProtWarrior && IsSpellReady(player, 12809) ? SelectUnstunDREnemyTarget(player, activeTarget, 5.0f, 12809) : nullptr;
     AddDecisionCandidate(candidates, concussionTarget, 39.6f,
         { "warrior concussion blow", "stun a target without stun diminishing returns", 12809, playerbot::PvpClassSpellContext::TargetMode::Enemy, concussionTarget ? concussionTarget->GetGUID() : ObjectGuid::Empty });

@@ -2033,11 +2033,36 @@ bool Aura::CanStackWith(Aura const* existingAura) const
     bool ignoreJustice = caster && (m_spellInfo->Id == 20164 || existingSpellInfo->Id == 20164) && caster->HasAura(81474); // lancelot's justice
     bool ignoreJudgementJustice = caster && (m_spellInfo->Id == 20184 || existingSpellInfo->Id == 20184) && caster->HasAura(81474); // lancelot's justice
 
+    // Lawbender 3pc (90132): judging Light or Wisdom also applies Judgement of
+    // the Crusader, and that PAIR is meant to coexist - the bonus is precisely
+    // the ability to carry the Crusader alongside it. Judgements are
+    // per-caster exclusive, so without this the Crusader application replaced
+    // the judgement that triggered it and the target kept Crusader alone.
+    //
+    // Deliberately requires one side to be a Crusader rank AND the other to be
+    // a Light or Wisdom rank, so only the pairing the set bonus actually
+    // creates is exempt. Judgement of Justice is the other debuff judgement
+    // and still collides normally, wiping whatever was there. Righteousness
+    // and Command are damage-only (no APPLY_AURA effect), so they never reach
+    // this check at all and neither clear nor coexist with anything.
+    auto isCrusaderJudgement = [](uint32 id)
+    {
+        return id == 21183 || id == 20303 || id == 20188 || id == 20300 || id == 20301 || id == 20302;
+    };
+    auto isLightOrWisdomJudgement = [](uint32 id)
+    {
+        return id == 20185 || id == 20344 || id == 20345 || id == 20346   // light
+            || id == 20186 || id == 20354 || id == 20355;                 // wisdom
+    };
+    bool ignoreLawbenderCrusader = caster && caster->HasAura(90132) &&
+        ((isCrusaderJudgement(m_spellInfo->Id) && isLightOrWisdomJudgement(existingSpellInfo->Id))
+            || (isCrusaderJudgement(existingSpellInfo->Id) && isLightOrWisdomJudgement(m_spellInfo->Id)));
+
     // check spell specific stack rules
     if (m_spellInfo->IsAuraExclusiveBySpecificWith(existingSpellInfo)
         || (sameCaster && m_spellInfo->IsAuraExclusiveBySpecificPerCasterWith(existingSpellInfo)))
     {
-        if(!ignoreJustice && !ignoreJudgementJustice)
+        if(!ignoreJustice && !ignoreJudgementJustice && !ignoreLawbenderCrusader)
             return false;
     }
 

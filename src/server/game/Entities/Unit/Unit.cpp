@@ -933,6 +933,17 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
             /// @todo check packets if damage is done by victim, or by attacker of victim
             Unit::DealDamageMods(shareDamageTarget, share, nullptr);
             Unit::DealDamage(attacker, shareDamageTarget, share, nullptr, NODAMAGE, redirectedSchoolMask, spell, false);
+
+            // Sacrificial Aura only: run the paladin's damage-taken procs on
+            // the redirected portion. This path deals the damage but never
+            // called the proc system, so soaking a party's damage triggered
+            // nothing - most visibly Reckoning, which built no stacks at all
+            // from redirected hits even though the paladin genuinely lost the
+            // health. Scoped to the custom redirect so stock SHARE_DAMAGE_PCT
+            // users (Soul Link) keep their existing behaviour.
+            if (share && (*i)->GetId() == PARTY_DAMAGE_REDIRECT_SPELL_ID && shareDamageTarget->IsAlive())
+                Unit::ProcSkillsAndAuras(attacker, shareDamageTarget, PROC_FLAG_NONE, PROC_FLAG_TAKEN_DAMAGE,
+                    PROC_SPELL_TYPE_DAMAGE, PROC_SPELL_PHASE_HIT, PROC_HIT_NONE, nullptr, nullptr, nullptr);
         }
     }
 
