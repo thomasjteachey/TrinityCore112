@@ -1664,29 +1664,30 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
 
         Aura* judgeWisdomAura = victim->GetAuraOfRankedSpell(20186);
         Aura* judgeLightAura = victim->GetAuraOfRankedSpell(20185);
+        // Covers the whole real Judgement of the Crusader chain
+        // (20188 -> 20300 -> 20301 -> 20302 -> 20303), which is what the
+        // Lawbender 3pc applies. Deliberately not 21183: that shares the name
+        // but is the Heart of the Crusader effect on an unrelated chain, and
+        // stock behaviour does not refresh it from auto attacks.
         Aura* judgeCrusaderAura = victim->GetAuraOfRankedSpell(20188);
         Aura* judgeJusticeAura = victim->GetAura(20184);
 
-        //if paladin that cast judgement hits with auto attack, it refreshes duration
-        if (judgeWisdomAura && judgeWisdomAura->GetCaster()->GetGUID() == attacker->GetGUID())
+        // if paladin that cast judgement hits with auto attack, it refreshes
+        // duration. GetCaster() can be null once the caster is gone from the
+        // world, so it must be checked before dereferencing.
+        auto refreshIfOurs = [attacker](Aura* aura)
         {
-            judgeWisdomAura->RefreshDuration();
-        }
+            if (!aura)
+                return;
+            Unit* auraCaster = aura->GetCaster();
+            if (auraCaster && auraCaster->GetGUID() == attacker->GetGUID())
+                aura->RefreshDuration();
+        };
 
-        if (judgeLightAura && judgeLightAura->GetCaster()->GetGUID() == attacker->GetGUID())
-        {
-            judgeLightAura->RefreshDuration();
-        }
-
-        if (judgeCrusaderAura && judgeCrusaderAura->GetCaster()->GetGUID() == attacker->GetGUID())
-        {
-            judgeCrusaderAura->RefreshDuration();
-        }
-
-        if (judgeJusticeAura && judgeJusticeAura->GetCaster()->GetGUID() == attacker->GetGUID())
-        {
-            judgeJusticeAura->RefreshDuration();
-        }
+        refreshIfOurs(judgeWisdomAura);
+        refreshIfOurs(judgeLightAura);
+        refreshIfOurs(judgeCrusaderAura);
+        refreshIfOurs(judgeJusticeAura);
     }
 
     // If this is a creature and it attacks from behind it has a probability to daze it's victim

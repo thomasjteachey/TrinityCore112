@@ -65,7 +65,12 @@ namespace
         // paladin
         SPELL_T1_JUDGEMENT_PASSIVE      = 90132,
         SPELL_T1_SEAL_PERSIST_PASSIVE   = 90133,
-        SPELL_JUDGEMENT_OF_THE_CRUSADER = 21183,
+        // Max rank of the real Judgement of the Crusader (chain 20188 -> 20300
+        // -> 20301 -> 20302 -> 20303, +140 holy damage taken, level 52). NOT
+        // 21183: despite sharing the name that is the Heart of the Crusader
+        // effect on its own separate chain (21183 -> 54498 -> 54499) and only
+        // worth +20, so the bonus was applying a level-6 debuff.
+        SPELL_JUDGEMENT_OF_THE_CRUSADER = 20303,
         // druid
         SPELL_T1_THINNERVATE_PASSIVE    = 90135,
         SPELL_T1_FERAL_CHARGE_PASSIVE   = 90136,
@@ -640,11 +645,12 @@ class spell_t1_judgement_crusader : public AuraScript
         if (GetId() == SPELL_JUDGEMENT_OF_THE_CRUSADER)
             return;
 
-        // Deliberately re-cast even when the target already carries our
-        // Crusader: that is what refreshes its duration when the paladin
-        // judges again. An earlier "skip if already applied" guard here
-        // stopped the spam but also stopped the refresh, so Crusader quietly
-        // ticked away to nothing while Light/Wisdom kept being renewed.
+        // Re-cast even when the target already carries our Crusader, so
+        // judging again gives a full-duration one rather than leaving a
+        // nearly-expired debuff in place. Keeping it up BETWEEN judgements is
+        // a separate mechanism: the paladin's auto attacks refresh judgements
+        // in Unit::DealMeleeDamage, which reaches this debuff because 20303
+        // sits in the 20188 rank chain that code walks.
         caster->CastSpell(GetTarget(), SPELL_JUDGEMENT_OF_THE_CRUSADER, true);
     }
 
