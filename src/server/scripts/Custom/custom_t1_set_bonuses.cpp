@@ -734,19 +734,30 @@ class spell_t1_reckoning_heal : public SpellScript
         Unit* caster = GetCaster();
         if (!caster || !caster->HasAura(SPELL_T1_RECKONING_PASSIVE))
             return;
-        // whichever Reckoning aura actually carries the charges on this core
-        static uint32 const reckoning[] = { 20178, 20177, 20179, 20180, 20181, 20182, 32746 };
-        for (uint32 id : reckoning)
-            if (Aura* charges = caster->GetAura(id))
-            {
-                charges->Remove();
-                int32 heal = GetHitHeal();
-                SetHitHeal(AddPct(heal, 30));
-                SendCustomAuraDiag(Trinity::StringFormat(
-                    "[CustomAuras] {}: Righteous Reckoning consumed {} - heal +30%",
-                    caster->GetName(), id));
-                return;
-            }
+        // ONLY 20178 carries Reckoning charges - it is the stacking "your next
+        // N weapon swings" buff. 20177/20179-20182 are the TALENT passives and
+        // 32746 is the extra-swing effect; the old list included them, so the
+        // first empowered heal called Remove() on the talent aura itself and
+        // silently unlearned Reckoning for the rest of the session (the talent
+        // frame still showed 4/4 because character_talent was untouched, but
+        // the passive was gone and nothing could proc again).
+        Aura* charges = caster->GetAura(20178);
+        if (!charges)
+            return;
+
+        // Consume exactly ONE charge, not the whole buff, matching how the
+        // core's own Reckoning consumption works (spell_pal_reckoning_stacks).
+        uint8 const before = charges->GetStackAmount();
+        if (before > 1)
+            charges->ModStackAmount(-1, AURA_REMOVE_BY_DEFAULT);
+        else
+            charges->Remove();
+
+        int32 heal = GetHitHeal();
+        SetHitHeal(AddPct(heal, 30));
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Righteous Reckoning consumed 1 charge ({} -> {}) - heal +30%",
+            caster->GetName(), before, before > 1 ? before - 1 : 0));
     }
 
     void Register() override

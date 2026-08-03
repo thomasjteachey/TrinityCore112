@@ -1049,17 +1049,31 @@ class spell_pal_party_damage_redirect : public AuraScript
                 &procDamage,
                 nullptr);
 
+            // Plain unblocked hits are the overwhelming majority and say
+            // nothing, so only the lines that can actually answer a question
+            // are printed: a crit came in, the swing was avoided or blocked,
+            // or a Reckoning charge moved. Everything else is counted and
+            // reported once every 25 hits so the stream stays readable.
+            uint32 const reckoningAfter = ReckoningCharges(caster);
+            bool const interesting = originalWasCrit || reckoningAfter != reckoningBefore
+                || outcome != MELEE_HIT_NORMAL;
+
+            static uint32 quietHits = 0;
+            if (!interesting && ++quietHits % 25 != 0)
+                return;
+
             SendSacrificialAuraDiag(Trinity::StringFormat(
                 "[SacrificialAura] {}: hit from {} | origCrit {} | outcome {} | "
                 "hitMask 0x{:X} | redirected {} (blocked {}, absorbed {}) | "
-                "Reckoning {} -> {} | talents [{}]",
+                "Reckoning {} -> {} | talents [{}]{}",
                 caster->GetName(), attacker->GetName(),
                 originalWasCrit ? "YES" : "no",
                 MeleeOutcomeName(outcome), procDamage.GetHitMask(),
                 redirectInfo.Damages[0].Damage, redirectInfo.Blocked,
                 redirectInfo.Damages[0].Absorb,
-                reckoningBefore, ReckoningCharges(caster),
-                ActiveTalentSummary(caster)));
+                reckoningBefore, reckoningAfter,
+                ActiveTalentSummary(caster),
+                interesting ? "" : "  (+24 quiet hits)"));
         }
     }
 
