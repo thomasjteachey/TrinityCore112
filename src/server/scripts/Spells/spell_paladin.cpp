@@ -33,8 +33,11 @@
 #include "SpellScript.h"
 #include "Item.h"
 #include "Spell.h"
+#include "Chat.h"
 #include "Log.h"
+#include "World.h"
 #include "WorldPacket.h"
+#include "WorldSession.h"
 #include <algorithm>
 
 enum PaladinSpells
@@ -778,6 +781,47 @@ class spell_pal_hand_of_sacrifice : public AuraScript
     }
 };
 
+namespace
+{
+    // Broadcast to anyone running ".gm diagnostics on sacrificialaura". The
+    // redirect resolves faster than it can be read off the buff bar, so the
+    // only practical way to confirm the avoidance roll and whether Reckoning
+    // actually built a charge is to print it per hit.
+    void SendSacrificialAuraDiag(std::string const& msg)
+    {
+        for (auto const& sessionPair : sWorld->GetAllSessions())
+            if (sessionPair.second && sessionPair.second->GetPlayer()
+                && sessionPair.second->IsGmDiagnosticEnabled(GmDiagnosticCategory::SacrificialAura))
+                ChatHandler(sessionPair.second).SendSysMessage(msg.c_str());
+    }
+
+    char const* MeleeOutcomeName(MeleeHitOutcome outcome)
+    {
+        switch (outcome)
+        {
+            case MELEE_HIT_MISS:     return "MISS";
+            case MELEE_HIT_DODGE:    return "DODGE";
+            case MELEE_HIT_PARRY:    return "PARRY";
+            case MELEE_HIT_BLOCK:    return "BLOCK";
+            case MELEE_HIT_CRIT:     return "CRIT";
+            case MELEE_HIT_GLANCING: return "GLANCING";
+            case MELEE_HIT_CRUSHING: return "CRUSHING";
+            case MELEE_HIT_EVADE:    return "EVADE";
+            default:                 return "NORMAL";
+        }
+    }
+
+    // Reckoning stacks live on 20178 ("the next N weapon swings"); the talent
+    // ranks 20177-20182 are the passives that grant it, so the charge count on
+    // 20178 is what actually shows whether a proc landed.
+    uint32 ReckoningCharges(Unit* paladin)
+    {
+        if (Aura* reckoning = paladin->GetAura(20178))
+            return reckoning->GetStackAmount() ? reckoning->GetStackAmount() : reckoning->GetCharges();
+        return 0;
+    }
+}
+
 class spell_pal_party_damage_redirect : public AuraScript
 {
     PrepareAuraScript(spell_pal_party_damage_redirect);
@@ -952,6 +996,8 @@ class spell_pal_party_damage_redirect : public AuraScript
             redirectInfo.Attacker->DealMeleeDamage(&redirectInfo, false);
 
             DamageInfo procDamage(redirectInfo);
+            uint32 const reckoningBefore = ReckoningCharges(caster);
+
             Unit::ProcSkillsAndAuras(
                 redirectInfo.Attacker,
                 redirectInfo.Target,
@@ -963,6 +1009,15 @@ class spell_pal_party_damage_redirect : public AuraScript
                 nullptr,
                 &procDamage,
                 nullptr);
+
+            SendSacrificialAuraDiag(Trinity::StringFormat(
+                "[SacrificialAura] {}: hit from {} | outcome {} | hitMask 0x{:X} | "
+                "redirected {} (blocked {}, absorbed {}) | Reckoning {} -> {}",
+                caster->GetName(), attacker->GetName(),
+                MeleeOutcomeName(outcome), procDamage.GetHitMask(),
+                redirectInfo.Damages[0].Damage, redirectInfo.Blocked,
+                redirectInfo.Damages[0].Absorb,
+                reckoningBefore, ReckoningCharges(caster)));
         }
     }
 
