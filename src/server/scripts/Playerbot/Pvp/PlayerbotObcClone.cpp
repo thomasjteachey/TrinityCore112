@@ -594,6 +594,10 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
     clone->SetGender(nativeGender);
     clone->SetNativeGender(nativeGender);
     clone->InitDisplayIds();
+    // Server-created player: LoadFromDB never runs, so PlayerSocial is
+    // null unless we make one. Channel::SendToAll and friends call
+    // GetSocial()->HasIgnore() on every player they touch.
+    clone->EnsureSocial();
 
     // WorldSession::SetPlayer reads the player's GUID immediately. Player's
     // update-field storage and GUID do not exist until Player::Create succeeds.
@@ -857,6 +861,10 @@ Player* CreateCustomGameLobbyClone(Player* source, uint32 mapId, uint32 lobbyIns
     clone->SetGender(source->GetNativeGender());
     clone->SetNativeGender(source->GetNativeGender());
     clone->InitDisplayIds();
+    // Server-created player: LoadFromDB never runs, so PlayerSocial is
+    // null unless we make one. Channel::SendToAll and friends call
+    // GetSocial()->HasIgnore() on every player they touch.
+    clone->EnsureSocial();
     session->SetPlayer(clone);
     clone->GetMotionMaster()->Initialize();
     clone->SetLevel(source->GetLevel(), false);
@@ -1285,6 +1293,10 @@ Player* PlayerbotObcCloneManager::CreateCustomGameClone(Player* source, Battlegr
     clone->SetGender(source->GetNativeGender());
     clone->SetNativeGender(source->GetNativeGender());
     clone->InitDisplayIds();
+    // Server-created player: LoadFromDB never runs, so PlayerSocial is
+    // null unless we make one. Channel::SendToAll and friends call
+    // GetSocial()->HasIgnore() on every player they touch.
+    clone->EnsureSocial();
     session->SetPlayer(clone);
     clone->GetMotionMaster()->Initialize();
     clone->SetLevel(source->GetLevel(), false);

@@ -754,9 +754,9 @@ class spell_t1_reckoning_heal : public SpellScript
             charges->Remove();
 
         int32 heal = GetHitHeal();
-        SetHitHeal(AddPct(heal, 30));
+        SetHitHeal(AddPct(heal, 20));
         SendCustomAuraDiag(Trinity::StringFormat(
-            "[CustomAuras] {}: Righteous Reckoning consumed 1 charge ({} -> {}) - heal +30%",
+            "[CustomAuras] {}: Righteous Reckoning consumed 1 charge ({} -> {}) - heal +20%",
             caster->GetName(), before, before > 1 ? before - 1 : 0));
     }
 

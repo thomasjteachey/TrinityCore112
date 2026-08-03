@@ -998,6 +998,13 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
 
         PlayerSocial* GetSocial() { return m_social; }
         void RemoveSocial();
+        // Server-created players (dark clones, lobby mannequins) are built with
+        // Player::Create and never run LoadFromDB, which is the only place
+        // m_social is assigned - leaving it null. Anything iterating players
+        // and calling GetSocial()->... then dereferences null; Channel::SendToAll
+        // did exactly that and crashed the world server. Give them an empty
+        // social list instead of null so they behave like any other player.
+        void EnsureSocial();
 
         PlayerTaxi m_taxi;
         void InitTaxiNodesForLevel() { m_taxi.InitTaxiNodesForLevel(GetRace(), GetClass(), GetLevel()); }

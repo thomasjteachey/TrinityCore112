@@ -29636,6 +29636,16 @@ void Player::RemoveSocial()
     m_social = nullptr;
 }
 
+void Player::EnsureSocial()
+{
+    if (m_social)
+        return;
+
+    // Empty result = no friends/ignores, which is correct for a server-created
+    // player. RemoveSocial() during teardown cleans the map entry back up.
+    m_social = sSocialMgr->LoadFromDB(PreparedQueryResult(nullptr), GetGUID());
+}
+
 std::string Player::GetDebugInfo() const
 {
     std::stringstream sstr;
