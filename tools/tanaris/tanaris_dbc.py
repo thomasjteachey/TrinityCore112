@@ -56,6 +56,12 @@ SPECS = {
         "fields": "iii" + "s" + "ffff" + "iii",
         "count": 11,
     },
+    "WorldMapOverlay.dbc": {
+        # ID, MapAreaID, AreaID_1..4, MapPointX, MapPointY, TextureName,
+        # TextureWidth, TextureHeight, OffsetX, OffsetY, HitRect{Top,Left,Bottom,Right}
+        "fields": "iiiiii" + "ii" + "s" + "iiiiiiii",
+        "count": 17,
+    },
     "WorldStateUI.dbc": {
         # ID, MapID, AreaID, PhaseShift, Icon, String(loc), Tooltip(loc),
         # StateVariable, Type, DynamicIcon, DynamicTooltip(loc), ExtendedUI,
@@ -183,6 +189,40 @@ ROWS = {
          -1,           # DisplayMapID
          0,            # DefaultDungeonFloor
          0],           # ParentWorldMapID
+    ],
+    "WorldMapOverlay.dbc": [
+        # The explored-area artwork. Without these the world map for 1620 draws
+        # as blank parchment: the arrow sits in the right place, but no zone
+        # detail appears however thoroughly the player has explored Tanaris.
+        #
+        # MapAreaID is a WorldMapArea ROW ID, not a map id. Stock Tanaris's 20
+        # overlays all point at row 161; the client now displays row 9532 and so
+        # finds none. These are those same 20 rows repointed at 9532 - identical
+        # textures, offsets and hit rects, and identical AreaIDs so they light up
+        # from the exploration the player already has.
+        #
+        # Generated from the MapAreaID=161 rows of the live binary; if those ever
+        # change, regenerate rather than hand-editing.
+        [1700, 9532, 980, 0, 0, 0, 0, 0, 'THISTLESHRUBVALLEY', 185, 250, 203, 286, 360, 245, 475, 370],
+        [1701, 9532, 990, 0, 0, 0, 0, 0, 'VALLEYOFTHEWATCHERS', 150, 160, 291, 434, 490, 330, 585, 410],
+        [1702, 9532, 992, 0, 0, 0, 0, 0, 'SOUTHMOONRUINS', 195, 210, 323, 359, 445, 365, 510, 440],
+        [1703, 9532, 987, 0, 0, 0, 0, 0, 'LANDSENDBEACH', 205, 157, 445, 511, 565, 480, 660, 620],
+        [1704, 9532, 984, 0, 0, 0, 0, 0, 'EASTMOONRUINS', 160, 150, 395, 346, 410, 435, 460, 500],
+        [1705, 9532, 981, 0, 0, 0, 0, 0, 'THEGAPINGCHASM', 220, 210, 449, 372, 415, 490, 530, 600],
+        [1706, 9532, 1940, 0, 0, 0, 0, 0, 'SOUTHBREAKSHORE', 215, 175, 499, 293, 365, 570, 430, 680],
+        [1707, 9532, 983, 0, 0, 0, 0, 0, 'DUNEMAULCOMPOUND', 205, 145, 325, 289, 335, 380, 415, 460],
+        [1708, 9532, 982, 0, 0, 0, 0, 0, 'THENOXIOUSLAIR', 180, 200, 252, 199, 255, 310, 355, 385],
+        [1709, 9532, 1938, 0, 0, 0, 0, 0, 'BROKENPILLAR', 110, 180, 473, 234, 275, 500, 335, 565],
+        [1710, 9532, 1939, 0, 0, 0, 0, 0, 'ABYSSALSANDS', 215, 180, 363, 194, 240, 410, 330, 505],
+        [1711, 9532, 985, 0, 0, 0, 0, 0, 'WATERSPRINGFIELD', 165, 180, 509, 168, 210, 550, 295, 645],
+        [1712, 9532, 1336, 0, 0, 0, 0, 0, 'LOSTRIGGERCOVE', 160, 190, 629, 220, 255, 675, 375, 760],
+        [1713, 9532, 986, 0, 0, 0, 0, 0, 'ZALASHJISDEN', 110, 140, 611, 147, 190, 640, 255, 700],
+        [1714, 9532, 977, 0, 0, 0, 0, 0, 'STEAMWHEEDLEPORT', 155, 150, 592, 75, 110, 630, 175, 710],
+        [1715, 9532, 1937, 0, 0, 0, 0, 0, 'NOONSHADERUINS', 120, 135, 533, 104, 140, 570, 190, 630],
+        [1716, 9532, 2300, 0, 0, 0, 0, 0, 'CAVERNSOFTIME', 155, 150, 561, 256, 295, 595, 365, 690],
+        [1717, 9532, 976, 0, 0, 0, 0, 0, 'GADGETZAN', 175, 165, 421, 91, 140, 460, 225, 565],
+        [1718, 9532, 979, 0, 0, 0, 0, 0, 'SANDSORROWWATCH', 195, 175, 299, 100, 155, 365, 225, 435],
+        [1719, 9532, 978, 0, 0, 0, 0, 0, 'ZULFARRAK', 210, 175, 254, 0, 25, 300, 145, 450]
     ],
     "WorldStateUI.dbc": [
         # The top-frame score readout. Without these two rows the server still

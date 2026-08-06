@@ -19,6 +19,7 @@ WANT = {
     "WorldSafeLocs.dbc": [52500, 52501, 52502, 52503],
     "WorldMapArea.dbc": [9532],
     "WorldStateUI.dbc": [90023, 90024],
+    "WorldMapOverlay.dbc": list(range(1700, 1720)),
 }
 
 
