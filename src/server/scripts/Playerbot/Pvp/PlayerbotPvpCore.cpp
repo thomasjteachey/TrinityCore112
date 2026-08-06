@@ -5824,10 +5824,30 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
 // normal class rotation entirely: whatever is off cooldown from their short
 // list gets cast, and if none of it is ready they simply do nothing rather
 // than falling through to the real priest/druid logic.
+// Clones are created with a display prefix - "Dark " for player and OBC
+// clones, empty for playerbot clones (see custom_game_lobby.cpp) - so
+// "Dark Kader" is still Kader and must obey the same kit. Strip the prefix
+// before matching, otherwise the clone silently falls through to the real
+// class rotation and starts casting Flash Heal.
+std::string NoveltyBotSourceName(Player const* player)
+{
+    std::string name = player->GetName();
+    static std::string const darkPrefix = "Dark ";
+    if (name.size() > darkPrefix.size() && name.compare(0, darkPrefix.size(), darkPrefix) == 0)
+        name.erase(0, darkPrefix.size());
+    return name;
+}
+
+bool IsNoveltyBotName(Player const* player)
+{
+    std::string const name = NoveltyBotSourceName(player);
+    return name == "Kader" || name == "Irripius";
+}
+
 SpellDecision SelectNoveltyBotSpell(Player const* player, Unit const* target)
 {
     SpellDecision decision;
-    std::string const& name = player->GetName();
+    std::string const name = NoveltyBotSourceName(player);
 
     // Kader: Smite, Holy Nova, and "angel form" (the castable custom Spirit of
     // Redemption, 81321).
@@ -5835,6 +5855,13 @@ SpellDecision SelectNoveltyBotSpell(Player const* player, Unit const* target)
     {
         if (IsSpellReady(player, 81321) && !HasAuraFromSpellChain(player, 81321))
             return { "kader angel form", "novelty bot: become the Spirit of Redemption", 81321,
+                playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+        // Lightwell, whenever its cooldown allows. Rank 1 id: IsSpellReady
+        // resolves the chain (724 -> 27870 -> 27871 -> ...) to whatever rank
+        // he actually knows.
+        if (IsSpellReady(player, 724))
+            return { "kader lightwell", "novelty bot: plant a lightwell", 724,
                 playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
 
         if (target && CountNearbyEnemies(player, 10.0f) >= 2 && IsSpellReady(player, 15237))
@@ -5878,7 +5905,13 @@ SpellDecision SelectClassicClassSpell(Player const* player, Unit const* target, 
     }
 
     // Checked before the class switch so these two never run normal rotations.
-    if (player->GetName() == "Kader" || player->GetName() == "Irripius")
+    // Matches clones too ("Dark Kader" etc.), not just the source character.
+    //
+    // Exception: Kader in angel form is deliberately let through to the real
+    // priest selector. Flash Heal is free during Spirit of Redemption, and the
+    // caller already special-cases that aura, so smiting through it would
+    // waste the form.
+    if (IsNoveltyBotName(player) && !IsPriestInSpiritOfRedemption(player))
         return SelectNoveltyBotSpell(player, target);
 
     if (profileSelection.unsupportedClass)
