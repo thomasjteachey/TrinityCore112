@@ -2,7 +2,6 @@
 
 #include "BattlegroundMgr.h"
 #include "DBCStores.h"
-#include "GameObject.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
@@ -18,7 +17,9 @@ void BattlegroundTRTScore::BuildObjectivesBlock(WorldPacket& data)
 
 BattlegroundTRT::BattlegroundTRT()
 {
-    BgObjects.resize(BG_TRT_OBJECT_MAX);
+    // No BgObjects: the zone carries no start gates and no buff nodes. The RTS
+    // structures will be spawned and owned by their own system rather than
+    // living in this fixed-size array.
     BgCreatures.resize(BG_TRT_CREATURE_MAX);
     _allianceKills = 0;
     _hordeKills = 0;
@@ -26,7 +27,6 @@ BattlegroundTRT::BattlegroundTRT()
     _hordeHumanParticipants = 0;
     _humanFaceoffEverHappened = false;
     _boundsCheckTimer = 0;
-    m_BuffChange = true;
 }
 
 void BattlegroundTRT::AddPlayer(Player* player)
@@ -63,9 +63,8 @@ void BattlegroundTRT::Reset()
 void BattlegroundTRT::PostUpdateImpl(uint32 diff)
 {
     // Deliberately outside any STATUS_IN_PROGRESS gate: the warmup is exactly
-    // when players test the start line, and a player who has wandered off into
-    // the desert during the countdown is just as stuck as one who does it
-    // mid-match.
+    // when players test the boundary, and someone who has wandered off during
+    // the countdown is just as out of place as one who does it mid-match.
     _boundsCheckTimer += diff;
     if (_boundsCheckTimer >= BG_TRT_BOUNDS_CHECK_INTERVAL)
     {
@@ -94,52 +93,60 @@ void BattlegroundTRT::ConfinePlayers()
     }
 }
 
-// Slide a player back inside the region they are allowed to be in, keeping
-// them as close to where they were as possible. Returns true if it moved them.
+// Keep a player inside the region they are allowed to be in, moving them as
+// little as possible. Returns true if it moved them.
 //
-// Held Z rather than re-deriving it: the arena floor is level to within a yard,
-// so the player's own Z is already the right height, and it avoids a terrain
-// query per player per check. A player who was airborne simply falls to the
-// shelf, which is the same thing that would happen anyway.
+// Z is kept rather than re-derived: the player is already standing on valid
+// ground, and holding their height avoids a terrain query per player per check.
+// Someone airborne simply falls, which is what would have happened anyway.
 bool BattlegroundTRT::ConfineToRegion(Player* player) const
 {
-    float minX = BG_TRT_ARENA_MIN_X;
-    float maxX = BG_TRT_ARENA_MAX_X;
-
-    // Before the gates open each team is additionally held behind its own
-    // gate line. The gates are open terrain dressing and can simply be walked
-    // around, so this is what actually keeps the two sides apart.
+    // Before the gates would have opened, hold each team near its own spawn.
+    // The zone is open ground with the two starts over two thousand yards
+    // apart, so a radius around the spawn is the only thing separating the
+    // sides during the warmup.
     if (GetStatus() != STATUS_IN_PROGRESS)
     {
-        if (player->GetBGTeam() == ALLIANCE)
-            maxX = BG_TRT_GATE_LINE_ALLIANCE;
-        else if (player->GetBGTeam() == HORDE)
-            minX = BG_TRT_GATE_LINE_HORDE;
+        uint32 const startLoc = (player->GetBGTeam() == HORDE)
+            ? BG_TRT_GY_HORDE_START : BG_TRT_GY_ALLIANCE_START;
+
+        if (WorldSafeLocsEntry const* start = sWorldSafeLocsStore.LookupEntry(startLoc))
+        {
+            float const dx = player->GetPositionX() - start->Loc.X;
+            float const dy = player->GetPositionY() - start->Loc.Y;
+            if ((dx * dx + dy * dy) > (BG_TRT_WARMUP_RADIUS * BG_TRT_WARMUP_RADIUS))
+            {
+                player->TeleportTo(GetMapId(), start->Loc.X, start->Loc.Y, start->Loc.Z + 1.0f,
+                    player->GetOrientation());
+                return true;
+            }
+        }
+        return false;
     }
 
     float x = player->GetPositionX();
     float y = player->GetPositionY();
     bool outside = false;
 
-    if (x < minX)
+    if (x < BG_TRT_FIELD_MIN_X)
     {
-        x = minX + BG_TRT_BOUNDS_INSET;
+        x = BG_TRT_FIELD_MIN_X + BG_TRT_BOUNDS_INSET;
         outside = true;
     }
-    else if (x > maxX)
+    else if (x > BG_TRT_FIELD_MAX_X)
     {
-        x = maxX - BG_TRT_BOUNDS_INSET;
+        x = BG_TRT_FIELD_MAX_X - BG_TRT_BOUNDS_INSET;
         outside = true;
     }
 
-    if (y < BG_TRT_ARENA_MIN_Y)
+    if (y < BG_TRT_FIELD_MIN_Y)
     {
-        y = BG_TRT_ARENA_MIN_Y + BG_TRT_BOUNDS_INSET;
+        y = BG_TRT_FIELD_MIN_Y + BG_TRT_BOUNDS_INSET;
         outside = true;
     }
-    else if (y > BG_TRT_ARENA_MAX_Y)
+    else if (y > BG_TRT_FIELD_MAX_Y)
     {
-        y = BG_TRT_ARENA_MAX_Y - BG_TRT_BOUNDS_INSET;
+        y = BG_TRT_FIELD_MAX_Y - BG_TRT_BOUNDS_INSET;
         outside = true;
     }
 
@@ -215,52 +222,6 @@ void BattlegroundTRT::ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, u
 
 bool BattlegroundTRT::SetupBattleground()
 {
-    // Every Z below is the terrain height read out of the server's own
-    // 16204737.map tile at that exact point. The shelf is level but not
-    // perfectly flat, so these are measured rather than shared - re-measure if
-    // anything moves, or objects end up buried or floating.
-    //
-    // Gates sit on each team's start line, between the spawn and the middle,
-    // facing each other down the x axis.
-    if (!AddObject(BG_TRT_OBJECT_GATE_ALLIANCE, BG_TRT_OBJECT_GATE_ENTRY,
-            BG_TRT_GATE_LINE_ALLIANCE, -3010.0f, 9.57f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f,
-            RESPAWN_IMMEDIATELY)
-        || !AddObject(BG_TRT_OBJECT_GATE_HORDE, BG_TRT_OBJECT_GATE_ENTRY,
-            BG_TRT_GATE_LINE_HORDE, -3010.0f, 8.73f, 3.14159f,
-            0.0f, 0.0f, 1.0f, 0.0f,
-            RESPAWN_IMMEDIATELY)
-        // Four buff nodes, north/south/east/west of the arena centre and
-        // equidistant from it, so neither side is closer to any of them.
-        || !AddObject(BG_TRT_OBJECT_BUFF1_SPEED, BG_OBJECTID_SPEEDBUFF_ENTRY,
-            -8365.0f, -2955.0f, 8.63f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_TRT_OBJECT_BUFF1_REGEN, BG_OBJECTID_REGENBUFF_ENTRY,
-            -8365.0f, -2955.0f, 8.63f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_TRT_OBJECT_BUFF1_BERSERK, BG_OBJECTID_BERSERKERBUFF_ENTRY,
-            -8365.0f, -2955.0f, 8.63f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_TRT_OBJECT_BUFF2_SPEED, BG_OBJECTID_SPEEDBUFF_ENTRY,
-            -8365.0f, -3065.0f, 8.09f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_TRT_OBJECT_BUFF2_REGEN, BG_OBJECTID_REGENBUFF_ENTRY,
-            -8365.0f, -3065.0f, 8.09f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_TRT_OBJECT_BUFF2_BERSERK, BG_OBJECTID_BERSERKERBUFF_ENTRY,
-            -8365.0f, -3065.0f, 8.09f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_TRT_OBJECT_BUFF3_SPEED, BG_OBJECTID_SPEEDBUFF_ENTRY,
-            -8415.0f, -3010.0f, 8.65f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_TRT_OBJECT_BUFF3_REGEN, BG_OBJECTID_REGENBUFF_ENTRY,
-            -8415.0f, -3010.0f, 8.65f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_TRT_OBJECT_BUFF3_BERSERK, BG_OBJECTID_BERSERKERBUFF_ENTRY,
-            -8415.0f, -3010.0f, 8.65f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_TRT_OBJECT_BUFF4_SPEED, BG_OBJECTID_SPEEDBUFF_ENTRY,
-            -8315.0f, -3010.0f, 8.63f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_TRT_OBJECT_BUFF4_REGEN, BG_OBJECTID_REGENBUFF_ENTRY,
-            -8315.0f, -3010.0f, 8.63f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_TRT_OBJECT_BUFF4_BERSERK, BG_OBJECTID_BERSERKERBUFF_ENTRY,
-            -8315.0f, -3010.0f, 8.63f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME))
-    {
-        TC_LOG_ERROR("bg.battleground", "BattlegroundTRT::SetupBattleground: failed to spawn one or more Tanaris gameobjects.");
-        return false;
-    }
-
     WorldSafeLocsEntry const* alliance = sWorldSafeLocsStore.LookupEntry(BG_TRT_GY_ALLIANCE);
     WorldSafeLocsEntry const* horde = sWorldSafeLocsStore.LookupEntry(BG_TRT_GY_HORDE);
 
@@ -272,58 +233,21 @@ bool BattlegroundTRT::SetupBattleground()
 
     if (!AddSpiritGuide(BG_TRT_SPIRIT_ALLIANCE, alliance->Loc.X, alliance->Loc.Y, alliance->Loc.Z, 0.0f, TEAM_ALLIANCE))
         return false;
-    if (!AddSpiritGuide(BG_TRT_SPIRIT_HORDE, horde->Loc.X, horde->Loc.Y, horde->Loc.Z, 3.14159f, TEAM_HORDE))
+    if (!AddSpiritGuide(BG_TRT_SPIRIT_HORDE, horde->Loc.X, horde->Loc.Y, horde->Loc.Z, 0.0f, TEAM_HORDE))
         return false;
 
-    ApplyNonInteractableObjectFlags();
     return true;
 }
 
-void BattlegroundTRT::ApplyNonInteractableObjectFlags()
-{
-    if (GameObject* allianceGate = GetBGObject(BG_TRT_OBJECT_GATE_ALLIANCE))
-        allianceGate->SetFlag(GO_FLAG_NOT_SELECTABLE);
-
-    if (GameObject* hordeGate = GetBGObject(BG_TRT_OBJECT_GATE_HORDE))
-        hordeGate->SetFlag(GO_FLAG_NOT_SELECTABLE);
-}
-
-void BattlegroundTRT::SpawnRandomBuffSet(uint32 speedTypeIndex)
-{
-    // Despawn all three buff variants at this node first.
-    SpawnBGObject(speedTypeIndex + 0, RESPAWN_ONE_DAY);
-    SpawnBGObject(speedTypeIndex + 1, RESPAWN_ONE_DAY);
-    SpawnBGObject(speedTypeIndex + 2, RESPAWN_ONE_DAY);
-
-    uint8 const buff = urand(0, 2);
-    SpawnBGObject(speedTypeIndex + buff, RESPAWN_IMMEDIATELY);
-}
-
+// Both required by the base class. There is nothing to open or close: the zone
+// has no start gates, and the warmup is enforced by the spawn radius in
+// ConfineToRegion instead.
 void BattlegroundTRT::StartingEventCloseDoors()
 {
-    DoorClose(BG_TRT_OBJECT_GATE_ALLIANCE);
-    DoorClose(BG_TRT_OBJECT_GATE_HORDE);
-    SpawnBGObject(BG_TRT_OBJECT_GATE_ALLIANCE, RESPAWN_IMMEDIATELY);
-    SpawnBGObject(BG_TRT_OBJECT_GATE_HORDE, RESPAWN_IMMEDIATELY);
-
-    // Hide all buff variants until battle start.
-    for (uint32 type = BG_TRT_OBJECT_BUFF1_SPEED; type <= BG_TRT_OBJECT_BUFF4_BERSERK; ++type)
-        SpawnBGObject(type, RESPAWN_ONE_DAY);
-
-    ApplyNonInteractableObjectFlags();
 }
 
 void BattlegroundTRT::StartingEventOpenDoors()
 {
-    DoorOpen(BG_TRT_OBJECT_GATE_ALLIANCE);
-    DoorOpen(BG_TRT_OBJECT_GATE_HORDE);
-
-    SpawnRandomBuffSet(BG_TRT_OBJECT_BUFF1_SPEED);
-    SpawnRandomBuffSet(BG_TRT_OBJECT_BUFF2_SPEED);
-    SpawnRandomBuffSet(BG_TRT_OBJECT_BUFF3_SPEED);
-    SpawnRandomBuffSet(BG_TRT_OBJECT_BUFF4_SPEED);
-
-    ApplyNonInteractableObjectFlags();
 }
 
 WorldSafeLocsEntry const* BattlegroundTRT::GetClosestGraveyard(Player* player)
@@ -452,9 +376,4 @@ void BattlegroundTRT::EndBattleground(uint32 winner)
 {
     UpdateTeamScoreWorldStates();
     Battleground::EndBattleground(winner);
-}
-
-uint32 BattlegroundTRT::GetBuffRespawnTime(uint32 /*type*/) const
-{
-    return BG_TRT_BUFF_RESPAWN_TIME;
 }

@@ -87,17 +87,15 @@ BG_NAME = "Tanaris"
 MAP_NAME = "Tanaris Deathmatch"
 DESC = "A deathmatch in the deep desert of Tanaris. First team to the kill limit wins."
 
-# Start / graveyard positions, laid out symmetrically about the arena centre
-# at (-8365, -3010) and 180 yards apart.
+# Start / graveyard positions. Southmoon Ruins for the Alliance, Gadgetzan for
+# the Horde -- about 2200 yards apart, which is RTS scale rather than arena
+# scale. Each team's spirit healer stands on its own spawn point.
 #
-# Every Z here is the real terrain height read out of the server's own
-# 16204737.map tile plus one yard, so nobody spawns inside the ground. They
-# differ because the shelf is level but not perfectly so - the numbers are
-# measured, not guessed, and should be re-measured if the positions move.
-A_START = (-8455.0, -3010.0, 9.6)    # ground 8.63
-H_START = (-8275.0, -3010.0, 11.0)   # ground 10.01
-A_GRAVE = (-8470.0, -3010.0, 10.2)   # ground 9.23
-H_GRAVE = (-8260.0, -3010.0, 9.7)    # ground 8.69
+# Z is the measured ground height plus a yard so nobody spawns inside terrain.
+A_START = (-9235.11, -3009.99, 17.19)   # ground 16.19
+H_START = (-7166.45, -3760.62, 9.40)    # ground 8.40
+A_GRAVE = (-9235.11, -3009.99, 17.19)   # spirit healer stands on the spawn
+H_GRAVE = (-7166.45, -3760.62, 9.40)
 
 WSL_A_START, WSL_H_START, WSL_A_GRAVE, WSL_H_GRAVE = 52500, 52501, 52502, 52503
 

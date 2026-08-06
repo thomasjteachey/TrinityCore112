@@ -3,18 +3,18 @@
  * Custom TrinityCore 3.3.5 battleground type 104 (map 1620, cloned from map 1)
  *
  * Straight deathmatch: one point per kill, first side to the kill limit wins.
+ * This is the baseline the RTS layer will be built on top of.
  *
  * What makes this one different from the other custom battlegrounds here is
- * that it is fought OUTDOORS, on the flat desert shelf in north-west Tanaris,
- * rather than inside a building. There are no walls to keep anyone in, so
- * containment is a coordinate check on a timer (ConfinePlayers) instead of a
- * ring of doors. The gates are start-line dressing; the bounds check is what
- * actually holds the arena together.
+ * that it is fought OUTDOORS across the whole Tanaris zone rather than inside a
+ * building. There are no walls, so containment is a coordinate check on a timer
+ * (ConfinePlayers) instead of a ring of doors.
  *
- * Map 1620 is a full clone of Kalimdor, so the terrain outside the arena is
- * real ground rather than a hole. Leaving the rectangle is therefore a
- * gameplay problem, not a falling-through-the-world one, and the fix is to
- * slide the player back inside rather than to yank them to a graveyard.
+ * Map 1620 ships its own copy of the Tanaris tiles plus a two-tile horizon
+ * ring, so the terrain outside the playable bounds is real ground rather than a
+ * hole. Leaving the bounds is therefore a gameplay problem, not a
+ * falling-through-the-world one, and the fix is to slide the player back inside
+ * rather than yank them to a graveyard.
  */
 
 #ifndef __BATTLEGROUNDTRT_H
@@ -51,82 +51,41 @@ enum BG_TRT_Creatures
     BG_TRT_CREATURE_MAX    = 2
 };
 
-enum BG_TRT_Objects
-{
-    BG_TRT_OBJECT_GATE_ALLIANCE = 0,
-    BG_TRT_OBJECT_GATE_HORDE    = 1,
-
-    // Buff group 1 must stay contiguous in Speed/Regen/Berserk order for m_BuffChange logic.
-    BG_TRT_OBJECT_BUFF1_SPEED   = 2,
-    BG_TRT_OBJECT_BUFF1_REGEN   = 3,
-    BG_TRT_OBJECT_BUFF1_BERSERK = 4,
-
-    // Buff group 2 must stay contiguous in Speed/Regen/Berserk order for m_BuffChange logic.
-    BG_TRT_OBJECT_BUFF2_SPEED   = 5,
-    BG_TRT_OBJECT_BUFF2_REGEN   = 6,
-    BG_TRT_OBJECT_BUFF2_BERSERK = 7,
-
-    // Buff group 3 must stay contiguous in Speed/Regen/Berserk order for m_BuffChange logic.
-    BG_TRT_OBJECT_BUFF3_SPEED   = 8,
-    BG_TRT_OBJECT_BUFF3_REGEN   = 9,
-    BG_TRT_OBJECT_BUFF3_BERSERK = 10,
-
-    // Buff group 4 must stay contiguous in Speed/Regen/Berserk order for m_BuffChange logic.
-    BG_TRT_OBJECT_BUFF4_SPEED   = 11,
-    BG_TRT_OBJECT_BUFF4_REGEN   = 12,
-    BG_TRT_OBJECT_BUFF4_BERSERK = 13,
-
-    BG_TRT_OBJECT_MAX           = 14
-};
-
-enum BG_TRT_ObjectEntries
-{
-    // Same gate the other two custom battlegrounds use, so it is known to
-    // open and close correctly through DoorOpen/DoorClose here.
-    BG_TRT_OBJECT_GATE_ENTRY = 185483
-};
-
 enum BG_TRT_Constants
 {
-    BG_TRT_KILL_LIMIT        = 30,
-    BG_TRT_BUFF_RESPAWN_TIME = 60,
+    BG_TRT_KILL_LIMIT = 30,
     // Bounds and fall-through are both checked on this timer rather than every
-    // tick. Walking out of the arena takes far longer than the interval at any
+    // tick. Crossing the boundary takes far longer than the interval at any
     // achievable run speed, so nothing can slip past between checks.
     BG_TRT_BOUNDS_CHECK_INTERVAL = 500
 };
 
-// The playable rectangle, in world coordinates on map 1620: 230 x 200 yards
-// of the level desert shelf, centred on (-8365, -3010).
+// The playable region, in world coordinates on map 1620: the whole Tanaris
+// zone, which is the ground the RTS layer is meant to be fought over.
 //
-// These bounds are not arbitrary. Sampling the server's own terrain out of
-// 16204737.map, the shelf holds z 8.6 - 15.3 across this rectangle, but a mesa
-// rises to z 60 just north-west of it and the ground climbs steeply away to the
-// south-east. Both would sit on one team's side only, so the rectangle is drawn
-// to exclude them and keep the fight on symmetric ground. Widening it without
-// re-checking the heightmap would hand the Alliance a hill.
-//
-// The one feature left inside is a small crater about 15 yards across near the
-// centre, bottoming at z 2. That is deliberate: it is central, so it costs
-// neither side anything, and it gives an otherwise featureless plain a landmark.
-constexpr float BG_TRT_ARENA_MIN_X = -8480.0f;
-constexpr float BG_TRT_ARENA_MAX_X = -8250.0f;
-constexpr float BG_TRT_ARENA_MIN_Y = -3110.0f;
-constexpr float BG_TRT_ARENA_MAX_Y = -2910.0f;
+// These are the extents of the tiles that actually contain Tanaris areas
+// (server grid x 43-51, y 34-42). The client patch ships a further two-tile
+// ring beyond this in every direction, so a player pushed back at the edge is
+// always standing on real terrain and always has terrain on the horizon.
+constexpr float BG_TRT_FIELD_MIN_X = -10700.0f;
+constexpr float BG_TRT_FIELD_MAX_X =  -5850.0f;
+constexpr float BG_TRT_FIELD_MIN_Y =  -5900.0f;
+constexpr float BG_TRT_FIELD_MAX_Y =  -1030.0f;
 
 // How far inside the boundary a player is put back. Landing exactly on the
 // edge would re-trigger the check on the next pass from any outward drift.
-constexpr float BG_TRT_BOUNDS_INSET = 5.0f;
+constexpr float BG_TRT_BOUNDS_INSET = 10.0f;
 
-// During the warmup each team is held behind its own gate line, 55 yards from
-// its own end of the rectangle and equidistant from the centre.
-constexpr float BG_TRT_GATE_LINE_ALLIANCE = -8425.0f;
-constexpr float BG_TRT_GATE_LINE_HORDE    = -8305.0f;
+// Before the match starts each team is held near its own spawn. There are no
+// start gates on an open zone, so this radius is what keeps the two sides
+// apart during the warmup.
+constexpr float BG_TRT_WARMUP_RADIUS = 60.0f;
 
-// Ground in the arena runs z 8.6 - 15.3, and the crater floor is z 2, so
-// anything this far down has fallen out of the world rather than walked
-// downhill.
-constexpr float BG_TRT_MIN_SAFE_Z = -30.0f;
+// Tanaris drops well below sea level in places -- Zul'Farrak and the sunken
+// ground near the Gaping Chasm sit around z -270 -- so the fall-through guard
+// has to sit below those to avoid teleporting players out of legitimate
+// terrain. The map's own MinHeight is -500.
+constexpr float BG_TRT_MIN_SAFE_Z = -400.0f;
 
 struct BattlegroundTRTScore final : public BattlegroundScore
 {
@@ -160,14 +119,11 @@ public:
     void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet) override;
     bool HandlePlayerUnderMap(Player* player) override;
     void EndBattleground(uint32 winner) override;
-    uint32 GetBuffRespawnTime(uint32 type) const override;
 
 private:
     void UpdateTeamScoreWorldStates();
     void AwardPointToTeam(uint32 team);
     void AwardLeavePointIfNeeded(Player const* player, uint32 team);
-    void ApplyNonInteractableObjectFlags();
-    void SpawnRandomBuffSet(uint32 speedTypeIndex);
     void ConfinePlayers();
     bool ConfineToRegion(Player* player) const;
     uint32 GetHonorRewardForTeam() const;
