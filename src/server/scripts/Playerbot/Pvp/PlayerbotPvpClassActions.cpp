@@ -552,6 +552,91 @@ Position BuildFollowDestination(Player* player, Unit* target, float desiredDista
     return BuildCollisionSafeDestination(player, destination);
 }
 
+// LOS recovery normally works by closing distance, which is right for peeking
+// around a pillar and useless once the bot is already standing on the target:
+// halving a 0.09 yard gap changes nothing, so the "recovery" re-issues forever.
+// Worse, against an arena boundary "closer" drives both bodies further into the
+// wall geometry that is blocking the trace to begin with. Step out to a spot
+// that can actually see the target instead of trying to close a gap of zero.
+bool TryIssueLosUnstickMovement(Player* player, Unit* target, char const* label)
+{
+    if (!player || !target)
+        return false;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return false;
+
+    // Re-issuing every tick would just be the same stutter in a new direction.
+    struct LosUnstickState
+    {
+        ObjectGuid targetGuid = ObjectGuid::Empty;
+        uint32 lastIssueMs = 0;
+    };
+
+    static std::unordered_map<uint64, LosUnstickState> stateByGuid;
+    LosUnstickState& state = playerbot::LockedGetOrCreate(stateByGuid, player->GetGUID().GetRawValue());
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    if (state.targetGuid == target->GetGUID() && state.lastIssueMs != 0 && nowMs < state.lastIssueMs + 1500)
+        return false;
+
+    float const targetX = target->GetPositionX();
+    float const targetY = target->GetPositionY();
+    float const targetZ = target->GetPositionZ();
+
+    // Sample a ring around the target and take the nearest stand-off point that
+    // can actually trace back to it. Starting from the bot's current bearing
+    // keeps the correction small whenever a small one is enough.
+    float const baseAngle = target->GetAbsoluteAngle(player);
+    constexpr float unstickRadius = 7.0f;
+    constexpr uint32 sampleCount = 8;
+
+    Position best;
+    bool found = false;
+    float bestDistance = std::numeric_limits<float>::max();
+
+    for (uint32 sample = 0; sample < sampleCount; ++sample)
+    {
+        float const angle = baseAngle + (float(sample) * 2.0f * float(M_PI) / float(sampleCount));
+        float x = targetX + unstickRadius * std::cos(angle);
+        float y = targetY + unstickRadius * std::sin(angle);
+        float z = targetZ;
+        player->UpdateAllowedPositionZ(x, y, z);
+
+        if (!target->IsWithinLOS(x, y, z + 0.5f))
+            continue;
+
+        Position const candidate = BuildCollisionSafeDestination(player, Position(x, y, z, player->GetOrientation()));
+        float const candidateDistance = player->GetDistance(candidate);
+        if (candidateDistance < bestDistance)
+        {
+            bestDistance = candidateDistance;
+            best = candidate;
+            found = true;
+        }
+    }
+
+    if (!found)
+        return false;
+
+    motionMaster->Clear(MOTION_SLOT_ACTIVE);
+    motionMaster->MovePoint(0, best, true);
+    state.targetGuid = target->GetGUID();
+    state.lastIssueMs = nowMs;
+
+    std::ostringstream diag;
+    diag << "los_unstick_reposition"
+         << " label=" << (label ? label : "none")
+         << " dist_to_target=" << player->GetDistance(target)
+         << " unstick_radius=" << unstickRadius
+         << " chosen_dist=" << bestDistance
+         << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
+         << " moving_after=" << (player->isMoving() ? "yes" : "no");
+    SetLastMovementDebugStatus(player, diag.str());
+    return true;
+}
+
 bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desiredDestination, Position& segmentDestination)
 {
     if (!player)
@@ -1788,6 +1873,19 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     bool const forcedInRangeLosRecovery = forceMovementWhenAlreadyInRange && currentDistance <= (requestedSafeDistance + 0.25f);
     if (forcedInRangeLosRecovery)
     {
+        // Closing distance cannot restore line of sight once the bot is already
+        // touching the target - there is no gap left to halve, so the same
+        // no-op move is re-issued forever. Two bots that pick each other in that
+        // state wiggle against each other permanently, and because neither can
+        // land an attack without LOS, neither ever enters combat to break it.
+        // Step out to a point that can actually see the target instead.
+        float const contactDistance = player->GetCombatReach() + target->GetCombatReach() + 1.0f;
+        if (currentDistance <= contactDistance)
+        {
+            if (TryIssueLosUnstickMovement(player, target, forcedReason))
+                return;
+        }
+
         float const forcedCloserDistance = currentDistance > 4.0f ? (currentDistance - 3.0f) : (currentDistance * 0.5f);
         safeDistance = std::max(1.0f, std::min(requestedSafeDistance, forcedCloserDistance));
     }
