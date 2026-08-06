@@ -10286,19 +10286,14 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
         }
         break;
     default:
-        // Tiger's Peak can report a non-canonical zone ID in some positions.
-        // Fall back to battleground type so arena world states are still initialized.
-        if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_TTP)
-            battleground->FillInitialWorldStates(packet);
-        // Scarlet Chapel can also report a non-canonical zone ID near spawn.
-        // Fall back to battleground type so the top-frame world states initialize immediately.
-        else if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_SCM)
-            battleground->FillInitialWorldStates(packet);
-        // Blackrock Throne can report stock BRD zone IDs; initialize from battleground type.
-        else if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_BRT)
-            battleground->FillInitialWorldStates(packet);
-        // Obsidian Colosseum reports the stock Obsidian Sanctum zone ID (4493); initialize from battleground type.
-        else if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_OBC)
+        // None of these report a zone ID with a case above. Tiger's Peak is
+        // non-canonical near spawn, and the custom battlegrounds run on cloned
+        // maps that keep their source zone's ID: Blackrock Throne reports the
+        // stock BRD zones, the Obsidian Colosseum reports Obsidian Sanctum's
+        // 4493, and Tanaris reports plain Tanaris (440). Fall back to the
+        // battleground type so the top-frame world states still initialize.
+        if (battleground && (battleground->GetTypeID(true) == BATTLEGROUND_TTP
+            || IsCustomBattleground(battleground->GetTypeID(true))))
             battleground->FillInitialWorldStates(packet);
         break;
     }

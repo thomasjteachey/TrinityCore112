@@ -86,6 +86,7 @@ enum GossipAction : uint32
     ACTION_SELECT_SCM,
     ACTION_SELECT_BRT,
     ACTION_SELECT_OBC,
+    ACTION_SELECT_TRT,
     ACTION_SELECT_BFG,
     ACTION_SELECT_AV,
     ACTION_SELECT_SA,
@@ -195,6 +196,7 @@ std::string BattlegroundName(CustomGameLobby const& lobby)
         case BATTLEGROUND_SCM: return "Scarlet Chapel Deathmatch";
         case BATTLEGROUND_BRT: return "Blackrock Throne Deathmatch";
         case BATTLEGROUND_OBC: return "Obsidian Colosseum";
+        case BATTLEGROUND_TRT: return "Tanaris Deathmatch";
         case BATTLEGROUND_BFG: return "Battle for Gilneas";
         case BATTLEGROUND_AV: return "Alterac Valley";
         case BATTLEGROUND_SA: return "Strand of the Ancients";
@@ -1990,6 +1992,7 @@ public:
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Scarlet Chapel Deathmatch", GOSSIP_SENDER_MAIN, ACTION_SELECT_SCM);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Blackrock Throne Deathmatch", GOSSIP_SENDER_MAIN, ACTION_SELECT_BRT);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Obsidian Colosseum", GOSSIP_SENDER_MAIN, ACTION_SELECT_OBC);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Tanaris Deathmatch", GOSSIP_SENDER_MAIN, ACTION_SELECT_TRT);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Battle for Gilneas", GOSSIP_SENDER_MAIN, ACTION_SELECT_BFG);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Alterac Valley", GOSSIP_SENDER_MAIN, ACTION_SELECT_AV);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Strand of the Ancients", GOSSIP_SENDER_MAIN, ACTION_SELECT_SA);
@@ -2028,8 +2031,9 @@ public:
                     GOSSIP_SENDER_MAIN, ACTION_RULE_RESOURCE_RATE, "Percent (100 is normal)", 0, true);
             }
 
-            if (lobby->SelectedType == BATTLEGROUND_SCM || lobby->SelectedType == BATTLEGROUND_BRT ||
-                lobby->SelectedType == BATTLEGROUND_OBC)
+            // Every custom battleground is scored by kills, so they all expose
+            // the kill-limit rule.
+            if (IsCustomBattleground(lobby->SelectedType))
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT,
                     "Deathmatch kills: " + ConfiguredValue(lobby->Rules.DeathmatchKillLimit, DefaultDeathmatchKillLimit(lobby->SelectedType)),
                     GOSSIP_SENDER_MAIN, ACTION_RULE_KILLS, "Winning kill total (0 restores default)", 0, true);
@@ -2149,6 +2153,7 @@ public:
                 case ACTION_SELECT_SCM: manager.SelectBattleground(player, BATTLEGROUND_SCM, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_BRT: manager.SelectBattleground(player, BATTLEGROUND_BRT, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_OBC: manager.SelectBattleground(player, BATTLEGROUND_OBC, 0); ShowChromieMenu(player); return true;
+                case ACTION_SELECT_TRT: manager.SelectBattleground(player, BATTLEGROUND_TRT, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_BFG: manager.SelectBattleground(player, BATTLEGROUND_BFG, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_AV: manager.SelectBattleground(player, BATTLEGROUND_AV, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_SA: manager.SelectBattleground(player, BATTLEGROUND_SA, 0); ShowChromieMenu(player); return true;

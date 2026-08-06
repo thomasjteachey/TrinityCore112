@@ -247,6 +247,9 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.ObsidianColosseumAccounts").count(accountId))
             return BATTLEGROUND_OBC;
 
+        if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.TanarisAccounts").count(accountId))
+            return BATTLEGROUND_TRT;
+
         if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.BattleForGilneasAccounts").count(accountId))
             return BATTLEGROUND_BFG;
 

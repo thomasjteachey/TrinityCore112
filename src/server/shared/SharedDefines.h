@@ -3523,6 +3523,7 @@ enum BattlegroundTypeId : uint32
     BATTLEGROUND_BRT            = 101, // Blackrock Throne
     BATTLEGROUND_OBC            = 102, // Obsidian Colosseum
     BATTLEGROUND_NL             = 103, // Nefarian's Arena
+    BATTLEGROUND_TRT            = 104, // Tanaris, map 1620 cloned from 1
     BATTLEGROUND_TP             = 108, // Twin Peaks
     BATTLEGROUND_BFG            = 120, // Battle for Gilneas
     BATTLEGROUND_TV             = 870, // Tol'Viron Arena
@@ -3541,7 +3542,8 @@ constexpr bool IsCustomBattleground(BattlegroundTypeId bgTypeId)
 {
     return bgTypeId == BATTLEGROUND_SCM
         || bgTypeId == BATTLEGROUND_BRT
-        || bgTypeId == BATTLEGROUND_OBC;
+        || bgTypeId == BATTLEGROUND_OBC
+        || bgTypeId == BATTLEGROUND_TRT;
 }
 
 enum BattlefieldBattleId : uint8
@@ -3708,6 +3710,7 @@ enum BattlegroundQueueTypeId
     BATTLEGROUND_QUEUE_BFG      = 15,
     BATTLEGROUND_QUEUE_SV       = 16,
     BATTLEGROUND_QUEUE_OBC      = 17,
+    BATTLEGROUND_QUEUE_TRT      = 18,
     MAX_BATTLEGROUND_QUEUE_TYPES
 };
 

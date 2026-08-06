@@ -25,6 +25,9 @@ constexpr uint32 ACTION_CLOSE = GOSSIP_ACTION_INFO_DEF + 7;
 constexpr uint32 ACTION_QUEUE_OBSIDIAN_REGULAR = GOSSIP_ACTION_INFO_DEF + 8;
 constexpr uint32 ACTION_QUEUE_OBSIDIAN_ALLIANCE = GOSSIP_ACTION_INFO_DEF + 9;
 constexpr uint32 ACTION_QUEUE_OBSIDIAN_HORDE = GOSSIP_ACTION_INFO_DEF + 10;
+constexpr uint32 ACTION_QUEUE_TANARIS_REGULAR = GOSSIP_ACTION_INFO_DEF + 11;
+constexpr uint32 ACTION_QUEUE_TANARIS_ALLIANCE = GOSSIP_ACTION_INFO_DEF + 12;
+constexpr uint32 ACTION_QUEUE_TANARIS_HORDE = GOSSIP_ACTION_INFO_DEF + 13;
 
 void SendQueueError(Player* player, char const* text)
 {
@@ -164,6 +167,9 @@ public:
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Obsidian Colosseum", GOSSIP_SENDER_MAIN, ACTION_QUEUE_OBSIDIAN_REGULAR);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Obsidian Colosseum (Force Alliance side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_OBSIDIAN_ALLIANCE);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Obsidian Colosseum (Force Horde side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_OBSIDIAN_HORDE);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Tanaris Deathmatch", GOSSIP_SENDER_MAIN, ACTION_QUEUE_TANARIS_REGULAR);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Tanaris Deathmatch (Force Alliance side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_TANARIS_ALLIANCE);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Tanaris Deathmatch (Force Horde side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_TANARIS_HORDE);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Maybe later", GOSSIP_SENDER_MAIN, ACTION_CLOSE);
             SendGossipMenuFor(player, player->GetGossipTextId(me), me);
             return true;
@@ -183,6 +189,9 @@ public:
                 case ACTION_QUEUE_OBSIDIAN_REGULAR: return HandleQueue(player, BATTLEGROUND_OBC, "Obsidian Colosseum", TEAM_NEUTRAL);
                 case ACTION_QUEUE_OBSIDIAN_ALLIANCE: return HandleQueue(player, BATTLEGROUND_OBC, "Obsidian Colosseum", TEAM_ALLIANCE);
                 case ACTION_QUEUE_OBSIDIAN_HORDE: return HandleQueue(player, BATTLEGROUND_OBC, "Obsidian Colosseum", TEAM_HORDE);
+                case ACTION_QUEUE_TANARIS_REGULAR: return HandleQueue(player, BATTLEGROUND_TRT, "Tanaris Deathmatch", TEAM_NEUTRAL);
+                case ACTION_QUEUE_TANARIS_ALLIANCE: return HandleQueue(player, BATTLEGROUND_TRT, "Tanaris Deathmatch", TEAM_ALLIANCE);
+                case ACTION_QUEUE_TANARIS_HORDE: return HandleQueue(player, BATTLEGROUND_TRT, "Tanaris Deathmatch", TEAM_HORDE);
                 case ACTION_CLOSE: CloseGossipMenuFor(player); return true;
                 default: return false;
             }

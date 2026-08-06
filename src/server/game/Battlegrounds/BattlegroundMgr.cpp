@@ -32,6 +32,7 @@
 #include "BattlegroundSCM.h"
 #include "BattlegroundBRT.h"
 #include "BattlegroundOBC.h"
+#include "BattlegroundTRT.h"
 #include "BattlegroundSV.h"
 #include "BattlegroundTP.h"
 #include "BattlegroundBFG.h"
@@ -442,6 +443,9 @@ Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundTypeId original
         case BATTLEGROUND_OBC:
             bg = new BattlegroundOBC(*(BattlegroundOBC*)bg_template);
             break;
+        case BATTLEGROUND_TRT:
+            bg = new BattlegroundTRT(*(BattlegroundTRT*)bg_template);
+            break;
         case BATTLEGROUND_SV:
             bg = new BattlegroundSV(*(BattlegroundSV*)bg_template);
             break;
@@ -559,6 +563,9 @@ bool BattlegroundMgr::CreateBattleground(BattlegroundTemplate const* bgTemplate)
                 break;
             case BATTLEGROUND_OBC:
                 bg = new BattlegroundOBC();
+                break;
+            case BATTLEGROUND_TRT:
+                bg = new BattlegroundTRT();
                 break;
             case BATTLEGROUND_SV:
                 bg = new BattlegroundSV();
@@ -862,6 +869,8 @@ BattlegroundQueueTypeId BattlegroundMgr::BGQueueTypeId(BattlegroundTypeId bgType
             return BATTLEGROUND_QUEUE_BRT;
         case BATTLEGROUND_OBC:
             return BATTLEGROUND_QUEUE_OBC;
+        case BATTLEGROUND_TRT:
+            return BATTLEGROUND_QUEUE_TRT;
         case BATTLEGROUND_TP:
             return BATTLEGROUND_QUEUE_TP;
         case BATTLEGROUND_BFG:
@@ -919,6 +928,8 @@ BattlegroundTypeId BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId bgQueue
             return BATTLEGROUND_BRT;
         case BATTLEGROUND_QUEUE_OBC:
             return BATTLEGROUND_OBC;
+        case BATTLEGROUND_QUEUE_TRT:
+            return BATTLEGROUND_TRT;
         case BATTLEGROUND_QUEUE_TP:
             return BATTLEGROUND_TP;
         case BATTLEGROUND_QUEUE_BFG:
