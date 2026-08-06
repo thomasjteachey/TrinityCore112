@@ -2822,6 +2822,38 @@ bool PlayerHasPoisonForStoneform(Player const* player)
     return false;
 }
 
+// Mirrors FindEveryManForHimselfBreakableAura in PlayerbotPvpCore.cpp. Helpful
+// auras must be excluded: the arena team markers ("Gold Team" 32724, "Green
+// Team" 32725, and the 35774/35775 pair) carry MECHANIC_TURN in stock spell
+// data, which sits inside the loss-of-control mask. A plain HasAuraWithMechanic
+// therefore reports every arena participant as permanently crowd controlled.
+bool HasHarmfulAuraWithMechanic(Player const* player, uint32 mechanicMask)
+{
+    if (!player)
+        return false;
+
+    for (auto const& auraPair : player->GetAppliedAuras())
+    {
+        AuraApplication const* application = auraPair.second;
+        if (!application || application->IsPositive() || !application->GetBase())
+            continue;
+
+        SpellInfo const* spellInfo = application->GetBase()->GetSpellInfo();
+        if (!spellInfo)
+            continue;
+
+        if (spellInfo->Mechanic && (mechanicMask & (1 << spellInfo->Mechanic)))
+            return true;
+
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+            if (application->HasEffect(effect.EffectIndex) && effect.IsEffect() && effect.Mechanic &&
+                (mechanicMask & (1 << effect.Mechanic)))
+                return true;
+    }
+
+    return false;
+}
+
 bool IsControlBreakingRacialCast(Player const* player, playerbot::PvpClassSpellContext const& context, uint32 resolvedSpellId)
 {
     if (!player || context.targetMode != playerbot::PvpClassSpellContext::TargetMode::Self)
@@ -2849,7 +2881,7 @@ bool IsControlBreakingRacialCast(Player const* player, playerbot::PvpClassSpellC
         case 89151: // Mage
         case 89152: // Druid and anything else
             return player->HasUnitState(UNIT_STATE_FLEEING) ||
-                player->HasAuraWithMechanic(IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK);
+                HasHarmfulAuraWithMechanic(player, IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK);
         default:
             return false;
     }

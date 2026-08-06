@@ -497,6 +497,15 @@ SpellInfo const* FindEveryManForHimselfBreakableAura(Player const* player)
         if (!application || !application->GetBase())
             continue;
 
+        // Helpful auras are never something to trinket out of. This is not a
+        // theoretical guard: the arena team markers ("Gold Team" 32724, "Green
+        // Team" 32725, and the 35774/35775 pair) carry MECHANIC_TURN in stock
+        // spell data, and MECHANIC_TURN sits inside the loss-of-control mask.
+        // Without this, every human in every arena reads as permanently crowd
+        // controlled and burns Every Man for Himself the moment the gate opens.
+        if (application->IsPositive())
+            continue;
+
         SpellInfo const* spellInfo = application->GetBase()->GetSpellInfo();
         if (!spellInfo)
             continue;
@@ -523,8 +532,13 @@ bool HasEveryManForHimselfBreakableControl(Player const* player)
     // SpellInfo::_InitializeExplicitTargetMask's SPELL_AURA_MECHANIC_IMMUNITY
     // handling for 59752, which the custom 89148-89152 trinket spells are
     // modeled on), so this stays in lockstep with what they actually clear.
+    //
+    // Routed through FindEveryManForHimselfBreakableAura rather than calling
+    // HasAuraWithMechanic directly, because that helper also filters out
+    // helpful auras - without which the arena team markers alone are enough to
+    // make this permanently true. See the note there.
     return player->HasUnitState(UNIT_STATE_FLEEING) ||
-        player->HasAuraWithMechanic(IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK);
+        FindEveryManForHimselfBreakableAura(player) != nullptr;
 }
 
 // The custom Every Man for Himself trinket equivalents are granted to Human
