@@ -45,6 +45,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <initializer_list>
 #include <mutex>
 #include <sstream>
 #include <unordered_map>
@@ -912,6 +913,49 @@ public:
 
             std::string const moveDiag = playerbot::PvpClassActions::GetLastMovementDebugStatus(bot);
             handler->PSendSysMessage("   %s", moveDiag.empty() ? "(no movement diagnostic recorded)" : moveDiag.c_str());
+
+            // Warrior gap closers have a lot of independent gates (known rank,
+            // cooldown, stance, rage, min/max range, combat) and a failure in
+            // any one of them looks identical from outside: the bot just runs.
+            // Clones are memory-only, so this is the only way to see which gate
+            // is the one saying no.
+            if (bot->GetClass() == CLASS_WARRIOR)
+            {
+                auto knownRank = [bot](std::initializer_list<uint32> ranks) -> uint32
+                {
+                    uint32 best = 0;
+                    for (uint32 rank : ranks)
+                        if (bot->HasSpell(rank))
+                            best = rank;
+                    return best;
+                };
+                auto readyText = [bot](uint32 spellId) -> char const*
+                {
+                    if (!spellId)
+                        return "unknown";
+                    return bot->GetSpellHistory()->HasCooldown(spellId) ? "cooldown" : "ready";
+                };
+
+                uint32 const chargeId = knownRank({ 100, 6178, 11578 });
+                uint32 const interceptId = knownRank({ 20252, 20616, 20617 });
+                uint32 const leapId = knownRank({ 81271 });
+                uint32 const bloodrageId = knownRank({ 2687 });
+
+                char const* stance = bot->HasAura(2457) ? "battle" :
+                    (bot->HasAura(71) ? "defensive" : (bot->HasAura(2458) ? "berserker" : "none"));
+
+                float const victimDist = victim ? bot->GetDistance(victim) : -1.0f;
+                handler->PSendSysMessage("   warrior: charge=%u/%s intercept=%u/%s leap=%u/%s bloodrage=%u/%s stance=%s rage=%u combat=%s victim_dist=%.1f band8-25=%s",
+                    chargeId, readyText(chargeId),
+                    interceptId, readyText(interceptId),
+                    leapId, readyText(leapId),
+                    bloodrageId, readyText(bloodrageId),
+                    stance,
+                    uint32(bot->GetPower(POWER_RAGE) / 10),
+                    bot->IsInCombat() ? "yes" : "no",
+                    victimDist,
+                    (victimDist >= 8.0f && victimDist <= 25.0f) ? "yes" : "no");
+            }
         }
 
         return true;
