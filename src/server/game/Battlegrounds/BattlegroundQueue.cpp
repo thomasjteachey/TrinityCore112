@@ -1019,6 +1019,55 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
         m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_HORDE].empty())
         return;
 
+    // Violet Hold never waits for an opponent. The enemy side is summoned by the
+    // clone driver once the match is live, so there is no second team to match
+    // against and no reason to hold anyone in the queue: every waiting group is
+    // given its own instance immediately.
+    //
+    // Groups are deliberately not merged. A run's difficulty is pinned to the
+    // party size that started it, so dropping a latecomer into someone else's
+    // wave would change a curve that is already underway.
+    if (bgTypeId == BATTLEGROUND_VHR)
+    {
+        Battleground* vhrTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
+        if (!vhrTemplate)
+        {
+            TC_LOG_ERROR("bg.battleground", "BattlegroundQueue::Update - Cannot find Violet Hold template: {}", bgTypeId);
+            return;
+        }
+
+        PvPDifficultyEntry const* vhrBracket = GetBattlegroundBracketById(vhrTemplate->GetMapId(), bracket_id);
+        if (!vhrBracket)
+        {
+            TC_LOG_ERROR("bg.battleground", "BattlegroundQueue::Update - Cannot find Violet Hold bracket for map {} bracket {}", vhrTemplate->GetMapId(), bracket_id);
+            return;
+        }
+
+        for (uint32 queueIndex = BG_QUEUE_PREMADE_ALLIANCE; queueIndex < BG_QUEUE_GROUP_TYPES_COUNT; ++queueIndex)
+        {
+            for (GroupQueueInfo* ginfo : m_QueuedGroups[bracket_id][queueIndex])
+            {
+                if (ginfo->IsInvitedToBGInstanceGUID)
+                    continue;
+
+                Battleground* vhr = sBattlegroundMgr->CreateNewBattleground(bgTypeId, vhrBracket, 0, false);
+                if (!vhr)
+                {
+                    TC_LOG_ERROR("bg.battleground", "BattlegroundQueue::Update - Cannot create Violet Hold battleground: {}", bgTypeId);
+                    return;
+                }
+
+                // The party always holds one side outright, whatever their real
+                // factions are, so the clones have the other to themselves.
+                ginfo->Team = ALLIANCE;
+                InviteGroupToBG(ginfo, vhr, ALLIANCE);
+                vhr->StartBattleground();
+            }
+        }
+
+        return;
+    }
+
     // battleground with free slot for player should be always in the beggining of the queue
     // maybe it would be better to create bgfreeslotqueue for each bracket_id
     BGFreeSlotQueueContainer& bgQueues = sBattlegroundMgr->GetBGFreeSlotQueueStore(bgTypeId);

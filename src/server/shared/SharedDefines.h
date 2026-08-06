@@ -3524,6 +3524,7 @@ enum BattlegroundTypeId : uint32
     BATTLEGROUND_OBC            = 102, // Obsidian Colosseum
     BATTLEGROUND_NL             = 103, // Nefarian's Arena
     BATTLEGROUND_TRT            = 104, // Tanaris, map 1620 cloned from 1
+    BATTLEGROUND_VHR            = 105, // Violet Hold survival, map 1608 cloned from 608
     BATTLEGROUND_TP             = 108, // Twin Peaks
     BATTLEGROUND_BFG            = 120, // Battle for Gilneas
     BATTLEGROUND_TV             = 870, // Tol'Viron Arena
@@ -3711,6 +3712,7 @@ enum BattlegroundQueueTypeId
     BATTLEGROUND_QUEUE_SV       = 16,
     BATTLEGROUND_QUEUE_OBC      = 17,
     BATTLEGROUND_QUEUE_TRT      = 18,
+    BATTLEGROUND_QUEUE_VHR      = 19,
     MAX_BATTLEGROUND_QUEUE_TYPES
 };
 

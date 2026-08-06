@@ -631,6 +631,11 @@ class TC_GAME_API Battleground
         virtual uint32 GetResurrectionInterval() const { return GetConfiguredResurrectionInterval(RESURRECTION_INTERVAL); }
         virtual uint32 GetBuffRespawnTime(uint32 type) const { return BUFF_RESPAWN_TIME; }
 
+        // Whether an under-populated team should start the premature-finish
+        // countdown. Modes that legitimately run with one side empty - Violet
+        // Hold sits at zero enemies between waves - opt out here.
+        virtual bool AllowsPrematureFinish() const { return true; }
+
         // Scorekeeping
         BattlegroundScoreMap PlayerScores;                // Player scores
         // must be implemented in BG subclass

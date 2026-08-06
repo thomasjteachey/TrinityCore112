@@ -2048,6 +2048,10 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         bool IsInvitedForBattlegroundInstance(uint32 instanceId) const;
         WorldLocation const& GetBattlegroundEntryPoint() const { return m_bgData.joinPos; }
         void SetBattlegroundEntryPoint();
+        // Override where leaving the battleground puts the player, instead of
+        // recording where they queued from. Violet Hold uses this to return a
+        // wiped party to Gurubashi rather than to wherever they came from.
+        void SetBattlegroundEntryPoint(WorldLocation const& loc) { m_bgData.joinPos = loc; }
 
         void SetBGTeam(uint32 team);
         uint32 GetBGTeam() const;

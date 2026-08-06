@@ -31,6 +31,7 @@
 #include "BattlegroundMgr.h"
 #include "BattlegroundQueue.h"
 #include "Playerbot/Pvp/PlayerbotObcClone.h"
+#include "Playerbot/Pvp/PlayerbotVhrWaveDriver.h"
 #include "Playerbot/Pvp/PlayerbotPvpClassActions.h"
 #include "Playerbot/Pvp/PlayerbotPvpCore.h"
 #include "Playerbot/Pvp/PlayerbotPvpLifecycleActions.h"
@@ -625,6 +626,7 @@ public:
         playerbot::ResourceGovernor::NoteWorldUpdate(diff);
         playerbot::RandomBotParticipationManager::OnWorldUpdate(diff);
         playerbot::PlayerbotObcCloneManager::OnWorldUpdate(diff);
+        playerbot::PlayerbotVhrWaveDriver::OnWorldUpdate(diff);
     }
 
     void OnShutdown() override

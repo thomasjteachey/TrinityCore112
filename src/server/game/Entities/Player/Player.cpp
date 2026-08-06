@@ -10260,7 +10260,13 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
         }
         break;
     case 4415: // Violet Hold
-        if (instance)
+        // Map 1608 (the survival battleground clone) reports this stock zone
+        // too, and a battleground map has no dungeon InstanceScript, so it
+        // must be routed before the stock branches or its wave scoreboard
+        // never initializes.
+        if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_VHR)
+            battleground->FillInitialWorldStates(packet);
+        else if (instance)
             instance->FillInitialWorldStates(packet);
         else
         {
@@ -10290,9 +10296,14 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
         // non-canonical near spawn, and the custom battlegrounds run on cloned
         // maps that keep their source zone's ID: Blackrock Throne reports the
         // stock BRD zones, the Obsidian Colosseum reports Obsidian Sanctum's
-        // 4493, and Tanaris reports plain Tanaris (440). Fall back to the
-        // battleground type so the top-frame world states still initialize.
+        // 4493, Tanaris reports plain Tanaris (440), and the Violet Hold run
+        // reports the stock Violet Hold (4415). Fall back to the battleground
+        // type so the top-frame world states still initialize. Violet Hold is
+        // named here rather than joining IsCustomBattleground() because the
+        // rest of what that helper grants - mid-match gear and talent swaps in
+        // particular - would undercut a mode built entirely on attrition.
         if (battleground && (battleground->GetTypeID(true) == BATTLEGROUND_TTP
+            || battleground->GetTypeID(true) == BATTLEGROUND_VHR
             || IsCustomBattleground(battleground->GetTypeID(true))))
             battleground->FillInitialWorldStates(packet);
         break;

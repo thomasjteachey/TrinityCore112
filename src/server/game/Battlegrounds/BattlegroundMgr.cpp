@@ -33,6 +33,7 @@
 #include "BattlegroundBRT.h"
 #include "BattlegroundOBC.h"
 #include "BattlegroundTRT.h"
+#include "BattlegroundVHR.h"
 #include "BattlegroundSV.h"
 #include "BattlegroundTP.h"
 #include "BattlegroundBFG.h"
@@ -446,6 +447,9 @@ Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundTypeId original
         case BATTLEGROUND_TRT:
             bg = new BattlegroundTRT(*(BattlegroundTRT*)bg_template);
             break;
+        case BATTLEGROUND_VHR:
+            bg = new BattlegroundVHR(*(BattlegroundVHR*)bg_template);
+            break;
         case BATTLEGROUND_SV:
             bg = new BattlegroundSV(*(BattlegroundSV*)bg_template);
             break;
@@ -566,6 +570,9 @@ bool BattlegroundMgr::CreateBattleground(BattlegroundTemplate const* bgTemplate)
                 break;
             case BATTLEGROUND_TRT:
                 bg = new BattlegroundTRT();
+                break;
+            case BATTLEGROUND_VHR:
+                bg = new BattlegroundVHR();
                 break;
             case BATTLEGROUND_SV:
                 bg = new BattlegroundSV();
@@ -871,6 +878,8 @@ BattlegroundQueueTypeId BattlegroundMgr::BGQueueTypeId(BattlegroundTypeId bgType
             return BATTLEGROUND_QUEUE_OBC;
         case BATTLEGROUND_TRT:
             return BATTLEGROUND_QUEUE_TRT;
+        case BATTLEGROUND_VHR:
+            return BATTLEGROUND_QUEUE_VHR;
         case BATTLEGROUND_TP:
             return BATTLEGROUND_QUEUE_TP;
         case BATTLEGROUND_BFG:
@@ -930,6 +939,8 @@ BattlegroundTypeId BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId bgQueue
             return BATTLEGROUND_OBC;
         case BATTLEGROUND_QUEUE_TRT:
             return BATTLEGROUND_TRT;
+        case BATTLEGROUND_QUEUE_VHR:
+            return BATTLEGROUND_VHR;
         case BATTLEGROUND_QUEUE_TP:
             return BATTLEGROUND_TP;
         case BATTLEGROUND_QUEUE_BFG:
@@ -1157,6 +1168,15 @@ void BattlegroundMgr::RemoveFromBGFreeSlotQueue(BattlegroundTypeId bgTypeId, uin
             queues.erase(itr);
             return;
         }
+}
+
+BattlegroundContainer const* BattlegroundMgr::GetBattlegroundsByType(BattlegroundTypeId bgTypeId) const
+{
+    BattlegroundDataContainer::const_iterator itr = bgDataStore.find(bgTypeId);
+    if (itr == bgDataStore.end())
+        return nullptr;
+
+    return &itr->second.m_Battlegrounds;
 }
 
 void BattlegroundMgr::AddBattleground(Battleground* bg)

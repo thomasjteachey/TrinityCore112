@@ -1,3 +1,4 @@
 *.sql
 !2026_08_06_00_dbc_tanaris_battleground.sql
 !2026_08_06_01_dbc_worldmapoverlay_mirror.sql
+!2026_08_06_02_dbc_violet_hold_battleground.sql
