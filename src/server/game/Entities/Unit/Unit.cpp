@@ -3597,6 +3597,21 @@ bool Unit::IsMovementPreventedByCasting() const
             return false;
     }
 
+    // A cast the client itself permits on the move must not pin a server-driven
+    // unit in place. The client only blocks movement for casts flagged as
+    // movement-interrupted, which is why a human can run while casting one of
+    // these - their movement is client-authoritative and never consults this.
+    // A playerbot's movement is server-driven and every movement generator
+    // checks here, so without this the bot is frozen for the entire cast while
+    // a player casting the identical spell keeps running.
+    //
+    // Creature overrides this method outright, so the scope is players (and
+    // therefore playerbots) only - no NPC behaviour changes.
+    if (Spell* spell = m_currentSpells[CURRENT_GENERIC_SPELL])
+        if (spell->getState() != SPELL_STATE_FINISHED &&
+            !(spell->GetSpellInfo()->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT))
+            return false;
+
     // prohibit movement for all other spell casts
     return true;
 }

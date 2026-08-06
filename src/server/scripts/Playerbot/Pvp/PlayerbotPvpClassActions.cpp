@@ -3608,13 +3608,13 @@ bool IsPlayerbotMovableCastTimeSpell(Player const* player, SpellInfo const* spel
     if (spellInfo->IsStarfire() && player->GetStarfireSnareSpeedRate() > 0.0f)
         return true;
 
-    // A cast that movement does not interrupt can simply be made on the move,
-    // and forcing the bot to stand still for it is worse than unnecessary: while
-    // the bot is mid-chase the stationary path defers the cast every tick, so it
-    // never completes, never takes its cooldown, and is re-selected forever.
-    // That is what left gnome warriors endlessly re-picking their grenade
-    // (89160 - cast time, but InterruptFlags 0) instead of using their rotation,
-    // while ranged classes were unaffected because they stop to cast anyway.
+    // Spells the client lets a human cast while running. Without the movement
+    // interrupt flag there is nothing to stand still for, so the bot must not
+    // plant itself: the stationary path defers the cast while the bot is
+    // mid-chase, so it never completes, never takes its cooldown, and is
+    // re-selected forever. Pairs with the matching allowance in
+    // Unit::IsMovementPreventedByCasting - this stops the bot choosing to halt,
+    // that stops the movement generator freezing it. Both are needed.
     return (spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) == 0;
 }
 
