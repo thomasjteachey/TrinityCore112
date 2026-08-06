@@ -3601,7 +3601,21 @@ bool IsPlayerbotStationaryChannel(SpellInfo const* spellInfo)
 
 bool IsPlayerbotMovableCastTimeSpell(Player const* player, SpellInfo const* spellInfo)
 {
-    return player && spellInfo && spellInfo->IsStarfire() && player->GetStarfireSnareSpeedRate() > 0.0f;
+    if (!player || !spellInfo)
+        return false;
+
+    // Starfire keeps its bespoke snare-rate exception.
+    if (spellInfo->IsStarfire() && player->GetStarfireSnareSpeedRate() > 0.0f)
+        return true;
+
+    // A cast that movement does not interrupt can simply be made on the move,
+    // and forcing the bot to stand still for it is worse than unnecessary: while
+    // the bot is mid-chase the stationary path defers the cast every tick, so it
+    // never completes, never takes its cooldown, and is re-selected forever.
+    // That is what left gnome warriors endlessly re-picking their grenade
+    // (89160 - cast time, but InterruptFlags 0) instead of using their rotation,
+    // while ranged classes were unaffected because they stop to cast anyway.
+    return (spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) == 0;
 }
 
 bool HasActiveStationaryChannel(Player const* player)

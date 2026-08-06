@@ -5519,28 +5519,6 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target, Class
     return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
 }
 
-// Racials that answer a loss-of-control effect. Only these are worth jumping
-// the class rotation for - the window to break a stun or fear is short and
-// missing it costs the fight. Everything else (throughput cooldowns, the gnome
-// grenade, Perception) is opportunistic and must never preempt class selection.
-bool IsControlBreakingRacial(uint32 spellId)
-{
-    switch (spellId)
-    {
-        case kEveryManForHimselfWarlockGroupSpellId:
-        case kEveryManForHimselfHunterGroupSpellId:
-        case kEveryManForHimselfPriestGroupSpellId:
-        case kEveryManForHimselfMageGroupSpellId:
-        case kEveryManForHimselfDruidGroupSpellId:
-        case kRacialUndeadWillOfTheForsakenSpellId:
-        case kRacialDwarfStoneformSpellId:
-        case kRacialNightElfShadowmeldSpellId:
-            return true;
-        default:
-            return false;
-    }
-}
-
 // IsDecisionImmediatelyCastable deliberately ignores line of sight, because the
 // normal flow for a real spell is to select it and then reposition until the
 // shot is available. A racial must not work that way: it sits above class
@@ -6345,15 +6323,17 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
         IsDecisionImmediatelyCastable(player, racialDecision, target, allyTarget) &&
         DecisionTargetIsInLineOfSight(player, racialDecision, target, allyTarget);
 
-    // Only a control break jumps the queue. An opportunistic racial that keeps
-    // getting selected but never actually cast would otherwise starve the bot of
-    // its entire rotation for as long as its condition holds - which is exactly
-    // what left a warrior jogging at an enemy with Charge, Intercept and Mortal
-    // Strike all available and none of them ever evaluated.
-    if (racialUsable && IsControlBreakingRacial(racialDecision.spellId))
+    // Racials take priority over the class rotation, control-breaking or not:
+    // an offensive racial that only comes up once a minute is worth more than
+    // one rotational GCD, and demoting it to a fallback means classes that
+    // always have something to cast (mages, and every caster) would never fire
+    // it at all. The starvation risk this ordering carries is handled at the
+    // source instead - a racial that cannot actually be cast right now is not
+    // returned, so it cannot be re-picked forever without ever landing.
+    if (racialUsable)
     {
         if (player->GetClass() == CLASS_WARRIOR)
-            SetWarriorGapCloserDiagnostic(player, "early_exit=racial_control_break spell=" + std::to_string(racialDecision.spellId));
+            SetWarriorGapCloserDiagnostic(player, "early_exit=racial spell=" + std::to_string(racialDecision.spellId));
         return racialDecision;
     }
 
@@ -6386,17 +6366,7 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
         return {};
     }
 
-    // Class rotation first, opportunistic racial only as the fallback. This is
-    // the ordering that guarantees a racial can never starve the rotation, no
-    // matter why its own cast fails to land.
-    SpellDecision const classDecision = SelectClassicClassSpell(player, target, allyTarget, profileSelection);
-    if (classDecision.spellId || classDecision.itemEntry)
-        return classDecision;
-
-    if (racialUsable)
-        return racialDecision;
-
-    return classDecision;
+    return SelectClassicClassSpell(player, target, allyTarget, profileSelection);
 }
 
 char const* GetClassLabel(uint8 classId)
