@@ -18,6 +18,7 @@
 #include "PlayerbotPvpCore.h"
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotRandomBotParticipation.h"
+#include "PlayerbotSharedStateGuard.h"
 
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
@@ -52,6 +53,7 @@
 #include <limits>
 #include <list>
 #include <mutex>
+#include <sstream>
 #include <unordered_map>
 #include <vector>
 
