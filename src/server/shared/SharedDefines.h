@@ -3526,11 +3526,34 @@ enum BattlegroundTypeId : uint32
     BATTLEGROUND_TRT            = 104, // Tanaris, map 1620 cloned from 1
     BATTLEGROUND_TP             = 108, // Twin Peaks
     BATTLEGROUND_BFG            = 120, // Battle for Gilneas
-    BATTLEGROUND_TV             = 870, // Tol'Viron Arena
-    BATTLEGROUND_TTP            = 871 // Tiger's Peak
+    BATTLEGROUND_TV             = 870, // Tol'Viron Arena,            map 980
+    BATTLEGROUND_TTP            = 871, // Tiger's Peak,               map 1134
+    // Arena ports. The map ids are deliberately the same as in the source data
+    // the terrain came from, the way TV (980) and TTP (1134) already are, so a
+    // directory name and a map id never have to be reconciled by hand.
+    BATTLEGROUND_CPE            = 872, // Coliseum of Past Echoes,    map 982
+    BATTLEGROUND_IAT            = 873, // Imperial Arena of Thakraj,  map 983
+    BATTLEGROUND_MXC            = 874, // Maldraxxus Coliseum,        map 984
+    BATTLEGROUND_NGA            = 875, // Nagrand Arena (remake),     map 985
+    BATTLEGROUND_BEA            = 876, // Blade's Edge Arena (remake),map 986
+    BATTLEGROUND_GDH            = 877, // Guardian's Hall,            map 1007
+    BATTLEGROUND_SOC            = 878, // Spark of Creator,           map 1008
+    BATTLEGROUND_BHA            = 879, // Baradin Hold Arena,         map 1401
+    BATTLEGROUND_OBS            = 880, // Obelisk of the Stars,       map 1402
+    BATTLEGROUND_TWN            = 881, // The Twisting Nether,        map 1403
+    BATTLEGROUND_BRH            = 882, // Black Rook Hold Arena,      map 1504
+    BATTLEGROUND_ASF            = 883, // Ashamane's Fall,            map 1552
+    BATTLEGROUND_INL            = 884, // The Inventor's Library,     map 1683
+    BATTLEGROUND_AOA            = 885  // Amphitheater of Anguish,    map 1684
 };
 
-#define MAX_BATTLEGROUND_TYPE_ID 872
+#define MAX_BATTLEGROUND_TYPE_ID 886
+
+// First and last of the contiguous block above. Kept as named constants so the
+// range checks below and the registration loops in BattlegroundMgr do not each
+// repeat the literals.
+#define BATTLEGROUND_CUSTOM_ARENA_FIRST BATTLEGROUND_CPE
+#define BATTLEGROUND_CUSTOM_ARENA_LAST  BATTLEGROUND_AOA
 
 // The custom battlegrounds share behaviour the stock ones do not: synthetic
 // cross-faction queue sides, free-slot refill and saturation, mid-match gear
@@ -3544,6 +3567,29 @@ constexpr bool IsCustomBattleground(BattlegroundTypeId bgTypeId)
         || bgTypeId == BATTLEGROUND_BRT
         || bgTypeId == BATTLEGROUND_OBC
         || bgTypeId == BATTLEGROUND_TRT;
+}
+
+// Every arena that is not one of Blizzard's five. Same reasoning as
+// IsCustomBattleground above: the queue NPC, the game lobby, the battlemaster
+// gossip and the playerbot hooks all need to know "is this one of ours", and
+// each of them used to answer it with its own hand-written list of ids.
+constexpr bool IsCustomArena(BattlegroundTypeId bgTypeId)
+{
+    return bgTypeId == BATTLEGROUND_TV
+        || bgTypeId == BATTLEGROUND_TTP
+        || (bgTypeId >= BATTLEGROUND_CUSTOM_ARENA_FIRST
+            && bgTypeId <= BATTLEGROUND_CUSTOM_ARENA_LAST);
+}
+
+// The subset of the above served by the single data-driven BattlegroundCustomArena
+// class rather than by a bespoke C++ class. TV and TTP predate it and keep their
+// own classes; everything from BATTLEGROUND_CPE up is described entirely by rows
+// in `battleground_custom_arena_object`, so adding another arena is SQL plus one
+// enum line, with no new C++ file.
+constexpr bool IsDataDrivenArena(BattlegroundTypeId bgTypeId)
+{
+    return bgTypeId >= BATTLEGROUND_CUSTOM_ARENA_FIRST
+        && bgTypeId <= BATTLEGROUND_CUSTOM_ARENA_LAST;
 }
 
 enum BattlefieldBattleId : uint8

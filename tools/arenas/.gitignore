@@ -1,0 +1,5 @@
+# WMO group files pulled out of the client MPQs by wmo_floor.py. Regenerated on
+# demand and megabytes of binary; the measurements they produce are committed in
+# arena_floors.json instead.
+_wmocache/
+__pycache__/

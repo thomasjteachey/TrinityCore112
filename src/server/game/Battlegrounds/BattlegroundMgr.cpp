@@ -38,6 +38,7 @@
 #include "BattlegroundBFG.h"
 #include "BattlegroundTTP.h"
 #include "BattlegroundTV.h"
+#include "BattlegroundCustomArena.h"
 #include "Common.h"
 #include "Containers.h"
 #include "Chat.h"
@@ -395,8 +396,13 @@ Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundTypeId original
     }
 
     Battleground* bg = nullptr;
-    // create a copy of the BG template
-    switch (bgTypeId)
+
+    // The data-driven arenas are a contiguous id range served by one class, so
+    // they are handled before the switch rather than as fourteen identical case
+    // labels. Adding another arena does not touch this function.
+    if (IsDataDrivenArena(bgTypeId))
+        bg = new BattlegroundCustomArena(*(BattlegroundCustomArena*)bg_template);
+    else switch (bgTypeId) // create a copy of the BG template
     {
         case BATTLEGROUND_AV:
             bg = new BattlegroundAV(*(BattlegroundAV*)bg_template);
@@ -517,7 +523,9 @@ bool BattlegroundMgr::CreateBattleground(BattlegroundTemplate const* bgTemplate)
     if (!bg)
     {
         // Create the BG
-        switch (bgTemplate->Id)
+        if (IsDataDrivenArena(bgTemplate->Id))
+            bg = new BattlegroundCustomArena();
+        else switch (bgTemplate->Id)
         {
             case BATTLEGROUND_AV:
                 bg = new BattlegroundAV();
@@ -617,6 +625,13 @@ bool BattlegroundMgr::CreateBattleground(BattlegroundTemplate const* bgTemplate)
 void BattlegroundMgr::LoadBattlegroundTemplates()
 {
     uint32 oldMSTime = getMSTime();
+
+    // Loaded alongside the templates, and therefore also refreshed by
+    // `.reload battleground_template`. Deliberately not given reload commands of
+    // their own: that would need new rbac_permissions rows in the auth database,
+    // and these three tables are always edited together anyway.
+    LoadRandomBattlegroundPools();
+    BattlegroundCustomArena::LoadObjects();
 
     _battlegroundMapTemplates.clear();
     _battlegroundTemplates.clear();
@@ -841,8 +856,7 @@ bool BattlegroundMgr::IsArenaType(BattlegroundTypeId bgTypeId)
         || bgTypeId == BATTLEGROUND_RV
         || bgTypeId == BATTLEGROUND_RL
         || bgTypeId == BATTLEGROUND_NL
-        || bgTypeId == BATTLEGROUND_TV
-        || bgTypeId == BATTLEGROUND_TTP;
+        || IsCustomArena(bgTypeId);
 }
 
 BattlegroundQueueTypeId BattlegroundMgr::BGQueueTypeId(BattlegroundTypeId bgTypeId, uint8 arenaType)
@@ -877,15 +891,14 @@ BattlegroundQueueTypeId BattlegroundMgr::BGQueueTypeId(BattlegroundTypeId bgType
             return BATTLEGROUND_QUEUE_BFG;
         case BATTLEGROUND_SV:
             return BATTLEGROUND_QUEUE_SV;
-        case BATTLEGROUND_AA:
-        case BATTLEGROUND_BE:
-        case BATTLEGROUND_DS:
-        case BATTLEGROUND_NA:
-        case BATTLEGROUND_RL:
-        case BATTLEGROUND_RV:
-        case BATTLEGROUND_NL:
-        case BATTLEGROUND_TV:
-        case BATTLEGROUND_TTP:
+        default:
+            // Arenas do not get a queue per arena -- every arena of a given team
+            // size shares one queue, which is what lets All Arenas mix them. The
+            // custom arenas are matched by range here rather than by listing
+            // each id, so a new one needs no edit.
+            if (!IsArenaType(bgTypeId))
+                return BATTLEGROUND_QUEUE_NONE;
+
             switch (arenaType)
             {
                 case ARENA_TYPE_2v2:
@@ -899,8 +912,6 @@ BattlegroundQueueTypeId BattlegroundMgr::BGQueueTypeId(BattlegroundTypeId bgType
                 default:
                     return BATTLEGROUND_QUEUE_NONE;
             }
-        default:
-            return BATTLEGROUND_QUEUE_NONE;
     }
 }
 
@@ -1112,14 +1123,106 @@ bool BattlegroundMgr::IsBGWeekend(BattlegroundTypeId bgTypeId)
     return IsHolidayActive(BGTypeToWeekendHolidayId(bgTypeId));
 }
 
+void BattlegroundMgr::LoadRandomBattlegroundPools()
+{
+    uint32 oldMSTime = getMSTime();
+
+    _randomPools.clear();
+
+    QueryResult result = WorldDatabase.Query("SELECT PoolBgTypeId, MemberBgTypeId, Weight FROM battleground_random_pool WHERE Enabled <> 0 ORDER BY PoolBgTypeId, MemberBgTypeId");
+    if (!result)
+    {
+        TC_LOG_INFO("server.loading", ">> Loaded 0 random battleground pool entries. Falling back to BattlemasterList.dbc.");
+        return;
+    }
+
+    uint32 count = 0;
+    do
+    {
+        Field* fields = result->Fetch();
+
+        BattlegroundTypeId poolId   = BattlegroundTypeId(fields[0].GetUInt32());
+        BattlegroundTypeId memberId = BattlegroundTypeId(fields[1].GetUInt32());
+        double weight               = fields[2].GetDouble();
+
+        if (weight <= 0.0)
+        {
+            TC_LOG_ERROR("sql.sql", "Table `battleground_random_pool` entry (pool {}, member {}) has Weight {} which is not positive. Skipped.", uint32(poolId), uint32(memberId), weight);
+            continue;
+        }
+
+        // Deliberately not validated against _battlegroundTemplates here: this
+        // runs before templates are loaded on a cold start. Members that have no
+        // template are dropped at selection time instead, so a pool row for an
+        // arena whose map is not shipped yet is harmless rather than fatal.
+        _randomPools[poolId].emplace_back(memberId, weight);
+        ++count;
+    }
+    while (result->NextRow());
+
+    TC_LOG_INFO("server.loading", ">> Loaded {} random battleground pool entries for {} pools in {} ms",
+        count, uint32(_randomPools.size()), GetMSTimeDiffToNow(oldMSTime));
+}
+
+std::vector<BattlegroundTypeId> BattlegroundMgr::GetRandomPoolMembers(BattlegroundTypeId poolBgTypeId)
+{
+    std::vector<BattlegroundTypeId> members;
+
+    auto itr = _randomPools.find(poolBgTypeId);
+    if (itr == _randomPools.end())
+        return members;
+
+    members.reserve(itr->second.size());
+    for (auto const& [memberId, weight] : itr->second)
+    {
+        (void)weight;
+        if (GetBattlegroundTemplateByTypeId(memberId))
+            members.push_back(memberId);
+    }
+
+    return members;
+}
+
 BattlegroundTypeId BattlegroundMgr::GetRandomBG(BattlegroundTypeId bgTypeId)
 {
-    if (BattlegroundTemplate const* bgTemplate = GetBattlegroundTemplateByTypeId(bgTypeId))
+    std::vector<BattlegroundTypeId> ids;
+    std::vector<double> weights;
+    ids.reserve(32);
+    weights.reserve(32);
+
+    // Prefer the world-DB pool over BattlemasterList.dbc.
+    //
+    // The DBC route cannot express more than eight, because BattlemasterListEntry
+    // holds a fixed `int32 MapID[8]`. That is a hard cap in the client's own file
+    // format, not a limit of this code, so "All Arenas" could never roll a ninth
+    // arena however many were installed. The pool table has no such ceiling and
+    // is editable live: change a row and `.reload battleground_template` picks it
+    // up without a restart or a DBC rebuild.
+    auto poolItr = _randomPools.find(bgTypeId);
+    if (poolItr != _randomPools.end())
     {
-        std::vector<BattlegroundTypeId> ids;
-        ids.reserve(16);
-        std::vector<double> weights;
-        weights.reserve(16);
+        for (auto const& [memberId, weight] : poolItr->second)
+        {
+            // Skip members with no template: the arena is configured in the pool
+            // but not (yet) loadable, and rolling it would hand back a type id
+            // that CreateNewBattleground cannot instantiate.
+            if (!GetBattlegroundTemplateByTypeId(memberId))
+            {
+                TC_LOG_DEBUG("bg.battleground", "GetRandomBG: pool {} lists {} which has no battleground template; skipping it.", uint32(bgTypeId), uint32(memberId));
+                continue;
+            }
+
+            ids.push_back(memberId);
+            weights.push_back(weight);
+        }
+    }
+
+    if (ids.empty())
+    {
+        BattlegroundTemplate const* bgTemplate = GetBattlegroundTemplateByTypeId(bgTypeId);
+        if (!bgTemplate)
+            return BATTLEGROUND_TYPE_NONE;
+
         for (int32 mapId : bgTemplate->BattlemasterEntry->MapID)
         {
             if (mapId == -1)
@@ -1131,11 +1234,17 @@ BattlegroundTypeId BattlegroundMgr::GetRandomBG(BattlegroundTypeId bgTypeId)
                 weights.push_back(bg->Weight);
             }
         }
-
-        return *Trinity::Containers::SelectRandomWeightedContainerElement(ids, weights);
     }
 
-    return BATTLEGROUND_TYPE_NONE;
+    // Both routes can come up empty -- an unconfigured pool and a DBC row whose
+    // maps have no templates. SelectRandomWeightedContainerElement dereferences
+    // its result, so returning the id unchanged is the only safe answer: the
+    // caller then looks up the template for the type actually queued for, which
+    // is the pre-existing behaviour for every non-random battleground.
+    if (ids.empty())
+        return bgTypeId;
+
+    return *Trinity::Containers::SelectRandomWeightedContainerElement(ids, weights);
 }
 
 BGFreeSlotQueueContainer& BattlegroundMgr::GetBGFreeSlotQueueStore(BattlegroundTypeId bgTypeId)
