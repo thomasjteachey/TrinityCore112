@@ -5865,11 +5865,9 @@ SpellDecision SelectNoveltyBotSpell(Player const* player, Unit const* target)
     {
         // Angel form is an emergency cooldown, not an opener. Without a gate
         // it went off the instant the gates opened, wasting the whole form at
-        // full health. Save it for actual pressure: low health, or being
-        // swarmed in melee while already hurt.
-        bool const kaderUnderPressure = player->HealthBelowPct(35) ||
-            (player->HealthBelowPct(60) && CountNearbyEnemies(player, 8.0f) >= 2);
-        if (kaderUnderPressure && IsSpellReady(player, 81321) && !HasAuraFromSpellChain(player, 81321))
+        // full health. Health pool alone decides it - no melee/proximity
+        // condition, so it fires the same way whatever is hurting him.
+        if (player->HealthBelowPct(35) && IsSpellReady(player, 81321) && !HasAuraFromSpellChain(player, 81321))
             return { "kader angel form", "novelty bot: become the Spirit of Redemption under pressure", 81321,
                 playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
 
@@ -5892,9 +5890,16 @@ SpellDecision SelectNoveltyBotSpell(Player const* player, Unit const* target)
         return decision;
     }
 
-    // Irripius: Moonkin Form and Moonfire, nothing else.
+    // Irripius: Moonkin Form and Moonfire, plus Innervate to keep casting.
     if (name == "Irripius")
     {
+        // Self-Innervate on low mana. 6 min cooldown, so gate it rather than
+        // burning it the moment mana dips.
+        if (player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 25.0f &&
+            IsSpellReady(player, 29166) && !HasAuraFromSpellChain(player, 29166))
+            return { "irripius innervate", "novelty bot: innervate at low mana", 29166,
+                playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
         if (!player->HasAuraType(SPELL_AURA_MOD_SHAPESHIFT) && IsSpellReady(player, 24858))
             return { "irripius moonkin form", "novelty bot: assume moonkin form", 24858,
                 playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
