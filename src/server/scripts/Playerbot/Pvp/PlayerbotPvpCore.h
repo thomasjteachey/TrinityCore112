@@ -260,6 +260,11 @@ public:
     static bool IsBattlegroundFlagCarrier(Player const* player);
     static bool SpellWouldBreakFlagCarry(uint32 spellId);
     static bool TeamHasHumanPlayers(Player const* player);
+    // Records why a warrior did or did not pick a gap closer on its last
+    // decision pass. Every gate can fail silently and look identical from
+    // outside - the bot simply runs - so the values have to be captured where
+    // they are computed. Read back through ".playerbot pvp movediag".
+    static std::string GetLastWarriorGapCloserDiagnostic(Player const* player);
 
 private:
     static bool IsLifecycleEnabled();

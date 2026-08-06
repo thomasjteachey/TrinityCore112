@@ -161,6 +161,12 @@ float playerBaseMoveSpeed[MAX_MOVE_TYPE] =
     3.14f                  // MOVE_PITCH_RATE
 };
 
+// The rate the overwhelming majority of creature templates carry, and what
+// ObjectMgr substitutes when a template's speed_run is invalid. 1.14286 * the
+// 7.0 base run speed is 8.0 yd/s - deliberately above a player's 7.0 so a pet
+// can close on its owner rather than merely match them.
+static constexpr float DEFAULT_CREATURE_RUN_SPEED_RATE = 1.14286f;
+
 DamageInfo::DamageInfo(Unit* attacker, Unit* victim, uint32 damage, SpellInfo const* spellInfo, SpellSchoolMask schoolMask, DamageEffectType damageType, WeaponAttackType attackType)
     : m_attacker(attacker), m_victim(victim), m_damage(damage), m_spellInfo(spellInfo), m_schoolMask(schoolMask), m_damageType(damageType), m_attackType(attackType),
     m_absorb(0), m_resist(0), m_block(0), m_hitMask(0)
@@ -9604,7 +9610,21 @@ void Unit::UpdateSpeed(UnitMoveType mtype)
         {
             // Set creature speed rate
             if (GetTypeId() == TYPEID_UNIT)
-                speed *= ToCreature()->GetCreatureTemplate()->speed_run;    // at this point, MOVE_WALK is never reached
+            {
+                float templateSpeedRate = ToCreature()->GetCreatureTemplate()->speed_run;
+
+                // Normalize player pets to the standard creature run rate. A
+                // tameable beast's template speed is authored for the wild mob,
+                // and 125 of them sit below standard - Snow Leopard is 0.857,
+                // i.e. 6.0 yd/s against a player's 7.0. Out of combat the
+                // owner-speed inheritance further down hides this, so it only
+                // shows up mid-fight, where the pet can never close the gap.
+                // Floor it rather than override it: fast pets stay fast.
+                if (IsPet() && GetOwnerGUID().IsPlayer())
+                    templateSpeedRate = std::max(templateSpeedRate, DEFAULT_CREATURE_RUN_SPEED_RATE);
+
+                speed *= templateSpeedRate;    // at this point, MOVE_WALK is never reached
+            }
 
             // Normalize speed by 191 aura SPELL_AURA_USE_NORMAL_MOVEMENT_SPEED if need
             /// @todo possible affect only on MOVE_RUN

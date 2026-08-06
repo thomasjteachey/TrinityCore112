@@ -2222,6 +2222,31 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         player->Attack(target, false);
     }
 
+    // Nothing left to approach. Preserving a chase after the bot has already
+    // arrived leaves the generator micro-correcting against a target that is
+    // itself micro-correcting - two bots in contact then jitter against each
+    // other indefinitely, which is what shows up at arena boundaries. Settle
+    // instead. The 0.5 yard margin is hysteresis: without it the bot would flip
+    // between stopping and chasing every tick right at the range edge.
+    if (activeTargetRelativeMotion && currentDistance <= std::max(0.5f, genericMoveRange - 0.5f))
+    {
+        motionMaster->Clear(MOTION_SLOT_ACTIVE);
+        player->StopMoving();
+
+        stallState.targetGuid = target->GetGUID();
+        stallState.lastDistance = currentDistance;
+        stallState.lastSampleMs = nowMs;
+
+        std::ostringstream settleDiag;
+        settleDiag << "generic_arrived_settle"
+                   << " dist=" << currentDistance
+                   << " desired_range=" << genericMoveRange
+                   << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
+                   << " moving_after=" << (player->isMoving() ? "yes" : "no");
+        SetLastMovementDebugStatus(player, settleDiag.str());
+        return;
+    }
+
     if (activeTargetRelativeMotion && !hardStaleTargetRelative)
     {
         std::string preserveDiag;

@@ -912,7 +912,12 @@ public:
                 victim ? bot->GetDistance(victim) : 0.0f);
 
             std::string const moveDiag = playerbot::PvpClassActions::GetLastMovementDebugStatus(bot);
-            handler->PSendSysMessage("   %s", moveDiag.empty() ? "(no movement diagnostic recorded)" : moveDiag.c_str());
+            handler->PSendSysMessage("   move: %s", moveDiag.empty() ? "(none recorded)" : moveDiag.c_str());
+
+            // What the bot last actually tried to cast, and why it failed. The
+            // movement line only shows the consequence; this shows the cause.
+            std::string const execDiag = playerbot::PvpClassActions::GetLastExecutionStatus(bot);
+            handler->PSendSysMessage("   exec: %s", execDiag.empty() ? "(none recorded)" : execDiag.c_str());
 
             // Warrior gap closers have a lot of independent gates (known rank,
             // cooldown, stance, rage, min/max range, combat) and a failure in
@@ -955,6 +960,9 @@ public:
                     bot->IsInCombat() ? "yes" : "no",
                     victimDist,
                     (victimDist >= 8.0f && victimDist <= 25.0f) ? "yes" : "no");
+
+                std::string const gapDiag = playerbot::PvpCore::GetLastWarriorGapCloserDiagnostic(bot);
+                handler->PSendSysMessage("   gapclose: %s", gapDiag.empty() ? "(warrior selector has not run)" : gapDiag.c_str());
             }
         }
 

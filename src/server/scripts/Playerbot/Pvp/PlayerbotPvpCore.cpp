@@ -5447,6 +5447,16 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target, Class
     return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
 }
 
+std::unordered_map<uint64, std::string> g_WarriorGapCloserDiagnosticByGuid;
+
+void SetWarriorGapCloserDiagnostic(Player const* player, std::string const& diagnostic)
+{
+    if (!player)
+        return;
+
+    playerbot::LockedGetOrCreate(g_WarriorGapCloserDiagnosticByGuid, player->GetGUID().GetRawValue()) = diagnostic;
+}
+
 SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, ClassicProfileSelection const& profileSelection)
 {
     SpellDecision decision;
@@ -5489,7 +5499,15 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     // the Tactical Mastery value - 0 without the talent - so the swap that
     // Intercept requires destroys any rage generated before it. The stance swap
     // is therefore driven by "wants", and rage generation is sequenced after it.
-    bool const wantsInterceptGapCloser = !isFuryWarrior && !player->IsWithinMeleeRange(gapCloseTarget) && player->IsInCombat() && canInterceptByRange && IsSpellReady(player, 20617);
+    // Fury is routed to Heroic Leap rather than Intercept. Heroic Leap is a
+    // custom spell (81271) the bot may simply not have been granted, and when
+    // that happens Fury loses Intercept to the spec check and Heroic Leap to
+    // the unknown-spell check - leaving it with no in-combat gap closer at all,
+    // since Charge requires being out of combat. Fall back to Intercept rather
+    // than jogging the whole way.
+    bool const knowsHeroicLeap = ResolveKnownPlayerSpellInChain(player, 81271) != 0;
+    bool const interceptIsThisSpecGapCloser = !isFuryWarrior || !knowsHeroicLeap;
+    bool const wantsInterceptGapCloser = interceptIsThisSpecGapCloser && !player->IsWithinMeleeRange(gapCloseTarget) && player->IsInCombat() && canInterceptByRange && IsSpellReady(player, 20617);
     bool const shouldUseInterceptGapCloser = wantsInterceptGapCloser && CanAffordSpellPowerCost(player, 20617);
     // Fury uses Heroic Leap (ground-targeted, same range band as Intercept)
     // instead of Intercept. This was missing the same min-range gate
@@ -5522,6 +5540,32 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     // rage back to 0; generating first would just be thrown away.
     bool const gapCloserRageStarved = (wantsInterceptGapCloser || wantsHeroicLeapGapCloser) &&
         !gapCloseUrgent && inBerserkerStance && IsSpellReady(player, 2687);
+
+    {
+        // Note gapclose_target: this is the decision layer's target, which is
+        // not necessarily the unit shown as the bot's victim, and it may be a
+        // creature or pet rather than a player. A nearby one collapses
+        // intercept_by_range and silently removes the gap closer.
+        std::ostringstream gapDiag;
+        gapDiag << "fury=" << (isFuryWarrior ? "yes" : "no")
+                << " prot=" << (isProtWarrior ? "yes" : "no")
+                << " knows_leap=" << (knowsHeroicLeap ? "yes" : "no")
+                << " gapclose_target=" << (gapCloseTarget ? gapCloseTarget->GetName() : "none")
+                << " gapclose_dist=" << (gapCloseTarget ? player->GetDistance(gapCloseTarget) : -1.0f)
+                << " in_melee=" << (gapCloseTarget && player->IsWithinMeleeRange(gapCloseTarget) ? "yes" : "no")
+                << " combat=" << (player->IsInCombat() ? "yes" : "no")
+                << " icept_minrange=" << interceptMinRange
+                << " by_range=" << (canInterceptByRange ? "yes" : "no")
+                << " icept_ready=" << (IsSpellReady(player, 20617) ? "yes" : "no")
+                << " icept_afford=" << (CanAffordSpellPowerCost(player, 20617) ? "yes" : "no")
+                << " wants_icept=" << (wantsInterceptGapCloser ? "yes" : "no")
+                << " should_icept=" << (shouldUseInterceptGapCloser ? "yes" : "no")
+                << " berserker=" << (inBerserkerStance ? "yes" : "no")
+                << " stance_ready=" << (IsSpellReady(player, 2458) ? "yes" : "no")
+                << " spline_inflight=" << (warriorGapCloserInFlight ? "yes" : "no")
+                << " charge_ok=" << (shouldUseChargeGapCloser ? "yes" : "no");
+        SetWarriorGapCloserDiagnostic(player, gapDiag.str());
+    }
     Unit const* nearbyMeleeTarget = SelectNearbyMeleeTarget(player, activeTarget, 8.0f);
     Unit const* nearbyCastingTarget = SelectEnemyCastingTarget(player, 8.0f, activeTarget);
     Unit const* tauntTarget = isProtWarrior && IsSpellReady(player, 355) ? SelectWarriorTauntTarget(player, activeTarget, 30.0f) : nullptr;
@@ -6352,6 +6396,17 @@ uint32 PvpCore::CountHumanPlayersOnBattlegroundTeam(Player const* player)
     }
 
     return humanCount;
+}
+
+std::string PvpCore::GetLastWarriorGapCloserDiagnostic(Player const* player)
+{
+    if (!player)
+        return std::string();
+
+    if (std::string const* diagnostic = playerbot::LockedFind(g_WarriorGapCloserDiagnosticByGuid, player->GetGUID().GetRawValue()))
+        return *diagnostic;
+
+    return std::string();
 }
 
 bool PvpCore::TeamHasHumanPlayers(Player const* player)
