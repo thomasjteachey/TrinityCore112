@@ -62,6 +62,7 @@ namespace
 {
 struct SpellDecision;
 bool HasHostileTarget(Player const* player, Unit const* target);
+void SetWarriorGapCloserDiagnostic(Player const* player, std::string const& diagnostic);
 uint32 ResolveKnownPlayerSpellInChain(Player const* player, uint32 spellId);
 bool IsPetSpellReady(Player const* player, uint32 spellId);
 bool IsSpellReady(Player const* player, uint32 spellId);
@@ -477,6 +478,39 @@ bool HasWillOfTheForsakenBreakableControl(Player const* player)
 
     return player->HasUnitState(UNIT_STATE_FLEEING) ||
         player->HasAuraWithMechanic(wotfMechanicMask);
+}
+
+// Returns the aura that makes Every Man for Himself worth using, or nullptr.
+// Deliberately named rather than boolean: "it fired with nothing on me" cannot
+// be investigated without knowing what the check actually matched, and the
+// mechanic mask is broad enough that an unexpected aura carrying a snare or
+// root mechanic looks identical to real crowd control from outside.
+SpellInfo const* FindEveryManForHimselfBreakableAura(Player const* player)
+{
+    if (!player)
+        return nullptr;
+
+    for (auto const& auraPair : player->GetAppliedAuras())
+    {
+        AuraApplication const* application = auraPair.second;
+        if (!application || !application->GetBase())
+            continue;
+
+        SpellInfo const* spellInfo = application->GetBase()->GetSpellInfo();
+        if (!spellInfo)
+            continue;
+
+        if (spellInfo->Mechanic &&
+            (IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK & (1 << spellInfo->Mechanic)))
+            return spellInfo;
+
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+            if (application->HasEffect(effect.EffectIndex) && effect.IsEffect() && effect.Mechanic &&
+                (IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK & (1 << effect.Mechanic)))
+                return spellInfo;
+    }
+
+    return nullptr;
 }
 
 bool HasEveryManForHimselfBreakableControl(Player const* player)
@@ -1142,7 +1176,24 @@ SpellDecision SelectRacialSpell(Player const* player, Unit const* target, Unit c
     if (player->GetRace() == RACE_HUMAN && HasEveryManForHimselfBreakableControl(player))
     {
         if (uint32 const emfhSpellId = GetCustomEveryManForHimselfSpellId(player); emfhSpellId && IsSpellReady(player, emfhSpellId))
+        {
+            // Name what triggered it. Snares and roots are legitimate targets
+            // here, so the mask is not the suspect - but if this fires with the
+            // bot visibly untouched, the aura it matched is the only thing that
+            // can explain it.
+            if (player->GetClass() == CLASS_WARRIOR)
+            {
+                SpellInfo const* trigger = FindEveryManForHimselfBreakableAura(player);
+                std::ostringstream emfhDiag;
+                emfhDiag << "racial_emfh spell=" << emfhSpellId
+                         << " trigger=" << (trigger ? std::to_string(trigger->Id) : std::string("none"))
+                         << " trigger_mechanic=" << (trigger ? trigger->Mechanic : 0)
+                         << " fleeing=" << (player->HasUnitState(UNIT_STATE_FLEEING) ? "yes" : "no")
+                         << " combat=" << (player->IsInCombat() ? "yes" : "no");
+                SetWarriorGapCloserDiagnostic(player, emfhDiag.str());
+            }
             return { "custom every man for himself", "break stun/root/fear/charm and other loss-of-control effects", emfhSpellId, playerbot::PvpClassSpellContext::TargetMode::Self };
+        }
     }
 
     switch (player->GetRace())
