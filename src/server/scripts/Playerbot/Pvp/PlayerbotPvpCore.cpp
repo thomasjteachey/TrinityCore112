@@ -23,6 +23,7 @@
 #include "BattlegroundMgr.h"
 #include "BattlegroundTP.h"
 #include "BattlegroundWS.h"
+#include "CharacterCache.h"
 #include "Configuration/Config.h"
 #include "Creature.h"
 #include "GameObject.h"
@@ -5831,7 +5832,16 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
 // class rotation and starts casting Flash Heal.
 std::string NoveltyBotSourceName(Player const* player)
 {
-    std::string name = player->GetName();
+    // Clones do NOT carry the name you see in game. Player::Create is given a
+    // generated internal name (GenerateCloneInternalName), and the friendly
+    // "Dark <source>" string is only written into the character cache - which
+    // is what clients render. So GetName() on a clone returns gibberish and
+    // never matches anything. Read the cached display name first and fall back
+    // to the object name for ordinary players.
+    std::string name;
+    if (!sCharacterCache->GetCharacterNameByGuid(player->GetGUID(), name) || name.empty())
+        name = player->GetName();
+
     static std::string const darkPrefix = "Dark ";
     if (name.size() > darkPrefix.size() && name.compare(0, darkPrefix.size(), darkPrefix) == 0)
         name.erase(0, darkPrefix.size());
