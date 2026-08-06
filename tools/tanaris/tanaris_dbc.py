@@ -51,6 +51,11 @@ SPECS = {
         "fields": "ii" + "fff" + LOC,
         "count": 22,
     },
+    "WorldMapArea.dbc": {
+        # AreaName here is a plain string, not a 17-field locale block.
+        "fields": "iii" + "s" + "ffff" + "iii",
+        "count": 11,
+    },
 }
 
 
@@ -147,6 +152,30 @@ ROWS = {
         [WSL_H_START, MAP_ID] + list(H_START) + loc("Tanaris - Horde Start"),
         [WSL_A_GRAVE, MAP_ID] + list(A_GRAVE) + loc("Tanaris - Alliance Graveyard"),
         [WSL_H_GRAVE, MAP_ID] + list(H_GRAVE) + loc("Tanaris - Horde Graveyard"),
+    ],
+    "WorldMapArea.dbc": [
+        # Without this the world map draws Tanaris but never draws the player
+        # arrow: the client only positions the blob when the displayed area's
+        # MapID equals the map the player is actually standing on, and stock
+        # Tanaris (row 161) says MapID 1.
+        #
+        # AreaID stays 440 rather than the custom area 30234, because the client
+        # works out the current area from the Kalimdor ADTs it loaded, and those
+        # say 440. That leaves two rows sharing AreaID 440, which is exactly what
+        # the Obsidian Colosseum already does with 4493 (rows 531 on map 615 and
+        # 9531 on map 1615) - the client disambiguates on MapID, so the real
+        # Tanaris map is unaffected.
+        #
+        # The bounds are copied verbatim from row 161 so the arrow lands in the
+        # right place on the same artwork. AreaName picks the artwork.
+        [9532, MAP_ID, 440, "Tanaris",
+         -218.75,      # LocLeft   (world Y max)
+         -7118.75,     # LocRight  (world Y min)
+         -5875.0,      # LocTop    (world X max)
+         -10475.0,     # LocBottom (world X min)
+         -1,           # DisplayMapID
+         0,            # DefaultDungeonFloor
+         0],           # ParentWorldMapID
     ],
 }
 

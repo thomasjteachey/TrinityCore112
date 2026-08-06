@@ -19,8 +19,8 @@ both the dev and prod data trees and skips anything already present.
 
 ## `tanaris_dbc.py`
 
-Appends the map/area/battlemaster/bracket/graveyard rows to the five binary
-DBCs. Point it at any number of `dbc` directories:
+Appends the map/area/battlemaster/bracket/graveyard/worldmap rows to the six
+binary DBCs. Point it at any number of `dbc` directories:
 
 ```bash
 python3 tanaris_dbc.py /home/brokilodeluxe/wow/servers/tc-lplus-dev/data/dbc
@@ -37,6 +37,11 @@ being corrupted.
 Directories that need it: both server `data/dbc` trees, the local workspace at
 `wow/data/dbc/lplus`, and a staging copy for whatever gets packed into the
 client patch.
+
+`WorldMapArea.dbc` is the odd one out: it is **client-side only**. The server
+never reads it for battleground logic, so the player arrow stays missing from
+the world map until that row reaches a packed client patch, however correct the
+database looks.
 
 ## `verify_dbc.py`
 

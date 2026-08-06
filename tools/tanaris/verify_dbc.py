@@ -17,6 +17,7 @@ WANT = {
     "BattlemasterList.dbc": [104],
     "PvpDifficulty.dbc": [91620],
     "WorldSafeLocs.dbc": [52500, 52501, 52502, 52503],
+    "WorldMapArea.dbc": [9532],
 }
 
 
