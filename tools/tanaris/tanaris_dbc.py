@@ -56,6 +56,13 @@ SPECS = {
         "fields": "iii" + "s" + "ffff" + "iii",
         "count": 11,
     },
+    "WorldStateUI.dbc": {
+        # ID, MapID, AreaID, PhaseShift, Icon, String(loc), Tooltip(loc),
+        # StateVariable, Type, DynamicIcon, DynamicTooltip(loc), ExtendedUI,
+        # ExtendedUIStateVariable_1..3
+        "fields": "iiii" + "s" + LOC + LOC + "ii" + "s" + LOC + "s" + "iii",
+        "count": 63,
+    },
 }
 
 
@@ -176,6 +183,41 @@ ROWS = {
          -1,           # DisplayMapID
          0,            # DefaultDungeonFloor
          0],           # ParentWorldMapID
+    ],
+    "WorldStateUI.dbc": [
+        # The top-frame score readout. Without these two rows the server still
+        # sends the world states and the client still stores them, but nothing
+        # is declared to display them, so the battleground shows no score at all.
+        #
+        # Shape copied from Scarlet Chapel's pair (90002/90003). The "%9300w"
+        # syntax substitutes the live value of that world state into the string,
+        # so these read "<team kills>/<kill limit>" - see BG_TRT_WorldStates.
+        #
+        # StateVariable 0 means "always visible", which is what a plain
+        # deathmatch wants. The Obsidian Colosseum sets it instead, because its
+        # rows are the mutually exclusive flag-carrier indicators.
+        #
+        # AreaID 0 means "anywhere on this map" - important here, since the
+        # arena reports stock Tanaris (440) rather than a custom area.
+        [90023, MAP_ID, 0, 0,
+         r"Interface\TargetingFrame\UI-PVP-Alliance"]
+        + loc("%9300w/%9306w") + loc("") + [
+         0,            # StateVariable: always shown
+         0,            # Type
+         ""]           # DynamicIcon
+        + loc("", 16712188) + [
+         "",           # ExtendedUI
+         0, 0, 0],     # ExtendedUIStateVariable_1..3
+
+        [90024, MAP_ID, 0, 0,
+         r"Interface\TargetingFrame\UI-PVP-Horde"]
+        + loc("%9301w/%9306w") + loc("") + [
+         0,
+         0,
+         ""]
+        + loc("", 16712188) + [
+         "",
+         0, 0, 0],
     ],
 }
 
