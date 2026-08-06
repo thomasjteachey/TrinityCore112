@@ -1704,6 +1704,28 @@ bool IsSpellReady(Player const* player, uint32 spellId)
     return !player->GetSpellHistory()->HasCooldown(resolvedSpellId);
 }
 
+// IsSpellReady only answers "off cooldown". Affordability is enforced later in
+// IsDecisionImmediatelyCastable, which is fine for picking an action but not for
+// gating conditions that feed *other* decisions - a gap closer that reads as
+// "ready" while unaffordable can suppress the very rage generation needed to pay
+// for it, and the bot then has no way out of that state.
+bool CanAffordSpellPowerCost(Player const* player, uint32 spellId)
+{
+    uint32 const resolvedSpellId = ResolveKnownPlayerSpellInChain(player, spellId);
+    if (!player || !resolvedSpellId)
+        return false;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(resolvedSpellId);
+    if (!spellInfo)
+        return false;
+
+    if (spellInfo->PowerType < 0 || spellInfo->PowerType >= MAX_POWERS)
+        return true;
+
+    int32 const powerCost = spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask());
+    return powerCost <= 0 || player->GetPower(Powers(spellInfo->PowerType)) >= powerCost;
+}
+
 bool IsZeroManaCostSpellReady(Player const* player, uint32 spellId)
 {
     uint32 const resolvedSpellId = ResolveKnownPlayerSpellInChain(player, spellId);
@@ -5460,13 +5482,22 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     bool const canChargeByRange = !player->IsWithinDistInMap(gapCloseTarget, chargeMinRange);
     bool const canInterceptByRange = !player->IsWithinDistInMap(gapCloseTarget, interceptMinRange);
     bool const shouldUseChargeGapCloser = !player->IsWithinMeleeRange(gapCloseTarget) && !player->IsInCombat() && canChargeByRange && IsSpellReady(player, 11578);
-    bool const shouldUseInterceptGapCloser = !isFuryWarrior && !player->IsWithinMeleeRange(gapCloseTarget) && player->IsInCombat() && canInterceptByRange && IsSpellReady(player, 20617);
+    // "Wants" = range and cooldown allow it; "should" additionally requires the
+    // rage to pay for it. Intercept and Heroic Leap cost 10 rage, and a warrior
+    // pulled into combat at range (a Moonfire landing before Charge goes off) has
+    // none. Keeping these separate matters because a stance change caps rage to
+    // the Tactical Mastery value - 0 without the talent - so the swap that
+    // Intercept requires destroys any rage generated before it. The stance swap
+    // is therefore driven by "wants", and rage generation is sequenced after it.
+    bool const wantsInterceptGapCloser = !isFuryWarrior && !player->IsWithinMeleeRange(gapCloseTarget) && player->IsInCombat() && canInterceptByRange && IsSpellReady(player, 20617);
+    bool const shouldUseInterceptGapCloser = wantsInterceptGapCloser && CanAffordSpellPowerCost(player, 20617);
     // Fury uses Heroic Leap (ground-targeted, same range band as Intercept)
     // instead of Intercept. This was missing the same min-range gate
     // Intercept has above - close-but-not-melee distances inside Intercept's
     // min range would try to fire Heroic Leap anyway and fail the spell's own
     // range validation, silently doing nothing.
-    bool const shouldUseHeroicLeapGapCloser = isFuryWarrior && !player->IsWithinMeleeRange(gapCloseTarget) && player->IsInCombat() && canInterceptByRange && IsSpellReady(player, 81271);
+    bool const wantsHeroicLeapGapCloser = isFuryWarrior && !player->IsWithinMeleeRange(gapCloseTarget) && player->IsInCombat() && canInterceptByRange && IsSpellReady(player, 81271);
+    bool const shouldUseHeroicLeapGapCloser = wantsHeroicLeapGapCloser && CanAffordSpellPowerCost(player, 81271);
     bool const furyInDanger = isFuryWarrior && player->HealthBelowPct(35) && SelectNearbyMeleeTarget(player, activeTarget, 8.0f) && IsSpellReady(player, 81271);
     bool const furyRecentGapCloser = isFuryWarrior && (player->GetSpellHistory()->HasCooldown(11578) || player->GetSpellHistory()->HasCooldown(81271));
     uint32 const meleeFinisherSpellId = isProtWarrior ? uint32(23925) : (isFuryWarrior ? uint32(23881) : uint32(21553));
@@ -5478,6 +5509,19 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     // the first immediately-castable candidate scanning top-down rather than
     // preferring an out-of-range action that would trigger approach movement.
     bool const gapCloseUrgent = shouldUseChargeGapCloser || shouldUseInterceptGapCloser || shouldUseHeroicLeapGapCloser;
+    // Intent, regardless of whether the rage is there yet. Used to keep the
+    // ordinary rotational Bloodrage from firing a tick before a stance swap
+    // would wipe the rage it just made.
+    bool const gapCloseWanted = shouldUseChargeGapCloser || wantsInterceptGapCloser || wantsHeroicLeapGapCloser;
+    // The deadlock this breaks: warrior is pulled into combat at range, so
+    // Charge is off the table and Intercept/Heroic Leap is the only gap closer
+    // left - but both cost rage the warrior does not have, and at range there is
+    // nothing to hit to make more. Bloodrage is the only source, and it is off
+    // the GCD, so spending a decision tick on it costs nothing but the tick.
+    // Gated on already being in Berserker Stance because the swap into it caps
+    // rage back to 0; generating first would just be thrown away.
+    bool const gapCloserRageStarved = (wantsInterceptGapCloser || wantsHeroicLeapGapCloser) &&
+        !gapCloseUrgent && inBerserkerStance && IsSpellReady(player, 2687);
     Unit const* nearbyMeleeTarget = SelectNearbyMeleeTarget(player, activeTarget, 8.0f);
     Unit const* nearbyCastingTarget = SelectEnemyCastingTarget(player, 8.0f, activeTarget);
     Unit const* tauntTarget = isProtWarrior && IsSpellReady(player, 355) ? SelectWarriorTauntTarget(player, activeTarget, 30.0f) : nullptr;
@@ -5533,7 +5577,7 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "warrior piercing howl", "apply area snare when multiple enemies are unsnared in melee range", 12323, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, HasHostileTarget(player, activeTarget) && CountNearbyEnemies(player, 10.0f) >= 2 && IsSpellReady(player, 5246), 55.5f,
         { "warrior intimidating shout", "aoe fear around the current target when outnumbered", 5246, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !gapCloseUrgent && (IsSpellReady(player, 6552) || IsSpellReady(player, 81492) || IsSpellReady(player, 20617) || IsSpellReady(player, 1680) || IsSpellReady(player, meleeFinisherSpellId)) &&
+    AddDecisionCandidate(candidates, !gapCloseWanted && (IsSpellReady(player, 6552) || IsSpellReady(player, 81492) || IsSpellReady(player, 20617) || IsSpellReady(player, 1680) || IsSpellReady(player, meleeFinisherSpellId)) &&
             player->GetPower(POWER_RAGE) < 150 && IsSpellReady(player, 2687), 54.0f,
         { "warrior bloodrage", "generate rage to unlock rotational abilities", 2687, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !warriorGapCloserInFlight && !isProtWarrior && inDefensiveStance && (!IsSpellReady(player, 81492) || !hasNearbyMeleeThreat) && IsSpellReady(player, 2458), 53.0f,
@@ -5542,8 +5586,16 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "warrior battle stance", "switch to battle stance before out-of-combat charge", 2457, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, shouldUseChargeGapCloser, 52.0f,
         { "warrior charge", "close gap to target from out of combat", 11578, playerbot::PvpClassSpellContext::TargetMode::Enemy, gapCloseTarget ? gapCloseTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !warriorGapCloserInFlight && shouldUseInterceptGapCloser && !inBerserkerStance && IsSpellReady(player, 2458), 51.5f,
+    // Driven by intent rather than affordability: the swap itself wipes rage, so
+    // waiting until Intercept is affordable would mean swapping and immediately
+    // being unable to pay again. Still requires a way to end up with rage - if
+    // Bloodrage is down and the warrior is broke, skip the swap entirely and let
+    // the ordinary chase take him into melee instead of stalling at range.
+    AddDecisionCandidate(candidates, !warriorGapCloserInFlight && wantsInterceptGapCloser && !inBerserkerStance && IsSpellReady(player, 2458) &&
+            (CanAffordSpellPowerCost(player, 20617) || IsSpellReady(player, 2687)), 51.5f,
         { "warrior berserker stance", "switch to berserker stance before intercept gap close", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, gapCloserRageStarved, 51.25f,
+        { "warrior bloodrage", "generate rage to pay for the gap closer after the stance swap", 2687, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, shouldUseInterceptGapCloser, 51.0f,
         { "warrior intercept", "close gap to target while in combat", 20617, playerbot::PvpClassSpellContext::TargetMode::Enemy, gapCloseTarget ? gapCloseTarget->GetGUID() : ObjectGuid::Empty });
     // Heroic Leap's ShapeshiftMask requires Berserker Stance (same shapeshift
@@ -5552,7 +5604,8 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     // Without this, the generic shapeshift-compatibility check silently
     // rejects Heroic Leap whenever the warrior isn't already in Berserker
     // Stance, and the bot falls back to Charge (which doesn't need it).
-    AddDecisionCandidate(candidates, !warriorGapCloserInFlight && (shouldUseHeroicLeapGapCloser || furyInDanger) && !inBerserkerStance && IsSpellReady(player, 2458), 1000.0f,
+    AddDecisionCandidate(candidates, !warriorGapCloserInFlight && (wantsHeroicLeapGapCloser || furyInDanger) && !inBerserkerStance && IsSpellReady(player, 2458) &&
+            (CanAffordSpellPowerCost(player, 81271) || IsSpellReady(player, 2687)), 1000.0f,
         { "warrior berserker stance", "switch to berserker stance before heroic leap", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
     // TEMPORARY: forced to top priority (above everything, including
     // emergency defensives) at the user's explicit request to isolate and
