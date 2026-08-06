@@ -132,7 +132,16 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
         // the pet standing in the middle of the hold.
         bg->SetTeamStartPosition(enemyTeamIndex, positions[i]);
 
-        Player* clone = playerbot::PlayerbotObcCloneManager::CreateCustomGameClone(source, bg, enemyTeam, "Dark ");
+        // "Dark" is reserved for a memory copied from a real human. Managed
+        // playerbots (BotMagArcane and the rest of the random-bot roster) are
+        // source material too, but they are not a dark reflection of an
+        // actual player and should keep their ordinary display name.
+        WorldSession const* sourceSession = source->GetSession();
+        bool const isActualHuman = sourceSession && !sourceSession->IsVirtualSession() &&
+            !sourceSession->IsTransientPlayerSession() && !playerbot::IsManagedRandomBot(source);
+        std::string const displayPrefix = isActualHuman ? "Dark " : "";
+
+        Player* clone = playerbot::PlayerbotObcCloneManager::CreateCustomGameClone(source, bg, enemyTeam, displayPrefix);
         if (!clone)
         {
             TC_LOG_WARN("playerbot", "PlayerbotVhrWaveDriver: failed to clone {} for wave {} of instance {}.",

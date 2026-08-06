@@ -157,7 +157,7 @@ VALUES
   (51002, 1608, 25154, 1101, -10000);
 
 -- -------------------------------------------------------- WorldStateUI.dbc
--- The top-frame readout: party members left, enemies left, current wave.
+-- The top-frame readout: party members left and enemies left.
 -- Without these rows the server still sends the world states and the client
 -- still stores them, but nothing is declared to display them.
 --
@@ -177,14 +177,10 @@ INSERT INTO dbc.worldstateui_lplus
    ExtendedUI, ExtendedUIStateVariable_1, ExtendedUIStateVariable_2, ExtendedUIStateVariable_3)
 VALUES
   (90025, 1608, 0, 0, '',
-   'Defenders: %9401w Players Remaining', 16712190, '', 16712190,
+   '%9401w Players Remaining', 16712190, '', 16712190,
    9400, 0, '', 16712188,
    '', 0, 0, 0),
   (90026, 1608, 0, 0, '',
-   'Dark Reflections: %9402w Remaining', 16712190, '', 16712190,
-   9400, 0, '', 16712188,
-   '', 0, 0, 0),
-  (90027, 1608, 0, 0, '',
-   'Wave: %9403w', 16712190, '', 16712190,
+   '%9402w Memories Remaining', 16712190, '', 16712190,
    9400, 0, '', 16712188,
    '', 0, 0, 0);

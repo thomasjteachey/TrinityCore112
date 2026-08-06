@@ -120,9 +120,14 @@ def upsert(path, spec, rows, dry_run=False, backup_suffix=BACKUP_SUFFIX):
                     struct.pack_into("<i", rec_bytes, off, int(value))
                     dirty = True
             elif kind == "f":
-                cur = struct.unpack_from("<f", rec_bytes, off)[0]
-                if abs(cur - float(value)) > 1e-4:
-                    struct.pack_into("<f", rec_bytes, off, float(value))
+                # Compare the encoded float32 bytes, not the Python float64
+                # values.  Large coordinates such as -9235.11 cannot be
+                # represented within 1e-4 by a float32, so a tolerance check
+                # incorrectly marked an already-canonical record dirty on
+                # every run.
+                encoded = struct.pack("<f", float(value))
+                if rec_bytes[off:off + 4] != encoded:
+                    rec_bytes[off:off + 4] = encoded
                     dirty = True
             else:
                 cur_off = struct.unpack_from("<I", rec_bytes, off)[0]

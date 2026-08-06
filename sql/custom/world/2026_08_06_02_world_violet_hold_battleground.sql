@@ -39,3 +39,14 @@ VALUES
    1,          -- Weight (unused: VHR is not in the random BG pool)
    '',
    'The Violet Hold Gauntlet');
+
+-- Battleground-system warning used by the ten-second first-wave countdown and
+-- every later wave's ten-second preparation window.
+DELETE FROM `broadcast_text` WHERE `ID` = 910079;
+INSERT INTO `broadcast_text`
+  (`ID`, `LanguageID`, `Text`, `Text1`, `EmoteID1`, `EmoteID2`, `EmoteID3`,
+   `EmoteDelay1`, `EmoteDelay2`, `EmoteDelay3`, `SoundEntriesID`, `EmotesID`,
+   `Flags`, `VerifiedBuild`)
+VALUES
+  (910079, 0, 'The next wave begins in 10 seconds!',
+   'The next wave begins in 10 seconds!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);

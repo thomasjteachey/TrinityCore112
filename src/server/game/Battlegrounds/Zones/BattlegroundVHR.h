@@ -52,6 +52,11 @@ enum BG_VHR_WorldStates
     BG_VHR_WORLDSTATE_ENEMIES_MAX     = 9404
 };
 
+enum BG_VHR_BroadcastTexts
+{
+    BG_VHR_TEXT_NEXT_WAVE_IN_TEN_SECONDS = 910079
+};
+
 enum BG_VHR_Objects
 {
     BG_VHR_OBJECT_CELL_XEVOZZ      = 0,

@@ -114,6 +114,7 @@ BattlegroundVHR::BattlegroundVHR()
     StartDelayTimes[BG_STARTING_EVENT_SECOND] = BG_START_DELAY_15S;
     StartDelayTimes[BG_STARTING_EVENT_THIRD]  = BG_START_DELAY_10S;
     StartDelayTimes[BG_STARTING_EVENT_FOURTH] = BG_START_DELAY_NONE;
+    StartMessageIds[BG_STARTING_EVENT_THIRD]  = BG_VHR_TEXT_NEXT_WAVE_IN_TEN_SECONDS;
 
     // Humans always hold Alliance. The queue forces this side regardless of the
     // player's real faction, so a cross-faction party stays together and the
@@ -185,6 +186,9 @@ bool BattlegroundVHR::SetupBattleground()
             TC_LOG_ERROR("bg.battleground", "BattlegroundVHR::SetupBattleground: failed to spawn cell door {} (entry {}).", i, cell.doorEntry);
             return false;
         }
+
+        if (GameObject* door = GetBGObject(i))
+            door->SetFlag(GO_FLAG_NOT_SELECTABLE);
     }
 
     if (!AddObject(BG_VHR_OBJECT_MAIN_DOOR, kMainDoorEntry, kMainDoor.GetPositionX(), kMainDoor.GetPositionY(),
@@ -193,6 +197,9 @@ bool BattlegroundVHR::SetupBattleground()
         TC_LOG_ERROR("bg.battleground", "BattlegroundVHR::SetupBattleground: failed to spawn the prison seal (entry {}).", kMainDoorEntry);
         return false;
     }
+
+    if (GameObject* door = GetBGObject(BG_VHR_OBJECT_MAIN_DOOR))
+        door->SetFlag(GO_FLAG_NOT_SELECTABLE);
 
     // Deliberately no AddSpiritGuide call. Map 1608 also ships without
     // graveyard rows, so a released ghost has nowhere to resurrect: death is
@@ -248,11 +255,6 @@ void BattlegroundVHR::BeginWave()
 
     _waveState = WaveState::AwaitingSpawn;
     _prepTimerMs = BG_VHR_PREP_MS;
-
-    for (auto const& itr : GetPlayers())
-        if (Player* player = ObjectAccessor::FindPlayer(itr.first))
-            if (player->GetBGTeam() == _humanTeam && player->GetSession())
-                player->GetSession()->SendAreaTriggerMessage("Wave %u - %u incoming!", _waveNumber, enemyCount);
 
     UpdateScoreWorldStates();
 }
@@ -422,6 +424,7 @@ void BattlegroundVHR::NotifyWaveSpawnFulfilled(uint32 waveNumber, uint32 /*spawn
         ApplyPreparationToWave();
         _waveState = WaveState::Preparing;
         _prepTimerMs = BG_VHR_PREP_MS;
+        SendBroadcastText(BG_VHR_TEXT_NEXT_WAVE_IN_TEN_SECONDS, CHAT_MSG_BG_SYSTEM_NEUTRAL);
     }
 
     UpdateScoreWorldStates();

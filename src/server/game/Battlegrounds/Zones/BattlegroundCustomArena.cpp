@@ -17,6 +17,7 @@
 
 #include "BattlegroundCustomArena.h"
 #include "DatabaseEnv.h"
+#include "GameObject.h"
 #include "GameTime.h"
 #include "Log.h"
 #include "ObjectMgr.h"
@@ -141,7 +142,15 @@ bool BattlegroundCustomArena::SetupBattleground()
         }
 
         if (obj.Type == CUSTOM_ARENA_OBJECT_DOOR)
+        {
+            // Arena gates are match machinery, not usable world doors. Keep
+            // them clickable by neither players nor GMs while retaining their
+            // normal server-driven close/open lifecycle.
+            if (GameObject* door = GetBGObject(index))
+                door->SetFlag(GO_FLAG_NOT_SELECTABLE);
+
             ++_doorCount;
+        }
         else
             ++_buffCount;
 
