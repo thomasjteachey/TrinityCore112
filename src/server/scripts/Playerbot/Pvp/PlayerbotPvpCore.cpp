@@ -5820,6 +5820,54 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
     return SelectHighestPriorityCastableDecision(candidates, player, target, allyTarget);
 }
 
+// Novelty bots with a deliberately tiny kit, matched by name. They bypass the
+// normal class rotation entirely: whatever is off cooldown from their short
+// list gets cast, and if none of it is ready they simply do nothing rather
+// than falling through to the real priest/druid logic.
+SpellDecision SelectNoveltyBotSpell(Player const* player, Unit const* target)
+{
+    SpellDecision decision;
+    std::string const& name = player->GetName();
+
+    // Kader: Smite, Holy Nova, and "angel form" (the castable custom Spirit of
+    // Redemption, 81321).
+    if (name == "Kader")
+    {
+        if (IsSpellReady(player, 81321) && !HasAuraFromSpellChain(player, 81321))
+            return { "kader angel form", "novelty bot: become the Spirit of Redemption", 81321,
+                playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+        if (target && CountNearbyEnemies(player, 10.0f) >= 2 && IsSpellReady(player, 15237))
+            return { "kader holy nova", "novelty bot: holy nova when enemies are close", 15237,
+                playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+        if (target && IsSpellReady(player, 585))
+            return { "kader smite", "novelty bot: smite, forever", 585,
+                playerbot::PvpClassSpellContext::TargetMode::Enemy, target->GetGUID() };
+
+        decision.reason = "kader-nothing-ready";
+        return decision;
+    }
+
+    // Irripius: Moonkin Form and Moonfire, nothing else.
+    if (name == "Irripius")
+    {
+        if (!player->HasAuraType(SPELL_AURA_MOD_SHAPESHIFT) && IsSpellReady(player, 24858))
+            return { "irripius moonkin form", "novelty bot: assume moonkin form", 24858,
+                playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+        if (target && IsSpellReady(player, 8921))
+            return { "irripius moonfire", "novelty bot: moonfire, forever", 8921,
+                playerbot::PvpClassSpellContext::TargetMode::Enemy, target->GetGUID() };
+
+        decision.reason = "irripius-nothing-ready";
+        return decision;
+    }
+
+    decision.reason = "not-a-novelty-bot";
+    return decision;
+}
+
 SpellDecision SelectClassicClassSpell(Player const* player, Unit const* target, Unit const* allyTarget, ClassicProfileSelection const& profileSelection)
 {
     SpellDecision decision;
@@ -5828,6 +5876,10 @@ SpellDecision SelectClassicClassSpell(Player const* player, Unit const* target, 
         decision.reason = "missing-player";
         return decision;
     }
+
+    // Checked before the class switch so these two never run normal rotations.
+    if (player->GetName() == "Kader" || player->GetName() == "Irripius")
+        return SelectNoveltyBotSpell(player, target);
 
     if (profileSelection.unsupportedClass)
     {
