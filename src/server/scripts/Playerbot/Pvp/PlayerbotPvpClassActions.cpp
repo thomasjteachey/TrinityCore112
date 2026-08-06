@@ -6087,10 +6087,18 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
     {
         if (context.spellId == 783 && context.reason && std::string_view(context.reason) == "recovering from polymorph by travel-form reposition")
             RepositionDruidAfterTravelFormRecovery(player);
-        SetLastExecutionStatus(player, "cast_executed");
+        // Record which spell, not just that something happened. Without the id
+        // and the selector's own reason string, "cast_executed" cannot answer
+        // the only question worth asking when a bot misbehaves: what did it
+        // actually decide to do, and why.
+        SetLastExecutionStatus(player, "cast_executed spell=" + std::to_string(context.spellId) +
+            " action=" + (context.actionName ? context.actionName : "none") +
+            " reason=" + (context.reason ? context.reason : "none"));
     }
     else
-        SetLastExecutionStatus(player, "cast_failed_" + failureReason);
+        SetLastExecutionStatus(player, "cast_failed_" + failureReason +
+            " spell=" + std::to_string(context.spellId) +
+            " action=" + (context.actionName ? context.actionName : "none"));
     return casted;
 }
 }
