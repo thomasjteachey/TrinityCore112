@@ -6125,8 +6125,17 @@ SpellDecision SelectClassicClassSpell(Player const* player, Unit const* target, 
 
 SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target, Unit const* allyTarget, ClassicProfileSelection const& profileSelection)
 {
+    // Entry marker: every return below overwrites this, so a warrior snapshot
+    // still reading "entered" means an uninstrumented path, and one that stays
+    // stale (high age_ms) means this function is not being reached at all -
+    // which points upstream, not here.
+    if (player && player->GetClass() == CLASS_WARRIOR)
+        SetWarriorGapCloserDiagnostic(player, "entered=class_or_utility");
+
     if (playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotShadowmeldGraceToken))
     {
+        if (player && player->GetClass() == CLASS_WARRIOR)
+            SetWarriorGapCloserDiagnostic(player, "early_exit=shadowmeld_grace_window");
         SpellDecision holdDecision;
         holdDecision.reason = "shadowmeld grace window";
         return holdDecision;
@@ -6135,8 +6144,12 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
     if (player && player->HealthBelowPct(50))
     {
         if (uint32 const healthstoneItemEntry = SelectReadyHealthstoneItemEntry(player))
+        {
+            if (player->GetClass() == CLASS_WARRIOR)
+                SetWarriorGapCloserDiagnostic(player, "early_exit=healthstone");
             return { "use healthstone", "restore health below fifty percent", 0,
                 playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID(), healthstoneItemEntry };
+        }
     }
 
     // Spirit of Redemption must run the priest healing selector even with no
@@ -6171,6 +6184,8 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
     // some branches.
     if (IsHunterCastTimeActionLocked(player))
     {
+        if (player && player->GetClass() == CLASS_WARRIOR)
+            SetWarriorGapCloserDiagnostic(player, "early_exit=hunter_cast_time_lock");
         SpellDecision holdDecision;
         holdDecision.reason = "hunter cast-time spell in progress";
         return holdDecision;
@@ -6186,10 +6201,18 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
     // opportunistic utility; if one is not castable this instant, move on.
     if (SpellDecision const racialDecision = SelectRacialSpell(player, target, allyTarget);
         racialDecision.spellId && IsDecisionImmediatelyCastable(player, racialDecision, target, allyTarget))
+    {
+        if (player->GetClass() == CLASS_WARRIOR)
+            SetWarriorGapCloserDiagnostic(player, "early_exit=racial spell=" + std::to_string(racialDecision.spellId));
         return racialDecision;
+    }
 
     if (SpellDecision const utilityDecision = MaybeSelectUtilitySpell(player, target); utilityDecision.spellId)
+    {
+        if (player->GetClass() == CLASS_WARRIOR)
+            SetWarriorGapCloserDiagnostic(player, "early_exit=utility spell=" + std::to_string(utilityDecision.spellId));
         return utilityDecision;
+    }
 
     if (!HasHostileTarget(player, target) && !allyTarget)
     {
@@ -7000,6 +7023,25 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
 
     if (player->IsInCombat() && !hasValidTarget && !hasValidAllyTarget)
     {
+        // In combat with nothing the selector considers a valid target. Report
+        // the validity inputs directly: target validity runs through
+        // IsValidAttackTarget, so this distinguishes "no selection" from
+        // "selection exists but is being rejected".
+        if (player->GetClass() == CLASS_WARRIOR)
+        {
+            Unit const* selected = ObjectAccessor::GetUnit(*player, selectedTargetGuid);
+            Unit const* victim = player->GetVictim();
+            std::ostringstream stuckDiag;
+            stuckDiag << "early_exit=combat_stuck_no_valid_target"
+                      << " sel_guid=" << (selectedTargetGuid.IsEmpty() ? "empty" : selectedTargetGuid.ToString())
+                      << " sel_resolved=" << (selected ? selected->GetName() : "null")
+                      << " sel_alive=" << (selected && selected->IsAlive() ? "yes" : "no")
+                      << " sel_valid_attack=" << (selected && player->IsValidAttackTarget(selected) ? "yes" : "no")
+                      << " victim=" << (victim ? victim->GetName() : "none")
+                      << " victim_valid_attack=" << (victim && player->IsValidAttackTarget(victim) ? "yes" : "no");
+            SetWarriorGapCloserDiagnostic(player, stuckDiag.str());
+        }
+
         if (IncrementCombatNoTargetTicks(player) >= 3)
         {
             context.movementDirective = PvpClassSpellContext::MovementDirective::ResetCombatState;
@@ -7017,6 +7059,17 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
 
     if (hasInvalidSelectedTarget)
     {
+        if (player->GetClass() == CLASS_WARRIOR)
+        {
+            Unit const* selected = ObjectAccessor::GetUnit(*player, selectedTargetGuid);
+            std::ostringstream dropDiag;
+            dropDiag << "early_exit=drop_invalid_selected_target"
+                     << " sel_resolved=" << (selected ? selected->GetName() : "null")
+                     << " sel_alive=" << (selected && selected->IsAlive() ? "yes" : "no")
+                     << " sel_valid_attack=" << (selected && player->IsValidAttackTarget(selected) ? "yes" : "no");
+            SetWarriorGapCloserDiagnostic(player, dropDiag.str());
+        }
+
         context.movementDirective = PvpClassSpellContext::MovementDirective::DropInvalidTarget;
         context.actionName = "drop target";
         context.reason = "invalid target";
