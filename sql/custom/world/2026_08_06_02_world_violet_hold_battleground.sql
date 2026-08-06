@@ -30,7 +30,8 @@ VALUES
                -- Humans are still capped at 10 by BattlemasterList 105's
                -- MaxGroupSize plus the queue handing every group its own
                -- instance and never refilling it.
-   60, 69,     -- bracket, must agree with PvpDifficulty 91608
+   1, 80,      -- bracket, must agree with PvpDifficulty 91608 (1-80: the
+               -- server caps at 60, so a 60 floor would lock out levelers)
    52520, 0.027,      -- party start: the entrance landing, facing the chamber
    52521, 3.211,      -- enemy nominal start: chamber centre (clones are moved
                       -- into their cells by the wave driver immediately)

@@ -1,0 +1,14 @@
+-- Widen the Tanaris and Violet Hold queue brackets to 1-80.
+--
+-- Both shipped as a single 60-69 bracket, copied from the older custom
+-- battlegrounds. On this server 60 is the level cap, so a MinLevel of 60
+-- locked out every leveling character: PvpDifficulty is the bracket the queue
+-- actually consults (GetBattlegroundBracketByLevel), and a player whose level
+-- matches no bracket is refused silently. One 1-80 bracket admits everyone.
+--
+-- Pairs with the same change in the binary DBCs (tools/violet_hold/vhr_dbc.py
+-- and tools/tanaris/tanaris_dbc.py now carry 1-80) and in
+-- battleground_template (2026_08_06_03_world_custom_bg_bracket_widen.sql).
+--
+-- Replayable.
+UPDATE dbc.pvpdifficulty_lplus SET MinLevel = 1, MaxLevel = 80 WHERE ID IN (91608, 91620);

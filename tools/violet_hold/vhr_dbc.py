@@ -160,7 +160,9 @@ ROWS = {
         # Without a bracket row the queue silently refuses everyone --
         # GetBattlegroundBracketByLevel just fails and logs nothing.
         # Id follows the existing 9<mapid> convention (91620 for Tanaris).
-        [90000 + MAP_ID, MAP_ID, 0, 60, 69, 0],
+        # One 1-80 bracket: 60 is this server's level cap, so a 60-69 bracket
+        # (the older custom BGs' shape) locks out every leveling character.
+        [90000 + MAP_ID, MAP_ID, 0, 1, 80, 0],
     ],
     "WorldSafeLocs.dbc": [
         # Deliberately NO graveyard entries: death in the gauntlet is final

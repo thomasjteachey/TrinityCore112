@@ -95,13 +95,14 @@ VALUES
 -- ------------------------------------------------------- PvpDifficulty.dbc
 -- Miss this and the queue silently refuses everyone:
 -- GetBattlegroundBracketByLevel finds no bracket and fails without logging.
--- Id follows the existing 9<mapid> convention; one 60-69 bracket like the
--- other custom battlegrounds.
+-- Id follows the existing 9<mapid> convention. One 1-80 bracket: 60 is this
+-- server's level cap, so the older custom BGs' 60-69 shape would lock out
+-- every leveling character.
 DELETE FROM dbc.pvpdifficulty_lplus WHERE MapID = 1608;
 INSERT INTO dbc.pvpdifficulty_lplus
   (ID, MapID, RangeIndex, MinLevel, MaxLevel, Difficulty)
 VALUES
-  (91608, 1608, 0, 60, 69, 0);
+  (91608, 1608, 0, 1, 80, 0);
 
 -- ------------------------------------------------------- WorldSafeLocs.dbc
 -- 52520/52521: next free block after Tanaris (52500-52503).
