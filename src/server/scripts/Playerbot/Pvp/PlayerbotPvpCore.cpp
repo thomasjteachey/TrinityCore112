@@ -5867,7 +5867,7 @@ SpellDecision SelectNoveltyBotSpell(Player const* player, Unit const* target)
         // it went off the instant the gates opened, wasting the whole form at
         // full health. Health pool alone decides it - no melee/proximity
         // condition, so it fires the same way whatever is hurting him.
-        if (player->HealthBelowPct(35) && IsSpellReady(player, 81321) && !HasAuraFromSpellChain(player, 81321))
+        if (player->HealthBelowPct(50) && IsSpellReady(player, 81321) && !HasAuraFromSpellChain(player, 81321))
             return { "kader angel form", "novelty bot: become the Spirit of Redemption under pressure", 81321,
                 playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
 

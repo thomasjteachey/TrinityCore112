@@ -3016,6 +3016,30 @@ SpellCastResult WorldObject::CastSpell(CastSpellTargetArg const& targets, uint32
     return spell->prepare(*targets.Targets, args.TriggeringAura);
 }
 
+namespace
+{
+    // True when this object is - or belongs to - a spectator in a custom game.
+    // Resolves through the owner so a spectator's pet, totem or other minion
+    // is just as inert as the spectator itself.
+    bool IsSpectatorInCustomGame(WorldObject const* object)
+    {
+        Unit const* unit = object ? object->ToUnit() : nullptr;
+        if (!unit)
+            return false;
+
+        Player const* player = unit->ToPlayer();
+        if (!player)
+            if (Unit const* owner = unit->GetCharmerOrOwner())
+                player = owner->ToPlayer();
+
+        if (!player || !player->IsSpectator())
+            return false;
+
+        Battleground const* bg = player->GetBattleground();
+        return bg && bg->IsCustomGame();
+    }
+}
+
 // function based on function Unit::CanAttack from 13850 client
 bool WorldObject::IsValidAttackTarget(WorldObject const* target, SpellInfo const* bySpell /*= nullptr*/) const
 {
@@ -3035,6 +3059,13 @@ bool WorldObject::IsValidAttackTarget(WorldObject const* target, SpellInfo const
 
     // can't attack GMs
     if (target->GetTypeId() == TYPEID_PLAYER && target->ToPlayer()->IsGameMaster())
+        return false;
+
+    // Custom-game spectators are inert: they can neither affect participants
+    // nor be affected by them. GetReactionTo deliberately gives a spectator
+    // the reaction of the side they are watching, which otherwise leaves them
+    // a legal target (and a legal caster) for anything aimed at that side.
+    if (IsSpectatorInCustomGame(this) || IsSpectatorInCustomGame(target))
         return false;
 
     Unit const* unit = ToUnit();
@@ -3182,6 +3213,12 @@ bool WorldObject::IsValidAssistTarget(WorldObject const* target, SpellInfo const
 
     // can't assist GMs
     if (target->GetTypeId() == TYPEID_PLAYER && target->ToPlayer()->IsGameMaster())
+        return false;
+
+    // Custom-game spectators are inert - see the matching note in
+    // IsValidAttackTarget. This is the check that stops a spectator healing,
+    // shielding or buffing the side they are watching.
+    if (IsSpectatorInCustomGame(this) || IsSpectatorInCustomGame(target))
         return false;
 
     // can't assist own vehicle or passenger
