@@ -215,41 +215,47 @@ void BattlegroundTRT::ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, u
 
 bool BattlegroundTRT::SetupBattleground()
 {
-    // Gates sit on each team's start line, between the spawn and the middle.
-    // Orientations face the two sides at each other down the x axis.
+    // Every Z below is the terrain height read out of the server's own
+    // 16204737.map tile at that exact point. The shelf is level but not
+    // perfectly flat, so these are measured rather than shared - re-measure if
+    // anything moves, or objects end up buried or floating.
+    //
+    // Gates sit on each team's start line, between the spawn and the middle,
+    // facing each other down the x axis.
     if (!AddObject(BG_TRT_OBJECT_GATE_ALLIANCE, BG_TRT_OBJECT_GATE_ENTRY,
-            BG_TRT_GATE_LINE_ALLIANCE, -3010.0f, 9.0f, 0.0f,
+            BG_TRT_GATE_LINE_ALLIANCE, -3010.0f, 9.57f, 0.0f,
             0.0f, 0.0f, 0.0f, 1.0f,
             RESPAWN_IMMEDIATELY)
         || !AddObject(BG_TRT_OBJECT_GATE_HORDE, BG_TRT_OBJECT_GATE_ENTRY,
-            BG_TRT_GATE_LINE_HORDE, -3010.0f, 9.0f, 3.14159f,
+            BG_TRT_GATE_LINE_HORDE, -3010.0f, 8.73f, 3.14159f,
             0.0f, 0.0f, 1.0f, 0.0f,
             RESPAWN_IMMEDIATELY)
-        // Four buff nodes around the centre of the shelf, north/south/east/west.
+        // Four buff nodes, north/south/east/west of the arena centre and
+        // equidistant from it, so neither side is closer to any of them.
         || !AddObject(BG_TRT_OBJECT_BUFF1_SPEED, BG_OBJECTID_SPEEDBUFF_ENTRY,
-            -8365.0f, -2950.0f, 9.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
+            -8365.0f, -2955.0f, 8.63f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
         || !AddObject(BG_TRT_OBJECT_BUFF1_REGEN, BG_OBJECTID_REGENBUFF_ENTRY,
-            -8365.0f, -2950.0f, 9.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
+            -8365.0f, -2955.0f, 8.63f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
         || !AddObject(BG_TRT_OBJECT_BUFF1_BERSERK, BG_OBJECTID_BERSERKERBUFF_ENTRY,
-            -8365.0f, -2950.0f, 9.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
+            -8365.0f, -2955.0f, 8.63f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
         || !AddObject(BG_TRT_OBJECT_BUFF2_SPEED, BG_OBJECTID_SPEEDBUFF_ENTRY,
-            -8365.0f, -3070.0f, 9.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
+            -8365.0f, -3065.0f, 8.09f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
         || !AddObject(BG_TRT_OBJECT_BUFF2_REGEN, BG_OBJECTID_REGENBUFF_ENTRY,
-            -8365.0f, -3070.0f, 9.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
+            -8365.0f, -3065.0f, 8.09f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
         || !AddObject(BG_TRT_OBJECT_BUFF2_BERSERK, BG_OBJECTID_BERSERKERBUFF_ENTRY,
-            -8365.0f, -3070.0f, 9.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
+            -8365.0f, -3065.0f, 8.09f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
         || !AddObject(BG_TRT_OBJECT_BUFF3_SPEED, BG_OBJECTID_SPEEDBUFF_ENTRY,
-            -8420.0f, -3010.0f, 9.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
+            -8415.0f, -3010.0f, 8.65f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
         || !AddObject(BG_TRT_OBJECT_BUFF3_REGEN, BG_OBJECTID_REGENBUFF_ENTRY,
-            -8420.0f, -3010.0f, 9.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
+            -8415.0f, -3010.0f, 8.65f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
         || !AddObject(BG_TRT_OBJECT_BUFF3_BERSERK, BG_OBJECTID_BERSERKERBUFF_ENTRY,
-            -8420.0f, -3010.0f, 9.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
+            -8415.0f, -3010.0f, 8.65f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
         || !AddObject(BG_TRT_OBJECT_BUFF4_SPEED, BG_OBJECTID_SPEEDBUFF_ENTRY,
-            -8310.0f, -3010.0f, 9.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
+            -8315.0f, -3010.0f, 8.63f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
         || !AddObject(BG_TRT_OBJECT_BUFF4_REGEN, BG_OBJECTID_REGENBUFF_ENTRY,
-            -8310.0f, -3010.0f, 9.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
+            -8315.0f, -3010.0f, 8.63f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME)
         || !AddObject(BG_TRT_OBJECT_BUFF4_BERSERK, BG_OBJECTID_BERSERKERBUFF_ENTRY,
-            -8310.0f, -3010.0f, 9.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME))
+            -8315.0f, -3010.0f, 8.63f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, BG_TRT_BUFF_RESPAWN_TIME))
     {
         TC_LOG_ERROR("bg.battleground", "BattlegroundTRT::SetupBattleground: failed to spawn one or more Tanaris gameobjects.");
         return false;

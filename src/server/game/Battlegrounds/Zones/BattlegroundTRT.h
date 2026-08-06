@@ -96,24 +96,36 @@ enum BG_TRT_Constants
     BG_TRT_BOUNDS_CHECK_INTERVAL = 500
 };
 
-// The playable rectangle, in world coordinates on map 1620. It surrounds the
-// level desert shelf that runs along y ~ -3000 between x -8500 and -8240; the
-// ground there sits at z ~ 8.65 and stays within a yard of that throughout.
-constexpr float BG_TRT_ARENA_MIN_X = -8565.0f;
-constexpr float BG_TRT_ARENA_MAX_X = -8165.0f;
-constexpr float BG_TRT_ARENA_MIN_Y = -3140.0f;
-constexpr float BG_TRT_ARENA_MAX_Y = -2880.0f;
+// The playable rectangle, in world coordinates on map 1620: 230 x 200 yards
+// of the level desert shelf, centred on (-8365, -3010).
+//
+// These bounds are not arbitrary. Sampling the server's own terrain out of
+// 16204737.map, the shelf holds z 8.6 - 15.3 across this rectangle, but a mesa
+// rises to z 60 just north-west of it and the ground climbs steeply away to the
+// south-east. Both would sit on one team's side only, so the rectangle is drawn
+// to exclude them and keep the fight on symmetric ground. Widening it without
+// re-checking the heightmap would hand the Alliance a hill.
+//
+// The one feature left inside is a small crater about 15 yards across near the
+// centre, bottoming at z 2. That is deliberate: it is central, so it costs
+// neither side anything, and it gives an otherwise featureless plain a landmark.
+constexpr float BG_TRT_ARENA_MIN_X = -8480.0f;
+constexpr float BG_TRT_ARENA_MAX_X = -8250.0f;
+constexpr float BG_TRT_ARENA_MIN_Y = -3110.0f;
+constexpr float BG_TRT_ARENA_MAX_Y = -2910.0f;
 
 // How far inside the boundary a player is put back. Landing exactly on the
 // edge would re-trigger the check on the next pass from any outward drift.
 constexpr float BG_TRT_BOUNDS_INSET = 5.0f;
 
-// During the warmup each team is held behind its own gate line.
-constexpr float BG_TRT_GATE_LINE_ALLIANCE = -8440.0f;
-constexpr float BG_TRT_GATE_LINE_HORDE    = -8290.0f;
+// During the warmup each team is held behind its own gate line, 55 yards from
+// its own end of the rectangle and equidistant from the centre.
+constexpr float BG_TRT_GATE_LINE_ALLIANCE = -8425.0f;
+constexpr float BG_TRT_GATE_LINE_HORDE    = -8305.0f;
 
-// Ground in the arena is at z ~ 8.65, so anything this far down has fallen
-// out of the world rather than walked downhill.
+// Ground in the arena runs z 8.6 - 15.3, and the crater floor is z 2, so
+// anything this far down has fallen out of the world rather than walked
+// downhill.
 constexpr float BG_TRT_MIN_SAFE_Z = -30.0f;
 
 struct BattlegroundTRTScore final : public BattlegroundScore

@@ -1,0 +1,276 @@
+"""Append the Tanaris battleground (map 1620 / BG type 104) rows to the five
+binary DBCs that describe it.
+
+Runs identically against a server data/dbc directory and a local workspace, so
+the same rows land everywhere instead of drifting (the SQL mirrors and the
+binaries are separate sources of truth and only agree if both are written).
+
+WDBC layout: a 20-byte header (magic, recordCount, fieldCount, recordSize,
+stringBlockSize), then fixed-size records, then the string block. Strings are
+stored as byte offsets into that block, so a new string is APPENDED to the end
+of the block and the record points at it -- existing offsets stay valid and
+nothing has to be rewritten. Offset 0 is the empty string by convention, which
+is what every unused locale slot points at.
+
+Idempotent: a row whose id is already present is left alone, so re-running
+after a partial failure is safe. The original is copied to <name>.bak-tanaris
+once, and never overwritten by a later run.
+"""
+import os
+import shutil
+import struct
+import sys
+
+# ---------------------------------------------------------------- field specs
+# One character per field, in DBC column order: i = int32, f = float,
+# s = string (offset into the string block). These were checked against both
+# the binary headers (fieldCount/recordSize) and the dbc.*_lplus column lists;
+# all five agree exactly, which is why the SQL mirror and the binary can be
+# written from one description.
+
+LOC = "s" * 16 + "i"            # 16 locale slots + the locale mask
+
+SPECS = {
+    "Map.dbc": {
+        "fields": "is" + "ii" + "i" + LOC + "i" + LOC + LOC + "ififfiiii",
+        "count": 66,
+    },
+    "AreaTable.dbc": {
+        "fields": "iiiii" + "iiiiii" + LOC + "i" + "iiii" + "ffi",
+        "count": 36,
+    },
+    "BattlemasterList.dbc": {
+        "fields": "i" + "iiiiiiii" + "ii" + LOC + "iiii",
+        "count": 32,
+    },
+    "PvpDifficulty.dbc": {
+        "fields": "iiiiii",
+        "count": 6,
+    },
+    "WorldSafeLocs.dbc": {
+        "fields": "ii" + "fff" + LOC,
+        "count": 22,
+    },
+}
+
+
+def loc(text, mask=16712190):
+    """A localized string block: enUS populated, the other 15 locales empty."""
+    return [text] + [""] * 15 + [mask]
+
+
+# ------------------------------------------------------------------ the rows
+MAP_ID = 1620
+BG_TYPE_ID = 104
+AREA_ID = 30234
+AREA_BIT = 3717                 # max in use is 3716; the client field is 4096 bits
+
+BG_NAME = "Tanaris"
+MAP_NAME = "Tanaris Deathmatch"
+DESC = "A deathmatch in the deep desert of Tanaris. First team to the kill limit wins."
+
+# Start / graveyard positions, laid out symmetrically about the arena centre
+# at (-8365, -3010) and 180 yards apart.
+#
+# Every Z here is the real terrain height read out of the server's own
+# 16204737.map tile plus one yard, so nobody spawns inside the ground. They
+# differ because the shelf is level but not perfectly so - the numbers are
+# measured, not guessed, and should be re-measured if the positions move.
+A_START = (-8455.0, -3010.0, 9.6)    # ground 8.63
+H_START = (-8275.0, -3010.0, 11.0)   # ground 10.01
+A_GRAVE = (-8470.0, -3010.0, 10.2)   # ground 9.23
+H_GRAVE = (-8260.0, -3010.0, 9.7)    # ground 8.69
+
+WSL_A_START, WSL_H_START, WSL_A_GRAVE, WSL_H_GRAVE = 52500, 52501, 52502, 52503
+
+ROWS = {
+    "Map.dbc": [
+        [MAP_ID,
+         # Same terrain directory as Kalimdor: the client resolves ADTs by
+         # Directory, not by map id, so a cloned continent needs no new client
+         # terrain at all. This is what map 1615 does with 615.
+         "Kalimdor",
+         3,             # InstanceType 3 = battleground
+         1,             # Flags: matches the other custom BG maps (1189/1230)
+         1,             # PVP
+         ] + loc(MAP_NAME) + [
+         AREA_ID,
+         ] + loc(DESC, 16712188) + loc(DESC, 16712188) + [
+         3,             # LoadingScreenID: Kalimdor's
+         1.0,           # MinimapIconScale
+         1,             # CorpseMapID: ghosts resolve back onto Kalimdor
+         -7177.0,       # CorpseX  (Gadgetzan)
+         -3785.0,       # CorpseY
+         -1,            # TimeOfDayOverride
+         0,             # ExpansionID
+         0,             # RaidOffset
+         20],           # MaxPlayers
+    ],
+    "AreaTable.dbc": [
+        [AREA_ID,
+         MAP_ID,        # ContinentID -> the new map
+         0,             # ParentAreaID
+         AREA_BIT,
+         0,             # Flags
+         0,             # SoundProviderPref
+         11,            # SoundProviderPrefUnderwater )
+         39,            # AmbienceID                  ) copied from Tanaris (440)
+         176,           # ZoneMusic                   ) so it sounds like Tanaris
+         0,             # IntroSound
+         0,             # ExplorationLevel
+         ] + loc(MAP_NAME) + [
+         0,             # FactionGroupMask
+         0, 0, 0, 0,    # LiquidTypeID_1..4
+         -500.0,        # MinElevation
+         0.5,           # Ambient_Multiplier
+         0],            # Lightid
+    ],
+    "BattlemasterList.dbc": [
+        [BG_TYPE_ID,
+         MAP_ID, -1, -1, -1, -1, -1, -1, -1,
+         3,             # InstanceType
+         1,             # GroupsAllowed
+         ] + loc(BG_NAME) + [
+         10,            # MaxGroupSize
+         1942,          # HolidayWorldState: same as the other custom BGs
+         10,            # Minlevel
+         80],           # Maxlevel
+    ],
+    "PvpDifficulty.dbc": [
+        # Without a bracket row the queue silently refuses everyone --
+        # GetBattlegroundBracketByLevel just fails and logs nothing.
+        # Id follows the existing 9<mapid> convention (91615 for OBC).
+        [90000 + MAP_ID, MAP_ID, 0, 60, 69, 0],
+    ],
+    "WorldSafeLocs.dbc": [
+        [WSL_A_START, MAP_ID] + list(A_START) + loc("Tanaris - Alliance Start"),
+        [WSL_H_START, MAP_ID] + list(H_START) + loc("Tanaris - Horde Start"),
+        [WSL_A_GRAVE, MAP_ID] + list(A_GRAVE) + loc("Tanaris - Alliance Graveyard"),
+        [WSL_H_GRAVE, MAP_ID] + list(H_GRAVE) + loc("Tanaris - Horde Graveyard"),
+    ],
+}
+
+
+# --------------------------------------------------------------------- engine
+def patch(path, spec, rows, dry_run=False):
+    name = os.path.basename(path)
+    with open(path, "rb") as f:
+        blob = f.read()
+
+    magic, rec_count, field_count, rec_size, str_size = struct.unpack_from("<4sIIII", blob, 0)
+    if magic != b"WDBC":
+        raise ValueError("%s: not a WDBC file" % name)
+    if field_count != spec["count"] or rec_size != spec["count"] * 4:
+        raise ValueError("%s: expected %d fields / %d bytes, found %d / %d"
+                         % (name, spec["count"], spec["count"] * 4, field_count, rec_size))
+    if len(spec["fields"]) != field_count:
+        raise ValueError("%s: field spec is %d chars, file has %d fields"
+                         % (name, len(spec["fields"]), field_count))
+
+    rec_start = 20
+    rec_bytes = bytearray(blob[rec_start:rec_start + rec_count * rec_size])
+    str_block = bytearray(blob[rec_start + rec_count * rec_size:])
+    if len(str_block) != str_size:
+        raise ValueError("%s: string block is %d bytes, header says %d"
+                         % (name, len(str_block), str_size))
+    if not str_block or str_block[0] != 0:
+        raise ValueError("%s: string block does not start with the empty string" % name)
+
+    existing = set()
+    for i in range(rec_count):
+        existing.add(struct.unpack_from("<i", rec_bytes, i * rec_size)[0])
+
+    added = 0
+    for row in rows:
+        if len(row) != field_count:
+            raise ValueError("%s: row has %d values, need %d" % (name, len(row), field_count))
+        if row[0] in existing:
+            print("      id %-6s already present, left alone" % row[0])
+            continue
+
+        packed = bytearray()
+        for kind, value in zip(spec["fields"], row):
+            if kind == "i":
+                packed += struct.pack("<i", int(value))
+            elif kind == "f":
+                packed += struct.pack("<f", float(value))
+            elif kind == "s":
+                if value == "":
+                    packed += struct.pack("<I", 0)
+                else:
+                    packed += struct.pack("<I", len(str_block))
+                    str_block += value.encode("utf-8") + b"\x00"
+            else:
+                raise ValueError("bad spec char %r" % kind)
+        rec_bytes += packed
+        rec_count += 1
+        added += 1
+        print("      id %-6s appended" % row[0])
+
+    if not added:
+        return 0
+
+    out = bytearray(struct.pack("<4sIIII", b"WDBC", rec_count, field_count,
+                                rec_size, len(str_block)))
+    out += rec_bytes
+    out += str_block
+
+    if dry_run:
+        print("      (dry run, %d bytes not written)" % len(out))
+        return added
+
+    backup = path + ".bak-tanaris"
+    if not os.path.exists(backup):
+        shutil.copyfile(path, backup)
+
+    # Write beside the target and rename in: a torn DBC is never visible under
+    # the real name, even if the server happens to be starting up.
+    tmp = path + ".tanaris-tmp"
+    with open(tmp, "wb") as f:
+        f.write(out)
+    os.replace(tmp, path)
+    return added
+
+
+def restore(path):
+    """Put back the pre-Tanaris copy, so an apply with changed values starts
+    from a clean file instead of trying to rewrite records in place."""
+    backup = path + ".bak-tanaris"
+    if not os.path.exists(backup):
+        print("      no backup, left alone")
+        return
+    shutil.copyfile(backup, path)
+    print("      restored from %s" % os.path.basename(backup))
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    dry_run = "--dry-run" in sys.argv
+    do_restore = "--restore" in sys.argv
+    if not args:
+        raise SystemExit("usage: tanaris_dbc.py [--dry-run] [--restore] <dbc-dir> [<dbc-dir> ...]")
+
+    total = 0
+    for d in args:
+        print("=== %s ===" % d)
+        if not os.path.isdir(d):
+            print("    NOT A DIRECTORY, skipped")
+            continue
+        if do_restore:
+            for name in SPECS:
+                path = os.path.join(d, name)
+                if os.path.exists(path):
+                    print("    %s" % name)
+                    restore(path)
+        for name, spec in SPECS.items():
+            path = os.path.join(d, name)
+            if not os.path.exists(path):
+                print("    %-22s MISSING, skipped" % name)
+                continue
+            print("    %s" % name)
+            total += patch(path, spec, ROWS[name], dry_run)
+    print("total rows added: %d%s" % (total, " (dry run)" if dry_run else ""))
+
+
+if __name__ == "__main__":
+    main()
