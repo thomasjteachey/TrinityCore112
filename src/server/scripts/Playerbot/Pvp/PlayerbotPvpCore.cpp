@@ -185,16 +185,6 @@ bool IsPriestFlashHealSpell(uint32 spellId)
     return firstRankSpellId == 2061; // Flash Heal (rank 1)
 }
 
-bool IsShamanFrostShockSpell(uint32 spellId)
-{
-    if (!spellId)
-        return false;
-
-    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
-    uint32 const firstRankSpellId = spellInfo && spellInfo->GetFirstRankSpell() ? spellInfo->GetFirstRankSpell()->Id : spellId;
-    return firstRankSpellId == 8056;
-}
-
 bool IsPriestInSpiritOfRedemption(Player const* player)
 {
     return player && player->GetClass() == CLASS_PRIEST &&
@@ -7351,16 +7341,34 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         context.targetMode == PvpClassSpellContext::TargetMode::Enemy && UsesMeleeSpacingProfile(player, profileSelection))
     {
         Unit const* meleeTarget = resolveTargetByGuid(context.targetGuid);
-        // Gap closers and ranged chase tools belong on this allowlist: they are
-        // the mechanism used to reach or hold melee range in the first place.
-        // Without them here, this generic
-        // "not in melee yet" check zeroes context.spellId and silently substitutes
-        // a plain ReachMeleeRange walk before CastDirectSpell/NotifyDuelDecision
-        // are ever reached, which reads as the bot doing nothing but walking and
-        // never whispering a decision at all.
-        bool const canCastOutsideMelee = context.spellId == 11578 || context.spellId == 20617 || context.spellId == 62124 ||
-            context.spellId == 81271 || context.spellId == 82419 || context.spellId == 49376 || context.spellId == 16979 ||
-            IsShamanFrostShockSpell(context.spellId);
+        // This check zeroes context.spellId and substitutes a plain walk into
+        // melee, so anything it wrongly captures is silently never cast.
+        //
+        // It used to be a hardcoded list of gap-closer ids (Charge, Intercept,
+        // Heroic Leap, Feral Charge, Rehgar's Fury, Hand of Reckoning, Frost
+        // Shock). Any other ranged ability a melee bot selected fell through it
+        // and was replaced by a walk - the gnome grenade (89160, 45 yards) being
+        // the case that surfaced it: repeatedly selected at range, zeroed every
+        // tick, never cast so never put on cooldown, and therefore re-selected
+        // forever, which starved the warrior of its whole rotation. It only ever
+        // landed at point blank, once the walk had finished.
+        //
+        // Ask the spell what its range is instead of maintaining a list. Melee
+        // abilities have melee-length ranges and still correctly trigger the
+        // walk; everything else is cast from where it can actually be cast.
+        bool canCastOutsideMelee = false;
+        if (meleeTarget)
+        {
+            if (SpellInfo const* pendingSpellInfo = sSpellMgr->GetSpellInfo(context.spellId))
+            {
+                float const pendingMaxRange = pendingSpellInfo->GetMaxRange(false);
+                float const pendingMinRange = pendingSpellInfo->GetMinRange(false);
+                float const targetDistance = player->GetDistance(meleeTarget);
+                canCastOutsideMelee = pendingMaxRange > 0.0f && targetDistance <= pendingMaxRange &&
+                    (pendingMinRange <= 0.0f || targetDistance >= pendingMinRange);
+            }
+        }
+
         if (meleeTarget && !player->IsWithinMeleeRange(meleeTarget) && !canCastOutsideMelee)
         {
             ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachMeleeRange, meleeTarget->GetGUID(),
