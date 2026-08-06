@@ -96,21 +96,22 @@ VALUES
 -- ------------------------------------------------------- WorldSafeLocs.dbc
 -- 52500-52503: next free block after Nefarian's Arena (52410/52411).
 --
--- Laid out symmetrically about the arena centre (-8365, -3010), 180 yards
--- apart, on the level desert shelf in north-west Tanaris.
+-- Alliance at Southmoon Ruins, Horde at Gadgetzan -- about 2200 yards apart,
+-- which is RTS scale rather than arena scale. Each team's spirit healer stands
+-- on its own spawn point, so start and graveyard share a position.
 --
--- Each LocZ is the real terrain height sampled from the server's own
--- 16204737.map tile at that point, plus one yard so nobody spawns inside the
--- ground. They differ because the shelf is level but not perfectly flat. If a
--- position moves, re-measure rather than copying a neighbour's value.
+-- LocZ is the measured ground height plus a yard so nobody spawns inside
+-- terrain. Re-measure with .gps if a position moves rather than guessing.
+-- Orientations live in battleground_template (AllianceStartO / HordeStartO),
+-- not here.
 DELETE FROM dbc.worldsafelocs_lplus WHERE ID BETWEEN 52500 AND 52503;
 INSERT INTO dbc.worldsafelocs_lplus
   (ID, Continent, LocX, LocY, LocZ, AreaName_Lang_enUS, AreaName_Lang_Mask)
 VALUES
-  (52500, 1620, -8455, -3010,  9.6, 'Tanaris - Alliance Start',      16712190),  -- ground 8.63
-  (52501, 1620, -8275, -3010, 11.0, 'Tanaris - Horde Start',         16712190),  -- ground 10.01
-  (52502, 1620, -8470, -3010, 10.2, 'Tanaris - Alliance Graveyard',  16712190),  -- ground 9.23
-  (52503, 1620, -8260, -3010,  9.7, 'Tanaris - Horde Graveyard',     16712190);  -- ground 8.69
+  (52500, 1620, -9235.11, -3009.99, 17.19, 'Tanaris - Alliance Start',     16712190),  -- ground 16.19
+  (52502, 1620, -9235.11, -3009.99, 17.19, 'Tanaris - Alliance Graveyard', 16712190),
+  (52501, 1620, -7166.45, -3760.62,  9.40, 'Tanaris - Horde Start',        16712190),  -- ground 8.40
+  (52503, 1620, -7166.45, -3760.62,  9.40, 'Tanaris - Horde Graveyard',    16712190);
 
 -- -------------------------------------------------------- WorldMapArea.dbc
 -- Without this the world map draws the Tanaris artwork correctly but never
@@ -124,9 +125,18 @@ VALUES
 -- already does with 4493 (row 531 on map 615, row 9531 on map 1615) - the
 -- client disambiguates on MapID, so the real Tanaris map is unaffected.
 --
--- Bounds copied verbatim from row 161 so the arrow lands in the right place on
--- the same artwork; AreaName is what selects that artwork. Note the axes are
--- rotated: LocLeft/LocRight are world Y, LocTop/LocBottom are world X.
+-- Bounds copied verbatim from row 161 so the arrow lands in the right place.
+-- AreaName selects the ART DIRECTORY: Interface\WorldMap\<AreaName>\. It is
+-- "TanarisBG", not "Tanaris", because the battleground ships its own pre-baked
+-- map image - see tools/tanaris/build_worldmap_art.py. Borrowing Tanaris's art
+-- worked but left the map blank inside: the zone detail lives in
+-- WorldMapOverlay textures, and the client matches no overlays at all to map
+-- 1620 (GetNumMapOverlays() returns 0 there) however correct the rows are.
+-- The baked image needs no overlays and no exploration.
+--
+-- This row and the 12 BLPs must be packed together, and the art goes in a
+-- LOCALE patch (patch-enUS-8) because Interface/ lives in the locale MPQs.
+-- Note the axes are rotated: LocLeft/LocRight are world Y, LocTop/LocBottom X.
 --
 -- This one is CLIENT-side. The server never reads it for battleground logic,
 -- so it only takes effect once it is packed into the client patch.
@@ -135,7 +145,7 @@ INSERT INTO dbc.worldmaparea_lplus
   (ID, MapID, AreaID, AreaName, LocLeft, LocRight, LocTop, LocBottom,
    DisplayMapID, DefaultDungeonFloor, ParentWorldMapID)
 VALUES
-  (9532, 1620, 440, 'Tanaris', -218.75, -7118.75, -5875, -10475, -1, 0, 0);
+  (9532, 1620, 440, 'TanarisBG', -218.75, -7118.75, -5875, -10475, -1, 0, 0);
 
 -- -------------------------------------------------------- WorldStateUI.dbc
 -- The top-frame score readout. Without these two rows the server still sends
