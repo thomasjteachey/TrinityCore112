@@ -3531,6 +3531,19 @@ enum BattlegroundTypeId : uint32
 
 #define MAX_BATTLEGROUND_TYPE_ID 872
 
+// The custom battlegrounds share behaviour the stock ones do not: synthetic
+// cross-faction queue sides, free-slot refill and saturation, mid-match gear
+// and talent swapping, and mark-of-honor restoration. Every one of those sites
+// used to spell the list out by hand, so adding a battleground meant finding
+// all of them - and a site that got missed is a silent runtime bug, never a
+// compile error. Keep the membership test here so there is one list to change.
+constexpr bool IsCustomBattleground(BattlegroundTypeId bgTypeId)
+{
+    return bgTypeId == BATTLEGROUND_SCM
+        || bgTypeId == BATTLEGROUND_BRT
+        || bgTypeId == BATTLEGROUND_OBC;
+}
+
 enum BattlefieldBattleId : uint8
 {
     BATTLEFIELD_BATTLEID_WINTERGRASP = 1, // Wintergrasp battle

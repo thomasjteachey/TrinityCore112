@@ -375,7 +375,7 @@ namespace
     bool IsBattlegroundEquipChangeAllowed(Player const* player, uint8 slot)
     {
         if (Battleground const* battleground = player->GetBattleground())
-            if (battleground->GetTypeID(true) == BATTLEGROUND_SCM || battleground->GetTypeID(true) == BATTLEGROUND_BRT || battleground->GetTypeID(true) == BATTLEGROUND_OBC)
+            if (IsCustomBattleground(battleground->GetTypeID(true)))
                 return true;
 
         switch (slot)
@@ -27615,7 +27615,7 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
     if (InBattleground())
     {
         Battleground const* battleground = GetBattleground();
-        if (!battleground || (battleground->GetTypeID(true) != BATTLEGROUND_SCM && battleground->GetTypeID(true) != BATTLEGROUND_BRT && battleground->GetTypeID(true) != BATTLEGROUND_OBC))
+        if (!battleground || !IsCustomBattleground(battleground->GetTypeID(true)))
             return;
     }
 
