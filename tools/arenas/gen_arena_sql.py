@@ -132,25 +132,101 @@ AREA_AMBIENT_MUL = 0.6
 #
 # 872 keeps the in-game survey because it was measured in this client.
 MEASURED = {
-    874: {  # Maldraxxus Coliseum, map 984  (WSL 6041/6042)
+    874: {  # Maldraxxus Coliseum, map 984
+        # starts from Ascension's WorldSafeLocs 6041/6042; the rest surveyed.
         "alliance": (2853.540039, 2185.810059, 3259.969971, 1.565400),
         "horde":    (2854.270020, 2321.080078, 3259.739990, 4.706993),
+        "gates": [
+            (185483, 2849.806152, 2201.163330, 3260.175049, 0.281295, 0.0, 0.0, -0.140184, -0.990125),
+            (185483, 2849.402100, 2304.351318, 3259.939453, 5.991170, 0.0, 0.0, -0.145491,  0.989360),
+        ],
+        # Re-surveyed. The first pass had both of these 4.9 yards apart on the
+        # same side of the arena; these are 88.9 apart and mirrored about
+        # X 2831.9, which lines up with Ascension's own arena-centre graveyard
+        # (6043, at 2832.28/2254.64). Note the centre is NOT the midpoint of the
+        # team starts -- both starts sit at X ~2854, 22 yards off it.
+        "buffs": [
+            (184663, 2876.318359, 2252.889648, 3260.397705, 3.081219),
+            (184664, 2787.438477, 2254.387939, 3260.434570, 0.002457),
+        ],
+        # Permanent arena furniture, not part of the match lifecycle: spawned as
+        # ordinary gameobject rows rather than battleground objects, because
+        # they never open, never respawn and want no code to manage them. They
+        # are emitted into this script so a dev wipe does not lose them.
+        "static_gameobjects": [
+            (2136050, 193612, 2768.251953, 2252.592041, 3260.246338, 0.081026,
+             0.0, 0.0, -0.040502, -0.999179, "Maldraxxus barricade 1"),
+            (2136051, 193612, 2768.198975, 2258.288818, 3260.260254, 5.908680,
+             0.0, 0.0, -0.186161,  0.982519, "Maldraxxus barricade 2"),
+        ],
+        "drop_gameobject_guids": [2136052, 2136053],
     },
-    875: {  # Nagrand Arena (Remastered), map 985  (WSL 6044/6045)
+    875: {  # Nagrand Arena (Remastered), map 985
+        # starts from Ascension's WorldSafeLocs 6044/6045; the rest surveyed.
+        # Gates use cloned templates 300400/300401 so they can be scaled to
+        # 1.25 without touching the real Nagrand Arena's doors.
         "alliance": (-2070.389893, 6704.709961, 12.052200, 5.199065),
         "horde":    (-2016.709961, 6603.259766, 12.373800, 2.057472),
+        "gates": [
+            (300400, -2019.264404, 6609.552246, 12.717039, 0.400356, 0.0, 0.0, -0.198844, -0.980031),
+            (300401, -2067.859375, 6699.410645, 12.658770, 3.632270, 0.0, 0.0, -0.970055,  0.242886),
+        ],
+        "buffs": [
+            (184663, -1995.345825, 6679.221191, 13.071568, 3.616559),
+            (184664, -2090.863037, 6629.114746, 12.869463, 0.722366),
+        ],
+        "drop_gameobject_guids": [2136054, 2136055],
     },
-    876: {  # Blade's Edge Arena (Remastered), map 986  (WSL 6047/6048)
+    876: {  # Blade's Edge Arena (Remastered), map 986
+        # starts from Ascension's WorldSafeLocs 6047/6048; the rest surveyed.
+        # Gates reuse the source arena's two inner doors (183971/183973) at
+        # stock size, so no cloned template is needed here.
         "alliance": (2772.129883, 6060.359863, -3.068170, 4.973402),
         "horde":    (2802.149902, 5947.970215, -3.098460, 1.831809),
+        "gates": [
+            (183971, 2778.054688, 6053.388672, -3.145406, 2.169530, 0.0, 0.0, -0.884193, -0.467121),
+            (183973, 2796.864746, 5954.017578, -3.068224, 2.322670, 0.0, 0.0, -0.917336, -0.398114),
+        ],
+        "buffs": [
+            (184663, 2768.117432, 5986.673828, -4.405022, 0.775437),
+            (184664, 2808.445801, 6020.854492, -4.124462, 3.803169),
+        ],
+        "drop_gameobject_guids": [2136075, 2136076],
     },
-    877: {  # Guardian's Hall, map 1007  (WSL 4852/4853)
+    877: {  # Guardian's Hall, map 1007
+        # starts from Ascension's WorldSafeLocs 4852/4853; the rest surveyed.
+        # Gate order follows the starts: gate 1 is the Alliance side (Y ~752,
+        # start at Y 746), gate 2 the Horde side (Y ~859, start at Y 866).
         "alliance": (536.510010, 745.909973, 0.500000, 1.570629),
         "horde":    (536.530029, 865.880005, 0.500000, 4.712222),
+        "gates": [
+            (185483, 536.768921, 752.416748, 0.505373, 3.141500, 0.0, 0.0, -1.0,      -0.0000487129),
+            (185483, 536.463623, 858.864014, 0.504717, 3.204290, 0.0, 0.0, -0.999509,  0.0313427),
+        ],
+        "buffs": [
+            (184663, 564.335449, 805.874634, -0.059970, 3.188655),
+            (184664, 508.639801, 805.705750, -0.059966, 6.279174),
+        ],
+        "drop_gameobject_guids": [2136077, 2136078],
     },
-    878: {  # Spark of Creator, map 1008  (WSL 4855/4856)
+    878: {  # Spark of Creator, map 1008
+        # starts from Ascension's WorldSafeLocs 4855/4856; the rest surveyed.
+        # Unusual shape: both teams enter from the west wall (X ~498) at the
+        # north and south ends, and both buffs sit against the east wall
+        # (X ~557). Each pair is symmetric about Y ~802, and the arena WMO's
+        # centre (533.4) falls between the two walls, so this is the layout, not
+        # a mis-measurement.
         "alliance": (497.869995, 853.880005, 0.928000, 4.712774),
         "horde":    (497.910004, 750.059998, 0.930000, 1.571182),
+        "gates": [
+            (185483, 505.719635, 838.528198, 0.872084, 0.522682, 0.0, 0.0, -0.258376, -0.966044),
+            (185483, 507.537842, 764.469116, 0.872084, 2.501910, 0.0, 0.0, -0.949285, -0.314417),
+        ],
+        "buffs": [
+            (184663, 557.732117, 837.495300, 0.870770, 3.864655),
+            (184664, 556.419800, 768.008728, 0.871984, 2.388106),
+        ],
+        "drop_gameobject_guids": [2136081, 2136082],
     },
     879: {  # Baradin Hold Arena, map 1401  (WSL 2033/2034)
         "alliance": (-1176.300049, 1043.319946, 121.000000, 3.948866),
@@ -164,13 +240,53 @@ MEASURED = {
         "alliance": (4566.959961, -1428.469971, 387.000000, 3.136064),
         "horde":    (4431.299805, -1427.719971, 387.000000, 6.277657),
     },
-    882: {  # Black Rook Hold Arena, map 1504  (WSL 5121/5122)
+    882: {  # Black Rook Hold Arena, map 1504
+        # starts from Ascension's WorldSafeLocs 5121/5122; the rest surveyed.
+        # FOUR gates, two per side -- the table takes any number, so this needs
+        # nothing special beyond listing them. Alliance side is the pair at
+        # X ~1384, Horde the pair at X ~1450-1464.
         "alliance": (1372.130005, 1247.189941, 33.004799, 0.271261),
         "horde":    (1472.699951, 1275.160034, 32.110401, 3.412853),
+        "gates": [
+            (185483, 1383.606689, 1258.042847, 33.250454, 5.007230, 0.0, 0.0, -0.595572,  0.803302),
+            (185483, 1384.172729, 1232.460693, 33.254791, 4.426049, 0.0, 0.0, -0.800763,  0.598981),
+            (185483, 1450.317993, 1277.049927, 33.233463, 4.971893, 0.0, 0.0, -0.609672,  0.792654),
+            (185483, 1464.198730, 1254.328491, 33.238369, 2.442888, 0.0, 0.0, -0.939595, -0.342289),
+        ],
+        # Both of these sit south of the arena centre rather than either side of
+        # it -- see the note in the survey summary. Applied as measured.
+        "buffs": [
+            (184663, 1429.629395, 1238.815552, 34.107357, 2.329053),
+            (184664, 1424.596191, 1202.647827, 32.094311, 1.669335),
+        ],
+        "drop_gameobject_guids": [2136085, 2136086, 2136088, 2136089],
     },
-    883: {  # Ashamane's Fall, map 1552  (WSL 2020/2021)
+    883: {  # Ashamane's Fall, map 1552
+        # starts from Ascension's WorldSafeLocs 2020/2021; the rest surveyed.
+        # Gates are entry 300002 "Chapel Door", an existing custom template, not
+        # the 185483 gate the other arenas use. Each doorway is flanked by two
+        # barricades, which are permanent scenery and stay as plain spawns.
         "alliance": (3548.389893, 5601.629883, 327.000000, 4.640550),
         "horde":    (3539.080078, 5472.259766, 327.000000, 1.498958),
+        "gates": [
+            (300002, 3539.142334, 5482.908203, 325.489502, 4.774114, 0.0, 0.0, -0.684951, 0.728590),
+            (300002, 3548.853760, 5591.532715, 325.513580, 4.683782, 0.0, 0.0, -0.717148, 0.696921),
+        ],
+        "buffs": [
+            (184663, 3493.611572, 5540.871094, 323.020508, 6.160314),
+            (184664, 3604.439697, 5532.029785, 325.363953, 3.042288),
+        ],
+        "static_gameobjects": [
+            (2136097, 193612, 3544.428467, 5481.986816, 325.499939, 1.334063,
+             0.0, 0.0, -0.618657, -0.785662, "Ashamane's Fall barricade, Horde gate E"),
+            (2136098, 193612, 3533.850098, 5481.982910, 325.499786, 1.813156,
+             0.0, 0.0, -0.787399, -0.616444, "Ashamane's Fall barricade, Horde gate W"),
+            (2136100, 193612, 3553.842529, 5591.891602, 325.507080, 5.017581,
+             0.0, 0.0, -0.591407,  0.806373, "Ashamane's Fall barricade, Alliance gate E"),
+            (2136101, 193612, 3543.508789, 5591.613281, 325.506836, 4.589548,
+             0.0, 0.0, -0.749177,  0.662370, "Ashamane's Fall barricade, Alliance gate W"),
+        ],
+        "drop_gameobject_guids": [2136096, 2136099],
     },
     884: {  # The Inventor's Library, map 1683  (WSL 2013/2014)
         "alliance": (8115.540039, -960.760010, 958.000000, 1.318947),
@@ -218,6 +334,24 @@ MEASURED = {
 }
 
 
+# ------------------------------------------------- cloned gameobject templates
+#
+# A gate that needs a different scale gets its own template rather than a change
+# to the stock one. `gameobject_template.size` is per-entry, and these entries
+# are not ours: 183977 and 183979 are the real Nagrand Arena's front doors, so
+# resizing them there would resize map 559's doors too.
+#
+# Cloned with a temporary table rather than a spelled-out column list, so every
+# column comes across whatever the schema happens to be -- there are 36 of them,
+# and a hand-written list silently drops whatever it forgets.
+#
+# (new_entry, source_entry, size, name)
+GO_TEMPLATE_CLONES = [
+    (300400, 183977, 1.25, "Nagrand Arena HD Gate 1"),
+    (300401, 183979, 1.25, "Nagrand Arena HD Gate 2"),
+]
+
+
 # ------------------------------------------------------------------ disabled
 #
 # Held back for now. Disabling is done through `disables` rather than by
@@ -230,6 +364,7 @@ MEASURED = {
 # a stale zone name in the open; 881 is a pure-WMO map with no terrain textures
 # at all. Worth knowing if the question of why comes up later.
 DISABLED = {
+    879: "Baradin Hold Arena",
     880: "Obelisk of the Stars",
     881: "The Twisting Nether",
     884: "The Inventor's Library",
@@ -416,12 +551,14 @@ def gen_dbc():
     rows = []
     for i, (bg, mid, d, name, cx, cy, cz, conf, ev) in enumerate(ARENAS):
         (ax, ay, az, _ao), (hx, hy, hz, _ho) = start_positions(bg, cx, cy, cz)
-        tag = "SURVEYED in-game" if measured(bg) else ("derived, confidence: %s" % conf)
-        rows.append("  (%d, %d, %.6f, %.6f, %.6f, '%s - Alliance Start', %d),   -- %s"
-                    % (WSL_BASE + i * 2, mid, ax, ay, az, esc(name), LANG_MASK, tag))
-        rows.append("  (%d, %d, %.6f, %.6f, %.6f, '%s - Horde Start',    %d)"
-                    % (WSL_BASE + i * 2 + 1, mid, hx, hy, hz, esc(name), LANG_MASK))
-    L.append(",\n".join(rows) + ";")
+        tag = "from Ascension WorldSafeLocs" if measured(bg) else ("derived, confidence: %s" % conf)
+        rows.append(("  (%d, %d, %.6f, %.6f, %.6f, '%s - Alliance Start', %d)"
+                     % (WSL_BASE + i * 2, mid, ax, ay, az, esc(name), LANG_MASK), tag))
+        rows.append(("  (%d, %d, %.6f, %.6f, %.6f, '%s - Horde Start',    %d)"
+                     % (WSL_BASE + i * 2 + 1, mid, hx, hy, hz, esc(name), LANG_MASK), ""))
+    for i, (vals, note) in enumerate(rows):
+        sep = "," if i < len(rows) - 1 else ";"
+        L.append("%s%s%s" % (vals, sep, ("   -- %s" % note) if note else ""))
     L.append("")
 
     # ---------------- AreaTable.dbc
@@ -515,6 +652,30 @@ def gen_world():
 --
 -- Creates two new tables. Both are read by BattlegroundMgr::LoadBattlegroundTemplates,
 -- so `.reload battleground_template` picks up edits to either without a restart.""" % STAMP))
+
+    # ---------------- cloned gameobject templates
+    if GO_TEMPLATE_CLONES:
+        L.append("-- ------------------------------------------- cloned gameobject templates")
+        L.append("-- Gates that need a size other than the model's default get their own")
+        L.append("-- template. `size` lives on the template, not the spawn, and these source")
+        L.append("-- entries are not ours -- 183977/183979 are the real Nagrand Arena's front")
+        L.append("-- doors on map 559, so editing them there would resize that arena too.")
+        L.append("--")
+        L.append("-- Copied through a temporary table rather than a written-out column list:")
+        L.append("-- gameobject_template has 36 columns, and a hand-maintained list silently")
+        L.append("-- drops whatever it forgets and whatever gets added later.")
+        L.append("DELETE FROM gameobject_template WHERE entry IN (%s);"
+                 % ",".join(str(c[0]) for c in GO_TEMPLATE_CLONES))
+        for new_entry, src_entry, size, name in GO_TEMPLATE_CLONES:
+            L.append("")
+            L.append("DROP TEMPORARY TABLE IF EXISTS _arena_go_clone;")
+            L.append("CREATE TEMPORARY TABLE _arena_go_clone AS SELECT * FROM gameobject_template WHERE entry = %d;"
+                     % src_entry)
+            L.append("UPDATE _arena_go_clone SET entry = %d, size = %s, name = '%s';"
+                     % (new_entry, size, esc(name)))
+            L.append("INSERT INTO gameobject_template SELECT * FROM _arena_go_clone;")
+            L.append("DROP TEMPORARY TABLE _arena_go_clone;")
+        L.append("")
 
     # ---------------- battleground_template
     L.append("-- --------------------------------------------------- battleground_template")
@@ -714,6 +875,48 @@ def gen_world():
         for bg, gs in drops:
             L.append("DELETE FROM gameobject WHERE map = %d AND guid IN (%s);"
                      % (by_map.get(bg, 0), ",".join(str(g) for g in gs)))
+        L.append("")
+
+    # ---------------- permanent arena furniture
+    statics = [(bg, m.get("static_gameobjects", [])) for bg, m in sorted(MEASURED.items())]
+    statics = [(bg, s) for bg, s in statics if s]
+    if statics:
+        by_map = {a[0]: a[1] for a in ARENAS}
+        by_name = {a[0]: a[3] for a in ARENAS}
+        L.append("-- ------------------------------------------------ permanent arena props")
+        L.append("-- Scenery that is always up: no opening, no respawn, no lifecycle. Plain")
+        L.append("-- gameobject rows rather than battleground objects, because an instanced")
+        L.append("-- map spawns its gameobject rows into every instance anyway, and routing")
+        L.append("-- them through the battleground would need code to manage something that")
+        L.append("-- never changes.")
+        L.append("--")
+        L.append("-- They are here at all because `lplusdevworld` gets wiped and re-cloned")
+        L.append("-- from prod: a spawn placed by hand in-game does not survive that, and")
+        L.append("-- this script is the only durable copy.")
+        for bg, rows_ in statics:
+            L.append("--   %s (map %d): %d prop(s)" % (by_name.get(bg, "?"), by_map.get(bg, 0), len(rows_)))
+        all_guids = sorted({r[0] for _bg, rows_ in statics for r in rows_})
+        for bg, rows_ in statics:
+            L.append("DELETE FROM gameobject WHERE map = %d AND guid IN (%s);"
+                     % (by_map.get(bg, 0), ",".join(str(r[0]) for r in sorted(rows_))))
+        L.append("INSERT INTO gameobject")
+        L.append("  (guid, id, map, zoneId, areaId, spawnMask, phaseMask,")
+        L.append("   position_x, position_y, position_z, orientation,")
+        L.append("   rotation0, rotation1, rotation2, rotation3,")
+        L.append("   spawntimesecs, animprogress, state)")
+        L.append("VALUES")
+        out = []
+        for bg, rows_ in statics:
+            mid = by_map.get(bg, 0)
+            for (guid, entry, x, y, z, o, r0, r1, r2, r3, note) in rows_:
+                # note goes into a `--` comment, so it must NOT be SQL-escaped:
+                # esc() would render an apostrophe as '' and just read wrong
+                out.append(("  (%d, %d, %d, 0, 0, 1, 1, %.6f, %.6f, %.6f, %.6f, %g, %g, %.6f, %.6f, 300, 255, 1)"
+                            % (guid, entry, mid, x, y, z, o, r0, r1, r2, r3), note))
+        # separator BEFORE the trailing comment -- a comment placed first eats
+        # the comma and silently fuses two rows into one syntax error
+        for i, (vals, note) in enumerate(out):
+            L.append("%s%s  -- %s" % (vals, "," if i < len(out) - 1 else ";", note))
         L.append("")
 
     # ---------------- provenance
