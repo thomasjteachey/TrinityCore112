@@ -5863,8 +5863,14 @@ SpellDecision SelectNoveltyBotSpell(Player const* player, Unit const* target)
     // Redemption, 81321).
     if (name == "Kader")
     {
-        if (IsSpellReady(player, 81321) && !HasAuraFromSpellChain(player, 81321))
-            return { "kader angel form", "novelty bot: become the Spirit of Redemption", 81321,
+        // Angel form is an emergency cooldown, not an opener. Without a gate
+        // it went off the instant the gates opened, wasting the whole form at
+        // full health. Save it for actual pressure: low health, or being
+        // swarmed in melee while already hurt.
+        bool const kaderUnderPressure = player->HealthBelowPct(35) ||
+            (player->HealthBelowPct(60) && CountNearbyEnemies(player, 8.0f) >= 2);
+        if (kaderUnderPressure && IsSpellReady(player, 81321) && !HasAuraFromSpellChain(player, 81321))
+            return { "kader angel form", "novelty bot: become the Spirit of Redemption under pressure", 81321,
                 playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
 
         // Lightwell, whenever its cooldown allows. Rank 1 id: IsSpellReady
