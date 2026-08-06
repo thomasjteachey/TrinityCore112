@@ -158,9 +158,10 @@ ROWS = {
         # Without a bracket row the queue silently refuses everyone --
         # GetBattlegroundBracketByLevel just fails and logs nothing.
         # Id follows the existing 9<mapid> convention (91615 for OBC).
-        # One 1-80 bracket: 60 is this server's level cap, so a 60-69 bracket
-        # (the older custom BGs' shape) locks out every leveling character.
-        [90000 + MAP_ID, MAP_ID, 0, 1, 80, 0],
+        # 80-80 ON PURPOSE: the server caps at 60, so an 80-only bracket is
+        # how Tanaris is currently DISABLED without deleting anything. Widen
+        # to 1-80 to re-enable (2026-08-06).
+        [90000 + MAP_ID, MAP_ID, 0, 80, 80, 0],
     ],
     "WorldSafeLocs.dbc": [
         [WSL_A_START, MAP_ID] + list(A_START) + loc("Tanaris - Alliance Start"),

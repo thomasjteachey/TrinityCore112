@@ -95,12 +95,13 @@ enum BG_VHR_Constants
     BG_VHR_SPAWN_CLEAR_RADIUS = 15
 };
 
-// Which human characters a wave's clones are copied from. Every wave is made of
+// Which characters a wave's clones are copied from. Every wave is made of
 // clones either way; these only change how the sources are chosen.
 enum class VhrWaveComposition : uint8
 {
-    // The common case: each slot draws its own source at random, so the wave is
-    // an uneven mix and some players see more of themselves than others.
+    // Party flavour: each slot draws its own source from the party at random,
+    // so the wave is an uneven mix of the players' own reflections. Rolled at
+    // Centurion.VioletHold.PartyWaveChancePercent per wave.
     RandomPerSlot = 0,
 
     // 2.5% - one player is picked and the whole wave is copies of them.
@@ -109,17 +110,28 @@ enum class VhrWaveComposition : uint8
 
     // 2.5% - the living roster in order, repeated until the wave is full, so
     // every player is represented as evenly as the count allows.
-    FullRoster = 2
+    FullRoster = 2,
+
+    // The common case: the wave is drawn from the server's playerbot
+    // population instead of the party. sourceGuids still holds party picks as
+    // a fallback; the driver swaps in level-appropriate bots when it can find
+    // any, and uses the fallback when it cannot (an empty bot roster must
+    // never stall a wave).
+    BotSourced = 3
 };
 
 // Published by the battleground and fulfilled by the script-side clone driver.
 // sourceGuids is already expanded to one entry per clone, in spawn order, so
-// the driver needs to know nothing about how a composition was chosen.
+// the driver needs to know nothing about how a composition was chosen -
+// except for BotSourced, where it re-sources the same count from the bot
+// population using the party level range below to pick fair opponents.
 struct VhrWaveSpawnRequest
 {
     uint32 waveNumber = 0;
     uint32 enemyTeam = 0;
     VhrWaveComposition composition = VhrWaveComposition::RandomPerSlot;
+    uint32 partyMinLevel = 0;
+    uint32 partyMaxLevel = 0;
     std::vector<ObjectGuid> sourceGuids;
     std::vector<Position> spawnPositions;
 };

@@ -1514,6 +1514,10 @@ void World::LoadConfigSettings(bool reload)
     m_int_configs[CONFIG_CENTURION_BG_REWARD_MONEY_WINNER] = sConfigMgr->GetIntDefault("Centurion.Battleground.RewardMoneyWinner", 100000);
     m_int_configs[CONFIG_CENTURION_BG_REWARD_MONEY_LOSER] = sConfigMgr->GetIntDefault("Centurion.Battleground.RewardMoneyLoser", 100000);
     m_int_configs[CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP] = sConfigMgr->GetIntDefault("Centurion.Battleground.RewardHonorFlagCap", 10);
+    // Percent chance a Violet Hold wave mirrors the party itself rather than
+    // being drawn from the playerbot population (the 2.5% mono and full-roster
+    // specials roll first and are unaffected).
+    m_int_configs[CONFIG_CENTURION_VHR_PARTY_WAVE_CHANCE] = sConfigMgr->GetIntDefault("Centurion.VioletHold.PartyWaveChancePercent", 10);
     m_float_configs[CONFIG_CENTURION_BG_ARENA_REWARD_MULTIPLIER] = sConfigMgr->GetFloatDefault("Centurion.Battleground.ArenaRewardMultiplier", .2f);
 
     m_int_configs[CONFIG_CENTURION_LEAP_XY_SPEED] = sConfigMgr->GetIntDefault("Centurion.LeapXYSpeed", 100);

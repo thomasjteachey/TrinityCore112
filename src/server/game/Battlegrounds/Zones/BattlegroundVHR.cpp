@@ -275,11 +275,31 @@ void BattlegroundVHR::ComposeWave(uint32 enemyCount)
         return;
     }
 
-    VhrWaveComposition composition = VhrWaveComposition::RandomPerSlot;
+    // The party's level range rides along so the bot driver can pick fair
+    // opponents for BotSourced waves.
+    uint32 minLevel = 0, maxLevel = 0;
+    for (ObjectGuid guid : roster)
+        if (Player const* member = ObjectAccessor::FindPlayer(guid))
+        {
+            uint32 const level = member->GetLevel();
+            if (!minLevel || level < minLevel)
+                minLevel = level;
+            if (level > maxLevel)
+                maxLevel = level;
+        }
+    _pendingRequest.partyMinLevel = minLevel;
+    _pendingRequest.partyMaxLevel = maxLevel;
+
+    // Party-mirror waves are the seasoning, not the meal: most waves are
+    // drawn from the playerbot population, with the party flavours rolled
+    // first so they keep their exact advertised odds.
+    VhrWaveComposition composition = VhrWaveComposition::BotSourced;
     if (urand(0, 999) < BG_VHR_MONO_WAVE_CHANCE_PERMILLE)
         composition = VhrWaveComposition::SingleSource;
     else if (urand(0, 999) < BG_VHR_ROSTER_WAVE_CHANCE_PERMILLE)
         composition = VhrWaveComposition::FullRoster;
+    else if (urand(0, 99) < sWorld->getIntConfig(CONFIG_CENTURION_VHR_PARTY_WAVE_CHANCE))
+        composition = VhrWaveComposition::RandomPerSlot;
 
     _pendingRequest.composition = composition;
     _pendingRequest.sourceGuids.reserve(enemyCount);
@@ -302,6 +322,7 @@ void BattlegroundVHR::ComposeWave(uint32 enemyCount)
             break;
         }
         case VhrWaveComposition::RandomPerSlot:
+        case VhrWaveComposition::BotSourced: // party picks are only the fallback
         default:
         {
             for (uint32 i = 0; i < enemyCount; ++i)
@@ -387,10 +408,21 @@ void BattlegroundVHR::NotifyWaveSpawnFulfilled(uint32 waveNumber, uint32 /*spawn
         if (itr.second.Team == _enemyTeam && _eliminated.find(itr.first) == _eliminated.end())
             _waveEnemies.push_back(itr.first);
 
-    ApplyPreparationToWave();
-
-    _waveState = WaveState::Preparing;
-    _prepTimerMs = BG_VHR_PREP_MS;
+    if (_waveNumber == 1)
+    {
+        // The match countdown was the first wave's warning; making the party
+        // stand through a second ten-second wait on top of it kills the
+        // opening. The cells open the moment the clones exist, unbuffed -
+        // wave one is the easiest fight of the run anyway.
+        OpenWaveCell();
+        _waveState = WaveState::Fighting;
+    }
+    else
+    {
+        ApplyPreparationToWave();
+        _waveState = WaveState::Preparing;
+        _prepTimerMs = BG_VHR_PREP_MS;
+    }
 
     UpdateScoreWorldStates();
 }

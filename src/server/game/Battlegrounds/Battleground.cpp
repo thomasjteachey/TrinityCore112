@@ -981,7 +981,12 @@ void Battleground::EndBattleground(uint32 winner)
 
                     player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_WIN_BG, player->GetMapId());
 
-                    bool canRestoreMark = isArena() || GetTypeID(true) == BATTLEGROUND_WS || IsCustomBattleground(GetTypeID(true));
+                    // Violet Hold survival is explicitly barred from restoring
+                    // marks: its enemy team is summoned clones, so a "win"
+                    // requires no opposing players and must not feed the mark
+                    // economy - even if VHR ever joins IsCustomBattleground().
+                    bool canRestoreMark = (isArena() || GetTypeID(true) == BATTLEGROUND_WS || IsCustomBattleground(GetTypeID(true)))
+                        && GetTypeID(true) != BATTLEGROUND_VHR;
                     if (canRestoreMark && Trinity::Custom::ConsumeEligibleDepletedMarks(player, 1))
                         player->AddItem(Trinity::Custom::ITEM_RESTORED_MARK_OF_HONOR, 1); // restored mark of honor
                 }

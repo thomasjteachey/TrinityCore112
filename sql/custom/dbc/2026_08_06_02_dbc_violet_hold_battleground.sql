@@ -162,9 +162,11 @@ VALUES
 -- still stores them, but nothing is declared to display them.
 --
 -- "%9401w" substitutes the live value of that world state into the string -
--- see BG_VHR_WorldStates in BattlegroundVHR.h. StateVariable 0 = always
--- visible. AreaID 0 = anywhere on the map, which matters because the hold
--- reports stock area 4415 rather than the custom area id.
+-- see BG_VHR_WorldStates in BattlegroundVHR.h. The format copies the custom
+-- arenas' rows ("Green Team: %3600w Players Remaining"): plain labelled text,
+-- no icon. StateVariable 9400 is this battleground's own show flag, sent as 1
+-- for the whole match. AreaID 0 = anywhere on the map, which matters because
+-- the hold reports stock area 4415 rather than the custom area id.
 --
 -- Client-side: no effect until packed into the client patch.
 DELETE FROM dbc.worldstateui_lplus WHERE ID IN (90025, 90026, 90027);
@@ -174,18 +176,15 @@ INSERT INTO dbc.worldstateui_lplus
    StateVariable, Type, DynamicIcon, DynamicTooltip_Lang_Mask,
    ExtendedUI, ExtendedUIStateVariable_1, ExtendedUIStateVariable_2, ExtendedUIStateVariable_3)
 VALUES
-  -- NOTE the doubled backslashes: MySQL treats a single backslash as an escape
-  -- introducer, so 'Interface\T...' silently becomes 'InterfaceT...' and the
-  -- icon just fails to load. They must survive into the column as single ones.
-  (90025, 1608, 0, 0, 'Interface\\TargetingFrame\\UI-PVP-Alliance',
-   '%9401w', 16712190, 'Defenders still standing', 16712190,
-   0, 0, '', 16712188,
+  (90025, 1608, 0, 0, '',
+   'Defenders: %9401w Players Remaining', 16712190, '', 16712190,
+   9400, 0, '', 16712188,
    '', 0, 0, 0),
-  (90026, 1608, 0, 0, 'Interface\\TargetingFrame\\UI-PVP-Horde',
-   '%9402w', 16712190, 'Dark reflections remaining', 16712190,
-   0, 0, '', 16712188,
+  (90026, 1608, 0, 0, '',
+   'Dark Reflections: %9402w Remaining', 16712190, '', 16712190,
+   9400, 0, '', 16712188,
    '', 0, 0, 0),
-  (90027, 1608, 0, 0, 'Interface\\Minimap\\Minimap-DeathstrikeIcon',
-   'Wave %9403w', 16712190, 'Current wave', 16712190,
-   0, 0, '', 16712188,
+  (90027, 1608, 0, 0, '',
+   'Wave: %9403w', 16712190, '', 16712190,
+   9400, 0, '', 16712188,
    '', 0, 0, 0);

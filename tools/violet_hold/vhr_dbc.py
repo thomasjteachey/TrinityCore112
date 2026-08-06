@@ -200,33 +200,33 @@ ROWS = {
     "WorldStateUI.dbc": [
         # The top-frame readout: party members left, enemies left, current
         # wave. "%9401w" substitutes the live value of that world state - see
-        # BG_VHR_WorldStates in BattlegroundVHR.h. StateVariable 0 = always
-        # visible; AreaID 0 = anywhere on the map, which matters because the
-        # hold reports stock area 4415 rather than the custom id.
-        [90025, MAP_ID, 0, 0,
-         r"Interface\TargetingFrame\UI-PVP-Alliance"]
-        + loc("%9401w") + loc("Defenders still standing") + [
-         0,            # StateVariable: always shown
+        # BG_VHR_WorldStates in BattlegroundVHR.h. The format copies the
+        # custom arenas' rows ("Green Team: %3600w Players Remaining"): plain
+        # labelled text, no icon. StateVariable 9400 is this battleground's
+        # own show flag, sent as 1 for the whole match. AreaID 0 = anywhere on
+        # the map, which matters because the hold reports stock area 4415
+        # rather than the custom id.
+        [90025, MAP_ID, 0, 0, ""]
+        + loc("Defenders: %9401w Players Remaining") + loc("") + [
+         9400,         # StateVariable: the battleground's show flag
          0,            # Type
          ""]           # DynamicIcon
         + loc("", 16712188) + [
          "",           # ExtendedUI
          0, 0, 0],     # ExtendedUIStateVariable_1..3
 
-        [90026, MAP_ID, 0, 0,
-         r"Interface\TargetingFrame\UI-PVP-Horde"]
-        + loc("%9402w") + loc("Dark reflections remaining") + [
-         0,
+        [90026, MAP_ID, 0, 0, ""]
+        + loc("Dark Reflections: %9402w Remaining") + loc("") + [
+         9400,
          0,
          ""]
         + loc("", 16712188) + [
          "",
          0, 0, 0],
 
-        [90027, MAP_ID, 0, 0,
-         r"Interface\Minimap\Minimap-DeathstrikeIcon"]
-        + loc("Wave %9403w") + loc("Current wave") + [
-         0,
+        [90027, MAP_ID, 0, 0, ""]
+        + loc("Wave: %9403w") + loc("") + [
+         9400,
          0,
          ""]
         + loc("", 16712188) + [

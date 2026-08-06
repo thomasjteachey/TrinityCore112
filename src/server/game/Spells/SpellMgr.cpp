@@ -832,6 +832,13 @@ bool SpellArea::IsFitToRequirements(Player const* player, uint32 newZone, uint32
             if (!player)
                 return false;
 
+            // Custom battlegrounds cloned from Northrend maps report their
+            // source zone (the Violet Hold run reports 4415), which is enough
+            // for the spell_area rows to match. A world buff has no business
+            // inside an instanced match, wherever its map came from.
+            if (player->InBattleground())
+                return false;
+
             if (Battlefield* battlefieldWG = sBattlefieldMgr->GetBattlefieldByBattleId(BATTLEFIELD_BATTLEID_WG))
                 return battlefieldWG->IsEnabled() && (player->GetTeamId() == battlefieldWG->GetDefenderTeam()) && !battlefieldWG->IsWarTime();
             break;
