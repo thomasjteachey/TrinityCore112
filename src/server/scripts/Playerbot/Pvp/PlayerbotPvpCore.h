@@ -265,6 +265,10 @@ public:
     // outside - the bot simply runs - so the values have to be captured where
     // they are computed. Read back through ".playerbot pvp movediag".
     static std::string GetLastWarriorGapCloserDiagnostic(Player const* player);
+    // Persists until the next time the racial is chosen, unlike the gap-closer
+    // slot which is rewritten every decision tick. Every Man for Himself fires
+    // once and is over, so a per-tick slot could never be read in time.
+    static std::string GetLastEveryManForHimselfDiagnostic(Player const* player);
 
 private:
     static bool IsLifecycleEnabled();

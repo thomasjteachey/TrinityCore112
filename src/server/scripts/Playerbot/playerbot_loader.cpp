@@ -919,6 +919,11 @@ public:
             std::string const execDiag = playerbot::PvpClassActions::GetLastExecutionStatus(bot);
             handler->PSendSysMessage("   exec: %s", execDiag.empty() ? "(none recorded)" : execDiag.c_str());
 
+            // Sticky: only written when Every Man for Himself is actually
+            // chosen, so it can be read long after the moment has passed.
+            if (std::string const emfhDiag = playerbot::PvpCore::GetLastEveryManForHimselfDiagnostic(bot); !emfhDiag.empty())
+                handler->PSendSysMessage("   emfh: %s", emfhDiag.c_str());
+
             // Warrior gap closers have a lot of independent gates (known rank,
             // cooldown, stance, rage, min/max range, combat) and a failure in
             // any one of them looks identical from outside: the bot just runs.

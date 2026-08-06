@@ -63,6 +63,7 @@ namespace
 struct SpellDecision;
 bool HasHostileTarget(Player const* player, Unit const* target);
 void SetWarriorGapCloserDiagnostic(Player const* player, std::string const& diagnostic);
+void SetEveryManForHimselfDiagnostic(Player const* player, std::string const& diagnostic);
 uint32 ResolveKnownPlayerSpellInChain(Player const* player, uint32 spellId);
 bool IsPetSpellReady(Player const* player, uint32 spellId);
 bool IsSpellReady(Player const* player, uint32 spellId);
@@ -1181,16 +1182,16 @@ SpellDecision SelectRacialSpell(Player const* player, Unit const* target, Unit c
             // here, so the mask is not the suspect - but if this fires with the
             // bot visibly untouched, the aura it matched is the only thing that
             // can explain it.
-            if (player->GetClass() == CLASS_WARRIOR)
             {
                 SpellInfo const* trigger = FindEveryManForHimselfBreakableAura(player);
                 std::ostringstream emfhDiag;
-                emfhDiag << "racial_emfh spell=" << emfhSpellId
+                emfhDiag << "spell=" << emfhSpellId
                          << " trigger=" << (trigger ? std::to_string(trigger->Id) : std::string("none"))
-                         << " trigger_mechanic=" << (trigger ? trigger->Mechanic : 0)
+                         << " trigger_mechanic=" << (trigger ? uint32(trigger->Mechanic) : 0u)
                          << " fleeing=" << (player->HasUnitState(UNIT_STATE_FLEEING) ? "yes" : "no")
-                         << " combat=" << (player->IsInCombat() ? "yes" : "no");
-                SetWarriorGapCloserDiagnostic(player, emfhDiag.str());
+                         << " combat=" << (player->IsInCombat() ? "yes" : "no")
+                         << " aura_count=" << uint32(player->GetAppliedAuras().size());
+                SetEveryManForHimselfDiagnostic(player, emfhDiag.str());
             }
             return { "custom every man for himself", "break stun/root/fear/charm and other loss-of-control effects", emfhSpellId, playerbot::PvpClassSpellContext::TargetMode::Self };
         }
@@ -5569,6 +5570,24 @@ struct WarriorGapCloserDiagnosticEntry
 
 std::unordered_map<uint64, WarriorGapCloserDiagnosticEntry> g_WarriorGapCloserDiagnosticByGuid;
 
+// Every Man for Himself gets its own slot rather than sharing the gap-closer
+// one. It fires once and the shared slot is rewritten on the very next decision
+// tick, so by the time anyone can type a command the evidence is gone. This
+// records only when the racial is actually chosen, so it persists until the
+// next time it happens.
+std::unordered_map<uint64, WarriorGapCloserDiagnosticEntry> g_EveryManForHimselfDiagnosticByGuid;
+
+void SetEveryManForHimselfDiagnostic(Player const* player, std::string const& diagnostic)
+{
+    if (!player)
+        return;
+
+    WarriorGapCloserDiagnosticEntry& entry =
+        playerbot::LockedGetOrCreate(g_EveryManForHimselfDiagnosticByGuid, player->GetGUID().GetRawValue());
+    entry.recordedMs = GameTime::GetGameTimeMS();
+    entry.text = diagnostic;
+}
+
 // The timestamp is not decoration. This snapshot is only refreshed when the
 // warrior selector actually runs, so a stale entry looks exactly like a live
 // one and silently describes a moment that has passed - which is precisely how
@@ -6598,6 +6617,24 @@ uint32 PvpCore::CountHumanPlayersOnBattlegroundTeam(Player const* player)
     }
 
     return humanCount;
+}
+
+std::string PvpCore::GetLastEveryManForHimselfDiagnostic(Player const* player)
+{
+    if (!player)
+        return std::string();
+
+    if (WarriorGapCloserDiagnosticEntry const* entry =
+            playerbot::LockedFind(g_EveryManForHimselfDiagnosticByGuid, player->GetGUID().GetRawValue()))
+    {
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        uint32 const ageMs = entry->recordedMs != 0 && nowMs >= entry->recordedMs ? nowMs - entry->recordedMs : 0;
+        std::ostringstream aged;
+        aged << "age_ms=" << ageMs << ' ' << entry->text;
+        return aged.str();
+    }
+
+    return std::string();
 }
 
 std::string PvpCore::GetLastWarriorGapCloserDiagnostic(Player const* player)
