@@ -20,13 +20,21 @@
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "BattlegroundVHR.h"
+#include "Containers.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "PlayerbotObcClone.h"
+#include "PlayerbotRandomBotParticipation.h"
+#include "Random.h"
 #include "SharedDefines.h"
+#include "WorldSession.h"
 
+#include <algorithm>
+#include <mutex>
+#include <shared_mutex>
 #include <unordered_set>
+#include <vector>
 
 namespace
 {
@@ -34,6 +42,42 @@ namespace
 // instance id can be recycled by a later battleground, so entries are dropped
 // as soon as the id stops referring to a live match.
 std::unordered_set<uint32> g_TornDownInstances;
+
+// The bot population a BotSourced wave draws from: online managed random bots
+// whose level is close enough to the party's to be a fair fight. The band
+// widens if the strict one is empty; an empty result falls back to the party
+// picks the battleground provided, so a wave can never stall on this.
+std::vector<ObjectGuid> CollectBotWaveSources(uint32 partyMinLevel, uint32 partyMaxLevel)
+{
+    std::vector<ObjectGuid> strict;
+    std::vector<ObjectGuid> loose;
+
+    uint32 const lowBand = partyMinLevel > 3 ? partyMinLevel - 3 : 1;
+    uint32 const highBand = partyMaxLevel + 3;
+
+    std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
+    for (auto const& [guid, candidate] : ObjectAccessor::GetPlayers())
+    {
+        if (!candidate || !candidate->IsInWorld())
+            continue;
+
+        if (!playerbot::IsManagedRandomBot(candidate))
+            continue;
+
+        // A bot already inside a battleground or arena is mid-match somewhere;
+        // cloning it works, but its double walking out of a cell while the
+        // original fights elsewhere reads as a bug to anyone who knows it.
+        if (candidate->InBattleground())
+            continue;
+
+        loose.push_back(guid);
+        uint32 const level = candidate->GetLevel();
+        if (level >= lowBand && level <= highBand)
+            strict.push_back(guid);
+    }
+
+    return strict.empty() ? loose : strict;
+}
 
 void FulfilWaveRequest(BattlegroundVHR* bg)
 {
@@ -52,15 +96,41 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
     // request's storage via world-state updates.
     uint32 const waveNumber = request->waveNumber;
     uint32 const enemyTeam = request->enemyTeam;
-    std::vector<ObjectGuid> const sources = request->sourceGuids;
+    std::vector<ObjectGuid> sources = request->sourceGuids;
     std::vector<Position> const positions = request->spawnPositions;
 
+    // Most waves mirror the bot population, not the party. The battleground
+    // cannot see the bot roster from the game lib, so it sends party picks as
+    // a fallback and this driver re-sources here.
+    if (request->composition == VhrWaveComposition::BotSourced)
+    {
+        std::vector<ObjectGuid> bots = CollectBotWaveSources(request->partyMinLevel, request->partyMaxLevel);
+        if (!bots.empty())
+        {
+            // Shuffle and deal without repeats until the pool runs dry, so a
+            // wave shows as many different bots as the population allows.
+            Trinity::Containers::RandomShuffle(bots);
+            for (size_t i = 0; i < sources.size(); ++i)
+                sources[i] = bots[i % bots.size()];
+        }
+        else
+            TC_LOG_DEBUG("playerbot", "PlayerbotVhrWaveDriver: no eligible bots for wave {} of instance {}, using party fallback.",
+                waveNumber, bg->GetInstanceID());
+    }
+
+    TeamId const enemyTeamIndex = Battleground::GetTeamIndexByTeamId(enemyTeam);
     uint32 spawned = 0;
     for (size_t i = 0; i < sources.size() && i < positions.size(); ++i)
     {
         Player* source = ObjectAccessor::FindPlayer(sources[i]);
         if (!source)
             continue;
+
+        // The clone manager seats a new clone - and summons its hunter pet -
+        // at the team start position, so aim that at the clone's cell slot
+        // before creating it. Teleporting afterwards moved the clone but left
+        // the pet standing in the middle of the hold.
+        bg->SetTeamStartPosition(enemyTeamIndex, positions[i]);
 
         Player* clone = playerbot::PlayerbotObcCloneManager::CreateCustomGameClone(source, bg, enemyTeam, "Dark ");
         if (!clone)
@@ -70,9 +140,6 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
             continue;
         }
 
-        // CreateCustomGameClone seats the clone at the team start position;
-        // its cell slot is decided by the battleground per wave.
-        clone->NearTeleportTo(positions[i]);
         ++spawned;
     }
 
