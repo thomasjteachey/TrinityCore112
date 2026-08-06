@@ -9677,6 +9677,14 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
     // BG object is authoritative for their initial WorldStateUI data.
     if (battleground && battleground->IsCustomGame() && IsSpectator())
         battleground->FillInitialWorldStates(packet);
+    // Same reasoning, for the ported arenas. The switch below is keyed on zone
+    // id, and each arena has its own new zone, so serving them there would mean
+    // fourteen copies of the same three lines -- and an arena whose case was
+    // forgotten would show no score at all, silently, with nothing in the log to
+    // say why. Tol'viron (zone 6296) and Tiger's Peak (6732) still have their
+    // cases below; this covers every arena added since.
+    else if (battleground && IsDataDrivenArena(battleground->GetTypeID(true)))
+        battleground->FillInitialWorldStates(packet);
     else
     switch (zoneId)
     {

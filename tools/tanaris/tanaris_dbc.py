@@ -265,7 +265,14 @@ ROWS = {
 
 
 # --------------------------------------------------------------------- engine
-def patch(path, spec, rows, dry_run=False):
+def patch(path, spec, rows, dry_run=False, backup_suffix=".bak-tanaris"):
+    """Append rows to a binary DBC.
+
+    backup_suffix lets another project reuse this engine and keep its own
+    pre-change snapshot under its own name -- see tools/arenas/arena_dbc.py.
+    An existing backup is never overwritten, so the oldest copy survives
+    whichever project ran first.
+    """
     name = os.path.basename(path)
     with open(path, "rb") as f:
         blob = f.read()
@@ -332,13 +339,13 @@ def patch(path, spec, rows, dry_run=False):
         print("      (dry run, %d bytes not written)" % len(out))
         return added
 
-    backup = path + ".bak-tanaris"
+    backup = path + backup_suffix
     if not os.path.exists(backup):
         shutil.copyfile(path, backup)
 
     # Write beside the target and rename in: a torn DBC is never visible under
     # the real name, even if the server happens to be starting up.
-    tmp = path + ".tanaris-tmp"
+    tmp = path + ".dbc-tmp"
     with open(tmp, "wb") as f:
         f.write(out)
     os.replace(tmp, path)

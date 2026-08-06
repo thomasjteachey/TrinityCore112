@@ -1281,13 +1281,16 @@ bool Creature::isCanInteractWithBattleMaster(Player* player, bool msg) const
             case BATTLEGROUND_RL:
             case BATTLEGROUND_SA:
             case BATTLEGROUND_DS:
-            case BATTLEGROUND_RV:
-            case BATTLEGROUND_TV:
-            case BATTLEGROUND_TTP: SendGossipMenuFor(player, 10024, this); break;
+            case BATTLEGROUND_RV:  SendGossipMenuFor(player, 10024, this); break;
             case BATTLEGROUND_TP:
             case BATTLEGROUND_BFG:
             case BATTLEGROUND_SV: SendGossipMenuFor(player, 7642, this); break;
-            default: break;
+            default:
+                // Every ported arena uses the generic arena battlemaster text,
+                // so match the whole range rather than naming each one.
+                if (IsCustomArena(bgTypeId))
+                    SendGossipMenuFor(player, 10024, this);
+                break;
         }
         return false;
     }

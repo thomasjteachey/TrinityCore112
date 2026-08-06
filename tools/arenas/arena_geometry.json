@@ -1,0 +1,3492 @@
+{
+ "coliseumarena": {
+  "map_id": 982,
+  "arena_wmo": {
+   "name": "WORLD\\WMO\\DUNGEON\\PVP\\PVP_TITAN_ARENA.WMO",
+   "unique_id": 542,
+   "pos": [
+    8077.387,
+    -2749.794,
+    1136.815
+   ],
+   "rot_deg": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bbox_min": [
+    7991.21,
+    -2864.87,
+    1131.91
+   ],
+   "bbox_max": [
+    8163.56,
+    -2634.72,
+    1178.98
+   ],
+   "doodad_set": 0,
+   "name_set": 0,
+   "flags": 0
+  },
+  "candidates": [
+   {
+    "name": "WORLD\\WMO\\DUNGEON\\PVP\\PVP_TITAN_ARENA.WMO",
+    "unique_id": 542,
+    "pos": [
+     8077.387,
+     -2749.794,
+     1136.815
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "bbox_min": [
+     7991.21,
+     -2864.87,
+     1131.91
+    ],
+    "bbox_max": [
+     8163.56,
+     -2634.72,
+     1178.98
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   }
+  ],
+  "collision_panes": [],
+  "doors": [],
+  "tile_bbox": {
+   "x_min": 6933.33,
+   "x_max": 9600.0,
+   "y_min": -3733.33,
+   "y_max": -1600.0
+  }
+ },
+ "nerubianarena": {
+  "map_id": 983,
+  "arena_wmo": {
+   "name": "WORLD\\WMO\\DUNGEON\\PVP\\NERUBIAN_ARENA.WMO",
+   "unique_id": 1,
+   "pos": [
+    544.034,
+    -909.113,
+    25.715
+   ],
+   "rot_deg": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bbox_min": [
+    129.0,
+    -1310.36,
+    23.98
+   ],
+   "bbox_max": [
+    959.06,
+    -507.86,
+    779.35
+   ],
+   "doodad_set": 0,
+   "name_set": 0,
+   "flags": 0
+  },
+  "candidates": [
+   {
+    "name": "WORLD\\WMO\\DUNGEON\\PVP\\NERUBIAN_ARENA.WMO",
+    "unique_id": 1,
+    "pos": [
+     544.034,
+     -909.113,
+     25.715
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "bbox_min": [
+     129.0,
+     -1310.36,
+     23.98
+    ],
+    "bbox_max": [
+     959.06,
+     -507.86,
+     779.35
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   }
+  ],
+  "collision_panes": [],
+  "doors": [],
+  "tile_bbox": {
+   "x_min": -533.33,
+   "x_max": 1600.0,
+   "y_min": -2133.33,
+   "y_max": 0.0
+  }
+ },
+ "MaldraxxusColiseum": {
+  "map_id": 984,
+  "arena_wmo": {
+   "name": "WORLD\\WMO\\EXPANSION08\\MALDRAXXUS\\9MAL_MALDRAXXUS_ARENA01.WMO",
+   "unique_id": 33375963,
+   "pos": [
+    2833.001,
+    2250.001,
+    3245.666
+   ],
+   "rot_deg": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bbox_min": [
+    2634.29,
+    2058.36,
+    3251.64
+   ],
+   "bbox_max": [
+    3001.9,
+    2446.44,
+    3345.87
+   ],
+   "doodad_set": 0,
+   "name_set": 0,
+   "flags": 12
+  },
+  "candidates": [
+   {
+    "name": "WORLD\\WMO\\EXPANSION08\\MALDRAXXUS\\9MAL_MALDRAXXUS_ARENA01.WMO",
+    "unique_id": 33375963,
+    "pos": [
+     2833.001,
+     2250.001,
+     3245.666
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "bbox_min": [
+     2634.29,
+     2058.36,
+     3251.64
+    ],
+    "bbox_max": [
+     3001.9,
+     2446.44,
+     3345.87
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 12
+   },
+   {
+    "name": "WORLD\\WMO\\DUNGEON\\MALDRAXXUSPVPARENA\\9DU_MALDRAXXUSPVPARENA_COLLISION01.WMO",
+    "unique_id": 33672821,
+    "pos": [
+     2832.455,
+     2254.905,
+     3219.837
+    ],
+    "rot_deg": [
+     0.0,
+     -180.0,
+     0.0
+    ],
+    "bbox_min": [
+     2771.87,
+     2159.32,
+     3255.93
+    ],
+    "bbox_max": [
+     2894.19,
+     2348.06,
+     3402.67
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 12
+   }
+  ],
+  "collision_panes": [],
+  "doors": [
+   {
+    "name": "WORLD\\EXPANSION08\\DOODADS\\NECRO\\9NC_NECRO_ARENAPORTCULLIS02.M2",
+    "unique_id": 33376054,
+    "pos": [
+     2696.437,
+     2155.877,
+     3294.625
+    ],
+    "rot_deg": [
+     0.0,
+     35.5,
+     0.0
+    ],
+    "scale": 1.0,
+    "flags": 0
+   }
+  ],
+  "tile_bbox": {
+   "x_min": 2133.33,
+   "x_max": 3200.0,
+   "y_min": 1600.0,
+   "y_max": 2666.67
+  }
+ },
+ "nagrandarena2": {
+  "map_id": 985,
+  "arena_wmo": {
+   "name": "WORLD\\WMO\\PVP\\BUILDINGS\\NAGRANDARENA\\7NG_NAGRANDARENA_PVPSTADIUM.WMO",
+   "unique_id": 1862,
+   "pos": [
+    -2043.539,
+    6654.352,
+    11.442
+   ],
+   "rot_deg": [
+    0.0,
+    28.24,
+    0.0
+   ],
+   "bbox_min": [
+    -2148.8,
+    6547.01,
+    8.75
+   ],
+   "bbox_max": [
+    -1937.95,
+    6761.86,
+    88.83
+   ],
+   "doodad_set": 0,
+   "name_set": 0,
+   "flags": 4
+  },
+  "candidates": [
+   {
+    "name": "WORLD\\WMO\\PVP\\BUILDINGS\\NAGRANDARENA\\7NG_NAGRANDARENA_PVPSTADIUM.WMO",
+    "unique_id": 1862,
+    "pos": [
+     -2043.539,
+     6654.352,
+     11.442
+    ],
+    "rot_deg": [
+     0.0,
+     28.24,
+     0.0
+    ],
+    "bbox_min": [
+     -2148.8,
+     6547.01,
+     8.75
+    ],
+    "bbox_max": [
+     -1937.95,
+     6761.86,
+     88.83
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 4
+   }
+  ],
+  "collision_panes": [],
+  "doors": [],
+  "tile_bbox": {
+   "x_min": -2666.67,
+   "x_max": -1066.67,
+   "y_min": 5866.67,
+   "y_max": 7466.67
+  }
+ },
+ "bladesedgearena2b": {
+  "map_id": 986,
+  "arena_wmo": {
+   "name": "WORLD\\WMO\\PVP\\BUILDINGS\\BLADESEDGEARENA\\7OG_BLADESEDGEARENA_PVPSTADIUM.WMO",
+   "unique_id": 858,
+   "pos": [
+    2785.612,
+    6066.079,
+    -6.124
+   ],
+   "rot_deg": [
+    0.0,
+    -50.0,
+    0.0
+   ],
+   "bbox_min": [
+    2666.58,
+    5889.28,
+    -20.05
+   ],
+   "bbox_max": [
+    2930.96,
+    6148.3,
+    83.34
+   ],
+   "doodad_set": 0,
+   "name_set": 0,
+   "flags": 4
+  },
+  "candidates": [
+   {
+    "name": "WORLD\\WMO\\PVP\\BUILDINGS\\BLADESEDGEARENA\\7OG_BLADESEDGEARENA_PVPSTADIUM.WMO",
+    "unique_id": 858,
+    "pos": [
+     2785.612,
+     6066.079,
+     -6.124
+    ],
+    "rot_deg": [
+     0.0,
+     -50.0,
+     0.0
+    ],
+    "bbox_min": [
+     2666.58,
+     5889.28,
+     -20.05
+    ],
+    "bbox_max": [
+     2930.96,
+     6148.3,
+     83.34
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 4
+   },
+   {
+    "name": "WORLD\\WMO\\PVP\\BUILDINGS\\BLADESEDGEARENA\\7OG_BLADESEDGEARENA_SPIKE02.WMO",
+    "unique_id": 914,
+    "pos": [
+     3099.726,
+     6249.384,
+     203.615
+    ],
+    "rot_deg": [
+     -47.5,
+     -113.5,
+     -20.0
+    ],
+    "bbox_min": [
+     3045.35,
+     6198.17,
+     194.54
+    ],
+    "bbox_max": [
+     3113.02,
+     6262.28,
+     262.03
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 4
+   },
+   {
+    "name": "WORLD\\WMO\\PVP\\BUILDINGS\\BLADESEDGEARENA\\7OG_BLADESEDGEARENA_SPIKE02.WMO",
+    "unique_id": 664,
+    "pos": [
+     2413.42,
+     6093.042,
+     139.317
+    ],
+    "rot_deg": [
+     47.0,
+     -74.5,
+     -29.5
+    ],
+    "bbox_min": [
+     2355.67,
+     6081.05,
+     128.05
+    ],
+    "bbox_max": [
+     2425.23,
+     6143.98,
+     194.89
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 4
+   },
+   {
+    "name": "WORLD\\WMO\\PVP\\BUILDINGS\\BLADESEDGEARENA\\7OG_BLADESEDGEARENA_SPIKE02.WMO",
+    "unique_id": 555,
+    "pos": [
+     2618.95,
+     5523.283,
+     60.647
+    ],
+    "rot_deg": [
+     6.0,
+     137.0,
+     -51.0
+    ],
+    "bbox_min": [
+     2607.27,
+     5508.98,
+     51.55
+    ],
+    "bbox_max": [
+     2673.7,
+     5573.89,
+     118.9
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 4
+   }
+  ],
+  "collision_panes": [],
+  "doors": [],
+  "tile_bbox": {
+   "x_min": 1600.0,
+   "x_max": 4266.67,
+   "y_min": 4800.0,
+   "y_max": 7466.67
+  }
+ },
+ "karazhanarena": {
+  "map_id": 1007,
+  "arena_wmo": {
+   "name": "WORLD\\WMO\\DUNGEON\\PVP\\KARAZHAN_ARENA.WMO",
+   "unique_id": 0,
+   "pos": [
+    536.493,
+    805.679,
+    0.0
+   ],
+   "rot_deg": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bbox_min": [
+    480.21,
+    738.88,
+    -3.81
+   ],
+   "bbox_max": [
+    592.78,
+    872.48,
+    113.23
+   ],
+   "doodad_set": 0,
+   "name_set": 0,
+   "flags": 0
+  },
+  "candidates": [
+   {
+    "name": "WORLD\\WMO\\DUNGEON\\PVP\\KARAZHAN_ARENA.WMO",
+    "unique_id": 0,
+    "pos": [
+     536.493,
+     805.679,
+     0.0
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "bbox_min": [
+     480.21,
+     738.88,
+     -3.81
+    ],
+    "bbox_max": [
+     592.78,
+     872.48,
+     113.23
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   }
+  ],
+  "collision_panes": [],
+  "doors": [],
+  "tile_bbox": {
+   "x_min": 0.0,
+   "x_max": 1066.67,
+   "y_min": 0.0,
+   "y_max": 1600.0
+  }
+ },
+ "ulduararena": {
+  "map_id": 1008,
+  "arena_wmo": {
+   "name": "WORLD\\WMO\\DUNGEON\\PVP\\ULDUAR_ARENA.WMO",
+   "unique_id": 1,
+   "pos": [
+    533.42,
+    800.121,
+    57.4
+   ],
+   "rot_deg": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bbox_min": [
+    194.42,
+    467.12,
+    -374.6
+   ],
+   "bbox_max": [
+    866.42,
+    1138.12,
+    421.4
+   ],
+   "doodad_set": 0,
+   "name_set": 0,
+   "flags": 0
+  },
+  "candidates": [
+   {
+    "name": "WORLD\\WMO\\DUNGEON\\PVP\\ULDUAR_ARENA.WMO",
+    "unique_id": 1,
+    "pos": [
+     533.42,
+     800.121,
+     57.4
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "bbox_min": [
+     194.42,
+     467.12,
+     -374.6
+    ],
+    "bbox_max": [
+     866.42,
+     1138.12,
+     421.4
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   }
+  ],
+  "collision_panes": [],
+  "doors": [],
+  "tile_bbox": {
+   "x_min": 0.0,
+   "x_max": 1066.67,
+   "y_min": 0.0,
+   "y_max": 1600.0
+  }
+ },
+ "BaradinHoldArena": {
+  "map_id": 1401,
+  "arena_wmo": {
+   "name": "WORLD\\WMO\\PVP\\BUILDINGS\\TOLBARAD\\TB_TOWER.WMO",
+   "unique_id": 6890,
+   "pos": [
+    -1232.869,
+    981.333,
+    119.576
+   ],
+   "rot_deg": [
+    0.0,
+    -178.5,
+    0.0
+   ],
+   "bbox_min": [
+    -1318.97,
+    871.67,
+    101.47
+   ],
+   "bbox_max": [
+    -1143.82,
+    1089.08,
+    238.76
+   ],
+   "doodad_set": 0,
+   "name_set": 0,
+   "flags": 0
+  },
+  "candidates": [],
+  "collision_panes": [],
+  "doors": [
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5789,
+    "pos": [
+     -360.638,
+     1308.03,
+     22.519
+    ],
+    "rot_deg": [
+     -43.3,
+     -118.5,
+     -132.09
+    ],
+    "scale": 1.1591796875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5760,
+    "pos": [
+     -221.085,
+     1397.411,
+     22.914
+    ],
+    "rot_deg": [
+     -48.03,
+     88.02,
+     -136.37
+    ],
+    "scale": 1.0693359375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5778,
+    "pos": [
+     -361.513,
+     1317.74,
+     22.161
+    ],
+    "rot_deg": [
+     -50.88,
+     62.0,
+     -149.53
+    ],
+    "scale": 1.1591796875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5783,
+    "pos": [
+     -271.175,
+     1407.67,
+     22.235
+    ],
+    "rot_deg": [
+     -47.55,
+     86.02,
+     -127.82
+    ],
+    "scale": 1.029296875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5773,
+    "pos": [
+     -324.009,
+     1430.101,
+     21.83
+    ],
+    "rot_deg": [
+     -47.76,
+     60.5,
+     -136.5
+    ],
+    "scale": 1.01953125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5756,
+    "pos": [
+     -329.958,
+     1370.811,
+     21.096
+    ],
+    "rot_deg": [
+     -47.78,
+     143.5,
+     -112.0
+    ],
+    "scale": 0.9091796875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5755,
+    "pos": [
+     -305.185,
+     1334.95,
+     22.189
+    ],
+    "rot_deg": [
+     -45.7,
+     -112.16,
+     -128.17
+    ],
+    "scale": 0.9091796875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5780,
+    "pos": [
+     -245.23,
+     1436.84,
+     23.22
+    ],
+    "rot_deg": [
+     -45.71,
+     109.83,
+     -135.72
+    ],
+    "scale": 0.9091796875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5786,
+    "pos": [
+     -297.706,
+     1331.761,
+     21.775
+    ],
+    "rot_deg": [
+     -50.72,
+     124.25,
+     -146.51
+    ],
+    "scale": 0.9091796875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5767,
+    "pos": [
+     -217.835,
+     1396.53,
+     21.877
+    ],
+    "rot_deg": [
+     -41.29,
+     -7.0,
+     -129.26
+    ],
+    "scale": 0.8896484375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5754,
+    "pos": [
+     -335.023,
+     1369.141,
+     21.522
+    ],
+    "rot_deg": [
+     -32.6,
+     163.0,
+     -143.51
+    ],
+    "scale": 0.9091796875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5777,
+    "pos": [
+     -276.478,
+     1409.15,
+     22.621
+    ],
+    "rot_deg": [
+     -44.69,
+     117.52,
+     -131.75
+    ],
+    "scale": 0.8896484375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5785,
+    "pos": [
+     -220.677,
+     1395.44,
+     22.631
+    ],
+    "rot_deg": [
+     -45.3,
+     62.0,
+     -135.76
+    ],
+    "scale": 0.8896484375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5766,
+    "pos": [
+     -237.285,
+     1334.911,
+     23.696
+    ],
+    "rot_deg": [
+     -28.03,
+     -133.24,
+     -165.16
+    ],
+    "scale": 0.8798828125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5762,
+    "pos": [
+     -253.14,
+     1434.94,
+     23.552
+    ],
+    "rot_deg": [
+     -54.84,
+     -23.49,
+     -141.08
+    ],
+    "scale": 0.9091796875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5784,
+    "pos": [
+     -363.835,
+     1314.021,
+     21.778
+    ],
+    "rot_deg": [
+     -46.64,
+     135.0,
+     -136.73
+    ],
+    "scale": 0.8896484375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5779,
+    "pos": [
+     -208.757,
+     1453.661,
+     23.225
+    ],
+    "rot_deg": [
+     -57.74,
+     -70.92,
+     -126.45
+    ],
+    "scale": 0.8896484375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5776,
+    "pos": [
+     -243.519,
+     1344.061,
+     21.701
+    ],
+    "rot_deg": [
+     -60.38,
+     -130.01,
+     -121.18
+    ],
+    "scale": 0.8798828125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5782,
+    "pos": [
+     -372.05,
+     1306.9,
+     23.357
+    ],
+    "rot_deg": [
+     -36.14,
+     169.5,
+     -152.06
+    ],
+    "scale": 0.8896484375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5781,
+    "pos": [
+     -297.724,
+     1296.871,
+     21.253
+    ],
+    "rot_deg": [
+     -62.48,
+     95.95,
+     -116.25
+    ],
+    "scale": 0.8896484375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5787,
+    "pos": [
+     -375.751,
+     1349.791,
+     22.247
+    ],
+    "rot_deg": [
+     -49.27,
+     167.5,
+     -138.32
+    ],
+    "scale": 0.8291015625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5788,
+    "pos": [
+     -232.162,
+     1348.061,
+     22.63
+    ],
+    "rot_deg": [
+     -43.52,
+     -40.4,
+     -149.41
+    ],
+    "scale": 0.849609375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5753,
+    "pos": [
+     -218.552,
+     1396.331,
+     22.338
+    ],
+    "rot_deg": [
+     -47.76,
+     27.0,
+     -136.5
+    ],
+    "scale": 0.7998046875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5757,
+    "pos": [
+     -239.984,
+     1339.251,
+     21.817
+    ],
+    "rot_deg": [
+     -48.56,
+     -160.96,
+     -151.51
+    ],
+    "scale": 0.759765625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5759,
+    "pos": [
+     -298.873,
+     1330.42,
+     21.541
+    ],
+    "rot_deg": [
+     -49.42,
+     -88.49,
+     -129.2
+    ],
+    "scale": 0.759765625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5769,
+    "pos": [
+     -322.314,
+     1431.221,
+     22.454
+    ],
+    "rot_deg": [
+     -39.8,
+     133.5,
+     -137.81
+    ],
+    "scale": 0.759765625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5752,
+    "pos": [
+     -209.351,
+     1452.63,
+     23.418
+    ],
+    "rot_deg": [
+     -52.46,
+     48.15,
+     -121.34
+    ],
+    "scale": 0.759765625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5758,
+    "pos": [
+     -301.869,
+     1295.78,
+     21.383
+    ],
+    "rot_deg": [
+     -51.53,
+     -92.2,
+     -110.73
+    ],
+    "scale": 0.759765625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5763,
+    "pos": [
+     -253.025,
+     1436.711,
+     23.258
+    ],
+    "rot_deg": [
+     -47.31,
+     133.54,
+     -136.47
+    ],
+    "scale": 0.759765625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5764,
+    "pos": [
+     -297.072,
+     1297.871,
+     21.45
+    ],
+    "rot_deg": [
+     -53.56,
+     -127.01,
+     -132.74
+    ],
+    "scale": 0.759765625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5761,
+    "pos": [
+     -204.736,
+     1455.081,
+     23.705
+    ],
+    "rot_deg": [
+     -54.6,
+     83.77,
+     -100.36
+    ],
+    "scale": 0.759765625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5765,
+    "pos": [
+     -315.976,
+     1428.721,
+     20.855
+    ],
+    "rot_deg": [
+     -53.98,
+     106.0,
+     -121.65
+    ],
+    "scale": 0.6298828125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5768,
+    "pos": [
+     -372.222,
+     1353.86,
+     21.945
+    ],
+    "rot_deg": [
+     -50.59,
+     34.0,
+     -145.4
+    ],
+    "scale": 0.5595703125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5774,
+    "pos": [
+     -327.796,
+     1362.69,
+     19.253
+    ],
+    "rot_deg": [
+     -50.06,
+     81.0,
+     -133.63
+    ],
+    "scale": 0.529296875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5770,
+    "pos": [
+     -373.539,
+     1347.521,
+     22.792
+    ],
+    "rot_deg": [
+     -29.55,
+     -100.0,
+     -147.8
+    ],
+    "scale": 0.5595703125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5771,
+    "pos": [
+     -210.324,
+     1459.94,
+     21.79
+    ],
+    "rot_deg": [
+     -40.59,
+     66.86,
+     -137.76
+    ],
+    "scale": 0.529296875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5772,
+    "pos": [
+     -296.507,
+     1290.42,
+     20.355
+    ],
+    "rot_deg": [
+     -39.62,
+     -111.62,
+     -146.75
+    ],
+    "scale": 0.529296875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\LORDAERON\\STRATHOLME\\ACTIVEDOODADS\\DOORS\\NOX_DOOR_WEB_BOSS2.M2",
+    "unique_id": 5775,
+    "pos": [
+     -377.962,
+     1348.001,
+     22.543
+    ],
+    "rot_deg": [
+     -39.59,
+     167.5,
+     -152.2
+    ],
+    "scale": 0.5,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR02.M2",
+    "unique_id": 61,
+    "pos": [
+     -1308.847,
+     979.798,
+     75.466
+    ],
+    "rot_deg": [
+     0.0,
+     2.0,
+     0.0
+    ],
+    "scale": 1.0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR02.M2",
+    "unique_id": 62,
+    "pos": [
+     -1155.611,
+     984.842,
+     91.188
+    ],
+    "rot_deg": [
+     0.0,
+     -178.41,
+     0.0
+    ],
+    "scale": 1.0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 75,
+    "pos": [
+     -1165.08,
+     1050.068,
+     114.188
+    ],
+    "rot_deg": [
+     0.0,
+     42.0,
+     0.0
+    ],
+    "scale": 1.0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 77,
+    "pos": [
+     -1299.089,
+     1047.461,
+     112.031
+    ],
+    "rot_deg": [
+     0.0,
+     -37.0,
+     0.0
+    ],
+    "scale": 1.0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR02.M2",
+    "unique_id": 63,
+    "pos": [
+     -1227.947,
+     902.68,
+     95.558
+    ],
+    "rot_deg": [
+     0.0,
+     91.34,
+     0.0
+    ],
+    "scale": 1.0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR02.M2",
+    "unique_id": 64,
+    "pos": [
+     -1253.941,
+     1061.294,
+     85.922
+    ],
+    "rot_deg": [
+     0.0,
+     91.34,
+     0.0
+    ],
+    "scale": 1.0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 65,
+    "pos": [
+     -1156.519,
+     983.357,
+     69.981
+    ],
+    "rot_deg": [
+     0.0,
+     1.42,
+     0.0
+    ],
+    "scale": 1.57421875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 66,
+    "pos": [
+     -1305.415,
+     978.712,
+     92.182
+    ],
+    "rot_deg": [
+     0.0,
+     2.92,
+     0.0
+    ],
+    "scale": 1.470703125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 74,
+    "pos": [
+     -1295.697,
+     915.262,
+     86.502
+    ],
+    "rot_deg": [
+     0.0,
+     -137.35,
+     0.0
+    ],
+    "scale": 1.0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 76,
+    "pos": [
+     -1163.298,
+     918.505,
+     111.252
+    ],
+    "rot_deg": [
+     0.0,
+     -37.87,
+     0.0
+    ],
+    "scale": 1.0,
+    "flags": 0
+   }
+  ],
+  "tile_bbox": {
+   "x_min": -3200.0,
+   "x_max": 533.33,
+   "y_min": -533.33,
+   "y_max": 2666.67
+  }
+ },
+ "obeliskofthestarts": {
+  "map_id": 1402,
+  "arena_wmo": {
+   "name": "WORLD\\WMO\\CATACLYSM\\ULDUM\\TITAN\\ULDUM_TITAN_MICRO.WMO",
+   "unique_id": 5962472,
+   "pos": [
+    -9256.04,
+    -1496.66,
+    -58.001
+   ],
+   "rot_deg": [
+    0.0,
+    -0.5,
+    0.0
+   ],
+   "bbox_min": [
+    -9509.1,
+    -1768.6,
+    -185.24
+   ],
+   "bbox_max": [
+    -9013.36,
+    -1336.03,
+    222.07
+   ],
+   "doodad_set": 0,
+   "name_set": 1,
+   "flags": 4
+  },
+  "candidates": [],
+  "collision_panes": [
+   {
+    "name": "WORLD\\WMO\\PVP\\PVP_COLLISIONPANE01.WMO",
+    "unique_id": 6197404,
+    "pos": [
+     -9277.771,
+     -1546.085,
+     101.254
+    ],
+    "rot_deg": [
+     89.52,
+     0.0,
+     0.0
+    ],
+    "bbox_min": [
+     -9277.92,
+     -1560.0,
+     87.34
+    ],
+    "bbox_max": [
+     -9277.63,
+     -1532.17,
+     115.17
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\WMO\\PVP\\PVP_COLLISIONPANE01.WMO",
+    "unique_id": 6197405,
+    "pos": [
+     -9277.785,
+     -1554.386,
+     101.113
+    ],
+    "rot_deg": [
+     89.52,
+     0.0,
+     0.0
+    ],
+    "bbox_min": [
+     -9277.93,
+     -1568.3,
+     87.2
+    ],
+    "bbox_max": [
+     -9277.64,
+     -1540.47,
+     115.03
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\WMO\\PVP\\PVP_COLLISIONPANE01.WMO",
+    "unique_id": 6197406,
+    "pos": [
+     -9282.933,
+     -1550.318,
+     100.443
+    ],
+    "rot_deg": [
+     89.52,
+     0.0,
+     0.0
+    ],
+    "bbox_min": [
+     -9283.08,
+     -1564.23,
+     86.53
+    ],
+    "bbox_max": [
+     -9282.79,
+     -1536.4,
+     114.36
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\WMO\\PVP\\PVP_COLLISIONPANE01.WMO",
+    "unique_id": 6197419,
+    "pos": [
+     -9268.126,
+     -1567.031,
+     102.808
+    ],
+    "rot_deg": [
+     89.52,
+     -0.3,
+     -90.66
+    ],
+    "bbox_min": [
+     -9282.16,
+     -1567.15,
+     88.78
+    ],
+    "bbox_max": [
+     -9254.09,
+     -1566.91,
+     116.84
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\WMO\\PVP\\PVP_COLLISIONPANE01.WMO",
+    "unique_id": 6197408,
+    "pos": [
+     -9275.478,
+     -1558.962,
+     101.946
+    ],
+    "rot_deg": [
+     89.52,
+     -0.3,
+     -90.66
+    ],
+    "bbox_min": [
+     -9289.51,
+     -1559.08,
+     87.91
+    ],
+    "bbox_max": [
+     -9261.44,
+     -1558.85,
+     115.98
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\WMO\\PVP\\PVP_COLLISIONPANE01.WMO",
+    "unique_id": 6197420,
+    "pos": [
+     -9254.673,
+     -1567.115,
+     103.382
+    ],
+    "rot_deg": [
+     89.52,
+     -0.3,
+     -90.66
+    ],
+    "bbox_min": [
+     -9268.71,
+     -1567.23,
+     89.35
+    ],
+    "bbox_max": [
+     -9240.64,
+     -1567.0,
+     117.41
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\WMO\\PVP\\PVP_COLLISIONPANE01.WMO",
+    "unique_id": 6197409,
+    "pos": [
+     -9253.16,
+     -1558.515,
+     101.828
+    ],
+    "rot_deg": [
+     89.52,
+     -0.3,
+     -90.66
+    ],
+    "bbox_min": [
+     -9267.19,
+     -1558.63,
+     87.8
+    ],
+    "bbox_max": [
+     -9239.13,
+     -1558.4,
+     115.86
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\WMO\\PVP\\PVP_COLLISIONPANE01.WMO",
+    "unique_id": 6197415,
+    "pos": [
+     -9239.732,
+     -1549.445,
+     101.178
+    ],
+    "rot_deg": [
+     -89.68,
+     0.0,
+     0.0
+    ],
+    "bbox_min": [
+     -9239.84,
+     -1563.36,
+     87.26
+    ],
+    "bbox_max": [
+     -9239.63,
+     -1535.53,
+     115.09
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\WMO\\PVP\\PVP_COLLISIONPANE01.WMO",
+    "unique_id": 6197410,
+    "pos": [
+     -9253.283,
+     -1541.398,
+     101.198
+    ],
+    "rot_deg": [
+     89.52,
+     0.0,
+     89.71
+    ],
+    "bbox_min": [
+     -9267.32,
+     -1541.5,
+     87.16
+    ],
+    "bbox_max": [
+     -9239.25,
+     -1541.3,
+     115.23
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\WMO\\PVP\\PVP_COLLISIONPANE01.WMO",
+    "unique_id": 6197411,
+    "pos": [
+     -9270.777,
+     -1541.648,
+     101.313
+    ],
+    "rot_deg": [
+     89.52,
+     0.0,
+     89.71
+    ],
+    "bbox_min": [
+     -9284.81,
+     -1541.75,
+     87.28
+    ],
+    "bbox_max": [
+     -9256.74,
+     -1541.55,
+     115.35
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\WMO\\PVP\\PVP_COLLISIONPANE01.WMO",
+    "unique_id": 6197421,
+    "pos": [
+     -9254.97,
+     -1533.324,
+     101.597
+    ],
+    "rot_deg": [
+     89.52,
+     0.0,
+     89.71
+    ],
+    "bbox_min": [
+     -9269.0,
+     -1533.42,
+     87.56
+    ],
+    "bbox_max": [
+     -9240.94,
+     -1533.22,
+     115.63
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\WMO\\PVP\\PVP_COLLISIONPANE01.WMO",
+    "unique_id": 6197422,
+    "pos": [
+     -9267.587,
+     -1533.773,
+     102.988
+    ],
+    "rot_deg": [
+     89.52,
+     0.0,
+     89.71
+    ],
+    "bbox_min": [
+     -9281.62,
+     -1533.87,
+     88.96
+    ],
+    "bbox_max": [
+     -9253.55,
+     -1533.67,
+     117.02
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\WMO\\PVP\\PVP_COLLISIONPANE01.WMO",
+    "unique_id": 6197413,
+    "pos": [
+     -9244.037,
+     -1556.431,
+     100.749
+    ],
+    "rot_deg": [
+     -90.12,
+     0.0,
+     0.0
+    ],
+    "bbox_min": [
+     -9244.09,
+     -1570.35,
+     86.83
+    ],
+    "bbox_max": [
+     -9243.98,
+     -1542.52,
+     114.67
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\WMO\\PVP\\PVP_COLLISIONPANE01.WMO",
+    "unique_id": 6197414,
+    "pos": [
+     -9244.33,
+     -1542.359,
+     100.792
+    ],
+    "rot_deg": [
+     -90.04,
+     0.0,
+     0.0
+    ],
+    "bbox_min": [
+     -9244.37,
+     -1556.27,
+     86.87
+    ],
+    "bbox_max": [
+     -9244.29,
+     -1528.44,
+     114.71
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   }
+  ],
+  "doors": [
+   {
+    "name": "WORLD\\EXPANSION03\\DOODADS\\ULDUM\\TITAN\\ULDUM_TITAN_DOORWAY02.M2",
+    "unique_id": 6125073,
+    "pos": [
+     -8934.56,
+     -1549.57,
+     98.19
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "scale": 0.2998046875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION03\\DOODADS\\ULDUM\\DOORS\\ULDUM_DOOR_01.M2",
+    "unique_id": 5962355,
+    "pos": [
+     -8934.218,
+     -1549.57,
+     98.737
+    ],
+    "rot_deg": [
+     0.0,
+     -1.0,
+     0.0
+    ],
+    "scale": 0.359375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197468,
+    "pos": [
+     -9334.138,
+     -1492.347,
+     -34.222
+    ],
+    "rot_deg": [
+     0.0,
+     -179.65,
+     0.0
+    ],
+    "scale": 1.3095703125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197467,
+    "pos": [
+     -9191.73,
+     -1491.857,
+     -34.222
+    ],
+    "rot_deg": [
+     0.0,
+     -179.65,
+     0.0
+    ],
+    "scale": 1.3095703125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197466,
+    "pos": [
+     -9191.255,
+     -1606.831,
+     -34.222
+    ],
+    "rot_deg": [
+     0.0,
+     -179.65,
+     0.0
+    ],
+    "scale": 1.3095703125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197469,
+    "pos": [
+     -9333.206,
+     -1606.605,
+     -34.222
+    ],
+    "rot_deg": [
+     0.0,
+     -179.65,
+     0.0
+    ],
+    "scale": 1.3095703125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197463,
+    "pos": [
+     -9208.701,
+     -1474.351,
+     -34.222
+    ],
+    "rot_deg": [
+     0.0,
+     90.14,
+     0.0
+    ],
+    "scale": 1.3095703125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197458,
+    "pos": [
+     -9315.404,
+     -1475.15,
+     -34.222
+    ],
+    "rot_deg": [
+     0.0,
+     89.95,
+     0.0
+    ],
+    "scale": 1.3095703125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197417,
+    "pos": [
+     -9184.335,
+     -1549.447,
+     58.644
+    ],
+    "rot_deg": [
+     0.0,
+     179.1,
+     0.0
+    ],
+    "scale": 1.2421875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197418,
+    "pos": [
+     -9341.208,
+     -1549.091,
+     58.725
+    ],
+    "rot_deg": [
+     0.0,
+     179.1,
+     0.0
+    ],
+    "scale": 1.2421875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197403,
+    "pos": [
+     -9262.259,
+     -1467.164,
+     61.073
+    ],
+    "rot_deg": [
+     0.0,
+     89.24,
+     0.0
+    ],
+    "scale": 1.1298828125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197453,
+    "pos": [
+     -9337.406,
+     -1511.884,
+     56.971
+    ],
+    "rot_deg": [
+     0.0,
+     -89.55,
+     0.0
+    ],
+    "scale": 0.3681640625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197444,
+    "pos": [
+     -9337.511,
+     -1572.773,
+     56.996
+    ],
+    "rot_deg": [
+     0.0,
+     -89.55,
+     0.0
+    ],
+    "scale": 0.3681640625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197427,
+    "pos": [
+     -9228.441,
+     -1471.132,
+     53.67
+    ],
+    "rot_deg": [
+     0.0,
+     -179.58,
+     0.0
+    ],
+    "scale": 0.3681640625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197424,
+    "pos": [
+     -9281.404,
+     -1470.81,
+     58.819
+    ],
+    "rot_deg": [
+     0.0,
+     -179.58,
+     0.0
+    ],
+    "scale": 0.3681640625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197428,
+    "pos": [
+     -9243.142,
+     -1471.343,
+     58.025
+    ],
+    "rot_deg": [
+     0.0,
+     -179.58,
+     0.0
+    ],
+    "scale": 0.3681640625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197425,
+    "pos": [
+     -9296.105,
+     -1470.978,
+     57.947
+    ],
+    "rot_deg": [
+     0.0,
+     -179.58,
+     0.0
+    ],
+    "scale": 0.3681640625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197448,
+    "pos": [
+     -9188.722,
+     -1573.144,
+     56.801
+    ],
+    "rot_deg": [
+     0.0,
+     -90.24,
+     0.0
+    ],
+    "scale": 0.3681640625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197434,
+    "pos": [
+     -9188.048,
+     -1512.331,
+     58.132
+    ],
+    "rot_deg": [
+     0.0,
+     -90.24,
+     0.0
+    ],
+    "scale": 0.3681640625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197433,
+    "pos": [
+     -9188.015,
+     -1527.046,
+     57.661
+    ],
+    "rot_deg": [
+     0.0,
+     -89.82,
+     0.0
+    ],
+    "scale": 0.3681640625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197443,
+    "pos": [
+     -9337.271,
+     -1587.496,
+     53.82
+    ],
+    "rot_deg": [
+     0.0,
+     -89.82,
+     0.0
+    ],
+    "scale": 0.3681640625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197452,
+    "pos": [
+     -9337.205,
+     -1526.714,
+     58.074
+    ],
+    "rot_deg": [
+     0.0,
+     -89.82,
+     0.0
+    ],
+    "scale": 0.3681640625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197447,
+    "pos": [
+     -9188.312,
+     -1587.937,
+     57.566
+    ],
+    "rot_deg": [
+     0.0,
+     -89.82,
+     0.0
+    ],
+    "scale": 0.3681640625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197423,
+    "pos": [
+     -9288.623,
+     -1479.179,
+     58.724
+    ],
+    "rot_deg": [
+     0.0,
+     90.78,
+     0.0
+    ],
+    "scale": 0.33984375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197426,
+    "pos": [
+     -9235.623,
+     -1479.408,
+     57.861
+    ],
+    "rot_deg": [
+     0.0,
+     90.78,
+     0.0
+    ],
+    "scale": 0.33984375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197432,
+    "pos": [
+     -9195.699,
+     -1519.521,
+     59.467
+    ],
+    "rot_deg": [
+     0.0,
+     -179.32,
+     0.0
+    ],
+    "scale": 0.33984375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197454,
+    "pos": [
+     -9329.169,
+     -1519.015,
+     58.085
+    ],
+    "rot_deg": [
+     0.0,
+     -179.32,
+     0.0
+    ],
+    "scale": 0.33984375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197446,
+    "pos": [
+     -9196.181,
+     -1580.371,
+     59.347
+    ],
+    "rot_deg": [
+     0.0,
+     -179.32,
+     0.0
+    ],
+    "scale": 0.33984375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197442,
+    "pos": [
+     -9329.242,
+     -1579.865,
+     55.933
+    ],
+    "rot_deg": [
+     0.0,
+     -179.32,
+     0.0
+    ],
+    "scale": 0.33984375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197460,
+    "pos": [
+     -9315.613,
+     -1625.296,
+     -34.222
+    ],
+    "rot_deg": [
+     0.0,
+     90.29,
+     0.0
+    ],
+    "scale": 1.3095703125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197462,
+    "pos": [
+     -9208.47,
+     -1624.007,
+     -34.222
+    ],
+    "rot_deg": [
+     0.0,
+     89.95,
+     0.0
+    ],
+    "scale": 1.3095703125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197456,
+    "pos": [
+     -9263.132,
+     -1632.009,
+     61.073
+    ],
+    "rot_deg": [
+     0.0,
+     89.24,
+     0.0
+    ],
+    "scale": 1.1298828125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197440,
+    "pos": [
+     -9228.9,
+     -1627.914,
+     56.464
+    ],
+    "rot_deg": [
+     0.0,
+     -179.41,
+     0.0
+    ],
+    "scale": 0.3681640625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197451,
+    "pos": [
+     -9281.734,
+     -1627.679,
+     56.845
+    ],
+    "rot_deg": [
+     0.0,
+     -179.41,
+     0.0
+    ],
+    "scale": 0.3681640625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197450,
+    "pos": [
+     -9296.556,
+     -1628.503,
+     56.638
+    ],
+    "rot_deg": [
+     0.0,
+     0.48,
+     0.0
+    ],
+    "scale": 0.3681640625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197439,
+    "pos": [
+     -9243.722,
+     -1628.878,
+     54.867
+    ],
+    "rot_deg": [
+     0.0,
+     0.48,
+     0.0
+    ],
+    "scale": 0.3681640625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197449,
+    "pos": [
+     -9289.013,
+     -1620.242,
+     57.772
+    ],
+    "rot_deg": [
+     0.0,
+     90.42,
+     0.0
+    ],
+    "scale": 0.33984375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\ULDUAR\\UL_LIGHTING_DOOR03.M2",
+    "unique_id": 6197438,
+    "pos": [
+     -9236.201,
+     -1620.462,
+     58.27
+    ],
+    "rot_deg": [
+     0.0,
+     90.42,
+     0.0
+    ],
+    "scale": 0.33984375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION03\\DOODADS\\ULDUM\\TITAN\\ULDUM_TITAN_DOORWAY02.M2",
+    "unique_id": 5868165,
+    "pos": [
+     -9837.099,
+     -2116.009,
+     18.606
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "scale": 0.2998046875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION03\\DOODADS\\ULDUM\\DOORS\\ULDUM_DOOR_01.M2",
+    "unique_id": 5868164,
+    "pos": [
+     -9835.999,
+     -2115.931,
+     19.318
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "scale": 0.359375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION03\\DOODADS\\ULDUM\\TITAN\\ULDUM_TITAN_DOORWAY02.M2",
+    "unique_id": 5868952,
+    "pos": [
+     -9745.519,
+     -2259.46,
+     43.046
+    ],
+    "rot_deg": [
+     0.0,
+     -0.5,
+     0.0
+    ],
+    "scale": 0.2998046875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION03\\DOODADS\\ULDUM\\TITAN\\ULDUM_TITAN_DOORWAY02.M2",
+    "unique_id": 5868146,
+    "pos": [
+     -9828.519,
+     -2226.08,
+     19.876
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "scale": 0.2998046875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION03\\DOODADS\\ULDUM\\DOORS\\ULDUM_DOOR_01.M2",
+    "unique_id": 5868147,
+    "pos": [
+     -9827.41,
+     -2225.999,
+     20.623
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "scale": 0.359375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION03\\DOODADS\\ULDUM\\DOORS\\ULDUM_DOOR_01.M2",
+    "unique_id": 5997949,
+    "pos": [
+     -9745.369,
+     -2259.439,
+     43.619
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "scale": 0.3193359375,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\AZEROTH\\THEBLASTEDLANDS\\PASSIVEDOODADS\\RUINS\\BROKENGATECHAIN02.M2",
+    "unique_id": 300329,
+    "pos": [
+     -9575.29,
+     -2835.96,
+     -316.433
+    ],
+    "rot_deg": [
+     0.0,
+     86.5,
+     0.0
+    ],
+    "scale": 0.859375,
+    "flags": 0
+   }
+  ],
+  "tile_bbox": {
+   "x_min": -10133.33,
+   "x_max": -8533.33,
+   "y_min": -3733.33,
+   "y_max": -533.33
+  }
+ },
+ "thetwistingnether": {
+  "map_id": 1403,
+  "arena_wmo": {
+   "name": "WORLD\\WMO\\PVP\\LEGIONARENA\\LEGION_ARENA.WMO",
+   "unique_id": 38,
+   "pos": [
+    4500.372,
+    -1273.103,
+    275.155
+   ],
+   "rot_deg": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bbox_min": [
+    4275.42,
+    -1725.39,
+    106.69
+   ],
+   "bbox_max": [
+    4725.05,
+    -651.08,
+    525.22
+   ],
+   "doodad_set": 0,
+   "name_set": 0,
+   "flags": 0
+  },
+  "candidates": [
+   {
+    "name": "WORLD\\WMO\\PVP\\LEGIONARENA\\LEGION_ARENA.WMO",
+    "unique_id": 38,
+    "pos": [
+     4500.372,
+     -1273.103,
+     275.155
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "bbox_min": [
+     4275.42,
+     -1725.39,
+     106.69
+    ],
+    "bbox_max": [
+     4725.05,
+     -651.08,
+     525.22
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   }
+  ],
+  "collision_panes": [
+   {
+    "name": "WORLD\\WMO\\PVP\\PVP_COLLISIONPANE01.WMO",
+    "unique_id": 35,
+    "pos": [
+     4498.496,
+     -1417.951,
+     390.179
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "bbox_min": [
+     4484.58,
+     -1431.87,
+     390.15
+    ],
+    "bbox_max": [
+     4512.41,
+     -1404.03,
+     390.21
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   }
+  ],
+  "doors": [
+   {
+    "name": "WORLD\\EXPANSION06\\DOODADS\\DUNGEON\\DOODADS\\7DU_TOMBOFSARGERAS_FIREDOOR01.M2",
+    "unique_id": 19,
+    "pos": [
+     4442.849,
+     -1421.402,
+     386.831
+    ],
+    "rot_deg": [
+     0.12,
+     -158.25,
+     0.34
+    ],
+    "scale": 0.26171875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION06\\DOODADS\\DUNGEON\\DOODADS\\7DU_TOMBOFSARGERAS_FIREDOOR01.M2",
+    "unique_id": 18,
+    "pos": [
+     4556.842,
+     -1422.316,
+     386.744
+    ],
+    "rot_deg": [
+     -0.28,
+     -20.15,
+     -0.12
+    ],
+    "scale": 0.26171875,
+    "flags": 0
+   }
+  ],
+  "tile_bbox": {
+   "x_min": 3733.33,
+   "x_max": 5333.33,
+   "y_min": -2133.33,
+   "y_max": -533.33
+  }
+ },
+ "blackrookholdarena": {
+  "map_id": 1504,
+  "arena_wmo": {
+   "name": "WORLD\\WMO\\PVP\\BUILDINGS\\BLACKROOKHOLD\\7VS_BLACKROOKHOLD_ARENA.WMO",
+   "unique_id": 1099,
+   "pos": [
+    1458.695,
+    1458.056,
+    81.681
+   ],
+   "rot_deg": [
+    0.0,
+    1.0,
+    0.0
+   ],
+   "bbox_min": [
+    1111.96,
+    1096.34,
+    -17.33
+   ],
+   "bbox_max": [
+    1575.36,
+    1530.56,
+    488.51
+   ],
+   "doodad_set": 0,
+   "name_set": 0,
+   "flags": 12
+  },
+  "candidates": [
+   {
+    "name": "WORLD\\WMO\\PVP\\BUILDINGS\\BLACKROOKHOLD\\7VS_BLACKROOKHOLD_ARENA.WMO",
+    "unique_id": 1099,
+    "pos": [
+     1458.695,
+     1458.056,
+     81.681
+    ],
+    "rot_deg": [
+     0.0,
+     1.0,
+     0.0
+    ],
+    "bbox_min": [
+     1111.96,
+     1096.34,
+     -17.33
+    ],
+    "bbox_max": [
+     1575.36,
+     1530.56,
+     488.51
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 12
+   },
+   {
+    "name": "WORLD\\WMO\\PVP\\BUILDINGS\\BLACKROOKHOLD\\BLACKROOKHOLD_ARENA_PLATFORMTEST.WMO",
+    "unique_id": 1098,
+    "pos": [
+     1422.157,
+     1246.965,
+     33.714
+    ],
+    "rot_deg": [
+     0.0,
+     17.5,
+     0.0
+    ],
+    "bbox_min": [
+     1393.6,
+     1220.81,
+     28.2
+    ],
+    "bbox_max": [
+     1448.17,
+     1275.44,
+     63.48
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 12
+   }
+  ],
+  "collision_panes": [],
+  "doors": [],
+  "tile_bbox": {
+   "x_min": 533.33,
+   "x_max": 2133.33,
+   "y_min": 533.33,
+   "y_max": 2133.33
+  }
+ },
+ "valsharaharena": {
+  "map_id": 1552,
+  "arena_wmo": {
+   "name": "WORLD\\WMO\\DUNGEON\\PVP\\CUSTOM_VALSHARAH_ARENA.WMO",
+   "unique_id": 1800,
+   "pos": [
+    3548.968,
+    5542.226,
+    325.23
+   ],
+   "rot_deg": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bbox_min": [
+    3457.73,
+    5462.98,
+    291.32
+   ],
+   "bbox_max": [
+    3612.19,
+    5610.78,
+    384.85
+   ],
+   "doodad_set": 0,
+   "name_set": 0,
+   "flags": 0
+  },
+  "candidates": [
+   {
+    "name": "WORLD\\WMO\\DUNGEON\\PVP\\CUSTOM_VALSHARAH_ARENA.WMO",
+    "unique_id": 1800,
+    "pos": [
+     3548.968,
+     5542.226,
+     325.23
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "bbox_min": [
+     3457.73,
+     5462.98,
+     291.32
+    ],
+    "bbox_max": [
+     3612.19,
+     5610.78,
+     384.85
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   }
+  ],
+  "collision_panes": [],
+  "doors": [
+   {
+    "name": "WORLD\\EXPANSION06\\DOODADS\\NIGHTELF\\7NE_DRUID_DOORLARGE01.M2",
+    "unique_id": 1032,
+    "pos": [
+     3399.897,
+     5674.161,
+     311.922
+    ],
+    "rot_deg": [
+     0.0,
+     150.46,
+     0.0
+    ],
+    "scale": 0.841796875,
+    "flags": 0
+   }
+  ],
+  "tile_bbox": {
+   "x_min": 2666.67,
+   "x_max": 4266.67,
+   "y_min": 4800.0,
+   "y_max": 6400.0
+  }
+ },
+ "ulduaroutarena": {
+  "map_id": 1683,
+  "arena_wmo": {
+   "name": "WORLD\\WMO\\DUNGEON\\ULDUAR\\ULDUAR_EXT03.WMO",
+   "unique_id": 1243,
+   "pos": [
+    8859.216,
+    -904.738,
+    884.09
+   ],
+   "rot_deg": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bbox_min": [
+    8461.49,
+    -1514.54,
+    439.09
+   ],
+   "bbox_max": [
+    9064.18,
+    -441.92,
+    1189.56
+   ],
+   "doodad_set": 0,
+   "name_set": 0,
+   "flags": 4
+  },
+  "candidates": [],
+  "collision_panes": [],
+  "doors": [],
+  "tile_bbox": {
+   "x_min": 7466.67,
+   "x_max": 9066.67,
+   "y_min": -1600.0,
+   "y_max": 0.0
+  }
+ },
+ "gundrakarena": {
+  "map_id": 1684,
+  "arena_wmo": {
+   "name": "WORLD\\WMO\\DUNGEON\\MD_ZD_COLISEUM\\ZD_COLISEUM.WMO",
+   "unique_id": 5184,
+   "pos": [
+    5798.492,
+    -3047.376,
+    281.46
+   ],
+   "rot_deg": [
+    0.0,
+    -64.5,
+    0.0
+   ],
+   "bbox_min": [
+    4918.25,
+    -3717.27,
+    256.64
+   ],
+   "bbox_max": [
+    6387.11,
+    -2643.4,
+    503.96
+   ],
+   "doodad_set": 0,
+   "name_set": 0,
+   "flags": 4
+  },
+  "candidates": [
+   {
+    "name": "WORLD\\WMO\\DUNGEON\\MD_ZD_COLISEUM\\ZD_COLISEUM.WMO",
+    "unique_id": 5184,
+    "pos": [
+     5798.492,
+     -3047.376,
+     281.46
+    ],
+    "rot_deg": [
+     0.0,
+     -64.5,
+     0.0
+    ],
+    "bbox_min": [
+     4918.25,
+     -3717.27,
+     256.64
+    ],
+    "bbox_max": [
+     6387.11,
+     -2643.4,
+     503.96
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 4
+   }
+  ],
+  "collision_panes": [],
+  "doors": [
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\GENERIC\\WOLVAR\\WOLVAR_DOORWAY01.M2",
+    "unique_id": 1506,
+    "pos": [
+     4847.411,
+     -2345.562,
+     237.839
+    ],
+    "rot_deg": [
+     9.62,
+     131.0,
+     -0.65
+    ],
+    "scale": 1.0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\GENERIC\\WOLVAR\\WOLVAR_DOORWAY01.M2",
+    "unique_id": 1508,
+    "pos": [
+     4951.0,
+     -2358.56,
+     244.596
+    ],
+    "rot_deg": [
+     8.39,
+     140.0,
+     0.86
+    ],
+    "scale": 1.0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\GENERIC\\WOLVAR\\WOLVAR_DOORWAY01.M2",
+    "unique_id": 1529,
+    "pos": [
+     4909.304,
+     -2316.081,
+     242.427
+    ],
+    "rot_deg": [
+     0.23,
+     -58.0,
+     0.32
+    ],
+    "scale": 1.0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\GENERIC\\WOLVAR\\WOLVAR_DOORWAY01.M2",
+    "unique_id": 1544,
+    "pos": [
+     4962.61,
+     -2285.199,
+     245.084
+    ],
+    "rot_deg": [
+     6.41,
+     77.5,
+     0.56
+    ],
+    "scale": 1.0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\GENERIC\\WOLVAR\\WOLVAR_DOORWAY01.M2",
+    "unique_id": 1548,
+    "pos": [
+     4984.987,
+     -2319.455,
+     248.459
+    ],
+    "rot_deg": [
+     8.19,
+     -9.5,
+     1.09
+    ],
+    "scale": 1.0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\GENERIC\\WOLVAR\\WOLVAR_DOORWAY01.M2",
+    "unique_id": 1556,
+    "pos": [
+     4893.364,
+     -2360.763,
+     237.373
+    ],
+    "rot_deg": [
+     3.76,
+     13.0,
+     0.83
+    ],
+    "scale": 1.0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION02\\DOODADS\\GENERIC\\WOLVAR\\WOLVAR_DOORWAY01.M2",
+    "unique_id": 1561,
+    "pos": [
+     4877.056,
+     -2322.218,
+     238.734
+    ],
+    "rot_deg": [
+     6.41,
+     98.5,
+     0.56
+    ],
+    "scale": 1.0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION01\\DOODADS\\ZULAMAN\\DOORS\\ZULAMAN_TORCHFIRE.M2",
+    "unique_id": 0,
+    "pos": [
+     5241.213,
+     -3293.234,
+     342.661
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "scale": 15.5498046875,
+    "flags": 0
+   }
+  ],
+  "tile_bbox": {
+   "x_min": 4800.0,
+   "x_max": 6400.0,
+   "y_min": -3733.33,
+   "y_max": -2133.33
+  }
+ },
+ "tolvirarena": {
+  "map_id": 980,
+  "arena_wmo": {
+   "name": "WORLD\\WMO\\CATACLYSM\\TOLVIR\\TOLVIR_ARENA.WMO",
+   "unique_id": 7623,
+   "pos": [
+    -10714.482,
+    428.305,
+    1.928
+   ],
+   "rot_deg": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bbox_min": [
+    -10794.62,
+    359.7,
+    4.86
+   ],
+   "bbox_max": [
+    -10634.17,
+    501.04,
+    72.0
+   ],
+   "doodad_set": 0,
+   "name_set": 0,
+   "flags": 0
+  },
+  "candidates": [
+   {
+    "name": "WORLD\\WMO\\CATACLYSM\\TOLVIR\\TOLVIR_ARENA.WMO",
+    "unique_id": 7623,
+    "pos": [
+     -10714.482,
+     428.305,
+     1.928
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "bbox_min": [
+     -10794.62,
+     359.7,
+     4.86
+    ],
+    "bbox_max": [
+     -10634.17,
+     501.04,
+     72.0
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   }
+  ],
+  "collision_panes": [],
+  "doors": [
+   {
+    "name": "WORLD\\EXPANSION03\\DOODADS\\ULDUM\\DOORS\\ULDUM_DOOR_01.M2",
+    "unique_id": 2488,
+    "pos": [
+     -10525.486,
+     429.772,
+     37.295
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "scale": 0.9794921875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION03\\DOODADS\\ULDUM\\TITAN\\ULDUM_TITAN_DOORWAY01.M2",
+    "unique_id": 2490,
+    "pos": [
+     -10516.599,
+     46.321,
+     19.695
+    ],
+    "rot_deg": [
+     0.0,
+     -91.0,
+     0.0
+    ],
+    "scale": 0.7998046875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION03\\DOODADS\\ULDUM\\DOORS\\ULDUM_DOOR_01.M2",
+    "unique_id": 2491,
+    "pos": [
+     -10516.623,
+     45.395,
+     20.967
+    ],
+    "rot_deg": [
+     0.0,
+     -91.5,
+     0.0
+    ],
+    "scale": 0.869140625,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION03\\DOODADS\\ULDUM\\DOORS\\ULDUM_DOOR_01.M2",
+    "unique_id": 2506,
+    "pos": [
+     -10620.9,
+     485.329,
+     26.099
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "scale": 0.439453125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION03\\DOODADS\\ULDUM\\DOORS\\ULDUM_DOOR_01.M2",
+    "unique_id": 2507,
+    "pos": [
+     -10620.701,
+     382.376,
+     26.026
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "scale": 0.439453125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION03\\DOODADS\\ULDUM\\TITAN\\ULDUM_TITAN_DOORWAY01.M2",
+    "unique_id": 2509,
+    "pos": [
+     -10621.599,
+     382.256,
+     24.974
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "scale": 0.2998046875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION03\\DOODADS\\ULDUM\\TITAN\\ULDUM_TITAN_DOORWAY01.M2",
+    "unique_id": 2510,
+    "pos": [
+     -10621.701,
+     485.208,
+     24.975
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "scale": 0.2998046875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION03\\DOODADS\\ULDUM\\DOORS\\ULDUM_DOOR_01.M2",
+    "unique_id": 1594,
+    "pos": [
+     -10883.154,
+     429.995,
+     11.833
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "scale": 0.9794921875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION03\\DOODADS\\ULDUM\\DOORS\\ULDUM_DOOR_01.M2",
+    "unique_id": 1665,
+    "pos": [
+     -10810.802,
+     482.696,
+     23.537
+    ],
+    "rot_deg": [
+     0.0,
+     -180.0,
+     0.0
+    ],
+    "scale": 0.439453125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION03\\DOODADS\\ULDUM\\DOORS\\ULDUM_DOOR_01.M2",
+    "unique_id": 1666,
+    "pos": [
+     -10810.58,
+     380.174,
+     25.968
+    ],
+    "rot_deg": [
+     0.0,
+     -180.0,
+     0.0
+    ],
+    "scale": 0.439453125,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION03\\DOODADS\\ULDUM\\TITAN\\ULDUM_TITAN_DOORWAY01.M2",
+    "unique_id": 1692,
+    "pos": [
+     -10810.251,
+     482.551,
+     24.157
+    ],
+    "rot_deg": [
+     0.0,
+     -180.0,
+     0.0
+    ],
+    "scale": 0.2998046875,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\EXPANSION03\\DOODADS\\ULDUM\\TITAN\\ULDUM_TITAN_DOORWAY01.M2",
+    "unique_id": 1693,
+    "pos": [
+     -10809.775,
+     380.295,
+     27.066
+    ],
+    "rot_deg": [
+     0.0,
+     -180.0,
+     0.0
+    ],
+    "scale": 0.2998046875,
+    "flags": 0
+   }
+  ],
+  "tile_bbox": {
+   "x_min": -11200.0,
+   "x_max": -9066.67,
+   "y_min": -1066.67,
+   "y_max": 1600.0
+  }
+ },
+ "ShadoPanArena": {
+  "map_id": 1134,
+  "arena_wmo": {
+   "name": "WORLD\\WMO\\PANDARIA\\SHADOWPAN\\PA_SHADOWPAN_ARENA.WMO",
+   "unique_id": 8710509,
+   "pos": [
+    566.872,
+    627.43,
+    379.813
+   ],
+   "rot_deg": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bbox_min": [
+    471.27,
+    552.11,
+    365.78
+   ],
+   "bbox_max": [
+    663.82,
+    694.86,
+    416.64
+   ],
+   "doodad_set": 0,
+   "name_set": 0,
+   "flags": 0
+  },
+  "candidates": [
+   {
+    "name": "WORLD\\WMO\\PANDARIA\\SHADOWPAN\\PA_SHADOWPAN_ARENA.WMO",
+    "unique_id": 8710509,
+    "pos": [
+     566.872,
+     627.43,
+     379.813
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "bbox_min": [
+     471.27,
+     552.11,
+     365.78
+    ],
+    "bbox_max": [
+     663.82,
+     694.86,
+     416.64
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\WMO\\DUNGEON\\PVP\\SHADOPANARENA_GROUND.WMO",
+    "unique_id": 8714672,
+    "pos": [
+     566.872,
+     627.43,
+     379.813
+    ],
+    "rot_deg": [
+     0.0,
+     -180.0,
+     0.0
+    ],
+    "bbox_min": [
+     466.67,
+     533.33,
+     377.01
+    ],
+    "bbox_max": [
+     666.67,
+     700.0,
+     397.41
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\WMO\\PANDARIA\\SHADOWPAN\\PA_SHADOWPAN_ARENA_PLATFORM.WMO",
+    "unique_id": 8710301,
+    "pos": [
+     566.876,
+     664.542,
+     341.411
+    ],
+    "rot_deg": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "bbox_min": [
+     555.46,
+     654.41,
+     369.01
+    ],
+    "bbox_max": [
+     577.97,
+     678.83,
+     391.15
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   },
+   {
+    "name": "WORLD\\WMO\\PANDARIA\\SHADOWPAN\\PA_SHADOWPAN_ARENA_PLATFORM.WMO",
+    "unique_id": 8710302,
+    "pos": [
+     566.551,
+     602.329,
+     341.411
+    ],
+    "rot_deg": [
+     0.0,
+     -180.0,
+     0.0
+    ],
+    "bbox_min": [
+     555.45,
+     588.04,
+     369.01
+    ],
+    "bbox_max": [
+     577.96,
+     612.46,
+     391.15
+    ],
+    "doodad_set": 0,
+    "name_set": 0,
+    "flags": 0
+   }
+  ],
+  "collision_panes": [],
+  "doors": [],
+  "tile_bbox": {
+   "x_min": 0.0,
+   "x_max": 1066.67,
+   "y_min": 0.0,
+   "y_max": 1600.0
+  }
+ }
+}
