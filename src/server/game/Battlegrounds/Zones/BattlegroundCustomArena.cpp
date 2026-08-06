@@ -154,8 +154,18 @@ bool BattlegroundCustomArena::SetupBattleground()
 void BattlegroundCustomArena::StartingEventCloseDoors()
 {
     for (uint32 i = 0; i < _doorCount; ++i)
+    {
+        // DoorClose before spawning, the way the Obsidian Colosseum does it.
+        // AddObject leaves a door in GO_STATE_READY, which is closed, so this is
+        // usually redundant -- but a gate re-used from a template that was saved
+        // open would otherwise spawn open and the match would start with no
+        // gates at all. Cheap insurance, and it keeps behaviour identical to the
+        // battleground these gate models came from.
+        DoorClose(i);
         SpawnBGObject(i, RESPAWN_IMMEDIATELY);
+    }
 
+    // Buffs stay hidden until the gates open.
     for (uint32 i = _doorCount; i < _doorCount + _buffCount; ++i)
         SpawnBGObject(i, RESPAWN_ONE_DAY);
 }

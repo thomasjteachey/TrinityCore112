@@ -16,8 +16,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from gen_arena_sql import (ARENAS, PVPDIFF_BASE, SPAWN_OFFSET,  # noqa: E402
-                           SPAWN_Z_LIFT, WSL_BASE, WSUI_BASE)
+from gen_arena_sql import (ARENAS, AREA_IDS, PVPDIFF_BASE,  # noqa: E402
+                           WSL_BASE, WSUI_BASE, measured, start_positions)
 
 
 class Dbc:
@@ -64,9 +64,14 @@ def main():
     pvp = Dbc(os.path.join(d, "PvpDifficulty.dbc"))
     wsl = Dbc(os.path.join(d, "WorldSafeLocs.dbc"))
     wsui = Dbc(os.path.join(d, "WorldStateUI.dbc"))
+    area = None
+    area_path = os.path.join(d, "AreaTable.dbc")
+    if os.path.exists(area_path):
+        area = Dbc(area_path)
 
-    print("%-5s %-5s %-20s %-34s %-9s %s" % ("BG", "MAP", "DIRECTORY", "NAME", "BRACKETS", "STARTS"))
-    print("-" * 104)
+    print("%-5s %-5s %-20s %-34s %-9s %-16s %s"
+          % ("BG", "MAP", "DIRECTORY", "NAME", "BRACKETS", "STARTS", "AREAS"))
+    print("-" * 118)
 
     for i, (bg, mid, directory, name, cx, cy, cz, conf, ev) in enumerate(ARENAS):
         # Map.dbc
@@ -101,9 +106,11 @@ def main():
         if brackets != 16:
             bad.append("PvpDifficulty for map %d has %d brackets, want 16" % (mid, brackets))
 
-        # WorldSafeLocs.dbc
+        # WorldSafeLocs.dbc -- compared against start_positions(), which is the
+        # same function the writers use, so surveyed arenas are checked against
+        # their surveyed values and derived ones against the derived formula.
         starts = []
-        for k, expect_x in ((0, cx + SPAWN_OFFSET), (1, cx - SPAWN_OFFSET)):
+        for k, (ex, ey, ez, _eo) in enumerate(start_positions(bg, cx, cy, cz)):
             rw = wsl.find(WSL_BASE + i * 2 + k)
             if rw is None:
                 bad.append("WorldSafeLocs missing id %d" % (WSL_BASE + i * 2 + k))
@@ -111,9 +118,9 @@ def main():
             if wsl.i(rw, 1) != mid:
                 bad.append("WorldSafeLocs %d Continent %d != %d" % (WSL_BASE + i * 2 + k, wsl.i(rw, 1), mid))
             gx, gy, gz = wsl.f(rw, 2), wsl.f(rw, 3), wsl.f(rw, 4)
-            if abs(gx - expect_x) > 0.05 or abs(gy - cy) > 0.05 or abs(gz - (cz + SPAWN_Z_LIFT)) > 0.05:
+            if abs(gx - ex) > 0.05 or abs(gy - ey) > 0.05 or abs(gz - ez) > 0.05:
                 bad.append("WorldSafeLocs %d pos (%.2f,%.2f,%.2f) != (%.2f,%.2f,%.2f)" % (
-                    WSL_BASE + i * 2 + k, gx, gy, gz, expect_x, cy, cz + SPAWN_Z_LIFT))
+                    WSL_BASE + i * 2 + k, gx, gy, gz, ex, ey, ez))
             starts.append("%.0f" % gx)
 
         # WorldStateUI.dbc -- two rows, both gated on state 3610
@@ -130,8 +137,33 @@ def main():
             if wsui.i(ru, 39) != 3610:
                 bad.append("WorldStateUI %d StateVariable %d != 3610" % (WSUI_BASE + i * 2 + k, wsui.i(ru, 39)))
 
-        print("%-5d %-5d %-20s %-34s %-9d %s" % (
-            bg, mid, got_dir[:20], got_name[:34], brackets, " / ".join(starts)))
+        # AreaTable.dbc -- the rows that make the arena name itself rather than
+        # showing whatever zone the player came from.
+        area_note = "-"
+        if area is not None:
+            want = AREA_IDS.get(bg, [])
+            found = []
+            for aid in want:
+                ra = area.find(aid)
+                if ra is None:
+                    bad.append("AreaTable missing id %d for map %d" % (aid, mid))
+                    continue
+                if area.i(ra, 1) != mid:
+                    bad.append("AreaTable %d ContinentID %d != %d" % (aid, area.i(ra, 1), mid))
+                if area.s(ra, 11) != name:
+                    bad.append("AreaTable %d name %r != %r" % (aid, area.s(ra, 11), name))
+                found.append(aid)
+            area_note = ",".join(str(x) for x in found) if found else ("none" if want else "-")
+
+            # Map.dbc should point at the first of them. AreaTableID is field
+            # 22, not 6: fields 5-20 are the 16 MapName locale slots and 21 is
+            # their mask, so the binary layout is much wider than the SQL
+            # mirror's column list makes it look.
+            if want and m.i(r, 22) != want[0]:
+                bad.append("Map %d AreaTableID %d != %d" % (mid, m.i(r, 22), want[0]))
+
+        print("%-5d %-5d %-20s %-34s %-9d %-16s %s" % (
+            bg, mid, got_dir[:20], got_name[:34], brackets, " / ".join(starts), area_note))
 
     print()
     if bad:
@@ -140,7 +172,7 @@ def main():
             print("   %s" % b)
         sys.exit(1)
     print("OK -- all %d arenas verified in Map, BattlemasterList, PvpDifficulty, "
-          "WorldSafeLocs and WorldStateUI" % len(ARENAS))
+          "WorldSafeLocs, WorldStateUI%s" % (len(ARENAS), " and AreaTable" if area else ""))
 
 
 if __name__ == "__main__":

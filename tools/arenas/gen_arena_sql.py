@@ -39,7 +39,7 @@ WSL_BASE = 52600        # WorldSafeLocs, 2 per arena
 PVPDIFF_BASE = 93000    # PvpDifficulty, 16 per arena
 WSUI_BASE = 90100       # WorldStateUI, 2 per arena
 
-DOOR_GO = 179469        # "Arena Door", the stock arena gate
+DOOR_GO = 185483        # "Gate", the same model the Obsidian Colosseum uses
 DOOR_OFFSET = 45.0      # gates, along X from centre
 SPAWN_OFFSET = 57.0     # players start behind their gate
 SPAWN_Z_LIFT = 2.0      # measured floors are the mesh; stand slightly above it
@@ -64,6 +64,227 @@ ARENAS = [
     (884, 1683, "ulduaroutarena",     "The Inventor's Library",         8859.22,  -904.74,  884.09, "low",    "no arena-named WMO; ULDUAR_EXT03 origin used as a placeholder"),
     (885, 1684, "gundrakarena",       "Amphitheater of Anguish",        5798.49, -3047.38,  307.96, "medium", "ZD_COLISEUM.WMO mesh; the WMO is the whole Gundrak coliseum shell"),
 ]
+
+# ---------------------------------------------------------------- area ids
+#
+# The zone name a player sees does NOT come from Map.dbc. The client reads the
+# `areaid` baked into each MCNK terrain chunk and looks that up in AreaTable.dbc.
+# Ported terrain keeps the ids it was authored with, and none of these existed
+# here -- so map 982 announced itself as whatever zone the player came from.
+#
+# Because the ids are absent rather than taken, rows can simply be added under
+# the same ids and no terrain has to be rewritten. Read out of the ADTs by
+# tools/arenas/area_ids.py; first id listed covers most of the map, the rest are
+# slivers along the edges.
+AREA_IDS = {
+    872:  [10026, 10027],
+    873:  [10028, 10029],
+    874:  [10032, 10033],
+    875:  [10040, 10041],
+    876:  [10038, 10039],
+    877:  [6137],
+    878:  [6138],
+    879:  [10109],
+    880:  [8463],     # the rest of this map is area 0 -- see the caveat below
+    881:  [10051, 10052],
+    882:  [10057, 10058],
+    883:  [10053, 10054],
+    884:  [8443],     # ditto
+    885:  [8442],     # ditto, plus real Zul'Drak ids that already resolve
+}
+
+# Caveat for 880/884/885: most of their chunks carry area id 0, which is "no
+# area" and cannot be given a row. Standing on those the client still shows a
+# stale name. The listed ids cover the built-up part, which is where the arena
+# is, so this is expected to be enough -- if not, the fix is rewriting the MCNK
+# areaid fields, which area_ids.py already knows how to find.
+
+# 3715/3716 are Tol'viron and Tiger's Peak; the highest in use is 3718, taken by
+# the Violet Hold work that is live in this database right now. Starting at 3800
+# leaves that room to grow. The client's explored-zone bitfield is 4096 bits.
+AREABIT_BASE = 3800
+
+# Copied from AreaTable 6296 (Tol'viron) so the arenas sound and light like the
+# arenas already here.
+AREA_FLAGS       = 65664
+AREA_AMBIENCE    = 369
+AREA_ZONEMUSIC   = 243
+AREA_INTROSOUND  = 512
+AREA_AMBIENT_MUL = 0.6
+
+
+# ------------------------------------------------------------ surveyed data
+#
+# Positions measured in-game with .gps, which replace the ones derived from the
+# client terrain. Filled in one arena at a time as each is walked; any arena not
+# listed here still uses the derived fallback (centre +- SPAWN_OFFSET on X).
+#
+#   alliance/horde : (x, y, z, orientation)
+#   gates          : (goEntry, x, y, z, o, rot0, rot1, rot2, rot3)
+#   buffs          : (goEntry, x, y, z, o)   -- rotation derived from o
+#
+# Everything except 872 comes from Ascension's own WorldSafeLocs.dbc, read by
+# tools/arenas/ascension_starts.py -- the exact teleport targets the source
+# server used, so they are on the floor and inside the arena by construction.
+# That beats anything derived from geometry, and it checks out: Ascension's 982
+# starts land 1.1 yards from the values surveyed in-game here, with orientations
+# agreeing to 0.02 rad.
+#
+# 872 keeps the in-game survey because it was measured in this client.
+MEASURED = {
+    874: {  # Maldraxxus Coliseum, map 984  (WSL 6041/6042)
+        "alliance": (2853.540039, 2185.810059, 3259.969971, 1.565400),
+        "horde":    (2854.270020, 2321.080078, 3259.739990, 4.706993),
+    },
+    875: {  # Nagrand Arena (Remastered), map 985  (WSL 6044/6045)
+        "alliance": (-2070.389893, 6704.709961, 12.052200, 5.199065),
+        "horde":    (-2016.709961, 6603.259766, 12.373800, 2.057472),
+    },
+    876: {  # Blade's Edge Arena (Remastered), map 986  (WSL 6047/6048)
+        "alliance": (2772.129883, 6060.359863, -3.068170, 4.973402),
+        "horde":    (2802.149902, 5947.970215, -3.098460, 1.831809),
+    },
+    877: {  # Guardian's Hall, map 1007  (WSL 4852/4853)
+        "alliance": (536.510010, 745.909973, 0.500000, 1.570629),
+        "horde":    (536.530029, 865.880005, 0.500000, 4.712222),
+    },
+    878: {  # Spark of Creator, map 1008  (WSL 4855/4856)
+        "alliance": (497.869995, 853.880005, 0.928000, 4.712774),
+        "horde":    (497.910004, 750.059998, 0.930000, 1.571182),
+    },
+    879: {  # Baradin Hold Arena, map 1401  (WSL 2033/2034)
+        "alliance": (-1176.300049, 1043.319946, 121.000000, 3.948866),
+        "horde":    (-1288.290039, 926.320007, 121.000000, 0.807273),
+    },
+    880: {  # Obelisk of the Stars, map 1402  (WSL 2035/2036)
+        "alliance": (-9254.530273, -1473.119995, 68.000000, 4.650473),
+        "horde":    (-9264.080078, -1627.160034, 68.000000, 1.508880),
+    },
+    881: {  # The Twisting Nether, map 1403  (WSL 2037/2038)
+        "alliance": (4566.959961, -1428.469971, 387.000000, 3.136064),
+        "horde":    (4431.299805, -1427.719971, 387.000000, 6.277657),
+    },
+    882: {  # Black Rook Hold Arena, map 1504  (WSL 5121/5122)
+        "alliance": (1372.130005, 1247.189941, 33.004799, 0.271261),
+        "horde":    (1472.699951, 1275.160034, 32.110401, 3.412853),
+    },
+    883: {  # Ashamane's Fall, map 1552  (WSL 2020/2021)
+        "alliance": (3548.389893, 5601.629883, 327.000000, 4.640550),
+        "horde":    (3539.080078, 5472.259766, 327.000000, 1.498958),
+    },
+    884: {  # The Inventor's Library, map 1683  (WSL 2013/2014)
+        "alliance": (8115.540039, -960.760010, 958.000000, 1.318947),
+        "horde":    (8165.160156, -767.919983, 958.000000, 4.460540),
+    },
+    885: {  # Amphitheater of Anguish, map 1684  (WSL 2010/2011)
+        "alliance": (5812.209961, -2977.669922, 274.000000, 3.576462),
+        "horde":    (5748.359863, -3007.330078, 274.000000, 0.434869),
+    },
+    873: {  # Imperial Arena of Thakraj, map 983
+        # starts from Ascension's WorldSafeLocs 6066/6067; gates and buffs
+        # surveyed in-game. The gates sit just inside the starts, which is the
+        # arrangement every arena here uses.
+        "alliance": (483.440002, -878.169983, 27.520000, 5.810376),
+        "horde":    (604.260010, -939.969971, 27.520000, 2.668784),
+        "gates": [
+            (185483, 488.070007, -878.305847, 27.709145, 4.750093, 0.0, 0.0, -0.693652, 0.720311),
+            (185483, 599.510742, -941.209656, 27.702806, 4.714780, 0.0, 0.0, -0.706261, 0.707952),
+        ],
+        "buffs": [
+            (184663, 544.370667, -884.355469, 26.796488, 4.675490),
+            (184664, 544.132263, -931.261658, 26.033279, 4.710832),
+        ],
+        "drop_gameobject_guids": [2136044, 2136045],
+    },
+    872: {  # Coliseum of Past Echoes, map 982
+        "alliance": (8017.729004, -2750.085205, 1134.563477, 6.263565),
+        "horde":    (8138.802246, -2750.745605, 1134.562378, 3.114111),
+        # Entry 185483 is the same gate the Obsidian Colosseum uses, so it
+        # behaves the same: closed on spawn, opened on the start countdown.
+        # Rotations are the ones the placed spawns carried, not recomputed.
+        "gates": [
+            (185483, 8026.25, -2749.97, 1133.77, 4.63387, 0.0, 0.0, -0.734317, 0.678807),
+            (185483, 8128.83, -2748.27, 1133.85, 4.68099, 0.0, 0.0, -0.71812,  0.695919),
+        ],
+        "buffs": [
+            (184663, 8074.241699, -2712.755615, 1134.076294, 4.708468),
+            (184664, 8076.928223, -2788.572266, 1134.222046, 1.610051),
+        ],
+        # Placed as static gameobject rows to survey them; the battleground
+        # spawns its own, so these have to go or every match starts with a
+        # second, permanently shut gate in the same doorway.
+        "drop_gameobject_guids": [2136044, 2136045],
+    },
+}
+
+
+# ------------------------------------------------------------------ disabled
+#
+# Held back for now. Disabling is done through `disables` rather than by
+# deleting anything: it is the mechanism the server already has, every guard
+# added for Dalaran Sewers and the Ring of Valor already honours it, and
+# re-enabling one is a single DELETE. All their data -- DBC rows, terrain,
+# gates, minimaps -- stays in place.
+#
+# 880/884/885 are also the three whose terrain is mostly area id 0, so they show
+# a stale zone name in the open; 881 is a pure-WMO map with no terrain textures
+# at all. Worth knowing if the question of why comes up later.
+DISABLED = {
+    880: "Obelisk of the Stars",
+    881: "The Twisting Nether",
+    884: "The Inventor's Library",
+    885: "Amphitheater of Anguish",
+}
+
+
+def measured(bg):
+    return MEASURED.get(bg)
+
+
+def quat_from_o(o):
+    """GO rotation for a yaw-only orientation."""
+    import math
+    return (0.0, 0.0, math.sin(o / 2.0), math.cos(o / 2.0))
+
+
+def start_positions(bg, cx, cy, cz):
+    """(alliance xyzo, horde xyzo) -- surveyed if we have it, derived if not."""
+    m = measured(bg)
+    if m:
+        return m["alliance"], m["horde"]
+    z = cz + SPAWN_Z_LIFT
+    return ((cx + SPAWN_OFFSET, cy, z, 3.14159),
+            (cx - SPAWN_OFFSET, cy, z, 0.0))
+
+
+# Where a gate sits between the arena centre and a team's start, as a fraction
+# of that distance. 0.85 and 0.8 yards below the start are what the surveyed
+# gates on map 982 actually measure, so the same shape is assumed for arenas
+# whose gates have not been walked yet.
+GATE_FRACTION = 0.85
+GATE_Z_DROP = 0.8
+
+
+def gates_for(bg, cx, cy, cz):
+    """[(entry, x, y, z, o, r0, r1, r2, r3)] -- surveyed if known, else derived
+    from the team starts, which is far better than guessing from the terrain."""
+    import math
+    m = measured(bg)
+    if m and m.get("gates"):
+        return m["gates"]
+
+    (ax, ay, az, _ao), (hx, hy, hz, _ho) = start_positions(bg, cx, cy, cz)
+    mx, my = (ax + hx) / 2.0, (ay + hy) / 2.0
+    out = []
+    for (sx, sy, sz) in ((ax, ay, az), (hx, hy, hz)):
+        gx = mx + GATE_FRACTION * (sx - mx)
+        gy = my + GATE_FRACTION * (sy - my)
+        gz = sz - GATE_Z_DROP
+        # face the arena centre
+        o = math.atan2(my - gy, mx - gx) % (2 * math.pi)
+        r0, r1, r2, r3 = quat_from_o(o)
+        out.append((DOOR_GO, gx, gy, gz, o, r0, r1, r2, r3))
+    return out
 
 
 def esc(s):
@@ -194,12 +415,55 @@ def gen_dbc():
     L.append("VALUES")
     rows = []
     for i, (bg, mid, d, name, cx, cy, cz, conf, ev) in enumerate(ARENAS):
-        z = cz + SPAWN_Z_LIFT
-        rows.append("  (%d, %d, %.2f, %.2f, %.2f, '%s - Alliance Start', %d),   -- confidence: %s"
-                    % (WSL_BASE + i * 2, mid, cx + SPAWN_OFFSET, cy, z, esc(name), LANG_MASK, conf))
-        rows.append("  (%d, %d, %.2f, %.2f, %.2f, '%s - Horde Start',    %d)"
-                    % (WSL_BASE + i * 2 + 1, mid, cx - SPAWN_OFFSET, cy, z, esc(name), LANG_MASK))
+        (ax, ay, az, _ao), (hx, hy, hz, _ho) = start_positions(bg, cx, cy, cz)
+        tag = "SURVEYED in-game" if measured(bg) else ("derived, confidence: %s" % conf)
+        rows.append("  (%d, %d, %.6f, %.6f, %.6f, '%s - Alliance Start', %d),   -- %s"
+                    % (WSL_BASE + i * 2, mid, ax, ay, az, esc(name), LANG_MASK, tag))
+        rows.append("  (%d, %d, %.6f, %.6f, %.6f, '%s - Horde Start',    %d)"
+                    % (WSL_BASE + i * 2 + 1, mid, hx, hy, hz, esc(name), LANG_MASK))
     L.append(",\n".join(rows) + ";")
+    L.append("")
+
+    # ---------------- AreaTable.dbc
+    L.append("-- ----------------------------------------------------------- AreaTable.dbc")
+    L.append("-- Without these an arena shows the zone name of wherever the player last")
+    L.append("-- was, because the client resolves the zone from the area id baked into the")
+    L.append("-- terrain and these arenas' ids had no rows at all.")
+    L.append("--")
+    L.append("-- The ids are NOT chosen here -- they are read out of the ADTs. Adding rows")
+    L.append("-- under the same ids is what makes the arenas name themselves without")
+    L.append("-- touching a single terrain file.")
+    L.append("--")
+    L.append("-- Sound, light and flag values are copied from AreaTable 6296 (Tol'viron).")
+    L.append("-- AreaBits start at %d: the highest in use is 3718 and other work is live" % AREABIT_BASE)
+    L.append("-- in this table, so this leaves that room rather than crowding it.")
+    all_area_ids = sorted(i for ids in AREA_IDS.values() for i in ids)
+    L.append("DELETE FROM dbc.areatable_lplus WHERE ID IN (%s);"
+             % ",".join(str(i) for i in all_area_ids))
+    L.append("INSERT INTO dbc.areatable_lplus")
+    L.append("  (ID, ContinentID, ParentAreaID, AreaBit, Flags,")
+    L.append("   SoundProviderPref, SoundProviderPrefUnderwater, AmbienceID, ZoneMusic, IntroSound,")
+    L.append("   ExplorationLevel, AreaName_Lang_enUS, AreaName_Lang_Mask, FactionGroupMask,")
+    L.append("   LiquidTypeID_1, LiquidTypeID_2, LiquidTypeID_3, LiquidTypeID_4,")
+    L.append("   MinElevation, Ambient_Multiplier, Lightid)")
+    L.append("VALUES")
+    rows = []
+    bit = AREABIT_BASE
+    for bg, mid, d, name, cx, cy, cz, conf, ev in ARENAS:
+        for area_id in AREA_IDS.get(bg, []):
+            rows.append("  (%d, %d, 0, %d, %d, 0, 0, %d, %d, %d, 0, '%s', %d, 0, 0, 0, 0, 0, -500, %s, 0)"
+                        % (area_id, mid, bit, AREA_FLAGS, AREA_AMBIENCE, AREA_ZONEMUSIC,
+                           AREA_INTROSOUND, esc(name), LANG_MASK, AREA_AMBIENT_MUL))
+            bit += 1
+    L.append(",\n".join(rows) + ";")
+    L.append("")
+    L.append("-- Point each map at its own area, replacing the 0 the arenas were created")
+    L.append("-- with. The client still decides the zone from the terrain; this is the")
+    L.append("-- server-side fallback for anything that asks the map what area it is.")
+    for bg, mid, d, name, cx, cy, cz, conf, ev in ARENAS:
+        ids = AREA_IDS.get(bg)
+        if ids:
+            L.append("UPDATE dbc.map_lplus SET AreaTableID = %d WHERE ID = %d;" % (ids[0], mid))
     L.append("")
 
     # ---------------- WorldStateUI.dbc
@@ -270,8 +534,9 @@ def gen_world():
     L.append("VALUES")
     rows = []
     for i, (bg, mid, d, name, cx, cy, cz, conf, ev) in enumerate(ARENAS):
-        rows.append("  (%d, 0, 5, 10, 80, %d, 3.14159, %d, 0, 0, 1, '', '%s')"
-                    % (bg, WSL_BASE + i * 2, WSL_BASE + i * 2 + 1, esc(name)))
+        (_ax, _ay, _az, ao), (_hx, _hy, _hz, ho) = start_positions(bg, cx, cy, cz)
+        rows.append("  (%d, 0, 5, 10, 80, %d, %.6f, %d, %.6f, 0, 1, '', '%s')"
+                    % (bg, WSL_BASE + i * 2, ao, WSL_BASE + i * 2 + 1, ho, esc(name)))
     L.append(",\n".join(rows) + ";")
     L.append("")
 
@@ -303,17 +568,62 @@ def gen_world():
     L.append("  PRIMARY KEY (`PoolBgTypeId`,`MemberBgTypeId`)")
     L.append(") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Random battleground/arena selection pools';")
     L.append("")
-    L.append("-- All Arenas (6): the five stock arenas plus every ported one. Sixteen")
-    L.append("-- entries -- twice what the DBC route could ever have expressed.")
+    L.append("-- All Arenas (6): the runnable stock arenas plus every ported one --")
+    L.append("-- twenty entries, well past the eight the DBC route could express.")
+    L.append("--")
+    L.append("-- Dalaran Sewers (10) and the Ring of Valor (11) are seeded DISABLED. Both")
+    L.append("-- are turned off in `disables` (sourceType 3), so neither has a")
+    L.append("-- battleground template and neither can be created. They are kept as rows")
+    L.append("-- rather than omitted so the reason is recorded here rather than being an")
+    L.append("-- unexplained absence -- flip Enabled to 1 if they are ever re-enabled.")
+    L.append("--")
+    L.append("-- Enabled is not the only guard: BattlegroundMgr::IsPoolMemberSelectable")
+    L.append("-- re-checks `disables` and the template at selection time, so a row turned")
+    L.append("-- on by hand still cannot roll a battleground the server cannot build.")
     L.append("INSERT INTO `battleground_random_pool` (PoolBgTypeId, MemberBgTypeId, Weight, Enabled, Comment) VALUES")
     pool = [
-        (4,  "Nagrand Arena"), (5, "Blade's Edge Arena"), (8, "Ruins of Lordaeron"),
-        (10, "Dalaran Sewers"), (11, "The Ring of Valor"),
-        (103, "Nefarian's Arena"), (870, "Tol'Viron Arena"), (871, "The Tiger's Peak"),
+        (4,  1, "Nagrand Arena"),
+        (5,  1, "Blade's Edge Arena"),
+        (8,  1, "Ruins of Lordaeron"),
+        (10, 0, "Dalaran Sewers - DISABLED in `disables`"),
+        (11, 0, "The Ring of Valor - DISABLED in `disables`"),
+        (103, 1, "Nefarian's Arena"),
+        (870, 1, "Tol'Viron Arena"),
+        (871, 1, "The Tiger's Peak"),
     ]
-    rows = ["  (6, %d, 1, 1, '%s')" % (m, esc(c)) for m, c in pool]
+    rows = ["  (6, %d, 1, %d, '%s')" % (m, en, esc(c)) for m, en, c in pool]
     for bg, mid, d, name, cx, cy, cz, conf, ev in ARENAS:
-        rows.append("  (6, %d, 1, 1, '%s')" % (bg, esc(name[:60])))
+        if bg in DISABLED:
+            rows.append("  (6, %d, 1, 0, '%s')" % (bg, esc(("%s - held back" % name)[:60])))
+        else:
+            rows.append("  (6, %d, 1, 1, '%s')" % (bg, esc(name[:60])))
+    L.append(",\n".join(rows) + ";")
+    L.append("")
+
+    # ---------------- disables
+    L.append("-- ------------------------------------------------------------------ disables")
+    L.append("-- Arenas held back for now. sourceType 3 is DISABLE_TYPE_BATTLEGROUND, the")
+    L.append("-- same switch Dalaran Sewers (10) and the Ring of Valor (11) already use.")
+    L.append("--")
+    L.append("-- Nothing is deleted: DBC rows, terrain, gates and minimaps all stay in")
+    L.append("-- place. A disabled battleground gets no template, and every path that")
+    L.append("-- could offer one -- the Chromie arena menu, SelectBattleground, the random")
+    L.append("-- pool, the queue -- checks for a template or asks DisableMgr directly.")
+    L.append("--")
+    L.append("-- To bring one back:")
+    L.append("--   DELETE FROM disables WHERE sourceType = 3 AND entry = <bgTypeId>;")
+    L.append("--   UPDATE battleground_random_pool SET Enabled = 1")
+    L.append("--     WHERE PoolBgTypeId = 6 AND MemberBgTypeId = <bgTypeId>;")
+    L.append("--   then `.reload battleground_template` and restart, since templates are")
+    L.append("--   built at startup.")
+    ids = ",".join(str(b) for b in sorted(DISABLED))
+    L.append("DELETE FROM disables WHERE sourceType = 3 AND entry IN (%s);" % ids)
+    L.append("INSERT INTO disables (sourceType, entry, flags, params_0, params_1, comment) VALUES")
+    rows = []
+    by_bg = {a[0]: a[1] for a in ARENAS}
+    for bg in sorted(DISABLED):
+        rows.append("  (3, %d, 0, '', '', '%s (map %d) - held back')"
+                    % (bg, esc(DISABLED[bg]), by_bg.get(bg, 0)))
     L.append(",\n".join(rows) + ";")
     L.append("")
 
@@ -325,9 +635,10 @@ def gen_world():
     L.append("--   ObjectType 0 = door   spawned closed, opened on the start countdown")
     L.append("--   ObjectType 1 = buff   shadowsight nodes, spawned 60s after the gates open")
     L.append("--")
-    L.append("-- NO BUFF ROWS ARE SEEDED. Shadowsight positions have to be eyeballed in-game")
-    L.append("-- and are being left for later; an arena with no buff rows simply has no")
-    L.append("-- buffs and is otherwise fully playable. Add them with:")
+    L.append("-- Buff rows exist only for arenas that have been surveyed in-game;")
+    L.append("-- shadowsight positions cannot be derived from the terrain. An arena with")
+    L.append("-- no buff rows simply has no buffs and is otherwise fully playable. Add")
+    L.append("-- them as each arena is walked, with:")
     L.append("--")
     L.append("--   INSERT INTO battleground_custom_arena_object")
     L.append("--     (BgTypeId, GoEntry, X, Y, Z, Orientation, Rotation0, Rotation1, Rotation2, Rotation3, ObjectType, Comment)")
@@ -336,9 +647,11 @@ def gen_world():
     L.append("-- then `.reload battleground_template`. GameObject 184663/184664 are the two")
     L.append("-- Shadow Sight nodes; 179469 below is the stock 'Arena Door'.")
     L.append("--")
-    L.append("-- The gate positions are derived, not surveyed: %.0f yards either side of the" % DOOR_OFFSET)
-    L.append("-- measured centre on the X axis, with the team spawns %.0f yards out so players" % SPAWN_OFFSET)
-    L.append("-- start behind their own gate. Expect to adjust these.")
+    L.append("-- Rows marked (surveyed) were measured in-game and are correct. Rows marked")
+    L.append("-- (derived) are placeholders: %.0f yards either side of the centre read off" % DOOR_OFFSET)
+    L.append("-- the terrain, on the X axis, with the team spawns %.0f yards out so players" % SPAWN_OFFSET)
+    L.append("-- start behind their own gate. Expect to replace every derived row as each")
+    L.append("-- arena is walked -- add it to MEASURED in tools/arenas/gen_arena_sql.py.")
     L.append("DROP TABLE IF EXISTS `battleground_custom_arena_object`;")
     L.append("CREATE TABLE `battleground_custom_arena_object` (")
     L.append("  `Id`          int unsigned NOT NULL AUTO_INCREMENT,")
@@ -363,12 +676,45 @@ def gen_world():
     L.append("VALUES")
     rows = []
     for bg, mid, d, name, cx, cy, cz, conf, ev in ARENAS:
-        rows.append("  (%d, %d, %.2f, %.2f, %.2f, 3.14159, 0, 0, 1, 0, 0, '%s gate A')"
-                    % (bg, DOOR_GO, cx + DOOR_OFFSET, cy, cz, esc(d[:40])))
-        rows.append("  (%d, %d, %.2f, %.2f, %.2f, 0, 0, 0, 0, 1, 0, '%s gate H')"
-                    % (bg, DOOR_GO, cx - DOOR_OFFSET, cy, cz, esc(d[:40])))
+        m = measured(bg) or {}
+        surveyed_gates = bool(m.get("gates"))
+        tag = "surveyed" if surveyed_gates else "derived from the team starts"
+        for j, (entry, x, y, z, o, r0, r1, r2, r3) in enumerate(gates_for(bg, cx, cy, cz), 1):
+            rows.append("  (%d, %d, %.6f, %.6f, %.6f, %.6f, %g, %g, %.6f, %.6f, 0, '%s gate %d (%s)')"
+                        % (bg, entry, x, y, z, o, r0, r1, r2, r3, esc(d[:24]), j, tag))
+        for j, (entry, x, y, z, o) in enumerate(m.get("buffs", []), 1):
+            r0, r1, r2, r3 = quat_from_o(o)
+            rows.append("  (%d, %d, %.6f, %.6f, %.6f, %.6f, %g, %g, %.6f, %.6f, 1, '%s shadowsight %d')"
+                        % (bg, entry, x, y, z, o, r0, r1, r2, r3, esc(d[:30]), j))
     L.append(",\n".join(rows) + ";")
     L.append("")
+
+    # ---------------- static spawns that the battleground now owns
+    drops = [(bg, sorted(set(m.get("drop_gameobject_guids", []))))
+             for bg, m in sorted(MEASURED.items())]
+    drops = [(bg, gs) for bg, gs in drops if gs]
+    if drops:
+        L.append("-- Gates surveyed by placing them as static gameobject rows. The")
+        L.append("-- battleground spawns its own copies from the table above, so the static")
+        L.append("-- ones have to go -- otherwise every match starts with a second gate in")
+        L.append("-- the same doorway that nothing ever opens.")
+        L.append("--")
+        L.append("-- Scoped by map, not by guid alone. Spawn guids are RECYCLED: deleting")
+        L.append("-- 982's gates freed 2136044/2136045, and the next pair placed -- on 983 --")
+        L.append("-- came back with the same two numbers. A bare `WHERE guid IN (...)` would")
+        L.append("-- delete whatever holds that number today, on any map, which after a")
+        L.append("-- second survey is somebody else's gate. The map id confines each")
+        L.append("-- statement to its own arena and makes an already-applied one a no-op.")
+        by_map = {a[0]: a[1] for a in ARENAS}
+        by_name = {a[0]: a[3] for a in ARENAS}
+        for bg, gs in drops:
+            L.append("--   %-28s map %-5d guid%s %s"
+                     % (by_name.get(bg, "?"), by_map.get(bg, 0),
+                        "s" if len(gs) > 1 else " ", ", ".join(str(g) for g in gs)))
+        for bg, gs in drops:
+            L.append("DELETE FROM gameobject WHERE map = %d AND guid IN (%s);"
+                     % (by_map.get(bg, 0), ",".join(str(g) for g in gs)))
+        L.append("")
 
     # ---------------- provenance
     L.append("-- ------------------------------------------------------------- provenance")

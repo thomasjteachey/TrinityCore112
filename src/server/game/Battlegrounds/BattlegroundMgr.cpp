@@ -1175,6 +1175,23 @@ void BattlegroundMgr::LoadRandomBattlegroundPools()
         count, uint32(_randomPools.size()), GetMSTimeDiffToNow(oldMSTime));
 }
 
+bool BattlegroundMgr::IsPoolMemberSelectable(BattlegroundTypeId bgTypeId)
+{
+    // A row in `battleground_random_pool` says an administrator *wants* this
+    // battleground in the rotation. Whether it can actually be run is a separate
+    // question, and both answers have to be yes.
+    //
+    // Dalaran Sewers and the Ring of Valor are the live example: both are listed
+    // as arenas, both are disabled in `disables`, and neither therefore has a
+    // template. Rolling one would hand back a type id CreateNewBattleground
+    // cannot instantiate, and the queue pop would break instead of the arena
+    // simply not being offered.
+    if (DisableMgr::IsDisabledFor(DISABLE_TYPE_BATTLEGROUND, bgTypeId, nullptr))
+        return false;
+
+    return GetBattlegroundTemplateByTypeId(bgTypeId) != nullptr;
+}
+
 std::vector<BattlegroundTypeId> BattlegroundMgr::GetRandomPoolMembers(BattlegroundTypeId poolBgTypeId)
 {
     std::vector<BattlegroundTypeId> members;
@@ -1187,7 +1204,7 @@ std::vector<BattlegroundTypeId> BattlegroundMgr::GetRandomPoolMembers(Battlegrou
     for (auto const& [memberId, weight] : itr->second)
     {
         (void)weight;
-        if (GetBattlegroundTemplateByTypeId(memberId))
+        if (IsPoolMemberSelectable(memberId))
             members.push_back(memberId);
     }
 
@@ -1214,12 +1231,12 @@ BattlegroundTypeId BattlegroundMgr::GetRandomBG(BattlegroundTypeId bgTypeId)
     {
         for (auto const& [memberId, weight] : poolItr->second)
         {
-            // Skip members with no template: the arena is configured in the pool
-            // but not (yet) loadable, and rolling it would hand back a type id
-            // that CreateNewBattleground cannot instantiate.
-            if (!GetBattlegroundTemplateByTypeId(memberId))
+            // Disabled, or no template: configured in the pool but not runnable.
+            // Rolling it would hand back a type id CreateNewBattleground cannot
+            // instantiate.
+            if (!IsPoolMemberSelectable(memberId))
             {
-                TC_LOG_DEBUG("bg.battleground", "GetRandomBG: pool {} lists {} which has no battleground template; skipping it.", uint32(bgTypeId), uint32(memberId));
+                TC_LOG_DEBUG("bg.battleground", "GetRandomBG: pool {} lists {}, which is disabled or has no battleground template; skipping it.", uint32(bgTypeId), uint32(memberId));
                 continue;
             }
 

@@ -9,6 +9,7 @@
 #include "Chat.h"
 #include "Creature.h"
 #include "DBCStores.h"
+#include "DisableMgr.h"
 #include "Group.h"
 #include "GameTime.h"
 #include "GameObject.h"
@@ -813,6 +814,18 @@ public:
         CustomGameLobby* lobby = GetLobby(player);
         if (!IsOwner(player, lobby) || lobby->ActiveBattlegroundId)
             return;
+
+        // The menu already filters these out, but the menu is not the only way
+        // an action id can arrive -- a stale gossip page or a hand-built packet
+        // reaches here too. Accepting a disabled or template-less battleground
+        // would leave the lobby pointing at something StartGame cannot create,
+        // which fails later and less clearly than refusing it now.
+        if (DisableMgr::IsDisabledFor(DISABLE_TYPE_BATTLEGROUND, type, nullptr) ||
+            !sBattlegroundMgr->GetBattlegroundTemplate(type))
+        {
+            Notify(player, "That battleground is not available on this realm.");
+            return;
+        }
 
         if (lobby->RandomArena || lobby->SelectedType != type)
             lobby->Rules = BattlegroundCustomRules();
@@ -1996,26 +2009,37 @@ public:
                 return;
 
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Random Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_RANDOM_ARENA);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Nagrand Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_NA);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Blade's Edge Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_BE);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Ruins of Lordaeron", GOSSIP_SENDER_MAIN, ACTION_SELECT_RL);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Nefarian's Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_NL);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Tol'Viron Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_TV);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Tiger's Peak", GOSSIP_SENDER_MAIN, ACTION_SELECT_TTP);
 
-            // Listed by walking the id range, so an arena appears here as soon
-            // as it has a battleground_template row. Arenas whose terrain is not
-            // on this realm yet have no template and are skipped, which keeps a
-            // half-deployed install from offering a match it cannot start.
-            for (uint32 type = BATTLEGROUND_CUSTOM_ARENA_FIRST; type <= BATTLEGROUND_CUSTOM_ARENA_LAST; ++type)
+            // Every arena goes through one guard rather than being listed
+            // unconditionally, because "which arenas exist" and "which arenas
+            // are playable" are not the same question. Dalaran Sewers and the
+            // Ring of Valor are disabled in `disables`, so they have no template
+            // and must never be offered -- picking one would start a match the
+            // server cannot create. Same guard covers an arena whose terrain is
+            // not on this realm yet.
+            auto offerArena = [&](BattlegroundTypeId bgTypeId, uint32 action)
             {
-                BattlegroundTypeId const bgTypeId = BattlegroundTypeId(type);
+                if (DisableMgr::IsDisabledFor(DISABLE_TYPE_BATTLEGROUND, bgTypeId, nullptr))
+                    return;
                 if (!sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId))
-                    continue;
+                    return;
 
-                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, BattlegroundNameByType(bgTypeId), GOSSIP_SENDER_MAIN,
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, BattlegroundNameByType(bgTypeId),
+                    GOSSIP_SENDER_MAIN, action);
+            };
+
+            offerArena(BATTLEGROUND_NA,  ACTION_SELECT_NA);
+            offerArena(BATTLEGROUND_BE,  ACTION_SELECT_BE);
+            offerArena(BATTLEGROUND_RL,  ACTION_SELECT_RL);
+            offerArena(BATTLEGROUND_NL,  ACTION_SELECT_NL);
+            offerArena(BATTLEGROUND_TV,  ACTION_SELECT_TV);
+            offerArena(BATTLEGROUND_TTP, ACTION_SELECT_TTP);
+
+            // The ported arenas are a contiguous id range, so they are walked
+            // rather than listed: adding one needs no edit here.
+            for (uint32 type = BATTLEGROUND_CUSTOM_ARENA_FIRST; type <= BATTLEGROUND_CUSTOM_ARENA_LAST; ++type)
+                offerArena(BattlegroundTypeId(type),
                     ACTION_SELECT_CUSTOM_ARENA_BASE + (type - BATTLEGROUND_CUSTOM_ARENA_FIRST));
-            }
 
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Back", GOSSIP_SENDER_MAIN, ACTION_SELECT_LIST_BACK);
             SendGossipMenuFor(player, 1, me->GetGUID());
