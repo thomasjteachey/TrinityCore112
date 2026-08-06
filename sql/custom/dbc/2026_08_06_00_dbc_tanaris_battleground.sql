@@ -1,9 +1,16 @@
 -- Tanaris deathmatch battleground - DBC mirror rows.
 --
 -- Map 1620 is a clone of Kalimdor (map 1) reused as an instanced battleground.
--- Directory stays "Kalimdor" on purpose: the client picks terrain by Directory,
--- not by map id, so the cloned continent needs no new client terrain files.
--- Map 1615 (Obsidian Colosseum) does the same thing with 615.
+--
+-- Directory is "TanarisBG", a private copy of the Tanaris tiles shipped in the
+-- client patch, NOT "Kalimdor". Pointing it at Kalimdor works and is how this
+-- started - the client picks terrain by Directory, not by map id, the same way
+-- map 1615 borrows 615's - but it means any terrain edit made for the
+-- battleground would also change the live Tanaris zone. The private copy is
+-- built by tools/tanaris/build_tanaris_terrain.py.
+--
+-- Server-side maps/vmaps/mmaps are keyed by map id, not by Directory, so they
+-- are unaffected by this and still come from the Kalimdor byte-copies.
 --
 -- The dbc.*_lplus mirrors are SHARED between the dev and prod realms - there is
 -- no *_lplusdev flavour - so these rows become visible to prod as soon as prod
@@ -35,7 +42,7 @@ INSERT INTO dbc.map_lplus
    CorpseMapID, CorpseX, CorpseY,
    TimeOfDayOverride, ExpansionID, RaidOffset, MaxPlayers)
 VALUES
-  (1620, 'Kalimdor', 3, 1, 1,
+  (1620, 'TanarisBG', 3, 1, 1,
    'Tanaris Deathmatch', 16712190, 30234,
    'A deathmatch in the deep desert of Tanaris. First team to the kill limit wins.', 16712188,
    'A deathmatch in the deep desert of Tanaris. First team to the kill limit wins.', 16712188,

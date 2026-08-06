@@ -43,6 +43,43 @@ never reads it for battleground logic, so the player arrow stays missing from
 the world map until that row reaches a packed client patch, however correct the
 database looks.
 
+## `tanaris_tiles.py` and `build_tanaris_terrain.py`
+
+Together these build the private terrain copy the battleground renders, so that
+editing it cannot change the live Tanaris zone.
+
+`tanaris_tiles.py` runs on the game server and works out which tiles Tanaris
+actually occupies by reading the area map inside each `001*.map` — much tighter
+than a bounding box, which would sweep in ocean and neighbouring zones. It grows
+that set by a ring of tiles for the horizon and writes `tiles.txt`. Note the
+axis swap it handles: a server tile is `%03u<gx><gy>.map` but the client's ADT
+for it is `<Map>_<gy>_<gx>.adt`.
+
+`build_tanaris_terrain.py` runs on Windows against the client MPQs and produces
+`wow/data/patch-staging/TanarisBG/`, ready to pack:
+
+```bash
+python build_tanaris_terrain.py
+```
+
+It resolves every tile through the whole MPQ chain and takes the copy from the
+**highest-priority** archive that holds it — some Tanaris tiles and the WDT are
+already overridden in patch-Y, so reading from `common.MPQ` would ship older
+terrain than the client actually uses. It also rewrites the WDT's MAIN grid so
+only the shipped tiles are flagged, and appends a section to the minimap's
+`md5translate.trs` pointing at the same artwork Kalimdor already uses.
+
+ADTs reference textures and models by absolute path and never name their own map
+directory, so renaming the file is a complete rename.
+
+## `set_map_directory.py`
+
+Repoints an existing `Map.dbc` row's `Directory` at a different terrain folder —
+how map 1620 was moved from `Kalimdor` onto `TanarisBG`. Separate from
+`tanaris_dbc.py` because that tool only appends rows, and because its
+`--restore` would undo unrelated repairs made to those files since their backups
+were taken.
+
 ## `verify_dbc.py`
 
 Decodes the appended rows back out and prints them field by field, using an

@@ -104,10 +104,12 @@ WSL_A_START, WSL_H_START, WSL_A_GRAVE, WSL_H_GRAVE = 52500, 52501, 52502, 52503
 ROWS = {
     "Map.dbc": [
         [MAP_ID,
-         # Same terrain directory as Kalimdor: the client resolves ADTs by
-         # Directory, not by map id, so a cloned continent needs no new client
-         # terrain at all. This is what map 1615 does with 615.
-         "Kalimdor",
+         # A private copy of the Tanaris tiles rather than "Kalimdor" itself.
+         # Borrowing the real continent works - the client resolves ADTs by
+         # Directory, not by map id, which is how 1615 borrows 615's terrain -
+         # but then any terrain edit for the battleground would also change the
+         # live Tanaris zone. Built by build_tanaris_terrain.py.
+         "TanarisBG",
          3,             # InstanceType 3 = battleground
          1,             # Flags: matches the other custom BG maps (1189/1230)
          1,             # PVP
