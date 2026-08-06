@@ -35,6 +35,7 @@
 
 #include "Battleground.h"
 #include "BattlegroundScore.h"
+#include "Common.h"
 #include "Position.h"
 
 #include <vector>
