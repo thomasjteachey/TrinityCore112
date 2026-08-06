@@ -85,6 +85,11 @@ class TC_GAME_API BattlegroundMgr
         Battleground* GetBattlegroundThroughClientInstance(uint32 instanceId, BattlegroundTypeId bgTypeId);
         Battleground* GetBattleground(uint32 InstanceID, BattlegroundTypeId bgTypeId);
         Battleground* GetBattlegroundTemplate(BattlegroundTypeId bgTypeId);
+        // Every battleground of one type, keyed by instance id. Entry 0 is the
+        // template and is not a live match. Added for the Violet Hold clone
+        // driver, which lives in the scripts library and has to find instances
+        // waiting on a wave without holding a guid to any of them.
+        BattlegroundContainer const* GetBattlegroundsByType(BattlegroundTypeId bgTypeId) const;
         Battleground* CreateNewBattleground(BattlegroundTypeId bgTypeId, PvPDifficultyEntry const* bracketEntry, uint8 arenaType, bool isRated, bool isPrivate = false);
 
         void AddBattleground(Battleground* bg);

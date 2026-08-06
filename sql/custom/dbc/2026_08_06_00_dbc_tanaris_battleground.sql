@@ -91,7 +91,9 @@ DELETE FROM dbc.pvpdifficulty_lplus WHERE MapID = 1620;
 INSERT INTO dbc.pvpdifficulty_lplus
   (ID, MapID, RangeIndex, MinLevel, MaxLevel, Difficulty)
 VALUES
-  (91620, 1620, 0, 60, 69, 0);
+  -- 1-80: 60 is this server's level cap, so the original 60-69 bracket
+  -- locked out every leveling character (widened 2026-08-06).
+  (91620, 1620, 0, 1, 80, 0);
 
 -- ------------------------------------------------------- WorldSafeLocs.dbc
 -- 52500-52503: next free block after Nefarian's Arena (52410/52411).

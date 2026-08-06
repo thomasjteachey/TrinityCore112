@@ -28,6 +28,9 @@ constexpr uint32 ACTION_QUEUE_OBSIDIAN_HORDE = GOSSIP_ACTION_INFO_DEF + 10;
 constexpr uint32 ACTION_QUEUE_TANARIS_REGULAR = GOSSIP_ACTION_INFO_DEF + 11;
 constexpr uint32 ACTION_QUEUE_TANARIS_ALLIANCE = GOSSIP_ACTION_INFO_DEF + 12;
 constexpr uint32 ACTION_QUEUE_TANARIS_HORDE = GOSSIP_ACTION_INFO_DEF + 13;
+// No force-side variants: the party always holds one side of the Violet Hold
+// and the clone waves always hold the other.
+constexpr uint32 ACTION_QUEUE_VIOLET_HOLD = GOSSIP_ACTION_INFO_DEF + 14;
 
 void SendQueueError(Player* player, char const* text)
 {
@@ -170,6 +173,7 @@ public:
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Tanaris Deathmatch", GOSSIP_SENDER_MAIN, ACTION_QUEUE_TANARIS_REGULAR);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Tanaris Deathmatch (Force Alliance side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_TANARIS_ALLIANCE);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Tanaris Deathmatch (Force Horde side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_TANARIS_HORDE);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for the Violet Hold (survival)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_VIOLET_HOLD);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Maybe later", GOSSIP_SENDER_MAIN, ACTION_CLOSE);
             SendGossipMenuFor(player, player->GetGossipTextId(me), me);
             return true;
@@ -192,6 +196,7 @@ public:
                 case ACTION_QUEUE_TANARIS_REGULAR: return HandleQueue(player, BATTLEGROUND_TRT, "Tanaris Deathmatch", TEAM_NEUTRAL);
                 case ACTION_QUEUE_TANARIS_ALLIANCE: return HandleQueue(player, BATTLEGROUND_TRT, "Tanaris Deathmatch", TEAM_ALLIANCE);
                 case ACTION_QUEUE_TANARIS_HORDE: return HandleQueue(player, BATTLEGROUND_TRT, "Tanaris Deathmatch", TEAM_HORDE);
+                case ACTION_QUEUE_VIOLET_HOLD: return HandleQueue(player, BATTLEGROUND_VHR, "the Violet Hold", TEAM_NEUTRAL);
                 case ACTION_CLOSE: CloseGossipMenuFor(player); return true;
                 default: return false;
             }

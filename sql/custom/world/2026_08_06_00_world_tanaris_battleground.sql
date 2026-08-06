@@ -26,7 +26,9 @@ VALUES
   (104,
    2,          -- MinPlayersPerTeam: same 2v2 floor the other custom BGs use,
    10,         -- MaxPlayersPerTeam: matches BattlemasterList 104 MaxGroupSize
-   60, 69,     -- bracket, must agree with PvpDifficulty 91620
+   1, 80,      -- bracket, must agree with PvpDifficulty 91620 (widened
+               -- 2026-08-06: the server caps at 60, so a 60 floor locked
+               -- out every leveling character)
    52500, 0,          -- Alliance start, facing east down the arena toward Horde
    52501, 3.14159,    -- Horde start, facing west toward Alliance
    40,         -- StartMaxDist
