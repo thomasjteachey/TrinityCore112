@@ -5916,6 +5916,25 @@ SpellDecision SelectNoveltyBotSpell(Player const* player, Unit const* target)
     // Redemption, 81321).
     if (name == "Kader")
     {
+        // Angel form: Flash Heal is free for the duration, so spend the entire
+        // form healing whoever is worst off rather than letting the generic
+        // priest rotation pick something else. Self is excluded - the form ends
+        // in death regardless, so healing it is wasted. Returning empty when
+        // nobody is hurt lets the caller fall through to the real priest
+        // selector instead of stalling.
+        if (IsPriestInSpiritOfRedemption(player))
+        {
+            SpellInfo const* flashHealInfo = sSpellMgr->GetSpellInfo(2061);
+            float const flashHealRange = flashHealInfo ? flashHealInfo->GetMaxRange(true) : 38.0f;
+            if (IsSpellReady(player, 2061))
+                if (Unit const* injured = SelectFriendlyLowestHealthTarget(player, flashHealRange, 95.0f, 0, false))
+                    return { "kader flash heal", "novelty bot: free flash heal on the most injured ally during angel form", 2061,
+                        playerbot::PvpClassSpellContext::TargetMode::Ally, injured->GetGUID() };
+
+            decision.reason = "kader-angel-no-heal-target";
+            return decision;
+        }
+
         // Angel form is an emergency cooldown, not an opener. Without a gate
         // it went off the instant the gates opened, wasting the whole form at
         // full health. Health pool alone decides it - no melee/proximity
@@ -5924,10 +5943,11 @@ SpellDecision SelectNoveltyBotSpell(Player const* player, Unit const* target)
             return { "kader angel form", "novelty bot: become the Spirit of Redemption under pressure", 81321,
                 playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
 
-        // Lightwell, whenever its cooldown allows. Rank 1 id: IsSpellReady
+        // Lightwell, in combat only - out of combat he would replant it on
+        // every cooldown while walking to the fight. Rank 1 id: IsSpellReady
         // resolves the chain (724 -> 27870 -> 27871 -> ...) to whatever rank
         // he actually knows.
-        if (IsSpellReady(player, 724))
+        if (player->IsInCombat() && IsSpellReady(player, 724))
             return { "kader lightwell", "novelty bot: plant a lightwell", 724,
                 playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
 
@@ -5981,12 +6001,16 @@ SpellDecision SelectClassicClassSpell(Player const* player, Unit const* target, 
     // Checked before the class switch so these two never run normal rotations.
     // Matches clones too ("Dark Kader" etc.), not just the source character.
     //
-    // Exception: Kader in angel form is deliberately let through to the real
-    // priest selector. Flash Heal is free during Spirit of Redemption, and the
-    // caller already special-cases that aura, so smiting through it would
-    // waste the form.
-    if (IsNoveltyBotName(player) && !IsPriestInSpiritOfRedemption(player))
-        return SelectNoveltyBotSpell(player, target);
+    // Kader in angel form still routes here first so his own Flash Heal
+    // priority wins over the generic priest rotation. He falls through to the
+    // real priest selector only when that branch returns nothing - i.e. no ally
+    // needs healing - so the free-heal window is never wasted on Smite.
+    if (IsNoveltyBotName(player))
+    {
+        SpellDecision novelty = SelectNoveltyBotSpell(player, target);
+        if (novelty.spellId || !IsPriestInSpiritOfRedemption(player))
+            return novelty;
+    }
 
     if (profileSelection.unsupportedClass)
     {

@@ -17,10 +17,13 @@
 
 #include "Log.h"
 #include "Chat.h"
+#include "CharacterCache.h"
 #include "GameTime.h"
 #include "Globals/ObjectAccessor.h"
 #include "Item.h"
+#include "Map.h"
 #include "MotionMaster.h"
+#include "Optional.h"
 #include "MoveSpline.h"
 #include "Movement/AbstractFollower.h"
 #include "Player.h"
@@ -45,6 +48,7 @@
 #include <mutex>
 #include <sstream>
 #include <unordered_map>
+#include <vector>
 #include <cmath>
 #include <algorithm>
 #include <cctype>
@@ -787,6 +791,7 @@ public:
         {
             { "lifecycle", playerbotPvpLifecycleTable },
             { "forcequeue", HandlePlayerbotPvpForceQueueCurrentCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
+            { "movediag", HandlePlayerbotPvpMoveDiagCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
         };
 
         static ChatCommandTable playerbotRandomPopulationTable =
@@ -826,6 +831,89 @@ public:
         handler->PSendSysMessage(" - noLifecycleHooksActive: " UI64FMTD, snapshot.noLifecycleHooksActive);
         handler->PSendSysMessage(" - battlegroundLifecycleExecuted: " UI64FMTD, snapshot.battlegroundLifecycleExecuted);
         handler->PSendSysMessage(" - arenaLifecycleExecuted: " UI64FMTD, snapshot.arenaLifecycleExecuted);
+        return true;
+    }
+
+    // Reports the last movement directive each nearby bot issued, plus the state
+    // that drives it. Exists because the whisper diagnostic is unusable for
+    // clones: they carry generated internal names and their display name lives
+    // only in the character cache, so there is nothing to type. Reports on the
+    // current selection when something is selected, otherwise sweeps the radius.
+    static bool HandlePlayerbotPvpMoveDiagCommand(ChatHandler* handler, Optional<float> radiusArg)
+    {
+        if (!handler)
+            return false;
+
+        Player* player = handler->GetPlayer();
+        if (!player || !player->FindMap())
+            return false;
+
+        float const radius = std::max(1.0f, radiusArg.value_or(80.0f));
+
+        std::vector<Player*> bots;
+        if (Player* selected = handler->getSelectedPlayer())
+        {
+            if (selected != player)
+                bots.push_back(selected);
+        }
+
+        if (bots.empty())
+        {
+            Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+            for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+            {
+                Player* candidate = itr->GetSource();
+                if (!candidate || candidate == player || !candidate->IsInWorld())
+                    continue;
+                if (!candidate->IsWithinDistInMap(player, radius))
+                    continue;
+                bots.push_back(candidate);
+            }
+
+            std::sort(bots.begin(), bots.end(), [player](Player const* left, Player const* right)
+            {
+                return player->GetDistance(left) < player->GetDistance(right);
+            });
+        }
+
+        if (bots.empty())
+        {
+            handler->PSendSysMessage("No players found (nothing selected, none within %.0f yd).", radius);
+            return true;
+        }
+
+        // Two lines each - cap the sweep so a full battleground does not flood
+        // the chat frame and push the interesting rows off screen.
+        constexpr size_t maxReported = 8;
+        size_t const reported = std::min(bots.size(), maxReported);
+        handler->PSendSysMessage("Playerbot move diagnostics (%u of %u within %.0f yd):",
+            uint32(reported), uint32(bots.size()), radius);
+
+        for (size_t index = 0; index < reported; ++index)
+        {
+            Player* bot = bots[index];
+
+            std::string displayName;
+            if (!sCharacterCache->GetCharacterNameByGuid(bot->GetGUID(), displayName) || displayName.empty())
+                displayName = bot->GetName();
+
+            MotionMaster const* motionMaster = bot->GetMotionMaster();
+            Unit const* victim = bot->GetVictim();
+
+            handler->PSendSysMessage("%s (%s) cls=%u dist=%.1f motion=%u moving=%s combat=%s rage=%u victim=%s@%.1f",
+                displayName.c_str(), bot->GetName().c_str(), uint32(bot->GetClass()),
+                player->GetDistance(bot),
+                uint32(motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE),
+                bot->isMoving() ? "yes" : "no",
+                bot->IsInCombat() ? "yes" : "no",
+                uint32(bot->GetPower(POWER_RAGE) / 10),
+                victim ? victim->GetName().c_str() : "none",
+                victim ? bot->GetDistance(victim) : 0.0f);
+
+            std::string const moveDiag = playerbot::PvpClassActions::GetLastMovementDebugStatus(bot);
+            handler->PSendSysMessage("   %s", moveDiag.empty() ? "(no movement diagnostic recorded)" : moveDiag.c_str());
+        }
+
         return true;
     }
 
