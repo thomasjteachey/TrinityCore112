@@ -34,7 +34,12 @@ from mpq import MPQArchive                      # noqa: E402
 from mpqwrite import Storm, MPQ_FILE_COMPRESS, MPQ_FILE_REPLACEEXISTING  # noqa: E402
 
 DBCS = ["Map.dbc", "BattlemasterList.dbc", "PvpDifficulty.dbc",
-        "WorldSafeLocs.dbc", "WorldStateUI.dbc"]
+        "WorldSafeLocs.dbc", "WorldStateUI.dbc",
+        # AreaTable is the one the Violet Hold work is most active in. It is
+        # handled the same way as the rest -- read out of the archive, appended
+        # to, and checked afterwards that every record id present beforehand is
+        # still there -- so their row survives.
+        "AreaTable.dbc"]
 
 INTERNAL = ("(listfile)", "(attributes)", "(signature)", "(user data)")
 
@@ -49,6 +54,15 @@ def storm():
 
 def human(n):
     return "%.1f MB" % (n / 1048576.0)
+
+
+def _record_ids(blob):
+    """Every record's id (field 0) in a WDBC blob."""
+    import struct
+    magic, count, fields, recsize, _strsize = struct.unpack_from("<4sIIII", blob, 0)
+    if magic != b"WDBC":
+        raise ValueError("not a WDBC blob")
+    return {struct.unpack_from("<I", blob, 20 + i * recsize)[0] for i in range(count)}
 
 
 # ---------------------------------------------------------------- patch-Z

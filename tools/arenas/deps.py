@@ -172,6 +172,14 @@ def walk():
             refs = adt_refs(os.path.join(d, fn))
             for t in refs["blp"]:
                 add(t, directory)
+                # Every ground texture has a `_s.blp` specular companion that
+                # the client loads with it and that MTEX never names. Leave them
+                # out and the terrain renders bright green -- which is exactly
+                # what happened to maps 985, 986, 1504 and 1552 on the first
+                # pass. add() ignores anything that does not exist, so naming a
+                # companion that was never authored is harmless.
+                if t.lower().endswith(".blp"):
+                    add(t[:-4] + "_s.blp", directory)
             for m in refs["m2"]:
                 m2_q.append(m)
             for w in refs["wmo"]:

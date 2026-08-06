@@ -142,6 +142,7 @@ class TC_GAME_API BattlegroundMgr
 
     private:
         bool CreateBattleground(BattlegroundTemplate const* bgTemplate);
+        bool IsPoolMemberSelectable(BattlegroundTypeId bgTypeId);
         uint32 CreateClientVisibleInstanceId(BattlegroundTypeId bgTypeId, BattlegroundBracketId bracket_id);
         static bool IsArenaType(BattlegroundTypeId bgTypeId);
         BattlegroundTypeId GetRandomBG(BattlegroundTypeId id);
