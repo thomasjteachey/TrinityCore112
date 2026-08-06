@@ -1187,6 +1187,9 @@ SpellDecision SelectRacialSpell(Player const* player, Unit const* target, Unit c
             break;
         case RACE_GNOME:
         {
+            // 30 yards is a deliberate subset of the spell's real 45 yard range,
+            // not a bug - the castability gate in SelectClassOrUtilitySpell is
+            // what stops an unusable pick from starving class selection.
             Unit const* surpriseTarget = IsSpellReady(player, kRacialGnomeSurpriseSpellId) ? SelectRandomEnemyWithoutBreakableCrowdControl(player, 30.0f) : nullptr;
             if (surpriseTarget)
                 return { "racial surprise", "throw surprise grenade at random non-cc enemy", kRacialGnomeSurpriseSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy, surpriseTarget->GetGUID() };
@@ -6173,7 +6176,16 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
         return holdDecision;
     }
 
-    if (SpellDecision const racialDecision = SelectRacialSpell(player, target, allyTarget); racialDecision.spellId)
+    // A racial that cannot actually be cast right now must not be returned: this
+    // sits above class selection, so returning an unusable one starves the bot
+    // of its entire rotation for as long as the condition holds. That is not
+    // hypothetical - a targeted racial picked at a range the spell cannot reach
+    // never lands, never takes its cooldown, and is therefore re-picked every
+    // single tick, leaving (for example) a warrior jogging at an enemy with
+    // Charge and Intercept both off cooldown and never used. Racials are
+    // opportunistic utility; if one is not castable this instant, move on.
+    if (SpellDecision const racialDecision = SelectRacialSpell(player, target, allyTarget);
+        racialDecision.spellId && IsDecisionImmediatelyCastable(player, racialDecision, target, allyTarget))
         return racialDecision;
 
     if (SpellDecision const utilityDecision = MaybeSelectUtilitySpell(player, target); utilityDecision.spellId)
