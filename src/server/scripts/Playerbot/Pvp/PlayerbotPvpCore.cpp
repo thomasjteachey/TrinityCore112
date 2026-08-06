@@ -15,6 +15,7 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "GameTime.h"
 #include "PlayerbotPvpCore.h"
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotRandomBotParticipation.h"
@@ -5449,14 +5450,27 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target, Class
     return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
 }
 
-std::unordered_map<uint64, std::string> g_WarriorGapCloserDiagnosticByGuid;
+struct WarriorGapCloserDiagnosticEntry
+{
+    uint32 recordedMs = 0;
+    std::string text;
+};
 
+std::unordered_map<uint64, WarriorGapCloserDiagnosticEntry> g_WarriorGapCloserDiagnosticByGuid;
+
+// The timestamp is not decoration. This snapshot is only refreshed when the
+// warrior selector actually runs, so a stale entry looks exactly like a live
+// one and silently describes a moment that has passed - which is precisely how
+// a frozen "cannot afford intercept" reading got mistaken for the live state.
 void SetWarriorGapCloserDiagnostic(Player const* player, std::string const& diagnostic)
 {
     if (!player)
         return;
 
-    playerbot::LockedGetOrCreate(g_WarriorGapCloserDiagnosticByGuid, player->GetGUID().GetRawValue()) = diagnostic;
+    WarriorGapCloserDiagnosticEntry& entry =
+        playerbot::LockedGetOrCreate(g_WarriorGapCloserDiagnosticByGuid, player->GetGUID().GetRawValue());
+    entry.recordedMs = GameTime::GetGameTimeMS();
+    entry.text = diagnostic;
 }
 
 SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, ClassicProfileSelection const& profileSelection)
@@ -5465,8 +5479,15 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     if (!player)
         return decision;
 
+    // Record the early exits too. A selector that never reaches the gap-closer
+    // logic leaves the previous snapshot in place, which reads as live data and
+    // hides the fact that nothing evaluated at all this tick.
     if (!HasHostileTarget(player, target))
+    {
+        SetWarriorGapCloserDiagnostic(player, std::string("early_exit=no_hostile_target target=") +
+            (target ? target->GetName() : "null"));
         return decision;
+    }
 
     Unit const* activeTarget = SelectWarriorPriorityTarget(player, target, 25.0f);
     if (!HasHostileTarget(player, activeTarget))
@@ -5476,7 +5497,10 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     // While that movement is resolving the warrior is locked in, so defer all
     // spell decisions until the native gap-closer motion finishes.
     if (HasActiveMovementEffectSpline(player))
+    {
+        SetWarriorGapCloserDiagnostic(player, "early_exit=movement_effect_spline");
         return decision;
+    }
 
     bool const isProtWarrior = profileSelection.profile == ClassicClassProfile::TertiaryClassic;
     bool const isFuryWarrior = profileSelection.profile == ClassicClassProfile::SecondaryClassic;
@@ -6157,6 +6181,20 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
 
     if (!HasHostileTarget(player, target) && !allyTarget)
     {
+        // Class selection is skipped entirely here, so SelectWarriorSpell never
+        // runs and its snapshot would otherwise sit frozen at whatever the last
+        // successful pass recorded - looking exactly like live data.
+        if (player->GetClass() == CLASS_WARRIOR)
+        {
+            std::ostringstream skipDiag;
+            skipDiag << "early_exit=class_selection_skipped_no_hostile_target"
+                     << " target=" << (target ? target->GetName() : "null")
+                     << " target_alive=" << (target && target->IsAlive() ? "yes" : "no")
+                     << " valid_attack=" << (target && player->IsValidAttackTarget(target) ? "yes" : "no")
+                     << " combat=" << (player->IsInCombat() ? "yes" : "no");
+            SetWarriorGapCloserDiagnostic(player, skipDiag.str());
+        }
+
         if (SpellDecision const racialDecision = SelectRacialSpell(player, target, allyTarget); racialDecision.spellId)
             return racialDecision;
 
@@ -6405,8 +6443,15 @@ std::string PvpCore::GetLastWarriorGapCloserDiagnostic(Player const* player)
     if (!player)
         return std::string();
 
-    if (std::string const* diagnostic = playerbot::LockedFind(g_WarriorGapCloserDiagnosticByGuid, player->GetGUID().GetRawValue()))
-        return *diagnostic;
+    if (WarriorGapCloserDiagnosticEntry const* entry =
+            playerbot::LockedFind(g_WarriorGapCloserDiagnosticByGuid, player->GetGUID().GetRawValue()))
+    {
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        uint32 const ageMs = entry->recordedMs != 0 && nowMs >= entry->recordedMs ? nowMs - entry->recordedMs : 0;
+        std::ostringstream aged;
+        aged << "age_ms=" << ageMs << ' ' << entry->text;
+        return aged.str();
+    }
 
     return std::string();
 }
