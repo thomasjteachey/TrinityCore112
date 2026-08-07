@@ -582,8 +582,11 @@ bool BattlegroundVHR::CanPickUpPowerup(Player const* player) const
     return player && player->GetBGTeam() == _humanTeam;
 }
 
-// Find a spot on the chamber floor that is walkable, clear of the party, clear
-// of the cell doors, and not on top of another drop.
+// Find a spot for a dropped powerup. This does not fail: the party earned the
+// reward, so something is always placed. Only two things are never traded away
+// - there has to be real ground, and the spot has to be inside the room. Every
+// other preference is given back a step at a time, and if the whole ladder is
+// exhausted the drop simply lands next to somebody.
 bool BattlegroundVHR::PickBuffPosition(std::vector<Position> const& taken, Position& out) const
 {
     Map* map = GetBgMap();
@@ -592,78 +595,123 @@ bool BattlegroundVHR::PickBuffPosition(std::vector<Position> const& taken, Posit
 
     std::vector<ObjectGuid> const roster = GetHumanRoster(true);
 
-    // Rings outward from the middle of the floor. The centre is the furthest
-    // point from every cell, so working out from it keeps drops in the open
-    // rather than tucked against the wall.
-    static float const kRadii[] = { 12.0f, 18.0f, 24.0f, 30.0f, 8.0f };
-
-    for (uint32 attempt = 0; attempt < 60; ++attempt)
+    // Snap to whatever floor is under a point and confirm it is in the room.
+    // Height is searched from well above the chamber floor and over a long
+    // distance on purpose: the ramp and the cell ledges are metres above it and
+    // are perfectly good places for a rune to sit.
+    auto groundAt = [map](float x, float y, Position& result) -> bool
     {
-        float const radius = kRadii[attempt % (sizeof(kRadii) / sizeof(kRadii[0]))];
-        float const angle = frand(0.0f, 2.0f * float(M_PI));
-
-        Position candidate(
-            kChamberCentre.GetPositionX() + radius * std::cos(angle),
-            kChamberCentre.GetPositionY() + radius * std::sin(angle),
-            kChamberCentre.GetPositionZ(),
-            frand(0.0f, 2.0f * float(M_PI)));
-
-        // Snap to the floor. An invalid height means there is no ground there.
-        float const z = map->GetHeight(PHASEMASK_NORMAL, candidate.GetPositionX(), candidate.GetPositionY(),
-            kChamberCentre.GetPositionZ() + 5.0f, true, 20.0f);
+        float const z = map->GetHeight(PHASEMASK_NORMAL, x, y, kChamberCentre.GetPositionZ() + 15.0f, true, 40.0f);
         if (z <= INVALID_HEIGHT)
-            continue;
+            return false;
 
-        // Reject the entrance ramp and the raised cell ledges - the drop has to
-        // be on the flat fighting floor or players cannot simply run to it.
-        if (std::fabs(z - kChamberCentre.GetPositionZ()) > float(BG_VHR_BUFF_MAX_FLOOR_DRIFT))
-            continue;
-
-        candidate.m_positionZ = z + 0.5f;
-
-        // Inside the room, not through a wall.
         if (!map->isInLineOfSight(kChamberCentre.GetPositionX(), kChamberCentre.GetPositionY(), kChamberCentre.GetPositionZ() + 2.0f,
-            candidate.GetPositionX(), candidate.GetPositionY(), candidate.GetPositionZ() + 2.0f,
-            PHASEMASK_NORMAL, LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing))
-            continue;
+            x, y, z + 2.0f, PHASEMASK_NORMAL, LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing))
+            return false;
 
-        // Never in a gate that is about to open.
-        bool blocked = false;
-        for (VhrCell const& cell : kCells)
-            if (candidate.GetExactDist2d(cell.release) < float(BG_VHR_BUFF_MIN_CELL_DISTANCE))
+        result.Relocate(x, y, z + 0.5f, frand(0.0f, 2.0f * float(M_PI)));
+        return true;
+    };
+
+    auto farEnough = [](Position const& pos, std::vector<Position> const& others, float distance) -> bool
+    {
+        if (distance <= 0.0f)
+            return true;
+
+        for (Position const& other : others)
+            if (pos.GetExactDist2d(other) < distance)
+                return false;
+
+        return true;
+    };
+
+    std::vector<Position> livingPositions;
+    livingPositions.reserve(roster.size());
+    for (ObjectGuid guid : roster)
+        if (Player const* member = ObjectAccessor::FindPlayer(guid))
+            livingPositions.push_back(*member);
+
+    std::vector<Position> cellPositions;
+    cellPositions.reserve(BG_VHR_OBJECT_CELL_MAX);
+    for (VhrCell const& cell : kCells)
+        cellPositions.push_back(cell.release);
+
+    // Separation from other drops is surrendered first because two runes near
+    // each other is only untidy; landing on the party or in a gate actually
+    // changes how the wave plays. The last rung asks for nothing at all.
+    struct Relaxation
+    {
+        float fromDrops;
+        float fromPlayers;
+        float fromCells;
+    };
+    static Relaxation const kLadder[] =
+    {
+        // Rung 0 is the ideal, and the only one the header constants describe.
+        { float(BG_VHR_BUFF_MIN_DROP_DISTANCE), float(BG_VHR_BUFF_MIN_PLAYER_DISTANCE), float(BG_VHR_BUFF_MIN_CELL_DISTANCE) },
+        {  8.0f, 20.0f, 12.0f },
+        {  4.0f, 16.0f, 12.0f },
+        {  0.0f, 12.0f, 10.0f },
+        {  0.0f,  6.0f,  8.0f },
+        {  0.0f,  0.0f,  6.0f },
+        {  0.0f,  0.0f,  0.0f }
+    };
+
+    static float const kRadii[] = { 12.0f, 18.0f, 24.0f, 30.0f, 8.0f, 34.0f };
+
+    for (Relaxation const& rung : kLadder)
+    {
+        for (uint32 attempt = 0; attempt < 40; ++attempt)
+        {
+            float const radius = kRadii[attempt % (sizeof(kRadii) / sizeof(kRadii[0]))];
+            float const angle = frand(0.0f, 2.0f * float(M_PI));
+
+            Position candidate;
+            if (!groundAt(kChamberCentre.GetPositionX() + radius * std::cos(angle),
+                kChamberCentre.GetPositionY() + radius * std::sin(angle), candidate))
+                continue;
+
+            if (!farEnough(candidate, cellPositions, rung.fromCells))
+                continue;
+            if (!farEnough(candidate, livingPositions, rung.fromPlayers))
+                continue;
+            if (!farEnough(candidate, taken, rung.fromDrops))
+                continue;
+
+            out = candidate;
+            return true;
+        }
+    }
+
+    // Nothing in the open worked, so put it where somebody is standing. A rune
+    // dropped at the party's feet is a worse reward than one across the room,
+    // but it is a reward; silently skipping it is the one outcome to avoid.
+    if (!livingPositions.empty())
+    {
+        Position const& anchor = livingPositions[urand(0, uint32(livingPositions.size()) - 1)];
+        for (uint32 attempt = 0; attempt < 24; ++attempt)
+        {
+            float const angle = frand(0.0f, 2.0f * float(M_PI));
+            float const radius = frand(3.0f, 10.0f);
+
+            Position candidate;
+            if (groundAt(anchor.GetPositionX() + radius * std::cos(angle),
+                anchor.GetPositionY() + radius * std::sin(angle), candidate))
             {
-                blocked = true;
-                break;
+                out = candidate;
+                return true;
             }
-        if (blocked)
-            continue;
+        }
 
-        // Away from the party - the point is to make them leave the huddle.
-        for (ObjectGuid guid : roster)
-            if (Player const* member = ObjectAccessor::FindPlayer(guid))
-                if (candidate.GetExactDist2d(*member) < float(BG_VHR_BUFF_MIN_PLAYER_DISTANCE))
-                {
-                    blocked = true;
-                    break;
-                }
-        if (blocked)
-            continue;
-
-        // ...and not stacked on a drop already placed this wave.
-        for (Position const& other : taken)
-            if (candidate.GetExactDist2d(other) < float(BG_VHR_BUFF_MIN_CELL_DISTANCE))
-            {
-                blocked = true;
-                break;
-            }
-        if (blocked)
-            continue;
-
-        out = candidate;
+        // Even the ring failed - drop it exactly on them.
+        out = anchor;
         return true;
     }
 
-    return false;
+    // No living players at all. The wipe check is about to end the run, but
+    // return a sane spot rather than a garbage one.
+    out = kChamberCentre;
+    return true;
 }
 
 void BattlegroundVHR::SpawnWaveRewardBuffs()
@@ -692,13 +740,12 @@ void BattlegroundVHR::SpawnWaveRewardBuffs()
 
     for (uint32 i = 0; i < wanted; ++i)
     {
+        // Only ever false when the instance has no map, in which case nothing
+        // can be spawned at all - the picker relaxes its way to an answer for
+        // every other case rather than skipping a reward the party earned.
         Position spot;
         if (!PickBuffPosition(placed, spot))
-        {
-            TC_LOG_DEBUG("bg.battleground", "BattlegroundVHR: no clear spot for wave-{} reward {} in instance {}.",
-                _waveNumber, i, GetInstanceID());
-            continue;
-        }
+            break;
 
         uint32 const kBuffCount = uint32(sizeof(kBuffEntries) / sizeof(kBuffEntries[0]));
         uint32 const entry = kBuffEntries[urand(0, kBuffCount - 1)];

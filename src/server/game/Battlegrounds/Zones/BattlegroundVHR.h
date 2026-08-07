@@ -144,17 +144,16 @@ enum BG_VHR_Constants
     // the next wave is still behind its cell door.
     BG_VHR_BUFF_LIFETIME_MS = 60 * IN_MILLISECONDS,
 
-    // A dropped powerup has to be walked to, not stood on. Candidate spots
-    // inside this range of any living player are rejected.
+    // Ideal spacing for a dropped powerup: this far from any living player, so
+    // it has to be walked to rather than stood on, and this far from a cell
+    // release point so it never lands in a gate that is about to open.
+    //
+    // These are the FIRST pass only. PickBuffPosition walks a relaxation ladder
+    // and gives ground back on each attempt rather than failing - a wave that
+    // earns a reward always gets one, even if it ends up in someone's lap.
     BG_VHR_BUFF_MIN_PLAYER_DISTANCE = 20,
-
-    // ...and this far from a cell release point, so nothing ever lands in a
-    // gate that is about to open.
     BG_VHR_BUFF_MIN_CELL_DISTANCE = 12,
-
-    // The chamber floor is flat; anything further than this from its height is
-    // the entrance ramp or a cell ledge rather than the fighting area.
-    BG_VHR_BUFF_MAX_FLOOR_DRIFT = 4,
+    BG_VHR_BUFF_MIN_DROP_DISTANCE = 12,
 
     // The custom cooldown-reset rune, alongside stock Restoration and
     // Berserking. Speed is deliberately not in the roll.
