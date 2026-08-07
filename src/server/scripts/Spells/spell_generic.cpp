@@ -3298,6 +3298,16 @@ class spell_gen_diminished : public AuraScript
         canBeRecalculated = true;
     }
 
+    // The one effect that goes UP with stacks: more damage taken, not less.
+    // This replaced a max-health reduction, which was invisible in play - the
+    // clone is set to full health when it is built and the health aura keeps
+    // health PERCENT, so a weakened clone still showed a full bar.
+    void CalcDamageTakenAmount(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
+    {
+        amount = int32(GetStackAmount());
+        canBeRecalculated = true;
+    }
+
     void SyncHealing(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
         Unit* target = GetTarget();
@@ -3324,7 +3334,7 @@ class spell_gen_diminished : public AuraScript
     void Register() override
     {
         DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_gen_diminished::CalcAmount, EFFECT_0, SPELL_AURA_MOD_DAMAGE_PERCENT_DONE);
-        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_gen_diminished::CalcAmount, EFFECT_1, SPELL_AURA_MOD_INCREASE_HEALTH_PERCENT);
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_gen_diminished::CalcDamageTakenAmount, EFFECT_1, SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN);
         DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_gen_diminished::CalcScaleAmount, EFFECT_2, SPELL_AURA_MOD_SCALE);
         // REAPPLY as well as CHANGE_AMOUNT: Aura::SetStackAmount calls
         // ChangeAmount with onStackOrReapply set, and CHANGE_AMOUNT is only

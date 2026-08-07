@@ -1,9 +1,13 @@
 -- Diminished: one permanent, stacking handicap debuff for Violet Hold.
 --
--- ONE spell, up to 100 stacks, and each stack is one percent off the top:
--- 25 stacks = 75% size / health / damage / healing, 50 stacks = half,
--- 75 stacks = quarter. Any value in 1..100 works, so the tiers are a matter of
--- how many stacks you apply rather than which spell you pick.
+-- ONE spell, up to 100 stacks. Each stack is one percent off damage done and
+-- healing done, one percent MORE damage taken, and half a percent off model
+-- scale. Any value in 1..100 works, so the tiers are a matter of how many
+-- stacks you apply rather than which spell you pick.
+--
+-- Scale is deliberately the odd one out at half rate - a clone at 25% power was
+-- shrunk to a quarter height and became a hard-to-click speck, so 100 stacks is
+-- half size rather than nothing.
 --
 --   90201  Diminished           the debuff - this is the only id you apply
 --   90202  Diminished (healing) hidden helper, see below
@@ -32,10 +36,21 @@
 -- makes this undispellable and immune to mechanic-clearing trinkets.
 --
 -- All four auras take a signed percentage delta:
---   61  MOD_SCALE                    -25 -> scale 1.0 + (-25/100) = 0.75
---   133 MOD_INCREASE_HEALTH_PERCENT  -25 -> UNIT_MOD_HEALTH TOTAL_PCT 75%
---   79  MOD_DAMAGE_PERCENT_DONE      -25 -> 75% damage done
---   136 MOD_HEALING_DONE_PERCENT     -25 -> 75% healing done
+--   61  MOD_SCALE                 -25 -> scale 1.0 + (-25/100) = 0.75
+--   87  MOD_DAMAGE_PERCENT_TAKEN  +25 -> takes 125% damage
+--   79  MOD_DAMAGE_PERCENT_DONE   -25 -> 75% damage done
+--   136 MOD_HEALING_DONE_PERCENT  -25 -> 75% healing done
+--
+-- Effect 2 was MOD_INCREASE_HEALTH_PERCENT (133) and is now damage TAKEN, on
+-- the same donor field the stock Berserking rune uses. Two reasons: the max
+-- health version could not be confirmed working in game, and it was invisible
+-- anyway - the clone is put at full health after it is built, and that aura
+-- preserves health PERCENT, so a weakened clone still showed a completely full
+-- bar. Damage taken shows up immediately in how fast the thing dies.
+--
+-- Note this one is POSITIVE and MiscValue must stay 127: aura 87 is read
+-- through GetTotalAuraMultiplierByMiscMask against the damage school, so a
+-- zero mask would silently apply to nothing.
 --
 -- Player object scale is floored at 0.1 in Unit::RecalculateObjectScale, so
 -- even 100 stacks leaves a visible (if tiny) character rather than a null model.
@@ -65,9 +80,9 @@ UPDATE `tmp_dim` SET
   `SpellIconID`               = 543,   -- Spell_Shadow_CurseOfMannoroth
   `SpellVisualID_1`           = 0,     -- donor's 6943 is Berserking's red flash
   `SpellVisualID_2`           = 0,
-  `Effect_1` = 6, `EffectAura_1` = 79,  `EffectBasePoints_1` = -1, `EffectDieSides_1` = 0, `EffectMiscValue_1` = 127, `EffectMechanic_1` = 0, `ImplicitTargetA_1` = 25,
-  `Effect_2` = 6, `EffectAura_2` = 133, `EffectBasePoints_2` = -1, `EffectDieSides_2` = 0, `EffectMiscValue_2` = 0,   `EffectMechanic_2` = 0, `ImplicitTargetA_2` = 25,
-  `Effect_3` = 6, `EffectAura_3` = 61,  `EffectBasePoints_3` = -1, `EffectDieSides_3` = 0, `EffectMiscValue_3` = 0,   `EffectMechanic_3` = 0, `ImplicitTargetA_3` = 25;
+  `Effect_1` = 6, `EffectAura_1` = 79, `EffectBasePoints_1` = -1, `EffectDieSides_1` = 0, `EffectMiscValue_1` = 127, `EffectMechanic_1` = 0, `ImplicitTargetA_1` = 25,
+  `Effect_2` = 6, `EffectAura_2` = 87, `EffectBasePoints_2` =  1, `EffectDieSides_2` = 0, `EffectMiscValue_2` = 127, `EffectMechanic_2` = 0, `ImplicitTargetA_2` = 25,
+  `Effect_3` = 6, `EffectAura_3` = 61, `EffectBasePoints_3` = -1, `EffectDieSides_3` = 0, `EffectMiscValue_3` = 0,   `EffectMechanic_3` = 0, `ImplicitTargetA_3` = 25;
 INSERT INTO `spell_lplus` SELECT * FROM `tmp_dim`;
 
 -- 90202 - hidden healing-done helper. 0x80 SPELL_ATTR0_HIDDEN_CLIENTSIDE keeps
