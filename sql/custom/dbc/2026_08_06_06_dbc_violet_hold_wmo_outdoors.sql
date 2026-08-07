@@ -1,0 +1,21 @@
+-- Flag the Violet Hold WMO as outdoors so mounting works in the gauntlet.
+--
+-- WMOAreaTable Flags bit 4 is the explicit "treat as outdoors" override that
+-- both the client and the server honor ABOVE the WMO group's own interior
+-- flags (Map::GetFullTerrainStatusForPosition: Flags & 4 -> outdoors). The
+-- client blocks mount casts on its own indoor verdict before the server ever
+-- sees them, so the server-side map-1608 override alone could not make
+-- mounting work - the client's copy of this DBC is the one that matters.
+--
+-- wmoId 5282 has three rows: 44376 (root), 44377 (group 24622), 45563 (group
+-- 25154, the main hold). All shipped Flags 0.
+--
+-- KNOWN SIDE EFFECT, accepted: the STOCK Violet Hold dungeon (map 608) uses
+-- the same WMO rows, so it also becomes mountable/outdoors on both client and
+-- server. Precedent: AQ40-style raids are mountable exactly this way.
+--
+-- Binary DBCs need the same change (in-place int rewrite of the Flags field);
+-- see tools/violet_hold/vhr_dbc.py notes.
+--
+-- Replayable.
+UPDATE dbc.wmoareatable_lplus SET Flags = Flags | 4 WHERE WMOID = 5282;
