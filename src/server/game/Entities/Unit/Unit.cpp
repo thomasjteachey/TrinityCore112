@@ -7868,6 +7868,41 @@ float Unit::SpellDamagePctDone(Unit* victim, SpellInfo const* spellProto, Damage
     return DoneTotalMod;
 }
 
+// 90201 - Diminished, the Violet Hold stacking handicap. Reports what its
+// damage-done and damage-taken components actually contributed to a hit, to
+// every GM with ".gm diagnostics customauras" on. Only fires when one side of
+// the hit carries the aura, and only for abilities/spells - the two taken
+// paths this is called from never see plain auto attacks with a spellProto.
+static void BroadcastDiminishedDamageDiagnostic(char const* path, Unit const* attacker, Unit const* victim,
+    uint32 spellId, uint32 damageBefore, float takenTotalMod)
+{
+    constexpr uint32 SPELL_DIMINISHED = 90201;
+
+    Aura* victimAura = victim ? victim->GetAura(SPELL_DIMINISHED) : nullptr;
+    Aura* attackerAura = attacker ? attacker->GetAura(SPELL_DIMINISHED) : nullptr;
+    if (!victimAura && !attackerAura)
+        return;
+
+    // Amounts as the engine holds them: base points already multiplied by the
+    // stack count. If these read 0 the aura is applied but inert; if the final
+    // multiplier disagrees with the taken amount, something downstream eats it.
+    int32 const takenAmount = victimAura && victimAura->GetEffect(EFFECT_1) ? victimAura->GetEffect(EFFECT_1)->GetAmount() : 0;
+    int32 const doneAmount = attackerAura && attackerAura->GetEffect(EFFECT_0) ? attackerAura->GetEffect(EFFECT_0)->GetAmount() : 0;
+
+    for (auto const& sessionPair : sWorld->GetAllSessions())
+        if (sessionPair.second && sessionPair.second->GetPlayer()
+            && sessionPair.second->IsGmDiagnosticEnabled(GmDiagnosticCategory::CustomAuras))
+            ChatHandler(sessionPair.second).PSendSysMessage(
+                "[Diminished] %s: %s -> %s spell %u dmg-in %u | victim stacks %u taken %+d%% | attacker stacks %u done %+d%% | taken mult x%.3f",
+                path,
+                attacker ? attacker->GetName().c_str() : "<none>",
+                victim ? victim->GetName().c_str() : "<none>",
+                spellId, damageBefore,
+                victimAura ? uint32(victimAura->GetStackAmount()) : 0, takenAmount,
+                attackerAura ? uint32(attackerAura->GetStackAmount()) : 0, doneAmount,
+                takenTotalMod);
+}
+
 uint32 Unit::SpellDamageBonusTaken(Unit* caster, SpellInfo const* spellProto, uint32 pdamage, DamageEffectType damagetype) const
 {
     if (!spellProto || damagetype == DIRECT_DAMAGE)
@@ -7940,6 +7975,8 @@ uint32 Unit::SpellDamageBonusTaken(Unit* caster, SpellInfo const* spellProto, ui
 
         TakenTotalMod = 1.0f - damageReduction;
     }
+
+    BroadcastDiminishedDamageDiagnostic("spell", caster, this, spellProto->Id, pdamage, TakenTotalMod);
 
     float tmpDamage = pdamage * TakenTotalMod;
     return uint32(std::max(tmpDamage, 0.0f));
@@ -9145,6 +9182,11 @@ uint32 Unit::MeleeDamageBonusTaken(Unit* attacker, uint32 pdamage, WeaponAttackT
 
         TakenTotalMod = 1.0f - damageReduction;
     }
+
+    // Abilities only - a plain swing has no spellProto, and auto attacks would
+    // drown the diagnostic channel.
+    if (spellProto)
+        BroadcastDiminishedDamageDiagnostic("melee", attacker, this, spellProto->Id, pdamage, TakenTotalMod);
 
     float tmpDamage = float(pdamage + TakenFlatBenefit) * TakenTotalMod;
     return uint32(std::max(tmpDamage, 0.0f));

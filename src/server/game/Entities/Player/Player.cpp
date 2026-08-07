@@ -26014,7 +26014,17 @@ uint32 Player::GetCorpseReclaimDelay(bool pvp) const
     // 0..2 full period
     // should be ceil(x)-1 but not floor(x)
     uint64 count = (now < m_deathExpireTime - 1) ? (m_deathExpireTime - 1 - now) / DEATH_EXPIRE_STEP : 0;
-    return copseReclaimDelay[count];
+    uint32 delay = copseReclaimDelay[count];
+
+    // Wave-survival battlegrounds cap the escalation - dying repeatedly is
+    // their entire loop, and 120 second reclaims would eliminate players by
+    // boredom. This is the single choke point: the client's displayed timer
+    // and the reclaim check in HandleReclaimCorpse both come through here.
+    if (Battleground* bg = GetBattleground())
+        if (uint32 cap = bg->GetCorpseReclaimDelayCap())
+            delay = std::min(delay, cap);
+
+    return delay;
 }
 
 void Player::UpdateCorpseReclaimDelay()

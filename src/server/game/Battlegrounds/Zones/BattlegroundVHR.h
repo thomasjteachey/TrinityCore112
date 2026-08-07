@@ -105,7 +105,7 @@ enum BG_VHR_Constants
     BG_VHR_CLONES_PER_CELL = 10,
 
     // The gates-closed preparation window, in milliseconds.
-    BG_VHR_PREP_MS = 10 * IN_MILLISECONDS,
+    BG_VHR_PREP_MS = 15 * IN_MILLISECONDS,
 
     // Alive counts and the wipe check run on this timer rather than every tick.
     BG_VHR_STATE_CHECK_INTERVAL = 500,
@@ -160,7 +160,14 @@ enum BG_VHR_Constants
 
     // The custom cooldown-reset rune, alongside stock Restoration and
     // Berserking. Speed is deliberately not in the roll.
-    BG_VHR_GO_RECHARGE_BUFF = 300500
+    BG_VHR_GO_RECHARGE_BUFF = 300500,
+
+    // Dying in this mode is manual-resurrect only: run the ghost to the corpse
+    // and reclaim. The stock corpse reclaim delay ESCALATES with repeated
+    // deaths (30s, then 60s, then 120s), and dying repeatedly is the whole
+    // nature of a wave survival mode - so it is capped here at the first step.
+    // Every release waits exactly thirty seconds, never more.
+    BG_VHR_REZ_DELAY_SECONDS = 30
 };
 
 // Which characters a wave's clones are copied from. Every wave is made of
@@ -245,6 +252,17 @@ public:
     // Wave-clear rewards belong to the party. The clones are Players on the
     // enemy team and would otherwise walk over them on the way in.
     bool CanPickUpPowerup(Player const* player) const override;
+
+    // Caps the corpse reclaim delay at a flat thirty seconds - death in this
+    // mode is manual-reclaim only, and the stock escalation (30/60/120 on
+    // repeated deaths) punishes exactly what a wave-survival mode is made of.
+    // Consulted from Player::GetCorpseReclaimDelay, which feeds both the
+    // client's displayed timer and the reclaim enforcement in MiscHandler.
+    uint32 GetCorpseReclaimDelayCap() const override { return BG_VHR_REZ_DELAY_SECONDS; }
+
+    // What the client is told over the CCGAME REZ addon whisper, so the number
+    // a player sees matches the reclaim they actually wait.
+    uint32 GetResurrectionInterval() const override { return BG_VHR_REZ_DELAY_SECONDS * IN_MILLISECONDS; }
     bool HandlePlayerUnderMap(Player* player) override;
     void EndBattleground(uint32 winner) override;
 
