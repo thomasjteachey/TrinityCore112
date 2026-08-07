@@ -2645,7 +2645,22 @@ SpellDecision SelectMissingBattlegroundRaidBuff(Player const* player)
 SpellDecision SelectPreparationBuffSpell(Player const* player)
 {
     SpellDecision decision;
-    if (!player || player->IsInCombat())
+    if (!player)
+        return decision;
+
+    // The combat check is a proxy for "the fight has not started yet", which
+    // holds at a normal battleground or arena start because nobody is in combat
+    // behind the gates. It does not hold in Violet Hold: waves are prepared
+    // mid-match, and a wave's clones are playerbots whose AI picks a target and
+    // enters combat during their own countdown. Immunity stops them being
+    // attacked, not from attacking. The gate would then deny them every opening
+    // buff - the exact thing the preparation window exists to give them.
+    //
+    // Holding a preparation aura states "not fighting yet" outright, so it wins
+    // over the inference. Behaviour at ordinary starts is unchanged, since
+    // nothing there is in combat to begin with.
+    bool const preparing = player->HasAura(SPELL_ARENA_PREPARATION) || player->HasAura(SPELL_PREPARATION);
+    if (player->IsInCombat() && !preparing)
         return decision;
 
     auto hasUnimbuedWeapon = [player]()
