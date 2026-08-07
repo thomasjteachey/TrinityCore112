@@ -3288,6 +3288,16 @@ class spell_gen_diminished : public AuraScript
         canBeRecalculated = true;
     }
 
+    // Size is deliberately gentler than the rest. A clone at 25% power was
+    // shrunk to a quarter of its height and became a hard-to-click speck, so
+    // scale runs over half the range the other effects do: 100 stacks is half
+    // size rather than nothing at all, and the 75-stack case sits at ~62%.
+    void CalcScaleAmount(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
+    {
+        amount = -int32(GetStackAmount()) / 2;
+        canBeRecalculated = true;
+    }
+
     void SyncHealing(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
         Unit* target = GetTarget();
@@ -3315,7 +3325,7 @@ class spell_gen_diminished : public AuraScript
     {
         DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_gen_diminished::CalcAmount, EFFECT_0, SPELL_AURA_MOD_DAMAGE_PERCENT_DONE);
         DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_gen_diminished::CalcAmount, EFFECT_1, SPELL_AURA_MOD_INCREASE_HEALTH_PERCENT);
-        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_gen_diminished::CalcAmount, EFFECT_2, SPELL_AURA_MOD_SCALE);
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_gen_diminished::CalcScaleAmount, EFFECT_2, SPELL_AURA_MOD_SCALE);
         // REAPPLY as well as CHANGE_AMOUNT: Aura::SetStackAmount calls
         // ChangeAmount with onStackOrReapply set, and CHANGE_AMOUNT is only
         // raised when the value actually moves. REAPPLY covers a stack change

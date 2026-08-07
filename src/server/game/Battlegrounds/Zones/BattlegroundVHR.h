@@ -85,13 +85,14 @@ enum BG_VHR_Objects
     BG_VHR_OBJECT_MAIN_DOOR        = 8,
 
     // Reward powerups dropped on the floor when a wave is cleared: one per
-    // three players. A full party of ten therefore never needs more than three
-    // slots. Reused every wave - the previous one is deleted and a fresh object
+    // three players, rounded UP, so a full party of ten needs four slots.
+    // Reused every wave - the previous one is deleted and a fresh object
     // created at a newly chosen spot, so these are not fixed positions.
     BG_VHR_OBJECT_BUFF_1           = 9,
     BG_VHR_OBJECT_BUFF_2           = 10,
     BG_VHR_OBJECT_BUFF_3           = 11,
-    BG_VHR_OBJECT_MAX              = 12
+    BG_VHR_OBJECT_BUFF_4           = 12,
+    BG_VHR_OBJECT_MAX              = 13
 };
 
 enum BG_VHR_Constants
@@ -134,9 +135,11 @@ enum BG_VHR_Constants
     BG_VHR_SPELL_DIMINISHED   = 90201,
 
     // Clearing a wave drops powerups on the floor: one per this many players,
-    // rounded down, so a party of two gets nothing and a full ten gets three.
+    // rounded UP, so even a solo run gets one and a full ten gets four.
+    //
+    //   1-3 players -> 1     4-6 -> 2     7-9 -> 3     10 -> 4
     BG_VHR_PLAYERS_PER_BUFF = 3,
-    BG_VHR_MAX_WAVE_BUFFS   = 3,
+    BG_VHR_MAX_WAVE_BUFFS   = 4,
 
     // How long a dropped powerup survives before it is taken back, in ms. Waves
     // are composed the moment the previous one dies, so this deliberately

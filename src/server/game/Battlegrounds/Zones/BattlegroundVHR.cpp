@@ -716,9 +716,12 @@ bool BattlegroundVHR::PickBuffPosition(std::vector<Position> const& taken, Posit
 
 void BattlegroundVHR::SpawnWaveRewardBuffs()
 {
-    // One drop per three players, rounded down, fixed to the party size the run
-    // started with so it does not shrink as people die.
-    uint32 const wanted = std::min<uint32>(_partySize / BG_VHR_PLAYERS_PER_BUFF, BG_VHR_MAX_WAVE_BUFFS);
+    // One drop per three players, rounded UP - 1-3 players get one, 4-6 get
+    // two, 7-9 get three, ten get four. Rounded up rather than down so a small
+    // party is never left with nothing at all. Fixed to the party size the run
+    // started with, so it does not shrink as people die.
+    uint32 const wanted = std::min<uint32>(
+        (_partySize + BG_VHR_PLAYERS_PER_BUFF - 1) / BG_VHR_PLAYERS_PER_BUFF, BG_VHR_MAX_WAVE_BUFFS);
 
     // Whatever is still lying around from the previous wave goes now, so the
     // slots are free and the party never banks two waves' worth.
