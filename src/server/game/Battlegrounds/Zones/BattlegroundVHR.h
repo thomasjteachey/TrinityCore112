@@ -4,9 +4,12 @@
  *
  * A party of up to ten queues together and fights waves of "Dark <name>" clones
  * released from the Violet Hold's prison cells. Wave 1 fields as many clones as
- * there are players; every cleared wave adds one more. Clearing continues until
- * a wave would need more than BG_VHR_MAX_ENEMIES clones, at which point the
- * party has won - which is not expected to happen.
+ * there are players; every cleared wave adds a QUARTER of a clone, expressed as
+ * one extra clone carrying the Diminished debuff at 75, 50 or 25 stacks before
+ * it finally joins at full strength on the fourth step. See
+ * BG_VHR_QUARTERS_PER_CLONE for the table. Clearing continues until a wave would
+ * need more than BG_VHR_MAX_ENEMIES clones, at which point the party has won -
+ * which is not expected to happen.
  *
  * Three things make this different from the other custom battlegrounds here:
  *
@@ -80,7 +83,15 @@ enum BG_VHR_Objects
     // The prison seal at the west end of the chamber. Held shut for the whole
     // run so the party cannot retreat up the entrance ramp.
     BG_VHR_OBJECT_MAIN_DOOR        = 8,
-    BG_VHR_OBJECT_MAX              = 9
+
+    // Reward powerups dropped on the floor when a wave is cleared: one per
+    // three players. A full party of ten therefore never needs more than three
+    // slots. Reused every wave - the previous one is deleted and a fresh object
+    // created at a newly chosen spot, so these are not fixed positions.
+    BG_VHR_OBJECT_BUFF_1           = 9,
+    BG_VHR_OBJECT_BUFF_2           = 10,
+    BG_VHR_OBJECT_BUFF_3           = 11,
+    BG_VHR_OBJECT_MAX              = 12
 };
 
 enum BG_VHR_Constants
@@ -105,7 +116,49 @@ enum BG_VHR_Constants
 
     // How close a player has to be to a cell's release point to be pushed off
     // it when that cell is chosen. Checked once, as the wave is composed.
-    BG_VHR_SPAWN_CLEAR_RADIUS = 15
+    BG_VHR_SPAWN_CLEAR_RADIUS = 15,
+
+    // The difficulty curve advances a QUARTER of a clone per wave, not a whole
+    // one. Each step either strengthens the wave's partial clone or, on the
+    // fourth step, promotes it to a full one and starts a new partial:
+    //
+    //   wave 1  party                      wave 5  party + 1
+    //   wave 2  party + a 25%-power clone   wave 6  party + 1 + a 25% clone
+    //   wave 3  party + a 50%-power clone   wave 7  party + 1 + a 50% clone
+    //   wave 4  party + a 75%-power clone   ...
+    //
+    // The partial clone is held back by the Diminished debuff, whose stack
+    // count is the percentage taken off its size, health, damage and healing -
+    // so a clone at 25% power carries 75 stacks.
+    BG_VHR_QUARTERS_PER_CLONE = 4,
+    BG_VHR_SPELL_DIMINISHED   = 90201,
+
+    // Clearing a wave drops powerups on the floor: one per this many players,
+    // rounded down, so a party of two gets nothing and a full ten gets three.
+    BG_VHR_PLAYERS_PER_BUFF = 3,
+    BG_VHR_MAX_WAVE_BUFFS   = 3,
+
+    // How long a dropped powerup survives before it is taken back, in ms. Waves
+    // are composed the moment the previous one dies, so this deliberately
+    // outlives the ten-second preparation window - the party can grab one while
+    // the next wave is still behind its cell door.
+    BG_VHR_BUFF_LIFETIME_MS = 60 * IN_MILLISECONDS,
+
+    // A dropped powerup has to be walked to, not stood on. Candidate spots
+    // inside this range of any living player are rejected.
+    BG_VHR_BUFF_MIN_PLAYER_DISTANCE = 20,
+
+    // ...and this far from a cell release point, so nothing ever lands in a
+    // gate that is about to open.
+    BG_VHR_BUFF_MIN_CELL_DISTANCE = 12,
+
+    // The chamber floor is flat; anything further than this from its height is
+    // the entrance ramp or a cell ledge rather than the fighting area.
+    BG_VHR_BUFF_MAX_FLOOR_DRIFT = 4,
+
+    // The custom cooldown-reset rune, alongside stock Restoration and
+    // Berserking. Speed is deliberately not in the roll.
+    BG_VHR_GO_RECHARGE_BUFF = 300500
 };
 
 // Which characters a wave's clones are copied from. Every wave is made of
@@ -147,6 +200,12 @@ struct VhrWaveSpawnRequest
     uint32 partyMaxLevel = 0;
     std::vector<ObjectGuid> sourceGuids;
     std::vector<Position> spawnPositions;
+
+    // Diminished stacks per clone, parallel to sourceGuids. 0 means a clone at
+    // full strength, which is every entry except - on three waves in four - the
+    // last one. Kept as a per-slot vector rather than a single "the last one is
+    // weak" flag so the driver never has to know which slot is special.
+    std::vector<uint8> diminishedStacks;
 };
 
 struct BattlegroundVHRScore final : public BattlegroundScore
@@ -180,6 +239,10 @@ public:
     void HandleKillPlayer(Player* victim, Player* killer) override;
     void HandlePlayerResurrect(Player* player) override;
     void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet) override;
+
+    // Wave-clear rewards belong to the party. The clones are Players on the
+    // enemy team and would otherwise walk over them on the way in.
+    bool CanPickUpPowerup(Player const* player) const override;
     bool HandlePlayerUnderMap(Player* player) override;
     void EndBattleground(uint32 winner) override;
 
@@ -229,6 +292,17 @@ private:
     uint32 CountAliveEnemies() const;
     std::vector<ObjectGuid> GetHumanRoster(bool livingOnly) const;
     uint32 GetEnemyCountForWave(uint32 wave) const;
+    // Full-strength clones only, ignoring the partial one.
+    uint32 GetFullStrengthCountForWave(uint32 wave) const;
+    // Diminished stacks for the wave's partial clone, 0 when the wave is made
+    // entirely of full-strength clones (every fourth wave).
+    static uint8 GetPartialCloneStacks(uint32 wave);
+
+    // Reward powerups, dropped when a wave is cleared and taken back after
+    // BG_VHR_BUFF_LIFETIME_MS.
+    void SpawnWaveRewardBuffs();
+    void DespawnWaveRewardBuffs();
+    bool PickBuffPosition(std::vector<Position> const& taken, Position& out) const;
 
     uint32 GetHonorRewardForRun() const;
     void ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, uint32& winnerHonor, uint32& loserHonor) const override;
@@ -236,10 +310,15 @@ private:
     uint32 _humanTeam;
     uint32 _enemyTeam;
 
-    // Party size captured when the gates first open. Wave N fields
-    // _partySize + N - 1 clones, so this fixes the whole difficulty curve and
-    // must not drift when someone dies or leaves.
+    // Party size captured when the gates first open. Wave N fields _partySize
+    // full clones plus a quarter of a clone per wave elapsed, so this fixes the
+    // whole difficulty curve and must not drift when someone dies or leaves.
     uint32 _partySize;
+
+    // Counts down while dropped powerups are on the floor; 0 means none are
+    // out. Reset each time a wave is cleared, so a fresh drop always gets the
+    // full lifetime even if the previous one had not expired.
+    uint32 _buffLifetimeMs;
 
     uint32 _waveNumber;
     uint32 _highestWaveCleared;

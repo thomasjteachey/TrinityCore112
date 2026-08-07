@@ -62,8 +62,19 @@ public:
 
     bool operator()(Player* player) const
     {
-        return player && player->IsAlive() && !player->IsSpectator() &&
-            _object->IsWithinDistInMap(player, _range);
+        if (!player || !player->IsAlive() || player->IsSpectator())
+            return false;
+
+        if (!_object->IsWithinDistInMap(player, _range))
+            return false;
+
+        // A battleground may reserve its powerups for one side - Violet Hold
+        // does, so its wave-clear rewards cannot be taken by the clones.
+        if (Battleground* bg = player->GetBattleground())
+            if (!bg->CanPickUpPowerup(player))
+                return false;
+
+        return true;
     }
 
 private:

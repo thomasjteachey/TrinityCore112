@@ -548,6 +548,14 @@ class TC_GAME_API Battleground
                                                             // can be extended in in BG subclass
 
         void HandleTriggerBuff(ObjectGuid go_guid);
+
+        // Whether this player may set off an environmental powerup - the Speed,
+        // Restoration and Berserking runes and any custom one. Consulted by the
+        // ownerless-trap search in GameObject::Update, which is the only thing
+        // that fires those. Default is "anyone standing on it"; Violet Hold
+        // narrows it to the human side so the clone waves cannot eat the
+        // rewards the party is meant to be racing them for.
+        virtual bool CanPickUpPowerup(Player const* /*player*/) const { return true; }
         void SetHoliday(bool is_holiday);
 
         /// @todo make this protected:

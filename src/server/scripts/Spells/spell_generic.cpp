@@ -3222,6 +3222,126 @@ class spell_gen_restoration : public AuraScript
     }
 };
 
+// 90200 - Recharge
+// The fourth battleground power rune, alongside Speed / Restoration /
+// Berserking. All of the work happens the instant it is picked up; the aura
+// itself is inert and exists only so the buff is visible in the frame, which
+// is what lets the other team see who took the rune and react.
+//
+// Everything resets, deliberately - no exemption list. That includes the PvP
+// trinket, Bloodlust/Heroism and consumables, so a player can trinket twice or
+// double-potion off a single rune. ResetAllCooldowns is the right call for
+// that: unlike the predicate form of ResetCooldowns it also clears the
+// _categoryCooldowns map, and without that a potion whose spell cooldown was
+// cleared would still be blocked by its shared category.
+class spell_gen_recharge : public AuraScript
+{
+    PrepareAuraScript(spell_gen_recharge);
+
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Player* player = GetTarget()->ToPlayer();
+        if (!player)
+            return;
+
+        player->GetSpellHistory()->ResetAllCooldowns();
+
+        // A hunter whose pet is still waiting on Intimidation has not really
+        // been recharged - the pet keeps its own history, so it goes too.
+        if (Pet* pet = player->GetPet())
+            pet->GetSpellHistory()->ResetAllCooldowns();
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(spell_gen_recharge::HandleApply, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+enum DiminishedSpells
+{
+    SPELL_DIMINISHED            = 90201,
+    SPELL_DIMINISHED_HEALING    = 90202
+};
+
+// 90201 - Diminished
+// A permanent, stacking handicap: every stack takes one percent off model
+// scale, maximum health, damage done and healing done, up to 100.
+//
+// The DBC stores -1 per effect, which is the per-stack value; the real amount
+// is -stackAmount and is recalculated here. Aura::SetStackAmount re-runs
+// CalculateAmount for every effect, so this fires whenever the stack count
+// moves and canBeRecalculated must stay true or the first value sticks.
+//
+// Healing lives in a separate hidden aura because a 3.3.5 spell only has three
+// effect slots and this needs four auras - Unit::SpellHealingPctDone reads only
+// SPELL_AURA_MOD_HEALING_DONE_PERCENT, so it cannot ride along on the damage
+// effect. 90202 is applied, stack-synced and removed from here, and should
+// never be applied by anything else.
+class spell_gen_diminished : public AuraScript
+{
+    PrepareAuraScript(spell_gen_diminished);
+
+    void CalcAmount(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
+    {
+        amount = -int32(GetStackAmount());
+        canBeRecalculated = true;
+    }
+
+    void SyncHealing(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* target = GetTarget();
+        uint8 const stacks = GetStackAmount();
+
+        Aura* helper = target->GetAura(SPELL_DIMINISHED_HEALING, GetCasterGUID());
+        if (!helper)
+        {
+            CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+            args.SetOriginalCaster(GetCasterGUID());
+            target->CastSpell(target, SPELL_DIMINISHED_HEALING, args);
+            helper = target->GetAura(SPELL_DIMINISHED_HEALING, GetCasterGUID());
+        }
+
+        if (helper && helper->GetStackAmount() != stacks)
+            helper->SetStackAmount(stacks);
+    }
+
+    void RemoveHealing(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        GetTarget()->RemoveAurasDueToSpell(SPELL_DIMINISHED_HEALING, GetCasterGUID());
+    }
+
+    void Register() override
+    {
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_gen_diminished::CalcAmount, EFFECT_0, SPELL_AURA_MOD_DAMAGE_PERCENT_DONE);
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_gen_diminished::CalcAmount, EFFECT_1, SPELL_AURA_MOD_INCREASE_HEALTH_PERCENT);
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_gen_diminished::CalcAmount, EFFECT_2, SPELL_AURA_MOD_SCALE);
+        // REAPPLY as well as CHANGE_AMOUNT: Aura::SetStackAmount calls
+        // ChangeAmount with onStackOrReapply set, and CHANGE_AMOUNT is only
+        // raised when the value actually moves. REAPPLY covers a stack change
+        // that happens to compute the same amount.
+        AfterEffectApply += AuraEffectApplyFn(spell_gen_diminished::SyncHealing, EFFECT_0, SPELL_AURA_MOD_DAMAGE_PERCENT_DONE, AuraEffectHandleModes(AURA_EFFECT_HANDLE_REAL | AURA_EFFECT_HANDLE_CHANGE_AMOUNT | AURA_EFFECT_HANDLE_REAPPLY));
+        AfterEffectRemove += AuraEffectRemoveFn(spell_gen_diminished::RemoveHealing, EFFECT_0, SPELL_AURA_MOD_DAMAGE_PERCENT_DONE, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 90202 - Diminished (hidden healing-done half of 90201)
+class spell_gen_diminished_healing : public AuraScript
+{
+    PrepareAuraScript(spell_gen_diminished_healing);
+
+    void CalcAmount(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
+    {
+        amount = -int32(GetStackAmount());
+        canBeRecalculated = true;
+    }
+
+    void Register() override
+    {
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_gen_diminished_healing::CalcAmount, EFFECT_0, SPELL_AURA_MOD_HEALING_DONE_PERCENT);
+    }
+};
+
 // 38772 Grievous Wound
 // 43937 Grievous Wound
 // 62331 Impale
@@ -4815,6 +4935,9 @@ void AddSC_generic_spell_scripts()
     RegisterSpellScript(spell_gen_remove_flight_auras);
     RegisterSpellScript(spell_gen_remove_impairing_auras);
     RegisterSpellScript(spell_gen_restoration);
+    RegisterSpellScript(spell_gen_recharge);
+    RegisterSpellScript(spell_gen_diminished);
+    RegisterSpellScript(spell_gen_diminished_healing);
     RegisterSpellAndAuraScriptPair(spell_gen_replenishment, spell_gen_replenishment_aura);
     RegisterSpellScript(spell_gen_remove_on_health_pct);
     RegisterSpellScript(spell_gen_remove_on_full_health);

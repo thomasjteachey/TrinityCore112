@@ -28,6 +28,7 @@
 #include "PlayerbotRandomBotParticipation.h"
 #include "Random.h"
 #include "SharedDefines.h"
+#include "SpellAuras.h"
 #include "WorldSession.h"
 
 #include <algorithm>
@@ -98,6 +99,7 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
     uint32 const enemyTeam = request->enemyTeam;
     std::vector<ObjectGuid> sources = request->sourceGuids;
     std::vector<Position> const positions = request->spawnPositions;
+    std::vector<uint8> const handicap = request->diminishedStacks;
 
     // Most waves mirror the bot population, not the party. The battleground
     // cannot see the bot roster from the game lib, so it sends party picks as
@@ -147,6 +149,25 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
             TC_LOG_WARN("playerbot", "PlayerbotVhrWaveDriver: failed to clone {} for wave {} of instance {}.",
                 source->GetName(), waveNumber, bg->GetInstanceID());
             continue;
+        }
+
+        // The wave's trailing clone is usually a partial one - the difficulty
+        // curve advances a quarter of a clone per wave, and Diminished is how
+        // the fractions are expressed. Stacks are the percentage removed, so a
+        // clone meant to fight at 25% power carries 75 of them.
+        //
+        // Applied rather than cast: the clone has just been seated and this
+        // needs to land before it engages, with no cast time, GCD or line of
+        // sight in the way. MOD_INCREASE_HEALTH_PERCENT preserves the current
+        // health percentage, so a clone at full health stays full at its new
+        // lower maximum.
+        if (i < handicap.size() && handicap[i])
+        {
+            if (Aura* diminished = clone->AddAura(BG_VHR_SPELL_DIMINISHED, clone))
+                diminished->SetStackAmount(handicap[i]);
+            else
+                TC_LOG_WARN("playerbot", "PlayerbotVhrWaveDriver: could not apply Diminished to {} for wave {} of instance {}.",
+                    clone->GetName(), waveNumber, bg->GetInstanceID());
         }
 
         ++spawned;

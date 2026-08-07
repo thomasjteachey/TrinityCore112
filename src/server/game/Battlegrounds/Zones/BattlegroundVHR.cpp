@@ -4,6 +4,10 @@
 #include "DBCStores.h"
 #include "GameObject.h"
 #include "Log.h"
+#include "Map.h"
+// Map.h only forward-declares VMAP::ModelIgnoreFlags, and PickBuffPosition
+// names one of its values.
+#include "ModelIgnoreFlags.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "Random.h"
@@ -127,6 +131,7 @@ BattlegroundVHR::BattlegroundVHR()
     _highestWaveCleared = 0;
     _waveState = WaveState::NotStarted;
     _prepTimerMs = 0;
+    _buffLifetimeMs = 0;
     _lastCountdownSecond = 0;
     _stateCheckTimerMs = 0;
     _hasPendingRequest = false;
@@ -171,6 +176,7 @@ void BattlegroundVHR::Reset()
     _highestWaveCleared = 0;
     _waveState = WaveState::NotStarted;
     _prepTimerMs = 0;
+    _buffLifetimeMs = 0;
     _lastCountdownSecond = 0;
     _stateCheckTimerMs = 0;
     _waveCells.clear();
@@ -233,12 +239,36 @@ void BattlegroundVHR::StartingEventOpenDoors()
     BeginWave();
 }
 
+uint32 BattlegroundVHR::GetFullStrengthCountForWave(uint32 wave) const
+{
+    if (!wave)
+        return 0;
+
+    // A quarter of a clone per wave elapsed; every fourth quarter is a whole
+    // clone joining the wave at full strength.
+    return _partySize + (wave - 1) / BG_VHR_QUARTERS_PER_CLONE;
+}
+
+uint8 BattlegroundVHR::GetPartialCloneStacks(uint32 wave)
+{
+    if (!wave)
+        return 0;
+
+    uint32 const quarter = (wave - 1) % BG_VHR_QUARTERS_PER_CLONE;
+    if (!quarter)
+        return 0;   // the ramp landed on a whole clone, nothing partial here
+
+    // quarter 1..3 is a clone at 25%/50%/75% power, and Diminished stacks are
+    // the percentage REMOVED - so 25% power is 75 stacks.
+    return static_cast<uint8>(100 - quarter * (100 / BG_VHR_QUARTERS_PER_CLONE));
+}
+
 uint32 BattlegroundVHR::GetEnemyCountForWave(uint32 wave) const
 {
     if (!wave)
         return 0;
 
-    return _partySize + wave - 1;
+    return GetFullStrengthCountForWave(wave) + (GetPartialCloneStacks(wave) ? 1 : 0);
 }
 
 void BattlegroundVHR::BeginWave()
@@ -338,6 +368,14 @@ void BattlegroundVHR::ComposeWave(uint32 enemyCount)
             break;
         }
     }
+
+    // Every clone is full strength except the trailing partial one, which is
+    // what advances the curve in quarter-clone steps. It goes last so it is the
+    // clone spawned into the highest cell slot rather than a random one.
+    _pendingRequest.diminishedStacks.assign(_pendingRequest.sourceGuids.size(), 0);
+    if (uint8 const stacks = GetPartialCloneStacks(_waveNumber))
+        if (!_pendingRequest.diminishedStacks.empty())
+            _pendingRequest.diminishedStacks.back() = stacks;
 
     // Spread the wave over as many cells as it needs, starting from a different
     // cell each wave so consecutive waves do not pour out of the same door.
@@ -529,13 +567,178 @@ void BattlegroundVHR::OpenWaveCell()
 void BattlegroundVHR::CompleteWave()
 {
     _highestWaveCleared = _waveNumber;
+
+    // Reward first: BeginWave may end the run outright when the cap is reached,
+    // and there is no point dropping powerups into a finished battleground.
+    SpawnWaveRewardBuffs();
+
     BeginWave();
+}
+
+bool BattlegroundVHR::CanPickUpPowerup(Player const* player) const
+{
+    // The clones are Players on the enemy team and walk right over the drop on
+    // their way in, so without this the wave eats the party's reward.
+    return player && player->GetBGTeam() == _humanTeam;
+}
+
+// Find a spot on the chamber floor that is walkable, clear of the party, clear
+// of the cell doors, and not on top of another drop.
+bool BattlegroundVHR::PickBuffPosition(std::vector<Position> const& taken, Position& out) const
+{
+    Map* map = GetBgMap();
+    if (!map)
+        return false;
+
+    std::vector<ObjectGuid> const roster = GetHumanRoster(true);
+
+    // Rings outward from the middle of the floor. The centre is the furthest
+    // point from every cell, so working out from it keeps drops in the open
+    // rather than tucked against the wall.
+    static float const kRadii[] = { 12.0f, 18.0f, 24.0f, 30.0f, 8.0f };
+
+    for (uint32 attempt = 0; attempt < 60; ++attempt)
+    {
+        float const radius = kRadii[attempt % (sizeof(kRadii) / sizeof(kRadii[0]))];
+        float const angle = frand(0.0f, 2.0f * float(M_PI));
+
+        Position candidate(
+            kChamberCentre.GetPositionX() + radius * std::cos(angle),
+            kChamberCentre.GetPositionY() + radius * std::sin(angle),
+            kChamberCentre.GetPositionZ(),
+            frand(0.0f, 2.0f * float(M_PI)));
+
+        // Snap to the floor. An invalid height means there is no ground there.
+        float const z = map->GetHeight(PHASEMASK_NORMAL, candidate.GetPositionX(), candidate.GetPositionY(),
+            kChamberCentre.GetPositionZ() + 5.0f, true, 20.0f);
+        if (z <= INVALID_HEIGHT)
+            continue;
+
+        // Reject the entrance ramp and the raised cell ledges - the drop has to
+        // be on the flat fighting floor or players cannot simply run to it.
+        if (std::fabs(z - kChamberCentre.GetPositionZ()) > float(BG_VHR_BUFF_MAX_FLOOR_DRIFT))
+            continue;
+
+        candidate.m_positionZ = z + 0.5f;
+
+        // Inside the room, not through a wall.
+        if (!map->isInLineOfSight(kChamberCentre.GetPositionX(), kChamberCentre.GetPositionY(), kChamberCentre.GetPositionZ() + 2.0f,
+            candidate.GetPositionX(), candidate.GetPositionY(), candidate.GetPositionZ() + 2.0f,
+            PHASEMASK_NORMAL, LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing))
+            continue;
+
+        // Never in a gate that is about to open.
+        bool blocked = false;
+        for (VhrCell const& cell : kCells)
+            if (candidate.GetExactDist2d(cell.release) < float(BG_VHR_BUFF_MIN_CELL_DISTANCE))
+            {
+                blocked = true;
+                break;
+            }
+        if (blocked)
+            continue;
+
+        // Away from the party - the point is to make them leave the huddle.
+        for (ObjectGuid guid : roster)
+            if (Player const* member = ObjectAccessor::FindPlayer(guid))
+                if (candidate.GetExactDist2d(*member) < float(BG_VHR_BUFF_MIN_PLAYER_DISTANCE))
+                {
+                    blocked = true;
+                    break;
+                }
+        if (blocked)
+            continue;
+
+        // ...and not stacked on a drop already placed this wave.
+        for (Position const& other : taken)
+            if (candidate.GetExactDist2d(other) < float(BG_VHR_BUFF_MIN_CELL_DISTANCE))
+            {
+                blocked = true;
+                break;
+            }
+        if (blocked)
+            continue;
+
+        out = candidate;
+        return true;
+    }
+
+    return false;
+}
+
+void BattlegroundVHR::SpawnWaveRewardBuffs()
+{
+    // One drop per three players, rounded down, fixed to the party size the run
+    // started with so it does not shrink as people die.
+    uint32 const wanted = std::min<uint32>(_partySize / BG_VHR_PLAYERS_PER_BUFF, BG_VHR_MAX_WAVE_BUFFS);
+
+    // Whatever is still lying around from the previous wave goes now, so the
+    // slots are free and the party never banks two waves' worth.
+    DespawnWaveRewardBuffs();
+
+    if (!wanted)
+        return;
+
+    // Speed is deliberately not in the roll - the party is not chasing anyone.
+    static uint32 const kBuffEntries[] =
+    {
+        BG_OBJECTID_REGENBUFF_ENTRY,
+        BG_OBJECTID_BERSERKERBUFF_ENTRY,
+        BG_VHR_GO_RECHARGE_BUFF
+    };
+
+    std::vector<Position> placed;
+    placed.reserve(wanted);
+
+    for (uint32 i = 0; i < wanted; ++i)
+    {
+        Position spot;
+        if (!PickBuffPosition(placed, spot))
+        {
+            TC_LOG_DEBUG("bg.battleground", "BattlegroundVHR: no clear spot for wave-{} reward {} in instance {}.",
+                _waveNumber, i, GetInstanceID());
+            continue;
+        }
+
+        uint32 const kBuffCount = uint32(sizeof(kBuffEntries) / sizeof(kBuffEntries[0]));
+        uint32 const entry = kBuffEntries[urand(0, kBuffCount - 1)];
+        if (!AddObject(BG_VHR_OBJECT_BUFF_1 + i, entry, spot, 0.0f, 0.0f,
+            std::sin(spot.GetOrientation() / 2.0f), std::cos(spot.GetOrientation() / 2.0f), RESPAWN_IMMEDIATELY))
+        {
+            TC_LOG_ERROR("bg.battleground", "BattlegroundVHR: could not create reward powerup {} for instance {}.",
+                entry, GetInstanceID());
+            continue;
+        }
+
+        placed.push_back(spot);
+    }
+
+    if (!placed.empty())
+        _buffLifetimeMs = BG_VHR_BUFF_LIFETIME_MS;
+}
+
+void BattlegroundVHR::DespawnWaveRewardBuffs()
+{
+    for (uint32 i = 0; i < BG_VHR_MAX_WAVE_BUFFS; ++i)
+        DelObject(BG_VHR_OBJECT_BUFF_1 + i);
+
+    _buffLifetimeMs = 0;
 }
 
 void BattlegroundVHR::PostUpdateImpl(uint32 diff)
 {
     if (GetStatus() != STATUS_IN_PROGRESS)
         return;
+
+    // Dropped powerups are on a wall clock, not a wave clock: an uncollected
+    // reward is taken back whether or not the next wave has started.
+    if (_buffLifetimeMs)
+    {
+        if (_buffLifetimeMs <= diff)
+            DespawnWaveRewardBuffs();
+        else
+            _buffLifetimeMs -= diff;
+    }
 
     switch (_waveState)
     {
