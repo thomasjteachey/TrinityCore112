@@ -57,6 +57,14 @@ enum BG_VHR_BroadcastTexts
     BG_VHR_TEXT_NEXT_WAVE_IN_TEN_SECONDS = 910079
 };
 
+enum BG_VHR_TrinityStrings
+{
+    // "Next wave in %u..." - formatted per second and sent as a raid-boss
+    // emote, which the client draws in the centre of the screen. See
+    // sql/custom/world/2026_08_06_04_world_violet_hold_countdown_text.sql.
+    BG_VHR_STRING_NEXT_WAVE_COUNTDOWN = 20100
+};
+
 enum BG_VHR_Objects
 {
     BG_VHR_OBJECT_CELL_XEVOZZ      = 0,
@@ -211,6 +219,8 @@ private:
     void ClearPlayersFromSpawn();
     void ApplyPreparationToWave();
     void ReleaseWaveFromPreparation();
+    // Centre-screen "Next wave in N..." notification, once per whole second.
+    void AnnounceWaveCountdown();
     void SetWaveEnemyImmunity(bool immune);
     void CheckRunState();
     void TeleportSurvivorsToGurubashi();
@@ -235,6 +245,9 @@ private:
     uint32 _highestWaveCleared;
     WaveState _waveState;
     uint32 _prepTimerMs;
+    // Last whole second announced during the prep window, so the countdown
+    // fires once per second instead of once per tick.
+    uint32 _lastCountdownSecond;
     uint32 _stateCheckTimerMs;
 
     // Cells in use by the current wave, as BG_VHR_OBJECT_* indices.

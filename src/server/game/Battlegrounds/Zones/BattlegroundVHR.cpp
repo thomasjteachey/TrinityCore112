@@ -127,6 +127,7 @@ BattlegroundVHR::BattlegroundVHR()
     _highestWaveCleared = 0;
     _waveState = WaveState::NotStarted;
     _prepTimerMs = 0;
+    _lastCountdownSecond = 0;
     _stateCheckTimerMs = 0;
     _hasPendingRequest = false;
 }
@@ -170,6 +171,7 @@ void BattlegroundVHR::Reset()
     _highestWaveCleared = 0;
     _waveState = WaveState::NotStarted;
     _prepTimerMs = 0;
+    _lastCountdownSecond = 0;
     _stateCheckTimerMs = 0;
     _waveCells.clear();
     _waveEnemies.clear();
@@ -258,6 +260,7 @@ void BattlegroundVHR::BeginWave()
 
     _waveState = WaveState::AwaitingSpawn;
     _prepTimerMs = BG_VHR_PREP_MS;
+    _lastCountdownSecond = 0;
 
     UpdateScoreWorldStates();
 }
@@ -427,10 +430,39 @@ void BattlegroundVHR::NotifyWaveSpawnFulfilled(uint32 waveNumber, uint32 /*spawn
         ApplyPreparationToWave();
         _waveState = WaveState::Preparing;
         _prepTimerMs = BG_VHR_PREP_MS;
-        SendBroadcastText(BG_VHR_TEXT_NEXT_WAVE_IN_TEN_SECONDS, CHAT_MSG_BG_SYSTEM_NEUTRAL);
+        // Seed above the first tick so the countdown announces 10 itself
+        // rather than needing a separate opening message.
+        _lastCountdownSecond = (BG_VHR_PREP_MS / IN_MILLISECONDS) + 1;
+        AnnounceWaveCountdown();
     }
 
     UpdateScoreWorldStates();
+}
+
+// Announce the wave countdown as a centre-screen notification, once per whole
+// second.
+//
+// CHAT_MSG_RAID_BOSS_EMOTE is what the client routes to RaidBossEmoteFrame -
+// the large centre text used for boss emotes and raid warnings - rather than
+// the chat frame. The wave timer previously announced itself once as an
+// ordinary battleground chat line, which is trivially missed while fighting the
+// wave that is still alive.
+//
+// Called every tick; the _lastCountdownSecond guard is what makes it fire on
+// the second instead of on every update.
+void BattlegroundVHR::AnnounceWaveCountdown()
+{
+    if (GetStatus() != STATUS_IN_PROGRESS)
+        return;
+
+    // Round up: with 9.6s left the players should still be reading "10".
+    uint32 const secondsLeft = (_prepTimerMs + IN_MILLISECONDS - 1) / IN_MILLISECONDS;
+    if (!secondsLeft || secondsLeft >= _lastCountdownSecond)
+        return;
+
+    _lastCountdownSecond = secondsLeft;
+    PSendMessageToAll(BG_VHR_STRING_NEXT_WAVE_COUNTDOWN, CHAT_MSG_RAID_BOSS_EMOTE,
+                      nullptr, secondsLeft);
 }
 
 // The clones' ten seconds. Arena Preparation is what the playerbot core keys
@@ -520,7 +552,10 @@ void BattlegroundVHR::PostUpdateImpl(uint32 diff)
                 _waveState = WaveState::Fighting;
             }
             else
+            {
                 _prepTimerMs -= diff;
+                AnnounceWaveCountdown();
+            }
             break;
         default:
             break;
