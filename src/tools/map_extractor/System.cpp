@@ -80,19 +80,16 @@ float CONF_float_to_int16_limit = 2048.0f;   // Max accuracy = val/65536
 float CONF_flat_height_delta_limit = 0.005f; // If max - min less this value - surface is flat
 float CONF_flat_liquid_delta_limit = 0.001f; // If max - min less this value - liquid surface is flat
 
-// List MPQ for extract from
+// Base archives. Patches are NOT listed here - they are scanned for in
+// LoadCommonMPQFiles so that a custom lettered patch cannot be missed by
+// forgetting to add it to a hardcoded list. That had already happened: only
+// patch-Z was ever added, so patch-Y (and F, G, H, L, T, U) were silently
+// ignored, and any terrain living in them never reached the extracted maps.
 const char *CONF_mpq_list[]={
     "common.MPQ",
     "common-2.MPQ",
     "lichking.MPQ",
     "expansion.MPQ",
-    "patch.MPQ",
-    "patch-2.MPQ",
-    "patch-3.MPQ",
-    "patch-4.MPQ",
-    "patch-5.MPQ",
-    "patch-6.MPQ",
-    "patch-Z.MPQ",
 };
 
 static char const* const langs[] = {"enGB", "enUS", "deDE", "esES", "frFR", "koKR", "zhCN", "zhTW", "enCN", "enTW", "esMX", "ruRU" };
@@ -1126,13 +1123,36 @@ void LoadLocaleMPQFiles(int const locale)
 void LoadCommonMPQFiles()
 {
     std::string fileName;
+
+    auto tryOpen = [&fileName](std::string const& name)
+    {
+        fileName = Trinity::StringFormat("{}/Data/{}", input_path, name);
+        if (boost::filesystem::exists(fileName))
+        {
+            printf("Loading archive %s\n", name.c_str());
+            new MPQArchive(fileName.c_str());
+        }
+    };
+
+    // Base archives first.
     int count = sizeof(CONF_mpq_list)/sizeof(char*);
     for(int i = 0; i < count; ++i)
-    {
-        fileName = Trinity::StringFormat("{}/Data/{}", input_path, CONF_mpq_list[i]);
-        if (boost::filesystem::exists(fileName))
-            new MPQArchive(fileName.c_str());
-    }
+        tryOpen(CONF_mpq_list[i]);
+
+    // Then patches, in the same order vmap4_extractor scans them. Keeping the
+    // two tools in step is not cosmetic: if one loads an archive the other does
+    // not, the extracted terrain and the extracted collision come from
+    // different content, and the mismatch only shows up in game as players
+    // clipping through geometry that looks solid.
+    //
+    // Normal Blizzard patch order: patch.MPQ, patch-2.MPQ ... patch-99.MPQ
+    for (int i = 1; i <= 99; ++i)
+        tryOpen(i == 1 ? std::string("patch.MPQ") : Trinity::StringFormat("patch-{}.MPQ", i));
+
+    // Custom lettered patches: patch-A.MPQ ... patch-Z.MPQ. Opened after the
+    // numeric ones so they win override priority.
+    for (char c = 'A'; c <= 'Z'; ++c)
+        tryOpen(Trinity::StringFormat("patch-{}.MPQ", c));
 }
 
 inline void CloseMPQFiles()

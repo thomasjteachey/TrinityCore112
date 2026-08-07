@@ -12,9 +12,10 @@ format notes), with the Violet Hold row set and two extra specs: DungeonMap
 and DungeonMapChunk, which an indoor instance needs for its floor map and a
 continent clone did not.
 
-Idempotent: a row whose id is already present is left alone, so re-running
-after a partial failure is safe. The original is copied to <name>.bak-vhr
-once, and never overwritten by a later run.
+Idempotent: a row whose id is already present is left alone, while the outdoor
+classification fields on existing AreaTable/WMOAreaTable rows are normalized
+in place. The original is copied to <name>.bak-vhr once, and never overwritten
+by a later run.
 """
 import os
 import shutil
@@ -72,6 +73,12 @@ SPECS = {
         "fields": "iiii" + "s" + LOC + LOC + "ii" + "s" + LOC + "s" + "iii",
         "count": 63,
     },
+    "WMOAreaTable.dbc": {
+        # ID, WMOID, NameSetID, WMOGroupID, five sound fields, Flags,
+        # AreaTableID, AreaName(loc).
+        "fields": "i" * 11 + LOC,
+        "count": 28,
+    },
 }
 
 
@@ -85,6 +92,12 @@ MAP_ID = 1608
 BG_TYPE_ID = 105
 AREA_ID = 30608
 AREA_BIT = 3718                 # 3717 (Tanaris) is the highest in use
+STOCK_AREA_ID = 4415            # baked into all 6,400 DalaranPrison MCNKs
+AREA_FLAG_INSIDE = 0x02000000
+AREA_FLAG_OUTSIDE = 0x04000000
+WMO_ROOT_ID = 5282
+WMO_AREA_FLAG_INSIDE = 2
+WMO_AREA_FLAG_OUTSIDE = 4
 
 BG_NAME = "The Violet Hold"
 MAP_NAME = "The Violet Hold Gauntlet"
@@ -129,7 +142,10 @@ ROWS = {
          MAP_ID,        # ContinentID -> the new map
          0,             # ParentAreaID
          AREA_BIT,
-         0,             # Flags
+         AREA_FLAG_OUTSIDE,
+                        # Explicit outside verdict. The stock 4415 row is
+                        # normalized below because every DalaranPrison ADT
+                        # MCNK references it directly.
          0,             # SoundProviderPref            )
          0,             # SoundProviderPrefUnderwater  ) all copied from the
          0,             # AmbienceID                   ) stock Violet Hold
@@ -198,8 +214,8 @@ ROWS = {
         [51002, MAP_ID, 25154, 1101, -10000.0],
     ],
     "WorldStateUI.dbc": [
-        # The top-frame readout: party members left and enemies left. "%9401w"
-        # substitutes the live value of that world state - see
+        # The top-frame readout: party members left, enemies left, and the
+        # current wave. "%9401w" substitutes the live value of that world state - see
         # BG_VHR_WorldStates in BattlegroundVHR.h. The format copies the
         # custom arenas' rows ("Green Team: %3600w Players Remaining"): plain
         # labelled text, no icon. StateVariable 9400 is this battleground's
@@ -223,11 +239,71 @@ ROWS = {
         + loc("", 16712188) + [
          "",
          0, 0, 0],
+
+        [90027, MAP_ID, 0, 0, ""]
+        + loc("Wave: %9403w") + loc("") + [
+         9400,
+         0,
+         ""]
+        + loc("", 16712188) + [
+         "",
+         0, 0, 0],
     ],
+    # These are stock rows and are rewritten in place by normalize_outdoors;
+    # no new WMOAreaTable records are appended.
+    "WMOAreaTable.dbc": [],
 }
 
 
 # --------------------------------------------------------------------- engine
+def normalize_outdoors(name, rec_bytes, rec_count, rec_size):
+    """Return the number of existing records whose outdoor fields changed.
+
+    ADTs have no indoor/outdoor flag. Every DalaranPrison MCNK carries area id
+    4415, so both that stock row and map 1608's fallback row must explicitly
+    say OUTSIDE. WMO model flags must remain stock because they control client
+    rendering/culling and must be changed as a coupled root/group/batch set by
+    vhr_outdoors.py; WMOAreaTable is the client/server outdoor override. Its
+    Violet Hold rows must also resolve to AreaTable 4415 instead of area 0, or
+    the 3.3.5 client falls back to the stock WMO's indoor classification when
+    deciding whether to enable outdoors-only action buttons.
+    """
+    changed = 0
+    for i in range(rec_count):
+        base = i * rec_size
+        record_id = struct.unpack_from("<i", rec_bytes, base)[0]
+        if name == "AreaTable.dbc" and record_id in (STOCK_AREA_ID, AREA_ID):
+            field = base + 4 * 4
+            old = struct.unpack_from("<I", rec_bytes, field)[0]
+            new = (old | AREA_FLAG_OUTSIDE) & ~AREA_FLAG_INSIDE
+        elif name == "WMOAreaTable.dbc":
+            wmo_id = struct.unpack_from("<i", rec_bytes, base + 4)[0]
+            if wmo_id != WMO_ROOT_ID:
+                continue
+            flags_field = base + 4 * 9
+            area_field = base + 4 * 10
+            old_flags = struct.unpack_from("<I", rec_bytes, flags_field)[0]
+            old_area = struct.unpack_from("<I", rec_bytes, area_field)[0]
+            new_flags = (old_flags | WMO_AREA_FLAG_OUTSIDE) & ~WMO_AREA_FLAG_INSIDE
+            new_area = STOCK_AREA_ID
+            if new_flags == old_flags and new_area == old_area:
+                continue
+            struct.pack_into("<I", rec_bytes, flags_field, new_flags)
+            struct.pack_into("<I", rec_bytes, area_field, new_area)
+            print("      id %-6s WMO outdoor flags 0x%08X -> 0x%08X, area %u -> %u" %
+                  (record_id, old_flags, new_flags, old_area, new_area))
+            changed += 1
+            continue
+        else:
+            continue
+        if new != old:
+            struct.pack_into("<I", rec_bytes, field, new)
+            print("      id %-6s outdoor flags 0x%08X -> 0x%08X" %
+                  (record_id, old, new))
+            changed += 1
+    return changed
+
+
 def patch(path, spec, rows, dry_run=False):
     name = os.path.basename(path)
     with open(path, "rb") as f:
@@ -256,6 +332,7 @@ def patch(path, spec, rows, dry_run=False):
     for i in range(rec_count):
         existing.add(struct.unpack_from("<i", rec_bytes, i * rec_size)[0])
 
+    changed = normalize_outdoors(name, rec_bytes, rec_count, rec_size)
     added = 0
     for row in rows:
         if len(row) != field_count:
@@ -283,7 +360,7 @@ def patch(path, spec, rows, dry_run=False):
         added += 1
         print("      id %-6s appended" % row[0])
 
-    if not added:
+    if not added and not changed:
         return 0
 
     out = bytearray(struct.pack("<4sIIII", b"WDBC", rec_count, field_count,
@@ -293,7 +370,7 @@ def patch(path, spec, rows, dry_run=False):
 
     if dry_run:
         print("      (dry run, %d bytes not written)" % len(out))
-        return added
+        return added + changed
 
     backup = path + ".bak-vhr"
     if not os.path.exists(backup):
@@ -305,7 +382,7 @@ def patch(path, spec, rows, dry_run=False):
     with open(tmp, "wb") as f:
         f.write(out)
     os.replace(tmp, path)
-    return added
+    return added + changed
 
 
 def restore(path):
@@ -345,7 +422,8 @@ def main():
                 continue
             print("    %s" % name)
             total += patch(path, spec, ROWS[name], dry_run)
-    print("total rows added: %d%s" % (total, " (dry run)" if dry_run else ""))
+    print("total records added/updated: %d%s" %
+          (total, " (dry run)" if dry_run else ""))
 
 
 if __name__ == "__main__":

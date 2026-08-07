@@ -144,8 +144,11 @@ void BattlegroundVHR::AddPlayer(Player* player)
     }
 
     // A clone summoned into a live wave must not inherit the run's earlier
-    // eliminations if its GUID is ever recycled.
-    _eliminated.erase(player->GetGUID());
+    // eliminations if its GUID is ever recycled. Only the living get this
+    // amnesty: a dead player relogging back into the run is still down, and
+    // HandlePlayerResurrect readmits them if they are ever rezzed.
+    if (player->IsAlive())
+        _eliminated.erase(player->GetGUID());
 
     UpdateScoreWorldStates();
 }
@@ -619,6 +622,17 @@ void BattlegroundVHR::HandleKillPlayer(Player* victim, Player* killer)
 
     UpdateScoreWorldStates();
     CheckRunState();
+}
+
+void BattlegroundVHR::HandlePlayerResurrect(Player* player)
+{
+    // There are no graveyards here, but combat rezzes (soulstone, Rebirth,
+    // Reincarnation) still work and are meant to. Whoever stands up is holding
+    // the line again and has to leave the eliminated set, or the next death
+    // would wipe-check the run with them still fighting. Symmetric on purpose:
+    // a rezzed clone keeps its wave alive too.
+    _eliminated.erase(player->GetGUID());
+    UpdateScoreWorldStates();
 }
 
 void BattlegroundVHR::UpdateScoreWorldStates()

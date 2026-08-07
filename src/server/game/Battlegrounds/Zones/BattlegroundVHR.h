@@ -170,6 +170,7 @@ public:
 
     WorldSafeLocsEntry const* GetClosestGraveyard(Player* player) override;
     void HandleKillPlayer(Player* victim, Player* killer) override;
+    void HandlePlayerResurrect(Player* player) override;
     void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet) override;
     bool HandlePlayerUnderMap(Player* player) override;
     void EndBattleground(uint32 winner) override;

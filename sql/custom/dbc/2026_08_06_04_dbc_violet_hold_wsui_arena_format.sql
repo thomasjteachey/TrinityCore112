@@ -1,10 +1,9 @@
--- Keep the Violet Hold top-frame readout to its two live counts.
+-- Keep the Violet Hold top-frame readout to its live counts and wave number.
 --
 -- The first version showed bare numbers behind PvP icons; the arenas'
 -- convention (rows 90100+ - "Green Team: %3600w Players Remaining") is plain
--- labelled text. The current version deliberately removes the labels and the
--- wave-number row, leaving only "X Players Remaining" and
--- "X Memories Remaining". The rows use StateVariable 9400, the
+-- labelled text. The current version removes the team labels while retaining
+-- "X Players Remaining", "X Memories Remaining", and "Wave: X". The rows use StateVariable 9400, the
 -- battleground's own show flag, instead of "always visible".
 --
 -- The canonical row values live in 2026_08_06_02_dbc_violet_hold_battleground.sql
@@ -27,5 +26,9 @@ VALUES
    '', 0, 0, 0),
   (90026, 1608, 0, 0, '',
    '%9402w Memories Remaining', 16712190, '', 16712190,
+   9400, 0, '', 16712188,
+   '', 0, 0, 0),
+  (90027, 1608, 0, 0, '',
+   'Wave: %9403w', 16712190, '', 16712190,
    9400, 0, '', 16712188,
    '', 0, 0, 0);

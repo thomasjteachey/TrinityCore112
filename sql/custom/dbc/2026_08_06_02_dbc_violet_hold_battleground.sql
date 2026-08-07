@@ -4,9 +4,10 @@
 -- wave-survival battleground (BATTLEGROUND_VHR = 105).
 --
 -- Directory stays "DalaranPrison", the stock instance's own folder: the client
--- picks terrain by Directory, not map id, so no client map files are needed at
--- all - the same trick map 1615 uses with 615. Unlike Tanaris there is no plan
--- to edit this terrain, so borrowing the directory is safe. Server-side
+-- picks terrain by Directory, not map id, so the same trick map 1615 uses with
+-- 615 applies. The client patch overrides the shared WMO group's classification
+-- as exterior; all ADT MCNKs continue to resolve through stock area 4415.
+-- Server-side
 -- maps/vmaps/mmaps are keyed by map id and are byte-copies of 608's
 -- (tools/violet_hold/clone_map_data.sh).
 --
@@ -62,7 +63,8 @@ VALUES
 -- comes from the WMO area data in the byte-copied map files, which still says
 -- 4415 (stock Violet Hold) - the same way map 1620 reports plain Tanaris. The
 -- server code accounts for this (Player::SendInitWorldStates case 4415).
--- Shape copied from area 4415; AreaBit 3718 is the next free bit after
+-- Both 4415 and this custom fallback are normalized to AREA_FLAG_OUTSIDE by
+-- the dedicated outdoor migration. Shape copied from area 4415; AreaBit 3718 is the next free bit after
 -- Tanaris's 3717 (the client's explored-zones bitfield holds 4096).
 DELETE FROM dbc.areatable_lplus WHERE ID = 30608;
 INSERT INTO dbc.areatable_lplus
@@ -72,7 +74,7 @@ INSERT INTO dbc.areatable_lplus
    LiquidTypeID_1, LiquidTypeID_2, LiquidTypeID_3, LiquidTypeID_4,
    MinElevation, Ambient_Multiplier, Lightid)
 VALUES
-  (30608, 1608, 0, 3718, 0,
+  (30608, 1608, 0, 3718, 67108864,
    0, 0, 0, 0, 0,
    0, 'The Violet Hold Gauntlet', 16712190, 0,
    0, 0, 0, 0,
@@ -157,7 +159,7 @@ VALUES
   (51002, 1608, 25154, 1101, -10000);
 
 -- -------------------------------------------------------- WorldStateUI.dbc
--- The top-frame readout: party members left and enemies left.
+-- The top-frame readout: party members left, enemies left, and current wave.
 -- Without these rows the server still sends the world states and the client
 -- still stores them, but nothing is declared to display them.
 --
@@ -182,5 +184,9 @@ VALUES
    '', 0, 0, 0),
   (90026, 1608, 0, 0, '',
    '%9402w Memories Remaining', 16712190, '', 16712190,
+   9400, 0, '', 16712188,
+   '', 0, 0, 0),
+  (90027, 1608, 0, 0, '',
+   'Wave: %9403w', 16712190, '', 16712190,
    9400, 0, '', 16712188,
    '', 0, 0, 0);

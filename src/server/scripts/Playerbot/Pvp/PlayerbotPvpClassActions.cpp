@@ -2228,7 +2228,17 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     // other indefinitely, which is what shows up at arena boundaries. Settle
     // instead. The 0.5 yard margin is hysteresis: without it the bot would flip
     // between stopping and chasing every tick right at the range edge.
-    if (activeTargetRelativeMotion && currentDistance <= std::max(0.5f, genericMoveRange - 0.5f))
+    //
+    // The contact test is load-bearing, not belt-and-braces. "Inside the
+    // desired range" is not the same as "arrived": a bot approaching with a
+    // desired range of 15 while standing at 8 satisfies the range test and
+    // would be stopped dead mid-approach - which is precisely how this stranded
+    // stealthed rogues, parked and never closing. Only a bot actually in
+    // contact can have nothing left to approach.
+    float const contactDistance = player->GetCombatReach() + target->GetCombatReach() + 1.0f;
+    if (activeTargetRelativeMotion &&
+        currentDistance <= std::max(0.5f, genericMoveRange - 0.5f) &&
+        currentDistance <= contactDistance)
     {
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
         player->StopMoving();
