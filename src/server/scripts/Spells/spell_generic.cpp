@@ -3260,105 +3260,65 @@ class spell_gen_recharge : public AuraScript
 
 enum DiminishedSpells
 {
-    SPELL_DIMINISHED            = 90201,
-    SPELL_DIMINISHED_HEALING    = 90202
+    SPELL_DIMINISHED        = 90201,
+    SPELL_DIMINISHED_SCALE  = 90202
 };
 
 // 90201 - Diminished
-// A permanent, stacking handicap: every stack takes one percent off model
-// scale, maximum health, damage done and healing done, up to 100.
+// A permanent, stacking handicap. Every stack is one percent less damage done,
+// one percent less healing done and one percent MORE damage taken.
 //
-// The DBC stores -1 per effect, which is the per-stack value; the real amount
-// is -stackAmount and is recalculated here. Aura::SetStackAmount re-runs
-// CalculateAmount for every effect, so this fires whenever the stack count
-// moves and canBeRecalculated must stay true or the first value sticks.
+// The amounts are NOT computed here. AuraEffect::CalculateAmount multiplies by
+// the stack count AFTER the script's calc-amount handlers run, so a handler
+// returning the total produces stacks SQUARED - that is what made a 25-stack
+// clone take 625% extra damage instead of 25%. Base points in the DBC are the
+// per-stack value (-1 / +1) and the engine does the rest, exactly as Fire
+// Vulnerability does it.
 //
-// Healing lives in a separate hidden aura because a 3.3.5 spell only has three
-// effect slots and this needs four auras - Unit::SpellHealingPctDone reads only
-// SPELL_AURA_MOD_HEALING_DONE_PERCENT, so it cannot ride along on the damage
-// effect. 90202 is applied, stack-synced and removed from here, and should
-// never be applied by anything else.
+// Model scale lives on the hidden companion 90202 rather than here, for the
+// same reason. Scale is wanted at HALF rate - 100 stacks should be half size,
+// not invisible - and a per-stack integer cannot express -0.5. Giving the
+// companion half the parent's stacks gets there with a per-stack -1, and it
+// frees the parent's third effect slot for healing done. This script's only
+// job is keeping that companion applied at the right stack count.
 class spell_gen_diminished : public AuraScript
 {
     PrepareAuraScript(spell_gen_diminished);
 
-    void CalcAmount(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
-    {
-        amount = -int32(GetStackAmount());
-        canBeRecalculated = true;
-    }
-
-    // Size is deliberately gentler than the rest. A clone at 25% power was
-    // shrunk to a quarter of its height and became a hard-to-click speck, so
-    // scale runs over half the range the other effects do: 100 stacks is half
-    // size rather than nothing at all, and the 75-stack case sits at ~62%.
-    void CalcScaleAmount(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
-    {
-        amount = -int32(GetStackAmount()) / 2;
-        canBeRecalculated = true;
-    }
-
-    // The one effect that goes UP with stacks: more damage taken, not less.
-    // This replaced a max-health reduction, which was invisible in play - the
-    // clone is set to full health when it is built and the health aura keeps
-    // health PERCENT, so a weakened clone still showed a full bar.
-    void CalcDamageTakenAmount(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
-    {
-        amount = int32(GetStackAmount());
-        canBeRecalculated = true;
-    }
-
-    void SyncHealing(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    void SyncScaleHelper(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
         Unit* target = GetTarget();
-        uint8 const stacks = GetStackAmount();
 
-        Aura* helper = target->GetAura(SPELL_DIMINISHED_HEALING, GetCasterGUID());
+        // Half the parent's stacks, but never zero - a zero-stack aura is not
+        // a thing, and one stack of shrink is the correct floor anyway.
+        uint8 const stacks = GetStackAmount();
+        uint8 const halfStacks = stacks > 1 ? uint8(stacks / 2) : uint8(1);
+
+        Aura* helper = target->GetAura(SPELL_DIMINISHED_SCALE, GetCasterGUID());
         if (!helper)
         {
             CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
             args.SetOriginalCaster(GetCasterGUID());
-            target->CastSpell(target, SPELL_DIMINISHED_HEALING, args);
-            helper = target->GetAura(SPELL_DIMINISHED_HEALING, GetCasterGUID());
+            target->CastSpell(target, SPELL_DIMINISHED_SCALE, args);
+            helper = target->GetAura(SPELL_DIMINISHED_SCALE, GetCasterGUID());
         }
 
-        if (helper && helper->GetStackAmount() != stacks)
-            helper->SetStackAmount(stacks);
+        if (helper && helper->GetStackAmount() != halfStacks)
+            helper->SetStackAmount(halfStacks);
     }
 
-    void RemoveHealing(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    void RemoveScaleHelper(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
-        GetTarget()->RemoveAurasDueToSpell(SPELL_DIMINISHED_HEALING, GetCasterGUID());
+        GetTarget()->RemoveAurasDueToSpell(SPELL_DIMINISHED_SCALE, GetCasterGUID());
     }
 
     void Register() override
     {
-        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_gen_diminished::CalcAmount, EFFECT_0, SPELL_AURA_MOD_DAMAGE_PERCENT_DONE);
-        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_gen_diminished::CalcDamageTakenAmount, EFFECT_1, SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN);
-        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_gen_diminished::CalcScaleAmount, EFFECT_2, SPELL_AURA_MOD_SCALE);
         // REAPPLY as well as CHANGE_AMOUNT: Aura::SetStackAmount calls
         // ChangeAmount with onStackOrReapply set, and CHANGE_AMOUNT is only
-        // raised when the value actually moves. REAPPLY covers a stack change
-        // that happens to compute the same amount.
-        AfterEffectApply += AuraEffectApplyFn(spell_gen_diminished::SyncHealing, EFFECT_0, SPELL_AURA_MOD_DAMAGE_PERCENT_DONE, AuraEffectHandleModes(AURA_EFFECT_HANDLE_REAL | AURA_EFFECT_HANDLE_CHANGE_AMOUNT | AURA_EFFECT_HANDLE_REAPPLY));
-        AfterEffectRemove += AuraEffectRemoveFn(spell_gen_diminished::RemoveHealing, EFFECT_0, SPELL_AURA_MOD_DAMAGE_PERCENT_DONE, AURA_EFFECT_HANDLE_REAL);
-    }
-};
-
-// 90202 - Diminished (hidden healing-done half of 90201)
-class spell_gen_diminished_healing : public AuraScript
-{
-    PrepareAuraScript(spell_gen_diminished_healing);
-
-    void CalcAmount(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
-    {
-        amount = -int32(GetStackAmount());
-        canBeRecalculated = true;
-    }
-
-    void Register() override
-    {
-        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_gen_diminished_healing::CalcAmount, EFFECT_0, SPELL_AURA_MOD_HEALING_DONE_PERCENT);
+        // raised when the value actually moves.
+        AfterEffectApply += AuraEffectApplyFn(spell_gen_diminished::SyncScaleHelper, EFFECT_0, SPELL_AURA_MOD_DAMAGE_PERCENT_DONE, AuraEffectHandleModes(AURA_EFFECT_HANDLE_REAL | AURA_EFFECT_HANDLE_CHANGE_AMOUNT | AURA_EFFECT_HANDLE_REAPPLY));
+        AfterEffectRemove += AuraEffectRemoveFn(spell_gen_diminished::RemoveScaleHelper, EFFECT_0, SPELL_AURA_MOD_DAMAGE_PERCENT_DONE, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
@@ -4957,7 +4917,6 @@ void AddSC_generic_spell_scripts()
     RegisterSpellScript(spell_gen_restoration);
     RegisterSpellScript(spell_gen_recharge);
     RegisterSpellScript(spell_gen_diminished);
-    RegisterSpellScript(spell_gen_diminished_healing);
     RegisterSpellAndAuraScriptPair(spell_gen_replenishment, spell_gen_replenishment_aura);
     RegisterSpellScript(spell_gen_remove_on_health_pct);
     RegisterSpellScript(spell_gen_remove_on_full_health);
