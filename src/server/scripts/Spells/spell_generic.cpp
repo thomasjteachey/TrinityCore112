@@ -3275,12 +3275,12 @@ enum DiminishedSpells
 // per-stack value (-1 / +1) and the engine does the rest, exactly as Fire
 // Vulnerability does it.
 //
-// Model scale lives on the hidden companion 90202 rather than here, for the
-// same reason. Scale is wanted at HALF rate - 100 stacks should be half size,
-// not invisible - and a per-stack integer cannot express -0.5. Giving the
-// companion half the parent's stacks gets there with a per-stack -1, and it
-// frees the parent's third effect slot for healing done. This script's only
-// job is keeping that companion applied at the right stack count.
+// Model scale lives on the hidden companion 90202 rather than here because a
+// 3.3.5 spell has only three effect slots and the parent's are taken by damage
+// done, damage taken and healing done. The companion mirrors the parent's
+// stack count exactly - one percent of size per stack, same rate as the rest,
+// with Unit::RecalculateObjectScale's 0.1 floor catching the top end. This
+// script's only job is keeping that companion applied at the right count.
 class spell_gen_diminished : public AuraScript
 {
     PrepareAuraScript(spell_gen_diminished);
@@ -3288,11 +3288,7 @@ class spell_gen_diminished : public AuraScript
     void SyncScaleHelper(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
         Unit* target = GetTarget();
-
-        // Half the parent's stacks, but never zero - a zero-stack aura is not
-        // a thing, and one stack of shrink is the correct floor anyway.
         uint8 const stacks = GetStackAmount();
-        uint8 const halfStacks = stacks > 1 ? uint8(stacks / 2) : uint8(1);
 
         Aura* helper = target->GetAura(SPELL_DIMINISHED_SCALE, GetCasterGUID());
         if (!helper)
@@ -3303,8 +3299,8 @@ class spell_gen_diminished : public AuraScript
             helper = target->GetAura(SPELL_DIMINISHED_SCALE, GetCasterGUID());
         }
 
-        if (helper && helper->GetStackAmount() != halfStacks)
-            helper->SetStackAmount(halfStacks);
+        if (helper && helper->GetStackAmount() != stacks)
+            helper->SetStackAmount(stacks);
     }
 
     void RemoveScaleHelper(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)

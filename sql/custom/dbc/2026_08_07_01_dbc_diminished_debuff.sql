@@ -22,11 +22,11 @@
 --
 -- Why there is a companion spell: a 3.3.5 spell has exactly three effect slots
 -- and this needs four auras. Damage done, damage taken and healing done fill
--- the parent. Scale goes on 90202 because it is wanted at HALF rate - 100
--- stacks should be half size, not invisible - and a per-stack integer cannot
--- express -0.5. Giving the companion half the parent's stack count gets there
--- with a per-stack -1. spell_gen_diminished applies, stack-syncs and removes
--- it; nothing should ever apply 90202 directly.
+-- the parent, so scale rides on 90202 at the same one-percent-per-stack rate,
+-- with the companion mirroring the parent's stack count exactly.
+-- Unit::RecalculateObjectScale floors player scale at 0.1, so even 100 stacks
+-- leaves a clickable speck. spell_gen_diminished applies, stack-syncs and
+-- removes it; nothing should ever apply 90202 directly.
 --
 -- Effect 2 was MOD_INCREASE_HEALTH_PERCENT (133) and is now damage taken. The
 -- health version was invisible in play: the clone is set to full health after
@@ -77,7 +77,7 @@ UPDATE `tmp_dim` SET
   `Effect_3` = 6, `EffectAura_3` = 136, `EffectBasePoints_3` = -1, `EffectDieSides_3` = 0, `EffectMiscValue_3` = 0,   `EffectMechanic_3` = 0, `ImplicitTargetA_3` = 25;
 INSERT INTO `spell_lplus` SELECT * FROM `tmp_dim`;
 
--- 90202 - hidden model-scale helper, carried at HALF the parent's stacks. 0x80 SPELL_ATTR0_HIDDEN_CLIENTSIDE keeps
+-- 90202 - hidden model-scale helper, mirroring the parent's stack count. 0x80 SPELL_ATTR0_HIDDEN_CLIENTSIDE keeps
 -- it out of the aura bar so the player sees one debuff icon, not two.
 UPDATE `tmp_dim` SET
   `ID`                        = 90202,

@@ -556,6 +556,14 @@ class TC_GAME_API Battleground
         // narrows it to the human side so the clone waves cannot eat the
         // rewards the party is meant to be racing them for.
         virtual bool CanPickUpPowerup(Player const* /*player*/) const { return true; }
+
+        // Upper bound in SECONDS on the corpse reclaim delay while in this
+        // battleground; 0 means no cap. The stock delay escalates 30/60/120
+        // with repeated deaths, which modes built around dying repeatedly
+        // (Violet Hold) cap back down. Public because it is consulted from
+        // Player::GetCorpseReclaimDelay, which covers both the displayed
+        // timer and reclaim enforcement.
+        virtual uint32 GetCorpseReclaimDelayCap() const { return 0; }
         void SetHoliday(bool is_holiday);
 
         /// @todo make this protected:
@@ -637,13 +645,6 @@ class TC_GAME_API Battleground
 
         uint32 GetConfiguredResurrectionInterval(uint32 defaultValue) const { return m_IsCustomGame && m_CustomRules.ResurrectionIntervalMs ? m_CustomRules.ResurrectionIntervalMs : defaultValue; }
         virtual uint32 GetResurrectionInterval() const { return GetConfiguredResurrectionInterval(RESURRECTION_INTERVAL); }
-
-        // Upper bound in SECONDS on the corpse reclaim delay while in this
-        // battleground; 0 means no cap. The stock delay escalates 30/60/120
-        // with repeated deaths, which modes built around dying repeatedly
-        // (Violet Hold) cap back down. Consulted by Player::GetCorpseReclaimDelay,
-        // so it covers both the displayed timer and reclaim enforcement.
-        virtual uint32 GetCorpseReclaimDelayCap() const { return 0; }
         virtual uint32 GetBuffRespawnTime(uint32 type) const { return BUFF_RESPAWN_TIME; }
 
         // Whether an under-populated team should start the premature-finish
