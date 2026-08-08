@@ -60,7 +60,7 @@ VALUES
   -- revocation is built - the server never accepts the turn.
   (900116, 40000, 'Goblin Workshop', 'Converted WMO twin', 60, 60, 35, 16777216,
    1, 0, 1073742080, 0, 0, 551238166, 30, 1, 1.0, 1, 1.14286,
-   121, '', 'npc_rts_building');
+   1000, '', 'npc_rts_building');
 
 -- The vehicle action bar shown to whoever garrisons the building. Index 0-7.
 -- 51421 is the donor turret's Cannon Blast, a placeholder until the custom
