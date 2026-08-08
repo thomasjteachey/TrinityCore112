@@ -77,14 +77,19 @@ INSERT INTO npc_spellclick_spells (npc_entry, spell_id, cast_flags, user_type) V
 
 -- The building must never move or rotate, not even imperceptibly (user rule:
 -- outlawing client movement with pure server code is a lost cause - solve it
--- in data). A garrisoned rider's client steers a CAN_CONTROL vehicle, so the
--- creature carries a permanent MOD_STUN aura (9454, GM Freeze): the client can
--- send all the movement it likes, a stunned unit goes nowhere. Known
--- consequence: a stunned unit cannot cast either, so the custom building
--- spells will need SPELL_ATTR5_USABLE_WHILE_STUNNED (the placeholder 51421
--- fails while the stun holds).
+-- in data). Immobility is split across two data mechanisms:
+--   * translation + jumping: permanent MOD_ROOT aura 42716 "Self Root Forever
+--     (No Visual)" - a rooted mover cannot move or jump client-side;
+--   * rotation: vehicle kit 1000's facing limits (0.0001 rad) freeze turning.
+-- NOT a stun (9454 was tried first): the client refuses the Leave Vehicle
+-- action while its mover is stunned - the button simply did nothing - and a
+-- stunned vehicle cannot cast its action bar. Root gates neither: exits and
+-- bar casts (51421) work, which is also why future custom building spells do
+-- NOT need SPELL_ATTR5_USABLE_WHILE_STUNNED. Being a genuine MOD_ROOT aura,
+-- 42716 also keeps Unit::SetControlled(false, UNIT_STATE_ROOT) from ever
+-- unrooting the creature when an enemy's temporary root expires.
 DELETE FROM creature_template_addon WHERE entry = 900116;
-INSERT INTO creature_template_addon (entry, auras) VALUES (900116, '9454');
+INSERT INTO creature_template_addon (entry, auras) VALUES (900116, '42716');
 
 -- Dismount in front of the gate, not inside the building. Vehicle exits place
 -- the passenger at the vehicle's origin - the dead center of a sixty-yard

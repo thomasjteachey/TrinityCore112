@@ -22,9 +22,11 @@
  * Earlier revisions revoked SetClientControl on boarding and near-teleported
  * the rider on exit; both fought the client's own control handback and locked
  * the camera to the vehicle. Garrisoning is handled entirely by data instead:
- * the vehicle kit's facing limits, a vehicle_seat_addon exit offset, and a
- * permanent stun aura (9454) in creature_template_addon that keeps the
- * building from ever moving or turning.
+ * the vehicle kit's facing limits freeze rotation, a vehicle_seat_addon
+ * offset places the exit, and a permanent root pins the building - the aura
+ * 42716 in creature_template_addon, re-asserted below in case anything ever
+ * strips it. A ROOT, not a stun: the client refuses the Leave Vehicle action
+ * while its mover is stunned, and a stunned vehicle cannot cast its bar.
  */
 
 #include "Creature.h"
@@ -58,6 +60,11 @@ struct RtsBuildingAI : public CreatureAI
 
     void UpdateAI(uint32 diff) override
     {
+        // A building is architecture: keep it pinned even if the addon aura
+        // is ever dispelled or a future building template forgets the aura.
+        if (!me->HasUnitState(UNIT_STATE_ROOT))
+            me->SetControlled(true, UNIT_STATE_ROOT);
+
         if (!me->IsInCombat())
             return;
 
