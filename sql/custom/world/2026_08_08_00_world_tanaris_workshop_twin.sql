@@ -94,16 +94,17 @@ INSERT INTO creature_template_addon (entry, auras) VALUES (900116, '42716');
 -- the vehicle's CollisionHeight so the passenger settles onto the floor).
 -- Offset mode (ExitParamValue 1) is relative to the vehicle's facing - an
 -- earlier revision used +35 yd to land outside the gate; zeroed 2026-08-08
--- when the user chose the interior. Seat 90000 is the building's own custom
+-- when the user chose the interior, with Z +3 so the passenger settles down
+-- onto the floor instead of clipping through it. Seat 90000 is the building's own custom
 -- seat (minted by tools/tanaris/seat_tool.py), so this no longer touches
 -- Stampy's stock seat 1705 as an earlier revision did.
 --
 -- WHERE THE RIDER SITS is NOT here: it is seat 90000's AttachmentOffset in
--- VehicleSeat.dbc (-8.8678, 6.6468, 5.4641 with AttachmentID -1 = offset
+-- VehicleSeat.dbc (-8.8678, 6.6468, 7.4641 with AttachmentID -1 = offset
 -- from model origin; converted M2s have no attachment bones - Stampy's
 -- inherited bone 21 put the rider at the client's fallback spot). Computed
 -- from a user-picked world point via seat_tool.py; SeatOrientation below is
 -- the matching relative facing.
 DELETE FROM vehicle_seat_addon WHERE SeatEntry IN (1705, 90000);
 INSERT INTO vehicle_seat_addon (SeatEntry, SeatOrientation, ExitParamX, ExitParamY, ExitParamZ, ExitParamO, ExitParamValue)
-VALUES (90000, 1.4508, 0, 0, 0, 0, 1);
+VALUES (90000, 1.4508, 0, 0, 3, 0, 1);
