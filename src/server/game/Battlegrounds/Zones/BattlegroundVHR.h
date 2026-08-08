@@ -169,6 +169,11 @@ enum BG_VHR_Constants
     // Berserking. Speed is deliberately not in the roll.
     BG_VHR_GO_RECHARGE_BUFF = 300500,
 
+    // Scales the whole end-of-run honor payout. The curve in
+    // GetHonorRewardForRun compounds hard with depth, so this is the single
+    // knob for the mode's overall generosity rather than a per-wave tweak.
+    BG_VHR_HONOR_PERCENT = 50,
+
     // Clearing a wave puts every casualty back on their feet at this fraction
     // of health and mana. Being brought back weakened is the cost of dying; the
     // run's difficulty comes from the party getting more fragile as the waves

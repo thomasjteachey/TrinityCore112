@@ -1021,7 +1021,11 @@ uint32 BattlegroundVHR::GetHonorRewardForRun() const
         + sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP) * 3) * arenaMultiplier);
 
     double const compounded = std::pow(1.10, double(_highestWaveCleared) - 1.0);
-    return uint32(double(arenaWinHonor) * double(_highestWaveCleared) * compounded);
+    double const raw = double(arenaWinHonor) * double(_highestWaveCleared) * compounded;
+
+    // Scaled down at the end rather than inside the curve, so the shape of the
+    // reward across waves is untouched and only its size moves.
+    return uint32(raw * double(BG_VHR_HONOR_PERCENT) / 100.0);
 }
 
 void BattlegroundVHR::ModifyEndOfMatchHonorRewards(uint32 /*winner*/, uint32 team, uint32& winnerHonor, uint32& loserHonor) const

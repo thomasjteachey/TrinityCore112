@@ -93,3 +93,29 @@ Reads real terrain heights out of the server's `.map` tiles, mirroring
 graveyards, gates, buff nodes — was measured with this rather than guessed, and
 the arena bounds were drawn from it to keep a mesa on the Alliance side out of
 the playable area. Re-run it before moving anything.
+
+## `wmo2m2.py`, `mint_building_display.py`, `wire_workshop_twin.py`
+
+The RTS building pattern: a GameObject for collision plus a creature "twin"
+wearing the same model for targeting. Creature displays can only reference M2
+models, so WMO buildings need converting first.
+
+`wmo2m2.py` converts a WMO to a static M2 directly -- no Blender. It merges
+the group geometry, re-buckets triangles per material into contiguous submesh
+ranges, builds the collision mesh from every face including the WMO's
+invisible collision-only ones, and copies every fussy convention (bone,
+sequence, batch flags, lookup shapes) from a donor doodad the client
+demonstrably renders. Dropped by design: doodad decorations, baked interior
+lighting, portals.
+
+`mint_building_display.py` registers the converted model in
+GameObjectDisplayInfo (11000), CreatureModelData (4000) and
+CreatureDisplayInfo (40000), reading the geo box out of the M2 itself. The
+CreatureModelData layout was derived EMPIRICALLY -- documentation-from-memory
+put an int where the file has a second string; only trust a layout after
+checking that every row's value resolves to a string start.
+
+`wire_workshop_twin.py` runs on the game server: stages the client DBCs,
+creates and seeds the three `_lplus` mirrors from the minted binaries (so
+mirror and binary are born agreeing), probes the heightmap for flat ground,
+and spawns the template rows and the test pair.
