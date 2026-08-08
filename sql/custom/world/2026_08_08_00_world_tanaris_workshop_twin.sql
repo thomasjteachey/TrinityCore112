@@ -71,3 +71,15 @@ INSERT INTO creature_template_spell (CreatureID, `Index`, Spell) VALUES
 DELETE FROM npc_spellclick_spells WHERE npc_entry = 900116;
 INSERT INTO npc_spellclick_spells (npc_entry, spell_id, cast_flags, user_type) VALUES
   (900116, 46598, 1, 1);
+
+-- Dismount in front of the gate, not inside the building. Vehicle exits place
+-- the passenger at the vehicle's origin - the dead center of a sixty-yard
+-- building, wedged inside its own collision shell. Offset mode (ExitParamValue
+-- 1) relocates the exit relative to the vehicle's facing; the door is baked
+-- onto model +X, so +35 yards along facing lands just outside the gate (the
+-- wall sits at +23.7). NOTE: seat 2029 is kit 160's stock seat, so this also
+-- moves exits for real Antipersonnel Cannons - unused on this server, and a
+-- dedicated seat row can replace this if that ever changes.
+DELETE FROM vehicle_seat_addon WHERE SeatEntry = 2029;
+INSERT INTO vehicle_seat_addon (SeatEntry, SeatOrientation, ExitParamX, ExitParamY, ExitParamZ, ExitParamO, ExitParamValue)
+VALUES (2029, 0, 35, 0, 1, 0, 1);
