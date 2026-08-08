@@ -47,12 +47,15 @@ INSERT INTO creature_template
 VALUES
   -- faction 35 (friendly-to-all) is the boarding-test state; the RTS gives
   -- buildings per-team factions and this row follows ownership at runtime.
-  -- npcflag 16777216 = SPELLCLICK (right-click boards). VehicleId 244 is the
-  -- Wintergrasp Tower Cannon kit: stationary, one control seat, so the
-  -- passenger gets the building's action bar without being able to drive.
+  -- npcflag 16777216 = SPELLCLICK (right-click boards). VehicleId 274 is the
+  -- Icecrown bomber GUN seat: the occupant gets the action bar and can attack
+  -- but cannot steer (no ALLOW_TURNING, and unlike turret kits it has no
+  -- steering semantics at all - kit 244 made the whole building rotate with
+  -- the rider's mouse). Its HIDE_PASSENGER flag tucks the occupant into the
+  -- building, which reads exactly like a garrison.
   (900116, 40000, 'Goblin Workshop', 'Converted WMO twin', 60, 60, 35, 16777216,
    1, 0, 1073742080, 0, 0, 551238167, 30, 1, 1.0, 1, 1.14286,
-   244, '', 'npc_rts_building');
+   274, '', 'npc_rts_building');
 
 -- The vehicle action bar shown to whoever garrisons the building. Index 0-7.
 -- 51421 is the donor turret's Cannon Blast, a placeholder until the custom
