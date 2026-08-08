@@ -169,13 +169,23 @@ def bbox_of(pts):
     return mn, mx, cx, r
 
 
-def convert(materials, verts, normals, uvs, tris, name):
+def convert(materials, verts, normals, uvs, tris, name, collision_only=False):
     # ---- render geometry, re-bucketed per material so every submesh owns a
-    # contiguous vertex and index range (the shape the skin format wants)
+    # contiguous vertex and index range (the shape the skin format wants).
+    #
+    # collision_only: emit NO render geometry at all -- zero vertices, zero
+    # textures, an empty skin -- but the full collision mesh. The client's
+    # movement collision reads the collision arrays, not the drawn triangles,
+    # so the result is an invisible solid: exactly how Blizzard's own
+    # "FakeCollision" door models are built (0 verts, empty skin, full
+    # boundingTriangles). Used for the GO half of the twin pattern so the
+    # creature can carry all the visuals at exact scale with nothing to
+    # z-fight against.
     by_mat = {}
-    for i0, i1, i2, mat in tris:
-        if mat != 0xFF:
-            by_mat.setdefault(mat, []).append((i0, i1, i2))
+    if not collision_only:
+        for i0, i1, i2, mat in tris:
+            if mat != 0xFF:
+                by_mat.setdefault(mat, []).append((i0, i1, i2))
 
     out_verts = []                # (pos, normal, uv)
     submeshes = []                # dicts
@@ -236,7 +246,8 @@ def convert(materials, verts, normals, uvs, tris, name):
         rf.append((flags, blend))
 
     render_pts = [v[0] for v in out_verts]
-    vmn, vmx, _c, vrad = bbox_of(render_pts)
+    # with no render geometry, box everything off the collision mesh instead
+    vmn, vmx, _c, vrad = bbox_of(render_pts if render_pts else cverts)
     cmn, cmx, _c2, crad = bbox_of(cverts)
 
     # ---------------------------------------------------------------- M2 file
@@ -288,6 +299,10 @@ def convert(materials, verts, normals, uvs, tris, name):
     ofs_ts_inner = B.add(struct.pack("<2I", 1, ofs_ts_data))  # M2Array<u32>
     ofs_val_inner = B.add(struct.pack("<2I", 1, ofs_val_data))
     ofs_transp = B.add(struct.pack("<hh4I", 0, -1, 1, ofs_ts_inner, 1, ofs_val_inner))
+    if collision_only:
+        # mirror the stock FakeCollision models: nothing render-side at all
+        tex_paths, rf = [], []
+        ofs_tex = ofs_transp = 0
 
     ofs_texrep = B.add(struct.pack("<h", -1))
     ofs_rf = B.add(b"".join(struct.pack("<HH", f, b) for f, b in rf))
@@ -316,7 +331,7 @@ def convert(materials, verts, normals, uvs, tris, name):
     hdr += struct.pack("<I", 1)                             # nViews
     hdr += struct.pack("<2I", 0, 0)                         # colors
     hdr += struct.pack("<2I", len(tex_paths), ofs_tex)
-    hdr += struct.pack("<2I", 1, ofs_transp)
+    hdr += struct.pack("<2I", (0 if collision_only else 1), ofs_transp)
     hdr += struct.pack("<2I", 0, 0)                         # uv animations
     hdr += struct.pack("<2I", 1, ofs_texrep)
     hdr += struct.pack("<2I", len(rf), ofs_rf)
@@ -422,6 +437,7 @@ def main():
     wmo = r"world\wmo\Northrend\Wintergrasp\WG_Siege01.wmo"
     name = "WgWorkshopBG"
     rotate = -90.0
+    collision_only = False
     i = 0
     while i < len(args):
         if args[i] == "--wmo":
@@ -433,6 +449,8 @@ def main():
         elif args[i] == "--rotate":
             i += 1
             rotate = float(args[i])
+        elif args[i] == "--collision-only":
+            collision_only = True
         i += 1
 
     arcs = load_archives()
@@ -443,7 +461,7 @@ def main():
         normals = rotate_z(normals, rotate)
         print("rotated %.1f deg around Z (door to model +X)" % rotate)
 
-    m2, skin, st = convert(materials, verts, normals, uvs, tris, name)
+    m2, skin, st = convert(materials, verts, normals, uvs, tris, name, collision_only)
 
     dest = os.path.join(OUT_ROOT, "World", "TanarisBG")
     os.makedirs(dest, exist_ok=True)

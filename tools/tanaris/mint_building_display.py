@@ -28,6 +28,7 @@ MODEL_REF = r"World\TanarisBG\WgWorkshopBG.m2"
 MODEL_REF_MDX = r"World\TanarisBG\WgWorkshopBG.mdx"
 
 GO_DISPLAY_ID = 11000
+GO_COL_DISPLAY_ID = 11001          # collision-only shell: invisible, solid
 MODEL_DATA_ID = 4000
 CRE_DISPLAY_ID = 40000
 
@@ -66,6 +67,11 @@ def build_rows():
     return {
         "GameObjectDisplayInfo.dbc": [
             [GO_DISPLAY_ID, MODEL_REF] + [0] * 10 + box + [0],
+            # The invisible-but-solid variant (wmo2m2.py --collision-only):
+            # zero render geometry, full collision mesh, stock FakeCollision
+            # shape. The GO shell wears this so the creature twin can carry
+            # every pixel at exact scale with nothing to z-fight against.
+            [GO_COL_DISPLAY_ID, r"World\TanarisBG\WgWorkshopBGCol.mdx"] + [0] * 10 + box + [0],
         ],
         "CreatureModelData.dbc": [
             [MODEL_DATA_ID,

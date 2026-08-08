@@ -15,11 +15,14 @@
 --
 -- Replayable.
 
--- The GO shell: plain GENERIC object, its collision comes from the M2's own
--- collision mesh (client-side).
+-- The GO shell: INVISIBLE collision-only model (display 11001, built by
+-- wmo2m2.py --collision-only, same shape as Blizzard's FakeCollision doors:
+-- zero render geometry, full collision mesh). The creature twin carries every
+-- pixel at exact scale 1.0 with nothing to z-fight against. Display 11000 is
+-- the same building WITH visuals, kept for GO-only uses.
 DELETE FROM gameobject_template WHERE entry = 900001;
 INSERT INTO gameobject_template (entry, type, displayId, name, size, Data0, Data1)
-VALUES (900001, 5, 11000, 'Goblin Workshop (BG shell)', 1, 0, 0);
+VALUES (900001, 5, 11001, 'Goblin Workshop (BG shell)', 1, 0, 0);
 
 -- Reach must cover the building's footprint: the walls sit ~30 yards from
 -- center, so with CombatReach 45 melee connects from just outside them
@@ -43,4 +46,4 @@ INSERT INTO creature_template
    AIName, ScriptName)
 VALUES
   (900116, 40000, 'Goblin Workshop', 'Converted WMO twin', 80, 80, 14, 0,
-   1, 0, 1073742080, 0, 0, 551238167, 30, 1, 1.005, 1, 1.14286, '', 'npc_rts_building');
+   1, 0, 1073742080, 0, 0, 551238167, 30, 1, 1.0, 1, 1.14286, '', 'npc_rts_building');
