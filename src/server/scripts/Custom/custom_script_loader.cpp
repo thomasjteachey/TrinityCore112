@@ -36,6 +36,7 @@ void AddSC_custom_game_lobby();
 void AddSC_npc_transmogrifier();
 void AddSC_custom_t1_set_bonuses();
 void AddSC_GOMove_commandscript();
+void AddSC_rts_building();
 
 void AddCustomScripts()
 {
@@ -55,4 +56,5 @@ void AddCustomScripts()
     AddSC_npc_transmogrifier();
     AddSC_custom_t1_set_bonuses();
     AddSC_GOMove_commandscript();
+    AddSC_rts_building();
 }

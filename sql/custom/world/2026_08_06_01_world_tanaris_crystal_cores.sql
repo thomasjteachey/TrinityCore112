@@ -13,7 +13,9 @@
 --
 -- Set up as a proper core rather than a plain dummy:
 --   faction 14          hostile to everyone, so both teams can attack it
---   UNIT_FLAG_PACIFIED  it can be hit but never swings back
+--   npc_rts_building    the RTS structure AI: never retaliates, and drops
+--                       combat five seconds after the last hit so attackers
+--                       disengage like they would from a player
 --   MovementType 0      never wanders or chases
 --   flags_extra         NO_TAUNT | IMMUNITY_KNOCKBACK, so it cannot be pulled
 --                       out of its building
@@ -33,32 +35,32 @@ INSERT INTO creature_template
 VALUES
 -- The recommended one. Its environment map is SILITHUS_CRYSTAL_ENVIRONMENT_MAP,
 -- so it is lit for desert and sits naturally in Tanaris sand.
-  (900100, 17856, 'Crystal Core', 'Power Crystal - blue, desert-lit',        80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', ''),
-  (900101, 19258, 'Crystal Core', 'Power Crystal - 1.5x scale',              80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', ''),
-  (900102, 19257, 'Crystal Core', 'Power Crystal - naga glass reskin',       80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', ''),
+  (900100, 17856, 'Crystal Core', 'Power Crystal - blue, desert-lit',        80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', 'npc_rts_building'),
+  (900101, 19258, 'Crystal Core', 'Power Crystal - 1.5x scale',              80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', 'npc_rts_building'),
+  (900102, 19257, 'Crystal Core', 'Power Crystal - naga glass reskin',       80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', 'npc_rts_building'),
 
 -- Machine rather than mineral - suits goblin engineering. Orb on a pedestal.
-  (900103, 28741, 'Titan Core', 'Titan Orb - machine, on a base',            80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', ''),
+  (900103, 28741, 'Titan Core', 'Titan Orb - machine, on a base',            80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', 'npc_rts_building'),
 
 -- Arcane. The model is literally named Dalaran_BuildingCrystal_01.
-  (900104, 28876, 'Arcane Core', 'Dalaran Building Crystal',                 80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', ''),
+  (900104, 28876, 'Arcane Core', 'Dalaran Building Crystal',                 80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', 'npc_rts_building'),
 
 -- The only pair with a purpose-made cracked variant: swap 900105 -> 900106 at
 -- a health threshold and the core visibly breaks. Green/undead, so not neutral,
 -- but it proves the damage-state pattern.
-  (900105, 16135, 'Shard Core', 'Scourge Crystal - INTACT of pair',          80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', ''),
-  (900106, 16136, 'Shard Core', 'Scourge Crystal - DAMAGED of pair',         80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', ''),
-  (900107, 22506, 'Shard Core', 'Scourge Crystal 02',                        80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', ''),
+  (900105, 16135, 'Shard Core', 'Scourge Crystal - INTACT of pair',          80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', 'npc_rts_building'),
+  (900106, 16136, 'Shard Core', 'Scourge Crystal - DAMAGED of pair',         80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', 'npc_rts_building'),
+  (900107, 22506, 'Shard Core', 'Scourge Crystal 02',                        80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', 'npc_rts_building'),
 
 -- Natural crystal formations from Sholazar. Note the odd scales: the "large"
 -- model ships at 0.6 and the small one at 2.5.
-  (900108, 25931, 'Stone Core', 'Oracle Crystal - small model at 2.5x',      80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', ''),
-  (900109, 25929, 'Stone Core', 'Oracle Crystal - large model at 0.6x',      80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', ''),
+  (900108, 25931, 'Stone Core', 'Oracle Crystal - small model at 2.5x',      80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', 'npc_rts_building'),
+  (900109, 25929, 'Stone Core', 'Oracle Crystal - large model at 0.6x',      80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', 'npc_rts_building'),
 
 -- Other candidates worth eyeballing before committing.
-  (900110, 22669, 'Fel Core', 'Demon Crystal 02',                            80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', ''),
-  (900111, 26620, 'Sc Core', 'Creature_Sc_Crystal',                          80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', ''),
-  (900112, 24813, 'Orb Core', 'Scrying Orb - floating',                      80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', ''),
-  (900113,  9832, 'Ziggurat Core', 'Ziggurat Crystal',                       80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', ''),
-  (900114, 11490, 'Portal Core', 'Crystal Portal - animated',                80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', ''),
-  (900115, 16034, 'Portal Core', 'Crystal Portal - 3x scale',                80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', '');
+  (900110, 22669, 'Fel Core', 'Demon Crystal 02',                            80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', 'npc_rts_building'),
+  (900111, 26620, 'Sc Core', 'Creature_Sc_Crystal',                          80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', 'npc_rts_building'),
+  (900112, 24813, 'Orb Core', 'Scrying Orb - floating',                      80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', 'npc_rts_building'),
+  (900113,  9832, 'Ziggurat Core', 'Ziggurat Crystal',                       80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', 'npc_rts_building'),
+  (900114, 11490, 'Portal Core', 'Crystal Portal - animated',                80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', 'npc_rts_building'),
+  (900115, 16034, 'Portal Core', 'Crystal Portal - 3x scale',                80, 80, 14, 0, 1, 131072, 1073742080, 0, 0, 551238167, 20, 1, 1, 1.14286, '', 'npc_rts_building');
