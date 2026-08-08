@@ -43,7 +43,26 @@ INSERT INTO creature_template
   (entry, modelid1, name, subname, minlevel, maxlevel, faction, npcflag,
    unit_class, unit_flags, flags_extra, MovementType, RegenHealth,
    mechanic_immune_mask, HealthModifier, ArmorModifier, scale, speed_walk, speed_run,
-   AIName, ScriptName)
+   VehicleId, AIName, ScriptName)
 VALUES
-  (900116, 40000, 'Goblin Workshop', 'Converted WMO twin', 80, 80, 14, 0,
-   1, 0, 1073742080, 0, 0, 551238167, 30, 1, 1.0, 1, 1.14286, '', 'npc_rts_building');
+  -- faction 35 (friendly-to-all) is the boarding-test state; the RTS gives
+  -- buildings per-team factions and this row follows ownership at runtime.
+  -- npcflag 16777216 = SPELLCLICK (right-click boards). VehicleId 244 is the
+  -- Wintergrasp Tower Cannon kit: stationary, one control seat, so the
+  -- passenger gets the building's action bar without being able to drive.
+  (900116, 40000, 'Goblin Workshop', 'Converted WMO twin', 60, 60, 35, 16777216,
+   1, 0, 1073742080, 0, 0, 551238167, 30, 1, 1.0, 1, 1.14286,
+   244, '', 'npc_rts_building');
+
+-- The vehicle action bar shown to whoever garrisons the building. Index 0-7.
+-- 51421 is the donor turret's Cannon Blast, a placeholder until the custom
+-- building spells go through the spell_lplus pipeline.
+DELETE FROM creature_template_spell WHERE CreatureID = 900116;
+INSERT INTO creature_template_spell (CreatureID, `Index`, Spell) VALUES
+  (900116, 0, 51421);
+
+-- Right-click boarding, restricted to FRIENDLY units (user_type 1): an enemy
+-- building is a target, your own is a garrison.
+DELETE FROM npc_spellclick_spells WHERE npc_entry = 900116;
+INSERT INTO npc_spellclick_spells (npc_entry, spell_id, cast_flags, user_type) VALUES
+  (900116, 46598, 1, 1);

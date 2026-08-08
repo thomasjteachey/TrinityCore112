@@ -138,3 +138,26 @@ and spawns the template rows and the test pair.
 - `CreatureModelData.ModelName` must spell the model **`.mdx`**.
 - Building-sized creatures need `creature_model_info.CombatReach` ≈ footprint
   radius (the workshop uses 45), or melee only connects at the model's center.
+
+## THE RTS BUILDING TEMPLATE (final, proven in-client 2026-08-08)
+
+A building is two co-located spawns sharing one converted model:
+
+1. **GO shell — collision, invisible.** `wmo2m2.py --collision-only` emits the
+   model with zero render geometry and the full collision mesh (the stock
+   FakeCollision construction). Registered as its own GO display; the GO
+   template wears that display. Solid to players, draws nothing.
+2. **Creature twin — every pixel, the kill target.** Full conversion at exact
+   scale 1.0 (nothing to z-fight against), `npc_rts_building` AI (never
+   retaliates, drops combat 5 s after the last hit), CombatReach ≈ footprint
+   radius, PACIFIED not used (stripped at load).
+3. **Garrison layer.** `VehicleId` (244 = stationary one-seat turret kit) +
+   npcflag SPELLCLICK + `npc_spellclick_spells` row with `user_type 1` so only
+   FRIENDLY units can board; the occupant's action bar comes from
+   `creature_template_spell` rows. Ownership = faction swap: hostile buildings
+   are targets, friendly ones are garrisons, the same template serves both.
+4. **Door faces +X** (`--rotate`, derived from the WMO's portal bearings), so
+   a spawn orientation aims the gate.
+
+Worked example: entries 900001 (shell) + 900116 (twin), displays 11001/11000 +
+40000, sql/custom/world/2026_08_08_00_world_tanaris_workshop_twin.sql.
