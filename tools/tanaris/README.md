@@ -119,3 +119,22 @@ checking that every row's value resolves to a string start.
 creates and seeds the three `_lplus` mirrors from the minted binaries (so
 mirror and binary are born agreeing), probes the heightmap for flat ground,
 and spawns the template rows and the test pair.
+
+### Client delivery rules for creature displays (hard-won)
+
+- **patch-F shadows patch-enUS-8** for `CreatureDisplayInfo.dbc` and
+  `CreatureModelData.dbc` — it is the HD-creatures pack and carries its own
+  copies with 145 extra models. Creature display rows must be minted into
+  patch-F's copies and shipped in **patch-Z** (which loads above F), or the
+  client renders checkered cubes while the identical rows sit unread in
+  enUS-8. `GameObjectDisplayInfo.dbc` is not in patch-F, so GO rows ride
+  enUS-8 normally — which is why a GO can render a model while the creature
+  twin cubes.
+- **v264 M2 animation tracks are nested per-sequence arrays**
+  (`M2Array<M2Array<T>>`). A flat v256-style transparency track makes the
+  creature renderer read an inner count of 0 and draw the model at weight 0:
+  loads fine, fully invisible — while the gameobject renderer, which never
+  evaluates the track, draws the same file perfectly.
+- `CreatureModelData.ModelName` must spell the model **`.mdx`**.
+- Building-sized creatures need `creature_model_info.CombatReach` ≈ footprint
+  radius (the workshop uses 45), or melee only connects at the model's center.

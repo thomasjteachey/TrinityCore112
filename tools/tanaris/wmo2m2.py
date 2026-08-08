@@ -275,10 +275,19 @@ def convert(materials, verts, normals, uvs, tris, name):
         tex_entries += struct.pack("<4I", 0, 0x3, len(p) + 1, tex_name_offsets[i])
     ofs_tex = B.add(bytes(tex_entries))
 
-    # transparency: one static track, opaque
-    ofs_tts = B.add(struct.pack("<I", 0))
-    ofs_tval = B.add(struct.pack("<h", 32767))
-    ofs_transp = B.add(struct.pack("<hh4I", 0, -1, 1, ofs_tts, 1, ofs_tval))
+    # transparency: one static track, opaque. In v264 a track's timestamp and
+    # value members are NESTED arrays -- one inner array per sequence -- not
+    # flat lists as in v256. The donor's dumped "ts[0]=1, key[0]=1" were inner
+    # ARRAY COUNTS, misread as values. A flat track here makes the creature
+    # renderer (which evaluates transparency through the animation system) see
+    # an inner count of 0, no keys, weight 0: the model loads and draws
+    # nothing. The gameobject renderer never evaluates it, which is why the
+    # same file rendered fine as a GO.
+    ofs_ts_data = B.add(struct.pack("<I", 0))                 # inner: [t=0]
+    ofs_val_data = B.add(struct.pack("<h", 32767))            # inner: [opaque]
+    ofs_ts_inner = B.add(struct.pack("<2I", 1, ofs_ts_data))  # M2Array<u32>
+    ofs_val_inner = B.add(struct.pack("<2I", 1, ofs_val_data))
+    ofs_transp = B.add(struct.pack("<hh4I", 0, -1, 1, ofs_ts_inner, 1, ofs_val_inner))
 
     ofs_texrep = B.add(struct.pack("<h", -1))
     ofs_rf = B.add(b"".join(struct.pack("<HH", f, b) for f, b in rf))
