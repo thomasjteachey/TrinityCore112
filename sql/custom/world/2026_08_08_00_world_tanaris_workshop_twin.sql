@@ -30,8 +30,10 @@ VALUES (40000, 28, 45, 2, 0);
 
 -- The attackable body. PassiveAI rather than UNIT_FLAG_PACIFIED: the core
 -- strips PACIFIED from templates at load as a disallowed flag, while
--- PassiveAI legitimately never engages or retaliates. Scale 1.02 so the
--- creature's shell wraps the GO's mesh without z-fighting when co-located.
+-- PassiveAI legitimately never engages or retaliates. Scale 1.0001: a 1.02
+-- wrap avoided z-fighting but shifted the visible surface off the GO's
+-- collision mesh; near-exact scale keeps collision honest and the z-fighting
+-- is accepted (user's call).
 DELETE FROM creature_template WHERE entry = 900116;
 INSERT INTO creature_template
   (entry, modelid1, name, subname, minlevel, maxlevel, faction, npcflag,
@@ -40,4 +42,4 @@ INSERT INTO creature_template
    AIName, ScriptName)
 VALUES
   (900116, 40000, 'Goblin Workshop', 'Converted WMO twin', 80, 80, 14, 0,
-   1, 0, 1073742080, 0, 0, 551238167, 30, 1, 1.02, 1, 1.14286, 'PassiveAI', '');
+   1, 0, 1073742080, 0, 0, 551238167, 30, 1, 1.0001, 1, 1.14286, 'PassiveAI', '');
