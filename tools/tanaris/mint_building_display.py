@@ -22,6 +22,10 @@ import sys
 
 M2_PATH = r"C:\Projects\Gamedev\wow\data\patch-staging\TanarisBG-models\World\TanarisBG\WgWorkshopBG.m2"
 MODEL_REF = r"World\TanarisBG\WgWorkshopBG.m2"
+# The creature-side row must spell the model .mdx: all 1331 stock
+# CreatureModelData rows do, and the creature loader renders a checkered cube
+# when handed a literal .m2 -- the gameobject loader accepts either.
+MODEL_REF_MDX = r"World\TanarisBG\WgWorkshopBG.mdx"
 
 GO_DISPLAY_ID = 11000
 MODEL_DATA_ID = 4000
@@ -66,7 +70,7 @@ def build_rows():
         "CreatureModelData.dbc": [
             [MODEL_DATA_ID,
              0,                     # Flags
-             MODEL_REF,
+             MODEL_REF_MDX,
              "",                    # ModelNameAlt: empty, like 625 stock rows
              1.0,                   # ModelScale
              1,                     # SizeClass
