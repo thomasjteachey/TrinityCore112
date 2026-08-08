@@ -404,10 +404,24 @@ def preview(verts_tris, path):
     img.save(path)
 
 
+def rotate_z(points, deg):
+    """Rotate positions/normals around Z. Used to re-aim a building so its
+    DOOR sits on model-local +X: a creature's facing direction is +X, and a
+    spawn orientation should point the doorway, not a blank wall. For
+    WG_Siege01 the two door portals sit on +Y (bearings ~58 and ~124 degrees,
+    read straight out of MOPV/MOPT), so the -90 default brings them to front.
+    """
+    import math
+    r = math.radians(deg)
+    c, sn = math.cos(r), math.sin(r)
+    return [(x * c - y * sn, x * sn + y * c, z) for x, y, z in points]
+
+
 def main():
     args = sys.argv[1:]
     wmo = r"world\wmo\Northrend\Wintergrasp\WG_Siege01.wmo"
     name = "WgWorkshopBG"
+    rotate = -90.0
     i = 0
     while i < len(args):
         if args[i] == "--wmo":
@@ -416,11 +430,18 @@ def main():
         elif args[i] == "--name":
             i += 1
             name = args[i]
+        elif args[i] == "--rotate":
+            i += 1
+            rotate = float(args[i])
         i += 1
 
     arcs = load_archives()
     materials, verts, normals, uvs, tris = read_wmo(arcs, wmo)
     print("WMO: %d verts, %d tris, %d materials" % (len(verts), len(tris), len(materials)))
+    if rotate:
+        verts = rotate_z(verts, rotate)
+        normals = rotate_z(normals, rotate)
+        print("rotated %.1f deg around Z (door to model +X)" % rotate)
 
     m2, skin, st = convert(materials, verts, normals, uvs, tris, name)
 
