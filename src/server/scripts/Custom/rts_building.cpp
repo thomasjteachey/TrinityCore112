@@ -21,6 +21,8 @@
 
 #include "Creature.h"
 #include "CreatureAI.h"
+#include "ObjectAccessor.h"
+#include "Player.h"
 #include "ScriptMgr.h"
 #include "ThreatManager.h"
 
@@ -42,6 +44,27 @@ struct RtsBuildingAI : public CreatureAI
     void AttackStart(Unit* /*victim*/) override { }
     void JustEngagedWith(Unit* /*attacker*/) override { _sinceLastHit = 0; }
 
+    // Garrison seats give the occupant the building's action bar via
+    // CAN_CONTROL - but CAN_CONTROL also lets the rider's client steer, and
+    // no seat flag suppresses that: a garrisoned player could spin the whole
+    // building with their mouse. Revoke movement control while keeping the
+    // possess bar, the same split scripted possessions use. Revoked on the
+    // next update tick as well, because the charm's own control grant can
+    // land after this hook fires.
+    void PassengerBoarded(Unit* passenger, int8 /*seatId*/, bool apply) override
+    {
+        if (Player* player = passenger->ToPlayer())
+        {
+            if (apply)
+            {
+                player->SetClientControl(me, false);
+                _controlRevokePending = passenger->GetGUID();
+            }
+            else
+                _controlRevokePending.Clear();
+        }
+    }
+
     void DamageTaken(Unit* /*attacker*/, uint32& /*damage*/,
                      DamageEffectType /*damageType*/, SpellInfo const* /*spellInfo*/) override
     {
@@ -50,6 +73,13 @@ struct RtsBuildingAI : public CreatureAI
 
     void UpdateAI(uint32 diff) override
     {
+        if (!_controlRevokePending.IsEmpty())
+        {
+            if (Player* rider = ObjectAccessor::GetPlayer(*me, _controlRevokePending))
+                rider->SetClientControl(me, false);
+            _controlRevokePending.Clear();
+        }
+
         if (!me->IsInCombat())
             return;
 
@@ -67,6 +97,7 @@ struct RtsBuildingAI : public CreatureAI
 
 private:
     uint32 _sinceLastHit;
+    ObjectGuid _controlRevokePending;
 };
 
 class npc_rts_building : public CreatureScript
