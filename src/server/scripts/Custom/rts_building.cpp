@@ -17,12 +17,18 @@
  * Deliberately NOT an evade (EnterEvadeMode): evading is a full creature reset
  * and restores health, and a building must keep its damage when the fight
  * pauses. Health only comes back if someone repairs (heals) it.
+ *
+ * Deliberately NO client-control tricks for the garrison (vehicle) layer.
+ * Earlier revisions revoked SetClientControl on boarding and near-teleported
+ * the rider on exit; both fought the client's own control handback and locked
+ * the camera to the vehicle. Garrisoning is handled entirely by data instead:
+ * the vehicle kit's facing limits, a vehicle_seat_addon exit offset, and a
+ * permanent stun aura (9454) in creature_template_addon that keeps the
+ * building from ever moving or turning.
  */
 
 #include "Creature.h"
 #include "CreatureAI.h"
-#include "ObjectAccessor.h"
-#include "Player.h"
 #include "ScriptMgr.h"
 #include "ThreatManager.h"
 
@@ -44,36 +50,6 @@ struct RtsBuildingAI : public CreatureAI
     void AttackStart(Unit* /*victim*/) override { }
     void JustEngagedWith(Unit* /*attacker*/) override { _sinceLastHit = 0; }
 
-    // Garrison seats give the occupant the building's action bar via
-    // CAN_CONTROL - but CAN_CONTROL also lets the rider's client steer, and
-    // no seat flag suppresses that: a garrisoned player could spin the whole
-    // building with their mouse. Revoke movement control while keeping the
-    // possess bar, the same split scripted possessions use. Revoked on the
-    // next update tick as well, because the charm's own control grant can
-    // land after this hook fires.
-    void PassengerBoarded(Unit* passenger, int8 /*seatId*/, bool apply) override
-    {
-        if (Player* player = passenger->ToPlayer())
-        {
-            if (apply)
-            {
-                player->SetClientControl(me, false);
-                _controlRevokePending = passenger->GetGUID();
-            }
-            else
-            {
-                _controlRevokePending.Clear();
-                // Replace the vehicle-exit spline with an instant relocation
-                // to the gate. The stock exit walks a spline the whole way,
-                // during which the server counts the player as moving and
-                // refuses casts; over a building-sized exit distance that is
-                // seconds of dead time. Deferred one tick so the exit
-                // finishes tearing down before the teleport lands.
-                _exitTeleportPending = passenger->GetGUID();
-            }
-        }
-    }
-
     void DamageTaken(Unit* /*attacker*/, uint32& /*damage*/,
                      DamageEffectType /*damageType*/, SpellInfo const* /*spellInfo*/) override
     {
@@ -82,29 +58,6 @@ struct RtsBuildingAI : public CreatureAI
 
     void UpdateAI(uint32 diff) override
     {
-        if (!_controlRevokePending.IsEmpty())
-        {
-            if (Player* rider = ObjectAccessor::GetPlayer(*me, _controlRevokePending))
-                rider->SetClientControl(me, false);
-            _controlRevokePending.Clear();
-        }
-
-        if (!_exitTeleportPending.IsEmpty())
-        {
-            if (Player* rider = ObjectAccessor::GetPlayer(*me, _exitTeleportPending))
-            {
-                // The door is baked onto model +X, so "in front of the gate"
-                // is a straight offset along the building's facing.
-                float const dist = me->GetCombatReach() + 5.0f;
-                float const x = me->GetPositionX() + std::cos(me->GetOrientation()) * dist;
-                float const y = me->GetPositionY() + std::sin(me->GetOrientation()) * dist;
-                float z = me->GetPositionZ() + 1.0f;
-                me->UpdateGroundPositionZ(x, y, z);
-                rider->NearTeleportTo(x, y, z, me->GetOrientation());
-            }
-            _exitTeleportPending.Clear();
-        }
-
         if (!me->IsInCombat())
             return;
 
@@ -122,8 +75,6 @@ struct RtsBuildingAI : public CreatureAI
 
 private:
     uint32 _sinceLastHit;
-    ObjectGuid _controlRevokePending;
-    ObjectGuid _exitTeleportPending;
 };
 
 class npc_rts_building : public CreatureScript

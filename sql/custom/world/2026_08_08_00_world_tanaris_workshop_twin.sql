@@ -55,9 +55,9 @@ VALUES
   -- exit profile and the cannon kits' exit-animation seat flags both hung the
   -- client's control handback over our animation-less converted model, while
   -- this kit's plain seat exits cleanly. Seat CAN_ATTACK is irrelevant:
-  -- vehicle-bar spells are cast by the vehicle itself. The rider CAN
-  -- cosmetically spin the building until npc_rts_building's control
-  -- revocation is built - the server never accepts the turn.
+  -- vehicle-bar spells are cast by the vehicle itself. Immobility is NOT
+  -- scripted (SetClientControl tricks locked the camera): it comes from the
+  -- permanent stun aura in creature_template_addon below.
   (900116, 40000, 'Goblin Workshop', 'Converted WMO twin', 60, 60, 35, 16777216,
    1, 0, 1073742080, 0, 0, 551238166, 30, 1, 1.0, 1, 1.14286,
    1000, '', 'npc_rts_building');
@@ -74,6 +74,17 @@ INSERT INTO creature_template_spell (CreatureID, `Index`, Spell) VALUES
 DELETE FROM npc_spellclick_spells WHERE npc_entry = 900116;
 INSERT INTO npc_spellclick_spells (npc_entry, spell_id, cast_flags, user_type) VALUES
   (900116, 46598, 1, 1);
+
+-- The building must never move or rotate, not even imperceptibly (user rule:
+-- outlawing client movement with pure server code is a lost cause - solve it
+-- in data). A garrisoned rider's client steers a CAN_CONTROL vehicle, so the
+-- creature carries a permanent MOD_STUN aura (9454, GM Freeze): the client can
+-- send all the movement it likes, a stunned unit goes nowhere. Known
+-- consequence: a stunned unit cannot cast either, so the custom building
+-- spells will need SPELL_ATTR5_USABLE_WHILE_STUNNED (the placeholder 51421
+-- fails while the stun holds).
+DELETE FROM creature_template_addon WHERE entry = 900116;
+INSERT INTO creature_template_addon (entry, auras) VALUES (900116, '9454');
 
 -- Dismount in front of the gate, not inside the building. Vehicle exits place
 -- the passenger at the vehicle's origin - the dead center of a sixty-yard

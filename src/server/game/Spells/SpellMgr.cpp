@@ -3083,6 +3083,23 @@ void SpellMgr::LoadSpellInfoCorrections()
             spellInfo->AttributesEx3 |= SPELL_ATTR3_NO_INITIAL_AGGRO;
     }
 
+    // Recharge (90200), the custom battleground rune: the trap GO must deliver
+    // it to absolutely anyone who steps on the rune. Vanish's immunity window
+    // was eating the whole hit - the player grabbed the rune, the reset script
+    // never ran, and the rune was wasted. Piercing invulnerability plus
+    // ignoring the hit roll makes delivery unconditional; no-threat/no-aggro
+    // keeps the pickup from flagging a stealthed grabber into combat with the
+    // trap. Positivity is forced separately in _isPositiveEffectImpl (the
+    // custom-attributes pass runs after these corrections and would re-mark a
+    // bare dummy aura negative, which is what made the buff break stealth and
+    // land as a debuff).
+    ApplySpellFix({ 90200 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->Attributes |= SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY;
+        spellInfo->AttributesEx |= SPELL_ATTR1_NO_THREAT;
+        spellInfo->AttributesEx3 |= SPELL_ATTR3_IGNORE_HIT_RESULT | SPELL_ATTR3_NO_INITIAL_AGGRO;
+    });
+
     // Some spells have no amplitude set
     {
         ApplySpellFix({

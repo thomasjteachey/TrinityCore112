@@ -3234,13 +3234,18 @@ class spell_gen_restoration : public AuraScript
 // that: unlike the predicate form of ResetCooldowns it also clears the
 // _categoryCooldowns map, and without that a potion whose spell cooldown was
 // cleared would still be blocked by its shared category.
-class spell_gen_recharge : public AuraScript
+//
+// A SpellScript on the trap's cast, NOT an aura-apply handler: grabbing a
+// rune while the previous buff is still running only REFRESHES the aura, and
+// a refresh never re-enters AfterEffectApply(REAL) - that was players
+// "sometimes" keeping their cooldowns. The spell hit happens on every pickup.
+class spell_gen_recharge : public SpellScript
 {
-    PrepareAuraScript(spell_gen_recharge);
+    PrepareSpellScript(spell_gen_recharge);
 
-    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    void HandleReset(SpellEffIndex /*effIndex*/)
     {
-        Player* player = GetTarget()->ToPlayer();
+        Player* player = GetHitPlayer();
         if (!player)
             return;
 
@@ -3254,7 +3259,7 @@ class spell_gen_recharge : public AuraScript
 
     void Register() override
     {
-        AfterEffectApply += AuraEffectApplyFn(spell_gen_recharge::HandleApply, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+        OnEffectHitTarget += SpellEffectFn(spell_gen_recharge::HandleReset, EFFECT_0, SPELL_EFFECT_APPLY_AURA);
     }
 };
 

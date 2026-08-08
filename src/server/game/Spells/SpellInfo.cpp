@@ -3658,6 +3658,7 @@ bool _isPositiveEffectImpl(SpellInfo const* spellInfo, SpellEffectInfo const& ef
                 case 50344: // Dream Funnel
                 case 61819: // Manabonked! (item)
                 case 61834: // Manabonked! (minigob)
+                case 90200: // Recharge (custom BG rune) - an inert dummy the heuristic has nothing to read from
                     return true;
                 default:
                     break;
