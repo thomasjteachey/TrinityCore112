@@ -3,7 +3,8 @@
   python seat_tool.py dump <VehicleSeat.dbc> <id> [<id>...]
   python seat_tool.py maxid <VehicleSeat.dbc>
   python seat_tool.py mint <VehicleSeat.dbc> <srcId> <newId> <andNotFlags-hex>
-  python seat_tool.py vehseat <Vehicle.dbc> <vehicleId> [<newSeat0>]
+  python seat_tool.py vehseat <Vehicle.dbc> <vehicleId> [<newSeat0> [<newSeat1> ...]]
+  python seat_tool.py setattach <VehicleSeat.dbc> <id> <attachId> <x> <y> <z>
 """
 import struct
 import sys
@@ -30,8 +31,19 @@ def main():
         for want in (int(a) for a in sys.argv[3:]):
             off = row_off(data, records, rsize, want)
             flags = struct.unpack_from("<I", data, off + 4)[0]
-            flagsB = struct.unpack_from("<I", data, off + (fields - 1) * 4)[0]
-            print(f"  seat {want}: flags={flags:#010x} lastField(flagsB?)={flagsB:#010x}")
+            attach_id = struct.unpack_from("<i", data, off + 2 * 4)[0]
+            ax, ay, az = struct.unpack_from("<fff", data, off + 3 * 4)
+            print(f"  seat {want}: flags={flags:#010x} attachId={attach_id} "
+                  f"attachOffset=({ax:.4f}, {ay:.4f}, {az:.4f})")
+    elif mode == "setattach":
+        want = int(sys.argv[3])
+        attach_id = int(sys.argv[4])
+        ax, ay, az = (float(v) for v in sys.argv[5:8])
+        off = row_off(data, records, rsize, want)
+        struct.pack_into("<ifff", data, off + 2 * 4, attach_id, ax, ay, az)
+        with open(path, "wb") as f:
+            f.write(data)
+        print(f"  seat {want}: attachId={attach_id} offset=({ax}, {ay}, {az})")
     elif mode == "maxid":
         ids = [struct.unpack_from("<i", data, 20 + i * rsize)[0] for i in range(records)]
         print(f"  max id = {max(ids)}, sorted ascending = {ids == sorted(ids)}")

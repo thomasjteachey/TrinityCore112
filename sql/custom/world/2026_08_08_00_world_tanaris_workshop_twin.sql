@@ -95,8 +95,15 @@ INSERT INTO creature_template_addon (entry, auras) VALUES (900116, '42716');
 -- 1) relocates the exit relative to the vehicle's facing; the door is baked
 -- onto model +X, so +35 yards along facing lands just outside the gate (the
 -- wall sits at +23.7). Seat 90000 is the building's own custom seat (minted
--- by tools/tanaris/seat DBC tooling), so this no longer touches Stampy's
--- stock seat 1705 as an earlier revision did.
+-- by tools/tanaris/seat_tool.py), so this no longer touches Stampy's stock
+-- seat 1705 as an earlier revision did.
+--
+-- WHERE THE RIDER SITS is NOT here: it is seat 90000's AttachmentOffset in
+-- VehicleSeat.dbc (-8.8678, 6.6468, 5.4641 with AttachmentID -1 = offset
+-- from model origin; converted M2s have no attachment bones - Stampy's
+-- inherited bone 21 put the rider at the client's fallback spot). Computed
+-- from a user-picked world point via seat_tool.py; SeatOrientation below is
+-- the matching relative facing.
 DELETE FROM vehicle_seat_addon WHERE SeatEntry IN (1705, 90000);
 INSERT INTO vehicle_seat_addon (SeatEntry, SeatOrientation, ExitParamX, ExitParamY, ExitParamZ, ExitParamO, ExitParamValue)
-VALUES (90000, 0, 35, 0, 1, 0, 1);
+VALUES (90000, 1.4508, 35, 0, 1, 0, 1);
