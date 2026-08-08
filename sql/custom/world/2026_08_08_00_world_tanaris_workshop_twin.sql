@@ -89,22 +89,19 @@ INSERT INTO npc_spellclick_spells (npc_entry, spell_id, cast_flags, user_type) V
 DELETE FROM creature_template_addon WHERE entry = 900116;
 INSERT INTO creature_template_addon (entry, auras) VALUES (900116, '42716');
 
--- Dismount INSIDE the workshop at its center, facing the gate (user-picked
--- spot; the interior is walkable through the door, and the exit spline adds
--- the vehicle's CollisionHeight so the passenger settles onto the floor).
--- Offset mode (ExitParamValue 1) is relative to the vehicle's facing - an
--- earlier revision used +35 yd to land outside the gate; zeroed 2026-08-08
--- when the user chose the interior, with Z +3 so the passenger settles down
--- onto the floor instead of clipping through it. Seat 90000 is the building's own custom
+-- Dismount just outside the gate (user-picked spot ~23 yd out along the
+-- door side); offset mode (ExitParamValue 1) is relative to the vehicle's
+-- facing, and the exit spline adds the vehicle's CollisionHeight so the
+-- passenger settles onto the ground. Seat 90000 is the building's own custom
 -- seat (minted by tools/tanaris/seat_tool.py), so this no longer touches
 -- Stampy's stock seat 1705 as an earlier revision did.
 --
 -- WHERE THE RIDER SITS is NOT here: it is seat 90000's AttachmentOffset in
--- VehicleSeat.dbc (0, 0, 2.0 with AttachmentID -1 = offset
+-- VehicleSeat.dbc (0.4815, -2.2578, 32.5056 - the TOWER TOP - with AttachmentID -1 = offset
 -- from model origin; converted M2s have no attachment bones - Stampy's
 -- inherited bone 21 put the rider at the client's fallback spot). Computed
 -- from a user-picked world point via seat_tool.py; SeatOrientation below is
 -- the matching relative facing.
 DELETE FROM vehicle_seat_addon WHERE SeatEntry IN (1705, 90000);
 INSERT INTO vehicle_seat_addon (SeatEntry, SeatOrientation, ExitParamX, ExitParamY, ExitParamZ, ExitParamO, ExitParamValue)
-VALUES (90000, 0, 0, 0, 4, 0, 1);
+VALUES (90000, 0.1470, 21.8570, -7.2697, 1, 0.0449, 1);
