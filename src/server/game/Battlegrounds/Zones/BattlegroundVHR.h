@@ -41,6 +41,7 @@
 #include "Common.h"
 #include "Position.h"
 
+#include <unordered_map>
 #include <vector>
 
 // Blocks of 100 per custom battleground: SCM 9000, BRT 9100, OBC 9200,
@@ -163,11 +164,21 @@ enum BG_VHR_Constants
     BG_VHR_GO_RECHARGE_BUFF = 300500,
 
     // Dying in this mode is manual-resurrect only: run the ghost to the corpse
-    // and reclaim. The stock corpse reclaim delay ESCALATES with repeated
-    // deaths (30s, then 60s, then 120s), and dying repeatedly is the whole
-    // nature of a wave survival mode - so it is capped here at the first step.
-    // Every release waits exactly thirty seconds, never more.
-    BG_VHR_REZ_DELAY_SECONDS = 30
+    // and reclaim. The wait is driven by how deep the run is, not by how
+    // recently you last died as the stock 30/60/120 escalation does - a wave
+    // survival mode is built out of repeated dying, so the stock curve punishes
+    // its own core loop.
+    //
+    //   wave 1  30s      wave 3  90s
+    //   wave 2  60s      wave 4+ 120s
+    //
+    // ...and once a player has served a death at the two minute ceiling, every
+    // later death costs thirty minutes. That is longer than any run lasts, so
+    // it is the point of no return dressed as a timer: die deep twice and you
+    // are out for good, without the mode having to special-case elimination.
+    BG_VHR_REZ_DELAY_STEP_SECONDS    = 30,
+    BG_VHR_REZ_DELAY_MAX_SECONDS     = 120,
+    BG_VHR_REZ_DELAY_LOCKOUT_SECONDS = 30 * MINUTE
 };
 
 // Which characters a wave's clones are copied from. Every wave is made of
@@ -253,16 +264,16 @@ public:
     // enemy team and would otherwise walk over them on the way in.
     bool CanPickUpPowerup(Player const* player) const override;
 
-    // Caps the corpse reclaim delay at a flat thirty seconds - death in this
-    // mode is manual-reclaim only, and the stock escalation (30/60/120 on
-    // repeated deaths) punishes exactly what a wave-survival mode is made of.
-    // Consulted from Player::GetCorpseReclaimDelay, which feeds both the
-    // client's displayed timer and the reclaim enforcement in MiscHandler.
-    uint32 GetCorpseReclaimDelayCap() const override { return BG_VHR_REZ_DELAY_SECONDS; }
+    // The wave-scaled reclaim wait, locked in at the moment of death rather
+    // than recomputed on the way out - see _rezDelaySeconds. Consulted from
+    // Player::GetCorpseReclaimDelay, which feeds both the client's displayed
+    // timer and the reclaim enforcement in MiscHandler.
+    uint32 GetCorpseReclaimDelayOverride(Player const* player) const override;
 
-    // What the client is told over the CCGAME REZ addon whisper, so the number
-    // a player sees matches the reclaim they actually wait.
-    uint32 GetResurrectionInterval() const override { return BG_VHR_REZ_DELAY_SECONDS * IN_MILLISECONDS; }
+    // What the client is told over the CCGAME REZ addon whisper. That message
+    // is sent once on join, so it can only carry the opening value - the real
+    // wait climbs with the wave and this cannot follow it.
+    uint32 GetResurrectionInterval() const override { return BG_VHR_REZ_DELAY_STEP_SECONDS * IN_MILLISECONDS; }
     bool HandlePlayerUnderMap(Player* player) override;
     void EndBattleground(uint32 winner) override;
 
@@ -357,6 +368,13 @@ private:
     // set is steadier than asking the object accessor mid-death-transition,
     // which is the same problem Arena solves for its custom-game clones.
     GuidSet _eliminated;
+
+    // Reclaim wait in seconds, per player, fixed at the instant they died.
+    // Locked in rather than derived on demand for two reasons: the wave can
+    // advance while a corpse is lying there, and a player who earned the two
+    // minute ceiling must keep it even if they reclaim after the run has moved
+    // on. An absent entry means they have not died yet this run.
+    std::unordered_map<ObjectGuid, uint32> _rezDelaySeconds;
 
     VhrWaveSpawnRequest _pendingRequest;
     bool _hasPendingRequest;

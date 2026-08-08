@@ -182,6 +182,7 @@ void BattlegroundVHR::Reset()
     _waveCells.clear();
     _waveEnemies.clear();
     _eliminated.clear();
+    _rezDelaySeconds.clear();
     _pendingRequest = VhrWaveSpawnRequest();
     _hasPendingRequest = false;
 }
@@ -906,10 +907,38 @@ void BattlegroundVHR::HandleKillPlayer(Player* victim, Player* killer)
 
     _eliminated.insert(victim->GetGUID());
 
+    // Fix this death's reclaim wait now. The wave can advance while the corpse
+    // is still lying there, and a player who has earned the ceiling must keep
+    // it rather than have it recomputed cheaper later.
+    //
+    // The step climbs with the wave to a two minute ceiling; once a player has
+    // ALREADY served a death at that ceiling, every later death costs the
+    // lockout instead. Reading the previous value is what encodes "after you
+    // die at two minutes" - the ceiling death itself still waits two minutes,
+    // and only the one after it is punished.
+    uint32& delay = _rezDelaySeconds[victim->GetGUID()];
+    if (delay >= BG_VHR_REZ_DELAY_MAX_SECONDS)
+        delay = BG_VHR_REZ_DELAY_LOCKOUT_SECONDS;
+    else
+        delay = std::min<uint32>(BG_VHR_REZ_DELAY_STEP_SECONDS * std::max<uint32>(_waveNumber, 1),
+            BG_VHR_REZ_DELAY_MAX_SECONDS);
+
     Battleground::HandleKillPlayer(victim, killer);
 
     UpdateScoreWorldStates();
     CheckRunState();
+}
+
+uint32 BattlegroundVHR::GetCorpseReclaimDelayOverride(Player const* player) const
+{
+    if (!player)
+        return 0;
+
+    auto itr = _rezDelaySeconds.find(player->GetGUID());
+    if (itr == _rezDelaySeconds.end())
+        return 0;   // has not died here yet - leave the stock value alone
+
+    return itr->second;
 }
 
 void BattlegroundVHR::HandlePlayerResurrect(Player* player)

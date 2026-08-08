@@ -26016,13 +26016,14 @@ uint32 Player::GetCorpseReclaimDelay(bool pvp) const
     uint64 count = (now < m_deathExpireTime - 1) ? (m_deathExpireTime - 1 - now) / DEATH_EXPIRE_STEP : 0;
     uint32 delay = copseReclaimDelay[count];
 
-    // Wave-survival battlegrounds cap the escalation - dying repeatedly is
-    // their entire loop, and 120 second reclaims would eliminate players by
-    // boredom. This is the single choke point: the client's displayed timer
-    // and the reclaim check in HandleReclaimCorpse both come through here.
+    // A battleground may run its own death economy and replace the stock
+    // escalation outright - Violet Hold scales the wait by wave rather than by
+    // how recently you last died. This is the single choke point: the client's
+    // displayed timer and the reclaim check in HandleReclaimCorpse both come
+    // through here.
     if (Battleground* bg = GetBattleground())
-        if (uint32 cap = bg->GetCorpseReclaimDelayCap())
-            delay = std::min(delay, cap);
+        if (uint32 bgDelay = bg->GetCorpseReclaimDelayOverride(this))
+            return bgDelay;
 
     return delay;
 }

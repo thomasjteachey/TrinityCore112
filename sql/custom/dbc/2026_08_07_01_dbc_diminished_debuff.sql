@@ -45,6 +45,20 @@
 -- Mechanic are both 0 - which is what makes this undispellable and immune to
 -- mechanic-clearing trinkets.
 --
+-- AttributesExB 0x04000000 SPELL_ATTR2_UNAFFECTED_BY_AURA_SCHOOL_IMMUNE is what
+-- stops Divine Shield and Ice Block eating it. Those carry
+-- SPELL_ATTR1_DISPEL_AURAS_ON_IMMUNITY, so on application they sweep every
+-- non-positive aura whose school the immunity covers - see
+-- SpellInfo::ApplyAllSpellImmunitiesTo. SpellInfo::CanDispelAura returns false
+-- unconditionally for auras holding this bit, which is why it is used here in
+-- preference to SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY (0x20000000): that
+-- one is overridden whenever the dispelling spell carries it too, so a
+-- Mass Dispel style effect would still strip the handicap. Neither Divine
+-- Shield (642) nor Ice Block (45438) holds 0x20000000 today, but the ATTR2
+-- route does not depend on that staying true. It also lets the debuff land on
+-- a target already immune to new aura applications, which is what a clone
+-- spawning under a shield needs.
+--
 -- Player object scale is floored at 0.1 in Unit::RecalculateObjectScale.
 --
 -- NOT death-persistent: auras drop on death without SPELL_ATTR3_DEATH_PERSISTENT,
@@ -68,7 +82,8 @@ UPDATE `tmp_dim` SET
   `AuraDescription_Lang_enUS` = 'Damage done and healing done reduced, and damage taken increased.',
   `DurationIndex`             = 21,    -- -1, permanent
   `CumulativeAura`            = 100,   -- max stacks
-  `Attributes`                = 256,   -- hide in combat log only
+  `Attributes`                = 256,        -- hide in combat log only
+  `AttributesExB`             = 67108864,   -- 0x04000000, see note below
   `SpellIconID`               = 543,   -- Spell_Shadow_CurseOfMannoroth
   `SpellVisualID_1`           = 0,     -- donor's 6943 is Berserking's red flash
   `SpellVisualID_2`           = 0,
@@ -83,7 +98,8 @@ UPDATE `tmp_dim` SET
   `ID`                        = 90202,
   `Name_Lang_enUS`            = 'Diminished',
   `AuraDescription_Lang_enUS` = 'Size reduced.',
-  `Attributes`                = 384,   -- 0x100 hide in combat log | 0x80 hidden in UI
+  `Attributes`                = 384,        -- 0x100 hide in combat log | 0x80 hidden in UI
+  `AttributesExB`             = 67108864,   -- 0x04000000, same immunity opt-out as the parent
   `Effect_1` = 6, `EffectAura_1` = 61, `EffectBasePoints_1` = -1, `EffectDieSides_1` = 0, `EffectMiscValue_1` = 0, `EffectMechanic_1` = 0, `ImplicitTargetA_1` = 25,
   `Effect_2` = 0, `EffectAura_2` = 0, `EffectBasePoints_2` = 0, `EffectDieSides_2` = 0, `EffectMiscValue_2` = 0, `EffectMechanic_2` = 0, `ImplicitTargetA_2` = 0,
   `Effect_3` = 0, `EffectAura_3` = 0, `EffectBasePoints_3` = 0, `EffectDieSides_3` = 0, `EffectMiscValue_3` = 0, `EffectMechanic_3` = 0, `ImplicitTargetA_3` = 0;

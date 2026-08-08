@@ -557,13 +557,14 @@ class TC_GAME_API Battleground
         // rewards the party is meant to be racing them for.
         virtual bool CanPickUpPowerup(Player const* /*player*/) const { return true; }
 
-        // Upper bound in SECONDS on the corpse reclaim delay while in this
-        // battleground; 0 means no cap. The stock delay escalates 30/60/120
-        // with repeated deaths, which modes built around dying repeatedly
-        // (Violet Hold) cap back down. Public because it is consulted from
-        // Player::GetCorpseReclaimDelay, which covers both the displayed
-        // timer and reclaim enforcement.
-        virtual uint32 GetCorpseReclaimDelayCap() const { return 0; }
+        // Corpse reclaim delay in SECONDS for this player, REPLACING the stock
+        // escalation entirely; 0 means "use the stock value". The stock delay
+        // is driven by how recently you last died (30/60/120), which suits
+        // open-world play but not a mode with its own death economy - Violet
+        // Hold scales the wait by wave instead. Public because it is consulted
+        // from Player::GetCorpseReclaimDelay, which covers both the client's
+        // displayed timer and reclaim enforcement in HandleReclaimCorpse.
+        virtual uint32 GetCorpseReclaimDelayOverride(Player const* /*player*/) const { return 0; }
         void SetHoliday(bool is_holiday);
 
         /// @todo make this protected:
