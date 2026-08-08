@@ -45,6 +45,15 @@ struct RtsBuildingAI : public CreatureAI
         : CreatureAI(creature), _sinceLastHit(0)
     {
         creature->SetReactState(REACT_PASSIVE);
+        // EXACTLY zero, not merely slow - the user's rule is no movement and
+        // no turning at all. Translation is killed by the permanent root (a
+        // binary state, not a speed); turning is killed twice: vehicle kit
+        // 1000 carries TurnSpeed 0.0 in Vehicle.dbc for the client, and this
+        // pins the unit's own turn rate so no core path can ever hand a
+        // possessing rider a nonzero rate. (The kit's 0.0001 facing limits
+        // proved to be per-input clamps that ACCUMULATE across inputs - they
+        // are not the rotation blocker, turn rate is.)
+        creature->SetSpeed(MOVE_TURN_RATE, 0.0f);
     }
 
     // Structures never act on their own: no target selection, no chasing, no

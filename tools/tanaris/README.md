@@ -151,13 +151,31 @@ A building is two co-located spawns sharing one converted model:
    scale 1.0 (nothing to z-fight against), `npc_rts_building` AI (never
    retaliates, drops combat 5 s after the last hit), CombatReach ≈ footprint
    radius, PACIFIED not used (stripped at load).
-3. **Garrison layer.** `VehicleId` (244 = stationary one-seat turret kit) +
-   npcflag SPELLCLICK + `npc_spellclick_spells` row with `user_type 1` so only
-   FRIENDLY units can board; the occupant's action bar comes from
-   `creature_template_spell` rows. Ownership = faction swap: hostile buildings
-   are targets, friendly ones are garrisons, the same template serves both.
-4. **Door faces +X** (`--rotate`, derived from the WMO's portal bearings), so
-   a spawn orientation aims the gate.
+3. **Garrison layer.** `VehicleId` 1000 — a byte-clone of Stampy's kit 121
+   (flags 0x4008E002; `mint_vehicle.py`) — + npcflag SPELLCLICK +
+   `npc_spellclick_spells` row with `user_type 1` so only FRIENDLY units can
+   board; the occupant's action bar comes from `creature_template_spell` rows.
+   Ownership = faction swap: hostile buildings are targets, friendly ones are
+   garrisons, the same template serves both. NEVER set
+   VEHICLE_FLAG_FIXED_POSITION (0x200000): it breaks possess-exits on this
+   client (locked camera), which is why immobility is built from parts
+   instead (next point).
+4. **Immobility — EXACT zero, no epsilons (user rule).**
+   - Translation + jumping: permanent MOD_ROOT aura **42716** "Self Root
+     Forever (No Visual)" in `creature_template_addon`. A rooted mover
+     translates exactly zero client-side, and the kit's NO_JUMPING flag
+     (0x2) covers jumps. NOT a stun: the client dead-buttons Leave Vehicle
+     while its mover is stunned and a stunned vehicle cannot cast its bar.
+   - Rotation: Vehicle.dbc **TurnSpeed = 0.0** on kit 1000 (`vehicle_facing.py
+     setturn <dbc> 1000 0` — patch all four DBC locations AND repack the
+     client's patch-Z, the client is the enforcer), plus
+     `SetSpeed(MOVE_TURN_RATE, 0)` in npc_rts_building as the server-side
+     pin. The FacingLimit fields (18/19) are per-input clamps that ACCUMULATE
+     across inputs — an epsilon there still lets the rider slowly spin the
+     building; they are not the rotation blocker.
+5. **Door faces +X** (`--rotate`, derived from the WMO's portal bearings), so
+   a spawn orientation aims the gate. Dismounts land in front of it via
+   `vehicle_seat_addon` (seat 1705: +35 yd along facing, ExitParamValue 1).
 
 Worked example: entries 900001 (shell) + 900116 (twin), displays 11001/11000 +
 40000, sql/custom/world/2026_08_08_00_world_tanaris_workshop_twin.sql.
