@@ -97,11 +97,16 @@ INSERT INTO creature_template_addon (entry, auras) VALUES (900116, '42716');
 -- Stampy's stock seat 1705 as an earlier revision did.
 --
 -- WHERE THE RIDER SITS is NOT here: it is seat 90000's AttachmentOffset in
--- VehicleSeat.dbc (0.4815, -2.2578, 32.5056 - the TOWER TOP - with AttachmentID -1 = offset
--- from model origin; converted M2s have no attachment bones - Stampy's
--- inherited bone 21 put the rider at the client's fallback spot). Computed
--- from a user-picked world point via seat_tool.py; SeatOrientation below is
--- the matching relative facing.
+-- VehicleSeat.dbc (0.4815, -2.2578, 32.5056 - the TOWER TOP), composed on
+-- top of M2 attachment 0. The client resolves AttachmentID through the
+-- model's attachment lookup and DISCARDS the whole offset when the lookup
+-- fails - converted M2s ship with no attachments, so the rider rendered at
+-- the model origin no matter what the seat said (the server-side transport
+-- position was always right; the desync was purely visual).
+-- tools/tanaris/add_m2_attachment.py appends attachment 0 at the origin so
+-- the composed position equals the DBC offset and tuning stays data-only.
+-- Computed from a user-picked world point via seat_tool.py; SeatOrientation
+-- below is the matching relative facing.
 DELETE FROM vehicle_seat_addon WHERE SeatEntry IN (1705, 90000);
 INSERT INTO vehicle_seat_addon (SeatEntry, SeatOrientation, ExitParamX, ExitParamY, ExitParamZ, ExitParamO, ExitParamValue)
 VALUES (90000, 0.1470, 21.8570, -7.2697, 1, 0.0449, 1);
