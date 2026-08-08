@@ -47,17 +47,17 @@ INSERT INTO creature_template
 VALUES
   -- faction 35 (friendly-to-all) is the boarding-test state; the RTS gives
   -- buildings per-team factions and this row follows ownership at runtime.
-  -- npcflag 16777216 = SPELLCLICK (right-click boards). VehicleId 160 is the
-  -- Antipersonnel Cannon kit: a ground turret with clean enter/exit (the
-  -- bomber gun seat's exit profile, built for mid-flight ejection, left
-  -- riders stuck "moving" over a stationary building). Seat CAN_ATTACK is
-  -- irrelevant: vehicle-bar spells are cast by the vehicle itself, the flag
-  -- only gates the rider's own spellbook. The rider CAN cosmetically spin the
-  -- building until npc_rts_building's control revocation is built - the
-  -- server never accepts the turn, so only the rider sees it.
+  -- npcflag 16777216 = SPELLCLICK (right-click boards). VehicleId 121
+  -- (Stampy's kit) after a three-kit hunt: the bomber gun seat's ejection
+  -- exit profile and the cannon kits' exit-animation seat flags both hung the
+  -- client's control handback over our animation-less converted model, while
+  -- this kit's plain seat exits cleanly. Seat CAN_ATTACK is irrelevant:
+  -- vehicle-bar spells are cast by the vehicle itself. The rider CAN
+  -- cosmetically spin the building until npc_rts_building's control
+  -- revocation is built - the server never accepts the turn.
   (900116, 40000, 'Goblin Workshop', 'Converted WMO twin', 60, 60, 35, 16777216,
    1, 0, 1073742080, 0, 0, 551238167, 30, 1, 1.0, 1, 1.14286,
-   160, '', 'npc_rts_building');
+   121, '', 'npc_rts_building');
 
 -- The vehicle action bar shown to whoever garrisons the building. Index 0-7.
 -- 51421 is the donor turret's Cannon Blast, a placeholder until the custom
@@ -77,9 +77,9 @@ INSERT INTO npc_spellclick_spells (npc_entry, spell_id, cast_flags, user_type) V
 -- building, wedged inside its own collision shell. Offset mode (ExitParamValue
 -- 1) relocates the exit relative to the vehicle's facing; the door is baked
 -- onto model +X, so +35 yards along facing lands just outside the gate (the
--- wall sits at +23.7). NOTE: seat 2029 is kit 160's stock seat, so this also
--- moves exits for real Antipersonnel Cannons - unused on this server, and a
--- dedicated seat row can replace this if that ever changes.
-DELETE FROM vehicle_seat_addon WHERE SeatEntry = 2029;
+-- wall sits at +23.7). NOTE: seat 1705 is vehicle kit 121's stock seat
+-- (Stampy), so this also moves that quest mammoth's exits - harmless here,
+-- and a dedicated custom seat can replace it if it ever matters.
+DELETE FROM vehicle_seat_addon WHERE SeatEntry = 1705;
 INSERT INTO vehicle_seat_addon (SeatEntry, SeatOrientation, ExitParamX, ExitParamY, ExitParamZ, ExitParamO, ExitParamValue)
-VALUES (2029, 0, 35, 0, 1, 0, 1);
+VALUES (1705, 0, 35, 0, 1, 0, 1);
