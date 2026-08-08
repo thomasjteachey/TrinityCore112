@@ -53,7 +53,13 @@ enum BG_VHR_WorldStates
     BG_VHR_WORLDSTATE_PLAYERS_ALIVE   = 9401,
     BG_VHR_WORLDSTATE_ENEMIES_ALIVE   = 9402,
     BG_VHR_WORLDSTATE_WAVE            = 9403,
-    BG_VHR_WORLDSTATE_ENEMIES_MAX     = 9404
+    // Denominators for the "X / Y remaining" readouts. Enemies total is THIS
+    // WAVE's clone count, not the run-ending BG_VHR_MAX_ENEMIES cap - the
+    // top frame is reporting the fight in front of the party, not the run's
+    // ceiling. Players total is the party size captured when the gates opened,
+    // so it stays put as people fall.
+    BG_VHR_WORLDSTATE_ENEMIES_TOTAL   = 9404,
+    BG_VHR_WORLDSTATE_PLAYERS_TOTAL   = 9405
 };
 
 enum BG_VHR_BroadcastTexts
@@ -163,22 +169,11 @@ enum BG_VHR_Constants
     // Berserking. Speed is deliberately not in the roll.
     BG_VHR_GO_RECHARGE_BUFF = 300500,
 
-    // Dying in this mode is manual-resurrect only: run the ghost to the corpse
-    // and reclaim. The wait is driven by how deep the run is, not by how
-    // recently you last died as the stock 30/60/120 escalation does - a wave
-    // survival mode is built out of repeated dying, so the stock curve punishes
-    // its own core loop.
-    //
-    //   wave 1  30s      wave 3  90s
-    //   wave 2  60s      wave 4+ 120s
-    //
-    // ...and once a player has served a death at the two minute ceiling, every
-    // later death costs thirty minutes. That is longer than any run lasts, so
-    // it is the point of no return dressed as a timer: die deep twice and you
-    // are out for good, without the mode having to special-case elimination.
-    BG_VHR_REZ_DELAY_STEP_SECONDS    = 30,
-    BG_VHR_REZ_DELAY_MAX_SECONDS     = 120,
-    BG_VHR_REZ_DELAY_LOCKOUT_SECONDS = 30 * MINUTE
+    // Clearing a wave puts every casualty back on their feet at this fraction
+    // of health and mana. Being brought back weakened is the cost of dying; the
+    // run's difficulty comes from the party getting more fragile as the waves
+    // climb, not from anyone sitting the rest of it out.
+    BG_VHR_WAVE_END_REZ_PERCENT = 75
 };
 
 // Which characters a wave's clones are copied from. Every wave is made of
@@ -264,16 +259,11 @@ public:
     // enemy team and would otherwise walk over them on the way in.
     bool CanPickUpPowerup(Player const* player) const override;
 
-    // The wave-scaled reclaim wait, locked in at the moment of death rather
-    // than recomputed on the way out - see _rezDelaySeconds. Consulted from
-    // Player::GetCorpseReclaimDelay, which feeds both the client's displayed
-    // timer and the reclaim enforcement in MiscHandler.
-    uint32 GetCorpseReclaimDelayOverride(Player const* player) const override;
-
-    // What the client is told over the CCGAME REZ addon whisper. That message
-    // is sent once on join, so it can only carry the opening value - the real
-    // wait climbs with the wave and this cannot follow it.
-    uint32 GetResurrectionInterval() const override { return BG_VHR_REZ_DELAY_STEP_SECONDS * IN_MILLISECONDS; }
+    // Same rule as an arena: you cannot walk back to your own corpse. Being
+    // raised by someone else is untouched - Rebirth, soulstones and
+    // Reincarnation are the intended way back mid-wave, and
+    // ResurrectWaveCasualties is the guaranteed one at the end of it.
+    bool AllowsCorpseReclaim() const override { return false; }
     bool HandlePlayerUnderMap(Player* player) override;
     void EndBattleground(uint32 winner) override;
 
@@ -320,6 +310,9 @@ private:
     void TeleportSurvivorsToGurubashi();
 
     uint32 CountAliveHumans() const;
+    // Denominator for the players readout - the party size the run started
+    // with, or the live head count before that is fixed.
+    uint32 GetPartyStrength() const;
     uint32 CountAliveEnemies() const;
     std::vector<ObjectGuid> GetHumanRoster(bool livingOnly) const;
     uint32 GetEnemyCountForWave(uint32 wave) const;
@@ -331,6 +324,11 @@ private:
 
     // Reward powerups, dropped when a wave is cleared and taken back after
     // BG_VHR_BUFF_LIFETIME_MS.
+    // Puts every dead player back on their feet at BG_VHR_WAVE_END_REZ_PERCENT
+    // health and mana. Called once as a wave falls, and is the only route back
+    // from death in this mode.
+    void ResurrectWaveCasualties();
+
     void SpawnWaveRewardBuffs();
     void DespawnWaveRewardBuffs();
     bool PickBuffPosition(std::vector<Position> const& taken, Position& out) const;
@@ -368,13 +366,6 @@ private:
     // set is steadier than asking the object accessor mid-death-transition,
     // which is the same problem Arena solves for its custom-game clones.
     GuidSet _eliminated;
-
-    // Reclaim wait in seconds, per player, fixed at the instant they died.
-    // Locked in rather than derived on demand for two reasons: the wave can
-    // advance while a corpse is lying there, and a player who earned the two
-    // minute ceiling must keep it even if they reclaim after the run has moved
-    // on. An absent entry means they have not died yet this run.
-    std::unordered_map<ObjectGuid, uint32> _rezDelaySeconds;
 
     VhrWaveSpawnRequest _pendingRequest;
     bool _hasPendingRequest;

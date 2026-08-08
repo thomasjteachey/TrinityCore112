@@ -557,14 +557,15 @@ class TC_GAME_API Battleground
         // rewards the party is meant to be racing them for.
         virtual bool CanPickUpPowerup(Player const* /*player*/) const { return true; }
 
-        // Corpse reclaim delay in SECONDS for this player, REPLACING the stock
-        // escalation entirely; 0 means "use the stock value". The stock delay
-        // is driven by how recently you last died (30/60/120), which suits
-        // open-world play but not a mode with its own death economy - Violet
-        // Hold scales the wait by wave instead. Public because it is consulted
-        // from Player::GetCorpseReclaimDelay, which covers both the client's
-        // displayed timer and reclaim enforcement in HandleReclaimCorpse.
-        virtual uint32 GetCorpseReclaimDelayOverride(Player const* /*player*/) const { return 0; }
+        // Whether a dead player may walk back to their own corpse and reclaim
+        // it. Arenas refuse this outright via Player::InArena, and this is the
+        // same rule made available to other modes.
+        //
+        // Refusing the reclaim does NOT remove the corpse or block being raised
+        // by someone else: HandleReclaimCorpse is only the self-service route.
+        // Rebirth, soulstones and Reincarnation all still work, exactly as they
+        // do in an arena. Public because that handler is the caller.
+        virtual bool AllowsCorpseReclaim() const { return true; }
         void SetHoliday(bool is_holiday);
 
         /// @todo make this protected:

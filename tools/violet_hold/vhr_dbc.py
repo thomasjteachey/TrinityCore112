@@ -215,6 +215,9 @@ ROWS = {
     ],
     "WorldStateUI.dbc": [
         # The top-frame readout: party members left, enemies left, and the
+        # current wave, each shown as "X / Y". The denominators are world
+        # states too - 9405 is the party size the run started with, 9404 is
+        # this wave's clone count.
         # current wave. "%9401w" substitutes the live value of that world state - see
         # BG_VHR_WorldStates in BattlegroundVHR.h. The format copies the
         # custom arenas' rows ("Green Team: %3600w Players Remaining"): plain
@@ -223,7 +226,7 @@ ROWS = {
         # the map, which matters because the hold reports stock area 4415
         # rather than the custom id.
         [90025, MAP_ID, 0, 0, ""]
-        + loc("%9401w Players Remaining") + loc("") + [
+        + loc("%9401w / %9405w Players Remaining") + loc("") + [
          9400,         # StateVariable: the battleground's show flag
          0,            # Type
          ""]           # DynamicIcon
@@ -232,7 +235,7 @@ ROWS = {
          0, 0, 0],     # ExtendedUIStateVariable_1..3
 
         [90026, MAP_ID, 0, 0, ""]
-        + loc("%9402w Memories Remaining") + loc("") + [
+        + loc("%9402w / %9404w Memories Remaining") + loc("") + [
          9400,
          0,
          ""]

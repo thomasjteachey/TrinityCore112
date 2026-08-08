@@ -545,6 +545,13 @@ void WorldSession::HandleReclaimCorpse(WorldPackets::Misc::ReclaimCorpse& /*pack
     if (_player->InArena())
         return;
 
+    // ...nor in battlegrounds that opt into the same rule. Violet Hold hands
+    // the dead back when a wave falls; being raised by another player still
+    // works, since this handler is only the self-service route.
+    if (Battleground* bg = _player->GetBattleground())
+        if (!bg->AllowsCorpseReclaim())
+            return;
+
     // body not released yet
     if (!_player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         return;

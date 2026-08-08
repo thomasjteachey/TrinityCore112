@@ -182,7 +182,6 @@ void BattlegroundVHR::Reset()
     _waveCells.clear();
     _waveEnemies.clear();
     _eliminated.clear();
-    _rezDelaySeconds.clear();
     _pendingRequest = VhrWaveSpawnRequest();
     _hasPendingRequest = false;
 }
@@ -569,8 +568,15 @@ void BattlegroundVHR::CompleteWave()
 {
     _highestWaveCleared = _waveNumber;
 
-    // Reward first: BeginWave may end the run outright when the cap is reached,
-    // and there is no point dropping powerups into a finished battleground.
+    // Casualties and rewards both land before BeginWave, which may end the run
+    // outright when the enemy cap is reached - there is no point resurrecting
+    // anyone into, or dropping powerups into, a finished battleground.
+    //
+    // The dead come back BEFORE the next wave is composed on purpose: wave size
+    // is fixed from the party size captured at the start, but the composition
+    // draws its source characters from the living roster, and a party that just
+    // clawed through a wave should be whole again when that happens.
+    ResurrectWaveCasualties();
     SpawnWaveRewardBuffs();
 
     BeginWave();
@@ -907,38 +913,40 @@ void BattlegroundVHR::HandleKillPlayer(Player* victim, Player* killer)
 
     _eliminated.insert(victim->GetGUID());
 
-    // Fix this death's reclaim wait now. The wave can advance while the corpse
-    // is still lying there, and a player who has earned the ceiling must keep
-    // it rather than have it recomputed cheaper later.
-    //
-    // The step climbs with the wave to a two minute ceiling; once a player has
-    // ALREADY served a death at that ceiling, every later death costs the
-    // lockout instead. Reading the previous value is what encodes "after you
-    // die at two minutes" - the ceiling death itself still waits two minutes,
-    // and only the one after it is punished.
-    uint32& delay = _rezDelaySeconds[victim->GetGUID()];
-    if (delay >= BG_VHR_REZ_DELAY_MAX_SECONDS)
-        delay = BG_VHR_REZ_DELAY_LOCKOUT_SECONDS;
-    else
-        delay = std::min<uint32>(BG_VHR_REZ_DELAY_STEP_SECONDS * std::max<uint32>(_waveNumber, 1),
-            BG_VHR_REZ_DELAY_MAX_SECONDS);
-
     Battleground::HandleKillPlayer(victim, killer);
 
     UpdateScoreWorldStates();
     CheckRunState();
 }
 
-uint32 BattlegroundVHR::GetCorpseReclaimDelayOverride(Player const* player) const
+// The only way back from death in this mode. Corpse reclaim is refused and no
+// spirit guide exists, so a player who goes down stays down until the wave they
+// died to is finished off by the survivors.
+void BattlegroundVHR::ResurrectWaveCasualties()
 {
-    if (!player)
-        return 0;
+    float const restore = float(BG_VHR_WAVE_END_REZ_PERCENT) / 100.0f;
 
-    auto itr = _rezDelaySeconds.find(player->GetGUID());
-    if (itr == _rezDelaySeconds.end())
-        return 0;   // has not died here yet - leave the stock value alone
+    // The full roster, not just the living - the dead are the entire point.
+    for (ObjectGuid guid : GetHumanRoster(false))
+    {
+        Player* player = ObjectAccessor::FindPlayer(guid);
+        if (!player || !player->IsInWorld() || player->IsAlive())
+            continue;
 
-    return itr->second;
+        // ResurrectPlayer sets health, mana and energy to this fraction of
+        // maximum and zeroes rage, which is exactly the intended "back but
+        // weakened". SpawnCorpseBones clears the corpse they were tethered to;
+        // without it the ghost's corpse is left lying in the chamber.
+        player->ResurrectPlayer(restore);
+        player->SpawnCorpseBones(false);
+
+        // Standing again means holding the line again, so they leave the
+        // eliminated set or the next death would wipe-check the run with them
+        // still fighting.
+        _eliminated.erase(guid);
+    }
+
+    UpdateScoreWorldStates();
 }
 
 void BattlegroundVHR::HandlePlayerResurrect(Player* player)
@@ -952,13 +960,22 @@ void BattlegroundVHR::HandlePlayerResurrect(Player* player)
     UpdateScoreWorldStates();
 }
 
+// Denominator for the players readout. _partySize is only fixed when the gates
+// open, and the top frame is populated before that - fall back to the live head
+// count so the opening moments read "5 / 5" rather than "5 / 0".
+uint32 BattlegroundVHR::GetPartyStrength() const
+{
+    return _partySize ? _partySize : CountAliveHumans();
+}
+
 void BattlegroundVHR::UpdateScoreWorldStates()
 {
     UpdateWorldState(BG_VHR_WORLDSTATE_SHOW, 1);
     UpdateWorldState(BG_VHR_WORLDSTATE_PLAYERS_ALIVE, CountAliveHumans());
     UpdateWorldState(BG_VHR_WORLDSTATE_ENEMIES_ALIVE, CountAliveEnemies());
     UpdateWorldState(BG_VHR_WORLDSTATE_WAVE, _waveNumber);
-    UpdateWorldState(BG_VHR_WORLDSTATE_ENEMIES_MAX, BG_VHR_MAX_ENEMIES);
+    UpdateWorldState(BG_VHR_WORLDSTATE_ENEMIES_TOTAL, uint32(_waveEnemies.size()));
+    UpdateWorldState(BG_VHR_WORLDSTATE_PLAYERS_TOTAL, GetPartyStrength());
 }
 
 void BattlegroundVHR::FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet)
@@ -967,7 +984,8 @@ void BattlegroundVHR::FillInitialWorldStates(WorldPackets::WorldState::InitWorld
     packet.Worldstates.emplace_back(BG_VHR_WORLDSTATE_PLAYERS_ALIVE, CountAliveHumans());
     packet.Worldstates.emplace_back(BG_VHR_WORLDSTATE_ENEMIES_ALIVE, CountAliveEnemies());
     packet.Worldstates.emplace_back(BG_VHR_WORLDSTATE_WAVE, _waveNumber);
-    packet.Worldstates.emplace_back(BG_VHR_WORLDSTATE_ENEMIES_MAX, BG_VHR_MAX_ENEMIES);
+    packet.Worldstates.emplace_back(BG_VHR_WORLDSTATE_ENEMIES_TOTAL, uint32(_waveEnemies.size()));
+    packet.Worldstates.emplace_back(BG_VHR_WORLDSTATE_PLAYERS_TOTAL, GetPartyStrength());
 }
 
 // No graveyards are defined for map 1608 and no spirit guide is placed, so this

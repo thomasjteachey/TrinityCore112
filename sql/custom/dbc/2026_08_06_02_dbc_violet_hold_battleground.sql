@@ -179,11 +179,11 @@ INSERT INTO dbc.worldstateui_lplus
    ExtendedUI, ExtendedUIStateVariable_1, ExtendedUIStateVariable_2, ExtendedUIStateVariable_3)
 VALUES
   (90025, 1608, 0, 0, '',
-   '%9401w Players Remaining', 16712190, '', 16712190,
+   '%9401w / %9405w Players Remaining', 16712190, '', 16712190,
    9400, 0, '', 16712188,
    '', 0, 0, 0),
   (90026, 1608, 0, 0, '',
-   '%9402w Memories Remaining', 16712190, '', 16712190,
+   '%9402w / %9404w Memories Remaining', 16712190, '', 16712190,
    9400, 0, '', 16712188,
    '', 0, 0, 0),
   (90027, 1608, 0, 0, '',
