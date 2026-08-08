@@ -61,7 +61,16 @@ struct RtsBuildingAI : public CreatureAI
                 _controlRevokePending = passenger->GetGUID();
             }
             else
+            {
                 _controlRevokePending.Clear();
+                // Replace the vehicle-exit spline with an instant relocation
+                // to the gate. The stock exit walks a spline the whole way,
+                // during which the server counts the player as moving and
+                // refuses casts; over a building-sized exit distance that is
+                // seconds of dead time. Deferred one tick so the exit
+                // finishes tearing down before the teleport lands.
+                _exitTeleportPending = passenger->GetGUID();
+            }
         }
     }
 
@@ -78,6 +87,22 @@ struct RtsBuildingAI : public CreatureAI
             if (Player* rider = ObjectAccessor::GetPlayer(*me, _controlRevokePending))
                 rider->SetClientControl(me, false);
             _controlRevokePending.Clear();
+        }
+
+        if (!_exitTeleportPending.IsEmpty())
+        {
+            if (Player* rider = ObjectAccessor::GetPlayer(*me, _exitTeleportPending))
+            {
+                // The door is baked onto model +X, so "in front of the gate"
+                // is a straight offset along the building's facing.
+                float const dist = me->GetCombatReach() + 5.0f;
+                float const x = me->GetPositionX() + std::cos(me->GetOrientation()) * dist;
+                float const y = me->GetPositionY() + std::sin(me->GetOrientation()) * dist;
+                float z = me->GetPositionZ() + 1.0f;
+                me->UpdateGroundPositionZ(x, y, z);
+                rider->NearTeleportTo(x, y, z, me->GetOrientation());
+            }
+            _exitTeleportPending.Clear();
         }
 
         if (!me->IsInCombat())
@@ -98,6 +123,7 @@ struct RtsBuildingAI : public CreatureAI
 private:
     uint32 _sinceLastHit;
     ObjectGuid _controlRevokePending;
+    ObjectGuid _exitTeleportPending;
 };
 
 class npc_rts_building : public CreatureScript
