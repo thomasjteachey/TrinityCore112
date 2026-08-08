@@ -35,12 +35,36 @@
 
 #include "Creature.h"
 #include "CreatureAI.h"
+#include "GameObject.h"
+#include "ObjectAccessor.h"
 #include "ScriptMgr.h"
 #include "ThreatManager.h"
 
 namespace
 {
     constexpr uint32 RTS_BUILDING_COMBAT_DROP_MS = 5 * IN_MILLISECONDS;
+
+    // Building creature -> its invisible collision-shell gameobject (the
+    // --collision-only conversion of the same model). The AI summons the
+    // shell itself, co-located and co-oriented, so placing a building is ONE
+    // spawn: the creature. No separate .gobject add, no DB gameobject row.
+    struct RtsBuildingShell
+    {
+        uint32 creatureEntry;
+        uint32 shellEntry;
+    };
+    constexpr RtsBuildingShell RTS_BUILDING_SHELLS[] =
+    {
+        { 900116, 900001 }, // Goblin Workshop
+    };
+
+    uint32 ShellEntryFor(uint32 creatureEntry)
+    {
+        for (RtsBuildingShell const& pair : RTS_BUILDING_SHELLS)
+            if (pair.creatureEntry == creatureEntry)
+                return pair.shellEntry;
+        return 0;
+    }
 }
 
 struct RtsBuildingAI : public CreatureAI
@@ -60,6 +84,35 @@ struct RtsBuildingAI : public CreatureAI
     // retaliation. Combat exists only as a record of who is hitting them.
     void AttackStart(Unit* /*victim*/) override { }
     void JustEngagedWith(Unit* /*attacker*/) override { _sinceLastHit = 0; }
+
+    void JustAppeared() override
+    {
+        uint32 const shellEntry = ShellEntryFor(me->GetEntry());
+        if (!shellEntry)
+            return;
+
+        // Adopt a shell that already exists at this spot (a DB-spawned one,
+        // or one left standing from this creature's previous life) rather
+        // than stacking a second collision mesh inside it.
+        if (GameObject* existing = me->FindNearestGameObject(shellEntry, 1.0f))
+        {
+            _shellGuid = existing->GetGUID();
+            return;
+        }
+
+        if (GameObject* shell = me->SummonGameObject(shellEntry, me->GetPosition(),
+                QuaternionData::fromEulerAnglesZYX(me->GetOrientation(), 0.0f, 0.0f), 0s))
+            _shellGuid = shell->GetGUID();
+    }
+
+    // A dead building is rubble: the kill target is gone, so the collision
+    // shell goes with it and the footprint becomes walkable.
+    void JustDied(Unit* /*killer*/) override
+    {
+        if (GameObject* shell = ObjectAccessor::GetGameObject(*me, _shellGuid))
+            shell->Delete();
+        _shellGuid.Clear();
+    }
 
     void DamageTaken(Unit* /*attacker*/, uint32& /*damage*/,
                      DamageEffectType /*damageType*/, SpellInfo const* /*spellInfo*/) override
@@ -91,6 +144,7 @@ struct RtsBuildingAI : public CreatureAI
 
 private:
     uint32 _sinceLastHit;
+    ObjectGuid _shellGuid;
 };
 
 class npc_rts_building : public CreatureScript
