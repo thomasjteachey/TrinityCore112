@@ -14187,6 +14187,18 @@ void Unit::_ExitVehicle(Position const* exitPosition)
         if (GetTypeId() == TYPEID_UNIT && !CanFly() && height > GetMap()->GetWaterOrGroundLevel(GetPhaseMask(), pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ() + vehicleCollisionHeight, &height))
             init.SetFall();
 
+        // The passenger counts as MOVING until this spline finishes, which
+        // blocks mounting and stand-still casts. At default velocity (the
+        // unit's run speed) that scales with the exit offset: a stock 2 yd
+        // hop is instant, but a building-sized seat-addon offset (35 yd, out
+        // past the structure's own walls) left the player "moving" for ~5
+        // seconds after visibly landing. Cap the DURATION instead, so long
+        // exits speed up and stock exits keep their velocity untouched.
+        constexpr float maxExitDuration = 0.4f;
+        float const exitDist = GetExactDist(pos.GetPositionX(), pos.GetPositionY(), height);
+        if (exitDist > GetSpeed(MOVE_RUN) * maxExitDuration)
+            init.SetVelocity(exitDist / maxExitDuration);
+
         init.MoveTo(pos.GetPositionX(), pos.GetPositionY(), height, false);
         init.SetFacing(pos.GetOrientation());
         init.SetTransportExit();
