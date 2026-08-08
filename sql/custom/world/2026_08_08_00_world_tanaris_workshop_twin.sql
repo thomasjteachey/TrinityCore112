@@ -50,14 +50,16 @@ INSERT INTO creature_template
 VALUES
   -- faction 35 (friendly-to-all) is the boarding-test state; the RTS gives
   -- buildings per-team factions and this row follows ownership at runtime.
-  -- npcflag 16777216 = SPELLCLICK (right-click boards). VehicleId 121
-  -- (Stampy's kit) after a three-kit hunt: the bomber gun seat's ejection
-  -- exit profile and the cannon kits' exit-animation seat flags both hung the
-  -- client's control handback over our animation-less converted model, while
-  -- this kit's plain seat exits cleanly. Seat CAN_ATTACK is irrelevant:
-  -- vehicle-bar spells are cast by the vehicle itself. Immobility is NOT
-  -- scripted (SetClientControl tricks locked the camera): it comes from the
-  -- permanent stun aura in creature_template_addon below.
+  -- npcflag 16777216 = SPELLCLICK (right-click boards). VehicleId 1000 is a
+  -- Vehicle.dbc byte-clone of Stampy's kit 121 (its plain seat profile was
+  -- the only one of four whose exits didn't hang the client's control
+  -- handback) whose single seat is now the custom seat 90000: seat 1705
+  -- minus CAN_CONTROL, keeping CAN_CAST + CAN_ENTER_OR_EXIT. The garrisoned
+  -- rider is therefore a PASSENGER with the vehicle's action bar (the stock
+  -- gunner arrangement, wired server-side in Vehicle.cpp/PetHandler.cpp):
+  -- the client never movers the building, so steering, turning and jumping
+  -- are impossible by architecture - EXACT zero, which no possess-seat
+  -- mechanism (facing limits, TurnSpeed, turn rate) ever delivered.
   (900116, 40000, 'Goblin Workshop', 'Converted WMO twin', 60, 60, 35, 16777216,
    1, 0, 1073742080, 0, 0, 551238166, 30, 1, 1.0, 1, 1.14286,
    1000, '', 'npc_rts_building');
@@ -75,19 +77,15 @@ DELETE FROM npc_spellclick_spells WHERE npc_entry = 900116;
 INSERT INTO npc_spellclick_spells (npc_entry, spell_id, cast_flags, user_type) VALUES
   (900116, 46598, 1, 1);
 
--- The building must never move or rotate, not even imperceptibly (user rule:
--- outlawing client movement with pure server code is a lost cause - solve it
--- in data). Immobility is split across two data mechanisms:
---   * translation + jumping: permanent MOD_ROOT aura 42716 "Self Root Forever
---     (No Visual)" - a rooted mover cannot move or jump client-side;
---   * rotation: vehicle kit 1000's facing limits (0.0001 rad) freeze turning.
--- NOT a stun (9454 was tried first): the client refuses the Leave Vehicle
--- action while its mover is stunned - the button simply did nothing - and a
--- stunned vehicle cannot cast its action bar. Root gates neither: exits and
--- bar casts (51421) work, which is also why future custom building spells do
--- NOT need SPELL_ATTR5_USABLE_WHILE_STUNNED. Being a genuine MOD_ROOT aura,
--- 42716 also keeps Unit::SetControlled(false, UNIT_STATE_ROOT) from ever
--- unrooting the creature when an enemy's temporary root expires.
+-- Belt on top of the non-control seat: permanent MOD_ROOT aura 42716 "Self
+-- Root Forever (No Visual)" pins the creature against anything server-side
+-- that might ever try to move it. NOT a stun (9454 was tried first): the
+-- client refuses the Leave Vehicle action while its mover is stunned - the
+-- button simply did nothing - and a stunned vehicle cannot cast its action
+-- bar. Root gates neither, so future custom building spells do NOT need
+-- SPELL_ATTR5_USABLE_WHILE_STUNNED. Being a genuine MOD_ROOT aura, 42716
+-- also keeps Unit::SetControlled(false, UNIT_STATE_ROOT) from ever unrooting
+-- the creature when an enemy's temporary root expires.
 DELETE FROM creature_template_addon WHERE entry = 900116;
 INSERT INTO creature_template_addon (entry, auras) VALUES (900116, '42716');
 
@@ -96,9 +94,9 @@ INSERT INTO creature_template_addon (entry, auras) VALUES (900116, '42716');
 -- building, wedged inside its own collision shell. Offset mode (ExitParamValue
 -- 1) relocates the exit relative to the vehicle's facing; the door is baked
 -- onto model +X, so +35 yards along facing lands just outside the gate (the
--- wall sits at +23.7). NOTE: seat 1705 is vehicle kit 121's stock seat
--- (Stampy), so this also moves that quest mammoth's exits - harmless here,
--- and a dedicated custom seat can replace it if it ever matters.
-DELETE FROM vehicle_seat_addon WHERE SeatEntry = 1705;
+-- wall sits at +23.7). Seat 90000 is the building's own custom seat (minted
+-- by tools/tanaris/seat DBC tooling), so this no longer touches Stampy's
+-- stock seat 1705 as an earlier revision did.
+DELETE FROM vehicle_seat_addon WHERE SeatEntry IN (1705, 90000);
 INSERT INTO vehicle_seat_addon (SeatEntry, SeatOrientation, ExitParamX, ExitParamY, ExitParamZ, ExitParamO, ExitParamValue)
-VALUES (1705, 0, 35, 0, 1, 0, 1);
+VALUES (90000, 0, 35, 0, 1, 0, 1);

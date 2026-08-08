@@ -21,12 +21,16 @@
  * Deliberately NO client-control tricks for the garrison (vehicle) layer.
  * Earlier revisions revoked SetClientControl on boarding and near-teleported
  * the rider on exit; both fought the client's own control handback and locked
- * the camera to the vehicle. Garrisoning is handled entirely by data instead:
- * the vehicle kit's facing limits freeze rotation, a vehicle_seat_addon
- * offset places the exit, and a permanent root pins the building - the aura
- * 42716 in creature_template_addon, re-asserted below in case anything ever
- * strips it. A ROOT, not a stun: the client refuses the Leave Vehicle action
- * while its mover is stunned, and a stunned vehicle cannot cast its bar.
+ * the camera to the vehicle. The final architecture makes the rider a
+ * PASSENGER, never the mover: vehicle kit 1000's only seat (90000) has
+ * CAN_CAST without CAN_CONTROL, so the client physically cannot steer, turn
+ * or jump the building - exact zero, by construction - while Vehicle.cpp
+ * still hands the rider the building's action bar (the stock gunner
+ * arrangement). Every possess-seat immobilizer failed before this: stun
+ * dead-buttons Leave Vehicle, facing limits accumulate per input, TurnSpeed
+ * is ignored for non-turret kits, and FIXED_POSITION breaks exits. The
+ * permanent root (aura 42716, re-asserted below) and the zero turn rate are
+ * kept as server-side belts.
  */
 
 #include "Creature.h"
@@ -45,14 +49,10 @@ struct RtsBuildingAI : public CreatureAI
         : CreatureAI(creature), _sinceLastHit(0)
     {
         creature->SetReactState(REACT_PASSIVE);
-        // EXACTLY zero, not merely slow - the user's rule is no movement and
-        // no turning at all. Translation is killed by the permanent root (a
-        // binary state, not a speed); turning is killed twice: vehicle kit
-        // 1000 carries TurnSpeed 0.0 in Vehicle.dbc for the client, and this
-        // pins the unit's own turn rate so no core path can ever hand a
-        // possessing rider a nonzero rate. (The kit's 0.0001 facing limits
-        // proved to be per-input clamps that ACCUMULATE across inputs - they
-        // are not the rotation blocker, turn rate is.)
+        // Belt: the non-control seat already makes rider-driven movement
+        // impossible, but the rule is EXACT zero with no code path exempt,
+        // so the unit's own turn rate is pinned too (SetSpeedRate has no
+        // floor clamp - a true 0 survives).
         creature->SetSpeed(MOVE_TURN_RATE, 0.0f);
     }
 

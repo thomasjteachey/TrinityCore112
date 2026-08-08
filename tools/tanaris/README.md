@@ -160,22 +160,30 @@ A building is two co-located spawns sharing one converted model:
    VEHICLE_FLAG_FIXED_POSITION (0x200000): it breaks possess-exits on this
    client (locked camera), which is why immobility is built from parts
    instead (next point).
-4. **Immobility — EXACT zero, no epsilons (user rule).**
-   - Translation + jumping: permanent MOD_ROOT aura **42716** "Self Root
-     Forever (No Visual)" in `creature_template_addon`. A rooted mover
-     translates exactly zero client-side, and the kit's NO_JUMPING flag
-     (0x2) covers jumps. NOT a stun: the client dead-buttons Leave Vehicle
-     while its mover is stunned and a stunned vehicle cannot cast its bar.
-   - Rotation: Vehicle.dbc **TurnSpeed = 0.0** on kit 1000 (`vehicle_facing.py
-     setturn <dbc> 1000 0` — patch all four DBC locations AND repack the
-     client's patch-Z, the client is the enforcer), plus
-     `SetSpeed(MOVE_TURN_RATE, 0)` in npc_rts_building as the server-side
-     pin. The FacingLimit fields (18/19) are per-input clamps that ACCUMULATE
-     across inputs — an epsilon there still lets the rider slowly spin the
-     building; they are not the rotation blocker.
+4. **Immobility — EXACT zero, no epsilons (user rule): the rider is a
+   PASSENGER, never the mover.** Kit 1000's only seat is the custom seat
+   **90000** (`seat_tool.py mint <VehicleSeat.dbc> 1705 90000 800`): seat
+   1705 minus CAN_CONTROL (0x800), keeping CAN_CAST (0x20000000, the
+   "gunner" vehicle-UI flag) and CAN_ENTER_OR_EXIT. No possess ⇒ the client
+   never movers the building ⇒ steering, turning and jumping are impossible
+   by construction. Vehicle.cpp sends the bar for CAN_CAST non-control seats
+   and PetHandler.cpp routes the ridden-vehicle casts (both custom, this
+   fork). VehicleSeat.dbc must reach the client (patch-Z) and both servers;
+   mirror `dbc.vehicleseat_lplus` (full 58-field layout).
+   Graveyard of possess-seat immobilizers, so nobody retries them:
+   - Stun (aura 9454): pins perfectly but the client DEAD-BUTTONS Leave
+     Vehicle while its mover is stunned, and a stunned vehicle cannot cast.
+   - FacingLimit fields (18/19): per-input clamps that ACCUMULATE — an
+     epsilon still lets the rider slowly spin the building.
+   - Vehicle.dbc TurnSpeed 0: ignored for non-turret kits.
+   - VEHICLE_FLAG_FIXED_POSITION (the stock turret answer, on kits 160/244):
+     breaks possess-exits on this client (locked camera), four data points.
+   Kept as server-side belts: permanent MOD_ROOT aura **42716** "Self Root
+   Forever (No Visual)" in `creature_template_addon` (root never gates exits
+   or casting) and `SetSpeed(MOVE_TURN_RATE, 0)` in npc_rts_building.
 5. **Door faces +X** (`--rotate`, derived from the WMO's portal bearings), so
    a spawn orientation aims the gate. Dismounts land in front of it via
-   `vehicle_seat_addon` (seat 1705: +35 yd along facing, ExitParamValue 1).
+   `vehicle_seat_addon` (seat 90000: +35 yd along facing, ExitParamValue 1).
 
 Worked example: entries 900001 (shell) + 900116 (twin), displays 11001/11000 +
 40000, sql/custom/world/2026_08_08_00_world_tanaris_workshop_twin.sql.

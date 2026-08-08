@@ -19,6 +19,7 @@
 #include "Common.h"
 #include "CreatureAI.h"
 #include "DatabaseEnv.h"
+#include "DBCStructure.h"
 #include "Group.h"
 #include "Log.h"
 #include "MotionMaster.h"
@@ -34,6 +35,7 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "Util.h"
+#include "Vehicle.h"
 #include "World.h"
 #include "WorldPacket.h"
 
@@ -758,13 +760,24 @@ void WorldSession::HandlePetCastSpellOpcode(WorldPacket& recvPacket)
 
     TC_LOG_DEBUG("entities.pet", "WORLD: CMSG_PET_CAST_SPELL, {}, castCount: {}, spellId {}, castFlags {}", guid.ToString(), castCount, spellId, castFlags);
 
-    // This opcode is also sent from charmed and possessed units (players and creatures)
-    if (!_player->GetGuardianPet() && !_player->GetCharmed())
-        return;
-
     Unit* caster = ObjectAccessor::GetUnit(*_player, guid);
 
-    if (!caster || (caster != _player->GetGuardianPet() && caster != _player->GetCharmed()))
+    // The vehicle bar of a CAN_CAST non-control seat (the stock gunner
+    // arrangement) casts through the ridden vehicle, which is neither pet nor
+    // charm - the rider never controls it, they only borrow its bar.
+    auto isRiddenCanCastVehicle = [this](Unit const* unit)
+    {
+        if (!unit || unit != _player->GetVehicleBase())
+            return false;
+        VehicleSeatEntry const* seat = _player->GetVehicle()->GetSeatForPassenger(_player);
+        return seat && seat->HasFlag(VEHICLE_SEAT_FLAG_CAN_CAST) && !seat->HasFlag(VEHICLE_SEAT_FLAG_CAN_CONTROL);
+    };
+
+    // This opcode is also sent from charmed and possessed units (players and creatures)
+    if (!_player->GetGuardianPet() && !_player->GetCharmed() && !isRiddenCanCastVehicle(caster))
+        return;
+
+    if (!caster || (caster != _player->GetGuardianPet() && caster != _player->GetCharmed() && !isRiddenCanCastVehicle(caster)))
     {
         TC_LOG_ERROR("entities.pet", "HandlePetCastSpellOpcode: {} isn't pet of player {} ({}).", guid.ToString(), GetPlayer()->GetName(), GetPlayer()->GetGUID().ToString());
         return;
