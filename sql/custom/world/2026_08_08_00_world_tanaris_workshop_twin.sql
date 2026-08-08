@@ -89,14 +89,14 @@ INSERT INTO npc_spellclick_spells (npc_entry, spell_id, cast_flags, user_type) V
 DELETE FROM creature_template_addon WHERE entry = 900116;
 INSERT INTO creature_template_addon (entry, auras) VALUES (900116, '42716');
 
--- Dismount in front of the gate, not inside the building. Vehicle exits place
--- the passenger at the vehicle's origin - the dead center of a sixty-yard
--- building, wedged inside its own collision shell. Offset mode (ExitParamValue
--- 1) relocates the exit relative to the vehicle's facing; the door is baked
--- onto model +X, so +35 yards along facing lands just outside the gate (the
--- wall sits at +23.7). Seat 90000 is the building's own custom seat (minted
--- by tools/tanaris/seat_tool.py), so this no longer touches Stampy's stock
--- seat 1705 as an earlier revision did.
+-- Dismount INSIDE the workshop at its center, facing the gate (user-picked
+-- spot; the interior is walkable through the door, and the exit spline adds
+-- the vehicle's CollisionHeight so the passenger settles onto the floor).
+-- Offset mode (ExitParamValue 1) is relative to the vehicle's facing - an
+-- earlier revision used +35 yd to land outside the gate; zeroed 2026-08-08
+-- when the user chose the interior. Seat 90000 is the building's own custom
+-- seat (minted by tools/tanaris/seat_tool.py), so this no longer touches
+-- Stampy's stock seat 1705 as an earlier revision did.
 --
 -- WHERE THE RIDER SITS is NOT here: it is seat 90000's AttachmentOffset in
 -- VehicleSeat.dbc (-8.8678, 6.6468, 5.4641 with AttachmentID -1 = offset
@@ -106,4 +106,4 @@ INSERT INTO creature_template_addon (entry, auras) VALUES (900116, '42716');
 -- the matching relative facing.
 DELETE FROM vehicle_seat_addon WHERE SeatEntry IN (1705, 90000);
 INSERT INTO vehicle_seat_addon (SeatEntry, SeatOrientation, ExitParamX, ExitParamY, ExitParamZ, ExitParamO, ExitParamValue)
-VALUES (90000, 1.4508, 35, 0, 1, 0, 1);
+VALUES (90000, 1.4508, 0, 0, 0, 0, 1);
