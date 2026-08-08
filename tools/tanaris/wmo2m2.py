@@ -294,7 +294,10 @@ def convert(materials, verts, normals, uvs, tris, name):
 
     hdr = struct.pack("<4sI", b"MD20", 264)
     hdr += struct.pack("<2I", len(name_b), ofs_name)
-    hdr += struct.pack("<I", 0x80)                          # global flags, donor value
+    # 0x10, not the donor's 0x80: the donor is only ever a doodad. Every stock
+    # World-doodad model that Blizzard wired as a CREATURE display carries 0x8
+    # or 0x10 here, and the creature renderer cubes on 0x80.
+    hdr += struct.pack("<I", 0x10)
     hdr += struct.pack("<2I", 0, 0)                         # global sequences
     hdr += struct.pack("<2I", 1, ofs_seq)
     hdr += struct.pack("<2I", 0, 0)                         # animation lookup
@@ -346,10 +349,13 @@ def convert(materials, verts, normals, uvs, tris, name):
                                 mat_to_tex[smx["mat"]], 0, 0, 0)
     ofs_bat = S.add(bytes(bat_blob))
 
+    # boneCountMax 21, not the donor's 0: every stock skin paired with a
+    # creature display says 21, and the creature renderer's bone-matrix setup
+    # reads it -- 0 is another way to earn the checkered cube. Doodads don't care.
     skin = struct.pack("<4s10I", b"SKIN",
                        len(out_verts), ofs_sv, len(out_indices), ofs_si,
                        len(out_verts), ofs_sb, len(submeshes), ofs_sub,
-                       len(submeshes), ofs_bat) + struct.pack("<I", 0)
+                       len(submeshes), ofs_bat) + struct.pack("<I", 21)
     assert len(skin) == SH
     skin = skin + S.blob()
     # header was assembled before block offsets existed? no: Blocks(SH) already
