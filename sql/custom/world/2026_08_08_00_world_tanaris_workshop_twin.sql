@@ -34,7 +34,10 @@ VALUES (40000, 28, 45, 2, 0);
 -- The attackable body, driven by npc_rts_building (Custom/rts_building.cpp):
 -- never retaliates, and clears its own combat five seconds after the last hit
 -- so attackers disengage the way they would from a player. (PACIFIED gets
--- stripped from templates at load; plain PassiveAI never ends the fight.) Scale 1.0001: a 1.02
+-- stripped from templates at load; plain PassiveAI never ends the fight.)
+-- The immunity mask deliberately EXCLUDES the charm-mechanic bit (551238166,
+-- not ...167): a garrisonable building is boarded via a charm-class aura, so
+-- charm immunity and the vehicle system are mutually exclusive. Scale 1.0001: a 1.02
 -- wrap avoided z-fighting but shifted the visible surface off the GO's
 -- collision mesh; near-exact scale keeps collision honest and the z-fighting
 -- is accepted (user's call).
@@ -56,7 +59,7 @@ VALUES
   -- cosmetically spin the building until npc_rts_building's control
   -- revocation is built - the server never accepts the turn.
   (900116, 40000, 'Goblin Workshop', 'Converted WMO twin', 60, 60, 35, 16777216,
-   1, 0, 1073742080, 0, 0, 551238167, 30, 1, 1.0, 1, 1.14286,
+   1, 0, 1073742080, 0, 0, 551238166, 30, 1, 1.0, 1, 1.14286,
    121, '', 'npc_rts_building');
 
 -- The vehicle action bar shown to whoever garrisons the building. Index 0-7.
