@@ -100,7 +100,7 @@ INSERT INTO creature_template_addon (entry, auras) VALUES (900116, '42716');
 -- Stampy's stock seat 1705 as an earlier revision did.
 --
 -- WHERE THE RIDER SITS is NOT here: it is seat 90000's AttachmentOffset in
--- VehicleSeat.dbc (-8.8678, 6.6468, 8.4641 with AttachmentID -1 = offset
+-- VehicleSeat.dbc (-6.8822, 6.4074, 8.4641 with AttachmentID -1 = offset
 -- from model origin; converted M2s have no attachment bones - Stampy's
 -- inherited bone 21 put the rider at the client's fallback spot). Computed
 -- from a user-picked world point via seat_tool.py; SeatOrientation below is
