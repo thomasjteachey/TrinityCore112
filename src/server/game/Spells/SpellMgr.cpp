@@ -1923,6 +1923,22 @@ void SpellMgr::LoadSpellProcs()
                     if (spellEffectInfo.CalcValue() <= -100)
                         procEntry.HitMask = PROC_HIT_MISS;
                     break;
+                // Stealth is dropped by the proc system, not by an interrupt flag:
+                // Stealth (1784) carries no AURA_INTERRUPT_FLAG_TAKE_DAMAGE, just
+                // proc flags for every TAKEN hit class and a single charge. That
+                // leaves it on the default taken hit mask of NORMAL | CRITICAL,
+                // and a fully absorbed hit reports PROC_HIT_ABSORB and nothing
+                // else - so any shield that ate a hit whole kept the rogue
+                // stealthed. Power Word: Shield soaking a Curse of Agony tick is
+                // the obvious case, but it held for every full absorb, including
+                // damage a paladin's Sacrificial Aura redirected away (splits go
+                // through DamageInfo::AbsorbDamage and mark PROC_HIT_ABSORB too).
+                // Absorbed damage is still a hit that landed. Full resists and
+                // full blocks stay out on purpose - DamageInfo clears
+                // NORMAL/CRITICAL for those because nothing reached the target.
+                case SPELL_AURA_MOD_STEALTH:
+                    procEntry.HitMask = PROC_HIT_NORMAL | PROC_HIT_CRITICAL | PROC_HIT_ABSORB;
+                    break;
                 default:
                     continue;
             }

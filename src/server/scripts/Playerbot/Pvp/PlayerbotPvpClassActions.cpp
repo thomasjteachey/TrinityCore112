@@ -31,6 +31,7 @@
 #include "MovementDefines.h"
 #include "MoveSpline.h"
 #include "MotionMaster.h"
+#include "PlayerCollisionServer.h"
 #include "Player.h"
 #include "Battleground.h"
 #include "PathGenerator.h"
@@ -534,6 +535,17 @@ Position BuildCollisionSafeDestination(Player* player, Position const& destinati
     }
 
     adjustedDestination.Relocate(adjustedDestination.GetPositionX(), adjustedDestination.GetPositionY(), adjustedZ, adjustedDestination.GetOrientation());
+
+    // Stop the segment at any player carrying a collision aura. Humans get this
+    // from the client tweak - movement is client-authoritative, so their own
+    // client clips them - but a bot has no client and would walk straight
+    // through. Clipping the DESTINATION rather than correcting the position
+    // afterwards is deliberate: a spline that keeps advancing while the unit is
+    // held back accumulates and discharges as a teleport the moment the way
+    // clears, which is exactly the artefact the client-side work had to solve.
+    // No-op (one atomic load) whenever nobody has one of the auras.
+    PlayerCollisionServer::ClipSegment(player, *player, adjustedDestination);
+
     return adjustedDestination;
 }
 

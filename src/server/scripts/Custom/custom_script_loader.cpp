@@ -38,12 +38,14 @@ void AddSC_custom_t1_set_bonuses();
 void AddSC_GOMove_commandscript();
 void AddSC_rts_building();
 void AddSC_custom_los_blocker();
+void AddSC_custom_player_collision();
 
 void AddCustomScripts()
 {
     LoadHiddenItemsetBonuses();
     AddSC_custom_hidden_itemset_bonus();
     AddSC_custom_los_blocker();
+    AddSC_custom_player_collision();
     AddBGReplayScripts();
     AddSC_custom_zone_group_rules();
     AddSC_mod_pvp_titles();
