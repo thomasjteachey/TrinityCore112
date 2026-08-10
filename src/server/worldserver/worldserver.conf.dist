@@ -4350,3 +4350,40 @@ PvPTitles.Rank_11 = 12500
 PvPTitles.Rank_12 = 15000
 PvPTitles.Rank_13 = 20000
 PvPTitles.Rank_14 = 25000
+
+###############################################################################
+# PLAYER COLLISION
+#
+#    PlayerCollision.GlobalAura
+#        Description: Apply a collision aura to every player automatically, so
+#                     everyone is solid without it being cast on them.
+#
+#                     Humans are stopped by their own client (movement is
+#                     client-authoritative and the client tweak reads the aura);
+#                     playerbots are stopped server-side. Both come from this one
+#                     aura, so there is no second behaviour to drift.
+#
+#                     Rotate the weekly mode by changing the id, or set 0 to turn
+#                     the whole thing off - the aura is then stripped from
+#                     everyone within one sweep. `.reload config` applies it
+#                     without a restart.
+#
+#                       0     - disabled
+#                       90210 - Obstruction: enemies cannot pass you (one-way)
+#                       90211 - Immovable:   nobody can pass you (one-way)
+#                       90212 - Bodycheck:   mutual collision with enemies
+#                       90213 - Solid Form:  mutual collision with everyone
+#
+#        Default:     0 (disabled)
+
+PlayerCollision.GlobalAura = 0
+
+#    PlayerCollision.GlobalAura.CheckSeconds
+#        Description: How often to re-assert the aura. It is re-applied on a
+#                     sweep rather than only at login because auras come off on
+#                     death and can be stripped by other effects.
+#        Default:     5
+
+PlayerCollision.GlobalAura.CheckSeconds = 5
+
+###############################################################################
