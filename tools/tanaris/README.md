@@ -120,6 +120,27 @@ creates and seeds the three `_lplus` mirrors from the minted binaries (so
 mirror and binary are born agreeing), probes the heightmap for flat ground,
 and spawns the template rows and the test pair.
 
+### Where client files ship: patch-Y, not patch-Z (since 2026-08-10)
+
+The forge's art-patch split retired production patch-Z to a placeholder and
+moved the art base to patch-Y, so anything hand-packed into a local
+`patch-Z.MPQ` gets wiped the next time the launcher runs. Custom client files
+— the converted models AND the DBCs — belong in the served `patch-Y.zip`:
+
+```bash
+smpq -r patch-Y.MPQ 'DBFilesClient\Vehicle.dbc'      # -a refuses to overwrite
+smpq -a patch-Y.MPQ DBFilesClient/Vehicle.dbc World/TanarisBG/WgWorkshopBG.m2
+```
+
+then rezip (`zip -0`), bump `patch-Y.version`, and sync the forge's cached
+copy at `itemforge/app/itemforge/.cache/patchmpq/patch-Y.MPQ` or its next
+bundle reintroduces the old content. Bump `patch-Z.version` too so stale
+full patch-Z archives on player clients are replaced by the stub and stop
+shadowing Y. **smpq compacts the archive on rewrite**, so the file gets
+SMALLER — verify a merge by file count (`smpq -i`), never by size. patch-Y
+still outranks patch-F, so the creature-display shadowing rule below is
+satisfied. Publishing touches the live download: ask first.
+
 ### Client delivery rules for creature displays (hard-won)
 
 - **patch-F shadows patch-enUS-8** for `CreatureDisplayInfo.dbc` and
