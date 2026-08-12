@@ -32,6 +32,7 @@
 #include "RBAC.h"
 #include "ScriptMgr.h"
 #include "SpellScript.h"
+#include "WorldSession.h"
 #include <cmath>
 #include <unordered_map>
 
