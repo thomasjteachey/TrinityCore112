@@ -53,16 +53,19 @@ VALUES (40000, 28, 45, 2, 0);
 -- 0 keeps a damaged building damaged; flags_extra 1073742080 = no XP + civilian
 -- ...ish combination already proven in the dev row.
 DELETE FROM creature_template WHERE entry = 900116;
+-- Every column is backticked: `rank` is a reserved word in MySQL 8 (window
+-- functions), and `exp`/`type`/`family` are close enough to reserved to not
+-- be worth the gamble in a script meant to replay on any realm.
 INSERT INTO creature_template
-  (entry, difficulty_entry_1, difficulty_entry_2, difficulty_entry_3, KillCredit1, KillCredit2,
-   modelid1, modelid2, modelid3, modelid4, name, subname, IconName, gossip_menu_id,
-   minlevel, maxlevel, exp, faction, npcflag, speed_walk, speed_run, scale, rank,
-   dmgschool, BaseAttackTime, RangeAttackTime, BaseVariance, RangeVariance, unit_class,
-   unit_flags, unit_flags2, dynamicflags, family, type, type_flags, lootid, pickpocketloot,
-   skinloot, PetSpellDataId, VehicleId, mingold, maxgold, AIName, MovementType, HoverHeight,
-   HealthModifier, ManaModifier, ArmorModifier, DamageModifier, ExperienceModifier,
-   RacialLeader, movementId, RegenHealth, mechanic_immune_mask, spell_school_immune_mask,
-   flags_extra, ScriptName, StringId, VerifiedBuild)
+  (`entry`, `difficulty_entry_1`, `difficulty_entry_2`, `difficulty_entry_3`, `KillCredit1`, `KillCredit2`,
+   `modelid1`, `modelid2`, `modelid3`, `modelid4`, `name`, `subname`, `IconName`, `gossip_menu_id`,
+   `minlevel`, `maxlevel`, `exp`, `faction`, `npcflag`, `speed_walk`, `speed_run`, `scale`, `rank`,
+   `dmgschool`, `BaseAttackTime`, `RangeAttackTime`, `BaseVariance`, `RangeVariance`, `unit_class`,
+   `unit_flags`, `unit_flags2`, `dynamicflags`, `family`, `type`, `type_flags`, `lootid`, `pickpocketloot`,
+   `skinloot`, `PetSpellDataId`, `VehicleId`, `mingold`, `maxgold`, `AIName`, `MovementType`, `HoverHeight`,
+   `HealthModifier`, `ManaModifier`, `ArmorModifier`, `DamageModifier`, `ExperienceModifier`,
+   `RacialLeader`, `movementId`, `RegenHealth`, `mechanic_immune_mask`, `spell_school_immune_mask`,
+   `flags_extra`, `ScriptName`, `StringId`, `VerifiedBuild`)
 VALUES
   -- faction 35 (friendly-to-all) is the boarding-test state; the RTS gives
   -- buildings per-team factions and this row follows ownership at runtime.
