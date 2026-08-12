@@ -8,12 +8,15 @@
 -- CLIENT-SIDE PREREQUISITES, learned the hard way:
 --   * patch-F ships its own CreatureDisplayInfo/CreatureModelData (the HD
 --     creature pack, 145 extra models) and OUTRANKS patch-enUS-8. Creature
---     display rows must be minted into patch-F's copies and shipped in
---     patch-Z, or the client never sees them and renders checkered cubes.
+--     display rows must be minted into patch-F's copies and shipped in the
+--     ART patch, or the client never sees them and renders checkered cubes.
 --     GameObjectDisplayInfo is not in patch-F, so GO rows ride enUS-8 fine.
---   * The .m2/.skin must be in a non-locale patch (patch-Z).
+--   * The .m2/.skin must be in a non-locale patch.
+--   * That art patch is **patch-Y** since the 2026-08-08 split (production
+--     patch-Z was emptied to a forge-delta stub; anything left only in a
+--     hand-built local patch-Z is erased by the next launcher run).
 --
--- Replayable.
+-- Replayable, and the migration source of truth for other realms.
 
 -- The GO shell: INVISIBLE collision-only model (display 11001, built by
 -- wmo2m2.py --collision-only, same shape as Blizzard's FakeCollision doors:
@@ -37,16 +40,29 @@ VALUES (40000, 28, 45, 2, 0);
 -- stripped from templates at load; plain PassiveAI never ends the fight.)
 -- The immunity mask deliberately EXCLUDES the charm-mechanic bit (551238166,
 -- not ...167): a garrisonable building is boarded via a charm-class aura, so
--- charm immunity and the vehicle system are mutually exclusive. Scale 1.0001: a 1.02
--- wrap avoided z-fighting but shifted the visible surface off the GO's
--- collision mesh; near-exact scale keeps collision honest and the z-fighting
--- is accepted (user's call).
+-- charm immunity and the vehicle system are mutually exclusive. Scale is
+-- EXACTLY 1.0: oversized wraps (1.005 - 1.02) were tried to dodge z-fighting
+-- against the shell, but the shell became invisible (collision-only model)
+-- so there is nothing to z-fight and any wrap would only drift the visible
+-- surface off the collision mesh.
+-- Every column is spelled out because this row is the migration source of
+-- truth for other realms: the belt-and-braces immobility values are easy to
+-- lose in a partial insert. unit_flags2 2048 = UNIT_FLAG2_DISABLE_TURN and
+-- speed_walk/speed_run 0.00001 are the last two of those belts (the seat
+-- itself is what actually makes movement impossible - see below); RegenHealth
+-- 0 keeps a damaged building damaged; flags_extra 1073742080 = no XP + civilian
+-- ...ish combination already proven in the dev row.
 DELETE FROM creature_template WHERE entry = 900116;
 INSERT INTO creature_template
-  (entry, modelid1, name, subname, minlevel, maxlevel, faction, npcflag,
-   unit_class, unit_flags, flags_extra, MovementType, RegenHealth,
-   mechanic_immune_mask, HealthModifier, ArmorModifier, scale, speed_walk, speed_run,
-   VehicleId, AIName, ScriptName)
+  (entry, difficulty_entry_1, difficulty_entry_2, difficulty_entry_3, KillCredit1, KillCredit2,
+   modelid1, modelid2, modelid3, modelid4, name, subname, IconName, gossip_menu_id,
+   minlevel, maxlevel, exp, faction, npcflag, speed_walk, speed_run, scale, rank,
+   dmgschool, BaseAttackTime, RangeAttackTime, BaseVariance, RangeVariance, unit_class,
+   unit_flags, unit_flags2, dynamicflags, family, type, type_flags, lootid, pickpocketloot,
+   skinloot, PetSpellDataId, VehicleId, mingold, maxgold, AIName, MovementType, HoverHeight,
+   HealthModifier, ManaModifier, ArmorModifier, DamageModifier, ExperienceModifier,
+   RacialLeader, movementId, RegenHealth, mechanic_immune_mask, spell_school_immune_mask,
+   flags_extra, ScriptName, StringId, VerifiedBuild)
 VALUES
   -- faction 35 (friendly-to-all) is the boarding-test state; the RTS gives
   -- buildings per-team factions and this row follows ownership at runtime.
@@ -60,9 +76,15 @@ VALUES
   -- the client never movers the building, so steering, turning and jumping
   -- are impossible by architecture - EXACT zero, which no possess-seat
   -- mechanism (facing limits, TurnSpeed, turn rate) ever delivered.
-  (900116, 40000, 'Goblin Workshop', 'Converted WMO twin', 60, 60, 35, 16777216,
-   1, 0, 1073742080, 0, 0, 551238166, 30, 1, 1.0, 1, 1.14286,
-   1000, '', 'npc_rts_building');
+  (900116, 0, 0, 0, 0, 0,
+   40000, 0, 0, 0, 'Goblin Workshop', 'Converted WMO twin', NULL, 0,
+   60, 60, 0, 35, 16777216, 0.00001, 0.00001, 1, 0,
+   0, 0, 0, 1, 1, 1,
+   0, 2048, 0, 0, 1, 0, 0, 0,
+   0, 0, 1000, 0, 0, '', 0, 1,
+   30, 1, 1, 1, 1,
+   0, 0, 0, 551238166, 0,
+   1073742080, 'npc_rts_building', NULL, NULL);
 
 -- The vehicle action bar shown to whoever garrisons the building. Index 0-7.
 -- 51421 is the donor turret's Cannon Blast, a placeholder until the custom
@@ -96,17 +118,18 @@ INSERT INTO creature_template_addon (entry, auras) VALUES (900116, '42716');
 -- seat (minted by tools/tanaris/seat_tool.py), so this no longer touches
 -- Stampy's stock seat 1705 as an earlier revision did.
 --
--- WHERE THE RIDER SITS is NOT here: it is seat 90000's AttachmentOffset in
--- VehicleSeat.dbc (0.4815, -2.2578, 32.5056 - the TOWER TOP), composed on
--- top of M2 attachment 0. The client resolves AttachmentID through the
--- model's attachment lookup and DISCARDS the whole offset when the lookup
--- fails - converted M2s ship with no attachments, so the rider rendered at
--- the model origin no matter what the seat said (the server-side transport
--- position was always right; the desync was purely visual).
--- tools/tanaris/add_m2_attachment.py appends attachment 0 at the origin so
--- the composed position equals the DBC offset and tuning stays data-only.
--- Computed from a user-picked world point via seat_tool.py; SeatOrientation
--- below is the matching relative facing.
+-- WHERE THE RIDER SITS is NOT here, and NOT in VehicleSeat.dbc either: it is
+-- M2 attachment 0 inside World\TanarisBG\WgWorkshopBG.m2, at model-space
+-- (0.4815, -2.2578, 32.5056) - the TOWER TOP - written by
+-- tools/tanaris/add_m2_attachment.py. The client takes the seat position
+-- from the attachment named by VehicleSeat.AttachmentID and treats
+-- AttachmentOffset only as a FALLBACK for when that attachment cannot be
+-- resolved, so seat 90000 keeps AttachmentID 0 with offset (0,0,0) exactly
+-- like the stock seats (Stampy's 1705 is AttachmentID 21, offset zero, and
+-- its rider still sits on the mammoth's back). Consequence, also stock: the
+-- SERVER derives the passenger's transport offset from AttachmentOffset
+-- alone, so it treats a garrisoned rider as standing at the building's
+-- origin while the client draws them on the tower.
 DELETE FROM vehicle_seat_addon WHERE SeatEntry IN (1705, 90000);
 INSERT INTO vehicle_seat_addon (SeatEntry, SeatOrientation, ExitParamX, ExitParamY, ExitParamZ, ExitParamO, ExitParamValue)
 VALUES (90000, 0.1470, 21.8570, -7.2697, 1, 0.0449, 1);

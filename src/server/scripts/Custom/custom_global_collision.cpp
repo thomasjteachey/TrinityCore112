@@ -1,17 +1,24 @@
 /*
  * Server-wide collision: give everyone a collision aura automatically.
  *
- * Rather than teaching the client and the bot code about a separate "global
- * collision" mode, the server just applies the configured aura to every player.
- * Both halves then work with no further changes:
+ * Rather than teaching the client about a separate "global collision" mode, the
+ * server just applies the configured aura to every player; their client already
+ * reads the aura and clips their own movement, because movement in 3.3.5 is
+ * client-authoritative. So the server-wide mode is the exact same mechanic
+ * players can be given individually - there is no second code path to drift.
  *
- *   - humans    : their client already reads the aura and clips their own
- *                 movement (movement is client-authoritative)
- *   - playerbots: PlayerCollisionServer already registers the aura, and the bot
- *                 movement code already clips destinations against it
- *
- * So the server-wide mode is the exact same mechanic players can be given
- * individually - there is no second code path to drift from the first.
+ * PLAYERBOTS ARE NOT AFFECTED, deliberately. A bot has no client, so nothing
+ * clips it. The attempt to fix that server-side was removed as unworkable: the
+ * only available hook was to shorten a movement destination before issuing it,
+ * and that cannot behave like the client's per-frame clipping. MovePoint then
+ * runs the destination through the navmesh pathfinder, which re-routes and can
+ * path straight back through the body; the check happens once when the
+ * destination is computed rather than every frame, so anyone stepping into a
+ * moving bot's path is simply walked through; and an already-overlapping bot
+ * stops dead instead of sliding out, so it wedges. Making bots collide properly
+ * would need per-tick position enforcement with depenetration - i.e. porting the
+ * client's ClipDelta into bot movement - which is a much bigger change than the
+ * destination hook pretended to be.
  *
  * Config (worldserver.conf), all live-reloadable with `.reload config`:
  *

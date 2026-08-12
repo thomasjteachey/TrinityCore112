@@ -57,6 +57,19 @@
 --   does not stop someone simply deleting the client DLL, which remains the real
 --   hole (see the client-coverage note above).
 --
+--   AttributesEx gains SPELL_ATTR1_DONT_DISPLAY_IN_AURA_BAR (0x02000000) so the
+--   buff draws no icon at all: these are mode switches, not player-facing buffs,
+--   and with a server-wide collision aura the icon is permanent clutter.
+--
+--   Do NOT reach for SPELL_ATTR0_PASSIVE to hide them instead. Passive is not a
+--   display flag - Aura::CanBeSentToClient() is `!IsPassive() || area-aura ||
+--   ignore-aurastate`, so a passive aura is never given a client slot and never
+--   reaches the client at all. The DLL gates collision by reading these ids off
+--   the client's own aura table, so a passive version would be invisible to it
+--   and collision would silently stop working. DONT_DISPLAY_IN_AURA_BAR is the
+--   right flag: the aura is still sent and still in the aura table (which the DLL
+--   walks by index), the client just does not draw it in the buff frame.
+--
 -- DurationIndex is taken from the donor (index 1 = 10s) and overridden to 21,
 -- VERIFIED as Duration -1 (infinite) in dbc.spellduration_lplus - these are
 -- mode-defining buffs, not timed pickups. Change it if they should expire.
@@ -92,6 +105,7 @@ UPDATE `tmp_collide` SET
   `AuraInterruptFlags` = 0,      -- donor carried 0x20000 AURA_INTERRUPT_FLAG_MOUNT
   `AttributesExC` = 1048576,     -- SPELL_ATTR3_DEATH_PERSISTENT
   `Attributes` = 2147483648,     -- SPELL_ATTR0_CANT_CANCEL: player cannot right-click it off
+  `AttributesEx` = 33554432,     -- SPELL_ATTR1_DONT_DISPLAY_IN_AURA_BAR: no buff icon
   `SpellIconID` = 28;      -- Ability_Defend
 INSERT INTO `spell_lplus` SELECT * FROM `tmp_collide`;
 

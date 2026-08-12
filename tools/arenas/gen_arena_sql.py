@@ -364,6 +364,14 @@ GO_TEMPLATE_CLONES = [
 # a stale zone name in the open; 881 is a pure-WMO map with no terrain textures
 # at all. Worth knowing if the question of why comes up later.
 DISABLED = {
+    # No minimap exists for these two and none can easily be made: both are a
+    # single WMO with no terrain, so there is nothing for a minimap generator to
+    # draw. Rendering one from the WMO mesh works (tools/arenas/make_minimap.py,
+    # and the tiles are already packed) but the result was not good enough to
+    # ship. The tiles are left in the patch -- harmless, and there if these come
+    # back.
+    877: "Guardian's Hall",
+    878: "Spark of Creator",
     879: "Baradin Hold Arena",
     880: "Obelisk of the Stars",
     881: "The Twisting Nether",
