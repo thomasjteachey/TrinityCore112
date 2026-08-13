@@ -18,6 +18,7 @@
 #include "WorldSession.h"
 #include "AccountMgr.h"
 #include "CellImpl.h"
+#include "ClientTweaksAttest.h"
 #include "CharacterCache.h"
 #include "Common.h"
 #include "Channel.h"
@@ -431,6 +432,8 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
         if (HandleWSGFlagSyncRequest(sender, type, lang, msg))
             return;
         if (HandleCustomGameRulesRequest(sender, type, lang, msg))
+            return;
+        if (ClientTweaksAttest::HandleToken(sender, type, lang, msg))
             return;
 
         if (lang == LANG_ADDON)

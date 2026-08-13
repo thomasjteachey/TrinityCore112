@@ -4387,3 +4387,51 @@ PlayerCollision.GlobalAura = 0
 PlayerCollision.GlobalAura.CheckSeconds = 5
 
 ###############################################################################
+# CLIENT-TWEAKS ATTESTATION (anti-cheat)
+#
+#    Verifies each player is running the mandatory client-tweaks DLL
+#    (dinput8.dll), which is what enforces player collision client-side. A
+#    player who deletes the DLL walks through everyone; this kicks them.
+#
+#    The DLL sends a per-player token every ~15s (addon channel). The server
+#    recomputes the expected token and kicks any player who does not produce a
+#    valid one within the grace window, or who stops sending them.
+#
+#    HONEST LIMIT: this stops the casual "delete the DLL" cheat. It is NOT
+#    cryptographic - a determined attacker who extracts the compiled secret from
+#    the DLL can forge tokens. See ClientTweaksAttest.cpp.
+###############################################################################
+#
+#    ClientTweaks.Attest.Enable
+#        Description: Master switch. 0 = nothing is enforced, no one is kicked.
+#        Default:     0
+#
+#    ClientTweaks.Attest.Secret
+#        Description: Shared secret. MUST match the secret compiled into the
+#                     client-tweaks DLL, or every token fails. If Enable is on
+#                     and this is empty the feature FAILS OPEN (kicks no one) and
+#                     logs an error - it will never kick the whole realm over a
+#                     missing secret. Rotating the secret requires a matching DLL
+#                     rebuild + republish.
+#        Default:     "" (empty)
+#        Note:        Do NOT put a comment on the same line as any value here -
+#                     the parser does not strip inline comments and the value
+#                     fails to parse, silently using the default.
+#
+#    ClientTweaks.Attest.GraceSeconds
+#        Description: Seconds after login before a player must have attested.
+#                     Covers load time and the first token.
+#        Default:     60
+#
+#    ClientTweaks.Attest.TimeoutSeconds
+#        Description: Max seconds between valid tokens once past the grace window.
+#                     Catches unloading the DLL after logging in. Keep well above
+#                     the DLL's ~15s send interval.
+#        Default:     90
+
+ClientTweaks.Attest.Enable = 0
+ClientTweaks.Attest.Secret = ""
+ClientTweaks.Attest.GraceSeconds = 60
+ClientTweaks.Attest.TimeoutSeconds = 90
+
+###############################################################################
