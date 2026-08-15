@@ -80,6 +80,7 @@
 #include "UpdateFieldFlags.h"
 #include "Util.h"
 #include "Vehicle.h"
+#include "VioletHoldBoons.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -14532,6 +14533,10 @@ void Unit::RewardRage(uint32 damage, uint32 weaponSpeedHitFactor, bool attacker)
         if (HasAura(18499))
             addRage *= 2.0f;
     }
+
+    // Violet Hold "Boon of Wrath": more rage from both dealing and taking damage.
+    if (int32 boonPct = VioletHoldBoons::GetRageGenerationPct(this))
+        AddPct(addRage, boonPct);
 
     addRage *= sWorld->getRate(RATE_POWER_RAGE_INCOME);
 

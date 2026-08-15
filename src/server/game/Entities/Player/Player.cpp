@@ -350,6 +350,7 @@ namespace
     }
 }
 #include "ArenaSpectator.h"
+#include "VioletHoldBoons.h"
 
 #include <array>
 
@@ -3033,11 +3034,16 @@ void Player::GiveXP(uint32 xp, Unit* victim, float group_rate)
 
 // Update player to next level
 // Current player experience not update (must be update by caller)
-void Player::GiveLevel(uint8 level)
+void Player::GiveLevel(uint8 level, bool borrowed /*= false*/)
 {
     uint8 oldLevel = GetLevel();
     if (level == oldLevel)
         return;
+
+    // A borrowed level keeps the character's health/power fraction; a real one
+    // fills them up below as it always has.
+    float const healthPct = GetHealthPct();
+    float const manaPct = GetMaxPower(POWER_MANA) ? GetPowerPct(POWER_MANA) : 0.0f;
 
     if (Guild* guild = GetGuild())
         guild->UpdateMemberData(this, GUILD_MEMBER_DATA_LEVEL, level);
@@ -3096,37 +3102,52 @@ void Player::GiveLevel(uint8 level)
     _ApplyAllLevelScaleItemMods(true);
 
     // set current level health and mana/energy to maximum after applying all mods.
-    SetFullHealth();
-    SetFullPower(POWER_MANA);
+    if (borrowed)
+    {
+        SetHealth(std::max<uint32>(1, uint32(CalculatePct(GetMaxHealth(), healthPct))));
+        if (GetMaxPower(POWER_MANA))
+            SetPower(POWER_MANA, uint32(CalculatePct(GetMaxPower(POWER_MANA), manaPct)));
+    }
+    else
+    {
+        SetFullHealth();
+        SetFullPower(POWER_MANA);
+    }
 
     // update level to hunter/summon pet
     if (Pet* pet = GetPet())
         pet->SynchronizeLevelWithOwner();
 
-    if (MailLevelReward const* mailReward = sObjectMgr->GetMailLevelReward(level, GetRaceMask()))
+    // The one-way rewards of genuinely reaching a level. A borrowed level is
+    // taken back later and must leave none of these behind.
+    if (!borrowed)
     {
-        /// @todo Poor design of mail system
-        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-        MailDraft(mailReward->mailTemplateId).SendMailTo(trans, this, MailSender(MAIL_CREATURE, mailReward->senderEntry));
-        CharacterDatabase.CommitTransaction(trans);
+        if (MailLevelReward const* mailReward = sObjectMgr->GetMailLevelReward(level, GetRaceMask()))
+        {
+            /// @todo Poor design of mail system
+            CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+            MailDraft(mailReward->mailTemplateId).SendMailTo(trans, this, MailSender(MAIL_CREATURE, mailReward->senderEntry));
+            CharacterDatabase.CommitTransaction(trans);
+        }
+
+        UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_REACH_LEVEL);
+
+        // Refer-A-Friend
+        if (GetSession()->GetRecruiterId())
+            if (level < sWorld->getIntConfig(CONFIG_MAX_RECRUIT_A_FRIEND_BONUS_PLAYER_LEVEL))
+                if (level % 2 == 0)
+                {
+                    ++m_grantableLevels;
+
+                    if (!HasByteFlag(PLAYER_FIELD_BYTES, PLAYER_FIELD_BYTES_OFFSET_RAF_GRANTABLE_LEVEL, 0x01))
+                        SetByteFlag(PLAYER_FIELD_BYTES, PLAYER_FIELD_BYTES_OFFSET_RAF_GRANTABLE_LEVEL, 0x01);
+                }
     }
-
-    UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_REACH_LEVEL);
-
-    // Refer-A-Friend
-    if (GetSession()->GetRecruiterId())
-        if (level < sWorld->getIntConfig(CONFIG_MAX_RECRUIT_A_FRIEND_BONUS_PLAYER_LEVEL))
-            if (level % 2 == 0)
-            {
-                ++m_grantableLevels;
-
-                if (!HasByteFlag(PLAYER_FIELD_BYTES, PLAYER_FIELD_BYTES_OFFSET_RAF_GRANTABLE_LEVEL, 0x01))
-                    SetByteFlag(PLAYER_FIELD_BYTES, PLAYER_FIELD_BYTES_OFFSET_RAF_GRANTABLE_LEVEL, 0x01);
-            }
 
     SendQuestGiverStatusMultiple();
 
-    sScriptMgr->OnPlayerLevelChanged(this, oldLevel);
+    if (!borrowed)
+        sScriptMgr->OnPlayerLevelChanged(this, oldLevel);
 }
 
 bool Player::IsMaxLevel() const
@@ -4423,11 +4444,15 @@ bool Player::ResetTalents(bool no_cost)
 
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
     _SaveTalents(trans);
+    _SaveVioletHoldRunTalents(trans);
     _SaveSpells(trans);
     CharacterDatabase.CommitTransaction(trans);
 
     m_usedTalentCount = 0;
     SetFreeTalentPoints(talentPointsForLevel);
+
+    // Nothing left to undo for a Violet Hold run either.
+    ClearVioletHoldRunTalents();
 
     if (!no_cost)
     {
@@ -4877,6 +4902,10 @@ void Player::DeleteFromDB(ObjectGuid playerguid, uint32 accountId, bool updateRe
         trans->Append(stmt);
 
         stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHAR_TALENT);
+        stmt->setUInt32(0, guid);
+        trans->Append(stmt);
+
+        stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_VHR_RUN_TALENTS);
         stmt->setUInt32(0, guid);
         trans->Append(stmt);
 
@@ -13456,6 +13485,83 @@ void Player::RefreshTransmogView()
             wearer->SendVisibleItemUpdateTo(this);
 }
 
+void Player::_LoadVioletHoldRunTalents(PreparedQueryResult result)
+{
+    //         0    1      2
+    // SELECT seq, spell, prev_spell FROM custom_violet_hold_talents WHERE guid = ? ORDER BY seq
+    m_vhrRunTalents.clear();
+    m_vhrRunTalentNextSeq = 1;
+    m_vhrRunTalentsDirty = false;
+    if (!result)
+        return;
+
+    do
+    {
+        Field* fields = result->Fetch();
+        VioletHoldRunTalent entry;
+        entry.seq = fields[0].GetUInt32();
+        entry.spell = fields[1].GetUInt32();
+        entry.previousSpell = fields[2].GetUInt32();
+        m_vhrRunTalents.push_back(entry);
+        m_vhrRunTalentNextSeq = std::max(m_vhrRunTalentNextSeq, entry.seq + 1);
+    } while (result->NextRow());
+}
+
+// The ledger only ever changes in memory here and is written by
+// _SaveVioletHoldRunTalents inside the character's own save transaction, so
+// it can never get ahead of (or behind) the talents and level it describes -
+// a crash between an undo and the next save leaves both at the old, still
+// mutually consistent state, and the next login simply undoes again.
+void Player::RecordVioletHoldRunTalent(uint32 spell, uint32 previousSpell)
+{
+    VioletHoldRunTalent entry;
+    entry.seq = m_vhrRunTalentNextSeq++;
+    entry.spell = spell;
+    entry.previousSpell = previousSpell;
+    m_vhrRunTalents.push_back(entry);
+    m_vhrRunTalentsDirty = true;
+}
+
+void Player::PopVioletHoldRunTalent()
+{
+    if (m_vhrRunTalents.empty())
+        return;
+
+    m_vhrRunTalents.pop_back();
+    m_vhrRunTalentsDirty = true;
+}
+
+void Player::ClearVioletHoldRunTalents()
+{
+    if (m_vhrRunTalents.empty())
+        return;
+
+    m_vhrRunTalents.clear();
+    m_vhrRunTalentsDirty = true;
+}
+
+void Player::_SaveVioletHoldRunTalents(CharacterDatabaseTransaction trans)
+{
+    if (!m_vhrRunTalentsDirty)
+        return;
+    m_vhrRunTalentsDirty = false;
+
+    // Small and rare: rewrite the whole ledger.
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_VHR_RUN_TALENTS);
+    stmt->setUInt32(0, GetGUID().GetCounter());
+    trans->Append(stmt);
+
+    for (VioletHoldRunTalent const& entry : m_vhrRunTalents)
+    {
+        stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_VHR_RUN_TALENT);
+        stmt->setUInt32(0, GetGUID().GetCounter());
+        stmt->setUInt32(1, entry.seq);
+        stmt->setUInt32(2, entry.spell);
+        stmt->setUInt32(3, entry.previousSpell);
+        trans->Append(stmt);
+    }
+}
+
 void Player::_LoadTransmogs(PreparedQueryResult transmogs, PreparedQueryResult settings)
 {
     _transmogs.clear();
@@ -19076,8 +19182,17 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     _LoadTransmogs(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_TRANSMOGS),
         holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_TRANSMOG_SETTINGS));
 
+    _LoadVioletHoldRunTalents(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_VHR_RUN_TALENTS));
+
     // update items with duration and realtime
     UpdateItemDuration(time_diff, true);
+
+    // Class spells the Violet Hold broker taught are dependent (never saved);
+    // if this character is being put back into a still-running run, teach
+    // them again NOW so the action buttons that point at them survive the
+    // validation _LoadActions does.
+    if (Battleground const* runBg = GetBattleground(); runBg && runBg->GetTypeID() == BATTLEGROUND_VHR)
+        VioletHoldBoons::RestoreTaughtSpells(this);
 
     _LoadActions(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACTIONS));
 
@@ -20926,6 +21041,7 @@ void Player::SaveToDB(CharacterDatabaseTransaction trans, bool create /* = false
     _SaveSeasonalQuestStatus(trans);
     _SaveMonthlyQuestStatus(trans);
     _SaveTalents(trans);
+    _SaveVioletHoldRunTalents(trans);
     _SaveSpells(trans);
     GetSpellHistory()->SaveToDB<Player>(trans);
     _SaveActions(trans);
@@ -27305,12 +27421,17 @@ void Player::StoreLootItem(uint8 lootSlot, Loot* loot)
 
 uint32 Player::CalculateTalentsPoints() const
 {
-    uint32 base_talent = GetLevel() < 10 ? 0 : GetLevel() - 9;
+    return CalculateTalentsPointsForLevel(GetLevel());
+}
+
+uint32 Player::CalculateTalentsPointsForLevel(uint8 level) const
+{
+    uint32 base_talent = level < 10 ? 0 : level - 9;
 
     if (GetClass() != CLASS_DEATH_KNIGHT || GetMapId() != 609)
         return uint32(base_talent * sWorld->getRate(RATE_TALENT));
 
-    uint32 talentPointsForLevel = GetLevel() < 56 ? 0 : GetLevel() - 55;
+    uint32 talentPointsForLevel = level < 56 ? 0 : level - 55;
     talentPointsForLevel += m_questRewardTalentCount;
 
     if (talentPointsForLevel > base_talent)
@@ -27630,8 +27751,11 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
 
     if (InBattleground())
     {
+        // The Violet Hold run hands out temporary levels; the talent points
+        // that come with them are only worth anything if they can be spent
+        // there. Spending is all this allows - there is no respec inside.
         Battleground const* battleground = GetBattleground();
-        if (!battleground || !IsCustomBattleground(battleground->GetTypeID(true)))
+        if (!battleground || (!IsCustomBattleground(battleground->GetTypeID(true)) && battleground->GetTypeID() != BATTLEGROUND_VHR))
             return;
     }
 
@@ -27722,56 +27846,134 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
 
     // learn! (other talent ranks will unlearned at learning)
     LearnSpell(spellid, false);
-    if (SpellInfo const* talentSpellInfo = sSpellMgr->GetSpellInfo(spellid))
-    {
-        auto learnNextActivatableRanks = [this](uint32 currentRankSpellId)
-        {
-            uint32 nextRankSpellId = sSpellMgr->GetNextSpellInChain(currentRankSpellId);
-            while (nextRankSpellId)
-            {
-                SpellInfo const* nextRankSpellInfo = sSpellMgr->GetSpellInfo(nextRankSpellId);
-                if (!nextRankSpellInfo)
-                    break;
-
-                // Stop if next rank requires a higher level
-                uint32 requiredLevel = std::max(nextRankSpellInfo->BaseLevel, nextRankSpellInfo->SpellLevel);
-                if (requiredLevel && requiredLevel > GetLevel())
-                    break;
-
-                LearnSpell(nextRankSpellId, false);
-                nextRankSpellId = sSpellMgr->GetNextSpellInChain(nextRankSpellId);
-            }
-        };
-
-        // Only auto-learn ranks and dependencies for activatable spells
-        if (!talentSpellInfo->IsPassive())
-        {
-            learnNextActivatableRanks(spellid);
-
-            SpellsRequiringSpellMapBounds spellsRequiringSpell = sSpellMgr->GetSpellsRequiringSpellBounds(spellid);
-            for (SpellsRequiringSpellMap::const_iterator itr = spellsRequiringSpell.first; itr != spellsRequiringSpell.second; ++itr)
-            {
-                uint32 dependentSpellId = itr->second;
-                SpellInfo const* dependentSpellInfo = sSpellMgr->GetSpellInfo(dependentSpellId);
-
-                if (!dependentSpellInfo || dependentSpellInfo->IsPassive())
-                    continue;
-
-                uint32 requiredLevel = std::max(dependentSpellInfo->BaseLevel, dependentSpellInfo->SpellLevel);
-                if (requiredLevel && requiredLevel > GetLevel())
-                    continue;
-
-                LearnSpell(dependentSpellId, false);
-                learnNextActivatableRanks(dependentSpellId);
-            }
-        }
-    }
+    // Inside a Violet Hold run the character may stand on borrowed levels;
+    // the ranks a talent brings along are capped at the REAL level, so the
+    // rollback never has to hunt for over-level ability ranks.
+    LearnTalentSpellDependencies(spellid, VioletHoldBoons::GetBaseLevel(this));
     AddTalent(spellid, m_activeSpec, true);
 
     TC_LOG_DEBUG("misc", "Player::LearnTalent: TalentID: {} Spell: {} Group: {}\n", talentId, spellid, uint32(m_activeSpec));
 
     // update free talent points
     SetFreeTalentPoints(CurTalentPoints - (talentRank - curtalent_maxrank + 1));
+
+    // Violet Hold: points spent during a run are remembered so that, when the
+    // run's borrowed levels go away, only THESE talents are undone (newest
+    // first, only as many as the lost points demand) instead of the full
+    // reset InitTalentForLevel would otherwise fall back to.
+    if (Battleground const* bg = GetBattleground(); bg && bg->GetTypeID() == BATTLEGROUND_VHR)
+        VioletHoldBoons::OnTalentLearnedInRun(this, spellid, curtalent_maxrank ? talentInfo->SpellRank[curtalent_maxrank - 1] : 0);
+}
+
+// The activatable ranks and dependent spells a talent brings with it - what
+// LearnTalent teaches beyond the talent spell itself. Split out so a talent
+// rank restored by UnlearnTalentSpell gets exactly the same set back.
+void Player::LearnTalentSpellDependencies(uint32 spellid, uint8 levelCap)
+{
+    SpellInfo const* talentSpellInfo = sSpellMgr->GetSpellInfo(spellid);
+    if (!talentSpellInfo)
+        return;
+
+    if (!levelCap || levelCap > GetLevel())
+        levelCap = GetLevel();
+
+    auto learnNextActivatableRanks = [this, levelCap](uint32 currentRankSpellId)
+    {
+        uint32 nextRankSpellId = sSpellMgr->GetNextSpellInChain(currentRankSpellId);
+        while (nextRankSpellId)
+        {
+            SpellInfo const* nextRankSpellInfo = sSpellMgr->GetSpellInfo(nextRankSpellId);
+            if (!nextRankSpellInfo)
+                break;
+
+            // Stop if next rank requires a higher level
+            uint32 requiredLevel = std::max(nextRankSpellInfo->BaseLevel, nextRankSpellInfo->SpellLevel);
+            if (requiredLevel && requiredLevel > levelCap)
+                break;
+
+            LearnSpell(nextRankSpellId, false);
+            nextRankSpellId = sSpellMgr->GetNextSpellInChain(nextRankSpellId);
+        }
+    };
+
+    // Only auto-learn ranks and dependencies for activatable spells
+    if (talentSpellInfo->IsPassive())
+        return;
+
+    learnNextActivatableRanks(spellid);
+
+    SpellsRequiringSpellMapBounds spellsRequiringSpell = sSpellMgr->GetSpellsRequiringSpellBounds(spellid);
+    for (SpellsRequiringSpellMap::const_iterator itr = spellsRequiringSpell.first; itr != spellsRequiringSpell.second; ++itr)
+    {
+        uint32 dependentSpellId = itr->second;
+        SpellInfo const* dependentSpellInfo = sSpellMgr->GetSpellInfo(dependentSpellId);
+
+        if (!dependentSpellInfo || dependentSpellInfo->IsPassive())
+            continue;
+
+        uint32 requiredLevel = std::max(dependentSpellInfo->BaseLevel, dependentSpellInfo->SpellLevel);
+        if (requiredLevel && requiredLevel > levelCap)
+            continue;
+
+        LearnSpell(dependentSpellId, false);
+        learnNextActivatableRanks(dependentSpellId);
+    }
+}
+
+// Take back one talent rank learned with LearnTalent: the rank's spell (and
+// what it auto-taught) goes, its talent-book entry is marked removed, the
+// spent points come back through RemoveSpell's talent-cost path, and the rank
+// held before it - if any - is put back exactly as LearnTalent would have.
+void Player::UnlearnTalentSpell(uint32 spellId, uint32 previousRankSpellId, uint8 levelCap)
+{
+    if (!GetTalentSpellPos(spellId))
+        return;
+
+    if (HasSpell(spellId))
+        RemoveSpell(spellId, false, false);
+
+    if (PlayerTalentMap* talents = m_talents[m_activeSpec])
+    {
+        PlayerTalentMap::iterator itr = talents->find(spellId);
+        if (itr != talents->end())
+        {
+            // Mirror RemoveSpell: an entry never saved yet just goes away, so a
+            // later re-learn creates a fresh NEW one (AddTalent would otherwise
+            // find it and set UNCHANGED - never written). A saved one is
+            // flagged for deletion.
+            if (itr->second->state == PLAYERSPELL_NEW)
+            {
+                delete itr->second;
+                talents->erase(itr);
+            }
+            else
+                itr->second->state = PLAYERSPELL_REMOVED;
+        }
+    }
+
+    if (previousRankSpellId && GetTalentSpellPos(previousRankSpellId) && !HasSpell(previousRankSpellId))
+    {
+        LearnSpell(previousRankSpellId, false);
+        LearnTalentSpellDependencies(previousRankSpellId, levelCap);
+        AddTalent(previousRankSpellId, m_activeSpec, true);
+
+        // AddTalent flips an EXISTING entry to UNCHANGED whatever it was. If
+        // the previous rank was learned and superseded in this same session,
+        // its entry was REMOVED-but-never-saved, and UNCHANGED would mean it
+        // is never written at all. CHANGED is a delete-then-insert on save, so
+        // it is right whether or not the row already exists.
+        if (PlayerTalentMap* talents = m_talents[m_activeSpec])
+        {
+            PlayerTalentMap::iterator restored = talents->find(previousRankSpellId);
+            if (restored != talents->end() && restored->second->state == PLAYERSPELL_UNCHANGED)
+                restored->second->state = PLAYERSPELL_CHANGED;
+        }
+    }
+
+    uint32 const talentPointsForLevel = CalculateTalentsPoints();
+    SetFreeTalentPoints(m_usedTalentCount < talentPointsForLevel ? talentPointsForLevel - m_usedTalentCount : 0);
+    if (!GetSession()->PlayerLoading())
+        SendTalentsInfoData(false);
 }
 
 void Player::LearnPetTalent(ObjectGuid petGuid, uint32 talentId, uint32 talentRank)

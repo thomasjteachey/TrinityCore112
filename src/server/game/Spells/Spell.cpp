@@ -6579,7 +6579,10 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
                 // can't change during already started arena/battleground
                 if (m_caster->GetTypeId() == TYPEID_PLAYER)
                     if (Battleground const* bg = m_caster->ToPlayer()->GetBattleground())
-                        if (bg->GetStatus() == STATUS_IN_PROGRESS)
+                        // Violet Hold at any stage: the run's borrowed levels
+                        // and their talent ledger are per active spec, and
+                        // they live on into the leave window.
+                        if (bg->GetStatus() == STATUS_IN_PROGRESS || bg->GetTypeID() == BATTLEGROUND_VHR)
                             return SPELL_FAILED_NOT_IN_BATTLEGROUND;
                 break;
             default:

@@ -171,10 +171,22 @@ void BattlegroundVHR::RemovePlayer(Player* player, ObjectGuid guid, uint32 team)
 
     // Boons are a Violet Hold thing. Every way out of the run - the leave
     // button, the match ending, a GM teleport, an AFK kick - comes through
-    // here with the Player still in hand. The one path that does not (timed
-    // out while logged off) is caught by VioletHoldBoons::OnLogin.
+    // here with the Player still in hand and is stripped now.
+    //
+    // A LOGOUT also lands here (Battleground::EventPlayerLoggedOut calls
+    // RemovePlayer with the live Player, before the character is saved), but
+    // that is not leaving: the character stays on the roster with an
+    // OfflineRemoveTime and may log straight back into the run. Stripping
+    // there would save the character bare and make the marker/re-teach
+    // design pointless. So a logout keeps everything, and
+    // VioletHoldBoons::OnLogin decides at the next login: back into this
+    // run - restore; anywhere else (run over, timed out) - strip then.
     if (player && team == _humanTeam)
-        VioletHoldBoons::StripAll(player);
+    {
+        WorldSession const* session = player->GetSession();
+        if (!session || !session->PlayerLogout())
+            VioletHoldBoons::StripAll(player);
+    }
 }
 
 void BattlegroundVHR::Reset()

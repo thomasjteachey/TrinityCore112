@@ -139,6 +139,16 @@ struct PlayerTalent
     uint8 spec;
 };
 
+// A talent rank spent inside a Violet Hold run (custom_violet_hold_talents).
+// When the run's borrowed levels are taken back, these are undone newest first,
+// only as many as the lost points demand - see VioletHoldBoons::StripAll.
+struct VioletHoldRunTalent
+{
+    uint32 seq;             // learn order, per character
+    uint32 spell;           // the talent rank spell learned
+    uint32 previousSpell;   // the rank held before it (0 = none), restored on undo
+};
+
 // Spell modifier (used for modify other spells)
 struct SpellModifier
 {
@@ -746,6 +756,7 @@ enum PlayerLoginQueryIndex
     PLAYER_LOGIN_QUERY_LOAD_PET_SLOTS               = 34,
     PLAYER_LOGIN_QUERY_LOAD_TRANSMOGS               = 35,
     PLAYER_LOGIN_QUERY_LOAD_TRANSMOG_SETTINGS       = 36,
+    PLAYER_LOGIN_QUERY_LOAD_VHR_RUN_TALENTS         = 37,
     MAX_PLAYER_LOGIN_QUERY
 };
 
@@ -1043,7 +1054,13 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         uint32 GetXPForNextLevel() const { return GetUInt32Value(PLAYER_NEXT_LEVEL_XP); }
         void SetXP(uint32 xp) { SetUInt32Value(PLAYER_XP, xp); }
         void GiveXP(uint32 xp, Unit* victim, float group_rate = 1.0f);
-        void GiveLevel(uint8 level);
+        // borrowed = a temporary level (Violet Hold's Boon of Ascension and its
+        // rollback): the level itself, its stats, skills and talent points are
+        // applied, but none of the one-way rewards of really reaching a level -
+        // no achievement, no level-reward mail, no Refer-A-Friend grant, no
+        // OnPlayerLevelChanged hook - and health/power keep their percentage
+        // instead of refilling.
+        void GiveLevel(uint8 level, bool borrowed = false);
         bool IsMaxLevel() const;
 
         void InitStatsForLevel(bool reapplyMods = false);
@@ -1548,6 +1565,20 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         bool HasTalent(uint32 spell_id, uint8 spec) const;
 
         uint32 CalculateTalentsPoints() const;
+        // Points a character of `level` (this class) would have; the same
+        // formula CalculateTalentsPoints applies to the current level.
+        uint32 CalculateTalentsPointsForLevel(uint8 level) const;
+        uint32 GetUsedTalentCount() const { return m_usedTalentCount; }
+
+        // Undo of one LearnTalent: removes the rank's spell and what it taught,
+        // refunds its points, restores `previousRankSpellId` if given.
+        void UnlearnTalentSpell(uint32 spellId, uint32 previousRankSpellId, uint8 levelCap = 0);
+
+        // Talent points spent inside a Violet Hold run - see VioletHoldRunTalent.
+        std::vector<VioletHoldRunTalent> const& GetVioletHoldRunTalents() const { return m_vhrRunTalents; }
+        void RecordVioletHoldRunTalent(uint32 spell, uint32 previousSpell);
+        void PopVioletHoldRunTalent();
+        void ClearVioletHoldRunTalents();
 
         // Dual Spec
         void UpdateSpecCount(uint8 count);
@@ -2424,6 +2455,9 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void _LoadInstanceTimeRestrictions(PreparedQueryResult result);
         void _LoadPetStable(uint8 petStableSlots, PreparedQueryResult result);
         void _LoadTransmogs(PreparedQueryResult transmogs, PreparedQueryResult settings);
+        void _LoadVioletHoldRunTalents(PreparedQueryResult result);
+        void LearnTalentSpellDependencies(uint32 spellid, uint8 levelCap = 0);
+        void _SaveVioletHoldRunTalents(CharacterDatabaseTransaction trans);
 
         /*********************************************************/
         /***                   SAVE SYSTEM                     ***/
@@ -2481,6 +2515,11 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         std::unordered_map<ObjectGuid, uint32> _transmogs;
         std::array<uint32, EQUIPMENT_SLOT_END> _transmogSlotCache{};
         bool _transmogEnabled{ false };
+
+        // Violet Hold run talents, oldest first (custom_violet_hold_talents).
+        std::vector<VioletHoldRunTalent> m_vhrRunTalents;
+        uint32 m_vhrRunTalentNextSeq{ 1 };
+        bool m_vhrRunTalentsDirty{ false };
 
         std::vector<Item*> m_itemUpdateQueue;
         bool m_itemUpdateQueueBlocked;

@@ -63,7 +63,7 @@ namespace VioletHoldBoons
         ManaCost,
         RageCost,
         EnergyCost,
-        MaxHealth,
+        Stamina,        // was Max Health; +% Stamina covers it and shows on the sheet
         ExtraAttack,
         Doublecast,
         Crit,
@@ -74,6 +74,12 @@ namespace VioletHoldBoons
         Cooldown,
         Resistance,
         Level,
+        Strength,
+        Agility,
+        Intellect,
+        Spirit,
+        EnergyRegen,
+        RageGeneration,
 
         Max
     };
@@ -89,7 +95,7 @@ namespace VioletHoldBoons
         SPELL_BOON_MANA_COST    = 90234,
         SPELL_BOON_RAGE_COST    = 90235,
         SPELL_BOON_ENERGY_COST  = 90236,
-        SPELL_BOON_MAX_HEALTH   = 90237,
+        SPELL_BOON_STAMINA      = 90237,   // reused: was Max Health, now +% Stamina
         SPELL_BOON_EXTRA_ATTACK = 90238,
         SPELL_BOON_DOUBLECAST   = 90239,
         SPELL_BOON_CRIT         = 90240,
@@ -101,6 +107,29 @@ namespace VioletHoldBoons
         SPELL_BOON_RESISTANCE   = 90246,
         SPELL_BOON_LEVEL        = 90247,
         SPELL_BOON_LAST         = 90247,
+
+        // Later additions, past the marker/swing ids.
+        SPELL_BOON_STRENGTH     = 90251,
+        SPELL_BOON_AGILITY      = 90252,
+        SPELL_BOON_INTELLECT    = 90253,
+        SPELL_BOON_SPIRIT       = 90254,
+        SPELL_BOON_ENERGY_REGEN = 90255,   // MOD_POWER_REGEN_PERCENT on energy
+        SPELL_BOON_RAGE_GEN     = 90256,   // dummy read by Unit::RewardRage
+        SPELL_BOON_EXTRA_FIRST  = 90251,
+        SPELL_BOON_EXTRA_LAST   = 90256,
+
+        // Hidden marker whose three effect base amounts hold the class spells
+        // (table spellId, first rank) the broker taught this character - a
+        // class has exactly three, so three slots is the whole answer. Persists
+        // in character_aura, which is how a relog INTO a live run re-teaches
+        // them (dependent spells themselves are never saved).
+        SPELL_KNOWLEDGE_MARKER = 90248,
+
+        // Same idea for the legendary weapons the broker hands out: effect base
+        // amounts hold the low guids of the granted items, one slot per entry
+        // in the item table, so StripAll destroys exactly those items and never
+        // a copy the character genuinely owns.
+        SPELL_CACHE_MARKER = 90257,
 
         // The extra swing granted by SPELL_BOON_EXTRA_ATTACK's proc.
         SPELL_BOON_EXTRA_ATTACK_SWING = 90250,
@@ -121,6 +150,10 @@ namespace VioletHoldBoons
         // Classes the boon is offered to, as a ChrClasses bitmask (1 << (class-1)).
         // A rage discount is noise to a mage; the roll skips it instead.
         uint32 classMask;
+        // Relative roll weight in the broker's pool (see RollOffers). Class
+        // spells use CLASS_SPELL_WEIGHT, items their own; a plain useful boon
+        // sits around 8-10, the run-defining ones lower.
+        uint8 weight;
         char const* name;
         char const* summary;    // one line for the gossip menu, without numbers
         char const* unit;       // "%", " resistance", " level" - what one stack is
@@ -143,16 +176,31 @@ namespace VioletHoldBoons
 
     constexpr uint8 CLASS_SPELL_COUNT = 27;
 
-    // What the broker actually shows: either a boon or a class spell.
+    // A weapon the broker can hand out for the run (a real item, destroyed on
+    // the way out - its guid is kept in SPELL_CACHE_MARKER's slot `index`).
+    struct ItemGrantInfo
+    {
+        uint32 itemEntry;
+        uint32 classMask;   // who it is offered to (who could wield it)
+        uint8 weight;
+        char const* name;
+    };
+
+    constexpr uint8 ITEM_GRANT_COUNT = 2;
+    // Every class spell rolls at this weight; with three per present class the
+    // spells end up roughly a quarter to a third of a full party's pool.
+    constexpr uint8 CLASS_SPELL_WEIGHT = 4;
+
+    // What the broker actually shows: a boon, a class spell or an item.
     struct Offer
     {
-        enum class Kind : uint8 { Boon, ClassSpell };
+        enum class Kind : uint8 { Boon, ClassSpell, Item };
 
         Kind kind = Kind::Boon;
-        uint8 index = 0;   // enum Boon value, or index into the class-spell table
+        uint8 index = 0;   // enum Boon value, or index into the class-spell / item table
 
-        // Packed for gossip actions and back. Codes are < 200.
-        uint32 Encode() const { return kind == Kind::Boon ? index : 100 + index; }
+        // Packed for gossip actions and back. Codes are < 300.
+        uint32 Encode() const { return kind == Kind::Boon ? index : kind == Kind::ClassSpell ? 100 + index : 200 + index; }
         static bool Decode(uint32 code, Offer& out);
 
         bool operator==(Offer const& other) const { return kind == other.kind && index == other.index; }
@@ -161,10 +209,11 @@ namespace VioletHoldBoons
     enum class PickResult : uint8
     {
         Ok,
-        WrongClass,     // a class spell (or class-gated boon) for a class the picker is not
-        AlreadyKnown,   // the picker already knows some rank of the spell
+        WrongClass,     // a class spell / item / class-gated boon for a class the picker is not
+        AlreadyKnown,   // the picker already knows some rank of the spell, or already has the item
         AtCap,          // the boon is at its stack cap for the picker
         LevelCeiling,   // the level boon at LEVEL_BOON_CEILING
+        NoRoom,         // the item does not fit in the picker's bags
         Failed          // the grant itself did not take
     };
 
@@ -177,6 +226,7 @@ namespace VioletHoldBoons
 
     TC_GAME_API BoonInfo const& GetBoon(Boon boon);
     TC_GAME_API ClassSpellInfo const& GetClassSpell(uint8 index);
+    TC_GAME_API ItemGrantInfo const& GetItemGrant(uint8 index);
     TC_GAME_API BoonInfo const* FindBySpell(uint32 spellId);
     TC_GAME_API bool IsBoonSpell(uint32 spellId);
 
@@ -206,9 +256,31 @@ namespace VioletHoldBoons
     TC_GAME_API void StripAll(Player* player);
 
     // Login-time sweep: a character carrying boons who is not being placed
-    // back into a Violet Hold run loses them here. (Taught spells need no
-    // sweep - dependent spells are never saved.)
+    // back into a Violet Hold run loses them here; one who IS placed back
+    // gets the taught class spells re-learned from the knowledge marker.
     TC_GAME_API void OnLogin(Player* player);
+
+    // Re-teach whatever SPELL_KNOWLEDGE_MARKER says the broker taught (the
+    // dependent spells themselves do not survive a logout).
+    TC_GAME_API void RestoreTaughtSpells(Player* player);
+
+    // Player::LearnTalent reports every talent rank spent inside a Violet Hold
+    // run here; StripAll undoes them newest-first, only as far as the lost
+    // levels' points require.
+    TC_GAME_API void OnTalentLearnedInRun(Player* player, uint32 talentSpellId, uint32 previousRankSpellId);
+
+    // Drop the character back to `baseLevel`, first undoing just enough of the
+    // run-spent talents (newest first) that InitTalentForLevel never has to
+    // fall back to its full reset. Used by StripAll and the marker's script.
+    TC_GAME_API void RollbackBorrowedLevels(Player* player, uint8 baseLevel);
+
+    // The level the character REALLY has: the Ascension marker's recorded
+    // pre-boon level while boosted, GetLevel() otherwise.
+    TC_GAME_API uint8 GetBaseLevel(Player const* player);
+
+    // Destroy one broker-granted weapon by its item low guid (cache marker
+    // slot content). False if the character no longer has it.
+    TC_GAME_API bool DestroyGrantedItemByGuidLow(Player* player, uint32 itemGuidLow);
 
     // Gossip line for `viewer`: "Boon of Might: +3% damage done [6/255%]" or
     // "Lava Burst (Shaman)".
@@ -226,6 +298,8 @@ namespace VioletHoldBoons
     TC_GAME_API int32 GetMountCastTimeReductionMs(Unit const* caster);
     // Percent taken off spell cooldowns (SpellHistory::StartCooldown).
     TC_GAME_API int32 GetCooldownReductionPct(Unit const* caster);
+    // Percent added to rage gained from dealing and taking damage (Unit::RewardRage).
+    TC_GAME_API int32 GetRageGenerationPct(Unit const* unit);
 }
 
 #endif // TRINITYCORE_VIOLET_HOLD_BOONS_H

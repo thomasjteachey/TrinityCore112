@@ -2529,6 +2529,11 @@ void Spell::EffectSummonType()
                             // randomize position for multiple summons
                             pos = caster->GetRandomPoint(*destTarget, radius);
 
+                        // Ground-targeted summons face the caster, matching the client-side summon
+                        // preview (which faces the ghost model toward the player).
+                        if (m_targets.HasDst())
+                            pos.SetOrientation(pos.GetAbsoluteAngle(caster));
+
                         summon = caster->SummonCreature(entry, pos, summonType, Milliseconds(duration), 0, m_spellInfo->Id, personalSpawn);
                         if (!summon)
                             continue;
@@ -5799,6 +5804,10 @@ void Spell::SummonGuardian(SpellEffectInfo const& spellEffectInfo, uint32 entry,
         else
             // randomize position for multiple summons
             pos = unitCaster->GetRandomPoint(*destTarget, radius);
+
+        // Ground-targeted summons face the caster, matching the client-side summon preview.
+        if (m_targets.HasDst())
+            pos.SetOrientation(pos.GetAbsoluteAngle(unitCaster));
 
         TempSummon* summon = map->SummonCreature(entry, pos, properties, duration, unitCaster, m_spellInfo->Id);
         if (!summon)

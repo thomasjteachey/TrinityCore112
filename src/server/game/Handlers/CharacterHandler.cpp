@@ -173,6 +173,10 @@ bool LoginQueryHolder::Initialize()
     stmt->setUInt32(0, lowGuid);
     res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_TRANSMOG_SETTINGS, stmt);
 
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_VHR_RUN_TALENTS);
+    stmt->setUInt32(0, lowGuid);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_VHR_RUN_TALENTS, stmt);
+
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_BGDATA);
     stmt->setUInt32(0, lowGuid);
     res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_BG_DATA, stmt);
@@ -850,6 +854,15 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     bool handledTalentReset = pCurrChar->HasAtLoginFlag(AT_LOGIN_RESET_SPELLS_KEEP_MOUNTS);
     if (handledTalentReset)
     {
+        // The reset below wipes every aura before the character is in the
+        // world - including the Violet Hold markers, whose removal scripts
+        // cannot act out of world. Strip the boons FIRST, run or no run: the
+        // borrowed levels, taught spells and granted weapons must never
+        // outlive the markers that say they exist. (A character headed back
+        // into a live run simply arrives without them; a spell reset was
+        // asked for, after all.)
+        VioletHoldBoons::StripAll(pCurrChar);
+
         pCurrChar->ResetNonQuestAndMountSpells();
         SendNotification(LANG_RESET_SPELLS);
         SendNotification(LANG_RESET_TALENTS);

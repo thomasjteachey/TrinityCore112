@@ -16,6 +16,34 @@ remain in the interior range, so the client culls the hold. The safe client
 override changes MOHD, MOGI, MOGP, and the three MOGP batch counts together.
 The server VMAP remains stock; map 1608's server override controls gameplay.
 
+How the 3.3.5a (12340) client actually consumes these flags -- reverse
+engineered 2026-08-15 after the first build (MOGI 0x2008 / MOGP 0x380D)
+made the hold's water unswimmable:
+
+* Position query (CWorld, 0x7C2A70/0x7C1DC0): the vertical ray hit against a
+  group records "inside a WMO group" only when that group's MOGP flags lack
+  EXTERIOR (0x8).  An exterior-flagged group never counts as "inside".
+* CGUnit_C::IsOutdoors (0x71B7F0 -> 0x77FBF0): inside a group -> WMOAreaTable
+  row (WMOID, NameSet, group uniqueID) Flags & 4 = outdoors, else indoors;
+  not inside -> AreaTable(terrain MCNK area) OUTSIDE/INSIDE, default outdoors.
+  This is the mount gate (Spell_C checks ATTR0 INDOORS_ONLY/OUTDOORS_ONLY
+  0x4000/0x8000 through it).
+* Liquid query (0x7A1BC0): inside a group -> only that group's MLIQ is
+  consulted.  NOT inside -> WMO liquid is still consulted (0x7A09D0 ->
+  0x7AEB90), but only for groups whose *MOGI* flags lack INTERIOR (0x2000)
+  and whose MOGI bounding box contains the point; then terrain liquid.
+  (This is how Stormwind's canals swim: exterior groups with MLIQ.)
+
+So MOGP EXTERIOR alone flips the query to the "not inside" branch, and MOGI
+INTERIOR then hides the group's water from the outdoor liquid path: water
+renders (rendering gathers group liquids independently) but you walk along
+the pool floor without swimming while the server -- whose VMAP is stock --
+still counts you as under water.  The fix is CLIENT_MOGI_FLAGS below:
+EXTERIOR only, INTERIOR cleared.  MOGP keeps INTERIOR|EXTERIOR: the culling
+keys on MOGI EXTERIOR being present (that is why MOGP-EXTERIOR-alone culled
+the hold), MOGP INTERIOR has no bearing on the liquid path, and leaving it
+preserves the lighting the hold shipped with.
+
 The DBC half is maintained by vhr_dbc.py.  This script audits the ADTs and
 the client/server WMO flags using the scriptable StormLib wrapper.
 """
@@ -41,7 +69,11 @@ MOGP_INTERIOR = 0x00002000
 STOCK_MOGP_FLAGS = 0x00003805
 CLIENT_MOGP_FLAGS = STOCK_MOGP_FLAGS | MOGP_EXTERIOR
 STOCK_MOGI_FLAGS = 0x00002000
-CLIENT_MOGI_FLAGS = STOCK_MOGI_FLAGS | MOGP_EXTERIOR
+# EXTERIOR only. The first build kept INTERIOR here (0x2008); the client's
+# outdoor liquid path skips any group whose MOGI flags carry INTERIOR, which
+# is what made the hold's pool unswimmable. See the module docstring.
+CLIENT_MOGI_FLAGS = MOGP_EXTERIOR
+BROKEN_WATER_MOGI_FLAGS = STOCK_MOGI_FLAGS | MOGP_EXTERIOR
 STOCK_MOHD_FLAGS = 0x00000005
 CLIENT_MOHD_FLAGS = STOCK_MOHD_FLAGS | 0x00000008
 STOCK_BATCH_COUNTS = (0, 16, 0)
@@ -298,6 +330,52 @@ def audit_client_wmo(mpq: Path) -> None:
         verify_client_wmo(archive.read(root_name), archive.read(group_name))
 
 
+def fix_client_mogi(root: bytes) -> bytes:
+    """Clear INTERIOR from the already-built root's MOGI flags (0x2008 -> 0x8).
+
+    Idempotent: a root that already carries CLIENT_MOGI_FLAGS is returned
+    unchanged. Anything else (stock, or an unknown edit) is refused so this
+    can never be run against the wrong asset.
+    """
+    root_flags, mogi_flags = client_root_header(root)
+    if root_flags != CLIENT_MOHD_FLAGS:
+        raise ValueError(f"refusing: MOHD flags {root_flags:#x} are not the built "
+                         f"client value {CLIENT_MOHD_FLAGS:#x} (run build-client-wmo first)")
+    if mogi_flags == CLIENT_MOGI_FLAGS:
+        return root
+    if mogi_flags != BROKEN_WATER_MOGI_FLAGS:
+        raise ValueError(f"refusing: unexpected MOGI flags {mogi_flags:#x}")
+    patched = bytearray(root)
+    mogi, _ = find_chunk(patched, "MOGI")
+    struct.pack_into("<I", patched, mogi, CLIENT_MOGI_FLAGS)
+    return bytes(patched)
+
+
+def fix_client_mogi_in_mpq(mpq: Path, backup: Path | None) -> None:
+    """Rewrite only the DalaranPrison root inside an existing (built) patch MPQ."""
+    with MPQArchive(mpq) as archive:
+        root_name, group_name = client_wmo_names(archive)
+        root = archive.read(root_name)
+        group = archive.read(group_name)
+    fixed = fix_client_mogi(root)
+    if fixed == root:
+        print(f"{mpq}: MOGI already {CLIENT_MOGI_FLAGS:#x}, nothing to do")
+        verify_client_wmo(root, group)
+        return
+    if backup is not None:
+        backup.write_bytes(root)
+        print(f"original root saved to {backup}")
+    verify_client_wmo(fixed, group)
+    with tempfile.TemporaryDirectory(prefix="vhr-client-mogi-") as temporary:
+        root_file = Path(temporary) / "DalaranPrison.wmo"
+        root_file.write_bytes(fixed)
+        with MPQArchive(mpq, writable=True) as patch:
+            patch.add(root_file, root_name)
+            patch.flush()
+    audit_client_wmo(mpq)
+    print(f"{mpq}: MOGI {BROKEN_WATER_MOGI_FLAGS:#x} -> {CLIENT_MOGI_FLAGS:#x} written and re-verified")
+
+
 def build_client_wmo(source_assets_mpq: Path, base_patch_mpq: Path,
                      output_patch_mpq: Path) -> None:
     if source_assets_mpq.resolve() == output_patch_mpq.resolve():
@@ -336,6 +414,13 @@ def main() -> None:
     build_client.add_argument("source_assets_mpq", type=Path)
     build_client.add_argument("base_patch_mpq", type=Path)
     build_client.add_argument("output_patch_mpq", type=Path)
+    fix_mogi = sub.add_parser(
+        "fix-client-mogi",
+        help="in an already-built patch MPQ, clear INTERIOR from the root MOGI "
+             "flags so the client's outdoor liquid path sees the hold's water")
+    fix_mogi.add_argument("patch_mpq", type=Path)
+    fix_mogi.add_argument("--backup-root", type=Path, default=None,
+                          help="where to save the original DalaranPrison.wmo before rewriting")
     args = parser.parse_args()
 
     if args.command == "audit-assets":
@@ -346,6 +431,8 @@ def main() -> None:
         audit_vmo(args.vmo)
     elif args.command == "audit-client-wmo":
         audit_client_wmo(args.mpq)
+    elif args.command == "fix-client-mogi":
+        fix_client_mogi_in_mpq(args.patch_mpq, args.backup_root)
     else:
         build_client_wmo(args.source_assets_mpq, args.base_patch_mpq,
                          args.output_patch_mpq)

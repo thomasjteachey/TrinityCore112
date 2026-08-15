@@ -139,7 +139,9 @@ public:
 
             _consumed = true;
 
-            char const* name = offer.kind == Offer::Kind::Boon ? GetBoon(Boon(offer.index)).name : GetClassSpell(offer.index).name;
+            char const* name = offer.kind == Offer::Kind::Boon ? GetBoon(Boon(offer.index)).name
+                             : offer.kind == Offer::Kind::ClassSpell ? GetClassSpell(offer.index).name
+                             : GetItemGrant(offer.index).name;
             if (WorldSession* session = player->GetSession())
                 session->SendNotification("You receive %s.", name);
             run->PSendMessageToAll(STRING_BOON_TAKEN, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, player->GetName().c_str(), name);
@@ -249,8 +251,17 @@ class spell_vhr_boon_echoes : public AuraScript
             return false;
 
         // The echo itself is a triggered cast; never echo an echo, and leave
-        // every other triggered cast (procs, item effects) alone too.
-        if (spell->IsTriggered())
+        // every other triggered cast (procs) alone too. Item uses (potions,
+        // healthstones, explosives) are NOT triggered casts and would otherwise
+        // be doubled for free - out as well. A consumed charge has already
+        // nulled m_CastItem by the time the cast-phase proc runs (TakeCastItem
+        // precedes it), so the reliable test is the spellbook: only a spell
+        // the caster actually knows may echo.
+        if (spell->IsTriggered() || spell->m_CastItem || spell->m_castItemGUID)
+            return false;
+
+        Player const* casterPlayer = GetTarget() ? GetTarget()->ToPlayer() : nullptr;
+        if (!casterPlayer || !casterPlayer->HasActiveSpell(info->Id))
             return false;
 
         if (info->IsChanneled() || info->IsPassive() || info->NeedsComboPoints())
@@ -290,8 +301,11 @@ class spell_vhr_boon_echoes : public AuraScript
 // back to. VioletHoldBoons::StripAll does the rollback deliberately, before
 // removing this; this is the safety net for the marker vanishing any other
 // way while the character is in the world (a GM .unaura, a spell reset).
-// Logout cleanup removes auras after RemoveFromWorld, which the IsInWorld
-// check is there to skip - the levels must survive a relog into the run.
+// A LOGOUT must not trigger it - the levels have to survive a relog into the
+// run - and in this fork logout cleanup removes auras BEFORE RemoveFromWorld
+// (Unit::CleanupBeforeRemoveFromMap -> DefensiveCleanupAurasBeforeDelete),
+// after the character was already saved, so IsInWorld alone is not enough:
+// the session's logout flag is what says "this is a logout".
 class spell_vhr_boon_ascension : public AuraScript
 {
     PrepareAuraScript(spell_vhr_boon_ascension);
@@ -302,14 +316,48 @@ class spell_vhr_boon_ascension : public AuraScript
         if (!player || !player->IsInWorld())
             return;
 
+        WorldSession const* session = player->GetSession();
+        if (!session || session->PlayerLogout())
+            return;
+
         int32 const baseLevel = aurEff->GetBaseAmount();
         if (baseLevel > 0 && baseLevel < int32(player->GetLevel()))
-            player->GiveLevel(uint8(baseLevel));
+            RollbackBorrowedLevels(player, uint8(baseLevel));
     }
 
     void Register() override
     {
         AfterEffectRemove += AuraEffectRemoveFn(spell_vhr_boon_ascension::HandleRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// Boon Broker's Cache (90257): each effect's base amount is the low guid of a
+// weapon the broker handed out. Same safety net as the Ascension marker: if
+// the aura goes any way other than StripAll while the character is in the
+// world (and not logging out), the weapon goes with it - otherwise a stray
+// `.unaura all` would leave someone a permanent Thunderfury.
+class spell_vhr_boon_cache : public AuraScript
+{
+    PrepareAuraScript(spell_vhr_boon_cache);
+
+    void HandleRemove(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
+    {
+        Player* player = GetTarget() ? GetTarget()->ToPlayer() : nullptr;
+        if (!player || !player->IsInWorld())
+            return;
+
+        WorldSession const* session = player->GetSession();
+        if (!session || session->PlayerLogout())
+            return;
+
+        DestroyGrantedItemByGuidLow(player, uint32(aurEff->GetBaseAmount()));
+    }
+
+    void Register() override
+    {
+        AfterEffectRemove += AuraEffectRemoveFn(spell_vhr_boon_cache::HandleRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_vhr_boon_cache::HandleRemove, EFFECT_1, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_vhr_boon_cache::HandleRemove, EFFECT_2, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
@@ -319,4 +367,5 @@ void AddSC_violet_hold_boons()
     RegisterSpellScript(spell_vhr_boon_flurry);
     RegisterSpellScript(spell_vhr_boon_echoes);
     RegisterSpellScript(spell_vhr_boon_ascension);
+    RegisterSpellScript(spell_vhr_boon_cache);
 }

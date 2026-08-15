@@ -185,6 +185,12 @@ void CharacterDatabaseConnection::DoPrepareStatements()
     PrepareStatement(CHAR_SEL_TRANSMOG_SETTINGS, "SELECT enabled FROM custom_transmog_settings WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_REP_TRANSMOG_SETTINGS, "REPLACE INTO custom_transmog_settings (guid, enabled) VALUES (?, ?)", CONNECTION_ASYNC);
 
+    // Violet Hold: talent points spent during a run (undone, newest first, when the run's levels go)
+    PrepareStatement(CHAR_SEL_VHR_RUN_TALENTS, "SELECT seq, spell, prev_spell FROM custom_violet_hold_talents WHERE guid = ? ORDER BY seq", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_INS_VHR_RUN_TALENT, "INSERT INTO custom_violet_hold_talents (guid, seq, spell, prev_spell) VALUES (?, ?, ?, ?)", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_DEL_VHR_RUN_TALENT, "DELETE FROM custom_violet_hold_talents WHERE guid = ? AND seq = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_DEL_VHR_RUN_TALENTS, "DELETE FROM custom_violet_hold_talents WHERE guid = ?", CONNECTION_ASYNC);
+
     // Guild handling
     // 0: uint32, 1: string, 2: uint32, 3: string, 4: string, 5: uint64, 6-10: uint32, 11: uint64
     PrepareStatement(CHAR_INS_GUILD, "INSERT INTO guild (guildid, name, leaderguid, info, motd, createdate, EmblemStyle, EmblemColor, BorderStyle, BorderColor, BackgroundColor, BankMoney) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);
