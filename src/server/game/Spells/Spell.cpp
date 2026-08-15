@@ -66,6 +66,7 @@
 #include "UpdateMask.h"
 #include "Util.h"
 #include "Vehicle.h"
+#include "VioletHoldBoons.h"
 #include "VMapFactory.h"
 #include "VMapManager2.h"
 #include "World.h"
@@ -5741,6 +5742,14 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
                 }
             }
         }
+
+        // Violet Hold "Boon of the Outrider": mounts may be summoned in
+        // combat. Same bypass Warbringer's ABILITY_IGNORE_AURASTATE gives
+        // Charge above, but by spell id - mount spells are family GENERIC with
+        // empty class masks, which no aura mask could single out.
+        if (reqCombat && (m_spellInfo->HasAura(SPELL_AURA_MOUNTED) || m_spellInfo->Mechanic == MECHANIC_MOUNT)
+            && VioletHoldBoons::AllowsMountingInCombat(unitCaster))
+            reqCombat = false;
 
         // caster state requirements
         // not for triggered spells (needed by execute)

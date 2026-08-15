@@ -23,6 +23,10 @@
 #include "Timer.h"
 #include "Util.h"
 #include <boost/filesystem.hpp>
+#include <cctype>
+#include <cstdlib>
+#include <set>
+#include <string>
 #include <unordered_map>
 
 using namespace MMAP;
@@ -79,8 +83,35 @@ int finish(char const* message, int returnValue)
     return returnValue;
 }
 
+// Parses "1608" or "1608,1620,617" into ids. Returns false on anything else.
+static bool ParseMapIdList(char const* text, std::set<uint32>& ids)
+{
+    if (!text || !*text)
+        return false;
+
+    std::string token;
+    for (char const* p = text; ; ++p)
+    {
+        if (*p == ',' || *p == '\0')
+        {
+            if (token.empty())
+                return false;
+            for (char ch : token)
+                if (!isdigit(static_cast<unsigned char>(ch)))
+                    return false;
+            ids.insert(static_cast<uint32>(strtoul(token.c_str(), nullptr, 10)));
+            token.clear();
+            if (*p == '\0')
+                break;
+        }
+        else
+            token.push_back(*p);
+    }
+    return !ids.empty();
+}
+
 bool handleArgs(int argc, char** argv,
-               int &mapnum,
+               std::set<uint32>& mapIds,
                int &tileX,
                int &tileY,
                Optional<float>& maxAngle,
@@ -256,15 +287,20 @@ bool handleArgs(int argc, char** argv,
         }
         else
         {
-            int map = atoi(argv[i]);
-            if (map > 0 || (map == 0 && (strcmp(argv[i], "0") == 0)))
-                mapnum = map;
-            else
+            // Optional: one map id, or a comma-separated list ("1608" / "1608,1620").
+            // Nothing given = every map, as before.
+            if (!ParseMapIdList(argv[i], mapIds))
             {
-                printf("invalid map id\n");
+                printf("invalid map id (list): %s\n", argv[i]);
                 return false;
             }
         }
+    }
+
+    if (tileX > -1 && tileY > -1 && mapIds.size() != 1)
+    {
+        printf("--tile needs exactly one map id\n");
+        return false;
     }
 
 #ifndef NDEBUG
@@ -305,7 +341,7 @@ int main(int argc, char** argv)
     Trinity::Banner::Show("MMAP generator", [](char const* text) { printf("%s\n", text); }, nullptr);
 
     unsigned int threads = std::thread::hardware_concurrency();
-    int mapnum = -1;
+    std::set<uint32> mapIds;   // empty = all maps
     int tileX = -1, tileY = -1;
     Optional<float> maxAngle, maxAngleNotSteep;
     bool skipLiquid = false,
@@ -318,7 +354,7 @@ int main(int argc, char** argv)
     char* offMeshInputPath = nullptr;
     char* file = nullptr;
 
-    bool validParam = handleArgs(argc, argv, mapnum,
+    bool validParam = handleArgs(argc, argv, mapIds,
                                  tileX, tileY, maxAngle, maxAngleNotSteep,
                                  skipLiquid, skipContinents, skipJunkMaps, skipBattlegrounds,
                                  debugOutput, silent, bigBaseUnit, offMeshInputPath, file, threads);
@@ -326,7 +362,7 @@ int main(int argc, char** argv)
     if (!validParam)
         return silent ? -1 : finish("You have specified invalid parameters", -1);
 
-    if (mapnum == -1 && debugOutput)
+    if (mapIds.empty() && debugOutput)
     {
         if (silent)
             return -2;
@@ -346,17 +382,15 @@ int main(int argc, char** argv)
         return silent ? -5 : finish("Failed to load LiquidType.dbc", -5);
 
     MapBuilder builder(maxAngle, maxAngleNotSteep, skipLiquid, skipContinents, skipJunkMaps,
-                       skipBattlegrounds, debugOutput, bigBaseUnit, mapnum, offMeshInputPath, threads);
+                       skipBattlegrounds, debugOutput, bigBaseUnit, mapIds, offMeshInputPath, threads);
 
     uint32 start = getMSTime();
     if (file)
         builder.buildMeshFromFile(file);
-    else if (tileX > -1 && tileY > -1 && mapnum >= 0)
-        builder.buildSingleTile(mapnum, tileX, tileY);
-    else if (mapnum >= 0)
-        builder.buildMaps(uint32(mapnum));
+    else if (tileX > -1 && tileY > -1 && mapIds.size() == 1)
+        builder.buildSingleTile(*mapIds.begin(), tileX, tileY);
     else
-        builder.buildMaps({});
+        builder.buildMaps(mapIds);   // empty = all maps
 
     if (!silent)
         printf("Finished. MMAPS were built in %s\n", secsToTimeString(GetMSTimeDiffToNow(start) / 1000).c_str());

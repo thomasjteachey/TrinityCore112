@@ -296,6 +296,8 @@ namespace VioletHoldBoons
     TC_GAME_API int32 GetPowerCostReductionPct(Unit const* caster, Powers power);
     // Milliseconds taken off a mount summon (WorldObject::ModSpellCastTime).
     TC_GAME_API int32 GetMountCastTimeReductionMs(Unit const* caster);
+    // Boon of the Outrider also lets mounts be summoned in combat (Spell::CheckCast).
+    TC_GAME_API bool AllowsMountingInCombat(Unit const* caster);
     // Percent taken off spell cooldowns (SpellHistory::StartCooldown).
     TC_GAME_API int32 GetCooldownReductionPct(Unit const* caster);
     // Percent added to rage gained from dealing and taking damage (Unit::RewardRage).

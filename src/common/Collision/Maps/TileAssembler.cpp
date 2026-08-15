@@ -70,6 +70,29 @@ namespace VMAP
         if (!success)
             return false;
 
+        if (!iMapFilter.empty())
+        {
+            printf("Map filter: assembling only map id(s)");
+            for (uint32 id : iMapFilter)
+                printf(" %u", id);
+            printf("\n");
+
+            for (uint32 id : iMapFilter)
+                if (mapData.find(id) == mapData.end())
+                    printf("WARNING: map id %u has no spawns in %s/dir_bin, nothing will be assembled for it\n", id, iSrcDir.c_str());
+
+            for (MapData::iterator map_iter = mapData.begin(); map_iter != mapData.end();)
+            {
+                if (iMapFilter.find(map_iter->first) == iMapFilter.end())
+                {
+                    delete map_iter->second;
+                    map_iter = mapData.erase(map_iter);
+                }
+                else
+                    ++map_iter;
+            }
+        }
+
         // export Map data
         for (MapData::iterator map_iter = mapData.begin(); map_iter != mapData.end() && success; ++map_iter)
         {
@@ -182,7 +205,11 @@ namespace VMAP
         }
 
         // add an object models, listed in temp_gameobject_models file
-        exportGameobjectModels();
+        // (global list - a per-map assemble must not rewrite it)
+        if (iMapFilter.empty())
+            exportGameobjectModels();
+        else
+            printf("Map filter active: leaving the gameobject model list alone\n");
         // export objects
         std::cout << "\nConverting Model Files" << std::endl;
         for (std::string const& spawnedModelFile : spawnedModelFiles)

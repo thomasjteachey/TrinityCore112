@@ -761,21 +761,19 @@ void BattlegroundVHR::SpawnWaveRewardBuffs()
         return;
 
     // Speed is deliberately not in the roll - the party is not chasing anyone.
-    // The broker is a fourth, equally weighted entry.
     static uint32 const kBuffEntries[] =
     {
         BG_OBJECTID_REGENBUFF_ENTRY,
         BG_OBJECTID_BERSERKERBUFF_ENTRY,
-        BG_VHR_GO_RECHARGE_BUFF,
-        BG_VHR_REWARD_BOON_BROKER
+        BG_VHR_GO_RECHARGE_BUFF
     };
     uint32 const kBuffCount = uint32(sizeof(kBuffEntries) / sizeof(kBuffEntries[0]));
 
     // Brokers left over from earlier waves count as taken ground for the
-    // placement picker, so a rune is not dropped on top of one.
+    // placement picker, so nothing is dropped on top of one.
     std::vector<Position> placed;
     uint32 brokerSlot = FindFreeBoonBrokerSlot(placed);
-    placed.reserve(placed.size() + wanted);
+    placed.reserve(placed.size() + wanted * 2);
 
     bool droppedRune = false;
     for (uint32 i = 0; i < wanted; ++i)
@@ -787,34 +785,35 @@ void BattlegroundVHR::SpawnWaveRewardBuffs()
         if (!PickBuffPosition(placed, spot))
             break;
 
-        uint32 entry = kBuffEntries[urand(0, kBuffCount - 1)];
-
-        // A broker with nowhere to stand becomes a rune rather than nothing.
-        if (entry == BG_VHR_REWARD_BOON_BROKER && brokerSlot >= BG_VHR_CREATURE_BOON_BROKER_MAX)
-            entry = kBuffEntries[urand(0, kBuffCount - 2)];
-
-        if (entry == BG_VHR_REWARD_BOON_BROKER)
+        uint32 const entry = kBuffEntries[urand(0, kBuffCount - 1)];
+        if (!AddObject(BG_VHR_OBJECT_BUFF_1 + i, entry, spot, 0.0f, 0.0f,
+            std::sin(spot.GetOrientation() / 2.0f), std::cos(spot.GetOrientation() / 2.0f), RESPAWN_IMMEDIATELY))
         {
-            if (!SpawnBoonBroker(brokerSlot, spot))
-                continue;
+            TC_LOG_ERROR("bg.battleground", "BattlegroundVHR: could not create reward powerup {} for instance {}.",
+                entry, GetInstanceID());
+            continue;
+        }
+        droppedRune = true;
+        placed.push_back(spot);
+    }
 
-            // Next broker this wave needs the next free slot.
-            std::vector<Position> ignored;
-            brokerSlot = FindFreeBoonBrokerSlot(ignored);
-        }
-        else
-        {
-            if (!AddObject(BG_VHR_OBJECT_BUFF_1 + i, entry, spot, 0.0f, 0.0f,
-                std::sin(spot.GetOrientation() / 2.0f), std::cos(spot.GetOrientation() / 2.0f), RESPAWN_IMMEDIATELY))
-            {
-                TC_LOG_ERROR("bg.battleground", "BattlegroundVHR: could not create reward powerup {} for instance {}.",
-                    entry, GetInstanceID());
-                continue;
-            }
-            droppedRune = true;
-        }
+    // And a boon broker PER drop, on top of the runes, never instead of one.
+    // He waits for a taker (no timer), so a run that never talks to him fills
+    // his slots; once all BG_VHR_CREATURE_BOON_BROKER_MAX are standing no
+    // more come until one is used.
+    for (uint32 i = 0; i < wanted && brokerSlot < BG_VHR_CREATURE_BOON_BROKER_MAX; ++i)
+    {
+        Position spot;
+        if (!PickBuffPosition(placed, spot))
+            break;
+
+        if (!SpawnBoonBroker(brokerSlot, spot))
+            break;
 
         placed.push_back(spot);
+
+        std::vector<Position> ignored;
+        brokerSlot = FindFreeBoonBrokerSlot(ignored);
     }
 
     if (droppedRune)

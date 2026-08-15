@@ -154,7 +154,7 @@ namespace MMAP
                 bool skipBattlegrounds,
                 bool debugOutput,
                 bool bigBaseUnit,
-                int mapid,
+                std::set<uint32> const& mapIds,
                 char const* offMeshFilePath,
                 unsigned int threads);
 
@@ -165,8 +165,8 @@ namespace MMAP
             // builds an mmap tile for the specified map and its mesh
             void buildSingleTile(uint32 mapID, uint32 tileX, uint32 tileY);
 
-            // builds list of maps, then builds all of mmap tiles (based on the skip settings)
-            void buildMaps(Optional<uint32> mapID);
+            // builds the requested maps (empty = every discovered map, subject to the skip settings)
+            void buildMaps(std::set<uint32> const& mapIds);
 
         private:
             // builds all mmap tiles for the specified map id (ignores skip settings)
@@ -207,7 +207,9 @@ namespace MMAP
             Optional<float> m_maxWalkableAngleNotSteep;
             bool m_bigBaseUnit;
 
-            int32 m_mapid;
+            // Empty = every map (minus skip settings); otherwise only these ids
+            // are discovered/counted/built. One id or a whole list, same code path.
+            std::set<uint32> m_mapIds;
 
             std::atomic<uint32> m_totalTiles;
             std::atomic<uint32> m_totalTilesProcessed;

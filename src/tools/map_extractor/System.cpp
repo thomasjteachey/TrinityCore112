@@ -26,10 +26,12 @@
 #include "wdt.h"
 #include <boost/filesystem/path.hpp>
 #include <boost/filesystem/operations.hpp>
+#include <cctype>
 #include <cstdio>
 #include <deque>
 #include <fstream>
 #include <set>
+#include <string>
 #include <unordered_map>
 #include <cstdlib>
 #include <cstring>
@@ -68,7 +70,36 @@ enum Extract
 
 // Select data for extract
 int   CONF_extract = EXTRACT_MAP | EXTRACT_DBC | EXTRACT_CAMERA;
-int   CONF_single_map = -1;
+// -m: only these map ids are converted (empty = every map in Map.dbc).
+// Accepts one id or a comma-separated list: -m 1608 / -m 1608,1620.
+std::set<uint32> CONF_map_ids;
+
+// Parses "1608" or "1608,1620,617" into ids. Returns false on anything else.
+bool ParseMapIdList(char const* text, std::set<uint32>& ids)
+{
+    if (!text || !*text)
+        return false;
+
+    std::string token;
+    for (char const* p = text; ; ++p)
+    {
+        if (*p == ',' || *p == '\0')
+        {
+            if (token.empty())
+                return false;
+            for (char ch : token)
+                if (!isdigit(static_cast<unsigned char>(ch)))
+                    return false;
+            ids.insert(static_cast<uint32>(strtoul(token.c_str(), nullptr, 10)));
+            token.clear();
+            if (*p == '\0')
+                break;
+        }
+        else
+            token.push_back(*p);
+    }
+    return !ids.empty();
+}
 // This option allow limit minimum height to some value (Allow save some memory)
 bool  CONF_allow_height_limit = true;
 float CONF_use_minHeight = -500.0f;
@@ -113,7 +144,7 @@ void Usage(char* prg)
         "-i set input path (max %d characters)\n"\
         "-o set output path (max %d characters)\n"\
         "-e extract only MAP(1)/DBC(2)/Camera(4) - standard: all(7)\n"\
-        "-m extract only this map id when extracting maps, example: -m 617\n"\
+        "-m extract only these map ids when extracting maps (one id or a comma-separated list), example: -m 617 or -m 1608,1620\n"\
         "-f height stored as int (less map size but lost some accuracy) 1 by default\n"\
         "Example: %s -f 0 -i \"c:\\games\\game\"", prg, MAX_PATH_LENGTH - 1, MAX_PATH_LENGTH - 1, prg);
     exit(1);
@@ -171,8 +202,7 @@ void HandleArgs(int argc, char * arg[])
             case 'm':
                 if (c + 1 < argc)                            // all ok
                 {
-                    CONF_single_map = atoi(arg[(c++) + 1]);
-                    if (CONF_single_map < 0)
+                    if (!ParseMapIdList(arg[(c++) + 1], CONF_map_ids))
                         Usage(arg[0]);
                 }
                 else
@@ -949,12 +979,29 @@ void ExtractMapsFromMpq(uint32 build)
     CreateDir(path);
 
     printf("Convert map files\n");
-    if (CONF_single_map >= 0)
-        printf("Single-map mode: extracting map %d only\n", CONF_single_map);
+    if (!CONF_map_ids.empty())
+    {
+        printf("Map filter: extracting only map id(s)");
+        for (uint32 id : CONF_map_ids)
+            printf(" %u", id);
+        printf("\n");
+
+        // A requested id that Map.dbc does not know is almost always a typo or
+        // a client whose patch lacks the row - say so instead of silently
+        // extracting nothing.
+        for (uint32 id : CONF_map_ids)
+        {
+            bool known = false;
+            for (uint32 z = 0; z < map_count && !known; ++z)
+                known = map_ids[z].id == id;
+            if (!known)
+                printf("WARNING: map id %u is not in the client's Map.dbc, nothing will be extracted for it\n", id);
+        }
+    }
 
     for(uint32 z = 0; z < map_count; ++z)
     {
-        if (CONF_single_map >= 0 && static_cast<uint32>(CONF_single_map) != map_ids[z].id)
+        if (!CONF_map_ids.empty() && CONF_map_ids.find(map_ids[z].id) == CONF_map_ids.end())
             continue;
 
         printf("Extract %s (%d/%u)                  \n", map_ids[z].name, z+1, map_count);

@@ -104,11 +104,12 @@ enum BG_VHR_Objects
 
 enum BG_VHR_Creatures
 {
-    // The boon broker rolls in the same reward pool as the runes above but,
-    // unlike them, is not taken back on a timer: he stands until somebody
-    // picks a boon. Several can therefore be up at once, so he gets his own
-    // slots rather than sharing the per-drop object slots. When every slot is
-    // occupied the roll falls back to a rune.
+    // The boon broker spawns ALONGSIDE the runes above - one broker per rune
+    // dropped, in addition to it, never in its place - and, unlike them, is
+    // not taken back on a timer: he stands until somebody picks a boon.
+    // Several can therefore be up at once, so he gets his own slots rather
+    // than sharing the per-drop object slots. When every slot is occupied no
+    // further broker comes until one is used.
     BG_VHR_CREATURE_BOON_BROKER_1  = 0,
     BG_VHR_CREATURE_BOON_BROKER_MAX = 8,
     BG_VHR_CREATURE_MAX            = 8
@@ -180,11 +181,6 @@ enum BG_VHR_Constants
     // The custom cooldown-reset rune, alongside stock Restoration and
     // Berserking. Speed is deliberately not in the roll.
     BG_VHR_GO_RECHARGE_BUFF = 300500,
-
-    // Sentinel in the reward roll for "spawn the boon broker here instead of
-    // a rune". Not a gameobject entry; the creature entry lives in
-    // VioletHoldBoons::NPC_BOON_BROKER.
-    BG_VHR_REWARD_BOON_BROKER = 0,
 
     // Scales the whole end-of-run honor payout. The curve in
     // GetHonorRewardForRun compounds hard with depth, so this is the single

@@ -330,6 +330,44 @@ def audit_client_wmo(mpq: Path) -> None:
         verify_client_wmo(archive.read(root_name), archive.read(group_name))
 
 
+def build_client_wmo_files(source_assets_mpq: Path, out_dir: Path) -> tuple[str, str]:
+    """Write the patched root + group as loose files (no base patch needed).
+
+    SOURCE MATTERS: use the client's highest-priority STOCK copy. For 3.3.5a
+    that is Data\\patch.MPQ, not lichking.MPQ - patch.MPQ carries the newer
+    DalaranPrison (24109 tris incl. 582 extra collision faces, different BSP)
+    that the unmodified client and the server's original vmaps use. The first
+    override (2026-08-07) was built from lichking.MPQ, i.e. the 3.0-era
+    geometry, which is why a regen from that client produced a smaller vmap.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with MPQArchive(source_assets_mpq) as source:
+        root_name, group_name = client_wmo_names(source)
+        root, group = force_client_wmo_outdoors(source.read(root_name), source.read(group_name))
+    verify_client_wmo(root, group)
+    (out_dir / "DalaranPrison.wmo").write_bytes(root)
+    (out_dir / "DalaranPrison_000.wmo").write_bytes(group)
+    (out_dir / "INTERNAL_NAMES.txt").write_text(root_name + "\n" + group_name + "\n")
+    print(f"wrote {out_dir / 'DalaranPrison.wmo'} ({len(root)} B) and "
+          f"{out_dir / 'DalaranPrison_000.wmo'} ({len(group)} B) from {source_assets_mpq}")
+    return root_name, group_name
+
+
+def install_client_wmo(patch_mpq: Path, files_dir: Path) -> None:
+    """Put a built root+group pair (from build-client-wmo-files) into an existing patch MPQ."""
+    root = (files_dir / "DalaranPrison.wmo").read_bytes()
+    group = (files_dir / "DalaranPrison_000.wmo").read_bytes()
+    verify_client_wmo(root, group)
+    with MPQArchive(patch_mpq) as archive:
+        root_name, group_name = client_wmo_names(archive)
+    with MPQArchive(patch_mpq, writable=True) as patch:
+        patch.add(files_dir / "DalaranPrison.wmo", root_name)
+        patch.add(files_dir / "DalaranPrison_000.wmo", group_name)
+        patch.flush()
+    audit_client_wmo(patch_mpq)
+    print(f"{patch_mpq}: DalaranPrison root+group replaced from {files_dir} and re-verified")
+
+
 def fix_client_mogi(root: bytes) -> bytes:
     """Clear INTERIOR from the already-built root's MOGI flags (0x2008 -> 0x8).
 
@@ -421,6 +459,18 @@ def main() -> None:
     fix_mogi.add_argument("patch_mpq", type=Path)
     fix_mogi.add_argument("--backup-root", type=Path, default=None,
                           help="where to save the original DalaranPrison.wmo before rewriting")
+    build_files = sub.add_parser(
+        "build-client-wmo-files",
+        help="write the patched DalaranPrison root+group as loose files; source should be "
+             "the client's Data\\patch.MPQ (the 3.3.5 geometry), not lichking.MPQ")
+    build_files.add_argument("source_assets_mpq", type=Path)
+    build_files.add_argument("out_dir", type=Path)
+    install = sub.add_parser(
+        "install-client-wmo",
+        help="replace the DalaranPrison root+group inside an existing patch MPQ with the "
+             "files from build-client-wmo-files (close Wow.exe first)")
+    install.add_argument("patch_mpq", type=Path)
+    install.add_argument("files_dir", type=Path)
     args = parser.parse_args()
 
     if args.command == "audit-assets":
@@ -433,6 +483,10 @@ def main() -> None:
         audit_client_wmo(args.mpq)
     elif args.command == "fix-client-mogi":
         fix_client_mogi_in_mpq(args.patch_mpq, args.backup_root)
+    elif args.command == "build-client-wmo-files":
+        build_client_wmo_files(args.source_assets_mpq, args.out_dir)
+    elif args.command == "install-client-wmo":
+        install_client_wmo(args.patch_mpq, args.files_dir)
     else:
         build_client_wmo(args.source_assets_mpq, args.base_patch_mpq,
                          args.output_patch_mpq)
