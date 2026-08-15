@@ -42,6 +42,7 @@ void AddSC_custom_los_blocker();
 void AddSC_custom_player_collision();
 void AddSC_custom_global_collision();
 void AddSC_custom_client_attest();
+void AddSC_violet_hold_boons();
 
 void AddCustomScripts()
 {
@@ -67,4 +68,5 @@ void AddCustomScripts()
     AddSC_GOMove_commandscript();
     AddSC_GOEditor();
     AddSC_rts_building();
+    AddSC_violet_hold_boons();
 }

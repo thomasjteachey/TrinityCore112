@@ -102,6 +102,18 @@ enum BG_VHR_Objects
     BG_VHR_OBJECT_MAX              = 13
 };
 
+enum BG_VHR_Creatures
+{
+    // The boon broker rolls in the same reward pool as the runes above but,
+    // unlike them, is not taken back on a timer: he stands until somebody
+    // picks a boon. Several can therefore be up at once, so he gets his own
+    // slots rather than sharing the per-drop object slots. When every slot is
+    // occupied the roll falls back to a rune.
+    BG_VHR_CREATURE_BOON_BROKER_1  = 0,
+    BG_VHR_CREATURE_BOON_BROKER_MAX = 8,
+    BG_VHR_CREATURE_MAX            = 8
+};
+
 enum BG_VHR_Constants
 {
     // A wave needing more clones than this ends the run as a win.
@@ -168,6 +180,11 @@ enum BG_VHR_Constants
     // The custom cooldown-reset rune, alongside stock Restoration and
     // Berserking. Speed is deliberately not in the roll.
     BG_VHR_GO_RECHARGE_BUFF = 300500,
+
+    // Sentinel in the reward roll for "spawn the boon broker here instead of
+    // a rune". Not a gameobject entry; the creature entry lives in
+    // VioletHoldBoons::NPC_BOON_BROKER.
+    BG_VHR_REWARD_BOON_BROKER = 0,
 
     // Scales the whole end-of-run honor payout. The curve in
     // GetHonorRewardForRun compounds hard with depth, so this is the single
@@ -264,6 +281,14 @@ public:
     // enemy team and would otherwise walk over them on the way in.
     bool CanPickUpPowerup(Player const* player) const override;
 
+    // Called by the boon broker's script once a player has taken a boon from
+    // him: the broker leaves and his slot is freed. Unknown guids are ignored.
+    void ConsumeBoonBroker(ObjectGuid brokerGuid);
+
+    // The human team as it stands - online, real (non-transient) characters,
+    // dead or alive. What the broker rolls his offers against.
+    void CollectHumanPlayers(std::vector<Player const*>& out) const;
+
     // Same rule as an arena: you cannot walk back to your own corpse. Being
     // raised by someone else is untouched - Rebirth, soulstones and
     // Reincarnation are the intended way back mid-wave, and
@@ -337,6 +362,11 @@ private:
     void SpawnWaveRewardBuffs();
     void DespawnWaveRewardBuffs();
     bool PickBuffPosition(std::vector<Position> const& taken, Position& out) const;
+    // First free broker slot, or BG_VHR_CREATURE_BOON_BROKER_MAX when all are
+    // standing. Also collects the standing brokers' positions so a new drop
+    // keeps its distance from them.
+    uint32 FindFreeBoonBrokerSlot(std::vector<Position>& occupied) const;
+    bool SpawnBoonBroker(uint32 slot, Position const& spot);
 
     uint32 GetHonorRewardForRun() const;
     void ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, uint32& winnerHonor, uint32& loserHonor) const override;

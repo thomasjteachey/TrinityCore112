@@ -56,6 +56,7 @@
 #include "StringConvert.h"
 #include "SystemPackets.h"
 #include "QueryHolder.h"
+#include "VioletHoldBoons.h"
 #include "World.h"
 
 bool LoginQueryHolder::Initialize()
@@ -1082,6 +1083,13 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     }
 
     pCurrChar->RemoveAurasDueToSpell(45813);
+
+    // Violet Hold boons (and the levels the level boon granted) survive a
+    // logout in character_aura so a relog INTO a still-running run keeps
+    // them; a relog anywhere else means the run ended without a Player to
+    // strip, so it happens here. After m_playerLoading is cleared, so the
+    // level rollback's talent packet actually goes out.
+    VioletHoldBoons::OnLogin(pCurrChar);
 
     sScriptMgr->OnPlayerLogin(pCurrChar, firstLogin);
 

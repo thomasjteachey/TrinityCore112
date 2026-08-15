@@ -26,6 +26,7 @@
 #include "Spell.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "VioletHoldBoons.h"
 #include "WorldPacket.h"
 
 SpellHistory::Clock::duration const SpellHistory::InfinityCooldownDelay = std::chrono::duration_cast<SpellHistory::Clock::duration>(std::chrono::seconds(MONTH));
@@ -329,6 +330,22 @@ void SpellHistory::StartCooldown(SpellInfo const* spellInfo, uint32 itemId, Spel
             }
         }
 
+        // Violet Hold "Boon of Alacrity": a percentage off the holder's spell
+        // cooldowns, self and category alike. Item-use cooldowns (potions,
+        // trinkets) are left alone. The client predicts the DBC value on its
+        // own, so it is told the real one, exactly as MOD_COOLDOWN does.
+        if (!itemId && (cooldown > 0 || categoryCooldown > 0))
+        {
+            if (int32 boonPct = VioletHoldBoons::GetCooldownReductionPct(_owner))
+            {
+                if (cooldown > 0)
+                    cooldown = cooldown * (100 - boonPct) / 100;
+                if (categoryCooldown > 0)
+                    categoryCooldown = categoryCooldown * (100 - boonPct) / 100;
+                needsCooldownPacket = true;
+            }
+        }
+
         // replace negative cooldowns by 0
         if (cooldown < 0)
             cooldown = 0;
@@ -354,7 +371,10 @@ void SpellHistory::StartCooldown(SpellInfo const* spellInfo, uint32 itemId, Spel
             if (Player* playerOwner = GetPlayerOwner())
             {
                 WorldPacket spellCooldown;
-                BuildCooldownPacket(spellCooldown, SPELL_COOLDOWN_FLAG_NONE, spellInfo->Id, cooldown);
+                // A category-only spell (shocks, traps) has cooldown 0 here and
+                // lives on catrecTime; telling the client "0" would clear its
+                // own prediction, so send the category value for that case.
+                BuildCooldownPacket(spellCooldown, SPELL_COOLDOWN_FLAG_NONE, spellInfo->Id, cooldown ? cooldown : categoryCooldown);
                 playerOwner->SendDirectMessage(&spellCooldown);
             }
         }

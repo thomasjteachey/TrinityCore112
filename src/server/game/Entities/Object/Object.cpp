@@ -46,6 +46,7 @@
 #include "Unit.h"
 #include "UpdateFieldFlags.h"
 #include "Vehicle.h"
+#include "VioletHoldBoons.h"
 #include "VMapFactory.h"
 #include "VMapManager2.h"
 #include "World.h"
@@ -2396,6 +2397,12 @@ int32 WorldObject::ModSpellDuration(SpellInfo const* spellInfo, WorldObject cons
         if (durationMod != 0)
             AddPct(duration, durationMod);
 
+        // Violet Hold "Boon of Resolve": a flat percentage off any crowd
+        // control landing on the holder, whatever its mechanic. Applied on
+        // top of the mechanic mods above rather than competing with them.
+        if (int32 boonPct = VioletHoldBoons::GetCcDurationReductionPct(unitTarget, uint32(mechanicMask)))
+            AddPct(duration, -boonPct);
+
         // there are only negative mods currently
         durationMod_always = unitTarget->GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL, spellInfo->Dispel);
         durationMod_not_stack = unitTarget->GetMaxNegativeAuraModifierByMiscValue(SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL_NOT_STACK, spellInfo->Dispel);
@@ -2480,6 +2487,10 @@ void WorldObject::ModSpellCastTime(SpellInfo const* spellInfo, int32& castTime, 
         && (spellInfo->HasAura(SPELL_AURA_MOUNTED) || spellInfo->Mechanic == MECHANIC_MOUNT))
         castTime = std::max(castTime - 1000, 0);
 
+    // Violet Hold "Boon of the Outrider": same shape as the Tauren perk above.
+    if (castTime > 0 && (spellInfo->HasAura(SPELL_AURA_MOUNTED) || spellInfo->Mechanic == MECHANIC_MOUNT))
+        if (int32 boonMs = VioletHoldBoons::GetMountCastTimeReductionMs(unitCaster))
+            castTime = std::max(castTime - boonMs, 0);
 }
 
 void WorldObject::ModSpellDurationTime(SpellInfo const* spellInfo, int32& duration, Spell* spell /*= nullptr*/) const

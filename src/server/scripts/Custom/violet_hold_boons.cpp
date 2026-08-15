@@ -1,0 +1,322 @@
+/*
+ * Violet Hold boons - the broker NPC and the aura scripts behind the two
+ * chance-based boons and the level marker. See
+ * game/Miscellaneous/VioletHoldBoons.h for the design and the boon table.
+ */
+
+#include "Battleground.h"
+#include "BattlegroundVHR.h"
+#include "Map.h"
+#include "Player.h"
+#include "Random.h"
+#include "ScriptedCreature.h"
+#include "ScriptedGossip.h"
+#include "ScriptMgr.h"
+#include "Spell.h"
+#include "SpellAuraEffects.h"
+#include "SpellAuras.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
+#include "SpellScript.h"
+#include "VioletHoldBoons.h"
+#include "WorldSession.h"
+
+#include <algorithm>
+#include <unordered_map>
+#include <vector>
+
+using namespace VioletHoldBoons;
+
+namespace
+{
+constexpr uint32 ACTION_PICK_BASE = GOSSIP_ACTION_INFO_DEF + 100;   // + uint8(Boon)
+
+// "%s takes the %s." - see sql/custom/world/2026_08_15_00_world_violet_hold_boons.sql
+constexpr uint32 STRING_BOON_TAKEN = 20101;
+
+// The broker's own run, or nullptr when he is somewhere he should not be.
+BattlegroundVHR* GetRun(Creature const* broker)
+{
+    Map* map = broker->GetMap();
+    BattlegroundMap* bgMap = map ? map->ToBattlegroundMap() : nullptr;
+    if (!bgMap)
+        return nullptr;
+
+    Battleground* bg = bgMap->GetBG();
+    if (!bg || bg->GetTypeID() != BATTLEGROUND_VHR)
+        return nullptr;
+
+    return static_cast<BattlegroundVHR*>(bg);
+}
+
+// Only the party may trade with him: the clones are Players too, and on the
+// other team.
+bool MayTrade(Player const* player, BattlegroundVHR const* run)
+{
+    if (!player || !run)
+        return false;
+
+    WorldSession const* session = player->GetSession();
+    if (!session || session->IsTransientPlayerSession())
+        return false;
+
+    if (player->GetBattleground() != run)
+        return false;
+
+    return player->GetBGTeam() == run->GetHumanTeam();
+}
+}
+
+class npc_violet_hold_boon_broker : public CreatureScript
+{
+public:
+    npc_violet_hold_boon_broker() : CreatureScript("npc_violet_hold_boon_broker") { }
+
+    struct npc_violet_hold_boon_brokerAI : public ScriptedAI
+    {
+        npc_violet_hold_boon_brokerAI(Creature* creature) : ScriptedAI(creature), _rolled(false), _consumed(false) { }
+
+        void Reset() override
+        {
+            me->SetReactState(REACT_PASSIVE);
+        }
+
+        bool OnGossipHello(Player* player) override
+        {
+            BattlegroundVHR* run = GetRun(me);
+            if (!MayTrade(player, run) || _consumed)
+            {
+                CloseGossipMenuFor(player);
+                return true;
+            }
+
+            std::vector<Offer> const& offers = OffersFor(run);
+            if (offers.empty())
+            {
+                if (WorldSession* session = player->GetSession())
+                    session->SendNotification("The broker has nothing left that would help anyone here.");
+                CloseGossipMenuFor(player);
+                return true;
+            }
+
+            ClearGossipMenuFor(player);
+            for (Offer const& offer : offers)
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, DescribeOffer(player, offer),
+                    GOSSIP_SENDER_MAIN, ACTION_PICK_BASE + offer.Encode());
+
+            SendGossipMenuFor(player, NPC_TEXT_BOON_BROKER, me->GetGUID());
+            return true;
+        }
+
+        bool OnGossipSelect(Player* player, uint32 /*menuId*/, uint32 gossipListId) override
+        {
+            uint32 const action = player->PlayerTalkClass->GetGossipOptionAction(gossipListId);
+            CloseGossipMenuFor(player);
+
+            BattlegroundVHR* run = GetRun(me);
+            if (!MayTrade(player, run) || _consumed)
+                return true;
+
+            Offer offer;
+            if (action < ACTION_PICK_BASE || !Offer::Decode(action - ACTION_PICK_BASE, offer))
+                return true;
+
+            // The pick has to be one of the three this broker is actually
+            // showing, so a hand-crafted gossip packet cannot shop the whole list.
+            std::vector<Offer> const& offers = OffersFor(run);
+            if (std::find(offers.begin(), offers.end(), offer) == offers.end())
+                return true;
+
+            PickResult const result = Take(player, offer);
+            if (result != PickResult::Ok)
+            {
+                // Wrong class, already known, capped: the broker stays for
+                // whoever it does fit. Nothing was changed.
+                if (WorldSession* session = player->GetSession())
+                    session->SendNotification("%s", GetPickResultText(result));
+                return true;
+            }
+
+            _consumed = true;
+
+            char const* name = offer.kind == Offer::Kind::Boon ? GetBoon(Boon(offer.index)).name : GetClassSpell(offer.index).name;
+            if (WorldSession* session = player->GetSession())
+                session->SendNotification("You receive %s.", name);
+            run->PSendMessageToAll(STRING_BOON_TAKEN, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, player->GetName().c_str(), name);
+
+            // Frees the slot and removes the creature at the end of the update.
+            // Nothing below may touch `me` after this.
+            run->ConsumeBoonBroker(me->GetGUID());
+            return true;
+        }
+
+    private:
+        // Rolled once, on the first visit, against the party as it stands then,
+        // and shown unchanged to everyone after - closing and reopening the
+        // window is not a reroll, and a hunter ability stays on the board for
+        // the hunter even if a mage looked first.
+        std::vector<Offer> const& OffersFor(BattlegroundVHR const* run)
+        {
+            if (!_rolled)
+            {
+                std::vector<Player const*> roster;
+                run->CollectHumanPlayers(roster);
+                _offers = RollOffers(roster);
+                _rolled = true;
+            }
+            return _offers;
+        }
+
+        std::vector<Offer> _offers;
+        bool _rolled;
+        bool _consumed;
+    };
+
+    CreatureAI* GetAI(Creature* creature) const override
+    {
+        return new npc_violet_hold_boon_brokerAI(creature);
+    }
+};
+
+// Boon of Flurry (90238): SPELL_AURA_PROC_TRIGGER_SPELL firing 90250 (add one
+// extra attack) at 1% per stack. spell_proc gives it melee-only proc flags
+// at 100% and this script supplies the real chance from the stacked amount.
+class spell_vhr_boon_flurry : public AuraScript
+{
+    PrepareAuraScript(spell_vhr_boon_flurry);
+
+    bool CheckProc(ProcEventInfo& /*eventInfo*/)
+    {
+        AuraEffect const* eff = GetEffect(EFFECT_0);
+        return eff && roll_chance_i(eff->GetAmount());
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(spell_vhr_boon_flurry::CheckProc);
+    }
+};
+
+// Boon of Echoes (90239): a dummy with cast-phase proc flags for damage-class
+// magic/none spells. When it fires, the spell that was just cast is cast again
+// at the same targets, free and instant.
+class spell_vhr_boon_echoes : public AuraScript
+{
+    PrepareAuraScript(spell_vhr_boon_echoes);
+
+    static bool IsDamageOrHeal(SpellInfo const* info)
+    {
+        for (SpellEffectInfo const& effect : info->GetEffects())
+        {
+            if (!effect.IsEffect())
+                continue;
+
+            switch (effect.Effect)
+            {
+                case SPELL_EFFECT_SCHOOL_DAMAGE:
+                case SPELL_EFFECT_HEALTH_LEECH:
+                case SPELL_EFFECT_HEAL:
+                case SPELL_EFFECT_HEAL_PCT:
+                case SPELL_EFFECT_HEAL_MECHANICAL:
+                    return true;
+                case SPELL_EFFECT_APPLY_AURA:
+                case SPELL_EFFECT_APPLY_AREA_AURA_PARTY:
+                case SPELL_EFFECT_APPLY_AREA_AURA_RAID:
+                    switch (effect.ApplyAuraName)
+                    {
+                        case SPELL_AURA_PERIODIC_DAMAGE:
+                        case SPELL_AURA_PERIODIC_DAMAGE_PERCENT:
+                        case SPELL_AURA_PERIODIC_HEAL:
+                        case SPELL_AURA_PERIODIC_LEECH:
+                        case SPELL_AURA_OBS_MOD_HEALTH:
+                            return true;
+                        default:
+                            break;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+        return false;
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        Spell const* spell = eventInfo.GetProcSpell();
+        SpellInfo const* info = eventInfo.GetSpellInfo();
+        if (!spell || !info)
+            return false;
+
+        // The echo itself is a triggered cast; never echo an echo, and leave
+        // every other triggered cast (procs, item effects) alone too.
+        if (spell->IsTriggered())
+            return false;
+
+        if (info->IsChanneled() || info->IsPassive() || info->NeedsComboPoints())
+            return false;
+
+        if (IsBoonSpell(info->Id))
+            return false;
+
+        if (!IsDamageOrHeal(info))
+            return false;
+
+        AuraEffect const* eff = GetEffect(EFFECT_0);
+        return eff && roll_chance_i(eff->GetAmount());
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        Spell const* spell = eventInfo.GetProcSpell();
+        Unit* caster = GetTarget();
+        if (!spell || !caster)
+            return;
+
+        SpellCastTargets targets = spell->m_targets;
+        caster->CastSpell(std::move(targets), spell->GetSpellInfo()->Id, TRIGGERED_FULL_MASK);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(spell_vhr_boon_echoes::CheckProc);
+        OnEffectProc += AuraEffectProcFn(spell_vhr_boon_echoes::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// Boon of Ascension (90247): the marker whose base amount is the level to go
+// back to. VioletHoldBoons::StripAll does the rollback deliberately, before
+// removing this; this is the safety net for the marker vanishing any other
+// way while the character is in the world (a GM .unaura, a spell reset).
+// Logout cleanup removes auras after RemoveFromWorld, which the IsInWorld
+// check is there to skip - the levels must survive a relog into the run.
+class spell_vhr_boon_ascension : public AuraScript
+{
+    PrepareAuraScript(spell_vhr_boon_ascension);
+
+    void HandleRemove(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
+    {
+        Player* player = GetTarget() ? GetTarget()->ToPlayer() : nullptr;
+        if (!player || !player->IsInWorld())
+            return;
+
+        int32 const baseLevel = aurEff->GetBaseAmount();
+        if (baseLevel > 0 && baseLevel < int32(player->GetLevel()))
+            player->GiveLevel(uint8(baseLevel));
+    }
+
+    void Register() override
+    {
+        AfterEffectRemove += AuraEffectRemoveFn(spell_vhr_boon_ascension::HandleRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+void AddSC_violet_hold_boons()
+{
+    new npc_violet_hold_boon_broker();
+    RegisterSpellScript(spell_vhr_boon_flurry);
+    RegisterSpellScript(spell_vhr_boon_echoes);
+    RegisterSpellScript(spell_vhr_boon_ascension);
+}

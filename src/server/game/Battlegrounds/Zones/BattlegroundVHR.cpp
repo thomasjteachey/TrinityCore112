@@ -1,6 +1,7 @@
 #include "BattlegroundVHR.h"
 
 #include "BattlegroundMgr.h"
+#include "Creature.h"
 #include "DBCStores.h"
 #include "GameObject.h"
 #include "Log.h"
@@ -11,6 +12,7 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "Random.h"
+#include "VioletHoldBoons.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -110,6 +112,7 @@ void BattlegroundVHRScore::BuildObjectivesBlock(WorldPacket& data)
 BattlegroundVHR::BattlegroundVHR()
 {
     BgObjects.resize(BG_VHR_OBJECT_MAX);
+    BgCreatures.resize(BG_VHR_CREATURE_MAX);
 
     // Arena-style pre-match countdown, not the one-minute battleground stock:
     // the whole party arrives together from one queue group, so there is
@@ -159,12 +162,19 @@ void BattlegroundVHR::AddPlayer(Player* player)
     UpdateScoreWorldStates();
 }
 
-void BattlegroundVHR::RemovePlayer(Player* /*player*/, ObjectGuid guid, uint32 /*team*/)
+void BattlegroundVHR::RemovePlayer(Player* player, ObjectGuid guid, uint32 team)
 {
     // Leaving is indistinguishable from dying as far as the run is concerned:
     // either way that character is no longer holding the line.
     _eliminated.insert(guid);
     UpdateScoreWorldStates();
+
+    // Boons are a Violet Hold thing. Every way out of the run - the leave
+    // button, the match ending, a GM teleport, an AFK kick - comes through
+    // here with the Player still in hand. The one path that does not (timed
+    // out while logged off) is caught by VioletHoldBoons::OnLogin.
+    if (player && team == _humanTeam)
+        VioletHoldBoons::StripAll(player);
 }
 
 void BattlegroundVHR::Reset()
@@ -730,24 +740,32 @@ void BattlegroundVHR::SpawnWaveRewardBuffs()
     uint32 const wanted = std::min<uint32>(
         (_partySize + BG_VHR_PLAYERS_PER_BUFF - 1) / BG_VHR_PLAYERS_PER_BUFF, BG_VHR_MAX_WAVE_BUFFS);
 
-    // Whatever is still lying around from the previous wave goes now, so the
-    // slots are free and the party never banks two waves' worth.
+    // Whatever runes are still lying around from the previous wave go now, so
+    // the slots are free and the party never banks two waves' worth. Standing
+    // boon brokers are NOT touched - they wait for a taker.
     DespawnWaveRewardBuffs();
 
     if (!wanted)
         return;
 
     // Speed is deliberately not in the roll - the party is not chasing anyone.
+    // The broker is a fourth, equally weighted entry.
     static uint32 const kBuffEntries[] =
     {
         BG_OBJECTID_REGENBUFF_ENTRY,
         BG_OBJECTID_BERSERKERBUFF_ENTRY,
-        BG_VHR_GO_RECHARGE_BUFF
+        BG_VHR_GO_RECHARGE_BUFF,
+        BG_VHR_REWARD_BOON_BROKER
     };
+    uint32 const kBuffCount = uint32(sizeof(kBuffEntries) / sizeof(kBuffEntries[0]));
 
+    // Brokers left over from earlier waves count as taken ground for the
+    // placement picker, so a rune is not dropped on top of one.
     std::vector<Position> placed;
-    placed.reserve(wanted);
+    uint32 brokerSlot = FindFreeBoonBrokerSlot(placed);
+    placed.reserve(placed.size() + wanted);
 
+    bool droppedRune = false;
     for (uint32 i = 0; i < wanted; ++i)
     {
         // Only ever false when the instance has no map, in which case nothing
@@ -757,20 +775,37 @@ void BattlegroundVHR::SpawnWaveRewardBuffs()
         if (!PickBuffPosition(placed, spot))
             break;
 
-        uint32 const kBuffCount = uint32(sizeof(kBuffEntries) / sizeof(kBuffEntries[0]));
-        uint32 const entry = kBuffEntries[urand(0, kBuffCount - 1)];
-        if (!AddObject(BG_VHR_OBJECT_BUFF_1 + i, entry, spot, 0.0f, 0.0f,
-            std::sin(spot.GetOrientation() / 2.0f), std::cos(spot.GetOrientation() / 2.0f), RESPAWN_IMMEDIATELY))
+        uint32 entry = kBuffEntries[urand(0, kBuffCount - 1)];
+
+        // A broker with nowhere to stand becomes a rune rather than nothing.
+        if (entry == BG_VHR_REWARD_BOON_BROKER && brokerSlot >= BG_VHR_CREATURE_BOON_BROKER_MAX)
+            entry = kBuffEntries[urand(0, kBuffCount - 2)];
+
+        if (entry == BG_VHR_REWARD_BOON_BROKER)
         {
-            TC_LOG_ERROR("bg.battleground", "BattlegroundVHR: could not create reward powerup {} for instance {}.",
-                entry, GetInstanceID());
-            continue;
+            if (!SpawnBoonBroker(brokerSlot, spot))
+                continue;
+
+            // Next broker this wave needs the next free slot.
+            std::vector<Position> ignored;
+            brokerSlot = FindFreeBoonBrokerSlot(ignored);
+        }
+        else
+        {
+            if (!AddObject(BG_VHR_OBJECT_BUFF_1 + i, entry, spot, 0.0f, 0.0f,
+                std::sin(spot.GetOrientation() / 2.0f), std::cos(spot.GetOrientation() / 2.0f), RESPAWN_IMMEDIATELY))
+            {
+                TC_LOG_ERROR("bg.battleground", "BattlegroundVHR: could not create reward powerup {} for instance {}.",
+                    entry, GetInstanceID());
+                continue;
+            }
+            droppedRune = true;
         }
 
         placed.push_back(spot);
     }
 
-    if (!placed.empty())
+    if (droppedRune)
         _buffLifetimeMs = BG_VHR_BUFF_LIFETIME_MS;
 }
 
@@ -780,6 +815,71 @@ void BattlegroundVHR::DespawnWaveRewardBuffs()
         DelObject(BG_VHR_OBJECT_BUFF_1 + i);
 
     _buffLifetimeMs = 0;
+}
+
+uint32 BattlegroundVHR::FindFreeBoonBrokerSlot(std::vector<Position>& occupied) const
+{
+    uint32 freeSlot = BG_VHR_CREATURE_BOON_BROKER_MAX;
+
+    Map* map = FindBgMap();
+    for (uint32 slot = BG_VHR_CREATURE_BOON_BROKER_1; slot < BG_VHR_CREATURE_BOON_BROKER_MAX; ++slot)
+    {
+        Creature const* broker = (map && BgCreatures[slot]) ? map->GetCreature(BgCreatures[slot]) : nullptr;
+        if (broker && broker->IsInWorld())
+        {
+            occupied.push_back(*broker);
+            continue;
+        }
+
+        if (freeSlot == BG_VHR_CREATURE_BOON_BROKER_MAX)
+            freeSlot = slot;
+    }
+
+    return freeSlot;
+}
+
+bool BattlegroundVHR::SpawnBoonBroker(uint32 slot, Position const& spot)
+{
+    // A stale guid in the slot (creature gone without ConsumeBoonBroker) is
+    // just cleared; DelCreature logs if it cannot find it, which is fine.
+    if (BgCreatures[slot])
+        DelCreature(slot);
+
+    // Face the middle of the room rather than a random wall.
+    Position facing = spot;
+    facing.SetOrientation(spot.GetAbsoluteAngle(kChamberCentre));
+
+    Creature* broker = AddCreature(VioletHoldBoons::NPC_BOON_BROKER, slot, facing);
+    if (!broker)
+    {
+        TC_LOG_ERROR("bg.battleground", "BattlegroundVHR: could not create boon broker (entry {}) for instance {}.",
+            VioletHoldBoons::NPC_BOON_BROKER, GetInstanceID());
+        return false;
+    }
+
+    return true;
+}
+
+void BattlegroundVHR::CollectHumanPlayers(std::vector<Player const*>& out) const
+{
+    for (ObjectGuid guid : GetHumanRoster(false))
+        if (Player const* player = ObjectAccessor::FindPlayer(guid))
+            out.push_back(player);
+}
+
+void BattlegroundVHR::ConsumeBoonBroker(ObjectGuid brokerGuid)
+{
+    if (!brokerGuid)
+        return;
+
+    for (uint32 slot = BG_VHR_CREATURE_BOON_BROKER_1; slot < BG_VHR_CREATURE_BOON_BROKER_MAX; ++slot)
+    {
+        if (BgCreatures[slot] != brokerGuid)
+            continue;
+
+        DelCreature(slot);
+        return;
+    }
 }
 
 void BattlegroundVHR::PostUpdateImpl(uint32 diff)

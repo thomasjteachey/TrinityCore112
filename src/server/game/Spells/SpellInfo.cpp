@@ -31,6 +31,7 @@
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
 #include "Vehicle.h"
+#include "VioletHoldBoons.h"
 
 uint32 GetTargetFlagMask(SpellTargetObjectTypes objType)
 {
@@ -3472,6 +3473,13 @@ int32 SpellInfo::CalcPowerCost(WorldObject const* caster, SpellSchoolMask school
 
     // PCT mod from user auras by school
     powerCost = int32(powerCost * (1.0f + unitCaster->GetFloatValue(UNIT_FIELD_POWER_COST_MULTIPLIER + AsUnderlyingType(school))));
+
+    // Violet Hold cost boons are per POWER TYPE, which the school-keyed
+    // multiplier above cannot express, so they take their cut here.
+    if (powerCost > 0)
+        if (int32 boonPct = VioletHoldBoons::GetPowerCostReductionPct(unitCaster, Powers(PowerType)))
+            powerCost -= CalculatePct(powerCost, boonPct);
+
     if (powerCost < 0)
         powerCost = 0;
     return powerCost;
@@ -3632,6 +3640,12 @@ bool _isPositiveEffectImpl(SpellInfo const* spellInfo, SpellEffectInfo const& ef
     // not found a single positive spell with this attribute
     if (spellInfo->HasAttribute(SPELL_ATTR0_NEGATIVE_1))
         return false;
+
+    // Violet Hold boons are all self-buffs; several are dummies or carry
+    // negative base points (cost/damage-taken reductions) that the heuristic
+    // below would read as debuffs. Same reason 90200 Recharge is pinned.
+    if (VioletHoldBoons::IsBoonSpell(spellInfo->Id))
+        return true;
 
     visited.insert({ spellInfo->Id, effect.EffectIndex });
 
