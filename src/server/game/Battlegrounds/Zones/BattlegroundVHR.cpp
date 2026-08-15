@@ -479,7 +479,7 @@ void BattlegroundVHR::NotifyWaveSpawnFulfilled(uint32 waveNumber, uint32 /*spawn
     if (_waveNumber == 1)
     {
         // The match countdown was the first wave's warning; making the party
-        // stand through a second ten-second wait on top of it kills the
+        // stand through a second thirty-second wait on top of it kills the
         // opening. The cells open the moment the clones exist, unbuffed -
         // wave one is the easiest fight of the run anyway.
         OpenWaveCell();
@@ -490,8 +490,8 @@ void BattlegroundVHR::NotifyWaveSpawnFulfilled(uint32 waveNumber, uint32 /*spawn
         ApplyPreparationToWave();
         _waveState = WaveState::Preparing;
         _prepTimerMs = BG_VHR_PREP_MS;
-        // Seed above the first tick so the countdown announces 10 itself
-        // rather than needing a separate opening message.
+        // Seed above the first tick so the countdown announces the full
+        // window (30) itself rather than needing a separate opening message.
         _lastCountdownSecond = (BG_VHR_PREP_MS / IN_MILLISECONDS) + 1;
         AnnounceWaveCountdown();
     }
@@ -499,8 +499,9 @@ void BattlegroundVHR::NotifyWaveSpawnFulfilled(uint32 waveNumber, uint32 /*spawn
     UpdateScoreWorldStates();
 }
 
-// Announce the wave countdown as a centre-screen notification, once per whole
-// second.
+// Announce the wave countdown as a centre-screen notification: once when the
+// window opens ("30"), nothing while the party loots and regroups, then once
+// per whole second from BG_VHR_COUNTDOWN_FROM_SECONDS down.
 //
 // CHAT_MSG_RAID_BOSS_EMOTE is what the client routes to RaidBossEmoteFrame -
 // the large centre text used for boss emotes and raid warnings - rather than
@@ -521,11 +522,18 @@ void BattlegroundVHR::AnnounceWaveCountdown()
         return;
 
     _lastCountdownSecond = secondsLeft;
+
+    // The opening call is the whole window; after that, quiet until the
+    // final stretch.
+    uint32 const fullWindow = BG_VHR_PREP_MS / IN_MILLISECONDS;
+    if (secondsLeft != fullWindow && secondsLeft > BG_VHR_COUNTDOWN_FROM_SECONDS)
+        return;
+
     PSendMessageToAll(BG_VHR_STRING_NEXT_WAVE_COUNTDOWN, CHAT_MSG_RAID_BOSS_EMOTE,
                       nullptr, secondsLeft);
 }
 
-// The clones' ten seconds. Arena Preparation is what the playerbot core keys
+// The clones' preparation window. Arena Preparation is what the playerbot core keys
 // its pre-gates buffing off (SelectPreparationBuffSpell), so applying it here
 // is what makes a wave walk out already buffed, exactly as at an arena start.
 void BattlegroundVHR::ApplyPreparationToWave()

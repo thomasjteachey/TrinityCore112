@@ -22,7 +22,7 @@
  *    mana-restored, or given their cooldowns back. Attrition across waves is the
  *    entire difficulty curve, so anything that undoes it has to stay out.
  *
- * 3. The ten-second gap between waves is a preparation window for the clones
+ * 3. The thirty-second gap between waves is a preparation window for the clones
  *    only. They get Arena Preparation - which is also what drives the playerbot
  *    self-buff logic in SelectPreparationBuffSpell - while the players get
  *    nothing but a warning about what is about to walk out of the cell.
@@ -124,8 +124,11 @@ enum BG_VHR_Constants
     // wave has to be spread over several. One cell per ten clones, rounded up.
     BG_VHR_CLONES_PER_CELL = 10,
 
-    // The gates-closed preparation window, in milliseconds.
-    BG_VHR_PREP_MS = 15 * IN_MILLISECONDS,
+    // The gates-closed preparation window, in milliseconds. Announced once as
+    // it opens, then silently until BG_VHR_COUNTDOWN_FROM_SECONDS, then every
+    // second down to the gates.
+    BG_VHR_PREP_MS = 30 * IN_MILLISECONDS,
+    BG_VHR_COUNTDOWN_FROM_SECONDS = 15,
 
     // Alive counts and the wipe check run on this timer rather than every tick.
     BG_VHR_STATE_CHECK_INTERVAL = 500,
@@ -163,7 +166,7 @@ enum BG_VHR_Constants
 
     // How long a dropped powerup survives before it is taken back, in ms. Waves
     // are composed the moment the previous one dies, so this deliberately
-    // outlives the ten-second preparation window - the party can grab one while
+    // outlives the preparation window - the party can grab one while
     // the next wave is still behind its cell door.
     BG_VHR_BUFF_LIFETIME_MS = 60 * IN_MILLISECONDS,
 
