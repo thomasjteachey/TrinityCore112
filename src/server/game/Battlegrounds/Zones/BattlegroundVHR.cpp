@@ -102,6 +102,34 @@ Position ScatterInCell(Position const& release, uint32 indexInCell)
              release.GetPositionZ(),
              release.GetOrientation() };
 }
+
+// Ichoron's cell is a flooded basin: its release point (the boss's first path
+// node) sits on the pool bed, six yards under a surface that a player could
+// not stand in. A clone put down there starts the wave swimming from the
+// bottom, and a swimmer's first move is a straight spline - up through the
+// basin wall and along under the arena floor until it surfaces near the party
+// ("bots teleporting under the arena"). Seat such clones just under the
+// surface instead: that is the swim band the playerbot core keeps swimmers in
+// (0.5 below the level, inside its swim hysteresis and next to the navmesh
+// water polys), and where a player would be treading water anyway. Dry cells
+// and water shallow enough to stand in are left exactly where they were.
+void SettleSpawnIntoWater(Map const* map, Position& spawn)
+{
+    if (!map)
+        return;
+
+    LiquidData liquid{};
+    ZLiquidStatus const status = map->GetLiquidStatus(PHASEMASK_NORMAL, spawn.GetPositionX(), spawn.GetPositionY(),
+        spawn.GetPositionZ() + 0.5f, MAP_ALL_LIQUIDS, &liquid, DEFAULT_COLLISION_HEIGHT);
+    if (!(status & MAP_LIQUID_STATUS_SWIMMING))
+        return;
+
+    bool const tooDeepToStand = (liquid.level - liquid.depth_level) > DEFAULT_COLLISION_HEIGHT;
+    if (!tooDeepToStand)
+        return;
+
+    spawn.Relocate(spawn.GetPositionX(), spawn.GetPositionY(), liquid.level - 0.5f, spawn.GetOrientation());
+}
 }
 
 void BattlegroundVHRScore::BuildObjectivesBlock(WorldPacket& data)
@@ -412,11 +440,14 @@ void BattlegroundVHR::ComposeWave(uint32 enemyCount)
 
     _pendingRequest.spawnPositions.reserve(enemyCount);
     std::vector<uint32> perCellCount(cellsNeeded, 0);
+    Map const* map = GetBgMap();
     for (uint32 i = 0; i < enemyCount; ++i)
     {
         uint32 const cellSlot = i % cellsNeeded;
         VhrCell const& cell = kCells[_waveCells[cellSlot]];
-        _pendingRequest.spawnPositions.push_back(ScatterInCell(cell.release, perCellCount[cellSlot]++));
+        Position spawn = ScatterInCell(cell.release, perCellCount[cellSlot]++);
+        SettleSpawnIntoWater(map, spawn);
+        _pendingRequest.spawnPositions.push_back(spawn);
     }
 
     for (uint32 cellIndex : _waveCells)

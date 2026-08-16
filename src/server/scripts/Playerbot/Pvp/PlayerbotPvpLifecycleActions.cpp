@@ -1203,6 +1203,41 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return IssueMovePointThrottled(player, BuildFollowDestination(player, target, desiredDistance), destinationChangeThreshold, minReissueMs);
     }
 
+    // Bring a bot that is well below the surface of water too deep to stand in
+    // up into the swim band (0.5 under the level - the same band the swim
+    // hysteresis and BuildCollisionSafeDestination use). A bot can find itself
+    // on a pool bed by being put down there (Violet Hold's flooded cell) or by
+    // sinking while stopped; a player in that spot would be treading water at
+    // the surface, and that is also where the navmesh water polys are, so
+    // route building has to start from there. Same UpdatePosition idiom as
+    // the stationary swim resync: observers pick it up with the next spline.
+    void SurfacePlayerbotInDeepWater(Player* player)
+    {
+        if (!player || !player->IsInWorld() || player->HasAuraType(SPELL_AURA_WATER_WALK))
+            return;
+
+        Map const* map = player->FindMap();
+        if (!map)
+            return;
+
+        LiquidData liquidData{};
+        ZLiquidStatus const status = map->GetLiquidStatus(player->GetPhaseMask(), player->GetPositionX(),
+            player->GetPositionY(), player->GetPositionZ() + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight());
+        if (!(status & MAP_LIQUID_STATUS_SWIMMING))
+            return;
+
+        bool const tooDeepToStand = (liquidData.level - liquidData.depth_level) > player->GetCollisionHeight();
+        if (!tooDeepToStand)
+            return;
+
+        float const swimZ = liquidData.level - 0.5f;
+        if (swimZ - player->GetPositionZ() < 1.0f)
+            return;
+
+        player->UpdatePosition(player->GetPositionX(), player->GetPositionY(), swimZ, player->GetOrientation());
+        player->UpdatePositionData();
+    }
+
     bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs)
     {
         if (!player)
@@ -1291,10 +1326,51 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             motionMaster->Clear();
         }
 
-        bool const generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+        bool const swimming = !player->IsFlying() && player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+        bool const generatePath = !player->IsFlying() && !swimming;
         Position const safeDestination = generatePath ? BuildCollisionSafeDestination(player, destination) : destination;
 
-        if (generatePath && player->InBattleground())
+        if (swimming && player->InBattleground())
+        {
+            // A swimmer's raw MovePoint is a straight spline. From the bed of a
+            // pool that line climbs through the basin wall and runs along under
+            // the surrounding floor until it surfaces next to the target -
+            // Violet Hold's flooded cell showed this as bots "teleporting under
+            // the arena". Surface the bot first (a player would be treading
+            // water there). Then: if the straight swim is unobstructed keep it,
+            // exactly as before - open water, and no walking-on-the-surface
+            // look from riding water polys. If geometry is in the way, walk the
+            // same mmap segments the land movers use: water polys are walkable
+            // for players and join the shore, so a real route normally exists.
+            // Only when Detour has nothing to offer either does the old direct
+            // spline go out, so no bot ends up worse off than before.
+            SurfacePlayerbotInDeepWater(player);
+
+            Map const* map = player->FindMap();
+            bool const straightSwimClear = map && map->isInLineOfSight(
+                player->GetPositionX(), player->GetPositionY(), player->GetPositionZ() + 1.0f,
+                safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ() + 1.0f,
+                player->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing);
+
+            Position segmentDestination;
+            PathType pathType = PathType(0);
+            if (!straightSwimClear &&
+                TryBuildBattlegroundSegmentDestination(player, BuildCollisionSafeDestination(player, destination), segmentDestination, &pathType))
+            {
+                motionMaster->MovePoint(0, segmentDestination, true);
+                EmitBattlegroundGmDebug(player,
+                    "movepoint=swim-nav-segment pathType=" + std::to_string(uint32(pathType)) +
+                    " segDist=" + std::to_string(int32(player->GetDistance(segmentDestination))), 0);
+            }
+            else
+            {
+                motionMaster->MovePoint(0, safeDestination, false);
+                EmitBattlegroundGmDebug(player,
+                    std::string("movepoint=swim-direct reason=") + (straightSwimClear ? "clear" : "no-nav") +
+                    " destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 0);
+            }
+        }
+        else if (generatePath && player->InBattleground())
         {
             Position segmentDestination;
             PathType pathType = PathType(0);
