@@ -3485,7 +3485,16 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
     bool const needsHurricaneMovementInterrupt = isHurricane && !snareMovementAllowed;
     bool const needsArcaneMissilesMovementInterrupt = isArcaneMissiles && !snareMovementAllowed;
     bool const moveAllowedChannel = m_spellInfo->IsMoveAllowedChannel() && !needsHurricaneMovementInterrupt && !needsArcaneMissilesMovementInterrupt;
-    bool const requiresMovementInterrupt = (m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) || needsStarfireMovementInterrupt || needsHurricaneMovementInterrupt || needsArcaneMissilesMovementInterrupt;
+    // Mount summons carry no SPELL_INTERRUPT_FLAG_MOVEMENT in the DBC: the
+    // client refuses to START a cast while moving off that flag, and Violet
+    // Hold's Boon of the Outrider needs the client to let the cast through
+    // (the client only applies cast-time spellmods to the player's own class
+    // family - Spell_C_GetSpellModifiers 0x7FD970 - so a family-15 mount can
+    // never read as instant to it). The movement rule is re-imposed here for
+    // everyone, same shape as movable Starfire; a boon holder's mount cast
+    // time is 0 server-side and passes regardless.
+    bool const needsMountMovementInterrupt = m_spellInfo->HasAura(SPELL_AURA_MOUNTED);
+    bool const requiresMovementInterrupt = (m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) || needsStarfireMovementInterrupt || needsHurricaneMovementInterrupt || needsArcaneMissilesMovementInterrupt || needsMountMovementInterrupt;
 
     // don't allow channeled spells / spells with cast time to be cast while moving
     // exception are only channeled spells that have no casttime and SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING
@@ -4226,7 +4235,9 @@ void Spell::update(uint32 difftime)
         bool const needsStarfireMovementInterrupt = isStarfire && !snareMovementAllowed;
         bool const needsHurricaneMovementInterrupt = isHurricane && !snareMovementAllowed;
         bool const needsArcaneMissilesMovementInterrupt = isArcaneMissiles && !snareMovementAllowed;
-        bool const hasMovementInterruptFlag = m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT;
+        // Mount summons: movement bit cleared in the DBC for the client's sake,
+        // enforced here (see Spell::prepare).
+        bool const hasMovementInterruptFlag = (m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) || m_spellInfo->HasAura(SPELL_AURA_MOUNTED);
         bool const moveAllowedChannel = IsChannelActive() && m_spellInfo->IsMoveAllowedChannel() && !needsHurricaneMovementInterrupt && !needsArcaneMissilesMovementInterrupt;
 
         // Movable Starfire lets virtual players keep their active movement
