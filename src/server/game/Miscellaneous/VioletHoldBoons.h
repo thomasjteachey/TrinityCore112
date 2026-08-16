@@ -44,6 +44,7 @@
 #define TRINITYCORE_VIOLET_HOLD_BOONS_H
 
 #include "Define.h"
+#include "ObjectGuid.h"
 #include "SharedDefines.h"
 #include <string>
 #include <vector>
