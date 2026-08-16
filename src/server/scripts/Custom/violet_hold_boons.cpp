@@ -467,7 +467,8 @@ class spell_vhr_boon_ricochet : public AuraScript
     }
 };
 
-// 90290 Boon of Reflection: stacks% of melee damage taken thrown back.
+// 90290 Boon of Reflection: stacks% of any damage taken (physical or magic,
+// direct or periodic - PROC_FLAG_TAKEN_DAMAGE) thrown back at the attacker.
 class spell_vhr_boon_reflection : public AuraScript
 {
     PrepareAuraScript(spell_vhr_boon_reflection);

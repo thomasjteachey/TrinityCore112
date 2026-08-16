@@ -659,6 +659,10 @@ class TC_GAME_API Battleground
         // must be implemented in BG subclass
         virtual void RemovePlayer(Player* /*player*/, ObjectGuid /*guid*/, uint32 /*team*/) { }
         virtual void ModifyEndOfMatchHonorRewards(uint32 /*winner*/, uint32 /*team*/, uint32& /*winnerHonor*/, uint32& /*loserHonor*/) const { }
+        // Same hook for the copper payout: sees the amounts as they will be
+        // paid (arena multiplier already applied for arenas), before the
+        // 15-second minimum-duration gate.
+        virtual void ModifyEndOfMatchMoneyRewards(uint32 /*winner*/, uint32 /*team*/, uint32& /*winnerMoney*/, uint32& /*loserMoney*/) const { }
 
         // Player lists, those need to be accessible by inherited classes
         BattlegroundPlayerMap m_Players;

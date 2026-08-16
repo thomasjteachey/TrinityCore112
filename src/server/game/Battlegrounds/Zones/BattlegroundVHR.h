@@ -193,10 +193,13 @@ enum BG_VHR_Constants
     // Berserking. Speed is deliberately not in the roll.
     BG_VHR_GO_RECHARGE_BUFF = 300500,
 
-    // Scales the whole end-of-run honor payout. The curve in
-    // GetHonorRewardForRun compounds hard with depth, so this is the single
-    // knob for the mode's overall generosity rather than a per-wave tweak.
-    BG_VHR_HONOR_PERCENT = 50,
+    // Both end-of-run payouts share one shape: the matching arena-win payout,
+    // times the wave the run ended on, divided by this. Honor additionally
+    // compounds BG_VHR_HONOR_COMPOUND_PERCENT per wave (see
+    // GetHonorRewardForRun); gold does not. This is the single knob for the
+    // mode's overall generosity rather than a per-wave tweak.
+    BG_VHR_REWARD_DIVISOR = 2,
+    BG_VHR_HONOR_COMPOUND_PERCENT = 10,
 
     // Clearing a wave puts every casualty back on their feet at this fraction
     // of health and mana. Being brought back weakened is the cost of dying; the
@@ -422,6 +425,8 @@ private:
 
     uint32 GetHonorRewardForRun() const;
     void ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, uint32& winnerHonor, uint32& loserHonor) const override;
+    uint32 GetMoneyRewardForRun() const;
+    void ModifyEndOfMatchMoneyRewards(uint32 winner, uint32 team, uint32& winnerMoney, uint32& loserMoney) const override;
 
     uint32 _humanTeam;
     uint32 _enemyTeam;

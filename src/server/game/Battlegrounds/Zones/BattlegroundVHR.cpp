@@ -1306,12 +1306,13 @@ bool BattlegroundVHR::HandlePlayerUnderMap(Player* player)
     return true;
 }
 
-// Honor is the standard arena win payout, multiplied by the deepest wave the
-// party fully cleared, compounded ten percent per wave on top. Wiping on wave
-// one pays nothing: the multiplier is waves *cleared*, not waves reached.
+// Honor is the standard arena win payout, times the wave the run ended on,
+// compounded ten percent per wave on top, all halved. Same wave semantics as
+// the gold below: the wave *reached* - a party that dies on wave 7 is paid for
+// wave 7 - and nothing before the first wave (_waveNumber 0).
 uint32 BattlegroundVHR::GetHonorRewardForRun() const
 {
-    if (!_highestWaveCleared)
+    if (!_waveNumber)
         return 0;
 
     // Mirrors the arena branch of Battleground::EndBattleground so the base
@@ -1320,12 +1321,12 @@ uint32 BattlegroundVHR::GetHonorRewardForRun() const
     uint32 const arenaWinHonor = uint32((sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_WINNER)
         + sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP) * 3) * arenaMultiplier);
 
-    double const compounded = std::pow(1.10, double(_highestWaveCleared) - 1.0);
-    double const raw = double(arenaWinHonor) * double(_highestWaveCleared) * compounded;
+    double const compounded = std::pow(1.0 + double(BG_VHR_HONOR_COMPOUND_PERCENT) / 100.0, double(_waveNumber) - 1.0);
+    double const raw = double(arenaWinHonor) * double(_waveNumber) * compounded;
 
-    // Scaled down at the end rather than inside the curve, so the shape of the
+    // Divided at the end rather than inside the curve, so the shape of the
     // reward across waves is untouched and only its size moves.
-    return uint32(raw * double(BG_VHR_HONOR_PERCENT) / 100.0);
+    return uint32(std::lround(raw / double(BG_VHR_REWARD_DIVISOR)));
 }
 
 void BattlegroundVHR::ModifyEndOfMatchHonorRewards(uint32 /*winner*/, uint32 team, uint32& winnerHonor, uint32& loserHonor) const
@@ -1343,6 +1344,40 @@ void BattlegroundVHR::ModifyEndOfMatchHonorRewards(uint32 /*winner*/, uint32 tea
     uint32 const reward = GetHonorRewardForRun();
     winnerHonor = reward;
     loserHonor = reward;
+}
+
+// Gold is the arena win payout, times the wave the run ended on, halved. Wave
+// as reached, not cleared: a party that dies on wave 7 is paid for wave 7.
+// Before the first wave (_waveNumber 0) nothing is paid. Without this the hold
+// paid the flat battleground winner/loser gold on every run, wave 1 wipe or
+// not, which was far too much for what is a party-sized survival mode.
+uint32 BattlegroundVHR::GetMoneyRewardForRun() const
+{
+    if (!_waveNumber)
+        return 0;
+
+    // Mirrors the arena branch of Battleground::EndBattleground so the base
+    // tracks the same configuration the real arenas pay out on.
+    float const arenaMultiplier = sWorld->getFloatConfig(CONFIG_CENTURION_BG_ARENA_REWARD_MULTIPLIER);
+    double const arenaWinMoney = double(sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_MONEY_WINNER)) * double(arenaMultiplier);
+
+    return uint32(std::lround(arenaWinMoney * double(_waveNumber) / 2.0));
+}
+
+void BattlegroundVHR::ModifyEndOfMatchMoneyRewards(uint32 /*winner*/, uint32 team, uint32& winnerMoney, uint32& loserMoney) const
+{
+    // Same shape as the honor hook: only the party is paid, the same amount
+    // whether the run ended in a wipe or the clear, and the clones nothing.
+    if (team != _humanTeam)
+    {
+        winnerMoney = 0;
+        loserMoney = 0;
+        return;
+    }
+
+    uint32 const reward = GetMoneyRewardForRun();
+    winnerMoney = reward;
+    loserMoney = reward;
 }
 
 // Rewrite where leaving this battleground drops the party. The base exit path

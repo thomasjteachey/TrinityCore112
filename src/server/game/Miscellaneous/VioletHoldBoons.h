@@ -85,7 +85,7 @@ namespace VioletHoldBoons
         // Second batch (2026-08-16).
         Ricochet,       // damage has a chance to leap to a second enemy for half
         Overkill,       // unique: ALL excess killing-blow damage splashes nearby enemies
-        Reflection,     // % of melee damage taken thrown back
+        Reflection,     // % of damage taken (any kind) thrown back
         Vampire,        // % of damage dealt returned as health
         Phoenix,        // survive one killing blow at full hp/mana (unique per pick)
         Greed,          // RUN-WIDE: brokers show an extra option

@@ -962,6 +962,7 @@ void Battleground::EndBattleground(uint32 winner)
         }
 
         ModifyEndOfMatchHonorRewards(winner, team, winner_honor, loser_honor);
+        ModifyEndOfMatchMoneyRewards(winner, team, winner_money, loser_money);
 
         // Rewards
         // only grant rewards if battle has lasted 15 seconds

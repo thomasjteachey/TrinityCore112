@@ -84,7 +84,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::SpellCrit,    SPELL_BOON_SPELL_CRIT,   3, 100, MASK_CASTER,   5, "Boon of Insight",      "spell crit",                              "%" },
     { Boon::AttackSpeed,  SPELL_BOON_ATTACK_SPEED, 4, 255, MASK_MELEE,    6, "Boon of Haste",        "attack speed",                            "%" },
     { Boon::CastSpeed,    SPELL_BOON_CAST_SPEED,   4, 100, MASK_CASTER,   6, "Boon of Celerity",     "casting speed",                           "%" },
-    { Boon::MountSpeed,   SPELL_BOON_MOUNT_SPEED,  1,   1, MASK_ALL,     2, "Boon of the Outrider", "mounts summon 3 sec faster (unique)",     "" },
+    { Boon::MountSpeed,   SPELL_BOON_MOUNT_SPEED,  1,   1, MASK_ALL,     2, "Boon of the Outrider", "mounts summon instantly, even in combat and while moving (unique)", "" },
     { Boon::Cooldown,     SPELL_BOON_COOLDOWN,     5, 100, MASK_ALL,     4, "Boon of Alacrity",     "cooldown reduction",                      "%" },
     { Boon::Resistance,   SPELL_BOON_RESISTANCE,   5, 255, MASK_ALL,      6, "Boon of Warding",      "to all resistances",                      "" },
     { Boon::Level,        SPELL_BOON_LEVEL,        1, 100, MASK_ALL,     3, "Boon of Ascension",    "level, with its talent point (until you leave)", "" },
@@ -100,7 +100,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     // the taker is only the record of who bought them.
     { Boon::Ricochet,     SPELL_BOON_RICOCHET,     5,  50, MASK_ALL,      4, "Boon of Ricochet",     "chance for damage to ricochet to a nearby enemy for half", "%" },
     { Boon::Overkill,     SPELL_BOON_OVERKILL,     1,   1, MASK_ALL,      3, "Boon of Overkill",     "all overkill damage from your killing blows splashes enemies within 15 yd (unique)", "" },
-    { Boon::Reflection,   SPELL_BOON_REFLECTION,  10,  50, MASK_ALL,      5, "Boon of Reflection",   "of melee damage taken reflected",         "%" },
+    { Boon::Reflection,   SPELL_BOON_REFLECTION,  10,  50, MASK_ALL,      5, "Boon of Reflection",   "of damage taken reflected",               "%" },
     { Boon::Vampire,      SPELL_BOON_VAMPIRE,      3,  30, MASK_ALL,      4, "Boon of the Vampire",  "of damage dealt returned as health",      "%" },
     { Boon::Phoenix,      SPELL_BOON_PHOENIX,      1,   1, MASK_ALL,      2, "Boon of the Phoenix",  "survive one killing blow at full health and mana (unique)", "" },
     { Boon::Greed,        SPELL_BOON_GREED,        1,   3, MASK_ALL,      3, "Boon of Greed",        "extra option at every broker from now on (run-wide)",    "" },
