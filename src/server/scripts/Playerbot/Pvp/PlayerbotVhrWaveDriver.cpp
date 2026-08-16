@@ -80,6 +80,58 @@ std::vector<ObjectGuid> CollectBotWaveSources(uint32 partyMinLevel, uint32 party
     return strict.empty() ? loose : strict;
 }
 
+// Boon of Fellowship: one clone of a random level-appropriate managed bot per
+// pending request, on the HUMAN team, beside whoever asked. An empty bot pool
+// leaves the requests queued and comes back in a couple of seconds.
+void FulfilAllyRequests(BattlegroundVHR* bg)
+{
+    if (!bg->AreAllyRequestsDue())
+        return;
+
+    // Copy: NotifyAllySpawned edits the queue.
+    std::vector<VhrAllyRequest> const requests = bg->GetPendingAllyRequests();
+    TeamId const humanTeamIndex = Battleground::GetTeamIndexByTeamId(bg->GetHumanTeam());
+
+    for (VhrAllyRequest const& request : requests)
+    {
+        std::vector<ObjectGuid> bots = CollectBotWaveSources(request.partyMinLevel, request.partyMaxLevel);
+        Player* source = nullptr;
+        while (!bots.empty() && !source)
+        {
+            uint32 const idx = urand(0, uint32(bots.size()) - 1);
+            source = ObjectAccessor::FindPlayer(bots[idx]);
+            bots.erase(bots.begin() + idx);
+        }
+        if (!source)
+        {
+            TC_LOG_DEBUG("playerbot", "PlayerbotVhrWaveDriver: no eligible bot for a Fellowship ally in instance {}; retrying later.",
+                bg->GetInstanceID());
+            bg->DeferAllyRequests(2 * IN_MILLISECONDS);
+            return;
+        }
+
+        // The clone manager seats a clone (and its pet) at its team's start
+        // position; point that at the requester for the moment of creation
+        // and put it back, so a party member relogging into the run still
+        // lands where the run starts them.
+        Position const* previousStart = bg->GetTeamStartPosition(humanTeamIndex);
+        Position const restore = previousStart ? *previousStart : request.where;
+        bg->SetTeamStartPosition(humanTeamIndex, request.where);
+        Player* ally = playerbot::PlayerbotObcCloneManager::CreateCustomGameClone(source, bg, bg->GetHumanTeam(), "");
+        bg->SetTeamStartPosition(humanTeamIndex, restore);
+
+        if (!ally)
+        {
+            TC_LOG_WARN("playerbot", "PlayerbotVhrWaveDriver: failed to clone {} as a Fellowship ally for instance {}.",
+                source->GetName(), bg->GetInstanceID());
+            bg->DeferAllyRequests(2 * IN_MILLISECONDS);
+            return;
+        }
+
+        bg->NotifyAllySpawned(request.id, ally->GetGUID());
+    }
+}
+
 void FulfilWaveRequest(BattlegroundVHR* bg)
 {
     VhrWaveSpawnRequest const* request = bg->GetPendingWaveSpawnRequest();
@@ -87,10 +139,11 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
         return;
 
     // A pending request means the previous wave is fully dead (that is the
-    // only way a new wave begins), so every clone this instance still holds is
-    // a corpse. Take them down now rather than letting forty waves of bodies
-    // and their transient sessions pile up in the player roster.
-    playerbot::PlayerbotObcCloneManager::DestroyCustomGameClones(bg->GetInstanceID());
+    // only way a new wave begins), so every ENEMY clone this instance still
+    // holds is a corpse. Take them down now rather than letting forty waves of
+    // bodies and their transient sessions pile up in the player roster. The
+    // party's Fellowship allies are clones on the human team and stay.
+    playerbot::PlayerbotObcCloneManager::DestroyCustomGameClones(bg->GetInstanceID(), request->enemyTeam);
 
     // Copy what we need before spawning: the first successful clone mutates
     // the battleground's player roster, and AddPlayer paths may touch the
@@ -207,6 +260,7 @@ void PlayerbotVhrWaveDriver::OnWorldUpdate(uint32 /*diffMs*/)
         {
             case STATUS_IN_PROGRESS:
                 FulfilWaveRequest(vhr);
+                FulfilAllyRequests(vhr);
                 break;
             case STATUS_WAIT_LEAVE:
                 // The run is over; take the surviving clones down with it.

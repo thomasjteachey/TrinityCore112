@@ -3052,6 +3052,24 @@ void SpellMgr::LoadSpellInfoCustomAttributes()
         }
     }
 
+    // Violet Hold "Beastmaster's Blessing" (90287) rides on the pets at the
+    // owner's boon stack count and is re-applied by Unit::SetMinion on every
+    // summon; saving it to pet_aura would carry it out of the Hold on a
+    // dismissed or stabled pet.
+    if (SpellInfo* spellInfo = _GetSpellInfo(90287))
+        spellInfo->AttributesCu |= SPELL_ATTR0_CU_AURA_CANNOT_BE_SAVED;
+
+    // Alliance/Horde flag visuals (32609/32610) are used by the custom game
+    // lobbies and clone mannequins purely as a team-colour cosmetic. They are
+    // self-cast, non-passive auras, so by default they persist to
+    // character_aura - and the lobby only strips them in its OnPlayerLogout
+    // hook, which runs AFTER Player::SaveToDB. That let the visual survive to
+    // the DB and reappear on the next login/zone. They are transient by nature
+    // (a real flag is always dropped before logout), so never save them.
+    for (uint32 flagVisual : { 32609u, 32610u })
+        if (SpellInfo* spellInfo = _GetSpellInfo(flagVisual))
+            spellInfo->AttributesCu |= SPELL_ATTR0_CU_AURA_CANNOT_BE_SAVED;
+
     // add custom attribute to liquid auras
     for (LiquidTypeEntry const* liquid : sLiquidTypeStore)
     {

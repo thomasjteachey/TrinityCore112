@@ -6,6 +6,9 @@
 
 #include "Battleground.h"
 #include "BattlegroundVHR.h"
+#include "CellImpl.h"
+#include "GridNotifiers.h"
+#include "GridNotifiersImpl.h"
 #include "Map.h"
 #include "Player.h"
 #include "Random.h"
@@ -163,7 +166,8 @@ public:
             {
                 std::vector<Player const*> roster;
                 run->CollectHumanPlayers(roster);
-                _offers = RollOffers(roster);
+                // Boon of Greed widens every broker rolled after it.
+                _offers = RollOffers(roster, uint8(std::min<uint32>(OFFERS_PER_BROKER + run->GetBrokerBonusOffers(), 12)));
                 _rolled = true;
             }
             return _offers;
@@ -361,6 +365,174 @@ class spell_vhr_boon_cache : public AuraScript
     }
 };
 
+namespace
+{
+// Living hostile units within `radius` of `around` that `attacker` may hit,
+// excluding `around`. Same rule as the game-lib Overkill splash.
+std::vector<Unit*> HostilesAround(Unit* around, Unit* attacker, float radius)
+{
+    std::vector<Unit*> out;
+    if (!around || !attacker || !around->IsInWorld())
+        return out;
+
+    std::list<Unit*> found;
+    Trinity::AnyUnfriendlyUnitInObjectRangeCheck check(around, attacker, radius);
+    Trinity::UnitListSearcher<Trinity::AnyUnfriendlyUnitInObjectRangeCheck> searcher(around, found, check);
+    Cell::VisitAllObjects(around, searcher, radius);
+
+    for (Unit* unit : found)
+        if (unit != around && unit->IsAlive() && attacker->IsValidAttackTarget(unit))
+            out.push_back(unit);
+    return out;
+}
+
+// The proc-fired spells never feed the procs again (they carry
+// CANT_TRIGGER_PROC too; this is the belt to that brace).
+bool IsBoonTriggeredSpell(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return false;
+    switch (spellInfo->Id)
+    {
+        case SPELL_RICOCHET_DAMAGE:
+        case SPELL_OVERKILL_DAMAGE:
+        case SPELL_REFLECTION_DAMAGE:
+        case SPELL_VAMPIRE_HEAL:
+        case SPELL_BOON_EXTRA_ATTACK_SWING:
+            return true;
+        default:
+            return false;
+    }
+}
+
+uint32 ProcDamage(ProcEventInfo const& eventInfo)
+{
+    DamageInfo const* damageInfo = eventInfo.GetDamageInfo();
+    return damageInfo ? damageInfo->GetDamage() : 0;
+}
+}
+
+// 90288 Boon of Ricochet: stacks% chance for a damaging hit to leap to the
+// nearest other enemy within RICOCHET_RADIUS of the victim for half.
+class spell_vhr_boon_ricochet : public AuraScript
+{
+    PrepareAuraScript(spell_vhr_boon_ricochet);
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        if (IsBoonTriggeredSpell(eventInfo.GetSpellInfo()))
+            return false;
+        // The boons are death-persistent and procs run after Kill(): a hit
+        // that lands on a holder's corpse must not fire from it.
+        if (!GetTarget()->IsAlive())
+            return false;
+        if (!ProcDamage(eventInfo) || !eventInfo.GetProcTarget())
+            return false;
+        return roll_chance_i(GetStackAmount());
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        Unit* caster = GetTarget();
+        Unit* victim = eventInfo.GetProcTarget();
+        uint32 const damage = ProcDamage(eventInfo);
+        if (!caster || !victim || !damage)
+            return;
+
+        Unit* next = nullptr;
+        float best = 0.0f;
+        for (Unit* candidate : HostilesAround(victim, caster, RICOCHET_RADIUS))
+        {
+            float const dist = victim->GetExactDist2d(candidate);
+            if (!next || dist < best)
+            {
+                next = candidate;
+                best = dist;
+            }
+        }
+        if (!next)
+            return;
+
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        args.AddSpellBP0(int32(std::max<uint32>(1, damage / 2)));
+        caster->CastSpell(next, SPELL_RICOCHET_DAMAGE, args);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(spell_vhr_boon_ricochet::CheckProc);
+        OnEffectProc += AuraEffectProcFn(spell_vhr_boon_ricochet::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 90290 Boon of Reflection: stacks% of melee damage taken thrown back.
+class spell_vhr_boon_reflection : public AuraScript
+{
+    PrepareAuraScript(spell_vhr_boon_reflection);
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        if (IsBoonTriggeredSpell(eventInfo.GetSpellInfo()))
+            return false;
+        Unit* attacker = eventInfo.GetActor();
+        return GetTarget()->IsAlive() && attacker && attacker != GetTarget() && attacker->IsAlive() && ProcDamage(eventInfo);
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        Unit* attacker = eventInfo.GetActor();
+        uint32 const reflected = CalculatePct(ProcDamage(eventInfo), uint32(GetStackAmount()));
+        if (!attacker || !reflected)
+            return;
+
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        args.AddSpellBP0(int32(reflected));
+        GetTarget()->CastSpell(attacker, SPELL_REFLECTION_DAMAGE, args);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(spell_vhr_boon_reflection::CheckProc);
+        OnEffectProc += AuraEffectProcFn(spell_vhr_boon_reflection::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 90291 Boon of the Vampire: stacks% of damage dealt returned as health.
+class spell_vhr_boon_vampire : public AuraScript
+{
+    PrepareAuraScript(spell_vhr_boon_vampire);
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        if (IsBoonTriggeredSpell(eventInfo.GetSpellInfo()))
+            return false;
+        return GetTarget()->IsAlive() && ProcDamage(eventInfo) > 0;
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        uint32 const heal = CalculatePct(ProcDamage(eventInfo), uint32(GetStackAmount()));
+        if (!heal)
+            return;
+
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        args.AddSpellBP0(int32(heal));
+        GetTarget()->CastSpell(GetTarget(), SPELL_VAMPIRE_HEAL, args);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(spell_vhr_boon_vampire::CheckProc);
+        OnEffectProc += AuraEffectProcFn(spell_vhr_boon_vampire::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
 void AddSC_violet_hold_boons()
 {
     new npc_violet_hold_boon_broker();
@@ -368,4 +540,7 @@ void AddSC_violet_hold_boons()
     RegisterSpellScript(spell_vhr_boon_echoes);
     RegisterSpellScript(spell_vhr_boon_ascension);
     RegisterSpellScript(spell_vhr_boon_cache);
+    RegisterSpellScript(spell_vhr_boon_ricochet);
+    RegisterSpellScript(spell_vhr_boon_reflection);
+    RegisterSpellScript(spell_vhr_boon_vampire);
 }

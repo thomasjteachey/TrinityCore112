@@ -1445,13 +1445,13 @@ bool PlayerbotObcCloneManager::QueueCustomGameClone(ObjectGuid sourceGuid, World
     return true;
 }
 
-void PlayerbotObcCloneManager::DestroyCustomGameClones(uint32 battlegroundInstanceId)
+void PlayerbotObcCloneManager::DestroyCustomGameClones(uint32 battlegroundInstanceId, uint32 team)
 {
     std::vector<ObjectGuid> cloneGuids;
     {
         std::lock_guard<std::mutex> lock(g_ObcCloneLock);
         for (auto const& [cloneGuid, record] : g_CustomGameClones)
-            if (record.battlegroundInstanceId == battlegroundInstanceId)
+            if (record.battlegroundInstanceId == battlegroundInstanceId && (!team || record.team == team))
                 cloneGuids.push_back(cloneGuid);
     }
 

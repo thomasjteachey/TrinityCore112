@@ -2721,14 +2721,17 @@ void AuraEffect::HandleAuraMounted(AuraApplication const* aurApp, uint8 mode, bo
                 creatureEntry = 15665;
         }
 
-        // Beast Rider: ride the active pet's own model. Without a pet the
-        // spell never reaches this point (its script reroutes the cast to
-        // Swift White Steed).
+        // Beast Rider: ride the living pet's own model. The pet is not
+        // necessarily spawned here - when the aura is restored at login the
+        // pet is still temporarily unsummoned because we are mounted - so the
+        // lookup also covers the current pet in the stable. Without a living
+        // pet the cast is normally rerouted to Swift White Steed by the spell
+        // script; if the aura is applied anyway (login with a dead pet) the
+        // steed model below is used.
         uint32 petModelDisplayId = 0;
         if (GetId() == SpellHunterBeastRider)
             if (Player* player = target->ToPlayer())
-                if (Pet* pet = player->GetPet())
-                    petModelDisplayId = pet->GetNativeDisplayId();
+                petModelDisplayId = player->GetLivingPetDisplayId();
 
         if (CreatureTemplate const* creatureInfo = sObjectMgr->GetCreatureTemplate(creatureEntry))
         {

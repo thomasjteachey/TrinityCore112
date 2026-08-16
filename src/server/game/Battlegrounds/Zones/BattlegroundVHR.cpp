@@ -1,6 +1,7 @@
 #include "BattlegroundVHR.h"
 
 #include "BattlegroundMgr.h"
+#include "CharacterCache.h"
 #include "Creature.h"
 #include "DBCStores.h"
 #include "GameObject.h"
@@ -166,6 +167,10 @@ BattlegroundVHR::BattlegroundVHR()
     _lastCountdownSecond = 0;
     _stateCheckTimerMs = 0;
     _hasPendingRequest = false;
+    _brokerBonusOffers = 0;
+    _bonusBrokersPerWave = 0;
+    _nextAllyRequestId = 0;
+    _allyRetryMs = 0;
 }
 
 void BattlegroundVHR::AddPlayer(Player* player)
@@ -234,6 +239,13 @@ void BattlegroundVHR::Reset()
     _eliminated.clear();
     _pendingRequest = VhrWaveSpawnRequest();
     _hasPendingRequest = false;
+    _brokerBonusOffers = 0;
+    _bonusBrokersPerWave = 0;
+    _allyRequests.clear();
+    _nextAllyRequestId = 0;
+    _allyRetryMs = 0;
+    _allies.clear();
+    _menagerie.clear();
 }
 
 bool BattlegroundVHR::SetupBattleground()
@@ -631,6 +643,11 @@ void BattlegroundVHR::OpenWaveCell()
         DoorOpen(cellIndex);
 
     ReleaseWaveFromPreparation();
+
+    // The Menagerie walks out with the wave: last wave's guardians go, this
+    // wave's arrive beside their owners.
+    DespawnMenagerie();
+    SummonMenagerie();
 }
 
 void BattlegroundVHR::CompleteWave()
@@ -654,8 +671,9 @@ void BattlegroundVHR::CompleteWave()
 bool BattlegroundVHR::CanPickUpPowerup(Player const* player) const
 {
     // The clones are Players on the enemy team and walk right over the drop on
-    // their way in, so without this the wave eats the party's reward.
-    return player && player->GetBGTeam() == _humanTeam;
+    // their way in, so without this the wave eats the party's reward. A
+    // Fellowship ally is on the party's side but the runes are the party's.
+    return player && player->GetBGTeam() == _humanTeam && !IsAlly(player->GetGUID());
 }
 
 // Find a spot for a dropped powerup. This does not fail: the party earned the
@@ -844,11 +862,13 @@ void BattlegroundVHR::SpawnWaveRewardBuffs()
         placed.push_back(spot);
     }
 
-    // And a boon broker PER drop, on top of the runes, never instead of one.
-    // He waits for a taker (no timer), so a run that never talks to him fills
-    // his slots; once all BG_VHR_CREATURE_BOON_BROKER_MAX are standing no
-    // more come until one is used.
-    for (uint32 i = 0; i < wanted && brokerSlot < BG_VHR_CREATURE_BOON_BROKER_MAX; ++i)
+    // And a boon broker PER drop, on top of the runes, never instead of one -
+    // plus the Hoarder's extra ones. He waits for a taker (no timer), so a run
+    // that never talks to him fills his slots; once all
+    // BG_VHR_CREATURE_BOON_BROKER_MAX are standing no more come until one is
+    // used.
+    uint32 const brokersWanted = wanted + _bonusBrokersPerWave;
+    for (uint32 i = 0; i < brokersWanted && brokerSlot < BG_VHR_CREATURE_BOON_BROKER_MAX; ++i)
     {
         Position spot;
         if (!PickBuffPosition(placed, spot))
@@ -940,10 +960,105 @@ void BattlegroundVHR::ConsumeBoonBroker(ObjectGuid brokerGuid)
     }
 }
 
+void BattlegroundVHR::AddBrokerBonusOffers(uint8 count)
+{
+    _brokerBonusOffers = uint8(std::min<uint32>(uint32(_brokerBonusOffers) + count, 250));
+}
+
+void BattlegroundVHR::AddBonusBrokersPerWave(uint8 count)
+{
+    _bonusBrokersPerWave = uint8(std::min<uint32>(uint32(_bonusBrokersPerWave) + count, BG_VHR_CREATURE_BOON_BROKER_MAX));
+}
+
+void BattlegroundVHR::RequestAlly(Player const* requester)
+{
+    if (!requester)
+        return;
+
+    VhrAllyRequest request;
+    request.id = ++_nextAllyRequestId;
+    request.requester = requester->GetGUID();
+    request.where = requester->GetPosition();
+
+    // The party's level band, for a fair pick - the same rule BotSourced waves
+    // use for their opponents.
+    for (ObjectGuid guid : GetHumanRoster(true))
+        if (Player const* member = ObjectAccessor::FindPlayer(guid))
+        {
+            uint32 const level = member->GetLevel();
+            if (!request.partyMinLevel || level < request.partyMinLevel)
+                request.partyMinLevel = level;
+            if (level > request.partyMaxLevel)
+                request.partyMaxLevel = level;
+        }
+    if (!request.partyMinLevel)
+        request.partyMinLevel = request.partyMaxLevel = requester->GetLevel();
+
+    _allyRequests.push_back(request);
+    _allyRetryMs = 0;
+}
+
+void BattlegroundVHR::NotifyAllySpawned(uint32 requestId, ObjectGuid allyGuid)
+{
+    for (auto itr = _allyRequests.begin(); itr != _allyRequests.end(); ++itr)
+    {
+        if (itr->id != requestId)
+            continue;
+
+        _allyRequests.erase(itr);
+        break;
+    }
+
+    if (!allyGuid)
+        return;
+
+    _allies.insert(allyGuid);
+    _eliminated.erase(allyGuid);
+
+    // The clone's Player name is an internal placeholder; the name everyone
+    // sees over its head is the one registered in the character cache.
+    std::string name;
+    if (!sCharacterCache->GetCharacterNameByGuid(allyGuid, name))
+        if (Player const* ally = ObjectAccessor::FindPlayer(allyGuid))
+            name = ally->GetName();
+    if (!name.empty())
+        PSendMessageToAll(BG_VHR_STRING_ALLY_JOINED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, name.c_str());
+
+    UpdateScoreWorldStates();
+}
+
+void BattlegroundVHR::SummonMenagerie()
+{
+    for (ObjectGuid guid : GetHumanRoster(true))
+    {
+        Player* owner = ObjectAccessor::FindPlayer(guid);
+        if (!owner)
+            continue;
+
+        uint8 const count = VioletHoldBoons::GetStacks(owner, VioletHoldBoons::Boon::Menagerie);
+        if (count)
+            VioletHoldBoons::SummonMenagerie(owner, count, _menagerie);
+    }
+}
+
+void BattlegroundVHR::DespawnMenagerie()
+{
+    Map* map = FindBgMap();
+    if (map)
+        for (ObjectGuid guid : _menagerie)
+            if (Creature* guardian = map->GetCreature(guid))
+                guardian->DespawnOrUnsummon();
+
+    _menagerie.clear();
+}
+
 void BattlegroundVHR::PostUpdateImpl(uint32 diff)
 {
     if (GetStatus() != STATUS_IN_PROGRESS)
         return;
+
+    if (_allyRetryMs)
+        _allyRetryMs = _allyRetryMs <= diff ? 0 : _allyRetryMs - diff;
 
     // Dropped powerups are on a wall clock, not a wave clock: an uncollected
     // reward is taken back whether or not the next wave has started.
@@ -1015,6 +1130,11 @@ uint32 BattlegroundVHR::CountAliveHumans() const
             continue;
 
         if (_eliminated.find(itr.first) != _eliminated.end())
+            continue;
+
+        // A Fellowship ally holds the line but is not the party: it neither
+        // keeps a wiped run alive nor shows in the players-remaining count.
+        if (IsAlly(itr.first))
             continue;
 
         ++alive;
@@ -1104,7 +1224,29 @@ void BattlegroundVHR::ResurrectWaveCasualties()
         _eliminated.erase(guid);
     }
 
+    // Fellowship allies are transient sessions and not on the human roster,
+    // but they come back with the party all the same.
+    ResurrectAllies(restore);
+
     UpdateScoreWorldStates();
+}
+
+void BattlegroundVHR::ResurrectAllies(float restore)
+{
+    for (ObjectGuid guid : _allies)
+    {
+        Player* ally = ObjectAccessor::FindPlayer(guid);
+        if (!ally || !ally->IsInWorld() || ally->IsAlive())
+            continue;
+
+        ally->ResurrectPlayer(restore);
+        ally->SpawnCorpseBones(false);
+        // Back into the room, on their feet, next to the middle: a bot that
+        // released nowhere is still standing on the spot it died.
+        ally->NearTeleportTo(kChamberCentre.GetPositionX(), kChamberCentre.GetPositionY(),
+            kChamberCentre.GetPositionZ(), kChamberCentre.GetOrientation());
+        _eliminated.erase(guid);
+    }
 }
 
 void BattlegroundVHR::HandlePlayerResurrect(Player* player)
@@ -1226,6 +1368,7 @@ void BattlegroundVHR::TeleportSurvivorsToGurubashi()
 void BattlegroundVHR::EndBattleground(uint32 winner)
 {
     UpdateScoreWorldStates();
+    DespawnMenagerie();
 
     // Only a wipe sends the party to Gurubashi. Surviving all forty leaves the
     // normal entry point alone, so a winning party returns where they queued.

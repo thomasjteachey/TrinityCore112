@@ -72,7 +72,10 @@ enum BG_VHR_TrinityStrings
     // "Next wave in %u..." - formatted per second and sent as a raid-boss
     // emote, which the client draws in the centre of the screen. See
     // sql/custom/world/2026_08_06_04_world_violet_hold_countdown_text.sql.
-    BG_VHR_STRING_NEXT_WAVE_COUNTDOWN = 20100
+    BG_VHR_STRING_NEXT_WAVE_COUNTDOWN = 20100,
+    // "%s answers the call and joins your side." - Boon of Fellowship ally
+    // arrival. See sql/custom/world/2026_08_16_01_world_violet_hold_boons2.sql.
+    BG_VHR_STRING_ALLY_JOINED = 20102
 };
 
 enum BG_VHR_Objects
@@ -110,9 +113,11 @@ enum BG_VHR_Creatures
     // Several can therefore be up at once, so he gets his own slots rather
     // than sharing the per-drop object slots. When every slot is occupied no
     // further broker comes until one is used.
+    // 16: four runes' worth of brokers per wave plus the Hoarder's extra,
+    // with room for a couple of waves to go untouched before it fills.
     BG_VHR_CREATURE_BOON_BROKER_1  = 0,
-    BG_VHR_CREATURE_BOON_BROKER_MAX = 8,
-    BG_VHR_CREATURE_MAX            = 8
+    BG_VHR_CREATURE_BOON_BROKER_MAX = 16,
+    BG_VHR_CREATURE_MAX            = 16
 };
 
 enum BG_VHR_Constants
@@ -247,6 +252,22 @@ struct VhrWaveSpawnRequest
     std::vector<uint8> diminishedStacks;
 };
 
+// Boon of Fellowship: the party asked for a bot ally. The battleground cannot
+// see the bot population, so it publishes the request and the script-side
+// driver fulfils it - one clone of a random level-appropriate managed bot,
+// created on the HUMAN team next to whoever asked, and reported back with
+// NotifyAllySpawned. Allies live for the rest of the run: not torn down with
+// the waves, resurrected with the party when a wave falls, never counted as
+// party members (wave size, wipe check, broker roster, rune pickup).
+struct VhrAllyRequest
+{
+    uint32 id = 0;
+    ObjectGuid requester;
+    Position where;
+    uint32 partyMinLevel = 0;
+    uint32 partyMaxLevel = 0;
+};
+
 struct BattlegroundVHRScore final : public BattlegroundScore
 {
     explicit BattlegroundVHRScore(ObjectGuid playerGuid, uint32 scoreboardTeamMarker = 0)
@@ -318,6 +339,27 @@ public:
     uint32 GetWaveNumber() const { return _waveNumber; }
     bool IsWavePreparing() const { return _waveState == WaveState::Preparing; }
 
+    // --- run-wide boons ----------------------------------------------------
+    // Greed: every broker rolled from now on shows this many extra options.
+    uint8 GetBrokerBonusOffers() const { return _brokerBonusOffers; }
+    void AddBrokerBonusOffers(uint8 count);
+    // Hoarder: this many brokers more than runes after every wave from now on.
+    uint8 GetBonusBrokersPerWave() const { return _bonusBrokersPerWave; }
+    void AddBonusBrokersPerWave(uint8 count);
+
+    // Fellowship. RequestAlly queues one; the driver polls the queue, and on
+    // success calls NotifyAllySpawned. A request that cannot be met right now
+    // (no eligible bot online) is left in the queue and retried; DeferAllyRequests
+    // is how the driver spaces those retries.
+    void RequestAlly(Player const* requester);
+    std::vector<VhrAllyRequest> const& GetPendingAllyRequests() const { return _allyRequests; }
+    uint32 GetPendingAllyRequestCount() const { return uint32(_allyRequests.size()); }
+    bool AreAllyRequestsDue() const { return !_allyRequests.empty() && !_allyRetryMs; }
+    void DeferAllyRequests(uint32 ms) { _allyRetryMs = ms; }
+    void NotifyAllySpawned(uint32 requestId, ObjectGuid allyGuid);
+    uint32 GetAllyCount() const { return uint32(_allies.size()); }
+    bool IsAlly(ObjectGuid guid) const { return _allies.find(guid) != _allies.end(); }
+
 private:
     enum class WaveState : uint8
     {
@@ -354,6 +396,13 @@ private:
     // Diminished stacks for the wave's partial clone, 0 when the wave is made
     // entirely of full-strength clones (every fourth wave).
     static uint8 GetPartialCloneStacks(uint32 wave);
+
+    // Menagerie: summon each holder's guardians as the cells open, take the
+    // previous wave's down first (and at the end of the run).
+    void SummonMenagerie();
+    void DespawnMenagerie();
+    // Everyone alive who is not a real party member and needs no rez.
+    void ResurrectAllies(float restore);
 
     // Reward powerups, dropped when a wave is cleared and taken back after
     // BG_VHR_BUFF_LIFETIME_MS.
@@ -407,6 +456,16 @@ private:
 
     VhrWaveSpawnRequest _pendingRequest;
     bool _hasPendingRequest;
+
+    // Run-wide boon state (see the accessors above).
+    uint8 _brokerBonusOffers;
+    uint8 _bonusBrokersPerWave;
+    std::vector<VhrAllyRequest> _allyRequests;
+    uint32 _nextAllyRequestId;
+    uint32 _allyRetryMs;
+    GuidSet _allies;
+    // Menagerie guardians alive for the current wave.
+    std::vector<ObjectGuid> _menagerie;
 };
 
 #endif

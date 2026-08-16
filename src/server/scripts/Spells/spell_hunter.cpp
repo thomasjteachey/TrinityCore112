@@ -1851,10 +1851,12 @@ class spell_hun_beast_rider : public SpellScript
     SpellCastResult CheckCast()
     {
         Player* player = GetCaster()->ToPlayer();
-        if (!player || player->GetPet())
+        // A living pet that is only temporarily unsummoned (we are already
+        // mounted) still counts: HandleAuraMounted rides its stabled display id.
+        if (!player || player->GetLivingPetDisplayId())
             return SPELL_CAST_OK;
 
-        // No active pet: summon the trusty white steed instead. The cast is
+        // No living pet: summon the trusty white steed instead. The cast is
         // deferred through the event queue because we are still inside this
         // spell's own cast pipeline here.
         player->m_Events.AddEventAtOffset([player]()

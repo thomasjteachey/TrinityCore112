@@ -5,7 +5,15 @@
 #include "VioletHoldBoons.h"
 
 #include "Battleground.h"
+#include "BattlegroundVHR.h"
+#include "CellImpl.h"
 #include "Containers.h"
+#include "GridNotifiers.h"
+#include "GridNotifiersImpl.h"
+#include "Map.h"
+#include "PetAI.h"
+#include "TemporarySummon.h"
+#include "WorldSession.h"
 #include "DBCStores.h"
 #include "Errors.h"
 #include "Item.h"
@@ -44,6 +52,10 @@ constexpr uint32 MASK_MANA   = MASK_CASTER | ClassBit(CLASS_HUNTER);
 constexpr uint32 MASK_RAGE   = ClassBit(CLASS_WARRIOR) | ClassBit(CLASS_DRUID);
 constexpr uint32 MASK_ENERGY = ClassBit(CLASS_ROGUE) | ClassBit(CLASS_DRUID);
 
+// Classes that ever field a pet or guardian on this realm (no death knights).
+constexpr uint32 MASK_PETS   = ClassBit(CLASS_HUNTER) | ClassBit(CLASS_WARLOCK) | ClassBit(CLASS_MAGE)
+                             | ClassBit(CLASS_PRIEST) | ClassBit(CLASS_SHAMAN) | ClassBit(CLASS_DRUID);
+
 // Order matches enum Boon. maxStacks MUST match the spell's StackAmount in
 // Spell.dbc - the DBC is what Aura::ModStackAmount clamps against; the value
 // here only drives the "cap" readout and the offer filter.
@@ -52,21 +64,21 @@ constexpr uint32 MASK_ENERGY = ClassBit(CLASS_ROGUE) | ClassBit(CLASS_DRUID);
 // resist point 230 per school): the cheaper a pick is in that currency, the
 // more often it rolls. So +5% stats sit at 10, +3% crit / damage at 5, the
 // run-defining ones (Echoes, Alacrity, Ascension) lower still, the pure fluff
-// (Outrider) at 2. Class spells roll at CLASS_SPELL_WEIGHT (4), legendaries at 2.
+// (Outrider) at 2. Class spells roll at CLASS_SPELL_WEIGHT (2), legendaries at 2.
 BoonInfo const kBoons[uint8(Boon::Max)] =
 {
     { Boon::Speed,        SPELL_BOON_SPEED,        8, 255, MASK_ALL,    10, "Boon of Swiftness",    "movement speed",                          "%" },
     { Boon::Damage,       SPELL_BOON_DAMAGE,       3, 255, MASK_ALL,      5, "Boon of Might",        "damage done",                             "%" },
     { Boon::DamageTaken,  SPELL_BOON_DAMAGE_TAKEN, 3,  50, MASK_ALL,     8, "Boon of Fortitude",    "less damage taken",                       "%" },
-    { Boon::CcDuration,   SPELL_BOON_CC_DURATION, 15,  90, MASK_ALL,     7, "Boon of Resolve",      "shorter crowd control on you",            "%" },
+    { Boon::CcDuration,   SPELL_BOON_CC_DURATION, 15,  90, MASK_ALL,     7, "Boon of Resolve",      "shorter crowd control and interrupt lockouts on you", "%" },
     { Boon::ManaCost,     SPELL_BOON_MANA_COST,   10, 100, MASK_MANA,    7, "Boon of Clarity",      "cheaper mana costs",                      "%" },
     { Boon::RageCost,     SPELL_BOON_RAGE_COST,   10,  75, MASK_RAGE,    7, "Boon of Fury",         "cheaper rage costs",                      "%" },
     { Boon::EnergyCost,   SPELL_BOON_ENERGY_COST, 10,  75, MASK_ENERGY,  7, "Boon of Finesse",      "cheaper energy costs",                    "%" },
     { Boon::Stamina,      SPELL_BOON_STAMINA,      5, 255, MASK_ALL,     10, "Boon of Vitality",     "Stamina",                                 "%" },
     { Boon::ExtraAttack,  SPELL_BOON_EXTRA_ATTACK, 3, 100, MASK_MELEE,   6, "Boon of Flurry",       "chance for attacks to swing again",       "%" },
     { Boon::Doublecast,   SPELL_BOON_DOUBLECAST,   3, 100, MASK_CASTER,  5, "Boon of Echoes",       "chance for damage/heal spells to double", "%" },
-    { Boon::Crit,         SPELL_BOON_CRIT,         3, 255, MASK_MELEE,    5, "Boon of Precision",    "melee and ranged crit",                   "%" },
-    { Boon::SpellCrit,    SPELL_BOON_SPELL_CRIT,   3, 255, MASK_CASTER,   5, "Boon of Insight",      "spell crit",                              "%" },
+    { Boon::Crit,         SPELL_BOON_CRIT,         3, 100, MASK_MELEE,    5, "Boon of Precision",    "melee and ranged crit",                   "%" },
+    { Boon::SpellCrit,    SPELL_BOON_SPELL_CRIT,   3, 100, MASK_CASTER,   5, "Boon of Insight",      "spell crit",                              "%" },
     { Boon::AttackSpeed,  SPELL_BOON_ATTACK_SPEED, 4, 255, MASK_MELEE,    6, "Boon of Haste",        "attack speed",                            "%" },
     { Boon::CastSpeed,    SPELL_BOON_CAST_SPEED,   4, 100, MASK_CASTER,   6, "Boon of Celerity",     "casting speed",                           "%" },
     { Boon::MountSpeed,   SPELL_BOON_MOUNT_SPEED,  1,   1, MASK_ALL,     2, "Boon of the Outrider", "mounts summon 3 sec faster (unique)",     "" },
@@ -78,7 +90,21 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Intellect,    SPELL_BOON_INTELLECT,    5, 255, MASK_ALL,     10, "Boon of Wit",          "Intellect",                               "%" },
     { Boon::Spirit,       SPELL_BOON_SPIRIT,       5, 255, MASK_ALL,     10, "Boon of Soul",         "Spirit",                                  "%" },
     { Boon::EnergyRegen,  SPELL_BOON_ENERGY_REGEN, 20, 100, MASK_ENERGY,  7, "Boon of Vigor",        "energy regeneration",                     "%" },
-    { Boon::RageGeneration, SPELL_BOON_RAGE_GEN,   20, 100, MASK_RAGE,    7, "Boon of Wrath",        "rage generation",                         "%" }
+    { Boon::RageGeneration, SPELL_BOON_RAGE_GEN,   20, 100, MASK_RAGE,    7, "Boon of Wrath",        "rage generation",                         "%" },
+
+    // Second batch. The run-wide ones (Greed, Hoarder, Fellowship) count and
+    // cap against the RUN, not the taker - see CanTake/GetStacks; their aura on
+    // the taker is only the record of who bought them.
+    { Boon::Ricochet,     SPELL_BOON_RICOCHET,     5,  50, MASK_ALL,      4, "Boon of Ricochet",     "chance for damage to ricochet to a nearby enemy for half", "%" },
+    { Boon::Overkill,     SPELL_BOON_OVERKILL,    25, 100, MASK_ALL,      4, "Boon of Overkill",     "of overkill damage splashes to enemies within 8 yd",     "%" },
+    { Boon::Reflection,   SPELL_BOON_REFLECTION,  10,  50, MASK_ALL,      5, "Boon of Reflection",   "of melee damage taken reflected",         "%" },
+    { Boon::Vampire,      SPELL_BOON_VAMPIRE,      3,  30, MASK_ALL,      4, "Boon of the Vampire",  "of damage dealt returned as health",      "%" },
+    { Boon::Phoenix,      SPELL_BOON_PHOENIX,      1,   1, MASK_ALL,      2, "Boon of the Phoenix",  "survive one killing blow at 30% health and mana (unique)", "" },
+    { Boon::Greed,        SPELL_BOON_GREED,        1,   3, MASK_ALL,      3, "Boon of Greed",        "extra option at every broker from now on (run-wide)",    "" },
+    { Boon::Hoarder,      SPELL_BOON_HOARDER,      1,   1, MASK_ALL,      2, "Boon of the Hoarder",  "extra broker after every wave from now on (run-wide, unique)", "" },
+    { Boon::Beastmaster,  SPELL_BOON_BEASTMASTER, 10, 100, MASK_PETS,     5, "Boon of the Beastmaster", "pet and guardian damage and health",  "%" },
+    { Boon::Menagerie,    SPELL_BOON_MENAGERIE,    1,   3, MASK_ALL,      4, "Boon of the Menagerie", "random guardian fights beside you each wave", "" },
+    { Boon::Fellowship,   SPELL_BOON_FELLOWSHIP,   1,   3, MASK_ALL,      3, "Boon of Fellowship",   "a random champion joins your side for the rest of the run (run-wide)", "" }
 };
 
 // Three per class. spellId is the FIRST rank where a chain exists
@@ -140,10 +166,16 @@ ItemGrantInfo const kItemGrants[ITEM_GRANT_COUNT] =
 // Both weapons come with Crusader on them (SpellItemEnchantment 1900).
 constexpr uint32 ENCHANT_CRUSADER = 1900;
 
-// Mechanics that count as crowd control for Boon of Resolve. Slows, dazes,
-// disarms and interrupt lockouts are deliberately left out.
+// Mechanics that count as crowd control for Boon of Resolve. Slows, dazes and
+// disarms are deliberately left out. Interrupt lockouts ARE in: Kick /
+// Pummel / Counterspell / Spell Lock / Mind Freeze carry MECHANIC_INTERRUPT
+// (on the spell or the interrupt effect) and Spell::EffectInterruptCast runs
+// the lockout duration through ModSpellDuration with that effect's mask, so
+// the same hook shortens the school lock (SpellHistory::LockSpellSchool tells
+// the client the exact server duration - nothing to sync).
 constexpr uint32 CC_MECHANIC_MASK =
       (1 << MECHANIC_CHARM)
+    | (1 << MECHANIC_INTERRUPT)
     | (1 << MECHANIC_DISORIENTED)
     | (1 << MECHANIC_FEAR)
     | (1 << MECHANIC_GRIP)
@@ -159,6 +191,47 @@ constexpr uint32 CC_MECHANIC_MASK =
     | (1 << MECHANIC_TURN)
     | (1 << MECHANIC_HORROR)
     | (1 << MECHANIC_SAPPED);
+
+// The Violet Hold run a player is standing in, or nullptr.
+BattlegroundVHR* GetRunOf(Player const* player)
+{
+    if (!player)
+        return nullptr;
+    Battleground* bg = player->GetBattleground();
+    if (!bg || bg->GetTypeID() != BATTLEGROUND_VHR)
+        return nullptr;
+    return static_cast<BattlegroundVHR*>(bg);
+}
+
+// Run-wide boons: how much of it the RUN already holds (what the [x/cap]
+// readout and the cap check use). -1 for boons that are per player.
+int32 RunHeld(Player const* player, Boon boon)
+{
+    switch (boon)
+    {
+        case Boon::Greed:
+        case Boon::Hoarder:
+        case Boon::Fellowship:
+            break;
+        default:
+            return -1;
+    }
+
+    BattlegroundVHR const* run = GetRunOf(player);
+    if (!run)
+        return 0;
+
+    switch (boon)
+    {
+        case Boon::Greed:      return int32(run->GetBrokerBonusOffers());
+        case Boon::Hoarder:    return int32(run->GetBonusBrokersPerWave());
+        // Spawned allies plus the requests still with the driver, so a pick
+        // already promised is not offered twice and the [x/cap] readout says
+        // the same thing the cap check does.
+        case Boon::Fellowship: return int32(run->GetAllyCount() + run->GetPendingAllyRequestCount());
+        default:               return 0;
+    }
+}
 
 int32 AmountOf(Unit const* unit, uint32 spellId, int32 cap)
 {
@@ -414,6 +487,7 @@ bool IsBoonSpell(uint32 spellId)
     return (spellId >= SPELL_BOON_FIRST && spellId <= SPELL_BOON_LAST)
         || (spellId >= SPELL_BOON_EXTRA_FIRST && spellId <= SPELL_BOON_EXTRA_LAST)
         || (spellId >= SPELL_BOON_COOLDOWN_CLASS_FIRST && spellId <= SPELL_BOON_COOLDOWN_CLASS_LAST)
+        || (spellId >= SPELL_BOON_BATCH2_FIRST && spellId <= SPELL_BOON_BATCH2_LAST)
         || spellId == SPELL_KNOWLEDGE_MARKER
         || spellId == SPELL_BOON_EXTRA_ATTACK_SWING;
 }
@@ -453,6 +527,10 @@ uint8 GetStacks(Player const* player, Boon boon)
     if (!player)
         return 0;
 
+    // Run-wide boons read the run, not the taker's aura.
+    if (int32 held = RunHeld(player, boon); held >= 0)
+        return uint8(std::min<int32>(held, 255));
+
     if (Aura const* aura = player->GetAura(GetBoonSpellFor(boon, player->GetClass())))
         return aura->GetStackAmount();
     return 0;
@@ -488,6 +566,12 @@ PickResult CanTake(Player const* player, Offer offer)
 
         if (info.boon == Boon::Level)
             return player->GetLevel() < LEVEL_BOON_CEILING ? PickResult::Ok : PickResult::LevelCeiling;
+
+        // Run-wide boons live on the battleground; without one there is nothing
+        // to apply them to (never the case for a broker offer, but CanTake is
+        // public).
+        if (RunHeld(player, info.boon) >= 0 && !GetRunOf(player))
+            return PickResult::Failed;
 
         return GetStacks(player, info.boon) < info.maxStacks ? PickResult::Ok : PickResult::AtCap;
     }
@@ -537,7 +621,7 @@ uint32 GetOfferWeight(Offer const& offer)
     return 0;
 }
 
-std::vector<Offer> RollOffers(std::vector<Player const*> const& roster)
+std::vector<Offer> RollOffers(std::vector<Player const*> const& roster, uint8 count)
 {
     // "Only rolls when it makes sense": something is in the pool while at
     // least one person on the team could take it. Two hunters and one who
@@ -575,7 +659,7 @@ std::vector<Offer> RollOffers(std::vector<Player const*> const& roster)
     // Weighted draw without replacement: each pick's odds are its weight over
     // the weight still in the pool.
     std::vector<Offer> picked;
-    while (picked.size() < OFFERS_PER_BROKER && !pool.empty())
+    while (picked.size() < count && !pool.empty())
     {
         uint32 total = 0;
         for (Offer const& offer : pool)
@@ -696,6 +780,29 @@ PickResult Take(Player* player, Offer offer)
     else
         aura->ModStackAmount(info.grantStacks);
 
+    // Boons whose effect is not the aura itself.
+    switch (info.boon)
+    {
+        case Boon::Greed:
+            if (BattlegroundVHR* run = GetRunOf(player))
+                run->AddBrokerBonusOffers(info.grantStacks);
+            break;
+        case Boon::Hoarder:
+            if (BattlegroundVHR* run = GetRunOf(player))
+                run->AddBonusBrokersPerWave(info.grantStacks);
+            break;
+        case Boon::Fellowship:
+            if (BattlegroundVHR* run = GetRunOf(player))
+                for (uint8 i = 0; i < info.grantStacks; ++i)
+                    run->RequestAlly(player);
+            break;
+        case Boon::Beastmaster:
+            RefreshBeastmaster(player);
+            break;
+        default:
+            break;
+    }
+
     return PickResult::Ok;
 }
 
@@ -786,6 +893,9 @@ void StripAll(Player* player)
         player->RemoveAurasDueToSpell(id);
     player->RemoveAurasDueToSpell(SPELL_KNOWLEDGE_MARKER);
     player->RemoveAurasDueToSpell(SPELL_CACHE_MARKER);
+
+    // The Beastmaster blessing rides on the pets, not the player.
+    RefreshBeastmaster(player);
 }
 
 void RestoreTaughtSpells(Player* player)
@@ -922,9 +1032,15 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
     switch (info.boon)
     {
         case Boon::MountSpeed:
+        case Boon::Phoenix:
+        case Boon::Hoarder:
             return Trinity::StringFormat("{}: {}", info.name, info.summary);
         case Boon::Level:
             return Trinity::StringFormat("{}: +1 {}", info.name, info.summary);
+        case Boon::Greed:
+        case Boon::Fellowship:
+        case Boon::Menagerie:
+            return Trinity::StringFormat("{}: {} [{}/{}]", info.name, info.summary, uint32(held), uint32(info.maxStacks));
         default:
             return Trinity::StringFormat("{}: +{}{} {} [{}/{}{}]", info.name, uint32(info.grantStacks), info.unit,
                 info.summary, uint32(held), uint32(info.maxStacks), info.unit);
@@ -951,5 +1067,248 @@ bool AllowsMountingInCombat(Unit const* caster)
 int32 GetRageGenerationPct(Unit const* unit)
 {
     return AmountOf(unit, SPELL_BOON_RAGE_GEN, 100);
+}
+
+// --- second batch ------------------------------------------------------------
+
+namespace
+{
+// Living hostile units within `radius` of `around` that `attacker` may hit,
+// excluding `around` itself. Behind-the-gate wave clones are NON_ATTACKABLE
+// during preparation and fall out through IsValidAttackTarget.
+std::vector<Unit*> HostilesAround(Unit* around, Unit* attacker, float radius)
+{
+    std::vector<Unit*> out;
+    if (!around || !attacker || !around->IsInWorld())
+        return out;
+
+    std::list<Unit*> found;
+    Trinity::AnyUnfriendlyUnitInObjectRangeCheck check(around, attacker, radius);
+    Trinity::UnitListSearcher<Trinity::AnyUnfriendlyUnitInObjectRangeCheck> searcher(around, found, check);
+    Cell::VisitAllObjects(around, searcher, radius);
+
+    for (Unit* unit : found)
+        if (unit != around && unit->IsAlive() && attacker->IsValidAttackTarget(unit))
+            out.push_back(unit);
+    return out;
+}
+
+// The player who owns a boon-relevant unit: the player itself, or a pet's /
+// guardian's owner (Overkill and Beastmaster count pet kills and pet stacks).
+Player* BoonOwnerOf(Unit* unit)
+{
+    return unit ? unit->GetCharmerOrOwnerPlayerOrPlayerItself() : nullptr;
+}
+
+void ApplyBeastmasterBlessing(Player* owner, Unit* minion, uint8 stacks)
+{
+    if (!minion)
+        return;
+
+    // Dead pets are handled too: the blessing is death-persistent (so a pet
+    // that dies keeps it for Revive Pet) and CAN_TARGET_DEAD (so a pet that
+    // is dead at pick time gets it, and one that is dead at strip time loses
+    // it). It is never saved to pet_aura (SPELL_ATTR0_CU_AURA_CANNOT_BE_SAVED,
+    // pinned in SpellMgr::LoadSpellInfoCustomAttributes), so it cannot follow
+    // a pet out of the Hold through the database.
+    // "Pets and guardians": totems are neither, and their health is set by
+    // the summon spell rather than by unit mods anyway.
+    if (minion->IsTotem())
+        return;
+
+    bool changed = false;
+    if (!stacks)
+    {
+        changed = minion->HasAura(SPELL_BEASTMASTER_BLESSING);
+        if (changed)
+            minion->RemoveAurasDueToSpell(SPELL_BEASTMASTER_BLESSING);
+    }
+    else
+    {
+        // AddAura rather than CastSpell: SetMinion runs before the summon is
+        // added to its map, and an aura can be created on a not-yet-in-world
+        // unit while a cast cannot target one. The stack count is the owner's,
+        // so the pet's tooltip and numbers say the same thing the owner's boon
+        // does.
+        Aura* aura = minion->GetAura(SPELL_BEASTMASTER_BLESSING);
+        if (!aura)
+        {
+            aura = owner->AddAura(SPELL_BEASTMASTER_BLESSING, minion);
+            changed = aura != nullptr;
+        }
+        if (aura && aura->GetStackAmount() != stacks)
+        {
+            aura->SetStackAmount(stacks);
+            changed = true;
+        }
+    }
+
+    // Guardians (treants, elementals, mirror images, the Menagerie) and pets
+    // that were not loaded from the database never get CanModifyStats, so a
+    // percent aura changing on one that is already out only stores the
+    // modifier - recompute so max health and melee damage actually move.
+    // ONLY when the blessing itself moved: this also runs from SetMinion for
+    // every pet on the realm whose owner holds no stacks, and must be a no-op
+    // there. Fresh summons are covered by InitStatsForLevel.
+    if (changed && minion->IsInWorld() && !minion->CanModifyStats())
+        minion->UpdateAllStats();
+}
+
+struct MenagerieEntry
+{
+    uint32 entry;
+    char const* name;
+};
+
+// Every one of these has a Guardian::InitStatsForLevel special case that
+// scales it from the owner's attack/spell power, so a level-60 guardian hits
+// like a level-60 guardian whoever summoned it. Water elementals and warlock
+// demons are missing on purpose: they scale through pet_levelstats as PETS
+// and would come out as bare creatures here.
+MenagerieEntry const kMenagerie[] =
+{
+    { 1964,  "Treant" },
+    { 29264, "Spirit Wolf" },
+    { 19668, "Shadowfiend" },
+    { 15352, "Greater Earth Elemental" },
+    { 15438, "Greater Fire Elemental" },
+    { 31216, "Mirror Image" }
+};
+
+// SummonProperties 61: Control ALLY, Title GUARDIAN. A plain guardian, so it
+// never competes with the owner's real pet for the pet slot (SetMinion
+// dismisses a different-entry "guardian pet", which the pet-control
+// properties the class spells use would make every one of these).
+constexpr uint32 MENAGERIE_SUMMON_PROPERTIES = 61;
+}
+
+bool TryPhoenixRescue(Unit* victim)
+{
+    Player* player = victim ? victim->ToPlayer() : nullptr;
+    if (!player || !player->IsAlive() || !player->HasAura(SPELL_BOON_PHOENIX))
+        return false;
+
+    // Spent now, before the damage lands, so nothing between here and
+    // CompletePhoenixRescue can spend it twice.
+    player->RemoveAurasDueToSpell(SPELL_BOON_PHOENIX);
+    return true;
+}
+
+void CompletePhoenixRescue(Unit* victim)
+{
+    Player* player = victim ? victim->ToPlayer() : nullptr;
+    if (!player || !player->IsAlive())
+        return;
+
+    player->SetHealth(std::max<uint32>(1, player->CountPctFromMaxHealth(PHOENIX_RESTORE_PCT)));
+    if (player->GetMaxPower(POWER_MANA))
+        player->SetPower(POWER_MANA, player->CountPctFromMaxPower(POWER_MANA, PHOENIX_RESTORE_PCT));
+
+    player->CastSpell(player, SPELL_PHOENIX_VISUAL, TRIGGERED_FULL_MASK);
+    if (WorldSession* session = player->GetSession())
+        session->SendNotification("The phoenix rises!");
+}
+
+void OnKillingBlow(Unit* attacker, Unit* victim, uint32 overkill, SpellInfo const* spellProto)
+{
+    // Damage landing on a corpse (a second damage shield after the first one
+    // killed the attacker) is not a killing blow, and neither is dying to
+    // your own fall damage or Hellfire.
+    if (!attacker || !victim || !overkill || attacker == victim || !victim->IsAlive())
+        return;
+
+    // Splash never splashes: a chain of overkills would otherwise recurse
+    // through DealDamage until nothing in the room was left standing.
+    if (spellProto && (spellProto->Id == SPELL_OVERKILL_DAMAGE || spellProto->Id == SPELL_RICOCHET_DAMAGE))
+        return;
+
+    Player* owner = BoonOwnerOf(attacker);
+    if (!owner)
+        return;
+
+    uint8 const stacks = GetStacks(owner, Boon::Overkill);
+    if (!stacks)
+        return;
+
+    uint32 const splash = CalculatePct(overkill, uint32(stacks));
+    if (!splash)
+        return;
+
+    // Collected before any of it is dealt: a splash that kills may reshape the
+    // neighbourhood mid-loop otherwise.
+    std::vector<Unit*> targets = HostilesAround(victim, owner, OVERKILL_SPLASH_RADIUS);
+    for (Unit* target : targets)
+    {
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        args.AddSpellBP0(int32(std::min<uint32>(splash, uint32(INT32_MAX))));
+        owner->CastSpell(target, SPELL_OVERKILL_DAMAGE, args);
+    }
+}
+
+void OnMinionAdded(Unit* owner, Unit* minion)
+{
+    Player* player = owner ? owner->ToPlayer() : nullptr;
+    if (!player || !minion)
+        return;
+
+    // Unconditional: with no stacks this scrubs a stale blessing off a pet
+    // that somehow arrived carrying one.
+    ApplyBeastmasterBlessing(player, minion, GetStacks(player, Boon::Beastmaster));
+}
+
+void RefreshBeastmaster(Player* player)
+{
+    if (!player)
+        return;
+
+    uint8 const stacks = GetStacks(player, Boon::Beastmaster);
+    // Copy first: SetStackAmount / RemoveAuras may not touch the list, but a
+    // dying totem in the middle of an aura update could. Only OWNED minions -
+    // m_Controlled also holds charmed units (a mind-controlled wave clone),
+    // which SetMinion never blessed and which must not walk away with it.
+    std::vector<Unit*> controlled(player->m_Controlled.begin(), player->m_Controlled.end());
+    for (Unit* unit : controlled)
+        if (unit->GetTypeId() == TYPEID_UNIT && unit->GetOwnerGUID() == player->GetGUID())
+            ApplyBeastmasterBlessing(player, unit, stacks);
+}
+
+void SummonMenagerie(Player* owner, uint8 count, std::vector<ObjectGuid>& out)
+{
+    if (!owner || !count || !owner->IsInWorld() || !owner->IsAlive())
+        return;
+
+    Map* map = owner->GetMap();
+    SummonPropertiesEntry const* properties = sSummonPropertiesStore.LookupEntry(MENAGERIE_SUMMON_PROPERTIES);
+    if (!map || !properties)
+        return;
+
+    for (uint8 i = 0; i < count; ++i)
+    {
+        MenagerieEntry const& pick = kMenagerie[urand(0, uint32(std::size(kMenagerie)) - 1)];
+
+        Position pos = owner->GetNearPosition(3.0f, frand(0.0f, 2.0f * float(M_PI)));
+        // Duration 0: they live until the battleground takes them down (or the
+        // owner leaves the map, which unsummons everything it controls).
+        TempSummon* summon = map->SummonCreature(pick.entry, pos, properties, 0, owner);
+        if (!summon)
+        {
+            TC_LOG_ERROR("bg.battleground", "VioletHoldBoons::SummonMenagerie: could not summon {} ({}) for {}.",
+                pick.name, pick.entry, owner->GetGUID().ToString());
+            continue;
+        }
+
+        // A Title-GUARDIAN summon has no CharmInfo, and PetAI (and the
+        // PetAI-derived pet scripts) bail out without one. Give it the charm
+        // info and re-pick the AI: scripted entries keep their script, the
+        // rest get PetAI so they follow the owner and take the owner's fights.
+        summon->InitCharmInfo();
+        if (summon->GetScriptId())
+            summon->AIM_Initialize();
+        else
+            summon->AIM_Initialize(new PetAI(summon));
+        summon->SetReactState(REACT_AGGRESSIVE);
+
+        out.push_back(summon->GetGUID());
+    }
 }
 }

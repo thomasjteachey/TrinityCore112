@@ -1032,6 +1032,17 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
         }
     }
 
+    // Violet Hold "Boon of the Phoenix": a blow that would kill a holder is
+    // clamped to leave one health, exactly the way a duel-ending blow is, and
+    // the rescue (30% health and mana) is applied once the damage has landed
+    // below. Spent on use.
+    bool phoenixRescue = false;
+    if (!duel_hasEnded && damage >= health && VioletHoldBoons::TryPhoenixRescue(victim))
+    {
+        damage = health - 1;
+        phoenixRescue = true;
+    }
+
     if (attacker && attacker != victim)
     {
         if (Player* killer = attacker->ToPlayer())
@@ -1061,6 +1072,12 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
     {
         if (victim->GetTypeId() == TYPEID_PLAYER && victim != attacker)
             victim->ToPlayer()->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_TOTAL_DAMAGE_RECEIVED, health);
+
+        // Violet Hold "Boon of Overkill": the damage past the victim's health
+        // splashes its neighbours. Before Kill(), while the victim still
+        // stands - the splash excludes it and never splashes itself.
+        if (health && attacker && attacker != victim && damage > health)
+            VioletHoldBoons::OnKillingBlow(attacker, victim, damage - health, spellProto);
 
         Unit::Kill(attacker, victim, durabilityLoss);
     }
@@ -1155,6 +1172,9 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
     // make player victims stand up automatically
     if (victim->GetStandState() && victim->IsPlayer() && damagetype != NODAMAGE && damagetype != DOT)
         victim->SetStandState(UNIT_STAND_STATE_STAND);
+
+    if (phoenixRescue)
+        VioletHoldBoons::CompletePhoenixRescue(victim);
 
     return damage;
 }
@@ -6835,6 +6855,10 @@ void Unit::SetMinion(Minion *minion, bool apply)
         SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(minion->GetUInt32Value(UNIT_CREATED_BY_SPELL));
         if (spellInfo && spellInfo->IsCooldownStartedOnEvent())
             GetSpellHistory()->StartCooldown(spellInfo, 0, nullptr, true);
+
+        // Violet Hold "Boon of the Beastmaster": the owner's blessing rides on
+        // everything it summons.
+        VioletHoldBoons::OnMinionAdded(this, minion);
     }
     else
     {

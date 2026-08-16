@@ -81,6 +81,18 @@ namespace VioletHoldBoons
         EnergyRegen,
         RageGeneration,
 
+        // Second batch (2026-08-16).
+        Ricochet,       // damage has a chance to leap to a second enemy for half
+        Overkill,       // excess killing-blow damage splashes nearby enemies
+        Reflection,     // % of melee damage taken thrown back
+        Vampire,        // % of damage dealt returned as health
+        Phoenix,        // survive one killing blow (unique per pick)
+        Greed,          // RUN-WIDE: brokers show an extra option
+        Hoarder,        // RUN-WIDE, unique: an extra broker every wave
+        Beastmaster,    // pets & guardians +% damage and health
+        Menagerie,      // random guardians summoned as each wave opens
+        Fellowship,     // RUN-WIDE: a random playerbot joins the party for the run
+
         Max
     };
 
@@ -127,6 +139,34 @@ namespace VioletHoldBoons
         SPELL_BOON_COOLDOWN_CLASS_BASE  = 90270,
         SPELL_BOON_COOLDOWN_CLASS_FIRST = 90271,
         SPELL_BOON_COOLDOWN_CLASS_LAST  = 90281,
+
+        // Second batch. 90283-90286 are the spells the procs and hooks FIRE
+        // (hostile single-target holy damage that ignores hit/crit/done-bonus
+        // and cannot itself proc anything, plus one heal) - deliberately not
+        // boon auras and not pinned positive. 90287 is what Beastmaster puts on
+        // the pets. 90288-90297 are the boon auras (dummies; the work happens
+        // in scripts/Custom/violet_hold_boons.cpp procs, Unit::DealDamage,
+        // Unit::SetMinion and BattlegroundVHR).
+        SPELL_RICOCHET_DAMAGE      = 90283,
+        SPELL_OVERKILL_DAMAGE      = 90284,
+        SPELL_REFLECTION_DAMAGE    = 90285,
+        SPELL_VAMPIRE_HEAL         = 90286,
+        SPELL_BEASTMASTER_BLESSING = 90287,
+        SPELL_BOON_RICOCHET     = 90288,
+        SPELL_BOON_OVERKILL     = 90289,
+        SPELL_BOON_REFLECTION   = 90290,
+        SPELL_BOON_VAMPIRE      = 90291,
+        SPELL_BOON_PHOENIX      = 90292,
+        SPELL_BOON_GREED        = 90293,
+        SPELL_BOON_HOARDER      = 90294,
+        SPELL_BOON_BEASTMASTER  = 90295,
+        SPELL_BOON_MENAGERIE    = 90296,
+        SPELL_BOON_FELLOWSHIP   = 90297,
+        SPELL_BOON_BATCH2_FIRST = 90287,
+        SPELL_BOON_BATCH2_LAST  = 90297,
+
+        // Stock "Resurrection Impact Visual", played on a Phoenix rescue.
+        SPELL_PHOENIX_VISUAL    = 24171,
 
         // Hidden marker whose three effect base amounts hold the class spells
         // (table spellId, first rank) the broker taught this character - a
@@ -197,9 +237,10 @@ namespace VioletHoldBoons
     };
 
     constexpr uint8 ITEM_GRANT_COUNT = 2;
-    // Every class spell rolls at this weight; with three per present class the
-    // spells end up roughly a quarter to a third of a full party's pool.
-    constexpr uint8 CLASS_SPELL_WEIGHT = 4;
+    // Every class spell rolls at this weight. Three per present class add up
+    // fast, so it sits at the bottom of the scale (with the legendaries):
+    // a full party's spells make up well under a fifth of the pool.
+    constexpr uint8 CLASS_SPELL_WEIGHT = 2;
 
     // What the broker actually shows: a boon, a class spell or an item.
     struct Offer
@@ -255,9 +296,10 @@ namespace VioletHoldBoons
     // is what makes a level-64+ utility spell teachable at 60 unchanged.
     TC_GAME_API uint32 ResolveRank(uint32 firstRankSpellId, uint8 level);
 
-    // OFFERS_PER_BROKER distinct offers that at least one member of `roster`
-    // (the run's human team) could take. Fewer if the pool has run dry.
-    TC_GAME_API std::vector<Offer> RollOffers(std::vector<Player const*> const& roster);
+    // `count` distinct offers (OFFERS_PER_BROKER plus the run's Greed bonus)
+    // that at least one member of `roster` (the run's human team) could take.
+    // Fewer if the pool has run dry.
+    TC_GAME_API std::vector<Offer> RollOffers(std::vector<Player const*> const& roster, uint8 count = OFFERS_PER_BROKER);
 
     // Apply one pick. Ok on success; otherwise nothing changed.
     TC_GAME_API PickResult Take(Player* player, Offer offer);
@@ -312,6 +354,35 @@ namespace VioletHoldBoons
     TC_GAME_API bool AllowsMountingInCombat(Unit const* caster);
     // Percent added to rage gained from dealing and taking damage (Unit::RewardRage).
     TC_GAME_API int32 GetRageGenerationPct(Unit const* unit);
+
+    // --- second-batch hooks -------------------------------------------------
+    // Ricochet, Reflection and Vampire are aura procs (scripts/Custom). These
+    // are the ones the core itself has to call.
+
+    // Unit::DealDamage, when `damage` would kill `victim`: a Phoenix holder
+    // spends the boon and the caller clamps the blow to leave 1 health, then
+    // calls CompletePhoenixRescue once the damage has been applied. True when
+    // the boon was spent.
+    TC_GAME_API bool TryPhoenixRescue(Unit* victim);
+    TC_GAME_API void CompletePhoenixRescue(Unit* victim);
+    constexpr uint8 PHOENIX_RESTORE_PCT = 30;
+
+    // Unit::DealDamage, on a killing blow: Overkill splashes `overkill` (the
+    // damage past the victim's health) onto enemies near the victim.
+    TC_GAME_API void OnKillingBlow(Unit* attacker, Unit* victim, uint32 overkill, SpellInfo const* spellProto);
+    constexpr float OVERKILL_SPLASH_RADIUS = 8.0f;
+    constexpr float RICOCHET_RADIUS = 10.0f;
+
+    // Unit::SetMinion(apply): a Beastmaster owner's blessing goes on the new
+    // pet/guardian, at the owner's stack count.
+    TC_GAME_API void OnMinionAdded(Unit* owner, Unit* minion);
+    // Re-sync the blessing on everything the player controls (after a pick).
+    TC_GAME_API void RefreshBeastmaster(Player* player);
+
+    // Menagerie: `count` random guardians appear beside `owner`, fight with
+    // PetAI at the owner's level, and are appended to `out` for the
+    // battleground to take down when the wave is over.
+    TC_GAME_API void SummonMenagerie(Player* owner, uint8 count, std::vector<ObjectGuid>& out);
 }
 
 #endif // TRINITYCORE_VIOLET_HOLD_BOONS_H

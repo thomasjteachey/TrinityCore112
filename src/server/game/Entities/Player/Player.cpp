@@ -22121,6 +22121,22 @@ Pet* Player::GetPet() const
     return nullptr;
 }
 
+uint32 Player::GetLivingPetDisplayId() const
+{
+    if (Pet const* pet = GetPet())
+        return pet->IsAlive() ? pet->GetNativeDisplayId() : 0;
+
+    // Not spawned right now: the pet may still be the current pet, only temporarily
+    // unsummoned (we are mounted, or logged in mounted and LoadPet() skipped it).
+    // The stable mirrors character_pet and is loaded before auras at login; a dead
+    // pet is stored there with 0 health (see Pet::LoadPetFromDB).
+    if (PetStable const* petStable = GetPetStable())
+        if (petStable->CurrentPet && petStable->CurrentPet->Health)
+            return petStable->CurrentPet->DisplayId;
+
+    return 0;
+}
+
 void Player::RemovePet(Pet* pet, PetSaveMode mode, bool returnreagent)
 {
     if (!pet)

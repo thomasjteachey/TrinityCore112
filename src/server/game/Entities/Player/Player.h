@@ -1110,6 +1110,10 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         PetStable const* GetPetStable() const { return m_petStable.get(); }
 
         Pet* GetPet() const;
+        // Native display id of the current pet if it is alive, including one that is only
+        // temporarily unsummoned (mounted, mounted at login, ...). 0 when there is no
+        // current pet or it is dead.
+        uint32 GetLivingPetDisplayId() const;
         Pet* EnsureArenaPetResurrected();
         Pet* SummonPet(uint32 entry, float x, float y, float z, float ang, PetType petType, uint32 despwtime);
         void RemovePet(Pet* pet, PetSaveMode mode, bool returnreagent = false);
