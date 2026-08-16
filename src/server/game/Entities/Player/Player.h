@@ -1110,9 +1110,9 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         PetStable const* GetPetStable() const { return m_petStable.get(); }
 
         Pet* GetPet() const;
-        // Native display id of the current pet if it is alive, including one that is only
-        // temporarily unsummoned (mounted, mounted at login, ...). 0 when there is no
-        // current pet or it is dead.
+        // Native display id of a living pet we own: the spawned pet, a current pet only
+        // temporarily unsummoned (mounted, mounted at login, ...), or a dismissed hunter
+        // pet still callable via Call Pet. 0 when there is no such pet or it is dead.
         uint32 GetLivingPetDisplayId() const;
         Pet* EnsureArenaPetResurrected();
         Pet* SummonPet(uint32 entry, float x, float y, float z, float ang, PetType petType, uint32 despwtime);

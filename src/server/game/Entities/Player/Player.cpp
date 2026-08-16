@@ -22126,13 +22126,22 @@ uint32 Player::GetLivingPetDisplayId() const
     if (Pet const* pet = GetPet())
         return pet->IsAlive() ? pet->GetNativeDisplayId() : 0;
 
-    // Not spawned right now: the pet may still be the current pet, only temporarily
-    // unsummoned (we are mounted, or logged in mounted and LoadPet() skipped it).
-    // The stable mirrors character_pet and is loaded before auras at login; a dead
-    // pet is stored there with 0 health (see Pet::LoadPetFromDB).
+    // No pet spawned right now, but one may still belong to us: a current pet only
+    // temporarily unsummoned (we are mounted, or logged in mounted and LoadPet()
+    // skipped it), or a hunter pet that was dismissed and is waiting for Call Pet
+    // (RemovePet with PET_SAVE_NOT_IN_SLOT moves it to the unslotted list). Both
+    // live in the pet stable, which mirrors character_pet and is loaded before
+    // auras at login; PetInfo::DisplayId is the pet's native display id. A dead pet
+    // is stored with 0 health and, by design, rides the steed, so require health.
     if (PetStable const* petStable = GetPetStable())
+    {
         if (petStable->CurrentPet && petStable->CurrentPet->Health)
             return petStable->CurrentPet->DisplayId;
+
+        if (PetStable::PetInfo const* hunterPet = petStable->GetUnslottedHunterPet())
+            if (hunterPet->Health)
+                return hunterPet->DisplayId;
+    }
 
     return 0;
 }

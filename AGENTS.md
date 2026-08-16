@@ -184,7 +184,25 @@ patch is invisible until the test patch is refreshed too.
 
 So: `enUS-7`=17 < `enUS-8`=18 < `enUS-9`=19 < `enUS-A`=21 < `enUS-T`=40.
 
-**Letters outrank digits.** Alphabetical order is NOT load order.
+**Letters outrank digits.** Alphabetical order is NOT load order. The folder
+(`Data\` vs `Data\enUS\`) does not matter — only the letter/digit does, so
+`Data\patch-F` beats `Data\enUS\patch-enUS-8`.
+
+**Optional HD packs ship their own DBCs, and DBCs replace whole-file.**
+`hd-creatures.zip` (`patch-F`) carries CreatureDisplayInfo, CreatureModelData,
+CreatureDisplayInfoExtra, CreatureSoundData, SpellVisualEffectName;
+`hd-spells.zip` (`patch-G`/`patch-H`) carries SpellVisual, SpellVisualKit,
+SpellVisualEffectName. Two consequences:
+
+- **Never put CreatureDisplayInfo/CreatureModelData in patch-Y or patch-Z.**
+  Those are mandatory and outrank F, so an F-lineage copy there is live for
+  players who have HD Creatures OFF — with no F to supply the HD models it
+  references, they get cubes + green textures everywhere (2026-08-10 →
+  2026-08-16 incident: 1,551 broken displays). A stock-lineage copy there
+  would instead override the HD pack's remaps for HD-ON players.
+- New creature display rows must be added **twice**: stock lineage into
+  `patch-enUS-8` (HD off), and into F's own copies inside `hd-creatures.zip`
+  (HD on — F shadows enUS-8). Same for spell-visual rows vs `patch-H`.
 
 Client dir: `C:\Projects\Gamedev\wow\clients\centurion\Data\enUS\`
 (locale patches) and `...\Data\` (art patches).
@@ -273,6 +291,7 @@ will pick up consumables like 28273 Bloodthistle that share the aura pair.
 | `src/server/scripts/Custom/rts_building.cpp` | committed; the AI summons the shell itself |
 | spell **90216** "Summon Goblin Workshop" | created: effect 28 → 900116, SummonProperties 64, `ImplicitTargetA=32`, `Targets=64` (ground reticle), `RangeIndex=4`, `DurationIndex=21` (permanent), icon 1 |
 | deployed | mirror + all 3 `data/dbc` + `patch-enUS-8` v1.00213 + `patch-enUS-T-test` v1.00012 |
+| client display rows (CDI 40000-40002, CMD 4000-4002, GODI 11000/11001, Vehicle/VehicleSeat) | **stock lineage in `patch-enUS-8` v1.00241 (2026-08-16)** — they were pulled out of `patch-Y` (v1.00014) after the HD-off incident (§4). HD-ON clients use patch-F's own CDI/CMD, which do NOT have these rows yet: the workshop creature cubes for them until `hd-creatures.zip` is republished with the F-lineage copies staged at `~/hdoff_fix_20260816/hdF/DBFilesClient/` |
 
 **BLOCKED:** 90216 has **no `SkillLineAbility` row**, so `.learn` succeeds but it
 never appears in a spellbook. Needs a row in `dbc.skilllineability_lplus`
@@ -306,3 +325,6 @@ the Lightbringer glow — so shrunken clones are findable.
   those stale copies and shadow live data again
 - ItemSet 1045's set bonuses reference spells 21895 / 90125 / 90126 — unverified
 - Prod worldserver restart pending for spell 90216
+- `hd-creatures.zip` (patch-F) still lacks the workshop CDI/CMD rows — republish (1.45 GB re-download for HD-on players) when the workshop ships; F-lineage copies with the rows are staged on the server (`~/hdoff_fix_20260816/hdF/`)
+- Client `patch-enUS-8` CDI carries the 146 pet-display scale bumps (0.4→1.0); servers' `data/dbc` and `dbc.creaturedisplayinfo_lplus` are pure stock — a dbcgen/mirror-sync of CDI would silently revert them; decide which is truth
+- Client `Vehicle.dbc` (now in enUS-8) has a stray row 89799 not present server-side; client `VehicleSeat.dbc` has one row more than the servers' copy
