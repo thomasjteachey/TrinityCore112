@@ -777,6 +777,16 @@ bool SpellArea::IsFitToRequirements(Player const* player, uint32 newZone, uint32
 
     if (player)
     {
+        // Essence of Wintergrasp: a world buff has no business inside an
+        // instanced match, and custom battlegrounds cloned from Northrend maps
+        // report their source zone (the Violet Hold run reports 4415, which
+        // has an autocast spell_area row). This has to sit ABOVE the generic
+        // battleground hand-off below - the same check further down in the
+        // switch was never reached in a battleground and the buff kept
+        // landing in the Hold.
+        if ((spellId == 57940 || spellId == 58045) && player->InBattleground())
+            return false;
+
         if (Battleground* bg = player->GetBattleground())
             return bg->IsSpellAllowed(spellId, player);
     }
@@ -832,13 +842,8 @@ bool SpellArea::IsFitToRequirements(Player const* player, uint32 newZone, uint32
             if (!player)
                 return false;
 
-            // Custom battlegrounds cloned from Northrend maps report their
-            // source zone (the Violet Hold run reports 4415), which is enough
-            // for the spell_area rows to match. A world buff has no business
-            // inside an instanced match, wherever its map came from.
-            if (player->InBattleground())
-                return false;
-
+            // (The in-battleground refusal lives above the battleground
+            // hand-off; a battleground never reaches this switch.)
             if (Battlefield* battlefieldWG = sBattlefieldMgr->GetBattlefieldByBattleId(BATTLEFIELD_BATTLEID_WG))
                 return battlefieldWG->IsEnabled() && (player->GetTeamId() == battlefieldWG->GetDefenderTeam()) && !battlefieldWG->IsWarTime();
             break;

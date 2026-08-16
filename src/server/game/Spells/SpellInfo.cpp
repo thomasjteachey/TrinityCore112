@@ -3474,12 +3474,6 @@ int32 SpellInfo::CalcPowerCost(WorldObject const* caster, SpellSchoolMask school
     // PCT mod from user auras by school
     powerCost = int32(powerCost * (1.0f + unitCaster->GetFloatValue(UNIT_FIELD_POWER_COST_MULTIPLIER + AsUnderlyingType(school))));
 
-    // Violet Hold cost boons are per POWER TYPE, which the school-keyed
-    // multiplier above cannot express, so they take their cut here.
-    if (powerCost > 0)
-        if (int32 boonPct = VioletHoldBoons::GetPowerCostReductionPct(unitCaster, Powers(PowerType)))
-            powerCost -= CalculatePct(powerCost, boonPct);
-
     if (powerCost < 0)
         powerCost = 0;
     return powerCost;

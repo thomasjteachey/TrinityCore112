@@ -4434,4 +4434,28 @@ ClientTweaks.Attest.Secret = ""
 ClientTweaks.Attest.GraceSeconds = 60
 ClientTweaks.Attest.TimeoutSeconds = 90
 
+#
+###################################################################################################
+#   VIOLET HOLD (custom wave-survival battleground, type 105)
+#
+#    Centurion.VioletHold.PrepSeconds
+#        Description: Gate window between waves, in seconds, counted from the moment the
+#                     next wave's clones stand in their cells. Announced once as it opens.
+#                     Live: `.reload config` applies to the next wave.
+#        Default:     30
+#
+#    Centurion.VioletHold.CountdownFromSeconds
+#        Description: The second at which the per-second centre-screen countdown starts;
+#                     between the opening call and this it is silent. Clamped to PrepSeconds.
+#        Default:     15
+#
+#    Centurion.VioletHold.PartyWaveChancePercent
+#        Description: Percent chance a wave mirrors the party itself instead of being drawn
+#                     from the playerbot population.
+#        Default:     10
+
+Centurion.VioletHold.PrepSeconds = 30
+Centurion.VioletHold.CountdownFromSeconds = 15
+Centurion.VioletHold.PartyWaveChancePercent = 10
+
 ###############################################################################

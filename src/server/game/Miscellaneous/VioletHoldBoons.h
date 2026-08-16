@@ -118,6 +118,16 @@ namespace VioletHoldBoons
         SPELL_BOON_EXTRA_FIRST  = 90251,
         SPELL_BOON_EXTRA_LAST   = 90256,
 
+        // Boon of Alacrity is a real SPELLMOD_COOLDOWN pct spellmod so the
+        // CLIENT computes the shortened cooldowns too (its own timers and its
+        // "not ready" pre-check). Spellmods work by spell family, so there is
+        // one variant per class: id = SPELL_BOON_COOLDOWN_CLASS_BASE + ChrClasses
+        // id (90271 warrior ... 90281 druid; 90276/90280 unused). 90245 is the
+        // old dummy, kept only so StripAll can clean it off old characters.
+        SPELL_BOON_COOLDOWN_CLASS_BASE  = 90270,
+        SPELL_BOON_COOLDOWN_CLASS_FIRST = 90271,
+        SPELL_BOON_COOLDOWN_CLASS_LAST  = 90281,
+
         // Hidden marker whose three effect base amounts hold the class spells
         // (table spellId, first rank) the broker taught this character - a
         // class has exactly three, so three slots is the whole answer. Persists
@@ -230,6 +240,10 @@ namespace VioletHoldBoons
     TC_GAME_API BoonInfo const* FindBySpell(uint32 spellId);
     TC_GAME_API bool IsBoonSpell(uint32 spellId);
 
+    // The aura a boon puts on THIS player - the same for everyone except the
+    // per-class spellmod variants (Alacrity).
+    TC_GAME_API uint32 GetBoonSpellFor(Boon boon, uint8 classId);
+
     // Stacks the player currently holds of a boon (0 if none).
     TC_GAME_API uint8 GetStacks(Player const* player, Boon boon);
 
@@ -292,14 +306,10 @@ namespace VioletHoldBoons
     // Percent taken off the duration of a hostile aura with a crowd-control
     // mechanic (WorldObject::ModSpellDuration).
     TC_GAME_API int32 GetCcDurationReductionPct(Unit const* target, uint32 mechanicMask);
-    // Percent taken off the cost of a spell drawing on `power` (SpellInfo::CalcPowerCost).
-    TC_GAME_API int32 GetPowerCostReductionPct(Unit const* caster, Powers power);
     // Milliseconds taken off a mount summon (WorldObject::ModSpellCastTime).
     TC_GAME_API int32 GetMountCastTimeReductionMs(Unit const* caster);
     // Boon of the Outrider also lets mounts be summoned in combat (Spell::CheckCast).
     TC_GAME_API bool AllowsMountingInCombat(Unit const* caster);
-    // Percent taken off spell cooldowns (SpellHistory::StartCooldown).
-    TC_GAME_API int32 GetCooldownReductionPct(Unit const* caster);
     // Percent added to rage gained from dealing and taking damage (Unit::RewardRage).
     TC_GAME_API int32 GetRageGenerationPct(Unit const* unit);
 }

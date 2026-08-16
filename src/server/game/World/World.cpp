@@ -1518,6 +1518,13 @@ void World::LoadConfigSettings(bool reload)
     // being drawn from the playerbot population (the 2.5% mono and full-roster
     // specials roll first and are unaffected).
     m_int_configs[CONFIG_CENTURION_VHR_PARTY_WAVE_CHANCE] = sConfigMgr->GetIntDefault("Centurion.VioletHold.PartyWaveChancePercent", 10);
+    // Violet Hold gate window between waves (seconds, from the moment the
+    // clones stand in their cells) and where the per-second raid-warning
+    // countdown starts. The window's full length is always called out once as
+    // it opens. Both are read at use time, so `.reload config` applies to
+    // the next wave. Sanitised: window >= 1s, countdown start clamped to it.
+    m_int_configs[CONFIG_CENTURION_VHR_PREP_SECONDS] = std::max<int32>(1, sConfigMgr->GetIntDefault("Centurion.VioletHold.PrepSeconds", 30));
+    m_int_configs[CONFIG_CENTURION_VHR_COUNTDOWN_FROM_SECONDS] = std::clamp<int32>(sConfigMgr->GetIntDefault("Centurion.VioletHold.CountdownFromSeconds", 15), 0, int32(m_int_configs[CONFIG_CENTURION_VHR_PREP_SECONDS]));
     m_float_configs[CONFIG_CENTURION_BG_ARENA_REWARD_MULTIPLIER] = sConfigMgr->GetFloatDefault("Centurion.Battleground.ArenaRewardMultiplier", .2f);
 
     m_int_configs[CONFIG_CENTURION_LEAP_XY_SPEED] = sConfigMgr->GetIntDefault("Centurion.LeapXYSpeed", 100);

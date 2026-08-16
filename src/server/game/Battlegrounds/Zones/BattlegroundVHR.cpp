@@ -311,7 +311,7 @@ void BattlegroundVHR::BeginWave()
     ComposeWave(enemyCount);
 
     _waveState = WaveState::AwaitingSpawn;
-    _prepTimerMs = BG_VHR_PREP_MS;
+    _prepTimerMs = GetPrepWindowMs();
     _lastCountdownSecond = 0;
 
     UpdateScoreWorldStates();
@@ -489,19 +489,27 @@ void BattlegroundVHR::NotifyWaveSpawnFulfilled(uint32 waveNumber, uint32 /*spawn
     {
         ApplyPreparationToWave();
         _waveState = WaveState::Preparing;
-        _prepTimerMs = BG_VHR_PREP_MS;
+        _prepTimerMs = GetPrepWindowMs();
         // Seed above the first tick so the countdown announces the full
-        // window (30) itself rather than needing a separate opening message.
-        _lastCountdownSecond = (BG_VHR_PREP_MS / IN_MILLISECONDS) + 1;
+        // window itself rather than needing a separate opening message.
+        _lastCountdownSecond = (_prepTimerMs / IN_MILLISECONDS) + 1;
         AnnounceWaveCountdown();
     }
 
     UpdateScoreWorldStates();
 }
 
+// The gate window between waves, from config (Centurion.VioletHold.PrepSeconds,
+// default BG_VHR_PREP_MS). Read at use time so `.reload config` takes effect
+// on the next wave.
+uint32 BattlegroundVHR::GetPrepWindowMs() const
+{
+    return std::max<uint32>(1, sWorld->getIntConfig(CONFIG_CENTURION_VHR_PREP_SECONDS)) * IN_MILLISECONDS;
+}
+
 // Announce the wave countdown as a centre-screen notification: once when the
 // window opens ("30"), nothing while the party loots and regroups, then once
-// per whole second from BG_VHR_COUNTDOWN_FROM_SECONDS down.
+// per whole second from Centurion.VioletHold.CountdownFromSeconds down.
 //
 // CHAT_MSG_RAID_BOSS_EMOTE is what the client routes to RaidBossEmoteFrame -
 // the large centre text used for boss emotes and raid warnings - rather than
@@ -524,9 +532,9 @@ void BattlegroundVHR::AnnounceWaveCountdown()
     _lastCountdownSecond = secondsLeft;
 
     // The opening call is the whole window; after that, quiet until the
-    // final stretch.
-    uint32 const fullWindow = BG_VHR_PREP_MS / IN_MILLISECONDS;
-    if (secondsLeft != fullWindow && secondsLeft > BG_VHR_COUNTDOWN_FROM_SECONDS)
+    // final stretch. Both knobs are live config (Centurion.VioletHold.*).
+    uint32 const fullWindow = GetPrepWindowMs() / IN_MILLISECONDS;
+    if (secondsLeft != fullWindow && secondsLeft > sWorld->getIntConfig(CONFIG_CENTURION_VHR_COUNTDOWN_FROM_SECONDS))
         return;
 
     PSendMessageToAll(BG_VHR_STRING_NEXT_WAVE_COUNTDOWN, CHAT_MSG_RAID_BOSS_EMOTE,

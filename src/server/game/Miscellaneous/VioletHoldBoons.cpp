@@ -413,6 +413,7 @@ bool IsBoonSpell(uint32 spellId)
 {
     return (spellId >= SPELL_BOON_FIRST && spellId <= SPELL_BOON_LAST)
         || (spellId >= SPELL_BOON_EXTRA_FIRST && spellId <= SPELL_BOON_EXTRA_LAST)
+        || (spellId >= SPELL_BOON_COOLDOWN_CLASS_FIRST && spellId <= SPELL_BOON_COOLDOWN_CLASS_LAST)
         || spellId == SPELL_KNOWLEDGE_MARKER
         || spellId == SPELL_BOON_EXTRA_ATTACK_SWING;
 }
@@ -440,12 +441,19 @@ bool Offer::Decode(uint32 code, Offer& out)
     return false;
 }
 
+uint32 GetBoonSpellFor(Boon boon, uint8 classId)
+{
+    if (boon == Boon::Cooldown && classId >= CLASS_WARRIOR && classId < MAX_CLASSES)
+        return SPELL_BOON_COOLDOWN_CLASS_BASE + classId;
+    return GetBoon(boon).spellId;
+}
+
 uint8 GetStacks(Player const* player, Boon boon)
 {
     if (!player)
         return 0;
 
-    if (Aura const* aura = player->GetAura(GetBoon(boon).spellId))
+    if (Aura const* aura = player->GetAura(GetBoonSpellFor(boon, player->GetClass())))
         return aura->GetStackAmount();
     return 0;
 }
@@ -668,15 +676,16 @@ PickResult Take(Player* player, Offer offer)
         return PickResult::Ok;
     }
 
-    Aura* aura = player->GetAura(info.spellId);
+    uint32 const boonSpellId = GetBoonSpellFor(info.boon, player->GetClass());
+    Aura* aura = player->GetAura(boonSpellId);
     if (!aura)
     {
-        player->CastSpell(player, info.spellId, true);
-        aura = player->GetAura(info.spellId);
+        player->CastSpell(player, boonSpellId, true);
+        aura = player->GetAura(boonSpellId);
         if (!aura)
         {
             TC_LOG_ERROR("bg.battleground", "VioletHoldBoons::Take: boon spell {} did not apply to {}.",
-                info.spellId, player->GetGUID().ToString());
+                boonSpellId, player->GetGUID().ToString());
             return PickResult::Failed;
         }
 
@@ -773,6 +782,8 @@ void StripAll(Player* player)
 
     for (BoonInfo const& info : kBoons)
         player->RemoveAurasDueToSpell(info.spellId);
+    for (uint32 id = SPELL_BOON_COOLDOWN_CLASS_FIRST; id <= SPELL_BOON_COOLDOWN_CLASS_LAST; ++id)
+        player->RemoveAurasDueToSpell(id);
     player->RemoveAurasDueToSpell(SPELL_KNOWLEDGE_MARKER);
     player->RemoveAurasDueToSpell(SPELL_CACHE_MARKER);
 }
@@ -861,7 +872,8 @@ void OnLogin(Player* player)
         }
     }
 
-    bool carrying = player->HasAura(SPELL_KNOWLEDGE_MARKER) || player->HasAura(SPELL_CACHE_MARKER);
+    bool carrying = player->HasAura(SPELL_KNOWLEDGE_MARKER) || player->HasAura(SPELL_CACHE_MARKER)
+        || player->HasAura(GetBoonSpellFor(Boon::Cooldown, player->GetClass()));
     for (BoonInfo const& info : kBoons)
         if (carrying || player->HasAura(info.spellId))
         {
@@ -926,17 +938,6 @@ int32 GetCcDurationReductionPct(Unit const* target, uint32 mechanicMask)
     return AmountOf(target, SPELL_BOON_CC_DURATION, 90);
 }
 
-int32 GetPowerCostReductionPct(Unit const* caster, Powers power)
-{
-    switch (power)
-    {
-        case POWER_MANA:   return AmountOf(caster, SPELL_BOON_MANA_COST, 100);
-        case POWER_RAGE:   return AmountOf(caster, SPELL_BOON_RAGE_COST, 100);
-        case POWER_ENERGY: return AmountOf(caster, SPELL_BOON_ENERGY_COST, 100);
-        default:           return 0;
-    }
-}
-
 int32 GetMountCastTimeReductionMs(Unit const* caster)
 {
     return AmountOf(caster, SPELL_BOON_MOUNT_SPEED, 3000);
@@ -945,11 +946,6 @@ int32 GetMountCastTimeReductionMs(Unit const* caster)
 bool AllowsMountingInCombat(Unit const* caster)
 {
     return caster && caster->HasAura(SPELL_BOON_MOUNT_SPEED);
-}
-
-int32 GetCooldownReductionPct(Unit const* caster)
-{
-    return AmountOf(caster, SPELL_BOON_COOLDOWN, 100);
 }
 
 int32 GetRageGenerationPct(Unit const* unit)

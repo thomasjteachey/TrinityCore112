@@ -124,9 +124,12 @@ enum BG_VHR_Constants
     // wave has to be spread over several. One cell per ten clones, rounded up.
     BG_VHR_CLONES_PER_CELL = 10,
 
-    // The gates-closed preparation window, in milliseconds. Announced once as
-    // it opens, then silently until BG_VHR_COUNTDOWN_FROM_SECONDS, then every
-    // second down to the gates.
+    // Defaults for the gates-closed preparation window and the second the
+    // per-second countdown starts at; the live values are
+    // Centurion.VioletHold.PrepSeconds / .CountdownFromSeconds (World.cpp),
+    // read at use time so `.reload config` applies to the next wave. The
+    // window is announced once as it opens, then silently until the
+    // countdown second, then every second down to the gates.
     BG_VHR_PREP_MS = 30 * IN_MILLISECONDS,
     BG_VHR_COUNTDOWN_FROM_SECONDS = 15,
 
@@ -334,6 +337,7 @@ private:
     void ReleaseWaveFromPreparation();
     // Centre-screen "Next wave in N..." notification, once per whole second.
     void AnnounceWaveCountdown();
+    uint32 GetPrepWindowMs() const;
     void SetWaveEnemyImmunity(bool immune);
     void CheckRunState();
     void TeleportSurvivorsToGurubashi();
