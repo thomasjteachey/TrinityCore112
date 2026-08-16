@@ -84,7 +84,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::SpellCrit,    SPELL_BOON_SPELL_CRIT,   3, 100, MASK_CASTER,   5, "Boon of Insight",      "spell crit",                              "%" },
     { Boon::AttackSpeed,  SPELL_BOON_ATTACK_SPEED, 4, 255, MASK_MELEE,    6, "Boon of Haste",        "attack speed",                            "%" },
     { Boon::CastSpeed,    SPELL_BOON_CAST_SPEED,   4, 100, MASK_CASTER,   6, "Boon of Celerity",     "casting speed",                           "%" },
-    { Boon::MountSpeed,   SPELL_BOON_MOUNT_SPEED,  1,   1, MASK_ALL,     2, "Boon of the Outrider", "mounts summon instantly, even in combat and while moving (unique)", "" },
+    { Boon::MountSpeed,   SPELL_BOON_MOUNT_SPEED,  1,   1, MASK_ALL,     2, "Boon of the Outrider", "mounts summon instantly, even in combat (unique)", "" },
     { Boon::Cooldown,     SPELL_BOON_COOLDOWN,     5, 100, MASK_ALL,     4, "Boon of Alacrity",     "cooldown reduction",                      "%" },
     { Boon::Resistance,   SPELL_BOON_RESISTANCE,   5, 255, MASK_ALL,      6, "Boon of Warding",      "to all resistances",                      "" },
     { Boon::Level,        SPELL_BOON_LEVEL,        1, 100, MASK_ALL,     3, "Boon of Ascension",    "level, with its talent point (until you leave)", "" },
@@ -984,6 +984,16 @@ void OnLogin(Player* player)
             // the taught spells did not (dependent, never saved) - put them
             // back from the marker.
             RestoreTaughtSpells(player);
+
+            // Boon of the Outrider is a spellmod now (was a dummy). A copy
+            // saved by an older build carries the dummy's amount (2999) into
+            // the spellmod slot, which would ADD three seconds. Re-cast so the
+            // amounts come from the current DBC. Unique, so nothing is lost.
+            if (player->HasAura(SPELL_BOON_MOUNT_SPEED))
+            {
+                player->RemoveAurasDueToSpell(SPELL_BOON_MOUNT_SPEED);
+                player->CastSpell(player, SPELL_BOON_MOUNT_SPEED, true);
+            }
             return;
         }
     }

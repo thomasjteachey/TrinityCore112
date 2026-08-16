@@ -1346,11 +1346,12 @@ void BattlegroundVHR::ModifyEndOfMatchHonorRewards(uint32 /*winner*/, uint32 tea
     loserHonor = reward;
 }
 
-// Gold is the arena win payout, times the wave the run ended on, halved. Wave
-// as reached, not cleared: a party that dies on wave 7 is paid for wave 7.
-// Before the first wave (_waveNumber 0) nothing is paid. Without this the hold
-// paid the flat battleground winner/loser gold on every run, wave 1 wipe or
-// not, which was far too much for what is a party-sized survival mode.
+// Gold is the arena win payout, times the wave the run ended on, halved - the
+// honor formula without the compounding. Wave as reached, not cleared: a party
+// that dies on wave 7 is paid for wave 7. Before the first wave (_waveNumber
+// 0) nothing is paid. Without this the hold paid the flat battleground
+// winner/loser gold on every run, wave 1 wipe or not, which was far too much
+// for what is a party-sized survival mode.
 uint32 BattlegroundVHR::GetMoneyRewardForRun() const
 {
     if (!_waveNumber)
@@ -1361,7 +1362,7 @@ uint32 BattlegroundVHR::GetMoneyRewardForRun() const
     float const arenaMultiplier = sWorld->getFloatConfig(CONFIG_CENTURION_BG_ARENA_REWARD_MULTIPLIER);
     double const arenaWinMoney = double(sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_MONEY_WINNER)) * double(arenaMultiplier);
 
-    return uint32(std::lround(arenaWinMoney * double(_waveNumber) / 2.0));
+    return uint32(std::lround(arenaWinMoney * double(_waveNumber) / double(BG_VHR_REWARD_DIVISOR)));
 }
 
 void BattlegroundVHR::ModifyEndOfMatchMoneyRewards(uint32 /*winner*/, uint32 team, uint32& winnerMoney, uint32& loserMoney) const
