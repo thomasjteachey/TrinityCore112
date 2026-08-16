@@ -361,36 +361,6 @@ class spell_vhr_boon_cache : public AuraScript
     }
 };
 
-// 90282 Outrider's Call - Boon of the Outrider's instant "mount now" ability.
-class spell_vhr_outriders_call : public SpellScript
-{
-    PrepareSpellScript(spell_vhr_outriders_call);
-
-    SpellCastResult CheckCast()
-    {
-        Player* player = GetCaster()->ToPlayer();
-        if (!player)
-            return SPELL_FAILED_BAD_TARGETS;
-        // Only meaningful while the boon is held; the spell itself is stripped
-        // with the boon, this just closes the window between the two.
-        if (!VioletHoldBoons::AllowsMountingInCombat(player))
-            return SPELL_FAILED_CASTER_AURASTATE;
-        return SPELL_CAST_OK;
-    }
-
-    void HandleDummy(SpellEffIndex /*effIndex*/)
-    {
-        if (Player* player = GetCaster()->ToPlayer())
-            VioletHoldBoons::SummonFastestMount(player);
-    }
-
-    void Register() override
-    {
-        OnCheckCast += SpellCheckCastFn(spell_vhr_outriders_call::CheckCast);
-        OnEffectHitTarget += SpellEffectFn(spell_vhr_outriders_call::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
-    }
-};
-
 void AddSC_violet_hold_boons()
 {
     new npc_violet_hold_boon_broker();
@@ -398,5 +368,4 @@ void AddSC_violet_hold_boons()
     RegisterSpellScript(spell_vhr_boon_echoes);
     RegisterSpellScript(spell_vhr_boon_ascension);
     RegisterSpellScript(spell_vhr_boon_cache);
-    RegisterSpellScript(spell_vhr_outriders_call);
 }

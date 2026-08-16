@@ -144,17 +144,6 @@ namespace VioletHoldBoons
         // The extra swing granted by SPELL_BOON_EXTRA_ATTACK's proc.
         SPELL_BOON_EXTRA_ATTACK_SWING = 90250,
 
-        // "Outrider's Call": the ability Boon of the Outrider teaches. Mount
-        // spells are family-GENERIC with empty class masks, so nothing the
-        // client understands (spellmods, ignore-aurastate) can reach them, and
-        // the client greys out / refuses the mount button in combat and while
-        // moving on its own before the server ever hears about it. This is a
-        // plain instant, no-restriction spell whose server script summons the
-        // fastest mount the player knows (triggered, so cast time and the
-        // combat/moving checks do not apply). Taught dependent (never saved);
-        // re-taught on relog while the boon aura is held; removed by StripAll.
-        SPELL_OUTRIDERS_CALL = 90282,
-
         // Level-60 editions of class spells that only exist at 64+ in the
         // stock data. See sql/custom/dbc/2026_08_15_01_dbc_violet_hold_class_spells.sql.
         SPELL_L60_SPELL_REFLECTION = 90260,   // 23920 was repurposed as the passive "Shield Reflection" here
@@ -321,9 +310,6 @@ namespace VioletHoldBoons
     TC_GAME_API int32 GetMountCastTimeReductionMs(Unit const* caster);
     // Boon of the Outrider also lets mounts be summoned in combat (Spell::CheckCast).
     TC_GAME_API bool AllowsMountingInCombat(Unit const* caster);
-    // Outrider's Call: summon the fastest mount the player knows, right now.
-    // Returns false (with the reason sent to the player) if there is none.
-    TC_GAME_API bool SummonFastestMount(Player* player);
     // Percent added to rage gained from dealing and taking damage (Unit::RewardRage).
     TC_GAME_API int32 GetRageGenerationPct(Unit const* unit);
 }

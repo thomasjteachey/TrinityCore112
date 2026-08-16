@@ -5,7 +5,6 @@
 #include "VioletHoldBoons.h"
 
 #include "Battleground.h"
-#include "Chat.h"
 #include "Containers.h"
 #include "DBCStores.h"
 #include "Errors.h"
@@ -70,7 +69,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::SpellCrit,    SPELL_BOON_SPELL_CRIT,   3, 255, MASK_CASTER,   5, "Boon of Insight",      "spell crit",                              "%" },
     { Boon::AttackSpeed,  SPELL_BOON_ATTACK_SPEED, 4, 255, MASK_MELEE,    6, "Boon of Haste",        "attack speed",                            "%" },
     { Boon::CastSpeed,    SPELL_BOON_CAST_SPEED,   4, 100, MASK_CASTER,   6, "Boon of Celerity",     "casting speed",                           "%" },
-    { Boon::MountSpeed,   SPELL_BOON_MOUNT_SPEED,  1,   1, MASK_ALL,     2, "Boon of the Outrider", "grants Outrider's Call: instantly summon your fastest mount, even in combat or while moving (unique)", "" },
+    { Boon::MountSpeed,   SPELL_BOON_MOUNT_SPEED,  1,   1, MASK_ALL,     2, "Boon of the Outrider", "mounts summon 3 sec faster, even in combat (unique)",     "" },
     { Boon::Cooldown,     SPELL_BOON_COOLDOWN,     5, 100, MASK_ALL,     4, "Boon of Alacrity",     "cooldown reduction",                      "%" },
     { Boon::Resistance,   SPELL_BOON_RESISTANCE,   5, 255, MASK_ALL,      6, "Boon of Warding",      "to all resistances",                      "" },
     { Boon::Level,        SPELL_BOON_LEVEL,        1, 100, MASK_ALL,     3, "Boon of Ascension",    "level, with its talent point (until you leave)", "" },
@@ -604,14 +603,6 @@ std::vector<Offer> RollOffers(std::vector<Player const*> const& roster)
     return picked;
 }
 
-// Boon of the Outrider's ability. Dependent: lives only for the session,
-// like the taught class spells, and comes back through RestoreTaughtSpells.
-static void TeachOutridersCall(Player* player)
-{
-    if (!player->HasSpell(SPELL_OUTRIDERS_CALL))
-        player->LearnSpell(SPELL_OUTRIDERS_CALL, /*dependent*/ true);
-}
-
 PickResult Take(Player* player, Offer offer)
 {
     PickResult const check = CanTake(player, offer);
@@ -705,9 +696,6 @@ PickResult Take(Player* player, Offer offer)
     else
         aura->ModStackAmount(info.grantStacks);
 
-    if (info.boon == Boon::MountSpeed)
-        TeachOutridersCall(player);
-
     return PickResult::Ok;
 }
 
@@ -792,9 +780,6 @@ void StripAll(Player* player)
                 player->RemoveSpell(*itr, false, false);
     }
 
-    if (player->HasSpell(SPELL_OUTRIDERS_CALL))
-        player->RemoveSpell(SPELL_OUTRIDERS_CALL, false, false);
-
     for (BoonInfo const& info : kBoons)
         player->RemoveAurasDueToSpell(info.spellId);
     for (uint32 id = SPELL_BOON_COOLDOWN_CLASS_FIRST; id <= SPELL_BOON_COOLDOWN_CLASS_LAST; ++id)
@@ -807,10 +792,6 @@ void RestoreTaughtSpells(Player* player)
 {
     if (!player)
         return;
-
-    // Dependent spells are not saved; the boon aura is.
-    if (player->HasAura(SPELL_BOON_MOUNT_SPEED))
-        TeachOutridersCall(player);
 
     for (uint32 tableSpellId : ReadKnowledge(player))
     {
@@ -965,59 +946,6 @@ int32 GetMountCastTimeReductionMs(Unit const* caster)
 bool AllowsMountingInCombat(Unit const* caster)
 {
     return caster && caster->HasAura(SPELL_BOON_MOUNT_SPEED);
-}
-
-bool SummonFastestMount(Player* player)
-{
-    if (!player)
-        return false;
-
-    // Fastest ground mount the character actually knows. Flying mounts carry a
-    // ground speed effect too, so they qualify at their ground speed; ties go
-    // to the first found. Only active, non-removed spells count - the same
-    // set the mount journal shows.
-    uint32 bestId = 0;
-    int32 bestSpeed = -1;
-    for (auto const& [spellId, playerSpell] : player->GetSpellMap())
-    {
-        if (playerSpell.state == PLAYERSPELL_REMOVED || playerSpell.disabled || !playerSpell.active)
-            continue;
-
-        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
-        if (!spellInfo || !spellInfo->HasAura(SPELL_AURA_MOUNTED))
-            continue;
-
-        int32 speed = 0;
-        for (SpellEffectInfo const& eff : spellInfo->GetEffects())
-            if (eff.IsAura(SPELL_AURA_MOD_INCREASE_MOUNTED_SPEED))
-                speed = std::max(speed, eff.CalcValue(player));
-
-        if (speed > bestSpeed)
-        {
-            bestSpeed = speed;
-            bestId = spellId;
-        }
-    }
-
-    if (!bestId)
-    {
-        ChatHandler(player->GetSession()).SendSysMessage("You know no mount to call.");
-        return false;
-    }
-
-    if (player->IsMounted())
-        return true;
-
-    // A druid in cat/bear would otherwise get the usual "shapeshifted" refusal
-    // from CheckCast; the whole point of the ability is "on the mount, now".
-    if (player->IsInDisallowedMountForm())
-        player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
-
-    // Triggered: no cast time, no combat / moving refusals - that is the
-    // whole point of the boon. Zone rules (no mounts allowed) still apply
-    // from CheckCast.
-    player->CastSpell(player, bestId, TRIGGERED_FULL_MASK);
-    return true;
 }
 
 int32 GetRageGenerationPct(Unit const* unit)
