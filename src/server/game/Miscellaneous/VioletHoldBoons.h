@@ -83,10 +83,10 @@ namespace VioletHoldBoons
 
         // Second batch (2026-08-16).
         Ricochet,       // damage has a chance to leap to a second enemy for half
-        Overkill,       // excess killing-blow damage splashes nearby enemies
+        Overkill,       // unique: ALL excess killing-blow damage splashes nearby enemies
         Reflection,     // % of melee damage taken thrown back
         Vampire,        // % of damage dealt returned as health
-        Phoenix,        // survive one killing blow (unique per pick)
+        Phoenix,        // survive one killing blow at full hp/mana (unique per pick)
         Greed,          // RUN-WIDE: brokers show an extra option
         Hoarder,        // RUN-WIDE, unique: an extra broker every wave
         Beastmaster,    // pets & guardians +% damage and health
@@ -361,16 +361,16 @@ namespace VioletHoldBoons
 
     // Unit::DealDamage, when `damage` would kill `victim`: a Phoenix holder
     // spends the boon and the caller clamps the blow to leave 1 health, then
-    // calls CompletePhoenixRescue once the damage has been applied. True when
-    // the boon was spent.
+    // calls CompletePhoenixRescue (full health and mana) once the damage has
+    // been applied. True when the boon was spent.
     TC_GAME_API bool TryPhoenixRescue(Unit* victim);
     TC_GAME_API void CompletePhoenixRescue(Unit* victim);
-    constexpr uint8 PHOENIX_RESTORE_PCT = 30;
+    constexpr uint8 PHOENIX_RESTORE_PCT = 100;
 
     // Unit::DealDamage, on a killing blow: Overkill splashes `overkill` (the
     // damage past the victim's health) onto enemies near the victim.
     TC_GAME_API void OnKillingBlow(Unit* attacker, Unit* victim, uint32 overkill, SpellInfo const* spellProto);
-    constexpr float OVERKILL_SPLASH_RADIUS = 8.0f;
+    constexpr float OVERKILL_SPLASH_RADIUS = 15.0f;
     constexpr float RICOCHET_RADIUS = 10.0f;
 
     // Unit::SetMinion(apply): a Beastmaster owner's blessing goes on the new

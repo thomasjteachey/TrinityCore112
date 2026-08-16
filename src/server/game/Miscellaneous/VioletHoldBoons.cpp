@@ -96,10 +96,10 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     // cap against the RUN, not the taker - see CanTake/GetStacks; their aura on
     // the taker is only the record of who bought them.
     { Boon::Ricochet,     SPELL_BOON_RICOCHET,     5,  50, MASK_ALL,      4, "Boon of Ricochet",     "chance for damage to ricochet to a nearby enemy for half", "%" },
-    { Boon::Overkill,     SPELL_BOON_OVERKILL,    25, 100, MASK_ALL,      4, "Boon of Overkill",     "of overkill damage splashes to enemies within 8 yd",     "%" },
+    { Boon::Overkill,     SPELL_BOON_OVERKILL,     1,   1, MASK_ALL,      3, "Boon of Overkill",     "all overkill damage from your killing blows splashes enemies within 15 yd (unique)", "" },
     { Boon::Reflection,   SPELL_BOON_REFLECTION,  10,  50, MASK_ALL,      5, "Boon of Reflection",   "of melee damage taken reflected",         "%" },
     { Boon::Vampire,      SPELL_BOON_VAMPIRE,      3,  30, MASK_ALL,      4, "Boon of the Vampire",  "of damage dealt returned as health",      "%" },
-    { Boon::Phoenix,      SPELL_BOON_PHOENIX,      1,   1, MASK_ALL,      2, "Boon of the Phoenix",  "survive one killing blow at 30% health and mana (unique)", "" },
+    { Boon::Phoenix,      SPELL_BOON_PHOENIX,      1,   1, MASK_ALL,      2, "Boon of the Phoenix",  "survive one killing blow at full health and mana (unique)", "" },
     { Boon::Greed,        SPELL_BOON_GREED,        1,   3, MASK_ALL,      3, "Boon of Greed",        "extra option at every broker from now on (run-wide)",    "" },
     { Boon::Hoarder,      SPELL_BOON_HOARDER,      1,   1, MASK_ALL,      2, "Boon of the Hoarder",  "extra broker after every wave from now on (run-wide, unique)", "" },
     { Boon::Beastmaster,  SPELL_BOON_BEASTMASTER, 10, 100, MASK_PETS,     5, "Boon of the Beastmaster", "pet and guardian damage and health",  "%" },
@@ -1034,6 +1034,7 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
         case Boon::MountSpeed:
         case Boon::Phoenix:
         case Boon::Hoarder:
+        case Boon::Overkill:
             return Trinity::StringFormat("{}: {}", info.name, info.summary);
         case Boon::Level:
             return Trinity::StringFormat("{}: +1 {}", info.name, info.summary);
@@ -1226,13 +1227,11 @@ void OnKillingBlow(Unit* attacker, Unit* victim, uint32 overkill, SpellInfo cons
     if (!owner)
         return;
 
-    uint8 const stacks = GetStacks(owner, Boon::Overkill);
-    if (!stacks)
+    if (!GetStacks(owner, Boon::Overkill))
         return;
 
-    uint32 const splash = CalculatePct(overkill, uint32(stacks));
-    if (!splash)
-        return;
+    // Unique boon: the entire excess, on everyone in range.
+    uint32 const splash = overkill;
 
     // Collected before any of it is dealt: a splash that kills may reshape the
     // neighbourhood mid-loop otherwise.
