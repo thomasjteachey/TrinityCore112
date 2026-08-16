@@ -73,7 +73,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Speed,        SPELL_BOON_SPEED,        8, 255, MASK_ALL,    10, "Boon of Swiftness",    "movement speed",                          "%" },
     { Boon::Damage,       SPELL_BOON_DAMAGE,       3, 255, MASK_ALL,      5, "Boon of Might",        "damage done",                             "%" },
     { Boon::DamageTaken,  SPELL_BOON_DAMAGE_TAKEN, 3,  50, MASK_ALL,     8, "Boon of Fortitude",    "less damage taken",                       "%" },
-    { Boon::CcDuration,   SPELL_BOON_CC_DURATION, 15,  90, MASK_ALL,     7, "Boon of Resolve",      "shorter crowd control and interrupt lockouts on you", "%" },
+    { Boon::CcDuration,   SPELL_BOON_CC_DURATION, 15,  90, MASK_ALL,     7, "Boon of Resolve",      "shorter crowd control (stuns, roots, snares, fears...) and interrupt lockouts on you", "%" },
     { Boon::ManaCost,     SPELL_BOON_MANA_COST,   10, 100, MASK_MANA,    7, "Boon of Clarity",      "cheaper mana costs",                      "%" },
     { Boon::RageCost,     SPELL_BOON_RAGE_COST,   10,  75, MASK_RAGE,    7, "Boon of Fury",         "cheaper rage costs",                      "%" },
     { Boon::EnergyCost,   SPELL_BOON_ENERGY_COST, 10,  75, MASK_ENERGY,  7, "Boon of Finesse",      "cheaper energy costs",                    "%" },
@@ -169,8 +169,9 @@ ItemGrantInfo const kItemGrants[ITEM_GRANT_COUNT] =
 // Both weapons come with Crusader on them (SpellItemEnchantment 1900).
 constexpr uint32 ENCHANT_CRUSADER = 1900;
 
-// Mechanics that count as crowd control for Boon of Resolve. Slows, dazes and
-// disarms are deliberately left out. Interrupt lockouts ARE in: Kick /
+// Mechanics that count as crowd control for Boon of Resolve. Disarms are
+// left out; snares and dazes (Crippling Poison, Hamstring, Frostbolt's slow,
+// Concussive Shot) are in. Interrupt lockouts ARE in: Kick /
 // Pummel / Counterspell / Spell Lock / Mind Freeze carry MECHANIC_INTERRUPT
 // (on the spell or the interrupt effect) and Spell::EffectInterruptCast runs
 // the lockout duration through ModSpellDuration with that effect's mask, so
@@ -179,6 +180,8 @@ constexpr uint32 ENCHANT_CRUSADER = 1900;
 constexpr uint32 CC_MECHANIC_MASK =
       (1 << MECHANIC_CHARM)
     | (1 << MECHANIC_INTERRUPT)
+    | (1 << MECHANIC_SNARE)
+    | (1 << MECHANIC_DAZE)
     | (1 << MECHANIC_DISORIENTED)
     | (1 << MECHANIC_FEAR)
     | (1 << MECHANIC_GRIP)
