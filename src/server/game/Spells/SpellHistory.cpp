@@ -26,7 +26,6 @@
 #include "Spell.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
-#include "VioletHoldBoons.h"
 #include "WorldPacket.h"
 
 SpellHistory::Clock::duration const SpellHistory::InfinityCooldownDelay = std::chrono::duration_cast<SpellHistory::Clock::duration>(std::chrono::seconds(MONTH));
@@ -294,7 +293,6 @@ void SpellHistory::StartCooldown(SpellInfo const* spellInfo, uint32 itemId, Spel
     Clock::time_point catrecTime;
     Clock::time_point recTime;
     bool needsCooldownPacket = false;
-    bool boonShortenedCategory = false;
 
     // overwrite time for selected category
     if (onHold)
@@ -331,23 +329,6 @@ void SpellHistory::StartCooldown(SpellInfo const* spellInfo, uint32 itemId, Spel
             }
         }
 
-        // Violet Hold "Boon of Alacrity": a percentage off the holder's spell
-        // cooldowns, self and category alike. Item-use cooldowns (potions,
-        // trinkets) are left alone. The client predicts the DBC value on its
-        // own, so it is told the real one, exactly as MOD_COOLDOWN does.
-        if (!itemId && (cooldown > 0 || categoryCooldown > 0))
-        {
-            if (int32 boonPct = VioletHoldBoons::GetCooldownReductionPct(_owner))
-            {
-                boonShortenedCategory = categoryCooldown > 0;
-                if (cooldown > 0)
-                    cooldown = cooldown * (100 - boonPct) / 100;
-                if (categoryCooldown > 0)
-                    categoryCooldown = categoryCooldown * (100 - boonPct) / 100;
-                needsCooldownPacket = true;
-            }
-        }
-
         // replace negative cooldowns by 0
         if (cooldown < 0)
             cooldown = 0;
@@ -357,42 +338,7 @@ void SpellHistory::StartCooldown(SpellInfo const* spellInfo, uint32 itemId, Spel
 
         // no cooldown after applying spell mods
         if (cooldown == 0 && categoryCooldown == 0)
-        {
-            // The boon took the whole cooldown away (its 100% cap, or a short
-            // one that truncated to nothing). The client already started its
-            // own DBC-predicted timer on cast and would refuse the next cast
-            // locally, so tell it to clear - the spell and, if it shares a
-            // category, every known spell in that category that has no live
-            // cooldown of its own.
-            if (needsCooldownPacket)
-            {
-                if (Player* playerOwner = GetPlayerOwner())
-                {
-                    std::vector<int32> cleared;
-                    cleared.push_back(int32(spellInfo->Id));
-                    if (boonShortenedCategory && categoryId)
-                    {
-                        for (auto const& [knownId, knownSpell] : playerOwner->GetSpellMap())
-                        {
-                            if (knownId == spellInfo->Id || knownSpell.state == PLAYERSPELL_REMOVED || knownSpell.disabled)
-                                continue;
-
-                            SpellInfo const* other = sSpellMgr->GetSpellInfo(knownId);
-                            if (!other || other->GetCategory() != categoryId)
-                                continue;
-
-                            auto ownItr = _spellCooldowns.find(knownId);
-                            if (ownItr != _spellCooldowns.end() && ownItr->second.CooldownEnd > curTime)
-                                continue;
-
-                            cleared.push_back(int32(knownId));
-                        }
-                    }
-                    SendClearCooldowns(cleared);
-                }
-            }
             return;
-        }
 
         catrecTime = categoryCooldown ? curTime + std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(categoryCooldown)) : curTime;
         recTime = cooldown ? curTime + std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(cooldown)) : catrecTime;
@@ -407,41 +353,8 @@ void SpellHistory::StartCooldown(SpellInfo const* spellInfo, uint32 itemId, Spel
         {
             if (Player* playerOwner = GetPlayerOwner())
             {
-                // A category-only spell (shocks, traps) has cooldown 0 here and
-                // lives on catrecTime; telling the client "0" would clear its
-                // own prediction, so send the category value for that case.
-                PacketCooldowns cooldowns;
-                cooldowns[spellInfo->Id] = uint32(cooldown ? cooldown : categoryCooldown);
-
-                // The client predicts a shared category cooldown from its own
-                // DBC and only learns the real value for the spell it is told
-                // about, so when the boon shortened a category every other
-                // known spell in that category is told too - each at the
-                // longer of the new category time and whatever own cooldown
-                // it is still serving, so nothing is ever shown shorter than
-                // the server will actually allow.
-                if (boonShortenedCategory && categoryId)
-                {
-                    for (auto const& [knownId, knownSpell] : playerOwner->GetSpellMap())
-                    {
-                        if (knownId == spellInfo->Id || knownSpell.state == PLAYERSPELL_REMOVED || knownSpell.disabled)
-                            continue;
-
-                        SpellInfo const* other = sSpellMgr->GetSpellInfo(knownId);
-                        if (!other || other->GetCategory() != categoryId)
-                            continue;
-
-                        uint32 shown = uint32(categoryCooldown);
-                        auto ownItr = _spellCooldowns.find(knownId);
-                        if (ownItr != _spellCooldowns.end() && ownItr->second.CooldownEnd > curTime)
-                            shown = std::max<uint32>(shown, uint32(std::chrono::duration_cast<std::chrono::milliseconds>(ownItr->second.CooldownEnd - curTime).count()));
-
-                        cooldowns[knownId] = shown;
-                    }
-                }
-
                 WorldPacket spellCooldown;
-                BuildCooldownPacket(spellCooldown, SPELL_COOLDOWN_FLAG_NONE, cooldowns);
+                BuildCooldownPacket(spellCooldown, SPELL_COOLDOWN_FLAG_NONE, spellInfo->Id, cooldown);
                 playerOwner->SendDirectMessage(&spellCooldown);
             }
         }
