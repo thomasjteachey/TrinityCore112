@@ -198,8 +198,8 @@ enum BG_VHR_Constants
     // compounds BG_VHR_HONOR_COMPOUND_PERCENT per wave (see
     // GetHonorRewardForRun); gold does not. This is the single knob for the
     // mode's overall generosity rather than a per-wave tweak.
-    BG_VHR_REWARD_DIVISOR = 2,
-    BG_VHR_HONOR_COMPOUND_PERCENT = 10,
+    BG_VHR_REWARD_DIVISOR = 10,
+    BG_VHR_HONOR_COMPOUND_PERCENT = 1,
 
     // Clearing a wave puts every casualty back on their feet at this fraction
     // of health and mana. Being brought back weakened is the cost of dying; the
