@@ -83,6 +83,7 @@
 #include "SkillExtraItems.h"
 #include "SmartScriptMgr.h"
 #include "SpellMgr.h"
+#include "StringConvert.h"
 #include "TicketMgr.h"
 #include "TransportMgr.h"
 #include "Unit.h"
@@ -1530,6 +1531,32 @@ void World::LoadConfigSettings(bool reload)
     m_int_configs[CONFIG_CENTURION_LEAP_XY_SPEED] = sConfigMgr->GetIntDefault("Centurion.LeapXYSpeed", 100);
     m_int_configs[CONFIG_CENTURION_LEAP_Z_SPEED] = sConfigMgr->GetIntDefault("Centurion.LeapZSpeed", 20);
 
+    // Auras that waive the equipped-WEAPON requirement on melee abilities, so a
+    // set bonus can let a warrior fight bare-handed. Comma-separated ids; empty
+    // = off. A list because a rank chain is one spell to the player but N ids
+    // here - the client-side half (clientedits [RuleRelax] WeaponAura) lists the
+    // same ids, and the two must be kept in step by hand.
+    // NOTE: neither Trinity::StringTo nor std::from_chars tolerates whitespace,
+    // so each token is trimmed before parsing - "1243, 1244" must not silently
+    // become just 1243.
+    m_unarmedWaiverAuras.clear();
+    {
+        std::string const rawWaiverAuras = sConfigMgr->GetStringDefault("Centurion.Unarmed.WaiverAuras", "");
+        for (std::string_view token : Trinity::Tokenize(rawWaiverAuras, ',', false))
+        {
+            while (!token.empty() && (token.front() == ' ' || token.front() == '\t'))
+                token.remove_prefix(1);
+            while (!token.empty() && (token.back() == ' ' || token.back() == '\t'))
+                token.remove_suffix(1);
+
+            if (Optional<uint32> auraId = Trinity::StringTo<uint32>(token))
+                if (*auraId)
+                    m_unarmedWaiverAuras.push_back(*auraId);
+        }
+        if (!m_unarmedWaiverAuras.empty())
+            TC_LOG_INFO("server.loading", "Unarmed weapon-requirement waiver active for {} aura(s).", m_unarmedWaiverAuras.size());
+    }
+
     m_int_configs[CONFIG_CENTURION_HEARTBEATRESIST_NUMROLLS] = sConfigMgr->GetIntDefault("Centurion.HeartbeatResist.NumberRolls", 4);
     m_int_configs[CONFIG_CENTURION_HEARTBEATRESIST_REGRESSION] = sConfigMgr->GetIntDefault("Centurion.HeartbeatResist.Regression", 30);
     m_float_configs[CONFIG_CENTURION_HEARTBEATRESIST_REGRESSION_LERP] = sConfigMgr->GetFloatDefault("Centurion.HeartbeatResist.RegressionLerp", .2f);
@@ -1641,6 +1668,17 @@ void World::LoadConfigSettings(bool reload)
     // call ScriptMgr if we're reloading the configuration
     if (reload)
         sScriptMgr->OnConfigLoad(reload);
+}
+
+// Out of line so World.h does not need <algorithm>. The list is a handful of
+// ids at most, so a linear scan beats anything with setup cost.
+bool World::IsUnarmedWaiverAura(uint32 spellId) const
+{
+    for (uint32 auraId : m_unarmedWaiverAuras)
+        if (auraId == spellId)
+            return true;
+
+    return false;
 }
 
 /// Initialize the World

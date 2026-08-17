@@ -4039,6 +4039,11 @@ void Unit::_ApplyAura(AuraApplication* aurApp, uint8 effMask)
                     player->ApplyEnchantment(weapon, TEMP_ENCHANTMENT_SLOT, false);
                     weapon->ClearEnchantment(TEMP_ENCHANTMENT_SLOT);
                 }
+
+        // A waiver aura changes which weapon-gated passives qualify. Latch only -
+        // the sweep adds and removes auras, and we are inside aura application.
+        if (sWorld->IsUnarmedWaiverAura(aura->GetId()))
+            player->ScheduleUnarmedWaiverSync();
     }
 }
 
@@ -4148,8 +4153,17 @@ void Unit::_UnapplyAura(AuraApplicationMap::iterator& i, AuraRemoveMode removeMo
         UpdateIceFangSprintTurnRate();
 
     if (Player* player = ToPlayer())
+    {
         if (sConditionMgr->IsSpellUsedInSpellClickConditions(aurApp->GetBase()->GetId()))
             player->UpdateVisibleGameobjectsOrSpellClicks();
+
+        // Losing a waiver aura re-gates the weapon-gated passives it was keeping
+        // alive. Latch only, and deliberately before the `i = m_appliedAuras.begin()`
+        // reset below - the application is already erased, so the sweep sees the
+        // correct post-removal state when it drains.
+        if (sWorld->IsUnarmedWaiverAura(aura->GetId()))
+            player->ScheduleUnarmedWaiverSync();
+    }
 
     // The diagnostic above describes the operation currently in progress. Do
     // not leave a successfully removed aura as the apparent cause of a later,

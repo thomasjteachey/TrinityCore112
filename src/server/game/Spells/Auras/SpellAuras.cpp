@@ -2465,37 +2465,60 @@ uint8 Aura::GetProcEffectMask(AuraApplication* aurApp, ProcEventInfo& eventInfo,
     {
         if (!GetSpellInfo()->HasAttribute(SPELL_ATTR3_IGNORE_PROC_SUBCLASS_MASK))
         {
+            Player* player = target->ToPlayer();
             Item* item = nullptr;
+            // Set only when the slot is GENUINELY EMPTY - not disarmed, not broken,
+            // not the wrong weapon - and the player carries an unarmed waiver aura.
+            bool emptyHandWaived = false;
+
             if (GetSpellInfo()->EquippedItemClass == ITEM_CLASS_WEAPON)
             {
-                if (target->ToPlayer()->IsInFeralForm())
+                if (player->IsInFeralForm())
                 {
                     return 0;
                 }
 
                 if (DamageInfo const* damageInfo = eventInfo.GetDamageInfo())
                 {
+                    uint8 slot;
                     switch (damageInfo->GetAttackType())
                     {
                         case BASE_ATTACK:
-                            item = target->ToPlayer()->GetUseableItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
+                            slot = EQUIPMENT_SLOT_MAINHAND;
                             break;
                         case OFF_ATTACK:
-                            item = target->ToPlayer()->GetUseableItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
+                            slot = EQUIPMENT_SLOT_OFFHAND;
                             break;
                         default:
-                            item = target->ToPlayer()->GetUseableItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_RANGED);
+                            slot = EQUIPMENT_SLOT_RANGED;
                             break;
+                    }
+
+                    item = player->GetUseableItemByPos(INVENTORY_SLOT_BAG_0, slot);
+
+                    // An empty hand counts as a weapon that fits. GetUseableItemByPos
+                    // also returns null for a DISARMED player holding a fine weapon,
+                    // so the raw GetItemByPos below is what stops this becoming a
+                    // partial disarm immunity. Never waived for the ranged slot: a
+                    // melee-classed passive can proc off a ranged auto-attack, and
+                    // IsWeaponRequirementWaived only inspects the spell, not the event.
+                    if (!item && slot != EQUIPMENT_SLOT_RANGED
+                        && !player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot)
+                        && player->IsWeaponRequirementWaived(GetSpellInfo()))
+                    {
+                        emptyHandWaived = true;
                     }
                 }
             }
             else if (GetSpellInfo()->EquippedItemClass == ITEM_CLASS_ARMOR)
             {
                 // Check if player is wearing shield
-                item = target->ToPlayer()->GetUseableItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
+                item = player->GetUseableItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
             }
 
-            if (!item || item->IsBroken() || !item->IsFitToSpellRequirements(GetSpellInfo()))
+            // `!item` stays first so an armed player short-circuits before the raw
+            // slot read and the aura lookup. Do not hoist the waiver above it.
+            if (!emptyHandWaived && (!item || item->IsBroken() || !item->IsFitToSpellRequirements(GetSpellInfo())))
             {
                 return 0;
             }

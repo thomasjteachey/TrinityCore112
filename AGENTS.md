@@ -291,7 +291,7 @@ will pick up consumables like 28273 Bloodthistle that share the aura pair.
 | `src/server/scripts/Custom/rts_building.cpp` | committed; the AI summons the shell itself |
 | spell **90216** "Summon Goblin Workshop" | created: effect 28 → 900116, SummonProperties 64, `ImplicitTargetA=32`, `Targets=64` (ground reticle), `RangeIndex=4`, `DurationIndex=21` (permanent), icon 1 |
 | deployed | mirror + all 3 `data/dbc` + `patch-enUS-8` v1.00213 + `patch-enUS-T-test` v1.00012 |
-| client display rows (CDI 40000-40002, CMD 4000-4002, GODI 11000/11001, Vehicle/VehicleSeat) | **stock lineage in `patch-enUS-8` v1.00241 (2026-08-16)** — they were pulled out of `patch-Y` (v1.00014) after the HD-off incident (§4). HD-ON clients use patch-F's own CDI/CMD, which do NOT have these rows yet: the workshop creature cubes for them until `hd-creatures.zip` is republished with the F-lineage copies staged at `~/hdoff_fix_20260816/hdF/DBFilesClient/` |
+| client display rows (CDI 40000-40002, CMD 4000-4002, GODI 11000/11001, Vehicle/VehicleSeat) | stock lineage in `patch-enUS-8` v1.00242 AND F lineage inside `hd-creatures.zip` v1.00004 (2026-08-16); pulled out of `patch-Y` (v1.00014) after the HD-off incident (§4). Any future row must again go to BOTH |
 
 **BLOCKED:** 90216 has **no `SkillLineAbility` row**, so `.learn` succeeds but it
 never appears in a spellbook. Needs a row in `dbc.skilllineability_lplus`
@@ -325,6 +325,5 @@ the Lightbringer glow — so shrunken clones are findable.
   those stale copies and shadow live data again
 - ItemSet 1045's set bonuses reference spells 21895 / 90125 / 90126 — unverified
 - Prod worldserver restart pending for spell 90216
-- `hd-creatures.zip` (patch-F) still lacks the workshop CDI/CMD rows — republish (1.45 GB re-download for HD-on players) when the workshop ships; F-lineage copies with the rows are staged on the server (`~/hdoff_fix_20260816/hdF/`)
-- Client `patch-enUS-8` CDI carries the 146 pet-display scale bumps (0.4→1.0); servers' `data/dbc` and `dbc.creaturedisplayinfo_lplus` are pure stock — a dbcgen/mirror-sync of CDI would silently revert them; decide which is truth
-- Client `Vehicle.dbc` (now in enUS-8) has a stray row 89799 not present server-side; client `VehicleSeat.dbc` has one row more than the servers' copy
+- Prod worldserver restart also picks up the synced `data/dbc/CreatureDisplayInfo.dbc` (146 pet-display scale bumps, 2026-08-16 — the client, servers and `dbc.creaturedisplayinfo_lplus` now agree; only collision-height math changes server-side)
+- `VehicleSeat` seat 90000 AttachmentOffset differs: client patch (0.48, -2.26, 32.51 — the workshop rider-placement tuning) vs servers + `dbc.vehicleseat_lplus` (0, 0, 0). Client value = where the rider renders; server value = passenger's server position. Deliberately left as-is 2026-08-16 — decide, then copy the chosen file to the other side

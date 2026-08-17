@@ -93,12 +93,24 @@ public:
                 return true;
             }
 
-            std::vector<Offer> const& offers = OffersFor(run);
+            // The board minus whatever has gone dead since it was rolled: a
+            // unique boon somebody claimed, a class spell its only owner
+            // learned, a legendary already handed out. Lines that merely do
+            // not fit THIS reader stay - they are still somebody's - and
+            // DescribeOffer labels them.
+            std::vector<Offer> const offers = LiveOffersFor(run);
             if (offers.empty())
             {
+                // Nothing here helps anyone any more. This broker can never be
+                // consumed by a pick, and his slot is one of a fixed few, so
+                // retire him now and let the next wave put a fresh one out.
                 if (WorldSession* session = player->GetSession())
                     session->SendNotification("The broker has nothing left that would help anyone here.");
                 CloseGossipMenuFor(player);
+                _consumed = true;
+                // Frees the slot and removes the creature at the end of the
+                // update. Nothing below may touch `me` after this.
+                run->ConsumeBoonBroker(me->GetGUID());
                 return true;
             }
 
@@ -160,6 +172,26 @@ public:
         // and shown unchanged to everyone after - closing and reopening the
         // window is not a reroll, and a hunter ability stays on the board for
         // the hunter even if a mage looked first.
+        // The cached board, filtered to what at least one member of the team
+        // could still take. Recomputed on every visit: the roll is fixed, but
+        // whether an offer is still worth anything is not.
+        std::vector<Offer> LiveOffersFor(BattlegroundVHR const* run)
+        {
+            std::vector<Player const*> roster;
+            run->CollectHumanPlayers(roster);
+
+            std::vector<Offer> live;
+            for (Offer const& offer : OffersFor(run))
+                for (Player const* member : roster)
+                    if (member && CanTake(member, offer) == PickResult::Ok)
+                    {
+                        live.push_back(offer);
+                        break;
+                    }
+
+            return live;
+        }
+
         std::vector<Offer> const& OffersFor(BattlegroundVHR const* run)
         {
             if (!_rolled)

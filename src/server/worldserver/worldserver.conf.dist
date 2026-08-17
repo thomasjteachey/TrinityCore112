@@ -4459,3 +4459,50 @@ Centurion.VioletHold.CountdownFromSeconds = 15
 Centurion.VioletHold.PartyWaveChancePercent = 10
 
 ###############################################################################
+
+###################################################################################################
+#   UNARMED WEAPON-REQUIREMENT WAIVER (set bonus: fight bare-handed)
+#
+#    Centurion.Unarmed.WaiverAuras
+#        Description: Comma-separated aura IDs that waive the equipped-WEAPON requirement on
+#                     melee abilities, so a player carrying one can use Heroic Strike, Slam,
+#                     Mortal Strike and so on with an empty hand.
+#
+#                     Deliberately narrow. It waives melee weapon requirements only: ranged
+#                     and wand spells keep theirs (or an aura holder could fire Arcane Shot
+#                     with an empty ranged slot), and shield requirements are untouched, so
+#                     Shield Slam and Shield Block still need a shield.
+#
+#                     This is only half the feature. The client refuses these casts on its
+#                     own, before any packet is sent, so the matching client-side list in
+#                     clientedits AnimSpeedFix.ini [RuleRelax] WeaponAura must hold the SAME
+#                     ids. Nothing enforces that they agree - keep them in step by hand.
+#
+#                     A list rather than one id because a rank chain is one spell to the
+#                     player but N ids here: Power Word: Fortitude is 8 ranks, and an id that
+#                     does not match the rank actually on the player looks exactly like a
+#                     broken feature. A purpose-made set aura will just be one entry.
+#
+#                     The aura must be VISIBLE to the client (not PASSIVE, not
+#                     HIDDEN_CLIENTSIDE) or the client-side half cannot see it.
+#
+#                     Weapon-gated on-hit PASSIVES (Deep Wounds and the like) are
+#                     also kept alive and allowed to proc while the aura is held.
+#                     That applies only to a GENUINELY EMPTY hand: disarmed, broken
+#                     and wrong-weapon states still suppress the proc, as does cat
+#                     or bear form. Shield-gated procs are untouched.
+#
+#                     Not covered: weapon-specialisation talents that add stats or
+#                     crit stay applied but contribute nothing while unarmed, and
+#                     weapon ENCHANT procs (Windfury, Crusader, poisons) live on the
+#                     item, so with no weapon there is no enchant to fire at all.
+#
+#        Note:        Do NOT put a comment on the same line as the value - the parser does
+#                     not strip inline comments and the value silently falls back.
+#
+#        Example:     Centurion.Unarmed.WaiverAuras = 1243, 1244, 1245, 2791, 10937, 10938, 25389, 48161
+#                     (Power Word: Fortitude, all 8 ranks - the current test stand-in)
+#
+#        Default:     "" - (Disabled, no aura waives anything)
+
+Centurion.Unarmed.WaiverAuras = ""

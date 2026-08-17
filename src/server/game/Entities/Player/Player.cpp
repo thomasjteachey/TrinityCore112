@@ -522,6 +522,7 @@ Player::Player(WorldSession* session) : Unit(true)
 
     m_DelayedOperations = 0;
     m_bCanDelayTeleport = false;
+    m_unarmedWaiverSyncPending = false;
     m_bHasDelayedTeleport = false;
     m_teleport_options = 0;
 
@@ -1394,6 +1395,12 @@ void Player::Update(uint32 p_time)
     SetCanDelayTeleport(true);
     Unit::Update(p_time);
     SetCanDelayTeleport(false);
+
+    // Drained here, not at the hook: Unit::Update has returned, so the owned-aura
+    // update loop is finished, removed auras have been deleted, and no proc or
+    // spell hit-frame is live. Safe to add and remove auras.
+    if (m_unarmedWaiverSyncPending)
+        SyncUnarmedWaiverPassives();
     sScriptMgr->OnPlayerUpdate(this, p_time);
     UpdateCombatDiagnostic(p_time);
 
@@ -4015,7 +4022,7 @@ bool Player::HandlePassiveSpellLearn(SpellInfo const* spellInfo)
         {
             if (spellEffectInfo.IsAura())
             {
-                if (!HasAura(spellInfo->Id) && HasItemFitToSpellRequirements(spellInfo))
+                if (!HasAura(spellInfo->Id) && (HasItemFitToSpellRequirements(spellInfo) || IsWeaponRequirementWaived(spellInfo)))
                     AddAura(spellInfo->Id, this);
                 return false;
             }
@@ -8549,6 +8556,11 @@ void Player::ApplyItemDependentAuras(Item* item, bool apply)
 {
     if (apply)
     {
+        // Collect first, add second. AddAura can reach code that touches m_spells,
+        // and PlayerSpellMap is an unordered_map, so an insert mid-loop rehashes and
+        // invalidates the iterator. Latent before the waiver; this path is now
+        // reached far more often, so it is worth not relying on luck.
+        std::vector<uint32> toAdd;
         PlayerSpellMap const& spells = GetSpellMap();
         for (auto itr = spells.begin(); itr != spells.end(); ++itr)
         {
@@ -8559,9 +8571,14 @@ void Player::ApplyItemDependentAuras(Item* item, bool apply)
             if (!spellInfo || !spellInfo->IsPassive() || spellInfo->EquippedItemClass < 0)
                 continue;
 
-            if (!HasAura(itr->first) && HasItemFitToSpellRequirements(spellInfo))
-                AddAura(itr->first, this);  // no SMSG_SPELL_GO in sniff found
+            // Already passive-filtered above, so the waiver needs no extra gate here.
+            if (!HasAura(itr->first) && (HasItemFitToSpellRequirements(spellInfo) || IsWeaponRequirementWaived(spellInfo)))
+                toAdd.push_back(itr->first);
         }
+
+        for (uint32 spellId : toAdd)
+            if (!HasAura(spellId))
+                AddAura(spellId, this);  // no SMSG_SPELL_GO in sniff found
     }
     else
         RemoveItemDependentAurasAndCasts(item);
@@ -25787,6 +25804,54 @@ bool Player::HasItemFitToSpellRequirements(SpellInfo const* spellInfo, Item cons
     return false;
 }
 
+// A set bonus can let a player use melee abilities with an empty hand, and have
+// weapon-gated on-hit passives (Deep Wounds and friends) still proc.
+//
+// The waiver is deliberately NOT inside HasItemFitToSpellRequirements. That
+// function has five callers with genuinely different needs: the cast checks want
+// the waiver unconditionally, the PASSIVE lifecycle wants it only for passives,
+// and the item-target branch (enchants, poisons, vellums) must never see it.
+// Callers opt in individually instead.
+//
+// Keeping a passive applied because of an aura means something has to react when
+// that AURA changes - the item-dependent sweep is otherwise driven only by
+// equipment events, so "buff -> unequip -> buff expires" would strand the passive
+// applied with no weapon. Player::SyncUnarmedWaiverPassives is that reaction,
+// latched from the aura hooks in Unit::_ApplyAura / _UnapplyAura.
+//
+// Narrow on purpose. ITEM_CLASS_WEAPON alone is far too broad: of the 1961
+// weapon-gated spells in Spell.dbc, 565 are bow/gun/crossbow/thrown/wand only,
+// and most of them (Arcane Shot, Serpent Sting, Multi-Shot, Aimed Shot, Steady
+// Shot) are NOT caught by the ranged/ammo block in Spell::CheckItems, because
+// that block only covers SPELL_EFFECT_WEAPON_DAMAGE(_NOSCHOOL). Without the
+// subclass test an aura holder could shoot with an empty ranged slot.
+// ITEM_CLASS_ARMOR (shields - Shield Slam, Shield Block) is excluded by the
+// class test alone, which is what we want: this waives weapons, nothing else.
+bool Player::IsWeaponRequirementWaived(SpellInfo const* spellInfo) const
+{
+    if (!spellInfo || spellInfo->EquippedItemClass != ITEM_CLASS_WEAPON)
+        return false;
+
+    // Ranged and wand spells keep their requirement.
+    uint32 const rangedOrWand = uint32(ITEM_SUBCLASS_MASK_WEAPON_RANGED) | (1u << ITEM_SUBCLASS_WEAPON_WAND);
+    if (spellInfo->EquippedItemSubClassMask != 0 &&
+        (uint32(spellInfo->EquippedItemSubClassMask) & ~rangedOrWand) == 0)
+        return false;
+
+    if (spellInfo->GetAttackType() == RANGED_ATTACK)
+        return false;
+
+    std::vector<uint32> const& waiverAuras = sWorld->GetUnarmedWaiverAuras();
+    if (waiverAuras.empty())
+        return false;
+
+    for (uint32 auraId : waiverAuras)
+        if (HasAura(auraId))
+            return true;
+
+    return false;
+}
+
 bool Player::CanNoReagentCast(SpellInfo const* spellInfo) const
 {
     // don't take reagents for spells with SPELL_ATTR5_NO_REAGENT_WHILE_PREP
@@ -25820,7 +25885,13 @@ void Player::RemoveItemDependentAurasAndCasts(Item* pItem)
         }
 
         // skip if not item dependent or have alternative item
-        if (HasItemFitToSpellRequirements(spellInfo, pItem))
+        //
+        // The waiver is honoured for PASSIVES ONLY. This loop is not passive-filtered,
+        // and a non-passive self-cast aura that survived here would become save-eligible:
+        // it would reach character_aura and come back on a character with neither a
+        // weapon nor the waiver.
+        if (HasItemFitToSpellRequirements(spellInfo, pItem)
+            || (spellInfo->IsPassive() && IsWeaponRequirementWaived(spellInfo)))
         {
             ++itr;
             continue;
@@ -25831,10 +25902,34 @@ void Player::RemoveItemDependentAurasAndCasts(Item* pItem)
     }
 
     // currently cast spells can be dependent from item
+    // The waiver is checked here too, or an aura holder mid-Slam would have it
+    // interrupted by any unrelated item leaving a slot - a trinket swap, a
+    // shield, or durability hitting zero - which reads as a random interrupt bug.
     for (uint32 i = 0; i < CURRENT_MAX_SPELL; ++i)
         if (Spell* spell = GetCurrentSpell(CurrentSpellTypes(i)))
-            if (spell->getState() != SPELL_STATE_DELAYED && !HasItemFitToSpellRequirements(spell->m_spellInfo, pItem))
+            if (spell->getState() != SPELL_STATE_DELAYED && !HasItemFitToSpellRequirements(spell->m_spellInfo, pItem)
+                && !IsWeaponRequirementWaived(spell->m_spellInfo))
                 InterruptSpell(CurrentSpellTypes(i));
+}
+
+// Re-evaluate weapon-gated passives after a waiver aura landed or fell off.
+//
+// Deferred out of Unit::_ApplyAura / _UnapplyAura rather than called from them:
+// this sweep adds and removes auras, and those hooks run while the aura machinery
+// is mid-iteration over m_appliedAuras / m_ownedAuras. Calling it inline would
+// erase nodes out from under callers like RemoveAllAuras and RemoveAllAurasOnDeath.
+void Player::SyncUnarmedWaiverPassives()
+{
+    // Cleared FIRST: the sweep below re-enters the aura hooks, and anything they
+    // re-arm should get its own idempotent pass on the next tick rather than
+    // being swallowed here.
+    m_unarmedWaiverSyncPending = false;
+
+    if (sWorld->GetUnarmedWaiverAuras().empty() || !IsInWorld())
+        return;
+
+    ApplyItemDependentAuras(nullptr, false);   // drop what no longer qualifies
+    ApplyItemDependentAuras(nullptr, true);    // add what qualifies now
 }
 
 uint32 Player::GetResurrectionSpellId()

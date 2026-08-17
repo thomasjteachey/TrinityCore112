@@ -1170,6 +1170,10 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void SetBankBagSlotCount(uint8 count) { SetByteValue(PLAYER_BYTES_2, PLAYER_BYTES_2_OFFSET_BANK_BAG_SLOTS, count); }
         bool HasItemCount(uint32 item, uint32 count = 1, bool inBankAlso = false) const;
         bool HasItemFitToSpellRequirements(SpellInfo const* spellInfo, Item const* ignoreItem = nullptr) const;
+        bool IsWeaponRequirementWaived(SpellInfo const* spellInfo) const;
+        // Latch, not an immediate sweep - see Player::SyncUnarmedWaiverPassives.
+        void ScheduleUnarmedWaiverSync() { m_unarmedWaiverSyncPending = true; }
+        void SyncUnarmedWaiverPassives();
         bool CanNoReagentCast(SpellInfo const* spellInfo) const;
         bool HasItemOrGemWithIdEquipped(uint32 item, uint32 count, uint8 except_slot = NULL_SLOT) const;
         bool HasItemWithLimitCategoryEquipped(uint32 limitCategory, uint32 count, uint8 except_slot = NULL_SLOT) const;
@@ -2746,6 +2750,10 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
 
         uint32 m_DelayedOperations;
         bool m_bCanDelayTeleport;
+        // Set by the aura hooks when a waiver aura lands or drops, drained in
+        // Player::Update. Deferred because the sweep it triggers mutates the
+        // very aura maps the hooks are called from mid-iteration.
+        bool m_unarmedWaiverSyncPending;
         bool m_bHasDelayedTeleport;
 
         std::unique_ptr<PetStable> m_petStable;

@@ -1015,8 +1015,29 @@ void OnLogin(Player* player)
     StripAll(player);
 }
 
+// Why `viewer` cannot take this offer, as a short suffix for the gossip line.
+// The offers are SHARED by everyone at a broker, so a line that is useless to
+// the reader (a warrior looking at a mage spell, or at a unique boon he has
+// already taken) still has to be shown for whoever it does fit - it just says
+// so rather than letting the player find out by clicking.
+static char const* OfferBlockedSuffix(Player const* viewer, Offer offer)
+{
+    switch (CanTake(viewer, offer))
+    {
+        case PickResult::Ok:           return "";
+        case PickResult::WrongClass:   return " - not for you";
+        case PickResult::AlreadyKnown: return " - already yours";
+        case PickResult::AtCap:        return " - already at your cap";
+        case PickResult::LevelCeiling: return " - you can go no higher";
+        case PickResult::NoRoom:       return " - your bags are full";
+        default:                       return "";
+    }
+}
+
 std::string DescribeOffer(Player const* viewer, Offer offer)
 {
+    char const* blocked = OfferBlockedSuffix(viewer, offer);
+
     if (offer.kind == Offer::Kind::Item)
     {
         if (offer.index >= ITEM_GRANT_COUNT)
@@ -1025,7 +1046,7 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
         char const* name = info.name;
         if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(info.itemEntry))
             name = proto->Name1.c_str();
-        return Trinity::StringFormat("Take up {} (with Crusader)", name);
+        return Trinity::StringFormat("Take up {} (with Crusader){}", name, blocked);
     }
 
     if (offer.kind == Offer::Kind::ClassSpell)
@@ -1036,7 +1057,7 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
         char const* className = "?";
         if (ChrClassesEntry const* entry = sChrClassesStore.LookupEntry(info.classId))
             className = entry->Name[LOCALE_enUS];
-        return Trinity::StringFormat("Learn {} ({})", info.name, className);
+        return Trinity::StringFormat("Learn {} ({}){}", info.name, className, blocked);
     }
 
     if (offer.index >= uint8(Boon::Max))
@@ -1051,16 +1072,16 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
         case Boon::Phoenix:
         case Boon::Hoarder:
         case Boon::Overkill:
-            return Trinity::StringFormat("{}: {}", info.name, info.summary);
+            return Trinity::StringFormat("{}: {}{}", info.name, info.summary, blocked);
         case Boon::Level:
-            return Trinity::StringFormat("{}: +1 {}", info.name, info.summary);
+            return Trinity::StringFormat("{}: +1 {}{}", info.name, info.summary, blocked);
         case Boon::Greed:
         case Boon::Fellowship:
         case Boon::Menagerie:
-            return Trinity::StringFormat("{}: {} [{}/{}]", info.name, info.summary, uint32(held), uint32(info.maxStacks));
+            return Trinity::StringFormat("{}: {} [{}/{}]{}", info.name, info.summary, uint32(held), uint32(info.maxStacks), blocked);
         default:
-            return Trinity::StringFormat("{}: +{}{} {} [{}/{}{}]", info.name, uint32(info.grantStacks), info.unit,
-                info.summary, uint32(held), uint32(info.maxStacks), info.unit);
+            return Trinity::StringFormat("{}: +{}{} {} [{}/{}{}]{}", info.name, uint32(info.grantStacks), info.unit,
+                info.summary, uint32(held), uint32(info.maxStacks), info.unit, blocked);
     }
 }
 

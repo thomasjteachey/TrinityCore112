@@ -7426,7 +7426,8 @@ SpellCastResult Spell::CheckItems(uint32* param1 /*= nullptr*/, uint32* param2 /
     {
         if (!(_triggeredCastFlags & TRIGGERED_IGNORE_EQUIPPED_ITEM_REQUIREMENT))
             if (!player->HasItemFitToSpellRequirements(m_spellInfo))
-                return SPELL_FAILED_EQUIPPED_ITEM_CLASS;
+                if (!player->IsWeaponRequirementWaived(m_spellInfo))
+                    return SPELL_FAILED_EQUIPPED_ITEM_CLASS;
     }
 
     // do not take reagents for these item casts
@@ -7860,7 +7861,11 @@ SpellCastResult Spell::CheckItems(uint32* param1 /*= nullptr*/, uint32* param2 /
     }
 
     // check weapon presence in slots for main/offhand weapons
-    if (!(_triggeredCastFlags & TRIGGERED_IGNORE_EQUIPPED_ITEM_REQUIREMENT) && m_spellInfo->EquippedItemClass >= 0)
+    // A waiver aura (see Player::IsWeaponRequirementWaived) skips this too - it
+    // is the gate that would otherwise reject a bare-handed cast the moment the
+    // check above starts letting it through.
+    if (!(_triggeredCastFlags & TRIGGERED_IGNORE_EQUIPPED_ITEM_REQUIREMENT) && m_spellInfo->EquippedItemClass >= 0
+        && !player->IsWeaponRequirementWaived(m_spellInfo))
     {
         auto weaponCheck = [&](WeaponAttackType attackType) -> SpellCastResult
         {

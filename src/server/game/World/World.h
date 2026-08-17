@@ -756,6 +756,19 @@ class TC_GAME_API World
             return index < INT_CONFIG_VALUE_COUNT ? m_int_configs[index] : 0;
         }
 
+        /// Auras that waive the equipped-weapon requirement on melee abilities
+        /// (Centurion.Unarmed.WaiverAuras). A list rather than a single id
+        /// because a rank chain is one spell to a player but N ids to us, and
+        /// a configured id that does not match the rank actually on the player
+        /// looks exactly like a broken feature. Empty = feature off.
+        /// Parsed once in LoadConfigSettings, so `.reload config` applies.
+        std::vector<uint32> const& GetUnarmedWaiverAuras() const { return m_unarmedWaiverAuras; }
+
+        /// Is this spell one of the waiver auras? Called from the aura apply and
+        /// unapply hooks, so it must stay cheap: an empty list is a zero-iteration
+        /// loop, which is what keeps the hooks free when the feature is off.
+        bool IsUnarmedWaiverAura(uint32 spellId) const;
+
         void setWorldState(uint32 index, uint64 value);
         uint64 getWorldState(uint32 index) const;
         void LoadWorldStates();
@@ -862,6 +875,8 @@ class TC_GAME_API World
         uint32 m_int_configs[INT_CONFIG_VALUE_COUNT];
         bool m_bool_configs[BOOL_CONFIG_VALUE_COUNT];
         float m_float_configs[FLOAT_CONFIG_VALUE_COUNT];
+        // Config lists have no home in the scalar arrays above; see GetUnarmedWaiverAuras().
+        std::vector<uint32> m_unarmedWaiverAuras;
         typedef std::map<uint32, uint64> WorldStatesMap;
         WorldStatesMap m_worldstates;
         uint32 m_playerLimit;
