@@ -54,6 +54,7 @@
 #include "SpellAuraEffects.h"
 #include "SpellHistory.h"
 #include "T2SpellHooks.h"
+#include "T2UnitHooks.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "LosBlocker.h"
@@ -80,6 +81,7 @@ namespace
 {
     constexpr uint32 SPELL_DRUID_BEEFS_TENACITY = 89766;
     constexpr uint32 SPELL_DRUID_UNSTOPPABLE = 89765;
+    constexpr uint8 HURRICANE_UNSTOPPABLE_MIN_RANK = 3;    // Beef's Tenacity: Hurricane rank 3 (17402) and up
     constexpr uint32 SPELL_ROGUE_VANISH_AURA = 89783;
     constexpr uint32 SPELL_PRIEST_SHADOW_WRAITH = 89784;
 
@@ -4025,7 +4027,12 @@ void Spell::handle_immediate()
 
             if (m_spellInfo->IsHurricane())
             {
-                if (unitCaster->GetTypeId() == TYPEID_PLAYER && unitCaster->HasAura(SPELL_DRUID_BEEFS_TENACITY))
+                // Beef's Tenacity reads "unstoppable while casting Hurricane
+                // RANK 3": rank 1 and 2 channel exactly as stock. GetRank()
+                // walks the spell chain (16914 r1, 17401 r2, 17402 r3), so a
+                // higher rank added later qualifies as well.
+                if (unitCaster->GetTypeId() == TYPEID_PLAYER && m_spellInfo->GetRank() >= HURRICANE_UNSTOPPABLE_MIN_RANK
+                    && unitCaster->HasAura(SPELL_DRUID_BEEFS_TENACITY))
                     if (Aura* unstoppable = unitCaster->AddAura(SPELL_DRUID_UNSTOPPABLE, unitCaster))
                     {
                         m_appliedBeefsTenacityHurricaneAura = true;
@@ -5750,7 +5757,11 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
             {
                 // Cannot be used in this stance/form
                 SpellCastResult shapeError = m_spellInfo->CheckShapeshift(unitCaster->GetShapeshiftForm());
-                if (shapeError != SPELL_CAST_OK)
+                // T2 Umbral Mercy (90340): the holder's priest heals are allowed
+                // in Shadowform (the client's cancel of the form was swallowed,
+                // see T2SpellHooks.h). Only consulted once the stock check has
+                // already refused, so everyone else pays nothing.
+                if (shapeError != SPELL_CAST_OK && !T2SpellHooks::WaivesShapeshiftRestriction(unitCaster, m_spellInfo))
                     return shapeError;
 
                 if (m_spellInfo->HasAttribute(SPELL_ATTR0_ONLY_STEALTHED) && !(unitCaster->HasStealthAura()))
@@ -7707,6 +7718,11 @@ SpellCastResult Spell::CheckItems(uint32* param1 /*= nullptr*/, uint32* param2 /
 
                 // prevent disenchanting in trade slot
                 if (m_targets.GetItemTarget()->GetOwnerGUID() != player->GetGUID())
+                    return SPELL_FAILED_CANT_BE_DISENCHANTED;
+
+                // T2 Ashen Confiscation: a seized weapon is a real item for a
+                // few seconds and must not be turned into enchanting mats.
+                if (T2UnitHooks::IsTemporaryWeapon(m_targets.GetItemTarget()))
                     return SPELL_FAILED_CANT_BE_DISENCHANTED;
 
                 ItemTemplate const* itemProto = m_targets.GetItemTarget()->GetTemplate();

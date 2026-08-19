@@ -20,7 +20,7 @@
  *     damage without movement, no per-tick travel clamp.
  *   - Iron Fists / Flurry of Blows are event-driven (T2Unarmed::OnEquipmentChanged
  *     from every Player equipment-change site + the carrier's apply/remove +
- *     login), not a 1 s poll.
+ *     login / map change), not a 1 s poll.
  *   - Rattling Blow casts its stun from the script with full diagnostics.
  */
 
@@ -154,9 +154,9 @@ namespace
 // Declared in T2UnitHooks.h and called by the core from every Player
 // equipment-change site (EquipItem / QuickEquipItem / RemoveItem / DestroyItem
 // / the swap paths), following the HiddenSets / PolearmStaffInnerAuras
-// convention. Also called from the carriers' own apply/remove hooks below and
-// once on login, so there is no polling anywhere: the buffs flip exactly when
-// the answer to "are the hands empty" can change.
+// convention. Also called from the carriers' own apply/remove hooks below,
+// on login and on every map change, so there is no polling anywhere: the
+// buffs flip exactly when the answer to "are the hands empty" can change.
 //
 // State table (evaluated in full every call, so every site is idempotent):
 //   90303 on wearer && both hand slots empty          -> 90368 Iron Fists
@@ -546,6 +546,22 @@ public:
     t2_unarmed_login() : PlayerScript("t2_unarmed_login") { }
 
     void OnLogin(Player* player, bool /*firstLogin*/) override
+    {
+        T2Unarmed::OnEquipmentChanged(player);
+    }
+
+    // Map changes are the other place the buffs can vanish without an
+    // equipment change: Player::TeleportTo runs Unit::RemoveArenaAuras() on
+    // entry to any battleground-or-arena map (GMs exempt). 90368/90369 now
+    // carry SPELL_ATTR4_DONT_REMOVE_IN_ARENA so that particular sweep spares
+    // them, but the evaluator is idempotent and cheap for everyone without
+    // the set, so re-running it here makes any future bulk strip self-heal
+    // instead of waiting for the next equipment change.
+    //
+    // ScriptMgr::OnPlayerEnterMap fires this from Map::AddPlayerToMap after
+    // player->AddToWorld(), outside any aura iteration, so the evaluator's
+    // IsInWorld gate passes and casting here is safe.
+    void OnMapChanged(Player* player) override
     {
         T2Unarmed::OnEquipmentChanged(player);
     }

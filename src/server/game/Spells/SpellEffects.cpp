@@ -55,6 +55,7 @@
 #include "SpellHistory.h"
 #include "SpellMgr.h"
 #include "T2SpellHooks.h"
+#include "T2UnitHooks.h"
 #include "TemporarySummon.h"
 #include "Totem.h"
 #include "UpdateMask.h"
@@ -4442,6 +4443,13 @@ void Spell::EffectDisEnchant()
         return;
 
     if (!itemTarget || !itemTarget->GetTemplate()->DisenchantID)
+        return;
+
+    // T2 Ashen Confiscation: CheckItems already refuses a seized weapon with
+    // SPELL_FAILED_CANT_BE_DISENCHANTED; this is the backstop for any path
+    // that reaches the effect without it (the item target could be swapped
+    // between the two), so the temporary never yields loot.
+    if (T2UnitHooks::IsTemporaryWeapon(itemTarget))
         return;
 
     if (Player* caster = m_caster->ToPlayer())

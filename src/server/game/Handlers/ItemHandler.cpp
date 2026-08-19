@@ -27,6 +27,7 @@
 #include "Player.h"
 #include "SpellInfo.h"
 #include "QueryPackets.h"
+#include "T2UnitHooks.h"
 #include "World.h"
 #include "WorldPacket.h"
 
@@ -399,6 +400,16 @@ void WorldSession::HandleSellItemOpcode(WorldPacket& recvData)
     {
         // prevent sell not owner item
         if (_player->GetGUID() != pItem->GetOwnerGUID())
+        {
+            _player->SendSellError(SELL_ERR_CANT_SELL_ITEM, creature, itemguid, 0);
+            return;
+        }
+
+        // T2 Ashen Confiscation: a seized weapon is a real soulbound item for
+        // a few seconds and must not turn into vendor gold (or sit in a
+        // buyback slot past its buff). Checked before the refundable bail-out
+        // below so the player gets the "can't sell" feedback.
+        if (T2UnitHooks::IsTemporaryWeapon(pItem))
         {
             _player->SendSellError(SELL_ERR_CANT_SELL_ITEM, creature, itemguid, 0);
             return;

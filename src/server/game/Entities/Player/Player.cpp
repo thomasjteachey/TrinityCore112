@@ -8897,16 +8897,24 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
 
                 // Assassination T1 8pc (Toxic Momentum, 90121): each poison
                 // application shaves 1 sec off whichever of Vanish, Blind or
-                // Sprint has the most cooldown left.
+                // Sprint has the most cooldown left. Sprint is learned as the
+                // T2 wrappers 90514/90515/90516 (the category-44 cooldown sits
+                // on the wrapper, the stock rank is only cast triggered), so
+                // the wrappers are candidates too. Only ids that hold their
+                // OWN cooldown entry are considered: GetRemainingCooldown
+                // reports the shared category time for every rank of a chain,
+                // but ModifyCooldown can only move the entry that exists.
                 if (isPoison && HasAura(90121))
                 {
-                    static uint32 const cdSpells[] = { 1856, 1857, 26889, 2094, 2983, 8696, 11305 };
+                    static uint32 const cdSpells[] = { 1856, 1857, 26889, 2094, 2983, 8696, 11305, 90514, 90515, 90516 };
                     uint32 best = 0;
                     uint32 bestLeft = 0;
                     for (uint32 cd : cdSpells)
                     {
                         SpellInfo const* cdInfo = sSpellMgr->GetSpellInfo(cd);
                         if (!cdInfo)
+                            continue;
+                        if (!GetSpellHistory()->HasCooldown(cdInfo, 0, /*ignoreCategoryCooldown*/ true))
                             continue;
                         uint32 left = GetSpellHistory()->GetRemainingCooldown(cdInfo);
                         if (left > bestLeft)
@@ -12550,6 +12558,13 @@ InventoryResult Player::CanBankItem(uint8 bag, uint8 slot, ItemPosCountVec& dest
         if (pItem->IsSoulBound() || pItem->IsBoundAccountWide() || pItem->IsBoundByEnchant())
             return EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT;
     }
+
+    // T2 Ashen Confiscation: a seized weapon lives for a few seconds and is
+    // destroyed when its buff ends; it never goes into a bank (the account
+    // bank would even carry it to another character). Soulbound does not stop
+    // banking, so this is explicit.
+    if (T2UnitHooks::IsTemporaryWeapon(pItem))
+        return EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT;
 
     if (AccountBank::IsAccountBankOpen(this))
     {

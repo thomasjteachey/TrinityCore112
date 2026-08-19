@@ -1,22 +1,43 @@
 /*
  * Legionnaire Plus T2 set bonuses - the rogue-armour group.
  *
- * Carriers 90348-90365 and helpers 90388-90394 are Spell.dbc rows from
+ * Carriers 90348-90365 and helpers 90391-90394 are Spell.dbc rows from
  * sql/custom/dbc/2026_08_17_00_dbc_t2_set_bonuses.sql; the 2026-08-19 rework
- * adds 90510-90520 (sql/custom/dbc/2026_08_19_07_dbc_t2_rogue_armor.sql),
- * which is the contract this file implements.
+ * adds 90513-90518, 90520, 90521, enchant 3889 and rewrites 14177 in place
+ * (sql/custom/dbc/2026_08_19_07_dbc_t2_rogue_armor.sql), which is the
+ * contract this file implements.
  *
  * Sets covered: rogue-ice-fang (90348/90349/90350), rogue-deadly-poison
  * (90352/90353), mail-momentum (90359's half of the 90392 buff),
  * leather-mister-reset (90360/90362).
  *
- * ICE FANG uses the REPLACEMENT-WRAPPER pattern (spell_warr_disarm_wrapper in
- * Spells/spell_warrior.cpp): the rogue no longer learns Crippling Poison /
- * Sprint / Cold Blood directly. They learn a DUMMY wrapper with the same cost,
- * cast time, cooldown, family and tooltip, and the wrapper script casts either
- * the untouched original or the set-bonus alternate, TRIGGERED, based on the
- * carrier aura. The originals are never edited, so a rogue without the set
- * plays exactly as before.
+ * ICE FANG: Sprint uses the REPLACEMENT-WRAPPER pattern
+ * (spell_warr_disarm_wrapper in Spells/spell_warrior.cpp): the rogue no
+ * longer learns Sprint directly. They learn a DUMMY wrapper with the same
+ * cost, cast time, cooldown, family and tooltip, and the wrapper script casts
+ * either the untouched original or the set-bonus alternate, TRIGGERED, based
+ * on the carrier aura. The originals are never edited, so a rogue without the
+ * set plays exactly as before.
+ *
+ * Crippling Poison is NOT wrapped. The coat 3408/11202 stays the trained
+ * spell, untouched in the DBC, and carries a script instead: with the 3pc
+ * the ENCHANT_ITEM_TEMPORARY effect is replaced by hand with the Chilling
+ * Poison enchant 3889 (proc 90513), mirroring Spell::EffectEnchantItemTmp
+ * line for line. Reason: an item-targeted spell whose only effect is DUMMY
+ * exists nowhere else in Spell.dbc, and if the client's item-target
+ * validation keys on an enchant-type effect, every rogue on the realm loses
+ * poison application - not a risk worth taking blind for one set bonus.
+ * (90510/90511/90512, a first draft's DUMMY coat wrappers + coat clone, were
+ * deleted before they ever shipped.)
+ *
+ * Cold Blood is the other exception, because 14177 is a TALENT (Talent.dbc
+ * 142, Assassination tier 4), not a trained spell: there is no skill line to
+ * repoint, and a new-id wrapper would need Talent.dbc rewritten on server AND
+ * client plus a character_talent migration on every realm before a single
+ * rogue learned it. So the wrapper is 14177 ITSELF, rewritten in place to a
+ * DUMMY (what the user literally asked for: "make the original spells dummy
+ * spells that pick"), and the stock crit-guarantee buff lives on as an exact
+ * clone, 90521. Talent, spellbook, action bars and client SLA are untouched.
  *
  * Momentum (90358) is NOT here any more: the straight-line tracker lives in
  * the movement handler (T2UnitHooks.cpp). Only the 8pc gate on the 90392 buff
@@ -27,9 +48,13 @@
 
 #include "ScriptMgr.h"
 #include "Chat.h"
+#include "DBCStores.h"
 #include "Item.h"
+#include "ItemTemplate.h"
+#include "Log.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "RBAC.h"
 #include "SharedDefines.h"
 #include "SpellAuraEffects.h"
 #include "SpellHistory.h"
@@ -61,27 +86,39 @@ namespace
         // helpers from the 2026-08-17 file still in use
         SPELL_T2_COLDER_BLOOD_ROOT      = 90391,
 
-        // 2026-08-19 rework: wrappers, alternates and helpers (90510-90520)
-        SPELL_T2_CRIPPLING_WRAPPER_R1   = 90510,   // learned instead of 3408
-        SPELL_T2_CRIPPLING_WRAPPER_R2   = 90511,   // learned instead of 11202
-        SPELL_T2_CHILLING_POISON_COAT   = 90512,   // clone of 3408, enchant 3889
+        // 2026-08-19 rework: wrappers, alternates and helpers (90513-90521;
+        // 90510-90512 were a first draft's Crippling Poison wrappers + coat
+        // clone, deleted - the coat keeps its stock id, see the header)
         SPELL_T2_CHILLING_POISON_PROC   = 90513,   // clone of 3409: -55% move, -15% attack speed
         SPELL_T2_SPRINT_WRAPPER_R1      = 90514,   // learned instead of 2983
         SPELL_T2_SPRINT_WRAPPER_R2      = 90515,   // learned instead of 8696
         SPELL_T2_SPRINT_WRAPPER_R3      = 90516,   // learned instead of 11305
         SPELL_T2_ICE_SKATE              = 90517,   // +45% for 18 s, effect 2 drives the trail
         SPELL_T2_ICE_TRAIL_PATCH        = 90518,   // persistent area aura, the visible slick
-        SPELL_T2_COLD_BLOOD_WRAPPER     = 90519,   // learned instead of 14177
+        // (90519 was briefly a new-id Cold Blood wrapper; deleted - see below)
         SPELL_T2_VENOM_SUSTENANCE_HEAL  = 90520,   // SPELL_EFFECT_HEAL, bp at runtime
+        SPELL_T2_COLD_BLOOD_BUFF        = 90521,   // exact clone of the stock 14177 crit buff
 
         // the stock abilities the wrappers hand off to
-        SPELL_ROGUE_CRIPPLING_POISON_R1 = 3408,
+        SPELL_ROGUE_CRIPPLING_POISON_R1 = 3408,    // NOT wrapped: scripted in place (spell_t2_icefang_chilling_coat)
         SPELL_ROGUE_CRIPPLING_POISON_R2 = 11202,
         SPELL_ROGUE_SPRINT_R1           = 2983,
         SPELL_ROGUE_SPRINT_R2           = 8696,
         SPELL_ROGUE_SPRINT_R3           = 11305,
-        SPELL_ROGUE_COLD_BLOOD          = 14177,
+        SPELL_ROGUE_COLD_BLOOD          = 14177,   // the talent spell, rewritten IN PLACE to the wrapper
     };
+
+    // SpellItemEnchantment 3889 - the Chilling Poison weapon coat, a clone of
+    // Crippling Poison's enchant 22 with EffectArg_1 = 90513 (dbc SQL, 8.).
+    constexpr uint32 ENCHANT_T2_CHILLING_POISON = 3889;
+
+    // Spell::EffectEnchantItemTmp's duration ladder, for the one rung the
+    // coat script can reach: 3408/11202 are SPELLFAMILY_ROGUE and not 38615,
+    // so "other rogue family enchantments always 1 hour". (The rows' "lasts
+    // for 30 minutes" tooltip is stale 3.3.5 text the core never honoured;
+    // stock Crippling already lasts an hour on this realm.) Must stay equal to
+    // what the core hands stock Crippling or the two poisons would drift apart.
+    constexpr uint32 ROGUE_POISON_COAT_SECONDS = 3600;
 
     // Deadly Poison's periodic damage effect, on every rank. Same family mask
     // the core's own spell_rog_deadly_poison matches on.
@@ -109,49 +146,92 @@ namespace
 }
 
 // ===========================================================================
-// ICE FANG - replacement wrappers
+// ICE FANG - Crippling Poison in place, Sprint / Cold Blood wrapped
 // ===========================================================================
 
-// 90510 \ 90511 - Crippling Poison wrappers (ranks 1 and 2). The wrapper is
-// an item-targeted 3 s cast exactly like 3408/11202; on completion it coats
-// the chosen weapon with either the rank's own Crippling Poison or, for a
-// rogue wearing the 3pc, Chilling Poison (90512 -> enchant 3889 -> proc 90513).
+// -3408 - Crippling Poison (both ranks), the stock coat spell, untouched in
+// the DBC. With the 3pc (90348) the ENCHANT_ITEM_TEMPORARY effect is taken
+// over: the default is prevented and the weapon gets the Chilling Poison
+// enchant 3889 (proc 90513) instead of the rank's own 22 / 603. Without the
+// carrier the effect runs as stock and nothing here is observable.
 //
-// OnEffectHit rather than OnEffectHitTarget: a DUMMY effect adds no targets of
-// its own (EFFECT_IMPLICIT_TARGET_NONE in SpellInfo's effect table) and the
-// wrapper keeps the original's ImplicitTargetA 0, so the per-target hook would
-// never fire. The item comes from the explicit cast targets instead.
-class spell_t2_icefang_crippling_wrapper : public SpellScript
+// The body is Spell::EffectEnchantItemTmp (SpellEffects.cpp) with only the
+// enchant id and the duration rung swapped for constants: same player/item
+// gates, same "owner may differ from caster (trade window)" rule, same GM
+// trade log, same ApplyEnchantment(false) -> SetEnchantment -> Apply
+// Enchantment(true) sequence - the apply side's default apply_dur = true is
+// what books the enchant duration (AddEnchantmentDuration), exactly as the
+// core's call does. Everything that happens BEFORE the hit (CheckItems'
+// soulbound/trade rules against enchant 22, weapon subclass fit, cast time,
+// cost) is the stock spell's own and still runs, since the spell IS the stock
+// spell. No aura is added or removed here; the enchant is an item field.
+class spell_t2_icefang_chilling_coat : public SpellScript
 {
-    PrepareSpellScript(spell_t2_icefang_crippling_wrapper);
+    PrepareSpellScript(spell_t2_icefang_chilling_coat);
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ SPELL_T2_CHILLING_POISON_COAT, SPELL_ROGUE_CRIPPLING_POISON_R1, SPELL_ROGUE_CRIPPLING_POISON_R2 });
+        return ValidateSpellInfo({ SPELL_T2_CHILLING_POISON, SPELL_T2_CHILLING_POISON_PROC });
     }
 
-    void HandleDummy(SpellEffIndex /*effIndex*/)
+    void HandleEnchant(SpellEffIndex effIndex)
     {
         Unit* caster = GetCaster();
-        Item* weapon = GetExplTargetItem();
-        if (!caster || !weapon)
+        Player* player = caster ? caster->ToPlayer() : nullptr;
+        Item* itemTarget = GetHitItem();
+        if (!player || !itemTarget)
+            return;
+        if (!player->HasAura(SPELL_T2_CHILLING_POISON))
+            return;                                         // stock Crippling, default effect
+
+        // The enchant row ships with SpellItemEnchantment.dbc; if this server
+        // has not been regenerated yet, fall back to stock Crippling rather
+        // than leave the weapon bare after a 3 s cast.
+        SpellItemEnchantmentEntry const* pEnchant = sSpellItemEnchantmentStore.LookupEntry(ENCHANT_T2_CHILLING_POISON);
+        if (!pEnchant)
+        {
+            TC_LOG_ERROR("spells", "spell_t2_icefang_chilling_coat: enchant {} missing from SpellItemEnchantment.dbc, {} coats stock Crippling Poison",
+                ENCHANT_T2_CHILLING_POISON, player->GetName());
+            return;
+        }
+
+        // The duration rung below is the rogue-family one; a non-rogue
+        // binding would need the core's full ladder, so refuse the takeover.
+        if (GetSpellInfo()->SpellFamilyName != SPELLFAMILY_ROGUE)
             return;
 
-        uint32 coat;
-        if (caster->HasAura(SPELL_T2_CHILLING_POISON))
-            coat = SPELL_T2_CHILLING_POISON_COAT;
-        else
-            coat = GetSpellInfo()->Id == SPELL_T2_CRIPPLING_WRAPPER_R2 ? SPELL_ROGUE_CRIPPLING_POISON_R2 : SPELL_ROGUE_CRIPPLING_POISON_R1;
+        // item can be in trade slot and have owner diff. from caster
+        Player* item_owner = itemTarget->GetOwner();
+        if (!item_owner)
+            return;
 
-        // Triggered: no second cast time, cost or cooldown - the wrapper paid
-        // all three. The coat spell's own CheckItems still runs against the
-        // weapon (TRIGGERED_FULL_MASK does not skip item checks).
-        caster->CastSpell(weapon, coat, true);
+        // Past every gate: from here on the stock enchant must NOT also land.
+        PreventHitDefaultEffect(effIndex);
+
+        if (item_owner != player && player->GetSession()->HasPermission(rbac::RBAC_PERM_LOG_GM_TRADE))
+        {
+            sLog->OutCommand(player->GetSession()->GetAccountId(), "GM {} (Account: {}) enchanting(temp): {} (Entry: {}) for player: {} (Account: {})",
+                player->GetName(), player->GetSession()->GetAccountId(),
+                itemTarget->GetTemplate()->Name1, itemTarget->GetEntry(),
+                item_owner->GetName(), item_owner->GetSession()->GetAccountId());
+        }
+
+        // remove old enchanting before applying new if equipped
+        item_owner->ApplyEnchantment(itemTarget, TEMP_ENCHANTMENT_SLOT, false);
+
+        itemTarget->SetEnchantment(TEMP_ENCHANTMENT_SLOT, ENCHANT_T2_CHILLING_POISON, ROGUE_POISON_COAT_SECONDS * 1000, 0, player->GetGUID());
+
+        // add new enchanting if equipped
+        item_owner->ApplyEnchantment(itemTarget, TEMP_ENCHANTMENT_SLOT, true);
+
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Chilling Poison coated {} (enchant {} for {} s)",
+            player->GetName(), itemTarget->GetTemplate()->Name1, ENCHANT_T2_CHILLING_POISON, ROGUE_POISON_COAT_SECONDS));
     }
 
     void Register() override
     {
-        OnEffectHit += SpellEffectFn(spell_t2_icefang_crippling_wrapper::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+        OnEffectHitTarget += SpellEffectFn(spell_t2_icefang_chilling_coat::HandleEnchant, EFFECT_0, SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY);
     }
 };
 
@@ -251,20 +331,23 @@ private:
     bool  _hasLast = false;
 };
 
-// 90519 - Cold Blood wrapper. Without the 8pc it casts the real Cold Blood
-// 14177 (crit guarantee, consumed by the next finisher, 3 min cooldown that
-// starts when the buff is used). With Colder Blood (90350) it instead roots
-// the current selection with 90391 and the 3 min cooldown starts at once.
+// 14177 - Cold Blood, now the wrapper (the talent still teaches 14177, the
+// spellbook row and the client are untouched; only the Spell.dbc row changed
+// from "apply the crit buff" to DUMMY). Without the 8pc it casts 90521, an
+// exact clone of the stock buff (crit guarantee, consumed by the next
+// finisher, 3 min cooldown that starts when the buff is used). With Colder
+// Blood (90350) it instead roots the current selection with 90391 and the
+// 3 min cooldown starts at once.
 //
-// Cooldown plumbing, because 14177 is SPELL_ATTR0_DISABLED_WHILE_ACTIVE:
-// SpellHistory::HandleCooldowns skips on-event spells entirely, and the held /
-// released cooldown is driven from Aura::_ApplyForTarget / _UnapplyForTarget
-// of the AURA's spell - which is 14177, not the wrapper. So the wrapper row
-// carries the same attribute (the client then waits for SMSG_COOLDOWN_EVENT
-// instead of starting a local timer), and:
-//   * spell_t2_icefang_cold_blood_cd on 14177 puts the WRAPPER on hold when
-//     the buff is applied and releases it (event + live 3 min) when the buff
-//     goes away - exactly what the core does for 14177 itself;
+// Cooldown plumbing: 14177 keeps SPELL_ATTR0_DISABLED_WHILE_ACTIVE, so
+// SpellHistory::HandleCooldowns never starts its cooldown from the cast and
+// the client waits for SMSG_COOLDOWN_EVENT instead of a local timer. The buff
+// clone 90521 has that attribute STRIPPED (it is never cast directly, so the
+// core's own hold/release on the buff's id would only be noise); instead
+//   * spell_t2_icefang_cold_blood_cd on 90521 puts 14177 on hold when the
+//     buff is applied and releases it (event + live 3 min) when the buff goes
+//     away - the same two SpellHistory calls Aura::_ApplyForTarget /
+//     _UnapplyForTarget made for the stock 14177;
 //   * the root branch has no buff, so the wrapper releases itself right away.
 // Nothing here touches the caster's aura containers.
 class spell_t2_icefang_cold_blood_wrapper : public SpellScript
@@ -273,7 +356,7 @@ class spell_t2_icefang_cold_blood_wrapper : public SpellScript
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ SPELL_ROGUE_COLD_BLOOD, SPELL_T2_COLDER_BLOOD_ROOT });
+        return ValidateSpellInfo({ SPELL_T2_COLD_BLOOD_BUFF, SPELL_T2_COLDER_BLOOD_ROOT });
     }
 
     // The root needs a target the self-cast wrapper never asked for; refuse
@@ -304,7 +387,7 @@ class spell_t2_icefang_cold_blood_wrapper : public SpellScript
 
         if (!rogue->HasAura(SPELL_T2_COLDER_BLOOD))
         {
-            rogue->CastSpell(rogue, SPELL_ROGUE_COLD_BLOOD, true);
+            rogue->CastSpell(rogue, SPELL_T2_COLD_BLOOD_BUFF, true);
             return;
         }
 
@@ -333,27 +416,28 @@ class spell_t2_icefang_cold_blood_wrapper : public SpellScript
     }
 };
 
-// 14177 - Cold Blood, mirroring its on-event cooldown onto the wrapper the
-// rogue actually has on the bar. Apply: hold. Remove (consumed, expired,
-// dispelled, death, logout cleanup): cooldown event, which the client turns
-// into the 3 min timer on the wrapper and the server into a live cooldown.
-// This is the same pair of calls Aura::_ApplyForTarget/_UnapplyForTarget make
-// for 14177 itself, so the two stay in lockstep (and Preparation, which resets
-// every rogue-family cooldown, clears both).
+// 90521 - the Cold Blood buff, driving the on-event cooldown of 14177, the
+// wrapper the rogue actually has on the bar. Apply: hold. Remove (consumed,
+// expired, dispelled, death, logout cleanup): cooldown event, which the client
+// turns into the 3 min timer on 14177 and the server into a live cooldown.
+// This is the same pair of calls Aura::_ApplyForTarget/_UnapplyForTarget made
+// for the stock 14177 buff, so nothing changes for the rogue (and whatever
+// resets 14177's cooldown - Preparation in rulesets where it does - still
+// finds it under the same id).
 class spell_t2_icefang_cold_blood_cd : public AuraScript
 {
     PrepareAuraScript(spell_t2_icefang_cold_blood_cd);
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ SPELL_T2_COLD_BLOOD_WRAPPER });
+        return ValidateSpellInfo({ SPELL_ROGUE_COLD_BLOOD });
     }
 
     Player* WrapperOwner() const
     {
         Unit* caster = GetCaster();
         Player* rogue = caster ? caster->ToPlayer() : nullptr;
-        if (!rogue || !rogue->HasSpell(SPELL_T2_COLD_BLOOD_WRAPPER))
+        if (!rogue || !rogue->HasSpell(SPELL_ROGUE_COLD_BLOOD))
             return nullptr;
         return rogue;
     }
@@ -361,13 +445,13 @@ class spell_t2_icefang_cold_blood_cd : public AuraScript
     void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
         if (Player* rogue = WrapperOwner())
-            rogue->GetSpellHistory()->StartCooldown(sSpellMgr->AssertSpellInfo(SPELL_T2_COLD_BLOOD_WRAPPER), 0, nullptr, true);
+            rogue->GetSpellHistory()->StartCooldown(sSpellMgr->AssertSpellInfo(SPELL_ROGUE_COLD_BLOOD), 0, nullptr, true);
     }
 
     void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
         if (Player* rogue = WrapperOwner())
-            rogue->GetSpellHistory()->SendCooldownEvent(sSpellMgr->AssertSpellInfo(SPELL_T2_COLD_BLOOD_WRAPPER));
+            rogue->GetSpellHistory()->SendCooldownEvent(sSpellMgr->AssertSpellInfo(SPELL_ROGUE_COLD_BLOOD));
     }
 
     void Register() override
@@ -589,7 +673,7 @@ class spell_t2_reset_field_dressing : public AuraScript
 
 void AddSC_custom_t2_rogue_armor()
 {
-    RegisterSpellScript(spell_t2_icefang_crippling_wrapper);
+    RegisterSpellScript(spell_t2_icefang_chilling_coat);
     RegisterSpellScript(spell_t2_icefang_sprint_wrapper);
     RegisterSpellScript(spell_t2_icefang_ice_skate);
     RegisterSpellScript(spell_t2_icefang_cold_blood_wrapper);

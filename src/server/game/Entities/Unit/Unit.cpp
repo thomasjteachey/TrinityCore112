@@ -12700,6 +12700,14 @@ void Unit::SetControlled(bool apply, UnitState state)
             default:
                 break;
         }
+
+        // T2 Momentum (90358): a stunned / rooted / feared / confused player
+        // sends no movement packets, so the run tracker would never see the
+        // stop. The hook early-outs for everyone without the set and defers
+        // the buff removal itself (we may be inside the CC aura's apply).
+        if (state & (UNIT_STATE_STUNNED | UNIT_STATE_ROOT | UNIT_STATE_CONFUSED | UNIT_STATE_FLEEING))
+            if (Player* player = ToPlayer())
+                T2UnitHooks::OnPlayerControlLost(player);
     }
     else
     {

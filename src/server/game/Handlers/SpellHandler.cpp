@@ -412,6 +412,11 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
                 spellInfo = actualSpellInfo;
         }
 
+    // T2 Umbral Mercy (90340): a priest heal request consumes the swallowed
+    // Shadowform cancel that the client sent one packet earlier - before
+    // prepare, so a heal that then fails still keeps the form.
+    T2SpellHooks::OnCastSpellRequest(_player, spellInfo);
+
     Spell* spell = new Spell(_player, spellInfo, triggerFlag);
     spell->m_fromClient = true;
     spell->m_cast_count = castCount;                       // set count of casts
@@ -437,6 +442,12 @@ void WorldSession::HandleCancelCastOpcode(WorldPackets::Spells::CancelCast& canc
 
 void WorldSession::HandleCancelAuraOpcode(WorldPackets::Spells::CancelAura& cancelAura)
 {
+    // T2 Umbral Mercy (90340): the client's auto-unshift cancel of Shadowform
+    // is swallowed for a holder (a manual cancel is deferred ~300 ms instead).
+    // Must run before anything below touches the aura.
+    if (T2SpellHooks::OnCancelAuraRequest(_player, cancelAura.SpellID))
+        return;
+
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(cancelAura.SpellID);
     if (!spellInfo)
         return;

@@ -8,22 +8,80 @@
  *   OnInterruptWhileNotCasting Spell::EffectInterruptCast
  *   OnImmuneSpellHit          Spell::TargetInfo::PreprocessTarget
  *   OnImmuneMeleeHit          Unit::CalculateMeleeDamage (physical-immune branch)
+ *   OnCancelAuraRequest       WorldSession::HandleCancelAuraOpcode (first statement)
+ *   OnCastSpellRequest        WorldSession::HandleCastSpellOpcode (before prepare)
+ *   WaivesShapeshiftRestriction Spell::CheckCast (CheckShapeshift refusal)
  *
  * Every body is a cheap early-out for anyone who does not carry the set-bonus
  * aura it keys on.
  */
 
 #include "T2SpellHooks.h"
+#include "GameTime.h"
 #include "Player.h"
 #include "Spell.h"
 #include "SpellAuraEffects.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "Timer.h"
 #include "Unit.h"
 #include "Util.h"
+#include <mutex>
+#include <unordered_map>
 
 namespace
 {
+    // -----------------------------------------------------------------------
+    // UMBRAL MERCY
+    // -----------------------------------------------------------------------
+
+    // How long a swallowed CMSG_CANCEL_AURA(Shadowform) waits for the heal's
+    // CMSG_CAST_SPELL before it is honoured after all. The two packets arrive
+    // in one client frame, so the heal is normally processed in the same world
+    // tick; 300 ms is generous latency slack and still short enough that a
+    // manual right-click cancel feels immediate.
+    constexpr uint32 UMBRAL_CANCEL_GRACE_MS = 300;
+
+    // A cast request only matches a pending cancel inside this window. Wider
+    // than the grace so a tick that runs late still pairs the two packets;
+    // anything older is a leftover from a cancel whose event died with a map
+    // change or logout and must not be acted on.
+    constexpr uint32 UMBRAL_PENDING_MAX_AGE_MS = 1000;
+
+    // The heals the 5pc lets through: a priest spell Shadowform explicitly
+    // forbids (its StancesNot carries the form - exactly the set the client
+    // auto-unshifts for) that heals directly (SPELL_EFFECT_HEAL) or over time
+    // (SPELL_AURA_PERIODIC_HEAL). Against the binary Spell.dbc that is Lesser
+    // Heal, Heal, Greater Heal, Flash Heal, Binding Heal, Prayer of Healing,
+    // Circle of Healing, Desperate Prayer and Renew - the tooltip's list.
+    // Prayer of Mending (a proc aura, effect 142) and Holy Nova (damage plus a
+    // linked heal) do not match and keep the stock behaviour on purpose: their
+    // healing cannot be priced by the script.
+    bool IsUmbralHeal(SpellInfo const* spellInfo)
+    {
+        if (!spellInfo || spellInfo->SpellFamilyName != SPELLFAMILY_PRIEST)
+            return false;
+
+        if (spellInfo->CheckShapeshift(FORM_SHADOW) == SPELL_CAST_OK)
+            return false;
+
+        return spellInfo->HasEffect(SPELL_EFFECT_HEAL) || spellInfo->HasAura(SPELL_AURA_PERIODIC_HEAL);
+    }
+
+    // Swallowed Shadowform cancels: player -> GameTime stamp of the cancel. The
+    // removal event carries the same stamp, so a mark consumed by a heal (or
+    // superseded by a later cancel) is recognised and left alone. Map updates
+    // run on several threads; the map is shared, so it is locked. Nobody
+    // without 90340 ever reaches the lock.
+    std::mutex                               s_umbralMutex;
+    std::unordered_map<ObjectGuid, uint32>   s_umbralPendingCancel;
+
+    bool UmbralIsShadowPriest(Player const* player)
+    {
+        return player && player->HasAura(T2SpellHooks::SPELL_UMBRAL_MERCY)
+            && player->GetShapeshiftForm() == FORM_SHADOW;
+    }
+
     // Shaman family flags (Spell.dbc SpellClassMask_1, identical on every rank).
     constexpr uint32 SHOCK_FLAG_EARTH = 0x00100000;
     constexpr uint32 SHOCK_FLAG_FLAME = 0x10000000;
@@ -240,4 +298,106 @@ void T2SpellHooks::OnImmuneMeleeHit(Unit* attacker, Unit* victim, uint32 wouldBe
         return;
 
     DealReflect(attacker, victim, wouldBeDamage);
+}
+
+bool T2SpellHooks::OnCancelAuraRequest(Player* player, uint32 spellId)
+{
+    if (!player || spellId != SPELL_SHADOWFORM)
+        return false;
+
+    // Holders only; and without Shadowform up the stock path is a no-op anyway.
+    if (!player->HasAura(SPELL_UMBRAL_MERCY) || !player->HasAura(SPELL_SHADOWFORM))
+        return false;
+
+    uint32 const stamp = GameTime::GetGameTimeMS();
+    {
+        std::lock_guard<std::mutex> guard(s_umbralMutex);
+        s_umbralPendingCancel[player->GetGUID()] = stamp;
+    }
+
+    // The removal is deferred past the frame the heal's CMSG_CAST_SPELL shares
+    // with this cancel. The event lives on the player's own queue, so it dies
+    // with him (logout, map change) and runs from the top of Unit::Update -
+    // never from inside aura iteration.
+    player->m_Events.AddEventAtOffset([player, stamp]()
+    {
+        {
+            std::lock_guard<std::mutex> guard(s_umbralMutex);
+            auto itr = s_umbralPendingCancel.find(player->GetGUID());
+            // Consumed by a heal, or superseded by a later cancel that has
+            // its own event: not this event's job.
+            if (itr == s_umbralPendingCancel.end() || itr->second != stamp)
+                return;
+            s_umbralPendingCancel.erase(itr);
+        }
+
+        // Nobody consumed it: it was a real cancel. Same call the stock
+        // handler would have made 300 ms ago.
+        player->RemoveOwnedAura(SPELL_SHADOWFORM, ObjectGuid::Empty, 0, AURA_REMOVE_BY_CANCEL);
+    }, Milliseconds(UMBRAL_CANCEL_GRACE_MS));
+
+    return true;
+}
+
+void T2SpellHooks::OnCastSpellRequest(Player* player, SpellInfo const* spellInfo)
+{
+    if (!player || !spellInfo)
+        return;
+
+    // Cheapest test first: almost nobody carries the aura, and only a holder
+    // can have a pending mark (OnCancelAuraRequest gates on it too).
+    if (!player->HasAura(SPELL_UMBRAL_MERCY))
+        return;
+
+    bool honourNow = false;
+    {
+        std::lock_guard<std::mutex> guard(s_umbralMutex);
+        auto itr = s_umbralPendingCancel.find(player->GetGUID());
+        if (itr == s_umbralPendingCancel.end())
+            return;
+
+        // A mark older than the window belongs to a cancel whose removal event
+        // was dropped (RemoveFromWorld kills the queue); it must neither keep
+        // nor drop the form now.
+        if (getMSTimeDiff(itr->second, GameTime::GetGameTimeMS()) > UMBRAL_PENDING_MAX_AGE_MS)
+        {
+            s_umbralPendingCancel.erase(itr);
+            return;
+        }
+
+        if (IsUmbralHeal(spellInfo))
+        {
+            // The whole point: consumed even if the cast goes on to fail
+            // (range, mana, already casting) - the form stays either way.
+            s_umbralPendingCancel.erase(itr);
+            return;
+        }
+
+        // Not a heal, but a spell Shadowform forbids (Smite, Holy Fire, Holy
+        // Nova, Prayer of Mending...): the client auto-unshifted for THIS
+        // spell, so the cancel is honoured right now and the cast then sees
+        // exactly what it sees without the set - no form, no refusal.
+        // Anything else (Mind Blast after a manual cancel) leaves the mark to
+        // its event.
+        if (player->GetShapeshiftForm() == FORM_SHADOW && spellInfo->CheckShapeshift(FORM_SHADOW) != SPELL_CAST_OK)
+        {
+            s_umbralPendingCancel.erase(itr);
+            honourNow = true;
+        }
+    }
+
+    if (honourNow)
+        player->RemoveOwnedAura(SPELL_SHADOWFORM, ObjectGuid::Empty, 0, AURA_REMOVE_BY_CANCEL);
+}
+
+bool T2SpellHooks::WaivesShapeshiftRestriction(Unit const* caster, SpellInfo const* spellInfo)
+{
+    if (!caster || !spellInfo)
+        return false;
+
+    Player const* priest = caster->ToPlayer();
+    if (!UmbralIsShadowPriest(priest))
+        return false;
+
+    return IsUmbralHeal(spellInfo);
 }

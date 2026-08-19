@@ -16,6 +16,9 @@
  *   - Moonlit Wound / Moonlit Prey are now invisible, undispellable riders tied
  *     to the Mangle / Moonfire aura they belong to, built exactly like the T1
  *     Exposing Mark (90138) rider on Hunter's Mark.
+ *   - Prowling Moonfire books its combo point on the Spell (Spell::
+ *     AddComboPointGain, the SPELL_EFFECT_ADD_COMBO_POINTS path) and rolls
+ *     Primal Fury on a crit, mirroring the Surprise Bear Maul / Swipe script.
  *   - Feline Grace is a scripted "hidden real buff" keyed on Moonkin Form.
  *   - Simian Frenzy gets its Aspect of the Monkey gate here (its proc row is in
  *     the world SQL).
@@ -35,7 +38,10 @@
 #include "DynamicObject.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "Random.h"
+#include "Spell.h"
 #include "SpellAuraEffects.h"
+#include "SpellDefines.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
@@ -55,6 +61,7 @@ namespace
         SPELL_T2_FELINE_GRACE_HELPER    = 90484,   // hidden: Cat Form costs -100% (lives while in Moonkin Form)
         SPELL_DRUID_MOONFIRE            = 8921,    // rank 1, for the ranked lookup
         SPELL_DRUID_MOONKIN_FORM        = 24858,
+        SPELL_DRUID_PRIMAL_FRENZY_R1    = 16952,   // the fork's Primal Fury talent; rank 2 is 16954 (ranked lookup)
 
         // monkey stalker (hunter)
         SPELL_T2_SIMIAN_FRENZY          = 90332,   // 8pc carrier (proc -> 90379)
@@ -229,8 +236,10 @@ class spell_t2_moonkitten_mangle_aura : public AuraScript
 
 // 8921 and ranks - Moonfire, carrying the moonkitten 5pc: a Moonfire landing on
 // a target not already burning with this druid's Moonfire is worth a combo
-// point, and the target takes 5% more damage from the druid's melee abilities
-// for as long as the Moonfire burns.
+// point (two if it crits and Primal Fury rolls, exactly as Maul / Swipe with
+// Surprise Bear 89759 - see spell_dru_surprise_bear_combo), and the target
+// takes 5% more damage from the druid's melee abilities for as long as the
+// Moonfire burns.
 class spell_t2_moonkitten_moonfire : public SpellScript
 {
     PrepareSpellScript(spell_t2_moonkitten_moonfire);
@@ -270,8 +279,49 @@ class spell_t2_moonkitten_moonfire : public SpellScript
         // point is rationed to a target that was not already burning.
         ApplyRider(caster, target, moonfire, SPELL_T2_MOONLIT_PREY);
 
-        if (!_wasBurning)
-            caster->AddComboPoints(target, 1);
+        if (_wasBurning)
+            return;
+
+        // Through Spell::AddComboPointGain, not Unit::AddComboPoints here: the
+        // gain is booked on the Spell and paid once in
+        // Spell::_handle_finish_phase through Unit::AddComboPoints, which is
+        // what sends SMSG_UPDATE_COMBO_POINTS - the one packet the client's
+        // combo frame and floating combat text (UNIT_COMBO_POINTS) react to.
+        // That is the path SPELL_EFFECT_ADD_COMBO_POINTS and the Surprise
+        // Bear Maul / Swipe script take, so the Moonfire point shows up exactly
+        // where a Mangle point does.
+        GetSpell()->AddComboPointGain(target, 1);
+
+        // Primal Fury: "critical strikes from abilities that add combo points
+        // have a chance to add an additional combo point". Only a Moonfire
+        // that earned the base point qualifies (the refresh case returned
+        // above - a refresh adds nothing, so there is nothing to double). The
+        // direct hit's crit is already folded into the spell's hit mask by the
+        // time AfterHit runs (m_hitMask is updated before the AfterHit
+        // handlers), the same read the Maul script does.
+        if ((GetSpell()->GetHitMask() & PROC_HIT_CRITICAL) && RollPrimalFrenzyBonus(caster))
+            GetSpell()->AddComboPointGain(target, 1);
+    }
+
+    // Verbatim the roll spell_dru_surprise_bear_combo uses for Maul / Swipe,
+    // so Moonfire and the bear abilities agree: the chance is the talent row's
+    // own ProcChance (16952 rank 1 = 50, 16954 rank 2 = 100 in Spell.dbc) run
+    // through SPELLMOD_CHANCE_OF_SUCCESS. Ranked lookup - the druid has one
+    // rank or the other, never rank 1 by id.
+    static bool RollPrimalFrenzyBonus(Unit* caster)
+    {
+        AuraEffect const* primalFrenzy = caster->GetAuraEffectOfRankedSpell(SPELL_DRUID_PRIMAL_FRENZY_R1, EFFECT_0, caster->GetGUID());
+        if (!primalFrenzy)
+            primalFrenzy = caster->GetAuraEffectOfRankedSpell(SPELL_DRUID_PRIMAL_FRENZY_R1, EFFECT_0);
+
+        if (!primalFrenzy)
+            return false;
+
+        float chance = float(primalFrenzy->GetSpellInfo()->ProcChance);
+        if (Player* modOwner = caster->GetSpellModOwner())
+            modOwner->ApplySpellMod(primalFrenzy->GetId(), SPELLMOD_CHANCE_OF_SUCCESS, chance);
+
+        return roll_chance_f(chance);
     }
 
     void Register() override

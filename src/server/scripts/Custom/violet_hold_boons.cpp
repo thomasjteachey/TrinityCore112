@@ -25,6 +25,7 @@
 #include "WorldSession.h"
 
 #include <algorithm>
+#include <iterator>
 #include <unordered_map>
 #include <vector>
 
@@ -235,6 +236,65 @@ class spell_vhr_boon_flurry : public AuraScript
     }
 };
 
+namespace
+{
+// The T2 set wrappers: Shadow Bolt (Felflame Bolt 90318, custom_t2_shaman_
+// warlock.cpp) and Serpent Sting (Cinderbite 90334, custom_t2_druid_hunter.cpp)
+// are no longer what the class learns. The spellbook holds a DUMMY wrapper per
+// rank; its hit casts the real damage as an INNER spell - the stock rank or a
+// clone of it - which nobody "knows". Echoes keys on the spellbook, so without
+// this table it would skip the wrapper (a dummy, nothing to double - correct)
+// and then skip the inner cast too (unknown id - wrong), and neither spell
+// would ever echo for anyone, wearer or not. Inner id -> the wrapper that
+// stands for it in the spellbook. Ids from the two scripts and
+// sql/custom/dbc/2026_08_19_04_dbc_t2_shaman_warlock.sql /
+// 2026_08_19_05_dbc_t2_druid_hunter.sql.
+uint32 WrapperForInnerSpell(uint32 spellId)
+{
+    static std::unordered_map<uint32, uint32> const innerToWrapper = []()
+    {
+        std::unordered_map<uint32, uint32> map;
+
+        // Shadow Bolt: wrapper 90420+r, inner = stock rank, shadow clone
+        // 90433+r (instant/free/GCD-less rebuild of the rank) or fire clone
+        // 90446+r (the Felflame wearer's bolt).
+        constexpr uint32 shadowBoltRanks[] = { 686, 695, 705, 1088, 1106, 7641, 11659, 11660, 11661, 25307, 27209, 47808, 47809 };
+        for (uint32 r = 0; r < std::size(shadowBoltRanks); ++r)
+        {
+            uint32 const wrapper = 90420 + r;
+            map.emplace(shadowBoltRanks[r], wrapper);
+            map.emplace(90433 + r, wrapper);
+            map.emplace(90446 + r, wrapper);
+        }
+
+        // Serpent Sting: wrapper 90460+r, inner = stock rank or fire clone
+        // 90472+r (the Cinderbite wearer's sting).
+        constexpr uint32 serpentStingRanks[] = { 1978, 13549, 13550, 13551, 13552, 13553, 13554, 13555, 25295, 27016, 49000, 49001 };
+        for (uint32 r = 0; r < std::size(serpentStingRanks); ++r)
+        {
+            uint32 const wrapper = 90460 + r;
+            map.emplace(serpentStingRanks[r], wrapper);
+            map.emplace(90472 + r, wrapper);
+        }
+
+        return map;
+    }();
+
+    auto itr = innerToWrapper.find(spellId);
+    return itr != innerToWrapper.end() ? itr->second : 0;
+}
+
+// Set for the duration of the echo's own CastSpell. TRIGGERED_FULL_MASK casts
+// directly, so the echoed spell's cast-phase proc - which is the very event
+// Echoes listens to, carrying the very id that just passed CheckProc - arrives
+// here synchronously, while HandleProc is still on the stack. The plain
+// "triggered casts never echo" rule used to be the whole guard; now that the
+// wrapped inner spells are allowed through it triggered, the echo of one of
+// them would echo itself again. thread_local because map updates run on a
+// thread pool: a cast never crosses threads, but two maps echo concurrently.
+thread_local bool s_echoInFlight = false;
+}
+
 // Boon of Echoes (90239): a dummy with cast-phase proc flags for damage-class
 // magic/none spells. When it fires, the spell that was just cast is cast again
 // at the same targets, free and instant.
@@ -286,18 +346,38 @@ class spell_vhr_boon_echoes : public AuraScript
         if (!spell || !info)
             return false;
 
-        // The echo itself is a triggered cast; never echo an echo, and leave
-        // every other triggered cast (procs) alone too. Item uses (potions,
-        // healthstones, explosives) are NOT triggered casts and would otherwise
-        // be doubled for free - out as well. A consumed charge has already
-        // nulled m_CastItem by the time the cast-phase proc runs (TakeCastItem
-        // precedes it), so the reliable test is the spellbook: only a spell
-        // the caster actually knows may echo.
-        if (spell->IsTriggered() || spell->m_CastItem || spell->m_castItemGUID)
+        // Never echo an echo (see s_echoInFlight).
+        if (s_echoInFlight)
+            return false;
+
+        // Item uses (potions, healthstones, explosives) are NOT triggered casts
+        // and would otherwise be doubled for free - out. A consumed charge has
+        // already nulled m_CastItem by the time the cast-phase proc runs
+        // (TakeCastItem precedes it), so the reliable test is the spellbook
+        // below: only a spell the caster actually knows may echo.
+        if (spell->m_CastItem || spell->m_castItemGUID)
             return false;
 
         Player const* casterPlayer = GetTarget() ? GetTarget()->ToPlayer() : nullptr;
-        if (!casterPlayer || !casterPlayer->HasActiveSpell(info->Id))
+        if (!casterPlayer)
+            return false;
+
+        // Leave triggered casts (procs, other scripts' inner casts) alone. The
+        // one exception is the inner cast of a wrapped rank (WrapperForInnerSpell):
+        // the Serpent Sting wrapper launches its sting TRIGGERED_FULL_MASK, and
+        // that sting IS the hunter's cast - it has to be allowed through, and
+        // only it. (Shadow Bolt's wrapper casts its clone TRIGGERED_NONE, so
+        // the clone never needed this; the exception is harmless for it.)
+        // NB: Aura::GetProcEffectMask drops triggered sources before any script
+        // runs unless 90239's spell_proc row carries PROC_ATTR_TRIGGERED_CAN_PROC
+        // - the Serpent Sting half of this depends on that row.
+        uint32 const wrapper = WrapperForInnerSpell(info->Id);
+        if (spell->IsTriggered() && !wrapper)
+            return false;
+
+        // The spellbook test. A wrapped inner spell is never known itself; the
+        // wrapper that stands for it is.
+        if (!casterPlayer->HasActiveSpell(info->Id) && !(wrapper && casterPlayer->HasActiveSpell(wrapper)))
             return false;
 
         if (info->IsChanneled() || info->IsPassive() || info->NeedsComboPoints())
@@ -322,8 +402,13 @@ class spell_vhr_boon_echoes : public AuraScript
         if (!spell || !caster)
             return;
 
+        // For a wrapped rank this is the INNER spell (clone or stock rank): the
+        // wrapper itself was refused by IsDamageOrHeal, so the echo re-fires
+        // the damage without a second dummy, cost, or cast bar.
         SpellCastTargets targets = spell->m_targets;
+        s_echoInFlight = true;
         caster->CastSpell(std::move(targets), spell->GetSpellInfo()->Id, TRIGGERED_FULL_MASK);
+        s_echoInFlight = false;
     }
 
     void Register() override

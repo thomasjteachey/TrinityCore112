@@ -35,14 +35,23 @@ namespace T2UnitHooks
     bool BlocksManaGain(Unit const* target, SpellInfo const* source);
 
     // MOMENTUM. Called from WorldSession::HandleMovementOpcodes for the player's
-    // own mover, after the packet has been validated, with the NEW movement info.
-    // Keyboard turning sets MOVEMENTFLAG_LEFT/RIGHT; mouse turning arrives as
-    // MSG_MOVE_SET_FACING with a new orientation and no turn flag, so the body
-    // tracks cumulative orientation drift from the moment momentum started.
+    // own mover, after the packet has been validated, with the NEW movement info
+    // (its `time` already converted to the server clock by the handler - the
+    // body times everything off it, not off when the packet happened to be
+    // processed). Keyboard turning sets MOVEMENTFLAG_LEFT/RIGHT; mouse turning
+    // arrives as MSG_MOVE_SET_FACING with a new orientation and no turn flag,
+    // so the body tracks orientation drift from the moment momentum started.
     void OnPlayerMovement(Player* player, uint16 opcode, MovementInfo const& newInfo);
     // Housekeeping for the momentum tracker: called from Player::RemoveFromWorld
     // (logout and far teleport both pass through it). Touches no auras.
     void OnPlayerRemovedFromWorld(Player* player);
+    // Loss of control breaks a run: called from Unit::SetControlled when a
+    // stun / root / confuse / fear is APPLIED to a player (a controlled player
+    // sends no movement packets, so the tracker would otherwise never notice).
+    // The run is forgotten at once; the buff itself is dropped from the
+    // player's event queue on the next Unit::Update, because SetControlled runs
+    // from inside the CC aura's apply handler.
+    void OnPlayerControlLost(Player* player);
 
     // ASHEN CONFISCATION. Temporary weapons a mage "confiscates" from a disarmed
     // victim are registered here so Player::CanUseItem / weapon-skill lookups can

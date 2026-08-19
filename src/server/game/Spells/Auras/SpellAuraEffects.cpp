@@ -39,6 +39,7 @@
 #include "Spell.h"
 #include "SpellHistory.h"
 #include "SpellMgr.h"
+#include "T2UnitHooks.h"
 #include "StringFormat.h"
 #include "ThreatManager.h"
 #include "Unit.h"
@@ -5738,6 +5739,10 @@ void AuraEffect::HandlePeriodicManaLeechAuraTick(Unit* target, Unit* caster) con
 
     int32 gainAmount = int32(drainedAmount * gainMultiplier);
     int32 gainedAmount = 0;
+    // Blood for Power: the Drain Mana return is mana gained by the caster from
+    // something that is not Life Tap, so it is refused too.
+    if (gainAmount && powerType == POWER_MANA && T2UnitHooks::BlocksManaGain(caster, GetSpellInfo()))
+        gainAmount = 0;
     if (gainAmount)
     {
         gainedAmount = caster->ModifyPower(powerType, gainAmount);
@@ -5784,6 +5789,12 @@ void AuraEffect::HandleObsModPowerAuraTick(Unit* target, Unit* caster) const
     if (GetBase()->IsPermanent() && target->GetPower(powerType) == target->GetMaxPower(powerType))
         return;
 
+    // Blood for Power (T2 warlock 5pc): drink, Innervate and every other
+    // percent-regen aura land here via ModifyPower, never EnergizeBySpell,
+    // so the Life-Tap-only gate has to be applied at this tick as well.
+    if (powerType == POWER_MANA && T2UnitHooks::BlocksManaGain(target, GetSpellInfo()))
+        return;
+
     // ignore negative values (can be result apply spellmods to aura damage
     uint32 amount = std::max(GetAmount(), 0) * target->GetMaxPower(powerType) /100;
     TC_LOG_DEBUG("spells.aura.effect", "PeriodicTick: {} energize {} for {} dmg inflicted by {}",
@@ -5816,6 +5827,11 @@ void AuraEffect::HandlePeriodicEnergizeAuraTick(Unit* target, Unit* caster) cons
 
     // don't regen when permanent aura target has full power
     if (GetBase()->IsPermanent() && target->GetPower(powerType) == target->GetMaxPower(powerType))
+        return;
+
+    // Blood for Power: Mana Spring, Replenishment and friends tick through
+    // ModifyPower directly, bypassing the EnergizeBySpell gate.
+    if (powerType == POWER_MANA && T2UnitHooks::BlocksManaGain(target, GetSpellInfo()))
         return;
 
     // ignore negative values (can be result apply spellmods to aura damage

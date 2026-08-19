@@ -6,6 +6,7 @@
  *   BlocksManaGain          Unit::EnergizeBySpell, Player::Regenerate
  *   OnPlayerMovement        WorldSession::HandleMovementOpcodes (own mover)
  *   OnPlayerRemovedFromWorld Player::RemoveFromWorld
+ *   OnPlayerControlLost     Unit::SetControlled (stun / root / confuse / fear applied)
  *   IsTemporaryWeapon       Player::CanUseItem(Item*), Player::GetBaseWeaponSkillValue,
  *                           Unit::GetWeaponSkillValue
  *
@@ -16,7 +17,6 @@
 #include "T2UnitHooks.h"
 #include "Chat.h"
 #include "Common.h"
-#include "GameTime.h"
 #include "Item.h"
 #include "MovementInfo.h"
 #include "Player.h"
@@ -43,6 +43,15 @@ namespace
             if (sessionPair.second && sessionPair.second->GetPlayer()
                 && sessionPair.second->IsGmDiagnosticEnabled(GmDiagnosticCategory::CustomAuras))
                 ChatHandler(sessionPair.second).SendSysMessage(msg);
+    }
+
+    // Milliseconds from `from` to `to` on the packet clock, 0 if `to` is not
+    // after `from`. Movement times can step back a few ms when the session
+    // re-syncs its clock delta; an unsigned subtraction would then read as
+    // hours, not as nothing.
+    uint32 ElapsedMs(uint32 from, uint32 to)
+    {
+        return to >= from ? to - from : 0;
     }
 
     // Smallest absolute angle between two orientations, in radians.
@@ -78,21 +87,28 @@ namespace
     // Driven from the player's own movement packets, so a genuine stop, turn
     // or strafe is seen the moment the client reports it, and a heartbeat
     // (~500 ms) bounds how late a silent event (running into a wall) is seen.
+    // All timing uses the packet's own movementInfo.time (converted to the
+    // server clock by the handler): two heartbeats drained from the queue in
+    // one lagged world tick are 500 ms apart by that clock, not 0 ms, so they
+    // never read as a position jump.
     //
     // Rules implemented (the design text is in T2UnitHooks.h):
     //   running  = alive, not mounted, not on a taxi, MOVEMENTFLAG_FORWARD set,
     //              none of BACKWARD / STRAFE_* / LEFT / RIGHT (keyboard turn) /
     //              ROOT / WALKING / SWIMMING / FLYING set.
-    //   leg      = a stretch of running whose heading stays within
-    //              MOMENTUM_TURN_TOLERANCE of the heading it STARTED with
+    //   run      = a stretch of running whose heading stays within
+    //              MOMENTUM_TURN_TOLERANCE of the heading the RUN started with
     //              (mouse turning only shows up as orientation drift, so this
-    //              is what catches it). Every MOMENTUM_STACK_MS of a live leg
-    //              that actually covered ground adds one stack of 90392 and
-    //              opens the next leg from the current heading.
+    //              is what catches it). The reference heading is fixed for the
+    //              whole run, never re-based per stack: otherwise a runner
+    //              could curve 10 deg/s for ever and keep four stacks.
+    //   leg      = MOMENTUM_STACK_MS of a live run. Every leg that actually
+    //              covered ground adds one stack of 90392 and opens the next.
     //   break    = anything that is not running, a turn past tolerance, a
-    //              position jump (teleport/knockback), or a leg that ran its
-    //              3 s without covering MOMENTUM_MIN_SPEED_FRACTION of run
-    //              speed (stuck against geometry). Break removes 90392.
+    //              position jump (teleport/knockback), loss of control (see
+    //              OnPlayerControlLost), or a leg that ran its 3 s without
+    //              covering MOMENTUM_MIN_SPEED_FRACTION of run speed (stuck
+    //              against geometry). Break removes 90392.
     //   jumping  = does NOT break (FALLING/FALLING_FAR are ignored); a jump
     //              with FORWARD held keeps the leg alive.
     //   mounting = breaks, and nothing builds while mounted (SPELL_AURA_
@@ -112,13 +128,13 @@ namespace
 
     struct MomentumRun
     {
-        uint32 legStartMs     = 0;      // 0 = no live leg
-        float  legOrientation = 0.0f;
+        uint32 legStartMs     = 0;      // 0 = no live run/leg
+        float  runOrientation = 0.0f;   // heading the RUN opened with; the 30-degree tolerance is against this
         float  legDistance    = 0.0f;   // ground covered during the live leg
         bool   hasSample      = false;
         float  lastX          = 0.0f;
         float  lastY          = 0.0f;
-        uint32 lastSampleMs   = 0;
+        uint32 lastSampleMs   = 0;      // movementInfo.time of the previous packet (server clock)
     };
 
     enum class MomentumVerdict : uint8 { None, Break, Stack };
@@ -131,7 +147,8 @@ namespace
     // Everything that needs the tracker, under the lock. Returns what the
     // caller should do to the buff; the caller acts on it OUTSIDE the lock.
     // `freshTracker` is set when this packet created the entry, so the caller
-    // can drop a buff left over from before a teleport/relog.
+    // can drop a buff left over from before a teleport/relog. `nowMs` is the
+    // packet's movementInfo.time, already on the server clock.
     MomentumVerdict AdvanceMomentum(Player* player, MovementInfo const& info, uint32 nowMs, bool& freshTracker)
     {
         std::lock_guard<std::mutex> guard(s_momentumMutex);
@@ -158,7 +175,9 @@ namespace
             float const dx = x - run.lastX;
             float const dy = y - run.lastY;
             moved = std::sqrt(dx * dx + dy * dy);
-            dt = nowMs - run.lastSampleMs;
+            // A backwards step reads as "no time passed", which the
+            // position-jump test below then judges on slack alone.
+            dt = ElapsedMs(run.lastSampleMs, nowMs);
 
             // Stale tracker (nothing heard for a long time) or a position jump
             // the player's own legs cannot explain (teleport, knockback).
@@ -180,34 +199,35 @@ namespace
         }
         else if (run.legStartMs == 0)
         {
-            // First running packet: open a leg from this heading. (After a
+            // First running packet: open a run from this heading. (After a
             // Break above while still running - a teleport mid-run - the next
             // packet lands here.)
             run.legStartMs = nowMs;
-            run.legOrientation = o;
+            run.runOrientation = o;
             run.legDistance = 0.0f;
         }
         else
         {
             run.legDistance += moved;
 
-            if (FacingDelta(o, run.legOrientation) > MOMENTUM_TURN_TOLERANCE)
+            if (FacingDelta(o, run.runOrientation) > MOMENTUM_TURN_TOLERANCE)
             {
-                // Turned: stacks go, but the player is still running, so the
-                // next leg starts right now from the new heading.
+                // Turned past tolerance against the heading the whole run
+                // started with: stacks go, but the player is still running,
+                // so a NEW run opens right now from the new heading.
                 verdict = MomentumVerdict::Break;
                 run.legStartMs = nowMs;
-                run.legOrientation = o;
+                run.runOrientation = o;
                 run.legDistance = 0.0f;
             }
-            else if (nowMs - run.legStartMs >= MOMENTUM_STACK_MS)
+            else if (ElapsedMs(run.legStartMs, nowMs) >= MOMENTUM_STACK_MS)
             {
                 // A full leg. It only counts if it covered ground: FORWARD
-                // stays set while running into a wall.
+                // stays set while running into a wall. The next leg opens
+                // against the SAME run heading - deliberately not re-based.
                 float const needed = player->GetSpeed(MOVE_RUN) * (float(MOMENTUM_STACK_MS) / 1000.0f) * MOMENTUM_MIN_SPEED_FRACTION;
                 verdict = run.legDistance >= needed ? MomentumVerdict::Stack : MomentumVerdict::Break;
                 run.legStartMs = nowMs;
-                run.legOrientation = o;
                 run.legDistance = 0.0f;
             }
         }
@@ -268,8 +288,12 @@ namespace T2UnitHooks
             return;
         }
 
+        // Timed off the packet's own clock (the handler has already shifted
+        // movementInfo.time onto the server clock), not off GameTime at
+        // processing time: a lagged tick drains several queued heartbeats in
+        // one go and they must keep their real spacing.
         bool freshTracker = false;
-        MomentumVerdict const verdict = AdvanceMomentum(player, newInfo, GameTime::GetGameTimeMS(), freshTracker);
+        MomentumVerdict const verdict = AdvanceMomentum(player, newInfo, newInfo.time, freshTracker);
 
         // A tracker that was just (re)created while the buff is still on the
         // player means the buff survived a far teleport or a relog; it belongs
@@ -315,6 +339,40 @@ namespace T2UnitHooks
         // Only the bookkeeping. Whether the buff survives the map change is
         // settled by the first packet on the other side (see freshTracker).
         ForgetMomentum(player->GetGUID());
+    }
+
+    void OnPlayerControlLost(Player* player)
+    {
+        if (!player)
+            return;
+
+        // Cheapest test first: almost nobody carries the five-piece.
+        if (!player->HasAura(SPELL_MOMENTUM))
+            return;
+
+        // The run is over whatever happens next; the next packet (when the
+        // player can move again) opens a fresh tracker, which on its own
+        // already drops a buff it does not know about.
+        ForgetMomentum(player->GetGUID());
+
+        if (!player->HasAura(SPELL_MOMENTUM_BUFF))
+            return;
+
+        // We are inside Unit::SetControlled, i.e. inside the stun / root /
+        // fear / confuse aura's own apply handler - removing another aura
+        // from there is exactly what the open heap-corruption rule forbids.
+        // The removal goes onto the player's event queue instead and runs
+        // from the top of the next Unit::Update (the queue dies with the
+        // player, so the captured pointer cannot dangle). Until then the
+        // stacks linger for at most one world tick.
+        player->m_Events.AddEventAtOffset([player]()
+        {
+            if (!player->HasAura(SPELL_MOMENTUM_BUFF))
+                return;
+            player->RemoveAurasDueToSpell(SPELL_MOMENTUM_BUFF);
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Momentum broken by loss of control - stacks cleared", player->GetName()));
+        }, Milliseconds(0));
     }
 
     void RegisterTemporaryWeapon(ObjectGuid itemGuid)

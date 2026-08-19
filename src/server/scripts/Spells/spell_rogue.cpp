@@ -327,7 +327,14 @@ class spell_rog_deadly_brew : public AuraScript
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
         PreventDefaultAction();
-        eventInfo.GetActor()->CastSpell(eventInfo.GetProcTarget(), 11201, aurEff);
+        Unit* actor = eventInfo.GetActor();
+        Unit* victim = eventInfo.GetProcTarget();
+        if (!actor || !victim)
+            return;
+        // T2 ice fang 3pc (90348): the coat on the weapon is Chilling Poison
+        // (proc 90513), so Deadly Brew must hand out that poison, not Crippling.
+        uint32 const poison = actor->HasAura(90348) ? 90513u : 11201u;
+        actor->CastSpell(victim, poison, aurEff);
     }
 
     void Register() override
@@ -416,7 +423,13 @@ class spell_rog_poison : public SpellScript
         {
             if (roll_chance_f(sealFate->GetBase()->GetSpellInfo()->ProcChance))
             {
-                GetCaster()->AddAura(11201, GetHitUnit());
+                Unit* caster = GetCaster();
+                Unit* victim = GetHitUnit();
+                if (!caster || !victim)
+                    return;
+                // Same Chilling-vs-Crippling choice as Deadly Brew above.
+                uint32 const poison = caster->HasAura(90348) ? 90513u : 11201u;
+                caster->AddAura(poison, victim);
             }
         }
     }
