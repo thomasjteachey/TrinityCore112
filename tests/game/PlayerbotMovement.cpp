@@ -35,7 +35,24 @@ TEST_CASE("Socketless playerbot facing preserves active translation", "[playerbo
     std::string const source = ReadFile("src/server/game/Entities/Unit/Unit.cpp");
     CHECK(source.find("bool HasActiveTranslationalSpline(Unit const* unit)") != std::string::npos);
     CHECK(source.find("unit->movespline->splineflags.parabolic") != std::string::npos);
-    CHECK(CountOccurrences(source, "IsSocketlessServerDrivenPlayer(this) && HasActiveTranslationalSpline(this)") >= 2);
+    // SetInFront / SetFacingTo / SetFacingToObject all route bots through the
+    // shared turn helper, which keeps an active translational spline untouched.
+    CHECK(CountOccurrences(source, "TurnSocketlessServerDrivenPlayer(this, ") >= 3);
+    CHECK(source.find("bool const visibleTurn = !HasActiveTranslationalSpline(unit) &&") != std::string::npos);
+}
+
+TEST_CASE("Socketless playerbot turn-in-place is published to observers", "[playerbot][movement]")
+{
+    std::string const source = ReadFile("src/server/game/Entities/Unit/Unit.cpp");
+    // A stopped bot announces a facing change like a client would (MSG_MOVE_SET_FACING
+    // from the live position), never while a spline is still playing.
+    std::size_t const broadcastPos = source.find("void BroadcastSocketlessServerDrivenFacing(Unit* unit)");
+    REQUIRE(broadcastPos != std::string::npos);
+    std::string const body = source.substr(broadcastPos, 2000);
+    CHECK(body.find("if (unit->movespline && !unit->movespline->Finalized())") != std::string::npos);
+    CHECK(body.find("WorldPacket data(MSG_MOVE_SET_FACING, 64);") != std::string::npos);
+    CHECK(body.find("movementInfo.pos.Relocate(unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ(), unit->GetOrientation());") != std::string::npos);
+    CHECK(body.find("MOVEMENTFLAG_SPLINE_ENABLED") != std::string::npos);
 }
 
 TEST_CASE("Socketless pure vertical knock-up uses a closed client-timed spline", "[playerbot][movement]")

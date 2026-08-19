@@ -717,16 +717,58 @@ void WorldSession::HandleGroupChangeSubGroupOpcode(WorldPacket& recvData)
     if (!group->HasFreeSlotSubGroup(groupNr))
         return;
 
-    ObjectGuid guid;
-    if (Player* movedPlayer = ObjectAccessor::FindConnectedPlayerByName(name))
-        guid = movedPlayer->GetGUID();
-    else
-        guid = sCharacterCache->GetCharacterGuidByName(name);
+    // Resolve the name against THIS group's roster first. Server-created
+    // members (Violet Hold Fellowship allies, custom-game clones) are
+    // addressed by their character-cache display name, which the world-wide
+    // lookup below resolves to the online source character instead - a guid
+    // that is not in the raid, so the move silently did nothing.
+    ObjectGuid guid = group->GetMemberGUID(name);
+    if (guid.IsEmpty())
+    {
+        if (Player* movedPlayer = ObjectAccessor::FindConnectedPlayerByName(name))
+            guid = movedPlayer->GetGUID();
+        else
+            guid = sCharacterCache->GetCharacterGuidByName(name);
+    }
 
     if (guid.IsEmpty())
         return;
 
     group->ChangeMembersGroup(guid, groupNr);
+}
+
+void WorldSession::HandleGroupSwapSubGroupOpcode(WorldPacket& recvData)
+{
+    TC_LOG_DEBUG("network", "WORLD: Received CMSG_GROUP_SWAP_SUB_GROUP");
+
+    // Sent by the raid frame when a member is dropped onto another member
+    // (swap) instead of onto an empty slot (change). Same name semantics as
+    // HandleGroupChangeSubGroupOpcode: resolve against this roster first.
+    Group* group = GetPlayer()->GetGroup();
+    if (!group)
+        return;
+
+    if (IsPlayerInsideCustomGameLobby(GetPlayer()))
+        return;
+
+    std::string firstName;
+    std::string secondName;
+    recvData >> firstName;
+    recvData >> secondName;
+
+    if (!normalizePlayerName(firstName) || !normalizePlayerName(secondName))
+        return;
+
+    ObjectGuid senderGuid = GetPlayer()->GetGUID();
+    if (!group->IsLeader(senderGuid) && !group->IsAssistant(senderGuid))
+        return;
+
+    ObjectGuid firstGuid = group->GetMemberGUID(firstName);
+    ObjectGuid secondGuid = group->GetMemberGUID(secondName);
+    if (firstGuid.IsEmpty() || secondGuid.IsEmpty() || firstGuid == secondGuid)
+        return;
+
+    group->SwapMembersGroups(firstGuid, secondGuid);
 }
 
 void WorldSession::HandleGroupAssistantLeaderOpcode(WorldPacket& recvData)

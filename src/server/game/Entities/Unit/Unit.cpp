@@ -134,6 +134,71 @@ bool HasActiveTranslationalSpline(Unit const* unit)
     float const dz = destination.z - current.z;
     return dx * dx + dy * dy + dz * dz > 0.01f;
 }
+
+// Smallest absolute angle between two orientations, in radians.
+float FacingDelta(float lhs, float rhs)
+{
+    float delta = std::fabs(Position::NormalizeOrientation(lhs) - Position::NormalizeOrientation(rhs));
+    if (delta > float(M_PI))
+        delta = 2.0f * float(M_PI) - delta;
+    return delta;
+}
+
+// A socketless playerbot has no client to announce a turn-in-place. Real
+// players broadcast MSG_MOVE_SET_FACING themselves; the creature route (a
+// 1 ms facing spline) is fragile for bots: any same-tick Unit::StopMoving()
+// (the SPELL_FAILED_MOVING retry, hunter plant stops, ...) replaces the
+// facing spline with a MonsterMoveStop before observer clients ever apply
+// the angle, and ChaseMovementGenerator's SetInFront() sends nothing at all.
+// Either way observers keep rendering the old orientation while server-side
+// arc checks (spell facing, melee swing) already use the new one. Publish the
+// turn the way a client would, from the live position, and only while no
+// spline is active -- mid-spline the spline owns the orientation on both
+// sides and a player-style packet would stomp its playback.
+void BroadcastSocketlessServerDrivenFacing(Unit* unit)
+{
+    if (!IsSocketlessServerDrivenPlayer(unit) || !unit->IsInWorld())
+        return;
+
+    if (unit->movespline && !unit->movespline->Finalized())
+        return;
+
+    MovementInfo movementInfo = unit->m_movementInfo;
+    movementInfo.RemoveMovementFlag(MOVEMENTFLAG_MASK_MOVING | MOVEMENTFLAG_MASK_TURNING | MOVEMENTFLAG_SPLINE_ENABLED |
+        MOVEMENTFLAG_PENDING_STOP | MOVEMENTFLAG_PENDING_STRAFE_STOP | MOVEMENTFLAG_PENDING_FORWARD | MOVEMENTFLAG_PENDING_BACKWARD |
+        MOVEMENTFLAG_PENDING_STRAFE_LEFT | MOVEMENTFLAG_PENDING_STRAFE_RIGHT | MOVEMENTFLAG_PENDING_ROOT);
+    movementInfo.pos.Relocate(unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ(), unit->GetOrientation());
+    movementInfo.time = GameTime::GetGameTimeMS();
+    movementInfo.fallTime = 0;
+
+    WorldPacket data(MSG_MOVE_SET_FACING, 64);
+    data << unit->GetPackGUID();
+    Unit::BuildMovementPacket(movementInfo.pos, movementInfo.transport.pos, movementInfo, &data);
+    unit->SendMessageToSet(&data, false);
+}
+
+// Applies a facing change to a socketless playerbot. Returns false for every
+// other unit so the caller falls through to the regular (spline) handling.
+// While a translational spline is active only the authoritative server
+// orientation is updated (the spline re-derives it on the next update and the
+// observers are already following that spline); once the bot is standing still
+// the turn is also broadcast so observers stop rendering a stale angle.
+bool TurnSocketlessServerDrivenPlayer(Unit* unit, float orientation)
+{
+    if (!IsSocketlessServerDrivenPlayer(unit))
+        return false;
+
+    // Below float noise there is nothing to show; the chatty callers
+    // (hunter plant, chase settle) re-face every decision tick.
+    static float constexpr VISIBLE_TURN_EPSILON = 0.001f;
+    bool const visibleTurn = !HasActiveTranslationalSpline(unit) &&
+        FacingDelta(unit->GetOrientation(), orientation) > VISIBLE_TURN_EPSILON;
+
+    unit->UpdateOrientation(orientation);
+    if (visibleTurn)
+        BroadcastSocketlessServerDrivenFacing(unit);
+    return true;
+}
 }
 
 float baseMoveSpeed[MAX_MOVE_TYPE] =
@@ -14767,8 +14832,19 @@ bool CharmInfo::IsReturning()
 
 void Unit::SetInFront(WorldObject const* target)
 {
-    if (!HasUnitState(UNIT_STATE_CANNOT_TURN))
-        SetOrientation(GetAbsoluteAngle(target));
+    if (HasUnitState(UNIT_STATE_CANNOT_TURN))
+        return;
+
+    float const orientation = GetAbsoluteAngle(target);
+
+    // Server-only for everything that has a client of its own (the client
+    // auto-faces creatures at their target). A socketless playerbot is a
+    // player unit to observers, so its turn has to be published or they keep
+    // rendering the stale angle (see TurnSocketlessServerDrivenPlayer).
+    if (TurnSocketlessServerDrivenPlayer(this, orientation))
+        return;
+
+    SetOrientation(orientation);
 }
 
 void Unit::SetFacingTo(float ori, bool force)
@@ -14778,16 +14854,13 @@ void Unit::SetFacingTo(float ori, bool force)
         return;
 
     // SetFacingTo normally launches a zero-distance spline. For a socketless
-    // playerbot that replaces the translational spline observers are currently
-    // interpolating, and the movement generator then launches another travel
-    // spline on its next update. The alternating packets render as a sporadic
-    // back-and-forth teleport. Preserve travel and update only the authoritative
-    // facing needed by the immediate server-side spell/arc check.
-    if (IsSocketlessServerDrivenPlayer(this) && HasActiveTranslationalSpline(this))
-    {
-        UpdateOrientation(ori);
+    // playerbot that either replaces the translational spline observers are
+    // currently interpolating (rendering as a back-and-forth teleport once the
+    // movement generator relaunches travel) or, when standing still, gets
+    // dropped by any same-tick StopMoving() before the client applies it.
+    // Bots turn via a player-style facing packet instead.
+    if (TurnSocketlessServerDrivenPlayer(this, ori))
         return;
-    }
 
     Movement::MoveSplineInit init(this);
     init.MoveTo(GetPositionX(), GetPositionY(), GetPositionZ(), false);
@@ -14808,11 +14881,9 @@ void Unit::SetFacingToObject(WorldObject const* object, bool force)
     if (!force && (!IsStopped() || !movespline->Finalized()))
         return;
 
-    if (IsSocketlessServerDrivenPlayer(this) && HasActiveTranslationalSpline(this))
-    {
-        UpdateOrientation(GetAbsoluteAngle(object));
+    // Socketless playerbots: see SetFacingTo.
+    if (TurnSocketlessServerDrivenPlayer(this, GetAbsoluteAngle(object)))
         return;
-    }
 
     /// @todo figure out under what conditions creature will move towards object instead of facing it where it currently is.
     Movement::MoveSplineInit init(this);
