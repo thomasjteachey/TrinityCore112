@@ -57,9 +57,12 @@
 --   does not stop someone simply deleting the client DLL, which remains the real
 --   hole (see the client-coverage note above).
 --
---   AttributesEx gains SPELL_ATTR1_DONT_DISPLAY_IN_AURA_BAR (0x02000000) so the
---   buff draws no icon at all: these are mode switches, not player-facing buffs,
---   and with a server-wide collision aura the icon is permanent clutter.
+--   AttributesEx = 0x12000000 hides the buff icon: BOTH DONT_DISPLAY bits. This
+--   tree's SharedDefines.h names 0x10000000 SPELL_ATTR1_DONT_DISPLAY_IN_AURA_BAR
+--   and 0x02000000 SPELL_ATTR1_UNK25. The 3.3.5 client honours 0x10000000, so
+--   0x02000000 alone (the old value 33554432) still drew an icon in-game;
+--   setting both (301989888) matches the confirmed-hidden Boon Broker markers
+--   (90248/90257). These are mode switches, not player-facing buffs.
 --
 --   Do NOT reach for SPELL_ATTR0_PASSIVE to hide them instead. Passive is not a
 --   display flag - Aura::CanBeSentToClient() is `!IsPassive() || area-aura ||
@@ -105,7 +108,7 @@ UPDATE `tmp_collide` SET
   `AuraInterruptFlags` = 0,      -- donor carried 0x20000 AURA_INTERRUPT_FLAG_MOUNT
   `AttributesExC` = 1048576,     -- SPELL_ATTR3_DEATH_PERSISTENT
   `Attributes` = 2147483648,     -- SPELL_ATTR0_CANT_CANCEL: player cannot right-click it off
-  `AttributesEx` = 33554432,     -- SPELL_ATTR1_DONT_DISPLAY_IN_AURA_BAR: no buff icon
+  `AttributesEx` = 301989888,    -- 0x12000000: BOTH DONT_DISPLAY bits, no buff icon
   `SpellIconID` = 28;      -- Ability_Defend
 INSERT INTO `spell_lplus` SELECT * FROM `tmp_collide`;
 

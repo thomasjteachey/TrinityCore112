@@ -38,10 +38,12 @@ UPDATE `tmp_losblock` SET
   `AuraInterruptFlags` = 0,      -- donor's 0x20000 would drop it on mounting
   `AttributesExC` = 1048576,     -- SPELL_ATTR3_DEATH_PERSISTENT
   `Attributes` = 2147483648,     -- SPELL_ATTR0_CANT_CANCEL: player cannot right-click it off
-  `AttributesEx` = 33554432,     -- SPELL_ATTR1_DONT_DISPLAY_IN_AURA_BAR: no buff icon.
-                                 -- Never use SPELL_ATTR0_PASSIVE for this: passive
-                                 -- auras fail Aura::CanBeSentToClient() and are not
-                                 -- sent to the client at all.
+  `AttributesEx` = 301989888,    -- 0x12000000: BOTH DONT_DISPLAY bits, no buff icon.
+                                 -- 0x02000000 alone (old 33554432) still drew an icon
+                                 -- on this 3.3.5 client; 0x10000000 is the one it
+                                 -- honours, so set both. Never use SPELL_ATTR0_PASSIVE
+                                 -- for this: passive auras fail Aura::CanBeSentToClient()
+                                 -- and are not sent to the client at all.
   `SpellIconID` = 2135;        -- Spell_Holy_ArdentDefender
 
 INSERT INTO `spell_lplus` SELECT * FROM `tmp_losblock`;
