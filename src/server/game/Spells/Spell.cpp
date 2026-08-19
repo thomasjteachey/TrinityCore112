@@ -53,6 +53,7 @@
 #include "StringFormat.h"
 #include "SpellAuraEffects.h"
 #include "SpellHistory.h"
+#include "T2SpellHooks.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "LosBlocker.h"
@@ -2643,6 +2644,19 @@ void Spell::TargetInfo::PreprocessTarget(Spell* spell)
         }
     }
 
+    // T2 Reflective Carapace (90344): a hostile spell that was flatly immune
+    // against a player in Ice Block reflects part of what it would have done.
+    // Both immune sources land here - the launch-time SpellHitResult and the
+    // hit-time PreprocessSpellHit re-check for delayed missiles.
+    if (MissCondition == SPELL_MISS_IMMUNE || MissCondition == SPELL_MISS_IMMUNE2)
+    {
+        Unit* attacker = spell->m_caster->ToUnit();
+        if (!attacker)
+            attacker = spell->m_originalCaster;
+        if (attacker)
+            T2SpellHooks::OnImmuneSpellHit(attacker, unit, spell->m_spellInfo);
+    }
+
     spell->CallScriptOnHitHandlers();
 
     // scripts can modify damage/healing for current target, save them
@@ -3875,6 +3889,13 @@ void Spell::_cast(bool skipCheck)
 
     // we must send smsg_spell_go packet before m_castItem delete in TakeCastItem()...
     SendSpellGo();
+
+    // T2 Unbound Rime/Ember: the 3.3.5 client starts the shared shock category
+    // cooldown from its own Spell.dbc on SMSG_SPELL_GO, so a holder's client has
+    // to be told the real per-spell picture right after it. No-op for everyone
+    // else (see SpellHistory::SyncShockCooldownsToClient).
+    if (Player* shockCaster = m_caster->ToPlayer())
+        shockCaster->GetSpellHistory()->SyncShockCooldownsToClient(m_spellInfo);
 
     if (!m_spellInfo->IsChanneled())
         if (Creature* creatureCaster = m_caster->ToCreature())

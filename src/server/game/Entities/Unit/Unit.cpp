@@ -72,6 +72,8 @@
 #include "SpellInfo.h"
 #include "SpellHistory.h"
 #include "SpellMgr.h"
+#include "T2SpellHooks.h"
+#include "T2UnitHooks.h"
 #include "StringConvert.h"
 #include "TemporarySummon.h"
 #include "Transport.h"
@@ -1452,6 +1454,36 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
         damageInfo->HitInfo |= HITINFO_NORMALSWING;
         damageInfo->TargetState = VICTIMSTATE_IS_IMMUNE;
         damageInfo->CleanDamage = 0;
+
+        // T2 Reflective Ice (90344): the wearer's Ice Block reflects a share of
+        // what a swing WOULD have done. This fork bails out before the damage
+        // is ever rolled for a fully immune target, so the would-be damage is
+        // estimated here with the same pipeline the non-immune path uses
+        // (weapon damage, done/taken bonuses, armor; no crit roll, no
+        // ModifyMeleeDamage script hook) and handed to the spell-side hook.
+        // Gated on the carrier so no one else pays for the estimate.
+        if (victim->HasAura(T2SpellHooks::SPELL_REFLECTIVE_ICE))
+        {
+            uint32 wouldBeDamage = 0;
+            for (uint8 i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
+            {
+                // only players have secondary weapon damage
+                if (i > 0 && GetTypeId() != TYPEID_PLAYER)
+                    break;
+
+                SpellSchoolMask const schoolMask = SpellSchoolMask(damageInfo->Damages[i].DamageSchoolMask);
+                bool const addPctMods = (schoolMask & SPELL_SCHOOL_MASK_NORMAL) != 0;
+                uint8 const itemDamagesMask = (GetTypeId() == TYPEID_PLAYER) ? (1 << i) : 0;
+
+                uint32 damage = CalculateDamage(attackType, false, addPctMods, itemDamagesMask);
+                damage = MeleeDamageBonusDone(victim, damage, attackType, nullptr, schoolMask);
+                damage = victim->MeleeDamageBonusTaken(this, damage, attackType, nullptr, schoolMask);
+                if (Unit::IsDamageReducedByArmor(schoolMask))
+                    damage = Unit::CalcArmorReducedDamage(this, victim, damage, nullptr, attackType);
+                wouldBeDamage += damage;
+            }
+            T2SpellHooks::OnImmuneMeleeHit(this, victim, wouldBeDamage);
+        }
         return;
     }
 
@@ -3230,10 +3262,19 @@ uint32 Unit::GetWeaponSkillValue(WeaponAttackType attType, Unit const* target) c
         if (item)
             skill = item->GetSkill();
 
-        // in PvP use full skill instead current skill value
-        value = (target && target->IsControlledByPlayer())
-            ? player->GetMaxSkillValue(skill)
-            : player->GetSkillValue(skill);
+        // T2 Ashen Confiscation (90347): a confiscated weapon is swung "as if"
+        // the wearer had TEMPORARY_WEAPON_SKILL in it, whatever the real
+        // skill line says (the mage usually has no line for it at all). Only
+        // items the script registered qualify; everything else is untouched.
+        if (item && T2UnitHooks::IsTemporaryWeapon(item))
+            value = T2UnitHooks::TEMPORARY_WEAPON_SKILL;
+        else
+        {
+            // in PvP use full skill instead current skill value
+            value = (target && target->IsControlledByPlayer())
+                ? player->GetMaxSkillValue(skill)
+                : player->GetSkillValue(skill);
+        }
         // Modify value from ratings
         value += uint32(player->GetRatingBonusValue(CR_WEAPON_SKILL));
         switch (attType)
@@ -7514,6 +7555,14 @@ void Unit::EnergizeBySpell(Unit* victim, uint32 spellId, int32 damage, Powers po
 
 void Unit::EnergizeBySpell(Unit* victim, SpellInfo const* spellInfo, int32 damage, Powers powerType)
 {
+    // T2 Blood for Power (90322): the wearer gains no MANA from anything but
+    // Life Tap. Potions, gems, runes, Judgement of Wisdom, Shadowfiend, Water
+    // Shield, Spiritual Attunement... every SPELL_EFFECT_ENERGIZE(_PCT) and
+    // every script that energizes arrives here. Nothing is gained, so nothing
+    // is logged and no threat is forwarded. Other power types are untouched.
+    if (powerType == POWER_MANA && damage > 0 && T2UnitHooks::BlocksManaGain(victim, spellInfo))
+        return;
+
     victim->ModifyPower(powerType, damage, false);
     victim->GetThreatManager().ForwardThreatForAssistingMe(this, float(damage)/2, spellInfo, true);
     SendEnergizeSpellLog(victim, spellInfo->Id, damage, powerType);

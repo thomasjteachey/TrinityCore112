@@ -32,6 +32,7 @@
 #include "Opcodes.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "T2UnitHooks.h"
 #include "Transport.h"
 #include "Vehicle.h"
 #include "World.h"
@@ -607,6 +608,12 @@ void WorldSession::HandleMovementOpcodes(WorldPacket& recvData)
         }
         else
             plrMover->RemoveFlag(PLAYER_FLAGS, PLAYER_FLAGS_IS_OUT_OF_BOUNDS);
+
+        // T2 Momentum (90358): the player's OWN mover only, after the packet
+        // has been validated, broadcast and applied to the unit. The body
+        // early-outs for anyone without the set-bonus aura.
+        if (plrMover == _player)
+            T2UnitHooks::OnPlayerMovement(plrMover, opcode, movementInfo);
     }
 }
 

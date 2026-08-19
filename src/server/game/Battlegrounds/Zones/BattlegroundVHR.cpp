@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace
 {
@@ -166,6 +167,7 @@ BattlegroundVHR::BattlegroundVHR()
     _buffLifetimeMs = 0;
     _lastCountdownSecond = 0;
     _stateCheckTimerMs = 0;
+    _floorCheckTimerMs = 0;
     _hasPendingRequest = false;
     _brokerBonusOffers = 0;
     _bonusBrokersPerWave = 0;
@@ -234,6 +236,7 @@ void BattlegroundVHR::Reset()
     _buffLifetimeMs = 0;
     _lastCountdownSecond = 0;
     _stateCheckTimerMs = 0;
+    _floorCheckTimerMs = 0;
     _waveCells.clear();
     _waveEnemies.clear();
     _eliminated.clear();
@@ -308,12 +311,20 @@ uint32 BattlegroundVHR::GetFullStrengthCountForWave(uint32 wave) const
 
     // A quarter of a clone per wave elapsed; every fourth quarter is a whole
     // clone joining the wave at full strength.
-    return _partySize + (wave - 1) / BG_VHR_QUARTERS_PER_CLONE;
+    if (wave <= BG_VHR_QUARTER_RAMP_LAST_WAVE)
+        return _partySize + (wave - 1) / BG_VHR_QUARTERS_PER_CLONE;
+
+    // Past the ramp: a whole clone per wave, counted on top of where the ramp
+    // left off, so the step from its last wave to the next one is the usual
+    // quarter-to-whole promotion and nothing jumps.
+    uint32 const atRampEnd = _partySize + (BG_VHR_QUARTER_RAMP_LAST_WAVE - 1) / BG_VHR_QUARTERS_PER_CLONE;
+    return atRampEnd + (wave - BG_VHR_QUARTER_RAMP_LAST_WAVE);
 }
 
 uint8 BattlegroundVHR::GetPartialCloneStacks(uint32 wave)
 {
-    if (!wave)
+    // Past the ramp every clone is a full one.
+    if (!wave || wave > BG_VHR_QUARTER_RAMP_LAST_WAVE)
         return 0;
 
     uint32 const quarter = (wave - 1) % BG_VHR_QUARTERS_PER_CLONE;
@@ -1054,6 +1065,16 @@ void BattlegroundVHR::DespawnMenagerie()
 
 void BattlegroundVHR::PostUpdateImpl(uint32 diff)
 {
+    // Deliberately ahead of the status gate: a fall through the floor during
+    // the pre-match countdown needs putting right just as much as one
+    // mid-wave, and the stock check would not notice either for seconds.
+    _floorCheckTimerMs += diff;
+    if (_floorCheckTimerMs >= BG_VHR_FLOOR_CHECK_INTERVAL)
+    {
+        _floorCheckTimerMs = 0;
+        RescueFallenPlayers();
+    }
+
     if (GetStatus() != STATUS_IN_PROGRESS)
         return;
 
@@ -1296,13 +1317,76 @@ WorldSafeLocsEntry const* BattlegroundVHR::GetClosestGraveyard(Player* /*player*
     return nullptr;
 }
 
+// Anyone who has clipped through the floor is put back on it. The engine's own
+// under-map check - MovementHandler for real players, the playerbot lifecycle
+// tick for bots - only fires at the map's MinHeight, which is hundreds of yards
+// below the Hold; this catches the fall where it starts (BG_VHR_MIN_SAFE_Z),
+// and catches the clones, whose server-side movement never sends the packets
+// that check looks at. Same destination either way: HandlePlayerUnderMap.
+void BattlegroundVHR::RescueFallenPlayers()
+{
+    for (auto const& itr : GetPlayers())
+    {
+        Player* player = ObjectAccessor::FindPlayer(itr.first);
+        // A teleport already in flight will fix the position by itself;
+        // issuing another on top of it just fights the first. A roster member
+        // who is somehow on another map is not under THIS floor.
+        if (!player || !player->IsInWorld() || player->IsBeingTeleported() || player->GetMapId() != GetMapId())
+            continue;
+
+        if (player->GetPositionZ() < BG_VHR_MIN_SAFE_Z)
+            HandlePlayerUnderMap(player);
+    }
+}
+
+Position BattlegroundVHR::GetRescuePosition(Player const* player) const
+{
+    // Before the gates open (and after the run is over) the only place anyone
+    // belongs is where they were put down.
+    if (GetStatus() != STATUS_IN_PROGRESS)
+        return kPlayerStart;
+
+    // A clone whose cell has not opened yet goes back behind its door - onto
+    // the release point of the nearest cell this wave is using - rather than
+    // into the middle of the room where it would be loose, immune and early.
+    // Same water seating as the spawn itself, or an Ichoron clone would be
+    // put back on the pool bed and start swimming under the floor again.
+    if (player->GetBGTeam() == _enemyTeam && _waveState != WaveState::Fighting && !_waveCells.empty())
+    {
+        uint32 nearest = _waveCells.front();
+        float nearestDistSq = std::numeric_limits<float>::max();
+        for (uint32 cellIndex : _waveCells)
+        {
+            float const distSq = player->GetExactDist2dSq(kCells[cellIndex].release);
+            if (distSq < nearestDistSq)
+            {
+                nearestDistSq = distSq;
+                nearest = cellIndex;
+            }
+        }
+
+        Position spot = kCells[nearest].release;
+        SettleSpawnIntoWater(GetBgMap(), spot);
+        return spot;
+    }
+
+    // The party, its allies, and any clone already loose: the middle of the
+    // chamber floor - the same spot ClearPlayersFromSpawn uses, the furthest
+    // point from every cell door and the centre of the navmesh.
+    return kChamberCentre;
+}
+
 bool BattlegroundVHR::HandlePlayerUnderMap(Player* player)
 {
     if (!player)
         return false;
 
-    player->TeleportTo(GetMapId(), kChamberCentre.GetPositionX(), kChamberCentre.GetPositionY(),
-        kChamberCentre.GetPositionZ(), kChamberCentre.GetOrientation());
+    // A near teleport rather than a plain TeleportTo: the fall is an accident
+    // of geometry, not a retreat, so combat and pets are kept as they were and
+    // any spline the faller was riding is cut. Bots ack near teleports on
+    // their lifecycle tick, so clones land the same way players do.
+    Position const dest = GetRescuePosition(player);
+    player->NearTeleportTo(dest);
     return true;
 }
 

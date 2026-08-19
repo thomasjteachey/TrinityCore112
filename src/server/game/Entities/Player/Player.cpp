@@ -103,6 +103,7 @@
 #include "SpellPackets.h"
 #include "StringConvert.h"
 #include "StringFormat.h"
+#include "T2UnitHooks.h"
 #include "TicketMgr.h"
 #include "TradeData.h"
 #include "Trainer.h"
@@ -370,6 +371,10 @@ namespace PolearmStaffInnerAuras
     void OnEquipmentChanged(Player* player);
     void OnKnownSpellChanged(Player* player, uint32 spellId);
 }
+
+// T2Unarmed::OnEquipmentChanged follows the same convention and is called at
+// the same sites; it is declared in T2UnitHooks.h (included above) and its body
+// lives in custom_t2_warrior_paladin.cpp.
 
 namespace
 {
@@ -2358,6 +2363,10 @@ void Player::AddToWorld()
 
 void Player::RemoveFromWorld()
 {
+    // T2 Momentum tracker: logout and far teleport both come through here.
+    // Bookkeeping only, no aura work.
+    T2UnitHooks::OnPlayerRemovedFromWorld(this);
+
     // cleanup
     if (IsInWorld())
     {
@@ -2499,6 +2508,13 @@ void Player::Regenerate(Powers power)
 
     /// @todo possible use of miscvalueb instead of amount
     if (HasAuraTypeWithValue(SPELL_AURA_PREVENT_REGENERATE_POWER, power))
+        return;
+
+    // T2 Blood for Power (90322): no passive/Spirit/drink/Blessing of Wisdom
+    // mana regeneration for the wearer, whatever the carrier's own dbc effect
+    // says (belt and braces next to the PREVENT_REGENERATE_POWER check above).
+    // Other powers are untouched.
+    if (power == POWER_MANA && T2UnitHooks::BlocksManaGain(this, nullptr))
         return;
 
     float addvalue = 0.0f;
@@ -12734,6 +12750,16 @@ InventoryResult Player::CanUseItem(Item* pItem, bool not_loading) const
         ItemTemplate const* pProto = pItem->GetTemplate();
         if (pProto)
         {
+            // T2 Ashen Confiscation (90347): a weapon confiscated from a
+            // disarmed victim is equipped "as if" the mage met every
+            // requirement on it - class/race, weapon proficiency, required
+            // skill rank, level, reputation. It is a temporary item the script
+            // created for this player and registered; nothing else is waived.
+            // (The ItemTemplate-only overload below has no Item to key on and
+            // is left strict; every equip path with an Item* goes through here.)
+            if (T2UnitHooks::IsTemporaryWeapon(pItem))
+                return EQUIP_ERR_OK;
+
             if (pItem->IsBindedNotWith(this))
                 return EQUIP_ERR_DONT_OWN_THAT_ITEM;
 
@@ -13249,6 +13275,7 @@ Item* Player::EquipItem(uint16 pos, Item* pItem, bool update)
         {
             HiddenSets::OnEquipmentChanged(this);
             PolearmStaffInnerAuras::OnEquipmentChanged(this);
+            T2Unarmed::OnEquipmentChanged(this);
         }
 
         return pItem2;
@@ -13265,6 +13292,7 @@ Item* Player::EquipItem(uint16 pos, Item* pItem, bool update)
     {
         HiddenSets::OnEquipmentChanged(this);
         PolearmStaffInnerAuras::OnEquipmentChanged(this);
+        T2Unarmed::OnEquipmentChanged(this);
     }
 
     return pItem;
@@ -13296,6 +13324,7 @@ void Player::QuickEquipItem(uint16 pos, Item* pItem)
         {
             HiddenSets::OnEquipmentChanged(this);
             PolearmStaffInnerAuras::OnEquipmentChanged(this);
+            T2Unarmed::OnEquipmentChanged(this);
         }
     }
 }
@@ -13713,6 +13742,7 @@ void Player::RemoveItem(uint8 bag, uint8 slot, bool update)
 
                 HiddenSets::OnEquipmentChanged(this);
                 PolearmStaffInnerAuras::OnEquipmentChanged(this);
+                T2Unarmed::OnEquipmentChanged(this);
             }
         }
         else if (Bag* pBag = GetBagByPos(bag))
@@ -13847,6 +13877,7 @@ void Player::DestroyItem(uint8 bag, uint8 slot, bool update)
 
                 HiddenSets::OnEquipmentChanged(this);
                 PolearmStaffInnerAuras::OnEquipmentChanged(this);
+                T2Unarmed::OnEquipmentChanged(this);
             }
 
             m_items[slot] = nullptr;
@@ -26100,6 +26131,12 @@ uint32 Player::GetBaseWeaponSkillValue(WeaponAttackType attType) const
     // unarmed only with base attack
     if (attType != BASE_ATTACK && !item)
         return 0;
+
+    // T2 Ashen Confiscation (90347): a confiscated weapon counts as
+    // TEMPORARY_WEAPON_SKILL here too, so the skill-up roll in
+    // UpdateCombatSkills does not fire on a line the player may not even have.
+    if (item && T2UnitHooks::IsTemporaryWeapon(item))
+        return T2UnitHooks::TEMPORARY_WEAPON_SKILL;
 
     // weapon skill or (unarmed for base attack)
     uint32  skill = item ? item->GetSkill() : uint32(SKILL_UNARMED);

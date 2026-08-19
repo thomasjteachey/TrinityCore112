@@ -26,6 +26,7 @@
 #include "Spell.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "T2SpellHooks.h"
 #include "WorldPacket.h"
 
 SpellHistory::Clock::duration const SpellHistory::InfinityCooldownDelay = std::chrono::duration_cast<SpellHistory::Clock::duration>(std::chrono::seconds(MONTH));
@@ -289,6 +290,18 @@ void SpellHistory::StartCooldown(SpellInfo const* spellInfo, uint32 itemId, Spel
 
     GetCooldownDurations(spellInfo, itemId, &cooldown, &categoryId, &categoryCooldown);
 
+    // T2 Unbound Rime / Ember: the shock cooldown lives entirely in category 19
+    // (RecoveryTime 0, CategoryRecoveryTime 6000). A holder's unbound shock keeps
+    // those 6 s as its OWN cooldown and leaves the category alone, so it neither
+    // hands the lockout to the other shocks nor takes it from them.
+    if (categoryId && T2SpellHooks::IsShockUnbound(_owner, spellInfo))
+    {
+        if (categoryCooldown > cooldown)
+            cooldown = categoryCooldown;
+        categoryId = 0;
+        categoryCooldown = -1;
+    }
+
     Clock::time_point curTime = GameTime::GetSystemTime();
     Clock::time_point catrecTime;
     Clock::time_point recTime;
@@ -524,6 +537,11 @@ bool SpellHistory::HasCooldown(SpellInfo const* spellInfo, uint32 itemId /*= 0*/
     if (_spellCooldowns.count(spellInfo->Id) != 0)
         return true;
 
+    // T2 unbound shock: own chain-wide cooldown only, the shared category is
+    // never consulted for it.
+    if (IsUnboundShock(spellInfo))
+        return FindUnboundShockCooldown(spellInfo, nullptr);
+
     if (ignoreCategoryCooldown)
         return false;
 
@@ -546,6 +564,13 @@ uint32 SpellHistory::GetRemainingCooldown(SpellInfo const* spellInfo) const
     auto itr = _spellCooldowns.find(spellInfo->Id);
     if (itr != _spellCooldowns.end())
         end = itr->second.CooldownEnd;
+    else if (IsUnboundShock(spellInfo))
+    {
+        // T2 unbound shock: another rank of the same chain may hold the own
+        // cooldown; the shared category is ignored for it.
+        if (!FindUnboundShockCooldown(spellInfo, &end))
+            return 0;
+    }
     else
     {
         auto catItr = _categoryCooldowns.find(spellInfo->GetCategory());
@@ -873,6 +898,155 @@ void SpellHistory::GetCooldownDurations(SpellInfo const* spellInfo, uint32 itemI
         *categoryId = tmpCategoryId;
     if (categoryCooldown)
         *categoryCooldown = tmpCategoryCooldown;
+}
+
+bool SpellHistory::IsUnboundShock(SpellInfo const* spellInfo) const
+{
+    return T2SpellHooks::IsShockUnbound(_owner, spellInfo);
+}
+
+bool SpellHistory::FindUnboundShockCooldown(SpellInfo const* spellInfo, Clock::time_point* end) const
+{
+    // Same family, same category, overlapping family flags = same shock chain.
+    // The unbound entry was stored with CategoryId 0, so nothing else keys on it.
+    bool found = false;
+    for (auto const& p : _spellCooldowns)
+    {
+        if (p.first != spellInfo->Id)
+        {
+            SpellInfo const* other = sSpellMgr->GetSpellInfo(p.first);
+            if (!other || other->SpellFamilyName != spellInfo->SpellFamilyName || other->GetCategory() != spellInfo->GetCategory())
+                continue;
+
+            if (!(other->SpellFamilyFlags[0] & spellInfo->SpellFamilyFlags[0]))
+                continue;
+        }
+
+        found = true;
+        if (end && p.second.CooldownEnd > *end)
+            *end = p.second.CooldownEnd;
+    }
+
+    return found;
+}
+
+void SpellHistory::SyncShockCooldownsToClient(SpellInfo const* castSpell)
+{
+    // Cheap gates first: a shaman shock (category 19) cast by a player who holds
+    // at least one of the two unbound auras.
+    if (!castSpell || castSpell->SpellFamilyName != SPELLFAMILY_SHAMAN || castSpell->GetCategory() != 19)
+        return;
+
+    Player* player = _owner->ToPlayer();
+    if (!player)
+        return;
+
+    if (!player->HasAura(T2SpellHooks::SPELL_UNBOUND_RIME) && !player->HasAura(T2SpellHooks::SPELL_UNBOUND_EMBER))
+        return;
+
+    // The 3.3.5 client builds ONE record per own cast from its Spell.dbc on
+    // SMSG_SPELL_GO: {spellId, RecoveryTime, category 19, CategoryRecoveryTime,
+    // GCD}. Every other category-19 spell reads the category half of that record.
+    // SMSG_CLEAR_COOLDOWN(id) deletes the whole record (category and GCD halves
+    // included); SMSG_SPELL_COOLDOWN(id, ms != 0) creates {id, ms, category
+    // half 0} plus a fresh 1.5 s GCD when flag 0x1 is set; SMSG_MODIFY_COOLDOWN
+    // shifts a record's start time. So:
+    //   unbound cast : tear down the cast rank's record, re-add every known rank
+    //                  of that chain as a plain per-spell cooldown;
+    //   bound cast   : tear down the cast rank's record (it would lock the
+    //                  unbound shock), re-add every known rank of every shock
+    //                  that still shares - they all end together;
+    // then shift the new records back so the own cooldown AND the GCD end
+    // exactly when the server's do (the client gives the re-sent GCD a flat
+    // 1.5 s, the server's is haste-scaled).
+    bool const castUnbound = T2SpellHooks::IsShockUnbound(player, castSpell);
+
+    std::vector<uint32> ids;
+    ids.push_back(castSpell->Id);
+    for (auto const& spell : player->GetSpellMap())
+    {
+        if (spell.second.state == PLAYERSPELL_REMOVED || spell.second.disabled)
+            continue;
+
+        if (spell.first == castSpell->Id)
+            continue;
+
+        SpellInfo const* info = sSpellMgr->GetSpellInfo(spell.first);
+        if (!info || info->SpellFamilyName != SPELLFAMILY_SHAMAN || info->GetCategory() != 19)
+            continue;
+
+        if (castUnbound)
+        {
+            // only the other ranks of the unbound chain
+            if (info->SpellFamilyFlags[0] & castSpell->SpellFamilyFlags[0])
+                ids.push_back(spell.first);
+        }
+        else
+        {
+            // every shock that still shares the category with the cast one
+            if (!T2SpellHooks::IsShockUnbound(player, info))
+                ids.push_back(spell.first);
+        }
+    }
+
+    // Nothing to mirror if the server itself holds no cooldown for this cast
+    // (cooldown cheat, triggered cast ignoring cooldowns): leave the client's own
+    // DBC-derived record alone rather than tear down its GCD display too.
+    uint32 remaining = GetRemainingCooldown(castSpell);
+    if (!remaining)
+        return;
+
+    // 1. drop the client's own records for these ids
+    for (uint32 id : ids)
+    {
+        WorldPacket clear(SMSG_CLEAR_COOLDOWN, 4 + 8);
+        clear << uint32(id);
+        clear << uint64(_owner->GetGUID());
+        player->SendDirectMessage(&clear);
+    }
+
+    // 2. re-add as plain per-spell cooldowns. Flag 0x1 makes the client start a
+    //    GCD record with the same start time; its length is StartRecoveryTime
+    //    after SPELLMOD_GLOBAL_COOLDOWN (no haste), so shift everything by the
+    //    difference to the server's remaining GCD.
+    uint8 flags = SPELL_COOLDOWN_FLAG_NONE;
+    int32 delta = 0;
+    uint32 gcdRemaining = GetRemainingGlobalCooldown(castSpell);
+    if (gcdRemaining)
+    {
+        int32 gcdClient = int32(castSpell->StartRecoveryTime);
+        if (Player* modOwner = _owner->GetSpellModOwner())
+            modOwner->ApplySpellMod(castSpell->Id, SPELLMOD_GLOBAL_COOLDOWN, gcdClient);
+
+        if (gcdClient > 0)
+        {
+            flags = SPELL_COOLDOWN_FLAG_INCLUDE_GCD;
+            delta = int32(gcdRemaining) - gcdClient;
+            if (delta > 0)
+                delta = 0;
+        }
+    }
+
+    PacketCooldowns cooldowns;
+    for (uint32 id : ids)
+        cooldowns[id] = uint32(int32(remaining) - delta);
+
+    WorldPacket data;
+    BuildCooldownPacket(data, flags, cooldowns);
+    player->SendDirectMessage(&data);
+
+    // 3. shift the start back so both halves line up with the server
+    if (delta)
+    {
+        for (uint32 id : ids)
+        {
+            WorldPacket modify(SMSG_MODIFY_COOLDOWN, 4 + 8 + 4);
+            modify << uint32(id);
+            modify << uint64(_owner->GetGUID());
+            modify << int32(delta);
+            player->SendDirectMessage(&modify);
+        }
+    }
 }
 
 void SpellHistory::SaveCooldownStateBeforeDuel()

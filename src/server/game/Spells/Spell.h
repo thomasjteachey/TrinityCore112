@@ -416,6 +416,9 @@ class TC_GAME_API Spell
         UsedSpellMods m_appliedMods;
 
         int32 GetCastTime() const { return m_casttime; }
+        // Milliseconds this cast has already spent on its cast bar (0 for
+        // instants; pushback shrinks it). Only meaningful while PREPARING.
+        int32 GetCastTimeElapsed() const { return m_casttime > 0 ? m_casttime - m_timer : 0; }
         bool IsAutoRepeat() const { return m_autoRepeat; }
         void SetAutoRepeat(bool rep) { m_autoRepeat = rep; }
         void ReSetTimer() { m_timer = m_casttime > 0 ? m_casttime : 0; }

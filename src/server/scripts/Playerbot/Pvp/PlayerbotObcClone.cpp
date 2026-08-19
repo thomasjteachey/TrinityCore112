@@ -617,6 +617,12 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
         return false;
     }
 
+    // Player::LoadFromDB turns this on before its own UpdateAllStats, and a
+    // server-built clone never runs LoadFromDB - so without it Unit::UpdateUnitMod
+    // returns early for the rest of the clone's life and every LATER stat or
+    // damage percent modifier (arena preparation buffs, the Violet Hold
+    // Diminished debuff, copied boons, Reinforced) is stored and never applied.
+    clone->SetCanModifyStats(true);
     clone->UpdateAllStats();
     clone->SetFullHealth();
     for (uint8 power = POWER_MANA; power < MAX_POWERS; ++power)
@@ -879,6 +885,12 @@ Player* CreateCustomGameLobbyClone(Player* source, uint32 mapId, uint32 lobbyIns
         return nullptr;
     }
 
+    // Player::LoadFromDB turns this on before its own UpdateAllStats, and a
+    // server-built clone never runs LoadFromDB - so without it Unit::UpdateUnitMod
+    // returns early for the rest of the clone's life and every LATER stat or
+    // damage percent modifier (arena preparation buffs, the Violet Hold
+    // Diminished debuff, copied boons, Reinforced) is stored and never applied.
+    clone->SetCanModifyStats(true);
     clone->UpdateAllStats();
     clone->SetFullHealth();
     for (uint8 power = POWER_MANA; power < MAX_POWERS; ++power)
@@ -1311,6 +1323,12 @@ Player* PlayerbotObcCloneManager::CreateCustomGameClone(Player* source, Battlegr
         return nullptr;
     }
 
+    // Player::LoadFromDB turns this on before its own UpdateAllStats, and a
+    // server-built clone never runs LoadFromDB - so without it Unit::UpdateUnitMod
+    // returns early for the rest of the clone's life and every LATER stat or
+    // damage percent modifier (arena preparation buffs, the Violet Hold
+    // Diminished debuff, copied boons, Reinforced) is stored and never applied.
+    clone->SetCanModifyStats(true);
     clone->UpdateAllStats();
     clone->SetFullHealth();
     for (uint8 power = POWER_MANA; power < MAX_POWERS; ++power)

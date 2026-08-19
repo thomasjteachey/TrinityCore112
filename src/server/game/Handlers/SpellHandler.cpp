@@ -35,6 +35,7 @@
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
 #include "SpellPackets.h"
+#include "T2SpellHooks.h"
 #include "Totem.h"
 #include "TotemPackets.h"
 #include "World.h"
@@ -423,7 +424,15 @@ void WorldSession::HandleCancelCastOpcode(WorldPackets::Spells::CancelCast& canc
         return;
 
     if (_player->IsNonMeleeSpellCast(false))
+    {
+        // T2 Feint Cadence (90364): the cancelled cast still knows how long it
+        // has been on the bar only until InterruptNonMeleeSpells runs.
+        if (Spell* generic = _player->GetCurrentSpell(CURRENT_GENERIC_SPELL))
+            if (!cancelCast.SpellID || generic->GetSpellInfo()->Id == cancelCast.SpellID)
+                T2SpellHooks::OnPlayerCancelCast(_player, generic);
+
         _player->InterruptNonMeleeSpells(false, cancelCast.SpellID, false);
+    }
 }
 
 void WorldSession::HandleCancelAuraOpcode(WorldPackets::Spells::CancelAura& cancelAura)

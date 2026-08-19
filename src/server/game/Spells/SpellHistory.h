@@ -122,6 +122,16 @@ public:
     bool HasCooldown(uint32 spellId, uint32 itemId = 0, bool ignoreCategoryCooldown = false) const;
     uint32 GetRemainingCooldown(SpellInfo const* spellInfo) const;
 
+    // T2 Unbound Rime / Unbound Ember (90313 / 90316). The whole shock cooldown
+    // is the shared category 19 in Spell.dbc (RecoveryTime 0, CategoryRecoveryTime
+    // 6000). A holder's unbound shock keeps that 6 s as its OWN chain-wide
+    // cooldown, never touches the category, and ignores it. The client starts
+    // the category from its own DBC on SMSG_SPELL_GO, so after every shock cast
+    // by a holder the real picture is re-sent: call this right after
+    // SendSpellGo. No-op unless the owner is a player holding one of the auras
+    // and the spell is a shock.
+    void SyncShockCooldownsToClient(SpellInfo const* castSpell);
+
     // School lockouts
     void LockSpellSchool(SpellSchoolMask schoolMask, uint32 lockoutTime);
     bool IsSchoolLocked(SpellSchoolMask schoolMask) const;
@@ -143,6 +153,12 @@ public:
 private:
     Player* GetPlayerOwner() const;
     void SendClearCooldowns(std::vector<int32> const& cooldowns) const;
+
+    // T2 unbound shocks: the own cooldown is shared by every rank of that shock
+    // chain (the DBC has no RecoveryTime to key it on). True when any rank of
+    // spellInfo's chain is on cooldown; *end receives the latest CooldownEnd.
+    bool IsUnboundShock(SpellInfo const* spellInfo) const;
+    bool FindUnboundShockCooldown(SpellInfo const* spellInfo, Clock::time_point* end) const;
     CooldownStorageType::iterator EraseCooldown(CooldownStorageType::iterator itr)
     {
         _categoryCooldowns.erase(itr->second.CategoryId);

@@ -1308,6 +1308,55 @@ void RefreshBeastmaster(Player* player)
             ApplyBeastmasterBlessing(player, unit, stacks);
 }
 
+void CopyBoonsTo(Player const* source, Player* target)
+{
+    if (!source || !target || source == target)
+        return;
+
+    auto copyOne = [source, target](uint32 spellId)
+    {
+        Aura const* held = source->GetAura(spellId);
+        if (!held)
+            return;
+
+        Aura* copy = target->GetAura(spellId);
+        if (!copy)
+            copy = target->AddAura(spellId, target);
+        if (copy)
+            copy->SetStackAmount(held->GetStackAmount());
+    };
+
+    for (BoonInfo const& info : kBoons)
+    {
+        switch (info.boon)
+        {
+            // Bookkeeping the battleground does itself, for the party only.
+            case Boon::Greed:
+            case Boon::Hoarder:
+            case Boon::Fellowship:
+            case Boon::Menagerie:
+            // The clone is built at the source's CURRENT level, borrowed
+            // levels included, so the marker has nothing left to mark.
+            case Boon::Level:
+                continue;
+            // Alacrity lives in a per-class variant, not the table's id.
+            case Boon::Cooldown:
+                continue;
+            default:
+                break;
+        }
+
+        copyOne(info.spellId);
+    }
+
+    // The clone shares the source's class, so the same variant fits.
+    copyOne(GetBoonSpellFor(Boon::Cooldown, source->GetClass()));
+
+    // Anything the clone already has out (its mirrored hunter pet) gets the
+    // Beastmaster blessing the copy just handed it.
+    RefreshBeastmaster(target);
+}
+
 void SummonMenagerie(Player* owner, uint8 count, std::vector<ObjectGuid>& out)
 {
     if (!owner || !count || !owner->IsInWorld() || !owner->IsAlive())

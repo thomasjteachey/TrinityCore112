@@ -3,33 +3,56 @@
  *
  * The carriers themselves are Spell.dbc rows 90300-90394 (see
  * sql/custom/dbc/2026_08_17_00_dbc_t2_set_bonuses.sql, which is the contract
- * for every id in this file). Everything a plain aura type could express -
- * cost, range, global cooldown, the flat +300% physical on Wraithblade - is
- * already done in data; only the bonuses that need to look at state, at a
- * different spell, or at the player's hands live here.
+ * for every id in this file) plus the 2026_08_19_06 follow-up rows 90500/90501
+ * and the updates to 90340/90383/90385 in
+ * sql/custom/dbc/2026_08_19_06_dbc_t2_priest_mage.sql. Everything a plain aura
+ * type could express - cost, range, global cooldown, the flat +300% physical on
+ * Wraithblade - is already done in data; only the bonuses that need to look at
+ * state, at a different spell, or at the player's hands live here.
  *
  * Same shape as custom_t1_set_bonuses.cpp: the passive is an inert dummy the
  * ItemSet grants, and each script either sits on that dummy or on the ability
  * it modifies and tests HasAura() on the caster.
  *
  * Wiring lives in ItemSet.dbc (SetSpellID/SetThreshold), written by the forge
- * tooling; sql/custom/world/2026_08_17_01_world_t2_priest-mage.sql binds these
+ * tooling; sql/custom/world/2026_08_19_06_world_t2_priest_mage.sql binds these
  * classes and carries the spell_proc rows the proc carriers need.
+ *
+ * DEFERRED WORK RULE. Several bonuses here have to touch the player's inventory
+ * or cast an area spell at the exact moment an aura is being removed (Ice Block
+ * expiring, Confiscated Arms ending, the mage dying). None of that is done
+ * inside the aura machinery: the aura hook only flags the player, and the
+ * PlayerScript t2_priest_mage_update does the real work on the next
+ * Player::Update tick, outside every aura container walk. That is the "defer
+ * via a flag" half of the heap-corruption rule and it costs one atomic load per
+ * player tick for everyone who has nothing pending.
  */
 
 #include "ScriptMgr.h"
 #include "Chat.h"
+#include "GameTime.h"
 #include "Item.h"
+#include "ItemTemplate.h"
 #include "ObjectAccessor.h"
+#include "ObjectMgr.h"
 #include "Player.h"
 #include "SpellAuraEffects.h"
+#include "SpellAuras.h"
 #include "SpellHistory.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
+#include "T2UnitHooks.h"
+#include "Timer.h"
 #include "UpdateFields.h"
 #include "World.h"
 #include "WorldSession.h"
+
+#include <atomic>
+#include <mutex>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 namespace
 {
@@ -46,7 +69,10 @@ namespace
 
         // priest - shadow (90339 3pc, 90340 5pc, 90341 8pc)
         SPELL_T2_UMBRAL_MERCY           = 90340,
+        SPELL_T2_UMBRAL_MERCY_DAMAGE    = 90501,   // combat-log carrier for the self damage
         SPELL_T2_WRAITHBLADE            = 90341,
+        SPELL_T2_WRAITHBLADE_ENERGIZE   = 90500,   // ENERGIZE helper, bp at runtime
+        SPELL_PRIEST_SHADOWFORM         = 15473,
 
         // mage - dusty / Ice Block (90342 3pc, 90343 5pc, 90344 8pc)
         SPELL_T2_GLACIAL_REPRIEVE       = 90342,
@@ -60,12 +86,18 @@ namespace
         SPELL_T2_CONFISCATED_ARMS       = 90387,
         // Fiery Payback's own disarm: mechanic 3, 6 sec, and it takes the main
         // hand (aura 67) AND the ranged slot (aura 278) - which is why the
-        // seizure copies visible item slots 15 and 17 and not the off hand.
+        // seizure takes slots 15 and 17 and not the off hand.
         SPELL_MAGE_FIERY_PAYBACK_DISARM = 64346,
     };
 
     // Fire Blast, family 3, word 0 bit 0x2 - identical on all eleven ranks.
     uint32 constexpr MAGE_FIRE_BLAST_FAMILY_MASK0 = 0x2;
+
+    // How long after the client's CMSG_CANCEL_AURA(Shadowform) a Holy heal may
+    // start and still count as the client's autoUnshift rather than the priest
+    // deliberately leaving form. The two packets are sent in the same client
+    // frame and land in the same WorldSession::Update, so this is generous.
+    uint32 constexpr UMBRAL_SHADOWFORM_REAPPLY_WINDOW_MS = 300;
 
     // .gm diagnostics customauras - broadcast to every opted-in GM session
     void SendCustomAuraDiag(std::string const& msg)
@@ -74,6 +106,348 @@ namespace
             if (sessionPair.second && sessionPair.second->GetPlayer()
                 && sessionPair.second->IsGmDiagnosticEnabled(GmDiagnosticCategory::CustomAuras))
                 ChatHandler(sessionPair.second).SendSysMessage(msg.c_str());
+    }
+
+    // -----------------------------------------------------------------------
+    // Shared deferred-work bookkeeping. Map updates run in parallel, so every
+    // container below is guarded; the atomic is the fast path that lets
+    // t2_priest_mage_update::OnUpdate return without taking the lock for the
+    // (overwhelmingly common) player with nothing pending.
+    // -----------------------------------------------------------------------
+    std::mutex s_workMutex;
+    std::unordered_set<ObjectGuid> s_playersWithWork;
+    std::atomic<uint32> s_workCount{ 0 };
+
+    void MarkWork(ObjectGuid guid)
+    {
+        std::lock_guard<std::mutex> guard(s_workMutex);
+        s_playersWithWork.insert(guid);
+        s_workCount.store(uint32(s_playersWithWork.size()), std::memory_order_release);
+    }
+
+    // Pops the flag; true if this player had work queued.
+    bool TakeWork(ObjectGuid guid)
+    {
+        if (s_workCount.load(std::memory_order_acquire) == 0)
+            return false;
+        std::lock_guard<std::mutex> guard(s_workMutex);
+        auto itr = s_playersWithWork.find(guid);
+        if (itr == s_playersWithWork.end())
+            return false;
+        s_playersWithWork.erase(itr);
+        s_workCount.store(uint32(s_playersWithWork.size()), std::memory_order_release);
+        return true;
+    }
+
+    // Hoarfrost Bloom: mages whose Ice Block just ran out.
+    std::unordered_set<ObjectGuid> s_pendingHoarfrost;
+
+    // Umbral Mercy: priests whose Shadowform was just cancelled by the client,
+    // with the game-time ms of the cancel.
+    std::unordered_map<ObjectGuid, uint32> s_pendingShadowform;
+
+    // Ashen Confiscation state, per mage.
+    struct SeizedWeapon
+    {
+        uint8 slot = 0;                 // EQUIPMENT_SLOT_MAINHAND / RANGED
+        uint32 entry = 0;
+        ObjectGuid tempGuid;            // empty when visualOnly
+        bool visualOnly = false;        // fell back to PLAYER_VISIBLE_ITEM_*
+    };
+    struct DisplacedWeapon
+    {
+        uint8 slot = 0;                 // where it was equipped
+        ObjectGuid guid;
+    };
+    struct ConfiscationState
+    {
+        bool equipPending = false;
+        bool cleanupPending = false;
+        uint32 pendingMainHandEntry = 0;
+        uint32 pendingRangedEntry = 0;
+        std::vector<SeizedWeapon> seized;
+        std::vector<DisplacedWeapon> displaced;
+    };
+    std::unordered_map<ObjectGuid, ConfiscationState> s_confiscations;
+
+    // Equip / re-equip without the 1.5 s weapon-swap global cooldown that
+    // Player::EquipItem starts for weapons changed in combat. Nothing the mage
+    // pressed caused this swap, so the mage must not be locked out for it. The
+    // timer is only read by EquipItem's "== 0" gate and by CanEquipItem (which we
+    // call with not_loading = false, bypassing it), so parking it at 1 and
+    // clearing it afterwards has no other effect.
+    void EquipWithoutSwapCooldown(Player* player, uint16 pos, Item* item)
+    {
+        player->setWeaponChangeTimer(1);
+        player->EquipItem(pos, item, true);
+        player->setWeaponChangeTimer(0);
+        // EquipItem skips _ApplyItemMods on a dead player (stats are normally
+        // untouched by death and re-applied only through equip), so a re-equip
+        // during the death cleanup would leave the weapon's stats missing
+        // until the next manual re-equip. Apply them here to keep the
+        // "equipped == modded" invariant.
+        if (!player->IsAlive())
+            player->_ApplyItemMods(item, uint8(pos & 255), true);
+    }
+
+    // Re-equip a displaced original. True on success.
+    bool ReequipOriginal(Player* mage, DisplacedWeapon const& displaced)
+    {
+        Item* item = mage->GetItemByGuid(displaced.guid);
+        if (!item)
+            return false;
+        if (item->IsEquipped())
+            return true; // the mage already put it back by hand
+        if (mage->GetItemByPos(INVENTORY_SLOT_BAG_0, displaced.slot))
+            return false; // something else is there now, leave it in the bag
+        uint16 pos = 0;
+        if (mage->CanEquipItem(displaced.slot, pos, item, false, false) != EQUIP_ERR_OK)
+            return false;
+        mage->RemoveItem(item->GetBagSlot(), item->GetSlot(), true);
+        EquipWithoutSwapCooldown(mage, pos, item);
+        return true;
+    }
+
+    // Move an equipped item into the bags. True on success; on success the
+    // item is recorded in `displaced` so the cleanup can put it back.
+    bool DisplaceToBags(Player* mage, uint8 slot, std::vector<DisplacedWeapon>& displaced)
+    {
+        Item* item = mage->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item)
+            return true; // nothing to move
+        ItemPosCountVec dest;
+        if (mage->CanStoreItem(NULL_BAG, NULL_SLOT, dest, item, false) != EQUIP_ERR_OK)
+            return false;
+        DisplacedWeapon record;
+        record.slot = slot;
+        record.guid = item->GetGUID();
+        mage->RemoveItem(INVENTORY_SLOT_BAG_0, slot, true);
+        mage->StoreItem(dest, item, true);
+        displaced.push_back(record);
+        return true;
+    }
+
+    // Put the victim's weapon entry into `slot` for real. Returns the seizure
+    // record; visualOnly is set when the inventory had no room for the mage's
+    // own weapon(s) or the equip was refused, in which case only the
+    // appearance is swapped (the old behaviour) and the reason is logged.
+    SeizedWeapon SeizeIntoSlot(Player* mage, uint8 slot, uint32 entry, std::vector<DisplacedWeapon>& displaced)
+    {
+        SeizedWeapon seized;
+        seized.slot = slot;
+        seized.entry = entry;
+
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry);
+        std::string why;
+        if (!proto)
+            why = "no item_template for the entry";
+        else
+        {
+            // Everything the mage is wearing in the way goes to the bags
+            // first, one at a time, so each CanStoreItem sees the previous move.
+            size_t const displacedBefore = displaced.size();
+            bool roomy = DisplaceToBags(mage, slot, displaced);
+            if (roomy && slot == EQUIPMENT_SLOT_MAINHAND && proto->InventoryType == INVTYPE_2HWEAPON)
+                roomy = DisplaceToBags(mage, EQUIPMENT_SLOT_OFFHAND, displaced);
+
+            if (!roomy)
+                why = "no free bag slot for the mage's own weapon";
+            else
+            {
+                Item* temp = Item::CreateItem(entry, 1, mage);
+                if (!temp)
+                    why = "Item::CreateItem failed";
+                else
+                {
+                    // Registered BEFORE CanEquipItem: that is what lets the
+                    // core waive class/proficiency/skill/level on exactly this
+                    // item and report 300 weapon skill for it.
+                    T2UnitHooks::RegisterTemporaryWeapon(temp->GetGUID());
+                    // Soulbound: no trade, mail, auction or guild bank. The 6 s
+                    // window and the cleanup sweep cover the rest.
+                    temp->SetBinding(true);
+
+                    uint16 pos = 0;
+                    // not_loading = false: the in-combat weapon-change timer,
+                    // stun and casting gates are for the player's own swaps.
+                    InventoryResult res = mage->CanEquipItem(slot, pos, temp, false, false);
+                    if (res == EQUIP_ERR_OK)
+                    {
+                        EquipWithoutSwapCooldown(mage, pos, temp);
+                        seized.tempGuid = temp->GetGUID();
+                        return seized;
+                    }
+
+                    why = Trinity::StringFormat("CanEquipItem refused ({})", uint32(res));
+                    T2UnitHooks::UnregisterTemporaryWeapon(temp->GetGUID());
+                    delete temp; // never entered any container
+                }
+            }
+
+            // Undo the displacement this slot caused, newest first.
+            while (displaced.size() > displacedBefore)
+            {
+                DisplacedWeapon back = displaced.back();
+                displaced.pop_back();
+                ReequipOriginal(mage, back);
+            }
+        }
+
+        // Appearance-only fallback.
+        seized.visualOnly = true;
+        if (slot < EQUIPMENT_SLOT_END)
+            mage->SetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENTRYID + (slot * 2), entry);
+
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Ashen Confiscation - could not equip item {} in slot {} ({}); showing it only",
+            mage->GetName(), entry, uint32(slot), why));
+        return seized;
+    }
+
+    void CleanupConfiscation(Player* mage, char const* reason);
+
+    // Drop a state entry that holds nothing (no seized weapons, nothing
+    // pending) so OnSave/OnMapChanged never pay for a stale key.
+    void ForgetConfiscationIfEmpty(ObjectGuid guid)
+    {
+        std::lock_guard<std::mutex> guard(s_workMutex);
+        auto itr = s_confiscations.find(guid);
+        if (itr != s_confiscations.end() && itr->second.seized.empty() && itr->second.displaced.empty()
+            && !itr->second.equipPending && !itr->second.cleanupPending)
+            s_confiscations.erase(itr);
+    }
+
+    void PerformConfiscationEquip(Player* mage, uint32 mainHandEntry, uint32 rangedEntry)
+    {
+        // The buff ended (or never landed) before this tick, or the mage is
+        // dead / between maps: nothing to wield.
+        if (!mage->IsInWorld() || !mage->IsAlive() || !mage->HasAura(SPELL_T2_CONFISCATED_ARMS)
+            || (!mainHandEntry && !rangedEntry))
+        {
+            ForgetConfiscationIfEmpty(mage->GetGUID());
+            return;
+        }
+
+        std::vector<SeizedWeapon> seized;
+        std::vector<DisplacedWeapon> displaced;
+        if (mainHandEntry)
+            seized.push_back(SeizeIntoSlot(mage, EQUIPMENT_SLOT_MAINHAND, mainHandEntry, displaced));
+        if (rangedEntry)
+            seized.push_back(SeizeIntoSlot(mage, EQUIPMENT_SLOT_RANGED, rangedEntry, displaced));
+
+        {
+            std::lock_guard<std::mutex> guard(s_workMutex);
+            ConfiscationState& state = s_confiscations[mage->GetGUID()];
+            state.seized.insert(state.seized.end(), seized.begin(), seized.end());
+            state.displaced.insert(state.displaced.end(), displaced.begin(), displaced.end());
+        }
+
+        // The buff may have been stripped while we were moving items (an item
+        // equip spell is not going to do that, but be exact): if it is gone,
+        // undo right away rather than waiting for a removal hook that already
+        // fired.
+        if (!mage->HasAura(SPELL_T2_CONFISCATED_ARMS))
+        {
+            CleanupConfiscation(mage, "buff gone during equip");
+            return;
+        }
+
+        for (SeizedWeapon const& weapon : seized)
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Ashen Confiscation - {} item {} in slot {}",
+                mage->GetName(), weapon.visualOnly ? "showing" : "wielding", weapon.entry, uint32(weapon.slot)));
+    }
+
+    // Tear the confiscation down: destroy every temporary weapon wherever it
+    // ended up, put the mage's own weapons back, restore appearance. Safe to
+    // call from any clean context (Player::Update, SaveToDB, logout); never
+    // from inside an aura hook.
+    void CleanupConfiscation(Player* mage, char const* reason)
+    {
+        ConfiscationState state;
+        {
+            std::lock_guard<std::mutex> guard(s_workMutex);
+            auto itr = s_confiscations.find(mage->GetGUID());
+            if (itr == s_confiscations.end())
+                return;
+            state = itr->second;
+            s_confiscations.erase(itr);
+        }
+
+        uint32 destroyed = 0;
+        for (SeizedWeapon const& weapon : state.seized)
+        {
+            if (weapon.visualOnly)
+            {
+                // SetVisibleItemSlot re-derives entry, enchants and the
+                // transmog cache from whatever is really equipped.
+                mage->SetVisibleItemSlot(weapon.slot, mage->GetItemByPos(INVENTORY_SLOT_BAG_0, weapon.slot));
+                continue;
+            }
+
+            T2UnitHooks::UnregisterTemporaryWeapon(weapon.tempGuid);
+
+            if (Item* item = mage->GetItemByGuid(weapon.tempGuid))
+            {
+                mage->DestroyItem(item->GetBagSlot(), item->GetSlot(), true);
+                ++destroyed;
+                continue;
+            }
+            // Sold in the window: it is sitting in a buyback slot.
+            for (uint32 i = BUYBACK_SLOT_START; i < BUYBACK_SLOT_END; ++i)
+                if (Item* item = mage->GetItemFromBuyBackSlot(i))
+                    if (item->GetGUID() == weapon.tempGuid)
+                    {
+                        mage->RemoveItemFromBuyBackSlot(i, true);
+                        ++destroyed;
+                        break;
+                    }
+        }
+
+        // Originals back, newest displacement first (the off hand a 2H
+        // pushed out goes back after the main hand is free again).
+        uint32 restored = 0;
+        for (auto itr = state.displaced.rbegin(); itr != state.displaced.rend(); ++itr)
+            if (ReequipOriginal(mage, *itr))
+                ++restored;
+
+        if (!state.seized.empty())
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Ashen Confiscation over ({}) - {} temporary weapon(s) destroyed, {} of {} own weapon(s) re-equipped",
+                mage->GetName(), reason, destroyed, restored, uint32(state.displaced.size())));
+    }
+
+    // Umbral Mercy's price. Raw (no resist, no absorb, no done/taken
+    // modifiers - Shadowform's own -15% physical would otherwise refund part of
+    // it and a Power Word: Shield would eat it) but logged through 90501 so the
+    // combat log shows "Umbral Mercy" hitting the priest for the amount.
+    void DealUmbralMercyPrice(Player* priest, int32 amount)
+    {
+        if (amount <= 0)
+            return;
+
+        // Never lethal, and never from a reentrant death: a priest must not
+        // one-shot himself with his own heal.
+        if (uint32(amount) >= priest->GetHealth())
+            amount = int32(priest->GetHealth()) - 1;
+        if (amount <= 0)
+            return;
+
+        if (sSpellMgr->GetSpellInfo(SPELL_T2_UMBRAL_MERCY_DAMAGE))
+        {
+            SpellNonMeleeDamage log(priest, priest, SPELL_T2_UMBRAL_MERCY_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
+            log.damage = uint32(amount);
+            priest->SendSpellNonMeleeDamageLog(&log);
+            // DealSpellDamage -> DealDamage with attacker == victim: no
+            // pushback, no combat entry, no procs; just the health.
+            priest->DealSpellDamage(&log, false);
+        }
+        else
+        {
+            // Row not loaded yet (DBC not regenerated) - still charge the price.
+            Unit::DealDamage(priest, priest, uint32(amount), nullptr,
+                SELF_DAMAGE, SPELL_SCHOOL_MASK_SHADOW, nullptr, false);
+        }
     }
 }
 
@@ -98,7 +472,7 @@ class spell_t2_holy_censer : public AuraScript
     {
         Unit* priest = GetTarget();
         Unit* victim = eventInfo.GetProcTarget();
-        if (!victim)
+        if (!priest || !victim)
             return;
 
         // Max rank, cast triggered: the imbue is not the priest casting Holy
@@ -118,76 +492,138 @@ class spell_t2_holy_censer : public AuraScript
     }
 };
 
-// 2054 \ 2055 \ 6063 \ 6064 - Heal, carrying the shadow 5pc: cast in
-// Shadowform it costs the priest half of what it healed.
+// NOTE 90337 Kindled Zeal (holy 5pc) and its one-charge buff 90383 have NO
+// script on purpose - both halves are data: the carrier is a PROC_TRIGGER_SPELL
+// narrowed to Smite/Flash Heal crits by its spell_proc row, and 90383's two
+// spellmods are consumed through the proc system (spell_proc row with
+// PROC_ATTR_REQ_SPELLMOD, phase CAST, 1 charge: in this core a spellmod
+// aura's charge is dropped by Aura::PrepareProcToTrigger on the cast-phase
+// proc of the spell that took the mod, not by Spell::TakeMods). Both rows were
+// missing from the 2026_08_17_01 world file; they are in 2026_08_19_06.
+
+// 15473 - Shadowform, carrying the shadow 5pc's form keeper.
 //
-// This is only the price half. Being ALLOWED to cast Heal in Shadowform is a
-// ShapeshiftExclude edit on those four rows, deliberately kept out of the T2
-// dbc file because it changes shipped spells for every priest on the server -
-// until that ships, this script simply never has anything to do.
+// The 3.3.5 client auto-unshifts: a Holy heal pressed in Shadowform makes it
+// send CMSG_CANCEL_AURA(15473) and then CMSG_CAST_SPELL in the same frame.
+// The server never refused the heal - Shadowform was already gone when the
+// cast arrived. Nothing in a script can veto that cancel, so with 90340 the
+// cancel is remembered here and the heal's own script (below) puts the form
+// straight back when it starts within the window; 90340 effect 2
+// (MOD_IGNORE_SHAPESHIFT over the heals) is what lets the server accept the
+// cast with the form back up, at both CheckCast passes.
+class spell_t2_umbral_shadowform : public AuraScript
+{
+    PrepareAuraScript(spell_t2_umbral_shadowform);
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        AuraApplication const* application = GetTargetApplication();
+        // BY_CANCEL only: BY_DEFAULT is scripts/bots (PlayerAI drops form to
+        // heal and must keep doing so), BY_DEATH/EXPIRE/ENEMY_SPELL are not
+        // the priest pressing a heal.
+        if (!application || application->GetRemoveMode() != AURA_REMOVE_BY_CANCEL)
+            return;
+
+        Unit* target = GetTarget();
+        Player* priest = target ? target->ToPlayer() : nullptr;
+        if (!priest || !priest->HasAura(SPELL_T2_UMBRAL_MERCY))
+            return;
+
+        std::lock_guard<std::mutex> guard(s_workMutex);
+        s_pendingShadowform[priest->GetGUID()] = GameTime::GetGameTimeMS();
+    }
+
+    void Register() override
+    {
+        AfterEffectRemove += AuraEffectRemoveFn(spell_t2_umbral_shadowform::HandleRemove, EFFECT_0, SPELL_AURA_MOD_SHAPESHIFT, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// The direct heals (Lesser Heal, Heal, Greater Heal, Flash Heal, Binding Heal,
+// Prayer of Healing, Circle of Healing, Desperate Prayer - all ranks, bound by
+// positive id), carrying the shadow 5pc: started right after the client's
+// autoUnshift they put Shadowform back, and every hit they land in Shadowform
+// costs the priest half of the EFFECTIVE healing (overheal is not charged).
+//
+// NOT covered (documented, not half-built): Renew ticks - the tick amount and
+// its overheal only exist inside the periodic handler, and the generic
+// UnitScript::OnHeal hook carries no SpellInfo, so it cannot tell a Renew tick
+// from the Vampiric Embrace heals a shadow priest is supposed to do for free.
+// Renew therefore keeps the stock behaviour (drops the form). Holy Nova's
+// linked heal and Prayer of Mending are likewise untouched.
 class spell_t2_umbral_mercy : public SpellScript
 {
     PrepareSpellScript(spell_t2_umbral_mercy);
 
-    void CaptureHeal()
+    SpellCastResult CheckCast()
     {
-        _selfDamage = 0;
-
         Unit* caster = GetCaster();
-        if (!caster || !caster->HasAura(SPELL_T2_UMBRAL_MERCY))
-            return;
-        // "Doing so" is specifically casting it in Shadowform; a priest who
-        // drops form to heal normally pays nothing.
-        if (caster->GetShapeshiftForm() != FORM_SHADOW)
-            return;
+        Player* priest = caster ? caster->ToPlayer() : nullptr;
+        if (!priest || !priest->HasAura(SPELL_T2_UMBRAL_MERCY))
+            return SPELL_CAST_OK;
+        if (priest->GetShapeshiftForm() == FORM_SHADOW)
+            return SPELL_CAST_OK;
 
-        // OnHit, NOT AfterHit: by AfterHit m_healing has been overwritten with
-        // the EFFECTIVE heal, so healing a full-health ally would cost the
-        // priest nothing at all. Here it is still the full computed heal -
-        // healing-taken debuffs are already in it, overheal is not.
-        _selfDamage = CalculatePct(GetHitHeal(), 50);
+        bool fresh = false;
+        {
+            std::lock_guard<std::mutex> guard(s_workMutex);
+            auto itr = s_pendingShadowform.find(priest->GetGUID());
+            if (itr == s_pendingShadowform.end())
+                return SPELL_CAST_OK;
+            fresh = getMSTimeDiff(itr->second, GameTime::GetGameTimeMS()) <= UMBRAL_SHADOWFORM_REAPPLY_WINDOW_MS;
+            // Consumed either way: the second CheckCast at the end of the cast
+            // bar must not re-run this, and a stale cancel is not ours.
+            s_pendingShadowform.erase(itr);
+        }
+        if (!fresh)
+            return SPELL_CAST_OK;
+
+        // Triggered: no mana, no global, no cooldown; the client sees the form
+        // go and come back inside one update batch.
+        priest->CastSpell(priest, SPELL_PRIEST_SHADOWFORM, true);
+
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Umbral Mercy - kept Shadowform through {}",
+            priest->GetName(), GetSpellInfo()->SpellName[sWorld->GetDefaultDbcLocale()]));
+        return SPELL_CAST_OK;
     }
 
     void HandleAfterHit()
     {
         Unit* caster = GetCaster();
-        if (!caster || _selfDamage <= 0)
+        Player* priest = caster ? caster->ToPlayer() : nullptr;
+        if (!priest || !priest->HasAura(SPELL_T2_UMBRAL_MERCY))
+            return;
+        // "Doing so" is specifically healing in Shadowform; a priest who left
+        // form first (and waited past the window) pays nothing.
+        if (priest->GetShapeshiftForm() != FORM_SHADOW)
             return;
 
-        // Never lethal. Killing the caster from AfterHit re-enters setDeathState ->
-        // RemoveAllAurasOnDeath + InterruptNonMeleeSpells underneath the Spell that
-        // is still executing, which is precisely the re-entrancy shape not worth
-        // introducing while a sporadic heap corruption is unexplained. It is also a
-        // gameplay footgun: a priest should not one-shot himself with his own heal.
-        if (uint32(_selfDamage) >= caster->GetHealth())
-            _selfDamage = int32(caster->GetHealth()) - 1;
-        if (_selfDamage <= 0)
+        // AfterHit: m_healing now holds the EFFECTIVE heal (DealHeal wrote the
+        // real gain back), which is what "healing done" means in the log.
+        int32 const price = CalculatePct(GetHitHeal(), 50);
+        if (price <= 0)
             return;
 
-        // Dealt raw and as shadow rather than through a spell: Shadowform's
-        // -15% physical damage taken (effect 3 of 15473) would otherwise
-        // refund a chunk of the priest's own price, and routing it through
-        // DealDamage skips resistance and school absorbs the same way.
-        Unit::DealDamage(caster, caster, uint32(_selfDamage), nullptr,
-            SELF_DAMAGE, SPELL_SCHOOL_MASK_SHADOW, nullptr, false);
+        DealUmbralMercyPrice(priest, price);
 
         SendCustomAuraDiag(Trinity::StringFormat(
-            "[CustomAuras] {}: Umbral Mercy - Heal in Shadowform cost {} health",
-            caster->GetName(), _selfDamage));
+            "[CustomAuras] {}: Umbral Mercy - {} in Shadowform healed {} for {}, cost {} health",
+            priest->GetName(), GetSpellInfo()->SpellName[sWorld->GetDefaultDbcLocale()],
+            GetHitUnit() ? GetHitUnit()->GetName() : std::string("?"), GetHitHeal(), price));
     }
 
     void Register() override
     {
-        OnHit += SpellHitFn(spell_t2_umbral_mercy::CaptureHeal);
+        OnCheckCast += SpellCheckCastFn(spell_t2_umbral_mercy::CheckCast);
         AfterHit += SpellHitFn(spell_t2_umbral_mercy::HandleAfterHit);
     }
-
-private:
-    int32 _selfDamage = 0;
 };
 
 // 90341 - Wraithblade (shadow 8pc): the +300% melee damage is effect 2 and
-// needs no code. This is the mana half - 10% of what the swing actually dealt.
+// needs no code. This is the mana half - 10% of what the swing actually dealt,
+// paid through the ENERGIZE helper 90500 so it is a real energize event in the
+// combat log (and on the floating combat text), not a silent ModifyPower.
 class spell_t2_wraithblade : public AuraScript
 {
     PrepareAuraScript(spell_t2_wraithblade);
@@ -198,20 +634,26 @@ class spell_t2_wraithblade : public AuraScript
         return damageInfo && damageInfo->GetDamage() > 0;
     }
 
-    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
         DamageInfo* damageInfo = eventInfo.GetDamageInfo();
-        if (!damageInfo)
+        Unit* priest = GetTarget();
+        if (!damageInfo || !priest)
             return;
 
-        Unit* priest = GetTarget();
         int32 const mana = CalculatePct(int32(damageInfo->GetDamage()), 10);
         if (mana <= 0)
             return;
 
-        // Direct energize rather than a helper cast, matching the T1 fury rage
-        // bonus: a passive-cast helper never paid out there either.
-        priest->EnergizeBySpell(priest, GetSpellInfo(), mana, POWER_MANA);
+        // 90500 has DieSides 0 on its energize effect, so the override is the
+        // exact amount. Triggered by this aura: free, instant, no global.
+        CastSpellExtraArgs args(aurEff);
+        args.AddSpellBP0(mana);
+        priest->CastSpell(priest, SPELL_T2_WRAITHBLADE_ENERGIZE, args);
+
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Wraithblade - {} melee damage -> {} mana",
+            priest->GetName(), damageInfo->GetDamage(), mana));
     }
 
     void Register() override
@@ -254,62 +696,56 @@ class spell_t2_dusty_glacial_reprieve : public SpellScript
 //
 // This is a second script on 45438; the shipped spell_mage_ice_block (which
 // triggers Hypothermia) is a SpellScript on the same id and must survive.
+//
+// The freeze is NOT cast from in here. Ice Block's expiry is processed inside
+// Unit::_UpdateSpells' owned-aura walk on the mage, and at the moment effect 0
+// (the stun) is unapplied, effects 1 and 2 (the immunities) are still on the
+// mage. The hook only flags the mage; t2_priest_mage_update casts 90385 on the
+// next Player::Update tick, with the block fully gone and no aura container in
+// flight.
 class spell_t2_dusty_hoarfrost : public AuraScript
 {
     PrepareAuraScript(spell_t2_dusty_hoarfrost);
 
     void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
+        Unit* target = GetTarget();
+        Player* mage = target ? target->ToPlayer() : nullptr;
+        if (!mage || !mage->HasAura(SPELL_T2_HOARFROST_BLOOM))
+            return;
+
         AuraApplication const* application = GetTargetApplication();
-        // EXPIRE only: BY_CANCEL is the player clicking it off, BY_DEATH is
-        // the block failing to save them, and neither should pay out.
-        if (!application || application->GetRemoveMode() != AURA_REMOVE_BY_EXPIRE)
+        AuraRemoveMode const mode = application ? application->GetRemoveMode() : AURA_REMOVE_NONE;
+        // EXPIRE only: BY_CANCEL is the player clicking it off (or pressing
+        // Ice Block again - the client sends a cancel for that too), BY_DEATH
+        // is the block failing to save them, and neither should pay out.
+        if (mode != AURA_REMOVE_BY_EXPIRE)
+        {
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Hoarfrost Bloom - Ice Block ended early (remove mode {}), no freeze",
+                mage->GetName(), uint32(mode)));
             return;
+        }
 
-        Unit* mage = GetTarget();
-        if (!mage->HasAura(SPELL_T2_HOARFROST_BLOOM))
-            return;
-
-        // 90385 selects TARGET_UNIT_SRC_AREA_ENEMY, so this adds auras to
-        // nearby enemies and never to the mage - nothing is inserted into the
-        // container the aura machinery is currently walking.
-        mage->CastSpell(mage, SPELL_T2_ENCASED_IN_ICE, true);
-
-        SendCustomAuraDiag(Trinity::StringFormat(
-            "[CustomAuras] {}: Hoarfrost Bloom - Ice Block ran out, freezing 10 yd",
-            mage->GetName()));
+        {
+            std::lock_guard<std::mutex> guard(s_workMutex);
+            s_pendingHoarfrost.insert(mage->GetGUID());
+        }
+        MarkWork(mage->GetGUID());
     }
 
     void Register() override
     {
-        // EFFECT_FIRST_FOUND: Ice Block's effect 0 is the self stun, effects 1
-        // and 2 are the two halves of the immunity. Any of them going away
-        // means the block is over.
-        AfterEffectRemove += AuraEffectRemoveFn(spell_t2_dusty_hoarfrost::HandleRemove, EFFECT_FIRST_FOUND, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+        // Effect 0 is the self stun; it is unapplied first and exactly once
+        // per removal, so this fires once per block.
+        AfterEffectRemove += AuraEffectRemoveFn(spell_t2_dusty_hoarfrost::HandleRemove, EFFECT_0, SPELL_AURA_MOD_STUN, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
-// -----------------------------------------------------------------------
-// 90344 Reflective Carapace (dusty 8pc) - NOT IMPLEMENTED.
-//
-// The decision taken was "reflect 50% of the damage Ice Block PREVENTED", and
-// that number does not exist anywhere a script can reach:
-//
-//   * melee: Unit::CalculateMeleeDamage bails at the `immunedMask ==
-//     ((1 << 0) | (1 << 1))` early return (Unit.cpp) BEFORE it computes any
-//     damage at all - the weapon damage roll never happens, and the
-//     UnitScript::ModifyMeleeDamage hook sits below that return.
-//   * spells: Spell::DoAllEffectOnTarget stamps SPELL_MISS_IMMUNE and skips
-//     effect handling entirely, so no SpellScript hook and no proc ever fires.
-//
-// TODO(core): Unit::CalculateMeleeDamage (the immunedMask early return) and
-// Spell::DoAllEffectOnTarget (the SPELL_MISS_IMMUNE branch) have to compute the
-// would-be damage and surface it - a UnitScript hook there, or a per-unit
-// "prevented this hit" counter. Once that exists this is a short AuraScript on
-// 45438. Left inert rather than half-built: the data-only substitutes (spell
-// reflect, which is inert against melee, or a flat damage shield, which is not
-// a percentage) would both silently ship the wrong bonus.
-// -----------------------------------------------------------------------
+// 90344 Reflective Carapace (dusty 8pc) lives in core: T2SpellHooks::
+// OnImmuneSpellHit / OnImmuneMeleeHit (src/server/game/Entities/Object/
+// T2SpellHooks.cpp), called from the immune branches the would-be damage
+// never reaches a script from. Nothing to bind here.
 
 // 31643 - Blazing Speed, carrying the fiery payback 5pc: the buff going up
 // also resets Fire Blast. Bound to the triggered buff, not to the talent
@@ -320,7 +756,8 @@ class spell_t2_fp_scorching_momentum : public AuraScript
 
     void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
-        Player* mage = GetTarget()->ToPlayer();
+        Unit* target = GetTarget();
+        Player* mage = target ? target->ToPlayer() : nullptr;
         if (!mage || !mage->HasAura(SPELL_T2_SCORCHING_MOMENTUM))
             return;
 
@@ -357,6 +794,13 @@ class spell_t2_fp_scorching_momentum : public AuraScript
 // spell_proc row narrows it to Fire Blast), and a disarm that actually lands
 // is immediately followed by the seizure.
 //
+// The seizure is LITERAL since 2026-08-19: the victim's main hand (and ranged,
+// both are what 64346 disarms) are created as temporary items, registered
+// with T2UnitHooks so the core waives every requirement on them and reports
+// 300 weapon skill, and equipped in the mage's own slots; the mage's weapons
+// wait in the bags. The equip itself runs on the next Player::Update tick
+// (PerformConfiscationEquip), never inside this proc.
+//
 // Scripting 64346 itself was the alternative and was rejected: it would run
 // inside the VICTIM's aura machinery to hang a buff on the mage, and this set
 // is the only disarm a mage without the Fiery Payback talent has anyway.
@@ -367,7 +811,8 @@ class spell_t2_ashen_confiscation : public AuraScript
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
         Unit* victim = eventInfo.GetProcTarget();
-        Player* mage = GetTarget()->ToPlayer();
+        Unit* target = GetTarget();
+        Player* mage = target ? target->ToPlayer() : nullptr;
         if (!mage || !victim)
             return;
 
@@ -376,34 +821,56 @@ class spell_t2_ashen_confiscation : public AuraScript
         // Mechanic immunity, a PvP trinket or a resist all eat the disarm, and
         // "when you disarm an enemy" means the disarm has to be on them.
         if (!victim->HasAura(SPELL_MAGE_FIERY_PAYBACK_DISARM, mage->GetGUID()))
+        {
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Ashen Confiscation - disarm did not land on {}",
+                mage->GetName(), victim->GetName()));
             return;
+        }
+
+        // What the victim is holding. Players: the real items in the two
+        // disarmed slots. Creatures: their virtual item ids (which are item
+        // entries; ones without an item_template are skipped at equip time).
+        uint32 mainHandEntry = 0;
+        uint32 rangedEntry = 0;
+        if (Player* robbed = victim->ToPlayer())
+        {
+            if (Item* item = robbed->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND))
+                mainHandEntry = item->GetEntry();
+            if (Item* item = robbed->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_RANGED))
+                rangedEntry = item->GetEntry();
+        }
+        else
+        {
+            mainHandEntry = victim->GetVirtualItemId(0);
+            rangedEntry = victim->GetVirtualItemId(2);
+        }
 
         // The attack power and the disarm immunity are 90387's two effects;
         // the amount is computed in its own script, at apply.
         mage->CastSpell(mage, SPELL_T2_CONFISCATED_ARMS, true);
 
-        // "Seize their weapons" is an appearance swap and nothing more - the
-        // items are not moved and the mage's own weapons keep working. Only
-        // players have PLAYER_VISIBLE_ITEM_*; those indices run off the end of
-        // a creature's update-field block, so a creature victim gives the
-        // stat half of the bonus and no visual.
-        //
-        // CAVEAT: a mage transmogging their own main hand or ranged slot keeps
-        // showing the transmog. Player::GetVisibleItemEntryFor prefers
-        // _transmogSlotCache over the real field, and that cache is private
-        // with no public way to suppress one slot temporarily. The stat half
-        // is unaffected.
-        Player* robbed = victim->ToPlayer();
-        if (!robbed)
-            return;
-        mage->SetUInt32Value(PLAYER_VISIBLE_ITEM_16_ENTRYID,
-            robbed->GetUInt32Value(PLAYER_VISIBLE_ITEM_16_ENTRYID));
-        mage->SetUInt32Value(PLAYER_VISIBLE_ITEM_18_ENTRYID,
-            robbed->GetUInt32Value(PLAYER_VISIBLE_ITEM_18_ENTRYID));
+        bool queued = false;
+        {
+            std::lock_guard<std::mutex> guard(s_workMutex);
+            ConfiscationState& state = s_confiscations[mage->GetGUID()];
+            // A seizure already in hand (the proc's internal cooldown is
+            // longer than the buff, so this is belt and braces): refresh the
+            // buff only, never stack a second set of weapons.
+            if (state.seized.empty() && !state.equipPending)
+            {
+                state.equipPending = true;
+                state.pendingMainHandEntry = mainHandEntry;
+                state.pendingRangedEntry = rangedEntry;
+                queued = true;
+            }
+        }
+        if (queued)
+            MarkWork(mage->GetGUID());
 
         SendCustomAuraDiag(Trinity::StringFormat(
-            "[CustomAuras] {}: Ashen Confiscation - disarmed {} and seized their arms",
-            mage->GetName(), robbed->GetName()));
+            "[CustomAuras] {}: Ashen Confiscation - disarmed {}; seizing main hand {} / ranged {}",
+            mage->GetName(), victim->GetName(), mainHandEntry, rangedEntry));
     }
 
     void Register() override
@@ -414,7 +881,8 @@ class spell_t2_ashen_confiscation : public AuraScript
 
 // 90387 - Confiscated Arms, the buff 90347 hangs on the mage. Ships with a
 // zero attack power amount on purpose; the real number is the mage's own spell
-// power, which only exists at runtime.
+// power, which only exists at runtime. Its removal - expiry, death, dispel,
+// anything - is what hands the weapons back.
 class spell_t2_confiscated_arms : public AuraScript
 {
     PrepareAuraScript(spell_t2_confiscated_arms);
@@ -437,19 +905,27 @@ class spell_t2_confiscated_arms : public AuraScript
 
     void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
-        Player* mage = GetTarget()->ToPlayer();
+        Unit* target = GetTarget();
+        Player* mage = target ? target->ToPlayer() : nullptr;
         if (!mage)
             return;
 
-        // SetVisibleItemSlot, not a bare field write: it restores the entry,
-        // both enchantment halves and the transmog slot cache from whatever is
-        // really equipped, which is exactly what undoing the seizure means.
-        // Passing the item back in (or nullptr for an empty slot) is what the
-        // core's own unequip path does.
-        mage->SetVisibleItemSlot(EQUIPMENT_SLOT_MAINHAND,
-            mage->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND));
-        mage->SetVisibleItemSlot(EQUIPMENT_SLOT_RANGED,
-            mage->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_RANGED));
+        // Flag only. Destroying and re-equipping items applies and removes
+        // item auras on the mage, and this hook can be running inside
+        // RemoveAllAurasOnDeath's walk of exactly those containers.
+        bool hasState = false;
+        {
+            std::lock_guard<std::mutex> guard(s_workMutex);
+            auto itr = s_confiscations.find(mage->GetGUID());
+            if (itr != s_confiscations.end())
+            {
+                itr->second.cleanupPending = true;
+                itr->second.equipPending = false;   // too late to wield anything
+                hasState = true;
+            }
+        }
+        if (hasState)
+            MarkWork(mage->GetGUID());
     }
 
     void Register() override
@@ -459,15 +935,111 @@ class spell_t2_confiscated_arms : public AuraScript
     }
 };
 
-// NOTE 90383 Kindled Zeal (the one-charge Holy Nova buff the holy 5pc
-// triggers) deliberately has NO script. Both of its effects are spellmods, and
-// Player::ApplySpellMod / Spell::TakeMods drop the aura's charge when the
-// modified cast completes - a proc entry or a script here would consume it a
-// second time.
+// The deferred-work runner plus the persistence guards for the confiscated
+// weapons. OnUpdate is the "next tick" every hook above defers to; OnSave runs
+// at the top of Player::SaveToDB, BEFORE _SaveInventory, so a temporary weapon
+// can never reach item_instance/character_inventory - an autosave, a far
+// teleport save or the logout save simply ends the confiscation first. OnLogout
+// and OnMapChanged are the belt to that brace.
+class t2_priest_mage_update : public PlayerScript
+{
+public:
+    t2_priest_mage_update() : PlayerScript("t2_priest_mage_update") { }
+
+    void OnUpdate(Player* player, uint32 /*diff*/) override
+    {
+        if (!player || !TakeWork(player->GetGUID()))
+            return;
+
+        ObjectGuid const guid = player->GetGUID();
+
+        // Hoarfrost Bloom - the freeze, one tick after Ice Block ran out.
+        bool hoarfrost = false;
+        bool equip = false;
+        bool cleanup = false;
+        uint32 mainHandEntry = 0;
+        uint32 rangedEntry = 0;
+        {
+            std::lock_guard<std::mutex> guard(s_workMutex);
+            hoarfrost = s_pendingHoarfrost.erase(guid) > 0;
+            auto itr = s_confiscations.find(guid);
+            if (itr != s_confiscations.end())
+            {
+                cleanup = itr->second.cleanupPending;
+                equip = itr->second.equipPending && !cleanup;
+                mainHandEntry = itr->second.pendingMainHandEntry;
+                rangedEntry = itr->second.pendingRangedEntry;
+                itr->second.cleanupPending = false;
+                itr->second.equipPending = false;
+                itr->second.pendingMainHandEntry = 0;
+                itr->second.pendingRangedEntry = 0;
+            }
+        }
+
+        if (hoarfrost && player->IsInWorld() && player->IsAlive() && player->HasAura(SPELL_T2_HOARFROST_BLOOM))
+        {
+            // 90385 selects TARGET_UNIT_SRC_AREA_ENEMY around the mage, so
+            // this adds auras to nearby enemies and never to the mage.
+            player->CastSpell(player, SPELL_T2_ENCASED_IN_ICE, true);
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Hoarfrost Bloom - Ice Block ran out, freezing 10 yd",
+                player->GetName()));
+        }
+
+        if (cleanup)
+            CleanupConfiscation(player, "buff ended");
+        else if (equip)
+            PerformConfiscationEquip(player, mainHandEntry, rangedEntry);
+    }
+
+    void OnSave(Player* player) override
+    {
+        if (!player)
+            return;
+        // Cheap pre-check so the common save costs one lock at most.
+        {
+            std::lock_guard<std::mutex> guard(s_workMutex);
+            if (s_confiscations.find(player->GetGUID()) == s_confiscations.end())
+                return;
+        }
+        // Weapons first (so the save never sees them), then the buff: its
+        // removal flags a cleanup that will find nothing left to do.
+        CleanupConfiscation(player, "save");
+        player->RemoveAurasDueToSpell(SPELL_T2_CONFISCATED_ARMS);
+    }
+
+    void OnMapChanged(Player* player) override
+    {
+        if (!player)
+            return;
+        {
+            std::lock_guard<std::mutex> guard(s_workMutex);
+            if (s_confiscations.find(player->GetGUID()) == s_confiscations.end())
+                return;
+        }
+        CleanupConfiscation(player, "map change");
+        player->RemoveAurasDueToSpell(SPELL_T2_CONFISCATED_ARMS);
+    }
+
+    void OnLogout(Player* player) override
+    {
+        if (!player)
+            return;
+        ObjectGuid const guid = player->GetGUID();
+        CleanupConfiscation(player, "logout");
+        std::lock_guard<std::mutex> guard(s_workMutex);
+        s_pendingShadowform.erase(guid);
+        s_pendingHoarfrost.erase(guid);
+        s_confiscations.erase(guid);
+        if (s_playersWithWork.erase(guid))
+            s_workCount.store(uint32(s_playersWithWork.size()), std::memory_order_release);
+    }
+};
 
 void AddSC_custom_t2_priest_mage()
 {
     RegisterSpellScript(spell_t2_holy_censer);
+    RegisterSpellScript(spell_t2_umbral_shadowform);
     RegisterSpellScript(spell_t2_umbral_mercy);
     RegisterSpellScript(spell_t2_wraithblade);
     RegisterSpellScript(spell_t2_dusty_glacial_reprieve);
@@ -475,4 +1047,5 @@ void AddSC_custom_t2_priest_mage()
     RegisterSpellScript(spell_t2_fp_scorching_momentum);
     RegisterSpellScript(spell_t2_ashen_confiscation);
     RegisterSpellScript(spell_t2_confiscated_arms);
+    new t2_priest_mage_update();
 }

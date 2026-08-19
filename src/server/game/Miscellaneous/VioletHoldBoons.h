@@ -380,6 +380,14 @@ namespace VioletHoldBoons
     // Re-sync the blessing on everything the player controls (after a pick).
     TC_GAME_API void RefreshBeastmaster(Player* player);
 
+    // Wave clones copied from a party member fight with that member's boons,
+    // at the same stack counts (PlayerbotVhrWaveDriver; the clone manager
+    // copies the spellbook and gear but wipes auras). The run-wide records
+    // (Greed, Hoarder, Fellowship), the Menagerie and the Ascension marker are
+    // NOT copied - they only mean anything to the battleground's own
+    // bookkeeping, which knows nothing about clones.
+    TC_GAME_API void CopyBoonsTo(Player const* source, Player* target);
+
     // Menagerie: `count` random guardians appear beside `owner`, fight with
     // PetAI at the owner's level, and are appended to `out` for the
     // battleground to take down when the wave is over.

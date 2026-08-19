@@ -9,9 +9,19 @@
  * it rewrites, checking for the carrier on the caster.
  *
  * Carrier ids, tooltips and the intended hook per bonus are the contract in
- * sql/custom/dbc/2026_08_17_00_dbc_t2_set_bonuses.sql; spell_script_names
+ * sql/custom/dbc/2026_08_17_00_dbc_t2_set_bonuses.sql, amended for this file by
+ * sql/custom/dbc/2026_08_19_03_dbc_t2_warrior_paladin.sql; spell_script_names
  * bindings for this file are in
- * sql/custom/world/2026_08_17_01_world_t2_warrior-paladin.sql.
+ * sql/custom/world/2026_08_19_03_world_t2_warrior_paladin.sql.
+ *
+ * 2026-08-19 live-test fixes:
+ *   - Gaping Wound is now a 21-stack debuff: every whole yard the victim moves
+ *     (or is moved) pops one stack and pays 1/21 of the pool. No periodic
+ *     damage without movement, no per-tick travel clamp.
+ *   - Iron Fists / Flurry of Blows are event-driven (T2Unarmed::OnEquipmentChanged
+ *     from every Player equipment-change site + the carrier's apply/remove +
+ *     login), not a 1 s poll.
+ *   - Rattling Blow casts its stun from the script with full diagnostics.
  */
 
 #include "ScriptMgr.h"
@@ -26,8 +36,11 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
+#include "T2UnitHooks.h"
 #include "World.h"
 #include "WorldSession.h"
+
+#include <cmath>
 
 namespace
 {
@@ -41,8 +54,10 @@ namespace
         // warrior - bare knuckle set
         SPELL_T2_IRON_FISTS_PASSIVE     = 90303,
         SPELL_T2_FLURRY_BLOWS_PASSIVE   = 90304,
+        SPELL_T2_RATTLING_BLOW_PASSIVE  = 90305,
         SPELL_T2_IRON_FISTS_BUFF        = 90368,
         SPELL_T2_FLURRY_BLOWS_BUFF      = 90369,
+        SPELL_T2_RATTLING_BLOW_STUN     = 90370,
         // paladin - consecration set
         SPELL_T2_SANCTIFIED_CORE_PASSIVE = 90307,
         SPELL_T2_SANCTIFIED_CORE_TICK   = 90371,
@@ -54,16 +69,11 @@ namespace
         SPELL_PALADIN_HOLY_SHOCK_R1     = 20473,
     };
 
-    // Gaping Wound pays its whole pool out over this much movement. Both halves
-    // of the bonus (the Rend replacement and the bleed's own tick) have to agree
-    // on it, so it lives here rather than in either script.
-    constexpr float GAPING_WOUND_YARDS = 21.0f;
-
-    // A single 500 ms tick can only credit this much travel. Blink, Intercept,
-    // knockbacks and teleports all move a player further than any run speed
-    // could in half a second, and without the clamp one Blink dumps the entire
-    // pool in a single tick.
-    constexpr float GAPING_WOUND_MAX_STEP = 10.0f;
+    // Gaping Wound is applied at this many stacks (90366 CumulativeAura must
+    // agree - it is the client-visible counter) and pays pool/21 per stack,
+    // one stack per whole yard of movement. Both halves of the bonus (the Rend
+    // replacement and the bleed's own tick) read it, so it lives here.
+    constexpr uint8 GAPING_WOUND_STACKS = 21;
 
     // Radius of the "heart" of a Consecration for the 5pc.
     constexpr float SANCTIFIED_CORE_RADIUS = 3.0f;
@@ -77,13 +87,30 @@ namespace
                 ChatHandler(sessionPair.second).SendSysMessage(msg.c_str());
     }
 
+    // One hand slot is empty when neither the item array nor the visible
+    // PLAYER_FIELD_INV_SLOT guid holds anything. Two reads on purpose: the
+    // evaluator below is called from inside Player::DestroyItem at a point
+    // where (following the HiddenSets/Polearm convention it copies) the slot
+    // guid has already been cleared but m_items[slot] has not - reading only
+    // GetItemByPos there would report a destroyed weapon as still held until
+    // the next equipment change. Every other site (EquipItem/VisualizeItem,
+    // RemoveItem) sets or clears both before the hook, so the pair agrees.
+    bool IsHandSlotEmpty(Player const* player, uint8 slot)
+    {
+        return !player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot)
+            || player->GetGuidValue(PLAYER_FIELD_INV_SLOT_HEAD + (slot * 2)).IsEmpty();
+    }
+
     // "Hands empty" is about the equipment slots, not about weapons:
     // GetWeaponForAttack returns nullptr for a shield as well, so a
     // sword-and-board warrior would have read as bare-fisted in the off hand.
+    // A disarmed or broken weapon is still IN the slot and still counts as
+    // equipped - the set is about fighting with nothing, not about being
+    // unable to use what you hold.
     bool HasEmptyHands(Player const* player)
     {
-        return !player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND)
-            && !player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
+        return IsHandSlotEmpty(player, EQUIPMENT_SLOT_MAINHAND)
+            && IsHandSlotEmpty(player, EQUIPMENT_SLOT_OFFHAND);
     }
 
     // Pay one instalment of a Gaping Wound. Deliberately NOT the spell bonus
@@ -107,11 +134,71 @@ namespace
         Unit::DealDamage(caster, target, log.damage, &clean, DOT,
             SpellSchoolMask(log.schoolMask), spellInfo, false);
     }
+
+    // Add/remove one buff to match a wanted state. Idempotent, so it is safe to
+    // call from every site that might change the answer. Shipped pattern for
+    // state-mirroring buffs (see spell_t1_fury_speed).
+    void ToggleBuff(Unit* wearer, uint32 spellId, bool wanted)
+    {
+        bool const has = wearer->HasAura(spellId);
+        if (wanted && !has)
+            wearer->CastSpell(wearer, spellId, true);
+        else if (!wanted && has)
+            wearer->RemoveAurasDueToSpell(spellId);
+    }
+}
+
+// ===========================================================================
+// T2Unarmed - the bare knuckle set's equipment-change fan-out.
+//
+// Declared in T2UnitHooks.h and called by the core from every Player
+// equipment-change site (EquipItem / QuickEquipItem / RemoveItem / DestroyItem
+// / the swap paths), following the HiddenSets / PolearmStaffInnerAuras
+// convention. Also called from the carriers' own apply/remove hooks below and
+// once on login, so there is no polling anywhere: the buffs flip exactly when
+// the answer to "are the hands empty" can change.
+//
+// State table (evaluated in full every call, so every site is idempotent):
+//   90303 on wearer && both hand slots empty          -> 90368 Iron Fists
+//   ... && 90304 on wearer                            -> 90369 Flurry of Blows
+//   anything else                                     -> neither
+// ===========================================================================
+namespace T2Unarmed
+{
+    void OnEquipmentChanged(Player* player)
+    {
+        if (!player)
+            return;
+
+        // Player::_LoadInventory runs before the player is added to its map
+        // and the set passives are (re)cast from there. Casting the real
+        // buffs on a unit that is not in world yet is not something
+        // Spell::prepare is written for (precedent: PolearmStaffInnerAuras
+        // skips too). 90368/90369 are saved auras, so a logged-out state is
+        // restored by _LoadAuras, and the OnLogin hook below re-evaluates
+        // once the player IS in world.
+        if (!player->IsInWorld())
+            return;
+
+        bool const hasIronFists = player->HasAura(SPELL_T2_IRON_FISTS_PASSIVE);
+
+        // Cheap early-out for the 99% of equipment changes that belong to
+        // players without the set and without the buffs: three map lookups.
+        if (!hasIronFists
+            && !player->HasAura(SPELL_T2_IRON_FISTS_BUFF)
+            && !player->HasAura(SPELL_T2_FLURRY_BLOWS_BUFF))
+            return;
+
+        bool const empty = hasIronFists && HasEmptyHands(player);
+        ToggleBuff(player, SPELL_T2_IRON_FISTS_BUFF, empty);
+        ToggleBuff(player, SPELL_T2_FLURRY_BLOWS_BUFF, empty && player->HasAura(SPELL_T2_FLURRY_BLOWS_PASSIVE));
+    }
 }
 
 // -772 - Rend, carrying the Rend 5pc (90301): the bleed is replaced by Gaping
-// Wound (90366), which holds twice the damage this rank would have dealt over
-// its full duration and pays it out only as the victim moves.
+// Wound (90366), a 21-stack debuff holding twice the damage this rank would
+// have dealt over its full duration, paid out one stack per yard the victim
+// moves.
 class spell_t2_rend_gaping_wound : public SpellScript
 {
     PrepareSpellScript(spell_t2_rend_gaping_wound);
@@ -164,13 +251,21 @@ class spell_t2_rend_gaping_wound : public SpellScript
         // Cast from AfterHit rather than out of the effect handler so the whole
         // aura-application pass for Rend has finished first. Rend is
         // single-target, so one _pool per script instance is enough.
+        //
+        // SPELLVALUE_AURA_STACK: Spell::DoSpellEffectHit applies it as
+        // SetStackAmount(21) on a fresh aura and ModStackAmount(+21) on a
+        // refresh, which Aura::ModStackAmount clamps to the row's
+        // CumulativeAura - so a re-cast always restocks to exactly 21 while
+        // Unit::_TryStackingOrRefreshingExistingAura rewrites the base amount
+        // to the new pool.
         CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
         args.AddSpellBP0(_pool);
+        args.AddSpellMod(SPELLVALUE_AURA_STACK, GAPING_WOUND_STACKS);
         caster->CastSpell(target, SPELL_T2_GAPING_WOUND_BLEED, args);
 
         SendCustomAuraDiag(Trinity::StringFormat(
-            "[CustomAuras] {}: Gaping Wound replaces Rend on {} - pool {} over {:.0f} yd",
-            caster->GetName(), target->GetName(), _pool, GAPING_WOUND_YARDS));
+            "[CustomAuras] {}: Gaping Wound replaces Rend on {} - pool {} over {} stacks ({} per yard)",
+            caster->GetName(), target->GetName(), _pool, uint32(GAPING_WOUND_STACKS), _pool / GAPING_WOUND_STACKS));
         _pool = 0;
     }
 
@@ -184,12 +279,45 @@ private:
     int32 _pool = 0;
 };
 
-// 90366 - Gaping Wound: a 1 min bleed that only bleeds while its victim moves.
-// Ticks twice a second, measures how far the target travelled since the last
-// tick, and pays the pool out in proportion, finishing after 21 yards.
+// 90366 - Gaping Wound: a 1 min, 21-stack bleed that only bleeds while its
+// victim moves. Ticks four times a second, measures how far the target
+// travelled since the last tick (displacement included - knockbacks, Blink,
+// Intercept and teleports all count, there is deliberately no per-tick clamp),
+// and for every whole yard pops one stack and pays 1/21 of the pool. Ends at
+// 0 stacks or when the minute runs out.
 class spell_t2_gaping_wound_tick : public AuraScript
 {
     PrepareAuraScript(spell_t2_gaping_wound_tick);
+
+    // Anchor the odometer to wherever the victim is RIGHT NOW. Runs on the
+    // initial application and again on every restock (re-cast), so the gap
+    // between two casts is never billed as movement. `pool` is the current
+    // base amount; `stacks` is whatever the aura holds at that instant.
+    void Restock(Unit* target, int32 pool, uint8 stacks)
+    {
+        _lastPos = target->GetPosition();
+        _yards = 0.0f;
+        _lastStacks = stacks;
+        // What the consumed stacks (if any) are already worth, so the running
+        // total stays exact across a restock that did not land on 21.
+        _paid = OwedFor(pool, stacks);
+    }
+
+    // Total damage owed once the aura is down to `stacks` stacks.
+    static int32 OwedFor(int32 pool, uint8 stacks)
+    {
+        int32 const consumed = int32(GAPING_WOUND_STACKS) - int32(std::min<uint8>(stacks, GAPING_WOUND_STACKS));
+        return int32(int64(pool) * consumed / int64(GAPING_WOUND_STACKS));
+    }
+
+    void HandleApply(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
+    {
+        // Anchor at the moment the debuff lands, not lazily on the first tick
+        // (the old build relied on a duration comparison inside the tick to
+        // do this, which left the reference point implicit).
+        Restock(GetTarget(), aurEff->GetBaseAmount(), GetStackAmount());
+        _lastDuration = GetDuration();
+    }
 
     void HandlePeriodic(AuraEffect const* aurEff)
     {
@@ -198,9 +326,10 @@ class spell_t2_gaping_wound_tick : public AuraScript
         // GetBaseAmount, NOT GetAmount: 90366 carries Rend's own SpellClassMask
         // so that Improved Rend keeps recognising it, which means CalcValue
         // would apply Improved Rend's percentage to the pool - and the pool was
-        // built from a Rend amount that already had it. GetBaseAmount is the
-        // raw BP0 the replacement passed in, and the core rewrites it on a
-        // refresh too (Unit::_TryStackingOrRefreshingExistingAura).
+        // built from a Rend amount that already had it. On top of that
+        // AuraEffect::CalculateAmount multiplies by the stack count. The base
+        // amount is the raw BP0 the replacement passed in, and the core
+        // rewrites it on a refresh too (Unit::_TryStackingOrRefreshingExistingAura).
         int32 const pool = aurEff->GetBaseAmount();
         if (pool <= 0)
         {
@@ -208,52 +337,69 @@ class spell_t2_gaping_wound_tick : public AuraScript
             return;
         }
 
-        // A re-cast REFRESHES this aura instead of replacing it, and no apply
-        // hook fires for that, so the paid-out counters would survive into the
-        // new bleed. Duration only ever grows on a refresh, so that is the
-        // signal to restock - and to re-anchor the position, since the gap
-        // between the old and new cast is not movement this bleed paid for.
+        uint8 const stacks = GetStackAmount();
         int32 const duration = GetDuration();
-        if (duration > _lastDuration)
-        {
-            _paid = 0;
-            _yards = 0.0f;
-            _lastPos = target->GetPosition();
-        }
+
+        // A re-cast REFRESHES this aura instead of replacing it, and no apply
+        // hook fires for that. Two independent tells, either is enough:
+        // duration only ever grows on a refresh, and stacks only ever grow on
+        // a refresh (this script is the only thing that lowers them).
+        if (duration > _lastDuration || stacks > _lastStacks)
+            Restock(target, pool, stacks);
         _lastDuration = duration;
+        _lastStacks = stacks;
 
         // Horizontal distance only: falling and jumping in place are not
         // "moving" for a bonus whose whole point is punishing a kiting target.
+        // Everything else - running, Blink, Intercept, knockbacks, teleports -
+        // is movement or displacement and counts in full.
         float const moved = target->GetExactDist2d(&_lastPos);
         _lastPos = target->GetPosition();
-        if (moved > GAPING_WOUND_MAX_STEP)
-            return;
 
-        Unit* caster = GetCaster();
-        if (!caster || !target->IsAlive())
-            return;
-
-        // Accumulate distance and bill against a running total rather than
-        // paying per tick: rounding a fraction of the pool down every half
-        // second would quietly lose most of a slow walker's bleed.
+        // Accumulate fractional yards so a slow walker is billed exactly as
+        // much as a sprinter over the same ground; only whole yards pop stacks.
         _yards += moved;
-        float const progress = std::min(_yards / GAPING_WOUND_YARDS, 1.0f);
-        int32 const owed = int32(float(pool) * progress) - _paid;
-        if (owed <= 0)
+        float const wholeYards = std::floor(_yards);
+        if (wholeYards < 1.0f)
+            return;
+        _yards -= wholeYards;
+
+        uint8 const pop = uint8(std::min<float>(wholeYards, float(stacks)));
+        if (!pop)
             return;
 
-        _paid += owed;
-        DealGapingWoundDamage(caster, target, GetSpellInfo(), uint32(owed));
+        uint8 const newStacks = stacks - pop;
+        _lastStacks = newStacks;
 
-        // SetDuration(0) rather than Remove(): we are inside the owner's aura
-        // update loop here, and Unit::_UpdateSpells sweeps expired auras in a
-        // second pass once that loop has finished.
-        if (_paid >= pool)
+        int32 const owed = OwedFor(pool, newStacks) - _paid;
+        _paid += std::max(owed, 0);
+
+        // The caster may have logged off; the movement still costs stacks, it
+        // just cannot be billed without an attacker to book it against.
+        Unit* caster = GetCaster();
+        if (caster && target->IsAlive() && owed > 0)
+            DealGapingWoundDamage(caster, target, GetSpellInfo(), uint32(owed));
+
+        if (newStacks > 0)
+        {
+            // SetStackAmount rather than ModStackAmount: the latter removes
+            // the aura outright at 0, and we are inside the owner's aura
+            // update loop here. It re-runs CalculateAmount (harmless for a
+            // PERIODIC_DUMMY) and flags the application for a client update,
+            // which is what makes the counter on the debuff drop.
+            SetStackAmount(newStacks);
+        }
+        else
+        {
+            // SetDuration(0) rather than Remove(): Unit::_UpdateSpells sweeps
+            // expired auras in a second pass once this loop has finished.
             SetDuration(0);
+        }
     }
 
     void Register() override
     {
+        AfterEffectApply += AuraEffectApplyFn(spell_t2_gaping_wound_tick::HandleApply, EFFECT_0, SPELL_AURA_PERIODIC_DUMMY, AURA_EFFECT_HANDLE_REAL);
         OnEffectPeriodic += AuraEffectPeriodicFn(spell_t2_gaping_wound_tick::HandlePeriodic, EFFECT_0, SPELL_AURA_PERIODIC_DUMMY);
     }
 
@@ -262,6 +408,7 @@ private:
     float _yards = 0.0f;
     int32 _paid = 0;
     int32 _lastDuration = 0;
+    uint8 _lastStacks = GAPING_WOUND_STACKS;
 };
 
 // 20253 \ 20614 \ 20615 \ 25273 \ 25274 \ 47995 \ 58747 \ 61491 - the Intercept
@@ -331,41 +478,32 @@ private:
     bool _landed = false;
 };
 
-// 90303 - Iron Fists (bare knuckle 3pc): polls the hands once a second and
-// toggles the real buffs. "While your hands are empty" is a state no aura
-// condition can express, so it has to be watched; the same tick also drives the
-// 5pc (90304), which is an inert flag with no poll of its own.
+// 90303 - Iron Fists (bare knuckle 3pc). The carrier is a plain DUMMY now; all
+// the state logic is T2Unarmed::OnEquipmentChanged above. This script only
+// makes sure that evaluator also runs when the CARRIER comes and goes - the
+// set being completed/broken is an equipment change the core sites do not
+// phrase as one - and that losing the carrier strips both buffs.
+//
+// Login is covered: the carrier is a passive, so it is never saved and is
+// re-cast by the set machinery on every login, which lands here. If that
+// happens before the player is in world the evaluator defers to the OnLogin
+// hook below (and the buffs themselves ARE saved auras in the meantime).
 class spell_t2_bareknuckle_state : public AuraScript
 {
     PrepareAuraScript(spell_t2_bareknuckle_state);
 
-    // Add/remove one buff to match a wanted state. Called from inside the
-    // owner's own aura update: Unit::RemoveOwnedAura advances
-    // m_auraUpdateIterator past an entry it erases and AuraEffect::Update ticks
-    // a snapshot of the application list, which is what makes this the shipped
-    // pattern for polled buffs (see spell_t1_fury_speed).
-    static void Toggle(Unit* wearer, uint32 spellId, bool wanted)
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
-        bool const has = wearer->HasAura(spellId);
-        if (wanted && !has)
-            wearer->CastSpell(wearer, spellId, true);
-        else if (!wanted && has)
-            wearer->RemoveAurasDueToSpell(spellId);
-    }
-
-    void HandlePeriodic(AuraEffect const* /*aurEff*/)
-    {
-        Player* player = GetTarget()->ToPlayer();
-        if (!player)
-            return;
-
-        bool const empty = HasEmptyHands(player);
-        Toggle(player, SPELL_T2_IRON_FISTS_BUFF, empty);
-        Toggle(player, SPELL_T2_FLURRY_BLOWS_BUFF, empty && player->HasAura(SPELL_T2_FLURRY_BLOWS_PASSIVE));
+        if (Player* player = GetTarget()->ToPlayer())
+            T2Unarmed::OnEquipmentChanged(player);
     }
 
     void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
+        // The aura is already out of the applied list at this point (Unit::
+        // _UnapplyAura erases first, then runs effect handlers), so the
+        // evaluator sees "no Iron Fists" and strips both buffs. Done by hand
+        // anyway so the contract does not depend on that ordering.
         Unit* wearer = GetTarget();
         wearer->RemoveAurasDueToSpell(SPELL_T2_IRON_FISTS_BUFF);
         wearer->RemoveAurasDueToSpell(SPELL_T2_FLURRY_BLOWS_BUFF);
@@ -373,27 +511,117 @@ class spell_t2_bareknuckle_state : public AuraScript
 
     void Register() override
     {
-        OnEffectPeriodic += AuraEffectPeriodicFn(spell_t2_bareknuckle_state::HandlePeriodic, EFFECT_0, SPELL_AURA_PERIODIC_DUMMY);
-        AfterEffectRemove += AuraEffectRemoveFn(spell_t2_bareknuckle_state::HandleRemove, EFFECT_0, SPELL_AURA_PERIODIC_DUMMY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectApply += AuraEffectApplyFn(spell_t2_bareknuckle_state::HandleApply, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_t2_bareknuckle_state::HandleRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
-// 90305 - Rattling Blow (bare knuckle 8pc): crits stun for 1 sec. The crit
-// filter and the trigger are both data (world.spell_proc HitMask 2 and the
-// carrier's own PROC_TRIGGER_SPELL to 90370); this only guards the hands.
+// 90304 - Flurry of Blows (bare knuckle 5pc). Inert flag; gaining or losing it
+// is the only thing besides the hands that changes the 90369 answer, so it
+// re-runs the same evaluator. Removal is handled by the evaluator too (no
+// 90304 -> no 90369), no hand-stripping needed.
+class spell_t2_bareknuckle_flurry_flag : public AuraScript
+{
+    PrepareAuraScript(spell_t2_bareknuckle_flurry_flag);
+
+    void HandleChange(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (Player* player = GetTarget()->ToPlayer())
+            T2Unarmed::OnEquipmentChanged(player);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(spell_t2_bareknuckle_flurry_flag::HandleChange, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_t2_bareknuckle_flurry_flag::HandleChange, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// Login re-evaluation for the bare knuckle set. Player::_LoadInventory re-casts
+// the set passives before the player is in world, where the evaluator
+// (correctly) refuses to cast; this runs once the player is on its map.
+class t2_unarmed_login : public PlayerScript
+{
+public:
+    t2_unarmed_login() : PlayerScript("t2_unarmed_login") { }
+
+    void OnLogin(Player* player, bool /*firstLogin*/) override
+    {
+        T2Unarmed::OnEquipmentChanged(player);
+    }
+};
+
+// 90305 - Rattling Blow (bare knuckle 8pc): melee crits stun for 1 sec while
+// the hands are empty. The proc FILTER is data (world.spell_proc: ProcFlags
+// 0x14 melee auto-attack + melee-class spells, SpellPhaseMask HIT, HitMask
+// CRITICAL) and the carrier is a PROC_TRIGGER_SPELL -> 90370; this script
+// guards the hands and, since 2026-08-19, performs the stun cast itself
+// (PreventDefaultAction + explicit cast on the proc target) so that every
+// rejection and every cast result is visible under .gm diagnostics
+// customauras. Functionally identical to the core's
+// HandleProcTriggerSpellAuraProc, but observable.
+//
+// Known non-bugs that look like "not working":
+//   - 90370 is Mechanic 12 (stun) and is cast as triggered, so it sits in the
+//     triggered-stun diminishing group (DRTYPE_ALL - creatures too): 1.0 s,
+//     0.5 s, 0.25 s, then IMMUNE until 15 s pass with no stun on the target.
+//     In continuous melee the third crit of a fight is the last one that
+//     stuns. The diag line below prints the resulting duration so this is
+//     not mistaken for a dead proc. If a raw repeatable 1 s stun is wanted,
+//     set 90370 Mechanic to 0 in the DBC (one-line change, design call).
+//   - Target dummies and other stun-immune creatures take no stun at all
+//     (SPELL_MISS_IMMUNE). Test on a player or a regular mob.
 class spell_t2_bareknuckle_stun : public AuraScript
 {
     PrepareAuraScript(spell_t2_bareknuckle_stun);
 
-    bool CheckProc(ProcEventInfo& /*eventInfo*/)
+    bool CheckProc(ProcEventInfo& eventInfo)
     {
         Player* player = GetTarget()->ToPlayer();
-        return player && HasEmptyHands(player);
+        if (!player)
+            return false;
+
+        if (!HasEmptyHands(player))
+        {
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Rattling Blow - crit ignored, hands not empty", player->GetName()));
+            return false;
+        }
+
+        Unit* victim = eventInfo.GetProcTarget();
+        if (!victim || victim == player || !victim->IsAlive())
+            return false;
+
+        return true;
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        // Cast by hand so the result is observable; the core would otherwise
+        // do exactly this in AuraEffect::HandleProcTriggerSpellAuraProc.
+        PreventDefaultAction();
+
+        Unit* warrior = GetTarget();
+        Unit* victim = eventInfo.GetProcTarget();
+        if (!warrior || !victim)
+            return;
+
+        SpellCastResult const result = warrior->CastSpell(victim, SPELL_T2_RATTLING_BLOW_STUN, aurEff);
+
+        int32 landedMs = 0;
+        if (Aura const* stun = victim->GetAura(SPELL_T2_RATTLING_BLOW_STUN, warrior->GetGUID()))
+            landedMs = stun->GetDuration();
+
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Rattling Blow crit on {} - cast result {}, stun on target {} ms{}",
+            warrior->GetName(), victim->GetName(), uint32(result), landedMs,
+            (result == SPELL_CAST_OK && landedMs <= 0) ? " (immune or diminished to 0 - DR/immunity, not a dead proc)" : ""));
     }
 
     void Register() override
     {
         DoCheckProc += AuraCheckProcFn(spell_t2_bareknuckle_stun::CheckProc);
+        OnEffectProc += AuraEffectProcFn(spell_t2_bareknuckle_stun::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
     }
 };
 
@@ -553,8 +781,10 @@ void AddSC_custom_t2_warrior_paladin()
     RegisterSpellScript(spell_t2_gaping_wound_tick);
     RegisterSpellScript(spell_t2_intercept_knockback);
     RegisterSpellScript(spell_t2_bareknuckle_state);
+    RegisterSpellScript(spell_t2_bareknuckle_flurry_flag);
     RegisterSpellScript(spell_t2_bareknuckle_stun);
     RegisterSpellScript(spell_t2_consecration_core);
     RegisterSpellScript(spell_t2_walking_consecration);
     RegisterSpellScript(spell_t2_second_shock);
+    new t2_unarmed_login();
 }

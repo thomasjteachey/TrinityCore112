@@ -54,6 +54,7 @@
 #include "SpellAuras.h"
 #include "SpellHistory.h"
 #include "SpellMgr.h"
+#include "T2SpellHooks.h"
 #include "TemporarySummon.h"
 #include "Totem.h"
 #include "UpdateMask.h"
@@ -3856,6 +3857,7 @@ void Spell::EffectInterruptCast()
     /// @todo not all spells that used this effect apply cooldown at school spells
     // also exist case: apply cooldown to interrupted cast only and to all spells
     // there is no CURRENT_AUTOREPEAT_SPELL spells that can be interrupted
+    bool interruptedSomething = false;
     for (uint32 i = CURRENT_FIRST_NON_MELEE_SPELL; i < CURRENT_AUTOREPEAT_SPELL; ++i)
     {
         if (Spell* spell = unitTarget->GetCurrentSpell(CurrentSpellTypes(i)))
@@ -3868,6 +3870,7 @@ void Spell::EffectInterruptCast()
                 && ((i == CURRENT_GENERIC_SPELL && curSpellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_INTERRUPT)
                 || (i == CURRENT_CHANNELED_SPELL && curSpellInfo->ChannelInterruptFlags & CHANNEL_INTERRUPT_FLAG_INTERRUPT)))
             {
+                interruptedSomething = true;
                 if (Unit* unitCaster = GetUnitCasterForEffectHandlers())
                 {
                     int32 duration = Aura::CalcMaxDuration(m_spellInfo, unitCaster);
@@ -3884,6 +3887,12 @@ void Spell::EffectInterruptCast()
             }
         }
     }
+
+    // T2 Dead Air (90365): the kick landed on someone with nothing interruptible
+    // running - this is the only place that still knows the kick whiffed.
+    if (!interruptedSomething)
+        if (Unit* unitCaster = GetUnitCasterForEffectHandlers())
+            T2SpellHooks::OnInterruptWhileNotCasting(unitCaster, unitTarget);
 }
 
 void Spell::EffectSummonObjectWild()

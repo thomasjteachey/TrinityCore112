@@ -9,15 +9,22 @@
  * the carrier on the caster.
  *
  * Contract for the ids and the intended hooks:
- *   sql/custom/dbc/2026_08_17_00_dbc_t2_set_bonuses.sql
+ *   sql/custom/dbc/2026_08_17_00_dbc_t2_set_bonuses.sql      (carriers/helpers)
+ *   sql/custom/dbc/2026_08_19_04_dbc_t2_shaman_warlock.sql   (Shadow Bolt wrappers
+ *                                                             and clones 90420-90458,
+ *                                                             Legion of One scale)
  * Bindings:
- *   sql/custom/world/2026_08_17_01_world_t2_shaman-warlock.sql
+ *   sql/custom/world/2026_08_17_01_world_t2_shaman-warlock.sql (superseded by)
+ *   sql/custom/world/2026_08_19_04_world_t2_shaman_warlock.sql
+ * Skill-line / create-spell repoints for the wrappers:
+ *   sql/custom/helper/2026_08_19_04_helper_t2_shaman_warlock.sql
  */
 
 #include "ScriptMgr.h"
 #include "Chat.h"
 #include "Pet.h"
 #include "Player.h"
+#include "SharedDefines.h"
 #include "SpellAuraEffects.h"
 #include "SpellHistory.h"
 #include "SpellInfo.h"
@@ -44,6 +51,7 @@ namespace
         // shaman - flame shock set
         SPELL_T2_PYRE_OFFERING          = 90317,   // 8pc carrier
         // warlock - imp set
+        SPELL_T2_FELFLAME_BOLT          = 90318,   // 3pc carrier - Shadow Bolt becomes fire + Firebolt art
         SPELL_T2_LEGION_OF_ONE          = 90320,   // 8pc carrier
         SPELL_T2_LESSER_IMP             = 90375,   // -50% damage done
         // warlock - life tap set
@@ -76,6 +84,24 @@ namespace
             if (sessionPair.second && sessionPair.second->GetPlayer()
                 && sessionPair.second->IsGmDiagnosticEnabled(GmDiagnosticCategory::CustomAuras))
                 ChatHandler(sessionPair.second).SendSysMessage(msg.c_str());
+    }
+
+    // True when `target` is a totem owned by `caster` and `caster` wears one of
+    // the two totem-offering 8pc carriers. This is the SAME predicate that
+    // spell_sha_purge::IsOwnTotemOfferingTarget (spell_shaman.cpp) uses to let
+    // the Purge wrapper's CheckCast accept the friendly totem - the gate lives
+    // there because Spell::CallScriptCheckCastHandlers keeps the first non-OK
+    // result, so a second script cannot override spell_sha_purge's rejection.
+    // Keep the two in sync.
+    bool IsOwnTotemOfferingTarget(Unit const* caster, Unit const* target)
+    {
+        if (!caster || !target || caster->GetTypeId() != TYPEID_PLAYER)
+            return false;
+
+        if (!target->IsTotem() || target->GetOwnerGUID() != caster->GetGUID())
+            return false;
+
+        return caster->HasAura(SPELL_T2_RIMEWARD_OFFERING) || caster->HasAura(SPELL_T2_PYRE_OFFERING);
     }
 
     // Lifted from spell_sha_purge::AddVisiblePurgeCooldown (spell_shaman.cpp),
@@ -170,6 +196,51 @@ namespace
         lesser->SetMaxDuration(LESSER_IMP_LEASE_MS);
         lesser->SetDuration(LESSER_IMP_LEASE_MS);
     }
+
+    // ---------------------------------------------------------------------
+    // Shadow Bolt replacement wrappers (Felflame Bolt 90318).
+    //
+    // One row triple per rank, ids from the shaman-warlock range 90420-90459:
+    //   wrapper      90420 + (rank-1)   what the warlock LEARNS (skill line and
+    //                                   playercreateinfo_spell_custom are
+    //                                   repointed from the original rank to it)
+    //   shadow clone 90433 + (rank-1)   the original rank as an instant, free,
+    //                                   GCD-less spell - shadow school, visual 64
+    //   fire clone   90446 + (rank-1)   same, fire school, Firebolt visual 67
+    // The original 686..47809 rows are untouched (creatures cast them).
+    // ---------------------------------------------------------------------
+    struct ShadowBoltRank
+    {
+        uint32 original;
+        uint32 wrapper;
+        uint32 shadowClone;
+        uint32 fireClone;
+    };
+
+    constexpr std::array<ShadowBoltRank, 13> ShadowBoltRanks =
+    {{
+        {   686, 90420, 90433, 90446 },   // Rank 1
+        {   695, 90421, 90434, 90447 },   // Rank 2
+        {   705, 90422, 90435, 90448 },   // Rank 3
+        {  1088, 90423, 90436, 90449 },   // Rank 4
+        {  1106, 90424, 90437, 90450 },   // Rank 5
+        {  7641, 90425, 90438, 90451 },   // Rank 6
+        { 11659, 90426, 90439, 90452 },   // Rank 7
+        { 11660, 90427, 90440, 90453 },   // Rank 8
+        { 11661, 90428, 90441, 90454 },   // Rank 9
+        { 25307, 90429, 90442, 90455 },   // Rank 10
+        { 27209, 90430, 90443, 90456 },   // Rank 11
+        { 47808, 90431, 90444, 90457 },   // Rank 12
+        { 47809, 90432, 90445, 90458 },   // Rank 13
+    }};
+
+    ShadowBoltRank const* FindShadowBoltRankByWrapper(uint32 wrapperId)
+    {
+        for (ShadowBoltRank const& rank : ShadowBoltRanks)
+            if (rank.wrapper == wrapperId)
+                return &rank;
+        return nullptr;
+    }
 }
 
 // 81324 \ 81325 - the Purge wrappers, carrying both totem offerings: purging
@@ -183,53 +254,49 @@ namespace
 // spell_script_names is a multimap, so both scripts run on the same cast and
 // spell_sha_purge keeps owning the enemy dispel and the Rehgar's Mercy path.
 //
-// TODO(blocked - one line in spell_shaman.cpp): the payload below is complete
-// but unreachable, because spell_sha_purge::CheckMagicDispel rejects every
-// friendly target that is not a Rehgar's Mercy crowd-control cleanse:
-//     if (caster->IsFriendlyTo(target))
-//     {
-//         if (!caster->HasAura(SPELL_SHAMAN_REHGARS_MERCY))
-//             return SPELL_FAILED_BAD_TARGETS;
-//         return HasRehgarsMercyCrowdControl(target) ? SPELL_CAST_OK
-//                                                   : SPELL_FAILED_NOTHING_TO_DISPEL;
-//     }
-// Your own totem is friendly and carries no crowd control, so both arms reject
-// it. A second script CANNOT override that: Spell::CallScriptCheckCastHandlers
-// keeps the FIRST non-OK result (`if (retVal == SPELL_CAST_OK) retVal = ...`),
-// so returning SPELL_CAST_OK from here is ignored regardless of script order.
-// The gate has to open inside CheckMagicDispel itself, before the friendly
-// rejection - an own-totem exception for a wearer of 90314/90317.
+// The live-test failure ("nothing to dispel" on your own totem) was the gate,
+// not this payload: spell_sha_purge::CheckMagicDispel rejected every friendly
+// target that was not a Rehgar's Mercy crowd-control cleanse, and a second
+// script cannot override that (Spell::CallScriptCheckCastHandlers keeps the
+// FIRST non-OK result). The gate now has an own-totem exception
+// (spell_sha_purge::IsOwnTotemOfferingTarget) mirroring the predicate above.
+//
+// Two hooks, on purpose:
+//   OnCast               - the payload. It keys off the explicit target, so it
+//                          runs even on the ~3% "resist" roll the wrapper makes
+//                          against your own totem (MagicSpellHitResult has no
+//                          friendly exemption for a negative spell).
+//   OnEffectLaunchTarget - Effect 0 of the wrapper is SPELL_EFFECT_TRIGGER_SPELL
+//                          (370/8012), and Spell::EffectTriggerSpell fires in the
+//                          LAUNCH_TARGET phase, not at hit. Preventing it here is
+//                          what actually stops the real Purge being thrown at the
+//                          totem (it would fail BAD_TARGETS anyway - 370 is
+//                          enemy-only - but there is no point launching it).
 class spell_t2_purge_offering : public SpellScript
 {
     PrepareSpellScript(spell_t2_purge_offering);
 
-    void HandleOwnTotem(SpellEffIndex effIndex)
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_T2_RIMEWARD_OFFERING, SPELL_T2_PYRE_OFFERING, SPELL_T2_RIMEWARD });
+    }
+
+    void HandleOfferingOnCast()
     {
         Unit* caster = GetCaster();
-        Unit* target = GetHitUnit();
-        if (!caster || !target)
+        Unit* target = GetExplTargetUnit();
+        if (!IsOwnTotemOfferingTarget(caster, target))
             return;
 
         Player* shaman = caster->ToPlayer();
-        if (!shaman)
-            return;
-
         Totem* totem = target->ToTotem();
-        if (!totem || !totem->GetOwner() || totem->GetOwner()->GetGUID() != shaman->GetGUID())
+        if (!shaman || !totem)
             return;
 
         // The two are different 8pc sets, so nobody can wear both; Rimeward
         // wins if the impossible happens, because Pyre would destroy the totem
         // the shield was just put on.
         bool const rimeward = shaman->HasAura(SPELL_T2_RIMEWARD_OFFERING);
-        bool const pyre = !rimeward && shaman->HasAura(SPELL_T2_PYRE_OFFERING);
-        if (!rimeward && !pyre)
-            return;
-
-        // Effect 0 of the wrapper is the TRIGGER_SPELL that fires the real
-        // Purge (370/8012) - a dispel attempt on our own totem is meaningless
-        // and would eat the totem's own aura, so it never runs here.
-        PreventHitDefaultEffect(effIndex);
 
         if (rimeward)
         {
@@ -252,22 +319,142 @@ class spell_t2_purge_offering : public SpellScript
 
         // Delayed by a millisecond on purpose. Totem::UnSummon strips auras
         // from the shaman and clears his totem slot, and we are standing
-        // inside a spell effect handler that is still holding this totem as
-        // its current target; the msTime arm queues a ForcedUnsummonDelayEvent
+        // inside the wrapper's cast that still holds this totem as its
+        // explicit target; the msTime arm queues a ForcedUnsummonDelayEvent
         // instead, so the teardown happens on the creature's own update.
         totem->UnSummon(1);
     }
 
+    void PreventPurgeLaunch(SpellEffIndex effIndex)
+    {
+        if (IsOwnTotemOfferingTarget(GetCaster(), GetHitUnit()))
+            PreventHitDefaultEffect(effIndex);
+    }
+
     void Register() override
     {
-        OnEffectHitTarget += SpellEffectFn(spell_t2_purge_offering::HandleOwnTotem, EFFECT_0, SPELL_EFFECT_TRIGGER_SPELL);
+        OnCast += SpellCastFn(spell_t2_purge_offering::HandleOfferingOnCast);
+        OnEffectLaunchTarget += SpellEffectFn(spell_t2_purge_offering::PreventPurgeLaunch, EFFECT_0, SPELL_EFFECT_TRIGGER_SPELL);
     }
 };
 
+// 90420-90432 - the Shadow Bolt wrappers (one per rank), carrying the imp 3pc
+// Felflame Bolt (90318): "Your Shadow Bolt is now fire damage and uses the
+// Firebolt graphic."
+//
+// Same shape as spell_warr_disarm_wrapper (81492): the wrapper is a DUMMY
+// with the rank's cast time / cost / range / family mask, so every cast-side
+// rule (Bane, Backlash, Shadow Trance, Glyph of Shadow Bolt, haste, pushback,
+// interrupts, school lockout) applies to it exactly as to the original, and
+// the script hands the hit to either clone.
+//
+// The inner cast is deliberately NOT triggered. Two gates stop a triggered
+// Shadow Bolt from proccing anything: Aura::GetProcEffectMask requires the
+// PROC AURA (Improved Shadow Bolt, Shadow Embrace, Soul Leech, Eradication,
+// Everlasting Affliction, every trinket...) to carry
+// SPELL_ATTR3_CAN_PROC_WITH_TRIGGERED, and SpellMgr::CanSpellTriggerProcOnEvent
+// requires the triggering SPELL to carry SPELL_ATTR2/3_TRIGGERED_CAN_TRIGGER_PROC.
+// Putting the attribute on the inner spell satisfies neither, so instead the
+// clones are built instant (CastingTimeIndex 0), free (cost 0) and GCD-less
+// (StartRecovery 0) and are cast with TRIGGERED_NONE: a normal cast whose
+// procs, crits, spell power and charged mods (Empowered Imp) all behave like
+// the original. The wrapper itself carries SPELL_ATTR3_CANT_TRIGGER_PROC (no
+// hit procs from the dummy), SPELL_ATTR3_IGNORE_HIT_RESULT and
+// SPELL_ATTR1_CANT_BE_REFLECTED (one hit roll and one reflect roll per bolt,
+// both on the clone) and SPELL_ATTR0_NEGATIVE_1 (the heuristic would read a
+// dummy as positive). The wrapper's own cast-phase proc is what drops the
+// charge of cast-time mods it consumed (Shadow Trance, Backlash, Backdraft -
+// spell_proc PROC_ATTR_REQ_SPELLMOD); the clones have CastingTimeIndex 0 so
+// CalcCastTime never registers those mods a second time.
+//
+// Casting a non-triggered spell from inside another spell's hit is an
+// established pattern here (spell_gen_cannibalize, spell_gen_mounted_charge):
+// Unit::SetCurrentCastSpell cannot cancel the wrapper because it is
+// m_executedCurrently, and the clone simply takes over the GENERIC slot in
+// DELAYED state, exactly where the original's missile would have been.
+class spell_t2_shadow_bolt_wrapper : public SpellScript
+{
+    PrepareSpellScript(spell_t2_shadow_bolt_wrapper);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        std::vector<uint32> ids = { SPELL_T2_FELFLAME_BOLT };
+        for (ShadowBoltRank const& rank : ShadowBoltRanks)
+        {
+            ids.push_back(rank.wrapper);
+            ids.push_back(rank.shadowClone);
+            ids.push_back(rank.fireClone);
+        }
+        return ValidateSpellInfo(ids);
+    }
+
+    bool Load() override
+    {
+        _rank = FindShadowBoltRankByWrapper(GetSpellInfo()->Id);
+        return _rank != nullptr;
+    }
+
+    // The wrapper is shadow (it inherits the rank's SchoolMask, so a shadow
+    // lockout still blocks it, and school-based cost mods still see shadow).
+    // A Felflame wearer's bolt lands as fire, though, and SpellHistory::IsReady
+    // would reject the fire clone after the cast time had already been spent.
+    // Fail up front instead, the same way the original fails on its own school.
+    SpellCastResult CheckFireLockout()
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !caster->HasAura(SPELL_T2_FELFLAME_BOLT))
+            return SPELL_CAST_OK;
+
+        if (SpellHistory const* history = caster->GetSpellHistory())
+            if (history->IsSchoolLocked(SPELL_SCHOOL_MASK_FIRE))
+                return SPELL_FAILED_NOT_READY;
+
+        return SPELL_CAST_OK;
+    }
+
+    void HandleDummy(SpellEffIndex effIndex)
+    {
+        PreventHitDefaultEffect(effIndex);
+
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target || !_rank)
+            return;
+
+        // The wrapper can only be reflected if its dbc row lost
+        // SPELL_ATTR1_CANT_BE_REFLECTED; never bolt yourself regardless.
+        if (target == caster)
+            return;
+
+        bool const felflame = caster->HasAura(SPELL_T2_FELFLAME_BOLT);
+        uint32 const innerId = felflame ? _rank->fireClone : _rank->shadowClone;
+
+        // TRIGGERED_NONE on purpose - see the class comment. The clone is
+        // instant, free and GCD-less by data, so the only things a normal cast
+        // re-checks here (range, LoS, facing, lockout) were just verified for
+        // the wrapper with identical fields.
+        caster->CastSpell(target, innerId, CastSpellExtraArgs(TRIGGERED_NONE));
+
+        if (felflame)
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Felflame Bolt - Shadow Bolt rank {} -> fire clone {} at {}",
+                caster->GetName(), uint32(_rank - ShadowBoltRanks.data()) + 1, innerId, target->GetName()));
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(spell_t2_shadow_bolt_wrapper::CheckFireLockout);
+        OnEffectHitTarget += SpellEffectFn(spell_t2_shadow_bolt_wrapper::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+
+    ShadowBoltRank const* _rank = nullptr;
+};
+
 // 90320 - Legion of One (imp 8pc). The imp form is pure data (effect 1 is a
-// TRANSFORM to creature 416 and the carrier gained CASTABLE_WHILE_MOUNTED so
-// the form can still mount); effect 0 is the one-second poll the dbc file
-// reserved for the shared-death check.
+// TRANSFORM to creature 416, effect 2 (added 2026-08-19) is MOD_SCALE +100%
+// so the form is twice the imp's size, and the carrier gained
+// CASTABLE_WHILE_MOUNTED so the form can still mount); effect 0 is the
+// one-second poll the dbc file reserved for the shared-death check.
 //
 // What the poll does today is keep Lesser Imp (90375) leased onto the imp, so
 // the halving tracks the set: equipping the 8pc with the imp already out halves
@@ -393,13 +580,12 @@ class spell_t2_mana_equilibrium : public AuraScript
 // Mana Feed (32553) is deliberately left alone: it is a percentage of the tap
 // taken before this doubling, and it is the pet's cut, not the warlock's.
 //
-// TODO(core): the other half of 90322 - "no mana regeneration by any means but
-// Life Tap" - is only half data. Effect 1 is SPELL_AURA_PREVENT_REGENERATE_POWER
-// for POWER_MANA, which Player::Regenerate honours, so passive and Spirit regen
-// are already dead. Every other source (potions, runes, Innervate, Mana Spring,
-// Replenishment, Shadowfiend) arrives through Unit::EnergizeBySpell, which has
-// no script seam - it needs a guard there that lets 31818/32553 through and
-// zeroes POWER_MANA gains for anyone carrying 90322.
+// The other half of 90322 - "no mana regeneration by any means but Life Tap" -
+// is core: effect 1 of the carrier is SPELL_AURA_PREVENT_REGENERATE_POWER for
+// POWER_MANA (Player::Regenerate), and T2UnitHooks::BlocksManaGain zeroes every
+// other POWER_MANA gain in Unit::EnergizeBySpell / Player::Regenerate while
+// letting 31818 (and Life Tap itself) through. The doubled value below still
+// arrives via Spell::EffectEnergize -> EnergizeBySpell(31818), so it passes.
 class spell_t2_blood_for_power : public SpellScript
 {
     PrepareSpellScript(spell_t2_blood_for_power);
@@ -428,6 +614,7 @@ class spell_t2_blood_for_power : public SpellScript
 void AddSC_custom_t2_shaman_warlock()
 {
     RegisterSpellScript(spell_t2_purge_offering);
+    RegisterSpellScript(spell_t2_shadow_bolt_wrapper);
     RegisterSpellScript(spell_t2_imp_legion);
     RegisterSpellScript(spell_t2_imp_legion_summon);
     RegisterSpellScript(spell_t2_mana_equilibrium);

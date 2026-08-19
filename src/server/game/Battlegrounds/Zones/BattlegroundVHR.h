@@ -4,12 +4,17 @@
  *
  * A party of up to ten queues together and fights waves of "Dark <name>" clones
  * released from the Violet Hold's prison cells. Wave 1 fields as many clones as
- * there are players; every cleared wave adds a QUARTER of a clone, expressed as
- * one extra clone carrying the Diminished debuff at 75, 50 or 25 stacks before
- * it finally joins at full strength on the fourth step. See
- * BG_VHR_QUARTERS_PER_CLONE for the table. Clearing continues until a wave would
- * need more than BG_VHR_MAX_ENEMIES clones, at which point the party has won -
- * which is not expected to happen.
+ * there are players, and the wave grows in two phases. Through
+ * BG_VHR_QUARTER_RAMP_LAST_WAVE every cleared wave adds a QUARTER of a clone,
+ * expressed as one extra clone carrying the Diminished debuff at 75, 50 or 25
+ * stacks before it finally joins at full strength on the fourth step; from the
+ * wave after that it is one WHOLE clone per wave and there is no partial one.
+ * See BG_VHR_QUARTERS_PER_CLONE for the table. Clearing continues until a wave
+ * would need more than BG_VHR_MAX_ENEMIES clones, at which point the party has
+ * won - reached after clearing wave 46 with a full ten, 51 with five, 55 solo.
+ * Deeper waves also reinforce every clone that is not a copy of a party member
+ * (BG_VHR_REINFORCE_FROM_WAVE), while clones OF a party member carry that
+ * member's boons.
  *
  * Three things make this different from the other custom battlegrounds here:
  *
@@ -141,6 +146,12 @@ enum BG_VHR_Constants
     // Alive counts and the wipe check run on this timer rather than every tick.
     BG_VHR_STATE_CHECK_INTERVAL = 500,
 
+    // The fall-through sweep (see BG_VHR_MIN_SAFE_Z) runs on this timer, and -
+    // unlike the state check - from the moment the party is put down, not only
+    // once the gates open. Half a second of free fall from the floor is well
+    // short of the map's MinHeight, so nothing slips past between sweeps.
+    BG_VHR_FLOOR_CHECK_INTERVAL = 500,
+
     // Chance per wave of each special composition, in tenths of a percent, so
     // 25 is 2.5%. Rolled against urand(0, 999) in the order declared here.
     BG_VHR_MONO_WAVE_CHANCE_PERMILLE   = 25,
@@ -159,11 +170,25 @@ enum BG_VHR_Constants
     //   wave 3  party + a 50%-power clone   wave 7  party + 1 + a 50% clone
     //   wave 4  party + a 75%-power clone   ...
     //
+    //   wave 21 party + 5    wave 22 party + 6    wave 23 party + 7 ...
+    //
     // The partial clone is held back by the Diminished debuff, whose stack
     // count is the percentage taken off its size, health, damage and healing -
     // so a clone at 25% power carries 75 stacks.
+    //
+    // That quarter-step ramp only runs to BG_VHR_QUARTER_RAMP_LAST_WAVE. From
+    // the wave after it the curve is a WHOLE extra clone per wave and there is
+    // no partial one any more, so a deep run climbs to the BG_VHR_MAX_ENEMIES
+    // finish in tens of waves rather than hundreds.
     BG_VHR_QUARTERS_PER_CLONE = 4,
     BG_VHR_SPELL_DIMINISHED   = 90201,
+    BG_VHR_QUARTER_RAMP_LAST_WAVE = 20,
+
+    // Past this wave every clone that is NOT a copy of a party member walks in
+    // carrying BG_VHR_SPELL_REINFORCED at (wave - this) stacks - +5% Stamina
+    // each. Party copies are left alone: they already scale with the party.
+    BG_VHR_REINFORCE_FROM_WAVE = 30,
+    BG_VHR_SPELL_REINFORCED   = 90298,
 
     // Clearing a wave drops powerups on the floor: one per this many players,
     // rounded UP, so even a solo run gets one and a full ten gets four.
@@ -207,6 +232,16 @@ enum BG_VHR_Constants
     // climb, not from anyone sitting the rest of it out.
     BG_VHR_WAVE_END_REZ_PERCENT = 75
 };
+
+// Nothing in the Hold is walkable this low. The chamber floor sits at z 38 and
+// the bed of Ichoron's flooded cell - the lowest ground anyone can be on - at
+// 31, while the map's own MinHeight, where the stock under-map check fires
+// (MovementHandler for players, the playerbot lifecycle tick for bots), is
+// hundreds of yards further down: someone who had clipped through the floor
+// would fall for seconds before the engine noticed, and a clone doing it
+// mid-wave would stall the run. Anyone below this has fallen out of the map
+// and is put back by RescueFallenPlayers.
+constexpr float BG_VHR_MIN_SAFE_Z = 20.0f;
 
 // Which characters a wave's clones are copied from. Every wave is made of
 // clones either way; these only change how the sources are chosen.
@@ -320,6 +355,9 @@ public:
     // Reincarnation are the intended way back mid-wave, and
     // ResurrectWaveCasualties is the guaranteed one at the end of it.
     bool AllowsCorpseReclaim() const override { return false; }
+    // Puts a fallen player back on valid ground (see GetRescuePosition).
+    // Reached from the engine's MinHeight check and, well before that, from
+    // the battleground's own BG_VHR_MIN_SAFE_Z sweep.
     bool HandlePlayerUnderMap(Player* player) override;
     void EndBattleground(uint32 winner) override;
 
@@ -387,6 +425,16 @@ private:
     void CheckRunState();
     void TeleportSurvivorsToGurubashi();
 
+    // Fall-through guard: everyone in the instance below BG_VHR_MIN_SAFE_Z is
+    // handed to HandlePlayerUnderMap. Runs on BG_VHR_FLOOR_CHECK_INTERVAL from
+    // PostUpdateImpl, countdown included.
+    void RescueFallenPlayers();
+    // Where someone who has fallen out of the map is put back: the start
+    // landing before the gates open, the middle of the chamber floor after,
+    // and for a clone still behind its cell door the release point of the
+    // nearest cell in use, so a fall cannot let it out early.
+    Position GetRescuePosition(Player const* player) const;
+
     uint32 CountAliveHumans() const;
     // Denominator for the players readout - the party size the run started
     // with, or the live head count before that is fixed.
@@ -396,8 +444,9 @@ private:
     uint32 GetEnemyCountForWave(uint32 wave) const;
     // Full-strength clones only, ignoring the partial one.
     uint32 GetFullStrengthCountForWave(uint32 wave) const;
-    // Diminished stacks for the wave's partial clone, 0 when the wave is made
-    // entirely of full-strength clones (every fourth wave).
+    // Diminished stacks for the wave's partial clone. 0 when the wave is made
+    // entirely of full-strength clones: every fourth wave during the quarter
+    // ramp, and every wave past BG_VHR_QUARTER_RAMP_LAST_WAVE.
     static uint8 GetPartialCloneStacks(uint32 wave);
 
     // Menagerie: summon each holder's guardians as the cells open, take the
@@ -431,9 +480,11 @@ private:
     uint32 _humanTeam;
     uint32 _enemyTeam;
 
-    // Party size captured when the gates first open. Wave N fields _partySize
-    // full clones plus a quarter of a clone per wave elapsed, so this fixes the
-    // whole difficulty curve and must not drift when someone dies or leaves.
+    // Party size captured when the gates first open. Every wave is sized from
+    // it - a quarter of a clone per wave elapsed up to
+    // BG_VHR_QUARTER_RAMP_LAST_WAVE, a whole one per wave after that - so this
+    // fixes the whole difficulty curve and must not drift when someone dies or
+    // leaves.
     uint32 _partySize;
 
     // Counts down while dropped powerups are on the floor; 0 means none are
@@ -449,6 +500,7 @@ private:
     // fires once per second instead of once per tick.
     uint32 _lastCountdownSecond;
     uint32 _stateCheckTimerMs;
+    uint32 _floorCheckTimerMs;
 
     // Cells in use by the current wave, as BG_VHR_OBJECT_* indices.
     std::vector<uint32> _waveCells;

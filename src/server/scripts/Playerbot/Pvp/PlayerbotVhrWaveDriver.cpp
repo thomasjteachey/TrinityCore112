@@ -26,6 +26,7 @@
 #include "Player.h"
 #include "PlayerbotObcClone.h"
 #include "PlayerbotRandomBotParticipation.h"
+#include "VioletHoldBoons.h"
 #include "Random.h"
 #include "SharedDefines.h"
 #include "SpellAuras.h"
@@ -202,6 +203,30 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
             TC_LOG_WARN("playerbot", "PlayerbotVhrWaveDriver: failed to clone {} for wave {} of instance {}.",
                 source->GetName(), waveNumber, bg->GetInstanceID());
             continue;
+        }
+
+        // A clone of a party member is that member, boons included - the
+        // clone manager copies the spellbook and gear but wipes auras.
+        if (isActualHuman)
+            VioletHoldBoons::CopyBoonsTo(source, clone);
+
+        // Deep waves reinforce everything that is NOT a party copy: +5%
+        // Stamina per wave past BG_VHR_REINFORCE_FROM_WAVE, so the bot-sourced
+        // ranks keep pace once the count alone stops being the difficulty.
+        if (!isActualHuman && waveNumber > BG_VHR_REINFORCE_FROM_WAVE)
+        {
+            uint32 const stacks = std::min<uint32>(waveNumber - BG_VHR_REINFORCE_FROM_WAVE, 255);
+            if (Aura* reinforced = clone->AddAura(BG_VHR_SPELL_REINFORCED, clone))
+            {
+                reinforced->SetStackAmount(uint8(stacks));
+                // The clone was filled up before this landed, and a percentage
+                // stat aura raises the MAXIMUM without touching the current
+                // value - so top it up or the wave walks out already hurt.
+                clone->SetFullHealth();
+            }
+            else
+                TC_LOG_WARN("playerbot", "PlayerbotVhrWaveDriver: could not reinforce {} for wave {} of instance {}.",
+                    clone->GetName(), waveNumber, bg->GetInstanceID());
         }
 
         // The wave's trailing clone is usually a partial one - the difficulty

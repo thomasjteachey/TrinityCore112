@@ -293,29 +293,6 @@ will pick up consumables like 28273 Bloodthistle that share the aura pair.
 | deployed | mirror + all 3 `data/dbc` + `patch-enUS-8` v1.00213 + `patch-enUS-T-test` v1.00012 |
 | client display rows (CDI 40000-40002, CMD 4000-4002, GODI 11000/11001, Vehicle/VehicleSeat) | stock lineage in `patch-enUS-8` v1.00242 AND F lineage inside `hd-creatures.zip` v1.00004 (2026-08-16); pulled out of `patch-Y` (v1.00014) after the HD-off incident (§4). Any future row must again go to BOTH |
 
-**BLOCKED:** 90216 has **no `SkillLineAbility` row**, so `.learn` succeeds but it
-never appears in a spellbook. Needs a row in `dbc.skilllineability_lplus`
-(next free id after 22016) with a `SkillLine` + `ClassMask` — *undecided who
-should be able to cast it*. Then regenerate `SkillLineAbility.dbc` via dbcgen
-and publish to both streams. **Prod also needs a worldserver restart** to load
-the new `Spell.dbc`.
-
-### Rotar's Battlegear (done)
-
-Entries 100664–100671, displays 68835–68842, ItemSet 1045, textures tagged
-`_Superwofl` (misspelling is load-bearing — renaming orphans the art).
-Enhancement set: Strength 149, Stamina 127, Intellect 64, spell power 75
-(vs Stormdancer the elemental set at 104), all ilvl 66.
-
-### Diminished debuff
-
-Spell **90201** (+ helper 90202), used by Violet Hold clones via
-`PlayerbotVhrWaveDriver.cpp:166`. Stacks = percentage removed. Base points are
-PER STACK (`AuraEffect::CalculateAmount` multiplies by stack count after script
-handlers). As of 2026-08-12 it carries `SpellVisualID_1 = 15457` — the Tabard of
-the Lightbringer glow — so shrunken clones are findable.
-
----
 
 ## 8. Open items
 
