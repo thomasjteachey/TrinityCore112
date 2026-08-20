@@ -121,6 +121,7 @@ namespace
         SPELL_T2_VENOM_SUSTENANCE_HEAL  = 90520,   // SPELL_EFFECT_HEAL, bp at runtime
         SPELL_T2_RUPTURING_VENOM_FX     = 90519,   // visual-only: Envenom's burst on the victim
         SPELL_T2_COLD_BLOOD_BUFF        = 90521,   // exact clone of the stock 14177 crit buff
+        SPELL_T2_COLDER_BLOOD_BUFF      = 90539,   // 90521 with the crit spellmod swapped for a proc firing 90391
         // (90522 was the block's LoS aura when the tomb was a creature; the
         //  DBC row remains but nothing references it since 2026-08-20)
 
@@ -150,11 +151,6 @@ namespace
     constexpr uint32 DEADLY_POISON_FAMILY_MASK_0 = 0x10000;
     constexpr uint32 DEADLY_POISON_FAMILY_MASK_1 = 0x80000;
     constexpr uint8  DEADLY_POISON_RUPTURE_STACKS = 5;
-
-    // Colder Blood: the root is cast on the current selection, which no range
-    // check of the self-cast wrapper ever covered. 90391 itself has RangeIndex
-    // 13 ("anywhere"), so the reach is pinned here.
-    constexpr float COLDER_BLOOD_ROOT_RANGE = 30.0f;
 
     // Ice Skate trail: one patch per this many yards of movement. The REAL
     // limiter used to be the 250 ms tick of 90517's periodic - at +45% speed
@@ -504,19 +500,27 @@ private:
 // from "apply the crit buff" to DUMMY). Without the 8pc it casts 90521, an
 // exact clone of the stock buff (crit guarantee, consumed by the next
 // finisher, 3 min cooldown that starts when the buff is used). With Colder
-// Blood (90350) it instead roots the current selection with 90391 and the
-// 3 min cooldown starts at once.
+// Blood (90350) it casts 90539 instead, which is that same buff with the crit
+// spellmod swapped for a proc that fires the root 90391 at whatever the next
+// qualifying ability hits.
+//
+// The 2026-08-20 rework: the 8pc used to root the current selection the instant
+// the button was pressed. That is not what the bonus is for - it should read
+// like Cold Blood, a buff you arm and then spend on your next Sinister Strike,
+// Backstab, Ambush or Eviscerate, with the root replacing the guaranteed crit.
+// Keeping it a buff also removes the target, range and LoS checks a self-cast
+// wrapper had no business performing.
 //
 // Cooldown plumbing: 14177 keeps SPELL_ATTR0_DISABLED_WHILE_ACTIVE, so
 // SpellHistory::HandleCooldowns never starts its cooldown from the cast and
 // the client waits for SMSG_COOLDOWN_EVENT instead of a local timer. The buff
-// clone 90521 has that attribute STRIPPED (it is never cast directly, so the
+// clones have that attribute STRIPPED (they are never cast directly, so the
 // core's own hold/release on the buff's id would only be noise); instead
-//   * spell_t2_icefang_cold_blood_cd on 90521 puts 14177 on hold when the
-//     buff is applied and releases it (event + live 3 min) when the buff goes
-//     away - the same two SpellHistory calls Aura::_ApplyForTarget /
-//     _UnapplyForTarget made for the stock 14177;
-//   * the root branch has no buff, so the wrapper releases itself right away.
+// spell_t2_icefang_cold_blood_cd rides BOTH 90521 and 90539 and puts 14177 on
+// hold when the buff is applied, releasing it (event + live 3 min) when the
+// buff goes away - the same two SpellHistory calls Aura::_ApplyForTarget /
+// _UnapplyForTarget made for the stock 14177. Both branches now have a buff,
+// so the old "root branch releases itself right away" special case is gone.
 // Nothing here touches the caster's aura containers.
 class spell_t2_icefang_cold_blood_wrapper : public SpellScript
 {
@@ -524,26 +528,7 @@ class spell_t2_icefang_cold_blood_wrapper : public SpellScript
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ SPELL_T2_COLD_BLOOD_BUFF, SPELL_T2_COLDER_BLOOD_ROOT });
-    }
-
-    // The root needs a target the self-cast wrapper never asked for; refuse
-    // the cast up front (no cooldown, no GCD) rather than eat the press.
-    SpellCastResult CheckRootTarget()
-    {
-        Unit* caster = GetCaster();
-        Player* rogue = caster ? caster->ToPlayer() : nullptr;
-        if (!rogue || !rogue->HasAura(SPELL_T2_COLDER_BLOOD))
-            return SPELL_CAST_OK;
-
-        Unit* victim = rogue->GetSelectedUnit();
-        if (!victim || !rogue->IsValidAttackTarget(victim))
-            return SPELL_FAILED_BAD_TARGETS;
-        if (!rogue->IsWithinDistInMap(victim, COLDER_BLOOD_ROOT_RANGE))
-            return SPELL_FAILED_OUT_OF_RANGE;
-        if (!rogue->IsWithinLOSInMap(victim))
-            return SPELL_FAILED_LINE_OF_SIGHT;
-        return SPELL_CAST_OK;
+        return ValidateSpellInfo({ SPELL_T2_COLD_BLOOD_BUFF, SPELL_T2_COLDER_BLOOD_BUFF });
     }
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
@@ -553,33 +538,28 @@ class spell_t2_icefang_cold_blood_wrapper : public SpellScript
         if (!rogue)
             return;
 
-        if (!rogue->HasAura(SPELL_T2_COLDER_BLOOD))
-        {
-            rogue->CastSpell(rogue, SPELL_T2_COLD_BLOOD_BUFF, true);
-            return;
-        }
+        // BOTH branches are a self-buff consumed by the next Sinister Strike,
+        // Backstab, Ambush or Eviscerate; the 8pc only changes what consuming it
+        // DOES. 90539 is 90521 with the crit spellmod (aura 107, SPELLMOD_CRITICAL_
+        // CHANCE) replaced by a proc that fires the root 90391 at whatever the
+        // rogue hit, so it keeps the same spell-class mask, the same single charge
+        // and the same duration - and therefore the same cooldown plumbing, since
+        // spell_t2_icefang_cold_blood_cd rides both buff ids.
+        //
+        // It used to root the current selection the instant the button was pressed,
+        // which is why it needed a target, a range and a LoS check that a self-cast
+        // wrapper had no business doing. None of that applies to a buff.
+        bool const colder = rogue->HasAura(SPELL_T2_COLDER_BLOOD);
+        rogue->CastSpell(rogue, colder ? SPELL_T2_COLDER_BLOOD_BUFF : SPELL_T2_COLD_BLOOD_BUFF, true);
 
-        // Re-validated: CheckCast ran when the press arrived, this runs when
-        // the (instant) cast executes - same frame, but cheap to be sure.
-        Unit* victim = rogue->GetSelectedUnit();
-        if (!victim || !rogue->IsValidAttackTarget(victim)
-            || !rogue->IsWithinDistInMap(victim, COLDER_BLOOD_ROOT_RANGE) || !rogue->IsWithinLOSInMap(victim))
-            return;
-
-        rogue->CastSpell(victim, SPELL_T2_COLDER_BLOOD_ROOT, true);
-
-        // No buff to wait for: release the wrapper's cooldown now. The wrapper
-        // is IsCooldownStartedOnEvent, so its own Spell::SendSpellCooldown is
-        // a no-op and cannot overwrite this with a held entry afterwards.
-        rogue->GetSpellHistory()->SendCooldownEvent(GetSpellInfo());
-
-        SendCustomAuraDiag(Trinity::StringFormat(
-            "[CustomAuras] {}: Colder Blood rooted {}", rogue->GetName(), victim->GetName()));
+        if (colder)
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Colder Blood armed - next finisher roots instead of critting",
+                rogue->GetName()));
     }
 
     void Register() override
     {
-        OnCheckCast += SpellCheckCastFn(spell_t2_icefang_cold_blood_wrapper::CheckRootTarget);
         OnEffectHit += SpellEffectFn(spell_t2_icefang_cold_blood_wrapper::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
     }
 };
