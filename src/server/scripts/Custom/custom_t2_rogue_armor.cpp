@@ -83,6 +83,7 @@
 #include "WorldSession.h"
 
 #include <algorithm>
+#include <cmath>
 #include <atomic>
 #include <mutex>
 #include <unordered_map>
@@ -428,18 +429,56 @@ class spell_t2_icefang_ice_skate : public AuraScript
         if (!rogue || !rogue->IsAlive() || !rogue->IsInWorld())
             return;
 
-        // Distance-gated, not tick-gated: a rogue who stops drops nothing and
-        // stacks nothing, a rogue at full speed drops roughly one per tick.
-        if (_hasLast && rogue->GetExactDist2d(_lastX, _lastY) < ICE_TRAIL_STEP_YARDS)
-            return;
-        _lastX = rogue->GetPositionX();
-        _lastY = rogue->GetPositionY();
-        _hasLast = true;
+        float const x = rogue->GetPositionX();
+        float const y = rogue->GetPositionY();
 
+        if (!_hasLast)
+        {
+            _lastX = x;
+            _lastY = y;
+            _hasLast = true;
+            rogue->CastSpell(rogue->GetPosition(), SPELL_T2_ICE_TRAIL_PATCH, true);
+            return;
+        }
+
+        float const dx = x - _lastX;
+        float const dy = y - _lastY;
+        float const dist = std::sqrt(dx * dx + dy * dy);
+        if (dist < ICE_TRAIL_STEP_YARDS)
+            return;                       // stopped or barely moved: no drops
+
+        // A teleport (Blink, .go, arena start) must not paint a line across
+        // the map; just move the anchor.
+        if (dist > 40.0f)
+        {
+            _lastX = x;
+            _lastY = y;
+            return;
+        }
+
+        // Lay patches every STEP yards ALONG the segment travelled since the
+        // last drop, not one patch per tick. The nominal 125 ms period is
+        // quantized to whatever the map update actually delivers, so per-tick
+        // drops space themselves by server load and movement speed; per-yard
+        // interpolation makes the spacing a geometric guarantee instead. The
+        // step cap only matters in pathological ticks (a 10-yard tick is
+        // already 8 patches).
+        //
         // Explicit destination (90518 keeps Frost Trap Aura's TARGET_FLAG_DEST
         // _LOCATION, so the dest survives InitExplicitTargets). Triggered, so
         // no GCD, no stealth break, no cooldown.
-        rogue->CastSpell(rogue->GetPosition(), SPELL_T2_ICE_TRAIL_PATCH, true);
+        float const ux = dx / dist;
+        float const uy = dy / dist;
+        int const steps = std::min(int(dist / ICE_TRAIL_STEP_YARDS), 8);
+        for (int i = 1; i <= steps; ++i)
+        {
+            Position at(_lastX + ux * ICE_TRAIL_STEP_YARDS * float(i),
+                        _lastY + uy * ICE_TRAIL_STEP_YARDS * float(i),
+                        rogue->GetPositionZ(), rogue->GetOrientation());
+            rogue->CastSpell(at, SPELL_T2_ICE_TRAIL_PATCH, true);
+        }
+        _lastX += ux * ICE_TRAIL_STEP_YARDS * float(steps);
+        _lastY += uy * ICE_TRAIL_STEP_YARDS * float(steps);
     }
 
     void Register() override

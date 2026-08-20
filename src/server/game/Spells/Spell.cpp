@@ -197,9 +197,21 @@ namespace
         return unit->ToTotem()->IsFireTotem();
     }
 
-    bool ShouldSpellStartCombat(SpellInfo const* spellInfo, Unit const* originalCaster, WorldObject const* caster)
+    bool ShouldSpellStartCombat(SpellInfo const* spellInfo, Unit const* originalCaster, WorldObject const* caster,
+                                SpellInfo const* triggeredByAura = nullptr)
     {
         if (IsNoCombatSpell(spellInfo))
+            return false;
+
+        // A spell that exists only because a no-combat aura ticked inherits that
+        // exemption. Frost Trap Aura (13810) is listed above, but every pulse it
+        // casts Dummy Trigger (18350) at the enemies standing in the slick, and
+        // 18350 is a shared generic that cannot simply be added to the list
+        // without exempting unrelated users of it. Without this the trap kept
+        // re-establishing combat on every tick for the whole 30s duration, so
+        // the hunter never dropped out of it - the exemption stopped the fight
+        // STARTING but nothing stopped it being renewed.
+        if (triggeredByAura && IsNoCombatSpell(triggeredByAura))
             return false;
 
         if (!ShouldTotemSpellStartCombat(originalCaster))
@@ -2598,7 +2610,7 @@ void Spell::TargetInfo::PreprocessTarget(Spell* spell)
     else if (MissCondition == SPELL_MISS_REFLECT && ReflectResult == SPELL_MISS_NONE)
         _spellHitTarget = spell->m_caster->ToUnit();
 
-    if (spell->m_originalCaster && MissCondition != SPELL_MISS_EVADE && !spell->m_originalCaster->IsFriendlyTo(unit) && (!spell->m_spellInfo->IsPositive() || spell->m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (spell->m_spellInfo->HasInitialAggro() || unit->IsEngaged()) && !spell->m_spellInfo->IsMindVision() && ShouldSpellStartCombat(spell->m_spellInfo, spell->m_originalCaster, spell->m_caster))
+    if (spell->m_originalCaster && MissCondition != SPELL_MISS_EVADE && !spell->m_originalCaster->IsFriendlyTo(unit) && (!spell->m_spellInfo->IsPositive() || spell->m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (spell->m_spellInfo->HasInitialAggro() || unit->IsEngaged()) && !spell->m_spellInfo->IsMindVision() && ShouldSpellStartCombat(spell->m_spellInfo, spell->m_originalCaster, spell->m_caster, spell->GetTriggeredByAuraSpell()))
     {
         // Combat diagnostic: this is why a missed/resisted/dodged hostile cast
         // can still re-enter combat with zero damage recorded -- combat entry
@@ -2904,7 +2916,7 @@ void Spell::TargetInfo::DoDamageAndTriggers(Spell* spell)
         {
             if (Unit* unitCaster = spell->m_caster->ToUnit())
             {
-                if (ShouldSpellStartCombat(spell->m_spellInfo, spell->m_originalCaster, spell->m_caster))
+                if (ShouldSpellStartCombat(spell->m_spellInfo, spell->m_originalCaster, spell->m_caster, spell->GetTriggeredByAuraSpell()))
                     unitCaster->AtTargetAttacked(unit, spell->m_spellInfo->HasInitialAggro());
             }
 
@@ -5582,7 +5594,7 @@ void Spell::HandleThreatSpells()
     if (!unitCaster)
         return;
 
-    if (!ShouldSpellStartCombat(m_spellInfo, m_originalCaster, m_caster))
+    if (!ShouldSpellStartCombat(m_spellInfo, m_originalCaster, m_caster, GetTriggeredByAuraSpell()))
         return;
 
     if (m_UniqueTargetInfo.empty())
@@ -8488,7 +8500,7 @@ void Spell::PreprocessSpellLaunch(TargetInfo& targetInfo)
         return;
 
     // This will only cause combat - the target will engage once the projectile hits (in Spell::TargetInfo::PreprocessTarget)
-    if (m_originalCaster && targetInfo.MissCondition != SPELL_MISS_EVADE && !m_originalCaster->IsFriendlyTo(targetUnit) && (!m_spellInfo->IsPositive() || m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (m_spellInfo->HasInitialAggro() || targetUnit->IsEngaged()) && !m_spellInfo->IsMindVision() && ShouldSpellStartCombat(m_spellInfo, m_originalCaster, m_caster))
+    if (m_originalCaster && targetInfo.MissCondition != SPELL_MISS_EVADE && !m_originalCaster->IsFriendlyTo(targetUnit) && (!m_spellInfo->IsPositive() || m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (m_spellInfo->HasInitialAggro() || targetUnit->IsEngaged()) && !m_spellInfo->IsMindVision() && ShouldSpellStartCombat(m_spellInfo, m_originalCaster, m_caster, GetTriggeredByAuraSpell()))
         m_originalCaster->SetInCombatWith(targetUnit, true);
 
     Unit* unit = nullptr;
