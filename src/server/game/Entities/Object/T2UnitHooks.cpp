@@ -438,8 +438,14 @@ namespace T2UnitHooks
             return damage;
 
         // Consecration only. Cheapest discriminator first: the aura has to be
-        // owned by a dynobject at all, which almost nothing is.
-        DynamicObject* dynObj = aurEff->GetBase() ? aurEff->GetBase()->GetDynobjOwner() : nullptr;
+        // owned by a dynobject at all, which almost nothing is. The type check
+        // is load-bearing, not style: GetDynobjOwner() ASSERTS on any other
+        // aura type instead of returning null, and every plain unit DoT tick
+        // in the game passes through here.
+        Aura* base = aurEff->GetBase();
+        if (!base || base->GetType() != DYNOBJ_AURA_TYPE)
+            return damage;
+        DynamicObject* dynObj = base->GetDynobjOwner();
         if (!dynObj)
             return damage;
 
