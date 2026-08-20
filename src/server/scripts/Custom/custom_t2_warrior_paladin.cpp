@@ -61,7 +61,15 @@ namespace
         SPELL_T2_IRON_FISTS_PASSIVE     = 90303,
         SPELL_T2_FLURRY_BLOWS_PASSIVE   = 90304,
         SPELL_T2_RATTLING_BLOW_PASSIVE  = 90305,
-        SPELL_T2_IRON_FISTS_BUFF        = 90368,
+        // ONE aura for the whole 3pc since 2026-08-20: +50% physical, immunity
+        // to disarm, AND the weapon-requirement waiver. It is 90217 rather than
+        // 90368 because 90217 is the id the server config
+        // (Centurion.Unarmed.WaiverAuras) and the client's rulerelax.cpp both
+        // key on - merging the other way would have needed a client rebuild.
+        SPELL_T2_IRON_FISTS_BUFF        = 90217,
+        // The old split buff. Nothing applies it any more; it is still torn
+        // down so a warrior carrying one from an older build gets cleaned up.
+        SPELL_T2_IRON_FISTS_BUFF_LEGACY = 90368,
         SPELL_T2_FLURRY_BLOWS_BUFF      = 90369,
         SPELL_T2_RATTLING_BLOW_STUN     = 90370,
         // paladin - consecration set
@@ -236,11 +244,15 @@ namespace T2Unarmed
         // players without the set and without the buffs: three map lookups.
         if (!hasIronFists
             && !player->HasAura(SPELL_T2_IRON_FISTS_BUFF)
+            && !player->HasAura(SPELL_T2_IRON_FISTS_BUFF_LEGACY)
             && !player->HasAura(SPELL_T2_FLURRY_BLOWS_BUFF))
             return;
 
         bool const empty = hasIronFists && HasEmptyHands(player);
         ToggleBuff(player, SPELL_T2_IRON_FISTS_BUFF, empty);
+        // Never re-applied, only removed.
+        if (player->HasAura(SPELL_T2_IRON_FISTS_BUFF_LEGACY))
+            player->RemoveAurasDueToSpell(SPELL_T2_IRON_FISTS_BUFF_LEGACY);
         ToggleBuff(player, SPELL_T2_FLURRY_BLOWS_BUFF, empty && player->HasAura(SPELL_T2_FLURRY_BLOWS_PASSIVE));
     }
 }
@@ -565,6 +577,26 @@ class spell_t2_intercept_knockback : public SpellScript
             return;
 
         caster->CastSpell(target, SPELL_T2_BRUISING_KNOCKBACK, true);
+
+        // Playerbots have historically ignored knockups/knockbacks, so say
+        // whether this one could possibly land. Both Unit::KnockbackFrom and
+        // MotionMaster::MoveKnockbackFrom carry socketless-playerbot exceptions
+        // (a virtual session has no client to execute SMSG_MOVE_KNOCK_BACK, so
+        // they take the server spline instead), which covers every managed bot
+        // on this realm - BotAccountIds is unconfigured, so they are all virtual.
+        // What is NOT covered is stock behaviour: Spell::EffectKnockBack bails
+        // outright on a ROOTED or STUNNED target, for bots and players alike.
+        if (target->HasUnitState(UNIT_STATE_ROOT | UNIT_STATE_STUNNED))
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Bruising Charge - {} is rooted/stunned, so EffectKnockBack will refuse to move them",
+                caster->GetName(), target->GetName()));
+        else
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Bruising Charge - knockback cast at {} (server-driven movement: {})",
+                caster->GetName(), target->GetName(),
+                target->ToPlayer() && target->ToPlayer()->GetSession()
+                    && (target->ToPlayer()->GetSession()->IsVirtualSession()
+                        || target->ToPlayer()->GetSession()->IsTransientPlayerSession())));
     }
 
     void Register() override
@@ -609,6 +641,7 @@ class spell_t2_bareknuckle_state : public AuraScript
         // anyway so the contract does not depend on that ordering.
         Unit* wearer = GetTarget();
         wearer->RemoveAurasDueToSpell(SPELL_T2_IRON_FISTS_BUFF);
+        wearer->RemoveAurasDueToSpell(SPELL_T2_IRON_FISTS_BUFF_LEGACY);
         wearer->RemoveAurasDueToSpell(SPELL_T2_FLURRY_BLOWS_BUFF);
     }
 
@@ -744,75 +777,13 @@ class spell_t2_bareknuckle_stun : public AuraScript
     }
 };
 
-// -26573 - Consecration, carrying the Consecration 5pc (90307): enemies inside
-// the middle 3 yards take the tick twice.
-class spell_t2_consecration_core : public AuraScript
-{
-    PrepareAuraScript(spell_t2_consecration_core);
-
-    void HandlePeriodic(AuraEffect const* aurEff)
-    {
-        Unit* caster = GetCaster();
-        Unit* target = GetTarget();
-        if (!caster || !target)
-            return;
-
-        // Every rung says so out loud. This script had NO diagnostics at all,
-        // which is exactly why "90307 is not adjusting the damage" could not be
-        // told apart from "the tick never reached the script".
-        if (!caster->HasAura(SPELL_T2_SANCTIFIED_CORE_PASSIVE))
-        {
-            SendCustomAuraDiag(Trinity::StringFormat(
-                "[CustomAuras] Sanctified Core: Consecration ticked on {} but {} does not have the 5pc carrier 90307",
-                target->GetName(), caster->GetName()));
-            return;
-        }
-
-        // Consecration's aura is owned by the ground dynobject, not by the
-        // paladin, so the ring's centre is the dynobject's position - the
-        // paladin may have walked off it long ago.
-        DynamicObject* dynObj = GetDynobjOwner();
-        if (!dynObj)
-        {
-            SendCustomAuraDiag(Trinity::StringFormat(
-                "[CustomAuras] {}: Sanctified Core - the ticking aura has no dynobject owner; cannot measure the core",
-                caster->GetName()));
-            return;
-        }
-
-        // GetExactDist2d, not GetDistance2d: the latter subtracts both objects'
-        // combat reach, which on a 3 yard test would let a tauren stand a
-        // metre outside the core and still count.
-        float const dist = dynObj->GetExactDist2d(target);
-        if (dist > SANCTIFIED_CORE_RADIUS)
-            return;                      // outside the core: normal tick only
-
-        // A second explicit hit rather than doubling the tick amount: the tick
-        // amount is shared by every target of the dynobject aura, and this way
-        // the combat log shows what the player is actually taking.
-        int32 const extra = std::max(aurEff->GetAmount(), 0);
-        if (extra <= 0)
-        {
-            SendCustomAuraDiag(Trinity::StringFormat(
-                "[CustomAuras] {}: Sanctified Core - {} is {:.1f} yd inside the core but the tick amount is {}; nothing to double",
-                caster->GetName(), target->GetName(), dist, aurEff->GetAmount()));
-            return;
-        }
-
-        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
-        args.AddSpellBP0(extra);   // 90371 has DieSides 0, so this is used exactly
-        caster->CastSpell(target, SPELL_T2_SANCTIFIED_CORE_TICK, args);
-
-        SendCustomAuraDiag(Trinity::StringFormat(
-            "[CustomAuras] {}: Sanctified Core - {} is {:.1f} yd from the centre; doubled the tick with a second {} hit",
-            caster->GetName(), target->GetName(), dist, extra));
-    }
-
-    void Register() override
-    {
-        OnEffectPeriodic += AuraEffectPeriodicFn(spell_t2_consecration_core::HandlePeriodic, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE);
-    }
-};
+// Consecration 5pc (90307) "Sanctified Core" USED to live here as a second
+// explicit hit, because a dynobject aura has one AuraEffect shared by every unit
+// standing in it and GetAmount() therefore cannot differ per target. The user
+// asked for the tick itself to be doubled rather than a second line in the
+// combat log, so it moved into the tick: T2UnitHooks::ApplySanctifiedCore,
+// called from AuraEffect::HandlePeriodicDamageAurasTick once the per-target
+// damage is known. Helper spell 90371 is now unused.
 
 // 90526-90531 - the Consecration wrappers. Same cost, cast time, cooldown, GCD,
 // icon and tooltip as the rank they stand in for; the only thing they decide is
@@ -1002,7 +973,6 @@ void AddSC_custom_t2_warrior_paladin()
     RegisterSpellScript(spell_t2_bareknuckle_state);
     RegisterSpellScript(spell_t2_bareknuckle_flurry_flag);
     RegisterSpellScript(spell_t2_bareknuckle_stun);
-    RegisterSpellScript(spell_t2_consecration_core);
     RegisterSpellScript(spell_t2_consecration_wrapper);
     RegisterSpellScript(spell_t2_walking_consecration);
     RegisterSpellScript(spell_t2_second_shock);

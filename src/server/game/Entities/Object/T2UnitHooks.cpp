@@ -24,6 +24,10 @@
 #include "Pet.h"
 #include "Player.h"
 #include "SharedDefines.h"
+#include "GameTime.h"
+#include "Timer.h"
+#include "DynamicObject.h"
+#include "SpellAuraEffects.h"
 #include "SpellAuras.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
@@ -39,9 +43,47 @@
 
 namespace
 {
+    // Sanctified Core: the paladin Consecration 5pc, and the radius of the
+    // "core" it doubles inside. Consecration's family mask word 0, identical on
+    // every rank.
+    constexpr uint32 SPELL_SANCTIFIED_CORE       = 90307;
+    constexpr float  SANCTIFIED_CORE_RADIUS      = 3.0f;
+    constexpr uint32 CONSECRATION_FAMILY_MASK0   = 0x20;
+
     // Legion of One's escape: 90320 is the 8pc carrier, 90525 the rebirth flash.
     constexpr uint32 SPELL_LEGION_OF_ONE         = 90320;
     constexpr uint32 SPELL_LEGION_REBIRTH_VISUAL = 90525;
+    // The visible 2 minute cooldown, and the SOURCE OF TRUTH for it. Carries
+    // DEATH_PERSISTENT and UNAFFECTED_BY_INVULNERABILITY so neither dying nor
+    // Ice Block / Divine Shield / a trinket can hand back a free rebirth.
+    constexpr uint32 SPELL_LEGION_REBIRTH_CD     = 90538;
+
+    // "This effect can only happen once every 120 seconds" - the design doc.
+    // Tracked here rather than as a spell cooldown because nothing is ever CAST
+    // to trigger it: the save happens inside Unit::DealDamage, so there is no
+    // cast to hang a cooldown on. Keyed by player guid, and the entry is only
+    // written when a save actually fires.
+    constexpr uint32 LEGION_REBIRTH_COOLDOWN_MS = 120 * IN_MILLISECONDS;
+    std::mutex s_legionMutex;
+    std::unordered_map<ObjectGuid, uint32> s_legionLastRebirth;   // guid -> GameTime ms
+
+    // True (and stamps it) when the warlock's 120 s window has elapsed.
+    //
+    // The DEBUFF 90538 is the real cooldown - it is what the player sees, it
+    // survives death and immunities, and it is saved across a relog. This map
+    // exists only to close the gap between the save happening (inside
+    // DealDamage) and the debuff actually landing a tick later, so that two
+    // lethal blows in the same frame cannot both be survived.
+    bool TakeLegionRebirth(ObjectGuid guid)
+    {
+        uint32 const now = GameTime::GetGameTimeMS();
+        std::lock_guard<std::mutex> guard(s_legionMutex);
+        auto itr = s_legionLastRebirth.find(guid);
+        if (itr != s_legionLastRebirth.end() && getMSTimeDiff(itr->second, now) < LEGION_REBIRTH_COOLDOWN_MS)
+            return false;
+        s_legionLastRebirth[guid] = now;
+        return true;
+    }
 
     // .gm diagnostics customauras - same channel the custom_t1/t2 scripts use,
     // so a GM who opted in sees this module's decisions next to theirs.
@@ -389,6 +431,40 @@ namespace T2UnitHooks
         }, Milliseconds(0));
     }
 
+    // SANCTIFIED CORE (90307). See the header for why this is not an AuraScript.
+    uint32 ApplySanctifiedCore(AuraEffect const* aurEff, Unit* caster, Unit* target, uint32 damage)
+    {
+        if (!aurEff || !caster || !target || !damage)
+            return damage;
+
+        // Consecration only. Cheapest discriminator first: the aura has to be
+        // owned by a dynobject at all, which almost nothing is.
+        DynamicObject* dynObj = aurEff->GetBase() ? aurEff->GetBase()->GetDynobjOwner() : nullptr;
+        if (!dynObj)
+            return damage;
+
+        SpellInfo const* info = aurEff->GetSpellInfo();
+        if (!info || info->SpellFamilyName != SPELLFAMILY_PALADIN
+            || !(info->SpellFamilyFlags[0] & CONSECRATION_FAMILY_MASK0))
+            return damage;
+
+        if (!caster->HasAura(SPELL_SANCTIFIED_CORE))
+            return damage;
+
+        // GetExactDist2d, not GetDistance2d: the latter subtracts both objects'
+        // combat reach, which on a 3 yard test would let a tauren stand a metre
+        // outside the core and still count.
+        float const dist = dynObj->GetExactDist2d(target);
+        if (dist > SANCTIFIED_CORE_RADIUS)
+            return damage;
+
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Sanctified Core - {} is {:.1f} yd from the centre; tick doubled {} -> {}",
+            caster->GetName(), target->GetName(), dist, damage, damage * 2));
+
+        return damage * 2;
+    }
+
     // LEGION OF ONE (90320). See the header. Returns true when the imp was
     // spent to save the warlock, in which case Unit::DealDamage must not kill him.
     bool OnWouldBeLethalDamage(Unit* victim)
@@ -402,6 +478,17 @@ namespace T2UnitHooks
 
         Pet* imp = warlock->GetPet();
         if (!imp || !imp->IsAlive() || !imp->IsInWorld() || imp->GetMap() != warlock->GetMap())
+            return false;
+
+        // The debuff first: it is the authoritative cooldown and the only part
+        // that survives a relog. The in-memory stamp then covers the one tick
+        // between this save and the debuff landing.
+        if (warlock->HasAura(SPELL_LEGION_REBIRTH_CD))
+            return false;
+
+        // Checked LAST of the cheap tests and only once everything else has
+        // passed, so a warlock who dies with no imp out never burns his window.
+        if (!TakeLegionRebirth(warlock->GetGUID()))
             return false;
 
         // The imp's remaining health becomes the warlock's, clamped to what he
@@ -437,6 +524,11 @@ namespace T2UnitHooks
             // A resurrection flash, so it reads as a rebirth and not a blink.
             if (sSpellMgr->GetSpellInfo(SPELL_LEGION_REBIRTH_VISUAL))
                 owner->CastSpell(owner, SPELL_LEGION_REBIRTH_VISUAL, true);
+
+            // The visible cooldown. Applied here rather than in the damage
+            // frame for the same reason as everything else in this lambda.
+            if (sSpellMgr->GetSpellInfo(SPELL_LEGION_REBIRTH_CD))
+                owner->CastSpell(owner, SPELL_LEGION_REBIRTH_CD, true);
 
             SendCustomAuraDiag(Trinity::StringFormat(
                 "[CustomAuras] {}: Legion of One - lethal damage taken; the imp was spent, reborn at its spot on {} health",

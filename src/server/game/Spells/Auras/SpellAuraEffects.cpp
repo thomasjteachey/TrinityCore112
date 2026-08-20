@@ -5421,6 +5421,15 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
 
     damage = target->SpellDamageBonusTaken(caster, GetSpellInfo(), damage, DOT);
 
+    // T2 Sanctified Core (90307): a target inside the middle 3 yards of the
+    // paladin's Consecration takes the tick DOUBLED. It has to happen here,
+    // per target, because a dynobject aura has ONE AuraEffect shared by every
+    // unit standing in it - GetAmount() cannot differ between them, which is
+    // why this used to be a second explicit hit instead. Doubling the computed
+    // damage gives one number in the combat log, which is what it should have
+    // been.
+    damage = T2UnitHooks::ApplySanctifiedCore(this, caster, target, damage);
+
     bool crit = 0;
     if (crit)
         damage = Unit::SpellCriticalDamageBonus(caster, m_spellInfo, damage, target);

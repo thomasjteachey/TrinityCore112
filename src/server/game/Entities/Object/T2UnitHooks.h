@@ -12,6 +12,7 @@
 #include "Define.h"
 #include "ObjectGuid.h"
 
+class AuraEffect;
 class Item;
 class Player;
 class SpellInfo;
@@ -52,6 +53,19 @@ namespace T2UnitHooks
     // player's event queue on the next Unit::Update, because SetControlled runs
     // from inside the CC aura's apply handler.
     void OnPlayerControlLost(Player* player);
+
+    // SANCTIFIED CORE (paladin Consecration 5pc, 90307). Called from
+    // AuraEffect::HandlePeriodicDamageAurasTick once the per-target damage is
+    // known. Returns the damage to actually deal: doubled when `target` is
+    // inside the middle 3 yards of a Consecration whose caster wears the 5pc,
+    // unchanged otherwise.
+    //
+    // It lives in the tick rather than in an AuraScript because a dynobject
+    // aura has ONE AuraEffect shared by every unit standing in it, so
+    // GetAmount() cannot differ per target - the only place a per-target
+    // decision can be made is after the damage has been computed for that
+    // target.
+    uint32 ApplySanctifiedCore(AuraEffect const* aurEff, Unit* caster, Unit* target, uint32 damage);
 
     // LEGION OF ONE (warlock imp 8pc). Called from Unit::DealDamage at the
     // instant damage is found to be lethal, BEFORE Unit::Kill. If the victim is
