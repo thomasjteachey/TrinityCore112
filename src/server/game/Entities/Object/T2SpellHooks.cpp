@@ -114,6 +114,14 @@ namespace
     std::mutex                               s_umbralMutex;
     std::unordered_map<ObjectGuid, uint32>   s_umbralPendingCancel;
 
+    // A mark is meant to live exactly one player tick. If the resolve event is
+    // aborted rather than run - KillAllEvents(false) on logout or a far
+    // teleport - the mark outlives the session and comes back with the GUID, so
+    // anything older than this is treated as debris rather than as a real
+    // pending cancel. Generous by three orders of magnitude against the one
+    // tick it should take, so it can never fire on a live mark.
+    constexpr uint32 UMBRAL_CANCEL_STALE_MS = 2000;
+
     bool UmbralIsShadowPriest(Player const* player)
     {
         return player && player->HasAura(T2SpellHooks::SPELL_UMBRAL_MERCY)
@@ -398,7 +406,7 @@ bool T2SpellHooks::OnCancelAuraRequest(Player* player, uint32 spellId)
     {
         std::lock_guard<std::mutex> guard(s_umbralMutex);
         auto itr = s_umbralPendingCancel.find(player->GetGUID());
-        if (itr != s_umbralPendingCancel.end())
+        if (itr != s_umbralPendingCancel.end() && getMSTimeDiff(itr->second, stamp) <= UMBRAL_CANCEL_STALE_MS)
         {
             // A cancel is already waiting on its resolve event. The client
             // auto-unshifts exactly once per cast attempt and always follows it
@@ -410,7 +418,13 @@ bool T2SpellHooks::OnCancelAuraRequest(Player* player, uint32 spellId)
             secondPress = true;
         }
         else
+        {
+            // Covers both the ordinary first press and the debris case: an
+            // orphaned mark is simply overwritten with a live stamp and gets a
+            // fresh event, so the press behaves exactly like a first press
+            // instead of skipping the auto-unshift grace.
             s_umbralPendingCancel[player->GetGUID()] = stamp;
+        }
     }
 
     if (secondPress)

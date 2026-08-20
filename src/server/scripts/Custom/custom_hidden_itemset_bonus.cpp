@@ -28,6 +28,7 @@
 
 #include <list>
 #include <map>
+#include <mutex>
 #include <set>
 #include <shared_mutex>
 #include <unordered_map>
@@ -79,6 +80,26 @@ struct LearnedSpellRefState
 using PlayerLearnedSpellRefMap = std::unordered_map<uint32, LearnedSpellRefState>;
 std::unordered_map<uint64, PlayerLearnedSpellRefMap> s_PlayerLearnedSpellRefs;
 
+// Everything above is reachable from more than one thread. HiddenSets::
+// OnEquipmentChanged runs from Player::Update (item duration expiry ->
+// DestroyItem -> RemoveItem), and Player::Update runs under Map::Update, which
+// the MapUpdater executes on parallel worker threads - so two players on two
+// maps can insert into the same unordered_map in the same tick and rehash its
+// bucket array concurrently. That is a heap corruption, not a benign race, and
+// it is exactly the signature the open crash hunt is chasing. `.hiddenitemset
+// reload` is worse still: it clears the bonus map while another thread may be
+// holding a `HiddenItemsetBonus const&` into one of its nodes.
+//
+// RECURSIVE on purpose. The lock is held across LearnSpell / RemoveSpell /
+// AddAura / CastSpell, any of which can re-enter through a hook, and a plain
+// mutex would self-deadlock the moment one did. Nothing under this lock ever
+// takes another lock (the helpers only touch the player's own controlled list),
+// and the only caller that holds a different lock first - the reload command,
+// which takes HashMapHolder<Player> - always takes them in that order, so there
+// is no inversion. These paths run on equipment change and login, never per
+// tick, so serialising them costs nothing measurable.
+std::recursive_mutex s_stateMutex;
+
 void CollectLearnedSpellsFromSpell(uint32 spellId, std::unordered_set<uint32>& learnedSpellSet, std::unordered_set<uint32>& visitedSpells)
 {
     if (!spellId)
@@ -107,6 +128,8 @@ void CollectLearnedSpellsFromSpell(uint32 spellId, std::unordered_set<uint32>& l
 
 bool IsHiddenBonusActive(Player* player, HiddenItemsetBonusKey bonusKey)
 {
+    std::lock_guard<std::recursive_mutex> guard(s_stateMutex);
+
     if (!player)
         return false;
 
@@ -119,6 +142,8 @@ bool IsHiddenBonusActive(Player* player, HiddenItemsetBonusKey bonusKey)
 
 void MarkHiddenBonusActive(Player* player, HiddenItemsetBonusKey bonusKey)
 {
+    std::lock_guard<std::recursive_mutex> guard(s_stateMutex);
+
     if (!player)
         return;
 
@@ -127,6 +152,8 @@ void MarkHiddenBonusActive(Player* player, HiddenItemsetBonusKey bonusKey)
 
 void MarkHiddenBonusInactive(Player* player, HiddenItemsetBonusKey bonusKey)
 {
+    std::lock_guard<std::recursive_mutex> guard(s_stateMutex);
+
     if (!player)
         return;
 
@@ -140,6 +167,8 @@ void MarkHiddenBonusInactive(Player* player, HiddenItemsetBonusKey bonusKey)
 }
 void AddLearnedSpellRefs(Player* player, HiddenItemsetBonus const& bonus)
 {
+    std::lock_guard<std::recursive_mutex> guard(s_stateMutex);
+
     if (!player || bonus.learnedSpells.empty())
         return;
 
@@ -175,6 +204,8 @@ void EnsureOriginalSpellsRestored(Player* player, uint32 learnedSpell, LearnedSp
 
 void RemoveLearnedSpellRefs(Player* player, HiddenItemsetBonus const& bonus)
 {
+    std::lock_guard<std::recursive_mutex> guard(s_stateMutex);
+
     if (!player || bonus.learnedSpells.empty())
         return;
 
@@ -212,6 +243,8 @@ void RemoveLearnedSpellRefs(Player* player, HiddenItemsetBonus const& bonus)
 
 void RemoveLearnedSpellRefs(Player* player, uint32 spellId)
 {
+    std::lock_guard<std::recursive_mutex> guard(s_stateMutex);
+
     auto learnsItr = s_KnownHiddenItemsetBonusLearns.find(spellId);
     if (learnsItr == s_KnownHiddenItemsetBonusLearns.end() || learnsItr->second.empty())
         return;
@@ -233,6 +266,8 @@ void UnsummonHiddenBonusCreatures(Player* player, HiddenItemsetBonus const& bonu
 
 void UnsummonHiddenBonusCreatures(Player* player, uint32 spellId)
 {
+    std::lock_guard<std::recursive_mutex> guard(s_stateMutex);
+
     auto summonsItr = s_KnownHiddenItemsetBonusSummons.find(spellId);
     if (summonsItr == s_KnownHiddenItemsetBonusSummons.end() || summonsItr->second.empty())
         return;
@@ -282,6 +317,8 @@ void EnsureHiddenBonusSummons(Player* player, HiddenItemsetBonus const& bonus)
 
 void ResummonHiddenBonusCreatures(Player* player)
 {
+    std::lock_guard<std::recursive_mutex> guard(s_stateMutex);
+
     if (!player)
         return;
 
@@ -302,6 +339,8 @@ void ResummonHiddenBonusCreatures(Player* player)
 
 void RecalcHiddenItemsetBonuses(Player* player)
 {
+    std::lock_guard<std::recursive_mutex> guard(s_stateMutex);
+
     if (!player)
         return;
 
@@ -414,8 +453,6 @@ void RecalcHiddenItemsetBonuses(Player* player)
             if (spellItr != s_KnownHiddenItemsetSpellIds.end())
             {
                 uint32 spellId = spellItr->second;
-                if (player->HasAura(spellId))
-                    player->RemoveAura(spellId);
 
                 HiddenItemsetBonus cleanup;
                 cleanup.spellId = spellId;
@@ -427,8 +464,24 @@ void RecalcHiddenItemsetBonuses(Player* player)
                 if (summonsItr != s_KnownHiddenItemsetBonusSummons.end())
                     cleanup.summonedEntries = summonsItr->second;
 
-                UnsummonHiddenBonusCreatures(player, cleanup);
+                // The refcount is always released: it was taken when this key
+                // went active and nothing else will ever hand it back.
                 RemoveLearnedSpellRefs(player, cleanup);
+
+                // The aura and the minions are NOT, unless the spell is really
+                // gone. A retired KEY is not a retired SPELL - editing one row's
+                // required_count retires (set, oldCount) while the identical
+                // spell_to_apply stays live under (set, newCount), and this loop
+                // runs AFTER the main one, so an unguarded strip here silently
+                // undoes what the main loop just did (the "lost hidden bonus"
+                // log line lives in the main loop, not here).
+                if (validSpells.find(spellId) == validSpells.end())
+                {
+                    if (player->HasAura(spellId))
+                        player->RemoveAura(spellId);
+
+                    UnsummonHiddenBonusCreatures(player, cleanup);
+                }
             }
 
             it = activeItr->second.erase(it);
@@ -497,6 +550,8 @@ public:
 
 void LoadHiddenItemsetBonuses()
 {
+    std::lock_guard<std::recursive_mutex> guard(s_stateMutex);
+
     s_HiddenItemsetBonuses.clear();
 
     QueryResult result = WorldDatabase.Query(

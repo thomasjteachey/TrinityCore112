@@ -816,6 +816,11 @@ class spell_t2_second_shock : public AuraScript
 
     void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
     {
+        // DUMMY carrier with TriggerSpell 0 - see the note on Cinderbite's melt
+        // in custom_t2_druid_hunter.cpp. Omitting this logs a TC_LOG_ERROR on
+        // every successful proc.
+        PreventDefaultAction();
+
         Player* paladin = GetTarget()->ToPlayer();
         if (!paladin)
             return;

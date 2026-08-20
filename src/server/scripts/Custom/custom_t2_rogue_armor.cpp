@@ -583,6 +583,11 @@ class spell_t2_deadlypoison_leech : public AuraScript
 
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
+        // DUMMY carrier with TriggerSpell 0 - see the note on Cinderbite's melt
+        // in custom_t2_druid_hunter.cpp. This one fires on every poison hit and
+        // every Deadly Poison tick, so the error rate is the highest of the three.
+        PreventDefaultAction();
+
         DamageInfo* damageInfo = eventInfo.GetDamageInfo();
         Unit* rogue = GetTarget();
         if (!damageInfo || !rogue)

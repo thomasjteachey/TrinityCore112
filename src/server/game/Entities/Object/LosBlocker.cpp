@@ -13,12 +13,28 @@
 
 namespace
 {
-    // Blockers are rare (a mode-specific buff), so a global set plus an atomic
+    // Blockers are rare (a mode-specific buff), so a registry plus an atomic
     // count is plenty: the count makes the common "nobody has it" case free, and
-    // the set is only walked when the count is non-zero.
-    std::mutex                             s_mutex;
-    std::unordered_map<ObjectGuid, uint32>  s_blockers;   // guid -> aura spell id
+    // the registry is only walked when the count is non-zero.
+    //
+    // PARTITIONED BY MAP+INSTANCE, and it has to be. A creature's low guid is
+    // generated per map (Map::GenerateLowGuid), so two parallel instances of the
+    // same battleground hand out the SAME guid to their respective blocks; a
+    // flat guid-keyed map would silently drop the second registration and then
+    // deregister both on the first removal. Player guids are globally unique, so
+    // this only started to matter when non-player blockers became possible.
+    // Partitioning also means a lookup walks only the caster's own instance.
+    std::mutex                              s_mutex;
+    using BlockerBucket = std::unordered_map<ObjectGuid, uint32>;   // guid -> aura spell id
+    std::unordered_map<uint64, BlockerBucket> s_blockers;           // map+instance -> bucket
     std::atomic<uint32>                     s_count{ 0 };
+
+    // Map id in the high half, instance id in the low half. Instance id alone is
+    // not enough: it is 0 for every non-instanceable map.
+    uint64 MapKeyOf(WorldObject const* who)
+    {
+        return (uint64(who->GetMapId()) << 32) | uint64(who->GetInstanceId());
+    }
 
     // How wide a body is, for the purposes of eclipsing a shot. Kept a little
     // generous compared with the client-side collision radius: collision decides
@@ -77,7 +93,10 @@ namespace
         std::vector<std::pair<ObjectGuid, uint32>> candidates;
         {
             std::lock_guard<std::mutex> guard(s_mutex);
-            candidates.assign(s_blockers.begin(), s_blockers.end());
+            auto bucket = s_blockers.find(MapKeyOf(caster));
+            if (bucket == s_blockers.end())
+                return false;
+            candidates.assign(bucket->second.begin(), bucket->second.end());
         }
 
         for (auto const& candidate : candidates)
@@ -139,7 +158,7 @@ namespace LosBlocker
         if (!who)
             return;
         std::lock_guard<std::mutex> guard(s_mutex);
-        if (s_blockers.emplace(who->GetGUID(), spellId).second)
+        if (s_blockers[MapKeyOf(who)].emplace(who->GetGUID(), spellId).second)
             s_count.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -148,8 +167,33 @@ namespace LosBlocker
         if (!who)
             return;
         std::lock_guard<std::mutex> guard(s_mutex);
-        if (s_blockers.erase(who->GetGUID()))
+
+        ObjectGuid const guid = who->GetGUID();
+
+        // Try the bucket it is on NOW first, then fall back to a full sweep: a
+        // player keeps his auras across a map change, so the aura that
+        // registered him on one map can just as easily be removed on another,
+        // and a missed erase would leave a permanent phantom blocker plus a
+        // count that never returns to zero. The registry holds a handful of
+        // entries, so the fallback is free.
+        auto bucket = s_blockers.find(MapKeyOf(who));
+        if (bucket != s_blockers.end() && bucket->second.erase(guid))
+        {
+            if (bucket->second.empty())
+                s_blockers.erase(bucket);
             s_count.fetch_sub(1, std::memory_order_relaxed);
+            return;
+        }
+
+        for (auto itr = s_blockers.begin(); itr != s_blockers.end(); ++itr)
+        {
+            if (!itr->second.erase(guid))
+                continue;
+            if (itr->second.empty())
+                s_blockers.erase(itr);
+            s_count.fetch_sub(1, std::memory_order_relaxed);
+            return;
+        }
     }
 
     bool Active()

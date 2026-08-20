@@ -567,9 +567,20 @@ class spell_t2_penguin_serpent_sting_direct : public SpellScript
         _swapped = true;
     }
 
-    // The clone is cast here rather than from the effect handler: this is the
-    // shape the sibling scripts use, and it keeps the nested cast (and the aura
-    // it applies) out of the hit phase that is still walking this target's
+    // Applied, not cast. A cast would roll the ranged hit check a SECOND time -
+    // the stock rank already passed one to get here - so ~5% of stings would
+    // suppress the nature DoT and then land nothing at all, and a refresh would
+    // strip the fire DoT already ticking and fail to replace it. The wrapper
+    // path does not have this problem because the wrapper itself carries
+    // IGNORE_HIT_RESULT (ATTR3 0x40000) and the clone is its only roll; the
+    // stock rank obviously cannot carry it, so the second roll is removed on
+    // this side instead. Unit::AddAura still honours IsImmunedToSpell and the
+    // per-effect immunity mask, so an immune target is unaffected, and dropping
+    // the cast also drops the clone's own missile - the rank's missile has
+    // already flown and impacted by the time this runs.
+    //
+    // Still done from AfterHit rather than the effect handler: that keeps the
+    // aura application out of the hit phase that is still walking this target's
     // effects. Missed / resisted / immune casts never reach the effect handler
     // at all, so _swapped stays false and nothing is substituted.
     void HandleAfterHit()
@@ -589,7 +600,7 @@ class spell_t2_penguin_serpent_sting_direct : public SpellScript
         if (!rank)
             return;
 
-        caster->CastSpell(target, rank->FireClone, TRIGGERED_FULL_MASK);
+        caster->AddAura(rank->FireClone, target);
     }
 
     void Register() override
@@ -664,6 +675,12 @@ class spell_t2_penguin_melt : public AuraScript
 
     void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
     {
+        // 90334's effect 0 is a DUMMY with TriggerSpell 0. Without this the core
+        // logs "has non-existent spell 0 in EffectTriggered[0]" as TC_LOG_ERROR
+        // into the 'spells' channel every time the bonus SUCCEEDS - straight
+        // into the log the heap-corruption hunt reads.
+        PreventDefaultAction();
+
         g_lastTrapBreak = FrozenTrapBreak();
 
         Unit* hunter = GetTarget();
