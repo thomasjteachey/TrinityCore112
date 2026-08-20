@@ -1524,16 +1524,19 @@ void Creature::SaveToDB(uint32 mapid, uint8 spawnMask, uint32 phaseMask)
     stmt->setUInt32(index++, dynamicflags);
     trans->Append(stmt);
 
-    stmt = WorldDatabase.GetPreparedStatement(WORLD_DEL_CREATURE_PLAYERBYTES);
-    stmt->setUInt32(0, m_spawnId);
-    trans->Append(stmt);
-
-
+    // Keyed on the template entry, not the spawn: the copied look belongs to the NPC
+    // type. Only rewrite it when this creature actually carries one - a plain spawn of
+    // some other entry saving itself must not be able to clear another type's row, and
+    // an entry with a stored look re-inserts it unchanged because LoadFromDB applied it.
     if (_hasPlayerAppearance)
     {
+        stmt = WorldDatabase.GetPreparedStatement(WORLD_DEL_CREATURE_PLAYERBYTES);
+        stmt->setUInt32(0, GetEntry());
+        trans->Append(stmt);
+
         stmt = WorldDatabase.GetPreparedStatement(WORLD_INS_CREATURE_PLAYERBYTES);
         uint8 paramIndex = 0;
-        stmt->setUInt32(paramIndex++, m_spawnId);
+        stmt->setUInt32(paramIndex++, GetEntry());
         stmt->setUInt8(paramIndex++, playerRace);
         stmt->setUInt8(paramIndex++, playerClass);
         stmt->setUInt8(paramIndex++, playerGender);
@@ -1549,9 +1552,7 @@ void Creature::SaveToDB(uint32 mapid, uint8 spawnMask, uint32 phaseMask)
 
     WorldDatabase.CommitTransaction(trans);
     if (_hasPlayerAppearance)
-        sObjectMgr->SetCreaturePlayerBytes(m_spawnId, &_playerAppearance);
-    else
-        sObjectMgr->SetCreaturePlayerBytes(m_spawnId, nullptr);
+        sObjectMgr->SetCreaturePlayerBytes(GetEntry(), &_playerAppearance);
 }
 
 void Creature::SelectLevel()
@@ -3163,8 +3164,8 @@ CreaturePlayerBytes const* Creature::GetCreaturePlayerBytes() const
 {
     if (_hasPlayerAppearance)
         return &_playerAppearance;
-    if (m_spawnId)
-        return sObjectMgr->GetCreaturePlayerBytes(m_spawnId);
+    if (uint32 const entry = GetEntry())
+        return sObjectMgr->GetCreaturePlayerBytes(entry);
 
     return nullptr;
 }
