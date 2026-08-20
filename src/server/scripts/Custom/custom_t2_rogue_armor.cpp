@@ -154,14 +154,14 @@ namespace
     // 13 ("anywhere"), so the reach is pinned here.
     constexpr float COLDER_BLOOD_ROOT_RANGE = 30.0f;
 
-    // Ice Skate trail: one patch per this many yards of movement. Patches are
-    // 2 yd radius (SpellRadius 7), so 2 yd spacing keeps the slick unbroken.
-    // Drop spacing, matched to the patch radius (90518 EffectRadiusIndex 16 =
-    // 1.0 yd, so 2 yards across). Slightly under the diameter so the patches
-    // just overlap and the trail stays unbroken instead of dotting.  The old
-    // pairing - 2.0 yd radius dropped every 2.0 yd - overlapped into a 4-yard
-    // wide road, which is what read as "way too big".
-    constexpr float ICE_TRAIL_STEP_YARDS = 1.75f;
+    // Ice Skate trail: one patch per this many yards of movement. The REAL
+    // limiter used to be the 250 ms tick of 90517's periodic - at +45% speed
+    // (~10.2 yd/s) that is one drop chance every ~2.5 yd, so the old 1.75 gate
+    // never fired and the trail read as separate puffs. The 2026-08-20
+    // revision halves the tick to 125 ms (2026_08_20_02 dbc SQL, server-side)
+    // and this gate to 1.25 yd, which lays a patch every ~1.3 yd against the
+    // frost-trap art's ~2 yd visible core: solid overlap, an actual ribbon.
+    constexpr float ICE_TRAIL_STEP_YARDS = 1.25f;
 
     // .gm diagnostics customauras - broadcast to every opted-in GM session
     void SendCustomAuraDiag(std::string const& msg)
