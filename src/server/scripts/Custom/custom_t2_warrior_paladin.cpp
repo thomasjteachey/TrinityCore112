@@ -51,6 +51,7 @@ namespace
     enum T2WarriorPaladinSpells
     {
         // warrior - rend set
+        SPELL_T2_WALKING_SANCTUARY      = 90308,   // 8pc carrier, read by the wrapper
         SPELL_T2_WALKING_SANCTUARY_RING = 90523,   // unit-attached ring; follows the paladin
         SPELL_T2_GAPING_WOUND_PASSIVE   = 90301,
         SPELL_T2_BRUISING_CHARGE_PASSIVE = 90302,
@@ -89,6 +90,37 @@ namespace
 
     // Radius of the "heart" of a Consecration for the 5pc.
     constexpr float SANCTIFIED_CORE_RADIUS = 3.0f;
+
+    // Consecration, the REPLACEMENT-WRAPPER pattern (spell_warr_disarm_wrapper
+    // 81492 is the model). The paladin learns the wrapper instead of the rank;
+    // it casts either the untouched original or a visual-less clone, chosen on
+    // the 8pc aura. All SIX ranks, because SkillLineAbility has
+    // SupercededBySpell = 0 on every one - a trained paladin keeps them all as
+    // separate buttons and any of them can be the one he presses.
+    struct ConsecrationRank
+    {
+        uint32 Wrapper;
+        uint32 Original;
+        uint32 Clone;      // identical but SpellVisual 21101 (PersistentAreaKit 0)
+    };
+
+    constexpr ConsecrationRank CONSECRATION_RANKS[] =
+    {
+        { 90526, 26573, 90532 },   // Rank 1
+        { 90527, 20116, 90533 },   // Rank 2
+        { 90528, 20922, 90534 },   // Rank 3
+        { 90529, 20923, 90535 },   // Rank 4
+        { 90530, 20924, 90536 },   // Rank 5
+        { 90531, 27173, 90537 },   // Rank 6
+    };
+
+    ConsecrationRank const* FindConsecrationRank(uint32 wrapperId)
+    {
+        for (ConsecrationRank const& rank : CONSECRATION_RANKS)
+            if (rank.Wrapper == wrapperId)
+                return &rank;
+        return nullptr;
+    }
 
     // .gm diagnostics customauras - broadcast to every opted-in GM session.
     void SendCustomAuraDiag(std::string const& msg)
@@ -722,37 +754,101 @@ class spell_t2_consecration_core : public AuraScript
     {
         Unit* caster = GetCaster();
         Unit* target = GetTarget();
-        if (!caster || !target || !caster->HasAura(SPELL_T2_SANCTIFIED_CORE_PASSIVE))
+        if (!caster || !target)
             return;
+
+        // Every rung says so out loud. This script had NO diagnostics at all,
+        // which is exactly why "90307 is not adjusting the damage" could not be
+        // told apart from "the tick never reached the script".
+        if (!caster->HasAura(SPELL_T2_SANCTIFIED_CORE_PASSIVE))
+        {
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] Sanctified Core: Consecration ticked on {} but {} does not have the 5pc carrier 90307",
+                target->GetName(), caster->GetName()));
+            return;
+        }
 
         // Consecration's aura is owned by the ground dynobject, not by the
         // paladin, so the ring's centre is the dynobject's position - the
         // paladin may have walked off it long ago.
         DynamicObject* dynObj = GetDynobjOwner();
         if (!dynObj)
+        {
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Sanctified Core - the ticking aura has no dynobject owner; cannot measure the core",
+                caster->GetName()));
             return;
+        }
 
         // GetExactDist2d, not GetDistance2d: the latter subtracts both objects'
         // combat reach, which on a 3 yard test would let a tauren stand a
         // metre outside the core and still count.
-        if (dynObj->GetExactDist2d(target) > SANCTIFIED_CORE_RADIUS)
-            return;
+        float const dist = dynObj->GetExactDist2d(target);
+        if (dist > SANCTIFIED_CORE_RADIUS)
+            return;                      // outside the core: normal tick only
 
         // A second explicit hit rather than doubling the tick amount: the tick
         // amount is shared by every target of the dynobject aura, and this way
         // the combat log shows what the player is actually taking.
         int32 const extra = std::max(aurEff->GetAmount(), 0);
         if (extra <= 0)
+        {
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Sanctified Core - {} is {:.1f} yd inside the core but the tick amount is {}; nothing to double",
+                caster->GetName(), target->GetName(), dist, aurEff->GetAmount()));
             return;
+        }
 
         CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
         args.AddSpellBP0(extra);   // 90371 has DieSides 0, so this is used exactly
         caster->CastSpell(target, SPELL_T2_SANCTIFIED_CORE_TICK, args);
+
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Sanctified Core - {} is {:.1f} yd from the centre; doubled the tick with a second {} hit",
+            caster->GetName(), target->GetName(), dist, extra));
     }
 
     void Register() override
     {
         OnEffectPeriodic += AuraEffectPeriodicFn(spell_t2_consecration_core::HandlePeriodic, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE);
+    }
+};
+
+// 90526-90531 - the Consecration wrappers. Same cost, cast time, cooldown, GCD,
+// icon and tooltip as the rank they stand in for; the only thing they decide is
+// WHICH Consecration actually goes out.
+//
+// Without the 8pc that is the untouched original, so a paladin who is not
+// wearing the set plays exactly as before. With it, a clone whose SpellVisual
+// carries PersistentAreaKit 0 - the dynobject is created and does all the
+// damage as usual, it simply draws nothing on the floor, leaving 90523's
+// unit-attached ring as the only one on screen.
+class spell_t2_consecration_wrapper : public SpellScript
+{
+    PrepareSpellScript(spell_t2_consecration_wrapper);
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        if (!caster)
+            return;
+
+        ConsecrationRank const* rank = FindConsecrationRank(GetSpellInfo()->Id);
+        if (!rank)
+            return;
+
+        uint32 const spell = caster->HasAura(SPELL_T2_WALKING_SANCTUARY)
+            ? rank->Clone : rank->Original;
+
+        // At the caster's feet: Consecration is self-centred (ImplicitTargetA
+        // 18), so the destination is wherever he is standing, exactly as the
+        // original would have placed it.
+        caster->CastSpell(caster->GetPosition(), spell, true);
+    }
+
+    void Register() override
+    {
+        OnEffectHit += SpellEffectFn(spell_t2_consecration_wrapper::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
     }
 };
 
@@ -791,7 +887,15 @@ class spell_t2_walking_consecration : public AuraScript
         // leave a paladin wearing consecrated ground that does nothing.
         bool anyConsecration = false;
 
+        // Both the stock chain and the clones: with the 8pc the dynobject out
+        // there belongs to a clone, which is not in 26573's rank chain.
+        std::vector<uint32> ids;
         for (uint32 rank = SPELL_PALADIN_CONSECRATION_R1; rank; rank = sSpellMgr->GetNextSpellInChain(rank))
+            ids.push_back(rank);
+        for (ConsecrationRank const& r : CONSECRATION_RANKS)
+            ids.push_back(r.Clone);
+
+        for (uint32 rank : ids)
         {
             for (DynamicObject* dynObj : paladin->GetDynObjects(rank))
             {
@@ -899,6 +1003,7 @@ void AddSC_custom_t2_warrior_paladin()
     RegisterSpellScript(spell_t2_bareknuckle_flurry_flag);
     RegisterSpellScript(spell_t2_bareknuckle_stun);
     RegisterSpellScript(spell_t2_consecration_core);
+    RegisterSpellScript(spell_t2_consecration_wrapper);
     RegisterSpellScript(spell_t2_walking_consecration);
     RegisterSpellScript(spell_t2_second_shock);
     new t2_unarmed_login();
