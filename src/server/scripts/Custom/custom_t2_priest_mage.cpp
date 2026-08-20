@@ -41,6 +41,7 @@
  */
 
 #include "ScriptMgr.h"
+#include "Log.h"
 #include "Chat.h"
 #include "Item.h"
 #include "ItemTemplate.h"
@@ -108,6 +109,12 @@ namespace
     // .gm diagnostics customauras - broadcast to every opted-in GM session
     void SendCustomAuraDiag(std::string const& msg)
     {
+        // Also to the log, not just to whoever happens to be watching. A
+        // chat-only diagnostic cannot distinguish "the chain never ran" from
+        // "no GM had the category enabled", which is precisely how three set
+        // bonuses got mis-diagnosed twice. Logger `custom.auras`; free when off.
+        TC_LOG_INFO("custom.auras", "{}", msg);
+
         for (auto const& sessionPair : sWorld->GetAllSessions())
             if (sessionPair.second && sessionPair.second->GetPlayer()
                 && sessionPair.second->IsGmDiagnosticEnabled(GmDiagnosticCategory::CustomAuras))
@@ -603,9 +610,22 @@ class spell_t2_umbral_mercy_passive : public AuraScript
 
     bool CheckProc(ProcEventInfo& eventInfo)
     {
+        // Entry trace FIRST, before any gate. Every previous round could only
+        // observe "no damage happened", which cannot distinguish "the proc never
+        // fired" from "it fired and a gate rejected it" - and those have
+        // completely different fixes. Now the log says which.
         HealInfo const* healInfo = eventInfo.GetHealInfo();
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] Umbral Mercy CheckProc entered: spell={} healInfo={} effective={}",
+            eventInfo.GetSpellInfo() ? eventInfo.GetSpellInfo()->Id : 0,
+            healInfo != nullptr,
+            healInfo ? healInfo->GetEffectiveHeal() : 0));
+
         if (!healInfo || !healInfo->GetEffectiveHeal())
+        {
+            SendCustomAuraDiag("[CustomAuras] Umbral Mercy: rejected - no effective healing (full-health target?)");
             return false;
+        }
         Unit* target = GetTarget();
         Player* priest = target ? target->ToPlayer() : nullptr;
         if (!priest)

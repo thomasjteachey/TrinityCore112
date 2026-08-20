@@ -18,6 +18,7 @@
 
 #include "T2SpellHooks.h"
 #include "Chat.h"
+#include "Log.h"
 #include "GameTime.h"
 #include "Player.h"
 #include "Spell.h"
@@ -41,6 +42,12 @@ namespace
     // reached unless a GM has opted in AND the hook already decided it has work.
     void SendCustomAuraDiag(std::string const& msg)
     {
+        // Also to the log, not just to whoever happens to be watching. A
+        // chat-only diagnostic cannot distinguish "the chain never ran" from
+        // "no GM had the category enabled", which is precisely how three set
+        // bonuses got mis-diagnosed twice. Logger `custom.auras`; free when off.
+        TC_LOG_INFO("custom.auras", "{}", msg);
+
         for (auto const& sessionPair : sWorld->GetAllSessions())
             if (sessionPair.second && sessionPair.second->GetPlayer()
                 && sessionPair.second->IsGmDiagnosticEnabled(GmDiagnosticCategory::CustomAuras))

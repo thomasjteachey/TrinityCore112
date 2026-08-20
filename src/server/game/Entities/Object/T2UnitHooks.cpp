@@ -16,6 +16,7 @@
 
 #include "T2UnitHooks.h"
 #include "Chat.h"
+#include "Log.h"
 #include "Common.h"
 #include "Item.h"
 #include "MovementInfo.h"
@@ -39,6 +40,12 @@ namespace
     // so a GM who opted in sees this module's decisions next to theirs.
     void SendCustomAuraDiag(std::string const& msg)
     {
+        // Also to the log, not just to whoever happens to be watching. A
+        // chat-only diagnostic cannot distinguish "the chain never ran" from
+        // "no GM had the category enabled", which is precisely how three set
+        // bonuses got mis-diagnosed twice. Logger `custom.auras`; free when off.
+        TC_LOG_INFO("custom.auras", "{}", msg);
+
         for (auto const& sessionPair : sWorld->GetAllSessions())
             if (sessionPair.second && sessionPair.second->GetPlayer()
                 && sessionPair.second->IsGmDiagnosticEnabled(GmDiagnosticCategory::CustomAuras))

@@ -442,6 +442,18 @@ void WorldSession::HandleCancelCastOpcode(WorldPackets::Spells::CancelCast& canc
 
 void WorldSession::HandleCancelAuraOpcode(WorldPackets::Spells::CancelAura& cancelAura)
 {
+    // UNCONDITIONAL trace of every Shadowform cancel, holder or not. This
+    // settles a question that has cost two live-test rounds: whether the client
+    // sends CMSG_CANCEL_AURA at all when you press the Shadowform key a second
+    // time. If a press produces no line here, the client is using some other
+    // opcode and the whole swallow-and-defer design is aimed at the wrong
+    // packet. Costs one integer compare per cancel.
+    if (cancelAura.SpellID == 15473)
+        TC_LOG_INFO("custom.auras", "[CustomAuras] {}: CMSG_CANCEL_AURA(15473 Shadowform) received; has90340={} form={}",
+            _player ? _player->GetName() : "<no player>",
+            _player && _player->HasAura(90340),
+            _player ? uint32(_player->GetShapeshiftForm()) : 0u);
+
     // T2 Umbral Mercy (90340): the client's auto-unshift cancel of Shadowform
     // is swallowed for a holder (a manual cancel is deferred ~300 ms instead).
     // Must run before anything below touches the aura.

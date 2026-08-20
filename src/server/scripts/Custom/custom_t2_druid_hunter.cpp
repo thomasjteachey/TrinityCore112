@@ -45,6 +45,7 @@
  */
 
 #include "ScriptMgr.h"
+#include "Log.h"
 #include "Chat.h"
 #include "DynamicObject.h"
 #include "ObjectAccessor.h"
@@ -134,6 +135,12 @@ namespace
     // .gm diagnostics customauras - broadcast to every opted-in GM session
     void SendCustomAuraDiag(std::string const& msg)
     {
+        // Also to the log, not just to whoever happens to be watching. A
+        // chat-only diagnostic cannot distinguish "the chain never ran" from
+        // "no GM had the category enabled", which is precisely how three set
+        // bonuses got mis-diagnosed twice. Logger `custom.auras`; free when off.
+        TC_LOG_INFO("custom.auras", "{}", msg);
+
         for (auto const& sessionPair : sWorld->GetAllSessions())
             if (sessionPair.second && sessionPair.second->GetPlayer()
                 && sessionPair.second->IsGmDiagnosticEnabled(GmDiagnosticCategory::CustomAuras))
