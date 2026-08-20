@@ -2552,7 +2552,15 @@ ObjectGuid SelectFriendlyWithoutAnyAuraFromSpellChain(Player const* player, std:
 
 SpellDecision SelectMissingBattlegroundRaidBuff(Player const* player)
 {
-    if (!player || !player->InBattleground() || player->IsInCombat())
+    if (!player || !player->InBattleground())
+        return {};
+
+    // Same relaxation as SelectPreparationBuffSpell: holding a preparation
+    // aura or flag states "not fighting yet" outright, which the in-combat
+    // inference gets wrong for a Violet Hold wave preparing mid-match.
+    bool const preparing = player->HasAura(SPELL_ARENA_PREPARATION) || player->HasAura(SPELL_PREPARATION)
+        || player->HasUnitFlag(UNIT_FLAG_PREPARATION);
+    if (player->IsInCombat() && !preparing)
         return {};
 
     auto makeDecision = [player](char const* actionName, char const* reason, uint32 spellId,

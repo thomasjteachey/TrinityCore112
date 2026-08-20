@@ -67,6 +67,17 @@ namespace
 
         SPELL_WARLOCK_SUMMON_IMP        = 688,
         NPC_WARLOCK_IMP                 = 416,
+
+        // Improved Flurry is this fork's own talent: a PASSIVE (Attributes
+        // 0x40) whose single effect is APPLY_AURA / PROC_TRIGGER_SPELL (42)
+        // firing Blurry on melee autoattacks - verified in the binary
+        // Spell.dbc, and it is NOT a rank chain (the only other "Improved
+        // Flurry" row is the unrelated stock 37241). "Learned" therefore
+        // means HasSpell; HasAura is checked too because a learned passive is
+        // applied on login and the pair is what spell_t1_rehgar_flurry
+        // (custom_t1_set_bonuses.cpp) already uses.
+        SPELL_SHAMAN_IMPROVED_FLURRY    = 89746,
+        SPELL_SHAMAN_BLURRY             = 89745,
     };
 
     // Rimeward puts Purge on 10 s, Pyre on 15 s.
@@ -144,12 +155,41 @@ namespace
         }
     }
 
+    // Pyre Offering's payout.
+    //
+    // A shaman who has learned Improved Flurry (89746) gets BLURRY (89745)
+    // instead of Flurry - that talent's whole purpose is to convert Flurry
+    // procs into Blurry, so handing its owner raw Flurry charges would be
+    // handing him the thing he already traded away. Exactly ONE Blurry, not
+    // "two charges' worth", for three reasons: 89745 ships with ProcCharges 1
+    // and StackAmount 0 (verified in the binary Spell.dbc), so a second charge
+    // could only be forced on; one charge is already worth far more than the
+    // two Flurry swing charges below (-20% cast time, -0.5 s GCD and -100%
+    // mana cost on the next LB / CL / HW / LHW / Chain Heal, i.e. one free
+    // cast); and it matches every other grant of Blurry in the fork - the
+    // Improved Flurry proc itself and spell_t1_rehgar_flurry both give one.
+    // A recast while Blurry is already up refreshes it to a full 15 s / 1
+    // charge rather than stacking, which is the same behaviour as the talent
+    // proccing again.
+    //
     // Flurry is charge-based, not stacking: the buff always lands with its full
-    // 3 swing charges, so "grants N charges" means capping it back down. An
-    // untalented shaman has no Flurry rank and gets nothing - deliberate, and
-    // noted on the 90317 row in the dbc file.
-    void GrantFlurryCharges(Player* player, uint8 grant)
+    // 3 swing charges, so "grants N charges" means capping it back down. A
+    // shaman with neither Improved Flurry nor a Flurry rank gets nothing -
+    // deliberate, and noted on the 90317 row in the dbc file.
+    void GrantFlurryReward(Player* player, uint8 grant)
     {
+        if (player->HasSpell(SPELL_SHAMAN_IMPROVED_FLURRY) || player->HasAura(SPELL_SHAMAN_IMPROVED_FLURRY))
+        {
+            // Safe here: the only caller is the Purge wrapper's OnCast hook,
+            // i.e. the spell-cast path, not a walk over this unit's aura
+            // containers.
+            player->CastSpell(player, SPELL_SHAMAN_BLURRY, true);
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Pyre Offering - Improved Flurry learned, granted Blurry",
+                player->GetName()));
+            return;
+        }
+
         // highest rank first; talents[i] pairs with buffs[i]
         static constexpr std::array<uint32, 5> talents = { 16284, 16283, 16282, 16281, 16256 };
         static constexpr std::array<uint32, 5> buffs   = { 16280, 16279, 16278, 16277, 16257 };
@@ -169,7 +209,7 @@ namespace
         }
 
         SendCustomAuraDiag(Trinity::StringFormat(
-            "[CustomAuras] {}: Pyre Offering - no Flurry rank trained, no charges granted",
+            "[CustomAuras] {}: Pyre Offering - no Improved Flurry and no Flurry rank trained, nothing granted",
             player->GetName()));
     }
 
@@ -248,7 +288,9 @@ namespace
 //   90314 Rimeward Offering (frost-shock 8pc): the totem gets a 500 absorb and
 //         Purge goes on 10 sec.
 //   90317 Pyre Offering (flame-shock 8pc): the totem is destroyed, the shaman
-//         gets 2 Flurry charges and Purge goes on 15 sec.
+//         gets 2 Flurry charges - or one Blurry (89745) if he has learned
+//         Improved Flurry (89746), see GrantFlurryReward - and Purge goes on
+//         15 sec.
 //
 // This rides the shipped spell_sha_purge rather than reimplementing Purge:
 // spell_script_names is a multimap, so both scripts run on the same cast and
@@ -311,7 +353,7 @@ class spell_t2_purge_offering : public SpellScript
             return;
         }
 
-        GrantFlurryCharges(shaman, 2);
+        GrantFlurryReward(shaman, 2);
         AddVisiblePurgeCooldown(shaman, PYRE_PURGE_COOLDOWN_MS);
         SendCustomAuraDiag(Trinity::StringFormat(
             "[CustomAuras] {}: Pyre Offering - {} consumed, Purge on 15s",

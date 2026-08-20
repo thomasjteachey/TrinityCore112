@@ -249,6 +249,7 @@ void BattlegroundVHR::Reset()
     _allyRetryMs = 0;
     _allies.clear();
     _menagerie.clear();
+    _waveCloneSources.clear();
 }
 
 bool BattlegroundVHR::SetupBattleground()
@@ -358,6 +359,7 @@ void BattlegroundVHR::BeginWave()
 
     _waveNumber = nextWave;
     _waveEnemies.clear();
+    _waveCloneSources.clear();
 
     ComposeWave(enemyCount);
 
@@ -606,7 +608,21 @@ void BattlegroundVHR::ApplyPreparationToWave()
         if (!enemy)
             continue;
 
-        enemy->CastSpell(enemy, SPELL_ARENA_PREPARATION, true);
+        // AddAura, not CastSpell, and SPELL_PREPARATION rather than the arena
+        // one: BOTH preparation spells are location-gated in SpellInfo::
+        // CheckLocation to a battleground/arena at STATUS_WAIT_JOIN, and a
+        // Violet Hold wave prepares mid-match, so every cast was silently
+        // refused with SPELL_FAILED_REQUIRES_AREA and the clones never held
+        // the state their bot brain keys its opening buffs off. AddAura skips
+        // Spell::CheckCast entirely. The arena spell is deliberately not the
+        // one used: it also carries MOD_INVISIBILITY, which would hide the
+        // wave the party is watching gear up behind the door.
+        enemy->AddAura(SPELL_PREPARATION, enemy);
+        // What SPELL_AURA_ARENA_PREPARATION would have set. The bot brain
+        // accepts this flag as "not fighting yet", and the core reads it as
+        // "no reagents for preparation spells", which is what lets a clone
+        // put up a reagent buff it has no bags for.
+        enemy->SetUnitFlag(UNIT_FLAG_PREPARATION);
         enemy->ResetAllPowers();
     }
 
@@ -621,8 +637,10 @@ void BattlegroundVHR::ReleaseWaveFromPreparation()
         if (!enemy)
             continue;
 
+        enemy->RemoveAurasDueToSpell(SPELL_PREPARATION);
         enemy->RemoveAurasDueToSpell(SPELL_ARENA_PREPARATION);
         enemy->RemoveAurasDueToSpell(SPELL_INSTANT_CAST);
+        enemy->RemoveUnitFlag(UNIT_FLAG_PREPARATION);
         enemy->ResetAllPowers();
     }
 
@@ -641,11 +659,45 @@ void BattlegroundVHR::SetWaveEnemyImmunity(bool immune)
 
         enemy->SetImmuneToAll(immune);
 
+        // NON_ATTACKABLE and the immunities are what make the wave untouchable
+        // from outside the cell. UNIT_FLAG_UNINTERACTIBLE is deliberately NOT
+        // among them: it refuses every friendly interaction as well, including
+        // the clones' own support casting, and it buys nothing here that
+        // IMMUNE_TO_PC does not already give against real players.
         if (immune)
-            enemy->SetUnitFlag(UnitFlags(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_UNINTERACTIBLE));
+            enemy->SetUnitFlag(UNIT_FLAG_NON_ATTACKABLE);
         else
-            enemy->RemoveUnitFlag(UnitFlags(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_UNINTERACTIBLE));
+            enemy->RemoveUnitFlag(UNIT_FLAG_NON_ATTACKABLE);
     }
+}
+
+void BattlegroundVHR::NotifyCloneSource(ObjectGuid cloneGuid, ObjectGuid sourceGuid)
+{
+    if (!cloneGuid || !sourceGuid)
+        return;
+
+    _waveCloneSources.emplace_back(cloneGuid, sourceGuid);
+}
+
+void BattlegroundVHR::RefreshWaveBoonCopies()
+{
+    for (auto const& [cloneGuid, sourceGuid] : _waveCloneSources)
+    {
+        Player* clone = ObjectAccessor::FindPlayer(cloneGuid);
+        Player const* source = ObjectAccessor::FindPlayer(sourceGuid);
+        if (!clone || !source || !clone->IsInWorld() || !clone->IsAlive())
+            continue;
+
+        VioletHoldBoons::CopyBoonsTo(source, clone);
+    }
+}
+
+bool BattlegroundVHR::OwnsPreparationState(Player const* player) const
+{
+    if (!player || _waveState != WaveState::Preparing)
+        return false;
+
+    return std::find(_waveEnemies.begin(), _waveEnemies.end(), player->GetGUID()) != _waveEnemies.end();
 }
 
 void BattlegroundVHR::OpenWaveCell()
@@ -654,6 +706,10 @@ void BattlegroundVHR::OpenWaveCell()
         DoorOpen(cellIndex);
 
     ReleaseWaveFromPreparation();
+
+    // Anything the party bought from the brokers during the countdown is on
+    // their reflections too, as of this moment.
+    RefreshWaveBoonCopies();
 
     // The Menagerie walks out with the wave: last wave's guardians go, this
     // wave's arrive beside their owners.

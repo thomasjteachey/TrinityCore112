@@ -566,6 +566,14 @@ class TC_GAME_API Battleground
         // Rebirth, soulstones and Reincarnation all still work, exactly as they
         // do in an arena. Public because that handler is the caller.
         virtual bool AllowsCorpseReclaim() const { return true; }
+
+        // True while THIS battleground owns `player`'s preparation state: it
+        // applied the aura/flag itself and takes it back when it is ready.
+        // Violet Hold does that per WAVE, mid-match - and the playerbot
+        // lifecycle otherwise strips preparation from every bot the moment a
+        // match reads STATUS_IN_PROGRESS, which is Violet Hold's entire life.
+        virtual bool OwnsPreparationState(Player const* /*player*/) const { return false; }
+
         void SetHoliday(bool is_holiday);
 
         /// @todo make this protected:
@@ -653,6 +661,7 @@ class TC_GAME_API Battleground
         // countdown. Modes that legitimately run with one side empty - Violet
         // Hold sits at zero enemies between waves - opt out here.
         virtual bool AllowsPrematureFinish() const { return true; }
+
 
         // Scorekeeping
         BattlegroundScoreMap PlayerScores;                // Player scores

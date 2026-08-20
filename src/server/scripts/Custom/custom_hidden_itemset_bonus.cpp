@@ -47,14 +47,27 @@ struct HiddenItemsetBonus
     std::vector<uint32> summonedEntries;
 };
 
-using HiddenItemsetBonusMap = std::map<uint32, HiddenItemsetBonus>;
+// One row is "the N-piece bonus of set X", and a set has several of them
+// (3pc / 5pc / 8pc). Keying on itemset_id alone meant the loader's
+// `map[itemsetId] = b` kept only whichever row was read last, so two of every
+// three tiers were discarded before any player was looked at. The key is the
+// pair the table is really identified by, packed high-itemset/low-count so the
+// map still iterates a set's tiers together and in ascending piece order.
+using HiddenItemsetBonusKey = uint64;
+
+constexpr HiddenItemsetBonusKey MakeHiddenBonusKey(uint32 itemsetId, uint8 requiredCount)
+{
+    return (uint64(itemsetId) << 8) | uint64(requiredCount);
+}
+
+using HiddenItemsetBonusMap = std::map<HiddenItemsetBonusKey, HiddenItemsetBonus>;
 
 HiddenItemsetBonusMap s_HiddenItemsetBonuses;
 std::set<uint32> s_AllHiddenItemsetBonusSpells;
 std::unordered_map<uint32, std::vector<uint32>> s_KnownHiddenItemsetBonusLearns;
-std::unordered_map<uint32, uint32> s_KnownHiddenItemsetSpellIds;
+std::unordered_map<HiddenItemsetBonusKey, uint32> s_KnownHiddenItemsetSpellIds;
 std::unordered_map<uint32, std::vector<uint32>> s_KnownHiddenItemsetBonusSummons;
-using PlayerActiveItemsetMap = std::unordered_map<uint64, std::unordered_set<uint32>>;
+using PlayerActiveItemsetMap = std::unordered_map<uint64, std::unordered_set<HiddenItemsetBonusKey>>;
 PlayerActiveItemsetMap s_PlayerActiveHiddenItemsets;
 
 struct LearnedSpellRefState
@@ -92,7 +105,7 @@ void CollectLearnedSpellsFromSpell(uint32 spellId, std::unordered_set<uint32>& l
     }
 }
 
-bool IsHiddenBonusActive(Player* player, uint32 itemsetId)
+bool IsHiddenBonusActive(Player* player, HiddenItemsetBonusKey bonusKey)
 {
     if (!player)
         return false;
@@ -101,18 +114,18 @@ bool IsHiddenBonusActive(Player* player, uint32 itemsetId)
     if (itr == s_PlayerActiveHiddenItemsets.end())
         return false;
 
-    return itr->second.find(itemsetId) != itr->second.end();
+    return itr->second.find(bonusKey) != itr->second.end();
 }
 
-void MarkHiddenBonusActive(Player* player, uint32 itemsetId)
+void MarkHiddenBonusActive(Player* player, HiddenItemsetBonusKey bonusKey)
 {
     if (!player)
         return;
 
-    s_PlayerActiveHiddenItemsets[player->GetGUID().GetRawValue()].insert(itemsetId);
+    s_PlayerActiveHiddenItemsets[player->GetGUID().GetRawValue()].insert(bonusKey);
 }
 
-void MarkHiddenBonusInactive(Player* player, uint32 itemsetId)
+void MarkHiddenBonusInactive(Player* player, HiddenItemsetBonusKey bonusKey)
 {
     if (!player)
         return;
@@ -121,7 +134,7 @@ void MarkHiddenBonusInactive(Player* player, uint32 itemsetId)
     if (itr == s_PlayerActiveHiddenItemsets.end())
         return;
 
-    itr->second.erase(itemsetId);
+    itr->second.erase(bonusKey);
     if (itr->second.empty())
         s_PlayerActiveHiddenItemsets.erase(itr);
 }
@@ -277,9 +290,9 @@ void ResummonHiddenBonusCreatures(Player* player)
     if (itr == s_PlayerActiveHiddenItemsets.end())
         return;
 
-    for (uint32 itemsetId : itr->second)
+    for (HiddenItemsetBonusKey bonusKey : itr->second)
     {
-        auto bonusItr = s_HiddenItemsetBonuses.find(itemsetId);
+        auto bonusItr = s_HiddenItemsetBonuses.find(bonusKey);
         if (bonusItr == s_HiddenItemsetBonuses.end())
             continue;
 
@@ -294,25 +307,43 @@ void RecalcHiddenItemsetBonuses(Player* player)
 
     std::set<uint32> validSpells;
 
+    // Decide every tier before touching anything. Tiers of one set are separate
+    // rows judged separately - that is the point of the composite key - and two
+    // rows are allowed to grant the same spell, so the strip below has to know
+    // whether some other tier still wants it. Without that, a set whose 3pc and
+    // 5pc share a spell would have the 5pc branch tear down the 3pc's aura.
+    std::map<HiddenItemsetBonusKey, bool> wanted;
+    std::set<uint32> wantedSpells;
+
     for (auto const& kv : s_HiddenItemsetBonuses)
     {
-        uint32 itemsetId = kv.first;
         HiddenItemsetBonus const& bonus = kv.second;
 
         validSpells.insert(bonus.spellId);
 
-        uint8 have = player->GetEquippedItemSetCount(itemsetId);
+        bool const shouldBeActive =
+            player->GetEquippedItemSetCount(bonus.itemsetId) >= bonus.requiredCount;
+
+        wanted[kv.first] = shouldBeActive;
+        if (shouldBeActive)
+            wantedSpells.insert(bonus.spellId);
+    }
+
+    for (auto const& kv : s_HiddenItemsetBonuses)
+    {
+        HiddenItemsetBonusKey bonusKey = kv.first;
+        HiddenItemsetBonus const& bonus = kv.second;
 
         bool hasAura = player->HasAura(bonus.spellId);
 
-        bool shouldBeActive = have >= bonus.requiredCount;
-        bool isActive = IsHiddenBonusActive(player, itemsetId);
+        bool shouldBeActive = wanted[bonusKey];
+        bool isActive = IsHiddenBonusActive(player, bonusKey);
 
         if (shouldBeActive)
         {
             if (!isActive)
             {
-                MarkHiddenBonusActive(player, itemsetId);
+                MarkHiddenBonusActive(player, bonusKey);
                 AddLearnedSpellRefs(player, bonus);
             }
 
@@ -323,26 +354,34 @@ void RecalcHiddenItemsetBonuses(Player* player)
             {
                 player->AddAura(bonus.spellId, player);
                 TC_LOG_INFO("server.custom",
-                    "hidden_itemset: player {} gained hidden bonus for itemset {} (spell {}).",
-                    player->GetGUID().ToString(), itemsetId, bonus.spellId);
+                    "hidden_itemset: player {} gained hidden bonus for itemset {} ({}pc, spell {}).",
+                    player->GetGUID().ToString(), bonus.itemsetId,
+                    uint32(bonus.requiredCount), bonus.spellId);
             }
         }
         else
         {
-            if (hasAura)
+            // Only tear the spell down if no other tier of any set still wants
+            // it; the learned-spell refs below are counted, so they are always
+            // released per row.
+            if (wantedSpells.find(bonus.spellId) == wantedSpells.end())
             {
-                player->RemoveAura(bonus.spellId);
-                TC_LOG_INFO("server.custom",
-                    "hidden_itemset: player {} lost hidden bonus for itemset {} (spell {}).",
-                    player->GetGUID().ToString(), itemsetId, bonus.spellId);
-            }
+                if (hasAura)
+                {
+                    player->RemoveAura(bonus.spellId);
+                    TC_LOG_INFO("server.custom",
+                        "hidden_itemset: player {} lost hidden bonus for itemset {} ({}pc, spell {}).",
+                        player->GetGUID().ToString(), bonus.itemsetId,
+                        uint32(bonus.requiredCount), bonus.spellId);
+                }
 
-            UnsummonHiddenBonusCreatures(player, bonus);
+                UnsummonHiddenBonusCreatures(player, bonus);
+            }
 
             if (isActive)
             {
                 RemoveLearnedSpellRefs(player, bonus);
-                MarkHiddenBonusInactive(player, itemsetId);
+                MarkHiddenBonusInactive(player, bonusKey);
             }
         }
     }
@@ -364,14 +403,14 @@ void RecalcHiddenItemsetBonuses(Player* player)
     {
         for (auto it = activeItr->second.begin(); it != activeItr->second.end();)
         {
-            uint32 activeItemset = *it;
-            if (s_HiddenItemsetBonuses.find(activeItemset) != s_HiddenItemsetBonuses.end())
+            HiddenItemsetBonusKey activeKey = *it;
+            if (s_HiddenItemsetBonuses.find(activeKey) != s_HiddenItemsetBonuses.end())
             {
                 ++it;
                 continue;
             }
 
-            auto spellItr = s_KnownHiddenItemsetSpellIds.find(activeItemset);
+            auto spellItr = s_KnownHiddenItemsetSpellIds.find(activeKey);
             if (spellItr != s_KnownHiddenItemsetSpellIds.end())
             {
                 uint32 spellId = spellItr->second;
@@ -499,10 +538,12 @@ void LoadHiddenItemsetBonuses()
 
         b.learnedSpells.assign(learnedSpellSet.begin(), learnedSpellSet.end());
 
-        s_HiddenItemsetBonuses[b.itemsetId] = b;
+        HiddenItemsetBonusKey const key = MakeHiddenBonusKey(b.itemsetId, b.requiredCount);
+
+        s_HiddenItemsetBonuses[key] = b;
         currentSpells.insert(b.spellId);
         s_KnownHiddenItemsetBonusLearns[b.spellId] = b.learnedSpells;
-        s_KnownHiddenItemsetSpellIds[b.itemsetId] = b.spellId;
+        s_KnownHiddenItemsetSpellIds[key] = b.spellId;
         s_KnownHiddenItemsetBonusSummons[b.spellId] = b.summonedEntries;
     }
     while (result->NextRow());

@@ -1352,6 +1352,15 @@ void CopyBoonsTo(Player const* source, Player* target)
     // The clone shares the source's class, so the same variant fits.
     copyOne(GetBoonSpellFor(Boon::Cooldown, source->GetClass()));
 
+    // Self-audit: anything the source holds that did not make it across is a
+    // real defect (a refused AddAura, an immunity, a missing DBC row) and is
+    // otherwise completely silent - the copy has no return value and the
+    // players only find out by inspecting a clone mid-fight.
+    for (BoonInfo const& info : kBoons)
+        if (source->HasAura(info.spellId) && !target->HasAura(info.spellId))
+            TC_LOG_ERROR("bg.battleground", "VioletHoldBoons::CopyBoonsTo: boon {} ({}) did not copy from {} to clone {}.",
+                info.spellId, info.name, source->GetGUID().ToString(), target->GetGUID().ToString());
+
     // Anything the clone already has out (its mirrored hunter pet) gets the
     // Beastmaster blessing the copy just handed it.
     RefreshBeastmaster(target);

@@ -62,9 +62,19 @@ namespace T2SpellHooks
     //
     //  OnCancelAuraRequest  - FIRST thing in WorldSession::HandleCancelAuraOpcode.
     //      True = handled: the holder's Shadowform is NOT removed now; the cancel
-    //      is remembered and a ~300 ms event removes the form only if no heal
-    //      request has consumed the mark by then (a manual right-click cancel
-    //      still works, 300 ms late). False = not ours, stock path.
+    //      is remembered and a ZERO-offset event on the player's own queue
+    //      removes the form unless a heal request consumed the mark first. Zero
+    //      is exact, not optimistic - CMSG_CANCEL_AURA is PROCESS_INPLACE
+    //      (World::UpdateSessions), CMSG_CAST_SPELL is PROCESS_THREADSAFE (the
+    //      session pass at the top of Map::Update) and Player::Update runs after
+    //      both, while LockedQueue::next peeks the queue HEAD so no packet can
+    //      overtake one sent before it. A deliberate press therefore takes the
+    //      form off on the very tick it was pressed. A second cancel arriving
+    //      before the first resolved is honoured on the spot (the client
+    //      auto-unshifts once per cast, so two in a row is a human pressing the
+    //      button), which is also what stops a mashed button from starving the
+    //      removal for ever - the bug the old 300 ms wall-clock grace had.
+    //      False = not ours, stock path.
     //  OnCastSpellRequest   - WorldSession::HandleCastSpellOpcode, before
     //      Spell::prepare. A pending mark plus a priest heal (see the body for
     //      the predicate) consumes the mark - whether or not the cast goes on to

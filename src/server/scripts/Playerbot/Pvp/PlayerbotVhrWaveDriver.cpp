@@ -206,9 +206,14 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
         }
 
         // A clone of a party member is that member, boons included - the
-        // clone manager copies the spellbook and gear but wipes auras.
+        // clone manager copies the spellbook and gear but wipes auras. The
+        // pairing goes to the battleground as well, which re-copies as the
+        // cells open so boons bought during the countdown still land.
         if (isActualHuman)
+        {
             VioletHoldBoons::CopyBoonsTo(source, clone);
+            bg->NotifyCloneSource(clone->GetGUID(), source->GetGUID());
+        }
 
         // Deep waves reinforce everything that is NOT a party copy: +5%
         // Stamina per wave past BG_VHR_REINFORCE_FROM_WAVE, so the bot-sourced

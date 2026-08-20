@@ -6,9 +6,10 @@
 
 #include <atomic>
 #include <cmath>
-#include <list>
 #include <mutex>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace
 {
@@ -61,42 +62,50 @@ namespace
                            float bx, float by, float bz,
                            WorldObject const* exclude)
     {
-        std::list<Player*> nearby;
-        // Search from the caster; a blocker further than the shot itself cannot
-        // stand between the two ends of it.
         float dx = bx - ax, dy = by - ay;
-        float range = std::sqrt(dx * dx + dy * dy) + BLOCK_RADIUS + 1.0f;
-        caster->GetPlayerListInGrid(nearby, range);
 
-        for (Player* p : nearby)
+        // Walk the registry, not the grid. GetPlayerListInGrid only ever yields
+        // *alive players*, so a blocker that is not a player could never be
+        // found however faithfully it registered itself - which is what kept
+        // Tomb of Ice's summon (90522) inert. It is also the cheaper of the two:
+        // the registry holds a handful of entries at most, where a grid search
+        // touches every player in range.
+        //
+        // Snapshot under the lock and resolve outside it. Resolving a guid walks
+        // the map, and holding s_mutex across that would invert the lock order
+        // against an Add/Remove firing from an aura hook on another map update.
+        std::vector<std::pair<ObjectGuid, uint32>> candidates;
         {
-            if (!p || p == caster || p == exclude)
-                continue;
-            if (!p->IsInWorld() || p->IsGameMaster())
-                continue;
+            std::lock_guard<std::mutex> guard(s_mutex);
+            candidates.assign(s_blockers.begin(), s_blockers.end());
+        }
 
-            uint32 auraId = 0;
-            {
-                std::lock_guard<std::mutex> guard(s_mutex);
-                auto itr = s_blockers.find(p->GetGUID());
-                if (itr == s_blockers.end())
-                    continue;
-                auraId = itr->second;
-            }
+        for (auto const& candidate : candidates)
+        {
+            WorldObject* blocker = ObjectAccessor::GetWorldObject(*caster, candidate.first);
+            if (!blocker || blocker == caster || blocker == exclude)
+                continue;
+            if (!blocker->IsInWorld() || !blocker->IsInMap(caster))
+                continue;
 
             // The registry is only a fast filter. Verify the aura for real, so a
             // stale entry - a disconnect that skipped the remove handler, say -
             // can never make somebody block without the buff.
-            if (!p->HasAura(auraId))
+            Unit const* blockerUnit = blocker->ToUnit();
+            if (!blockerUnit || !blockerUnit->HasAura(candidate.second))
                 continue;
 
+            if (Player const* blockerPlayer = blocker->ToPlayer())
+                if (blockerPlayer->IsGameMaster())
+                    continue;
+
             // Only enemies are eclipsed by you; allies shoot through freely.
-            if (!caster->IsHostileTo(p))
+            if (!caster->IsHostileTo(blocker))
                 continue;
 
             float t = 0.0f;
             float d = DistanceToSegment2D(ax, ay, bx, by,
-                                          p->GetPositionX(), p->GetPositionY(), t);
+                                          blocker->GetPositionX(), blocker->GetPositionY(), t);
             if (d >= BLOCK_RADIUS)
                 continue;
 
@@ -113,7 +122,7 @@ namespace
             // Height: the shot's z where the blocker stands, against the
             // blocker's own column.
             float shotZ = az + (bz - az) * t;
-            float footZ = p->GetPositionZ();
+            float footZ = blocker->GetPositionZ();
             if (shotZ < footZ - 0.5f || shotZ > footZ + BLOCK_HEIGHT)
                 continue;
 

@@ -17,30 +17,68 @@
  */
 
 #include "T2SpellHooks.h"
+#include "Chat.h"
 #include "GameTime.h"
 #include "Player.h"
 #include "Spell.h"
 #include "SpellAuraEffects.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "StringFormat.h"
 #include "Timer.h"
 #include "Unit.h"
 #include "Util.h"
+#include "World.h"
+#include "WorldSession.h"
 #include <mutex>
 #include <unordered_map>
 
 namespace
 {
+    // .gm diagnostics customauras - same channel the T2 script files use, so a
+    // live test can watch the core half of these bonuses too. Nothing here is
+    // reached unless a GM has opted in AND the hook already decided it has work.
+    void SendCustomAuraDiag(std::string const& msg)
+    {
+        for (auto const& sessionPair : sWorld->GetAllSessions())
+            if (sessionPair.second && sessionPair.second->GetPlayer()
+                && sessionPair.second->IsGmDiagnosticEnabled(GmDiagnosticCategory::CustomAuras))
+                ChatHandler(sessionPair.second).SendSysMessage(msg.c_str());
+    }
+
     // -----------------------------------------------------------------------
     // UMBRAL MERCY
     // -----------------------------------------------------------------------
 
     // How long a swallowed CMSG_CANCEL_AURA(Shadowform) waits for the heal's
-    // CMSG_CAST_SPELL before it is honoured after all. The two packets arrive
-    // in one client frame, so the heal is normally processed in the same world
-    // tick; 300 ms is generous latency slack and still short enough that a
-    // manual right-click cancel feels immediate.
-    constexpr uint32 UMBRAL_CANCEL_GRACE_MS = 300;
+    // CMSG_CAST_SPELL before it is honoured after all. ZERO - one player tick,
+    // not a wall-clock grace - and that is exact rather than optimistic:
+    //
+    //   * CMSG_CANCEL_AURA is PROCESS_INPLACE, so it is drained by
+    //     World::UpdateSessions().
+    //   * CMSG_CAST_SPELL is PROCESS_THREADSAFE, so it is drained by the
+    //     per-map session pass at the TOP of Map::Update().
+    //   * Player::Update() (and with it Unit::Update -> m_Events.Update) runs
+    //     in the object-update pass AFTER that, in the same Map::Update.
+    //   * WorldSession::Update pops from a single FIFO through
+    //     LockedQueue::next(), which peeks the HEAD and stops when the filter
+    //     rejects it. A packet can therefore never overtake one that was sent
+    //     before it, whichever filter each of them belongs to.
+    //
+    // So a cancel and the cast the client sent behind it in the same frame are
+    // always both handled before the event fires, even if they arrive in
+    // different world ticks. An offset of zero is "after the rest of this
+    // client frame", which is the shortest deadline that is still correct - and
+    // it makes a deliberate toggle come off on the very same tick it was
+    // pressed instead of a third of a second later.
+    //
+    // The old 300 ms wall-clock grace was ALSO starvable: every press replaced
+    // the pending mark with a new stamp and pushed the deadline out, so a
+    // player mashing the button faster than once per 300 ms kept Shadowform on
+    // for ever. That is the reported "can't leave shadowform" bug. A zero
+    // offset cannot be starved, and the second-press rule below is the belt to
+    // that brace.
+    constexpr uint32 UMBRAL_CANCEL_GRACE_MS = 0;
 
     // A cast request only matches a pending cancel inside this window. Wider
     // than the grace so a tick that runs late still pairs the two packets;
@@ -125,14 +163,26 @@ namespace
         return true;
     }
 
-    void DealReflect(Unit* attacker, Unit* victim, uint32 preventedDamage)
+    void DealReflect(Unit* attacker, Unit* victim, uint32 preventedDamage, char const* source)
     {
-        if (!preventedDamage)
-            return;
-
-        int32 reflected = int32(CalculatePct(preventedDamage, REFLECT_PERCENT));
+        int32 reflected = preventedDamage ? int32(CalculatePct(preventedDamage, REFLECT_PERCENT)) : 0;
         if (reflected <= 0)
+        {
+            // A zero estimate is a silent no-op that looks exactly like "the
+            // bonus does nothing", so say it out loud on the diag channel.
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Reflective Carapace - {} from {} prevented 0 estimated damage, nothing to reflect",
+                victim->GetName(), source, attacker->GetName()));
             return;
+        }
+
+        if (!sSpellMgr->GetSpellInfo(SPELL_REFLECTIVE_ICE_DAMAGE))
+        {
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Reflective Carapace - helper spell {} is not in the loaded Spell.dbc, no reflect",
+                victim->GetName(), SPELL_REFLECTIVE_ICE_DAMAGE));
+            return;
+        }
 
         // Cast by the blocked mage at the attacker, triggered (the mage is stunned
         // by Ice Block - TRIGGERED_FULL_MASK ignores caster auras) so it shows up
@@ -140,6 +190,27 @@ namespace
         CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
         args.AddSpellBP0(reflected);
         victim->CastSpell(attacker, SPELL_REFLECTIVE_ICE_DAMAGE, args);
+
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Reflective Carapace - {} from {} prevented {}, reflected {} frost",
+            victim->GetName(), source, attacker->GetName(), preventedDamage, reflected));
+    }
+
+    // Why a reflect that should have happened did not. Only ever called on the
+    // (rare) immune-hit path, and only for a player who is actually in Ice
+    // Block, so it costs nobody anything.
+    void ReportReflectMiss(Unit* attacker, Unit* victim, char const* source)
+    {
+        Player* mage = victim ? victim->ToPlayer() : nullptr;
+        if (!mage || !mage->HasAura(T2SpellHooks::SPELL_ICE_BLOCK))
+            return;
+
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Reflective Carapace did NOT fire for {} - carrier 90344 {}, attacker {}, hostile {}",
+            mage->GetName(), source,
+            mage->HasAura(T2SpellHooks::SPELL_REFLECTIVE_ICE) ? "present" : "MISSING (set bonus was never granted)",
+            attacker ? (attacker->IsAlive() ? "alive" : "dead") : "none",
+            attacker && (mage->IsHostileTo(attacker) || attacker->IsHostileTo(mage)) ? "yes" : "no"));
     }
 
     // Rough "what would this spell have done" for a spell that was flatly immune.
@@ -286,18 +357,31 @@ void T2SpellHooks::OnImmuneSpellHit(Unit* caster, Unit* victim, SpellInfo const*
         return;
 
     if (!ReflectApplies(caster, victim))
+    {
+        // The one place the whole feature can be observed from outside: this
+        // hook is called for EVERY immune hostile spell hit, not just a
+        // carrier's, so the diag can say whether the 8pc aura is even there.
+        ReportReflectMiss(caster, victim, "an immune spell");
         return;
+    }
 
     uint32 prevented = EstimateImmuneSpellDamage(caster, victim, spellInfo);
-    DealReflect(caster, victim, prevented);
+    char const* spellName = spellInfo->SpellName[sWorld->GetDefaultDbcLocale()];
+    DealReflect(caster, victim, prevented, spellName ? spellName : "a spell");
 }
 
 void T2SpellHooks::OnImmuneMeleeHit(Unit* attacker, Unit* victim, uint32 wouldBeDamage)
 {
     if (!ReflectApplies(attacker, victim))
+    {
+        // Unit::CalculateMeleeDamage already gated this call on the victim
+        // carrying 90344, so getting here means Ice Block, life or hostility
+        // failed - worth naming.
+        ReportReflectMiss(attacker, victim, "an immune melee swing");
         return;
+    }
 
-    DealReflect(attacker, victim, wouldBeDamage);
+    DealReflect(attacker, victim, wouldBeDamage, "a melee swing");
 }
 
 bool T2SpellHooks::OnCancelAuraRequest(Player* player, uint32 spellId)
@@ -310,9 +394,32 @@ bool T2SpellHooks::OnCancelAuraRequest(Player* player, uint32 spellId)
         return false;
 
     uint32 const stamp = GameTime::GetGameTimeMS();
+    bool secondPress = false;
     {
         std::lock_guard<std::mutex> guard(s_umbralMutex);
-        s_umbralPendingCancel[player->GetGUID()] = stamp;
+        auto itr = s_umbralPendingCancel.find(player->GetGUID());
+        if (itr != s_umbralPendingCancel.end())
+        {
+            // A cancel is already waiting on its resolve event. The client
+            // auto-unshifts exactly once per cast attempt and always follows it
+            // with the cast in the same frame, so a SECOND cancel arriving
+            // before the first was resolved cannot be an auto-unshift - it is
+            // the player pressing the button. Honour it on the spot; the
+            // pending event then finds no mark and does nothing.
+            s_umbralPendingCancel.erase(itr);
+            secondPress = true;
+        }
+        else
+            s_umbralPendingCancel[player->GetGUID()] = stamp;
+    }
+
+    if (secondPress)
+    {
+        player->RemoveOwnedAura(SPELL_SHADOWFORM, ObjectGuid::Empty, 0, AURA_REMOVE_BY_CANCEL);
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Umbral Mercy - second Shadowform cancel before the first resolved, form dropped now",
+            player->GetName()));
+        return true;
     }
 
     // The removal is deferred past the frame the heal's CMSG_CAST_SPELL shares
@@ -332,8 +439,11 @@ bool T2SpellHooks::OnCancelAuraRequest(Player* player, uint32 spellId)
         }
 
         // Nobody consumed it: it was a real cancel. Same call the stock
-        // handler would have made 300 ms ago.
+        // handler would have made one tick ago.
         player->RemoveOwnedAura(SPELL_SHADOWFORM, ObjectGuid::Empty, 0, AURA_REMOVE_BY_CANCEL);
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Umbral Mercy - Shadowform cancel was not followed by a heal, form dropped",
+            player->GetName()));
     }, Milliseconds(UMBRAL_CANCEL_GRACE_MS));
 
     return true;
@@ -350,6 +460,7 @@ void T2SpellHooks::OnCastSpellRequest(Player* player, SpellInfo const* spellInfo
         return;
 
     bool honourNow = false;
+    bool keptForHeal = false;
     {
         std::lock_guard<std::mutex> guard(s_umbralMutex);
         auto itr = s_umbralPendingCancel.find(player->GetGUID());
@@ -370,7 +481,7 @@ void T2SpellHooks::OnCastSpellRequest(Player* player, SpellInfo const* spellInfo
             // The whole point: consumed even if the cast goes on to fail
             // (range, mana, already casting) - the form stays either way.
             s_umbralPendingCancel.erase(itr);
-            return;
+            keptForHeal = true;
         }
 
         // Not a heal, but a spell Shadowform forbids (Smite, Holy Fire, Holy
@@ -379,7 +490,7 @@ void T2SpellHooks::OnCastSpellRequest(Player* player, SpellInfo const* spellInfo
         // exactly what it sees without the set - no form, no refusal.
         // Anything else (Mind Blast after a manual cancel) leaves the mark to
         // its event.
-        if (player->GetShapeshiftForm() == FORM_SHADOW && spellInfo->CheckShapeshift(FORM_SHADOW) != SPELL_CAST_OK)
+        else if (player->GetShapeshiftForm() == FORM_SHADOW && spellInfo->CheckShapeshift(FORM_SHADOW) != SPELL_CAST_OK)
         {
             s_umbralPendingCancel.erase(itr);
             honourNow = true;
@@ -388,6 +499,15 @@ void T2SpellHooks::OnCastSpellRequest(Player* player, SpellInfo const* spellInfo
 
     if (honourNow)
         player->RemoveOwnedAura(SPELL_SHADOWFORM, ObjectGuid::Empty, 0, AURA_REMOVE_BY_CANCEL);
+
+    if (keptForHeal || honourNow)
+    {
+        char const* spellName = spellInfo->SpellName[sWorld->GetDefaultDbcLocale()];
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Umbral Mercy - autoUnshift cancel {} by {} (id {})",
+            player->GetName(), keptForHeal ? "consumed, Shadowform kept" : "honoured, Shadowform dropped",
+            spellName ? spellName : "?", spellInfo->Id));
+    }
 }
 
 bool T2SpellHooks::WaivesShapeshiftRestriction(Unit const* caster, SpellInfo const* spellInfo)

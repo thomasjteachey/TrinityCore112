@@ -5033,7 +5033,13 @@ namespace playerbot
 
         ClearStaleWaitingForResurrectAura(player);
 
-        if (player->HasAura(SPELL_PREPARATION) || player->HasAura(SPELL_ARENA_PREPARATION) || player->HasUnitFlag(UNIT_FLAG_PREPARATION))
+        // Stale start-of-match preparation on a bot that is already playing.
+        // A battleground that hands out preparation mid-match owns it and
+        // takes it back itself (Violet Hold's per-wave gate) - stripping that
+        // would delete the window the wave is meant to buff in, on the very
+        // next tick.
+        if ((player->HasAura(SPELL_PREPARATION) || player->HasAura(SPELL_ARENA_PREPARATION) || player->HasUnitFlag(UNIT_FLAG_PREPARATION))
+            && !battleground->OwnsPreparationState(player))
         {
             player->RemoveAurasDueToSpell(SPELL_PREPARATION);
             player->RemoveAurasDueToSpell(SPELL_ARENA_PREPARATION);

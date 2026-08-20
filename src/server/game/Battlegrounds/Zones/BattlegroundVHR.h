@@ -365,6 +365,10 @@ public:
     // countdown would treat every gap as a team having abandoned the match.
     bool AllowsPrematureFinish() const override { return false; }
 
+    // The wave behind the gates is mid-preparation and its clones are holding
+    // the preparation aura and flag this battleground gave them.
+    bool OwnsPreparationState(Player const* player) const override;
+
     // --- script-side clone driver interface -------------------------------
     // The driver polls this every world tick. A non-null return means the wave
     // has been composed and is waiting to be summoned; the driver spawns one
@@ -373,6 +377,14 @@ public:
     // does not start, so a slow spawn never eats into the players' warning.
     VhrWaveSpawnRequest const* GetPendingWaveSpawnRequest() const;
     void NotifyWaveSpawnFulfilled(uint32 waveNumber, uint32 spawnedCount);
+
+    // Reported per clone as the driver builds the wave, for clones copied from
+    // a party member. The pairing is what lets the boons be refreshed when the
+    // gates open: the wave is composed the instant the previous one dies -
+    // BEFORE the party has even walked to the brokers that drop with it - so a
+    // boon taken during the preparation window would otherwise not reach the
+    // wave it was bought to fight.
+    void NotifyCloneSource(ObjectGuid cloneGuid, ObjectGuid sourceGuid);
 
     // The team the clones fight on. Humans always hold the other one.
     uint32 GetEnemyTeam() const { return _enemyTeam; }
@@ -449,6 +461,10 @@ private:
     // ramp, and every wave past BG_VHR_QUARTER_RAMP_LAST_WAVE.
     static uint8 GetPartialCloneStacks(uint32 wave);
 
+    // Re-copy every party member's boons onto the clones made from them, as
+    // the cells open. Idempotent: CopyBoonsTo only tops up what is missing.
+    void RefreshWaveBoonCopies();
+
     // Menagerie: summon each holder's guardians as the cells open, take the
     // previous wave's down first (and at the end of the run).
     void SummonMenagerie();
@@ -523,6 +539,8 @@ private:
     GuidSet _allies;
     // Menagerie guardians alive for the current wave.
     std::vector<ObjectGuid> _menagerie;
+    // clone -> the party member it was copied from, for the current wave only.
+    std::vector<std::pair<ObjectGuid, ObjectGuid>> _waveCloneSources;
 };
 
 #endif

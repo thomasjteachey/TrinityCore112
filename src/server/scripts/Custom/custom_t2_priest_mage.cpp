@@ -34,7 +34,10 @@
  * heal through with the form still up). Nothing in this file touches the form
  * any more - an earlier script-side re-apply was removed so the two cannot
  * fight. Only the PRICE is here: half of the effective healing, paid as shadow
- * self-damage (AfterHit for the direct heals, a deferred tick for Renew).
+ * self-damage. Since 2026-08-19 that is ONE mechanism for every heal - the
+ * carrier's own proc (spell_proc row on 90340) queues the price and
+ * t2_priest_mage_update pays it next tick. The eleven per-heal
+ * spell_script_names bindings it replaced are gone.
  */
 
 #include "ScriptMgr.h"
@@ -144,10 +147,10 @@ namespace
     // Hoarfrost Bloom: mages whose Ice Block just ran out.
     std::unordered_set<ObjectGuid> s_pendingHoarfrost;
 
-    // Umbral Mercy: self damage owed for Renew ticks healed in Shadowform,
-    // accumulated by the 90340 proc and paid on the next Player::Update tick
-    // (the tick fires inside the priest's own owned-aura walk when the Renew
-    // is on himself, and DealDamage strips TAKE_DAMAGE auras - deferred).
+    // Umbral Mercy: self damage owed for healing done in Shadowform (direct
+    // heals and Renew ticks alike), accumulated by the 90340 proc and paid on
+    // the next Player::Update tick - a Renew tick on the priest himself fires
+    // inside his own owned-aura walk, and DealDamage strips TAKE_DAMAGE auras.
     std::unordered_map<ObjectGuid, int32> s_pendingUmbralPrice;
 
     // Ashen Confiscation state, per mage.
@@ -538,70 +541,49 @@ class spell_t2_holy_censer : public AuraScript
 // proc of the spell that took the mod, not by Spell::TakeMods). Both rows were
 // missing from the 2026_08_17_01 world file; they are in 2026_08_19_06.
 
-// The heals (Lesser Heal, Heal, Greater Heal, Flash Heal, Binding Heal,
-// Prayer of Healing, Circle of Healing, Desperate Prayer and Renew - all
-// ranks, bound through their spell_ranks chains), carrying the shadow 5pc's
-// PRICE: every direct hit they land in Shadowform costs the priest half of the
-// EFFECTIVE healing (overheal is not charged). Renew's own cast contributes
-// nothing here (GetHitHeal() is 0 for an aura-only spell); its ticks are priced
-// by spell_t2_umbral_mercy_passive below, off the DONE_PERIODIC heal proc that
-// carries the tick's HealInfo.
+// RETIRED 2026-08-19: 'spell_t2_umbral_mercy', a SpellScript that sat on the
+// nine heal chains (eleven spell_script_names rows of NEGATIVE first-rank ids)
+// and charged the price from AfterHit. Everything it did is now done by the
+// carrier's own proc below, for one reason: eleven rows that each depend on the
+// spell_ranks chain still holding every rank of that heal is eleven ways for the
+// bonus to go quietly missing, and "Umbral Mercy is not damaging me when I heal"
+// is exactly what a dropped binding looks like. One aura, one spell_proc row and
+// one script is the whole feature now. The DELETE in the world file still names
+// the retired script, so replaying it drops the old rows.
+//
+// NOT covered (documented, not half-built): Prayer of Mending (its heals are
+// cast by the bounce target, triggered, under the priest's guid) and Holy
+// Nova's linked heal. Neither is in 90340's family mask, so both keep the stock
+// behaviour - the same set the 5pc's own MOD_IGNORE_SHAPESHIFT effect covers.
+
+// 90340 - Umbral Mercy itself, and the whole price. The carrier is a dummy
+// aura; its spell_proc row (family 6, mask0 0x11041E40 / mask1 0x4 - Lesser
+// Heal, Heal, Greater Heal, Flash Heal, Prayer of Healing, Circle of Healing,
+// Desperate Prayer, Renew and Binding Heal, byte for byte the mask on 90340's
+// own MOD_IGNORE_SHAPESHIFT effect; ProcFlags DONE_SPELL_MAGIC_DMG_CLASS_POS |
+// DONE_PERIODIC, SpellTypeMask HEAL, phase HIT) makes it see every heal the
+// priest lands, direct or ticking, with that hit's HealInfo - effective heal,
+// overheal excluded, which is what "healing done" means in the log.
+//
+// All nine heals are SPELL_DAMAGE_CLASS_MAGIC, so Spell::prepareDataForTriggerSystem
+// leaves the proc flags empty and TargetInfo::DoDamageAndTriggers fills in
+// DONE_SPELL_MAGIC_DMG_CLASS_POS for the positive hit; Renew's own cast heals
+// nothing and is filtered out by SpellTypeMask (it reports NO_DMG_HEAL), its
+// ticks come back through DONE_PERIODIC. Multi-target heals proc once per
+// target, which is the same per-target pricing the old AfterHit did.
 //
 // Keeping the form up is NOT this script's job. The 3.3.5 client auto-unshifts
 // (CMSG_CANCEL_AURA(15473) then CMSG_CAST_SPELL in one frame); that cancel is
 // swallowed for 90340 holders in core (T2SpellHooks::OnCancelAuraRequest), and
 // the cast is let through with the form still up (OnCastSpellRequest + the
-// CheckShapeshift waiver, with 90340 effect 2's MOD_IGNORE_SHAPESHIFT over the
-// heals). By the time this script runs the priest is simply still in
-// Shadowform, which is exactly the state the price keys on.
+// CheckShapeshift waiver). By the time this script runs the priest is simply
+// still in Shadowform, which is exactly the state the price keys on.
 //
-// NOT covered (documented, not half-built): Prayer of Mending (its heals are
-// cast by the bounce target, triggered, under the priest's guid) and Holy
-// Nova's linked heal. Both keep the stock behaviour.
-class spell_t2_umbral_mercy : public SpellScript
-{
-    PrepareSpellScript(spell_t2_umbral_mercy);
-
-    void HandleAfterHit()
-    {
-        Unit* caster = GetCaster();
-        Player* priest = caster ? caster->ToPlayer() : nullptr;
-        if (!priest || !priest->HasAura(SPELL_T2_UMBRAL_MERCY))
-            return;
-        // "Doing so" is specifically healing in Shadowform; a priest who left
-        // form on purpose first (a deliberate cancel, which core lets through
-        // when no heal follows it) pays nothing.
-        if (priest->GetShapeshiftForm() != FORM_SHADOW)
-            return;
-
-        // AfterHit: m_healing now holds the EFFECTIVE heal (DealHeal wrote the
-        // real gain back), which is what "healing done" means in the log.
-        int32 const price = CalculatePct(GetHitHeal(), 50);
-        if (price <= 0)
-            return;
-
-        DealUmbralMercyPrice(priest, price);
-
-        SendCustomAuraDiag(Trinity::StringFormat(
-            "[CustomAuras] {}: Umbral Mercy - {} in Shadowform healed {} for {}, cost {} health",
-            priest->GetName(), GetSpellInfo()->SpellName[sWorld->GetDefaultDbcLocale()],
-            GetHitUnit() ? GetHitUnit()->GetName() : std::string("?"), GetHitHeal(), price));
-    }
-
-    void Register() override
-    {
-        AfterHit += SpellHitFn(spell_t2_umbral_mercy::HandleAfterHit);
-    }
-};
-
-// 90340 - Umbral Mercy itself, the Renew half of the price. The carrier is a
-// dummy aura; its spell_proc row (family 6 mask 0x40 = Renew, ProcFlags
-// DONE_PERIODIC, SpellTypeMask HEAL, phase HIT) makes it see every Renew tick
-// the priest lands, with the tick's HealInfo - effective heal, overheal
-// excluded, exactly what AfterHit sees for the direct heals. The price is only
-// QUEUED here: the tick runs inside the owned-aura walk of whoever carries the
-// Renew (the priest himself, often), and DealDamage strips TAKE_DAMAGE auras
-// from the priest, so the damage is dealt from t2_priest_mage_update::OnUpdate.
+// The price is only QUEUED here: a tick runs inside the owned-aura walk of
+// whoever carries the Renew (the priest himself, often) and even a direct heal
+// procs from inside the spell's hit frame, while DealDamage strips TAKE_DAMAGE
+// auras from the priest - so the damage is dealt from
+// t2_priest_mage_update::OnUpdate, one tick later, with nothing in flight.
 class spell_t2_umbral_mercy_passive : public AuraScript
 {
     PrepareAuraScript(spell_t2_umbral_mercy_passive);
@@ -631,6 +613,15 @@ class spell_t2_umbral_mercy_passive : public AuraScript
             return;
 
         int32 const price = CalculatePct(int32(healInfo->GetEffectiveHeal()), 50);
+
+        SpellInfo const* healSpell = eventInfo.GetSpellInfo();
+        char const* healName = healSpell ? healSpell->SpellName[sWorld->GetDefaultDbcLocale()] : nullptr;
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Umbral Mercy - {} healed {} for {} effective, price {}",
+            priest->GetName(), healName ? healName : "?",
+            healInfo->GetTarget() ? healInfo->GetTarget()->GetName() : std::string("?"),
+            healInfo->GetEffectiveHeal(), price));
+
         if (price <= 0)
             return;
 
@@ -871,6 +862,13 @@ class spell_t2_ashen_confiscation : public AuraScript
         if (!mage || !victim)
             return;
 
+        // First rung of the chain, said out loud: if this never appears in the
+        // diag channel during a live test the 8pc aura was never granted (or
+        // its spell_proc row is missing) and everything below is moot.
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Ashen Confiscation - Fire Blast proc on {}, casting the disarm",
+            mage->GetName(), victim->GetName()));
+
         mage->CastSpell(victim, SPELL_MAGE_FIERY_PAYBACK_DISARM, aurEff);
 
         // Mechanic immunity, a PvP trinket or a resist all eat the disarm, and
@@ -1040,21 +1038,31 @@ public:
 
         if (hoarfrost && player->IsInWorld() && player->IsAlive() && player->HasAura(SPELL_T2_HOARFROST_BLOOM))
         {
-            // 90385 selects TARGET_UNIT_SRC_AREA_ENEMY around the mage, so
-            // this adds auras to nearby enemies and never to the mage.
-            player->CastSpell(player, SPELL_T2_ENCASED_IN_ICE, true);
-            SendCustomAuraDiag(Trinity::StringFormat(
-                "[CustomAuras] {}: Hoarfrost Bloom - Ice Block ran out, freezing 10 yd",
-                player->GetName()));
+            // 90385 selects TARGET_UNIT_SRC_AREA_ENEMY (radius index 13 = 10
+            // yd) around the mage, so this adds auras to nearby enemies and
+            // never to the mage. Effect 0 is a 6 s MOD_STUN with mechanic
+            // FREEZE and AuraInterruptFlags TAKE_DAMAGE, so damage breaks it.
+            if (!sSpellMgr->GetSpellInfo(SPELL_T2_ENCASED_IN_ICE))
+                SendCustomAuraDiag(Trinity::StringFormat(
+                    "[CustomAuras] {}: Hoarfrost Bloom - helper spell {} is not in the loaded Spell.dbc, no freeze",
+                    player->GetName(), uint32(SPELL_T2_ENCASED_IN_ICE)));
+            else
+            {
+                player->CastSpell(player, SPELL_T2_ENCASED_IN_ICE, true);
+                SendCustomAuraDiag(Trinity::StringFormat(
+                    "[CustomAuras] {}: Hoarfrost Bloom - Ice Block ran out, freezing 10 yd",
+                    player->GetName()));
+            }
         }
 
         // Umbral Mercy - the Renew ticks' price, one tick after the heal.
         if (umbralPrice > 0 && player->IsInWorld() && player->IsAlive() && player->HasAura(SPELL_T2_UMBRAL_MERCY))
         {
+            uint32 const before = player->GetHealth();
             DealUmbralMercyPrice(player, umbralPrice);
             SendCustomAuraDiag(Trinity::StringFormat(
-                "[CustomAuras] {}: Umbral Mercy - Renew ticked in Shadowform, cost {} health",
-                player->GetName(), umbralPrice));
+                "[CustomAuras] {}: Umbral Mercy - healing done in Shadowform cost {} health ({} -> {})",
+                player->GetName(), umbralPrice, before, player->GetHealth()));
         }
 
         if (cleanup)
@@ -1110,7 +1118,6 @@ public:
 void AddSC_custom_t2_priest_mage()
 {
     RegisterSpellScript(spell_t2_holy_censer);
-    RegisterSpellScript(spell_t2_umbral_mercy);
     RegisterSpellScript(spell_t2_umbral_mercy_passive);
     RegisterSpellScript(spell_t2_wraithblade);
     RegisterSpellScript(spell_t2_dusty_glacial_reprieve);

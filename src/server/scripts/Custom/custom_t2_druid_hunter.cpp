@@ -27,6 +27,17 @@
  *     Sting rank which casts either the stock rank or its Fire clone, and the
  *     trap melt spawns a real Frost Trap slick (13810) where the freeze broke.
  *
+ * Revision 2026-08-19b (second live test):
+ *   - Cinderbite's Fire sting now also fires when the hunter casts the STOCK
+ *     Serpent Sting rank. The wrapper is only reachable from a spellbook that
+ *     holds it, which no already-existing character's does (and no client does
+ *     until patch-enUS-8 ships the wrapper rows), so the bonus looked
+ *     conditional in game; the swap is now on both ids and has no precondition.
+ *   - Cold Efficiency is a real cost reduction carried by the 90333 row itself
+ *     instead of an AfterCast refund, so the client's own cost check agrees and
+ *     the traps are castable at low mana. Its script is gone - the reasoning is
+ *     in the comment where the class used to be.
+ *
  * Wiring lives in ItemSet.dbc (SetSpellID/SetThreshold); spell_script_names
  * binds these classes to their spell ids - see
  * sql/custom/world/2026_08_19_05_world_t2_druid_hunter.sql, which also
@@ -68,7 +79,7 @@ namespace
         SPELL_HUNTER_ASPECT_OF_MONKEY   = 13163,
 
         // penguin stalker (hunter)
-        SPELL_T2_COLD_EFFICIENCY        = 90333,   // 3pc carrier
+        SPELL_T2_COLD_EFFICIENCY        = 90333,   // 3pc carrier (pure Spell.dbc, no script)
         SPELL_T2_CINDERBITE             = 90334,   // 5pc carrier (also the melt proc aura)
         SPELL_T2_SLICK_GETAWAY          = 90335,   // 8pc carrier (periodic dummy)
         SPELL_T2_SLICK_GETAWAY_SPRINT   = 90382,   // the 3 s sprint
@@ -108,6 +119,14 @@ namespace
     {
         for (SerpentStingRank const& rank : SERPENT_STING_RANKS)
             if (rank.Wrapper == wrapperId)
+                return &rank;
+        return nullptr;
+    }
+
+    SerpentStingRank const* FindSerpentStingRankByOriginal(uint32 originalId)
+    {
+        for (SerpentStingRank const& rank : SERPENT_STING_RANKS)
+            if (rank.Original == originalId)
                 return &rank;
         return nullptr;
     }
@@ -446,41 +465,30 @@ class spell_t2_monkey_frenzy : public AuraScript
 // penguin stalker (hunter)
 // ===========================================================================
 
-// 13809 - Frost Trap, and 1499 and ranks - Freezing Trap, carrying the penguin
-// stalker 3pc: half the mana back.
-class spell_t2_penguin_cold_efficiency : public SpellScript
-{
-    PrepareSpellScript(spell_t2_penguin_cold_efficiency);
-
-    void HandleAfterCast()
-    {
-        Unit* caster = GetCaster();
-        if (!caster || !caster->HasAura(SPELL_T2_COLD_EFFICIENCY))
-            return;
-
-        if (GetSpellInfo()->PowerType != POWER_MANA)
-            return;
-
-        // A refund, not a cost modifier: all five traps share family word 0 bit
-        // 0x80, so a SPELLMOD_COST carrier would read "all traps -50%" (see the
-        // DBC file). AfterCast is safe for this - Spell::TakePower runs well
-        // before CallScriptAfterCastHandlers, so the full cost has already left
-        // the bar by the time we hand half of it back.
-        //
-        // No Spell* passed to CalcPowerCost on purpose: the cast has already
-        // consumed its cost spellmods, and handing it the Spell again would
-        // register them a second time.
-        int32 const cost = GetSpellInfo()->CalcPowerCost(caster, GetSpellInfo()->GetSchoolMask());
-        int32 const refund = CalculatePct(cost, 50);
-        if (refund > 0)
-            caster->EnergizeBySpell(caster, GetSpellInfo(), refund, POWER_MANA);
-    }
-
-    void Register() override
-    {
-        AfterCast += SpellCastFn(spell_t2_penguin_cold_efficiency::HandleAfterCast);
-    }
-};
+// 90333 Cold Efficiency (penguin stalker 3pc) has NO script any more - the
+// carrier row itself is now the discount. The shipped version refunded half the
+// cost from an AfterCast hook on the trap, which is not what the bonus says: the
+// mana still left the bar, so the trap was uncastable at low mana and the client
+// greyed the button exactly as if the bonus were not worn.
+//
+// It is a SPELL_AURA_MOD_POWER_COST_SCHOOL_PCT (72) effect on 90333, school mask
+// 16 (frost), -50%. Two reasons that aura and not the house SPELLMOD_COST
+// (108 / misc 14) pattern:
+//   * A spellmod cannot name the two traps. Frost Trap 13809 and Freezing Trap
+//     1499/14310/14311 carry family word 0 bit 0x80, and so do Immolation Trap,
+//     Explosive Trap, Snake Trap, Trap Launcher, Freezing Arrow, Black Arrow
+//     ranks 2-6 and Deterrence - nothing in the three mask words separates them
+//     (verified over every SpellClassSet 9 row in Spell.dbc). Aura 72 keys on
+//     the SCHOOL instead, and the only frost-school hunter spells that cost
+//     mana are the two traps plus Freezing Arrow 60192/60202 - a Freezing Trap
+//     fired from a bow, which is as close to "these two traps" as the data can
+//     express.
+//   * The client has to agree, or the button stays grey. It reads
+//     UNIT_FIELD_POWER_COST_MULTIPLIER[school], which is exactly where aura 72
+//     lands (AuraEffect::HandleModPowerCostPCT), and SpellInfo::CalcPowerCost
+//     applies the same field server-side. Whether the client is told about a
+//     spellmod carried by a PASSIVE aura - which every set carrier is - is an
+//     open question in this project; the unit field is not in doubt.
 
 // 90460-90471 - Serpent Sting wrappers (the spell the hunter actually learns
 // and presses): a DUMMY that casts the stock rank, or - with Cinderbite worn -
@@ -511,6 +519,87 @@ class spell_t2_penguin_serpent_sting : public SpellScript
     {
         OnEffectHitTarget += SpellEffectFn(spell_t2_penguin_serpent_sting::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
     }
+};
+
+// 1978 and ranks - the STOCK Serpent Sting, the other half of Cinderbite's
+// swap and the reason the bonus looked conditional in the live test.
+//
+// The wrapper above can only fire for a hunter who is actually CASTING the
+// wrapper, and nothing makes that true for a character that already exists:
+// sql/custom/helper/2026_08_19_05 repoints SkillLineAbility, the trainer list
+// and playercreateinfo, all of which decide what a character learns NEXT - the
+// stock rank stays in character_spell, stays on the action bar, and is the only
+// one of the two the client can cast until patch-enUS-8 ships the wrapper rows.
+// Whichever of the two ids a hunter ends up pressing (and one hunter can hold
+// both), the sting has to burn, so the swap lives on both spells. It also
+// catches every OTHER way a stock rank is cast - a macro, a bot rotation, a
+// Violet Hold echo - which is what "no precondition" means.
+//
+// Mechanically this is the wrapper's swap read backwards: instead of choosing
+// the clone before casting, the rank's own payload is prevented and the clone
+// is cast at the same target. Every effect on every rank is an APPLY_AURA (the
+// DoT, plus the Chimera Shot rider on ranks 11-12), so preventing them all
+// leaves the cast itself untouched - cost, GCD, range and the ranged hit roll
+// all still happen, only the damage that lands is fire. The one cosmetic price
+// on this path is a second missile (the rank's own arrow, then the clone's);
+// the wrapper avoids it with Speed 0 / SpellVisualID 0, which is why the
+// wrapper stays the primary path once the client has its rows.
+class spell_t2_penguin_serpent_sting_direct : public SpellScript
+{
+    PrepareSpellScript(spell_t2_penguin_serpent_sting_direct);
+
+    void HandleSwap(SpellEffIndex effIndex)
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !caster->HasAura(SPELL_T2_CINDERBITE))
+            return;
+
+        if (!FindSerpentStingRankByOriginal(GetSpellInfo()->Id))
+            return;
+
+        // Both are required, exactly as spell_t2_intercept_knockback documents:
+        // removing the aura does not stop EffectApplyAura running against it.
+        // Called for every effect the rank has - the DoT on all twelve, plus
+        // the Chimera Shot rider on ranks 11 and 12 - so nothing of the Nature
+        // sting survives.
+        PreventHitAura();
+        PreventHitDefaultEffect(effIndex);
+        _swapped = true;
+    }
+
+    // The clone is cast here rather than from the effect handler: this is the
+    // shape the sibling scripts use, and it keeps the nested cast (and the aura
+    // it applies) out of the hit phase that is still walking this target's
+    // effects. Missed / resisted / immune casts never reach the effect handler
+    // at all, so _swapped stays false and nothing is substituted.
+    void HandleAfterHit()
+    {
+        bool const swapped = _swapped;
+        _swapped = false;
+
+        if (!swapped)
+            return;
+
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target)
+            return;
+
+        SerpentStingRank const* rank = FindSerpentStingRankByOriginal(GetSpellInfo()->Id);
+        if (!rank)
+            return;
+
+        caster->CastSpell(target, rank->FireClone, TRIGGERED_FULL_MASK);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_t2_penguin_serpent_sting_direct::HandleSwap, EFFECT_ALL, SPELL_EFFECT_APPLY_AURA);
+        AfterHit += SpellHitFn(spell_t2_penguin_serpent_sting_direct::HandleAfterHit);
+    }
+
+private:
+    bool _swapped = false;
 };
 
 // 3355 \ 14308 \ 14309 - Freezing Trap Effect: the write half of Cinderbite's
@@ -684,9 +773,9 @@ void AddSC_custom_t2_druid_hunter()
     RegisterSpellScript(spell_t2_feline_grace);
     // monkey stalker
     RegisterSpellScript(spell_t2_monkey_frenzy);
-    // penguin stalker
-    RegisterSpellScript(spell_t2_penguin_cold_efficiency);
+    // penguin stalker (Cold Efficiency 90333 is pure Spell.dbc - see above)
     RegisterSpellScript(spell_t2_penguin_serpent_sting);
+    RegisterSpellScript(spell_t2_penguin_serpent_sting_direct);
     RegisterSpellScript(spell_t2_penguin_trap_break);
     RegisterSpellScript(spell_t2_penguin_melt);
     RegisterSpellScript(spell_t2_penguin_slick);

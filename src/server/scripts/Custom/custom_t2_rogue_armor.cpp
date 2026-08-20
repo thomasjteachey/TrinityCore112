@@ -8,8 +8,13 @@
  * contract this file implements.
  *
  * Sets covered: rogue-ice-fang (90348/90349/90350), rogue-deadly-poison
- * (90352/90353), mail-momentum (90359's half of the 90392 buff),
- * leather-mister-reset (90360/90362).
+ * (90352/90353), plate-icebane (90356's Tomb of Ice), mail-momentum (90359's
+ * half of the 90392 buff), leather-mister-reset (90360/90362).
+ *
+ * TOMB OF ICE (90356) is the one bonus here that is not driven by a spell
+ * cast at all: a PlayerScript watches for the wearer's death on the next safe
+ * tick and summons creature 900118, a block of ice that carries the
+ * line-of-sight aura 90522 for 15 s.
  *
  * ICE FANG: Sprint uses the REPLACEMENT-WRAPPER pattern
  * (spell_warr_disarm_wrapper in Spells/spell_warrior.cpp): the rogue no
@@ -48,10 +53,12 @@
 
 #include "ScriptMgr.h"
 #include "Chat.h"
+#include "Creature.h"
 #include "DBCStores.h"
 #include "Item.h"
 #include "ItemTemplate.h"
 #include "Log.h"
+#include "LosBlocker.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "RBAC.h"
@@ -62,11 +69,15 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "T2UnitHooks.h"
+#include "TemporarySummon.h"
 #include "Unit.h"
 #include "World.h"
 #include "WorldSession.h"
 
 #include <algorithm>
+#include <atomic>
+#include <mutex>
+#include <unordered_map>
 
 namespace
 {
@@ -79,6 +90,8 @@ namespace
         // rogue-deadly-poison
         SPELL_T2_VENOM_SUSTENANCE       = 90352,
         SPELL_T2_RUPTURING_VENOM        = 90353,
+        // plate-icebane (only the 8pc is scripted here; 90354/90355 are data)
+        SPELL_T2_TOMB_OF_ICE            = 90356,   // 8pc carrier, a passive - read on death
         // leather-mister-reset
         SPELL_T2_HEARTY_APPETITE        = 90360,
         SPELL_T2_FIELD_DRESSING         = 90362,
@@ -98,6 +111,7 @@ namespace
         // (90519 was briefly a new-id Cold Blood wrapper; deleted - see below)
         SPELL_T2_VENOM_SUSTENANCE_HEAL  = 90520,   // SPELL_EFFECT_HEAL, bp at runtime
         SPELL_T2_COLD_BLOOD_BUFF        = 90521,   // exact clone of the stock 14177 crit buff
+        SPELL_T2_TOMB_OF_ICE_LOS        = 90522,   // the block's own LoS-blocker aura
 
         // the stock abilities the wrappers hand off to
         SPELL_ROGUE_CRIPPLING_POISON_R1 = 3408,    // NOT wrapped: scripted in place (spell_t2_icefang_chilling_coat)
@@ -133,7 +147,12 @@ namespace
 
     // Ice Skate trail: one patch per this many yards of movement. Patches are
     // 2 yd radius (SpellRadius 7), so 2 yd spacing keeps the slick unbroken.
-    constexpr float ICE_TRAIL_STEP_YARDS = 2.0f;
+    // Drop spacing, matched to the patch radius (90518 EffectRadiusIndex 16 =
+    // 1.0 yd, so 2 yards across). Slightly under the diameter so the patches
+    // just overlap and the trail stays unbroken instead of dotting.  The old
+    // pairing - 2.0 yd radius dropped every 2.0 yd - overlapped into a 4-yard
+    // wide road, which is what read as "way too big".
+    constexpr float ICE_TRAIL_STEP_YARDS = 1.75f;
 
     // .gm diagnostics customauras - broadcast to every opted-in GM session
     void SendCustomAuraDiag(std::string const& msg)
@@ -142,6 +161,78 @@ namespace
             if (sessionPair.second && sessionPair.second->GetPlayer()
                 && sessionPair.second->IsGmDiagnosticEnabled(GmDiagnosticCategory::CustomAuras))
                 ChatHandler(sessionPair.second).SendSysMessage(msg.c_str());
+    }
+
+    // -----------------------------------------------------------------------
+    // TOMB OF ICE (90356, plate-icebane 8pc) bookkeeping.
+    //
+    // One entry per wearer whose death has already been answered, wearer GUID
+    // -> block GUID (empty once the block is gone). The entry deliberately
+    // OUTLIVES the block: it is what stops the next Player::Update tick - the
+    // body is still lying there, still carrying the passive - from raising a
+    // second tomb every 100 ms. It is forgotten only when the wearer is out of
+    // that death (alive again) or off the realm.
+    //
+    // Map updates run in parallel, so the map is behind a mutex; the atomic is
+    // the fast path that lets the alive branch of OnUpdate - i.e. every living
+    // player on the realm, every tick - decide with one relaxed load.
+    // -----------------------------------------------------------------------
+    std::mutex s_tombMutex;
+    std::unordered_map<ObjectGuid, ObjectGuid> s_tombs;
+    std::atomic<uint32> s_tombCount{ 0 };
+
+    // 15 s, the design's figure. The summon's own TEMPSUMMON_TIMED_DESPAWN is
+    // the authority; 90522 carries the same 15 s (DurationIndex 8) so the
+    // blocker registration comes off even if the creature outlives its timer.
+    constexpr Milliseconds TOMB_OF_ICE_DURATION = Milliseconds(15000);
+
+    // creature_template 900118, from
+    // sql/custom/world/2026_08_19_07_world_t2_rogue_armor.sql.
+    constexpr uint32 NPC_T2_TOMB_OF_ICE = 900118;
+
+    // Takes a block away. The aura removal that unregisters the blocker
+    // happens on the CREATURE, never on a unit whose own aura containers the
+    // caller might be walking.
+    void DespawnTombOfIce(Player* player, ObjectGuid tombGuid)
+    {
+        if (!player || tombGuid.IsEmpty())
+            return;
+
+        Creature* tomb = ObjectAccessor::GetCreature(*player, tombGuid);
+        if (!tomb)
+            return;             // already gone, or left behind on another map
+
+        tomb->RemoveAurasDueToSpell(SPELL_T2_TOMB_OF_ICE_LOS);
+        if (TempSummon* summon = tomb->ToTempSummon())
+            summon->UnSummon();
+        else
+            tomb->DespawnOrUnsummon();
+    }
+
+    // Ends the wearer's tomb. `forget` also clears the "this death has been
+    // answered" marker, which must only happen once the wearer is OUT of that
+    // death - otherwise the next tick raises a fresh tomb over the same body.
+    void EndTombOfIce(Player* player, bool forget)
+    {
+        if (!player)
+            return;
+
+        ObjectGuid tombGuid;
+        {
+            std::lock_guard<std::mutex> guard(s_tombMutex);
+            auto itr = s_tombs.find(player->GetGUID());
+            if (itr == s_tombs.end())
+                return;
+            tombGuid = itr->second;
+            itr->second.Clear();
+            if (forget)
+            {
+                s_tombs.erase(itr);
+                s_tombCount.store(uint32(s_tombs.size()), std::memory_order_release);
+            }
+        }
+
+        DespawnTombOfIce(player, tombGuid);
     }
 }
 
@@ -671,6 +762,175 @@ class spell_t2_reset_field_dressing : public AuraScript
     }
 };
 
+// ===========================================================================
+// ICEBANE - Tomb of Ice (90356, plate 8pc)
+// ===========================================================================
+
+// 90522 - the block's line-of-sight aura. Registration and nothing else: all
+// of the geometry lives in LosBlocker (Entities/Object/LosBlocker.cpp), and
+// Spell::CheckCast consults it. Same two-line body as spell_los_blocker
+// (90214 Obstructing Presence), but a SEPARATE script name and spell id on
+// purpose: retuning the Obstructing Presence buff must never silently retune a
+// set bonus, and this file then owns its own spell_script_names row instead of
+// having to rewrite 2026_08_09_00_world_los_blocker_script.sql's.
+//
+// The aura rides the SUMMONED BLOCK, not the corpse. LosBlocker's registry
+// takes any WorldObject, so registration here is complete and correct; what
+// the shipped lookup does with it is the caveat at the top of
+// t2_icebane_tomb.
+class spell_t2_icebane_tomb_los : public AuraScript
+{
+    PrepareAuraScript(spell_t2_icebane_tomb_los);
+
+    void OnApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (Unit* target = GetTarget())
+            LosBlocker::Add(target, GetId());
+    }
+
+    void OnRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (Unit* target = GetTarget())
+            LosBlocker::Remove(target);
+    }
+
+    void Register() override
+    {
+        OnEffectApply  += AuraEffectApplyFn(spell_t2_icebane_tomb_los::OnApply,
+                                            EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+        OnEffectRemove += AuraEffectRemoveFn(spell_t2_icebane_tomb_los::OnRemove,
+                                             EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 90356 Tomb of Ice - the death hook, plus every path that has to take the
+// block away again.
+//
+// The block is a real blocker, not just a prop: LosBlocker::SegmentEclipsedBy
+// walks its own registry rather than caster->GetPlayerListInGrid(), which only
+// ever yielded ALIVE PLAYERS and so could never have seen a summoned creature
+// however faithfully it registered itself. That is why the aura rides the
+// block and not the corpse - a corpse is not alive either.
+//
+// WHY Player::Update AND NOT OnPVPKill: the design says "when killed", not
+// "when killed by a player". OnPVPKill fires for player kills only and
+// OnPlayerKilledByCreature for creature kills only; between them they still
+// miss falling, drowning, lava and every other environmental death. The state
+// change itself - the first tick on which a wearer is not alive - covers every
+// death by construction, with no second code path to drift.
+//
+// It is also the only place this is SAFE. Player::Update calls OnPlayerUpdate
+// after Unit::Update has returned (Player.cpp says so in as many words): the
+// owned-aura update loop is finished, removed auras have been deleted and no
+// proc or spell hit frame is live. Summoning from the kill path itself would
+// run inside Unit::setDeathState -> RemoveAllAurasOnDeath, i.e. inside an
+// aura-removal walk of the dying player's own containers.
+//
+// Cost for everybody who is not dead: one IsAlive() and one relaxed load.
+class t2_icebane_tomb : public PlayerScript
+{
+public:
+    t2_icebane_tomb() : PlayerScript("t2_icebane_tomb") { }
+
+    void OnUpdate(Player* player, uint32 /*diff*/) override
+    {
+        if (!player)
+            return;
+
+        if (player->IsAlive())
+        {
+            // Up again (resurrect, spirit healer, battle rez, .revive): the
+            // block goes with them, and the death is forgotten so that the
+            // NEXT one gets its own tomb.
+            if (s_tombCount.load(std::memory_order_acquire) != 0)
+                EndTombOfIce(player, true);
+            return;
+        }
+
+        // Dead. Only 8pc wearers go any further. The carrier is a passive, so
+        // RemoveAllAurasOnDeath leaves it in place and it is still readable.
+        if (!player->HasAura(SPELL_T2_TOMB_OF_ICE))
+            return;
+
+        // Already released - the body, and with it the tomb, is behind them.
+        if (player->HasAuraType(SPELL_AURA_GHOST))
+            return;
+
+        ObjectGuid const guid = player->GetGUID();
+        {
+            std::lock_guard<std::mutex> guard(s_tombMutex);
+            if (s_tombs.count(guid))
+                return;                     // this death is already answered
+            // Marked BEFORE the summon: if SummonCreature fails, it must not
+            // be retried ten times a second for as long as the body lies here.
+            s_tombs[guid] = ObjectGuid::Empty;
+            s_tombCount.store(uint32(s_tombs.size()), std::memory_order_release);
+        }
+
+        TempSummon* tomb = player->SummonCreature(NPC_T2_TOMB_OF_ICE, player->GetPosition(),
+                                                  TEMPSUMMON_TIMED_DESPAWN, TOMB_OF_ICE_DURATION);
+        if (!tomb)
+            return;
+
+        // The wearer's own faction, NOT the template's neutral 35: LosBlocker
+        // only eclipses casters who are HOSTILE to the blocker, so a friendly
+        // block would block nobody, and a monster-faction one would block the
+        // wearer's own side too. This is also what keeps friendly casts
+        // through the tomb working.
+        tomb->SetFaction(player->GetFaction());
+        tomb->SetReactState(REACT_PASSIVE);
+        tomb->SetImmuneToAll(true);
+        tomb->SetUnitFlag(UnitFlags(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_IMMUNE_TO_PC
+                                    | UNIT_FLAG_IMMUNE_TO_NPC | UNIT_FLAG_UNINTERACTIBLE));
+
+        // creature_template_addon already carries 90522; this is the belt for
+        // a realm whose addon row was dropped at load (which happens if the
+        // dbc row is not in yet - LoadCreatureTemplateAddons validates it).
+        if (!tomb->HasAura(SPELL_T2_TOMB_OF_ICE_LOS))
+            tomb->AddAura(SPELL_T2_TOMB_OF_ICE_LOS, tomb);
+
+        {
+            std::lock_guard<std::mutex> guard(s_tombMutex);
+            s_tombs[guid] = tomb->GetGUID();
+            // Recomputed rather than left alone: the marker above and this
+            // line are one thread's work on one player, but the count must
+            // never disagree with the map's size whatever reorders them.
+            s_tombCount.store(uint32(s_tombs.size()), std::memory_order_release);
+        }
+
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Tomb of Ice - died, ice block up for {} sec",
+            player->GetName(), TOMB_OF_ICE_DURATION.count() / 1000));
+    }
+
+    // Release: the body is gone, so the block goes with it. The marker STAYS -
+    // the wearer is a ghost, still not alive, and must not be handed a second
+    // tomb at the graveyard.
+    void OnPlayerRepop(Player* player) override
+    {
+        EndTombOfIce(player, false);
+    }
+
+    void OnPlayerResurrect(Player* player) override
+    {
+        EndTombOfIce(player, true);
+    }
+
+    void OnLogout(Player* player) override
+    {
+        EndTombOfIce(player, true);
+    }
+
+    // A map change leaves the block behind where ObjectAccessor cannot reach
+    // it; its own TEMPSUMMON_TIMED_DESPAWN is the backstop there. The marker
+    // is kept: a wearer teleported out dead (battleground end, a spirit healer
+    // on another map) must not be given a fresh tomb on arrival.
+    void OnMapChanged(Player* player) override
+    {
+        EndTombOfIce(player, false);
+    }
+};
+
 void AddSC_custom_t2_rogue_armor()
 {
     RegisterSpellScript(spell_t2_icefang_chilling_coat);
@@ -683,4 +943,6 @@ void AddSC_custom_t2_rogue_armor()
     RegisterSpellScript(spell_t2_momentum_buff);
     RegisterSpellScript(spell_t2_reset_hearty_appetite);
     RegisterSpellScript(spell_t2_reset_field_dressing);
+    RegisterSpellScript(spell_t2_icebane_tomb_los);
+    new t2_icebane_tomb();
 }

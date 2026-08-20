@@ -17,7 +17,10 @@
  * 2026-08-19 live-test fixes:
  *   - Gaping Wound is now a 21-stack debuff: every whole yard the victim moves
  *     (or is moved) pops one stack and pays 1/21 of the pool. No periodic
- *     damage without movement, no per-tick travel clamp.
+ *     damage without movement, no per-tick travel clamp. One combat-log line
+ *     per yard, and the pool is pre-rounded to a multiple of 21, so every
+ *     line is the same number - a tick that covers two yards deals two hits,
+ *     it does not deal one double hit.
  *   - Iron Fists / Flurry of Blows are event-driven (T2Unarmed::OnEquipmentChanged
  *     from every Player equipment-change site + the carrier's apply/remove +
  *     login / map change), not a 1 s poll.
@@ -228,7 +231,18 @@ class spell_t2_rend_gaping_wound : public SpellScript
         // was computed, and those two extra ticks are damage the untouched Rend
         // really would have dealt.
         uint32 const ticks = std::max<uint32>(bleed->GetTotalTicks(), 1);
-        _pool = int32(std::max(bleed->GetAmount(), 0)) * int32(ticks) * 2;
+        int32 const raw = int32(std::max(bleed->GetAmount(), 0)) * int32(ticks) * 2;
+
+        // Round the pool UP to a whole number of stacks. Every yard is billed
+        // pool/21, and unless 21 divides the pool exactly that quotient is not
+        // an integer: paying it out of a running total - the only scheme in
+        // which the 21 instalments still add up to exactly the pool - then
+        // makes adjacent yards cost floor() and ceil() of it in an irregular
+        // pattern, so the yard price wobbles by 1. Snapping the pool up here
+        // costs at most 20 damage over the whole minute and makes every
+        // instalment byte-identical, which is what a wearer can actually read
+        // off their combat log.
+        _pool = int32((int64(raw) + int64(GAPING_WOUND_STACKS) - 1) / int64(GAPING_WOUND_STACKS)) * int32(GAPING_WOUND_STACKS);
 
         // Both are required. PreventHitAura only calls aura->Remove(); it does NOT
         // set the prevent-default mask, so Spell::HandleEffects would still run
@@ -285,6 +299,15 @@ private:
 // Intercept and teleports all count, there is deliberately no per-tick clamp),
 // and for every whole yard pops one stack and pays 1/21 of the pool. Ends at
 // 0 stacks or when the minute runs out.
+//
+// The tick is a sampler, not the unit of damage: a tick that finds two yards
+// of travel deals TWO separate hits of the one yard price rather than one
+// double-sized one, so the combat log reads as the same number repeated at a
+// rate that tracks the victim's speed. The pool is captured at application
+// (aurEff->GetBaseAmount(), never GetAmount() - this fork multiplies effect
+// amounts by the stack count, so GetAmount() would shrink as the stacks are
+// spent) and pre-rounded to a multiple of 21 by the Rend replacement, so that
+// one yard price is the same integer for the whole life of the debuff.
 class spell_t2_gaping_wound_tick : public AuraScript
 {
     PrepareAuraScript(spell_t2_gaping_wound_tick);
@@ -371,14 +394,38 @@ class spell_t2_gaping_wound_tick : public AuraScript
         uint8 const newStacks = stacks - pop;
         _lastStacks = newStacks;
 
-        int32 const owed = OwedFor(pool, newStacks) - _paid;
-        _paid += std::max(owed, 0);
-
         // The caster may have logged off; the movement still costs stacks, it
         // just cannot be billed without an attacker to book it against.
         Unit* caster = GetCaster();
-        if (caster && target->IsAlive() && owed > 0)
-            DealGapingWoundDamage(caster, target, GetSpellInfo(), uint32(owed));
+
+        // ONE damage event per YARD, not one per tick. The instalment is the
+        // same number every time; what varies with speed is how many yards a
+        // single 250 ms sample covers - a sprinter crosses ~1.75 - and paying
+        // the whole sample as one lump is what made the log alternate between
+        // one and two (mounted: three and four) times the yard price and read
+        // as "variable damage per tick". The event count is bounded by the
+        // stack count, so a whole Gaping Wound is at most 21 lines however
+        // fast the victim runs - fewer than Rend plus its Deep Wounds - and a
+        // teleport that pops every remaining stack at once is one burst and
+        // then the debuff is gone.
+        for (uint8 i = 0; i < pop; ++i)
+        {
+            // Running total rather than a flat pool/21, so a restock that did
+            // not land on 21 stacks - and any pool that never went through the
+            // rounding above, e.g. a hand-cast 90366 - still adds up to
+            // exactly the pool.
+            uint8 const remaining = uint8(stacks - (i + 1));
+            int32 const owed = OwedFor(pool, remaining) - _paid;
+            if (owed <= 0)
+                continue;
+
+            _paid += owed;
+
+            // Re-checked every yard: the victim can die part-way through a
+            // burst, and DealDamage below is what would have killed them.
+            if (caster && target->IsAlive())
+                DealGapingWoundDamage(caster, target, GetSpellInfo(), uint32(owed));
+        }
 
         if (newStacks > 0)
         {
@@ -391,6 +438,13 @@ class spell_t2_gaping_wound_tick : public AuraScript
         }
         else
         {
+            // Fires once per spent debuff, only for GMs who opted into the
+            // category. `paid` must equal `pool` exactly for a wound that ran
+            // from a clean 21 stacks - that is the whole invariant.
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] Gaping Wound on {} spent - paid {} of pool {} over {} yards ({} each)",
+                target->GetName(), _paid, pool, uint32(GAPING_WOUND_STACKS), pool / int32(GAPING_WOUND_STACKS)));
+
             // SetDuration(0) rather than Remove(): Unit::_UpdateSpells sweeps
             // expired auras in a second pass once this loop has finished.
             SetDuration(0);
