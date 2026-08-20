@@ -48,6 +48,7 @@ void AddSC_custom_player_collision();
 void AddSC_custom_global_collision();
 void AddSC_custom_client_attest();
 void AddSC_violet_hold_boons();
+void AddSC_custom_spell_propagate();
 
 void AddCustomScripts()
 {
@@ -57,6 +58,7 @@ void AddCustomScripts()
     AddSC_custom_player_collision();
     AddSC_custom_global_collision();
     AddSC_custom_client_attest();
+    AddSC_custom_spell_propagate();
     AddBGReplayScripts();
     AddSC_custom_zone_group_rules();
     AddSC_mod_pvp_titles();
