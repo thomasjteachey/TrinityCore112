@@ -13,8 +13,14 @@
  *
  * TOMB OF ICE (90356) is the one bonus here that is not driven by a spell
  * cast at all: a PlayerScript watches for the wearer's death on the next safe
- * tick and summons creature 900118, a block of ice that carries the
- * line-of-sight aura 90522 for 15 s.
+ * tick and summons gameobject 900118 for 15 s - a clone of Sindragosa's Ice
+ * Tomb (GO 201722, a DOOR-type object). A closed door is impassable on the
+ * client, and its model lives in the server's dynamic vmap tree, so it blocks
+ * spell line of sight for everyone with no custom code - exactly the ICC
+ * mechanic. (Revision 2026-08-20: this replaced a summoned CREATURE carrying
+ * LoS aura 90522 through the LosBlocker registry - that worked server-side
+ * but a creature never blocks movement, and its bespoke visuals depended on
+ * appended SpellVisual rows the client never rendered.)
  *
  * ICE FANG: Sprint uses the REPLACEMENT-WRAPPER pattern
  * (spell_warr_disarm_wrapper in Spells/spell_warrior.cpp): the rogue no
@@ -58,7 +64,7 @@
 #include "Item.h"
 #include "ItemTemplate.h"
 #include "Log.h"
-#include "LosBlocker.h"
+#include "GameObject.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "RBAC.h"
@@ -72,6 +78,8 @@
 #include "TemporarySummon.h"
 #include "Unit.h"
 #include "World.h"
+#include "Opcodes.h"
+#include "WorldPacket.h"
 #include "WorldSession.h"
 
 #include <algorithm>
@@ -111,7 +119,8 @@ namespace
         // (90519 was briefly a new-id Cold Blood wrapper; deleted - see below)
         SPELL_T2_VENOM_SUSTENANCE_HEAL  = 90520,   // SPELL_EFFECT_HEAL, bp at runtime
         SPELL_T2_COLD_BLOOD_BUFF        = 90521,   // exact clone of the stock 14177 crit buff
-        SPELL_T2_TOMB_OF_ICE_LOS        = 90522,   // the block's own LoS-blocker aura
+        // (90522 was the block's LoS aura when the tomb was a creature; the
+        //  DBC row remains but nothing references it since 2026-08-20)
 
         // the stock abilities the wrappers hand off to
         SPELL_ROGUE_CRIPPLING_POISON_R1 = 3408,    // NOT wrapped: scripted in place (spell_t2_icefang_chilling_coat)
@@ -181,32 +190,27 @@ namespace
     std::unordered_map<ObjectGuid, ObjectGuid> s_tombs;
     std::atomic<uint32> s_tombCount{ 0 };
 
-    // 15 s, the design's figure. The summon's own TEMPSUMMON_TIMED_DESPAWN is
-    // the authority; 90522 carries the same 15 s (DurationIndex 8) so the
-    // blocker registration comes off even if the creature outlives its timer.
-    constexpr Milliseconds TOMB_OF_ICE_DURATION = Milliseconds(15000);
+    // 15 s, the design's figure. The summon's own respawn timer is the
+    // authority; every early-end path below deletes it explicitly.
+    constexpr Seconds TOMB_OF_ICE_DURATION = Seconds(15);
 
-    // creature_template 900118, from
-    // sql/custom/world/2026_08_19_07_world_t2_rogue_armor.sql.
-    constexpr uint32 NPC_T2_TOMB_OF_ICE = 900118;
+    // gameobject_template 900118, a clone of Sindragosa's Ice Tomb 201722
+    // (type 0 DOOR, display 9244, Data0 startOpen = 0 so it spawns CLOSED and
+    // solid), from sql/custom/world/2026_08_20_01_world_t2_tomb_go.sql.
+    constexpr uint32 GO_T2_TOMB_OF_ICE = 900118;
 
-    // Takes a block away. The aura removal that unregisters the blocker
-    // happens on the CREATURE, never on a unit whose own aura containers the
-    // caller might be walking.
+    // Takes a block away. Deleting a gameobject touches no aura container,
+    // so this is safe from any caller.
     void DespawnTombOfIce(Player* player, ObjectGuid tombGuid)
     {
         if (!player || tombGuid.IsEmpty())
             return;
 
-        Creature* tomb = ObjectAccessor::GetCreature(*player, tombGuid);
+        GameObject* tomb = ObjectAccessor::GetGameObject(*player, tombGuid);
         if (!tomb)
             return;             // already gone, or left behind on another map
 
-        tomb->RemoveAurasDueToSpell(SPELL_T2_TOMB_OF_ICE_LOS);
-        if (TempSummon* summon = tomb->ToTempSummon())
-            summon->UnSummon();
-        else
-            tomb->DespawnOrUnsummon();
+        tomb->Delete();
     }
 
     // Ends the wearer's tomb. `forget` also clears the "this death has been
@@ -367,6 +371,22 @@ class spell_t2_icefang_sprint_wrapper : public SpellScript
             }
         }
         caster->CastSpell(caster, spell, true);
+
+        // The client saw TWO SPELL_GO packets for one press - the wrapper's
+        // and the inner spell's - and starts the shared category-44 cooldown
+        // under BOTH ids. The server ignores the triggered inner cast, so its
+        // history holds only the wrapper; `.cooldown` then clears 90514 alone
+        // and the client's second category hold (keyed on the inner id) keeps
+        // the button dark forever ("sprint doesn't come back"). Retract the
+        // inner id's client-side cooldown the moment it starts; the wrapper's
+        // own entry remains the single tracker, exactly like stock Sprint.
+        if (Player* rogue = caster->ToPlayer())
+        {
+            WorldPacket clear(SMSG_CLEAR_COOLDOWN, 4 + 8);
+            clear << uint32(spell);
+            clear << uint64(rogue->GetGUID());
+            rogue->SendDirectMessage(&clear);
+        }
     }
 
     void Register() override
@@ -676,6 +696,23 @@ class spell_t2_deadlypoison_burst : public SpellScript
             SendCustomAuraDiag(Trinity::StringFormat(
                 "[CustomAuras] {}: Rupturing Venom burst {} on {} for {}",
                 owner->GetName(), dotId, victim->GetName(), log.damage));
+
+            // Venom Sustenance: the burst is poison damage too, but this raw
+            // DealSpellDamage path never enters the proc system, so the 90352
+            // leech proc cannot see it - the heal is paid here directly. Same
+            // sum the proc would have computed: leech% of the damage DEALT
+            // (post-mitigation), through the same 90520 carrier so it shows
+            // in the combat log identically.
+            if (AuraEffect const* leech = owner->GetAuraEffect(SPELL_T2_VENOM_SUSTENANCE, EFFECT_0))
+            {
+                int32 const heal = CalculatePct(int32(log.damage), leech->GetAmount());
+                if (heal > 0)
+                {
+                    CastSpellExtraArgs args(leech);
+                    args.AddSpellBP0(heal);
+                    owner->CastSpell(owner, SPELL_T2_VENOM_SUSTENANCE_HEAL, args);
+                }
+            }
         }, Milliseconds(1));
     }
 
@@ -771,51 +808,15 @@ class spell_t2_reset_field_dressing : public AuraScript
 // ICEBANE - Tomb of Ice (90356, plate 8pc)
 // ===========================================================================
 
-// 90522 - the block's line-of-sight aura. Registration and nothing else: all
-// of the geometry lives in LosBlocker (Entities/Object/LosBlocker.cpp), and
-// Spell::CheckCast consults it. Same two-line body as spell_los_blocker
-// (90214 Obstructing Presence), but a SEPARATE script name and spell id on
-// purpose: retuning the Obstructing Presence buff must never silently retune a
-// set bonus, and this file then owns its own spell_script_names row instead of
-// having to rewrite 2026_08_09_00_world_los_blocker_script.sql's.
-//
-// The aura rides the SUMMONED BLOCK, not the corpse. LosBlocker's registry
-// takes any WorldObject, so registration here is complete and correct; what
-// the shipped lookup does with it is the caveat at the top of
-// t2_icebane_tomb.
-class spell_t2_icebane_tomb_los : public AuraScript
-{
-    PrepareAuraScript(spell_t2_icebane_tomb_los);
-
-    void OnApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
-    {
-        if (Unit* target = GetTarget())
-            LosBlocker::Add(target, GetId());
-    }
-
-    void OnRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
-    {
-        if (Unit* target = GetTarget())
-            LosBlocker::Remove(target);
-    }
-
-    void Register() override
-    {
-        OnEffectApply  += AuraEffectApplyFn(spell_t2_icebane_tomb_los::OnApply,
-                                            EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
-        OnEffectRemove += AuraEffectRemoveFn(spell_t2_icebane_tomb_los::OnRemove,
-                                             EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
-    }
-};
-
 // 90356 Tomb of Ice - the death hook, plus every path that has to take the
 // block away again.
 //
-// The block is a real blocker, not just a prop: LosBlocker::SegmentEclipsedBy
-// walks its own registry rather than caster->GetPlayerListInGrid(), which only
-// ever yielded ALIVE PLAYERS and so could never have seen a summoned creature
-// however faithfully it registered itself. That is why the aura rides the
-// block and not the corpse - a corpse is not alive either.
+// The block is a closed DOOR gameobject, which is what makes it both
+// impassable (client collision) and a line-of-sight wall for both sides
+// (GameObject::Create inserts the model into the map's dynamic vmap tree,
+// the same mechanism Sindragosa's Ice Tomb relies on). Nothing here talks to
+// LosBlocker any more - that registry still serves 90214 Obstructing
+// Presence, whose blocker is a living player.
 //
 // WHY Player::Update AND NOT OnPVPKill: the design says "when killed", not
 // "when killed by a player". OnPVPKill fires for player kills only and
@@ -872,27 +873,17 @@ public:
             s_tombCount.store(uint32(s_tombs.size()), std::memory_order_release);
         }
 
-        TempSummon* tomb = player->SummonCreature(NPC_T2_TOMB_OF_ICE, player->GetPosition(),
-                                                  TEMPSUMMON_TIMED_DESPAWN, TOMB_OF_ICE_DURATION);
+        // A door-type gameobject, spawned CLOSED (Data0 startOpen = 0): the
+        // client's own collision makes it impassable, and the server inserts
+        // its model into the dynamic vmap tree, which blocks spell LoS for
+        // EVERYONE - both sides, like the real Ice Tomb. No faction, no aura,
+        // no registry.
+        GameObject* tomb = player->SummonGameObject(GO_T2_TOMB_OF_ICE,
+            player->GetPosition(),
+            QuaternionData::fromEulerAnglesZYX(player->GetOrientation(), 0.0f, 0.0f),
+            TOMB_OF_ICE_DURATION);
         if (!tomb)
             return;
-
-        // The wearer's own faction, NOT the template's neutral 35: LosBlocker
-        // only eclipses casters who are HOSTILE to the blocker, so a friendly
-        // block would block nobody, and a monster-faction one would block the
-        // wearer's own side too. This is also what keeps friendly casts
-        // through the tomb working.
-        tomb->SetFaction(player->GetFaction());
-        tomb->SetReactState(REACT_PASSIVE);
-        tomb->SetImmuneToAll(true);
-        tomb->SetUnitFlag(UnitFlags(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_IMMUNE_TO_PC
-                                    | UNIT_FLAG_IMMUNE_TO_NPC | UNIT_FLAG_UNINTERACTIBLE));
-
-        // creature_template_addon already carries 90522; this is the belt for
-        // a realm whose addon row was dropped at load (which happens if the
-        // dbc row is not in yet - LoadCreatureTemplateAddons validates it).
-        if (!tomb->HasAura(SPELL_T2_TOMB_OF_ICE_LOS))
-            tomb->AddAura(SPELL_T2_TOMB_OF_ICE_LOS, tomb);
 
         {
             std::lock_guard<std::mutex> guard(s_tombMutex);
@@ -948,6 +939,5 @@ void AddSC_custom_t2_rogue_armor()
     RegisterSpellScript(spell_t2_momentum_buff);
     RegisterSpellScript(spell_t2_reset_hearty_appetite);
     RegisterSpellScript(spell_t2_reset_field_dressing);
-    RegisterSpellScript(spell_t2_icebane_tomb_los);
     new t2_icebane_tomb();
 }
