@@ -158,16 +158,21 @@ namespace
         if (!caster || !target || !parent)
             return;
 
+        // NO DURATION CLAMP. The parent's remove hook is the authoritative teardown,
+        // and it fires for every real removal - expiry, dispel, death, an exclusive
+        // overwrite by another druid - so the rider already lives exactly as long as
+        // the parent and not one tick longer.
+        //
+        // Clamping on top of that is not merely redundant, it is actively wrong once
+        // the parent can be REFRESHED. Unit::_TryStackingOrRefreshingExistingAura only
+        // bumps the existing application's timers; it never re-applies, so an aura
+        // hook does not run again on a refresh. A rider clamped on first application
+        // therefore expires on the parent's ORIGINAL deadline while the parent itself
+        // is renewed indefinitely - a feral druid clawing on cooldown got the bonus
+        // for the first 12 seconds of a fight and never again, with the Mangle debuff
+        // still plainly up. Leaving the rider at its own infinite duration and letting
+        // the remove hook end it is correct on every route and refresh-proof.
         caster->CastSpell(target, riderId, true);
-        if (Aura* rider = target->GetAura(riderId, caster->GetGUID()))
-        {
-            int32 const remaining = parent->GetDuration();
-            if (remaining > 0)
-            {
-                rider->SetMaxDuration(remaining);
-                rider->SetDuration(remaining);
-            }
-        }
     }
 
     // Cinderbite's melt has an ordering problem that no single hook solves.
