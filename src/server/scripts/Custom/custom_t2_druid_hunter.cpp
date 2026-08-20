@@ -246,6 +246,35 @@ class spell_t2_moonkitten_mangle_aura : public AuraScript
 {
     PrepareAuraScript(spell_t2_moonkitten_mangle_aura);
 
+    // The rider is placed from the DEBUFF, not from the Mangle cast, because the
+    // debuff does not only arrive by casting Mangle: the fork's Primal Precision
+    // (48410) puts it on Claw through a bare Unit::AddAura (spell_dru_claw in
+    // spell_druid.cpp), and no Mangle spell is cast at all on that path. A
+    // SpellScript bound to the Mangle ability ids never runs for it, which is why
+    // a feral druid saw this bonus do nothing. Keying on the aura covers every way
+    // the debuff can arrive, including any added later.
+    //
+    // This also gets the duration clamp right. In the cast's AfterHit the parent's
+    // duration is not necessarily initialised yet; by AURA_EFFECT_HANDLE_REAL on
+    // apply it always is, so the rider actually inherits the Mangle's remaining time.
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetTarget();
+        if (!caster || !target)
+            return;
+
+        // Cheapest test last of the free ones: almost no druid carries the 3pc.
+        if (!caster->HasAura(SPELL_T2_MOONLIT_WOUND))
+            return;
+
+        ApplyRider(caster, target, GetAura(), SPELL_T2_MOONLIT_WOUND_DEBUFF);
+
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Moonlit Wound applied to {} (Mangle debuff {})",
+            caster->GetName(), target->GetName(), GetId()));
+    }
+
     void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
         GetTarget()->RemoveAura(SPELL_T2_MOONLIT_WOUND_DEBUFF, GetCasterGUID());
@@ -256,6 +285,7 @@ class spell_t2_moonkitten_mangle_aura : public AuraScript
         // EFFECT_1 is the APPLY_AURA (bleed-damage-taken) effect on every Mangle
         // rank; effects 0 and 2 are the weapon-damage effects and never become
         // aura effects.
+        AfterEffectApply += AuraEffectApplyFn(spell_t2_moonkitten_mangle_aura::HandleApply, EFFECT_1, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
         AfterEffectRemove += AuraEffectRemoveFn(spell_t2_moonkitten_mangle_aura::HandleRemove, EFFECT_1, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
     }
 };
