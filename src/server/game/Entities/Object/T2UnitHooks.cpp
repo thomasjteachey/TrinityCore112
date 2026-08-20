@@ -20,10 +20,13 @@
 #include "Common.h"
 #include "Item.h"
 #include "MovementInfo.h"
+#include "ObjectAccessor.h"
+#include "Pet.h"
 #include "Player.h"
 #include "SharedDefines.h"
 #include "SpellAuras.h"
 #include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "StringFormat.h"
 #include "UnitDefines.h"
 #include "World.h"
@@ -36,6 +39,10 @@
 
 namespace
 {
+    // Legion of One's escape: 90320 is the 8pc carrier, 90525 the rebirth flash.
+    constexpr uint32 SPELL_LEGION_OF_ONE         = 90320;
+    constexpr uint32 SPELL_LEGION_REBIRTH_VISUAL = 90525;
+
     // .gm diagnostics customauras - same channel the custom_t1/t2 scripts use,
     // so a GM who opted in sees this module's decisions next to theirs.
     void SendCustomAuraDiag(std::string const& msg)
@@ -380,6 +387,63 @@ namespace T2UnitHooks
             SendCustomAuraDiag(Trinity::StringFormat(
                 "[CustomAuras] {}: Momentum broken by loss of control - stacks cleared", player->GetName()));
         }, Milliseconds(0));
+    }
+
+    // LEGION OF ONE (90320). See the header. Returns true when the imp was
+    // spent to save the warlock, in which case Unit::DealDamage must not kill him.
+    bool OnWouldBeLethalDamage(Unit* victim)
+    {
+        Player* warlock = victim ? victim->ToPlayer() : nullptr;
+        if (!warlock || !warlock->IsInWorld())
+            return false;
+
+        if (!warlock->HasAura(SPELL_LEGION_OF_ONE))
+            return false;
+
+        Pet* imp = warlock->GetPet();
+        if (!imp || !imp->IsAlive() || !imp->IsInWorld() || imp->GetMap() != warlock->GetMap())
+            return false;
+
+        // The imp's remaining health becomes the warlock's, clamped to what he
+        // can hold and floored at 1. Mana is deliberately not mentioned: he
+        // never dies, and Unit::setDeathState is the only thing that zeroes it.
+        uint32 const health = std::max<uint32>(1u,
+            std::min<uint32>(imp->GetHealth(), warlock->GetMaxHealth()));
+        Position const at = imp->GetPosition();
+        ObjectGuid const impGuid = imp->GetGUID();
+        ObjectGuid const warlockGuid = warlock->GetGUID();
+
+        // Survive HERE, synchronously: the caller is about to decide whether to
+        // call Unit::Kill and has to see a living unit.
+        warlock->SetHealth(health);
+
+        // Everything else is deferred. This runs inside the ATTACKER's damage
+        // frame, so unsummoning a pet, teleporting or casting from here would
+        // re-enter object and aura machinery that is mid-walk. The event
+        // processor drains from the top of Unit::Update, clear of all of it,
+        // and dies with the player on logout or a far teleport.
+        warlock->m_Events.AddEventAtOffset([warlockGuid, impGuid, at]()
+        {
+            Player* owner = ObjectAccessor::FindPlayer(warlockGuid);
+            if (!owner || !owner->IsInWorld() || !owner->IsAlive())
+                return;
+
+            if (Pet* pet = owner->GetPet())
+                if (pet->GetGUID() == impGuid)
+                    owner->RemovePet(pet, PET_SAVE_NOT_IN_SLOT, false);
+
+            owner->NearTeleportTo(at, false);
+
+            // A resurrection flash, so it reads as a rebirth and not a blink.
+            if (sSpellMgr->GetSpellInfo(SPELL_LEGION_REBIRTH_VISUAL))
+                owner->CastSpell(owner, SPELL_LEGION_REBIRTH_VISUAL, true);
+
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Legion of One - lethal damage taken; the imp was spent, reborn at its spot on {} health",
+                owner->GetName(), owner->GetHealth()));
+        }, Milliseconds(1));
+
+        return true;
     }
 
     void RegisterTemporaryWeapon(ObjectGuid itemGuid)

@@ -53,6 +53,18 @@ namespace T2UnitHooks
     // from inside the CC aura's apply handler.
     void OnPlayerControlLost(Player* player);
 
+    // LEGION OF ONE (warlock imp 8pc). Called from Unit::DealDamage at the
+    // instant damage is found to be lethal, BEFORE Unit::Kill. If the victim is
+    // a warlock wearing 90320 with a living imp out, the imp is spent instead:
+    // the warlock survives on the imp's remaining health and is moved to where
+    // it stood. Returns true when it saved him, in which case the caller must
+    // not kill him.
+    //
+    // Nothing is torn down synchronously - the pet unsummon, the teleport and
+    // the visual are all queued onto the warlock's own event processor, because
+    // this runs deep inside the attacker's damage frame.
+    bool OnWouldBeLethalDamage(Unit* victim);
+
     // ASHEN CONFISCATION. Temporary weapons a mage "confiscates" from a disarmed
     // victim are registered here so Player::CanUseItem / weapon-skill lookups can
     // waive requirements for exactly these items and nothing else.

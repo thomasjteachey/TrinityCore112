@@ -1140,6 +1140,13 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
         if (victim->GetTypeId() == TYPEID_PLAYER && victim != attacker)
             victim->ToPlayer()->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_TOTAL_DAMAGE_RECEIVED, health);
 
+        // T2 Legion of One (90320): a warlock with an imp out does not die -
+        // the imp is spent, he survives on its remaining health and is moved to
+        // where it stood. Checked before the overkill splash and before Kill(),
+        // because neither belongs to a death that is not going to happen.
+        if (T2UnitHooks::OnWouldBeLethalDamage(victim))
+            return damage;
+
         // Violet Hold "Boon of Overkill": the damage past the victim's health
         // splashes its neighbours. Before Kill(), while the victim still
         // stands - the splash excludes it and never splashes itself.

@@ -105,6 +105,11 @@ namespace
         // hand (aura 67) AND the ranged slot (aura 278) - which is why the
         // seizure takes slots 15 and 17 and not the off hand.
         SPELL_MAGE_FIERY_PAYBACK_DISARM = 64346,
+        // Fiery Payback takes the main hand (aura 67) and the ranged slot
+        // (aura 278) and leaves the off hand alone; the 8pc takes that too, so
+        // it brings its own disarm. Same 6 s duration so a dual-wielder is
+        // never left half-disarmed.
+        SPELL_T2_CONFISCATE_OFFHAND     = 90524,
     };
 
     // Fire Blast, family 3, word 0 bit 0x2 - identical on all eleven ranks.
@@ -183,6 +188,7 @@ namespace
         bool equipPending = false;
         bool cleanupPending = false;
         uint32 pendingMainHandEntry = 0;
+        uint32 pendingOffHandEntry = 0;
         uint32 pendingRangedEntry = 0;
         std::vector<SeizedWeapon> seized;
         std::vector<DisplacedWeapon> displaced;
@@ -346,12 +352,12 @@ namespace
             s_confiscations.erase(itr);
     }
 
-    void PerformConfiscationEquip(Player* mage, uint32 mainHandEntry, uint32 rangedEntry)
+    void PerformConfiscationEquip(Player* mage, uint32 mainHandEntry, uint32 offHandEntry, uint32 rangedEntry)
     {
         // The buff ended (or never landed) before this tick, or the mage is
         // dead / between maps: nothing to wield.
         if (!mage->IsInWorld() || !mage->IsAlive() || !mage->HasAura(SPELL_T2_CONFISCATED_ARMS)
-            || (!mainHandEntry && !rangedEntry))
+            || (!mainHandEntry && !offHandEntry && !rangedEntry))
         {
             // All four of these were silent drops, and a silent drop here is
             // EXACTLY what "the stealing weapon didn't work" looks like from
@@ -363,7 +369,7 @@ namespace
                 !mage->IsInWorld() ? "mage is no longer in world"
                     : !mage->IsAlive() ? "mage died before the equip tick"
                     : !mage->HasAura(SPELL_T2_CONFISCATED_ARMS) ? "Confiscated Arms (90387) is not on the mage - it never landed or was removed"
-                    : "the victim had nothing in either seized slot"));
+                    : "the victim had nothing in any seized slot"));
             ForgetConfiscationIfEmpty(mage->GetGUID());
             return;
         }
@@ -372,6 +378,12 @@ namespace
         std::vector<DisplacedWeapon> displaced;
         if (mainHandEntry)
             seized.push_back(SeizeIntoSlot(mage, EQUIPMENT_SLOT_MAINHAND, mainHandEntry, displaced));
+        // Off hand after the main hand: seizing a two-hander into the main hand
+        // displaces the off hand first (DisplaceToBags above), so doing it in
+        // this order means the stolen off hand lands in a slot already emptied
+        // rather than fighting that displacement.
+        if (offHandEntry)
+            seized.push_back(SeizeIntoSlot(mage, EQUIPMENT_SLOT_OFFHAND, offHandEntry, displaced));
         if (rangedEntry)
             seized.push_back(SeizeIntoSlot(mage, EQUIPMENT_SLOT_RANGED, rangedEntry, displaced));
 
@@ -940,16 +952,24 @@ class spell_t2_ashen_confiscation : public AuraScript
         // entries; ones without an item_template are skipped at equip time).
         uint32 mainHandEntry = 0;
         uint32 rangedEntry = 0;
+        // Fiery Payback only ever disarms the main hand and the ranged slot,
+        // so the off hand has to be taken by the set bonus itself.
+        mage->CastSpell(victim, SPELL_T2_CONFISCATE_OFFHAND, true);
+
+        uint32 offHandEntry = 0;
         if (Player* robbed = victim->ToPlayer())
         {
             if (Item* item = robbed->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND))
                 mainHandEntry = item->GetEntry();
+            if (Item* item = robbed->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND))
+                offHandEntry = item->GetEntry();
             if (Item* item = robbed->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_RANGED))
                 rangedEntry = item->GetEntry();
         }
         else
         {
             mainHandEntry = victim->GetVirtualItemId(0);
+            offHandEntry = victim->GetVirtualItemId(1);
             rangedEntry = victim->GetVirtualItemId(2);
         }
 
@@ -968,6 +988,7 @@ class spell_t2_ashen_confiscation : public AuraScript
             {
                 state.equipPending = true;
                 state.pendingMainHandEntry = mainHandEntry;
+                state.pendingOffHandEntry = offHandEntry;
                 state.pendingRangedEntry = rangedEntry;
                 queued = true;
             }
@@ -983,14 +1004,14 @@ class spell_t2_ashen_confiscation : public AuraScript
             SendCustomAuraDiag(Trinity::StringFormat(
                 "[CustomAuras] {}: Ashen Confiscation - disarmed {} but a seizure is still in hand; only the buff was refreshed, no weapons taken",
                 mage->GetName(), victim->GetName()));
-        else if (!mainHandEntry && !rangedEntry)
+        else if (!mainHandEntry && !offHandEntry && !rangedEntry)
             SendCustomAuraDiag(Trinity::StringFormat(
-                "[CustomAuras] {}: Ashen Confiscation - disarmed {}, but it has nothing in its main hand or ranged slot; nothing to seize",
+                "[CustomAuras] {}: Ashen Confiscation - disarmed {}, but its weapon slots are all empty; nothing to seize",
                 mage->GetName(), victim->GetName()));
         else
             SendCustomAuraDiag(Trinity::StringFormat(
-                "[CustomAuras] {}: Ashen Confiscation - disarmed {}; seizing main hand {} / ranged {}",
-                mage->GetName(), victim->GetName(), mainHandEntry, rangedEntry));
+                "[CustomAuras] {}: Ashen Confiscation - disarmed {}; seizing main hand {} / off hand {} / ranged {}",
+                mage->GetName(), victim->GetName(), mainHandEntry, offHandEntry, rangedEntry));
     }
 
     void Register() override
@@ -1016,11 +1037,16 @@ class spell_t2_confiscated_arms : public AuraScript
         canBeRecalculated = false;
         amount = 0;
 
+        // TWICE the mage's spell power, per the 2026-08-20 buff. A mage's
+        // spell power is the stat they actually stack, and 1:1 left the seized
+        // weapons hitting for so little that the bonus read as flavour; 2x makes
+        // the stolen swing worth taking.
+        //
         // Fire, not the whole magic mask: this is the fiery payback set, and
         // all-school spell power (misc 126) is counted by a fire query anyway,
         // while a magic-wide query would also sweep in +frost / +arcane gear.
         if (Unit* caster = GetCaster())
-            amount = std::max(0, caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FIRE));
+            amount = std::max(0, caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FIRE)) * 2;
     }
 
     void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
@@ -1087,6 +1113,7 @@ public:
         bool cleanup = false;
         int32 umbralPrice = 0;
         uint32 mainHandEntry = 0;
+        uint32 offHandEntry = 0;
         uint32 rangedEntry = 0;
         {
             std::lock_guard<std::mutex> guard(s_workMutex);
@@ -1103,10 +1130,12 @@ public:
                 cleanup = itr->second.cleanupPending;
                 equip = itr->second.equipPending && !cleanup;
                 mainHandEntry = itr->second.pendingMainHandEntry;
+                offHandEntry = itr->second.pendingOffHandEntry;
                 rangedEntry = itr->second.pendingRangedEntry;
                 itr->second.cleanupPending = false;
                 itr->second.equipPending = false;
                 itr->second.pendingMainHandEntry = 0;
+                itr->second.pendingOffHandEntry = 0;
                 itr->second.pendingRangedEntry = 0;
             }
         }
@@ -1166,7 +1195,7 @@ public:
         if (cleanup)
             CleanupConfiscation(player, "buff ended");
         else if (equip)
-            PerformConfiscationEquip(player, mainHandEntry, rangedEntry);
+            PerformConfiscationEquip(player, mainHandEntry, offHandEntry, rangedEntry);
     }
 
     void OnSave(Player* player) override

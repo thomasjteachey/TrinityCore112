@@ -15,7 +15,7 @@
  * sql/custom/world/2026_08_19_03_world_t2_warrior_paladin.sql.
  *
  * 2026-08-19 live-test fixes:
- *   - Gaping Wound is now a 21-stack debuff: every whole yard the victim moves
+ *   - Gaping Wound is now a 21-stack debuff: every 3 yards the victim moves
  *     (or is moved) pops one stack and pays 1/21 of the pool. No periodic
  *     damage without movement, no per-tick travel clamp. One combat-log line
  *     per yard, and the pool is pre-rounded to a multiple of 21, so every
@@ -51,6 +51,7 @@ namespace
     enum T2WarriorPaladinSpells
     {
         // warrior - rend set
+        SPELL_T2_WALKING_SANCTUARY_RING = 90523,   // unit-attached ring; follows the paladin
         SPELL_T2_GAPING_WOUND_PASSIVE   = 90301,
         SPELL_T2_BRUISING_CHARGE_PASSIVE = 90302,
         SPELL_T2_GAPING_WOUND_BLEED     = 90366,
@@ -78,6 +79,13 @@ namespace
     // one stack per whole yard of movement. Both halves of the bonus (the Rend
     // replacement and the bleed's own tick) read it, so it lives here.
     constexpr uint8 GAPING_WOUND_STACKS = 21;
+
+    // Yards of travel that buy ONE stack. 21 stacks x 3 yd = the wound bleeds
+    // out over 63 yards of running rather than 21 (user, 2026-08-20). The pool
+    // is unchanged, so the same total damage is now spread over three times the
+    // distance - each instalment is identical, they just arrive a third as
+    // often. 21 yards was roughly one Charge plus a stumble; 63 is a real kite.
+    constexpr float GAPING_WOUND_YARDS_PER_STACK = 3.0f;
 
     // Radius of the "heart" of a Consecration for the 5pc.
     constexpr float SANCTIFIED_CORE_RADIUS = 3.0f;
@@ -207,7 +215,7 @@ namespace T2Unarmed
 
 // -772 - Rend, carrying the Rend 5pc (90301): the bleed is replaced by Gaping
 // Wound (90366), a 21-stack debuff holding twice the damage this rank would
-// have dealt over its full duration, paid out one stack per yard the victim
+// have dealt over its full duration, paid out one stack per 3 yards the victim
 // moves.
 class spell_t2_rend_gaping_wound : public SpellScript
 {
@@ -285,7 +293,7 @@ class spell_t2_rend_gaping_wound : public SpellScript
         caster->CastSpell(target, SPELL_T2_GAPING_WOUND_BLEED, args);
 
         SendCustomAuraDiag(Trinity::StringFormat(
-            "[CustomAuras] {}: Gaping Wound replaces Rend on {} - pool {} over {} stacks ({} per yard)",
+            "[CustomAuras] {}: Gaping Wound replaces Rend on {} - pool {} over {} stacks ({} per stack, one per 3 yd)",
             caster->GetName(), target->GetName(), _pool, uint32(GAPING_WOUND_STACKS), _pool / GAPING_WOUND_STACKS));
         _pool = 0;
     }
@@ -304,7 +312,7 @@ private:
 // victim moves. Ticks four times a second, measures how far the target
 // travelled since the last tick (displacement included - knockbacks, Blink,
 // Intercept and teleports all count, there is deliberately no per-tick clamp),
-// and for every whole yard pops one stack and pays 1/21 of the pool. Ends at
+// and for every whole 3-yard stride pops one stack and pays 1/21 of the pool. Ends at
 // 0 stacks or when the minute runs out.
 //
 // The tick is a sampler, not the unit of damage: a tick that finds two yards
@@ -387,14 +395,16 @@ class spell_t2_gaping_wound_tick : public AuraScript
         _lastPos = target->GetPosition();
 
         // Accumulate fractional yards so a slow walker is billed exactly as
-        // much as a sprinter over the same ground; only whole yards pop stacks.
+        // much as a sprinter over the same ground; only WHOLE STRIDES of
+        // GAPING_WOUND_YARDS_PER_STACK pop a stack. The remainder is carried,
+        // so distance is never lost to rounding across ticks.
         _yards += moved;
-        float const wholeYards = std::floor(_yards);
-        if (wholeYards < 1.0f)
+        float const strides = std::floor(_yards / GAPING_WOUND_YARDS_PER_STACK);
+        if (strides < 1.0f)
             return;
-        _yards -= wholeYards;
+        _yards -= strides * GAPING_WOUND_YARDS_PER_STACK;
 
-        uint8 const pop = uint8(std::min<float>(wholeYards, float(stacks)));
+        uint8 const pop = uint8(std::min<float>(strides, float(stacks)));
         if (!pop)
             return;
 
@@ -405,7 +415,7 @@ class spell_t2_gaping_wound_tick : public AuraScript
         // just cannot be billed without an attacker to book it against.
         Unit* caster = GetCaster();
 
-        // ONE damage event per YARD, not one per tick. The instalment is the
+        // ONE damage event per STRIDE, not one per tick. The instalment is the
         // same number every time; what varies with speed is how many yards a
         // single 250 ms sample covers - a sprinter crosses ~1.75 - and paying
         // the whole sample as one lump is what made the log alternate between
@@ -751,9 +761,16 @@ class spell_t2_consecration_core : public AuraScript
 // picks its victims from the dynobject's position, so moving the object is the
 // whole server-side bonus.
 //
-// TODO(client): the ring does not follow on screen. A dynobject's position only
-// reaches the client in its create block, and there is no relocation opcode for
-// one in 3.3.5, so the visual half is client work and is not covered here.
+// The ring DOES follow on screen since 2026-08-20. A dynobject's position only
+// reaches the client in its create block and 3.3.5 has no relocation opcode for
+// one, so the drawn ring can never move - but it never had to. Consecration's
+// art (SpellVisualKit 9366) hangs off field 5, baseEffect, which is a UNIT
+// ATTACHMENT slot; it is only parented to a dynobject by accident of being a
+// PersistentAreaKit. 90523 "Walking Sanctuary" is an aura on the PALADIN whose
+// SpellVisual 21101 puts that same kit in the StateKit slot, so the client
+// parents the ring to the paladin's model and it follows smoothly, for free,
+// with no per-tick server work. This periodic still moves the dynobject because
+// that is what actually picks the victims.
 class spell_t2_walking_consecration : public AuraScript
 {
     PrepareAuraScript(spell_t2_walking_consecration);
@@ -768,12 +785,20 @@ class spell_t2_walking_consecration : public AuraScript
         if (!map)
             return;
 
+        // Keep the ring aura up for exactly as long as a Consecration is out.
+        // Refreshed from the poll rather than applied once at cast, so it can
+        // never outlive the dynobject (a dispel, a death, a zone change) and
+        // leave a paladin wearing consecrated ground that does nothing.
+        bool anyConsecration = false;
+
         for (uint32 rank = SPELL_PALADIN_CONSECRATION_R1; rank; rank = sSpellMgr->GetNextSpellInChain(rank))
         {
             for (DynamicObject* dynObj : paladin->GetDynObjects(rank))
             {
                 if (!dynObj->IsInWorld() || dynObj->GetMap() != map)
                     continue;
+
+                anyConsecration = true;
 
                 // Map::DynamicObjectRelocation asserts the object's cell matches
                 // its position, and a no-op relocation is not free, so skip the
@@ -787,6 +812,14 @@ class spell_t2_walking_consecration : public AuraScript
                     paladin->GetPositionY(), paladin->GetPositionZ(), dynObj->GetOrientation());
             }
         }
+
+        if (anyConsecration)
+        {
+            if (!paladin->HasAura(SPELL_T2_WALKING_SANCTUARY_RING))
+                paladin->CastSpell(paladin, SPELL_T2_WALKING_SANCTUARY_RING, true);
+        }
+        else if (paladin->HasAura(SPELL_T2_WALKING_SANCTUARY_RING))
+            paladin->RemoveAurasDueToSpell(SPELL_T2_WALKING_SANCTUARY_RING);
     }
 
     void Register() override
