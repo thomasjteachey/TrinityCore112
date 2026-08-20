@@ -297,12 +297,17 @@ class spell_t1_hunters_mark : public AuraScript
         Unit* caster = GetCaster();
         if (!caster || !caster->HasAura(SPELL_T1_HM_PASSIVE))
             return;
+        // No duration clamp - HandleRemove below is the authoritative teardown and
+        // fires for expiry, dispel, death and eviction alike, so the rider already
+        // ends with the mark. Clamping on top of that breaks on a REFRESH: an aura
+        // hook does not run again when Unit::_TryStackingOrRefreshingExistingAura
+        // merely bumps an existing application's timers, so a clamped rider dies on
+        // the mark's ORIGINAL deadline while the mark itself is renewed. Harmless
+        // here only because Hunter's Mark runs two minutes; the identical clamp on
+        // the moonkitten Mangle rider, whose parent lasts twelve seconds and is
+        // re-applied every GCD, made that bonus quit mid-fight (see
+        // custom_t2_druid_hunter.cpp ApplyRider).
         caster->CastSpell(target, SPELL_T1_HM_DEBUFF, true);
-        if (Aura* rider = target->GetAura(SPELL_T1_HM_DEBUFF, caster->GetGUID()))
-        {
-            rider->SetMaxDuration(GetAura()->GetDuration());
-            rider->SetDuration(GetAura()->GetDuration());
-        }
     }
 
     void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
