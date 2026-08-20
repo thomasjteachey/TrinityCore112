@@ -380,8 +380,19 @@ class spell_t2_icefang_sprint_wrapper : public SpellScript
         // the button dark forever ("sprint doesn't come back"). Retract the
         // inner id's client-side cooldown the moment it starts; the wrapper's
         // own entry remains the single tracker, exactly like stock Sprint.
+        //
+        // COOLDOWN_EVENT first, then CLEAR - the same pair
+        // SpellHistory::SendClearCooldowns sends for category spells. That
+        // recipe is this fork's own duel-reset lesson (15b671921b "Send
+        // cooldown events when clearing duel CDs"): a bare CLEAR_COOLDOWN
+        // does not release a client-side CATEGORY hold.
         if (Player* rogue = caster->ToPlayer())
         {
+            WorldPacket event(SMSG_COOLDOWN_EVENT, 4 + 8);
+            event << uint32(spell);
+            event << uint64(rogue->GetGUID());
+            rogue->SendDirectMessage(&event);
+
             WorldPacket clear(SMSG_CLEAR_COOLDOWN, 4 + 8);
             clear << uint32(spell);
             clear << uint64(rogue->GetGUID());
