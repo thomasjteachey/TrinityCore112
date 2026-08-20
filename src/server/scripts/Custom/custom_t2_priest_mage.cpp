@@ -53,6 +53,7 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
+#include "T2SpellHooks.h"
 #include "T2UnitHooks.h"
 #include "UpdateFields.h"
 #include "World.h"
@@ -341,6 +342,17 @@ namespace
         if (!mage->IsInWorld() || !mage->IsAlive() || !mage->HasAura(SPELL_T2_CONFISCATED_ARMS)
             || (!mainHandEntry && !rangedEntry))
         {
+            // All four of these were silent drops, and a silent drop here is
+            // EXACTLY what "the stealing weapon didn't work" looks like from
+            // the outside: the proc fired, the disarm landed, and then the
+            // seizure evaporated one tick later with nothing said.
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Ashen Confiscation - seizure dropped on the equip tick ({})",
+                mage->GetName(),
+                !mage->IsInWorld() ? "mage is no longer in world"
+                    : !mage->IsAlive() ? "mage died before the equip tick"
+                    : !mage->HasAura(SPELL_T2_CONFISCATED_ARMS) ? "Confiscated Arms (90387) is not on the mage - it never landed or was removed"
+                    : "the victim had nothing in either seized slot"));
             ForgetConfiscationIfEmpty(mage->GetGUID());
             return;
         }
@@ -576,8 +588,9 @@ class spell_t2_holy_censer : public AuraScript
 // (CMSG_CANCEL_AURA(15473) then CMSG_CAST_SPELL in one frame); that cancel is
 // swallowed for 90340 holders in core (T2SpellHooks::OnCancelAuraRequest), and
 // the cast is let through with the form still up (OnCastSpellRequest + the
-// CheckShapeshift waiver). By the time this script runs the priest is simply
-// still in Shadowform, which is exactly the state the price keys on.
+// CheckShapeshift waiver, though for these nine heals 90340's own
+// MOD_IGNORE_SHAPESHIFT effect already sets checkForm = false before the waiver
+// is reached). The price must NOT assume that worked, though: see CheckProc.
 //
 // The price is only QUEUED here: a tick runs inside the owned-aura walk of
 // whoever carries the Renew (the priest himself, often) and even a direct heal
@@ -595,9 +608,23 @@ class spell_t2_umbral_mercy_passive : public AuraScript
             return false;
         Unit* target = GetTarget();
         Player* priest = target ? target->ToPlayer() : nullptr;
-        // "Doing so" is healing IN Shadowform; a Renew ticking after the priest
-        // left form is free, like the stock spell.
-        return priest && priest->GetShapeshiftForm() == FORM_SHADOW;
+        if (!priest)
+            return false;
+
+        // "Doing so" is healing THIS BONUS made possible; a Renew ticking long
+        // after the priest left the form is free, like the stock spell.
+        //
+        // Deliberately NOT a bare `GetShapeshiftForm() == FORM_SHADOW`. That was
+        // the 2026-08-19 build's only silent gate and it races the very thing the
+        // bonus exists for: the client auto-unshifts out of its own Spell.dbc,
+        // which knows nothing about 90340, so every Holy heal pressed in
+        // Shadowform is preceded by CMSG_CANCEL_AURA(15473). Any frame in which
+        // that cancel wins - it arrived with no cast behind it, a second press
+        // raced it, the form went down for an unrelated reason mid-cast - the
+        // heal lands out of form, this returns false without a word, and the
+        // priest heals for free. T2SpellHooks::CountsAsHealingInShadowform
+        // anchors on the cancel instead, which is the same key press as the heal.
+        return T2SpellHooks::CountsAsHealingInShadowform(priest);
     }
 
     void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
@@ -774,6 +801,13 @@ class spell_t2_dusty_hoarfrost : public AuraScript
             s_pendingHoarfrost.insert(mage->GetGUID());
         }
         MarkWork(mage->GetGUID());
+
+        // Half the chain lives in t2_priest_mage_update; without this line the
+        // aura hook and the deferred cast are indistinguishable when nothing
+        // freezes.
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Hoarfrost Bloom - Ice Block expired, freeze armed for the next tick",
+            mage->GetName()));
     }
 
     void Register() override
@@ -921,9 +955,22 @@ class spell_t2_ashen_confiscation : public AuraScript
         if (queued)
             MarkWork(mage->GetGUID());
 
-        SendCustomAuraDiag(Trinity::StringFormat(
-            "[CustomAuras] {}: Ashen Confiscation - disarmed {}; seizing main hand {} / ranged {}",
-            mage->GetName(), victim->GetName(), mainHandEntry, rangedEntry));
+        // This line used to claim a seizure unconditionally, including when
+        // nothing was queued at all - so a mage whose previous confiscation
+        // never got torn down saw "seizing ..." for ever while no weapon ever
+        // changed hands. Say which of the three actually happened.
+        if (!queued)
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Ashen Confiscation - disarmed {} but a seizure is still in hand; only the buff was refreshed, no weapons taken",
+                mage->GetName(), victim->GetName()));
+        else if (!mainHandEntry && !rangedEntry)
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Ashen Confiscation - disarmed {}, but it has nothing in its main hand or ranged slot; nothing to seize",
+                mage->GetName(), victim->GetName()));
+        else
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Ashen Confiscation - disarmed {}; seizing main hand {} / ranged {}",
+                mage->GetName(), victim->GetName(), mainHandEntry, rangedEntry));
     }
 
     void Register() override
@@ -1001,6 +1048,14 @@ public:
 
     void OnUpdate(Player* player, uint32 /*diff*/) override
     {
+        // Umbral Mercy's swallowed Shadowform cancel. Not gated on TakeWork: the
+        // mark lives in core (T2SpellHooks), which has its own atomic fast path,
+        // and this is the tick that guarantees a deliberate toggle always comes
+        // off. Player::Update calls this hook AFTER Unit::Update has returned, so
+        // removing the aura here is safe - see the comment above the call site in
+        // Player::Update.
+        T2SpellHooks::ResolvePendingShadowformCancel(player);
+
         if (!player || !TakeWork(player->GetGUID()))
             return;
 
@@ -1048,11 +1103,34 @@ public:
                     player->GetName(), uint32(SPELL_T2_ENCASED_IN_ICE)));
             else
             {
-                player->CastSpell(player, SPELL_T2_ENCASED_IN_ICE, true);
-                SendCustomAuraDiag(Trinity::StringFormat(
-                    "[CustomAuras] {}: Hoarfrost Bloom - Ice Block ran out, freezing 10 yd",
-                    player->GetName()));
+                // The cast RESULT is the only thing that separates "froze the
+                // room" from "nothing hostile was standing inside 10 yd": an
+                // area spell that selects no target fails with
+                // SPELL_FAILED_NO_VALID_TARGETS (26) and is otherwise entirely
+                // silent. Announcing success unconditionally is what made a
+                // working freeze indistinguishable from a dead one.
+                SpellCastResult const result = player->CastSpell(player, SPELL_T2_ENCASED_IN_ICE, true);
+                if (result == SPELL_CAST_OK)
+                    SendCustomAuraDiag(Trinity::StringFormat(
+                        "[CustomAuras] {}: Hoarfrost Bloom - Ice Block ran out, freezing 10 yd",
+                        player->GetName()));
+                else
+                    SendCustomAuraDiag(Trinity::StringFormat(
+                        "[CustomAuras] {}: Hoarfrost Bloom - Ice Block ran out but the freeze ({}) did not go off, cast result {} (26 = no valid target, i.e. nothing hostile within 10 yd)",
+                        player->GetName(), uint32(SPELL_T2_ENCASED_IN_ICE), uint32(result)));
             }
+        }
+        else if (hoarfrost)
+        {
+            // The aura hook armed the freeze and this tick threw it away. Was
+            // dark; it is the only thing that distinguishes "the Ice Block
+            // hook never ran" from "the deferred tick dropped it".
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Hoarfrost Bloom - freeze was queued but dropped on the next tick ({})",
+                player->GetName(),
+                !player->IsInWorld() ? "no longer in world"
+                    : !player->IsAlive() ? "mage is dead"
+                    : "the Hoarfrost Bloom aura (90343) is gone"));
         }
 
         // Umbral Mercy - the Renew ticks' price, one tick after the heal.
@@ -1106,6 +1184,9 @@ public:
             return;
         ObjectGuid const guid = player->GetGUID();
         CleanupConfiscation(player, "logout");
+        // Umbral Mercy's marks live in core; drop them with the session so a
+        // pending cancel can never come back attached to the same GUID.
+        T2SpellHooks::ForgetPlayer(player);
         std::lock_guard<std::mutex> guard(s_workMutex);
         s_pendingUmbralPrice.erase(guid);
         s_pendingHoarfrost.erase(guid);

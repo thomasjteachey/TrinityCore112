@@ -30,6 +30,7 @@
 #include "Util.h"
 #include "World.h"
 #include "WorldSession.h"
+#include <atomic>
 #include <mutex>
 #include <unordered_map>
 
@@ -50,35 +51,37 @@ namespace
     // UMBRAL MERCY
     // -----------------------------------------------------------------------
 
-    // How long a swallowed CMSG_CANCEL_AURA(Shadowform) waits for the heal's
-    // CMSG_CAST_SPELL before it is honoured after all. ZERO - one player tick,
-    // not a wall-clock grace - and that is exact rather than optimistic:
+    // A swallowed CMSG_CANCEL_AURA(Shadowform) waits exactly ONE PLAYER TICK for
+    // the heal's CMSG_CAST_SPELL before it is honoured after all. That is exact
+    // rather than optimistic, and the whole ordering argument is:
     //
     //   * CMSG_CANCEL_AURA is PROCESS_INPLACE, so it is drained by
-    //     World::UpdateSessions().
+    //     World::UpdateSessions() - World.cpp line ~2561.
     //   * CMSG_CAST_SPELL is PROCESS_THREADSAFE, so it is drained by the
-    //     per-map session pass at the TOP of Map::Update().
-    //   * Player::Update() (and with it Unit::Update -> m_Events.Update) runs
-    //     in the object-update pass AFTER that, in the same Map::Update.
+    //     per-map session pass at the TOP of Map::Update(), inside the
+    //     sMapMgr->Update(diff) that follows at World.cpp line ~2607.
+    //   * Player::Update() runs in the object-update pass after that same map's
+    //     session pass, and t2_priest_mage_update::OnUpdate is called from the
+    //     END of Player::Update - after Unit::Update has returned.
     //   * WorldSession::Update pops from a single FIFO through
     //     LockedQueue::next(), which peeks the HEAD and stops when the filter
     //     rejects it. A packet can therefore never overtake one that was sent
     //     before it, whichever filter each of them belongs to.
     //
     // So a cancel and the cast the client sent behind it in the same frame are
-    // always both handled before the event fires, even if they arrive in
-    // different world ticks. An offset of zero is "after the rest of this
-    // client frame", which is the shortest deadline that is still correct - and
-    // it makes a deliberate toggle come off on the very same tick it was
-    // pressed instead of a third of a second later.
+    // both handled before the resolve runs, even if they land in different world
+    // ticks - and a deliberate toggle comes off on the very tick it was pressed.
     //
-    // The old 300 ms wall-clock grace was ALSO starvable: every press replaced
-    // the pending mark with a new stamp and pushed the deadline out, so a
-    // player mashing the button faster than once per 300 ms kept Shadowform on
-    // for ever. That is the reported "can't leave shadowform" bug. A zero
-    // offset cannot be starved, and the second-press rule below is the belt to
-    // that brace.
-    constexpr uint32 UMBRAL_CANCEL_GRACE_MS = 0;
+    // The old 300 ms wall-clock grace was starvable: every press replaced the
+    // pending mark with a new stamp and pushed the deadline out, so a player
+    // mashing the button kept Shadowform on for ever. One tick cannot be
+    // starved, and the second-press rule below is the belt to that brace.
+    //
+    // The resolve used to be a zero-offset event on the player's own
+    // EventProcessor. It is a PlayerScript tick now: an EventProcessor is
+    // emptied by KillAllEvents on a far teleport, a map change and logout, and a
+    // removal event that dies that way leaves Shadowform stuck up with nothing
+    // left to retry it. See T2SpellHooks::ResolvePendingShadowformCancel.
 
     // A cast request only matches a pending cancel inside this window. Wider
     // than the grace so a tick that runs late still pairs the two packets;
@@ -114,13 +117,38 @@ namespace
     std::mutex                               s_umbralMutex;
     std::unordered_map<ObjectGuid, uint32>   s_umbralPendingCancel;
 
-    // A mark is meant to live exactly one player tick. If the resolve event is
-    // aborted rather than run - KillAllEvents(false) on logout or a far
-    // teleport - the mark outlives the session and comes back with the GUID, so
-    // anything older than this is treated as debris rather than as a real
-    // pending cancel. Generous by three orders of magnitude against the one
-    // tick it should take, so it can never fire on a live mark.
+    // When each 90340 holder's client last asked to leave Shadowform. Stamped by
+    // OnCancelAuraRequest whether the cancel is swallowed or honoured, and read
+    // by CountsAsHealingInShadowform.
+    std::unordered_map<ObjectGuid, uint32>   s_umbralFormLeftAt;
+
+    // Fast path for the per-player-tick resolve: nobody on the server has a
+    // swallowed cancel outstanding, so ResolvePendingShadowformCancel costs one
+    // relaxed load and returns. Kept in step with s_umbralPendingCancel.size()
+    // under s_umbralMutex.
+    std::atomic<uint32>                      s_umbralPendingCount{ 0 };
+
+    // Must be called with s_umbralMutex held, after every insert/erase.
+    void UmbralPublishPendingCount()
+    {
+        s_umbralPendingCount.store(uint32(s_umbralPendingCancel.size()), std::memory_order_release);
+    }
+
+    // A mark is meant to live exactly one player tick. If the resolve never runs
+    // - the player left the map, or logged out before his next tick - the mark
+    // outlives the session and comes back with the GUID, so anything older than
+    // this is treated as debris rather than as a real pending cancel. Generous
+    // by three orders of magnitude against the one tick it should take, so it
+    // can never fire on a live mark.
     constexpr uint32 UMBRAL_CANCEL_STALE_MS = 2000;
+
+    // How long after the client's Shadowform cancel a landing heal still counts
+    // as "healing done in Shadowform". Wide enough to cover the longest heal the
+    // 5pc unlocks (Greater Heal, 3 s, plus its hit frame) so a cast that was
+    // authorised in the form is priced even if the form came off underneath it;
+    // short enough that a priest who left the form on purpose and then healed a
+    // while later pays nothing.
+    constexpr uint32 UMBRAL_FORM_GRACE_MS = 6000;
 
     bool UmbralIsShadowPriest(Player const* player)
     {
@@ -239,7 +267,12 @@ namespace
 
             switch (effect.Effect)
             {
+                // HEALTH_LEECH is direct damage that also heals the caster; it
+                // goes through the same spell-damage pipeline. Without it a
+                // Drain Life / Death Coil stopped by the block estimated ZERO
+                // and reflected nothing.
                 case SPELL_EFFECT_SCHOOL_DAMAGE:
+                case SPELL_EFFECT_HEALTH_LEECH:
                 {
                     int32 base = effect.CalcValue(caster);
                     if (base <= 0)
@@ -397,34 +430,53 @@ bool T2SpellHooks::OnCancelAuraRequest(Player* player, uint32 spellId)
     if (!player || spellId != SPELL_SHADOWFORM)
         return false;
 
-    // Holders only; and without Shadowform up the stock path is a no-op anyway.
-    if (!player->HasAura(SPELL_UMBRAL_MERCY) || !player->HasAura(SPELL_SHADOWFORM))
+    // Holders only. BOTH halves of the form are required, not just the aura: if
+    // the aura is up but the shapeshift byte is not FORM_SHADOW (or the other way
+    // round) the state is already inconsistent, and swallowing the cancel would
+    // turn that into a form the player can never take off. Handing those to the
+    // stock path costs nothing - RemoveOwnedAura is what the client asked for.
+    if (!player->HasAura(SPELL_UMBRAL_MERCY) || !player->HasAura(SPELL_SHADOWFORM)
+        || player->GetShapeshiftForm() != FORM_SHADOW)
         return false;
 
     uint32 const stamp = GameTime::GetGameTimeMS();
     bool secondPress = false;
     {
         std::lock_guard<std::mutex> guard(s_umbralMutex);
+
         auto itr = s_umbralPendingCancel.find(player->GetGUID());
         if (itr != s_umbralPendingCancel.end() && getMSTimeDiff(itr->second, stamp) <= UMBRAL_CANCEL_STALE_MS)
         {
-            // A cancel is already waiting on its resolve event. The client
+            // A cancel is already waiting on its resolve. The client
             // auto-unshifts exactly once per cast attempt and always follows it
             // with the cast in the same frame, so a SECOND cancel arriving
             // before the first was resolved cannot be an auto-unshift - it is
-            // the player pressing the button. Honour it on the spot; the
-            // pending event then finds no mark and does nothing.
+            // the player pressing the button. Honour it on the spot; the resolve
+            // then finds no mark and does nothing.
             s_umbralPendingCancel.erase(itr);
             secondPress = true;
+
+            // Unambiguously a deliberate un-shift, so it must NOT leave a
+            // healing-in-Shadowform grace behind: a heal the priest presses two
+            // seconds after choosing to leave the form is an ordinary heal and
+            // is free.
+            s_umbralFormLeftAt.erase(player->GetGUID());
         }
         else
         {
             // Covers both the ordinary first press and the debris case: an
-            // orphaned mark is simply overwritten with a live stamp and gets a
-            // fresh event, so the press behaves exactly like a first press
-            // instead of skipping the auto-unshift grace.
+            // orphaned mark is simply overwritten with a live stamp, so the
+            // press behaves exactly like a first press instead of skipping the
+            // auto-unshift grace.
             s_umbralPendingCancel[player->GetGUID()] = stamp;
+
+            // This is the cancel that MAY be the client unshifting to cast a
+            // heal - the ambiguity this whole hook exists for. Record when it
+            // happened so a heal that lands with the form already gone is still
+            // priced; CountsAsHealingInShadowform reads it.
+            s_umbralFormLeftAt[player->GetGUID()] = stamp;
         }
+        UmbralPublishPendingCount();
     }
 
     if (secondPress)
@@ -437,30 +489,89 @@ bool T2SpellHooks::OnCancelAuraRequest(Player* player, uint32 spellId)
     }
 
     // The removal is deferred past the frame the heal's CMSG_CAST_SPELL shares
-    // with this cancel. The event lives on the player's own queue, so it dies
-    // with him (logout, map change) and runs from the top of Unit::Update -
-    // never from inside aura iteration.
-    player->m_Events.AddEventAtOffset([player, stamp]()
-    {
-        {
-            std::lock_guard<std::mutex> guard(s_umbralMutex);
-            auto itr = s_umbralPendingCancel.find(player->GetGUID());
-            // Consumed by a heal, or superseded by a later cancel that has
-            // its own event: not this event's job.
-            if (itr == s_umbralPendingCancel.end() || itr->second != stamp)
-                return;
-            s_umbralPendingCancel.erase(itr);
-        }
+    // with this cancel. Nothing is scheduled here: the mark IS the schedule, and
+    // ResolvePendingShadowformCancel drains it at the end of this player's very
+    // next Player::Update - a tick that cannot be cancelled or dropped.
+    return true;
+}
 
-        // Nobody consumed it: it was a real cancel. Same call the stock
-        // handler would have made one tick ago.
-        player->RemoveOwnedAura(SPELL_SHADOWFORM, ObjectGuid::Empty, 0, AURA_REMOVE_BY_CANCEL);
-        SendCustomAuraDiag(Trinity::StringFormat(
-            "[CustomAuras] {}: Umbral Mercy - Shadowform cancel was not followed by a heal, form dropped",
-            player->GetName()));
-    }, Milliseconds(UMBRAL_CANCEL_GRACE_MS));
+void T2SpellHooks::ResolvePendingShadowformCancel(Player* player)
+{
+    // Nobody anywhere has a swallowed cancel outstanding: this is what the hook
+    // costs the other 99.99 % of player ticks.
+    if (!player || s_umbralPendingCount.load(std::memory_order_acquire) == 0)
+        return;
+
+    bool honour = false;
+    {
+        std::lock_guard<std::mutex> guard(s_umbralMutex);
+        auto itr = s_umbralPendingCancel.find(player->GetGUID());
+        if (itr == s_umbralPendingCancel.end())
+            return;
+
+        // A mark this old belongs to a cancel whose owner never got a tick -
+        // a load screen, a map change. Dropping the form now, seconds later and
+        // somewhere else, is not what the player asked for; forget it instead.
+        honour = getMSTimeDiff(itr->second, GameTime::GetGameTimeMS()) <= UMBRAL_CANCEL_STALE_MS;
+        s_umbralPendingCancel.erase(itr);
+        UmbralPublishPendingCount();
+    }
+
+    if (!honour)
+        return;
+
+    // Nobody consumed it: it was a real cancel, not an auto-unshift. Same call
+    // the stock handler would have made one tick ago. Safe here - this runs from
+    // t2_priest_mage_update::OnUpdate, after Unit::Update has returned, so no
+    // aura container is being walked.
+    player->RemoveOwnedAura(SPELL_SHADOWFORM, ObjectGuid::Empty, 0, AURA_REMOVE_BY_CANCEL);
+    SendCustomAuraDiag(Trinity::StringFormat(
+        "[CustomAuras] {}: Umbral Mercy - Shadowform cancel was not followed by a heal, form dropped",
+        player->GetName()));
+}
+
+bool T2SpellHooks::CountsAsHealingInShadowform(Player const* player)
+{
+    if (!player)
+        return false;
+
+    // The ordinary case, and the only one the old code tested.
+    if (player->GetShapeshiftForm() == FORM_SHADOW || player->HasAura(SPELL_SHADOWFORM))
+        return true;
+
+    // The form byte alone is NOT a safe test for this bonus, because the whole
+    // feature runs while the client is actively trying to take the form off. The
+    // client auto-unshifts from its OWN Spell.dbc, which knows nothing about
+    // 90340's MOD_IGNORE_SHAPESHIFT, so every Holy heal pressed in Shadowform is
+    // preceded by a CMSG_CANCEL_AURA(15473). If that cancel is honoured for any
+    // reason - it arrived without a cast behind it, a second press raced it, the
+    // form was dropped by something else in the same frame - the priest gets the
+    // heal for free and the price silently does nothing, which is the reported
+    // "shadowform heals are not dealing damage to me". Anchor on the cancel
+    // instead: it is the same key press as the heal.
+    std::lock_guard<std::mutex> guard(s_umbralMutex);
+    auto itr = s_umbralFormLeftAt.find(player->GetGUID());
+    if (itr == s_umbralFormLeftAt.end())
+        return false;
+
+    if (getMSTimeDiff(itr->second, GameTime::GetGameTimeMS()) > UMBRAL_FORM_GRACE_MS)
+    {
+        s_umbralFormLeftAt.erase(itr);
+        return false;
+    }
 
     return true;
+}
+
+void T2SpellHooks::ForgetPlayer(Player const* player)
+{
+    if (!player)
+        return;
+
+    std::lock_guard<std::mutex> guard(s_umbralMutex);
+    if (s_umbralPendingCancel.erase(player->GetGUID()))
+        UmbralPublishPendingCount();
+    s_umbralFormLeftAt.erase(player->GetGUID());
 }
 
 void T2SpellHooks::OnCastSpellRequest(Player* player, SpellInfo const* spellInfo)
@@ -481,12 +592,13 @@ void T2SpellHooks::OnCastSpellRequest(Player* player, SpellInfo const* spellInfo
         if (itr == s_umbralPendingCancel.end())
             return;
 
-        // A mark older than the window belongs to a cancel whose removal event
-        // was dropped (RemoveFromWorld kills the queue); it must neither keep
-        // nor drop the form now.
+        // A mark older than the window belongs to a cancel whose resolve never
+        // ran (the player left the map before his next tick); it must neither
+        // keep nor drop the form now.
         if (getMSTimeDiff(itr->second, GameTime::GetGameTimeMS()) > UMBRAL_PENDING_MAX_AGE_MS)
         {
             s_umbralPendingCancel.erase(itr);
+            UmbralPublishPendingCount();
             return;
         }
 
@@ -495,6 +607,7 @@ void T2SpellHooks::OnCastSpellRequest(Player* player, SpellInfo const* spellInfo
             // The whole point: consumed even if the cast goes on to fail
             // (range, mana, already casting) - the form stays either way.
             s_umbralPendingCancel.erase(itr);
+            UmbralPublishPendingCount();
             keptForHeal = true;
         }
 
@@ -503,10 +616,11 @@ void T2SpellHooks::OnCastSpellRequest(Player* player, SpellInfo const* spellInfo
         // spell, so the cancel is honoured right now and the cast then sees
         // exactly what it sees without the set - no form, no refusal.
         // Anything else (Mind Blast after a manual cancel) leaves the mark to
-        // its event.
+        // the resolve.
         else if (player->GetShapeshiftForm() == FORM_SHADOW && spellInfo->CheckShapeshift(FORM_SHADOW) != SPELL_CAST_OK)
         {
             s_umbralPendingCancel.erase(itr);
+            UmbralPublishPendingCount();
             honourNow = true;
         }
     }

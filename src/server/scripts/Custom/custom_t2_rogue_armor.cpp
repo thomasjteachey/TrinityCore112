@@ -119,6 +119,7 @@ namespace
         SPELL_T2_ICE_TRAIL_PATCH        = 90518,   // persistent area aura, the visible slick
         // (90519 was briefly a new-id Cold Blood wrapper; deleted - see below)
         SPELL_T2_VENOM_SUSTENANCE_HEAL  = 90520,   // SPELL_EFFECT_HEAL, bp at runtime
+        SPELL_T2_RUPTURING_VENOM_FX     = 90519,   // visual-only: Envenom's burst on the victim
         SPELL_T2_COLD_BLOOD_BUFF        = 90521,   // exact clone of the stock 14177 crit buff
         // (90522 was the block's LoS aura when the tomb was a creature; the
         //  DBC row remains but nothing references it since 2026-08-20)
@@ -743,6 +744,12 @@ class spell_t2_deadlypoison_burst : public SpellScript
             Unit::DealDamageMods(log.target, log.damage, &log.absorb);
             owner->DealSpellDamage(&log, false);
             owner->SendSpellNonMeleeDamageLog(&log);
+            // A raw damage log carries no SpellVisual - only SMSG_SPELL_GO does -
+            // so the rupture detonated invisibly. 90519 is an effect-less
+            // companion whose whole job is to make the client play Envenom's
+            // poison burst (SpellVisual 8144) on the victim.
+            owner->CastSpell(victim, SPELL_T2_RUPTURING_VENOM_FX, true);
+
             SendCustomAuraDiag(Trinity::StringFormat(
                 "[CustomAuras] {}: Rupturing Venom burst {} on {} for {}",
                 owner->GetName(), dotId, victim->GetName(), log.damage));

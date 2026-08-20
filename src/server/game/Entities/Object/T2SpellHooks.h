@@ -62,19 +62,21 @@ namespace T2SpellHooks
     //
     //  OnCancelAuraRequest  - FIRST thing in WorldSession::HandleCancelAuraOpcode.
     //      True = handled: the holder's Shadowform is NOT removed now; the cancel
-    //      is remembered and a ZERO-offset event on the player's own queue
-    //      removes the form unless a heal request consumed the mark first. Zero
-    //      is exact, not optimistic - CMSG_CANCEL_AURA is PROCESS_INPLACE
-    //      (World::UpdateSessions), CMSG_CAST_SPELL is PROCESS_THREADSAFE (the
-    //      session pass at the top of Map::Update) and Player::Update runs after
-    //      both, while LockedQueue::next peeks the queue HEAD so no packet can
-    //      overtake one sent before it. A deliberate press therefore takes the
-    //      form off on the very tick it was pressed. A second cancel arriving
-    //      before the first resolved is honoured on the spot (the client
-    //      auto-unshifts once per cast, so two in a row is a human pressing the
-    //      button), which is also what stops a mashed button from starving the
-    //      removal for ever - the bug the old 300 ms wall-clock grace had.
-    //      False = not ours, stock path.
+    //      is remembered and ResolvePendingShadowformCancel removes the form on
+    //      this player's very next tick unless a heal request consumed the mark
+    //      first. One tick is exact, not optimistic - CMSG_CANCEL_AURA is
+    //      PROCESS_INPLACE (World::UpdateSessions), CMSG_CAST_SPELL is
+    //      PROCESS_THREADSAFE (the session pass at the top of Map::Update) and
+    //      Player::Update runs after both, while LockedQueue::next peeks the
+    //      queue HEAD so no packet can overtake one sent before it. A deliberate
+    //      press therefore takes the form off on the very tick it was pressed. A
+    //      second cancel arriving before the first resolved is honoured on the
+    //      spot (the client auto-unshifts once per cast, so two in a row is a
+    //      human pressing the button), which is also what stops a mashed button
+    //      from starving the removal for ever - the bug the old 300 ms
+    //      wall-clock grace had. Only swallowed when the aura AND the shapeshift
+    //      byte both say Shadowform, so an inconsistent state can never become a
+    //      form the player is unable to take off. False = not ours, stock path.
     //  OnCastSpellRequest   - WorldSession::HandleCastSpellOpcode, before
     //      Spell::prepare. A pending mark plus a priest heal (see the body for
     //      the predicate) consumes the mark - whether or not the cast goes on to
@@ -89,6 +91,30 @@ namespace T2SpellHooks
     bool OnCancelAuraRequest(Player* player, uint32 spellId);
     void OnCastSpellRequest(Player* player, SpellInfo const* spellInfo);
     bool WaivesShapeshiftRestriction(Unit const* caster, SpellInfo const* spellInfo);
+
+    // Drains a swallowed Shadowform cancel that no heal claimed. Called once per
+    // player tick from t2_priest_mage_update::OnUpdate (custom_t2_priest_mage.cpp),
+    // which runs in Player::Update AFTER Unit::Update has returned - the one place
+    // this codebase documents as safe to add or remove auras from.
+    //
+    // This replaced a zero-offset event on the player's own EventProcessor. Same
+    // tick, but the queue is emptied by EventProcessor::KillAllEvents on a far
+    // teleport, a map change and logout, and an aborted removal leaves the form
+    // stuck up for good with nothing left to retry it - which is exactly the
+    // reported "I cannot leave Shadowform". A PlayerScript tick cannot be
+    // cancelled. Free for everyone: one relaxed atomic load when nothing is
+    // pending anywhere on the server.
+    void ResolvePendingShadowformCancel(Player* player);
+
+    // True when a heal landing NOW on this priest is healing that Umbral Mercy
+    // made possible: he is in Shadowform, still carries the aura, or his client
+    // cancelled the form so recently that the cancel and this heal are the same
+    // key press. See the body for why the raw form byte is not a safe test.
+    bool CountsAsHealingInShadowform(Player const* player);
+
+    // Drops every per-player mark this module holds. Called from the T2
+    // PlayerScript's OnLogout so nothing outlives the session.
+    void ForgetPlayer(Player const* player);
 }
 
 #endif // TRINITY_T2_SPELL_HOOKS_H
