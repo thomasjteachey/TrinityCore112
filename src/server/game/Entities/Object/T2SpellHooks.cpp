@@ -197,7 +197,8 @@ namespace
         if (!mage->HasAura(T2SpellHooks::SPELL_REFLECTIVE_ICE))
             return false;
 
-        if (!mage->HasAura(T2SpellHooks::SPELL_ICE_BLOCK))
+        if (!mage->HasAura(T2SpellHooks::SPELL_ICE_BLOCK)
+            && !mage->HasAura(T2SpellHooks::SPELL_ICE_BLOCK_WOTLK))
             return false;
 
         if (!mage->IsHostileTo(attacker) && !attacker->IsHostileTo(mage))
@@ -245,7 +246,8 @@ namespace
     void ReportReflectMiss(Unit* attacker, Unit* victim, char const* source)
     {
         Player* mage = victim ? victim->ToPlayer() : nullptr;
-        if (!mage || !mage->HasAura(T2SpellHooks::SPELL_ICE_BLOCK))
+        if (!mage || (!mage->HasAura(T2SpellHooks::SPELL_ICE_BLOCK)
+            && !mage->HasAura(T2SpellHooks::SPELL_ICE_BLOCK_WOTLK)))
             return;
 
         SendCustomAuraDiag(Trinity::StringFormat(

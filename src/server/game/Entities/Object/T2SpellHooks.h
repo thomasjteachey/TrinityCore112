@@ -29,7 +29,13 @@ namespace T2SpellHooks
     // Helpers cast by these hooks (rows exist in dbc.spell_lplus).
     constexpr uint32 SPELL_FEINT_CADENCE_BUFF = 90393;
     constexpr uint32 SPELL_DEAD_AIR_BUFF      = 90394;
-    constexpr uint32 SPELL_ICE_BLOCK          = 45438;
+    // THIS SERVER'S Ice Block is 11958, the classic Frost talent (Talent 31,
+    // tab 61) - 52 dev / 51 prod characters hold it. The WotLK id 45438 is held
+    // by NOBODY, which is why the whole dusty-mage set watched a spell that
+    // could never be cast. Both are accepted: the rows are structurally
+    // identical and a future id switch must not silently break this again.
+    constexpr uint32 SPELL_ICE_BLOCK          = 11958;
+    constexpr uint32 SPELL_ICE_BLOCK_WOTLK    = 45438;
     constexpr uint32 SPELL_SHADOWFORM         = 15473;
 
     // SHOCKS. True when `caster` holds the unbound aura matching this shock, in

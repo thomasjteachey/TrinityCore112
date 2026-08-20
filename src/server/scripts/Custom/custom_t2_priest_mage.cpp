@@ -91,7 +91,11 @@ namespace
         SPELL_T2_GLACIAL_REPRIEVE       = 90342,
         SPELL_T2_HOARFROST_BLOOM        = 90343,
         SPELL_T2_ENCASED_IN_ICE         = 90385,
-        SPELL_MAGE_ICE_BLOCK            = 45438,
+        // 11958, not 45438: see the note on T2SpellHooks::SPELL_ICE_BLOCK.
+        // This server runs the classic Frost talent version; the WotLK id is
+        // in nobody's spellbook.
+        SPELL_MAGE_ICE_BLOCK            = 11958,
+        SPELL_MAGE_ICE_BLOCK_WOTLK      = 45438,
 
         // mage - fiery payback (90345 3pc, 90346 5pc, 90347 8pc)
         SPELL_T2_SCORCHING_MOMENTUM     = 90346,
@@ -619,11 +623,14 @@ class spell_t2_umbral_mercy_passive : public AuraScript
             "[CustomAuras] Umbral Mercy CheckProc entered: spell={} healInfo={} effective={}",
             eventInfo.GetSpellInfo() ? eventInfo.GetSpellInfo()->Id : 0,
             healInfo != nullptr,
-            healInfo ? healInfo->GetEffectiveHeal() : 0));
+            healInfo ? healInfo->GetHeal() : 0));
 
-        if (!healInfo || !healInfo->GetEffectiveHeal())
+        // The FULL heal, overheal included - the user's call: a Shadowform heal
+        // costs blood whether or not the target had room for it. GetHeal() is
+        // the gross figure, GetEffectiveHeal() the part that actually landed.
+        if (!healInfo || !healInfo->GetHeal())
         {
-            SendCustomAuraDiag("[CustomAuras] Umbral Mercy: rejected - no effective healing (full-health target?)");
+            SendCustomAuraDiag("[CustomAuras] Umbral Mercy: rejected - the heal was zero");
             return false;
         }
         Unit* target = GetTarget();
@@ -659,7 +666,9 @@ class spell_t2_umbral_mercy_passive : public AuraScript
         if (!priest || !healInfo)
             return;
 
-        int32 const price = CalculatePct(int32(healInfo->GetEffectiveHeal()), 50);
+        // GROSS heal, overheal included. Half of what you TRIED to heal, not
+        // half of what stuck - so topping off a full-health ally still bleeds you.
+        int32 const price = CalculatePct(int32(healInfo->GetHeal()), 50);
 
         SpellInfo const* healSpell = eventInfo.GetSpellInfo();
         char const* healName = healSpell ? healSpell->SpellName[sWorld->GetDefaultDbcLocale()] : nullptr;
@@ -667,7 +676,7 @@ class spell_t2_umbral_mercy_passive : public AuraScript
             "[CustomAuras] {}: Umbral Mercy - {} healed {} for {} effective, price {}",
             priest->GetName(), healName ? healName : "?",
             healInfo->GetTarget() ? healInfo->GetTarget()->GetName() : std::string("?"),
-            healInfo->GetEffectiveHeal(), price));
+            healInfo->GetHeal(), price));
 
         if (price <= 0)
             return;
@@ -904,36 +913,27 @@ class spell_t2_ashen_confiscation : public AuraScript
 {
     PrepareAuraScript(spell_t2_ashen_confiscation);
 
-    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    // Rides FIERY PAYBACK'S OWN DISARM (64346), not Fire Blast. Fiery Payback
+    // is Talent 15 / tab 41 on this server (ranks 64353/64357); below 35% health
+    // its 64349/64350 passive procs 64346 onto whoever hit you. Reacting to that
+    // aura landing means the bonus fires exactly when the talent fires - no
+    // second disarm cast, no proc row, and no way for the two to disagree about
+    // whether a disarm happened.
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
-        // Effect 0 is a DUMMY with no trigger spell: the core's default action
-        // would only log "non-existent spell 0" on every Fire Blast.
-        PreventDefaultAction();
-
-        Unit* victim = eventInfo.GetProcTarget();
-        Unit* target = GetTarget();
-        Player* mage = target ? target->ToPlayer() : nullptr;
+        Unit* victim = GetTarget();                 // the disarmed attacker
+        Unit* caster = GetCaster();                 // the mage Fiery Payback fired for
+        Player* mage = caster ? caster->ToPlayer() : nullptr;
         if (!mage || !victim)
             return;
 
-        // First rung of the chain, said out loud: if this never appears in the
-        // diag channel during a live test the 8pc aura was never granted (or
-        // its spell_proc row is missing) and everything below is moot.
-        SendCustomAuraDiag(Trinity::StringFormat(
-            "[CustomAuras] {}: Ashen Confiscation - Fire Blast proc on {}, casting the disarm",
-            mage->GetName(), victim->GetName()));
-
-        mage->CastSpell(victim, SPELL_MAGE_FIERY_PAYBACK_DISARM, aurEff);
-
-        // Mechanic immunity, a PvP trinket or a resist all eat the disarm, and
-        // "when you disarm an enemy" means the disarm has to be on them.
-        if (!victim->HasAura(SPELL_MAGE_FIERY_PAYBACK_DISARM, mage->GetGUID()))
-        {
-            SendCustomAuraDiag(Trinity::StringFormat(
-                "[CustomAuras] {}: Ashen Confiscation - disarm did not land on {}",
-                mage->GetName(), victim->GetName()));
+        // The 8pc gate. Every other mage's Fiery Payback disarms as normal.
+        if (!mage->HasAura(SPELL_T2_ASHEN_CONFISCATION))
             return;
-        }
+
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Ashen Confiscation - Fiery Payback disarmed {}",
+            mage->GetName(), victim->GetName()));
 
         // What the victim is holding. Players: the real items in the two
         // disarmed slots. Creatures: their virtual item ids (which are item
@@ -995,7 +995,7 @@ class spell_t2_ashen_confiscation : public AuraScript
 
     void Register() override
     {
-        OnEffectProc += AuraEffectProcFn(spell_t2_ashen_confiscation::HandleProc, EFFECT_0, SPELL_AURA_ANY);
+        AfterEffectApply += AuraEffectApplyFn(spell_t2_ashen_confiscation::HandleApply, EFFECT_0, SPELL_AURA_MOD_DISARM, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
