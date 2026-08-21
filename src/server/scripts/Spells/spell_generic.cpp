@@ -23,6 +23,7 @@
  */
 
 #include "ScriptMgr.h"
+#include "Bag.h"
 #include "Battleground.h"
 #include "CellImpl.h"
 #include "Containers.h"
@@ -3243,6 +3244,45 @@ class spell_gen_recharge : public SpellScript
 {
     PrepareSpellScript(spell_gen_recharge);
 
+    // PvP consumables are grouped by ItemLimitCategory 5 on this realm - the
+    // same key the Gurubashi arena restocker keys on - so the rune never needs
+    // a hardcoded item list that would go stale the moment one is added.
+    static constexpr uint32 PVP_CONSUMABLE_ITEM_LIMIT_CATEGORY = 5;
+
+    // Charges are written straight back to the template value rather than the
+    // destroy-and-restore-the-item dance the arena uses: that path can fail at
+    // CanStoreNewItem after the original has already been destroyed, which
+    // loses the item outright. This is what the core's own
+    // Spell::EffectRechargeManaGem does, and it cannot drop anything.
+    static bool RechargePvpConsumable(Player* owner, Item* item)
+    {
+        if (!item)
+            return false;
+
+        ItemTemplate const* proto = item->GetTemplate();
+        if (!proto || proto->ItemLimitCategory != PVP_CONSUMABLE_ITEM_LIMIT_CATEGORY)
+            return false;
+
+        bool restored = false;
+        for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+        {
+            // A negative SpellCharges means "expendable"; the count still runs
+            // toward zero, so comparing against the template value covers both
+            // signs without caring which one this item uses.
+            int32 const full = proto->Spells[i].SpellCharges;
+            if (!full || item->GetSpellCharges(i) == full)
+                continue;
+
+            item->SetSpellCharges(i, full);
+            restored = true;
+        }
+
+        if (restored)
+            item->SetState(ITEM_CHANGED, owner);
+
+        return restored;
+    }
+
     void HandleReset(SpellEffIndex /*effIndex*/)
     {
         Player* player = GetHitPlayer();
@@ -3255,6 +3295,18 @@ class spell_gen_recharge : public SpellScript
         // been recharged - the pet keeps its own history, so it goes too.
         if (Pet* pet = player->GetPet())
             pet->GetSpellHistory()->ResetAllCooldowns();
+
+        // ...and the consumables themselves. Clearing the cooldown of a potion
+        // that has no charges left recharges nothing, so the rune tops the
+        // charges up as well - otherwise "everything resets" quietly stops
+        // being true for exactly the items a rune is most wanted for.
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+            RechargePvpConsumable(player, player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot));
+
+        for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+            if (Bag* bag = player->GetBagByPos(bagSlot))
+                for (uint8 slot = 0; slot < bag->GetBagSize(); ++slot)
+                    RechargePvpConsumable(player, bag->GetItemByPos(slot));
     }
 
     void Register() override
