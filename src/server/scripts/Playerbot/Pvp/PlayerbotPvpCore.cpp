@@ -4659,10 +4659,44 @@ ObjectGuid SelectTauntingEnemyGuid(Player const* player)
         return ObjectGuid::Empty;
     };
 
-    if (ObjectGuid const guid = tauntCaster(SPELL_AURA_MOD_FEAR, true); !guid.IsEmpty())
-        return guid;
+    ObjectGuid guid = tauntCaster(SPELL_AURA_MOD_FEAR, true);
+    if (guid.IsEmpty())
+        guid = tauntCaster(SPELL_AURA_MOD_TAUNT, false);
 
-    return tauntCaster(SPELL_AURA_MOD_TAUNT, false);
+    // Only speaks while a taunt is actually on the bot, so it costs nothing the
+    // rest of the time. Static reading says the core already issues MoveChase +
+    // Attack from HandleModFear's followFear branch and that this selection now
+    // hands the same enemy back - yet the bots still stand there, so the answer
+    // has to come from a live taunt rather than another pass over the source.
+    //
+    // Prints WHY separately: whether the aura was seen at all, whether its caster
+    // resolved (Unit::SetTaunted silently does nothing when it does not, having
+    // already cleared the target), and what the bot is actually doing right now.
+    // Unit::IsTaunted() is what this expresses, but it is not const-qualified and
+    // `player` is a const pointer here, so its two halves are spelled out.
+    if (player->HasAttackMeFearAura() || player->HasUnitState(UNIT_STATE_TAUNTED) || !guid.IsEmpty())
+    {
+        MotionMaster const* motion = player->GetMotionMaster();
+        Unit const* victim = player->GetVictim();
+        TC_LOG_INFO("playerbots.pvp",
+            "PB taunt: bot={} attackMeFear={} tauntedState={} tauntCaster={} target={} victim={} "
+            "motion={} moving={} fleeing={} stunned={} rooted={} confused={} meleeAttacking={}",
+            player->GetName(),
+            player->HasAttackMeFearAura() ? "yes" : "no",
+            player->HasUnitState(UNIT_STATE_TAUNTED) ? "yes" : "no",
+            guid.IsEmpty() ? "UNRESOLVED" : guid.ToString(),
+            player->GetTarget().IsEmpty() ? "empty" : player->GetTarget().ToString(),
+            victim ? victim->GetName() : "none",
+            motion ? uint32(motion->GetCurrentMovementGeneratorType()) : 999u,
+            player->isMoving() ? "yes" : "no",
+            player->HasUnitState(UNIT_STATE_FLEEING) ? "yes" : "no",
+            player->HasUnitState(UNIT_STATE_STUNNED) ? "yes" : "no",
+            player->HasUnitState(UNIT_STATE_ROOT) ? "yes" : "no",
+            player->HasUnitState(UNIT_STATE_CONFUSED) ? "yes" : "no",
+            player->HasUnitState(UNIT_STATE_MELEE_ATTACKING) ? "yes" : "no");
+    }
+
+    return guid;
 }
 
 ObjectGuid SelectCombatTargetGuid(Player const* player)
