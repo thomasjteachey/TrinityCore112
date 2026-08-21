@@ -4615,10 +4615,67 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
     return count;
 }
 
+// Whoever currently has this realm's taunt CC on the bot, if anyone.
+//
+// The taunt is custom: a MOD_FEAR aura whose spell also carries
+// SPELL_EFFECT_ATTACK_ME, which is what makes it behave for the CLIENT (fear
+// takes client control, so a taunted player cannot simply walk away). The core
+// recognises it through Unit::HasAttackMeFearAura / IsTaunted and Unit::SetTaunted
+// turns it into "chase and attack the caster" - both aura types are checked here
+// for the same reason IsTaunted() checks both.
+//
+// The bot needs its own read of it because Unit::SetTaunted calls
+// SetTarget(ObjectGuid::Empty) before wiring up the chase, and Attack() does not
+// repopulate that field for a player the way it does for a creature. The bot's
+// selection below is purely player->GetTarget(), so it sees an empty target,
+// concludes it has nothing to do, and its next tick overrides the chase the core
+// just set up. That is the "sometimes they just stand there" report, and why it
+// is intermittent - it depends on whether a bot tick lands before anything else
+// re-selects for them.
+ObjectGuid SelectTauntingEnemyGuid(Player const* player)
+{
+    if (!player)
+        return ObjectGuid::Empty;
+
+    auto const tauntCaster = [player](AuraType type, bool requireAttackMe) -> ObjectGuid
+    {
+        for (AuraEffect const* effect : player->GetAuraEffectsByType(type))
+        {
+            if (!effect)
+                continue;
+            // The fear list also holds ordinary fears; only the ones carrying
+            // ATTACK_ME are this taunt, exactly as HasAttackMeFearAura tests.
+            if (requireAttackMe && !effect->GetSpellInfo()->HasEffect(SPELL_EFFECT_ATTACK_ME))
+                continue;
+
+            Unit const* caster = effect->GetCaster();
+            if (!caster || caster == player)
+                continue;
+            if (!HasHostileTarget(player, caster) || IsTargetInvalidByImmunity(player, caster))
+                continue;
+
+            return caster->GetGUID();
+        }
+        return ObjectGuid::Empty;
+    };
+
+    if (ObjectGuid const guid = tauntCaster(SPELL_AURA_MOD_FEAR, true); !guid.IsEmpty())
+        return guid;
+
+    return tauntCaster(SPELL_AURA_MOD_TAUNT, false);
+}
+
 ObjectGuid SelectCombatTargetGuid(Player const* player)
 {
     if (!player)
         return ObjectGuid::Empty;
+
+    // Taunt first, and deliberately ahead of whatever the bot had selected -
+    // overriding the current target IS what a taunt is for, and it keeps the bot
+    // agreeing with what Unit::SetTaunted already told the core to do rather than
+    // fighting it.
+    if (ObjectGuid const tauntGuid = SelectTauntingEnemyGuid(player); !tauntGuid.IsEmpty())
+        return tauntGuid;
 
     if (ObjectGuid const selectedGuid = player->GetTarget(); !selectedGuid.IsEmpty())
         if (Unit const* selectedTarget = ObjectAccessor::GetUnit(*player, selectedGuid); HasHostileTarget(player, selectedTarget) && !IsTargetInvalidByImmunity(player, selectedTarget))

@@ -404,7 +404,17 @@ void Spell::EffectSchoolDMG()
                     uint8 level = unitCaster->GetLevel();
                     uint32 block_value = unitCaster->GetShieldBlockValue(uint32(float(level) * 50), uint32(float(level) * 50));
                     int32 blockScaling = int32(unitCaster->ApplyEffectModifiers(m_spellInfo, effectInfo->EffectIndex, float(block_value)));
-                    damage += blockScaling + blockScaling / 2;
+                    // Block-value contribution, cut by 25% (user, 2026-08-21):
+                    // the old 1.5x becomes 1.125x, i.e. nine eighths.
+                    //
+                    // Scaled on the OUTPUT rather than by shrinking block_value,
+                    // because ApplyEffectModifiers has already run by here - reducing
+                    // its input would also shrink whatever spellmods contributed,
+                    // which is a different change from the one that was asked for.
+                    // Kept as integer arithmetic in the same shape as before so the
+                    // rounding behaviour does not shift; blockScaling is bounded by
+                    // level*50, so the multiply cannot overflow.
+                    damage += (blockScaling * 9) / 8;
                 }
                 // Victory Rush
                 else if (m_spellInfo->SpellFamilyFlags[1] & 0x100)
