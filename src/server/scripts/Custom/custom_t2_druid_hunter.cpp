@@ -360,8 +360,24 @@ class spell_t2_moonkitten_moonfire : public SpellScript
         // direct hit's crit is already folded into the spell's hit mask by the
         // time AfterHit runs (m_hitMask is updated before the AfterHit
         // handlers), the same read the Maul script does.
-        if ((GetSpell()->GetHitMask() & PROC_HIT_CRITICAL) && RollPrimalFrenzyBonus(caster))
+        bool const crit = (GetSpell()->GetHitMask() & PROC_HIT_CRITICAL) != 0;
+        float const frenzyChance = PrimalFrenzyChance(caster);
+        bool const bonus = crit && roll_chance_f(frenzyChance);
+        if (bonus)
             GetSpell()->AddComboPointGain(target, 1);
+
+        // Reported live because every condition above checks out statically and the
+        // bonus point still does not appear: the 16952->16954 rank chain is present,
+        // 16954 is PASSIVE with ProcChance 100, no spellmod matches its (0,0,0) class
+        // mask, m_hitMask is written at Spell.cpp:2898 before AfterHit runs at :2967
+        // in the same function, and AddComboPointGain accumulates on a repeat target.
+        // One cast with `.gm diagnostics customauras` on says which of the three is
+        // actually false, instead of a fourth round of reading the data.
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Moonfire combo - hitMask=0x{:X} crit={} frenzy={} chance={} -> {}",
+            caster->GetName(), GetSpell()->GetHitMask(), crit ? "YES" : "no",
+            FindPrimalFrenzy(caster) ? "found" : "MISSING", int32(frenzyChance),
+            bonus ? "2 points" : "1 point"));
     }
 
     // Verbatim the roll spell_dru_surprise_bear_combo uses for Maul / Swipe,
@@ -369,20 +385,32 @@ class spell_t2_moonkitten_moonfire : public SpellScript
     // own ProcChance (16952 rank 1 = 50, 16954 rank 2 = 100 in Spell.dbc) run
     // through SPELLMOD_CHANCE_OF_SUCCESS. Ranked lookup - the druid has one
     // rank or the other, never rank 1 by id.
-    static bool RollPrimalFrenzyBonus(Unit* caster)
+    // Split out of the old RollPrimalFrenzyBonus so the diagnostic can report WHICH
+    // half failed - "no aura" and "aura found but rolled 0" are different bugs and
+    // the combined boolean could not tell them apart.
+    //
+    // Looked up by RANK 1's id on purpose: this fork collapsed the talent to a single
+    // rank and that rank is 16954, so nobody holds 16952 and the lookup depends
+    // entirely on the spell_ranks chain walk inside GetAuraEffectOfRankedSpell.
+    static AuraEffect const* FindPrimalFrenzy(Unit* caster)
     {
         AuraEffect const* primalFrenzy = caster->GetAuraEffectOfRankedSpell(SPELL_DRUID_PRIMAL_FRENZY_R1, EFFECT_0, caster->GetGUID());
         if (!primalFrenzy)
             primalFrenzy = caster->GetAuraEffectOfRankedSpell(SPELL_DRUID_PRIMAL_FRENZY_R1, EFFECT_0);
+        return primalFrenzy;
+    }
 
+    static float PrimalFrenzyChance(Unit* caster)
+    {
+        AuraEffect const* primalFrenzy = FindPrimalFrenzy(caster);
         if (!primalFrenzy)
-            return false;
+            return 0.0f;
 
         float chance = float(primalFrenzy->GetSpellInfo()->ProcChance);
         if (Player* modOwner = caster->GetSpellModOwner())
             modOwner->ApplySpellMod(primalFrenzy->GetId(), SPELLMOD_CHANCE_OF_SUCCESS, chance);
 
-        return roll_chance_f(chance);
+        return chance;
     }
 
     void Register() override

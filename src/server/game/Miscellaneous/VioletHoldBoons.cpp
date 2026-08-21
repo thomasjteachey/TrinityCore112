@@ -98,7 +98,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     // Second batch. The run-wide ones (Greed, Hoarder, Fellowship) count and
     // cap against the RUN, not the taker - see CanTake/GetStacks; their aura on
     // the taker is only the record of who bought them.
-    { Boon::Ricochet,     SPELL_BOON_RICOCHET,     8,  50, MASK_ALL,      4, "Boon of Ricochet",     "chance for damage to ricochet to a nearby enemy for half", "%" },
+    { Boon::Ricochet,     SPELL_BOON_RICOCHET,     8,  50, MASK_ALL,      6, "Boon of Ricochet",     "chance for damage to ricochet to a nearby enemy for half", "%" },
     { Boon::Overkill,     SPELL_BOON_OVERKILL,     1,   1, MASK_ALL,      3, "Boon of Overkill",     "all overkill damage from your killing blows splashes enemies within 15 yd (unique)", "" },
     { Boon::Reflection,   SPELL_BOON_REFLECTION,  12,  50, MASK_ALL,      5, "Boon of Reflection",   "of damage taken reflected",               "%" },
     { Boon::Vampire,      SPELL_BOON_VAMPIRE,      3,  30, MASK_ALL,      4, "Boon of the Vampire",  "of damage dealt returned as health",      "%" },
