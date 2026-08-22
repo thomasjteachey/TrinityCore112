@@ -4699,6 +4699,17 @@ namespace playerbot
         if (!battleground || !player)
             return false;
 
+        // Violet Hold has no objectives, and its team start positions are not
+        // places anyone should walk to: the enemy one is wherever the LAST
+        // wave clone was seated, i.e. inside a cell. The fallback below would
+        // send a caged wave - and the party's own bots - marching at that
+        // cell, straight through the wall between two of them, which is
+        // exactly what a two-cell wave looks like on screen. There is nothing
+        // to take or defend here; everyone fights what is in front of them,
+        // which the enemy-pursuit paths above already handle.
+        if (battleground->GetTypeID(true) == BATTLEGROUND_VHR)
+            return false;
+
         BattlegroundNodeObjective nodeObjective;
         if (battleground->GetNodeObjective(player->GetGUID(), nodeObjective))
         {
@@ -5296,7 +5307,7 @@ namespace playerbot
             context.movement == BattlegroundMovementPrimitive::None &&
             context.flagCarrierDirective == FlagCarrierDirective::None)
         {
-            if (battleground && battleground->GetTypeID() == BATTLEGROUND_SCM)
+            if (battleground && (battleground->GetTypeID() == BATTLEGROUND_SCM || battleground->GetTypeID() == BATTLEGROUND_VHR))
             {
                 float const engageDistance = GetAggressiveCombatScanDistance(player, 100.0f);
                 if (EngageNearestEnemyPlayer(player, engageDistance))
@@ -5340,7 +5351,7 @@ namespace playerbot
                     return true;
                 }
 
-                if (battleground->GetTypeID() == BATTLEGROUND_SCM)
+                if (battleground->GetTypeID() == BATTLEGROUND_SCM || battleground->GetTypeID() == BATTLEGROUND_VHR)
                 {
                     float const engageDistance = GetAggressiveCombatScanDistance(player, 100.0f);
                     if (EngageNearestEnemyPlayer(player, engageDistance))

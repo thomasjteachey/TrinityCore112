@@ -175,6 +175,14 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
     }
 
     TeamId const enemyTeamIndex = Battleground::GetTeamIndexByTeamId(enemyTeam);
+
+    // The seating trick below rewrites the enemy team start position once per
+    // clone, and whatever it held last outlives the wave. Anything that reads
+    // team starts afterwards - bot objective movement, a relog into the run -
+    // would be pointed inside a cell, so put it back when the wave is built.
+    Position const enemyStartBeforeWave = bg->GetTeamStartPosition(enemyTeamIndex)
+        ? *bg->GetTeamStartPosition(enemyTeamIndex) : Position();
+
     uint32 spawned = 0;
     for (size_t i = 0; i < sources.size() && i < positions.size(); ++i)
     {
@@ -255,6 +263,8 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
 
         ++spawned;
     }
+
+    bg->SetTeamStartPosition(enemyTeamIndex, enemyStartBeforeWave);
 
     TC_LOG_DEBUG("playerbot", "PlayerbotVhrWaveDriver: wave {} of instance {} fielded {}/{} clones.",
         waveNumber, bg->GetInstanceID(), spawned, uint32(sources.size()));

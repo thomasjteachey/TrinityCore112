@@ -2841,10 +2841,31 @@ void SpellInfo::_LoadImmunityInfo()
                     case 81272: //death wish: unstoppable
                     case 81296: //unstoppable
                     case 81300: //bestial wrath (new)
-                    case 89765: //unstoppable hurricane
                     case 89775: //thank your shaman
                     case 89784: //fade unstoppable
                         mechanicImmunityMask |= IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK;
+                        break;
+                    case 89765: //unstoppable hurricane (Beef's Tenacity 8pc)
+                        // Same movement/loss-of-control immunity as the rest, PLUS
+                        // interrupt immunity - which that mask does not contain. It
+                        // is charm/fear/root/sleep/snare/stun/freeze/knockout/
+                        // polymorph/banish/shackle/turn/horror/daze/sap and nothing
+                        // else, so a Kick or Counterspell landed normally, ran
+                        // Spell::EffectInterruptCast and school-locked the druid
+                        // through LockSpellSchool. "Unstoppable" on a CHANNEL has to
+                        // mean the channel cannot be stopped, or the bonus protects
+                        // against everything except the one thing that actually ends
+                        // a Hurricane.
+                        //
+                        // Both levers on purpose: the mechanic covers spells that
+                        // declare MECHANIC_INTERRUPT, and the effect immunity covers
+                        // the ones that carry SPELL_EFFECT_INTERRUPT_CAST without
+                        // declaring that mechanic. The effect immunity is what stops
+                        // the school lockout, since LockSpellSchool is called from
+                        // inside that effect handler.
+                        mechanicImmunityMask |= IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK;
+                        mechanicImmunityMask |= (1 << MECHANIC_INTERRUPT);
+                        immuneInfo.SpellEffectImmune.insert(SPELL_EFFECT_INTERRUPT_CAST);
                         break;
                     case 54508: // Demonic Empowerment
                         mechanicImmunityMask |= (1 << MECHANIC_SNARE) | (1 << MECHANIC_ROOT) | (1 << MECHANIC_STUN);

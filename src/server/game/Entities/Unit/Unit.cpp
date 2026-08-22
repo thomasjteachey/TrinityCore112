@@ -9940,7 +9940,28 @@ void Unit::SetSpeedRate(UnitMoveType mtype, float rate)
 
     if (Player* player = ToPlayer())
         if (float const starfireRateLimit = player->GetActiveStarfireSnareSpeedRate(mtype))
-            rate = std::min(rate, starfireRateLimit);
+        {
+            // The move-while-casting snare (Starfire / Arcane Missiles / Hurricane)
+            // MULTIPLIES the speed you would otherwise have, rather than capping it.
+            //
+            // It used to be std::min(rate, limit), which broke both directions at
+            // once. Speed buffs vanished the instant a cast began, because
+            // min(1.5, 0.25) is 0.25 - Boon of Swiftness (and Sprint, Dash, ...)
+            // simply stopped existing. And a snare below the cap stopped mattering:
+            // a Frost Nova'd caster at 0.5 also landed on exactly 0.25, moving no
+            // slower than an unsnared one.
+            //
+            // `rate` already carries every positive and negative speed aura by the
+            // time it reaches here, so one multiply gives the right answer to both:
+            //
+            //     unbuffed, unsnared  1.00 * 0.25 = 0.25   (unchanged)
+            //     +50% boon           1.50 * 0.25 = 0.375  (buff stacks)
+            //     Frost Nova -50%     0.50 * 0.25 = 0.125  (still snared below)
+            //
+            // i.e. "a quarter of whatever your speed currently is", which is what
+            // the ability reads as, instead of a flat ceiling that overwrote it.
+            rate *= starfireRateLimit;
+        }
 
     // Update speed only on change
     MovementChangeType changeType = MovementPacketSender::GetChangeTypeByMoveType(mtype);
