@@ -640,6 +640,7 @@ Player::Player(WorldSession* session) : Unit(true)
     _pendingStarfireSnareRemoval = false;
     _starfireSnareRemovalGraceUpdates = 0;
     _verifyStarfireSnareNextUpdate = false;
+    _inStarfireSnareSpeedUpdate = false;
 
     m_activeSpec = 0;
     m_specsCount = 1;
@@ -23748,8 +23749,23 @@ void Player::ApplyActiveStarfireSnare(UnitMoveType moveType)
     if (desiredRate <= 0.0f)
         return;
 
-    if (GetSpeedRate(moveType) > desiredRate)
-        SetSpeedRate(moveType, desiredRate);
+    // Re-run the full calculation rather than forcing the rate directly.
+    //
+    // This used to be `if (GetSpeedRate() > desiredRate) SetSpeedRate(desiredRate)`,
+    // which pinned the player to the RAW snare rate and so discarded every speed
+    // buff they had - a buffed caster was dragged back down to 0.25 immediately
+    // after UpdateSpeed had correctly given them more. UpdateSpeed now applies the
+    // snare multiplicatively as part of the whole computation, so asking it to run
+    // again IS applying the snare, and the result keeps the buffs.
+    //
+    // Guarded because UpdateSpeed's tail calls straight back into here through
+    // HandleStarfireSnareOnSpeedUpdate.
+    if (_inStarfireSnareSpeedUpdate)
+        return;
+
+    _inStarfireSnareSpeedUpdate = true;
+    UpdateSpeed(moveType);
+    _inStarfireSnareSpeedUpdate = false;
 }
 
 void Player::UpdateStarfireSnare()
@@ -23800,16 +23816,13 @@ void Player::VerifyStarfireSnare()
         return;
     }
 
-    for (UnitMoveType moveType : StarfireSnareMoveTypes)
-    {
-        float const allowedSpeed = desiredRate * playerBaseMoveSpeed[moveType];
-        if (GetSpeedRate(moveType) > desiredRate || GetSpeed(moveType) > allowedSpeed)
-        {
-            ApplyActiveStarfireSnare();
-            return;
-        }
-    }
-
+    // Recompute once and stop, rather than comparing against the raw rate.
+    //
+    // The old test was `GetSpeedRate() > desiredRate`, which assumed the snare was
+    // an absolute ceiling. Now that speed buffs stack with it a snared player is
+    // LEGITIMATELY above that rate, so the comparison would be true forever and
+    // re-fire this check on every single update without ever settling.
+    ApplyActiveStarfireSnare();
     _verifyStarfireSnareNextUpdate = false;
 }
 

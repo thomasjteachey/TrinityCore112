@@ -2557,6 +2557,9 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         bool _pendingStarfireSnareRemoval;
         uint8 _starfireSnareRemovalGraceUpdates;
         bool _verifyStarfireSnareNextUpdate;
+        // Re-entrancy guard: ApplyActiveStarfireSnare re-runs UpdateSpeed, whose
+        // tail calls back into it via HandleStarfireSnareOnSpeedUpdate.
+        bool _inStarfireSnareSpeedUpdate;
 
         uint32 m_enchantmentFlatMod[MAX_ATTACK]; // TODO: Stat system - incorporate generically, exposes a required hidden weapon stat that does not apply when unarmed
 
