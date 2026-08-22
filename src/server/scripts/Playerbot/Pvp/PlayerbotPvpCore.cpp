@@ -47,6 +47,7 @@
 #include "Totem.h"
 #include "Unit.h"
 #include "Util.h"
+#include "WorldSession.h"
 
 #include <array>
 #include <algorithm>
@@ -172,6 +173,10 @@ struct InterruptReactionState
 };
 std::unordered_map<ObjectGuid, InterruptReactionState> g_InterruptReactionStateByBot;
 std::mutex g_InterruptReactionStateLock;
+// Last taunt diagnostic line whispered per bot, so the tick-rate diagnostic only
+// speaks on a state change instead of repeating itself (see SelectTauntingEnemyGuid).
+std::unordered_map<ObjectGuid, std::string> g_TauntDiagnosticLastLineByBot;
+std::mutex g_TauntDiagnosticLastLineLock;
 thread_local ObjectGuid g_CurrentDecisionBotGuid = ObjectGuid::Empty;
 thread_local uint32 g_SuppressedDecisionSpellId = 0;
 
@@ -4674,26 +4679,65 @@ ObjectGuid SelectTauntingEnemyGuid(Player const* player)
     // already cleared the target), and what the bot is actually doing right now.
     // Unit::IsTaunted() is what this expresses, but it is not const-qualified and
     // `player` is a const pointer here, so its two halves are spelled out.
+    //
+    // Delivered as an in-game whisper on the `playerbot` GM diagnostic category,
+    // the same channel the spell-fail lines already arrive on, because that is
+    // where these are actually read - a TC_LOG_INFO only lands in the server log.
+    // The log line is kept too; it costs nothing and survives past the session.
     if (player->HasAttackMeFearAura() || player->HasUnitState(UNIT_STATE_TAUNTED) || !guid.IsEmpty())
     {
         MotionMaster const* motion = player->GetMotionMaster();
         Unit const* victim = player->GetVictim();
-        TC_LOG_INFO("playerbots.pvp",
-            "PB taunt: bot={} attackMeFear={} tauntedState={} tauntCaster={} target={} victim={} "
-            "motion={} moving={} fleeing={} stunned={} rooted={} confused={} meleeAttacking={}",
-            player->GetName(),
-            player->HasAttackMeFearAura() ? "yes" : "no",
-            player->HasUnitState(UNIT_STATE_TAUNTED) ? "yes" : "no",
-            guid.IsEmpty() ? "UNRESOLVED" : guid.ToString(),
-            player->GetTarget().IsEmpty() ? "empty" : player->GetTarget().ToString(),
-            victim ? victim->GetName() : "none",
-            motion ? uint32(motion->GetCurrentMovementGeneratorType()) : 999u,
-            player->isMoving() ? "yes" : "no",
-            player->HasUnitState(UNIT_STATE_FLEEING) ? "yes" : "no",
-            player->HasUnitState(UNIT_STATE_STUNNED) ? "yes" : "no",
-            player->HasUnitState(UNIT_STATE_ROOT) ? "yes" : "no",
-            player->HasUnitState(UNIT_STATE_CONFUSED) ? "yes" : "no",
-            player->HasUnitState(UNIT_STATE_MELEE_ATTACKING) ? "yes" : "no");
+        std::ostringstream os;
+        os << "[Playerbot taunt] bot=" << player->GetName()
+           << " attackMeFear=" << (player->HasAttackMeFearAura() ? "yes" : "no")
+           << " tauntedState=" << (player->HasUnitState(UNIT_STATE_TAUNTED) ? "yes" : "no")
+           << " tauntCaster=" << (guid.IsEmpty() ? std::string("UNRESOLVED") : guid.ToString())
+           << " target=" << (player->GetTarget().IsEmpty() ? std::string("empty") : player->GetTarget().ToString())
+           << " victim=" << (victim ? victim->GetName() : "none")
+           << " motion=" << (motion ? uint32(motion->GetCurrentMovementGeneratorType()) : 999u)
+           << " moving=" << (player->isMoving() ? "yes" : "no")
+           << " fleeing=" << (player->HasUnitState(UNIT_STATE_FLEEING) ? "yes" : "no")
+           << " stunned=" << (player->HasUnitState(UNIT_STATE_STUNNED) ? "yes" : "no")
+           << " rooted=" << (player->HasUnitState(UNIT_STATE_ROOT) ? "yes" : "no")
+           << " confused=" << (player->HasUnitState(UNIT_STATE_CONFUSED) ? "yes" : "no")
+           << " meleeAttacking=" << (player->HasUnitState(UNIT_STATE_MELEE_ATTACKING) ? "yes" : "no");
+        std::string const message = os.str();
+
+        TC_LOG_INFO("playerbots.pvp", "{}", message);
+
+        // This runs on every bot decision tick for as long as the taunt is up, so
+        // whispering unconditionally would bury the observer under identical lines
+        // at tick rate. Only speak when something in the line actually changed -
+        // which is also the useful signal, since the question is what the bot's
+        // state does over the life of the taunt.
+        bool changed = false;
+        {
+            std::lock_guard<std::mutex> lock(g_TauntDiagnosticLastLineLock);
+            std::string& last = g_TauntDiagnosticLastLineByBot[player->GetGUID()];
+            if (last != message)
+            {
+                last = message;
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            if (Map* map = player->FindMap())
+            {
+                // Whisper is a non-const send on a const selection pointer; the
+                // cast is confined to the diagnostic and touches no bot state.
+                Player* bot = const_cast<Player*>(player);
+                for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+                {
+                    Player* observer = itr->GetSource();
+                    WorldSession const* session = observer ? observer->GetSession() : nullptr;
+                    if (session && session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Playerbot))
+                        bot->Whisper(message, LANG_UNIVERSAL, observer);
+                }
+            }
+        }
     }
 
     return guid;
