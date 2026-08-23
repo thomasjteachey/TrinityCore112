@@ -152,97 +152,15 @@ namespace
     }
 }
 
-// 90607 - No Life: spells and melee attacks summon three Scorpions.
-// The proc flags and the 10% chance live in spell_proc; this only performs the
-// summon, so a retune of the chance never needs a rebuild.
-class spell_nolife_scorpions : public AuraScript
-{
-    PrepareAuraScript(spell_nolife_scorpions);
-
-    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
-    {
-        PreventDefaultAction();
-
-        Player* player = GetTarget()->ToPlayer();
-        if (!player)
-            return;
-
-        Unit* victim = eventInfo.GetProcTarget();
-
-        for (uint32 i = 0; i < NOLIFE_SCORPION_COUNT; ++i)
-        {
-            Position pos = player->GetRandomNearPosition(3.0f);
-            TempSummon* scorpion = player->SummonCreature(NOLIFE_SCORPION_ENTRY, pos,
-                TEMPSUMMON_TIMED_DESPAWN, NOLIFE_SCORPION_DURATION);
-            if (!scorpion)
-                continue;
-
-            // Faction and ownership FIRST. The creature template ships faction
-            // 14 (hostile to everything), and the AI evaluates hostility from
-            // whatever faction it holds at the moment it is asked. Setting the
-            // owner's faction after issuing the attack left the scorpions
-            // deciding against a faction they no longer had, so they spawned and
-            // then stood there.
-            scorpion->SetOwnerGUID(player->GetGUID());
-            scorpion->SetCreatorGUID(player->GetGUID());
-            scorpion->SetFaction(player->GetFaction());
-
-            // Pin the health rather than chase it through HealthModifier: that
-            // multiplier is applied against creature_classlevelstats and would
-            // drift with any future stat pass, and 1500 is a stated number.
-            scorpion->SetLevel(player->GetLevel());
-            scorpion->SetMaxHealth(NOLIFE_SCORPION_HEALTH);
-            scorpion->SetHealth(NOLIFE_SCORPION_HEALTH);
-
-            // AggressorAI only engages what it considers hostile on its own
-            // sweep, and a target dummy sitting at neutral never qualifies.
-            // Point it at what the wearer is actually fighting, and back the
-            // order with threat so the first swing does not immediately
-            // re-evaluate to nothing.
-            scorpion->SetReactState(REACT_AGGRESSIVE);
-
-            // Judge the target from the OWNER's perspective, not the scorpion's.
-            // A training dummy is neutral (faction 7 against a player's 1), so
-            // the summon's own IsValidAttackTarget says no even though the
-            // player is visibly beating on it - which is exactly what the
-            // diagnostic caught: valid=0, canAttack=0, scorpVictim=none.
-            // A guardian fights what its owner fights; anything the owner may
-            // legally attack, it may follow in on.
-            bool const validTarget = victim && victim->IsAlive() && player->IsValidAttackTarget(victim);
-            if (validTarget)
-            {
-                scorpion->Attack(victim, true);
-                scorpion->AI()->AttackStart(victim);
-                scorpion->GetThreatManager().AddThreat(victim, 1000.0f);
-                scorpion->SetInCombatWith(victim);
-            }
-
-            // TEMPORARY, same reason as the [NoLife] tick line: the faction-order
-            // fix did not make them engage, and every static check says it should
-            // have. Report what the summon actually saw so the next pass is not
-            // another guess. Only the first of the three is logged - they are
-            // identical and three lines per proc is noise.
-            if (i == 0)
-                TC_LOG_INFO("custom.auras",
-                    "[NoLife] scorpion owner={} victim={} victimAlive={} valid={} "
-                    "scorpFaction={} victimFaction={} react={} scorpVictim={} canAttack={}",
-                    player->GetName(),
-                    victim ? victim->GetName() : "none",
-                    victim && victim->IsAlive() ? 1 : 0,
-                    validTarget ? 1 : 0,
-                    scorpion->GetFaction(),
-                    victim ? victim->GetFaction() : 0,
-                    uint32(scorpion->GetReactState()),
-                    scorpion->GetVictim() ? scorpion->GetVictim()->GetName() : "none",
-                    victim ? (scorpion->CanCreatureAttack(victim) ? 1 : 0) : -1);
-        }
-    }
-
-    void Register() override
-    {
-        OnEffectProc += AuraEffectProcFn(spell_nolife_scorpions::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
-    }
-};
+// 90607 needs no script. It is a PROC_TRIGGER_SPELL carrier whose trigger is
+// 90608, and 90608 is a real SPELL_EFFECT_SUMMON (effect 28) pointing at
+// SummonProperties 1562 - the identical shape Force of Nature uses to put
+// down three treants for 30 sec. The core owns the summon, which means it
+// also owns ownership, faction, UNIT_FLAG_PLAYER_CONTROLLED and the guardian
+// AI that follows the owner's target. The hand-rolled version that used to
+// live here could never work: it called PreventDefaultAction(), suppressing
+// the very trigger that does the job, and then summoned a plain creature
+// whose creature-vs-creature faction check refused a neutral target dummy.
 
 // The Scorpions' own bite. Applied by the creature rather than by a spell list
 // so the poison follows the summon wherever it is used.
@@ -254,6 +172,15 @@ public:
     struct npc_nolife_scorpionAI : public ScriptedAI
     {
         npc_nolife_scorpionAI(Creature* creature) : ScriptedAI(creature) { }
+
+        void JustAppeared() override
+        {
+            // 1500 is a stated number, so pin it rather than chase it through
+            // HealthModifier, which multiplies against creature_classlevelstats
+            // and would drift with any future stat pass.
+            me->SetMaxHealth(NOLIFE_SCORPION_HEALTH);
+            me->SetHealth(NOLIFE_SCORPION_HEALTH);
+        }
 
         void DamageDealt(Unit* victim, uint32& /*damage*/, DamageEffectType damageType) override
         {
@@ -445,7 +372,6 @@ class spell_nolife_cursed_communion : public AuraScript
 
 void AddSC_custom_southpark_nolife()
 {
-    RegisterSpellScript(spell_nolife_scorpions);
     RegisterSpellScript(spell_nolife_three_lives);
     RegisterSpellScript(spell_nolife_extra_life);
     RegisterSpellScript(spell_nolife_cursed_communion);
