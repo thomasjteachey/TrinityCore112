@@ -1107,20 +1107,32 @@ uint32 Player::EnvironmentalDamage(EnviromentalDamage type, uint32 damage)
     // Absorb, resist some environmental damage type
     uint32 absorb = 0;
     uint32 resist = 0;
-    switch (type)
+
+    // Every environmental type except the void runs the absorb pipeline. Only
+    // lava and slime used to, which left falling, drowning, fatigue and fire as
+    // the one damage path an absorb shield could never see - so an effect that
+    // refuses the killing blow protected against every death except a cliff.
+    //
+    // Resistance is unaffected for the physical types: CalcSpellResistedDamage
+    // returns 0 for anything outside SPELL_SCHOOL_MASK_MAGIC, so fall damage
+    // does not start being mitigated by armour.
+    //
+    // DAMAGE_FALL_TO_VOID is deliberately excluded. It fires when the player is
+    // already beneath the world, and surviving it strands them there - worse
+    // than the death it would have prevented.
+    if (type != DAMAGE_FALL_TO_VOID)
     {
-    case DAMAGE_LAVA:
-    case DAMAGE_SLIME:
-    {
-        DamageInfo dmgInfo(this, this, damage, nullptr, type == DAMAGE_LAVA ? SPELL_SCHOOL_MASK_FIRE : SPELL_SCHOOL_MASK_NATURE, DIRECT_DAMAGE, BASE_ATTACK);
+        SpellSchoolMask school = SPELL_SCHOOL_MASK_NORMAL;
+        if (type == DAMAGE_LAVA || type == DAMAGE_FIRE)
+            school = SPELL_SCHOOL_MASK_FIRE;
+        else if (type == DAMAGE_SLIME)
+            school = SPELL_SCHOOL_MASK_NATURE;
+
+        DamageInfo dmgInfo(this, this, damage, nullptr, school, DIRECT_DAMAGE, BASE_ATTACK);
         Unit::CalcAbsorbResist(dmgInfo);
         absorb = dmgInfo.GetAbsorb();
         resist = dmgInfo.GetResist();
         damage = dmgInfo.GetDamage();
-        break;
-    }
-    default:
-        break;
     }
 
     Unit::DealDamageMods(this, damage, &absorb);

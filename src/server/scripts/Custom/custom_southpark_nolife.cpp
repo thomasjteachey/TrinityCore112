@@ -40,6 +40,7 @@
 #include "ScriptMgr.h"
 #include "Creature.h"
 #include "ScriptedCreature.h"
+#include "PetAI.h"
 #include "DBCStores.h"
 #include "GameTime.h"
 #include "Log.h"
@@ -164,38 +165,39 @@ namespace
 
 // The Scorpions' own bite. Applied by the creature rather than by a spell list
 // so the poison follows the summon wherever it is used.
-class npc_nolife_scorpion : public CreatureScript
+// Derives from PetAI, NOT ScriptedAI. These are guardians (SummonProperties
+// 1562), and everything that makes a guardian useful - following the owner,
+// picking up the owner's target, re-engaging when the owner is attacked - lives
+// in PetAI. A script that hands back a ScriptedAI REPLACES that, which is why
+// the scorpions used to spawn and then just stand there.
+//
+// Same shape the Shadowfiend uses (pet_priest.cpp), including registration via
+// RegisterCreatureAI. creature_template.AIName must stay empty for 900118: a
+// row carrying both AIName and ScriptName is contradictory and the AIName copy
+// would be what the factory honours.
+struct npc_nolife_scorpion : public PetAI
 {
-public:
-    npc_nolife_scorpion() : CreatureScript("npc_nolife_scorpion") { }
+    npc_nolife_scorpion(Creature* creature) : PetAI(creature) { }
 
-    struct npc_nolife_scorpionAI : public ScriptedAI
+    // No base call - PetAI::JustAppeared is deliberately empty because it
+    // controls following itself.
+    void JustAppeared() override
     {
-        npc_nolife_scorpionAI(Creature* creature) : ScriptedAI(creature) { }
+        // 1500 is a stated number, so pin it rather than chase it through
+        // HealthModifier, which multiplies against creature_classlevelstats
+        // and would drift with any future stat pass.
+        me->SetMaxHealth(NOLIFE_SCORPION_HEALTH);
+        me->SetHealth(NOLIFE_SCORPION_HEALTH);
+    }
 
-        void JustAppeared() override
-        {
-            // 1500 is a stated number, so pin it rather than chase it through
-            // HealthModifier, which multiplies against creature_classlevelstats
-            // and would drift with any future stat pass.
-            me->SetMaxHealth(NOLIFE_SCORPION_HEALTH);
-            me->SetHealth(NOLIFE_SCORPION_HEALTH);
-        }
-
-        void DamageDealt(Unit* victim, uint32& /*damage*/, DamageEffectType damageType) override
-        {
-            // Auto attacks only: the poison is the bite, not a spell effect.
-            if (damageType != DIRECT_DAMAGE || !victim || !victim->IsAlive())
-                return;
-
-            if (!victim->HasAura(SPELL_NOLIFE_SCORPION_VENOM))
-                me->CastSpell(victim, SPELL_NOLIFE_SCORPION_VENOM, true);
-        }
-    };
-
-    CreatureAI* GetAI(Creature* creature) const override
+    void DamageDealt(Unit* victim, uint32& /*damage*/, DamageEffectType damageType) override
     {
-        return new npc_nolife_scorpionAI(creature);
+        // Auto attacks only: the poison is the bite, not a spell effect.
+        if (damageType != DIRECT_DAMAGE || !victim || !victim->IsAlive())
+            return;
+
+        if (!victim->HasAura(SPELL_NOLIFE_SCORPION_VENOM))
+            me->CastSpell(victim, SPELL_NOLIFE_SCORPION_VENOM, true);
     }
 };
 
@@ -383,5 +385,5 @@ void AddSC_custom_southpark_nolife()
     RegisterSpellScript(spell_nolife_three_lives);
     RegisterSpellScript(spell_nolife_extra_life);
     RegisterSpellScript(spell_nolife_cursed_communion);
-    new npc_nolife_scorpion();
+    RegisterCreatureAI(npc_nolife_scorpion);
 }
