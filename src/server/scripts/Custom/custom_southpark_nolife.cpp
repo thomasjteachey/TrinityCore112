@@ -200,12 +200,32 @@ class spell_nolife_scorpions : public AuraScript
             // order with threat so the first swing does not immediately
             // re-evaluate to nothing.
             scorpion->SetReactState(REACT_AGGRESSIVE);
-            if (victim && victim->IsAlive() && scorpion->IsValidAttackTarget(victim))
+            bool const validTarget = victim && victim->IsAlive() && scorpion->IsValidAttackTarget(victim);
+            if (validTarget)
             {
                 scorpion->AI()->AttackStart(victim);
                 scorpion->GetThreatManager().AddThreat(victim, 1000.0f);
                 scorpion->SetInCombatWith(victim);
             }
+
+            // TEMPORARY, same reason as the [NoLife] tick line: the faction-order
+            // fix did not make them engage, and every static check says it should
+            // have. Report what the summon actually saw so the next pass is not
+            // another guess. Only the first of the three is logged - they are
+            // identical and three lines per proc is noise.
+            if (i == 0)
+                TC_LOG_INFO("custom.auras",
+                    "[NoLife] scorpion owner={} victim={} victimAlive={} valid={} "
+                    "scorpFaction={} victimFaction={} react={} scorpVictim={} canAttack={}",
+                    player->GetName(),
+                    victim ? victim->GetName() : "none",
+                    victim && victim->IsAlive() ? 1 : 0,
+                    validTarget ? 1 : 0,
+                    scorpion->GetFaction(),
+                    victim ? victim->GetFaction() : 0,
+                    uint32(scorpion->GetReactState()),
+                    scorpion->GetVictim() ? scorpion->GetVictim()->GetName() : "none",
+                    victim ? (scorpion->CanCreatureAttack(victim) ? 1 : 0) : -1);
         }
     }
 
