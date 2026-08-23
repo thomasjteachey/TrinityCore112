@@ -4063,6 +4063,14 @@ void ClearActiveMovementForControlLoss(Player* player)
     if (!player)
         return;
 
+    // Taunt pauses the tick like any other CC, but it must not tear down its own
+    // effect. Unit::SetTaunted has already installed MoveChase(caster) +
+    // Attack(caster) (Unit.cpp:12990); AttackStop/SetSelection/Clear below would
+    // erase it every tick and leave the bot standing still. Real players never
+    // reach this function, which is why taunt works on them and not on bots.
+    if (player->IsTaunted())
+        return;
+
     player->AttackStop();
     player->SetSelection(ObjectGuid::Empty);
     // Confused/polymorphed units need the server-driven wander movement to

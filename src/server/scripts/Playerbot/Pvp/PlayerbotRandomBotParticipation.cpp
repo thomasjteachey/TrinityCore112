@@ -105,6 +105,28 @@ void ClearActiveMovementForControlLoss(Player* player)
     if (!player)
         return;
 
+    // Taunt is a crowd control here like any other, and it SHOULD pause the
+    // decision tick. What it must not do is tear down its own effect.
+    //
+    // Unlike every other CC in the mask, a taunt prescribes an action instead of
+    // removing one: Unit::SetTaunted has already cleared UNIT_STATE_FLEEING,
+    // removed the fleeing generator, and installed MoveChase(caster) +
+    // Attack(caster) (Unit.cpp:12990-12998). The three lines below would undo
+    // exactly that - AttackStop() and SetSelection() drop the forced attack,
+    // MotionMaster::Clear(MOTION_SLOT_ACTIVE) drops the forced chase - and on the
+    // battleground fast tick that repeats every cadence for the whole duration.
+    // The bot ends up standing still: the taunt applied, and the bot's own tick
+    // erased it a few milliseconds later.
+    //
+    // Returning early leaves the chase and attack in place. They are server-owned
+    // state that survives without the decision tick, so a taunted bot follows and
+    // autoattacks the taunter while still being paused for everything else -
+    // which is what the CC is supposed to do. Same reasoning as the confused /
+    // polymorph exemption below: movement the CC itself installed is not ours to
+    // clear.
+    if (player->IsTaunted())
+        return;
+
     player->AttackStop();
     player->SetSelection(ObjectGuid::Empty);
     // Preserve server-owned confused movement (e.g. polymorph drift). Clearing
