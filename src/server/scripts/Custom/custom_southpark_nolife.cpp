@@ -62,6 +62,8 @@ namespace
         SPELL_NOLIFE_RECHARGE          = 90612,
         SPELL_NOLIFE_COMMUNION_CARRIER = 90613,
         SPELL_NOLIFE_COMMUNION_BUFF    = 90614,
+        SPELL_NOLIFE_COMMUNION_HEAL    = 90621,
+        SPELL_NOLIFE_COMMUNION_MANA    = 90622,
     };
 
     enum NoLifeItems
@@ -334,11 +336,24 @@ class spell_nolife_cursed_communion : public AuraScript
         if (!damageInfo || !damageInfo->GetDamage())
             return;
 
-        uint32 const amount = damageInfo->GetDamage();
-        player->ModifyHealth(int32(amount));
+        int32 const amount = int32(damageInfo->GetDamage());
+
+        // Cast real spells rather than calling ModifyHealth/ModifyPower.
+        // Those move the bars silently: nothing reaches the combat log, so the
+        // wearer cannot see the leech happening or check the numbers. Casting
+        // 90621/90622 with the amount as the base value produces ordinary heal
+        // and energize log lines, and picks up the rest of the healing pipeline
+        // (overheal reporting, healing done, absorbs) for free.
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        args.AddSpellBP0(amount);
+        player->CastSpell(player, SPELL_NOLIFE_COMMUNION_HEAL, args);
 
         if (player->GetPowerType() == POWER_MANA)
-            player->ModifyPower(POWER_MANA, int32(amount));
+        {
+            CastSpellExtraArgs manaArgs(TRIGGERED_FULL_MASK);
+            manaArgs.AddSpellBP0(amount);
+            player->CastSpell(player, SPELL_NOLIFE_COMMUNION_MANA, manaArgs);
+        }
     }
 
     void Register() override
