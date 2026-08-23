@@ -224,18 +224,26 @@ class spell_nolife_three_lives : public AuraScript
             if (!last || now - last >= 1000)
             {
                 last = now;
+                // The aura is confirmed applied with 3 stacks and its DBC flags
+                // are confirmed non-passive/non-hidden on BOTH sides, yet the
+                // player cannot see it. The remaining unknown is whether the
+                // core ever handed it a client slot - an aura without one is
+                // simply never transmitted, whatever its attributes say.
+                Aura* lives = player->GetAura(SPELL_NOLIFE_EXTRA_LIFE);
+                AuraApplication const* app = lives ? lives->GetApplicationOfTarget(player->GetGUID()) : nullptr;
                 TC_LOG_INFO("custom.auras",
-                    "[NoLife] tick {} strict={} recharge={} hasLives={} stacks={} head={} hands={} feet={} main={}",
+                    "[NoLife] tick {} strict={} recharge={} hasLives={} stacks={} "
+                    "slot={} passive={} sendable={} flags={} casterIsPlayer={}",
                     player->GetName(),
                     WearsOnlyNoLife(player, false) ? 1 : 0,
                     player->HasAura(SPELL_NOLIFE_RECHARGE) ? 1 : 0,
-                    player->HasAura(SPELL_NOLIFE_EXTRA_LIFE) ? 1 : 0,
-                    player->HasAura(SPELL_NOLIFE_EXTRA_LIFE)
-                        ? player->GetAura(SPELL_NOLIFE_EXTRA_LIFE)->GetStackAmount() : 0,
-                    EquippedEntry(player, EQUIPMENT_SLOT_HEAD),
-                    EquippedEntry(player, EQUIPMENT_SLOT_HANDS),
-                    EquippedEntry(player, EQUIPMENT_SLOT_FEET),
-                    EquippedEntry(player, EQUIPMENT_SLOT_MAINHAND));
+                    lives ? 1 : 0,
+                    lives ? lives->GetStackAmount() : 0,
+                    app ? int32(app->GetSlot()) : -1,
+                    lives ? (lives->IsPassive() ? 1 : 0) : -1,
+                    lives ? (lives->CanBeSentToClient() ? 1 : 0) : -1,
+                    app ? uint32(app->GetFlags()) : 0,
+                    lives && lives->GetCasterGUID().IsPlayer() ? 1 : 0);
             }
         }
 
