@@ -33,6 +33,7 @@
 #include "DynamicObject.h"
 #include "Item.h"
 #include "Map.h"
+#include "MoveSpline.h"
 #include "Player.h"
 #include "SpellAuraEffects.h"
 #include "SpellDefines.h"
@@ -44,6 +45,7 @@
 #include "World.h"
 #include "WorldSession.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace
@@ -95,6 +97,13 @@ namespace
     // distance - each instalment is identical, they just arrive a third as
     // often. 21 yards was roughly one Charge plus a stumble; 63 is a real kite.
     constexpr float GAPING_WOUND_YARDS_PER_STACK = 3.0f;
+
+    // How much further than top speed a single sample may cover before it is
+    // read as a relocation (Blink / Outmaneuver / teleport) rather than travel.
+    // At run speed a 250 ms sample is ~1.75 yd, so this allows ~5 yd - well
+    // clear of a stalled tick delivering two samples at once, and well under the
+    // ~20 yd a Blink covers. Server-driven travel bypasses the gate entirely.
+    constexpr float GAPING_WOUND_TRAVEL_SLACK = 3.0f;
 
     // Radius of the "heart" of a Consecration for the 5pc.
     constexpr float SANCTIFIED_CORE_RADIUS = 3.0f;
@@ -290,7 +299,13 @@ class spell_t2_rend_gaping_wound : public SpellScript
         // was computed, and those two extra ticks are damage the untouched Rend
         // really would have dealt.
         uint32 const ticks = std::max<uint32>(bleed->GetTotalTicks(), 1);
-        int32 const raw = int32(std::max(bleed->GetAmount(), 0)) * int32(ticks) * 2;
+
+        // 125% MORE damage than the Rend it replaces, i.e. 9/4 of it (user,
+        // 2026-08-23; was 2x / "100% more"). Kept as an exact integer ratio
+        // rather than a float so the pool stays reproducible, and computed in
+        // int64 because amount x ticks x 9 can overshoot int32 on a heavily
+        // buffed Rend before the division brings it back.
+        int32 const raw = int32(int64(std::max(bleed->GetAmount(), 0)) * int64(ticks) * 9 / 4);
 
         // Round the pool UP to a whole number of stacks. Every yard is billed
         // pool/21, and unless 21 divides the pool exactly that quotient is not
@@ -354,10 +369,13 @@ private:
 
 // 90366 - Gaping Wound: a 1 min, 21-stack bleed that only bleeds while its
 // victim moves. Ticks four times a second, measures how far the target
-// travelled since the last tick (displacement included - knockbacks, Blink,
-// Intercept and teleports all count, there is deliberately no per-tick clamp),
-// and for every whole 3-yard stride pops one stack and pays 1/21 of the pool. Ends at
-// 0 stacks or when the minute runs out.
+// TRAVELLED since the last tick, and for every whole 3-yard stride pops one
+// stack and pays 1/21 of the pool. Ends at 0 stacks or when the minute runs out.
+//
+// Travel means ground the victim crossed. Running and knockbacks count; Blink,
+// Outmaneuver and teleports do not, because they relocate the victim without
+// crossing anything (user, 2026-08-23 - an earlier build billed all
+// displacement alike and a single Blink popped seven stacks).
 //
 // The tick is a sampler, not the unit of damage: a tick that finds two yards
 // of travel deals TWO separate hits of the one yard price rather than one
@@ -433,10 +451,36 @@ class spell_t2_gaping_wound_tick : public AuraScript
 
         // Horizontal distance only: falling and jumping in place are not
         // "moving" for a bonus whose whole point is punishing a kiting target.
-        // Everything else - running, Blink, Intercept, knockbacks, teleports -
-        // is movement or displacement and counts in full.
         float const moved = target->GetExactDist2d(&_lastPos);
         _lastPos = target->GetPosition();
+
+        // Bill ground the victim CROSSED, not ground it merely ended up across.
+        //
+        // Blink, Outmaneuver (81297) and .tele relocate the victim without
+        // traversing the distance; a 20-yard Blink used to pop seven stacks out
+        // of a single 250 ms sample. Knockbacks are the opposite - the victim
+        // really does travel the arc - and must keep counting in full.
+        //
+        // The physical tell is speed: a relocation covers more ground in one
+        // sample than any speed permits. This is written as a plausibility gate
+        // rather than a spell blacklist so it also covers relocations added
+        // later, which a blacklist would silently miss.
+        //
+        // Server-driven travel is exempt from the gate and always billed:
+        // knockback arcs, charges and bot pathing all ride a spline and are
+        // genuine traversal even when they outrun run speed.
+        bool const serverDrivenTravel = target->movespline && !target->movespline->Finalized();
+        if (!serverDrivenTravel)
+        {
+            float const elapsed = float(std::max<int32>(aurEff->GetAmplitude(), 1)) / 1000.0f;
+            float const topSpeed = std::max(target->GetSpeed(MOVE_RUN),
+                                   std::max(target->GetSpeed(MOVE_FLIGHT),
+                                            target->GetSpeed(MOVE_SWIM)));
+            // Slack absorbs a stalled tick delivering two samples' worth of
+            // running at once; it is still far below any relocation distance.
+            if (moved > topSpeed * elapsed * GAPING_WOUND_TRAVEL_SLACK)
+                return;     // relocation - re-anchored above, nothing billed
+        }
 
         // Accumulate fractional yards so a slow walker is billed exactly as
         // much as a sprinter over the same ground; only WHOLE STRIDES of

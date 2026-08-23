@@ -102,6 +102,8 @@ namespace
     std::unordered_map<uint64, uint32> g_HunterLastFleeIssueMs;
     std::unordered_map<uint64, uint32> g_HunterKiteHoldUntilMs;
     std::unordered_map<uint64, int8> g_HunterKiteSideByGuid;
+    // Set when the core refused Auto Shot; suppresses planting until it expires.
+    std::unordered_map<uint64, uint32> g_HunterAutoShotCoreRejectUntilMs;
     // std::unordered_map<uint64, uint32> g_HunterAimedDiagLastMsByGuid; // Aimed Shot whisper diagnostics disabled.
 
     struct HunterFleeState
@@ -118,6 +120,11 @@ namespace
     constexpr uint32 PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS = 1150;
     constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS = 550;
     constexpr uint32 PLAYERBOT_HUNTER_FLEE_REISSUE_MS = 350;
+    // How long to stop trying to plant after the CORE refused the shot. Without
+    // a backoff the kite loop re-arms the plant on the very next pass, because
+    // spell 75's failed CheckCast never resets the ranged timer - see the
+    // core-reject branch in IsHunterAutoShotPlantActiveInternal.
+    constexpr uint32 PLAYERBOT_HUNTER_AUTOSHOT_CORE_REJECT_BACKOFF_MS = 5000;
     constexpr uint32 PLAYERBOT_PRIEST_ELUNES_GRACE_SPELL_ID = 81351;
     constexpr uint32 PLAYERBOT_PRIEST_WISP_FORM_SPELL_ID = 81352;
 constexpr uint32 kHunterFeignDeathSpellId = 5384;
@@ -2326,6 +2333,45 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         player->SetFacingToObject(target);
         player->SetInFront(target);
         StopHunterTargetMovementForPlant(player);
+
+        // The core is the only authority on whether Auto Shot can actually
+        // release, and this plant's own legality model (alive / no breakable CC /
+        // range band / IsWithinLOSInMap) is a SUBSET of what CheckCast enforces.
+        // Anything CheckCast rejects that this gate cannot see - the fork's
+        // LoS-blocker aura is the live example, since IsWithinLOSInMap knows
+        // nothing about it - produces a plant that can never end:
+        //
+        //   Unit::_UpdateAutoRepeatSpell (Unit.cpp:3505) special-cases spell 75.
+        //   On a failed CheckCast it neither interrupts the auto-repeat NOR
+        //   calls resetAttackTimer(RANGED_ATTACK), so the ranged timer stays at
+        //   0. The plant's releases both require the shot to land, the 2.2 s
+        //   deadline clears the plant, and DriveHunterKiteLoop re-arms it on the
+        //   same pass because the timer is still 0. Forever.
+        //
+        // Ask the core directly once the plant has outlived a full release
+        // window. A hunter that is genuinely shooting clears its plant inside
+        // the 434 ms window and never reaches this, so correct kiting is
+        // untouched.
+        uint32 const plantHeldMs = PLAYERBOT_HUNTER_STUTTER_MAX_PLANT_MS - (plantUntilMs - nowMs);
+        if (plantHeldMs >= PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS)
+        {
+            Spell* autoRepeatLive = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+            SpellCastResult const coreVerdict = autoRepeatLive ? autoRepeatLive->CheckCast(true) : SPELL_FAILED_ERROR;
+            if (coreVerdict != SPELL_CAST_OK)
+            {
+                std::ostringstream rejectDiag;
+                rejectDiag << "[AutoShot] core-reject held=" << plantHeldMs
+                    << " check=" << (!autoRepeatLive ? "NO_SPELL" : EnumUtils::ToString(coreVerdict).Title)
+                    << " - releasing plant and repositioning";
+                WhisperAutoShotDiagnosticToArena(player, rejectDiag.str(), 0);
+
+                playerbot::LockedSet(g_HunterAutoShotCoreRejectUntilMs, guidRaw,
+                    nowMs + PLAYERBOT_HUNTER_AUTOSHOT_CORE_REJECT_BACKOFF_MS);
+                clearPlantState();
+                return false;
+            }
+        }
+
         return true;
     }
 
@@ -3210,6 +3256,17 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         float const desiredDistance = shouldCommitForBite ? 3.0f : idealRange;
 
         bool const hasLos = player->IsWithinLOSInMap(target);
+
+        // The plant released because the CORE refused the shot for a reason this
+        // loop cannot see (IsWithinLOSInMap says yes, CheckCast says no - the
+        // fork's LoS-blocker aura being the live example). Treat that exactly
+        // like having no line of sight: it is the same situation, "I cannot
+        // shoot from here", and it already has a purpose-built recovery.
+        // Without this the loop re-arms the plant on this very pass, because
+        // spell 75's failed CheckCast leaves the ranged timer at 0 forever.
+        uint32 const* coreRejectUntilMs = playerbot::LockedFind(g_HunterAutoShotCoreRejectUntilMs, hunterGuidRaw);
+        bool const coreRejectsAutoShot = coreRejectUntilMs && *coreRejectUntilMs > nowMs;
+
         bool const inAutoShotBand = hasLos && exactDistance > safeShootMin && exactDistance <= maxAutoShotRange;
         bool const tooClose = exactDistance <= safeShootMin;
 
@@ -3318,10 +3375,11 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return true;
         }
 
-        if (!hasLos)
+        if (!hasLos || coreRejectsAutoShot)
         {
             clearPlantState();
-            return TryRecoverLineOfSight(player, target, profile, "hunter-stutter-los");
+            return TryRecoverLineOfSight(player, target, profile,
+                hasLos ? "hunter-stutter-core-reject" : "hunter-stutter-los");
         }
 
         if (tooClose && !shouldCommitForBite)
