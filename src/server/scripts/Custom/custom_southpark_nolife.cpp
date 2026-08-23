@@ -200,9 +200,18 @@ class spell_nolife_scorpions : public AuraScript
             // order with threat so the first swing does not immediately
             // re-evaluate to nothing.
             scorpion->SetReactState(REACT_AGGRESSIVE);
-            bool const validTarget = victim && victim->IsAlive() && scorpion->IsValidAttackTarget(victim);
+
+            // Judge the target from the OWNER's perspective, not the scorpion's.
+            // A training dummy is neutral (faction 7 against a player's 1), so
+            // the summon's own IsValidAttackTarget says no even though the
+            // player is visibly beating on it - which is exactly what the
+            // diagnostic caught: valid=0, canAttack=0, scorpVictim=none.
+            // A guardian fights what its owner fights; anything the owner may
+            // legally attack, it may follow in on.
+            bool const validTarget = victim && victim->IsAlive() && player->IsValidAttackTarget(victim);
             if (validTarget)
             {
+                scorpion->Attack(victim, true);
                 scorpion->AI()->AttackStart(victim);
                 scorpion->GetThreatManager().AddThreat(victim, 1000.0f);
                 scorpion->SetInCombatWith(victim);
