@@ -41,6 +41,8 @@
 #include "Creature.h"
 #include "ScriptedCreature.h"
 #include "DBCStores.h"
+#include "GameTime.h"
+#include "Log.h"
 #include "Item.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
@@ -50,6 +52,8 @@
 #include "SpellScript.h"
 #include "ThreatManager.h"
 #include "TemporarySummon.h"
+
+#include <unordered_map>
 
 namespace
 {
@@ -250,6 +254,34 @@ class spell_nolife_three_lives : public AuraScript
         Player* player = GetTarget()->ToPlayer();
         if (!player)
             return;
+
+        // TEMPORARY. Every static link in this chain verified correct - itemset,
+        // durations, periodic flag, script binding, build revision - and the
+        // bonus still did nothing, so the remaining unknown is runtime. Goes to
+        // the custom.auras channel because that logger is already configured and
+        // writes to its own file; nothing has to change in worldserver.conf.
+        // Throttled to once a second per wearer, which is the tick rate anyway.
+        {
+            static std::unordered_map<uint64, uint32> lastLogMs;
+            uint32 const now = GameTime::GetGameTimeMS();
+            uint32& last = lastLogMs[player->GetGUID().GetRawValue()];
+            if (!last || now - last >= 1000)
+            {
+                last = now;
+                TC_LOG_INFO("custom.auras",
+                    "[NoLife] tick {} strict={} recharge={} hasLives={} stacks={} head={} hands={} feet={} main={}",
+                    player->GetName(),
+                    WearsOnlyNoLife(player, false) ? 1 : 0,
+                    player->HasAura(SPELL_NOLIFE_RECHARGE) ? 1 : 0,
+                    player->HasAura(SPELL_NOLIFE_EXTRA_LIFE) ? 1 : 0,
+                    player->HasAura(SPELL_NOLIFE_EXTRA_LIFE)
+                        ? player->GetAura(SPELL_NOLIFE_EXTRA_LIFE)->GetStackAmount() : 0,
+                    EquippedEntry(player, EQUIPMENT_SLOT_HEAD),
+                    EquippedEntry(player, EQUIPMENT_SLOT_HANDS),
+                    EquippedEntry(player, EQUIPMENT_SLOT_FEET),
+                    EquippedEntry(player, EQUIPMENT_SLOT_MAINHAND));
+            }
+        }
 
         if (!WearsOnlyNoLife(player, false))
         {
