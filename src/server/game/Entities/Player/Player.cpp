@@ -3179,6 +3179,66 @@ bool Player::IsMaxLevel() const
     return GetLevel() >= GetUInt32Value(PLAYER_FIELD_MAX_LEVEL);
 }
 
+// Rebuild m_usedTalentCount from the TALENT map rather than from the spellbook.
+//
+// Until this existed, the count was whatever Player::AddSpell had accumulated
+// while _LoadSpells replayed character_spell: AddSpell does
+// `m_usedTalentCount += GetTalentSpellCost(spellId)`, and GetTalentSpellCost
+// prices any spell that appears in Talent.dbc. That made the spellbook the
+// source of truth for a number the talent TREE is drawn from, and the two drift
+// apart for a reason that is completely routine:
+//
+//   Train Holy Shield rank 3. Rank 3 is not itself a talent rank, so when it is
+//   loaded AddSpell walks down the rank chain and re-adds ranks 2 and 1 with
+//   dependent = true. _SaveSpells then DELETEs any CHANGED row unconditionally
+//   but skips the re-INSERT for dependent ones, so the talent's own rank-1 spell
+//   is dropped from character_spell on that very login - and with it the point
+//   it was carrying. The tree still shows the talent; the counter no longer
+//   counts it; the client offers a free point that LearnTalent will not accept.
+//
+// Counting the talent map instead makes the count agree with what the player
+// can actually see, and it is immune to anything the rank machinery does to the
+// spellbook. This mirrors what ActivateSpec already does when switching specs -
+// the login path simply never had an equivalent.
+void Player::RecountUsedTalentsFromTalentMap()
+{
+    uint32 spentTalents = 0;
+
+    for (uint32 talentId = 0; talentId < sTalentStore.GetNumRows(); ++talentId)
+    {
+        TalentEntry const* talentInfo = sTalentStore.LookupEntry(talentId);
+        if (!talentInfo)
+            continue;
+
+        TalentTabEntry const* talentTabInfo = sTalentTabStore.LookupEntry(talentInfo->TabID);
+        if (!talentTabInfo)
+            continue;
+
+        // Count only this character's own trees. A talent spell belonging to
+        // another class must not be priced, or it inflates the count past the
+        // level cap and InitTalentForLevel below wipes the character - the
+        // failure mode that stranded the foreign-talent characters in 2026-07.
+        if ((GetClassMask() & talentTabInfo->ClassMask) == 0)
+            continue;
+
+        // Highest held rank only, then stop: a talent costs its rank, not the
+        // sum of every rank beneath it.
+        for (int8 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
+        {
+            if (talentInfo->SpellRank[rank] == 0)
+                continue;
+
+            if (HasTalent(talentInfo->SpellRank[rank], m_activeSpec))
+            {
+                spentTalents += (rank + 1);
+                break;
+            }
+        }
+    }
+
+    m_usedTalentCount = spentTalents;
+}
+
 void Player::InitTalentForLevel()
 {
     uint8 level = GetLevel();
@@ -19233,6 +19293,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     SetHonorPoints(fields[45].GetUInt32());
 
     // after spell and quest load
+    RecountUsedTalentsFromTalentMap();
     InitTalentForLevel();
     LearnDefaultSkills();
     LearnCustomSpells();
@@ -27965,10 +28026,17 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
         return;
 
     // find current max talent rank (0~5)
+    //
+    // HasTalent, not HasSpell. The spellbook is not a reliable record of which
+    // talents are held: training a higher rank of an ability a talent granted
+    // drops the talent's own rank spell from it (see
+    // RecountUsedTalentsFromTalentMap). Asking the spellbook made the server
+    // believe a taken talent was untaken while the client - drawing from the
+    // talent map - showed it taken, and the two could never agree on a click.
     uint8 curtalent_maxrank = 0; // 0 = not learned any rank
     for (int8 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
     {
-        if (talentInfo->SpellRank[rank] && HasSpell(talentInfo->SpellRank[rank]))
+        if (talentInfo->SpellRank[rank] && HasTalent(talentInfo->SpellRank[rank], m_activeSpec))
         {
             curtalent_maxrank = (rank + 1);
             break;
@@ -27992,7 +28060,7 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
             for (uint8 rank = talentInfo->PrereqRank; rank < MAX_TALENT_RANK; rank++)
             {
                 if (depTalentInfo->SpellRank[rank] != 0)
-                    if (HasSpell(depTalentInfo->SpellRank[rank]))
+                    if (HasTalent(depTalentInfo->SpellRank[rank], m_activeSpec))
                         hasEnoughRank = true;
             }
             if (!hasEnoughRank)
@@ -28001,6 +28069,12 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
     }
 
     // Find out how many points we have in this field
+    //
+    // Also HasTalent rather than HasSpell, and for the same reason: a tree whose
+    // talents are all taken could still read short here, so a deep talent was
+    // refused for "not enough points spent in the tree" when the tree was in
+    // fact full. Counting the highest held rank once (break) rather than every
+    // rank present matches what a talent actually costs.
     uint32 spentPoints = 0;
 
     uint32 tTab = talentInfo->TabID;
@@ -28008,10 +28082,13 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
         for (uint32 i = 0; i < sTalentStore.GetNumRows(); i++)          // Loop through all talents.
             if (TalentEntry const* tmpTalent = sTalentStore.LookupEntry(i))                                  // the way talents are tracked
                 if (tmpTalent->TabID == tTab)
-                    for (uint8 rank = 0; rank < MAX_TALENT_RANK; rank++)
+                    for (int8 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
                         if (tmpTalent->SpellRank[rank] != 0)
-                            if (HasSpell(tmpTalent->SpellRank[rank]))
+                            if (HasTalent(tmpTalent->SpellRank[rank], m_activeSpec))
+                            {
                                 spentPoints += (rank + 1);
+                                break;
+                            }
 
     // not have required min points spent in talent tree
     if (spentPoints < (talentInfo->TierID * MAX_TALENT_RANK))

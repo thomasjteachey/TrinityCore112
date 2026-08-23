@@ -1571,6 +1571,10 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
 
         bool AddTalent(uint32 spellId, uint8 spec, bool learning);
         bool HasTalent(uint32 spell_id, uint8 spec) const;
+        // Rebuild m_usedTalentCount from the talent map. Must run at login after
+        // _LoadTalents/_LoadSpells and before InitTalentForLevel, otherwise the
+        // count is whatever AddSpell scraped out of the spellbook.
+        void RecountUsedTalentsFromTalentMap();
 
         uint32 CalculateTalentsPoints() const;
         // Points a character of `level` (this class) would have; the same
