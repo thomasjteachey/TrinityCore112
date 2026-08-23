@@ -48,6 +48,7 @@
 #include "SpellHistory.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
+#include "ThreatManager.h"
 #include "TemporarySummon.h"
 
 namespace
@@ -172,17 +173,35 @@ class spell_nolife_scorpions : public AuraScript
             if (!scorpion)
                 continue;
 
+            // Faction and ownership FIRST. The creature template ships faction
+            // 14 (hostile to everything), and the AI evaluates hostility from
+            // whatever faction it holds at the moment it is asked. Setting the
+            // owner's faction after issuing the attack left the scorpions
+            // deciding against a faction they no longer had, so they spawned and
+            // then stood there.
+            scorpion->SetOwnerGUID(player->GetGUID());
+            scorpion->SetCreatorGUID(player->GetGUID());
+            scorpion->SetFaction(player->GetFaction());
+
             // Pin the health rather than chase it through HealthModifier: that
             // multiplier is applied against creature_classlevelstats and would
             // drift with any future stat pass, and 1500 is a stated number.
+            scorpion->SetLevel(player->GetLevel());
             scorpion->SetMaxHealth(NOLIFE_SCORPION_HEALTH);
             scorpion->SetHealth(NOLIFE_SCORPION_HEALTH);
-            scorpion->SetLevel(player->GetLevel());
-            scorpion->SetFaction(player->GetFaction());
-            scorpion->SetOwnerGUID(player->GetGUID());
 
-            if (victim && player->IsValidAttackTarget(victim))
+            // AggressorAI only engages what it considers hostile on its own
+            // sweep, and a target dummy sitting at neutral never qualifies.
+            // Point it at what the wearer is actually fighting, and back the
+            // order with threat so the first swing does not immediately
+            // re-evaluate to nothing.
+            scorpion->SetReactState(REACT_AGGRESSIVE);
+            if (victim && victim->IsAlive() && scorpion->IsValidAttackTarget(victim))
+            {
                 scorpion->AI()->AttackStart(victim);
+                scorpion->GetThreatManager().AddThreat(victim, 1000.0f);
+                scorpion->SetInCombatWith(victim);
+            }
         }
     }
 
