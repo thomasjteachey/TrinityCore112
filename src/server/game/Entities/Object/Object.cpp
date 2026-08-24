@@ -46,6 +46,7 @@
 #include "Unit.h"
 #include "UpdateFieldFlags.h"
 #include "Vehicle.h"
+#include "T2SpellHooks.h"
 #include "VioletHoldBoons.h"
 #include "VMapFactory.h"
 #include "VMapManager2.h"
@@ -2491,6 +2492,14 @@ void WorldObject::ModSpellCastTime(SpellInfo const* spellInfo, int32& castTime, 
     if (castTime > 0 && (spellInfo->HasAura(SPELL_AURA_MOUNTED) || spellInfo->Mechanic == MECHANIC_MOUNT))
         if (int32 boonMs = VioletHoldBoons::GetMountCastTimeReductionMs(unitCaster))
             castTime = std::max(castTime - boonMs, 0);
+
+    // Moonkitty 5pc (90630): Starfire spends the druid's combo points, 0.25 sec
+    // off the cast for each. Flat and applied last, like the two above, so the
+    // "0.25 sec per point" the tooltip promises is what the player actually
+    // gets rather than something haste has already scaled.
+    if (castTime > 0)
+        if (int32 comboCut = T2SpellHooks::MoonkittyStarfireCastTimeCutMs(unitCaster, spellInfo))
+            castTime = std::max(castTime - comboCut, 0);
 }
 
 void WorldObject::ModSpellDurationTime(SpellInfo const* spellInfo, int32& duration, Spell* spell /*= nullptr*/) const

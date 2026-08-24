@@ -693,3 +693,24 @@ uint32 T2SpellHooks::DamageSchoolThatBroke(Unit const* victim)
 
     return s_pendingDamageSchool.SchoolMask;
 }
+
+// ---------------------------------------------------------------------------
+// MOONKITTY - Starfire spends combo points for cast speed
+// ---------------------------------------------------------------------------
+int32 T2SpellHooks::MoonkittyStarfireCastTimeCutMs(Unit const* caster, SpellInfo const* spellInfo)
+{
+    if (!caster || !spellInfo)
+        return 0;
+
+    // Starfire by family, not by id: SpellClassSet 7 (druid) with word 0 bit 2,
+    // which every rank from 2912 to 48465 carries. Matching ids would silently
+    // miss a rank, and the several other "Starfire" rows in Spell.dbc are NPC
+    // copies with SpellClassSet 0 that must NOT be caught.
+    if (spellInfo->SpellFamilyName != SPELLFAMILY_DRUID || !(spellInfo->SpellFamilyFlags[0] & 0x4))
+        return 0;
+
+    if (!caster->HasAura(T2SpellHooks::SPELL_MOONKITTY_LUNAR_MOMENTUM))
+        return 0;
+
+    return int32(caster->GetComboPoints()) * 250;
+}

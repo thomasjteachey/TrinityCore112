@@ -71,6 +71,7 @@ namespace
         SPELL_T2_PROWLING_MOONFIRE      = 90328,   // 5pc carrier (inert dummy)
         SPELL_T2_MOONLIT_PREY           = 90378,   // +5% melee damage taken, rides the Moonfire DoT
         SPELL_T2_FELINE_GRACE           = 90329,   // 8pc carrier (inert dummy)
+        SPELL_T2_LUNAR_MOMENTUM         = 90630,   // 5pc carrier (inert dummy)
         SPELL_T2_FELINE_GRACE_HELPER    = 90484,   // hidden: Cat Form costs -100% (lives while in Moonkin Form)
         SPELL_DRUID_MOONFIRE            = 8921,    // rank 1, for the ranked lookup
         SPELL_DRUID_MOONKIN_FORM        = 24858,
@@ -497,6 +498,76 @@ class spell_t2_feline_grace : public AuraScript
     }
 };
 
+// 2912 .. 48465 Starfire - Moonkitty 5pc (90630 Lunar Momentum).
+//
+// The CAST TIME is not here: it is fixed in Spell::prepare before any script
+// cast hook runs, so it comes off in WorldObject::ModSpellCastTime via
+// T2SpellHooks::MoonkittyStarfireCastTimeCutMs. This half spends the points and
+// makes the spend count as a finishing move.
+//
+// PREDATORY STRIKES IS ROLLED BY HAND, deliberately. The talent's own path is
+// generic - SPELL_AURA_ADD_TARGET_TRIGGER, resolved in Spell.cpp against
+// aurEff->IsAffectedOnSpell - and it gates on EffectSpellClassMaskC_3
+// 0x40000000, a bit the druid finishers carry and Starfire does not. Setting
+// that bit on Starfire would work, and would also make Starfire a finishing
+// move for EVERY druid on the server whether they own this set or not. Rolling
+// it here keeps the whole bonus inside the set.
+//
+// The chance is read from the talent rather than hardcoded: effect 3's
+// PointsPerComboPoint (7 / 13 / 20 by rank) is precisely the "$b3% chance per
+// combo point" its own tooltip promises, so a retune of the talent carries.
+class spell_t2_moonkitty_starfire : public SpellScript
+{
+    PrepareSpellScript(spell_t2_moonkitty_starfire);
+
+    static constexpr uint32 PREDATORY_STRIKES_RANKS[] = { 16972, 16974, 16975 };
+    static constexpr uint32 SPELL_PREDATORS_SWIFTNESS = 69369;
+
+    void HandleAfterCast()
+    {
+        Player* druid = GetCaster() ? GetCaster()->ToPlayer() : nullptr;
+        if (!druid || !druid->HasAura(SPELL_T2_LUNAR_MOMENTUM))
+            return;
+
+        uint8 const combo = druid->GetComboPoints();
+        if (!combo)
+            return;
+
+        // Rolled BEFORE the points are cleared - the chance is per point.
+        TryPredatoryStrikes(druid, combo);
+
+        // Spent on cast, not on hit, which is how every other finishing move
+        // behaves: a resisted Ferocious Bite still eats its combo points.
+        druid->ClearComboPoints();
+
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Lunar Momentum - Starfire spent {} combo point(s) ({} ms off the cast)",
+            druid->GetName(), uint32(combo), uint32(combo) * 250));
+    }
+
+    static void TryPredatoryStrikes(Player* druid, uint8 combo)
+    {
+        for (uint32 rankId : PREDATORY_STRIKES_RANKS)
+        {
+            // Effect 3 in the DBC is EFFECT_2 here; the ranks do not stack, so
+            // the first one found is the one that counts.
+            AuraEffect const* talent = druid->GetAuraEffect(rankId, EFFECT_2);
+            if (!talent)
+                continue;
+
+            int32 const chance = int32(talent->GetSpellEffectInfo().PointsPerComboPoint) * int32(combo);
+            if (chance > 0 && roll_chance_i(chance))
+                druid->CastSpell(druid, SPELL_PREDATORS_SWIFTNESS, true);
+            return;
+        }
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_t2_moonkitty_starfire::HandleAfterCast);
+    }
+};
+
 // ===========================================================================
 // monkey stalker (hunter)
 // ===========================================================================
@@ -818,5 +889,6 @@ void AddSC_custom_t2_druid_hunter()
     RegisterSpellScript(spell_t2_penguin_serpent_sting);
     RegisterSpellScript(spell_t2_penguin_serpent_sting_direct);
     RegisterSpellScript(spell_t2_penguin_trap_break);
+    RegisterSpellScript(spell_t2_moonkitty_starfire);
     RegisterSpellScript(spell_t2_penguin_slick);
 }

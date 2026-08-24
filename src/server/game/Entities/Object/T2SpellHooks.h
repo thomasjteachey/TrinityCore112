@@ -137,6 +137,23 @@ namespace T2SpellHooks
     void NoteDamageSchool(Unit const* victim, uint32 schoolMask);
     uint32 DamageSchoolThatBroke(Unit const* victim);
 
+    // MOONKITTY 5pc (90630 Lunar Momentum): Starfire spends the druid's combo
+    // points, 0.25 sec off the cast for each one. Returns the milliseconds to
+    // take off, or 0 for everyone else.
+    //
+    // This has to be a core hook rather than a SpellScript because the cast time
+    // is fixed in Spell::prepare - before any of the script cast hooks run - and
+    // it is what the cast bar is built from. WorldObject::ModSpellCastTime is
+    // the one choke point that sees both the SpellInfo and the caster, and it
+    // already carries two flat reductions of exactly this shape (the Tauren
+    // mount perk and Boon of the Outrider).
+    //
+    // The points themselves are spent by the Starfire script on cast, not here:
+    // ModSpellCastTime is a const query that can run more than once for a single
+    // press, so consuming anything in it would be wrong.
+    constexpr uint32 SPELL_MOONKITTY_LUNAR_MOMENTUM = 90630;
+    int32 MoonkittyStarfireCastTimeCutMs(Unit const* caster, SpellInfo const* spellInfo);
+
     // Drops every per-player mark this module holds. Called from the T2
     // PlayerScript's OnLogout so nothing outlives the session.
     void ForgetPlayer(Player const* player);
