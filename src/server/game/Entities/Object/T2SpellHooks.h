@@ -118,6 +118,25 @@ namespace T2SpellHooks
     // key press. See the body for why the raw form byte is not a safe test.
     bool CountsAsHealingInShadowform(Player const* player);
 
+    // PENGUINSTALKER 5pc (90334 Cinderbite): what school of damage is breaking
+    // the aura that is being removed right now.
+    //
+    // Freezing Trap carries AURA_INTERRUPT_FLAG_TAKE_DAMAGE, and Unit::DealDamage
+    // runs that interrupt sweep BEFORE ProcSkillsAndAuras - so by the time any
+    // proc could ask what broke the freeze, the trap is already gone. The school
+    // is recorded immediately before the sweep and read back by the trap's own
+    // removal hook.
+    //
+    // It has to work this way round rather than as a proc on the hunter, because
+    // the bonus answers to fire from ANY source: the hunter is usually not the
+    // attacker at all, so no aura of theirs would ever proc.
+    //
+    // NoteDamageSchool(nullptr, 0) clears it. Unit::DealDamage brackets the sweep
+    // with a set and a clear, so the value is only ever readable for the removals
+    // that damage itself caused.
+    void NoteDamageSchool(Unit const* victim, uint32 schoolMask);
+    uint32 DamageSchoolThatBroke(Unit const* victim);
+
     // Drops every per-player mark this module holds. Called from the T2
     // PlayerScript's OnLogout so nothing outlives the session.
     void ForgetPlayer(Player const* player);

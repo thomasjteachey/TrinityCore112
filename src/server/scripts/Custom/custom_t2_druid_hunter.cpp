@@ -57,6 +57,7 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
+#include "T2SpellHooks.h"
 #include "World.h"
 #include "WorldSession.h"
 
@@ -175,32 +176,6 @@ namespace
         caster->CastSpell(target, riderId, true);
     }
 
-    // Cinderbite's melt has an ordering problem that no single hook solves.
-    // Freezing Trap carries AURA_INTERRUPT_FLAG_TAKE_DAMAGE, and Unit::DealDamage
-    // runs that interrupt sweep BEFORE Unit::ProcSkillsAndAuras - so by the time
-    // the fire proc fires, the trap the fire just shattered is already gone and
-    // the proc has nothing left to test. The trap's own removal hook therefore
-    // drops a breadcrumb that the proc immediately following it in the same call
-    // stack picks up. (The remove hook itself cannot act: it has no idea what
-    // school of damage broke the freeze - RemoveAurasWithInterruptFlags only
-    // knows the flag - and the proc is the only place the school is known.)
-    //
-    // thread_local, not a plain global: maps update on parallel threads, but the
-    // DealDamage that breaks the trap and the ProcSkillsAndAuras it feeds are
-    // always the same statement sequence on one thread, never two.
-    struct FrozenTrapBreak
-    {
-        ObjectGuid Hunter;
-        ObjectGuid Victim;
-        uint32 TimeMs = 0;
-    };
-
-    thread_local FrozenTrapBreak g_lastTrapBreak;
-
-    // The proc that owns a break follows it within the same tick. The window is
-    // only wide enough to survive that, so a later unrelated fire tick on the
-    // same victim cannot claim a break it had nothing to do with.
-    constexpr uint32 TRAP_BREAK_CLAIM_WINDOW_MS = 200;
 }
 
 // ===========================================================================
@@ -698,12 +673,24 @@ private:
     bool _swapped = false;
 };
 
-// 3355 \ 14308 \ 14309 - Freezing Trap Effect: the write half of Cinderbite's
-// break handshake, see FrozenTrapBreak. Deliberately bound for every hunter and
-// not gated on the 5pc - resolving the trap's caster here costs an
-// ObjectAccessor lookup on a path that runs for every broken trap on the
-// server, and the proc that reads the breadcrumb is the one that already knows
-// whether the set is worn.
+// 3355 \ 14308 \ 14309 - Freezing Trap Effect. Cinderbite's melt lives entirely
+// here now.
+//
+// It used to be a handshake: this hook left a breadcrumb and a PROC on the
+// hunter's own 90334 read it back. That could only ever answer to the HUNTER'S
+// fire, because a proc on the hunter's aura fires when the hunter deals damage -
+// which is precisely the restriction the bonus is not supposed to have. Fire
+// from a raid-mate, from a fire elemental, from anyone at all now melts the trap.
+//
+// The school comes from T2SpellHooks::DamageSchoolThatBroke, recorded by
+// Unit::DealDamage immediately before the interrupt sweep that removes this
+// aura. This hook cannot work it out for itself: RemoveAurasWithInterruptFlags
+// knows only the flag, never what kind of damage tripped it.
+//
+// Bound for every hunter rather than gated on the 5pc, because the set can only
+// be tested once the trap's caster is resolved and that lookup is deferred until
+// the far cheaper school test has already passed - so a trap broken by anything
+// other than fire costs one thread_local compare.
 class spell_t2_penguin_trap_break : public AuraScript
 {
     PrepareAuraScript(spell_t2_penguin_trap_break);
@@ -717,67 +704,20 @@ class spell_t2_penguin_trap_break : public AuraScript
         if (!app || app->GetRemoveMode() != AURA_REMOVE_BY_DEFAULT)
             return;
 
-        g_lastTrapBreak.Hunter = GetCasterGUID();
-        g_lastTrapBreak.Victim = GetTarget()->GetGUID();
-        g_lastTrapBreak.TimeMs = getMSTime();
-    }
-
-    void Register() override
-    {
-        AfterEffectRemove += AuraEffectRemoveFn(spell_t2_penguin_trap_break::HandleRemove, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
-    }
-};
-
-// 90334 - Cinderbite (penguin stalker 5pc), read half of the handshake: the
-// hunter's fire melts their own Freezing Trap into a Frost Trap. The 5pc
-// carrier itself is the proc aura; the fire filter is the SchoolMask on its
-// spell_proc row, re-checked here so the script still behaves if that row is
-// ever edited. Every fire source counts - Explosive Shot, the fire traps and
-// the Fire Serpent Sting the same set grants: a frozen target stung with fire
-// melts its trap on the first tick, which is the set's whole premise.
-class spell_t2_penguin_melt : public AuraScript
-{
-    PrepareAuraScript(spell_t2_penguin_melt);
-
-    bool CheckProc(ProcEventInfo& eventInfo)
-    {
-        DamageInfo* damageInfo = eventInfo.GetDamageInfo();
-        if (!damageInfo || !(damageInfo->GetSchoolMask() & SPELL_SCHOOL_MASK_FIRE))
-            return false;
-
-        Unit* victim = eventInfo.GetActionTarget();
-        if (!victim)
-            return false;
-
-        // Peek only. The proc chance roll happens after this hook returns, so
-        // consuming the breadcrumb here could throw away a break the proc then
-        // declines to act on; HandleProc clears it instead.
-        return g_lastTrapBreak.TimeMs != 0
-            && g_lastTrapBreak.Hunter == GetTarget()->GetGUID()
-            && g_lastTrapBreak.Victim == victim->GetGUID()
-            && getMSTimeDiff(g_lastTrapBreak.TimeMs, getMSTime()) <= TRAP_BREAK_CLAIM_WINDOW_MS;
-    }
-
-    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
-    {
-        // 90334's effect 0 is a DUMMY with TriggerSpell 0. Without this the core
-        // logs "has non-existent spell 0 in EffectTriggered[0]" as TC_LOG_ERROR
-        // into the 'spells' channel every time the bonus SUCCEEDS - straight
-        // into the log the heap-corruption hunt reads.
-        PreventDefaultAction();
-
-        g_lastTrapBreak = FrozenTrapBreak();
-
-        Unit* hunter = GetTarget();
-        Unit* victim = eventInfo.GetActionTarget();
-        if (!victim)
+        Unit* victim = GetTarget();
+        if (!(T2SpellHooks::DamageSchoolThatBroke(victim) & SPELL_SCHOOL_MASK_FIRE))
             return;
 
-        // The freeze is already gone - the damage that got us here broke it.
-        // Leave a real Frost Trap slick (13810, the trap's own persistent area
-        // aura: 30 s, 10 yd, -60%) where the victim stood. A dest cast from the
-        // hunter hangs the dynamic object off the hunter exactly as a sprung
-        // Frost Trap does, so Slick Getaway (90335) sees it too.
+        // Fire did it. Only now is resolving the trap's owner worth paying for.
+        Unit* hunter = ObjectAccessor::GetUnit(*victim, GetCasterGUID());
+        if (!hunter || !hunter->HasAura(SPELL_T2_CINDERBITE))
+            return;
+
+        // The freeze is already gone - the fire that got us here broke it. Leave
+        // a real Frost Trap slick (13810, the trap's own persistent area aura:
+        // 30 s, 10 yd, -60%) where the victim stood. A dest cast from the hunter
+        // hangs the dynamic object off the hunter exactly as a sprung Frost Trap
+        // does, so Slick Getaway (90335) sees it too.
         hunter->CastSpell(victim->GetPosition(), SPELL_HUNTER_FROST_TRAP_AURA, true);
         SendCustomAuraDiag(Trinity::StringFormat(
             "[CustomAuras] {}: Cinderbite melted a Freezing Trap on {} - Frost Trap slick spawned at the target",
@@ -786,8 +726,7 @@ class spell_t2_penguin_melt : public AuraScript
 
     void Register() override
     {
-        DoCheckProc += AuraCheckProcFn(spell_t2_penguin_melt::CheckProc);
-        OnEffectProc += AuraEffectProcFn(spell_t2_penguin_melt::HandleProc, EFFECT_0, SPELL_AURA_ANY);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_t2_penguin_trap_break::HandleRemove, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
@@ -879,6 +818,5 @@ void AddSC_custom_t2_druid_hunter()
     RegisterSpellScript(spell_t2_penguin_serpent_sting);
     RegisterSpellScript(spell_t2_penguin_serpent_sting_direct);
     RegisterSpellScript(spell_t2_penguin_trap_break);
-    RegisterSpellScript(spell_t2_penguin_melt);
     RegisterSpellScript(spell_t2_penguin_slick);
 }

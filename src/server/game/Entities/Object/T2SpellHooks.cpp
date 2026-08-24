@@ -658,3 +658,38 @@ bool T2SpellHooks::WaivesShapeshiftRestriction(Unit const* caster, SpellInfo con
 
     return IsUmbralHeal(spellInfo);
 }
+
+// ---------------------------------------------------------------------------
+// PENGUINSTALKER - what school is breaking the aura being removed right now
+// ---------------------------------------------------------------------------
+namespace
+{
+    // thread_local, not a locked map: the Unit::DealDamage that records this and
+    // the aura-removal hook that reads it are the same statement sequence on one
+    // thread, always. Maps update on parallel threads, so a shared global would
+    // be a race bought for nothing.
+    struct PendingDamageSchool
+    {
+        ObjectGuid Victim;
+        uint32     SchoolMask = 0;
+    };
+
+    thread_local PendingDamageSchool s_pendingDamageSchool;
+}
+
+void T2SpellHooks::NoteDamageSchool(Unit const* victim, uint32 schoolMask)
+{
+    s_pendingDamageSchool.Victim     = victim ? victim->GetGUID() : ObjectGuid::Empty;
+    s_pendingDamageSchool.SchoolMask = victim ? schoolMask : 0u;
+}
+
+uint32 T2SpellHooks::DamageSchoolThatBroke(Unit const* victim)
+{
+    // Matching the victim as well as being inside the bracketed window: an aura
+    // removed for some other reason on some other unit must never read a school
+    // left behind by a different unit's hit.
+    if (!victim || s_pendingDamageSchool.Victim != victim->GetGUID())
+        return 0;
+
+    return s_pendingDamageSchool.SchoolMask;
+}

@@ -3111,6 +3111,29 @@ void SpellMgr::LoadSpellInfoCorrections()
     // IsHunterTrapSpellForCombatDiagnostic in Player.cpp: SpellFamilyFlags
     // here are not trap-exclusive, so exact-ID matching per rank chain is the
     // only reliable way to hit every rank.
+    // THE TRAP-LAYING SPELLS ARE NOT ENOUGH, and covering only those is why this
+    // still tagged people into combat after the first attempt (2026-07-22 ->
+    // reported again 2026-08-24). 1499 and 13809 are SPELL_EFFECT_ADD_FARSIGHT-
+    // style trap placements aimed at a destination; they never touch an enemy,
+    // so clearing initial aggro on them changes nothing at all. The spells that
+    // actually reach a victim are separate, and neither shares a rank chain with
+    // the placement spell:
+    //
+    //   Freezing Trap Effect  3355 / 14308 / 14309 - its OWN chain, first rank
+    //                         3355, NOT 1499.
+    //   Frost Trap Aura       13810 - the persistent area aura carrying the slow,
+    //                         with no spell_ranks row at all, so its "first rank"
+    //                         is itself, NOT 13809.
+    //
+    // Verified against lplusworld.spell_ranks rather than assumed.
+    static constexpr uint32 NoAggroTrapFirstRanks[] =
+    {
+        1499,       // Freezing Trap    (placement)
+        13809,      // Frost Trap       (placement)
+        3355,       // Freezing Trap Effect - the root+disorient that lands on the victim
+        13810,      // Frost Trap Aura      - the slow that lands on everyone inside
+    };
+
     for (SpellInfo* spellInfo : mSpellInfoMap)
     {
         if (!spellInfo)
@@ -3118,7 +3141,8 @@ void SpellMgr::LoadSpellInfoCorrections()
 
         SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
         uint32 const firstRankSpellId = firstRank ? firstRank->Id : spellInfo->Id;
-        if (firstRankSpellId == 1499 /* Freezing Trap */ || firstRankSpellId == 13809 /* Frost Trap */)
+        if (std::find(std::begin(NoAggroTrapFirstRanks), std::end(NoAggroTrapFirstRanks), firstRankSpellId)
+            != std::end(NoAggroTrapFirstRanks))
             spellInfo->AttributesEx3 |= SPELL_ATTR3_NO_INITIAL_AGGRO;
     }
 

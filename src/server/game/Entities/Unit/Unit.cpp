@@ -936,6 +936,14 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
     if (damagetype != NODAMAGE && (damage != 0 || hasAbsorbedDamage))
     {
         // interrupting auras with AURA_INTERRUPT_FLAG_DAMAGE before checking !damage (absorbed damage breaks that type of auras)
+        //
+        // Bracketed by the school breadcrumb: RemoveAurasWithInterruptFlags knows
+        // only the flag, never what kind of damage tripped it, and this sweep runs
+        // BEFORE ProcSkillsAndAuras - so an aura removed here is already gone by
+        // the time any proc could ask. Penguinstalker's Cinderbite (90334) needs
+        // that answer inside the trap's own removal hook. Set and cleared around
+        // the call so nothing outside these two statements can read it.
+        T2SpellHooks::NoteDamageSchool(victim, damageSchoolMask);
         if (spellProto)
         {
             if (!spellProto->HasAttribute(SPELL_ATTR4_DAMAGE_DOESNT_BREAK_AURAS))
@@ -943,6 +951,7 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
         }
         else
             victim->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TAKE_DAMAGE, 0);
+        T2SpellHooks::NoteDamageSchool(nullptr, 0);
 
         // Combat diagnostic: names who kept hitting the player through a pending
         // feign/trap watch, independent of whether this particular hit is what
