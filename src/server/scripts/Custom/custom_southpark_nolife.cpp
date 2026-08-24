@@ -282,15 +282,22 @@ class spell_nolife_three_lives : public AuraScript
         if (!player)
             return;
 
-        // Re-synced before the loadout check so the timer stays truthful even
-        // for someone wearing the set with something extra on. The gate is the
-        // COOLDOWN, never the aura - so cancelling the buff just puts it
-        // straight back with the correct time remaining.
         uint32 const remainingMs = RechargeRemainingMs(player);
-        SyncRechargeMarker(player, remainingMs);
 
+        // Not the strict loadout, so the bonus is inactive and nothing it owns
+        // belongs on the player. The COOLDOWN is untouched by this - it is not
+        // an aura and cannot be shed by changing gear.
         if (!WearsOnlyNoLife(player, false))
+        {
+            player->RemoveAurasDueToSpell(SPELL_NOLIFE_EXTRA_LIFE);
+            player->RemoveAurasDueToSpell(SPELL_NOLIFE_RECHARGE);
             return;
+        }
+
+        // The gate is the cooldown, never the aura - the marker is re-synced
+        // from it here, so cancelling the buff just puts it straight back with
+        // the correct time remaining.
+        SyncRechargeMarker(player, remainingMs);
 
         // Recharging: no lives, and no topping up a partial pool either.
         if (remainingMs)
@@ -311,9 +318,32 @@ class spell_nolife_three_lives : public AuraScript
             lives->SetStackAmount(NOLIFE_LIVES);
     }
 
+    // The carrier owns the pool, so the carrier's removal is what tears it down.
+    //
+    // This CANNOT live in the periodic tick. The tick stops the instant the
+    // carrier is gone - which is precisely the moment the cleanup is needed -
+    // so taking every set piece off left the lives and the recharge display
+    // sitting on the player indefinitely. The tick only ever sees the lesser
+    // case: still wearing the set, but no longer the strict loadout.
+    //
+    // Dropping the pool outright is safe now that the recharge is a real
+    // cooldown: re-equipping cannot refill while that cooldown runs, so there
+    // is nothing to gain by taking the set off and putting it back on.
+    void OnCarrierRemoved(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Player* player = GetTarget()->ToPlayer();
+        if (!player)
+            return;
+
+        player->RemoveAurasDueToSpell(SPELL_NOLIFE_EXTRA_LIFE);
+        // Display only - the cooldown behind it keeps running.
+        player->RemoveAurasDueToSpell(SPELL_NOLIFE_RECHARGE);
+    }
+
     void Register() override
     {
         OnEffectPeriodic += AuraEffectPeriodicFn(spell_nolife_three_lives::HandlePeriodic, EFFECT_0, SPELL_AURA_PERIODIC_DUMMY);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_nolife_three_lives::OnCarrierRemoved, EFFECT_0, SPELL_AURA_PERIODIC_DUMMY, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
@@ -402,6 +432,15 @@ class spell_nolife_cursed_communion : public AuraScript
             SyncGatedBuff(player, SPELL_NOLIFE_COMMUNION_BUFF, WearsOnlyNoLife(player, true));
     }
 
+    // Same reason as the pool on 90610: SyncGatedBuff can only retract the buff
+    // while the tick is still running, and unequipping the set stops the tick
+    // in the same instant it invalidates the bonus.
+    void OnCarrierRemoved(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (Player* player = GetTarget()->ToPlayer())
+            player->RemoveAurasDueToSpell(SPELL_NOLIFE_COMMUNION_BUFF);
+    }
+
     void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
     {
         PreventDefaultAction();
@@ -437,6 +476,7 @@ class spell_nolife_cursed_communion : public AuraScript
     void Register() override
     {
         OnEffectPeriodic += AuraEffectPeriodicFn(spell_nolife_cursed_communion::HandlePeriodic, EFFECT_0, SPELL_AURA_PERIODIC_DUMMY);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_nolife_cursed_communion::OnCarrierRemoved, EFFECT_0, SPELL_AURA_PERIODIC_DUMMY, AURA_EFFECT_HANDLE_REAL);
         OnEffectProc += AuraEffectProcFn(spell_nolife_cursed_communion::HandleProc, EFFECT_1, SPELL_AURA_DUMMY);
     }
 };
