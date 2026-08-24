@@ -467,10 +467,27 @@ class spell_t2_gaping_wound_tick : public AuraScript
         // later, which a blacklist would silently miss.
         //
         // Server-driven travel is exempt from the gate and always billed:
-        // knockback arcs, charges and bot pathing all ride a spline and are
-        // genuine traversal even when they outrun run speed.
+        // charges and bot pathing ride a spline and are genuine traversal even
+        // when they outrun run speed.
         bool const serverDrivenTravel = target->movespline && !target->movespline->Finalized();
-        if (!serverDrivenTravel)
+
+        // A KNOCKBACK ON A PLAYER RIDES NO SPLINE. The server sends
+        // SMSG_MOVE_KNOCK_BACK and the client flies the arc itself, reporting
+        // positions back as ordinary movement - so the spline test above is true
+        // for a knocked-back creature or bot and FALSE for a knocked-back
+        // player. The arc then looked exactly like a teleport to the gate below
+        // and was thrown away, which is why this billed against playerbots and
+        // did nothing at all against players.
+        //
+        // What the client does declare is the arc it was handed, in
+        // MovementInfo::jump. Falling with horizontal velocity is a powered arc
+        // - a knockback, Intercept's launch, Disengage - and the victim really
+        // does cross that ground, so it bills in full exactly like the spline
+        // case. A plain running jump lands here too and is harmless: it covers
+        // only run-speed ground, which the gate would have allowed anyway.
+        bool const clientDrivenArc = target->IsFalling() && target->m_movementInfo.jump.xyspeed > 0.0f;
+
+        if (!serverDrivenTravel && !clientDrivenArc)
         {
             float const elapsed = float(std::max<int32>(aurEff->GetAmplitude(), 1)) / 1000.0f;
             float const topSpeed = std::max(target->GetSpeed(MOVE_RUN),
