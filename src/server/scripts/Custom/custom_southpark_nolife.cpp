@@ -22,6 +22,29 @@
  *                                 three Scorpions for 30 sec.
  *   3pc  90610 Three Lives      - while wearing ONLY the three set pieces, death
  *                                 is refused three times. 30 min to recharge.
+ *
+ * The pool of lives (90611, one stack per life) is DURABLE: it survives death,
+ * logout, zoning into a battleground, and taking the set off.
+ *
+ * THE RECHARGE IS A COOLDOWN, NOT AN AURA. It lives in the player's
+ * SpellHistory keyed on 90612; the 90612 aura is only a display that the
+ * periodic tick re-syncs from it. Two rounds of live testing were lost to
+ * getting this backwards:
+ *
+ *   - When the aura WAS the cooldown, a player right-clicked the buff off and
+ *     had all three lives back on the next tick. Auras are cancellable by
+ *     design; cooldowns are not. Marking the aura negative so the client would
+ *     refuse to cancel it is a client-side fix for a server-side rule, and
+ *     SPELL_ATTR0_CANT_CANCEL on top of that is still only a second layer.
+ *   - A cooldown also persists on its own (character_spell_cooldown, with no
+ *     filter on either save or load), and cannot be dispelled, stolen, or
+ *     stripped on arena entry - three more things an aura has to be flagged
+ *     against one at a time.
+ *
+ * The window starts on the FIRST life spent and refills all three at once when
+ * it lapses. Note that a life grants "every cooldown reset", so the absorb has
+ * to carry the recharge across its own ResetAllCooldowns call - otherwise
+ * spending the last life would clear the very cooldown that governs lives.
  *   4pc  90613 Cursed Communion - those three pieces PLUS the Cursed Skinning
  *                                 Knife make every melee swing an unavoidable,
  *                                 unmitigated critical that fully leeches.
@@ -42,8 +65,6 @@
 #include "ScriptedCreature.h"
 #include "PetAI.h"
 #include "DBCStores.h"
-#include "GameTime.h"
-#include "Log.h"
 #include "Item.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
@@ -54,7 +75,6 @@
 #include "ThreatManager.h"
 #include "TemporarySummon.h"
 
-#include <unordered_map>
 
 namespace
 {
@@ -138,6 +158,45 @@ namespace
         return true;
     }
 
+    constexpr Minutes NOLIFE_RECHARGE_TIME = Minutes(30);
+
+    // How long until lives come back. THIS is the cooldown - a real entry in the
+    // player's SpellHistory, not an aura.
+    //
+    // The recharge used to BE the aura 90612, which meant a player could
+    // right-click the buff off and have all three lives back on the next tick.
+    // An aura is player-cancellable and a cooldown is not; a cooldown also
+    // persists across logout on its own (character_spell_cooldown) and cannot be
+    // dispelled, stolen, or stripped on zoning into a battleground. The aura is
+    // now only the display.
+    uint32 RechargeRemainingMs(Player const* player)
+    {
+        return player->GetSpellHistory()->GetRemainingCooldown(
+            sSpellMgr->AssertSpellInfo(SPELL_NOLIFE_RECHARGE));
+    }
+
+    // Keep the cosmetic marker in step with the real cooldown. Re-applying it
+    // after a cancel is what makes right-clicking it off pointless rather than
+    // rewarding, and the duration is taken from the cooldown each time so the
+    // two can never drift apart.
+    void SyncRechargeMarker(Player* player, uint32 remainingMs)
+    {
+        if (!remainingMs)
+        {
+            player->RemoveAurasDueToSpell(SPELL_NOLIFE_RECHARGE);
+            return;
+        }
+
+        if (!player->HasAura(SPELL_NOLIFE_RECHARGE))
+            player->CastSpell(player, SPELL_NOLIFE_RECHARGE, true);
+
+        if (Aura* mark = player->GetAura(SPELL_NOLIFE_RECHARGE))
+        {
+            mark->SetMaxDuration(int32(remainingMs));
+            mark->SetDuration(int32(remainingMs));
+        }
+    }
+
     // Keep `buff` present exactly while `wanted` holds. Applying an aura that is
     // already there would refresh it every tick, which for a permanent buff is
     // just churn on the client's aura frame.
@@ -207,65 +266,49 @@ class spell_nolife_three_lives : public AuraScript
 {
     PrepareAuraScript(spell_nolife_three_lives);
 
+    // One rule: while the strict loadout holds and the recharge is NOT running,
+    // the pool sits at full. Everything else follows from that.
+    //
+    // The pool deliberately does NOT get torn down when the set comes off. It
+    // used to, and re-equipping then rebuilt it from scratch - three lives on
+    // demand, for the price of two inventory clicks. Now the stack IS the
+    // durable record of how many lives are left, so taking the set off and
+    // putting it back changes nothing. What stops an unequipped player from
+    // spending those lives is the loadout check inside the absorb, not the
+    // absence of the aura.
     void HandlePeriodic(AuraEffect const* /*aurEff*/)
     {
         Player* player = GetTarget()->ToPlayer();
         if (!player)
             return;
 
-        // TEMPORARY. Every static link in this chain verified correct - itemset,
-        // durations, periodic flag, script binding, build revision - and the
-        // bonus still did nothing, so the remaining unknown is runtime. Goes to
-        // the custom.auras channel because that logger is already configured and
-        // writes to its own file; nothing has to change in worldserver.conf.
-        // Throttled to once a second per wearer, which is the tick rate anyway.
-        {
-            static std::unordered_map<uint64, uint32> lastLogMs;
-            uint32 const now = GameTime::GetGameTimeMS();
-            uint32& last = lastLogMs[player->GetGUID().GetRawValue()];
-            if (!last || now - last >= 1000)
-            {
-                last = now;
-                // The aura is confirmed applied with 3 stacks and its DBC flags
-                // are confirmed non-passive/non-hidden on BOTH sides, yet the
-                // player cannot see it. The remaining unknown is whether the
-                // core ever handed it a client slot - an aura without one is
-                // simply never transmitted, whatever its attributes say.
-                Aura* lives = player->GetAura(SPELL_NOLIFE_EXTRA_LIFE);
-                AuraApplication const* app = lives ? lives->GetApplicationOfTarget(player->GetGUID()) : nullptr;
-                TC_LOG_INFO("custom.auras",
-                    "[NoLife] tick {} strict={} recharge={} hasLives={} stacks={} "
-                    "slot={} passive={} sendable={} flags={} casterIsPlayer={}",
-                    player->GetName(),
-                    WearsOnlyNoLife(player, false) ? 1 : 0,
-                    player->HasAura(SPELL_NOLIFE_RECHARGE) ? 1 : 0,
-                    lives ? 1 : 0,
-                    lives ? lives->GetStackAmount() : 0,
-                    app ? int32(app->GetSlot()) : -1,
-                    lives ? (lives->IsPassive() ? 1 : 0) : -1,
-                    lives ? (lives->CanBeSentToClient() ? 1 : 0) : -1,
-                    app ? uint32(app->GetFlags()) : 0,
-                    lives && lives->GetCasterGUID().IsPlayer() ? 1 : 0);
-            }
-        }
+        // Re-synced before the loadout check so the timer stays truthful even
+        // for someone wearing the set with something extra on. The gate is the
+        // COOLDOWN, never the aura - so cancelling the buff just puts it
+        // straight back with the correct time remaining.
+        uint32 const remainingMs = RechargeRemainingMs(player);
+        SyncRechargeMarker(player, remainingMs);
 
         if (!WearsOnlyNoLife(player, false))
-        {
-            player->RemoveAurasDueToSpell(SPELL_NOLIFE_EXTRA_LIFE);
-            return;
-        }
-
-        // Recharging: no lives until the 30 min marker lapses. Checked before
-        // the re-grant so a spent set cannot be topped up by re-equipping.
-        if (player->HasAura(SPELL_NOLIFE_RECHARGE))
             return;
 
-        if (!player->HasAura(SPELL_NOLIFE_EXTRA_LIFE))
+        // Recharging: no lives, and no topping up a partial pool either.
+        if (remainingMs)
+            return;
+
+        // Off cooldown: refill. This is also what restores the pool after the
+        // cooldown lapses, including a partial pool left over from a life spent
+        // earlier in the window.
+        if (Aura* lives = player->GetAura(SPELL_NOLIFE_EXTRA_LIFE))
         {
-            player->CastSpell(player, SPELL_NOLIFE_EXTRA_LIFE, true);
-            if (Aura* lives = player->GetAura(SPELL_NOLIFE_EXTRA_LIFE))
+            if (lives->GetStackAmount() < NOLIFE_LIVES)
                 lives->SetStackAmount(NOLIFE_LIVES);
+            return;
         }
+
+        player->CastSpell(player, SPELL_NOLIFE_EXTRA_LIFE, true);
+        if (Aura* lives = player->GetAura(SPELL_NOLIFE_EXTRA_LIFE))
+            lives->SetStackAmount(NOLIFE_LIVES);
     }
 
     void Register() override
@@ -300,6 +343,19 @@ class spell_nolife_extra_life : public AuraScript
         if (!player)
             return;
 
+        // The pool now outlives the set, so this is the ONLY thing keeping an
+        // unequipped player from cashing in the lives they are still visibly
+        // carrying. Without it, stripping the set would be strictly better:
+        // full stats and a death save.
+        if (!WearsOnlyNoLife(player, false))
+            return;
+
+        // Read the recharge BEFORE the reset below. "Every cooldown reset" is
+        // part of what a life gives you, and it would otherwise wipe the one
+        // cooldown that decides when lives come back - handing out a fresh
+        // three every time the pool ran dry.
+        uint32 const carriedMs = RechargeRemainingMs(player);
+
         // Eat the whole blow, then restore. Absorbing rather than resurrecting
         // keeps the player from ever entering the dead state, so no corpse, no
         // release, no spirit healer.
@@ -309,16 +365,21 @@ class spell_nolife_extra_life : public AuraScript
         player->SetPower(POWER_MANA, player->GetMaxPower(POWER_MANA));
         player->GetSpellHistory()->ResetAllCooldowns();
 
+        // The cooldown starts on the FIRST life spent and the pool refills to
+        // three in one go when it lapses. Starting it on the last life instead
+        // would strand anyone who spent one or two lives at that reduced count
+        // permanently, since a partial pool is never topped up while it is the
+        // full pool being waited for. A window already running is carried over
+        // untouched rather than restarted.
+        player->GetSpellHistory()->AddCooldown(SPELL_NOLIFE_RECHARGE, 0,
+            carriedMs ? Milliseconds(carriedMs) : Milliseconds(NOLIFE_RECHARGE_TIME));
+        SyncRechargeMarker(player, RechargeRemainingMs(player));
+
         uint8 const remaining = GetStackAmount() > 1 ? GetStackAmount() - 1 : 0;
         if (remaining)
             SetStackAmount(remaining);
         else
-        {
-            // Last life spent: drop the buff and start the 30 min recharge. The
-            // periodic gate above refuses to re-grant while that marker is up.
-            player->CastSpell(player, SPELL_NOLIFE_RECHARGE, true);
-            Remove();
-        }
+            Remove();   // out of lives; the cooldown above governs the way back
     }
 
     void Register() override
