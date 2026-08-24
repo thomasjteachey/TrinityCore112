@@ -500,10 +500,22 @@ class spell_t2_shadow_bolt_wrapper : public SpellScript
 };
 
 // 90320 - Legion of One (imp 8pc). The imp form is pure data (effect 1 is a
-// TRANSFORM to creature 416, effect 2 (added 2026-08-19) is MOD_SCALE +100%
-// so the form is twice the imp's size, and the carrier gained
+// TRANSFORM to creature 16957 "Nether Imp", and the carrier gained
 // CASTABLE_WHILE_MOUNTED so the form can still mount); effect 0 is the
 // one-second poll the dbc file reserved for the shared-death check.
+//
+// The size comes from the DISPLAY, not from a scale aura. Effect 2 used to be
+// MOD_SCALE +100% on top of creature 416 (display 4449, model scale 0.5), which
+// looked right and played badly: Player::SetObjectScale multiplies BOTH the
+// collision radius and the combat reach by the object scale, so the tiny imp
+// carried 0.778 radius - twice a Tauren's, since every player is 0.389
+// regardless of race - and could not fit through ordinary doorways. It was also
+// silently granting double melee range at reach 3.0.
+//
+// Creature 16957 carries display 16480: the same imp model at CreatureModelScale
+// 1.0 instead of 0.5, i.e. exactly the size the +100% was producing, but applied
+// at render time where it cannot touch OBJECT_FIELD_SCALE_X. Same picture, and a
+// normal player's footprint. Both displays are stock, so nothing ships for it.
 //
 // What the poll does today is keep Lesser Imp (90375) leased onto the imp, so
 // the halving tracks the set: equipping the 8pc with the imp already out halves

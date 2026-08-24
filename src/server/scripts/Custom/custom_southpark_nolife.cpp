@@ -90,6 +90,7 @@ namespace
         SPELL_NOLIFE_COMMUNION_BUFF    = 90614,
         SPELL_NOLIFE_COMMUNION_HEAL    = 90621,
         SPELL_NOLIFE_COMMUNION_MANA    = 90622,
+        SPELL_NOLIFE_CHARGES           = 90626,
     };
 
     enum NoLifeItems
@@ -197,6 +198,36 @@ namespace
         }
     }
 
+    uint8 ChargesLeft(Player const* player)
+    {
+        Aura const* pool = player->GetAura(SPELL_NOLIFE_CHARGES);
+        return pool ? pool->GetStackAmount() : 0;
+    }
+
+    // The pool (90626) is hidden and durable; the buff the player actually sees
+    // (90611) is created and destroyed with the set and only ever MIRRORS it.
+    //
+    // Splitting the two is what lets the display vanish when the set comes off
+    // without the lives going with it. One combined aura cannot do both jobs:
+    // removing it on unequip silently spent the remaining lives, and keeping it
+    // meant a set bonus sat in the buff frame while the set was in the bank.
+    void SyncLivesDisplay(Player* player)
+    {
+        uint8 const charges = ChargesLeft(player);
+        if (!charges)
+        {
+            player->RemoveAurasDueToSpell(SPELL_NOLIFE_EXTRA_LIFE);
+            return;
+        }
+
+        if (!player->HasAura(SPELL_NOLIFE_EXTRA_LIFE))
+            player->CastSpell(player, SPELL_NOLIFE_EXTRA_LIFE, true);
+
+        if (Aura* shown = player->GetAura(SPELL_NOLIFE_EXTRA_LIFE))
+            if (shown->GetStackAmount() != charges)
+                shown->SetStackAmount(charges);
+    }
+
     // Keep `buff` present exactly while `wanted` holds. Applying an aura that is
     // already there would refresh it every tick, which for a permanent buff is
     // just churn on the client's aura frame.
@@ -284,9 +315,10 @@ class spell_nolife_three_lives : public AuraScript
 
         uint32 const remainingMs = RechargeRemainingMs(player);
 
-        // Not the strict loadout, so the bonus is inactive and nothing it owns
-        // belongs on the player. The COOLDOWN is untouched by this - it is not
-        // an aura and cannot be shed by changing gear.
+        // Not the strict loadout, so the bonus is inactive and nothing VISIBLE
+        // belongs on the player. Only the two DISPLAYS come off here - the pool
+        // and the cooldown behind them are untouched, which is what makes
+        // taking the set off and putting it back on a no-op rather than a cost.
         if (!WearsOnlyNoLife(player, false))
         {
             player->RemoveAurasDueToSpell(SPELL_NOLIFE_EXTRA_LIFE);
@@ -299,23 +331,24 @@ class spell_nolife_three_lives : public AuraScript
         // the correct time remaining.
         SyncRechargeMarker(player, remainingMs);
 
-        // Recharging: no lives, and no topping up a partial pool either.
-        if (remainingMs)
-            return;
-
-        // Off cooldown: refill. This is also what restores the pool after the
-        // cooldown lapses, including a partial pool left over from a life spent
-        // earlier in the window.
-        if (Aura* lives = player->GetAura(SPELL_NOLIFE_EXTRA_LIFE))
+        // Off cooldown: refill the pool. This also restores a partial pool left
+        // over from a life spent earlier in the window.
+        if (!remainingMs)
         {
-            if (lives->GetStackAmount() < NOLIFE_LIVES)
-                lives->SetStackAmount(NOLIFE_LIVES);
-            return;
+            if (Aura* pool = player->GetAura(SPELL_NOLIFE_CHARGES))
+            {
+                if (pool->GetStackAmount() < NOLIFE_LIVES)
+                    pool->SetStackAmount(NOLIFE_LIVES);
+            }
+            else
+            {
+                player->CastSpell(player, SPELL_NOLIFE_CHARGES, true);
+                if (Aura* pool = player->GetAura(SPELL_NOLIFE_CHARGES))
+                    pool->SetStackAmount(NOLIFE_LIVES);
+            }
         }
 
-        player->CastSpell(player, SPELL_NOLIFE_EXTRA_LIFE, true);
-        if (Aura* lives = player->GetAura(SPELL_NOLIFE_EXTRA_LIFE))
-            lives->SetStackAmount(NOLIFE_LIVES);
+        SyncLivesDisplay(player);
     }
 
     // The carrier owns the pool, so the carrier's removal is what tears it down.
@@ -326,9 +359,10 @@ class spell_nolife_three_lives : public AuraScript
     // sitting on the player indefinitely. The tick only ever sees the lesser
     // case: still wearing the set, but no longer the strict loadout.
     //
-    // Dropping the pool outright is safe now that the recharge is a real
-    // cooldown: re-equipping cannot refill while that cooldown runs, so there
-    // is nothing to gain by taking the set off and putting it back on.
+    // ONLY the displays. The pool (90626) and the recharge cooldown both stay,
+    // because they are the durable state - dropping the pool here would quietly
+    // spend whatever lives were left the moment the set came off, which is
+    // exactly what unequipping used to cost.
     void OnCarrierRemoved(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
         Player* player = GetTarget()->ToPlayer();
@@ -336,7 +370,6 @@ class spell_nolife_three_lives : public AuraScript
             return;
 
         player->RemoveAurasDueToSpell(SPELL_NOLIFE_EXTRA_LIFE);
-        // Display only - the cooldown behind it keeps running.
         player->RemoveAurasDueToSpell(SPELL_NOLIFE_RECHARGE);
     }
 
@@ -380,6 +413,12 @@ class spell_nolife_extra_life : public AuraScript
         if (!WearsOnlyNoLife(player, false))
             return;
 
+        // The buff this script rides on is only a mirror; 90626 is the record.
+        // If the two are out of step, refuse rather than hand out a free life.
+        Aura* pool = player->GetAura(SPELL_NOLIFE_CHARGES);
+        if (!pool || !pool->GetStackAmount())
+            return;
+
         // Read the recharge BEFORE the reset below. "Every cooldown reset" is
         // part of what a life gives you, and it would otherwise wipe the one
         // cooldown that decides when lives come back - handing out a fresh
@@ -405,11 +444,20 @@ class spell_nolife_extra_life : public AuraScript
             carriedMs ? Milliseconds(carriedMs) : Milliseconds(NOLIFE_RECHARGE_TIME));
         SyncRechargeMarker(player, RechargeRemainingMs(player));
 
-        uint8 const remaining = GetStackAmount() > 1 ? GetStackAmount() - 1 : 0;
+        // Spend from the pool, then bring the visible mirror into line. The
+        // periodic tick would do the same a fraction of a second later, but
+        // waiting would show a stale life count on the frame that mattered.
+        uint8 const remaining = pool->GetStackAmount() > 1 ? pool->GetStackAmount() - 1 : 0;
         if (remaining)
+        {
+            pool->SetStackAmount(remaining);
             SetStackAmount(remaining);
+        }
         else
+        {
+            player->RemoveAurasDueToSpell(SPELL_NOLIFE_CHARGES);
             Remove();   // out of lives; the cooldown above governs the way back
+        }
     }
 
     void Register() override
