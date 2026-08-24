@@ -533,6 +533,15 @@ class spell_t2_moonkitty_starfire : public SpellScript
         if (!combo)
             return;
 
+        // Read from the SPELL, not from the player's selection, so a mouseover
+        // or focus macro counts. T2SpellHooks::MoonkittyMouseoverCastTimeCutMs
+        // gates the discount the same way, and the two must agree: a Starfire
+        // at some other enemy gets no discount, so it must not eat the points.
+        Unit const* comboTarget = druid->GetComboTarget();
+        Unit const* hit = GetExplTargetUnit();
+        if (!comboTarget || !hit || hit->GetGUID() != comboTarget->GetGUID())
+            return;
+
         // Rolled BEFORE the points are cleared - the chance is per point.
         TryPredatoryStrikes(druid, combo);
 

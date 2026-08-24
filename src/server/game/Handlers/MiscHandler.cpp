@@ -46,6 +46,7 @@
 #include "Opcodes.h"
 #include "OutdoorPvP.h"
 #include "Player.h"
+#include "T2SpellHooks.h"
 #include "ScriptMgr.h"
 #include "Spell.h"
 #include "SpellInfo.h"
@@ -485,6 +486,10 @@ void WorldSession::HandleSetSelectionOpcode(WorldPacket& recvData)
     }
 
     _player->SetSelection(guid);
+
+    // Moonkitty 5pc: the Starfire discount only stands while the combo points'
+    // own target is the one selected, so a target change has to re-evaluate it.
+    T2SpellHooks::SyncMoonkittyComboStacks(_player);
 
     if (guid.IsEmpty())
         _player->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);

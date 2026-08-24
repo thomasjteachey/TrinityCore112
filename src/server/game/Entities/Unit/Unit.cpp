@@ -11864,6 +11864,13 @@ void Unit::SendComboPoints()
     if (m_cleanupDone)
         return;
 
+    // Moonkitty 5pc: keep the Starfire cast-time aura's stacks equal to the
+    // points. This is the single choke point every change runs through - both
+    // AddComboPoints and ClearComboPoints end here - so spending the points for
+    // ANY reason takes the aura off with them. Costs one HasAura for a player
+    // without the set.
+    T2SpellHooks::SyncMoonkittyComboStacks(this);
+
     PackedGuid const packGUID = m_comboTarget ? m_comboTarget->GetPackGUID() : PackedGuid();
     if (Player* playerMe = ToPlayer())
     {

@@ -695,22 +695,75 @@ uint32 T2SpellHooks::DamageSchoolThatBroke(Unit const* victim)
 }
 
 // ---------------------------------------------------------------------------
-// MOONKITTY - Starfire spends combo points for cast speed
+// MOONKITTY - combo points mirrored onto a stacking Starfire cast-time aura
 // ---------------------------------------------------------------------------
-int32 T2SpellHooks::MoonkittyStarfireCastTimeCutMs(Unit const* caster, SpellInfo const* spellInfo)
+void T2SpellHooks::SyncMoonkittyComboStacks(Unit* who)
 {
-    if (!caster || !spellInfo)
+    if (!who || who->GetTypeId() != TYPEID_PLAYER)
+        return;
+
+    // Not wearing the 5pc: make sure nothing is left over from when they were.
+    if (!who->HasAura(T2SpellHooks::SPELL_MOONKITTY_LUNAR_MOMENTUM))
+    {
+        if (who->HasAura(T2SpellHooks::SPELL_MOONKITTY_COMBO_HASTE))
+            who->RemoveAurasDueToSpell(T2SpellHooks::SPELL_MOONKITTY_COMBO_HASTE);
+        return;
+    }
+
+    // Only while the points' OWN target is the one selected. Combo points are
+    // per-target (Unit::m_comboTarget) but a spellmod aura is blanket - it has
+    // no idea what the cast is aimed at - so without this the druid could build
+    // five points on one enemy and then fire a discounted Starfire at a
+    // completely different one. Re-synced from the selection opcode as well as
+    // from every combo point change, so switching targets drops the discount and
+    // switching back restores it.
+    uint8 const points = who->GetComboPoints();
+    bool const onComboTarget = points && !who->GetComboTargetGUID().IsEmpty()
+        && who->GetTarget() == who->GetComboTargetGUID();
+
+    if (!onComboTarget)
+    {
+        // Spent, expired, or aimed somewhere else - all of them arrive here.
+        if (who->HasAura(T2SpellHooks::SPELL_MOONKITTY_COMBO_HASTE))
+            who->RemoveAurasDueToSpell(T2SpellHooks::SPELL_MOONKITTY_COMBO_HASTE);
+        return;
+    }
+
+    Aura* haste = who->GetAura(T2SpellHooks::SPELL_MOONKITTY_COMBO_HASTE);
+    if (!haste)
+    {
+        who->CastSpell(who, T2SpellHooks::SPELL_MOONKITTY_COMBO_HASTE, true);
+        haste = who->GetAura(T2SpellHooks::SPELL_MOONKITTY_COMBO_HASTE);
+    }
+
+    // Only when it actually differs: SetStackAmount re-runs every effect handler,
+    // and this is called on every combo point change.
+    if (haste && haste->GetStackAmount() != points)
+        haste->SetStackAmount(points);
+}
+
+int32 T2SpellHooks::MoonkittyMouseoverCastTimeCutMs(Unit const* caster, SpellInfo const* spellInfo, Spell* spell)
+{
+    if (!caster || !spellInfo || !spell)
         return 0;
 
-    // Starfire by family, not by id: SpellClassSet 7 (druid) with word 0 bit 2,
-    // which every rank from 2912 to 48465 carries. Matching ids would silently
-    // miss a rank, and the several other "Starfire" rows in Spell.dbc are NPC
-    // copies with SpellClassSet 0 that must NOT be caught.
-    if (spellInfo->SpellFamilyName != SPELLFAMILY_DRUID || !(spellInfo->SpellFamilyFlags[0] & 0x4))
+    if (!spellInfo->IsStarfire())
         return 0;
 
     if (!caster->HasAura(T2SpellHooks::SPELL_MOONKITTY_LUNAR_MOMENTUM))
         return 0;
 
-    return int32(caster->GetComboPoints()) * 250;
+    // The aura is already doing it - do not pay twice.
+    if (caster->HasAura(T2SpellHooks::SPELL_MOONKITTY_COMBO_HASTE))
+        return 0;
+
+    uint8 const points = caster->GetComboPoints();
+    if (!points)
+        return 0;
+
+    ObjectGuid const comboTarget = caster->GetComboTargetGUID();
+    if (comboTarget.IsEmpty() || spell->m_targets.GetUnitTargetGUID() != comboTarget)
+        return 0;
+
+    return int32(points) * 250;
 }

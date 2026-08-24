@@ -2493,12 +2493,10 @@ void WorldObject::ModSpellCastTime(SpellInfo const* spellInfo, int32& castTime, 
         if (int32 boonMs = VioletHoldBoons::GetMountCastTimeReductionMs(unitCaster))
             castTime = std::max(castTime - boonMs, 0);
 
-    // Moonkitty 5pc (90630): Starfire spends the druid's combo points, 0.25 sec
-    // off the cast for each. Flat and applied last, like the two above, so the
-    // "0.25 sec per point" the tooltip promises is what the player actually
-    // gets rather than something haste has already scaled.
-    if (castTime > 0)
-        if (int32 comboCut = T2SpellHooks::MoonkittyStarfireCastTimeCutMs(unitCaster, spellInfo))
+    // Moonkitty 5pc, macro casts only: see the header. Returns 0 when the
+    // stacking aura already covers this cast, so the two cannot both apply.
+    if (castTime > 0 && spell)
+        if (int32 comboCut = T2SpellHooks::MoonkittyMouseoverCastTimeCutMs(unitCaster, spellInfo, spell))
             castTime = std::max(castTime - comboCut, 0);
 }
 
