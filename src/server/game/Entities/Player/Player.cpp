@@ -2155,6 +2155,33 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
         // near teleport, triggering send MSG_MOVE_TELEPORT_ACK from client at landing
         if (!GetSession()->PlayerLogout())
             SendTeleportPacket(m_teleport_dest, (options & TELE_TO_TRANSPORT_TELEPORT) != 0);
+
+        // A SERVER-DRIVEN BOT NEVER SENDS THAT ACK, and nothing else clears the
+        // semaphore: WorldSession::ResolvePendingTeleport is the only other
+        // route, and its sole runtime caller is HandleMovementOpcodes - reached
+        // from a client movement packet a socketless bot will never send.
+        //
+        // Left alone the bot stays "mid-teleport" for the rest of its session.
+        // Its own AI keeps issuing splines from where it really is while the
+        // server holds an unconsumed teleport destination, and observers get fed
+        // both, which renders as the unit flicking rapidly between two points.
+        // Blink is the usual trigger - it is a near teleport - so a mage bot
+        // blinking out of a stun starts porting around the battleground.
+        //
+        // Finished inline rather than by synthesising the ack packet: the ack
+        // handler resolves its mover through GameClient::GetActivelyMovedUnit,
+        // and completing a teleport must not depend on a bot session's mover
+        // bookkeeping being intact. These are the same three steps the
+        // forceNearFallback branch of ResolvePendingTeleport performs.
+        if (WorldSession const* session = GetSession())
+        {
+            if (session->IsVirtualSession() || session->IsTransientPlayerSession())
+            {
+                SetSemaphoreTeleportNear(false);
+                UpdatePosition(m_teleport_dest, true);
+                SetFallInformation(0, GetPositionZ());
+            }
+        }
     }
     else
     {
