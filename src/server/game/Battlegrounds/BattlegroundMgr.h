@@ -85,6 +85,11 @@ class TC_GAME_API BattlegroundMgr
         Battleground* GetBattlegroundThroughClientInstance(uint32 instanceId, BattlegroundTypeId bgTypeId);
         Battleground* GetBattleground(uint32 InstanceID, BattlegroundTypeId bgTypeId);
         Battleground* GetBattlegroundTemplate(BattlegroundTypeId bgTypeId);
+        // Every battleground of one type, keyed by instance id. Entry 0 is the
+        // template and is not a live match. Added for the Violet Hold clone
+        // driver, which lives in the scripts library and has to find instances
+        // waiting on a wave without holding a guid to any of them.
+        BattlegroundContainer const* GetBattlegroundsByType(BattlegroundTypeId bgTypeId) const;
         Battleground* CreateNewBattleground(BattlegroundTypeId bgTypeId, PvPDifficultyEntry const* bracketEntry, uint8 arenaType, bool isRated, bool isPrivate = false);
 
         void AddBattleground(Battleground* bg);
@@ -94,7 +99,14 @@ class TC_GAME_API BattlegroundMgr
         BGFreeSlotQueueContainer& GetBGFreeSlotQueueStore(BattlegroundTypeId bgTypeId);
 
         void LoadBattlegroundTemplates();
+        void LoadRandomBattlegroundPools();
         void DeleteAllBattlegrounds();
+
+        // Members of a random selection pool, in table order, filtered to those
+        // that actually have a battleground template. Empty when the pool is not
+        // configured, which callers should treat as "fall back to your own
+        // list" rather than "no battlegrounds exist".
+        std::vector<BattlegroundTypeId> GetRandomPoolMembers(BattlegroundTypeId poolBgTypeId);
 
         void SendToBattleground(Player* player, uint32 InstanceID, BattlegroundTypeId bgTypeId);
 
@@ -135,6 +147,7 @@ class TC_GAME_API BattlegroundMgr
 
     private:
         bool CreateBattleground(BattlegroundTemplate const* bgTemplate);
+        bool IsPoolMemberSelectable(BattlegroundTypeId bgTypeId);
         uint32 CreateClientVisibleInstanceId(BattlegroundTypeId bgTypeId, BattlegroundBracketId bracket_id);
         static bool IsArenaType(BattlegroundTypeId bgTypeId);
         BattlegroundTypeId GetRandomBG(BattlegroundTypeId id);
@@ -169,6 +182,15 @@ class TC_GAME_API BattlegroundMgr
                 return itr->second;
             return nullptr;
         }
+
+        // Random selection pools, keyed by the type id players queue for
+        // (BATTLEGROUND_AA for All Arenas, BATTLEGROUND_RB for Random
+        // Battleground) and holding the candidates with their weights. This
+        // exists because BattlemasterList.dbc can only name eight maps per row,
+        // which capped All Arenas at eight arenas no matter how many were
+        // installed. Populated from `battleground_random_pool`.
+        typedef std::vector<std::pair<BattlegroundTypeId, double /*weight*/>> RandomPoolMembers;
+        std::map<BattlegroundTypeId, RandomPoolMembers> _randomPools;
 
         typedef std::map<BattlegroundTypeId, uint8 /*weight*/> BattlegroundSelectionWeightMap;
 

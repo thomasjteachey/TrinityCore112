@@ -1,0 +1,526 @@
+{
+ "coliseumarena": {
+  "map_id": 982,
+  "wmo": "PVP_TITAN_ARENA.WMO",
+  "centre_x": 8077.387,
+  "centre_y": -2749.794,
+  "wmo_origin_z": 1136.815,
+  "floor": {
+   "floor_local_y": 105.5,
+   "floor_world_z": 1242.32,
+   "floor_area": 328.2,
+   "largest_area_at": 1242.32,
+   "flat_area_total": 23927.8,
+   "top5": [
+    [
+     105.5,
+     1242.32,
+     328.2
+    ],
+    [
+     -105.5,
+     1031.32,
+     322.0
+    ],
+    [
+     102.0,
+     1238.82,
+     301.9
+    ],
+    [
+     -102.0,
+     1034.82,
+     301.9
+    ],
+    [
+     107.25,
+     1244.07,
+     291.5
+    ]
+   ]
+  }
+ },
+ "nerubianarena": {
+  "map_id": 983,
+  "wmo": "NERUBIAN_ARENA.WMO",
+  "centre_x": 544.034,
+  "centre_y": -909.113,
+  "wmo_origin_z": 25.715,
+  "floor": {
+   "floor_local_y": 59.5,
+   "floor_world_z": 85.22,
+   "floor_area": 1051.3,
+   "largest_area_at": 85.22,
+   "flat_area_total": 5794.0,
+   "top5": [
+    [
+     59.5,
+     85.22,
+     1051.3
+    ],
+    [
+     -59.5,
+     -33.78,
+     1051.3
+    ],
+    [
+     59.25,
+     84.97,
+     396.0
+    ],
+    [
+     -59.25,
+     -33.53,
+     396.0
+    ],
+    [
+     -48.0,
+     -22.29,
+     230.8
+    ]
+   ]
+  }
+ },
+ "MaldraxxusColiseum": {
+  "map_id": 984,
+  "wmo": "9MAL_MALDRAXXUS_ARENA01.WMO",
+  "centre_x": 2833.001,
+  "centre_y": 2250.001,
+  "wmo_origin_z": 3245.666,
+  "floor": null
+ },
+ "nagrandarena2": {
+  "map_id": 985,
+  "wmo": "7NG_NAGRANDARENA_PVPSTADIUM.WMO",
+  "centre_x": -2043.539,
+  "centre_y": 6654.352,
+  "wmo_origin_z": 11.442,
+  "floor": {
+   "floor_local_y": 59.5,
+   "floor_world_z": 70.94,
+   "floor_area": 231.4,
+   "largest_area_at": 70.94,
+   "flat_area_total": 12937.3,
+   "top5": [
+    [
+     59.5,
+     70.94,
+     231.4
+    ],
+    [
+     -59.5,
+     -48.06,
+     229.9
+    ],
+    [
+     11.5,
+     22.94,
+     207.5
+    ],
+    [
+     -11.5,
+     -0.06,
+     207.2
+    ],
+    [
+     44.25,
+     55.69,
+     189.4
+    ]
+   ]
+  }
+ },
+ "bladesedgearena2b": {
+  "map_id": 986,
+  "wmo": "7OG_BLADESEDGEARENA_PVPSTADIUM.WMO",
+  "centre_x": 2785.612,
+  "centre_y": 6066.079,
+  "wmo_origin_z": -6.124,
+  "floor": {
+   "floor_local_y": 90.25,
+   "floor_world_z": 84.13,
+   "floor_area": 390.1,
+   "largest_area_at": -18.87,
+   "flat_area_total": 9438.9,
+   "top5": [
+    [
+     -12.75,
+     -18.87,
+     690.6
+    ],
+    [
+     -12.5,
+     -18.62,
+     626.5
+    ],
+    [
+     -13.0,
+     -19.12,
+     512.3
+    ],
+    [
+     90.25,
+     84.13,
+     390.1
+    ],
+    [
+     -12.0,
+     -18.12,
+     388.7
+    ]
+   ]
+  }
+ },
+ "karazhanarena": {
+  "map_id": 1007,
+  "wmo": "KARAZHAN_ARENA.WMO",
+  "centre_x": 536.493,
+  "centre_y": 805.679,
+  "wmo_origin_z": 0.0,
+  "floor": {
+   "floor_local_y": 64.25,
+   "floor_world_z": 64.25,
+   "floor_area": 224.4,
+   "largest_area_at": -64.25,
+   "flat_area_total": 4987.0,
+   "top5": [
+    [
+     -64.25,
+     -64.25,
+     224.4
+    ],
+    [
+     64.25,
+     64.25,
+     224.4
+    ],
+    [
+     -4.5,
+     -4.5,
+     206.9
+    ],
+    [
+     -4.25,
+     -4.25,
+     206.9
+    ],
+    [
+     4.5,
+     4.5,
+     206.9
+    ]
+   ]
+  }
+ },
+ "ulduararena": {
+  "map_id": 1008,
+  "wmo": "ULDUAR_ARENA.WMO",
+  "centre_x": 533.42,
+  "centre_y": 800.121,
+  "wmo_origin_z": 57.4,
+  "floor": {
+   "floor_local_y": 74.0,
+   "floor_world_z": 131.4,
+   "floor_area": 15700.0,
+   "largest_area_at": 131.4,
+   "flat_area_total": 457238.9,
+   "top5": [
+    [
+     74.0,
+     131.4,
+     15700.0
+    ],
+    [
+     -14.75,
+     42.65,
+     8409.1
+    ],
+    [
+     -54.5,
+     2.9,
+     8088.1
+    ],
+    [
+     -70.0,
+     -12.6,
+     7909.5
+    ],
+    [
+     65.75,
+     123.15,
+     7908.8
+    ]
+   ]
+  }
+ },
+ "BaradinHoldArena": {
+  "map_id": 1401,
+  "wmo": "TB_TOWER.WMO",
+  "centre_x": -1232.869,
+  "centre_y": 981.333,
+  "wmo_origin_z": 119.576,
+  "floor": null
+ },
+ "obeliskofthestarts": {
+  "map_id": 1402,
+  "wmo": "ULDUM_TITAN_MICRO.WMO",
+  "centre_x": -9256.04,
+  "centre_y": -1496.66,
+  "wmo_origin_z": -58.001,
+  "floor": null
+ },
+ "thetwistingnether": {
+  "map_id": 1403,
+  "wmo": "LEGION_ARENA.WMO",
+  "centre_x": 4500.372,
+  "centre_y": -1273.103,
+  "wmo_origin_z": 275.155,
+  "floor": {
+   "floor_local_y": 193.0,
+   "floor_world_z": 468.15,
+   "floor_area": 3314.3,
+   "largest_area_at": 468.15,
+   "flat_area_total": 53696.2,
+   "top5": [
+    [
+     193.0,
+     468.15,
+     3314.3
+    ],
+    [
+     281.75,
+     556.9,
+     3314.3
+    ],
+    [
+     282.0,
+     557.15,
+     2053.9
+    ],
+    [
+     127.25,
+     402.4,
+     1841.3
+    ],
+    [
+     193.25,
+     468.4,
+     1839.3
+    ]
+   ]
+  }
+ },
+ "blackrookholdarena": {
+  "map_id": 1504,
+  "wmo": "7VS_BLACKROOKHOLD_ARENA.WMO",
+  "centre_x": 1458.695,
+  "centre_y": 1458.056,
+  "wmo_origin_z": 81.681,
+  "floor": {
+   "floor_local_y": 165.5,
+   "floor_world_z": 247.18,
+   "floor_area": 823.4,
+   "largest_area_at": 247.18,
+   "flat_area_total": 9146.4,
+   "top5": [
+    [
+     165.5,
+     247.18,
+     823.4
+    ],
+    [
+     163.25,
+     244.93,
+     552.0
+    ],
+    [
+     249.5,
+     331.18,
+     371.0
+    ],
+    [
+     250.75,
+     332.43,
+     319.4
+    ],
+    [
+     274.0,
+     355.68,
+     309.6
+    ]
+   ]
+  }
+ },
+ "valsharaharena": {
+  "map_id": 1552,
+  "wmo": "CUSTOM_VALSHARAH_ARENA.WMO",
+  "centre_x": 3548.968,
+  "centre_y": 5542.226,
+  "wmo_origin_z": 325.23,
+  "floor": {
+   "floor_local_y": 53.25,
+   "floor_world_z": 378.48,
+   "floor_area": 378.1,
+   "largest_area_at": 378.48,
+   "flat_area_total": 15758.3,
+   "top5": [
+    [
+     53.25,
+     378.48,
+     378.1
+    ],
+    [
+     61.5,
+     386.73,
+     320.1
+    ],
+    [
+     -57.75,
+     267.48,
+     320.0
+    ],
+    [
+     -55.75,
+     269.48,
+     307.5
+    ],
+    [
+     -42.0,
+     283.23,
+     257.6
+    ]
+   ]
+  }
+ },
+ "ulduaroutarena": {
+  "map_id": 1683,
+  "wmo": "ULDUAR_EXT03.WMO",
+  "centre_x": 8859.216,
+  "centre_y": -904.738,
+  "wmo_origin_z": 884.09,
+  "floor": null
+ },
+ "gundrakarena": {
+  "map_id": 1684,
+  "wmo": "ZD_COLISEUM.WMO",
+  "centre_x": 5798.492,
+  "centre_y": -3047.376,
+  "wmo_origin_z": 281.46,
+  "floor": {
+   "floor_local_y": 26.5,
+   "floor_world_z": 307.96,
+   "floor_area": 4908.5,
+   "largest_area_at": 307.96,
+   "flat_area_total": 289832.9,
+   "top5": [
+    [
+     26.5,
+     307.96,
+     4908.5
+    ],
+    [
+     -62.75,
+     218.71,
+     4721.9
+    ],
+    [
+     -40.5,
+     240.96,
+     3904.7
+    ],
+    [
+     49.0,
+     330.46,
+     3173.4
+    ],
+    [
+     48.75,
+     330.21,
+     3135.9
+    ]
+   ]
+  }
+ },
+ "tolvirarena": {
+  "map_id": 980,
+  "wmo": "TOLVIR_ARENA.WMO",
+  "centre_x": -10714.482,
+  "centre_y": 428.305,
+  "wmo_origin_z": 1.928,
+  "floor": {
+   "floor_local_y": 20.75,
+   "floor_world_z": 22.68,
+   "floor_area": 402.7,
+   "largest_area_at": 22.68,
+   "flat_area_total": 13818.3,
+   "top5": [
+    [
+     20.75,
+     22.68,
+     402.7
+    ],
+    [
+     -57.0,
+     -55.07,
+     342.4
+    ],
+    [
+     33.25,
+     35.18,
+     262.3
+    ],
+    [
+     52.0,
+     53.93,
+     259.5
+    ],
+    [
+     53.25,
+     55.18,
+     208.9
+    ]
+   ]
+  }
+ },
+ "ShadoPanArena": {
+  "map_id": 1134,
+  "wmo": "PA_SHADOWPAN_ARENA.WMO",
+  "centre_x": 566.872,
+  "centre_y": 627.43,
+  "wmo_origin_z": 379.813,
+  "floor": {
+   "floor_local_y": 3.75,
+   "floor_world_z": 383.56,
+   "floor_area": 848.8,
+   "largest_area_at": 364.06,
+   "flat_area_total": 10837.5,
+   "top5": [
+    [
+     -15.75,
+     364.06,
+     1044.2
+    ],
+    [
+     3.75,
+     383.56,
+     848.8
+    ],
+    [
+     72.25,
+     452.06,
+     657.0
+    ],
+    [
+     3.5,
+     383.31,
+     570.1
+    ],
+    [
+     -15.5,
+     364.31,
+     560.7
+    ]
+   ]
+  }
+ }
+}

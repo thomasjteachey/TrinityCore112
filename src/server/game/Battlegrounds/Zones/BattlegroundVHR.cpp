@@ -1,0 +1,1555 @@
+#include "BattlegroundVHR.h"
+
+#include "BattlegroundMgr.h"
+#include "CharacterCache.h"
+#include "Creature.h"
+#include "DBCStores.h"
+#include "GameObject.h"
+#include "Log.h"
+#include "Map.h"
+// Map.h only forward-declares VMAP::ModelIgnoreFlags, and PickBuffPosition
+// names one of its values.
+#include "ModelIgnoreFlags.h"
+#include "ObjectAccessor.h"
+#include "Player.h"
+#include "Random.h"
+#include "VioletHoldBoons.h"
+#include "World.h"
+#include "WorldPacket.h"
+#include "WorldSession.h"
+#include "WorldStatePackets.h"
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
+namespace
+{
+// Cell geometry, taken from the live map 608 gameobject spawns and the boss
+// walk-out paths in instance_violet_hold.cpp. The door is where the gate object
+// sits; the release point is the first node of that boss's path, which is the
+// spot inside the cell the occupant stands on. Spawning on the release point
+// rather than the door keeps clones behind the gate while it is shut.
+struct VhrCell
+{
+    uint32 doorEntry;
+    Position door;
+    float doorRotation2;
+    float doorRotation3;
+    Position release;
+};
+
+VhrCell const kCells[BG_VHR_OBJECT_CELL_MAX] =
+{
+    // Xevozz - north-east
+    { 191556, { 1908.06f, 844.885f, 41.1377f, -0.444615f }, -0.220481f, 0.975391f, { 1908.417f, 845.8502f, 38.71947f, 3.560472f } },
+    // Lavanthor - south-west
+    { 191566, { 1847.81f, 752.476f, 49.3023f,  2.44346f  },  0.939692f, 0.342021f, { 1844.557f, 748.7083f, 38.74205f, 0.907571f } },
+    // Ichoron - south-east
+    { 191722, { 1938.43f, 754.695f, 28.7801f,  2.37934f  },  0.928246f, 0.371966f, { 1942.041f, 749.5228f, 30.95229f, 2.251475f } },
+    // Moragg - due south
+    { 191606, { 1895.07f, 733.715f, 57.6715f,  3.14159f  },  1.0f,      0.000001f, { 1893.895f, 728.1261f, 47.75016f, 1.675516f } },
+    // Zuramat - far north-east
+    { 191565, { 1931.87f, 859.01f,  54.923f,  -0.698129f }, -0.342019f, 0.939693f, { 1934.151f, 860.9463f, 47.29499f, 3.961897f } },
+    // Erekem - north
+    { 191564, { 1872.45f, 868.998f, 47.6405f,  0.289969f },  0.144477f, 0.989508f, { 1871.456f, 871.0361f, 43.41524f, 4.345870f } },
+    // Erekem's left guard - north-west
+    { 191562, { 1854.57f, 860.96f,  47.6405f,  0.546741f },  0.269978f, 0.962866f, { 1853.752f, 862.4528f, 43.41614f, 4.345870f } },
+    // Erekem's right guard - north
+    { 191563, { 1892.01f, 871.239f, 47.6405f, -0.05735f  }, -0.028671f, 0.999589f, { 1892.418f, 872.2831f, 43.41563f, 4.345870f } }
+};
+
+// The prison seal at the west end. Kept shut for the whole run.
+constexpr uint32 kMainDoorEntry = 191723;
+Position const kMainDoor = { 1822.59f, 803.928f, 44.3647f, 3.14159f };
+
+// Where the party is put down, just inside the seal on the entrance landing.
+Position const kPlayerStart = { 1848.03f, 804.62f, 44.07f, 0.027476f };
+
+// Middle of the chamber floor, below the ramp. Anyone loitering on a cell that
+// is about to open gets moved here - it is the furthest point from every cell.
+Position const kChamberCentre = { 1886.251f, 803.0743f, 38.42326f, 3.211406f };
+
+// Gurubashi arena, where a wiped party is returned to. Kept in step with
+// GurubashiGamesmasterLocation in scripts/Custom/custom_game_lobby.cpp, which
+// is the same spot every other custom mode drops players back onto.
+WorldLocation const kGurubashiReturn(0, -13235.707031f, 214.336441f, 31.276190f, 1.010225f);
+
+// Clones are placed in a ring around the cell's release point so forty of them
+// do not end up inside one another.
+constexpr float kCloneRingSpacing = 1.6f;
+
+Position ScatterInCell(Position const& release, uint32 indexInCell)
+{
+    if (!indexInCell)
+        return release;
+
+    // Concentric rings of six, eight, ten... starting one spacing out.
+    uint32 ring = 1;
+    uint32 consumed = 0;
+    uint32 slotsInRing = 6;
+    while (consumed + slotsInRing < indexInCell)
+    {
+        consumed += slotsInRing;
+        ++ring;
+        slotsInRing += 2;
+    }
+
+    uint32 const slot = indexInCell - consumed - 1;
+    float const angle = (2.0f * float(M_PI) * float(slot)) / float(slotsInRing);
+    float const radius = kCloneRingSpacing * float(ring);
+
+    return { release.GetPositionX() + radius * std::cos(angle),
+             release.GetPositionY() + radius * std::sin(angle),
+             release.GetPositionZ(),
+             release.GetOrientation() };
+}
+
+// Ichoron's cell is a flooded basin: its release point (the boss's first path
+// node) sits on the pool bed, six yards under a surface that a player could
+// not stand in. A clone put down there starts the wave swimming from the
+// bottom, and a swimmer's first move is a straight spline - up through the
+// basin wall and along under the arena floor until it surfaces near the party
+// ("bots teleporting under the arena"). Seat such clones just under the
+// surface instead: that is the swim band the playerbot core keeps swimmers in
+// (0.5 below the level, inside its swim hysteresis and next to the navmesh
+// water polys), and where a player would be treading water anyway. Dry cells
+// and water shallow enough to stand in are left exactly where they were.
+void SettleSpawnIntoWater(Map const* map, Position& spawn)
+{
+    if (!map)
+        return;
+
+    LiquidData liquid{};
+    ZLiquidStatus const status = map->GetLiquidStatus(PHASEMASK_NORMAL, spawn.GetPositionX(), spawn.GetPositionY(),
+        spawn.GetPositionZ() + 0.5f, MAP_ALL_LIQUIDS, &liquid, DEFAULT_COLLISION_HEIGHT);
+    if (!(status & MAP_LIQUID_STATUS_SWIMMING))
+        return;
+
+    bool const tooDeepToStand = (liquid.level - liquid.depth_level) > DEFAULT_COLLISION_HEIGHT;
+    if (!tooDeepToStand)
+        return;
+
+    spawn.Relocate(spawn.GetPositionX(), spawn.GetPositionY(), liquid.level - 0.5f, spawn.GetOrientation());
+}
+}
+
+void BattlegroundVHRScore::BuildObjectivesBlock(WorldPacket& data)
+{
+    data << uint32(0); // no extra custom scoreboard columns
+}
+
+BattlegroundVHR::BattlegroundVHR()
+{
+    BgObjects.resize(BG_VHR_OBJECT_MAX);
+    BgCreatures.resize(BG_VHR_CREATURE_MAX);
+
+    // Arena-style pre-match countdown, not the one-minute battleground stock:
+    // the whole party arrives together from one queue group, so there is
+    // nobody to wait for.
+    StartDelayTimes[BG_STARTING_EVENT_FIRST]  = BG_START_DELAY_30S;
+    StartDelayTimes[BG_STARTING_EVENT_SECOND] = BG_START_DELAY_15S;
+    StartDelayTimes[BG_STARTING_EVENT_THIRD]  = BG_START_DELAY_10S;
+    StartDelayTimes[BG_STARTING_EVENT_FOURTH] = BG_START_DELAY_NONE;
+    StartMessageIds[BG_STARTING_EVENT_THIRD]  = BG_VHR_TEXT_NEXT_WAVE_IN_TEN_SECONDS;
+
+    // Humans always hold Alliance. The queue forces this side regardless of the
+    // player's real faction, so a cross-faction party stays together and the
+    // clones always have the other side to themselves.
+    _humanTeam = ALLIANCE;
+    _enemyTeam = HORDE;
+
+    _partySize = 0;
+    _waveNumber = 0;
+    _highestWaveCleared = 0;
+    _waveState = WaveState::NotStarted;
+    _prepTimerMs = 0;
+    _buffLifetimeMs = 0;
+    _lastCountdownSecond = 0;
+    _stateCheckTimerMs = 0;
+    _floorCheckTimerMs = 0;
+    _hasPendingRequest = false;
+    _brokerBonusOffers = 0;
+    _bonusBrokersPerWave = 0;
+    _nextAllyRequestId = 0;
+    _allyRetryMs = 0;
+}
+
+void BattlegroundVHR::AddPlayer(Player* player)
+{
+    bool const isInBattleground = IsPlayerInBattleground(player->GetGUID());
+
+    Battleground::AddPlayer(player);
+
+    if (!isInBattleground)
+    {
+        uint32 const scoreboardTeamMarker = (player->GetBGTeam() == HORDE) ? 1u : 0u;
+        PlayerScores[player->GetGUID().GetCounter()] = new BattlegroundVHRScore(player->GetGUID(), scoreboardTeamMarker);
+    }
+
+    // A clone summoned into a live wave must not inherit the run's earlier
+    // eliminations if its GUID is ever recycled. Only the living get this
+    // amnesty: a dead player relogging back into the run is still down, and
+    // HandlePlayerResurrect readmits them if they are ever rezzed.
+    if (player->IsAlive())
+        _eliminated.erase(player->GetGUID());
+
+    UpdateScoreWorldStates();
+}
+
+void BattlegroundVHR::RemovePlayer(Player* player, ObjectGuid guid, uint32 team)
+{
+    // Leaving is indistinguishable from dying as far as the run is concerned:
+    // either way that character is no longer holding the line.
+    _eliminated.insert(guid);
+    UpdateScoreWorldStates();
+
+    // Boons are a Violet Hold thing. Every way out of the run - the leave
+    // button, the match ending, a GM teleport, an AFK kick - comes through
+    // here with the Player still in hand and is stripped now.
+    //
+    // A LOGOUT also lands here (Battleground::EventPlayerLoggedOut calls
+    // RemovePlayer with the live Player, before the character is saved), but
+    // that is not leaving: the character stays on the roster with an
+    // OfflineRemoveTime and may log straight back into the run. Stripping
+    // there would save the character bare and make the marker/re-teach
+    // design pointless. So a logout keeps everything, and
+    // VioletHoldBoons::OnLogin decides at the next login: back into this
+    // run - restore; anywhere else (run over, timed out) - strip then.
+    if (player && team == _humanTeam)
+    {
+        WorldSession const* session = player->GetSession();
+        if (!session || !session->PlayerLogout())
+            VioletHoldBoons::StripAll(player);
+    }
+}
+
+void BattlegroundVHR::Reset()
+{
+    Battleground::Reset();
+
+    _partySize = 0;
+    _waveNumber = 0;
+    _highestWaveCleared = 0;
+    _waveState = WaveState::NotStarted;
+    _prepTimerMs = 0;
+    _buffLifetimeMs = 0;
+    _lastCountdownSecond = 0;
+    _stateCheckTimerMs = 0;
+    _floorCheckTimerMs = 0;
+    _waveCells.clear();
+    _waveEnemies.clear();
+    _eliminated.clear();
+    _pendingRequest = VhrWaveSpawnRequest();
+    _hasPendingRequest = false;
+    _brokerBonusOffers = 0;
+    _bonusBrokersPerWave = 0;
+    _allyRequests.clear();
+    _nextAllyRequestId = 0;
+    _allyRetryMs = 0;
+    _allies.clear();
+    _menagerie.clear();
+    _waveCloneSources.clear();
+}
+
+bool BattlegroundVHR::SetupBattleground()
+{
+    for (uint32 i = 0; i < BG_VHR_OBJECT_CELL_MAX; ++i)
+    {
+        VhrCell const& cell = kCells[i];
+        if (!AddObject(i, cell.doorEntry, cell.door.GetPositionX(), cell.door.GetPositionY(), cell.door.GetPositionZ(),
+            cell.door.GetOrientation(), 0.0f, 0.0f, cell.doorRotation2, cell.doorRotation3, RESPAWN_IMMEDIATELY))
+        {
+            TC_LOG_ERROR("bg.battleground", "BattlegroundVHR::SetupBattleground: failed to spawn cell door {} (entry {}).", i, cell.doorEntry);
+            return false;
+        }
+
+        if (GameObject* door = GetBGObject(i))
+            door->SetFlag(GO_FLAG_NOT_SELECTABLE);
+    }
+
+    if (!AddObject(BG_VHR_OBJECT_MAIN_DOOR, kMainDoorEntry, kMainDoor.GetPositionX(), kMainDoor.GetPositionY(),
+        kMainDoor.GetPositionZ(), kMainDoor.GetOrientation(), 0.0f, 0.0f, 1.0f, 0.000001f, RESPAWN_IMMEDIATELY))
+    {
+        TC_LOG_ERROR("bg.battleground", "BattlegroundVHR::SetupBattleground: failed to spawn the prison seal (entry {}).", kMainDoorEntry);
+        return false;
+    }
+
+    if (GameObject* door = GetBGObject(BG_VHR_OBJECT_MAIN_DOOR))
+        door->SetFlag(GO_FLAG_NOT_SELECTABLE);
+
+    // Deliberately no AddSpiritGuide call. Map 1608 also ships without
+    // graveyard rows, so a released ghost has nowhere to resurrect: death is
+    // final for the rest of the run, which is the whole point of the mode.
+    return true;
+}
+
+void BattlegroundVHR::StartingEventCloseDoors()
+{
+    for (uint32 i = 0; i < BG_VHR_OBJECT_CELL_MAX; ++i)
+        DoorClose(i);
+
+    DoorClose(BG_VHR_OBJECT_MAIN_DOOR);
+}
+
+void BattlegroundVHR::StartingEventOpenDoors()
+{
+    // The prison seal stays shut - there is nowhere to go but the chamber.
+    // Only the cells are managed from here, and they open one wave at a time.
+
+    // Fix the difficulty curve to whoever actually made it to the start.
+    _partySize = CountAliveHumans();
+    if (!_partySize)
+        _partySize = 1;
+
+    BeginWave();
+}
+
+uint32 BattlegroundVHR::GetFullStrengthCountForWave(uint32 wave) const
+{
+    if (!wave)
+        return 0;
+
+    // A quarter of a clone per wave elapsed; every fourth quarter is a whole
+    // clone joining the wave at full strength.
+    if (wave <= BG_VHR_QUARTER_RAMP_LAST_WAVE)
+        return _partySize + (wave - 1) / BG_VHR_QUARTERS_PER_CLONE;
+
+    // Past the ramp: a whole clone per wave, counted on top of where the ramp
+    // left off, so the step from its last wave to the next one is the usual
+    // quarter-to-whole promotion and nothing jumps.
+    uint32 const atRampEnd = _partySize + (BG_VHR_QUARTER_RAMP_LAST_WAVE - 1) / BG_VHR_QUARTERS_PER_CLONE;
+    return atRampEnd + (wave - BG_VHR_QUARTER_RAMP_LAST_WAVE);
+}
+
+uint8 BattlegroundVHR::GetPartialCloneStacks(uint32 wave)
+{
+    // Past the ramp every clone is a full one.
+    if (!wave || wave > BG_VHR_QUARTER_RAMP_LAST_WAVE)
+        return 0;
+
+    uint32 const quarter = (wave - 1) % BG_VHR_QUARTERS_PER_CLONE;
+    if (!quarter)
+        return 0;   // the ramp landed on a whole clone, nothing partial here
+
+    // quarter 1..3 is a clone at 25%/50%/75% power, and Diminished stacks are
+    // the percentage REMOVED - so 25% power is 75 stacks.
+    return static_cast<uint8>(100 - quarter * (100 / BG_VHR_QUARTERS_PER_CLONE));
+}
+
+uint32 BattlegroundVHR::GetEnemyCountForWave(uint32 wave) const
+{
+    if (!wave)
+        return 0;
+
+    return GetFullStrengthCountForWave(wave) + (GetPartialCloneStacks(wave) ? 1 : 0);
+}
+
+void BattlegroundVHR::BeginWave()
+{
+    uint32 const nextWave = _waveNumber + 1;
+    uint32 const enemyCount = GetEnemyCountForWave(nextWave);
+
+    // Surviving a wave that would need more than the cap is the win condition.
+    if (enemyCount > BG_VHR_MAX_ENEMIES)
+    {
+        EndBattleground(_humanTeam);
+        return;
+    }
+
+    _waveNumber = nextWave;
+    _waveEnemies.clear();
+    _waveCloneSources.clear();
+
+    ComposeWave(enemyCount);
+
+    _waveState = WaveState::AwaitingSpawn;
+    _prepTimerMs = GetPrepWindowMs();
+    _lastCountdownSecond = 0;
+
+    UpdateScoreWorldStates();
+}
+
+// Decide who this wave is made of and where each clone is put down, then
+// publish it for the script-side driver. Nothing is summoned here.
+void BattlegroundVHR::ComposeWave(uint32 enemyCount)
+{
+    _pendingRequest = VhrWaveSpawnRequest();
+    _pendingRequest.waveNumber = _waveNumber;
+    _pendingRequest.enemyTeam = _enemyTeam;
+
+    // Sources are drawn from the living. A dead player's likeness should not
+    // keep walking out of the cells after they have been eliminated.
+    std::vector<ObjectGuid> roster = GetHumanRoster(true);
+    if (roster.empty())
+    {
+        // Everyone is already down; the wipe check will end the run shortly.
+        _hasPendingRequest = false;
+        return;
+    }
+
+    // The party's level range rides along so the bot driver can pick fair
+    // opponents for BotSourced waves.
+    uint32 minLevel = 0, maxLevel = 0;
+    for (ObjectGuid guid : roster)
+        if (Player const* member = ObjectAccessor::FindPlayer(guid))
+        {
+            uint32 const level = member->GetLevel();
+            if (!minLevel || level < minLevel)
+                minLevel = level;
+            if (level > maxLevel)
+                maxLevel = level;
+        }
+    _pendingRequest.partyMinLevel = minLevel;
+    _pendingRequest.partyMaxLevel = maxLevel;
+
+    // Party-mirror waves are the seasoning, not the meal: most waves are
+    // drawn from the playerbot population, with the party flavours rolled
+    // first so they keep their exact advertised odds.
+    VhrWaveComposition composition = VhrWaveComposition::BotSourced;
+    if (urand(0, 999) < BG_VHR_MONO_WAVE_CHANCE_PERMILLE)
+        composition = VhrWaveComposition::SingleSource;
+    else if (urand(0, 999) < BG_VHR_ROSTER_WAVE_CHANCE_PERMILLE)
+        composition = VhrWaveComposition::FullRoster;
+    else if (urand(0, 99) < sWorld->getIntConfig(CONFIG_CENTURION_VHR_PARTY_WAVE_CHANCE))
+        composition = VhrWaveComposition::RandomPerSlot;
+
+    _pendingRequest.composition = composition;
+    _pendingRequest.sourceGuids.reserve(enemyCount);
+
+    switch (composition)
+    {
+        case VhrWaveComposition::SingleSource:
+        {
+            // One unlucky player, over and over.
+            ObjectGuid const source = roster[urand(0, uint32(roster.size()) - 1)];
+            _pendingRequest.sourceGuids.assign(enemyCount, source);
+            break;
+        }
+        case VhrWaveComposition::FullRoster:
+        {
+            // The whole party in order, looped until the wave is full, so
+            // everyone is represented as evenly as the count allows.
+            for (uint32 i = 0; i < enemyCount; ++i)
+                _pendingRequest.sourceGuids.push_back(roster[i % roster.size()]);
+            break;
+        }
+        case VhrWaveComposition::RandomPerSlot:
+        case VhrWaveComposition::BotSourced: // party picks are only the fallback
+        default:
+        {
+            for (uint32 i = 0; i < enemyCount; ++i)
+                _pendingRequest.sourceGuids.push_back(roster[urand(0, uint32(roster.size()) - 1)]);
+            break;
+        }
+    }
+
+    // Every clone is full strength except the trailing partial one, which is
+    // what advances the curve in quarter-clone steps. It goes last so it is the
+    // clone spawned into the highest cell slot rather than a random one.
+    _pendingRequest.diminishedStacks.assign(_pendingRequest.sourceGuids.size(), 0);
+    if (uint8 const stacks = GetPartialCloneStacks(_waveNumber))
+        if (!_pendingRequest.diminishedStacks.empty())
+            _pendingRequest.diminishedStacks.back() = stacks;
+
+    // Spread the wave over as many cells as it needs, starting from a different
+    // cell each wave so consecutive waves do not pour out of the same door.
+    uint32 const cellsNeeded = std::min<uint32>(BG_VHR_OBJECT_CELL_MAX,
+        (enemyCount + BG_VHR_CLONES_PER_CELL - 1) / BG_VHR_CLONES_PER_CELL);
+
+    _waveCells.clear();
+    for (uint32 i = 0; i < cellsNeeded; ++i)
+        _waveCells.push_back((_waveNumber - 1 + i) % BG_VHR_OBJECT_CELL_MAX);
+
+    ClearPlayersFromSpawn();
+
+    _pendingRequest.spawnPositions.reserve(enemyCount);
+    std::vector<uint32> perCellCount(cellsNeeded, 0);
+    Map const* map = GetBgMap();
+    for (uint32 i = 0; i < enemyCount; ++i)
+    {
+        uint32 const cellSlot = i % cellsNeeded;
+        VhrCell const& cell = kCells[_waveCells[cellSlot]];
+        Position spawn = ScatterInCell(cell.release, perCellCount[cellSlot]++);
+        SettleSpawnIntoWater(map, spawn);
+        _pendingRequest.spawnPositions.push_back(spawn);
+    }
+
+    for (uint32 cellIndex : _waveCells)
+        DoorClose(cellIndex);
+
+    _hasPendingRequest = true;
+}
+
+// Anyone standing on a cell that is about to release is moved to the middle of
+// the chamber. Checked once per wave, as the cells are chosen.
+void BattlegroundVHR::ClearPlayersFromSpawn()
+{
+    float const radiusSq = float(BG_VHR_SPAWN_CLEAR_RADIUS) * float(BG_VHR_SPAWN_CLEAR_RADIUS);
+
+    for (auto const& itr : GetPlayers())
+    {
+        Player* player = ObjectAccessor::FindPlayer(itr.first);
+        if (!player || player->GetBGTeam() != _humanTeam || player->IsBeingTeleported())
+            continue;
+
+        for (uint32 cellIndex : _waveCells)
+        {
+            Position const& release = kCells[cellIndex].release;
+            float const dx = player->GetPositionX() - release.GetPositionX();
+            float const dy = player->GetPositionY() - release.GetPositionY();
+            float const dz = player->GetPositionZ() - release.GetPositionZ();
+
+            if ((dx * dx + dy * dy + dz * dz) > radiusSq)
+                continue;
+
+            player->TeleportTo(GetMapId(), kChamberCentre.GetPositionX(), kChamberCentre.GetPositionY(),
+                kChamberCentre.GetPositionZ(), kChamberCentre.GetOrientation());
+            break;
+        }
+    }
+}
+
+VhrWaveSpawnRequest const* BattlegroundVHR::GetPendingWaveSpawnRequest() const
+{
+    return _hasPendingRequest ? &_pendingRequest : nullptr;
+}
+
+void BattlegroundVHR::NotifyWaveSpawnFulfilled(uint32 waveNumber, uint32 /*spawnedCount*/)
+{
+    // A late callback from a wave that has already been cleared must not
+    // restart the preparation window.
+    if (!_hasPendingRequest || waveNumber != _waveNumber)
+        return;
+
+    _hasPendingRequest = false;
+
+    // Record the wave's clones by reading the roster back out: the driver
+    // spawned them straight into this battleground, so they are already in
+    // m_Players on the enemy side.
+    _waveEnemies.clear();
+    for (auto const& itr : GetPlayers())
+        if (itr.second.Team == _enemyTeam && _eliminated.find(itr.first) == _eliminated.end())
+            _waveEnemies.push_back(itr.first);
+
+    if (_waveNumber == 1)
+    {
+        // The match countdown was the first wave's warning; making the party
+        // stand through a second thirty-second wait on top of it kills the
+        // opening. The cells open the moment the clones exist, unbuffed -
+        // wave one is the easiest fight of the run anyway.
+        OpenWaveCell();
+        _waveState = WaveState::Fighting;
+    }
+    else
+    {
+        ApplyPreparationToWave();
+        _waveState = WaveState::Preparing;
+        _prepTimerMs = GetPrepWindowMs();
+        // Seed above the first tick so the countdown announces the full
+        // window itself rather than needing a separate opening message.
+        _lastCountdownSecond = (_prepTimerMs / IN_MILLISECONDS) + 1;
+        AnnounceWaveCountdown();
+    }
+
+    UpdateScoreWorldStates();
+}
+
+// The gate window between waves, from config (Centurion.VioletHold.PrepSeconds,
+// default BG_VHR_PREP_MS). Read at use time so `.reload config` takes effect
+// on the next wave.
+uint32 BattlegroundVHR::GetPrepWindowMs() const
+{
+    return std::max<uint32>(1, sWorld->getIntConfig(CONFIG_CENTURION_VHR_PREP_SECONDS)) * IN_MILLISECONDS;
+}
+
+// Announce the wave countdown as a centre-screen notification: once when the
+// window opens ("30"), nothing while the party loots and regroups, then once
+// per whole second from Centurion.VioletHold.CountdownFromSeconds down.
+//
+// CHAT_MSG_RAID_BOSS_EMOTE is what the client routes to RaidBossEmoteFrame -
+// the large centre text used for boss emotes and raid warnings - rather than
+// the chat frame. The wave timer previously announced itself once as an
+// ordinary battleground chat line, which is trivially missed while fighting the
+// wave that is still alive.
+//
+// Called every tick; the _lastCountdownSecond guard is what makes it fire on
+// the second instead of on every update.
+void BattlegroundVHR::AnnounceWaveCountdown()
+{
+    if (GetStatus() != STATUS_IN_PROGRESS)
+        return;
+
+    // Round up: with 9.6s left the players should still be reading "10".
+    uint32 const secondsLeft = (_prepTimerMs + IN_MILLISECONDS - 1) / IN_MILLISECONDS;
+    if (!secondsLeft || secondsLeft >= _lastCountdownSecond)
+        return;
+
+    _lastCountdownSecond = secondsLeft;
+
+    // The opening call is the whole window; after that, quiet until the
+    // final stretch. Both knobs are live config (Centurion.VioletHold.*).
+    uint32 const fullWindow = GetPrepWindowMs() / IN_MILLISECONDS;
+    if (secondsLeft != fullWindow && secondsLeft > sWorld->getIntConfig(CONFIG_CENTURION_VHR_COUNTDOWN_FROM_SECONDS))
+        return;
+
+    PSendMessageToAll(BG_VHR_STRING_NEXT_WAVE_COUNTDOWN, CHAT_MSG_RAID_BOSS_EMOTE,
+                      nullptr, secondsLeft);
+}
+
+// The clones' preparation window. Arena Preparation is what the playerbot core keys
+// its pre-gates buffing off (SelectPreparationBuffSpell), so applying it here
+// is what makes a wave walk out already buffed, exactly as at an arena start.
+void BattlegroundVHR::ApplyPreparationToWave()
+{
+    for (ObjectGuid guid : _waveEnemies)
+    {
+        Player* enemy = ObjectAccessor::FindPlayer(guid);
+        if (!enemy)
+            continue;
+
+        // AddAura, not CastSpell, and SPELL_PREPARATION rather than the arena
+        // one: BOTH preparation spells are location-gated in SpellInfo::
+        // CheckLocation to a battleground/arena at STATUS_WAIT_JOIN, and a
+        // Violet Hold wave prepares mid-match, so every cast was silently
+        // refused with SPELL_FAILED_REQUIRES_AREA and the clones never held
+        // the state their bot brain keys its opening buffs off. AddAura skips
+        // Spell::CheckCast entirely. The arena spell is deliberately not the
+        // one used: it also carries MOD_INVISIBILITY, which would hide the
+        // wave the party is watching gear up behind the door.
+        enemy->AddAura(SPELL_PREPARATION, enemy);
+        // What SPELL_AURA_ARENA_PREPARATION would have set. The bot brain
+        // accepts this flag as "not fighting yet", and the core reads it as
+        // "no reagents for preparation spells", which is what lets a clone
+        // put up a reagent buff it has no bags for.
+        enemy->SetUnitFlag(UNIT_FLAG_PREPARATION);
+        enemy->ResetAllPowers();
+    }
+
+    SetWaveEnemyImmunity(true);
+}
+
+void BattlegroundVHR::ReleaseWaveFromPreparation()
+{
+    for (ObjectGuid guid : _waveEnemies)
+    {
+        Player* enemy = ObjectAccessor::FindPlayer(guid);
+        if (!enemy)
+            continue;
+
+        enemy->RemoveAurasDueToSpell(SPELL_PREPARATION);
+        enemy->RemoveAurasDueToSpell(SPELL_ARENA_PREPARATION);
+        enemy->RemoveAurasDueToSpell(SPELL_INSTANT_CAST);
+        enemy->RemoveUnitFlag(UNIT_FLAG_PREPARATION);
+        enemy->ResetAllPowers();
+    }
+
+    SetWaveEnemyImmunity(false);
+}
+
+// Nothing may reach through a shut cell in either direction. The gate is solid,
+// but area effects and targeting are not stopped by geometry alone.
+void BattlegroundVHR::SetWaveEnemyImmunity(bool immune)
+{
+    for (ObjectGuid guid : _waveEnemies)
+    {
+        Player* enemy = ObjectAccessor::FindPlayer(guid);
+        if (!enemy)
+            continue;
+
+        enemy->SetImmuneToAll(immune);
+
+        // NON_ATTACKABLE and the immunities are what make the wave untouchable
+        // from outside the cell. UNIT_FLAG_UNINTERACTIBLE is deliberately NOT
+        // among them: it refuses every friendly interaction as well, including
+        // the clones' own support casting, and it buys nothing here that
+        // IMMUNE_TO_PC does not already give against real players.
+        if (immune)
+            enemy->SetUnitFlag(UNIT_FLAG_NON_ATTACKABLE);
+        else
+            enemy->RemoveUnitFlag(UNIT_FLAG_NON_ATTACKABLE);
+    }
+}
+
+void BattlegroundVHR::NotifyCloneSource(ObjectGuid cloneGuid, ObjectGuid sourceGuid)
+{
+    if (!cloneGuid || !sourceGuid)
+        return;
+
+    _waveCloneSources.emplace_back(cloneGuid, sourceGuid);
+}
+
+void BattlegroundVHR::RefreshWaveBoonCopies()
+{
+    for (auto const& [cloneGuid, sourceGuid] : _waveCloneSources)
+    {
+        Player* clone = ObjectAccessor::FindPlayer(cloneGuid);
+        Player const* source = ObjectAccessor::FindPlayer(sourceGuid);
+        if (!clone || !source || !clone->IsInWorld() || !clone->IsAlive())
+            continue;
+
+        VioletHoldBoons::CopyBoonsTo(source, clone);
+    }
+}
+
+bool BattlegroundVHR::OwnsPreparationState(Player const* player) const
+{
+    if (!player || _waveState != WaveState::Preparing)
+        return false;
+
+    return std::find(_waveEnemies.begin(), _waveEnemies.end(), player->GetGUID()) != _waveEnemies.end();
+}
+
+void BattlegroundVHR::OpenWaveCell()
+{
+    for (uint32 cellIndex : _waveCells)
+        DoorOpen(cellIndex);
+
+    ReleaseWaveFromPreparation();
+
+    // Anything the party bought from the brokers during the countdown is on
+    // their reflections too, as of this moment.
+    RefreshWaveBoonCopies();
+
+    // The Menagerie walks out with the wave: last wave's guardians go, this
+    // wave's arrive beside their owners.
+    DespawnMenagerie();
+    SummonMenagerie();
+}
+
+void BattlegroundVHR::CompleteWave()
+{
+    _highestWaveCleared = _waveNumber;
+
+    // Casualties and rewards both land before BeginWave, which may end the run
+    // outright when the enemy cap is reached - there is no point resurrecting
+    // anyone into, or dropping powerups into, a finished battleground.
+    //
+    // The dead come back BEFORE the next wave is composed on purpose: wave size
+    // is fixed from the party size captured at the start, but the composition
+    // draws its source characters from the living roster, and a party that just
+    // clawed through a wave should be whole again when that happens.
+    ResurrectWaveCasualties();
+    SpawnWaveRewardBuffs();
+
+    BeginWave();
+}
+
+bool BattlegroundVHR::CanPickUpPowerup(Player const* player) const
+{
+    // The clones are Players on the enemy team and walk right over the drop on
+    // their way in, so without this the wave eats the party's reward. A
+    // Fellowship ally is on the party's side but the runes are the party's.
+    return player && player->GetBGTeam() == _humanTeam && !IsAlly(player->GetGUID());
+}
+
+// Find a spot for a dropped powerup. This does not fail: the party earned the
+// reward, so something is always placed. Only two things are never traded away
+// - there has to be real ground, and the spot has to be inside the room. Every
+// other preference is given back a step at a time, and if the whole ladder is
+// exhausted the drop simply lands next to somebody.
+bool BattlegroundVHR::PickBuffPosition(std::vector<Position> const& taken, Position& out) const
+{
+    Map* map = GetBgMap();
+    if (!map)
+        return false;
+
+    std::vector<ObjectGuid> const roster = GetHumanRoster(true);
+
+    // Snap to whatever floor is under a point and confirm it is in the room.
+    // Height is searched from well above the chamber floor and over a long
+    // distance on purpose: the ramp and the cell ledges are metres above it and
+    // are perfectly good places for a rune to sit.
+    auto groundAt = [map](float x, float y, Position& result) -> bool
+    {
+        float const z = map->GetHeight(PHASEMASK_NORMAL, x, y, kChamberCentre.GetPositionZ() + 15.0f, true, 40.0f);
+        if (z <= INVALID_HEIGHT)
+            return false;
+
+        if (!map->isInLineOfSight(kChamberCentre.GetPositionX(), kChamberCentre.GetPositionY(), kChamberCentre.GetPositionZ() + 2.0f,
+            x, y, z + 2.0f, PHASEMASK_NORMAL, LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing))
+            return false;
+
+        result.Relocate(x, y, z + 0.5f, frand(0.0f, 2.0f * float(M_PI)));
+        return true;
+    };
+
+    auto farEnough = [](Position const& pos, std::vector<Position> const& others, float distance) -> bool
+    {
+        if (distance <= 0.0f)
+            return true;
+
+        for (Position const& other : others)
+            if (pos.GetExactDist2d(other) < distance)
+                return false;
+
+        return true;
+    };
+
+    std::vector<Position> livingPositions;
+    livingPositions.reserve(roster.size());
+    for (ObjectGuid guid : roster)
+        if (Player const* member = ObjectAccessor::FindPlayer(guid))
+            livingPositions.push_back(*member);
+
+    std::vector<Position> cellPositions;
+    cellPositions.reserve(BG_VHR_OBJECT_CELL_MAX);
+    for (VhrCell const& cell : kCells)
+        cellPositions.push_back(cell.release);
+
+    // Separation from other drops is surrendered first because two runes near
+    // each other is only untidy; landing on the party or in a gate actually
+    // changes how the wave plays. The last rung asks for nothing at all.
+    struct Relaxation
+    {
+        float fromDrops;
+        float fromPlayers;
+        float fromCells;
+    };
+    static Relaxation const kLadder[] =
+    {
+        // Rung 0 is the ideal, and the only one the header constants describe.
+        { float(BG_VHR_BUFF_MIN_DROP_DISTANCE), float(BG_VHR_BUFF_MIN_PLAYER_DISTANCE), float(BG_VHR_BUFF_MIN_CELL_DISTANCE) },
+        {  8.0f, 20.0f, 12.0f },
+        {  4.0f, 16.0f, 12.0f },
+        {  0.0f, 12.0f, 10.0f },
+        {  0.0f,  6.0f,  8.0f },
+        {  0.0f,  0.0f,  6.0f },
+        {  0.0f,  0.0f,  0.0f }
+    };
+
+    static float const kRadii[] = { 12.0f, 18.0f, 24.0f, 30.0f, 8.0f, 34.0f };
+
+    for (Relaxation const& rung : kLadder)
+    {
+        for (uint32 attempt = 0; attempt < 40; ++attempt)
+        {
+            float const radius = kRadii[attempt % (sizeof(kRadii) / sizeof(kRadii[0]))];
+            float const angle = frand(0.0f, 2.0f * float(M_PI));
+
+            Position candidate;
+            if (!groundAt(kChamberCentre.GetPositionX() + radius * std::cos(angle),
+                kChamberCentre.GetPositionY() + radius * std::sin(angle), candidate))
+                continue;
+
+            if (!farEnough(candidate, cellPositions, rung.fromCells))
+                continue;
+            if (!farEnough(candidate, livingPositions, rung.fromPlayers))
+                continue;
+            if (!farEnough(candidate, taken, rung.fromDrops))
+                continue;
+
+            out = candidate;
+            return true;
+        }
+    }
+
+    // Nothing in the open worked, so put it where somebody is standing. A rune
+    // dropped at the party's feet is a worse reward than one across the room,
+    // but it is a reward; silently skipping it is the one outcome to avoid.
+    if (!livingPositions.empty())
+    {
+        Position const& anchor = livingPositions[urand(0, uint32(livingPositions.size()) - 1)];
+        for (uint32 attempt = 0; attempt < 24; ++attempt)
+        {
+            float const angle = frand(0.0f, 2.0f * float(M_PI));
+            float const radius = frand(3.0f, 10.0f);
+
+            Position candidate;
+            if (groundAt(anchor.GetPositionX() + radius * std::cos(angle),
+                anchor.GetPositionY() + radius * std::sin(angle), candidate))
+            {
+                out = candidate;
+                return true;
+            }
+        }
+
+        // Even the ring failed - drop it exactly on them.
+        out = anchor;
+        return true;
+    }
+
+    // No living players at all. The wipe check is about to end the run, but
+    // return a sane spot rather than a garbage one.
+    out = kChamberCentre;
+    return true;
+}
+
+void BattlegroundVHR::SpawnWaveRewardBuffs()
+{
+    // One drop per three players, rounded UP - 1-3 players get one, 4-6 get
+    // two, 7-9 get three, ten get four. Rounded up rather than down so a small
+    // party is never left with nothing at all. Fixed to the party size the run
+    // started with, so it does not shrink as people die.
+    uint32 const wanted = std::min<uint32>(
+        (_partySize + BG_VHR_PLAYERS_PER_BUFF - 1) / BG_VHR_PLAYERS_PER_BUFF, BG_VHR_MAX_WAVE_BUFFS);
+
+    // Whatever runes are still lying around from the previous wave go now, so
+    // the slots are free and the party never banks two waves' worth. Standing
+    // boon brokers are NOT touched - they wait for a taker.
+    DespawnWaveRewardBuffs();
+
+    if (!wanted)
+        return;
+
+    // Speed is deliberately not in the roll - the party is not chasing anyone.
+    static uint32 const kBuffEntries[] =
+    {
+        BG_OBJECTID_REGENBUFF_ENTRY,
+        BG_OBJECTID_BERSERKERBUFF_ENTRY,
+        BG_VHR_GO_RECHARGE_BUFF
+    };
+    uint32 const kBuffCount = uint32(sizeof(kBuffEntries) / sizeof(kBuffEntries[0]));
+
+    // Brokers left over from earlier waves count as taken ground for the
+    // placement picker, so nothing is dropped on top of one.
+    std::vector<Position> placed;
+    uint32 brokerSlot = FindFreeBoonBrokerSlot(placed);
+    placed.reserve(placed.size() + wanted * 2);
+
+    bool droppedRune = false;
+    for (uint32 i = 0; i < wanted; ++i)
+    {
+        // Only ever false when the instance has no map, in which case nothing
+        // can be spawned at all - the picker relaxes its way to an answer for
+        // every other case rather than skipping a reward the party earned.
+        Position spot;
+        if (!PickBuffPosition(placed, spot))
+            break;
+
+        uint32 const entry = kBuffEntries[urand(0, kBuffCount - 1)];
+        if (!AddObject(BG_VHR_OBJECT_BUFF_1 + i, entry, spot, 0.0f, 0.0f,
+            std::sin(spot.GetOrientation() / 2.0f), std::cos(spot.GetOrientation() / 2.0f), RESPAWN_IMMEDIATELY))
+        {
+            TC_LOG_ERROR("bg.battleground", "BattlegroundVHR: could not create reward powerup {} for instance {}.",
+                entry, GetInstanceID());
+            continue;
+        }
+        droppedRune = true;
+        placed.push_back(spot);
+    }
+
+    // And a boon broker PER drop, on top of the runes, never instead of one -
+    // plus the Hoarder's extra ones. He waits for a taker (no timer), so a run
+    // that never talks to him fills his slots; once all
+    // BG_VHR_CREATURE_BOON_BROKER_MAX are standing no more come until one is
+    // used.
+    uint32 const brokersWanted = wanted + _bonusBrokersPerWave;
+    for (uint32 i = 0; i < brokersWanted && brokerSlot < BG_VHR_CREATURE_BOON_BROKER_MAX; ++i)
+    {
+        Position spot;
+        if (!PickBuffPosition(placed, spot))
+            break;
+
+        if (!SpawnBoonBroker(brokerSlot, spot))
+            break;
+
+        placed.push_back(spot);
+
+        std::vector<Position> ignored;
+        brokerSlot = FindFreeBoonBrokerSlot(ignored);
+    }
+
+    if (droppedRune)
+        _buffLifetimeMs = BG_VHR_BUFF_LIFETIME_MS;
+}
+
+void BattlegroundVHR::DespawnWaveRewardBuffs()
+{
+    for (uint32 i = 0; i < BG_VHR_MAX_WAVE_BUFFS; ++i)
+        DelObject(BG_VHR_OBJECT_BUFF_1 + i);
+
+    _buffLifetimeMs = 0;
+}
+
+uint32 BattlegroundVHR::FindFreeBoonBrokerSlot(std::vector<Position>& occupied) const
+{
+    uint32 freeSlot = BG_VHR_CREATURE_BOON_BROKER_MAX;
+
+    Map* map = FindBgMap();
+    for (uint32 slot = BG_VHR_CREATURE_BOON_BROKER_1; slot < BG_VHR_CREATURE_BOON_BROKER_MAX; ++slot)
+    {
+        Creature const* broker = (map && BgCreatures[slot]) ? map->GetCreature(BgCreatures[slot]) : nullptr;
+        if (broker && broker->IsInWorld())
+        {
+            occupied.push_back(*broker);
+            continue;
+        }
+
+        if (freeSlot == BG_VHR_CREATURE_BOON_BROKER_MAX)
+            freeSlot = slot;
+    }
+
+    return freeSlot;
+}
+
+bool BattlegroundVHR::SpawnBoonBroker(uint32 slot, Position const& spot)
+{
+    // A stale guid in the slot (creature gone without ConsumeBoonBroker) is
+    // just cleared; DelCreature logs if it cannot find it, which is fine.
+    if (BgCreatures[slot])
+        DelCreature(slot);
+
+    // Face the middle of the room rather than a random wall.
+    Position facing = spot;
+    facing.SetOrientation(spot.GetAbsoluteAngle(kChamberCentre));
+
+    Creature* broker = AddCreature(VioletHoldBoons::NPC_BOON_BROKER, slot, facing);
+    if (!broker)
+    {
+        TC_LOG_ERROR("bg.battleground", "BattlegroundVHR: could not create boon broker (entry {}) for instance {}.",
+            VioletHoldBoons::NPC_BOON_BROKER, GetInstanceID());
+        return false;
+    }
+
+    return true;
+}
+
+void BattlegroundVHR::CollectHumanPlayers(std::vector<Player const*>& out) const
+{
+    for (ObjectGuid guid : GetHumanRoster(false))
+        if (Player const* player = ObjectAccessor::FindPlayer(guid))
+            out.push_back(player);
+}
+
+void BattlegroundVHR::ConsumeBoonBroker(ObjectGuid brokerGuid)
+{
+    if (!brokerGuid)
+        return;
+
+    for (uint32 slot = BG_VHR_CREATURE_BOON_BROKER_1; slot < BG_VHR_CREATURE_BOON_BROKER_MAX; ++slot)
+    {
+        if (BgCreatures[slot] != brokerGuid)
+            continue;
+
+        DelCreature(slot);
+        return;
+    }
+}
+
+void BattlegroundVHR::AddBrokerBonusOffers(uint8 count)
+{
+    _brokerBonusOffers = uint8(std::min<uint32>(uint32(_brokerBonusOffers) + count, 250));
+}
+
+void BattlegroundVHR::AddBonusBrokersPerWave(uint8 count)
+{
+    _bonusBrokersPerWave = uint8(std::min<uint32>(uint32(_bonusBrokersPerWave) + count, BG_VHR_CREATURE_BOON_BROKER_MAX));
+}
+
+void BattlegroundVHR::RequestAlly(Player const* requester)
+{
+    if (!requester)
+        return;
+
+    VhrAllyRequest request;
+    request.id = ++_nextAllyRequestId;
+    request.requester = requester->GetGUID();
+    request.where = requester->GetPosition();
+
+    // The party's level band, for a fair pick - the same rule BotSourced waves
+    // use for their opponents.
+    for (ObjectGuid guid : GetHumanRoster(true))
+        if (Player const* member = ObjectAccessor::FindPlayer(guid))
+        {
+            uint32 const level = member->GetLevel();
+            if (!request.partyMinLevel || level < request.partyMinLevel)
+                request.partyMinLevel = level;
+            if (level > request.partyMaxLevel)
+                request.partyMaxLevel = level;
+        }
+    if (!request.partyMinLevel)
+        request.partyMinLevel = request.partyMaxLevel = requester->GetLevel();
+
+    _allyRequests.push_back(request);
+    _allyRetryMs = 0;
+}
+
+void BattlegroundVHR::NotifyAllySpawned(uint32 requestId, ObjectGuid allyGuid)
+{
+    for (auto itr = _allyRequests.begin(); itr != _allyRequests.end(); ++itr)
+    {
+        if (itr->id != requestId)
+            continue;
+
+        _allyRequests.erase(itr);
+        break;
+    }
+
+    if (!allyGuid)
+        return;
+
+    _allies.insert(allyGuid);
+    _eliminated.erase(allyGuid);
+
+    // The clone's Player name is an internal placeholder; the name everyone
+    // sees over its head is the one registered in the character cache.
+    std::string name;
+    if (!sCharacterCache->GetCharacterNameByGuid(allyGuid, name))
+        if (Player const* ally = ObjectAccessor::FindPlayer(allyGuid))
+            name = ally->GetName();
+    if (!name.empty())
+        PSendMessageToAll(BG_VHR_STRING_ALLY_JOINED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, name.c_str());
+
+    UpdateScoreWorldStates();
+}
+
+void BattlegroundVHR::SummonMenagerie()
+{
+    for (ObjectGuid guid : GetHumanRoster(true))
+    {
+        Player* owner = ObjectAccessor::FindPlayer(guid);
+        if (!owner)
+            continue;
+
+        uint8 const count = VioletHoldBoons::GetStacks(owner, VioletHoldBoons::Boon::Menagerie);
+        if (count)
+            VioletHoldBoons::SummonMenagerie(owner, count, _menagerie);
+    }
+}
+
+void BattlegroundVHR::DespawnMenagerie()
+{
+    Map* map = FindBgMap();
+    if (map)
+        for (ObjectGuid guid : _menagerie)
+            if (Creature* guardian = map->GetCreature(guid))
+                guardian->DespawnOrUnsummon();
+
+    _menagerie.clear();
+}
+
+void BattlegroundVHR::PostUpdateImpl(uint32 diff)
+{
+    // Deliberately ahead of the status gate: a fall through the floor during
+    // the pre-match countdown needs putting right just as much as one
+    // mid-wave, and the stock check would not notice either for seconds.
+    _floorCheckTimerMs += diff;
+    if (_floorCheckTimerMs >= BG_VHR_FLOOR_CHECK_INTERVAL)
+    {
+        _floorCheckTimerMs = 0;
+        RescueFallenPlayers();
+    }
+
+    if (GetStatus() != STATUS_IN_PROGRESS)
+        return;
+
+    if (_allyRetryMs)
+        _allyRetryMs = _allyRetryMs <= diff ? 0 : _allyRetryMs - diff;
+
+    // Dropped powerups are on a wall clock, not a wave clock: an uncollected
+    // reward is taken back whether or not the next wave has started.
+    if (_buffLifetimeMs)
+    {
+        if (_buffLifetimeMs <= diff)
+            DespawnWaveRewardBuffs();
+        else
+            _buffLifetimeMs -= diff;
+    }
+
+    switch (_waveState)
+    {
+        case WaveState::AwaitingSpawn:
+            // Waiting on the script-side driver. If the roster was empty when
+            // the wave was composed there is nothing coming, so fall through to
+            // the wipe check below.
+            break;
+        case WaveState::Preparing:
+            if (_prepTimerMs <= diff)
+            {
+                _prepTimerMs = 0;
+                OpenWaveCell();
+                _waveState = WaveState::Fighting;
+            }
+            else
+            {
+                _prepTimerMs -= diff;
+                AnnounceWaveCountdown();
+            }
+            break;
+        default:
+            break;
+    }
+
+    _stateCheckTimerMs += diff;
+    if (_stateCheckTimerMs < BG_VHR_STATE_CHECK_INTERVAL)
+        return;
+
+    _stateCheckTimerMs = 0;
+    CheckRunState();
+    UpdateScoreWorldStates();
+}
+
+void BattlegroundVHR::CheckRunState()
+{
+    if (GetStatus() != STATUS_IN_PROGRESS)
+        return;
+
+    // The party is gone: the run is over regardless of what the wave is doing.
+    if (!CountAliveHumans())
+    {
+        EndBattleground(_enemyTeam);
+        return;
+    }
+
+    // A wave is only cleared once it is actually on the field. Checking during
+    // AwaitingSpawn would see an empty enemy side and skip straight past it.
+    if (_waveState == WaveState::Fighting && !CountAliveEnemies())
+        CompleteWave();
+}
+
+uint32 BattlegroundVHR::CountAliveHumans() const
+{
+    uint32 alive = 0;
+    for (auto const& itr : GetPlayers())
+    {
+        if (itr.second.Team != _humanTeam || itr.second.OfflineRemoveTime)
+            continue;
+
+        if (_eliminated.find(itr.first) != _eliminated.end())
+            continue;
+
+        // A Fellowship ally holds the line but is not the party: it neither
+        // keeps a wiped run alive nor shows in the players-remaining count.
+        if (IsAlly(itr.first))
+            continue;
+
+        ++alive;
+    }
+
+    return alive;
+}
+
+uint32 BattlegroundVHR::CountAliveEnemies() const
+{
+    uint32 alive = 0;
+    for (auto const& itr : GetPlayers())
+    {
+        if (itr.second.Team != _enemyTeam || itr.second.OfflineRemoveTime)
+            continue;
+
+        if (_eliminated.find(itr.first) != _eliminated.end())
+            continue;
+
+        ++alive;
+    }
+
+    return alive;
+}
+
+std::vector<ObjectGuid> BattlegroundVHR::GetHumanRoster(bool livingOnly) const
+{
+    std::vector<ObjectGuid> roster;
+
+    for (auto const& itr : GetPlayers())
+    {
+        if (itr.second.Team != _humanTeam || itr.second.OfflineRemoveTime)
+            continue;
+
+        if (livingOnly && _eliminated.find(itr.first) != _eliminated.end())
+            continue;
+
+        // Clones are copied from real characters only; a clone of a clone would
+        // compound any drift in the copy.
+        Player const* player = ObjectAccessor::FindPlayer(itr.first);
+        if (!player || !player->GetSession() || player->GetSession()->IsTransientPlayerSession())
+            continue;
+
+        roster.push_back(itr.first);
+    }
+
+    return roster;
+}
+
+void BattlegroundVHR::HandleKillPlayer(Player* victim, Player* killer)
+{
+    if (GetStatus() != STATUS_IN_PROGRESS || !victim)
+        return;
+
+    _eliminated.insert(victim->GetGUID());
+
+    Battleground::HandleKillPlayer(victim, killer);
+
+    UpdateScoreWorldStates();
+    CheckRunState();
+}
+
+// The only way back from death in this mode. Corpse reclaim is refused and no
+// spirit guide exists, so a player who goes down stays down until the wave they
+// died to is finished off by the survivors.
+void BattlegroundVHR::ResurrectWaveCasualties()
+{
+    float const restore = float(BG_VHR_WAVE_END_REZ_PERCENT) / 100.0f;
+
+    // The full roster, not just the living - the dead are the entire point.
+    for (ObjectGuid guid : GetHumanRoster(false))
+    {
+        Player* player = ObjectAccessor::FindPlayer(guid);
+        if (!player || !player->IsInWorld() || player->IsAlive())
+            continue;
+
+        // ResurrectPlayer sets health, mana and energy to this fraction of
+        // maximum and zeroes rage, which is exactly the intended "back but
+        // weakened". SpawnCorpseBones clears the corpse they were tethered to;
+        // without it the ghost's corpse is left lying in the chamber.
+        player->ResurrectPlayer(restore);
+        player->SpawnCorpseBones(false);
+
+        // Standing again means holding the line again, so they leave the
+        // eliminated set or the next death would wipe-check the run with them
+        // still fighting.
+        _eliminated.erase(guid);
+    }
+
+    // Fellowship allies are transient sessions and not on the human roster,
+    // but they come back with the party all the same.
+    ResurrectAllies(restore);
+
+    UpdateScoreWorldStates();
+}
+
+void BattlegroundVHR::ResurrectAllies(float restore)
+{
+    for (ObjectGuid guid : _allies)
+    {
+        Player* ally = ObjectAccessor::FindPlayer(guid);
+        if (!ally || !ally->IsInWorld() || ally->IsAlive())
+            continue;
+
+        ally->ResurrectPlayer(restore);
+        ally->SpawnCorpseBones(false);
+        // Back into the room, on their feet, next to the middle: a bot that
+        // released nowhere is still standing on the spot it died.
+        ally->NearTeleportTo(kChamberCentre.GetPositionX(), kChamberCentre.GetPositionY(),
+            kChamberCentre.GetPositionZ(), kChamberCentre.GetOrientation());
+        _eliminated.erase(guid);
+    }
+}
+
+void BattlegroundVHR::HandlePlayerResurrect(Player* player)
+{
+    // There are no graveyards here, but combat rezzes (soulstone, Rebirth,
+    // Reincarnation) still work and are meant to. Whoever stands up is holding
+    // the line again and has to leave the eliminated set, or the next death
+    // would wipe-check the run with them still fighting. Symmetric on purpose:
+    // a rezzed clone keeps its wave alive too.
+    _eliminated.erase(player->GetGUID());
+    UpdateScoreWorldStates();
+}
+
+// Denominator for the players readout. _partySize is only fixed when the gates
+// open, and the top frame is populated before that - fall back to the live head
+// count so the opening moments read "5 / 5" rather than "5 / 0".
+uint32 BattlegroundVHR::GetPartyStrength() const
+{
+    return _partySize ? _partySize : CountAliveHumans();
+}
+
+void BattlegroundVHR::UpdateScoreWorldStates()
+{
+    UpdateWorldState(BG_VHR_WORLDSTATE_SHOW, 1);
+    UpdateWorldState(BG_VHR_WORLDSTATE_PLAYERS_ALIVE, CountAliveHumans());
+    UpdateWorldState(BG_VHR_WORLDSTATE_ENEMIES_ALIVE, CountAliveEnemies());
+    UpdateWorldState(BG_VHR_WORLDSTATE_WAVE, _waveNumber);
+    UpdateWorldState(BG_VHR_WORLDSTATE_ENEMIES_TOTAL, uint32(_waveEnemies.size()));
+    UpdateWorldState(BG_VHR_WORLDSTATE_PLAYERS_TOTAL, GetPartyStrength());
+}
+
+void BattlegroundVHR::FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet)
+{
+    packet.Worldstates.emplace_back(BG_VHR_WORLDSTATE_SHOW, 1);
+    packet.Worldstates.emplace_back(BG_VHR_WORLDSTATE_PLAYERS_ALIVE, CountAliveHumans());
+    packet.Worldstates.emplace_back(BG_VHR_WORLDSTATE_ENEMIES_ALIVE, CountAliveEnemies());
+    packet.Worldstates.emplace_back(BG_VHR_WORLDSTATE_WAVE, _waveNumber);
+    packet.Worldstates.emplace_back(BG_VHR_WORLDSTATE_ENEMIES_TOTAL, uint32(_waveEnemies.size()));
+    packet.Worldstates.emplace_back(BG_VHR_WORLDSTATE_PLAYERS_TOTAL, GetPartyStrength());
+}
+
+// No graveyards are defined for map 1608 and no spirit guide is placed, so this
+// only ever answers the "where is my corpse" question with the start landing.
+// Returning a location does not make anyone resurrectable.
+WorldSafeLocsEntry const* BattlegroundVHR::GetClosestGraveyard(Player* /*player*/)
+{
+    return nullptr;
+}
+
+// Anyone who has clipped through the floor is put back on it. The engine's own
+// under-map check - MovementHandler for real players, the playerbot lifecycle
+// tick for bots - only fires at the map's MinHeight, which is hundreds of yards
+// below the Hold; this catches the fall where it starts (BG_VHR_MIN_SAFE_Z),
+// and catches the clones, whose server-side movement never sends the packets
+// that check looks at. Same destination either way: HandlePlayerUnderMap.
+void BattlegroundVHR::RescueFallenPlayers()
+{
+    for (auto const& itr : GetPlayers())
+    {
+        Player* player = ObjectAccessor::FindPlayer(itr.first);
+        // A teleport already in flight will fix the position by itself;
+        // issuing another on top of it just fights the first. A roster member
+        // who is somehow on another map is not under THIS floor.
+        if (!player || !player->IsInWorld() || player->IsBeingTeleported() || player->GetMapId() != GetMapId())
+            continue;
+
+        if (player->GetPositionZ() < BG_VHR_MIN_SAFE_Z)
+            HandlePlayerUnderMap(player);
+    }
+}
+
+Position BattlegroundVHR::GetRescuePosition(Player const* player) const
+{
+    // Before the gates open (and after the run is over) the only place anyone
+    // belongs is where they were put down.
+    if (GetStatus() != STATUS_IN_PROGRESS)
+        return kPlayerStart;
+
+    // A clone whose cell has not opened yet goes back behind its door - onto
+    // the release point of the nearest cell this wave is using - rather than
+    // into the middle of the room where it would be loose, immune and early.
+    // Same water seating as the spawn itself, or an Ichoron clone would be
+    // put back on the pool bed and start swimming under the floor again.
+    if (player->GetBGTeam() == _enemyTeam && _waveState != WaveState::Fighting && !_waveCells.empty())
+    {
+        uint32 nearest = _waveCells.front();
+        float nearestDistSq = std::numeric_limits<float>::max();
+        for (uint32 cellIndex : _waveCells)
+        {
+            float const distSq = player->GetExactDist2dSq(kCells[cellIndex].release);
+            if (distSq < nearestDistSq)
+            {
+                nearestDistSq = distSq;
+                nearest = cellIndex;
+            }
+        }
+
+        Position spot = kCells[nearest].release;
+        SettleSpawnIntoWater(GetBgMap(), spot);
+        return spot;
+    }
+
+    // The party, its allies, and any clone already loose: the middle of the
+    // chamber floor - the same spot ClearPlayersFromSpawn uses, the furthest
+    // point from every cell door and the centre of the navmesh.
+    return kChamberCentre;
+}
+
+bool BattlegroundVHR::HandlePlayerUnderMap(Player* player)
+{
+    if (!player)
+        return false;
+
+    // A near teleport rather than a plain TeleportTo: the fall is an accident
+    // of geometry, not a retreat, so combat and pets are kept as they were and
+    // any spline the faller was riding is cut. Bots ack near teleports on
+    // their lifecycle tick, so clones land the same way players do.
+    Position const dest = GetRescuePosition(player);
+    player->NearTeleportTo(dest);
+    return true;
+}
+
+// Honor is the standard arena win payout, times the wave the run ended on,
+// compounded ten percent per wave on top, all halved. Same wave semantics as
+// the gold below: the wave *reached* - a party that dies on wave 7 is paid for
+// wave 7 - and nothing before the first wave (_waveNumber 0).
+uint32 BattlegroundVHR::GetHonorRewardForRun() const
+{
+    if (!_waveNumber)
+        return 0;
+
+    // Mirrors the arena branch of Battleground::EndBattleground so the base
+    // tracks the same configuration the real arenas pay out on.
+    float const arenaMultiplier = sWorld->getFloatConfig(CONFIG_CENTURION_BG_ARENA_REWARD_MULTIPLIER);
+    uint32 const arenaWinHonor = uint32((sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_WINNER)
+        + sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP) * 3) * arenaMultiplier);
+
+    double const compounded = std::pow(1.0 + double(BG_VHR_HONOR_COMPOUND_PERCENT) / 100.0, double(_waveNumber) - 1.0);
+    double const raw = double(arenaWinHonor) * double(_waveNumber) * compounded;
+
+    // Divided at the end rather than inside the curve, so the shape of the
+    // reward across waves is untouched and only its size moves.
+    return uint32(std::lround(raw / double(BG_VHR_REWARD_DIVISOR)));
+}
+
+void BattlegroundVHR::ModifyEndOfMatchHonorRewards(uint32 /*winner*/, uint32 team, uint32& winnerHonor, uint32& loserHonor) const
+{
+    // The clones are transient sessions and are skipped by the reward loop
+    // anyway; only the party is paid, and the same amount whether the run ended
+    // in a wipe or the improbable clear.
+    if (team != _humanTeam)
+    {
+        winnerHonor = 0;
+        loserHonor = 0;
+        return;
+    }
+
+    uint32 const reward = GetHonorRewardForRun();
+    winnerHonor = reward;
+    loserHonor = reward;
+}
+
+// Gold is the arena win payout, times the wave the run ended on, halved - the
+// honor formula without the compounding. Wave as reached, not cleared: a party
+// that dies on wave 7 is paid for wave 7. Before the first wave (_waveNumber
+// 0) nothing is paid. Without this the hold paid the flat battleground
+// winner/loser gold on every run, wave 1 wipe or not, which was far too much
+// for what is a party-sized survival mode.
+uint32 BattlegroundVHR::GetMoneyRewardForRun() const
+{
+    if (!_waveNumber)
+        return 0;
+
+    // Mirrors the arena branch of Battleground::EndBattleground so the base
+    // tracks the same configuration the real arenas pay out on.
+    float const arenaMultiplier = sWorld->getFloatConfig(CONFIG_CENTURION_BG_ARENA_REWARD_MULTIPLIER);
+    double const arenaWinMoney = double(sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_MONEY_WINNER)) * double(arenaMultiplier);
+
+    return uint32(std::lround(arenaWinMoney * double(_waveNumber) / double(BG_VHR_REWARD_DIVISOR)));
+}
+
+void BattlegroundVHR::ModifyEndOfMatchMoneyRewards(uint32 /*winner*/, uint32 team, uint32& winnerMoney, uint32& loserMoney) const
+{
+    // Same shape as the honor hook: only the party is paid, the same amount
+    // whether the run ended in a wipe or the clear, and the clones nothing.
+    if (team != _humanTeam)
+    {
+        winnerMoney = 0;
+        loserMoney = 0;
+        return;
+    }
+
+    uint32 const reward = GetMoneyRewardForRun();
+    winnerMoney = reward;
+    loserMoney = reward;
+}
+
+// Rewrite where leaving this battleground drops the party. The base exit path
+// reads the stored entry point in RemovePlayerAtLeave, well after this runs, so
+// overriding it here is enough - no second teleport, and the usual mount, taxi
+// and group restores still happen on the way out.
+void BattlegroundVHR::TeleportSurvivorsToGurubashi()
+{
+    for (auto const& itr : GetPlayers())
+    {
+        Player* player = ObjectAccessor::FindPlayer(itr.first);
+        if (!player || player->GetBGTeam() != _humanTeam)
+            continue;
+
+        WorldSession const* session = player->GetSession();
+        if (!session || session->IsTransientPlayerSession())
+            continue;
+
+        player->SetBattlegroundEntryPoint(kGurubashiReturn);
+    }
+}
+
+void BattlegroundVHR::EndBattleground(uint32 winner)
+{
+    UpdateScoreWorldStates();
+    DespawnMenagerie();
+
+    // Only a wipe sends the party to Gurubashi. Surviving all forty leaves the
+    // normal entry point alone, so a winning party returns where they queued.
+    if (winner == _enemyTeam)
+        TeleportSurvivorsToGurubashi();
+
+    Battleground::EndBattleground(winner);
+}

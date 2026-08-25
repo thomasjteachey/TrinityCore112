@@ -35,6 +35,24 @@ void AddSC_npc_scarlet_chapel_queue();
 void AddSC_npc_account_banker();
 void AddSC_go_lplus_jump_pad();
 void AddSC_custom_game_lobby();
+void AddSC_npc_transmogrifier();
+void AddSC_custom_t1_set_bonuses();
+void AddSC_custom_t2_warrior_paladin();
+void AddSC_custom_t2_shaman_warlock();
+void AddSC_custom_t2_druid_hunter();
+void AddSC_custom_t2_priest_mage();
+void AddSC_custom_t2_rogue_armor();
+void AddSC_custom_southpark_nolife();
+void AddSC_custom_sucky_demon();
+void AddSC_GOMove_commandscript();
+void AddSC_GOEditor();
+void AddSC_rts_building();
+void AddSC_custom_los_blocker();
+void AddSC_custom_player_collision();
+void AddSC_custom_global_collision();
+void AddSC_custom_client_attest();
+void AddSC_violet_hold_boons();
+void AddSC_custom_spell_propagate();
 
 void AddCustomScripts()
 {
@@ -42,6 +60,11 @@ void AddCustomScripts()
     AddAutoBalanceScripts();
     LoadHiddenItemsetBonuses();
     AddSC_custom_hidden_itemset_bonus();
+    AddSC_custom_los_blocker();
+    AddSC_custom_player_collision();
+    AddSC_custom_global_collision();
+    AddSC_custom_client_attest();
+    AddSC_custom_spell_propagate();
     AddBGReplayScripts();
     AddSC_custom_zone_group_rules();
     AddSC_mod_pvp_titles();
@@ -53,4 +76,17 @@ void AddCustomScripts()
     AddSC_npc_account_banker();
     AddSC_go_lplus_jump_pad();
     AddSC_custom_game_lobby();
+    AddSC_npc_transmogrifier();
+    AddSC_custom_t1_set_bonuses();
+    AddSC_custom_t2_warrior_paladin();
+    AddSC_custom_t2_shaman_warlock();
+    AddSC_custom_t2_druid_hunter();
+    AddSC_custom_t2_priest_mage();
+    AddSC_custom_t2_rogue_armor();
+    AddSC_custom_southpark_nolife();
+    AddSC_custom_sucky_demon();
+    AddSC_GOMove_commandscript();
+    AddSC_GOEditor();
+    AddSC_rts_building();
+    AddSC_violet_hold_boons();
 }

@@ -155,7 +155,7 @@ enum Spells
     SPELL_CLOAK_OF_SHADOWS  = 31224,
 
     /* Rogue - Assassination */
-    SPELL_COLD_BLOOD        = 14177,
+    SPELL_COLD_BLOOD = 14177,
     SPELL_MUTILATE          =  1329,
     SPELL_HUNGER_FOR_BLOOD  = 51662,
     SPELL_ENVENOM           = 57993,
@@ -323,7 +323,7 @@ enum Spells
     SPELL_HOWL_OF_TERROR       = 17928,
     SPELL_CORRUPTION           = 47813,
     SPELL_DEATH_COIL_W         = 47860,
-    SPELL_SHADOW_BOLT          = 47809,
+    SPELL_SHADOW_BOLT          = 90432, // T2 wrapper: 47809 is now learned as 90432
     SPELL_INCINERATE           = 47838,
     SPELL_IMMOLATE             = 47811,
     SPELL_SEED_OF_CORRUPTION   = 47836,

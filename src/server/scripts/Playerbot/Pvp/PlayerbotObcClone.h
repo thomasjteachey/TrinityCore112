@@ -74,7 +74,10 @@ public:
     static Player* CreateCustomGameClone(Player* source, Battleground* bg, uint32 team, std::string const& displayPrefix);
     static bool QueueCustomGameClone(ObjectGuid sourceGuid, WorldSession* callbackSession, Battleground* bg,
         uint32 team, std::string const& displayPrefix);
-    static void DestroyCustomGameClones(uint32 battlegroundInstanceId);
+    // team 0 = every clone of the instance; otherwise only that team's
+    // (the Violet Hold driver tears the enemy wave down between waves and
+    // leaves the party's Fellowship allies standing).
+    static void DestroyCustomGameClones(uint32 battlegroundInstanceId, uint32 team = 0);
 
     // Resource-governor load shedding: remove a single clone from a running
     // custom match. Picks the team currently fielding more clones and prefers

@@ -33,8 +33,11 @@
 #include "SpellScript.h"
 #include "Item.h"
 #include "Spell.h"
+#include "Chat.h"
 #include "Log.h"
+#include "World.h"
 #include "WorldPacket.h"
+#include "WorldSession.h"
 #include <algorithm>
 
 enum PaladinSpells
@@ -778,6 +781,69 @@ class spell_pal_hand_of_sacrifice : public AuraScript
     }
 };
 
+namespace
+{
+    // Broadcast to anyone running ".gm diagnostics on sacrificialaura". The
+    // redirect resolves faster than it can be read off the buff bar, so the
+    // only practical way to confirm the avoidance roll and whether Reckoning
+    // actually built a charge is to print it per hit.
+    void SendSacrificialAuraDiag(std::string const& msg)
+    {
+        for (auto const& sessionPair : sWorld->GetAllSessions())
+            if (sessionPair.second && sessionPair.second->GetPlayer()
+                && sessionPair.second->IsGmDiagnosticEnabled(GmDiagnosticCategory::SacrificialAura))
+                ChatHandler(sessionPair.second).SendSysMessage(msg.c_str());
+    }
+
+    char const* MeleeOutcomeName(MeleeHitOutcome outcome)
+    {
+        switch (outcome)
+        {
+            case MELEE_HIT_MISS:     return "MISS";
+            case MELEE_HIT_DODGE:    return "DODGE";
+            case MELEE_HIT_PARRY:    return "PARRY";
+            case MELEE_HIT_BLOCK:    return "BLOCK";
+            case MELEE_HIT_CRIT:     return "CRIT";
+            case MELEE_HIT_GLANCING: return "GLANCING";
+            case MELEE_HIT_CRUSHING: return "CRUSHING";
+            case MELEE_HIT_EVADE:    return "EVADE";
+            default:                 return "NORMAL";
+        }
+    }
+
+    // Reckoning stacks live on 20178 ("the next N weapon swings"); the talent
+    // ranks 20177-20182 are the passives that grant it, so the charge count on
+    // 20178 is what actually shows whether a proc landed.
+    uint32 ReckoningCharges(Unit* paladin)
+    {
+        if (Aura* reckoning = paladin->GetAura(20178))
+            return reckoning->GetStackAmount() ? reckoning->GetStackAmount() : reckoning->GetCharges();
+        return 0;
+    }
+
+    // Which talent ranks are actually ACTIVE on the paladin right now. A
+    // talent that is known but disabled (character_spell.disabled = 1, which
+    // the talent-reset path leaves behind) applies no aura and cannot proc, so
+    // "no stacks" means nothing until this is known.
+    std::string ActiveTalentSummary(Unit* paladin)
+    {
+        uint32 reckRank = 0;
+        for (uint32 id : { 20177u, 20179u, 20180u, 20181u, 20182u })
+            if (paladin->HasAura(id))
+                reckRank = id;
+
+        uint32 redoubtRank = 0;
+        for (uint32 id : { 20127u, 20130u, 20135u, 20136u, 20137u })
+            if (paladin->HasAura(id))
+                redoubtRank = id;
+
+        return Trinity::StringFormat("Reck={} ImpReck={} Redoubt={}",
+            reckRank ? std::to_string(reckRank) : "NONE",
+            paladin->HasAura(83269) ? "yes" : "NO",
+            redoubtRank ? std::to_string(redoubtRank) : "NONE");
+    }
+}
+
 class spell_pal_party_damage_redirect : public AuraScript
 {
     PrepareAuraScript(spell_pal_party_damage_redirect);
@@ -889,6 +955,23 @@ class spell_pal_party_damage_redirect : public AuraScript
         redirectInfo.HitInfo = HITINFO_NORMALSWING;
 
         MeleeHitOutcome outcome = RollAvoidance(attacker, caster);
+
+        // Carry the ORIGINAL hit's crit through to the redirect. RollAvoidance
+        // only rolls dodge/parry/block and can never return a crit, so without
+        // this the redirect is always NORMAL or BLOCK - and Reckoning, which
+        // requires being crit, could never fire from it.
+        //
+        // Flag only, never re-doubled: the share was taken out of damage the
+        // original target had already received, so a crit's doubling is
+        // already baked into the number. An avoided or blocked roll wins over
+        // the flag, since those are outcomes for THIS swing.
+        bool const originalWasCrit = (dmgInfo.GetHitMask() & PROC_HIT_CRITICAL) != 0;
+        if (originalWasCrit && outcome == MELEE_HIT_NORMAL)
+        {
+            outcome = MELEE_HIT_CRIT;
+            redirectInfo.HitInfo |= HITINFO_CRITICALHIT;
+        }
+
         redirectInfo.HitOutCome = outcome;
 
         uint32 const preBlockDamage = redirectInfo.Damages[0].Damage;
@@ -952,6 +1035,8 @@ class spell_pal_party_damage_redirect : public AuraScript
             redirectInfo.Attacker->DealMeleeDamage(&redirectInfo, false);
 
             DamageInfo procDamage(redirectInfo);
+            uint32 const reckoningBefore = ReckoningCharges(caster);
+
             Unit::ProcSkillsAndAuras(
                 redirectInfo.Attacker,
                 redirectInfo.Target,
@@ -963,6 +1048,32 @@ class spell_pal_party_damage_redirect : public AuraScript
                 nullptr,
                 &procDamage,
                 nullptr);
+
+            // Plain unblocked hits are the overwhelming majority and say
+            // nothing, so only the lines that can actually answer a question
+            // are printed: a crit came in, the swing was avoided or blocked,
+            // or a Reckoning charge moved. Everything else is counted and
+            // reported once every 25 hits so the stream stays readable.
+            uint32 const reckoningAfter = ReckoningCharges(caster);
+            bool const interesting = originalWasCrit || reckoningAfter != reckoningBefore
+                || outcome != MELEE_HIT_NORMAL;
+
+            static uint32 quietHits = 0;
+            if (!interesting && ++quietHits % 25 != 0)
+                return;
+
+            SendSacrificialAuraDiag(Trinity::StringFormat(
+                "[SacrificialAura] {}: hit from {} | origCrit {} | outcome {} | "
+                "hitMask 0x{:X} | redirected {} (blocked {}, absorbed {}) | "
+                "Reckoning {} -> {} | talents [{}]{}",
+                caster->GetName(), attacker->GetName(),
+                originalWasCrit ? "YES" : "no",
+                MeleeOutcomeName(outcome), procDamage.GetHitMask(),
+                redirectInfo.Damages[0].Damage, redirectInfo.Blocked,
+                redirectInfo.Damages[0].Absorb,
+                reckoningBefore, reckoningAfter,
+                ActiveTalentSummary(caster),
+                interesting ? "" : "  (+24 quiet hits)"));
         }
     }
 
@@ -1482,6 +1593,15 @@ private:
         // Some seals have SPELL_AURA_DUMMY in EFFECT_2.  Do not cast or remove
         // auras while iterating this list: triggered Judgement effects can alter
         // the caster's seal auras and invalidate the AuraEffectList iterator.
+        // Judgement is off-GCD, so during the seal-twist grace window two seals
+        // can be up at once: judge only the one with the most time left (the
+        // seal cast last), never the replaced seal that is about to expire.
+        AuraEffect const* judgedSeal = nullptr;
+        // Ret T1 8pc (Zealot's Persistence, 90133): every active seal fires
+        // its judgement, not just the freshest. Collected here, cast after
+        // the iteration - casting inside would invalidate the list.
+        std::vector<uint32> extraSealJudgements;
+        bool const judgeAllSeals = caster->HasAura(90133);
         Unit::AuraEffectList const& auras = caster->GetAuraEffectsByType(SPELL_AURA_DUMMY);
         for (Unit::AuraEffectList::const_iterator i = auras.begin(); i != auras.end(); ++i)
         {
@@ -1497,13 +1617,21 @@ private:
                 auraEffect->GetEffIndex() != EFFECT_2 || !sSpellMgr->GetSpellInfo(auraEffect->GetAmount()))
                 continue;
 
-            spellId2 = auraEffect->GetAmount();
+            if (judgeAllSeals && judgedSeal)
+                extraSealJudgements.push_back(judgedSeal->GetBase()->GetDuration() > auraEffect->GetBase()->GetDuration()
+                    ? auraEffect->GetAmount() : judgedSeal->GetAmount());
+
+            if (!judgedSeal || auraEffect->GetBase()->GetDuration() > judgedSeal->GetBase()->GetDuration())
+                judgedSeal = auraEffect;
+        }
+
+        if (judgedSeal)
+        {
+            spellId2 = judgedSeal->GetAmount();
 
             if (Aura* sanctifiedSeals = caster->GetAuraOfRankedSpell(SPELL_PALADIN_SANCTIFIED_SEALS))
                 if (sanctifiedSeals->GetSpellInfo())
-                    sealManaRefund = auraSpellInfo->ManaCost * 8 / 10;
-
-            break;
+                    sealManaRefund = judgedSeal->GetSpellInfo()->ManaCost * 8 / 10;
         }
 
         if (sealManaRefund)
@@ -1514,23 +1642,22 @@ private:
         }
 
         if (hitUnit)
-            caster->CastSpell(hitUnit, spellId2, true);
-
-        // Remove all seal spells.
-        caster->RemoveAurasDueToSpell(20164);
-
-        auto removeRankedSeal = [caster](uint32 spellId)
         {
-            if (AuraApplication* seal = caster->GetAuraApplicationOfRankedSpell(spellId))
-                caster->RemoveAurasDueToSpell(seal->GetBase()->GetId());
-        };
+            caster->CastSpell(hitUnit, spellId2, true);
+            for (uint32 extra : extraSealJudgements)
+                caster->CastSpell(hitUnit, extra, true);
+        }
 
-        removeRankedSeal(20154); // Seal of Righteousness
-        removeRankedSeal(20165); // Seal of Light
-        removeRankedSeal(20166); // Seal of Wisdom
-        removeRankedSeal(21082); // Seal of the Crusader
-        removeRankedSeal(20375); // Seal of Command
-        removeRankedSeal(33127); // Seal of Command
+        // Remove all seal spells. Chain-independent on purpose: the Seal of
+        // Righteousness ranks are split across two chains in spell_ranks
+        // (20154 has no chain row, 21084 heads ranks 2+), so ranked lookups
+        // miss ranks 2+ and left SoR up after judging. This also catches a
+        // second seal lingering in the seal-twist grace window.
+        caster->RemoveAppliedAuras([](AuraApplication const* aurApp)
+        {
+            SpellInfo const* sealInfo = aurApp->GetBase()->GetSpellInfo();
+            return sealInfo->GetSpellSpecific() == SPELL_SPECIFIC_SEAL || sealInfo->Id == 20164;
+        });
     }
 
     void Register() override

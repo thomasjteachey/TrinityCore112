@@ -177,6 +177,20 @@ void CharacterDatabaseConnection::DoPrepareStatements()
     PrepareStatement(CHAR_UPD_NAME_BY_GUID, "UPDATE characters SET name = ? WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_DEL_DECLINED_NAME, "DELETE FROM character_declinedname WHERE guid = ?", CONNECTION_ASYNC);
 
+    // Transmogrification
+    PrepareStatement(CHAR_SEL_TRANSMOGS, "SELECT ct.item_guid, ct.fake_entry FROM custom_transmogrification ct "
+        "INNER JOIN item_instance ii ON ii.guid = ct.item_guid WHERE ii.owner_guid = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_REP_TRANSMOG, "REPLACE INTO custom_transmogrification (item_guid, fake_entry) VALUES (?, ?)", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_DEL_TRANSMOG, "DELETE FROM custom_transmogrification WHERE item_guid = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_SEL_TRANSMOG_SETTINGS, "SELECT enabled FROM custom_transmog_settings WHERE guid = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_REP_TRANSMOG_SETTINGS, "REPLACE INTO custom_transmog_settings (guid, enabled) VALUES (?, ?)", CONNECTION_ASYNC);
+
+    // Violet Hold: talent points spent during a run (undone, newest first, when the run's levels go)
+    PrepareStatement(CHAR_SEL_VHR_RUN_TALENTS, "SELECT seq, spell, prev_spell FROM custom_violet_hold_talents WHERE guid = ? ORDER BY seq", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_INS_VHR_RUN_TALENT, "INSERT INTO custom_violet_hold_talents (guid, seq, spell, prev_spell) VALUES (?, ?, ?, ?)", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_DEL_VHR_RUN_TALENT, "DELETE FROM custom_violet_hold_talents WHERE guid = ? AND seq = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_DEL_VHR_RUN_TALENTS, "DELETE FROM custom_violet_hold_talents WHERE guid = ?", CONNECTION_ASYNC);
+
     // Guild handling
     // 0: uint32, 1: string, 2: uint32, 3: string, 4: string, 5: uint64, 6-10: uint32, 11: uint64
     PrepareStatement(CHAR_INS_GUILD, "INSERT INTO guild (guildid, name, leaderguid, info, motd, createdate, EmblemStyle, EmblemColor, BorderStyle, BorderColor, BackgroundColor, BankMoney) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);

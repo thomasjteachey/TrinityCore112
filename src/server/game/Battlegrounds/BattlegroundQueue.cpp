@@ -278,7 +278,7 @@ GroupQueueInfo* BattlegroundQueue::AddGroup(Player* leader, Group* grp, Battlegr
     // Scarlet Chapel may explicitly request a side by temporarily setting the raw BG team override
     // before queueing. Do not use Player::GetBGTeam() here: it falls back to the player's real
     // faction when no override is set, which would make every SCM queue look forced.
-    uint32 const explicitBgTeam = ((BgTypeId == BATTLEGROUND_SCM) || (BgTypeId == BATTLEGROUND_BRT) || (BgTypeId == BATTLEGROUND_OBC)) ? leader->GetBGTeamOverride() : 0;
+    uint32 const explicitBgTeam = IsCustomBattleground(BgTypeId) ? leader->GetBGTeamOverride() : 0;
     bool const hasForcedQueueTeam = explicitBgTeam == ALLIANCE || explicitBgTeam == HORDE;
     if (!ArenaType && !hasForcedQueueTeam)
     {
@@ -323,7 +323,7 @@ GroupQueueInfo* BattlegroundQueue::AddGroup(Player* leader, Group* grp, Battlegr
 
         // SCM refill behavior: if there is already an active/free-slot SCM instance,
         // drive new solo entries to the side that currently has more free slots.
-        if (BgTypeId == BATTLEGROUND_SCM || BgTypeId == BATTLEGROUND_BRT || BgTypeId == BATTLEGROUND_OBC)
+        if (IsCustomBattleground(BgTypeId))
         {
             BGFreeSlotQueueContainer& freeSlotQueue = sBattlegroundMgr->GetBGFreeSlotQueueStore(BgTypeId);
             for (Battleground* bg : freeSlotQueue)
@@ -1019,6 +1019,55 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
         m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_HORDE].empty())
         return;
 
+    // Violet Hold never waits for an opponent. The enemy side is summoned by the
+    // clone driver once the match is live, so there is no second team to match
+    // against and no reason to hold anyone in the queue: every waiting group is
+    // given its own instance immediately.
+    //
+    // Groups are deliberately not merged. A run's difficulty is pinned to the
+    // party size that started it, so dropping a latecomer into someone else's
+    // wave would change a curve that is already underway.
+    if (bgTypeId == BATTLEGROUND_VHR)
+    {
+        Battleground* vhrTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
+        if (!vhrTemplate)
+        {
+            TC_LOG_ERROR("bg.battleground", "BattlegroundQueue::Update - Cannot find Violet Hold template: {}", bgTypeId);
+            return;
+        }
+
+        PvPDifficultyEntry const* vhrBracket = GetBattlegroundBracketById(vhrTemplate->GetMapId(), bracket_id);
+        if (!vhrBracket)
+        {
+            TC_LOG_ERROR("bg.battleground", "BattlegroundQueue::Update - Cannot find Violet Hold bracket for map {} bracket {}", vhrTemplate->GetMapId(), bracket_id);
+            return;
+        }
+
+        for (uint32 queueIndex = BG_QUEUE_PREMADE_ALLIANCE; queueIndex < BG_QUEUE_GROUP_TYPES_COUNT; ++queueIndex)
+        {
+            for (GroupQueueInfo* ginfo : m_QueuedGroups[bracket_id][queueIndex])
+            {
+                if (ginfo->IsInvitedToBGInstanceGUID)
+                    continue;
+
+                Battleground* vhr = sBattlegroundMgr->CreateNewBattleground(bgTypeId, vhrBracket, 0, false);
+                if (!vhr)
+                {
+                    TC_LOG_ERROR("bg.battleground", "BattlegroundQueue::Update - Cannot create Violet Hold battleground: {}", bgTypeId);
+                    return;
+                }
+
+                // The party always holds one side outright, whatever their real
+                // factions are, so the clones have the other to themselves.
+                ginfo->Team = ALLIANCE;
+                InviteGroupToBG(ginfo, vhr, ALLIANCE);
+                vhr->StartBattleground();
+            }
+        }
+
+        return;
+    }
+
     // battleground with free slot for player should be always in the beggining of the queue
     // maybe it would be better to create bgfreeslotqueue for each bracket_id
     BGFreeSlotQueueContainer& bgQueues = sBattlegroundMgr->GetBGFreeSlotQueueStore(bgTypeId);
@@ -1045,7 +1094,7 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
 
             if (!bg->HasFreeSlots())
                 bg->RemoveFromBGFreeSlotQueue();
-            else if (bgTypeId == BATTLEGROUND_SCM || bgTypeId == BATTLEGROUND_BRT || bgTypeId == BATTLEGROUND_OBC)
+            else if (IsCustomBattleground(bgTypeId))
             {
                 // Keep SCM refill progressing even when no new external queue events
                 // occur. Without a follow-up update pulse, SCM can stall at an
@@ -1058,7 +1107,7 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
     // SCM should always saturate existing free-slot instances before creating another one.
     // This prevents queue fragmentation where late joiners get split into a second SCM while
     // the first instance still has open seats.
-    if (bgTypeId == BATTLEGROUND_SCM || bgTypeId == BATTLEGROUND_BRT || bgTypeId == BATTLEGROUND_OBC)
+    if (IsCustomBattleground(bgTypeId))
     {
         for (Battleground* bg : bgQueues)
         {

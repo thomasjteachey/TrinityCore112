@@ -4,6 +4,7 @@
 #include "DBCStores.h"
 #include "GameObject.h"
 #include "Log.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "World.h"
 #include "WorldPacket.h"
@@ -26,6 +27,7 @@ BattlegroundSCM::BattlegroundSCM()
     _humanFaceoffEverHappened = false;
     _usePrimaryGraveyard = true;
     _graveyardSwapTimer = 0;
+    _underMapCheckTimer = 0;
     m_BuffChange = true;
 }
 
@@ -59,10 +61,32 @@ void BattlegroundSCM::Reset()
     _humanFaceoffEverHappened = false;
     _usePrimaryGraveyard = true;
     _graveyardSwapTimer = 0;
+    _underMapCheckTimer = 0;
 }
 
 void BattlegroundSCM::PostUpdateImpl(uint32 diff)
 {
+    // Fall-through safety net, deliberately outside the STATUS_IN_PROGRESS
+    // gate below: players can drop out of the chapel during the warmup as
+    // well as the match, and being stuck under the map is unrecoverable
+    // either way.
+    _underMapCheckTimer += diff;
+    if (_underMapCheckTimer >= BG_SCM_UNDER_MAP_CHECK_INTERVAL)
+    {
+        _underMapCheckTimer = 0;
+        for (auto const& itr : GetPlayers())
+        {
+            Player* player = ObjectAccessor::FindPlayer(itr.first);
+            // A teleport already in flight will fix the position by itself;
+            // issuing another one on top of it just fights the first.
+            if (!player || player->IsBeingTeleported())
+                continue;
+
+            if (player->GetPositionZ() < BG_SCM_MIN_SAFE_Z)
+                HandlePlayerUnderMap(player);
+        }
+    }
+
     if (GetStatus() != STATUS_IN_PROGRESS)
         return;
 

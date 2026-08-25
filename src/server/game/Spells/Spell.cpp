@@ -53,8 +53,11 @@
 #include "StringFormat.h"
 #include "SpellAuraEffects.h"
 #include "SpellHistory.h"
+#include "T2SpellHooks.h"
+#include "T2UnitHooks.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "LosBlocker.h"
 #include "SpellPackets.h"
 #include "SpellScript.h"
 #include "TemporarySummon.h"
@@ -65,6 +68,7 @@
 #include "UpdateMask.h"
 #include "Util.h"
 #include "Vehicle.h"
+#include "VioletHoldBoons.h"
 #include "VMapFactory.h"
 #include "VMapManager2.h"
 #include "World.h"
@@ -77,6 +81,7 @@ namespace
 {
     constexpr uint32 SPELL_DRUID_BEEFS_TENACITY = 89766;
     constexpr uint32 SPELL_DRUID_UNSTOPPABLE = 89765;
+    constexpr uint8 HURRICANE_UNSTOPPABLE_MIN_RANK = 3;    // Beef's Tenacity: Hurricane rank 3 (17402) and up
     constexpr uint32 SPELL_ROGUE_VANISH_AURA = 89783;
     constexpr uint32 SPELL_PRIEST_SHADOW_WRAITH = 89784;
 
@@ -192,9 +197,21 @@ namespace
         return unit->ToTotem()->IsFireTotem();
     }
 
-    bool ShouldSpellStartCombat(SpellInfo const* spellInfo, Unit const* originalCaster, WorldObject const* caster)
+    bool ShouldSpellStartCombat(SpellInfo const* spellInfo, Unit const* originalCaster, WorldObject const* caster,
+                                SpellInfo const* triggeredByAura = nullptr)
     {
         if (IsNoCombatSpell(spellInfo))
+            return false;
+
+        // A spell that exists only because a no-combat aura ticked inherits that
+        // exemption. Frost Trap Aura (13810) is listed above, but every pulse it
+        // casts Dummy Trigger (18350) at the enemies standing in the slick, and
+        // 18350 is a shared generic that cannot simply be added to the list
+        // without exempting unrelated users of it. Without this the trap kept
+        // re-establishing combat on every tick for the whole 30s duration, so
+        // the hunter never dropped out of it - the exemption stopped the fight
+        // STARTING but nothing stopped it being renewed.
+        if (triggeredByAura && IsNoCombatSpell(triggeredByAura))
             return false;
 
         if (!ShouldTotemSpellStartCombat(originalCaster))
@@ -2593,7 +2610,7 @@ void Spell::TargetInfo::PreprocessTarget(Spell* spell)
     else if (MissCondition == SPELL_MISS_REFLECT && ReflectResult == SPELL_MISS_NONE)
         _spellHitTarget = spell->m_caster->ToUnit();
 
-    if (spell->m_originalCaster && MissCondition != SPELL_MISS_EVADE && !spell->m_originalCaster->IsFriendlyTo(unit) && (!spell->m_spellInfo->IsPositive() || spell->m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (spell->m_spellInfo->HasInitialAggro() || unit->IsEngaged()) && !spell->m_spellInfo->IsMindVision() && ShouldSpellStartCombat(spell->m_spellInfo, spell->m_originalCaster, spell->m_caster))
+    if (spell->m_originalCaster && MissCondition != SPELL_MISS_EVADE && !spell->m_originalCaster->IsFriendlyTo(unit) && (!spell->m_spellInfo->IsPositive() || spell->m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (spell->m_spellInfo->HasInitialAggro() || unit->IsEngaged()) && !spell->m_spellInfo->IsMindVision() && ShouldSpellStartCombat(spell->m_spellInfo, spell->m_originalCaster, spell->m_caster, spell->GetTriggeredByAuraSpell()))
     {
         // Combat diagnostic: this is why a missed/resisted/dodged hostile cast
         // can still re-enter combat with zero damage recorded -- combat entry
@@ -2639,6 +2656,19 @@ void Spell::TargetInfo::PreprocessTarget(Spell* spell)
             spell->m_healing = 0;
             _spellHitTarget = nullptr;
         }
+    }
+
+    // T2 Reflective Carapace (90344): a hostile spell that was flatly immune
+    // against a player in Ice Block reflects part of what it would have done.
+    // Both immune sources land here - the launch-time SpellHitResult and the
+    // hit-time PreprocessSpellHit re-check for delayed missiles.
+    if (MissCondition == SPELL_MISS_IMMUNE || MissCondition == SPELL_MISS_IMMUNE2)
+    {
+        Unit* attacker = spell->m_caster->ToUnit();
+        if (!attacker)
+            attacker = spell->m_originalCaster;
+        if (attacker)
+            T2SpellHooks::OnImmuneSpellHit(attacker, unit, spell->m_spellInfo);
     }
 
     spell->CallScriptOnHitHandlers();
@@ -2886,7 +2916,7 @@ void Spell::TargetInfo::DoDamageAndTriggers(Spell* spell)
         {
             if (Unit* unitCaster = spell->m_caster->ToUnit())
             {
-                if (ShouldSpellStartCombat(spell->m_spellInfo, spell->m_originalCaster, spell->m_caster))
+                if (ShouldSpellStartCombat(spell->m_spellInfo, spell->m_originalCaster, spell->m_caster, spell->GetTriggeredByAuraSpell()))
                     unitCaster->AtTargetAttacked(unit, spell->m_spellInfo->HasInitialAggro());
             }
 
@@ -3025,7 +3055,10 @@ SpellMissInfo Spell::PreprocessSpellHit(Unit* unit, bool scaleAura, TargetInfo& 
         if (m_caster->IsValidAttackTarget(unit, m_spellInfo) && !m_spellInfo->IsMindVision())
         {
             // Earthbind Totem pulses (6474/3600) should not break stealth/prowl.
-            if (m_spellInfo->Id != 6474 && m_spellInfo->Id != 3600)
+            // Neither should Recharge (90200): a BG rune trap's "hit" is a pure
+            // buff, but an ownerless neutral trap GO always passes the
+            // IsValidAttackTarget gate above, so it needs the same exemption.
+            if (m_spellInfo->Id != 6474 && m_spellInfo->Id != 3600 && m_spellInfo->Id != 90200)
                 unit->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_HITBYSPELL);
         }
         else if (m_caster->IsFriendlyTo(unit))
@@ -3480,7 +3513,16 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
     bool const needsHurricaneMovementInterrupt = isHurricane && !snareMovementAllowed;
     bool const needsArcaneMissilesMovementInterrupt = isArcaneMissiles && !snareMovementAllowed;
     bool const moveAllowedChannel = m_spellInfo->IsMoveAllowedChannel() && !needsHurricaneMovementInterrupt && !needsArcaneMissilesMovementInterrupt;
-    bool const requiresMovementInterrupt = (m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) || needsStarfireMovementInterrupt || needsHurricaneMovementInterrupt || needsArcaneMissilesMovementInterrupt;
+    // Mount summons carry no SPELL_INTERRUPT_FLAG_MOVEMENT in the DBC: the
+    // client refuses to START a cast while moving off that flag, and Violet
+    // Hold's Boon of the Outrider needs the client to let the cast through
+    // (the client only applies cast-time spellmods to the player's own class
+    // family - Spell_C_GetSpellModifiers 0x7FD970 - so a family-15 mount can
+    // never read as instant to it). The movement rule is re-imposed here for
+    // everyone, same shape as movable Starfire; a boon holder's mount cast
+    // time is 0 server-side and passes regardless.
+    bool const needsMountMovementInterrupt = m_spellInfo->HasAura(SPELL_AURA_MOUNTED);
+    bool const requiresMovementInterrupt = (m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) || needsStarfireMovementInterrupt || needsHurricaneMovementInterrupt || needsArcaneMissilesMovementInterrupt || needsMountMovementInterrupt;
 
     // don't allow channeled spells / spells with cast time to be cast while moving
     // exception are only channeled spells that have no casttime and SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING
@@ -3862,6 +3904,13 @@ void Spell::_cast(bool skipCheck)
     // we must send smsg_spell_go packet before m_castItem delete in TakeCastItem()...
     SendSpellGo();
 
+    // T2 Unbound Rime/Ember: the 3.3.5 client starts the shared shock category
+    // cooldown from its own Spell.dbc on SMSG_SPELL_GO, so a holder's client has
+    // to be told the real per-spell picture right after it. No-op for everyone
+    // else (see SpellHistory::SyncShockCooldownsToClient).
+    if (Player* shockCaster = m_caster->ToPlayer())
+        shockCaster->GetSpellHistory()->SyncShockCooldownsToClient(m_spellInfo);
+
     if (!m_spellInfo->IsChanneled())
         if (Creature* creatureCaster = m_caster->ToCreature())
             creatureCaster->ReleaseSpellFocus(this);
@@ -3990,7 +4039,12 @@ void Spell::handle_immediate()
 
             if (m_spellInfo->IsHurricane())
             {
-                if (unitCaster->GetTypeId() == TYPEID_PLAYER && unitCaster->HasAura(SPELL_DRUID_BEEFS_TENACITY))
+                // Beef's Tenacity reads "unstoppable while casting Hurricane
+                // RANK 3": rank 1 and 2 channel exactly as stock. GetRank()
+                // walks the spell chain (16914 r1, 17401 r2, 17402 r3), so a
+                // higher rank added later qualifies as well.
+                if (unitCaster->GetTypeId() == TYPEID_PLAYER && m_spellInfo->GetRank() >= HURRICANE_UNSTOPPABLE_MIN_RANK
+                    && unitCaster->HasAura(SPELL_DRUID_BEEFS_TENACITY))
                     if (Aura* unstoppable = unitCaster->AddAura(SPELL_DRUID_UNSTOPPABLE, unitCaster))
                     {
                         m_appliedBeefsTenacityHurricaneAura = true;
@@ -4221,7 +4275,9 @@ void Spell::update(uint32 difftime)
         bool const needsStarfireMovementInterrupt = isStarfire && !snareMovementAllowed;
         bool const needsHurricaneMovementInterrupt = isHurricane && !snareMovementAllowed;
         bool const needsArcaneMissilesMovementInterrupt = isArcaneMissiles && !snareMovementAllowed;
-        bool const hasMovementInterruptFlag = m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT;
+        // Mount summons: movement bit cleared in the DBC for the client's sake,
+        // enforced here (see Spell::prepare).
+        bool const hasMovementInterruptFlag = (m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) || m_spellInfo->HasAura(SPELL_AURA_MOUNTED);
         bool const moveAllowedChannel = IsChannelActive() && m_spellInfo->IsMoveAllowedChannel() && !needsHurricaneMovementInterrupt && !needsArcaneMissilesMovementInterrupt;
 
         // Movable Starfire lets virtual players keep their active movement
@@ -5537,7 +5593,7 @@ void Spell::HandleThreatSpells()
     if (!unitCaster)
         return;
 
-    if (!ShouldSpellStartCombat(m_spellInfo, m_originalCaster, m_caster))
+    if (!ShouldSpellStartCombat(m_spellInfo, m_originalCaster, m_caster, GetTriggeredByAuraSpell()))
         return;
 
     if (m_UniqueTargetInfo.empty())
@@ -5712,7 +5768,11 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
             {
                 // Cannot be used in this stance/form
                 SpellCastResult shapeError = m_spellInfo->CheckShapeshift(unitCaster->GetShapeshiftForm());
-                if (shapeError != SPELL_CAST_OK)
+                // T2 Umbral Mercy (90340): the holder's priest heals are allowed
+                // in Shadowform (the client's cancel of the form was swallowed,
+                // see T2SpellHooks.h). Only consulted once the stock check has
+                // already refused, so everyone else pays nothing.
+                if (shapeError != SPELL_CAST_OK && !T2SpellHooks::WaivesShapeshiftRestriction(unitCaster, m_spellInfo))
                     return shapeError;
 
                 if (m_spellInfo->HasAttribute(SPELL_ATTR0_ONLY_STEALTHED) && !(unitCaster->HasStealthAura()))
@@ -5736,6 +5796,14 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
                 }
             }
         }
+
+        // Violet Hold "Boon of the Outrider": mounts may be summoned in
+        // combat. Same bypass Warbringer's ABILITY_IGNORE_AURASTATE gives
+        // Charge above, but by spell id - mount spells are family GENERIC with
+        // empty class masks, which no aura mask could single out.
+        if (reqCombat && (m_spellInfo->HasAura(SPELL_AURA_MOUNTED) || m_spellInfo->Mechanic == MECHANIC_MOUNT)
+            && VioletHoldBoons::AllowsMountingInCombat(unitCaster))
+            reqCombat = false;
 
         // caster state requirements
         // not for triggered spells (needed by execute)
@@ -5871,6 +5939,12 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
 
                 if (!m_spellInfo->HasAttribute(SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS) && !m_spellInfo->HasAttribute(SPELL_ATTR5_SKIP_CHECKCAST_LOS_CHECK) && !DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, m_spellInfo->Id, nullptr, SPELL_DISABLE_LOS) && !target->IsWithinLOSInMap(losTarget, LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::M2))
                     return SPELL_FAILED_LINE_OF_SIGHT;
+
+                // A hostile player carrying the LoS-blocker aura eclipses the
+                // shot. `target` is excluded inside, so a spell aimed at the
+                // blocker itself still lands.
+                if (!m_spellInfo->HasAttribute(SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS) && !m_spellInfo->HasAttribute(SPELL_ATTR5_SKIP_CHECKCAST_LOS_CHECK) && LosBlocker::Blocks(losTarget, target))
+                    return SPELL_FAILED_LINE_OF_SIGHT;
             }
         }
     }
@@ -5881,7 +5955,7 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
         float x, y, z;
         m_targets.GetDstPos()->GetPosition(x, y, z);
 
-        if (!m_spellInfo->HasAttribute(SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS) && !m_spellInfo->HasAttribute(SPELL_ATTR5_SKIP_CHECKCAST_LOS_CHECK) && !DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, m_spellInfo->Id, nullptr, SPELL_DISABLE_LOS) && !m_caster->IsWithinLOS(x, y, z, LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::M2))
+        if (!m_spellInfo->HasAttribute(SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS) && !m_spellInfo->HasAttribute(SPELL_ATTR5_SKIP_CHECKCAST_LOS_CHECK) && !DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, m_spellInfo->Id, nullptr, SPELL_DISABLE_LOS) && ((!m_caster->IsWithinLOS(x, y, z, LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::M2)) || LosBlocker::BlocksPosition(m_caster, x, y, z)))
         {
             return SPELL_FAILED_LINE_OF_SIGHT;
         }
@@ -6568,7 +6642,10 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
                 // can't change during already started arena/battleground
                 if (m_caster->GetTypeId() == TYPEID_PLAYER)
                     if (Battleground const* bg = m_caster->ToPlayer()->GetBattleground())
-                        if (bg->GetStatus() == STATUS_IN_PROGRESS)
+                        // Violet Hold at any stage: the run's borrowed levels
+                        // and their talent ledger are per active spec, and
+                        // they live on into the leave window.
+                        if (bg->GetStatus() == STATUS_IN_PROGRESS || bg->GetTypeID() == BATTLEGROUND_VHR)
                             return SPELL_FAILED_NOT_IN_BATTLEGROUND;
                 break;
             default:
@@ -7392,7 +7469,8 @@ SpellCastResult Spell::CheckItems(uint32* param1 /*= nullptr*/, uint32* param2 /
     {
         if (!(_triggeredCastFlags & TRIGGERED_IGNORE_EQUIPPED_ITEM_REQUIREMENT))
             if (!player->HasItemFitToSpellRequirements(m_spellInfo))
-                return SPELL_FAILED_EQUIPPED_ITEM_CLASS;
+                if (!player->IsWeaponRequirementWaived(m_spellInfo))
+                    return SPELL_FAILED_EQUIPPED_ITEM_CLASS;
     }
 
     // do not take reagents for these item casts
@@ -7653,6 +7731,11 @@ SpellCastResult Spell::CheckItems(uint32* param1 /*= nullptr*/, uint32* param2 /
                 if (m_targets.GetItemTarget()->GetOwnerGUID() != player->GetGUID())
                     return SPELL_FAILED_CANT_BE_DISENCHANTED;
 
+                // T2 Ashen Confiscation: a seized weapon is a real item for a
+                // few seconds and must not be turned into enchanting mats.
+                if (T2UnitHooks::IsTemporaryWeapon(m_targets.GetItemTarget()))
+                    return SPELL_FAILED_CANT_BE_DISENCHANTED;
+
                 ItemTemplate const* itemProto = m_targets.GetItemTarget()->GetTemplate();
                 if (!itemProto)
                     return SPELL_FAILED_CANT_BE_DISENCHANTED;
@@ -7826,7 +7909,11 @@ SpellCastResult Spell::CheckItems(uint32* param1 /*= nullptr*/, uint32* param2 /
     }
 
     // check weapon presence in slots for main/offhand weapons
-    if (!(_triggeredCastFlags & TRIGGERED_IGNORE_EQUIPPED_ITEM_REQUIREMENT) && m_spellInfo->EquippedItemClass >= 0)
+    // A waiver aura (see Player::IsWeaponRequirementWaived) skips this too - it
+    // is the gate that would otherwise reject a bare-handed cast the moment the
+    // check above starts letting it through.
+    if (!(_triggeredCastFlags & TRIGGERED_IGNORE_EQUIPPED_ITEM_REQUIREMENT) && m_spellInfo->EquippedItemClass >= 0
+        && !player->IsWeaponRequirementWaived(m_spellInfo))
     {
         auto weaponCheck = [&](WeaponAttackType attackType) -> SpellCastResult
         {
@@ -7861,10 +7948,35 @@ SpellCastResult Spell::CheckItems(uint32* param1 /*= nullptr*/, uint32* param2 /
     return SPELL_CAST_OK;
 }
 
+namespace
+{
+    // The four "big heal" chains are immune to damage pushback outright - their
+    // tooltips say so plainly - rather than relying on a talent for a percentage
+    // chance. Matched on the first spell in each rank chain so every rank is
+    // covered without listing 51 ids.
+    bool IsPushbackImmuneHeal(SpellInfo const* spellInfo)
+    {
+        SpellInfo const* first = spellInfo->GetFirstRankSpell();
+        switch (first ? first->Id : spellInfo->Id)
+        {
+            case 5185: // Healing Touch
+            case 331:  // Healing Wave
+            case 635:  // Holy Light
+            case 2060: // Greater Heal
+                return true;
+            default:
+                return false;
+        }
+    }
+}
+
 void Spell::Delayed() // only called in DealDamage()
 {
     Player* playerCaster = m_caster->ToPlayer();
     if (!playerCaster)
+        return;
+
+    if (IsPushbackImmuneHeal(m_spellInfo))
         return;
 
     // spells not losing casting time
@@ -8387,7 +8499,7 @@ void Spell::PreprocessSpellLaunch(TargetInfo& targetInfo)
         return;
 
     // This will only cause combat - the target will engage once the projectile hits (in Spell::TargetInfo::PreprocessTarget)
-    if (m_originalCaster && targetInfo.MissCondition != SPELL_MISS_EVADE && !m_originalCaster->IsFriendlyTo(targetUnit) && (!m_spellInfo->IsPositive() || m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (m_spellInfo->HasInitialAggro() || targetUnit->IsEngaged()) && !m_spellInfo->IsMindVision() && ShouldSpellStartCombat(m_spellInfo, m_originalCaster, m_caster))
+    if (m_originalCaster && targetInfo.MissCondition != SPELL_MISS_EVADE && !m_originalCaster->IsFriendlyTo(targetUnit) && (!m_spellInfo->IsPositive() || m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (m_spellInfo->HasInitialAggro() || targetUnit->IsEngaged()) && !m_spellInfo->IsMindVision() && ShouldSpellStartCombat(m_spellInfo, m_originalCaster, m_caster, GetTriggeredByAuraSpell()))
         m_originalCaster->SetInCombatWith(targetUnit, true);
 
     Unit* unit = nullptr;

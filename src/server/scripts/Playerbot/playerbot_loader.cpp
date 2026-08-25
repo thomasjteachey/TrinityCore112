@@ -17,10 +17,13 @@
 
 #include "Log.h"
 #include "Chat.h"
+#include "CharacterCache.h"
 #include "GameTime.h"
 #include "Globals/ObjectAccessor.h"
 #include "Item.h"
+#include "Map.h"
 #include "MotionMaster.h"
+#include "Optional.h"
 #include "MoveSpline.h"
 #include "Movement/AbstractFollower.h"
 #include "Player.h"
@@ -28,6 +31,7 @@
 #include "BattlegroundMgr.h"
 #include "BattlegroundQueue.h"
 #include "Playerbot/Pvp/PlayerbotObcClone.h"
+#include "Playerbot/Pvp/PlayerbotVhrWaveDriver.h"
 #include "Playerbot/Pvp/PlayerbotPvpClassActions.h"
 #include "Playerbot/Pvp/PlayerbotPvpCore.h"
 #include "Playerbot/Pvp/PlayerbotPvpLifecycleActions.h"
@@ -42,9 +46,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <initializer_list>
 #include <mutex>
 #include <sstream>
 #include <unordered_map>
+#include <vector>
 #include <cmath>
 #include <algorithm>
 #include <cctype>
@@ -620,6 +626,7 @@ public:
         playerbot::ResourceGovernor::NoteWorldUpdate(diff);
         playerbot::RandomBotParticipationManager::OnWorldUpdate(diff);
         playerbot::PlayerbotObcCloneManager::OnWorldUpdate(diff);
+        playerbot::PlayerbotVhrWaveDriver::OnWorldUpdate(diff);
     }
 
     void OnShutdown() override
@@ -787,6 +794,7 @@ public:
         {
             { "lifecycle", playerbotPvpLifecycleTable },
             { "forcequeue", HandlePlayerbotPvpForceQueueCurrentCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
+            { "movediag", HandlePlayerbotPvpMoveDiagCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
         };
 
         static ChatCommandTable playerbotRandomPopulationTable =
@@ -826,6 +834,145 @@ public:
         handler->PSendSysMessage(" - noLifecycleHooksActive: " UI64FMTD, snapshot.noLifecycleHooksActive);
         handler->PSendSysMessage(" - battlegroundLifecycleExecuted: " UI64FMTD, snapshot.battlegroundLifecycleExecuted);
         handler->PSendSysMessage(" - arenaLifecycleExecuted: " UI64FMTD, snapshot.arenaLifecycleExecuted);
+        return true;
+    }
+
+    // Reports the last movement directive each nearby bot issued, plus the state
+    // that drives it. Exists because the whisper diagnostic is unusable for
+    // clones: they carry generated internal names and their display name lives
+    // only in the character cache, so there is nothing to type. Reports on the
+    // current selection when something is selected, otherwise sweeps the radius.
+    static bool HandlePlayerbotPvpMoveDiagCommand(ChatHandler* handler, Optional<float> radiusArg)
+    {
+        if (!handler)
+            return false;
+
+        Player* player = handler->GetPlayer();
+        if (!player || !player->FindMap())
+            return false;
+
+        float const radius = std::max(1.0f, radiusArg.value_or(80.0f));
+
+        std::vector<Player*> bots;
+        if (Player* selected = handler->getSelectedPlayer())
+        {
+            if (selected != player)
+                bots.push_back(selected);
+        }
+
+        if (bots.empty())
+        {
+            Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+            for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+            {
+                Player* candidate = itr->GetSource();
+                if (!candidate || candidate == player || !candidate->IsInWorld())
+                    continue;
+                if (!candidate->IsWithinDistInMap(player, radius))
+                    continue;
+                bots.push_back(candidate);
+            }
+
+            std::sort(bots.begin(), bots.end(), [player](Player const* left, Player const* right)
+            {
+                return player->GetDistance(left) < player->GetDistance(right);
+            });
+        }
+
+        if (bots.empty())
+        {
+            handler->PSendSysMessage("No players found (nothing selected, none within %.0f yd).", radius);
+            return true;
+        }
+
+        // Two lines each - cap the sweep so a full battleground does not flood
+        // the chat frame and push the interesting rows off screen.
+        constexpr size_t maxReported = 8;
+        size_t const reported = std::min(bots.size(), maxReported);
+        handler->PSendSysMessage("Playerbot move diagnostics (%u of %u within %.0f yd):",
+            uint32(reported), uint32(bots.size()), radius);
+
+        for (size_t index = 0; index < reported; ++index)
+        {
+            Player* bot = bots[index];
+
+            std::string displayName;
+            if (!sCharacterCache->GetCharacterNameByGuid(bot->GetGUID(), displayName) || displayName.empty())
+                displayName = bot->GetName();
+
+            MotionMaster const* motionMaster = bot->GetMotionMaster();
+            Unit const* victim = bot->GetVictim();
+
+            handler->PSendSysMessage("%s (%s) cls=%u dist=%.1f motion=%u moving=%s combat=%s rage=%u victim=%s@%.1f",
+                displayName.c_str(), bot->GetName().c_str(), uint32(bot->GetClass()),
+                player->GetDistance(bot),
+                uint32(motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE),
+                bot->isMoving() ? "yes" : "no",
+                bot->IsInCombat() ? "yes" : "no",
+                uint32(bot->GetPower(POWER_RAGE) / 10),
+                victim ? victim->GetName().c_str() : "none",
+                victim ? bot->GetDistance(victim) : 0.0f);
+
+            std::string const moveDiag = playerbot::PvpClassActions::GetLastMovementDebugStatus(bot);
+            handler->PSendSysMessage("   move: %s", moveDiag.empty() ? "(none recorded)" : moveDiag.c_str());
+
+            // What the bot last actually tried to cast, and why it failed. The
+            // movement line only shows the consequence; this shows the cause.
+            std::string const execDiag = playerbot::PvpClassActions::GetLastExecutionStatus(bot);
+            handler->PSendSysMessage("   exec: %s", execDiag.empty() ? "(none recorded)" : execDiag.c_str());
+
+            // Sticky: only written when Every Man for Himself is actually
+            // chosen, so it can be read long after the moment has passed.
+            if (std::string const emfhDiag = playerbot::PvpCore::GetLastEveryManForHimselfDiagnostic(bot); !emfhDiag.empty())
+                handler->PSendSysMessage("   emfh: %s", emfhDiag.c_str());
+
+            // Warrior gap closers have a lot of independent gates (known rank,
+            // cooldown, stance, rage, min/max range, combat) and a failure in
+            // any one of them looks identical from outside: the bot just runs.
+            // Clones are memory-only, so this is the only way to see which gate
+            // is the one saying no.
+            if (bot->GetClass() == CLASS_WARRIOR)
+            {
+                auto knownRank = [bot](std::initializer_list<uint32> ranks) -> uint32
+                {
+                    uint32 best = 0;
+                    for (uint32 rank : ranks)
+                        if (bot->HasSpell(rank))
+                            best = rank;
+                    return best;
+                };
+                auto readyText = [bot](uint32 spellId) -> char const*
+                {
+                    if (!spellId)
+                        return "unknown";
+                    return bot->GetSpellHistory()->HasCooldown(spellId) ? "cooldown" : "ready";
+                };
+
+                uint32 const chargeId = knownRank({ 100, 6178, 11578 });
+                uint32 const interceptId = knownRank({ 20252, 20616, 20617 });
+                uint32 const leapId = knownRank({ 81271 });
+                uint32 const bloodrageId = knownRank({ 2687 });
+
+                char const* stance = bot->HasAura(2457) ? "battle" :
+                    (bot->HasAura(71) ? "defensive" : (bot->HasAura(2458) ? "berserker" : "none"));
+
+                float const victimDist = victim ? bot->GetDistance(victim) : -1.0f;
+                handler->PSendSysMessage("   warrior: charge=%u/%s intercept=%u/%s leap=%u/%s bloodrage=%u/%s stance=%s rage=%u combat=%s victim_dist=%.1f band8-25=%s",
+                    chargeId, readyText(chargeId),
+                    interceptId, readyText(interceptId),
+                    leapId, readyText(leapId),
+                    bloodrageId, readyText(bloodrageId),
+                    stance,
+                    uint32(bot->GetPower(POWER_RAGE) / 10),
+                    bot->IsInCombat() ? "yes" : "no",
+                    victimDist,
+                    (victimDist >= 8.0f && victimDist <= 25.0f) ? "yes" : "no");
+
+                std::string const gapDiag = playerbot::PvpCore::GetLastWarriorGapCloserDiagnostic(bot);
+                handler->PSendSysMessage("   gapclose: %s", gapDiag.empty() ? "(warrior selector has not run)" : gapDiag.c_str());
+            }
+        }
+
         return true;
     }
 

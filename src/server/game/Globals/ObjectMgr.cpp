@@ -1421,7 +1421,7 @@ void ObjectMgr::LoadCreaturePlayerBytes()
     _creaturePlayerBytesStore.clear();
 
     QueryResult result = WorldDatabase.Query(
-        "SELECT guid, race, class, gender, playerBytes, playerBytes2, guildId, "
+        "SELECT entry, race, class, gender, playerBytes, playerBytes2, guildId, "
         "visibleItem0, visibleItem1, visibleItem2, visibleItem3, visibleItem4, visibleItem5, visibleItem6, visibleItem7, "
         "visibleItem8, visibleItem9, visibleItem10, visibleItem11, visibleItem12, visibleItem13, visibleItem14, visibleItem15, "
         "visibleItem16, visibleItem17, visibleItem18, virtualItem0, virtualItem1, virtualItem2 FROM creature_playerbytes");
@@ -1438,16 +1438,15 @@ void ObjectMgr::LoadCreaturePlayerBytes()
     {
         Field* fields = result->Fetch();
 
-        ObjectGuid::LowType guid = fields[0].GetUInt32();
+        uint32 entry = fields[0].GetUInt32();
 
-        CreatureData const* creData = GetCreatureData(guid);
-        if (!creData)
+        if (!GetCreatureTemplate(entry))
         {
-            TC_LOG_ERROR("sql.sql", "Creature (GUID: {}) does not exist but has a record in `creature_playerbytes`", guid);
+            TC_LOG_ERROR("sql.sql", "Creature template (Entry: {}) does not exist but has a record in `creature_playerbytes`", entry);
             continue;
         }
 
-        CreaturePlayerBytes& customization = _creaturePlayerBytesStore[guid];
+        CreaturePlayerBytes& customization = _creaturePlayerBytesStore[entry];
         customization.race = fields[1].GetUInt8();
         customization.playerClass = fields[2].GetUInt8();
         customization.gender = fields[3].GetUInt8();
@@ -1545,9 +1544,9 @@ CreatureAddon const* ObjectMgr::GetCreatureAddon(ObjectGuid::LowType lowguid) co
     return nullptr;
 }
 
-CreaturePlayerBytes const* ObjectMgr::GetCreaturePlayerBytes(ObjectGuid::LowType lowguid) const
+CreaturePlayerBytes const* ObjectMgr::GetCreaturePlayerBytes(uint32 entry) const
 {
-    CreaturePlayerBytesContainer::const_iterator itr = _creaturePlayerBytesStore.find(lowguid);
+    CreaturePlayerBytesContainer::const_iterator itr = _creaturePlayerBytesStore.find(entry);
     if (itr != _creaturePlayerBytesStore.end())
         return &(itr->second);
 
@@ -8694,21 +8693,23 @@ void ObjectMgr::DeleteCreatureData(ObjectGuid::LowType guid)
     }
 
     _creatureDataStore.erase(guid);
-    _creaturePlayerBytesStore.erase(guid);
+    // Deliberately NOT touching _creaturePlayerBytesStore: it is keyed on the template
+    // entry now, so deleting one spawn must not strip the look from the NPC type (and
+    // from every other spawn of it).
 }
 
-void ObjectMgr::SetCreaturePlayerBytes(ObjectGuid::LowType guid, CreaturePlayerBytes const* appearance)
+void ObjectMgr::SetCreaturePlayerBytes(uint32 entry, CreaturePlayerBytes const* appearance)
 {
-    if (!guid)
+    if (!entry)
         return;
 
     if (!appearance)
     {
-        _creaturePlayerBytesStore.erase(guid);
+        _creaturePlayerBytesStore.erase(entry);
         return;
     }
 
-    _creaturePlayerBytesStore[guid] = *appearance;
+    _creaturePlayerBytesStore[entry] = *appearance;
 }
 
 void ObjectMgr::DeleteGameObjectData(ObjectGuid::LowType guid)

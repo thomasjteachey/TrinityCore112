@@ -534,6 +534,7 @@ Position BuildCollisionSafeDestination(Player* player, Position const& destinati
     }
 
     adjustedDestination.Relocate(adjustedDestination.GetPositionX(), adjustedDestination.GetPositionY(), adjustedZ, adjustedDestination.GetOrientation());
+
     return adjustedDestination;
 }
 
@@ -550,6 +551,91 @@ Position BuildFollowDestination(Player* player, Unit* target, float desiredDista
     target->GetNearPoint(player, x, y, z, followDistance, target->GetAbsoluteAngle(player));
     Position destination(x, y, z, player->GetOrientation());
     return BuildCollisionSafeDestination(player, destination);
+}
+
+// LOS recovery normally works by closing distance, which is right for peeking
+// around a pillar and useless once the bot is already standing on the target:
+// halving a 0.09 yard gap changes nothing, so the "recovery" re-issues forever.
+// Worse, against an arena boundary "closer" drives both bodies further into the
+// wall geometry that is blocking the trace to begin with. Step out to a spot
+// that can actually see the target instead of trying to close a gap of zero.
+bool TryIssueLosUnstickMovement(Player* player, Unit* target, char const* label)
+{
+    if (!player || !target)
+        return false;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return false;
+
+    // Re-issuing every tick would just be the same stutter in a new direction.
+    struct LosUnstickState
+    {
+        ObjectGuid targetGuid = ObjectGuid::Empty;
+        uint32 lastIssueMs = 0;
+    };
+
+    static std::unordered_map<uint64, LosUnstickState> stateByGuid;
+    LosUnstickState& state = playerbot::LockedGetOrCreate(stateByGuid, player->GetGUID().GetRawValue());
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    if (state.targetGuid == target->GetGUID() && state.lastIssueMs != 0 && nowMs < state.lastIssueMs + 1500)
+        return false;
+
+    float const targetX = target->GetPositionX();
+    float const targetY = target->GetPositionY();
+    float const targetZ = target->GetPositionZ();
+
+    // Sample a ring around the target and take the nearest stand-off point that
+    // can actually trace back to it. Starting from the bot's current bearing
+    // keeps the correction small whenever a small one is enough.
+    float const baseAngle = target->GetAbsoluteAngle(player);
+    constexpr float unstickRadius = 7.0f;
+    constexpr uint32 sampleCount = 8;
+
+    Position best;
+    bool found = false;
+    float bestDistance = std::numeric_limits<float>::max();
+
+    for (uint32 sample = 0; sample < sampleCount; ++sample)
+    {
+        float const angle = baseAngle + (float(sample) * 2.0f * float(M_PI) / float(sampleCount));
+        float x = targetX + unstickRadius * std::cos(angle);
+        float y = targetY + unstickRadius * std::sin(angle);
+        float z = targetZ;
+        player->UpdateAllowedPositionZ(x, y, z);
+
+        if (!target->IsWithinLOS(x, y, z + 0.5f))
+            continue;
+
+        Position const candidate = BuildCollisionSafeDestination(player, Position(x, y, z, player->GetOrientation()));
+        float const candidateDistance = player->GetDistance(candidate);
+        if (candidateDistance < bestDistance)
+        {
+            bestDistance = candidateDistance;
+            best = candidate;
+            found = true;
+        }
+    }
+
+    if (!found)
+        return false;
+
+    motionMaster->Clear(MOTION_SLOT_ACTIVE);
+    motionMaster->MovePoint(0, best, true);
+    state.targetGuid = target->GetGUID();
+    state.lastIssueMs = nowMs;
+
+    std::ostringstream diag;
+    diag << "los_unstick_reposition"
+         << " label=" << (label ? label : "none")
+         << " dist_to_target=" << player->GetDistance(target)
+         << " unstick_radius=" << unstickRadius
+         << " chosen_dist=" << bestDistance
+         << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
+         << " moving_after=" << (player->isMoving() ? "yes" : "no");
+    SetLastMovementDebugStatus(player, diag.str());
+    return true;
 }
 
 bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desiredDestination, Position& segmentDestination)
@@ -1788,6 +1874,19 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     bool const forcedInRangeLosRecovery = forceMovementWhenAlreadyInRange && currentDistance <= (requestedSafeDistance + 0.25f);
     if (forcedInRangeLosRecovery)
     {
+        // Closing distance cannot restore line of sight once the bot is already
+        // touching the target - there is no gap left to halve, so the same
+        // no-op move is re-issued forever. Two bots that pick each other in that
+        // state wiggle against each other permanently, and because neither can
+        // land an attack without LOS, neither ever enters combat to break it.
+        // Step out to a point that can actually see the target instead.
+        float const contactDistance = player->GetCombatReach() + target->GetCombatReach() + 1.0f;
+        if (currentDistance <= contactDistance)
+        {
+            if (TryIssueLosUnstickMovement(player, target, forcedReason))
+                return;
+        }
+
         float const forcedCloserDistance = currentDistance > 4.0f ? (currentDistance - 3.0f) : (currentDistance * 0.5f);
         safeDistance = std::max(1.0f, std::min(requestedSafeDistance, forcedCloserDistance));
     }
@@ -2122,6 +2221,41 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         // Ensure hostile ranged approach can engage chase generators even when
         // the bot is currently out of combat.
         player->Attack(target, false);
+    }
+
+    // Nothing left to approach. Preserving a chase after the bot has already
+    // arrived leaves the generator micro-correcting against a target that is
+    // itself micro-correcting - two bots in contact then jitter against each
+    // other indefinitely, which is what shows up at arena boundaries. Settle
+    // instead. The 0.5 yard margin is hysteresis: without it the bot would flip
+    // between stopping and chasing every tick right at the range edge.
+    //
+    // The contact test is load-bearing, not belt-and-braces. "Inside the
+    // desired range" is not the same as "arrived": a bot approaching with a
+    // desired range of 15 while standing at 8 satisfies the range test and
+    // would be stopped dead mid-approach - which is precisely how this stranded
+    // stealthed rogues, parked and never closing. Only a bot actually in
+    // contact can have nothing left to approach.
+    float const contactDistance = player->GetCombatReach() + target->GetCombatReach() + 1.0f;
+    if (activeTargetRelativeMotion &&
+        currentDistance <= std::max(0.5f, genericMoveRange - 0.5f) &&
+        currentDistance <= contactDistance)
+    {
+        motionMaster->Clear(MOTION_SLOT_ACTIVE);
+        player->StopMoving();
+
+        stallState.targetGuid = target->GetGUID();
+        stallState.lastDistance = currentDistance;
+        stallState.lastSampleMs = nowMs;
+
+        std::ostringstream settleDiag;
+        settleDiag << "generic_arrived_settle"
+                   << " dist=" << currentDistance
+                   << " desired_range=" << genericMoveRange
+                   << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
+                   << " moving_after=" << (player->isMoving() ? "yes" : "no");
+        SetLastMovementDebugStatus(player, settleDiag.str());
+        return;
     }
 
     if (activeTargetRelativeMotion && !hardStaleTargetRelative)
@@ -2699,6 +2833,38 @@ bool PlayerHasPoisonForStoneform(Player const* player)
     return false;
 }
 
+// Mirrors FindEveryManForHimselfBreakableAura in PlayerbotPvpCore.cpp. Helpful
+// auras must be excluded: the arena team markers ("Gold Team" 32724, "Green
+// Team" 32725, and the 35774/35775 pair) carry MECHANIC_TURN in stock spell
+// data, which sits inside the loss-of-control mask. A plain HasAuraWithMechanic
+// therefore reports every arena participant as permanently crowd controlled.
+bool HasHarmfulAuraWithMechanic(Player const* player, uint32 mechanicMask)
+{
+    if (!player)
+        return false;
+
+    for (auto const& auraPair : player->GetAppliedAuras())
+    {
+        AuraApplication const* application = auraPair.second;
+        if (!application || application->IsPositive() || !application->GetBase())
+            continue;
+
+        SpellInfo const* spellInfo = application->GetBase()->GetSpellInfo();
+        if (!spellInfo)
+            continue;
+
+        if (spellInfo->Mechanic && (mechanicMask & (1 << spellInfo->Mechanic)))
+            return true;
+
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+            if (application->HasEffect(effect.EffectIndex) && effect.IsEffect() && effect.Mechanic &&
+                (mechanicMask & (1 << effect.Mechanic)))
+                return true;
+    }
+
+    return false;
+}
+
 bool IsControlBreakingRacialCast(Player const* player, playerbot::PvpClassSpellContext const& context, uint32 resolvedSpellId)
 {
     if (!player || context.targetMode != playerbot::PvpClassSpellContext::TargetMode::Self)
@@ -2726,7 +2892,7 @@ bool IsControlBreakingRacialCast(Player const* player, playerbot::PvpClassSpellC
         case 89151: // Mage
         case 89152: // Druid and anything else
             return player->HasUnitState(UNIT_STATE_FLEEING) ||
-                player->HasAuraWithMechanic(IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK);
+                HasHarmfulAuraWithMechanic(player, IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK);
         default:
             return false;
     }
@@ -3446,7 +3612,21 @@ bool IsPlayerbotStationaryChannel(SpellInfo const* spellInfo)
 
 bool IsPlayerbotMovableCastTimeSpell(Player const* player, SpellInfo const* spellInfo)
 {
-    return player && spellInfo && spellInfo->IsStarfire() && player->GetStarfireSnareSpeedRate() > 0.0f;
+    if (!player || !spellInfo)
+        return false;
+
+    // Starfire keeps its bespoke snare-rate exception.
+    if (spellInfo->IsStarfire() && player->GetStarfireSnareSpeedRate() > 0.0f)
+        return true;
+
+    // Spells the client lets a human cast while running. Without the movement
+    // interrupt flag there is nothing to stand still for, so the bot must not
+    // plant itself: the stationary path defers the cast while the bot is
+    // mid-chase, so it never completes, never takes its cooldown, and is
+    // re-selected forever. Pairs with the matching allowance in
+    // Unit::IsMovementPreventedByCasting - this stops the bot choosing to halt,
+    // that stops the movement generator freezing it. Both are needed.
+    return (spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) == 0;
 }
 
 bool HasActiveStationaryChannel(Player const* player)
@@ -3881,6 +4061,14 @@ bool CanIssueFollowCommands(Player const* player)
 void ClearActiveMovementForControlLoss(Player* player)
 {
     if (!player)
+        return;
+
+    // Taunt pauses the tick like any other CC, but it must not tear down its own
+    // effect. Unit::SetTaunted has already installed MoveChase(caster) +
+    // Attack(caster) (Unit.cpp:12990); AttackStop/SetSelection/Clear below would
+    // erase it every tick and leave the bot standing still. Real players never
+    // reach this function, which is why taunt works on them and not on bots.
+    if (player->IsTaunted())
         return;
 
     player->AttackStop();
@@ -5964,10 +6152,18 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
     {
         if (context.spellId == 783 && context.reason && std::string_view(context.reason) == "recovering from polymorph by travel-form reposition")
             RepositionDruidAfterTravelFormRecovery(player);
-        SetLastExecutionStatus(player, "cast_executed");
+        // Record which spell, not just that something happened. Without the id
+        // and the selector's own reason string, "cast_executed" cannot answer
+        // the only question worth asking when a bot misbehaves: what did it
+        // actually decide to do, and why.
+        SetLastExecutionStatus(player, "cast_executed spell=" + std::to_string(context.spellId) +
+            " action=" + (context.actionName ? context.actionName : "none") +
+            " reason=" + (context.reason ? context.reason : "none"));
     }
     else
-        SetLastExecutionStatus(player, "cast_failed_" + failureReason);
+        SetLastExecutionStatus(player, "cast_failed_" + failureReason +
+            " spell=" + std::to_string(context.spellId) +
+            " action=" + (context.actionName ? context.actionName : "none"));
     return casted;
 }
 }

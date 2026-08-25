@@ -30,9 +30,13 @@
 #include <iostream>
 #include <list>
 #include <map>
+#include <set>
+#include <string>
 #include <unordered_map>
 #include <vector>
+#include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cerrno>
 #include <sys/stat.h>
 
@@ -62,6 +66,40 @@ char output_path[128] = ".";
 char input_path[1024] = ".";
 bool hasInputPathParam = false;
 bool preciseVectorData = false;
+// -m: only these map ids are walked (empty = every map in Map.dbc). WMO and
+// M2 models are extracted on demand from the WDT/ADT placements, so a filtered
+// run yields exactly the models those maps reference. The gameobject model
+// list (GameObjectDisplayInfo.dbc) is global, not per map, so a filtered run
+// leaves it alone unless -g is also given.
+std::set<uint32> mapFilter;
+bool extractGameobjectModels = true;
+
+// Parses "1608" or "1608,1620,617" into ids. Returns false on anything else.
+bool ParseMapIdList(char const* text, std::set<uint32>& ids)
+{
+    if (!text || !*text)
+        return false;
+
+    std::string token;
+    for (char const* p = text; ; ++p)
+    {
+        if (*p == ',' || *p == '\0')
+        {
+            if (token.empty())
+                return false;
+            for (char ch : token)
+                if (!isdigit(static_cast<unsigned char>(ch)))
+                    return false;
+            ids.insert(static_cast<uint32>(strtoul(token.c_str(), nullptr, 10)));
+            token.clear();
+            if (*p == '\0')
+                break;
+        }
+        else
+            token.push_back(*p);
+    }
+    return !ids.empty();
+}
 std::unordered_map<std::string, WMODoodadData> WmoDoodads;
 
 // Constants
@@ -199,8 +237,28 @@ void ParsMapFiles()
 {
     char fn[512];
     //char id_filename[64];
+    if (!mapFilter.empty())
+    {
+        printf("Map filter: processing only map id(s)");
+        for (uint32 id : mapFilter)
+            printf(" %u", id);
+        printf("\n");
+
+        for (uint32 id : mapFilter)
+        {
+            bool known = false;
+            for (unsigned int i = 0; i < map_count && !known; ++i)
+                known = map_ids[i].id == id;
+            if (!known)
+                printf("WARNING: map id %u is not in the client's Map.dbc, nothing will be extracted for it\n", id);
+        }
+    }
+
     for (unsigned int i = 0; i < map_count; ++i)
     {
+        if (!mapFilter.empty() && mapFilter.find(map_ids[i].id) == mapFilter.end())
+            continue;
+
         sprintf(fn, "World\\Maps\\%s\\%s.wdt", map_ids[i].name, map_ids[i].name);
         WDTFile WDT(fn, map_ids[i].name);
         if (WDT.init(map_ids[i].id))
@@ -395,19 +453,50 @@ bool processArgv(int argc, char** argv, const char* versionString)
         {
             preciseVectorData = true;
         }
+        else if (strcmp("-m", argv[i]) == 0)
+        {
+            if ((i + 1) < argc && ParseMapIdList(argv[i + 1], mapFilter))
+                ++i;
+            else
+            {
+                result = false;
+                break;
+            }
+        }
+        else if (strcmp("-g", argv[i]) == 0)
+        {
+            extractGameobjectModels = true;
+        }
         else
         {
             result = false;
             break;
         }
     }
+
+    // A filtered run is a per-map refresh; the gameobject model list is
+    // global and would be regenerated from scratch (and every GO model
+    // re-extracted) for no benefit, so it is opt-in there.
+    if (!mapFilter.empty())
+    {
+        bool forced = false;
+        for (int i = 1; i < argc; ++i)
+            if (strcmp("-g", argv[i]) == 0)
+                forced = true;
+        extractGameobjectModels = forced;
+    }
+
     if (!result)
     {
         printf("Extract %s.\n", versionString);
-        printf("%s [-?][-s][-l][-d <path>]\n", argv[0]);
+        printf("%s [-?][-s][-l][-d <path>][-m <map ids>][-g]\n", argv[0]);
         printf("   -s : (default) small size (data size optimization), ~500MB less vmap data.\n");
         printf("   -l : large size, ~500MB more vmap data. (might contain more details)\n");
         printf("   -d <path>: Path to the vector data source folder.\n");
+        printf("   -m <map ids>: only walk these maps, one id or a comma-separated list (e.g. -m 1608 or -m 1608,1620).\n");
+        printf("                 Models are extracted on demand, so only what those maps place is written.\n");
+        printf("                 Skips the gameobject model list unless -g is also given.\n");
+        printf("   -g : extract the gameobject model list (GameObjectDisplayInfo.dbc) even with -m.\n");
         printf("   -? : This message.\n");
     }
     return result;
@@ -513,7 +602,10 @@ int main(int argc, char** argv)
         ParsMapFiles();
         //nError = ERROR_SUCCESS;
         // Extract models, listed in DameObjectDisplayInfo.dbc
-        ExtractGameobjectModels();
+        if (extractGameobjectModels)
+            ExtractGameobjectModels();
+        else
+            printf("Skipping gameobject model list (map filter active, no -g)\n");
     }
 
     printf("\n");

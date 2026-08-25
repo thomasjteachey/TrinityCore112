@@ -22,6 +22,7 @@
 #include <G3D/Matrix3.h>
 #include <map>
 #include <set>
+#include <utility>
 
 #include "ModelInstance.h"
 #include "WorldModel.h"
@@ -96,10 +97,17 @@ namespace VMAP
             std::string iSrcDir;
             MapData mapData;
             std::set<std::string> spawnedModelFiles;
+            // Empty = assemble every map found in dir_bin. Otherwise only these
+            // map ids get a .vmtree/.vmtile set, and only the models they spawn
+            // are converted, so a full Buildings dump can be re-assembled for a
+            // handful of maps without touching the rest.
+            std::set<uint32> iMapFilter;
 
         public:
             TileAssembler(const std::string& pSrcDirName, const std::string& pDestDirName);
             virtual ~TileAssembler();
+
+            void setMapFilter(std::set<uint32> mapIds) { iMapFilter = std::move(mapIds); }
 
             bool convertWorld2();
             bool readMapSpawns();

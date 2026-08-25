@@ -8,6 +8,7 @@
 #include "ScriptedCreature.h"
 #include "ScriptedGossip.h"
 #include "SharedDefines.h"
+#include "WorldPacket.h"
 #include "WorldSession.h"
 #include <DBCStores.h>
 #include <string>
@@ -24,6 +25,12 @@ constexpr uint32 ACTION_CLOSE = GOSSIP_ACTION_INFO_DEF + 7;
 constexpr uint32 ACTION_QUEUE_OBSIDIAN_REGULAR = GOSSIP_ACTION_INFO_DEF + 8;
 constexpr uint32 ACTION_QUEUE_OBSIDIAN_ALLIANCE = GOSSIP_ACTION_INFO_DEF + 9;
 constexpr uint32 ACTION_QUEUE_OBSIDIAN_HORDE = GOSSIP_ACTION_INFO_DEF + 10;
+constexpr uint32 ACTION_QUEUE_TANARIS_REGULAR = GOSSIP_ACTION_INFO_DEF + 11;
+constexpr uint32 ACTION_QUEUE_TANARIS_ALLIANCE = GOSSIP_ACTION_INFO_DEF + 12;
+constexpr uint32 ACTION_QUEUE_TANARIS_HORDE = GOSSIP_ACTION_INFO_DEF + 13;
+// No force-side variants: the party always holds one side of the Violet Hold
+// and the clone waves always hold the other.
+constexpr uint32 ACTION_QUEUE_VIOLET_HOLD = GOSSIP_ACTION_INFO_DEF + 14;
 
 void SendQueueError(Player* player, char const* text)
 {
@@ -72,6 +79,74 @@ bool QueueSinglePlayer(Player* player, BattlegroundTypeId bgTypeId, uint32 force
     sBattlegroundMgr->ScheduleQueueUpdate(ginfo->ArenaMatchmakerRating, ginfo->ArenaType, queueTypeId, bgTypeId, bracketEntry->GetBracketId());
     return true;
 }
+
+// Queue an entire party as a single GroupQueueInfo, mirroring the stock
+// CMSG_BATTLEMASTER_JOIN group path. Every member must individually be
+// eligible; if any is not, nothing is queued at all rather than leaving a
+// half-queued party.
+bool QueueGroup(Player* leader, Group* group, BattlegroundTypeId bgTypeId, uint32 forcedTeam)
+{
+    if (!leader || !group)
+        return false;
+
+    Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
+    if (!bgTemplate)
+        return false;
+
+    BattlegroundQueueTypeId const queueTypeId = BattlegroundMgr::BGQueueTypeId(bgTypeId, 0);
+    if (queueTypeId == BATTLEGROUND_QUEUE_NONE)
+        return false;
+
+    PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), leader->GetLevel());
+    if (!bracketEntry)
+        return false;
+
+    for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+    {
+        Player* member = ref->GetSource();
+        if (!member || member->IsInCustomGameLobby() || !member->GetBGAccessByLevel(bgTypeId) ||
+            !member->HasFreeBattlegroundQueueId() ||
+            member->GetBattlegroundQueueIndex(queueTypeId) < PLAYER_MAX_BATTLEGROUND_QUEUES)
+            return false;
+    }
+
+    // The forced side is read off the LEADER inside AddGroup, and it applies to
+    // the whole resulting entry, so only the leader's override needs setting.
+    uint32 const previousBgTeam = leader->GetBGTeamOverride();
+    if (forcedTeam == TEAM_ALLIANCE)
+        leader->SetBGTeam(ALLIANCE);
+    else if (forcedTeam == TEAM_HORDE)
+        leader->SetBGTeam(HORDE);
+    else
+        leader->SetBGTeam(0);
+
+    BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(queueTypeId);
+    bool const isPremade = group->GetMembersCount() >= bgTemplate->GetMinPlayersPerTeam();
+    GroupQueueInfo* ginfo = bgQueue.AddGroup(leader, group, bgTypeId, bracketEntry, 0, false, isPremade, 0, 0);
+
+    leader->SetBGTeam(previousBgTeam);
+
+    if (!ginfo)
+        return false;
+
+    uint32 const avgTime = bgQueue.GetAverageQueueWaitTime(ginfo, bracketEntry->GetBracketId());
+    for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+    {
+        Player* member = ref->GetSource();
+        if (!member)
+            continue;
+
+        uint32 const queueSlot = member->AddBattlegroundQueueId(queueTypeId);
+
+        WorldPacket data;
+        sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, bgTemplate, queueSlot, STATUS_WAIT_QUEUE,
+            avgTime, 0, ginfo->ArenaType, 0);
+        member->SendDirectMessage(&data);
+    }
+
+    sBattlegroundMgr->ScheduleQueueUpdate(ginfo->ArenaMatchmakerRating, ginfo->ArenaType, queueTypeId, bgTypeId, bracketEntry->GetBracketId());
+    return true;
+}
 }
 
 class npc_scarlet_chapel_queue : public CreatureScript
@@ -95,6 +170,10 @@ public:
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Obsidian Colosseum", GOSSIP_SENDER_MAIN, ACTION_QUEUE_OBSIDIAN_REGULAR);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Obsidian Colosseum (Force Alliance side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_OBSIDIAN_ALLIANCE);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Obsidian Colosseum (Force Horde side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_OBSIDIAN_HORDE);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Tanaris Deathmatch", GOSSIP_SENDER_MAIN, ACTION_QUEUE_TANARIS_REGULAR);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Tanaris Deathmatch (Force Alliance side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_TANARIS_ALLIANCE);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Tanaris Deathmatch (Force Horde side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_TANARIS_HORDE);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for the Violet Hold (survival)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_VIOLET_HOLD);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Maybe later", GOSSIP_SENDER_MAIN, ACTION_CLOSE);
             SendGossipMenuFor(player, player->GetGossipTextId(me), me);
             return true;
@@ -114,6 +193,10 @@ public:
                 case ACTION_QUEUE_OBSIDIAN_REGULAR: return HandleQueue(player, BATTLEGROUND_OBC, "Obsidian Colosseum", TEAM_NEUTRAL);
                 case ACTION_QUEUE_OBSIDIAN_ALLIANCE: return HandleQueue(player, BATTLEGROUND_OBC, "Obsidian Colosseum", TEAM_ALLIANCE);
                 case ACTION_QUEUE_OBSIDIAN_HORDE: return HandleQueue(player, BATTLEGROUND_OBC, "Obsidian Colosseum", TEAM_HORDE);
+                case ACTION_QUEUE_TANARIS_REGULAR: return HandleQueue(player, BATTLEGROUND_TRT, "Tanaris Deathmatch", TEAM_NEUTRAL);
+                case ACTION_QUEUE_TANARIS_ALLIANCE: return HandleQueue(player, BATTLEGROUND_TRT, "Tanaris Deathmatch", TEAM_ALLIANCE);
+                case ACTION_QUEUE_TANARIS_HORDE: return HandleQueue(player, BATTLEGROUND_TRT, "Tanaris Deathmatch", TEAM_HORDE);
+                case ACTION_QUEUE_VIOLET_HOLD: return HandleQueue(player, BATTLEGROUND_VHR, "the Violet Hold", TEAM_NEUTRAL);
                 case ACTION_CLOSE: CloseGossipMenuFor(player); return true;
                 default: return false;
             }
@@ -152,16 +235,21 @@ public:
                 }
             }
 
-            bool anyFailed = false;
-            for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+            // Queue the party as ONE queue entry. Calling QueueSinglePlayer per
+            // member (as this used to) created a separate solo GroupQueueInfo
+            // for each of them, so the queue never knew they were together -
+            // and AddGroup's balancing deliberately pushes consecutive solo
+            // entries to opposite sides, which is exactly what scattered
+            // parties across both teams. One entry also lets the group-aware
+            // logic in BattlegroundQueue work: it evicts bots to make room
+            // rather than admitting a group partially or splitting it.
+            if (!QueueGroup(player, group, bgTypeId, forcedTeam))
             {
-                Player* member = ref->GetSource();
-                if (!QueueSinglePlayer(member, bgTypeId, forcedTeam))
-                    anyFailed = true;
+                std::string error = "Unable to queue your group for ";
+                error += battlegroundName;
+                error += " right now.";
+                SendQueueError(player, error.c_str());
             }
-
-            if (anyFailed)
-                SendQueueError(player, "One or more party members could not be queued.");
             else
                 CloseGossipMenuFor(player);
 

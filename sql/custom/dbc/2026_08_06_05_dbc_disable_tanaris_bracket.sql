@@ -1,0 +1,14 @@
+-- Disable Tanaris queueing by making its bracket 80-only.
+--
+-- The server caps at 60, so a MinLevel-80 bracket means
+-- GetBattlegroundBracketByLevel matches no real character and the queue
+-- refuses everyone - which is the requested "off switch" that deletes
+-- nothing: the map, template, and every other row stay intact, and
+-- re-enabling is one UPDATE back to 1-80.
+--
+-- The binary DBCs carry the same values (tools/tanaris/tanaris_dbc.py);
+-- changed rows ship there via tools/violet_hold/strip_dbc_rows.py + re-append,
+-- or an in-place rewrite since PvpDifficulty is all-integer.
+--
+-- Replayable. Must run after 2026_08_06_03_dbc_custom_bg_bracket_widen.sql.
+UPDATE dbc.pvpdifficulty_lplus SET MinLevel = 80, MaxLevel = 80 WHERE ID = 91620;

@@ -3173,15 +3173,6 @@ CharDelete.KeepDays = 30
 ###################################################################################################
 # CUSTOM SERVER OPTIONS
 #
-#    AutoBalance.Conf
-#        Description: Path to the AutoBalance module configuration file. Leave empty to disable loading
-#                     the module configuration file and use worldserver.conf/default values only.
-#        Default:     "conf/AutoBalance.conf"
-#
-
-AutoBalance.Conf = "conf/AutoBalance.conf"
-
-#
 #    DireMaulBeads.ItemId
 #        Description: Item entry that represents the Dire Maul ogre beads.
 #                     Set to 0 to disable bead tracking/loot distribution.
@@ -4360,97 +4351,158 @@ PvPTitles.Rank_12 = 15000
 PvPTitles.Rank_13 = 20000
 PvPTitles.Rank_14 = 25000
 
+###############################################################################
+# PLAYER COLLISION
+#
+#    PlayerCollision.GlobalAura
+#        Description: Apply a collision aura to every player automatically, so
+#                     everyone is solid without it being cast on them.
+#
+#                     Humans are stopped by their own client (movement is
+#                     client-authoritative and the client tweak reads the aura);
+#                     playerbots are stopped server-side. Both come from this one
+#                     aura, so there is no second behaviour to drift.
+#
+#                     Rotate the weekly mode by changing the id, or set 0 to turn
+#                     the whole thing off - the aura is then stripped from
+#                     everyone within one sweep. `.reload config` applies it
+#                     without a restart.
+#
+#                       0     - disabled
+#                       90210 - Obstruction: enemies cannot pass you (one-way)
+#                       90211 - Immovable:   nobody can pass you (one-way)
+#                       90212 - Bodycheck:   mutual collision with enemies
+#                       90213 - Solid Form:  mutual collision with everyone
+#
+#        Default:     0 (disabled)
+
+PlayerCollision.GlobalAura = 0
+
+#    PlayerCollision.GlobalAura.CheckSeconds
+#        Description: How often to re-assert the aura. It is re-applied on a
+#                     sweep rather than only at login because auras come off on
+#                     death and can be stripped by other effects.
+#        Default:     5
+
+PlayerCollision.GlobalAura.CheckSeconds = 5
+
+###############################################################################
+# CLIENT-TWEAKS ATTESTATION (anti-cheat)
+#
+#    Verifies each player is running the mandatory client-tweaks DLL
+#    (dinput8.dll), which is what enforces player collision client-side. A
+#    player who deletes the DLL walks through everyone; this kicks them.
+#
+#    The DLL sends a per-player token every ~15s (addon channel). The server
+#    recomputes the expected token and kicks any player who does not produce a
+#    valid one within the grace window, or who stops sending them.
+#
+#    HONEST LIMIT: this stops the casual "delete the DLL" cheat. It is NOT
+#    cryptographic - a determined attacker who extracts the compiled secret from
+#    the DLL can forge tokens. See ClientTweaksAttest.cpp.
+###############################################################################
+#
+#    ClientTweaks.Attest.Enable
+#        Description: Master switch. 0 = nothing is enforced, no one is kicked.
+#        Default:     0
+#
+#    ClientTweaks.Attest.Secret
+#        Description: Shared secret. MUST match the secret compiled into the
+#                     client-tweaks DLL, or every token fails. If Enable is on
+#                     and this is empty the feature FAILS OPEN (kicks no one) and
+#                     logs an error - it will never kick the whole realm over a
+#                     missing secret. Rotating the secret requires a matching DLL
+#                     rebuild + republish.
+#        Default:     "" (empty)
+#        Note:        Do NOT put a comment on the same line as any value here -
+#                     the parser does not strip inline comments and the value
+#                     fails to parse, silently using the default.
+#
+#    ClientTweaks.Attest.GraceSeconds
+#        Description: Seconds after login before a player must have attested.
+#                     Covers load time and the first token.
+#        Default:     60
+#
+#    ClientTweaks.Attest.TimeoutSeconds
+#        Description: Max seconds between valid tokens once past the grace window.
+#                     Catches unloading the DLL after logging in. Keep well above
+#                     the DLL's ~15s send interval.
+#        Default:     90
+
+ClientTweaks.Attest.Enable = 0
+ClientTweaks.Attest.Secret = ""
+ClientTweaks.Attest.GraceSeconds = 60
+ClientTweaks.Attest.TimeoutSeconds = 90
+
+#
+###################################################################################################
+#   VIOLET HOLD (custom wave-survival battleground, type 105)
+#
+#    Centurion.VioletHold.PrepSeconds
+#        Description: Gate window between waves, in seconds, counted from the moment the
+#                     next wave's clones stand in their cells. Announced once as it opens.
+#                     Live: `.reload config` applies to the next wave.
+#        Default:     30
+#
+#    Centurion.VioletHold.CountdownFromSeconds
+#        Description: The second at which the per-second centre-screen countdown starts;
+#                     between the opening call and this it is silent. Clamped to PrepSeconds.
+#        Default:     15
+#
+#    Centurion.VioletHold.PartyWaveChancePercent
+#        Description: Percent chance a wave mirrors the party itself instead of being drawn
+#                     from the playerbot population.
+#        Default:     10
+
+Centurion.VioletHold.PrepSeconds = 30
+Centurion.VioletHold.CountdownFromSeconds = 15
+Centurion.VioletHold.PartyWaveChancePercent = 10
+
+###############################################################################
 
 ###################################################################################################
-# CHALLENGE MODES
+#   UNARMED WEAPON-REQUIREMENT WAIVER (set bonus: fight bare-handed)
 #
-# ChallengeModes.Enable
-#     Description: Enable the challenge-mode shrine and mode restrictions.
-#     Default:     1 - Enabled
+#    Centurion.Unarmed.WaiverAuras
+#        Description: Comma-separated aura IDs that waive the equipped-WEAPON requirement on
+#                     melee abilities, so a player carrying one can use Heroic Strike, Slam,
+#                     Mortal Strike and so on with an empty hand.
 #
-# Modes:
-#     Hardcore           - Death marks the character permanently dead.
-#     SemiHardcore       - Death destroys equipped gear and removes carried gold.
-#     SelfCrafted        - Only self-crafted equipment can be equipped.
-#     ItemQualityLevel   - Only poor/normal-quality gear can be equipped.
-#     SlowXpGain         - XP multiplier defaults to 0.50.
-#     VerySlowXpGain     - XP multiplier defaults to 0.25.
-#     QuestXpOnly        - Creature-kill XP is suppressed.
-#     IronMan            - Normal/poor gear only, no enchants, no potions/elixirs/flasks, no professions, no grouping.
+#                     Deliberately narrow. It waives melee weapon requirements only: ranged
+#                     and wand spells keep theirs (or an aura holder could fire Arcane Shot
+#                     with an empty ranged slot), and shield requirements are untouched, so
+#                     Shield Slam and Shield Block still need a shield.
 #
-# Reward strings use pairs of "level rewardId", separated by commas. Example: "60 143, 80 145"
+#                     This is only half the feature. The client refuses these casts on its
+#                     own, before any packet is sent, so the matching client-side list in
+#                     clientedits AnimSpeedFix.ini [RuleRelax] WeaponAura must hold the SAME
+#                     ids. Nothing enforces that they agree - keep them in step by hand.
 #
-###################################################################################################
+#                     A list rather than one id because a rank chain is one spell to the
+#                     player but N ids here: Power Word: Fortitude is 8 ranks, and an id that
+#                     does not match the rank actually on the player looks exactly like a
+#                     broken feature. A purpose-made set aura will just be one entry.
+#
+#                     The aura must be VISIBLE to the client (not PASSIVE, not
+#                     HIDDEN_CLIENTSIDE) or the client-side half cannot see it.
+#
+#                     Weapon-gated on-hit PASSIVES (Deep Wounds and the like) are
+#                     also kept alive and allowed to proc while the aura is held.
+#                     That applies only to a GENUINELY EMPTY hand: disarmed, broken
+#                     and wrong-weapon states still suppress the proc, as does cat
+#                     or bear form. Shield-gated procs are untouched.
+#
+#                     Not covered: weapon-specialisation talents that add stats or
+#                     crit stay applied but contribute nothing while unarmed, and
+#                     weapon ENCHANT procs (Windfury, Crusader, poisons) live on the
+#                     item, so with no weapon there is no enchant to fire at all.
+#
+#        Note:        Do NOT put a comment on the same line as the value - the parser does
+#                     not strip inline comments and the value silently falls back.
+#
+#        Example:     Centurion.Unarmed.WaiverAuras = 1243, 1244, 1245, 2791, 10937, 10938, 25389, 48161
+#                     (Power Word: Fortitude, all 8 ranks - the current test stand-in)
+#
+#        Default:     "" - (Disabled, no aura waives anything)
 
-ChallengeModes.Enable = 1
-
-Hardcore.Enable = 1
-Hardcore.TitleRewards = ""
-Hardcore.XPMultiplier = 1
-Hardcore.TalentRewards = ""
-Hardcore.ItemRewards = ""
-Hardcore.ItemRewardAmount = 1
-Hardcore.DisableLevel = 0
-Hardcore.AchievementReward = ""
-
-SemiHardcore.Enable = 1
-SemiHardcore.TitleRewards = ""
-SemiHardcore.XPMultiplier = 1
-SemiHardcore.TalentRewards = ""
-SemiHardcore.ItemRewards = ""
-SemiHardcore.ItemRewardAmount = 1
-SemiHardcore.DisableLevel = 0
-SemiHardcore.AchievementReward = ""
-
-SelfCrafted.Enable = 1
-SelfCrafted.TitleRewards = ""
-SelfCrafted.XPMultiplier = 1
-SelfCrafted.TalentRewards = ""
-SelfCrafted.ItemRewards = ""
-SelfCrafted.ItemRewardAmount = 1
-SelfCrafted.DisableLevel = 0
-SelfCrafted.AchievementReward = ""
-
-ItemQualityLevel.Enable = 1
-ItemQualityLevel.TitleRewards = ""
-ItemQualityLevel.XPMultiplier = 1
-ItemQualityLevel.ItemRewards = ""
-ItemQualityLevel.ItemRewardAmount = 1
-ItemQualityLevel.DisableLevel = 0
-ItemQualityLevel.AchievementReward = ""
-
-SlowXpGain.Enable = 1
-SlowXpGain.TitleRewards = ""
-SlowXpGain.XPMultiplier = 0.50
-SlowXpGain.TalentRewards = ""
-SlowXpGain.ItemRewards = ""
-SlowXpGain.ItemRewardAmount = 1
-SlowXpGain.DisableLevel = 0
-SlowXpGain.AchievementReward = ""
-
-VerySlowXpGain.Enable = 1
-VerySlowXpGain.TitleRewards = ""
-VerySlowXpGain.XPMultiplier = 0.25
-VerySlowXpGain.TalentRewards = ""
-VerySlowXpGain.ItemRewards = ""
-VerySlowXpGain.ItemRewardAmount = 1
-VerySlowXpGain.DisableLevel = 0
-VerySlowXpGain.AchievementReward = ""
-
-QuestXpOnly.Enable = 1
-QuestXpOnly.TitleRewards = ""
-QuestXpOnly.XPMultiplier = 1
-QuestXpOnly.TalentRewards = ""
-QuestXpOnly.ItemRewards = ""
-QuestXpOnly.ItemRewardAmount = 1
-QuestXpOnly.DisableLevel = 0
-QuestXpOnly.AchievementReward = ""
-
-IronMan.Enable = 1
-IronMan.TitleRewards = ""
-IronMan.XPMultiplier = 1
-IronMan.TalentRewards = ""
-IronMan.ItemRewards = ""
-IronMan.ItemRewardAmount = 1
-IronMan.DisableLevel = 0
-IronMan.AchievementReward = ""
+Centurion.Unarmed.WaiverAuras = ""

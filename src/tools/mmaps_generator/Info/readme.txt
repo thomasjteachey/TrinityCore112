@@ -50,8 +50,10 @@ Generator command line args
                                     if this option is not used, all tiles are built
 
                     [#]             Build only the map specified by #
-                                    this command will build the map regardless of --skip* option settings
+                    [#,#,...]       or only the maps in this comma-separated list
+                                    this command will build those maps regardless of --skip* option settings
                                     if you do not specify a map number, builds all maps that pass the filters specified by --skip* options
+                                    (--tile needs exactly one map number)
 
 examples:
 
@@ -63,6 +65,9 @@ builds the default maps, except continents
 
 movement_extractor 0
 builds all tiles of map 0
+
+movement_extractor 1608,1620
+builds all tiles of maps 1608 and 1620, nothing else
 
 movement_extractor 0 --tile 34,46
 builds only tile 34,46 of map 0 (this is the southern face of blackrock mountain)

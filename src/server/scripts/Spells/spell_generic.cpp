@@ -23,6 +23,7 @@
  */
 
 #include "ScriptMgr.h"
+#include "Bag.h"
 #include "Battleground.h"
 #include "CellImpl.h"
 #include "Containers.h"
@@ -3222,6 +3223,158 @@ class spell_gen_restoration : public AuraScript
     }
 };
 
+// 90200 - Recharge
+// The fourth battleground power rune, alongside Speed / Restoration /
+// Berserking. All of the work happens the instant it is picked up; the aura
+// itself is inert and exists only so the buff is visible in the frame, which
+// is what lets the other team see who took the rune and react.
+//
+// Everything resets, deliberately - no exemption list. That includes the PvP
+// trinket, Bloodlust/Heroism and consumables, so a player can trinket twice or
+// double-potion off a single rune. ResetAllCooldowns is the right call for
+// that: unlike the predicate form of ResetCooldowns it also clears the
+// _categoryCooldowns map, and without that a potion whose spell cooldown was
+// cleared would still be blocked by its shared category.
+//
+// A SpellScript on the trap's cast, NOT an aura-apply handler: grabbing a
+// rune while the previous buff is still running only REFRESHES the aura, and
+// a refresh never re-enters AfterEffectApply(REAL) - that was players
+// "sometimes" keeping their cooldowns. The spell hit happens on every pickup.
+class spell_gen_recharge : public SpellScript
+{
+    PrepareSpellScript(spell_gen_recharge);
+
+    // PvP consumables are grouped by ItemLimitCategory 5 on this realm - the
+    // same key the Gurubashi arena restocker keys on - so the rune never needs
+    // a hardcoded item list that would go stale the moment one is added.
+    static constexpr uint32 PVP_CONSUMABLE_ITEM_LIMIT_CATEGORY = 5;
+
+    // Charges are written straight back to the template value rather than the
+    // destroy-and-restore-the-item dance the arena uses: that path can fail at
+    // CanStoreNewItem after the original has already been destroyed, which
+    // loses the item outright. This is what the core's own
+    // Spell::EffectRechargeManaGem does, and it cannot drop anything.
+    static bool RechargePvpConsumable(Player* owner, Item* item)
+    {
+        if (!item)
+            return false;
+
+        ItemTemplate const* proto = item->GetTemplate();
+        if (!proto || proto->ItemLimitCategory != PVP_CONSUMABLE_ITEM_LIMIT_CATEGORY)
+            return false;
+
+        bool restored = false;
+        for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+        {
+            // A negative SpellCharges means "expendable"; the count still runs
+            // toward zero, so comparing against the template value covers both
+            // signs without caring which one this item uses.
+            int32 const full = proto->Spells[i].SpellCharges;
+            if (!full || item->GetSpellCharges(i) == full)
+                continue;
+
+            item->SetSpellCharges(i, full);
+            restored = true;
+        }
+
+        if (restored)
+            item->SetState(ITEM_CHANGED, owner);
+
+        return restored;
+    }
+
+    void HandleReset(SpellEffIndex /*effIndex*/)
+    {
+        Player* player = GetHitPlayer();
+        if (!player)
+            return;
+
+        player->GetSpellHistory()->ResetAllCooldowns();
+
+        // A hunter whose pet is still waiting on Intimidation has not really
+        // been recharged - the pet keeps its own history, so it goes too.
+        if (Pet* pet = player->GetPet())
+            pet->GetSpellHistory()->ResetAllCooldowns();
+
+        // ...and the consumables themselves. Clearing the cooldown of a potion
+        // that has no charges left recharges nothing, so the rune tops the
+        // charges up as well - otherwise "everything resets" quietly stops
+        // being true for exactly the items a rune is most wanted for.
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+            RechargePvpConsumable(player, player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot));
+
+        for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+            if (Bag* bag = player->GetBagByPos(bagSlot))
+                for (uint8 slot = 0; slot < bag->GetBagSize(); ++slot)
+                    RechargePvpConsumable(player, bag->GetItemByPos(slot));
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_gen_recharge::HandleReset, EFFECT_0, SPELL_EFFECT_APPLY_AURA);
+    }
+};
+
+enum DiminishedSpells
+{
+    SPELL_DIMINISHED        = 90201,
+    SPELL_DIMINISHED_SCALE  = 90202
+};
+
+// 90201 - Diminished
+// A permanent, stacking handicap. Every stack is one percent less damage done,
+// one percent less healing done and one percent MORE damage taken.
+//
+// The amounts are NOT computed here. AuraEffect::CalculateAmount multiplies by
+// the stack count AFTER the script's calc-amount handlers run, so a handler
+// returning the total produces stacks SQUARED - that is what made a 25-stack
+// clone take 625% extra damage instead of 25%. Base points in the DBC are the
+// per-stack value (-1 / +1) and the engine does the rest, exactly as Fire
+// Vulnerability does it.
+//
+// Model scale lives on the hidden companion 90202 rather than here because a
+// 3.3.5 spell has only three effect slots and the parent's are taken by damage
+// done, damage taken and healing done. The companion mirrors the parent's
+// stack count exactly - one percent of size per stack, same rate as the rest,
+// with Unit::RecalculateObjectScale's 0.1 floor catching the top end. This
+// script's only job is keeping that companion applied at the right count.
+class spell_gen_diminished : public AuraScript
+{
+    PrepareAuraScript(spell_gen_diminished);
+
+    void SyncScaleHelper(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* target = GetTarget();
+        uint8 const stacks = GetStackAmount();
+
+        Aura* helper = target->GetAura(SPELL_DIMINISHED_SCALE, GetCasterGUID());
+        if (!helper)
+        {
+            CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+            args.SetOriginalCaster(GetCasterGUID());
+            target->CastSpell(target, SPELL_DIMINISHED_SCALE, args);
+            helper = target->GetAura(SPELL_DIMINISHED_SCALE, GetCasterGUID());
+        }
+
+        if (helper && helper->GetStackAmount() != stacks)
+            helper->SetStackAmount(stacks);
+    }
+
+    void RemoveScaleHelper(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        GetTarget()->RemoveAurasDueToSpell(SPELL_DIMINISHED_SCALE, GetCasterGUID());
+    }
+
+    void Register() override
+    {
+        // REAPPLY as well as CHANGE_AMOUNT: Aura::SetStackAmount calls
+        // ChangeAmount with onStackOrReapply set, and CHANGE_AMOUNT is only
+        // raised when the value actually moves.
+        AfterEffectApply += AuraEffectApplyFn(spell_gen_diminished::SyncScaleHelper, EFFECT_0, SPELL_AURA_MOD_DAMAGE_PERCENT_DONE, AuraEffectHandleModes(AURA_EFFECT_HANDLE_REAL | AURA_EFFECT_HANDLE_CHANGE_AMOUNT | AURA_EFFECT_HANDLE_REAPPLY));
+        AfterEffectRemove += AuraEffectRemoveFn(spell_gen_diminished::RemoveScaleHelper, EFFECT_0, SPELL_AURA_MOD_DAMAGE_PERCENT_DONE, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
 // 38772 Grievous Wound
 // 43937 Grievous Wound
 // 62331 Impale
@@ -4815,6 +4968,8 @@ void AddSC_generic_spell_scripts()
     RegisterSpellScript(spell_gen_remove_flight_auras);
     RegisterSpellScript(spell_gen_remove_impairing_auras);
     RegisterSpellScript(spell_gen_restoration);
+    RegisterSpellScript(spell_gen_recharge);
+    RegisterSpellScript(spell_gen_diminished);
     RegisterSpellAndAuraScriptPair(spell_gen_replenishment, spell_gen_replenishment_aura);
     RegisterSpellScript(spell_gen_remove_on_health_pct);
     RegisterSpellScript(spell_gen_remove_on_full_health);

@@ -118,7 +118,16 @@ WorldSession::WorldSession(uint32 id, std::string&& name, std::shared_ptr<WorldS
     m_virtualSession(!m_Socket),
     m_transientPlayerSession(false),
     _security(sec),
-    _gmDiagnosticMask(0),
+    // Preset from config rather than always 0. The mask is session state with no
+    // persistence anywhere (this is its only initialiser, and cs_gm.cpp's
+    // command is its only writer), so it silently reset on every login AND every
+    // restart - which on 2026-08-20 cost a whole live-test round: three set
+    // bonuses were declared broken purely because their diagnostics could not
+    // have printed. GM sessions on a dev realm want it on by default; the
+    // default of 0 keeps live behaviour unchanged.
+    _gmDiagnosticMask(sec > SEC_PLAYER
+        ? uint8(sConfigMgr->GetIntDefault("Centurion.GmDiagnostics.DefaultMask", 0) & 0xFF)
+        : uint8(0)),
     _accountId(id),
     m_sessionMapKey(id),
     _accountName(std::move(name)),

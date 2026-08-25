@@ -5,3 +5,11 @@
 !2024_07_05_02_world_party_damage_redirect.sql
 !2024_07_12_00_world_gurubashi_hourly_chest.sql
 !2026_03_10_00_world_reserved_name_chromi.sql
+!2026_08_06_00_world_tanaris_battleground.sql
+!2026_08_06_01_world_tanaris_crystal_cores.sql
+!2026_08_06_02_world_violet_hold_battleground.sql
+!2026_08_06_03_world_custom_bg_bracket_widen.sql
+!2026_08_06_04_world_violet_hold_countdown_text.sql
+!2026_08_07_00_world_recharge_rune.sql
+!2026_08_07_01_world_diminished_debuff.sql
+!2026_08_08_00_world_tanaris_workshop_twin.sql

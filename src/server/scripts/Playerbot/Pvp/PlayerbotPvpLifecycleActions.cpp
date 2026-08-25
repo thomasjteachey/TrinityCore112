@@ -102,6 +102,8 @@ namespace
     std::unordered_map<uint64, uint32> g_HunterLastFleeIssueMs;
     std::unordered_map<uint64, uint32> g_HunterKiteHoldUntilMs;
     std::unordered_map<uint64, int8> g_HunterKiteSideByGuid;
+    // Set when the core refused Auto Shot; suppresses planting until it expires.
+    std::unordered_map<uint64, uint32> g_HunterAutoShotCoreRejectUntilMs;
     // std::unordered_map<uint64, uint32> g_HunterAimedDiagLastMsByGuid; // Aimed Shot whisper diagnostics disabled.
 
     struct HunterFleeState
@@ -118,6 +120,11 @@ namespace
     constexpr uint32 PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS = 1150;
     constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS = 550;
     constexpr uint32 PLAYERBOT_HUNTER_FLEE_REISSUE_MS = 350;
+    // How long to stop trying to plant after the CORE refused the shot. Without
+    // a backoff the kite loop re-arms the plant on the very next pass, because
+    // spell 75's failed CheckCast never resets the ranged timer - see the
+    // core-reject branch in IsHunterAutoShotPlantActiveInternal.
+    constexpr uint32 PLAYERBOT_HUNTER_AUTOSHOT_CORE_REJECT_BACKOFF_MS = 5000;
     constexpr uint32 PLAYERBOT_PRIEST_ELUNES_GRACE_SPELL_ID = 81351;
     constexpr uint32 PLAYERBOT_PRIEST_WISP_FORM_SPELL_ID = 81352;
 constexpr uint32 kHunterFeignDeathSpellId = 5384;
@@ -246,6 +253,9 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
         if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.ObsidianColosseumAccounts").count(accountId))
             return BATTLEGROUND_OBC;
+
+        if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.TanarisAccounts").count(accountId))
+            return BATTLEGROUND_TRT;
 
         if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.BattleForGilneasAccounts").count(accountId))
             return BATTLEGROUND_BFG;
@@ -1200,6 +1210,41 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return IssueMovePointThrottled(player, BuildFollowDestination(player, target, desiredDistance), destinationChangeThreshold, minReissueMs);
     }
 
+    // Bring a bot that is well below the surface of water too deep to stand in
+    // up into the swim band (0.5 under the level - the same band the swim
+    // hysteresis and BuildCollisionSafeDestination use). A bot can find itself
+    // on a pool bed by being put down there (Violet Hold's flooded cell) or by
+    // sinking while stopped; a player in that spot would be treading water at
+    // the surface, and that is also where the navmesh water polys are, so
+    // route building has to start from there. Same UpdatePosition idiom as
+    // the stationary swim resync: observers pick it up with the next spline.
+    void SurfacePlayerbotInDeepWater(Player* player)
+    {
+        if (!player || !player->IsInWorld() || player->HasAuraType(SPELL_AURA_WATER_WALK))
+            return;
+
+        Map const* map = player->FindMap();
+        if (!map)
+            return;
+
+        LiquidData liquidData{};
+        ZLiquidStatus const status = map->GetLiquidStatus(player->GetPhaseMask(), player->GetPositionX(),
+            player->GetPositionY(), player->GetPositionZ() + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight());
+        if (!(status & MAP_LIQUID_STATUS_SWIMMING))
+            return;
+
+        bool const tooDeepToStand = (liquidData.level - liquidData.depth_level) > player->GetCollisionHeight();
+        if (!tooDeepToStand)
+            return;
+
+        float const swimZ = liquidData.level - 0.5f;
+        if (swimZ - player->GetPositionZ() < 1.0f)
+            return;
+
+        player->UpdatePosition(player->GetPositionX(), player->GetPositionY(), swimZ, player->GetOrientation());
+        player->UpdatePositionData();
+    }
+
     bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs)
     {
         if (!player)
@@ -1288,10 +1333,51 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             motionMaster->Clear();
         }
 
-        bool const generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+        bool const swimming = !player->IsFlying() && player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+        bool const generatePath = !player->IsFlying() && !swimming;
         Position const safeDestination = generatePath ? BuildCollisionSafeDestination(player, destination) : destination;
 
-        if (generatePath && player->InBattleground())
+        if (swimming && player->InBattleground())
+        {
+            // A swimmer's raw MovePoint is a straight spline. From the bed of a
+            // pool that line climbs through the basin wall and runs along under
+            // the surrounding floor until it surfaces next to the target -
+            // Violet Hold's flooded cell showed this as bots "teleporting under
+            // the arena". Surface the bot first (a player would be treading
+            // water there). Then: if the straight swim is unobstructed keep it,
+            // exactly as before - open water, and no walking-on-the-surface
+            // look from riding water polys. If geometry is in the way, walk the
+            // same mmap segments the land movers use: water polys are walkable
+            // for players and join the shore, so a real route normally exists.
+            // Only when Detour has nothing to offer either does the old direct
+            // spline go out, so no bot ends up worse off than before.
+            SurfacePlayerbotInDeepWater(player);
+
+            Map const* map = player->FindMap();
+            bool const straightSwimClear = map && map->isInLineOfSight(
+                player->GetPositionX(), player->GetPositionY(), player->GetPositionZ() + 1.0f,
+                safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ() + 1.0f,
+                player->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing);
+
+            Position segmentDestination;
+            PathType pathType = PathType(0);
+            if (!straightSwimClear &&
+                TryBuildBattlegroundSegmentDestination(player, BuildCollisionSafeDestination(player, destination), segmentDestination, &pathType))
+            {
+                motionMaster->MovePoint(0, segmentDestination, true);
+                EmitBattlegroundGmDebug(player,
+                    "movepoint=swim-nav-segment pathType=" + std::to_string(uint32(pathType)) +
+                    " segDist=" + std::to_string(int32(player->GetDistance(segmentDestination))), 0);
+            }
+            else
+            {
+                motionMaster->MovePoint(0, safeDestination, false);
+                EmitBattlegroundGmDebug(player,
+                    std::string("movepoint=swim-direct reason=") + (straightSwimClear ? "clear" : "no-nav") +
+                    " destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 0);
+            }
+        }
+        else if (generatePath && player->InBattleground())
         {
             Position segmentDestination;
             PathType pathType = PathType(0);
@@ -1871,6 +1957,15 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (!player)
             return;
 
+        // Taunt pauses the tick like any other CC, but it must not tear down its
+        // own effect. Unit::SetTaunted has already installed MoveChase(caster) +
+        // Attack(caster) (Unit.cpp:12990); AttackStop/SetSelection/Clear below
+        // would erase it every tick and leave the bot standing still. Real
+        // players never reach this function, which is why taunt works on them and
+        // not on bots.
+        if (player->IsTaunted())
+            return;
+
         player->AttackStop();
         player->SetSelection(ObjectGuid::Empty);
         // Preserve server-side confused wander (e.g. polymorph/sheep). Clearing
@@ -2238,6 +2333,45 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         player->SetFacingToObject(target);
         player->SetInFront(target);
         StopHunterTargetMovementForPlant(player);
+
+        // The core is the only authority on whether Auto Shot can actually
+        // release, and this plant's own legality model (alive / no breakable CC /
+        // range band / IsWithinLOSInMap) is a SUBSET of what CheckCast enforces.
+        // Anything CheckCast rejects that this gate cannot see - the fork's
+        // LoS-blocker aura is the live example, since IsWithinLOSInMap knows
+        // nothing about it - produces a plant that can never end:
+        //
+        //   Unit::_UpdateAutoRepeatSpell (Unit.cpp:3505) special-cases spell 75.
+        //   On a failed CheckCast it neither interrupts the auto-repeat NOR
+        //   calls resetAttackTimer(RANGED_ATTACK), so the ranged timer stays at
+        //   0. The plant's releases both require the shot to land, the 2.2 s
+        //   deadline clears the plant, and DriveHunterKiteLoop re-arms it on the
+        //   same pass because the timer is still 0. Forever.
+        //
+        // Ask the core directly once the plant has outlived a full release
+        // window. A hunter that is genuinely shooting clears its plant inside
+        // the 434 ms window and never reaches this, so correct kiting is
+        // untouched.
+        uint32 const plantHeldMs = PLAYERBOT_HUNTER_STUTTER_MAX_PLANT_MS - (plantUntilMs - nowMs);
+        if (plantHeldMs >= PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS)
+        {
+            Spell* autoRepeatLive = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+            SpellCastResult const coreVerdict = autoRepeatLive ? autoRepeatLive->CheckCast(true) : SPELL_FAILED_ERROR;
+            if (coreVerdict != SPELL_CAST_OK)
+            {
+                std::ostringstream rejectDiag;
+                rejectDiag << "[AutoShot] core-reject held=" << plantHeldMs
+                    << " check=" << (!autoRepeatLive ? "NO_SPELL" : EnumUtils::ToString(coreVerdict).Title)
+                    << " - releasing plant and repositioning";
+                WhisperAutoShotDiagnosticToArena(player, rejectDiag.str(), 0);
+
+                playerbot::LockedSet(g_HunterAutoShotCoreRejectUntilMs, guidRaw,
+                    nowMs + PLAYERBOT_HUNTER_AUTOSHOT_CORE_REJECT_BACKOFF_MS);
+                clearPlantState();
+                return false;
+            }
+        }
+
         return true;
     }
 
@@ -3122,6 +3256,17 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         float const desiredDistance = shouldCommitForBite ? 3.0f : idealRange;
 
         bool const hasLos = player->IsWithinLOSInMap(target);
+
+        // The plant released because the CORE refused the shot for a reason this
+        // loop cannot see (IsWithinLOSInMap says yes, CheckCast says no - the
+        // fork's LoS-blocker aura being the live example). Treat that exactly
+        // like having no line of sight: it is the same situation, "I cannot
+        // shoot from here", and it already has a purpose-built recovery.
+        // Without this the loop re-arms the plant on this very pass, because
+        // spell 75's failed CheckCast leaves the ranged timer at 0 forever.
+        uint32 const* coreRejectUntilMs = playerbot::LockedFind(g_HunterAutoShotCoreRejectUntilMs, hunterGuidRaw);
+        bool const coreRejectsAutoShot = coreRejectUntilMs && *coreRejectUntilMs > nowMs;
+
         bool const inAutoShotBand = hasLos && exactDistance > safeShootMin && exactDistance <= maxAutoShotRange;
         bool const tooClose = exactDistance <= safeShootMin;
 
@@ -3230,10 +3375,11 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return true;
         }
 
-        if (!hasLos)
+        if (!hasLos || coreRejectsAutoShot)
         {
             clearPlantState();
-            return TryRecoverLineOfSight(player, target, profile, "hunter-stutter-los");
+            return TryRecoverLineOfSight(player, target, profile,
+                hasLos ? "hunter-stutter-core-reject" : "hunter-stutter-los");
         }
 
         if (tooClose && !shouldCommitForBite)
@@ -4620,6 +4766,17 @@ namespace playerbot
         if (!battleground || !player)
             return false;
 
+        // Violet Hold has no objectives, and its team start positions are not
+        // places anyone should walk to: the enemy one is wherever the LAST
+        // wave clone was seated, i.e. inside a cell. The fallback below would
+        // send a caged wave - and the party's own bots - marching at that
+        // cell, straight through the wall between two of them, which is
+        // exactly what a two-cell wave looks like on screen. There is nothing
+        // to take or defend here; everyone fights what is in front of them,
+        // which the enemy-pursuit paths above already handle.
+        if (battleground->GetTypeID(true) == BATTLEGROUND_VHR)
+            return false;
+
         BattlegroundNodeObjective nodeObjective;
         if (battleground->GetNodeObjective(player->GetGUID(), nodeObjective))
         {
@@ -4954,7 +5111,13 @@ namespace playerbot
 
         ClearStaleWaitingForResurrectAura(player);
 
-        if (player->HasAura(SPELL_PREPARATION) || player->HasAura(SPELL_ARENA_PREPARATION) || player->HasUnitFlag(UNIT_FLAG_PREPARATION))
+        // Stale start-of-match preparation on a bot that is already playing.
+        // A battleground that hands out preparation mid-match owns it and
+        // takes it back itself (Violet Hold's per-wave gate) - stripping that
+        // would delete the window the wave is meant to buff in, on the very
+        // next tick.
+        if ((player->HasAura(SPELL_PREPARATION) || player->HasAura(SPELL_ARENA_PREPARATION) || player->HasUnitFlag(UNIT_FLAG_PREPARATION))
+            && !battleground->OwnsPreparationState(player))
         {
             player->RemoveAurasDueToSpell(SPELL_PREPARATION);
             player->RemoveAurasDueToSpell(SPELL_ARENA_PREPARATION);
@@ -5211,7 +5374,7 @@ namespace playerbot
             context.movement == BattlegroundMovementPrimitive::None &&
             context.flagCarrierDirective == FlagCarrierDirective::None)
         {
-            if (battleground && battleground->GetTypeID() == BATTLEGROUND_SCM)
+            if (battleground && (battleground->GetTypeID() == BATTLEGROUND_SCM || battleground->GetTypeID() == BATTLEGROUND_VHR))
             {
                 float const engageDistance = GetAggressiveCombatScanDistance(player, 100.0f);
                 if (EngageNearestEnemyPlayer(player, engageDistance))
@@ -5255,7 +5418,7 @@ namespace playerbot
                     return true;
                 }
 
-                if (battleground->GetTypeID() == BATTLEGROUND_SCM)
+                if (battleground->GetTypeID() == BATTLEGROUND_SCM || battleground->GetTypeID() == BATTLEGROUND_VHR)
                 {
                     float const engageDistance = GetAggressiveCombatScanDistance(player, 100.0f);
                     if (EngageNearestEnemyPlayer(player, engageDistance))

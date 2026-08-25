@@ -15,14 +15,17 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "GameTime.h"
 #include "PlayerbotPvpCore.h"
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotRandomBotParticipation.h"
+#include "PlayerbotSharedStateGuard.h"
 
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "BattlegroundTP.h"
 #include "BattlegroundWS.h"
+#include "CharacterCache.h"
 #include "Configuration/Config.h"
 #include "Creature.h"
 #include "GameObject.h"
@@ -44,6 +47,7 @@
 #include "Totem.h"
 #include "Unit.h"
 #include "Util.h"
+#include "WorldSession.h"
 
 #include <array>
 #include <algorithm>
@@ -51,6 +55,7 @@
 #include <limits>
 #include <list>
 #include <mutex>
+#include <sstream>
 #include <unordered_map>
 #include <vector>
 
@@ -58,6 +63,8 @@ namespace
 {
 struct SpellDecision;
 bool HasHostileTarget(Player const* player, Unit const* target);
+void SetWarriorGapCloserDiagnostic(Player const* player, std::string const& diagnostic);
+void SetEveryManForHimselfDiagnostic(Player const* player, std::string const& diagnostic);
 uint32 ResolveKnownPlayerSpellInChain(Player const* player, uint32 spellId);
 bool IsPetSpellReady(Player const* player, uint32 spellId);
 bool IsSpellReady(Player const* player, uint32 spellId);
@@ -153,6 +160,23 @@ std::unordered_map<ObjectGuid, uint8> g_CombatNoTargetTicksByBot;
 std::mutex g_CombatNoTargetTicksByBotLock;
 std::unordered_map<ObjectGuid, std::unordered_map<ObjectGuid, bool>> g_HumanPerceptionStealthStateByBot;
 std::mutex g_HumanPerceptionStealthStateLock;
+// Per-bot interrupt reaction tracking (see ApplyHumanInterruptReaction): which
+// enemy cast the bot is currently "watching", when it noticed it, and the
+// randomized reaction time rolled for that cast.
+struct InterruptReactionState
+{
+    ObjectGuid castTargetGuid;
+    uint32 castSpellId = 0;
+    uint32 noticedAtMs = 0;
+    uint32 reactionDelayMs = 0;
+    uint32 lastSeenCastingMs = 0;
+};
+std::unordered_map<ObjectGuid, InterruptReactionState> g_InterruptReactionStateByBot;
+std::mutex g_InterruptReactionStateLock;
+// Last taunt diagnostic line whispered per bot, so the tick-rate diagnostic only
+// speaks on a state change instead of repeating itself (see SelectTauntingEnemyGuid).
+std::unordered_map<ObjectGuid, std::string> g_TauntDiagnosticLastLineByBot;
+std::mutex g_TauntDiagnosticLastLineLock;
 thread_local ObjectGuid g_CurrentDecisionBotGuid = ObjectGuid::Empty;
 thread_local uint32 g_SuppressedDecisionSpellId = 0;
 
@@ -165,16 +189,6 @@ thread_local uint32 g_SuppressedDecisionSpellId = 0;
         uint32 const firstRankSpellId = spellInfo && spellInfo->GetFirstRankSpell() ? spellInfo->GetFirstRankSpell()->Id : spellId;
         return firstRankSpellId == 2061; // Flash Heal (rank 1)
     }
-
-bool IsShamanFrostShockSpell(uint32 spellId)
-{
-    if (!spellId)
-        return false;
-
-    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
-    uint32 const firstRankSpellId = spellInfo && spellInfo->GetFirstRankSpell() ? spellInfo->GetFirstRankSpell()->Id : spellId;
-    return firstRankSpellId == 8056;
-}
 
 bool IsPriestInSpiritOfRedemption(Player const* player)
 {
@@ -462,6 +476,48 @@ bool IsWarlockSpellstoneItemEntry(uint32 itemEntry)
             player->HasAuraWithMechanic(wotfMechanicMask);
     }
 
+// Returns the aura that makes Every Man for Himself worth using, or nullptr.
+// Deliberately named rather than boolean: "it fired with nothing on me" cannot
+// be investigated without knowing what the check actually matched, and the
+// mechanic mask is broad enough that an unexpected aura carrying a snare or
+// root mechanic looks identical to real crowd control from outside.
+SpellInfo const* FindEveryManForHimselfBreakableAura(Player const* player)
+{
+    if (!player)
+        return nullptr;
+
+    for (auto const& auraPair : player->GetAppliedAuras())
+    {
+        AuraApplication const* application = auraPair.second;
+        if (!application || !application->GetBase())
+            continue;
+
+        // Helpful auras are never something to trinket out of. This is not a
+        // theoretical guard: the arena team markers ("Gold Team" 32724, "Green
+        // Team" 32725, and the 35774/35775 pair) carry MECHANIC_TURN in stock
+        // spell data, and MECHANIC_TURN sits inside the loss-of-control mask.
+        // Without this, every human in every arena reads as permanently crowd
+        // controlled and burns Every Man for Himself the moment the gate opens.
+        if (application->IsPositive())
+            continue;
+
+        SpellInfo const* spellInfo = application->GetBase()->GetSpellInfo();
+        if (!spellInfo)
+            continue;
+
+        if (spellInfo->Mechanic &&
+            (IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK & (1 << spellInfo->Mechanic)))
+            return spellInfo;
+
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+            if (application->HasEffect(effect.EffectIndex) && effect.IsEffect() && effect.Mechanic &&
+                (IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK & (1 << effect.Mechanic)))
+                return spellInfo;
+    }
+
+    return nullptr;
+}
+
 bool HasEveryManForHimselfBreakableControl(Player const* player)
 {
     if (!player)
@@ -471,8 +527,13 @@ bool HasEveryManForHimselfBreakableControl(Player const* player)
     // SpellInfo::_InitializeExplicitTargetMask's SPELL_AURA_MECHANIC_IMMUNITY
     // handling for 59752, which the custom 89148-89152 trinket spells are
     // modeled on), so this stays in lockstep with what they actually clear.
+    //
+    // Routed through FindEveryManForHimselfBreakableAura rather than calling
+    // HasAuraWithMechanic directly, because that helper also filters out
+    // helpful auras - without which the arena team markers alone are enough to
+    // make this permanently true. See the note there.
     return player->HasUnitState(UNIT_STATE_FLEEING) ||
-        player->HasAuraWithMechanic(IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK);
+        FindEveryManForHimselfBreakableAura(player) != nullptr;
 }
 
 // The custom Every Man for Himself trinket equivalents are granted to Human
@@ -1125,7 +1186,24 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
     if (player->GetRace() == RACE_HUMAN && HasEveryManForHimselfBreakableControl(player))
     {
         if (uint32 const emfhSpellId = GetCustomEveryManForHimselfSpellId(player); emfhSpellId && IsSpellReady(player, emfhSpellId))
+        {
+            // Name what triggered it. Snares and roots are legitimate targets
+            // here, so the mask is not the suspect - but if this fires with the
+            // bot visibly untouched, the aura it matched is the only thing that
+            // can explain it.
+            {
+                SpellInfo const* trigger = FindEveryManForHimselfBreakableAura(player);
+                std::ostringstream emfhDiag;
+                emfhDiag << "spell=" << emfhSpellId
+                         << " trigger=" << (trigger ? std::to_string(trigger->Id) : std::string("none"))
+                         << " trigger_mechanic=" << (trigger ? uint32(trigger->Mechanic) : 0u)
+                         << " fleeing=" << (player->HasUnitState(UNIT_STATE_FLEEING) ? "yes" : "no")
+                         << " combat=" << (player->IsInCombat() ? "yes" : "no")
+                         << " aura_count=" << uint32(player->GetAppliedAuras().size());
+                SetEveryManForHimselfDiagnostic(player, emfhDiag.str());
+            }
             return { "custom every man for himself", "break stun/root/fear/charm and other loss-of-control effects", emfhSpellId, playerbot::PvpClassSpellContext::TargetMode::Self };
+        }
     }
 
     switch (player->GetRace())
@@ -1170,6 +1248,9 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
             break;
         case RACE_GNOME:
         {
+            // 30 yards is a deliberate subset of the spell's real 45 yard range,
+            // not a bug - the castability gate in SelectClassOrUtilitySpell is
+            // what stops an unusable pick from starving class selection.
             Unit const* surpriseTarget = IsSpellReady(player, kRacialGnomeSurpriseSpellId) ? SelectRandomEnemyWithoutBreakableCrowdControl(player, 30.0f) : nullptr;
             if (surpriseTarget)
                 return { "racial surprise", "throw surprise grenade at random non-cc enemy", kRacialGnomeSurpriseSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy, surpriseTarget->GetGUID() };
@@ -1689,6 +1770,28 @@ uint32 ResolveKnownPlayerSpellInChain(Player const* player, uint32 spellId)
 
         return !player->GetSpellHistory()->HasCooldown(resolvedSpellId);
     }
+
+// IsSpellReady only answers "off cooldown". Affordability is enforced later in
+// IsDecisionImmediatelyCastable, which is fine for picking an action but not for
+// gating conditions that feed *other* decisions - a gap closer that reads as
+// "ready" while unaffordable can suppress the very rage generation needed to pay
+// for it, and the bot then has no way out of that state.
+bool CanAffordSpellPowerCost(Player const* player, uint32 spellId)
+{
+    uint32 const resolvedSpellId = ResolveKnownPlayerSpellInChain(player, spellId);
+    if (!player || !resolvedSpellId)
+        return false;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(resolvedSpellId);
+    if (!spellInfo)
+        return false;
+
+    if (spellInfo->PowerType < 0 || spellInfo->PowerType >= MAX_POWERS)
+        return true;
+
+    int32 const powerCost = spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask());
+    return powerCost <= 0 || player->GetPower(Powers(spellInfo->PowerType)) >= powerCost;
+}
 
 bool IsZeroManaCostSpellReady(Player const* player, uint32 spellId)
 {
@@ -2304,14 +2407,19 @@ bool HasHunterStingFromCaster(Unit const* unit, ObjectGuid casterGuid)
             return player->GetGUID();
         }
 
-        Player* bestTarget = nullptr;
-        float bestDistance = std::numeric_limits<float>::max();
-        Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
-        for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
-        {
-            Player* candidate = itr->GetSource();
-            if (!isEligible(candidate))
-                continue;
+    Player* bestTarget = nullptr;
+    float bestDistance = std::numeric_limits<float>::max();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        // see the note in SelectFriendlyWithManaAndWithoutAuraFromSpellChain:
+        // includeSelf must gate this sweep too, or the caster (distance 0)
+        // always wins and the flag does nothing.
+        if (!includeSelf && candidate == player)
+            continue;
+        if (!isEligible(candidate))
+            continue;
 
             float const distance = player->GetDistance(candidate);
             if (distance < bestDistance)
@@ -2379,6 +2487,15 @@ ObjectGuid SelectFriendlyWithManaAndWithoutAuraFromSpellChain(Player const* play
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
+        // includeSelf gates the shortcut above, but this sweep walks every
+        // player on the map - the caster included, at distance 0, so it always
+        // wins "closest". Without this the flag is meaningless here: a ret
+        // paladin looking for a mana ally to bless picked HIMSELF, Wisdom
+        // replaced his own Might (one blessing per caster per target), the
+        // next pass saw Might missing and recast it over Wisdom, and the two
+        // buffs cycled forever during the buff phase.
+        if (!includeSelf && candidate == player)
+            continue;
         if (!isEligible(candidate))
             continue;
 
@@ -2415,14 +2532,14 @@ ObjectGuid SelectFriendlyWithoutAnyAuraFromSpellChain(Player const* player, std:
         if (includeSelf && isEligible(const_cast<Player*>(player)))
             return player->GetGUID();
 
-        Player* bestTarget = nullptr;
-        float bestDistance = std::numeric_limits<float>::max();
-        Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
-        for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
-        {
-            Player* candidate = itr->GetSource();
-            if (!isEligible(candidate))
-                continue;
+    Player* bestTarget = nullptr;
+    float bestDistance = std::numeric_limits<float>::max();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!isEligible(candidate))
+            continue;
 
             float const distance = player->GetDistance(candidate);
             if (distance < bestDistance)
@@ -2437,7 +2554,15 @@ ObjectGuid SelectFriendlyWithoutAnyAuraFromSpellChain(Player const* player, std:
 
 SpellDecision SelectMissingBattlegroundRaidBuff(Player const* player)
 {
-    if (!player || !player->InBattleground() || player->IsInCombat())
+    if (!player || !player->InBattleground())
+        return {};
+
+    // Same relaxation as SelectPreparationBuffSpell: holding a preparation
+    // aura or flag states "not fighting yet" outright, which the in-combat
+    // inference gets wrong for a Violet Hold wave preparing mid-match.
+    bool const preparing = player->HasAura(SPELL_ARENA_PREPARATION) || player->HasAura(SPELL_PREPARATION)
+        || player->HasUnitFlag(UNIT_FLAG_PREPARATION);
+    if (player->IsInCombat() && !preparing)
         return {};
 
     auto makeDecision = [player](char const* actionName, char const* reason, uint32 spellId,
@@ -2530,7 +2655,22 @@ SpellDecision SelectMissingBattlegroundRaidBuff(Player const* player)
 SpellDecision SelectPreparationBuffSpell(Player const* player)
 {
     SpellDecision decision;
-    if (!player || player->IsInCombat())
+    if (!player)
+        return decision;
+
+    // The combat check is a proxy for "the fight has not started yet", which
+    // holds at a normal battleground or arena start because nobody is in combat
+    // behind the gates. It does not hold in Violet Hold: waves are prepared
+    // mid-match, and a wave's clones are playerbots whose AI picks a target and
+    // enters combat during their own countdown. Immunity stops them being
+    // attacked, not from attacking. The gate would then deny them every opening
+    // buff - the exact thing the preparation window exists to give them.
+    //
+    // Holding a preparation aura states "not fighting yet" outright, so it wins
+    // over the inference. Behaviour at ordinary starts is unchanged, since
+    // nothing there is in combat to begin with.
+    bool const preparing = player->HasAura(SPELL_ARENA_PREPARATION) || player->HasAura(SPELL_PREPARATION);
+    if (player->IsInCombat() && !preparing)
         return decision;
 
         auto hasUnimbuedWeapon = [player]()
@@ -3210,10 +3350,79 @@ Unit const* SelectClosestEnemyTarget(Player const* player, bool requireReachable
     return nullptr;
 }
 
-    Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Unit const* preferredTarget = nullptr)
+uint32 GetCurrentCastSpellId(Unit const* unit)
+{
+    if (!unit)
+        return 0;
+
+    if (Spell const* spell = unit->GetCurrentSpell(CURRENT_GENERIC_SPELL))
+        if (SpellInfo const* spellInfo = spell->GetSpellInfo())
+            return spellInfo->Id;
+
+    if (Spell const* spell = unit->GetCurrentSpell(CURRENT_CHANNELED_SPELL))
+        if (SpellInfo const* spellInfo = spell->GetSpellInfo())
+            return spellInfo->Id;
+
+    return 0;
+}
+
+// How long a committed "button press" stays live waiting for a decision tick
+// to actually deliver it. Must cover at least one battleground fast tick, but
+// stay short enough that a stale press never fires visibly late.
+constexpr uint32 kInterruptPressSlopMs = 300;
+// Maximum unobserved gap after which a same-spell cast by the same enemy is
+// treated as a brand-new cast (fresh reaction roll) instead of a continuation.
+// Sized above the 500ms world decision cadence so coarse ticking alone never
+// splits one cast into two.
+constexpr uint32 kInterruptCastContinuityGapMs = 750;
+
+// Humanizes bot interrupt reflexes. A bot that notices an enemy cast does not
+// become interrupt-eligible until a per-cast randomized reaction time has
+// passed. Once that reaction time arrives the bot is treated as having
+// committed to pressing the button: if the cast vanishes within the commit
+// window just before the press, the interrupt still goes out at the now-idle
+// target and is wasted. A well-timed fake cast can therefore bait the
+// interrupt, while cancelling early just makes the bot hold it.
+Unit const* ApplyHumanInterruptReaction(Player const* player, Unit const* candidate, float maxDistance)
+{
+    uint32 const reactionMaxMs = g_PvpCoreConfig.interruptReactionMaxMs;
+    if (reactionMaxMs == 0)
+        return candidate; // humanization disabled: legacy instant reflexes
+
+    uint32 const now = GameTime::GetGameTimeMS();
+    std::lock_guard<std::mutex> lock(g_InterruptReactionStateLock);
+    auto stateItr = g_InterruptReactionStateByBot.find(player->GetGUID());
+
+    if (candidate)
     {
-        if (!player || !player->FindMap())
+        uint32 const castSpellId = GetCurrentCastSpellId(candidate);
+        bool const continuesTrackedCast = stateItr != g_InterruptReactionStateByBot.end() &&
+            stateItr->second.castTargetGuid == candidate->GetGUID() &&
+            stateItr->second.castSpellId == castSpellId &&
+            now - stateItr->second.lastSeenCastingMs <= kInterruptCastContinuityGapMs;
+        if (!continuesTrackedCast)
+        {
+            uint32 const reactionMinMs = std::min(g_PvpCoreConfig.interruptReactionMinMs, reactionMaxMs);
+            InterruptReactionState& state = g_InterruptReactionStateByBot[player->GetGUID()];
+            state.castTargetGuid = candidate->GetGUID();
+            state.castSpellId = castSpellId;
+            state.noticedAtMs = now;
+            state.reactionDelayMs = urand(reactionMinMs, reactionMaxMs);
+            state.lastSeenCastingMs = now;
             return nullptr;
+        }
+
+        InterruptReactionState& state = stateItr->second;
+        state.lastSeenCastingMs = now;
+        if (now - state.noticedAtMs >= state.reactionDelayMs)
+            return candidate;
+        return nullptr;
+    }
+
+Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Unit const* preferredTarget = nullptr)
+{
+    if (!player || !player->FindMap())
+        return nullptr;
 
         auto isCandidateUsable = [&](Unit const* candidate)
         {
@@ -3225,28 +3434,28 @@ Unit const* SelectClosestEnemyTarget(Player const* player, bool requireReachable
                 player->IsWithinDistInMap(candidate, maxDistance);
         };
 
-        if (isCandidateUsable(preferredTarget))
-            return preferredTarget;
+    if (isCandidateUsable(preferredTarget))
+        return preferredTarget;
 
-        Unit const* best = nullptr;
-        float bestDistance = std::numeric_limits<float>::max();
-        Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
-        for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    Unit const* best = nullptr;
+    float bestDistance = std::numeric_limits<float>::max();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!isCandidateUsable(candidate))
+            continue;
+
+        float const distance = player->GetDistance(candidate);
+        if (distance < bestDistance)
         {
-            Player* candidate = itr->GetSource();
-            if (!isCandidateUsable(candidate))
-                continue;
-
-            float const distance = player->GetDistance(candidate);
-            if (distance < bestDistance)
-            {
-                best = candidate;
-                bestDistance = distance;
-            }
+            best = candidate;
+            bestDistance = distance;
         }
-
-        return best;
     }
+
+    return best;
+}
 
     bool AnyEnemyPolymorphed(Player const* player, float maxDistance)
     {
@@ -4366,17 +4575,17 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
         ++count;
     }
 
-        return count;
-    }
+    return count;
+}
 
-    ObjectGuid SelectCombatTargetGuid(Player const* player)
-    {
-        if (!player)
-            return ObjectGuid::Empty;
+ObjectGuid SelectCombatTargetGuid(Player const* player)
+{
+    if (!player)
+        return ObjectGuid::Empty;
 
-        if (ObjectGuid const selectedGuid = player->GetTarget(); !selectedGuid.IsEmpty())
-            if (Unit const* selectedTarget = ObjectAccessor::GetUnit(*player, selectedGuid); HasHostileTarget(player, selectedTarget) && !IsTargetInvalidByImmunity(player, selectedTarget))
-                return selectedGuid;
+    if (ObjectGuid const selectedGuid = player->GetTarget(); !selectedGuid.IsEmpty())
+        if (Unit const* selectedTarget = ObjectAccessor::GetUnit(*player, selectedGuid); HasHostileTarget(player, selectedTarget) && !IsTargetInvalidByImmunity(player, selectedTarget))
+            return selectedGuid;
 
         return ObjectGuid::Empty;
     }
@@ -4432,6 +4641,8 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
 
     Unit const* enemyOnTopTarget = SelectNearbyEnemyTarget(player, activeTarget, 5.0f);
     Unit const* nearbyCastingTarget = SelectEnemyCastingTarget(player, 20.0f, activeTarget);
+    Unit const* scatterPointBlankTarget = IsSpellReady(player, 19503) ?
+        SelectEnemyCastingTarget(player, 5.0f, enemyOnTopTarget) : nullptr;
     Unit const* closeMeleeThreat = SelectNearbyMeleeTarget(player, enemyOnTopTarget, 5.0f);
     Unit const* trapSetupTarget = SelectNearbyEnemyTarget(player, enemyOnTopTarget ? enemyOnTopTarget : activeTarget, 8.0f);
     Unit const* rogueTarget = SelectEnemyClassTarget(player, CLASS_ROGUE, GetConfiguredLongRange());
@@ -4445,6 +4656,19 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
     bool const bmPetAtUsefulSwapPosition = bmPetDistance >= 8.0f && bmPetDistance <= 30.0f &&
         player->IsWithinLOSInMap(bmPet) &&
         std::abs(player->GetPositionZ() - bmPet->GetPositionZ()) <= 20.0f;
+    // Outmaneuver (81297) has a MINIMUM range of 8 yd (SpellRange 163: 8-30),
+    // so the pet must be that far out for the swap to be castable at all. A BM
+    // pet normally sits on whatever is beating on the hunter - inside 8 yd -
+    // which is why pairing "enemy in melee on me" with "pet 8-30 yd away"
+    // practically never came true and the bot never got the spell off.
+    // Require instead that the pet is busy with a DIFFERENT enemy than the one
+    // pressuring us: only then is the pet standing somewhere worth porting to,
+    // rather than next to the very enemy we are trying to escape. The distance
+    // that matters is the PET's (already checked above, and it is what the
+    // spell actually ranges against) - where its victim happens to stand is
+    // irrelevant.
+    Unit const* bmPetVictim = bmPet && bmPet->IsAlive() ? bmPet->GetVictim() : nullptr;
+    bool const bmPetOnDifferentEnemy = bmPetVictim && bmPetVictim != enemyOnTopTarget;
     bool const bmCrowdControlled = isBeastMasteryHunter && IsHunterBestialWrathBreakableControl(player);
     bool const hasMongooseBite = ResolveKnownPlayerSpellInChain(player, 81285) != 0;
     bool const hasBitePrimerOnKillTarget = hasMongooseBite && activeTarget &&
@@ -4457,6 +4681,13 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
     // learned bite is ready; fillers remain available until melee is reached.
     bool const readyToBiteKillTarget = hasBitePrimerOnKillTarget && !IsRootedOrSnared(player) &&
         activeTarget && player->IsWithinMeleeRange(activeTarget);
+    // Outmaneuver is an opener as well as an escape. When the pet is already
+    // in melee with the kill target and the hunter is not, swapping places
+    // lands the hunter in melee range - which is exactly what Mongoose Bite
+    // needs. Cheaper and instant compared to running the gap down.
+    bool const bmSwapToReachBite = isBeastMasteryHunter && hasMongooseBite && activeTarget &&
+        IsSpellReady(player, 81285) && bmPetVictim == activeTarget &&
+        !player->IsWithinMeleeRange(activeTarget);
     Unit const* manaTarget = isSurvivalHunter
         ? SelectNearbyEnemyManaTarget(player, activeTarget, GetConfiguredLongRange(), 0.0f)
         : SelectNearbyEnemyTarget(player, activeTarget, GetConfiguredLongRange());
@@ -4485,33 +4716,33 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
             (target->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) ||
                 target->HasAuraWithMechanic((1 << MECHANIC_ROOT) | (1 << MECHANIC_STUN)));
 
-        std::vector<PrioritizedSpellDecision> candidates;
-        AddDecisionCandidate(candidates, player->HealthBelowPct(35) && IsSpellReady(player, 19263), 35.0f,
-            { "hunter deterrence", "defensive cooldown under sustained melee pressure", 19263, playerbot::PvpClassSpellContext::TargetMode::Self });
-        AddDecisionCandidate(candidates, canFeignUnderPressure, 36.0f,
-            { "hunter feign death", "drop combat under melee/dead-zone pressure", 5384, playerbot::PvpClassSpellContext::TargetMode::Self, trapSetupTarget ? trapSetupTarget->GetGUID() : ObjectGuid::Empty });
-        AddDecisionCandidate(candidates, canDropTrapNow, 35.75f,
-            { preferredTrapSpellId == 13809 ? "hunter frost trap" : "hunter freezing trap", "drop trap after feign death setup", preferredTrapSpellId, playerbot::PvpClassSpellContext::TargetMode::Self, trapSetupTarget ? trapSetupTarget->GetGUID() : ObjectGuid::Empty });
-        AddDecisionCandidate(candidates, isSurvivalHunter && IsSpellReady(player, 23989) && !HasAuraFromSpellChain(player, 19263) && !IsSpellReady(player, 19263), 34.0f,
-            { "hunter readiness", "reset cooldowns after deterrence has fallen", 23989, playerbot::PvpClassSpellContext::TargetMode::Self });
-        AddDecisionCandidate(candidates, isSurvivalHunter && enemyOnTop && enemyOnTopTarget && player->IsWithinMeleeRange(enemyOnTopTarget) && IsSpellReadyAndCasterAuraAllowed(player, 20910), 34.5f,
-            { "hunter counterattack", "strike any enemy in melee range after a parry", 20910, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
-        AddDecisionCandidate(candidates, isSurvivalHunter && wyvernTarget && IsSpellReady(player, 24133), 30.0f,
-            { "hunter wyvern sting", "crowd-control a non-dotted enemy support target", 24133, playerbot::PvpClassSpellContext::TargetMode::Enemy, wyvernTarget ? wyvernTarget->GetGUID() : ObjectGuid::Empty });
-        AddDecisionCandidate(candidates, rogueTarget && !HasAuraFromSpellChain(rogueTarget, 14325) && IsSpellReady(player, 14325), 29.5f,
-            { "hunter mark", "mark rogue targets for anti-stealth pressure", 14325, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
-        AddDecisionCandidate(candidates, isMarksmanshipHunter && !HasAuraFromSpellChain(player, 20906) && IsSpellReady(player, 20906), 27.5f,
-            { "hunter trueshot aura", "maintain personal buff aura", 20906, playerbot::PvpClassSpellContext::TargetMode::Self });
-        AddDecisionCandidate(candidates, canCallPet && IsSpellReady(player, kHunterCallPetSpellId), 26.0f,
-            { "hunter call pet", "summon active stable pet when no living pet is present", kHunterCallPetSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
-        AddDecisionCandidate(candidates, shouldRevivePet && IsSpellReady(player, kHunterRevivePetSpellId), 25.0f,
-            { "hunter revive pet", "revive dead hunter pet instead of repeatedly calling it", kHunterRevivePetSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
-        AddDecisionCandidate(candidates, isMarksmanshipHunter && enemyOnTop && enemyOnTopTarget->HasUnitState(UNIT_STATE_CASTING) && !HasBreakableCrowdControl(enemyOnTopTarget) && IsSpellReady(player, 19503), 23.0f,
-            { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
-        AddDecisionCandidate(candidates, isMarksmanshipHunter && nearbyCastingTarget && !HasBreakableCrowdControl(nearbyCastingTarget) && IsSpellReady(player, 19503), 23.0f,
-            { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyCastingTarget ? nearbyCastingTarget->GetGUID() : ObjectGuid::Empty });
-        AddDecisionCandidate(candidates,
-            enemyOnTop && enemyOnTopTarget && player->IsWithinMeleeRange(enemyOnTopTarget) &&
+    std::vector<PrioritizedSpellDecision> candidates;
+    AddDecisionCandidate(candidates, player->HealthBelowPct(35) && IsSpellReady(player, 19263), 35.0f,
+        { "hunter deterrence", "defensive cooldown under sustained melee pressure", 19263, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, canFeignUnderPressure, 36.0f,
+        { "hunter feign death", "drop combat under melee/dead-zone pressure", 5384, playerbot::PvpClassSpellContext::TargetMode::Self, trapSetupTarget ? trapSetupTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, canDropTrapNow, 35.75f,
+        { preferredTrapSpellId == 13809 ? "hunter frost trap" : "hunter freezing trap", "drop trap after feign death setup", preferredTrapSpellId, playerbot::PvpClassSpellContext::TargetMode::Self, trapSetupTarget ? trapSetupTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, isSurvivalHunter && IsSpellReady(player, 23989) && !HasAuraFromSpellChain(player, 19263) && !IsSpellReady(player, 19263), 34.0f,
+        { "hunter readiness", "reset cooldowns after deterrence has fallen", 23989, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, isSurvivalHunter && enemyOnTop && enemyOnTopTarget && player->IsWithinMeleeRange(enemyOnTopTarget) && IsSpellReadyAndCasterAuraAllowed(player, 20910), 34.5f,
+        { "hunter counterattack", "strike any enemy in melee range after a parry", 20910, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, isSurvivalHunter && wyvernTarget && IsSpellReady(player, 24133), 30.0f,
+        { "hunter wyvern sting", "crowd-control a non-dotted enemy support target", 24133, playerbot::PvpClassSpellContext::TargetMode::Enemy, wyvernTarget ? wyvernTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, rogueTarget && !HasAuraFromSpellChain(rogueTarget, 14325) && IsSpellReady(player, 14325), 29.5f,
+        { "hunter mark", "mark rogue targets for anti-stealth pressure", 14325, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, isMarksmanshipHunter && !HasAuraFromSpellChain(player, 20906) && IsSpellReady(player, 20906), 27.5f,
+        { "hunter trueshot aura", "maintain personal buff aura", 20906, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, canCallPet && IsSpellReady(player, kHunterCallPetSpellId), 26.0f,
+        { "hunter call pet", "summon active stable pet when no living pet is present", kHunterCallPetSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, shouldRevivePet && IsSpellReady(player, kHunterRevivePetSpellId), 25.0f,
+        { "hunter revive pet", "revive dead hunter pet instead of repeatedly calling it", kHunterRevivePetSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, isMarksmanshipHunter && enemyOnTop && enemyOnTopTarget->HasUnitState(UNIT_STATE_CASTING) && !HasBreakableCrowdControl(enemyOnTopTarget) && IsSpellReady(player, 19503), 23.0f,
+        { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, isMarksmanshipHunter && nearbyCastingTarget && !HasBreakableCrowdControl(nearbyCastingTarget) && IsSpellReady(player, 19503), 23.0f,
+        { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyCastingTarget ? nearbyCastingTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates,
+        enemyOnTop && enemyOnTopTarget && player->IsWithinMeleeRange(enemyOnTopTarget) &&
             IsSpellReady(player, 14268) && !HasAuraFromSpellChain(enemyOnTopTarget, 14268),
         21.0f,
         { "hunter wing clip", "close-range fallback snare", 14268, playerbot::PvpClassSpellContext::TargetMode::Enemy,
@@ -4519,10 +4750,10 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
     AddDecisionCandidate(candidates, !readyToBiteKillTarget && !activeTargetDeadZone && !targetBreakableCrowdControl && !targetClose && !targetSnaredOrStunned && IsSpellReady(player, 5116), 20.0f,
         { "hunter concussive shot", "kite or chase control", 5116, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetBreakableCrowdControl && (isSurvivalHunter || isBeastMasteryHunter) && activeTarget && activeTarget->GetPowerType() != POWER_MANA &&
-        !HasHunterStingFromCaster(activeTarget, player->GetGUID()) && IsSpellReady(player, 25295), 19.75f,
-        { "hunter serpent sting", "apply ranged dot pressure to non-mana kill target", 25295, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !activeTargetDeadZone && rogueTarget && !HasBreakableCrowdControl(rogueTarget) && !HasAuraFromSpellChain(rogueTarget, 25295) && IsSpellReady(player, 25295), 19.5f,
-        { "hunter serpent sting", "apply ranged dot pressure", 25295, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
+        !HasHunterStingFromCaster(activeTarget, player->GetGUID()) && IsSpellReady(player, 90468 /* T2 wrapper: 25295 is now learned as 90468 */), 19.75f,
+        { "hunter serpent sting", "apply ranged dot pressure to non-mana kill target", 90468, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, !activeTargetDeadZone && rogueTarget && !HasBreakableCrowdControl(rogueTarget) && !HasAuraFromSpellChain(rogueTarget, 25295) && IsSpellReady(player, 90468 /* T2 wrapper: 25295 is now learned as 90468 */), 19.5f,
+        { "hunter serpent sting", "apply ranged dot pressure", 90468, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetBreakableCrowdControl && isMarksmanshipHunter && rangedMode && !enemyNear && IsSpellReady(player, 20904), 18.0f,
         { "hunter aimed shot", "long cast pressure from range", 20904, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, hasBitePrimerOnKillTarget && activeTarget && player->IsWithinMeleeRange(activeTarget) && IsSpellReady(player, 81285), 27.0f,
@@ -4546,9 +4777,19 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
         { "hunter bestial wrath", "break any removable crowd-control effect", 81300, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isBeastMasteryHunter && bmPetAttacking && activeTarget && IsSpellReady(player, 19577), 28.5f,
         { "hunter intimidate", "stun the kill target whenever the pet is attacking", 19577, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
+    // Two reasons to swap, and they are different situations: get OUT (the pet
+    // holds someone else while we are pressured/stuck), or get IN (the pet is
+    // on our kill target and we want to be in melee for Mongoose Bite).
     AddDecisionCandidate(candidates, isBeastMasteryHunter && bmPetAtUsefulSwapPosition &&
-        (enemyOnTop || activeTargetDeadZone || IsRootedOrSnared(player)) && IsSpellReady(player, 81297), 36.5f,
-        { "hunter outmaneuver", "swap to the pet's safe position under movement or melee pressure", 81297, playerbot::PvpClassSpellContext::TargetMode::None });
+        ((bmPetOnDifferentEnemy && (enemyOnTop || activeTargetDeadZone || IsRootedOrSnared(player))) ||
+            bmSwapToReachBite) && IsSpellReady(player, 81297), 36.5f,
+        // TargetMode::Pet, NOT None: the castability check resolves a target
+        // per mode and treats None as "no target -> not castable", so this
+        // candidate was rejected before any of its conditions were even
+        // considered - the real reason the bot never got Outmaneuver off.
+        // Spell 81297 targets TARGET_UNIT_PET, which is exactly what Pet mode
+        // resolves to.
+        { "hunter outmaneuver", "swap out to the pet while it holds a different enemy", 81297, playerbot::PvpClassSpellContext::TargetMode::Pet });
     AddDecisionCandidate(candidates, hasMongooseBite && enemyOnTop && enemyOnTopTarget && player->IsWithinMeleeRange(enemyOnTopTarget) && IsSpellReady(player, 81285), 24.0f,
         { "hunter mongoose bite", "bite the nearest attacker under melee pressure", 81285, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
     // The old unconditional fallback candidate here (no melee-range check,
@@ -5154,7 +5395,8 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
 
     bool const closePressure = player->IsWithinDistInMap(target, 8.0f);
     Unit const* fearTarget = IsSpellReady(player, 6215) ? SelectWarlockFearTarget(player, 20.0f) : nullptr;
-    Unit const* spellLockTarget = (isAfflictionWarlock && IsPetSpellReady(player, 19647)) ? SelectEnemyCastingTarget(player, 30.0f, target) : nullptr;
+    bool const petSpellLockReady = isAfflictionWarlock ? IsPetSpellReady(player, 19647) : IsPetSpellReady(player, 19244);
+    Unit const* spellLockTarget = petSpellLockReady ? SelectEnemyCastingTarget(player, 30.0f, target) : nullptr;
     Unit const* devourEnemyTarget = (isAfflictionWarlock && IsPetSpellReady(player, 19736)) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, 30.0f) : nullptr;
     Unit const* devourFriendlyTarget = (isAfflictionWarlock && IsPetSpellReady(player, 19736)) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 30.0f) : nullptr;
     Item const* equippedOffhand = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
@@ -5176,9 +5418,9 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
     std::vector<PrioritizedSpellDecision> candidates;
     AddDecisionCandidate(candidates, canUseVoidwalkerSacrifice, 70.0f,
         { "warlock sacrifice", "emergency voidwalker sacrifice at or below 25 percent health", 19443, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, !isAfflictionWarlock && target->HasUnitState(UNIT_STATE_CASTING) && IsPetSpellReady(player, 19244), 54.0f,
-        { "warlock spell lock", "pet interrupt when available", 19244, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, spellLockTarget, 57.0f,
+    AddDecisionCandidate(candidates, !isAfflictionWarlock && spellLockTarget && IsPetSpellReady(player, 19244), 54.0f,
+        { "warlock spell lock", "pet interrupt when available", 19244, playerbot::PvpClassSpellContext::TargetMode::Enemy, spellLockTarget ? spellLockTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, isAfflictionWarlock && spellLockTarget, 57.0f,
         { "warlock spell lock", "felhunter interrupt on any nearby caster", 19647, playerbot::PvpClassSpellContext::TargetMode::Enemy, spellLockTarget ? spellLockTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, devourFriendlyTarget, 56.5f,
         { "warlock devour magic ally", "felhunter dispels friendly magic debuffs", 19736, playerbot::PvpClassSpellContext::TargetMode::Ally, devourFriendlyTarget ? devourFriendlyTarget->GetGUID() : ObjectGuid::Empty });
@@ -5234,8 +5476,8 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
         { "warlock life tap", "convert health to mana for sustained casting", 11689, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, IsLowOrOutOfManaForFallback(player) && IsWandShootReadyForDecision(player), 31.5f,
         { "warlock shoot wand", "fallback to wand pressure while low on mana", kWandShootSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, player->HasAura(17941) && IsSpellReady(player, 25307), 20.0f,
-        { "warlock shadow bolt", "consume nightfall proc for instant pressure", 25307, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, player->HasAura(17941) && IsSpellReady(player, 90429 /* T2 wrapper: 25307 is now learned as 90429 */), 20.0f,
+        { "warlock shadow bolt", "consume nightfall proc for instant pressure", 90429, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     // Destruction should never default-cast Shadow Bolt - only ever on a
     // Nightfall proc (above). Its own filler is Searing Pain once Immolate
     // is already ticking and both Conflagrate and Shadowburn are on
@@ -5243,8 +5485,8 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
     AddDecisionCandidate(candidates, isDestructionWarlock && HasAuraFromSpellChain(target, 25309) &&
             !IsSpellReady(player, 18932) && !IsSpellReady(player, 18871) && IsSpellReady(player, 17923), 19.5f,
         { "warlock searing pain", "filler pressure while conflagrate and shadowburn are both on cooldown", 17923, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, !isAfflictionWarlock && !isDestructionWarlock && IsSpellReady(player, 25307), 19.0f,
-        { "warlock shadow bolt", "default ranged pressure", 25307, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, !isAfflictionWarlock && !isDestructionWarlock && IsSpellReady(player, 90429 /* T2 wrapper: 25307 is now learned as 90429 */), 19.0f,
+        { "warlock shadow bolt", "default ranged pressure", 90429, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, isAfflictionWarlock && IsSpellReady(player, 11700), 18.0f,
         { "warlock drain life", "fallback affliction channel", 11700, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, HasHostileTarget(player, target) && target && !HasBreakableCrowdControl(target) && IsWandShootReadyForDecision(player), 8.0f,
@@ -5253,14 +5495,15 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
         return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
     }
 
-    SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, ClassicProfileSelection const& profileSelection)
-    {
-        SpellDecision decision;
-        if (!player)
-            return decision;
+SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, ClassicProfileSelection const& profileSelection)
+{
+    SpellDecision decision;
+    if (!player)
+        return decision;
 
-        if (!HasHostileTarget(player, target))
-            return decision;
+    if (!HasHostileTarget(player, target))
+        return decision;
+    }
 
         Unit const* activeTarget = SelectWarriorPriorityTarget(player, target, 25.0f);
         if (!HasHostileTarget(player, activeTarget))
@@ -5270,7 +5513,10 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
     // While that movement is resolving the warrior is locked in, so defer all
     // spell decisions until the native gap-closer motion finishes.
     if (HasActiveMovementEffectSpline(player))
+    {
+        SetWarriorGapCloserDiagnostic(player, "early_exit=movement_effect_spline");
         return decision;
+    }
 
     bool const isProtWarrior = profileSelection.profile == ClassicClassProfile::TertiaryClassic;
     bool const isFuryWarrior = profileSelection.profile == ClassicClassProfile::SecondaryClassic;
@@ -5288,13 +5534,30 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
     bool const canChargeByRange = !player->IsWithinDistInMap(gapCloseTarget, chargeMinRange);
     bool const canInterceptByRange = !player->IsWithinDistInMap(gapCloseTarget, interceptMinRange);
     bool const shouldUseChargeGapCloser = !player->IsWithinMeleeRange(gapCloseTarget) && !player->IsInCombat() && canChargeByRange && IsSpellReady(player, 11578);
-    bool const shouldUseInterceptGapCloser = !isFuryWarrior && !player->IsWithinMeleeRange(gapCloseTarget) && player->IsInCombat() && canInterceptByRange && IsSpellReady(player, 20617);
+    // "Wants" = range and cooldown allow it; "should" additionally requires the
+    // rage to pay for it. Intercept and Heroic Leap cost 10 rage, and a warrior
+    // pulled into combat at range (a Moonfire landing before Charge goes off) has
+    // none. Keeping these separate matters because a stance change caps rage to
+    // the Tactical Mastery value - 0 without the talent - so the swap that
+    // Intercept requires destroys any rage generated before it. The stance swap
+    // is therefore driven by "wants", and rage generation is sequenced after it.
+    // Fury is routed to Heroic Leap rather than Intercept. Heroic Leap is a
+    // custom spell (81271) the bot may simply not have been granted, and when
+    // that happens Fury loses Intercept to the spec check and Heroic Leap to
+    // the unknown-spell check - leaving it with no in-combat gap closer at all,
+    // since Charge requires being out of combat. Fall back to Intercept rather
+    // than jogging the whole way.
+    bool const knowsHeroicLeap = ResolveKnownPlayerSpellInChain(player, 81271) != 0;
+    bool const interceptIsThisSpecGapCloser = !isFuryWarrior || !knowsHeroicLeap;
+    bool const wantsInterceptGapCloser = interceptIsThisSpecGapCloser && !player->IsWithinMeleeRange(gapCloseTarget) && player->IsInCombat() && canInterceptByRange && IsSpellReady(player, 20617);
+    bool const shouldUseInterceptGapCloser = wantsInterceptGapCloser && CanAffordSpellPowerCost(player, 20617);
     // Fury uses Heroic Leap (ground-targeted, same range band as Intercept)
     // instead of Intercept. This was missing the same min-range gate
     // Intercept has above - close-but-not-melee distances inside Intercept's
     // min range would try to fire Heroic Leap anyway and fail the spell's own
     // range validation, silently doing nothing.
-    bool const shouldUseHeroicLeapGapCloser = isFuryWarrior && !player->IsWithinMeleeRange(gapCloseTarget) && player->IsInCombat() && canInterceptByRange && IsSpellReady(player, 81271);
+    bool const wantsHeroicLeapGapCloser = isFuryWarrior && !player->IsWithinMeleeRange(gapCloseTarget) && player->IsInCombat() && canInterceptByRange && IsSpellReady(player, 81271);
+    bool const shouldUseHeroicLeapGapCloser = wantsHeroicLeapGapCloser && CanAffordSpellPowerCost(player, 81271);
     bool const furyInDanger = isFuryWarrior && player->HealthBelowPct(35) && SelectNearbyMeleeTarget(player, activeTarget, 8.0f) && IsSpellReady(player, 81271);
     bool const furyRecentGapCloser = isFuryWarrior && (player->GetSpellHistory()->HasCooldown(11578) || player->GetSpellHistory()->HasCooldown(81271));
     uint32 const meleeFinisherSpellId = isProtWarrior ? uint32(23925) : (isFuryWarrior ? uint32(23881) : uint32(21553));
@@ -5306,6 +5569,45 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
     // the first immediately-castable candidate scanning top-down rather than
     // preferring an out-of-range action that would trigger approach movement.
     bool const gapCloseUrgent = shouldUseChargeGapCloser || shouldUseInterceptGapCloser || shouldUseHeroicLeapGapCloser;
+    // Intent, regardless of whether the rage is there yet. Used to keep the
+    // ordinary rotational Bloodrage from firing a tick before a stance swap
+    // would wipe the rage it just made.
+    bool const gapCloseWanted = shouldUseChargeGapCloser || wantsInterceptGapCloser || wantsHeroicLeapGapCloser;
+    // The deadlock this breaks: warrior is pulled into combat at range, so
+    // Charge is off the table and Intercept/Heroic Leap is the only gap closer
+    // left - but both cost rage the warrior does not have, and at range there is
+    // nothing to hit to make more. Bloodrage is the only source, and it is off
+    // the GCD, so spending a decision tick on it costs nothing but the tick.
+    // Gated on already being in Berserker Stance because the swap into it caps
+    // rage back to 0; generating first would just be thrown away.
+    bool const gapCloserRageStarved = (wantsInterceptGapCloser || wantsHeroicLeapGapCloser) &&
+        !gapCloseUrgent && inBerserkerStance && IsSpellReady(player, 2687);
+
+    {
+        // Note gapclose_target: this is the decision layer's target, which is
+        // not necessarily the unit shown as the bot's victim, and it may be a
+        // creature or pet rather than a player. A nearby one collapses
+        // intercept_by_range and silently removes the gap closer.
+        std::ostringstream gapDiag;
+        gapDiag << "fury=" << (isFuryWarrior ? "yes" : "no")
+                << " prot=" << (isProtWarrior ? "yes" : "no")
+                << " knows_leap=" << (knowsHeroicLeap ? "yes" : "no")
+                << " gapclose_target=" << (gapCloseTarget ? gapCloseTarget->GetName() : "none")
+                << " gapclose_dist=" << (gapCloseTarget ? player->GetDistance(gapCloseTarget) : -1.0f)
+                << " in_melee=" << (gapCloseTarget && player->IsWithinMeleeRange(gapCloseTarget) ? "yes" : "no")
+                << " combat=" << (player->IsInCombat() ? "yes" : "no")
+                << " icept_minrange=" << interceptMinRange
+                << " by_range=" << (canInterceptByRange ? "yes" : "no")
+                << " icept_ready=" << (IsSpellReady(player, 20617) ? "yes" : "no")
+                << " icept_afford=" << (CanAffordSpellPowerCost(player, 20617) ? "yes" : "no")
+                << " wants_icept=" << (wantsInterceptGapCloser ? "yes" : "no")
+                << " should_icept=" << (shouldUseInterceptGapCloser ? "yes" : "no")
+                << " berserker=" << (inBerserkerStance ? "yes" : "no")
+                << " stance_ready=" << (IsSpellReady(player, 2458) ? "yes" : "no")
+                << " spline_inflight=" << (warriorGapCloserInFlight ? "yes" : "no")
+                << " charge_ok=" << (shouldUseChargeGapCloser ? "yes" : "no");
+        SetWarriorGapCloserDiagnostic(player, gapDiag.str());
+    }
     Unit const* nearbyMeleeTarget = SelectNearbyMeleeTarget(player, activeTarget, 8.0f);
     Unit const* nearbyCastingTarget = SelectEnemyCastingTarget(player, 8.0f, activeTarget);
     Unit const* tauntTarget = isProtWarrior && IsSpellReady(player, 355) ? SelectWarriorTauntTarget(player, activeTarget, 30.0f) : nullptr;
@@ -5317,6 +5619,14 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
     if (interveneTarget == player || (interveneTarget && player->IsWithinMeleeRange(interveneTarget)))
         interveneTarget = nullptr;
     bool const revengeReady = isProtWarrior && player->IsWithinMeleeRange(activeTarget) && IsSpellReadyAndCasterAuraAllowed(player, 25288);
+    // Overpower: reactive, Battle Stance only, and usable only in the short
+    // window after the target dodges - IsSpellReadyAndCasterAuraAllowed is
+    // what tests that aura state, the same way Revenge does above. No stance
+    // dance for it: arms already fights in Battle Stance, and forcing fury or
+    // prot out of theirs to land a 5-rage hit is a losing trade.
+    bool const overpowerReady = inBattleStance && activeTarget &&
+        player->IsWithinMeleeRange(activeTarget) &&
+        IsSpellReadyAndCasterAuraAllowed(player, 7384);
     bool const executeReady = activeTarget && activeTarget->HealthBelowPct(20) && IsSpellReady(player, 20662) && player->GetPower(POWER_RAGE) >= 150;
     bool const hasNearbyMeleeThreat = HasHostileTarget(player, nearbyMeleeTarget);
     bool const nearbyMeleeThreatSnared = hasNearbyMeleeThreat && nearbyMeleeTarget->HasAuraWithMechanic(1 << MECHANIC_SNARE);
@@ -5353,7 +5663,7 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
         { "warrior piercing howl", "apply area snare when multiple enemies are unsnared in melee range", 12323, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, HasHostileTarget(player, activeTarget) && CountNearbyEnemies(player, 10.0f) >= 2 && IsSpellReady(player, 5246), 55.5f,
         { "warrior intimidating shout", "aoe fear around the current target when outnumbered", 5246, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !gapCloseUrgent && (IsSpellReady(player, 6552) || IsSpellReady(player, 81492) || IsSpellReady(player, 20617) || IsSpellReady(player, 1680) || IsSpellReady(player, meleeFinisherSpellId)) &&
+    AddDecisionCandidate(candidates, !gapCloseWanted && (IsSpellReady(player, 6552) || IsSpellReady(player, 81492) || IsSpellReady(player, 20617) || IsSpellReady(player, 1680) || IsSpellReady(player, meleeFinisherSpellId)) &&
             player->GetPower(POWER_RAGE) < 150 && IsSpellReady(player, 2687), 54.0f,
         { "warrior bloodrage", "generate rage to unlock rotational abilities", 2687, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !warriorGapCloserInFlight && !isProtWarrior && inDefensiveStance && (!IsSpellReady(player, 81492) || !hasNearbyMeleeThreat) && IsSpellReady(player, 2458), 53.0f,
@@ -5362,8 +5672,16 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
         { "warrior battle stance", "switch to battle stance before out-of-combat charge", 2457, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, shouldUseChargeGapCloser, 52.0f,
         { "warrior charge", "close gap to target from out of combat", 11578, playerbot::PvpClassSpellContext::TargetMode::Enemy, gapCloseTarget ? gapCloseTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !warriorGapCloserInFlight && shouldUseInterceptGapCloser && !inBerserkerStance && IsSpellReady(player, 2458), 51.5f,
+    // Driven by intent rather than affordability: the swap itself wipes rage, so
+    // waiting until Intercept is affordable would mean swapping and immediately
+    // being unable to pay again. Still requires a way to end up with rage - if
+    // Bloodrage is down and the warrior is broke, skip the swap entirely and let
+    // the ordinary chase take him into melee instead of stalling at range.
+    AddDecisionCandidate(candidates, !warriorGapCloserInFlight && wantsInterceptGapCloser && !inBerserkerStance && IsSpellReady(player, 2458) &&
+            (CanAffordSpellPowerCost(player, 20617) || IsSpellReady(player, 2687)), 51.5f,
         { "warrior berserker stance", "switch to berserker stance before intercept gap close", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, gapCloserRageStarved, 51.25f,
+        { "warrior bloodrage", "generate rage to pay for the gap closer after the stance swap", 2687, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, shouldUseInterceptGapCloser, 51.0f,
         { "warrior intercept", "close gap to target while in combat", 20617, playerbot::PvpClassSpellContext::TargetMode::Enemy, gapCloseTarget ? gapCloseTarget->GetGUID() : ObjectGuid::Empty });
     // Heroic Leap's ShapeshiftMask requires Berserker Stance (same shapeshift
@@ -5372,7 +5690,8 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
     // Without this, the generic shapeshift-compatibility check silently
     // rejects Heroic Leap whenever the warrior isn't already in Berserker
     // Stance, and the bot falls back to Charge (which doesn't need it).
-    AddDecisionCandidate(candidates, !warriorGapCloserInFlight && (shouldUseHeroicLeapGapCloser || furyInDanger) && !inBerserkerStance && IsSpellReady(player, 2458), 1000.0f,
+    AddDecisionCandidate(candidates, !warriorGapCloserInFlight && (wantsHeroicLeapGapCloser || furyInDanger) && !inBerserkerStance && IsSpellReady(player, 2458) &&
+            (CanAffordSpellPowerCost(player, 81271) || IsSpellReady(player, 2687)), 1000.0f,
         { "warrior berserker stance", "switch to berserker stance before heroic leap", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
     // TEMPORARY: forced to top priority (above everything, including
     // emergency defensives) at the user's explicit request to isolate and
@@ -5395,6 +5714,11 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
         { "warrior battle shout", "maintain attack power buff", 25289, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, revengeReady && inDefensiveStance, 40.5f,
         { "warrior revenge", "use reactive revenge whenever available", 25288, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
+    // Above Mortal Strike/Slam tier: the dodge window is only a few seconds
+    // and Overpower cannot be dodged, parried or blocked, so it is always the
+    // better rage spend while it is up.
+    AddDecisionCandidate(candidates, overpowerReady, 40.6f,
+        { "warrior overpower", "reactive strike in the window after the target dodges", 7384, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
     Unit const* concussionTarget = isProtWarrior && IsSpellReady(player, 12809) ? SelectUnstunDREnemyTarget(player, activeTarget, 5.0f, 12809) : nullptr;
     AddDecisionCandidate(candidates, concussionTarget, 39.6f,
         { "warrior concussion blow", "stun a target without stun diminishing returns", 12809, playerbot::PvpClassSpellContext::TargetMode::Enemy, concussionTarget ? concussionTarget->GetGUID() : ObjectGuid::Empty });
@@ -5450,13 +5774,13 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
         { "rogue garrote", "assassination opener from stealth", 703, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, !isAssassinationRogue && player->HasStealthAura() && player->IsWithinMeleeRange(target) && IsSpellReady(player, 1833), 49.0f,
         { "rogue cheap shot", "default opener", 1833, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, ((isCombatRogue && nearbyCastingTarget) || (!isCombatRogue && target->HasUnitState(UNIT_STATE_CASTING))) && IsSpellReady(player, 1766), 48.0f,
-        { "rogue kick", isCombatRogue ? "interrupt nearby enemy cast" : "interrupt enemy cast", 1766, playerbot::PvpClassSpellContext::TargetMode::Enemy, isCombatRogue && nearbyCastingTarget ? nearbyCastingTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, nearbyCastingTarget && IsSpellReady(player, 1766), 48.0f,
+        { "rogue kick", isCombatRogue ? "interrupt nearby enemy cast" : "interrupt enemy cast", 1766, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyCastingTarget ? nearbyCastingTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, player->HealthBelowPct(40) && IsSpellReady(player, 5277), 47.0f,
         { "rogue evasion", "defensive survival in melee", 5277, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, (isCombatRogue ? rootedOrSnared : (!player->HealthBelowPct(50) && !player->IsWithinMeleeRange(target) && player->IsWithinDistInMap(target, 30.0f))) && IsSpellReady(player, 11305), 46.0f,
-        { "rogue sprint", "close gap for melee pressure", 11305, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, isCombatRogue && rootedOrSnared && !IsSpellReady(player, 11305) && IsSpellReady(player, 26889), 45.8f,
+    AddDecisionCandidate(candidates, (isCombatRogue ? rootedOrSnared : (!player->HealthBelowPct(50) && !player->IsWithinMeleeRange(target) && player->IsWithinDistInMap(target, 30.0f))) && IsSpellReady(player, 90516 /* T2 wrapper: 11305 is now learned as 90516 */), 46.0f,
+        { "rogue sprint", "close gap for melee pressure", 90516, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, isCombatRogue && rootedOrSnared && !IsSpellReady(player, 90516 /* T2 wrapper: 11305 is now learned as 90516 */) && IsSpellReady(player, 26889), 45.8f,
         { "rogue vanish", "escape root or snare when sprint is unavailable", 26889, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isCombatRogue && player->IsWithinMeleeRange(target) && IsSpellReady(player, 13750), 45.7f,
         { "rogue adrenaline rush", "combat burst when in melee", 13750, playerbot::PvpClassSpellContext::TargetMode::Self });
@@ -5558,12 +5882,15 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
         return decision;
     }
 
+    Unit const* earthShockCastingTarget = IsSpellReady(player, 10414) ?
+        SelectEnemyCastingTarget(player, 20.0f, target) : nullptr;
+
     std::vector<PrioritizedSpellDecision> candidates;
     // Disabled: auto-casting Windfury Weapon from PvP loop while investigating weapon-dependent aura crashes.
     AddDecisionCandidate(candidates, !player->IsInCombat() && !HasAuraFromSpellChain(player, 10432) && IsSpellReady(player, 10432), 34.0f,
         { "shaman lightning shield", "maintain shield buff out of combat", 10432, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, hasHostileTarget && target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 10414), 60.0f,
-        { "shaman earth shock", "interrupt enemy cast with shock", 10414, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, earthShockCastingTarget && IsSpellReady(player, 10414), 60.0f,
+        { "shaman earth shock", "interrupt enemy cast with shock", 10414, playerbot::PvpClassSpellContext::TargetMode::Enemy, earthShockCastingTarget ? earthShockCastingTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, inCombat && !isRestoShaman && !isEnhancementShaman && !partyBenefitsFromWindfury && hasHostileTarget && manaEnemyNearby && !HasActiveAirTotem(player) && IsSpellReady(player, 8177), 59.0f,
         { "shaman grounding totem", "counter incoming caster pressure from a mana user within 50 yards", 8177, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !isRestoShaman && IsSpellReady(player, 16166), 58.0f,
@@ -5633,20 +5960,20 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
         return SelectHighestPriorityCastableDecision(candidates, player, target, allyTarget);
     }
 
-    SpellDecision SelectClassicClassSpell(Player const* player, Unit const* target, Unit const* allyTarget, ClassicProfileSelection const& profileSelection)
+SpellDecision SelectClassicClassSpell(Player const* player, Unit const* target, Unit const* allyTarget, ClassicProfileSelection const& profileSelection)
+{
+    SpellDecision decision;
+    if (!player)
     {
-        SpellDecision decision;
-        if (!player)
-        {
-            decision.reason = "missing-player";
-            return decision;
-        }
+        decision.reason = "missing-player";
+        return decision;
+    }
 
-        if (profileSelection.unsupportedClass)
-        {
-            decision.reason = "unsupported-class";
-            return decision;
-        }
+    if (profileSelection.unsupportedClass)
+    {
+        decision.reason = "unsupported-class";
+        return decision;
+    }
 
         bool const inMelee = target && player->IsWithinMeleeRange(target);
         switch (player->GetClass())
@@ -5680,20 +6007,24 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
         }
     }
 
-    SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target, Unit const* allyTarget, ClassicProfileSelection const& profileSelection)
+SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target, Unit const* allyTarget, ClassicProfileSelection const& profileSelection)
+{
+    if (playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotShadowmeldGraceToken))
     {
-        if (playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotShadowmeldGraceToken))
-        {
-            SpellDecision holdDecision;
-            holdDecision.reason = "shadowmeld grace window";
-            return holdDecision;
-        }
+        SpellDecision holdDecision;
+        holdDecision.reason = "shadowmeld grace window";
+        return holdDecision;
+    }
 
     if (player && player->HealthBelowPct(50))
     {
         if (uint32 const healthstoneItemEntry = SelectReadyHealthstoneItemEntry(player))
+        {
+            if (player->GetClass() == CLASS_WARRIOR)
+                SetWarriorGapCloserDiagnostic(player, "early_exit=healthstone");
             return { "use healthstone", "restore health below fifty percent", 0,
                 playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID(), healthstoneItemEntry };
+        }
     }
 
     // Spirit of Redemption must run the priest healing selector even with no
@@ -5720,29 +6051,30 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool 
             return SelectClassicClassSpell(player, target, allyTarget, profileSelection);
     }
 
-        // Hunter cast-time actions (especially Aimed Shot and Revive Pet) must be
-        // exclusive. Lifecycle movement already holds the hunter still, but the
-        // selector also has to stop returning other instant actions like Rapid Fire
-        // while the accepted cast is preparing/channeling. Otherwise the next AI
-        // tick can attempt another action during Aimed Shot and clip/interrupt it on
-        // some branches.
-        if (IsHunterCastTimeActionLocked(player))
-        {
-            SpellDecision holdDecision;
-            holdDecision.reason = "hunter cast-time spell in progress";
-            return holdDecision;
-        }
+    // Hunter cast-time actions (especially Aimed Shot and Revive Pet) must be
+    // exclusive. Lifecycle movement already holds the hunter still, but the
+    // selector also has to stop returning other instant actions like Rapid Fire
+    // while the accepted cast is preparing/channeling. Otherwise the next AI
+    // tick can attempt another action during Aimed Shot and clip/interrupt it on
+    // some branches.
+    if (IsHunterCastTimeActionLocked(player))
+    {
+        SpellDecision holdDecision;
+        holdDecision.reason = "hunter cast-time spell in progress";
+        return holdDecision;
+    }
 
+    if (SpellDecision const racialDecision = SelectRacialSpell(player, target, allyTarget); racialDecision.spellId)
+        return racialDecision;
+
+    if (SpellDecision const utilityDecision = MaybeSelectUtilitySpell(player, target); utilityDecision.spellId)
+        return utilityDecision;
+    }
+
+    if (!HasHostileTarget(player, target) && !allyTarget)
+    {
         if (SpellDecision const racialDecision = SelectRacialSpell(player, target, allyTarget); racialDecision.spellId)
             return racialDecision;
-
-        if (SpellDecision const utilityDecision = MaybeSelectUtilitySpell(player, target); utilityDecision.spellId)
-            return utilityDecision;
-
-        if (!HasHostileTarget(player, target) && !allyTarget)
-        {
-            if (SpellDecision const racialDecision = SelectRacialSpell(player, target, allyTarget); racialDecision.spellId)
-                return racialDecision;
 
             return {};
         }
@@ -5984,10 +6316,10 @@ namespace playerbot
         return humanCount;
     }
 
-    bool PvpCore::TeamHasHumanPlayers(Player const* player)
-    {
-        return CountHumanPlayersOnBattlegroundTeam(player) > 0;
-    }
+bool PvpCore::TeamHasHumanPlayers(Player const* player)
+{
+    return CountHumanPlayersOnBattlegroundTeam(player) > 0;
+}
 
 GameObject* PvpCore::FindUsableLightwell(Player const* player, float maxDistance)
 {
@@ -6122,6 +6454,14 @@ void PvpCore::LoadConfig()
     g_PvpCoreConfig.meleeRange = sConfigMgr->GetFloatDefault("Playerbot.PvpClassSpells.Range.Melee", 8.0f);
     g_PvpCoreConfig.closeRange = sConfigMgr->GetFloatDefault("Playerbot.PvpClassSpells.Range.Close", 15.0f);
     g_PvpCoreConfig.longRange = sConfigMgr->GetFloatDefault("Playerbot.PvpClassSpells.Range.Long", 35.0f);
+    g_PvpCoreConfig.interruptReactionMinMs = uint32(std::clamp(
+        sConfigMgr->GetIntDefault("Playerbot.PvpClassSpells.Interrupt.ReactionMinMs", 200), 0, 5000));
+    g_PvpCoreConfig.interruptReactionMaxMs = uint32(std::clamp(
+        sConfigMgr->GetIntDefault("Playerbot.PvpClassSpells.Interrupt.ReactionMaxMs", 1000), 0, 5000));
+    if (g_PvpCoreConfig.interruptReactionMaxMs < g_PvpCoreConfig.interruptReactionMinMs)
+        g_PvpCoreConfig.interruptReactionMaxMs = g_PvpCoreConfig.interruptReactionMinMs;
+    g_PvpCoreConfig.interruptCommitWindowMs = uint32(std::clamp(
+        sConfigMgr->GetIntDefault("Playerbot.PvpClassSpells.Interrupt.CommitWindowMs", 200), 0, 2000));
 }
 
     PvpCoreConfig const& PvpCore::GetConfig()
@@ -6506,32 +6846,32 @@ PvpValues PvpCore::CollectValues(Player const* player)
             }
         }
 
-        if (player->IsInCombat() && !hasValidTarget && !hasValidAllyTarget)
+    if (player->IsInCombat() && !hasValidTarget && !hasValidAllyTarget)
+    {
+        if (IncrementCombatNoTargetTicks(player) >= 3)
         {
-            if (IncrementCombatNoTargetTicks(player) >= 3)
-            {
-                context.movementDirective = PvpClassSpellContext::MovementDirective::ResetCombatState;
-                context.actionName = "reset";
-                context.reason = "combat stuck";
-                context.shouldExecute = true;
-                ResetCombatNoTargetTicks(player);
-                return context;
-            }
-        }
-        else
-        {
-            ResetCombatNoTargetTicks(player);
-        }
-
-        if (hasInvalidSelectedTarget)
-        {
-            context.movementDirective = PvpClassSpellContext::MovementDirective::DropInvalidTarget;
-            context.actionName = "drop target";
-            context.reason = "invalid target";
+            context.movementDirective = PvpClassSpellContext::MovementDirective::ResetCombatState;
+            context.actionName = "reset";
+            context.reason = "combat stuck";
             context.shouldExecute = true;
-            context.movementTargetGuid = selectedTargetGuid;
+            ResetCombatNoTargetTicks(player);
             return context;
         }
+    }
+    else
+    {
+        ResetCombatNoTargetTicks(player);
+    }
+
+    if (hasInvalidSelectedTarget)
+    {
+        context.movementDirective = PvpClassSpellContext::MovementDirective::DropInvalidTarget;
+        context.actionName = "drop target";
+        context.reason = "invalid target";
+        context.shouldExecute = true;
+        context.movementTargetGuid = selectedTargetGuid;
+        return context;
+    }
 
         if (player->GetClass() == CLASS_HUNTER)
         {
@@ -6658,16 +6998,34 @@ PvpValues PvpCore::CollectValues(Player const* player)
         context.targetMode == PvpClassSpellContext::TargetMode::Enemy && UsesMeleeSpacingProfile(player, profileSelection))
     {
         Unit const* meleeTarget = resolveTargetByGuid(context.targetGuid);
-        // Gap closers and ranged chase tools belong on this allowlist: they are
-        // the mechanism used to reach or hold melee range in the first place.
-        // Without them here, this generic
-        // "not in melee yet" check zeroes context.spellId and silently substitutes
-        // a plain ReachMeleeRange walk before CastDirectSpell/NotifyDuelDecision
-        // are ever reached, which reads as the bot doing nothing but walking and
-        // never whispering a decision at all.
-        bool const canCastOutsideMelee = context.spellId == 11578 || context.spellId == 20617 || context.spellId == 62124 ||
-            context.spellId == 81271 || context.spellId == 82419 || context.spellId == 49376 || context.spellId == 16979 ||
-            IsShamanFrostShockSpell(context.spellId);
+        // This check zeroes context.spellId and substitutes a plain walk into
+        // melee, so anything it wrongly captures is silently never cast.
+        //
+        // It used to be a hardcoded list of gap-closer ids (Charge, Intercept,
+        // Heroic Leap, Feral Charge, Rehgar's Fury, Hand of Reckoning, Frost
+        // Shock). Any other ranged ability a melee bot selected fell through it
+        // and was replaced by a walk - the gnome grenade (89160, 45 yards) being
+        // the case that surfaced it: repeatedly selected at range, zeroed every
+        // tick, never cast so never put on cooldown, and therefore re-selected
+        // forever, which starved the warrior of its whole rotation. It only ever
+        // landed at point blank, once the walk had finished.
+        //
+        // Ask the spell what its range is instead of maintaining a list. Melee
+        // abilities have melee-length ranges and still correctly trigger the
+        // walk; everything else is cast from where it can actually be cast.
+        bool canCastOutsideMelee = false;
+        if (meleeTarget)
+        {
+            if (SpellInfo const* pendingSpellInfo = sSpellMgr->GetSpellInfo(context.spellId))
+            {
+                float const pendingMaxRange = pendingSpellInfo->GetMaxRange(false);
+                float const pendingMinRange = pendingSpellInfo->GetMinRange(false);
+                float const targetDistance = player->GetDistance(meleeTarget);
+                canCastOutsideMelee = pendingMaxRange > 0.0f && targetDistance <= pendingMaxRange &&
+                    (pendingMinRange <= 0.0f || targetDistance >= pendingMinRange);
+            }
+        }
+
         if (meleeTarget && !player->IsWithinMeleeRange(meleeTarget) && !canCastOutsideMelee)
         {
             ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachMeleeRange, meleeTarget->GetGUID(),

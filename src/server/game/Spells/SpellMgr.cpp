@@ -777,6 +777,16 @@ bool SpellArea::IsFitToRequirements(Player const* player, uint32 newZone, uint32
 
     if (player)
     {
+        // Essence of Wintergrasp: a world buff has no business inside an
+        // instanced match, and custom battlegrounds cloned from Northrend maps
+        // report their source zone (the Violet Hold run reports 4415, which
+        // has an autocast spell_area row). This has to sit ABOVE the generic
+        // battleground hand-off below - the same check further down in the
+        // switch was never reached in a battleground and the buff kept
+        // landing in the Hold.
+        if ((spellId == 57940 || spellId == 58045) && player->InBattleground())
+            return false;
+
         if (Battleground* bg = player->GetBattleground())
             return bg->IsSpellAllowed(spellId, player);
     }
@@ -832,6 +842,8 @@ bool SpellArea::IsFitToRequirements(Player const* player, uint32 newZone, uint32
             if (!player)
                 return false;
 
+            // (The in-battleground refusal lives above the battleground
+            // hand-off; a battleground never reaches this switch.)
             if (Battlefield* battlefieldWG = sBattlefieldMgr->GetBattlefieldByBattleId(BATTLEFIELD_BATTLEID_WG))
                 return battlefieldWG->IsEnabled() && (player->GetTeamId() == battlefieldWG->GetDefenderTeam()) && !battlefieldWG->IsWarTime();
             break;
@@ -1915,6 +1927,22 @@ void SpellMgr::LoadSpellProcs()
                 case SPELL_AURA_MOD_HIT_CHANCE:
                     if (spellEffectInfo.CalcValue() <= -100)
                         procEntry.HitMask = PROC_HIT_MISS;
+                    break;
+                // Stealth is dropped by the proc system, not by an interrupt flag:
+                // Stealth (1784) carries no AURA_INTERRUPT_FLAG_TAKE_DAMAGE, just
+                // proc flags for every TAKEN hit class and a single charge. That
+                // leaves it on the default taken hit mask of NORMAL | CRITICAL,
+                // and a fully absorbed hit reports PROC_HIT_ABSORB and nothing
+                // else - so any shield that ate a hit whole kept the rogue
+                // stealthed. Power Word: Shield soaking a Curse of Agony tick is
+                // the obvious case, but it held for every full absorb, including
+                // damage a paladin's Sacrificial Aura redirected away (splits go
+                // through DamageInfo::AbsorbDamage and mark PROC_HIT_ABSORB too).
+                // Absorbed damage is still a hit that landed. Full resists and
+                // full blocks stay out on purpose - DamageInfo clears
+                // NORMAL/CRITICAL for those because nothing reached the target.
+                case SPELL_AURA_MOD_STEALTH:
+                    procEntry.HitMask = PROC_HIT_NORMAL | PROC_HIT_CRITICAL | PROC_HIT_ABSORB;
                     break;
                 default:
                     continue;
@@ -3024,6 +3052,24 @@ void SpellMgr::LoadSpellInfoCustomAttributes()
         }
     }
 
+    // Violet Hold "Beastmaster's Blessing" (90287) rides on the pets at the
+    // owner's boon stack count and is re-applied by Unit::SetMinion on every
+    // summon; saving it to pet_aura would carry it out of the Hold on a
+    // dismissed or stabled pet.
+    if (SpellInfo* spellInfo = _GetSpellInfo(90287))
+        spellInfo->AttributesCu |= SPELL_ATTR0_CU_AURA_CANNOT_BE_SAVED;
+
+    // Alliance/Horde flag visuals (32609/32610) are used by the custom game
+    // lobbies and clone mannequins purely as a team-colour cosmetic. They are
+    // self-cast, non-passive auras, so by default they persist to
+    // character_aura - and the lobby only strips them in its OnPlayerLogout
+    // hook, which runs AFTER Player::SaveToDB. That let the visual survive to
+    // the DB and reappear on the next login/zone. They are transient by nature
+    // (a real flag is always dropped before logout), so never save them.
+    for (uint32 flagVisual : { 32609u, 32610u })
+        if (SpellInfo* spellInfo = _GetSpellInfo(flagVisual))
+            spellInfo->AttributesCu |= SPELL_ATTR0_CU_AURA_CANNOT_BE_SAVED;
+
     // add custom attribute to liquid auras
     for (LiquidTypeEntry const* liquid : sLiquidTypeStore)
     {
@@ -3065,6 +3111,29 @@ void SpellMgr::LoadSpellInfoCorrections()
     // IsHunterTrapSpellForCombatDiagnostic in Player.cpp: SpellFamilyFlags
     // here are not trap-exclusive, so exact-ID matching per rank chain is the
     // only reliable way to hit every rank.
+    // THE TRAP-LAYING SPELLS ARE NOT ENOUGH, and covering only those is why this
+    // still tagged people into combat after the first attempt (2026-07-22 ->
+    // reported again 2026-08-24). 1499 and 13809 are SPELL_EFFECT_ADD_FARSIGHT-
+    // style trap placements aimed at a destination; they never touch an enemy,
+    // so clearing initial aggro on them changes nothing at all. The spells that
+    // actually reach a victim are separate, and neither shares a rank chain with
+    // the placement spell:
+    //
+    //   Freezing Trap Effect  3355 / 14308 / 14309 - its OWN chain, first rank
+    //                         3355, NOT 1499.
+    //   Frost Trap Aura       13810 - the persistent area aura carrying the slow,
+    //                         with no spell_ranks row at all, so its "first rank"
+    //                         is itself, NOT 13809.
+    //
+    // Verified against lplusworld.spell_ranks rather than assumed.
+    static constexpr uint32 NoAggroTrapFirstRanks[] =
+    {
+        1499,       // Freezing Trap    (placement)
+        13809,      // Frost Trap       (placement)
+        3355,       // Freezing Trap Effect - the root+disorient that lands on the victim
+        13810,      // Frost Trap Aura      - the slow that lands on everyone inside
+    };
+
     for (SpellInfo* spellInfo : mSpellInfoMap)
     {
         if (!spellInfo)
@@ -3072,9 +3141,27 @@ void SpellMgr::LoadSpellInfoCorrections()
 
         SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
         uint32 const firstRankSpellId = firstRank ? firstRank->Id : spellInfo->Id;
-        if (firstRankSpellId == 1499 /* Freezing Trap */ || firstRankSpellId == 13809 /* Frost Trap */)
+        if (std::find(std::begin(NoAggroTrapFirstRanks), std::end(NoAggroTrapFirstRanks), firstRankSpellId)
+            != std::end(NoAggroTrapFirstRanks))
             spellInfo->AttributesEx3 |= SPELL_ATTR3_NO_INITIAL_AGGRO;
     }
+
+    // Recharge (90200), the custom battleground rune: the trap GO must deliver
+    // it to absolutely anyone who steps on the rune. Vanish's immunity window
+    // was eating the whole hit - the player grabbed the rune, the reset script
+    // never ran, and the rune was wasted. Piercing invulnerability plus
+    // ignoring the hit roll makes delivery unconditional; no-threat/no-aggro
+    // keeps the pickup from flagging a stealthed grabber into combat with the
+    // trap. Positivity is forced separately in _isPositiveEffectImpl (the
+    // custom-attributes pass runs after these corrections and would re-mark a
+    // bare dummy aura negative, which is what made the buff break stealth and
+    // land as a debuff).
+    ApplySpellFix({ 90200 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->Attributes |= SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY;
+        spellInfo->AttributesEx |= SPELL_ATTR1_NO_THREAT;
+        spellInfo->AttributesEx3 |= SPELL_ATTR3_IGNORE_HIT_RESULT | SPELL_ATTR3_NO_INITIAL_AGGRO;
+    });
 
     // Some spells have no amplitude set
     {

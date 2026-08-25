@@ -56,6 +56,7 @@
 #include "StringConvert.h"
 #include "SystemPackets.h"
 #include "QueryHolder.h"
+#include "VioletHoldBoons.h"
 #include "World.h"
 
 bool LoginQueryHolder::Initialize()
@@ -163,6 +164,18 @@ bool LoginQueryHolder::Initialize()
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_EQUIPMENTSETS);
     stmt->setUInt32(0, lowGuid);
     res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_EQUIPMENT_SETS, stmt);
+
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_TRANSMOGS);
+    stmt->setUInt32(0, lowGuid);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_TRANSMOGS, stmt);
+
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_TRANSMOG_SETTINGS);
+    stmt->setUInt32(0, lowGuid);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_TRANSMOG_SETTINGS, stmt);
+
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_VHR_RUN_TALENTS);
+    stmt->setUInt32(0, lowGuid);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_VHR_RUN_TALENTS, stmt);
 
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_BGDATA);
     stmt->setUInt32(0, lowGuid);
@@ -841,6 +854,15 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     bool handledTalentReset = pCurrChar->HasAtLoginFlag(AT_LOGIN_RESET_SPELLS_KEEP_MOUNTS);
     if (handledTalentReset)
     {
+        // The reset below wipes every aura before the character is in the
+        // world - including the Violet Hold markers, whose removal scripts
+        // cannot act out of world. Strip the boons FIRST, run or no run: the
+        // borrowed levels, taught spells and granted weapons must never
+        // outlive the markers that say they exist. (A character headed back
+        // into a live run simply arrives without them; a spell reset was
+        // asked for, after all.)
+        VioletHoldBoons::StripAll(pCurrChar);
+
         pCurrChar->ResetNonQuestAndMountSpells();
         SendNotification(LANG_RESET_SPELLS);
         SendNotification(LANG_RESET_TALENTS);
@@ -1074,6 +1096,13 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     }
 
     pCurrChar->RemoveAurasDueToSpell(45813);
+
+    // Violet Hold boons (and the levels the level boon granted) survive a
+    // logout in character_aura so a relog INTO a still-running run keeps
+    // them; a relog anywhere else means the run ended without a Player to
+    // strip, so it happens here. After m_playerLoading is cleared, so the
+    // level rollback's talent packet actually goes out.
+    VioletHoldBoons::OnLogin(pCurrChar);
 
     sScriptMgr->OnPlayerLogin(pCurrChar, firstLogin);
 

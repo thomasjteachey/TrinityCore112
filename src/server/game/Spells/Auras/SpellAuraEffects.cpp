@@ -39,6 +39,7 @@
 #include "Spell.h"
 #include "SpellHistory.h"
 #include "SpellMgr.h"
+#include "T2UnitHooks.h"
 #include "StringFormat.h"
 #include "ThreatManager.h"
 #include "Unit.h"
@@ -57,6 +58,7 @@ namespace
 {
     constexpr uint32 SpellRogueNeilyoImmunity = 81439;
     constexpr uint32 SpellRogueVanishImmunity = 89783;
+    constexpr uint32 SpellHunterBeastRider = 89799;
 
     bool IsRogueVanishProtectionImmunity(SpellInfo const* spellInfo)
     {
@@ -2720,6 +2722,18 @@ void AuraEffect::HandleAuraMounted(AuraApplication const* aurApp, uint8 mode, bo
                 creatureEntry = 15665;
         }
 
+        // Beast Rider: ride the living pet's own model. The pet is not
+        // necessarily spawned here - when the aura is restored at login the
+        // pet is still temporarily unsummoned because we are mounted - so the
+        // lookup also covers the current pet in the stable. Without a living
+        // pet the cast is normally rerouted to Swift White Steed by the spell
+        // script; if the aura is applied anyway (login with a dead pet) the
+        // steed model below is used.
+        uint32 petModelDisplayId = 0;
+        if (GetId() == SpellHunterBeastRider)
+            if (Player* player = target->ToPlayer())
+                petModelDisplayId = player->GetLivingPetDisplayId();
+
         if (CreatureTemplate const* creatureInfo = sObjectMgr->GetCreatureTemplate(creatureEntry))
         {
             if (GetMiscValueB() > 0) // Choose proper modelid
@@ -2735,6 +2749,9 @@ void AuraEffect::HandleAuraMounted(AuraApplication const* aurApp, uint8 mode, bo
                 if (effect.IsEffect(SPELL_EFFECT_SUMMON) && effect.MiscValue == GetMiscValue())
                     displayId = 0;
         }
+
+        if (petModelDisplayId)
+            displayId = petModelDisplayId;
 
         target->Mount(displayId, vehicleId, creatureEntry);
     }
@@ -5404,6 +5421,15 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
 
     damage = target->SpellDamageBonusTaken(caster, GetSpellInfo(), damage, DOT);
 
+    // T2 Sanctified Core (90307): a target inside the middle 3 yards of the
+    // paladin's Consecration takes the tick DOUBLED. It has to happen here,
+    // per target, because a dynobject aura has ONE AuraEffect shared by every
+    // unit standing in it - GetAmount() cannot differ between them, which is
+    // why this used to be a second explicit hit instead. Doubling the computed
+    // damage gives one number in the combat log, which is what it should have
+    // been.
+    damage = T2UnitHooks::ApplySanctifiedCore(this, caster, target, damage);
+
     bool crit = 0;
     if (crit)
         damage = Unit::SpellCriticalDamageBonus(caster, m_spellInfo, damage, target);
@@ -5722,6 +5748,10 @@ void AuraEffect::HandlePeriodicManaLeechAuraTick(Unit* target, Unit* caster) con
 
     int32 gainAmount = int32(drainedAmount * gainMultiplier);
     int32 gainedAmount = 0;
+    // Blood for Power: the Drain Mana return is mana gained by the caster from
+    // something that is not Life Tap, so it is refused too.
+    if (gainAmount && powerType == POWER_MANA && T2UnitHooks::BlocksManaGain(caster, GetSpellInfo()))
+        gainAmount = 0;
     if (gainAmount)
     {
         gainedAmount = caster->ModifyPower(powerType, gainAmount);
@@ -5768,6 +5798,12 @@ void AuraEffect::HandleObsModPowerAuraTick(Unit* target, Unit* caster) const
     if (GetBase()->IsPermanent() && target->GetPower(powerType) == target->GetMaxPower(powerType))
         return;
 
+    // Blood for Power (T2 warlock 5pc): drink, Innervate and every other
+    // percent-regen aura land here via ModifyPower, never EnergizeBySpell,
+    // so the Life-Tap-only gate has to be applied at this tick as well.
+    if (powerType == POWER_MANA && T2UnitHooks::BlocksManaGain(target, GetSpellInfo()))
+        return;
+
     // ignore negative values (can be result apply spellmods to aura damage
     uint32 amount = std::max(GetAmount(), 0) * target->GetMaxPower(powerType) /100;
     TC_LOG_DEBUG("spells.aura.effect", "PeriodicTick: {} energize {} for {} dmg inflicted by {}",
@@ -5800,6 +5836,11 @@ void AuraEffect::HandlePeriodicEnergizeAuraTick(Unit* target, Unit* caster) cons
 
     // don't regen when permanent aura target has full power
     if (GetBase()->IsPermanent() && target->GetPower(powerType) == target->GetMaxPower(powerType))
+        return;
+
+    // Blood for Power: Mana Spring, Replenishment and friends tick through
+    // ModifyPower directly, bypassing the EnergizeBySpell gate.
+    if (powerType == POWER_MANA && T2UnitHooks::BlocksManaGain(target, GetSpellInfo()))
         return;
 
     // ignore negative values (can be result apply spellmods to aura damage

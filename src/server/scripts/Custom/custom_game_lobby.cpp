@@ -9,6 +9,7 @@
 #include "Chat.h"
 #include "Creature.h"
 #include "DBCStores.h"
+#include "DisableMgr.h"
 #include "Group.h"
 #include "GameTime.h"
 #include "GameObject.h"
@@ -86,6 +87,7 @@ enum GossipAction : uint32
     ACTION_SELECT_SCM,
     ACTION_SELECT_BRT,
     ACTION_SELECT_OBC,
+    ACTION_SELECT_TRT,
     ACTION_SELECT_BFG,
     ACTION_SELECT_AV,
     ACTION_SELECT_SA,
@@ -97,6 +99,13 @@ enum GossipAction : uint32
     ACTION_SELECT_TV,
     ACTION_SELECT_TTP,
     ACTION_SELECT_RANDOM_ARENA,
+    // The ported arenas are addressed as a block instead of one constant each:
+    // the action id is this base plus the arena's offset within
+    // BATTLEGROUND_CUSTOM_ARENA_FIRST..LAST. Adding an arena then costs nothing
+    // here, nothing in the menu builder and nothing in the select handler.
+    // Occupies 330..343 today; the block above ends at 318 and the next starts
+    // at 380, so there is room for 50 arenas before this needs revisiting.
+    ACTION_SELECT_CUSTOM_ARENA_BASE = 330,
     ACTION_BATTLEGROUND_OPTIONS = 380,
     ACTION_BATTLEGROUND_OPTIONS_BACK,
     ACTION_RULE_FLAG_CAPS = 400,
@@ -181,12 +190,9 @@ char const* TeamName(uint32 team)
     return team == ALLIANCE ? "Blue" : team == HORDE ? "Red" : "Spectator";
 }
 
-std::string BattlegroundName(CustomGameLobby const& lobby)
+std::string BattlegroundNameByType(BattlegroundTypeId type)
 {
-    if (lobby.RandomArena)
-        return "Random Arena";
-
-    switch (lobby.SelectedType)
+    switch (type)
     {
         case BATTLEGROUND_WS: return "Warsong Gulch";
         case BATTLEGROUND_TP: return "Twin Peaks";
@@ -195,6 +201,7 @@ std::string BattlegroundName(CustomGameLobby const& lobby)
         case BATTLEGROUND_SCM: return "Scarlet Chapel Deathmatch";
         case BATTLEGROUND_BRT: return "Blackrock Throne Deathmatch";
         case BATTLEGROUND_OBC: return "Obsidian Colosseum";
+        case BATTLEGROUND_TRT: return "Tanaris Deathmatch";
         case BATTLEGROUND_BFG: return "Battle for Gilneas";
         case BATTLEGROUND_AV: return "Alterac Valley";
         case BATTLEGROUND_SA: return "Strand of the Ancients";
@@ -205,8 +212,30 @@ std::string BattlegroundName(CustomGameLobby const& lobby)
         case BATTLEGROUND_NL: return "Nefarian's Arena";
         case BATTLEGROUND_TV: return "Tol'Viron Arena";
         case BATTLEGROUND_TTP: return "Tiger's Peak";
+        case BATTLEGROUND_CPE: return "Coliseum of Past Echoes";
+        case BATTLEGROUND_IAT: return "Imperial Arena of Thakraj";
+        case BATTLEGROUND_MXC: return "Maldraxxus Coliseum";
+        case BATTLEGROUND_NGA: return "Nagrand Arena (Remastered)";
+        case BATTLEGROUND_BEA: return "Blade's Edge Arena (Remastered)";
+        case BATTLEGROUND_GDH: return "Guardian's Hall";
+        case BATTLEGROUND_SOC: return "Spark of Creator";
+        case BATTLEGROUND_BHA: return "Baradin Hold Arena";
+        case BATTLEGROUND_OBS: return "Obelisk of the Stars";
+        case BATTLEGROUND_TWN: return "The Twisting Nether";
+        case BATTLEGROUND_BRH: return "Black Rook Hold Arena";
+        case BATTLEGROUND_ASF: return "Ashamane's Fall";
+        case BATTLEGROUND_INL: return "The Inventor's Library";
+        case BATTLEGROUND_AOA: return "Amphitheater of Anguish";
         default: return "Unknown";
     }
+}
+
+std::string BattlegroundName(CustomGameLobby const& lobby)
+{
+    if (lobby.RandomArena)
+        return "Random Arena";
+
+    return BattlegroundNameByType(lobby.SelectedType);
 }
 
 char const* WeatherName(BattlegroundCustomWeather weather)
@@ -244,11 +273,9 @@ bool IsArenaSelection(BattlegroundTypeId type)
         case BATTLEGROUND_BE:
         case BATTLEGROUND_RL:
         case BATTLEGROUND_NL:
-        case BATTLEGROUND_TV:
-        case BATTLEGROUND_TTP:
             return true;
         default:
-            return false;
+            return IsCustomArena(type);
     }
 }
 
@@ -788,6 +815,18 @@ public:
         if (!IsOwner(player, lobby) || lobby->ActiveBattlegroundId)
             return;
 
+        // The menu already filters these out, but the menu is not the only way
+        // an action id can arrive -- a stale gossip page or a hand-built packet
+        // reaches here too. Accepting a disabled or template-less battleground
+        // would leave the lobby pointing at something StartGame cannot create,
+        // which fails later and less clearly than refusing it now.
+        if (DisableMgr::IsDisabledFor(DISABLE_TYPE_BATTLEGROUND, type, nullptr) ||
+            !sBattlegroundMgr->GetBattlegroundTemplate(type))
+        {
+            Notify(player, "That battleground is not available on this realm.");
+            return;
+        }
+
         if (lobby->RandomArena || lobby->SelectedType != type)
             lobby->Rules = BattlegroundCustomRules();
         lobby->SelectedType = type;
@@ -956,18 +995,21 @@ public:
         BattlegroundTypeId matchType = lobby->SelectedType;
         if (lobby->RandomArena)
         {
-            BattlegroundTypeId const arenaTypes[] =
-            {
-                BATTLEGROUND_NA,
-                BATTLEGROUND_BE,
-                BATTLEGROUND_RL,
-                BATTLEGROUND_NL,
-                BATTLEGROUND_TV,
-                BATTLEGROUND_TTP
-            };
+            // The candidate arenas come from `battleground_random_pool` so this
+            // list and the one behind the All Arenas queue cannot drift apart,
+            // and so an arena can be added or taken out of rotation with an
+            // UPDATE and `.reload battleground_template`.
+            std::vector<BattlegroundTypeId> arenaTypes =
+                sBattlegroundMgr->GetRandomPoolMembers(BATTLEGROUND_AA);
+
+            // Only if the pool has not been configured at all. Keeps a fresh or
+            // half-migrated database working rather than offering no arenas.
+            if (arenaTypes.empty())
+                arenaTypes = { BATTLEGROUND_NA, BATTLEGROUND_BE, BATTLEGROUND_RL,
+                               BATTLEGROUND_NL, BATTLEGROUND_TV, BATTLEGROUND_TTP };
 
             std::vector<BattlegroundTypeId> compatibleArenas;
-            compatibleArenas.reserve(std::size(arenaTypes));
+            compatibleArenas.reserve(arenaTypes.size());
             for (BattlegroundTypeId type : arenaTypes)
                 if (resolveBracket(type))
                     compatibleArenas.push_back(type);
@@ -1232,6 +1274,22 @@ public:
         CustomGameLobby* lobby = GetLobby(player);
         if (!lobby)
             return;
+
+        // Crash telemetry: a client that crashes never sends a logout request,
+        // so its session is torn down with the logout timer unset. A clean exit
+        // (or a /logout) always goes through that timer. This is the closest
+        // the server gets to observing a client crash - correlate the DROP
+        // timestamp with a MANNEQUIN spawn line to identify what was being
+        // built when it died. Alt-F4 and genuine connection loss look the same
+        // as a crash here, so treat it as a signal, not proof.
+        WorldSession const* session = player->GetSession();
+        bool const graceful = session && session->isLogingOut();
+        TC_LOG_INFO("custom.lobby", "{} player='{}' guid={} lobbyOwner={} "
+            "members={} pos=({:.2f},{:.2f},{:.2f})",
+            graceful ? "LEAVE  graceful" : "DROP   ungraceful(crash suspect)",
+            player->GetName(), player->GetGUID().ToString(),
+            lobby->OwnerGuid.ToString(), uint32(lobby->Teams.size()),
+            player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
 
         RemoveLobbyMember(player, *lobby, false);
     }
@@ -1951,12 +2009,38 @@ public:
                 return;
 
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Random Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_RANDOM_ARENA);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Nagrand Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_NA);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Blade's Edge Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_BE);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Ruins of Lordaeron", GOSSIP_SENDER_MAIN, ACTION_SELECT_RL);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Nefarian's Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_NL);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Tol'Viron Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_TV);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Tiger's Peak", GOSSIP_SENDER_MAIN, ACTION_SELECT_TTP);
+
+            // Every arena goes through one guard rather than being listed
+            // unconditionally, because "which arenas exist" and "which arenas
+            // are playable" are not the same question. Dalaran Sewers and the
+            // Ring of Valor are disabled in `disables`, so they have no template
+            // and must never be offered -- picking one would start a match the
+            // server cannot create. Same guard covers an arena whose terrain is
+            // not on this realm yet.
+            auto offerArena = [&](BattlegroundTypeId bgTypeId, uint32 action)
+            {
+                if (DisableMgr::IsDisabledFor(DISABLE_TYPE_BATTLEGROUND, bgTypeId, nullptr))
+                    return;
+                if (!sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId))
+                    return;
+
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, BattlegroundNameByType(bgTypeId),
+                    GOSSIP_SENDER_MAIN, action);
+            };
+
+            offerArena(BATTLEGROUND_NA,  ACTION_SELECT_NA);
+            offerArena(BATTLEGROUND_BE,  ACTION_SELECT_BE);
+            offerArena(BATTLEGROUND_RL,  ACTION_SELECT_RL);
+            offerArena(BATTLEGROUND_NL,  ACTION_SELECT_NL);
+            offerArena(BATTLEGROUND_TV,  ACTION_SELECT_TV);
+            offerArena(BATTLEGROUND_TTP, ACTION_SELECT_TTP);
+
+            // The ported arenas are a contiguous id range, so they are walked
+            // rather than listed: adding one needs no edit here.
+            for (uint32 type = BATTLEGROUND_CUSTOM_ARENA_FIRST; type <= BATTLEGROUND_CUSTOM_ARENA_LAST; ++type)
+                offerArena(BattlegroundTypeId(type),
+                    ACTION_SELECT_CUSTOM_ARENA_BASE + (type - BATTLEGROUND_CUSTOM_ARENA_FIRST));
+
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Back", GOSSIP_SENDER_MAIN, ACTION_SELECT_LIST_BACK);
             SendGossipMenuFor(player, 1, me->GetGUID());
         }
@@ -1974,6 +2058,7 @@ public:
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Scarlet Chapel Deathmatch", GOSSIP_SENDER_MAIN, ACTION_SELECT_SCM);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Blackrock Throne Deathmatch", GOSSIP_SENDER_MAIN, ACTION_SELECT_BRT);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Obsidian Colosseum", GOSSIP_SENDER_MAIN, ACTION_SELECT_OBC);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Tanaris Deathmatch", GOSSIP_SENDER_MAIN, ACTION_SELECT_TRT);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Battle for Gilneas", GOSSIP_SENDER_MAIN, ACTION_SELECT_BFG);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Alterac Valley", GOSSIP_SENDER_MAIN, ACTION_SELECT_AV);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Strand of the Ancients", GOSSIP_SENDER_MAIN, ACTION_SELECT_SA);
@@ -2012,8 +2097,9 @@ public:
                     GOSSIP_SENDER_MAIN, ACTION_RULE_RESOURCE_RATE, "Percent (100 is normal)", 0, true);
             }
 
-            if (lobby->SelectedType == BATTLEGROUND_SCM || lobby->SelectedType == BATTLEGROUND_BRT ||
-                lobby->SelectedType == BATTLEGROUND_OBC)
+            // Every custom battleground is scored by kills, so they all expose
+            // the kill-limit rule.
+            if (IsCustomBattleground(lobby->SelectedType))
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT,
                     "Deathmatch kills: " + ConfiguredValue(lobby->Rules.DeathmatchKillLimit, DefaultDeathmatchKillLimit(lobby->SelectedType)),
                     GOSSIP_SENDER_MAIN, ACTION_RULE_KILLS, "Winning kill total (0 restores default)", 0, true);
@@ -2093,6 +2179,19 @@ public:
                 return true;
             }
 
+            // The ported arenas occupy a contiguous block of action ids, which a
+            // switch cannot match, so they are resolved here alongside the other
+            // range-addressed menus above.
+            if (action >= ACTION_SELECT_CUSTOM_ARENA_BASE &&
+                action <= ACTION_SELECT_CUSTOM_ARENA_BASE + (BATTLEGROUND_CUSTOM_ARENA_LAST - BATTLEGROUND_CUSTOM_ARENA_FIRST))
+            {
+                BattlegroundTypeId const bgTypeId =
+                    BattlegroundTypeId(BATTLEGROUND_CUSTOM_ARENA_FIRST + (action - ACTION_SELECT_CUSTOM_ARENA_BASE));
+                manager.SelectBattleground(player, bgTypeId, ARENA_TYPE_5v5);
+                ShowChromieMenu(player);
+                return true;
+            }
+
             switch (action)
             {
                 case ACTION_CREATE: manager.CreateLobby(player); break;
@@ -2133,6 +2232,7 @@ public:
                 case ACTION_SELECT_SCM: manager.SelectBattleground(player, BATTLEGROUND_SCM, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_BRT: manager.SelectBattleground(player, BATTLEGROUND_BRT, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_OBC: manager.SelectBattleground(player, BATTLEGROUND_OBC, 0); ShowChromieMenu(player); return true;
+                case ACTION_SELECT_TRT: manager.SelectBattleground(player, BATTLEGROUND_TRT, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_BFG: manager.SelectBattleground(player, BATTLEGROUND_BFG, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_AV: manager.SelectBattleground(player, BATTLEGROUND_AV, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_SA: manager.SelectBattleground(player, BATTLEGROUND_SA, 0); ShowChromieMenu(player); return true;
@@ -2144,6 +2244,9 @@ public:
                 case ACTION_SELECT_TV: manager.SelectBattleground(player, BATTLEGROUND_TV, ARENA_TYPE_5v5); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_TTP: manager.SelectBattleground(player, BATTLEGROUND_TTP, ARENA_TYPE_5v5); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_RANDOM_ARENA: manager.SelectRandomArena(player); ShowChromieMenu(player); return true;
+                // Counterpart to the block of gossip entries built above. A
+                // switch cannot express a range, so this is handled ahead of it
+                // in the same function -- see the check before the switch.
                 case ACTION_BATTLEGROUND_OPTIONS: ShowBattlegroundOptions(player); return true;
                 case ACTION_BATTLEGROUND_OPTIONS_BACK: ShowChromieMenu(player); return true;
                 case ACTION_TOGGLE_ENEMY_FLAG:

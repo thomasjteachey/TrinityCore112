@@ -91,7 +91,18 @@ public:
         unbalanced_times = 0;
         m_objects.fastClear();
         m_obj2Idx.getKeys(m_objects);
-        m_objects_to_push.getMembers(m_objects);
+
+        // G3D's getKeys/getMembers RESIZE the destination array, so calling
+        // getMembers straight into m_objects here would REPLACE the live
+        // objects just gathered from the index with only the pending
+        // inserts. That made every rebalance evict every previously
+        // registered model from the tree - game objects stopped blocking
+        // line of sight (and every other dynamic-tree query) within minutes
+        // of a cell seeing its first respawn churn. Collect the pending set
+        // separately and append instead.
+        ObjArray pending;
+        m_objects_to_push.getMembers(pending);
+        m_objects.appendPOD(pending);   // elements are raw pointers
 
         // Rebuild index table from the currently live object list and reset the pending insert set.
         m_obj2Idx.clear();

@@ -180,6 +180,16 @@ enum WorldBoolConfigs : uint32
     CONFIG_REGEN_HP_CANNOT_REACH_TARGET_IN_RAID,
     CONFIG_ALLOW_LOGGING_IP_ADDRESSES_IN_DATABASE,
     CONFIG_TRAP_DEBUG_WHISPER_ON_SUCCESS,
+    CONFIG_CENTURION_TRANSMOG_ENABLE,
+    CONFIG_CENTURION_TRANSMOG_DEFAULT_ENABLED,
+    CONFIG_CENTURION_TRANSMOG_ALLOW_MIXED_ARMOR_TYPES,
+    CONFIG_CENTURION_TRANSMOG_ALLOW_MIXED_WEAPON_TYPES,
+    CONFIG_CENTURION_TRANSMOG_ALLOW_FISHING_POLES,
+    CONFIG_CENTURION_TRANSMOG_IGNORE_REQ_CLASS,
+    CONFIG_CENTURION_TRANSMOG_IGNORE_REQ_RACE,
+    CONFIG_CENTURION_TRANSMOG_IGNORE_REQ_LEVEL,
+    CONFIG_CENTURION_TRANSMOG_IGNORE_REQ_SKILL,
+    CONFIG_CENTURION_TRANSMOG_IGNORE_REQ_SPELL,
     BOOL_CONFIG_VALUE_COUNT
 };
 
@@ -391,10 +401,16 @@ enum WorldIntConfigs : uint32
     CONFIG_CENTURION_BG_REWARD_MONEY_WINNER,
     CONFIG_CENTURION_BG_REWARD_MONEY_LOSER,
     CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP,
+    CONFIG_CENTURION_VHR_PARTY_WAVE_CHANCE,
+    CONFIG_CENTURION_VHR_PREP_SECONDS,
+    CONFIG_CENTURION_VHR_COUNTDOWN_FROM_SECONDS,
     CONFIG_CENTURION_LEAP_Z_SPEED,
     CONFIG_CENTURION_LEAP_XY_SPEED,
     CONFIG_CENTURION_HEARTBEATRESIST_NUMROLLS,
     CONFIG_CENTURION_HEARTBEATRESIST_REGRESSION,
+    CONFIG_CENTURION_TRANSMOG_TOKEN_ENTRY,
+    CONFIG_CENTURION_TRANSMOG_TOKEN_COST,
+    CONFIG_CENTURION_TRANSMOG_QUALITY_MASK,
     CONFIG_BIRTHDAY_TIME,
     CONFIG_CREATURE_PICKPOCKET_REFILL,
     CONFIG_CREATURE_STOP_FOR_PLAYER,
@@ -419,6 +435,7 @@ enum WorldIntConfigs : uint32
     CONFIG_RESPAWN_GUIDWARNING_FREQUENCY,
     CONFIG_SOCKET_TIMEOUTTIME_ACTIVE,
     CONFIG_PENDING_MOVE_CHANGES_TIMEOUT,
+    CONFIG_CENTURION_PALADIN_SEAL_TWIST_WINDOW_MS,
     INT_CONFIG_VALUE_COUNT
 };
 
@@ -739,6 +756,19 @@ class TC_GAME_API World
             return index < INT_CONFIG_VALUE_COUNT ? m_int_configs[index] : 0;
         }
 
+        /// Auras that waive the equipped-weapon requirement on melee abilities
+        /// (Centurion.Unarmed.WaiverAuras). A list rather than a single id
+        /// because a rank chain is one spell to a player but N ids to us, and
+        /// a configured id that does not match the rank actually on the player
+        /// looks exactly like a broken feature. Empty = feature off.
+        /// Parsed once in LoadConfigSettings, so `.reload config` applies.
+        std::vector<uint32> const& GetUnarmedWaiverAuras() const { return m_unarmedWaiverAuras; }
+
+        /// Is this spell one of the waiver auras? Called from the aura apply and
+        /// unapply hooks, so it must stay cheap: an empty list is a zero-iteration
+        /// loop, which is what keeps the hooks free when the feature is off.
+        bool IsUnarmedWaiverAura(uint32 spellId) const;
+
         void setWorldState(uint32 index, uint64 value);
         uint64 getWorldState(uint32 index) const;
         void LoadWorldStates();
@@ -845,6 +875,8 @@ class TC_GAME_API World
         uint32 m_int_configs[INT_CONFIG_VALUE_COUNT];
         bool m_bool_configs[BOOL_CONFIG_VALUE_COUNT];
         float m_float_configs[FLOAT_CONFIG_VALUE_COUNT];
+        // Config lists have no home in the scalar arrays above; see GetUnarmedWaiverAuras().
+        std::vector<uint32> m_unarmedWaiverAuras;
         typedef std::map<uint32, uint64> WorldStatesMap;
         WorldStatesMap m_worldstates;
         uint32 m_playerLimit;

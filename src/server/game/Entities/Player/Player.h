@@ -139,6 +139,16 @@ struct PlayerTalent
     uint8 spec;
 };
 
+// A talent rank spent inside a Violet Hold run (custom_violet_hold_talents).
+// When the run's borrowed levels are taken back, these are undone newest first,
+// only as many as the lost points demand - see VioletHoldBoons::StripAll.
+struct VioletHoldRunTalent
+{
+    uint32 seq;             // learn order, per character
+    uint32 spell;           // the talent rank spell learned
+    uint32 previousSpell;   // the rank held before it (0 = none), restored on undo
+};
+
 // Spell modifier (used for modify other spells)
 struct SpellModifier
 {
@@ -744,6 +754,9 @@ enum PlayerLoginQueryIndex
     PLAYER_LOGIN_QUERY_LOAD_MONTHLY_QUEST_STATUS    = 32,
     PLAYER_LOGIN_QUERY_LOAD_CORPSE_LOCATION         = 33,
     PLAYER_LOGIN_QUERY_LOAD_PET_SLOTS               = 34,
+    PLAYER_LOGIN_QUERY_LOAD_TRANSMOGS               = 35,
+    PLAYER_LOGIN_QUERY_LOAD_TRANSMOG_SETTINGS       = 36,
+    PLAYER_LOGIN_QUERY_LOAD_VHR_RUN_TALENTS         = 37,
     MAX_PLAYER_LOGIN_QUERY
 };
 
@@ -996,6 +1009,13 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
 
         PlayerSocial* GetSocial() { return m_social; }
         void RemoveSocial();
+        // Server-created players (dark clones, lobby mannequins) are built with
+        // Player::Create and never run LoadFromDB, which is the only place
+        // m_social is assigned - leaving it null. Anything iterating players
+        // and calling GetSocial()->... then dereferences null; Channel::SendToAll
+        // did exactly that and crashed the world server. Give them an empty
+        // social list instead of null so they behave like any other player.
+        void EnsureSocial();
 
         PlayerTaxi m_taxi;
         void InitTaxiNodesForLevel() { m_taxi.InitTaxiNodesForLevel(GetRace(), GetClass(), GetLevel()); }
@@ -1034,7 +1054,13 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         uint32 GetXPForNextLevel() const { return GetUInt32Value(PLAYER_NEXT_LEVEL_XP); }
         void SetXP(uint32 xp) { SetUInt32Value(PLAYER_XP, xp); }
         void GiveXP(uint32 xp, Unit* victim, float group_rate = 1.0f);
-        void GiveLevel(uint8 level);
+        // borrowed = a temporary level (Violet Hold's Boon of Ascension and its
+        // rollback): the level itself, its stats, skills and talent points are
+        // applied, but none of the one-way rewards of really reaching a level -
+        // no achievement, no level-reward mail, no Refer-A-Friend grant, no
+        // OnPlayerLevelChanged hook - and health/power keep their percentage
+        // instead of refilling.
+        void GiveLevel(uint8 level, bool borrowed = false);
         bool IsMaxLevel() const;
 
         void InitStatsForLevel(bool reapplyMods = false);
@@ -1084,6 +1110,10 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         PetStable const* GetPetStable() const { return m_petStable.get(); }
 
         Pet* GetPet() const;
+        // Native display id of a living pet we own: the spawned pet, a current pet only
+        // temporarily unsummoned (mounted, mounted at login, ...), or a dismissed hunter
+        // pet still callable via Call Pet. 0 when there is no such pet or it is dead.
+        uint32 GetLivingPetDisplayId() const;
         Pet* EnsureArenaPetResurrected();
         Pet* SummonPet(uint32 entry, float x, float y, float z, float ang, PetType petType, uint32 despwtime);
         void RemovePet(Pet* pet, PetSaveMode mode, bool returnreagent = false);
@@ -1140,6 +1170,10 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void SetBankBagSlotCount(uint8 count) { SetByteValue(PLAYER_BYTES_2, PLAYER_BYTES_2_OFFSET_BANK_BAG_SLOTS, count); }
         bool HasItemCount(uint32 item, uint32 count = 1, bool inBankAlso = false) const;
         bool HasItemFitToSpellRequirements(SpellInfo const* spellInfo, Item const* ignoreItem = nullptr) const;
+        bool IsWeaponRequirementWaived(SpellInfo const* spellInfo) const;
+        // Latch, not an immediate sweep - see Player::SyncUnarmedWaiverPassives.
+        void ScheduleUnarmedWaiverSync() { m_unarmedWaiverSyncPending = true; }
+        void SyncUnarmedWaiverPassives();
         bool CanNoReagentCast(SpellInfo const* spellInfo) const;
         bool HasItemOrGemWithIdEquipped(uint32 item, uint32 count, uint8 except_slot = NULL_SLOT) const;
         bool HasItemWithLimitCategoryEquipped(uint32 limitCategory, uint32 count, uint8 except_slot = NULL_SLOT) const;
@@ -1188,6 +1222,26 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void QuickEquipItem(uint16 pos, Item* pItem);
         void VisualizeItem(uint8 slot, Item* pItem);
         void SetVisibleItemSlot(uint8 slot, Item* pItem);
+
+        // Transmogrification. The visible-item update fields always hold the real
+        // item entry; the fake entry is substituted per observer when the packet is
+        // built, so the display flag can be honoured on both sides at once.
+        bool IsTransmogEnabled() const { return _transmogEnabled; }
+        void SetTransmogEnabled(bool enabled);
+        uint32 GetTransmogEntry(ObjectGuid itemGuid) const;
+        void SetTransmog(Item* item, uint32 fakeEntry);
+        void RemoveTransmog(Item* item);
+        uint32 RemoveAllTransmogs();
+        // Entry the given observer should see in the given equipment slot.
+        uint32 GetVisibleItemEntryFor(Player const* observer, uint8 slot) const;
+        void RebuildTransmogCache();
+        void RefreshTransmogSlot(uint8 slot);
+        // Resend this player's visible-item fields to a single observer.
+        void SendVisibleItemUpdateTo(Player* receiver);
+        // My appearance changed: push it to everyone who can see me.
+        void RefreshTransmogForObservers();
+        // My display flag changed: pull everyone else's appearance back to me.
+        void RefreshTransmogView();
         Item* BankItem(ItemPosCountVec const& dest, Item* pItem, bool update);
         void RemoveItem(uint8 bag, uint8 slot, bool update);
         void MoveItemFromInventory(uint8 bag, uint8 slot, bool update);
@@ -1517,8 +1571,26 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
 
         bool AddTalent(uint32 spellId, uint8 spec, bool learning);
         bool HasTalent(uint32 spell_id, uint8 spec) const;
+        // Rebuild m_usedTalentCount from the talent map. Must run at login after
+        // _LoadTalents/_LoadSpells and before InitTalentForLevel, otherwise the
+        // count is whatever AddSpell scraped out of the spellbook.
+        void RecountUsedTalentsFromTalentMap();
 
         uint32 CalculateTalentsPoints() const;
+        // Points a character of `level` (this class) would have; the same
+        // formula CalculateTalentsPoints applies to the current level.
+        uint32 CalculateTalentsPointsForLevel(uint8 level) const;
+        uint32 GetUsedTalentCount() const { return m_usedTalentCount; }
+
+        // Undo of one LearnTalent: removes the rank's spell and what it taught,
+        // refunds its points, restores `previousRankSpellId` if given.
+        void UnlearnTalentSpell(uint32 spellId, uint32 previousRankSpellId, uint8 levelCap = 0);
+
+        // Talent points spent inside a Violet Hold run - see VioletHoldRunTalent.
+        std::vector<VioletHoldRunTalent> const& GetVioletHoldRunTalents() const { return m_vhrRunTalents; }
+        void RecordVioletHoldRunTalent(uint32 spell, uint32 previousSpell);
+        void PopVioletHoldRunTalent();
+        void ClearVioletHoldRunTalents();
 
         // Dual Spec
         void UpdateSpecCount(uint8 count);
@@ -2019,6 +2091,10 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         bool IsInvitedForBattlegroundInstance(uint32 instanceId) const;
         WorldLocation const& GetBattlegroundEntryPoint() const { return m_bgData.joinPos; }
         void SetBattlegroundEntryPoint();
+        // Override where leaving the battleground puts the player, instead of
+        // recording where they queued from. Violet Hold uses this to return a
+        // wiped party to Gurubashi rather than to wherever they came from.
+        void SetBattlegroundEntryPoint(WorldLocation const& loc) { m_bgData.joinPos = loc; }
 
         void SetBGTeam(uint32 team);
         uint32 GetBGTeam() const;
@@ -2390,6 +2466,10 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void _LoadTalents(PreparedQueryResult result);
         void _LoadInstanceTimeRestrictions(PreparedQueryResult result);
         void _LoadPetStable(uint8 petStableSlots, PreparedQueryResult result);
+        void _LoadTransmogs(PreparedQueryResult transmogs, PreparedQueryResult settings);
+        void _LoadVioletHoldRunTalents(PreparedQueryResult result);
+        void LearnTalentSpellDependencies(uint32 spellid, uint8 levelCap = 0);
+        void _SaveVioletHoldRunTalents(CharacterDatabaseTransaction trans);
 
         /*********************************************************/
         /***                   SAVE SYSTEM                     ***/
@@ -2442,6 +2522,17 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         Item* m_items[PLAYER_SLOTS_COUNT];
         uint32 m_currentBuybackSlot;
 
+        // Transmogrification: appearance per owned item, plus a flat per-equipment-slot
+        // cache so the packet-build path never touches the map.
+        std::unordered_map<ObjectGuid, uint32> _transmogs;
+        std::array<uint32, EQUIPMENT_SLOT_END> _transmogSlotCache{};
+        bool _transmogEnabled{ false };
+
+        // Violet Hold run talents, oldest first (custom_violet_hold_talents).
+        std::vector<VioletHoldRunTalent> m_vhrRunTalents;
+        uint32 m_vhrRunTalentNextSeq{ 1 };
+        bool m_vhrRunTalentsDirty{ false };
+
         std::vector<Item*> m_itemUpdateQueue;
         bool m_itemUpdateQueueBlocked;
 
@@ -2470,6 +2561,9 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         bool _pendingStarfireSnareRemoval;
         uint8 _starfireSnareRemovalGraceUpdates;
         bool _verifyStarfireSnareNextUpdate;
+        // Re-entrancy guard: ApplyActiveStarfireSnare re-runs UpdateSpeed, whose
+        // tail calls back into it via HandleStarfireSnareOnSpeedUpdate.
+        bool _inStarfireSnareSpeedUpdate;
 
         uint32 m_enchantmentFlatMod[MAX_ATTACK]; // TODO: Stat system - incorporate generically, exposes a required hidden weapon stat that does not apply when unarmed
 
@@ -2663,6 +2757,10 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
 
         uint32 m_DelayedOperations;
         bool m_bCanDelayTeleport;
+        // Set by the aura hooks when a waiver aura lands or drops, drained in
+        // Player::Update. Deferred because the sweep it triggers mutates the
+        // very aura maps the hooks are called from mid-iteration.
+        bool m_unarmedWaiverSyncPending;
         bool m_bHasDelayedTeleport;
 
         std::unique_ptr<PetStable> m_petStable;

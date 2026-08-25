@@ -43,6 +43,9 @@ struct PvpCoreConfig
     float meleeRange = 5.0f;
     float closeRange = 15.0f;
     float longRange = 35.0f;
+    uint32 interruptReactionMinMs = 200;
+    uint32 interruptReactionMaxMs = 1000;
+    uint32 interruptCommitWindowMs = 200;
 };
 
 enum class BattlegroundState : uint8
@@ -257,6 +260,15 @@ public:
     static bool IsBattlegroundFlagCarrier(Player const* player);
     static bool SpellWouldBreakFlagCarry(uint32 spellId);
     static bool TeamHasHumanPlayers(Player const* player);
+    // Records why a warrior did or did not pick a gap closer on its last
+    // decision pass. Every gate can fail silently and look identical from
+    // outside - the bot simply runs - so the values have to be captured where
+    // they are computed. Read back through ".playerbot pvp movediag".
+    static std::string GetLastWarriorGapCloserDiagnostic(Player const* player);
+    // Persists until the next time the racial is chosen, unlike the gap-closer
+    // slot which is rewritten every decision tick. Every Man for Himself fires
+    // once and is over, so a per-tick slot could never be read in time.
+    static std::string GetLastEveryManForHimselfDiagnostic(Player const* player);
 
 private:
     static bool IsLifecycleEnabled();

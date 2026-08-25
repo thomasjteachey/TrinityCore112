@@ -26,10 +26,12 @@
 #include "wdt.h"
 #include <boost/filesystem/path.hpp>
 #include <boost/filesystem/operations.hpp>
+#include <cctype>
 #include <cstdio>
 #include <deque>
 #include <fstream>
 #include <set>
+#include <string>
 #include <unordered_map>
 #include <cstdlib>
 #include <cstring>
@@ -68,7 +70,36 @@ enum Extract
 
 // Select data for extract
 int   CONF_extract = EXTRACT_MAP | EXTRACT_DBC | EXTRACT_CAMERA;
-int   CONF_single_map = -1;
+// -m: only these map ids are converted (empty = every map in Map.dbc).
+// Accepts one id or a comma-separated list: -m 1608 / -m 1608,1620.
+std::set<uint32> CONF_map_ids;
+
+// Parses "1608" or "1608,1620,617" into ids. Returns false on anything else.
+bool ParseMapIdList(char const* text, std::set<uint32>& ids)
+{
+    if (!text || !*text)
+        return false;
+
+    std::string token;
+    for (char const* p = text; ; ++p)
+    {
+        if (*p == ',' || *p == '\0')
+        {
+            if (token.empty())
+                return false;
+            for (char ch : token)
+                if (!isdigit(static_cast<unsigned char>(ch)))
+                    return false;
+            ids.insert(static_cast<uint32>(strtoul(token.c_str(), nullptr, 10)));
+            token.clear();
+            if (*p == '\0')
+                break;
+        }
+        else
+            token.push_back(*p);
+    }
+    return !ids.empty();
+}
 // This option allow limit minimum height to some value (Allow save some memory)
 bool  CONF_allow_height_limit = true;
 float CONF_use_minHeight = -500.0f;
@@ -80,19 +111,16 @@ float CONF_float_to_int16_limit = 2048.0f;   // Max accuracy = val/65536
 float CONF_flat_height_delta_limit = 0.005f; // If max - min less this value - surface is flat
 float CONF_flat_liquid_delta_limit = 0.001f; // If max - min less this value - liquid surface is flat
 
-// List MPQ for extract from
+// Base archives. Patches are NOT listed here - they are scanned for in
+// LoadCommonMPQFiles so that a custom lettered patch cannot be missed by
+// forgetting to add it to a hardcoded list. That had already happened: only
+// patch-Z was ever added, so patch-Y (and F, G, H, L, T, U) were silently
+// ignored, and any terrain living in them never reached the extracted maps.
 const char *CONF_mpq_list[]={
     "common.MPQ",
     "common-2.MPQ",
     "lichking.MPQ",
     "expansion.MPQ",
-    "patch.MPQ",
-    "patch-2.MPQ",
-    "patch-3.MPQ",
-    "patch-4.MPQ",
-    "patch-5.MPQ",
-    "patch-6.MPQ",
-    "patch-Z.MPQ",
 };
 
 static char const* const langs[] = {"enGB", "enUS", "deDE", "esES", "frFR", "koKR", "zhCN", "zhTW", "enCN", "enTW", "esMX", "ruRU" };
@@ -116,7 +144,7 @@ void Usage(char* prg)
         "-i set input path (max %d characters)\n"\
         "-o set output path (max %d characters)\n"\
         "-e extract only MAP(1)/DBC(2)/Camera(4) - standard: all(7)\n"\
-        "-m extract only this map id when extracting maps, example: -m 617\n"\
+        "-m extract only these map ids when extracting maps (one id or a comma-separated list), example: -m 617 or -m 1608,1620\n"\
         "-f height stored as int (less map size but lost some accuracy) 1 by default\n"\
         "Example: %s -f 0 -i \"c:\\games\\game\"", prg, MAX_PATH_LENGTH - 1, MAX_PATH_LENGTH - 1, prg);
     exit(1);
@@ -174,8 +202,7 @@ void HandleArgs(int argc, char * arg[])
             case 'm':
                 if (c + 1 < argc)                            // all ok
                 {
-                    CONF_single_map = atoi(arg[(c++) + 1]);
-                    if (CONF_single_map < 0)
+                    if (!ParseMapIdList(arg[(c++) + 1], CONF_map_ids))
                         Usage(arg[0]);
                 }
                 else
@@ -952,12 +979,29 @@ void ExtractMapsFromMpq(uint32 build)
     CreateDir(path);
 
     printf("Convert map files\n");
-    if (CONF_single_map >= 0)
-        printf("Single-map mode: extracting map %d only\n", CONF_single_map);
+    if (!CONF_map_ids.empty())
+    {
+        printf("Map filter: extracting only map id(s)");
+        for (uint32 id : CONF_map_ids)
+            printf(" %u", id);
+        printf("\n");
+
+        // A requested id that Map.dbc does not know is almost always a typo or
+        // a client whose patch lacks the row - say so instead of silently
+        // extracting nothing.
+        for (uint32 id : CONF_map_ids)
+        {
+            bool known = false;
+            for (uint32 z = 0; z < map_count && !known; ++z)
+                known = map_ids[z].id == id;
+            if (!known)
+                printf("WARNING: map id %u is not in the client's Map.dbc, nothing will be extracted for it\n", id);
+        }
+    }
 
     for(uint32 z = 0; z < map_count; ++z)
     {
-        if (CONF_single_map >= 0 && static_cast<uint32>(CONF_single_map) != map_ids[z].id)
+        if (!CONF_map_ids.empty() && CONF_map_ids.find(map_ids[z].id) == CONF_map_ids.end())
             continue;
 
         printf("Extract %s (%d/%u)                  \n", map_ids[z].name, z+1, map_count);
@@ -1126,13 +1170,36 @@ void LoadLocaleMPQFiles(int const locale)
 void LoadCommonMPQFiles()
 {
     std::string fileName;
+
+    auto tryOpen = [&fileName](std::string const& name)
+    {
+        fileName = Trinity::StringFormat("{}/Data/{}", input_path, name);
+        if (boost::filesystem::exists(fileName))
+        {
+            printf("Loading archive %s\n", name.c_str());
+            new MPQArchive(fileName.c_str());
+        }
+    };
+
+    // Base archives first.
     int count = sizeof(CONF_mpq_list)/sizeof(char*);
     for(int i = 0; i < count; ++i)
-    {
-        fileName = Trinity::StringFormat("{}/Data/{}", input_path, CONF_mpq_list[i]);
-        if (boost::filesystem::exists(fileName))
-            new MPQArchive(fileName.c_str());
-    }
+        tryOpen(CONF_mpq_list[i]);
+
+    // Then patches, in the same order vmap4_extractor scans them. Keeping the
+    // two tools in step is not cosmetic: if one loads an archive the other does
+    // not, the extracted terrain and the extracted collision come from
+    // different content, and the mismatch only shows up in game as players
+    // clipping through geometry that looks solid.
+    //
+    // Normal Blizzard patch order: patch.MPQ, patch-2.MPQ ... patch-99.MPQ
+    for (int i = 1; i <= 99; ++i)
+        tryOpen(i == 1 ? std::string("patch.MPQ") : Trinity::StringFormat("patch-{}.MPQ", i));
+
+    // Custom lettered patches: patch-A.MPQ ... patch-Z.MPQ. Opened after the
+    // numeric ones so they win override priority.
+    for (char c = 'A'; c <= 'Z'; ++c)
+        tryOpen(Trinity::StringFormat("patch-{}.MPQ", c));
 }
 
 inline void CloseMPQFiles()

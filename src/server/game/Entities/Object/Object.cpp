@@ -46,6 +46,8 @@
 #include "Unit.h"
 #include "UpdateFieldFlags.h"
 #include "Vehicle.h"
+#include "T2SpellHooks.h"
+#include "VioletHoldBoons.h"
 #include "VMapFactory.h"
 #include "VMapManager2.h"
 #include "World.h"
@@ -2396,6 +2398,12 @@ int32 WorldObject::ModSpellDuration(SpellInfo const* spellInfo, WorldObject cons
         if (durationMod != 0)
             AddPct(duration, durationMod);
 
+        // Violet Hold "Boon of Resolve": a flat percentage off any crowd
+        // control landing on the holder, whatever its mechanic. Applied on
+        // top of the mechanic mods above rather than competing with them.
+        if (int32 boonPct = VioletHoldBoons::GetCcDurationReductionPct(unitTarget, uint32(mechanicMask)))
+            AddPct(duration, -boonPct);
+
         // there are only negative mods currently
         durationMod_always = unitTarget->GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL, spellInfo->Dispel);
         durationMod_not_stack = unitTarget->GetMaxNegativeAuraModifierByMiscValue(SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL_NOT_STACK, spellInfo->Dispel);
@@ -2480,6 +2488,16 @@ void WorldObject::ModSpellCastTime(SpellInfo const* spellInfo, int32& castTime, 
         && (spellInfo->HasAura(SPELL_AURA_MOUNTED) || spellInfo->Mechanic == MECHANIC_MOUNT))
         castTime = std::max(castTime - 1000, 0);
 
+    // Violet Hold "Boon of the Outrider": same shape as the Tauren perk above.
+    if (castTime > 0 && (spellInfo->HasAura(SPELL_AURA_MOUNTED) || spellInfo->Mechanic == MECHANIC_MOUNT))
+        if (int32 boonMs = VioletHoldBoons::GetMountCastTimeReductionMs(unitCaster))
+            castTime = std::max(castTime - boonMs, 0);
+
+    // Moonkitty 5pc, macro casts only: see the header. Returns 0 when the
+    // stacking aura already covers this cast, so the two cannot both apply.
+    if (castTime > 0 && spell)
+        if (int32 comboCut = T2SpellHooks::MoonkittyMouseoverCastTimeCutMs(unitCaster, spellInfo, spell))
+            castTime = std::max(castTime - comboCut, 0);
 }
 
 void WorldObject::ModSpellDurationTime(SpellInfo const* spellInfo, int32& duration, Spell* spell /*= nullptr*/) const
@@ -3016,6 +3034,30 @@ SpellCastResult WorldObject::CastSpell(CastSpellTargetArg const& targets, uint32
     return spell->prepare(*targets.Targets, args.TriggeringAura);
 }
 
+namespace
+{
+    // True when this object is - or belongs to - a spectator in a custom game.
+    // Resolves through the owner so a spectator's pet, totem or other minion
+    // is just as inert as the spectator itself.
+    bool IsSpectatorInCustomGame(WorldObject const* object)
+    {
+        Unit const* unit = object ? object->ToUnit() : nullptr;
+        if (!unit)
+            return false;
+
+        Player const* player = unit->ToPlayer();
+        if (!player)
+            if (Unit const* owner = unit->GetCharmerOrOwner())
+                player = owner->ToPlayer();
+
+        if (!player || !player->IsSpectator())
+            return false;
+
+        Battleground const* bg = player->GetBattleground();
+        return bg && bg->IsCustomGame();
+    }
+}
+
 // function based on function Unit::CanAttack from 13850 client
 bool WorldObject::IsValidAttackTarget(WorldObject const* target, SpellInfo const* bySpell /*= nullptr*/) const
 {
@@ -3035,6 +3077,13 @@ bool WorldObject::IsValidAttackTarget(WorldObject const* target, SpellInfo const
 
     // can't attack GMs
     if (target->GetTypeId() == TYPEID_PLAYER && target->ToPlayer()->IsGameMaster())
+        return false;
+
+    // Custom-game spectators are inert: they can neither affect participants
+    // nor be affected by them. GetReactionTo deliberately gives a spectator
+    // the reaction of the side they are watching, which otherwise leaves them
+    // a legal target (and a legal caster) for anything aimed at that side.
+    if (IsSpectatorInCustomGame(this) || IsSpectatorInCustomGame(target))
         return false;
 
     Unit const* unit = ToUnit();
@@ -3182,6 +3231,12 @@ bool WorldObject::IsValidAssistTarget(WorldObject const* target, SpellInfo const
 
     // can't assist GMs
     if (target->GetTypeId() == TYPEID_PLAYER && target->ToPlayer()->IsGameMaster())
+        return false;
+
+    // Custom-game spectators are inert - see the matching note in
+    // IsValidAttackTarget. This is the check that stops a spectator healing,
+    // shielding or buffing the side they are watching.
+    if (IsSpectatorInCustomGame(this) || IsSpectatorInCustomGame(target))
         return false;
 
     // can't assist own vehicle or passenger

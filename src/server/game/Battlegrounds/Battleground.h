@@ -548,6 +548,32 @@ class TC_GAME_API Battleground
                                                             // can be extended in in BG subclass
 
         void HandleTriggerBuff(ObjectGuid go_guid);
+
+        // Whether this player may set off an environmental powerup - the Speed,
+        // Restoration and Berserking runes and any custom one. Consulted by the
+        // ownerless-trap search in GameObject::Update, which is the only thing
+        // that fires those. Default is "anyone standing on it"; Violet Hold
+        // narrows it to the human side so the clone waves cannot eat the
+        // rewards the party is meant to be racing them for.
+        virtual bool CanPickUpPowerup(Player const* /*player*/) const { return true; }
+
+        // Whether a dead player may walk back to their own corpse and reclaim
+        // it. Arenas refuse this outright via Player::InArena, and this is the
+        // same rule made available to other modes.
+        //
+        // Refusing the reclaim does NOT remove the corpse or block being raised
+        // by someone else: HandleReclaimCorpse is only the self-service route.
+        // Rebirth, soulstones and Reincarnation all still work, exactly as they
+        // do in an arena. Public because that handler is the caller.
+        virtual bool AllowsCorpseReclaim() const { return true; }
+
+        // True while THIS battleground owns `player`'s preparation state: it
+        // applied the aura/flag itself and takes it back when it is ready.
+        // Violet Hold does that per WAVE, mid-match - and the playerbot
+        // lifecycle otherwise strips preparation from every bot the moment a
+        // match reads STATUS_IN_PROGRESS, which is Violet Hold's entire life.
+        virtual bool OwnsPreparationState(Player const* /*player*/) const { return false; }
+
         void SetHoliday(bool is_holiday);
 
         /// @todo make this protected:
@@ -631,11 +657,21 @@ class TC_GAME_API Battleground
         virtual uint32 GetResurrectionInterval() const { return GetConfiguredResurrectionInterval(RESURRECTION_INTERVAL); }
         virtual uint32 GetBuffRespawnTime(uint32 type) const { return BUFF_RESPAWN_TIME; }
 
+        // Whether an under-populated team should start the premature-finish
+        // countdown. Modes that legitimately run with one side empty - Violet
+        // Hold sits at zero enemies between waves - opt out here.
+        virtual bool AllowsPrematureFinish() const { return true; }
+
+
         // Scorekeeping
         BattlegroundScoreMap PlayerScores;                // Player scores
         // must be implemented in BG subclass
         virtual void RemovePlayer(Player* /*player*/, ObjectGuid /*guid*/, uint32 /*team*/) { }
         virtual void ModifyEndOfMatchHonorRewards(uint32 /*winner*/, uint32 /*team*/, uint32& /*winnerHonor*/, uint32& /*loserHonor*/) const { }
+        // Same hook for the copper payout: sees the amounts as they will be
+        // paid (arena multiplier already applied for arenas), before the
+        // 15-second minimum-duration gate.
+        virtual void ModifyEndOfMatchMoneyRewards(uint32 /*winner*/, uint32 /*team*/, uint32& /*winnerMoney*/, uint32& /*loserMoney*/) const { }
 
         // Player lists, those need to be accessible by inherited classes
         BattlegroundPlayerMap m_Players;

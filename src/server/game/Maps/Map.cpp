@@ -2845,6 +2845,14 @@ void Map::GetFullTerrainStatusForPosition(uint32 phaseMask, float x, float y, fl
             data.outdoors = (areaEntry->Flags & (AREA_FLAG_INSIDE | AREA_FLAG_OUTSIDE)) != AREA_FLAG_INSIDE;
     }
 
+    // The Violet Hold survival battleground (map 1608) plays inside a WMO
+    // whose byte-copied groups are all flagged interior, so the checks above
+    // land on "indoors" everywhere - which blocks mounts and every
+    // outdoors-only spell. The mode wants open-arena rules, so this map
+    // overrides whatever the WMO and ADT flags say.
+    if (GetId() == 1608)
+        data.outdoors = true;
+
     if (!data.areaId)
         data.areaId = i_mapEntry->AreaTableID;
 

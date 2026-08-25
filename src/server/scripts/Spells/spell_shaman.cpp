@@ -2325,6 +2325,27 @@ class spell_sha_purge : public SpellScript
 {
     PrepareSpellScript(spell_sha_purge);
 
+    // T2 shaman 8pc carriers (custom_t2_shaman_warlock.cpp): Purge on your
+    // OWN totem is the payoff, not a dispel.
+    static constexpr uint32 SPELL_T2_RIMEWARD_OFFERING = 90314;
+    static constexpr uint32 SPELL_T2_PYRE_OFFERING     = 90317;
+
+    // Mirror of the predicate in custom_t2_shaman_warlock.cpp
+    // (IsOwnTotemOfferingTarget) - keep the two in sync. It lives here as well
+    // because Spell::CallScriptCheckCastHandlers keeps the FIRST non-OK result,
+    // so the offering script cannot open this gate from outside.
+    static bool IsOwnTotemOfferingTarget(Unit const* caster, Unit const* target)
+    {
+        if (!caster || !target || caster->GetTypeId() != TYPEID_PLAYER)
+            return false;
+
+        // Unit-level checks only (no Totem.h needed in this TU).
+        if (!target->IsTotem() || target->GetOwnerGUID() != caster->GetGUID())
+            return false;
+
+        return caster->HasAura(SPELL_T2_RIMEWARD_OFFERING) || caster->HasAura(SPELL_T2_PYRE_OFFERING);
+    }
+
     static bool HasRehgarsMercyCrowdControl(Unit const* target)
     {
         if (!target)
@@ -2381,6 +2402,14 @@ class spell_sha_purge : public SpellScript
         Unit* target = GetExplTargetUnit();
 
         if (!caster || !target)
+            return SPELL_CAST_OK;
+
+        // T2 totem offerings (90314 Rimeward / 90317 Pyre): a wearer may Purge
+        // his OWN totem. spell_t2_purge_offering does the payload and stops the
+        // inner 370/8012 from launching; all this gate has to do is not reject
+        // the friendly totem (BAD_TARGETS, or NOTHING_TO_DISPEL under Rehgar's
+        // Mercy - the live "nothing to dispel" report).
+        if (IsOwnTotemOfferingTarget(caster, target))
             return SPELL_CAST_OK;
 
         // Rehgar's Mercy turns wrapper Purge into a friendly spell.

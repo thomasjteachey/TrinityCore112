@@ -95,8 +95,8 @@ enum HunterSpells
     SPELL_TELEPORT_VISUAL_GURUBASHI = 64446,
     SPELL_HUNTER_WEAVING_R1 = 81288,
     SPELL_HUNTER_WEAVING_R2 = 81289,
-    SPELL_HUNTER_WEAVING_AUTOSHOT_R1 = 81290,
-    SPELL_HUNTER_WEAVING_AUTOSHOT_R2 = 81291
+    SPELL_HUNTER_WEAVING_MELEE_AP = 81948,
+    SPELL_HUNTER_WEAVING_RANGED_AP = 81949
 };
 
 enum HunterSpellIcons
@@ -1679,41 +1679,52 @@ class spell_hun_outmaneuver : public SpellScript
     }
 };
 
+// -81288 - Weaving (talent), 81298 / 81299 - Weaving - Auto Shot (learned passive)
 class spell_hun_weaving : public AuraScript
 {
     PrepareAuraScript(spell_hun_weaving);
+
+    static constexpr uint32 RangedProcMask = PROC_FLAG_DONE_RANGED_AUTO_ATTACK | PROC_FLAG_DONE_SPELL_RANGED_DMG_CLASS;
+    static constexpr uint32 MeleeProcMask = PROC_FLAG_DONE_MELEE_AUTO_ATTACK | PROC_FLAG_DONE_SPELL_MELEE_DMG_CLASS;
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo(
             {
-                SPELL_HUNTER_WEAVING_AUTOSHOT_R1,
-                SPELL_HUNTER_WEAVING_AUTOSHOT_R2
+                SPELL_HUNTER_WEAVING_MELEE_AP,
+                SPELL_HUNTER_WEAVING_RANGED_AP
             });
     }
 
-    void OnApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    bool CheckAttackProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
     {
-        uint8 rank = GetSpellInfo()->GetRank();
-        if (rank == 1)
-            GetCaster()->CastSpell(GetCaster(), SPELL_HUNTER_WEAVING_AUTOSHOT_R1);
-        else
-            GetCaster()->CastSpell(GetCaster(), SPELL_HUNTER_WEAVING_AUTOSHOT_R2);
+        return (eventInfo.GetTypeMask() & (RangedProcMask | MeleeProcMask)) != 0;
     }
 
-    void OnRemove(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
+    void HandleWeave(ProcEventInfo& eventInfo)
     {
-        uint8 rank = GetSpellInfo()->GetRank();
-        if (rank == 1)
-            GetCaster()->RemoveAurasDueToSpell(SPELL_HUNTER_WEAVING_AUTOSHOT_R1);
-        else
-            GetCaster()->RemoveAurasDueToSpell(SPELL_HUNTER_WEAVING_AUTOSHOT_R2);
+        uint32 const typeMask = eventInfo.GetTypeMask();
+
+        // EFFECT_0 triggers the Mongoose Bite cooldown reduction. Melee
+        // attacks only grant ranged attack power and must not reduce it.
+        if (typeMask & MeleeProcMask)
+            PreventDefaultAction();
+
+        DamageInfo* damageInfo = eventInfo.GetDamageInfo();
+        if (!damageInfo)
+            return;
+
+        Unit* target = GetTarget();
+        if (typeMask & RangedProcMask)
+            target->CastSpell(target, SPELL_HUNTER_WEAVING_MELEE_AP, true);
+        else if (typeMask & MeleeProcMask)
+            target->CastSpell(target, SPELL_HUNTER_WEAVING_RANGED_AP, true);
     }
 
     void Register() override
     {
-        AfterEffectApply += AuraEffectApplyFn(spell_hun_weaving::OnApply, EFFECT_1, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
-        AfterEffectRemove += AuraEffectRemoveFn(spell_hun_weaving::OnRemove, EFFECT_1, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
+        DoCheckEffectProc += AuraCheckEffectProcFn(spell_hun_weaving::CheckAttackProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+        OnProc += AuraProcFn(spell_hun_weaving::HandleWeave);
     }
 };
 
@@ -1825,6 +1836,43 @@ class spell_int_cd_reduce : public SpellScript
     }
 };
 
+// 89799 - Beast Rider
+class spell_hun_beast_rider : public SpellScript
+{
+    PrepareSpellScript(spell_hun_beast_rider);
+
+    static constexpr uint32 SPELL_SWIFT_WHITE_STEED = 23228;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_SWIFT_WHITE_STEED });
+    }
+
+    SpellCastResult CheckCast()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        // A living pet that is only temporarily unsummoned (we are already
+        // mounted) still counts: HandleAuraMounted rides its stabled display id.
+        if (!player || player->GetLivingPetDisplayId())
+            return SPELL_CAST_OK;
+
+        // No living pet: summon the trusty white steed instead. The cast is
+        // deferred through the event queue because we are still inside this
+        // spell's own cast pipeline here.
+        player->m_Events.AddEventAtOffset([player]()
+        {
+            player->CastSpell(player, SPELL_SWIFT_WHITE_STEED, false);
+        }, 1ms);
+
+        return SPELL_FAILED_DONT_REPORT;
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(spell_hun_beast_rider::CheckCast);
+    }
+};
+
 void AddSC_hunter_spell_scripts()
 {
     RegisterSpellScript(spell_hun_aspect_of_the_beast);
@@ -1872,4 +1920,5 @@ void AddSC_hunter_spell_scripts()
     RegisterSpellScript(spell_hun_weaving);
     RegisterSpellScript(spell_hun_trap_cd_reduce);
     RegisterSpellScript(spell_int_cd_reduce);
+    RegisterSpellScript(spell_hun_beast_rider);
 }

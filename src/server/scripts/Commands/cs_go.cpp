@@ -59,6 +59,12 @@ public:
             { "xyz",                HandleGoXYZCommand,                     rbac::RBAC_PERM_COMMAND_GO,             Console::No },
             { "ticket",             HandleGoTicketCommand,                  rbac::RBAC_PERM_COMMAND_GO,             Console::No },
             { "offset",             HandleGoOffsetCommand,                  rbac::RBAC_PERM_COMMAND_GO,             Console::No },
+            { "up",                 HandleGoUpCommand,                      rbac::RBAC_PERM_COMMAND_GO,             Console::No },
+            { "down",               HandleGoDownCommand,                    rbac::RBAC_PERM_COMMAND_GO,             Console::No },
+            { "forward",            HandleGoForwardCommand,                 rbac::RBAC_PERM_COMMAND_GO,             Console::No },
+            { "back",               HandleGoBackCommand,                    rbac::RBAC_PERM_COMMAND_GO,             Console::No },
+            { "left",               HandleGoLeftCommand,                    rbac::RBAC_PERM_COMMAND_GO,             Console::No },
+            { "right",              HandleGoRightCommand,                   rbac::RBAC_PERM_COMMAND_GO,             Console::No },
             { "instance",           HandleGoInstanceCommand,                rbac::RBAC_PERM_COMMAND_GO,             Console::No },
             { "boss",               HandleGoBossCommand,                    rbac::RBAC_PERM_COMMAND_GO,             Console::No }
         };
@@ -361,6 +367,57 @@ public:
         loc.RelocateOffset({ dX, dY.value_or(0.0f), dZ.value_or(0.0f), dO.value_or(0.0f) });
 
         return DoTeleport(handler, loc);
+    }
+
+    // `.go up 20`, `.go back 5`, ...: the same relative teleport as `.go offset`
+    // with the direction spelled out instead of worked out by hand. Forward,
+    // back, left and right are taken along the character's facing (the offset
+    // is rotated by the orientation, as RelocateOffset does), up and down are
+    // straight along Z. Nothing is snapped to the ground or clamped to the
+    // walkable: `.go down 30` really does put you under the floor, which is
+    // the point when testing a map's fall-through rescue. A coordinate that
+    // leaves the map entirely is refused by DoTeleport's validity check.
+    static bool DoRelativeTeleport(ChatHandler* handler, char const* direction, float yards, Position const& offset)
+    {
+        Position loc = handler->GetSession()->GetPlayer()->GetPosition();
+        loc.RelocateOffset(offset);
+
+        if (!DoTeleport(handler, loc))
+            return false;
+
+        handler->PSendSysMessage("Moved %s %.1f yards to X: %.2f Y: %.2f Z: %.2f", direction, yards,
+            loc.GetPositionX(), loc.GetPositionY(), loc.GetPositionZ());
+        return true;
+    }
+
+    static bool HandleGoUpCommand(ChatHandler* handler, float yards)
+    {
+        return DoRelativeTeleport(handler, "up", yards, { 0.0f, 0.0f, yards, 0.0f });
+    }
+
+    static bool HandleGoDownCommand(ChatHandler* handler, float yards)
+    {
+        return DoRelativeTeleport(handler, "down", yards, { 0.0f, 0.0f, -yards, 0.0f });
+    }
+
+    static bool HandleGoForwardCommand(ChatHandler* handler, float yards)
+    {
+        return DoRelativeTeleport(handler, "forward", yards, { yards, 0.0f, 0.0f, 0.0f });
+    }
+
+    static bool HandleGoBackCommand(ChatHandler* handler, float yards)
+    {
+        return DoRelativeTeleport(handler, "back", yards, { -yards, 0.0f, 0.0f, 0.0f });
+    }
+
+    static bool HandleGoLeftCommand(ChatHandler* handler, float yards)
+    {
+        return DoRelativeTeleport(handler, "left", yards, { 0.0f, yards, 0.0f, 0.0f });
+    }
+
+    static bool HandleGoRightCommand(ChatHandler* handler, float yards)
+    {
+        return DoRelativeTeleport(handler, "right", yards, { 0.0f, -yards, 0.0f, 0.0f });
     }
 
     static bool HandleGoInstanceCommand(ChatHandler* handler, std::vector<std::string_view> labels)

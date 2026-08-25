@@ -103,6 +103,7 @@
 #include "SpellPackets.h"
 #include "StringConvert.h"
 #include "StringFormat.h"
+#include "T2UnitHooks.h"
 #include "TicketMgr.h"
 #include "TradeData.h"
 #include "Trainer.h"
@@ -350,6 +351,7 @@ namespace
     }
 }
 #include "ArenaSpectator.h"
+#include "VioletHoldBoons.h"
 
 #include <array>
 
@@ -370,12 +372,16 @@ namespace PolearmStaffInnerAuras
     void OnKnownSpellChanged(Player* player, uint32 spellId);
 }
 
+// T2Unarmed::OnEquipmentChanged follows the same convention and is called at
+// the same sites; it is declared in T2UnitHooks.h (included above) and its body
+// lives in custom_t2_warrior_paladin.cpp.
+
 namespace
 {
     bool IsBattlegroundEquipChangeAllowed(Player const* player, uint8 slot)
     {
         if (Battleground const* battleground = player->GetBattleground())
-            if (battleground->GetTypeID(true) == BATTLEGROUND_SCM || battleground->GetTypeID(true) == BATTLEGROUND_BRT || battleground->GetTypeID(true) == BATTLEGROUND_OBC)
+            if (IsCustomBattleground(battleground->GetTypeID(true)))
                 return true;
 
         switch (slot)
@@ -521,6 +527,7 @@ Player::Player(WorldSession* session) : Unit(true)
 
     m_DelayedOperations = 0;
     m_bCanDelayTeleport = false;
+    m_unarmedWaiverSyncPending = false;
     m_bHasDelayedTeleport = false;
     m_teleport_options = 0;
 
@@ -633,6 +640,7 @@ Player::Player(WorldSession* session) : Unit(true)
     _pendingStarfireSnareRemoval = false;
     _starfireSnareRemovalGraceUpdates = 0;
     _verifyStarfireSnareNextUpdate = false;
+    _inStarfireSnareSpeedUpdate = false;
 
     m_activeSpec = 0;
     m_specsCount = 1;
@@ -1099,20 +1107,32 @@ uint32 Player::EnvironmentalDamage(EnviromentalDamage type, uint32 damage)
     // Absorb, resist some environmental damage type
     uint32 absorb = 0;
     uint32 resist = 0;
-    switch (type)
+
+    // Every environmental type except the void runs the absorb pipeline. Only
+    // lava and slime used to, which left falling, drowning, fatigue and fire as
+    // the one damage path an absorb shield could never see - so an effect that
+    // refuses the killing blow protected against every death except a cliff.
+    //
+    // Resistance is unaffected for the physical types: CalcSpellResistedDamage
+    // returns 0 for anything outside SPELL_SCHOOL_MASK_MAGIC, so fall damage
+    // does not start being mitigated by armour.
+    //
+    // DAMAGE_FALL_TO_VOID is deliberately excluded. It fires when the player is
+    // already beneath the world, and surviving it strands them there - worse
+    // than the death it would have prevented.
+    if (type != DAMAGE_FALL_TO_VOID)
     {
-    case DAMAGE_LAVA:
-    case DAMAGE_SLIME:
-    {
-        DamageInfo dmgInfo(this, this, damage, nullptr, type == DAMAGE_LAVA ? SPELL_SCHOOL_MASK_FIRE : SPELL_SCHOOL_MASK_NATURE, DIRECT_DAMAGE, BASE_ATTACK);
+        SpellSchoolMask school = SPELL_SCHOOL_MASK_NORMAL;
+        if (type == DAMAGE_LAVA || type == DAMAGE_FIRE)
+            school = SPELL_SCHOOL_MASK_FIRE;
+        else if (type == DAMAGE_SLIME)
+            school = SPELL_SCHOOL_MASK_NATURE;
+
+        DamageInfo dmgInfo(this, this, damage, nullptr, school, DIRECT_DAMAGE, BASE_ATTACK);
         Unit::CalcAbsorbResist(dmgInfo);
         absorb = dmgInfo.GetAbsorb();
         resist = dmgInfo.GetResist();
         damage = dmgInfo.GetDamage();
-        break;
-    }
-    default:
-        break;
     }
 
     Unit::DealDamageMods(this, damage, &absorb);
@@ -1393,6 +1413,12 @@ void Player::Update(uint32 p_time)
     SetCanDelayTeleport(true);
     Unit::Update(p_time);
     SetCanDelayTeleport(false);
+
+    // Drained here, not at the hook: Unit::Update has returned, so the owned-aura
+    // update loop is finished, removed auras have been deleted, and no proc or
+    // spell hit-frame is live. Safe to add and remove auras.
+    if (m_unarmedWaiverSyncPending)
+        SyncUnarmedWaiverPassives();
     sScriptMgr->OnPlayerUpdate(this, p_time);
     UpdateCombatDiagnostic(p_time);
 
@@ -2129,6 +2155,33 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
         // near teleport, triggering send MSG_MOVE_TELEPORT_ACK from client at landing
         if (!GetSession()->PlayerLogout())
             SendTeleportPacket(m_teleport_dest, (options & TELE_TO_TRANSPORT_TELEPORT) != 0);
+
+        // A SERVER-DRIVEN BOT NEVER SENDS THAT ACK, and nothing else clears the
+        // semaphore: WorldSession::ResolvePendingTeleport is the only other
+        // route, and its sole runtime caller is HandleMovementOpcodes - reached
+        // from a client movement packet a socketless bot will never send.
+        //
+        // Left alone the bot stays "mid-teleport" for the rest of its session.
+        // Its own AI keeps issuing splines from where it really is while the
+        // server holds an unconsumed teleport destination, and observers get fed
+        // both, which renders as the unit flicking rapidly between two points.
+        // Blink is the usual trigger - it is a near teleport - so a mage bot
+        // blinking out of a stun starts porting around the battleground.
+        //
+        // Finished inline rather than by synthesising the ack packet: the ack
+        // handler resolves its mover through GameClient::GetActivelyMovedUnit,
+        // and completing a teleport must not depend on a bot session's mover
+        // bookkeeping being intact. These are the same three steps the
+        // forceNearFallback branch of ResolvePendingTeleport performs.
+        if (WorldSession const* session = GetSession())
+        {
+            if (session->IsVirtualSession() || session->IsTransientPlayerSession())
+            {
+                SetSemaphoreTeleportNear(false);
+                UpdatePosition(m_teleport_dest, true);
+                SetFallInformation(0, GetPositionZ());
+            }
+        }
     }
     else
     {
@@ -2350,6 +2403,10 @@ void Player::AddToWorld()
 
 void Player::RemoveFromWorld()
 {
+    // T2 Momentum tracker: logout and far teleport both come through here.
+    // Bookkeeping only, no aura work.
+    T2UnitHooks::OnPlayerRemovedFromWorld(this);
+
     // cleanup
     if (IsInWorld())
     {
@@ -2491,6 +2548,13 @@ void Player::Regenerate(Powers power)
 
     /// @todo possible use of miscvalueb instead of amount
     if (HasAuraTypeWithValue(SPELL_AURA_PREVENT_REGENERATE_POWER, power))
+        return;
+
+    // T2 Blood for Power (90322): no passive/Spirit/drink/Blessing of Wisdom
+    // mana regeneration for the wearer, whatever the carrier's own dbc effect
+    // says (belt and braces next to the PREVENT_REGENERATE_POWER check above).
+    // Other powers are untouched.
+    if (power == POWER_MANA && T2UnitHooks::BlocksManaGain(this, nullptr))
         return;
 
     float addvalue = 0.0f;
@@ -3033,11 +3097,16 @@ void Player::GiveXP(uint32 xp, Unit* victim, float group_rate)
 
 // Update player to next level
 // Current player experience not update (must be update by caller)
-void Player::GiveLevel(uint8 level)
+void Player::GiveLevel(uint8 level, bool borrowed /*= false*/)
 {
     uint8 oldLevel = GetLevel();
     if (level == oldLevel)
         return;
+
+    // A borrowed level keeps the character's health/power fraction; a real one
+    // fills them up below as it always has.
+    float const healthPct = GetHealthPct();
+    float const manaPct = GetMaxPower(POWER_MANA) ? GetPowerPct(POWER_MANA) : 0.0f;
 
     if (Guild* guild = GetGuild())
         guild->UpdateMemberData(this, GUILD_MEMBER_DATA_LEVEL, level);
@@ -3096,42 +3165,117 @@ void Player::GiveLevel(uint8 level)
     _ApplyAllLevelScaleItemMods(true);
 
     // set current level health and mana/energy to maximum after applying all mods.
-    SetFullHealth();
-    SetFullPower(POWER_MANA);
+    if (borrowed)
+    {
+        SetHealth(std::max<uint32>(1, uint32(CalculatePct(GetMaxHealth(), healthPct))));
+        if (GetMaxPower(POWER_MANA))
+            SetPower(POWER_MANA, uint32(CalculatePct(GetMaxPower(POWER_MANA), manaPct)));
+    }
+    else
+    {
+        SetFullHealth();
+        SetFullPower(POWER_MANA);
+    }
 
     // update level to hunter/summon pet
     if (Pet* pet = GetPet())
         pet->SynchronizeLevelWithOwner();
 
-    if (MailLevelReward const* mailReward = sObjectMgr->GetMailLevelReward(level, GetRaceMask()))
+    // The one-way rewards of genuinely reaching a level. A borrowed level is
+    // taken back later and must leave none of these behind.
+    if (!borrowed)
     {
-        /// @todo Poor design of mail system
-        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-        MailDraft(mailReward->mailTemplateId).SendMailTo(trans, this, MailSender(MAIL_CREATURE, mailReward->senderEntry));
-        CharacterDatabase.CommitTransaction(trans);
+        if (MailLevelReward const* mailReward = sObjectMgr->GetMailLevelReward(level, GetRaceMask()))
+        {
+            /// @todo Poor design of mail system
+            CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+            MailDraft(mailReward->mailTemplateId).SendMailTo(trans, this, MailSender(MAIL_CREATURE, mailReward->senderEntry));
+            CharacterDatabase.CommitTransaction(trans);
+        }
+
+        UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_REACH_LEVEL);
+
+        // Refer-A-Friend
+        if (GetSession()->GetRecruiterId())
+            if (level < sWorld->getIntConfig(CONFIG_MAX_RECRUIT_A_FRIEND_BONUS_PLAYER_LEVEL))
+                if (level % 2 == 0)
+                {
+                    ++m_grantableLevels;
+
+                    if (!HasByteFlag(PLAYER_FIELD_BYTES, PLAYER_FIELD_BYTES_OFFSET_RAF_GRANTABLE_LEVEL, 0x01))
+                        SetByteFlag(PLAYER_FIELD_BYTES, PLAYER_FIELD_BYTES_OFFSET_RAF_GRANTABLE_LEVEL, 0x01);
+                }
     }
-
-    UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_REACH_LEVEL);
-
-    // Refer-A-Friend
-    if (GetSession()->GetRecruiterId())
-        if (level < sWorld->getIntConfig(CONFIG_MAX_RECRUIT_A_FRIEND_BONUS_PLAYER_LEVEL))
-            if (level % 2 == 0)
-            {
-                ++m_grantableLevels;
-
-                if (!HasByteFlag(PLAYER_FIELD_BYTES, PLAYER_FIELD_BYTES_OFFSET_RAF_GRANTABLE_LEVEL, 0x01))
-                    SetByteFlag(PLAYER_FIELD_BYTES, PLAYER_FIELD_BYTES_OFFSET_RAF_GRANTABLE_LEVEL, 0x01);
-            }
 
     SendQuestGiverStatusMultiple();
 
-    sScriptMgr->OnPlayerLevelChanged(this, oldLevel);
+    if (!borrowed)
+        sScriptMgr->OnPlayerLevelChanged(this, oldLevel);
 }
 
 bool Player::IsMaxLevel() const
 {
     return GetLevel() >= GetUInt32Value(PLAYER_FIELD_MAX_LEVEL);
+}
+
+// Rebuild m_usedTalentCount from the TALENT map rather than from the spellbook.
+//
+// Until this existed, the count was whatever Player::AddSpell had accumulated
+// while _LoadSpells replayed character_spell: AddSpell does
+// `m_usedTalentCount += GetTalentSpellCost(spellId)`, and GetTalentSpellCost
+// prices any spell that appears in Talent.dbc. That made the spellbook the
+// source of truth for a number the talent TREE is drawn from, and the two drift
+// apart for a reason that is completely routine:
+//
+//   Train Holy Shield rank 3. Rank 3 is not itself a talent rank, so when it is
+//   loaded AddSpell walks down the rank chain and re-adds ranks 2 and 1 with
+//   dependent = true. _SaveSpells then DELETEs any CHANGED row unconditionally
+//   but skips the re-INSERT for dependent ones, so the talent's own rank-1 spell
+//   is dropped from character_spell on that very login - and with it the point
+//   it was carrying. The tree still shows the talent; the counter no longer
+//   counts it; the client offers a free point that LearnTalent will not accept.
+//
+// Counting the talent map instead makes the count agree with what the player
+// can actually see, and it is immune to anything the rank machinery does to the
+// spellbook. This mirrors what ActivateSpec already does when switching specs -
+// the login path simply never had an equivalent.
+void Player::RecountUsedTalentsFromTalentMap()
+{
+    uint32 spentTalents = 0;
+
+    for (uint32 talentId = 0; talentId < sTalentStore.GetNumRows(); ++talentId)
+    {
+        TalentEntry const* talentInfo = sTalentStore.LookupEntry(talentId);
+        if (!talentInfo)
+            continue;
+
+        TalentTabEntry const* talentTabInfo = sTalentTabStore.LookupEntry(talentInfo->TabID);
+        if (!talentTabInfo)
+            continue;
+
+        // Count only this character's own trees. A talent spell belonging to
+        // another class must not be priced, or it inflates the count past the
+        // level cap and InitTalentForLevel below wipes the character - the
+        // failure mode that stranded the foreign-talent characters in 2026-07.
+        if ((GetClassMask() & talentTabInfo->ClassMask) == 0)
+            continue;
+
+        // Highest held rank only, then stop: a talent costs its rank, not the
+        // sum of every rank beneath it.
+        for (int8 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
+        {
+            if (talentInfo->SpellRank[rank] == 0)
+                continue;
+
+            if (HasTalent(talentInfo->SpellRank[rank], m_activeSpec))
+            {
+                spentTalents += (rank + 1);
+                break;
+            }
+        }
+    }
+
+    m_usedTalentCount = spentTalents;
 }
 
 void Player::InitTalentForLevel()
@@ -3994,7 +4138,7 @@ bool Player::HandlePassiveSpellLearn(SpellInfo const* spellInfo)
         {
             if (spellEffectInfo.IsAura())
             {
-                if (!HasAura(spellInfo->Id) && HasItemFitToSpellRequirements(spellInfo))
+                if (!HasAura(spellInfo->Id) && (HasItemFitToSpellRequirements(spellInfo) || IsWeaponRequirementWaived(spellInfo)))
                     AddAura(spellInfo->Id, this);
                 return false;
             }
@@ -4426,11 +4570,15 @@ bool Player::ResetTalents(bool no_cost)
 
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
     _SaveTalents(trans);
+    _SaveVioletHoldRunTalents(trans);
     _SaveSpells(trans);
     CharacterDatabase.CommitTransaction(trans);
 
     m_usedTalentCount = 0;
     SetFreeTalentPoints(talentPointsForLevel);
+
+    // Nothing left to undo for a Violet Hold run either.
+    ClearVioletHoldRunTalents();
 
     if (!no_cost)
     {
@@ -4880,6 +5028,10 @@ void Player::DeleteFromDB(ObjectGuid playerguid, uint32 accountId, bool updateRe
         trans->Append(stmt);
 
         stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHAR_TALENT);
+        stmt->setUInt32(0, guid);
+        trans->Append(stmt);
+
+        stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_VHR_RUN_TALENTS);
         stmt->setUInt32(0, guid);
         trans->Append(stmt);
 
@@ -8557,6 +8709,11 @@ void Player::ApplyItemDependentAuras(Item* item, bool apply)
 {
     if (apply)
     {
+        // Collect first, add second. AddAura can reach code that touches m_spells,
+        // and PlayerSpellMap is an unordered_map, so an insert mid-loop rehashes and
+        // invalidates the iterator. Latent before the waiver; this path is now
+        // reached far more often, so it is worth not relying on luck.
+        std::vector<uint32> toAdd;
         PlayerSpellMap const& spells = GetSpellMap();
         for (auto itr = spells.begin(); itr != spells.end(); ++itr)
         {
@@ -8567,9 +8724,14 @@ void Player::ApplyItemDependentAuras(Item* item, bool apply)
             if (!spellInfo || !spellInfo->IsPassive() || spellInfo->EquippedItemClass < 0)
                 continue;
 
-            if (!HasAura(itr->first) && HasItemFitToSpellRequirements(spellInfo))
-                AddAura(itr->first, this);  // no SMSG_SPELL_GO in sniff found
+            // Already passive-filtered above, so the waiver needs no extra gate here.
+            if (!HasAura(itr->first) && (HasItemFitToSpellRequirements(spellInfo) || IsWeaponRequirementWaived(spellInfo)))
+                toAdd.push_back(itr->first);
         }
+
+        for (uint32 spellId : toAdd)
+            if (!HasAura(spellId))
+                AddAura(spellId, this);  // no SMSG_SPELL_GO in sniff found
     }
     else
         RemoveItemDependentAurasAndCasts(item);
@@ -8858,11 +9020,82 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
             if (FindCurrentSpellBySpellId(5938) && e_slot == TEMP_ENCHANTMENT_SLOT)
                 chance = 100.0f;
 
+            // Assassination T1 3pc (Coated Blades, 90119): +12% chance to
+            // apply the OFF-HAND poison. Poisons are temp enchants, so hand
+            // is the attack type that delivered this proc.
+            bool const isPoison = e_slot == TEMP_ENCHANTMENT_SLOT
+                && spellInfo->Dispel == DISPEL_POISON;
+            bool const coatedBlades = isPoison
+                && damageInfo.GetAttackType() == OFF_ATTACK && HasAura(90119);
+            if (coatedBlades)
+                chance += 12.0f;
+
+            // .gm diagnostics customauras
+            auto customAuraDiag = [](std::string const& msg)
+            {
+                for (auto const& sessionPair : sWorld->GetAllSessions())
+                    if (sessionPair.second && sessionPair.second->GetPlayer()
+                        && sessionPair.second->IsGmDiagnosticEnabled(GmDiagnosticCategory::CustomAuras))
+                        ChatHandler(sessionPair.second).SendSysMessage(msg.c_str());
+            };
+            if (isPoison)
+                customAuraDiag(Trinity::StringFormat("[CustomAuras] {}: {} poison attempt at {:.1f}%{}",
+                    GetName(),
+                    damageInfo.GetAttackType() == OFF_ATTACK ? "off-hand" : "main-hand",
+                    chance, coatedBlades ? " (includes +12% Coated Blades)" : ""));
+
             if (roll_chance_f(chance))
             {
                 Unit* target = spellInfo->IsPositive() ? this : damageInfo.GetVictim();
                 if (BPlusIsFlametongueWeaponProcSpell(spellInfo->Id))
                     target = damageInfo.GetVictim();
+
+                if (isPoison)
+                    customAuraDiag(Trinity::StringFormat("[CustomAuras] {}: poison APPLIED ({} {})",
+                        GetName(), spellInfo->SpellName[DEFAULT_LOCALE], spellInfo->Id));
+
+                // Assassination T1 8pc (Toxic Momentum, 90121): each poison
+                // application shaves 1 sec off whichever of Vanish, Blind or
+                // Sprint has the most cooldown left. Sprint is learned as the
+                // T2 wrappers 90514/90515/90516 (the category-44 cooldown sits
+                // on the wrapper, the stock rank is only cast triggered), so
+                // the wrappers are candidates too. Only ids that hold their
+                // OWN cooldown entry are considered: GetRemainingCooldown
+                // reports the shared category time for every rank of a chain,
+                // but ModifyCooldown can only move the entry that exists.
+                if (isPoison && HasAura(90121))
+                {
+                    static uint32 const cdSpells[] = { 1856, 1857, 26889, 2094, 2983, 8696, 11305, 90514, 90515, 90516 };
+                    uint32 best = 0;
+                    uint32 bestLeft = 0;
+                    for (uint32 cd : cdSpells)
+                    {
+                        SpellInfo const* cdInfo = sSpellMgr->GetSpellInfo(cd);
+                        if (!cdInfo)
+                            continue;
+                        if (!GetSpellHistory()->HasCooldown(cdInfo, 0, /*ignoreCategoryCooldown*/ true))
+                            continue;
+                        uint32 left = GetSpellHistory()->GetRemainingCooldown(cdInfo);
+                        if (left > bestLeft)
+                        {
+                            bestLeft = left;
+                            best = cd;
+                        }
+                    }
+                    if (best)
+                    {
+                        GetSpellHistory()->ModifyCooldown(best, -1000);
+                        SpellInfo const* bestInfo = sSpellMgr->GetSpellInfo(best);
+                        customAuraDiag(Trinity::StringFormat(
+                            "[CustomAuras] {}: Toxic Momentum -1.0s on {} ({}): {:.1f}s -> {:.1f}s left",
+                            GetName(), bestInfo->SpellName[DEFAULT_LOCALE], best,
+                            bestLeft / 1000.0f, std::max(int32(bestLeft) - 1000, 0) / 1000.0f));
+                    }
+                    else
+                        customAuraDiag(Trinity::StringFormat(
+                            "[CustomAuras] {}: Toxic Momentum - Vanish/Blind/Sprint all off cooldown, nothing to reduce",
+                            GetName()));
+                }
 
                 CastSpellExtraArgs args(item);
                 // reduce effect values if enchant is limited
@@ -9673,6 +9906,14 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
     // BG object is authoritative for their initial WorldStateUI data.
     if (battleground && battleground->IsCustomGame() && IsSpectator())
         battleground->FillInitialWorldStates(packet);
+    // Same reasoning, for the ported arenas. The switch below is keyed on zone
+    // id, and each arena has its own new zone, so serving them there would mean
+    // fourteen copies of the same three lines -- and an arena whose case was
+    // forgotten would show no score at all, silently, with nothing in the log to
+    // say why. Tol'viron (zone 6296) and Tiger's Peak (6732) still have their
+    // cases below; this covers every arena added since.
+    else if (battleground && IsDataDrivenArena(battleground->GetTypeID(true)))
+        battleground->FillInitialWorldStates(packet);
     else
     switch (zoneId)
     {
@@ -10256,7 +10497,13 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
         }
         break;
     case 4415: // Violet Hold
-        if (instance)
+        // Map 1608 (the survival battleground clone) reports this stock zone
+        // too, and a battleground map has no dungeon InstanceScript, so it
+        // must be routed before the stock branches or its wave scoreboard
+        // never initializes.
+        if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_VHR)
+            battleground->FillInitialWorldStates(packet);
+        else if (instance)
             instance->FillInitialWorldStates(packet);
         else
         {
@@ -10282,19 +10529,19 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
         }
         break;
     default:
-        // Tiger's Peak can report a non-canonical zone ID in some positions.
-        // Fall back to battleground type so arena world states are still initialized.
-        if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_TTP)
-            battleground->FillInitialWorldStates(packet);
-        // Scarlet Chapel can also report a non-canonical zone ID near spawn.
-        // Fall back to battleground type so the top-frame world states initialize immediately.
-        else if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_SCM)
-            battleground->FillInitialWorldStates(packet);
-        // Blackrock Throne can report stock BRD zone IDs; initialize from battleground type.
-        else if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_BRT)
-            battleground->FillInitialWorldStates(packet);
-        // Obsidian Colosseum reports the stock Obsidian Sanctum zone ID (4493); initialize from battleground type.
-        else if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_OBC)
+        // None of these report a zone ID with a case above. Tiger's Peak is
+        // non-canonical near spawn, and the custom battlegrounds run on cloned
+        // maps that keep their source zone's ID: Blackrock Throne reports the
+        // stock BRD zones, the Obsidian Colosseum reports Obsidian Sanctum's
+        // 4493, Tanaris reports plain Tanaris (440), and the Violet Hold run
+        // reports the stock Violet Hold (4415). Fall back to the battleground
+        // type so the top-frame world states still initialize. Violet Hold is
+        // named here rather than joining IsCustomBattleground() because the
+        // rest of what that helper grants - mid-match gear and talent swaps in
+        // particular - would undercut a mode built entirely on attrition.
+        if (battleground && (battleground->GetTypeID(true) == BATTLEGROUND_TTP
+            || battleground->GetTypeID(true) == BATTLEGROUND_VHR
+            || IsCustomBattleground(battleground->GetTypeID(true))))
             battleground->FillInitialWorldStates(packet);
         break;
     }
@@ -12474,6 +12721,13 @@ InventoryResult Player::CanBankItem(uint8 bag, uint8 slot, ItemPosCountVec& dest
             return EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT;
     }
 
+    // T2 Ashen Confiscation: a seized weapon lives for a few seconds and is
+    // destroyed when its buff ends; it never goes into a bank (the account
+    // bank would even carry it to another character). Soulbound does not stop
+    // banking, so this is explicit.
+    if (T2UnitHooks::IsTemporaryWeapon(pItem))
+        return EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT;
+
     if (AccountBank::IsAccountBankOpen(this))
     {
         if (!AccountBank::IsAccountBankAccessible(this))
@@ -12673,6 +12927,16 @@ InventoryResult Player::CanUseItem(Item* pItem, bool not_loading) const
         ItemTemplate const* pProto = pItem->GetTemplate();
         if (pProto)
         {
+            // T2 Ashen Confiscation (90347): a weapon confiscated from a
+            // disarmed victim is equipped "as if" the mage met every
+            // requirement on it - class/race, weapon proficiency, required
+            // skill rank, level, reputation. It is a temporary item the script
+            // created for this player and registered; nothing else is waived.
+            // (The ItemTemplate-only overload below has no Item to key on and
+            // is left strict; every equip path with an Item* goes through here.)
+            if (T2UnitHooks::IsTemporaryWeapon(pItem))
+                return EQUIP_ERR_OK;
+
             if (pItem->IsBindedNotWith(this))
                 return EQUIP_ERR_DONT_OWN_THAT_ITEM;
 
@@ -13192,6 +13456,7 @@ Item* Player::EquipItem(uint16 pos, Item* pItem, bool update)
         {
             HiddenSets::OnEquipmentChanged(this);
             PolearmStaffInnerAuras::OnEquipmentChanged(this);
+            T2Unarmed::OnEquipmentChanged(this);
         }
 
         return pItem2;
@@ -13208,6 +13473,7 @@ Item* Player::EquipItem(uint16 pos, Item* pItem, bool update)
     {
         HiddenSets::OnEquipmentChanged(this);
         PolearmStaffInnerAuras::OnEquipmentChanged(this);
+        T2Unarmed::OnEquipmentChanged(this);
     }
 
     return pItem;
@@ -13239,6 +13505,7 @@ void Player::QuickEquipItem(uint16 pos, Item* pItem)
         {
             HiddenSets::OnEquipmentChanged(this);
             PolearmStaffInnerAuras::OnEquipmentChanged(this);
+            T2Unarmed::OnEquipmentChanged(this);
         }
     }
 }
@@ -13256,6 +13523,300 @@ void Player::SetVisibleItemSlot(uint8 slot, Item* pItem)
         SetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENTRYID + (slot * 2), 0);
         SetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENCHANTMENT + (slot * 2), 0);
     }
+
+    // Track the field, not m_items: several unequip paths null the slot only after
+    // calling this, and a cache built from a stale m_items would leave an
+    // appearance hanging on an empty slot.
+    if (slot < EQUIPMENT_SLOT_END)
+        _transmogSlotCache[slot] = pItem ? GetTransmogEntry(pItem->GetGUID()) : 0;
+}
+
+void Player::RefreshTransmogSlot(uint8 slot)
+{
+    if (slot >= EQUIPMENT_SLOT_END)
+        return;
+
+    _transmogSlotCache[slot] = 0;
+
+    if (_transmogs.empty())
+        return;
+
+    if (Item const* item = GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+    {
+        auto const itr = _transmogs.find(item->GetGUID());
+        if (itr != _transmogs.end())
+            _transmogSlotCache[slot] = itr->second;
+    }
+}
+
+void Player::RebuildTransmogCache()
+{
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        RefreshTransmogSlot(slot);
+}
+
+uint32 Player::GetTransmogEntry(ObjectGuid itemGuid) const
+{
+    auto const itr = _transmogs.find(itemGuid);
+    return itr != _transmogs.end() ? itr->second : 0;
+}
+
+void Player::SetTransmog(Item* item, uint32 fakeEntry)
+{
+    if (!item)
+        return;
+
+    _transmogs[item->GetGUID()] = fakeEntry;
+
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_REP_TRANSMOG);
+    stmt->setUInt32(0, item->GetGUID().GetCounter());
+    stmt->setUInt32(1, fakeEntry);
+    CharacterDatabase.Execute(stmt);
+
+    RebuildTransmogCache();
+    RefreshTransmogForObservers();
+}
+
+void Player::RemoveTransmog(Item* item)
+{
+    if (!item)
+        return;
+
+    if (!_transmogs.erase(item->GetGUID()))
+        return;
+
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_TRANSMOG);
+    stmt->setUInt32(0, item->GetGUID().GetCounter());
+    CharacterDatabase.Execute(stmt);
+
+    RebuildTransmogCache();
+    RefreshTransmogForObservers();
+}
+
+uint32 Player::RemoveAllTransmogs()
+{
+    if (_transmogs.empty())
+        return 0;
+
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    for (auto const& transmog : _transmogs)
+    {
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_TRANSMOG);
+        stmt->setUInt32(0, transmog.first.GetCounter());
+        trans->Append(stmt);
+    }
+    CharacterDatabase.CommitTransaction(trans);
+
+    uint32 const removed = uint32(_transmogs.size());
+    _transmogs.clear();
+
+    RebuildTransmogCache();
+    RefreshTransmogForObservers();
+    return removed;
+}
+
+void Player::SetTransmogEnabled(bool enabled)
+{
+    if (_transmogEnabled == enabled)
+        return;
+
+    _transmogEnabled = enabled;
+
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_REP_TRANSMOG_SETTINGS);
+    stmt->setUInt32(0, GetGUID().GetCounter());
+    stmt->setUInt8(1, enabled ? 1 : 0);
+    CharacterDatabase.Execute(stmt);
+
+    // The flag is a symmetric opt-out, so both directions have to be refreshed:
+    // what everyone else sees on me, and what I see on everyone else.
+    RefreshTransmogForObservers();
+    RefreshTransmogView();
+}
+
+uint32 Player::GetVisibleItemEntryFor(Player const* observer, uint8 slot) const
+{
+    if (slot >= EQUIPMENT_SLOT_END)
+        return 0;
+
+    uint32 const real = GetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENTRYID + (slot * 2));
+
+    uint32 const fake = _transmogSlotCache[slot];
+    if (!fake)
+        return real;
+
+    if (!sWorld->getBoolConfig(CONFIG_CENTURION_TRANSMOG_ENABLE))
+        return real;
+
+    // Either side opting out drops the whole pair back to real gear.
+    if (!_transmogEnabled || !observer || !observer->IsTransmogEnabled())
+        return real;
+
+    return fake;
+}
+
+void Player::SendVisibleItemUpdateTo(Player* receiver)
+{
+    if (!receiver || !receiver->GetSession() || !receiver->HaveAtClient(this))
+        return;
+
+    // Appearance changes never dirty the underlying field, so force the visible-item
+    // entry bits on for this one build, then put the change mask back exactly as it
+    // was: a real pending change must not be swallowed here.
+    std::array<bool, EQUIPMENT_SLOT_END> wasDirty{};
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        uint16 const index = PLAYER_VISIBLE_ITEM_1_ENTRYID + (slot * 2);
+        wasDirty[slot] = _changesMask.GetBit(index);
+        _changesMask.SetBit(index);
+    }
+
+    UpdateData updateData;
+    BuildValuesUpdateBlockForPlayer(&updateData, receiver);
+
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        if (!wasDirty[slot])
+            _changesMask.UnsetBit(PLAYER_VISIBLE_ITEM_1_ENTRYID + (slot * 2));
+
+    WorldPacket packet;
+    if (updateData.BuildPacket(&packet))
+        receiver->SendDirectMessage(&packet);
+}
+
+void Player::RefreshTransmogForObservers()
+{
+    if (!IsInWorld())
+        return;
+
+    SendVisibleItemUpdateTo(this);
+
+    std::list<Player*> nearby;
+    GetPlayerListInGrid(nearby, GetVisibilityRange(), false);
+
+    for (Player* observer : nearby)
+        if (observer != this)
+            SendVisibleItemUpdateTo(observer);
+}
+
+void Player::RefreshTransmogView()
+{
+    if (!IsInWorld())
+        return;
+
+    SendVisibleItemUpdateTo(this);
+
+    std::list<Player*> nearby;
+    GetPlayerListInGrid(nearby, GetVisibilityRange(), false);
+
+    for (Player* wearer : nearby)
+        if (wearer != this)
+            wearer->SendVisibleItemUpdateTo(this);
+}
+
+void Player::_LoadVioletHoldRunTalents(PreparedQueryResult result)
+{
+    //         0    1      2
+    // SELECT seq, spell, prev_spell FROM custom_violet_hold_talents WHERE guid = ? ORDER BY seq
+    m_vhrRunTalents.clear();
+    m_vhrRunTalentNextSeq = 1;
+    m_vhrRunTalentsDirty = false;
+    if (!result)
+        return;
+
+    do
+    {
+        Field* fields = result->Fetch();
+        VioletHoldRunTalent entry;
+        entry.seq = fields[0].GetUInt32();
+        entry.spell = fields[1].GetUInt32();
+        entry.previousSpell = fields[2].GetUInt32();
+        m_vhrRunTalents.push_back(entry);
+        m_vhrRunTalentNextSeq = std::max(m_vhrRunTalentNextSeq, entry.seq + 1);
+    } while (result->NextRow());
+}
+
+// The ledger only ever changes in memory here and is written by
+// _SaveVioletHoldRunTalents inside the character's own save transaction, so
+// it can never get ahead of (or behind) the talents and level it describes -
+// a crash between an undo and the next save leaves both at the old, still
+// mutually consistent state, and the next login simply undoes again.
+void Player::RecordVioletHoldRunTalent(uint32 spell, uint32 previousSpell)
+{
+    VioletHoldRunTalent entry;
+    entry.seq = m_vhrRunTalentNextSeq++;
+    entry.spell = spell;
+    entry.previousSpell = previousSpell;
+    m_vhrRunTalents.push_back(entry);
+    m_vhrRunTalentsDirty = true;
+}
+
+void Player::PopVioletHoldRunTalent()
+{
+    if (m_vhrRunTalents.empty())
+        return;
+
+    m_vhrRunTalents.pop_back();
+    m_vhrRunTalentsDirty = true;
+}
+
+void Player::ClearVioletHoldRunTalents()
+{
+    if (m_vhrRunTalents.empty())
+        return;
+
+    m_vhrRunTalents.clear();
+    m_vhrRunTalentsDirty = true;
+}
+
+void Player::_SaveVioletHoldRunTalents(CharacterDatabaseTransaction trans)
+{
+    if (!m_vhrRunTalentsDirty)
+        return;
+    m_vhrRunTalentsDirty = false;
+
+    // Small and rare: rewrite the whole ledger.
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_VHR_RUN_TALENTS);
+    stmt->setUInt32(0, GetGUID().GetCounter());
+    trans->Append(stmt);
+
+    for (VioletHoldRunTalent const& entry : m_vhrRunTalents)
+    {
+        stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_VHR_RUN_TALENT);
+        stmt->setUInt32(0, GetGUID().GetCounter());
+        stmt->setUInt32(1, entry.seq);
+        stmt->setUInt32(2, entry.spell);
+        stmt->setUInt32(3, entry.previousSpell);
+        trans->Append(stmt);
+    }
+}
+
+void Player::_LoadTransmogs(PreparedQueryResult transmogs, PreparedQueryResult settings)
+{
+    _transmogs.clear();
+    _transmogEnabled = sWorld->getBoolConfig(CONFIG_CENTURION_TRANSMOG_DEFAULT_ENABLED);
+
+    if (settings)
+        _transmogEnabled = (*settings)[0].GetUInt8() != 0;
+
+    if (transmogs)
+    {
+        do
+        {
+            Field* fields = transmogs->Fetch();
+            uint32 const itemGuid = fields[0].GetUInt32();
+            uint32 const fakeEntry = fields[1].GetUInt32();
+
+            if (!sObjectMgr->GetItemTemplate(fakeEntry))
+            {
+                TC_LOG_ERROR("entities.player.items", "Player::_LoadTransmogs: Player '{}' ({}) has a transmog to unknown item {} on item {}, ignored.",
+                    GetName(), GetGUID().ToString(), fakeEntry, itemGuid);
+                continue;
+            }
+
+            _transmogs[ObjectGuid::Create<HighGuid::Item>(itemGuid)] = fakeEntry;
+        } while (transmogs->NextRow());
+    }
+
+    RebuildTransmogCache();
 }
 
 void Player::VisualizeItem(uint8 slot, Item* pItem)
@@ -13362,6 +13923,7 @@ void Player::RemoveItem(uint8 bag, uint8 slot, bool update)
 
                 HiddenSets::OnEquipmentChanged(this);
                 PolearmStaffInnerAuras::OnEquipmentChanged(this);
+                T2Unarmed::OnEquipmentChanged(this);
             }
         }
         else if (Bag* pBag = GetBagByPos(bag))
@@ -13446,6 +14008,9 @@ void Player::DestroyItem(uint8 bag, uint8 slot, bool update)
         RemoveEnchantmentDurations(pItem);
         RemoveItemDurations(pItem);
 
+        // the DB row goes with Item::DeleteFromDB, this just drops the cached appearance
+        _transmogs.erase(pItem->GetGUID());
+
         pItem->SetNotRefundable(this);
         pItem->ClearSoulboundTradeable(this);
         RemoveTradeableItem(pItem);
@@ -13493,6 +14058,7 @@ void Player::DestroyItem(uint8 bag, uint8 slot, bool update)
 
                 HiddenSets::OnEquipmentChanged(this);
                 PolearmStaffInnerAuras::OnEquipmentChanged(this);
+                T2Unarmed::OnEquipmentChanged(this);
             }
 
             m_items[slot] = nullptr;
@@ -18835,6 +19401,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     SetHonorPoints(fields[45].GetUInt32());
 
     // after spell and quest load
+    RecountUsedTalentsFromTalentMap();
     InitTalentForLevel();
     LearnDefaultSkills();
     LearnCustomSpells();
@@ -18844,8 +19411,21 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
 
     _LoadInventory(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_INVENTORY), time_diff);
 
+    // must be after inventory: the slot cache is built from the equipped items
+    _LoadTransmogs(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_TRANSMOGS),
+        holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_TRANSMOG_SETTINGS));
+
+    _LoadVioletHoldRunTalents(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_VHR_RUN_TALENTS));
+
     // update items with duration and realtime
     UpdateItemDuration(time_diff, true);
+
+    // Class spells the Violet Hold broker taught are dependent (never saved);
+    // if this character is being put back into a still-running run, teach
+    // them again NOW so the action buttons that point at them survive the
+    // validation _LoadActions does.
+    if (Battleground const* runBg = GetBattleground(); runBg && runBg->GetTypeID() == BATTLEGROUND_VHR)
+        VioletHoldBoons::RestoreTaughtSpells(this);
 
     _LoadActions(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACTIONS));
 
@@ -20513,9 +21093,11 @@ void Player::SaveToDB(CharacterDatabaseTransaction trans, bool create /* = false
         stmt->setString(index++, ss.str());
 
         ss.str("");
-        // cache equipment...
+        // cache equipment... (entry halves carry the appearance this character sees
+        // on itself, so the character select screen matches the in-world look)
         for (uint32 i = 0; i < EQUIPMENT_SLOT_END * 2; ++i)
-            ss << GetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENTRYID + i) << ' ';
+            ss << ((i & 1) ? GetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENTRYID + i)
+                           : GetVisibleItemEntryFor(this, uint8(i / 2))) << ' ';
 
         // ...and bags for enum opcode
         for (uint32 i = INVENTORY_SLOT_BAG_START; i < INVENTORY_SLOT_BAG_END; ++i)
@@ -20638,9 +21220,11 @@ void Player::SaveToDB(CharacterDatabaseTransaction trans, bool create /* = false
         stmt->setString(index++, ss.str());
 
         ss.str("");
-        // cache equipment...
+        // cache equipment... (entry halves carry the appearance this character sees
+        // on itself, so the character select screen matches the in-world look)
         for (uint32 i = 0; i < EQUIPMENT_SLOT_END * 2; ++i)
-            ss << GetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENTRYID + i) << ' ';
+            ss << ((i & 1) ? GetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENTRYID + i)
+                           : GetVisibleItemEntryFor(this, uint8(i / 2))) << ' ';
 
         // ...and bags for enum opcode
         for (uint32 i = INVENTORY_SLOT_BAG_START; i < INVENTORY_SLOT_BAG_END; ++i)
@@ -20690,6 +21274,7 @@ void Player::SaveToDB(CharacterDatabaseTransaction trans, bool create /* = false
     _SaveSeasonalQuestStatus(trans);
     _SaveMonthlyQuestStatus(trans);
     _SaveTalents(trans);
+    _SaveVioletHoldRunTalents(trans);
     _SaveSpells(trans);
     GetSpellHistory()->SaveToDB<Player>(trans);
     _SaveActions(trans);
@@ -21767,6 +22352,31 @@ Pet* Player::GetPet() const
     }
 
     return nullptr;
+}
+
+uint32 Player::GetLivingPetDisplayId() const
+{
+    if (Pet const* pet = GetPet())
+        return pet->IsAlive() ? pet->GetNativeDisplayId() : 0;
+
+    // No pet spawned right now, but one may still belong to us: a current pet only
+    // temporarily unsummoned (we are mounted, or logged in mounted and LoadPet()
+    // skipped it), or a hunter pet that was dismissed and is waiting for Call Pet
+    // (RemovePet with PET_SAVE_NOT_IN_SLOT moves it to the unslotted list). Both
+    // live in the pet stable, which mirrors character_pet and is loaded before
+    // auras at login; PetInfo::DisplayId is the pet's native display id. A dead pet
+    // is stored with 0 health and, by design, rides the steed, so require health.
+    if (PetStable const* petStable = GetPetStable())
+    {
+        if (petStable->CurrentPet && petStable->CurrentPet->Health)
+            return petStable->CurrentPet->DisplayId;
+
+        if (PetStable::PetInfo const* hunterPet = petStable->GetUnslottedHunterPet())
+            if (hunterPet->Health)
+                return hunterPet->DisplayId;
+    }
+
+    return 0;
 }
 
 void Player::RemovePet(Pet* pet, PetSaveMode mode, bool returnreagent)
@@ -23311,8 +23921,23 @@ void Player::ApplyActiveStarfireSnare(UnitMoveType moveType)
     if (desiredRate <= 0.0f)
         return;
 
-    if (GetSpeedRate(moveType) > desiredRate)
-        SetSpeedRate(moveType, desiredRate);
+    // Re-run the full calculation rather than forcing the rate directly.
+    //
+    // This used to be `if (GetSpeedRate() > desiredRate) SetSpeedRate(desiredRate)`,
+    // which pinned the player to the RAW snare rate and so discarded every speed
+    // buff they had - a buffed caster was dragged back down to 0.25 immediately
+    // after UpdateSpeed had correctly given them more. UpdateSpeed now applies the
+    // snare multiplicatively as part of the whole computation, so asking it to run
+    // again IS applying the snare, and the result keeps the buffs.
+    //
+    // Guarded because UpdateSpeed's tail calls straight back into here through
+    // HandleStarfireSnareOnSpeedUpdate.
+    if (_inStarfireSnareSpeedUpdate)
+        return;
+
+    _inStarfireSnareSpeedUpdate = true;
+    UpdateSpeed(moveType);
+    _inStarfireSnareSpeedUpdate = false;
 }
 
 void Player::UpdateStarfireSnare()
@@ -23363,16 +23988,13 @@ void Player::VerifyStarfireSnare()
         return;
     }
 
-    for (UnitMoveType moveType : StarfireSnareMoveTypes)
-    {
-        float const allowedSpeed = desiredRate * playerBaseMoveSpeed[moveType];
-        if (GetSpeedRate(moveType) > desiredRate || GetSpeed(moveType) > allowedSpeed)
-        {
-            ApplyActiveStarfireSnare();
-            return;
-        }
-    }
-
+    // Recompute once and stop, rather than comparing against the raw rate.
+    //
+    // The old test was `GetSpeedRate() > desiredRate`, which assumed the snare was
+    // an absolute ceiling. Now that speed buffs stack with it a snared player is
+    // LEGITIMATELY above that rate, so the comparison would be true forever and
+    // re-fire this check on every single update without ever settling.
+    ApplyActiveStarfireSnare();
     _verifyStarfireSnareNextUpdate = false;
 }
 
@@ -25451,6 +26073,54 @@ bool Player::HasItemFitToSpellRequirements(SpellInfo const* spellInfo, Item cons
     return false;
 }
 
+// A set bonus can let a player use melee abilities with an empty hand, and have
+// weapon-gated on-hit passives (Deep Wounds and friends) still proc.
+//
+// The waiver is deliberately NOT inside HasItemFitToSpellRequirements. That
+// function has five callers with genuinely different needs: the cast checks want
+// the waiver unconditionally, the PASSIVE lifecycle wants it only for passives,
+// and the item-target branch (enchants, poisons, vellums) must never see it.
+// Callers opt in individually instead.
+//
+// Keeping a passive applied because of an aura means something has to react when
+// that AURA changes - the item-dependent sweep is otherwise driven only by
+// equipment events, so "buff -> unequip -> buff expires" would strand the passive
+// applied with no weapon. Player::SyncUnarmedWaiverPassives is that reaction,
+// latched from the aura hooks in Unit::_ApplyAura / _UnapplyAura.
+//
+// Narrow on purpose. ITEM_CLASS_WEAPON alone is far too broad: of the 1961
+// weapon-gated spells in Spell.dbc, 565 are bow/gun/crossbow/thrown/wand only,
+// and most of them (Arcane Shot, Serpent Sting, Multi-Shot, Aimed Shot, Steady
+// Shot) are NOT caught by the ranged/ammo block in Spell::CheckItems, because
+// that block only covers SPELL_EFFECT_WEAPON_DAMAGE(_NOSCHOOL). Without the
+// subclass test an aura holder could shoot with an empty ranged slot.
+// ITEM_CLASS_ARMOR (shields - Shield Slam, Shield Block) is excluded by the
+// class test alone, which is what we want: this waives weapons, nothing else.
+bool Player::IsWeaponRequirementWaived(SpellInfo const* spellInfo) const
+{
+    if (!spellInfo || spellInfo->EquippedItemClass != ITEM_CLASS_WEAPON)
+        return false;
+
+    // Ranged and wand spells keep their requirement.
+    uint32 const rangedOrWand = uint32(ITEM_SUBCLASS_MASK_WEAPON_RANGED) | (1u << ITEM_SUBCLASS_WEAPON_WAND);
+    if (spellInfo->EquippedItemSubClassMask != 0 &&
+        (uint32(spellInfo->EquippedItemSubClassMask) & ~rangedOrWand) == 0)
+        return false;
+
+    if (spellInfo->GetAttackType() == RANGED_ATTACK)
+        return false;
+
+    std::vector<uint32> const& waiverAuras = sWorld->GetUnarmedWaiverAuras();
+    if (waiverAuras.empty())
+        return false;
+
+    for (uint32 auraId : waiverAuras)
+        if (HasAura(auraId))
+            return true;
+
+    return false;
+}
+
 bool Player::CanNoReagentCast(SpellInfo const* spellInfo) const
 {
     // don't take reagents for spells with SPELL_ATTR5_NO_REAGENT_WHILE_PREP
@@ -25484,7 +26154,13 @@ void Player::RemoveItemDependentAurasAndCasts(Item* pItem)
         }
 
         // skip if not item dependent or have alternative item
-        if (HasItemFitToSpellRequirements(spellInfo, pItem))
+        //
+        // The waiver is honoured for PASSIVES ONLY. This loop is not passive-filtered,
+        // and a non-passive self-cast aura that survived here would become save-eligible:
+        // it would reach character_aura and come back on a character with neither a
+        // weapon nor the waiver.
+        if (HasItemFitToSpellRequirements(spellInfo, pItem)
+            || (spellInfo->IsPassive() && IsWeaponRequirementWaived(spellInfo)))
         {
             ++itr;
             continue;
@@ -25495,10 +26171,34 @@ void Player::RemoveItemDependentAurasAndCasts(Item* pItem)
     }
 
     // currently cast spells can be dependent from item
+    // The waiver is checked here too, or an aura holder mid-Slam would have it
+    // interrupted by any unrelated item leaving a slot - a trinket swap, a
+    // shield, or durability hitting zero - which reads as a random interrupt bug.
     for (uint32 i = 0; i < CURRENT_MAX_SPELL; ++i)
         if (Spell* spell = GetCurrentSpell(CurrentSpellTypes(i)))
-            if (spell->getState() != SPELL_STATE_DELAYED && !HasItemFitToSpellRequirements(spell->m_spellInfo, pItem))
+            if (spell->getState() != SPELL_STATE_DELAYED && !HasItemFitToSpellRequirements(spell->m_spellInfo, pItem)
+                && !IsWeaponRequirementWaived(spell->m_spellInfo))
                 InterruptSpell(CurrentSpellTypes(i));
+}
+
+// Re-evaluate weapon-gated passives after a waiver aura landed or fell off.
+//
+// Deferred out of Unit::_ApplyAura / _UnapplyAura rather than called from them:
+// this sweep adds and removes auras, and those hooks run while the aura machinery
+// is mid-iteration over m_appliedAuras / m_ownedAuras. Calling it inline would
+// erase nodes out from under callers like RemoveAllAuras and RemoveAllAurasOnDeath.
+void Player::SyncUnarmedWaiverPassives()
+{
+    // Cleared FIRST: the sweep below re-enters the aura hooks, and anything they
+    // re-arm should get its own idempotent pass on the next tick rather than
+    // being swallowed here.
+    m_unarmedWaiverSyncPending = false;
+
+    if (sWorld->GetUnarmedWaiverAuras().empty() || !IsInWorld())
+        return;
+
+    ApplyItemDependentAuras(nullptr, false);   // drop what no longer qualifies
+    ApplyItemDependentAuras(nullptr, true);    // add what qualifies now
 }
 
 uint32 Player::GetResurrectionSpellId()
@@ -25670,6 +26370,12 @@ uint32 Player::GetBaseWeaponSkillValue(WeaponAttackType attType) const
     if (attType != BASE_ATTACK && !item)
         return 0;
 
+    // T2 Ashen Confiscation (90347): a confiscated weapon counts as
+    // TEMPORARY_WEAPON_SKILL here too, so the skill-up roll in
+    // UpdateCombatSkills does not fire on a line the player may not even have.
+    if (item && T2UnitHooks::IsTemporaryWeapon(item))
+        return T2UnitHooks::TEMPORARY_WEAPON_SKILL;
+
     // weapon skill or (unarmed for base attack)
     uint32  skill = item ? item->GetSkill() : uint32(SKILL_UNARMED);
     return GetBaseSkillValue(skill);
@@ -25819,7 +26525,9 @@ uint32 Player::GetCorpseReclaimDelay(bool pvp) const
     // 0..2 full period
     // should be ceil(x)-1 but not floor(x)
     uint64 count = (now < m_deathExpireTime - 1) ? (m_deathExpireTime - 1 - now) / DEATH_EXPIRE_STEP : 0;
-    return copseReclaimDelay[count];
+    uint32 delay = copseReclaimDelay[count];
+
+    return delay;
 }
 
 void Player::UpdateCorpseReclaimDelay()
@@ -27108,12 +27816,17 @@ void Player::StoreLootItem(uint8 lootSlot, Loot* loot)
 
 uint32 Player::CalculateTalentsPoints() const
 {
-    uint32 base_talent = GetLevel() < 10 ? 0 : GetLevel() - 9;
+    return CalculateTalentsPointsForLevel(GetLevel());
+}
+
+uint32 Player::CalculateTalentsPointsForLevel(uint8 level) const
+{
+    uint32 base_talent = level < 10 ? 0 : level - 9;
 
     if (GetClass() != CLASS_DEATH_KNIGHT || GetMapId() != 609)
         return uint32(base_talent * sWorld->getRate(RATE_TALENT));
 
-    uint32 talentPointsForLevel = GetLevel() < 56 ? 0 : GetLevel() - 55;
+    uint32 talentPointsForLevel = level < 56 ? 0 : level - 55;
     talentPointsForLevel += m_questRewardTalentCount;
 
     if (talentPointsForLevel > base_talent)
@@ -27433,8 +28146,11 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
 
     if (InBattleground())
     {
+        // The Violet Hold run hands out temporary levels; the talent points
+        // that come with them are only worth anything if they can be spent
+        // there. Spending is all this allows - there is no respec inside.
         Battleground const* battleground = GetBattleground();
-        if (!battleground || (battleground->GetTypeID(true) != BATTLEGROUND_SCM && battleground->GetTypeID(true) != BATTLEGROUND_BRT && battleground->GetTypeID(true) != BATTLEGROUND_OBC))
+        if (!battleground || (!IsCustomBattleground(battleground->GetTypeID(true)) && battleground->GetTypeID() != BATTLEGROUND_VHR))
             return;
     }
 
@@ -27459,10 +28175,17 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
         return;
 
     // find current max talent rank (0~5)
+    //
+    // HasTalent, not HasSpell. The spellbook is not a reliable record of which
+    // talents are held: training a higher rank of an ability a talent granted
+    // drops the talent's own rank spell from it (see
+    // RecountUsedTalentsFromTalentMap). Asking the spellbook made the server
+    // believe a taken talent was untaken while the client - drawing from the
+    // talent map - showed it taken, and the two could never agree on a click.
     uint8 curtalent_maxrank = 0; // 0 = not learned any rank
     for (int8 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
     {
-        if (talentInfo->SpellRank[rank] && HasSpell(talentInfo->SpellRank[rank]))
+        if (talentInfo->SpellRank[rank] && HasTalent(talentInfo->SpellRank[rank], m_activeSpec))
         {
             curtalent_maxrank = (rank + 1);
             break;
@@ -27486,7 +28209,7 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
             for (uint8 rank = talentInfo->PrereqRank; rank < MAX_TALENT_RANK; rank++)
             {
                 if (depTalentInfo->SpellRank[rank] != 0)
-                    if (HasSpell(depTalentInfo->SpellRank[rank]))
+                    if (HasTalent(depTalentInfo->SpellRank[rank], m_activeSpec))
                         hasEnoughRank = true;
             }
             if (!hasEnoughRank)
@@ -27495,6 +28218,12 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
     }
 
     // Find out how many points we have in this field
+    //
+    // Also HasTalent rather than HasSpell, and for the same reason: a tree whose
+    // talents are all taken could still read short here, so a deep talent was
+    // refused for "not enough points spent in the tree" when the tree was in
+    // fact full. Counting the highest held rank once (break) rather than every
+    // rank present matches what a talent actually costs.
     uint32 spentPoints = 0;
 
     uint32 tTab = talentInfo->TabID;
@@ -27502,10 +28231,13 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
         for (uint32 i = 0; i < sTalentStore.GetNumRows(); i++)          // Loop through all talents.
             if (TalentEntry const* tmpTalent = sTalentStore.LookupEntry(i))                                  // the way talents are tracked
                 if (tmpTalent->TabID == tTab)
-                    for (uint8 rank = 0; rank < MAX_TALENT_RANK; rank++)
+                    for (int8 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
                         if (tmpTalent->SpellRank[rank] != 0)
-                            if (HasSpell(tmpTalent->SpellRank[rank]))
+                            if (HasTalent(tmpTalent->SpellRank[rank], m_activeSpec))
+                            {
                                 spentPoints += (rank + 1);
+                                break;
+                            }
 
     // not have required min points spent in talent tree
     if (spentPoints < (talentInfo->TierID * MAX_TALENT_RANK))
@@ -27525,56 +28257,134 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
 
     // learn! (other talent ranks will unlearned at learning)
     LearnSpell(spellid, false);
-    if (SpellInfo const* talentSpellInfo = sSpellMgr->GetSpellInfo(spellid))
-    {
-        auto learnNextActivatableRanks = [this](uint32 currentRankSpellId)
-        {
-            uint32 nextRankSpellId = sSpellMgr->GetNextSpellInChain(currentRankSpellId);
-            while (nextRankSpellId)
-            {
-                SpellInfo const* nextRankSpellInfo = sSpellMgr->GetSpellInfo(nextRankSpellId);
-                if (!nextRankSpellInfo)
-                    break;
-
-                // Stop if next rank requires a higher level
-                uint32 requiredLevel = std::max(nextRankSpellInfo->BaseLevel, nextRankSpellInfo->SpellLevel);
-                if (requiredLevel && requiredLevel > GetLevel())
-                    break;
-
-                LearnSpell(nextRankSpellId, false);
-                nextRankSpellId = sSpellMgr->GetNextSpellInChain(nextRankSpellId);
-            }
-        };
-
-        // Only auto-learn ranks and dependencies for activatable spells
-        if (!talentSpellInfo->IsPassive())
-        {
-            learnNextActivatableRanks(spellid);
-
-            SpellsRequiringSpellMapBounds spellsRequiringSpell = sSpellMgr->GetSpellsRequiringSpellBounds(spellid);
-            for (SpellsRequiringSpellMap::const_iterator itr = spellsRequiringSpell.first; itr != spellsRequiringSpell.second; ++itr)
-            {
-                uint32 dependentSpellId = itr->second;
-                SpellInfo const* dependentSpellInfo = sSpellMgr->GetSpellInfo(dependentSpellId);
-
-                if (!dependentSpellInfo || dependentSpellInfo->IsPassive())
-                    continue;
-
-                uint32 requiredLevel = std::max(dependentSpellInfo->BaseLevel, dependentSpellInfo->SpellLevel);
-                if (requiredLevel && requiredLevel > GetLevel())
-                    continue;
-
-                LearnSpell(dependentSpellId, false);
-                learnNextActivatableRanks(dependentSpellId);
-            }
-        }
-    }
+    // Inside a Violet Hold run the character may stand on borrowed levels;
+    // the ranks a talent brings along are capped at the REAL level, so the
+    // rollback never has to hunt for over-level ability ranks.
+    LearnTalentSpellDependencies(spellid, VioletHoldBoons::GetBaseLevel(this));
     AddTalent(spellid, m_activeSpec, true);
 
     TC_LOG_DEBUG("misc", "Player::LearnTalent: TalentID: {} Spell: {} Group: {}\n", talentId, spellid, uint32(m_activeSpec));
 
     // update free talent points
     SetFreeTalentPoints(CurTalentPoints - (talentRank - curtalent_maxrank + 1));
+
+    // Violet Hold: points spent during a run are remembered so that, when the
+    // run's borrowed levels go away, only THESE talents are undone (newest
+    // first, only as many as the lost points demand) instead of the full
+    // reset InitTalentForLevel would otherwise fall back to.
+    if (Battleground const* bg = GetBattleground(); bg && bg->GetTypeID() == BATTLEGROUND_VHR)
+        VioletHoldBoons::OnTalentLearnedInRun(this, spellid, curtalent_maxrank ? talentInfo->SpellRank[curtalent_maxrank - 1] : 0);
+}
+
+// The activatable ranks and dependent spells a talent brings with it - what
+// LearnTalent teaches beyond the talent spell itself. Split out so a talent
+// rank restored by UnlearnTalentSpell gets exactly the same set back.
+void Player::LearnTalentSpellDependencies(uint32 spellid, uint8 levelCap)
+{
+    SpellInfo const* talentSpellInfo = sSpellMgr->GetSpellInfo(spellid);
+    if (!talentSpellInfo)
+        return;
+
+    if (!levelCap || levelCap > GetLevel())
+        levelCap = GetLevel();
+
+    auto learnNextActivatableRanks = [this, levelCap](uint32 currentRankSpellId)
+    {
+        uint32 nextRankSpellId = sSpellMgr->GetNextSpellInChain(currentRankSpellId);
+        while (nextRankSpellId)
+        {
+            SpellInfo const* nextRankSpellInfo = sSpellMgr->GetSpellInfo(nextRankSpellId);
+            if (!nextRankSpellInfo)
+                break;
+
+            // Stop if next rank requires a higher level
+            uint32 requiredLevel = std::max(nextRankSpellInfo->BaseLevel, nextRankSpellInfo->SpellLevel);
+            if (requiredLevel && requiredLevel > levelCap)
+                break;
+
+            LearnSpell(nextRankSpellId, false);
+            nextRankSpellId = sSpellMgr->GetNextSpellInChain(nextRankSpellId);
+        }
+    };
+
+    // Only auto-learn ranks and dependencies for activatable spells
+    if (talentSpellInfo->IsPassive())
+        return;
+
+    learnNextActivatableRanks(spellid);
+
+    SpellsRequiringSpellMapBounds spellsRequiringSpell = sSpellMgr->GetSpellsRequiringSpellBounds(spellid);
+    for (SpellsRequiringSpellMap::const_iterator itr = spellsRequiringSpell.first; itr != spellsRequiringSpell.second; ++itr)
+    {
+        uint32 dependentSpellId = itr->second;
+        SpellInfo const* dependentSpellInfo = sSpellMgr->GetSpellInfo(dependentSpellId);
+
+        if (!dependentSpellInfo || dependentSpellInfo->IsPassive())
+            continue;
+
+        uint32 requiredLevel = std::max(dependentSpellInfo->BaseLevel, dependentSpellInfo->SpellLevel);
+        if (requiredLevel && requiredLevel > levelCap)
+            continue;
+
+        LearnSpell(dependentSpellId, false);
+        learnNextActivatableRanks(dependentSpellId);
+    }
+}
+
+// Take back one talent rank learned with LearnTalent: the rank's spell (and
+// what it auto-taught) goes, its talent-book entry is marked removed, the
+// spent points come back through RemoveSpell's talent-cost path, and the rank
+// held before it - if any - is put back exactly as LearnTalent would have.
+void Player::UnlearnTalentSpell(uint32 spellId, uint32 previousRankSpellId, uint8 levelCap)
+{
+    if (!GetTalentSpellPos(spellId))
+        return;
+
+    if (HasSpell(spellId))
+        RemoveSpell(spellId, false, false);
+
+    if (PlayerTalentMap* talents = m_talents[m_activeSpec])
+    {
+        PlayerTalentMap::iterator itr = talents->find(spellId);
+        if (itr != talents->end())
+        {
+            // Mirror RemoveSpell: an entry never saved yet just goes away, so a
+            // later re-learn creates a fresh NEW one (AddTalent would otherwise
+            // find it and set UNCHANGED - never written). A saved one is
+            // flagged for deletion.
+            if (itr->second->state == PLAYERSPELL_NEW)
+            {
+                delete itr->second;
+                talents->erase(itr);
+            }
+            else
+                itr->second->state = PLAYERSPELL_REMOVED;
+        }
+    }
+
+    if (previousRankSpellId && GetTalentSpellPos(previousRankSpellId) && !HasSpell(previousRankSpellId))
+    {
+        LearnSpell(previousRankSpellId, false);
+        LearnTalentSpellDependencies(previousRankSpellId, levelCap);
+        AddTalent(previousRankSpellId, m_activeSpec, true);
+
+        // AddTalent flips an EXISTING entry to UNCHANGED whatever it was. If
+        // the previous rank was learned and superseded in this same session,
+        // its entry was REMOVED-but-never-saved, and UNCHANGED would mean it
+        // is never written at all. CHANGED is a delete-then-insert on save, so
+        // it is right whether or not the row already exists.
+        if (PlayerTalentMap* talents = m_talents[m_activeSpec])
+        {
+            PlayerTalentMap::iterator restored = talents->find(previousRankSpellId);
+            if (restored != talents->end() && restored->second->state == PLAYERSPELL_UNCHANGED)
+                restored->second->state = PLAYERSPELL_CHANGED;
+        }
+    }
+
+    uint32 const talentPointsForLevel = CalculateTalentsPoints();
+    SetFreeTalentPoints(m_usedTalentCount < talentPointsForLevel ? talentPointsForLevel - m_usedTalentCount : 0);
+    if (!GetSession()->PlayerLoading())
+        SendTalentsInfoData(false);
 }
 
 void Player::LearnPetTalent(ObjectGuid petGuid, uint32 talentId, uint32 talentRank)
@@ -29453,6 +30263,16 @@ void Player::RemoveSocial()
 {
     sSocialMgr->RemovePlayerSocial(GetGUID());
     m_social = nullptr;
+}
+
+void Player::EnsureSocial()
+{
+    if (m_social)
+        return;
+
+    // Empty result = no friends/ignores, which is correct for a server-created
+    // player. RemoveSocial() during teardown cleans the map entry back up.
+    m_social = sSocialMgr->LoadFromDB(PreparedQueryResult(nullptr), GetGUID());
 }
 
 std::string Player::GetDebugInfo() const

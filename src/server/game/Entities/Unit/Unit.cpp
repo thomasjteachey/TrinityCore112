@@ -73,6 +73,8 @@
 #include "SpellInfo.h"
 #include "SpellHistory.h"
 #include "SpellMgr.h"
+#include "T2SpellHooks.h"
+#include "T2UnitHooks.h"
 #include "StringConvert.h"
 #include "TemporarySummon.h"
 #include "Transport.h"
@@ -81,6 +83,7 @@
 #include "UpdateFieldFlags.h"
 #include "Util.h"
 #include "Vehicle.h"
+#include "VioletHoldBoons.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -135,6 +138,71 @@ bool HasActiveTranslationalSpline(Unit const* unit)
     float const dz = destination.z - current.z;
     return dx * dx + dy * dy + dz * dz > 0.01f;
 }
+
+// Smallest absolute angle between two orientations, in radians.
+float FacingDelta(float lhs, float rhs)
+{
+    float delta = std::fabs(Position::NormalizeOrientation(lhs) - Position::NormalizeOrientation(rhs));
+    if (delta > float(M_PI))
+        delta = 2.0f * float(M_PI) - delta;
+    return delta;
+}
+
+// A socketless playerbot has no client to announce a turn-in-place. Real
+// players broadcast MSG_MOVE_SET_FACING themselves; the creature route (a
+// 1 ms facing spline) is fragile for bots: any same-tick Unit::StopMoving()
+// (the SPELL_FAILED_MOVING retry, hunter plant stops, ...) replaces the
+// facing spline with a MonsterMoveStop before observer clients ever apply
+// the angle, and ChaseMovementGenerator's SetInFront() sends nothing at all.
+// Either way observers keep rendering the old orientation while server-side
+// arc checks (spell facing, melee swing) already use the new one. Publish the
+// turn the way a client would, from the live position, and only while no
+// spline is active -- mid-spline the spline owns the orientation on both
+// sides and a player-style packet would stomp its playback.
+void BroadcastSocketlessServerDrivenFacing(Unit* unit)
+{
+    if (!IsSocketlessServerDrivenPlayer(unit) || !unit->IsInWorld())
+        return;
+
+    if (unit->movespline && !unit->movespline->Finalized())
+        return;
+
+    MovementInfo movementInfo = unit->m_movementInfo;
+    movementInfo.RemoveMovementFlag(MOVEMENTFLAG_MASK_MOVING | MOVEMENTFLAG_MASK_TURNING | MOVEMENTFLAG_SPLINE_ENABLED |
+        MOVEMENTFLAG_PENDING_STOP | MOVEMENTFLAG_PENDING_STRAFE_STOP | MOVEMENTFLAG_PENDING_FORWARD | MOVEMENTFLAG_PENDING_BACKWARD |
+        MOVEMENTFLAG_PENDING_STRAFE_LEFT | MOVEMENTFLAG_PENDING_STRAFE_RIGHT | MOVEMENTFLAG_PENDING_ROOT);
+    movementInfo.pos.Relocate(unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ(), unit->GetOrientation());
+    movementInfo.time = GameTime::GetGameTimeMS();
+    movementInfo.fallTime = 0;
+
+    WorldPacket data(MSG_MOVE_SET_FACING, 64);
+    data << unit->GetPackGUID();
+    Unit::BuildMovementPacket(movementInfo.pos, movementInfo.transport.pos, movementInfo, &data);
+    unit->SendMessageToSet(&data, false);
+}
+
+// Applies a facing change to a socketless playerbot. Returns false for every
+// other unit so the caller falls through to the regular (spline) handling.
+// While a translational spline is active only the authoritative server
+// orientation is updated (the spline re-derives it on the next update and the
+// observers are already following that spline); once the bot is standing still
+// the turn is also broadcast so observers stop rendering a stale angle.
+bool TurnSocketlessServerDrivenPlayer(Unit* unit, float orientation)
+{
+    if (!IsSocketlessServerDrivenPlayer(unit))
+        return false;
+
+    // Below float noise there is nothing to show; the chatty callers
+    // (hunter plant, chase settle) re-face every decision tick.
+    static float constexpr VISIBLE_TURN_EPSILON = 0.001f;
+    bool const visibleTurn = !HasActiveTranslationalSpline(unit) &&
+        FacingDelta(unit->GetOrientation(), orientation) > VISIBLE_TURN_EPSILON;
+
+    unit->UpdateOrientation(orientation);
+    if (visibleTurn)
+        BroadcastSocketlessServerDrivenFacing(unit);
+    return true;
+}
 }
 
 float baseMoveSpeed[MAX_MOVE_TYPE] =
@@ -162,6 +230,12 @@ float playerBaseMoveSpeed[MAX_MOVE_TYPE] =
     4.5f,                  // MOVE_FLIGHT_BACK
     3.14f                  // MOVE_PITCH_RATE
 };
+
+// The rate the overwhelming majority of creature templates carry, and what
+// ObjectMgr substitutes when a template's speed_run is invalid. 1.14286 * the
+// 7.0 base run speed is 8.0 yd/s - deliberately above a player's 7.0 so a pet
+// can close on its owner rather than merely match them.
+static constexpr float DEFAULT_CREATURE_RUN_SPEED_RATE = 1.14286f;
 
 DamageInfo::DamageInfo(Unit* attacker, Unit* victim, uint32 damage, SpellInfo const* spellInfo, SpellSchoolMask schoolMask, DamageEffectType damageType, WeaponAttackType attackType)
     : m_attacker(attacker), m_victim(victim), m_damage(damage), m_spellInfo(spellInfo), m_schoolMask(schoolMask), m_damageType(damageType), m_attackType(attackType),
@@ -864,6 +938,14 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
     if (damagetype != NODAMAGE && (damage != 0 || hasAbsorbedDamage))
     {
         // interrupting auras with AURA_INTERRUPT_FLAG_DAMAGE before checking !damage (absorbed damage breaks that type of auras)
+        //
+        // Bracketed by the school breadcrumb: RemoveAurasWithInterruptFlags knows
+        // only the flag, never what kind of damage tripped it, and this sweep runs
+        // BEFORE ProcSkillsAndAuras - so an aura removed here is already gone by
+        // the time any proc could ask. Penguinstalker's Cinderbite (90334) needs
+        // that answer inside the trap's own removal hook. Set and cleared around
+        // the call so nothing outside these two statements can read it.
+        T2SpellHooks::NoteDamageSchool(victim, damageSchoolMask);
         if (spellProto)
         {
             if (!spellProto->HasAttribute(SPELL_ATTR4_DAMAGE_DOESNT_BREAK_AURAS))
@@ -871,6 +953,7 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
         }
         else
             victim->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TAKE_DAMAGE, 0);
+        T2SpellHooks::NoteDamageSchool(nullptr, 0);
 
         // Combat diagnostic: names who kept hitting the player through a pending
         // feign/trap watch, independent of whether this particular hit is what
@@ -935,6 +1018,28 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
             /// @todo check packets if damage is done by victim, or by attacker of victim
             Unit::DealDamageMods(shareDamageTarget, share, nullptr);
             Unit::DealDamage(attacker, shareDamageTarget, share, nullptr, NODAMAGE, redirectedSchoolMask, spell, false);
+
+            // Sacrificial Aura only: run the paladin's damage-taken procs on
+            // the redirected portion. This path deals the damage but never
+            // called the proc system, so soaking a party's damage triggered
+            // nothing - most visibly Reckoning, which built no stacks at all
+            // from redirected hits even though the paladin genuinely lost the
+            // health. Scoped to the custom redirect so stock SHARE_DAMAGE_PCT
+            // users (Soul Link) keep their existing behaviour.
+            //
+            // The flags matter: Reckoning's ProcTypeMask (0x222A8) lists the
+            // TAKEN_* hit classes and does NOT include PROC_FLAG_TAKEN_DAMAGE,
+            // so proccing with that alone fires nothing. The redirect is a
+            // hostile effect with no damage class, which is exactly
+            // TAKEN_SPELL_NONE_DMG_CLASS_NEG; TAKEN_DAMAGE rides along for
+            // effects that do key off raw damage taken.
+            // Improved Reckoning (83269) is deliberately unaffected - it
+            // requires a block (spell_proc HitMask 64), and redirected damage
+            // is never an attack the paladin could have blocked.
+            if (share && (*i)->GetId() == PARTY_DAMAGE_REDIRECT_SPELL_ID && shareDamageTarget->IsAlive())
+                Unit::ProcSkillsAndAuras(attacker, shareDamageTarget, PROC_FLAG_NONE,
+                    PROC_FLAG_TAKEN_SPELL_NONE_DMG_CLASS_NEG | PROC_FLAG_TAKEN_DAMAGE,
+                    PROC_SPELL_TYPE_DAMAGE, PROC_SPELL_PHASE_HIT, PROC_HIT_NORMAL, nullptr, nullptr, nullptr);
         }
     }
 
@@ -1005,6 +1110,17 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
         }
     }
 
+    // Violet Hold "Boon of the Phoenix": a blow that would kill a holder is
+    // clamped to leave one health, exactly the way a duel-ending blow is, and
+    // the rescue (30% health and mana) is applied once the damage has landed
+    // below. Spent on use.
+    bool phoenixRescue = false;
+    if (!duel_hasEnded && damage >= health && VioletHoldBoons::TryPhoenixRescue(victim))
+    {
+        damage = health - 1;
+        phoenixRescue = true;
+    }
+
     if (attacker && attacker != victim)
     {
         if (Player* killer = attacker->ToPlayer())
@@ -1034,6 +1150,19 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
     {
         if (victim->GetTypeId() == TYPEID_PLAYER && victim != attacker)
             victim->ToPlayer()->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_TOTAL_DAMAGE_RECEIVED, health);
+
+        // T2 Legion of One (90320): a warlock with an imp out does not die -
+        // the imp is spent, he survives on its remaining health and is moved to
+        // where it stood. Checked before the overkill splash and before Kill(),
+        // because neither belongs to a death that is not going to happen.
+        if (T2UnitHooks::OnWouldBeLethalDamage(victim))
+            return damage;
+
+        // Violet Hold "Boon of Overkill": the damage past the victim's health
+        // splashes its neighbours. Before Kill(), while the victim still
+        // stands - the splash excludes it and never splashes itself.
+        if (health && attacker && attacker != victim && damage > health)
+            VioletHoldBoons::OnKillingBlow(attacker, victim, damage - health, spellProto);
 
         Unit::Kill(attacker, victim, durabilityLoss);
     }
@@ -1128,6 +1257,9 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
     // make player victims stand up automatically
     if (victim->GetStandState() && victim->IsPlayer() && damagetype != NODAMAGE && damagetype != DOT)
         victim->SetStandState(UNIT_STAND_STATE_STAND);
+
+    if (phoenixRescue)
+        VioletHoldBoons::CompletePhoenixRescue(victim);
 
     return damage;
 }
@@ -1340,6 +1472,36 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
         damageInfo->HitInfo |= HITINFO_NORMALSWING;
         damageInfo->TargetState = VICTIMSTATE_IS_IMMUNE;
         damageInfo->CleanDamage = 0;
+
+        // T2 Reflective Ice (90344): the wearer's Ice Block reflects a share of
+        // what a swing WOULD have done. This fork bails out before the damage
+        // is ever rolled for a fully immune target, so the would-be damage is
+        // estimated here with the same pipeline the non-immune path uses
+        // (weapon damage, done/taken bonuses, armor; no crit roll, no
+        // ModifyMeleeDamage script hook) and handed to the spell-side hook.
+        // Gated on the carrier so no one else pays for the estimate.
+        if (victim->HasAura(T2SpellHooks::SPELL_REFLECTIVE_ICE))
+        {
+            uint32 wouldBeDamage = 0;
+            for (uint8 i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
+            {
+                // only players have secondary weapon damage
+                if (i > 0 && GetTypeId() != TYPEID_PLAYER)
+                    break;
+
+                SpellSchoolMask const schoolMask = SpellSchoolMask(damageInfo->Damages[i].DamageSchoolMask);
+                bool const addPctMods = (schoolMask & SPELL_SCHOOL_MASK_NORMAL) != 0;
+                uint8 const itemDamagesMask = (GetTypeId() == TYPEID_PLAYER) ? (1 << i) : 0;
+
+                uint32 damage = CalculateDamage(attackType, false, addPctMods, itemDamagesMask);
+                damage = MeleeDamageBonusDone(victim, damage, attackType, nullptr, schoolMask);
+                damage = victim->MeleeDamageBonusTaken(this, damage, attackType, nullptr, schoolMask);
+                if (Unit::IsDamageReducedByArmor(schoolMask))
+                    damage = Unit::CalcArmorReducedDamage(this, victim, damage, nullptr, attackType);
+                wouldBeDamage += damage;
+            }
+            T2SpellHooks::OnImmuneMeleeHit(this, victim, wouldBeDamage);
+        }
         return;
     }
 
@@ -1644,29 +1806,30 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
 
         Aura* judgeWisdomAura = victim->GetAuraOfRankedSpell(20186);
         Aura* judgeLightAura = victim->GetAuraOfRankedSpell(20185);
+        // Covers the whole real Judgement of the Crusader chain
+        // (20188 -> 20300 -> 20301 -> 20302 -> 20303), which is what the
+        // Lawbender 3pc applies. Deliberately not 21183: that shares the name
+        // but is the Heart of the Crusader effect on an unrelated chain, and
+        // stock behaviour does not refresh it from auto attacks.
         Aura* judgeCrusaderAura = victim->GetAuraOfRankedSpell(20188);
         Aura* judgeJusticeAura = victim->GetAura(20184);
 
-        //if paladin that cast judgement hits with auto attack, it refreshes duration
-        if (judgeWisdomAura && judgeWisdomAura->GetCaster()->GetGUID() == attacker->GetGUID())
+        // if paladin that cast judgement hits with auto attack, it refreshes
+        // duration. GetCaster() can be null once the caster is gone from the
+        // world, so it must be checked before dereferencing.
+        auto refreshIfOurs = [attacker](Aura* aura)
         {
-            judgeWisdomAura->RefreshDuration();
-        }
+            if (!aura)
+                return;
+            Unit* auraCaster = aura->GetCaster();
+            if (auraCaster && auraCaster->GetGUID() == attacker->GetGUID())
+                aura->RefreshDuration();
+        };
 
-        if (judgeLightAura && judgeLightAura->GetCaster()->GetGUID() == attacker->GetGUID())
-        {
-            judgeLightAura->RefreshDuration();
-        }
-
-        if (judgeCrusaderAura && judgeCrusaderAura->GetCaster()->GetGUID() == attacker->GetGUID())
-        {
-            judgeCrusaderAura->RefreshDuration();
-        }
-
-        if (judgeJusticeAura && judgeJusticeAura->GetCaster()->GetGUID() == attacker->GetGUID())
-        {
-            judgeJusticeAura->RefreshDuration();
-        }
+        refreshIfOurs(judgeWisdomAura);
+        refreshIfOurs(judgeLightAura);
+        refreshIfOurs(judgeCrusaderAura);
+        refreshIfOurs(judgeJusticeAura);
     }
 
     // If this is a creature and it attacks from behind it has a probability to daze it's victim
@@ -3117,10 +3280,19 @@ uint32 Unit::GetWeaponSkillValue(WeaponAttackType attType, Unit const* target) c
         if (item)
             skill = item->GetSkill();
 
-        // in PvP use full skill instead current skill value
-        value = (target && target->IsControlledByPlayer())
-            ? player->GetMaxSkillValue(skill)
-            : player->GetSkillValue(skill);
+        // T2 Ashen Confiscation (90347): a confiscated weapon is swung "as if"
+        // the wearer had TEMPORARY_WEAPON_SKILL in it, whatever the real
+        // skill line says (the mage usually has no line for it at all). Only
+        // items the script registered qualify; everything else is untouched.
+        if (item && T2UnitHooks::IsTemporaryWeapon(item))
+            value = T2UnitHooks::TEMPORARY_WEAPON_SKILL;
+        else
+        {
+            // in PvP use full skill instead current skill value
+            value = (target && target->IsControlledByPlayer())
+                ? player->GetMaxSkillValue(skill)
+                : player->GetSkillValue(skill);
+        }
         // Modify value from ratings
         value += uint32(player->GetRatingBonusValue(CR_WEAPON_SKILL));
         switch (attType)
@@ -3570,6 +3742,21 @@ bool Unit::IsMovementPreventedByCasting() const
             return false;
     }
 
+    // A cast the client itself permits on the move must not pin a server-driven
+    // unit in place. The client only blocks movement for casts flagged as
+    // movement-interrupted, which is why a human can run while casting one of
+    // these - their movement is client-authoritative and never consults this.
+    // A playerbot's movement is server-driven and every movement generator
+    // checks here, so without this the bot is frozen for the entire cast while
+    // a player casting the identical spell keeps running.
+    //
+    // Creature overrides this method outright, so the scope is players (and
+    // therefore playerbots) only - no NPC behaviour changes.
+    if (Spell* spell = m_currentSpells[CURRENT_GENERIC_SPELL])
+        if (spell->getState() != SPELL_STATE_FINISHED &&
+            !(spell->GetSpellInfo()->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT))
+            return false;
+
     // prohibit movement for all other spell casts
     return true;
 }
@@ -3900,6 +4087,19 @@ void Unit::_ApplyAuraEffect(Aura* aura, uint8 effIndex)
         aurApp->_HandleEffect(effIndex, true);
 }
 
+// Same seal test as spell_pal_judgement: Seal of Justice (20164) sits outside
+// the seal family-flag collection and needs the explicit id check.
+static bool IsTwistableSeal(SpellInfo const* spellInfo)
+{
+    return spellInfo->GetSpellSpecific() == SPELL_SPECIFIC_SEAL || spellInfo->Id == 20164;
+}
+
+// Temporary weapon enchants applied by Windfury Totem Effect (8514/10607/10611).
+static bool IsWindfuryTotemEnchant(uint32 enchantId)
+{
+    return enchantId == 1783 || enchantId == 563 || enchantId == 564;
+}
+
 // handles effects of aura application
 // should be done after registering aura in lists
 void Unit::_ApplyAura(AuraApplication* aurApp, uint8 effMask)
@@ -3949,8 +4149,26 @@ void Unit::_ApplyAura(AuraApplication* aurApp, uint8 effMask)
         UpdateIceFangSprintTurnRate();
 
     if (Player* player = ToPlayer())
+    {
         if (sConditionMgr->IsSpellUsedInSpellClickConditions(aurApp->GetBase()->GetId()))
             player->UpdateVisibleGameobjectsOrSpellClicks();
+
+        // Seals and the Windfury Totem weapon buff are mutually exclusive: the
+        // totem pulse skips seal carriers (ExcludeTargetAuraState 5) and
+        // applying a seal strips an already-present Windfury Totem enchant.
+        if (!aurApp->GetRemoveMode() && IsTwistableSeal(aura->GetSpellInfo()))
+            if (Item* weapon = player->GetWeaponForAttack(BASE_ATTACK))
+                if (IsWindfuryTotemEnchant(weapon->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT)))
+                {
+                    player->ApplyEnchantment(weapon, TEMP_ENCHANTMENT_SLOT, false);
+                    weapon->ClearEnchantment(TEMP_ENCHANTMENT_SLOT);
+                }
+
+        // A waiver aura changes which weapon-gated passives qualify. Latch only -
+        // the sweep adds and removes auras, and we are inside aura application.
+        if (sWorld->IsUnarmedWaiverAura(aura->GetId()))
+            player->ScheduleUnarmedWaiverSync();
+    }
 }
 
 // removes aura application from lists and unapplies effects
@@ -4059,8 +4277,17 @@ void Unit::_UnapplyAura(AuraApplicationMap::iterator& i, AuraRemoveMode removeMo
         UpdateIceFangSprintTurnRate();
 
     if (Player* player = ToPlayer())
+    {
         if (sConditionMgr->IsSpellUsedInSpellClickConditions(aurApp->GetBase()->GetId()))
             player->UpdateVisibleGameobjectsOrSpellClicks();
+
+        // Losing a waiver aura re-gates the weapon-gated passives it was keeping
+        // alive. Latch only, and deliberately before the `i = m_appliedAuras.begin()`
+        // reset below - the application is already erased, so the sweep sees the
+        // correct post-removal state when it drains.
+        if (sWorld->IsUnarmedWaiverAura(aura->GetId()))
+            player->ScheduleUnarmedWaiverSync();
+    }
 
     // The diagnostic above describes the operation currently in progress. Do
     // not leave a successfully removed aura as the apparent cause of a later,
@@ -4105,10 +4332,68 @@ void Unit::_RemoveNoStackAurasDueToAura(Aura* aura, bool owned)
         return;
     }
 
+    // Seal twisting: a seal replacing another seal leaves the old one up for a
+    // short grace window instead of removing it, so a swing landing inside the
+    // window benefits from both seals (classic spell-batch behaviour). Safe
+    // against double judging even though Judgement is off-GCD: the Judgement
+    // script unleashes only the freshest seal and then strips every seal
+    // through direct removal, which never passes through this stacking path.
+    int32 twistWindow = int32(sWorld->getIntConfig(CONFIG_CENTURION_PALADIN_SEAL_TWIST_WINDOW_MS));
+
+    // Ret T1 8pc (Zealot's Persistence, 90133): Seal of Command and Seal of
+    // Righteousness persist for a full 6 seconds after another seal is cast,
+    // instead of the ordinary twist grace. The "or until you cast a third
+    // Seal" half lives below: only the longest-remaining existing seal is
+    // kept, so a third cast always drops the oldest one. The 35% seal damage
+    // cut that pays for this is in spell_t1_seal_damage.
+    bool const zealotsPersistence = HasAura(90133);
+    auto isPersistableSeal = [](SpellInfo const* info)
+    {
+        // fam 10 wordA: 0x02000000 Seal of Command, 0x08000000 Seal of Righteousness
+        return info->SpellFamilyName == SPELLFAMILY_PALADIN
+            && (info->SpellFamilyFlags[0] & 0x0A000000) != 0;
+    };
+    Aura const* newestExistingSeal = nullptr;
+    if (zealotsPersistence && IsTwistableSeal(spellProto))
+    {
+        for (auto const& pair : GetOwnedAuras())
+            if (IsTwistableSeal(pair.second->GetSpellInfo()) && pair.second->GetSpellInfo()->Id != spellProto->Id)
+                if (!newestExistingSeal || pair.second->GetDuration() > newestExistingSeal->GetDuration())
+                    newestExistingSeal = pair.second;
+    }
+
+    auto keepForSealTwist = [&](Aura const* existingAura)
+    {
+        if (!twistWindow || !IsTwistableSeal(spellProto) || !IsTwistableSeal(existingAura->GetSpellInfo()))
+            return false;
+
+        int32 window = twistWindow;
+        if (zealotsPersistence && isPersistableSeal(existingAura->GetSpellInfo()))
+        {
+            // only the freshest existing seal survives; a third seal cast
+            // pushes the oldest out through the normal removal path
+            if (newestExistingSeal && existingAura != newestExistingSeal)
+                return false;
+            window = 6 * IN_MILLISECONDS;
+        }
+
+        int32 const remaining = existingAura->GetDuration();
+        if (remaining < 0) // permanent aura, must not outlive its replacement
+            return false;
+
+        if (remaining > window)
+        {
+            Aura* existing = const_cast<Aura*>(existingAura); // owned by this unit, only the duration is shortened
+            existing->SetDuration(window);
+            existing->SetNeedClientUpdateForTargets();
+        }
+        return true;
+    };
+
     if (owned)
-        RemoveOwnedAuras([aura](Aura const* ownedAura) { return !aura->CanStackWith(ownedAura); }, AURA_REMOVE_BY_DEFAULT);
+        RemoveOwnedAuras([&](Aura const* ownedAura) { return !aura->CanStackWith(ownedAura) && !keepForSealTwist(ownedAura); }, AURA_REMOVE_BY_DEFAULT);
     else
-        RemoveAppliedAuras([aura](AuraApplication const* appliedAura) { return !aura->CanStackWith(appliedAura->GetBase()); }, AURA_REMOVE_BY_DEFAULT);
+        RemoveAppliedAuras([&](AuraApplication const* appliedAura) { return !aura->CanStackWith(appliedAura->GetBase()) && !keepForSealTwist(appliedAura->GetBase()); }, AURA_REMOVE_BY_DEFAULT);
 }
 
 void Unit::_RegisterAuraEffect(AuraEffect* aurEff, bool apply)
@@ -6708,6 +6993,10 @@ void Unit::SetMinion(Minion *minion, bool apply)
         SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(minion->GetUInt32Value(UNIT_CREATED_BY_SPELL));
         if (spellInfo && spellInfo->IsCooldownStartedOnEvent())
             GetSpellHistory()->StartCooldown(spellInfo, 0, nullptr, true);
+
+        // Violet Hold "Boon of the Beastmaster": the owner's blessing rides on
+        // everything it summons.
+        VioletHoldBoons::OnMinionAdded(this, minion);
     }
     else
     {
@@ -7284,6 +7573,14 @@ void Unit::EnergizeBySpell(Unit* victim, uint32 spellId, int32 damage, Powers po
 
 void Unit::EnergizeBySpell(Unit* victim, SpellInfo const* spellInfo, int32 damage, Powers powerType)
 {
+    // T2 Blood for Power (90322): the wearer gains no MANA from anything but
+    // Life Tap. Potions, gems, runes, Judgement of Wisdom, Shadowfiend, Water
+    // Shield, Spiritual Attunement... every SPELL_EFFECT_ENERGIZE(_PCT) and
+    // every script that energizes arrives here. Nothing is gained, so nothing
+    // is logged and no threat is forwarded. Other power types are untouched.
+    if (powerType == POWER_MANA && damage > 0 && T2UnitHooks::BlocksManaGain(victim, spellInfo))
+        return;
+
     victim->ModifyPower(powerType, damage, false);
     victim->GetThreatManager().ForwardThreatForAssistingMe(this, float(damage)/2, spellInfo, true);
     SendEnergizeSpellLog(victim, spellInfo->Id, damage, powerType);
@@ -7756,6 +8053,41 @@ float Unit::SpellDamagePctDone(Unit* victim, SpellInfo const* spellProto, Damage
     return DoneTotalMod;
 }
 
+// 90201 - Diminished, the Violet Hold stacking handicap. Reports what its
+// damage-done and damage-taken components actually contributed to a hit, to
+// every GM with ".gm diagnostics customauras" on. Only fires when one side of
+// the hit carries the aura, and only for abilities/spells - the two taken
+// paths this is called from never see plain auto attacks with a spellProto.
+static void BroadcastDiminishedDamageDiagnostic(char const* path, Unit const* attacker, Unit const* victim,
+    uint32 spellId, uint32 damageBefore, float takenTotalMod)
+{
+    constexpr uint32 SPELL_DIMINISHED = 90201;
+
+    Aura* victimAura = victim ? victim->GetAura(SPELL_DIMINISHED) : nullptr;
+    Aura* attackerAura = attacker ? attacker->GetAura(SPELL_DIMINISHED) : nullptr;
+    if (!victimAura && !attackerAura)
+        return;
+
+    // Amounts as the engine holds them: base points already multiplied by the
+    // stack count. If these read 0 the aura is applied but inert; if the final
+    // multiplier disagrees with the taken amount, something downstream eats it.
+    int32 const takenAmount = victimAura && victimAura->GetEffect(EFFECT_1) ? victimAura->GetEffect(EFFECT_1)->GetAmount() : 0;
+    int32 const doneAmount = attackerAura && attackerAura->GetEffect(EFFECT_0) ? attackerAura->GetEffect(EFFECT_0)->GetAmount() : 0;
+
+    for (auto const& sessionPair : sWorld->GetAllSessions())
+        if (sessionPair.second && sessionPair.second->GetPlayer()
+            && sessionPair.second->IsGmDiagnosticEnabled(GmDiagnosticCategory::CustomAuras))
+            ChatHandler(sessionPair.second).PSendSysMessage(
+                "[Diminished] %s: %s -> %s spell %u dmg-in %u | victim stacks %u taken %+d%% | attacker stacks %u done %+d%% | taken mult x%.3f",
+                path,
+                attacker ? attacker->GetName().c_str() : "<none>",
+                victim ? victim->GetName().c_str() : "<none>",
+                spellId, damageBefore,
+                victimAura ? uint32(victimAura->GetStackAmount()) : 0, takenAmount,
+                attackerAura ? uint32(attackerAura->GetStackAmount()) : 0, doneAmount,
+                takenTotalMod);
+}
+
 uint32 Unit::SpellDamageBonusTaken(Unit* caster, SpellInfo const* spellProto, uint32 pdamage, DamageEffectType damagetype) const
 {
     if (!spellProto || damagetype == DIRECT_DAMAGE)
@@ -7828,6 +8160,8 @@ uint32 Unit::SpellDamageBonusTaken(Unit* caster, SpellInfo const* spellProto, ui
 
         TakenTotalMod = 1.0f - damageReduction;
     }
+
+    BroadcastDiminishedDamageDiagnostic("spell", caster, this, spellProto->Id, pdamage, TakenTotalMod);
 
     float tmpDamage = pdamage * TakenTotalMod;
     return uint32(std::max(tmpDamage, 0.0f));
@@ -8961,8 +9295,21 @@ uint32 Unit::MeleeDamageBonusTaken(Unit* attacker, uint32 pdamage, WeaponAttackT
 
     int32 TakenFlatBenefit = 0;
 
+    // School the damage actually lands as. For a melee-class SPELL this is the
+    // spell's school, not the weapon's: Holy Strike is DefenseType melee but
+    // SchoolMask holy, and looking the modifiers up under the attacker's
+    // weapon school (physical) meant holy-school debuffs never applied to it.
+    // Judgement of the Crusader is SPELL_AURA_MOD_DAMAGE_TAKEN with misc mask
+    // 2 (holy), so it was silently skipped for every holy melee ability.
+    // For a plain swing the caller passes the per-component school from
+    // damageInfo, which is finer-grained than the attacker's aggregate
+    // GetMeleeDamageSchoolMask() and is what the Sanctified Wrath block below
+    // already relied on.
+    SpellSchoolMask const attackSchoolMask = spellProto ? spellProto->GetSchoolMask()
+                                                        : damageSchoolMask;
+
     // ..taken
-    TakenFlatBenefit += GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_DAMAGE_TAKEN, attacker->GetMeleeDamageSchoolMask());
+    TakenFlatBenefit += GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_DAMAGE_TAKEN, attackSchoolMask);
 
     if (attType != RANGED_ATTACK)
         TakenFlatBenefit += GetTotalAuraModifier(SPELL_AURA_MOD_MELEE_DAMAGE_TAKEN);
@@ -8976,7 +9323,7 @@ uint32 Unit::MeleeDamageBonusTaken(Unit* attacker, uint32 pdamage, WeaponAttackT
     float TakenTotalMod = 1.0f;
 
     // ..taken
-    TakenTotalMod *= GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN, attacker->GetMeleeDamageSchoolMask());
+    TakenTotalMod *= GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN, attackSchoolMask);
 
     // .. taken pct (special attacks)
     if (spellProto)
@@ -9044,8 +9391,7 @@ uint32 Unit::MeleeDamageBonusTaken(Unit* attacker, uint32 pdamage, WeaponAttackT
     // Sanctified Wrath (bypass damage reduction)
     if (TakenTotalMod < 1.0f)
     {
-        SpellSchoolMask const attackSchoolMask = spellProto ? spellProto->GetSchoolMask() : damageSchoolMask;
-
+        // attackSchoolMask is now resolved once at the top of the function
         float damageReduction = 1.0f - TakenTotalMod;
         Unit::AuraEffectList const& casterIgnoreResist = attacker->GetAuraEffectsByType(SPELL_AURA_MOD_IGNORE_TARGET_RESIST);
         for (AuraEffect const* aurEff : casterIgnoreResist)
@@ -9058,6 +9404,11 @@ uint32 Unit::MeleeDamageBonusTaken(Unit* attacker, uint32 pdamage, WeaponAttackT
 
         TakenTotalMod = 1.0f - damageReduction;
     }
+
+    // Abilities only - a plain swing has no spellProto, and auto attacks would
+    // drown the diagnostic channel.
+    if (spellProto)
+        BroadcastDiminishedDamageDiagnostic("melee", attacker, this, spellProto->Id, pdamage, TakenTotalMod);
 
     float tmpDamage = float(pdamage + TakenFlatBenefit) * TakenTotalMod;
     return uint32(std::max(tmpDamage, 0.0f));
@@ -9575,7 +9926,21 @@ void Unit::UpdateSpeed(UnitMoveType mtype)
         {
             // Set creature speed rate
             if (GetTypeId() == TYPEID_UNIT)
-                speed *= ToCreature()->GetCreatureTemplate()->speed_run;    // at this point, MOVE_WALK is never reached
+            {
+                float templateSpeedRate = ToCreature()->GetCreatureTemplate()->speed_run;
+
+                // Normalize player pets to the standard creature run rate. A
+                // tameable beast's template speed is authored for the wild mob,
+                // and 125 of them sit below standard - Snow Leopard is 0.857,
+                // i.e. 6.0 yd/s against a player's 7.0. Out of combat the
+                // owner-speed inheritance further down hides this, so it only
+                // shows up mid-fight, where the pet can never close the gap.
+                // Floor it rather than override it: fast pets stay fast.
+                if (IsPet() && GetOwnerGUID().IsPlayer())
+                    templateSpeedRate = std::max(templateSpeedRate, DEFAULT_CREATURE_RUN_SPEED_RATE);
+
+                speed *= templateSpeedRate;    // at this point, MOVE_WALK is never reached
+            }
 
             // Normalize speed by 191 aura SPELL_AURA_USE_NORMAL_MOVEMENT_SPEED if need
             /// @todo possible affect only on MOVE_RUN
@@ -9638,6 +10003,23 @@ void Unit::UpdateSpeed(UnitMoveType mtype)
             speed = min_speed;
     }
 
+    // Move-while-casting snare (Starfire / Arcane Missiles / Hurricane) applied
+    // LAST and MULTIPLICATIVELY, so it scales whatever speed the auras produced
+    // rather than overwriting it: "a quarter of your current speed", not "a flat
+    // quarter". Both directions matter -
+    //
+    //     unbuffed, unsnared  1.00 * 0.25 = 0.25   (unchanged)
+    //     +50% boon           1.50 * 0.25 = 0.375  (buffs stack)
+    //     Frost Nova -50%     0.50 * 0.25 = 0.125  (still snared below the rate)
+    //
+    // It used to be a std::min() cap inside SetSpeedRate, which discarded every
+    // speed buff (min(1.5, 0.25) is 0.25) AND made snares below the rate stop
+    // mattering. Here it sits after the slow/minimum-speed handling above, so it
+    // composes with them instead of replacing them.
+    if (Player* player = ToPlayer())
+        if (float const starfireSnareRate = player->GetActiveStarfireSnareSpeedRate(mtype))
+            speed *= starfireSnareRate;
+
     SetSpeedRate(mtype, speed);
 
     if (Player* player = ToPlayer())
@@ -9672,9 +10054,10 @@ void Unit::SetSpeedRate(UnitMoveType mtype, float rate)
     if (rate < 0)
         rate = 0.0f;
 
-    if (Player* player = ToPlayer())
-        if (float const starfireRateLimit = player->GetActiveStarfireSnareSpeedRate(mtype))
-            rate = std::min(rate, starfireRateLimit);
+    // NOTE: the move-while-casting snare is deliberately NOT applied here. This is
+    // a low-level setter reached from two directions, and Player::
+    // ApplyActiveStarfireSnare passes the snare RATE ITSELF as an absolute - so
+    // scaling here applied it twice (0.25 * 0.25 = 6%). UpdateSpeed owns it now.
 
     // Update speed only on change
     MovementChangeType changeType = MovementPacketSender::GetChangeTypeByMoveType(mtype);
@@ -11571,6 +11954,13 @@ void Unit::SendComboPoints()
     if (m_cleanupDone)
         return;
 
+    // Moonkitty 5pc: keep the Starfire cast-time aura's stacks equal to the
+    // points. This is the single choke point every change runs through - both
+    // AddComboPoints and ClearComboPoints end here - so spending the points for
+    // ANY reason takes the aura off with them. Costs one HasAura for a player
+    // without the set.
+    T2SpellHooks::SyncMoonkittyComboStacks(this);
+
     PackedGuid const packGUID = m_comboTarget ? m_comboTarget->GetPackGUID() : PackedGuid();
     if (Player* playerMe = ToPlayer())
     {
@@ -12441,6 +12831,14 @@ void Unit::SetControlled(bool apply, UnitState state)
             default:
                 break;
         }
+
+        // T2 Momentum (90358): a stunned / rooted / feared / confused player
+        // sends no movement packets, so the run tracker would never see the
+        // stop. The hook early-outs for everyone without the set and defers
+        // the buff removal itself (we may be inside the CC aura's apply).
+        if (state & (UNIT_STATE_STUNNED | UNIT_STATE_ROOT | UNIT_STATE_CONFUSED | UNIT_STATE_FLEEING))
+            if (Player* player = ToPlayer())
+                T2UnitHooks::OnPlayerControlLost(player);
     }
     else
     {
@@ -13451,6 +13849,31 @@ float Unit::MeleeSpellMissChance(Unit const* victim, WeaponAttackType attType, i
     else
         missChance -= victim->GetTotalAuraModifier(SPELL_AURA_MOD_ATTACKER_MELEE_HIT_CHANCE);
 
+    // Fury T1 3pc (Ambidexterity, 90127): +3% chance to hit with OFF-HAND
+    // attacks while dual-wielding one-handers. No aura type distinguishes
+    // hands, which is why this is a core rider rather than MOD_HIT_CHANCE.
+    if (attType == OFF_ATTACK && HasAura(90127))
+        if (Player const* player = ToPlayer())
+        {
+            Item* main = player->GetWeaponForAttack(BASE_ATTACK);
+            Item* off = player->GetWeaponForAttack(OFF_ATTACK);
+            bool const dualWield1H = main && off
+                && main->GetTemplate()->InventoryType != INVTYPE_2HWEAPON
+                && off->GetTemplate()->InventoryType != INVTYPE_2HWEAPON;
+            if (dualWield1H)
+                missChance -= 3.0f;
+
+            // .gm diagnostics customauras
+            for (auto const& sessionPair : sWorld->GetAllSessions())
+                if (sessionPair.second && sessionPair.second->GetPlayer()
+                    && sessionPair.second->IsGmDiagnosticEnabled(GmDiagnosticCategory::CustomAuras))
+                    ChatHandler(sessionPair.second).PSendSysMessage(
+                        "[CustomAuras] %s: Ambidexterity %s off-hand %s (spell %u), miss now %.1f%%",
+                        player->GetName().c_str(),
+                        dualWield1H ? "-3 pct miss on" : "INACTIVE (needs two one-handers) for",
+                        spellId ? "ability" : "swing", spellId, missChance);
+        }
+
     return std::max(missChance, 0.f);
 }
 
@@ -14056,6 +14479,18 @@ void Unit::_ExitVehicle(Position const* exitPosition)
         if (GetTypeId() == TYPEID_UNIT && !CanFly() && height > GetMap()->GetWaterOrGroundLevel(GetPhaseMask(), pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ() + vehicleCollisionHeight, &height))
             init.SetFall();
 
+        // The passenger counts as MOVING until this spline finishes, which
+        // blocks mounting and stand-still casts. At default velocity (the
+        // unit's run speed) that scales with the exit offset: a stock 2 yd
+        // hop is instant, but a building-sized seat-addon offset (35 yd, out
+        // past the structure's own walls) left the player "moving" for ~5
+        // seconds after visibly landing. Cap the DURATION instead, so long
+        // exits speed up and stock exits keep their velocity untouched.
+        constexpr float maxExitDuration = 0.4f;
+        float const exitDist = GetExactDist(pos.GetPositionX(), pos.GetPositionY(), height);
+        if (exitDist > GetSpeed(MOVE_RUN) * maxExitDuration)
+            init.SetVelocity(exitDist / maxExitDuration);
+
         init.MoveTo(pos.GetPositionX(), pos.GetPositionY(), height, false);
         init.SetFacing(pos.GetOrientation());
         init.SetTransportExit();
@@ -14390,6 +14825,10 @@ void Unit::RewardRage(uint32 damage, uint32 weaponSpeedHitFactor, bool attacker)
             addRage *= 2.0f;
     }
 
+    // Violet Hold "Boon of Wrath": more rage from both dealing and taking damage.
+    if (int32 boonPct = VioletHoldBoons::GetRageGenerationPct(this))
+        AddPct(addRage, boonPct);
+
     addRage *= sWorld->getRate(RATE_POWER_RAGE_INCOME);
 
     ModifyPower(POWER_RAGE, uint32(addRage * 10));
@@ -14581,8 +15020,19 @@ bool CharmInfo::IsReturning()
 
 void Unit::SetInFront(WorldObject const* target)
 {
-    if (!HasUnitState(UNIT_STATE_CANNOT_TURN))
-        SetOrientation(GetAbsoluteAngle(target));
+    if (HasUnitState(UNIT_STATE_CANNOT_TURN))
+        return;
+
+    float const orientation = GetAbsoluteAngle(target);
+
+    // Server-only for everything that has a client of its own (the client
+    // auto-faces creatures at their target). A socketless playerbot is a
+    // player unit to observers, so its turn has to be published or they keep
+    // rendering the stale angle (see TurnSocketlessServerDrivenPlayer).
+    if (TurnSocketlessServerDrivenPlayer(this, orientation))
+        return;
+
+    SetOrientation(orientation);
 }
 
 void Unit::SetFacingTo(float ori, bool force)
@@ -14592,16 +15042,13 @@ void Unit::SetFacingTo(float ori, bool force)
         return;
 
     // SetFacingTo normally launches a zero-distance spline. For a socketless
-    // playerbot that replaces the translational spline observers are currently
-    // interpolating, and the movement generator then launches another travel
-    // spline on its next update. The alternating packets render as a sporadic
-    // back-and-forth teleport. Preserve travel and update only the authoritative
-    // facing needed by the immediate server-side spell/arc check.
-    if (IsSocketlessServerDrivenPlayer(this) && HasActiveTranslationalSpline(this))
-    {
-        UpdateOrientation(ori);
+    // playerbot that either replaces the translational spline observers are
+    // currently interpolating (rendering as a back-and-forth teleport once the
+    // movement generator relaunches travel) or, when standing still, gets
+    // dropped by any same-tick StopMoving() before the client applies it.
+    // Bots turn via a player-style facing packet instead.
+    if (TurnSocketlessServerDrivenPlayer(this, ori))
         return;
-    }
 
     Movement::MoveSplineInit init(this);
     init.MoveTo(GetPositionX(), GetPositionY(), GetPositionZ(), false);
@@ -14622,11 +15069,9 @@ void Unit::SetFacingToObject(WorldObject const* object, bool force)
     if (!force && (!IsStopped() || !movespline->Finalized()))
         return;
 
-    if (IsSocketlessServerDrivenPlayer(this) && HasActiveTranslationalSpline(this))
-    {
-        UpdateOrientation(GetAbsoluteAngle(object));
+    // Socketless playerbots: see SetFacingTo.
+    if (TurnSocketlessServerDrivenPlayer(this, GetAbsoluteAngle(object)))
         return;
-    }
 
     /// @todo figure out under what conditions creature will move towards object instead of facing it where it currently is.
     Movement::MoveSplineInit init(this);
@@ -14900,6 +15345,14 @@ void Unit::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player const* t
                 }
                 else
                     fieldBuffer << m_uint32Values[index];
+            }
+            // transmogrification: the field holds the real item, the appearance the
+            // observer is entitled to see is resolved here (only the entry half of
+            // each entry/enchantment pair)
+            else if (index >= PLAYER_VISIBLE_ITEM_1_ENTRYID && index <= PLAYER_VISIBLE_ITEM_19_ENCHANTMENT &&
+                !((index - PLAYER_VISIBLE_ITEM_1_ENTRYID) & 1) && GetTypeId() == TYPEID_PLAYER)
+            {
+                fieldBuffer << ToPlayer()->GetVisibleItemEntryFor(target, uint8((index - PLAYER_VISIBLE_ITEM_1_ENTRYID) / 2));
             }
             else
             {

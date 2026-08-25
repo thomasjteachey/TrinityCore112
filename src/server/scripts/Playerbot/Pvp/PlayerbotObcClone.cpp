@@ -439,17 +439,53 @@ void SynchronizeHunterPetMirror(Player* human, Player* clone)
     if (!human || !clone || human->GetClass() != CLASS_HUNTER || clone->GetClass() != CLASS_HUNTER)
         return;
 
+    // A dead hunter keeps no pet. This runs on a timer, so a mirror that the
+    // core dismissed on death was simply resummoned on the next pass - a live
+    // pet standing over its owner's corpse, never despawning. Mirror the
+    // dismissal here and stay out until the clone is alive again; the normal
+    // path below then rebuilds the pet on res.
+    if (!clone->IsAlive())
+    {
+        if (Pet* orphanedPet = clone->GetPet())
+            clone->RemovePet(orphanedPet, PET_SAVE_NOT_IN_SLOT);
+        return;
+    }
+
     Pet* sourcePet = human->GetPet();
     if (sourcePet && sourcePet->getPetType() != HUNTER_PET)
         sourcePet = nullptr;
 
+    // Resolve the stable fallback FIRST, because it is a legitimate source of
+    // the mirror pet, not just a last resort at creation time.
+    PetStable const* stable = human->GetPetStable();
+    PetStable::PetInfo const* info = nullptr;
+    if (!sourcePet && stable)
+    {
+        std::pair<PetStable::PetInfo const*, PetSaveMode> const loadInfo =
+            Pet::GetLoadPetInfo(*stable, 0, 0, false);
+        info = loadInfo.first;
+        if (info && (info->Type != HUNTER_PET || info->Health == 0))
+            info = nullptr;
+    }
+
+    // Which pet SHOULD the clone have? Deciding this before touching the pet
+    // it already has is the whole point: the previous order removed the
+    // clone's pet whenever the source had none *summoned*, then recreated it
+    // from the stable on the very same pass. For a hunter whose pet lives in
+    // the stable (every playerbot that has not called its pet out) that meant
+    // destroy-and-respawn on every sync tick - which is exactly the pet
+    // blinking in and out of existence with a flickering unit frame.
+    uint32 const desiredEntry = sourcePet ? sourcePet->GetEntry()
+                                          : (info ? info->CreatureId : 0);
+
     Pet* clonePet = clone->GetPet();
-    if (clonePet && (!sourcePet || clonePet->GetEntry() != sourcePet->GetEntry()))
+    if (clonePet && clonePet->GetEntry() != desiredEntry)   // 0 => none wanted
     {
         clone->RemovePet(clonePet, PET_SAVE_AS_DELETED);
         clonePet = nullptr;
     }
 
+    // Already mirroring the right pet: leave it completely alone.
     if (clonePet)
         return;
 
@@ -459,17 +495,7 @@ void SynchronizeHunterPetMirror(Player* human, Player* clone)
         return;
     }
 
-    // The source has no pet summoned right now. Fall back to whatever their
-    // persisted pet stable still has on record (current or unslotted hunter
-    // pet) so the clone is not permanently petless just because the source
-    // hasn't called theirs out yet.
-    PetStable const* stable = human->GetPetStable();
-    if (!stable)
-        return;
-
-    std::pair<PetStable::PetInfo const*, PetSaveMode> const loadInfo = Pet::GetLoadPetInfo(*stable, 0, 0, false);
-    PetStable::PetInfo const* info = loadInfo.first;
-    if (!info || info->Type != HUNTER_PET || info->Health == 0)
+    if (!info)
         return;
 
     uint32 const sourcePetNumber = info->PetNumber;
@@ -568,6 +594,10 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
     clone->SetGender(nativeGender);
     clone->SetNativeGender(nativeGender);
     clone->InitDisplayIds();
+    // Server-created player: LoadFromDB never runs, so PlayerSocial is
+    // null unless we make one. Channel::SendToAll and friends call
+    // GetSocial()->HasIgnore() on every player they touch.
+    clone->EnsureSocial();
 
     // WorldSession::SetPlayer reads the player's GUID immediately. Player's
     // update-field storage and GUID do not exist until Player::Create succeeds.
@@ -587,6 +617,12 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
         return false;
     }
 
+    // Player::LoadFromDB turns this on before its own UpdateAllStats, and a
+    // server-built clone never runs LoadFromDB - so without it Unit::UpdateUnitMod
+    // returns early for the rest of the clone's life and every LATER stat or
+    // damage percent modifier (arena preparation buffs, the Violet Hold
+    // Diminished debuff, copied boons, Reinforced) is stored and never applied.
+    clone->SetCanModifyStats(true);
     clone->UpdateAllStats();
     clone->SetFullHealth();
     for (uint8 power = POWER_MANA; power < MAX_POWERS; ++power)
@@ -623,6 +659,16 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
         clone->GetClass(), clone->GetLevel());
     ObjectAccessor::AddObject(clone);
     bg->AddPlayer(clone);
+    // Battleground::AddPlayer runs UnsummonPetTemporaryIfAny() on everyone who
+    // enters, which records a "temporarily unsummoned" pet number for later
+    // restoration. That restore path (ResummonPetTemporaryUnSummonedIfAny) is
+    // DB-backed - it calls Pet::LoadPetFromDB - and a mirror pet only ever
+    // exists in memory under a clone GUID with no character_pet rows behind
+    // it. Leaving the number set makes the arena machinery chase a pet that
+    // cannot be loaded while SynchronizeHunterPetMirror independently builds
+    // the real mirror, so the two fight over one pet slot. The mirror is the
+    // only owner of this clone's pet: clear the core's claim on it.
+    clone->SetTemporaryUnsummonedPetNumber(0);
     clone->SetInGameTime(GameTime::GetGameTimeMS());
     SynchronizeHunterPetMirror(human, clone);
 
@@ -821,6 +867,10 @@ Player* CreateCustomGameLobbyClone(Player* source, uint32 mapId, uint32 lobbyIns
     clone->SetGender(source->GetNativeGender());
     clone->SetNativeGender(source->GetNativeGender());
     clone->InitDisplayIds();
+    // Server-created player: LoadFromDB never runs, so PlayerSocial is
+    // null unless we make one. Channel::SendToAll and friends call
+    // GetSocial()->HasIgnore() on every player they touch.
+    clone->EnsureSocial();
     session->SetPlayer(clone);
     clone->GetMotionMaster()->Initialize();
     clone->SetLevel(source->GetLevel(), false);
@@ -835,6 +885,12 @@ Player* CreateCustomGameLobbyClone(Player* source, uint32 mapId, uint32 lobbyIns
         return nullptr;
     }
 
+    // Player::LoadFromDB turns this on before its own UpdateAllStats, and a
+    // server-built clone never runs LoadFromDB - so without it Unit::UpdateUnitMod
+    // returns early for the rest of the clone's life and every LATER stat or
+    // damage percent modifier (arena preparation buffs, the Violet Hold
+    // Diminished debuff, copied boons, Reinforced) is stored and never applied.
+    clone->SetCanModifyStats(true);
     clone->UpdateAllStats();
     clone->SetFullHealth();
     for (uint8 power = POWER_MANA; power < MAX_POWERS; ++power)
@@ -851,6 +907,17 @@ Player* CreateCustomGameLobbyClone(Player* source, uint32 mapId, uint32 lobbyIns
         UNIT_FLAG_NON_ATTACKABLE_2 | UNIT_FLAG_UNINTERACTIBLE);
     clone->ClearUnitState(UNIT_STATE_UNATTACKABLE);
     clone->AddUnitState(UNIT_STATE_ROOT);
+
+    // Attach the team flag visual BEFORE the mannequin becomes visible, so
+    // observers build the character and its attached flag model from a single
+    // update. Applying it after AddPlayerToMap made every client rebuild the
+    // composited model a second time, and a picking raycast landing inside
+    // that rebuild is the leading suspect for the lobby client crash at
+    // WoW.exe+0x41D559 (submesh index below its batch base vertex).
+    // AddAura, not CastSpell: the mannequin is not in the world yet.
+    uint32 const teamFlagSpell = team == ALLIANCE ? 32609 : 32610;
+    clone->AddAura(teamFlagSpell, clone);
+
     clone->SetWorldSubMap(mapId, lobbyInstanceId);
     clone->ResetMap();
     clone->Relocate(position);
@@ -867,7 +934,11 @@ Player* CreateCustomGameLobbyClone(Player* source, uint32 mapId, uint32 lobbyIns
         clone->GetClass(), clone->GetLevel(), false);
     ObjectAccessor::AddObject(clone);
     clone->SetInGameTime(GameTime::GetGameTimeMS());
-    clone->CastSpell(clone, team == ALLIANCE ? 32609 : 32610, true);
+    // Fallback only: the pre-map AddAura above is the normal path, so this
+    // fires just if applying the aura off-map was refused. Casting it here
+    // costs observers a second model rebuild, which is what we are avoiding.
+    if (!clone->HasAura(teamFlagSpell))
+        clone->CastSpell(clone, teamFlagSpell, true);
     // Reassert this after the flag aura is applied as well. Any aura-side
     // targeting state must not turn the roster mannequin into scenery.
     clone->RemoveUnitFlag(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_NOT_ATTACKABLE_1 |
@@ -879,6 +950,33 @@ Player* CreateCustomGameLobbyClone(Player* source, uint32 mapId, uint32 lobbyIns
         g_CloneSessions.emplace(cloneGuid, std::move(session));
         g_CustomGameLobbyClones.emplace(cloneGuid, CustomGameLobbyCloneRecord{
             cloneGuid, source->GetGUID(), mapId, lobbyInstanceId, rosterSlotId, team, isPlayerbot });
+    }
+
+    // Spawn record for the lobby crash hunt: client crash reports carry a
+    // wall-clock timestamp, so this is what lets a crash be matched to the
+    // exact mannequin that was materialising at that moment. Everything the
+    // client has to build a model from is listed.
+    {
+        std::string gear;
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        {
+            Item const* worn = clone->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+            if (!worn)
+                continue;
+            if (!gear.empty())
+                gear += ",";
+            gear += std::to_string(slot) + ":" + std::to_string(worn->GetEntry());
+        }
+
+        TC_LOG_INFO("custom.lobby", "MANNEQUIN spawn name='{}' source='{}' srcGuid={} "
+            "race={} gender={} class={} level={} team={} playerbot={} map={} inst={} "
+            "pos=({:.2f},{:.2f},{:.2f}) flagSpell={} flagApplied={} gear=[{}]",
+            displayName, source->GetName(), source->GetGUID().ToString(),
+            uint32(clone->GetRace()), uint32(clone->GetNativeGender()),
+            uint32(clone->GetClass()), uint32(clone->GetLevel()), team,
+            isPlayerbot ? 1 : 0, mapId, lobbyInstanceId,
+            position.GetPositionX(), position.GetPositionY(), position.GetPositionZ(),
+            teamFlagSpell, clone->HasAura(teamFlagSpell) ? 1 : 0, gear);
     }
 
     return clone;
@@ -1111,6 +1209,16 @@ void PlayerbotObcCloneManager::OnPvpKill(Player* killer, Player* killed)
     if (!killer || !killed || killer == killed)
         return;
 
+    // Dismiss a dead clone's mirror pet here rather than leaving it to the
+    // periodic mirror sync: that runs on a timer, so the pet would otherwise
+    // outlive its owner for up to a full tick, which is what left mirror pets
+    // standing around after the hunter died. SynchronizeHunterPetMirror also
+    // refuses to rebuild one while the clone is dead, so this stays dismissed
+    // until it actually resurrects.
+    if (IsActiveClone(killed))
+        if (Pet* mirrorPet = killed->GetPet())
+            killed->RemovePet(mirrorPet, PET_SAVE_NOT_IN_SLOT);
+
     bool areCounterparts = false;
     {
         std::lock_guard<std::mutex> lock(g_ObcCloneLock);
@@ -1197,6 +1305,10 @@ Player* PlayerbotObcCloneManager::CreateCustomGameClone(Player* source, Battlegr
     clone->SetGender(source->GetNativeGender());
     clone->SetNativeGender(source->GetNativeGender());
     clone->InitDisplayIds();
+    // Server-created player: LoadFromDB never runs, so PlayerSocial is
+    // null unless we make one. Channel::SendToAll and friends call
+    // GetSocial()->HasIgnore() on every player they touch.
+    clone->EnsureSocial();
     session->SetPlayer(clone);
     clone->GetMotionMaster()->Initialize();
     clone->SetLevel(source->GetLevel(), false);
@@ -1211,6 +1323,12 @@ Player* PlayerbotObcCloneManager::CreateCustomGameClone(Player* source, Battlegr
         return nullptr;
     }
 
+    // Player::LoadFromDB turns this on before its own UpdateAllStats, and a
+    // server-built clone never runs LoadFromDB - so without it Unit::UpdateUnitMod
+    // returns early for the rest of the clone's life and every LATER stat or
+    // damage percent modifier (arena preparation buffs, the Violet Hold
+    // Diminished debuff, copied boons, Reinforced) is stored and never applied.
+    clone->SetCanModifyStats(true);
     clone->UpdateAllStats();
     clone->SetFullHealth();
     for (uint8 power = POWER_MANA; power < MAX_POWERS; ++power)
@@ -1244,6 +1362,16 @@ Player* PlayerbotObcCloneManager::CreateCustomGameClone(Player* source, Battlegr
     sCharacterCache->AddCharacterCacheEntry(cloneGuid, 0, displayName, clone->GetNativeGender(), clone->GetRace(), clone->GetClass(), clone->GetLevel(), false);
     ObjectAccessor::AddObject(clone);
     bg->AddPlayer(clone);
+    // Battleground::AddPlayer runs UnsummonPetTemporaryIfAny() on everyone who
+    // enters, which records a "temporarily unsummoned" pet number for later
+    // restoration. That restore path (ResummonPetTemporaryUnSummonedIfAny) is
+    // DB-backed - it calls Pet::LoadPetFromDB - and a mirror pet only ever
+    // exists in memory under a clone GUID with no character_pet rows behind
+    // it. Leaving the number set makes the arena machinery chase a pet that
+    // cannot be loaded while SynchronizeHunterPetMirror independently builds
+    // the real mirror, so the two fight over one pet slot. The mirror is the
+    // only owner of this clone's pet: clear the core's claim on it.
+    clone->SetTemporaryUnsummonedPetNumber(0);
     clone->SetInGameTime(GameTime::GetGameTimeMS());
     SynchronizeHunterPetMirror(source, clone);
 
@@ -1335,13 +1463,13 @@ bool PlayerbotObcCloneManager::QueueCustomGameClone(ObjectGuid sourceGuid, World
     return true;
 }
 
-void PlayerbotObcCloneManager::DestroyCustomGameClones(uint32 battlegroundInstanceId)
+void PlayerbotObcCloneManager::DestroyCustomGameClones(uint32 battlegroundInstanceId, uint32 team)
 {
     std::vector<ObjectGuid> cloneGuids;
     {
         std::lock_guard<std::mutex> lock(g_ObcCloneLock);
         for (auto const& [cloneGuid, record] : g_CustomGameClones)
-            if (record.battlegroundInstanceId == battlegroundInstanceId)
+            if (record.battlegroundInstanceId == battlegroundInstanceId && (!team || record.team == team))
                 cloneGuids.push_back(cloneGuid);
     }
 

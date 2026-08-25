@@ -46,6 +46,7 @@
 #include "Opcodes.h"
 #include "OutdoorPvP.h"
 #include "Player.h"
+#include "T2SpellHooks.h"
 #include "ScriptMgr.h"
 #include "Spell.h"
 #include "SpellInfo.h"
@@ -486,6 +487,10 @@ void WorldSession::HandleSetSelectionOpcode(WorldPacket& recvData)
 
     _player->SetSelection(guid);
 
+    // Moonkitty 5pc: the Starfire discount only stands while the combo points'
+    // own target is the one selected, so a target change has to re-evaluate it.
+    T2SpellHooks::SyncMoonkittyComboStacks(_player);
+
     if (guid.IsEmpty())
         _player->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
 }
@@ -544,6 +549,13 @@ void WorldSession::HandleReclaimCorpse(WorldPackets::Misc::ReclaimCorpse& /*pack
     // do not allow corpse reclaim in arena
     if (_player->InArena())
         return;
+
+    // ...nor in battlegrounds that opt into the same rule. Violet Hold hands
+    // the dead back when a wave falls; being raised by another player still
+    // works, since this handler is only the self-service route.
+    if (Battleground* bg = _player->GetBattleground())
+        if (!bg->AllowsCorpseReclaim())
+            return;
 
     // body not released yet
     if (!_player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))

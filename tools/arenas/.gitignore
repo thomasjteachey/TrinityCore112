@@ -1,0 +1,11 @@
+# WMO group files pulled out of the client MPQs by wmo_floor.py. Regenerated on
+# demand and megabytes of binary; the measurements they produce are committed in
+# arena_floors.json instead.
+_wmocache/
+__pycache__/
+
+# Same deal: staging dirs the packers write on the way into patch-Y. The WMOs
+# and tiles they hold are copies of what is already in the archive, so the
+# archive is the record, not these.
+_wmoout/
+_minimap/

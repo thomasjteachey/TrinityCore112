@@ -312,7 +312,7 @@ void Battleground::Update(uint32 diff)
             else
             {
                 _ProcessResurrect(diff);
-                if (sBattlegroundMgr->GetPrematureFinishTime() && (GetPlayersCountByTeam(ALLIANCE) < GetMinPlayersPerTeam() || GetPlayersCountByTeam(HORDE) < GetMinPlayersPerTeam()))
+                if (AllowsPrematureFinish() && sBattlegroundMgr->GetPrematureFinishTime() && (GetPlayersCountByTeam(ALLIANCE) < GetMinPlayersPerTeam() || GetPlayersCountByTeam(HORDE) < GetMinPlayersPerTeam()))
                     _ProcessProgress(diff);
                 else if (m_PrematureCountDown)
                     m_PrematureCountDown = false;
@@ -962,6 +962,7 @@ void Battleground::EndBattleground(uint32 winner)
         }
 
         ModifyEndOfMatchHonorRewards(winner, team, winner_honor, loser_honor);
+        ModifyEndOfMatchMoneyRewards(winner, team, winner_money, loser_money);
 
         // Rewards
         // only grant rewards if battle has lasted 15 seconds
@@ -981,7 +982,12 @@ void Battleground::EndBattleground(uint32 winner)
 
                     player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_WIN_BG, player->GetMapId());
 
-                    bool canRestoreMark = isArena() || GetTypeID(true) == BATTLEGROUND_WS || GetTypeID(true) == BATTLEGROUND_SCM || GetTypeID(true) == BATTLEGROUND_BRT || GetTypeID(true) == BATTLEGROUND_OBC;
+                    // Violet Hold survival is explicitly barred from restoring
+                    // marks: its enemy team is summoned clones, so a "win"
+                    // requires no opposing players and must not feed the mark
+                    // economy - even if VHR ever joins IsCustomBattleground().
+                    bool canRestoreMark = (isArena() || GetTypeID(true) == BATTLEGROUND_WS || IsCustomBattleground(GetTypeID(true)))
+                        && GetTypeID(true) != BATTLEGROUND_VHR;
                     if (canRestoreMark && Trinity::Custom::ConsumeEligibleDepletedMarks(player, 1))
                         player->AddItem(Trinity::Custom::ITEM_RESTORED_MARK_OF_HONOR, 1); // restored mark of honor
                 }

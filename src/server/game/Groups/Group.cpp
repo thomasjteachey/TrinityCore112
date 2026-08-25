@@ -1928,6 +1928,52 @@ void Group::ChangeMembersGroup(ObjectGuid guid, uint8 group)
     SendUpdate();
 }
 
+void Group::SwapMembersGroups(ObjectGuid firstGuid, ObjectGuid secondGuid)
+{
+    // Only raid groups have sub groups
+    if (!isRaidGroup())
+        return;
+
+    member_witerator slots[2];
+    slots[0] = _getMemberWSlot(firstGuid);
+    slots[1] = _getMemberWSlot(secondGuid);
+    if (slots[0] == m_memberSlots.end() || slots[1] == m_memberSlots.end())
+        return;
+
+    if (slots[0]->group == slots[1]->group)
+        return;
+
+    // Sub group counters are unchanged by a swap: each group loses one
+    // member and gains one.
+    std::swap(slots[0]->group, slots[1]->group);
+
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    for (member_witerator slot : slots)
+    {
+        // Preserve new sub group in database for non-raid groups
+        if (!isBGGroup() && !isBFGroup())
+        {
+            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_GROUP_MEMBER_SUBGROUP);
+            stmt->setUInt8(0, slot->group);
+            stmt->setUInt32(1, slot->guid.GetCounter());
+            trans->Append(stmt);
+        }
+
+        // In case the moved player is online, update the player object with the new sub group references
+        if (Player* player = ObjectAccessor::FindConnectedPlayer(slot->guid))
+        {
+            if (player->GetGroup() == this)
+                player->GetGroupRef().setSubGroup(slot->group);
+            else
+                player->GetOriginalGroupRef().setSubGroup(slot->group);
+        }
+    }
+    CharacterDatabase.CommitTransaction(trans);
+
+    // Broadcast the changes to the group
+    SendUpdate();
+}
+
 // Retrieve the next Round-Roubin player for the group
 //
 // No update done if loot method is FFA.
@@ -2518,6 +2564,22 @@ ObjectGuid Group::GetMemberGUID(const std::string& name)
     for (member_citerator itr = m_memberSlots.begin(); itr != m_memberSlots.end(); ++itr)
         if (itr->name == name)
             return itr->guid;
+
+    // Server-created members (custom-game clones, Violet Hold Fellowship
+    // allies) hold a generated internal Player name in their slot but are
+    // shown to clients under their character-cache display name, and that is
+    // the name the client addresses them by (sub-group moves, kicks). The
+    // display name can even coincide with the online source character that
+    // is NOT in this group, so resolving it world-wide picks the wrong unit.
+    // Client-supplied names arrive normalized (first letter upper, rest
+    // lower), hence the case-insensitive compare.
+    for (member_citerator itr = m_memberSlots.begin(); itr != m_memberSlots.end(); ++itr)
+    {
+        std::string displayName;
+        if (sCharacterCache->GetCharacterNameByGuid(itr->guid, displayName) && StringEqualI(displayName, name))
+            return itr->guid;
+    }
+
     return ObjectGuid::Empty;
 }
 

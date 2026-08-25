@@ -119,7 +119,7 @@ namespace MMAP
 
     MapBuilder::MapBuilder(Optional<float> maxWalkableAngle, Optional<float> maxWalkableAngleNotSteep, bool skipLiquid,
         bool skipContinents, bool skipJunkMaps, bool skipBattlegrounds,
-        bool debugOutput, bool bigBaseUnit, int mapid, char const* offMeshFilePath, unsigned int threads) :
+        bool debugOutput, bool bigBaseUnit, std::set<uint32> const& mapIds, char const* offMeshFilePath, unsigned int threads) :
         m_terrainBuilder     (nullptr),
         m_debugOutput        (debugOutput),
         m_offMeshFilePath    (offMeshFilePath),
@@ -131,7 +131,7 @@ namespace MMAP
         m_maxWalkableAngle   (maxWalkableAngle),
         m_maxWalkableAngleNotSteep (maxWalkableAngleNotSteep),
         m_bigBaseUnit        (bigBaseUnit),
-        m_mapid              (mapid),
+        m_mapIds             (mapIds),
         m_totalTiles         (0u),
         m_totalTilesProcessed(0u),
         m_rcContext          (nullptr),
@@ -303,7 +303,7 @@ namespace MMAP
         }
     }
 
-    void MapBuilder::buildMaps(Optional<uint32> mapID)
+    void MapBuilder::buildMaps(std::set<uint32> const& mapIds)
     {
         printf("Using %u threads to generate mmaps\n", m_threads);
 
@@ -312,9 +312,12 @@ namespace MMAP
             m_tileBuilders.push_back(new TileBuilder(this, m_skipLiquid, m_bigBaseUnit, m_debugOutput));
         }
 
-        if (mapID)
+        if (!mapIds.empty())
         {
-            buildMap(*mapID);
+            // Explicit list (one id or several): build exactly these,
+            // regardless of the --skip* settings.
+            for (uint32 mapID : mapIds)
+                buildMap(mapID);
         }
         else
         {
@@ -1027,8 +1030,8 @@ namespace MMAP
     /**************************************************************************/
     bool MapBuilder::shouldSkipMap(uint32 mapID) const
     {
-        if (m_mapid >= 0)
-            return static_cast<uint32>(m_mapid) != mapID;
+        if (!m_mapIds.empty())
+            return m_mapIds.find(mapID) == m_mapIds.end();
 
         if (m_skipContinents)
             if (isContinentMap(mapID))

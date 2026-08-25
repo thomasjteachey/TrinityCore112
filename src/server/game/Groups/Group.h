@@ -259,6 +259,7 @@ class TC_GAME_API Group
         GroupJoinBattlegroundResult CanJoinBattlegroundQueue(Battleground const* bgOrTemplate, BattlegroundQueueTypeId bgQueueTypeId, uint32 MinPlayerCount, uint32 MaxPlayerCount, bool isRated, uint32 arenaSlot);
 
         void ChangeMembersGroup(ObjectGuid guid, uint8 group);
+        void SwapMembersGroups(ObjectGuid firstGuid, ObjectGuid secondGuid);
         void SetTargetIcon(uint8 id, ObjectGuid whoGuid, ObjectGuid targetGuid);
         void SetGroupMemberFlag(ObjectGuid guid, bool apply, GroupMemberFlags flag);
         void RemoveUniqueGroupMemberFlag(GroupMemberFlags flag);

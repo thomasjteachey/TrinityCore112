@@ -84,6 +84,7 @@
 #include "SkillExtraItems.h"
 #include "SmartScriptMgr.h"
 #include "SpellMgr.h"
+#include "StringConvert.h"
 #include "TicketMgr.h"
 #include "TransportMgr.h"
 #include "Unit.h"
@@ -1518,14 +1519,72 @@ void World::LoadConfigSettings(bool reload)
     m_int_configs[CONFIG_CENTURION_BG_REWARD_MONEY_WINNER] = sConfigMgr->GetIntDefault("Centurion.Battleground.RewardMoneyWinner", 100000);
     m_int_configs[CONFIG_CENTURION_BG_REWARD_MONEY_LOSER] = sConfigMgr->GetIntDefault("Centurion.Battleground.RewardMoneyLoser", 100000);
     m_int_configs[CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP] = sConfigMgr->GetIntDefault("Centurion.Battleground.RewardHonorFlagCap", 10);
+    // Percent chance a Violet Hold wave mirrors the party itself rather than
+    // being drawn from the playerbot population (the 2.5% mono and full-roster
+    // specials roll first and are unaffected).
+    m_int_configs[CONFIG_CENTURION_VHR_PARTY_WAVE_CHANCE] = sConfigMgr->GetIntDefault("Centurion.VioletHold.PartyWaveChancePercent", 10);
+    // Violet Hold gate window between waves (seconds, from the moment the
+    // clones stand in their cells) and where the per-second raid-warning
+    // countdown starts. The window's full length is always called out once as
+    // it opens. Both are read at use time, so `.reload config` applies to
+    // the next wave. Sanitised: window >= 1s, countdown start clamped to it.
+    m_int_configs[CONFIG_CENTURION_VHR_PREP_SECONDS] = std::max<int32>(1, sConfigMgr->GetIntDefault("Centurion.VioletHold.PrepSeconds", 30));
+    m_int_configs[CONFIG_CENTURION_VHR_COUNTDOWN_FROM_SECONDS] = std::clamp<int32>(sConfigMgr->GetIntDefault("Centurion.VioletHold.CountdownFromSeconds", 15), 0, int32(m_int_configs[CONFIG_CENTURION_VHR_PREP_SECONDS]));
     m_float_configs[CONFIG_CENTURION_BG_ARENA_REWARD_MULTIPLIER] = sConfigMgr->GetFloatDefault("Centurion.Battleground.ArenaRewardMultiplier", .2f);
 
     m_int_configs[CONFIG_CENTURION_LEAP_XY_SPEED] = sConfigMgr->GetIntDefault("Centurion.LeapXYSpeed", 100);
     m_int_configs[CONFIG_CENTURION_LEAP_Z_SPEED] = sConfigMgr->GetIntDefault("Centurion.LeapZSpeed", 20);
 
+    // Auras that waive the equipped-WEAPON requirement on melee abilities, so a
+    // set bonus can let a warrior fight bare-handed. Comma-separated ids; empty
+    // = off. A list because a rank chain is one spell to the player but N ids
+    // here - the client-side half (clientedits [RuleRelax] WeaponAura) lists the
+    // same ids, and the two must be kept in step by hand.
+    // NOTE: neither Trinity::StringTo nor std::from_chars tolerates whitespace,
+    // so each token is trimmed before parsing - "1243, 1244" must not silently
+    // become just 1243.
+    m_unarmedWaiverAuras.clear();
+    {
+        std::string const rawWaiverAuras = sConfigMgr->GetStringDefault("Centurion.Unarmed.WaiverAuras", "");
+        for (std::string_view token : Trinity::Tokenize(rawWaiverAuras, ',', false))
+        {
+            while (!token.empty() && (token.front() == ' ' || token.front() == '\t'))
+                token.remove_prefix(1);
+            while (!token.empty() && (token.back() == ' ' || token.back() == '\t'))
+                token.remove_suffix(1);
+
+            if (Optional<uint32> auraId = Trinity::StringTo<uint32>(token))
+                if (*auraId)
+                    m_unarmedWaiverAuras.push_back(*auraId);
+        }
+        if (!m_unarmedWaiverAuras.empty())
+            TC_LOG_INFO("server.loading", "Unarmed weapon-requirement waiver active for {} aura(s).", m_unarmedWaiverAuras.size());
+    }
+
     m_int_configs[CONFIG_CENTURION_HEARTBEATRESIST_NUMROLLS] = sConfigMgr->GetIntDefault("Centurion.HeartbeatResist.NumberRolls", 4);
     m_int_configs[CONFIG_CENTURION_HEARTBEATRESIST_REGRESSION] = sConfigMgr->GetIntDefault("Centurion.HeartbeatResist.Regression", 30);
     m_float_configs[CONFIG_CENTURION_HEARTBEATRESIST_REGRESSION_LERP] = sConfigMgr->GetFloatDefault("Centurion.HeartbeatResist.RegressionLerp", .2f);
+
+    // Seal twisting: how long (ms) a paladin seal survives being replaced by
+    // another seal, letting one melee swing benefit from both. 0 disables.
+    m_int_configs[CONFIG_CENTURION_PALADIN_SEAL_TWIST_WINDOW_MS] = sConfigMgr->GetIntDefault("Centurion.Paladin.SealTwistWindowMs", 400);
+
+    // Transmogrification
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_ENABLE] = sConfigMgr->GetBoolDefault("Centurion.Transmog.Enable", true);
+    // Opt-in: a character sees (and shows) transmogs only after switching it on.
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_DEFAULT_ENABLED] = sConfigMgr->GetBoolDefault("Centurion.Transmog.DefaultEnabled", false);
+    m_int_configs[CONFIG_CENTURION_TRANSMOG_TOKEN_ENTRY] = sConfigMgr->GetIntDefault("Centurion.Transmog.TokenEntry", 20558);
+    m_int_configs[CONFIG_CENTURION_TRANSMOG_TOKEN_COST] = sConfigMgr->GetIntDefault("Centurion.Transmog.TokenCost", 1);
+    // Bitmask over ItemQualities: bit N allows quality N. 28 = uncommon|rare|epic.
+    m_int_configs[CONFIG_CENTURION_TRANSMOG_QUALITY_MASK] = sConfigMgr->GetIntDefault("Centurion.Transmog.QualityMask", 28);
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_ALLOW_MIXED_ARMOR_TYPES] = sConfigMgr->GetBoolDefault("Centurion.Transmog.AllowMixedArmorTypes", false);
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_ALLOW_MIXED_WEAPON_TYPES] = sConfigMgr->GetBoolDefault("Centurion.Transmog.AllowMixedWeaponTypes", false);
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_ALLOW_FISHING_POLES] = sConfigMgr->GetBoolDefault("Centurion.Transmog.AllowFishingPoles", false);
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_IGNORE_REQ_CLASS] = sConfigMgr->GetBoolDefault("Centurion.Transmog.IgnoreReqClass", false);
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_IGNORE_REQ_RACE] = sConfigMgr->GetBoolDefault("Centurion.Transmog.IgnoreReqRace", false);
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_IGNORE_REQ_LEVEL] = sConfigMgr->GetBoolDefault("Centurion.Transmog.IgnoreReqLevel", false);
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_IGNORE_REQ_SKILL] = sConfigMgr->GetBoolDefault("Centurion.Transmog.IgnoreReqSkill", false);
+    m_bool_configs[CONFIG_CENTURION_TRANSMOG_IGNORE_REQ_SPELL] = sConfigMgr->GetBoolDefault("Centurion.Transmog.IgnoreReqSpell", false);
 
     // Max instances per hour
     m_int_configs[CONFIG_MAX_INSTANCES_PER_HOUR] = sConfigMgr->GetIntDefault("AccountInstancesPerHour", 5);
@@ -1613,6 +1672,17 @@ void World::LoadConfigSettings(bool reload)
     // call ScriptMgr if we're reloading the configuration
     if (reload)
         sScriptMgr->OnConfigLoad(reload);
+}
+
+// Out of line so World.h does not need <algorithm>. The list is a handful of
+// ids at most, so a linear scan beats anything with setup cost.
+bool World::IsUnarmedWaiverAura(uint32 spellId) const
+{
+    for (uint32 auraId : m_unarmedWaiverAuras)
+        if (auraId == spellId)
+            return true;
+
+    return false;
 }
 
 /// Initialize the World

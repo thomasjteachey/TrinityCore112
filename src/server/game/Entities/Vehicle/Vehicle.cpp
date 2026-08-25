@@ -516,6 +516,10 @@ Vehicle* Vehicle::RemovePassenger(Unit* unit)
 
     if (_me->GetTypeId() == TYPEID_UNIT && unit->GetTypeId() == TYPEID_PLAYER && seat->second.SeatInfo->Flags & VEHICLE_SEAT_FLAG_CAN_CONTROL)
         _me->RemoveCharmedBy(unit);
+    else if (_me->GetTypeId() == TYPEID_UNIT && unit->GetTypeId() == TYPEID_PLAYER && seat->second.SeatInfo->Flags & VEHICLE_SEAT_FLAG_CAN_CAST)
+        // Mirror of the non-control CAN_CAST boarding path: it sent the
+        // vehicle bar without a charm, so no RemoveCharmedBy will clear it.
+        unit->ToPlayer()->SendRemoveControlBar();
 
     if (_me->IsInWorld())
     {
@@ -877,6 +881,16 @@ bool VehicleJoinEvent::Execute(uint64, uint32)
             Abort(0);
             return true;
         }
+    }
+    else if (Target->GetBase()->GetTypeId() == TYPEID_UNIT && Passenger->GetTypeId() == TYPEID_PLAYER &&
+        veSeat->HasFlag(VEHICLE_SEAT_FLAG_CAN_CAST))
+    {
+        // Passenger-with-bar seat (the stock gunner arrangement): CAN_CAST
+        // without CAN_CONTROL shows the vehicle UI without ever making the
+        // rider the vehicle's mover, so the client cannot steer or turn the
+        // vehicle at all. The charm path above is what normally sends the
+        // action bar; a non-control seat has to send it itself.
+        Passenger->ToPlayer()->VehicleSpellInitialize();
     }
 
     Passenger->SendClearTarget();                            // SMSG_BREAK_TARGET

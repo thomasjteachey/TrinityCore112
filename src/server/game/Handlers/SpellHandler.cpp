@@ -35,6 +35,7 @@
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
 #include "SpellPackets.h"
+#include "T2SpellHooks.h"
 #include "Totem.h"
 #include "TotemPackets.h"
 #include "World.h"
@@ -411,6 +412,11 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
                 spellInfo = actualSpellInfo;
         }
 
+    // T2 Umbral Mercy (90340): a priest heal request consumes the swallowed
+    // Shadowform cancel that the client sent one packet earlier - before
+    // prepare, so a heal that then fails still keeps the form.
+    T2SpellHooks::OnCastSpellRequest(_player, spellInfo);
+
     Spell* spell = new Spell(_player, spellInfo, triggerFlag);
     spell->m_fromClient = true;
     spell->m_cast_count = castCount;                       // set count of casts
@@ -423,11 +429,37 @@ void WorldSession::HandleCancelCastOpcode(WorldPackets::Spells::CancelCast& canc
         return;
 
     if (_player->IsNonMeleeSpellCast(false))
+    {
+        // T2 Feint Cadence (90364): the cancelled cast still knows how long it
+        // has been on the bar only until InterruptNonMeleeSpells runs.
+        if (Spell* generic = _player->GetCurrentSpell(CURRENT_GENERIC_SPELL))
+            if (!cancelCast.SpellID || generic->GetSpellInfo()->Id == cancelCast.SpellID)
+                T2SpellHooks::OnPlayerCancelCast(_player, generic);
+
         _player->InterruptNonMeleeSpells(false, cancelCast.SpellID, false);
+    }
 }
 
 void WorldSession::HandleCancelAuraOpcode(WorldPackets::Spells::CancelAura& cancelAura)
 {
+    // UNCONDITIONAL trace of every Shadowform cancel, holder or not. This
+    // settles a question that has cost two live-test rounds: whether the client
+    // sends CMSG_CANCEL_AURA at all when you press the Shadowform key a second
+    // time. If a press produces no line here, the client is using some other
+    // opcode and the whole swallow-and-defer design is aimed at the wrong
+    // packet. Costs one integer compare per cancel.
+    if (cancelAura.SpellID == 15473)
+        TC_LOG_INFO("custom.auras", "[CustomAuras] {}: CMSG_CANCEL_AURA(15473 Shadowform) received; has90340={} form={}",
+            _player ? _player->GetName() : "<no player>",
+            _player && _player->HasAura(90340),
+            _player ? uint32(_player->GetShapeshiftForm()) : 0u);
+
+    // T2 Umbral Mercy (90340): the client's auto-unshift cancel of Shadowform
+    // is swallowed for a holder (a manual cancel is deferred ~300 ms instead).
+    // Must run before anything below touches the aura.
+    if (T2SpellHooks::OnCancelAuraRequest(_player, cancelAura.SpellID))
+        return;
+
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(cancelAura.SpellID);
     if (!spellInfo)
         return;

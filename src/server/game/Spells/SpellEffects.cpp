@@ -54,6 +54,8 @@
 #include "SpellAuras.h"
 #include "SpellHistory.h"
 #include "SpellMgr.h"
+#include "T2SpellHooks.h"
+#include "T2UnitHooks.h"
 #include "TemporarySummon.h"
 #include "Totem.h"
 #include "UpdateMask.h"
@@ -402,7 +404,17 @@ void Spell::EffectSchoolDMG()
                     uint8 level = unitCaster->GetLevel();
                     uint32 block_value = unitCaster->GetShieldBlockValue(uint32(float(level) * 50), uint32(float(level) * 50));
                     int32 blockScaling = int32(unitCaster->ApplyEffectModifiers(m_spellInfo, effectInfo->EffectIndex, float(block_value)));
-                    damage += blockScaling + blockScaling / 2;
+                    // Block-value contribution, cut by 25% (user, 2026-08-21):
+                    // the old 1.5x becomes 1.125x, i.e. nine eighths.
+                    //
+                    // Scaled on the OUTPUT rather than by shrinking block_value,
+                    // because ApplyEffectModifiers has already run by here - reducing
+                    // its input would also shrink whatever spellmods contributed,
+                    // which is a different change from the one that was asked for.
+                    // Kept as integer arithmetic in the same shape as before so the
+                    // rounding behaviour does not shift; blockScaling is bounded by
+                    // level*50, so the multiply cannot overflow.
+                    damage += (blockScaling * 9) / 8;
                 }
                 // Victory Rush
                 else if (m_spellInfo->SpellFamilyFlags[1] & 0x100)
@@ -541,7 +553,7 @@ void Spell::EffectSchoolDMG()
                     float multiple = ap / 410 + effectInfo->DamageMultiplier;
                     int32 energy = -(unitCaster->ModifyPower(POWER_ENERGY, -30));
                     damage += int32(energy * multiple);
-                    damage += int32(CalculatePct(unitCaster->ToPlayer()->GetComboPoints() * ap, 7));
+                    damage += int32(CalculatePct(unitCaster->ToPlayer()->GetComboPoints() * ap, 3)); // classic: 3% AP per combo point
                 }
                 // Wrath
                 else if (m_spellInfo->SpellFamilyFlags[0] & 0x00000001)
@@ -614,7 +626,7 @@ void Spell::EffectSchoolDMG()
                         if (uint32 combo = player->GetComboPoints())
                         {
                             float ap = unitCaster->GetTotalAttackPowerValue(BASE_ATTACK);
-                            damage += std::lroundf(ap * combo * 0.07f);
+                            damage += std::lroundf(ap * combo * 0.03f); // classic: 3% AP per combo point
 
                             // Eviscerate and Envenom Bonus Damage (item set effect)
                             if (unitCaster->HasAura(37169))
@@ -2539,6 +2551,11 @@ void Spell::EffectSummonType()
                             // randomize position for multiple summons
                             pos = caster->GetRandomPoint(*destTarget, radius);
 
+                        // Ground-targeted summons face the caster, matching the client-side summon
+                        // preview (which faces the ghost model toward the player).
+                        if (m_targets.HasDst())
+                            pos.SetOrientation(pos.GetAbsoluteAngle(caster));
+
                         summon = caster->SummonCreature(entry, pos, summonType, Milliseconds(duration), 0, m_spellInfo->Id, personalSpawn);
                         if (!summon)
                             continue;
@@ -3722,6 +3739,13 @@ void Spell::EffectWeaponDmg()
         }
     }
 
+    // Weapon-damage effects never pass through SpellDamageBonusDone, so spell
+    // power coefficients for weapon-based special attacks (e.g. Seal of
+    // Command proc 20424) must be applied here from spell_bonus_data.
+    if (SpellBonusEntry const* bonusEntry = sSpellMgr->GetSpellBonusData(m_spellInfo->Id))
+        if (bonusEntry->direct_damage > 0.f)
+            spell_bonus += int32(bonusEntry->direct_damage * unitCaster->SpellBaseDamageBonusDone(m_spellInfo->GetSchoolMask()));
+
     bool normalized = false;
     float weaponDamagePercentMod = 1.0f;
     for (SpellEffectInfo const& spellEffectInfo : m_spellInfo->GetEffects())
@@ -3854,6 +3878,7 @@ void Spell::EffectInterruptCast()
     /// @todo not all spells that used this effect apply cooldown at school spells
     // also exist case: apply cooldown to interrupted cast only and to all spells
     // there is no CURRENT_AUTOREPEAT_SPELL spells that can be interrupted
+    bool interruptedSomething = false;
     for (uint32 i = CURRENT_FIRST_NON_MELEE_SPELL; i < CURRENT_AUTOREPEAT_SPELL; ++i)
     {
         if (Spell* spell = unitTarget->GetCurrentSpell(CurrentSpellTypes(i)))
@@ -3866,6 +3891,7 @@ void Spell::EffectInterruptCast()
                 && ((i == CURRENT_GENERIC_SPELL && curSpellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_INTERRUPT)
                 || (i == CURRENT_CHANNELED_SPELL && curSpellInfo->ChannelInterruptFlags & CHANNEL_INTERRUPT_FLAG_INTERRUPT)))
             {
+                interruptedSomething = true;
                 if (Unit* unitCaster = GetUnitCasterForEffectHandlers())
                 {
                     int32 duration = Aura::CalcMaxDuration(m_spellInfo, unitCaster);
@@ -3882,6 +3908,12 @@ void Spell::EffectInterruptCast()
             }
         }
     }
+
+    // T2 Dead Air (90365): the kick landed on someone with nothing interruptible
+    // running - this is the only place that still knows the kick whiffed.
+    if (!interruptedSomething)
+        if (Unit* unitCaster = GetUnitCasterForEffectHandlers())
+            T2SpellHooks::OnInterruptWhileNotCasting(unitCaster, unitTarget);
 }
 
 void Spell::EffectSummonObjectWild()
@@ -4431,6 +4463,13 @@ void Spell::EffectDisEnchant()
         return;
 
     if (!itemTarget || !itemTarget->GetTemplate()->DisenchantID)
+        return;
+
+    // T2 Ashen Confiscation: CheckItems already refuses a seized weapon with
+    // SPELL_FAILED_CANT_BE_DISENCHANTED; this is the backstop for any path
+    // that reaches the effect without it (the item target could be swapped
+    // between the two), so the temporary never yields loot.
+    if (T2UnitHooks::IsTemporaryWeapon(itemTarget))
         return;
 
     if (Player* caster = m_caster->ToPlayer())
@@ -5802,6 +5841,10 @@ void Spell::SummonGuardian(SpellEffectInfo const& spellEffectInfo, uint32 entry,
         else
             // randomize position for multiple summons
             pos = unitCaster->GetRandomPoint(*destTarget, radius);
+
+        // Ground-targeted summons face the caster, matching the client-side summon preview.
+        if (m_targets.HasDst())
+            pos.SetOrientation(pos.GetAbsoluteAngle(unitCaster));
 
         TempSummon* summon = map->SummonCreature(entry, pos, properties, duration, unitCaster, m_spellInfo->Id);
         if (!summon)
