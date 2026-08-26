@@ -132,7 +132,19 @@ namespace
     constexpr size_t CombatDiagnosticMaxReferences = 10;
     constexpr uint32 SpellRogueNeilyoImmunity = 81439;
     constexpr uint32 SpellRogueVanishImmunity = 89783;
+    constexpr uint32 SpellResurrectionSickness = 15007;
     UnitMoveType const StarfireSnareMoveTypes[] = { MOVE_RUN, MOVE_RUN_BACK, MOVE_SWIM, MOVE_SWIM_BACK };
+
+    uint32 GetResurrectionSicknessSpellId(Player const* player)
+    {
+        ChrRacesEntry const* raceEntry = sChrRacesStore.LookupEntry(player->GetRace());
+        if (raceEntry && raceEntry->ResSicknessSpellID && sSpellMgr->GetSpellInfo(raceEntry->ResSicknessSpellID))
+            return raceEntry->ResSicknessSpellID;
+
+        // Classic data should point every playable race at this shared spell, but
+        // keep spirit-healer resurrects working if the DBC field is empty or stale.
+        return SpellResurrectionSickness;
+    }
 
     bool IsRogueVanishImmunitySpell(uint32 spellId)
     {

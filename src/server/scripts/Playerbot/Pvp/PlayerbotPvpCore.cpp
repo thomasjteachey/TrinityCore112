@@ -3419,6 +3419,43 @@ Unit const* ApplyHumanInterruptReaction(Player const* player, Unit const* candid
         return nullptr;
     }
 
+    if (stateItr == g_InterruptReactionStateByBot.end())
+        return nullptr;
+
+    InterruptReactionState& state = stateItr->second;
+    Unit const* tracked = ObjectAccessor::GetUnit(*player, state.castTargetGuid);
+    if (tracked && GetCurrentCastSpellId(tracked) == state.castSpellId && IsInterruptibleCast(tracked))
+    {
+        // The tracked cast is still running, merely outside this particular
+        // ability's range/immunity filter. Keep watching without deciding.
+        state.lastSeenCastingMs = now;
+        return nullptr;
+    }
+
+    // The tracked cast is gone (finished or cancelled).
+    uint32 const elapsedMs = now - state.noticedAtMs;
+    uint32 const castVisibleMs = state.lastSeenCastingMs - state.noticedAtMs;
+    bool const reactionElapsed = elapsedMs >= state.reactionDelayMs;
+    bool const withinPressSlop = elapsedMs <= state.reactionDelayMs + kInterruptPressSlopMs;
+    bool const committedAtCastEnd = state.reactionDelayMs <= castVisibleMs + g_PvpCoreConfig.interruptCommitWindowMs;
+
+    if (reactionElapsed && withinPressSlop && committedAtCastEnd)
+    {
+        // The cast disappeared inside the commit window: the press happens
+        // anyway. Do not erase the state here - the enclosing context build
+        // may be one that never executes a decision, so keep answering until
+        // the press slop expires; spell cooldown gating prevents double casts.
+        if (tracked && HasHostileTarget(player, tracked) && !IsTargetInvalidByImmunity(player, tracked) &&
+            player->IsWithinLOSInMap(tracked) && player->IsWithinDistInMap(tracked, maxDistance))
+            return tracked;
+    }
+
+    if (!withinPressSlop || !committedAtCastEnd)
+        g_InterruptReactionStateByBot.erase(stateItr); // saw the cancel in time (hold it) or the moment passed
+
+    return nullptr;
+}
+
 Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Unit const* preferredTarget = nullptr)
 {
     if (!player || !player->FindMap())
@@ -5495,19 +5532,66 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
         return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
     }
 
+struct WarriorGapCloserDiagnosticEntry
+{
+    uint32 recordedMs = 0;
+    std::string text;
+};
+
+std::unordered_map<uint64, WarriorGapCloserDiagnosticEntry> g_WarriorGapCloserDiagnosticByGuid;
+
+// Every Man for Himself gets its own slot rather than sharing the gap-closer
+// one. It fires once and the shared slot is rewritten on the very next decision
+// tick, so by the time anyone can type a command the evidence is gone. This
+// records only when the racial is actually chosen, so it persists until the
+// next time it happens.
+std::unordered_map<uint64, WarriorGapCloserDiagnosticEntry> g_EveryManForHimselfDiagnosticByGuid;
+
+void SetEveryManForHimselfDiagnostic(Player const* player, std::string const& diagnostic)
+{
+    if (!player)
+        return;
+
+    WarriorGapCloserDiagnosticEntry& entry =
+        playerbot::LockedGetOrCreate(g_EveryManForHimselfDiagnosticByGuid, player->GetGUID().GetRawValue());
+    entry.recordedMs = GameTime::GetGameTimeMS();
+    entry.text = diagnostic;
+}
+
+// The timestamp is not decoration. This snapshot is only refreshed when the
+// warrior selector actually runs, so a stale entry looks exactly like a live
+// one and silently describes a moment that has passed - which is precisely how
+// a frozen "cannot afford intercept" reading got mistaken for the live state.
+void SetWarriorGapCloserDiagnostic(Player const* player, std::string const& diagnostic)
+{
+    if (!player)
+        return;
+
+    WarriorGapCloserDiagnosticEntry& entry =
+        playerbot::LockedGetOrCreate(g_WarriorGapCloserDiagnosticByGuid, player->GetGUID().GetRawValue());
+    entry.recordedMs = GameTime::GetGameTimeMS();
+    entry.text = diagnostic;
+}
+
 SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, ClassicProfileSelection const& profileSelection)
 {
     SpellDecision decision;
     if (!player)
         return decision;
 
+    // Record the early exits too. A selector that never reaches the gap-closer
+    // logic leaves the previous snapshot in place, which reads as live data and
+    // hides the fact that nothing evaluated at all this tick.
     if (!HasHostileTarget(player, target))
+    {
+        SetWarriorGapCloserDiagnostic(player, std::string("early_exit=no_hostile_target target=") +
+            (target ? target->GetName() : "null"));
         return decision;
     }
 
-        Unit const* activeTarget = SelectWarriorPriorityTarget(player, target, 25.0f);
-        if (!HasHostileTarget(player, activeTarget))
-            activeTarget = target;
+    Unit const* activeTarget = SelectWarriorPriorityTarget(player, target, 25.0f);
+    if (!HasHostileTarget(player, activeTarget))
+        activeTarget = target;
 
     // Charge, Intercept, and Heroic Leap drive their own effect-motion spline.
     // While that movement is resolving the warrior is locked in, so defer all
@@ -6069,18 +6153,17 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
 
     if (SpellDecision const utilityDecision = MaybeSelectUtilitySpell(player, target); utilityDecision.spellId)
         return utilityDecision;
-    }
 
     if (!HasHostileTarget(player, target) && !allyTarget)
     {
         if (SpellDecision const racialDecision = SelectRacialSpell(player, target, allyTarget); racialDecision.spellId)
             return racialDecision;
 
-            return {};
-        }
-
-        return SelectClassicClassSpell(player, target, allyTarget, profileSelection);
+        return {};
     }
+
+    return SelectClassicClassSpell(player, target, allyTarget, profileSelection);
+}
 
     char const* GetClassLabel(uint8 classId)
     {
@@ -7435,4 +7518,40 @@ FlagCarrierDirective PvpCore::SelectFlagCarrierDirectiveSkeleton(PvpValues const
 
         return ArenaTeamInteractionType::None;
     }
+
+std::string PvpCore::GetLastEveryManForHimselfDiagnostic(Player const* player)
+{
+    if (!player)
+        return std::string();
+
+    if (WarriorGapCloserDiagnosticEntry const* entry =
+            playerbot::LockedFind(g_EveryManForHimselfDiagnosticByGuid, player->GetGUID().GetRawValue()))
+    {
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        uint32 const ageMs = entry->recordedMs != 0 && nowMs >= entry->recordedMs ? nowMs - entry->recordedMs : 0;
+        std::ostringstream aged;
+        aged << "age_ms=" << ageMs << ' ' << entry->text;
+        return aged.str();
+    }
+
+    return std::string();
+}
+
+std::string PvpCore::GetLastWarriorGapCloserDiagnostic(Player const* player)
+{
+    if (!player)
+        return std::string();
+
+    if (WarriorGapCloserDiagnosticEntry const* entry =
+            playerbot::LockedFind(g_WarriorGapCloserDiagnosticByGuid, player->GetGUID().GetRawValue()))
+    {
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        uint32 const ageMs = entry->recordedMs != 0 && nowMs >= entry->recordedMs ? nowMs - entry->recordedMs : 0;
+        std::ostringstream aged;
+        aged << "age_ms=" << ageMs << ' ' << entry->text;
+        return aged.str();
+    }
+
+    return std::string();
+}
 }
