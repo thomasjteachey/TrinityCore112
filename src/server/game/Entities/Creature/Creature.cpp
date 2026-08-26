@@ -2464,9 +2464,11 @@ bool Creature::hasInvolvedQuest(uint32 quest_id) const
     stmt->setUInt32(0, spawnId);
     trans->Append(stmt);
 
-    stmt = WorldDatabase.GetPreparedStatement(WORLD_DEL_CREATURE_PLAYERBYTES);
-    stmt->setUInt32(0, spawnId);
-    trans->Append(stmt);
+    // creature_playerbytes is deliberately NOT touched here. It is keyed on the
+    // template entry, not the spawn (see SaveToDB above), so a stored look belongs
+    // to the NPC type and outlives any single spawn of it. Deleting by spawnId was
+    // left over from when this table was per-spawn: it silently wiped an unrelated
+    // entry's appearance whenever a spawn id happened to equal a creature entry.
 
     stmt = WorldDatabase.GetPreparedStatement(WORLD_DEL_GAME_EVENT_CREATURE);
     stmt->setUInt32(0, spawnId);
