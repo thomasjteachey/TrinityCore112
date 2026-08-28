@@ -1438,6 +1438,19 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
     if (knownByPlayer && spellInfo->EquippedItemClass >= 0 && !player->HasItemFitToSpellRequirements(spellInfo))
         return false;
 
+    // Same failure family for the combo-point mechanism: rogue finishers and
+    // the warrior reactive strikes (Overpower rides on combo points granted
+    // by the target's dodge) hard-fail with SPELL_FAILED_NO_COMBO_POINTS when
+    // the live combo state lags the selector's own window tracking.
+    if (knownByPlayer && spellInfo->NeedsComboPoints())
+    {
+        ObjectGuid const intendedTargetGuid = !decision.targetGuid.IsEmpty()
+            ? decision.targetGuid
+            : (defaultEnemyTarget ? defaultEnemyTarget->GetGUID() : ObjectGuid::Empty);
+        if (intendedTargetGuid.IsEmpty() || !player->GetComboPoints(intendedTargetGuid))
+            return false;
+    }
+
     if (playerbot::PvpCore::ShouldSeekLightwell(player))
     {
         if (spellInfo->CalcCastTime() > 0 || spellInfo->IsChanneled() || spellInfo->IsAutoRepeatRangedSpell())
