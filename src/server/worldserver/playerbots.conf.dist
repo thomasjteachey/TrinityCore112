@@ -467,3 +467,11 @@ Playerbot.PveGrind.Relocate.DryWandersBeforeMove = 5
 #    Playerbot.Pve.Quests.Enable also covers gameobject objectives: bots walk to and use
 #    quest goobers (RequiredNpcOrGo credit) and loot quest chests within 120 yards of their
 #    grind area. Gathering professions and exploration objectives remain unimplemented.
+
+#    Playerbot.PveGrind.Relocate.Maps
+#        Description: Comma-separated map ids the relocation cache samples grind spots from.
+#                     Barracks+ keeps the vanilla continents; a wrath realm can use "0,1,530,571".
+#                     The cache builds once at first use, so changes need a restart.
+#        Default:     "0,1"
+
+Playerbot.PveGrind.Relocate.Maps = "0,1"

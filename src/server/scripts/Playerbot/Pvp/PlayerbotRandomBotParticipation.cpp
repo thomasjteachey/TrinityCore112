@@ -2249,8 +2249,11 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
 
     // Outside instanced PvP a companion belongs to the PvE manager: no queue
     // joins, no invite handling, no duplicate class-decision execution. Once
-    // it actually stands inside a battleground the normal lifecycle resumes.
-    if (!player->InBattleground() && PveManager::IsExemptFromBattlegroundOrchestration(player))
+    // it actually stands inside a battleground - or still holds a queue slot
+    // from before it became a companion - the normal lifecycle resumes, so a
+    // pending invite is answered instead of stalling the pop.
+    if (!player->InBattleground() && !player->InBattlegroundQueue() &&
+        PveManager::IsExemptFromBattlegroundOrchestration(player))
         return;
 
     PvpValues const values = PvpCore::CollectValues(player);

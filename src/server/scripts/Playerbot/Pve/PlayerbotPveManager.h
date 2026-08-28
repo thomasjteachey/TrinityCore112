@@ -22,6 +22,7 @@
 #include "ObjectGuid.h"
 
 #include <string>
+#include <vector>
 
 class Player;
 
@@ -50,6 +51,7 @@ struct PveConfig
     bool talentsEnabled = true;
     bool relocateEnabled = true;
     uint32 relocateDryWanders = 5;
+    std::vector<uint32> relocateMaps = { 0, 1 };
 };
 
 // Open-world PvE behavior for managed random bots, layered on the existing

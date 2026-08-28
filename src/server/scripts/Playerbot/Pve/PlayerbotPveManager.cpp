@@ -59,7 +59,9 @@
 #include <chrono>
 #include <map>
 #include <mutex>
+#include <cstdlib>
 #include <sstream>
+#include <stdexcept>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -112,10 +114,40 @@ struct PveBotState
     PveTimePoint nextErrandScanAt{};
     PveTimePoint nextEquipCheckAt{};
     PveTimePoint nextTalentCheckAt{};
-    ObjectGuid recentQuestObjectGuid;
-    PveTimePoint recentQuestObjectUntil{};
+    // Errand targets (NPCs and quest objects) visited recently, whether or
+    // not the visit achieved anything - stops ping-ponging between blocked
+    // targets (locked chest, turn-in with full bags, vendor that can't fix
+    // the trigger).
+    std::unordered_map<uint64, PveTimePoint> recentErrandTargets;
     uint32 dryWanderCount = 0;
 };
+
+bool IsRecentErrandTarget(PveBotState& state, ObjectGuid const& guid)
+{
+    auto itr = state.recentErrandTargets.find(guid.GetRawValue());
+    if (itr == state.recentErrandTargets.end())
+        return false;
+
+    if (PveClock::now() >= itr->second)
+    {
+        state.recentErrandTargets.erase(itr);
+        return false;
+    }
+
+    return true;
+}
+
+void MarkRecentErrandTarget(PveBotState& state, ObjectGuid const& guid)
+{
+    PveTimePoint const now = PveClock::now();
+    if (state.recentErrandTargets.size() > 24)
+    {
+        for (auto itr = state.recentErrandTargets.begin(); itr != state.recentErrandTargets.end();)
+            itr = now >= itr->second ? state.recentErrandTargets.erase(itr) : std::next(itr);
+    }
+
+    state.recentErrandTargets[guid.GetRawValue()] = now + std::chrono::minutes(2);
+}
 
 std::unordered_map<uint64, PveBotState> g_PveBotStateByGuid;
 
@@ -132,10 +164,17 @@ std::mutex g_PvePendingLock;
 std::unordered_map<uint64, PendingSummon> g_PendingSummonsByBotGuid;
 std::unordered_set<uint64> g_PendingGroupInviteAccepts;
 std::unordered_set<uint64> g_PendingGrindRelocations;
+// Loot EXECUTION must happen on the world thread: Player::SendLoot for a
+// group-tagged kill (or a group-rules chest) mutates shared Group state
+// (roll lists, looter guid) that the core only ever touches from
+// PROCESS_THREADUNSAFE loot opcodes. The map-thread fast tick only walks the
+// bot to the corpse and enqueues here.
+std::unordered_map<uint64, ObjectGuid> g_PendingLootExecutions;
 
-GameObject* FindNearestQuestGameObject(Player* bot, PveBotState const& state, float radius);
+GameObject* FindNearestQuestGameObject(Player* bot, PveBotState& state, float radius);
 void UseQuestGameObject(Player* bot, PveBotState& state, GameObject* go);
 bool BotHasIncompleteQuest(Player* bot);
+void ProcessPendingLootExecutions();
 
 bool IsHumanPlayer(Player const* player)
 {
@@ -436,25 +475,95 @@ bool ProcessPendingLoot(Player* bot, PveBotState& state, playerbot::PveConfig co
         return true;
     }
 
-    bot->SendLoot(corpse->GetGUID(), LOOT_CORPSE);
-    Loot* loot = &corpse->loot;
-    if (loot->gold)
+    // In reach: hand the actual loot session to the world thread.
     {
-        bot->ModifyMoney(int32(loot->gold));
-        loot->gold = 0;
-        loot->NotifyMoneyRemoved();
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        g_PendingLootExecutions[bot->GetGUID().GetRawValue()] = state.pendingLootGuid;
+    }
+    clearPending();
+    state.nextEquipCheckAt = PveClock::now() + std::chrono::seconds(3);
+    return false;
+}
+
+// World thread. Opens the loot session, takes gold (group-split when the
+// kill was group-tagged), stores every slot and releases.
+void ProcessPendingLootExecutions()
+{
+    std::unordered_map<uint64, ObjectGuid> drained;
+    {
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        drained.swap(g_PendingLootExecutions);
     }
 
-    uint32 const maxSlot = loot->GetMaxSlotInLootFor(bot);
-    for (uint8 slot = 0; slot < maxSlot; ++slot)
-        bot->StoreLootItem(slot, loot);
+    for (auto const& entry : drained)
+    {
+        Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(entry.first));
+        if (!bot || !bot->IsInWorld() || !bot->IsAlive())
+            continue;
 
-    if (bot->GetLootGUID() == corpse->GetGUID())
-        bot->GetSession()->DoLootRelease(corpse->GetGUID());
+        ObjectGuid const lootGuid = entry.second;
+        WorldObject* lootObject = nullptr;
+        Loot* loot = nullptr;
+        LootType lootType = LOOT_CORPSE;
+        if (lootGuid.IsGameObject())
+        {
+            GameObject* go = ObjectAccessor::GetGameObject(*bot, lootGuid);
+            if (!go || !go->isSpawned())
+                continue;
+            lootObject = go;
+            loot = &go->loot;
+            lootType = LOOT_SKINNING;
+        }
+        else
+        {
+            Creature* corpse = ObjectAccessor::GetCreature(*bot, lootGuid);
+            if (!corpse || corpse->IsAlive() || corpse->loot.isLooted())
+                continue;
+            lootObject = corpse;
+            loot = &corpse->loot;
+        }
 
-    clearPending();
-    state.nextEquipCheckAt = PveClock::now();
-    return false;
+        if (!bot->IsWithinDistInMap(lootObject, INTERACTION_DISTANCE + 2.0f))
+            continue;
+
+        bot->SendLoot(lootGuid, lootType);
+        // SendLoot can refuse (permission, despawn race); it releases on its
+        // own failure paths, so only proceed while the session is ours.
+        if (bot->GetLootGUID() != lootGuid)
+            continue;
+
+        if (loot->gold)
+        {
+            // Mirror the loot-money handler's group split for shared kills.
+            Group* group = bot->GetGroup();
+            if (group)
+            {
+                std::vector<Player*> nearMembers;
+                for (Group::MemberSlot const& slot : group->GetMemberSlots())
+                    if (Player* member = ObjectAccessor::GetPlayer(*bot, slot.guid))
+                        if (member->IsAtGroupRewardDistance(lootObject))
+                            nearMembers.push_back(member);
+
+                uint32 const share = std::max<uint32>(1, loot->gold / std::max<size_t>(1, nearMembers.size()));
+                for (Player* member : nearMembers)
+                    member->ModifyMoney(int32(share));
+                if (nearMembers.empty())
+                    bot->ModifyMoney(int32(loot->gold));
+            }
+            else
+                bot->ModifyMoney(int32(loot->gold));
+
+            loot->gold = 0;
+            loot->NotifyMoneyRemoved();
+        }
+
+        uint32 const maxSlot = std::min<uint32>(loot->GetMaxSlotInLootFor(bot), 255);
+        for (uint32 slot = 0; slot < maxSlot; ++slot)
+            bot->StoreLootItem(uint8(slot), loot);
+
+        if (bot->GetLootGUID() == lootGuid)
+            bot->GetSession()->DoLootRelease(lootGuid);
+    }
 }
 
 uint32 PickQuestRewardIndex(Player* bot, Quest const* quest)
@@ -485,7 +594,7 @@ void AcceptAndTurnInQuestsAt(Player* bot, Creature* giver)
             continue;
 
         uint32 const rewardIndex = PickQuestRewardIndex(bot, quest);
-        if (bot->CanRewardQuest(quest, rewardIndex, false))
+        if (bot->CanRewardQuest(quest, false) && bot->CanRewardQuest(quest, rewardIndex, false))
         {
             bot->RewardQuest(quest, rewardIndex, giver, false);
             TC_LOG_INFO("playerbots.pve", "Bot {} turned in quest {} ({}).",
@@ -571,6 +680,9 @@ void StartErrandIfNeeded(Player* bot, PveBotState& state, playerbot::PveConfig c
 
     for (Creature* npc : serviceNpcs)
     {
+        if (IsRecentErrandTarget(state, npc->GetGUID()))
+            continue;
+
         if (cfg.questsEnabled && npc->IsQuestGiver())
         {
             QuestRelationResult const involved = sObjectMgr->GetCreatureQuestInvolvedRelations(npc->GetEntry());
@@ -641,6 +753,11 @@ bool ProcessErrand(Player* bot, PveBotState& state, playerbot::PveConfig const& 
         MoveTowardThrottled(bot, npc->GetPosition());
         return true;
     }
+
+    // Whatever the visit achieves, don't re-pick this NPC for a while - a
+    // turn-in blocked by full bags or an unaffordable repair would otherwise
+    // re-trigger the same errand every scan.
+    MarkRecentErrandTarget(state, npc->GetGUID());
 
     if (state.errandKind == PveErrandKind::Vendor)
     {
@@ -892,8 +1009,10 @@ void BuildGrindSpotCacheOnce()
 
     for (auto const& [spawnId, data] : sObjectMgr->GetAllCreatureData())
     {
-        // Barracks+ is a classic realm: the two vanilla continents only.
-        if (data.mapId != 0 && data.mapId != 1)
+        // Configurable per realm: B+ stays on the vanilla continents,
+        // L+ can add 530/571. (The cache builds once per process, so a map
+        // change needs a restart.)
+        if (!std::binary_search(g_PveConfig.relocateMaps.begin(), g_PveConfig.relocateMaps.end(), data.mapId))
             continue;
 
         if (data.spawntimesecs >= 1000)
@@ -926,7 +1045,7 @@ void BuildGrindSpotCacheOnce()
             continue;
 
         uint8 const meanLevel = uint8((proto->minlevel + proto->maxlevel + 1) / 2);
-        if (!meanLevel || meanLevel > 63)
+        if (!meanLevel || meanLevel > 83)
             continue;
 
         auto const key = std::make_tuple(uint16(data.mapId),
@@ -949,7 +1068,7 @@ void BuildGrindSpotCacheOnce()
 
         ++spotCount;
         for (int32 level = int32(bucket.meanLevel) - 1; level <= int32(bucket.meanLevel) + 3; ++level)
-            if (level >= 1 && level <= 60)
+            if (level >= 1 && level <= 80)
                 g_GrindSpotsByLevel[uint8(level)].push_back(bucket.spot);
     }
 
@@ -1002,7 +1121,7 @@ void ProcessPendingGrindRelocations()
         std::vector<GrindSpot> candidates;
         {
             std::lock_guard<std::mutex> guard(g_GrindSpotLock);
-            uint8 level = uint8(std::min<uint32>(bot->GetLevel(), 60));
+            uint8 level = uint8(std::min<uint32>(bot->GetLevel(), 80));
             // Walk down a few brackets if the exact level has no clusters.
             for (uint8 probe = 0; probe < 5 && candidates.empty() && level > probe; ++probe)
             {
@@ -1068,7 +1187,7 @@ struct QuestGameObjectCheck
     }
 };
 
-GameObject* FindNearestQuestGameObject(Player* bot, PveBotState const& state, float radius)
+GameObject* FindNearestQuestGameObject(Player* bot, PveBotState& state, float radius)
 {
     std::vector<GameObject*> matches;
     QuestGameObjectCheck check{ bot };
@@ -1077,10 +1196,9 @@ GameObject* FindNearestQuestGameObject(Player* bot, PveBotState const& state, fl
 
     GameObject* nearest = nullptr;
     float nearestDistance = 0.0f;
-    bool const suppressRecent = PveClock::now() < state.recentQuestObjectUntil;
     for (GameObject* candidate : matches)
     {
-        if (suppressRecent && candidate->GetGUID() == state.recentQuestObjectGuid)
+        if (IsRecentErrandTarget(state, candidate->GetGUID()))
             continue;
 
         float const distance = bot->GetDistance(candidate);
@@ -1098,8 +1216,7 @@ void UseQuestGameObject(Player* bot, PveBotState& state, GameObject* go)
 {
     // Whatever happens next, do not immediately re-pick this object: a
     // locked or script-gated one would otherwise loop the errand forever.
-    state.recentQuestObjectGuid = go->GetGUID();
-    state.recentQuestObjectUntil = PveClock::now() + std::chrono::minutes(2);
+    MarkRecentErrandTarget(state, go->GetGUID());
 
     if (go->GetGoType() == GAMEOBJECT_TYPE_GOOBER)
     {
@@ -1112,24 +1229,10 @@ void UseQuestGameObject(Player* bot, PveBotState& state, GameObject* go)
     if (go->GetGoType() != GAMEOBJECT_TYPE_CHEST || go->getLootState() != GO_READY)
         return;
 
-    bot->SendLoot(go->GetGUID(), LOOT_SKINNING);
-    Loot* loot = &go->loot;
-    if (loot->gold)
-    {
-        bot->ModifyMoney(int32(loot->gold));
-        loot->gold = 0;
-        loot->NotifyMoneyRemoved();
-    }
-
-    uint32 const maxSlot = loot->GetMaxSlotInLootFor(bot);
-    for (uint8 slot = 0; slot < maxSlot; ++slot)
-        bot->StoreLootItem(slot, loot);
-
-    if (bot->GetLootGUID() == go->GetGUID())
-        bot->GetSession()->DoLootRelease(go->GetGUID());
-
-    TC_LOG_INFO("playerbots.pve", "Bot {} looted quest chest {} ({}).",
-        bot->GetName(), go->GetEntry(), go->GetGOInfo() ? go->GetGOInfo()->name : "");
+    // The chest loot session mutates group loot state; execute it on the
+    // world thread with the corpse loot.
+    std::lock_guard<std::mutex> guard(g_PvePendingLock);
+    g_PendingLootExecutions[bot->GetGUID().GetRawValue()] = go->GetGUID();
 }
 
 bool BotHasIncompleteQuest(Player* bot)
@@ -1216,12 +1319,17 @@ void ExecuteEngagedCombatTick(Player* bot)
     }
 }
 
-void TryJoinSummonerGroup(Player* summoner, Player* bot)
+bool TryJoinSummonerGroup(Player* summoner, Player* bot)
 {
+    // A pending invite from some other group would leave a dangling invitee
+    // entry behind a direct AddMember.
+    if (bot->GetGroupInvite())
+        bot->UninviteFromGroup();
+
     if (bot->GetGroup())
     {
         if (bot->GetGroup() == summoner->GetGroup())
-            return;
+            return true;
 
         bot->RemoveFromGroup();
     }
@@ -1233,7 +1341,7 @@ void TryJoinSummonerGroup(Player* summoner, Player* bot)
         if (!group->Create(summoner))
         {
             delete group;
-            return;
+            return false;
         }
 
         sGroupMgr->AddGroup(group);
@@ -1241,12 +1349,15 @@ void TryJoinSummonerGroup(Player* summoner, Player* bot)
 
     if (group->IsFull())
     {
-        bot->Whisper("Your group is full; following without a group slot.", LANG_UNIVERSAL, summoner);
-        return;
+        bot->Whisper("Your group is full.", LANG_UNIVERSAL, summoner);
+        return false;
     }
 
-    if (group->AddMember(bot))
-        group->BroadcastGroupUpdate();
+    if (!group->AddMember(bot))
+        return false;
+
+    group->BroadcastGroupUpdate();
+    return true;
 }
 
 void ProcessPendingSummons()
@@ -1272,8 +1383,10 @@ void ProcessPendingSummons()
         };
 
         Player* summoner = ObjectAccessor::FindConnectedPlayer(pending.summonerGuid);
-        if (!summoner || !summoner->IsInWorld())
+        if (!summoner || !summoner->IsInWorld() || summoner->InBattleground())
         {
+            // A master inside a battleground can't be joined; drop the
+            // request rather than retrying against it forever.
             erasePending();
             continue;
         }
@@ -1318,8 +1431,14 @@ void ProcessPendingSummons()
             continue;
         }
 
-        if (pending.joinGroup)
-            TryJoinSummonerGroup(summoner, bot);
+        // Master status is derived from group membership everywhere else
+        // (UpdateMasterFromGroup); never set it for a bot that could not
+        // join the group, or the two disagree forever.
+        if (pending.joinGroup && !TryJoinSummonerGroup(summoner, bot))
+        {
+            erasePending();
+            continue;
+        }
 
         PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
         state.masterGuid = summoner->GetGUID();
@@ -1451,7 +1570,10 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         Player const* masterSameMap = ObjectAccessor::GetPlayer(*bot, state.masterGuid);
         if (!masterSameMap)
         {
-            if (ObjectAccessor::FindConnectedPlayer(state.masterGuid))
+            // No catch-up into battlegrounds: the summon executor refuses
+            // those anyway, so queueing would just retry forever.
+            Player const* master = ObjectAccessor::FindConnectedPlayer(state.masterGuid);
+            if (master && !master->InBattleground())
                 QueuePendingSummon(bot->GetGUID(), state.masterGuid, false);
         }
         else if (bot->GetDistance(masterSameMap) > PveCompanionTeleportCatchupDistance)
@@ -1464,7 +1586,17 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         playerbot::PvpCore::TryCastOpenWorldBuff(bot);
 
     // Rest: sit down and use the free food/water once the fight is over.
-    if (!state.engaged && !bot->IsInCombat() && !HasRestAura(bot))
+    // Companions only sit while their master is close (well inside the 40y
+    // rest-break distance), so start/break can't oscillate behind a moving
+    // master.
+    bool masterAllowsRest = true;
+    if (!state.masterGuid.IsEmpty())
+    {
+        Player const* masterSameMap = ObjectAccessor::GetPlayer(*bot, state.masterGuid);
+        masterAllowsRest = masterSameMap && bot->GetDistance(masterSameMap) < PveRestBreakFollowDistance * 0.75f;
+    }
+
+    if (!state.engaged && !bot->IsInCombat() && !HasRestAura(bot) && masterAllowsRest)
     {
         bool const needFood = bot->GetHealthPct() < cfg.restHealthPct;
         bool const needDrink = bot->GetMaxPower(POWER_MANA) > 0 && bot->GetPowerPct(POWER_MANA) < cfg.restManaPct;
@@ -1526,7 +1658,27 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     }
     else if (!target)
     {
-        if (master)
+        // Self-defense first, with no level window: something outside the
+        // grind filter (a higher-level aggro) beating on the bot must still
+        // be fought back regardless of mode.
+        Unit* nearestAttacker = nullptr;
+        float nearestAttackerDistance = 0.0f;
+        for (Unit* attacker : bot->getAttackers())
+        {
+            if (!attacker || !attacker->IsAlive() || !bot->IsValidAttackTarget(attacker))
+                continue;
+
+            float const distance = bot->GetDistance(attacker);
+            if (!nearestAttacker || distance < nearestAttackerDistance)
+            {
+                nearestAttacker = attacker;
+                nearestAttackerDistance = distance;
+            }
+        }
+
+        if (nearestAttacker)
+            target = nearestAttacker;
+        else if (master)
             target = PickCompanionTarget(bot, master, cfg);
         else if (cfg.grindEnabled && state.masterGuid.IsEmpty() && !HasRestAura(bot))
         {
@@ -1599,25 +1751,26 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
             bool const movementIdle = currentMovement == IDLE_MOTION_TYPE || currentMovement == MAX_MOTION_TYPE;
             if (movementIdle && !bot->isMoving())
             {
+                // Every wander cycle that did not END IN AN ENGAGEMENT counts
+                // toward relocation - including cycles that walk toward a
+                // prospect. Only actually reaching combat resets the counter,
+                // so an unreachable prospect (across a chasm) can't pin the
+                // bot in place forever.
+                if (cfg.relocateEnabled && ++state.dryWanderCount >= cfg.relocateDryWanders)
+                {
+                    state.dryWanderCount = 0;
+                    std::lock_guard<std::mutex> guard(g_PvePendingLock);
+                    g_PendingGrindRelocations.insert(bot->GetGUID().GetRawValue());
+                }
                 // Walk toward the nearest attackable creature when one exists
                 // beyond engage range; random-wander only in a truly empty
                 // area. The engage-radius scan takes over on arrival.
-                if (Creature* prospect = FindGrindProspect(bot, cfg))
+                else if (Creature* prospect = FindGrindProspect(bot, cfg))
                 {
-                    state.dryWanderCount = 0;
                     playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
                     bot->GetMotionMaster()->MovePoint(0, prospect->GetPosition(), true);
                     TC_LOG_DEBUG("playerbots.pve", "Grind bot {} walking toward prospect {} at {:.0f}y.",
                         bot->GetName(), prospect->GetName(), bot->GetDistance(prospect));
-                }
-                else if (cfg.relocateEnabled && ++state.dryWanderCount >= cfg.relocateDryWanders)
-                {
-                    // Nothing attackable anywhere near, repeatedly: this area
-                    // is empty or outleveled. Hand the bot to the world-thread
-                    // relocator, which drops it at a spot for its level.
-                    state.dryWanderCount = 0;
-                    std::lock_guard<std::mutex> guard(g_PvePendingLock);
-                    g_PendingGrindRelocations.insert(bot->GetGUID().GetRawValue());
                 }
                 else
                 {
@@ -1657,6 +1810,17 @@ void PveManager::LoadConfig()
     g_PveConfig.relocateEnabled = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.Relocate.Enable", true);
     g_PveConfig.relocateDryWanders = uint32(std::clamp(
         sConfigMgr->GetIntDefault("Playerbot.PveGrind.Relocate.DryWandersBeforeMove", 5), 2, 100));
+
+    g_PveConfig.relocateMaps.clear();
+    std::string const mapsCsv = sConfigMgr->GetStringDefault("Playerbot.PveGrind.Relocate.Maps", "0,1");
+    std::stringstream mapsStream(mapsCsv);
+    std::string token;
+    while (std::getline(mapsStream, token, ','))
+        if (!token.empty())
+            g_PveConfig.relocateMaps.push_back(uint32(std::strtoul(token.c_str(), nullptr, 10)));
+    if (g_PveConfig.relocateMaps.empty())
+        g_PveConfig.relocateMaps = { 0, 1 };
+    std::sort(g_PveConfig.relocateMaps.begin(), g_PveConfig.relocateMaps.end());
 }
 
 PveConfig const& PveManager::GetConfig()
@@ -1677,6 +1841,7 @@ void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
 
     ProcessPendingGroupInviteAccepts();
     ProcessPendingSummons();
+    ProcessPendingLootExecutions();
     if (g_PveConfig.relocateEnabled)
         ProcessPendingGrindRelocations();
 }
@@ -1695,9 +1860,15 @@ void PveManager::OnPlayerLifecycleTick(Player* player)
 
     if (player->InBattleground() || player->duel)
     {
+        // Clear only the PvE bookkeeping: the PvP engine owns the bot's
+        // target and combat state from here, and an AttackStop/SetTarget
+        // would clobber a target it may already have acquired.
         PveBotState& state = LockedGetOrCreate(g_PveBotStateByGuid, rawGuid);
         if (state.engaged)
-            DisengagePveCombat(player, state);
+        {
+            playerbot::PvpCore::SetPveCombatEngagement(player->GetGUID(), false);
+            state.engaged = false;
+        }
         return;
     }
 
@@ -1747,6 +1918,7 @@ void PveManager::OnBotLogout(Player const* player)
     g_PendingSummonsByBotGuid.erase(rawGuid);
     g_PendingGroupInviteAccepts.erase(rawGuid);
     g_PendingGrindRelocations.erase(rawGuid);
+    g_PendingLootExecutions.erase(rawGuid);
 }
 
 bool PveManager::IsExemptFromBattlegroundOrchestration(Player const* player)
@@ -1931,14 +2103,30 @@ void PveManager::OnManagedBotLevelChanged(Player* player, uint8 /*oldLevel*/)
         return;
     }
 
+    // GetClassTrainers is an unguarded unordered_map::at - a class with zero
+    // class-trainer rows (death knights here) would throw.
+    static std::vector<Trainer::Trainer const*> const emptyTrainers;
+    std::vector<Trainer::Trainer const*> const* trainersPtr = &emptyTrainers;
+    try
+    {
+        trainersPtr = &sObjectMgr->GetClassTrainers(player->GetClass());
+    }
+    catch (std::out_of_range const&)
+    {
+    }
+
     // Same loop as ".learn my trainer": keep taking every class-trainer spell
     // the bot now qualifies for until a full pass adds nothing, so rank chains
-    // resolve within one level-up.
-    std::vector<Trainer::Trainer const*> const& trainers = sObjectMgr->GetClassTrainers(player->GetClass());
+    // resolve within one level-up. Pass cap = insurance against a trainer row
+    // whose teach never changes learnable state.
+    std::vector<Trainer::Trainer const*> const& trainers = *trainersPtr;
     uint32 learned = 0;
+    uint32 passes = 0;
     bool hadNew;
     do
     {
+        if (++passes > 10)
+            break;
         hadNew = false;
         for (Trainer::Trainer const* trainer : trainers)
         {
