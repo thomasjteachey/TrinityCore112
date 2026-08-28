@@ -253,7 +253,23 @@ namespace Movement
     {
         if (generatePath)
         {
-            bool const playerControlled = unit->IsControlledByPlayer() || unit->GetOwnerGUID().IsPlayer();
+            // Only units that actually have something driving them belong in the strict
+            // arm below: a real client, or a bot session. A player-owned CREATURE has
+            // neither and must path exactly like stock 3.3.5.
+            //
+            // Unit::SetMinion stamps both m_ControlledByPlayer (Unit.cpp:6949) and the
+            // owner GUID (Unit.cpp:6945) onto every minion, so testing those alone swept
+            // in every pet, guardian, charmed creature and player temp summon. Once in
+            // the strict arm a rejected route yields buildStayPath() - a two-point spline
+            // to the unit's own current position. That passes MoveSplineInitArgs::Validate
+            // (it only checks path.size() > 1), launches, finalizes immediately, and
+            // PetAI::MovementInform then latches SetIsAtStay(true)/MoveIdle(). The pet is
+            // recorded as having arrived without having moved, and never retries.
+            //
+            // Playerbots are Player objects, so they still take the strict arm and their
+            // behaviour is unchanged.
+            bool const playerControlled = unit->GetTypeId() == TYPEID_PLAYER
+                && (unit->IsControlledByPlayer() || unit->GetOwnerGUID().IsPlayer());
             bool serverDrivenPlayer = false;
             if (Player const* moverPlayer = unit->ToPlayer())
                 if (WorldSession const* session = moverPlayer->GetSession())

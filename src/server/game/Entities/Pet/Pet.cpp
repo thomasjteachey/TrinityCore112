@@ -654,7 +654,12 @@ void Pet::Update(uint32 diff)
         {
             // unsummon pet that lost owner
             Player* owner = GetOwner();
-            if ((!IsWithinDistInMap(owner, GetMap()->GetVisibilityRange()) && !isPossessed()) || (isControlled() && !owner->GetPetGUID()))
+            // Stock TrinityCore dismisses at the map's visibility range, but these realms
+            // raise Visibility.Distance.Continents to 533 (stock default is 90), which
+            // effectively disables the dismissal entirely. Pin it to a fixed leash so the
+            // two settings stay independent - visibility is about what you can see, not
+            // how far a pet may stray.
+            if ((!IsWithinDistInMap(owner, PET_MAX_OWNER_DISTANCE) && !isPossessed()) || (isControlled() && !owner->GetPetGUID()))
             //if (!owner || (!IsWithinDistInMap(owner, GetMap()->GetVisibilityDistance()) && (owner->GetCharmGUID() && (owner->GetCharmGUID() != GetGUID()))) || (isControlled() && !owner->GetPetGUID()))
             {
                 Remove(PET_SAVE_NOT_IN_SLOT, true);

@@ -84,6 +84,13 @@ enum PetTalk
 #define PET_FOLLOW_DIST  1.0f
 #define PET_FOLLOW_ANGLE float(M_PI/2)
 
+// How far a pet may get from its owner before it is dismissed. Stock TrinityCore
+// uses the map's visibility range here, which ties the leash to a setting that has
+// nothing to do with pets - these realms run Visibility.Distance.Continents = 533
+// and the dismissal simply never fired. 90 is stock's default visibility, i.e. the
+// distance the check was originally written against.
+#define PET_MAX_OWNER_DISTANCE 90.0f
+
 class PetStable
 {
 public:
