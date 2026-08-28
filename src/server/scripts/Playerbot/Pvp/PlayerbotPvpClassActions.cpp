@@ -5746,6 +5746,16 @@ bool PvpClassActions::IsBattlegroundObjectInteractionInProgress(Player const* pl
     return spellInfo && spellInfo->HasEffect(SPELL_EFFECT_OPEN_LOCK) && spell->m_targets.GetGOTarget();
 }
 
+bool PvpClassActions::PrepareForExplicitMovement(Player* player)
+{
+    return PrepareMotionMasterForExplicitBotMovement(player);
+}
+
+bool PvpClassActions::IssueFollowMovement(Player* player, Unit* target, float desiredDistance)
+{
+    return IssueThrottledFollowMovement(player, target, desiredDistance);
+}
+
 bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& context)
 {
     if (!player || !context.classSpellsEnabled || !context.shouldExecute)

@@ -242,6 +242,13 @@ public:
     static bool GetHunterAutoShotRange(Player const* player, Unit const* target, HunterAutoShotRangeInfo& rangeInfo);
 
     static PvpValues CollectValues(Player const* player);
+    // PvE combat engagement: the PvE manager marks a bot as fighting creatures
+    // in the open world, which opens the class-spell gate outside battlegrounds
+    // and duels. While engaged, player-scan target acquisition and battleground
+    // raid buffing are suppressed; the PvE manager owns target selection via
+    // the bot's own selected target.
+    static void SetPveCombatEngagement(ObjectGuid const& botGuid, bool engaged);
+    static bool IsPveCombatEngaged(Player const* player);
     static bool CanMageBlinkOutOfControl(Player const* player);
     static bool CanHunterBestialWrathOutOfControl(Player const* player);
     static bool IsEffectivelyImmuneTarget(Player const* player, Unit const* target);

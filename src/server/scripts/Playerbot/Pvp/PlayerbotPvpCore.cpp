@@ -57,6 +57,7 @@
 #include <mutex>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace
@@ -6542,6 +6543,32 @@ bool PvpCore::SpellWouldBreakFlagCarry(uint32 spellId)
     return spellInfo && spellInfo->WouldDropBattlegroundFlag();
 }
 
+// Guarded through PlayerbotSharedStateGuard: the PvE manager flips engagement
+// from the bot's own map-update thread, but battleground entry cleanup and GM
+// commands can touch it cross-map.
+static std::unordered_set<uint64> g_PveCombatEngagedGuids;
+
+void PvpCore::SetPveCombatEngagement(ObjectGuid const& botGuid, bool engaged)
+{
+    if (botGuid.IsEmpty())
+        return;
+
+    std::lock_guard<std::mutex> guard(SharedBotStateStructureLock());
+    if (engaged)
+        g_PveCombatEngagedGuids.insert(botGuid.GetRawValue());
+    else
+        g_PveCombatEngagedGuids.erase(botGuid.GetRawValue());
+}
+
+bool PvpCore::IsPveCombatEngaged(Player const* player)
+{
+    if (!player)
+        return false;
+
+    std::lock_guard<std::mutex> guard(SharedBotStateStructureLock());
+    return g_PveCombatEngagedGuids.find(player->GetGUID().GetRawValue()) != g_PveCombatEngagedGuids.end();
+}
+
 void PvpCore::LoadConfig()
 {
     g_PvpCoreConfig.moduleEnabled = sConfigMgr->GetBoolDefault("Playerbot.Enable", false);
@@ -6778,7 +6805,11 @@ PvpValues PvpCore::CollectValues(Player const* player)
     bool const inBattlegroundPreparation = player->InBattleground() &&
         (player->HasAura(SPELL_PREPARATION) || player->HasAura(SPELL_ARENA_PREPARATION) || player->HasUnitFlag(UNIT_FLAG_PREPARATION));
     bool const inActiveDuel = player->duel && player->duel->State == DUEL_STATE_IN_PROGRESS;
-    if (!inActiveBattleground && !inBattlegroundPreparation && !inActiveDuel)
+    // Open-world creature combat driven by the PvE manager. Battleground and
+    // duel handling always win: engagement is only honored outside instanced
+    // PvP so a stale flag can never alter battleground behavior.
+    bool const inPveEngagement = !player->InBattleground() && !inActiveDuel && IsPveCombatEngaged(player);
+    if (!inActiveBattleground && !inBattlegroundPreparation && !inActiveDuel && !inPveEngagement)
         return context;
 
     if (inBattlegroundPreparation)
@@ -6802,7 +6833,7 @@ PvpValues PvpCore::CollectValues(Player const* player)
         return context;
     }
 
-    if (!player->IsInCombat())
+    if (!player->IsInCombat() && !inPveEngagement)
     {
         SpellDecision const raidBuffDecision = SelectMissingBattlegroundRaidBuff(player);
         if (raidBuffDecision.spellId)
@@ -6827,7 +6858,10 @@ PvpValues PvpCore::CollectValues(Player const* player)
     if (activeTargetGuid.IsEmpty())
         if (HasHostileTarget(player, combatVictim) && !hasEffectivelyImmuneCombatVictim)
             activeTargetGuid = combatVictim->GetGUID();
-    if (activeTargetGuid.IsEmpty())
+    // In PvE engagement the manager owns target acquisition through the bot's
+    // selected target; the fallback below scans the map player list and would
+    // make an open-world bot acquire hostile-faction players on its own.
+    if (activeTargetGuid.IsEmpty() && !inPveEngagement)
     {
         bool const allowLongAcquire =
             UsesRangedSpacingProfile(player, profileSelection) ||
@@ -6881,7 +6915,9 @@ PvpValues PvpCore::CollectValues(Player const* player)
                 return context;
             }
 
-            if (!HasNearbyAttackableEnemyPlayer(player, GetConfiguredCombatRange()))
+            // PvE engagement has no enemy players to probe for; the resolved
+            // creature target decides whether a traveling mount should break.
+            if (inPveEngagement ? !hasValidTarget : !HasNearbyAttackableEnemyPlayer(player, GetConfiguredCombatRange()))
                 return context;
         }
 

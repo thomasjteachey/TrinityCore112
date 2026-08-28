@@ -22,6 +22,7 @@
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotPvpLifecycleActions.h"
 #include "PlayerbotSharedStateGuard.h"
+#include "Playerbot/Pve/PlayerbotPveManager.h"
 
 #include "AccountMgr.h"
 #include "Battleground.h"
@@ -1397,6 +1398,11 @@ void ForceManagedScmQueueSweep(ManagedBotAccountIds const& botAccounts)
     for (ObjectGuid const& guid : managedGuids)
         if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
         {
+            // A companion leveling with a human must not be yanked into the
+            // battleground queue by the reactive sweep.
+            if (playerbot::PveManager::IsExemptFromBattlegroundOrchestration(player))
+                continue;
+
             playerbot::BattlegroundLifecycleActions::Execute(player, joinContext);
             playerbot::BattlegroundLifecycleActions::Execute(player, acceptContext);
         }
@@ -1815,6 +1821,12 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
                         guid.ToString(), ResolvePlayerAccountId(player));
                     continue;
                 }
+
+                // Companions grouped with a human are pinned online; shedding
+                // them mid-dungeon because the population is over target would
+                // dissolve the human's party from under them.
+                if (playerbot::PveManager::IsExemptFromBattlegroundOrchestration(player))
+                    continue;
             }
 
             state.logoutAttempts++;
@@ -2078,6 +2090,12 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
     if (isTransientClone)
         return;
 
+    // Open-world PvE behavior (companion follow/assist, grinding, rest,
+    // death recovery). Internally cadence-gated and inert inside
+    // battlegrounds, so it runs before the shared lifecycle cadence below
+    // rather than competing with it for the 500ms slot.
+    playerbot::PveManager::OnPlayerLifecycleTick(player);
+
     if (!CanProcessPlayerLifecycle(player))
         return;
 
@@ -2114,6 +2132,47 @@ bool RandomBotParticipationManager::TriggerImmediateRebalance()
 std::vector<uint32> RandomBotParticipationManager::GetConfiguredBotAccountIds()
 {
     return GetManagedBotAccountIdsSnapshot();
+}
+
+bool RandomBotParticipationManager::RequestBotLoginByGuidLow(uint32 characterLowGuid)
+{
+    if (!characterLowGuid)
+        return false;
+
+    if (ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(characterLowGuid)))
+        return true;
+
+    QueryResult result = CharacterDatabase.PQuery(
+        "SELECT account, level, race FROM characters WHERE guid = {} AND online = 0", characterLowGuid);
+    if (!result)
+    {
+        TC_LOG_WARN("playerbots.population",
+            "Requested bot login refused: character guidLow={} not found or already online.", characterLowGuid);
+        return false;
+    }
+
+    Field* fields = result->Fetch();
+    RandomBotPoolCandidate candidate;
+    candidate.lowGuid = characterLowGuid;
+    candidate.account = fields[0].GetUInt32();
+    candidate.level = fields[1].GetUInt8();
+    candidate.race = fields[2].GetUInt8();
+
+    ManagedBotAccountIds const botAccounts = GetManagedBotAccountIdsSnapshot();
+    if (!std::binary_search(botAccounts.begin(), botAccounts.end(), candidate.account))
+    {
+        TC_LOG_WARN("playerbots.population",
+            "Requested bot login refused: character guidLow={} account={} is not on the managed bot account list.",
+            characterLowGuid, candidate.account);
+        return false;
+    }
+
+    return TryLoginBotCharacter(candidate);
+}
+
+bool RandomBotParticipationManager::RequestManagedBotLogout(ObjectGuid const& guid)
+{
+    return TryLogoutRandomBot(guid);
 }
 
 LifecycleObservationSnapshot RandomBotParticipationManager::GetLifecycleObservationSnapshot()
@@ -2187,6 +2246,12 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
             didBlink ? 1 : 0);
         return;
     }
+
+    // Outside instanced PvP a companion belongs to the PvE manager: no queue
+    // joins, no invite handling, no duplicate class-decision execution. Once
+    // it actually stands inside a battleground the normal lifecycle resumes.
+    if (!player->InBattleground() && PveManager::IsExemptFromBattlegroundOrchestration(player))
+        return;
 
     PvpValues const values = PvpCore::CollectValues(player);
 

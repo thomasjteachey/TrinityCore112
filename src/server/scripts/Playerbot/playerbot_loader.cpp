@@ -30,6 +30,7 @@
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "BattlegroundQueue.h"
+#include "Playerbot/Pve/PlayerbotPveManager.h"
 #include "Playerbot/Pvp/PlayerbotObcClone.h"
 #include "Playerbot/Pvp/PlayerbotVhrWaveDriver.h"
 #include "Playerbot/Pvp/PlayerbotPvpClassActions.h"
@@ -596,6 +597,7 @@ public:
         playerbot::RandomBotParticipationManager::LoadPopulationConfig();
         playerbot::PlayerbotObcCloneManager::LoadConfig();
         playerbot::ResourceGovernor::LoadConfig();
+        playerbot::PveManager::LoadConfig();
     }
 
     void OnStartup() override
@@ -607,6 +609,7 @@ public:
         playerbot::PlayerbotObcCloneManager::LoadConfig();
         playerbot::PlayerbotObcCloneManager::OnStartupSweep();
         playerbot::ResourceGovernor::LoadConfig();
+        playerbot::PveManager::LoadConfig();
         playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
         playerbot::RandomBotPopulationSnapshot const population = playerbot::RandomBotParticipationManager::GetPopulationSnapshot();
 
@@ -627,6 +630,7 @@ public:
         playerbot::RandomBotParticipationManager::OnWorldUpdate(diff);
         playerbot::PlayerbotObcCloneManager::OnWorldUpdate(diff);
         playerbot::PlayerbotVhrWaveDriver::OnWorldUpdate(diff);
+        playerbot::PveManager::OnWorldUpdate(diff);
     }
 
     void OnShutdown() override
@@ -681,8 +685,14 @@ public:
 
     void OnLogout(Player* player) override
     {
+        playerbot::PveManager::OnBotLogout(player);
         playerbot::RandomBotParticipationManager::OnPlayerLogout(player);
         playerbot::PlayerbotObcCloneManager::OnPlayerLogout(player);
+    }
+
+    void OnLevelChanged(Player* player, uint8 oldLevel) override
+    {
+        playerbot::PveManager::OnManagedBotLevelChanged(player, oldLevel);
     }
 
     void OnPVPKill(Player* killer, Player* killed) override
@@ -757,6 +767,11 @@ public:
             return static_cast<char>(std::tolower(character));
         });
 
+        // PvE companion orders ("follow", "stay", "attack", "passive", "come",
+        // "dismiss") take precedence over the diagnostic dump below.
+        if (playerbot::PveManager::HandleWhisperCommand(sender, receiver, command))
+            return;
+
         if (command == "drop")
         {
             bool const wasFlagCarrier = playerbot::PvpCore::IsBattlegroundFlagCarrier(receiver);
@@ -806,9 +821,17 @@ public:
             { "list", HandlePlayerbotPopulationPoolCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
         };
 
+        static ChatCommandTable playerbotPveTable =
+        {
+            { "summon", HandlePlayerbotPveSummonCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
+            { "dismiss", HandlePlayerbotPveDismissCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
+            { "status", HandlePlayerbotPveStatusCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
+        };
+
         static ChatCommandTable playerbotTable =
         {
             { "pvp", playerbotPvpTable },
+            { "pve", playerbotPveTable },
             { "population", playerbotRandomPopulationTable },
         };
 
@@ -994,6 +1017,54 @@ public:
 
         uint32 const queuedCount = playerbot::QueueEligibleManagedBotsForBattleground(bgTypeId, 0);
         handler->PSendSysMessage("Forced managed playerbots to queue for battleground type %u. Queued bots: %u", uint32(bgTypeId), queuedCount);
+        return true;
+    }
+
+    static bool HandlePlayerbotPveSummonCommand(ChatHandler* handler, std::string characterName)
+    {
+        if (!handler || !handler->GetSession())
+            return false;
+
+        Player* summoner = handler->GetPlayer();
+        if (!summoner)
+            return false;
+
+        std::string statusMessage;
+        bool const accepted = playerbot::PveManager::RequestCompanionSummon(summoner, characterName, statusMessage);
+        handler->PSendSysMessage("%s", statusMessage.c_str());
+        return accepted;
+    }
+
+    static bool HandlePlayerbotPveDismissCommand(ChatHandler* handler, Optional<std::string> characterName)
+    {
+        if (!handler || !handler->GetSession())
+            return false;
+
+        Player* bot = nullptr;
+        if (characterName)
+            bot = ObjectAccessor::FindPlayerByName(*characterName);
+        else
+            bot = handler->getSelectedPlayer();
+
+        if (!bot)
+        {
+            handler->PSendSysMessage("Select an online playerbot or provide its name.");
+            return false;
+        }
+
+        std::string statusMessage;
+        bool const dismissed = playerbot::PveManager::RequestCompanionDismiss(handler->GetPlayer(), bot, statusMessage);
+        handler->PSendSysMessage("%s", statusMessage.c_str());
+        return dismissed;
+    }
+
+    static bool HandlePlayerbotPveStatusCommand(ChatHandler* handler)
+    {
+        if (!handler)
+            return false;
+
+        Player* bot = handler->getSelectedPlayer();
+        handler->PSendSysMessage("%s", playerbot::PveManager::BuildStatusLine(bot).c_str());
         return true;
     }
 

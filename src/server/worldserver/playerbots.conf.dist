@@ -289,3 +289,110 @@ Playerbot.Governor.BotShedCooldownSeconds = 5
 #        Default:     0
 
 Playerbot.PvpDecision.GlobalLock = 0
+
+###################################################################################################
+# PLAYERBOT PVE (COMPANIONS, LEVELING, GRINDING)
+###################################################################################################
+
+#    Playerbot.Pve.Enable
+#        Description: Master switch for open-world PvE bot behavior: companion bots that follow,
+#                     assist and level with a human, and (optionally) autonomous grinding for the
+#                     idle random-bot population. Combat decisions reuse the PvP class-spell
+#                     engine, so Playerbot.Enable and Playerbot.PvpClassSpells.Enable must also
+#                     be on for bots to actually fight.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Playerbot.Pve.Enable = 0
+
+#    Playerbot.Pve.Companion.FollowDistance
+#        Description: Follow distance in yards for a companion trailing its master out of combat.
+#        Default:     2.5
+
+Playerbot.Pve.Companion.FollowDistance = 2.5
+
+#    Playerbot.Pve.Companion.AssistRadius
+#        Description: Maximum distance in yards at which a companion will pick up a fight:
+#                     attackers of itself, its master or its group, and the master's active
+#                     combat victim.
+#        Default:     45
+
+Playerbot.Pve.Companion.AssistRadius = 45
+
+#    Playerbot.Pve.AutoReviveSeconds
+#        Description: A dead bot first waits this long for a player resurrection (it accepts any
+#                     pending resurrect request automatically). After the delay it releases,
+#                     self-resurrects at 66% and - if it has a master - teleports back to them.
+#        Default:     30
+
+Playerbot.Pve.AutoReviveSeconds = 30
+
+#    Playerbot.Pve.RestHealthPct
+#    Playerbot.Pve.RestManaPct
+#        Description: Out of combat, bots sit down to eat below the health threshold and drink
+#                     below the mana threshold (the same free food/water the battleground
+#                     preparation logic uses), resuming at ~99%.
+#        Default:     60 / 50
+
+Playerbot.Pve.RestHealthPct = 60
+Playerbot.Pve.RestManaPct = 50
+
+#    Playerbot.Pve.AutoLearnSpellsOnLevelUp
+#        Description: When a managed bot levels up, it learns every class-trainer spell it now
+#                     qualifies for (free, rank chains included), so leveling bots keep a usable
+#                     rotation without visiting trainers.
+#        Default:     1 - (Enabled)
+
+Playerbot.Pve.AutoLearnSpellsOnLevelUp = 1
+
+#    Playerbot.PveGrind.Enable
+#        Description: Idle managed random bots (online through Playerbot.RandomPopulation.*, not
+#                     grouped with a human, not in a battleground or its queue) hunt nearby
+#                     creatures, rest between kills and wander, gaining experience and levels.
+#                     Battleground participation still wins: the queue sweep can pull grinding
+#                     bots into a battleground whenever a human queues.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Playerbot.PveGrind.Enable = 0
+
+#    Playerbot.PveGrind.SearchRadius
+#        Description: Radius in yards a grinding bot scans for its next creature target.
+#        Default:     60
+
+Playerbot.PveGrind.SearchRadius = 60
+
+#    Playerbot.PveGrind.WanderRadius
+#        Description: When nothing attackable is nearby, the bot strolls to a random reachable
+#                     point within this many yards every 12-25 seconds.
+#        Default:     40
+
+Playerbot.PveGrind.WanderRadius = 40
+
+#    Playerbot.PveGrind.MaxLevelAbove
+#    Playerbot.PveGrind.MaxLevelBelow
+#        Description: Level window for grind targets relative to the bot's own level. Creatures
+#                     more than MaxLevelAbove levels higher or MaxLevelBelow levels lower are
+#                     ignored.
+#        Default:     3 / 5
+
+Playerbot.PveGrind.MaxLevelAbove = 3
+Playerbot.PveGrind.MaxLevelBelow = 5
+
+#    Playerbot.PveGrind.AllowElites
+#        Description: Allow grinding bots to pull elite and world-boss creatures.
+#        Default:     0 - (Disabled)
+
+Playerbot.PveGrind.AllowElites = 0
+
+# The in-game command surface for PvE bots:
+#   .playerbot pve summon <name>   - log a bot-account character in, teleport it to you and
+#                                    join it to your group (it follows and assists from then on)
+#   .playerbot pve dismiss [name]  - ungroup and log out the selected/named companion
+#   .playerbot pve status          - PvE state of the selected bot
+# Whisper commands a master can send their companion:
+#   follow / stay / attack / passive / come / dismiss
+#
+# Auction-house population is handled by the core AuctionHouseBot again (it was previously
+# hard-disabled in this fork): configure the AuctionHouseBot.* block in worldserver.conf,
+# most importantly AuctionHouseBot.Account plus Seller/Buyer.Enabled.

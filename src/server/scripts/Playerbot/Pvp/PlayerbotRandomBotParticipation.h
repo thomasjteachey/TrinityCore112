@@ -19,6 +19,7 @@
 #define TRINITY_PLAYERBOT_RANDOM_BOT_PARTICIPATION_H
 
 #include "Define.h"
+#include "ObjectGuid.h"
 #include <vector>
 
 class Player;
@@ -78,6 +79,13 @@ public:
     static bool IsPopulationRuntimeEnabled();
     static bool TriggerImmediateRebalance();
     static std::vector<uint32> GetConfiguredBotAccountIds();
+
+    // Seams for the PvE manager: bring one specific pool character online
+    // (asynchronous - the player materializes on a later world tick), or send
+    // an online managed bot back to the offline pool. Both refuse characters
+    // whose account is not on the configured bot-account allow-list.
+    static bool RequestBotLoginByGuidLow(uint32 characterLowGuid);
+    static bool RequestManagedBotLogout(ObjectGuid const& guid);
 
     static LifecycleObservationSnapshot GetLifecycleObservationSnapshot();
     static RandomBotPopulationSnapshot GetPopulationSnapshot();

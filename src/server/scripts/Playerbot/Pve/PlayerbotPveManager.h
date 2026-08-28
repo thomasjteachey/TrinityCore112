@@ -1,0 +1,93 @@
+/*
+ * This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#ifndef TRINITY_PLAYERBOT_PVE_MANAGER_H
+#define TRINITY_PLAYERBOT_PVE_MANAGER_H
+
+#include "Define.h"
+#include "ObjectGuid.h"
+
+#include <string>
+
+class Player;
+
+namespace playerbot
+{
+struct PveConfig
+{
+    bool enabled = false;
+    float companionFollowDistance = 2.5f;
+    float companionAssistRadius = 45.0f;
+    uint32 autoReviveSeconds = 30;
+    float restHealthPct = 60.0f;
+    float restManaPct = 50.0f;
+    bool autoLearnSpellsOnLevelUp = true;
+    bool grindEnabled = false;
+    float grindSearchRadius = 60.0f;
+    float grindWanderRadius = 40.0f;
+    uint32 grindMaxLevelAbove = 3;
+    uint32 grindMaxLevelBelow = 5;
+    bool grindAllowElites = false;
+};
+
+// Open-world PvE behavior for managed random bots, layered on the existing
+// PvP decision engine: companion mode (grouped with a human: follow, assist,
+// rest, revive) and grind mode (idle bots fight nearby creatures to level).
+// Combat itself reuses PvpCore::BuildClassSpellContext through the PvE
+// engagement flag; this manager only owns target selection and the
+// out-of-combat life around it.
+class PveManager
+{
+public:
+    static void LoadConfig();
+    static PveConfig const& GetConfig();
+
+    // Called from the world-update hook on the world thread: finalizes pending
+    // companion summons/teleports and drains queued group-invite acceptances,
+    // so all group mutations happen on the world thread.
+    static void OnWorldUpdate(uint32 diffMs);
+
+    // Called from RandomBotParticipationManager::ProcessPlayerLifecycle on the
+    // bot's map-update thread (under the per-map decision lock). Internally
+    // cadence-gated; inert inside battlegrounds and duels.
+    static void OnPlayerLifecycleTick(Player* player);
+
+    static void OnBotLogout(Player const* player);
+
+    // True while a bot is companion-bound to a human (or mid-summon): such a
+    // bot must not be queued for battlegrounds or logged out by the
+    // population rebalancer.
+    static bool IsExemptFromBattlegroundOrchestration(Player const* player);
+
+    // Master -> bot whisper command surface ("follow", "stay", "attack",
+    // "passive", "come", "dismiss"). Returns true when the whisper was a
+    // recognized PvE command and has been handled.
+    static bool HandleWhisperCommand(Player* sender, Player* botReceiver, std::string const& command);
+
+    // .playerbot pve summon <name>: logs the pool character in if needed,
+    // teleports it to the summoner and joins the summoner's group.
+    static bool RequestCompanionSummon(Player* summoner, std::string const& characterName, std::string& statusMessage);
+    static bool RequestCompanionDismiss(Player* requester, Player* bot, std::string& statusMessage);
+
+    // Config-gated trainer-spell catch-up whenever a managed bot levels.
+    static void OnManagedBotLevelChanged(Player* player, uint8 oldLevel);
+
+    static std::string BuildStatusLine(Player const* bot);
+};
+}
+
+#endif

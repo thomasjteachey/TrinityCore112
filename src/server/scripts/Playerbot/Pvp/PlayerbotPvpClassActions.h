@@ -34,6 +34,12 @@ public:
     static bool AreRehgarMovementDiagnosticsEnabled();
 
     static bool Execute(Player* player, PvpClassSpellContext const& context);
+    // Seams for the PvE manager: player MotionMasters can sit in a pending/
+    // uninitialized state (see PrepareMotionMasterForExplicitBotMovement), so
+    // external modules must issue follow/point movement through these instead
+    // of calling MotionMaster directly.
+    static bool PrepareForExplicitMovement(Player* player);
+    static bool IssueFollowMovement(Player* player, Unit* target, float desiredDistance);
     static bool IsWarlockCurseTargetCooldownActive(Player const* player, Unit const* target, uint32 spellId);
     static void RegisterWarlockCurseTargetCooldown(Player const* player, Unit const* target, uint32 spellId, std::chrono::seconds cooldown);
     static bool IsCasterSpellCooldownActive(Player const* player, uint32 spellId);
