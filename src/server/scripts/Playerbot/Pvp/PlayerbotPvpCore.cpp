@@ -3491,7 +3491,12 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
         }
     }
 
-    return best;
+    // Route the pick through the reaction delay / jukeable commit window. The
+    // playerbot pvp core merge dropped this call and the follow-up build fix only
+    // restored the function body, so ApplyHumanInterruptReaction sat with zero
+    // callers: bots kicked frame-perfect and unjukeable, and the three
+    // Playerbot.PvpClassSpells.Interrupt.* keys were silent no-ops.
+    return ApplyHumanInterruptReaction(player, best, maxDistance);
 }
 
     bool AnyEnemyPolymorphed(Player const* player, float maxDistance)
@@ -6148,7 +6153,19 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
         return holdDecision;
     }
 
-    if (SpellDecision const racialDecision = SelectRacialSpell(player, target, allyTarget); racialDecision.spellId)
+    // Racials take priority over the class rotation, but only if the pick can
+    // actually be cast this instant. SelectRacialSpell filters on IsSpellReady
+    // alone, and racials bypass AddDecisionCandidate, so the caller's retry loop
+    // cannot suppress a bad pick - without this gate the same uncastable racial
+    // is re-chosen every attempt and class selection never runs at all. The
+    // playerbot pvp core merge dropped the check; see the comment on the gnome
+    // branch of SelectRacialSpell, which still refers to it.
+    //
+    // LOS is not re-tested here: IsDecisionImmediatelyCastable already calls
+    // IsWithinLOSInMap, and the merge-base's separate DecisionTargetIsInLineOfSight
+    // helper no longer exists.
+    SpellDecision const racialDecision = SelectRacialSpell(player, target, allyTarget);
+    if (racialDecision.spellId && IsDecisionImmediatelyCastable(player, racialDecision, target, allyTarget))
         return racialDecision;
 
     if (SpellDecision const utilityDecision = MaybeSelectUtilitySpell(player, target); utilityDecision.spellId)
