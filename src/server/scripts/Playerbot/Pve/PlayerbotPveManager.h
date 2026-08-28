@@ -53,6 +53,9 @@ struct PveConfig
     uint32 relocateDryWanders = 5;
     std::vector<uint32> relocateMaps = { 0, 1 };
     bool combatDiagnostics = false;
+    // Realm economy switch: off = the free eat/drink spells (L+ style);
+    // on = bots buy real food/water/ammo from vendors and consume them (B+).
+    bool restUseConsumables = false;
 };
 
 // Open-world PvE behavior for managed random bots, layered on the existing

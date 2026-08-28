@@ -46,6 +46,7 @@
 #include "Player.h"
 #include "QuestDef.h"
 #include "RBAC.h"
+#include "Spell.h"
 #include "Random.h"
 #include "SharedDefines.h"
 #include "SpellMgr.h"
@@ -126,6 +127,10 @@ struct PveBotState
     std::unordered_map<uint64, PveTimePoint> recentBadTargets;
     bool initialKitDone = false;
     uint32 dryWanderCount = 0;
+    PveTimePoint restingUntil{};
+    uint32 engagedStallTicks = 0;
+    float lastEngagedX = 0.0f;
+    float lastEngagedY = 0.0f;
 };
 
 bool IsRecentErrandTarget(PveBotState& state, ObjectGuid const& guid)
@@ -224,6 +229,28 @@ bool IsHumanPlayer(Player const* player)
 bool HasRestAura(Player const* player)
 {
     return player->HasAura(SPELL_PVE_OUT_OF_COMBAT_EAT) || player->HasAura(SPELL_PVE_OUT_OF_COMBAT_DRINK);
+}
+
+bool IsRestingNow(Player const* player, PveBotState const& state)
+{
+    if (HasRestAura(player))
+        return true;
+
+    // Consumable-based rest has no fixed aura ids to sniff; the state timer
+    // set when the item was used stands in for it.
+    return PveClock::now() < state.restingUntil;
+}
+
+bool IsFoodTemplate(ItemTemplate const* proto)
+{
+    return proto && proto->Class == ITEM_CLASS_CONSUMABLE && proto->SubClass == ITEM_SUBCLASS_FOOD &&
+        proto->Spells[0].SpellCategory == SPELL_CATEGORY_FOOD;
+}
+
+bool IsDrinkTemplate(ItemTemplate const* proto)
+{
+    return proto && proto->Class == ITEM_CLASS_CONSUMABLE && proto->SubClass == ITEM_SUBCLASS_FOOD &&
+        proto->Spells[0].SpellCategory == SPELL_CATEGORY_DRINK;
 }
 
 void RemoveRestAuras(Player* player)
@@ -452,6 +479,130 @@ bool AnyEquippedItemBelowDurabilityPct(Player* bot, uint32 thresholdPct)
     }
 
     return false;
+}
+
+Item* FindBestConsumable(Player* bot, bool drink)
+{
+    Item* best = nullptr;
+    uint32 bestLevel = 0;
+    ForEachBagItem(bot, [&](Item* item, uint8 /*bag*/, uint8 /*slot*/)
+    {
+        ItemTemplate const* proto = item->GetTemplate();
+        if (drink ? !IsDrinkTemplate(proto) : !IsFoodTemplate(proto))
+            return;
+
+        if (proto->RequiredLevel > bot->GetLevel())
+            return;
+
+        if (!best || proto->RequiredLevel >= bestLevel)
+        {
+            best = item;
+            bestLevel = proto->RequiredLevel;
+        }
+    });
+    return best;
+}
+
+uint32 CountConsumableUnits(Player* bot, bool drink)
+{
+    uint32 units = 0;
+    ForEachBagItem(bot, [&](Item* item, uint8 /*bag*/, uint8 /*slot*/)
+    {
+        ItemTemplate const* proto = item->GetTemplate();
+        if (drink ? IsDrinkTemplate(proto) : IsFoodTemplate(proto))
+            units += item->GetCount();
+    });
+    return units;
+}
+
+// Ammo the bot's ranged weapon feeds on, or 0 when none is needed.
+uint32 RequiredAmmoSubclass(Player* bot)
+{
+    Item* ranged = bot->GetWeaponForAttack(RANGED_ATTACK, true);
+    if (!ranged || !ranged->GetTemplate())
+        return 0;
+
+    switch (ranged->GetTemplate()->SubClass)
+    {
+        case ITEM_SUBCLASS_WEAPON_BOW:
+        case ITEM_SUBCLASS_WEAPON_CROSSBOW:
+            return ITEM_SUBCLASS_ARROW;
+        case ITEM_SUBCLASS_WEAPON_GUN:
+            return ITEM_SUBCLASS_BULLET;
+        default:
+            return 0;
+    }
+}
+
+// Buy the best level-appropriate food (and water for mana users, and ammo
+// for ranged users) this vendor sells. Money is checked by the purchase
+// itself; a broke bot just fails quietly and grinds more coin.
+void TryBuySupplies(Player* bot, Creature* vendor)
+{
+    VendorItemData const* vendorItems = vendor->GetVendorItems();
+    if (!vendorItems)
+        return;
+
+    bool const wantsDrink = bot->GetMaxPower(POWER_MANA) > 0;
+    uint32 const ammoSubclass = RequiredAmmoSubclass(bot);
+
+    int32 bestFoodSlot = -1, bestDrinkSlot = -1, bestAmmoSlot = -1;
+    ItemTemplate const* bestFood = nullptr;
+    ItemTemplate const* bestDrink = nullptr;
+    ItemTemplate const* bestAmmo = nullptr;
+    for (uint8 slot = 0; slot < vendorItems->GetItemCount(); ++slot)
+    {
+        VendorItem const* vendorItem = vendorItems->GetItem(slot);
+        if (!vendorItem || vendorItem->ExtendedCost)
+            continue;
+
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(vendorItem->item);
+        if (!proto || proto->RequiredLevel > bot->GetLevel())
+            continue;
+
+        if (IsFoodTemplate(proto) && (!bestFood || proto->RequiredLevel >= bestFood->RequiredLevel))
+        {
+            bestFood = proto;
+            bestFoodSlot = slot;
+        }
+        else if (wantsDrink && IsDrinkTemplate(proto) && (!bestDrink || proto->RequiredLevel >= bestDrink->RequiredLevel))
+        {
+            bestDrink = proto;
+            bestDrinkSlot = slot;
+        }
+        else if (ammoSubclass && proto->Class == ITEM_CLASS_PROJECTILE && proto->SubClass == ammoSubclass &&
+            (!bestAmmo || proto->RequiredLevel >= bestAmmo->RequiredLevel))
+        {
+            bestAmmo = proto;
+            bestAmmoSlot = slot;
+        }
+    }
+
+    auto buyUnits = [&](int32 slot, ItemTemplate const* proto, uint32 desiredUnits)
+    {
+        if (slot < 0 || !proto)
+            return;
+
+        uint32 const buyCount = std::max<uint32>(1, proto->BuyCount);
+        uint32 units = std::max(buyCount, desiredUnits - (desiredUnits % buyCount));
+        units = std::min<uint32>(units, 250);
+        bot->BuyItemFromVendorSlot(vendor->GetGUID(), uint32(slot), proto->ItemId, uint8(units), NULL_BAG, NULL_SLOT);
+    };
+
+    if (bestFood && CountConsumableUnits(bot, false) < 10)
+        buyUnits(bestFoodSlot, bestFood, 20);
+    if (bestDrink && CountConsumableUnits(bot, true) < 10)
+        buyUnits(bestDrinkSlot, bestDrink, 20);
+    if (bestAmmo)
+    {
+        uint32 const currentAmmoId = bot->GetUInt32Value(PLAYER_AMMO_ID);
+        if (!currentAmmoId || bot->GetItemCount(currentAmmoId) < 100)
+        {
+            buyUnits(bestAmmoSlot, bestAmmo, 200);
+            if (bot->GetItemCount(bestAmmo->ItemId))
+                bot->SetAmmo(bestAmmo->ItemId);
+        }
+    }
 }
 
 uint32 SellVendorJunk(Player* bot)
@@ -712,8 +863,26 @@ void StartErrandIfNeeded(Player* bot, PveBotState& state, playerbot::PveConfig c
             if (status.Status == QUEST_STATUS_COMPLETE && !bot->GetQuestRewardStatus(questId))
                 completedQuests.push_back(questId);
 
+    bool const needRepair = AnyEquippedItemBelowDurabilityPct(bot, 35);
+    bool const needSupplies = cfg.restUseConsumables &&
+        (CountConsumableUnits(bot, false) == 0 ||
+            (bot->GetMaxPower(POWER_MANA) > 0 && CountConsumableUnits(bot, true) == 0) ||
+            (RequiredAmmoSubclass(bot) &&
+                (!bot->GetUInt32Value(PLAYER_AMMO_ID) || bot->GetItemCount(bot->GetUInt32Value(PLAYER_AMMO_ID)) == 0)));
     bool const needVendor = cfg.vendorEnabled &&
-        (CountFreeBagSlots(bot) < 4 || AnyEquippedItemBelowDurabilityPct(bot, 35));
+        (CountFreeBagSlots(bot) < 4 || needRepair || needSupplies);
+
+    // A worn-out bot needs a vendor that can actually repair, not just any
+    // merchant; try those first.
+    if (needVendor && needRepair)
+        for (Creature* npc : serviceNpcs)
+            if (!IsRecentErrandTarget(state, npc->GetGUID()) && npc->IsVendor() && npc->HasNpcFlag(UNIT_NPC_FLAG_REPAIR))
+            {
+                state.errandGuid = npc->GetGUID();
+                state.errandKind = PveErrandKind::Vendor;
+                state.errandUntil = PveClock::now() + std::chrono::seconds(90);
+                return;
+            }
 
     auto beginErrand = [&](Creature* npc, PveErrandKind kind)
     {
@@ -810,6 +979,8 @@ bool ProcessErrand(Player* bot, PveBotState& state, playerbot::PveConfig const& 
         uint32 const soldCount = SellVendorJunk(bot);
         if (npc->HasNpcFlag(UNIT_NPC_FLAG_REPAIR))
             bot->DurabilityRepairAll(true, 1.0f, false);
+        if (playerbot::PveManager::GetConfig().restUseConsumables)
+            TryBuySupplies(bot, npc);
         TC_LOG_INFO("playerbots.pve", "Bot {} visited vendor {} (sold {} junk items).",
             bot->GetName(), npc->GetName(), soldCount);
     }
@@ -820,8 +991,65 @@ bool ProcessErrand(Player* bot, PveBotState& state, playerbot::PveConfig const& 
     return false;
 }
 
+// A two-hander upgrade once benched a prot warrior's shield through
+// AutoUnequipOffhandIfNeed, permanently breaking Shield Slam. Undo that
+// state where possible: two-hander in main hand, empty off hand, and both a
+// one-hander and a shield sitting in the bags.
+void TryRestoreShieldProfile(Player* bot)
+{
+    switch (bot->GetClass())
+    {
+        case CLASS_WARRIOR:
+        case CLASS_PALADIN:
+        case CLASS_SHAMAN:
+            break;
+        default:
+            return;
+    }
+
+    Item* mainHand = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
+    if (!mainHand || !mainHand->GetTemplate() || mainHand->GetTemplate()->InventoryType != INVTYPE_2HWEAPON)
+        return;
+
+    if (bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND))
+        return;
+
+    Item* baggedShield = nullptr;
+    Item* baggedOneHander = nullptr;
+    ForEachBagItem(bot, [&](Item* item, uint8 /*bag*/, uint8 /*slot*/)
+    {
+        ItemTemplate const* proto = item->GetTemplate();
+        if (!proto)
+            return;
+
+        if (!baggedShield && proto->InventoryType == INVTYPE_SHIELD)
+            baggedShield = item;
+        if (!baggedOneHander && proto->Class == ITEM_CLASS_WEAPON &&
+            (proto->InventoryType == INVTYPE_WEAPON || proto->InventoryType == INVTYPE_WEAPONMAINHAND))
+            baggedOneHander = item;
+    });
+
+    if (!baggedShield || !baggedOneHander)
+        return;
+
+    uint16 const mainHandPos = uint16(INVENTORY_SLOT_BAG_0 << 8) | EQUIPMENT_SLOT_MAINHAND;
+    bot->SwapItem(baggedOneHander->GetPos(), mainHandPos);
+
+    uint16 dest = 0;
+    if (bot->CanEquipItem(NULL_SLOT, dest, baggedShield, false) == EQUIP_ERR_OK)
+    {
+        uint8 const bag = baggedShield->GetBagSlot();
+        uint8 const slot = baggedShield->GetSlot();
+        bot->RemoveItem(bag, slot, true);
+        bot->EquipItem(dest, baggedShield, true);
+        TC_LOG_INFO("playerbots.pve", "Bot {} restored its one-hander + shield profile.", bot->GetName());
+    }
+}
+
 void TryEquipUpgrades(Player* bot)
 {
+    TryRestoreShieldProfile(bot);
+
     std::vector<std::pair<uint8, uint8>> positions;
     ForEachBagItem(bot, [&](Item* /*item*/, uint8 bag, uint8 slot)
     {
@@ -836,6 +1064,12 @@ void TryEquipUpgrades(Player* bot)
 
         ItemTemplate const* proto = item->GetTemplate();
         if (!proto || (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR))
+            continue;
+
+        // Never bench an equipped off hand (shield!) for a two-hander: the
+        // "upgrade" silently disarms shield-dependent rotations.
+        if (proto->InventoryType == INVTYPE_2HWEAPON &&
+            bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND))
             continue;
 
         uint16 dest = 0;
@@ -1506,6 +1740,38 @@ void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
         if (!bot->IsWithinMeleeRange(victim))
             playerbot::PvpClassActions::IssueFollowMovement(bot, victim, 1.0f);
     }
+
+    // Stalled-chase recovery: a chase generator issued while the
+    // MotionMaster sat in its pending state never actually moves, and the
+    // movement throttle then "preserves" the dead chase forever
+    // (motion=chase, chase_move=no, moving=no). If an engaged bot with a far
+    // target holds the same position for ~1.5s, rebuild its movement.
+    float const victimDistance = bot->GetDistance(victim);
+    if (victimDistance > 35.0f && !bot->HasUnitState(UNIT_STATE_CASTING))
+    {
+        float const deltaX = bot->GetPositionX() - state.lastEngagedX;
+        float const deltaY = bot->GetPositionY() - state.lastEngagedY;
+        if (deltaX * deltaX + deltaY * deltaY < 0.25f)
+        {
+            if (++state.engagedStallTicks >= 6 && !bot->isMoving())
+            {
+                state.engagedStallTicks = 0;
+                if (MotionMaster* motionMaster = bot->GetMotionMaster())
+                    motionMaster->Clear();
+                playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
+                playerbot::PvpClassActions::IssueFollowMovement(bot, victim, 25.0f);
+                TC_LOG_INFO("playerbots.pve", "Bot {} recovered a stalled chase toward {} at {:.0f}y.",
+                    bot->GetName(), victim->GetName(), victimDistance);
+            }
+        }
+        else
+            state.engagedStallTicks = 0;
+
+        state.lastEngagedX = bot->GetPositionX();
+        state.lastEngagedY = bot->GetPositionY();
+    }
+    else
+        state.engagedStallTicks = 0;
 }
 
 bool TryJoinSummonerGroup(Player* summoner, Player* bot)
@@ -1773,7 +2039,7 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
 
     // Buff upkeep before the rest check: buffs only fire above 60% mana,
     // rest starts under 50%, so the two never chase each other.
-    if (cfg.buffsEnabled && !state.engaged && !HasRestAura(bot))
+    if (cfg.buffsEnabled && !state.engaged && !IsRestingNow(bot, state))
         playerbot::PvpCore::TryCastOpenWorldBuff(bot);
 
     // Rest: sit down and use the free food/water once the fight is over.
@@ -1787,17 +2053,39 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         masterAllowsRest = masterSameMap && bot->GetDistance(masterSameMap) < PveRestBreakFollowDistance * 0.75f;
     }
 
-    if (!state.engaged && !bot->IsInCombat() && !HasRestAura(bot) && masterAllowsRest)
+    if (!state.engaged && !bot->IsInCombat() && !IsRestingNow(bot, state) && masterAllowsRest)
     {
         bool const needFood = bot->GetHealthPct() < cfg.restHealthPct;
         bool const needDrink = bot->GetMaxPower(POWER_MANA) > 0 && bot->GetPowerPct(POWER_MANA) < cfg.restManaPct;
         if (needFood || needDrink)
         {
-            playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
-            if (MotionMaster* motionMaster = bot->GetMotionMaster())
-                motionMaster->Clear();
-            bot->StopMoving();
-            bot->CastSpell(bot, needFood ? SPELL_PVE_OUT_OF_COMBAT_EAT : SPELL_PVE_OUT_OF_COMBAT_DRINK, true);
+            if (cfg.restUseConsumables)
+            {
+                // Economy realm: eat/drink the real thing from the bags; a
+                // bot with nothing edible restocks through the vendor errand.
+                Item* consumable = FindBestConsumable(bot, !needFood);
+                if (!consumable && needDrink)
+                    consumable = FindBestConsumable(bot, true);
+                if (consumable)
+                {
+                    playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
+                    if (MotionMaster* motionMaster = bot->GetMotionMaster())
+                        motionMaster->Clear();
+                    bot->StopMoving();
+                    SpellCastTargets targets;
+                    targets.SetUnitTarget(bot);
+                    bot->CastItemUseSpell(consumable, targets, 0, 0);
+                    state.restingUntil = PveClock::now() + std::chrono::seconds(22);
+                }
+            }
+            else
+            {
+                playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
+                if (MotionMaster* motionMaster = bot->GetMotionMaster())
+                    motionMaster->Clear();
+                bot->StopMoving();
+                bot->CastSpell(bot, needFood ? SPELL_PVE_OUT_OF_COMBAT_EAT : SPELL_PVE_OUT_OF_COMBAT_DRINK, true);
+            }
         }
     }
 
@@ -1896,7 +2184,7 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
             target = nearestAttacker;
         else if (master)
             target = PickCompanionTarget(bot, state, master, cfg);
-        else if (cfg.grindEnabled && state.masterGuid.IsEmpty() && !HasRestAura(bot))
+        else if (cfg.grindEnabled && state.masterGuid.IsEmpty() && !IsRestingNow(bot, state))
         {
             PveTimePoint const now = PveClock::now();
             if (now >= state.nextGrindScanAt)
@@ -1935,7 +2223,7 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     if (ProcessPendingLoot(bot, state, cfg))
         return;
 
-    if (HasRestAura(bot))
+    if (IsRestingNow(bot, state))
     {
         bool const stillRecovering = bot->GetHealthPct() < 99.0f ||
             (bot->GetMaxPower(POWER_MANA) > 0 && bot->GetPowerPct(POWER_MANA) < 99.0f);
@@ -1944,6 +2232,7 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
             return;
 
         RemoveRestAuras(bot);
+        state.restingUntil = PveClock::now();
     }
 
     if (ProcessErrand(bot, state, cfg))
@@ -2029,6 +2318,7 @@ void PveManager::LoadConfig()
     g_PveConfig.buffsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Buffs.Enable", true);
     g_PveConfig.talentsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Talents.Enable", true);
     g_PveConfig.combatDiagnostics = sConfigMgr->GetBoolDefault("Playerbot.Pve.CombatDiagnostics", false);
+    g_PveConfig.restUseConsumables = sConfigMgr->GetBoolDefault("Playerbot.Pve.Rest.UseConsumables", false);
     g_PveConfig.relocateEnabled = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.Relocate.Enable", true);
     g_PveConfig.relocateDryWanders = uint32(std::clamp(
         sConfigMgr->GetIntDefault("Playerbot.PveGrind.Relocate.DryWandersBeforeMove", 5), 2, 100));

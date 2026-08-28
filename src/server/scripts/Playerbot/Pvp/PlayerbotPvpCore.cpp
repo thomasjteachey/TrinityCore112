@@ -1431,6 +1431,13 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
         if (!spellInfo)
             return false;
 
+    // A spell whose equipped-item requirement isn't met (Shield Slam without
+    // a shield) fails Spell::CheckItems on every attempt; treating it as
+    // castable commits the decision pass to an impossible pick and starves
+    // the whole rotation behind it.
+    if (knownByPlayer && spellInfo->EquippedItemClass >= 0 && !player->HasItemFitToSpellRequirements(spellInfo))
+        return false;
+
     if (playerbot::PvpCore::ShouldSeekLightwell(player))
     {
         if (spellInfo->CalcCastTime() > 0 || spellInfo->IsChanneled() || spellInfo->IsAutoRepeatRangedSpell())
@@ -5895,8 +5902,14 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     // Improved Backstab lets Assassination use Backstab as its combo builder
     // instead of Hemorrhage. Backstab also carries the behind-target attribute,
     // so the shared reposition-on-cast-failure handling keeps the bot flanking.
-    AddDecisionCandidate(candidates, hasImprovedBackstab && player->IsWithinMeleeRange(target) && IsSpellReady(player, 53), 20.5f,
+    // Backstab is positional: only usable from behind. A rogue holding the
+    // target's aggro (creature facing it) must build with Sinister Strike
+    // instead of spamming an impossible Backstab.
+    bool const behindTarget = target && !target->HasInArc(static_cast<float>(M_PI), player);
+    AddDecisionCandidate(candidates, hasImprovedBackstab && behindTarget && player->IsWithinMeleeRange(target) && IsSpellReady(player, 53), 20.5f,
         { "rogue backstab", "improved backstab combo point builder", 53, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, hasImprovedBackstab && !behindTarget && IsSpellReady(player, 11294), 20.2f,
+        { "rogue sinister strike", "frontal fallback builder while holding aggro", 11294, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, !hasImprovedBackstab && IsSpellReady(player, isCombatRogue ? uint32(11294) : uint32(16511)), 20.0f,
         { isCombatRogue ? "rogue sinister strike" : "rogue hemorrhage", isCombatRogue ? "default combat combo point builder" : "default subtlety combo point builder", isCombatRogue ? uint32(11294) : uint32(16511), playerbot::PvpClassSpellContext::TargetMode::Enemy });
 

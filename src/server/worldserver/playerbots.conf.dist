@@ -475,3 +475,12 @@ Playerbot.PveGrind.Relocate.DryWandersBeforeMove = 5
 #        Default:     "0,1"
 
 Playerbot.PveGrind.Relocate.Maps = "0,1"
+
+#    Playerbot.Pve.Rest.UseConsumables
+#        Description: Realm economy switch for bot recovery. 0 = bots cast the free eat/drink
+#                     spells (Legionnaire+ style). 1 = bots buy real food/water (and ammo for
+#                     ranged weapons) from vendors with their own gold and consume them, and an
+#                     empty pantry triggers a vendor errand (Barracks+ style).
+#        Default:     0
+
+Playerbot.Pve.Rest.UseConsumables = 0
