@@ -46,6 +46,10 @@ struct PveConfig
     bool vendorEnabled = true;
     bool questsEnabled = true;
     bool equipUpgradesEnabled = true;
+    bool buffsEnabled = true;
+    bool talentsEnabled = true;
+    bool relocateEnabled = true;
+    uint32 relocateDryWanders = 5;
 };
 
 // Open-world PvE behavior for managed random bots, layered on the existing

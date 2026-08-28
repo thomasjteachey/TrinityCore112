@@ -427,3 +427,43 @@ Playerbot.Pve.Quests.Enable = 1
 #        Default:     1 - (Enabled)
 
 Playerbot.Pve.EquipUpgrades.Enable = 1
+
+#    Playerbot.Pve.Buffs.Enable
+#        Description: Out of combat, bots keep their class self-buffs up (Mark of the Wild,
+#                     Power Word: Fortitude, Arcane Intellect, armors, aspects, Lightning
+#                     Shield, ...) at real mana cost, gated above 60% mana so buffing never
+#                     fights the eat/drink loop.
+#        Default:     1 - (Enabled)
+
+Playerbot.Pve.Buffs.Enable = 1
+
+#    Playerbot.Pve.Talents.Enable
+#        Description: Bots spend talent points as they level: each character deterministically
+#                     picks one of its class's three signature specs (the same signatures the
+#                     rotation engine detects) and greedily fills that tree tier by tier,
+#                     overflowing into the others when capped. Safe against custom talent-tree
+#                     rebuilds - selection keys on stable spell ids, not talent ids.
+#        Default:     1 - (Enabled)
+
+Playerbot.Pve.Talents.Enable = 1
+
+#    Playerbot.PveGrind.Relocate.Enable
+#        Description: When a grinding bot repeatedly finds nothing attackable (empty or
+#                     outleveled area), the world-thread relocator teleports it to a random
+#                     cluster of level-appropriate hostile spawns on the vanilla continents.
+#                     Enemy-faction zones, water landings and spots near real players are
+#                     rejected; the Z coordinate is grounded before the teleport.
+#        Default:     1 - (Enabled)
+
+Playerbot.PveGrind.Relocate.Enable = 1
+
+#    Playerbot.PveGrind.Relocate.DryWandersBeforeMove
+#        Description: How many consecutive fruitless wander cycles (no creature found within
+#                     3x the search radius) trigger a relocation.
+#        Default:     5
+
+Playerbot.PveGrind.Relocate.DryWandersBeforeMove = 5
+
+#    Playerbot.Pve.Quests.Enable also covers gameobject objectives: bots walk to and use
+#    quest goobers (RequiredNpcOrGo credit) and loot quest chests within 120 yards of their
+#    grind area. Gathering professions and exploration objectives remain unimplemented.

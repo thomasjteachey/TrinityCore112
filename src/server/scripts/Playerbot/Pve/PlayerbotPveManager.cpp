@@ -27,6 +27,8 @@
 #include "CharacterCache.h"
 #include "Configuration/Config.h"
 #include "Creature.h"
+#include "DBCStores.h"
+#include "GameObject.h"
 #include "GameTime.h"
 #include "Globals/ObjectAccessor.h"
 #include "GridNotifiers.h"
@@ -36,6 +38,7 @@
 #include "Item.h"
 #include "Log.h"
 #include "Loot.h"
+#include "MapManager.h"
 #include "Map.h"
 #include "MotionMaster.h"
 #include "ObjectMgr.h"
@@ -52,9 +55,12 @@
 #include "WorldSession.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <map>
 #include <mutex>
 #include <sstream>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -81,7 +87,8 @@ enum class PveErrandKind : uint8
 {
     None = 0,
     Vendor,
-    QuestGiver
+    QuestGiver,
+    QuestObject
 };
 
 struct PveBotState
@@ -104,6 +111,10 @@ struct PveBotState
     PveTimePoint errandUntil{};
     PveTimePoint nextErrandScanAt{};
     PveTimePoint nextEquipCheckAt{};
+    PveTimePoint nextTalentCheckAt{};
+    ObjectGuid recentQuestObjectGuid;
+    PveTimePoint recentQuestObjectUntil{};
+    uint32 dryWanderCount = 0;
 };
 
 std::unordered_map<uint64, PveBotState> g_PveBotStateByGuid;
@@ -120,6 +131,11 @@ struct PendingSummon
 std::mutex g_PvePendingLock;
 std::unordered_map<uint64, PendingSummon> g_PendingSummonsByBotGuid;
 std::unordered_set<uint64> g_PendingGroupInviteAccepts;
+std::unordered_set<uint64> g_PendingGrindRelocations;
+
+GameObject* FindNearestQuestGameObject(Player* bot, PveBotState const& state, float radius);
+void UseQuestGameObject(Player* bot, PveBotState& state, GameObject* go);
+bool BotHasIncompleteQuest(Player* bot);
 
 bool IsHumanPlayer(Player const* player)
 {
@@ -508,6 +524,21 @@ void StartErrandIfNeeded(Player* bot, PveBotState& state, playerbot::PveConfig c
     if (!cfg.questsEnabled && !cfg.vendorEnabled)
         return;
 
+    // Gameobject objectives first: they sit inside the grind area, so
+    // finishing them costs almost nothing and unblocks turn-ins.
+    if (cfg.questsEnabled && BotHasIncompleteQuest(bot))
+    {
+        if (GameObject* questGo = FindNearestQuestGameObject(bot, state, 120.0f))
+        {
+            state.errandGuid = questGo->GetGUID();
+            state.errandKind = PveErrandKind::QuestObject;
+            state.errandUntil = PveClock::now() + std::chrono::seconds(90);
+            TC_LOG_DEBUG("playerbots.pve", "Bot {} starting quest-object errand to {} at {:.0f}y.",
+                bot->GetName(), questGo->GetEntry(), bot->GetDistance(questGo));
+            return;
+        }
+    }
+
     std::vector<Creature*> serviceNpcs;
     ErrandNpcCheck check{ bot };
     Trinity::CreatureListSearcher<ErrandNpcCheck> searcher(bot, serviceNpcs, check);
@@ -574,6 +605,26 @@ bool ProcessErrand(Player* bot, PveBotState& state, playerbot::PveConfig const& 
     // drops its errand and follows.
     if (!state.masterGuid.IsEmpty() || PveClock::now() > state.errandUntil)
     {
+        clearErrand();
+        return false;
+    }
+
+    if (state.errandKind == PveErrandKind::QuestObject)
+    {
+        GameObject* questGo = ObjectAccessor::GetGameObject(*bot, state.errandGuid);
+        if (!questGo || !questGo->isSpawned())
+        {
+            clearErrand();
+            return false;
+        }
+
+        if (!bot->IsWithinDistInMap(questGo, INTERACTION_DISTANCE))
+        {
+            MoveTowardThrottled(bot, questGo->GetPosition());
+            return true;
+        }
+
+        UseQuestGameObject(bot, state, questGo);
         clearErrand();
         return false;
     }
@@ -646,6 +697,448 @@ void TryEquipUpgrades(Player* bot)
         TC_LOG_INFO("playerbots.pve", "Bot {} equipped {} (item level {}).",
             bot->GetName(), proto->Name1, proto->ItemLevel);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Talent auto-spend
+//
+// The talent trees on this fork are CUSTOM (rebuilt from talent_lplus, ids
+// renumbered on every regeneration), so no premade id lists can be trusted.
+// Instead: pick the tab that contains the signature talent of the bot's
+// assigned profile (same signature spells DetectClassicClassProfile keys on -
+// spell ids are stable across talent rebuilds), then greedily fill that tab
+// tier by tier. Player::LearnTalent validates class, prerequisites and row
+// gates itself and silently no-ops, so the greedy loop is safe by
+// construction.
+// ---------------------------------------------------------------------------
+
+// Signature talent SPELLS per class, Primary/Secondary/Tertiary - keep in
+// sync with DetectClassicClassProfile in PlayerbotPvpCore.cpp.
+std::array<uint32, 3> GetProfileSignatureSpells(uint8 classId)
+{
+    switch (classId)
+    {
+        case CLASS_WARRIOR: return { 12294, 81273, 23922 };
+        case CLASS_PALADIN: return { 20473, 20925, 20375 };
+        case CLASS_HUNTER:  return { 81300, 19506, 19386 };
+        case CLASS_ROGUE:   return { 81302, 13750, 14185 };
+        case CLASS_PRIEST:  return { 10060, 724, 15473 };
+        case CLASS_SHAMAN:  return { 16166, 17364, 16188 };
+        case CLASS_MAGE:    return { 12042, 33041, 11426 };
+        case CLASS_WARLOCK: return { 48181, 19028, 17962 };
+        case CLASS_DRUID:   return { 24858, 18562, 17007 };
+        default:            return { 0, 0, 0 };
+    }
+}
+
+std::vector<TalentEntry const*> const& GetSortedTabTalents(uint32 tabId)
+{
+    static std::mutex cacheLock;
+    static std::unordered_map<uint32, std::vector<TalentEntry const*>> cacheByTab;
+
+    std::lock_guard<std::mutex> guard(cacheLock);
+    auto const [itr, inserted] = cacheByTab.try_emplace(tabId);
+    if (inserted)
+    {
+        for (TalentEntry const* talent : sTalentStore)
+            if (talent && talent->TabID == tabId)
+                itr->second.push_back(talent);
+
+        std::sort(itr->second.begin(), itr->second.end(), [](TalentEntry const* left, TalentEntry const* right)
+        {
+            if (left->TierID != right->TierID)
+                return left->TierID < right->TierID;
+            return left->ColumnIndex < right->ColumnIndex;
+        });
+    }
+
+    return itr->second;
+}
+
+uint32 FindTalentTabContainingSpell(uint32 spellId)
+{
+    if (!spellId)
+        return 0;
+
+    for (TalentEntry const* talent : sTalentStore)
+        if (talent)
+            for (uint32 rank = 0; rank < MAX_TALENT_RANK; ++rank)
+                if (talent->SpellRank[rank] == spellId)
+                    return talent->TabID;
+
+    return 0;
+}
+
+std::vector<uint32> GetClassTalentTabs(Player const* bot)
+{
+    std::vector<uint32> tabs;
+    for (TalentTabEntry const* tab : sTalentTabStore)
+        if (tab && (tab->ClassMask & bot->GetClassMask()) && !tab->PetTalentMask)
+            tabs.push_back(tab->ID);
+
+    std::sort(tabs.begin(), tabs.end(), [](uint32 left, uint32 right)
+    {
+        TalentTabEntry const* leftTab = sTalentTabStore.LookupEntry(left);
+        TalentTabEntry const* rightTab = sTalentTabStore.LookupEntry(right);
+        return (leftTab ? leftTab->OrderIndex : 0) < (rightTab ? rightTab->OrderIndex : 0);
+    });
+    return tabs;
+}
+
+uint8 CurrentTalentRank(Player const* bot, TalentEntry const* talent)
+{
+    for (int8 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
+        if (talent->SpellRank[rank] && bot->HasTalent(talent->SpellRank[rank], bot->GetActiveSpec()))
+            return uint8(rank + 1);
+
+    return 0;
+}
+
+// One greedy pass over a tab; returns points spent.
+uint32 GreedySpendInTab(Player* bot, uint32 tabId)
+{
+    uint32 spent = 0;
+    bool progress = true;
+    while (progress && bot->GetFreeTalentPoints())
+    {
+        progress = false;
+        for (TalentEntry const* talent : GetSortedTabTalents(tabId))
+        {
+            uint8 const currentRank = CurrentTalentRank(bot, talent);
+            if (currentRank >= MAX_TALENT_RANK || !talent->SpellRank[currentRank])
+                continue;
+
+            uint32 const before = bot->GetFreeTalentPoints();
+            bot->LearnTalent(talent->ID, currentRank);
+            if (bot->GetFreeTalentPoints() < before)
+            {
+                spent += before - bot->GetFreeTalentPoints();
+                progress = true;
+                if (!bot->GetFreeTalentPoints())
+                    return spent;
+            }
+        }
+    }
+
+    return spent;
+}
+
+void SpendPendingTalentPoints(Player* bot)
+{
+    if (bot->GetLevel() < 10 || !bot->GetFreeTalentPoints())
+        return;
+
+    std::array<uint32, 3> const signatures = GetProfileSignatureSpells(bot->GetClass());
+    // Deterministic per-character profile so a class's bots spread across
+    // specs but each keeps the same build for life.
+    uint32 const profileIndex = uint32(bot->GetGUID().GetCounter() % 3);
+    uint32 preferredTab = FindTalentTabContainingSpell(signatures[profileIndex]);
+    for (uint32 probe = 1; probe < 3 && !preferredTab; ++probe)
+        preferredTab = FindTalentTabContainingSpell(signatures[(profileIndex + probe) % 3]);
+
+    std::vector<uint32> const classTabs = GetClassTalentTabs(bot);
+    if (!preferredTab && !classTabs.empty())
+        preferredTab = classTabs.front();
+    if (!preferredTab)
+        return;
+
+    uint32 spent = GreedySpendInTab(bot, preferredTab);
+    // Overflow into the other trees once the main tab can't absorb points.
+    for (uint32 tabId : classTabs)
+        if (tabId != preferredTab && bot->GetFreeTalentPoints())
+            spent += GreedySpendInTab(bot, tabId);
+
+    if (spent)
+        TC_LOG_INFO("playerbots.pve", "Bot {} spent {} talent points (main tab {}).",
+            bot->GetName(), spent, preferredTab);
+}
+
+// ---------------------------------------------------------------------------
+// Level-appropriate relocation (the reference module's teleport-for-level,
+// rebuilt on this core's in-memory spawn store)
+// ---------------------------------------------------------------------------
+
+struct GrindSpot
+{
+    uint16 mapId = 0;
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+};
+
+std::mutex g_GrindSpotLock;
+std::unordered_map<uint8, std::vector<GrindSpot>> g_GrindSpotsByLevel;
+bool g_GrindSpotsBuilt = false;
+
+// World thread only. Mirrors the reference filters: normal-rank lootable
+// mobs with tight level bands and short respawns, excluding service NPCs,
+// friendly/guard factions, critters and unattackable flags; clusters of 3+
+// spawns in a 50yd cell become one candidate spot for bot levels
+// [meanLevel-1 .. meanLevel+3].
+void BuildGrindSpotCacheOnce()
+{
+    std::lock_guard<std::mutex> guard(g_GrindSpotLock);
+    if (g_GrindSpotsBuilt)
+        return;
+    g_GrindSpotsBuilt = true;
+
+    struct SpotBucket
+    {
+        uint32 count = 0;
+        GrindSpot spot;
+        uint8 meanLevel = 0;
+    };
+    std::map<std::tuple<uint16, int32, int32>, SpotBucket> buckets;
+
+    for (auto const& [spawnId, data] : sObjectMgr->GetAllCreatureData())
+    {
+        // Barracks+ is a classic realm: the two vanilla continents only.
+        if (data.mapId != 0 && data.mapId != 1)
+            continue;
+
+        if (data.spawntimesecs >= 1000)
+            continue;
+
+        CreatureTemplate const* proto = sObjectMgr->GetCreatureTemplate(data.id);
+        if (!proto || proto->npcflag || !proto->lootid || proto->rank != CREATURE_ELITE_NORMAL)
+            continue;
+
+        if (proto->maxlevel < proto->minlevel || proto->maxlevel - proto->minlevel >= 3)
+            continue;
+
+        if (proto->type == CREATURE_TYPE_CRITTER || proto->type == CREATURE_TYPE_TOTEM)
+            continue;
+
+        if (proto->flags_extra & (CREATURE_FLAG_EXTRA_CIVILIAN | CREATURE_FLAG_EXTRA_TRIGGER))
+            continue;
+
+        // Friendly/guard factions the reference excludes explicitly.
+        switch (proto->faction)
+        {
+            case 11: case 71: case 79: case 85: case 188: case 1575:
+                continue;
+            default:
+                break;
+        }
+
+        uint32 const unitFlags = proto->unit_flags | data.unit_flags;
+        if (unitFlags & (UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_UNINTERACTIBLE))
+            continue;
+
+        uint8 const meanLevel = uint8((proto->minlevel + proto->maxlevel + 1) / 2);
+        if (!meanLevel || meanLevel > 63)
+            continue;
+
+        auto const key = std::make_tuple(uint16(data.mapId),
+            int32(data.spawnPoint.GetPositionX()) / 50, int32(data.spawnPoint.GetPositionY()) / 50);
+        SpotBucket& bucket = buckets[key];
+        if (!bucket.count)
+        {
+            bucket.spot = { uint16(data.mapId), data.spawnPoint.GetPositionX(),
+                data.spawnPoint.GetPositionY(), data.spawnPoint.GetPositionZ() };
+            bucket.meanLevel = meanLevel;
+        }
+        ++bucket.count;
+    }
+
+    uint32 spotCount = 0;
+    for (auto const& [key, bucket] : buckets)
+    {
+        if (bucket.count < 3)
+            continue;
+
+        ++spotCount;
+        for (int32 level = int32(bucket.meanLevel) - 1; level <= int32(bucket.meanLevel) + 3; ++level)
+            if (level >= 1 && level <= 60)
+                g_GrindSpotsByLevel[uint8(level)].push_back(bucket.spot);
+    }
+
+    TC_LOG_INFO("playerbots.pve", "Grind spot cache built: {} clusters across {} level buckets.",
+        spotCount, g_GrindSpotsByLevel.size());
+}
+
+bool HasHumanPlayerNearby(Player* bot, float radius)
+{
+    Map* map = bot->FindMap();
+    if (!map)
+        return false;
+
+    for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (candidate && candidate != bot && IsHumanPlayer(candidate) && bot->IsWithinDistInMap(candidate, radius))
+            return true;
+    }
+
+    return false;
+}
+
+// World thread. Teleports one bot to a random spot for its level, with the
+// reference safety checks: loaded map, no enemy-faction zone, not into
+// water, grounded Z, and never in sight of a real player.
+void ProcessPendingGrindRelocations()
+{
+    std::unordered_set<uint64> drained;
+    {
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        drained.swap(g_PendingGrindRelocations);
+    }
+
+    if (drained.empty())
+        return;
+
+    BuildGrindSpotCacheOnce();
+
+    for (uint64 botRawGuid : drained)
+    {
+        Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid));
+        if (!bot || !bot->IsInWorld() || !bot->IsAlive() || bot->InBattleground() ||
+            bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
+            continue;
+
+        if (HasHumanPlayerNearby(bot, 150.0f))
+            continue;
+
+        std::vector<GrindSpot> candidates;
+        {
+            std::lock_guard<std::mutex> guard(g_GrindSpotLock);
+            uint8 level = uint8(std::min<uint32>(bot->GetLevel(), 60));
+            // Walk down a few brackets if the exact level has no clusters.
+            for (uint8 probe = 0; probe < 5 && candidates.empty() && level > probe; ++probe)
+            {
+                auto itr = g_GrindSpotsByLevel.find(level - probe);
+                if (itr != g_GrindSpotsByLevel.end())
+                    candidates = itr->second;
+            }
+        }
+
+        if (candidates.empty())
+            continue;
+
+        for (uint8 attempt = 0; attempt < 10; ++attempt)
+        {
+            GrindSpot const& spot = candidates[urand(0, uint32(candidates.size() - 1))];
+            Map* map = sMapMgr->FindMap(spot.mapId, 0);
+            if (!map)
+                continue;
+
+            uint32 const zoneId = map->GetZoneId(PHASEMASK_NORMAL, spot.x, spot.y, spot.z);
+            if (AreaTableEntry const* zone = sAreaTableStore.LookupEntry(zoneId))
+            {
+                if (bot->GetTeamId() == TEAM_ALLIANCE && zone->FactionGroupMask == 4)
+                    continue;
+                if (bot->GetTeamId() == TEAM_HORDE && zone->FactionGroupMask == 2)
+                    continue;
+            }
+
+            if (map->IsInWater(PHASEMASK_NORMAL, spot.x, spot.y, spot.z))
+                continue;
+
+            float const ground = map->GetHeight(PHASEMASK_NORMAL, spot.x, spot.y, spot.z + 5.0f);
+            if (ground <= INVALID_HEIGHT)
+                continue;
+
+            playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), false);
+            if (MotionMaster* motionMaster = bot->GetMotionMaster())
+                motionMaster->Clear();
+            bot->TeleportTo(spot.mapId, spot.x, spot.y, ground + 0.05f, frand(0.0f, 6.28f));
+            TC_LOG_INFO("playerbots.pve", "Relocated grind bot {} (level {}) to map {} {:.0f} {:.0f}.",
+                bot->GetName(), bot->GetLevel(), spot.mapId, spot.x, spot.y);
+            break;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Gameobject quest objectives (goobers grant RequiredNpcOrGo<0 credit via
+// Use(); quest chests are looted for their quest items)
+// ---------------------------------------------------------------------------
+
+struct QuestGameObjectCheck
+{
+    Player* bot;
+
+    bool operator()(GameObject* go) const
+    {
+        if (!go->isSpawned() || !go->ActivateToQuest(bot))
+            return false;
+
+        GameobjectTypes const type = go->GetGoType();
+        return type == GAMEOBJECT_TYPE_GOOBER || type == GAMEOBJECT_TYPE_CHEST;
+    }
+};
+
+GameObject* FindNearestQuestGameObject(Player* bot, PveBotState const& state, float radius)
+{
+    std::vector<GameObject*> matches;
+    QuestGameObjectCheck check{ bot };
+    Trinity::GameObjectListSearcher<QuestGameObjectCheck> searcher(bot, matches, check);
+    Cell::VisitGridObjects(bot, searcher, radius);
+
+    GameObject* nearest = nullptr;
+    float nearestDistance = 0.0f;
+    bool const suppressRecent = PveClock::now() < state.recentQuestObjectUntil;
+    for (GameObject* candidate : matches)
+    {
+        if (suppressRecent && candidate->GetGUID() == state.recentQuestObjectGuid)
+            continue;
+
+        float const distance = bot->GetDistance(candidate);
+        if (!nearest || distance < nearestDistance)
+        {
+            nearest = candidate;
+            nearestDistance = distance;
+        }
+    }
+
+    return nearest;
+}
+
+void UseQuestGameObject(Player* bot, PveBotState& state, GameObject* go)
+{
+    // Whatever happens next, do not immediately re-pick this object: a
+    // locked or script-gated one would otherwise loop the errand forever.
+    state.recentQuestObjectGuid = go->GetGUID();
+    state.recentQuestObjectUntil = PveClock::now() + std::chrono::minutes(2);
+
+    if (go->GetGoType() == GAMEOBJECT_TYPE_GOOBER)
+    {
+        go->Use(bot);
+        TC_LOG_INFO("playerbots.pve", "Bot {} used quest object {} ({}).",
+            bot->GetName(), go->GetEntry(), go->GetGOInfo() ? go->GetGOInfo()->name : "");
+        return;
+    }
+
+    if (go->GetGoType() != GAMEOBJECT_TYPE_CHEST || go->getLootState() != GO_READY)
+        return;
+
+    bot->SendLoot(go->GetGUID(), LOOT_SKINNING);
+    Loot* loot = &go->loot;
+    if (loot->gold)
+    {
+        bot->ModifyMoney(int32(loot->gold));
+        loot->gold = 0;
+        loot->NotifyMoneyRemoved();
+    }
+
+    uint32 const maxSlot = loot->GetMaxSlotInLootFor(bot);
+    for (uint8 slot = 0; slot < maxSlot; ++slot)
+        bot->StoreLootItem(slot, loot);
+
+    if (bot->GetLootGUID() == go->GetGUID())
+        bot->GetSession()->DoLootRelease(go->GetGUID());
+
+    TC_LOG_INFO("playerbots.pve", "Bot {} looted quest chest {} ({}).",
+        bot->GetName(), go->GetEntry(), go->GetGOInfo() ? go->GetGOInfo()->name : "");
+}
+
+bool BotHasIncompleteQuest(Player* bot)
+{
+    for (auto const& [questId, status] : bot->getQuestStatusMap())
+        if (status.Status == QUEST_STATUS_INCOMPLETE)
+            return true;
+
+    return false;
 }
 
 Unit* PickCompanionTarget(Player* bot, Player* master, playerbot::PveConfig const& cfg)
@@ -965,6 +1458,11 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
             QueuePendingSummon(bot->GetGUID(), state.masterGuid, false);
     }
 
+    // Buff upkeep before the rest check: buffs only fire above 60% mana,
+    // rest starts under 50%, so the two never chase each other.
+    if (cfg.buffsEnabled && !state.engaged && !HasRestAura(bot))
+        playerbot::PvpCore::TryCastOpenWorldBuff(bot);
+
     // Rest: sit down and use the free food/water once the fight is over.
     if (!state.engaged && !bot->IsInCombat() && !HasRestAura(bot))
     {
@@ -996,6 +1494,12 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     {
         state.nextEquipCheckAt = now + std::chrono::seconds(15);
         TryEquipUpgrades(bot);
+    }
+
+    if (cfg.talentsEnabled && !bot->IsInCombat() && now >= state.nextTalentCheckAt)
+    {
+        state.nextTalentCheckAt = now + std::chrono::seconds(60);
+        SpendPendingTalentPoints(bot);
     }
 }
 
@@ -1037,6 +1541,7 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
 
     if (target)
     {
+        state.dryWanderCount = 0;
         if (bot->GetTarget() != target->GetGUID())
             bot->SetTarget(target->GetGUID());
         if (!state.engaged)
@@ -1099,10 +1604,20 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
                 // area. The engage-radius scan takes over on arrival.
                 if (Creature* prospect = FindGrindProspect(bot, cfg))
                 {
+                    state.dryWanderCount = 0;
                     playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
                     bot->GetMotionMaster()->MovePoint(0, prospect->GetPosition(), true);
                     TC_LOG_DEBUG("playerbots.pve", "Grind bot {} walking toward prospect {} at {:.0f}y.",
                         bot->GetName(), prospect->GetName(), bot->GetDistance(prospect));
+                }
+                else if (cfg.relocateEnabled && ++state.dryWanderCount >= cfg.relocateDryWanders)
+                {
+                    // Nothing attackable anywhere near, repeatedly: this area
+                    // is empty or outleveled. Hand the bot to the world-thread
+                    // relocator, which drops it at a spot for its level.
+                    state.dryWanderCount = 0;
+                    std::lock_guard<std::mutex> guard(g_PvePendingLock);
+                    g_PendingGrindRelocations.insert(bot->GetGUID().GetRawValue());
                 }
                 else
                 {
@@ -1137,6 +1652,11 @@ void PveManager::LoadConfig()
     g_PveConfig.vendorEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Vendor.Enable", true);
     g_PveConfig.questsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Quests.Enable", true);
     g_PveConfig.equipUpgradesEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.EquipUpgrades.Enable", true);
+    g_PveConfig.buffsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Buffs.Enable", true);
+    g_PveConfig.talentsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Talents.Enable", true);
+    g_PveConfig.relocateEnabled = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.Relocate.Enable", true);
+    g_PveConfig.relocateDryWanders = uint32(std::clamp(
+        sConfigMgr->GetIntDefault("Playerbot.PveGrind.Relocate.DryWandersBeforeMove", 5), 2, 100));
 }
 
 PveConfig const& PveManager::GetConfig()
@@ -1157,6 +1677,8 @@ void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
 
     ProcessPendingGroupInviteAccepts();
     ProcessPendingSummons();
+    if (g_PveConfig.relocateEnabled)
+        ProcessPendingGrindRelocations();
 }
 
 void PveManager::OnPlayerLifecycleTick(Player* player)
@@ -1224,6 +1746,7 @@ void PveManager::OnBotLogout(Player const* player)
     std::lock_guard<std::mutex> guard(g_PvePendingLock);
     g_PendingSummonsByBotGuid.erase(rawGuid);
     g_PendingGroupInviteAccepts.erase(rawGuid);
+    g_PendingGrindRelocations.erase(rawGuid);
 }
 
 bool PveManager::IsExemptFromBattlegroundOrchestration(Player const* player)
@@ -1395,11 +1918,18 @@ bool PveManager::RequestCompanionDismiss(Player* requester, Player* bot, std::st
 
 void PveManager::OnManagedBotLevelChanged(Player* player, uint8 /*oldLevel*/)
 {
-    if (!g_PveConfig.enabled || !g_PveConfig.autoLearnSpellsOnLevelUp)
+    if (!g_PveConfig.enabled)
         return;
 
     if (!player || !playerbot::IsManagedRandomBot(player))
         return;
+
+    if (!g_PveConfig.autoLearnSpellsOnLevelUp)
+    {
+        if (g_PveConfig.talentsEnabled)
+            SpendPendingTalentPoints(player);
+        return;
+    }
 
     // Same loop as ".learn my trainer": keep taking every class-trainer spell
     // the bot now qualifies for until a full pass adds nothing, so rank chains
@@ -1434,6 +1964,9 @@ void PveManager::OnManagedBotLevelChanged(Player* player, uint8 /*oldLevel*/)
     if (learned)
         TC_LOG_DEBUG("playerbots.pve", "Managed bot {} learned {} trainer spells on reaching level {}.",
             player->GetGUID().ToString(), learned, player->GetLevel());
+
+    if (g_PveConfig.talentsEnabled)
+        SpendPendingTalentPoints(player);
 }
 
 std::string PveManager::BuildStatusLine(Player const* bot)

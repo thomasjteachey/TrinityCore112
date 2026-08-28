@@ -6569,6 +6569,95 @@ bool PvpCore::IsPveCombatEngaged(Player const* player)
     return g_PveCombatEngagedGuids.find(player->GetGUID().GetRawValue()) != g_PveCombatEngagedGuids.end();
 }
 
+bool PvpCore::TryCastOpenWorldBuff(Player* player)
+{
+    if (!player || !player->IsAlive() || player->IsInCombat() || !player->IsInWorld())
+        return false;
+
+    // {primary chain, alternate chain}: the alternate is the lower-level
+    // stand-in (Demon Skin before Demon Armor, Monkey before Hawk); holding
+    // EITHER version's aura satisfies the slot.
+    struct OpenWorldBuff
+    {
+        uint32 chainSpellId;
+        uint32 alternateChainSpellId;
+    };
+
+    std::vector<OpenWorldBuff> candidates;
+    switch (player->GetClass())
+    {
+        case CLASS_WARRIOR:
+            // Battle Shout costs rage; only worth trying with leftover rage
+            // from the last fight.
+            if (player->GetPower(POWER_RAGE) >= 100)
+                candidates.push_back({ 6673, 0 });
+            break;
+        case CLASS_PALADIN:
+            candidates.push_back({ 19740, 0 });  // Blessing of Might
+            candidates.push_back({ 465, 7294 }); // Devotion Aura unless a Retribution Aura is up
+            break;
+        case CLASS_HUNTER:
+            candidates.push_back({ 13165, 13163 }); // Aspect of the Hawk, else Monkey
+            break;
+        case CLASS_PRIEST:
+            candidates.push_back({ 1243, 0 });   // Power Word: Fortitude
+            candidates.push_back({ 588, 0 });    // Inner Fire
+            candidates.push_back({ 14752, 0 });  // Divine Spirit
+            break;
+        case CLASS_SHAMAN:
+            candidates.push_back({ 324, 0 });    // Lightning Shield
+            break;
+        case CLASS_MAGE:
+            candidates.push_back({ 1459, 0 });   // Arcane Intellect
+            candidates.push_back({ 7302, 168 }); // Ice Armor, else Frost Armor
+            break;
+        case CLASS_WARLOCK:
+            candidates.push_back({ 706, 687 });  // Demon Armor, else Demon Skin
+            break;
+        case CLASS_DRUID:
+            candidates.push_back({ 1126, 0 });   // Mark of the Wild
+            candidates.push_back({ 467, 0 });    // Thorns
+            break;
+        default:
+            break;
+    }
+
+    if (candidates.empty())
+        return false;
+
+    // Keep clear of the eat/drink loop: rest starts under 50% mana, so a
+    // buff that spends mana only fires comfortably above it.
+    bool const isManaUser = player->GetMaxPower(POWER_MANA) > 0;
+    if (isManaUser && player->GetPowerPct(POWER_MANA) < 60.0f)
+        return false;
+
+    for (OpenWorldBuff const& candidate : candidates)
+    {
+        uint32 chainId = candidate.chainSpellId;
+        uint32 resolved = ResolveKnownPlayerSpellInChain(player, chainId);
+        if (!resolved && candidate.alternateChainSpellId)
+        {
+            chainId = candidate.alternateChainSpellId;
+            resolved = ResolveKnownPlayerSpellInChain(player, chainId);
+        }
+
+        if (!resolved)
+            continue;
+
+        if (HasAuraFromSpellChain(player, candidate.chainSpellId) ||
+            (candidate.alternateChainSpellId && HasAuraFromSpellChain(player, candidate.alternateChainSpellId)))
+            continue;
+
+        if (!IsSpellReady(player, chainId))
+            continue;
+
+        if (player->CastSpell(player, resolved, false) == SPELL_CAST_OK)
+            return true;
+    }
+
+    return false;
+}
+
 void PvpCore::LoadConfig()
 {
     g_PvpCoreConfig.moduleEnabled = sConfigMgr->GetBoolDefault("Playerbot.Enable", false);

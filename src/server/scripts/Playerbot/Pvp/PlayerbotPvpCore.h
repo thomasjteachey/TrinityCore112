@@ -249,6 +249,14 @@ public:
     // the bot's own selected target.
     static void SetPveCombatEngagement(ObjectGuid const& botGuid, bool engaged);
     static bool IsPveCombatEngaged(Player const* player);
+    // Open-world buff upkeep for PvE bots: casts at most ONE missing
+    // self-buff (highest known rank) per call, at real mana cost, mana-gated
+    // so it never fights the eat/drink loop. Returns true when a cast was
+    // issued. The battleground preparation selectors are NOT reusable here:
+    // their druid/priest/shaman content lives behind a hard InBattleground()
+    // gate plus the zero-mana-cost window that only exists under the
+    // Preparation aura.
+    static bool TryCastOpenWorldBuff(Player* player);
     static bool CanMageBlinkOutOfControl(Player const* player);
     static bool CanHunterBestialWrathOutOfControl(Player const* player);
     static bool IsEffectivelyImmuneTarget(Player const* player, Unit const* target);
