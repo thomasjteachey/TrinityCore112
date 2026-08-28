@@ -256,7 +256,9 @@ void DisengagePveCombat(Player* bot, PveBotState& state)
     state.engaged = false;
     if (bot->GetVictim())
         bot->AttackStop();
-    bot->SetTarget(ObjectGuid::Empty);
+    // Player::SetTarget is an EMPTY override ("does not apply to players") -
+    // player selection only changes through SetSelection.
+    bot->SetSelection(ObjectGuid::Empty);
 }
 
 void QueuePendingSummon(ObjectGuid const& botGuid, ObjectGuid const& summonerGuid, bool joinGroup)
@@ -1909,7 +1911,7 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     {
         state.dryWanderCount = 0;
         if (bot->GetTarget() != target->GetGUID())
-            bot->SetTarget(target->GetGUID());
+            bot->SetSelection(target->GetGUID());
         if (!state.engaged)
         {
             state.engaged = true;
