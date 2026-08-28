@@ -626,8 +626,14 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         if (now >= state.nextWanderAt)
         {
             state.nextWanderAt = now + std::chrono::seconds(urand(12, 25));
+            // A freshly logged-in player's MotionMaster is EMPTY and reports
+            // MAX_MOTION_TYPE, not IDLE - treating only IDLE as "free to
+            // wander" left spawned bots standing forever.
             MotionMaster* motionMaster = bot->GetMotionMaster();
-            bool const movementIdle = !motionMaster || motionMaster->GetCurrentMovementGeneratorType() == IDLE_MOTION_TYPE;
+            MovementGeneratorType const currentMovement = motionMaster
+                ? motionMaster->GetCurrentMovementGeneratorType()
+                : MAX_MOTION_TYPE;
+            bool const movementIdle = currentMovement == IDLE_MOTION_TYPE || currentMovement == MAX_MOTION_TYPE;
             if (movementIdle && !bot->isMoving())
             {
                 Position const destination = bot->GetRandomNearPosition(cfg.grindWanderRadius);
