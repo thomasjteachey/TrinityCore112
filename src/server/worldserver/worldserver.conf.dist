@@ -4436,6 +4436,39 @@ ClientTweaks.Attest.TimeoutSeconds = 90
 
 #
 ###################################################################################################
+#   CLASSIC UPKEEP MECHANICS (per-realm: one core serves Barracks+ and Legionnaire+)
+#
+#    These exist because Barracks+ is a classic PvE realm and Legionnaire+ is a PvP realm
+#    running the same binary. Each was previously a hardcoded edit on one branch - ammo was
+#    a bare `return;` at the top of Spell::TakeAmmo, and pet happiness was a Pet::LoseHappiness
+#    that topped the pet up instead of draining it - which is what made the two branches
+#    diverge in the first place.
+#
+#    Both default to 0, i.e. Legionnaire+ behaviour. That direction is deliberate: a conf that
+#    forgets these keys leaves the live PvP realm exactly as it is today, and the worst case on
+#    Barracks+ is that it feels slightly less classic until the key is added.
+#
+#    Barracks+ should set BOTH to 1.
+#
+#    Centurion.Classic.ConsumeAmmo
+#        Description: Ranged attacks consume arrows/bullets from the ammo slot.
+#                     0 - ammo is never consumed (Legionnaire+)
+#                     1 - classic consumption (Barracks+)
+#                     Independent of the SPELL_AURA_ABILITY_CONSUME_NO_AMMO aura and the
+#                     Volley-tick exemption, which still apply when this is 1.
+#        Default:     0
+#
+#    Centurion.Classic.PetHappinessDecay
+#        Description: Hunter pet happiness decays over time and must be fed.
+#                     0 - happiness is refilled on every tick, pets never go unhappy (Legionnaire+)
+#                     1 - classic decay, faster in combat (Barracks+)
+#        Default:     0
+
+Centurion.Classic.ConsumeAmmo = 0
+Centurion.Classic.PetHappinessDecay = 0
+
+#
+###################################################################################################
 #   VIOLET HOLD (custom wave-survival battleground, type 105)
 #
 #    Centurion.VioletHold.PrepSeconds

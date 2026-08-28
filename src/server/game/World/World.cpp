@@ -1514,6 +1514,12 @@ void World::LoadConfigSettings(bool reload)
     m_int_configs[CONFIG_BG_REWARD_LOSER_HONOR_LAST]   = sConfigMgr->GetIntDefault("Battleground.RewardLoserHonorLast", 5);
 
     //Centurion configurations
+    // Classic upkeep mechanics. Barracks+ (classic PvE) turns these on; Legionnaire+
+    // (PvP) leaves them off, which is how it behaved before the two branches merged.
+    // Default false on purpose: a conf that forgets the key cannot silently hand the
+    // live PvP realm ammo costs or decaying pets.
+    m_bool_configs[CONFIG_CENTURION_CLASSIC_CONSUME_AMMO] = sConfigMgr->GetBoolDefault("Centurion.Classic.ConsumeAmmo", false);
+    m_bool_configs[CONFIG_CENTURION_CLASSIC_PET_HAPPINESS_DECAY] = sConfigMgr->GetBoolDefault("Centurion.Classic.PetHappinessDecay", false);
     m_int_configs[CONFIG_CENTURION_BG_REWARD_HONOR_WINNER] = sConfigMgr->GetIntDefault("Centurion.Battleground.RewardHonorWinner", 100);
     m_int_configs[CONFIG_CENTURION_BG_REWARD_HONOR_LOSER] = sConfigMgr->GetIntDefault("Centurion.Battleground.RewardHonorLoser", 10);
     m_int_configs[CONFIG_CENTURION_BG_REWARD_MONEY_WINNER] = sConfigMgr->GetIntDefault("Centurion.Battleground.RewardMoneyWinner", 100000);

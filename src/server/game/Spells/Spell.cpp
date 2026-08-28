@@ -5367,6 +5367,12 @@ void Spell::TakePower()
 
 void Spell::TakeAmmo()
 {
+    // Legionnaire+ (PvP) has never charged for ammo; Barracks+ (classic PvE) does.
+    // This used to be a bare `return;` on the PvP branch, which is exactly the kind
+    // of divergence that made the two cores impossible to merge - keep it a config.
+    if (!sWorld->getBoolConfig(CONFIG_CENTURION_CLASSIC_CONSUME_AMMO))
+        return;
+
     // Only players use ammo
     Player* player = m_caster->ToPlayer();
     if (!player)

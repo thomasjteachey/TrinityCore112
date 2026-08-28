@@ -190,6 +190,11 @@ enum WorldBoolConfigs : uint32
     CONFIG_CENTURION_TRANSMOG_IGNORE_REQ_LEVEL,
     CONFIG_CENTURION_TRANSMOG_IGNORE_REQ_SKILL,
     CONFIG_CENTURION_TRANSMOG_IGNORE_REQ_SPELL,
+    // One core, two realms: Barracks+ is classic PvE and wants these upkeep
+    // mechanics, Legionnaire+ is PvP and has always run without them. Both
+    // default OFF so a conf that forgets them cannot regress the PvP realm.
+    CONFIG_CENTURION_CLASSIC_CONSUME_AMMO,
+    CONFIG_CENTURION_CLASSIC_PET_HAPPINESS_DECAY,
     BOOL_CONFIG_VALUE_COUNT
 };
 

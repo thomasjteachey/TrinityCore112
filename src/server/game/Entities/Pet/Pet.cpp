@@ -35,6 +35,7 @@
 #include "SpellPackets.h"
 #include "Unit.h"
 #include "Util.h"
+#include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include "ZoneScript.h"
@@ -736,6 +737,17 @@ void Pet::Update(uint32 diff)
 
 void Pet::LoseHappiness()
 {
+    // Legionnaire+ (PvP) keeps hunter pets permanently content - before the branches
+    // merged it did that by having this function top the pet back up instead of
+    // draining it. Barracks+ (classic PvE) wants the real decay. Gated here rather
+    // than at the caller so both realms keep the same 7.5s tick and call site.
+    if (!sWorld->getBoolConfig(CONFIG_CENTURION_CLASSIC_PET_HAPPINESS_DECAY))
+    {
+        if (int32 const maxHappiness = int32(GetMaxPower(POWER_HAPPINESS)))
+            SetPower(POWER_HAPPINESS, maxHappiness);
+        return;
+    }
+
     uint32 curValue = GetPower(POWER_HAPPINESS);
     if (curValue <= 0)
         return;
