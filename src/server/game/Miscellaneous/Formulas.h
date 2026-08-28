@@ -220,6 +220,7 @@ namespace Trinity
                     case 0:
                     case 1:
                         rate = 1.0f;
+                        break;
                     case 2:
                         rate = 1.25f;
                         break;
