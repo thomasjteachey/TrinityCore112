@@ -119,6 +119,11 @@ struct PveBotState
     // targets (locked chest, turn-in with full bags, vendor that can't fix
     // the trigger).
     std::unordered_map<uint64, PveTimePoint> recentErrandTargets;
+    // Targets that dropped out of engagement while still alive (evading,
+    // turned invalid): re-acquiring them immediately produces the visible
+    // engage/AttackStop flap that drags the mob back and forth.
+    std::unordered_map<uint64, PveTimePoint> recentBadTargets;
+    bool initialKitDone = false;
     uint32 dryWanderCount = 0;
 };
 
@@ -147,6 +152,33 @@ void MarkRecentErrandTarget(PveBotState& state, ObjectGuid const& guid)
     }
 
     state.recentErrandTargets[guid.GetRawValue()] = now + std::chrono::minutes(2);
+}
+
+bool IsRecentBadTarget(PveBotState& state, ObjectGuid const& guid)
+{
+    auto itr = state.recentBadTargets.find(guid.GetRawValue());
+    if (itr == state.recentBadTargets.end())
+        return false;
+
+    if (PveClock::now() >= itr->second)
+    {
+        state.recentBadTargets.erase(itr);
+        return false;
+    }
+
+    return true;
+}
+
+void MarkRecentBadTarget(PveBotState& state, ObjectGuid const& guid)
+{
+    PveTimePoint const now = PveClock::now();
+    if (state.recentBadTargets.size() > 24)
+    {
+        for (auto itr = state.recentBadTargets.begin(); itr != state.recentBadTargets.end();)
+            itr = now >= itr->second ? state.recentBadTargets.erase(itr) : std::next(itr);
+    }
+
+    state.recentBadTargets[guid.GetRawValue()] = now + std::chrono::seconds(60);
 }
 
 std::unordered_map<uint64, PveBotState> g_PveBotStateByGuid;
@@ -299,7 +331,7 @@ std::unordered_set<uint32> CollectWantedKillEntries(Player* bot)
     return wanted;
 }
 
-Unit* PickGrindTarget(Player* bot, playerbot::PveConfig const& cfg)
+Unit* PickGrindTarget(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
 {
     std::vector<Creature*> matches;
     GrindTargetCheck check{ bot, cfg };
@@ -319,10 +351,18 @@ Unit* PickGrindTarget(Player* bot, playerbot::PveConfig const& cfg)
     });
 
     // Raycasts are the expensive part; only vet the closest handful.
-    size_t const losProbeLimit = std::min<size_t>(matches.size(), 8);
-    for (size_t index = 0; index < losProbeLimit; ++index)
-        if (bot->IsWithinLOSInMap(matches[index]))
-            return matches[index];
+    size_t losProbesLeft = 8;
+    for (Creature* candidate : matches)
+    {
+        if (IsRecentBadTarget(state, candidate->GetGUID()))
+            continue;
+
+        if (!losProbesLeft--)
+            break;
+
+        if (bot->IsWithinLOSInMap(candidate))
+            return candidate;
+    }
 
     return nullptr;
 }
@@ -331,7 +371,7 @@ Unit* PickGrindTarget(Player* bot, playerbot::PveConfig const& cfg)
 // nearest prospect instead of wandering blind. Racial start points sit in
 // mob-free pockets (vendors, guards, triggers only), and an undirected random
 // walk takes minutes to drift out of one.
-Creature* FindGrindProspect(Player* bot, playerbot::PveConfig const& cfg)
+Creature* FindGrindProspect(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
 {
     std::vector<Creature*> matches;
     GrindTargetCheck check{ bot, cfg };
@@ -344,6 +384,9 @@ Creature* FindGrindProspect(Player* bot, playerbot::PveConfig const& cfg)
     float nearestDistance = 0.0f;
     for (Creature* candidate : matches)
     {
+        if (IsRecentBadTarget(state, candidate->GetGUID()))
+            continue;
+
         float const distance = bot->GetDistance(candidate);
         if (!nearest || distance < nearestDistance)
         {
@@ -970,6 +1013,118 @@ void SpendPendingTalentPoints(Player* bot)
             bot->GetName(), spent, preferredTab);
 }
 
+// Same loop as ".learn my trainer": keep taking every class-trainer spell
+// the bot qualifies for until a full pass adds nothing, so rank chains
+// resolve in one go. Returns the number of spells taught.
+uint32 RunTrainerSpellCatchup(Player* player)
+{
+    // GetClassTrainers is an unguarded unordered_map::at - a class with zero
+    // class-trainer rows (death knights here) would throw.
+    static std::vector<Trainer::Trainer const*> const emptyTrainers;
+    std::vector<Trainer::Trainer const*> const* trainersPtr = &emptyTrainers;
+    try
+    {
+        trainersPtr = &sObjectMgr->GetClassTrainers(player->GetClass());
+    }
+    catch (std::out_of_range const&)
+    {
+    }
+
+    uint32 learned = 0;
+    uint32 passes = 0;
+    bool hadNew;
+    do
+    {
+        // Pass cap = insurance against a trainer row whose teach never
+        // changes learnable state.
+        if (++passes > 10)
+            break;
+
+        hadNew = false;
+        for (Trainer::Trainer const* trainer : *trainersPtr)
+        {
+            if (!trainer->IsTrainerValidForPlayer(player))
+                continue;
+
+            for (Trainer::Spell const& trainerSpell : trainer->GetSpells())
+            {
+                if (!trainer->CanTeachSpell(player, &trainerSpell))
+                    continue;
+
+                if (trainerSpell.IsCastable())
+                    player->CastSpell(player, trainerSpell.SpellId, true);
+                else
+                    player->LearnSpell(trainerSpell.SpellId, false);
+
+                ++learned;
+                hadNew = true;
+            }
+        }
+    } while (hadNew);
+
+    return learned;
+}
+
+// One-time per login: SQL-provisioned bot characters start with an empty
+// spellbook and a bare weapon (the auto-learn hook only fires on level-up,
+// which a level-1 bot has never had). Teach everything trainable, spend any
+// banked talents, and dress a naked bot in its class's real starter outfit.
+void EnsureFirstLoginKit(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
+{
+    if (state.initialKitDone || !bot->IsAlive())
+        return;
+    state.initialKitDone = true;
+
+    uint32 learned = 0;
+    if (cfg.autoLearnSpellsOnLevelUp)
+        learned = RunTrainerSpellCatchup(bot);
+
+    if (cfg.talentsEnabled)
+        SpendPendingTalentPoints(bot);
+
+    bool outfitGranted = false;
+    bool const nakedTorso = !bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_CHEST) &&
+        !bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_LEGS);
+    if (nakedTorso)
+    {
+        if (CharStartOutfitEntry const* outfit = GetCharStartOutfitEntry(bot->GetRace(), bot->GetClass(), bot->GetGender()))
+        {
+            // Mirrors Player::Create's outfit grant, food stacks included.
+            for (int32 outfitItemId : outfit->ItemID)
+            {
+                if (outfitItemId <= 0)
+                    continue;
+
+                ItemTemplate const* proto = sObjectMgr->GetItemTemplate(uint32(outfitItemId));
+                if (!proto)
+                    continue;
+
+                uint32 count = proto->BuyCount;
+                if (proto->Class == ITEM_CLASS_CONSUMABLE && proto->SubClass == ITEM_SUBCLASS_FOOD)
+                {
+                    switch (proto->Spells[0].SpellCategory)
+                    {
+                        case SPELL_CATEGORY_FOOD:
+                            count = 4;
+                            break;
+                        case SPELL_CATEGORY_DRINK:
+                            count = 2;
+                            break;
+                    }
+                    if (proto->GetMaxStackSize() < count)
+                        count = proto->GetMaxStackSize();
+                }
+
+                outfitGranted = bot->StoreNewItemInBestSlots(uint32(outfitItemId), count) || outfitGranted;
+            }
+        }
+    }
+
+    if (learned || outfitGranted)
+        TC_LOG_INFO("playerbots.pve", "Bot {} first-login kit: {} trainer spells{}.",
+            bot->GetName(), learned, outfitGranted ? ", starter outfit granted" : "");
+}
+
 // ---------------------------------------------------------------------------
 // Level-appropriate relocation (the reference module's teleport-for-level,
 // rebuilt on this core's in-memory spawn store)
@@ -1158,6 +1313,12 @@ void ProcessPendingGrindRelocations()
                 continue;
 
             playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), false);
+            {
+                // Keep the per-bot flag in sync with the registry, or the
+                // bot's next fights run with the class-spell gate closed.
+                PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+                state.engaged = false;
+            }
             if (MotionMaster* motionMaster = bot->GetMotionMaster())
                 motionMaster->Clear();
             bot->TeleportTo(spot.mapId, spot.x, spot.y, ground + 0.05f, frand(0.0f, 6.28f));
@@ -1244,13 +1405,16 @@ bool BotHasIncompleteQuest(Player* bot)
     return false;
 }
 
-Unit* PickCompanionTarget(Player* bot, Player* master, playerbot::PveConfig const& cfg)
+Unit* PickCompanionTarget(Player* bot, PveBotState& state, Player* master, playerbot::PveConfig const& cfg)
 {
     Unit* best = nullptr;
     float bestDistance = 0.0f;
     auto consider = [&](Unit* candidate)
     {
         if (!candidate || !candidate->IsAlive() || !bot->IsValidAttackTarget(candidate))
+            return;
+
+        if (IsRecentBadTarget(state, candidate->GetGUID()))
             return;
 
         float const distance = bot->GetDistance(candidate);
@@ -1556,6 +1720,8 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     if (!bot->IsAlive())
         return;
 
+    EnsureFirstLoginKit(bot, state, cfg);
+
     if (bot->GetGroupInvite())
     {
         std::lock_guard<std::mutex> guard(g_PvePendingLock);
@@ -1642,7 +1808,16 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     // Must run before the disengage path clears the dead victim's guid.
     DetectFreshKillForLoot(bot, state, cfg);
 
-    Unit* target = ResolveAttackableByGuid(bot, bot->GetTarget());
+    ObjectGuid const previousTargetGuid = bot->GetTarget();
+    Unit* target = ResolveAttackableByGuid(bot, previousTargetGuid);
+
+    // A held target that stopped resolving while still alive (evade flicker,
+    // validity flicker) must not be immediately re-acquired: the resulting
+    // engage/AttackStop cycle stutters both the bot and the mob chasing it.
+    if (!target && state.engaged && !previousTargetGuid.IsEmpty())
+        if (Unit const* lost = ObjectAccessor::GetUnit(*bot, previousTargetGuid))
+            if (lost->IsAlive())
+                MarkRecentBadTarget(state, previousTargetGuid);
     if (!state.orderedTargetGuid.IsEmpty())
     {
         if (Unit* ordered = ResolveAttackableByGuid(bot, state.orderedTargetGuid))
@@ -1668,6 +1843,9 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
             if (!attacker || !attacker->IsAlive() || !bot->IsValidAttackTarget(attacker))
                 continue;
 
+            if (IsRecentBadTarget(state, attacker->GetGUID()))
+                continue;
+
             float const distance = bot->GetDistance(attacker);
             if (!nearestAttacker || distance < nearestAttackerDistance)
             {
@@ -1679,14 +1857,14 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         if (nearestAttacker)
             target = nearestAttacker;
         else if (master)
-            target = PickCompanionTarget(bot, master, cfg);
+            target = PickCompanionTarget(bot, state, master, cfg);
         else if (cfg.grindEnabled && state.masterGuid.IsEmpty() && !HasRestAura(bot))
         {
             PveTimePoint const now = PveClock::now();
             if (now >= state.nextGrindScanAt)
             {
                 state.nextGrindScanAt = now + PveGrindScanInterval;
-                target = PickGrindTarget(bot, cfg);
+                target = PickGrindTarget(bot, state, cfg);
             }
         }
     }
@@ -1698,11 +1876,16 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
             bot->SetTarget(target->GetGUID());
         if (!state.engaged)
         {
-            playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), true);
             state.engaged = true;
             TC_LOG_INFO("playerbots.pve", "Bot {} engaging {} (level {}) at {:.0f}y.",
                 bot->GetName(), target->GetName(), target->GetLevel(), bot->GetDistance(target));
         }
+
+        // Re-arm the registry every combat tick, not just on the first: the
+        // relocation executor (and any future cross-thread cleanup) clears
+        // the registry without seeing this map's engaged flag, and a bot
+        // whose registry is down fights with white swings only.
+        playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), true);
 
         ExecuteEngagedCombatTick(bot);
         return;
@@ -1765,7 +1948,7 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
                 // Walk toward the nearest attackable creature when one exists
                 // beyond engage range; random-wander only in a truly empty
                 // area. The engage-radius scan takes over on arrival.
-                else if (Creature* prospect = FindGrindProspect(bot, cfg))
+                else if (Creature* prospect = FindGrindProspect(bot, state, cfg))
                 {
                     playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
                     bot->GetMotionMaster()->MovePoint(0, prospect->GetPosition(), true);
@@ -2096,62 +2279,13 @@ void PveManager::OnManagedBotLevelChanged(Player* player, uint8 /*oldLevel*/)
     if (!player || !playerbot::IsManagedRandomBot(player))
         return;
 
-    if (!g_PveConfig.autoLearnSpellsOnLevelUp)
+    if (g_PveConfig.autoLearnSpellsOnLevelUp)
     {
-        if (g_PveConfig.talentsEnabled)
-            SpendPendingTalentPoints(player);
-        return;
+        uint32 const learned = RunTrainerSpellCatchup(player);
+        if (learned)
+            TC_LOG_DEBUG("playerbots.pve", "Managed bot {} learned {} trainer spells on reaching level {}.",
+                player->GetGUID().ToString(), learned, player->GetLevel());
     }
-
-    // GetClassTrainers is an unguarded unordered_map::at - a class with zero
-    // class-trainer rows (death knights here) would throw.
-    static std::vector<Trainer::Trainer const*> const emptyTrainers;
-    std::vector<Trainer::Trainer const*> const* trainersPtr = &emptyTrainers;
-    try
-    {
-        trainersPtr = &sObjectMgr->GetClassTrainers(player->GetClass());
-    }
-    catch (std::out_of_range const&)
-    {
-    }
-
-    // Same loop as ".learn my trainer": keep taking every class-trainer spell
-    // the bot now qualifies for until a full pass adds nothing, so rank chains
-    // resolve within one level-up. Pass cap = insurance against a trainer row
-    // whose teach never changes learnable state.
-    std::vector<Trainer::Trainer const*> const& trainers = *trainersPtr;
-    uint32 learned = 0;
-    uint32 passes = 0;
-    bool hadNew;
-    do
-    {
-        if (++passes > 10)
-            break;
-        hadNew = false;
-        for (Trainer::Trainer const* trainer : trainers)
-        {
-            if (!trainer->IsTrainerValidForPlayer(player))
-                continue;
-
-            for (Trainer::Spell const& trainerSpell : trainer->GetSpells())
-            {
-                if (!trainer->CanTeachSpell(player, &trainerSpell))
-                    continue;
-
-                if (trainerSpell.IsCastable())
-                    player->CastSpell(player, trainerSpell.SpellId, true);
-                else
-                    player->LearnSpell(trainerSpell.SpellId, false);
-
-                ++learned;
-                hadNew = true;
-            }
-        }
-    } while (hadNew);
-
-    if (learned)
-        TC_LOG_DEBUG("playerbots.pve", "Managed bot {} learned {} trainer spells on reaching level {}.",
-            player->GetGUID().ToString(), learned, player->GetLevel());
 
     if (g_PveConfig.talentsEnabled)
         SpendPendingTalentPoints(player);
