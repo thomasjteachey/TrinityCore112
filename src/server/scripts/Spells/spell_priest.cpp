@@ -1840,6 +1840,31 @@ namespace ShadowPriestWraith
         // then release possession/despawn one map update later. The client-reported
         // position is accepted only by MovementHandler's close-range validation.
         player->NearTeleportTo(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), dest.GetOrientation(), true);
+
+        // Nothing will ever ack that teleport, so finish it here.
+        //
+        // Possession is still active at this point - cleanup runs a map update
+        // later, deliberately - so the session's actively moved unit is the wraith,
+        // not the body being teleported. WorldSession::HandleMoveTeleportAck then
+        // fails twice over: IsRightUnitBeingMoved() rejects the player's guid
+        // because the mover is the wraith, and even past that
+        // GetActivelyMovedUnit()->ToPlayer() is null for a Creature. Its
+        // SetSemaphoreTeleportNear(false) is therefore unreachable, and the priest
+        // stays flagged mid-teleport for the rest of the session - its own movement
+        // keeps coming from where it really is while the server holds an unconsumed
+        // destination, which observers see as the body flicking between two points.
+        //
+        // These are the same three steps Player::TeleportTo performs inline for
+        // socketless bot sessions, which cannot ack for the same structural reason.
+        // Real players hit it here because possession, not the session, is what
+        // breaks the ack path.
+        if (player->IsBeingTeleportedNear())
+        {
+            player->SetSemaphoreTeleportNear(false);
+            player->UpdatePosition(player->GetTeleportDest(), true);
+            player->SetFallInformation(0, player->GetPositionZ());
+        }
+
         ScheduleWraithCleanup(player, wraith);
     }
 
