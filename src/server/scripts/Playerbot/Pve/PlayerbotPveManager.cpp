@@ -114,6 +114,7 @@ struct PveBotState
     PveTimePoint nextErrandScanAt{};
     PveTimePoint nextEquipCheckAt{};
     PveTimePoint nextTalentCheckAt{};
+    PveTimePoint nextCombatDiagAt{};
     // Errand targets (NPCs and quest objects) visited recently, whether or
     // not the visit achieved anything - stops ping-ponging between blocked
     // targets (locked chest, turn-in with full bags, vendor that can't fix
@@ -1458,7 +1459,7 @@ Unit* PickCompanionTarget(Player* bot, PveBotState& state, Player* master, playe
     return best;
 }
 
-void ExecuteEngagedCombatTick(Player* bot)
+void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
 {
     // Outside battlegrounds the values snapshot is all-default; the class
     // context builder only consults it for battleground triggers.
@@ -1467,6 +1468,28 @@ void ExecuteEngagedCombatTick(Player* bot)
     bool const executed = playerbot::PvpClassActions::Execute(bot, context);
 
     Unit* victim = ResolveAttackableByGuid(bot, bot->GetTarget());
+
+    if (playerbot::PveManager::GetConfig().combatDiagnostics)
+    {
+        PveTimePoint const now = PveClock::now();
+        if (now >= state.nextCombatDiagAt)
+        {
+            state.nextCombatDiagAt = now + std::chrono::seconds(2);
+            TC_LOG_INFO("playerbots.pve",
+                "combatdiag bot={} target={} dist={:.1f} exec={} should={} action={} reason={} spell={} moveDir={} lastExec=[{}] victim={} inCombat={} o={:.2f} moving={} motion={}",
+                bot->GetName(), victim ? victim->GetName() : "none",
+                victim ? bot->GetDistance(victim) : -1.0f,
+                executed ? 1 : 0, context.shouldExecute ? 1 : 0,
+                context.actionName ? context.actionName : "-",
+                context.reason ? context.reason : "-",
+                context.spellId, uint32(context.movementDirective),
+                playerbot::PvpClassActions::GetLastExecutionStatus(bot),
+                bot->GetVictim() ? "yes" : "no", bot->IsInCombat() ? 1 : 0,
+                bot->GetOrientation(), bot->isMoving() ? 1 : 0,
+                bot->GetMotionMaster() ? uint32(bot->GetMotionMaster()->GetCurrentMovementGeneratorType()) : 999);
+        }
+    }
+
     if (!victim)
         return;
 
@@ -1815,9 +1838,22 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     // validity flicker) must not be immediately re-acquired: the resulting
     // engage/AttackStop cycle stutters both the bot and the mob chasing it.
     if (!target && state.engaged && !previousTargetGuid.IsEmpty())
-        if (Unit const* lost = ObjectAccessor::GetUnit(*bot, previousTargetGuid))
-            if (lost->IsAlive())
-                MarkRecentBadTarget(state, previousTargetGuid);
+    {
+        Unit const* lost = ObjectAccessor::GetUnit(*bot, previousTargetGuid);
+        if (lost && lost->IsAlive())
+            MarkRecentBadTarget(state, previousTargetGuid);
+
+        if (playerbot::PveManager::GetConfig().combatDiagnostics)
+        {
+            Creature const* lostCreature = lost ? lost->ToCreature() : nullptr;
+            TC_LOG_INFO("playerbots.pve",
+                "combatdiag bot={} LOST target={} resolved={} alive={} validAttack={} evade={}",
+                bot->GetName(), previousTargetGuid.ToString(),
+                lost ? 1 : 0, lost && lost->IsAlive() ? 1 : 0,
+                lost && bot->IsValidAttackTarget(lost) ? 1 : 0,
+                lostCreature && lostCreature->IsInEvadeMode() ? 1 : 0);
+        }
+    }
     if (!state.orderedTargetGuid.IsEmpty())
     {
         if (Unit* ordered = ResolveAttackableByGuid(bot, state.orderedTargetGuid))
@@ -1887,7 +1923,7 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         // whose registry is down fights with white swings only.
         playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), true);
 
-        ExecuteEngagedCombatTick(bot);
+        ExecuteEngagedCombatTick(bot, state);
         return;
     }
 
@@ -1990,6 +2026,7 @@ void PveManager::LoadConfig()
     g_PveConfig.equipUpgradesEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.EquipUpgrades.Enable", true);
     g_PveConfig.buffsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Buffs.Enable", true);
     g_PveConfig.talentsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Talents.Enable", true);
+    g_PveConfig.combatDiagnostics = sConfigMgr->GetBoolDefault("Playerbot.Pve.CombatDiagnostics", false);
     g_PveConfig.relocateEnabled = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.Relocate.Enable", true);
     g_PveConfig.relocateDryWanders = uint32(std::clamp(
         sConfigMgr->GetIntDefault("Playerbot.PveGrind.Relocate.DryWandersBeforeMove", 5), 2, 100));

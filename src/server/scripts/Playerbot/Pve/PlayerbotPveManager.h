@@ -52,6 +52,7 @@ struct PveConfig
     bool relocateEnabled = true;
     uint32 relocateDryWanders = 5;
     std::vector<uint32> relocateMaps = { 0, 1 };
+    bool combatDiagnostics = false;
 };
 
 // Open-world PvE behavior for managed random bots, layered on the existing
