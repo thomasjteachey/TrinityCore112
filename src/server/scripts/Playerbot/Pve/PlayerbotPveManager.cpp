@@ -336,8 +336,12 @@ void ProcessPendingSummons()
     }
 
     uint32 const nowMs = GameTime::GetGameTimeMS();
-    for (auto const& [botRawGuid, pending] : snapshot)
+    for (auto const& pendingEntry : snapshot)
     {
+        // Not a structured binding: the erasePending lambda below must capture
+        // these, which C++17 forbids for bindings (clang enforces it).
+        uint64 const botRawGuid = pendingEntry.first;
+        PendingSummon const& pending = pendingEntry.second;
         ObjectGuid const botGuid(botRawGuid);
         auto erasePending = [&]()
         {
