@@ -396,3 +396,34 @@ Playerbot.PveGrind.AllowElites = 0
 # Auction-house population is handled by the core AuctionHouseBot again (it was previously
 # hard-disabled in this fork): configure the AuctionHouseBot.* block in worldserver.conf,
 # most importantly AuctionHouseBot.Account plus Seller/Buyer.Enabled.
+
+#    Playerbot.Pve.Loot.Enable
+#        Description: Bots loot gold and items from their own (or their group's) kills,
+#                     walking to the corpse first.
+#        Default:     1 - (Enabled)
+
+Playerbot.Pve.Loot.Enable = 1
+
+#    Playerbot.Pve.Vendor.Enable
+#        Description: When bags run low (< 4 free slots) or any equipped item drops under 35%
+#                     durability, autonomous bots walk to the nearest friendly vendor within
+#                     200 yards, sell their grey items and repair (if the vendor can).
+#        Default:     1 - (Enabled)
+
+Playerbot.Pve.Vendor.Enable = 1
+
+#    Playerbot.Pve.Quests.Enable
+#        Description: Autonomous bots accept quests from nearby quest givers, prefer grind
+#                     targets that advance their kill objectives, and turn completed quests in
+#                     (choosing a usable reward). Kill-credit quests complete naturally;
+#                     gathering/exploration objectives are not pursued yet.
+#        Default:     1 - (Enabled)
+
+Playerbot.Pve.Quests.Enable = 1
+
+#    Playerbot.Pve.EquipUpgrades.Enable
+#        Description: Bots equip looted or quest-rewarded weapons/armor when the item level
+#                     beats what they are wearing (empty slots are always filled).
+#        Default:     1 - (Enabled)
+
+Playerbot.Pve.EquipUpgrades.Enable = 1

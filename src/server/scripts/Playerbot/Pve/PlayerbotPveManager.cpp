@@ -22,6 +22,7 @@
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
 #include "Playerbot/Pvp/PlayerbotSharedStateGuard.h"
 
+#include "Bag.h"
 #include "CellImpl.h"
 #include "CharacterCache.h"
 #include "Configuration/Config.h"
@@ -32,12 +33,15 @@
 #include "GridNotifiersImpl.h"
 #include "Group.h"
 #include "GroupMgr.h"
+#include "Item.h"
 #include "Log.h"
+#include "Loot.h"
 #include "Map.h"
 #include "MotionMaster.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "Player.h"
+#include "QuestDef.h"
 #include "RBAC.h"
 #include "Random.h"
 #include "SharedDefines.h"
@@ -73,6 +77,13 @@ constexpr float PveRestBreakFollowDistance = 40.0f;
 
 playerbot::PveConfig g_PveConfig;
 
+enum class PveErrandKind : uint8
+{
+    None = 0,
+    Vendor,
+    QuestGiver
+};
+
 struct PveBotState
 {
     ObjectGuid masterGuid;
@@ -86,6 +97,13 @@ struct PveBotState
     PveTimePoint nextWanderAt{};
     PveTimePoint deathObservedAt{};
     bool deathObserved = false;
+    ObjectGuid pendingLootGuid;
+    PveTimePoint pendingLootUntil{};
+    ObjectGuid errandGuid;
+    PveErrandKind errandKind = PveErrandKind::None;
+    PveTimePoint errandUntil{};
+    PveTimePoint nextErrandScanAt{};
+    PveTimePoint nextEquipCheckAt{};
 };
 
 std::unordered_map<uint64, PveBotState> g_PveBotStateByGuid;
@@ -178,6 +196,11 @@ struct GrindTargetCheck
         if (!creature->IsAlive() || creature->IsCivilian() || creature->IsTrigger() || creature->IsInEvadeMode())
             return false;
 
+        // Rabbits and other critters are technically attackable but grinding
+        // them is neither XP nor a convincing simulation.
+        if (creature->GetCreatureType() == CREATURE_TYPE_CRITTER)
+            return false;
+
         if (creature->IsPet() || creature->IsTotem() || creature->IsControlledByPlayer())
             return false;
 
@@ -196,6 +219,31 @@ struct GrindTargetCheck
     }
 };
 
+// Creature entries the bot still needs kill credit for. Grinding prefers
+// these so an accepted kill quest completes as a side effect of leveling.
+std::unordered_set<uint32> CollectWantedKillEntries(Player* bot)
+{
+    std::unordered_set<uint32> wanted;
+    if (!playerbot::PveManager::GetConfig().questsEnabled)
+        return wanted;
+
+    for (auto const& [questId, status] : bot->getQuestStatusMap())
+    {
+        if (status.Status != QUEST_STATUS_INCOMPLETE)
+            continue;
+
+        Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+        if (!quest)
+            continue;
+
+        for (uint8 index = 0; index < QUEST_OBJECTIVES_COUNT; ++index)
+            if (quest->RequiredNpcOrGo[index] > 0 && status.CreatureOrGOCount[index] < quest->RequiredNpcOrGoCount[index])
+                wanted.insert(uint32(quest->RequiredNpcOrGo[index]));
+    }
+
+    return wanted;
+}
+
 Unit* PickGrindTarget(Player* bot, playerbot::PveConfig const& cfg)
 {
     std::vector<Creature*> matches;
@@ -205,8 +253,13 @@ Unit* PickGrindTarget(Player* bot, playerbot::PveConfig const& cfg)
     if (matches.empty())
         return nullptr;
 
-    std::sort(matches.begin(), matches.end(), [bot](Creature* left, Creature* right)
+    std::unordered_set<uint32> const wanted = CollectWantedKillEntries(bot);
+    std::sort(matches.begin(), matches.end(), [bot, &wanted](Creature* left, Creature* right)
     {
+        bool const leftWanted = wanted.count(left->GetEntry()) != 0;
+        bool const rightWanted = wanted.count(right->GetEntry()) != 0;
+        if (leftWanted != rightWanted)
+            return leftWanted;
         return bot->GetDistance(left) < bot->GetDistance(right);
     });
 
@@ -217,6 +270,382 @@ Unit* PickGrindTarget(Player* bot, playerbot::PveConfig const& cfg)
             return matches[index];
 
     return nullptr;
+}
+
+// When the engage-radius scan is empty, look further out and walk toward the
+// nearest prospect instead of wandering blind. Racial start points sit in
+// mob-free pockets (vendors, guards, triggers only), and an undirected random
+// walk takes minutes to drift out of one.
+Creature* FindGrindProspect(Player* bot, playerbot::PveConfig const& cfg)
+{
+    std::vector<Creature*> matches;
+    GrindTargetCheck check{ bot, cfg };
+    Trinity::CreatureListSearcher<GrindTargetCheck> searcher(bot, matches, check);
+    Cell::VisitGridObjects(bot, searcher, cfg.grindSearchRadius * 3.0f);
+    if (matches.empty())
+        return nullptr;
+
+    Creature* nearest = nullptr;
+    float nearestDistance = 0.0f;
+    for (Creature* candidate : matches)
+    {
+        float const distance = bot->GetDistance(candidate);
+        if (!nearest || distance < nearestDistance)
+        {
+            nearest = candidate;
+            nearestDistance = distance;
+        }
+    }
+
+    return nearest;
+}
+
+void MoveTowardThrottled(Player* bot, Position const& destination)
+{
+    if (bot->isMoving())
+        return;
+
+    playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
+    bot->GetMotionMaster()->MovePoint(0, destination, true);
+}
+
+template<typename Fn>
+void ForEachBagItem(Player* bot, Fn&& fn) // fn(Item*, bag, slot)
+{
+    for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+        if (Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+            fn(item, INVENTORY_SLOT_BAG_0, slot);
+
+    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+        if (Bag* bag = bot->GetBagByPos(bagSlot))
+            for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
+                if (Item* item = bot->GetItemByPos(bagSlot, uint8(slot)))
+                    fn(item, bagSlot, uint8(slot));
+}
+
+uint32 CountFreeBagSlots(Player* bot)
+{
+    uint32 freeSlots = 0;
+    for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+        if (!bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+            ++freeSlots;
+
+    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+        if (Bag* bag = bot->GetBagByPos(bagSlot))
+            freeSlots += bag->GetFreeSlots();
+
+    return freeSlots;
+}
+
+bool AnyEquippedItemBelowDurabilityPct(Player* bot, uint32 thresholdPct)
+{
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item)
+            continue;
+
+        uint32 const maxDurability = item->GetUInt32Value(ITEM_FIELD_MAXDURABILITY);
+        if (maxDurability && item->GetUInt32Value(ITEM_FIELD_DURABILITY) * 100 < maxDurability * thresholdPct)
+            return true;
+    }
+
+    return false;
+}
+
+uint32 SellVendorJunk(Player* bot)
+{
+    uint32 soldCount = 0;
+    ForEachBagItem(bot, [&](Item* item, uint8 bag, uint8 slot)
+    {
+        ItemTemplate const* proto = item->GetTemplate();
+        if (!proto || proto->Quality != ITEM_QUALITY_POOR || !proto->SellPrice)
+            return;
+
+        bot->ModifyMoney(int32(proto->SellPrice * item->GetCount()));
+        bot->DestroyItem(bag, slot, true);
+        ++soldCount;
+    });
+    return soldCount;
+}
+
+// The kill loop leaves the bot targeting its dead victim for one tick; grab
+// the corpse for looting before the disengage path clears the target.
+void DetectFreshKillForLoot(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
+{
+    if (!cfg.lootEnabled || !state.pendingLootGuid.IsEmpty())
+        return;
+
+    ObjectGuid const targetGuid = bot->GetTarget();
+    if (targetGuid.IsEmpty())
+        return;
+
+    Creature* corpse = ObjectAccessor::GetCreature(*bot, targetGuid);
+    if (!corpse || corpse->IsAlive() || corpse->loot.isLooted())
+        return;
+
+    Player* recipient = corpse->GetLootRecipient();
+    bool const lootIsOurs = recipient && (recipient == bot ||
+        (bot->GetGroup() && recipient->GetGroup() == bot->GetGroup()));
+    if (!lootIsOurs)
+        return;
+
+    state.pendingLootGuid = targetGuid;
+    state.pendingLootUntil = PveClock::now() + std::chrono::seconds(20);
+}
+
+// Returns true while the bot is still busy walking to the corpse.
+bool ProcessPendingLoot(Player* bot, PveBotState& state, playerbot::PveConfig const& /*cfg*/)
+{
+    if (state.pendingLootGuid.IsEmpty())
+        return false;
+
+    auto clearPending = [&]() { state.pendingLootGuid = ObjectGuid::Empty; };
+    if (PveClock::now() > state.pendingLootUntil)
+    {
+        clearPending();
+        return false;
+    }
+
+    Creature* corpse = ObjectAccessor::GetCreature(*bot, state.pendingLootGuid);
+    if (!corpse || corpse->IsAlive() || corpse->loot.isLooted())
+    {
+        clearPending();
+        return false;
+    }
+
+    if (!bot->IsWithinDistInMap(corpse, INTERACTION_DISTANCE))
+    {
+        MoveTowardThrottled(bot, corpse->GetPosition());
+        return true;
+    }
+
+    bot->SendLoot(corpse->GetGUID(), LOOT_CORPSE);
+    Loot* loot = &corpse->loot;
+    if (loot->gold)
+    {
+        bot->ModifyMoney(int32(loot->gold));
+        loot->gold = 0;
+        loot->NotifyMoneyRemoved();
+    }
+
+    uint32 const maxSlot = loot->GetMaxSlotInLootFor(bot);
+    for (uint8 slot = 0; slot < maxSlot; ++slot)
+        bot->StoreLootItem(slot, loot);
+
+    if (bot->GetLootGUID() == corpse->GetGUID())
+        bot->GetSession()->DoLootRelease(corpse->GetGUID());
+
+    clearPending();
+    state.nextEquipCheckAt = PveClock::now();
+    return false;
+}
+
+uint32 PickQuestRewardIndex(Player* bot, Quest const* quest)
+{
+    for (uint32 index = 0; index < quest->GetRewChoiceItemsCount(); ++index)
+        if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(quest->RewardChoiceItemId[index]))
+            if (bot->CanUseItem(proto) == EQUIP_ERR_OK)
+                return index;
+
+    return 0;
+}
+
+void AcceptAndTurnInQuestsAt(Player* bot, Creature* giver)
+{
+    std::vector<uint32> completedQuests;
+    for (auto const& [questId, status] : bot->getQuestStatusMap())
+        if (status.Status == QUEST_STATUS_COMPLETE && !bot->GetQuestRewardStatus(questId))
+            completedQuests.push_back(questId);
+
+    QuestRelationResult const involved = sObjectMgr->GetCreatureQuestInvolvedRelations(giver->GetEntry());
+    for (uint32 questId : completedQuests)
+    {
+        if (!involved.HasQuest(questId))
+            continue;
+
+        Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+        if (!quest)
+            continue;
+
+        uint32 const rewardIndex = PickQuestRewardIndex(bot, quest);
+        if (bot->CanRewardQuest(quest, rewardIndex, false))
+        {
+            bot->RewardQuest(quest, rewardIndex, giver, false);
+            TC_LOG_INFO("playerbots.pve", "Bot {} turned in quest {} ({}).",
+                bot->GetName(), questId, quest->GetTitle());
+        }
+    }
+
+    for (uint32 questId : sObjectMgr->GetCreatureQuestRelations(giver->GetEntry()))
+    {
+        Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+        if (!quest)
+            continue;
+
+        if (bot->CanTakeQuest(quest, false) && bot->CanAddQuest(quest, false))
+        {
+            bot->AddQuestAndCheckCompletion(quest, giver);
+            TC_LOG_INFO("playerbots.pve", "Bot {} accepted quest {} ({}).",
+                bot->GetName(), questId, quest->GetTitle());
+        }
+    }
+}
+
+struct ErrandNpcCheck
+{
+    Player* bot;
+
+    bool operator()(Creature* creature) const
+    {
+        return creature->IsAlive() && !creature->IsInEvadeMode() &&
+            (creature->IsQuestGiver() || creature->IsVendor()) && creature->IsFriendlyTo(bot);
+    }
+};
+
+void StartErrandIfNeeded(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
+{
+    if (!cfg.questsEnabled && !cfg.vendorEnabled)
+        return;
+
+    std::vector<Creature*> serviceNpcs;
+    ErrandNpcCheck check{ bot };
+    Trinity::CreatureListSearcher<ErrandNpcCheck> searcher(bot, serviceNpcs, check);
+    Cell::VisitGridObjects(bot, searcher, 200.0f);
+    if (serviceNpcs.empty())
+        return;
+
+    std::sort(serviceNpcs.begin(), serviceNpcs.end(), [bot](Creature* left, Creature* right)
+    {
+        return bot->GetDistance(left) < bot->GetDistance(right);
+    });
+
+    std::vector<uint32> completedQuests;
+    if (cfg.questsEnabled)
+        for (auto const& [questId, status] : bot->getQuestStatusMap())
+            if (status.Status == QUEST_STATUS_COMPLETE && !bot->GetQuestRewardStatus(questId))
+                completedQuests.push_back(questId);
+
+    bool const needVendor = cfg.vendorEnabled &&
+        (CountFreeBagSlots(bot) < 4 || AnyEquippedItemBelowDurabilityPct(bot, 35));
+
+    auto beginErrand = [&](Creature* npc, PveErrandKind kind)
+    {
+        state.errandGuid = npc->GetGUID();
+        state.errandKind = kind;
+        state.errandUntil = PveClock::now() + std::chrono::seconds(90);
+        TC_LOG_DEBUG("playerbots.pve", "Bot {} starting {} errand to {} at {:.0f}y.",
+            bot->GetName(), kind == PveErrandKind::Vendor ? "vendor" : "quest", npc->GetName(), bot->GetDistance(npc));
+    };
+
+    for (Creature* npc : serviceNpcs)
+    {
+        if (cfg.questsEnabled && npc->IsQuestGiver())
+        {
+            QuestRelationResult const involved = sObjectMgr->GetCreatureQuestInvolvedRelations(npc->GetEntry());
+            for (uint32 questId : completedQuests)
+                if (involved.HasQuest(questId))
+                    return beginErrand(npc, PveErrandKind::QuestGiver);
+
+            for (uint32 questId : sObjectMgr->GetCreatureQuestRelations(npc->GetEntry()))
+                if (Quest const* quest = sObjectMgr->GetQuestTemplate(questId))
+                    if (bot->CanTakeQuest(quest, false) && bot->CanAddQuest(quest, false))
+                        return beginErrand(npc, PveErrandKind::QuestGiver);
+        }
+
+        if (needVendor && npc->IsVendor())
+            return beginErrand(npc, PveErrandKind::Vendor);
+    }
+}
+
+// Returns true while the bot is still busy walking to the errand target.
+bool ProcessErrand(Player* bot, PveBotState& state, playerbot::PveConfig const& /*cfg*/)
+{
+    if (state.errandKind == PveErrandKind::None)
+        return false;
+
+    auto clearErrand = [&]()
+    {
+        state.errandGuid = ObjectGuid::Empty;
+        state.errandKind = PveErrandKind::None;
+    };
+
+    // Errands belong to autonomous bots; a bot that just gained a master
+    // drops its errand and follows.
+    if (!state.masterGuid.IsEmpty() || PveClock::now() > state.errandUntil)
+    {
+        clearErrand();
+        return false;
+    }
+
+    Creature* npc = ObjectAccessor::GetCreature(*bot, state.errandGuid);
+    if (!npc || !npc->IsAlive())
+    {
+        clearErrand();
+        return false;
+    }
+
+    if (!bot->IsWithinDistInMap(npc, INTERACTION_DISTANCE))
+    {
+        MoveTowardThrottled(bot, npc->GetPosition());
+        return true;
+    }
+
+    if (state.errandKind == PveErrandKind::Vendor)
+    {
+        uint32 const soldCount = SellVendorJunk(bot);
+        if (npc->HasNpcFlag(UNIT_NPC_FLAG_REPAIR))
+            bot->DurabilityRepairAll(true, 1.0f, false);
+        TC_LOG_INFO("playerbots.pve", "Bot {} visited vendor {} (sold {} junk items).",
+            bot->GetName(), npc->GetName(), soldCount);
+    }
+    else
+        AcceptAndTurnInQuestsAt(bot, npc);
+
+    clearErrand();
+    return false;
+}
+
+void TryEquipUpgrades(Player* bot)
+{
+    std::vector<std::pair<uint8, uint8>> positions;
+    ForEachBagItem(bot, [&](Item* /*item*/, uint8 bag, uint8 slot)
+    {
+        positions.emplace_back(bag, slot);
+    });
+
+    for (auto const& position : positions)
+    {
+        Item* item = bot->GetItemByPos(position.first, position.second);
+        if (!item)
+            continue;
+
+        ItemTemplate const* proto = item->GetTemplate();
+        if (!proto || (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR))
+            continue;
+
+        uint16 dest = 0;
+        if (bot->CanEquipItem(NULL_SLOT, dest, item, true) != EQUIP_ERR_OK)
+            continue;
+
+        if (Item* equipped = bot->GetItemByPos(dest))
+        {
+            ItemTemplate const* equippedProto = equipped->GetTemplate();
+            if (equippedProto && equippedProto->ItemLevel >= proto->ItemLevel)
+                continue;
+
+            bot->SwapItem(item->GetPos(), dest);
+        }
+        else
+        {
+            bot->RemoveItem(position.first, position.second, true);
+            bot->EquipItem(dest, item, true);
+            bot->AutoUnequipOffhandIfNeed();
+        }
+
+        TC_LOG_INFO("playerbots.pve", "Bot {} equipped {} (item level {}).",
+            bot->GetName(), proto->Name1, proto->ItemLevel);
+    }
 }
 
 Unit* PickCompanionTarget(Player* bot, Player* master, playerbot::PveConfig const& cfg)
@@ -550,11 +979,32 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
             bot->CastSpell(bot, needFood ? SPELL_PVE_OUT_OF_COMBAT_EAT : SPELL_PVE_OUT_OF_COMBAT_DRINK, true);
         }
     }
+
+    PveTimePoint const now = PveClock::now();
+
+    // Quest/vendor errands are for autonomous bots; companions stay on their
+    // master's heel.
+    if (state.masterGuid.IsEmpty() && !state.engaged && !bot->IsInCombat() &&
+        state.errandKind == PveErrandKind::None && state.pendingLootGuid.IsEmpty() &&
+        now >= state.nextErrandScanAt)
+    {
+        state.nextErrandScanAt = now + std::chrono::seconds(15);
+        StartErrandIfNeeded(bot, state, cfg);
+    }
+
+    if (cfg.equipUpgradesEnabled && !bot->IsInCombat() && now >= state.nextEquipCheckAt)
+    {
+        state.nextEquipCheckAt = now + std::chrono::seconds(15);
+        TryEquipUpgrades(bot);
+    }
 }
 
 void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
 {
     Player* master = state.masterGuid.IsEmpty() ? nullptr : ObjectAccessor::GetPlayer(*bot, state.masterGuid);
+
+    // Must run before the disengage path clears the dead victim's guid.
+    DetectFreshKillForLoot(bot, state, cfg);
 
     Unit* target = ResolveAttackableByGuid(bot, bot->GetTarget());
     if (!state.orderedTargetGuid.IsEmpty())
@@ -593,6 +1043,8 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         {
             playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), true);
             state.engaged = true;
+            TC_LOG_INFO("playerbots.pve", "Bot {} engaging {} (level {}) at {:.0f}y.",
+                bot->GetName(), target->GetName(), target->GetLevel(), bot->GetDistance(target));
         }
 
         ExecuteEngagedCombatTick(bot);
@@ -601,6 +1053,9 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
 
     if (state.engaged)
         DisengagePveCombat(bot, state);
+
+    if (ProcessPendingLoot(bot, state, cfg))
+        return;
 
     if (HasRestAura(bot))
     {
@@ -612,6 +1067,9 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
 
         RemoveRestAuras(bot);
     }
+
+    if (ProcessErrand(bot, state, cfg))
+        return;
 
     if (master && master->IsAlive() && !state.stay)
     {
@@ -636,9 +1094,22 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
             bool const movementIdle = currentMovement == IDLE_MOTION_TYPE || currentMovement == MAX_MOTION_TYPE;
             if (movementIdle && !bot->isMoving())
             {
-                Position const destination = bot->GetRandomNearPosition(cfg.grindWanderRadius);
-                playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
-                bot->GetMotionMaster()->MovePoint(0, destination, true);
+                // Walk toward the nearest attackable creature when one exists
+                // beyond engage range; random-wander only in a truly empty
+                // area. The engage-radius scan takes over on arrival.
+                if (Creature* prospect = FindGrindProspect(bot, cfg))
+                {
+                    playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
+                    bot->GetMotionMaster()->MovePoint(0, prospect->GetPosition(), true);
+                    TC_LOG_DEBUG("playerbots.pve", "Grind bot {} walking toward prospect {} at {:.0f}y.",
+                        bot->GetName(), prospect->GetName(), bot->GetDistance(prospect));
+                }
+                else
+                {
+                    Position const destination = bot->GetRandomNearPosition(cfg.grindWanderRadius);
+                    playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
+                    bot->GetMotionMaster()->MovePoint(0, destination, true);
+                }
             }
         }
     }
@@ -662,6 +1133,10 @@ void PveManager::LoadConfig()
     g_PveConfig.grindMaxLevelAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelAbove", 3), 0, 10));
     g_PveConfig.grindMaxLevelBelow = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelBelow", 5), 0, 80));
     g_PveConfig.grindAllowElites = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.AllowElites", false);
+    g_PveConfig.lootEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Loot.Enable", true);
+    g_PveConfig.vendorEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Vendor.Enable", true);
+    g_PveConfig.questsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Quests.Enable", true);
+    g_PveConfig.equipUpgradesEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.EquipUpgrades.Enable", true);
 }
 
 PveConfig const& PveManager::GetConfig()

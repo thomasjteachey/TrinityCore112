@@ -42,6 +42,10 @@ struct PveConfig
     uint32 grindMaxLevelAbove = 3;
     uint32 grindMaxLevelBelow = 5;
     bool grindAllowElites = false;
+    bool lootEnabled = true;
+    bool vendorEnabled = true;
+    bool questsEnabled = true;
+    bool equipUpgradesEnabled = true;
 };
 
 // Open-world PvE behavior for managed random bots, layered on the existing
