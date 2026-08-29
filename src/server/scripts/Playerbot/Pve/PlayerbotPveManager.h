@@ -78,6 +78,8 @@ struct PveConfig
     // Hardcore realms: bots never join groups - invites are declined and
     // companion summons refused.
     bool declineGroupInvites = false;
+    // The hardcore death-chest gameobject: bots loot these like any prize.
+    uint32 hardcoreLootChestEntry = 0;
 };
 
 // Open-world PvE behavior for managed random bots, layered on the existing

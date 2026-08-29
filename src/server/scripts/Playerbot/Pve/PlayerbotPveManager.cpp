@@ -1425,6 +1425,21 @@ void StartErrandIfNeeded(Player* bot, PveBotState& state, playerbot::PveConfig c
         }
     }
 
+    // Hardcore death chests are free treasure lying in the world: bots grab
+    // them like anyone else would.
+    if (cfg.hardcoreLootChestEntry)
+        if (GameObject* deathChest = bot->FindNearestGameObject(cfg.hardcoreLootChestEntry, 60.0f))
+            if (deathChest->isSpawned() && deathChest->getLootState() == GO_READY &&
+                !IsRecentErrandTarget(state, deathChest->GetGUID()))
+            {
+                state.errandGuid = deathChest->GetGUID();
+                state.errandKind = PveErrandKind::QuestObject;
+                state.errandUntil = PveClock::now() + std::chrono::seconds(90);
+                TC_LOG_DEBUG("playerbots.pve", "Bot {} heading for a death chest at {:.0f}y.",
+                    bot->GetName(), bot->GetDistance(deathChest));
+                return;
+            }
+
     bool const needRepair = AnyEquippedItemBelowDurabilityPct(bot, 35);
     bool const needSupplies = cfg.restUseConsumables &&
         ((CountConsumableUnits(bot, false) == 0 && !ConjureSpellId(bot, false)) ||
@@ -4699,6 +4714,7 @@ void PveManager::LoadConfig()
     g_PveConfig.rebirthAtMaxLevelPercent = uint32(std::clamp<int32>(
         sConfigMgr->GetIntDefault("Playerbot.Pve.RebirthAtMaxLevel.Percent", 0), 0, 100));
     g_PveConfig.declineGroupInvites = sConfigMgr->GetBoolDefault("Playerbot.Pve.DeclineGroupInvites", false);
+    g_PveConfig.hardcoreLootChestEntry = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FullLoot.ChestGameObjectId", 0)));
 
     // Accounts whose bots are PvP-only: parked in their sanctuary, never
     // touched by any PvE system (no grind, errands, gear, talents, economy),

@@ -3079,6 +3079,36 @@ namespace
         return !accountIds.empty() && std::binary_search(accountIds.begin(), accountIds.end(), accountId);
     }
 
+    // The hardcore pseudo-faction: one side an FFA-armed managed playerbot,
+    // the other a REAL player (or their pet) - mutually attackable no matter
+    // the player's own flag, faction or friendliness. The bot's FFA byte
+    // only arms in eligible zones, which keeps starter zones safe, and
+    // nothing arms it on realms without the hardcore script.
+    bool IsManagedPlayerbotAccountId(uint32 accountId);
+
+    bool IsHostilePlayerbotPvpPair(Unit const* self, Unit const* target)
+    {
+        if (!self || !target)
+            return false;
+
+        Player const* selfPlayer = self->GetAffectingPlayer();
+        Player const* targetPlayer = target->GetAffectingPlayer();
+        if (!selfPlayer || !targetPlayer || selfPlayer == targetPlayer)
+            return false;
+
+        Map const* map = selfPlayer->FindMap();
+        if (map && map->IsBattlegroundOrArena())
+            return false;
+
+        bool const selfIsBot = selfPlayer->GetSession() && IsManagedPlayerbotAccountId(selfPlayer->GetSession()->GetAccountId());
+        bool const targetIsBot = targetPlayer->GetSession() && IsManagedPlayerbotAccountId(targetPlayer->GetSession()->GetAccountId());
+        if (selfIsBot == targetIsBot)
+            return false; // bot-vs-bot is banned elsewhere; player-vs-player keeps stock FFA rules
+
+        Player const* bot = selfIsBot ? selfPlayer : targetPlayer;
+        return bot->IsFFAPvP();
+    }
+
     // Playerbots are one team in the open world: with everyone FFA-flagged
     // on a hardcore realm they would otherwise be legal targets for each
     // other. Battlegrounds keep their normal team rules. Configurable via
@@ -3205,6 +3235,13 @@ bool WorldObject::IsValidAttackTarget(WorldObject const* target, SpellInfo const
             if (unitTarget && !unitTarget->HasUnitFlag(UNIT_FLAG_PLAYER_CONTROLLED))
                 return IsHostileTo(unitTarget) || unitTarget->IsHostileTo(this);
     }
+
+    // Hardcore pseudo-faction: an armed playerbot and a real player are
+    // mutually attackable regardless of faction or the player's own flag.
+    // Must precede the friendliness bail - same-faction players would
+    // otherwise never get here.
+    if (unit && unitTarget && IsHostilePlayerbotPvpPair(unit, unitTarget))
+        return true;
 
     // PvP, PvC, CvP case
     // can't attack friendly targets
