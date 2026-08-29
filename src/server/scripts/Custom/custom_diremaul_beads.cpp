@@ -100,12 +100,12 @@ namespace DireMaulBeads
         }
 
         if (!s_OgreBeadItemId || !s_OgreBeadAuraId)
-            TC_LOG_INFO("scripts", "DireMaulBeads: feature disabled (item {}, aura {})", s_OgreBeadItemId, s_OgreBeadAuraId);
+            TC_LOG_DEBUG("scripts", "DireMaulBeads: feature disabled (item {}, aura {})", s_OgreBeadItemId, s_OgreBeadAuraId);
         else if (s_DireMaulAreaIds.empty())
-            TC_LOG_WARN("scripts", "DireMaulBeads: no Dire Maul area IDs configured; beads will never trigger");
+            TC_LOG_DEBUG("scripts", "DireMaulBeads: no Dire Maul area IDs configured; beads will never trigger");
 
         if (s_OgreBeadItemId && s_OgreBeadAuraId && !s_BeadChestGameObjectId)
-            TC_LOG_WARN("scripts", "DireMaulBeads: bead chest entry is 0; carriers will keep beads on death");
+            TC_LOG_DEBUG("scripts", "DireMaulBeads: bead chest entry is 0; carriers will keep beads on death");
     }
 
     uint32 GetOgreBeadItemId()
@@ -154,7 +154,7 @@ namespace DireMaulBeads
         if (!IsInOutdoorDireMaul(player))
         {
             player->RemoveAura(auraId);
-            TC_LOG_ERROR("scripts", "DireMaulBeads: skipping aura {} for {} - outside configured area (map {}, zone {}, area {})",
+            TC_LOG_DEBUG("scripts", "DireMaulBeads: skipping aura {} for {} - outside configured area (map {}, zone {}, area {})",
                 auraId, player->GetName(), mapId, zoneId, areaId);
             return;
         }
@@ -163,7 +163,7 @@ namespace DireMaulBeads
         if (!beadItemId)
         {
             player->RemoveAura(auraId);
-            TC_LOG_ERROR("scripts", "DireMaulBeads: skipping aura {} for {} - bead item id is 0 (map {}, zone {}, area {})",
+            TC_LOG_DEBUG("scripts", "DireMaulBeads: skipping aura {} for {} - bead item id is 0 (map {}, zone {}, area {})",
                 auraId, player->GetName(), mapId, zoneId, areaId);
             return;
         }
@@ -172,7 +172,7 @@ namespace DireMaulBeads
         if (!beadCount)
         {
             player->RemoveAura(auraId);
-            TC_LOG_ERROR("scripts", "DireMaulBeads: skipping aura {} for {} - no beads (map {}, zone {}, area {}, item {})",
+            TC_LOG_DEBUG("scripts", "DireMaulBeads: skipping aura {} for {} - no beads (map {}, zone {}, area {}, item {})",
                 auraId, player->GetName(), mapId, zoneId, areaId, beadItemId);
             return;
         }
@@ -187,12 +187,12 @@ namespace DireMaulBeads
 
         if (!aura)
         {
-            TC_LOG_ERROR("scripts", "DireMaulBeads: failed to apply aura {} for {} despite {} beads (map {}, zone {}, area {})",
+            TC_LOG_DEBUG("scripts", "DireMaulBeads: failed to apply aura {} for {} despite {} beads (map {}, zone {}, area {})",
                 auraId, player->GetName(), beadCount, mapId, zoneId, areaId);
             return;
         }
 
-        TC_LOG_INFO("scripts", "DireMaulBeads: applied aura {} ({} stacks) for {} (map {}, zone {}, area {})",
+        TC_LOG_DEBUG("scripts", "DireMaulBeads: applied aura {} ({} stacks) for {} (map {}, zone {}, area {})",
             auraId, stacks, player->GetName(), mapId, zoneId, areaId);
     }
 
