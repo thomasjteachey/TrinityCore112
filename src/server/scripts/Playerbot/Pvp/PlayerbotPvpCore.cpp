@@ -1451,6 +1451,32 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
             return false;
     }
 
+    // Offensive dispels (Purge, Spellsteal) hard-fail with
+    // SPELL_FAILED_NOTHING_TO_DISPEL against a target carrying nothing of
+    // the matching dispel type - the default state of every grind creature.
+    // "Purge by default" then starves the whole rotation behind it.
+    if (knownByPlayer && decision.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
+    {
+        uint32 dispelMask = 0;
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+            if (effect.Effect == SPELL_EFFECT_DISPEL)
+                dispelMask |= SpellInfo::GetDispelMask(DispelType(effect.MiscValue));
+
+        if (dispelMask)
+        {
+            Unit const* dispelTarget = !decision.targetGuid.IsEmpty()
+                ? ObjectAccessor::GetUnit(*player, decision.targetGuid)
+                : defaultEnemyTarget;
+            if (!dispelTarget)
+                return false;
+
+            DispelChargesList dispelList;
+            dispelTarget->GetDispellableAuraList(player, dispelMask, dispelList);
+            if (dispelList.empty())
+                return false;
+        }
+    }
+
     if (playerbot::PvpCore::ShouldSeekLightwell(player))
     {
         if (spellInfo->CalcCastTime() > 0 || spellInfo->IsChanneled() || spellInfo->IsAutoRepeatRangedSpell())
