@@ -509,6 +509,14 @@ Playerbot.Pve.DeclineGroupInvites = 0
 #        Default:     1
 Playerbot.OpenWorldNoFriendlyFire = 1
 
+#    Playerbot.Pve.ZoneGuardians.PerZone
+#        Description: This many bots per classic zone become that zone's permanent guardians:
+#                     set to the zone's classic level cap, XP gain frozen, relocated only within
+#                     their zone, excluded from rebirth and the reset command. Slots are claimed
+#                     first-come each uptime (previous guardians re-claim first). 0 disables.
+#        Default:     0
+Playerbot.Pve.ZoneGuardians.PerZone = 0
+
 #    Playerbot.Pve.RebirthAtMaxLevel.Percent
 #        Description: This percent of the managed fleet (guid-keyed, deterministic) is reborn
 #                     on reaching the level cap: the full level-1 reset (gear, spells, talents,

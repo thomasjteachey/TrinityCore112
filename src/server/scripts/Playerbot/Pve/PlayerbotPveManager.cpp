@@ -2434,7 +2434,140 @@ struct GrindSpot
     float x = 0.0f;
     float y = 0.0f;
     float z = 0.0f;
+    uint32 zoneId = 0;
 };
+
+// ---------------------------------------------------------------------------
+// Zone guardians: a configurable number of bots per classic zone live there
+// permanently at the zone's classic level cap, XP frozen, grinding forever.
+// Slots are claimed first-come each uptime; bots still wearing the frozen-XP
+// flag from a previous uptime re-claim first, so assignments stay sticky.
+// ---------------------------------------------------------------------------
+
+struct GuardianZone
+{
+    uint32 zoneId;
+    uint8 maxLevel;
+};
+
+// Classic zone level caps.
+constexpr std::array<GuardianZone, 38> kGuardianZones = { {
+    { 12, 10 },   // Elwynn Forest
+    { 14, 10 },   // Durotar
+    { 85, 10 },   // Tirisfal Glades
+    { 141, 10 },  // Teldrassil
+    { 215, 10 },  // Mulgore
+    { 1, 10 },    // Dun Morogh
+    { 40, 20 },   // Westfall
+    { 130, 20 },  // Silverpine Forest
+    { 148, 20 },  // Darkshore
+    { 38, 20 },   // Loch Modan
+    { 17, 25 },   // The Barrens
+    { 44, 25 },   // Redridge Mountains
+    { 406, 27 },  // Stonetalon Mountains
+    { 331, 30 },  // Ashenvale
+    { 10, 30 },   // Duskwood
+    { 267, 30 },  // Hillsbrad Foothills
+    { 11, 30 },   // Wetlands
+    { 400, 35 },  // Thousand Needles
+    { 36, 40 },   // Alterac Mountains
+    { 45, 40 },   // Arathi Highlands
+    { 405, 40 },  // Desolace
+    { 33, 45 },   // Stranglethorn Vale
+    { 3, 45 },    // Badlands
+    { 8, 45 },    // Swamp of Sorrows
+    { 15, 45 },   // Dustwallow Marsh
+    { 357, 50 },  // Feralas
+    { 440, 50 },  // Tanaris
+    { 47, 50 },   // The Hinterlands
+    { 51, 50 },   // Searing Gorge
+    { 16, 55 },   // Azshara
+    { 361, 55 },  // Felwood
+    { 490, 55 },  // Un'Goro Crater
+    { 4, 58 },    // Blasted Lands
+    { 46, 58 },   // Burning Steppes
+    { 28, 58 },   // Western Plaguelands
+    { 618, 60 },  // Winterspring
+    { 139, 60 },  // Eastern Plaguelands
+    { 1377, 60 }, // Silithus
+} };
+
+std::mutex g_GuardianLock;
+std::unordered_map<uint64, uint32> g_GuardianZoneByGuid; // guid -> zone index
+uint32 g_GuardianSlotsFilled = 0;
+
+void CompleteEligibleClassQuests(Player* bot); // defined with the class-quest cache below
+
+// Zone id the bot guards, or 0.
+uint32 GetGuardianZoneId(uint64 botRawGuid)
+{
+    std::lock_guard<std::mutex> guard(g_GuardianLock);
+    auto itr = g_GuardianZoneByGuid.find(botRawGuid);
+    return itr != g_GuardianZoneByGuid.end() ? kGuardianZones[itr->second % kGuardianZones.size()].zoneId : 0;
+}
+
+void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
+{
+    uint64 const botRawGuid = bot->GetGUID().GetRawValue();
+    bool const flaggedNoXp = bot->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN);
+    uint32 const totalSlots = cfg.zoneGuardiansPerZone * uint32(kGuardianZones.size());
+
+    uint32 slotIndex = 0;
+    bool assigned = false;
+    bool freshlyAssigned = false;
+    {
+        std::lock_guard<std::mutex> guard(g_GuardianLock);
+        auto itr = g_GuardianZoneByGuid.find(botRawGuid);
+        if (itr != g_GuardianZoneByGuid.end())
+        {
+            assigned = true;
+            slotIndex = itr->second;
+        }
+        else if (g_GuardianSlotsFilled < totalSlots)
+        {
+            slotIndex = g_GuardianSlotsFilled++;
+            g_GuardianZoneByGuid[botRawGuid] = slotIndex;
+            assigned = true;
+            freshlyAssigned = true;
+        }
+    }
+
+    if (!assigned)
+    {
+        // Not a guardian this uptime: shed a stale frozen-XP flag so the
+        // bot resumes leveling.
+        if (flaggedNoXp)
+            bot->RemoveFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN);
+        return;
+    }
+
+    GuardianZone const& zone = kGuardianZones[slotIndex % kGuardianZones.size()];
+    if (freshlyAssigned)
+    {
+        if (bot->GetLevel() != zone.maxLevel)
+        {
+            bot->GiveLevel(zone.maxLevel);
+            bot->SetUInt32Value(PLAYER_XP, 0);
+        }
+        if (!flaggedNoXp)
+            bot->SetFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN);
+        // Guardians never travel for class quests, so their kit spells
+        // (Tame Beast, demon summons, stances, totems) are granted as if
+        // the chains had been walked. XP is already frozen at this point,
+        // so the quest rewards cannot push the level.
+        CompleteEligibleClassQuests(bot);
+        TC_LOG_INFO("playerbots.pve", "Bot {} is now the level-{} guardian of zone {}.",
+            bot->GetName(), zone.maxLevel, zone.zoneId);
+    }
+
+    // A guardian caught outside its zone gets pulled home by the normal
+    // relocation machinery (which honors the guardian constraint).
+    if (bot->GetZoneId() != zone.zoneId && !bot->IsInCombat() && !state.journeyActive)
+    {
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        g_PendingGrindRelocations.insert(botRawGuid);
+    }
+}
 
 std::mutex g_GrindSpotLock;
 std::unordered_map<uint8, std::vector<GrindSpot>> g_GrindSpotsByLevel;
@@ -2514,16 +2647,20 @@ void BuildGrindSpotCacheOnce()
     }
 
     uint32 spotCount = 0;
-    for (auto const& [key, bucket] : buckets)
+    for (auto& [key, bucket] : buckets)
     {
         if (bucket.count < 3)
             continue;
 
         // Zone screen at the source, so forbidden clusters never exist for
         // any travel arm (walk, taxi or teleport) to deliver bots into.
+        // The zone id is kept: guardians relocate by it.
         if (Map* map = sMapMgr->FindMap(bucket.spot.mapId, 0))
-            if (IsForbiddenGrindZone(map->GetZoneId(PHASEMASK_NORMAL, bucket.spot.x, bucket.spot.y, bucket.spot.z)))
+        {
+            bucket.spot.zoneId = map->GetZoneId(PHASEMASK_NORMAL, bucket.spot.x, bucket.spot.y, bucket.spot.z);
+            if (IsForbiddenGrindZone(bucket.spot.zoneId))
                 continue;
+        }
 
         ++spotCount;
         for (int32 level = int32(bucket.meanLevel) - 1; level <= int32(bucket.meanLevel) + 3; ++level)
@@ -2724,6 +2861,44 @@ void BuildClassQuestCacheOnce()
         total += uint32(list.size());
     }
     TC_LOG_INFO("playerbots.pve", "Class quest cache built: {} single-class quests.", total);
+}
+
+// Force-rewards every class quest the bot could legitimately take at its
+// current level (class, race, level and chain prerequisites all honored via
+// CanTakeQuest); repeated passes walk chains link by link. Used for zone
+// guardians, which are pinned in place and can never travel to the givers.
+void CompleteEligibleClassQuests(Player* bot)
+{
+    BuildClassQuestCacheOnce();
+
+    std::vector<ClassQuestEntry> const* list = nullptr;
+    {
+        std::lock_guard<std::mutex> guard(g_ClassQuestLock);
+        auto itr = g_ClassQuestsByClass.find(bot->GetClass());
+        if (itr == g_ClassQuestsByClass.end())
+            return;
+        list = &itr->second; // immutable once built
+    }
+
+    uint32 completed = 0;
+    for (bool progressed = true; progressed;)
+    {
+        progressed = false;
+        for (ClassQuestEntry const& entry : *list)
+        {
+            if (bot->GetQuestRewardStatus(entry.questId))
+                continue;
+            Quest const* quest = sObjectMgr->GetQuestTemplate(entry.questId);
+            if (!quest || !bot->CanTakeQuest(quest, false))
+                continue;
+            bot->RewardQuest(quest, 0, bot, false);
+            ++completed;
+            progressed = true;
+        }
+    }
+    if (completed)
+        TC_LOG_INFO("playerbots.pve", "Bot {} completed {} class quests for its guardian post.",
+            bot->GetName(), completed);
 }
 
 // Map thread (under the per-map decision serialization). Picks the
@@ -3496,6 +3671,22 @@ void ProcessPendingGrindRelocations()
         bool const humanNearby = HasHumanPlayerNearby(bot, 150.0f);
 
         std::vector<GrindSpot> candidates;
+        if (uint32 const guardianZoneId = GetGuardianZoneId(botRawGuid))
+        {
+            // Guardians only ever go home: search every bucket at or below
+            // their level for clusters inside their zone.
+            std::lock_guard<std::mutex> guard(g_GrindSpotLock);
+            for (int32 level = int32(std::min<uint32>(bot->GetLevel(), 80)); level >= 1 && candidates.empty(); --level)
+            {
+                auto itr = g_GrindSpotsByLevel.find(uint8(level));
+                if (itr == g_GrindSpotsByLevel.end())
+                    continue;
+                for (GrindSpot const& spot : itr->second)
+                    if (spot.zoneId == guardianZoneId)
+                        candidates.push_back(spot);
+            }
+        }
+        else
         {
             std::lock_guard<std::mutex> guard(g_GrindSpotLock);
             uint8 level = uint8(std::min<uint32>(bot->GetLevel(), 80));
@@ -4315,6 +4506,10 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         MaybeFieldRepair(bot, state, cfg);
     }
 
+    // Zone guardians: claim or hold a guardian post.
+    if (cfg.zoneGuardiansPerZone && state.masterGuid.IsEmpty())
+        RunZoneGuardianTick(bot, state, cfg);
+
     // Class quests are sought out across the world, not just stumbled upon.
     if (cfg.questsEnabled && state.masterGuid.IsEmpty() && !state.engaged && !bot->IsInCombat() &&
         state.errandKind == PveErrandKind::None && !state.journeyActive && now >= state.nextClassQuestScanAt)
@@ -4715,6 +4910,7 @@ void PveManager::LoadConfig()
         sConfigMgr->GetIntDefault("Playerbot.Pve.RebirthAtMaxLevel.Percent", 0), 0, 100));
     g_PveConfig.declineGroupInvites = sConfigMgr->GetBoolDefault("Playerbot.Pve.DeclineGroupInvites", false);
     g_PveConfig.hardcoreLootChestEntry = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FullLoot.ChestGameObjectId", 0)));
+    g_PveConfig.zoneGuardiansPerZone = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ZoneGuardians.PerZone", 0), 0, 10));
 
     // Accounts whose bots are PvP-only: parked in their sanctuary, never
     // touched by any PvE system (no grind, errands, gear, talents, economy),
@@ -5068,7 +5264,8 @@ void PveManager::OnManagedBotLevelChanged(Player* player, uint8 /*oldLevel*/)
     if (g_PveConfig.rebirthAtMaxLevelPercent &&
         player->GetLevel() >= sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL) &&
         uint32(player->GetGUID().GetCounter() % 100) < g_PveConfig.rebirthAtMaxLevelPercent &&
-        !IsPvpOnlyBot(player) && !IsExemptFromBattlegroundOrchestration(player))
+        !IsPvpOnlyBot(player) && !IsExemptFromBattlegroundOrchestration(player) &&
+        !GetGuardianZoneId(player->GetGUID().GetRawValue()))
     {
         TC_LOG_INFO("playerbots.pve", "Bot {} reached the level cap and is flagged for rebirth.", player->GetName());
         std::lock_guard<std::mutex> guard(g_PvePendingLock);
@@ -5161,8 +5358,9 @@ uint32 PveManager::ResetBotsToLevelOne(uint8 percent)
         if (!candidate || !candidate->IsInWorld() || !playerbot::IsManagedRandomBot(candidate))
             continue;
         // Companions serving a human are left alone; PvP-only bots are not
-        // part of the leveling world at all.
-        if (IsExemptFromBattlegroundOrchestration(candidate) || IsPvpOnlyBot(candidate))
+        // part of the leveling world at all; zone guardians keep their post.
+        if (IsExemptFromBattlegroundOrchestration(candidate) || IsPvpOnlyBot(candidate) ||
+            GetGuardianZoneId(candidate->GetGUID().GetRawValue()))
             continue;
         managedBots.push_back(candidate);
     }
