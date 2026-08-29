@@ -297,6 +297,7 @@ void UseQuestGameObject(Player* bot, PveBotState& state, GameObject* go);
 bool BotHasIncompleteQuest(Player* bot);
 template<typename Fn>
 void ForEachBagItem(Player* bot, Fn&& fn);
+bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTemplate const* incumbent, uint8 slot);
 void ProcessPendingLootExecutions();
 void GrantGatherSkillCredit(Player* bot, GameObject* go);
 void TrySkinCorpse(Player* bot, Creature* corpse);
@@ -386,6 +387,26 @@ bool IsDrinkTemplate(ItemTemplate const* proto)
 {
     return proto && proto->Class == ITEM_CLASS_CONSUMABLE &&
         proto->Spells[0].SpellCategory == SPELL_CATEGORY_DRINK;
+}
+
+// Whether this class drinks at all. NOT GetMaxPower(POWER_MANA): a druid in
+// bear or cat form reports the form's power, so a shapeshifted druid looked
+// like a warrior to every water check and went thirsty for good.
+bool UsesMana(Player const* bot)
+{
+    switch (bot->GetClass())
+    {
+        case CLASS_PALADIN:
+        case CLASS_HUNTER:
+        case CLASS_PRIEST:
+        case CLASS_SHAMAN:
+        case CLASS_MAGE:
+        case CLASS_WARLOCK:
+        case CLASS_DRUID:
+            return true;
+        default:
+            return false;
+    }
 }
 
 void RemoveRestAuras(Player* player)
@@ -1143,7 +1164,7 @@ bool VendorStocksNeededSupplies(Player* bot, Creature* vendor)
     // carrying a hundred loaves and no water kept walking to food-only
     // vendors, buying nothing it needed, and arriving thirsty forever.
     bool const needsFood = CountConsumableUnits(bot, false) == 0 && !ConjureSpellId(bot, false);
-    bool const needsDrink = bot->GetMaxPower(POWER_MANA) > 0 &&
+    bool const needsDrink = UsesMana(bot) &&
         CountConsumableUnits(bot, true) == 0 && !ConjureSpellId(bot, true);
     uint32 const ammoSubclass = RequiredAmmoSubclass(bot);
     bool const needsAmmo = ammoSubclass != 0 &&
@@ -1181,7 +1202,7 @@ void TryBuySupplies(Player* bot, Creature* vendor)
     if (!vendorItems)
         return;
 
-    bool const wantsDrink = bot->GetMaxPower(POWER_MANA) > 0;
+    bool const wantsDrink = UsesMana(bot);
     uint32 const ammoSubclass = RequiredAmmoSubclass(bot);
 
     bool hasEmptyBagSlot = false;
@@ -1280,6 +1301,11 @@ bool IsQuestRequiredItem(Player* bot, uint32 itemId)
 
 uint32 SellVendorJunk(Player* bot)
 {
+    // With the pack full there is nowhere to put a drop, a purchase or a
+    // quest reward, so the clear-out widens: plain white gear the bot is not
+    // wearing is worth a few coppers and a free slot far more.
+    bool const packedTight = CountFreeBagSlots(bot) < 2;
+
     uint32 soldCount = 0;
     ForEachBagItem(bot, [&](Item* item, uint8 bag, uint8 slot)
     {
@@ -1293,6 +1319,25 @@ uint32 SellVendorJunk(Player* bot)
         if (!sellable && playerbot::PveManager::GetConfig().professionsEnabled &&
             proto->Class == ITEM_CLASS_TRADE_GOODS)
             sellable = !IsQuestRequiredItem(bot, proto->ItemId);
+
+        // Spare white gear once the pack is genuinely full - never the food,
+        // water, ammunition or bags that keep the bot running, and never
+        // something it would rather be wearing.
+        if (!sellable && packedTight && proto->Quality == ITEM_QUALITY_NORMAL &&
+            (proto->Class == ITEM_CLASS_WEAPON || proto->Class == ITEM_CLASS_ARMOR) &&
+            !IsQuestRequiredItem(bot, proto->ItemId))
+        {
+            uint16 dest = 0;
+            bool wantsToWear = false;
+            if (bot->CanEquipItem(NULL_SLOT, dest, item, false) == EQUIP_ERR_OK)
+            {
+                ItemTemplate const* equipped = nullptr;
+                if (Item const* worn = bot->GetItemByPos(dest))
+                    equipped = worn->GetTemplate();
+                wantsToWear = IsEquipUpgrade(bot, proto, equipped, uint8(dest & 255));
+            }
+            sellable = !wantsToWear;
+        }
 
         if (!sellable)
             return;
@@ -1571,7 +1616,7 @@ void StartErrandIfNeeded(Player* bot, PveBotState& state, playerbot::PveConfig c
     bool const needRepair = AnyEquippedItemBelowDurabilityPct(bot, 35);
     bool const needSupplies = cfg.restUseConsumables &&
         ((CountConsumableUnits(bot, false) == 0 && !ConjureSpellId(bot, false)) ||
-            (bot->GetMaxPower(POWER_MANA) > 0 && CountConsumableUnits(bot, true) == 0 && !ConjureSpellId(bot, true)) ||
+            (UsesMana(bot) && CountConsumableUnits(bot, true) == 0 && !ConjureSpellId(bot, true)) ||
             (RequiredAmmoSubclass(bot) &&
                 (!bot->GetUInt32Value(PLAYER_AMMO_ID) || bot->GetItemCount(bot->GetUInt32Value(PLAYER_AMMO_ID)) == 0)));
     bool const needVendor = cfg.vendorEnabled &&
@@ -4981,6 +5026,13 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
                 }
                 if (consumable)
                 {
+                    // Nobody eats or drinks as a bear. A shapeshifted druid
+                    // (or a shaman in ghost wolf) has to drop the form first,
+                    // or the item use is refused and it rests forever without
+                    // ever recovering a point of mana.
+                    if (bot->GetShapeshiftForm() != FORM_NONE)
+                        bot->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
+
                     // The cast may consume the last unit and delete the item;
                     // capture everything needed before it runs.
                     uint32 const consumableEntry = consumable->GetEntry();
