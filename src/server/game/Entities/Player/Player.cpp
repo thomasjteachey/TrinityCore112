@@ -46,6 +46,7 @@
 #include "MovementDefines.h"
 #include "Common.h"
 #include "ConditionMgr.h"
+#include "Configuration/Config.h"
 #include "Containers.h"
 #include "CreatureAI.h"
 #include "DatabaseEnv.h"
@@ -149,6 +150,26 @@ namespace
     bool IsRogueVanishImmunitySpell(uint32 spellId)
     {
         return spellId == SpellRogueNeilyoImmunity || spellId == SpellRogueVanishImmunity;
+    }
+
+    // Accounts whose playerbots are PvP-only (Playerbot.Pve.PvpOnlyAccountIds
+    // in playerbots.conf): their gear is cloned from another realm and the
+    // login inventory sweep must not enforce this realm's item requirements
+    // against it. Parsed once; the config is loaded before any player login.
+    bool IsPvpOnlyPlayerbotAccount(uint32 accountId)
+    {
+        static std::vector<uint32> const accountIds = []
+        {
+            std::vector<uint32> ids;
+            std::stringstream stream(sConfigMgr->GetStringDefault("Playerbot.Pve.PvpOnlyAccountIds", ""));
+            std::string token;
+            while (std::getline(stream, token, ','))
+                if (!token.empty())
+                    ids.push_back(uint32(std::strtoul(token.c_str(), nullptr, 10)));
+            std::sort(ids.begin(), ids.end());
+            return ids;
+        }();
+        return !accountIds.empty() && std::binary_search(accountIds.begin(), accountIds.end(), accountId);
     }
 
     void AdvanceCombatDiagnosticTimer(uint32& timer, uint32 diff)
@@ -19821,6 +19842,15 @@ void Player::_LoadInventory(PreparedQueryResult result, uint32 timeDiff)
                         err = CanEquipItem(slot, dest, item, false, false);
                         if (err == EQUIP_ERR_OK)
                             QuickEquipItem(dest, item);
+                        // PvP-only playerbots wear gear cloned from another
+                        // realm exactly as-is: this realm's tighter item
+                        // requirements (honor ranks, reputations, level
+                        // caps) must not strip it into the mailbox at login.
+                        else if (IsPvpOnlyPlayerbotAccount(GetSession()->GetAccountId()))
+                        {
+                            QuickEquipItem(uint16((INVENTORY_SLOT_BAG_0 << 8) | slot), item);
+                            err = EQUIP_ERR_OK;
+                        }
                     }
                     else if (IsBankPos(INVENTORY_SLOT_BAG_0, slot))
                     {
