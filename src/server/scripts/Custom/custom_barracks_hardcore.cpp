@@ -316,7 +316,12 @@ public:
                 AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Remove my free-for-all flag.", GOSSIP_SENDER_MAIN, 2);
             else
                 AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Flag me for free-for-all PvP. (Double experience and gold while armed!)", GOSSIP_SENDER_MAIN, 1);
-            SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me->GetGUID());
+            // A second option is load-bearing: the 3.3.5 client auto-selects
+            // a one-option gossip menu, so right-clicking Grix toggled the
+            // flag instantly with no window ever shown.
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Farewell.", GOSSIP_SENDER_MAIN, 3);
+            // Custom flavor text row (bplusworld.npc_text 900001).
+            SendGossipMenuFor(player, 900001, me->GetGUID());
             return true;
         }
 
