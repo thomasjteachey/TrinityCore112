@@ -43,6 +43,9 @@
 #include "MotionMaster.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
+#include "AuctionHouseBot/AuctionHouseBot.h"
+#include "AuctionHouseMgr.h"
+#include "Mail.h"
 #include "Player.h"
 #include "QuestDef.h"
 #include "RBAC.h"
@@ -129,9 +132,25 @@ struct PveBotState
     uint32 dryWanderCount = 0;
     PveTimePoint restingUntil{};
     PveTimePoint nextSupplyRunAt{};
+    PveTimePoint nextMailCheckAt{};
+    PveTimePoint nextAuctionShopAt{};
+    PveTimePoint nextProfessionCheckAt{};
     uint32 engagedStallTicks = 0;
     float lastEngagedX = 0.0f;
     float lastEngagedY = 0.0f;
+    // Walked journey (relocation/town run on foot). Fallback kind decides
+    // what happens on timeout or stuck: the old teleport.
+    bool journeyActive = false;
+    uint8 journeyFallbackKind = 0; // 1 = grind relocation, 2 = supply run
+    uint16 journeyMapId = 0;
+    float journeyX = 0.0f;
+    float journeyY = 0.0f;
+    float journeyZ = 0.0f;
+    PveTimePoint journeyUntil{};
+    PveTimePoint nextJourneyStepAt{};
+    PveTimePoint journeyProgressAt{};
+    float journeyProgressX = 0.0f;
+    float journeyProgressY = 0.0f;
 };
 
 bool IsRecentErrandTarget(PveBotState& state, ObjectGuid const& guid)
@@ -208,6 +227,10 @@ std::unordered_set<uint64> g_PendingGrindRelocations;
 // repairs happen through the normal errand, and the dry-scan relocation
 // afterwards sends them back to a grind spot.
 std::unordered_set<uint64> g_PendingSupplyRuns;
+// Mail collection and auction shopping mutate world-thread-only structures
+// (Player::m_mail, AuctionHouseObject) - executed from OnWorldUpdate.
+std::unordered_set<uint64> g_PendingMailCollections;
+std::unordered_set<uint64> g_PendingAuctionShopping;
 // Loot EXECUTION must happen on the world thread: Player::SendLoot for a
 // group-tagged kill (or a group-rules chest) mutates shared Group state
 // (roll lists, looter guid) that the core only ever touches from
@@ -219,6 +242,9 @@ GameObject* FindNearestQuestGameObject(Player* bot, PveBotState& state, float ra
 void UseQuestGameObject(Player* bot, PveBotState& state, GameObject* go);
 bool BotHasIncompleteQuest(Player* bot);
 void ProcessPendingLootExecutions();
+void GrantGatherSkillCredit(Player* bot, GameObject* go);
+void TrySkinCorpse(Player* bot, Creature* corpse);
+bool IsGatherableNodeFor(Player* bot, GameObject const* go, int32* outRequiredSkill);
 
 bool IsHumanPlayer(Player const* player)
 {
@@ -456,6 +482,88 @@ Creature* FindGrindProspect(Player* bot, PveBotState& state, playerbot::PveConfi
     return nearest;
 }
 
+// Begin a walked journey toward a destination on the bot's current map.
+// Called from world-thread executors; the map-thread fast tick advances it.
+void StartWalkedJourney(PveBotState& state, uint16 mapId, float x, float y, float z, uint8 fallbackKind, float distance)
+{
+    state.journeyActive = true;
+    state.journeyFallbackKind = fallbackKind;
+    state.journeyMapId = mapId;
+    state.journeyX = x;
+    state.journeyY = y;
+    state.journeyZ = z;
+    // Generous deadline: walking speed with detours plus fights on the way.
+    state.journeyUntil = PveClock::now() + std::chrono::seconds(uint32(distance / 4.0f) + 120);
+    state.nextJourneyStepAt = {};
+    state.journeyProgressAt = PveClock::now();
+    state.journeyProgressX = 0.0f;
+    state.journeyProgressY = 0.0f;
+}
+
+void CancelJourneyWithFallback(Player* bot, PveBotState& state)
+{
+    uint8 const fallbackKind = state.journeyFallbackKind;
+    state.journeyActive = false;
+    state.journeyFallbackKind = 0;
+
+    // The walk failed (timeout or stuck); the old teleport still delivers.
+    std::lock_guard<std::mutex> guard(g_PvePendingLock);
+    if (fallbackKind == 1)
+        g_PendingGrindRelocations.insert(bot->GetGUID().GetRawValue());
+    else if (fallbackKind == 2)
+        g_PendingSupplyRuns.insert(bot->GetGUID().GetRawValue());
+}
+
+// Returns true while the journey owns this tick.
+bool AdvanceWalkedJourney(Player* bot, PveBotState& state)
+{
+    if (!state.journeyActive)
+        return false;
+
+    PveTimePoint const now = PveClock::now();
+    if (bot->GetMapId() != state.journeyMapId || now > state.journeyUntil)
+    {
+        CancelJourneyWithFallback(bot, state);
+        return false;
+    }
+
+    float const dx = bot->GetPositionX() - state.journeyX;
+    float const dy = bot->GetPositionY() - state.journeyY;
+    if (dx * dx + dy * dy < 20.0f * 20.0f)
+    {
+        state.journeyActive = false;
+        state.journeyFallbackKind = 0;
+        TC_LOG_INFO("playerbots.pve", "Bot {} finished its walked journey.", bot->GetName());
+        return false;
+    }
+
+    // Stuck detection: no ground covered in 12s despite trying.
+    float const progressDx = bot->GetPositionX() - state.journeyProgressX;
+    float const progressDy = bot->GetPositionY() - state.journeyProgressY;
+    if (progressDx * progressDx + progressDy * progressDy > 4.0f)
+    {
+        state.journeyProgressX = bot->GetPositionX();
+        state.journeyProgressY = bot->GetPositionY();
+        state.journeyProgressAt = now;
+    }
+    else if (now - state.journeyProgressAt > std::chrono::seconds(12))
+    {
+        CancelJourneyWithFallback(bot, state);
+        return false;
+    }
+
+    if (now >= state.nextJourneyStepAt && !bot->isMoving())
+    {
+        state.nextJourneyStepAt = now + std::chrono::seconds(2);
+        playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
+        // MovePoint clamps to a partial mmap path toward a far destination;
+        // re-issuing on arrival at each partial end walks the full distance.
+        bot->GetMotionMaster()->MovePoint(0, Position(state.journeyX, state.journeyY, state.journeyZ), true);
+    }
+
+    return true;
+}
+
 void MoveTowardThrottled(Player* bot, Position const& destination)
 {
     if (bot->isMoving())
@@ -633,13 +741,42 @@ void TryBuySupplies(Player* bot, Creature* vendor)
     }
 }
 
+bool IsQuestRequiredItem(Player* bot, uint32 itemId)
+{
+    for (auto const& [questId, status] : bot->getQuestStatusMap())
+    {
+        if (status.Status != QUEST_STATUS_INCOMPLETE)
+            continue;
+
+        Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+        if (!quest)
+            continue;
+
+        for (uint8 index = 0; index < QUEST_ITEM_OBJECTIVES_COUNT; ++index)
+            if (quest->RequiredItemId[index] == itemId)
+                return true;
+    }
+
+    return false;
+}
+
 uint32 SellVendorJunk(Player* bot)
 {
     uint32 soldCount = 0;
     ForEachBagItem(bot, [&](Item* item, uint8 bag, uint8 slot)
     {
         ItemTemplate const* proto = item->GetTemplate();
-        if (!proto || proto->Quality != ITEM_QUALITY_POOR || !proto->SellPrice)
+        if (!proto || !proto->SellPrice)
+            return;
+
+        // Greys always; gathered trade goods too (bots don't craft), unless
+        // an active quest needs the item.
+        bool sellable = proto->Quality == ITEM_QUALITY_POOR;
+        if (!sellable && playerbot::PveManager::GetConfig().professionsEnabled &&
+            proto->Class == ITEM_CLASS_TRADE_GOODS)
+            sellable = !IsQuestRequiredItem(bot, proto->ItemId);
+
+        if (!sellable)
             return;
 
         bot->ModifyMoney(int32(proto->SellPrice * item->GetCount()));
@@ -730,22 +867,24 @@ void ProcessPendingLootExecutions()
         WorldObject* lootObject = nullptr;
         Loot* loot = nullptr;
         LootType lootType = LOOT_CORPSE;
+        GameObject* lootGameObject = nullptr;
+        Creature* lootCorpse = nullptr;
         if (lootGuid.IsGameObject())
         {
-            GameObject* go = ObjectAccessor::GetGameObject(*bot, lootGuid);
-            if (!go || !go->isSpawned())
+            lootGameObject = ObjectAccessor::GetGameObject(*bot, lootGuid);
+            if (!lootGameObject || !lootGameObject->isSpawned())
                 continue;
-            lootObject = go;
-            loot = &go->loot;
+            lootObject = lootGameObject;
+            loot = &lootGameObject->loot;
             lootType = LOOT_SKINNING;
         }
         else
         {
-            Creature* corpse = ObjectAccessor::GetCreature(*bot, lootGuid);
-            if (!corpse || corpse->IsAlive() || corpse->loot.isLooted())
+            lootCorpse = ObjectAccessor::GetCreature(*bot, lootGuid);
+            if (!lootCorpse || lootCorpse->IsAlive() || lootCorpse->loot.isLooted())
                 continue;
-            lootObject = corpse;
-            loot = &corpse->loot;
+            lootObject = lootCorpse;
+            loot = &lootCorpse->loot;
         }
 
         if (!bot->IsWithinDistInMap(lootObject, INTERACTION_DISTANCE + 2.0f))
@@ -788,6 +927,16 @@ void ProcessPendingLootExecutions()
 
         if (bot->GetLootGUID() == lootGuid)
             bot->GetSession()->DoLootRelease(lootGuid);
+
+        if (playerbot::PveManager::GetConfig().professionsEnabled)
+        {
+            // Gather nodes grant their skill-up; freshly emptied corpses
+            // become skinnable and get skinned in the same visit.
+            if (lootGameObject)
+                GrantGatherSkillCredit(bot, lootGameObject);
+            else if (lootCorpse)
+                TrySkinCorpse(bot, lootCorpse);
+        }
     }
 }
 
@@ -869,9 +1018,9 @@ void StartErrandIfNeeded(Player* bot, PveBotState& state, playerbot::PveConfig c
     if (!cfg.questsEnabled && !cfg.vendorEnabled)
         return;
 
-    // Gameobject objectives first: they sit inside the grind area, so
-    // finishing them costs almost nothing and unblocks turn-ins.
-    if (cfg.questsEnabled && BotHasIncompleteQuest(bot))
+    // Gameobject objectives and gather nodes first: they sit inside the
+    // grind area, so finishing them costs almost nothing.
+    if ((cfg.questsEnabled && BotHasIncompleteQuest(bot)) || cfg.professionsEnabled)
     {
         if (GameObject* questGo = FindNearestQuestGameObject(bot, state, 120.0f))
         {
@@ -1607,6 +1756,473 @@ void BuildVendorSpotCacheOnce()
     TC_LOG_INFO("playerbots.pve", "Vendor spot cache built: {} vendors.", g_VendorSpots.size());
 }
 
+// ---------------------------------------------------------------------------
+// Gathering professions: each bot takes two of herbalism/mining/skinning
+// (deterministic by guid), learns and ranks them automatically, gathers
+// nodes through the errand system and skins finished corpses.
+// ---------------------------------------------------------------------------
+
+struct ProfessionTier
+{
+    uint32 spellId;
+    uint16 requiredSkill;
+    uint8 requiredLevel;
+};
+
+// Classic ladders through Artisan (300) - the fork's realms are 60-capped.
+constexpr std::array<ProfessionTier, 4> kHerbalismTiers = { { { 2366, 0, 1 }, { 2368, 50, 10 }, { 3570, 125, 20 }, { 11993, 200, 35 } } };
+constexpr std::array<ProfessionTier, 4> kMiningTiers = { { { 2575, 0, 1 }, { 2576, 50, 10 }, { 3564, 125, 20 }, { 10248, 200, 35 } } };
+constexpr std::array<ProfessionTier, 4> kSkinningTiers = { { { 8613, 0, 1 }, { 8617, 50, 10 }, { 8618, 125, 20 }, { 10768, 200, 35 } } };
+
+bool BotHasProfession(Player const* bot, LockType lockType)
+{
+    // guid % 3 picks the pair: 0 = herb+skin, 1 = mining+skin, 2 = herb+mining.
+    uint32 const pick = bot->GetGUID().GetCounter() % 3;
+    switch (lockType)
+    {
+        case LOCKTYPE_HERBALISM: return pick != 1;
+        case LOCKTYPE_MINING:    return pick != 0;
+        default:                 return false;
+    }
+}
+
+bool BotSkins(Player const* bot)
+{
+    return bot->GetGUID().GetCounter() % 3 != 2;
+}
+
+void EnsureProfessionTier(Player* bot, std::array<ProfessionTier, 4> const& tiers, uint32 skillId)
+{
+    uint16 const skillValue = bot->GetSkillValue(skillId);
+    for (ProfessionTier const& tier : tiers)
+    {
+        if (bot->HasSpell(tier.spellId))
+            continue;
+
+        if (bot->GetLevel() < tier.requiredLevel || skillValue < tier.requiredSkill)
+            return;
+
+        bot->LearnSpell(tier.spellId, false);
+        TC_LOG_INFO("playerbots.pve", "Bot {} learned profession tier spell {}.", bot->GetName(), tier.spellId);
+        return; // one tier per pass; the next check picks up the rest
+    }
+}
+
+void EnsureProfessions(Player* bot)
+{
+    if (BotHasProfession(bot, LOCKTYPE_HERBALISM))
+        EnsureProfessionTier(bot, kHerbalismTiers, SKILL_HERBALISM);
+    if (BotHasProfession(bot, LOCKTYPE_MINING))
+        EnsureProfessionTier(bot, kMiningTiers, SKILL_MINING);
+    if (BotSkins(bot))
+        EnsureProfessionTier(bot, kSkinningTiers, SKILL_SKINNING);
+}
+
+// A herb/ore node this bot can gather right now: chest-type GO whose lock
+// carries a skill case of the matching type within the bot's skill.
+bool IsGatherableNodeFor(Player* bot, GameObject const* go, int32* outRequiredSkill = nullptr)
+{
+    GameObjectTemplate const* goInfo = go->GetGOInfo();
+    if (!goInfo || goInfo->type != GAMEOBJECT_TYPE_CHEST)
+        return false;
+
+    LockEntry const* lock = sLockStore.LookupEntry(goInfo->GetLockId());
+    if (!lock)
+        return false;
+
+    for (uint8 caseIndex = 0; caseIndex < MAX_LOCK_CASE; ++caseIndex)
+    {
+        if (lock->Type[caseIndex] != LOCK_KEY_SKILL)
+            continue;
+
+        LockType const lockType = LockType(lock->Index[caseIndex]);
+        if (lockType != LOCKTYPE_HERBALISM && lockType != LOCKTYPE_MINING)
+            continue;
+
+        if (!BotHasProfession(bot, lockType))
+            return false;
+
+        uint32 const skillId = SkillByLockType(lockType);
+        if (!skillId || bot->GetSkillValue(skillId) < lock->Skill[caseIndex])
+            return false;
+
+        if (outRequiredSkill)
+            *outRequiredSkill = int32(lock->Skill[caseIndex]);
+        return true;
+    }
+
+    return false;
+}
+
+// Skinning replica of Spell::EffectSkinning for the world-thread loot
+// executor: runs after a corpse is fully looted (which is what sets
+// UNIT_FLAG_SKINNABLE).
+void TrySkinCorpse(Player* bot, Creature* corpse)
+{
+    if (!BotSkins(bot) || !bot->HasSkill(SKILL_SKINNING))
+        return;
+
+    if (!corpse->HasUnitFlag(UNIT_FLAG_SKINNABLE))
+        return;
+
+    CreatureTemplate const* proto = corpse->GetCreatureTemplate();
+    if (!proto || proto->GetRequiredLootSkill() != SKILL_SKINNING)
+        return;
+
+    uint32 const skillValue = bot->GetSkillValue(SKILL_SKINNING);
+    int32 const targetLevel = int32(corpse->GetLevel());
+    int32 const requiredValue = targetLevel < 10 ? 0 : (targetLevel < 20 ? (targetLevel - 10) * 10 : targetLevel * 5);
+    if (int32(skillValue) < requiredValue)
+        return;
+
+    corpse->RemoveUnitFlag(UNIT_FLAG_SKINNABLE);
+    corpse->SetDynamicFlag(UNIT_DYNFLAG_LOOTABLE);
+    bot->SendLoot(corpse->GetGUID(), LOOT_SKINNING);
+    if (bot->GetLootGUID() != corpse->GetGUID())
+        return;
+
+    Loot* loot = &corpse->loot;
+    uint32 const maxSlot = std::min<uint32>(loot->GetMaxSlotInLootFor(bot), 255);
+    for (uint32 slot = 0; slot < maxSlot; ++slot)
+        bot->StoreLootItem(uint8(slot), loot);
+
+    if (bot->GetLootGUID() == corpse->GetGUID())
+        bot->GetSession()->DoLootRelease(corpse->GetGUID());
+
+    bot->UpdateGatherSkill(SKILL_SKINNING, skillValue, uint32(std::max(0, requiredValue)),
+        corpse->isElite() ? 2 : 1);
+}
+
+// After the world-thread executor loots a gather node: the skill-up the real
+// gather spell would have granted (EffectOpenLock's tail), with the same
+// one-per-respawn guard.
+void GrantGatherSkillCredit(Player* bot, GameObject* go)
+{
+    GameObjectTemplate const* goInfo = go->GetGOInfo();
+    if (!goInfo || goInfo->type != GAMEOBJECT_TYPE_CHEST)
+        return;
+
+    LockEntry const* lock = sLockStore.LookupEntry(goInfo->GetLockId());
+    if (!lock)
+        return;
+
+    for (uint8 caseIndex = 0; caseIndex < MAX_LOCK_CASE; ++caseIndex)
+    {
+        if (lock->Type[caseIndex] != LOCK_KEY_SKILL)
+            continue;
+
+        LockType const lockType = LockType(lock->Index[caseIndex]);
+        if (lockType != LOCKTYPE_HERBALISM && lockType != LOCKTYPE_MINING)
+            continue;
+
+        uint32 const skillId = SkillByLockType(lockType);
+        if (!skillId)
+            return;
+
+        if (uint32 const pureSkill = bot->GetPureSkillValue(skillId))
+        {
+            if (!go->IsInSkillupList(bot->GetGUID()))
+            {
+                bot->UpdateGatherSkill(skillId, pureSkill, lock->Skill[caseIndex]);
+                go->AddToSkillupList(bot->GetGUID());
+            }
+        }
+        return;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mail collection (world thread): auction wins and system mail arrive by
+// post; a bot empties attachments and gold into its bags, mirroring the
+// take-item/take-money handlers. Emptied mails are left to expire (flagging
+// them deleted would hard-delete any attachment that failed to fit).
+// ---------------------------------------------------------------------------
+
+void ProcessPendingMailCollections()
+{
+    std::unordered_set<uint64> drained;
+    {
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        drained.swap(g_PendingMailCollections);
+    }
+
+    for (uint64 botRawGuid : drained)
+    {
+        Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid));
+        if (!bot || !bot->IsInWorld() || bot->GetMails().empty())
+            continue;
+
+        bool tookAnything = false;
+        uint32 tookItems = 0;
+        time_t const nowTime = GameTime::GetGameTime();
+        for (Mail* mail : bot->GetMails())
+        {
+            if (!mail || mail->state == MAIL_STATE_DELETED || mail->deliver_time > nowTime)
+                continue;
+
+            if (mail->money)
+            {
+                if (bot->ModifyMoney(mail->money, false))
+                {
+                    mail->money = 0;
+                    mail->state = MAIL_STATE_CHANGED;
+                    tookAnything = true;
+                }
+            }
+
+            if (mail->HasItems())
+            {
+                // Copy: taking an attachment mutates mail->items.
+                std::vector<uint32> attachmentIds;
+                for (MailItemInfo const& info : mail->items)
+                    attachmentIds.push_back(info.item_guid);
+
+                for (uint32 attachmentId : attachmentIds)
+                {
+                    Item* item = bot->GetMItem(attachmentId);
+                    if (!item)
+                        continue;
+
+                    ItemPosCountVec dest;
+                    if (bot->CanStoreItem(NULL_BAG, NULL_SLOT, dest, item, false) != EQUIP_ERR_OK)
+                        continue;
+
+                    mail->RemoveItem(attachmentId);
+                    mail->removedItems.push_back(attachmentId);
+                    mail->state = MAIL_STATE_CHANGED;
+                    bot->RemoveMItem(attachmentId);
+                    item->SetState(ITEM_UNCHANGED);
+                    bot->MoveItemToInventory(dest, item, true);
+                    tookAnything = true;
+                    ++tookItems;
+                }
+            }
+        }
+
+        if (tookAnything)
+        {
+            bot->m_mailsUpdated = true;
+            // _SaveMail is protected; the full save runs it and keeps the
+            // mail rows and the moved items consistent in one transaction.
+            bot->SaveToDB();
+            TC_LOG_INFO("playerbots.pve", "Bot {} collected its mail ({} items).", bot->GetName(), tookItems);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Auction shopping (world thread): browse the bot's faction house for one
+// affordable gear upgrade and buy it out, replicating the handler's buyout
+// branch exactly. The win arrives by mail and the collector above brings it
+// home; the equip pass puts it on.
+// ---------------------------------------------------------------------------
+
+void ProcessPendingAuctionShopping()
+{
+    std::unordered_set<uint64> drained;
+    {
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        drained.swap(g_PendingAuctionShopping);
+    }
+
+    for (uint64 botRawGuid : drained)
+    {
+        Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid));
+        if (!bot || !bot->IsInWorld() || !bot->IsAlive())
+            continue;
+
+        // The fork destroys auction wins whose buyer is an AHBot character
+        // (SendAuctionWonMail's IsBotChar gate) - those bots must not shop.
+        if (sAuctionBotConfig->IsBotChar(bot->GetGUID().GetCounter()))
+            continue;
+
+        AuctionHouseObject* auctionHouse = sAuctionMgr->GetAuctionsMap(bot->GetFaction());
+        if (!auctionHouse)
+            continue;
+
+        uint32 const budget = CalculatePct(bot->GetMoney(), g_PveConfig.auctionBuyBudgetPct);
+        uint32 const botAccountId = bot->GetSession() ? bot->GetSession()->GetAccountId() : 0;
+
+        AuctionEntry* bestAuction = nullptr;
+        int32 bestGain = 0;
+        for (auto itr = auctionHouse->GetAuctionsBegin(); itr != auctionHouse->GetAuctionsEnd(); ++itr)
+        {
+            AuctionEntry* auction = itr->second;
+            if (!auction || !auction->buyout || auction->buyout > budget)
+                continue;
+
+            if (auction->owner == bot->GetGUID().GetCounter())
+                continue;
+
+            Item* item = sAuctionMgr->GetAItem(auction->itemGUIDLow);
+            if (!item)
+                continue;
+
+            ItemTemplate const* proto = item->GetTemplate();
+            if (!proto || (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR))
+                continue;
+
+            if (bot->CanUseItem(proto) != EQUIP_ERR_OK)
+                continue;
+
+            uint16 dest = 0;
+            if (bot->CanEquipItem(NULL_SLOT, dest, item, true) != EQUIP_ERR_OK)
+                continue;
+
+            // Never bench an equipped off hand for a two-hander (same rule
+            // as the local equip pass).
+            if (proto->InventoryType == INVTYPE_2HWEAPON &&
+                bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND))
+                continue;
+
+            uint32 equippedItemLevel = 0;
+            if (Item const* equipped = bot->GetItemByPos(dest))
+                equippedItemLevel = equipped->GetTemplate() ? equipped->GetTemplate()->ItemLevel : 0;
+
+            int32 const gain = int32(proto->ItemLevel) - int32(equippedItemLevel);
+            if (gain <= 0 || gain <= bestGain)
+                continue;
+
+            // No trading with the bot's own account.
+            if (botAccountId && sCharacterCache->GetCharacterAccountIdByGuid(
+                    ObjectGuid::Create<HighGuid::Player>(auction->owner)) == botAccountId)
+                continue;
+
+            bestAuction = auction;
+            bestGain = gain;
+        }
+
+        if (!bestAuction)
+            continue;
+
+        // Buyout replica: bidder/bid assigned BEFORE the mails (they read
+        // them), won-mail before RemoveAItem, RemoveAuction last.
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+        bot->ModifyMoney(-int32(bestAuction->buyout));
+        if (bestAuction->bidder)
+            sAuctionMgr->SendAuctionOutbiddedMail(bestAuction, bestAuction->buyout, bot, trans);
+        bestAuction->bidder = bot->GetGUID().GetCounter();
+        bestAuction->bid = bestAuction->buyout;
+
+        sAuctionMgr->SendAuctionSalePendingMail(bestAuction, trans);
+        sAuctionMgr->SendAuctionSuccessfulMail(bestAuction, trans);
+        sAuctionMgr->SendAuctionWonMail(bestAuction, trans);
+
+        TC_LOG_INFO("playerbots.pve", "Bot {} bought auction {} (item {} for {} copper, +{} item levels).",
+            bot->GetName(), bestAuction->Id, bestAuction->itemEntry, bestAuction->buyout, bestGain);
+
+        bestAuction->DeleteFromDB(trans);
+        sAuctionMgr->RemoveAItem(bestAuction->itemGUIDLow);
+        auctionHouse->RemoveAuction(bestAuction);
+
+        bot->SaveInventoryAndGoldToDB(trans);
+        CharacterDatabase.CommitTransaction(trans);
+
+        // Fetch the win right away.
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        g_PendingMailCollections.insert(botRawGuid);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Taxi travel: BFS over direct taxi edges; the bot pays its own fare.
+// ---------------------------------------------------------------------------
+
+std::vector<uint32> FindTaxiNodeChain(uint32 sourceNode, uint32 destNode)
+{
+    std::vector<uint32> chain;
+    if (!sourceNode || !destNode || sourceNode == destNode)
+        return chain;
+
+    std::unordered_map<uint32, uint32> cameFrom;
+    std::deque<uint32> frontier;
+    frontier.push_back(sourceNode);
+    cameFrom[sourceNode] = 0;
+
+    while (!frontier.empty() && cameFrom.size() < 500)
+    {
+        uint32 const node = frontier.front();
+        frontier.pop_front();
+        auto const edges = sTaxiPathSetBySource.find(node);
+        if (edges == sTaxiPathSetBySource.end())
+            continue;
+
+        for (auto const& edge : edges->second)
+        {
+            uint32 const next = edge.first;
+            if (cameFrom.count(next))
+                continue;
+
+            cameFrom[next] = node;
+            if (next == destNode)
+            {
+                for (uint32 walk = destNode; walk; walk = cameFrom[walk])
+                    chain.push_back(walk);
+                std::reverse(chain.begin(), chain.end());
+                return chain;
+            }
+            frontier.push_back(next);
+        }
+    }
+
+    return chain;
+}
+
+// World thread. Fly the bot toward a destination when a route exists and a
+// taxi node is close by; the post-landing leg becomes a walked journey.
+bool TryTaxiTravel(Player* bot, uint64 botRawGuid, uint16 destMapId, float destX, float destY, float destZ, uint8 fallbackKind)
+{
+    if (!g_PveConfig.travelUseFlightPaths || bot->IsInFlight() || bot->IsInCombat())
+        return false;
+
+    uint32 const sourceNode = sObjectMgr->GetNearestTaxiNodeAnyTeam(
+        bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(), bot->GetMapId());
+    uint32 const destNode = sObjectMgr->GetNearestTaxiNodeAnyTeam(destX, destY, destZ, destMapId);
+    if (!sourceNode || !destNode || sourceNode == destNode)
+        return false;
+
+    TaxiNodesEntry const* sourceEntry = sTaxiNodesStore.LookupEntry(sourceNode);
+    TaxiNodesEntry const* destEntry = sTaxiNodesStore.LookupEntry(destNode);
+    if (!sourceEntry || !destEntry)
+        return false;
+
+    // Only fly when the departure point is genuinely nearby; a flight that
+    // visibly starts hundreds of yards from any flight master looks wrong.
+    if (uint32(sourceEntry->ContinentID) != bot->GetMapId() ||
+        bot->GetDistance(sourceEntry->Pos.X, sourceEntry->Pos.Y, sourceEntry->Pos.Z) > 300.0f)
+        return false;
+
+    std::vector<uint32> const chain = FindTaxiNodeChain(sourceNode, destNode);
+    if (chain.size() < 2 || chain.size() > 8)
+        return false;
+
+    // Post-landing leg: walk from the arrival node to the actual target.
+    {
+        PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+        state.engaged = false;
+        if (uint32(destEntry->ContinentID) == destMapId)
+        {
+            StartWalkedJourney(state, destMapId, destX, destY, destZ, fallbackKind,
+                std::max(200.0f, bot->GetDistance(destX, destY, destZ)));
+            // Flights are long; extend the deadline generously.
+            state.journeyUntil = PveClock::now() + std::chrono::seconds(900);
+        }
+    }
+    playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), false);
+
+    if (!bot->ActivateTaxiPathTo(chain, nullptr))
+    {
+        PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+        state.journeyActive = false;
+        state.journeyFallbackKind = 0;
+        return false;
+    }
+
+    TC_LOG_INFO("playerbots.pve", "Bot {} took a flight: {} hops toward map {} ({:.0f} {:.0f}).",
+        bot->GetName(), uint32(chain.size() - 1), destMapId, destX, destY);
+    return true;
+}
+
 // World thread. Town run: teleport a supply-starved bot next to the nearest
 // vendor spawn, avoiding real players at both ends.
 void ProcessPendingSupplyRuns()
@@ -1653,6 +2269,25 @@ void ProcessPendingSupplyRuns()
         }
 
         if (!nearest)
+            continue;
+
+        // Walking distance? Make it a real trip to town.
+        if (g_PveConfig.travelWalkMaxDistance > 0.0f && nearest->mapId == bot->GetMapId())
+        {
+            float const walkDistance = bot->GetDistance(nearest->x, nearest->y, nearest->z);
+            if (walkDistance <= g_PveConfig.travelWalkMaxDistance)
+            {
+                playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), false);
+                PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+                state.engaged = false;
+                StartWalkedJourney(state, nearest->mapId, nearest->x, nearest->y, nearest->z, 2, walkDistance);
+                TC_LOG_INFO("playerbots.pve", "Bot {} walking {:.0f}y to town for supplies.",
+                    bot->GetName(), walkDistance);
+                continue;
+            }
+        }
+
+        if (TryTaxiTravel(bot, botRawGuid, nearest->mapId, nearest->x, nearest->y, nearest->z, 2))
             continue;
 
         Map* map = sMapMgr->FindMap(nearest->mapId, 0);
@@ -1718,6 +2353,28 @@ void ProcessPendingGrindRelocations()
         for (uint8 attempt = 0; attempt < 10; ++attempt)
         {
             GrindSpot const& spot = candidates[urand(0, uint32(candidates.size() - 1))];
+
+            // Walk when the spot is on this map within range: visible travel
+            // beats teleporting, and walking needs no vanish-guards.
+            if (g_PveConfig.travelWalkMaxDistance > 0.0f && spot.mapId == bot->GetMapId())
+            {
+                float const walkDistance = bot->GetDistance(spot.x, spot.y, spot.z);
+                if (walkDistance <= g_PveConfig.travelWalkMaxDistance)
+                {
+                    playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), false);
+                    PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+                    state.engaged = false;
+                    StartWalkedJourney(state, spot.mapId, spot.x, spot.y, spot.z, 1, walkDistance);
+                    TC_LOG_INFO("playerbots.pve", "Bot {} walking {:.0f}y to a new grind spot.",
+                        bot->GetName(), walkDistance);
+                    break;
+                }
+            }
+
+            // A real flight beats teleporting when a route exists.
+            if (TryTaxiTravel(bot, botRawGuid, spot.mapId, spot.x, spot.y, spot.z, 1))
+                break;
+
             Map* map = sMapMgr->FindMap(spot.mapId, 0);
             if (!map)
                 continue;
@@ -1763,21 +2420,30 @@ void ProcessPendingGrindRelocations()
 struct QuestGameObjectCheck
 {
     Player* bot;
+    bool wantQuestObjects;
+    bool wantGatherNodes;
 
     bool operator()(GameObject* go) const
     {
-        if (!go->isSpawned() || !go->ActivateToQuest(bot))
+        if (!go->isSpawned())
             return false;
 
-        GameobjectTypes const type = go->GetGoType();
-        return type == GAMEOBJECT_TYPE_GOOBER || type == GAMEOBJECT_TYPE_CHEST;
+        if (wantQuestObjects && go->ActivateToQuest(bot))
+        {
+            GameobjectTypes const type = go->GetGoType();
+            if (type == GAMEOBJECT_TYPE_GOOBER || type == GAMEOBJECT_TYPE_CHEST)
+                return true;
+        }
+
+        return wantGatherNodes && IsGatherableNodeFor(bot, go, nullptr);
     }
 };
 
 GameObject* FindNearestQuestGameObject(Player* bot, PveBotState& state, float radius)
 {
     std::vector<GameObject*> matches;
-    QuestGameObjectCheck check{ bot };
+    playerbot::PveConfig const& cfg = playerbot::PveManager::GetConfig();
+    QuestGameObjectCheck check{ bot, cfg.questsEnabled && BotHasIncompleteQuest(bot), cfg.professionsEnabled };
     Trinity::GameObjectListSearcher<QuestGameObjectCheck> searcher(bot, matches, check);
     Cell::VisitGridObjects(bot, searcher, radius);
 
@@ -2242,7 +2908,8 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         masterAllowsRest = masterSameMap && bot->GetDistance(masterSameMap) < PveRestBreakFollowDistance * 0.75f;
     }
 
-    if (!state.engaged && !bot->IsInCombat() && !IsRestingNow(bot, state) && masterAllowsRest)
+    if (!state.engaged && !bot->IsInCombat() && !IsRestingNow(bot, state) && masterAllowsRest &&
+        !state.journeyActive)
     {
         bool const needFood = bot->GetHealthPct() < cfg.restHealthPct;
         bool const needDrink = bot->GetMaxPower(POWER_MANA) > 0 && bot->GetPowerPct(POWER_MANA) < cfg.restManaPct;
@@ -2284,7 +2951,7 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     // master's heel.
     if (state.masterGuid.IsEmpty() && !state.engaged && !bot->IsInCombat() &&
         state.errandKind == PveErrandKind::None && state.pendingLootGuid.IsEmpty() &&
-        now >= state.nextErrandScanAt)
+        !state.journeyActive && now >= state.nextErrandScanAt)
     {
         state.nextErrandScanAt = now + std::chrono::seconds(15);
         StartErrandIfNeeded(bot, state, cfg);
@@ -2305,6 +2972,28 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     {
         state.nextTalentCheckAt = now + std::chrono::seconds(60);
         SpendPendingTalentPoints(bot);
+    }
+
+    if (cfg.professionsEnabled && !bot->IsInCombat() && now >= state.nextProfessionCheckAt)
+    {
+        state.nextProfessionCheckAt = now + std::chrono::seconds(60);
+        EnsureProfessions(bot);
+    }
+
+    // Mail and auction browsing touch world-thread structures; the map
+    // thread only enqueues.
+    if (now >= state.nextMailCheckAt)
+    {
+        state.nextMailCheckAt = now + std::chrono::minutes(3);
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        g_PendingMailCollections.insert(bot->GetGUID().GetRawValue());
+    }
+
+    if (cfg.auctionBuyEnabled && !bot->IsInCombat() && now >= state.nextAuctionShopAt)
+    {
+        state.nextAuctionShopAt = now + std::chrono::minutes(10);
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        g_PendingAuctionShopping.insert(bot->GetGUID().GetRawValue());
     }
 }
 
@@ -2433,6 +3122,9 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     if (ProcessErrand(bot, state, cfg))
         return;
 
+    if (AdvanceWalkedJourney(bot, state))
+        return;
+
     if (master && master->IsAlive() && !state.stay)
     {
         if (bot->GetDistance(master) > cfg.companionFollowDistance + 1.5f)
@@ -2516,6 +3208,11 @@ void PveManager::LoadConfig()
     g_PveConfig.talentsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Talents.Enable", true);
     g_PveConfig.combatDiagnostics = sConfigMgr->GetBoolDefault("Playerbot.Pve.CombatDiagnostics", false);
     g_PveConfig.restUseConsumables = sConfigMgr->GetBoolDefault("Playerbot.Pve.Rest.UseConsumables", false);
+    g_PveConfig.travelWalkMaxDistance = sConfigMgr->GetFloatDefault("Playerbot.Pve.Travel.WalkMaxDistance", 900.0f);
+    g_PveConfig.travelUseFlightPaths = sConfigMgr->GetBoolDefault("Playerbot.Pve.Travel.UseFlightPaths", true);
+    g_PveConfig.auctionBuyEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.AuctionBuy.Enable", false);
+    g_PveConfig.auctionBuyBudgetPct = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionBuy.BudgetPct", 30), 1, 100));
+    g_PveConfig.professionsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Professions.Enable", false);
     g_PveConfig.relocateEnabled = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.Relocate.Enable", true);
     g_PveConfig.relocateDryWanders = uint32(std::clamp(
         sConfigMgr->GetIntDefault("Playerbot.PveGrind.Relocate.DryWandersBeforeMove", 5), 2, 100));
@@ -2551,6 +3248,9 @@ void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
     ProcessPendingGroupInviteAccepts();
     ProcessPendingSummons();
     ProcessPendingLootExecutions();
+    ProcessPendingMailCollections();
+    if (g_PveConfig.auctionBuyEnabled)
+        ProcessPendingAuctionShopping();
     ProcessPendingSupplyRuns();
     if (g_PveConfig.relocateEnabled)
         ProcessPendingGrindRelocations();
@@ -2586,6 +3286,14 @@ void PveManager::OnPlayerLifecycleTick(Player* player)
         return;
 
     PveBotState& state = LockedGetOrCreate(g_PveBotStateByGuid, rawGuid);
+    if (player->IsInFlight())
+    {
+        // Keep the post-landing journey's stuck detector quiet while the
+        // taxi does the traveling.
+        if (state.journeyActive)
+            state.journeyProgressAt = PveClock::now();
+        return;
+    }
     PveTimePoint const now = PveClock::now();
     if (state.nextFastTick == PveTimePoint{})
     {
@@ -2630,6 +3338,8 @@ void PveManager::OnBotLogout(Player const* player)
     g_PendingGrindRelocations.erase(rawGuid);
     g_PendingLootExecutions.erase(rawGuid);
     g_PendingSupplyRuns.erase(rawGuid);
+    g_PendingMailCollections.erase(rawGuid);
+    g_PendingAuctionShopping.erase(rawGuid);
 }
 
 bool PveManager::IsExemptFromBattlegroundOrchestration(Player const* player)

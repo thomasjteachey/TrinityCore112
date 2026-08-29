@@ -484,3 +484,43 @@ Playerbot.PveGrind.Relocate.Maps = "0,1"
 #        Default:     0
 
 Playerbot.Pve.Rest.UseConsumables = 0
+
+#    Playerbot.Pve.Travel.WalkMaxDistance
+#        Description: Relocations and town runs within this range are WALKED (segmented mmap
+#                     pathing, fights allowed en route, stuck/timeout falls back to teleport).
+#                     0 restores teleport-only travel.
+#        Default:     900
+
+Playerbot.Pve.Travel.WalkMaxDistance = 900
+
+#    Playerbot.Pve.Travel.UseFlightPaths
+#        Description: For longer travel, bots take real flight-master routes when the departure
+#                     node is nearby and a route exists (BFS over taxi edges, up to 7 hops),
+#                     paying the fare from their own gold. Teleport remains the last fallback.
+#        Default:     1 - (Enabled)
+
+Playerbot.Pve.Travel.UseFlightPaths = 1
+
+#    Playerbot.Pve.AuctionBuy.Enable
+#        Description: Bots browse their faction auction house every ~10 minutes and buy out one
+#                     affordable gear upgrade (best item-level gain within budget), collect the
+#                     win from their mailbox and equip it. Characters on the AuctionHouseBot
+#                     account never shop (the core destroys AHBot-flagged buyers' wins).
+#        Default:     0 - (Disabled)
+
+Playerbot.Pve.AuctionBuy.Enable = 0
+
+#    Playerbot.Pve.AuctionBuy.BudgetPct
+#        Description: Maximum share of a bot's money a single auction buyout may cost.
+#        Default:     30
+
+Playerbot.Pve.AuctionBuy.BudgetPct = 30
+
+#    Playerbot.Pve.Professions.Enable
+#        Description: Each bot takes two gathering professions (herbalism/mining/skinning,
+#                     deterministic by character), learns and ranks them automatically, gathers
+#                     herbs and ore it passes while grinding, skins its finished corpses, and
+#                     sells the materials on vendor visits (unless a quest needs them).
+#        Default:     0 - (Disabled)
+
+Playerbot.Pve.Professions.Enable = 0

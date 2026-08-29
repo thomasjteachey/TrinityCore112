@@ -53,6 +53,19 @@ struct PveConfig
     uint32 relocateDryWanders = 5;
     std::vector<uint32> relocateMaps = { 0, 1 };
     bool combatDiagnostics = false;
+    // Journeys: destinations within this range are WALKED (segmented mmap
+    // pathing) instead of teleported; 0 restores teleport-only travel.
+    float travelWalkMaxDistance = 900.0f;
+    // Real flight-master routes for longer travel (BFS over taxi edges,
+    // bot pays the fare); teleport remains the last fallback.
+    bool travelUseFlightPaths = true;
+    // Bots browse their faction auction house and buy affordable gear
+    // upgrades (delivered by mail, which bots now collect).
+    bool auctionBuyEnabled = false;
+    uint32 auctionBuyBudgetPct = 30;
+    // Gathering professions: two of herbalism/mining/skinning per bot,
+    // auto-learned and ranked, nodes gathered mid-grind, corpses skinned.
+    bool professionsEnabled = false;
     // Realm economy switch: off = the free eat/drink spells (L+ style);
     // on = bots buy real food/water/ammo from vendors and consume them (B+).
     bool restUseConsumables = false;
