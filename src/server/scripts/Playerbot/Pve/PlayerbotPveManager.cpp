@@ -258,6 +258,9 @@ std::unordered_set<uint64> g_PendingGrindRelocations;
 std::unordered_set<uint64> g_PendingSupplyRuns;
 // Travel toward a class-quest giver or ender (state carries the target).
 std::unordered_set<uint64> g_PendingClassQuestTravels;
+// Rebirth-flagged bots that just hit the level cap: full level-1 reset on
+// the world thread.
+std::unordered_set<uint64> g_PendingRebirths;
 // Mail collection and auction shopping mutate world-thread-only structures
 // (Player::m_mail, AuctionHouseObject) - executed from OnWorldUpdate.
 std::unordered_set<uint64> g_PendingMailCollections;
@@ -395,6 +398,16 @@ void DisengagePveCombat(Player* bot, PveBotState& state)
     state.engaged = false;
     if (bot->GetVictim())
         bot->AttackStop();
+    // The white-swing floor's chase can outlive the fight as a preserved
+    // follow order: without a stop the bot trails its ex-target forever,
+    // targetless and swinging at nothing.
+    if (MotionMaster* motionMaster = bot->GetMotionMaster())
+        if (motionMaster->GetCurrentMovementGeneratorType() == FOLLOW_MOTION_TYPE ||
+            motionMaster->GetCurrentMovementGeneratorType() == CHASE_MOTION_TYPE)
+        {
+            motionMaster->Clear();
+            bot->StopMoving();
+        }
     // Player::SetTarget is an EMPTY override ("does not apply to players") -
     // player selection only changes through SetSelection.
     bot->SetSelection(ObjectGuid::Empty);
@@ -2666,6 +2679,13 @@ void TryStartClassQuestTravel(Player* bot, PveBotState& state)
         float bestDistance = 0.0f;
         for (ClassQuestSpot const& spot : *spots)
         {
+            // Only travel to givers on the realm's allowed continents: the
+            // quest data carries expansion-area class quests too, and the
+            // teleport arm happily delivered classic bots to Azuremyst.
+            if (!std::binary_search(playerbot::PveManager::GetConfig().relocateMaps.begin(),
+                playerbot::PveManager::GetConfig().relocateMaps.end(), uint32(spot.mapId)))
+                continue;
+
             float const distance = spot.mapId == bot->GetMapId()
                 ? bot->GetDistance(spot.x, spot.y, spot.z)
                 : 1000000.0f + float(spot.mapId);
@@ -2675,6 +2695,8 @@ void TryStartClassQuestTravel(Player* bot, PveBotState& state)
                 bestDistance = distance;
             }
         }
+        if (!best)
+            continue;
 
         // Close enough that the normal errand scan takes over.
         if (best->mapId == bot->GetMapId() && bestDistance < 150.0f)
@@ -4577,6 +4599,9 @@ void PveManager::LoadConfig()
         g_PveConfig.relocateMaps = { 0, 1 };
     std::sort(g_PveConfig.relocateMaps.begin(), g_PveConfig.relocateMaps.end());
 
+    g_PveConfig.rebirthAtMaxLevelPercent = uint32(std::clamp<int32>(
+        sConfigMgr->GetIntDefault("Playerbot.Pve.RebirthAtMaxLevel.Percent", 0), 0, 100));
+
     // Accounts whose bots are PvP-only: parked in their sanctuary, never
     // touched by any PvE system (no grind, errands, gear, talents, economy),
     // they exist purely for the battleground orchestration.
@@ -4603,6 +4628,8 @@ PveConfig const& PveManager::GetConfig()
     return g_PveConfig;
 }
 
+void ResetManagedBotToLevelOne(Player* bot);
+
 void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
 {
     if (!g_PveConfig.enabled)
@@ -4625,6 +4652,19 @@ void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
         ProcessPendingClassQuestTravels();
     if (g_PveConfig.relocateEnabled)
         ProcessPendingGrindRelocations();
+
+    // Rebirth-flagged bots that just hit the level cap.
+    {
+        std::unordered_set<uint64> drained;
+        {
+            std::lock_guard<std::mutex> guard(g_PvePendingLock);
+            drained.swap(g_PendingRebirths);
+        }
+        for (uint64 botRawGuid : drained)
+            if (Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid)))
+                if (bot->IsInWorld() && playerbot::IsManagedRandomBot(bot))
+                    ResetManagedBotToLevelOne(bot);
+    }
 }
 
 void PveManager::OnPlayerLifecycleTick(Player* player)
@@ -4902,34 +4942,26 @@ void PveManager::OnManagedBotLevelChanged(Player* player, uint8 /*oldLevel*/)
 
     if (g_PveConfig.talentsEnabled)
         SpendPendingTalentPoints(player);
+
+    // The flagged share of the fleet is reborn at the cap: back to level 1
+    // and home to climb again, keeping the leveling world populated.
+    if (g_PveConfig.rebirthAtMaxLevelPercent &&
+        player->GetLevel() >= sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL) &&
+        uint32(player->GetGUID().GetCounter() % 100) < g_PveConfig.rebirthAtMaxLevelPercent &&
+        !IsPvpOnlyBot(player) && !IsExemptFromBattlegroundOrchestration(player))
+    {
+        TC_LOG_INFO("playerbots.pve", "Bot {} reached the level cap and is flagged for rebirth.", player->GetName());
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        g_PendingRebirths.insert(player->GetGUID().GetRawValue());
+    }
 }
 
-// Full rebirth: strip a managed bot back to a freshly created level-1
-// character - gear, bags, bank, money, spells, talents, quests, pet - and
-// port it to its racial starting spot. World thread only (command handler).
-uint32 PveManager::ResetBotsToLevelOne(uint8 percent)
+// Full rebirth of ONE managed bot: strip it back to a freshly created
+// level-1 character - gear, bags, bank, money, spells, talents, quests,
+// pet - and port it to its racial starting spot. World thread only.
+void ResetManagedBotToLevelOne(Player* bot)
 {
-    percent = std::min<uint8>(percent ? percent : 100, 100);
-
-    std::vector<Player*> managedBots;
-    for (auto const& [accountId, session] : sWorld->GetAllSessions())
     {
-        Player* candidate = session ? session->GetPlayer() : nullptr;
-        if (!candidate || !candidate->IsInWorld() || !playerbot::IsManagedRandomBot(candidate))
-            continue;
-        // Companions serving a human are left alone; PvP-only bots are not
-        // part of the leveling world at all.
-        if (IsExemptFromBattlegroundOrchestration(candidate) || IsPvpOnlyBot(candidate))
-            continue;
-        managedBots.push_back(candidate);
-    }
-
-    Trinity::Containers::RandomShuffle(managedBots);
-    uint32 const resetCount = uint32(managedBots.size()) * percent / 100;
-
-    for (uint32 index = 0; index < resetCount; ++index)
-    {
-        Player* bot = managedBots[index];
         uint64 const botRawGuid = bot->GetGUID().GetRawValue();
 
         playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), false);
@@ -4996,7 +5028,29 @@ uint32 PveManager::ResetBotsToLevelOne(uint8 percent)
         bot->SaveToDB();
         TC_LOG_INFO("playerbots.pve", "Bot {} was reset to level 1 and sent home.", bot->GetName());
     }
+}
 
+uint32 PveManager::ResetBotsToLevelOne(uint8 percent)
+{
+    percent = std::min<uint8>(percent ? percent : 100, 100);
+
+    std::vector<Player*> managedBots;
+    for (auto const& [accountId, session] : sWorld->GetAllSessions())
+    {
+        Player* candidate = session ? session->GetPlayer() : nullptr;
+        if (!candidate || !candidate->IsInWorld() || !playerbot::IsManagedRandomBot(candidate))
+            continue;
+        // Companions serving a human are left alone; PvP-only bots are not
+        // part of the leveling world at all.
+        if (IsExemptFromBattlegroundOrchestration(candidate) || IsPvpOnlyBot(candidate))
+            continue;
+        managedBots.push_back(candidate);
+    }
+
+    Trinity::Containers::RandomShuffle(managedBots);
+    uint32 const resetCount = uint32(managedBots.size()) * percent / 100;
+    for (uint32 index = 0; index < resetCount; ++index)
+        ResetManagedBotToLevelOne(managedBots[index]);
     return resetCount;
 }
 

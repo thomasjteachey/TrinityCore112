@@ -495,6 +495,14 @@ Playerbot.Pve.Rest.UseConsumables = 0
 
 Playerbot.Pve.PvpOnlyAccountIds = ""
 
+#    Playerbot.Pve.RebirthAtMaxLevel.Percent
+#        Description: This percent of the managed fleet (guid-keyed, deterministic) is reborn
+#                     on reaching the level cap: the full level-1 reset (gear, spells, talents,
+#                     quests, money wiped; ported home) so the leveling world stays populated.
+#                     PvP-only bots and companions are never reborn. 0 disables.
+#        Default:     0
+Playerbot.Pve.RebirthAtMaxLevel.Percent = 0
+
 #    Playerbot.Pve.Travel.WalkMaxDistance
 #        Description: Relocations and town runs within this range are WALKED (segmented mmap
 #                     pathing, fights allowed en route, stuck/timeout falls back to teleport).

@@ -72,6 +72,9 @@ struct PveConfig
     // Accounts whose bots are PvP-only: no PvE behavior of any kind, they
     // idle at their sanctuary between battleground queues.
     std::vector<uint32> pvpOnlyAccountIds;
+    // This percent of the fleet (guid-keyed, deterministic) is reborn at
+    // the level cap: full level-1 reset and sent home. 0 disables.
+    uint32 rebirthAtMaxLevelPercent = 0;
 };
 
 // Open-world PvE behavior for managed random bots, layered on the existing
