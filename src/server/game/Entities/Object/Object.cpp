@@ -3059,6 +3059,55 @@ namespace
 }
 
 // function based on function Unit::CanAttack from 13850 client
+namespace
+{
+    // Managed playerbot accounts (Playerbot.RandomPopulation.BotAccountIds
+    // in playerbots.conf); parsed once, config loads before any login.
+    bool IsManagedPlayerbotAccountId(uint32 accountId)
+    {
+        static std::vector<uint32> const accountIds = []
+        {
+            std::vector<uint32> ids;
+            std::stringstream stream(sConfigMgr->GetStringDefault("Playerbot.RandomPopulation.BotAccountIds", ""));
+            std::string token;
+            while (std::getline(stream, token, ','))
+                if (!token.empty())
+                    ids.push_back(uint32(std::strtoul(token.c_str(), nullptr, 10)));
+            std::sort(ids.begin(), ids.end());
+            return ids;
+        }();
+        return !accountIds.empty() && std::binary_search(accountIds.begin(), accountIds.end(), accountId);
+    }
+
+    // Playerbots are one team in the open world: with everyone FFA-flagged
+    // on a hardcore realm they would otherwise be legal targets for each
+    // other. Battlegrounds keep their normal team rules. Configurable via
+    // Playerbot.OpenWorldNoFriendlyFire (default on).
+    bool AreOpenWorldTeamedPlayerbots(WorldObject const* self, WorldObject const* target)
+    {
+        static bool const noFriendlyFire = sConfigMgr->GetBoolDefault("Playerbot.OpenWorldNoFriendlyFire", true);
+        if (!noFriendlyFire)
+            return false;
+
+        if (!self || !target || self == target)
+            return false;
+        if (self->GetTypeId() != TYPEID_PLAYER || target->GetTypeId() != TYPEID_PLAYER)
+            return false;
+
+        Player const* selfPlayer = self->ToPlayer();
+        Player const* targetPlayer = target->ToPlayer();
+        Map const* map = selfPlayer->FindMap();
+        if (map && map->IsBattlegroundOrArena())
+            return false;
+
+        WorldSession const* selfSession = selfPlayer->GetSession();
+        WorldSession const* targetSession = targetPlayer->GetSession();
+        return selfSession && targetSession &&
+            IsManagedPlayerbotAccountId(selfSession->GetAccountId()) &&
+            IsManagedPlayerbotAccountId(targetSession->GetAccountId());
+    }
+}
+
 bool WorldObject::IsValidAttackTarget(WorldObject const* target, SpellInfo const* bySpell /*= nullptr*/) const
 {
     ASSERT(target);
@@ -3068,6 +3117,10 @@ bool WorldObject::IsValidAttackTarget(WorldObject const* target, SpellInfo const
 
     // can't attack self (spells can, attribute check)
     if (!bySpell && this == target)
+        return false;
+
+    // Playerbots never fight each other outside battlegrounds.
+    if (AreOpenWorldTeamedPlayerbots(this, target))
         return false;
 
     // can't attack unattackable units

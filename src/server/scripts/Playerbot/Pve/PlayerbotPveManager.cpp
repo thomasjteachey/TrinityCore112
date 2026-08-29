@@ -617,6 +617,47 @@ void MaybeFeedPet(Player* bot)
     bot->CastSpell(food, 6991, false);
 }
 
+// Adjacent packmates fight together: adopt the fight of a nearby managed
+// bot already in combat - its victim, or whatever is hitting it. Never
+// another bot (one team), never a resting exclusion's problem: callers
+// gate on the same conditions as a fresh grind pick.
+Unit* PickBotAssistTarget(Player* bot)
+{
+    Map* map = bot->FindMap();
+    if (!map)
+        return nullptr;
+
+    for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+    {
+        Player* ally = itr->GetSource();
+        if (!ally || ally == bot || !ally->IsAlive() || !ally->IsInCombat())
+            continue;
+
+        if (!playerbot::IsManagedRandomBot(ally) || playerbot::PveManager::IsPvpOnlyBot(ally))
+            continue;
+
+        if (!bot->IsWithinDistInMap(ally, 30.0f))
+            continue;
+
+        Unit* foe = ally->GetVictim();
+        if (!foe)
+            for (Unit* attacker : ally->getAttackers())
+            {
+                foe = attacker;
+                break;
+            }
+
+        if (!foe || !foe->IsAlive() || !bot->IsValidAttackTarget(foe))
+            continue;
+        if (foe->GetTypeId() == TYPEID_PLAYER && playerbot::IsManagedRandomBot(foe->ToPlayer()))
+            continue;
+
+        return foe;
+    }
+
+    return nullptr;
+}
+
 // Creature entries the bot still needs kill credit for. Grinding prefers
 // these so an accepted kill quest completes as a side effect of leveling.
 std::unordered_set<uint32> CollectWantedKillEntries(Player* bot)
@@ -4117,8 +4158,20 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
 
     if (bot->GetGroupInvite())
     {
-        std::lock_guard<std::mutex> guard(g_PvePendingLock);
-        g_PendingGroupInviteAccepts.insert(bot->GetGUID().GetRawValue());
+        if (cfg.declineGroupInvites)
+        {
+            // Hardcore realms: bots are strictly solo - decline politely.
+            if (WorldSession* session = bot->GetSession())
+            {
+                WorldPacket declinePacket(CMSG_GROUP_DECLINE, 0);
+                session->HandleGroupDeclineOpcode(declinePacket);
+            }
+        }
+        else
+        {
+            std::lock_guard<std::mutex> guard(g_PvePendingLock);
+            g_PendingGroupInviteAccepts.insert(bot->GetGUID().GetRawValue());
+        }
     }
 
     UpdateMasterFromGroup(bot, state);
@@ -4371,6 +4424,11 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
             if (!attacker || !attacker->IsAlive() || !bot->IsValidAttackTarget(attacker))
                 continue;
 
+            // Hardcore FFA rule: playerbots never fight each other, even
+            // when a stray hit lands - the exchange must fizzle.
+            if (attacker->GetTypeId() == TYPEID_PLAYER && playerbot::IsManagedRandomBot(attacker->ToPlayer()))
+                continue;
+
             // No bad-target screen here: that list stops re-PICKING
             // evade-flickery mobs, but a unit actively hitting the bot is
             // present and reachable by definition - and a genuinely evading
@@ -4396,8 +4454,12 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         else if (cfg.grindEnabled && state.masterGuid.IsEmpty() && !IsRestingNow(bot, state) &&
             !NeedsRecovery(bot, cfg))
         {
+            // Packmates first: adjacent bots fight together (one team),
+            // adopting the fight of any nearby bot already in combat.
+            target = PickBotAssistTarget(bot);
+
             PveTimePoint const now = PveClock::now();
-            if (now >= state.nextGrindScanAt)
+            if (!target && now >= state.nextGrindScanAt)
             {
                 state.nextGrindScanAt = now + PveGrindScanInterval;
                 target = PickGrindTarget(bot, state, cfg);
@@ -4416,6 +4478,10 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         for (Unit* attacker : bot->getAttackers())
         {
             if (!attacker || attacker == target || !attacker->IsAlive() || !bot->IsValidAttackTarget(attacker))
+                continue;
+
+            // Playerbots never fight each other.
+            if (attacker->GetTypeId() == TYPEID_PLAYER && playerbot::IsManagedRandomBot(attacker->ToPlayer()))
                 continue;
 
             float const distance = bot->GetDistance(attacker);
@@ -4632,6 +4698,7 @@ void PveManager::LoadConfig()
 
     g_PveConfig.rebirthAtMaxLevelPercent = uint32(std::clamp<int32>(
         sConfigMgr->GetIntDefault("Playerbot.Pve.RebirthAtMaxLevel.Percent", 0), 0, 100));
+    g_PveConfig.declineGroupInvites = sConfigMgr->GetBoolDefault("Playerbot.Pve.DeclineGroupInvites", false);
 
     // Accounts whose bots are PvP-only: parked in their sanctuary, never
     // touched by any PvE system (no grind, errands, gear, talents, economy),
@@ -4889,6 +4956,12 @@ bool PveManager::RequestCompanionSummon(Player* summoner, std::string const& cha
     if (!g_PveConfig.enabled)
     {
         statusMessage = "Playerbot PvE support is disabled (Playerbot.Pve.Enable).";
+        return false;
+    }
+
+    if (g_PveConfig.declineGroupInvites)
+    {
+        statusMessage = "Bots on this realm walk alone (Playerbot.Pve.DeclineGroupInvites).";
         return false;
     }
 

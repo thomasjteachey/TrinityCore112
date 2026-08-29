@@ -75,6 +75,9 @@ struct PveConfig
     // This percent of the fleet (guid-keyed, deterministic) is reborn at
     // the level cap: full level-1 reset and sent home. 0 disables.
     uint32 rebirthAtMaxLevelPercent = 0;
+    // Hardcore realms: bots never join groups - invites are declined and
+    // companion summons refused.
+    bool declineGroupInvites = false;
 };
 
 // Open-world PvE behavior for managed random bots, layered on the existing

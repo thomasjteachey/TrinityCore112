@@ -3198,6 +3198,41 @@ CharDelete.KeepDays = 30
 #                     A value of 0 means the chest persists until removed by core logic (e.g. manual cleanup).
 #        Default:     300
 
+###################################################################################################
+# CENTURION HARDCORE (Barracks+ ruleset; every key inert unless Centurion.Hardcore.Enable = 1)
+#
+#    Centurion.Hardcore.Enable
+#        Description: Master switch for the hardcore ruleset: full loot drop on death (world
+#                     only - battlegrounds and arenas exempt), opt-in free-for-all PvP via the
+#                     flagger NPC, playerbots always FFA-armed in eligible zones.
+#        Default:     0
+#
+#    Centurion.Hardcore.FullLoot.ChestGameObjectId
+#        Description: GameObject entry for the death chest. 0 disables the full-loot drop.
+#
+#    Centurion.Hardcore.FullLoot.ChestDespawnSeconds
+#        Description: Death chest lifetime. Default 600.
+#
+#    Centurion.Hardcore.FullLoot.DropChancePercent
+#        Description: Deflation: per-item chance to reach the chest; the rest is destroyed.
+#                     Money is always safe. Default 50.
+#
+#    Centurion.Hardcore.FfaPvp.MinZoneLevel
+#        Description: The FFA flag only arms in zones of at least this level - never in starter
+#                     zones, capitals or sanctuaries. Default 20.
+#
+#    Centurion.Hardcore.FfaPvp.RewardMultiplier
+#        Description: Experience and loot-gold multiplier for PLAYERS while their FFA flag is
+#                     armed (bots never receive it). Default 2.
+###################################################################################################
+
+Centurion.Hardcore.Enable = 0
+Centurion.Hardcore.FullLoot.ChestGameObjectId = 0
+Centurion.Hardcore.FullLoot.ChestDespawnSeconds = 600
+Centurion.Hardcore.FullLoot.DropChancePercent = 50
+Centurion.Hardcore.FfaPvp.MinZoneLevel = 20
+Centurion.Hardcore.FfaPvp.RewardMultiplier = 2
+
 DireMaulBeads.ItemId = 21982
 DireMaulBeads.AuraId = 90002
 DireMaulBeads.AreaIds = 495,496,498,2557,3217

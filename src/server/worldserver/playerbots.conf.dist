@@ -495,6 +495,20 @@ Playerbot.Pve.Rest.UseConsumables = 0
 
 Playerbot.Pve.PvpOnlyAccountIds = ""
 
+#    Playerbot.Pve.DeclineGroupInvites
+#        Description: Hardcore realms: bots never join groups. Group invites are declined and
+#                     companion summons refused. 0 keeps the normal companion behavior.
+#        Default:     0
+Playerbot.Pve.DeclineGroupInvites = 0
+
+#    Playerbot.OpenWorldNoFriendlyFire
+#        Description: Managed playerbots are one team in the open world: they are never valid
+#                     attack targets for each other outside battlegrounds and arenas, even when
+#                     everyone is FFA-flagged on a hardcore realm. Battleground team rules are
+#                     unaffected.
+#        Default:     1
+Playerbot.OpenWorldNoFriendlyFire = 1
+
 #    Playerbot.Pve.RebirthAtMaxLevel.Percent
 #        Description: This percent of the managed fleet (guid-keyed, deterministic) is reborn
 #                     on reaching the level cap: the full level-1 reset (gear, spells, talents,
