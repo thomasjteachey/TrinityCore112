@@ -15360,9 +15360,15 @@ void Unit::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player const* t
                 // battlegrounds keep real factions (FFA is core-driven
                 // there), and bot observers are never lied to (they act on
                 // server state anyway).
-                if (index == UNIT_FIELD_FACTIONTEMPLATE && target != this && GetTypeId() == TYPEID_PLAYER &&
-                    IsFFAPvP() && !GetMap()->IsBattlegroundOrArena() &&
-                    ToPlayer()->GetSession() && IsManagedPlayerbotAccountIdForDisplay(ToPlayer()->GetSession()->GetAccountId()) &&
+                // The bot's pets, minions and totems get the same treatment:
+                // they inherit the FFA byte but keep the player-derived
+                // faction, so a same-faction observer's client reads them as
+                // friendly and refuses to fight back against a pet the server
+                // considers a perfectly legal attacker.
+                Player const* ffaBotOwner = GetTypeId() == TYPEID_PLAYER ? ToPlayer() : GetAffectingPlayer();
+                if (index == UNIT_FIELD_FACTIONTEMPLATE && target != this && ffaBotOwner &&
+                    IsFFAPvP() && ffaBotOwner->IsFFAPvP() && !GetMap()->IsBattlegroundOrArena() &&
+                    ffaBotOwner->GetSession() && IsManagedPlayerbotAccountIdForDisplay(ffaBotOwner->GetSession()->GetAccountId()) &&
                     (!target->GetSession() || !IsManagedPlayerbotAccountIdForDisplay(target->GetSession()->GetAccountId())))
                 {
                     fieldBuffer << uint32(14);

@@ -156,6 +156,8 @@ struct PveBotState
     // itself is lethal (graveyard camped by higher-level mobs).
     uint8 recentDeathCount = 0;
     PveTimePoint recentDeathWindowStart{};
+    // Zone guardians: when this bot was first seen away from its post.
+    PveTimePoint guardianOutOfZoneSince{};
     // Naked recovery: when this bot was first seen stripped of its gear.
     PveTimePoint nakedSince{};
     PveTimePoint nextNakedCheckAt{};
@@ -2572,7 +2574,8 @@ constexpr std::array<GuardianZone, 38> kGuardianZones = { {
 
 std::mutex g_GuardianLock;
 std::unordered_map<uint64, uint32> g_GuardianZoneByGuid; // guid -> zone index
-uint32 g_GuardianSlotsFilled = 0;
+std::unordered_set<uint32> g_GuardianTakenSlots;
+bool g_GuardianPostsLoaded = false;
 
 void CompleteEligibleClassQuests(Player* bot); // defined with the class-quest cache below
 
@@ -2584,11 +2587,61 @@ uint32 GetGuardianZoneId(uint64 botRawGuid)
     return itr != g_GuardianZoneByGuid.end() ? kGuardianZones[itr->second % kGuardianZones.size()].zoneId : 0;
 }
 
+// A zone owned by the other faction can never be reached: the relocation
+// executor screens FactionGroupMask, so a wrong-faction claim would strand
+// the bot outside its post forever, retrying every tick.
+bool IsGuardianZoneAllowedForBot(Player const* bot, uint32 zoneId)
+{
+    AreaTableEntry const* zone = sAreaTableStore.LookupEntry(zoneId);
+    if (!zone || !zone->FactionGroupMask)
+        return true;
+    if (bot->GetTeamId() == TEAM_ALLIANCE && zone->FactionGroupMask == 4)
+        return false;
+    if (bot->GetTeamId() == TEAM_HORDE && zone->FactionGroupMask == 2)
+        return false;
+    return true;
+}
+
+// Posts are PERSISTED: an in-memory-only, first-come assignment reshuffles
+// every restart, and a bot that lands in a lower-capped zone would be
+// GiveLevel'd DOWNWARD - which resets its talents and strands it in gear it
+// can no longer wear, permanently, since guardians are excluded from both
+// rebirth and the reset command.
+void LoadGuardianPostsOnce()
+{
+    std::lock_guard<std::mutex> guard(g_GuardianLock);
+    if (g_GuardianPostsLoaded)
+        return;
+    g_GuardianPostsLoaded = true;
+
+    CharacterDatabase.DirectExecute(
+        "CREATE TABLE IF NOT EXISTS playerbot_zone_guardian ("
+        "guid BIGINT UNSIGNED NOT NULL PRIMARY KEY, slotIndex INT UNSIGNED NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8");
+
+    if (QueryResult result = CharacterDatabase.Query("SELECT guid, slotIndex FROM playerbot_zone_guardian"))
+    {
+        do
+        {
+            Field* fields = result->Fetch();
+            uint64 const rawGuid = fields[0].GetUInt64();
+            uint32 const slotIndex = fields[1].GetUInt32();
+            g_GuardianZoneByGuid[rawGuid] = slotIndex;
+            g_GuardianTakenSlots.insert(slotIndex);
+        } while (result->NextRow());
+
+        TC_LOG_INFO("playerbots.pve", "Loaded {} standing zone guardian posts.", uint32(g_GuardianZoneByGuid.size()));
+    }
+}
+
 void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
 {
+    LoadGuardianPostsOnce();
+
     uint64 const botRawGuid = bot->GetGUID().GetRawValue();
     bool const flaggedNoXp = bot->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN);
     uint32 const totalSlots = cfg.zoneGuardiansPerZone * uint32(kGuardianZones.size());
+    // Companions serve a human; they hold no post.
+    bool const eligible = state.masterGuid.IsEmpty() && !playerbot::PveManager::IsPvpOnlyBot(bot);
 
     uint32 slotIndex = 0;
     bool assigned = false;
@@ -2596,24 +2649,41 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
     {
         std::lock_guard<std::mutex> guard(g_GuardianLock);
         auto itr = g_GuardianZoneByGuid.find(botRawGuid);
-        if (itr != g_GuardianZoneByGuid.end())
+        if (itr != g_GuardianZoneByGuid.end() && itr->second < totalSlots)
         {
             assigned = true;
             slotIndex = itr->second;
         }
-        else if (g_GuardianSlotsFilled < totalSlots)
+        else if (itr == g_GuardianZoneByGuid.end() && eligible)
         {
-            slotIndex = g_GuardianSlotsFilled++;
-            g_GuardianZoneByGuid[botRawGuid] = slotIndex;
-            assigned = true;
-            freshlyAssigned = true;
+            // Take the lowest free post this bot can actually hold: its own
+            // faction's ground, and never one that would cost it levels.
+            for (uint32 candidate = 0; candidate < totalSlots; ++candidate)
+            {
+                if (g_GuardianTakenSlots.count(candidate))
+                    continue;
+
+                GuardianZone const& candidateZone = kGuardianZones[candidate % kGuardianZones.size()];
+                if (candidateZone.maxLevel < bot->GetLevel())
+                    continue;
+                if (!IsGuardianZoneAllowedForBot(bot, candidateZone.zoneId))
+                    continue;
+
+                slotIndex = candidate;
+                g_GuardianZoneByGuid[botRawGuid] = candidate;
+                g_GuardianTakenSlots.insert(candidate);
+                assigned = true;
+                freshlyAssigned = true;
+                break;
+            }
         }
     }
 
     if (!assigned)
     {
-        // Not a guardian this uptime: shed a stale frozen-XP flag so the
-        // bot resumes leveling.
+        // Not a guardian: shed a stale frozen-XP flag so the bot resumes
+        // leveling. This is the ONLY code that clears that flag, so it must
+        // run for every bot - including when the feature is switched off.
         if (flaggedNoXp)
             bot->RemoveFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN);
         return;
@@ -2622,7 +2692,12 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
     GuardianZone const& zone = kGuardianZones[slotIndex % kGuardianZones.size()];
     if (freshlyAssigned)
     {
-        if (bot->GetLevel() != zone.maxLevel)
+        CharacterDatabase.PExecute("REPLACE INTO playerbot_zone_guardian (guid, slotIndex) VALUES ({}, {})",
+            botRawGuid, slotIndex);
+
+        // Only ever levels UP to the post's cap: GiveLevel downward resets
+        // talents and leaves the bot in unusable gear.
+        if (bot->GetLevel() < zone.maxLevel)
         {
             bot->GiveLevel(zone.maxLevel);
             bot->SetUInt32Value(PLAYER_XP, 0);
@@ -2641,14 +2716,27 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
     // A guardian caught outside its zone gets pulled home by the normal
     // relocation machinery (which honors the guardian constraint). Supply
     // runs and death relocations legitimately teleport bots across the
-    // world, so this is the leash that always brings them back - but never
-    // mid-errand, or the vendor trip it interrupts just restarts forever.
-    if (bot->GetZoneId() != zone.zoneId && !bot->IsInCombat() && !state.journeyActive &&
-        state.errandKind == PveErrandKind::None)
+    // world, so this is the leash that always brings them back - but it
+    // waits out a grace period first. Arrival and errand-start are NOT
+    // atomic: the errand scan only runs every 15s, so a leash that fired on
+    // the next 750ms tick would teleport the bot home before it ever reached
+    // the vendor it travelled for, forever.
+    if (bot->GetZoneId() != zone.zoneId)
     {
-        std::lock_guard<std::mutex> guard(g_PvePendingLock);
-        g_PendingGrindRelocations.insert(botRawGuid);
+        PveTimePoint const now = PveClock::now();
+        if (state.guardianOutOfZoneSince == PveTimePoint())
+            state.guardianOutOfZoneSince = now;
+
+        if (now - state.guardianOutOfZoneSince >= std::chrono::seconds(120) &&
+            !bot->IsInCombat() && !state.journeyActive && state.errandKind == PveErrandKind::None)
+        {
+            state.guardianOutOfZoneSince = now;
+            std::lock_guard<std::mutex> guard(g_PvePendingLock);
+            g_PendingGrindRelocations.insert(botRawGuid);
+        }
     }
+    else
+        state.guardianOutOfZoneSince = PveTimePoint();
 }
 
 std::mutex g_GrindSpotLock;
@@ -4649,9 +4737,12 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         MaybeFieldRepair(bot, state, cfg);
     }
 
-    // Zone guardians: claim or hold a guardian post.
-    if (cfg.zoneGuardiansPerZone && state.masterGuid.IsEmpty())
-        RunZoneGuardianTick(bot, state, cfg);
+    // Zone guardians: claim or hold a post. This runs even with the feature
+    // switched off and for companions, because it is also the only code that
+    // sheds the frozen-XP flag - gating it would leave every former guardian
+    // unable to gain experience, permanently, with the flag persisted to the
+    // characters table.
+    RunZoneGuardianTick(bot, state, cfg);
 
     // Class quests are sought out across the world, not just stumbled upon.
     if (cfg.questsEnabled && state.masterGuid.IsEmpty() && !state.engaged && !bot->IsInCombat() &&

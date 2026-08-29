@@ -199,6 +199,19 @@ namespace BarracksHardcore
             player->UpdatePvPState(true);
             player->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
         }
+        // The FFA byte is not ours alone: Player::UpdateArea recomputes it
+        // from area flags on every sub-area crossing and sanctuary entry, and
+        // it never dirties the faction field when it does. Re-assert both, or
+        // an armed bot silently disarms a second after leaving open ground
+        // while observers keep the stale red faction of a unit the server has
+        // stopped letting them hit.
+        else if (shouldFfa && !player->IsFFAPvP())
+        {
+            player->UpdatePvPState(true);
+            player->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
+        }
+        else if (!shouldFfa && player->IsFFAPvP() && !coreFfaArea && !player->pvpInfo.IsInFFAPvPArea)
+            player->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
     }
 
     // ---------------------------------------------------------------------
@@ -356,6 +369,22 @@ namespace BarracksHardcore
                     if (player->CanUseItem(proto) != EQUIP_ERR_OK)
                         continue;
 
+                    // PROFICIENCY. CanUseItem(ItemTemplate const*) does NOT
+                    // check it - the gate lives in the CanUseItem(Item*)
+                    // overload, reached only through CanEquipItem. Without
+                    // this a priest is handed the highest-level two-handed
+                    // axe in the game: StoreNewItemInBestSlots quietly drops
+                    // it in the bags, reports success, and the empty slot
+                    // earns another copy on every single resurrection.
+                    if (uint32 const itemSkill = proto->GetSkill())
+                        if (!player->GetSkillValue(itemSkill))
+                            continue;
+
+                    // The authority on whether this can actually be worn.
+                    uint16 equipDest = 0;
+                    if (player->CanEquipNewItem(NULL_SLOT, equipDest, itemId, false) != EQUIP_ERR_OK)
+                        continue;
+
                     // Closest to the wearer's own level, then the better item.
                     if (proto->RequiredLevel > bestRequiredLevel ||
                         (proto->RequiredLevel == bestRequiredLevel && proto->ItemLevel > bestItemLevel))
@@ -368,9 +397,16 @@ namespace BarracksHardcore
                 }
             }
 
-            // StoreNewItemInBestSlots equips when the slot accepts the piece
-            // (the helper Player::Create dresses new characters with).
-            if (bestItemId && player->StoreNewItemInBestSlots(bestItemId, 1))
+            // Equip or nothing: StoreNewItemInBestSlots would silently bag a
+            // piece it could not wear and still report success, which leaves
+            // the slot empty and earns another copy at the next death.
+            if (!bestItemId)
+                continue;
+
+            uint16 equipDest = 0;
+            if (player->CanEquipNewItem(NULL_SLOT, equipDest, bestItemId, false) != EQUIP_ERR_OK)
+                continue;
+            if (player->EquipNewItem(equipDest, bestItemId, true))
                 ++granted;
         }
 
@@ -463,6 +499,16 @@ public:
     }
 
     void OnUpdateZone(Player* player, uint32 /*newZone*/, uint32 /*newArea*/) override
+    {
+        ApplyFfaState(player);
+    }
+
+    // Player::UpdateArea strips the FFA byte on every sub-area crossing and
+    // there is no area-change script hook, so the state is re-asserted here.
+    // No throttle: a PlayerScript is a singleton shared by every player, so a
+    // member timer would only ever service one of them. ApplyFfaState costs a
+    // couple of hash lookups and does nothing when nothing has drifted.
+    void OnUpdate(Player* player, uint32 /*diff*/) override
     {
         ApplyFfaState(player);
     }
