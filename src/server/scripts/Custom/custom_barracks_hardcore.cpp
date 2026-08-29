@@ -50,6 +50,7 @@
 #include "ScriptedGossip.h"
 #include "SharedDefines.h"
 #include "Util.h"
+#include "World.h"
 #include "WorldSession.h"
 #include "custom_loot_chest_helper.h"
 #include <algorithm>
@@ -249,6 +250,69 @@ namespace BarracksHardcore
     bool s_whiteKitBuilt = false;
     std::unordered_map<uint32, std::vector<uint32>> s_whiteKitByInvType;
 
+    // Placeholder and developer scaffolding wearing an item's clothes. These
+    // sit in item_template at quality white, item level 1 and required level
+    // 0, which is exactly the shape of a real starter item - so a level 1 bot
+    // kitted out from the template store ends up in "CRobinson Plate Shoulders"
+    // and a "[PH]" cap. Anything the world cannot actually hand out is not
+    // field kit.
+    bool LooksLikeScaffolding(std::string const& name)
+    {
+        static constexpr std::array<char const*, 8> markers = { {
+            "[PH]", "CRobinson", "Robinson Test", "Test ", "TEST", "Monster ", "OLD ", "Deprecated"
+        } };
+        for (char const* marker : markers)
+            if (name.find(marker) != std::string::npos)
+                return true;
+        return false;
+    }
+
+    // Item ids the world can actually produce: sold, dropped, or handed to a
+    // new character. Built once alongside the kit cache.
+    std::unordered_set<uint32> s_obtainableItems;
+
+    // Item ids run in release order, so the realm's level cap tells us where
+    // its content stops: classic ends around 24000, Burning Crusade around
+    // 35000.
+    uint32 s_kitItemIdCeiling = 0xFFFFFFFF;
+
+    void ComputeKitItemIdCeiling()
+    {
+        uint32 const maxLevel = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
+        if (maxLevel <= 60)
+            s_kitItemIdCeiling = 24000;
+        else if (maxLevel <= 70)
+            s_kitItemIdCeiling = 35000;
+        else
+            s_kitItemIdCeiling = 0xFFFFFFFF;
+    }
+
+    void LoadObtainableItemsOnce()
+    {
+        char const* sources[] = {
+            "SELECT DISTINCT item FROM npc_vendor",
+            "SELECT DISTINCT Item FROM creature_loot_template",
+            "SELECT DISTINCT Item FROM gameobject_loot_template",
+            "SELECT DISTINCT Item FROM reference_loot_template",
+            "SELECT DISTINCT Item FROM item_loot_template",
+            "SELECT DISTINCT itemid FROM playercreateinfo_item",
+        };
+
+        for (char const* sql : sources)
+        {
+            QueryResult result = WorldDatabase.Query(sql);
+            if (!result)
+                continue;
+            do
+            {
+                s_obtainableItems.insert((*result)[0].GetUInt32());
+            } while (result->NextRow());
+        }
+
+        TC_LOG_INFO("playerbots.hardcore", "White field kit: {} item ids are obtainable in the world.",
+            uint32(s_obtainableItems.size()));
+    }
+
     // Built once, then read-only.
     void BuildWhiteKitCacheOnce()
     {
@@ -257,10 +321,27 @@ namespace BarracksHardcore
             return;
         s_whiteKitBuilt = true;
 
+        ComputeKitItemIdCeiling();
+        LoadObtainableItemsOnce();
+
         for (auto const& itemPair : sObjectMgr->GetItemTemplateStore())
         {
             ItemTemplate const& proto = itemPair.second;
             if (proto.Quality != ITEM_QUALITY_NORMAL)
+                continue;
+
+            // Never hand out scaffolding, and never anything the world has no
+            // way of producing on its own.
+            if (LooksLikeScaffolding(proto.Name1))
+                continue;
+            if (!s_obtainableItems.empty() && !s_obtainableItems.count(proto.ItemId))
+                continue;
+            // Nothing from an expansion this realm does not run. Item ids are
+            // laid down in release order, so the realm's level cap picks the
+            // ceiling: a level 60 realm has no business issuing a Totem of the
+            // Earthen Ring, which is perfectly legal data and pure anachronism
+            // in a classic world.
+            if (proto.ItemId > s_kitItemIdCeiling)
                 continue;
             if (proto.Class != ITEM_CLASS_ARMOR && proto.Class != ITEM_CLASS_WEAPON)
                 continue;

@@ -2318,6 +2318,25 @@ void GameObject::Use(Unit* user)
             player->SetStandState(UnitStandStateType(UNIT_STAND_STATE_SIT_LOW_CHAIR + info->barberChair.chairheight));
             return;
         }
+        case GAMEOBJECT_TYPE_CHEST:                         //3
+        {
+            // Right-clicking a chest sends CMSG_GAMEOBJ_USE, and without this
+            // the click landed in the default case and did nothing at all -
+            // the cursor offered a gear, the server answered with silence.
+            // Every custom chest on this realm (hardcore death caches, Dire
+            // Maul beads, the Stockades drop) was unopenable for the same
+            // reason.
+            Player* player = user->ToPlayer();
+            if (!player)
+                return;
+
+            if (Battleground* bg = player->GetBattleground())
+                if (!bg->CanActivateGO(GetEntry(), bg->GetPlayerTeam(player->GetGUID())))
+                    return;
+
+            player->SendLoot(GetGUID(), LOOT_CORPSE);
+            return;
+        }
         default:
             if (GetGoType() >= MAX_GAMEOBJECT_TYPE)
                 TC_LOG_ERROR("misc", "GameObject::Use(): unit ({}, name: {}) tries to use object ({}, name: {}) of unknown type ({})",
@@ -2816,6 +2835,12 @@ void GameObject::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player co
                             dynFlags |= GO_DYNFLAG_LO_ACTIVATE | GO_DYNFLAG_LO_SPARKLE;
                         else if (targetIsGM)
                             dynFlags |= GO_DYNFLAG_LO_ACTIVATE;
+                        // A chest standing ready with something in it reads as
+                        // lootable to everyone, not just to quest-carriers and
+                        // GMs - otherwise a custom-filled chest looks like
+                        // scenery.
+                        else if (GetGoType() == GAMEOBJECT_TYPE_CHEST && getLootState() == GO_READY && !loot.isLooted())
+                            dynFlags |= GO_DYNFLAG_LO_ACTIVATE | GO_DYNFLAG_LO_SPARKLE;
                         break;
                     case GAMEOBJECT_TYPE_GENERIC:
                         if (ActivateToQuest(target))
