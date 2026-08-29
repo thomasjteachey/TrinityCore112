@@ -2811,6 +2811,16 @@ void BuildClassQuestCacheOnce()
         if (!questClass)
             continue;
 
+        // Repeatable-family quests (AQ armor turn-ins, Ravenholdt emblems,
+        // the classic-import Sapta rows...) never grant kit spells, and
+        // GetQuestRewardStatus is hardwired false for them - so any
+        // "complete once" loop over the cache would spin forever (each
+        // RewardQuest does a full SaveToDB: this melted the realm once)
+        // and travel would re-target them endlessly. Keep them out.
+        if (quest->IsRepeatable() || quest->IsDaily() || quest->IsWeekly() ||
+            quest->IsMonthly() || quest->IsSeasonal() || quest->IsDFQuest())
+            continue;
+
         auto& list = g_ClassQuestsByClass[questClass];
         entryIndexByQuest[questPair.first] = { questClass, list.size() };
         ClassQuestEntry entry;
@@ -2880,18 +2890,32 @@ void CompleteEligibleClassQuests(Player* bot)
         list = &itr->second; // immutable once built
     }
 
+    // Termination is load-bearing: GetQuestRewardStatus never turns true for
+    // repeatable-family quests (screened out of the cache, but belt and
+    // suspenders here), so the local rewarded set is what guarantees each
+    // quest is handed out at most once per call, and the pass cap bounds the
+    // chain walk regardless.
     uint32 completed = 0;
-    for (bool progressed = true; progressed;)
+    std::unordered_set<uint32> rewardedNow;
+    bool progressed = true;
+    for (uint8 pass = 0; pass < 16 && progressed; ++pass)
     {
         progressed = false;
         for (ClassQuestEntry const& entry : *list)
         {
-            if (bot->GetQuestRewardStatus(entry.questId))
+            if (rewardedNow.count(entry.questId) || bot->GetQuestRewardStatus(entry.questId))
                 continue;
             Quest const* quest = sObjectMgr->GetQuestTemplate(entry.questId);
             if (!quest || !bot->CanTakeQuest(quest, false))
                 continue;
+            // A reward spell absent from this realm's spell store would
+            // assert/crash inside RewardQuest (B+ rebuilds its Spell.dbc,
+            // and rows do go missing).
+            if ((quest->GetRewSpellCast() > 0 && !sSpellMgr->GetSpellInfo(uint32(quest->GetRewSpellCast()))) ||
+                (quest->GetRewSpell() > 0 && !sSpellMgr->GetSpellInfo(uint32(quest->GetRewSpell()))))
+                continue;
             bot->RewardQuest(quest, 0, bot, false);
+            rewardedNow.insert(entry.questId);
             ++completed;
             progressed = true;
         }
