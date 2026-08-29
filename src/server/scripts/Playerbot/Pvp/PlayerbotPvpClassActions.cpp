@@ -5287,6 +5287,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                     context.spellId == kHunterCallPetSpellId ? "call_pet_failed" : "revive_pet_failed", castResult));
             }
 
+            // The shared dispel throttle below only armed on SUCCESSFUL
+            // dispels, so a target the core deems undispellable (while the
+            // selector's own check disagrees) had the decision loop re-pick
+            // the same dead Purge every tick. Arm it on the refusal too.
+            if (castResult == SPELL_FAILED_NOTHING_TO_DISPEL && IsPlayerbotDispelSpell(resolvedSpellId))
+                playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kPlayerbotDispelCooldownToken, kPlayerbotDispelCooldown);
+
             NotifySpellCastFailureToDiagnosticObservers(player, context, castResult);
             EnumText const reasonText = EnumUtils::ToString(castResult);
             failureReason = reasonText.Title;

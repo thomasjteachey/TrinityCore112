@@ -2657,13 +2657,22 @@ void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
     // the decision graph then yields neither a spell nor a movement directive.
     // Plain chase plus auto-attack is what a player of that level does too.
     bool const engineActedThisTick = executed && context.shouldExecute;
-    if (!engineActedThisTick)
-    {
-        if (bot->GetVictim() != victim)
-            bot->Attack(victim, true);
-        if (!bot->IsWithinMeleeRange(victim))
-            playerbot::PvpClassActions::IssueFollowMovement(bot, victim, 1.0f);
-    }
+
+    // Auto-attack parity with a real client: pressing any offensive ability
+    // turns melee on and casting never turns it off. Bots have no client,
+    // and the class-action cast paths establish spell victims through
+    // Attack(target, false) - which Unit::Attack treats as a DOWNGRADE,
+    // clearing UNIT_STATE_MELEE_ATTACKING and broadcasting attack-stop
+    // (Player::Update gates every white swing on that state). Re-assert
+    // melee after the engine has acted each tick, or casting classes fight
+    // entire battles with auto-attack visibly off and no rage/dodge flow.
+    // Stealth is the one state where starting swings would wreck the opener.
+    if ((bot->GetVictim() != victim || !bot->HasUnitState(UNIT_STATE_MELEE_ATTACKING)) &&
+        !bot->HasAuraType(SPELL_AURA_MOD_STEALTH))
+        bot->Attack(victim, true);
+
+    if (!engineActedThisTick && !bot->IsWithinMeleeRange(victim))
+        playerbot::PvpClassActions::IssueFollowMovement(bot, victim, 1.0f);
 
     // Melee swings demand the 120-degree arc (Player::Update just re-arms
     // the attack timer outside it) and nothing maintains a stopped bot's
