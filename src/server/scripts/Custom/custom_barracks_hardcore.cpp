@@ -115,18 +115,43 @@ namespace BarracksHardcore
         return s_enabled && player && !player->InBattleground() && !player->InArena();
     }
 
+    // Classic zone level caps. AreaTableEntry::ExplorationLevel is ZERO for
+    // every zone in this realm's rebuilt DBC, so reading it armed nothing,
+    // anywhere - the whole FFA system (and every bot's red name) was inert.
+    // The zone's top level is the gate: Durotar/Elwynn (10) stay peaceful,
+    // Westfall/Silverpine (20) and everything above them arm.
+    uint8 ZoneTopLevel(uint32 zoneId)
+    {
+        switch (zoneId)
+        {
+            case 1: case 12: case 14: case 85: case 141: case 215:  return 10; // starter zones
+            case 3430: case 3524:                                   return 10; // Eversong, Azuremyst
+            case 38: case 40: case 130: case 148:                   return 20;
+            case 3433: case 3525:                                   return 20; // Ghostlands, Bloodmyst
+            case 17: case 44:                                       return 25;
+            case 406:                                               return 27;
+            case 10: case 11: case 267: case 331:                   return 30;
+            case 400:                                               return 35;
+            case 36: case 45: case 405:                             return 40;
+            case 3: case 8: case 15: case 33:                       return 45;
+            case 47: case 51: case 357: case 440:                   return 50;
+            case 16: case 361: case 490:                            return 55;
+            case 4: case 28: case 46:                               return 58;
+            case 139: case 618: case 1377:                          return 60;
+            default:                                                return 60; // Outland, Northrend, dungeons
+        }
+    }
+
     // FFA arms only in real PvP-level zones - never in starter zones like
     // Durotar, never in capitals or sanctuaries.
     bool IsFfaEligibleZone(Player* player)
     {
-        AreaTableEntry const* zone = sAreaTableStore.LookupEntry(player->GetZoneId());
-        if (!zone)
-            return false;
+        uint32 const zoneId = player->GetZoneId();
+        if (AreaTableEntry const* zone = sAreaTableStore.LookupEntry(zoneId))
+            if (zone->Flags & (AREA_FLAG_CAPITAL | AREA_FLAG_SANCTUARY))
+                return false;
 
-        if (zone->Flags & (AREA_FLAG_CAPITAL | AREA_FLAG_SANCTUARY))
-            return false;
-
-        return zone->ExplorationLevel >= int32(s_minZoneLevel);
+        return ZoneTopLevel(zoneId) >= s_minZoneLevel;
     }
 
     bool IsFfaArmed(Player* player)

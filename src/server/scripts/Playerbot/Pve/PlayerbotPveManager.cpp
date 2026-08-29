@@ -92,6 +92,10 @@ constexpr std::chrono::seconds PveGrindScanInterval(2);
 constexpr uint32 PvePendingSummonTimeoutMs = 90 * 1000;
 constexpr float PveCompanionTeleportCatchupDistance = 150.0f;
 constexpr float PveRestBreakFollowDistance = 40.0f;
+// Zone guardians hunt intruders across a wide sweep and patrol far rather
+// than shuffling in place: a guardian owns its whole zone.
+constexpr float PveGuardianHuntRadius = 120.0f;
+constexpr float PveGuardianPatrolRadius = 120.0f;
 
 playerbot::PveConfig g_PveConfig;
 
@@ -765,6 +769,41 @@ Creature* FindGrindProspect(Player* bot, PveBotState& state, playerbot::PveConfi
         }
     }
 
+    return nearest;
+}
+
+// Zone guardians hunt: the nearest real player they may lawfully attack.
+// The hardcore pseudo-faction (Object.cpp's IsValidAttackTarget override)
+// is what makes an armed guardian and a player mutually attackable, so this
+// finds nobody on realms without it - no config coupling needed here.
+// Radius is deliberately wide: a guardian owns its whole zone.
+Player* PickHuntTarget(Player* bot, float radius)
+{
+    std::list<Player*> matches;
+    Trinity::AnyPlayerInObjectRangeCheck check(bot, radius, true /*alive only*/);
+    Trinity::PlayerListSearcher<Trinity::AnyPlayerInObjectRangeCheck> searcher(bot, matches, check);
+    Cell::VisitWorldObjects(bot, searcher, radius);
+
+    Player* nearest = nullptr;
+    float nearestDistance = 0.0f;
+    for (Player* candidate : matches)
+    {
+        if (!candidate || candidate == bot || candidate->IsGameMaster() ||
+            candidate->IsBeingTeleported() || !bot->IsValidAttackTarget(candidate))
+            continue;
+
+        // Never each other: bots are one team (the pseudo-faction rule
+        // already bans it, but the check keeps this honest if it changes).
+        if (playerbot::IsManagedRandomBot(candidate))
+            continue;
+
+        float const distance = bot->GetDistance(candidate);
+        if (!nearest || distance < nearestDistance)
+        {
+            nearest = candidate;
+            nearestDistance = distance;
+        }
+    }
     return nearest;
 }
 
@@ -2566,8 +2605,12 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
     }
 
     // A guardian caught outside its zone gets pulled home by the normal
-    // relocation machinery (which honors the guardian constraint).
-    if (bot->GetZoneId() != zone.zoneId && !bot->IsInCombat() && !state.journeyActive)
+    // relocation machinery (which honors the guardian constraint). Supply
+    // runs and death relocations legitimately teleport bots across the
+    // world, so this is the leash that always brings them back - but never
+    // mid-errand, or the vendor trip it interrupts just restarts forever.
+    if (bot->GetZoneId() != zone.zoneId && !bot->IsInCombat() && !state.journeyActive &&
+        state.errandKind == PveErrandKind::None)
     {
         std::lock_guard<std::mutex> guard(g_PvePendingLock);
         g_PendingGrindRelocations.insert(botRawGuid);
@@ -2659,13 +2702,15 @@ void BuildGrindSpotCacheOnce()
 
         // Zone screen at the source, so forbidden clusters never exist for
         // any travel arm (walk, taxi or teleport) to deliver bots into.
-        // The zone id is kept: guardians relocate by it.
-        if (Map* map = sMapMgr->FindMap(bucket.spot.mapId, 0))
-        {
-            bucket.spot.zoneId = map->GetZoneId(PHASEMASK_NORMAL, bucket.spot.x, bucket.spot.y, bucket.spot.z);
-            if (IsForbiddenGrindZone(bucket.spot.zoneId))
-                continue;
-        }
+        // The zone id is kept: guardians relocate by it. sMapMgr->GetZoneId
+        // creates the base map on demand - FindMap returns null for every
+        // map not already loaded at cache-build time, which left almost
+        // every spot stamped zone 0 and guardians unable to find their way
+        // home.
+        bucket.spot.zoneId = sMapMgr->GetZoneId(PHASEMASK_NORMAL, bucket.spot.mapId,
+            bucket.spot.x, bucket.spot.y, bucket.spot.z);
+        if (IsForbiddenGrindZone(bucket.spot.zoneId))
+            continue;
 
         ++spotCount;
         for (int32 level = int32(bucket.meanLevel) - 1; level <= int32(bucket.meanLevel) + 3; ++level)
@@ -3703,7 +3748,8 @@ void ProcessPendingGrindRelocations()
         if (uint32 const guardianZoneId = GetGuardianZoneId(botRawGuid))
         {
             // Guardians only ever go home: search every bucket at or below
-            // their level for clusters inside their zone.
+            // their level for clusters inside their zone, then - rather than
+            // strand a guardian outside its post - every bucket at all.
             std::lock_guard<std::mutex> guard(g_GrindSpotLock);
             for (int32 level = int32(std::min<uint32>(bot->GetLevel(), 80)); level >= 1 && candidates.empty(); --level)
             {
@@ -3714,6 +3760,11 @@ void ProcessPendingGrindRelocations()
                     if (spot.zoneId == guardianZoneId)
                         candidates.push_back(spot);
             }
+            if (candidates.empty())
+                for (auto const& [level, spots] : g_GrindSpotsByLevel)
+                    for (GrindSpot const& spot : spots)
+                        if (spot.zoneId == guardianZoneId)
+                            candidates.push_back(spot);
         }
         else
         {
@@ -4718,9 +4769,15 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         else if (cfg.grindEnabled && state.masterGuid.IsEmpty() && !IsRestingNow(bot, state) &&
             !NeedsRecovery(bot, cfg))
         {
+            // Zone guardians hunt players above all else: they hold their
+            // zone against intruders and only grind between kills.
+            if (GetGuardianZoneId(bot->GetGUID().GetRawValue()))
+                target = PickHuntTarget(bot, PveGuardianHuntRadius);
+
             // Packmates first: adjacent bots fight together (one team),
             // adopting the fight of any nearby bot already in combat.
-            target = PickBotAssistTarget(bot);
+            if (!target)
+                target = PickBotAssistTarget(bot);
 
             PveTimePoint const now = PveClock::now();
             if (!target && now >= state.nextGrindScanAt)
@@ -4905,7 +4962,12 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
                 }
                 else
                 {
-                    Position const destination = bot->GetRandomNearPosition(cfg.grindWanderRadius);
+                    // Guardians patrol: a wider sweep than a grinder's local
+                    // shuffle, so a zone gets walked instead of camped.
+                    float const wanderRadius = GetGuardianZoneId(bot->GetGUID().GetRawValue())
+                        ? std::max(cfg.grindWanderRadius, PveGuardianPatrolRadius)
+                        : cfg.grindWanderRadius;
+                    Position const destination = bot->GetRandomNearPosition(wanderRadius);
                     playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
                     bot->GetMotionMaster()->MovePoint(0, destination, true);
                 }
