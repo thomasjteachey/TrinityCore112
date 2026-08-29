@@ -146,6 +146,10 @@ struct PveBotState
     // open from stealth before auto-attack starts anyway (a B+ fresh rogue
     // knows ONLY Stealth - its opener never comes).
     PveTimePoint stealthOpenerDeadline{};
+    // Death-loop breaker: repeated deaths in a short window mean the spot
+    // itself is lethal (graveyard camped by higher-level mobs).
+    uint8 recentDeathCount = 0;
+    PveTimePoint recentDeathWindowStart{};
     // Walked journey (relocation/town run on foot). Fallback kind decides
     // what happens on timeout or stuck: the old teleport.
     // walkFallbackUntil: after a failed walk, executors skip the walk branch
@@ -292,6 +296,40 @@ bool IsRestingNow(Player const* player, PveBotState const& state)
     // Consumable-based rest has no fixed aura ids to sniff; the state timer
     // set when the item was used stands in for it.
     return PveClock::now() < state.restingUntil;
+}
+
+uint32 HighestKnownRankInChain(Player* bot, uint32 firstRankSpellId)
+{
+    uint32 best = 0;
+    for (uint32 spellId = firstRankSpellId; spellId; spellId = sSpellMgr->GetNextSpellInChain(spellId))
+        if (bot->HasSpell(spellId))
+            best = spellId;
+    return best;
+}
+
+// The class's baseline nuke, at the highest rank the bot knows - what a
+// real low-level player leads with before any spec exists.
+uint32 BaselineNukeSpellId(Player* bot)
+{
+    uint32 firstRank = 0;
+    switch (bot->GetClass())
+    {
+        case CLASS_PRIEST:  firstRank = 585;  break; // Smite
+        case CLASS_MAGE:    firstRank = 133;  break; // Fireball
+        case CLASS_WARLOCK: firstRank = 686;  break; // Shadow Bolt
+        case CLASS_SHAMAN:  firstRank = 403;  break; // Lightning Bolt
+        case CLASS_DRUID:   firstRank = 5176; break; // Wrath
+        default:
+            return 0;
+    }
+    return HighestKnownRankInChain(bot, firstRank);
+}
+
+// Mages provision themselves: highest known Conjure Water / Conjure Food
+// rank, or 0 when the bot can't conjure that kind.
+uint32 ConjureSpellId(Player* bot, bool drink)
+{
+    return HighestKnownRankInChain(bot, drink ? 5504u : 587u);
 }
 
 // The spell category is the discriminating field, NOT the subclass: B+'s
@@ -794,9 +832,10 @@ void TryBuySupplies(Player* bot, Creature* vendor)
         bot->BuyItemFromVendorSlot(vendor->GetGUID(), uint32(slot), proto->ItemId, uint8(units), NULL_BAG, NULL_SLOT);
     };
 
-    if (bestFood && CountConsumableUnits(bot, false) < 10)
+    // A bot that can conjure its own food or water never buys that kind.
+    if (bestFood && CountConsumableUnits(bot, false) < 10 && !ConjureSpellId(bot, false))
         buyUnits(bestFoodSlot, bestFood, 20);
-    if (bestDrink && CountConsumableUnits(bot, true) < 10)
+    if (bestDrink && CountConsumableUnits(bot, true) < 10 && !ConjureSpellId(bot, true))
         buyUnits(bestDrinkSlot, bestDrink, 20);
     if (bestAmmo)
     {
@@ -1106,8 +1145,8 @@ void StartErrandIfNeeded(Player* bot, PveBotState& state, playerbot::PveConfig c
 
     bool const needRepair = AnyEquippedItemBelowDurabilityPct(bot, 35);
     bool const needSupplies = cfg.restUseConsumables &&
-        (CountConsumableUnits(bot, false) == 0 ||
-            (bot->GetMaxPower(POWER_MANA) > 0 && CountConsumableUnits(bot, true) == 0) ||
+        ((CountConsumableUnits(bot, false) == 0 && !ConjureSpellId(bot, false)) ||
+            (bot->GetMaxPower(POWER_MANA) > 0 && CountConsumableUnits(bot, true) == 0 && !ConjureSpellId(bot, true)) ||
             (RequiredAmmoSubclass(bot) &&
                 (!bot->GetUInt32Value(PLAYER_AMMO_ID) || bot->GetItemCount(bot->GetUInt32Value(PLAYER_AMMO_ID)) == 0)));
     bool const needVendor = cfg.vendorEnabled &&
@@ -1333,6 +1372,62 @@ void TryRestoreShieldProfile(Player* bot)
     }
 }
 
+float WeaponDps(ItemTemplate const* proto)
+{
+    if (!proto->Delay)
+        return 0.0f;
+
+    float total = 0.0f;
+    for (auto const& damage : proto->Damage)
+        total += (damage.DamageMin + damage.DamageMax) * 0.5f;
+    return total * 1000.0f / float(proto->Delay);
+}
+
+// What a real player of this class wears; equipping down a tier is never
+// an upgrade no matter the item level.
+uint32 PreferredArmorSubclass(Player const* bot)
+{
+    switch (bot->GetClass())
+    {
+        case CLASS_WARRIOR:
+        case CLASS_PALADIN:
+            return bot->GetLevel() >= 40 ? ITEM_SUBCLASS_ARMOR_PLATE : ITEM_SUBCLASS_ARMOR_MAIL;
+        case CLASS_HUNTER:
+        case CLASS_SHAMAN:
+            return bot->GetLevel() >= 40 ? ITEM_SUBCLASS_ARMOR_MAIL : ITEM_SUBCLASS_ARMOR_LEATHER;
+        case CLASS_ROGUE:
+        case CLASS_DRUID:
+            return ITEM_SUBCLASS_ARMOR_LEATHER;
+        default:
+            return ITEM_SUBCLASS_ARMOR_CLOTH;
+    }
+}
+
+// Item level alone swapped a fury warrior's good weapon for a higher-ilvl
+// paperweight: weapons compare by real DPS, armor by tier-appropriate
+// subclass first and item level second.
+bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTemplate const* incumbent)
+{
+    if (!incumbent)
+        return true;
+
+    if (candidate->Class == ITEM_CLASS_WEAPON)
+        return WeaponDps(candidate) > WeaponDps(incumbent) + 0.1f;
+
+    if (candidate->Class == ITEM_CLASS_ARMOR &&
+        candidate->SubClass >= ITEM_SUBCLASS_ARMOR_CLOTH && candidate->SubClass <= ITEM_SUBCLASS_ARMOR_PLATE &&
+        incumbent->SubClass >= ITEM_SUBCLASS_ARMOR_CLOTH && incumbent->SubClass <= ITEM_SUBCLASS_ARMOR_PLATE)
+    {
+        uint32 const preferred = PreferredArmorSubclass(bot);
+        bool const candidateOnTier = candidate->SubClass == preferred;
+        bool const incumbentOnTier = incumbent->SubClass == preferred;
+        if (candidateOnTier != incumbentOnTier)
+            return candidateOnTier;
+    }
+
+    return candidate->ItemLevel > incumbent->ItemLevel;
+}
+
 void TryEquipUpgrades(Player* bot)
 {
     TryRestoreShieldProfile(bot);
@@ -1365,8 +1460,7 @@ void TryEquipUpgrades(Player* bot)
 
         if (Item* equipped = bot->GetItemByPos(dest))
         {
-            ItemTemplate const* equippedProto = equipped->GetTemplate();
-            if (equippedProto && equippedProto->ItemLevel >= proto->ItemLevel)
+            if (!IsEquipUpgrade(bot, proto, equipped->GetTemplate()))
                 continue;
 
             bot->SwapItem(item->GetPos(), dest);
@@ -1507,15 +1601,134 @@ uint32 GreedySpendInTab(Player* bot, uint32 tabId)
     return spent;
 }
 
+// ---------------------------------------------------------------------------
+// Talent recipes: leveling bots copy the hand-built specs of the fleet's
+// level-60 archetype bots (the owner's own builds), so every build conforms
+// to those instead of a synthetic greedy fill. The donor's character_talent
+// rows ARE the recipe - rank spell ids, immune to talent-id renumbering -
+// and respeccing a donor updates the recipe at the next server start.
+// ---------------------------------------------------------------------------
+
+char const* TalentDonorName(uint8 botClass, uint32 pick)
+{
+    switch (botClass)
+    {
+        case CLASS_WARRIOR: { static char const* const n[3] = { "Botwarrarms", "Botwarrfury", "Botwarrprot" }; return n[pick % 3]; }
+        case CLASS_PALADIN: { static char const* const n[3] = { "Botpalholy", "Botpalprot", "Botpalret" }; return n[pick % 3]; }
+        case CLASS_HUNTER:  { static char const* const n[3] = { "Bothuntbeast", "Bothuntmarks", "Bothuntsurv" }; return n[pick % 3]; }
+        case CLASS_ROGUE:   { static char const* const n[3] = { "Botrogass", "Botrogcombat", "Botrogsub" }; return n[pick % 3]; }
+        case CLASS_PRIEST:  { static char const* const n[3] = { "Botpridisc", "Botpriholy", "Botprishadow" }; return n[pick % 3]; }
+        case CLASS_SHAMAN:  { static char const* const n[3] = { "Botshamele", "Botshamenh", "Botshamresto" }; return n[pick % 3]; }
+        case CLASS_MAGE:    { static char const* const n[3] = { "Botmagarcane", "Botmagfire", "Botmagfrost" }; return n[pick % 3]; }
+        case CLASS_WARLOCK: { static char const* const n[3] = { "Botwarlaffl", "Botwarldemo", "Botwarldest" }; return n[pick % 3]; }
+        case CLASS_DRUID:   { static char const* const n[3] = { "Botdruidbal", "Botdruferal", "Botdruidrest" }; return n[pick % 3]; }
+        default:
+            return nullptr;
+    }
+}
+
+std::mutex g_TalentRecipeLock;
+std::unordered_map<uint32, std::vector<uint32>> g_TalentRecipesByKey;
+
+std::vector<uint32> GetTalentRecipe(Player* bot, uint32 pick)
+{
+    uint32 const key = uint32(bot->GetClass()) * 4 + (pick % 3);
+    std::lock_guard<std::mutex> guard(g_TalentRecipeLock);
+    auto itr = g_TalentRecipesByKey.find(key);
+    if (itr != g_TalentRecipesByKey.end())
+        return itr->second;
+
+    // Missing donors negative-cache as empty (hunters have no B+ donor).
+    std::vector<uint32>& recipe = g_TalentRecipesByKey[key];
+    if (char const* donorName = TalentDonorName(bot->GetClass(), pick))
+    {
+        ObjectGuid const donorGuid = sCharacterCache->GetCharacterGuidByName(donorName);
+        if (!donorGuid.IsEmpty() && donorGuid != bot->GetGUID())
+            if (QueryResult result = CharacterDatabase.PQuery(
+                "SELECT spell FROM character_talent WHERE guid = {} AND talentGroup = 0", donorGuid.GetCounter()))
+                do
+                {
+                    recipe.push_back((*result)[0].GetUInt32());
+                } while (result->NextRow());
+    }
+    return recipe;
+}
+
+uint32 SpendTalentsFromRecipe(Player* bot, std::vector<uint32> const& recipe)
+{
+    if (recipe.empty())
+        return 0;
+
+    struct RecipeTalent
+    {
+        TalentEntry const* talent;
+        uint8 targetRank; // 0-based index of the donor's learned rank
+    };
+    std::vector<RecipeTalent> entries;
+    for (uint32 spellId : recipe)
+        for (TalentEntry const* talent : sTalentStore)
+            if (talent)
+                for (uint8 rank = 0; rank < MAX_TALENT_RANK; ++rank)
+                    if (talent->SpellRank[rank] == spellId)
+                        entries.push_back({ talent, rank });
+
+    // Tier order satisfies row requirements the way the donor's own legal
+    // build did; the outer passes spread one rank at a time so multi-tree
+    // builds interleave the way a leveling player's would.
+    std::sort(entries.begin(), entries.end(), [](RecipeTalent const& left, RecipeTalent const& right)
+    {
+        if (left.talent->TierID != right.talent->TierID)
+            return left.talent->TierID < right.talent->TierID;
+        return left.talent->ColumnIndex < right.talent->ColumnIndex;
+    });
+
+    uint32 spent = 0;
+    bool progress = true;
+    while (progress && bot->GetFreeTalentPoints())
+    {
+        progress = false;
+        for (RecipeTalent const& entry : entries)
+        {
+            uint8 const currentRank = CurrentTalentRank(bot, entry.talent);
+            if (currentRank > entry.targetRank)
+                continue;
+
+            uint32 const before = bot->GetFreeTalentPoints();
+            bot->LearnTalent(entry.talent->ID, currentRank);
+            if (bot->GetFreeTalentPoints() < before)
+            {
+                spent += before - bot->GetFreeTalentPoints();
+                progress = true;
+                if (!bot->GetFreeTalentPoints())
+                    return spent;
+            }
+        }
+    }
+
+    return spent;
+}
+
 void SpendPendingTalentPoints(Player* bot)
 {
     if (bot->GetLevel() < 10 || !bot->GetFreeTalentPoints())
         return;
 
-    std::array<uint32, 3> const signatures = GetProfileSignatureSpells(bot->GetClass());
     // Deterministic per-character profile so a class's bots spread across
     // specs but each keeps the same build for life.
     uint32 const profileIndex = uint32(bot->GetGUID().GetCounter() % 3);
+
+    // The owner's hand-built donor spec first; greedy filling only mops up
+    // what the recipe can't place (no donor, or points beyond its build).
+    uint32 const recipeSpent = SpendTalentsFromRecipe(bot, GetTalentRecipe(bot, profileIndex));
+    if (!bot->GetFreeTalentPoints())
+    {
+        if (recipeSpent)
+            TC_LOG_INFO("playerbots.pve", "Bot {} spent {} talent points from the {} build.",
+                bot->GetName(), recipeSpent, TalentDonorName(bot->GetClass(), profileIndex));
+        return;
+    }
+
+    std::array<uint32, 3> const signatures = GetProfileSignatureSpells(bot->GetClass());
     uint32 preferredTab = FindTalentTabContainingSpell(signatures[profileIndex]);
     for (uint32 probe = 1; probe < 3 && !preferredTab; ++probe)
         preferredTab = FindTalentTabContainingSpell(signatures[(profileIndex + probe) % 3]);
@@ -1526,15 +1739,15 @@ void SpendPendingTalentPoints(Player* bot)
     if (!preferredTab)
         return;
 
-    uint32 spent = GreedySpendInTab(bot, preferredTab);
+    uint32 spent = recipeSpent + GreedySpendInTab(bot, preferredTab);
     // Overflow into the other trees once the main tab can't absorb points.
     for (uint32 tabId : classTabs)
         if (tabId != preferredTab && bot->GetFreeTalentPoints())
             spent += GreedySpendInTab(bot, tabId);
 
     if (spent)
-        TC_LOG_INFO("playerbots.pve", "Bot {} spent {} talent points (main tab {}).",
-            bot->GetName(), spent, preferredTab);
+        TC_LOG_INFO("playerbots.pve", "Bot {} spent {} talent points ({} from the donor build, main tab {}).",
+            bot->GetName(), spent, recipeSpent, preferredTab);
 }
 
 // Same loop as ".learn my trainer": keep taking every class-trainer spell
@@ -2183,12 +2396,18 @@ void ProcessPendingAuctionShopping()
                 bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND))
                 continue;
 
-            uint32 equippedItemLevel = 0;
+            ItemTemplate const* equippedProto = nullptr;
             if (Item const* equipped = bot->GetItemByPos(dest))
-                equippedItemLevel = equipped->GetTemplate() ? equipped->GetTemplate()->ItemLevel : 0;
+                equippedProto = equipped->GetTemplate();
 
-            int32 const gain = int32(proto->ItemLevel) - int32(equippedItemLevel);
-            if (gain <= 0 || gain <= bestGain)
+            // Same scorer as the bag equip pass: DPS for weapons, armor
+            // tier before item level for armor.
+            if (!IsEquipUpgrade(bot, proto, equippedProto))
+                continue;
+
+            int32 const gain = std::max<int32>(1,
+                int32(proto->ItemLevel) - int32(equippedProto ? equippedProto->ItemLevel : 0));
+            if (gain <= bestGain)
                 continue;
 
             // No trading with the bot's own account.
@@ -2682,33 +2901,6 @@ Unit* PickCompanionTarget(Player* bot, PveBotState& state, Player* master, playe
     return best;
 }
 
-uint32 HighestKnownRankInChain(Player* bot, uint32 firstRankSpellId)
-{
-    uint32 best = 0;
-    for (uint32 spellId = firstRankSpellId; spellId; spellId = sSpellMgr->GetNextSpellInChain(spellId))
-        if (bot->HasSpell(spellId))
-            best = spellId;
-    return best;
-}
-
-// The class's baseline nuke, at the highest rank the bot knows - what a
-// real low-level player leads with before any spec exists.
-uint32 BaselineNukeSpellId(Player* bot)
-{
-    uint32 firstRank = 0;
-    switch (bot->GetClass())
-    {
-        case CLASS_PRIEST:  firstRank = 585;  break; // Smite
-        case CLASS_MAGE:    firstRank = 133;  break; // Fireball
-        case CLASS_WARLOCK: firstRank = 686;  break; // Shadow Bolt
-        case CLASS_SHAMAN:  firstRank = 403;  break; // Lightning Bolt
-        case CLASS_DRUID:   firstRank = 5176; break; // Wrath
-        default:
-            return 0;
-    }
-    return HighestKnownRankInChain(bot, firstRank);
-}
-
 void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
 {
     // Outside battlegrounds the values snapshot is all-default; the class
@@ -2799,9 +2991,12 @@ void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
 
     // Fresh talentless casters match no branch of the spec-gated rotation
     // and were left white-swinging with a mace. A real low-level player
-    // leads with the class's baseline nuke; do the same when the engine has
-    // nothing, using the highest rank the bot actually knows.
-    if (!engineActedThisTick && !bot->HasUnitState(UNIT_STATE_CASTING))
+    // leads with the class's baseline nuke; do the same when the engine cast
+    // NOTHING this tick - facing/positioning busywork (the "set facing"
+    // loop) and movement directives count as acted but must not starve the
+    // nuke, or a fresh priest circles its target forever without a Smite.
+    bool const engineCastThisTick = engineActedThisTick && context.spellId != 0;
+    if (!engineCastThisTick && !bot->HasUnitState(UNIT_STATE_CASTING))
     {
         if (uint32 const nukeId = BaselineNukeSpellId(bot))
         {
@@ -3073,6 +3268,17 @@ void RunDeathRecovery(Player* bot, PveBotState& state, playerbot::PveConfig cons
     {
         state.deathObserved = true;
         state.deathObservedAt = now;
+        // Dying voids any trek in progress: resuming the same walk would
+        // march straight back through whatever killed us.
+        state.journeyActive = false;
+        state.journeyFallbackKind = 0;
+        if (state.recentDeathWindowStart == PveTimePoint() ||
+            now - state.recentDeathWindowStart > std::chrono::minutes(5))
+        {
+            state.recentDeathWindowStart = now;
+            state.recentDeathCount = 0;
+        }
+        ++state.recentDeathCount;
         return;
     }
 
@@ -3089,6 +3295,19 @@ void RunDeathRecovery(Player* bot, PveBotState& state, playerbot::PveConfig cons
     bot->ResurrectPlayer(0.66f);
     bot->SpawnCorpseBones();
     state.deathObserved = false;
+
+    // Second death in the same five minutes: this spot kills us. Ban the
+    // walk arm (walking would retrace the deadly route) and let the
+    // relocation executor teleport us to a level-appropriate cluster.
+    if (state.recentDeathCount >= 2 && state.masterGuid.IsEmpty())
+    {
+        state.recentDeathCount = 0;
+        state.recentDeathWindowStart = PveTimePoint();
+        state.walkFallbackUntil = PveClock::now() + std::chrono::minutes(10);
+        TC_LOG_INFO("playerbots.pve", "Bot {} died twice in five minutes; relocating away.", bot->GetName());
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        g_PendingGrindRelocations.insert(bot->GetGUID().GetRawValue());
+    }
 
     // A revived companion whose master moved on catches up by teleport; the
     // world-update pass owns the actual move.
@@ -3162,6 +3381,22 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
                 Item* consumable = FindBestConsumable(bot, !needFood);
                 if (!consumable && needDrink)
                     consumable = FindBestConsumable(bot, true);
+                if (!consumable && !bot->HasUnitState(UNIT_STATE_CASTING))
+                {
+                    // A mage conjures its own pantry; the next slow tick
+                    // finds the conjured stack and eats it.
+                    uint32 conjureId = needFood ? ConjureSpellId(bot, false) : 0;
+                    if (!conjureId && needDrink)
+                        conjureId = ConjureSpellId(bot, true);
+                    if (conjureId)
+                    {
+                        playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
+                        if (MotionMaster* motionMaster = bot->GetMotionMaster())
+                            motionMaster->Clear();
+                        bot->StopMoving();
+                        bot->CastSpell(bot, conjureId, false);
+                    }
+                }
                 if (consumable)
                 {
                     // The cast may consume the last unit and delete the item;

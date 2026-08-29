@@ -5355,8 +5355,16 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
                 { "druid rake", "maintain rake bleed", 9904, playerbot::PvpClassSpellContext::TargetMode::Enemy });
             AddDecisionCandidate(feralCandidates, inFeralForm && !isProwling && target && !HasAuraFromSpellChain(target, 17392) && !HasAuraFromSpellChain(target, 9907) && IsSpellReady(player, 17392), 52.0f,
                 { "druid faerie fire feral", "feral armor debuff filler", 17392, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-            AddDecisionCandidate(feralCandidates, inCat && IsSpellReady(player, 9830), 51.0f,
+            // Shred is positional like Backstab, and a mob the cat holds
+            // aggro on re-faces it every AI tick - momentary "behind"
+            // windows just bait an endless flanking dance. Claw is the
+            // builder whenever the target is fixated on the bot.
+            bool const shredViable = target && !target->HasInArc(static_cast<float>(M_PI), player) &&
+                target->GetVictim() != player;
+            AddDecisionCandidate(feralCandidates, inCat && shredViable && IsSpellReady(player, 9830), 51.0f,
                 { "druid shred", "behind-target combo point builder", 9830, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+            AddDecisionCandidate(feralCandidates, inCat && !shredViable && IsSpellReady(player, 9850), 50.8f,
+                { "druid claw", "frontal fallback builder while holding aggro", 9850, playerbot::PvpClassSpellContext::TargetMode::Enemy });
 
             return SelectHighestPriorityCastableDecision(feralCandidates, player, target, nullptr);
         }
@@ -7609,7 +7617,10 @@ PvpValues PvpCore::CollectValues(Player const* player)
                 }
                 else
                 {
-                    if (UsesRangedSpacingProfile(player, profileSelection) && player->GetClass() != CLASS_HUNTER)
+                    // PvE fights are a commitment: no low-mana disengage
+                    // dancing against creatures (same rule as the other
+                    // flee arms).
+                    if (!inPveEngagement && UsesRangedSpacingProfile(player, profileSelection) && player->GetClass() != CLASS_HUNTER)
                     {
                         ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, fallbackTarget->GetGUID(),
                             std::max(1.0f, GetConfiguredCloseRange()), "flee", "low mana fallback disengage to recover", 67.0f);
