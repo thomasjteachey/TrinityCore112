@@ -145,6 +145,7 @@ struct PveBotState
     PveTimePoint nextSupplyRunAt{};
     PveTimePoint nextMailCheckAt{};
     PveTimePoint nextAuctionShopAt{};
+    PveTimePoint nextAuctionSellAt{};
     PveTimePoint nextProfessionCheckAt{};
     uint32 engagedStallTicks = 0;
     float lastEngagedX = 0.0f;
@@ -283,6 +284,7 @@ std::unordered_set<uint64> g_PendingRebirths;
 // (Player::m_mail, AuctionHouseObject) - executed from OnWorldUpdate.
 std::unordered_set<uint64> g_PendingMailCollections;
 std::unordered_set<uint64> g_PendingAuctionShopping;
+std::unordered_set<uint64> g_PendingAuctionSales;
 // Loot EXECUTION must happen on the world thread: Player::SendLoot for a
 // group-tagged kill (or a group-rules chest) mutates shared Group state
 // (roll lists, looter guid) that the core only ever touches from
@@ -1136,8 +1138,20 @@ bool VendorStocksNeededSupplies(Player* bot, Creature* vendor)
     if (!vendorItems)
         return false;
 
-    bool const wantsDrink = bot->GetMaxPower(POWER_MANA) > 0;
+    // What the bot is actually SHORT of, not merely what it consumes. This
+    // used to accept any vendor selling food OR water OR ammo, so a mana user
+    // carrying a hundred loaves and no water kept walking to food-only
+    // vendors, buying nothing it needed, and arriving thirsty forever.
+    bool const needsFood = CountConsumableUnits(bot, false) == 0 && !ConjureSpellId(bot, false);
+    bool const needsDrink = bot->GetMaxPower(POWER_MANA) > 0 &&
+        CountConsumableUnits(bot, true) == 0 && !ConjureSpellId(bot, true);
     uint32 const ammoSubclass = RequiredAmmoSubclass(bot);
+    bool const needsAmmo = ammoSubclass != 0 &&
+        (!bot->GetUInt32Value(PLAYER_AMMO_ID) || bot->GetItemCount(bot->GetUInt32Value(PLAYER_AMMO_ID)) == 0);
+
+    if (!needsFood && !needsDrink && !needsAmmo)
+        return false;
+
     for (uint8 slot = 0; slot < vendorItems->GetItemCount(); ++slot)
     {
         VendorItem const* vendorItem = vendorItems->GetItem(slot);
@@ -1145,12 +1159,14 @@ bool VendorStocksNeededSupplies(Player* bot, Creature* vendor)
             continue;
 
         ItemTemplate const* proto = sObjectMgr->GetItemTemplate(vendorItem->item);
-        if (!proto)
+        if (!proto || proto->RequiredLevel > bot->GetLevel())
             continue;
 
-        if (IsFoodTemplate(proto) || (wantsDrink && IsDrinkTemplate(proto)))
+        if (needsFood && IsFoodTemplate(proto))
             return true;
-        if (ammoSubclass && proto->Class == ITEM_CLASS_PROJECTILE && proto->SubClass == ammoSubclass)
+        if (needsDrink && IsDrinkTemplate(proto))
+            return true;
+        if (needsAmmo && proto->Class == ITEM_CLASS_PROJECTILE && proto->SubClass == ammoSubclass)
             return true;
     }
     return false;
@@ -3523,6 +3539,202 @@ void ProcessPendingMailCollections()
 // home; the equip pass puts it on.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Auction selling. Bots loot far more than they can wear, and everything they
+// cannot use was simply rotting in their bags. They now list the surplus and
+// UNDERCUT the standing price, so the house has real competing sellers in it
+// instead of one price-setting stocker.
+//
+// World thread only: AuctionHouseObject and the item/inventory moves are the
+// same structures the shopping executor mutates.
+// ---------------------------------------------------------------------------
+
+// Something the bot owns, cannot use, and can legally part with.
+bool IsAuctionableSurplus(Player* bot, Item* item)
+{
+    ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
+    if (!proto)
+        return false;
+
+    // The core's own rules for what may be listed at all.
+    if (!item->CanBeTraded() || item->IsNotEmptyBag() || item->GetUInt32Value(ITEM_FIELD_DURATION) ||
+        proto->HasFlag(ITEM_FLAG_CONJURED) || sAuctionMgr->GetAItem(item->GetGUID().GetCounter()))
+        return false;
+
+    // Worthless to everyone: vendor trash goes to the vendor, not the house.
+    if (proto->Quality == ITEM_QUALITY_POOR || !proto->SellPrice)
+        return false;
+
+    // Never sell the tools of the trade: food, water, ammo, bandages, potions,
+    // quest items, keys, or a bag the bot could still carry things in.
+    switch (proto->Class)
+    {
+        case ITEM_CLASS_CONSUMABLE:
+        case ITEM_CLASS_QUEST:
+        case ITEM_CLASS_KEY:
+        case ITEM_CLASS_PROJECTILE:
+        case ITEM_CLASS_QUIVER:
+        case ITEM_CLASS_CONTAINER:
+            return false;
+        default:
+            break;
+    }
+
+    // Gear it would rather wear than sell.
+    if (proto->Class == ITEM_CLASS_WEAPON || proto->Class == ITEM_CLASS_ARMOR)
+    {
+        uint16 dest = 0;
+        if (bot->CanEquipItem(NULL_SLOT, dest, item, false) == EQUIP_ERR_OK)
+        {
+            ItemTemplate const* equipped = nullptr;
+            if (Item const* worn = bot->GetItemByPos(dest))
+                equipped = worn->GetTemplate();
+            if (IsEquipUpgrade(bot, proto, equipped, uint8(dest & 255)))
+                return false;
+        }
+    }
+
+    return true;
+}
+
+// What to ask for it. The anchor is the item's own value, then the standing
+// competition decides: a seller who ignores the shelf price never sells.
+uint32 ComputeAuctionBuyout(ItemTemplate const* proto, uint32 count,
+    std::unordered_map<uint32, uint32> const& cheapestPerUnit)
+{
+    uint64 base = proto->BuyPrice ? proto->BuyPrice : uint64(proto->SellPrice) * 4;
+    if (!base)
+        base = proto->SellPrice ? proto->SellPrice : 1;
+    uint64 price = base * count;
+
+    // Undercut the cheapest listing of the same item by 5%.
+    auto itr = cheapestPerUnit.find(proto->ItemId);
+    if (itr != cheapestPerUnit.end() && itr->second)
+    {
+        uint64 const undercut = std::max<uint64>(uint64(itr->second) * count * 95 / 100, 1);
+        price = std::min(price, undercut);
+    }
+
+    // ...but never below what a vendor would hand over, or selling here is
+    // strictly worse than walking to town.
+    uint64 const vendorFloor = uint64(proto->SellPrice) * count * 3 / 2;
+    price = std::max(price, vendorFloor);
+
+    return uint32(std::min<uint64>(price, uint64(MAX_MONEY_AMOUNT)));
+}
+
+void ProcessPendingAuctionSales()
+{
+    std::unordered_set<uint64> drained;
+    {
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        drained.swap(g_PendingAuctionSales);
+    }
+
+    uint32 sellersLeft = 2; // the full-house scan is the expensive part
+    for (auto itr = drained.begin(); itr != drained.end(); ++itr)
+    {
+        if (!sellersLeft)
+        {
+            std::lock_guard<std::mutex> guard(g_PvePendingLock);
+            g_PendingAuctionSales.insert(itr, drained.end());
+            break;
+        }
+
+        Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(*itr));
+        if (!bot || !bot->IsInWorld() || !bot->IsAlive() || bot->IsInCombat())
+            continue;
+
+        // AHBot destroys auction proceeds paid to its own characters.
+        if (sAuctionBotConfig->IsBotChar(bot->GetGUID().GetCounter()))
+            continue;
+
+        AuctionHouseObject* auctionHouse = sAuctionMgr->GetAuctionsMap(bot->GetFaction());
+        AuctionHouseEntry const* houseEntry = AuctionHouseMgr::GetAuctionHouseEntry(bot->GetFaction());
+        if (!auctionHouse || !houseEntry)
+            continue;
+
+        std::vector<Item*> surplus;
+        ForEachBagItem(bot, [&](Item* item, uint8 /*bag*/, uint8 /*slot*/)
+        {
+            if (surplus.size() < 3 && IsAuctionableSurplus(bot, item))
+                surplus.push_back(item);
+        });
+
+        if (surplus.empty())
+            continue;
+
+        --sellersLeft;
+
+        // One pass over the house for the going rate of everything at once.
+        std::unordered_map<uint32, uint32> cheapestPerUnit;
+        for (auto houseItr = auctionHouse->GetAuctionsBegin(); houseItr != auctionHouse->GetAuctionsEnd(); ++houseItr)
+        {
+            AuctionEntry const* auction = houseItr->second;
+            if (!auction || !auction->buyout || !auction->itemCount)
+                continue;
+
+            uint32 const perUnit = auction->buyout / auction->itemCount;
+            auto existing = cheapestPerUnit.find(auction->itemEntry);
+            if (existing == cheapestPerUnit.end() || perUnit < existing->second)
+                cheapestPerUnit[auction->itemEntry] = perUnit;
+        }
+
+        for (Item* item : surplus)
+        {
+            ItemTemplate const* proto = item->GetTemplate();
+            uint32 const count = item->GetCount();
+            uint32 const etime = 12 * HOUR;
+
+            uint32 const deposit = sAuctionMgr->GetAuctionDeposit(houseEntry, etime, item, count);
+            if (!bot->HasEnoughMoney(deposit))
+                break;
+
+            uint32 const buyout = ComputeAuctionBuyout(proto, count, cheapestPerUnit);
+            uint32 const startBid = std::max<uint32>(1, uint32(uint64(buyout) * 80 / 100));
+
+            AuctionEntry* auction = new AuctionEntry();
+            auction->Id = sObjectMgr->GenerateAuctionID();
+            // Same rule the sell handler uses: one shared neutral house when
+            // cross-faction trading is on, otherwise the faction's own.
+            auction->houseId = sWorld->getBoolConfig(CONFIG_ALLOW_TWO_SIDE_INTERACTION_AUCTION)
+                ? uint8(AUCTIONHOUSE_NEUTRAL) : uint8(houseEntry->ID);
+            auction->itemGUIDLow = item->GetGUID().GetCounter();
+            auction->itemEntry = item->GetEntry();
+            auction->itemCount = count;
+            auction->owner = bot->GetGUID().GetCounter();
+            auction->startbid = startBid;
+            auction->bidder = 0;
+            auction->bid = 0;
+            auction->buyout = buyout;
+            auction->deposit = deposit;
+            auction->etime = etime;
+            auction->expire_time = GameTime::GetGameTime() + uint32(etime * sWorld->getRate(RATE_AUCTION_TIME));
+            auction->auctionHouseEntry = houseEntry;
+            auction->Flags = AUCTION_ENTRY_FLAG_NONE;
+
+            bot->ModifyMoney(-int64(deposit));
+            bot->MoveItemFromInventory(item->GetBagSlot(), item->GetSlot(), true);
+
+            CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+            item->DeleteFromInventoryDB(trans);
+            item->SaveToDB(trans);
+            sAuctionMgr->AddAItem(item);
+            auctionHouse->AddAuction(auction);
+            auction->SaveToDB(trans);
+            bot->SaveInventoryAndGoldToDB(trans);
+            CharacterDatabase.CommitTransaction(trans);
+
+            TC_LOG_INFO("playerbots.pve", "Bot {} listed {} x{} for {} copper (deposit {}).",
+                bot->GetName(), proto->Name1, count, buyout, deposit);
+
+            // The next listing this pass undercuts its own price too, so a bot
+            // dumping duplicates does not stack them all at the same number.
+            cheapestPerUnit[proto->ItemId] = std::max<uint32>(1, buyout / count);
+        }
+    }
+}
+
 void ProcessPendingAuctionShopping()
 {
     std::unordered_set<uint64> drained;
@@ -4915,6 +5127,22 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         g_PendingMailCollections.insert(bot->GetGUID().GetRawValue());
     }
 
+    // Selling the surplus: everything looted that the bot will never wear is
+    // worth more on the house than rotting in a bag.
+    if (cfg.auctionSellEnabled && !bot->IsInCombat() && now >= state.nextAuctionSellAt)
+    {
+        // Staggered like the shopping pass so a fleet restart does not queue
+        // every bot for the same full-house scan.
+        if (state.nextAuctionSellAt == PveTimePoint())
+            state.nextAuctionSellAt = now + std::chrono::seconds(120 + bot->GetGUID().GetCounter() % 420);
+        else
+        {
+            state.nextAuctionSellAt = now + std::chrono::minutes(8);
+            std::lock_guard<std::mutex> guard(g_PvePendingLock);
+            g_PendingAuctionSales.insert(bot->GetGUID().GetRawValue());
+        }
+    }
+
     if (cfg.auctionBuyEnabled && !bot->IsInCombat() && now >= state.nextAuctionShopAt)
     {
         // First pass after a restart: spread the fleet's shopping trips out
@@ -5277,6 +5505,7 @@ void PveManager::LoadConfig()
     g_PveConfig.travelWalkMaxDistance = sConfigMgr->GetFloatDefault("Playerbot.Pve.Travel.WalkMaxDistance", 900.0f);
     g_PveConfig.travelUseFlightPaths = sConfigMgr->GetBoolDefault("Playerbot.Pve.Travel.UseFlightPaths", true);
     g_PveConfig.auctionBuyEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.AuctionBuy.Enable", false);
+    g_PveConfig.auctionSellEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.AuctionSell.Enable", false);
     g_PveConfig.auctionBuyBudgetPct = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionBuy.BudgetPct", 30), 1, 100));
     g_PveConfig.professionsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Professions.Enable", false);
     g_PveConfig.relocateEnabled = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.Relocate.Enable", true);
@@ -5346,6 +5575,7 @@ void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
     ProcessPendingMailCollections();
     if (g_PveConfig.auctionBuyEnabled)
         ProcessPendingAuctionShopping();
+        ProcessPendingAuctionSales();
     ProcessPendingSupplyRuns();
     if (g_PveConfig.questsEnabled)
         ProcessPendingClassQuestTravels();

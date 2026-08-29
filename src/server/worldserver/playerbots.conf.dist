@@ -509,6 +509,15 @@ Playerbot.Pve.DeclineGroupInvites = 0
 #        Default:     1
 Playerbot.OpenWorldNoFriendlyFire = 1
 
+#    Playerbot.Pve.AuctionSell.Enable
+#        Description: Bots list the gear and goods they cannot use on their faction
+#                     auction house, undercutting the cheapest standing listing of the
+#                     same item by 5% but never going below vendor value. They never
+#                     sell food, water, ammunition, bags, quest items or anything they
+#                     would rather wear.
+#        Default:     0
+Playerbot.Pve.AuctionSell.Enable = 0
+
 #    Playerbot.Pve.ZoneGuardians.PerZone
 #        Description: This many bots per classic zone become that zone's permanent guardians:
 #                     set to the zone's classic level cap, XP gain frozen, relocated only within

@@ -63,6 +63,8 @@ struct PveConfig
     // upgrades (delivered by mail, which bots now collect).
     bool auctionBuyEnabled = false;
     uint32 auctionBuyBudgetPct = 30;
+    // Bots list the gear they cannot use, undercutting the standing price.
+    bool auctionSellEnabled = false;
     // Gathering professions: two of herbalism/mining/skinning per bot,
     // auto-learned and ranked, nodes gathered mid-grind, corpses skinned.
     bool professionsEnabled = false;
