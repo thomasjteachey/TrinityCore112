@@ -15371,7 +15371,16 @@ void Unit::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player const* t
                     ffaBotOwner->GetSession() && IsManagedPlayerbotAccountIdForDisplay(ffaBotOwner->GetSession()->GetAccountId()) &&
                     (!target->GetSession() || !IsManagedPlayerbotAccountIdForDisplay(target->GetSession()->GetAccountId())))
                 {
-                    fieldBuffer << uint32(14);
+                    // Show the observer an ENEMY PLAYER faction rather than
+                    // Monster: the 3.3.5 client colours other players by the
+                    // PvP rules (same faction reads friendly, and a lone FFA
+                    // byte only reads hostile to a viewer who is FFA-flagged
+                    // too), so a hostile creature faction does not reliably
+                    // turn a same-faction player red. Orcish (2) and Human (1)
+                    // are the race faction templates the client already knows
+                    // how to hate, and the armed bot carries the PvP flag, so
+                    // this resolves exactly like an enemy player.
+                    fieldBuffer << uint32(target->GetTeamId() == TEAM_ALLIANCE ? 2 : 1);
                 }
                 else if (IsControlledByPlayer() && target != this && sWorld->getBoolConfig(CONFIG_ALLOW_TWO_SIDE_INTERACTION_GROUP) && IsInRaidWith(target))
                 {

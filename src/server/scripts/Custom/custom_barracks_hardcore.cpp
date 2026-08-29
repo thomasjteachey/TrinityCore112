@@ -89,6 +89,13 @@ namespace BarracksHardcore
         while (std::getline(stream, token, ','))
             if (!token.empty())
                 s_botAccountIds.insert(uint32(std::strtoul(token.c_str(), nullptr, 10)));
+
+        // The "scripts" logger has no configuration, so it falls back to root,
+        // which is ERROR-only: anything logged there is invisible. Everything
+        // diagnostic here goes to playerbots.* instead, which reaches
+        // Playerbot.log.
+        TC_LOG_INFO("playerbots.hardcore", "Hardcore config: enabled={} chest={} minZoneLevel={} botAccounts={}",
+            uint32(s_enabled), s_chestEntry, s_minZoneLevel, uint32(s_botAccountIds.size()));
     }
 
     bool IsBotAccount(uint32 accountId)
@@ -203,12 +210,24 @@ namespace BarracksHardcore
         player->pvpInfo.IsInFFAPvPArea = shouldFfa;
         player->UpdatePvPState(true);
 
+        // An armed bot also carries the ordinary PvP flag: the enemy-faction
+        // render only reads as attackable on the client when the unit is
+        // flagged, exactly like a real enemy player standing in the open.
+        if (player->GetSession() && IsBotAccount(player->GetSession()->GetAccountId()))
+            player->UpdatePvP(shouldFfa, true);
+
         // Only when the byte actually moved: the bot pseudo-faction render
         // (Unit::BuildValuesUpdate) keys on it, and the faction field is never
         // dirtied by the core, but forcing it on a tick where nothing changed
         // is pure broadcast cost.
         if (player->IsFFAPvP() != wasFfa)
             player->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
+
+        // Transitions only - this cannot spam.
+        TC_LOG_INFO("playerbots.hardcore", "FFA {} for {} (zone {} area {} account {}): armed={} byteNow={} wasByte={}",
+            shouldFfa ? "ARM" : "disarm", player->GetName(), player->GetZoneId(), player->GetAreaId(),
+            player->GetSession() ? player->GetSession()->GetAccountId() : 0,
+            uint32(shouldFfa), uint32(player->IsFFAPvP()), uint32(wasFfa));
     }
 
     // ---------------------------------------------------------------------
