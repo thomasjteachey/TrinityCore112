@@ -44,6 +44,7 @@
 #include "MapManager.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "PathGenerator.h"
 #include "MoveSpline.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
@@ -158,6 +159,9 @@ struct PveBotState
     PveTimePoint recentDeathWindowStart{};
     // Zone guardians: when this bot was first seen away from its post.
     PveTimePoint guardianOutOfZoneSince{};
+    // Hardcore reclaim: when we fell, so the walk back is abandoned once the
+    // drop chest would have despawned.
+    PveTimePoint deathSpotAt{};
     // Naked recovery: when this bot was first seen stripped of its gear.
     PveTimePoint nakedSince{};
     PveTimePoint nextNakedCheckAt{};
@@ -810,6 +814,65 @@ Player* PickHuntTarget(Player* bot, float radius)
         }
     }
     return nearest;
+}
+
+// A point on the map is not automatically somewhere a walker can GET to.
+// MovePoint's own path generation silently falls back to a straight line
+// when the navmesh has no route (PATHFIND_SHORTCUT), which is how a bot ends
+// up marching up a cliff face or standing at the bottom of one re-issuing a
+// chase forever. Ask for a real path first and refuse anything that is not
+// one - the same answer a player's own footing would give them.
+bool CanWalkTo(Player* bot, float x, float y, float z)
+{
+    PathGenerator path(bot);
+    if (!path.CalculatePath(x, y, z, false))
+        return false;
+
+    PathType const type = path.GetPathType();
+    if (type & (PATHFIND_NOPATH | PATHFIND_SHORTCUT | PATHFIND_FARFROMPOLY | PATHFIND_NOT_USING_PATH))
+        return false;
+    return (type & PATHFIND_NORMAL) != 0;
+}
+
+bool CanWalkTo(Player* bot, Position const& destination)
+{
+    return CanWalkTo(bot, destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
+}
+
+// A wander/patrol destination the bot can actually walk to. Later tries pull
+// in closer, so a bot hemmed in by terrain still shuffles somewhere legal
+// instead of freezing or scaling the scenery.
+bool PickWalkableNearPosition(Player* bot, float radius, Position& destination)
+{
+    for (uint8 attempt = 0; attempt < 5; ++attempt)
+    {
+        float const tryRadius = radius * (1.0f - float(attempt) * 0.18f);
+        Position candidate = bot->GetRandomNearPosition(tryRadius);
+        bot->UpdateAllowedPositionZ(candidate.m_positionX, candidate.m_positionY, candidate.m_positionZ);
+        if (CanWalkTo(bot, candidate))
+        {
+            destination = candidate;
+            return true;
+        }
+    }
+    return false;
+}
+
+// The nearest grind prospect the bot can actually reach on foot. Each
+// unreachable one is listed as a recent bad target, so the next pass offers
+// the next-nearest rather than the same mob across the same canyon.
+Creature* FindWalkableGrindProspect(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
+{
+    for (uint8 attempt = 0; attempt < 3; ++attempt)
+    {
+        Creature* prospect = FindGrindProspect(bot, state, cfg);
+        if (!prospect)
+            return nullptr;
+        if (CanWalkTo(bot, prospect->GetPosition()))
+            return prospect;
+        MarkRecentBadTarget(state, prospect->GetGUID());
+    }
+    return nullptr;
 }
 
 // Begin a walked journey toward a destination on the bot's current map.
@@ -4535,6 +4598,7 @@ void RunDeathRecovery(Player* bot, PveBotState& state, playerbot::PveConfig cons
             state.deathSpotX = bot->GetPositionX();
             state.deathSpotY = bot->GetPositionY();
             state.deathSpotZ = bot->GetPositionZ();
+            state.deathSpotAt = now;
         }
         // Dying voids any trek in progress: resuming the same walk would
         // march straight back through whatever killed us.
@@ -4569,15 +4633,25 @@ void RunDeathRecovery(Player* bot, PveBotState& state, playerbot::PveConfig cons
     // on a repeat the loop breaker below relocates away instead, abandoning
     // the chest the way a player abandons a camped corpse.
     if (cfg.hardcoreLootChestEntry && state.recentDeathCount < 2 && state.masterGuid.IsEmpty() &&
-        state.deathSpotMapId == bot->GetMapId())
+        state.deathSpotMapId == bot->GetMapId() && state.deathSpotAt != PveTimePoint())
     {
+        // Only while the chest could still be standing there: it despawns on
+        // the hardcore timer, and the walk home has to be worth making. The
+        // corpse run itself takes time, so the remaining window must cover it
+        // at roughly running pace.
+        auto const chestAge = std::chrono::duration_cast<std::chrono::seconds>(now - state.deathSpotAt).count();
         float const distance = bot->GetDistance(state.deathSpotX, state.deathSpotY, state.deathSpotZ);
-        if (distance > 40.0f && cfg.travelWalkMaxDistance > 0.0f && distance < cfg.travelWalkMaxDistance)
+        int64 const travelSeconds = int64(distance / 7.0f) + 15;
+
+        if (chestAge + travelSeconds < int64(cfg.hardcoreChestDespawnSeconds) &&
+            distance > 20.0f && cfg.travelWalkMaxDistance > 0.0f && distance < cfg.travelWalkMaxDistance)
         {
-            TC_LOG_INFO("playerbots.pve", "Bot {} walks {} yards back to reclaim its death chest.",
-                bot->GetName(), uint32(distance));
+            TC_LOG_INFO("playerbots.pve", "Bot {} walks {} yards back to reclaim its death chest ({}s old).",
+                bot->GetName(), uint32(distance), uint32(chestAge));
             StartWalkedJourney(state, state.deathSpotMapId, state.deathSpotX, state.deathSpotY, state.deathSpotZ, 0, distance);
         }
+        else if (chestAge + travelSeconds >= int64(cfg.hardcoreChestDespawnSeconds))
+            state.deathSpotAt = PveTimePoint(); // gone; stop trying
     }
 
     // Second death in the same five minutes: this spot kills us. Ban the
@@ -5145,7 +5219,10 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
                 // Walk toward the nearest attackable creature when one exists
                 // beyond engage range; random-wander only in a truly empty
                 // area. The engage-radius scan takes over on arrival.
-                else if (Creature* prospect = FindGrindProspect(bot, state, cfg))
+                // A prospect on the far side of a canyon is not a prospect:
+                // MovePoint's straight-line fallback would march the bot into
+                // the terrain and the same chase would re-issue forever.
+                else if (Creature* prospect = FindWalkableGrindProspect(bot, state, cfg))
                 {
                     playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
                     bot->GetMotionMaster()->MovePoint(0, prospect->GetPosition(), true);
@@ -5159,9 +5236,12 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
                     float const wanderRadius = GetGuardianZoneId(bot->GetGUID().GetRawValue())
                         ? std::max(cfg.grindWanderRadius, PveGuardianPatrolRadius)
                         : cfg.grindWanderRadius;
-                    Position const destination = bot->GetRandomNearPosition(wanderRadius);
-                    playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
-                    bot->GetMotionMaster()->MovePoint(0, destination, true);
+                    Position destination;
+                    if (PickWalkableNearPosition(bot, wanderRadius, destination))
+                    {
+                        playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
+                        bot->GetMotionMaster()->MovePoint(0, destination, true);
+                    }
                 }
             }
         }
@@ -5218,6 +5298,7 @@ void PveManager::LoadConfig()
         sConfigMgr->GetIntDefault("Playerbot.Pve.RebirthAtMaxLevel.Percent", 0), 0, 100));
     g_PveConfig.declineGroupInvites = sConfigMgr->GetBoolDefault("Playerbot.Pve.DeclineGroupInvites", false);
     g_PveConfig.hardcoreLootChestEntry = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FullLoot.ChestGameObjectId", 0)));
+    g_PveConfig.hardcoreChestDespawnSeconds = uint32(std::max(30, sConfigMgr->GetIntDefault("Centurion.Hardcore.FullLoot.ChestDespawnSeconds", 600)));
     g_PveConfig.zoneGuardiansPerZone = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ZoneGuardians.PerZone", 0), 0, 10));
 
     // Accounts whose bots are PvP-only: parked in their sanctuary, never

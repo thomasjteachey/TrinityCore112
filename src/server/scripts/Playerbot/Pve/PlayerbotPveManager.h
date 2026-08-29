@@ -80,6 +80,9 @@ struct PveConfig
     bool declineGroupInvites = false;
     // The hardcore death-chest gameobject: bots loot these like any prize.
     uint32 hardcoreLootChestEntry = 0;
+    // How long such a chest stands before despawning - a corpse run is only
+    // worth starting while it could still be there.
+    uint32 hardcoreChestDespawnSeconds = 600;
     // Zone guardians: this many bots per classic zone are pinned there at
     // the zone's classic level cap with XP gain frozen. 0 disables.
     uint32 zoneGuardiansPerZone = 0;
