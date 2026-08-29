@@ -4872,6 +4872,20 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     ObjectGuid const previousTargetGuid = bot->GetTarget();
     Unit* target = ResolveAttackableByGuid(bot, previousTargetGuid);
 
+    // Zone guardians hunt: an intruder outranks whatever creature is being
+    // farmed. Without this the guardian only ever notices players between
+    // kills, which in a busy zone is almost never - it holds the zone, so
+    // the zone's visitors come first.
+    if (target && target->GetTypeId() != TYPEID_PLAYER && state.masterGuid.IsEmpty() &&
+        GetGuardianZoneId(bot->GetGUID().GetRawValue()))
+    {
+        if (Player* intruder = PickHuntTarget(bot, PveGuardianHuntRadius))
+        {
+            target = intruder;
+            state.recentBadTargets.erase(intruder->GetGUID().GetRawValue());
+        }
+    }
+
     // A held target that stopped resolving while still alive (evade flicker,
     // validity flicker) must not be immediately re-acquired: the resulting
     // engage/AttackStop cycle stutters both the bot and the mob chasing it.
