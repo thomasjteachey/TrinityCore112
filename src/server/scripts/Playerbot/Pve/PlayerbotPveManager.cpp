@@ -26,6 +26,7 @@
 #include "CellImpl.h"
 #include "CharacterCache.h"
 #include "Configuration/Config.h"
+#include "DatabaseEnv.h"
 #include "Creature.h"
 #include "DBCStores.h"
 #include "GameObject.h"
@@ -140,6 +141,10 @@ struct PveBotState
     float lastEngagedY = 0.0f;
     // Walked journey (relocation/town run on foot). Fallback kind decides
     // what happens on timeout or stuck: the old teleport.
+    // walkFallbackUntil: after a failed walk, executors skip the walk branch
+    // so the retry actually reaches taxi/teleport instead of re-walking into
+    // the same wall forever.
+    PveTimePoint walkFallbackUntil{};
     bool journeyActive = false;
     uint8 journeyFallbackKind = 0; // 1 = grind relocation, 2 = supply run
     uint16 journeyMapId = 0;
@@ -505,6 +510,10 @@ void CancelJourneyWithFallback(Player* bot, PveBotState& state)
     uint8 const fallbackKind = state.journeyFallbackKind;
     state.journeyActive = false;
     state.journeyFallbackKind = 0;
+    // The executors' walk branches honor this: without it the deterministic
+    // nearest-destination pick re-walks into the same unreachable wall
+    // forever and the teleport fallback is never reached.
+    state.walkFallbackUntil = PveClock::now() + std::chrono::minutes(10);
 
     // The walk failed (timeout or stuck); the old teleport still delivers.
     std::lock_guard<std::mutex> guard(g_PvePendingLock);
@@ -521,6 +530,14 @@ bool AdvanceWalkedJourney(Player* bot, PveBotState& state)
         return false;
 
     PveTimePoint const now = PveClock::now();
+
+    // A wounded traveler may sit and eat; the trek resumes after. Keep the
+    // stuck detector quiet meanwhile.
+    if (IsRestingNow(bot, state))
+    {
+        state.journeyProgressAt = now;
+        return true;
+    }
     if (bot->GetMapId() != state.journeyMapId || now > state.journeyUntil)
     {
         CancelJourneyWithFallback(bot, state);
@@ -833,6 +850,8 @@ bool ProcessPendingLoot(Player* bot, PveBotState& state, playerbot::PveConfig co
 
     if (!bot->IsWithinDistInMap(corpse, INTERACTION_DISTANCE))
     {
+        if (state.journeyActive)
+            state.journeyProgressAt = PveClock::now();
         MoveTowardThrottled(bot, corpse->GetPosition());
         return true;
     }
@@ -1889,8 +1908,10 @@ void TrySkinCorpse(Player* bot, Creature* corpse)
     if (bot->GetLootGUID() == corpse->GetGUID())
         bot->GetSession()->DoLootRelease(corpse->GetGUID());
 
-    bot->UpdateGatherSkill(SKILL_SKINNING, skillValue, uint32(std::max(0, requiredValue)),
-        corpse->isElite() ? 2 : 1);
+    // UpdateGatherSkill compares against max-skill caps, so feed it the pure
+    // (unbuffed) value; racial/enchant bonuses would stall skill-ups early.
+    bot->UpdateGatherSkill(SKILL_SKINNING, bot->GetPureSkillValue(SKILL_SKINNING),
+        uint32(std::max(0, requiredValue)), corpse->isElite() ? 2 : 1);
 }
 
 // After the world-thread executor loots a gather node: the skill-up the real
@@ -1960,6 +1981,12 @@ void ProcessPendingMailCollections()
             if (!mail || mail->state == MAIL_STATE_DELETED || mail->deliver_time > nowTime)
                 continue;
 
+            // Bots don't do COD trades: taking a CODed attachment without
+            // paying would silently rob the sender. Leave such mail to
+            // expire back to them.
+            if (mail->COD)
+                continue;
+
             if (mail->money)
             {
                 if (bot->ModifyMoney(mail->money, false))
@@ -2025,8 +2052,19 @@ void ProcessPendingAuctionShopping()
         drained.swap(g_PendingAuctionShopping);
     }
 
-    for (uint64 botRawGuid : drained)
+    // A full-house scan is the expensive part; two shoppers per world pass,
+    // the rest keep their place in line.
+    uint32 scansLeft = 2;
+    for (auto itr = drained.begin(); itr != drained.end(); ++itr)
     {
+        if (!scansLeft)
+        {
+            std::lock_guard<std::mutex> guard(g_PvePendingLock);
+            g_PendingAuctionShopping.insert(itr, drained.end());
+            break;
+        }
+
+        uint64 const botRawGuid = *itr;
         Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid));
         if (!bot || !bot->IsInWorld() || !bot->IsAlive())
             continue;
@@ -2036,10 +2074,15 @@ void ProcessPendingAuctionShopping()
         if (sAuctionBotConfig->IsBotChar(bot->GetGUID().GetCounter()))
             continue;
 
+        // A win that cannot be pocketed burns gold on mail that rots.
+        if (CountFreeBagSlots(bot) < 2)
+            continue;
+
         AuctionHouseObject* auctionHouse = sAuctionMgr->GetAuctionsMap(bot->GetFaction());
         if (!auctionHouse)
             continue;
 
+        --scansLeft;
         uint32 const budget = CalculatePct(bot->GetMoney(), g_PveConfig.auctionBuyBudgetPct);
         uint32 const botAccountId = bot->GetSession() ? bot->GetSession()->GetAccountId() : 0;
 
@@ -2103,6 +2146,8 @@ void ProcessPendingAuctionShopping()
             sAuctionMgr->SendAuctionOutbiddedMail(bestAuction, bestAuction->buyout, bot, trans);
         bestAuction->bidder = bot->GetGUID().GetCounter();
         bestAuction->bid = bestAuction->buyout;
+        // Bots hold no GM permission; same clear as the handler's else arm.
+        bestAuction->Flags = AuctionEntryFlag(bestAuction->Flags & ~AUCTION_ENTRY_FLAG_GM_LOG_BUYER);
 
         sAuctionMgr->SendAuctionSalePendingMail(bestAuction, trans);
         sAuctionMgr->SendAuctionSuccessfulMail(bestAuction, trans);
@@ -2212,6 +2257,12 @@ bool TryTaxiTravel(Player* bot, uint64 botRawGuid, uint16 destMapId, float destX
 
     if (!bot->ActivateTaxiPathTo(chain, nullptr))
     {
+        // InstantTaxi pays the fare, teleports to the last node and returns
+        // false; the journey leg still applies, so treat it as flown - a
+        // false return here would send the caller on to teleport elsewhere.
+        if (sWorld->getBoolConfig(CONFIG_INSTANT_TAXI))
+            return true;
+
         PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
         state.journeyActive = false;
         state.journeyFallbackKind = 0;
@@ -2245,9 +2296,6 @@ void ProcessPendingSupplyRuns()
             bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
             continue;
 
-        if (HasHumanPlayerNearby(bot, 150.0f))
-            continue;
-
         VendorSpot const* nearest = nullptr;
         float nearestDist2 = 0.0f;
         {
@@ -2272,7 +2320,12 @@ void ProcessPendingSupplyRuns()
             continue;
 
         // Walking distance? Make it a real trip to town.
-        if (g_PveConfig.travelWalkMaxDistance > 0.0f && nearest->mapId == bot->GetMapId())
+        bool walkAllowed;
+        {
+            PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+            walkAllowed = PveClock::now() >= state.walkFallbackUntil;
+        }
+        if (walkAllowed && g_PveConfig.travelWalkMaxDistance > 0.0f && nearest->mapId == bot->GetMapId())
         {
             float const walkDistance = bot->GetDistance(nearest->x, nearest->y, nearest->z);
             if (walkDistance <= g_PveConfig.travelWalkMaxDistance)
@@ -2288,6 +2341,11 @@ void ProcessPendingSupplyRuns()
         }
 
         if (TryTaxiTravel(bot, botRawGuid, nearest->mapId, nearest->x, nearest->y, nearest->z, 2))
+            continue;
+
+        // Walking and flying are visible, legitimate travel; only the
+        // teleport needs the vanish-guard at the source end.
+        if (HasHumanPlayerNearby(bot, 150.0f))
             continue;
 
         Map* map = sMapMgr->FindMap(nearest->mapId, 0);
@@ -2331,8 +2389,9 @@ void ProcessPendingGrindRelocations()
             bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
             continue;
 
-        if (HasHumanPlayerNearby(bot, 150.0f))
-            continue;
+        // Only the teleport arm below must hide from real players; walking
+        // and flying are visible, legitimate travel.
+        bool const humanNearby = HasHumanPlayerNearby(bot, 150.0f);
 
         std::vector<GrindSpot> candidates;
         {
@@ -2356,7 +2415,12 @@ void ProcessPendingGrindRelocations()
 
             // Walk when the spot is on this map within range: visible travel
             // beats teleporting, and walking needs no vanish-guards.
-            if (g_PveConfig.travelWalkMaxDistance > 0.0f && spot.mapId == bot->GetMapId())
+            bool walkAllowed;
+            {
+                PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+                walkAllowed = PveClock::now() >= state.walkFallbackUntil;
+            }
+            if (walkAllowed && g_PveConfig.travelWalkMaxDistance > 0.0f && spot.mapId == bot->GetMapId())
             {
                 float const walkDistance = bot->GetDistance(spot.x, spot.y, spot.z);
                 if (walkDistance <= g_PveConfig.travelWalkMaxDistance)
@@ -2373,6 +2437,9 @@ void ProcessPendingGrindRelocations()
 
             // A real flight beats teleporting when a route exists.
             if (TryTaxiTravel(bot, botRawGuid, spot.mapId, spot.x, spot.y, spot.z, 1))
+                break;
+
+            if (humanNearby)
                 break;
 
             Map* map = sMapMgr->FindMap(spot.mapId, 0);
@@ -2754,6 +2821,9 @@ void ProcessPendingSummons()
         state.masterGuid = summoner->GetGUID();
         state.passive = false;
         state.stay = false;
+        // Serving a master supersedes any solo trek in progress.
+        state.journeyActive = false;
+        state.journeyFallbackKind = 0;
         bot->Whisper("At your side.", LANG_UNIVERSAL, summoner);
         erasePending();
     }
@@ -2808,6 +2878,12 @@ void UpdateMasterFromGroup(Player* bot, PveBotState& state)
     }
 
     state.masterGuid = leaderIsHuman ? leaderGuid : firstHumanGuid;
+    // Gaining a master supersedes any solo trek in progress.
+    if (!state.masterGuid.IsEmpty() && state.journeyActive)
+    {
+        state.journeyActive = false;
+        state.journeyFallbackKind = 0;
+    }
 }
 
 void RunDeathRecovery(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
@@ -2909,7 +2985,7 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     }
 
     if (!state.engaged && !bot->IsInCombat() && !IsRestingNow(bot, state) && masterAllowsRest &&
-        !state.journeyActive)
+        (!state.journeyActive || NeedsRecovery(bot, cfg)))
     {
         bool const needFood = bot->GetHealthPct() < cfg.restHealthPct;
         bool const needDrink = bot->GetMaxPower(POWER_MANA) > 0 && bot->GetPowerPct(POWER_MANA) < cfg.restManaPct;
@@ -2991,9 +3067,16 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
 
     if (cfg.auctionBuyEnabled && !bot->IsInCombat() && now >= state.nextAuctionShopAt)
     {
-        state.nextAuctionShopAt = now + std::chrono::minutes(10);
-        std::lock_guard<std::mutex> guard(g_PvePendingLock);
-        g_PendingAuctionShopping.insert(bot->GetGUID().GetRawValue());
+        // First pass after a restart: spread the fleet's shopping trips out
+        // instead of lining every bot up for the same world tick.
+        if (state.nextAuctionShopAt == PveTimePoint())
+            state.nextAuctionShopAt = now + std::chrono::seconds(60 + bot->GetGUID().GetCounter() % 540);
+        else
+        {
+            state.nextAuctionShopAt = now + std::chrono::minutes(10);
+            std::lock_guard<std::mutex> guard(g_PvePendingLock);
+            g_PendingAuctionShopping.insert(bot->GetGUID().GetRawValue());
+        }
     }
 }
 
@@ -3097,6 +3180,10 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         // whose registry is down fights with white swings only.
         playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), true);
 
+        // A fight en route must not count as journey stall.
+        if (state.journeyActive)
+            state.journeyProgressAt = PveClock::now();
+
         ExecuteEngagedCombatTick(bot, state);
         return;
     }
@@ -3113,7 +3200,12 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
             (bot->GetMaxPower(POWER_MANA) > 0 && bot->GetPowerPct(POWER_MANA) < 99.0f);
         bool const masterLeftRestRange = master && bot->GetDistance(master) > PveRestBreakFollowDistance;
         if (stillRecovering && !masterLeftRestRange)
+        {
+            // A rest stop en route must not count as journey stall.
+            if (state.journeyActive)
+                state.journeyProgressAt = PveClock::now();
             return;
+        }
 
         RemoveRestAuras(bot);
         state.restingUntil = PveClock::now();
