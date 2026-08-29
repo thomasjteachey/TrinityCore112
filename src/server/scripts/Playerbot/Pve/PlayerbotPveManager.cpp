@@ -4441,9 +4441,10 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     if (state.engaged)
         DisengagePveCombat(bot, state);
 
-    if (ProcessPendingLoot(bot, state, cfg))
-        return;
-
+    // Rest holds BEFORE the loot walk: a bot that just sat down to eat must
+    // not slide seated toward its kill's corpse - movement never auto-stands
+    // a server-driven bot, so it visibly glides while chewing. The corpse
+    // waits the twenty seconds.
     if (IsRestingNow(bot, state))
     {
         bool const stillRecovering = bot->GetHealthPct() < 99.0f ||
@@ -4463,6 +4464,9 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         bot->SetStandState(UNIT_STAND_STATE_STAND);
         state.restingUntil = PveClock::now();
     }
+
+    if (ProcessPendingLoot(bot, state, cfg))
+        return;
 
     if (ProcessErrand(bot, state, cfg))
         return;
