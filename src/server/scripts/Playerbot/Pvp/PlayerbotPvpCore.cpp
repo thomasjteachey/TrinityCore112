@@ -6648,6 +6648,35 @@ bool PvpCore::TryCastOpenWorldBuff(Player* player)
     if (!player || !player->IsAlive() || player->IsInCombat() || !player->IsInWorld())
         return false;
 
+    // Never clobber an in-flight cast - pet summons take ten seconds and this
+    // runs on a sub-second cadence.
+    if (player->HasUnitState(UNIT_STATE_CASTING))
+        return false;
+
+    // Pet upkeep before buffs: a petless warlock or hunter in the open world
+    // is missing half its class (battleground preparation used to be the only
+    // place pets were summoned).
+    if (player->GetClass() == CLASS_WARLOCK && !player->GetPet())
+    {
+        // Voidwalker tanks the grind when a soul shard is on hand; the Imp
+        // needs no shard and is the level-1 fallback.
+        uint32 summonSpellId = 0;
+        if (player->HasItemCount(6265, 1) && player->HasSpell(697) && IsSpellReady(player, 697))
+            summonSpellId = 697;
+        else if (player->HasSpell(688) && IsSpellReady(player, 688))
+            summonSpellId = 688;
+
+        if (summonSpellId && player->CastSpell(player, summonSpellId, false) == SPELL_CAST_OK)
+            return true;
+    }
+
+    if (player->GetClass() == CLASS_HUNTER && !player->GetPet() &&
+        player->HasSpell(883) && IsSpellReady(player, 883))
+    {
+        if (player->CastSpell(player, 883, false) == SPELL_CAST_OK)
+            return true;
+    }
+
     // {primary chain, alternate chain}: the alternate is the lower-level
     // stand-in (Demon Skin before Demon Armor, Monkey before Hawk); holding
     // EITHER version's aura satisfies the slot.

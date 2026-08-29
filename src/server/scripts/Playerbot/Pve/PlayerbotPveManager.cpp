@@ -385,11 +385,24 @@ Unit* PickGrindTarget(Player* bot, PveBotState& state, playerbot::PveConfig cons
     if (matches.empty())
         return nullptr;
 
-    std::unordered_set<uint32> const wanted = CollectWantedKillEntries(bot);
-    std::sort(matches.begin(), matches.end(), [bot, &wanted](Creature* left, Creature* right)
+    // Quest targets are preferred, but only on a distance leash: walking
+    // past a closer mob's aggro radius to reach a farther quest mob pulls
+    // both. A wanted mob wins only when it is at most 20y farther than the
+    // nearest candidate.
+    float nearestDistance = 0.0f;
+    for (Creature* candidate : matches)
     {
-        bool const leftWanted = wanted.count(left->GetEntry()) != 0;
-        bool const rightWanted = wanted.count(right->GetEntry()) != 0;
+        float const distance = bot->GetDistance(candidate);
+        if (!nearestDistance || distance < nearestDistance)
+            nearestDistance = distance;
+    }
+
+    std::unordered_set<uint32> const wanted = CollectWantedKillEntries(bot);
+    float const questLeash = nearestDistance + 20.0f;
+    std::sort(matches.begin(), matches.end(), [bot, &wanted, questLeash](Creature* left, Creature* right)
+    {
+        bool const leftWanted = wanted.count(left->GetEntry()) != 0 && bot->GetDistance(left) <= questLeash;
+        bool const rightWanted = wanted.count(right->GetEntry()) != 0 && bot->GetDistance(right) <= questLeash;
         if (leftWanted != rightWanted)
             return leftWanted;
         return bot->GetDistance(left) < bot->GetDistance(right);
