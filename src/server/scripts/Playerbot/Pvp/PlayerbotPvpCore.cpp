@@ -1490,6 +1490,64 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
         if (spellInfo->HasAttribute(SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET) &&
             (!enemyTarget || enemyTarget->HasInArc(static_cast<float>(M_PI), player)))
             return false;
+
+        // Creature-type restrictions (Repentance only works on humanoids and
+        // demons; a grind beast fails SPELL_FAILED_BAD_TARGETS forever).
+        if (spellInfo->TargetCreatureType && enemyTarget)
+        {
+            uint32 const creatureTypeMask = enemyTarget->GetCreatureTypeMask();
+            if (creatureTypeMask && !(creatureTypeMask & spellInfo->TargetCreatureType))
+                return false;
+        }
+
+        if (spellInfo->HasAttribute(SPELL_ATTR3_ONLY_TARGET_PLAYERS) &&
+            (!enemyTarget || enemyTarget->GetTypeId() != TYPEID_PLAYER))
+            return false;
+    }
+
+    // Charge/leap-motion effects hard-fail while rooted
+    // (SPELL_FAILED_ROOTED): a rooted warrior otherwise spams Intercept or a
+    // priority-boosted Heroic Leap for the root's whole duration.
+    if (knownByPlayer && player->HasUnitState(UNIT_STATE_ROOT))
+    {
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+        {
+            switch (effect.Effect)
+            {
+                case SPELL_EFFECT_CHARGE:
+                case SPELL_EFFECT_CHARGE_DEST:
+                case SPELL_EFFECT_LEAP:
+                case SPELL_EFFECT_JUMP:
+                case SPELL_EFFECT_JUMP_DEST:
+                case SPELL_EFFECT_LEAP_BACK:
+                    return false;
+                default:
+                    break;
+            }
+        }
+    }
+
+    // Health-cost spells (Bloodrage): Spell::CheckPower fails whenever
+    // current health is at or below the cost, and the affordability check
+    // below only covers real power types.
+    if (knownByPlayer && int32(spellInfo->PowerType) == POWER_HEALTH &&
+        player->GetHealth() <= uint32(std::max(0, spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask()))))
+        return false;
+
+    // Life Tap's script refuses the conversion when health is too low;
+    // approximate the same floor so a dying warlock falls through to its
+    // wand instead of fizzling the tap forever.
+    if (knownByPlayer && spellInfo->GetFirstRankSpell()->Id == 1454 && player->GetHealthPct() < 20.0f)
+        return false;
+
+    // Pet-target spells (Soul Link) with no living pet: SPELL_FAILED_NO_PET.
+    {
+        Pet const* pet = player->GetPet();
+        bool const hasLivingPet = pet && pet->IsAlive();
+        if (knownByPlayer && !hasLivingPet)
+            for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+                if (effect.TargetA.GetTarget() == TARGET_UNIT_PET || effect.TargetB.GetTarget() == TARGET_UNIT_PET)
+                    return false;
     }
 
     // Reagents (warlock summons, soulstones): SPELL_FAILED_REAGENTS.
