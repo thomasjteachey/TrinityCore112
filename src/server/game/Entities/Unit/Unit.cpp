@@ -33,6 +33,7 @@
 #include "CombatPackets.h"
 #include "Common.h"
 #include "ConditionMgr.h"
+#include "Configuration/Config.h"
 #include "Containers.h"
 #include "CreatureAI.h"
 #include "CreatureAIImpl.h"
@@ -15194,6 +15195,28 @@ bool Unit::IsSplineEnabled() const
     return movespline->Initialized() && !movespline->Finalized();
 }
 
+namespace
+{
+    // Managed playerbot accounts (Playerbot.RandomPopulation.BotAccountIds in
+    // playerbots.conf); parsed once. Mirrors the Object.cpp copy - both feed
+    // the hardcore pseudo-faction (attack legality there, display here).
+    bool IsManagedPlayerbotAccountIdForDisplay(uint32 accountId)
+    {
+        static std::vector<uint32> const accountIds = []
+        {
+            std::vector<uint32> ids;
+            std::stringstream stream(sConfigMgr->GetStringDefault("Playerbot.RandomPopulation.BotAccountIds", ""));
+            std::string token;
+            while (std::getline(stream, token, ','))
+                if (!token.empty())
+                    ids.push_back(uint32(std::strtoul(token.c_str(), nullptr, 10)));
+            std::sort(ids.begin(), ids.end());
+            return ids;
+        }();
+        return !accountIds.empty() && std::binary_search(accountIds.begin(), accountIds.end(), accountId);
+    }
+}
+
 void Unit::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player const* target) const
 {
     if (!target)
@@ -15327,7 +15350,24 @@ void Unit::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player const* t
             // FG: pretend that OTHER players in own group are friendly ("blue")
             else if (index == UNIT_FIELD_BYTES_2 || index == UNIT_FIELD_FACTIONTEMPLATE)
             {
-                if (IsControlledByPlayer() && target != this && sWorld->getBoolConfig(CONFIG_ALLOW_TWO_SIDE_INTERACTION_GROUP) && IsInRaidWith(target))
+                // Hardcore pseudo-faction: an FFA-armed playerbot renders
+                // hostile (red) to every real player. The client colors by
+                // faction, and a mere FFA flag only reads hostile to other
+                // FFA-flagged viewers - so the observer-facing faction is
+                // substituted with Monster (14). Attack legality already
+                // comes from IsValidAttackTarget's playerbot override; this
+                // makes the display and client-side gating agree. Arenas and
+                // battlegrounds keep real factions (FFA is core-driven
+                // there), and bot observers are never lied to (they act on
+                // server state anyway).
+                if (index == UNIT_FIELD_FACTIONTEMPLATE && target != this && GetTypeId() == TYPEID_PLAYER &&
+                    IsFFAPvP() && !GetMap()->IsBattlegroundOrArena() &&
+                    ToPlayer()->GetSession() && IsManagedPlayerbotAccountIdForDisplay(ToPlayer()->GetSession()->GetAccountId()) &&
+                    (!target->GetSession() || !IsManagedPlayerbotAccountIdForDisplay(target->GetSession()->GetAccountId())))
+                {
+                    fieldBuffer << uint32(14);
+                }
+                else if (IsControlledByPlayer() && target != this && sWorld->getBoolConfig(CONFIG_ALLOW_TWO_SIDE_INTERACTION_GROUP) && IsInRaidWith(target))
                 {
                     FactionTemplateEntry const* ft1 = GetFactionTemplateEntry();
                     FactionTemplateEntry const* ft2 = target->GetFactionTemplateEntry();

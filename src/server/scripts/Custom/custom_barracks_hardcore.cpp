@@ -155,11 +155,16 @@ namespace BarracksHardcore
         {
             player->pvpInfo.IsInFFAPvPArea = true;
             player->UpdatePvPState(true);
+            // The bot pseudo-faction render (Unit::BuildValuesUpdate) keys on
+            // the FFA byte, but the faction FIELD never changes on its own -
+            // push it back through the update pipe so watchers recolor.
+            player->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
         }
         else if (!shouldFfa && player->pvpInfo.IsInFFAPvPArea && !coreFfaArea)
         {
             player->pvpInfo.IsInFFAPvPArea = false;
             player->UpdatePvPState(true);
+            player->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
         }
     }
 
@@ -300,15 +305,14 @@ public:
                 return true;
             }
 
-            // Greenhorns are turned away: the mark opens at level 10.
+            // Greenhorns see the offer but cannot take it: the select
+            // handler turns them away until level 10.
             if (player->GetLevel() < 10)
             {
                 me->Whisper("Come back when you have seen your tenth season. The mark is not for greenhorns.", LANG_UNIVERSAL, player);
-                SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me->GetGUID());
-                return true;
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Flag me for free-for-all PvP. (Requires level 10.)", GOSSIP_SENDER_MAIN, 1);
             }
-
-            if (IsOptedIn(player->GetGUID().GetCounter()))
+            else if (IsOptedIn(player->GetGUID().GetCounter()))
                 AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Remove my free-for-all flag.", GOSSIP_SENDER_MAIN, 2);
             else
                 AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Flag me for free-for-all PvP. (Double experience and gold while armed!)", GOSSIP_SENDER_MAIN, 1);
@@ -320,8 +324,13 @@ public:
         {
             uint32 const action = player->PlayerTalkClass->GetGossipOptionAction(gossipListId);
             CloseGossipMenuFor(player);
-            if (!s_enabled || player->GetLevel() < 10)
+            if (!s_enabled)
                 return true;
+            if (player->GetLevel() < 10)
+            {
+                me->Whisper("Not yet, greenhorn. Come back at level 10.", LANG_UNIVERSAL, player);
+                return true;
+            }
 
             uint32 const guidLow = player->GetGUID().GetCounter();
             if (action == 1)

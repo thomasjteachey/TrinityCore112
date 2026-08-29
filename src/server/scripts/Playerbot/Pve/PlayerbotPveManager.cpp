@@ -152,6 +152,11 @@ struct PveBotState
     // itself is lethal (graveyard camped by higher-level mobs).
     uint8 recentDeathCount = 0;
     PveTimePoint recentDeathWindowStart{};
+    // Hardcore reclaim: where we last fell - the drop chest stands there.
+    uint16 deathSpotMapId = 0;
+    float deathSpotX = 0.0f;
+    float deathSpotY = 0.0f;
+    float deathSpotZ = 0.0f;
     // Taming: guards the 20s tame/capture channel against every other
     // activity, and paces the tameable-beast scan.
     PveTimePoint tamingUntil{};
@@ -4327,6 +4332,15 @@ void RunDeathRecovery(Player* bot, PveBotState& state, playerbot::PveConfig cons
     {
         state.deathObserved = true;
         state.deathObservedAt = now;
+        // The body still lies where we fell: remember the spot, the hardcore
+        // drop chest stands on it (release teleports us to the graveyard).
+        if (cfg.hardcoreLootChestEntry)
+        {
+            state.deathSpotMapId = uint16(bot->GetMapId());
+            state.deathSpotX = bot->GetPositionX();
+            state.deathSpotY = bot->GetPositionY();
+            state.deathSpotZ = bot->GetPositionZ();
+        }
         // Dying voids any trek in progress: resuming the same walk would
         // march straight back through whatever killed us.
         state.journeyActive = false;
@@ -4354,6 +4368,22 @@ void RunDeathRecovery(Player* bot, PveBotState& state, playerbot::PveConfig cons
     bot->ResurrectPlayer(0.66f);
     bot->SpawnCorpseBones();
     state.deathObserved = false;
+
+    // Hardcore: the drop chest stands where we fell - walk back and reclaim
+    // it (the errand scan loots death chests inside 60y). First death only:
+    // on a repeat the loop breaker below relocates away instead, abandoning
+    // the chest the way a player abandons a camped corpse.
+    if (cfg.hardcoreLootChestEntry && state.recentDeathCount < 2 && state.masterGuid.IsEmpty() &&
+        state.deathSpotMapId == bot->GetMapId())
+    {
+        float const distance = bot->GetDistance(state.deathSpotX, state.deathSpotY, state.deathSpotZ);
+        if (distance > 40.0f && cfg.travelWalkMaxDistance > 0.0f && distance < cfg.travelWalkMaxDistance)
+        {
+            TC_LOG_INFO("playerbots.pve", "Bot {} walks {} yards back to reclaim its death chest.",
+                bot->GetName(), uint32(distance));
+            StartWalkedJourney(state, state.deathSpotMapId, state.deathSpotX, state.deathSpotY, state.deathSpotZ, 0, distance);
+        }
+    }
 
     // Second death in the same five minutes: this spot kills us. Ban the
     // walk arm (walking would retrace the deadly route) and let the

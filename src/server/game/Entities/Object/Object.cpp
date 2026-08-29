@@ -3066,6 +3066,7 @@ namespace
 {
     // Managed playerbot accounts (Playerbot.RandomPopulation.BotAccountIds
     // in playerbots.conf); parsed once, config loads before any login.
+    // (Unit.cpp keeps its own copy for the display-faction substitution.)
     bool IsManagedPlayerbotAccountId(uint32 accountId)
     {
         static std::vector<uint32> const accountIds = []
