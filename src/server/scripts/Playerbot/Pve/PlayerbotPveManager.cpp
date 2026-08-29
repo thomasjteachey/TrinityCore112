@@ -237,6 +237,15 @@ bool HasRestAura(Player const* player)
     return player->HasAura(SPELL_PVE_OUT_OF_COMBAT_EAT) || player->HasAura(SPELL_PVE_OUT_OF_COMBAT_DRINK);
 }
 
+// Below the rest thresholds a bot must not START anything new: without this
+// gate the 250ms acquisition tick re-engages before the 750ms rest check can
+// ever run, and a wounded bot beelines from corpse to corpse until it dies.
+bool NeedsRecovery(Player const* player, playerbot::PveConfig const& cfg)
+{
+    return player->GetHealthPct() < cfg.restHealthPct ||
+        (player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < cfg.restManaPct);
+}
+
 bool IsRestingNow(Player const* player, PveBotState const& state)
 {
     if (HasRestAura(player))
@@ -2356,7 +2365,8 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
             target = nearestAttacker;
         else if (master)
             target = PickCompanionTarget(bot, state, master, cfg);
-        else if (cfg.grindEnabled && state.masterGuid.IsEmpty() && !IsRestingNow(bot, state))
+        else if (cfg.grindEnabled && state.masterGuid.IsEmpty() && !IsRestingNow(bot, state) &&
+            !NeedsRecovery(bot, cfg))
         {
             PveTimePoint const now = PveClock::now();
             if (now >= state.nextGrindScanAt)
@@ -2417,7 +2427,9 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         return;
     }
 
-    if (cfg.grindEnabled && state.masterGuid.IsEmpty() && !state.stay)
+    // A recovering bot holds still: rest (or the vendor/supply pipeline for
+    // an empty pantry) is about to run, and walking cancels eating.
+    if (cfg.grindEnabled && state.masterGuid.IsEmpty() && !state.stay && !NeedsRecovery(bot, cfg))
     {
         PveTimePoint const now = PveClock::now();
         if (now >= state.nextWanderAt)
