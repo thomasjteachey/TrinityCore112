@@ -174,43 +174,40 @@ namespace BarracksHardcore
         return IsOptedIn(player->GetGUID().GetCounter());
     }
 
+    // Called on login, zone change and every player tick: Player::UpdateArea
+    // recomputes the FFA byte on every sub-area crossing and never dirties the
+    // faction field when it does, so the state has to be re-asserted rather
+    // than set once. MUST CONVERGE: it runs per player per world tick, and a
+    // branch that cannot satisfy its own condition would re-dirty the faction
+    // field forever, rebuilding a values block for every observer each tick.
     void ApplyFfaState(Player* player)
     {
         if (!s_enabled || !player || !player->IsInWorld())
             return;
 
-        bool const shouldFfa = IsFfaArmed(player);
-        // Never clear a core-driven FFA state (arena zones own their flag).
+        // Sanctuaries, arena areas and GM mode own the flag outright: the core
+        // REFUSES to set the FFA byte there (Player::UpdatePvPState), so a
+        // re-assert could never take effect and would simply repeat forever.
+        // Sanctuary sub-areas sit inside plenty of eligible zones - Blackrock
+        // Mountain, the Stair of Destiny, Gurubashi Arena, Acherus.
         AreaTableEntry const* area = sAreaTableStore.LookupEntry(player->GetAreaId());
-        bool const coreFfaArea = area && (area->Flags & AREA_FLAG_ARENA);
+        if (player->pvpInfo.IsInNoPvPArea || player->IsGameMaster() ||
+            (area && (area->Flags & AREA_FLAG_ARENA)))
+            return;
 
-        if (shouldFfa && !player->pvpInfo.IsInFFAPvPArea)
-        {
-            player->pvpInfo.IsInFFAPvPArea = true;
-            player->UpdatePvPState(true);
-            // The bot pseudo-faction render (Unit::BuildValuesUpdate) keys on
-            // the FFA byte, but the faction FIELD never changes on its own -
-            // push it back through the update pipe so watchers recolor.
-            player->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
-        }
-        else if (!shouldFfa && player->pvpInfo.IsInFFAPvPArea && !coreFfaArea)
-        {
-            player->pvpInfo.IsInFFAPvPArea = false;
-            player->UpdatePvPState(true);
-            player->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
-        }
-        // The FFA byte is not ours alone: Player::UpdateArea recomputes it
-        // from area flags on every sub-area crossing and sanctuary entry, and
-        // it never dirties the faction field when it does. Re-assert both, or
-        // an armed bot silently disarms a second after leaving open ground
-        // while observers keep the stale red faction of a unit the server has
-        // stopped letting them hit.
-        else if (shouldFfa && !player->IsFFAPvP())
-        {
-            player->UpdatePvPState(true);
-            player->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
-        }
-        else if (!shouldFfa && player->IsFFAPvP() && !coreFfaArea && !player->pvpInfo.IsInFFAPvPArea)
+        bool const shouldFfa = IsFfaArmed(player);
+        bool const wasFfa = player->IsFFAPvP();
+        if (wasFfa == shouldFfa && player->pvpInfo.IsInFFAPvPArea == shouldFfa)
+            return; // nothing has drifted - the overwhelmingly common case
+
+        player->pvpInfo.IsInFFAPvPArea = shouldFfa;
+        player->UpdatePvPState(true);
+
+        // Only when the byte actually moved: the bot pseudo-faction render
+        // (Unit::BuildValuesUpdate) keys on it, and the faction field is never
+        // dirtied by the core, but forcing it on a tick where nothing changed
+        // is pure broadcast cost.
+        if (player->IsFFAPvP() != wasFfa)
             player->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
     }
 

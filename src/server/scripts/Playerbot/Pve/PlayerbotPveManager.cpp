@@ -2579,12 +2579,21 @@ bool g_GuardianPostsLoaded = false;
 
 void CompleteEligibleClassQuests(Player* bot); // defined with the class-quest cache below
 
-// Zone id the bot guards, or 0.
+// Zone id the bot guards, or 0. Posts outlive the setting that created them
+// (they are persisted), so the CURRENT slot count decides who still counts as
+// a guardian - otherwise switching the feature off would leave stale posts
+// steering relocation, hunting, rebirth and the reset command forever.
 uint32 GetGuardianZoneId(uint64 botRawGuid)
 {
+    uint32 const totalSlots = g_PveConfig.zoneGuardiansPerZone * uint32(kGuardianZones.size());
+    if (!totalSlots)
+        return 0;
+
     std::lock_guard<std::mutex> guard(g_GuardianLock);
     auto itr = g_GuardianZoneByGuid.find(botRawGuid);
-    return itr != g_GuardianZoneByGuid.end() ? kGuardianZones[itr->second % kGuardianZones.size()].zoneId : 0;
+    if (itr == g_GuardianZoneByGuid.end() || itr->second >= totalSlots)
+        return 0;
+    return kGuardianZones[itr->second % kGuardianZones.size()].zoneId;
 }
 
 // A zone owned by the other faction can never be reached: the relocation
@@ -2690,6 +2699,14 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
     }
 
     GuardianZone const& zone = kGuardianZones[slotIndex % kGuardianZones.size()];
+
+    // Holding a post means frozen XP, whether the post was claimed just now or
+    // restored from the table on a later uptime: a guardian whose flag was
+    // cleared meanwhile (an admin, a character reset) would otherwise level
+    // past its zone forever.
+    if (!flaggedNoXp)
+        bot->SetFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN);
+
     if (freshlyAssigned)
     {
         CharacterDatabase.PExecute("REPLACE INTO playerbot_zone_guardian (guid, slotIndex) VALUES ({}, {})",
@@ -2702,8 +2719,6 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
             bot->GiveLevel(zone.maxLevel);
             bot->SetUInt32Value(PLAYER_XP, 0);
         }
-        if (!flaggedNoXp)
-            bot->SetFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN);
         // Guardians never travel for class quests, so their kit spells
         // (Tame Beast, demon summons, stances, totems) are granted as if
         // the chains had been walked. XP is already frozen at this point,
@@ -2721,7 +2736,10 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
     // atomic: the errand scan only runs every 15s, so a leash that fired on
     // the next 750ms tick would teleport the bot home before it ever reached
     // the vendor it travelled for, forever.
-    if (bot->GetZoneId() != zone.zoneId)
+    // A guardian serving a human keeps its post but not its leash: dragging a
+    // summoned companion away from its master every two minutes would make it
+    // useless as a companion.
+    if (bot->GetZoneId() != zone.zoneId && eligible)
     {
         PveTimePoint const now = PveClock::now();
         if (state.guardianOutOfZoneSince == PveTimePoint())
