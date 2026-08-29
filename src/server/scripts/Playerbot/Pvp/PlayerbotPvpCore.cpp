@@ -1451,12 +1451,18 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
             return false;
     }
 
-    // Offensive dispels (Purge, Spellsteal) hard-fail with
-    // SPELL_FAILED_NOTHING_TO_DISPEL against a target carrying nothing of
-    // the matching dispel type - the default state of every grind creature.
-    // "Purge by default" then starves the whole rotation behind it.
+    // Declarative requirements the core hard-enforces in CheckCast; a pick
+    // that fails one of these fails it on EVERY attempt and starves the
+    // rotation behind it (the Shield Slam / Overpower / Purge family).
     if (knownByPlayer && decision.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
     {
+        Unit const* enemyTarget = !decision.targetGuid.IsEmpty()
+            ? ObjectAccessor::GetUnit(*player, decision.targetGuid)
+            : defaultEnemyTarget;
+
+        // Offensive dispels (Purge, Spellsteal): SPELL_FAILED_NOTHING_TO_DISPEL
+        // against a target carrying nothing of the matching dispel type - the
+        // default state of every grind creature.
         uint32 dispelMask = 0;
         for (SpellEffectInfo const& effect : spellInfo->GetEffects())
             if (effect.Effect == SPELL_EFFECT_DISPEL)
@@ -1464,18 +1470,34 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
 
         if (dispelMask)
         {
-            Unit const* dispelTarget = !decision.targetGuid.IsEmpty()
-                ? ObjectAccessor::GetUnit(*player, decision.targetGuid)
-                : defaultEnemyTarget;
-            if (!dispelTarget)
+            if (!enemyTarget)
                 return false;
 
             DispelChargesList dispelList;
-            dispelTarget->GetDispellableAuraList(player, dispelMask, dispelList);
+            enemyTarget->GetDispellableAuraList(player, dispelMask, dispelList);
             if (dispelList.empty())
                 return false;
         }
+
+        // Target aura state (Conflagrate's immolate, sub-20% execute range):
+        // SPELL_FAILED_TARGET_AURASTATE.
+        if (spellInfo->TargetAuraState &&
+            (!enemyTarget || !enemyTarget->HasAuraState(AuraStateType(spellInfo->TargetAuraState), spellInfo, player)))
+            return false;
+
+        // Positional behind-target attribute (Backstab, Shred):
+        // SPELL_FAILED_NOT_BEHIND.
+        if (spellInfo->HasAttribute(SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET) &&
+            (!enemyTarget || enemyTarget->HasInArc(static_cast<float>(M_PI), player)))
+            return false;
     }
+
+    // Reagents (warlock summons, soulstones): SPELL_FAILED_REAGENTS.
+    if (knownByPlayer && !player->CanNoReagentCast(spellInfo))
+        for (uint8 reagentIndex = 0; reagentIndex < MAX_SPELL_REAGENTS; ++reagentIndex)
+            if (spellInfo->Reagent[reagentIndex] > 0 &&
+                !player->HasItemCount(uint32(spellInfo->Reagent[reagentIndex]), std::max<uint32>(1, spellInfo->ReagentCount[reagentIndex])))
+                return false;
 
     if (playerbot::PvpCore::ShouldSeekLightwell(player))
     {
