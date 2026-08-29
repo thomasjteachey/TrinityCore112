@@ -7059,7 +7059,11 @@ PvpValues PvpCore::CollectValues(Player const* player)
     // oscillating between chase and retreat as their mana crosses the threshold.
     // Spirit of Redemption is exempt because its healing casts are free and the
     // aura duration is too short to spend on drinking or disengaging.
-    if (criticalLowMana && !movementPreventedByRoot)
+    // PvE combat is a commitment: no kiting, no low-mana disengage, no
+    // too-close retreats. A fleeing bot never finishes a creature fight -
+    // the mob just chases - so outside PvP the bot stands and fights until
+    // one side dies; mana troughs fall through to wand/melee fallbacks.
+    if (criticalLowMana && !movementPreventedByRoot && !inPveEngagement)
     {
         if (player->IsInCombat())
         {
@@ -7347,7 +7351,7 @@ PvpValues PvpCore::CollectValues(Player const* player)
                 }
                 else if (minRange > 0.0f && distance < std::max(0.0f, minRange + kRangedSpacingEnterTooCloseBuffer))
                 {
-                    if (player->GetClass() != CLASS_HUNTER)
+                    if (player->GetClass() != CLASS_HUNTER && !inPveEngagement)
                     {
                         // Enter too-close movement before strict dead-zone boundaries so
                         // ranged users do not idle in 5-8y style min-range gaps.
@@ -7428,7 +7432,7 @@ PvpValues PvpCore::CollectValues(Player const* player)
                         ComputeHunterDeadZoneRetreatStep(player, movementTarget),
                         "hunter deadzone retreat", "enemy in hunter dead-zone", 100.0f);
                 }
-                else if (distance < std::max(0.0f, GetConfiguredMeleeRange() + kRangedSpacingEnterTooCloseBuffer))
+                else if (!inPveEngagement && distance < std::max(0.0f, GetConfiguredMeleeRange() + kRangedSpacingEnterTooCloseBuffer))
                 {
                     ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, movementTarget->GetGUID(),
                         std::max(1.0f, GetConfiguredCloseRange()), "flee", "enemy too close for spell", 71.0f);

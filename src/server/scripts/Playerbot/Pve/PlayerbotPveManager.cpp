@@ -128,6 +128,7 @@ struct PveBotState
     bool initialKitDone = false;
     uint32 dryWanderCount = 0;
     PveTimePoint restingUntil{};
+    PveTimePoint nextSupplyRunAt{};
     uint32 engagedStallTicks = 0;
     float lastEngagedX = 0.0f;
     float lastEngagedY = 0.0f;
@@ -202,6 +203,11 @@ std::mutex g_PvePendingLock;
 std::unordered_map<uint64, PendingSummon> g_PendingSummonsByBotGuid;
 std::unordered_set<uint64> g_PendingGroupInviteAccepts;
 std::unordered_set<uint64> g_PendingGrindRelocations;
+// Bots that need a vendor with none in walking range: the world thread
+// teleports them to the nearest vendor cluster (a town run), shopping and
+// repairs happen through the normal errand, and the dry-scan relocation
+// afterwards sends them back to a grind spot.
+std::unordered_set<uint64> g_PendingSupplyRuns;
 // Loot EXECUTION must happen on the world thread: Player::SendLoot for a
 // group-tagged kill (or a group-rules chest) mutates shared Group state
 // (roll lists, looter guid) that the core only ever touches from
@@ -825,6 +831,17 @@ struct ErrandNpcCheck
     }
 };
 
+void RequestSupplyRunIfDue(Player* bot, PveBotState& state)
+{
+    PveTimePoint const now = PveClock::now();
+    if (now < state.nextSupplyRunAt)
+        return;
+
+    state.nextSupplyRunAt = now + std::chrono::minutes(5);
+    std::lock_guard<std::mutex> guard(g_PvePendingLock);
+    g_PendingSupplyRuns.insert(bot->GetGUID().GetRawValue());
+}
+
 void StartErrandIfNeeded(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
 {
     if (!cfg.questsEnabled && !cfg.vendorEnabled)
@@ -845,12 +862,27 @@ void StartErrandIfNeeded(Player* bot, PveBotState& state, playerbot::PveConfig c
         }
     }
 
+    bool const needRepair = AnyEquippedItemBelowDurabilityPct(bot, 35);
+    bool const needSupplies = cfg.restUseConsumables &&
+        (CountConsumableUnits(bot, false) == 0 ||
+            (bot->GetMaxPower(POWER_MANA) > 0 && CountConsumableUnits(bot, true) == 0) ||
+            (RequiredAmmoSubclass(bot) &&
+                (!bot->GetUInt32Value(PLAYER_AMMO_ID) || bot->GetItemCount(bot->GetUInt32Value(PLAYER_AMMO_ID)) == 0)));
+    bool const needVendor = cfg.vendorEnabled &&
+        (CountFreeBagSlots(bot) < 4 || needRepair || needSupplies);
+
     std::vector<Creature*> serviceNpcs;
     ErrandNpcCheck check{ bot };
     Trinity::CreatureListSearcher<ErrandNpcCheck> searcher(bot, serviceNpcs, check);
     Cell::VisitGridObjects(bot, searcher, 200.0f);
     if (serviceNpcs.empty())
+    {
+        // Nothing in walking range at all: a bot that needs a vendor gets a
+        // town run instead of starving in the wilderness.
+        if (needVendor)
+            RequestSupplyRunIfDue(bot, state);
         return;
+    }
 
     std::sort(serviceNpcs.begin(), serviceNpcs.end(), [bot](Creature* left, Creature* right)
     {
@@ -862,15 +894,6 @@ void StartErrandIfNeeded(Player* bot, PveBotState& state, playerbot::PveConfig c
         for (auto const& [questId, status] : bot->getQuestStatusMap())
             if (status.Status == QUEST_STATUS_COMPLETE && !bot->GetQuestRewardStatus(questId))
                 completedQuests.push_back(questId);
-
-    bool const needRepair = AnyEquippedItemBelowDurabilityPct(bot, 35);
-    bool const needSupplies = cfg.restUseConsumables &&
-        (CountConsumableUnits(bot, false) == 0 ||
-            (bot->GetMaxPower(POWER_MANA) > 0 && CountConsumableUnits(bot, true) == 0) ||
-            (RequiredAmmoSubclass(bot) &&
-                (!bot->GetUInt32Value(PLAYER_AMMO_ID) || bot->GetItemCount(bot->GetUInt32Value(PLAYER_AMMO_ID)) == 0)));
-    bool const needVendor = cfg.vendorEnabled &&
-        (CountFreeBagSlots(bot) < 4 || needRepair || needSupplies);
 
     // A worn-out bot needs a vendor that can actually repair, not just any
     // merchant; try those first.
@@ -914,6 +937,11 @@ void StartErrandIfNeeded(Player* bot, PveBotState& state, playerbot::PveConfig c
         if (needVendor && npc->IsVendor())
             return beginErrand(npc, PveErrandKind::Vendor);
     }
+
+    // NPCs around, but no usable vendor among them (quest camp, cooldowns):
+    // the vendor need still stands, so town-run it.
+    if (needVendor)
+        RequestSupplyRunIfDue(bot, state);
 }
 
 // Wilderness grind spots can be hundreds of yards from the nearest vendor;
@@ -1499,6 +1527,128 @@ bool HasHumanPlayerNearby(Player* bot, float radius)
     }
 
     return false;
+}
+
+bool HasHumanPlayerNearPosition(Map* map, float x, float y, float radius)
+{
+    if (!map)
+        return false;
+
+    for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!candidate || !IsHumanPlayer(candidate))
+            continue;
+
+        float const dx = candidate->GetPositionX() - x;
+        float const dy = candidate->GetPositionY() - y;
+        if (dx * dx + dy * dy <= radius * radius)
+            return true;
+    }
+
+    return false;
+}
+
+struct VendorSpot
+{
+    uint16 mapId = 0;
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+};
+
+std::mutex g_VendorSpotLock;
+std::vector<VendorSpot> g_VendorSpots;
+bool g_VendorSpotsBuilt = false;
+
+// World thread only.
+void BuildVendorSpotCacheOnce()
+{
+    std::lock_guard<std::mutex> guard(g_VendorSpotLock);
+    if (g_VendorSpotsBuilt)
+        return;
+    g_VendorSpotsBuilt = true;
+
+    for (auto const& [spawnId, data] : sObjectMgr->GetAllCreatureData())
+    {
+        if (!std::binary_search(g_PveConfig.relocateMaps.begin(), g_PveConfig.relocateMaps.end(), data.mapId))
+            continue;
+
+        CreatureTemplate const* proto = sObjectMgr->GetCreatureTemplate(data.id);
+        if (!proto || !(proto->npcflag & UNIT_NPC_FLAG_VENDOR))
+            continue;
+
+        g_VendorSpots.push_back({ uint16(data.mapId), data.spawnPoint.GetPositionX(),
+            data.spawnPoint.GetPositionY(), data.spawnPoint.GetPositionZ() });
+    }
+
+    TC_LOG_INFO("playerbots.pve", "Vendor spot cache built: {} vendors.", g_VendorSpots.size());
+}
+
+// World thread. Town run: teleport a supply-starved bot next to the nearest
+// vendor spawn, avoiding real players at both ends.
+void ProcessPendingSupplyRuns()
+{
+    std::unordered_set<uint64> drained;
+    {
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        drained.swap(g_PendingSupplyRuns);
+    }
+
+    if (drained.empty())
+        return;
+
+    BuildVendorSpotCacheOnce();
+
+    for (uint64 botRawGuid : drained)
+    {
+        Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid));
+        if (!bot || !bot->IsInWorld() || !bot->IsAlive() || bot->InBattleground() ||
+            bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
+            continue;
+
+        if (HasHumanPlayerNearby(bot, 150.0f))
+            continue;
+
+        VendorSpot const* nearest = nullptr;
+        float nearestDist2 = 0.0f;
+        {
+            std::lock_guard<std::mutex> guard(g_VendorSpotLock);
+            for (VendorSpot const& spot : g_VendorSpots)
+            {
+                if (spot.mapId != bot->GetMapId())
+                    continue;
+
+                float const dx = spot.x - bot->GetPositionX();
+                float const dy = spot.y - bot->GetPositionY();
+                float const dist2 = dx * dx + dy * dy;
+                if (!nearest || dist2 < nearestDist2)
+                {
+                    nearest = &spot;
+                    nearestDist2 = dist2;
+                }
+            }
+        }
+
+        if (!nearest)
+            continue;
+
+        Map* map = sMapMgr->FindMap(nearest->mapId, 0);
+        if (!map || HasHumanPlayerNearPosition(map, nearest->x, nearest->y, 150.0f))
+            continue;
+
+        playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), false);
+        {
+            PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+            state.engaged = false;
+        }
+        if (MotionMaster* motionMaster = bot->GetMotionMaster())
+            motionMaster->Clear();
+        bot->TeleportTo(nearest->mapId, nearest->x + frand(-3.0f, 3.0f), nearest->y + frand(-3.0f, 3.0f),
+            nearest->z + 0.5f, frand(0.0f, 6.28f));
+        TC_LOG_INFO("playerbots.pve", "Supply run: teleported {} to a vendor cluster on map {}.",
+            bot->GetName(), nearest->mapId);
+    }
 }
 
 // World thread. Teleports one bot to a random spot for its level, with the
@@ -2376,6 +2526,7 @@ void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
     ProcessPendingGroupInviteAccepts();
     ProcessPendingSummons();
     ProcessPendingLootExecutions();
+    ProcessPendingSupplyRuns();
     if (g_PveConfig.relocateEnabled)
         ProcessPendingGrindRelocations();
 }
@@ -2453,6 +2604,7 @@ void PveManager::OnBotLogout(Player const* player)
     g_PendingGroupInviteAccepts.erase(rawGuid);
     g_PendingGrindRelocations.erase(rawGuid);
     g_PendingLootExecutions.erase(rawGuid);
+    g_PendingSupplyRuns.erase(rawGuid);
 }
 
 bool PveManager::IsExemptFromBattlegroundOrchestration(Player const* player)
