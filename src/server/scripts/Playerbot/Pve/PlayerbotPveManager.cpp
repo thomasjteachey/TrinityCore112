@@ -46,6 +46,7 @@
 #include "MoveSpline.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
+#include "Pet.h"
 #include "AuctionHouseBot/AuctionHouseBot.h"
 #include "AuctionHouseMgr.h"
 #include "Mail.h"
@@ -150,6 +151,10 @@ struct PveBotState
     // itself is lethal (graveyard camped by higher-level mobs).
     uint8 recentDeathCount = 0;
     PveTimePoint recentDeathWindowStart{};
+    // Taming: guards the 20s tame/capture channel against every other
+    // activity, and paces the tameable-beast scan.
+    PveTimePoint tamingUntil{};
+    PveTimePoint nextTameScanAt{};
     // Class-quest travel target (giver or ender) for the world executor.
     PveTimePoint nextClassQuestScanAt{};
     uint32 classQuestId = 0;
@@ -266,6 +271,8 @@ std::unordered_map<uint64, ObjectGuid> g_PendingLootExecutions;
 GameObject* FindNearestQuestGameObject(Player* bot, PveBotState& state, float radius);
 void UseQuestGameObject(Player* bot, PveBotState& state, GameObject* go);
 bool BotHasIncompleteQuest(Player* bot);
+template<typename Fn>
+void ForEachBagItem(Player* bot, Fn&& fn);
 void ProcessPendingLootExecutions();
 void GrantGatherSkillCredit(Player* bot, GameObject* go);
 void TrySkinCorpse(Player* bot, Creature* corpse);
@@ -465,6 +472,136 @@ struct GrindTargetCheck
         return bot->IsValidAttackTarget(creature);
     }
 };
+
+// A wanted-entry creature whose quest carries a source item (taming rods,
+// capture devices) must be USED on, not killed - the kill grants nothing
+// and the grind loop would farm it forever.
+Item* FindQuestSourceItemFor(Player* bot, uint32 creatureEntry)
+{
+    for (auto const& [questId, questStatus] : bot->getQuestStatusMap())
+    {
+        if (questStatus.Status != QUEST_STATUS_INCOMPLETE)
+            continue;
+
+        Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+        if (!quest || !quest->GetSrcItemId())
+            continue;
+
+        bool wanted = false;
+        for (uint8 objectiveIdx = 0; objectiveIdx < QUEST_OBJECTIVES_COUNT; ++objectiveIdx)
+            if (quest->RequiredNpcOrGo[objectiveIdx] == int32(creatureEntry) &&
+                questStatus.CreatureOrGOCount[objectiveIdx] < quest->RequiredNpcOrGoCount[objectiveIdx])
+                wanted = true;
+        if (!wanted)
+            continue;
+
+        Item* item = bot->GetItemByEntry(quest->GetSrcItemId());
+        if (!item)
+            continue;
+
+        if (ItemTemplate const* proto = item->GetTemplate())
+            for (uint8 spellIdx = 0; spellIdx < MAX_ITEM_PROTO_SPELLS; ++spellIdx)
+                if (proto->Spells[spellIdx].SpellId > 0 &&
+                    proto->Spells[spellIdx].SpellTrigger == ITEM_SPELLTRIGGER_ON_USE)
+                    return item;
+    }
+    return nullptr;
+}
+
+struct TameableBeastCheck
+{
+    Player* bot;
+
+    bool operator()(Creature* creature) const
+    {
+        if (!creature->IsAlive() || creature->IsInCombat() || creature->IsPet() ||
+            creature->IsInEvadeMode() || creature->isElite() || IsTargetDummyCreature(creature))
+            return false;
+
+        // Tame Beast demands target level <= own level; very grey pets are
+        // a waste of the tame.
+        if (creature->GetLevel() > bot->GetLevel() || creature->GetLevel() + 10 < bot->GetLevel())
+            return false;
+
+        CreatureTemplate const* proto = creature->GetCreatureTemplate();
+        return proto && proto->IsTameable(bot->CanTameExoticPets());
+    }
+};
+
+// A hunter that knows Tame Beast and has no pet (and none waiting in the
+// stable for Call Pet) tames the nearest suitable beast.
+void MaybeTameBeast(Player* bot, PveBotState& state)
+{
+    if (bot->GetClass() != CLASS_HUNTER || !bot->HasSpell(1515) || bot->GetPet())
+        return;
+
+    if (PetStable const* stable = bot->GetPetStable(); stable && stable->CurrentPet)
+        return;
+
+    std::vector<Creature*> matches;
+    TameableBeastCheck check{ bot };
+    Trinity::CreatureListSearcher<TameableBeastCheck> searcher(bot, matches, check);
+    Cell::VisitGridObjects(bot, searcher, 25.0f);
+
+    Creature* nearest = nullptr;
+    float nearestDistance = 0.0f;
+    for (Creature* candidate : matches)
+    {
+        if (!bot->IsWithinLOSInMap(candidate))
+            continue;
+        float const distance = bot->GetDistance(candidate);
+        if (!nearest || distance < nearestDistance)
+        {
+            nearest = candidate;
+            nearestDistance = distance;
+        }
+    }
+    if (!nearest)
+        return;
+
+    playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
+    if (MotionMaster* motionMaster = bot->GetMotionMaster())
+        motionMaster->Clear();
+    bot->StopMoving();
+    bot->SetSelection(nearest->GetGUID());
+    if (!bot->isInFront(nearest))
+    {
+        bot->SetFacingToObject(nearest);
+        bot->SetInFront(nearest);
+    }
+    bot->CastSpell(nearest, 1515, false);
+    if (bot->HasUnitState(UNIT_STATE_CASTING))
+    {
+        state.tamingUntil = PveClock::now() + std::chrono::seconds(25);
+        TC_LOG_INFO("playerbots.pve", "Bot {} taming {} (level {}).",
+            bot->GetName(), nearest->GetName(), nearest->GetLevel());
+    }
+}
+
+// Keep a hunter pet fed: happiness decay makes an unfed pet leave.
+void MaybeFeedPet(Player* bot)
+{
+    Pet* pet = bot->GetPet();
+    if (!pet || pet->getPetType() != HUNTER_PET || !bot->HasSpell(6991))
+        return;
+
+    if (bot->IsInCombat() || bot->HasUnitState(UNIT_STATE_CASTING) || pet->GetHappinessState() == HAPPY)
+        return;
+
+    Item* food = nullptr;
+    ForEachBagItem(bot, [&](Item* item, uint8 /*bag*/, uint8 /*slot*/)
+    {
+        if (food)
+            return;
+        ItemTemplate const* proto = item->GetTemplate();
+        if (proto && pet->HaveInDiet(proto) && pet->GetCurrentFoodBenefitLevel(proto->ItemLevel) > 0)
+            food = item;
+    });
+    if (!food)
+        return;
+
+    bot->CastSpell(food, 6991, false);
+}
 
 // Creature entries the bot still needs kill credit for. Grinding prefers
 // these so an accepted kill quest completes as a side effect of leveling.
@@ -2445,8 +2582,11 @@ void BuildClassQuestCacheOnce()
             if (auto itr = entryIndexByQuest.find(questId); itr != entryIndexByQuest.end())
                 enderQuestsByCreature[creaturePair.first].push_back(itr->second);
 
-    for (auto const& [spawnId, data] : sObjectMgr->GetAllCreatureData())
+    for (auto const& spawnPair : sObjectMgr->GetAllCreatureData())
     {
+        // Plain reference, NOT a structured binding: clang (unlike MSVC)
+        // refuses to capture structured bindings in lambdas under C++17.
+        CreatureData const& data = spawnPair.second;
         auto attach = [&](std::unordered_map<uint32, std::vector<std::pair<uint8, size_t>>> const& byCreature, bool giver)
         {
             auto itr = byCreature.find(data.id);
@@ -4028,6 +4168,15 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         TryStartClassQuestTravel(bot, state);
     }
 
+    // Hunters keep a pet: tame when petless, feed what they have.
+    if (!state.engaged && !bot->IsInCombat() && !IsRestingNow(bot, state) && !state.journeyActive &&
+        state.errandKind == PveErrandKind::None && now >= state.nextTameScanAt)
+    {
+        state.nextTameScanAt = now + std::chrono::seconds(30);
+        MaybeTameBeast(bot, state);
+        MaybeFeedPet(bot);
+    }
+
     if (cfg.equipUpgradesEnabled && !bot->IsInCombat() && now >= state.nextEquipCheckAt)
     {
         state.nextEquipCheckAt = now + std::chrono::seconds(15);
@@ -4077,6 +4226,12 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
 void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
 {
     Player* master = state.masterGuid.IsEmpty() ? nullptr : ObjectAccessor::GetPlayer(*bot, state.masterGuid);
+
+    // A tame or capture channel in progress must not be interrupted by
+    // anything - combat, loot walks, errands or journeys. Taking the
+    // beast's hits meanwhile is part of the mechanic.
+    if (PveClock::now() < state.tamingUntil && bot->GetCurrentSpell(CURRENT_CHANNELED_SPELL))
+        return;
 
     // Must run before the disengage path clears the dead victim's guid.
     DetectFreshKillForLoot(bot, state, cfg);
@@ -4187,6 +4342,37 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         {
             target = nearestAttacker;
             state.recentBadTargets.erase(nearestAttacker->GetGUID().GetRawValue());
+        }
+    }
+
+    // Use-item objectives (taming rods, capture devices): the wanted
+    // creature must be USED on with the quest's source item - killing it
+    // grants nothing and the grind loop would farm it forever.
+    if (target && !state.passive && !bot->HasUnitState(UNIT_STATE_CASTING))
+    {
+        if (Item* questItem = FindQuestSourceItemFor(bot, target->GetEntry()))
+        {
+            if (bot->GetTarget() != target->GetGUID())
+                bot->SetSelection(target->GetGUID());
+            if (bot->IsWithinDistInMap(target, 25.0f) && bot->IsWithinLOSInMap(target))
+            {
+                playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
+                if (MotionMaster* motionMaster = bot->GetMotionMaster())
+                    motionMaster->Clear();
+                bot->StopMoving();
+                if (!bot->isInFront(target))
+                {
+                    bot->SetFacingToObject(target);
+                    bot->SetInFront(target);
+                }
+                SpellCastTargets questItemTargets;
+                questItemTargets.SetUnitTarget(target);
+                bot->CastItemUseSpell(questItem, questItemTargets, 0, 0);
+                state.tamingUntil = PveClock::now() + std::chrono::seconds(25);
+            }
+            else if (!bot->isMoving())
+                playerbot::PvpClassActions::IssueFollowMovement(bot, target, 20.0f);
+            return;
         }
     }
 
