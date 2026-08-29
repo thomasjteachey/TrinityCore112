@@ -1451,6 +1451,12 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
             return false;
     }
 
+    // Stance and form locks (Whirlwind demands Berserker Stance):
+    // SPELL_FAILED_ONLY_SHAPESHIFT on every attempt. CheckShapeshift is the
+    // core's own CheckCast rule, so a blocked pick could never land.
+    if (knownByPlayer && spellInfo->CheckShapeshift(player->GetShapeshiftForm()) != SPELL_CAST_OK)
+        return false;
+
     // Declarative requirements the core hard-enforces in CheckCast; a pick
     // that fails one of these fails it on EVERY attempt and starves the
     // rotation behind it (the Shield Slam / Overpower / Purge family).

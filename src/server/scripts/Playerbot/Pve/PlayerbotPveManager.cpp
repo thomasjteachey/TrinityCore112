@@ -25,6 +25,7 @@
 #include "Bag.h"
 #include "CellImpl.h"
 #include "CharacterCache.h"
+#include "Common.h"
 #include "Configuration/Config.h"
 #include "DatabaseEnv.h"
 #include "Creature.h"
@@ -42,6 +43,7 @@
 #include "MapManager.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "MoveSpline.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "AuctionHouseBot/AuctionHouseBot.h"
@@ -2661,6 +2663,25 @@ void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
             bot->Attack(victim, true);
         if (!bot->IsWithinMeleeRange(victim))
             playerbot::PvpClassActions::IssueFollowMovement(bot, victim, 1.0f);
+    }
+
+    // Melee swings demand the 120-degree arc (Player::Update just re-arms
+    // the attack timer outside it) and nothing maintains a stopped bot's
+    // facing: real players re-face client-side, bots have no client, and
+    // the cast-time fixups use the wider 180-degree spell arc and only run
+    // when a cast actually executes. A victim that sidesteps into the
+    // 60-120 degree band silently blocks every auto-attack - no rage, no
+    // dodges, and the whole rotation starves behind the dead swing timer.
+    if (bot->IsWithinMeleeRange(victim) && !bot->HasUnitState(UNIT_STATE_CASTING) &&
+        !bot->HasInArc(2.0f * float(M_PI) / 3.0f, victim))
+    {
+        if (!bot->IsStopped() || (bot->movespline && !bot->movespline->Finalized()))
+            bot->SetInFront(victim);
+        else
+        {
+            bot->SetFacingToObject(victim);
+            bot->SetInFront(victim);
+        }
     }
 
     // Stalled-chase recovery: a chase generator issued while the
