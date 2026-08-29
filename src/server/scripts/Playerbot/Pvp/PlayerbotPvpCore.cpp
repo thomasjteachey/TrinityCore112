@@ -2211,6 +2211,17 @@ bool MeetsCasterAuraStateRequirements(Player const* player, uint32 spellId)
             if (!CanCastMountSpellAtCurrentLocation(player, spellInfo))
                 continue;
 
+            // Fast (100%) mounts are a level-60 privilege under classic rules.
+            if (player->GetLevel() < 60)
+            {
+                bool fastMount = false;
+                for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+                    if (effect.IsAura(SPELL_AURA_MOD_INCREASE_MOUNTED_SPEED) && effect.CalcValue() > 60)
+                        fastMount = true;
+                if (fastMount)
+                    continue;
+            }
+
             return spellId;
         }
 
@@ -2223,10 +2234,15 @@ bool MeetsCasterAuraStateRequirements(Player const* player, uint32 spellId)
         if (!player || !player->IsAlive() || player->IsInCombat() || player->IsMounted())
             return decision;
 
+        // Classic rules: no mounts of any kind before level 40.
+        if (player->GetLevel() < 40)
+            return decision;
+
         if (IsHardControlled(player))
             return decision;
 
-        if (IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
+        // The free bot mount is a 100% mount: level 60 only.
+        if (player->GetLevel() >= 60 && IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
             if (SpellInfo const* defaultMountInfo = sSpellMgr->GetSpellInfo(SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
                 if (CanCastMountSpellAtCurrentLocation(player, defaultMountInfo))
                     return { "mount", reason, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
