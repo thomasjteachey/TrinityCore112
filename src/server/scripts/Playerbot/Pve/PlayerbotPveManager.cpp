@@ -916,6 +916,23 @@ void StartErrandIfNeeded(Player* bot, PveBotState& state, playerbot::PveConfig c
     }
 }
 
+// Wilderness grind spots can be hundreds of yards from the nearest vendor;
+// gear that hits zero durability counts as unequipped and silently disarms
+// whole rotations (Hamstring, Shield Slam, white swings). When repair is
+// CRITICAL and no vendor is in reach, pay for a field repair from the bot's
+// own gold rather than let it fist-fight plague bears.
+void MaybeFieldRepair(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
+{
+    if (!cfg.vendorEnabled || state.errandKind != PveErrandKind::None)
+        return;
+
+    if (!AnyEquippedItemBelowDurabilityPct(bot, 10))
+        return;
+
+    bot->DurabilityRepairAll(true, 1.0f, false);
+    TC_LOG_INFO("playerbots.pve", "Bot {} field-repaired its gear (no vendor within reach).", bot->GetName());
+}
+
 // Returns true while the bot is still busy walking to the errand target.
 bool ProcessErrand(Player* bot, PveBotState& state, playerbot::PveConfig const& /*cfg*/)
 {
@@ -2099,12 +2116,17 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     {
         state.nextErrandScanAt = now + std::chrono::seconds(15);
         StartErrandIfNeeded(bot, state, cfg);
+        MaybeFieldRepair(bot, state, cfg);
     }
 
     if (cfg.equipUpgradesEnabled && !bot->IsInCombat() && now >= state.nextEquipCheckAt)
     {
         state.nextEquipCheckAt = now + std::chrono::seconds(15);
         TryEquipUpgrades(bot);
+        // Companions never run vendor errands (they stay on their master's
+        // heel), so critical durability gets the field repair here.
+        if (!state.masterGuid.IsEmpty())
+            MaybeFieldRepair(bot, state, cfg);
     }
 
     if (cfg.talentsEnabled && !bot->IsInCombat() && now >= state.nextTalentCheckAt)
