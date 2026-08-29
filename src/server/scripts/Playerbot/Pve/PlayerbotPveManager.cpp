@@ -3715,6 +3715,22 @@ void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
     // the rotation, and filling its deliberate gaps with Lightning Bolt
     // turned an enhancement shaman into a caster.
     bool const engineCastThisTick = engineActedThisTick && context.spellId != 0;
+
+    // Paladins at any level: keep a seal up and judge it. Leveling
+    // paladins match no spec branch, and the idle-tick floor never fights
+    // a talented rotation - that one casts on its own ticks.
+    if (!engineCastThisTick && !bot->HasUnitState(UNIT_STATE_CASTING) && bot->GetClass() == CLASS_PALADIN)
+    {
+        if (uint32 const sealId = HighestKnownRankInChain(bot, 21084)) // Seal of Righteousness
+        {
+            if (!bot->HasAura(sealId))
+                bot->CastSpell(bot, sealId, false);
+            else if (bot->HasSpell(20271) && !bot->GetSpellHistory()->HasCooldown(20271) &&
+                bot->IsWithinDistInMap(victim, 10.0f) && bot->IsWithinLOSInMap(victim))
+                bot->CastSpell(victim, 20271, false); // Judgement
+        }
+    }
+
     if (!engineCastThisTick && bot->GetLevel() < 10 && !bot->HasUnitState(UNIT_STATE_CASTING))
     {
         if (uint32 const nukeId = BaselineNukeSpellId(bot))
