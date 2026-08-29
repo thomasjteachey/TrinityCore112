@@ -289,15 +289,19 @@ bool IsRestingNow(Player const* player, PveBotState const& state)
     return PveClock::now() < state.restingUntil;
 }
 
+// The spell category is the discriminating field, NOT the subclass: B+'s
+// classic-imported item rows keep the old subclass 0 on basic food/water
+// (Tough Jerky, Refreshing Spring Water), and a subclass==FOOD requirement
+// makes every vendor staple invisible to both the buyer and the eater.
 bool IsFoodTemplate(ItemTemplate const* proto)
 {
-    return proto && proto->Class == ITEM_CLASS_CONSUMABLE && proto->SubClass == ITEM_SUBCLASS_FOOD &&
+    return proto && proto->Class == ITEM_CLASS_CONSUMABLE &&
         proto->Spells[0].SpellCategory == SPELL_CATEGORY_FOOD;
 }
 
 bool IsDrinkTemplate(ItemTemplate const* proto)
 {
-    return proto && proto->Class == ITEM_CLASS_CONSUMABLE && proto->SubClass == ITEM_SUBCLASS_FOOD &&
+    return proto && proto->Class == ITEM_CLASS_CONSUMABLE &&
         proto->Spells[0].SpellCategory == SPELL_CATEGORY_DRINK;
 }
 
@@ -351,6 +355,29 @@ bool HasPendingSummon(ObjectGuid const& botGuid)
     return g_PendingSummonsByBotGuid.find(botGuid.GetRawValue()) != g_PendingSummonsByBotGuid.end();
 }
 
+// Training and target dummies are attackable and level-appropriate but
+// effectively immortal: a bot that picks one attacks it until the end of
+// time. The many variants (classic engineering dummies, test dummies, the
+// wotlk trainer dummies) share no single template flag, but they all carry
+// the name, and the scripted ones additionally sit perma-stunned.
+bool IsTargetDummyCreature(Creature const* creature)
+{
+    if (creature->HasUnitFlag(UNIT_FLAG_STUNNED))
+        return true;
+
+    CreatureTemplate const* proto = creature->GetCreatureTemplate();
+    return proto && proto->Name.find("Dummy") != std::string::npos;
+}
+
+// Zones no bot should ever grind or shop in even when their spawns form
+// convincing clusters on an allowed map: this DB spawns the death knight
+// intro copy on map 0 (Plaguelands: The Scarlet Enclave), and GM Island
+// sits on map 1.
+bool IsForbiddenGrindZone(uint32 zoneId)
+{
+    return zoneId == 4298 || zoneId == 876;
+}
+
 struct GrindTargetCheck
 {
     Player* bot;
@@ -364,6 +391,9 @@ struct GrindTargetCheck
         // Rabbits and other critters are technically attackable but grinding
         // them is neither XP nor a convincing simulation.
         if (creature->GetCreatureType() == CREATURE_TYPE_CRITTER)
+            return false;
+
+        if (IsTargetDummyCreature(creature))
             return false;
 
         if (creature->IsPet() || creature->IsTotem() || creature->IsControlledByPlayer())
@@ -1695,6 +1725,12 @@ void BuildGrindSpotCacheOnce()
         if (bucket.count < 3)
             continue;
 
+        // Zone screen at the source, so forbidden clusters never exist for
+        // any travel arm (walk, taxi or teleport) to deliver bots into.
+        if (Map* map = sMapMgr->FindMap(bucket.spot.mapId, 0))
+            if (IsForbiddenGrindZone(map->GetZoneId(PHASEMASK_NORMAL, bucket.spot.x, bucket.spot.y, bucket.spot.z)))
+                continue;
+
         ++spotCount;
         for (int32 level = int32(bucket.meanLevel) - 1; level <= int32(bucket.meanLevel) + 3; ++level)
             if (level >= 1 && level <= 80)
@@ -1769,6 +1805,13 @@ void BuildVendorSpotCacheOnce()
         CreatureTemplate const* proto = sObjectMgr->GetCreatureTemplate(data.id);
         if (!proto || !(proto->npcflag & UNIT_NPC_FLAG_VENDOR))
             continue;
+
+        // Same zone screen as the grind clusters: no supply runs into the
+        // DK intro area or GM Island.
+        if (Map* map = sMapMgr->FindMap(data.mapId, 0))
+            if (IsForbiddenGrindZone(map->GetZoneId(PHASEMASK_NORMAL, data.spawnPoint.GetPositionX(),
+                data.spawnPoint.GetPositionY(), data.spawnPoint.GetPositionZ())))
+                continue;
 
         g_VendorSpots.push_back({ uint16(data.mapId), data.spawnPoint.GetPositionX(),
             data.spawnPoint.GetPositionY(), data.spawnPoint.GetPositionZ() });
@@ -3030,6 +3073,19 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
                     consumable = FindBestConsumable(bot, true);
                 if (consumable)
                 {
+                    // The cast may consume the last unit and delete the item;
+                    // capture everything needed before it runs.
+                    uint32 const consumableEntry = consumable->GetEntry();
+                    uint32 usedSpellId = 0;
+                    if (ItemTemplate const* proto = consumable->GetTemplate())
+                        for (uint8 spellIdx = 0; spellIdx < MAX_ITEM_PROTO_SPELLS; ++spellIdx)
+                            if (proto->Spells[spellIdx].SpellId > 0 &&
+                                proto->Spells[spellIdx].SpellTrigger == ITEM_SPELLTRIGGER_ON_USE)
+                            {
+                                usedSpellId = uint32(proto->Spells[spellIdx].SpellId);
+                                break;
+                            }
+
                     playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
                     if (MotionMaster* motionMaster = bot->GetMotionMaster())
                         motionMaster->Clear();
@@ -3037,7 +3093,20 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
                     SpellCastTargets targets;
                     targets.SetUnitTarget(bot);
                     bot->CastItemUseSpell(consumable, targets, 0, 0);
-                    state.restingUntil = PveClock::now() + std::chrono::seconds(22);
+
+                    // CastItemUseSpell reports nothing: only the landed
+                    // food/drink aura counts as eating. Without this check a
+                    // rejected cast faked a 22s "rest" that healed nothing,
+                    // forever. Sitting is the client's job for real players,
+                    // so do it here too.
+                    if (usedSpellId && bot->HasAura(usedSpellId))
+                    {
+                        bot->SetStandState(UNIT_STAND_STATE_SIT);
+                        state.restingUntil = PveClock::now() + std::chrono::seconds(22);
+                    }
+                    else if (cfg.combatDiagnostics)
+                        TC_LOG_INFO("playerbots.pve", "Bot {} could not eat/drink item {} (use spell {} did not land).",
+                            bot->GetName(), consumableEntry, usedSpellId);
                 }
             }
             else
@@ -3200,6 +3269,8 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         if (!state.engaged)
         {
             state.engaged = true;
+            // A bot jumped mid-meal must not fight sitting down.
+            bot->SetStandState(UNIT_STAND_STATE_STAND);
             TC_LOG_INFO("playerbots.pve", "Bot {} engaging {} (level {}) at {:.0f}y.",
                 bot->GetName(), target->GetName(), target->GetLevel(), bot->GetDistance(target));
         }
@@ -3238,6 +3309,9 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         }
 
         RemoveRestAuras(bot);
+        // Standing up also removes the consumable food/drink auras via the
+        // core's NOT_SEATED interrupt; a seated bot must never start moving.
+        bot->SetStandState(UNIT_STAND_STATE_STAND);
         state.restingUntil = PveClock::now();
     }
 
