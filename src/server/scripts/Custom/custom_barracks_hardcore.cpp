@@ -16,10 +16,12 @@
  */
 
 // Barracks+ hardcore ruleset (config-gated; entirely inert on Legionnaire+):
-//  - Loot drop on death: WORN EQUIPMENT is at stake - a configurable share
-//    drops into a chest at the corpse (Dire Maul beads style), the rest is
-//    destroyed as a deflationary sink. Bags, inventory and money are safe.
-//    World only - battlegrounds and arenas are exempt.
+//  - Loot drop on death: WORN GREEN-AND-BETTER EQUIPMENT is at stake - a
+//    configurable share drops into a chest at the corpse (Dire Maul beads
+//    style), the rest is destroyed as a deflationary sink. White gear is the
+//    floor and never drops; bags, inventory and money are safe. Whatever the
+//    death took is replaced with plain white field kit on resurrection, so
+//    nobody is ever left unable to fight. World only - BGs/arenas exempt.
 //  - Opt-in free-for-all PvP: a flagger NPC in the capitals toggles it. The
 //    flag only ARMS in zones of a configurable minimum level - never in
 //    starter zones, capitals or sanctuaries - and while armed the player
@@ -39,7 +41,10 @@
 #include "Duration.h"
 #include "GameObject.h"
 #include "Log.h"
+#include "Item.h"
+#include "ItemTemplate.h"
 #include "Map.h"
+#include "ObjectMgr.h"
 #include "Player.h"
 #include "ScriptedCreature.h"
 #include "ScriptedGossip.h"
@@ -47,9 +52,12 @@
 #include "Util.h"
 #include "WorldSession.h"
 #include "custom_loot_chest_helper.h"
+#include <algorithm>
+#include <array>
 #include <mutex>
 #include <shared_mutex>
 #include <sstream>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -193,8 +201,189 @@ namespace BarracksHardcore
         }
     }
 
-    // Full loot: everything worn and carried (contents before the bags that
-    // hold them, so destruction order stays legal), plus the money pouch.
+    // ---------------------------------------------------------------------
+    // The white field kit: the floor every fighter stands on. White gear is
+    // never taken by death, so a corpse run always leaves the victim able to
+    // swing back - no naked death spiral, for players or bots alike.
+    // ---------------------------------------------------------------------
+
+    constexpr std::array<uint8, 10> kKitSlots = { {
+        EQUIPMENT_SLOT_HEAD, EQUIPMENT_SLOT_SHOULDERS, EQUIPMENT_SLOT_CHEST,
+        EQUIPMENT_SLOT_WAIST, EQUIPMENT_SLOT_LEGS, EQUIPMENT_SLOT_FEET,
+        EQUIPMENT_SLOT_WRISTS, EQUIPMENT_SLOT_HANDS, EQUIPMENT_SLOT_BACK,
+        EQUIPMENT_SLOT_MAINHAND
+    } };
+
+    std::mutex s_whiteKitLock;
+    bool s_whiteKitBuilt = false;
+    std::unordered_map<uint32, std::vector<uint32>> s_whiteKitByInvType;
+
+    // Built once, then read-only.
+    void BuildWhiteKitCacheOnce()
+    {
+        std::lock_guard<std::mutex> guard(s_whiteKitLock);
+        if (s_whiteKitBuilt)
+            return;
+        s_whiteKitBuilt = true;
+
+        for (auto const& itemPair : sObjectMgr->GetItemTemplateStore())
+        {
+            ItemTemplate const& proto = itemPair.second;
+            if (proto.Quality != ITEM_QUALITY_NORMAL)
+                continue;
+            if (proto.Class != ITEM_CLASS_ARMOR && proto.Class != ITEM_CLASS_WEAPON)
+                continue;
+            if (proto.InventoryType == INVTYPE_NON_EQUIP)
+                continue;
+            // Plain field gear only: nothing gated, zone-locked or bound.
+            if (proto.RequiredLevel > 60 || proto.ItemLevel > 70)
+                continue;
+            if (proto.RequiredSkill || proto.RequiredSpell || proto.RequiredReputationFaction ||
+                proto.RequiredHonorRank || proto.Area || proto.Map)
+                continue;
+            if (proto.Bonding == BIND_QUEST_ITEM)
+                continue;
+
+            s_whiteKitByInvType[proto.InventoryType].push_back(proto.ItemId);
+        }
+
+        // Highest required level first, so a search can stop at its first
+        // usable hit instead of walking thousands of items per slot for
+        // every one of a few hundred logins.
+        uint32 total = 0;
+        for (auto& kitPair : s_whiteKitByInvType)
+        {
+            std::sort(kitPair.second.begin(), kitPair.second.end(), [](uint32 left, uint32 right)
+            {
+                ItemTemplate const* leftProto = sObjectMgr->GetItemTemplate(left);
+                ItemTemplate const* rightProto = sObjectMgr->GetItemTemplate(right);
+                if (leftProto->RequiredLevel != rightProto->RequiredLevel)
+                    return leftProto->RequiredLevel > rightProto->RequiredLevel;
+                return leftProto->ItemLevel > rightProto->ItemLevel;
+            });
+            total += uint32(kitPair.second.size());
+        }
+        TC_LOG_INFO("scripts", "BarracksHardcore: white field kit cache built ({} items).", total);
+    }
+
+    // Classic armor proficiency: the heavy classes step up at 40.
+    uint32 DesiredArmorSubclass(Player const* player)
+    {
+        switch (player->GetClass())
+        {
+            case CLASS_ROGUE:
+            case CLASS_DRUID:
+                return ITEM_SUBCLASS_ARMOR_LEATHER;
+            case CLASS_HUNTER:
+            case CLASS_SHAMAN:
+                return player->GetLevel() >= 40 ? uint32(ITEM_SUBCLASS_ARMOR_MAIL) : uint32(ITEM_SUBCLASS_ARMOR_LEATHER);
+            case CLASS_WARRIOR:
+            case CLASS_PALADIN:
+            case CLASS_DEATH_KNIGHT:
+                return player->GetLevel() >= 40 ? uint32(ITEM_SUBCLASS_ARMOR_PLATE) : uint32(ITEM_SUBCLASS_ARMOR_MAIL);
+            default:
+                return ITEM_SUBCLASS_ARMOR_CLOTH;
+        }
+    }
+
+    std::vector<uint32> InventoryTypesForSlot(uint8 slot)
+    {
+        switch (slot)
+        {
+            case EQUIPMENT_SLOT_HEAD:      return { INVTYPE_HEAD };
+            case EQUIPMENT_SLOT_SHOULDERS: return { INVTYPE_SHOULDERS };
+            case EQUIPMENT_SLOT_CHEST:     return { INVTYPE_CHEST, INVTYPE_ROBE };
+            case EQUIPMENT_SLOT_WAIST:     return { INVTYPE_WAIST };
+            case EQUIPMENT_SLOT_LEGS:      return { INVTYPE_LEGS };
+            case EQUIPMENT_SLOT_FEET:      return { INVTYPE_FEET };
+            case EQUIPMENT_SLOT_WRISTS:    return { INVTYPE_WRISTS };
+            case EQUIPMENT_SLOT_HANDS:     return { INVTYPE_HANDS };
+            case EQUIPMENT_SLOT_BACK:      return { INVTYPE_CLOAK };
+            case EQUIPMENT_SLOT_MAINHAND:  return { INVTYPE_WEAPON, INVTYPE_WEAPONMAINHAND, INVTYPE_2HWEAPON };
+            default:                       return {};
+        }
+    }
+
+    // Fills every empty kit slot with the best plain white piece the wearer's
+    // level and proficiency allow. Runs on resurrection (dead players cannot
+    // equip anything) and at login, so nobody stays bare.
+    void IssueWhiteFieldKit(Player* player)
+    {
+        if (!s_enabled || !player || !player->IsAlive() || player->IsGameMaster())
+            return;
+
+        BuildWhiteKitCacheOnce();
+
+        uint32 const wantedArmorSubclass = DesiredArmorSubclass(player);
+        uint8 const level = player->GetLevel();
+        uint32 granted = 0;
+
+        for (uint8 slot : kKitSlots)
+        {
+            if (player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                continue;
+
+            uint32 bestItemId = 0;
+            uint32 bestRequiredLevel = 0;
+            uint32 bestItemLevel = 0;
+
+            for (uint32 invType : InventoryTypesForSlot(slot))
+            {
+                std::vector<uint32> const* ids = nullptr;
+                {
+                    std::lock_guard<std::mutex> guard(s_whiteKitLock);
+                    auto itr = s_whiteKitByInvType.find(invType);
+                    if (itr == s_whiteKitByInvType.end())
+                        continue;
+                    ids = &itr->second; // immutable once built
+                }
+
+                // The list is sorted by required level descending: the first
+                // usable entry is already the best this slot can offer, so
+                // the scan stops there.
+                for (uint32 itemId : *ids)
+                {
+                    ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
+                    if (!proto || proto->RequiredLevel > level)
+                        continue;
+
+                    // Armor proficiency, decided explicitly. Cloaks are cloth
+                    // for every class, so they are exempt.
+                    if (proto->Class == ITEM_CLASS_ARMOR && proto->InventoryType != INVTYPE_CLOAK &&
+                        proto->SubClass != wantedArmorSubclass)
+                        continue;
+
+                    if (player->CanUseItem(proto) != EQUIP_ERR_OK)
+                        continue;
+
+                    // Closest to the wearer's own level, then the better item.
+                    if (proto->RequiredLevel > bestRequiredLevel ||
+                        (proto->RequiredLevel == bestRequiredLevel && proto->ItemLevel > bestItemLevel))
+                    {
+                        bestItemId = itemId;
+                        bestRequiredLevel = proto->RequiredLevel;
+                        bestItemLevel = proto->ItemLevel;
+                    }
+                    break;
+                }
+            }
+
+            // StoreNewItemInBestSlots equips when the slot accepts the piece
+            // (the helper Player::Create dresses new characters with).
+            if (bestItemId && player->StoreNewItemInBestSlots(bestItemId, 1))
+                ++granted;
+        }
+
+        if (granted)
+        {
+            player->SaveToDB(false);
+            TC_LOG_INFO("scripts", "BarracksHardcore: issued {} pieces of white field kit to {}.",
+                granted, player->GetName());
+        }
+    }
+
+    // Full loot: worn GREEN AND BETTER equipment is at stake. White and grey
+    // gear is the floor and never drops, bags/inventory/money are always safe.
     void DropFullLootChest(Player* victim)
     {
         if (!s_enabled || !s_chestEntry || !victim || victim->IsGameMaster())
@@ -213,6 +402,12 @@ namespace BarracksHardcore
         {
             Item* item = victim->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
             if (!item)
+                continue;
+
+            // The white floor survives every death; only green and above is
+            // ever lost, so nobody is ever left unable to fight back.
+            ItemTemplate const* proto = item->GetTemplate();
+            if (!proto || proto->Quality < ITEM_QUALITY_UNCOMMON)
                 continue;
 
             if (urand(0, 99) < s_dropChancePercent)
@@ -255,6 +450,16 @@ public:
             s_optInGuids.insert(guidLow);
         }
         ApplyFfaState(player);
+        // Anyone already stripped bare (deaths taken before the kit existed)
+        // is dressed on the way in.
+        IssueWhiteFieldKit(player);
+    }
+
+    // Fires for real players and for bots alike: the bot manager revives its
+    // dead through Player::ResurrectPlayer, which drives this same hook.
+    void OnPlayerResurrect(Player* player) override
+    {
+        IssueWhiteFieldKit(player);
     }
 
     void OnUpdateZone(Player* player, uint32 /*newZone*/, uint32 /*newArea*/) override

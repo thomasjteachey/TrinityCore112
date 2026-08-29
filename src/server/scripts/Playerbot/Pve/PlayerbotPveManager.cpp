@@ -156,6 +156,9 @@ struct PveBotState
     // itself is lethal (graveyard camped by higher-level mobs).
     uint8 recentDeathCount = 0;
     PveTimePoint recentDeathWindowStart{};
+    // Naked recovery: when this bot was first seen stripped of its gear.
+    PveTimePoint nakedSince{};
+    PveTimePoint nextNakedCheckAt{};
     // Hardcore reclaim: where we last fell - the drop chest stands there.
     uint16 deathSpotMapId = 0;
     float deathSpotX = 0.0f;
@@ -2468,6 +2471,37 @@ void EnsureFirstLoginKit(Player* bot, PveBotState& state, playerbot::PveConfig c
 }
 
 // ---------------------------------------------------------------------------
+// Naked recovery. On a full-loot realm a bot that never reclaims its death
+// chest is left helpless: it cannot kill anything, so it dies again, and the
+// spiral never ends (the Stonetalon guardian dying every two minutes). A
+// stripped bot spends its WHOLE purse at the auction house instead of the
+// usual upgrade slice. The white field kit that guarantees it can always
+// fight belongs to the hardcore script, which dresses players and bots alike
+// on resurrection.
+// ---------------------------------------------------------------------------
+
+constexpr std::array<uint8, 9> kCoreGearSlots = { {
+    EQUIPMENT_SLOT_HEAD, EQUIPMENT_SLOT_SHOULDERS, EQUIPMENT_SLOT_CHEST,
+    EQUIPMENT_SLOT_WAIST, EQUIPMENT_SLOT_LEGS, EQUIPMENT_SLOT_FEET,
+    EQUIPMENT_SLOT_WRISTS, EQUIPMENT_SLOT_HANDS, EQUIPMENT_SLOT_MAINHAND
+} };
+
+// Losing a piece or two is ordinary adventuring wear; this is the
+// "died and left everything in the chest" state. Level 1-9 bots wear their
+// starter outfit and nothing else, which is not nakedness.
+bool IsBotStrippedBare(Player const* bot)
+{
+    if (bot->GetLevel() < 10)
+        return false;
+
+    uint32 filled = 0;
+    for (uint8 slot : kCoreGearSlots)
+        if (bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+            ++filled;
+    return filled <= 3;
+}
+
+// ---------------------------------------------------------------------------
 // Level-appropriate relocation (the reference module's teleport-for-level,
 // rebuilt on this core's in-memory spawn store)
 // ---------------------------------------------------------------------------
@@ -3359,7 +3393,11 @@ void ProcessPendingAuctionShopping()
             continue;
 
         --scansLeft;
-        uint32 const budget = CalculatePct(bot->GetMoney(), g_PveConfig.auctionBuyBudgetPct);
+        // A stripped bot spends everything it has: the usual budget slice is
+        // for shopping upgrades, and this bot cannot fight at all.
+        uint32 const budget = IsBotStrippedBare(bot)
+            ? bot->GetMoney()
+            : CalculatePct(bot->GetMoney(), g_PveConfig.auctionBuyBudgetPct);
         uint32 const botAccountId = bot->GetSession() ? bot->GetSession()->GetAccountId() : 0;
 
         AuctionEntry* bestAuction = nullptr;
@@ -4630,6 +4668,37 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         state.nextTameScanAt = now + std::chrono::seconds(30);
         MaybeTameBeast(bot, state);
         MaybeFeedPet(bot);
+    }
+
+    // Naked recovery: shop the auction house with the whole purse, and when
+    // that has had its chance, issue green field kit. Ordered this way so a
+    // bot that can afford real gear buys it rather than taking handouts.
+    if (!bot->IsInCombat() && state.masterGuid.IsEmpty() && now >= state.nextNakedCheckAt)
+    {
+        state.nextNakedCheckAt = now + std::chrono::seconds(30);
+        if (IsBotStrippedBare(bot))
+        {
+            if (state.nakedSince == PveTimePoint())
+            {
+                state.nakedSince = now;
+                if (cfg.auctionBuyEnabled)
+                {
+                    std::lock_guard<std::mutex> guard(g_PvePendingLock);
+                    g_PendingAuctionShopping.insert(bot->GetGUID().GetRawValue());
+                }
+            }
+            // The white field kit itself is the hardcore script's business
+            // (it dresses players and bots alike on resurrection); here the
+            // auction house is simply given a fresh chance each pass.
+            else if (now - state.nakedSince >= std::chrono::seconds(90) && cfg.auctionBuyEnabled)
+            {
+                state.nakedSince = now;
+                std::lock_guard<std::mutex> guard(g_PvePendingLock);
+                g_PendingAuctionShopping.insert(bot->GetGUID().GetRawValue());
+            }
+        }
+        else
+            state.nakedSince = PveTimePoint();
     }
 
     if (cfg.equipUpgradesEnabled && !bot->IsInCombat() && now >= state.nextEquipCheckAt)
