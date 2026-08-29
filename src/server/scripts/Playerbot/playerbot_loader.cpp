@@ -826,6 +826,7 @@ public:
             { "summon", HandlePlayerbotPveSummonCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
             { "dismiss", HandlePlayerbotPveDismissCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
             { "status", HandlePlayerbotPveStatusCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
+            { "reset", HandlePlayerbotPveResetCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
         };
 
         static ChatCommandTable playerbotTable =
@@ -1017,6 +1018,18 @@ public:
 
         uint32 const queuedCount = playerbot::QueueEligibleManagedBotsForBattleground(bgTypeId, 0);
         handler->PSendSysMessage("Forced managed playerbots to queue for battleground type %u. Queued bots: %u", uint32(bgTypeId), queuedCount);
+        return true;
+    }
+
+    // .playerbot pve reset [percent] - rebirth that share of the online
+    // managed bots as fresh level-1 characters at their racial start.
+    static bool HandlePlayerbotPveResetCommand(ChatHandler* handler, Optional<uint8> percent)
+    {
+        if (!handler)
+            return false;
+
+        uint32 const resetCount = playerbot::PveManager::ResetBotsToLevelOne(percent.value_or(100));
+        handler->PSendSysMessage("Reset %u managed playerbots to level 1 and sent them home.", resetCount);
         return true;
     }
 

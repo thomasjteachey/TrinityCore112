@@ -26,6 +26,7 @@
 #include "CellImpl.h"
 #include "CharacterCache.h"
 #include "Common.h"
+#include "Containers.h"
 #include "Configuration/Config.h"
 #include "DatabaseEnv.h"
 #include "Creature.h"
@@ -2059,19 +2060,21 @@ uint32 GreedySpendInTab(Player* bot, uint32 tabId)
 // and respeccing a donor updates the recipe at the next server start.
 // ---------------------------------------------------------------------------
 
-char const* TalentDonorName(uint8 botClass, uint32 pick)
+// Two names per donor: the fleet's lore names, plus the legacy Bot<spec>
+// names as a fallback so realms that have not run the rename keep working.
+char const* TalentDonorName(uint8 botClass, uint32 pick, bool legacy)
 {
     switch (botClass)
     {
-        case CLASS_WARRIOR: { static char const* const n[3] = { "Botwarrarms", "Botwarrfury", "Botwarrprot" }; return n[pick % 3]; }
-        case CLASS_PALADIN: { static char const* const n[3] = { "Botpalholy", "Botpalprot", "Botpalret" }; return n[pick % 3]; }
-        case CLASS_HUNTER:  { static char const* const n[3] = { "Bothuntbeast", "Bothuntmarks", "Bothuntsurv" }; return n[pick % 3]; }
-        case CLASS_ROGUE:   { static char const* const n[3] = { "Botrogass", "Botrogcombat", "Botrogsub" }; return n[pick % 3]; }
-        case CLASS_PRIEST:  { static char const* const n[3] = { "Botpridisc", "Botpriholy", "Botprishadow" }; return n[pick % 3]; }
-        case CLASS_SHAMAN:  { static char const* const n[3] = { "Botshamele", "Botshamenh", "Botshamresto" }; return n[pick % 3]; }
-        case CLASS_MAGE:    { static char const* const n[3] = { "Botmagarcane", "Botmagfire", "Botmagfrost" }; return n[pick % 3]; }
-        case CLASS_WARLOCK: { static char const* const n[3] = { "Botwarlaffl", "Botwarldemo", "Botwarldest" }; return n[pick % 3]; }
-        case CLASS_DRUID:   { static char const* const n[3] = { "Botdruidbal", "Botdruferal", "Botdruidrest" }; return n[pick % 3]; }
+        case CLASS_WARRIOR: { static char const* const n[6] = { "Gorthak", "Skarvald", "Thorgrim", "Botwarrarms", "Botwarrfury", "Botwarrprot" }; return n[(legacy ? 3 : 0) + pick % 3]; }
+        case CLASS_PALADIN: { static char const* const n[6] = { "Aldric", "Barathen", "Varethan", "Botpalholy", "Botpalprot", "Botpalret" }; return n[(legacy ? 3 : 0) + pick % 3]; }
+        case CLASS_HUNTER:  { static char const* const n[6] = { "Thornwild", "Swiftarrow", "Grimtrack", "Bothuntbeast", "Bothuntmarks", "Bothuntsurv" }; return n[(legacy ? 3 : 0) + pick % 3]; }
+        case CLASS_ROGUE:   { static char const* const n[6] = { "Vexis", "Slateblade", "Shadowmere", "Botrogass", "Botrogcombat", "Botrogsub" }; return n[(legacy ? 3 : 0) + pick % 3]; }
+        case CLASS_PRIEST:  { static char const* const n[6] = { "Seraphine", "Lumenara", "Vespera", "Botpridisc", "Botpriholy", "Botprishadow" }; return n[(legacy ? 3 : 0) + pick % 3]; }
+        case CLASS_SHAMAN:  { static char const* const n[6] = { "Tempestra", "Korgul", "Riverwind", "Botshamele", "Botshamenh", "Botshamresto" }; return n[(legacy ? 3 : 0) + pick % 3]; }
+        case CLASS_MAGE:    { static char const* const n[6] = { "Elandrus", "Pyrella", "Rimeveil", "Botmagarcane", "Botmagfire", "Botmagfrost" }; return n[(legacy ? 3 : 0) + pick % 3]; }
+        case CLASS_WARLOCK: { static char const* const n[6] = { "Morgatha", "Karzul", "Infernia", "Botwarlaffl", "Botwarldemo", "Botwarldest" }; return n[(legacy ? 3 : 0) + pick % 3]; }
+        case CLASS_DRUID:   { static char const* const n[6] = { "Lunaris", "Clawthorn", "Sylvanel", "Botdruidbal", "Botdruferal", "Botdruidrest" }; return n[(legacy ? 3 : 0) + pick % 3]; }
         default:
             return nullptr;
     }
@@ -2090,16 +2093,24 @@ std::vector<uint32> GetTalentRecipe(Player* bot, uint32 pick)
 
     // Missing donors negative-cache as empty (hunters have no B+ donor).
     std::vector<uint32>& recipe = g_TalentRecipesByKey[key];
-    if (char const* donorName = TalentDonorName(bot->GetClass(), pick))
+    for (bool legacy : { false, true })
     {
+        char const* donorName = TalentDonorName(bot->GetClass(), pick, legacy);
+        if (!donorName)
+            break;
+
         ObjectGuid const donorGuid = sCharacterCache->GetCharacterGuidByName(donorName);
-        if (!donorGuid.IsEmpty() && donorGuid != bot->GetGUID())
-            if (QueryResult result = CharacterDatabase.PQuery(
-                "SELECT spell FROM character_talent WHERE guid = {} AND talentGroup = 0", donorGuid.GetCounter()))
-                do
-                {
-                    recipe.push_back((*result)[0].GetUInt32());
-                } while (result->NextRow());
+        if (donorGuid.IsEmpty() || donorGuid == bot->GetGUID())
+            continue;
+
+        if (QueryResult result = CharacterDatabase.PQuery(
+            "SELECT spell FROM character_talent WHERE guid = {} AND talentGroup = 0", donorGuid.GetCounter()))
+            do
+            {
+                recipe.push_back((*result)[0].GetUInt32());
+            } while (result->NextRow());
+        if (!recipe.empty())
+            break;
     }
     return recipe;
 }
@@ -2174,7 +2185,7 @@ void SpendPendingTalentPoints(Player* bot)
     {
         if (recipeSpent)
             TC_LOG_INFO("playerbots.pve", "Bot {} spent {} talent points from the {} build.",
-                bot->GetName(), recipeSpent, TalentDonorName(bot->GetClass(), profileIndex));
+                bot->GetName(), recipeSpent, TalentDonorName(bot->GetClass(), profileIndex, false));
         return;
     }
 
@@ -3682,7 +3693,16 @@ void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
         if (!splineActive)
             bot->SetInFront(victim);
         else if (bot->IsWithinMeleeRange(victim) && !bot->HasInArc(2.0f * float(M_PI) / 3.0f, victim))
+        {
+            // A bot that is not actually moving yet still reports an active
+            // spline is stuck behind a phantom one, and every broadcast
+            // path defers to it (the move_face_deferred loop) - observers
+            // keep rendering the bot fighting with its back turned. Kill
+            // the phantom so the turn actually publishes.
+            if (!bot->isMoving() && !bot->HasInArc(float(M_PI), victim))
+                bot->StopMoving();
             bot->SetInFront(victim);
+        }
     }
 
     // Fresh talentless casters match no branch of the spec-gated rotation
@@ -4838,6 +4858,101 @@ void PveManager::OnManagedBotLevelChanged(Player* player, uint8 /*oldLevel*/)
 
     if (g_PveConfig.talentsEnabled)
         SpendPendingTalentPoints(player);
+}
+
+// Full rebirth: strip a managed bot back to a freshly created level-1
+// character - gear, bags, bank, money, spells, talents, quests, pet - and
+// port it to its racial starting spot. World thread only (command handler).
+uint32 PveManager::ResetBotsToLevelOne(uint8 percent)
+{
+    percent = std::min<uint8>(percent ? percent : 100, 100);
+
+    std::vector<Player*> managedBots;
+    for (auto const& [accountId, session] : sWorld->GetAllSessions())
+    {
+        Player* candidate = session ? session->GetPlayer() : nullptr;
+        if (!candidate || !candidate->IsInWorld() || !playerbot::IsManagedRandomBot(candidate))
+            continue;
+        // Companions serving a human are left alone.
+        if (IsExemptFromBattlegroundOrchestration(candidate))
+            continue;
+        managedBots.push_back(candidate);
+    }
+
+    Trinity::Containers::RandomShuffle(managedBots);
+    uint32 const resetCount = uint32(managedBots.size()) * percent / 100;
+
+    for (uint32 index = 0; index < resetCount; ++index)
+    {
+        Player* bot = managedBots[index];
+        uint64 const botRawGuid = bot->GetGUID().GetRawValue();
+
+        playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), false);
+        playerbot::LockedErase(g_PveBotStateByGuid, botRawGuid);
+        bot->CombatStop(true);
+        bot->RemovePet(nullptr, PET_SAVE_AS_DELETED);
+        bot->RemoveAllAuras();
+
+        for (uint8 slot = 0; slot < MAX_QUEST_LOG_SIZE; ++slot)
+            if (uint32 questId = bot->GetQuestSlotQuestId(slot))
+            {
+                bot->RemoveActiveQuest(questId, false);
+                bot->SetQuestSlot(slot, 0);
+            }
+        for (uint32 questId : std::vector<uint32>(bot->getRewardedQuests().begin(), bot->getRewardedQuests().end()))
+            bot->RemoveRewardedQuest(questId);
+
+        // Bag and bank-bag contents first, then every direct slot.
+        for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+            if (Bag* bag = bot->GetBagByPos(bagSlot))
+                for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
+                    if (bag->GetItemByPos(uint8(slot)))
+                        bot->DestroyItem(bagSlot, uint8(slot), true);
+        for (uint8 bagSlot = BANK_SLOT_BAG_START; bagSlot < BANK_SLOT_BAG_END; ++bagSlot)
+            if (Bag* bag = bot->GetBagByPos(bagSlot))
+                for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
+                    if (bag->GetItemByPos(uint8(slot)))
+                        bot->DestroyItem(bagSlot, uint8(slot), true);
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < BANK_SLOT_BAG_END; ++slot)
+            if (bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                bot->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+        for (uint8 slot = KEYRING_SLOT_START; slot < CURRENCYTOKEN_SLOT_END; ++slot)
+            if (bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                bot->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+        bot->SetMoney(0);
+
+        bot->ResetTalents(true);
+        std::vector<uint32> knownSpells;
+        for (auto const& [spellId, playerSpell] : bot->GetSpellMap())
+            if (playerSpell.state != PLAYERSPELL_REMOVED)
+                knownSpells.push_back(spellId);
+        for (uint32 spellId : knownSpells)
+            bot->RemoveSpell(spellId, false, false);
+        bot->GetSpellHistory()->ResetAllCooldowns();
+
+        bot->SetSkill(SKILL_HERBALISM, 0, 0, 0);
+        bot->SetSkill(SKILL_MINING, 0, 0, 0);
+        bot->SetSkill(SKILL_SKINNING, 0, 0, 0);
+
+        bot->GiveLevel(1);
+        bot->SetUInt32Value(PLAYER_XP, 0);
+        bot->LearnDefaultSkills();
+        bot->LearnCustomSpells();
+        bot->SetFullHealth();
+        if (bot->GetMaxPower(POWER_MANA))
+            bot->SetPower(POWER_MANA, bot->GetMaxPower(POWER_MANA));
+
+        if (PlayerInfo const* info = sObjectMgr->GetPlayerInfo(bot->GetRace(), bot->GetClass()))
+        {
+            WorldLocation const home(info->mapId, info->positionX, info->positionY, info->positionZ, info->orientation);
+            bot->SetHomebind(home, info->areaId);
+            bot->TeleportTo(home);
+        }
+        bot->SaveToDB();
+        TC_LOG_INFO("playerbots.pve", "Bot {} was reset to level 1 and sent home.", bot->GetName());
+    }
+
+    return resetCount;
 }
 
 std::string PveManager::BuildStatusLine(Player const* bot)

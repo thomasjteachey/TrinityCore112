@@ -110,6 +110,11 @@ public:
     static bool RequestCompanionSummon(Player* summoner, std::string const& characterName, std::string& statusMessage);
     static bool RequestCompanionDismiss(Player* requester, Player* bot, std::string& statusMessage);
 
+    // .playerbot pve reset [percent]: strips that share of the online
+    // managed bots (companions excluded) back to freshly created level-1
+    // characters and ports them to their racial starting spots.
+    static uint32 ResetBotsToLevelOne(uint8 percent);
+
     // Config-gated trainer-spell catch-up whenever a managed bot levels.
     static void OnManagedBotLevelChanged(Player* player, uint8 oldLevel);
 
