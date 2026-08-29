@@ -956,7 +956,7 @@ uint32 CountConsumableUnits(Player* bot, bool drink)
 }
 
 // Ammo the bot's ranged weapon feeds on, or 0 when none is needed.
-uint32 RequiredAmmoSubclass(Player* bot)
+uint32 RequiredAmmoSubclass(Player const* bot)
 {
     Item* ranged = bot->GetWeaponForAttack(RANGED_ATTACK, true);
     if (!ranged || !ranged->GetTemplate())
@@ -1828,6 +1828,19 @@ bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTempla
         return !incumbent || (incumbent->Class == ITEM_CLASS_CONTAINER &&
             candidate->ContainerSlots > incumbent->ContainerSlots);
 
+    // Quivers and ammo pouches: only the type feeding the equipped ranged
+    // weapon, and bigger only.
+    if (candidate->Class == ITEM_CLASS_QUIVER)
+    {
+        uint32 const ammoSubclass = RequiredAmmoSubclass(bot);
+        uint32 const wantedSubclass = ammoSubclass == ITEM_SUBCLASS_ARROW ? uint32(ITEM_SUBCLASS_QUIVER)
+            : (ammoSubclass == ITEM_SUBCLASS_BULLET ? uint32(ITEM_SUBCLASS_AMMO_POUCH) : 0);
+        if (!wantedSubclass || candidate->SubClass != wantedSubclass)
+            return false;
+        return !incumbent || (incumbent->Class == ITEM_CLASS_QUIVER &&
+            candidate->ContainerSlots > incumbent->ContainerSlots);
+    }
+
     // A shield user never benches an equipped shield for a non-shield.
     if (incumbent && slot == EQUIPMENT_SLOT_OFFHAND &&
         incumbent->Class == ITEM_CLASS_ARMOR && incumbent->SubClass == ITEM_SUBCLASS_ARMOR_SHIELD &&
@@ -1909,7 +1922,7 @@ void TryEquipUpgrades(Player* bot)
 
         ItemTemplate const* proto = item->GetTemplate();
         if (!proto || (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR &&
-            proto->Class != ITEM_CLASS_CONTAINER))
+            proto->Class != ITEM_CLASS_CONTAINER && proto->Class != ITEM_CLASS_QUIVER))
             continue;
 
         // Never bench an equipped off hand (shield!) for a two-hander: the
@@ -2330,6 +2343,24 @@ void EnsureFirstLoginKit(Player* bot, PveBotState& state, playerbot::PveConfig c
             }
         }
     }
+
+    // A hunter kit is unusable dry: guarantee a starter stack of the ammo
+    // its ranged weapon feeds on (the weapon just arrived with the outfit),
+    // and load it. Idempotent - once ammo is loaded this never fires again,
+    // so it doubles as the fleet's one-time 200-ammo grant.
+    if (bot->GetClass() == CLASS_HUNTER)
+        if (uint32 const ammoSubclass = RequiredAmmoSubclass(bot))
+        {
+            uint32 const ammoId = ammoSubclass == ITEM_SUBCLASS_ARROW ? 2512u : 2516u;
+            if (!bot->GetItemCount(ammoId) && !bot->GetUInt32Value(PLAYER_AMMO_ID))
+            {
+                ItemPosCountVec ammoDest;
+                if (bot->CanStoreNewItem(NULL_BAG, NULL_SLOT, ammoDest, ammoId, 200) == EQUIP_ERR_OK)
+                    bot->StoreNewItem(ammoDest, ammoId, true);
+            }
+            if (!bot->GetUInt32Value(PLAYER_AMMO_ID) && bot->GetItemCount(ammoId))
+                bot->SetAmmo(ammoId);
+        }
 
     if (learned || outfitGranted)
         TC_LOG_INFO("playerbots.pve", "Bot {} first-login kit: {} trainer spells{}.",
