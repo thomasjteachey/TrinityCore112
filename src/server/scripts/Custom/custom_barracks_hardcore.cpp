@@ -41,6 +41,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "Player.h"
+#include "ScriptedCreature.h"
 #include "ScriptedGossip.h"
 #include "SharedDefines.h"
 #include "Util.h"
@@ -251,9 +252,14 @@ public:
             amount *= s_rewardMultiplier;
     }
 
-    void OnLootMoney(Player* player, uint32 money) override
+    void OnMoneyChanged(Player* player, int32& amount) override
     {
-        if (!s_enabled || s_rewardMultiplier < 2 || !money)
+        if (!s_enabled || s_rewardMultiplier < 2 || amount <= 0)
+            return;
+
+        // Loot pickups only: the loot window is open while money is looted,
+        // which keeps vendor sales, mail and the auction house at face value.
+        if (!player->GetLootGUID())
             return;
 
         WorldSession const* session = player->GetSession();
@@ -261,7 +267,7 @@ public:
             return;
 
         if (IsFfaArmed(player))
-            player->ModifyMoney(int32(money) * int32(s_rewardMultiplier - 1));
+            amount += amount * int32(s_rewardMultiplier - 1);
     }
 
     void OnPVPKill(Player* /*killer*/, Player* victim) override
@@ -275,58 +281,67 @@ public:
     }
 };
 
-// The town flagger: one gossip NPC entry, spawned in the capitals.
+// The town flagger: one gossip NPC entry, spawned in the capitals. Gossip
+// lives on the CreatureAI in this core, not on CreatureScript.
 class npc_ffa_flagger : public CreatureScript
 {
 public:
     npc_ffa_flagger() : CreatureScript("npc_ffa_flagger") {}
 
-    bool OnGossipHello(Player* player, Creature* creature) override
+    struct npc_ffa_flaggerAI : public ScriptedAI
     {
-        if (!s_enabled)
+        explicit npc_ffa_flaggerAI(Creature* creature) : ScriptedAI(creature) {}
+
+        bool OnGossipHello(Player* player) override
         {
-            SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, creature->GetGUID());
+            if (!s_enabled)
+            {
+                SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me->GetGUID());
+                return true;
+            }
+
+            // Greenhorns are turned away: the mark opens at level 10.
+            if (player->GetLevel() < 10)
+            {
+                me->Whisper("Come back when you have seen your tenth season. The mark is not for greenhorns.", LANG_UNIVERSAL, player);
+                SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me->GetGUID());
+                return true;
+            }
+
+            if (IsOptedIn(player->GetGUID().GetCounter()))
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Remove my free-for-all flag.", GOSSIP_SENDER_MAIN, 2);
+            else
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Flag me for free-for-all PvP. (Double experience and gold while armed!)", GOSSIP_SENDER_MAIN, 1);
+            SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me->GetGUID());
             return true;
         }
 
-        // Greenhorns are turned away: the mark opens at level 10.
-        if (player->GetLevel() < 10)
+        bool OnGossipSelect(Player* player, uint32 /*menuId*/, uint32 gossipListId) override
         {
-            creature->Whisper("Come back when you have seen your tenth season. The mark is not for greenhorns.", LANG_UNIVERSAL, player);
-            SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, creature->GetGUID());
+            uint32 const action = player->PlayerTalkClass->GetGossipOptionAction(gossipListId);
+            CloseGossipMenuFor(player);
+            if (!s_enabled || player->GetLevel() < 10)
+                return true;
+
+            uint32 const guidLow = player->GetGUID().GetCounter();
+            if (action == 1)
+            {
+                SetOptedIn(guidLow, true);
+                me->Whisper("You are marked for free-for-all combat. The flag arms outside the safe zones - fight well, and profit doubly.", LANG_UNIVERSAL, player);
+            }
+            else
+            {
+                SetOptedIn(guidLow, false);
+                me->Whisper("Your mark is lifted. The wilds are merely dangerous again.", LANG_UNIVERSAL, player);
+            }
+            ApplyFfaState(player);
             return true;
         }
+    };
 
-        if (IsOptedIn(player->GetGUID().GetCounter()))
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Remove my free-for-all flag.", GOSSIP_SENDER_MAIN, 2);
-        else
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Flag me for free-for-all PvP. (Double experience and gold while armed!)", GOSSIP_SENDER_MAIN, 1);
-        SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, creature->GetGUID());
-        return true;
-    }
-
-    bool OnGossipSelect(Player* player, Creature* creature, uint32 /*sender*/, uint32 action) override
+    CreatureAI* GetAI(Creature* creature) const override
     {
-        CloseGossipMenuFor(player);
-        if (!s_enabled)
-            return true;
-
-        if (player->GetLevel() < 10)
-            return true;
-
-        uint32 const guidLow = player->GetGUID().GetCounter();
-        if (action == 1)
-        {
-            SetOptedIn(guidLow, true);
-            creature->Whisper("You are marked for free-for-all combat. The flag arms outside the safe zones - fight well, and profit doubly.", LANG_UNIVERSAL, player);
-        }
-        else
-        {
-            SetOptedIn(guidLow, false);
-            creature->Whisper("Your mark is lifted. The wilds are merely dangerous again.", LANG_UNIVERSAL, player);
-        }
-        ApplyFfaState(player);
-        return true;
+        return new npc_ffa_flaggerAI(creature);
     }
 };
 

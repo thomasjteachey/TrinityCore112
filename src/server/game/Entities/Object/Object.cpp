@@ -3059,6 +3059,9 @@ namespace
 }
 
 // function based on function Unit::CanAttack from 13850 client
+#include "Configuration/Config.h"
+#include <sstream>
+
 namespace
 {
     // Managed playerbot accounts (Playerbot.RandomPopulation.BotAccountIds
