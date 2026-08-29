@@ -150,6 +150,13 @@ struct PveBotState
     // itself is lethal (graveyard camped by higher-level mobs).
     uint8 recentDeathCount = 0;
     PveTimePoint recentDeathWindowStart{};
+    // Class-quest travel target (giver or ender) for the world executor.
+    PveTimePoint nextClassQuestScanAt{};
+    uint32 classQuestId = 0;
+    uint16 classQuestMapId = 0;
+    float classQuestX = 0.0f;
+    float classQuestY = 0.0f;
+    float classQuestZ = 0.0f;
     // Walked journey (relocation/town run on foot). Fallback kind decides
     // what happens on timeout or stuck: the old teleport.
     // walkFallbackUntil: after a failed walk, executors skip the walk branch
@@ -243,6 +250,8 @@ std::unordered_set<uint64> g_PendingGrindRelocations;
 // repairs happen through the normal errand, and the dry-scan relocation
 // afterwards sends them back to a grind spot.
 std::unordered_set<uint64> g_PendingSupplyRuns;
+// Travel toward a class-quest giver or ender (state carries the target).
+std::unordered_set<uint64> g_PendingClassQuestTravels;
 // Mail collection and auction shopping mutate world-thread-only structures
 // (Player::m_mail, AuctionHouseObject) - executed from OnWorldUpdate.
 std::unordered_set<uint64> g_PendingMailCollections;
@@ -592,7 +601,9 @@ void CancelJourneyWithFallback(Player* bot, PveBotState& state)
 
     // The walk failed (timeout or stuck); the old teleport still delivers.
     std::lock_guard<std::mutex> guard(g_PvePendingLock);
-    if (fallbackKind == 1)
+    if (fallbackKind == 3)
+        g_PendingClassQuestTravels.insert(bot->GetGUID().GetRawValue());
+    else if (fallbackKind == 1)
         g_PendingGrindRelocations.insert(bot->GetGUID().GetRawValue());
     else if (fallbackKind == 2)
         g_PendingSupplyRuns.insert(bot->GetGUID().GetRawValue());
@@ -812,6 +823,35 @@ uint32 RequiredAmmoSubclass(Player* bot)
     }
 }
 
+// True when this vendor can actually satisfy the bot's SUPPLY need - a
+// mount vendor next to the grind spot is nearest but useless, and picking
+// it pinballs the errand loop between merchants forever.
+bool VendorStocksNeededSupplies(Player* bot, Creature* vendor)
+{
+    VendorItemData const* vendorItems = vendor->GetVendorItems();
+    if (!vendorItems)
+        return false;
+
+    bool const wantsDrink = bot->GetMaxPower(POWER_MANA) > 0;
+    uint32 const ammoSubclass = RequiredAmmoSubclass(bot);
+    for (uint8 slot = 0; slot < vendorItems->GetItemCount(); ++slot)
+    {
+        VendorItem const* vendorItem = vendorItems->GetItem(slot);
+        if (!vendorItem || vendorItem->ExtendedCost)
+            continue;
+
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(vendorItem->item);
+        if (!proto)
+            continue;
+
+        if (IsFoodTemplate(proto) || (wantsDrink && IsDrinkTemplate(proto)))
+            return true;
+        if (ammoSubclass && proto->Class == ITEM_CLASS_PROJECTILE && proto->SubClass == ammoSubclass)
+            return true;
+    }
+    return false;
+}
+
 // Buy the best level-appropriate food (and water for mana users, and ammo
 // for ranged users) this vendor sells. Money is checked by the purchase
 // itself; a broke bot just fails quietly and grinds more coin.
@@ -824,10 +864,16 @@ void TryBuySupplies(Player* bot, Creature* vendor)
     bool const wantsDrink = bot->GetMaxPower(POWER_MANA) > 0;
     uint32 const ammoSubclass = RequiredAmmoSubclass(bot);
 
-    int32 bestFoodSlot = -1, bestDrinkSlot = -1, bestAmmoSlot = -1;
+    bool hasEmptyBagSlot = false;
+    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+        if (!bot->GetBagByPos(bagSlot))
+            hasEmptyBagSlot = true;
+
+    int32 bestFoodSlot = -1, bestDrinkSlot = -1, bestAmmoSlot = -1, bestBagSlot = -1;
     ItemTemplate const* bestFood = nullptr;
     ItemTemplate const* bestDrink = nullptr;
     ItemTemplate const* bestAmmo = nullptr;
+    ItemTemplate const* bestBag = nullptr;
     for (uint8 slot = 0; slot < vendorItems->GetItemCount(); ++slot)
     {
         VendorItem const* vendorItem = vendorItems->GetItem(slot);
@@ -853,6 +899,12 @@ void TryBuySupplies(Player* bot, Creature* vendor)
         {
             bestAmmo = proto;
             bestAmmoSlot = slot;
+        }
+        else if (hasEmptyBagSlot && proto->Class == ITEM_CLASS_CONTAINER && proto->SubClass == ITEM_SUBCLASS_CONTAINER &&
+            (!bestBag || proto->ContainerSlots > bestBag->ContainerSlots))
+        {
+            bestBag = proto;
+            bestBagSlot = slot;
         }
     }
 
@@ -882,6 +934,9 @@ void TryBuySupplies(Player* bot, Creature* vendor)
                 bot->SetAmmo(bestAmmo->ItemId);
         }
     }
+    // One bag per visit fills empty bag slots; the equip pass mounts it.
+    if (bestBag)
+        bot->BuyItemFromVendorSlot(vendor->GetGUID(), uint32(bestBagSlot), bestBag->ItemId, 1, NULL_BAG, NULL_SLOT);
 }
 
 bool IsQuestRequiredItem(Player* bot, uint32 itemId)
@@ -1251,7 +1306,13 @@ void StartErrandIfNeeded(Player* bot, PveBotState& state, playerbot::PveConfig c
         }
 
         if (needVendor && npc->IsVendor())
-            return beginErrand(npc, PveErrandKind::Vendor);
+        {
+            // A pure supplies need demands a vendor that stocks them; junk
+            // selling and repair accept any merchant.
+            bool const otherNeeds = CountFreeBagSlots(bot) < 4 || needRepair;
+            if (otherNeeds || !needSupplies || VendorStocksNeededSupplies(bot, npc))
+                return beginErrand(npc, PveErrandKind::Vendor);
+        }
     }
 
     // NPCs around, but no usable vendor among them (quest camp, cooldowns):
@@ -1611,6 +1672,11 @@ bool TreatsWeaponAsStatStick(Player const* bot)
 // equipment (shields, dagger mainhands) never gets benched off-spec.
 bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTemplate const* incumbent, uint8 slot)
 {
+    // Bags compare by slot count, nothing else.
+    if (candidate->Class == ITEM_CLASS_CONTAINER)
+        return !incumbent || (incumbent->Class == ITEM_CLASS_CONTAINER &&
+            candidate->ContainerSlots > incumbent->ContainerSlots);
+
     // A shield user never benches an equipped shield for a non-shield.
     if (incumbent && slot == EQUIPMENT_SLOT_OFFHAND &&
         incumbent->Class == ITEM_CLASS_ARMOR && incumbent->SubClass == ITEM_SUBCLASS_ARMOR_SHIELD &&
@@ -1691,7 +1757,8 @@ void TryEquipUpgrades(Player* bot)
             continue;
 
         ItemTemplate const* proto = item->GetTemplate();
-        if (!proto || (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR))
+        if (!proto || (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR &&
+            proto->Class != ITEM_CLASS_CONTAINER))
             continue;
 
         // Never bench an equipped off hand (shield!) for a two-hander: the
@@ -2285,6 +2352,17 @@ void BuildVendorSpotCacheOnce()
         if (!proto || !(proto->npcflag & UNIT_NPC_FLAG_VENDOR))
             continue;
 
+        // Supply runs exist to buy food and water: only vendors that stock
+        // them qualify as destinations (mount and tabard vendors do not).
+        bool stocksConsumables = false;
+        if (VendorItemData const* vendorList = sObjectMgr->GetNpcVendorItemList(data.id))
+            for (uint8 slot = 0; slot < vendorList->GetItemCount() && !stocksConsumables; ++slot)
+                if (VendorItem const* vendorItem = vendorList->GetItem(slot); vendorItem && !vendorItem->ExtendedCost)
+                    if (ItemTemplate const* itemProto = sObjectMgr->GetItemTemplate(vendorItem->item))
+                        stocksConsumables = IsFoodTemplate(itemProto) || IsDrinkTemplate(itemProto);
+        if (!stocksConsumables)
+            continue;
+
         // Same zone screen as the grind clusters: no supply runs into the
         // DK intro area or GM Island.
         if (Map* map = sMapMgr->FindMap(data.mapId, 0))
@@ -2297,6 +2375,171 @@ void BuildVendorSpotCacheOnce()
     }
 
     TC_LOG_INFO("playerbots.pve", "Vendor spot cache built: {} vendors.", g_VendorSpots.size());
+}
+
+// ---------------------------------------------------------------------------
+// Class quests: quests restricted to a single class exist to hand out the
+// class's kit (warlock demons, hunter taming, druid forms, warrior stances,
+// shaman totems), and none of it is trainer-taught. Bots seek the givers
+// out across the world via the travel ladder, the normal errand accepts
+// once nearby, and the ender gets the same treatment when objectives are
+// done. Level is no obstacle beyond the quest's own minimum.
+// ---------------------------------------------------------------------------
+
+struct ClassQuestSpot
+{
+    uint16 mapId;
+    float x, y, z;
+};
+
+struct ClassQuestEntry
+{
+    uint32 questId = 0;
+    uint32 questLevel = 0;
+    std::vector<ClassQuestSpot> giverSpots;
+    std::vector<ClassQuestSpot> enderSpots;
+};
+
+std::mutex g_ClassQuestLock;
+bool g_ClassQuestsBuilt = false;
+std::unordered_map<uint8, std::vector<ClassQuestEntry>> g_ClassQuestsByClass;
+
+void BuildClassQuestCacheOnce()
+{
+    std::lock_guard<std::mutex> guard(g_ClassQuestLock);
+    if (g_ClassQuestsBuilt)
+        return;
+    g_ClassQuestsBuilt = true;
+
+    std::unordered_map<uint32, std::pair<uint8, size_t>> entryIndexByQuest;
+    for (auto const& questPair : sObjectMgr->GetQuestTemplates())
+    {
+        Quest const* quest = &questPair.second;
+        uint32 const classes = quest->GetRequiredClasses();
+        if (!classes)
+            continue;
+
+        uint8 questClass = 0;
+        for (uint8 cls = CLASS_WARRIOR; cls < MAX_CLASSES; ++cls)
+            if (classes == (1u << (cls - 1)))
+                questClass = cls;
+        if (!questClass)
+            continue;
+
+        auto& list = g_ClassQuestsByClass[questClass];
+        entryIndexByQuest[questPair.first] = { questClass, list.size() };
+        ClassQuestEntry entry;
+        entry.questId = questPair.first;
+        entry.questLevel = uint32(std::max<int32>(1, quest->GetQuestLevel()));
+        list.push_back(entry);
+    }
+
+    // Reverse the creature quest relations onto the class-quest set.
+    std::unordered_map<uint32, std::vector<std::pair<uint8, size_t>>> giverQuestsByCreature;
+    std::unordered_map<uint32, std::vector<std::pair<uint8, size_t>>> enderQuestsByCreature;
+    for (auto const& [creatureEntry, questId] : *sObjectMgr->GetCreatureQuestRelationMapHACK())
+        if (auto itr = entryIndexByQuest.find(questId); itr != entryIndexByQuest.end())
+            giverQuestsByCreature[creatureEntry].push_back(itr->second);
+    for (auto const& creaturePair : sObjectMgr->GetCreatureTemplates())
+        for (uint32 questId : sObjectMgr->GetCreatureQuestInvolvedRelations(creaturePair.first))
+            if (auto itr = entryIndexByQuest.find(questId); itr != entryIndexByQuest.end())
+                enderQuestsByCreature[creaturePair.first].push_back(itr->second);
+
+    for (auto const& [spawnId, data] : sObjectMgr->GetAllCreatureData())
+    {
+        auto attach = [&](std::unordered_map<uint32, std::vector<std::pair<uint8, size_t>>> const& byCreature, bool giver)
+        {
+            auto itr = byCreature.find(data.id);
+            if (itr == byCreature.end())
+                return;
+            for (auto const& [cls, index] : itr->second)
+            {
+                ClassQuestEntry& entry = g_ClassQuestsByClass[cls][index];
+                (giver ? entry.giverSpots : entry.enderSpots).push_back({ uint16(data.mapId),
+                    data.spawnPoint.GetPositionX(), data.spawnPoint.GetPositionY(), data.spawnPoint.GetPositionZ() });
+            }
+        };
+        attach(giverQuestsByCreature, true);
+        attach(enderQuestsByCreature, false);
+    }
+
+    uint32 total = 0;
+    for (auto& [cls, list] : g_ClassQuestsByClass)
+    {
+        std::sort(list.begin(), list.end(), [](ClassQuestEntry const& left, ClassQuestEntry const& right)
+        {
+            return left.questLevel < right.questLevel;
+        });
+        total += uint32(list.size());
+    }
+    TC_LOG_INFO("playerbots.pve", "Class quest cache built: {} single-class quests.", total);
+}
+
+// Map thread (under the per-map decision serialization). Picks the
+// lowest-level actionable class quest and stores the travel target; the
+// world executor moves the bot, the normal errand scan does the talking.
+void TryStartClassQuestTravel(Player* bot, PveBotState& state)
+{
+    BuildClassQuestCacheOnce();
+
+    std::vector<ClassQuestEntry> const* list = nullptr;
+    {
+        std::lock_guard<std::mutex> guard(g_ClassQuestLock);
+        auto itr = g_ClassQuestsByClass.find(bot->GetClass());
+        if (itr == g_ClassQuestsByClass.end())
+            return;
+        list = &itr->second; // immutable once built
+    }
+
+    for (ClassQuestEntry const& entry : *list)
+    {
+        if (bot->GetQuestRewardStatus(entry.questId))
+            continue;
+
+        Quest const* quest = sObjectMgr->GetQuestTemplate(entry.questId);
+        if (!quest)
+            continue;
+
+        QuestStatus const status = bot->GetQuestStatus(entry.questId);
+        std::vector<ClassQuestSpot> const* spots = nullptr;
+        if (status == QUEST_STATUS_COMPLETE)
+            spots = &entry.enderSpots;
+        else if (status == QUEST_STATUS_NONE && bot->CanTakeQuest(quest, false) && bot->CanAddQuest(quest, false))
+            spots = &entry.giverSpots;
+        else
+            continue;
+        if (spots->empty())
+            continue;
+
+        ClassQuestSpot const* best = nullptr;
+        float bestDistance = 0.0f;
+        for (ClassQuestSpot const& spot : *spots)
+        {
+            float const distance = spot.mapId == bot->GetMapId()
+                ? bot->GetDistance(spot.x, spot.y, spot.z)
+                : 1000000.0f + float(spot.mapId);
+            if (!best || distance < bestDistance)
+            {
+                best = &spot;
+                bestDistance = distance;
+            }
+        }
+
+        // Close enough that the normal errand scan takes over.
+        if (best->mapId == bot->GetMapId() && bestDistance < 150.0f)
+            return;
+
+        state.classQuestId = entry.questId;
+        state.classQuestMapId = best->mapId;
+        state.classQuestX = best->x;
+        state.classQuestY = best->y;
+        state.classQuestZ = best->z;
+        TC_LOG_INFO("playerbots.pve", "Bot {} traveling for class quest {} ({}).",
+            bot->GetName(), entry.questId, status == QUEST_STATUS_COMPLETE ? "turn-in" : "pickup");
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        g_PendingClassQuestTravels.insert(bot->GetGUID().GetRawValue());
+        return;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2893,6 +3136,75 @@ void ProcessPendingSupplyRuns()
             nearest->z + 0.5f, frand(0.0f, 6.28f));
         TC_LOG_INFO("playerbots.pve", "Supply run: teleported {} to a vendor cluster on map {}.",
             bot->GetName(), nearest->mapId);
+    }
+}
+
+// World thread. Move a bot toward its class-quest giver or ender via the
+// usual ladder: walk, fly, then vanish-guarded teleport.
+void ProcessPendingClassQuestTravels()
+{
+    std::unordered_set<uint64> drained;
+    {
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        drained.swap(g_PendingClassQuestTravels);
+    }
+
+    for (uint64 botRawGuid : drained)
+    {
+        Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid));
+        if (!bot || !bot->IsInWorld() || !bot->IsAlive() || bot->InBattleground() ||
+            bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
+            continue;
+
+        uint16 mapId;
+        float x, y, z;
+        bool walkAllowed;
+        {
+            PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+            if (!state.classQuestId)
+                continue;
+            mapId = state.classQuestMapId;
+            x = state.classQuestX;
+            y = state.classQuestY;
+            z = state.classQuestZ;
+            walkAllowed = PveClock::now() >= state.walkFallbackUntil;
+        }
+
+        if (walkAllowed && g_PveConfig.travelWalkMaxDistance > 0.0f && mapId == bot->GetMapId())
+        {
+            float const walkDistance = bot->GetDistance(x, y, z);
+            if (walkDistance <= g_PveConfig.travelWalkMaxDistance)
+            {
+                playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), false);
+                PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+                state.engaged = false;
+                StartWalkedJourney(state, mapId, x, y, z, 3, walkDistance);
+                TC_LOG_INFO("playerbots.pve", "Bot {} walking {:.0f}y to a class quest.",
+                    bot->GetName(), walkDistance);
+                continue;
+            }
+        }
+
+        if (TryTaxiTravel(bot, botRawGuid, mapId, x, y, z, 3))
+            continue;
+
+        // Only the teleport arm hides from real players.
+        if (HasHumanPlayerNearby(bot, 150.0f))
+            continue;
+
+        Map* map = sMapMgr->FindMap(mapId, 0);
+        if (!map || HasHumanPlayerNearPosition(map, x, y, 150.0f))
+            continue;
+
+        playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), false);
+        {
+            PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+            state.engaged = false;
+        }
+        if (MotionMaster* motionMaster = bot->GetMotionMaster())
+            motionMaster->Clear();
+        bot->TeleportTo(mapId, x + frand(-3.0f, 3.0f), y + frand(-3.0f, 3.0f), z + 0.5f, frand(0.0f, 6.28f));
+        TC_LOG_INFO("playerbots.pve", "Class quest travel: teleported {} to map {}.", bot->GetName(), mapId);
     }
 }
 
@@ -3708,6 +4020,14 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         MaybeFieldRepair(bot, state, cfg);
     }
 
+    // Class quests are sought out across the world, not just stumbled upon.
+    if (cfg.questsEnabled && state.masterGuid.IsEmpty() && !state.engaged && !bot->IsInCombat() &&
+        state.errandKind == PveErrandKind::None && !state.journeyActive && now >= state.nextClassQuestScanAt)
+    {
+        state.nextClassQuestScanAt = now + std::chrono::minutes(2);
+        TryStartClassQuestTravel(bot, state);
+    }
+
     if (cfg.equipUpgradesEnabled && !bot->IsInCombat() && now >= state.nextEquipCheckAt)
     {
         state.nextEquipCheckAt = now + std::chrono::seconds(15);
@@ -4057,6 +4377,8 @@ void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
     if (g_PveConfig.auctionBuyEnabled)
         ProcessPendingAuctionShopping();
     ProcessPendingSupplyRuns();
+    if (g_PveConfig.questsEnabled)
+        ProcessPendingClassQuestTravels();
     if (g_PveConfig.relocateEnabled)
         ProcessPendingGrindRelocations();
 }
