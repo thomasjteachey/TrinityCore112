@@ -3234,9 +3234,11 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
             if (!attacker || !attacker->IsAlive() || !bot->IsValidAttackTarget(attacker))
                 continue;
 
-            if (IsRecentBadTarget(state, attacker->GetGUID()))
-                continue;
-
+            // No bad-target screen here: that list stops re-PICKING
+            // evade-flickery mobs, but a unit actively hitting the bot is
+            // present and reachable by definition - and a genuinely evading
+            // mob is not in getAttackers() at all. Honoring the list here
+            // left bots standing in place eating hits for its full 60s.
             float const distance = bot->GetDistance(attacker);
             if (!nearestAttacker || distance < nearestAttackerDistance)
             {
@@ -3246,7 +3248,12 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         }
 
         if (nearestAttacker)
+        {
             target = nearestAttacker;
+            // Fighting it voids any stale bad-listing, or the engaged
+            // tick's own resolve would flap on the same stale entry.
+            state.recentBadTargets.erase(nearestAttacker->GetGUID().GetRawValue());
+        }
         else if (master)
             target = PickCompanionTarget(bot, state, master, cfg);
         else if (cfg.grindEnabled && state.masterGuid.IsEmpty() && !IsRestingNow(bot, state) &&
