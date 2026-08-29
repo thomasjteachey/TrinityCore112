@@ -236,11 +236,13 @@ namespace BarracksHardcore
     // swing back - no naked death spiral, for players or bots alike.
     // ---------------------------------------------------------------------
 
-    constexpr std::array<uint8, 10> kKitSlots = { {
+    // Main hand before off hand, so a two-hander is settled before anything
+    // tries to fill the slot it occupies.
+    constexpr std::array<uint8, 12> kKitSlots = { {
         EQUIPMENT_SLOT_HEAD, EQUIPMENT_SLOT_SHOULDERS, EQUIPMENT_SLOT_CHEST,
         EQUIPMENT_SLOT_WAIST, EQUIPMENT_SLOT_LEGS, EQUIPMENT_SLOT_FEET,
         EQUIPMENT_SLOT_WRISTS, EQUIPMENT_SLOT_HANDS, EQUIPMENT_SLOT_BACK,
-        EQUIPMENT_SLOT_MAINHAND
+        EQUIPMENT_SLOT_MAINHAND, EQUIPMENT_SLOT_OFFHAND, EQUIPMENT_SLOT_RANGED
     } };
 
     std::mutex s_whiteKitLock;
@@ -329,6 +331,10 @@ namespace BarracksHardcore
             case EQUIPMENT_SLOT_HANDS:     return { INVTYPE_HANDS };
             case EQUIPMENT_SLOT_BACK:      return { INVTYPE_CLOAK };
             case EQUIPMENT_SLOT_MAINHAND:  return { INVTYPE_WEAPON, INVTYPE_WEAPONMAINHAND, INVTYPE_2HWEAPON };
+            case EQUIPMENT_SLOT_OFFHAND:   return { INVTYPE_SHIELD, INVTYPE_WEAPONOFFHAND, INVTYPE_HOLDABLE };
+            // A hunter without a bow is not a hunter; casters get their wand
+            // and the hybrids their relic out of the same slot.
+            case EQUIPMENT_SLOT_RANGED:    return { INVTYPE_RANGED, INVTYPE_RANGEDRIGHT, INVTYPE_THROWN, INVTYPE_RELIC };
             default:                       return {};
         }
     }
@@ -377,8 +383,13 @@ namespace BarracksHardcore
                         continue;
 
                     // Armor proficiency, decided explicitly. Cloaks are cloth
-                    // for every class, so they are exempt.
-                    if (proto->Class == ITEM_CLASS_ARMOR && proto->InventoryType != INVTYPE_CLOAK &&
+                    // for every class; shields and relics (libram, idol,
+                    // totem) are their own subclasses and are gated by the
+                    // proficiency check below instead.
+                    if (proto->Class == ITEM_CLASS_ARMOR &&
+                        proto->InventoryType != INVTYPE_CLOAK &&
+                        proto->InventoryType != INVTYPE_SHIELD &&
+                        proto->InventoryType != INVTYPE_RELIC &&
                         proto->SubClass != wantedArmorSubclass)
                         continue;
 
@@ -426,10 +437,38 @@ namespace BarracksHardcore
                 ++granted;
         }
 
+        // A ranged weapon with nothing to fire is a stick: whoever ends up
+        // holding a bow, crossbow or gun gets a basic quiver's worth loaded.
+        // Thrown weapons are their own ammunition and wands need none.
+        if (Item const* ranged = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_RANGED))
+        {
+            if (ItemTemplate const* rangedProto = ranged->GetTemplate())
+            {
+                uint32 ammoId = 0;
+                if (rangedProto->SubClass == ITEM_SUBCLASS_WEAPON_BOW ||
+                    rangedProto->SubClass == ITEM_SUBCLASS_WEAPON_CROSSBOW)
+                    ammoId = 2512; // Rough Arrow
+                else if (rangedProto->SubClass == ITEM_SUBCLASS_WEAPON_GUN)
+                    ammoId = 2516; // Light Shot
+
+                if (ammoId && !player->GetItemCount(ammoId) && !player->GetUInt32Value(PLAYER_AMMO_ID))
+                {
+                    ItemPosCountVec ammoDest;
+                    if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, ammoDest, ammoId, 200) == EQUIP_ERR_OK)
+                    {
+                        player->StoreNewItem(ammoDest, ammoId, true);
+                        ++granted;
+                    }
+                }
+                if (ammoId && player->GetItemCount(ammoId) && !player->GetUInt32Value(PLAYER_AMMO_ID))
+                    player->SetAmmo(ammoId);
+            }
+        }
+
         if (granted)
         {
             player->SaveToDB(false);
-            TC_LOG_INFO("scripts", "BarracksHardcore: issued {} pieces of white field kit to {}.",
+            TC_LOG_INFO("playerbots.hardcore", "Issued {} pieces of white field kit to {}.",
                 granted, player->GetName());
         }
     }
