@@ -3668,23 +3668,21 @@ void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
     if (!engineActedThisTick && !bot->HasUnitState(UNIT_STATE_CASTING) && !bot->IsWithinMeleeRange(victim))
         playerbot::PvpClassActions::IssueFollowMovement(bot, victim, 1.0f);
 
-    // Melee swings demand the 120-degree arc (Player::Update just re-arms
-    // the attack timer outside it) and nothing maintains a stopped bot's
-    // facing: real players re-face client-side, bots have no client, and
-    // the cast-time fixups use the wider 180-degree spell arc and only run
-    // when a cast actually executes. A victim that sidesteps into the
-    // 60-120 degree band silently blocks every auto-attack - no rage, no
-    // dodges, and the whole rotation starves behind the dead swing timer.
-    if (bot->IsWithinMeleeRange(victim) && !bot->HasUnitState(UNIT_STATE_CASTING) &&
-        !bot->HasInArc(2.0f * float(M_PI) / 3.0f, victim))
+    // Track the victim continuously, like a real player's client does.
+    // For a socketless bot SetInFront routes through the player-style
+    // MSG_MOVE_SET_FACING broadcast (no-op below an epsilon), so calling
+    // it every tick is cheap when already aligned - and only correcting
+    // once the victim left the 120-degree SWING arc left bots visibly
+    // fighting sideways for the whole 60-100 degree band. Mid-spline only
+    // the server orientation may change (the spline owns what observers
+    // render), and there it only matters for landing swings.
+    if (!bot->HasUnitState(UNIT_STATE_CASTING))
     {
-        if (!bot->IsStopped() || (bot->movespline && !bot->movespline->Finalized()))
+        bool const splineActive = !bot->IsStopped() || (bot->movespline && !bot->movespline->Finalized());
+        if (!splineActive)
             bot->SetInFront(victim);
-        else
-        {
-            bot->SetFacingToObject(victim);
+        else if (bot->IsWithinMeleeRange(victim) && !bot->HasInArc(2.0f * float(M_PI) / 3.0f, victim))
             bot->SetInFront(victim);
-        }
     }
 
     // Fresh talentless casters match no branch of the spec-gated rotation
