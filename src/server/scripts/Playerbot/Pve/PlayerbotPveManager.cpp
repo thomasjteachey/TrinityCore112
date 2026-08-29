@@ -1445,11 +1445,144 @@ uint32 EquipProfileIndex(Player const* bot)
     return uint32(bot->GetGUID().GetCounter() % 3);
 }
 
-// Assassination and Subtlety rogues are built around daggers (Mutilate,
-// Backstab); Combat takes anything.
+// Only Assassination is built around daggers (Mutilate/Backstab); Combat
+// and Subtlety take anything and want it SLOW.
 bool PrefersDaggerMainhand(Player const* bot)
 {
-    return bot->GetClass() == CLASS_ROGUE && EquipProfileIndex(bot) != 1;
+    return bot->GetClass() == CLASS_ROGUE && EquipProfileIndex(bot) == 0;
+}
+
+// Instant attacks add flat damage to a single swing, so at comparable
+// quality the slower, harder-hitting weapon wins: average hit per swing
+// is DPS x speed, which prefers slow weapons at equal DPS by construction.
+float WeaponAverageHit(ItemTemplate const* proto)
+{
+    float total = 0.0f;
+    for (auto const& damage : proto->Damage)
+        total += (damage.DamageMin + damage.DamageMax) * 0.5f;
+    return total;
+}
+
+// Per-spec stat weights. On this classic-style server spell power, crit,
+// hit and mp5 live on items as ON_EQUIP auras, not stat fields, so the
+// scorer reads both the ItemStat array and the equip spells.
+struct GearScoreWeights
+{
+    float strength = 0.0f, agility = 0.0f, stamina = 0.0f, intellect = 0.0f, spirit = 0.0f;
+    float attackPower = 0.0f, spellDamage = 0.0f, healing = 0.0f, mp5 = 0.0f;
+    float meleeCritPct = 0.0f, spellCritPct = 0.0f, hitPct = 0.0f, spellHitPct = 0.0f;
+    float defense = 0.0f, dodge = 0.0f, critRating = 0.0f, hitRating = 0.0f;
+};
+
+GearScoreWeights GetGearWeights(Player const* bot)
+{
+    enum Archetype { MeleeStr, MeleeAgi, RangedAgi, Tank, CasterDps, Healer };
+    uint32 const profileIndex = EquipProfileIndex(bot);
+    Archetype archetype;
+    switch (bot->GetClass())
+    {
+        case CLASS_WARRIOR: archetype = profileIndex == 2 ? Tank : MeleeStr; break;
+        case CLASS_PALADIN: archetype = profileIndex == 0 ? Healer : (profileIndex == 1 ? Tank : MeleeStr); break;
+        case CLASS_HUNTER:  archetype = RangedAgi; break;
+        case CLASS_ROGUE:   archetype = MeleeAgi; break;
+        case CLASS_PRIEST:  archetype = profileIndex == 2 ? CasterDps : Healer; break;
+        case CLASS_SHAMAN:  archetype = profileIndex == 0 ? CasterDps : (profileIndex == 2 ? Healer : MeleeStr); break;
+        case CLASS_DRUID:   archetype = profileIndex == 0 ? CasterDps : (profileIndex == 2 ? Healer : MeleeAgi); break;
+        case CLASS_MAGE:
+        case CLASS_WARLOCK:
+        default:            archetype = CasterDps; break;
+    }
+
+    GearScoreWeights w;
+    switch (archetype)
+    {
+        case MeleeStr:
+            w.strength = 2.0f; w.agility = 1.0f; w.stamina = 0.8f; w.attackPower = 0.6f;
+            w.meleeCritPct = 12.0f; w.hitPct = 14.0f; w.critRating = 0.6f; w.hitRating = 0.7f;
+            break;
+        case MeleeAgi:
+            w.agility = 2.0f; w.strength = 1.0f; w.stamina = 0.8f; w.attackPower = 0.6f;
+            w.meleeCritPct = 12.0f; w.hitPct = 14.0f; w.critRating = 0.6f; w.hitRating = 0.7f;
+            break;
+        case RangedAgi:
+            w.agility = 2.0f; w.stamina = 0.8f; w.intellect = 0.3f; w.attackPower = 0.6f;
+            w.meleeCritPct = 12.0f; w.hitPct = 14.0f; w.critRating = 0.6f; w.hitRating = 0.7f;
+            break;
+        case Tank:
+            w.stamina = 2.0f; w.strength = 1.2f; w.agility = 1.0f; w.defense = 1.2f; w.dodge = 0.8f;
+            w.meleeCritPct = 6.0f; w.hitPct = 8.0f;
+            break;
+        case CasterDps:
+            w.spellDamage = 1.6f; w.intellect = 1.0f; w.stamina = 0.5f; w.spirit = 0.3f; w.mp5 = 1.5f;
+            w.spellCritPct = 12.0f; w.spellHitPct = 14.0f; w.critRating = 0.5f; w.hitRating = 0.6f;
+            break;
+        case Healer:
+            w.healing = 1.6f; w.intellect = 1.0f; w.spirit = 0.8f; w.stamina = 0.5f; w.mp5 = 2.0f;
+            w.spellCritPct = 6.0f;
+            break;
+    }
+    return w;
+}
+
+float ScoreItemForSpec(Player const* bot, ItemTemplate const* proto)
+{
+    GearScoreWeights const w = GetGearWeights(bot);
+    float score = 0.0f;
+
+    for (uint32 statIdx = 0; statIdx < MAX_ITEM_PROTO_STATS; ++statIdx)
+    {
+        float const value = float(proto->ItemStat[statIdx].ItemStatValue);
+        switch (proto->ItemStat[statIdx].ItemStatType)
+        {
+            case ITEM_MOD_STRENGTH:              score += w.strength * value; break;
+            case ITEM_MOD_AGILITY:               score += w.agility * value; break;
+            case ITEM_MOD_STAMINA:               score += w.stamina * value; break;
+            case ITEM_MOD_INTELLECT:             score += w.intellect * value; break;
+            case ITEM_MOD_SPIRIT:                score += w.spirit * value; break;
+            case ITEM_MOD_ATTACK_POWER:          score += w.attackPower * value; break;
+            case ITEM_MOD_SPELL_POWER:           score += std::max(w.spellDamage, w.healing) * value; break;
+            case ITEM_MOD_MANA_REGENERATION:     score += w.mp5 * value; break;
+            case ITEM_MOD_CRIT_RATING:           score += w.critRating * value; break;
+            case ITEM_MOD_HIT_RATING:            score += w.hitRating * value; break;
+            case ITEM_MOD_DEFENSE_SKILL_RATING:  score += w.defense * value; break;
+            case ITEM_MOD_DODGE_RATING:          score += w.dodge * value; break;
+            default: break;
+        }
+    }
+
+    for (uint8 spellIdx = 0; spellIdx < MAX_ITEM_PROTO_SPELLS; ++spellIdx)
+    {
+        if (proto->Spells[spellIdx].SpellId <= 0 ||
+            proto->Spells[spellIdx].SpellTrigger != ITEM_SPELLTRIGGER_ON_EQUIP)
+            continue;
+
+        SpellInfo const* info = sSpellMgr->GetSpellInfo(uint32(proto->Spells[spellIdx].SpellId));
+        if (!info)
+            continue;
+
+        for (SpellEffectInfo const& effect : info->GetEffects())
+        {
+            if (!effect.IsAura())
+                continue;
+
+            float const value = float(std::max<int32>(0, effect.CalcValue()));
+            switch (effect.ApplyAuraName)
+            {
+                case SPELL_AURA_MOD_DAMAGE_DONE:          score += w.spellDamage * value; break;
+                case SPELL_AURA_MOD_HEALING_DONE:         score += w.healing * value; break;
+                case SPELL_AURA_MOD_ATTACK_POWER:         score += w.attackPower * value; break;
+                case SPELL_AURA_MOD_RANGED_ATTACK_POWER:  score += w.attackPower * value; break;
+                case SPELL_AURA_MOD_WEAPON_CRIT_PERCENT:  score += w.meleeCritPct * value; break;
+                case SPELL_AURA_MOD_SPELL_CRIT_CHANCE:    score += w.spellCritPct * value; break;
+                case SPELL_AURA_MOD_HIT_CHANCE:           score += w.hitPct * value; break;
+                case SPELL_AURA_MOD_SPELL_HIT_CHANCE:     score += w.spellHitPct * value; break;
+                case SPELL_AURA_MOD_POWER_REGEN:          score += w.mp5 * value; break;
+                default: break;
+            }
+        }
+    }
+
+    return score;
 }
 
 // Casters and healers treat weapons as stat sticks - DPS on the weapon is
@@ -1489,8 +1622,8 @@ bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTempla
 
     if (candidate->Class == ITEM_CLASS_WEAPON && incumbent->Class == ITEM_CLASS_WEAPON)
     {
-        // On-spec weapon type dominates every other comparison for a
-        // dagger-bound rogue's mainhand.
+        // On-spec weapon type dominates every other comparison for an
+        // assassination rogue's mainhand.
         if (slot == EQUIPMENT_SLOT_MAINHAND && PrefersDaggerMainhand(bot))
         {
             bool const candidateDagger = candidate->SubClass == ITEM_SUBCLASS_WEAPON_DAGGER;
@@ -1499,12 +1632,25 @@ bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTempla
                 return candidateDagger;
         }
 
-        // Hunter melee is a stat stick; the ranged slot is the real weapon.
+        // Stat-stick weapons compare by the spec's stat score; only item
+        // level breaks a genuine tie.
         bool const statStick = TreatsWeaponAsStatStick(bot) ||
             (bot->GetClass() == CLASS_HUNTER && slot != EQUIPMENT_SLOT_RANGED);
-        if (!statStick)
-            return WeaponDps(candidate) > WeaponDps(incumbent) + 0.1f;
-        return candidate->ItemLevel > incumbent->ItemLevel;
+        if (statStick)
+        {
+            float const candidateScore = ScoreItemForSpec(bot, candidate);
+            float const incumbentScore = ScoreItemForSpec(bot, incumbent);
+            if (std::fabs(candidateScore - incumbentScore) > 0.5f)
+                return candidateScore > incumbentScore;
+            return candidate->ItemLevel > incumbent->ItemLevel;
+        }
+
+        // Combat and Subtlety mainhands: slow and hard-hitting beats fast,
+        // because instant attacks ride the average swing.
+        if (bot->GetClass() == CLASS_ROGUE && slot == EQUIPMENT_SLOT_MAINHAND && EquipProfileIndex(bot) != 0)
+            return WeaponAverageHit(candidate) > WeaponAverageHit(incumbent) + 0.1f;
+
+        return WeaponDps(candidate) > WeaponDps(incumbent) + 0.1f;
     }
 
     if (candidate->Class == ITEM_CLASS_ARMOR &&
@@ -1517,6 +1663,13 @@ bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTempla
         if (candidateOnTier != incumbentOnTier)
             return candidateOnTier;
     }
+
+    // Spec stat score before raw item level for every slot: ret paladins
+    // want strength and crit plate, not higher-ilvl spell-damage plate.
+    float const candidateScore = ScoreItemForSpec(bot, candidate);
+    float const incumbentScore = ScoreItemForSpec(bot, incumbent);
+    if (std::fabs(candidateScore - incumbentScore) > 0.5f)
+        return candidateScore > incumbentScore;
 
     return candidate->ItemLevel > incumbent->ItemLevel;
 }
