@@ -55,6 +55,7 @@
 #include "Spell.h"
 #include "Random.h"
 #include "SharedDefines.h"
+#include "SpellHistory.h"
 #include "SpellMgr.h"
 #include "Trainer.h"
 #include "World.h"
@@ -141,6 +142,10 @@ struct PveBotState
     uint32 engagedStallTicks = 0;
     float lastEngagedX = 0.0f;
     float lastEngagedY = 0.0f;
+    // How long a stealthed bot in melee range may wait for its rotation to
+    // open from stealth before auto-attack starts anyway (a B+ fresh rogue
+    // knows ONLY Stealth - its opener never comes).
+    PveTimePoint stealthOpenerDeadline{};
     // Walked journey (relocation/town run on foot). Fallback kind decides
     // what happens on timeout or stuck: the old teleport.
     // walkFallbackUntil: after a failed walk, executors skip the walk branch
@@ -605,9 +610,24 @@ bool AdvanceWalkedJourney(Player* bot, PveBotState& state)
     {
         state.nextJourneyStepAt = now + std::chrono::seconds(2);
         playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
-        // MovePoint clamps to a partial mmap path toward a far destination;
-        // re-issuing on arrival at each partial end walks the full distance.
-        bot->GetMotionMaster()->MovePoint(0, Position(state.journeyX, state.journeyY, state.journeyZ), true);
+
+        // Step in bounded hops with a ground-snapped Z instead of aiming
+        // MovePoint at the far destination: crossing unloaded mmap tiles
+        // degrades the generated path to a straight-line shortcut, and the
+        // spline then drags the bot through hills and under the terrain.
+        float const totalDx = state.journeyX - bot->GetPositionX();
+        float const totalDy = state.journeyY - bot->GetPositionY();
+        float const totalDistance = std::sqrt(totalDx * totalDx + totalDy * totalDy);
+        float stepX = state.journeyX, stepY = state.journeyY, stepZ = state.journeyZ;
+        if (totalDistance > 60.0f)
+        {
+            float const scale = 60.0f / totalDistance;
+            stepX = bot->GetPositionX() + totalDx * scale;
+            stepY = bot->GetPositionY() + totalDy * scale;
+            stepZ = bot->GetPositionZ();
+            bot->UpdateAllowedPositionZ(stepX, stepY, stepZ);
+        }
+        bot->GetMotionMaster()->MovePoint(0, Position(stepX, stepY, stepZ), true);
     }
 
     return true;
@@ -2662,6 +2682,33 @@ Unit* PickCompanionTarget(Player* bot, PveBotState& state, Player* master, playe
     return best;
 }
 
+uint32 HighestKnownRankInChain(Player* bot, uint32 firstRankSpellId)
+{
+    uint32 best = 0;
+    for (uint32 spellId = firstRankSpellId; spellId; spellId = sSpellMgr->GetNextSpellInChain(spellId))
+        if (bot->HasSpell(spellId))
+            best = spellId;
+    return best;
+}
+
+// The class's baseline nuke, at the highest rank the bot knows - what a
+// real low-level player leads with before any spec exists.
+uint32 BaselineNukeSpellId(Player* bot)
+{
+    uint32 firstRank = 0;
+    switch (bot->GetClass())
+    {
+        case CLASS_PRIEST:  firstRank = 585;  break; // Smite
+        case CLASS_MAGE:    firstRank = 133;  break; // Fireball
+        case CLASS_WARLOCK: firstRank = 686;  break; // Shadow Bolt
+        case CLASS_SHAMAN:  firstRank = 403;  break; // Lightning Bolt
+        case CLASS_DRUID:   firstRank = 5176; break; // Wrath
+        default:
+            return 0;
+    }
+    return HighestKnownRankInChain(bot, firstRank);
+}
+
 void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
 {
     // Outside battlegrounds the values snapshot is all-default; the class
@@ -2709,12 +2756,26 @@ void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
     // (Player::Update gates every white swing on that state). Re-assert
     // melee after the engine has acted each tick, or casting classes fight
     // entire battles with auto-attack visibly off and no rage/dodge flow.
-    // Stealth is the one state where starting swings would wreck the opener.
-    if ((bot->GetVictim() != victim || !bot->HasUnitState(UNIT_STATE_MELEE_ATTACKING)) &&
-        !bot->HasAuraType(SPELL_AURA_MOD_STEALTH))
+    //
+    // Stealth holds the swings back so the rotation can open from stealth -
+    // but only briefly once in melee range. A bot with no opener to cast
+    // (a B+ fresh rogue knows ONLY Stealth) would otherwise stand next to
+    // its target forever; a real player in that spot just starts attacking.
+    bool const stealthed = bot->HasAuraType(SPELL_AURA_MOD_STEALTH);
+    if (!stealthed)
+        state.stealthOpenerDeadline = PveTimePoint();
+    else if (bot->IsWithinMeleeRange(victim) && state.stealthOpenerDeadline == PveTimePoint())
+        state.stealthOpenerDeadline = PveClock::now() + std::chrono::seconds(4);
+
+    bool const holdSwingsForOpener = stealthed &&
+        (state.stealthOpenerDeadline == PveTimePoint() || PveClock::now() < state.stealthOpenerDeadline);
+
+    if ((bot->GetVictim() != victim || !bot->HasUnitState(UNIT_STATE_MELEE_ATTACKING)) && !holdSwingsForOpener)
         bot->Attack(victim, true);
 
-    if (!engineActedThisTick && !bot->IsWithinMeleeRange(victim))
+    // Never issue chase movement mid-cast: walking cancels the baseline
+    // nuke the block below just started.
+    if (!engineActedThisTick && !bot->HasUnitState(UNIT_STATE_CASTING) && !bot->IsWithinMeleeRange(victim))
         playerbot::PvpClassActions::IssueFollowMovement(bot, victim, 1.0f);
 
     // Melee swings demand the 120-degree arc (Player::Update just re-arms
@@ -2733,6 +2794,36 @@ void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
         {
             bot->SetFacingToObject(victim);
             bot->SetInFront(victim);
+        }
+    }
+
+    // Fresh talentless casters match no branch of the spec-gated rotation
+    // and were left white-swinging with a mace. A real low-level player
+    // leads with the class's baseline nuke; do the same when the engine has
+    // nothing, using the highest rank the bot actually knows.
+    if (!engineActedThisTick && !bot->HasUnitState(UNIT_STATE_CASTING))
+    {
+        if (uint32 const nukeId = BaselineNukeSpellId(bot))
+        {
+            SpellInfo const* nukeInfo = sSpellMgr->GetSpellInfo(nukeId);
+            if (nukeInfo && !bot->GetSpellHistory()->HasGlobalCooldown(nukeInfo) &&
+                !bot->GetSpellHistory()->HasCooldown(nukeId) &&
+                bot->IsWithinDistInMap(victim, 25.0f) && bot->IsWithinLOSInMap(victim))
+            {
+                if (bot->isMoving())
+                {
+                    playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
+                    if (MotionMaster* motionMaster = bot->GetMotionMaster())
+                        motionMaster->Clear();
+                    bot->StopMoving();
+                }
+                if (!bot->isInFront(victim))
+                {
+                    bot->SetFacingToObject(victim);
+                    bot->SetInFront(victim);
+                }
+                bot->CastSpell(victim, nukeId, false);
+            }
         }
     }
 
