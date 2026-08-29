@@ -4556,6 +4556,26 @@ void PveManager::LoadConfig()
     if (g_PveConfig.relocateMaps.empty())
         g_PveConfig.relocateMaps = { 0, 1 };
     std::sort(g_PveConfig.relocateMaps.begin(), g_PveConfig.relocateMaps.end());
+
+    // Accounts whose bots are PvP-only: parked in their sanctuary, never
+    // touched by any PvE system (no grind, errands, gear, talents, economy),
+    // they exist purely for the battleground orchestration.
+    g_PveConfig.pvpOnlyAccountIds.clear();
+    std::string const pvpOnlyCsv = sConfigMgr->GetStringDefault("Playerbot.Pve.PvpOnlyAccountIds", "");
+    std::stringstream pvpOnlyStream(pvpOnlyCsv);
+    while (std::getline(pvpOnlyStream, token, ','))
+        if (!token.empty())
+            g_PveConfig.pvpOnlyAccountIds.push_back(uint32(std::strtoul(token.c_str(), nullptr, 10)));
+    std::sort(g_PveConfig.pvpOnlyAccountIds.begin(), g_PveConfig.pvpOnlyAccountIds.end());
+}
+
+bool PveManager::IsPvpOnlyBot(Player const* player)
+{
+    if (g_PveConfig.pvpOnlyAccountIds.empty() || !player || !player->GetSession())
+        return false;
+
+    return std::binary_search(g_PveConfig.pvpOnlyAccountIds.begin(), g_PveConfig.pvpOnlyAccountIds.end(),
+        player->GetSession()->GetAccountId());
 }
 
 PveConfig const& PveManager::GetConfig()
@@ -4594,6 +4614,10 @@ void PveManager::OnPlayerLifecycleTick(Player* player)
         return;
 
     if (!playerbot::IsManagedRandomBot(player))
+        return;
+
+    // PvP-only bots live outside the PvE world entirely.
+    if (IsPvpOnlyBot(player))
         return;
 
     ObjectGuid const guid = player->GetGUID();
@@ -4873,8 +4897,9 @@ uint32 PveManager::ResetBotsToLevelOne(uint8 percent)
         Player* candidate = session ? session->GetPlayer() : nullptr;
         if (!candidate || !candidate->IsInWorld() || !playerbot::IsManagedRandomBot(candidate))
             continue;
-        // Companions serving a human are left alone.
-        if (IsExemptFromBattlegroundOrchestration(candidate))
+        // Companions serving a human are left alone; PvP-only bots are not
+        // part of the leveling world at all.
+        if (IsExemptFromBattlegroundOrchestration(candidate) || IsPvpOnlyBot(candidate))
             continue;
         managedBots.push_back(candidate);
     }

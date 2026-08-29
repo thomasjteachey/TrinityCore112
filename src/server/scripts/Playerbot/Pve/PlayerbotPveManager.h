@@ -69,6 +69,9 @@ struct PveConfig
     // Realm economy switch: off = the free eat/drink spells (L+ style);
     // on = bots buy real food/water/ammo from vendors and consume them (B+).
     bool restUseConsumables = false;
+    // Accounts whose bots are PvP-only: no PvE behavior of any kind, they
+    // idle at their sanctuary between battleground queues.
+    std::vector<uint32> pvpOnlyAccountIds;
 };
 
 // Open-world PvE behavior for managed random bots, layered on the existing
@@ -114,6 +117,10 @@ public:
     // managed bots (companions excluded) back to freshly created level-1
     // characters and ports them to their racial starting spots.
     static uint32 ResetBotsToLevelOne(uint8 percent);
+
+    // True for bots on Playerbot.Pve.PvpOnlyAccountIds: they skip every
+    // PvE system and only answer the battleground orchestration.
+    static bool IsPvpOnlyBot(Player const* player);
 
     // Config-gated trainer-spell catch-up whenever a managed bot levels.
     static void OnManagedBotLevelChanged(Player* player, uint8 oldLevel);

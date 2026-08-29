@@ -485,6 +485,16 @@ Playerbot.PveGrind.Relocate.Maps = "0,1"
 
 Playerbot.Pve.Rest.UseConsumables = 0
 
+#    Playerbot.Pve.PvpOnlyAccountIds
+#        Description: Comma-separated account ids whose bots are PvP-only: no PvE behavior of
+#                     any kind (no grinding, errands, gear changes, talents or economy). They
+#                     idle wherever they are parked - typically a sanctuary players cannot
+#                     reach - and only answer the battleground orchestration, which returns
+#                     them to that spot when the match ends. Empty disables the feature.
+#        Default:     ""
+
+Playerbot.Pve.PvpOnlyAccountIds = ""
+
 #    Playerbot.Pve.Travel.WalkMaxDistance
 #        Description: Relocations and town runs within this range are WALKED (segmented mmap
 #                     pathing, fights allowed en route, stuck/timeout falls back to teleport).
