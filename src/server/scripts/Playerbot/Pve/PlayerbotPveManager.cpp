@@ -659,12 +659,43 @@ bool AdvanceWalkedJourney(Player* bot, PveBotState& state)
         float stepX = state.journeyX, stepY = state.journeyY, stepZ = state.journeyZ;
         if (totalDistance > 60.0f)
         {
-            float const scale = 60.0f / totalDistance;
-            stepX = bot->GetPositionX() + totalDx * scale;
-            stepY = bot->GetPositionY() + totalDy * scale;
-            stepZ = bot->GetPositionZ();
-            bot->UpdateAllowedPositionZ(stepX, stepY, stepZ);
+            // Prefer hop points on dry ground: a straight-line waypoint
+            // dropped into water turns the whole leg into a slow surface
+            // swim even when the mesh has a walkable route around it. Only
+            // a genuinely unavoidable crossing gets swum.
+            float const dirX = totalDx / totalDistance;
+            float const dirY = totalDy / totalDistance;
+            bool found = false;
+            for (float hop : { 60.0f, 40.0f, 25.0f })
+            {
+                float const tryX = bot->GetPositionX() + dirX * hop;
+                float const tryY = bot->GetPositionY() + dirY * hop;
+                float tryZ = bot->GetPositionZ();
+                bot->UpdateAllowedPositionZ(tryX, tryY, tryZ);
+                if (!bot->GetMap()->IsInWater(PHASEMASK_NORMAL, tryX, tryY, tryZ))
+                {
+                    stepX = tryX;
+                    stepY = tryY;
+                    stepZ = tryZ;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+            {
+                stepX = bot->GetPositionX() + dirX * 60.0f;
+                stepY = bot->GetPositionY() + dirY * 60.0f;
+                stepZ = bot->GetPositionZ();
+                bot->UpdateAllowedPositionZ(stepX, stepY, stepZ);
+            }
         }
+
+        // The stabilization pass toggles the swim flag from terrain state,
+        // but it can lag a hop: a spline launched with a stale SWIMMING
+        // flag runs its entire land leg at swim speed.
+        if (bot->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING) && !bot->IsInWater())
+            bot->SetSwim(false);
+
         bot->GetMotionMaster()->MovePoint(0, Position(stepX, stepY, stepZ), true);
     }
 
@@ -677,6 +708,10 @@ void MoveTowardThrottled(Player* bot, Position const& destination)
         return;
 
     playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
+    // A stale SWIMMING flag from a just-left pond would run the whole
+    // spline at swim speed.
+    if (bot->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING) && !bot->IsInWater())
+        bot->SetSwim(false);
     bot->GetMotionMaster()->MovePoint(0, destination, true);
 }
 
@@ -1403,16 +1438,74 @@ uint32 PreferredArmorSubclass(Player const* bot)
     }
 }
 
-// Item level alone swapped a fury warrior's good weapon for a higher-ilvl
-// paperweight: weapons compare by real DPS, armor by tier-appropriate
-// subclass first and item level second.
-bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTemplate const* incumbent)
+// The same deterministic profile index that drives talent donors decides
+// weapon policy, so gear and spec always agree.
+uint32 EquipProfileIndex(Player const* bot)
 {
+    return uint32(bot->GetGUID().GetCounter() % 3);
+}
+
+// Assassination and Subtlety rogues are built around daggers (Mutilate,
+// Backstab); Combat takes anything.
+bool PrefersDaggerMainhand(Player const* bot)
+{
+    return bot->GetClass() == CLASS_ROGUE && EquipProfileIndex(bot) != 1;
+}
+
+// Casters and healers treat weapons as stat sticks - DPS on the weapon is
+// meaningless to them and item level tracks the stat budget.
+bool TreatsWeaponAsStatStick(Player const* bot)
+{
+    switch (bot->GetClass())
+    {
+        case CLASS_MAGE:
+        case CLASS_PRIEST:
+        case CLASS_WARLOCK:
+        case CLASS_DRUID: // feral weapons are stat sticks too
+            return true;
+        case CLASS_PALADIN:
+            return EquipProfileIndex(bot) == 0;  // holy
+        case CLASS_SHAMAN:
+            return EquipProfileIndex(bot) != 1;  // elemental / resto
+        default:
+            return false;
+    }
+}
+
+// Item level alone swapped a fury warrior's good weapon for a higher-ilvl
+// paperweight: melee weapons compare by real DPS, casters by stat budget
+// (item level), armor by tier-appropriate subclass first - and spec-defining
+// equipment (shields, dagger mainhands) never gets benched off-spec.
+bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTemplate const* incumbent, uint8 slot)
+{
+    // A shield user never benches an equipped shield for a non-shield.
+    if (incumbent && slot == EQUIPMENT_SLOT_OFFHAND &&
+        incumbent->Class == ITEM_CLASS_ARMOR && incumbent->SubClass == ITEM_SUBCLASS_ARMOR_SHIELD &&
+        !(candidate->Class == ITEM_CLASS_ARMOR && candidate->SubClass == ITEM_SUBCLASS_ARMOR_SHIELD))
+        return false;
+
     if (!incumbent)
         return true;
 
-    if (candidate->Class == ITEM_CLASS_WEAPON)
-        return WeaponDps(candidate) > WeaponDps(incumbent) + 0.1f;
+    if (candidate->Class == ITEM_CLASS_WEAPON && incumbent->Class == ITEM_CLASS_WEAPON)
+    {
+        // On-spec weapon type dominates every other comparison for a
+        // dagger-bound rogue's mainhand.
+        if (slot == EQUIPMENT_SLOT_MAINHAND && PrefersDaggerMainhand(bot))
+        {
+            bool const candidateDagger = candidate->SubClass == ITEM_SUBCLASS_WEAPON_DAGGER;
+            bool const incumbentDagger = incumbent->SubClass == ITEM_SUBCLASS_WEAPON_DAGGER;
+            if (candidateDagger != incumbentDagger)
+                return candidateDagger;
+        }
+
+        // Hunter melee is a stat stick; the ranged slot is the real weapon.
+        bool const statStick = TreatsWeaponAsStatStick(bot) ||
+            (bot->GetClass() == CLASS_HUNTER && slot != EQUIPMENT_SLOT_RANGED);
+        if (!statStick)
+            return WeaponDps(candidate) > WeaponDps(incumbent) + 0.1f;
+        return candidate->ItemLevel > incumbent->ItemLevel;
+    }
 
     if (candidate->Class == ITEM_CLASS_ARMOR &&
         candidate->SubClass >= ITEM_SUBCLASS_ARMOR_CLOTH && candidate->SubClass <= ITEM_SUBCLASS_ARMOR_PLATE &&
@@ -1460,7 +1553,7 @@ void TryEquipUpgrades(Player* bot)
 
         if (Item* equipped = bot->GetItemByPos(dest))
         {
-            if (!IsEquipUpgrade(bot, proto, equipped->GetTemplate()))
+            if (!IsEquipUpgrade(bot, proto, equipped->GetTemplate(), uint8(dest & 255)))
                 continue;
 
             bot->SwapItem(item->GetPos(), dest);
@@ -2400,9 +2493,9 @@ void ProcessPendingAuctionShopping()
             if (Item const* equipped = bot->GetItemByPos(dest))
                 equippedProto = equipped->GetTemplate();
 
-            // Same scorer as the bag equip pass: DPS for weapons, armor
-            // tier before item level for armor.
-            if (!IsEquipUpgrade(bot, proto, equippedProto))
+            // Same scorer as the bag equip pass: spec-aware weapon policy,
+            // armor tier before item level.
+            if (!IsEquipUpgrade(bot, proto, equippedProto, uint8(dest & 255)))
                 continue;
 
             int32 const gain = std::max<int32>(1,
@@ -2995,8 +3088,11 @@ void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
     // NOTHING this tick - facing/positioning busywork (the "set facing"
     // loop) and movement directives count as acted but must not starve the
     // nuke, or a fresh priest circles its target forever without a Smite.
+    // STRICTLY pre-talent (level < 10): from 10 up the detected spec owns
+    // the rotation, and filling its deliberate gaps with Lightning Bolt
+    // turned an enhancement shaman into a caster.
     bool const engineCastThisTick = engineActedThisTick && context.spellId != 0;
-    if (!engineCastThisTick && !bot->HasUnitState(UNIT_STATE_CASTING))
+    if (!engineCastThisTick && bot->GetLevel() < 10 && !bot->HasUnitState(UNIT_STATE_CASTING))
     {
         if (uint32 const nukeId = BaselineNukeSpellId(bot))
         {
@@ -3591,6 +3687,33 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
                 state.nextGrindScanAt = now + PveGrindScanInterval;
                 target = PickGrindTarget(bot, state, cfg);
             }
+        }
+    }
+
+    // An add picked up on the approach outranks a target that has not
+    // engaged us yet: stop, kill what is already hitting us, then the next
+    // scan re-acquires the original. Never switches off a mob that is
+    // actually fighting the bot, so live duels can't ping-pong.
+    if (target && target->GetVictim() != bot)
+    {
+        Unit* nearestAttacker = nullptr;
+        float nearestAttackerDistance = 0.0f;
+        for (Unit* attacker : bot->getAttackers())
+        {
+            if (!attacker || attacker == target || !attacker->IsAlive() || !bot->IsValidAttackTarget(attacker))
+                continue;
+
+            float const distance = bot->GetDistance(attacker);
+            if (!nearestAttacker || distance < nearestAttackerDistance)
+            {
+                nearestAttacker = attacker;
+                nearestAttackerDistance = distance;
+            }
+        }
+        if (nearestAttacker)
+        {
+            target = nearestAttacker;
+            state.recentBadTargets.erase(nearestAttacker->GetGUID().GetRawValue());
         }
     }
 
