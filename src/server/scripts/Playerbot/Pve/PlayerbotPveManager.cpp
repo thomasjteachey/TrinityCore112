@@ -2789,8 +2789,14 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
         }
         else if (itr == g_GuardianZoneByGuid.end() && eligible)
         {
-            // Take the lowest free post this bot can actually hold: its own
-            // faction's ground, and never one that would cost it levels.
+            // Pick the best free post this bot can actually hold: its own
+            // faction's ground, never one that would cost it levels, and
+            // PREFERABLY on the continent it is already standing on. A post
+            // across the sea can only ever be reached by teleport, which is
+            // deliberately refused while a real player is watching - so a
+            // cross-continent guardian just stands there looking broken.
+            uint32 bestCandidate = totalSlots;
+            uint32 bestScore = 0;
             for (uint32 candidate = 0; candidate < totalSlots; ++candidate)
             {
                 if (g_GuardianTakenSlots.count(candidate))
@@ -2802,12 +2808,28 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
                 if (!IsGuardianZoneAllowedForBot(bot, candidateZone.zoneId))
                     continue;
 
-                slotIndex = candidate;
-                g_GuardianZoneByGuid[botRawGuid] = candidate;
-                g_GuardianTakenSlots.insert(candidate);
+                bool sameContinent = false;
+                if (AreaTableEntry const* zoneEntry = sAreaTableStore.LookupEntry(candidateZone.zoneId))
+                    sameContinent = zoneEntry->ContinentID == bot->GetMapId();
+
+                // Same continent first, then the post closest to the level
+                // the bot already has.
+                uint32 const score = (sameContinent ? 0u : 1000u) +
+                    uint32(candidateZone.maxLevel - bot->GetLevel());
+                if (bestCandidate == totalSlots || score < bestScore)
+                {
+                    bestCandidate = candidate;
+                    bestScore = score;
+                }
+            }
+
+            if (bestCandidate < totalSlots)
+            {
+                slotIndex = bestCandidate;
+                g_GuardianZoneByGuid[botRawGuid] = bestCandidate;
+                g_GuardianTakenSlots.insert(bestCandidate);
                 assigned = true;
                 freshlyAssigned = true;
-                break;
             }
         }
     }
