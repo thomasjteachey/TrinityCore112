@@ -16,6 +16,7 @@
  */
 
 #include "CombatManager.h"
+#include "Log.h"
 #include "Containers.h"
 #include "Creature.h"
 #include "Unit.h"
@@ -435,17 +436,41 @@ void CombatManager::EndAllPvPCombat()
 
 void CombatManager::PutReference(ObjectGuid const& guid, CombatReference* ref)
 {
+    // Upstream ASSERTs here, which takes the whole server down. The state it
+    // objects to is a genuine bug - one half of a combat pair torn down
+    // without the other, leaving a stale reference behind - but it is also
+    // RECOVERABLE, and on a realm with hundreds of bots cycling through
+    // creatures it was the leading cause of crashes.
+    //
+    // SetInCombatWith only checks the CALLER's maps for an existing pair, so
+    // an asymmetric leftover is found here, on the second of its two inserts,
+    // with no way back. Ending the stale reference purges it from both
+    // managers and deletes it, which is exactly the cleanup that was missed;
+    // then the new reference goes in. The warning keeps the underlying leak
+    // visible instead of silently papering over it.
+    auto endStaleReference = [&](CombatReference* stale)
+    {
+        TC_LOG_WARN("entities.unit",
+            "CombatManager: stale {} combat reference for {} vs {} - ending it instead of asserting.",
+            ref->_isPvP ? "PvP" : "PvE", _owner->GetGUID().ToString(), guid.ToString());
+        stale->EndCombat(); // purges both managers and deletes the reference
+    };
+
     if (ref->_isPvP)
     {
-        auto& inMap = _pvpRefs[guid];
-        ASSERT(!inMap, "Duplicate combat state at %p being inserted for %s vs %s - memory leak!", ref, _owner->GetGUID().ToString().c_str(), guid.ToString().c_str());
-        inMap = static_cast<PvPCombatReference*>(ref);
+        auto itr = _pvpRefs.find(guid);
+        if (itr != _pvpRefs.end() && itr->second)
+            endStaleReference(itr->second);
+
+        _pvpRefs[guid] = static_cast<PvPCombatReference*>(ref);
     }
     else
     {
-        auto& inMap = _pveRefs[guid];
-        ASSERT(!inMap, "Duplicate combat state at %p being inserted for %s vs %s - memory leak!", ref, _owner->GetGUID().ToString().c_str(), guid.ToString().c_str());
-        inMap = ref;
+        auto itr = _pveRefs.find(guid);
+        if (itr != _pveRefs.end() && itr->second)
+            endStaleReference(itr->second);
+
+        _pveRefs[guid] = ref;
     }
 }
 
