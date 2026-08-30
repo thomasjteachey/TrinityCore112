@@ -105,7 +105,7 @@ void FulfilAllyRequests(BattlegroundVHR* bg)
         }
         if (!source)
         {
-            TC_LOG_DEBUG("playerbot", "PlayerbotVhrWaveDriver: no eligible bot for a Fellowship ally in instance {}; retrying later.",
+            TC_LOG_DEBUG("playerbots", "PlayerbotVhrWaveDriver: no eligible bot for a Fellowship ally in instance {}; retrying later.",
                 bg->GetInstanceID());
             bg->DeferAllyRequests(2 * IN_MILLISECONDS);
             return;
@@ -123,7 +123,7 @@ void FulfilAllyRequests(BattlegroundVHR* bg)
 
         if (!ally)
         {
-            TC_LOG_WARN("playerbot", "PlayerbotVhrWaveDriver: failed to clone {} as a Fellowship ally for instance {}.",
+            TC_LOG_WARN("playerbots", "PlayerbotVhrWaveDriver: failed to clone {} as a Fellowship ally for instance {}.",
                 source->GetName(), bg->GetInstanceID());
             bg->DeferAllyRequests(2 * IN_MILLISECONDS);
             return;
@@ -170,7 +170,7 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
                 sources[i] = bots[i % bots.size()];
         }
         else
-            TC_LOG_DEBUG("playerbot", "PlayerbotVhrWaveDriver: no eligible bots for wave {} of instance {}, using party fallback.",
+            TC_LOG_DEBUG("playerbots", "PlayerbotVhrWaveDriver: no eligible bots for wave {} of instance {}, using party fallback.",
                 waveNumber, bg->GetInstanceID());
     }
 
@@ -208,7 +208,7 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
         Player* clone = playerbot::PlayerbotObcCloneManager::CreateCustomGameClone(source, bg, enemyTeam, displayPrefix);
         if (!clone)
         {
-            TC_LOG_WARN("playerbot", "PlayerbotVhrWaveDriver: failed to clone {} for wave {} of instance {}.",
+            TC_LOG_WARN("playerbots", "PlayerbotVhrWaveDriver: failed to clone {} for wave {} of instance {}.",
                 source->GetName(), waveNumber, bg->GetInstanceID());
             continue;
         }
@@ -238,7 +238,7 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
                 clone->SetFullHealth();
             }
             else
-                TC_LOG_WARN("playerbot", "PlayerbotVhrWaveDriver: could not reinforce {} for wave {} of instance {}.",
+                TC_LOG_WARN("playerbots", "PlayerbotVhrWaveDriver: could not reinforce {} for wave {} of instance {}.",
                     clone->GetName(), waveNumber, bg->GetInstanceID());
         }
 
@@ -257,7 +257,7 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
             if (Aura* diminished = clone->AddAura(BG_VHR_SPELL_DIMINISHED, clone))
                 diminished->SetStackAmount(handicap[i]);
             else
-                TC_LOG_WARN("playerbot", "PlayerbotVhrWaveDriver: could not apply Diminished to {} for wave {} of instance {}.",
+                TC_LOG_WARN("playerbots", "PlayerbotVhrWaveDriver: could not apply Diminished to {} for wave {} of instance {}.",
                     clone->GetName(), waveNumber, bg->GetInstanceID());
         }
 
@@ -266,7 +266,7 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
 
     bg->SetTeamStartPosition(enemyTeamIndex, enemyStartBeforeWave);
 
-    TC_LOG_DEBUG("playerbot", "PlayerbotVhrWaveDriver: wave {} of instance {} fielded {}/{} clones.",
+    TC_LOG_DEBUG("playerbots", "PlayerbotVhrWaveDriver: wave {} of instance {} fielded {}/{} clones.",
         waveNumber, bg->GetInstanceID(), spawned, uint32(sources.size()));
 
     // Report back even at zero: the battleground's wipe check will close the

@@ -88,7 +88,7 @@ GameObject* PlayerChestBuilder::Summon() const
     GameObject* chest = _player->SummonGameObject(_chestEntry, _player->GetPosition(), QuaternionData(), _despawnTime, GO_SUMMON_TIMED_DESPAWN);
     if (!chest)
     {
-        TC_LOG_WARN("scripts", "CustomLootChests: failed to summon chest {} for player {} ({})", _chestEntry, _player->GetName(), _player->GetGUID().ToString());
+        TC_LOG_WARN("playerbots.pve", "CustomLootChests: failed to summon chest {} for player {} ({})", _chestEntry, _player->GetName(), _player->GetGUID().ToString());
         return nullptr;
     }
 
@@ -132,7 +132,7 @@ GameObject* PlayerChestBuilder::Summon() const
     // chest really was unfindable by every isSpawned()-filtered search (which
     // includes FindNearestGameObject's default spawnedOnly = true, the call the
     // bots use). If it is true, this whole block is unnecessary and should go.
-    TC_LOG_INFO("scripts",
+    TC_LOG_INFO("playerbots.pve",
         "CustomLootChests: chest {} for {} - isSpawned {} -> {}, spawnedByDefault {} -> {}, respawnDelay {}s.",
         _chestEntry, _player->GetName(), spawnedBefore, chest->isSpawned(),
         byDefaultBefore, chest->isSpawnedByDefault(), chest->GetRespawnDelay());
