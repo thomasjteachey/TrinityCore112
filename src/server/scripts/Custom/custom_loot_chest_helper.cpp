@@ -95,6 +95,35 @@ GameObject* PlayerChestBuilder::Summon() const
     _player->RemoveGameObject(chest, false);
     chest->SetOwnerGUID(ObjectGuid::Empty);
 
+    // The chest is deliberately left ownerless above so it outlives the corpse.
+    // That also removes GameObject::IsAlwaysVisibleFor's owner escape, which is
+    // what had been masking the following.
+    //
+    // WorldObject::SummonGameObject only calls SetSpawnedByDefault(false) when
+    // the summoner is NOT a player (Object.cpp) - and this summoner is the dying
+    // player, so the flag keeps its constructor value of true. Combined with a
+    // non-zero respawn delay, all three clauses of GameObject::isSpawned() are
+    // then false for the object's entire life:
+    //
+    //     m_respawnDelayTime == 0                        -> false (it is 3600)
+    //     m_respawnTime > 0 && !m_spawnedByDefault        -> false (flag is true)
+    //     m_respawnTime == 0 && m_spawnedByDefault        -> false (timer is set)
+    //
+    // So the chest is invisible to every client (isSpawned -> IsInvisibleDueToDespawn
+    // -> CanSeeOrDetect) and rejected by every bot search: FindNearestGameObject
+    // takes spawnedOnly = true by default, and three further call sites test
+    // isSpawned() explicitly. That is why bots walked straight past death chests.
+    //
+    // The flag also inverts the timer's meaning. GameObject::Update treats the
+    // expiry as a DESPAWN only when !m_spawnedByDefault ("Despawn timer" ->
+    // GO_JUST_DEACTIVATED); left true it falls through to the RESPAWN path, so
+    // the chest would wink into existence after an hour and then stay forever.
+    //
+    // Order matters: clear the flag first, because SetRespawnTime only publishes
+    // the visibility update when it sees !m_spawnedByDefault.
+    chest->SetSpawnedByDefault(false);
+    chest->SetRespawnTime(int32(_despawnTime.count()));
+
     Loot& loot = chest->loot;
     loot.clear();
     loot.loot_type = LOOT_CORPSE;
