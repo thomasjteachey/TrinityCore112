@@ -4817,7 +4817,7 @@ bool IsAuctionableSurplus(Player* bot, Item* item)
 // What to ask for it. The anchor is the item's own value, then the standing
 // competition decides: a seller who ignores the shelf price never sells.
 uint32 ComputeAuctionBuyout(ItemTemplate const* proto, uint32 count,
-    std::unordered_map<uint32, uint32> const& cheapestPerUnit)
+    std::unordered_map<uint32, uint32> const& cheapestPerUnit, uint32* outMarketPrice = nullptr)
 {
     // What the thing is worth, by the same reckoning the auction house
     // stocker uses (AuctionBotSeller::SetPricesOfItem):
@@ -4866,10 +4866,18 @@ uint32 ComputeAuctionBuyout(ItemTemplate const* proto, uint32 count,
         price = uint64(std::max(1.0, value * count / buyCount));
     }
 
-    // No vendor floor here any more. Propping the ask up to 1.5x the vendor
-    // price just parked unsellable listings in the house; the caller now
-    // compares this price against the merchant and takes whichever pays
-    // more, which is the honest version of the same idea.
+    // The market price BEFORE the floor is what the caller needs to judge
+    // whether listing is worth doing at all - the floor would otherwise mask
+    // exactly the case that decision exists for.
+    if (outMarketPrice)
+        *outMarketPrice = uint32(std::min<uint64>(price, uint64(MAX_MONEY_AMOUNT)));
+
+    // Never ask less than half again what a vendor would hand over. The ask
+    // and the decision to list are two different questions: this governs the
+    // ask, so a lot that IS worth listing is never posted for less than the
+    // merchant would have paid for it.
+    uint64 const vendorFloor = uint64(proto->SellPrice) * count * 3 / 2;
+    price = std::max(price, vendorFloor);
 
     return uint32(std::min<uint64>(price, uint64(MAX_MONEY_AMOUNT)));
 }
@@ -4960,17 +4968,23 @@ void ProcessPendingAuctionSales()
             // the simulation on lots that were never going to sell anyway.
             uint32 const deposit = 0;
 
-            uint32 const buyout = ComputeAuctionBuyout(proto, count, cheapestPerUnit);
+            uint32 marketPrice = 0;
+            uint32 const buyout = ComputeAuctionBuyout(proto, count, cheapestPerUnit, &marketPrice);
 
-            // Would a merchant pay more than the house? Bots pay no commission
-            // and no deposit, so the buyout IS what lands in the purse and the
-            // comparison is direct. Once the undercut ladder has walked a
-            // commodity down far enough the vendor genuinely is the better
-            // customer, and listing it anyway only ties the item up for twelve
-            // hours to earn less.
+            // Would a merchant pay more than the house? Judged on the MARKET
+            // price - what the undercut ladder actually says the item is worth
+            // right now - not on the floored ask. Comparing against the ask
+            // would be circular: the floor is derived from the vendor price,
+            // so it always wins and the question never gets asked.
+            //
+            // Bots pay no commission and no deposit, so the market price is
+            // what would land in the purse. Once the ladder has walked a
+            // commodity below what the merchant pays, listing it anyway just
+            // ties the item up for twelve hours to earn less - and an unsold
+            // bot lot is destroyed at expiry, so that would lose the vendor
+            // money outright.
             uint64 const vendorRevenue = uint64(proto->SellPrice) * count;
-            uint64 const netAuctionProceeds = uint64(buyout);
-            if (vendorRevenue && vendorRevenue >= netAuctionProceeds)
+            if (vendorRevenue && vendorRevenue >= uint64(marketPrice))
             {
                 bot->ModifyMoney(int64(vendorRevenue));
                 TC_LOG_INFO("playerbots.pve", "Bot {} vendored {} x{} for {} copper instead of listing at {}.",
