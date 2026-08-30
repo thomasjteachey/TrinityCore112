@@ -4438,10 +4438,10 @@ uint32 ComputeAuctionBuyout(ItemTemplate const* proto, uint32 count,
         price = uint64(std::max(1.0, value * count / buyCount));
     }
 
-    // ...but never below what a vendor would hand over, or selling here is
-    // strictly worse than walking to town.
-    uint64 const vendorFloor = uint64(proto->SellPrice) * count * 3 / 2;
-    price = std::max(price, vendorFloor);
+    // No vendor floor here any more. Propping the ask up to 1.5x the vendor
+    // price just parked unsellable listings in the house; the caller now
+    // compares this price against the merchant and takes whichever pays
+    // more, which is the honest version of the same idea.
 
     return uint32(std::min<uint64>(price, uint64(MAX_MONEY_AMOUNT)));
 }
@@ -4531,6 +4531,24 @@ void ProcessPendingAuctionSales()
                 break;
 
             uint32 const buyout = ComputeAuctionBuyout(proto, count, cheapestPerUnit);
+
+            // Would a merchant pay more than the house? Compare against what
+            // the auction would actually PUT IN THE PURSE - the buyout less
+            // the auction house's cut - not the sticker price. Once the
+            // undercut ladder has walked a commodity down far enough, the
+            // vendor genuinely is the better customer, and listing it there
+            // anyway only ties the item up for twelve hours to earn less.
+            uint64 const vendorRevenue = uint64(proto->SellPrice) * count;
+            uint64 const netAuctionProceeds = uint64(buyout) * 95 / 100;
+            if (vendorRevenue && vendorRevenue >= netAuctionProceeds)
+            {
+                bot->ModifyMoney(int64(vendorRevenue));
+                TC_LOG_INFO("playerbots.pve", "Bot {} vendored {} x{} for {} copper instead of listing at {}.",
+                    bot->GetName(), proto->Name1, count, vendorRevenue, buyout);
+                bot->DestroyItem(item->GetBagSlot(), item->GetSlot(), true);
+                continue;
+            }
+
             uint32 const startBid = std::max<uint32>(1, uint32(uint64(buyout) * 80 / 100));
 
             AuctionEntry* auction = new AuctionEntry();
