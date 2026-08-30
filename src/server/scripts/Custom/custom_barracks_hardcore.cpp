@@ -591,15 +591,18 @@ namespace BarracksHardcore
         if (droppedItems.empty())
             return;
 
-        GameObject* spawnedChest = chest.Summon();
-        if (!spawnedChest)
-            return;
+        // The chest is only summoned when something actually reached it - an
+        // empty one would be a cruel joke - but the loss happens either way.
+        // Bailing out here on an empty chest meant a victim wearing a single
+        // green piece kept it half the time, and the deflationary half of the
+        // rule quietly never ran.
+        bool const chestSpawned = chest.Summon() != nullptr;
 
         for (CustomLootChests::ItemLocation const& dropped : droppedItems)
             victim->DestroyItem(dropped.Bag, dropped.Slot, true);
 
-        TC_LOG_DEBUG("scripts", "BarracksHardcore: {} lost {} items at death ({}% reached the chest).",
-            victim->GetName(), uint32(droppedItems.size()), s_dropChancePercent);
+        TC_LOG_INFO("playerbots.hardcore", "{} lost {} worn items at death; chest spawned: {} ({}% reaches it).",
+            victim->GetName(), uint32(droppedItems.size()), uint32(chestSpawned), s_dropChancePercent);
     }
 }
 
