@@ -2388,6 +2388,18 @@ void ProcessPendingLootExecutions()
         if (!bot->IsWithinDistInMap(lootObject, INTERACTION_DISTANCE + 2.0f))
             continue;
 
+        // Never OPEN a world gameobject the bot has no room to empty.
+        //
+        // A gameobject's loot is generated once, for whoever opens it first,
+        // and quest items in it are filtered by that looter's quest state. So
+        // a bot that opens a shared node with a full pack takes nothing,
+        // releases, and leaves the object sitting there holding a loot table
+        // built for the bot - a player who clicks it afterwards gets an empty
+        // window. Corpses are the bot's own kill and are not contested this
+        // way, so only gameobjects are gated.
+        if (lootGameObject && CountFreeBagSlots(bot) < 2)
+            continue;
+
         bot->SendLoot(lootGuid, lootType);
         // SendLoot can refuse (permission, despawn race); it releases on its
         // own failure paths, so only proceed while the session is ours.
