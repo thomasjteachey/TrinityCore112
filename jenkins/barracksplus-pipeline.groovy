@@ -179,7 +179,23 @@ echo "[OK] CMAKE_BUILD_TYPE is RelWithDebInfo."
         sh '''#!/usr/bin/env bash
 set -Eeuo pipefail
 
-cmake --build "$BUILD_DIR" --parallel "$(nproc)"
+# This box runs LIVE realms while it builds. An unrestrained
+# "--parallel $(nproc)" takes every core and the running worldservers lose
+# the scheduler to it - which players feel directly as hit-to-damage delay,
+# and which has been mistaken for a bot regression more than once.
+#
+# Two independent protections:
+#   nice/ionice  - the compiler yields to any worldserver that wants the CPU,
+#                  so an idle box still builds at full speed.
+#   core headroom - never claim the last two cores outright.
+JOBS="$(nproc)"
+if [ "$JOBS" -gt 3 ]; then
+  JOBS=$((JOBS - 2))
+fi
+
+echo "[INFO] Building with $JOBS jobs at low priority (box has $(nproc) cores, live realms are running)."
+
+nice -n 19 ionice -c 3 cmake --build "$BUILD_DIR" --parallel "$JOBS"
 '''
       }
 
