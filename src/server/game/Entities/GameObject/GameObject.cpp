@@ -2330,6 +2330,15 @@ void GameObject::Use(Unit* user)
             if (!player)
                 return;
 
+            // Chest opening has a long history of failing silently on this
+            // realm; say out loud what state it was in when someone tried.
+            TC_LOG_INFO("playerbots.hardcore",
+                "Chest use: entry {} by {} dist {:.1f} lootState {} items {} looted {} immune {} lockId {} lootId {}",
+                GetEntry(), player->GetName(), GetDistance(player), uint32(getLootState()),
+                uint32(loot.items.size()), uint32(loot.isLooted()),
+                uint32(player->HasUnitFlag(UNIT_FLAG_IMMUNE)),
+                GetGOInfo()->chest.lockId, GetGOInfo()->GetLootId());
+
             if (Battleground* bg = player->GetBattleground())
                 if (!bg->CanActivateGO(GetEntry(), bg->GetPlayerTeam(player->GetGUID())))
                     return;
