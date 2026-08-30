@@ -47,6 +47,12 @@ struct PveConfig
     // other by 5% a pass, so an unmultiplied anchor walks the whole market
     // down to the vendor floor; this is the headroom that race runs in.
     float auctionPriceMultiplier = 10.0f;
+    // Common materials are listed in respectable lots rather than dribbled
+    // out one at a time. Capped by the item's own max stack size.
+    uint32 auctionMinTradeGoodStack = 10;
+    // Per-unit sell value at or above which a material is worth listing on
+    // its own, however few the bot has.
+    uint32 auctionValuableUnitCopper = 1000;
     float grindWanderRadius = 40.0f;
     uint32 grindMaxLevelAbove = 3;
     uint32 grindMaxLevelBelow = 5;

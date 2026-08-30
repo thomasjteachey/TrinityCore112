@@ -4745,6 +4745,27 @@ bool IsAuctionableSurplus(Player* bot, Item* item)
     if (IsStockedPoisonItem(proto->ItemId))
         return false;
 
+    // Common materials go up in respectable lots, not one at a time. A single
+    // linen cloth is noise on the house: it burns a listing, and because the
+    // undercut ladder prices against the cheapest STANDING lot it also drags
+    // the going rate down for every full stack already up there.
+    //
+    // Valuable materials are exempt however few the bot holds - calibrated
+    // against this realm's own prices, ordinary commodities top out around
+    // Mithril Bar at 400 copper a unit while genuine single-item goods start
+    // at Black Lotus on 1000, so that is where the line sits.
+    if (proto->Class == ITEM_CLASS_TRADE_GOODS || proto->Class == ITEM_CLASS_REAGENT)
+    {
+        playerbot::PveConfig const& auctionCfg = playerbot::PveManager::GetConfig();
+        uint32 const maxStack = std::max<uint32>(1, proto->GetMaxStackSize());
+        if (maxStack > 1 && uint32(proto->SellPrice) < auctionCfg.auctionValuableUnitCopper)
+        {
+            uint32 const wantedLot = std::min<uint32>(maxStack, auctionCfg.auctionMinTradeGoodStack);
+            if (item->GetCount() < wantedLot)
+                return false;
+        }
+    }
+
     // Never sell the tools of the trade: food, water, ammunition, bandages,
     // potions, quest items or keys.
     switch (proto->Class)
@@ -7022,6 +7043,8 @@ void PveManager::LoadConfig()
     g_PveConfig.grindSearchRadius = sConfigMgr->GetFloatDefault("Playerbot.PveGrind.SearchRadius", 60.0f);
     g_PveConfig.pathBudgetPerSecond = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.PathBudgetPerSecond", 150));
     g_PveConfig.auctionPriceMultiplier = sConfigMgr->GetFloatDefault("Playerbot.Pve.AuctionPriceMultiplier", 10.0f);
+    g_PveConfig.auctionMinTradeGoodStack = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionMinTradeGoodStack", 10));
+    g_PveConfig.auctionValuableUnitCopper = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionValuableUnitCopper", 1000));
     g_PveConfig.grindWanderRadius = sConfigMgr->GetFloatDefault("Playerbot.PveGrind.WanderRadius", 40.0f);
     g_PveConfig.grindMaxLevelAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelAbove", 3), 0, 10));
     g_PveConfig.grindMaxLevelBelow = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelBelow", 5), 0, 80));

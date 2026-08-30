@@ -358,6 +358,30 @@ Playerbot.GoldGainMultiplier.LowLevelMaxLevel = 10
 
 Playerbot.Pve.AuctionPriceMultiplier = 10.0
 
+#    Playerbot.Pve.AuctionMinTradeGoodStack
+#        Description: Smallest lot of a common material a bot will list. Capped by the
+#                     item's own max stack size, so a material that stacks to 10 needs a
+#                     full stack while one that stacks to 20 needs half.
+#                     A single linen cloth is noise on the auction house: it burns a
+#                     listing, and because the undercut ladder prices against the cheapest
+#                     STANDING lot, it also drags the going rate down for every full stack
+#                     already up there. Below the minimum the material is simply held, and
+#                     the vendor pass still clears it if the pack gets tight.
+#        Default:     10
+#                     1 - (list any amount, the old behaviour)
+
+Playerbot.Pve.AuctionMinTradeGoodStack = 10
+
+#    Playerbot.Pve.AuctionValuableUnitCopper
+#        Description: Per-unit vendor value at or above which a material is worth listing on
+#                     its own, however few the bot holds, ignoring the minimum lot above.
+#                     Calibrated against this realm's own prices: ordinary commodities top
+#                     out around Mithril Bar at 400 copper a unit, while genuine single-item
+#                     goods start at Black Lotus on 1000 - so 1000 is where the line sits.
+#        Default:     1000 - (10 silver a unit)
+
+Playerbot.Pve.AuctionValuableUnitCopper = 1000
+
 #    Playerbot.Pve.Companion.FollowDistance
 #        Description: Follow distance in yards for a companion trailing its master out of combat.
 #        Default:     2.5
