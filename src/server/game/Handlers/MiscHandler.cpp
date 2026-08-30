@@ -183,7 +183,7 @@ namespace
     // Playerbots are scenery, not players. They fill /who with hundreds of
     // names nobody can talk to, so they are left out of it unless the asker
     // is actually in GM mode and wants to see the machinery.
-    bool IsPlayerbotInWhoList(ObjectGuid guid)
+    bool IsPlayerbotCharacter(ObjectGuid guid)
     {
         Player const* player = ObjectAccessor::FindConnectedPlayer(guid);
         if (!player)
@@ -299,7 +299,7 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
 
         // Skipped before it is counted, so the bots do not inflate the totals
         // either.
-        if (!showPlayerbots && IsPlayerbotInWhoList(target.GetGuid()))
+        if (!showPlayerbots && IsPlayerbotCharacter(target.GetGuid()))
             continue;
 
         // player can see MODERATOR, GAME MASTER, ADMINISTRATOR only if CONFIG_GM_IN_WHO_LIST
@@ -977,7 +977,13 @@ void WorldSession::HandleInspectOpcode(WorldPacket& recvData)
         return;
 
     bool const sameCustomGameLobby = GetPlayer()->IsInSameCustomGameLobby(player);
-    if (GetPlayer()->IsValidAttackTarget(player) && !sameCustomGameLobby)
+
+    // A playerbot is always inspectable. The hardcore pseudo-faction makes an
+    // armed bot a valid attack target for everyone, and that alone silently
+    // refused every inspect - taking away the one tool that shows what a bot
+    // is wearing and specced into.
+    bool const targetIsPlayerbot = IsPlayerbotCharacter(guid);
+    if (GetPlayer()->IsValidAttackTarget(player) && !sameCustomGameLobby && !targetIsPlayerbot)
         return;
 
     uint32 talent_points = 0x47;
@@ -985,7 +991,7 @@ void WorldSession::HandleInspectOpcode(WorldPacket& recvData)
     WorldPacket data(SMSG_INSPECT_TALENT, guid_size+4+talent_points);
     data << player->GetPackGUID();
 
-    if (GetPlayer()->CanBeGameMaster() || sameCustomGameLobby ||
+    if (GetPlayer()->CanBeGameMaster() || sameCustomGameLobby || targetIsPlayerbot ||
         sWorld->getIntConfig(CONFIG_TALENTS_INSPECTING) + (GetPlayer()->GetTeamId() == player->GetTeamId()) > 1)
         player->BuildPlayerTalentsInfoData(&data);
     else
