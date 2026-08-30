@@ -39,6 +39,10 @@ struct PveConfig
     bool autoLearnSpellsOnLevelUp = true;
     bool grindEnabled = false;
     float grindSearchRadius = 60.0f;
+    // Navmesh A* queries the whole bot fleet may issue per second. These run
+    // on the map-update thread that also resolves human combat, so this is
+    // really a cap on how much player-visible latency the bots may cause.
+    uint32 pathBudgetPerSecond = 150;
     float grindWanderRadius = 40.0f;
     uint32 grindMaxLevelAbove = 3;
     uint32 grindMaxLevelBelow = 5;

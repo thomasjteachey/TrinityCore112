@@ -26,6 +26,8 @@
 #include "CellImpl.h"
 #include "CharacterCache.h"
 #include "Common.h"
+#include <atomic>
+
 #include "Containers.h"
 #include "Configuration/Config.h"
 #include "DatabaseEnv.h"
@@ -189,6 +191,13 @@ struct PveBotState
     // activity, and paces the tameable-beast scan.
     PveTimePoint tamingUntil{};
     PveTimePoint nextTameScanAt{};
+    // Taming drive: when the current walk-to-a-beast started, and how long
+    // to leave taming alone after one that could not be reached.
+    PveTimePoint tameDriveSince{};
+    PveTimePoint tameBackoffUntil{};
+    // Weapon skills are topped up on a slow cadence so a weapon bought or
+    // looted mid-level does not swing at skill 1 until the next ding.
+    PveTimePoint nextWeaponSkillCheckAt{};
     // Class-quest travel target (giver or ender) for the world executor.
     PveTimePoint nextClassQuestScanAt{};
     uint32 classQuestId = 0;
@@ -598,27 +607,65 @@ struct TameableBeastCheck
     }
 };
 
-// A hunter that knows Tame Beast and has no pet (and none waiting in the
-// stable for Call Pet) tames the nearest suitable beast.
-void MaybeTameBeast(Player* bot, PveBotState& state)
+// Weapon skill is pure friction for a bot: it never visits a weapon master,
+// and skill-up rolls only fire on swings it lands, so every newly equipped
+// weapon type leaves it glancing for hours. Bots are held at the cap for
+// their level instead.
+void MaxOutWeaponSkills(Player* bot)
 {
-    if (bot->GetClass() != CLASS_HUNTER || !bot->HasSpell(1515) || bot->GetPet())
+    static constexpr uint32 kWeaponSkills[] = {
+        SKILL_SWORDS, SKILL_AXES, SKILL_BOWS, SKILL_GUNS, SKILL_MACES,
+        SKILL_2H_SWORDS, SKILL_STAVES, SKILL_2H_MACES, SKILL_UNARMED,
+        SKILL_2H_AXES, SKILL_DAGGERS, SKILL_THROWN, SKILL_CROSSBOWS,
+        SKILL_WANDS, SKILL_POLEARMS, SKILL_FIST_WEAPONS
+    };
+
+    uint16 const cap = uint16(bot->GetLevel()) * 5;
+    if (!cap)
         return;
 
-    if (PetStable const* stable = bot->GetPetStable(); stable && stable->CurrentPet)
-        return;
+    for (uint32 skillId : kWeaponSkills)
+    {
+        if (!bot->HasSkill(skillId))
+            continue;
+        if (bot->GetSkillValue(skillId) >= cap && bot->GetMaxSkillValue(skillId) >= cap)
+            continue;
+        bot->SetSkill(skillId, bot->GetSkillStep(skillId), cap, cap);
+    }
 
+    // A weapon type the bot never trained has no skill line at all, which is
+    // worse than a low one - grant it outright for whatever it is holding.
+    for (uint8 slot : { EQUIPMENT_SLOT_MAINHAND, EQUIPMENT_SLOT_OFFHAND, EQUIPMENT_SLOT_RANGED })
+    {
+        Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item)
+            continue;
+        ItemTemplate const* proto = item->GetTemplate();
+        if (!proto || proto->Class != ITEM_CLASS_WEAPON)
+            continue;
+        uint32 const skillId = proto->GetSkill();
+        if (skillId && skillId != SKILL_NONE && !bot->HasSkill(skillId))
+            bot->SetSkill(skillId, 0, cap, cap);
+    }
+}
+
+// The nearest beast this hunter could actually tame. Line of sight is
+// deliberately not a filter: a beast behind a rock is still worth walking
+// to, and sight is rechecked where it matters, at the cast.
+Creature* FindTameableBeast(Player* bot, PveBotState& state, float radius)
+{
     std::vector<Creature*> matches;
     TameableBeastCheck check{ bot };
     Trinity::CreatureListSearcher<TameableBeastCheck> searcher(bot, matches, check);
-    Cell::VisitGridObjects(bot, searcher, 25.0f);
+    Cell::VisitGridObjects(bot, searcher, radius);
 
     Creature* nearest = nullptr;
     float nearestDistance = 0.0f;
     for (Creature* candidate : matches)
     {
-        if (!bot->IsWithinLOSInMap(candidate))
+        if (IsRecentBadTarget(state, candidate->GetGUID()))
             continue;
+
         float const distance = bot->GetDistance(candidate);
         if (!nearest || distance < nearestDistance)
         {
@@ -626,26 +673,83 @@ void MaybeTameBeast(Player* bot, PveBotState& state)
             nearestDistance = distance;
         }
     }
-    if (!nearest)
-        return;
+    return nearest;
+}
+
+// A petless hunter is a broken hunter: no threat sink, much of its damage
+// missing and half its kit dark. Taming therefore has to OUTRANK grinding,
+// not wait politely for the one moment the bot is simultaneously unengaged,
+// off-errand, rested, off-journey and already standing next to a beast -
+// which for a bot that grinds continuously essentially never arrives. That
+// conjunction is why hunters sat petless for hours.
+//
+// Returns true when it has claimed the tick.
+bool DriveHunterTaming(Player* bot, PveBotState& state)
+{
+    if (bot->GetClass() != CLASS_HUNTER || !bot->HasSpell(1515) || bot->GetPet())
+        return false;
+
+    if (PetStable const* stable = bot->GetPetStable(); stable && stable->CurrentPet)
+        return false;
+
+    // Tame Beast cannot be cast in combat and wants a peaceful beast, so this
+    // only ever gets to run in the gaps between kills. Those gaps are exactly
+    // what the old idle-only gate kept losing to the next pull.
+    if (!bot->IsAlive() || bot->IsInCombat() || bot->HasUnitState(UNIT_STATE_CASTING))
+        return false;
+
+    PveTimePoint const now = PveClock::now();
+    if (now < state.tameBackoffUntil)
+        return false;
+
+    Creature* beast = FindTameableBeast(bot, state, 80.0f);
+    if (!beast)
+    {
+        state.tameDriveSince = PveTimePoint{};
+        return false;
+    }
+
+    if (state.tameDriveSince == PveTimePoint{})
+        state.tameDriveSince = now;
+    else if (now - state.tameDriveSince > std::chrono::minutes(2))
+    {
+        // Two minutes of walking at one beast without landing a tame means it
+        // is not actually gettable. Blacklist it and go back to grinding.
+        MarkRecentBadTarget(state, beast->GetGUID());
+        state.tameDriveSince = PveTimePoint{};
+        state.tameBackoffUntil = now + std::chrono::minutes(3);
+        return false;
+    }
+
+    if (bot->GetDistance(beast) > 20.0f || !bot->IsWithinLOSInMap(beast))
+    {
+        // Claim the tick while closing the distance; letting the grind logic
+        // run too would leave the two fighting over the motion master.
+        playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
+        if (MotionMaster* motionMaster = bot->GetMotionMaster())
+            motionMaster->MovePoint(0, beast->GetPositionX(), beast->GetPositionY(), beast->GetPositionZ());
+        return true;
+    }
 
     playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
     if (MotionMaster* motionMaster = bot->GetMotionMaster())
         motionMaster->Clear();
     bot->StopMoving();
-    bot->SetSelection(nearest->GetGUID());
-    if (!bot->isInFront(nearest))
+    bot->SetSelection(beast->GetGUID());
+    if (!bot->isInFront(beast))
     {
-        bot->SetFacingToObject(nearest);
-        bot->SetInFront(nearest);
+        bot->SetFacingToObject(beast);
+        bot->SetInFront(beast);
     }
-    bot->CastSpell(nearest, 1515, false);
+    bot->CastSpell(beast, 1515, false);
     if (bot->HasUnitState(UNIT_STATE_CASTING))
     {
-        state.tamingUntil = PveClock::now() + std::chrono::seconds(25);
+        state.tamingUntil = now + std::chrono::seconds(25);
+        state.tameDriveSince = PveTimePoint{};
         TC_LOG_INFO("playerbots.pve", "Bot {} taming {} (level {}).",
-            bot->GetName(), nearest->GetName(), nearest->GetLevel());
+            bot->GetName(), beast->GetName(), beast->GetLevel());
     }
+    return true;
 }
 
 // Keep a hunter pet fed: happiness decay makes an unfed pet leave.
@@ -771,8 +875,11 @@ Unit* PickGrindTarget(Player* bot, PveBotState& state, playerbot::PveConfig cons
         return bot->GetDistance(left) < bot->GetDistance(right);
     });
 
-    // Raycasts are the expensive part; only vet the closest handful.
+    // Raycasts are the expensive part; only vet the closest handful. Navmesh
+    // paths are an order of magnitude worse again, so they get their own much
+    // tighter allowance on top of the fleet-wide budget.
     size_t losProbesLeft = 8;
+    size_t pathProbesLeft = 2;
     for (Creature* candidate : matches)
     {
         if (IsRecentBadTarget(state, candidate->GetGUID()))
@@ -790,10 +897,18 @@ Unit* PickGrindTarget(Player* bot, PveBotState& state, playerbot::PveConfig cons
         // the victim never stops resolving, so it chased a target it could
         // never touch until the server restarted. Anything beyond arm's
         // reach has to have an actual path.
-        if (bot->GetDistance(candidate) > 10.0f && !CanWalkTo(bot, candidate->GetPosition()))
+        // Only far targets are worth the path query. Anything close is
+        // almost always reachable, and the stalled-chase give-up ends the
+        // rare case that is not - it costs nothing and catches everything
+        // this screen would, just a few seconds later.
+        if (bot->GetDistance(candidate) > 25.0f && pathProbesLeft)
         {
-            MarkRecentBadTarget(state, candidate->GetGUID());
-            continue;
+            --pathProbesLeft;
+            if (!CanWalkTo(bot, candidate->GetPosition()))
+            {
+                MarkRecentBadTarget(state, candidate->GetGUID());
+                continue;
+            }
         }
 
         return candidate;
@@ -874,8 +989,41 @@ Player* PickHuntTarget(Player* bot, float radius)
 // up marching up a cliff face or standing at the bottom of one re-issuing a
 // chase forever. Ask for a real path first and refuse anything that is not
 // one - the same answer a player's own footing would give them.
+// PathGenerator is by far the most expensive thing a bot does - a full A*
+// over the navmesh, and a FAILED path is the worst case of all because it
+// exhausts the search space before it can answer. These run on the same
+// map-update thread that resolves a player's own melee swings, so with a
+// hundred bots on one continent an unbudgeted screen shows up directly as
+// hit-to-damage delay for the human standing there. Paths are therefore
+// drawn from a shared per-second allowance rather than issued on demand.
+std::atomic<uint32> g_PathBudgetTokens{ 0 };
+std::atomic<uint64> g_PathQueriesRun{ 0 };
+std::atomic<uint64> g_PathQueriesDenied{ 0 };
+
+bool TryConsumePathBudget()
+{
+    uint32 expected = g_PathBudgetTokens.load(std::memory_order_relaxed);
+    while (expected)
+    {
+        if (g_PathBudgetTokens.compare_exchange_weak(expected, expected - 1, std::memory_order_relaxed))
+            return true;
+    }
+    return false;
+}
+
 bool CanWalkTo(Player* bot, float x, float y, float z)
 {
+    // Out of allowance: assume it is reachable. Answering "no" here would
+    // make every bot refuse every target and stand still; answering "yes"
+    // only risks a chase that the stalled-chase give-up already ends.
+    if (!TryConsumePathBudget())
+    {
+        g_PathQueriesDenied.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
+
+    g_PathQueriesRun.fetch_add(1, std::memory_order_relaxed);
+
     PathGenerator path(bot);
     if (!path.CalculatePath(x, y, z, false))
         return false;
@@ -915,7 +1063,10 @@ bool PickWalkableNearPosition(Player* bot, float radius, Position& destination)
 // the next-nearest rather than the same mob across the same canyon.
 Creature* FindWalkableGrindProspect(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
 {
-    for (uint8 attempt = 0; attempt < 3; ++attempt)
+    // Each attempt re-runs a 180y grid sweep as well as a path query, so two
+    // is the most this is worth: a third pass costs more map-thread time than
+    // finding a slightly better prospect is worth.
+    for (uint8 attempt = 0; attempt < 2; ++attempt)
     {
         Creature* prospect = FindGrindProspect(bot, state, cfg);
         if (!prospect)
@@ -2460,6 +2611,23 @@ std::vector<uint32> GetTalentRecipe(Player* bot, uint32 pick)
 
     // Missing donors negative-cache as empty (hunters have no B+ donor).
     std::vector<uint32>& recipe = g_TalentRecipesByKey[key];
+
+    // Exported recipes come first. A realm that keeps no donor characters of
+    // its own - Barracks+ has none, the hand-built specs live on the other
+    // realm - reads the builds from this table, which a one-shot export
+    // populates. The engine still only ever reads its own database.
+    if (QueryResult exported = CharacterDatabase.PQuery(
+        "SELECT spell FROM playerbot_talent_recipe WHERE class = {} AND pick = {}",
+        uint32(bot->GetClass()), pick % 3))
+    {
+        do
+        {
+            recipe.push_back((*exported)[0].GetUInt32());
+        } while (exported->NextRow());
+    }
+    if (!recipe.empty())
+        return recipe;
+
     for (bool legacy : { false, true })
     {
         char const* donorName = TalentDonorName(bot->GetClass(), pick, legacy);
@@ -5227,6 +5395,12 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
 
     EnsureFirstLoginKit(bot, state, cfg);
 
+    if (PveClock::now() >= state.nextWeaponSkillCheckAt)
+    {
+        state.nextWeaponSkillCheckAt = PveClock::now() + std::chrono::seconds(15);
+        MaxOutWeaponSkills(bot);
+    }
+
     if (bot->GetGroupInvite())
     {
         if (cfg.declineGroupInvites)
@@ -5393,12 +5567,11 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         TryStartClassQuestTravel(bot, state);
     }
 
-    // Hunters keep a pet: tame when petless, feed what they have.
-    if (!state.engaged && !bot->IsInCombat() && !IsRestingNow(bot, state) && !state.journeyActive &&
-        state.errandKind == PveErrandKind::None && now >= state.nextTameScanAt)
+    // Taming itself is driven from the fast tick, where it can outrank the
+    // grind loop; this only keeps whatever pet the hunter already has fed.
+    if (!state.engaged && !bot->IsInCombat() && now >= state.nextTameScanAt)
     {
         state.nextTameScanAt = now + std::chrono::seconds(30);
-        MaybeTameBeast(bot, state);
         MaybeFeedPet(bot);
     }
 
@@ -5533,6 +5706,10 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
 
     // Must run before the disengage path clears the dead victim's guid.
     DetectFreshKillForLoot(bot, state, cfg);
+
+    // A hunter without a pet goes and gets one before it does anything else.
+    if (DriveHunterTaming(bot, state))
+        return;
 
     ObjectGuid const previousTargetGuid = bot->GetTarget();
     Unit* target = ResolveAttackableByGuid(bot, previousTargetGuid);
@@ -5861,6 +6038,7 @@ void PveManager::LoadConfig()
     g_PveConfig.autoLearnSpellsOnLevelUp = sConfigMgr->GetBoolDefault("Playerbot.Pve.AutoLearnSpellsOnLevelUp", true);
     g_PveConfig.grindEnabled = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.Enable", false);
     g_PveConfig.grindSearchRadius = sConfigMgr->GetFloatDefault("Playerbot.PveGrind.SearchRadius", 60.0f);
+    g_PveConfig.pathBudgetPerSecond = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.PathBudgetPerSecond", 150));
     g_PveConfig.grindWanderRadius = sConfigMgr->GetFloatDefault("Playerbot.PveGrind.WanderRadius", 40.0f);
     g_PveConfig.grindMaxLevelAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelAbove", 3), 0, 10));
     g_PveConfig.grindMaxLevelBelow = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelBelow", 5), 0, 80));
@@ -5940,12 +6118,36 @@ void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
         return;
     lastPassMs = nowMs;
 
+    // Hand the fleet a fresh second's worth of navmesh queries. Anything the
+    // bots did not spend is deliberately not carried over: the point is a
+    // ceiling on per-second map-thread cost, not a total.
+    g_PathBudgetTokens.store(g_PveConfig.pathBudgetPerSecond, std::memory_order_relaxed);
+
+    // Bot cost telemetry. The map-update thread is shared with human combat,
+    // so when a player reports hit-to-damage delay this is the line that says
+    // whether the bots are responsible.
+    {
+        static uint32 lastReportMs = 0;
+        if (!lastReportMs)
+            lastReportMs = nowMs;
+        else if (nowMs >= lastReportMs + 60000)
+        {
+            uint64 const ran = g_PathQueriesRun.exchange(0, std::memory_order_relaxed);
+            uint64 const denied = g_PathQueriesDenied.exchange(0, std::memory_order_relaxed);
+            uint32 const elapsedSec = std::max(1u, (nowMs - lastReportMs) / 1000);
+            lastReportMs = nowMs;
+            TC_LOG_INFO("playerbots.pve", "PvE cost: {} navmesh paths/sec run, {} /sec deferred (budget {}).",
+                ran / elapsedSec, denied / elapsedSec, g_PveConfig.pathBudgetPerSecond);
+        }
+    }
+
     ProcessPendingGroupInviteAccepts();
     ProcessPendingSummons();
     ProcessPendingLootExecutions();
     ProcessPendingMailCollections();
     if (g_PveConfig.auctionBuyEnabled)
         ProcessPendingAuctionShopping();
+    if (g_PveConfig.auctionSellEnabled)
         ProcessPendingAuctionSales();
     ProcessPendingSupplyRuns();
     if (g_PveConfig.questsEnabled)
@@ -6237,6 +6439,9 @@ void PveManager::OnManagedBotLevelChanged(Player* player, uint8 /*oldLevel*/)
 
     if (!player || !playerbot::IsManagedRandomBot(player))
         return;
+
+    // Covers PvP-only bots too: they never reach the PvE slow tick.
+    MaxOutWeaponSkills(player);
 
     if (g_PveConfig.autoLearnSpellsOnLevelUp)
     {
