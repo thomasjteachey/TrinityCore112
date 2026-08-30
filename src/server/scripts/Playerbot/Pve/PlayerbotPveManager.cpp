@@ -723,6 +723,18 @@ constexpr RoguePoisonRank kCripplingPoison[]   = { { 20, 3775 }, { 50, 3776 } };
 constexpr RoguePoisonRank kMindNumbingPoison[] = { { 24, 5237 }, { 38, 6951 }, { 52, 9186 } };
 constexpr RoguePoisonRank kWoundPoison[]       = { { 32, 10918 }, { 40, 10920 }, { 48, 10921 }, { 56, 10922 } };
 
+// Is this one of the poisons a rogue stocks for its own blades?
+//
+// Matched by ITEM ID on purpose, because the item CLASS cannot be trusted
+// for this. DBC.EnforceItemAttributes is on for this realm, and the client
+// Item.dbc calls Crippling Poison II and Mind-numbing Poison II class 15
+// (MISC) rather than class 0 (CONSUMABLE). The server honours the DBC and
+// rewrites the class at load - "Item (Entry: 3776) does not have a correct
+// class 0, must be 15" - so the consumable exclusion in IsAuctionableSurplus
+// silently missed exactly those two, and rogues auctioned the poisons they
+// had just been handed. Identity does not drift; class does.
+bool IsStockedPoisonItem(uint32 itemId);
+
 // Highest rank the bot's level actually allows. Ranks are listed ascending,
 // so the last one that passes wins.
 template<size_t N>
@@ -734,6 +746,26 @@ uint32 BestPoisonForLevel(Player const* bot, RoguePoisonRank const (&ranks)[N])
             best = rank.itemId;
 
     return best;
+}
+
+bool IsStockedPoisonItem(uint32 itemId)
+{
+    if (!itemId)
+        return false;
+
+    auto listed = [itemId](RoguePoisonRank const* ranks, size_t count)
+    {
+        for (size_t index = 0; index < count; ++index)
+            if (ranks[index].itemId == itemId)
+                return true;
+        return false;
+    };
+
+    return listed(kInstantPoison, std::size(kInstantPoison)) ||
+        listed(kDeadlyPoison, std::size(kDeadlyPoison)) ||
+        listed(kCripplingPoison, std::size(kCripplingPoison)) ||
+        listed(kMindNumbingPoison, std::size(kMindNumbingPoison)) ||
+        listed(kWoundPoison, std::size(kWoundPoison));
 }
 
 // Keep a working stock of every poison family the bot has access to.
@@ -1178,6 +1210,26 @@ void DrivePetGrowl(Player* bot)
         return;
 
     pet->CastSpell(petVictim, growlId, false);
+}
+
+// Hold a bot's pet at full happiness.
+//
+// Classic happiness decay is deliberately ON for this realm
+// (Centurion.Classic.PetHappinessDecay) and that is right for a player, who
+// can keep the right diet in their bags and notice when the pet sulks. A bot
+// cannot be relied on for either, and the penalty is real: an unhappy pet
+// loses damage and eventually runs off entirely, which on a hunter also
+// takes the threat sink with it. Players keep the classic rule; bot pets are
+// simply held at the top.
+void KeepPetHappy(Player* bot)
+{
+    Pet* pet = bot->GetPet();
+    if (!pet || !pet->IsAlive() || pet->getPetType() != HUNTER_PET)
+        return;
+
+    int32 const maxHappiness = int32(pet->GetMaxPower(POWER_HAPPINESS));
+    if (maxHappiness > 0 && int32(pet->GetPower(POWER_HAPPINESS)) < maxHappiness)
+        pet->SetPower(POWER_HAPPINESS, maxHappiness);
 }
 
 // Keep a hunter pet fed: happiness decay makes an unfed pet leave.
@@ -1862,10 +1914,19 @@ void TryBuySupplies(Player* bot, Creature* vendor)
         if (slot < 0 || !proto)
             return;
 
-        uint32 const buyCount = std::max<uint32>(1, proto->BuyCount);
-        uint32 units = std::max(buyCount, desiredUnits - (desiredUnits % buyCount));
-        units = std::min<uint32>(units, 250);
-        bot->BuyItemFromVendorSlot(vendor->GetGUID(), uint32(slot), proto->ItemId, uint8(units), NULL_BAG, NULL_SLOT);
+        // BuyItemFromVendorSlot's count is a number of vendor LOTS, and each
+        // lot is BuyCount items - it charges and delivers BuyCount * count.
+        // Passing a raw unit count therefore multiplied every purchase by
+        // BuyCount: vendor consumables here are sold five to a lot, so a
+        // twenty unit top-up actually bought ONE HUNDRED items, five full
+        // stacks. That is how a bot ended up carrying five stacks of food and
+        // then had no room left to buy any water at all - the water purchase
+        // failed on a full pack, silently, and it walked back to the same
+        // vendor every couple of minutes forever.
+        uint32 const perLot = std::max<uint32>(1, proto->BuyCount);
+        uint32 const lots = std::max<uint32>(1, (desiredUnits + perLot - 1) / perLot);
+        bot->BuyItemFromVendorSlot(vendor->GetGUID(), uint32(slot), proto->ItemId,
+            uint8(std::min<uint32>(lots, 250)), NULL_BAG, NULL_SLOT);
     };
 
     // A bot that can conjure its own food or water never buys that kind.
@@ -1975,10 +2036,14 @@ uint32 SellVendorJunk(Player* bot)
             sellable = !playerbot::PveManager::GetConfig().auctionSellEnabled ||
                 CountFreeBagSlots(bot) < 2 || !IsAuctionableSurplus(bot, item);
 
-        // Spare bags and quivers: worthless to carry, and carrying them is
-        // what filled the packs.
-        if (!sellable)
-            sellable = IsSpareContainer(bot, item);
+        // Spare bags and quivers. A bag is worth real money to another
+        // player and a pittance to a merchant, so these go to the house by
+        // preference and only to the vendor when that route is closed -
+        // selling disabled, the bag not listable, or the pack so tight that
+        // waiting for the next listing run would cost a drop.
+        if (!sellable && IsSpareContainer(bot, item))
+            sellable = !playerbot::PveManager::GetConfig().auctionSellEnabled ||
+                CountFreeBagSlots(bot) < 2 || !IsAuctionableSurplus(bot, item);
 
         // Spare white gear, always - it is barred from the auction house, so
         // the merchant is the only place it can go. Waiting for a full pack
@@ -4390,6 +4455,11 @@ bool IsAuctionableSurplus(Player* bot, Item* item)
     if (proto->Quality == ITEM_QUALITY_POOR || !proto->SellPrice)
         return false;
 
+    // Kit the bot was handed for its own use. Checked before the class switch
+    // because the class of some of these is rewritten from the client DBC.
+    if (IsStockedPoisonItem(proto->ItemId))
+        return false;
+
     // Never sell the tools of the trade: food, water, ammunition, bandages,
     // potions, quest items or keys.
     switch (proto->Class)
@@ -6136,6 +6206,7 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     {
         state.nextPetGrowlCheckAt = now + std::chrono::seconds(20);
         EnsurePetKnowsGrowl(bot);
+        KeepPetHappy(bot);
     }
 
     // Naked recovery: shop the auction house with the whole purse, and when
