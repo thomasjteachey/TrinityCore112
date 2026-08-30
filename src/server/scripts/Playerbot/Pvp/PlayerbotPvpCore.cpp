@@ -5136,6 +5136,17 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
     bool const isFireMage = profileSelection.profile == ClassicClassProfile::SecondaryClassic;
     bool const isArcaneMage = profileSelection.profile == ClassicClassProfile::PrimaryClassic;
     bool const isFrostMage = !isFireMage && !isArcaneMage;
+    // Mage armor by CHAIN, never by a hardcoded rank id. The old entry cast
+    // rank id 10220 and gated on HasAura(10220): a level 50 mage knows Ice
+    // Armor rank 3 (10219), the executor resolved the cast down to the rank
+    // it actually knew, the buff landed as 10219 - and the condition, still
+    // asking for 10220, never cleared. So it recast Ice Armor on every single
+    // pass, forever. Any rank of either chain now satisfies the slot, exactly
+    // as the open-world buff pass already did it.
+    uint32 mageArmorSpellId = ResolveKnownPlayerSpellInChain(player, 7302); // Ice Armor
+    if (!mageArmorSpellId)
+        mageArmorSpellId = ResolveKnownPlayerSpellInChain(player, 168);     // else Frost Armor
+    bool const mageArmorMissing = !HasAuraFromSpellChain(player, 7302) && !HasAuraFromSpellChain(player, 168);
     Unit const* cursedTarget = IsSpellReady(player, 475) ? SelectFriendlyCurseTarget(player, 40.0f) : nullptr;
     Unit const* castingTarget = IsSpellReady(player, 2139) ? SelectEnemyCastingTarget(player, 30.0f, target) : nullptr;
     Unit const* polymorphTarget =
@@ -5195,8 +5206,8 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
             { "mage polymorph", "priority crowd control on non-dotted paladin/priest targets", 12826, playerbot::PvpClassSpellContext::TargetMode::Enemy, polymorphTarget ? polymorphTarget->GetGUID() : ObjectGuid::Empty } },
         { "default ranged", hasHostileTarget && IsSpellReady(player, (isFireMage || isArcaneMage) ? uint32(10207) : uint32(25304)), 18.0f,
             { (isFireMage || isArcaneMage) ? "mage scorch" : "mage frostbolt", isFireMage ? "default fire pressure" : (isArcaneMage ? "scorch instead of frostbolt" : "default ranged pressure"), (isFireMage || isArcaneMage) ? uint32(10207) : uint32(25304), playerbot::PvpClassSpellContext::TargetMode::Enemy } },
-        { "maintain buff", !player->IsInCombat() && IsSpellReady(player, 10220) && !player->HasAura(10220), 9.0f,
-            { "frost armor", "frost armor", 10220, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "maintain buff", !player->IsInCombat() && mageArmorSpellId && mageArmorMissing && IsSpellReady(player, mageArmorSpellId), 9.0f,
+            { "mage armor", "maintain ice or frost armor", mageArmorSpellId, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "mana gem missing", !player->IsInCombat() && IsSpellReady(player, 10054) && !player->HasItemCount(8008), 8.0f,
             { "create mana ruby", "create mana ruby outside combat", 10054, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "defensive reset", !isFireMage && !IsSpellReady(player, 11958) && IsSpellReady(player, 12472), 7.0f,
