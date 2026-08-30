@@ -2055,6 +2055,34 @@ bool TreatsWeaponAsStatStick(Player const* bot)
 // paperweight: melee weapons compare by real DPS, casters by stat budget
 // (item level), armor by tier-appropriate subclass first - and spec-defining
 // equipment (shields, dagger mainhands) never gets benched off-spec.
+// A costume is not equipment. Holiday masks carry a seven-day duration,
+// novelty "weapons" deal no damage, and tabards and shirts protect nothing -
+// yet every one of them beats an empty slot on item level alone, so a bot
+// with money and bare shoulders bought them off the auction house until it
+// was broke. Real gear has armour, a stat, a swing, or an equip effect.
+bool HasFightingValue(ItemTemplate const* proto)
+{
+    if (proto->Duration)
+        return false;
+
+    if (proto->Class == ITEM_CLASS_WEAPON)
+        return proto->Damage[0].DamageMax > 0.0f;
+
+    if (proto->Armor)
+        return true;
+
+    for (uint32 statIndex = 0; statIndex < proto->StatsCount && statIndex < MAX_ITEM_PROTO_STATS; ++statIndex)
+        if (proto->ItemStat[statIndex].ItemStatValue != 0)
+            return true;
+
+    for (uint8 spellIndex = 0; spellIndex < MAX_ITEM_PROTO_SPELLS; ++spellIndex)
+        if (proto->Spells[spellIndex].SpellId > 0 &&
+            proto->Spells[spellIndex].SpellTrigger == ITEM_SPELLTRIGGER_ON_EQUIP)
+            return true;
+
+    return false;
+}
+
 bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTemplate const* incumbent, uint8 slot)
 {
     // Bags compare by slot count, nothing else.
@@ -2081,8 +2109,13 @@ bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTempla
         !(candidate->Class == ITEM_CLASS_ARMOR && candidate->SubClass == ITEM_SUBCLASS_ARMOR_SHIELD))
         return false;
 
+    // Nothing temporary, ever - a seven-day mask is not gear.
+    if (candidate->Duration)
+        return false;
+
+    // An empty slot is not a licence to buy anything at all.
     if (!incumbent)
-        return true;
+        return HasFightingValue(candidate);
 
     if (candidate->Class == ITEM_CLASS_WEAPON && incumbent->Class == ITEM_CLASS_WEAPON)
     {

@@ -355,6 +355,10 @@ namespace BarracksHardcore
                 continue;
             if (proto.Bonding == BIND_QUEST_ITEM)
                 continue;
+            // Nothing that expires: holiday masks and their kin carry a
+            // duration and would rot off the wearer days later.
+            if (proto.Duration)
+                continue;
 
             s_whiteKitByInvType[proto.InventoryType].push_back(proto.ItemId);
         }
