@@ -5461,10 +5461,18 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
 {
     Player* master = state.masterGuid.IsEmpty() ? nullptr : ObjectAccessor::GetPlayer(*bot, state.masterGuid);
 
-    // A tame or capture channel in progress must not be interrupted by
-    // anything - combat, loot walks, errands or journeys. Taking the
-    // beast's hits meanwhile is part of the mechanic.
-    if (PveClock::now() < state.tamingUntil && bot->GetCurrentSpell(CURRENT_CHANNELED_SPELL))
+    // A tame or capture cast in progress must not be interrupted by anything -
+    // combat, loot walks, errands or journeys. Taking the beast's hits
+    // meanwhile is part of the mechanic.
+    //
+    // UNIT_STATE_CASTING, not CURRENT_CHANNELED_SPELL: Tame Beast occupies the
+    // GENERIC cast slot, so asking only about channels meant the hold never
+    // applied to the one spell it was written for. The bot started its twenty
+    // second tame, and its own combat logic interrupted it a quarter of a
+    // second later - every time, forever. Hunters were seen starting a tame
+    // three times in ten minutes and never finishing one.
+    if (PveClock::now() < state.tamingUntil &&
+        (bot->HasUnitState(UNIT_STATE_CASTING) || bot->GetCurrentSpell(CURRENT_CHANNELED_SPELL)))
         return;
 
     // Must run before the disengage path clears the dead victim's guid.
