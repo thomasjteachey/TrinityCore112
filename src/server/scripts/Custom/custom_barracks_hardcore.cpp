@@ -104,6 +104,33 @@ namespace BarracksHardcore
         return s_botAccountIds.contains(accountId);
     }
 
+    // Is there a real person close enough for this death to mean anything?
+    // Bots and companion/virtual sessions do not count - a hillside full of
+    // other bots is still an empty hillside.
+    bool AnyHumanPlayerWithin(Player const* victim, float radius)
+    {
+        Map const* map = victim ? victim->GetMap() : nullptr;
+        if (!map)
+            return false;
+
+        for (auto const& reference : map->GetPlayers())
+        {
+            Player const* candidate = reference.GetSource();
+            if (!candidate || candidate == victim || !candidate->IsInWorld())
+                continue;
+
+            WorldSession const* session = candidate->GetSession();
+            if (!session || session->IsVirtualSession() || session->IsTransientPlayerSession() ||
+                IsBotAccount(session->GetAccountId()))
+                continue;
+
+            if (candidate->IsWithinDist(victim, radius, false))
+                return true;
+        }
+
+        return false;
+    }
+
     bool IsOptedIn(uint32 guidLow)
     {
         std::shared_lock<std::shared_mutex> guard(s_optInLock);
@@ -719,6 +746,19 @@ public:
 
     void OnPlayerKilledByCreature(Creature* /*killer*/, Player* victim) override
     {
+        // A bot killed by a mob with nobody around has stripped itself onto an
+        // empty hillside: no one can reach the chest before it despawns, so
+        // the only lasting effect is the fleet grinding itself out of its own
+        // gear. Deaths a player could actually witness or loot still count,
+        // and so does every death at the hands of a player (OnPVPKill).
+        if (victim)
+        {
+            WorldSession const* session = victim->GetSession();
+            bool const victimIsBot = session && IsBotAccount(session->GetAccountId());
+            if (victimIsBot && !AnyHumanPlayerWithin(victim, 200.0f))
+                return;
+        }
+
         DropFullLootChest(victim);
     }
 };

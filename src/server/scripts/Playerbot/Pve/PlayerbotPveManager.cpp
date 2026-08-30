@@ -321,6 +321,7 @@ bool BotHasIncompleteQuest(Player* bot);
 template<typename Fn>
 void ForEachBagItem(Player* bot, Fn&& fn);
 bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTemplate const* incumbent, uint8 slot);
+bool IsAuctionableSurplus(Player* bot, Item* item);
 bool CanWalkTo(Player* bot, Position const& destination);
 void ProcessPendingLootExecutions();
 void GrantGatherSkillCredit(Player* bot, GameObject* go);
@@ -1527,8 +1528,7 @@ bool IsSpareContainer(Player* bot, Item* item)
 uint32 SellVendorJunk(Player* bot)
 {
     // With the pack full there is nowhere to put a drop, a purchase or a
-    // quest reward, so the clear-out widens: plain white gear the bot is not
-    // wearing is worth a few coppers and a free slot far more.
+    // quest reward, so the clear-out widens.
     bool const packedTight = CountFreeBagSlots(bot) < 2;
 
     uint32 soldCount = 0;
@@ -1538,22 +1538,31 @@ uint32 SellVendorJunk(Player* bot)
         if (!proto || !proto->SellPrice)
             return;
 
-        // Greys always; gathered trade goods too (bots don't craft), unless
-        // an active quest needs the item.
+        // Greys always.
         bool sellable = proto->Quality == ITEM_QUALITY_POOR;
+
+        // Gathered trade goods (bots don't craft) - but these are exactly the
+        // reagents the auction house wants, and a vendor pays a fraction of
+        // what they fetch there. So they only go to the merchant when the
+        // auction route is closed to them: selling switched off, the item not
+        // listable at all (soulbound gathers), or the pack too full to afford
+        // waiting for the next listing run.
         if (!sellable && playerbot::PveManager::GetConfig().professionsEnabled &&
-            proto->Class == ITEM_CLASS_TRADE_GOODS)
-            sellable = !IsQuestRequiredItem(bot, proto->ItemId);
+            proto->Class == ITEM_CLASS_TRADE_GOODS && !IsQuestRequiredItem(bot, proto->ItemId))
+            sellable = !playerbot::PveManager::GetConfig().auctionSellEnabled ||
+                packedTight || !IsAuctionableSurplus(bot, item);
 
         // Spare bags and quivers: worthless to carry, and carrying them is
         // what filled the packs.
         if (!sellable)
             sellable = IsSpareContainer(bot, item);
 
-        // Spare white gear once the pack is genuinely full - never the food,
-        // water, ammunition or bags that keep the bot running, and never
-        // something it would rather be wearing.
-        if (!sellable && packedTight && proto->Quality == ITEM_QUALITY_NORMAL &&
+        // Spare white gear, always - it is barred from the auction house, so
+        // the merchant is the only place it can go. Waiting for a full pack
+        // just meant it accumulated. Never the food, water, ammunition or
+        // bags that keep the bot running, and never something it would rather
+        // be wearing.
+        if (!sellable && proto->Quality == ITEM_QUALITY_NORMAL &&
             (proto->Class == ITEM_CLASS_WEAPON || proto->Class == ITEM_CLASS_ARMOR) &&
             !IsQuestRequiredItem(bot, proto->ItemId))
         {
@@ -2123,6 +2132,17 @@ bool PrefersDaggerMainhand(Player const* bot)
     return bot->GetClass() == CLASS_ROGUE && EquipProfileIndex(bot) == 0;
 }
 
+// Beast Mastery hunters want two one-handers, not a two-hander. A hunter's
+// melee weapons are stat sticks it rarely swings, so the slot count is what
+// matters: two one-handers carry two sets of stats, and a two-hander gives
+// up the offhand entirely to carry one. CanDualWield is the authority -
+// below level 20, or before the trainer spell is picked up, a lone one-hander
+// really is worse than a two-hander and this must not fire.
+bool PrefersDualWield(Player const* bot)
+{
+    return bot->GetClass() == CLASS_HUNTER && EquipProfileIndex(bot) == 0 && bot->CanDualWield();
+}
+
 // Instant attacks add flat damage to a single swing, so at comparable
 // quality the slower, harder-hitting weapon wins: average hit per swing
 // is DPS x speed, which prefers slow weapons at equal DPS by construction.
@@ -2352,6 +2372,18 @@ bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTempla
             bool const incumbentDagger = incumbent->SubClass == ITEM_SUBCLASS_WEAPON_DAGGER;
             if (candidateDagger != incumbentDagger)
                 return candidateDagger;
+        }
+
+        // Taking a two-hander forfeits a whole weapon slot, so for a dual
+        // wielding hunter a one-hander wins on that alone, before any score
+        // comparison. Otherwise the higher-ilvl two-hander keeps winning the
+        // mainhand and the offhand sits empty forever.
+        if (slot == EQUIPMENT_SLOT_MAINHAND && PrefersDualWield(bot))
+        {
+            bool const candidateTwoHand = candidate->InventoryType == INVTYPE_2HWEAPON;
+            bool const incumbentTwoHand = incumbent->InventoryType == INVTYPE_2HWEAPON;
+            if (candidateTwoHand != incumbentTwoHand)
+                return !candidateTwoHand;
         }
 
         // Stat-stick weapons compare by the spec's stat score; only item
@@ -3953,9 +3985,18 @@ bool IsAuctionableSurplus(Player* bot, Item* item)
             break;
     }
 
-    // Gear it would rather wear than sell.
+    // Things you wear or swing have a quality floor: white gear is vendor
+    // stock, not auction stock. Nobody bids against the vendor's own shelf
+    // for a common sword, so listing one only parks it in the house for two
+    // days and forfeits the deposit. Green and better go up; the rest go to
+    // the merchant. Note this gate is deliberately narrow - reagents, trade
+    // goods, recipes and bags are not gear and are not affected by it.
     if (proto->Class == ITEM_CLASS_WEAPON || proto->Class == ITEM_CLASS_ARMOR)
     {
+        if (proto->Quality < ITEM_QUALITY_UNCOMMON)
+            return false;
+
+        // Gear it would rather wear than sell.
         uint16 dest = 0;
         if (bot->CanEquipItem(NULL_SLOT, dest, item, false) == EQUIP_ERR_OK)
         {
@@ -4719,11 +4760,23 @@ struct QuestGameObjectCheck
     Player* bot;
     bool wantQuestObjects;
     bool wantGatherNodes;
+    uint32 deathChestEntry; // 0 when full loot is off
 
     bool operator()(GameObject* go) const
     {
         if (!go->isSpawned())
             return false;
+
+        // Full-loot death chests. Nothing here ever matched one: a death chest
+        // is not a quest object and not a gather node, so ActivateToQuest was
+        // always false for it and the errand scan simply never saw it. The
+        // walk-back journey delivered the bot to the spot and then it stood on
+        // top of its own cache indefinitely, which is exactly what was seen in
+        // game. Any such chest in range is worth taking - a stale one left by
+        // another bot recycles that gear instead of despawning it.
+        if (deathChestEntry && go->GetEntry() == deathChestEntry &&
+            go->GetGoType() == GAMEOBJECT_TYPE_CHEST && go->getLootState() == GO_READY)
+            return true;
 
         if (wantQuestObjects && go->ActivateToQuest(bot))
         {
@@ -4740,7 +4793,8 @@ GameObject* FindNearestQuestGameObject(Player* bot, PveBotState& state, float ra
 {
     std::vector<GameObject*> matches;
     playerbot::PveConfig const& cfg = playerbot::PveManager::GetConfig();
-    QuestGameObjectCheck check{ bot, cfg.questsEnabled && BotHasIncompleteQuest(bot), cfg.professionsEnabled };
+    QuestGameObjectCheck check{ bot, cfg.questsEnabled && BotHasIncompleteQuest(bot), cfg.professionsEnabled,
+        cfg.hardcoreLootChestEntry };
     Trinity::GameObjectListSearcher<QuestGameObjectCheck> searcher(bot, matches, check);
     Cell::VisitGridObjects(bot, searcher, radius);
 
