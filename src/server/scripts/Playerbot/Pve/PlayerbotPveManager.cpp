@@ -3034,6 +3034,28 @@ bool HasFightingValue(ItemTemplate const* proto)
     return false;
 }
 
+// Does this bot actually cast from its off hand? Only those classes have any
+// use for an INVTYPE_HOLDABLE there - a tome, scepter or lantern carries no
+// damage and grants no swing, so for everyone else it silently deletes an
+// entire attack.
+bool BotCastsFromOffhand(Player const* bot)
+{
+    switch (bot->GetClass())
+    {
+        case CLASS_MAGE:
+        case CLASS_WARLOCK:
+        case CLASS_PRIEST:
+            return true;
+        case CLASS_PALADIN:                         // holy only; prot wants a shield
+            return EquipProfileIndex(bot) == 0;
+        case CLASS_SHAMAN:                          // elemental and restoration
+        case CLASS_DRUID:                           // balance and restoration
+            return EquipProfileIndex(bot) == 0 || EquipProfileIndex(bot) == 2;
+        default:                                    // warrior, rogue, hunter
+            return false;
+    }
+}
+
 bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTemplate const* incumbent, uint8 slot)
 {
     // Bags compare by slot count, nothing else.
@@ -3052,6 +3074,31 @@ bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTempla
             return false;
         return !incumbent || (incumbent->Class == ITEM_CLASS_QUIVER &&
             candidate->ContainerSlots > incumbent->ContainerSlots);
+    }
+
+    // A held off-hand is not a weapon. INVTYPE_HOLDABLE items - tomes,
+    // scepters, lanterns - have no damage and grant no swing, so putting one
+    // in the off hand of anyone who fights with two weapons silently deletes
+    // an entire attack. It is not caught by the shield rule below, and it is
+    // not caught by the stat scorer either, because a caster suffix like
+    // "of the Owl" can out-score a plain dagger on raw stat weight.
+    //
+    // Only classes that genuinely cast from that slot may take one; everyone
+    // else wants a weapon there, or a shield.
+    if (slot == EQUIPMENT_SLOT_OFFHAND)
+    {
+        bool const castsFromOffhand = BotCastsFromOffhand(bot);
+
+        if (candidate->InventoryType == INVTYPE_HOLDABLE && !castsFromOffhand)
+            return false;
+
+        // And the other direction: a bot already holding one is stuck with a
+        // dead slot until something displaces it, so a real weapon beats it
+        // outright rather than going to the stat scorer, which a caster
+        // suffix like "of the Owl" could otherwise win on raw stat weight.
+        if (!castsFromOffhand && incumbent && incumbent->InventoryType == INVTYPE_HOLDABLE &&
+            candidate->Class == ITEM_CLASS_WEAPON)
+            return true;
     }
 
     // A shield user never benches an equipped shield for a non-shield.
