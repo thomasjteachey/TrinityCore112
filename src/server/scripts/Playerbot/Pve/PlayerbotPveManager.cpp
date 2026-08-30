@@ -1500,6 +1500,20 @@ Unit* PickBotAssistTarget(Player* bot, playerbot::PveConfig const& cfg)
 
         if (!foe || !foe->IsAlive() || !bot->IsValidAttackTarget(foe))
             continue;
+
+        // Assist onto the PERSON, not their pet. Resolved before the two
+        // screens below on purpose: before the managed-bot check so bots do
+        // not brawl with each other's minions, and before the level band so a
+        // low level pet cannot smuggle its owner past a filter the owner would
+        // not have passed - players are exempt from that band anyway.
+        if (foe->GetTypeId() != TYPEID_PLAYER)
+        {
+            if (Unit* owner = foe->GetCharmerOrOwner())
+                if (Player* ownerPlayer = owner->ToPlayer())
+                    if (ownerPlayer->IsAlive() && bot->IsValidAttackTarget(ownerPlayer))
+                        foe = ownerPlayer;
+        }
+
         if (foe->GetTypeId() == TYPEID_PLAYER && playerbot::IsManagedRandomBot(foe->ToPlayer()))
             continue;
 
@@ -7280,13 +7294,44 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
             // are both on the bot, the mob is a distraction and the player is
             // the fight - taking whichever happened to be nearer meant a bot
             // being ganked would turn its back on the ganker to swat a boar.
-            bool const attackerIsPlayer = attacker->GetTypeId() == TYPEID_PLAYER;
-            float const distance = bot->GetDistance(attacker);
+            // ...and a player's PET is not the fight either - its owner is.
+            // A hunter or warlock pet is TYPEID_UNIT, so the person-first rule
+            // above never recognised one, and a bot being attacked by a pet
+            // would dutifully swat the pet while its owner shot the bot in the
+            // back. That is only visible "sometimes" because it needs the owner
+            // to be absent from getAttackers() - which is exactly what happens
+            // while they attack from range.
+            //
+            // Rank a player-controlled attacker as its owner, and fight the
+            // owner. If the owner is not a legal target the pet stays the
+            // candidate, so a bot is never left unable to answer something
+            // actively hitting it.
+            Unit* ranked = attacker;
+            if (attacker->GetTypeId() != TYPEID_PLAYER)
+            {
+                if (Unit* owner = attacker->GetCharmerOrOwner())
+                {
+                    if (Player* ownerPlayer = owner->ToPlayer())
+                    {
+                        // The no-friendly-fire rule has to follow the pet home
+                        // too, or bots would happily brawl with each other's
+                        // minions forever.
+                        if (playerbot::IsManagedRandomBot(ownerPlayer))
+                            continue;
+
+                        if (ownerPlayer->IsAlive() && bot->IsValidAttackTarget(ownerPlayer))
+                            ranked = ownerPlayer;
+                    }
+                }
+            }
+
+            bool const attackerIsPlayer = ranked->GetTypeId() == TYPEID_PLAYER;
+            float const distance = bot->GetDistance(ranked);
 
             if (!nearestAttacker || (attackerIsPlayer && !nearestAttackerIsPlayer) ||
                 (attackerIsPlayer == nearestAttackerIsPlayer && distance < nearestAttackerDistance))
             {
-                nearestAttacker = attacker;
+                nearestAttacker = ranked;
                 nearestAttackerDistance = distance;
                 nearestAttackerIsPlayer = attackerIsPlayer;
             }
