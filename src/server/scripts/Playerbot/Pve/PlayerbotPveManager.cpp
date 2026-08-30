@@ -329,6 +329,7 @@ template<typename Fn>
 void ForEachBagItem(Player* bot, Fn&& fn);
 bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTemplate const* incumbent, uint8 slot);
 bool IsAuctionableSurplus(Player* bot, Item* item);
+uint32 RequiredAmmoSubclass(Player const* bot);
 void MoveTowardThrottled(Player* bot, Position const& destination);
 bool CanWalkTo(Player* bot, Position const& destination);
 void ProcessPendingLootExecutions();
@@ -767,6 +768,99 @@ Creature* FindTameableBeast(Player* bot, PveBotState& state, float radius)
         }
     }
     return nearest;
+}
+
+// A hunter is a ranged class, but the follow this tick issues otherwise
+// closes to ONE yard for every class alike. That is fatal for a hunter
+// twice over. At five yards UpdateHunterCombatMode flips it into melee
+// mode, and every ranged shot the class engine offers is gated behind
+// ranged mode - and it only flips back at EIGHT yards, a separation nothing
+// in the PvE path ever produced. On top of that, the only code in the whole
+// tree that starts Auto Shot lives in the hunter kite loop, which is
+// reachable exclusively from battlegrounds and duels. So a PvE hunter
+// walked into melee, was no longer allowed to shoot, and never fired Auto
+// Shot at all - it just swung a melee weapon while its pet held the mob.
+//
+// mayMove is false while the engine has already acted or a cast is in
+// flight; Auto Shot upkeep still runs then, because it is an auto-repeat
+// that only needs starting once.
+//
+// Returns true when it owns movement this tick.
+bool DriveHunterRangedPositioning(Player* bot, Unit* victim, bool mayMove)
+{
+    if (!victim || bot->GetClass() != CLASS_HUNTER || !bot->HasSpell(75))
+        return false;
+
+    // No ranged weapon, or nothing to feed it: melee genuinely is the plan.
+    if (!bot->GetWeaponForAttack(RANGED_ATTACK, true))
+        return false;
+
+    if (RequiredAmmoSubclass(bot))
+    {
+        uint32 const ammoId = bot->GetUInt32Value(PLAYER_AMMO_ID);
+        if (!ammoId || !bot->GetItemCount(ammoId))
+            return false;
+    }
+
+    playerbot::HunterAutoShotRangeInfo rangeInfo;
+    if (!playerbot::PvpCore::GetHunterAutoShotRange(bot, victim, rangeInfo))
+        return false;
+
+    // Hold clear of BOTH the weapon's dead zone and the five yard melee-mode
+    // threshold, with margin, so the bot settles instead of oscillating
+    // across the mode boundary.
+    float const holdMin = std::max(rangeInfo.minRange + 2.0f, 10.0f);
+    float const holdMax = std::max(holdMin + 5.0f, rangeInfo.maxRange - 4.0f);
+    float const distance = rangeInfo.exactDistance;
+
+    if (distance > holdMax)
+    {
+        if (!mayMove)
+            return false;
+
+        playerbot::PvpClassActions::IssueFollowMovement(bot, victim, holdMax - 3.0f);
+        return true;
+    }
+
+    if (distance < holdMin)
+    {
+        if (!mayMove)
+            return false;
+
+        // Straight back from the target, not around it.
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        victim->GetNearPoint(bot, x, y, z, holdMin + 3.0f, victim->GetAbsoluteAngle(bot));
+        bot->UpdateAllowedPositionZ(x, y, z);
+        MoveTowardThrottled(bot, Position(x, y, z));
+        return true;
+    }
+
+    // Inside the band: plant, face the target and keep Auto Shot running.
+    if (mayMove && bot->isMoving())
+    {
+        playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
+        if (MotionMaster* motionMaster = bot->GetMotionMaster())
+            motionMaster->Clear();
+        bot->StopMoving();
+    }
+
+    if (!bot->isInFront(victim))
+    {
+        bot->SetFacingToObject(victim);
+        bot->SetInFront(victim);
+    }
+
+    Spell const* autoRepeat = bot->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+    bool const autoShotActive = autoRepeat && autoRepeat->GetSpellInfo() && autoRepeat->GetSpellInfo()->Id == 75;
+    bool const autoShotOnTarget = autoShotActive && autoRepeat->m_targets.GetUnitTargetGUID() == victim->GetGUID();
+    if (autoShotActive && !autoShotOnTarget)
+        bot->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
+    if (!autoShotOnTarget)
+        bot->CastSpell(victim, 75, false);
+
+    return true;
 }
 
 // A petless hunter is a broken hunter: no threat sink, much of its damage
@@ -5204,7 +5298,12 @@ void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
 
     // Never issue chase movement mid-cast: walking cancels the baseline
     // nuke the block below just started.
-    if (!engineActedThisTick && !bot->HasUnitState(UNIT_STATE_CASTING) && !bot->IsWithinMeleeRange(victim))
+    bool const mayIssueChase = !engineActedThisTick && !bot->HasUnitState(UNIT_STATE_CASTING);
+
+    // Hunters hold a firing line rather than closing to melee.
+    bool const hunterHoldsRange = DriveHunterRangedPositioning(bot, victim, mayIssueChase);
+
+    if (!hunterHoldsRange && mayIssueChase && !bot->IsWithinMeleeRange(victim))
         playerbot::PvpClassActions::IssueFollowMovement(bot, victim, 1.0f);
 
     // Track the victim continuously, like a real player's client does.
