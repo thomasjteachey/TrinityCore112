@@ -15,7 +15,11 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <atomic>
+#include <limits>
+
 #include "Log.h"
+#include "Configuration/Config.h"
 #include "Chat.h"
 #include "CharacterCache.h"
 #include "GameTime.h"
@@ -191,6 +195,19 @@ struct ManagedBotUpdatePulseState
 
 std::unordered_map<uint64, ManagedBotUpdatePulseState> g_ManagedBotUpdatePulseByGuid;
 std::mutex g_ManagedBotUpdatePulseLock;
+
+// A managed bot's income IS its whole economy: it buys its own gear, bags,
+// ammunition, food and auction stock out of what it earns, and it has no
+// player behind it to subsidise a bad run. At face value the fleet cannot
+// keep pace with the gear it outgrows, which is what left bots grinding in
+// white kit. Applied to gains only - see OnMoneyChanged.
+std::atomic<float> g_PlayerbotGoldGainMultiplier{ 2.0f };
+
+void LoadPlayerbotGoldGainMultiplier()
+{
+    float const configured = sConfigMgr->GetFloatDefault("Playerbot.GoldGainMultiplier", 2.0f);
+    g_PlayerbotGoldGainMultiplier.store(std::max(0.0f, configured), std::memory_order_relaxed);
+}
 
 Unit* GetCurrentMotionTarget(Player* bot)
 {
@@ -598,6 +615,7 @@ public:
         playerbot::PlayerbotObcCloneManager::LoadConfig();
         playerbot::ResourceGovernor::LoadConfig();
         playerbot::PveManager::LoadConfig();
+        LoadPlayerbotGoldGainMultiplier();
     }
 
     void OnStartup() override
@@ -610,6 +628,7 @@ public:
         playerbot::PlayerbotObcCloneManager::OnStartupSweep();
         playerbot::ResourceGovernor::LoadConfig();
         playerbot::PveManager::LoadConfig();
+        LoadPlayerbotGoldGainMultiplier();
         playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
         playerbot::RandomBotPopulationSnapshot const population = playerbot::RandomBotParticipationManager::GetPopulationSnapshot();
 
@@ -681,6 +700,30 @@ public:
             return;
 
         playerbot::NotifyHunterAutoShotFired(player);
+    }
+
+    void OnMoneyChanged(Player* player, int32& amount) override
+    {
+        // Gains only. Scaling the loss path too would make every bot pay
+        // double at the vendor and the auction house, which is worse than
+        // not scaling at all.
+        if (!player || amount <= 0)
+            return;
+
+        float const multiplier = g_PlayerbotGoldGainMultiplier.load(std::memory_order_relaxed);
+        if (multiplier <= 1.0f)
+            return;
+
+        if (!playerbot::IsManagedRandomBot(player))
+            return;
+
+        // Saturate rather than wrap: a large auction settlement scaled up
+        // must not overflow into a negative "gain" and take the bot's purse
+        // with it.
+        double const scaled = double(amount) * double(multiplier);
+        amount = scaled >= double(std::numeric_limits<int32>::max())
+            ? std::numeric_limits<int32>::max()
+            : int32(scaled);
     }
 
     void OnLogout(Player* player) override
@@ -828,6 +871,7 @@ public:
             { "status", HandlePlayerbotPveStatusCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
             { "reset", HandlePlayerbotPveResetCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "respec", HandlePlayerbotPveRespecCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "wipe", HandlePlayerbotPveWipeCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
         };
 
         static ChatCommandTable playerbotTable =
@@ -1044,6 +1088,21 @@ public:
 
         uint32 const respecced = playerbot::PveManager::RespecBotsToDonorBuilds();
         handler->PSendSysMessage("Respecced %u managed playerbots onto their donor builds.", respecced);
+        return true;
+    }
+
+    // Full economy reset: an empty auction house and every eligible bot back
+    // to level 1, so a fresh run can be measured from zero. The house is
+    // cleared FIRST so the reset does not race bots relisting their gear.
+    static bool HandlePlayerbotPveWipeCommand(ChatHandler* handler)
+    {
+        if (!handler)
+            return false;
+
+        uint32 const auctionsRemoved = playerbot::PveManager::ClearAuctionHouse();
+        uint32 const resetCount = playerbot::PveManager::ResetBotsToLevelOne(100);
+        handler->PSendSysMessage("Wiped %u auctions and reset %u managed playerbots to level 1.",
+            auctionsRemoved, resetCount);
         return true;
     }
 

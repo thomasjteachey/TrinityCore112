@@ -195,6 +195,8 @@ struct PveBotState
     // to leave taming alone after one that could not be reached.
     PveTimePoint tameDriveSince{};
     PveTimePoint tameBackoffUntil{};
+    // Pets are trained, not born, on this realm: Growl has to be granted.
+    PveTimePoint nextPetGrowlCheckAt{};
     // Weapon skills are topped up on a slow cadence so a weapon bought or
     // looted mid-level does not swing at skill 1 until the next ding.
     PveTimePoint nextWeaponSkillCheckAt{};
@@ -770,6 +772,74 @@ bool DriveHunterTaming(Player* bot, PveBotState& state)
     TC_LOG_INFO("playerbots.pve", "Bot {} taming {} (level {}).",
         bot->GetName(), beast->GetName(), beast->GetLevel());
     return true;
+}
+
+// Growl ranks, verified against classic_pet_training_template on this realm:
+// seven ranks, one every ten levels, and every one of them is TRAINER taught.
+// A bot never visits a pet trainer, so its pet knew no Growl at all and held
+// no threat - everything the pet was sent at simply walked past it and hit
+// the hunter instead.
+uint32 BestGrowlRankForLevel(uint8 level)
+{
+    struct GrowlRank
+    {
+        uint8 level;
+        uint32 spellId;
+    };
+
+    static constexpr GrowlRank kGrowlRanks[] = {
+        { 60, 14921 }, { 50, 14920 }, { 40, 14919 }, { 30, 14918 },
+        { 20, 14917 }, { 10, 14916 }, { 1, 2649 }
+    };
+
+    for (GrowlRank const& rank : kGrowlRanks)
+        if (level >= rank.level)
+            return rank.spellId;
+
+    return 0;
+}
+
+// Give the pet the best Growl it could train for, and switch autocast on -
+// knowing the spell is not the same as casting it.
+void EnsurePetKnowsGrowl(Player* bot)
+{
+    Pet* pet = bot->GetPet();
+    if (!pet || !pet->IsAlive() || pet->getPetType() != HUNTER_PET)
+        return;
+
+    uint32 const growlId = BestGrowlRankForLevel(uint8(pet->GetLevel()));
+    if (!growlId)
+        return;
+
+    SpellInfo const* growlInfo = sSpellMgr->GetSpellInfo(growlId);
+    if (!growlInfo)
+        return;
+
+    if (!pet->HasSpell(growlId))
+    {
+        // Retire every other rank first, so a level-up does not leave the
+        // action bar and the autocast flag pinned to a stale one.
+        for (uint32 otherRank : { 2649u, 14916u, 14917u, 14918u, 14919u, 14920u, 14921u })
+            if (otherRank != growlId && pet->HasSpell(otherRank))
+                pet->removeSpell(otherRank, false);
+
+        if (!pet->learnSpell(growlId))
+            return;
+
+        TC_LOG_INFO("playerbots.pve", "Bot {} taught its level {} pet Growl ({}).",
+            bot->GetName(), pet->GetLevel(), growlId);
+    }
+
+    // Explicit apply, not a flip, so this is safe to re-run every pass.
+    if (CharmInfo* charmInfo = pet->GetCharmInfo(); charmInfo && growlInfo->IsAutocastable())
+    {
+        pet->ToggleAutocast(growlInfo, true);
+        charmInfo->SetSpellAutocast(growlInfo, true);
+    }
+
+    // A passive pet neither attacks nor growls.
+    if (pet->GetReactState() == REACT_PASSIVE)
+        pet->SetReactState(REACT_DEFENSIVE);
 }
 
 // Keep a hunter pet fed: happiness decay makes an unfed pet leave.
@@ -1546,10 +1616,6 @@ bool IsSpareContainer(Player* bot, Item* item)
 
 uint32 SellVendorJunk(Player* bot)
 {
-    // With the pack full there is nowhere to put a drop, a purchase or a
-    // quest reward, so the clear-out widens.
-    bool const packedTight = CountFreeBagSlots(bot) < 2;
-
     uint32 soldCount = 0;
     ForEachBagItem(bot, [&](Item* item, uint8 bag, uint8 slot)
     {
@@ -1569,7 +1635,7 @@ uint32 SellVendorJunk(Player* bot)
         if (!sellable && playerbot::PveManager::GetConfig().professionsEnabled &&
             proto->Class == ITEM_CLASS_TRADE_GOODS && !IsQuestRequiredItem(bot, proto->ItemId))
             sellable = !playerbot::PveManager::GetConfig().auctionSellEnabled ||
-                packedTight || !IsAuctionableSurplus(bot, item);
+                CountFreeBagSlots(bot) < 2 || !IsAuctionableSurplus(bot, item);
 
         // Spare bags and quivers: worthless to carry, and carrying them is
         // what filled the packs.
@@ -5648,6 +5714,15 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         MaybeFeedPet(bot);
     }
 
+    // Growl is checked on its own cadence and NOT gated on being out of
+    // combat: a pet that just got tamed goes straight into a fight, and it
+    // is that first fight that most needs the threat.
+    if (now >= state.nextPetGrowlCheckAt)
+    {
+        state.nextPetGrowlCheckAt = now + std::chrono::seconds(20);
+        EnsurePetKnowsGrowl(bot);
+    }
+
     // Naked recovery: shop the auction house with the whole purse, and when
     // that has had its chance, issue green field kit. Ordered this way so a
     // bot that can afford real gear buys it rather than taking handouts.
@@ -6638,6 +6713,40 @@ uint32 PveManager::ResetBotsToLevelOne(uint8 percent)
     for (uint32 index = 0; index < resetCount; ++index)
         ResetManagedBotToLevelOne(managedBots[index]);
     return resetCount;
+}
+
+uint32 PveManager::ClearAuctionHouse()
+{
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    uint32 removed = 0;
+
+    for (uint8 houseId : { uint8(AUCTIONHOUSE_ALLIANCE), uint8(AUCTIONHOUSE_HORDE), uint8(AUCTIONHOUSE_NEUTRAL) })
+    {
+        AuctionHouseObject* house = sAuctionMgr->GetAuctionsMapByHouseId(houseId);
+        if (!house)
+            continue;
+
+        // Collect first: RemoveAuction erases from the very map we would
+        // otherwise be iterating, and it deletes the entry as it goes.
+        std::vector<AuctionEntry*> auctions;
+        for (auto itr = house->GetAuctionsBegin(); itr != house->GetAuctionsEnd(); ++itr)
+            auctions.push_back(itr->second);
+
+        for (AuctionEntry* auction : auctions)
+        {
+            // The escrowed item has to go too, or item_instance keeps a row
+            // that nothing in the world can ever reach again. Read every
+            // field BEFORE RemoveAuction - it frees the entry.
+            sAuctionMgr->RemoveAItem(auction->itemGUIDLow, true, &trans);
+            auction->DeleteFromDB(trans);
+            house->RemoveAuction(auction);
+            ++removed;
+        }
+    }
+
+    CharacterDatabase.CommitTransaction(trans);
+    TC_LOG_INFO("playerbots.pve", "Cleared {} auctions from every auction house.", removed);
+    return removed;
 }
 
 uint32 PveManager::RespecBotsToDonorBuilds()

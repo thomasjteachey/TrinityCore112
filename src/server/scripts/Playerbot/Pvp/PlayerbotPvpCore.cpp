@@ -42,6 +42,7 @@
 #include "Spell.h"
 #include "SpellAuras.h"
 #include "SpellAuraEffects.h"
+#include "DBCStores.h"
 #include "SpellMgr.h"
 #include "SpellHistory.h"
 #include "Totem.h"
@@ -1761,6 +1762,109 @@ struct TacticalDecision
         }
     }
 
+    // One capstone talent per tree, per class. These identify a spec cheaply,
+    // but ONLY once the bot is deep enough to have taken that exact talent.
+    struct ClassicProfileMarkers
+    {
+        uint8 classId;
+        uint32 primarySpell;
+        char const* primaryLabel;
+        uint32 secondarySpell;
+        char const* secondaryLabel;
+        uint32 tertiarySpell;
+        char const* tertiaryLabel;
+    };
+
+    constexpr ClassicProfileMarkers kClassicProfileMarkers[] = {
+        { CLASS_WARRIOR, 12294, "Arms-like",          81273, "Fury-like",        23922, "Prot-like"        },
+        { CLASS_PALADIN, 20473, "Holy-like",          20925, "Prot-like",        20375, "Ret-like"         },
+        { CLASS_HUNTER,  81300, "BM-like",            19506, "MM-like",          19386, "SV-like"          },
+        { CLASS_ROGUE,   81302, "Assassination-like", 13750, "Combat-like",      14185, "Subtlety-like"    },
+        { CLASS_PRIEST,  10060, "Discipline-like",    724,   "Holy-like",        15473, "Shadow-like"      },
+        { CLASS_SHAMAN,  16166, "Elemental-like",     17364, "Enhancement-like", 16188, "Restoration-like" },
+        { CLASS_MAGE,    12042, "Arcane-like",        33041, "Fire-like",        11426, "Frost-like"       },
+        { CLASS_WARLOCK, 48181, "Affliction-like",    19028, "Demonology-like",  17962, "Destruction-like" },
+        // Druid is deliberately NOT in DBC tab order here: Restoration is the
+        // secondary profile and Feral the tertiary. Anything deriving a tree
+        // order generically must go through this table, not through the DBC.
+        { CLASS_DRUID,   24858, "Balance-like",       18562, "Restoration-like", 17007, "Feral-like"       },
+    };
+
+    ClassicProfileMarkers const* FindClassicProfileMarkers(uint8 classId)
+    {
+        for (ClassicProfileMarkers const& markers : kClassicProfileMarkers)
+            if (markers.classId == classId)
+                return &markers;
+
+        return nullptr;
+    }
+
+    // When no capstone matches, ask the talent spend which tree this is.
+    //
+    // A level 50 mage seventeen talents deep into fire, holding Improved
+    // Scorch, that had simply not taken the ONE fire talent the table looks
+    // for, matched nothing and fell out as the default - and the default is
+    // read as frost. It opened every fight with Frostbolt while specced fire.
+    // Counting the points is the honest answer and costs one pass over the
+    // talent store, only for bots no capstone identified.
+    ClassicProfileSelection DetectProfileByTalentSpend(Player const* player, ClassicProfileMarkers const& markers)
+    {
+        uint8 const activeSpec = player->GetActiveSpec();
+        uint32 const markerSpells[3] = { markers.primarySpell, markers.secondarySpell, markers.tertiarySpell };
+        uint32 markerTabs[3] = { 0, 0, 0 };
+        std::unordered_map<uint32, uint32> pointsByTab;
+
+        for (TalentEntry const* talent : sTalentStore)
+        {
+            if (!talent)
+                continue;
+
+            uint32 highestKnownRank = 0;
+            for (uint8 rank = 0; rank < MAX_TALENT_RANK; ++rank)
+            {
+                uint32 const rankSpell = talent->SpellRank[rank];
+                if (!rankSpell)
+                    continue;
+
+                for (uint32 marker = 0; marker < 3; ++marker)
+                    if (markerSpells[marker] && rankSpell == markerSpells[marker])
+                        markerTabs[marker] = talent->TabID;
+
+                // Ranks are cumulative: the highest one known IS the spend.
+                if (player->HasTalent(rankSpell, activeSpec))
+                    highestKnownRank = uint32(rank) + 1;
+            }
+
+            if (highestKnownRank)
+                pointsByTab[talent->TabID] += highestKnownRank;
+        }
+
+        uint32 bestTab = 0;
+        uint32 bestPoints = 0;
+        for (auto const& [tabId, points] : pointsByTab)
+        {
+            if (points > bestPoints)
+            {
+                bestPoints = points;
+                bestTab = tabId;
+            }
+        }
+
+        // No talents spent at all, or the winning tree is not one of this
+        // class's three - either way there is nothing honest to say.
+        if (!bestPoints)
+            return {};
+
+        if (bestTab == markerTabs[0])
+            return { ClassicClassProfile::PrimaryClassic, markers.primaryLabel, false, false };
+        if (bestTab == markerTabs[1])
+            return { ClassicClassProfile::SecondaryClassic, markers.secondaryLabel, false, false };
+        if (bestTab == markerTabs[2])
+            return { ClassicClassProfile::TertiaryClassic, markers.tertiaryLabel, false, false };
+
+        return {};
+    }
+
     ClassicProfileSelection DetectClassicClassProfile(Player const* player)
     {
         ClassicProfileSelection selection;
@@ -1768,6 +1872,21 @@ struct TacticalDecision
             return selection;
 
         uint8 const activeSpec = player->GetActiveSpec();
+
+        if (ClassicProfileMarkers const* markers = FindClassicProfileMarkers(player->GetClass()))
+        {
+            if (player->HasTalent(markers->primarySpell, activeSpec))
+                return { ClassicClassProfile::PrimaryClassic, markers->primaryLabel, false, false };
+            if (player->HasTalent(markers->secondarySpell, activeSpec))
+                return { ClassicClassProfile::SecondaryClassic, markers->secondaryLabel, false, false };
+            if (player->HasTalent(markers->tertiarySpell, activeSpec))
+                return { ClassicClassProfile::TertiaryClassic, markers->tertiaryLabel, false, false };
+
+            if (ClassicProfileSelection const spend = DetectProfileByTalentSpend(player, *markers);
+                spend.profile != ClassicClassProfile::UnknownClassic)
+                return spend;
+        }
+
         switch (player->GetClass())
         {
         case CLASS_WARRIOR:

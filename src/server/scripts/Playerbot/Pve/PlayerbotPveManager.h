@@ -137,6 +137,9 @@ public:
     // managed bots (companions excluded) back to freshly created level-1
     // characters and ports them to their racial starting spots.
     static uint32 ResetBotsToLevelOne(uint8 percent);
+    // Wipe every auction in every house, escrowed items included. World
+    // thread only - it mutates the live auction maps.
+    static uint32 ClearAuctionHouse();
     // Wipe and re-spend every online managed bot's talents so existing bots
     // conform to the donor builds. Unlike the level-1 reset this deliberately
     // includes guardians and PvP-only bots: a build is a build wherever the

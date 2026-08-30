@@ -305,6 +305,20 @@ Playerbot.PvpDecision.GlobalLock = 0
 
 Playerbot.Pve.Enable = 0
 
+#    Playerbot.GoldGainMultiplier
+#        Description: Multiplies every gold GAIN a managed playerbot receives - loot, quest
+#                     rewards, vendor sales and auction settlements alike. Losses are never
+#                     scaled, so bots still pay face value for gear, ammunition and food.
+#                     A bot funds its entire economy out of what it earns and has no player
+#                     behind it to subsidise a bad run, so at 1.0 the fleet cannot keep pace
+#                     with the gear it outgrows and ends up grinding in white kit.
+#                     Applies to managed random bots only; human players are never affected.
+#        Default:     2.0 - (double income)
+#                     1.0 - (face value, no change)
+#                     0.0 - (bots earn nothing)
+
+Playerbot.GoldGainMultiplier = 2.0
+
 #    Playerbot.Pve.Companion.FollowDistance
 #        Description: Follow distance in yards for a companion trailing its master out of combat.
 #        Default:     2.5
