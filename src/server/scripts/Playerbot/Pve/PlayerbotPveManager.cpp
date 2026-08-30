@@ -1232,6 +1232,53 @@ void KeepPetHappy(Player* bot)
         pet->SetPower(POWER_HAPPINESS, maxHappiness);
 }
 
+// Mend Pet: a channelled heal-over-time on the pet, cast between fights.
+//
+// Gated on the hunter having mana to spare, because healing the pet must
+// never be the reason it cannot open the next fight - and on being out of
+// combat, both because that is when the channel survives long enough to
+// finish and because in combat the mana belongs to the rotation.
+constexpr float PveMendPetPetHealthPct = 60.0f;
+constexpr float PveMendPetMinOwnerManaPct = 60.0f;
+constexpr uint32 SPELL_HUNTER_MEND_PET = 136;
+
+void MaybeMendPet(Player* bot)
+{
+    if (bot->GetClass() != CLASS_HUNTER || bot->IsInCombat() || bot->HasUnitState(UNIT_STATE_CASTING))
+        return;
+
+    Pet* pet = bot->GetPet();
+    if (!pet || !pet->IsAlive() || pet->GetHealthPct() >= PveMendPetPetHealthPct)
+        return;
+
+    if (bot->GetMaxPower(POWER_MANA) <= 0 || bot->GetPowerPct(POWER_MANA) < PveMendPetMinOwnerManaPct)
+        return;
+
+    uint32 const mendPetId = HighestKnownRankInChain(bot, SPELL_HUNTER_MEND_PET);
+    if (!mendPetId || bot->GetSpellHistory()->HasCooldown(mendPetId))
+        return;
+
+    // Already ticking? Asked by CHAIN - the rank that landed is whichever one
+    // the hunter actually knew, never the base id.
+    for (uint32 spellId = SPELL_HUNTER_MEND_PET; spellId; spellId = sSpellMgr->GetNextSpellInChain(spellId))
+        if (pet->HasAura(spellId))
+            return;
+
+    // A channel does not survive walking, so plant first - the same thing the
+    // eat/drink path does before its own out-of-combat cast.
+    if (bot->isMoving())
+    {
+        playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
+        if (MotionMaster* motionMaster = bot->GetMotionMaster())
+            motionMaster->Clear();
+        bot->StopMoving();
+    }
+
+    bot->CastSpell(pet, mendPetId, false);
+    TC_LOG_INFO("playerbots.pve", "Bot {} mends its pet at {:.0f}% health.",
+        bot->GetName(), pet->GetHealthPct());
+}
+
 // Keep a hunter pet fed: happiness decay makes an unfed pet leave.
 void MaybeFeedPet(Player* bot)
 {
@@ -6209,6 +6256,11 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         KeepPetHappy(bot);
     }
 
+    // Not on the twenty second cadence: a hurt pet is worth topping up as
+    // soon as the fight that hurt it ends. Every check in it is cheap and it
+    // returns immediately for anything that is not a wounded hunter pet.
+    MaybeMendPet(bot);
+
     // Naked recovery: shop the auction house with the whole purse, and when
     // that has had its chance, issue green field kit. Ordered this way so a
     // bot that can afford real gear buys it rather than taking handouts.
@@ -6342,6 +6394,18 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     // the way a condition-based hold can.
     if (PveClock::now() < state.feignHoldUntil)
         return;
+
+    // A channelled spell dies the instant the bot walks. Mend Pet, Drain
+    // Life, Mind Flay and the rest need this tick to keep its hands off
+    // movement until the channel finishes or breaks on its own. Bounded by
+    // the spell's own duration, so unlike a condition-based hold it cannot
+    // latch: when the channel ends the spell clears and the tick resumes.
+    if (Spell const* channelled = bot->GetCurrentSpell(CURRENT_CHANNELED_SPELL))
+    {
+        SpellInfo const* channelInfo = channelled->GetSpellInfo();
+        if (channelInfo && channelInfo->IsChanneled() && !channelInfo->IsMoveAllowedChannel())
+            return;
+    }
 
     // Must run before the disengage path clears the dead victim's guid.
     DetectFreshKillForLoot(bot, state, cfg);
