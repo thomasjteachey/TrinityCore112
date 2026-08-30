@@ -200,6 +200,8 @@ struct PveBotState
     PveTimePoint feignHoldUntil{};
     // Pets are trained, not born, on this realm: Growl has to be granted.
     PveTimePoint nextPetGrowlCheckAt{};
+    // One-shot repair of the class starting spellbook.
+    bool startingSpellsEnsured = false;
     // Weapon skills are topped up on a slow cadence so a weapon bought or
     // looted mid-level does not swing at skill 1 until the next ding.
     PveTimePoint nextWeaponSkillCheckAt{};
@@ -395,6 +397,42 @@ uint32 BaselineNukeSpellId(Player* bot)
             return 0;
     }
     return HighestKnownRankInChain(bot, firstRank);
+}
+
+// This realm's playercreateinfo_spell_custom table is EMPTY, so
+// Player::LearnCustomSpells teaches nothing at all and a bot reborn at level
+// 1 comes back with no attack spell whatsoever - 107 of 116 low level caster
+// bots knew no nuke of any rank. A level 2 warlock with no Shadow Bolt just
+// walks up and swings its staff, which is exactly what was seen in game. The
+// trainer catch-up cannot cover it either: trainers only teach rank 2 and up,
+// never the rank a character is created with. So grant the opener directly.
+//
+// Ids verified against this realm's own spell_ranks: each is the rank-1 head
+// of a real chain (Heroic Strike 13 ranks, Fireball 16, Shadow Bolt 13...).
+void EnsureBaselineAttackSpell(Player* bot)
+{
+    uint32 opener = 0;
+    switch (bot->GetClass())
+    {
+        case CLASS_WARRIOR: opener = 78;    break; // Heroic Strike
+        case CLASS_PALADIN: opener = 21084; break; // Seal of Righteousness
+        case CLASS_HUNTER:  opener = 2973;  break; // Raptor Strike
+        case CLASS_ROGUE:   opener = 1752;  break; // Sinister Strike
+        case CLASS_PRIEST:  opener = 585;   break; // Smite
+        case CLASS_SHAMAN:  opener = 403;   break; // Lightning Bolt
+        case CLASS_MAGE:    opener = 133;   break; // Fireball
+        case CLASS_WARLOCK: opener = 686;   break; // Shadow Bolt
+        case CLASS_DRUID:   opener = 5176;  break; // Wrath
+        default:
+            return;
+    }
+
+    // Any rank satisfies this: only a bot that knows NONE of them is broken.
+    if (HighestKnownRankInChain(bot, opener))
+        return;
+
+    bot->LearnSpell(opener, false);
+    TC_LOG_INFO("playerbots.pve", "Bot {} knew no class opener; taught spell {}.", bot->GetName(), opener);
 }
 
 // Mages provision themselves: highest known Conjure Water / Conjure Food
@@ -5621,6 +5659,20 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         state.nextWeaponSkillCheckAt = PveClock::now() + std::chrono::seconds(15);
         MaxOutWeaponSkills(bot);
         DiscardScaffoldingItems(bot);
+
+        // A bot reborn at level 1 has its spellbook stripped and never got
+        // the class's STARTING spells back. The trainer catch-up only teaches
+        // rank 2 and up, so rank 1 - the spell a character is created with -
+        // was missing for the rest of that bot's life. A level 2 warlock with
+        // no Shadow Bolt simply walks up and swings its staff, which is
+        // exactly what was seen. Both calls skip anything already known.
+        if (!state.startingSpellsEnsured)
+        {
+            state.startingSpellsEnsured = true;
+            bot->LearnDefaultSkills();
+            bot->LearnCustomSpells();
+            EnsureBaselineAttackSpell(bot);
+        }
     }
 
     if (bot->GetGroupInvite())
