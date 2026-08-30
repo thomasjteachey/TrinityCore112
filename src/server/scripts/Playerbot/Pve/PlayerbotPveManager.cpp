@@ -6818,7 +6818,36 @@ void RunDeathRecovery(Player* bot, PveBotState& state, playerbot::PveConfig cons
                 bot->GetName(), uint32(distance), uint32(chestAge));
             StartWalkedJourney(state, state.deathSpotMapId, state.deathSpotX, state.deathSpotY, state.deathSpotZ, 0, distance);
         }
-        else if (chestAge + travelSeconds >= int64(cfg.hardcoreChestDespawnSeconds))
+        else if (distance <= 20.0f)
+        {
+            // Already standing on it, so there is no walk to make - and the
+            // generic errand scan will not rescue this. That scan runs at most
+            // once every fifteen seconds and only while the bot is unengaged
+            // and out of combat, whereas target selection runs on the 250ms
+            // fast tick. A resurrected bot therefore picks a fight long before
+            // the scan ever fires, and once it is in combat the gate never
+            // opens again: it runs off and fights over the top of its own
+            // gear. Claim the chest here, in the same tick it stood up, so
+            // nothing else can take the decision first.
+            //
+            // The errand holds for ninety seconds, so even if something
+            // aggroes the bot on the way, it returns to the chest afterwards
+            // rather than forgetting it.
+            if (GameObject* chest = bot->FindNearestGameObject(cfg.hardcoreLootChestEntry, 30.0f))
+            {
+                if (chest->isSpawned() && chest->getLootState() == GO_READY)
+                {
+                    state.errandGuid = chest->GetGUID();
+                    state.errandKind = PveErrandKind::QuestObject;
+                    state.errandUntil = now + std::chrono::seconds(90);
+                    state.deathSpotAt = PveTimePoint(); // claimed
+                    TC_LOG_INFO("playerbots.pve", "Bot {} claims the death chest it woke up on ({:.0f}y).",
+                        bot->GetName(), bot->GetDistance(chest));
+                }
+            }
+        }
+
+        if (chestAge + travelSeconds >= int64(cfg.hardcoreChestDespawnSeconds))
             state.deathSpotAt = PveTimePoint(); // gone; stop trying
     }
 
