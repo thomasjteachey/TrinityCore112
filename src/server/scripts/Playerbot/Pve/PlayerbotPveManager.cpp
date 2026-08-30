@@ -200,6 +200,8 @@ struct PveBotState
     PveTimePoint feignHoldUntil{};
     // Pets are trained, not born, on this realm: Growl has to be granted.
     PveTimePoint nextPetGrowlCheckAt{};
+    // Paces the "am I in the right zone for my level" check.
+    PveTimePoint nextZoneFitCheckAt{};
     // One-shot repair of the class starting spellbook.
     bool startingSpellsEnsured = false;
     // Weapon skills are topped up on a slow cadence so a weapon bought or
@@ -4034,6 +4036,8 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
 
 std::mutex g_GrindSpotLock;
 std::unordered_map<uint8, std::vector<GrindSpot>> g_GrindSpotsByLevel;
+// zoneId -> [lowest, highest] level the zone's grind clusters serve.
+std::unordered_map<uint32, std::pair<uint8, uint8>> g_ZoneLevelBand;
 bool g_GrindSpotsBuilt = false;
 
 // World thread only. Mirrors the reference filters: normal-rank lootable
@@ -4133,8 +4137,39 @@ void BuildGrindSpotCacheOnce()
                 g_GrindSpotsByLevel[uint8(level)].push_back(bucket.spot);
     }
 
-    TC_LOG_INFO("playerbots.pve", "Grind spot cache built: {} clusters across {} level buckets.",
-        spotCount, g_GrindSpotsByLevel.size());
+    // Invert it: which level band does each zone actually serve? Derived from
+    // the same clusters the relocation destination picker uses, so there is no
+    // hand-maintained table of zone levels to drift out of date.
+    g_ZoneLevelBand.clear();
+    for (auto const& [level, spots] : g_GrindSpotsByLevel)
+    {
+        for (GrindSpot const& spot : spots)
+        {
+            auto itr = g_ZoneLevelBand.find(spot.zoneId);
+            if (itr == g_ZoneLevelBand.end())
+                g_ZoneLevelBand.emplace(spot.zoneId, std::make_pair(level, level));
+            else
+            {
+                itr->second.first = std::min(itr->second.first, level);
+                itr->second.second = std::max(itr->second.second, level);
+            }
+        }
+    }
+
+    TC_LOG_INFO("playerbots.pve", "Grind spot cache built: {} clusters across {} level buckets, {} zones banded.",
+        spotCount, g_GrindSpotsByLevel.size(), g_ZoneLevelBand.size());
+}
+
+// Does this bot's level fit the zone it is standing in? One level of slack at
+// each end, so a bot on a boundary does not bounce between two zones.
+bool BotIsInSuitableZone(Player* bot)
+{
+    auto itr = g_ZoneLevelBand.find(bot->GetZoneId());
+    if (itr == g_ZoneLevelBand.end())
+        return true; // an unbanded zone is not evidence of anything
+
+    uint32 const level = std::min<uint32>(bot->GetLevel(), 80);
+    return level + 1 >= uint32(itr->second.first) && level <= uint32(itr->second.second) + 1;
 }
 
 bool HasHumanPlayerNearby(Player* bot, float radius)
@@ -6618,6 +6653,35 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     {
         state.nextTameScanAt = now + std::chrono::seconds(30);
         MaybeFeedPet(bot);
+    }
+
+    // Wrong zone for this level? Move, and do not wait to be asked.
+    //
+    // The dry-wander counter was the only route to a relocation, and it only
+    // trips when a bot finds NOTHING to fight. A low level zone is not empty -
+    // it is full of creatures that are all simply the wrong level - so a bot
+    // that outgrew its zone could sit there indefinitely, scanning, finding
+    // nothing it is allowed to attack, and never quite going dry enough to be
+    // moved. That is how a level 13 stayed in Durotar.
+    //
+    // Guardians are pinned to their post by design, and companions follow a
+    // human, so neither is eligible. A bot mid-journey or mid-errand is left
+    // alone until it arrives.
+    if (cfg.relocateEnabled && cfg.grindEnabled && state.masterGuid.IsEmpty() &&
+        !state.journeyActive && state.errandKind == PveErrandKind::None &&
+        !GetGuardianZoneId(bot->GetGUID().GetRawValue()) &&
+        now >= state.nextZoneFitCheckAt)
+    {
+        state.nextZoneFitCheckAt = now + std::chrono::seconds(60);
+
+        if (!BotIsInSuitableZone(bot))
+        {
+            TC_LOG_INFO("playerbots.pve", "Bot {} (level {}) has outgrown zone {}; relocating.",
+                bot->GetName(), bot->GetLevel(), bot->GetZoneId());
+            state.dryWanderCount = 0;
+            std::lock_guard<std::mutex> guard(g_PvePendingLock);
+            g_PendingGrindRelocations.insert(bot->GetGUID().GetRawValue());
+        }
     }
 
     // Growl is checked on its own cadence and NOT gated on being out of
