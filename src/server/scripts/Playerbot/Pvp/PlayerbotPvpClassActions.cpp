@@ -1640,6 +1640,15 @@ void IssueHunterDeadZoneRetreatMovement(Player* player, Unit* target, char const
     if (!player || !target || !target->IsAlive())
         return;
 
+    // Never back away from something that is already ON you. You cannot open
+    // a dead zone against a mob in melee contact - it simply follows, taking
+    // free swings the whole way - and the retreat then fights the melee
+    // approach that wants to close again, which is what "running in circles
+    // around the mob" looks like from outside. Once it has aggro, the hunter
+    // stands and fights.
+    if (target->GetVictim() == player)
+        return;
+
     MotionMaster* motionMaster = player->GetMotionMaster();
     if (!motionMaster)
         return;

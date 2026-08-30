@@ -7041,6 +7041,7 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         // be fought back regardless of mode.
         Unit* nearestAttacker = nullptr;
         float nearestAttackerDistance = 0.0f;
+        bool nearestAttackerIsPlayer = false;
         for (Unit* attacker : bot->getAttackers())
         {
             if (!attacker || !attacker->IsAlive() || !bot->IsValidAttackTarget(attacker))
@@ -7056,11 +7057,19 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
             // present and reachable by definition - and a genuinely evading
             // mob is not in getAttackers() at all. Honoring the list here
             // left bots standing in place eating hits for its full 60s.
+            // A person outranks anything with fur. When a player and a mob
+            // are both on the bot, the mob is a distraction and the player is
+            // the fight - taking whichever happened to be nearer meant a bot
+            // being ganked would turn its back on the ganker to swat a boar.
+            bool const attackerIsPlayer = attacker->GetTypeId() == TYPEID_PLAYER;
             float const distance = bot->GetDistance(attacker);
-            if (!nearestAttacker || distance < nearestAttackerDistance)
+
+            if (!nearestAttacker || (attackerIsPlayer && !nearestAttackerIsPlayer) ||
+                (attackerIsPlayer == nearestAttackerIsPlayer && distance < nearestAttackerDistance))
             {
                 nearestAttacker = attacker;
                 nearestAttackerDistance = distance;
+                nearestAttackerIsPlayer = attackerIsPlayer;
             }
         }
 

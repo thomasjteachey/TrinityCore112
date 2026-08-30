@@ -6178,6 +6178,17 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         AddDecisionCandidate(candidates, player->IsWithinMeleeRange(activeTarget) && player->GetPower(POWER_RAGE) >= 500 && IsSpellReady(player, 1680), 36.0f,
             { "warrior whirlwind", "fallback aoe melee pressure", 1680, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
 
+    // Heroic Strike: the rage dump, and the lowest-priority thing a warrior
+    // ever does - which is exactly why it was missing. Every other entry here
+    // is a talent, a stance ability or a reactive proc, so a warrior below the
+    // level where those arrive had NOTHING in the table at all and just
+    // auto-attacked. It sits under everything else, so it only ever spends
+    // rage nothing better wanted; at low level nothing better exists and it
+    // becomes the rotation, which is correct for the bracket.
+    AddDecisionCandidate(candidates, activeTarget && player->IsWithinMeleeRange(activeTarget) &&
+            player->GetPower(POWER_RAGE) >= 150 && IsSpellReady(player, 78), 12.0f,
+        { "warrior heroic strike", "spend surplus rage on the next swing", 78, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
+
         return SelectHighestPriorityCastableDecision(candidates, player, activeTarget, nullptr);
     }
 
