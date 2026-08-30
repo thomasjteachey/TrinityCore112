@@ -3707,7 +3707,13 @@ bool IsAuctionableSurplus(Player* bot, Item* item)
 uint32 ComputeAuctionBuyout(ItemTemplate const* proto, uint32 count,
     std::unordered_map<uint32, uint32> const& cheapestPerUnit)
 {
-    uint64 base = proto->BuyPrice ? proto->BuyPrice : uint64(proto->SellPrice) * 4;
+    // The asking price with no competition is the one the auction house
+    // stocker itself would post: vendor buy price spread over the units that
+    // price covers. Matching its arithmetic (BuyPrice / BuyCount, per unit)
+    // keeps bot listings and stocked listings on the same scale instead of
+    // pricing a stack at BuyCount times what it is worth.
+    uint32 const buyCount = std::max<uint32>(1, proto->BuyCount);
+    uint64 base = proto->BuyPrice ? (uint64(proto->BuyPrice) / buyCount) : uint64(proto->SellPrice) * 4;
     if (!base)
         base = proto->SellPrice ? proto->SellPrice : 1;
     uint64 price = base * count;
@@ -3782,11 +3788,18 @@ void ProcessPendingAuctionSales()
         --sellersLeft;
 
         // One pass over the house for the going rate of everything at once.
+        // The stocker's own listings are NOT competition: they are generated
+        // from nothing at a fixed formula, and undercutting them would walk
+        // every price down forever against a seller that never runs out.
+        // Only real sellers - players and other bots - are undercut.
         std::unordered_map<uint32, uint32> cheapestPerUnit;
         for (auto houseItr = auctionHouse->GetAuctionsBegin(); houseItr != auctionHouse->GetAuctionsEnd(); ++houseItr)
         {
             AuctionEntry const* auction = houseItr->second;
             if (!auction || !auction->buyout || !auction->itemCount)
+                continue;
+
+            if (sAuctionBotConfig->IsBotChar(auction->owner))
                 continue;
 
             uint32 const perUnit = auction->buyout / auction->itemCount;
