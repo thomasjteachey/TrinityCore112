@@ -137,6 +137,11 @@ public:
     // managed bots (companions excluded) back to freshly created level-1
     // characters and ports them to their racial starting spots.
     static uint32 ResetBotsToLevelOne(uint8 percent);
+    // Wipe and re-spend every online managed bot's talents so existing bots
+    // conform to the donor builds. Unlike the level-1 reset this deliberately
+    // includes guardians and PvP-only bots: a build is a build wherever the
+    // bot happens to be posted.
+    static uint32 RespecBotsToDonorBuilds();
 
     // True for bots on Playerbot.Pve.PvpOnlyAccountIds: they skip every
     // PvE system and only answer the battleground orchestration.

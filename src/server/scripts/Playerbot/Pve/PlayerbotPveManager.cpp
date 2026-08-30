@@ -6567,6 +6567,33 @@ uint32 PveManager::ResetBotsToLevelOne(uint8 percent)
     return resetCount;
 }
 
+uint32 PveManager::RespecBotsToDonorBuilds()
+{
+    std::vector<Player*> managedBots;
+    for (auto const& [accountId, session] : sWorld->GetAllSessions())
+    {
+        Player* candidate = session ? session->GetPlayer() : nullptr;
+        if (!candidate || !candidate->IsInWorld() || !playerbot::IsManagedRandomBot(candidate))
+            continue;
+        if (candidate->GetLevel() < 10)
+            continue;
+        managedBots.push_back(candidate);
+    }
+
+    uint32 respecced = 0;
+    for (Player* bot : managedBots)
+    {
+        // no_cost: these are not the player's gold and the bot must not be
+        // priced out of conforming to its own build.
+        bot->ResetTalents(true);
+        SpendPendingTalentPoints(bot);
+        ++respecced;
+    }
+
+    TC_LOG_INFO("playerbots.pve", "Respecced {} managed bots onto their donor builds.", respecced);
+    return respecced;
+}
+
 std::string PveManager::BuildStatusLine(Player const* bot)
 {
     std::ostringstream stream;

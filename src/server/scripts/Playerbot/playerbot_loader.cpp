@@ -827,6 +827,7 @@ public:
             { "dismiss", HandlePlayerbotPveDismissCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
             { "status", HandlePlayerbotPveStatusCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
             { "reset", HandlePlayerbotPveResetCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "respec", HandlePlayerbotPveRespecCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
         };
 
         static ChatCommandTable playerbotTable =
@@ -1030,6 +1031,19 @@ public:
 
         uint32 const resetCount = playerbot::PveManager::ResetBotsToLevelOne(percent.value_or(100));
         handler->PSendSysMessage("Reset %u managed playerbots to level 1 and sent them home.", resetCount);
+        return true;
+    }
+
+    // Re-spend every online managed bot's talents against the donor builds.
+    // For bots that already spent their points greedily before a recipe was
+    // available - a respec is the only thing that fixes those.
+    static bool HandlePlayerbotPveRespecCommand(ChatHandler* handler)
+    {
+        if (!handler)
+            return false;
+
+        uint32 const respecced = playerbot::PveManager::RespecBotsToDonorBuilds();
+        handler->PSendSysMessage("Respecced %u managed playerbots onto their donor builds.", respecced);
         return true;
     }
 
