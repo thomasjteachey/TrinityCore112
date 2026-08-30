@@ -728,6 +728,47 @@ void DiscardScaffoldingItems(Player* bot)
         bot->DestroyItem(position.first, position.second, true);
 }
 
+// Quest items are the one kind of loot a bot can never shed. The auction
+// screen refuses them and no vendor buys them, so a quest item picked up for
+// a quest the bot never accepted holds that slot for the rest of the
+// character's life.
+//
+// Measured on the live realm, they were the single largest occupant of bot
+// inventories - 1239 stacks across the fleet - and with every backpack sitting
+// at 16 of 16 the gameobject loot guard (CountFreeBagSlots < 2) then refused
+// every death chest the bots had just walked back to reclaim. They stood on
+// top of their own gear and could not pick it up.
+//
+// A player in that position simply destroys them. HasQuestForItem covers both
+// the "collect N of these" requirements of accepted quests and their turn-in
+// items, so anything it disowns is genuinely dead weight - except an item that
+// STARTS a quest, which is still worth something to a bot that may accept it.
+void DiscardOrphanedQuestItems(Player* bot)
+{
+    std::vector<std::pair<uint8, uint8>> doomed;
+    ForEachBagItem(bot, [&](Item* item, uint8 bag, uint8 slot)
+    {
+        ItemTemplate const* proto = item->GetTemplate();
+        if (!proto || proto->Class != ITEM_CLASS_QUEST)
+            return;
+
+        if (proto->StartQuest || bot->HasQuestForItem(proto->ItemId))
+            return;
+
+        doomed.emplace_back(bag, slot);
+    });
+
+    for (auto const& position : doomed)
+    {
+        if (Item* item = bot->GetItemByPos(position.first, position.second))
+        {
+            TC_LOG_INFO("playerbots.pve", "Bot {} discards orphaned quest item {}.",
+                bot->GetName(), item->GetTemplate()->Name1);
+            bot->DestroyItem(position.first, position.second, true);
+        }
+    }
+}
+
 // Rogue poisons are vendor CONSUMABLES here, gated by RequiredLevel, and
 // applying one is the item's own use-spell aimed at a weapon. The class
 // engine cannot drive that at all: its poison entries gate on IsSpellReady,
@@ -6810,6 +6851,7 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         state.nextWeaponSkillCheckAt = PveClock::now() + std::chrono::seconds(15);
         MaxOutWeaponSkills(bot);
         DiscardScaffoldingItems(bot);
+        DiscardOrphanedQuestItems(bot);
 
         // A bot reborn at level 1 has its spellbook stripped and never got
         // the class's STARTING spells back. The trainer catch-up only teaches
