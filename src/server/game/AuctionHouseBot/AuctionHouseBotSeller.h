@@ -133,6 +133,14 @@ public:
     void SetItemsAmountForQuality(AuctionQuality quality, uint32 val);
     void LoadConfig();
 
+public:
+    // The item valuation used to price stocked auctions. Exposed so the
+    // playerbot seller can ask for the same number instead of inventing a
+    // parallel one: bots and the stocker should agree on what a thing is
+    // worth, whether or not the stocker is switched on.
+    static uint32 GetBuyModifier(ItemTemplate const* prototype);
+    static uint32 GetSellModifier(ItemTemplate const* itemProto);
+
 private:
     SellerConfiguration _houseConfig[MAX_AUCTION_HOUSE_TYPE];
 
@@ -144,8 +152,6 @@ private:
     void SetPricesOfItem(ItemTemplate const* itemProto, SellerConfiguration& config, uint32& buyp, uint32& bidp, uint32 stackcnt);
     uint32 GetStackSizeForItem(ItemTemplate const* itemProto, SellerConfiguration& config) const;
     void LoadItemsQuantity(SellerConfiguration& config);
-    static uint32 GetBuyModifier(ItemTemplate const* prototype);
-    static uint32 GetSellModifier(ItemTemplate const* itemProto);
 };
 
 #endif

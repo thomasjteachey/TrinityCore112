@@ -50,6 +50,7 @@
 #include "Opcodes.h"
 #include "Pet.h"
 #include "AuctionHouseBot/AuctionHouseBot.h"
+#include "AuctionHouseBot/AuctionHouseBotSeller.h"
 #include "AuctionHouseMgr.h"
 #include "Mail.h"
 #include "Player.h"
@@ -3707,16 +3708,30 @@ bool IsAuctionableSurplus(Player* bot, Item* item)
 uint32 ComputeAuctionBuyout(ItemTemplate const* proto, uint32 count,
     std::unordered_map<uint32, uint32> const& cheapestPerUnit)
 {
-    // The asking price with no competition is the one the auction house
-    // stocker itself would post: vendor buy price spread over the units that
-    // price covers. Matching its arithmetic (BuyPrice / BuyCount, per unit)
-    // keeps bot listings and stocked listings on the same scale instead of
-    // pricing a stack at BuyCount times what it is worth.
+    // What the thing is worth, by the same reckoning the auction house
+    // stocker uses (AuctionBotSeller::SetPricesOfItem):
+    //   vendor buy price, or failing that the sell price times a per-class
+    //   modifier, or failing THAT a value derived from item level and
+    //   quality - level squared times quality times a per-subclass modifier.
+    // The last branch is what prices anything a vendor never handles; without
+    // it a bot would post a raid drop for one copper.
+    double value = double(proto->BuyPrice);
+    if (value <= 0.0)
+    {
+        if (proto->SellPrice > 0)
+            value = double(proto->SellPrice) * AuctionBotSeller::GetSellModifier(proto);
+        else
+        {
+            double const divisor = (proto->Class == ITEM_CLASS_WEAPON || proto->Class == ITEM_CLASS_ARMOR) ? 284.0 : 80.0;
+            double const level = proto->ItemLevel ? double(proto->ItemLevel) : 1.0;
+            double const quality = proto->Quality ? double(proto->Quality) : 1.0;
+            value = level * quality * double(AuctionBotSeller::GetBuyModifier(proto)) * level / divisor;
+        }
+    }
+
+    // Spread over the units that price covers, exactly as the stocker does.
     uint32 const buyCount = std::max<uint32>(1, proto->BuyCount);
-    uint64 base = proto->BuyPrice ? (uint64(proto->BuyPrice) / buyCount) : uint64(proto->SellPrice) * 4;
-    if (!base)
-        base = proto->SellPrice ? proto->SellPrice : 1;
-    uint64 price = base * count;
+    uint64 price = uint64(std::max(1.0, value * count / buyCount));
 
     // Undercut the cheapest listing of the same item by 5%.
     auto itr = cheapestPerUnit.find(proto->ItemId);
