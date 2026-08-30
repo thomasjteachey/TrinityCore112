@@ -200,8 +200,10 @@ std::mutex g_ManagedBotUpdatePulseLock;
 // ammunition, food and auction stock out of what it earns, and it has no
 // player behind it to subsidise a bad run. At face value the fleet cannot
 // keep pace with the gear it outgrows, which is what left bots grinding in
-// white kit. Applied to gains only - see OnMoneyChanged.
-// Split into two bands. The early levels are where a bot is poorest in
+// white kit.
+//
+// Applied to LOOTED gains only - see OnMoneyChanged for why selling is
+// excluded. Split into two bands. The early levels are where a bot is poorest in
 // absolute terms and where every purchase - first bags, first real weapon,
 // ammunition - costs a disproportionate share of everything it has earned,
 // so they get their own, larger multiplier.
@@ -734,6 +736,19 @@ public:
             return;
 
         if (!playerbot::IsManagedRandomBot(player))
+            return;
+
+        // Killing things only. A loot window is open exactly while money is
+        // being taken off a corpse and at no other time, so this admits mob
+        // loot and excludes vendor sales, auction settlements, mail and quest
+        // rewards - the same test the hardcore reward multiplier uses.
+        //
+        // It matters because a multiplier on SELLING mints gold rather than
+        // paying it out: a bot vendoring a green for 100c would receive 200c,
+        // and a bot-to-bot auction would pay the buyer's X out while crediting
+        // the seller 2X, so every trade inside the fleet created gold from
+        // nothing. Loot is world income; sales are not.
+        if (player->GetLootGUID().IsEmpty())
             return;
 
         // Band is chosen by the bot's CURRENT level, so a bot crossing out of
