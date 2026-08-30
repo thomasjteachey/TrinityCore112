@@ -1329,6 +1329,47 @@ bool IsQuestRequiredItem(Player* bot, uint32 itemId)
     return false;
 }
 
+// A container the bot has no use for. A quiver is spare once one is already
+// worn - a second holds nothing extra. A bag is spare when there is no free
+// bag slot left AND it is no roomier than the smallest one already worn, so
+// genuine upgrades survive: the equip pass mounts those every fifteen
+// seconds. Only empty ones qualify; a bag with contents is never touched.
+bool IsSpareContainer(Player* bot, Item* item)
+{
+    ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
+    if (!proto || (proto->Class != ITEM_CLASS_CONTAINER && proto->Class != ITEM_CLASS_QUIVER))
+        return false;
+
+    if (item->IsNotEmptyBag())
+        return false;
+
+    bool freeBagSlot = false;
+    bool quiverWorn = false;
+    uint32 smallestWorn = 0;
+    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+    {
+        Bag* worn = bot->GetBagByPos(bagSlot);
+        if (!worn)
+        {
+            freeBagSlot = true;
+            continue;
+        }
+
+        if (ItemTemplate const* wornProto = worn->GetTemplate())
+            if (wornProto->Class == ITEM_CLASS_QUIVER)
+                quiverWorn = true;
+
+        uint32 const size = worn->GetBagSize();
+        if (!smallestWorn || size < smallestWorn)
+            smallestWorn = size;
+    }
+
+    if (proto->Class == ITEM_CLASS_QUIVER)
+        return quiverWorn;
+
+    return !freeBagSlot && proto->ContainerSlots <= smallestWorn;
+}
+
 uint32 SellVendorJunk(Player* bot)
 {
     // With the pack full there is nowhere to put a drop, a purchase or a
@@ -1349,6 +1390,11 @@ uint32 SellVendorJunk(Player* bot)
         if (!sellable && playerbot::PveManager::GetConfig().professionsEnabled &&
             proto->Class == ITEM_CLASS_TRADE_GOODS)
             sellable = !IsQuestRequiredItem(bot, proto->ItemId);
+
+        // Spare bags and quivers: worthless to carry, and carrying them is
+        // what filled the packs.
+        if (!sellable)
+            sellable = IsSpareContainer(bot, item);
 
         // Spare white gear once the pack is genuinely full - never the food,
         // water, ammunition or bags that keep the bot running, and never
@@ -3723,14 +3769,14 @@ bool IsAuctionableSurplus(Player* bot, Item* item)
         case ITEM_CLASS_KEY:
         case ITEM_CLASS_PROJECTILE:
             return false;
-        // A SPARE container is not a tool, it is dead weight. The equip pass
-        // runs every fifteen seconds and mounts anything worth mounting, so a
-        // bag or quiver still sitting in the pack after that is surplus - and
-        // hoarding them is what filled the packs that stopped two thirds of
-        // the fleet from shopping at all. Only empty ones: IsNotEmptyBag
-        // above already refuses a bag with contents.
+        // A SPARE container is not a tool, it is dead weight - hoarding them
+        // is what filled the packs that stopped two thirds of the fleet from
+        // shopping. Genuine upgrades and the last free bag slot are protected
+        // by IsSpareContainer; anything else goes to the house.
         case ITEM_CLASS_QUIVER:
         case ITEM_CLASS_CONTAINER:
+            if (!IsSpareContainer(bot, item))
+                return false;
             break;
         default:
             break;
