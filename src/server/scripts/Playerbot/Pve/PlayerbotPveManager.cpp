@@ -999,6 +999,27 @@ Creature* FindTameableBeast(Player* bot, PveBotState& state, float radius)
 // that only needs starting once.
 //
 // Returns true when it owns movement this tick.
+// True when the bot is a hunter actually equipped to fight at range. Kept
+// separate from the positioning routine because the movement fallback needs
+// the same answer on the ticks that routine declines to act.
+bool BotShouldHoldRangedFiringLine(Player* bot)
+{
+    if (!bot || bot->GetClass() != CLASS_HUNTER || !bot->HasSpell(75))
+        return false;
+
+    if (!bot->GetWeaponForAttack(RANGED_ATTACK, true))
+        return false;
+
+    if (RequiredAmmoSubclass(bot))
+    {
+        uint32 const ammoId = bot->GetUInt32Value(PLAYER_AMMO_ID);
+        if (!ammoId || !bot->GetItemCount(ammoId))
+            return false;
+    }
+
+    return true;
+}
+
 bool DriveHunterRangedPositioning(Player* bot, Unit* victim, bool mayMove)
 {
     if (!victim || bot->GetClass() != CLASS_HUNTER || !bot->HasSpell(75))
@@ -1056,6 +1077,17 @@ bool DriveHunterRangedPositioning(Player* bot, Unit* victim, bool mayMove)
     {
         if (!mayMove)
             return false;
+
+        // A chase generator installed on an earlier tick does not expire: it
+        // keeps pulling the hunter back toward the target every update. The
+        // retreat point below then fights it continuously - the bot steps out,
+        // the chase drags it in, and because the angle between them changes
+        // each time, the result reads as running in circles around the mob
+        // rather than backing away from it. Drop the chase first so the
+        // retreat is the only thing moving the bot.
+        playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
+        if (MotionMaster* motionMaster = bot->GetMotionMaster())
+            motionMaster->Clear();
 
         // Straight back from the target, not around it.
         float x = 0.0f;
@@ -4207,6 +4239,11 @@ std::unordered_map<uint8, std::vector<GrindSpot>> g_GrindSpotsByLevel;
 // how many of them serve a given level, which is what actually answers "is
 // there anything here for me".
 std::unordered_map<uint32, uint32> g_ZoneSpotCount;
+// zoneId -> the level the zone's content tops out at, taken as the 80th
+// percentile of its clusters so one stray elite or rare cannot pass a whole
+// zone off as high level. This is what answers "have I outgrown this place",
+// which is a different question from "is anything here still killable".
+std::unordered_map<uint32, uint8> g_ZoneTopLevel;
 bool g_GrindSpotsBuilt = false;
 
 // World thread only. Mirrors the reference filters: normal-rank lootable
@@ -4310,9 +4347,27 @@ void BuildGrindSpotCacheOnce()
     // suitability test can ask what SHARE of a zone is huntable at a given
     // level.
     g_ZoneSpotCount.clear();
+    g_ZoneTopLevel.clear();
+    std::unordered_map<uint32, std::vector<uint8>> zoneLevels;
     for (auto const& [key, bucket] : buckets)
-        if (!IsForbiddenGrindZone(bucket.spot.zoneId))
-            ++g_ZoneSpotCount[bucket.spot.zoneId];
+    {
+        if (IsForbiddenGrindZone(bucket.spot.zoneId))
+            continue;
+
+        ++g_ZoneSpotCount[bucket.spot.zoneId];
+        if (bucket.count >= 3)
+            zoneLevels[bucket.spot.zoneId].push_back(uint8(std::min<uint32>(bucket.meanLevel, 80)));
+    }
+
+    for (auto& [zoneId, levels] : zoneLevels)
+    {
+        if (levels.empty())
+            continue;
+
+        std::sort(levels.begin(), levels.end());
+        size_t const index = (levels.size() * 4) / 5;             // 80th percentile
+        g_ZoneTopLevel[zoneId] = levels[std::min(index, levels.size() - 1)];
+    }
 
     TC_LOG_INFO("playerbots.pve", "Grind spot cache built: {} clusters across {} level buckets, {} zones counted.",
         spotCount, g_GrindSpotsByLevel.size(), g_ZoneSpotCount.size());
@@ -4333,7 +4388,19 @@ bool BotIsInSuitableZone(Player* bot)
     if (totalItr == g_ZoneSpotCount.end() || !totalItr->second)
         return true; // an uncounted zone is not evidence of anything
 
-    auto levelItr = g_GrindSpotsByLevel.find(uint8(std::min<uint32>(bot->GetLevel(), 80)));
+    uint32 const level = bot->GetLevel();
+
+    // Has the zone simply run out of level? A starter zone stays full of
+    // things a higher level bot is still ALLOWED to kill, so the share test
+    // below never fires there - a level 13 in Durotar can always find another
+    // level 10 to hit, and would grind grey mobs forever rather than walk to
+    // the Barrens. Judge the zone by where its content tops out instead, with
+    // a level of grace so bots do not bounce on the boundary.
+    auto topItr = g_ZoneTopLevel.find(zoneId);
+    if (topItr != g_ZoneTopLevel.end() && level > uint32(topItr->second) + 1)
+        return false;
+
+    auto levelItr = g_GrindSpotsByLevel.find(uint8(std::min<uint32>(level, 80)));
     if (levelItr == g_GrindSpotsByLevel.end())
         return false;
 
@@ -6185,8 +6252,17 @@ void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
     // rather than fighting: one correction and the loop is broken.
     bool const hunterHoldsRange = DriveHunterRangedPositioning(bot, victim, !casting);
 
+    // A hunter that is equipped to shoot must never be given a one-yard chase.
+    // DriveHunterRangedPositioning declines on any tick it cannot move the bot
+    // (mid-cast, most often), and a chase issued on one of those ticks outlives
+    // it: the generator keeps closing the distance long after the hunter wanted
+    // to hold, which is how one Mongoose Bite turned into a whole fight spent in
+    // melee. Fall back to the firing line instead of the target's face.
     if (!hunterHoldsRange && mayIssueChase && !bot->IsWithinMeleeRange(victim))
-        playerbot::PvpClassActions::IssueFollowMovement(bot, victim, 1.0f);
+    {
+        float const chaseDistance = BotShouldHoldRangedFiringLine(bot) ? 12.0f : 1.0f;
+        playerbot::PvpClassActions::IssueFollowMovement(bot, victim, chaseDistance);
+    }
 
     // Track the victim continuously, like a real player's client does.
     // For a socketless bot SetInFront routes through the player-style
