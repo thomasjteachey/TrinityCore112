@@ -701,6 +701,109 @@ void DiscardScaffoldingItems(Player* bot)
         bot->DestroyItem(position.first, position.second, true);
 }
 
+// Rogue poisons are vendor CONSUMABLES here, gated by RequiredLevel, and
+// applying one is the item's own use-spell aimed at a weapon. The class
+// engine cannot drive that at all: its poison entries gate on IsSpellReady,
+// which resolves through the PLAYER's spellbook, and a rogue never "knows" a
+// poison item's spell - so those entries could never fire and rogues fought
+// with bare blades for their whole lives.
+//
+// Item ids and their required levels verified against item_template on this
+// realm. Deliberately stops at the level 60 ranks: the higher ones exist in
+// the table but are post-classic items this realm should not be handing out.
+struct RoguePoisonRank
+{
+    uint8 requiredLevel;
+    uint32 itemId;
+};
+
+constexpr RoguePoisonRank kInstantPoison[]     = { { 20, 6947 }, { 28, 6949 }, { 36, 6950 }, { 44, 8926 }, { 52, 8927 }, { 60, 8928 } };
+constexpr RoguePoisonRank kDeadlyPoison[]      = { { 30, 2892 }, { 38, 2893 }, { 46, 8984 }, { 54, 8985 }, { 60, 20844 } };
+constexpr RoguePoisonRank kCripplingPoison[]   = { { 20, 3775 }, { 50, 3776 } };
+constexpr RoguePoisonRank kMindNumbingPoison[] = { { 24, 5237 }, { 38, 6951 }, { 52, 9186 } };
+constexpr RoguePoisonRank kWoundPoison[]       = { { 32, 10918 }, { 40, 10920 }, { 48, 10921 }, { 56, 10922 } };
+
+// Highest rank the bot's level actually allows. Ranks are listed ascending,
+// so the last one that passes wins.
+template<size_t N>
+uint32 BestPoisonForLevel(Player const* bot, RoguePoisonRank const (&ranks)[N])
+{
+    uint32 best = 0;
+    for (RoguePoisonRank const& rank : ranks)
+        if (bot->GetLevel() >= rank.requiredLevel)
+            best = rank.itemId;
+
+    return best;
+}
+
+// Keep a working stock of every poison family the bot has access to.
+void EnsureRoguePoisons(Player* bot)
+{
+    if (bot->GetClass() != CLASS_ROGUE || !bot->IsAlive())
+        return;
+
+    auto stock = [bot](uint32 itemId)
+    {
+        if (!itemId)
+            return;
+
+        uint32 const carried = bot->GetItemCount(itemId);
+        if (carried >= 5)
+            return;
+
+        bot->AddItem(itemId, 20 - std::min<uint32>(carried, 20));
+    };
+
+    stock(BestPoisonForLevel(bot, kInstantPoison));
+    stock(BestPoisonForLevel(bot, kDeadlyPoison));
+    stock(BestPoisonForLevel(bot, kCripplingPoison));
+    stock(BestPoisonForLevel(bot, kMindNumbingPoison));
+    stock(BestPoisonForLevel(bot, kWoundPoison));
+}
+
+// Coat the blades: Instant on the mainhand, Deadly on the offhand - the
+// classic pairing. One application per pass, because applying a poison is a
+// real cast and stacking two in a tick just cancels the first.
+void ApplyRoguePoisons(Player* bot)
+{
+    if (bot->GetClass() != CLASS_ROGUE || !bot->IsAlive() || bot->IsInCombat() ||
+        bot->HasUnitState(UNIT_STATE_CASTING) || bot->isMoving())
+        return;
+
+    struct PoisonAssignment
+    {
+        WeaponAttackType attackType;
+        uint32 itemId;
+    };
+
+    PoisonAssignment const assignments[] = {
+        { BASE_ATTACK, BestPoisonForLevel(bot, kInstantPoison) },
+        { OFF_ATTACK,  BestPoisonForLevel(bot, kDeadlyPoison) }
+    };
+
+    for (PoisonAssignment const& assignment : assignments)
+    {
+        if (!assignment.itemId)
+            continue;
+
+        Item* weapon = bot->GetWeaponForAttack(assignment.attackType, true);
+        if (!weapon || weapon->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
+            continue;
+
+        Item* poison = bot->GetItemByEntry(assignment.itemId);
+        if (!poison)
+            continue;
+
+        SpellCastTargets targets;
+        targets.SetItemTarget(weapon);
+        bot->CastItemUseSpell(poison, targets, 0, 0);
+
+        TC_LOG_INFO("playerbots.pve", "Bot {} coats its {} with poison {}.",
+            bot->GetName(), assignment.attackType == BASE_ATTACK ? "mainhand" : "offhand", assignment.itemId);
+        return;
+    }
+}
+
 // Weapon skill is pure friction for a bot: it never visits a weapon master,
 // and skill-up rolls only fire on swings it lands, so every newly equipped
 // weapon type leaves it glancing for hours. Bots are held at the cap for
@@ -5772,6 +5875,9 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
             bot->LearnCustomSpells();
             EnsureBaselineAttackSpell(bot);
         }
+
+        EnsureRoguePoisons(bot);
+        ApplyRoguePoisons(bot);
     }
 
     if (bot->GetGroupInvite())
