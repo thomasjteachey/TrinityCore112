@@ -833,10 +833,48 @@ void EnsureRangedAmmo(Player* bot)
             bot->GetName(), ammoId);
     }
 
-    // Loading it matters as much as owning it: an unset PLAYER_AMMO_ID means
-    // no ranged attack even with a full quiver.
-    if (!bot->GetUInt32Value(PLAYER_AMMO_ID) && bot->GetItemCount(ammoId))
-        bot->SetAmmo(ammoId);
+    // Loading it matters as much as owning it: a PLAYER_AMMO_ID pointing at an
+    // empty stack means no ranged attack even with a full quiver.
+    //
+    // This must be AUTHORITATIVE rather than first-write-wins, because nothing
+    // else in the tree can repair the field once it goes stale. It survives
+    // logout, and the only code that clears it (Spell::CheckItems) runs while
+    // ATTEMPTING a shot - which the ranged guard refuses to take precisely
+    // because the field points at an empty stack. That is a self-sealing latch:
+    // no shot, so no clear, so no reload, so no shot.
+    //
+    // A hunter crossing a rung of the ladder walks straight into it. It hits 25
+    // still loaded with Sharp Arrow, fires that stack to zero, and the top-up
+    // above then issues Razor Arrow - so the bot visibly owns 200 good arrows
+    // while the field still names the empty type, forever. Confirmed live: a
+    // level 35 and a level 58 hunter both still pointing at Rough Arrow (2512,
+    // the level ONE rung) with none carried, holding 200 of the right type.
+    // Every one of them fought in melee with a full quiver, because the guard
+    // in DriveHunterRangedPositioning bails on this field long before any
+    // positioning logic is reached.
+    uint32 const loadedCount = loadedId ? bot->GetItemCount(loadedId) : 0;
+    if (!loadedCount)
+    {
+        // Prefer the ladder's pick, but settle for anything of the right
+        // subclass the bot actually holds, so a pack too full to accept the
+        // issue above still cannot leave the hunter latched out of ranged.
+        uint32 reloadId = bot->GetItemCount(ammoId) ? ammoId : 0u;
+        if (!reloadId)
+        {
+            ForEachBagItem(bot, [&](Item* item, uint8 /*bag*/, uint8 /*slot*/)
+            {
+                if (reloadId)
+                    return;
+
+                ItemTemplate const* proto = item->GetTemplate();
+                if (proto && proto->Class == ITEM_CLASS_PROJECTILE && proto->SubClass == wantedSubclass)
+                    reloadId = proto->ItemId;
+            });
+        }
+
+        if (reloadId)
+            bot->SetAmmo(reloadId);
+    }
 }
 
 // Keep a working stock of every poison family the bot has access to.
