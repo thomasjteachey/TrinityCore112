@@ -4899,7 +4899,15 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
     // defensive/trap-setup attempt, but it must never put hunter movement into a
     // "wait for trap" state. If combat does not actually drop, the next tick
     // should immediately fall through to Wing Clip / Counterattack / flee / shots.
+    // Feign-to-set-a-trap is a DUEL opener: drop combat, lay the trap, re-open
+    // on your terms. Against a creature it just sends the mob home, and since
+    // this candidate carries the highest priority of any hunter decision and
+    // asks nothing about health, a PvE hunter feigned the instant anything
+    // touched it - pull, play dead, mob walks away, pull again. Bailing out of
+    // a creature fight is the PvE manager's business, and it only does it when
+    // the fight is actually lost.
     bool const canFeignUnderPressure = trapSetupThreat && player->IsInCombat() &&
+        !playerbot::PvpCore::IsPveCombatEngaged(player) &&
         IsSpellReady(player, 5384) && !HasAuraFromSpellChain(player, 5384);
     bool const canDropTrapNow = trapSetupThreat && !player->IsInCombat() && preferredTrapReady;
 

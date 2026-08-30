@@ -155,6 +155,9 @@ struct PveBotState
     bool auctionCatchUpSell = true;
     PveTimePoint nextProfessionCheckAt{};
     uint32 engagedStallTicks = 0;
+    // When the current fight started - a bail-out only makes sense once a
+    // fight has actually been joined.
+    PveTimePoint engagedSince{};
     // Repeated failed chases against the SAME victim mean it cannot be
     // reached at all, not that the motion master hiccuped.
     uint32 consecutiveChaseRecoveries = 0;
@@ -4684,7 +4687,14 @@ void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
     // home, and it stands up to eat. Only against creatures - a real player
     // just waits for the hunter to get up - and only when the fight is
     // genuinely lost.
-    if (bot->GetClass() == CLASS_HUNTER && bot->GetHealthPct() < 25.0f && bot->IsInCombat() &&
+    // Only after the fight has actually been fought. Feigning the instant
+    // something aggroes reads as a bot that cannot decide whether it wants to
+    // fight: it pulls, drops combat immediately, the mob walks home, and it
+    // does it again. Five seconds in means this fight was lost, not declined.
+    bool const fightIsLost = state.engagedSince != PveTimePoint() &&
+        PveClock::now() - state.engagedSince >= std::chrono::seconds(5);
+
+    if (bot->GetClass() == CLASS_HUNTER && fightIsLost && bot->GetHealthPct() < 25.0f && bot->IsInCombat() &&
         bot->HasSpell(SPELL_HUNTER_FEIGN_DEATH) && !bot->GetSpellHistory()->HasCooldown(SPELL_HUNTER_FEIGN_DEATH) &&
         !bot->HasAuraType(SPELL_AURA_FEIGN_DEATH) && !bot->HasUnitState(UNIT_STATE_CASTING))
     {
@@ -5712,6 +5722,7 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         if (!state.engaged)
         {
             state.engaged = true;
+            state.engagedSince = PveClock::now();
             // A bot jumped mid-meal must not fight sitting down.
             bot->SetStandState(UNIT_STAND_STATE_STAND);
             TC_LOG_INFO("playerbots.pve", "Bot {} engaging {} (level {}) at {:.0f}y.",
