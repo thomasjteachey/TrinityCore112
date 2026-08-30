@@ -4971,24 +4971,26 @@ void ProcessPendingAuctionSales()
             uint32 marketPrice = 0;
             uint32 const buyout = ComputeAuctionBuyout(proto, count, cheapestPerUnit, &marketPrice);
 
-            // Would a merchant pay more than the house? Judged on the MARKET
-            // price - what the undercut ladder actually says the item is worth
-            // right now - not on the floored ask. Comparing against the ask
-            // would be circular: the floor is derived from the vendor price,
-            // so it always wins and the question never gets asked.
+            // Has the market fallen below what we would have to ask? The ask
+            // never goes under 1.5x vendor price, so whenever the MARKET price
+            // is under that floor the bot would be posting above what anyone
+            // is currently paying - a listing that sits for twelve hours and
+            // then, since unsold bot lots are destroyed at expiry, takes the
+            // item and the vendor money with it.
             //
-            // Bots pay no commission and no deposit, so the market price is
-            // what would land in the purse. Once the ladder has walked a
-            // commodity below what the merchant pays, listing it anyway just
-            // ties the item up for twelve hours to earn less - and an unsold
-            // bot lot is destroyed at expiry, so that would lose the vendor
-            // money outright.
+            // So the floor doubles as the threshold: at or above it the item
+            // is worth listing, below it the merchant is the better customer.
+            // Judged on the MARKET price rather than the ask, because the ask
+            // is derived from the floor and comparing the two would be
+            // circular.
             uint64 const vendorRevenue = uint64(proto->SellPrice) * count;
-            if (vendorRevenue && vendorRevenue >= uint64(marketPrice))
+            uint64 const vendorFloor = vendorRevenue * 3 / 2;
+            if (vendorRevenue && uint64(marketPrice) < vendorFloor)
             {
                 bot->ModifyMoney(int64(vendorRevenue));
-                TC_LOG_INFO("playerbots.pve", "Bot {} vendored {} x{} for {} copper instead of listing at {}.",
-                    bot->GetName(), proto->Name1, count, vendorRevenue, buyout);
+                TC_LOG_INFO("playerbots.pve",
+                    "Bot {} vendored {} x{} for {} copper: market {} is under the {} floor.",
+                    bot->GetName(), proto->Name1, count, vendorRevenue, marketPrice, vendorFloor);
                 bot->DestroyItem(item->GetBagSlot(), item->GetSlot(), true);
                 continue;
             }
