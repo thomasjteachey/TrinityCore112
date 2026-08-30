@@ -20,8 +20,11 @@
 #include "Bag.h"
 #include "Item.h"
 #include "Log.h"
+#include "GameTime.h"
 #include "ObjectGuid.h"
 #include <algorithm>
+#include <mutex>
+#include <vector>
 
 namespace CustomLootChests
 {
@@ -154,7 +157,75 @@ GameObject* PlayerChestBuilder::Summon() const
     chest->SetGoState(GO_STATE_READY);
     chest->ForceValuesUpdateAtIndex(GAMEOBJECT_DYNAMIC);
     chest->ForceValuesUpdateAtIndex(GAMEOBJECT_FLAGS);
+
+    // Tell the registry where it is, so nothing ever has to search for it.
+    RegisterChest(chest, _despawnTime);
     return chest;
+}
+
+namespace
+{
+    std::mutex g_ChestRegistryLock;
+    std::vector<ChestLocation> g_ChestRegistry;
+}
+
+void RegisterChest(GameObject* chest, Seconds despawnTime)
+{
+    if (!chest)
+        return;
+
+    ChestLocation record;
+    record.Guid = chest->GetGUID();
+    record.Entry = chest->GetEntry();
+    record.MapId = chest->GetMapId();
+    record.X = chest->GetPositionX();
+    record.Y = chest->GetPositionY();
+    record.Z = chest->GetPositionZ();
+    record.ExpiresAt = GameTime::GetGameTime() + despawnTime.count();
+
+    std::lock_guard<std::mutex> guard(g_ChestRegistryLock);
+    g_ChestRegistry.push_back(record);
+}
+
+void ForgetChest(ObjectGuid guid)
+{
+    std::lock_guard<std::mutex> guard(g_ChestRegistryLock);
+    g_ChestRegistry.erase(std::remove_if(g_ChestRegistry.begin(), g_ChestRegistry.end(),
+        [guid](ChestLocation const& record) { return record.Guid == guid; }), g_ChestRegistry.end());
+}
+
+bool FindNearestChest(uint32 entry, uint32 mapId, float x, float y, float z, float maxDistance, ObjectGuid& outGuid)
+{
+    time_t const now = GameTime::GetGameTime();
+    float const limitSq = maxDistance * maxDistance;
+    float bestSq = limitSq;
+    bool found = false;
+
+    std::lock_guard<std::mutex> guard(g_ChestRegistryLock);
+
+    // Drop anything past its own despawn deadline while we are here; the list
+    // stays a handful of entries, so this never becomes the expensive part.
+    g_ChestRegistry.erase(std::remove_if(g_ChestRegistry.begin(), g_ChestRegistry.end(),
+        [now](ChestLocation const& record) { return record.ExpiresAt <= now; }), g_ChestRegistry.end());
+
+    for (ChestLocation const& record : g_ChestRegistry)
+    {
+        if (record.Entry != entry || record.MapId != mapId)
+            continue;
+
+        float const dx = record.X - x;
+        float const dy = record.Y - y;
+        float const dz = record.Z - z;
+        float const distSq = dx * dx + dy * dy + dz * dz;
+        if (distSq > bestSq)
+            continue;
+
+        bestSq = distSq;
+        outGuid = record.Guid;
+        found = true;
+    }
+
+    return found;
 }
 
 void CollectItemsWithQuality(Player* player, ItemQualities quality, PlayerChestBuilder& chest, std::vector<ItemLocation>& removedItems,

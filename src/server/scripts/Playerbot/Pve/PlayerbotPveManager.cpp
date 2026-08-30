@@ -22,6 +22,8 @@
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
 #include "Playerbot/Pvp/PlayerbotSharedStateGuard.h"
 
+#include "Custom/custom_loot_chest_helper.h"
+
 #include "Bag.h"
 #include "CellImpl.h"
 #include "CharacterCache.h"
@@ -338,6 +340,7 @@ template<typename Fn>
 void ForEachBagItem(Player* bot, Fn&& fn);
 bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTemplate const* incumbent, uint8 slot);
 float ScoreItemForSpec(Player const* bot, ItemTemplate const* proto);
+GameObject* FindRegisteredDeathChest(Player* bot, uint32 entry, float maxDistance);
 bool IsAuctionableSurplus(Player* bot, Item* item);
 uint32 RequiredAmmoSubclass(Player const* bot);
 void MoveTowardThrottled(Player* bot, Position const& destination);
@@ -1980,6 +1983,36 @@ bool AdvanceWalkedJourney(Player* bot, PveBotState& state)
     return true;
 }
 
+// Death chests are created by our own code, which already knows exactly where
+// each one is - so asking the grid to find them again was work done to learn
+// something we had just been told. Chests register their position on summon;
+// this is a pass over a handful of records instead of a proximity query on the
+// map update thread, and it runs on every bot's chest cadence.
+//
+// A guid that no longer resolves has been looted or despawned, so it is
+// dropped and the next nearest tried. The only way that misfires is a chest on
+// a grid this bot cannot see - which it could not have walked to anyway.
+GameObject* FindRegisteredDeathChest(Player* bot, uint32 entry, float maxDistance)
+{
+    if (!entry)
+        return nullptr;
+
+    for (int attempt = 0; attempt < 3; ++attempt)
+    {
+        ObjectGuid guid;
+        if (!CustomLootChests::FindNearestChest(entry, bot->GetMapId(), bot->GetPositionX(), bot->GetPositionY(),
+                bot->GetPositionZ(), maxDistance, guid))
+            return nullptr;
+
+        if (GameObject* chest = ObjectAccessor::GetGameObject(*bot, guid))
+            return chest;
+
+        CustomLootChests::ForgetChest(guid);
+    }
+
+    return nullptr;
+}
+
 void MoveTowardThrottled(Player* bot, Position const& destination)
 {
     if (bot->isMoving())
@@ -2879,7 +2912,7 @@ void StartErrandIfNeeded(Player* bot, PveBotState& state, playerbot::PveConfig c
     // journey ended. The errand allows 90 seconds, and 200 yards is about 29
     // at running pace, so the walk still fits comfortably.
     if (cfg.hardcoreLootChestEntry)
-        if (GameObject* deathChest = bot->FindNearestGameObject(cfg.hardcoreLootChestEntry, 200.0f))
+        if (GameObject* deathChest = FindRegisteredDeathChest(bot, cfg.hardcoreLootChestEntry, 200.0f))
             if (deathChest->isSpawned() && deathChest->getLootState() == GO_READY &&
                 !IsRecentErrandTarget(state, deathChest->GetGUID()))
             {
@@ -6834,7 +6867,7 @@ void RunDeathRecovery(Player* bot, PveBotState& state, playerbot::PveConfig cons
             // The errand holds for ninety seconds, so even if something
             // aggroes the bot on the way, it returns to the chest afterwards
             // rather than forgetting it.
-            if (GameObject* chest = bot->FindNearestGameObject(cfg.hardcoreLootChestEntry, 30.0f))
+            if (GameObject* chest = FindRegisteredDeathChest(bot, cfg.hardcoreLootChestEntry, 30.0f))
             {
                 if (chest->isSpawned() && chest->getLootState() == GO_READY)
                 {
@@ -7072,7 +7105,7 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     {
         state.nextChestScanAt = now + std::chrono::seconds(3);
 
-        if (GameObject* chest = bot->FindNearestGameObject(cfg.hardcoreLootChestEntry, 60.0f))
+        if (GameObject* chest = FindRegisteredDeathChest(bot, cfg.hardcoreLootChestEntry, 60.0f))
         {
             if (chest->isSpawned() && chest->getLootState() == GO_READY &&
                 !IsRecentErrandTarget(state, chest->GetGUID()))

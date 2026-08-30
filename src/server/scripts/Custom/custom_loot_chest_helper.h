@@ -56,6 +56,40 @@ private:
 
 void CollectItemsWithQuality(Player* player, ItemQualities quality, PlayerChestBuilder& chest, std::vector<ItemLocation>& removedItems,
     std::unordered_set<uint32> const& excludedEntries = {});
+
+// ---------------------------------------------------------------------------
+// Live chest registry.
+//
+// Every death chest in the world was created by code in this file, so nothing
+// has to go looking for one. Bots previously ran a grid search on a cadence to
+// notice chests near them, which is real work on the map update thread for an
+// answer we already knew at summon time. Chests announce themselves here
+// instead, and a lookup is a linear pass over a handful of records.
+//
+// Entries are pruned by their own despawn deadline; a caller that resolves a
+// guid to nothing should call ForgetChest so a looted or despawned chest stops
+// being offered.
+// ---------------------------------------------------------------------------
+struct ChestLocation
+{
+    ObjectGuid Guid;
+    uint32 Entry = 0;
+    uint32 MapId = 0;
+    float X = 0.0f;
+    float Y = 0.0f;
+    float Z = 0.0f;
+    time_t ExpiresAt = 0;
+};
+
+void RegisterChest(GameObject* chest, Seconds despawnTime);
+void ForgetChest(ObjectGuid guid);
+
+// Nearest live chest on this map within maxDistance, or false. Does not touch
+// the grid: the answer comes from the registry.
+// Entry is matched exactly: more than one system builds chests through
+// PlayerChestBuilder (hardcore death loot, Dire Maul beads), and they must not
+// be offered to each other's seekers.
+bool FindNearestChest(uint32 entry, uint32 mapId, float x, float y, float z, float maxDistance, ObjectGuid& outGuid);
 }
 
 #endif // CUSTOM_LOOT_CHEST_HELPER_H
