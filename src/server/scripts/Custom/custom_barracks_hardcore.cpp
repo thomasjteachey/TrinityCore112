@@ -188,6 +188,23 @@ namespace BarracksHardcore
     // than set once. MUST CONVERGE: it runs per player per world tick, and a
     // branch that cannot satisfy its own condition would re-dirty the faction
     // field forever, rebuilding a values block for every observer each tick.
+    // This realm is always at war. The PvP flag stays lit for everyone and
+    // /pvp cannot put it out: the toggle is simply overwritten on the next
+    // tick, and the five-minute cool-down timer never gets to expire. GMs are
+    // left alone so they can move about unflagged.
+    void EnforceAlwaysPvP(Player* player)
+    {
+        if (!s_enabled || !player || !player->IsInWorld() || player->IsGameMaster())
+            return;
+
+        if (!player->IsPvP() || player->pvpInfo.EndTimer)
+        {
+            player->pvpInfo.EndTimer = 0;
+            player->UpdatePvP(true, true);
+            player->RemoveFlag(PLAYER_FLAGS, PLAYER_FLAGS_PVP_TIMER);
+        }
+    }
+
     void ApplyFfaState(Player* player)
     {
         if (!s_enabled || !player || !player->IsInWorld())
@@ -653,6 +670,7 @@ public:
     // couple of hash lookups and does nothing when nothing has drifted.
     void OnUpdate(Player* player, uint32 /*diff*/) override
     {
+        EnforceAlwaysPvP(player);
         ApplyFfaState(player);
     }
 
