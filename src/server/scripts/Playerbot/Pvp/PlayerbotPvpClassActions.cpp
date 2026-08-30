@@ -1799,8 +1799,15 @@ bool IsGapCloserSpell(uint32 spellId)
 {
     switch (spellId)
     {
-        case 11578: // Charge
-        case 20617: // Intercept
+        // Fed the chain-RESOLVED id, so every rank has to be here. Listing only
+        // the top rank made this false for any warrior below the last rank of
+        // Charge or Intercept.
+        case 100:   // Charge rank 1
+        case 6178:  // Charge rank 2
+        case 11578: // Charge rank 3
+        case 20252: // Intercept rank 1
+        case 20616: // Intercept rank 2
+        case 20617: // Intercept rank 3
         case 81271: // Heroic Leap
         case 82419: // Rehgar's Fury
         case 83111: // Feral Charge - Moonkin
@@ -5447,7 +5454,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // short tactical cooldowns on selected PvP debuffs.
     if (context.spellId == 112826)
         player->GetSpellHistory()->AddCooldown(context.spellId, 0, std::chrono::seconds(15));
-    if (context.spellId == 3034 || context.spellId == 11719 || context.spellId == 11713)
+    // Compare by CHAIN, not by literal id: the hunter table casts Viper Sting
+    // rank 2 (14280) while this tested rank 1 (3034), so the twelve second
+    // reapplication throttle never applied and the sting could be re-cast
+    // every global cooldown.
+    uint32 const throttledChainId = context.spellId ? sSpellMgr->GetFirstSpellInChain(context.spellId) : 0;
+    if (throttledChainId == sSpellMgr->GetFirstSpellInChain(3034) ||
+        throttledChainId == sSpellMgr->GetFirstSpellInChain(11719) ||
+        throttledChainId == sSpellMgr->GetFirstSpellInChain(11713))
     {
         if (uint32 const resolvedSpellId = ResolveKnownSpellInChain(player, context.spellId))
             player->GetSpellHistory()->AddCooldown(resolvedSpellId, 0, std::chrono::seconds(12));

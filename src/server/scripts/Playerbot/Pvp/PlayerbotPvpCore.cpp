@@ -2618,6 +2618,25 @@ bool MeetsCasterAuraStateRequirements(Player const* player, uint32 spellId)
         return 0;
     }
 
+    // The aura for whichever RANK of a chain is actually on the unit. Asking
+    // for one exact rank and reading its duration is a silent failure: the
+    // arm simply never runs for anyone carrying a different rank.
+    Aura* GetAuraFromSpellChain(Unit const* unit, uint32 baseSpellId)
+    {
+        if (!unit || !baseSpellId)
+            return nullptr;
+
+        SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(baseSpellId);
+        if (!baseSpellInfo)
+            return nullptr;
+
+        for (uint32 chainSpellId = baseSpellInfo->GetFirstRankSpell()->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
+            if (Aura* aura = unit->GetAura(chainSpellId))
+                return aura;
+
+        return nullptr;
+    }
+
     bool HasAuraFromSpellChain(Unit const* unit, uint32 baseSpellId, ObjectGuid casterGuid)
     {
         if (!unit || !baseSpellId || casterGuid.IsEmpty())
@@ -5618,7 +5637,11 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
         { "druid faerie fire", "apply faerie fire to nearby rogues", kDruidCasterFaerieFireSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, ((!isFeralDruid && !isBalanceDruid && meleeThreat) || (isFeralDruid && player->HealthBelowPct(60) && heavyMeleePressure)) && IsSpellReady(player, 5487), 29.0f,
         { "druid bear form", isFeralDruid ? "swap to bear only under heavy melee pressure below 60 percent health" : "swap to bear under physical melee pressure", 5487, playerbot::PvpClassSpellContext::TargetMode::Self, meleeThreat ? meleeThreat->GetGUID() : ObjectGuid::Empty });
-    Unit const* bearChargeTarget = player->HasAura(5487) && IsSpellReady(player, 16979) ? SelectEnemyGapCloserTarget(player, target, 8.0f, 25.0f, false) : nullptr;
+    // Dire Bear Form (9634) is rank 2 of Bear Form, so any druid past level 40
+    // holds 9634 and never 5487 - this gate was permanently false and Feral
+    // Charge could not fire at all off the non-feral path. The feral fast path
+    // two hundred lines up already uses the chain form of exactly this test.
+    Unit const* bearChargeTarget = HasAuraFromSpellChain(player, 5487) && IsSpellReady(player, 16979) ? SelectEnemyGapCloserTarget(player, target, 8.0f, 25.0f, false) : nullptr;
     AddDecisionCandidate(candidates, bearChargeTarget, 28.0f,
         { "druid feral charge", "bear gap close / interrupt from charge range", 16979, playerbot::PvpClassSpellContext::TargetMode::Enemy, bearChargeTarget ? bearChargeTarget->GetGUID() : ObjectGuid::Empty });
 
@@ -6140,7 +6163,8 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
             player->GetPower(POWER_RAGE) >= 500 && IsSpellReady(player, 1680), 44.0f,
         { "warrior whirlwind", "prioritize aoe cleave over single-target pressure when surrounded", 1680, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, player->IsWithinMeleeRange(activeTarget) &&
-            (isProtWarrior ? !HasAuraFromSpellChain(activeTarget, 11597) : (!HasAuraFromSpellChain(activeTarget, 7373) || (activeTarget->GetAura(7373) && activeTarget->GetAura(7373)->GetDuration() < 2000))) &&
+            (isProtWarrior ? !HasAuraFromSpellChain(activeTarget, 11597) : (!HasAuraFromSpellChain(activeTarget, 7373) ||
+                    [&]() { Aura const* snare = GetAuraFromSpellChain(activeTarget, 7373); return snare && snare->GetDuration() < 2000; }())) &&
             IsSpellReady(player, isProtWarrior ? uint32(11597) : uint32(7373)), 39.0f,
         { isProtWarrior ? "warrior sunder armor" : "warrior hamstring", isProtWarrior ? "apply sunder armor as protection filler" : "maintain stickiness snare", isProtWarrior ? uint32(11597) : uint32(7373), playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
     char const* meleeFinisherName = isProtWarrior ? "warrior shield slam" : (isFuryWarrior ? "warrior bloodthirst" : "warrior mortal strike");
