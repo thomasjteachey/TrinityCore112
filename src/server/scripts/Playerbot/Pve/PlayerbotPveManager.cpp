@@ -912,6 +912,23 @@ bool DriveHunterRangedPositioning(Player* bot, Unit* victim, bool mayMove)
             return false;
     }
 
+    // Who actually has the hunter? If the mob is on the HUNTER rather than on
+    // its pet, melee it. A hunter being chewed on cannot shoot well anyway,
+    // and backing off only drags the fight across the zone and into whatever
+    // else happens to be standing there - the pet is the threat sink, so when
+    // it is doing its job the hunter shoots, and when it is not the hunter
+    // fights. Anything already in melee on the bot counts, not just the
+    // current victim, or a second mob could be eating it while it politely
+    // retreats from the first.
+    if (victim->GetVictim() == bot)
+        return false;
+
+    for (Unit const* attacker : bot->getAttackers())
+    {
+        if (attacker && attacker->IsWithinMeleeRange(bot))
+            return false;
+    }
+
     playerbot::HunterAutoShotRangeInfo rangeInfo;
     if (!playerbot::PvpCore::GetHunterAutoShotRange(bot, victim, rangeInfo))
         return false;
