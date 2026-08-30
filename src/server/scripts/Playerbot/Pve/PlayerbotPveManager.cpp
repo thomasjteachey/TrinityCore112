@@ -4792,9 +4792,17 @@ void ProcessPendingAuctionShopping()
         if (sAuctionBotConfig->IsBotChar(bot->GetGUID().GetCounter()))
             continue;
 
-        // A win that cannot be pocketed burns gold on mail that rots.
-        if (CountFreeBagSlots(bot) < 2)
+        // A win that cannot be pocketed burns gold on mail that rots, so one
+        // free slot is always required - the win arrives by mail and has to
+        // land somewhere. But a bot with a nearly full pack is precisely the
+        // bot that most needs a bigger bag, and skipping the pass outright
+        // left it stuck there forever. A tight pack now NARROWS the pass to
+        // containers rather than cancelling it.
+        uint32 const freeBagSlots = CountFreeBagSlots(bot);
+        if (!freeBagSlots)
             continue;
+
+        bool const containersOnly = freeBagSlots < 2;
 
         AuctionHouseObject* auctionHouse = sAuctionMgr->GetAuctionsMap(bot->GetFaction());
         if (!auctionHouse)
@@ -4846,7 +4854,18 @@ void ProcessPendingAuctionShopping()
                 continue;
 
             ItemTemplate const* proto = item->GetTemplate();
-            if (!proto || (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR))
+            if (!proto)
+                continue;
+
+            // Bags and quivers are shopped for exactly like gear. The scorer
+            // and the local equip pass already understand both - only this
+            // filter was keeping them out of the house.
+            bool const isContainer = proto->Class == ITEM_CLASS_CONTAINER || proto->Class == ITEM_CLASS_QUIVER;
+            bool const isGear = proto->Class == ITEM_CLASS_WEAPON || proto->Class == ITEM_CLASS_ARMOR;
+            if (!isContainer && !isGear)
+                continue;
+
+            if (containersOnly && !isContainer)
                 continue;
 
             if (bot->CanUseItem(proto) != EQUIP_ERR_OK)
@@ -4874,8 +4893,12 @@ void ProcessPendingAuctionShopping()
             if (!IsEquipUpgrade(bot, proto, equippedProto, uint8(dest & 255)))
                 continue;
 
-            int32 const gain = std::max<int32>(1,
-                int32(proto->ItemLevel) - int32(equippedProto ? equippedProto->ItemLevel : 0));
+            // Item level says nothing about a bag; slots do.
+            int32 const gain = isContainer
+                ? std::max<int32>(1, int32(proto->ContainerSlots) -
+                    int32(equippedProto ? equippedProto->ContainerSlots : 0))
+                : std::max<int32>(1, int32(proto->ItemLevel) -
+                    int32(equippedProto ? equippedProto->ItemLevel : 0));
             if (gain <= bestGain)
                 continue;
 
