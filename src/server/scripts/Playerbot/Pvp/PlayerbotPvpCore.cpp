@@ -3476,7 +3476,9 @@ bool IsTargetInvalidByImmunity(Player const* player, Unit const* target);
                 continue;
             if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
                 continue;
-            if (candidate->HasAura(1715))
+            // Hamstring, any rank (1715, 7372, 7373) - screening only rank 1
+            // meant a target snared with rank 2 or 3 read as unsnared.
+            if (HasAuraFromSpellChain(candidate, 1715))
                 continue;
 
             ++count;
@@ -3555,7 +3557,9 @@ bool IsTargetEffectivelyImmune(Player const* player, Unit const* target)
                 return true;
         }
 
-        if (target->HasAura(642)) // Divine Shield
+        // Divine Shield, EITHER rank (642, 1020). Testing only rank 1 left
+        // bots hammering away at a bubbled paladin who had trained rank 2.
+        if (HasAuraFromSpellChain(target, 642))
             return true;
 
         if (target->HasAura(11958)) // Ice Block
@@ -5667,7 +5671,7 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
         { "paladin hand of freedom", "free snared or rooted ally", 1044, freedomTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, freedomTarget ? freedomTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates,
         sacrificeTarget && sacrificeTarget != player &&
-        !player->HasAura(6940) &&
+        !HasAuraFromSpellChain(player, 6940) &&
         !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotHandOfSacrificeCooldownToken) &&
         !HasAuraFromSpellChain(sacrificeTarget, 6940) &&
         !HasAuraFromSpellChain(sacrificeTarget, 1022) &&
@@ -5747,7 +5751,7 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
     bool const hasSelfMagicDebuff = SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 0.0f) == player;
     bool const shouldUseSpellstone = spellstoneItemEntry != 0 && hasSelfMagicDebuff;
 
-    bool const canUseVoidwalkerSacrifice = !isAfflictionWarlock && !isDestructionWarlock && player->HealthBelowPct(25) && !player->HasAura(19443) &&
+    bool const canUseVoidwalkerSacrifice = !isAfflictionWarlock && !isDestructionWarlock && player->HealthBelowPct(25) && !HasAuraFromSpellChain(player, 19443) &&
         hasLivingPet && IsPetSpellReady(player, 19443);
     Unit const* seduceCandidate = (isDestructionWarlock && IsPetSpellReady(player, 6358)) ? SelectRandomEnemyWithoutBreakableCrowdControl(player, 30.0f) : nullptr;
     Unit const* seduceTarget = (seduceCandidate && !HasDotAura(seduceCandidate)) ? seduceCandidate : nullptr;

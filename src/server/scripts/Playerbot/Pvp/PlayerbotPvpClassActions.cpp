@@ -159,7 +159,9 @@ bool IsDruidFeralMeleePositioning(Player const* player)
     return player->HasAura(768) ||   // Cat Form
            player->HasAura(5487) ||  // Bear Form
            player->HasAura(9634) ||  // Dire Bear Form
-           player->HasAura(9913);    // Prowl
+           player->HasAura(5215) ||  // Prowl rank 1
+           player->HasAura(6783) ||  // Prowl rank 2
+           player->HasAura(9913);    // Prowl rank 3
 }
 
 bool IsStealthedMeleeOpener(Player const* player)

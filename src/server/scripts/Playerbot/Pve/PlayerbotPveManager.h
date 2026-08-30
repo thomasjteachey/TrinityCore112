@@ -43,6 +43,10 @@ struct PveConfig
     // on the map-update thread that also resolves human combat, so this is
     // really a cap on how much player-visible latency the bots may cause.
     uint32 pathBudgetPerSecond = 150;
+    // Multiplies the anchor price a bot asks for an item. Bots undercut each
+    // other by 5% a pass, so an unmultiplied anchor walks the whole market
+    // down to the vendor floor; this is the headroom that race runs in.
+    float auctionPriceMultiplier = 10.0f;
     float grindWanderRadius = 40.0f;
     uint32 grindMaxLevelAbove = 3;
     uint32 grindMaxLevelBelow = 5;

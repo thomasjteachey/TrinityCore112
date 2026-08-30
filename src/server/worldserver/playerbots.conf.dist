@@ -319,6 +319,19 @@ Playerbot.Pve.Enable = 0
 
 Playerbot.GoldGainMultiplier = 2.0
 
+#    Playerbot.Pve.AuctionPriceMultiplier
+#        Description: Multiplies the anchor price a bot asks for an item it lists. Bots
+#                     undercut the cheapest standing listing by 5% every pass, so with no
+#                     multiplier the market walks itself down to the vendor floor within a
+#                     few dozen passes and stays there. This is the headroom that race runs
+#                     in: at 5% a pass, roughly forty-five undercuts are needed to work back
+#                     down to the item's own unmultiplied value.
+#                     Does not affect the vendor floor, which remains the hard bottom.
+#        Default:     10.0
+#                     1.0 - (price at the item's own computed value)
+
+Playerbot.Pve.AuctionPriceMultiplier = 10.0
+
 #    Playerbot.Pve.Companion.FollowDistance
 #        Description: Follow distance in yards for a companion trailing its master out of combat.
 #        Default:     2.5

@@ -4122,13 +4122,24 @@ uint32 ComputeAuctionBuyout(ItemTemplate const* proto, uint32 count,
         }
     }
 
+    auto itr = cheapestPerUnit.find(proto->ItemId);
+    bool const alreadyOnTheHouse = itr != cheapestPerUnit.end() && itr->second != 0;
+
+    // Headroom, and ONLY for an item nothing else is selling. Opening the
+    // market for something high gives the undercut race somewhere to run: at
+    // 5% a pass it takes roughly forty-five undercuts to work back down to the
+    // item's own unmultiplied value. Once a listing exists, that standing
+    // price is the market and the 5% undercut below prices against it - not
+    // against a multiplied anchor, which would just ignore the competition.
+    if (!alreadyOnTheHouse)
+        value *= double(std::max(0.01f, playerbot::PveManager::GetConfig().auctionPriceMultiplier));
+
     // Spread over the units that price covers, exactly as the stocker does.
     uint32 const buyCount = std::max<uint32>(1, proto->BuyCount);
     uint64 price = uint64(std::max(1.0, value * count / buyCount));
 
     // Undercut the cheapest listing of the same item by 5%.
-    auto itr = cheapestPerUnit.find(proto->ItemId);
-    if (itr != cheapestPerUnit.end() && itr->second)
+    if (alreadyOnTheHouse)
     {
         uint64 const undercut = std::max<uint64>(uint64(itr->second) * count * 95 / 100, 1);
         price = std::min(price, undercut);
@@ -6187,6 +6198,7 @@ void PveManager::LoadConfig()
     g_PveConfig.grindEnabled = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.Enable", false);
     g_PveConfig.grindSearchRadius = sConfigMgr->GetFloatDefault("Playerbot.PveGrind.SearchRadius", 60.0f);
     g_PveConfig.pathBudgetPerSecond = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.PathBudgetPerSecond", 150));
+    g_PveConfig.auctionPriceMultiplier = sConfigMgr->GetFloatDefault("Playerbot.Pve.AuctionPriceMultiplier", 10.0f);
     g_PveConfig.grindWanderRadius = sConfigMgr->GetFloatDefault("Playerbot.PveGrind.WanderRadius", 40.0f);
     g_PveConfig.grindMaxLevelAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelAbove", 3), 0, 10));
     g_PveConfig.grindMaxLevelBelow = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelBelow", 5), 0, 80));
