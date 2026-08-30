@@ -1308,7 +1308,15 @@ void MaybeFeedPet(Player* bot)
 // bot already in combat - its victim, or whatever is hitting it. Never
 // another bot (one team), never a resting exclusion's problem: callers
 // gate on the same conditions as a fresh grind pick.
-Unit* PickBotAssistTarget(Player* bot)
+// Adopt a nearby packmate's fight. Bounded the same way the bot's own target
+// selection is: a level 13 has no business farming a level 5 just because a
+// level 6 standing next to it happens to be on one, and joining that fight
+// earns nothing while pulling the bot away from its own bracket.
+//
+// The foe's OWN distance is checked too. Only the ally was, so a packmate
+// could be two paces away while the thing it was chasing sat a hundred yards
+// off, and the assist would send the bot on that walk.
+Unit* PickBotAssistTarget(Player* bot, playerbot::PveConfig const& cfg)
 {
     Map* map = bot->FindMap();
     if (!map)
@@ -1338,6 +1346,19 @@ Unit* PickBotAssistTarget(Player* bot)
             continue;
         if (foe->GetTypeId() == TYPEID_PLAYER && playerbot::IsManagedRandomBot(foe->ToPlayer()))
             continue;
+
+        // Worth crossing the room for, and worth the bot's time when it gets
+        // there. Players are exempt from the level band - helping against one
+        // is about the fight, not the experience.
+        if (!bot->IsWithinDistInMap(foe, cfg.grindSearchRadius))
+            continue;
+
+        if (foe->GetTypeId() != TYPEID_PLAYER)
+        {
+            int32 const levelDelta = int32(foe->GetLevel()) - int32(bot->GetLevel());
+            if (levelDelta > int32(cfg.grindMaxLevelAbove) || -levelDelta > int32(cfg.grindMaxLevelBelow))
+                continue;
+        }
 
         return foe;
     }
@@ -6867,7 +6888,7 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
             // Packmates first: adjacent bots fight together (one team),
             // adopting the fight of any nearby bot already in combat.
             if (!target)
-                target = PickBotAssistTarget(bot);
+                target = PickBotAssistTarget(bot, cfg);
 
             PveTimePoint const now = PveClock::now();
             if (!target && now >= state.nextGrindScanAt)
