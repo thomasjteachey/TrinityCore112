@@ -85,6 +85,7 @@ using PveClock = std::chrono::steady_clock;
 using PveTimePoint = PveClock::time_point;
 
 // The same free eat/drink pair the battleground preparation logic uses.
+constexpr uint32 SPELL_HUNTER_FEIGN_DEATH = 5384;
 constexpr uint32 SPELL_PVE_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PVE_OUT_OF_COMBAT_DRINK = 22734;
 
@@ -4631,6 +4632,31 @@ Unit* PickCompanionTarget(Player* bot, PveBotState& state, Player* master, playe
 
 void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
 {
+    // Feign Death is the hunter's escape hatch and nothing else in the game
+    // does what it does: it drops PvE combat outright rather than merely
+    // running away from it. A hunter losing a fight plays dead, the mobs go
+    // home, and it stands up to eat. Only against creatures - a real player
+    // just waits for the hunter to get up - and only when the fight is
+    // genuinely lost.
+    if (bot->GetClass() == CLASS_HUNTER && bot->GetHealthPct() < 25.0f && bot->IsInCombat() &&
+        bot->HasSpell(SPELL_HUNTER_FEIGN_DEATH) && !bot->GetSpellHistory()->HasCooldown(SPELL_HUNTER_FEIGN_DEATH) &&
+        !bot->HasAuraType(SPELL_AURA_FEIGN_DEATH) && !bot->HasUnitState(UNIT_STATE_CASTING))
+    {
+        bool playerAttacker = false;
+        for (Unit const* attacker : bot->getAttackers())
+            if (attacker && attacker->GetTypeId() == TYPEID_PLAYER)
+                playerAttacker = true;
+
+        if (!playerAttacker)
+        {
+            bot->CastSpell(bot, SPELL_HUNTER_FEIGN_DEATH, false);
+            TC_LOG_DEBUG("playerbots.pve", "Bot {} feigns death to break combat at {:.0f}% health.",
+                bot->GetName(), bot->GetHealthPct());
+            DisengagePveCombat(bot, state);
+            return;
+        }
+    }
+
     // Outside battlegrounds the values snapshot is all-default; the class
     // context builder only consults it for battleground triggers.
     playerbot::PvpValues const values{};
