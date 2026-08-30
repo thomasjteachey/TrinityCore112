@@ -121,8 +121,21 @@ GameObject* PlayerChestBuilder::Summon() const
     //
     // Order matters: clear the flag first, because SetRespawnTime only publishes
     // the visibility update when it sees !m_spawnedByDefault.
+    bool const spawnedBefore = chest->isSpawned();
+    bool const byDefaultBefore = chest->isSpawnedByDefault();
+
     chest->SetSpawnedByDefault(false);
     chest->SetRespawnTime(int32(_despawnTime.count()));
+
+    // Settles, from the running server rather than by argument, whether the
+    // above was actually needed: if spawnedBefore is false then a summoned
+    // chest really was unfindable by every isSpawned()-filtered search (which
+    // includes FindNearestGameObject's default spawnedOnly = true, the call the
+    // bots use). If it is true, this whole block is unnecessary and should go.
+    TC_LOG_INFO("scripts",
+        "CustomLootChests: chest {} for {} - isSpawned {} -> {}, spawnedByDefault {} -> {}, respawnDelay {}s.",
+        _chestEntry, _player->GetName(), spawnedBefore, chest->isSpawned(),
+        byDefaultBefore, chest->isSpawnedByDefault(), chest->GetRespawnDelay());
 
     Loot& loot = chest->loot;
     loot.clear();
