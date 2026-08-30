@@ -15,7 +15,9 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <vector>
 #include "Spell.h"
+#include "Configuration/Config.h"
 #include <algorithm>
 #include <sstream>
 #include <utility>
@@ -5365,6 +5367,41 @@ void Spell::TakePower()
         unitCaster->SetLastManaUse(GameTime::GetGameTimeMS());
 }
 
+namespace
+{
+// Playerbots shoot for free.
+//
+// A bot cannot be relied on to keep a quiver stocked: ammunition is sold by
+// particular vendors, not all of them, and a bot whose supply errand keeps
+// landing somewhere that does not stock it runs dry. A dry hunter stops using
+// its ranged attack altogether and walks into melee, which is a far more
+// visible wrong than a free arrow. Real players still pay for their shots.
+bool IsManagedPlayerbotShooter(Player const* player)
+{
+    WorldSession const* session = player ? player->GetSession() : nullptr;
+    if (!session)
+        return false;
+
+    if (session->IsVirtualSession() || session->IsTransientPlayerSession())
+        return true;
+
+    static std::vector<uint32> const botAccountIds = []
+    {
+        std::vector<uint32> ids;
+        std::stringstream stream(sConfigMgr->GetStringDefault("Playerbot.RandomPopulation.BotAccountIds", ""));
+        std::string token;
+        while (std::getline(stream, token, ','))
+            if (!token.empty())
+                ids.push_back(uint32(std::strtoul(token.c_str(), nullptr, 10)));
+        std::sort(ids.begin(), ids.end());
+        return ids;
+    }();
+
+    return !botAccountIds.empty() &&
+        std::binary_search(botAccountIds.begin(), botAccountIds.end(), session->GetAccountId());
+}
+}
+
 void Spell::TakeAmmo()
 {
     // Legionnaire+ (PvP) has never charged for ammo; Barracks+ (classic PvE) does.
@@ -5376,6 +5413,9 @@ void Spell::TakeAmmo()
     // Only players use ammo
     Player* player = m_caster->ToPlayer();
     if (!player)
+        return;
+
+    if (IsManagedPlayerbotShooter(player))
         return;
 
     // only ranged
