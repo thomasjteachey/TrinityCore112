@@ -1078,24 +1078,39 @@ bool DriveHunterRangedPositioning(Player* bot, Unit* victim, bool mayMove)
         if (!mayMove)
             return false;
 
-        // A chase generator installed on an earlier tick does not expire: it
-        // keeps pulling the hunter back toward the target every update. The
-        // retreat point below then fights it continuously - the bot steps out,
-        // the chase drags it in, and because the angle between them changes
-        // each time, the result reads as running in circles around the mob
-        // rather than backing away from it. Drop the chase first so the
-        // retreat is the only thing moving the bot.
+        // This retreat must PREEMPT whatever the bot is already doing, and that
+        // is why it does not go through MoveTowardThrottled: that helper opens
+        // with "if (bot->isMoving()) return;" and silently does nothing while a
+        // spline or chase is running. The branch then returned true anyway -
+        // telling the caller the hunter was holding its firing line - so the
+        // bot neither backed out nor chased. It simply stood in melee for the
+        // whole fight while every tick reported success. Stuttering in and out
+        // of that state is equally what "running in circles" looks like.
+        //
+        // Clearing the motion master is not enough on its own either: isMoving()
+        // reads the movement flags, which stay set until the spline is actually
+        // stopped, so StopMoving() has to come with it - exactly what the
+        // in-band branch below already does.
         playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
         if (MotionMaster* motionMaster = bot->GetMotionMaster())
+        {
             motionMaster->Clear();
+            bot->StopMoving();
 
-        // Straight back from the target, not around it.
-        float x = 0.0f;
-        float y = 0.0f;
-        float z = 0.0f;
-        victim->GetNearPoint(bot, x, y, z, holdMin + 3.0f, victim->GetAbsoluteAngle(bot));
-        bot->UpdateAllowedPositionZ(x, y, z);
-        MoveTowardThrottled(bot, Position(x, y, z));
+            // A stale SWIMMING flag from a just-left pond would run the whole
+            // retreat at swim speed (MoveTowardThrottled guards this too).
+            if (bot->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING) && !bot->IsInWater())
+                bot->SetSwim(false);
+
+            // Straight back from the target, not around it.
+            float x = 0.0f;
+            float y = 0.0f;
+            float z = 0.0f;
+            victim->GetNearPoint(bot, x, y, z, holdMin + 3.0f, victim->GetAbsoluteAngle(bot));
+            bot->UpdateAllowedPositionZ(x, y, z);
+            motionMaster->MovePoint(0, x, y, z, true);
+        }
+
         return true;
     }
 
@@ -6228,8 +6243,35 @@ void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
     bool const holdSwingsForOpener = stealthed &&
         (state.stealthOpenerDeadline == PveTimePoint() || PveClock::now() < state.stealthOpenerDeadline);
 
-    if ((bot->GetVictim() != victim || !bot->HasUnitState(UNIT_STATE_MELEE_ATTACKING)) && !holdSwingsForOpener)
-        bot->Attack(victim, true);
+    // ...but a hunter equipped to shoot must NOT have white swings turned on,
+    // and this is the loop that kept it in melee no matter how the positioning
+    // was tuned:
+    //
+    //   melee auto-attack on -> the hunter's own swings generate melee threat
+    //   -> the mob peels off the pet and back onto the hunter -> the mob is now
+    //   within five yards, so PvpCore flips the bot into melee MODE, where every
+    //   ranged shot is gated off and only melee is offered -> and because the mob
+    //   is on the hunter, the "stand and fight when aggroed" guard in
+    //   DriveHunterRangedPositioning declines to back out at all.
+    //
+    // Every step justified the next, and the bot manufactured the very aggro
+    // that kept it there. Positioning could never win because it was arguing
+    // with threat the bot was generating itself, one swing at a time.
+    //
+    // Auto Shot is a hunter's white damage; melee is only correct once the mob
+    // is genuinely on the hunter and backing off would just feed it free swings.
+    // Attack(victim, false) is the same downgrade the cast paths use - it clears
+    // UNIT_STATE_MELEE_ATTACKING and stops the swings without dropping the target.
+    bool const wantsMeleeSwings = !BotShouldHoldRangedFiringLine(bot) || victim->GetVictim() == bot;
+
+    // Symmetric on purpose. Unit::Attack(victim, false) is what CLEARS
+    // UNIT_STATE_MELEE_ATTACKING and sends attack-stop, so the transition out of
+    // melee only happens if the call is actually made - testing only the "melee
+    // is missing" direction would turn swings on and never off again.
+    bool const meleeStateWrong = wantsMeleeSwings != bot->HasUnitState(UNIT_STATE_MELEE_ATTACKING);
+
+    if ((bot->GetVictim() != victim || meleeStateWrong) && !holdSwingsForOpener)
+        bot->Attack(victim, wantsMeleeSwings);
 
     // Never issue chase movement mid-cast: walking cancels the baseline
     // nuke the block below just started.
