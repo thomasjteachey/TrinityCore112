@@ -2004,14 +2004,28 @@ uint32 ResolveKnownPlayerSpellInChain(Player const* player, uint32 spellId)
         if (!baseSpellInfo)
             return 0;
 
-        uint32 resolvedSpellId = 0;
-        for (uint32 chainSpellId = baseSpellInfo->GetFirstRankSpell()->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
+        // Walk DOWN from the top rank and stop at the first known one. The old
+        // loop started at rank 1, never broke, and reached the next rank through
+        // sSpellMgr->GetNextSpellInChain - an mSpellChains hash lookup per rank
+        // on top of the HasSpell lookup, so a sixteen rank chain like Frostbolt
+        // cost thirty-two hash lookups to answer a question the first hit
+        // settles. This walks pointers instead and typically stops after one or
+        // two. "Last known scanning up" and "first known scanning down" are the
+        // same spell whether or not the known ranks are contiguous.
+        //
+        // Deliberately NOT cached: this is also called from
+        // IsDecisionImmediatelyCastable, CanAffordSpellPowerCost and
+        // MeetsCasterAuraStateRequirements, none of which go through
+        // BuildClassSpellContext, so anything keyed on less than the player
+        // would leak one bot's spellbook into another's decision.
+        for (SpellInfo const* rank = baseSpellInfo->ChainEntry ? baseSpellInfo->ChainEntry->last : baseSpellInfo;
+            rank; rank = rank->ChainEntry ? rank->ChainEntry->prev : nullptr)
         {
-            if (player->HasSpell(chainSpellId))
-                resolvedSpellId = chainSpellId;
+            if (player->HasSpell(rank->Id))
+                return rank->Id;
         }
 
-        return resolvedSpellId;
+        return 0;
     }
 
     bool IsSpellReady(Player const* player, uint32 spellId)
@@ -2420,7 +2434,7 @@ bool MeetsCasterAuraStateRequirements(Player const* player, uint32 spellId)
                 Player* candidate = itr->GetSource();
                 if (!HasHostileTarget(player, candidate))
                     continue;
-                if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, nearbyHostileCombatBoundary))
+                if (!player->IsWithinDistInMap(candidate, nearbyHostileCombatBoundary) || !player->IsWithinLOSInMap(candidate))
                     continue;
 
                 // If the bot is already drinking, keep that decision sticky until
@@ -2701,7 +2715,7 @@ bool HasHunterStingFromCaster(Unit const* unit, ObjectGuid casterGuid)
                 return false;
             if (!IsFriendlySupportTarget(player, candidate))
                 return false;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 return false;
             if (HasAuraFromSpellChain(candidate, baseSpellId))
                 return false;
@@ -2760,7 +2774,7 @@ ObjectGuid SelectFriendlyWithoutManaAndAuraFromSpellChain(Player const* player, 
             continue;
         if (!IsFriendlySupportTarget(player, candidate))
             continue;
-        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+        if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
             continue;
         if (HasAuraFromSpellChain(candidate, baseSpellId))
             continue;
@@ -2785,7 +2799,7 @@ ObjectGuid SelectFriendlyWithManaAndWithoutAuraFromSpellChain(Player const* play
     {
         return candidate && candidate->IsAlive() && candidate->GetMaxPower(POWER_MANA) > 0 &&
             IsFriendlySupportTarget(player, candidate) &&
-            player->IsWithinLOSInMap(candidate) && player->IsWithinDistInMap(candidate, maxDistance) &&
+            player->IsWithinDistInMap(candidate, maxDistance) && player->IsWithinLOSInMap(candidate) &&
             !HasAuraFromSpellChain(candidate, baseSpellId);
     };
 
@@ -2832,7 +2846,7 @@ ObjectGuid SelectFriendlyWithoutAnyAuraFromSpellChain(Player const* player, std:
                 return false;
             if (!IsFriendlySupportTarget(player, candidate))
                 return false;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 return false;
             if (HasAnyAuraFromSpellChain(candidate, baseSpellIds))
                 return false;
@@ -3204,10 +3218,10 @@ bool IsTargetInvalidByImmunity(Player const* player, Unit const* target);
 
         auto isCandidateUsable = [&](Unit const* candidate)
         {
-            return HasHostileTarget(player, candidate) &&
+            return player->IsWithinDistInMap(candidate, maxDistance) &&
+                HasHostileTarget(player, candidate) &&
                 !IsTargetInvalidByImmunity(player, candidate) &&
-                player->IsWithinLOSInMap(candidate) &&
-                player->IsWithinDistInMap(candidate, maxDistance);
+                player->IsWithinLOSInMap(candidate);
         };
 
         Unit const* best = nullptr;
@@ -3248,10 +3262,10 @@ bool IsTargetInvalidByImmunity(Player const* player, Unit const* target);
 
         auto isCandidateUsable = [&](Unit const* candidate)
         {
-            return HasHostileTarget(player, candidate) &&
+            return player->IsWithinDistInMap(candidate, maxDistance) &&
+                HasHostileTarget(player, candidate) &&
                 !IsTargetInvalidByImmunity(player, candidate) &&
-                player->IsWithinLOSInMap(candidate) &&
-                player->IsWithinDistInMap(candidate, maxDistance);
+                player->IsWithinLOSInMap(candidate);
         };
 
         auto isPressuringFriendly = [&](Unit const* candidate)
@@ -3345,10 +3359,10 @@ bool IsTargetInvalidByImmunity(Player const* player, Unit const* target);
 
         auto isCandidateUsable = [&](Unit const* candidate)
         {
-            return HasHostileTarget(player, candidate) &&
+            return player->IsWithinDistInMap(candidate, maxDistance) &&
+                HasHostileTarget(player, candidate) &&
                 !IsTargetInvalidByImmunity(player, candidate) &&
-                player->IsWithinLOSInMap(candidate) &&
-                player->IsWithinDistInMap(candidate, maxDistance);
+                player->IsWithinLOSInMap(candidate);
         };
 
         if (isCandidateUsable(preferredTarget))
@@ -3473,7 +3487,7 @@ bool IsTargetInvalidByImmunity(Player const* player, Unit const* target);
         {
             if (!HasHostileTarget(player, candidate) || IsTargetInvalidByImmunity(player, candidate))
                 return false;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 return false;
             if (candidate->GetPowerType() != POWER_MANA)
                 return false;
@@ -3518,7 +3532,7 @@ bool IsTargetInvalidByImmunity(Player const* player, Unit const* target);
                 continue;
             if (IsTargetInvalidByImmunity(player, candidate))
                 continue;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 continue;
             // Hamstring, any rank (1715, 7372, 7373) - screening only rank 1
             // meant a target snared with rank 2 or 3 read as unsnared.
@@ -3762,7 +3776,7 @@ Unit const* ApplyHumanInterruptReaction(Player const* player, Unit const* candid
         // may be one that never executes a decision, so keep answering until
         // the press slop expires; spell cooldown gating prevents double casts.
         if (tracked && HasHostileTarget(player, tracked) && !IsTargetInvalidByImmunity(player, tracked) &&
-            player->IsWithinLOSInMap(tracked) && player->IsWithinDistInMap(tracked, maxDistance))
+            player->IsWithinDistInMap(tracked, maxDistance) && player->IsWithinLOSInMap(tracked))
             return tracked;
     }
 
@@ -3826,7 +3840,7 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
             Player* candidate = itr->GetSource();
             if (!HasHostileTarget(player, candidate))
                 continue;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 continue;
             if (IsPolymorphed(candidate))
                 return true;
@@ -3855,7 +3869,7 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
                 continue;
             if (candidate->GetClass() == CLASS_DRUID)
                 continue;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 continue;
             if (HasDotAura(candidate) || IsPolymorphed(candidate))
                 continue;
@@ -3890,7 +3904,7 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
             Player* candidate = itr->GetSource();
             if (!HasHostileTarget(player, candidate))
                 continue;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 continue;
             if (IsWyvernStung(candidate))
                 return true;
@@ -3917,7 +3931,7 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
                 continue;
             if (primaryTarget && candidate == primaryTarget)
                 continue;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 continue;
             if (HasDotAura(candidate) || IsWyvernStung(candidate))
                 continue;
@@ -3966,7 +3980,7 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
                 continue;
             if (!IsFriendlySupportTarget(player, candidate))
                 continue;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 continue;
             if (!hasDispellableCurse(candidate))
                 continue;
@@ -3994,7 +4008,7 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
         {
             if (!HasHostileTarget(player, candidate))
                 return false;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 return false;
             if (IsTargetInvalidByImmunity(player, candidate))
                 return false;
@@ -4089,7 +4103,7 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
                 continue;
             if (IsTargetInvalidByImmunity(player, candidate))
                 continue;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 continue;
             if (isFearInvalidTarget(candidate))
                 continue;
@@ -4134,7 +4148,7 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
                 continue;
             if (IsTargetInvalidByImmunity(player, candidate))
                 continue;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 continue;
 
             float const distance = player->GetDistance(candidate);
@@ -4166,7 +4180,7 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
                 return;
             if (excludedAuraId && candidate->HasAura(excludedAuraId))
                 return;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 return;
 
             float const healthPct = candidate->GetHealthPct();
@@ -4216,7 +4230,7 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
                 return;
             if (excludedAuraId && candidate->HasAura(excludedAuraId))
                 return;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 return;
 
             float const healthPct = candidate->GetHealthPct();
@@ -4295,7 +4309,7 @@ Unit const* SelectFriendlyCasterTarget(Player const* player, float maxDistance, 
                 return;
             if (!IsFriendlySupportTarget(player, candidate))
                 return;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 return;
 
             float const healthPct = candidate->GetHealthPct();
@@ -4351,7 +4365,7 @@ Unit const* SelectFriendlyCasterTarget(Player const* player, float maxDistance, 
                 continue;
             if (!IsFriendlySupportTarget(player, candidate))
                 continue;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 continue;
             if (!hasDispellableAura(candidate))
                 continue;
@@ -4395,7 +4409,7 @@ Unit const* SelectFriendlyCasterTarget(Player const* player, float maxDistance, 
                 continue;
             if (HasBreakableCrowdControl(candidate))
                 continue;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 continue;
 
             float const distance = player->GetDistance(candidate);
@@ -4420,7 +4434,7 @@ Unit const* SelectFriendlyCasterTarget(Player const* player, float maxDistance, 
                 return false;
             if (!HasHostileTarget(player, target))
                 return false;
-            if (!player->IsWithinLOSInMap(target) || !player->IsWithinDistInMap(target, maxDistance))
+            if (!player->IsWithinDistInMap(target, maxDistance) || !player->IsWithinLOSInMap(target))
                 return false;
 
             DispelChargesList dispelList;
@@ -4480,7 +4494,7 @@ Unit const* SelectFriendlyCasterTarget(Player const* player, float maxDistance, 
                 return;
             if (!IsFriendlySupportTarget(player, candidate))
                 return;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 return;
             if (candidate->GetMaxPower(POWER_MANA) <= 0)
                 return;
@@ -4532,7 +4546,7 @@ Unit const* SelectFriendlyCasterTarget(Player const* player, float maxDistance, 
                 continue;
             if (!IsFriendlySupportTarget(player, candidate))
                 continue;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 continue;
             if (!isSnared(candidate))
                 continue;
@@ -4681,7 +4695,7 @@ bool HasShieldEquipped(Player const* player)
                 return;
             if (!IsFriendlySupportTarget(player, candidate))
                 return;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 return;
 
             bool underMeleePressure = false;
@@ -4761,7 +4775,7 @@ bool HasShieldEquipped(Player const* player)
         DiminishingGroup const stunDrGroup = stunInfo ? stunInfo->GetDiminishingReturnsGroupForSpell(false) : DIMINISHING_NONE;
         auto usable = [&](Unit const* candidate)
         {
-            if (!HasHostileTarget(player, candidate) || !player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !HasHostileTarget(player, candidate) || !player->IsWithinLOSInMap(candidate))
                 return false;
             if (IsTargetInvalidByImmunity(player, candidate))
                 return false;
@@ -4790,7 +4804,7 @@ bool HasShieldEquipped(Player const* player)
         for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
         {
             Player* candidate = itr->GetSource();
-            if (!HasHostileTarget(player, candidate) || !player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !HasHostileTarget(player, candidate) || !player->IsWithinLOSInMap(candidate))
                 continue;
             if (IsTargetInvalidByImmunity(player, candidate) || HasAuraFromSpellChain(candidate, 1044))
                 continue;
@@ -4819,7 +4833,7 @@ bool HasShieldEquipped(Player const* player)
             Player* candidate = itr->GetSource();
             if (!candidate || !candidate->IsAlive() || !IsFriendlySupportTarget(player, candidate))
                 continue;
-            if (player->IsWithinLOSInMap(candidate) && player->IsWithinDistInMap(candidate, maxDistance) && candidate->GetHealthPct() < minHealthPct)
+            if (player->IsWithinDistInMap(candidate, maxDistance) && player->IsWithinLOSInMap(candidate) && candidate->GetHealthPct() < minHealthPct)
                 return false;
         }
 
@@ -4841,7 +4855,7 @@ bool HasShieldEquipped(Player const* player)
             Player* candidate = itr->GetSource();
             if (!candidate || !candidate->IsAlive() || !IsFriendlySupportTarget(player, candidate))
                 continue;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 continue;
             if (HasAuraFromSpellChain(candidate, baseSpellId))
                 continue;
@@ -4882,7 +4896,7 @@ uint32 CountNearbyEnemies(Player const* player, float maxDistance)
                 continue;
             if (IsTargetInvalidByImmunity(player, candidate))
                 continue;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 continue;
             ++count;
         }
@@ -4904,7 +4918,7 @@ uint32 CountNearbyEnemies(Player const* player, float maxDistance)
                 continue;
             if (IsTargetInvalidByImmunity(player, candidate))
                 continue;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 continue;
             ++count;
         }
@@ -7375,8 +7389,12 @@ PvpValues PvpCore::CollectValues(Player const* player)
         // while in combat always force mount-state correction immediately. When a
         // mounted bot is simply traveling, do not let class spell selection break
         // the mount unless an enemy has actually entered the combat envelope.
-        bool const outdoors = IsEffectivelyOutdoors(player);
-        bool const sustainedIndoorMounted = player->IsMounted() && ShouldForceIndoorDismount(player, outdoors);
+        // IsEffectivelyOutdoors runs a full terrain query - grid fetch, VMAP
+        // area/liquid lookup, dynamic tree, WMOAreaTable and AreaTable - and its
+        // result has exactly one reader, on the next line. Folding it into the
+        // && lets an unmounted bot skip the query altogether instead of paying
+        // for an answer it discards.
+        bool const sustainedIndoorMounted = player->IsMounted() && ShouldForceIndoorDismount(player, IsEffectivelyOutdoors(player));
         if (player->IsMounted())
         {
             if (sustainedIndoorMounted || player->IsInCombat())
