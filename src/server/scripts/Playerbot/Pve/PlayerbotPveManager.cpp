@@ -4415,24 +4415,27 @@ uint32 ComputeAuctionBuyout(ItemTemplate const* proto, uint32 count,
     auto itr = cheapestPerUnit.find(proto->ItemId);
     bool const alreadyOnTheHouse = itr != cheapestPerUnit.end() && itr->second != 0;
 
-    // Headroom, and ONLY for an item nothing else is selling. Opening the
-    // market for something high gives the undercut race somewhere to run: at
-    // 5% a pass it takes roughly forty-five undercuts to work back down to the
-    // item's own unmultiplied value. Once a listing exists, that standing
-    // price is the market and the 5% undercut below prices against it - not
-    // against a multiplied anchor, which would just ignore the competition.
-    if (!alreadyOnTheHouse)
-        value *= double(std::max(0.01f, playerbot::PveManager::GetConfig().auctionPriceMultiplier));
+    uint64 price = 0;
 
-    // Spread over the units that price covers, exactly as the stocker does.
-    uint32 const buyCount = std::max<uint32>(1, proto->BuyCount);
-    uint64 price = uint64(std::max(1.0, value * count / buyCount));
-
-    // Undercut the cheapest listing of the same item by 5%.
     if (alreadyOnTheHouse)
     {
-        uint64 const undercut = std::max<uint64>(uint64(itr->second) * count * 95 / 100, 1);
-        price = std::min(price, undercut);
+        // A standing listing IS the market, and the only input. Taking
+        // min(own value, undercut) instead - which is what this did - meant
+        // the SECOND seller ignored the first entirely and dropped straight
+        // back to the item's face value: one copper ore at 2 silver and every
+        // other one at 20 copper, rather than a 5% ladder down from 2 silver.
+        price = std::max<uint64>(uint64(itr->second) * count * 95 / 100, 1);
+    }
+    else
+    {
+        // Opening a market: the item's own value, with headroom for the race
+        // that follows. At 5% a step it takes roughly forty-five undercuts to
+        // work back down to the unmultiplied value.
+        value *= double(std::max(0.01f, playerbot::PveManager::GetConfig().auctionPriceMultiplier));
+
+        // Spread over the units that price covers, exactly as the stocker does.
+        uint32 const buyCount = std::max<uint32>(1, proto->BuyCount);
+        price = uint64(std::max(1.0, value * count / buyCount));
     }
 
     // ...but never below what a vendor would hand over, or selling here is
