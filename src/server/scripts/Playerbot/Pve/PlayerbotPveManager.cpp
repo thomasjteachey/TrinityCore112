@@ -2024,6 +2024,100 @@ bool IsQuestRequiredItem(Player* bot, uint32 itemId)
 // bag slot left AND it is no roomier than the smallest one already worn, so
 // genuine upgrades survive: the equip pass mounts those every fifteen
 // seconds. Only empty ones qualify; a bag with contents is never touched.
+// A bag can only be UNEQUIPPED when it is empty, which creates a genuine
+// deadlock for the bot that most wants an upgrade: every bag slot taken,
+// every bag full, so the better bag it just bought sits in the backpack
+// forever, occupying one more slot than it started with and being retried on
+// every pass. These three helpers exist to make sure that never happens - the
+// buyer refuses a bag it could not equip, and the equipper clears the way
+// before it tries.
+
+// Free slots ANYWHERE except inside one specific bag. Excluding it matters:
+// counting its own free space would let the bot "make room" in the very bag
+// it is about to empty.
+uint32 CountFreeSlotsOutsideBag(Player* bot, uint8 excludedBagSlot)
+{
+    uint32 freeSlots = 0;
+    for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+        if (!bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+            ++freeSlots;
+
+    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+    {
+        if (bagSlot == excludedBagSlot)
+            continue;
+        if (Bag* bag = bot->GetBagByPos(bagSlot))
+            freeSlots += bag->GetFreeSlots();
+    }
+
+    return freeSlots;
+}
+
+uint32 CountUsedSlotsInBag(Player* bot, Bag* bag)
+{
+    if (!bag)
+        return 0;
+
+    uint32 used = 0;
+    for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
+        if (bot->GetItemByPos(bag->GetSlot(), uint8(slot)))
+            ++used;
+
+    return used;
+}
+
+// Could this bag's contents live somewhere else? Cheap, and answerable before
+// a single item is touched, which is what lets the buyer decline up front.
+bool CanRehomeBagContents(Player* bot, Bag* bag)
+{
+    if (!bag)
+        return true;
+
+    return CountUsedSlotsInBag(bot, bag) <= CountFreeSlotsOutsideBag(bot, bag->GetSlot());
+}
+
+// Actually move the contents out. Space is PROVEN with CanStoreItem before the
+// item is detached, exactly as the mail collector does it, so there is never a
+// moment where an item exists nowhere. A destination inside the bag being
+// emptied is never considered. Returns true only if the bag ends up empty; a
+// partial move is harmless, since items simply sit in different slots.
+bool TryEmptyBagForSwap(Player* bot, Bag* bag)
+{
+    if (!bag)
+        return true;
+
+    for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
+    {
+        Item* item = bot->GetItemByPos(bag->GetSlot(), uint8(slot));
+        if (!item)
+            continue;
+
+        ItemPosCountVec destination;
+        InventoryResult result = EQUIP_ERR_INVENTORY_FULL;
+
+        // The backpack first, then every OTHER equipped bag.
+        for (uint8 targetBag = INVENTORY_SLOT_BAG_START - 1; targetBag < INVENTORY_SLOT_BAG_END; ++targetBag)
+        {
+            uint8 const container = targetBag < INVENTORY_SLOT_BAG_START ? uint8(INVENTORY_SLOT_BAG_0) : targetBag;
+            if (container == bag->GetSlot())
+                continue;
+
+            destination.clear();
+            result = bot->CanStoreItem(container, NULL_SLOT, destination, item, false);
+            if (result == EQUIP_ERR_OK)
+                break;
+        }
+
+        if (result != EQUIP_ERR_OK)
+            return false;
+
+        bot->RemoveItem(bag->GetSlot(), uint8(slot), true);
+        bot->StoreItem(destination, item, true);
+    }
+
+    return true;
+}
+
 bool IsSpareContainer(Player* bot, Item* item)
 {
     ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
@@ -3003,6 +3097,19 @@ void TryEquipUpgrades(Player* bot)
             if (!IsEquipUpgrade(bot, proto, equipped->GetTemplate(), uint8(dest & 255)))
                 continue;
 
+            // A bag cannot be unequipped while it holds anything, so the
+            // better bag would otherwise sit in the pack forever, retried on
+            // every pass and costing a slot for the privilege. Clear the old
+            // one out first, and if its contents will not fit anywhere else,
+            // leave everything exactly as it was.
+            if (Bag* equippedBag = equipped->ToBag())
+            {
+                if (!CanRehomeBagContents(bot, equippedBag) || !TryEmptyBagForSwap(bot, equippedBag))
+                    continue;
+            }
+
+            // Re-read the position: emptying the old bag may have shuffled
+            // items around this one.
             bot->SwapItem(item->GetPos(), dest);
         }
         else
@@ -4695,20 +4802,22 @@ void ProcessPendingAuctionSales()
             uint32 const count = item->GetCount();
             uint32 const etime = 12 * HOUR;
 
-            uint32 const deposit = sAuctionMgr->GetAuctionDeposit(houseEntry, etime, item, count);
-            if (!bot->HasEnoughMoney(deposit))
-                break;
+            // Playerbots post for free. A deposit is a risk premium for a
+            // player who might misprice something; the fleet lists its whole
+            // surplus constantly, so all a deposit does is bleed gold out of
+            // the simulation on lots that were never going to sell anyway.
+            uint32 const deposit = 0;
 
             uint32 const buyout = ComputeAuctionBuyout(proto, count, cheapestPerUnit);
 
-            // Would a merchant pay more than the house? Compare against what
-            // the auction would actually PUT IN THE PURSE - the buyout less
-            // the auction house's cut - not the sticker price. Once the
-            // undercut ladder has walked a commodity down far enough, the
-            // vendor genuinely is the better customer, and listing it there
-            // anyway only ties the item up for twelve hours to earn less.
+            // Would a merchant pay more than the house? Bots pay no commission
+            // and no deposit, so the buyout IS what lands in the purse and the
+            // comparison is direct. Once the undercut ladder has walked a
+            // commodity down far enough the vendor genuinely is the better
+            // customer, and listing it anyway only ties the item up for twelve
+            // hours to earn less.
             uint64 const vendorRevenue = uint64(proto->SellPrice) * count;
-            uint64 const netAuctionProceeds = uint64(buyout) * 95 / 100;
+            uint64 const netAuctionProceeds = uint64(buyout);
             if (vendorRevenue && vendorRevenue >= netAuctionProceeds)
             {
                 bot->ModifyMoney(int64(vendorRevenue));
@@ -4892,6 +5001,18 @@ void ProcessPendingAuctionShopping()
 
             if (!IsEquipUpgrade(bot, proto, equippedProto, uint8(dest & 255)))
                 continue;
+
+            // Do not buy a bag the bot could never put on. Replacing a bag
+            // means emptying it first, and a bot whose bags are all full has
+            // nowhere to put the contents - it would pay for an upgrade that
+            // then occupies a slot indefinitely, leaving it worse off than
+            // before. Checked here, before the gold is spent.
+            if (isContainer)
+            {
+                if (Item* occupant = bot->GetItemByPos(dest))
+                    if (Bag* occupantBag = occupant->ToBag(); occupantBag && !CanRehomeBagContents(bot, occupantBag))
+                        continue;
+            }
 
             // Item level says nothing about a bag; slots do.
             int32 const gain = isContainer

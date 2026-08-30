@@ -15,11 +15,15 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <sstream>
+#include <algorithm>
+#include <vector>
 #include "AuctionHouseMgr.h"
 #include "AuctionHouseBot.h"
 #include "AccountMgr.h"
 #include "Bag.h"
 #include "Common.h"
+#include "Configuration/Config.h"
 #include "CharacterCache.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
@@ -207,6 +211,35 @@ void AuctionHouseMgr::SendAuctionSalePendingMail(AuctionEntry* auction, Characte
 }
 
 //call this method to send mail to auction owner, when auction is successful, it does not clear ram
+namespace
+{
+// Is this character one of the managed playerbots?
+//
+// Read from the same account list every other playerbot system uses, and
+// keyed on the ACCOUNT rather than the session, so it answers correctly for
+// an owner who is offline when their auction resolves.
+bool IsPlayerbotAuctionOwner(uint32 ownerAccountId)
+{
+    if (!ownerAccountId)
+        return false;
+
+    static std::vector<uint32> const botAccountIds = []
+    {
+        std::vector<uint32> ids;
+        std::stringstream stream(sConfigMgr->GetStringDefault("Playerbot.RandomPopulation.BotAccountIds", ""));
+        std::string token;
+        while (std::getline(stream, token, ','))
+            if (!token.empty())
+                ids.push_back(uint32(std::strtoul(token.c_str(), nullptr, 10)));
+        std::sort(ids.begin(), ids.end());
+        return ids;
+    }();
+
+    return !botAccountIds.empty() &&
+        std::binary_search(botAccountIds.begin(), botAccountIds.end(), ownerAccountId);
+}
+}
+
 void AuctionHouseMgr::SendAuctionSuccessfulMail(AuctionEntry* auction, CharacterDatabaseTransaction trans)
 {
     ObjectGuid owner_guid(HighGuid::Player, auction->owner);
@@ -215,7 +248,11 @@ void AuctionHouseMgr::SendAuctionSuccessfulMail(AuctionEntry* auction, Character
     // owner exist
     if ((owner || owner_accId) && !sAuctionBotConfig->IsBotChar(auction->owner))
     {
-        uint32 profit = auction->bid + auction->deposit - auction->GetAuctionCut();
+        // Playerbots pay no commission. The fleet's whole economy is the gold
+        // it earns, and skimming a cut off every sale only moves gold out of
+        // the simulation into nowhere.
+        uint32 const auctionCut = IsPlayerbotAuctionOwner(owner_accId) ? 0u : auction->GetAuctionCut();
+        uint32 profit = auction->bid + auction->deposit - auctionCut;
 
         //FIXME: what do if owner offline
         if (owner)
@@ -226,7 +263,7 @@ void AuctionHouseMgr::SendAuctionSuccessfulMail(AuctionEntry* auction, Character
             owner->GetSession()->SendAuctionOwnerNotification(auction);
         }
 
-        MailDraft(auction->BuildAuctionMailSubject(AUCTION_SUCCESSFUL), AuctionEntry::BuildAuctionSoldMailBody(ObjectGuid::Create<HighGuid::Player>(auction->bidder), auction->bid, auction->buyout, auction->deposit, auction->GetAuctionCut()))
+        MailDraft(auction->BuildAuctionMailSubject(AUCTION_SUCCESSFUL), AuctionEntry::BuildAuctionSoldMailBody(ObjectGuid::Create<HighGuid::Player>(auction->bidder), auction->bid, auction->buyout, auction->deposit, auctionCut))
             .AddMoney(profit)
             .SendMailTo(trans, MailReceiver(owner, auction->owner), auction, MAIL_CHECK_MASK_COPIED, sWorld->getIntConfig(CONFIG_MAIL_DELIVERY_DELAY));
     }
@@ -243,8 +280,16 @@ void AuctionHouseMgr::SendAuctionExpiredMail(AuctionEntry* auction, CharacterDat
     ObjectGuid owner_guid(HighGuid::Player, auction->owner);
     Player* owner = ObjectAccessor::FindConnectedPlayer(owner_guid);
     uint32 owner_accId = sCharacterCache->GetCharacterAccountIdByGuid(owner_guid);
+
+    // An unsold playerbot lot is destroyed rather than posted back. The fleet
+    // lists constantly, so returning every expiry would have bots spending
+    // their passes collecting their own unsold stock and re-listing it - and
+    // a bot with a full pack cannot collect the mail anyway, so it would sit
+    // there until it expired for real.
+    bool const ownerIsPlayerbot = IsPlayerbotAuctionOwner(owner_accId);
+
     // owner exist
-    if ((owner || owner_accId) && !sAuctionBotConfig->IsBotChar(auction->owner))
+    if ((owner || owner_accId) && !sAuctionBotConfig->IsBotChar(auction->owner) && !ownerIsPlayerbot)
     {
         if (owner)
             owner->GetSession()->SendAuctionOwnerNotification(auction);
