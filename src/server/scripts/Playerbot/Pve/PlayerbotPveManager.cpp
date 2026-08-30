@@ -794,6 +794,50 @@ bool IsStockedPoisonItem(uint32 itemId)
         listed(kWoundPoison, std::size(kWoundPoison));
 }
 
+// A hunter with no arrows is a hunter with no ranged attack, and the ranged
+// positioning correctly refuses to hold a firing line it cannot shoot from -
+// so it falls through to melee and the bot fights with its bow butt.
+//
+// Ammunition is bought at vendors, but only from one that actually stocks it,
+// and a bot whose supply errand keeps landing on the local drink merchant can
+// go indefinitely without any. Guarantee a working quiver the same way the
+// class kit is guaranteed; TryBuySupplies still tops it up normally.
+//
+// Item ids and required levels verified against item_template on this realm,
+// deliberately skipping the deprecated and crafted-only entries.
+constexpr RoguePoisonRank kArrowLadder[]  = { { 1, 2512 }, { 10, 2515 }, { 25, 3030 }, { 40, 11285 } };
+constexpr RoguePoisonRank kBulletLadder[] = { { 1, 2516 }, { 10, 2519 }, { 25, 3033 }, { 37, 10512 } };
+
+void EnsureRangedAmmo(Player* bot)
+{
+    uint32 const wantedSubclass = RequiredAmmoSubclass(bot);
+    if (!wantedSubclass || !bot->IsAlive())
+        return;
+
+    uint32 const ammoId = wantedSubclass == ITEM_SUBCLASS_ARROW
+        ? BestPoisonForLevel(bot, kArrowLadder)
+        : (wantedSubclass == ITEM_SUBCLASS_BULLET ? BestPoisonForLevel(bot, kBulletLadder) : 0u);
+    if (!ammoId)
+        return;
+
+    // Count what is actually in the pack, not just the loaded type - the same
+    // trap the vendor pass already learned about.
+    uint32 const loadedId = bot->GetUInt32Value(PLAYER_AMMO_ID);
+    uint32 const carried = bot->GetItemCount(ammoId) + (loadedId && loadedId != ammoId ? bot->GetItemCount(loadedId) : 0);
+
+    if (carried < 50)
+    {
+        bot->AddItem(ammoId, 200);
+        TC_LOG_INFO("playerbots.pve", "Bot {} was out of ammunition; issued 200 of item {}.",
+            bot->GetName(), ammoId);
+    }
+
+    // Loading it matters as much as owning it: an unset PLAYER_AMMO_ID means
+    // no ranged attack even with a full quiver.
+    if (!bot->GetUInt32Value(PLAYER_AMMO_ID) && bot->GetItemCount(ammoId))
+        bot->SetAmmo(ammoId);
+}
+
 // Keep a working stock of every poison family the bot has access to.
 void EnsureRoguePoisons(Player* bot)
 {
@@ -6551,6 +6595,7 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
 
         EnsureRoguePoisons(bot);
         ApplyRoguePoisons(bot);
+        EnsureRangedAmmo(bot);
     }
 
     if (bot->GetGroupInvite())
