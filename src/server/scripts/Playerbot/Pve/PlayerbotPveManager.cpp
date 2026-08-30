@@ -154,6 +154,10 @@ struct PveBotState
     bool auctionCatchUpSell = true;
     PveTimePoint nextProfessionCheckAt{};
     uint32 engagedStallTicks = 0;
+    // Repeated failed chases against the SAME victim mean it cannot be
+    // reached at all, not that the motion master hiccuped.
+    uint32 consecutiveChaseRecoveries = 0;
+    ObjectGuid lastRecoveryVictim;
     float lastEngagedX = 0.0f;
     float lastEngagedY = 0.0f;
     // How long a stealthed bot in melee range may wait for its rotation to
@@ -304,6 +308,7 @@ bool BotHasIncompleteQuest(Player* bot);
 template<typename Fn>
 void ForEachBagItem(Player* bot, Fn&& fn);
 bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTemplate const* incumbent, uint8 slot);
+bool CanWalkTo(Player* bot, Position const& destination);
 void ProcessPendingLootExecutions();
 void GrantGatherSkillCredit(Player* bot, GameObject* go);
 void TrySkinCorpse(Player* bot, Creature* corpse);
@@ -772,8 +777,22 @@ Unit* PickGrindTarget(Player* bot, PveBotState& state, playerbot::PveConfig cons
         if (!losProbesLeft--)
             break;
 
-        if (bot->IsWithinLOSInMap(candidate))
-            return candidate;
+        if (!bot->IsWithinLOSInMap(candidate))
+            continue;
+
+        // Line of sight is not a road. A mob across a canyon or a river is
+        // plainly visible and completely unreachable, and engaging one used
+        // to be permanent: the engaged bot skips every other behaviour and
+        // the victim never stops resolving, so it chased a target it could
+        // never touch until the server restarted. Anything beyond arm's
+        // reach has to have an actual path.
+        if (bot->GetDistance(candidate) > 10.0f && !CanWalkTo(bot, candidate->GetPosition()))
+        {
+            MarkRecentBadTarget(state, candidate->GetGUID());
+            continue;
+        }
+
+        return candidate;
     }
 
     return nullptr;
@@ -4742,11 +4761,39 @@ void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
             if (++state.engagedStallTicks >= 6 && !bot->isMoving())
             {
                 state.engagedStallTicks = 0;
+
+                // Rebuilding the chase only helps when the target IS
+                // reachable. A mob across a canyon can never be reached, and
+                // nothing else lets go of it: an engaged bot skips every
+                // errand, rest, relocation and wander branch, and the victim
+                // keeps resolving because an undamaged mob never dies, never
+                // evades and never leaves. Such a bot ran the full combat
+                // decision engine four times a second, forever - which is
+                // what pinned the map threads.
+                if (victim->GetGUID() == state.lastRecoveryVictim)
+                    ++state.consecutiveChaseRecoveries;
+                else
+                {
+                    state.lastRecoveryVictim = victim->GetGUID();
+                    state.consecutiveChaseRecoveries = 1;
+                }
+
+                if (state.consecutiveChaseRecoveries >= 3)
+                {
+                    TC_LOG_INFO("playerbots.pve", "Bot {} gives up on unreachable {} at {:.0f}y.",
+                        bot->GetName(), victim->GetName(), victimDistance);
+                    MarkRecentBadTarget(state, victim->GetGUID());
+                    state.consecutiveChaseRecoveries = 0;
+                    state.lastRecoveryVictim.Clear();
+                    DisengagePveCombat(bot, state);
+                    return;
+                }
+
                 if (MotionMaster* motionMaster = bot->GetMotionMaster())
                     motionMaster->Clear();
                 playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
                 playerbot::PvpClassActions::IssueFollowMovement(bot, victim, 25.0f);
-                TC_LOG_INFO("playerbots.pve", "Bot {} recovered a stalled chase toward {} at {:.0f}y.",
+                TC_LOG_DEBUG("playerbots.pve", "Bot {} recovered a stalled chase toward {} at {:.0f}y.",
                     bot->GetName(), victim->GetName(), victimDistance);
             }
         }
@@ -5542,7 +5589,14 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
 
     if (target)
     {
-        state.dryWanderCount = 0;
+        // ARRIVING resets the relocation counter, not merely picking someone
+        // out. Resetting on selection alone held the counter at zero for a
+        // bot that never reached anything, which is exactly the bot the
+        // relocation was meant to rescue - the comment further down claims
+        // this invariant, and this is where it was being broken.
+        if (bot->IsWithinDistInMap(target, 30.0f))
+            state.dryWanderCount = 0;
+
         if (bot->GetTarget() != target->GetGUID())
             bot->SetSelection(target->GetGUID());
         if (!state.engaged)
