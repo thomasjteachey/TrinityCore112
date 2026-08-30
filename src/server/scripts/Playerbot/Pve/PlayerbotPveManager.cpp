@@ -2869,9 +2869,16 @@ void StartErrandIfNeeded(Player* bot, PveBotState& state, playerbot::PveConfig c
     }
 
     // Hardcore death chests are free treasure lying in the world: bots grab
-    // them like anyone else would.
+    // them like anyone else would - their own, each other's, and players'.
+    // Ownership is deliberately not consulted.
+    //
+    // 200 yards rather than 60: a bot resurrects at a graveyard, which is
+    // usually further from where it fell than the old radius reached, so the
+    // chest it walked back for was frequently still outside the scan when the
+    // journey ended. The errand allows 90 seconds, and 200 yards is about 29
+    // at running pace, so the walk still fits comfortably.
     if (cfg.hardcoreLootChestEntry)
-        if (GameObject* deathChest = bot->FindNearestGameObject(cfg.hardcoreLootChestEntry, 60.0f))
+        if (GameObject* deathChest = bot->FindNearestGameObject(cfg.hardcoreLootChestEntry, 200.0f))
             if (deathChest->isSpawned() && deathChest->getLootState() == GO_READY &&
                 !IsRecentErrandTarget(state, deathChest->GetGUID()))
             {
@@ -6790,7 +6797,7 @@ void RunDeathRecovery(Player* bot, PveBotState& state, playerbot::PveConfig cons
     state.deathObserved = false;
 
     // Hardcore: the drop chest stands where we fell - walk back and reclaim
-    // it (the errand scan loots death chests inside 60y). First death only:
+    // it (the errand scan loots death chests inside 200y). First death only:
     // on a repeat the loop breaker below relocates away instead, abandoning
     // the chest the way a player abandons a camped corpse.
     if (cfg.hardcoreLootChestEntry && state.recentDeathCount < 2 && state.masterGuid.IsEmpty() &&
