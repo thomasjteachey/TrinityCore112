@@ -146,6 +146,11 @@ struct PveBotState
     PveTimePoint nextMailCheckAt{};
     PveTimePoint nextAuctionShopAt{};
     PveTimePoint nextAuctionSellAt{};
+    // The first trip to the house after logging in is immediate and takes as
+    // many items as it can, so a fleet that just came up trades itself into
+    // shape at once instead of trickling one item per bot per ten minutes.
+    bool auctionCatchUpBuy = true;
+    bool auctionCatchUpSell = true;
     PveTimePoint nextProfessionCheckAt{};
     uint32 engagedStallTicks = 0;
     float lastEngagedX = 0.0f;
@@ -3721,10 +3726,20 @@ void ProcessPendingAuctionSales()
         if (!auctionHouse || !houseEntry)
             continue;
 
+        // The catch-up pass empties the bags in one go; the steady state posts
+        // a few at a time so the house is not flooded by one bot.
+        bool catchUp = false;
+        {
+            PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, *itr);
+            catchUp = state.auctionCatchUpSell;
+            state.auctionCatchUpSell = false;
+        }
+        size_t const listingLimit = catchUp ? 40u : 3u;
+
         std::vector<Item*> surplus;
         ForEachBagItem(bot, [&](Item* item, uint8 /*bag*/, uint8 /*slot*/)
         {
-            if (surplus.size() < 3 && IsAuctionableSurplus(bot, item))
+            if (surplus.size() < listingLimit && IsAuctionableSurplus(bot, item))
                 surplus.push_back(item);
         });
 
@@ -3841,15 +3856,37 @@ void ProcessPendingAuctionShopping()
             continue;
 
         --scansLeft;
-        // A stripped bot spends everything it has: the usual budget slice is
-        // for shopping upgrades, and this bot cannot fight at all.
+        uint32 const botAccountId = bot->GetSession() ? bot->GetSession()->GetAccountId() : 0;
+
+        // The catch-up pass keeps buying until nothing left is an upgrade it
+        // can afford; the steady state takes one item and comes back later.
+        bool catchUp = false;
+        {
+            PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+            catchUp = state.auctionCatchUpBuy;
+            state.auctionCatchUpBuy = false;
+        }
+
+        // One purchase per equipment slot per pass. Auction wins arrive by
+        // MAIL, so the equipped item does not change while the pass runs -
+        // without this the bot would buy every chestpiece in the house, each
+        // one still "an upgrade" over the same empty chest slot, until it ran
+        // out of gold.
+        std::unordered_set<uint8> slotsBought;
+        uint32 const maxPurchases = catchUp ? 40u : 1u;
+
+    for (uint32 purchase = 0; purchase < maxPurchases; ++purchase)
+    {
+        // Recomputed every round: the purse shrinks with each buy. A stripped
+        // bot spends everything it has - the usual budget slice is for
+        // shopping upgrades, and this bot cannot fight at all.
         uint32 const budget = IsBotStrippedBare(bot)
             ? bot->GetMoney()
             : CalculatePct(bot->GetMoney(), g_PveConfig.auctionBuyBudgetPct);
-        uint32 const botAccountId = bot->GetSession() ? bot->GetSession()->GetAccountId() : 0;
 
         AuctionEntry* bestAuction = nullptr;
         int32 bestGain = 0;
+        uint8 bestSlot = 0;
         for (auto itr = auctionHouse->GetAuctionsBegin(); itr != auctionHouse->GetAuctionsEnd(); ++itr)
         {
             AuctionEntry* auction = itr->second;
@@ -3886,6 +3923,9 @@ void ProcessPendingAuctionShopping()
 
             // Same scorer as the bag equip pass: spec-aware weapon policy,
             // armor tier before item level.
+            if (slotsBought.count(uint8(dest & 255)))
+                continue;
+
             if (!IsEquipUpgrade(bot, proto, equippedProto, uint8(dest & 255)))
                 continue;
 
@@ -3901,10 +3941,12 @@ void ProcessPendingAuctionShopping()
 
             bestAuction = auction;
             bestGain = gain;
+            bestSlot = uint8(dest & 255);
         }
 
         if (!bestAuction)
-            continue;
+            break;
+        slotsBought.insert(bestSlot);
 
         // Buyout replica: bidder/bid assigned BEFORE the mails (they read
         // them), won-mail before RemoveAItem, RemoveAuction last.
@@ -3930,8 +3972,9 @@ void ProcessPendingAuctionShopping()
 
         bot->SaveInventoryAndGoldToDB(trans);
         CharacterDatabase.CommitTransaction(trans);
+    }
 
-        // Fetch the win right away.
+        // Fetch the wins right away.
         std::lock_guard<std::mutex> guard(g_PvePendingLock);
         g_PendingMailCollections.insert(botRawGuid);
     }
@@ -5199,6 +5242,24 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         state.nextMailCheckAt = now + std::chrono::minutes(3);
         std::lock_guard<std::mutex> guard(g_PvePendingLock);
         g_PendingMailCollections.insert(bot->GetGUID().GetRawValue());
+    }
+
+    // Straight after login, buy and sell once with no per-pass limit. The
+    // stagger below exists to keep the steady state cheap; a fleet coming up
+    // naked and rich should not wait ten minutes for its first item.
+    if (!bot->IsInCombat() && (state.auctionCatchUpBuy || state.auctionCatchUpSell))
+    {
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        if (cfg.auctionBuyEnabled && state.auctionCatchUpBuy)
+        {
+            state.nextAuctionShopAt = now + std::chrono::minutes(10);
+            g_PendingAuctionShopping.insert(bot->GetGUID().GetRawValue());
+        }
+        if (cfg.auctionSellEnabled && state.auctionCatchUpSell)
+        {
+            state.nextAuctionSellAt = now + std::chrono::minutes(8);
+            g_PendingAuctionSales.insert(bot->GetGUID().GetRawValue());
+        }
     }
 
     // Selling the surplus: everything looted that the bot will never wear is
