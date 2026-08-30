@@ -78,6 +78,8 @@ namespace BarracksHardcore
     // spell added through the usual spell_lplus -> dbcgen -> client patch
     // route drops straight in here without a code change.
     uint32 s_warModeAuraSpell = 0;
+    // Levels below this are issued GREY field kit instead of white.
+    uint32 s_greyKitMaxLevel = 15;
     std::unordered_set<uint32> s_botAccountIds;
 
     std::shared_mutex s_optInLock;
@@ -92,6 +94,7 @@ namespace BarracksHardcore
         s_minZoneLevel = uint32(std::max(1, sConfigMgr->GetIntDefault("Centurion.Hardcore.FfaPvp.MinZoneLevel", 20)));
         s_rewardMultiplier = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Hardcore.FfaPvp.RewardMultiplier", 2), 1, 10));
         s_warModeAuraSpell = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FfaPvp.WarModeAuraSpell", 0)));
+        s_greyKitMaxLevel = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FieldKit.GreyUntilLevel", 15)));
 
         s_botAccountIds.clear();
         std::stringstream stream(sConfigMgr->GetStringDefault("Playerbot.RandomPopulation.BotAccountIds", ""));
@@ -337,6 +340,11 @@ namespace BarracksHardcore
     std::mutex s_whiteKitLock;
     bool s_whiteKitBuilt = false;
     std::unordered_map<uint32, std::vector<uint32>> s_whiteKitByInvType;
+    // Greys for the earliest levels. A brand new character in plain white kit
+    // is already better equipped than the world it is walking into; grey is
+    // the honest floor for the first few levels, and white becomes something
+    // the player reaches rather than starts with.
+    std::unordered_map<uint32, std::vector<uint32>> s_greyKitByInvType;
 
     // Placeholder and developer scaffolding wearing an item's clothes. These
     // sit in item_template at quality white, item level 1 and required level
@@ -415,7 +423,7 @@ namespace BarracksHardcore
         for (auto const& itemPair : sObjectMgr->GetItemTemplateStore())
         {
             ItemTemplate const& proto = itemPair.second;
-            if (proto.Quality != ITEM_QUALITY_NORMAL)
+            if (proto.Quality != ITEM_QUALITY_NORMAL && proto.Quality != ITEM_QUALITY_POOR)
                 continue;
 
             // Never hand out scaffolding, and never anything the world has no
@@ -448,26 +456,36 @@ namespace BarracksHardcore
             if (proto.Duration)
                 continue;
 
-            s_whiteKitByInvType[proto.InventoryType].push_back(proto.ItemId);
+            if (proto.Quality == ITEM_QUALITY_POOR)
+                s_greyKitByInvType[proto.InventoryType].push_back(proto.ItemId);
+            else
+                s_whiteKitByInvType[proto.InventoryType].push_back(proto.ItemId);
         }
 
         // Highest required level first, so a search can stop at its first
         // usable hit instead of walking thousands of items per slot for
         // every one of a few hundred logins.
         uint32 total = 0;
-        for (auto& kitPair : s_whiteKitByInvType)
+        uint32 greys = 0;
+        for (auto* cache : { &s_whiteKitByInvType, &s_greyKitByInvType })
         {
-            std::sort(kitPair.second.begin(), kitPair.second.end(), [](uint32 left, uint32 right)
+            for (auto& kitPair : *cache)
             {
-                ItemTemplate const* leftProto = sObjectMgr->GetItemTemplate(left);
-                ItemTemplate const* rightProto = sObjectMgr->GetItemTemplate(right);
-                if (leftProto->RequiredLevel != rightProto->RequiredLevel)
-                    return leftProto->RequiredLevel > rightProto->RequiredLevel;
-                return leftProto->ItemLevel > rightProto->ItemLevel;
-            });
-            total += uint32(kitPair.second.size());
+                std::sort(kitPair.second.begin(), kitPair.second.end(), [](uint32 left, uint32 right)
+                {
+                    ItemTemplate const* leftProto = sObjectMgr->GetItemTemplate(left);
+                    ItemTemplate const* rightProto = sObjectMgr->GetItemTemplate(right);
+                    if (leftProto->RequiredLevel != rightProto->RequiredLevel)
+                        return leftProto->RequiredLevel > rightProto->RequiredLevel;
+                    return leftProto->ItemLevel > rightProto->ItemLevel;
+                });
+                if (cache == &s_greyKitByInvType)
+                    greys += uint32(kitPair.second.size());
+                else
+                    total += uint32(kitPair.second.size());
+            }
         }
-        TC_LOG_INFO("scripts", "BarracksHardcore: white field kit cache built ({} items).", total);
+        TC_LOG_INFO("scripts", "BarracksHardcore: field kit cache built ({} white, {} grey items).", total, greys);
     }
 
     // Classic armor proficiency: the heavy classes step up at 40.
@@ -540,9 +558,18 @@ namespace BarracksHardcore
                 std::vector<uint32> const* ids = nullptr;
                 {
                     std::lock_guard<std::mutex> guard(s_whiteKitLock);
-                    auto itr = s_whiteKitByInvType.find(invType);
-                    if (itr == s_whiteKitByInvType.end())
-                        continue;
+                    // Greys below the threshold, whites from there on. Falls
+                    // back to white when a slot has no grey to offer at all -
+                    // an empty slot helps nobody, and plenty of slots simply
+                    // have no poor-quality item in the game.
+                    auto const& cache = level < s_greyKitMaxLevel ? s_greyKitByInvType : s_whiteKitByInvType;
+                    auto itr = cache.find(invType);
+                    if (itr == cache.end() || itr->second.empty())
+                    {
+                        itr = s_whiteKitByInvType.find(invType);
+                        if (itr == s_whiteKitByInvType.end())
+                            continue;
+                    }
                     ids = &itr->second; // immutable once built
                 }
 

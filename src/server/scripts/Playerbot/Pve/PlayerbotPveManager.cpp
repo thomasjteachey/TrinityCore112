@@ -4096,8 +4096,10 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
 
 std::mutex g_GrindSpotLock;
 std::unordered_map<uint8, std::vector<GrindSpot>> g_GrindSpotsByLevel;
-// zoneId -> [lowest, highest] level the zone's grind clusters serve.
-std::unordered_map<uint32, std::pair<uint8, uint8>> g_ZoneLevelBand;
+// zoneId -> how many grind clusters the zone has in total. Compared against
+// how many of them serve a given level, which is what actually answers "is
+// there anything here for me".
+std::unordered_map<uint32, uint32> g_ZoneSpotCount;
 bool g_GrindSpotsBuilt = false;
 
 // World thread only. Mirrors the reference filters: normal-rank lootable
@@ -4197,39 +4199,44 @@ void BuildGrindSpotCacheOnce()
                 g_GrindSpotsByLevel[uint8(level)].push_back(bucket.spot);
     }
 
-    // Invert it: which level band does each zone actually serve? Derived from
-    // the same clusters the relocation destination picker uses, so there is no
-    // hand-maintained table of zone levels to drift out of date.
-    g_ZoneLevelBand.clear();
-    for (auto const& [level, spots] : g_GrindSpotsByLevel)
-    {
-        for (GrindSpot const& spot : spots)
-        {
-            auto itr = g_ZoneLevelBand.find(spot.zoneId);
-            if (itr == g_ZoneLevelBand.end())
-                g_ZoneLevelBand.emplace(spot.zoneId, std::make_pair(level, level));
-            else
-            {
-                itr->second.first = std::min(itr->second.first, level);
-                itr->second.second = std::max(itr->second.second, level);
-            }
-        }
-    }
+    // How many clusters does each zone hold? Counted once here so the
+    // suitability test can ask what SHARE of a zone is huntable at a given
+    // level.
+    g_ZoneSpotCount.clear();
+    for (auto const& [key, bucket] : buckets)
+        if (!IsForbiddenGrindZone(bucket.spot.zoneId))
+            ++g_ZoneSpotCount[bucket.spot.zoneId];
 
-    TC_LOG_INFO("playerbots.pve", "Grind spot cache built: {} clusters across {} level buckets, {} zones banded.",
-        spotCount, g_GrindSpotsByLevel.size(), g_ZoneLevelBand.size());
+    TC_LOG_INFO("playerbots.pve", "Grind spot cache built: {} clusters across {} level buckets, {} zones counted.",
+        spotCount, g_GrindSpotsByLevel.size(), g_ZoneSpotCount.size());
 }
 
-// Does this bot's level fit the zone it is standing in? One level of slack at
-// each end, so a bot on a boundary does not bounce between two zones.
+// Is there still enough here to be worth staying for?
+//
+// Asked as a SHARE of the zone rather than a level range. A range taken from
+// the zone's highest cluster is far too generous: Durotar holds a handful of
+// level 11-12 camps among dozens of level 3-8 ones, so by a min/max reading
+// it "suits" a level 13 - who then spends its time being jumped by level 6s
+// it cannot even choose to fight. What matters is not whether the zone has
+// ANY cluster at the bot's level, but whether it has enough of them.
 bool BotIsInSuitableZone(Player* bot)
 {
-    auto itr = g_ZoneLevelBand.find(bot->GetZoneId());
-    if (itr == g_ZoneLevelBand.end())
-        return true; // an unbanded zone is not evidence of anything
+    uint32 const zoneId = bot->GetZoneId();
+    auto totalItr = g_ZoneSpotCount.find(zoneId);
+    if (totalItr == g_ZoneSpotCount.end() || !totalItr->second)
+        return true; // an uncounted zone is not evidence of anything
 
-    uint32 const level = std::min<uint32>(bot->GetLevel(), 80);
-    return level + 1 >= uint32(itr->second.first) && level <= uint32(itr->second.second) + 1;
+    auto levelItr = g_GrindSpotsByLevel.find(uint8(std::min<uint32>(bot->GetLevel(), 80)));
+    if (levelItr == g_GrindSpotsByLevel.end())
+        return false;
+
+    uint32 usable = 0;
+    for (GrindSpot const& spot : levelItr->second)
+        if (spot.zoneId == zoneId)
+            ++usable;
+
+    // A quarter of the zone still worth hunting is enough to stay.
+    return usable * 4 >= totalItr->second;
 }
 
 bool HasHumanPlayerNearby(Player* bot, float radius)
