@@ -195,6 +195,9 @@ struct PveBotState
     // to leave taming alone after one that could not be reached.
     PveTimePoint tameDriveSince{};
     PveTimePoint tameBackoffUntil{};
+    // Hard deadline, never a condition: the bot lies still until this passes
+    // and then carries on regardless of what else is true.
+    PveTimePoint feignHoldUntil{};
     // Pets are trained, not born, on this realm: Growl has to be granted.
     PveTimePoint nextPetGrowlCheckAt{};
     // Weapon skills are topped up on a slow cadence so a weapon bought or
@@ -610,6 +613,54 @@ struct TameableBeastCheck
         return proto && proto->IsTameable(bot->CanTameExoticPets());
     }
 };
+
+// Test and placeholder stock - "CRobinson ...", "[PH] ...", "Test ..." and
+// friends. None of it is obtainable from any vendor, loot table or start
+// outfit any more, but a piece already sitting on a bot survives every
+// data-level cleanup: deleting the row while that character is ONLINE is
+// simply overwritten by its next save, which is exactly how one pair of
+// shoulders outlived a realm-wide purge. So the engine refuses it instead.
+bool LooksLikeScaffoldingItem(ItemTemplate const* proto)
+{
+    if (!proto)
+        return false;
+
+    static constexpr char const* kMarkers[] = {
+        "[PH]", "CRobinson", "Robinson Test", "Test ", "TEST", "Monster ", "OLD ", "Deprecated"
+    };
+
+    for (char const* marker : kMarkers)
+        if (proto->Name1.find(marker) != std::string::npos)
+            return true;
+
+    return false;
+}
+
+// Strip any scaffolding the bot is already wearing or carrying. The hardcore
+// field kit reissues a proper white piece for the empty slot on its next pass.
+void DiscardScaffoldingItems(Player* bot)
+{
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item || !LooksLikeScaffoldingItem(item->GetTemplate()))
+            continue;
+
+        TC_LOG_INFO("playerbots.pve", "Bot {} discards test item {} from slot {}.",
+            bot->GetName(), item->GetTemplate()->Name1, uint32(slot));
+        bot->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+    }
+
+    std::vector<std::pair<uint8, uint8>> doomed;
+    ForEachBagItem(bot, [&](Item* item, uint8 bag, uint8 slot)
+    {
+        if (LooksLikeScaffoldingItem(item->GetTemplate()))
+            doomed.emplace_back(bag, slot);
+    });
+
+    for (auto const& position : doomed)
+        bot->DestroyItem(position.first, position.second, true);
+}
 
 // Weapon skill is pure friction for a bot: it never visits a weapon master,
 // and skill-up rolls only fire on swings it lands, so every newly equipped
@@ -2441,6 +2492,10 @@ bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTempla
 
     // Nothing temporary, ever - a seven-day mask is not gear.
     if (candidate->Duration)
+        return false;
+
+    // Never pick up test/placeholder stock, whatever its stats claim.
+    if (LooksLikeScaffoldingItem(candidate))
         return false;
 
     // An empty slot is not a licence to buy anything at all.
@@ -5027,8 +5082,24 @@ void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
             TC_LOG_DEBUG("playerbots.pve", "Bot {} feigns death to break combat at {:.0f}% health.",
                 bot->GetName(), bot->GetHealthPct());
             DisengagePveCombat(bot, state);
+            // Stay down long enough for the animation to actually play. The
+            // PvP path gets this from its scheduled stand-up; here the very
+            // next tick would otherwise move the bot and cancel the feign
+            // outright, so it never visibly hit the ground at all.
+            state.feignHoldUntil = PveClock::now() + std::chrono::milliseconds(500);
             return;
         }
+    }
+
+    // Send the pet in. Nothing in the PvE tick ever commanded a pet, so a
+    // defensive pet only ever reacted to what hit it - and a pet that is not
+    // attacking cannot growl, cannot hold threat, and leaves every mob free
+    // to walk past it to the bot.
+    if (Pet* pet = bot->GetPet(); pet && pet->IsAlive())
+    {
+        if (Unit* petVictim = ResolveAttackableByGuid(bot, bot->GetTarget()))
+            if (pet->GetVictim() != petVictim)
+                playerbot::PvpClassActions::CommandPetAttack(bot, petVictim);
     }
 
     // Outside battlegrounds the values snapshot is all-default; the class
@@ -5549,6 +5620,7 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     {
         state.nextWeaponSkillCheckAt = PveClock::now() + std::chrono::seconds(15);
         MaxOutWeaponSkills(bot);
+        DiscardScaffoldingItems(bot);
     }
 
     if (bot->GetGroupInvite())
@@ -5861,6 +5933,11 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     // three times in ten minutes and never finishing one.
     if (PveClock::now() < state.tamingUntil &&
         (bot->HasUnitState(UNIT_STATE_CASTING) || bot->GetCurrentSpell(CURRENT_CHANNELED_SPELL)))
+        return;
+
+    // Lie still for the feign animation. Purely a deadline - it cannot latch
+    // the way a condition-based hold can.
+    if (PveClock::now() < state.feignHoldUntil)
         return;
 
     // Must run before the disengage path clears the dead victim's guid.

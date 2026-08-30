@@ -51,6 +51,10 @@ public:
     static bool IsBattlegroundObjectInteractionInProgress(Player const* player);
     static bool IsPetSpellAction(Player const* player, PvpClassSpellContext const& context);
     static bool TryIssueShadowWraithFleeMovement(Player* player, Unit* threat);
+    // Seam for the PvE manager: send the bot's pet at its victim. A pet that
+    // is not attacking cannot growl, cannot hold threat and contributes
+    // nothing, and the PvE tick had no way to command one at all.
+    static void CommandPetAttack(Player* player, Unit* target);
 };
 }
 

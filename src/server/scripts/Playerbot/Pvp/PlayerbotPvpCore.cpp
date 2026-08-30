@@ -2594,6 +2594,30 @@ bool MeetsCasterAuraStateRequirements(Player const* player, uint32 spellId)
         return false;
     }
 
+    // The item an in-chain rank ACTUALLY conjures. Mana Agate, Jade, Citrine
+    // and Ruby are four ranks of one spell that each create a DIFFERENT item,
+    // so testing for the top rank's gem while the cast resolves to a lower
+    // rank is a condition that can never clear: the mage reconjures forever,
+    // and because every attempt clears its movement to cast, it reads in game
+    // as a bot stutter-stepping toward a target it never reaches. Ask the
+    // resolved rank what it makes instead of hardcoding one item id.
+    uint32 ResolveConjuredItemForKnownRank(Player const* player, uint32 chainSpellId)
+    {
+        uint32 const resolvedSpellId = ResolveKnownPlayerSpellInChain(player, chainSpellId);
+        SpellInfo const* spellInfo = resolvedSpellId ? sSpellMgr->GetSpellInfo(resolvedSpellId) : nullptr;
+        if (!spellInfo)
+            return 0;
+
+        for (uint8 effectIndex = 0; effectIndex < MAX_SPELL_EFFECTS; ++effectIndex)
+        {
+            SpellEffectInfo const& effect = spellInfo->GetEffect(SpellEffIndex(effectIndex));
+            if (effect.Effect == SPELL_EFFECT_CREATE_ITEM && effect.ItemType)
+                return effect.ItemType;
+        }
+
+        return 0;
+    }
+
     bool HasAuraFromSpellChain(Unit const* unit, uint32 baseSpellId, ObjectGuid casterGuid)
     {
         if (!unit || !baseSpellId || casterGuid.IsEmpty())
@@ -3018,8 +3042,9 @@ SpellDecision SelectPreparationBuffSpell(Player const* player)
             break;
         case CLASS_MAGE:
         {
-            if (IsSpellReady(player, 10054) && !player->HasItemCount(8008))
-                return { "create mana ruby prep", "create mana ruby before gates open", 10054, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+            if (uint32 const manaGemItemId = ResolveConjuredItemForKnownRank(player, 10054);
+                manaGemItemId && IsSpellReady(player, 10054) && !player->HasItemCount(manaGemItemId))
+                return { "create mana gem prep", "conjure a mana gem before gates open", 10054, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
 
             if (!HasAuraFromSpellChain(player, 10220) && IsSpellReady(player, 10220))
                 return { "frost armor prep", "maintain armor before gates open", 10220, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
@@ -5147,6 +5172,7 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
     // asking for 10220, never cleared. So it recast Ice Armor on every single
     // pass, forever. Any rank of either chain now satisfies the slot, exactly
     // as the open-world buff pass already did it.
+    uint32 const manaGemItemId = ResolveConjuredItemForKnownRank(player, 10054);
     uint32 mageArmorSpellId = ResolveKnownPlayerSpellInChain(player, 7302); // Ice Armor
     if (!mageArmorSpellId)
         mageArmorSpellId = ResolveKnownPlayerSpellInChain(player, 168);     // else Frost Armor
@@ -5212,8 +5238,8 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
             { (isFireMage || isArcaneMage) ? "mage scorch" : "mage frostbolt", isFireMage ? "default fire pressure" : (isArcaneMage ? "scorch instead of frostbolt" : "default ranged pressure"), (isFireMage || isArcaneMage) ? uint32(10207) : uint32(25304), playerbot::PvpClassSpellContext::TargetMode::Enemy } },
         { "maintain buff", !player->IsInCombat() && mageArmorSpellId && mageArmorMissing && IsSpellReady(player, mageArmorSpellId), 9.0f,
             { "mage armor", "maintain ice or frost armor", mageArmorSpellId, playerbot::PvpClassSpellContext::TargetMode::Self } },
-        { "mana gem missing", !player->IsInCombat() && IsSpellReady(player, 10054) && !player->HasItemCount(8008), 8.0f,
-            { "create mana ruby", "create mana ruby outside combat", 10054, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "mana gem missing", !player->IsInCombat() && manaGemItemId && IsSpellReady(player, 10054) && !player->HasItemCount(manaGemItemId), 8.0f,
+            { "create mana gem", "conjure a mana gem outside combat", 10054, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "defensive reset", !isFireMage && !IsSpellReady(player, 11958) && IsSpellReady(player, 12472), 7.0f,
             { "mage cold snap", "reset frost defenses when ice block unavailable", 12472, playerbot::PvpClassSpellContext::TargetMode::Self } }
     });

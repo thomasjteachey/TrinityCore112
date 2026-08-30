@@ -5765,6 +5765,11 @@ bool PvpClassActions::IssueFollowMovement(Player* player, Unit* target, float de
     return IssueThrottledFollowMovement(player, target, desiredDistance);
 }
 
+void PvpClassActions::CommandPetAttack(Player* player, Unit* target)
+{
+    CommandPetAttackTarget(player, target);
+}
+
 bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& context)
 {
     if (!player || !context.classSpellsEnabled || !context.shouldExecute)
