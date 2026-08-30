@@ -336,6 +336,7 @@ bool BotHasIncompleteQuest(Player* bot);
 template<typename Fn>
 void ForEachBagItem(Player* bot, Fn&& fn);
 bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTemplate const* incumbent, uint8 slot);
+float ScoreItemForSpec(Player const* bot, ItemTemplate const* proto);
 bool IsAuctionableSurplus(Player* bot, Item* item);
 uint32 RequiredAmmoSubclass(Player const* bot);
 void MoveTowardThrottled(Player* bot, Position const& destination);
@@ -2572,14 +2573,76 @@ void ProcessPendingLootExecutions()
     }
 }
 
+// Quest choice rewards: take the item that most improves the bot rather than
+// the first one it happens to be able to use. Gear is valued against whatever
+// occupies the slot it would actually land in, through the same scorer the
+// bag-equip and auction passes use, so a bot picks the real upgrade out of the
+// four on offer instead of whichever the quest happens to list first - which is
+// why bots were finishing quests without ever visibly gaining anything.
+//
+// When nothing offered is an upgrade the pick falls back to vendor value, since
+// selling it is what the bot would do with the item anyway.
 uint32 PickQuestRewardIndex(Player* bot, Quest const* quest)
 {
-    for (uint32 index = 0; index < quest->GetRewChoiceItemsCount(); ++index)
-        if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(quest->RewardChoiceItemId[index]))
-            if (bot->CanUseItem(proto) == EQUIP_ERR_OK)
-                return index;
+    uint32 bestIndex = 0;
+    float bestScore = 0.0f;
+    bool haveAny = false;
 
-    return 0;
+    for (uint32 index = 0; index < quest->GetRewChoiceItemsCount(); ++index)
+    {
+        uint32 const entry = quest->RewardChoiceItemId[index];
+        if (!entry)
+            continue;
+
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry);
+        if (!proto)
+            continue;
+
+        // Vendor value in gold, deliberately on a scale far below any real
+        // stat gain so an upgrade can never lose to a merely expensive item.
+        float score = float(proto->SellPrice) / 10000.0f;
+
+        if (bot->CanUseItem(proto) == EQUIP_ERR_OK)
+        {
+            uint8 const slot = bot->FindEquipSlot(proto, NULL_SLOT, true);
+            if (slot < INVENTORY_SLOT_BAG_END)
+            {
+                uint16 dest = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | slot);
+
+                // Value a bag against the bag it would really replace, and a
+                // one-hander against the hand that actually needs it - the same
+                // two corrections the auction shopper makes, because
+                // FindEquipSlot falls back to the first candidate slot rather
+                // than the one most worth replacing.
+                if (proto->Class == ITEM_CLASS_CONTAINER || proto->Class == ITEM_CLASS_QUIVER)
+                    SelectContainerUpgradeSlot(bot, proto, dest);
+                else if (ShouldRedirectToOffHand(bot, proto, dest))
+                    dest = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | EQUIPMENT_SLOT_OFFHAND);
+
+                ItemTemplate const* incumbent = nullptr;
+                if (Item const* equipped = bot->GetItemByPos(dest))
+                    incumbent = equipped->GetTemplate();
+
+                if (IsEquipUpgrade(bot, proto, incumbent, uint8(dest & 255)))
+                {
+                    // Upgrades always outrank sellable rewards; between two
+                    // upgrades the margin over the incumbent decides.
+                    float const gain = ScoreItemForSpec(bot, proto) -
+                        (incumbent ? ScoreItemForSpec(bot, incumbent) : 0.0f);
+                    score = 1000.0f + gain;
+                }
+            }
+        }
+
+        if (!haveAny || score > bestScore)
+        {
+            bestScore = score;
+            bestIndex = index;
+            haveAny = true;
+        }
+    }
+
+    return bestIndex;
 }
 
 void AcceptAndTurnInQuestsAt(Player* bot, Creature* giver)

@@ -679,3 +679,38 @@ Playerbot.Pve.AuctionBuy.BudgetPct = 30
 #        Default:     0 - (Disabled)
 
 Playerbot.Pve.Professions.Enable = 0
+
+#
+#    Playerbot.Pve.PathBudgetPerSecond
+#        Description: Navmesh A* queries the whole bot fleet may issue per second.
+#                     These run on the map-update thread that also resolves human
+#                     combat, so this is really a cap on how much player-visible
+#                     latency the bots are allowed to cause. Queries over budget
+#                     are deferred, not dropped.
+#        Default:     150
+#
+Playerbot.Pve.PathBudgetPerSecond = 150
+
+#
+#    Playerbot.PvpClassSpells.Range.*
+#        Description: Engagement bands used by the class-spell engine, in yards.
+#                     Melee is the band a melee bot closes to; Close is the short
+#                     caster band; Spell and Long are the normal and extended
+#                     nuke bands; Heal is the band a healer holds from its target.
+#        Default:     8.0 / 15.0 / 30.0 / 35.0 / 40.0
+#
+Playerbot.PvpClassSpells.Range.Melee = 8.0
+Playerbot.PvpClassSpells.Range.Close = 15.0
+Playerbot.PvpClassSpells.Range.Spell = 30.0
+Playerbot.PvpClassSpells.Range.Long = 35.0
+Playerbot.PvpClassSpells.Range.Heal = 40.0
+
+#
+#    Centurion.Hardcore.FieldKit.GreyUntilLevel
+#        Description: The starter field kit hands out grey gear below this level
+#                     instead of white, so early upgrades still feel like upgrades.
+#                     A slot with no grey option falls back to white.
+#                     0 disables (always white).
+#        Default:     15
+#
+Centurion.Hardcore.FieldKit.GreyUntilLevel = 15
