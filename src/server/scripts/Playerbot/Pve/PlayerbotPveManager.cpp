@@ -4816,6 +4816,18 @@ bool IsAuctionableSurplus(Player* bot, Item* item)
 
 // What to ask for it. The anchor is the item's own value, then the standing
 // competition decides: a seller who ignores the shelf price never sells.
+// What a merchant would pay for the lot, times the configured floor factor.
+//
+// The ask never goes below this, and the same number decides whether listing
+// is worth doing at all - so it is computed in exactly one place. Two copies
+// of the multiplier would drift, and the two rules would then disagree about
+// where the boundary is.
+uint64 VendorPriceFloor(ItemTemplate const* proto, uint32 count)
+{
+    float const factor = std::max(0.0f, playerbot::PveManager::GetConfig().auctionVendorFloorFactor);
+    return uint64(double(proto->SellPrice) * double(count) * double(factor));
+}
+
 uint32 ComputeAuctionBuyout(ItemTemplate const* proto, uint32 count,
     std::unordered_map<uint32, uint32> const& cheapestPerUnit, uint32* outMarketPrice = nullptr)
 {
@@ -4876,8 +4888,7 @@ uint32 ComputeAuctionBuyout(ItemTemplate const* proto, uint32 count,
     // and the decision to list are two different questions: this governs the
     // ask, so a lot that IS worth listing is never posted for less than the
     // merchant would have paid for it.
-    uint64 const vendorFloor = uint64(proto->SellPrice) * count * 3 / 2;
-    price = std::max(price, vendorFloor);
+    price = std::max(price, VendorPriceFloor(proto, count));
 
     return uint32(std::min<uint64>(price, uint64(MAX_MONEY_AMOUNT)));
 }
@@ -4984,7 +4995,7 @@ void ProcessPendingAuctionSales()
             // is derived from the floor and comparing the two would be
             // circular.
             uint64 const vendorRevenue = uint64(proto->SellPrice) * count;
-            uint64 const vendorFloor = vendorRevenue * 3 / 2;
+            uint64 const vendorFloor = VendorPriceFloor(proto, count);
             if (vendorRevenue && uint64(marketPrice) < vendorFloor)
             {
                 bot->ModifyMoney(int64(vendorRevenue));
@@ -7061,6 +7072,7 @@ void PveManager::LoadConfig()
     g_PveConfig.auctionPriceMultiplier = sConfigMgr->GetFloatDefault("Playerbot.Pve.AuctionPriceMultiplier", 10.0f);
     g_PveConfig.auctionMinTradeGoodStack = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionMinTradeGoodStack", 10));
     g_PveConfig.auctionValuableUnitCopper = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionValuableUnitCopper", 1000));
+    g_PveConfig.auctionVendorFloorFactor = sConfigMgr->GetFloatDefault("Playerbot.Pve.AuctionVendorFloorFactor", 1.5f);
     g_PveConfig.grindWanderRadius = sConfigMgr->GetFloatDefault("Playerbot.PveGrind.WanderRadius", 40.0f);
     g_PveConfig.grindMaxLevelAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelAbove", 3), 0, 10));
     g_PveConfig.grindMaxLevelBelow = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelBelow", 5), 0, 80));

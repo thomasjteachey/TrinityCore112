@@ -53,6 +53,10 @@ struct PveConfig
     // Per-unit sell value at or above which a material is worth listing on
     // its own, however few the bot has.
     uint32 auctionValuableUnitCopper = 1000;
+    // Multiple of an item's vendor price that the auction ask never goes
+    // below - and, being the same number, the market price at which listing
+    // stops being worth doing at all.
+    float auctionVendorFloorFactor = 1.5f;
     float grindWanderRadius = 40.0f;
     uint32 grindMaxLevelAbove = 3;
     uint32 grindMaxLevelBelow = 5;

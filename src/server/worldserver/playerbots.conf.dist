@@ -382,6 +382,20 @@ Playerbot.Pve.AuctionMinTradeGoodStack = 10
 
 Playerbot.Pve.AuctionValuableUnitCopper = 1000
 
+#    Playerbot.Pve.AuctionVendorFloorFactor
+#        Description: Multiple of an item's vendor price that a bot's auction ask never goes
+#                     below. The same number is the threshold for listing at all: when the
+#                     going market price is under this floor, the bot sells to a merchant
+#                     instead of posting above what anyone is currently paying - which
+#                     matters because an unsold bot lot is destroyed at expiry rather than
+#                     returned, so a listing nobody meets costs the item AND the vendor money.
+#                     Raising it makes bots hold out for a better price and vendor more
+#                     readily; lowering it makes them list more and accept thinner margins.
+#        Default:     1.5
+#                     1.0 - (list at any price at or above vendor value)
+
+Playerbot.Pve.AuctionVendorFloorFactor = 1.5
+
 #    Playerbot.Pve.Companion.FollowDistance
 #        Description: Follow distance in yards for a companion trailing its master out of combat.
 #        Default:     2.5
