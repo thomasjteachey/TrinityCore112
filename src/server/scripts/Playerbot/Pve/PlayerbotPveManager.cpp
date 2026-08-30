@@ -4860,11 +4860,23 @@ uint32 ComputeAuctionBuyout(ItemTemplate const* proto, uint32 count,
     if (alreadyOnTheHouse)
     {
         // A standing listing IS the market, and the only input. Taking
-        // min(own value, undercut) instead - which is what this did - meant
-        // the SECOND seller ignored the first entirely and dropped straight
-        // back to the item's face value: one copper ore at 2 silver and every
-        // other one at 20 copper, rather than a 5% ladder down from 2 silver.
-        price = std::max<uint64>(uint64(itr->second) * count * 95 / 100, 1);
+        // min(own value, undercut) instead meant the SECOND seller ignored the
+        // first entirely and dropped straight back to the item's face value.
+        //
+        // The step is a FLAT number of copper per unit, not a percentage.
+        // A percentage compounds: 5% off a price that was itself 5% off walks
+        // a market down geometrically, and the further above vendor value the
+        // opening price is, the larger every early step is in absolute terms.
+        // A flat step drifts instead, and drifts at the same rate whatever the
+        // item is worth.
+        //
+        // Per unit because that is what the market map holds - a total-based
+        // step is not representable once a lot is divided back into a unit
+        // price, where integer division would swallow it.
+        uint64 const undercut = std::max<uint32>(1, playerbot::PveManager::GetConfig().auctionUndercutCopper);
+        uint64 const standingPerUnit = uint64(itr->second);
+        uint64 const askPerUnit = standingPerUnit > undercut ? standingPerUnit - undercut : 1;
+        price = std::max<uint64>(askPerUnit * count, 1);
     }
     else
     {
@@ -7073,6 +7085,7 @@ void PveManager::LoadConfig()
     g_PveConfig.auctionMinTradeGoodStack = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionMinTradeGoodStack", 10));
     g_PveConfig.auctionValuableUnitCopper = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionValuableUnitCopper", 1000));
     g_PveConfig.auctionVendorFloorFactor = sConfigMgr->GetFloatDefault("Playerbot.Pve.AuctionVendorFloorFactor", 1.5f);
+    g_PveConfig.auctionUndercutCopper = uint32(std::max(1, sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionUndercutCopper", 1)));
     g_PveConfig.grindWanderRadius = sConfigMgr->GetFloatDefault("Playerbot.PveGrind.WanderRadius", 40.0f);
     g_PveConfig.grindMaxLevelAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelAbove", 3), 0, 10));
     g_PveConfig.grindMaxLevelBelow = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelBelow", 5), 0, 80));

@@ -396,6 +396,21 @@ Playerbot.Pve.AuctionValuableUnitCopper = 1000
 
 Playerbot.Pve.AuctionVendorFloorFactor = 1.5
 
+#    Playerbot.Pve.AuctionUndercutCopper
+#        Description: How far a bot undercuts the cheapest standing lot, in copper PER UNIT.
+#                     A flat step, not a percentage. A percentage compounds - 5% off a price
+#                     that was itself 5% off walks a market down geometrically, and the
+#                     further above vendor value the opening price sits the larger every
+#                     early step is in absolute terms. A flat step drifts instead, at the
+#                     same rate whatever the item is worth.
+#                     Per unit because that is what the market comparison holds: a step
+#                     defined on the lot total is not representable once the lot is divided
+#                     back into a unit price, where integer division would swallow it. So a
+#                     20-stack moves 20 copper a step at the default.
+#        Default:     1
+
+Playerbot.Pve.AuctionUndercutCopper = 1
+
 #    Playerbot.Pve.Companion.FollowDistance
 #        Description: Follow distance in yards for a companion trailing its master out of combat.
 #        Default:     2.5

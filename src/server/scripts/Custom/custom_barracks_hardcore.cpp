@@ -70,6 +70,14 @@ namespace BarracksHardcore
     uint32 s_dropChancePercent = 50;
     uint32 s_minZoneLevel = 20;
     uint32 s_rewardMultiplier = 2;
+    // Visible badge for the war-mode opt-in, so a player can tell at a glance
+    // whether their flag is armed. 0 disables it. Configurable because no
+    // stock 3.3.5 spell is both named for this and free of side effects -
+    // 32609/32610 ("Alliance/Horde Flag Visual Only") are genuinely
+    // effect-free and already proven on this realm, and a bespoke "War Mode"
+    // spell added through the usual spell_lplus -> dbcgen -> client patch
+    // route drops straight in here without a code change.
+    uint32 s_warModeAuraSpell = 0;
     std::unordered_set<uint32> s_botAccountIds;
 
     std::shared_mutex s_optInLock;
@@ -83,6 +91,7 @@ namespace BarracksHardcore
         s_dropChancePercent = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Hardcore.FullLoot.DropChancePercent", 50), 0, 100));
         s_minZoneLevel = uint32(std::max(1, sConfigMgr->GetIntDefault("Centurion.Hardcore.FfaPvp.MinZoneLevel", 20)));
         s_rewardMultiplier = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Hardcore.FfaPvp.RewardMultiplier", 2), 1, 10));
+        s_warModeAuraSpell = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FfaPvp.WarModeAuraSpell", 0)));
 
         s_botAccountIds.clear();
         std::stringstream stream(sConfigMgr->GetStringDefault("Playerbot.RandomPopulation.BotAccountIds", ""));
@@ -236,6 +245,35 @@ namespace BarracksHardcore
             player->UpdatePvP(true, true);
             player->RemoveFlag(PLAYER_FLAGS, PLAYER_FLAGS_PVP_TIMER);
         }
+    }
+
+    // The war-mode badge. Tracks the OPT-IN rather than the armed state on
+    // purpose: armed depends on the zone, so a badge that tracked it would
+    // wink out every time the player stepped into a sanctuary and read as the
+    // setting having turned itself off. This says "your flag is on", and the
+    // flag itself decides where that bites.
+    //
+    // MUST CONVERGE, for the same reason ApplyFfaState must: it runs per
+    // player per world tick, so it compares before it touches anything.
+    void ApplyWarModeAura(Player* player)
+    {
+        if (!s_enabled || !s_warModeAuraSpell || !player || !player->IsInWorld())
+            return;
+
+        // Bots need no badge, and a couple of hundred of them re-broadcasting
+        // one would cost far more than it could ever tell anybody.
+        WorldSession const* session = player->GetSession();
+        if (!session || IsBotAccount(session->GetAccountId()))
+            return;
+
+        bool const wantsBadge = IsOptedIn(player->GetGUID().GetCounter());
+        if (wantsBadge == player->HasAura(s_warModeAuraSpell))
+            return; // converged - the overwhelmingly common case
+
+        if (wantsBadge)
+            player->AddAura(s_warModeAuraSpell, player);
+        else
+            player->RemoveAurasDueToSpell(s_warModeAuraSpell);
     }
 
     void ApplyFfaState(Player* player)
@@ -679,6 +717,7 @@ public:
             s_optInGuids.insert(guidLow);
         }
         ApplyFfaState(player);
+        ApplyWarModeAura(player);
         // Anyone already stripped bare (deaths taken before the kit existed)
         // is dressed on the way in.
         IssueWhiteFieldKit(player);
@@ -694,6 +733,7 @@ public:
     void OnUpdateZone(Player* player, uint32 /*newZone*/, uint32 /*newArea*/) override
     {
         ApplyFfaState(player);
+        ApplyWarModeAura(player);
     }
 
     // Player::UpdateArea strips the FFA byte on every sub-area crossing and
@@ -705,11 +745,13 @@ public:
     {
         EnforceAlwaysPvP(player);
         ApplyFfaState(player);
+        ApplyWarModeAura(player);
     }
 
     void OnMapChanged(Player* player) override
     {
         ApplyFfaState(player);
+        ApplyWarModeAura(player);
     }
 
     void OnGiveXP(Player* player, uint32& amount, Unit* /*victim*/) override
@@ -837,6 +879,7 @@ public:
                 me->Whisper("Your mark is lifted. The wilds are merely dangerous again.", LANG_UNIVERSAL, player);
             }
             ApplyFfaState(player);
+            ApplyWarModeAura(player);
             return true;
         }
     };

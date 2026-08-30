@@ -57,6 +57,10 @@ struct PveConfig
     // below - and, being the same number, the market price at which listing
     // stops being worth doing at all.
     float auctionVendorFloorFactor = 1.5f;
+    // How far a seller undercuts the standing lot, in copper PER UNIT. A flat
+    // step rather than a percentage, so the market drifts down instead of
+    // collapsing geometrically.
+    uint32 auctionUndercutCopper = 1;
     float grindWanderRadius = 40.0f;
     uint32 grindMaxLevelAbove = 3;
     uint32 grindMaxLevelBelow = 5;
