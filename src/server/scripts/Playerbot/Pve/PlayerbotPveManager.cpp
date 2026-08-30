@@ -88,6 +88,10 @@ using PveTimePoint = PveClock::time_point;
 
 // The same free eat/drink pair the battleground preparation logic uses.
 constexpr uint32 SPELL_HUNTER_FEIGN_DEATH = 5384;
+constexpr uint32 kPveHunterAutoShotSpellId = 75;
+// Consecutive ticks a live victim may fail to resolve before the bot gives up
+// on it. A knockback or a stun can flicker one for a tick or two.
+constexpr uint32 PveTargetResolveGrace = 3;
 constexpr uint32 SPELL_PVE_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PVE_OUT_OF_COMBAT_DRINK = 22734;
 
@@ -202,6 +206,8 @@ struct PveBotState
     PveTimePoint nextPetGrowlCheckAt{};
     // Paces the "am I in the right zone for my level" check.
     PveTimePoint nextZoneFitCheckAt{};
+    // Consecutive ticks the held victim has failed to resolve.
+    uint32 targetResolveMisses = 0;
     // One-shot repair of the class starting spellbook.
     bool startingSpellsEnsured = false;
     // Weapon skills are topped up on a slow cadence so a weapon bought or
@@ -436,6 +442,24 @@ void EnsureBaselineAttackSpell(Player* bot)
 
     bot->LearnSpell(opener, false);
     TC_LOG_INFO("playerbots.pve", "Bot {} knew no class opener; taught spell {}.", bot->GetName(), opener);
+}
+
+// Auto Shot is not the rank-1 of any chain, so the opener logic above cannot
+// reach it: it is a single spell every hunter is CREATED with, which on this
+// realm means the empty playercreateinfo_spell_custom table loses it forever
+// the first time a hunter is reborn at level 1.
+//
+// Without it a hunter has no ranged attack at all. It carries a bow, buys
+// arrows for it, and still walks into melee - because the ranged positioning
+// asks "does this bot have Auto Shot" before anything else and gets no for an
+// answer. Every hunter on the realm was in that state.
+void EnsureHunterAutoShot(Player* bot)
+{
+    if (bot->GetClass() != CLASS_HUNTER || bot->HasSpell(kPveHunterAutoShotSpellId))
+        return;
+
+    bot->LearnSpell(kPveHunterAutoShotSpellId, false);
+    TC_LOG_INFO("playerbots.pve", "Bot {} knew no Auto Shot; taught it.", bot->GetName());
 }
 
 // Mages provision themselves: highest known Conjure Water / Conjure Food
@@ -2141,6 +2165,37 @@ bool TryEmptyBagForSwap(Player* bot, Bag* bag)
     return true;
 }
 
+// Should this one-hander go in the OFF hand rather than the main?
+//
+// FindEquipSlot offers a one-handed weapon to the main hand first and, with
+// both hands full, returns the main hand unconditionally. So a bot whose off
+// hand holds a caster trinket judges every dagger it finds against its MAIN
+// hand, rejects the ones that are not upgrades there, and keeps the dead slot
+// indefinitely - the off hand is never even considered.
+//
+// When the off hand holds something that is not a weapon at all and the bot
+// can dual wield, that is plainly the slot that wants filling.
+bool ShouldRedirectToOffHand(Player* bot, ItemTemplate const* candidate, uint16 dest)
+{
+    if (!candidate || candidate->InventoryType != INVTYPE_WEAPON || !bot->CanDualWield())
+        return false;
+
+    if (uint8(dest & 255) != EQUIPMENT_SLOT_MAINHAND)
+        return false;
+
+    // Only when the main hand is actually occupied - an empty main hand is
+    // the right answer for a lone weapon.
+    if (!bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND))
+        return false;
+
+    Item const* offHand = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
+    if (!offHand)
+        return true; // a free off hand beats contesting the main hand
+
+    ItemTemplate const* offProto = offHand->GetTemplate();
+    return offProto && offProto->Class != ITEM_CLASS_WEAPON;
+}
+
 // Which bag slot should a container upgrade actually target?
 //
 // NOT the one CanEquipItem picks. Player::FindEquipSlot searches for a free
@@ -3245,6 +3300,11 @@ void TryEquipUpgrades(Player* bot)
         if (proto->Class == ITEM_CLASS_CONTAINER || proto->Class == ITEM_CLASS_QUIVER)
             if (!SelectContainerUpgradeSlot(bot, proto, dest))
                 continue;
+
+        // Same problem, other slot: a one-hander is offered to the main hand
+        // first, so a dead off hand would never be challenged.
+        if (ShouldRedirectToOffHand(bot, proto, dest))
+            dest = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | EQUIPMENT_SLOT_OFFHAND);
 
         if (Item* equipped = bot->GetItemByPos(dest))
         {
@@ -5235,6 +5295,10 @@ void ProcessPendingAuctionShopping()
             if (isContainer && !SelectContainerUpgradeSlot(bot, proto, dest))
                 continue;
 
+            // And value a one-hander against the hand that actually needs it.
+            if (ShouldRedirectToOffHand(bot, proto, dest))
+                dest = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | EQUIPMENT_SLOT_OFFHAND);
+
             // Never bench an equipped off hand for a two-hander (same rule
             // as the local equip pass).
             if (proto->InventoryType == INVTYPE_2HWEAPON &&
@@ -6475,6 +6539,7 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
             bot->LearnDefaultSkills();
             bot->LearnCustomSpells();
             EnsureBaselineAttackSpell(bot);
+            EnsureHunterAutoShot(bot);
         }
 
         EnsureRoguePoisons(bot);
@@ -6872,11 +6937,26 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     // A held target that stopped resolving while still alive (evade flicker,
     // validity flicker) must not be immediately re-acquired: the resulting
     // engage/AttackStop cycle stutters both the bot and the mob chasing it.
+    if (target)
+        state.targetResolveMisses = 0;
+
     if (!target && state.engaged && !previousTargetGuid.IsEmpty())
     {
         Unit const* lost = ObjectAccessor::GetUnit(*bot, previousTargetGuid);
         if (lost && lost->IsAlive())
+        {
+            // Hold through a brief flicker rather than abandoning the fight.
+            // A knockback, a stun, a moment of invalid-target state can all
+            // make a LIVE victim fail to resolve for a tick or two, and
+            // blacklisting on the first miss meant the bot dropped the fight
+            // it was already winning and went and pulled something else -
+            // which is exactly what a knockdown looked like in game. Only a
+            // target that stays unresolvable is really gone.
+            if (++state.targetResolveMisses < PveTargetResolveGrace)
+                return;
+
             MarkRecentBadTarget(state, previousTargetGuid);
+        }
 
         if (playerbot::PveManager::GetConfig().combatDiagnostics)
         {
