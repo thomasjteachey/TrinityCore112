@@ -322,6 +322,7 @@ template<typename Fn>
 void ForEachBagItem(Player* bot, Fn&& fn);
 bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTemplate const* incumbent, uint8 slot);
 bool IsAuctionableSurplus(Player* bot, Item* item);
+void MoveTowardThrottled(Player* bot, Position const& destination);
 bool CanWalkTo(Player* bot, Position const& destination);
 void ProcessPendingLootExecutions();
 void GrantGatherSkillCredit(Player* bot, GameObject* go);
@@ -687,10 +688,19 @@ Creature* FindTameableBeast(Player* bot, PveBotState& state, float radius)
 // Returns true when it has claimed the tick.
 bool DriveHunterTaming(Player* bot, PveBotState& state)
 {
-    if (bot->GetClass() != CLASS_HUNTER || !bot->HasSpell(1515) || bot->GetPet())
+    if (bot->GetClass() != CLASS_HUNTER || !bot->HasSpell(1515))
         return false;
 
-    if (PetStable const* stable = bot->GetPetStable(); stable && stable->CurrentPet)
+    // ANY pet rules taming out, and the one that matters is the DEAD one.
+    // A dead hunter pet is saved unslotted, so GetPet() and CurrentPet are
+    // both empty while Tame Beast is still refused - the cast silently failed
+    // and this drive re-ran forever, stopping and re-selecting the same beast
+    // every tick. That is what froze hunters standing next to a turtle.
+    if (bot->GetPet() || !bot->GetPetGUID().IsEmpty() || !bot->GetMinionGUID().IsEmpty())
+        return false;
+
+    if (PetStable const* stable = bot->GetPetStable();
+        stable && (stable->CurrentPet || stable->GetUnslottedHunterPet()))
         return false;
 
     // Tame Beast cannot be cast in combat and wants a peaceful beast, so this
@@ -726,9 +736,9 @@ bool DriveHunterTaming(Player* bot, PveBotState& state)
     {
         // Claim the tick while closing the distance; letting the grind logic
         // run too would leave the two fighting over the motion master.
-        playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
-        if (MotionMaster* motionMaster = bot->GetMotionMaster())
-            motionMaster->MovePoint(0, beast->GetPositionX(), beast->GetPositionY(), beast->GetPositionZ());
+        // Throttled: re-issuing MovePoint every 250ms tick restarts the spline
+        // from scratch each time, which reads as a bot standing still.
+        MoveTowardThrottled(bot, beast->GetPosition());
         return true;
     }
 
@@ -743,13 +753,22 @@ bool DriveHunterTaming(Player* bot, PveBotState& state)
         bot->SetInFront(beast);
     }
     bot->CastSpell(beast, 1515, false);
-    if (bot->HasUnitState(UNIT_STATE_CASTING))
+    if (!bot->HasUnitState(UNIT_STATE_CASTING))
     {
-        state.tamingUntil = now + std::chrono::seconds(25);
+        // The cast was refused. Claiming the tick anyway is what deadlocked
+        // hunters: the drive stopped the bot, re-selected the beast and
+        // returned, so the rest of the tick - engaging, moving, everything -
+        // never ran again. Give the beast up and hand the tick back.
+        MarkRecentBadTarget(state, beast->GetGUID());
         state.tameDriveSince = PveTimePoint{};
-        TC_LOG_INFO("playerbots.pve", "Bot {} taming {} (level {}).",
-            bot->GetName(), beast->GetName(), beast->GetLevel());
+        state.tameBackoffUntil = now + std::chrono::seconds(30);
+        return false;
     }
+
+    state.tamingUntil = now + std::chrono::seconds(25);
+    state.tameDriveSince = PveTimePoint{};
+    TC_LOG_INFO("playerbots.pve", "Bot {} taming {} (level {}).",
+        bot->GetName(), beast->GetName(), beast->GetLevel());
     return true;
 }
 
