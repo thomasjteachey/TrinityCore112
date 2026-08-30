@@ -201,12 +201,35 @@ std::mutex g_ManagedBotUpdatePulseLock;
 // player behind it to subsidise a bad run. At face value the fleet cannot
 // keep pace with the gear it outgrows, which is what left bots grinding in
 // white kit. Applied to gains only - see OnMoneyChanged.
+// Split into two bands. The early levels are where a bot is poorest in
+// absolute terms and where every purchase - first bags, first real weapon,
+// ammunition - costs a disproportionate share of everything it has earned,
+// so they get their own, larger multiplier.
 std::atomic<float> g_PlayerbotGoldGainMultiplier{ 2.0f };
+std::atomic<float> g_PlayerbotLowLevelGoldGainMultiplier{ 5.0f };
+std::atomic<uint32> g_PlayerbotLowLevelGoldBandMaxLevel{ 10 };
 
 void LoadPlayerbotGoldGainMultiplier()
 {
-    float const configured = sConfigMgr->GetFloatDefault("Playerbot.GoldGainMultiplier", 2.0f);
-    g_PlayerbotGoldGainMultiplier.store(std::max(0.0f, configured), std::memory_order_relaxed);
+    g_PlayerbotGoldGainMultiplier.store(
+        std::max(0.0f, sConfigMgr->GetFloatDefault("Playerbot.GoldGainMultiplier", 2.0f)),
+        std::memory_order_relaxed);
+
+    g_PlayerbotLowLevelGoldGainMultiplier.store(
+        std::max(0.0f, sConfigMgr->GetFloatDefault("Playerbot.GoldGainMultiplier.LowLevel", 5.0f)),
+        std::memory_order_relaxed);
+
+    g_PlayerbotLowLevelGoldBandMaxLevel.store(
+        uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.GoldGainMultiplier.LowLevelMaxLevel", 10))),
+        std::memory_order_relaxed);
+}
+
+// The multiplier for the band this bot's level falls in.
+float PlayerbotGoldGainMultiplierFor(Player const* player)
+{
+    return uint32(player->GetLevel()) <= g_PlayerbotLowLevelGoldBandMaxLevel.load(std::memory_order_relaxed)
+        ? g_PlayerbotLowLevelGoldGainMultiplier.load(std::memory_order_relaxed)
+        : g_PlayerbotGoldGainMultiplier.load(std::memory_order_relaxed);
 }
 
 Unit* GetCurrentMotionTarget(Player* bot)
@@ -710,11 +733,13 @@ public:
         if (!player || amount <= 0)
             return;
 
-        float const multiplier = g_PlayerbotGoldGainMultiplier.load(std::memory_order_relaxed);
-        if (multiplier <= 1.0f)
+        if (!playerbot::IsManagedRandomBot(player))
             return;
 
-        if (!playerbot::IsManagedRandomBot(player))
+        // Band is chosen by the bot's CURRENT level, so a bot crossing out of
+        // the low band simply starts earning at the other rate.
+        float const multiplier = PlayerbotGoldGainMultiplierFor(player);
+        if (multiplier <= 1.0f)
             return;
 
         // Saturate rather than wrap: a large auction settlement scaled up
