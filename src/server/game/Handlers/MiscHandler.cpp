@@ -41,6 +41,7 @@
 #include "MapManager.h"
 #include "MiscPackets.h"
 #include "Object.h"
+#include "Configuration/Config.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
@@ -177,6 +178,43 @@ void WorldSession::HandleGossipSelectOptionOpcode(WorldPacket& recvData)
     }
 }
 
+namespace
+{
+    // Playerbots are scenery, not players. They fill /who with hundreds of
+    // names nobody can talk to, so they are left out of it unless the asker
+    // is actually in GM mode and wants to see the machinery.
+    bool IsPlayerbotInWhoList(ObjectGuid guid)
+    {
+        Player const* player = ObjectAccessor::FindConnectedPlayer(guid);
+        if (!player)
+            return false;
+
+        WorldSession const* session = player->GetSession();
+        if (!session)
+            return false;
+
+        if (session->IsVirtualSession() || session->IsTransientPlayerSession())
+            return true;
+
+        // Bots driven through a real session are identified by their account,
+        // the same list the rest of the playerbot systems read.
+        static std::vector<uint32> const botAccountIds = []
+        {
+            std::vector<uint32> ids;
+            std::stringstream stream(sConfigMgr->GetStringDefault("Playerbot.RandomPopulation.BotAccountIds", ""));
+            std::string token;
+            while (std::getline(stream, token, ','))
+                if (!token.empty())
+                    ids.push_back(uint32(std::strtoul(token.c_str(), nullptr, 10)));
+            std::sort(ids.begin(), ids.end());
+            return ids;
+        }();
+
+        return !botAccountIds.empty() &&
+            std::binary_search(botAccountIds.begin(), botAccountIds.end(), session->GetAccountId());
+    }
+}
+
 void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: Recvd CMSG_WHO Message");
@@ -246,6 +284,7 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
 
     uint32 gmLevelInWhoList  = sWorld->getIntConfig(CONFIG_GM_LEVEL_IN_WHO_LIST);
     uint32 displayCount = 0;
+    bool const showPlayerbots = _player->IsGameMaster();
 
     WorldPacket data(SMSG_WHO, 500);                      // guess size
     data << uint32(matchCount);                           // placeholder, count of players matching criteria
@@ -256,6 +295,11 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
     {
         // player can see member of other team only if CONFIG_ALLOW_TWO_SIDE_WHO_LIST
         if (target.GetTeam() != team && !HasPermission(rbac::RBAC_PERM_TWO_SIDE_WHO_LIST))
+            continue;
+
+        // Skipped before it is counted, so the bots do not inflate the totals
+        // either.
+        if (!showPlayerbots && IsPlayerbotInWhoList(target.GetGuid()))
             continue;
 
         // player can see MODERATOR, GAME MASTER, ADMINISTRATOR only if CONFIG_GM_IN_WHO_LIST
