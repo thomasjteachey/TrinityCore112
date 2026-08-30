@@ -5932,10 +5932,24 @@ void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
 
     // Never issue chase movement mid-cast: walking cancels the baseline
     // nuke the block below just started.
-    bool const mayIssueChase = !engineActedThisTick && !bot->HasUnitState(UNIT_STATE_CASTING);
+    bool const casting = bot->HasUnitState(UNIT_STATE_CASTING);
+    bool const mayIssueChase = !engineActedThisTick && !casting;
 
-    // Hunters hold a firing line rather than closing to melee.
-    bool const hunterHoldsRange = DriveHunterRangedPositioning(bot, victim, mayIssueChase);
+    // Hunters hold a firing line rather than closing to melee - and this is
+    // deliberately NOT gated on the engine having been idle.
+    //
+    // In combat the engine acts on very nearly every tick, and it is the
+    // engine's own melee abilities that pull a hunter in: it offers Mongoose
+    // Bite or Raptor Strike, walks into range to use them, and the hunter is
+    // then in melee mode, where every ranged shot is gated off and only more
+    // melee is on offer. Waiting for a tick where the engine did nothing meant
+    // that never unwound - the hunter went in for one bite and stayed for the
+    // rest of the fight.
+    //
+    // Backing out restores the distance, which flips the mode back at eight
+    // yards, which stops the engine offering melee at all. So it converges
+    // rather than fighting: one correction and the loop is broken.
+    bool const hunterHoldsRange = DriveHunterRangedPositioning(bot, victim, !casting);
 
     if (!hunterHoldsRange && mayIssueChase && !bot->IsWithinMeleeRange(victim))
         playerbot::PvpClassActions::IssueFollowMovement(bot, victim, 1.0f);
