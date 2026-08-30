@@ -135,6 +135,7 @@ struct PveBotState
     PveErrandKind errandKind = PveErrandKind::None;
     PveTimePoint errandUntil{};
     PveTimePoint nextErrandScanAt{};
+    PveTimePoint nextChestScanAt{};
     PveTimePoint nextEquipCheckAt{};
     PveTimePoint nextTalentCheckAt{};
     PveTimePoint nextCombatDiagAt{};
@@ -7048,6 +7049,42 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     }
 
     PveTimePoint const now = PveClock::now();
+
+    // Free gear outranks the next pull. A bot that is not fighting picks up a
+    // chest lying near it - its own, another bot's, or a player's; ownership is
+    // not consulted - instead of walking past it to look for something to hit.
+    //
+    // This deliberately does NOT wait for the errand scan below. That scan is
+    // shared with quests, vendors and repairs and fires at most once every
+    // fifteen seconds, while target selection runs on the 250ms fast tick, so a
+    // bot that keeps finding fights never reaches it at all. That is how bots
+    // stood next to chests indefinitely.
+    //
+    // Kept to a short radius on its own three second cadence so the extra grid
+    // search stays cheap - roughly 86 searches a second across the fleet, at a
+    // ninth of the area of the errand scan's 200 yard sweep. Finding chests
+    // further out remains that scan's job; this one only has to notice what is
+    // already underfoot.
+    if (cfg.hardcoreLootChestEntry && bot->IsAlive() && !bot->IsInCombat() && !state.engaged &&
+        state.masterGuid.IsEmpty() && state.errandKind == PveErrandKind::None &&
+        state.pendingLootGuid.IsEmpty() && !state.journeyActive &&
+        now >= state.nextChestScanAt)
+    {
+        state.nextChestScanAt = now + std::chrono::seconds(3);
+
+        if (GameObject* chest = bot->FindNearestGameObject(cfg.hardcoreLootChestEntry, 60.0f))
+        {
+            if (chest->isSpawned() && chest->getLootState() == GO_READY &&
+                !IsRecentErrandTarget(state, chest->GetGUID()))
+            {
+                state.errandGuid = chest->GetGUID();
+                state.errandKind = PveErrandKind::QuestObject;
+                state.errandUntil = now + std::chrono::seconds(90);
+                TC_LOG_INFO("playerbots.pve", "Bot {} breaks off for a death chest {:.0f}y away.",
+                    bot->GetName(), bot->GetDistance(chest));
+            }
+        }
+    }
 
     // Quest/vendor errands are for autonomous bots; companions stay on their
     // master's heel.
