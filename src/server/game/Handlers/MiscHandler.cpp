@@ -978,28 +978,21 @@ void WorldSession::HandleInspectOpcode(WorldPacket& recvData)
 
     bool const sameCustomGameLobby = GetPlayer()->IsInSameCustomGameLobby(player);
 
-    // A playerbot is always inspectable. The hardcore pseudo-faction makes an
-    // armed bot a valid attack target for everyone, and that alone silently
-    // refused every inspect - taking away the one tool that shows what a bot
-    // is wearing and specced into.
-    bool const targetIsPlayerbot = IsPlayerbotCharacter(guid);
-    if (GetPlayer()->IsValidAttackTarget(player) && !sameCustomGameLobby && !targetIsPlayerbot)
-        return;
+    // Anyone within range may be inspected, hostile or not. Stock rules refuse
+    // to inspect a valid attack target, which on this realm means refusing
+    // almost everyone: the hardcore pseudo-faction makes every armed bot
+    // attackable by every player, so that check took the gear-and-talents
+    // window away entirely.
 
     uint32 talent_points = 0x47;
     uint32 guid_size = player->GetPackGUID().size();
     WorldPacket data(SMSG_INSPECT_TALENT, guid_size+4+talent_points);
     data << player->GetPackGUID();
 
-    if (GetPlayer()->CanBeGameMaster() || sameCustomGameLobby || targetIsPlayerbot ||
-        sWorld->getIntConfig(CONFIG_TALENTS_INSPECTING) + (GetPlayer()->GetTeamId() == player->GetTeamId()) > 1)
-        player->BuildPlayerTalentsInfoData(&data);
-    else
-    {
-        data << uint32(0);                                  // unspentTalentPoints
-        data << uint8(0);                                   // talentGroupCount
-        data << uint8(0);                                   // talentGroupIndex
-    }
+    // Talents come with the inspect, whoever is asking - an inspect that
+    // shows gear but blanks the tree is the half-answer that started this.
+    (void)sameCustomGameLobby;
+    player->BuildPlayerTalentsInfoData(&data);
 
     player->BuildEnchantmentsInfoData(&data);
     SendPacket(&data);
