@@ -912,6 +912,7 @@ public:
             { "reset", HandlePlayerbotPveResetCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "respec", HandlePlayerbotPveRespecCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "wipe", HandlePlayerbotPveWipeCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "clearauctions", HandlePlayerbotPveClearAuctionsCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
         };
 
         static ChatCommandTable playerbotTable =
@@ -1128,6 +1129,19 @@ public:
 
         uint32 const respecced = playerbot::PveManager::RespecBotsToDonorBuilds();
         handler->PSendSysMessage("Respecced %u managed playerbots onto their donor builds.", respecced);
+        return true;
+    }
+
+    // The auction half of ".playerbot pve wipe" on its own: empty the house
+    // without touching the fleet, for when the market needs a reset but the
+    // bots' levels, gear and gold should stand.
+    static bool HandlePlayerbotPveClearAuctionsCommand(ChatHandler* handler)
+    {
+        if (!handler)
+            return false;
+
+        uint32 const removed = playerbot::PveManager::ClearAuctionHouse();
+        handler->PSendSysMessage("Cleared %u auctions from every auction house.", removed);
         return true;
     }
 
