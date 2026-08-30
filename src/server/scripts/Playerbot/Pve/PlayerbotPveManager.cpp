@@ -800,7 +800,14 @@ void ApplyRoguePoisons(Player* bot)
 
         TC_LOG_INFO("playerbots.pve", "Bot {} coats its {} with poison {}.",
             bot->GetName(), assignment.attackType == BASE_ATTACK ? "mainhand" : "offhand", assignment.itemId);
-        return;
+
+        // Keep going to the offhand rather than returning. A grinding rogue is
+        // almost never simultaneously out of combat AND standing still, so the
+        // window this runs in is rare - spending a whole one on a single
+        // weapon meant the mainhand won every time and the offhand stayed
+        // bare. Bail only if that application actually started a cast.
+        if (bot->HasUnitState(UNIT_STATE_CASTING))
+            return;
     }
 }
 
@@ -1126,6 +1133,34 @@ void EnsurePetKnowsGrowl(Player* bot)
     // A passive pet neither attacks nor growls.
     if (pet->GetReactState() == REACT_PASSIVE)
         pet->SetReactState(REACT_DEFENSIVE);
+}
+
+// Cast Growl outright rather than trusting the autocast flag.
+//
+// Autocast alone cannot be relied on here: Pet::ToggleAutocast only repairs
+// the active flag when the spell is NOT already in the pet's autocast list,
+// so once anything clears that flag nothing can put it back - and the flag
+// was seen flipping from ACT_ENABLED to ACT_DISABLED on a live pet that had
+// been granted Growl minutes earlier. Issuing the cast directly removes the
+// dependency on that state entirely; the pet's own cooldown paces it.
+void DrivePetGrowl(Player* bot)
+{
+    Pet* pet = bot->GetPet();
+    if (!pet || !pet->IsAlive() || pet->getPetType() != HUNTER_PET)
+        return;
+
+    Unit* petVictim = pet->GetVictim();
+    if (!petVictim || !petVictim->IsAlive())
+        return;
+
+    uint32 const growlId = BestGrowlRankForLevel(uint8(pet->GetLevel()));
+    if (!growlId || !pet->HasSpell(growlId))
+        return;
+
+    if (pet->HasUnitState(UNIT_STATE_CASTING) || pet->GetSpellHistory()->HasCooldown(growlId))
+        return;
+
+    pet->CastSpell(petVictim, growlId, false);
 }
 
 // Keep a hunter pet fed: happiness decay makes an unfed pet leave.
@@ -5356,6 +5391,8 @@ void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
         if (Unit* petVictim = ResolveAttackableByGuid(bot, bot->GetTarget()))
             if (pet->GetVictim() != petVictim)
                 playerbot::PvpClassActions::CommandPetAttack(bot, petVictim);
+
+        DrivePetGrowl(bot);
     }
 
     // Outside battlegrounds the values snapshot is all-default; the class
