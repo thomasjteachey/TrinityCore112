@@ -224,8 +224,13 @@ void WorldSession::HandleLootOpcode(WorldPacket& recvData)
     ObjectGuid guid;
     recvData >> guid;
 
-    // Check possible cheat
-    if (!GetPlayer()->IsAlive() || !guid.IsCreatureOrVehicle())
+    // Check possible cheat. GAMEOBJECTS are allowed through as well: the
+    // client sends CMSG_LOOT (not CMSG_GAMEOBJ_USE) for an object it has been
+    // told is lootable, so refusing them here made every sparkling chest
+    // unopenable - the click produced no packet the server would answer and
+    // no error either. Player::SendLoot has its own gameobject branch, with
+    // its own distance and permission checks.
+    if (!GetPlayer()->IsAlive() || !(guid.IsCreatureOrVehicle() || guid.IsGameObject()))
         return;
 
     // interrupt cast
