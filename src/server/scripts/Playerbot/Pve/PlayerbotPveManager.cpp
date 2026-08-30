@@ -1292,13 +1292,17 @@ void TryBuySupplies(Player* bot, Creature* vendor)
         buyUnits(bestDrinkSlot, bestDrink, 20);
     if (bestAmmo)
     {
-        uint32 const currentAmmoId = bot->GetUInt32Value(PLAYER_AMMO_ID);
-        if (!currentAmmoId || bot->GetItemCount(currentAmmoId) < 100)
-        {
+        // Count what is actually in the pack, not just the loaded type. Asking
+        // only about PLAYER_AMMO_ID bought another two hundred arrows at every
+        // vendor whenever the field was unset or pointed at a different arrow,
+        // which is how a hunter ended up with six hundred arrows in four
+        // stacks and no room for anything else.
+        uint32 const carried = bot->GetItemCount(bestAmmo->ItemId) +
+            (bot->GetUInt32Value(PLAYER_AMMO_ID) ? bot->GetItemCount(bot->GetUInt32Value(PLAYER_AMMO_ID)) : 0);
+        if (carried < 200)
             buyUnits(bestAmmoSlot, bestAmmo, 200);
-            if (bot->GetItemCount(bestAmmo->ItemId))
-                bot->SetAmmo(bestAmmo->ItemId);
-        }
+        if (!bot->GetUInt32Value(PLAYER_AMMO_ID) && bot->GetItemCount(bestAmmo->ItemId))
+            bot->SetAmmo(bestAmmo->ItemId);
     }
     // One bag per visit fills empty bag slots; the equip pass mounts it.
     if (bestBag)
@@ -3709,17 +3713,24 @@ bool IsAuctionableSurplus(Player* bot, Item* item)
     if (proto->Quality == ITEM_QUALITY_POOR || !proto->SellPrice)
         return false;
 
-    // Never sell the tools of the trade: food, water, ammo, bandages, potions,
-    // quest items, keys, or a bag the bot could still carry things in.
+    // Never sell the tools of the trade: food, water, ammunition, bandages,
+    // potions, quest items or keys.
     switch (proto->Class)
     {
         case ITEM_CLASS_CONSUMABLE:
         case ITEM_CLASS_QUEST:
         case ITEM_CLASS_KEY:
         case ITEM_CLASS_PROJECTILE:
+            return false;
+        // A SPARE container is not a tool, it is dead weight. The equip pass
+        // runs every fifteen seconds and mounts anything worth mounting, so a
+        // bag or quiver still sitting in the pack after that is surplus - and
+        // hoarding them is what filled the packs that stopped two thirds of
+        // the fleet from shopping at all. Only empty ones: IsNotEmptyBag
+        // above already refuses a bag with contents.
         case ITEM_CLASS_QUIVER:
         case ITEM_CLASS_CONTAINER:
-            return false;
+            break;
         default:
             break;
     }
