@@ -3090,7 +3090,10 @@ namespace
     // nothing arms it on realms without the hardcore script.
     bool IsManagedPlayerbotAccountId(uint32 accountId);
 
-    bool IsHostilePlayerbotPvpPair(Unit const* self, Unit const* target)
+    // WorldObject, not Unit: a hunter's trap is a GAMEOBJECT owned by the bot,
+    // and asking only about Units meant traps never saw a same-faction player
+    // as hostile - they sat there and nobody ever set one off.
+    bool IsHostilePlayerbotPvpPair(WorldObject const* self, WorldObject const* target)
     {
         if (!self || !target)
             return false;
@@ -3244,7 +3247,7 @@ bool WorldObject::IsValidAttackTarget(WorldObject const* target, SpellInfo const
     // mutually attackable regardless of faction or the player's own flag.
     // Must precede the friendliness bail - same-faction players would
     // otherwise never get here.
-    if (unit && unitTarget && IsHostilePlayerbotPvpPair(unit, unitTarget))
+    if (IsHostilePlayerbotPvpPair(this, target))
         return true;
 
     // PvP, PvC, CvP case

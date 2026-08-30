@@ -2635,6 +2635,25 @@ void EnsureFirstLoginKit(Player* bot, PveBotState& state, playerbot::PveConfig c
     // its ranged weapon feeds on (the weapon just arrived with the outfit),
     // and load it. Idempotent - once ammo is loaded this never fires again,
     // so it doubles as the fleet's one-time 200-ammo grant.
+    // The hunter pet kit. Tame Beast and its companions are taught by a quest
+    // chain whose middle step is "use this rod on that beast", which a bot
+    // cannot reliably walk: not one of the fleet's twenty-five hunters knew
+    // Tame Beast, so not one of them ever had a pet - half a hunter, forever.
+    // Granted outright from level 10, the level the chain itself opens at.
+    if (bot->GetClass() == CLASS_HUNTER && bot->GetLevel() >= 10)
+    {
+        constexpr std::array<uint32, 4> kHunterPetKit = { {
+            1515,  // Tame Beast
+            883,   // Call Pet
+            982,   // Revive Pet
+            6991   // Feed Pet
+        } };
+
+        for (uint32 petSpell : kHunterPetKit)
+            if (!bot->HasSpell(petSpell))
+                bot->LearnSpell(petSpell, false);
+    }
+
     if (bot->GetClass() == CLASS_HUNTER)
         if (uint32 const ammoSubclass = RequiredAmmoSubclass(bot))
         {
