@@ -2118,6 +2118,71 @@ bool TryEmptyBagForSwap(Player* bot, Bag* bag)
     return true;
 }
 
+// Which bag slot should a container upgrade actually target?
+//
+// NOT the one CanEquipItem picks. Player::FindEquipSlot searches for a free
+// bag slot and, finding none, falls through to "return the first appropriate
+// from used" - which is unconditionally slot 19. So a bot with a big bag in
+// slot 19 and a tiny one in slot 22 would forever compare its new bag against
+// the BIG one, decline the upgrade, and never once consider the small bag it
+// actually wanted to replace.
+//
+// Choose deliberately instead: a free slot if there is one, otherwise the
+// smallest container of the SAME KIND. Kind matters because a quiver holds
+// only ammunition - sizing a new backpack against a worn quiver, or the
+// reverse, compares two things that cannot substitute for each other.
+bool SelectContainerUpgradeSlot(Player* bot, ItemTemplate const* candidate, uint16& dest)
+{
+    bool const wantQuiver = candidate->Class == ITEM_CLASS_QUIVER;
+    bool haveFree = false;
+    uint8 freeSlot = 0;
+    bool haveSmallest = false;
+    uint8 smallestSlot = 0;
+    uint32 smallestSize = 0;
+
+    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+    {
+        Bag* worn = bot->GetBagByPos(bagSlot);
+        if (!worn)
+        {
+            if (!haveFree)
+            {
+                haveFree = true;
+                freeSlot = bagSlot;
+            }
+            continue;
+        }
+
+        ItemTemplate const* wornProto = worn->GetTemplate();
+        if (!wornProto)
+            continue;
+
+        if ((wornProto->Class == ITEM_CLASS_QUIVER) != wantQuiver)
+            continue;
+
+        uint32 const size = worn->GetBagSize();
+        if (!haveSmallest || size < smallestSize)
+        {
+            haveSmallest = true;
+            smallestSize = size;
+            smallestSlot = bagSlot;
+        }
+    }
+
+    // An empty slot is always the best answer: nothing has to come off.
+    if (haveFree)
+    {
+        dest = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | freeSlot);
+        return true;
+    }
+
+    if (!haveSmallest)
+        return false;
+
+    dest = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | smallestSlot);
+    return true;
+}
+
 bool IsSpareContainer(Player* bot, Item* item)
 {
     ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
@@ -3091,6 +3156,13 @@ void TryEquipUpgrades(Player* bot)
         uint16 dest = 0;
         if (bot->CanEquipItem(NULL_SLOT, dest, item, true) != EQUIP_ERR_OK)
             continue;
+
+        // CanEquipItem still does the real validation above - combat state,
+        // proficiency, ownership - but its choice of WHICH bag slot is not
+        // usable for an upgrade decision, so containers pick their own.
+        if (proto->Class == ITEM_CLASS_CONTAINER || proto->Class == ITEM_CLASS_QUIVER)
+            if (!SelectContainerUpgradeSlot(bot, proto, dest))
+                continue;
 
         if (Item* equipped = bot->GetItemByPos(dest))
         {
@@ -4982,6 +5054,10 @@ void ProcessPendingAuctionShopping()
 
             uint16 dest = 0;
             if (bot->CanEquipItem(NULL_SLOT, dest, item, true) != EQUIP_ERR_OK)
+                continue;
+
+            // Value the bag against the one it would actually replace.
+            if (isContainer && !SelectContainerUpgradeSlot(bot, proto, dest))
                 continue;
 
             // Never bench an equipped off hand for a two-hander (same rule
