@@ -127,6 +127,13 @@ struct PveConfig
     // ordinary bots and leaves it to the zone guardians.
     uint32 aggressionMinMinutes = 5;
     uint32 aggressionMaxMinutes = 90;
+    // Losing a fight to a person makes a bot timid: for this long it will not
+    // go looking for another one, and it relocates to a grind spot with nobody
+    // around rather than staying where it just died. Scaled by the bot's own
+    // aggression, so the brave shrug it off and the meek stay away.
+    uint32 timidMinutes = 20;
+    // How far a fleeing bot's new grind spot must be from the nearest person.
+    float timidFleeYards = 500.0f;
 };
 
 // Open-world PvE behavior for managed random bots, layered on the existing

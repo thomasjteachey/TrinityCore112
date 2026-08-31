@@ -134,6 +134,11 @@ struct PveBotState
     PveTimePoint nextWanderAt{};
     PveTimePoint deathObservedAt{};
     bool deathObserved = false;
+    // Set when the bot is killed while fighting a person. Until it passes the
+    // bot will not go hunting, and its next relocation looks for somewhere with
+    // nobody around.
+    PveTimePoint timidUntil{};
+    bool fleeingFromPlayers = false;
     ObjectGuid pendingLootGuid;
     PveTimePoint pendingLootUntil{};
     ObjectGuid errandGuid;
@@ -4478,6 +4483,10 @@ void MaybeHuntPlayersByAggression(Player* bot, PveBotState& state, playerbot::Pv
 
     int64 const idleMinutes = std::chrono::duration_cast<std::chrono::minutes>(
         now - state.lastPlayerFightAt).count();
+    // Recently beaten by a person: leave it alone until the sting wears off.
+    if (PveClock::now() < state.timidUntil)
+        return;
+
     if (idleMinutes < int64(AggressionIdleMinutes(bot, cfg)))
         return;
 
@@ -4671,6 +4680,7 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
     float const dropDistance = std::max(20.0f, kGuardianDropYards - float(hungryMinutes) * 6.0f);
 
     if (eligible && !nearAHuman && !bot->IsInCombat() && !state.engaged &&
+        PveClock::now() >= state.timidUntil &&
         !state.journeyActive && state.errandKind == PveErrandKind::None &&
         cfg.guardianPlayerApproachYards > 0.0f &&
         PveClock::now() >= state.nextGuardianApproachAt)
@@ -6503,6 +6513,35 @@ void ProcessPendingGrindRelocations()
         if (candidates.empty())
             continue;
 
+        // A bot that just lost a fight wants somewhere quiet, not merely
+        // somewhere else. Consumed here so one defeat buys one relocation.
+        bool fleeing = false;
+        {
+            PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+            fleeing = state.fleeingFromPlayers;
+            state.fleeingFromPlayers = false;
+        }
+
+        if (fleeing && g_PveConfig.timidFleeYards > 0.0f)
+        {
+            std::vector<GrindSpot> quiet;
+            for (GrindSpot const& spot : candidates)
+            {
+                HumanSpot nearest;
+                float distance = 0.0f;
+                if (!FindNearestHumanSpot(spot.mapId, spot.x, spot.y, spot.z, nearest, distance) ||
+                    distance > g_PveConfig.timidFleeYards)
+                    quiet.push_back(spot);
+            }
+
+            // Keep the unfiltered list if the whole bracket is crowded: moving
+            // somewhere is still better than standing where it died.
+            if (!quiet.empty())
+                candidates.swap(quiet);
+            else
+                TC_LOG_INFO("playerbots.pve", "Bot {} found nowhere quiet to retreat to.", bot->GetName());
+        }
+
         for (uint8 attempt = 0; attempt < 10; ++attempt)
         {
             GrindSpot const& spot = candidates[urand(0, uint32(candidates.size() - 1))];
@@ -7296,6 +7335,39 @@ void UpdateMasterFromGroup(Player* bot, PveBotState& state)
     }
 }
 
+// Killed by a person: stop looking for the next fight for a while, and move
+// somewhere quieter afterwards. Brave bots shrug a defeat off in half the
+// time; the meek stay away for twice as long.
+void MarkTimidAfterPlayerDefeat(Player* bot, PveBotState& state,
+    playerbot::PveConfig const& cfg, PveTimePoint now)
+{
+    if (!cfg.timidMinutes)
+        return;
+
+    // Was a person actually involved? lastPlayerFightAt is only stamped while
+    // the bot is swinging at a human, so a recent stamp means this death ended
+    // a fight with one. Proximity alone would not do: a bystander watching the
+    // bot lose to a mob would read as a defeat at their hands.
+    if (state.lastPlayerFightAt == PveTimePoint() ||
+        now - state.lastPlayerFightAt > std::chrono::seconds(60))
+        return;
+
+    uint8 const aggression = GetBotAggression(bot);
+    float const minutes = float(cfg.timidMinutes) * (2.0f - 1.5f * (float(aggression) / 100.0f));
+
+    state.timidUntil = now + std::chrono::seconds(int64(minutes * 60.0f));
+    state.fleeingFromPlayers = true;
+
+    // Restart the hunting clock as well. Without this a bot that was already
+    // overdue for a hunt when it died would go straight back out the moment
+    // timidity lapsed, which is the opposite of learning its lesson.
+    state.lastPlayerFightAt = now;
+
+    TC_LOG_INFO("playerbots.pve",
+        "Bot {} (aggression {}) lost a fight to a person; timid for {}m and moving off.",
+        bot->GetName(), aggression, uint32(minutes));
+}
+
 void RunDeathRecovery(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
 {
     if (bot->IsAlive())
@@ -7319,6 +7391,7 @@ void RunDeathRecovery(Player* bot, PveBotState& state, playerbot::PveConfig cons
     {
         state.deathObserved = true;
         state.deathObservedAt = now;
+        MarkTimidAfterPlayerDefeat(bot, state, cfg, now);
         // The body still lies where we fell: remember the spot, the hardcore
         // drop chest stands on it (release teleports us to the graveyard).
         if (cfg.hardcoreLootChestEntry)
@@ -7357,11 +7430,20 @@ void RunDeathRecovery(Player* bot, PveBotState& state, playerbot::PveConfig cons
     bot->SpawnCorpseBones();
     state.deathObserved = false;
 
+    // Queued here rather than at the moment of death because the relocation
+    // pass skips corpses.
+    if (state.fleeingFromPlayers)
+    {
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        g_PendingGrindRelocations.insert(bot->GetGUID().GetRawValue());
+    }
+
     // Hardcore: the drop chest stands where we fell - walk back and reclaim
     // it (the errand scan loots death chests inside 200y). First death only:
     // on a repeat the loop breaker below relocates away instead, abandoning
     // the chest the way a player abandons a camped corpse.
-    if (cfg.hardcoreLootChestEntry && state.recentDeathCount < 2 && state.masterGuid.IsEmpty() &&
+    if (cfg.hardcoreLootChestEntry && state.recentDeathCount < 2 && !state.fleeingFromPlayers &&
+        state.masterGuid.IsEmpty() &&
         state.deathSpotMapId == bot->GetMapId() && state.deathSpotAt != PveTimePoint())
     {
         // Only while the chest could still be standing there: it despawns on
@@ -8304,6 +8386,10 @@ void PveManager::LoadConfig()
         sConfigMgr->GetIntDefault("Playerbot.Pve.Aggression.MinMinutes", 5)));
     g_PveConfig.aggressionMaxMinutes = uint32(std::max(0,
         sConfigMgr->GetIntDefault("Playerbot.Pve.Aggression.MaxMinutes", 90)));
+    g_PveConfig.timidMinutes = uint32(std::max(0,
+        sConfigMgr->GetIntDefault("Playerbot.Pve.Aggression.TimidMinutes", 20)));
+    g_PveConfig.timidFleeYards = std::max(0.0f,
+        sConfigMgr->GetFloatDefault("Playerbot.Pve.Aggression.TimidFleeYards", 500.0f));
     g_PveConfig.auctionPriceMultiplier = sConfigMgr->GetFloatDefault("Playerbot.Pve.AuctionPriceMultiplier", 10.0f);
     g_PveConfig.auctionMinTradeGoodStack = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionMinTradeGoodStack", 10));
     g_PveConfig.auctionValuableUnitCopper = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionValuableUnitCopper", 1000));

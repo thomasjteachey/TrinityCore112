@@ -799,3 +799,21 @@ Playerbot.Pve.ZoneGuardians.EscalateAfterMinutes = 30
 #
 Playerbot.Pve.Aggression.MinMinutes = 5
 Playerbot.Pve.Aggression.MaxMinutes = 90
+
+#    Playerbot.Pve.Aggression.TimidMinutes
+#        Description: How long a bot stays out of trouble after being killed while fighting a
+#                     person. While timid it will not go looking for a fight, a zone guardian
+#                     will not close in, and on resurrection it relocates to a grind spot with
+#                     nobody near it instead of walking back to its corpse. Scaled by the bot's
+#                     own aggression: the bravest serve half this, the meekest twice.
+#                     0 disables timidity entirely.
+#        Default:     20
+
+Playerbot.Pve.Aggression.TimidMinutes = 20
+
+#    Playerbot.Pve.Aggression.TimidFleeYards
+#        Description: How far a fleeing bot's new grind spot must be from the nearest person.
+#                     If nowhere in its level bracket is that quiet it relocates anyway.
+#        Default:     500
+
+Playerbot.Pve.Aggression.TimidFleeYards = 500
