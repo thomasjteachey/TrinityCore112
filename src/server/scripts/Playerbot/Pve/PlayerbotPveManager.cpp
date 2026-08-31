@@ -4392,6 +4392,10 @@ struct GuardianZone
 // character is expected to be in, so a bot reborn into one starts at level 1.
 constexpr uint8 kStarterZoneTopLevel = 10;
 
+// The narrowest band a zone may offer and still be somewhere a bot lives. Below
+// this the bot spends its life resetting rather than levelling.
+constexpr uint8 kMinRebirthBandLevels = 5;
+
 // Classic zone level caps.
 constexpr std::array<GuardianZone, 38> kGuardianZones = { {
     { 12, 10 },   // Elwynn Forest
@@ -4979,8 +4983,14 @@ void BuildGrindSpotCacheOnce()
         if (top <= kStarterZoneTopLevel)
             g_ZoneBottomLevel[zoneId] = 1;
 
+        // A band has to be worth living in. Requiring only top > bottom let
+        // through zones whose clusters all sit at one level - a dungeon portal
+        // and the few mobs around it, for instance - and a bot posted to one
+        // spent its whole life cycling a single level: reach seventeen, reset
+        // to sixteen, reach seventeen again, minutes apart, forever. Observed
+        // live on zone 1581 with a band of exactly one level.
         uint8 const bottom = g_ZoneBottomLevel[zoneId];
-        if (top > bottom && bottom >= 1 && g_ZoneSpotCount[zoneId] >= 5)
+        if (top >= bottom + kMinRebirthBandLevels && bottom >= 1 && g_ZoneSpotCount[zoneId] >= 5)
             g_RebirthZones.push_back(zoneId);
     }
 
