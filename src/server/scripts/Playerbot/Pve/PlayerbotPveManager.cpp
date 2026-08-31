@@ -9058,7 +9058,15 @@ void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
         }
         for (uint64 botRawGuid : drained)
             if (Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid)))
-                if (bot->IsInWorld() && playerbot::IsManagedRandomBot(bot))
+                // Not while a teleport is already in flight. The guardian and
+                // relocation passes above this one both teleport, and a bot
+                // caught by one of them is out of its grid until the teleport
+                // lands - so teleporting it again here walks into
+                // RemoveFromGrid's IsInGrid assert and takes the server down.
+                // The rebirth is simply skipped; the periodic check requeues it
+                // within the minute.
+                if (bot->IsInWorld() && playerbot::IsManagedRandomBot(bot) &&
+                    !bot->IsBeingTeleportedFar() && !bot->IsBeingTeleportedNear())
                 {
                     // Recomputed rather than carried on the queue: the mapping
                     // is deterministic, so the answer cannot drift between the
@@ -9496,6 +9504,11 @@ bool FindGrindSpotInZone(uint32 zoneId, uint8 level, GrindSpot& out)
 // nothing is destroyed either way.
 void ResetManagedBotToZoneBand(Player* bot, uint32 zoneId, uint8 bottomLevel)
 {
+    // Defence in depth: this teleports, and teleporting a bot whose previous
+    // teleport has not landed trips RemoveFromGrid's IsInGrid assert. Callers
+    // include GM commands, which have no such check of their own.
+    if (bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
+        return;
     uint64 const botRawGuid = bot->GetGUID().GetRawValue();
 
     playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), false);
@@ -9573,6 +9586,11 @@ void ResetManagedBotToZoneBand(Player* bot, uint32 zoneId, uint8 bottomLevel)
 
 void ResetManagedBotToLevelOne(Player* bot)
 {
+    // Defence in depth: this teleports, and teleporting a bot whose previous
+    // teleport has not landed trips RemoveFromGrid's IsInGrid assert. Callers
+    // include GM commands, which have no such check of their own.
+    if (bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
+        return;
     {
         uint64 const botRawGuid = bot->GetGUID().GetRawValue();
 
