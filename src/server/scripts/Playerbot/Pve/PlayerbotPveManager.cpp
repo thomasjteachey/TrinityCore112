@@ -9466,8 +9466,12 @@ void ResetManagedBotToLevelOne(Player* bot)
 // evening out on its own takes hours.
 uint32 PveManager::RelocateBotsToHomeZones()
 {
-    uint32 queued = 0;
-    std::lock_guard<std::mutex> guard(g_PvePendingLock);
+    // Selection happens with NO lock held. GetGuardianZoneId takes the guardian
+    // lock, and holding the pending lock across a call that takes another one
+    // is a lock-order inversion against every map thread that takes them the
+    // other way round - which hung the world thread outright the first time
+    // this command was run.
+    std::vector<uint64> targets;
     for (auto const& [accountId, session] : sWorld->GetAllSessions())
     {
         Player* candidate = session ? session->GetPlayer() : nullptr;
@@ -9481,15 +9485,19 @@ uint32 PveManager::RelocateBotsToHomeZones()
             GetGuardianZoneId(candidate->GetGUID().GetRawValue()))
             continue;
 
-        // Queued rather than moved here: the relocation executor owns the
-        // actual teleport, runs on the world thread and already prefers the
-        // bot's own zone. Doing it inline would duplicate all of that, and
-        // badly.
-        g_PendingGrindRelocations.insert(candidate->GetGUID().GetRawValue());
-        ++queued;
+        targets.push_back(candidate->GetGUID().GetRawValue());
     }
 
-    return queued;
+    // Queued rather than moved here: the relocation executor owns the actual
+    // teleport, runs on the world thread and already prefers the bot's own
+    // zone. Doing it inline would duplicate all of that, and badly.
+    {
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        for (uint64 rawGuid : targets)
+            g_PendingGrindRelocations.insert(rawGuid);
+    }
+
+    return uint32(targets.size());
 }
 
 uint32 PveManager::ResetBotsToLevelOne(uint8 percent)
