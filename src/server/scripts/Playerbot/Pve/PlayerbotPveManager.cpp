@@ -1198,6 +1198,16 @@ bool DriveHunterRangedPositioning(Player* bot, Unit* victim, bool mayMove)
     float const holdMax = std::max(holdMin + 5.0f, rangeInfo.maxRange - 4.0f);
     float const distance = rangeInfo.exactDistance;
 
+    // Backing out is for the DEAD ZONE, not for the whole comfort band. The
+    // dead zone ends at minRange - eight yards for a classic hunter - and
+    // anything past it can already shoot, so retreating from nine yards gave
+    // up a perfectly good firing position and walked the bot backwards for no
+    // gain. Retreat below the line the shot itself needs, and go back to a
+    // clean two yards past it so crossing back in takes real movement rather
+    // than a step.
+    float const deadZoneEdge = rangeInfo.minRange + playerbot::PLAYERBOT_HUNTER_AUTOSHOT_MIN_SAFETY_MARGIN;
+    float const retreatTo = rangeInfo.minRange + 2.0f;
+
     if (distance > holdMax)
     {
         if (!mayMove)
@@ -1207,10 +1217,22 @@ bool DriveHunterRangedPositioning(Player* bot, Unit* victim, bool mayMove)
         return true;
     }
 
-    if (distance < holdMin)
+    if (distance < deadZoneEdge)
     {
         if (!mayMove)
             return false;
+
+        // Commit to the retreat rather than restarting it every tick. This ran
+        // unconditionally, so each pass replaced the in-flight spline with a
+        // fresh one computed from wherever the bot had just got to: one step,
+        // recompute, one step, recompute. That is the stutter - the bot was
+        // being told to start running away several times a second and never
+        // allowed to finish. Let an existing point move run to its end; if it
+        // stalls or lands short, the next pass reissues from a standstill.
+        if (MotionMaster const* activeMotion = bot->GetMotionMaster())
+            if (activeMotion->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE &&
+                bot->movespline && bot->movespline->Initialized() && !bot->movespline->Finalized())
+                return true;
 
         // This retreat must PREEMPT whatever the bot is already doing, and that
         // is why it does not go through MoveTowardThrottled: that helper opens
@@ -1240,7 +1262,7 @@ bool DriveHunterRangedPositioning(Player* bot, Unit* victim, bool mayMove)
             float x = 0.0f;
             float y = 0.0f;
             float z = 0.0f;
-            victim->GetNearPoint(bot, x, y, z, holdMin + 3.0f, victim->GetAbsoluteAngle(bot));
+            victim->GetNearPoint(bot, x, y, z, retreatTo, victim->GetAbsoluteAngle(bot));
             bot->UpdateAllowedPositionZ(x, y, z);
             motionMaster->MovePoint(0, x, y, z, true);
         }
