@@ -358,7 +358,6 @@ void ForEachBagItem(Player* bot, Fn&& fn);
 bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTemplate const* incumbent, uint8 slot);
 float ScoreItemForSpec(Player const* bot, ItemTemplate const* proto);
 GameObject* FindRegisteredDeathChest(Player* bot, uint32 entry, float maxDistance);
-bool ZoneSuitsBotLevel(Player const* bot, uint32 zoneId);
 bool IsAuctionableSurplus(Player* bot, Item* item);
 uint32 RequiredAmmoSubclass(Player const* bot);
 void MoveTowardThrottled(Player* bot, Position const& destination);
@@ -1826,34 +1825,6 @@ uint32 AggressionIdleMinutes(Player const* bot, playerbot::PveConfig const& cfg)
 
 // Any player at all, wherever they are. Used by guardians, which travel by
 // teleport and so are not restricted to their own map.
-// Somebody this bot could plausibly have run into anyway.
-//
-// An aggressive bot travels to find a fight, but it must not turn up somewhere
-// it had no business being: a level 12 appearing in Ashenvale to swing at a
-// level 55 is not a bolder bot, it is a broken one. The grind-spot cache
-// already knows which zones suit a given level, so the destination is filtered
-// by the same data that decides where the bot would grind - and if nobody is
-// standing anywhere it belongs, it simply does not go.
-bool PickHumanSpotForBot(Player const* bot, HumanSpot& out)
-{
-    std::vector<HumanSpot> candidates;
-    {
-        std::lock_guard<std::mutex> guard(g_HumanSpotLock);
-        candidates = g_HumanSpots;
-    }
-
-    std::vector<HumanSpot const*> suitable;
-    for (HumanSpot const& spot : candidates)
-        if (ZoneSuitsBotLevel(bot, spot.ZoneId))
-            suitable.push_back(&spot);
-
-    if (suitable.empty())
-        return false;
-
-    out = *suitable[urand(0, uint32(suitable.size()) - 1)];
-    return true;
-}
-
 // Somebody in this exact zone, or nobody. A zone guardian NEVER leaves its
 // zone to hunt: it is the guardian OF that ground, and one that abandons
 // Ashenvale to fight in Orgrimmar is not guarding anything. When its zone is
@@ -4513,12 +4484,16 @@ void MaybeHuntPlayersByAggression(Player* bot, PveBotState& state, playerbot::Pv
     HumanSpot nearest;
     float nearestDistance = 0.0f;
     if (FindNearestHumanSpot(bot->GetMapId(), bot->GetPositionX(), bot->GetPositionY(),
-            bot->GetPositionZ(), nearest, nearestDistance) && nearestDistance <= 240.0f)
+            bot->GetPositionZ(), nearest, nearestDistance, bot->GetZoneId()) && nearestDistance <= 240.0f)
         return;
 
+    // Only ever within the zone the bot is ALREADY in. Travelling to find a
+    // fight is repositioning, not migration: a bot that crosses the world has
+    // abandoned wherever it was grinding, and a zone is easily wider than the
+    // 240 yards that triggers this, so there is plenty to do without leaving.
     HumanSpot destination;
-    if (!PickHumanSpotForBot(bot, destination))
-        return;   // nobody online standing anywhere this bot belongs
+    if (!PickHumanSpotInZone(bot->GetZoneId(), destination))
+        return;   // nobody in this bot's own zone
 
     // Count the trip as its fight for this cycle, so a bot that travels and
     // finds nothing does not re-port every minute afterwards.
@@ -4899,27 +4874,6 @@ void BuildGrindSpotCacheOnce()
 // it "suits" a level 13 - who then spends its time being jumped by level 6s
 // it cannot even choose to fight. What matters is not whether the zone has
 // ANY cluster at the bot's level, but whether it has enough of them.
-// Would this bot ever have been in that zone under its own steam? True when
-// the zone holds grind clusters for the bot's own level band, which is exactly
-// the data the grind loop uses to place it.
-bool ZoneSuitsBotLevel(Player const* bot, uint32 zoneId)
-{
-    if (!bot || !zoneId)
-        return false;
-
-    std::lock_guard<std::mutex> guard(g_GrindSpotLock);
-
-    auto levelItr = g_GrindSpotsByLevel.find(uint8(std::min<uint32>(bot->GetLevel(), 80)));
-    if (levelItr == g_GrindSpotsByLevel.end())
-        return false;
-
-    for (GrindSpot const& spot : levelItr->second)
-        if (spot.zoneId == zoneId)
-            return true;
-
-    return false;
-}
-
 bool BotIsInSuitableZone(Player* bot)
 {
     uint32 const zoneId = bot->GetZoneId();
