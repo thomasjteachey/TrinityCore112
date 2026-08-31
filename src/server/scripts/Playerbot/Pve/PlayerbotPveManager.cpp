@@ -7736,6 +7736,27 @@ bool TryClaimNearbyDeathChest(Player* bot, PveBotState& state, playerbot::PveCon
     return true;
 }
 
+// Asking only on level-up is not enough. A bot that is ALREADY past its zone's
+// ceiling - which is most of the fleet the moment banding is switched on, or
+// any time a band is retuned - never gains another level in time to be noticed,
+// and the higher its level the longer that takes. Ask again on a slow cadence
+// so the standing backlog drains instead of waiting for a ding that may be
+// hours away.
+void MaybeQueueOverBandRebirth(Player* bot, PveBotState& state)
+{
+    if (!g_PveConfig.rebirthZoneBanded)
+        return;
+
+    PveTimePoint const now = PveClock::now();
+    if (now < state.nextRebirthCheckAt)
+        return;
+    state.nextRebirthCheckAt = now + std::chrono::seconds(60);
+
+    // Same decision as the level-up hook, reached the same way, so the two can
+    // never disagree about who is due.
+    playerbot::PveManager::OnManagedBotLevelChanged(bot, bot->GetLevel());
+}
+
 void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
 {
     RunDeathRecovery(bot, state, cfg);
@@ -9108,26 +9129,6 @@ void PveManager::OnManagedBotLevelChanged(Player* player, uint8 /*oldLevel*/)
     }
 }
 
-// Asking only on level-up is not enough. A bot that is ALREADY past its zone's
-// ceiling - which is most of the fleet the moment banding is switched on, or
-// any time a band is retuned - never gains another level in time to be noticed,
-// and the higher its level the longer that takes. Ask again on a slow cadence
-// so the standing backlog drains instead of waiting for a ding that may be
-// hours away.
-void MaybeQueueOverBandRebirth(Player* bot, PveBotState& state)
-{
-    if (!g_PveConfig.rebirthZoneBanded)
-        return;
-
-    PveTimePoint const now = PveClock::now();
-    if (now < state.nextRebirthCheckAt)
-        return;
-    state.nextRebirthCheckAt = now + std::chrono::seconds(60);
-
-    // Same decision as the level-up hook, reached the same way, so the two can
-    // never disagree about who is due.
-    PveManager::OnManagedBotLevelChanged(bot, bot->GetLevel());
-}
 
 // Full rebirth of ONE managed bot: strip it back to a freshly created
 // level-1 character - gear, bags, bank, money, spells, talents, quests,
