@@ -59,6 +59,7 @@
 #include "WorldSession.h"
 #include "custom_loot_chest_helper.h"
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <mutex>
 #include <shared_mutex>
@@ -374,14 +375,36 @@ namespace BarracksHardcore
     // kitted out from the template store ends up in "CRobinson Plate Shoulders"
     // and a "[PH]" cap. Anything the world cannot actually hand out is not
     // field kit.
-    bool LooksLikeScaffolding(std::string const& name)
+    bool LooksLikeScaffolding(std::string const& rawName)
     {
-        static constexpr std::array<char const*, 8> markers = { {
-            "[PH]", "CRobinson", "Robinson Test", "Test ", "TEST", "Monster ", "OLD ", "Deprecated"
+        // Lowercased once, so the markers need not enumerate every casing a
+        // designer happened to use. The live data carries "(Test)", "(test)"
+        // and "(TEST)" on sibling items.
+        std::string name = rawName;
+        std::transform(name.begin(), name.end(), name.begin(),
+            [](unsigned char c) { return char(std::tolower(c)); });
+
+        static constexpr std::array<char const*, 7> markers = { {
+            "[ph]", "crobinson", "monster ", "old ", "deprecated", "unused", "placeholder"
         } };
         for (char const* marker : markers)
             if (name.find(marker) != std::string::npos)
                 return true;
+
+        // "test" as a WORD, however it happens to be punctuated - "Test ",
+        // "(Test)", "[TEST]", "- test". The old list matched "Test " with a
+        // trailing space, so "Pirates Patch (Test)" sailed straight through it
+        // and ended up on a bot's head. Requiring a boundary on both sides
+        // keeps real words like "Testament" out.
+        for (size_t at = name.find("test"); at != std::string::npos; at = name.find("test", at + 4))
+        {
+            bool const beforeOk = at == 0 || !std::isalpha(static_cast<unsigned char>(name[at - 1]));
+            size_t const after = at + 4;
+            bool const afterOk = after >= name.size() || !std::isalpha(static_cast<unsigned char>(name[after]));
+            if (beforeOk && afterOk)
+                return true;
+        }
+
         return false;
     }
 
@@ -430,6 +453,8 @@ namespace BarracksHardcore
         TC_LOG_INFO("playerbots.hardcore", "White field kit: {} item ids are obtainable in the world.",
             uint32(s_obtainableItems.size()));
     }
+
+    void BuildWhiteKitCacheOnce();
 
     // Built once, then read-only.
     void BuildWhiteKitCacheOnce()
@@ -508,6 +533,20 @@ namespace BarracksHardcore
             }
         }
         TC_LOG_INFO("scripts", "BarracksHardcore: field kit cache built ({} white, {} grey items).", total, greys);
+    }
+
+    // Whether the world can produce this item at all - sold by a vendor,
+    // dropped by something, or handed to a new character. Exported so the
+    // playerbot manager can strip gear the world has no way of granting
+    // without keeping a second copy of the same set.
+    //
+    // Fails OPEN: if the set has not been built yet, everything is considered
+    // obtainable. The alternative is a pass that destroys the fleet's gear
+    // because a query had not run.
+    bool IsObtainableInWorld(uint32 itemId)
+    {
+        BuildWhiteKitCacheOnce();
+        return s_obtainableItems.empty() || s_obtainableItems.count(itemId) != 0;
     }
 
     // Classic armor proficiency: the heavy classes step up at 40.

@@ -29,6 +29,11 @@ namespace BarracksHardcore
     // drift out of step with this one. A bot that travels to pick a fight in a
     // zone where no fight is possible is not aggressive, it is lost.
     bool IsOpenWorldPvpZone(uint32 zoneId);
+
+    // Whether the world can produce this item at all: sold by a vendor,
+    // dropped by something, or handed to a new character. Fails open when the
+    // set has not been built, so nothing is destroyed on a cold cache.
+    bool IsObtainableInWorld(uint32 itemId);
 }
 
 #endif

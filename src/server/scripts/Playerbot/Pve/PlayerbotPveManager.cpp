@@ -31,6 +31,7 @@
 #include "CellImpl.h"
 #include "CharacterCache.h"
 #include "Common.h"
+#include <cctype>
 #include <limits>
 #include <atomic>
 
@@ -733,13 +734,40 @@ bool LooksLikeScaffoldingItem(ItemTemplate const* proto)
     if (!proto)
         return false;
 
-    static constexpr char const* kMarkers[] = {
-        "[PH]", "CRobinson", "Robinson Test", "Test ", "TEST", "Monster ", "OLD ", "Deprecated"
-    };
+    // Lowercased once, so the markers need not enumerate every casing.
+    std::string name = proto->Name1;
+    std::transform(name.begin(), name.end(), name.begin(),
+        [](unsigned char c) { return char(std::tolower(c)); });
 
+    static constexpr char const* kMarkers[] = {
+        "[ph]", "crobinson", "monster ", "old ", "deprecated", "unused", "placeholder"
+    };
     for (char const* marker : kMarkers)
-        if (proto->Name1.find(marker) != std::string::npos)
+        if (name.find(marker) != std::string::npos)
             return true;
+
+    // "test" as a WORD, however punctuated. The old list matched "Test " with
+    // a trailing space, so "Pirates Patch (Test)" went straight through and
+    // ended up worn. A boundary on both sides keeps "Testament" out.
+    for (size_t at = name.find("test"); at != std::string::npos; at = name.find("test", at + 4))
+    {
+        bool const beforeOk = at == 0 || !std::isalpha(static_cast<unsigned char>(name[at - 1]));
+        size_t const after = at + 4;
+        bool const afterOk = after >= name.size() || !std::isalpha(static_cast<unsigned char>(name[after]));
+        if (beforeOk && afterOk)
+            return true;
+    }
+
+    // And anything the world simply cannot produce. A name filter only ever
+    // catches what somebody remembered to label; this catches the rest, which
+    // is the actual rule: gear a bot wears should be something a player could
+    // have looted from a mob or bought from a vendor. Only plain white and
+    // grey gear is judged this way - quest rewards, forged items and anything
+    // above common are legitimately absent from loot tables.
+    if ((proto->Quality == ITEM_QUALITY_NORMAL || proto->Quality == ITEM_QUALITY_POOR) &&
+        (proto->Class == ITEM_CLASS_ARMOR || proto->Class == ITEM_CLASS_WEAPON) &&
+        !BarracksHardcore::IsObtainableInWorld(proto->ItemId))
+        return true;
 
     return false;
 }
