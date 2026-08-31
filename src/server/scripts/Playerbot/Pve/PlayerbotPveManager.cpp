@@ -6908,6 +6908,49 @@ void RunDeathRecovery(Player* bot, PveBotState& state, playerbot::PveConfig cons
     }
 }
 
+// Claim a death chest lying near the bot - its own, another bot's, or a
+// player's; ownership is never consulted.
+//
+// This has to run on the FAST tick, ahead of target selection. It lived on the
+// slow tick with a three second cadence, and lost every race: a bot picks its
+// next target on the 250ms tick, so by the time the chest check came round the
+// bot was already engaged, and the check requires being out of combat. A player
+// dying in front of a bot watched it turn around and pull another mob.
+//
+// Affordable at this rate only because chests are looked up in a registry now
+// rather than through a grid search - it is a pass over a handful of records.
+bool TryClaimNearbyDeathChest(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
+{
+    if (!cfg.hardcoreLootChestEntry || !bot->IsAlive() || bot->IsInCombat() || state.engaged)
+        return false;
+
+    if (!state.masterGuid.IsEmpty() || !state.pendingLootGuid.IsEmpty())
+        return false;
+
+    // Do not disturb a chest errand already in flight; anything else may be
+    // preempted, because errands are resumable and dropped gear is not.
+    if (state.errandKind == PveErrandKind::QuestObject)
+        return false;
+
+    PveTimePoint const now = PveClock::now();
+    if (now < state.nextChestScanAt)
+        return false;
+
+    state.nextChestScanAt = now + std::chrono::seconds(1);
+
+    GameObject* chest = FindRegisteredDeathChest(bot, cfg.hardcoreLootChestEntry, 200.0f);
+    if (!chest || !chest->isSpawned() || chest->getLootState() != GO_READY ||
+        IsRecentErrandTarget(state, chest->GetGUID()))
+        return false;
+
+    state.errandGuid = chest->GetGUID();
+    state.errandKind = PveErrandKind::QuestObject;
+    state.errandUntil = now + std::chrono::seconds(180);
+    TC_LOG_INFO("playerbots.pve", "Bot {} breaks off for a death chest {:.0f}y away.",
+        bot->GetName(), bot->GetDistance(chest));
+    return true;
+}
+
 void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
 {
     RunDeathRecovery(bot, state, cfg);
@@ -7098,37 +7141,6 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     // ninth of the area of the errand scan's 200 yard sweep. Finding chests
     // further out remains that scan's job; this one only has to notice what is
     // already underfoot.
-    // COMBAT is the only thing that outranks a chest. An earlier version also
-    // required errandKind == None, which sounds harmless and is not: bots are
-    // very often mid-errand - a vendor run, an auction trip, a mail collection -
-    // and a bot revived on top of its own chest went straight back to its
-    // auction errand and left the gear on the floor. That was observed directly.
-    //
-    // A chest therefore PREEMPTS whatever errand is running. Errands are
-    // resumable and the gear is not: chests despawn, and another bot or a player
-    // will take one that is left lying there. IsRecentErrandTarget still stops a
-    // chest that cannot be reached from being re-picked forever.
-    if (cfg.hardcoreLootChestEntry && bot->IsAlive() && !bot->IsInCombat() && !state.engaged &&
-        state.masterGuid.IsEmpty() && state.pendingLootGuid.IsEmpty() &&
-        state.errandKind != PveErrandKind::QuestObject &&
-        now >= state.nextChestScanAt)
-    {
-        state.nextChestScanAt = now + std::chrono::seconds(3);
-
-        if (GameObject* chest = FindRegisteredDeathChest(bot, cfg.hardcoreLootChestEntry, 60.0f))
-        {
-            if (chest->isSpawned() && chest->getLootState() == GO_READY &&
-                !IsRecentErrandTarget(state, chest->GetGUID()))
-            {
-                state.errandGuid = chest->GetGUID();
-                state.errandKind = PveErrandKind::QuestObject;
-                state.errandUntil = now + std::chrono::seconds(90);
-                TC_LOG_INFO("playerbots.pve", "Bot {} breaks off for a death chest {:.0f}y away.",
-                    bot->GetName(), bot->GetDistance(chest));
-            }
-        }
-    }
-
     // Quest/vendor errands are for autonomous bots; companions stay on their
     // master's heel.
     if (state.masterGuid.IsEmpty() && !state.engaged && !bot->IsInCombat() &&
@@ -7505,8 +7517,14 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         else if (master)
             target = PickCompanionTarget(bot, state, master, cfg);
         else if (cfg.grindEnabled && state.masterGuid.IsEmpty() && !IsRestingNow(bot, state) &&
-            !NeedsRecovery(bot, cfg))
+            !NeedsRecovery(bot, cfg) && !TryClaimNearbyDeathChest(bot, state, cfg) &&
+            state.errandKind == PveErrandKind::None)
         {
+            // Free gear on the floor outranks finding something new to hit, and
+            // an errand already in flight outranks it too - otherwise the bot
+            // starts a fight on the way and never arrives. Note this only gates
+            // picking a NEW target: the attacker branch above still answers
+            // anything that is actually hitting the bot.
             // Zone guardians hunt players above all else: they hold their
             // zone against intruders and only grind between kills.
             if (GetGuardianZoneId(bot->GetGUID().GetRawValue()))
