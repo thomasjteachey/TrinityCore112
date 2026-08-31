@@ -8442,6 +8442,62 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     }
 }
 
+// A player-controlled attacker, ranked as the person controlling it.
+//
+// Returns the owning player when that owner can be fought, the attacker itself
+// when it cannot, and nullptr when the attacker must be ignored entirely
+// (a managed bot, or a managed bot's pet - playerbots never fight each other).
+//
+// Shared deliberately. Getting this right in one target-selection branch and
+// not another is precisely how a bot ends up ping-ponging: one converts the pet
+// to its owner and the next converts it straight back, and the last writer wins.
+Unit* RankAttackerAsOwner(Player* bot, Unit* attacker)
+{
+    if (!attacker)
+        return nullptr;
+
+    if (attacker->GetTypeId() == TYPEID_PLAYER)
+        return playerbot::IsManagedRandomBot(attacker->ToPlayer()) ? nullptr : attacker;
+
+    if (Unit* owner = attacker->GetCharmerOrOwner())
+        if (Player* ownerPlayer = owner->ToPlayer())
+        {
+            if (playerbot::IsManagedRandomBot(ownerPlayer))
+                return nullptr;   // the no-friendly-fire rule follows the pet home
+
+            if (ownerPlayer->IsAlive() && bot->IsValidAttackTarget(ownerPlayer))
+                return ownerPlayer;
+        }
+
+    return attacker;
+}
+
+// Is this unit actually fighting the bot?
+//
+// GetVictim() alone cannot answer it. That field is only set by Unit::Attack,
+// and a RANGED attacker never calls it - Spell.cpp contains no Attack() at all,
+// so a hunter shooting the bot has GetVictim() pointing anywhere but the bot,
+// permanently. Anything gated on GetVictim() == bot is therefore always false
+// against a ranged enemy, however hard they are hitting.
+bool IsEngagedWithBot(Player* bot, Unit const* candidate)
+{
+    if (!candidate)
+        return false;
+
+    if (candidate->GetVictim() == bot)
+        return true;
+
+    for (Unit const* attacker : bot->getAttackers())
+    {
+        if (!attacker)
+            continue;
+        if (attacker == candidate || attacker->GetCharmerOrOwner() == candidate)
+            return true;
+    }
+
+    return false;
+}
+
 void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
 {
     Player* master = state.masterGuid.IsEmpty() ? nullptr : ObjectAccessor::GetPlayer(*bot, state.masterGuid);
@@ -8699,23 +8755,35 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     // engaged us yet: stop, kill what is already hitting us, then the next
     // scan re-acquires the original. Never switches off a mob that is
     // actually fighting the bot, so live duels can't ping-pong.
-    if (target && target->GetVictim() != bot)
+    if (target && !IsEngagedWithBot(bot, target))
     {
         Unit* nearestAttacker = nullptr;
         float nearestAttackerDistance = 0.0f;
+        bool nearestAttackerIsPlayer = false;
         for (Unit* attacker : bot->getAttackers())
         {
-            if (!attacker || attacker == target || !attacker->IsAlive() || !bot->IsValidAttackTarget(attacker))
+            if (!attacker || !attacker->IsAlive() || !bot->IsValidAttackTarget(attacker))
                 continue;
 
-            // Playerbots never fight each other.
-            if (attacker->GetTypeId() == TYPEID_PLAYER && playerbot::IsManagedRandomBot(attacker->ToPlayer()))
+            // A pet is not an add - its owner is the fight. Without this the
+            // pet of the person the bot is ALREADY fighting counted as a fresh
+            // add every tick and took the slot back from the owner, so the two
+            // branches fought each other forever and the pet always won, being
+            // the last write before SetSelection.
+            Unit* ranked = RankAttackerAsOwner(bot, attacker);
+            if (!ranked || ranked == target)
                 continue;
 
-            float const distance = bot->GetDistance(attacker);
-            if (!nearestAttacker || distance < nearestAttackerDistance)
+            // A person outranks anything with fur, the same rule the
+            // self-defence branch above applies.
+            bool const rankedIsPlayer = ranked->GetTypeId() == TYPEID_PLAYER;
+            float const distance = bot->GetDistance(ranked);
+            if (!nearestAttacker ||
+                (rankedIsPlayer && !nearestAttackerIsPlayer) ||
+                (rankedIsPlayer == nearestAttackerIsPlayer && distance < nearestAttackerDistance))
             {
-                nearestAttacker = attacker;
+                nearestAttacker = ranked;
+                nearestAttackerIsPlayer = rankedIsPlayer;
                 nearestAttackerDistance = distance;
             }
         }
