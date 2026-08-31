@@ -1048,15 +1048,41 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
     // failsafe never fires. Nothing else in this function reads the range the
     // order was actually issued with, so the mismatch is invisible until a
     // human notices a bot running in circles around a level 12 boar.
+    // One yard, not less: the melee pair asks for 1.5 and records 0.5, which is
+    // a difference of exactly one, so it sits deliberately just inside this test
+    // and must keep its preserve. Anything tighter would break melee spacing
+    // every tick; the mismatch this exists to catch is measured in tens of yards.
     if (desiredRange > 0.0f && state.issuedRange > 0.0f &&
         std::fabs(state.issuedRange - desiredRange) > 1.0f)
     {
         if (reasonOut)
         {
+            // Carry the context the battleground stall lines carry. This return
+            // sits above aggressiveUnlaunchedBattleground and
+            // pathologicalUnlaunchedHold, which reach the same verdict by a
+            // different route - so whenever a stall and a mismatch coincide,
+            // this is the only line the operator gets, and a two field version
+            // of it would hide the stall it was shadowing. Everything here is
+            // read directly rather than from the locals computed further down,
+            // so the ordering of the state bookkeeping below is untouched.
+            uint32 const diagNowMs = GameTime::GetGameTimeMS();
+            bool const diagSplineInit = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
             std::ostringstream diag;
             diag << (label ? label : "target_relative_motion_not_preserved")
-                 << " reason=range_mismatch issued_range=" << state.issuedRange
-                 << " desired_range=" << desiredRange;
+                 << " reason=range_mismatch"
+                 << " issued_range=" << state.issuedRange
+                 << " desired_range=" << desiredRange
+                 << " motion=" << uint32(motionType)
+                 << " mode=" << uint32(state.mode)
+                 << " age_ms=" << (state.lastIssueMs != 0 && diagNowMs >= state.lastIssueMs ? diagNowMs - state.lastIssueMs : 0)
+                 << " dist=" << player->GetDistance(target)
+                 << " last_dist=" << state.lastDistance
+                 << " in_bg=" << (player->InBattleground() ? "yes" : "no")
+                 << " moving=" << (player->isMoving() ? "yes" : "no")
+                 << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
+                 << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
+                 << " spline_init=" << (diagSplineInit ? "yes" : "no")
+                 << " spline_started=" << (diagSplineInit && player->movespline->HasStarted() ? "yes" : "no");
             *reasonOut = diag.str();
         }
         return false;
