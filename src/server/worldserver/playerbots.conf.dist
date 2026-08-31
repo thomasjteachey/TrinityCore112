@@ -640,6 +640,35 @@ Playerbot.Pve.ZoneGuardians.PerZone = 0
 #        Default:     0
 Playerbot.Pve.RebirthAtMaxLevel.Percent = 0
 
+#    Playerbot.Pve.Rebirth.ZoneBanded
+#        Description: Bots live inside one zone instead of climbing to the level cap. Each bot is
+#                     permanently tied to a zone by its guid, and on reaching that zone's top
+#                     level it is reborn at the zone's bottom level, so every band of content
+#                     keeps a population at the level it was built for.
+#                     A reborn bot KEEPS everything it owns - gear, bags, bank, money. Equipped
+#                     items are moved into bags, since it can no longer wear them; anything that
+#                     will not fit stays worn rather than being destroyed. Talents are refunded
+#                     and re-spent automatically, quests are cleared, and spells above the new
+#                     level are removed and re-taught by the trainer catch-up pass.
+#                     Zone bands are derived from the levels of the creature clusters actually in
+#                     each zone (20th and 80th percentile), not a hand-written table.
+#                     When disabled, the old behaviour returns: Playerbot.Pve.RebirthAtMaxLevel
+#                     .Percent of the fleet resets all the way to level 1 at the cap.
+#        Default:     1 - (Enabled)
+
+Playerbot.Pve.Rebirth.ZoneBanded = 1
+
+#    Playerbot.Pve.Rebirth.EndgameBots
+#        Description: How many bots skip the zone cycle entirely, make the full climb to the
+#                     level cap and stay there, so the realm keeps an endgame population.
+#                     This is a COUNT, not a share. It is drawn only from bots that actually
+#                     cycle: zone guardians already sit at their zone's cap forever, and the
+#                     PvP-only accounts are at the cap by definition, so both are excluded from
+#                     the pool rather than counted against this number.
+#        Default:     20
+
+Playerbot.Pve.Rebirth.EndgameBots = 20
+
 #    Playerbot.Pve.Travel.WalkMaxDistance
 #        Description: Relocations and town runs within this range are WALKED (segmented mmap
 #                     pathing, fights allowed en route, stuck/timeout falls back to teleport).

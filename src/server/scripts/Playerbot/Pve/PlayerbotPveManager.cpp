@@ -4765,6 +4765,11 @@ std::unordered_map<uint32, uint32> g_ZoneSpotCount;
 // zone off as high level. This is what answers "have I outgrown this place",
 // which is a different question from "is anything here still killable".
 std::unordered_map<uint32, uint8> g_ZoneTopLevel;
+// The other end of the same ladder, and the zones worth tying a bot to. A
+// rebirth zone must be big enough to level through and must actually span a
+// range - a zone whose clusters are all one level is a corridor, not a home.
+std::unordered_map<uint32, uint8> g_ZoneBottomLevel;
+std::vector<uint32> g_RebirthZones;
 bool g_GrindSpotsBuilt = false;
 
 // World thread only. Mirrors the reference filters: normal-rank lootable
@@ -4880,6 +4885,8 @@ void BuildGrindSpotCacheOnce()
             zoneLevels[bucket.spot.zoneId].push_back(uint8(std::min<uint32>(bucket.meanLevel, 80)));
     }
 
+    g_ZoneBottomLevel.clear();
+    g_RebirthZones.clear();
     for (auto& [zoneId, levels] : zoneLevels)
     {
         if (levels.empty())
@@ -4888,7 +4895,23 @@ void BuildGrindSpotCacheOnce()
         std::sort(levels.begin(), levels.end());
         size_t const index = (levels.size() * 4) / 5;             // 80th percentile
         g_ZoneTopLevel[zoneId] = levels[std::min(index, levels.size() - 1)];
+        g_ZoneBottomLevel[zoneId] = levels[levels.size() / 5];    // 20th percentile
+
+        // Percentiles rather than the extremes on purpose: one stray elite or
+        // one low-level critter cluster should not define the band a bot spends
+        // its whole life inside.
+        uint8 const bottom = g_ZoneBottomLevel[zoneId];
+        uint8 const top = g_ZoneTopLevel[zoneId];
+        if (top > bottom && bottom >= 1 && g_ZoneSpotCount[zoneId] >= 5)
+            g_RebirthZones.push_back(zoneId);
     }
+
+    // Sorted so the guid -> zone mapping is stable: a bot must come back to the
+    // same zone every cycle, and unordered_map iteration order would reshuffle
+    // the whole fleet on every restart.
+    std::sort(g_RebirthZones.begin(), g_RebirthZones.end());
+
+    TC_LOG_INFO("playerbots.pve", "Rebirth zones: {} eligible.", g_RebirthZones.size());
 
     TC_LOG_INFO("playerbots.pve", "Grind spot cache built: {} clusters across {} level buckets, {} zones counted.",
         spotCount, g_GrindSpotsByLevel.size(), g_ZoneSpotCount.size());
@@ -8560,6 +8583,10 @@ void PveManager::LoadConfig()
 
     g_PveConfig.rebirthAtMaxLevelPercent = uint32(std::clamp<int32>(
         sConfigMgr->GetIntDefault("Playerbot.Pve.RebirthAtMaxLevel.Percent", 0), 0, 100));
+    g_PveConfig.rebirthZoneBanded = sConfigMgr->GetBoolDefault("Playerbot.Pve.Rebirth.ZoneBanded", true);
+    g_PveConfig.endgameBotCount = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.Rebirth.EndgameBots", 20)));
+    // Read from the population manager's own target so a count means what it says.
+    g_PveConfig.populationTarget = uint32(std::max(1, sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.TargetMax", 256)));
     g_PveConfig.declineGroupInvites = sConfigMgr->GetBoolDefault("Playerbot.Pve.DeclineGroupInvites", false);
     g_PveConfig.hardcoreLootChestEntry = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FullLoot.ChestGameObjectId", 0)));
     g_PveConfig.hardcoreChestDespawnSeconds = uint32(std::max(30, sConfigMgr->GetIntDefault("Centurion.Hardcore.FullLoot.ChestDespawnSeconds", 600)));
@@ -8575,6 +8602,20 @@ void PveManager::LoadConfig()
         if (!token.empty())
             g_PveConfig.pvpOnlyAccountIds.push_back(uint32(std::strtoul(token.c_str(), nullptr, 10)));
     std::sort(g_PveConfig.pvpOnlyAccountIds.begin(), g_PveConfig.pvpOnlyAccountIds.end());
+
+    // Counted once, from the accounts themselves, so it cannot drift out of
+    // step with them the way a hand-maintained number would.
+    g_PveConfig.pvpOnlyBotCount = 0;
+    if (!g_PveConfig.pvpOnlyAccountIds.empty())
+    {
+        std::ostringstream accountList;
+        for (size_t index = 0; index < g_PveConfig.pvpOnlyAccountIds.size(); ++index)
+            accountList << (index ? "," : "") << g_PveConfig.pvpOnlyAccountIds[index];
+
+        if (QueryResult result = CharacterDatabase.Query(
+                ("SELECT COUNT(*) FROM characters WHERE account IN (" + accountList.str() + ")").c_str()))
+            g_PveConfig.pvpOnlyBotCount = (*result)[0].GetUInt32();
+    }
 }
 
 bool PveManager::IsPvpOnlyBot(Player const* player)
@@ -8592,6 +8633,10 @@ PveConfig const& PveManager::GetConfig()
 }
 
 void ResetManagedBotToLevelOne(Player* bot);
+void ResetManagedBotToZoneBand(Player* bot, uint32 zoneId, uint8 bottomLevel);
+uint32 GetRebirthZoneId(Player const* bot);
+bool IsEndgameBot(Player const* bot);
+bool GetZoneLevelBand(uint32 zoneId, uint8& bottom, uint8& top);
 
 void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
 {
@@ -8684,7 +8729,18 @@ void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
         for (uint64 botRawGuid : drained)
             if (Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid)))
                 if (bot->IsInWorld() && playerbot::IsManagedRandomBot(bot))
-                    ResetManagedBotToLevelOne(bot);
+                {
+                    // Recomputed rather than carried on the queue: the mapping
+                    // is deterministic, so the answer cannot drift between the
+                    // flag and the reset.
+                    uint8 bottom = 0;
+                    uint8 top = 0;
+                    uint32 const zoneId = g_PveConfig.rebirthZoneBanded ? GetRebirthZoneId(bot) : 0u;
+                    if (zoneId && GetZoneLevelBand(zoneId, bottom, top))
+                        ResetManagedBotToZoneBand(bot, zoneId, bottom);
+                    else
+                        ResetManagedBotToLevelOne(bot);
+                }
     }
 }
 
@@ -8975,13 +9031,37 @@ void PveManager::OnManagedBotLevelChanged(Player* player, uint8 /*oldLevel*/)
 
     // The flagged share of the fleet is reborn at the cap: back to level 1
     // and home to climb again, keeping the leveling world populated.
-    if (g_PveConfig.rebirthAtMaxLevelPercent &&
-        player->GetLevel() >= sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL) &&
-        uint32(player->GetGUID().GetCounter() % 100) < g_PveConfig.rebirthAtMaxLevelPercent &&
-        !IsPvpOnlyBot(player) && !IsExemptFromBattlegroundOrchestration(player) &&
-        !GetGuardianZoneId(player->GetGUID().GetRawValue()))
+    bool const rebirthEligible = !IsPvpOnlyBot(player) &&
+        !IsExemptFromBattlegroundOrchestration(player) &&
+        !GetGuardianZoneId(player->GetGUID().GetRawValue());
+
+    // Zone-banded is the normal life of a bot now: it cycles inside the zone it
+    // was born to, so every band of content keeps a population. The exceptions
+    // are the endgame handful, who make the full climb and stay at sixty.
+    // Turning the flag off restores the old all-or-nothing behaviour, where a
+    // configured share of the fleet resets to level one at the cap.
+    bool const rebirthFlagged = g_PveConfig.rebirthZoneBanded
+        ? (rebirthEligible && !IsEndgameBot(player))
+        : (rebirthEligible && g_PveConfig.rebirthAtMaxLevelPercent &&
+           uint32(player->GetGUID().GetCounter() % 100) < g_PveConfig.rebirthAtMaxLevelPercent);
+
+    // A zone-tied bot tops out at its own zone's ceiling rather than the
+    // realm's, so it cycles inside the band it lives in and the zone keeps a
+    // population at the level its content is built for.
+    uint8 bandBottom = 0;
+    uint8 bandTop = 0;
+    uint32 const rebirthZoneId = (rebirthFlagged && g_PveConfig.rebirthZoneBanded)
+        ? GetRebirthZoneId(player) : 0u;
+    bool const banded = rebirthZoneId && GetZoneLevelBand(rebirthZoneId, bandBottom, bandTop);
+    uint32 const rebirthAtLevel = banded ? uint32(bandTop) : sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
+
+    if (rebirthFlagged && player->GetLevel() >= rebirthAtLevel)
     {
-        TC_LOG_INFO("playerbots.pve", "Bot {} reached the level cap and is flagged for rebirth.", player->GetName());
+        if (banded)
+            TC_LOG_INFO("playerbots.pve", "Bot {} topped out zone {} at level {}; rebirth to {}.",
+                player->GetName(), rebirthZoneId, uint32(bandTop), uint32(bandBottom));
+        else
+            TC_LOG_INFO("playerbots.pve", "Bot {} reached the level cap and is flagged for rebirth.", player->GetName());
         std::lock_guard<std::mutex> guard(g_PvePendingLock);
         g_PendingRebirths.insert(player->GetGUID().GetRawValue());
     }
@@ -8990,6 +9070,170 @@ void PveManager::OnManagedBotLevelChanged(Player* player, uint8 /*oldLevel*/)
 // Full rebirth of ONE managed bot: strip it back to a freshly created
 // level-1 character - gear, bags, bank, money, spells, talents, quests,
 // pet - and port it to its racial starting spot. World thread only.
+// The handful of bots that make the whole journey to sixty and stay there, so
+// the realm still has an endgame population. Asked for as a COUNT and turned
+// into a share of the configured fleet, so the operator says "twenty" and gets
+// roughly twenty however the population is sized.
+//
+// Chosen by hashing the guid rather than by ranking a roster: there is no
+// stable roster to rank against - the fleet is whoever happens to be logged in
+// - and a hash keeps a bot's role fixed for its entire life, which is the point.
+bool IsEndgameBot(Player const* bot)
+{
+    uint32 const endgame = g_PveConfig.endgameBotCount;
+    if (!endgame)
+        return false;
+
+    // Drawn from the bots that actually cycle, not the whole fleet. Zone
+    // guardians already sit at their zone's cap forever and the PvP-only
+    // accounts are level sixty by definition; neither was ever a rebirth
+    // candidate, so counting them here meant a share of the endgame slots
+    // landed on bots that could not use them and the real number came out
+    // well under what was asked for.
+    uint32 const reserved = g_PveConfig.zoneGuardiansPerZone * uint32(kGuardianZones.size()) +
+        g_PveConfig.pvpOnlyBotCount;
+    uint32 const pool = g_PveConfig.populationTarget > reserved
+        ? g_PveConfig.populationTarget - reserved
+        : g_PveConfig.populationTarget;
+
+    uint32 const fleet = std::max<uint32>(endgame, pool);
+
+    uint64 value = bot->GetGUID().GetRawValue() + 0x9E3779B97F4A7C15ull;
+    value = (value ^ (value >> 30)) * 0xBF58476D1CE4E5B9ull;
+    value = (value ^ (value >> 27)) * 0x94D049BB133111EBull;
+    value ^= value >> 31;
+
+    return uint32(value % fleet) < endgame;
+}
+
+// The zone a bot lives its cycles in. Deterministic from the guid and taken
+// from a sorted list, so it never moves: a bot reborn somewhere new each cycle
+// is not tied to a zone, it is just being teleported around.
+uint32 GetRebirthZoneId(Player const* bot)
+{
+    if (g_RebirthZones.empty())
+        return 0;
+
+    return g_RebirthZones[bot->GetGUID().GetCounter() % g_RebirthZones.size()];
+}
+
+bool GetZoneLevelBand(uint32 zoneId, uint8& bottom, uint8& top)
+{
+    auto bottomItr = g_ZoneBottomLevel.find(zoneId);
+    auto topItr = g_ZoneTopLevel.find(zoneId);
+    if (bottomItr == g_ZoneBottomLevel.end() || topItr == g_ZoneTopLevel.end())
+        return false;
+
+    bottom = bottomItr->second;
+    top = topItr->second;
+    return top > bottom;
+}
+
+bool FindGrindSpotInZone(uint32 zoneId, uint8 level, GrindSpot& out)
+{
+    std::lock_guard<std::mutex> guard(g_GrindSpotLock);
+    for (uint8 probe = 0; probe <= 5; ++probe)
+    {
+        auto itr = g_GrindSpotsByLevel.find(uint8(std::max(1, int32(level) - int32(probe))));
+        if (itr == g_GrindSpotsByLevel.end())
+            continue;
+
+        for (GrindSpot const& spot : itr->second)
+            if (spot.zoneId == zoneId)
+            {
+                out = spot;
+                return true;
+            }
+    }
+
+    return false;
+}
+
+// Rebirth inside a zone's band instead of all the way to level one. The bot
+// keeps everything it owns - gear, bags, bank, money - because the point is a
+// zone that always has somebody in it at the right level, not a punishment.
+//
+// Equipped items are moved into bags rather than left on: a bot dropped to
+// level twelve cannot use what it earned at fifty, and leaving it worn strands
+// it in gear it draws no stats from. Anything that will not fit stays equipped;
+// nothing is destroyed either way.
+void ResetManagedBotToZoneBand(Player* bot, uint32 zoneId, uint8 bottomLevel)
+{
+    uint64 const botRawGuid = bot->GetGUID().GetRawValue();
+
+    playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), false);
+    playerbot::LockedErase(g_PveBotStateByGuid, botRawGuid);
+    bot->CombatStop(true);
+    bot->RemovePet(nullptr, PET_SAVE_AS_DELETED);
+    bot->RemoveAllAuras();
+
+    // Quests go too, or the bot carries level fifty objectives through a level
+    // twelve life and never picks up anything its own size again.
+    for (uint8 slot = 0; slot < MAX_QUEST_LOG_SIZE; ++slot)
+        if (uint32 questId = bot->GetQuestSlotQuestId(slot))
+        {
+            bot->RemoveActiveQuest(questId, false);
+            bot->SetQuestSlot(slot, 0);
+        }
+    for (uint32 questId : std::vector<uint32>(bot->getRewardedQuests().begin(), bot->getRewardedQuests().end()))
+        bot->RemoveRewardedQuest(questId);
+
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item)
+            continue;
+
+        ItemPosCountVec dest;
+        if (bot->CanStoreItem(NULL_BAG, NULL_SLOT, dest, item, false) != EQUIP_ERR_OK)
+            continue;   // no room: keep it worn rather than destroy it
+
+        bot->RemoveItem(INVENTORY_SLOT_BAG_0, slot, true);
+        bot->StoreItem(dest, item, true);
+    }
+
+    // Talents back into the pool. The talent tick re-spends them inside a
+    // minute, for the spec the bot is meant to be, so this needs no help.
+    bot->ResetTalents(true);
+
+    // Every spell, then the class baseline. RunTrainerSpellCatchup re-teaches
+    // whatever the new level is actually entitled to on the next pass, so this
+    // is how the spells it should no longer know are removed without keeping a
+    // per-spell level table of our own.
+    std::vector<uint32> knownSpells;
+    for (auto const& [spellId, playerSpell] : bot->GetSpellMap())
+        if (playerSpell.state != PLAYERSPELL_REMOVED)
+            knownSpells.push_back(spellId);
+    for (uint32 spellId : knownSpells)
+        bot->RemoveSpell(spellId, false, false);
+    bot->GetSpellHistory()->ResetAllCooldowns();
+
+    bot->GiveLevel(bottomLevel);
+    bot->SetUInt32Value(PLAYER_XP, 0);
+    bot->LearnDefaultSkills();
+    bot->LearnCustomSpells();
+    bot->SetFullHealth();
+    if (bot->GetMaxPower(POWER_MANA))
+        bot->SetPower(POWER_MANA, bot->GetMaxPower(POWER_MANA));
+
+    // Gathering skill is deliberately left alone: it is held at a cap for the
+    // bot's level elsewhere, and that pass only ever raises, so a reborn bot
+    // keeps the profession progress it earned across cycles.
+
+    GrindSpot spot;
+    if (FindGrindSpotInZone(zoneId, bottomLevel, spot))
+    {
+        // Homebind too, so a corpse run or a hearth keeps it in its zone.
+        WorldLocation const home(spot.mapId, spot.x, spot.y, spot.z, 0.0f);
+        bot->SetHomebind(home, zoneId);
+        bot->TeleportTo(home);
+    }
+
+    bot->SaveToDB();
+    TC_LOG_INFO("playerbots.pve", "Bot {} reborn at level {} in zone {}.",
+        bot->GetName(), uint32(bottomLevel), zoneId);
+}
+
 void ResetManagedBotToLevelOne(Player* bot)
 {
     {

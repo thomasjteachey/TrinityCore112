@@ -100,6 +100,14 @@ struct PveConfig
     // This percent of the fleet (guid-keyed, deterministic) is reborn at
     // the level cap: full level-1 reset and sent home. 0 disables.
     uint32 rebirthAtMaxLevelPercent = 0;
+    // Rebirth into the bot's own zone band instead of all the way to level 1.
+    bool rebirthZoneBanded = true;
+    // How many bots skip the zone cycle, climb to the cap and stay there.
+    uint32 endgameBotCount = 20;
+    // The configured fleet size, so endgameBotCount can be a real count.
+    uint32 populationTarget = 256;
+    // Characters sitting on the PvP-only accounts, counted at config load.
+    uint32 pvpOnlyBotCount = 0;
     // Hardcore realms: bots never join groups - invites are declined and
     // companion summons refused.
     bool declineGroupInvites = false;
