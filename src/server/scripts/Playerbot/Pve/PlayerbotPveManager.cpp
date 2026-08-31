@@ -5325,6 +5325,63 @@ void EnsureProfessions(Player* bot)
         EnsureProfessionTier(bot, kSkinningTiers, SKILL_SKINNING);
 }
 
+// Gathering skill only rises when a node is actually gathered, and a bot levels
+// far faster than it mines. The result on a live fleet: 150 of 185 miners sat
+// below 65, the tin threshold, so the whole realm gathered nothing but copper
+// and the auction house never saw a second-tier material at all. Hold gathering
+// at the cap for the bot's level, exactly the way weapon skill is held.
+//
+// The rank spells are learned here rather than left to EnsureProfessions,
+// because the skill ceiling IS the rank: raising the value without the rank
+// would clamp straight back down to the old ceiling.
+void MaxOutGatheringSkills(Player* bot)
+{
+    struct GatherLine
+    {
+        uint32 skillId;
+        std::array<ProfessionTier, 4> const& tiers;
+    };
+
+    GatherLine const lines[] = {
+        { SKILL_HERBALISM, kHerbalismTiers },
+        { SKILL_MINING,    kMiningTiers },
+        { SKILL_SKINNING,  kSkinningTiers },
+    };
+
+    // Five per level, the same ladder weapon skill uses, capped at the classic
+    // Artisan ceiling. It lines up with the rank requirements by construction:
+    // level 10 reaches 50 for Journeyman, level 25 reaches 125 for Expert and
+    // level 40 reaches 200 for Artisan, each comfortably past the level gate.
+    uint16 const levelCap = uint16(std::min<uint32>(bot->GetLevel() * 5, 300));
+    if (!levelCap)
+        return;
+
+    for (GatherLine const& line : lines)
+    {
+        if (!bot->HasSkill(line.skillId))
+            continue;
+
+        // Every rank the level allows, in one pass. Tested against the cap we
+        // are about to set rather than the current value, so a bot climbs the
+        // whole ladder now instead of one rank per check.
+        for (ProfessionTier const& tier : line.tiers)
+        {
+            if (bot->HasSpell(tier.spellId))
+                continue;
+            if (bot->GetLevel() < tier.requiredLevel || levelCap < tier.requiredSkill)
+                break;
+            bot->LearnSpell(tier.spellId, false);
+        }
+
+        uint16 const trained = uint16(bot->GetMaxSkillValue(line.skillId));
+        uint16 const cap = std::min<uint16>(levelCap, trained);
+        if (!cap || bot->GetSkillValue(line.skillId) >= cap)
+            continue;
+
+        bot->SetSkill(line.skillId, bot->GetSkillStep(line.skillId), cap, std::max<uint16>(cap, trained));
+    }
+}
+
 // A herb/ore node this bot can gather right now: chest-type GO whose lock
 // carries a skill case of the matching type within the bot's skill.
 bool IsGatherableNodeFor(Player* bot, GameObject const* go, int32* outRequiredSkill = nullptr)
@@ -7643,6 +7700,7 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     {
         state.nextWeaponSkillCheckAt = PveClock::now() + std::chrono::seconds(15);
         MaxOutWeaponSkills(bot);
+        MaxOutGatheringSkills(bot);
         DiscardScaffoldingItems(bot);
         DiscardOrphanedQuestItems(bot);
 
