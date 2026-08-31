@@ -975,9 +975,20 @@ void EnsureRoguePoisons(Player* bot)
     stock(BestPoisonForLevel(bot, kWoundPoison));
 }
 
-// Coat the blades: Instant on the mainhand, Deadly on the offhand - the
-// classic pairing. One application per pass, because applying a poison is a
-// real cast and stacking two in a tick just cancels the first.
+// Seal Fate rank 5. Only the highest learned rank of a talent survives in
+// character_spell - lower ranks are superseded away - so simply holding this
+// spell IS five of five, and there are no talent points to count.
+constexpr uint32 kSealFateMaxRank = 14195;
+
+// Coat the blades. Instant on the mainhand and Deadly on the offhand is the
+// classic damage pairing, but it only earns its place once Seal Fate is turning
+// every crit into an extra combo point. Without that, a bot grinding solo gets
+// more out of never letting anything walk away from it: Crippling on both
+// blades, so the slow is reapplied by whichever hand lands next and a runner is
+// caught rather than chased across the zone.
+//
+// One application per pass, because applying a poison is a real cast and
+// stacking two in a tick just cancels the first.
 void ApplyRoguePoisons(Player* bot)
 {
     if (bot->GetClass() != CLASS_ROGUE || !bot->IsAlive() || bot->IsInCombat() ||
@@ -990,9 +1001,12 @@ void ApplyRoguePoisons(Player* bot)
         uint32 itemId;
     };
 
+    bool const hasSealFate = bot->HasSpell(kSealFateMaxRank);
+    uint32 const cripplingId = BestPoisonForLevel(bot, kCripplingPoison);
+
     PoisonAssignment const assignments[] = {
-        { BASE_ATTACK, BestPoisonForLevel(bot, kInstantPoison) },
-        { OFF_ATTACK,  BestPoisonForLevel(bot, kDeadlyPoison) }
+        { BASE_ATTACK, hasSealFate ? BestPoisonForLevel(bot, kInstantPoison) : cripplingId },
+        { OFF_ATTACK,  hasSealFate ? BestPoisonForLevel(bot, kDeadlyPoison)  : cripplingId }
     };
 
     for (PoisonAssignment const& assignment : assignments)
