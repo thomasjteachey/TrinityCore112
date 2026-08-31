@@ -795,6 +795,12 @@ public:
         if (!s_enabled || s_rewardMultiplier < 2)
             return;
 
+        // The aura's own SPELL_AURA_MOD_XP_PCT has already been applied by
+        // KillRewarder before this runs, so the config path is the fallback for
+        // a realm with no War Mode aura, exactly as for gold.
+        if (WarModeAuraProvidesXpBonus(player))
+            return;
+
         // The reward rides the RISK: only while the flag is actually armed,
         // and only for real players - bots level at the normal pace.
         WorldSession const* session = player->GetSession();
@@ -813,6 +819,23 @@ public:
     // SPELL_AURA_MOD_HONOR_GAIN_PCT, which Player::RewardHonor already applies
     // on its own ("AddPct(honor_f, GetMaxPositiveAuraModifier(...))"), so the
     // honor half of this feature is pure data and needs no code at all.
+    // True when the aura is carrying the experience bonus itself. If it is, the
+    // XP hook below must keep its hands off: SPELL_AURA_MOD_XP_PCT is applied
+    // natively by KillRewarder ("xp *= GetTotalAuraMultiplier(...)"), so adding
+    // the config multiplier on top would double-count and pay quadruple.
+    bool WarModeAuraProvidesXpBonus(Player const* player)
+    {
+        if (!s_warModeAuraSpell || !player)
+            return false;
+
+        Aura const* aura = player->GetAura(s_warModeAuraSpell);
+        if (!aura)
+            return false;
+
+        AuraEffect const* effect = aura->GetEffect(EFFECT_0);
+        return effect && effect->GetAuraType() == SPELL_AURA_MOD_XP_PCT && effect->GetAmount() > 0;
+    }
+
     int32 WarModeGoldBonusPct(Player const* player)
     {
         if (!s_warModeAuraSpell || !player)
