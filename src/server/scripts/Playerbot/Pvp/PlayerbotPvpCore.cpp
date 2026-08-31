@@ -203,6 +203,18 @@ bool IsPriestInSpiritOfRedemption(Player const* player)
         return IsPriestInSpiritOfRedemption(player) && IsPriestFlashHealSpell(spellId);
     }
 
+    // The highest rank of a chain the player actually knows, or 0. Spell ids
+    // for later ranks are unrelated numbers, so naming one in code silently
+    // restricts a behaviour to whoever has trained that exact rank.
+    uint32 HighestKnownRankInChain(Player const* player, uint32 firstRankSpellId)
+    {
+        uint32 best = 0;
+        for (uint32 spellId = firstRankSpellId; spellId; spellId = sSpellMgr->GetNextSpellInChain(spellId))
+            if (player->HasSpell(spellId))
+                best = spellId;
+        return best;
+    }
+
     bool IsHunterTrapSpell(uint32 spellId)
     {
         if (!spellId)
@@ -5074,8 +5086,24 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
     bool const trapSetupThreat = HasHostileTarget(player, trapSetupTarget);
     bool const enemyNear = player->IsWithinDistInMap(target, GetConfiguredCloseRange());
     bool const rangedMode = IsHunterInRangedMode(player);
-    uint32 const preferredTrapSpellId = trapSetupTarget && HasDotAura(trapSetupTarget) ? uint32(13809) : uint32(14311);
-    bool const preferredTrapReady = IsSpellReady(player, preferredTrapSpellId);
+    // Freezing Trap at whatever rank this hunter has trained, not rank three.
+    // Naming 14311 restricted the entire behaviour to level fifty and above:
+    // on the live fleet that was one hunter in thirty-five, so the other
+    // thirty-four feigned, found no trap they were allowed to cast, and sat
+    // down to eat instead - which is precisely what it looked like from the
+    // outside.
+    uint32 const freezingTrapSpellId = HighestKnownRankInChain(player, 1499);
+    uint32 const frostTrapSpellId = HighestKnownRankInChain(player, 13809);
+
+    // A damage-over-time effect breaks a Freezing Trap the moment it ticks, so
+    // a dotted target gets Frost Trap instead. Either way fall back to the one
+    // the hunter actually knows rather than casting nothing.
+    uint32 preferredTrapSpellId = trapSetupTarget && HasDotAura(trapSetupTarget)
+        ? frostTrapSpellId : freezingTrapSpellId;
+    if (!preferredTrapSpellId)
+        preferredTrapSpellId = freezingTrapSpellId ? freezingTrapSpellId : frostTrapSpellId;
+
+    bool const preferredTrapReady = preferredTrapSpellId && IsSpellReady(player, preferredTrapSpellId);
     // Traps are only legal out of combat. Feign Death is allowed as a quick
     // defensive/trap-setup attempt, but it must never put hunter movement into a
     // "wait for trap" state. If combat does not actually drop, the next tick
@@ -5087,10 +5115,25 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
     // touched it - pull, play dead, mob walks away, pull again. Bailing out of
     // a creature fight is the PvE manager's business, and it only does it when
     // the fight is actually lost.
+    // Feign the trap opener only against a PERSON. The rule was written as
+    // "not while PvE engaged", but that registry means "the PvE manager has a
+    // target", and the PvE manager engages whatever is being fought - a player
+    // included, since its attacker branch resolves an attacking pet to its
+    // owner and fights the owner. So a hunter attacked by a player was flagged
+    // PvE engaged and the trap opener was suppressed for the whole fight,
+    // leaving only the PvE manager's low-health escape hatch: feign, stand up
+    // out of combat, sit down and eat. Which is exactly what it looked like.
+    //
+    // Asking about the target directly keeps the behaviour the old check was
+    // reaching for - no feigning at creatures, which only sends them home and
+    // restarts the pull - without catching player fights in the same net.
+    bool const trapSetupTargetIsPlayer = trapSetupTarget &&
+        trapSetupTarget->GetTypeId() == TYPEID_PLAYER;
     bool const canFeignUnderPressure = trapSetupThreat && player->IsInCombat() &&
-        !playerbot::PvpCore::IsPveCombatEngaged(player) &&
+        trapSetupTargetIsPlayer &&
         IsSpellReady(player, 5384) && !HasAuraFromSpellChain(player, 5384);
-    bool const canDropTrapNow = trapSetupThreat && !player->IsInCombat() && preferredTrapReady;
+    bool const canDropTrapNow = trapSetupThreat && trapSetupTargetIsPlayer &&
+        !player->IsInCombat() && preferredTrapReady;
 
         bool const targetSnaredOrStunned = target &&
             (target->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) ||
@@ -5102,7 +5145,7 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
     AddDecisionCandidate(candidates, canFeignUnderPressure, 36.0f,
         { "hunter feign death", "drop combat under melee/dead-zone pressure", 5384, playerbot::PvpClassSpellContext::TargetMode::Self, trapSetupTarget ? trapSetupTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, canDropTrapNow, 35.75f,
-        { preferredTrapSpellId == 13809 ? "hunter frost trap" : "hunter freezing trap", "drop trap after feign death setup", preferredTrapSpellId, playerbot::PvpClassSpellContext::TargetMode::Self, trapSetupTarget ? trapSetupTarget->GetGUID() : ObjectGuid::Empty });
+        { preferredTrapSpellId == frostTrapSpellId ? "hunter frost trap" : "hunter freezing trap", "drop trap after feign death setup", preferredTrapSpellId, playerbot::PvpClassSpellContext::TargetMode::Self, trapSetupTarget ? trapSetupTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isSurvivalHunter && IsSpellReady(player, 23989) && !HasAuraFromSpellChain(player, 19263) && !IsSpellReady(player, 19263), 34.0f,
         { "hunter readiness", "reset cooldowns after deterrence has fallen", 23989, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isSurvivalHunter && enemyOnTop && enemyOnTopTarget && player->IsWithinMeleeRange(enemyOnTopTarget) && IsSpellReadyAndCasterAuraAllowed(player, 20910), 34.5f,
