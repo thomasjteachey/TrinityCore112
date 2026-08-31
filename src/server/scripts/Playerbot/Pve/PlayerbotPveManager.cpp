@@ -6582,25 +6582,35 @@ void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
     // rather than fighting: one correction and the loop is broken.
     bool const hunterHoldsRange = DriveHunterRangedPositioning(bot, victim, !casting);
 
-    // A hunter that is equipped to shoot must never be given a one-yard chase.
-    // DriveHunterRangedPositioning declines on any tick it cannot move the bot
-    // (mid-cast, most often), and a chase issued on one of those ticks outlives
-    // it: the generator keeps closing the distance long after the hunter wanted
-    // to hold, which is how one Mongoose Bite turned into a whole fight spent in
-    // melee. Fall back to the firing line instead of the target's face.
-    if (!hunterHoldsRange && mayIssueChase && !bot->IsWithinMeleeRange(victim))
+    // The hunter rule, plainly:
+    //
+    //   the mob is on the HUNTER        -> close and melee it
+    //   the pet or anything else has it -> hold a firing line and shoot
+    //
+    // DriveHunterRangedPositioning above owns the second case and declines the
+    // first, which is why the first is handled here.
+    bool const standAndFight = victim->GetVictim() == bot;
+
+    if (standAndFight)
     {
-        // A hunter that is BEING ATTACKED stands and fights, so it has to close -
-        // holding a firing line here is what made a level 6 hunter walk away
-        // from a plainstrider already hitting it. DriveHunterRangedPositioning
-        // declines for exactly that case, which dropped through to this chase,
-        // and a 12 yard follow generator then saw the bot at 3.8 yards, inside
-        // its band, and dutifully backed it out. From outside that is a hunter
-        // fleeing a mob it should be meleeing.
+        // Closing must NOT wait for a tick where the engine happened to do
+        // nothing. In combat the engine acts on nearly every tick, so gating
+        // this on engineActedThisTick meant no order was ever issued - and a
+        // stale twelve yard follow generator from the ranged case then held the
+        // hunter at range while the mob chewed on it. That is a level 6 hunter
+        // walking away from the plainstrider hitting it.
         //
-        // Only hold the firing line when the pet or someone else has the mob.
-        bool const standAndFight = victim->GetVictim() == bot;
-        float const chaseDistance = (!standAndFight && BotShouldHoldRangedFiringLine(bot)) ? 12.0f : 1.0f;
+        // Still not mid-cast: walking cancels the cast, and the next tick would
+        // simply re-issue this.
+        if (!casting && !bot->IsWithinMeleeRange(victim))
+            playerbot::PvpClassActions::IssueFollowMovement(bot, victim, 1.0f);
+    }
+    else if (!hunterHoldsRange && mayIssueChase && !bot->IsWithinMeleeRange(victim))
+    {
+        // Something else is holding the mob, so a hunter equipped to shoot
+        // keeps its distance instead of walking into the target's face. Anyone
+        // who cannot shoot still closes.
+        float const chaseDistance = BotShouldHoldRangedFiringLine(bot) ? 12.0f : 1.0f;
         playerbot::PvpClassActions::IssueFollowMovement(bot, victim, chaseDistance);
     }
 
