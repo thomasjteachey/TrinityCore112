@@ -6921,7 +6921,14 @@ void RunDeathRecovery(Player* bot, PveBotState& state, playerbot::PveConfig cons
 // rather than through a grid search - it is a pass over a handful of records.
 bool TryClaimNearbyDeathChest(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
 {
-    if (!cfg.hardcoreLootChestEntry || !bot->IsAlive() || bot->IsInCombat() || state.engaged)
+    // Combat is judged by the CORE's flag, not the bot's own engaged bookkeeping.
+    // state.engaged is set by the decision layer and can outlive the fight that
+    // set it - a GM .die on an engaged bot, a victim despawning, a target going
+    // invalid - and a stale true there would lock a bot out of every chest it
+    // ever walks past, permanently and silently. IsInCombat cannot go stale that
+    // way. If engaged is set but the bot is not actually in combat, taking the
+    // chest is the better answer anyway.
+    if (!cfg.hardcoreLootChestEntry || !bot->IsAlive() || bot->IsInCombat())
         return false;
 
     if (!state.masterGuid.IsEmpty() || !state.pendingLootGuid.IsEmpty())
