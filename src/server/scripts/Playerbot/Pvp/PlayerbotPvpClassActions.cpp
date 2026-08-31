@@ -895,7 +895,12 @@ bool IssueThrottledFollowMovement(Player* player, Unit* target, float desiredDis
     {
         SetLastMovementDebugStatus(player, preserveDiag);
         state.targetGuid = target->GetGUID();
-        state.range = safeDistance;
+        // Deliberately NOT state.range = safeDistance. Preserving means no
+        // MoveFollow was issued, so writing the new range here would record a
+        // change that never happened - and rangeChanged, which is the only
+        // thing that would ever reissue it, is computed from this field. One
+        // preserved tick during a range change used to erase that change
+        // permanently.
         return true;
     }
 
@@ -1033,6 +1038,29 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
     bool const sameTarget = state.targetGuid == target->GetGUID();
     if (!sameTarget)
         return false;
+
+    // The order must still ask for the range we want NOW. Preserving one that
+    // does not is how a bot ends up walking AWAY from a target it is standing
+    // next to: an order issued at thirty yards keeps a bot that has since
+    // decided it wants melee marching to its stale follow slot, and every gate
+    // below waves it through - it is moving, so madePositionProgress holds the
+    // preserve open, and it is inside desiredRange+4, so the far-from-range
+    // failsafe never fires. Nothing else in this function reads the range the
+    // order was actually issued with, so the mismatch is invisible until a
+    // human notices a bot running in circles around a level 12 boar.
+    if (desiredRange > 0.0f && state.issuedRange > 0.0f &&
+        std::fabs(state.issuedRange - desiredRange) > 1.0f)
+    {
+        if (reasonOut)
+        {
+            std::ostringstream diag;
+            diag << (label ? label : "target_relative_motion_not_preserved")
+                 << " reason=range_mismatch issued_range=" << state.issuedRange
+                 << " desired_range=" << desiredRange;
+            *reasonOut = diag.str();
+        }
+        return false;
+    }
 
     uint32 const nowMs = GameTime::GetGameTimeMS();
     uint32 const ageMs = state.lastIssueMs != 0 && nowMs >= state.lastIssueMs ? nowMs - state.lastIssueMs : 0;
