@@ -258,19 +258,40 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
 
     TC_LOG_DEBUG("network", "Minlvl {}, maxlvl {}, name {}, guild {}, racemask {}, classmask {}, zones {}, strings {}", levelMin, levelMax, packetPlayerName, packetGuildName, racemask, classmask, zonesCount, strCount);
 
+    // A search term that means "people only". There is no way to express NOT in
+    // the /who protocol and no spare permission to hang a new command off, but
+    // a reserved word costs nothing and uses the window the player already has:
+    // /who humans. It is consumed here rather than passed on, so it never also
+    // tries to match a name, guild or zone.
+    std::string const humanOnlyKeyword =
+        sConfigMgr->GetStringDefault("Playerbot.WhoHumanKeyword", "humans");
+    bool humansOnly = false;
+
     std::wstring str[4];                                    // 4 is client limit
+    uint32 keptStrings = 0;
     for (uint32 i = 0; i < strCount; ++i)
     {
         std::string temp;
         recvData >> temp;                                   // user entered string, it used as universal search pattern(guild+player name)?
 
-        if (!Utf8toWStr(temp, str[i]))
+        if (!humanOnlyKeyword.empty() && temp.size() == humanOnlyKeyword.size() &&
+            std::equal(temp.begin(), temp.end(), humanOnlyKeyword.begin(),
+                [](unsigned char left, unsigned char right)
+                { return std::tolower(left) == std::tolower(right); }))
+        {
+            humansOnly = true;
+            continue;
+        }
+
+        if (!Utf8toWStr(temp, str[keptStrings]))
             continue;
 
-        wstrToLower(str[i]);
+        wstrToLower(str[keptStrings]);
+        ++keptStrings;
 
         TC_LOG_DEBUG("network", "String {}: {}", i, temp);
     }
+    strCount = keptStrings;
 
     std::wstring wpacketPlayerName;
     std::wstring wpacketGuildName;
@@ -317,11 +338,13 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
     // the one gesture that answers "is anybody actually playing", useless. Two
     // passes over the same filter cost nothing at /who frequency and guarantee
     // no bot ever takes a slot a person could have had.
-    uint32 const passCount = showPlayerbots ? 2u : 1u;
+    uint32 const passCount = (showPlayerbots && !humansOnly) ? 2u : 1u;
     for (uint32 pass = 0; pass < passCount; ++pass)
     for (WhoListPlayerInfo const& target : whoList)
     {
         bool const targetIsBot = playerbotGuids.count(target.GetGuid().GetRawValue()) != 0;
+        if (humansOnly && targetIsBot)
+            continue;
         if (targetIsBot != (pass == 1))
             continue;
 

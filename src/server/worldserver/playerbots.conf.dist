@@ -827,6 +827,19 @@ Playerbot.WhoListVisibility = 1
 
 Playerbot.WhoListTag = "<Bot>"
 
+#    Playerbot.WhoHumanKeyword
+#        Description: Type this as a /who search term to list ONLY real players - "/who humans"
+#                     by default. The term is consumed, so it never also tries to match a name,
+#                     guild or zone, and it combines with the rest of the window: "/who humans"
+#                     with a level range or zone filter still applies those.
+#                     There is no way to express NOT in the /who protocol and no command
+#                     permission an ordinary player holds, so a reserved word is how this is
+#                     offered without an addon.
+#                     Empty disables it.
+#        Default:     humans
+
+Playerbot.WhoHumanKeyword = "humans"
+
 #
 #    Playerbot.Pve.ZoneGuardians.EscalateAfterMinutes
 #        Description: Minutes a guardian may go without fighting an actual player before
