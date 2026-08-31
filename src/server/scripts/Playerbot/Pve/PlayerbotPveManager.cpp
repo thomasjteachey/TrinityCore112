@@ -358,6 +358,7 @@ void ForEachBagItem(Player* bot, Fn&& fn);
 bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTemplate const* incumbent, uint8 slot);
 float ScoreItemForSpec(Player const* bot, ItemTemplate const* proto);
 GameObject* FindRegisteredDeathChest(Player* bot, uint32 entry, float maxDistance);
+bool ZoneSuitsBotLevel(Player const* bot, uint32 zoneId);
 bool IsAuctionableSurplus(Player* bot, Item* item);
 uint32 RequiredAmmoSubclass(Player const* bot);
 void MoveTowardThrottled(Player* bot, Position const& destination);
@@ -1825,36 +1826,63 @@ uint32 AggressionIdleMinutes(Player const* bot, playerbot::PveConfig const& cfg)
 
 // Any player at all, wherever they are. Used by guardians, which travel by
 // teleport and so are not restricted to their own map.
-bool PickAnyHumanSpot(HumanSpot& out, uint32 preferredZoneId = 0)
+// Somebody this bot could plausibly have run into anyway.
+//
+// An aggressive bot travels to find a fight, but it must not turn up somewhere
+// it had no business being: a level 12 appearing in Ashenvale to swing at a
+// level 55 is not a bolder bot, it is a broken one. The grind-spot cache
+// already knows which zones suit a given level, so the destination is filtered
+// by the same data that decides where the bot would grind - and if nobody is
+// standing anywhere it belongs, it simply does not go.
+bool PickHumanSpotForBot(Player const* bot, HumanSpot& out)
 {
-    std::lock_guard<std::mutex> guard(g_HumanSpotLock);
-    if (g_HumanSpots.empty())
-        return false;
-
-    // A zone guardian answers for its own zone first: somebody fighting in
-    // Ashenvale is the Ashenvale guardian's business, and crossing the world
-    // for a stranger while its own zone is occupied is not. Only when nobody is
-    // in its zone does it range further, which is what stops a guardian sitting
-    // idle on an empty hillside.
-    if (preferredZoneId)
+    std::vector<HumanSpot> candidates;
     {
-        std::vector<HumanSpot const*> inZone;
-        for (HumanSpot const& spot : g_HumanSpots)
-            if (spot.ZoneId == preferredZoneId)
-                inZone.push_back(&spot);
-
-        if (!inZone.empty())
-        {
-            out = *inZone[urand(0, uint32(inZone.size()) - 1)];
-            return true;
-        }
+        std::lock_guard<std::mutex> guard(g_HumanSpotLock);
+        candidates = g_HumanSpots;
     }
 
-    out = g_HumanSpots[urand(0, uint32(g_HumanSpots.size()) - 1)];
+    std::vector<HumanSpot const*> suitable;
+    for (HumanSpot const& spot : candidates)
+        if (ZoneSuitsBotLevel(bot, spot.ZoneId))
+            suitable.push_back(&spot);
+
+    if (suitable.empty())
+        return false;
+
+    out = *suitable[urand(0, uint32(suitable.size()) - 1)];
     return true;
 }
 
-bool FindNearestHumanSpot(uint32 mapId, float x, float y, float z, HumanSpot& out, float& outDistance)
+// Somebody in this exact zone, or nobody. A zone guardian NEVER leaves its
+// zone to hunt: it is the guardian OF that ground, and one that abandons
+// Ashenvale to fight in Orgrimmar is not guarding anything. When its zone is
+// empty it simply holds, which is the correct answer for a guardian - the
+// roaming is the ordinary bots' job.
+bool PickHumanSpotInZone(uint32 zoneId, HumanSpot& out)
+{
+    if (!zoneId)
+        return false;
+
+    std::lock_guard<std::mutex> guard(g_HumanSpotLock);
+
+    std::vector<HumanSpot const*> inZone;
+    for (HumanSpot const& spot : g_HumanSpots)
+        if (spot.ZoneId == zoneId)
+            inZone.push_back(&spot);
+
+    if (inZone.empty())
+        return false;
+
+    out = *inZone[urand(0, uint32(inZone.size()) - 1)];
+    return true;
+}
+
+// zoneFilter 0 means "anywhere on this map"; a zone guardian passes its own
+// zone so that every question it asks about players is scoped to the ground it
+// is responsible for.
+bool FindNearestHumanSpot(uint32 mapId, float x, float y, float z, HumanSpot& out, float& outDistance,
+    uint32 zoneFilter = 0)
 {
     std::lock_guard<std::mutex> guard(g_HumanSpotLock);
 
@@ -1863,6 +1891,9 @@ bool FindNearestHumanSpot(uint32 mapId, float x, float y, float z, HumanSpot& ou
     for (HumanSpot const& spot : g_HumanSpots)
     {
         if (spot.MapId != mapId)
+            continue;
+
+        if (zoneFilter && spot.ZoneId != zoneFilter)
             continue;
 
         float const dx = spot.X - x;
@@ -4486,8 +4517,8 @@ void MaybeHuntPlayersByAggression(Player* bot, PveBotState& state, playerbot::Pv
         return;
 
     HumanSpot destination;
-    if (!PickAnyHumanSpot(destination))
-        return;   // nobody online to go to
+    if (!PickHumanSpotForBot(bot, destination))
+        return;   // nobody online standing anywhere this bot belongs
 
     // Count the trip as its fight for this cycle, so a bot that travels and
     // finds nothing does not re-port every minute afterwards.
@@ -4627,7 +4658,7 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
     float humanDistance = 0.0f;
     bool const haveHuman = cfg.guardianPlayerApproachYards > 0.0f &&
         FindNearestHumanSpot(bot->GetMapId(), bot->GetPositionX(), bot->GetPositionY(),
-            bot->GetPositionZ(), nearestHuman, humanDistance);
+            bot->GetPositionZ(), nearestHuman, humanDistance, zone.zoneId);
     bool const nearAHuman = haveHuman && humanDistance <= cfg.guardianPlayerApproachYards;
 
     // A guardian with nobody near it goes to somebody. Walking when that is
@@ -4677,10 +4708,11 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
             StartWalkedJourney(state, bot->GetMapId(), nearestHuman.X, nearestHuman.Y,
                 nearestHuman.Z, 0, humanDistance);
         }
-        else if (HumanSpot destination; PickAnyHumanSpot(destination, zone.zoneId))
+        else if (HumanSpot destination; PickHumanSpotInZone(zone.zoneId, destination))
         {
-            // Beyond 240 yards, or on another map entirely. Its own zone first,
-            // then anybody anywhere - an idle guardian is the thing to avoid.
+            // Beyond 240 yards but still inside its own zone - a large zone is
+            // easily wider than that. Nobody in the zone means no teleport at
+            // all: a guardian holds its ground rather than abandoning it.
             if (hungryMinutes > 0)
                 TC_LOG_INFO("playerbots.pve", "Guardian {} has had no player fight for {}m; closing to {:.0f}y.",
                     bot->GetName(), idleMinutes, dropDistance);
@@ -4867,6 +4899,27 @@ void BuildGrindSpotCacheOnce()
 // it "suits" a level 13 - who then spends its time being jumped by level 6s
 // it cannot even choose to fight. What matters is not whether the zone has
 // ANY cluster at the bot's level, but whether it has enough of them.
+// Would this bot ever have been in that zone under its own steam? True when
+// the zone holds grind clusters for the bot's own level band, which is exactly
+// the data the grind loop uses to place it.
+bool ZoneSuitsBotLevel(Player const* bot, uint32 zoneId)
+{
+    if (!bot || !zoneId)
+        return false;
+
+    std::lock_guard<std::mutex> guard(g_GrindSpotLock);
+
+    auto levelItr = g_GrindSpotsByLevel.find(uint8(std::min<uint32>(bot->GetLevel(), 80)));
+    if (levelItr == g_GrindSpotsByLevel.end())
+        return false;
+
+    for (GrindSpot const& spot : levelItr->second)
+        if (spot.zoneId == zoneId)
+            return true;
+
+    return false;
+}
+
 bool BotIsInSuitableZone(Player* bot)
 {
     uint32 const zoneId = bot->GetZoneId();
