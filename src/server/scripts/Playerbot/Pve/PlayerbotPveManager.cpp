@@ -28,6 +28,7 @@
 #include "CellImpl.h"
 #include "CharacterCache.h"
 #include "Common.h"
+#include <limits>
 #include <atomic>
 
 #include "Containers.h"
@@ -5618,16 +5619,22 @@ uint64 VendorPriceFloor(ItemTemplate const* proto, uint32 count)
     return uint64(double(proto->SellPrice) * double(count) * double(factor));
 }
 
-uint32 ComputeAuctionBuyout(ItemTemplate const* proto, uint32 count,
-    std::unordered_map<uint32, uint32> const& cheapestPerUnit, uint32* outMarketPrice = nullptr)
+// What the thing is worth, by the same reckoning the auction house stocker
+// uses (AuctionBotSeller::SetPricesOfItem):
+//   vendor buy price, or failing that the sell price times a per-class
+//   modifier, or failing THAT a value derived from item level and quality -
+//   level squared times quality times a per-subclass modifier.
+// The last branch is what prices anything a vendor never handles; without it a
+// bot would post a raid drop for one copper.
+//
+// This is deliberately free of the seller's price multiplier: it is the item's
+// face value, which the seller marks UP and the buyer caps against. Sharing one
+// definition is the point - a buy ceiling reckoned differently from the sell
+// price would eventually drift into refusing every listing bots themselves post.
+//
+// The figure covers proto->BuyCount units, exactly as a vendor's price does.
+double ComputeItemFaceValue(ItemTemplate const* proto)
 {
-    // What the thing is worth, by the same reckoning the auction house
-    // stocker uses (AuctionBotSeller::SetPricesOfItem):
-    //   vendor buy price, or failing that the sell price times a per-class
-    //   modifier, or failing THAT a value derived from item level and
-    //   quality - level squared times quality times a per-subclass modifier.
-    // The last branch is what prices anything a vendor never handles; without
-    // it a bot would post a raid drop for one copper.
     double value = double(proto->BuyPrice);
     if (value <= 0.0)
     {
@@ -5641,6 +5648,35 @@ uint32 ComputeAuctionBuyout(ItemTemplate const* proto, uint32 count,
             value = level * quality * double(AuctionBotSeller::GetBuyModifier(proto)) * level / divisor;
         }
     }
+
+    return value;
+}
+
+// The most a bot will pay for a lot before it decides it is being fleeced.
+// Zero means no ceiling. Returns copper for the whole lot, so it is directly
+// comparable with AuctionEntry::buyout.
+uint64 ComputeMaxAcceptablePrice(ItemTemplate const* proto, uint32 itemCount)
+{
+    uint32 const overpayPct = playerbot::PveManager::GetConfig().auctionBuyMaxOverpayPct;
+    if (!overpayPct)
+        return std::numeric_limits<uint64>::max();
+
+    double const face = ComputeItemFaceValue(proto);
+    if (face <= 0.0)
+        return std::numeric_limits<uint64>::max();   // unpriceable: fall back to the purse
+
+    // Face value covers BuyCount units; scale it to the size of this lot, the
+    // same conversion the seller does in the other direction.
+    uint32 const buyCount = std::max<uint32>(1, proto->BuyCount);
+    double const lotFace = face * double(std::max<uint32>(1, itemCount)) / double(buyCount);
+
+    return uint64(std::max(1.0, lotFace * double(overpayPct) / 100.0));
+}
+
+uint32 ComputeAuctionBuyout(ItemTemplate const* proto, uint32 count,
+    std::unordered_map<uint32, uint32> const& cheapestPerUnit, uint32* outMarketPrice = nullptr)
+{
+    double value = ComputeItemFaceValue(proto);
 
     auto itr = cheapestPerUnit.find(proto->ItemId);
     bool const alreadyOnTheHouse = itr != cheapestPerUnit.end() && itr->second != 0;
@@ -5945,6 +5981,15 @@ void ProcessPendingAuctionShopping()
 
             ItemTemplate const* proto = item->GetTemplate();
             if (!proto)
+                continue;
+
+            // Affordable is not the same as worth it. Ranking is by item-level
+            // gain alone, so without this a bot with a deep purse will pay any
+            // sum at all for a one-point upgrade - a player who lists a trinket
+            // for six hundred gold gets six hundred gold. Cap the price against
+            // what the item is actually worth, by the same reckoning the bots
+            // price their own listings with.
+            if (auction->buyout > ComputeMaxAcceptablePrice(proto, auction->itemCount))
                 continue;
 
             // Bags and quivers are shopped for exactly like gear. The scorer
@@ -8255,6 +8300,7 @@ void PveManager::LoadConfig()
     g_PveConfig.auctionBuyEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.AuctionBuy.Enable", false);
     g_PveConfig.auctionSellEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.AuctionSell.Enable", false);
     g_PveConfig.auctionBuyBudgetPct = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionBuy.BudgetPct", 30), 1, 100));
+    g_PveConfig.auctionBuyMaxOverpayPct = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionBuy.MaxOverpayPct", 1200)));
     g_PveConfig.professionsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Professions.Enable", false);
     g_PveConfig.relocateEnabled = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.Relocate.Enable", true);
     g_PveConfig.relocateDryWanders = uint32(std::clamp(
