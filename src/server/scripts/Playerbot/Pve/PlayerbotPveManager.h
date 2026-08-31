@@ -104,9 +104,9 @@ struct PveConfig
     bool rebirthZoneBanded = true;
     // Guild every managed bot is put into. Empty disables it.
     std::string guildName = "AI Uprising";
-    // How many bots skip the zone cycle, climb to the cap and stay there.
-    uint32 endgameBotCount = 20;
-    // The configured fleet size, so endgameBotCount can be a real count.
+    // Veterans: how many bots skip the zone cycle, climb to the cap and stay.
+    uint32 veteranBotCount = 20;
+    // The configured fleet size, so veteranBotCount can be a real count.
     uint32 populationTarget = 256;
     // Characters sitting on the PvP-only accounts, counted at config load.
     uint32 pvpOnlyBotCount = 0;

@@ -4454,6 +4454,9 @@ ClassicZoneBand const* FindClassicZoneBand(uint32 zoneId)
 // character is expected to be in, so a bot reborn into one starts at level 1.
 constexpr uint8 kStarterZoneTopLevel = 10;
 
+// Zones opening at or above this are left to the veterans rather than banded.
+constexpr uint8 kVeteranBandMinLevel = 55;
+
 
 // Classic zone level caps.
 constexpr std::array<GuardianZone, 38> kGuardianZones = { {
@@ -5031,6 +5034,14 @@ void BuildGrindSpotCacheOnce()
     // somewhere with nothing to kill.
     for (ClassicZoneBand const& band : kClassicZoneBands)
     {
+        // The top of the chart is not banded. A zone that only opens at
+        // fifty-five is five levels from the cap, and the veterans - who make
+        // the whole climb once and then stay at sixty - already live up there.
+        // Handing those zones to cycling bots as well would put two populations
+        // in the same content while the zones below went short.
+        if (band.minLevel >= kVeteranBandMinLevel)
+            continue;
+
         AreaTableEntry const* zoneEntry = sAreaTableStore.LookupEntry(band.zoneId);
         if (!zoneEntry || !std::binary_search(g_PveConfig.relocateMaps.begin(),
                 g_PveConfig.relocateMaps.end(), zoneEntry->ContinentID))
@@ -8792,7 +8803,7 @@ void PveManager::LoadConfig()
         sConfigMgr->GetIntDefault("Playerbot.Pve.RebirthAtMaxLevel.Percent", 0), 0, 100));
     g_PveConfig.rebirthZoneBanded = sConfigMgr->GetBoolDefault("Playerbot.Pve.Rebirth.ZoneBanded", true);
     g_PveConfig.guildName = sConfigMgr->GetStringDefault("Playerbot.Pve.GuildName", "AI Uprising");
-    g_PveConfig.endgameBotCount = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.Rebirth.EndgameBots", 20)));
+    g_PveConfig.veteranBotCount = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.Rebirth.Veterans", 20)));
     // Read from the population manager's own target so a count means what it says.
     g_PveConfig.populationTarget = uint32(std::max(1, sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.TargetMax", 256)));
     g_PveConfig.declineGroupInvites = sConfigMgr->GetBoolDefault("Playerbot.Pve.DeclineGroupInvites", false);
@@ -8842,7 +8853,7 @@ PveConfig const& PveManager::GetConfig()
 
 void ResetManagedBotToLevelOne(Player* bot);
 void ResetManagedBotToZoneBand(Player* bot, uint32 zoneId, uint8 bottomLevel);
-bool IsEndgameBot(Player const* bot);
+bool IsVeteranBot(Player const* bot);
 bool GetZoneLevelBand(uint32 zoneId, uint8& bottom, uint8& top);
 
 void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
@@ -9281,11 +9292,11 @@ void PveManager::OnManagedBotLevelChanged(Player* player, uint8 /*oldLevel*/)
 
     // Zone-banded is the normal life of a bot now: it cycles inside the zone it
     // was born to, so every band of content keeps a population. The exceptions
-    // are the endgame handful, who make the full climb and stay at sixty.
+    // are the veterans, who make the full climb and stay at sixty.
     // Turning the flag off restores the old all-or-nothing behaviour, where a
     // configured share of the fleet resets to level one at the cap.
     bool const rebirthFlagged = g_PveConfig.rebirthZoneBanded
-        ? (rebirthEligible && !IsEndgameBot(player))
+        ? (rebirthEligible && !IsVeteranBot(player))
         : (rebirthEligible && g_PveConfig.rebirthAtMaxLevelPercent &&
            uint32(player->GetGUID().GetCounter() % 100) < g_PveConfig.rebirthAtMaxLevelPercent);
 
@@ -9333,24 +9344,24 @@ void PveManager::OnManagedBotLevelChanged(Player* player, uint8 /*oldLevel*/)
 // Full rebirth of ONE managed bot: strip it back to a freshly created
 // level-1 character - gear, bags, bank, money, spells, talents, quests,
 // pet - and port it to its racial starting spot. World thread only.
-// The handful of bots that make the whole journey to sixty and stay there, so
-// the realm still has an endgame population. Asked for as a COUNT and turned
+// The veterans: the handful of bots that make the whole journey to sixty and
+// stay there, so the realm still has a population at the top of the chart. Asked for as a COUNT and turned
 // into a share of the configured fleet, so the operator says "twenty" and gets
 // roughly twenty however the population is sized.
 //
 // Chosen by hashing the guid rather than by ranking a roster: there is no
 // stable roster to rank against - the fleet is whoever happens to be logged in
 // - and a hash keeps a bot's role fixed for its entire life, which is the point.
-bool IsEndgameBot(Player const* bot)
+bool IsVeteranBot(Player const* bot)
 {
-    uint32 const endgame = g_PveConfig.endgameBotCount;
-    if (!endgame)
+    uint32 const veterans = g_PveConfig.veteranBotCount;
+    if (!veterans)
         return false;
 
     // Drawn from the bots that actually cycle, not the whole fleet. Zone
     // guardians already sit at their zone's cap forever and the PvP-only
     // accounts are level sixty by definition; neither was ever a rebirth
-    // candidate, so counting them here meant a share of the endgame slots
+    // candidate, so counting them here meant a share of the veteran slots
     // landed on bots that could not use them and the real number came out
     // well under what was asked for.
     uint32 const reserved = g_PveConfig.zoneGuardiansPerZone * uint32(kGuardianZones.size()) +
@@ -9359,14 +9370,14 @@ bool IsEndgameBot(Player const* bot)
         ? g_PveConfig.populationTarget - reserved
         : g_PveConfig.populationTarget;
 
-    uint32 const fleet = std::max<uint32>(endgame, pool);
+    uint32 const fleet = std::max<uint32>(veterans, pool);
 
     uint64 value = bot->GetGUID().GetRawValue() + 0x9E3779B97F4A7C15ull;
     value = (value ^ (value >> 30)) * 0xBF58476D1CE4E5B9ull;
     value = (value ^ (value >> 27)) * 0x94D049BB133111EBull;
     value ^= value >> 31;
 
-    return uint32(value % fleet) < endgame;
+    return uint32(value % fleet) < veterans;
 }
 
 bool GetZoneLevelBand(uint32 zoneId, uint8& bottom, uint8& top)

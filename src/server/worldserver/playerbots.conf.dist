@@ -658,16 +658,19 @@ Playerbot.Pve.RebirthAtMaxLevel.Percent = 0
 
 Playerbot.Pve.Rebirth.ZoneBanded = 1
 
-#    Playerbot.Pve.Rebirth.EndgameBots
-#        Description: How many bots skip the zone cycle entirely, make the full climb to the
-#                     level cap and stay there, so the realm keeps an endgame population.
+#    Playerbot.Pve.Rebirth.Veterans
+#        Description: Veterans are the bots that skip the zone cycle entirely, make the full
+#                     climb to the level cap and stay there. Everything from level 55 up is
+#                     left to them - Winterspring, Deadwind Pass and Silithus are not handed
+#                     to banded bots, since the veterans already live in that content and two
+#                     populations in the same zones would starve the ones below.
 #                     This is a COUNT, not a share. It is drawn only from bots that actually
 #                     cycle: zone guardians already sit at their zone's cap forever, and the
 #                     PvP-only accounts are at the cap by definition, so both are excluded from
 #                     the pool rather than counted against this number.
 #        Default:     20
 
-Playerbot.Pve.Rebirth.EndgameBots = 20
+Playerbot.Pve.Rebirth.Veterans = 20
 
 #    Playerbot.Pve.GuildName
 #        Description: Guild every managed playerbot is put into. It is created around the first
