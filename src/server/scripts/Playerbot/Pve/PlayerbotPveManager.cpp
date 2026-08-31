@@ -139,6 +139,11 @@ struct PveBotState
     // nobody around.
     PveTimePoint timidUntil{};
     bool fleeingFromPlayers = false;
+    // Stamped only while the bot is actually swinging at a person. Kept apart
+    // from lastPlayerFightAt, which doubles as the hunt schedule and is also
+    // written by the login seed and by the hunt trip - reading defeat
+    // attribution off that field marks bots timid for dying to a boar.
+    PveTimePoint lastHumanSwingAt{};
     ObjectGuid pendingLootGuid;
     PveTimePoint pendingLootUntil{};
     ObjectGuid errandGuid;
@@ -4476,10 +4481,8 @@ void MaybeHuntPlayersByAggression(Player* bot, PveBotState& state, playerbot::Pv
     if (state.lastPlayerFightAt == PveTimePoint())
         state.lastPlayerFightAt = now;
 
-    if (Unit* currentVictim = bot->GetVictim())
-        if (Player const* victimPlayer = currentVictim->ToPlayer())
-            if (!playerbot::IsManagedRandomBot(victimPlayer))
-                state.lastPlayerFightAt = now;
+    // (The victim stamp that used to sit here was unreachable - the guard
+    // above returns whenever the bot is in combat. RunSlowTick does it now.)
 
     int64 const idleMinutes = std::chrono::duration_cast<std::chrono::minutes>(
         now - state.lastPlayerFightAt).count();
@@ -6466,6 +6469,16 @@ void ProcessPendingGrindRelocations()
 
     for (uint64 botRawGuid : drained)
     {
+        // Consumed up front so it cannot outlive the request that set it: every
+        // path below may skip this bot, and a flag left set would follow it
+        // into some later, unrelated relocation.
+        bool fleeing = false;
+        {
+            PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+            fleeing = state.fleeingFromPlayers;
+            state.fleeingFromPlayers = false;
+        }
+
         Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid));
         if (!bot || !bot->IsInWorld() || !bot->IsAlive() || bot->InBattleground() ||
             bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
@@ -6512,15 +6525,6 @@ void ProcessPendingGrindRelocations()
 
         if (candidates.empty())
             continue;
-
-        // A bot that just lost a fight wants somewhere quiet, not merely
-        // somewhere else. Consumed here so one defeat buys one relocation.
-        bool fleeing = false;
-        {
-            PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
-            fleeing = state.fleeingFromPlayers;
-            state.fleeingFromPlayers = false;
-        }
 
         if (fleeing && g_PveConfig.timidFleeYards > 0.0f)
         {
@@ -6589,8 +6593,16 @@ void ProcessPendingGrindRelocations()
             if (TryTaxiTravel(bot, botRawGuid, spot.mapId, spot.x, spot.y, spot.z, 1))
                 break;
 
-            if (humanNearby)
-                break;
+            // Somebody is watching, so a teleport would be seen - normally reason
+            // enough to give up. But a bot that just lost a fight is very likely
+            // standing next to whoever killed it, which is exactly when leaving
+            // matters most; being seen to vanish is a smaller sin than being
+            // farmed at a graveyard.
+            // Either way keep drawing rather than breaking: the candidate may
+            // simply have been out of walking range, and abandoning the whole
+            // retreat after one unlucky draw is how the camped case kept failing.
+            if (humanNearby && !fleeing)
+                continue;
 
             Map* map = sMapMgr->FindMap(spot.mapId, 0);
             if (!map)
@@ -7365,8 +7377,8 @@ void MarkTimidAfterPlayerDefeat(Player* bot, PveBotState& state,
     // the bot is swinging at a human, so a recent stamp means this death ended
     // a fight with one. Proximity alone would not do: a bystander watching the
     // bot lose to a mob would read as a defeat at their hands.
-    if (state.lastPlayerFightAt == PveTimePoint() ||
-        now - state.lastPlayerFightAt > std::chrono::seconds(60))
+    if (state.lastHumanSwingAt == PveTimePoint() ||
+        now - state.lastHumanSwingAt > std::chrono::seconds(60))
         return;
 
     uint8 const aggression = GetBotAggression(bot);
@@ -7459,8 +7471,14 @@ void RunDeathRecovery(Player* bot, PveBotState& state, playerbot::PveConfig cons
     // it (the errand scan loots death chests inside 200y). First death only:
     // on a repeat the loop breaker below relocates away instead, abandoning
     // the chest the way a player abandons a camped corpse.
-    if (cfg.hardcoreLootChestEntry && state.recentDeathCount < 2 && !state.fleeingFromPlayers &&
-        state.masterGuid.IsEmpty() &&
+    // Gated on timidity rather than the flee flag: that flag is a request for
+    // one relocation and is dropped unprocessed whenever the bot is in a
+    // battleground, mid-teleport or has no candidate spot - and if relocation
+    // is disabled realm-wide it is never cleared at all, which would disable
+    // the corpse run permanently on the first such death. timidUntil expires
+    // by itself.
+    if (cfg.hardcoreLootChestEntry && state.recentDeathCount < 2 &&
+        PveClock::now() >= state.timidUntil && state.masterGuid.IsEmpty() &&
         state.deathSpotMapId == bot->GetMapId() && state.deathSpotAt != PveTimePoint())
     {
         // Only while the chest could still be standing there: it despawns on
@@ -7589,6 +7607,21 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     RunDeathRecovery(bot, state, cfg);
     if (!bot->IsAlive())
         return;
+
+    // Defeat attribution has to be stamped from somewhere that runs WHILE the
+    // bot is fighting. MaybeHuntPlayersByAggression looks like the natural
+    // home and is not: it returns on IsInCombat/engaged long before its own
+    // victim check, so that stamp can never fire during the fight it is meant
+    // to record. This tick has no such gate.
+    if (Unit* victim = bot->GetVictim())
+        if (Player const* victimPlayer = victim->ToPlayer())
+            if (!playerbot::IsManagedRandomBot(victimPlayer))
+            {
+                state.lastHumanSwingAt = PveClock::now();
+                // The hunt clock wants this too, and for the same reason was
+                // never actually being reset by fighting a person.
+                state.lastPlayerFightAt = state.lastHumanSwingAt;
+            }
 
     EnsureFirstLoginKit(bot, state, cfg);
 
@@ -8014,6 +8047,7 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     // kills, which in a busy zone is almost never - it holds the zone, so
     // the zone's visitors come first.
     if (target && target->GetTypeId() != TYPEID_PLAYER && state.masterGuid.IsEmpty() &&
+        PveClock::now() >= state.timidUntil &&
         GetGuardianZoneId(bot->GetGUID().GetRawValue()))
     {
         if (Player* intruder = PickHuntTarget(bot, PveGuardianHuntRadius))
@@ -8160,8 +8194,14 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
             // picking a NEW target: the attacker branch above still answers
             // anything that is actually hitting the bot.
             // Zone guardians hunt players above all else: they hold their
-            // zone against intruders and only grind between kills.
-            if (GetGuardianZoneId(bot->GetGUID().GetRawValue()))
+            // zone against intruders and only grind between kills. Unless one
+            // has just been killed by a person - gating only the approach let a
+            // timid guardian stand up at the graveyard and immediately pick its
+            // killer again, which is the whole behaviour this was meant to stop.
+            // Retaliation is unaffected: the attacker branch above still answers
+            // anything actually hitting the bot.
+            if (GetGuardianZoneId(bot->GetGUID().GetRawValue()) &&
+                PveClock::now() >= state.timidUntil)
                 target = PickHuntTarget(bot, PveGuardianHuntRadius);
 
             // Packmates first: adjacent bots fight together (one team),
