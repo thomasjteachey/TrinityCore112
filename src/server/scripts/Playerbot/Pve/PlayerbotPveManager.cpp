@@ -4541,9 +4541,18 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
         }
     }
 
-    // A guardian standing next to a player is where it should be, whatever the
-    // zone says - the leash below would otherwise drag it home mid-fight.
-    if (bot->GetZoneId() != zone.zoneId && eligible && !nearAHuman)
+    // A guardian anywhere near a player is where it should be, whatever the zone
+    // says - the leash below would otherwise drag it home mid-fight.
+    //
+    // This uses the TELEPORT TRIGGER range, not the approach range, and that
+    // distinction matters: a guardian is deliberately dropped at 210 yards,
+    // which is outside the 200 yard approach test. Judging the leash by that
+    // test meant a guardian teleported to a player was relocated home 120
+    // seconds later - walking away from the person it had just been sent to
+    // meet, and quietly undoing the whole feature.
+    bool const withinPlayerReach = haveHuman && humanDistance <= kGuardianTeleportTriggerYards;
+
+    if (bot->GetZoneId() != zone.zoneId && eligible && !withinPlayerReach)
     {
         PveTimePoint const now = PveClock::now();
         if (state.guardianOutOfZoneSince == PveTimePoint())
