@@ -3230,9 +3230,13 @@ CharDelete.KeepDays = 30
 #                     BUBBLES - the twenty segments the experience bar is drawn as. One
 #                     bubble is 5% of a level, twenty is a full bar. Fractions allowed.
 #                     Scales with the killer's own next-level requirement, so it stays
-#                     worth the same at every level. Bots are never paid for killing each
-#                     other: they do it constantly on an FFA realm and would run the whole
-#                     fleet to the level cap.
+#                     worth the same at every level, and then by the level gap using the
+#                     same curve creatures use - grey pays nothing, green falls off to
+#                     zero at the grey line, yellow is full value, and orange/red add 5%
+#                     per level to a cap of +4 (1.2x). So the value above is what a
+#                     same-level (yellow) bot is worth.
+#                     Bots are never paid for killing each other: they do it constantly on
+#                     an FFA realm and would run the whole fleet to the level cap.
 #        Default:     2 - (two bubbles, 10% of a level)
 #                     0 - (disabled)
 ###################################################################################################

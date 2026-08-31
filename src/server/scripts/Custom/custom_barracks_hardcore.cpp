@@ -34,6 +34,7 @@
 
 #include "ScriptMgr.h"
 #include "Configuration/Config.h"
+#include "Formulas.h"
 #include "Chat.h"
 #include "Creature.h"
 #include "DatabaseEnv.h"
@@ -820,6 +821,37 @@ public:
             amount += amount * int32(s_rewardMultiplier - 1);
     }
 
+    // Scale the kill by the level gap, mirroring the creature experience curve
+    // in Formulas.h so the con colours mean exactly what a player already
+    // expects from mobs:
+    //
+    //   grey   - worth nothing at all, same threshold the client uses to grey
+    //            the name out
+    //   green  - falls off linearly, reaching zero exactly at the grey line
+    //   yellow - full value
+    //   orange - +5% per level above, matching the mob curve
+    //   red    - capped at +4 levels, so 1.2x, again as mobs are capped
+    float PlayerKillConScale(uint8 killerLevel, uint8 victimLevel)
+    {
+        if (victimLevel >= killerLevel)
+        {
+            uint8 levelDiff = victimLevel - killerLevel;
+            if (levelDiff > 4)
+                levelDiff = 4;
+
+            return float(20 + levelDiff) / 20.0f;
+        }
+
+        if (victimLevel <= Trinity::XP::GetGrayLevel(killerLevel))
+            return 0.0f;
+
+        uint8 const zeroDifference = Trinity::XP::GetZeroDifference(killerLevel);
+        if (!zeroDifference)
+            return 0.0f;
+
+        return float(zeroDifference + victimLevel - killerLevel) / float(zeroDifference);
+    }
+
     // Experience for killing a playerbot.
     //
     // Counted in BUBBLES: the experience bar is drawn as twenty segments, so a
@@ -845,7 +877,12 @@ public:
         if (!perLevel)
             return;
 
-        uint32 const amount = uint32(float(perLevel) * s_playerKillXpBubbles / 20.0f);
+        // A grey bot is worth nothing, so this exits before paying anything.
+        float const conScale = PlayerKillConScale(killer->GetLevel(), victim->GetLevel());
+        if (conScale <= 0.0f)
+            return;
+
+        uint32 const amount = uint32(float(perLevel) * s_playerKillXpBubbles / 20.0f * conScale);
         if (!amount)
             return;
 
@@ -853,8 +890,10 @@ public:
         // level cap and the XP-frozen flag on its own.
         killer->GiveXP(amount, victim);
 
-        TC_LOG_INFO("playerbots.hardcore", "{} killed playerbot {} for {} xp ({} bubbles of level {}).",
-            killer->GetName(), victim->GetName(), amount, s_playerKillXpBubbles, killer->GetLevel());
+        TC_LOG_INFO("playerbots.hardcore",
+            "{} (level {}) killed playerbot {} (level {}) for {} xp ({} bubbles x{:.2f} con).",
+            killer->GetName(), killer->GetLevel(), victim->GetName(), victim->GetLevel(),
+            amount, s_playerKillXpBubbles, conScale);
     }
 
     void OnPVPKill(Player* killer, Player* victim) override
