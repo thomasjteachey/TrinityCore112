@@ -97,6 +97,8 @@ constexpr uint32 PveTargetResolveGrace = 3;
 constexpr uint32 SPELL_PVE_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PVE_OUT_OF_COMBAT_DRINK = 22734;
 
+// "Opening", the channel a player performs to open a locked chest.
+constexpr uint32 kOpeningSpellId = 3365;
 constexpr std::chrono::milliseconds PveFastTickInterval(250);
 constexpr std::chrono::milliseconds PveSlowTickInterval(750);
 constexpr std::chrono::seconds PveGrindScanInterval(2);
@@ -138,6 +140,7 @@ struct PveBotState
     PveTimePoint errandUntil{};
     PveTimePoint nextErrandScanAt{};
     PveTimePoint nextChestScanAt{};
+    ObjectGuid chestOpeningGuid;
     PveTimePoint nextEquipCheckAt{};
     PveTimePoint nextTalentCheckAt{};
     PveTimePoint nextCombatDiagAt{};
@@ -334,7 +337,7 @@ std::unordered_set<uint64> g_PendingAuctionSales;
 std::unordered_map<uint64, ObjectGuid> g_PendingLootExecutions;
 
 GameObject* FindNearestQuestGameObject(Player* bot, PveBotState& state, float radius);
-void UseQuestGameObject(Player* bot, PveBotState& state, GameObject* go);
+bool UseQuestGameObject(Player* bot, PveBotState& state, GameObject* go);
 bool BotHasIncompleteQuest(Player* bot);
 template<typename Fn>
 void ForEachBagItem(Player* bot, Fn&& fn);
@@ -3064,7 +3067,9 @@ bool ProcessErrand(Player* bot, PveBotState& state, playerbot::PveConfig const& 
             return true;
         }
 
-        UseQuestGameObject(bot, state, questGo);
+        if (UseQuestGameObject(bot, state, questGo))
+            return true;                       // mid-open; hold the errand
+
         clearErrand();
         return false;
     }
@@ -6181,7 +6186,9 @@ GameObject* FindNearestQuestGameObject(Player* bot, PveBotState& state, float ra
     return nearest;
 }
 
-void UseQuestGameObject(Player* bot, PveBotState& state, GameObject* go)
+// Returns true while the bot is still working on the object, so the caller
+// keeps the errand alive instead of clearing it mid-cast.
+bool UseQuestGameObject(Player* bot, PveBotState& state, GameObject* go)
 {
     // Whatever happens next, do not immediately re-pick this object: a
     // locked or script-gated one would otherwise loop the errand forever.
@@ -6192,16 +6199,42 @@ void UseQuestGameObject(Player* bot, PveBotState& state, GameObject* go)
         go->Use(bot);
         TC_LOG_INFO("playerbots.pve", "Bot {} used quest object {} ({}).",
             bot->GetName(), go->GetEntry(), go->GetGOInfo() ? go->GetGOInfo()->name : "");
-        return;
+        return false;
     }
 
-    if (go->GetGoType() != GAMEOBJECT_TYPE_CHEST || go->getLootState() != GO_READY)
-        return;
+    if (go->GetGoType() != GAMEOBJECT_TYPE_CHEST)
+        return false;
 
-    // The chest loot session mutates group loot state; execute it on the
-    // world thread with the corpse loot.
-    std::lock_guard<std::mutex> guard(g_PvePendingLock);
-    g_PendingLootExecutions[bot->GetGUID().GetRawValue()] = go->GetGUID();
+    // Second visit: the open is already under way.
+    if (state.chestOpeningGuid == go->GetGUID())
+    {
+        if (bot->HasUnitState(UNIT_STATE_CASTING))
+            return true;                       // still channelling - let it finish
+
+        state.chestOpeningGuid.Clear();
+
+        // The cast is done, so take the contents. The chest loot session
+        // mutates group loot state; execute it on the world thread with the
+        // corpse loot.
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        g_PendingLootExecutions[bot->GetGUID().GetRawValue()] = go->GetGUID();
+        return false;
+    }
+
+    if (go->getLootState() != GO_READY)
+        return false;
+
+    // Open it the way a player does. These chests carry a lock (lockId 1599),
+    // and a player opening one channels Opening for its full duration, kneeling
+    // while it runs. Queueing the loot directly skipped all of that: the
+    // contents simply teleported into the bot's bags with no cast bar, no
+    // animation, and no window in which anyone could contest the pickup or
+    // interrupt the bot. Cast it instead and take the loot when the cast ends.
+    state.chestOpeningGuid = go->GetGUID();
+    bot->CastSpell(go, kOpeningSpellId);
+    TC_LOG_INFO("playerbots.pve", "Bot {} begins opening chest {} ({:.0f}y).",
+        bot->GetName(), go->GetEntry(), bot->GetDistance(go));
+    return true;
 }
 
 bool BotHasIncompleteQuest(Player* bot)
