@@ -726,6 +726,22 @@ Playerbot.Pve.AuctionBuy.BudgetPct = 30
 
 Playerbot.Pve.AuctionBuy.MaxOverpayPct = 1200
 
+#    Playerbot.Pve.AuctionBuy.BudgetWorthLevels
+#        Description: How many item levels a bot considers its ENTIRE auction budget to be
+#                     worth. Purchases are scored as (item levels gained) minus (price, in the
+#                     same currency), and a bot only buys when that is positive - so an item
+#                     costing half its budget must be worth half this many levels to be taken.
+#                     Ranking on raw item-level gain alone made price a gate and nothing more:
+#                     a bot would spend its whole purse on a single item level because that was
+#                     the biggest number on the house. Cheapest-per-level is no better on its
+#                     own - it buys a one copper trinket and never improves.
+#                     Wealth scales this automatically: a rich bot pays real gold for a real
+#                     upgrade, a poor one waits for a bargain.
+#                     Lower to make bots stingier, raise to make them freer with gold.
+#        Default:     15
+
+Playerbot.Pve.AuctionBuy.BudgetWorthLevels = 15
+
 #    Playerbot.Pve.Professions.Enable
 #        Description: Each bot takes two gathering professions (herbalism/mining/skinning,
 #                     deterministic by character), learns and ranks them automatically, gathers

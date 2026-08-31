@@ -6261,6 +6261,7 @@ void ProcessPendingAuctionShopping()
 
         AuctionEntry* bestAuction = nullptr;
         int32 bestGain = 0;
+        float bestValue = 0.0f;
         uint8 bestSlot = 0;
         for (auto itr = auctionHouse->GetAuctionsBegin(); itr != auctionHouse->GetAuctionsEnd(); ++itr)
         {
@@ -6350,7 +6351,31 @@ void ProcessPendingAuctionShopping()
                     int32(equippedProto ? equippedProto->ContainerSlots : 0))
                 : std::max<int32>(1, int32(proto->ItemLevel) -
                     int32(equippedProto ? equippedProto->ItemLevel : 0));
-            if (gain <= bestGain)
+
+            // What it is worth MINUS what it costs, both in item levels.
+            //
+            // Ranking on gain alone made price a gate and nothing more: among
+            // everything it could afford a bot took the largest jump, so it
+            // would hand over its entire purse for one item level because that
+            // happened to be the biggest number on the house. Nor is the
+            // opposite - cheapest per level - any better on its own: it buys a
+            // one copper trinket for one item level and never improves.
+            //
+            // Price is converted into the currency the gain is already in. The
+            // bot treats its whole budget as worth a fixed number of item
+            // levels, so an item costing half the budget has to be worth half
+            // that many levels before it is worth buying at all. Wealth scales
+            // it automatically: a rich bot will pay real gold for a real
+            // upgrade, a poor one holds out for a bargain, and neither pays a
+            // fortune for a trinket.
+            float const priceInLevels = budget
+                ? float(auction->buyout) * float(g_PveConfig.auctionBudgetWorthLevels) / float(budget)
+                : float(g_PveConfig.auctionBudgetWorthLevels);
+            float const netValue = float(gain) - priceInLevels;
+
+            // Must be worth more than it costs, and worth more than whatever is
+            // already the best offer on the house.
+            if (netValue <= 0.0f || netValue <= bestValue)
                 continue;
 
             // No trading with the bot's own account.
@@ -6360,6 +6385,7 @@ void ProcessPendingAuctionShopping()
 
             bestAuction = auction;
             bestGain = gain;
+            bestValue = netValue;
             bestSlot = uint8(dest & 255);
         }
 
@@ -8799,6 +8825,8 @@ void PveManager::LoadConfig()
     g_PveConfig.auctionSellEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.AuctionSell.Enable", false);
     g_PveConfig.auctionBuyBudgetPct = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionBuy.BudgetPct", 30), 1, 100));
     g_PveConfig.auctionBuyMaxOverpayPct = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionBuy.MaxOverpayPct", 1200)));
+    g_PveConfig.auctionBudgetWorthLevels = uint32(std::clamp(
+        sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionBuy.BudgetWorthLevels", 15), 1, 200));
     g_PveConfig.professionsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Professions.Enable", false);
     g_PveConfig.relocateEnabled = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.Relocate.Enable", true);
     g_PveConfig.relocateDryWanders = uint32(std::clamp(

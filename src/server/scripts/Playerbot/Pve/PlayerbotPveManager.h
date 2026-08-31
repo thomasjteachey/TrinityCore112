@@ -86,6 +86,9 @@ struct PveConfig
     bool auctionBuyEnabled = false;
     uint32 auctionBuyBudgetPct = 30;
     uint32 auctionBuyMaxOverpayPct = 1200;
+    // How many item levels a bot considers its whole auction budget worth.
+    // Higher means more willing to pay for an upgrade.
+    uint32 auctionBudgetWorthLevels = 15;
     // Bots list the gear they cannot use, undercutting the standing price.
     bool auctionSellEnabled = false;
     // Gathering professions: two of herbalism/mining/skinning per bot,
