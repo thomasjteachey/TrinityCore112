@@ -4444,14 +4444,20 @@ void Spell::EffectEnchantHeldItem()
         item->SetEnchantment(slot, enchant_id, duration, 0, m_caster->GetGUID());
         item_owner->ApplyEnchantment(item, slot, true);
 
-        //improved weapon totems
-        AuraApplication* improvedWeaponTotems = m_caster->GetOwner()->GetAuraApplicationOfRankedSpell(29192);
-        if (improvedWeaponTotems)
+        // Improved Weapon Totems sits on the shaman who dropped the totem, so
+        // this lookup only means anything when the caster is an owned unit. A
+        // player imbuing their own weapon has no owner, and the unguarded
+        // GetOwner() here dereferenced null on that path.
+        if (Unit* totemOwner = m_caster->GetOwner())
         {
-            SpellEffIndex dummyAuraIndex = m_spellInfo->SpellIconID == 1397 ? EFFECT_0 : EFFECT_1; // 0 - Windfury 1 - Flametongue
-            if (dummyAuraIndex == EFFECT_0)
+            if (AuraApplication* improvedWeaponTotems = totemOwner->GetAuraApplicationOfRankedSpell(29192))
             {
-                item->SetEnchantmentModifier(improvedWeaponTotems->GetBase()->GetEffect(EFFECT_0)->GetBaseAmount());
+                SpellEffIndex dummyAuraIndex = m_spellInfo->SpellIconID == 1397 ? EFFECT_0 : EFFECT_1; // 0 - Windfury 1 - Flametongue
+                if (dummyAuraIndex == EFFECT_0)
+                {
+                    if (AuraEffect const* bonus = improvedWeaponTotems->GetBase()->GetEffect(EFFECT_0))
+                        item->SetEnchantmentModifier(bonus->GetBaseAmount());
+                }
             }
         }
     }
