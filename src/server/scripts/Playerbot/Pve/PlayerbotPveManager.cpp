@@ -186,6 +186,7 @@ struct PveBotState
     PveTimePoint recentDeathWindowStart{};
     // Zone guardians: when this bot was first seen away from its post.
     PveTimePoint guardianOutOfZoneSince{};
+    PveTimePoint nextGuardianApproachAt{};
     // Hardcore reclaim: when we fell, so the walk back is abandoned once the
     // drop chest would have despawned.
     PveTimePoint deathSpotAt{};
@@ -1714,6 +1715,58 @@ Creature* FindGrindProspect(Player* bot, PveBotState& state, playerbot::PveConfi
     return nearest;
 }
 
+// Where the real people are.
+//
+// The server already knows this: every connected player sits in
+// ObjectAccessor's map, so finding one is a lookup, not a search. Guardians
+// used to locate players with Cell::VisitWorldObjects over a 120 yard sweep -
+// grid work on the map thread, repeated per guardian, to rediscover something
+// the core could simply be asked.
+//
+// Rebuilt once a second on the world thread and read as a plain vector. Humans
+// are a handful even on a busy realm, so this stays tiny however many bots are
+// logged in.
+struct HumanSpot
+{
+    ObjectGuid Guid;
+    uint32 MapId = 0;
+    float X = 0.0f;
+    float Y = 0.0f;
+    float Z = 0.0f;
+};
+
+std::mutex g_HumanSpotLock;
+std::vector<HumanSpot> g_HumanSpots;
+
+bool FindNearestHumanSpot(uint32 mapId, float x, float y, float z, HumanSpot& out, float& outDistance)
+{
+    std::lock_guard<std::mutex> guard(g_HumanSpotLock);
+
+    bool found = false;
+    float bestSq = 0.0f;
+    for (HumanSpot const& spot : g_HumanSpots)
+    {
+        if (spot.MapId != mapId)
+            continue;
+
+        float const dx = spot.X - x;
+        float const dy = spot.Y - y;
+        float const dz = spot.Z - z;
+        float const distSq = dx * dx + dy * dy + dz * dz;
+        if (found && distSq >= bestSq)
+            continue;
+
+        bestSq = distSq;
+        out = spot;
+        found = true;
+    }
+
+    if (found)
+        outDistance = std::sqrt(bestSq);
+
+    return found;
+}
+
 // Zone guardians hunt: the nearest real player they may lawfully attack.
 // The hardcore pseudo-faction (Object.cpp's IsValidAttackTarget override)
 // is what makes an armed guardian and a player mutually attackable, so this
@@ -1721,16 +1774,31 @@ Creature* FindGrindProspect(Player* bot, PveBotState& state, playerbot::PveConfi
 // Radius is deliberately wide: a guardian owns its whole zone.
 Player* PickHuntTarget(Player* bot, float radius)
 {
-    std::list<Player*> matches;
-    Trinity::AnyPlayerInObjectRangeCheck check(bot, radius, true /*alive only*/);
-    Trinity::PlayerListSearcher<Trinity::AnyPlayerInObjectRangeCheck> searcher(bot, matches, check);
-    Cell::VisitWorldObjects(bot, searcher, radius);
+    // Read the snapshot instead of sweeping the grid. This was a
+    // Cell::VisitWorldObjects over a 120 yard radius, run per guardian on the
+    // map update thread, to rediscover positions the core already had. Humans
+    // are a handful, so this loop is shorter than the searcher's setup alone.
+    std::vector<HumanSpot> candidates;
+    {
+        std::lock_guard<std::mutex> guard(g_HumanSpotLock);
+        candidates = g_HumanSpots;
+    }
 
     Player* nearest = nullptr;
     float nearestDistance = 0.0f;
-    for (Player* candidate : matches)
+    for (HumanSpot const& spot : candidates)
     {
-        if (!candidate || candidate == bot || candidate->IsGameMaster() ||
+        if (spot.MapId != bot->GetMapId())
+            continue;
+
+        Player* candidate = ObjectAccessor::FindConnectedPlayer(spot.Guid);
+        if (!candidate || !candidate->IsInWorld() || !candidate->IsAlive())
+            continue;
+
+        if (!bot->IsWithinDistInMap(candidate, radius))
+            continue;
+
+        if (candidate == bot || candidate->IsGameMaster() ||
             candidate->IsBeingTeleported() || !bot->IsValidAttackTarget(candidate))
             continue;
 
@@ -4377,7 +4445,31 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
     // A guardian serving a human keeps its post but not its leash: dragging a
     // summoned companion away from its master every two minutes would make it
     // useless as a companion.
-    if (bot->GetZoneId() != zone.zoneId && eligible)
+    // Go to the people. A guardian sitting in an empty zone is doing nothing
+    // for anyone, so it closes the gap to the nearest real player on its map
+    // and hunts from there. The position comes from the snapshot above, so no
+    // searching happens on the map thread at all.
+    HumanSpot nearestHuman;
+    float humanDistance = 0.0f;
+    bool const haveHuman = cfg.guardianPlayerApproachYards > 0.0f &&
+        FindNearestHumanSpot(bot->GetMapId(), bot->GetPositionX(), bot->GetPositionY(),
+            bot->GetPositionZ(), nearestHuman, humanDistance);
+    bool const nearAHuman = haveHuman && humanDistance <= cfg.guardianPlayerApproachYards;
+
+    if (eligible && haveHuman && !nearAHuman && !bot->IsInCombat() && !state.engaged &&
+        !state.journeyActive && state.errandKind == PveErrandKind::None &&
+        PveClock::now() >= state.nextGuardianApproachAt)
+    {
+        state.nextGuardianApproachAt = PveClock::now() + std::chrono::seconds(15);
+        TC_LOG_INFO("playerbots.pve", "Guardian {} closes on a player {:.0f}y away.",
+            bot->GetName(), humanDistance);
+        StartWalkedJourney(state, bot->GetMapId(), nearestHuman.X, nearestHuman.Y, nearestHuman.Z,
+            0, humanDistance);
+    }
+
+    // A guardian standing next to a player is where it should be, whatever the
+    // zone says - the leash below would otherwise drag it home mid-fight.
+    if (bot->GetZoneId() != zone.zoneId && eligible && !nearAHuman)
     {
         PveTimePoint const now = PveClock::now();
         if (state.guardianOutOfZoneSince == PveTimePoint())
@@ -7830,6 +7922,8 @@ void PveManager::LoadConfig()
     g_PveConfig.grindEnabled = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.Enable", false);
     g_PveConfig.grindSearchRadius = sConfigMgr->GetFloatDefault("Playerbot.PveGrind.SearchRadius", 60.0f);
     g_PveConfig.pathBudgetPerSecond = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.PathBudgetPerSecond", 150));
+    g_PveConfig.guardianPlayerApproachYards = std::max(0.0f,
+        sConfigMgr->GetFloatDefault("Playerbot.Pve.ZoneGuardians.PlayerApproachYards", 300.0f));
     g_PveConfig.auctionPriceMultiplier = sConfigMgr->GetFloatDefault("Playerbot.Pve.AuctionPriceMultiplier", 10.0f);
     g_PveConfig.auctionMinTradeGoodStack = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionMinTradeGoodStack", 10));
     g_PveConfig.auctionValuableUnitCopper = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionValuableUnitCopper", 1000));
@@ -7918,6 +8012,28 @@ void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
     // bots did not spend is deliberately not carried over: the point is a
     // ceiling on per-second map-thread cost, not a total.
     g_PathBudgetTokens.store(g_PveConfig.pathBudgetPerSecond, std::memory_order_relaxed);
+
+    // Refresh where the real people are, so guardians never have to search.
+    // One pass over the connected players per second, on the world thread,
+    // instead of a grid sweep per guardian on the map thread.
+    {
+        std::vector<HumanSpot> spots;
+        for (auto const& pair : ObjectAccessor::GetPlayers())
+        {
+            Player* human = pair.second;
+            if (!human || !human->IsInWorld() || !human->IsAlive())
+                continue;
+
+            if (human->IsGameMaster() || playerbot::IsManagedRandomBot(human))
+                continue;
+
+            spots.push_back({ human->GetGUID(), human->GetMapId(),
+                human->GetPositionX(), human->GetPositionY(), human->GetPositionZ() });
+        }
+
+        std::lock_guard<std::mutex> guard(g_HumanSpotLock);
+        g_HumanSpots.swap(spots);
+    }
 
     // Bot cost telemetry. The map-update thread is shared with human combat,
     // so when a player reports hit-to-damage delay this is the line that says

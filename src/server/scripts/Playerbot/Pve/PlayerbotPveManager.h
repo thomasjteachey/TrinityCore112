@@ -110,6 +110,11 @@ struct PveConfig
     // Zone guardians: this many bots per classic zone are pinned there at
     // the zone's classic level cap with XP gain frozen. 0 disables.
     uint32 zoneGuardiansPerZone = 0;
+    // How close a guardian tries to get to a real player. Guardians go to the
+    // people rather than waiting to be found: the server already knows where
+    // every player is, so this needs no searching. 0 disables the approach and
+    // leaves guardians standing their post.
+    float guardianPlayerApproachYards = 300.0f;
 };
 
 // Open-world PvE behavior for managed random bots, layered on the existing

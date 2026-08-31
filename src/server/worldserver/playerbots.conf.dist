@@ -714,3 +714,17 @@ Playerbot.PvpClassSpells.Range.Heal = 40.0
 #        Default:     15
 #
 Centurion.Hardcore.FieldKit.GreyUntilLevel = 15
+
+#
+#    Playerbot.Pve.ZoneGuardians.PlayerApproachYards
+#        Description: How close a zone guardian tries to get to a real player. Guardians go
+#                     to the people instead of waiting to be found: the server already
+#                     knows where every player is, so this costs no searching - a snapshot
+#                     of connected players is refreshed once a second on the world thread
+#                     and read as a plain lookup.
+#                     A guardian already this close to a player also stops being leashed
+#                     back to its own zone, so it can follow a fight out of the area.
+#        Default:     300
+#                     0   - (disabled: guardians stand their post and wait)
+#
+Playerbot.Pve.ZoneGuardians.PlayerApproachYards = 300
