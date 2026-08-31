@@ -3061,7 +3061,15 @@ bool ProcessErrand(Player* bot, PveBotState& state, playerbot::PveConfig const& 
             return false;
         }
 
-        if (!bot->IsWithinDistInMap(questGo, INTERACTION_DISTANCE))
+        // Use the lock spell's real interaction range rather than a flat
+        // INTERACTION_DISTANCE, the same way the battleground node path does -
+        // stopping short of it means the cast is refused on arrival.
+        SpellInfo const* const approachLockSpell = questGo->GetSpellForLock(bot);
+        bool const atInteractDistance = approachLockSpell
+            ? questGo->IsAtInteractDistance(bot, approachLockSpell)
+            : questGo->IsAtInteractDistance(bot);
+
+        if (!atInteractDistance)
         {
             MoveTowardThrottled(bot, questGo->GetPosition());
             return true;
@@ -6208,7 +6216,8 @@ bool UseQuestGameObject(Player* bot, PveBotState& state, GameObject* go)
     // Second visit: the open is already under way.
     if (state.chestOpeningGuid == go->GetGUID())
     {
-        if (bot->HasUnitState(UNIT_STATE_CASTING))
+        if (playerbot::PvpClassActions::IsBattlegroundObjectInteractionInProgress(bot) ||
+            bot->HasUnitState(UNIT_STATE_CASTING))
             return true;                       // still channelling - let it finish
 
         state.chestOpeningGuid.Clear();
@@ -6224,14 +6233,34 @@ bool UseQuestGameObject(Player* bot, PveBotState& state, GameObject* go)
     if (go->getLootState() != GO_READY)
         return false;
 
-    // Open it the way a player does. These chests carry a lock (lockId 1599),
-    // and a player opening one channels Opening for its full duration, kneeling
-    // while it runs. Queueing the loot directly skipped all of that: the
-    // contents simply teleported into the bot's bags with no cast bar, no
-    // animation, and no window in which anyone could contest the pickup or
-    // interrupt the bot. Cast it instead and take the loot when the cast ends.
+    // Open it the way a player does, mirroring the battleground node
+    // interaction that already channels correctly (PlayerbotPvpLifecycleActions,
+    // "Node banners use their lock spell").
+    //
+    // Ask the OBJECT for its lock spell rather than hardcoding Opening: the lock
+    // is what decides which spell and how long it takes, and a hardcoded id is
+    // wrong the moment a chest carries a different one.
+    SpellInfo const* lockSpell = go->GetSpellForLock(bot);
+
+    // Both of these cancel an interruptible OPEN_LOCK outright, and the bot
+    // arrives here under MoveTowardThrottled - so without stopping first it
+    // cancels its own channel on the very next step, which is exactly why no
+    // cast bar was ever visible. The battleground path stops movement and
+    // dismounts for the same reason.
+    if (bot->IsMounted())
+        bot->Dismount();
+
+    playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
+    if (MotionMaster* motionMaster = bot->GetMotionMaster())
+        motionMaster->Clear();
+    bot->StopMoving();
+    bot->AttackStop();
+
     state.chestOpeningGuid = go->GetGUID();
-    bot->CastSpell(go, kOpeningSpellId);
+    if (lockSpell)
+        bot->CastSpell(go, lockSpell->Id, false);
+    else
+        go->Use(bot);
     TC_LOG_INFO("playerbots.pve", "Bot {} begins opening chest {} ({:.0f}y).",
         bot->GetName(), go->GetEntry(), bot->GetDistance(go));
     return true;
