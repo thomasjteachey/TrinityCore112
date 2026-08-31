@@ -32,6 +32,7 @@
 // switch (Item::IsSoulBound), which also opens the auction house to
 // everything.
 
+#include "custom_barracks_hardcore.h"
 #include "ScriptMgr.h"
 #include "Configuration/Config.h"
 #include "Formulas.h"
@@ -212,16 +213,27 @@ namespace BarracksHardcore
         }
     }
 
-    // FFA arms only in real PvP-level zones - never in starter zones like
-    // Durotar, never in capitals or sanctuaries.
-    bool IsFfaEligibleZone(Player* player)
+    // Exported for the playerbot manager, which needs the same answer when it
+    // decides whether travelling somewhere to pick a fight makes any sense.
+    // With hardcore off there is no FFA gate at all and the realm's ordinary
+    // PvP rules apply, so every non-sanctuary zone qualifies.
+    bool IsOpenWorldPvpZone(uint32 zoneId)
     {
-        uint32 const zoneId = player->GetZoneId();
         if (AreaTableEntry const* zone = sAreaTableStore.LookupEntry(zoneId))
             if (zone->Flags & (AREA_FLAG_CAPITAL | AREA_FLAG_SANCTUARY))
                 return false;
 
+        if (!s_enabled)
+            return true;
+
         return ZoneTopLevel(zoneId) >= s_minZoneLevel;
+    }
+
+    // FFA arms only in real PvP-level zones - never in starter zones like
+    // Durotar, never in capitals or sanctuaries.
+    bool IsFfaEligibleZone(Player* player)
+    {
+        return IsOpenWorldPvpZone(player->GetZoneId());
     }
 
     bool IsFfaArmed(Player* player)

@@ -15,6 +15,7 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "Custom/custom_barracks_hardcore.h"
 #include "Playerbot/Pve/PlayerbotPveManager.h"
 
 #include "Playerbot/Pvp/PlayerbotPvpClassActions.h"
@@ -4357,6 +4358,10 @@ struct GuardianZone
     uint8 maxLevel;
 };
 
+// The cap of a starter zone. Zones topping out here are the ones a brand new
+// character is expected to be in, so a bot reborn into one starts at level 1.
+constexpr uint8 kStarterZoneTopLevel = 10;
+
 // Classic zone level caps.
 constexpr std::array<GuardianZone, 38> kGuardianZones = { {
     { 12, 10 },   // Elwynn Forest
@@ -4420,7 +4425,17 @@ uint32 GetGuardianZoneId(uint64 botRawGuid)
     auto itr = g_GuardianZoneByGuid.find(botRawGuid);
     if (itr == g_GuardianZoneByGuid.end() || itr->second >= totalSlots)
         return 0;
-    return kGuardianZones[itr->second % kGuardianZones.size()].zoneId;
+
+    // A post in a zone where a fight between people cannot happen is not a
+    // post: the guardian can never be attacked and can never attack, so it is
+    // scenery with its experience frozen. Disowning it here releases any bot
+    // already holding such a post back into the ordinary population, without
+    // needing the persisted table to be rewritten.
+    uint32 const zoneId = kGuardianZones[itr->second % kGuardianZones.size()].zoneId;
+    if (!BarracksHardcore::IsOpenWorldPvpZone(zoneId))
+        return 0;
+
+    return zoneId;
 }
 
 // A zone owned by the other faction can never be reached: the relocation
@@ -4504,6 +4519,13 @@ void MaybeHuntPlayersByAggression(Player* bot, PveBotState& state, playerbot::Pv
     if (PveClock::now() < state.timidUntil)
         return;
 
+    // And never in a zone where a fight between people cannot happen at all.
+    // Travelling across a starter zone to reach somebody you can neither
+    // attack nor be attacked by is not aggression, it is a bot walking in a
+    // straight line at a stranger.
+    if (!BarracksHardcore::IsOpenWorldPvpZone(bot->GetZoneId()))
+        return;
+
     if (idleMinutes < int64(AggressionIdleMinutes(bot, cfg)))
         return;
 
@@ -4572,6 +4594,8 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
                 GuardianZone const& candidateZone = kGuardianZones[candidate % kGuardianZones.size()];
                 if (candidateZone.maxLevel < bot->GetLevel())
                     continue;
+                if (!BarracksHardcore::IsOpenWorldPvpZone(candidateZone.zoneId))
+                    continue;   // starter zones never arm; the slot would be wasted
                 if (!IsGuardianZoneAllowedForBot(bot, candidateZone.zoneId))
                     continue;
 
@@ -4900,8 +4924,16 @@ void BuildGrindSpotCacheOnce()
         // Percentiles rather than the extremes on purpose: one stray elite or
         // one low-level critter cluster should not define the band a bot spends
         // its whole life inside.
-        uint8 const bottom = g_ZoneBottomLevel[zoneId];
         uint8 const top = g_ZoneTopLevel[zoneId];
+
+        // Except at the very bottom of the world. A starter zone is the one
+        // place a level one belongs, and the percentile floor would otherwise
+        // open it at four or five with nothing underneath - so the zones that
+        // top out at the starter cap run from one instead.
+        if (top <= kStarterZoneTopLevel)
+            g_ZoneBottomLevel[zoneId] = 1;
+
+        uint8 const bottom = g_ZoneBottomLevel[zoneId];
         if (top > bottom && bottom >= 1 && g_ZoneSpotCount[zoneId] >= 5)
             g_RebirthZones.push_back(zoneId);
     }
@@ -7465,6 +7497,12 @@ void MarkTimidAfterPlayerDefeat(Player* bot, PveBotState& state,
     playerbot::PveConfig const& cfg, PveTimePoint now)
 {
     if (!cfg.timidMinutes)
+        return;
+
+    // No retreat in a zone that cannot host a player fight. Nothing there
+    // could have killed the bot in the first place, so a flee would only ever
+    // be a spurious teleport.
+    if (!BarracksHardcore::IsOpenWorldPvpZone(bot->GetZoneId()))
         return;
 
     // Was a person actually involved? lastPlayerFightAt is only stamped while
