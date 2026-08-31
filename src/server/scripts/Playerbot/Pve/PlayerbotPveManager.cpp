@@ -9241,9 +9241,27 @@ void PveManager::OnManagedBotLevelChanged(Player* player, uint8 /*oldLevel*/)
     bool const banded = rebirthZoneId && GetZoneLevelBand(rebirthZoneId, bandBottom, bandTop);
     uint32 const rebirthAtLevel = banded ? uint32(bandTop) : sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
 
-    if (rebirthFlagged && player->GetLevel() >= rebirthAtLevel)
+    // Outside the band in EITHER direction. Firing only from above left every
+    // high zone empty: a bot assigned to a twenty-five to thirty-five zone
+    // while sitting at level fourteen cannot grind there, so it lives wherever
+    // its level fits and does not reach its own zone until it has climbed the
+    // whole way to the ceiling - by which time most of the fleet is somewhere
+    // else entirely. Measured live: 124 of 229 bots between ten and nineteen,
+    // eleven in the twenty-five to thirty-five band, and every high zone
+    // holding exactly one bot.
+    //
+    // Rebirthing a bot UP to its band bottom puts it where it belongs at once
+    // and keeps it there, which is the whole point of tying it to a zone. It
+    // is the same reset either way, so a bot arriving from below is re-kitted
+    // exactly like one cycling from above.
+    bool const belowBand = banded && player->GetLevel() < bandBottom;
+
+    if (rebirthFlagged && (belowBand || player->GetLevel() >= rebirthAtLevel))
     {
-        if (banded)
+        if (belowBand)
+            TC_LOG_INFO("playerbots.pve", "Bot {} is below zone {}'s band at level {}; rebirth up to {}.",
+                player->GetName(), rebirthZoneId, uint32(player->GetLevel()), uint32(bandBottom));
+        else if (banded)
             TC_LOG_INFO("playerbots.pve", "Bot {} topped out zone {} at level {}; rebirth to {}.",
                 player->GetName(), rebirthZoneId, uint32(bandTop), uint32(bandBottom));
         else
