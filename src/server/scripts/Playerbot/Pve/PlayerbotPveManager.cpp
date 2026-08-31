@@ -4388,13 +4388,72 @@ struct GuardianZone
     uint8 maxLevel;
 };
 
+// The classic levelling chart, as the zones actually play - not as a
+// percentile of whatever creatures happen to be spawned in them. Derived bands
+// were wrong in both directions: they let The Deadmines in through its Westfall
+// tunnel, and gave real zones one-level bands because their clusters happened
+// to sit at one level. This is the authority now.
+struct ClassicZoneBand
+{
+    uint32 zoneId;
+    uint8 minLevel;
+    uint8 maxLevel;
+};
+
+constexpr std::array<ClassicZoneBand, 39> kClassicZoneBands = { {
+    {   1,  1, 10 },  // Dun Morogh
+    {  12,  1, 10 },  // Elwynn Forest
+    { 141,  1, 10 },  // Teldrassil
+    {  85,  1, 10 },  // Tirisfal Glades
+    {  14,  1, 10 },  // Durotar
+    { 215,  1, 10 },  // Mulgore
+    {  40, 10, 20 },  // Westfall
+    {  38, 10, 20 },  // Loch Modan
+    { 148, 10, 20 },  // Darkshore
+    { 130, 10, 20 },  // Silverpine Forest
+    {  17, 10, 25 },  // The Barrens
+    {  44, 15, 25 },  // Redridge Mountains
+    { 406, 15, 27 },  // Stonetalon Mountains
+    {  10, 18, 30 },  // Duskwood
+    { 331, 18, 30 },  // Ashenvale
+    { 267, 20, 30 },  // Hillsbrad Foothills
+    {  11, 20, 30 },  // Wetlands
+    { 400, 24, 35 },  // Thousand Needles
+    {  36, 30, 40 },  // Alterac Mountains
+    {  45, 30, 40 },  // Arathi Highlands
+    { 405, 30, 40 },  // Desolace
+    {  33, 30, 45 },  // Stranglethorn Vale
+    {   3, 35, 45 },  // Badlands
+    {   8, 35, 45 },  // Swamp of Sorrows
+    {  15, 35, 45 },  // Dustwallow Marsh
+    { 440, 40, 50 },  // Tanaris
+    { 357, 40, 50 },  // Feralas
+    {  51, 43, 50 },  // Searing Gorge
+    {  47, 45, 50 },  // The Hinterlands
+    {  16, 45, 55 },  // Azshara
+    {   4, 45, 55 },  // Blasted Lands
+    { 361, 48, 55 },  // Felwood
+    { 490, 48, 55 },  // Un'Goro Crater
+    {  46, 50, 58 },  // Burning Steppes
+    {  28, 51, 58 },  // Western Plaguelands
+    { 139, 53, 60 },  // Eastern Plaguelands
+    { 618, 55, 60 },  // Winterspring
+    {  41, 55, 60 },  // Deadwind Pass
+    {1377, 55, 60 },  // Silithus
+} };
+
+ClassicZoneBand const* FindClassicZoneBand(uint32 zoneId)
+{
+    for (ClassicZoneBand const& band : kClassicZoneBands)
+        if (band.zoneId == zoneId)
+            return &band;
+    return nullptr;
+}
+
 // The cap of a starter zone. Zones topping out here are the ones a brand new
 // character is expected to be in, so a bot reborn into one starts at level 1.
 constexpr uint8 kStarterZoneTopLevel = 10;
 
-// The narrowest band a zone may offer and still be somewhere a bot lives. Below
-// this the bot spends its life resetting rather than levelling.
-constexpr uint8 kMinRebirthBandLevels = 5;
 
 // Classic zone level caps.
 constexpr std::array<GuardianZone, 38> kGuardianZones = { {
@@ -4823,10 +4882,6 @@ std::unordered_map<uint32, uint32> g_ZoneSpotCount;
 // zone off as high level. This is what answers "have I outgrown this place",
 // which is a different question from "is anything here still killable".
 std::unordered_map<uint32, uint8> g_ZoneTopLevel;
-// The other end of the same ladder, and the zones worth tying a bot to. A
-// rebirth zone must be big enough to level through and must actually span a
-// range - a zone whose clusters are all one level is a corridor, not a home.
-std::unordered_map<uint32, uint8> g_ZoneBottomLevel;
 std::vector<uint32> g_RebirthZones;
 
 // The zone a bot lives its cycles in. Deterministic from the guid and taken
@@ -4959,7 +5014,6 @@ void BuildGrindSpotCacheOnce()
             zoneLevels[bucket.spot.zoneId].push_back(uint8(std::min<uint32>(bucket.meanLevel, 80)));
     }
 
-    g_ZoneBottomLevel.clear();
     g_RebirthZones.clear();
     for (auto& [zoneId, levels] : zoneLevels)
     {
@@ -4969,42 +5023,23 @@ void BuildGrindSpotCacheOnce()
         std::sort(levels.begin(), levels.end());
         size_t const index = (levels.size() * 4) / 5;             // 80th percentile
         g_ZoneTopLevel[zoneId] = levels[std::min(index, levels.size() - 1)];
-        g_ZoneBottomLevel[zoneId] = levels[levels.size() / 5];    // 20th percentile
+    }
 
-        // Percentiles rather than the extremes on purpose: one stray elite or
-        // one low-level critter cluster should not define the band a bot spends
-        // its whole life inside.
-        uint8 const top = g_ZoneTopLevel[zoneId];
-
-        // Except at the very bottom of the world. A starter zone is the one
-        // place a level one belongs, and the percentile floor would otherwise
-        // open it at four or five with nothing underneath - so the zones that
-        // top out at the starter cap run from one instead.
-        if (top <= kStarterZoneTopLevel)
-            g_ZoneBottomLevel[zoneId] = 1;
-
-        // The zone has to be somewhere a bot can actually live.
-        //
-        // First, it must be an OUTDOOR zone of a scanned continent. Cluster
-        // zones are resolved from map coordinates at runtime, and an instance's
-        // entrance reaches into the overworld - the Moonbrook tunnel in
-        // Westfall resolves to The Deadmines - so an instance zone id leaks
-        // into the list from a cluster standing on map 0. AreaTable knows the
-        // difference: The Deadmines is continent 36, which is not a map the
-        // grind cache ever scans, so nothing there can be reached on foot.
-        AreaTableEntry const* zoneEntry = sAreaTableStore.LookupEntry(zoneId);
+    // Eligible rebirth zones are the classic levelling chart, filtered to the
+    // ones this realm can actually deliver a bot to: the zone must sit on a
+    // scanned continent and must have grind clusters, or a bot would be posted
+    // somewhere with nothing to kill.
+    for (ClassicZoneBand const& band : kClassicZoneBands)
+    {
+        AreaTableEntry const* zoneEntry = sAreaTableStore.LookupEntry(band.zoneId);
         if (!zoneEntry || !std::binary_search(g_PveConfig.relocateMaps.begin(),
                 g_PveConfig.relocateMaps.end(), zoneEntry->ContinentID))
             continue;
 
-        // Second, the band has to be worth living in. Requiring only
-        // top > bottom let through zones whose clusters all sit at one level,
-        // and a bot posted to one spent its whole life cycling a single level:
-        // reach seventeen, reset to sixteen, reach seventeen again, minutes
-        // apart, forever.
-        uint8 const bottom = g_ZoneBottomLevel[zoneId];
-        if (top >= bottom + kMinRebirthBandLevels && bottom >= 1 && g_ZoneSpotCount[zoneId] >= 5)
-            g_RebirthZones.push_back(zoneId);
+        if (!g_ZoneSpotCount.count(band.zoneId))
+            continue;
+
+        g_RebirthZones.push_back(band.zoneId);
     }
 
     // Sorted so the guid -> zone mapping is stable: a bot must come back to the
@@ -9336,13 +9371,12 @@ bool IsEndgameBot(Player const* bot)
 
 bool GetZoneLevelBand(uint32 zoneId, uint8& bottom, uint8& top)
 {
-    auto bottomItr = g_ZoneBottomLevel.find(zoneId);
-    auto topItr = g_ZoneTopLevel.find(zoneId);
-    if (bottomItr == g_ZoneBottomLevel.end() || topItr == g_ZoneTopLevel.end())
+    ClassicZoneBand const* band = FindClassicZoneBand(zoneId);
+    if (!band)
         return false;
 
-    bottom = bottomItr->second;
-    top = topItr->second;
+    bottom = band->minLevel;
+    top = band->maxLevel;
     return top > bottom;
 }
 
