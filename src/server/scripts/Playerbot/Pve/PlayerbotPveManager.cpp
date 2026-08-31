@@ -3677,6 +3677,34 @@ bool BotCastsFromOffhand(Player const* bot)
     }
 }
 
+// Quality is part of an item's stat budget, not decoration. Two items of the
+// same item level are not the same item: the budget a green is allowed to
+// spend on stats is meaningfully larger than a white's, and a grey's is barely
+// there at all. Comparing raw ItemLevel therefore rates a white and a green of
+// equal level identically, which is how a bot ends up buying the white.
+//
+// These are an approximation of the budget effect rather than the exact
+// classic curve - the real one varies by slot and level - but the ordering and
+// the rough spacing are what matter for choosing between two items.
+float ItemQualityBudgetFactor(uint32 quality)
+{
+    switch (quality)
+    {
+        case ITEM_QUALITY_POOR:     return 0.60f;
+        case ITEM_QUALITY_NORMAL:   return 1.00f;
+        case ITEM_QUALITY_UNCOMMON: return 1.25f;
+        case ITEM_QUALITY_RARE:     return 1.45f;
+        case ITEM_QUALITY_EPIC:     return 1.65f;
+        default:                    return 1.80f;   // legendary and artifact
+    }
+}
+
+// Item level as the bot should actually weigh it.
+float EffectiveItemLevel(ItemTemplate const* proto)
+{
+    return proto ? float(proto->ItemLevel) * ItemQualityBudgetFactor(proto->Quality) : 0.0f;
+}
+
 bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTemplate const* incumbent, uint8 slot)
 {
     // Bags compare by slot count, nothing else.
@@ -3774,7 +3802,7 @@ bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTempla
             float const incumbentScore = ScoreItemForSpec(bot, incumbent);
             if (std::fabs(candidateScore - incumbentScore) > 0.5f)
                 return candidateScore > incumbentScore;
-            return candidate->ItemLevel > incumbent->ItemLevel;
+            return EffectiveItemLevel(candidate) > EffectiveItemLevel(incumbent);
         }
 
         // Combat and Subtlety mainhands: slow and hard-hitting beats fast,
@@ -3803,7 +3831,7 @@ bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTempla
     if (std::fabs(candidateScore - incumbentScore) > 0.5f)
         return candidateScore > incumbentScore;
 
-    return candidate->ItemLevel > incumbent->ItemLevel;
+    return EffectiveItemLevel(candidate) > EffectiveItemLevel(incumbent);
 }
 
 void TryEquipUpgrades(Player* bot)
@@ -6260,7 +6288,7 @@ void ProcessPendingAuctionShopping()
             : CalculatePct(bot->GetMoney(), g_PveConfig.auctionBuyBudgetPct);
 
         AuctionEntry* bestAuction = nullptr;
-        int32 bestGain = 0;
+        float bestGain = 0.0f;
         float bestValue = 0.0f;
         uint8 bestSlot = 0;
         for (auto itr = auctionHouse->GetAuctionsBegin(); itr != auctionHouse->GetAuctionsEnd(); ++itr)
@@ -6345,12 +6373,14 @@ void ProcessPendingAuctionShopping()
                         continue;
             }
 
-            // Item level says nothing about a bag; slots do.
-            int32 const gain = isContainer
-                ? std::max<int32>(1, int32(proto->ContainerSlots) -
-                    int32(equippedProto ? equippedProto->ContainerSlots : 0))
-                : std::max<int32>(1, int32(proto->ItemLevel) -
-                    int32(equippedProto ? equippedProto->ItemLevel : 0));
+            // Item level says nothing about a bag; slots do. For gear it is
+            // weighed by quality, because nothing else in this path looks at
+            // an item's actual stats - a white and a green of the same level
+            // would otherwise be the same purchase.
+            float const gain = isContainer
+                ? std::max<float>(1.0f, float(proto->ContainerSlots) -
+                    float(equippedProto ? equippedProto->ContainerSlots : 0))
+                : std::max<float>(1.0f, EffectiveItemLevel(proto) - EffectiveItemLevel(equippedProto));
 
             // What it is worth MINUS what it costs, both in item levels.
             //
@@ -6371,7 +6401,7 @@ void ProcessPendingAuctionShopping()
             float const priceInLevels = budget
                 ? float(auction->buyout) * float(g_PveConfig.auctionBudgetWorthLevels) / float(budget)
                 : float(g_PveConfig.auctionBudgetWorthLevels);
-            float const netValue = float(gain) - priceInLevels;
+            float const netValue = gain - priceInLevels;
 
             // Must be worth more than it costs, and worth more than whatever is
             // already the best offer on the house.
@@ -6408,7 +6438,8 @@ void ProcessPendingAuctionShopping()
         sAuctionMgr->SendAuctionSuccessfulMail(bestAuction, trans);
         sAuctionMgr->SendAuctionWonMail(bestAuction, trans);
 
-        TC_LOG_INFO("playerbots.pve", "Bot {} bought auction {} (item {} for {} copper, +{} item levels).",
+        TC_LOG_INFO("playerbots.pve",
+            "Bot {} bought auction {} (item {} for {} copper, +{:.1f} quality-weighted item levels).",
             bot->GetName(), bestAuction->Id, bestAuction->itemEntry, bestAuction->buyout, bestGain);
 
         bestAuction->DeleteFromDB(trans);
