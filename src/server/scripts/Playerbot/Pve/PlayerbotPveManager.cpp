@@ -384,6 +384,7 @@ void ProcessPendingLootExecutions();
 void GrantGatherSkillCredit(Player* bot, GameObject* go);
 void MaybeQueueOverBandRebirth(Player* bot, PveBotState& state);
 void ClearResurrectionSickness(Player* bot);
+bool BotCanTeleportNow(Player* bot);
 void TrySkinCorpse(Player* bot, Creature* corpse);
 bool IsGatherableNodeFor(Player* bot, GameObject const* go, int32* outRequiredSkill);
 
@@ -6646,6 +6647,9 @@ void ProcessPendingSupplyRuns()
         }
         if (MotionMaster* motionMaster = bot->GetMotionMaster())
             motionMaster->Clear();
+        if (!BotCanTeleportNow(bot))
+            continue;
+
         bot->TeleportTo(nearest->mapId, nearest->x + frand(-3.0f, 3.0f), nearest->y + frand(-3.0f, 3.0f),
             nearest->z + 0.5f, frand(0.0f, 6.28f));
         TC_LOG_INFO("playerbots.pve", "Supply run: teleported {} to a vendor cluster on map {}.",
@@ -6717,6 +6721,9 @@ void ProcessPendingClassQuestTravels()
         }
         if (MotionMaster* motionMaster = bot->GetMotionMaster())
             motionMaster->Clear();
+        if (!BotCanTeleportNow(bot))
+            continue;
+
         bot->TeleportTo(mapId, x + frand(-3.0f, 3.0f), y + frand(-3.0f, 3.0f), z + 0.5f, frand(0.0f, 6.28f));
         TC_LOG_INFO("playerbots.pve", "Class quest travel: teleported {} to map {}.", bot->GetName(), mapId);
     }
@@ -6762,10 +6769,28 @@ void ProcessPendingGuardianTeleports()
         // another continent, where that ground does not exist.
         human->UpdateAllowedPositionZ(x, y, z);
 
+        if (!BotCanTeleportNow(bot))
+            continue;
+
         bot->TeleportTo(human->GetMapId(), x, y, z, frand(0.0f, 6.28f));
         TC_LOG_INFO("playerbots.pve", "Guardian {} teleported to within {:.0f}y of {}.",
             bot->GetName(), dropDistance, human->GetName());
     }
+}
+
+// Map::PlayerRelocation asserts that whatever it is moving is in a grid, and a
+// bot that an earlier pass of this same world update already teleported is NOT:
+// the grid link is dropped the moment a teleport begins and only restored when
+// it lands. Several passes here teleport - summons, class quest travel, supply
+// runs, guardian approaches, relocations, rebirths - so checking once at the
+// top of a loop is not enough. Arbitrary work runs between that check and the
+// call, and the bot may be picked up by something else in between.
+//
+// Test the assert's own precondition, immediately before the call.
+bool BotCanTeleportNow(Player* bot)
+{
+    return bot && bot->IsInWorld() && bot->IsInGrid() &&
+        !bot->IsBeingTeleportedFar() && !bot->IsBeingTeleportedNear();
 }
 
 void ProcessPendingGrindRelocations()
@@ -6969,6 +6994,9 @@ void ProcessPendingGrindRelocations()
             }
             if (MotionMaster* motionMaster = bot->GetMotionMaster())
                 motionMaster->Clear();
+            if (!BotCanTeleportNow(bot))
+                break;
+
             bot->TeleportTo(spot.mapId, spot.x, spot.y, ground + 0.05f, frand(0.0f, 6.28f));
             TC_LOG_INFO("playerbots.pve", "Relocated grind bot {} (level {}) to map {} {:.0f} {:.0f}.",
                 bot->GetName(), bot->GetLevel(), spot.mapId, spot.x, spot.y);
@@ -7614,6 +7642,9 @@ void ProcessPendingSummons()
                 erasePending();
                 continue;
             }
+
+            if (!BotCanTeleportNow(bot))
+                break;
 
             bot->TeleportTo(summoner->GetMapId(),
                 summoner->GetPositionX() + frand(-2.5f, 2.5f),
@@ -9576,7 +9607,8 @@ void ResetManagedBotToZoneBand(Player* bot, uint32 zoneId, uint8 bottomLevel)
         // Homebind too, so a corpse run or a hearth keeps it in its zone.
         WorldLocation const home(spot.mapId, spot.x, spot.y, spot.z, 0.0f);
         bot->SetHomebind(home, zoneId);
-        bot->TeleportTo(home);
+        if (BotCanTeleportNow(bot))
+            bot->TeleportTo(home);
     }
 
     bot->SaveToDB();
@@ -9653,7 +9685,8 @@ void ResetManagedBotToLevelOne(Player* bot)
         {
             WorldLocation const home(info->mapId, info->positionX, info->positionY, info->positionZ, info->orientation);
             bot->SetHomebind(home, info->areaId);
-            bot->TeleportTo(home);
+            if (BotCanTeleportNow(bot))
+                bot->TeleportTo(home);
         }
         bot->SaveToDB();
         TC_LOG_INFO("playerbots.pve", "Bot {} was reset to level 1 and sent home.", bot->GetName());
