@@ -8544,6 +8544,38 @@ void RunFastTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         state.orderedTargetGuid = ObjectGuid::Empty;
     }
 
+    // A HELD pet target is re-examined every tick, not only when a new target
+    // is picked.
+    //
+    // The self-defence branch below already ranks a player-controlled attacker
+    // as its owner, but it sits behind "else if (!target)" - it only runs when
+    // the bot has nothing. So it fixes the moment of choosing and nothing
+    // after it, and a bot that did latch onto a pet stayed on it for the whole
+    // fight while the owner shot it in the back. Latching is easy: that branch
+    // deliberately falls back to the pet when the owner is not a legal target
+    // yet, which is exactly the instant before a hunter's own attack flags
+    // them, so the pet gets in first and then keeps the slot forever.
+    //
+    // Switching here costs nothing when the owner is already the target, and
+    // the same no-friendly-fire rule applies as below: a bot's pet resolves to
+    // a bot, which is never a legal target.
+    if (target && target->GetTypeId() != TYPEID_PLAYER)
+    {
+        if (Unit* petOwner = target->GetCharmerOrOwner())
+        {
+            if (Player* ownerPlayer = petOwner->ToPlayer())
+            {
+                if (!playerbot::IsManagedRandomBot(ownerPlayer) && ownerPlayer->IsAlive() &&
+                    bot->IsValidAttackTarget(ownerPlayer))
+                {
+                    TC_LOG_DEBUG("playerbots.pve", "Bot {} switches from pet {} to its owner {}.",
+                        bot->GetName(), target->GetName(), ownerPlayer->GetName());
+                    target = ownerPlayer;
+                }
+            }
+        }
+    }
+
     if (state.passive)
     {
         if (state.engaged)
