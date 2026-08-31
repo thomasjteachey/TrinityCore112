@@ -1743,6 +1743,7 @@ struct HumanSpot
 {
     ObjectGuid Guid;
     uint32 MapId = 0;
+    uint32 ZoneId = 0;
     float X = 0.0f;
     float Y = 0.0f;
     float Z = 0.0f;
@@ -1824,11 +1825,30 @@ uint32 AggressionIdleMinutes(Player const* bot, playerbot::PveConfig const& cfg)
 
 // Any player at all, wherever they are. Used by guardians, which travel by
 // teleport and so are not restricted to their own map.
-bool PickAnyHumanSpot(HumanSpot& out)
+bool PickAnyHumanSpot(HumanSpot& out, uint32 preferredZoneId = 0)
 {
     std::lock_guard<std::mutex> guard(g_HumanSpotLock);
     if (g_HumanSpots.empty())
         return false;
+
+    // A zone guardian answers for its own zone first: somebody fighting in
+    // Ashenvale is the Ashenvale guardian's business, and crossing the world
+    // for a stranger while its own zone is occupied is not. Only when nobody is
+    // in its zone does it range further, which is what stops a guardian sitting
+    // idle on an empty hillside.
+    if (preferredZoneId)
+    {
+        std::vector<HumanSpot const*> inZone;
+        for (HumanSpot const& spot : g_HumanSpots)
+            if (spot.ZoneId == preferredZoneId)
+                inZone.push_back(&spot);
+
+        if (!inZone.empty())
+        {
+            out = *inZone[urand(0, uint32(inZone.size()) - 1)];
+            return true;
+        }
+    }
 
     out = g_HumanSpots[urand(0, uint32(g_HumanSpots.size()) - 1)];
     return true;
@@ -4657,10 +4677,10 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
             StartWalkedJourney(state, bot->GetMapId(), nearestHuman.X, nearestHuman.Y,
                 nearestHuman.Z, 0, humanDistance);
         }
-        else if (HumanSpot destination; PickAnyHumanSpot(destination))
+        else if (HumanSpot destination; PickAnyHumanSpot(destination, zone.zoneId))
         {
-            // Beyond 240 yards, or on another map entirely. Any player anywhere
-            // will do - that is the point of the feature.
+            // Beyond 240 yards, or on another map entirely. Its own zone first,
+            // then anybody anywhere - an idle guardian is the thing to avoid.
             if (hungryMinutes > 0)
                 TC_LOG_INFO("playerbots.pve", "Guardian {} has had no player fight for {}m; closing to {:.0f}y.",
                     bot->GetName(), idleMinutes, dropDistance);
@@ -8309,7 +8329,15 @@ void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
             if (human->IsGameMaster() || playerbot::IsManagedRandomBot(human))
                 continue;
 
-            spots.push_back({ human->GetGUID(), human->GetMapId(),
+            // Somebody standing in a sanctuary or their own capital cannot be
+            // fought there, so they are not a destination - a bot teleported
+            // into Orgrimmar to reach a Horde player can do nothing but be cut
+            // down by the guards. IsInNoPvPArea is faction-aware, so an
+            // ALLIANCE player standing in Orgrimmar is still fair game.
+            if (human->pvpInfo.IsInNoPvPArea)
+                continue;
+
+            spots.push_back({ human->GetGUID(), human->GetMapId(), human->GetZoneId(),
                 human->GetPositionX(), human->GetPositionY(), human->GetPositionZ() });
         }
 
