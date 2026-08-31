@@ -384,7 +384,6 @@ void ProcessPendingLootExecutions();
 void GrantGatherSkillCredit(Player* bot, GameObject* go);
 void MaybeQueueOverBandRebirth(Player* bot, PveBotState& state);
 void ClearResurrectionSickness(Player* bot);
-uint32 GetRebirthZoneId(Player const* bot);
 void TrySkinCorpse(Player* bot, Creature* corpse);
 bool IsGatherableNodeFor(Player* bot, GameObject const* go, int32* outRequiredSkill);
 
@@ -4803,6 +4802,22 @@ std::unordered_map<uint32, uint8> g_ZoneTopLevel;
 // range - a zone whose clusters are all one level is a corridor, not a home.
 std::unordered_map<uint32, uint8> g_ZoneBottomLevel;
 std::vector<uint32> g_RebirthZones;
+
+// The zone a bot lives its cycles in. Deterministic from the guid and taken
+// from a sorted list, so it never moves: a bot reborn somewhere new each cycle
+// is not tied to a zone, it is just being teleported around.
+//
+// Defined here, beside the list it reads and ahead of every caller, because it
+// is called from both the file's anonymous namespace and from namespace
+// playerbot. Declared in one and defined in the other, it links as two
+// different symbols and the internal one never gets a body.
+uint32 GetRebirthZoneId(Player const* bot)
+{
+    if (g_RebirthZones.empty())
+        return 0;
+
+    return g_RebirthZones[bot->GetGUID().GetCounter() % g_RebirthZones.size()];
+}
 bool g_GrindSpotsBuilt = false;
 
 // World thread only. Mirrors the reference filters: normal-rank lootable
@@ -9254,17 +9269,6 @@ bool IsEndgameBot(Player const* bot)
     value ^= value >> 31;
 
     return uint32(value % fleet) < endgame;
-}
-
-// The zone a bot lives its cycles in. Deterministic from the guid and taken
-// from a sorted list, so it never moves: a bot reborn somewhere new each cycle
-// is not tied to a zone, it is just being teleported around.
-uint32 GetRebirthZoneId(Player const* bot)
-{
-    if (g_RebirthZones.empty())
-        return 0;
-
-    return g_RebirthZones[bot->GetGUID().GetCounter() % g_RebirthZones.size()];
 }
 
 bool GetZoneLevelBand(uint32 zoneId, uint8& bottom, uint8& top)
