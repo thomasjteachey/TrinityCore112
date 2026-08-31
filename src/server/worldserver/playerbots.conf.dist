@@ -728,3 +728,14 @@ Centurion.Hardcore.FieldKit.GreyUntilLevel = 15
 #                     0   - (disabled: guardians stand their post and wait)
 #
 Playerbot.Pve.ZoneGuardians.PlayerApproachYards = 300
+
+#
+#    Playerbot.WhoListVisibility
+#        Description: Whether playerbots appear in /who. They fill the list with names
+#                     nobody can talk to, but on a realm where the bots ARE the
+#                     population, hiding them makes the realm look empty.
+#        Default:     1 - (only a GM in GM mode sees them)
+#                     0 - (never listed)
+#                     2 - (listed to everyone)
+#
+Playerbot.WhoListVisibility = 1

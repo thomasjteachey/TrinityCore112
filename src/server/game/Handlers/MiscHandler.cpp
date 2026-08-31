@@ -180,9 +180,13 @@ void WorldSession::HandleGossipSelectOptionOpcode(WorldPacket& recvData)
 
 namespace
 {
-    // Playerbots are scenery, not players. They fill /who with hundreds of
-    // names nobody can talk to, so they are left out of it unless the asker
-    // is actually in GM mode and wants to see the machinery.
+    // Playerbots fill /who with hundreds of names nobody can talk to, so
+    // whether they appear at all is a realm decision:
+    //
+    //   0  never listed
+    //   1  listed only to a GM (the original behaviour)
+    //   2  listed to everyone, which is what a realm that wants its bots to
+    //      read as population wants
     bool IsPlayerbotCharacter(ObjectGuid guid)
     {
         Player const* player = ObjectAccessor::FindConnectedPlayer(guid);
@@ -284,7 +288,11 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
 
     uint32 gmLevelInWhoList  = sWorld->getIntConfig(CONFIG_GM_LEVEL_IN_WHO_LIST);
     uint32 displayCount = 0;
-    bool const showPlayerbots = _player->IsGameMaster();
+    // 0 = never, 1 = GM only, 2 = everyone.
+    uint32 const playerbotWhoVisibility = uint32(std::clamp(
+        sConfigMgr->GetIntDefault("Playerbot.WhoListVisibility", 1), 0, 2));
+    bool const showPlayerbots = playerbotWhoVisibility == 2 ||
+        (playerbotWhoVisibility == 1 && _player->IsGameMaster());
 
     WorldPacket data(SMSG_WHO, 500);                      // guess size
     data << uint32(matchCount);                           // placeholder, count of players matching criteria
