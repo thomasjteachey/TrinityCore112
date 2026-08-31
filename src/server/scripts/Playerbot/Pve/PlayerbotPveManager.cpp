@@ -6524,9 +6524,19 @@ void ProcessPendingGrindRelocations()
 
         if (fleeing && g_PveConfig.timidFleeYards > 0.0f)
         {
+            // Retreat is a move within the bot's own zone, not a migration: it
+            // wants to be away from whoever just killed it, not relocated
+            // somewhere it had no business being. A guardian's zone is its post;
+            // everyone else uses the ground they are standing on.
+            uint32 const guardianZone = GetGuardianZoneId(botRawGuid);
+            uint32 const retreatZone = guardianZone ? guardianZone : bot->GetZoneId();
+
             std::vector<GrindSpot> quiet;
             for (GrindSpot const& spot : candidates)
             {
+                if (spot.zoneId != retreatZone)
+                    continue;
+
                 HumanSpot nearest;
                 float distance = 0.0f;
                 if (!FindNearestHumanSpot(spot.mapId, spot.x, spot.y, spot.z, nearest, distance) ||
@@ -6534,12 +6544,19 @@ void ProcessPendingGrindRelocations()
                     quiet.push_back(spot);
             }
 
-            // Keep the unfiltered list if the whole bracket is crowded: moving
-            // somewhere is still better than standing where it died.
-            if (!quiet.empty())
-                candidates.swap(quiet);
-            else
-                TC_LOG_INFO("playerbots.pve", "Bot {} found nowhere quiet to retreat to.", bot->GetName());
+            // Busy zone with nowhere clear to go: stay put rather than teleport
+            // across it to somewhere no quieter. Skipping the trip costs the bot
+            // nothing - it is still timid, so it grinds where it stands and does
+            // not go looking for another fight either way.
+            if (quiet.empty())
+            {
+                TC_LOG_INFO("playerbots.pve",
+                    "Bot {} stays put: nowhere in zone {} is {}y clear of a person.",
+                    bot->GetName(), retreatZone, uint32(g_PveConfig.timidFleeYards));
+                continue;
+            }
+
+            candidates.swap(quiet);
         }
 
         for (uint8 attempt = 0; attempt < 10; ++attempt)

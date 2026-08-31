@@ -813,7 +813,10 @@ Playerbot.Pve.Aggression.TimidMinutes = 20
 
 #    Playerbot.Pve.Aggression.TimidFleeYards
 #        Description: How far a fleeing bot's new grind spot must be from the nearest person.
-#                     If nowhere in its level bracket is that quiet it relocates anyway.
+#                     The retreat stays inside the bot's own zone (a guardian's post). If the
+#                     zone is busy enough that nowhere in it is this clear, the bot skips the
+#                     move and stays where it is - it is still timid either way, so it grinds
+#                     in place rather than teleporting across a crowded zone for nothing.
 #        Default:     500
 
 Playerbot.Pve.Aggression.TimidFleeYards = 500
