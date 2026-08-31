@@ -4472,10 +4472,20 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
             bot->GetPositionZ(), nearestHuman, humanDistance);
     bool const nearAHuman = haveHuman && humanDistance <= cfg.guardianPlayerApproachYards;
 
-    // Teleported, not walked. The point of a guardian is to be met, and walking
-    // cannot cross a map at all - a guardian whose zone is empty, or whose only
-    // players are on another continent, would simply never arrive. Torcarn
-    // standing alone in his zone is the whole failure mode this exists to end.
+    // A guardian with nobody near it goes to somebody. Walking when that is
+    // possible, teleporting when it is not - walking cannot cross a map at all,
+    // so a guardian whose zone is empty would otherwise never arrive. Torcarn
+    // standing alone in his zone is the failure this exists to end.
+    //
+    // The teleport trigger is deliberately well beyond the drop distance. Drop
+    // at 210 to land outside the player's sight, and the guardian is then
+    // further away than the approach distance it was just teleported to satisfy
+    // - so a trigger of "further than approach" would teleport it again every
+    // pass, forever. Trigger on twice the approach distance instead, leaving a
+    // band in which the guardian simply walks the rest of the way in.
+    float const guardianTeleportTrigger =
+        std::max(cfg.guardianPlayerApproachYards * 2.0f, 300.0f);
+
     if (eligible && !nearAHuman && !bot->IsInCombat() && !state.engaged &&
         !state.journeyActive && state.errandKind == PveErrandKind::None &&
         cfg.guardianPlayerApproachYards > 0.0f &&
@@ -4483,10 +4493,16 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
     {
         state.nextGuardianApproachAt = PveClock::now() + std::chrono::seconds(30);
 
-        // Any player anywhere, not just this map - that is the point.
-        HumanSpot destination;
-        if (PickAnyHumanSpot(destination))
+        if (haveHuman && humanDistance <= guardianTeleportTrigger)
         {
+            // Near enough to walk, and visible travel always beats a port.
+            StartWalkedJourney(state, bot->GetMapId(), nearestHuman.X, nearestHuman.Y,
+                nearestHuman.Z, 0, humanDistance);
+        }
+        else if (HumanSpot destination; PickAnyHumanSpot(destination))
+        {
+            // Too far to walk, or on another map entirely. Any player anywhere
+            // will do - that is the point of the feature.
             std::lock_guard<std::mutex> guard(g_PvePendingLock);
             g_PendingGuardianTeleports[botRawGuid] = destination.Guid.GetRawValue();
         }
@@ -6136,7 +6152,11 @@ void ProcessPendingGuardianTeleports()
         // Land at the EDGE of the player's sight, not on top of them. A guardian
         // materialising at ten yards reads as a bug; one appearing at the far
         // edge of vision and walking in reads as somebody hunting you.
-        float const dropDistance = frand(120.0f, 180.0f);
+        // Just OUTSIDE the player's sight. Visibility.Distance.Continents is 200,
+        // so landing inside that means the player watches a guardian blink into
+        // existence. At 210+ the drop happens unseen and the guardian walks in
+        // over the horizon, which is the difference between an ambush and a bug.
+        float const dropDistance = frand(210.0f, 240.0f);
         float const dropAngle = frand(0.0f, 2.0f * float(M_PI));
         float x = 0.0f;
         float y = 0.0f;
