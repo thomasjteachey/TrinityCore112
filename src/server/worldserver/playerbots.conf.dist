@@ -669,6 +669,15 @@ Playerbot.Pve.Rebirth.ZoneBanded = 1
 
 Playerbot.Pve.Rebirth.EndgameBots = 20
 
+#    Playerbot.Pve.GuildName
+#        Description: Guild every managed playerbot is put into. It is created around the first
+#                     bot to need it, which becomes its guild master; every bot after that is
+#                     simply added. Empty disables the whole behaviour and leaves bots
+#                     guildless.
+#        Default:     AI Uprising
+
+Playerbot.Pve.GuildName = "AI Uprising"
+
 #    Playerbot.Pve.Travel.WalkMaxDistance
 #        Description: Relocations and town runs within this range are WALKED (segmented mmap
 #                     pathing, fights allowed en route, stuck/timeout falls back to teleport).

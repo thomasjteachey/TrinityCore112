@@ -15,6 +15,8 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "Guild.h"
+#include "GuildMgr.h"
 #include "Custom/custom_barracks_hardcore.h"
 #include "Playerbot/Pve/PlayerbotPveManager.h"
 
@@ -354,6 +356,9 @@ std::unordered_set<uint64> g_PendingRebirths;
 // Mail collection and auction shopping mutate world-thread-only structures
 // (Player::m_mail, AuctionHouseObject) - executed from OnWorldUpdate.
 std::unordered_set<uint64> g_PendingMailCollections;
+// Guild joins: GuildMgr and Guild both mutate shared state the core only ever
+// touches from world-thread opcode handlers, so the bot tick may only queue.
+std::unordered_set<uint64> g_PendingGuildJoins;
 std::unordered_set<uint64> g_PendingAuctionShopping;
 std::unordered_set<uint64> g_PendingAuctionSales;
 // Loot EXECUTION must happen on the world thread: Player::SendLoot for a
@@ -379,6 +384,7 @@ void ProcessPendingLootExecutions();
 void GrantGatherSkillCredit(Player* bot, GameObject* go);
 void MaybeQueueOverBandRebirth(Player* bot, PveBotState& state);
 void ClearResurrectionSickness(Player* bot);
+uint32 GetRebirthZoneId(Player const* bot);
 void TrySkinCorpse(Player* bot, Creature* corpse);
 bool IsGatherableNodeFor(Player* bot, GameObject const* go, int32* outRequiredSkill);
 
@@ -6650,6 +6656,28 @@ void ProcessPendingGrindRelocations()
                 if (itr != g_GrindSpotsByLevel.end())
                     candidates = itr->second;
             }
+
+            // Home first. Being tied to a zone has to mean living in it, not
+            // merely being reborn there - and picking uniformly from every
+            // cluster in a level bracket does not spread a fleet evenly, it
+            // concentrates it in whichever zone owns the most clusters in the
+            // most populated bracket. The Barrens is enormous and spans ten to
+            // twenty five, so it collected a quarter of the fleet while zones
+            // beside it held one bot each.
+            //
+            // Only when the bot's own zone has nothing at its level does it
+            // look further afield, which is also how it climbs out of a zone
+            // it has outgrown before rebirth catches up with it.
+            if (uint32 const homeZoneId = g_PveConfig.rebirthZoneBanded ? GetRebirthZoneId(bot) : 0u)
+            {
+                std::vector<GrindSpot> atHome;
+                for (GrindSpot const& spot : candidates)
+                    if (spot.zoneId == homeZoneId)
+                        atHome.push_back(spot);
+
+                if (!atHome.empty())
+                    candidates.swap(atHome);
+            }
         }
 
         if (candidates.empty())
@@ -7801,6 +7829,12 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         MaxOutWeaponSkills(bot);
         MaxOutGatheringSkills(bot);
         ClearResurrectionSickness(bot);
+
+        if (!cfg.guildName.empty() && !bot->GetGuildId())
+        {
+            std::lock_guard<std::mutex> guard(g_PvePendingLock);
+            g_PendingGuildJoins.insert(bot->GetGUID().GetRawValue());
+        }
         MaybeQueueOverBandRebirth(bot, state);
         DiscardScaffoldingItems(bot);
         DiscardOrphanedQuestItems(bot);
@@ -8662,6 +8696,7 @@ void PveManager::LoadConfig()
     g_PveConfig.rebirthAtMaxLevelPercent = uint32(std::clamp<int32>(
         sConfigMgr->GetIntDefault("Playerbot.Pve.RebirthAtMaxLevel.Percent", 0), 0, 100));
     g_PveConfig.rebirthZoneBanded = sConfigMgr->GetBoolDefault("Playerbot.Pve.Rebirth.ZoneBanded", true);
+    g_PveConfig.guildName = sConfigMgr->GetStringDefault("Playerbot.Pve.GuildName", "AI Uprising");
     g_PveConfig.endgameBotCount = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.Rebirth.EndgameBots", 20)));
     // Read from the population manager's own target so a count means what it says.
     g_PveConfig.populationTarget = uint32(std::max(1, sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.TargetMax", 256)));
@@ -8712,7 +8747,6 @@ PveConfig const& PveManager::GetConfig()
 
 void ResetManagedBotToLevelOne(Player* bot);
 void ResetManagedBotToZoneBand(Player* bot, uint32 zoneId, uint8 bottomLevel);
-uint32 GetRebirthZoneId(Player const* bot);
 bool IsEndgameBot(Player const* bot);
 bool GetZoneLevelBand(uint32 zoneId, uint8& bottom, uint8& top);
 
@@ -8796,6 +8830,43 @@ void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
     ProcessPendingGuardianTeleports();
     if (g_PveConfig.relocateEnabled)
         ProcessPendingGrindRelocations();
+
+    // Guild joins. The first bot through creates the guild and becomes its
+    // master; every bot after that is simply added.
+    if (!g_PveConfig.guildName.empty())
+    {
+        std::unordered_set<uint64> drained;
+        {
+            std::lock_guard<std::mutex> guard(g_PvePendingLock);
+            drained.swap(g_PendingGuildJoins);
+        }
+
+        for (uint64 botRawGuid : drained)
+        {
+            Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid));
+            if (!bot || !bot->IsInWorld() || !playerbot::IsManagedRandomBot(bot) || bot->GetGuildId())
+                continue;
+
+            Guild* guild = sGuildMgr->GetGuildByName(g_PveConfig.guildName);
+            if (!guild)
+            {
+                // Create it around this bot. Guild::Create adds the leader as
+                // guildmaster itself, so there is nothing further to do for it.
+                std::unique_ptr<Guild> created = std::make_unique<Guild>();
+                if (!created->Create(bot, g_PveConfig.guildName))
+                    continue;
+
+                sGuildMgr->AddGuild(created.release());
+                TC_LOG_INFO("playerbots.pve", "Created guild '{}' with {} as guild master.",
+                    g_PveConfig.guildName, bot->GetName());
+                continue;
+            }
+
+            CharacterDatabaseTransaction trans(nullptr);
+            if (guild->AddMember(trans, bot->GetGUID()))
+                TC_LOG_INFO("playerbots.pve", "Bot {} joined guild '{}'.", bot->GetName(), g_PveConfig.guildName);
+        }
+    }
 
     // Rebirth-flagged bots that just hit the level cap.
     {

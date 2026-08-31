@@ -102,6 +102,8 @@ struct PveConfig
     uint32 rebirthAtMaxLevelPercent = 0;
     // Rebirth into the bot's own zone band instead of all the way to level 1.
     bool rebirthZoneBanded = true;
+    // Guild every managed bot is put into. Empty disables it.
+    std::string guildName = "AI Uprising";
     // How many bots skip the zone cycle, climb to the cap and stay there.
     uint32 endgameBotCount = 20;
     // The configured fleet size, so endgameBotCount can be a real count.
