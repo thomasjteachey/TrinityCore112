@@ -32,6 +32,7 @@
 // switch (Item::IsSoulBound), which also opens the auction house to
 // everything.
 
+#include "Bag.h"
 #include "custom_barracks_hardcore.h"
 #include "ScriptMgr.h"
 #include "Configuration/Config.h"
@@ -695,7 +696,8 @@ namespace BarracksHardcore
     }
 
     // Full loot: worn GREEN AND BETTER equipment is at stake. White and grey
-    // gear is the floor and never drops, bags/inventory/money are always safe.
+    // gear is the floor and never drops, and money is always safe. A person's
+    // bags are safe too; a bot's carried gear is not - see below.
     void DropFullLootChest(Player* victim)
     {
         if (!s_enabled || !s_chestEntry || !victim || victim->IsGameMaster())
@@ -725,6 +727,41 @@ namespace BarracksHardcore
             if (urand(0, 99) < s_dropChancePercent)
                 chest.AddItem(item);
             droppedItems.push_back({ INVENTORY_SLOT_BAG_0, slot });
+        }
+
+        // Bots put their CARRIED gear at stake as well. A person keeps their
+        // bags - losing what you were wearing is the rule, being emptied out is
+        // a different game - but a bot is not playing for keeps, and a bot's
+        // bags are where gear goes to stop existing: it hoards upgrades it has
+        // outlevelled, and a zone-band rebirth moves everything it was wearing
+        // straight into them. Left safe, that gear leaves the economy for good.
+        //
+        // Only weapons and armour, and only green and above, matching the worn
+        // rule exactly. Bags themselves, trade goods, consumables and reagents
+        // are untouched - a bot stripped of its containers could not carry the
+        // field kit it is about to be issued.
+        if (IsPlayerbot(victim))
+        {
+            auto stakeCarriedGear = [&](Item* item, uint8 bag, uint8 slot)
+            {
+                ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
+                if (!proto || proto->Quality < ITEM_QUALITY_UNCOMMON)
+                    return;
+                if (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR)
+                    return;
+
+                if (urand(0, 99) < s_dropChancePercent)
+                    chest.AddItem(item);
+                droppedItems.push_back({ bag, slot });
+            };
+
+            for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+                stakeCarriedGear(victim->GetItemByPos(INVENTORY_SLOT_BAG_0, slot), INVENTORY_SLOT_BAG_0, slot);
+
+            for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+                if (Bag* bag = victim->GetBagByPos(bagSlot))
+                    for (uint32 bagIndex = 0; bagIndex < bag->GetBagSize(); ++bagIndex)
+                        stakeCarriedGear(bag->GetItemByPos(uint8(bagIndex)), bagSlot, uint8(bagIndex));
         }
 
         // Money is SAFE: gold never drops and never burns.
