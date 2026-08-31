@@ -4590,14 +4590,3 @@ Centurion.VioletHold.PartyWaveChancePercent = 10
 #        Default:     "" - (Disabled, no aura waives anything)
 
 Centurion.Unarmed.WaiverAuras = ""
-
-#
-#    Centurion.SharedQuestLoot
-#        Description: Quest items drop for every party member who needs them, instead of only
-#                     for whoever the round robin landed on. Members who do not have the quest
-#                     still cannot see or take the item - the per-player quest requirement is
-#                     unchanged - and each member's copy is tracked separately, so taking one
-#                     does not consume anyone else's. Master loot is not affected.
-#        Default:     1 - (Enabled)
-
-Centurion.SharedQuestLoot = 1
