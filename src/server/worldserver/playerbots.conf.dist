@@ -759,6 +759,16 @@ Playerbot.Pve.ZoneGuardians.PlayerApproachYards = 200
 #
 Playerbot.WhoListVisibility = 1
 
+#    Playerbot.WhoListTag
+#        Description: Shown in the guild column of the /who list for playerbots, so they can be
+#                     told apart from real players at a glance. Bots are also always listed
+#                     AFTER humans: the client is only sent 49 entries, so without that a fleet
+#                     of bots buries every person in an unfiltered /who. Empty string disables
+#                     the tag (ordering still applies).
+#        Default:     <Bot>
+
+Playerbot.WhoListTag = "<Bot>"
+
 #
 #    Playerbot.Pve.ZoneGuardians.EscalateAfterMinutes
 #        Description: Minutes a guardian may go without fighting an actual player before

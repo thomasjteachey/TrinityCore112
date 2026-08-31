@@ -54,6 +54,7 @@
 #include "WhoListStorage.h"
 #include "World.h"
 #include "WorldPacket.h"
+#include <unordered_set>
 #include <cstdarg>
 #include <zlib.h>
 
@@ -293,21 +294,39 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
         sConfigMgr->GetIntDefault("Playerbot.WhoListVisibility", 1), 0, 2));
     bool const showPlayerbots = playerbotWhoVisibility == 2 ||
         (playerbotWhoVisibility == 1 && _player->IsGameMaster());
+    // Shown in the guild column so a bot is identifiable at a glance. Empty
+    // disables the tag.
+    std::string const playerbotWhoTag = sConfigMgr->GetStringDefault("Playerbot.WhoListTag", "<Bot>");
 
     WorldPacket data(SMSG_WHO, 500);                      // guess size
     data << uint32(matchCount);                           // placeholder, count of players matching criteria
     data << uint32(displayCount);                         // placeholder, count of players displayed
 
     WhoListInfoVector const& whoList = sWhoListStorageMgr->GetWhoList();
+
+    // Classify once. The test walks the connected-player map and the playerbot
+    // account list, and the loop below reads it twice per character.
+    std::unordered_set<uint64> playerbotGuids;
+    for (WhoListPlayerInfo const& classifyTarget : whoList)
+        if (IsPlayerbotCharacter(classifyTarget.GetGuid()))
+            playerbotGuids.insert(classifyTarget.GetGuid().GetRawValue());
+
+    // People first, bots second. The client is only sent CONFIG_MAX_WHO (49)
+    // entries and the list is otherwise walked in storage order, so a fleet of
+    // bots silently buries every human in it - which makes an unfiltered /who,
+    // the one gesture that answers "is anybody actually playing", useless. Two
+    // passes over the same filter cost nothing at /who frequency and guarantee
+    // no bot ever takes a slot a person could have had.
+    uint32 const passCount = showPlayerbots ? 2u : 1u;
+    for (uint32 pass = 0; pass < passCount; ++pass)
     for (WhoListPlayerInfo const& target : whoList)
     {
-        // player can see member of other team only if CONFIG_ALLOW_TWO_SIDE_WHO_LIST
-        if (target.GetTeam() != team && !HasPermission(rbac::RBAC_PERM_TWO_SIDE_WHO_LIST))
+        bool const targetIsBot = playerbotGuids.count(target.GetGuid().GetRawValue()) != 0;
+        if (targetIsBot != (pass == 1))
             continue;
 
-        // Skipped before it is counted, so the bots do not inflate the totals
-        // either.
-        if (!showPlayerbots && IsPlayerbotCharacter(target.GetGuid()))
+        // player can see member of other team only if CONFIG_ALLOW_TWO_SIDE_WHO_LIST
+        if (target.GetTeam() != team && !HasPermission(rbac::RBAC_PERM_TWO_SIDE_WHO_LIST))
             continue;
 
         // player can see MODERATOR, GAME MASTER, ADMINISTRATOR only if CONFIG_GM_IN_WHO_LIST
@@ -386,8 +405,12 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
         if ((matchCount++) >= sWorld->getIntConfig(CONFIG_MAX_WHO))
             continue;
 
+        std::string guildName = target.GetGuildName();
+        if (targetIsBot && !playerbotWhoTag.empty())
+            guildName = guildName.empty() ? playerbotWhoTag : guildName + " " + playerbotWhoTag;
+
         data << target.GetPlayerName();                   // player name
-        data << target.GetGuildName();                    // guild name
+        data << guildName;                                // guild name, tagged for bots
         data << uint32(lvl);                              // player level
         data << uint32(class_);                           // player class
         data << uint32(race);                             // player race
