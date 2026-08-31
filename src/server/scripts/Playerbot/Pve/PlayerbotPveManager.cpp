@@ -378,6 +378,7 @@ bool CanWalkTo(Player* bot, Position const& destination);
 void ProcessPendingLootExecutions();
 void GrantGatherSkillCredit(Player* bot, GameObject* go);
 void MaybeQueueOverBandRebirth(Player* bot, PveBotState& state);
+void ClearResurrectionSickness(Player* bot);
 void TrySkinCorpse(Player* bot, Creature* corpse);
 bool IsGatherableNodeFor(Player* bot, GameObject const* go, int32* outRequiredSkill);
 
@@ -7589,8 +7590,12 @@ void RunDeathRecovery(Player* bot, PveBotState& state, playerbot::PveConfig cons
         return;
     }
 
+    // RepopAtGraveyard above already moved the ghost to the spirit healer, so
+    // this stands the bot up there - just without the sickness a person would
+    // take for the same choice.
     bot->ResurrectPlayer(0.66f);
     bot->SpawnCorpseBones();
+    ClearResurrectionSickness(bot);
     state.deathObserved = false;
 
     // Queued here rather than at the moment of death because the relocation
@@ -7663,18 +7668,12 @@ void RunDeathRecovery(Player* bot, PveBotState& state, playerbot::PveConfig cons
             state.deathSpotAt = PveTimePoint(); // gone; stop trying
     }
 
-    // Second death in the same five minutes: this spot kills us. Ban the
-    // walk arm (walking would retrace the deadly route) and let the
-    // relocation executor teleport us to a level-appropriate cluster.
-    if (state.recentDeathCount >= 2 && state.masterGuid.IsEmpty())
-    {
-        state.recentDeathCount = 0;
-        state.recentDeathWindowStart = PveTimePoint();
-        state.walkFallbackUntil = PveClock::now() + std::chrono::minutes(10);
-        TC_LOG_INFO("playerbots.pve", "Bot {} died twice in five minutes; relocating away.", bot->GetName());
-        std::lock_guard<std::mutex> guard(g_PvePendingLock);
-        g_PendingGrindRelocations.insert(bot->GetGUID().GetRawValue());
-    }
+    // A bot that dies repeatedly used to be teleported to another cluster. It
+    // no longer is: dying in the same place twice is what a level-appropriate
+    // zone feels like from the inside, and hauling the bot out of its zone
+    // contradicts being tied to one. It gets up at the graveyard and walks
+    // back, the same as a person would. The death counter stays - the hardcore
+    // corpse run still reads it.
 
     // A revived companion whose master moved on catches up by teleport; the
     // world-update pass owns the actual move.
@@ -7742,6 +7741,22 @@ bool TryClaimNearbyDeathChest(Player* bot, PveBotState& state, playerbot::PveCon
 // and the higher its level the longer that takes. Ask again on a slow cadence
 // so the standing backlog drains instead of waiting for a ding that may be
 // hours away.
+// A bot never carries resurrection sickness. Nothing in the bot path asks for
+// it - ResurrectPlayer is called without the flag - but a race can carry its
+// own sickness spell through ChrRaces, and an aura saved on a character before
+// this rule existed is restored on login and would otherwise sit there for its
+// full ten minutes. Strip it wherever it came from.
+void ClearResurrectionSickness(Player* bot)
+{
+    constexpr uint32 kSharedResurrectionSickness = 15007;
+
+    if (ChrRacesEntry const* raceEntry = sChrRacesStore.LookupEntry(bot->GetRace()))
+        if (raceEntry->ResSicknessSpellID)
+            bot->RemoveAurasDueToSpell(raceEntry->ResSicknessSpellID);
+
+    bot->RemoveAurasDueToSpell(kSharedResurrectionSickness);
+}
+
 void MaybeQueueOverBandRebirth(Player* bot, PveBotState& state)
 {
     if (!g_PveConfig.rebirthZoneBanded)
@@ -7785,6 +7800,7 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
         state.nextWeaponSkillCheckAt = PveClock::now() + std::chrono::seconds(15);
         MaxOutWeaponSkills(bot);
         MaxOutGatheringSkills(bot);
+        ClearResurrectionSickness(bot);
         MaybeQueueOverBandRebirth(bot, state);
         DiscardScaffoldingItems(bot);
         DiscardOrphanedQuestItems(bot);
