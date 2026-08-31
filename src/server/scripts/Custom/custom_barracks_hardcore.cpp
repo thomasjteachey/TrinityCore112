@@ -80,6 +80,10 @@ namespace BarracksHardcore
     uint32 s_warModeAuraSpell = 0;
     // Levels below this are issued GREY field kit instead of white.
     uint32 s_greyKitMaxLevel = 15;
+    // Experience paid for killing a playerbot, counted in BUBBLES - the twenty
+    // segments the experience bar is divided into, so one bubble is 5% of a
+    // level and twenty is a full bar. Fractions are allowed. 0 disables.
+    float s_playerKillXpBubbles = 2.0f;
     std::unordered_set<uint32> s_botAccountIds;
 
     std::shared_mutex s_optInLock;
@@ -95,6 +99,8 @@ namespace BarracksHardcore
         s_rewardMultiplier = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Hardcore.FfaPvp.RewardMultiplier", 2), 1, 10));
         s_warModeAuraSpell = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FfaPvp.WarModeAuraSpell", 0)));
         s_greyKitMaxLevel = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FieldKit.GreyUntilLevel", 15)));
+        s_playerKillXpBubbles = std::clamp(
+            sConfigMgr->GetFloatDefault("Centurion.Hardcore.PlayerKill.ExperienceBubbles", 2.0f), 0.0f, 20.0f);
 
         s_botAccountIds.clear();
         std::stringstream stream(sConfigMgr->GetStringDefault("Playerbot.RandomPopulation.BotAccountIds", ""));
@@ -814,8 +820,47 @@ public:
             amount += amount * int32(s_rewardMultiplier - 1);
     }
 
+    // Experience for killing a playerbot.
+    //
+    // Counted in BUBBLES: the experience bar is drawn as twenty segments, so a
+    // bubble is 5% of a level and the whole bar is twenty of them. The reward
+    // is therefore a share of the KILLER's own next-level requirement, which
+    // keeps it worth the same at every level instead of becoming irrelevant.
+    void AwardPlayerKillExperience(Player* killer, Player* victim)
+    {
+        if (!s_enabled || s_playerKillXpBubbles <= 0.0f)
+            return;
+
+        if (!killer || !victim || killer == victim || !killer->IsAlive())
+            return;
+
+        // Only real people are paid for this. Bots kill each other constantly
+        // on an FFA realm - the zone guardians hunt each other by design - so
+        // paying bots would run the entire fleet to the level cap in minutes.
+        if (!IsPlayerbot(victim) || IsPlayerbot(killer))
+            return;
+
+        // Zero at the level cap, which is also where GiveXP would refuse it.
+        uint32 const perLevel = killer->GetXPForNextLevel();
+        if (!perLevel)
+            return;
+
+        uint32 const amount = uint32(float(perLevel) * s_playerKillXpBubbles / 20.0f);
+        if (!amount)
+            return;
+
+        // GiveXP walks multiple levels if the award overflows, and honours the
+        // level cap and the XP-frozen flag on its own.
+        killer->GiveXP(amount, victim);
+
+        TC_LOG_INFO("playerbots.hardcore", "{} killed playerbot {} for {} xp ({} bubbles of level {}).",
+            killer->GetName(), victim->GetName(), amount, s_playerKillXpBubbles, killer->GetLevel());
+    }
+
     void OnPVPKill(Player* killer, Player* victim) override
     {
+        AwardPlayerKillExperience(killer, victim);
+
         // Bots are players, so bot-on-bot kills land here rather than in the
         // creature hook - and on a full-loot FFA realm the guardians hunt each
         // other constantly. A bot stripping another bot on an empty hillside

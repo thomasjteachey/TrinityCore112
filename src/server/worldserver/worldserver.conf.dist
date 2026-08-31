@@ -3224,6 +3224,17 @@ CharDelete.KeepDays = 30
 #    Centurion.Hardcore.FfaPvp.RewardMultiplier
 #        Description: Experience and loot-gold multiplier for PLAYERS while their FFA flag is
 #                     armed (bots never receive it). Default 2.
+#
+#    Centurion.Hardcore.PlayerKill.ExperienceBubbles
+#        Description: Experience a PLAYER receives for killing a playerbot, counted in
+#                     BUBBLES - the twenty segments the experience bar is drawn as. One
+#                     bubble is 5% of a level, twenty is a full bar. Fractions allowed.
+#                     Scales with the killer's own next-level requirement, so it stays
+#                     worth the same at every level. Bots are never paid for killing each
+#                     other: they do it constantly on an FFA realm and would run the whole
+#                     fleet to the level cap.
+#        Default:     2 - (two bubbles, 10% of a level)
+#                     0 - (disabled)
 ###################################################################################################
 
 Centurion.Hardcore.Enable = 0
@@ -3232,6 +3243,7 @@ Centurion.Hardcore.FullLoot.ChestDespawnSeconds = 600
 Centurion.Hardcore.FullLoot.DropChancePercent = 50
 Centurion.Hardcore.FfaPvp.MinZoneLevel = 20
 Centurion.Hardcore.FfaPvp.RewardMultiplier = 2
+Centurion.Hardcore.PlayerKill.ExperienceBubbles = 2
 
 DireMaulBeads.ItemId = 21982
 DireMaulBeads.AuraId = 90002
