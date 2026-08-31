@@ -744,3 +744,18 @@ Playerbot.Pve.ZoneGuardians.PlayerApproachYards = 200
 #                     2 - (listed to everyone)
 #
 Playerbot.WhoListVisibility = 1
+
+#
+#    Playerbot.Pve.ZoneGuardians.EscalateAfterMinutes
+#        Description: Minutes a guardian may go without fighting an actual player before
+#                     it starts landing closer. Teleports normally drop at 210 yards -
+#                     outside the 200 yard sight range, so the port is never witnessed
+#                     and the guardian walks in over the horizon. Past this many idle
+#                     minutes the drop closes by six yards a minute, down to twenty,
+#                     until it is arriving on top of them.
+#                     Any fight with a real player resets the clock, so an active
+#                     guardian never escalates - only a bored one does.
+#        Default:     30
+#                     0 - (escalate immediately)
+#
+Playerbot.Pve.ZoneGuardians.EscalateAfterMinutes = 30

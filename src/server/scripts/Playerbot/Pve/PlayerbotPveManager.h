@@ -115,6 +115,9 @@ struct PveConfig
     // every player is, so this needs no searching. 0 disables the approach and
     // leaves guardians standing their post.
     float guardianPlayerApproachYards = 200.0f;
+    // Minutes without a fight against a real player before a guardian starts
+    // landing closer and closer, until it is arriving on top of them.
+    uint32 guardianEscalateAfterMinutes = 30;
 };
 
 // Open-world PvE behavior for managed random bots, layered on the existing

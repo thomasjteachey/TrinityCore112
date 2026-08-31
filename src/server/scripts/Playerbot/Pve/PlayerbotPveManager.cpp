@@ -187,6 +187,10 @@ struct PveBotState
     // Zone guardians: when this bot was first seen away from its post.
     PveTimePoint guardianOutOfZoneSince{};
     PveTimePoint nextGuardianApproachAt{};
+    // When this guardian last fought an actual person. Drives the escalation:
+    // a guardian nobody has fought in a while stops being polite about where it
+    // lands.
+    PveTimePoint lastPlayerFightAt{};
     // Hardcore reclaim: when we fell, so the walk back is abandoned once the
     // drop chest would have despawned.
     PveTimePoint deathSpotAt{};
@@ -318,7 +322,12 @@ std::unordered_set<uint64> g_PendingGrindRelocations;
 // bot guid -> the player it should be dropped next to. Guardians exist to meet
 // people, so one with nobody in reach is teleported to somebody rather than
 // left standing in an empty zone.
-std::unordered_map<uint64, uint64> g_PendingGuardianTeleports;
+struct GuardianTeleportRequest
+{
+    uint64 HumanRawGuid = 0;
+    float DropDistance = 210.0f;
+};
+std::unordered_map<uint64, GuardianTeleportRequest> g_PendingGuardianTeleports;
 // Bots that need a vendor with none in walking range: the world thread
 // teleports them to the nearest vendor cluster (a town run), shopping and
 // repairs happen through the normal errand, and the dry-scan relocation
@@ -4477,14 +4486,33 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
     // so a guardian whose zone is empty would otherwise never arrive. Torcarn
     // standing alone in his zone is the failure this exists to end.
     //
-    // The teleport trigger is deliberately well beyond the drop distance. Drop
-    // at 210 to land outside the player's sight, and the guardian is then
-    // further away than the approach distance it was just teleported to satisfy
-    // - so a trigger of "further than approach" would teleport it again every
-    // pass, forever. Trigger on twice the approach distance instead, leaving a
-    // band in which the guardian simply walks the rest of the way in.
-    float const guardianTeleportTrigger =
-        std::max(cfg.guardianPlayerApproachYards * 2.0f, 300.0f);
+    // Teleport in from beyond 240 yards; land at 210, which is outside the
+    // 200 yard sight range so the port itself is never witnessed. The trigger
+    // sits above the drop on purpose - a guardian dropped at 210 must not
+    // immediately qualify for another teleport, or it would port forever.
+    constexpr float kGuardianTeleportTriggerYards = 240.0f;
+    constexpr float kGuardianDropYards = 210.0f;
+
+    // Escalation. A guardian that has not had a fight with an actual person for
+    // a while stops being polite about where it lands, closing in a little more
+    // each minute until it is arriving right on top of somebody. The clock is
+    // reset by any fight with a real player, so an active hunter never
+    // escalates - only a bored one does.
+    if (state.lastPlayerFightAt == PveTimePoint())
+        state.lastPlayerFightAt = PveClock::now();
+
+    if (Unit* currentVictim = bot->GetVictim())
+        if (Player const* victimPlayer = currentVictim->ToPlayer())
+            if (!playerbot::IsManagedRandomBot(victimPlayer))
+                state.lastPlayerFightAt = PveClock::now();
+
+    int64 const idleMinutes = std::chrono::duration_cast<std::chrono::minutes>(
+        PveClock::now() - state.lastPlayerFightAt).count();
+    int64 const hungryMinutes = std::max<int64>(0, idleMinutes - int64(cfg.guardianEscalateAfterMinutes));
+
+    // Six yards closer per idle minute, floored at twenty - close enough to be
+    // standing next to them, which is the loudest the feature can be.
+    float const dropDistance = std::max(20.0f, kGuardianDropYards - float(hungryMinutes) * 6.0f);
 
     if (eligible && !nearAHuman && !bot->IsInCombat() && !state.engaged &&
         !state.journeyActive && state.errandKind == PveErrandKind::None &&
@@ -4493,18 +4521,23 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
     {
         state.nextGuardianApproachAt = PveClock::now() + std::chrono::seconds(30);
 
-        if (haveHuman && humanDistance <= guardianTeleportTrigger)
+        if (haveHuman && humanDistance <= kGuardianTeleportTriggerYards)
         {
-            // Near enough to walk, and visible travel always beats a port.
+            // Inside the trigger: walk the rest of the way. Visible travel
+            // always beats a port.
             StartWalkedJourney(state, bot->GetMapId(), nearestHuman.X, nearestHuman.Y,
                 nearestHuman.Z, 0, humanDistance);
         }
         else if (HumanSpot destination; PickAnyHumanSpot(destination))
         {
-            // Too far to walk, or on another map entirely. Any player anywhere
+            // Beyond 240 yards, or on another map entirely. Any player anywhere
             // will do - that is the point of the feature.
+            if (hungryMinutes > 0)
+                TC_LOG_INFO("playerbots.pve", "Guardian {} has had no player fight for {}m; closing to {:.0f}y.",
+                    bot->GetName(), idleMinutes, dropDistance);
+
             std::lock_guard<std::mutex> guard(g_PvePendingLock);
-            g_PendingGuardianTeleports[botRawGuid] = destination.Guid.GetRawValue();
+            g_PendingGuardianTeleports[botRawGuid] = { destination.Guid.GetRawValue(), dropDistance };
         }
     }
 
@@ -6132,31 +6165,30 @@ void ProcessPendingClassQuestTravels()
 // World thread: drop guardians next to a player.
 void ProcessPendingGuardianTeleports()
 {
-    std::unordered_map<uint64, uint64> drained;
+    std::unordered_map<uint64, GuardianTeleportRequest> drained;
     {
         std::lock_guard<std::mutex> guard(g_PvePendingLock);
         drained.swap(g_PendingGuardianTeleports);
     }
 
-    for (auto const& [botRawGuid, humanRawGuid] : drained)
+    for (auto const& [botRawGuid, request] : drained)
     {
         Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid));
         if (!bot || !bot->IsInWorld() || !bot->IsAlive() || bot->IsInCombat() ||
             bot->InBattleground() || bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
             continue;
 
-        Player* human = ObjectAccessor::FindConnectedPlayer(ObjectGuid(humanRawGuid));
+        Player* human = ObjectAccessor::FindConnectedPlayer(ObjectGuid(request.HumanRawGuid));
         if (!human || !human->IsInWorld() || !human->IsAlive() || human->InBattleground())
             continue;
 
         // Land at the EDGE of the player's sight, not on top of them. A guardian
         // materialising at ten yards reads as a bug; one appearing at the far
         // edge of vision and walking in reads as somebody hunting you.
-        // Just OUTSIDE the player's sight. Visibility.Distance.Continents is 200,
-        // so landing inside that means the player watches a guardian blink into
-        // existence. At 210+ the drop happens unseen and the guardian walks in
-        // over the horizon, which is the difference between an ambush and a bug.
-        float const dropDistance = frand(210.0f, 240.0f);
+        // Distance chosen by the caller: normally just outside the player's
+        // sight, closer once the guardian has gone hungry (see the escalation
+        // in RunZoneGuardianTick).
+        float const dropDistance = request.DropDistance;
         float const dropAngle = frand(0.0f, 2.0f * float(M_PI));
         float x = 0.0f;
         float y = 0.0f;
@@ -8029,6 +8061,8 @@ void PveManager::LoadConfig()
     g_PveConfig.pathBudgetPerSecond = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.PathBudgetPerSecond", 150));
     g_PveConfig.guardianPlayerApproachYards = std::max(0.0f,
         sConfigMgr->GetFloatDefault("Playerbot.Pve.ZoneGuardians.PlayerApproachYards", 200.0f));
+    g_PveConfig.guardianEscalateAfterMinutes = uint32(std::max(0,
+        sConfigMgr->GetIntDefault("Playerbot.Pve.ZoneGuardians.EscalateAfterMinutes", 30)));
     g_PveConfig.auctionPriceMultiplier = sConfigMgr->GetFloatDefault("Playerbot.Pve.AuctionPriceMultiplier", 10.0f);
     g_PveConfig.auctionMinTradeGoodStack = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionMinTradeGoodStack", 10));
     g_PveConfig.auctionValuableUnitCopper = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionValuableUnitCopper", 1000));
