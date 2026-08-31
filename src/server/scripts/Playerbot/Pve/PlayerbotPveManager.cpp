@@ -1751,6 +1751,77 @@ struct HumanSpot
 std::mutex g_HumanSpotLock;
 std::vector<HumanSpot> g_HumanSpots;
 
+// ---------------------------------------------------------------------------
+// Aggression: 1-100, one value per character, deciding how long that bot will
+// tolerate not fighting a person before it goes and finds one.
+//
+// Derived from the character GUID rather than stored, so it is stable for the
+// life of the character, survives restarts, costs no column and no lookup - and
+// two bots of the same class are still different people.
+//
+// The shape is deliberately a bell rather than a flat roll: most of a class
+// sits near its temperament and the extremes are rare, so a fleet reads as a
+// population rather than as noise. Three uniforms averaged (Irwin-Hall) is
+// close enough to normal for this and needs no floating-point library.
+// ---------------------------------------------------------------------------
+float ClassAggressionMean(uint8 classId)
+{
+    switch (classId)
+    {
+        case CLASS_ROGUE:        return 75.0f;   // picks the fight, by trade
+        case CLASS_DEATH_KNIGHT: return 72.0f;
+        case CLASS_WARRIOR:      return 70.0f;
+        case CLASS_PALADIN:      return 60.0f;
+        case CLASS_HUNTER:       return 58.0f;
+        case CLASS_SHAMAN:       return 55.0f;
+        case CLASS_DRUID:        return 50.0f;
+        case CLASS_WARLOCK:      return 45.0f;
+        case CLASS_MAGE:         return 40.0f;
+        case CLASS_PRIEST:       return 35.0f;   // and the healer least of all
+        default:                 return 50.0f;
+    }
+}
+
+uint8 GetBotAggression(Player const* bot)
+{
+    if (!bot)
+        return 50;
+
+    // splitmix64: cheap, and scatters adjacent GUIDs properly - a plain
+    // modulo would hand consecutively created bots near-identical values.
+    auto mix = [](uint64 value)
+    {
+        value += 0x9E3779B97F4A7C15ull;
+        value = (value ^ (value >> 30)) * 0xBF58476D1CE4E5B9ull;
+        value = (value ^ (value >> 27)) * 0x94D049BB133111EBull;
+        return value ^ (value >> 31);
+    };
+
+    uint64 const hashed = mix(bot->GetGUID().GetRawValue());
+    float const u1 = float((hashed >>  0) & 0xFFFF) / 65535.0f;
+    float const u2 = float((hashed >> 16) & 0xFFFF) / 65535.0f;
+    float const u3 = float((hashed >> 32) & 0xFFFF) / 65535.0f;
+
+    // Mean 0.5, bell shaped, bounded - so no bot ever rolls absurdly far from
+    // its class temperament.
+    float const bell = (u1 + u2 + u3) / 3.0f;
+    float const value = ClassAggressionMean(bot->GetClass()) + (bell - 0.5f) * 90.0f;
+    return uint8(std::clamp(value, 1.0f, 100.0f));
+}
+
+// How long this bot tolerates peace. Aggression 100 waits the minimum, 1 waits
+// the maximum, everything else in between.
+uint32 AggressionIdleMinutes(Player const* bot, playerbot::PveConfig const& cfg)
+{
+    if (!cfg.aggressionMaxMinutes)
+        return 0;
+
+    float const scale = float(GetBotAggression(bot) - 1) / 99.0f;
+    float const minutes = float(cfg.aggressionMaxMinutes) -
+        scale * float(cfg.aggressionMaxMinutes - cfg.aggressionMinMinutes);
+    return uint32(std::max(1.0f, minutes));
+}
+
 // Any player at all, wherever they are. Used by guardians, which travel by
 // teleport and so are not restricted to their own map.
 bool PickAnyHumanSpot(HumanSpot& out)
@@ -4349,6 +4420,64 @@ void LoadGuardianPostsOnce()
 
         TC_LOG_INFO("playerbots.pve", "Loaded {} standing zone guardian posts.", uint32(g_GuardianZoneByGuid.size()));
     }
+}
+
+// Ordinary bots hunt people too, each on its own schedule. Aggression decides
+// how long one will tolerate peace before travelling to a player and starting
+// something, so a fleet drifts toward the players over time instead of
+// ignoring them - and the rogues arrive long before the priests do.
+//
+// Guardians are excluded: they have their own, keener schedule with escalation.
+void MaybeHuntPlayersByAggression(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
+{
+    if (!cfg.aggressionMaxMinutes || GetGuardianZoneId(bot->GetGUID().GetRawValue()))
+        return;
+
+    if (!bot->IsAlive() || bot->IsInCombat() || state.engaged || !state.masterGuid.IsEmpty() ||
+        state.journeyActive || state.errandKind != PveErrandKind::None)
+        return;
+
+    PveTimePoint const now = PveClock::now();
+    if (now < state.nextGuardianApproachAt)
+        return;
+
+    state.nextGuardianApproachAt = now + std::chrono::seconds(60);
+
+    // Seed on first sight rather than leave it at the epoch, or every bot comes
+    // up already starving after a restart and the whole fleet ports at once.
+    if (state.lastPlayerFightAt == PveTimePoint())
+        state.lastPlayerFightAt = now;
+
+    if (Unit* currentVictim = bot->GetVictim())
+        if (Player const* victimPlayer = currentVictim->ToPlayer())
+            if (!playerbot::IsManagedRandomBot(victimPlayer))
+                state.lastPlayerFightAt = now;
+
+    int64 const idleMinutes = std::chrono::duration_cast<std::chrono::minutes>(
+        now - state.lastPlayerFightAt).count();
+    if (idleMinutes < int64(AggressionIdleMinutes(bot, cfg)))
+        return;
+
+    // Already near somebody: it is not being ignored, so leave it alone.
+    HumanSpot nearest;
+    float nearestDistance = 0.0f;
+    if (FindNearestHumanSpot(bot->GetMapId(), bot->GetPositionX(), bot->GetPositionY(),
+            bot->GetPositionZ(), nearest, nearestDistance) && nearestDistance <= 240.0f)
+        return;
+
+    HumanSpot destination;
+    if (!PickAnyHumanSpot(destination))
+        return;   // nobody online to go to
+
+    // Count the trip as its fight for this cycle, so a bot that travels and
+    // finds nothing does not re-port every minute afterwards.
+    state.lastPlayerFightAt = now;
+
+    TC_LOG_INFO("playerbots.pve", "Bot {} (aggression {}) goes looking for a fight after {}m.",
+        bot->GetName(), GetBotAggression(bot), idleMinutes);
+
+    std::lock_guard<std::mutex> guard(g_PvePendingLock);
+    g_PendingGuardianTeleports[bot->GetGUID().GetRawValue()] = { destination.Guid.GetRawValue(), 210.0f };
 }
 
 void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
@@ -7465,6 +7594,7 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     // unable to gain experience, permanently, with the flag persisted to the
     // characters table.
     RunZoneGuardianTick(bot, state, cfg);
+    MaybeHuntPlayersByAggression(bot, state, cfg);
 
     // Class quests are sought out across the world, not just stumbled upon.
     if (cfg.questsEnabled && state.masterGuid.IsEmpty() && !state.engaged && !bot->IsInCombat() &&
@@ -8072,6 +8202,10 @@ void PveManager::LoadConfig()
         sConfigMgr->GetFloatDefault("Playerbot.Pve.ZoneGuardians.PlayerApproachYards", 200.0f));
     g_PveConfig.guardianEscalateAfterMinutes = uint32(std::max(0,
         sConfigMgr->GetIntDefault("Playerbot.Pve.ZoneGuardians.EscalateAfterMinutes", 30)));
+    g_PveConfig.aggressionMinMinutes = uint32(std::max(1,
+        sConfigMgr->GetIntDefault("Playerbot.Pve.Aggression.MinMinutes", 5)));
+    g_PveConfig.aggressionMaxMinutes = uint32(std::max(0,
+        sConfigMgr->GetIntDefault("Playerbot.Pve.Aggression.MaxMinutes", 90)));
     g_PveConfig.auctionPriceMultiplier = sConfigMgr->GetFloatDefault("Playerbot.Pve.AuctionPriceMultiplier", 10.0f);
     g_PveConfig.auctionMinTradeGoodStack = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionMinTradeGoodStack", 10));
     g_PveConfig.auctionValuableUnitCopper = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionValuableUnitCopper", 1000));

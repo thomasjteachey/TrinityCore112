@@ -759,3 +759,29 @@ Playerbot.WhoListVisibility = 1
 #                     0 - (escalate immediately)
 #
 Playerbot.Pve.ZoneGuardians.EscalateAfterMinutes = 30
+
+#
+#    Playerbot.Pve.Aggression.MinMinutes
+#    Playerbot.Pve.Aggression.MaxMinutes
+#        Description: Every bot carries an aggression score of 1-100. It is derived from
+#                     the character GUID, so it is stable for the life of that character,
+#                     survives restarts and costs no storage - and two bots of the same
+#                     class are still different people.
+#                     The distribution is a bell, not a flat roll, centred on a mean that
+#                     depends on class: rogue 75, death knight 72, warrior 70, paladin 60,
+#                     hunter 58, shaman 55, druid 50, warlock 45, mage 40, priest 35, with
+#                     a spread of about 15 either side. Most of a class sits near its
+#                     temperament and the extremes are rare, so a fleet reads as a
+#                     population rather than as noise.
+#                     The score decides how long that bot tolerates not fighting a person
+#                     before it travels to one and starts something: 100 waits MinMinutes,
+#                     1 waits MaxMinutes. At the defaults a median rogue goes hunting after
+#                     about 27 minutes and a median priest after about 61.
+#                     Travel uses the same teleport as the zone guardians - dropped at 210
+#                     yards, outside sight, so it walks in rather than appearing.
+#        Default:     5 / 90
+#                     MaxMinutes 0 disables the hunt for ordinary bots and leaves it to
+#                     the zone guardians.
+#
+Playerbot.Pve.Aggression.MinMinutes = 5
+Playerbot.Pve.Aggression.MaxMinutes = 90

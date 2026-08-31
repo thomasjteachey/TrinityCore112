@@ -118,6 +118,14 @@ struct PveConfig
     // Minutes without a fight against a real player before a guardian starts
     // landing closer and closer, until it is arriving on top of them.
     uint32 guardianEscalateAfterMinutes = 30;
+    // Every bot carries an aggression score of 1-100, normally distributed and
+    // stable for the life of the character, biased by class. It decides how
+    // long the bot will go without fighting a person before it travels to one
+    // and starts a fight: the most aggressive wait AggressionMinMinutes, the
+    // most passive wait AggressionMaxMinutes. 0 for both disables the hunt for
+    // ordinary bots and leaves it to the zone guardians.
+    uint32 aggressionMinMinutes = 5;
+    uint32 aggressionMaxMinutes = 90;
 };
 
 // Open-world PvE behavior for managed random bots, layered on the existing
