@@ -98,47 +98,17 @@ GameObject* PlayerChestBuilder::Summon() const
     _player->RemoveGameObject(chest, false);
     chest->SetOwnerGUID(ObjectGuid::Empty);
 
-    // The chest is deliberately left ownerless above so it outlives the corpse.
-    // That also removes GameObject::IsAlwaysVisibleFor's owner escape, which is
-    // what had been masking the following.
+    // NOTE: an earlier version forced SetSpawnedByDefault(false) here, on the
+    // reasoning that a player-summoned GameObject keeps m_spawnedByDefault true
+    // and is therefore never isSpawned(). A probe on the live realm disproved
+    // it outright - "isSpawned true -> true, spawnedByDefault false -> false" -
+    // so the chest was always spawned and always findable, and the block was
+    // doing nothing. Removed rather than left in as decoration.
     //
-    // WorldObject::SummonGameObject only calls SetSpawnedByDefault(false) when
-    // the summoner is NOT a player (Object.cpp) - and this summoner is the dying
-    // player, so the flag keeps its constructor value of true. Combined with a
-    // non-zero respawn delay, all three clauses of GameObject::isSpawned() are
-    // then false for the object's entire life:
-    //
-    //     m_respawnDelayTime == 0                        -> false (it is 3600)
-    //     m_respawnTime > 0 && !m_spawnedByDefault        -> false (flag is true)
-    //     m_respawnTime == 0 && m_spawnedByDefault        -> false (timer is set)
-    //
-    // So the chest is invisible to every client (isSpawned -> IsInvisibleDueToDespawn
-    // -> CanSeeOrDetect) and rejected by every bot search: FindNearestGameObject
-    // takes spawnedOnly = true by default, and three further call sites test
-    // isSpawned() explicitly. That is why bots walked straight past death chests.
-    //
-    // The flag also inverts the timer's meaning. GameObject::Update treats the
-    // expiry as a DESPAWN only when !m_spawnedByDefault ("Despawn timer" ->
-    // GO_JUST_DEACTIVATED); left true it falls through to the RESPAWN path, so
-    // the chest would wink into existence after an hour and then stay forever.
-    //
-    // Order matters: clear the flag first, because SetRespawnTime only publishes
-    // the visibility update when it sees !m_spawnedByDefault.
-    bool const spawnedBefore = chest->isSpawned();
-    bool const byDefaultBefore = chest->isSpawnedByDefault();
-
-    chest->SetSpawnedByDefault(false);
-    chest->SetRespawnTime(int32(_despawnTime.count()));
-
-    // Settles, from the running server rather than by argument, whether the
-    // above was actually needed: if spawnedBefore is false then a summoned
-    // chest really was unfindable by every isSpawned()-filtered search (which
-    // includes FindNearestGameObject's default spawnedOnly = true, the call the
-    // bots use). If it is true, this whole block is unnecessary and should go.
-    TC_LOG_INFO("playerbots.pve",
-        "CustomLootChests: chest {} for {} - isSpawned {} -> {}, spawnedByDefault {} -> {}, respawnDelay {}s.",
-        _chestEntry, _player->GetName(), spawnedBefore, chest->isSpawned(),
-        byDefaultBefore, chest->isSpawnedByDefault(), chest->GetRespawnDelay());
+    // Bots ignoring chests was never a visibility problem: it was priority.
+    // The chest lookup sat behind an errand scan that fires once every fifteen
+    // seconds and only while the bot is idle, so a bot always found a fight or
+    // an errand first.
 
     Loot& loot = chest->loot;
     loot.clear();

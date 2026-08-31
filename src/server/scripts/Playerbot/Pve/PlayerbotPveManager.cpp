@@ -7098,9 +7098,19 @@ void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cf
     // ninth of the area of the errand scan's 200 yard sweep. Finding chests
     // further out remains that scan's job; this one only has to notice what is
     // already underfoot.
+    // COMBAT is the only thing that outranks a chest. An earlier version also
+    // required errandKind == None, which sounds harmless and is not: bots are
+    // very often mid-errand - a vendor run, an auction trip, a mail collection -
+    // and a bot revived on top of its own chest went straight back to its
+    // auction errand and left the gear on the floor. That was observed directly.
+    //
+    // A chest therefore PREEMPTS whatever errand is running. Errands are
+    // resumable and the gear is not: chests despawn, and another bot or a player
+    // will take one that is left lying there. IsRecentErrandTarget still stops a
+    // chest that cannot be reached from being re-picked forever.
     if (cfg.hardcoreLootChestEntry && bot->IsAlive() && !bot->IsInCombat() && !state.engaged &&
-        state.masterGuid.IsEmpty() && state.errandKind == PveErrandKind::None &&
-        state.pendingLootGuid.IsEmpty() && !state.journeyActive &&
+        state.masterGuid.IsEmpty() && state.pendingLootGuid.IsEmpty() &&
+        state.errandKind != PveErrandKind::QuestObject &&
         now >= state.nextChestScanAt)
     {
         state.nextChestScanAt = now + std::chrono::seconds(3);
