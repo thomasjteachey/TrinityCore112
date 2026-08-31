@@ -4983,12 +4983,25 @@ void BuildGrindSpotCacheOnce()
         if (top <= kStarterZoneTopLevel)
             g_ZoneBottomLevel[zoneId] = 1;
 
-        // A band has to be worth living in. Requiring only top > bottom let
-        // through zones whose clusters all sit at one level - a dungeon portal
-        // and the few mobs around it, for instance - and a bot posted to one
-        // spent its whole life cycling a single level: reach seventeen, reset
-        // to sixteen, reach seventeen again, minutes apart, forever. Observed
-        // live on zone 1581 with a band of exactly one level.
+        // The zone has to be somewhere a bot can actually live.
+        //
+        // First, it must be an OUTDOOR zone of a scanned continent. Cluster
+        // zones are resolved from map coordinates at runtime, and an instance's
+        // entrance reaches into the overworld - the Moonbrook tunnel in
+        // Westfall resolves to The Deadmines - so an instance zone id leaks
+        // into the list from a cluster standing on map 0. AreaTable knows the
+        // difference: The Deadmines is continent 36, which is not a map the
+        // grind cache ever scans, so nothing there can be reached on foot.
+        AreaTableEntry const* zoneEntry = sAreaTableStore.LookupEntry(zoneId);
+        if (!zoneEntry || !std::binary_search(g_PveConfig.relocateMaps.begin(),
+                g_PveConfig.relocateMaps.end(), zoneEntry->ContinentID))
+            continue;
+
+        // Second, the band has to be worth living in. Requiring only
+        // top > bottom let through zones whose clusters all sit at one level,
+        // and a bot posted to one spent its whole life cycling a single level:
+        // reach seventeen, reset to sixteen, reach seventeen again, minutes
+        // apart, forever.
         uint8 const bottom = g_ZoneBottomLevel[zoneId];
         if (top >= bottom + kMinRebirthBandLevels && bottom >= 1 && g_ZoneSpotCount[zoneId] >= 5)
             g_RebirthZones.push_back(zoneId);
