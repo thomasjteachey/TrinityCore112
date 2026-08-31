@@ -4794,14 +4794,30 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
     // immediately qualify for another teleport, or it would port forever.
     constexpr float kGuardianTeleportTriggerYards = 240.0f;
     constexpr float kGuardianDropYards = 210.0f;
+    // Idle minutes past the escalation threshold needed to reach the twenty
+    // yard floor, at six yards closer per minute.
+    constexpr int64 kGuardianFullEscalationMinutes = int64((kGuardianDropYards - 20.0f) / 6.0f) + 1;
 
     // Escalation. A guardian that has not had a fight with an actual person for
     // a while stops being polite about where it lands, closing in a little more
     // each minute until it is arriving right on top of somebody. The clock is
     // reset by any fight with a real player, so an active hunter never
     // escalates - only a bored one does.
+    //
+    // A guardian that has never fought anybody starts STARVING, not fed.
+    // Seeding this to "now" made a freshly posted guardian maximally polite: it
+    // teleported to two hundred and ten yards, which is deliberately outside
+    // the two hundred yard sight range, so a player entering the zone never saw
+    // it arrive and frequently never saw it at all. First contact is the moment
+    // a guardian matters most - it should be standing on you, and only become
+    // polite AFTER it has actually fought somebody and been reset by it.
+    //
+    // Only guardians are seeded this way. The ordinary aggression hunt keeps
+    // its own "seed to now" so the whole fleet does not port at once on a
+    // restart; it returns before this function for anyone holding a post.
     if (state.lastPlayerFightAt == PveTimePoint())
-        state.lastPlayerFightAt = PveClock::now();
+        state.lastPlayerFightAt = PveClock::now() -
+            std::chrono::minutes(cfg.guardianEscalateAfterMinutes + kGuardianFullEscalationMinutes);
 
     if (Unit* currentVictim = bot->GetVictim())
         if (Player const* victimPlayer = currentVictim->ToPlayer())
