@@ -713,15 +713,16 @@ Playerbot.Pve.AuctionBuy.Enable = 0
 Playerbot.Pve.AuctionBuy.BudgetPct = 30
 
 #    Playerbot.Pve.AuctionBuy.MaxOverpayPct
-#        Description: Ceiling on what a bot will pay for a lot, as a percentage of the item's face
-#                     value (vendor buy price, or the same item-level reckoning the bots price
-#                     their own listings with). Buyers rank candidates purely by item-level gain,
-#                     so without a ceiling a rich bot will pay any sum at all for a one-point
-#                     upgrade and a player can list junk at whatever the bot's purse allows.
-#                     Keep this comfortably ABOVE Playerbot.Pve.AuctionPriceMultiplier x 100:
-#                     bots open every market at that multiplier, so a lower ceiling here would
-#                     stop them buying each other's listings entirely.
-#                     0 disables the ceiling, leaving BudgetPct as the only limit.
+#        Description: Ceiling on what a bot will ASK for a lot when it undercuts the house, as a
+#                     percentage of the item's face value. This is NOT a purchase limit - bots
+#                     will consider any listing at any price, and decide with the value test in
+#                     BudgetWorthLevels, which penalises an overpriced listing smoothly instead
+#                     of refusing it outright.
+#                     It exists because the undercut anchor is the cheapest listing on the house
+#                     including players', so without a cap one person listing a green for ten
+#                     thousand gold walks the whole fleet's asking prices up to match.
+#                     Keep it comfortably ABOVE Playerbot.Pve.AuctionPriceMultiplier x 100.
+#                     0 disables it.
 #        Default:     1200 - (12x face value; the sell multiplier is 10x)
 
 Playerbot.Pve.AuctionBuy.MaxOverpayPct = 1200

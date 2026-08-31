@@ -5979,10 +5979,20 @@ double ComputeItemFaceValue(ItemTemplate const* proto)
     return value;
 }
 
-// The most a bot will pay for a lot before it decides it is being fleeced.
-// Zero means no ceiling. Returns copper for the whole lot, so it is directly
-// comparable with AuctionEntry::buyout.
-uint64 ComputeMaxAcceptablePrice(ItemTemplate const* proto, uint32 itemCount)
+// The most a bot will ASK for a lot when it undercuts the house.
+//
+// This was once a purchase ceiling too, and is not any more. A hard refusal on
+// price is a cliff: a listing one copper over it is not merely unattractive, it
+// is invisible, with nothing in the game to tell the seller why. The buy side
+// prices an item by weighing what it is worth against what it costs, which
+// penalises an overpriced listing smoothly and in proportion - a bot simply
+// finds something better to spend on, and comes back if nothing else turns up.
+//
+// It still governs what bots CHARGE. The undercut anchor is the cheapest
+// listing on the house including players', so without a cap one person listing
+// a green for ten thousand gold walks the entire fleet's asking prices up to
+// match. Zero disables it. Copper for the whole lot.
+uint64 ComputeSaneAskingPrice(ItemTemplate const* proto, uint32 itemCount)
 {
     playerbot::PveConfig const& cfg = playerbot::PveManager::GetConfig();
     if (!cfg.auctionBuyMaxOverpayPct)
@@ -6052,10 +6062,9 @@ uint32 ComputeAuctionBuyout(ItemTemplate const* proto, uint32 count,
 
         // The anchor is whatever is cheapest on the house, and players list
         // there too - so one player listing a green for ten thousand gold would
-        // otherwise walk the whole fleet up to match it, and every bot would
-        // then refuse to buy the result. Hold the ask to what a bot would be
-        // willing to pay, which is the same ceiling the buy side applies.
-        price = std::min(price, ComputeMaxAcceptablePrice(proto, count));
+        // otherwise walk the whole fleet up to match it. Hold the ask to a sane
+        // multiple of the item's own worth instead.
+        price = std::min(price, ComputeSaneAskingPrice(proto, count));
     }
     else
     {
@@ -6335,15 +6344,6 @@ void ProcessPendingAuctionShopping()
 
             ItemTemplate const* proto = item->GetTemplate();
             if (!proto)
-                continue;
-
-            // Affordable is not the same as worth it. Ranking is by item-level
-            // gain alone, so without this a bot with a deep purse will pay any
-            // sum at all for a one-point upgrade - a player who lists a trinket
-            // for six hundred gold gets six hundred gold. Cap the price against
-            // what the item is actually worth, by the same reckoning the bots
-            // price their own listings with.
-            if (auction->buyout > ComputeMaxAcceptablePrice(proto, auction->itemCount))
                 continue;
 
             // Bags and quivers are shopped for exactly like gear. The scorer
