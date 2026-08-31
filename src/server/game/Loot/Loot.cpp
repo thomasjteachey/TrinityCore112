@@ -15,6 +15,7 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "Config.h"
 #include "Loot.h"
 #include "Group.h"
 #include "ItemEnchantmentMgr.h"
@@ -96,7 +97,25 @@ bool LootItem::AllowedForPlayer(Player const* player, bool isGivenByMasterLooter
     if (pProto->Class == ITEM_CLASS_RECIPE && pProto->Bonding == BIND_WHEN_PICKED_UP && pProto->Spells[1].SpellId != 0 && player->HasSpell(pProto->Spells[1].SpellId))
         return false;
 
-    if (needs_quest && !freeforall && player->GetGroup() && (player->GetGroup()->GetLootMethod() == GROUP_LOOT || player->GetGroup()->GetLootMethod() == ROUND_ROBIN) && !ownerGuid.IsEmpty() && ownerGuid != player->GetGUID())
+    // Quest items for the whole party, not just whoever the round robin
+    // happened to land on. Levelling together otherwise means every drop is
+    // one person's, and the group stands around killing the same camp four
+    // times over - the single most common complaint about grouping in classic.
+    //
+    // This is safe to relax because the quest requirement check immediately
+    // below still applies to every player individually: a member who does not
+    // have the quest, or has already finished collecting, still cannot see or
+    // take the item. Nothing is duplicated for anyone who does not need it.
+    //
+    // The per-player bookkeeping was already there - quest items live in
+    // PlayerQuestItems with a NotNormalLootItem::is_looted flag PER PLAYER,
+    // not the shared LootItem::is_looted - so each member takes their own copy
+    // without affecting anyone else's. Only this ownership test stood in the
+    // way. Master loot is deliberately untouched.
+    if (needs_quest && !freeforall && player->GetGroup() &&
+        (player->GetGroup()->GetLootMethod() == GROUP_LOOT || player->GetGroup()->GetLootMethod() == ROUND_ROBIN) &&
+        !ownerGuid.IsEmpty() && ownerGuid != player->GetGUID() &&
+        !sConfigMgr->GetBoolDefault("Centurion.SharedQuestLoot", true))
         return false;
 
     // check quest requirements
