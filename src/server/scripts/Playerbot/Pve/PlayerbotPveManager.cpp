@@ -5657,20 +5657,39 @@ double ComputeItemFaceValue(ItemTemplate const* proto)
 // comparable with AuctionEntry::buyout.
 uint64 ComputeMaxAcceptablePrice(ItemTemplate const* proto, uint32 itemCount)
 {
-    uint32 const overpayPct = playerbot::PveManager::GetConfig().auctionBuyMaxOverpayPct;
-    if (!overpayPct)
+    playerbot::PveConfig const& cfg = playerbot::PveManager::GetConfig();
+    if (!cfg.auctionBuyMaxOverpayPct)
         return std::numeric_limits<uint64>::max();
-
-    double const face = ComputeItemFaceValue(proto);
-    if (face <= 0.0)
-        return std::numeric_limits<uint64>::max();   // unpriceable: fall back to the purse
 
     // Face value covers BuyCount units; scale it to the size of this lot, the
     // same conversion the seller does in the other direction.
     uint32 const buyCount = std::max<uint32>(1, proto->BuyCount);
-    double const lotFace = face * double(std::max<uint32>(1, itemCount)) / double(buyCount);
+    double const lotFace = ComputeItemFaceValue(proto) *
+        double(std::max<uint32>(1, itemCount)) / double(buyCount);
 
-    return uint64(std::max(1.0, lotFace * double(overpayPct) / 100.0));
+    uint64 ceiling = uint64(std::max(1.0, lotFace * double(cfg.auctionBuyMaxOverpayPct) / 100.0));
+
+    // Never refuse a price our own seller would ASK. The buy ceiling and the
+    // sell markup are two independent config keys with nothing tying them
+    // together, so a raised AuctionPriceMultiplier would otherwise freeze every
+    // bot-to-bot sale silently - and with the core's auction stocker disabled,
+    // bot listings are very nearly the whole market. Taking the larger of the
+    // two makes that deadlock unrepresentable rather than merely documented.
+    ceiling = std::max(ceiling, uint64(lotFace * double(std::max(0.01f, cfg.auctionPriceMultiplier))));
+
+    // Same reasoning for the vendor floor the seller clamps up to: an item
+    // whose SellPrice dwarfs its BuyPrice (inverted or partial price data, which
+    // hand-made items really do carry) would otherwise be listed high by one bot
+    // and refused by every other.
+    ceiling = std::max(ceiling, VendorPriceFloor(proto, itemCount));
+
+    // Deliberately no "unpriceable" escape hatch: the cascade cannot return zero
+    // - its smallest possible output is a fraction of a copper - so a hatch keyed
+    // on that would be dead code. The three-way maximum above is what actually
+    // protects items the formula prices badly, and containers are exactly that
+    // case: a quest-reward bag with no vendor prices and item level 0 values at
+    // six copper, so the seller's own ask is the only sane figure available.
+    return ceiling;
 }
 
 uint32 ComputeAuctionBuyout(ItemTemplate const* proto, uint32 count,
@@ -5703,6 +5722,13 @@ uint32 ComputeAuctionBuyout(ItemTemplate const* proto, uint32 count,
         uint64 const standingPerUnit = uint64(itr->second);
         uint64 const askPerUnit = standingPerUnit > undercut ? standingPerUnit - undercut : 1;
         price = std::max<uint64>(askPerUnit * count, 1);
+
+        // The anchor is whatever is cheapest on the house, and players list
+        // there too - so one player listing a green for ten thousand gold would
+        // otherwise walk the whole fleet up to match it, and every bot would
+        // then refuse to buy the result. Hold the ask to what a bot would be
+        // willing to pay, which is the same ceiling the buy side applies.
+        price = std::min(price, ComputeMaxAcceptablePrice(proto, count));
     }
     else
     {
