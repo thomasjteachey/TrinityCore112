@@ -40,26 +40,7 @@ LootItem::LootItem(LootStoreItem const& li)
     conditions = li.conditions;
 
     ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemid);
-    // "freeforall is 1 if everyone's supposed to get the quest item" - the
-    // core's own words, in Player::StoreLootItem. It is the switch that stops
-    // the SHARED LootItem::is_looted being set when somebody takes one:
-    //
-    //     if (!item->freeforall)
-    //         item->is_looted = true;
-    //
-    // and that flag is what Loot::FillQuestLoot tests before offering the item
-    // to the next player. So without it, the first looter erases the drop for
-    // everyone whose loot window had not been built yet - which is exactly what
-    // a party questing together sees, and no amount of relaxing the visibility
-    // rules fixes it, because the item is gone rather than hidden.
-    //
-    // Blizzard sets ITEM_FLAG_MULTI_DROP on some quest items and not others.
-    // Extending it to every quest-required drop is the whole of the shared
-    // quest loot behaviour; per-player eligibility is still enforced by the
-    // quest requirement test in AllowedForPlayer, so this hands nothing to
-    // anyone who does not need it.
-    freeforall = (proto && proto->HasFlag(ITEM_FLAG_MULTI_DROP)) ||
-        (li.needs_quest && sConfigMgr->GetBoolDefault("Centurion.SharedQuestLoot", true));
+    freeforall = proto && proto->HasFlag(ITEM_FLAG_MULTI_DROP);
     follow_loot_rules = proto && (proto->HasFlag(ITEM_FLAGS_CU_FOLLOW_LOOT_RULES));
 
     needs_quest = li.needs_quest;
@@ -116,10 +97,25 @@ bool LootItem::AllowedForPlayer(Player const* player, bool isGivenByMasterLooter
     if (pProto->Class == ITEM_CLASS_RECIPE && pProto->Bonding == BIND_WHEN_PICKED_UP && pProto->Spells[1].SpellId != 0 && player->HasSpell(pProto->Spells[1].SpellId))
         return false;
 
-    // Note the !freeforall: with Centurion.SharedQuestLoot on, every quest
-    // required drop is free for all, so this ownership test no longer applies
-    // to them and each party member is offered their own copy.
-    if (needs_quest && !freeforall && player->GetGroup() && (player->GetGroup()->GetLootMethod() == GROUP_LOOT || player->GetGroup()->GetLootMethod() == ROUND_ROBIN) && !ownerGuid.IsEmpty() && ownerGuid != player->GetGUID())
+    // Quest items for the whole party, not just whoever the round robin
+    // happened to land on. Levelling together otherwise means every drop is
+    // one person's, and the group stands around killing the same camp four
+    // times over - the single most common complaint about grouping in classic.
+    //
+    // This is safe to relax because the quest requirement check immediately
+    // below still applies to every player individually: a member who does not
+    // have the quest, or has already finished collecting, still cannot see or
+    // take the item. Nothing is duplicated for anyone who does not need it.
+    //
+    // The per-player bookkeeping was already there - quest items live in
+    // PlayerQuestItems with a NotNormalLootItem::is_looted flag PER PLAYER,
+    // not the shared LootItem::is_looted - so each member takes their own copy
+    // without affecting anyone else's. Only this ownership test stood in the
+    // way. Master loot is deliberately untouched.
+    if (needs_quest && !freeforall && player->GetGroup() &&
+        (player->GetGroup()->GetLootMethod() == GROUP_LOOT || player->GetGroup()->GetLootMethod() == ROUND_ROBIN) &&
+        !ownerGuid.IsEmpty() && ownerGuid != player->GetGUID() &&
+        !sConfigMgr->GetBoolDefault("Centurion.SharedQuestLoot", true))
         return false;
 
     // check quest requirements
