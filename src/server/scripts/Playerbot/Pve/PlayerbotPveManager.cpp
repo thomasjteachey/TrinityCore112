@@ -6590,7 +6590,17 @@ void ExecuteEngagedCombatTick(Player* bot, PveBotState& state)
     // melee. Fall back to the firing line instead of the target's face.
     if (!hunterHoldsRange && mayIssueChase && !bot->IsWithinMeleeRange(victim))
     {
-        float const chaseDistance = BotShouldHoldRangedFiringLine(bot) ? 12.0f : 1.0f;
+        // A hunter that is BEING ATTACKED stands and fights, so it has to close -
+        // holding a firing line here is what made a level 6 hunter walk away
+        // from a plainstrider already hitting it. DriveHunterRangedPositioning
+        // declines for exactly that case, which dropped through to this chase,
+        // and a 12 yard follow generator then saw the bot at 3.8 yards, inside
+        // its band, and dutifully backed it out. From outside that is a hunter
+        // fleeing a mob it should be meleeing.
+        //
+        // Only hold the firing line when the pet or someone else has the mob.
+        bool const standAndFight = victim->GetVictim() == bot;
+        float const chaseDistance = (!standAndFight && BotShouldHoldRangedFiringLine(bot)) ? 12.0f : 1.0f;
         playerbot::PvpClassActions::IssueFollowMovement(bot, victim, chaseDistance);
     }
 
