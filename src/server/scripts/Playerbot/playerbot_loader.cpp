@@ -911,6 +911,7 @@ public:
             { "status", HandlePlayerbotPveStatusCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
             { "reset", HandlePlayerbotPveResetCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "respec", HandlePlayerbotPveRespecCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "rehome", HandlePlayerbotPveRehomeCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "wipe", HandlePlayerbotPveWipeCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "clearauctions", HandlePlayerbotPveClearAuctionsCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
         };
@@ -1116,6 +1117,18 @@ public:
 
         uint32 const resetCount = playerbot::PveManager::ResetBotsToLevelOne(percent.value_or(100));
         handler->PSendSysMessage("Reset %u managed playerbots to level 1 and sent them home.", resetCount);
+        return true;
+    }
+
+    // .playerbot pve rehome - send every online managed bot to the zone its
+    // guid assigns it, instead of waiting for relocation to fire on its own.
+    static bool HandlePlayerbotPveRehomeCommand(ChatHandler* handler)
+    {
+        if (!handler)
+            return false;
+
+        uint32 const queued = playerbot::PveManager::RelocateBotsToHomeZones();
+        handler->PSendSysMessage("Queued %u managed playerbots to relocate to their own zones.", queued);
         return true;
     }
 

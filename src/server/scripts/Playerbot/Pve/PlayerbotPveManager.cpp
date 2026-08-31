@@ -9455,6 +9455,39 @@ void ResetManagedBotToLevelOne(Player* bot)
     }
 }
 
+// Send every managed bot to the zone it is supposed to live in, now, rather
+// than waiting for relocation to fire naturally. Turning zone banding on, or
+// retuning a band, leaves the whole fleet standing wherever it already was -
+// and a bot only relocates on a dry wander, an outlevel or a rebirth, so
+// evening out on its own takes hours.
+uint32 PveManager::RelocateBotsToHomeZones()
+{
+    uint32 queued = 0;
+    std::lock_guard<std::mutex> guard(g_PvePendingLock);
+    for (auto const& [accountId, session] : sWorld->GetAllSessions())
+    {
+        Player* candidate = session ? session->GetPlayer() : nullptr;
+        if (!candidate || !candidate->IsInWorld() || !playerbot::IsManagedRandomBot(candidate))
+            continue;
+
+        // Same exemptions the reset command uses: a companion is serving a
+        // human, a PvP-only bot is not part of the levelling world, and a
+        // guardian's post IS its home already.
+        if (IsExemptFromBattlegroundOrchestration(candidate) || IsPvpOnlyBot(candidate) ||
+            GetGuardianZoneId(candidate->GetGUID().GetRawValue()))
+            continue;
+
+        // Queued rather than moved here: the relocation executor owns the
+        // actual teleport, runs on the world thread and already prefers the
+        // bot's own zone. Doing it inline would duplicate all of that, and
+        // badly.
+        g_PendingGrindRelocations.insert(candidate->GetGUID().GetRawValue());
+        ++queued;
+    }
+
+    return queued;
+}
+
 uint32 PveManager::ResetBotsToLevelOne(uint8 percent)
 {
     percent = std::min<uint8>(percent ? percent : 100, 100);

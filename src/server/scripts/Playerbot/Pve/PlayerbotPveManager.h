@@ -189,6 +189,8 @@ public:
     // managed bots (companions excluded) back to freshly created level-1
     // characters and ports them to their racial starting spots.
     static uint32 ResetBotsToLevelOne(uint8 percent);
+    // Send every managed bot to its assigned zone immediately.
+    static uint32 RelocateBotsToHomeZones();
     // Wipe every auction in every house, escrowed items included. World
     // thread only - it mutates the live auction maps.
     static uint32 ClearAuctionHouse();
