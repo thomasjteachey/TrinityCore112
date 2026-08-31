@@ -35,6 +35,8 @@
 #include "ScriptMgr.h"
 #include "Configuration/Config.h"
 #include "Formulas.h"
+#include "SpellAuraEffects.h"
+#include "SpellAuras.h"
 #include "Chat.h"
 #include "Creature.h"
 #include "DatabaseEnv.h"
@@ -803,9 +805,30 @@ public:
             amount *= s_rewardMultiplier;
     }
 
+    // Gold bonus carried by the War Mode aura itself rather than by the engine,
+    // so it is retuned by editing the spell instead of rebuilding. Effect 1 is
+    // a DUMMY whose base points ARE the percentage.
+    //
+    // Honor deliberately has no counterpart here: effect 0 is a real
+    // SPELL_AURA_MOD_HONOR_GAIN_PCT, which Player::RewardHonor already applies
+    // on its own ("AddPct(honor_f, GetMaxPositiveAuraModifier(...))"), so the
+    // honor half of this feature is pure data and needs no code at all.
+    int32 WarModeGoldBonusPct(Player const* player)
+    {
+        if (!s_warModeAuraSpell || !player)
+            return 0;
+
+        Aura const* aura = player->GetAura(s_warModeAuraSpell);
+        if (!aura)
+            return 0;
+
+        AuraEffect const* effect = aura->GetEffect(EFFECT_1);
+        return effect ? effect->GetAmount() : 0;
+    }
+
     void OnMoneyChanged(Player* player, int32& amount) override
     {
-        if (!s_enabled || s_rewardMultiplier < 2 || amount <= 0)
+        if (!s_enabled || amount <= 0)
             return;
 
         // Loot pickups only: the loot window is open while money is looted,
@@ -817,7 +840,14 @@ public:
         if (session && IsBotAccount(session->GetAccountId()))
             return;
 
-        if (IsFfaArmed(player))
+        if (!IsFfaArmed(player))
+            return;
+
+        // Prefer the aura's own number; fall back to the config multiplier so a
+        // realm with no War Mode aura configured behaves exactly as before.
+        if (int32 const goldPct = WarModeGoldBonusPct(player); goldPct > 0)
+            amount += CalculatePct(amount, goldPct);
+        else if (s_rewardMultiplier >= 2)
             amount += amount * int32(s_rewardMultiplier - 1);
     }
 

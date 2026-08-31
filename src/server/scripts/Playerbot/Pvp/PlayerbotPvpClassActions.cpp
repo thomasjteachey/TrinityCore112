@@ -18,6 +18,7 @@
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotPvpLifecycleActions.h"
 #include "PlayerbotSharedStateGuard.h"
+#include "Playerbot/Pve/PlayerbotPveManager.h"
 #include "Chat.h"
 #include "Configuration/Config.h"
 #include "GameTime.h"
@@ -1646,7 +1647,12 @@ void IssueHunterDeadZoneRetreatMovement(Player* player, Unit* target, char const
     // approach that wants to close again, which is what "running in circles
     // around the mob" looks like from outside. Once it has aggro, the hunter
     // stands and fights.
-    if (target->GetVictim() == player)
+    //
+    // PvE realms only. This was written for open-world grinding against mobs,
+    // which simply chase and cannot be kited out of the dead zone. A PLAYER can
+    // be, so a battleground hunter should still open the gap - and realms
+    // running only the PvP engine keep the original behaviour untouched.
+    if (playerbot::PveManager::GetConfig().enabled && target->GetVictim() == player)
         return;
 
     MotionMaster* motionMaster = player->GetMotionMaster();
