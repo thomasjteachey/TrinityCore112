@@ -315,6 +315,10 @@ std::mutex g_PvePendingLock;
 std::unordered_map<uint64, PendingSummon> g_PendingSummonsByBotGuid;
 std::unordered_set<uint64> g_PendingGroupInviteAccepts;
 std::unordered_set<uint64> g_PendingGrindRelocations;
+// bot guid -> the player it should be dropped next to. Guardians exist to meet
+// people, so one with nobody in reach is teleported to somebody rather than
+// left standing in an empty zone.
+std::unordered_map<uint64, uint64> g_PendingGuardianTeleports;
 // Bots that need a vendor with none in walking range: the world thread
 // teleports them to the nearest vendor cluster (a town run), shopping and
 // repairs happen through the normal errand, and the dry-scan relocation
@@ -1737,6 +1741,18 @@ struct HumanSpot
 
 std::mutex g_HumanSpotLock;
 std::vector<HumanSpot> g_HumanSpots;
+
+// Any player at all, wherever they are. Used by guardians, which travel by
+// teleport and so are not restricted to their own map.
+bool PickAnyHumanSpot(HumanSpot& out)
+{
+    std::lock_guard<std::mutex> guard(g_HumanSpotLock);
+    if (g_HumanSpots.empty())
+        return false;
+
+    out = g_HumanSpots[urand(0, uint32(g_HumanSpots.size()) - 1)];
+    return true;
+}
 
 bool FindNearestHumanSpot(uint32 mapId, float x, float y, float z, HumanSpot& out, float& outDistance)
 {
@@ -4456,15 +4472,24 @@ void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig c
             bot->GetPositionZ(), nearestHuman, humanDistance);
     bool const nearAHuman = haveHuman && humanDistance <= cfg.guardianPlayerApproachYards;
 
-    if (eligible && haveHuman && !nearAHuman && !bot->IsInCombat() && !state.engaged &&
+    // Teleported, not walked. The point of a guardian is to be met, and walking
+    // cannot cross a map at all - a guardian whose zone is empty, or whose only
+    // players are on another continent, would simply never arrive. Torcarn
+    // standing alone in his zone is the whole failure mode this exists to end.
+    if (eligible && !nearAHuman && !bot->IsInCombat() && !state.engaged &&
         !state.journeyActive && state.errandKind == PveErrandKind::None &&
+        cfg.guardianPlayerApproachYards > 0.0f &&
         PveClock::now() >= state.nextGuardianApproachAt)
     {
-        state.nextGuardianApproachAt = PveClock::now() + std::chrono::seconds(15);
-        TC_LOG_INFO("playerbots.pve", "Guardian {} closes on a player {:.0f}y away.",
-            bot->GetName(), humanDistance);
-        StartWalkedJourney(state, bot->GetMapId(), nearestHuman.X, nearestHuman.Y, nearestHuman.Z,
-            0, humanDistance);
+        state.nextGuardianApproachAt = PveClock::now() + std::chrono::seconds(30);
+
+        // Any player anywhere, not just this map - that is the point.
+        HumanSpot destination;
+        if (PickAnyHumanSpot(destination))
+        {
+            std::lock_guard<std::mutex> guard(g_PvePendingLock);
+            g_PendingGuardianTeleports[botRawGuid] = destination.Guid.GetRawValue();
+        }
     }
 
     // A guardian standing next to a player is where it should be, whatever the
@@ -6088,6 +6113,46 @@ void ProcessPendingClassQuestTravels()
 // World thread. Teleports one bot to a random spot for its level, with the
 // reference safety checks: loaded map, no enemy-faction zone, not into
 // water, grounded Z, and never in sight of a real player.
+// World thread: drop guardians next to a player.
+void ProcessPendingGuardianTeleports()
+{
+    std::unordered_map<uint64, uint64> drained;
+    {
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        drained.swap(g_PendingGuardianTeleports);
+    }
+
+    for (auto const& [botRawGuid, humanRawGuid] : drained)
+    {
+        Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid));
+        if (!bot || !bot->IsInWorld() || !bot->IsAlive() || bot->IsInCombat() ||
+            bot->InBattleground() || bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
+            continue;
+
+        Player* human = ObjectAccessor::FindConnectedPlayer(ObjectGuid(humanRawGuid));
+        if (!human || !human->IsInWorld() || !human->IsAlive() || human->InBattleground())
+            continue;
+
+        // Land at the EDGE of the player's sight, not on top of them. A guardian
+        // materialising at ten yards reads as a bug; one appearing at the far
+        // edge of vision and walking in reads as somebody hunting you.
+        float const dropDistance = frand(120.0f, 180.0f);
+        float const dropAngle = frand(0.0f, 2.0f * float(M_PI));
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        human->GetNearPoint(bot, x, y, z, dropDistance, dropAngle);
+
+        // Fix the height against the HUMAN's map: the guardian may still be on
+        // another continent, where that ground does not exist.
+        human->UpdateAllowedPositionZ(x, y, z);
+
+        bot->TeleportTo(human->GetMapId(), x, y, z, frand(0.0f, 6.28f));
+        TC_LOG_INFO("playerbots.pve", "Guardian {} teleported to within {:.0f}y of {}.",
+            bot->GetName(), dropDistance, human->GetName());
+    }
+}
+
 void ProcessPendingGrindRelocations()
 {
     std::unordered_set<uint64> drained;
@@ -7943,7 +8008,7 @@ void PveManager::LoadConfig()
     g_PveConfig.grindSearchRadius = sConfigMgr->GetFloatDefault("Playerbot.PveGrind.SearchRadius", 60.0f);
     g_PveConfig.pathBudgetPerSecond = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.PathBudgetPerSecond", 150));
     g_PveConfig.guardianPlayerApproachYards = std::max(0.0f,
-        sConfigMgr->GetFloatDefault("Playerbot.Pve.ZoneGuardians.PlayerApproachYards", 300.0f));
+        sConfigMgr->GetFloatDefault("Playerbot.Pve.ZoneGuardians.PlayerApproachYards", 200.0f));
     g_PveConfig.auctionPriceMultiplier = sConfigMgr->GetFloatDefault("Playerbot.Pve.AuctionPriceMultiplier", 10.0f);
     g_PveConfig.auctionMinTradeGoodStack = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionMinTradeGoodStack", 10));
     g_PveConfig.auctionValuableUnitCopper = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionValuableUnitCopper", 1000));
@@ -8084,6 +8149,9 @@ void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
     ProcessPendingSupplyRuns();
     if (g_PveConfig.questsEnabled)
         ProcessPendingClassQuestTravels();
+    // Not gated on relocateEnabled: the enqueue side already checks its own
+    // config, and grind relocation keeps the gating it always had.
+    ProcessPendingGuardianTeleports();
     if (g_PveConfig.relocateEnabled)
         ProcessPendingGrindRelocations();
 

@@ -722,12 +722,17 @@ Centurion.Hardcore.FieldKit.GreyUntilLevel = 15
 #                     knows where every player is, so this costs no searching - a snapshot
 #                     of connected players is refreshed once a second on the world thread
 #                     and read as a plain lookup.
-#                     A guardian already this close to a player also stops being leashed
-#                     back to its own zone, so it can follow a fight out of the area.
-#        Default:     300
+#                     A guardian further than this from EVERY player is TELEPORTED to
+#                     one, landing 120-180 yards away so it walks in from the edge of
+#                     sight rather than materialising on top of anyone. Walking cannot
+#                     cross a map, so a guardian whose zone is empty would otherwise
+#                     never meet anybody at all.
+#                     A guardian already this close also stops being leashed back to its
+#                     own zone, so it can follow a fight out of the area.
+#        Default:     200
 #                     0   - (disabled: guardians stand their post and wait)
 #
-Playerbot.Pve.ZoneGuardians.PlayerApproachYards = 300
+Playerbot.Pve.ZoneGuardians.PlayerApproachYards = 200
 
 #
 #    Playerbot.WhoListVisibility

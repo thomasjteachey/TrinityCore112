@@ -114,7 +114,7 @@ struct PveConfig
     // people rather than waiting to be found: the server already knows where
     // every player is, so this needs no searching. 0 disables the approach and
     // leaves guardians standing their post.
-    float guardianPlayerApproachYards = 300.0f;
+    float guardianPlayerApproachYards = 200.0f;
 };
 
 // Open-world PvE behavior for managed random bots, layered on the existing
