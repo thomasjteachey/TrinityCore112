@@ -74,6 +74,12 @@ struct PveConfig
     bool relocateEnabled = true;
     uint32 relocateDryWanders = 5;
     std::vector<uint32> relocateMaps = { 0, 1 };
+    // Open-world safety net: an autonomous PvE bot that never gets this far
+    // from one anchor during the timeout is moved to a validated grind spot
+    // in the zone it is already in.
+    bool stuckRecoveryEnabled = true;
+    float stuckRecoveryDistanceYards = 15.0f;
+    uint32 stuckRecoverySeconds = 120;
     bool combatDiagnostics = false;
     // Journeys: destinations within this range are WALKED (segmented mmap
     // pathing) instead of teleported; 0 restores teleport-only travel.

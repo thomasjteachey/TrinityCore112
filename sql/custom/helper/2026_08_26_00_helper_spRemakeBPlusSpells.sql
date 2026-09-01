@@ -91,6 +91,30 @@ BEGIN
        SET MapID=1, PositionX=1469.96, PositionY=-4222.51, PositionZ=58.9938, Orientation=0
      WHERE ID=3567 AND EffectIndex=0;
 
+    -- B+ OVERRIDE: classic rank-1 auras.
+    -- L+ starts characters at 60, so it promoted each aura's RANK 1 spell id to
+    -- max-rank values - a fresh 60 then gets the full-strength version straight
+    -- away. On B+ (1-60) that is backwards: the rank 1 spell is the one you
+    -- learn first, so it handed out more than rank 2 did and every chain read
+    -- R1 > R2 < R3. SkillLineAbility still supersedes 465 with 10290, so the
+    -- chain itself always said these were rank 1; only the data disagreed.
+    -- Restored to stock/classic rank-1 values 2026-08-28. Descriptions use $s1
+    -- so tooltips follow automatically - do not edit the text.
+    --   465   Devotion Aura          lvl 1  +55 armor
+    --   7294  Retribution Aura       lvl 16 3 Holy  (stock is 10, but B+ retuned
+    --                                ranks 2-5 to classic 8/12/16/20, so 10 would
+    --                                still invert against rank 2)
+    --   19876 Shadow Resistance Aura lvl 28 +30
+    --   19888 Frost Resistance Aura  lvl 32 +30
+    --   19891 Fire Resistance Aura   lvl 36 +30
+    --   19506 Trueshot Aura          lvl 40 +10 AP (ranks 2-3 are L+ additions)
+    UPDATE dbc.spell_bplus SET NameSubtext_Lang_enUS='Rank 1', SpellLevel=1,  BaseLevel=1,  EffectBasePoints_1=54 WHERE ID=465;
+    UPDATE dbc.spell_bplus SET NameSubtext_Lang_enUS='Rank 1', SpellLevel=16, BaseLevel=16, EffectBasePoints_1=2  WHERE ID=7294;
+    UPDATE dbc.spell_bplus SET NameSubtext_Lang_enUS='Rank 1', SpellLevel=28, BaseLevel=28, EffectBasePoints_1=29 WHERE ID=19876;
+    UPDATE dbc.spell_bplus SET NameSubtext_Lang_enUS='Rank 1', SpellLevel=32, BaseLevel=32, EffectBasePoints_1=29 WHERE ID=19888;
+    UPDATE dbc.spell_bplus SET NameSubtext_Lang_enUS='Rank 1', SpellLevel=36, BaseLevel=36, EffectBasePoints_1=29 WHERE ID=19891;
+    UPDATE dbc.spell_bplus SET NameSubtext_Lang_enUS='Rank 1', SpellLevel=40, BaseLevel=40, EffectBasePoints_1=9  WHERE ID=19506;
+
     SELECT COUNT(*) INTO v_after FROM dbc.spell_bplus;
     SELECT COUNT(*) INTO v_reag  FROM dbc.spell_bplus WHERE Reagent_1 <> 0;
 

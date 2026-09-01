@@ -582,6 +582,31 @@ Playerbot.PveGrind.Relocate.DryWandersBeforeMove = 5
 
 Playerbot.PveGrind.Relocate.Maps = "0,1"
 
+#    Playerbot.PveGrind.StuckRecovery.Enable
+#        Description: Safety net for autonomous open-world PvE bots. If a bot never reaches
+#                     DistanceYards from an anchor during TimeoutSeconds, queue a world-thread
+#                     teleport to a validated hostile-spawn cluster in the SAME zone.
+#                     Combat, death, resting, casting/control, companions/stay orders,
+#                     transports, flight, vehicles, battlegrounds and instances reset the
+#                     observation window and never trigger recovery.
+#        Default:     1 - (Enabled)
+
+Playerbot.PveGrind.StuckRecovery.Enable = 1
+
+#    Playerbot.PveGrind.StuckRecovery.DistanceYards
+#        Description: Horizontal distance a bot must reach from its current anchor to count
+#                     as meaningful progress and start a fresh observation window.
+#        Default:     15.0
+
+Playerbot.PveGrind.StuckRecovery.DistanceYards = 15.0
+
+#    Playerbot.PveGrind.StuckRecovery.TimeoutSeconds
+#        Description: Consecutive eligible seconds without reaching DistanceYards before the
+#                     bot is recovered elsewhere in its current zone.
+#        Default:     120
+
+Playerbot.PveGrind.StuckRecovery.TimeoutSeconds = 120
+
 #    Playerbot.Pve.Rest.UseConsumables
 #        Description: Realm economy switch for bot recovery. 0 = bots cast the free eat/drink
 #                     spells (Legionnaire+ style). 1 = bots buy real food/water (and ammo for

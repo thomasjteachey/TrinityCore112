@@ -101,3 +101,33 @@ TEST_CASE("Socketless playerbot movers never broadcast MSG_MOVE_HEARTBEAT", "[pl
     std::string const lifecycleSource = ReadFile("src/server/scripts/Playerbot/Pvp/PlayerbotPvpLifecycleActions.cpp");
     CHECK(lifecycleSource.find("player->SendMovementFlagUpdate();") == std::string::npos);
 }
+
+TEST_CASE("PvE playerbot movement never treats an unverified path as walkable", "[playerbot][movement][pve]")
+{
+    std::string const source = ReadFile("src/server/scripts/Playerbot/Pve/PlayerbotPveManager.cpp");
+
+    CHECK(source.find("enum class WalkPathResult") != std::string::npos);
+    CHECK(source.find("return WalkPathResult::Deferred;") != std::string::npos);
+    CHECK(source.find("PATHFIND_SHORTCUT") != std::string::npos);
+    CHECK(source.find("CheckWalkPath(bot, stepX, stepY, stepZ)") != std::string::npos);
+    CHECK(source.find("CheckWalkPath(bot, destination) != WalkPathResult::Reachable") != std::string::npos);
+    CHECK(source.find("IsInWater(PHASEMASK_NORMAL, candidate.m_positionX") != std::string::npos);
+    CHECK(CountOccurrences(source, "WalkPathResult::Deferred") >= 4);
+}
+
+TEST_CASE("PvE playerbot long-stall recovery is conservative and same-zone", "[playerbot][movement][pve]")
+{
+    std::string const source = ReadFile("src/server/scripts/Playerbot/Pve/PlayerbotPveManager.cpp");
+    std::string const config = ReadFile("src/server/worldserver/playerbots.conf.dist");
+
+    CHECK(source.find("g_PendingStuckRelocations[bot->GetGUID().GetRawValue()] = zoneId;") != std::string::npos);
+    CHECK(source.find("bot->GetZoneId() != stuckZoneId") != std::string::npos);
+    CHECK(source.find("spot.zoneId == stuckZoneId") != std::string::npos);
+    CHECK(source.find("zoneId != stuckZoneId") != std::string::npos);
+    CHECK(source.find("std::chrono::seconds(cfg.stuckRecoverySeconds)") != std::string::npos);
+    CHECK(source.find("spot.z + 3.0f, true, 8.0f") != std::string::npos);
+
+    CHECK(config.find("Playerbot.PveGrind.StuckRecovery.Enable = 1") != std::string::npos);
+    CHECK(config.find("Playerbot.PveGrind.StuckRecovery.DistanceYards = 15.0") != std::string::npos);
+    CHECK(config.find("Playerbot.PveGrind.StuckRecovery.TimeoutSeconds = 120") != std::string::npos);
+}

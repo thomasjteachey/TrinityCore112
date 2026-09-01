@@ -93,6 +93,41 @@ Each DBC exists in up to **five** places:
 4. `~/wow/servers/tc-lplus-dev/data/dbc/` — dev server
 5. inside the client patches (two streams — see §4)
 
+### THERE ARE TWO REALMS. A DBC FIX IS NOT DONE UNTIL BOTH ARE UPDATED.
+
+Everything above is written for Legionnaire+. **Barracks+ is a first-class realm
+with its own copy of every one of these surfaces**, and it is the one that gets
+forgotten. A change applied to only some surfaces produces the worst failure mode
+in this project: the data looks correct wherever you check, and is still wrong in
+game. Work the full grid, both columns:
+
+| surface | Legionnaire+ | Barracks+ |
+|---|---|---|
+| MySQL mirror | `dbc.<table>_lplus` | `dbc.<table>_bplus` |
+| local working copy (Windows) | `C:\Projects\Gamedev\wow\data\dbc\lplus\` | `C:\Projects\Gamedev\wow\data\dbc\bplus\` |
+| PROD server binary | `~/wow/servers/tc-legionnaireplus/data/dbc/` | `~/wow/servers/tc-barracksplus/data/dbc/` |
+| client patch (+ `.version` bump) | `patch-enUS-8` | `patch-enUS-A` |
+| world DB | `lplusworld` | `bplusworld` |
+| service | `legionnaireplusworld.service` | `barracksplusworld.service` |
+
+Patch→realm mapping is defined in `FileMap` in
+`C:\Projects\Gamedev\wow\tools\centurionlauncher\src\common\constants.ts` — that
+file is the authority. Do **not** infer it from file sizes, and do not read
+`/var/www/html/downloads/patches/index.php` as a manifest (it is a generic
+directory lister whose `$ignore_file_list` is files to *hide*).
+
+Two rules that follow from this, both learned the hard way:
+
+- **The mirror is not what the server reads.** The worldserver loads the binary.
+  `dbc.skilllineability_bplus` once held every racial row while the B+ binary had
+  none, so every mirror-vs-mirror comparison looked clean and proved nothing.
+  Parse the binary before concluding anything.
+- **The server binary is not what the player reads.** Tooltip *text and values*
+  come from the client's copy. Fixing only the server makes the server compute the
+  new value while the client keeps displaying the old one — the fix looks broken.
+  Any change to displayed data needs the client patch republished and its
+  `.version` bumped, or clients never re-download.
+
 ### Which side is authoritative is PER TABLE
 
 There is no global rule, and assuming one destroys data.
@@ -210,13 +245,46 @@ Client dir: `C:\Projects\Gamedev\wow\clients\centurion\Data\enUS\`
 ### Publish recipe (what `write_into_patch` does, replicated by hand)
 
 1. Extract the inner `.MPQ` from the `.zip`
-2. `smpq -a -f <mpq> <relative paths>` with `cwd` = a stage dir
+2. **`smpq -d <mpq> 'DBFilesClient\Name.dbc'` FIRST**, then
+   `smpq -a -f <mpq> <relative paths>` with `cwd` = a stage dir
    (internal names come out backslash-separated and match automatically)
 3. Re-zip **DEFLATED** with the entry named for the REAL patch
    (`patch-Y.MPQ`, not `patch-Y-test.MPQ`)
-4. Bump the sibling `.version` file (format `1.NNNNN`) — **last**, so a failure
-   never advertises a half-written archive
-5. Verify by extracting the file back OUT of the rebuilt archive
+4. Verify by extracting the file back OUT of the rebuilt archive and
+   **comparing md5 against the source** — see the trap below
+5. Bump the sibling `.version` file — **last**, so a failure never advertises a
+   half-written archive. Format is exactly `%s.%05d` (`1.00042`), **no trailing
+   newline**. Clients only re-download when this changes.
+
+> **`smpq -a` SILENTLY NO-OPS when the entry already exists** — it prints
+> `Cannot create new file: File exists` and **still exits 0**. Skipping the
+> `-d` in step 2 therefore "succeeds" while publishing nothing at all. The md5
+> round-trip in step 4 is the only trustworthy check; a matching size proves
+> nothing.
+>
+> `smpq -d` printing `No space left on device` is StormLib hash-table
+> compaction noise — **the delete succeeded**. Don't chase it.
+
+### Diagnose what the client ACTUALLY loads before believing a value is wrong
+
+Read the real client with `tools/mpqpy/mpqread.py` — `MPQ(path).extract(
+'DBFilesClient\\Spell.dbc')` — over every `Data\patch*.MPQ` and
+`Data\enUS\patch*.MPQ` in `C:\Projects\Gamedev\wow\clients\centurion\`. The
+highest-sorting archive containing the file wins, and that is the only copy that
+matters. `.launcher\cached\<patch>\<version>\` also shows exactly which version
+the client installed, which settles "did my publish reach them" instantly.
+
+`~/publish_patch.py` is **STALE — do not run it.** It promotes a pre-refactor
+test zip and would republish old data.
+
+### The local `wow\data\dbc\{bplus,lplus}` copies are a REFERENCE and go stale
+
+Nothing regenerates them. Publish **from the server**, then resync them down —
+never the reverse, or you silently revert live data. But **never blind-copy the
+whole folder**: audited 2026-08-20, 3 files were a strict local *superset*
+(`Vehicle.dbc`, `VehicleSeat.dbc` — Beast Rider 89799; `SpellVisualEffectName.dbc`
+— rows 9000/9001) whose rows exist nowhere else, since dbcgen cannot build
+`Vehicle` at all. Compare id sets per file and skip any file with local-only ids.
 
 Art lives in `patch-Y` (base) and `patch-Z` (**registry items only** — user's
 explicit rule). Data lives in `patch-enUS-8` (+ the test `patch-enUS-T`).
