@@ -2400,6 +2400,75 @@ namespace
         return false;
     }
 
+    bool HasBrokenEquippedItem(Player* bot)
+    {
+        if (!bot)
+            return false;
+
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        {
+            Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+            if (!item)
+                continue;
+
+            uint32 const maxDurability = item->GetUInt32Value(ITEM_FIELD_MAXDURABILITY);
+            if (maxDurability && item->GetUInt32Value(ITEM_FIELD_DURABILITY) == 0)
+                return true;
+        }
+
+        return false;
+    }
+
+    // A broken equipped item is not ordinary wear: at zero durability the core
+    // removes its item mods and weapon-dependent abilities can hard-fail with
+    // SPELL_FAILED_EQUIPPED_ITEM_CLASS. Repair broken equipped pieces
+    // individually and immediately while out of combat so an unrelated repair
+    // bill, quest errand, or fast-tick chain pull cannot strand the bot disarmed.
+    bool RepairBrokenEquippedItems(Player* bot)
+    {
+        if (!bot || bot->IsInCombat())
+            return false;
+
+        bool repairedAny = false;
+        bool foundBroken = false;
+
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        {
+            Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+            if (!item)
+                continue;
+
+            uint32 const maxDurability = item->GetUInt32Value(ITEM_FIELD_MAXDURABILITY);
+            if (!maxDurability || item->GetUInt32Value(ITEM_FIELD_DURABILITY) != 0)
+                continue;
+
+            foundBroken = true;
+            uint32 const itemEntry = item->GetEntry();
+            uint64 const moneyBefore = bot->GetMoney();
+
+            // Paid repair, but only for this broken equipped piece. This avoids
+            // DurabilityRepairAll's all-or-nothing affordability check across
+            // every damaged item in bags/equipment.
+            bot->DurabilityRepair(item->GetPos(), true, 1.0f);
+
+            if (item->GetUInt32Value(ITEM_FIELD_DURABILITY) > 0)
+            {
+                repairedAny = true;
+                TC_LOG_INFO("playerbots.pve",
+                    "Bot {} emergency-repaired broken equipped item {} in slot {} (money {} -> {}).",
+                    bot->GetName(), itemEntry, uint32(slot), moneyBefore, bot->GetMoney());
+            }
+            else
+            {
+                TC_LOG_WARN("playerbots.pve",
+                    "Bot {} could not emergency-repair broken equipped item {} in slot {} (money {}).",
+                    bot->GetName(), itemEntry, uint32(slot), bot->GetMoney());
+            }
+        }
+
+        return foundBroken && repairedAny;
+    }
+
     Item* FindBestConsumable(Player* bot, bool drink)
     {
         Item* best = nullptr;
@@ -5040,20 +5109,215 @@ namespace
     std::unordered_map<uint32, uint8> g_ZoneTopLevel;
     std::vector<uint32> g_RebirthZones;
 
-    // The zone a bot lives its cycles in. Deterministic from the guid and taken
-    // from a sorted list, so it never moves: a bot reborn somewhere new each cycle
-    // is not tied to a zone, it is just being teleported around.
+    // Class-balanced home-zone assignment for ordinary zone-banded bots.
     //
-    // Defined here, beside the list it reads and ahead of every caller, because it
-    // is called from both the file's anonymous namespace and from namespace
-    // playerbot. Declared in one and defined in the other, it links as two
-    // different symbols and the internal one never gets a body.
+    // The old mapping was simply guid % zoneCount. That spread the fleet overall,
+    // but class never entered the decision: one zone could randomly end up with
+    // four warriors and no priest while another had the opposite problem.
+    //
+    // This map is built from the COMPLETE configured bot roster in characters,
+    // grouped by class and sorted by GUID. Each class is then round-robin spread
+    // over every eligible rebirth zone. Therefore, for any one class, the number
+    // assigned to any two zones differs by at most one. The starting point for the
+    // next class advances by the previous class's remainder, which also spreads
+    // the unavoidable "extra" members across zones instead of stacking every
+    // class's remainder into the first few zones.
+    //
+    // The map is immutable after its one-time startup build (newly-created bots
+    // are assigned lazily to the least-populated zone for their class), so reads
+    // from map threads are stable. A roster/config change takes effect on restart.
+    std::mutex g_BandedZoneLock;
+    std::unordered_map<uint64, uint32> g_BandedZoneByGuid;
+    std::unordered_map<uint8, std::vector<uint32>> g_BandedClassZoneCounts;
+    std::atomic<bool> g_BandedZoneAssignmentsBuilt{ false };
+
+    bool IsBandedVeteranGuid(uint64 rawGuid)
+    {
+        uint32 const veterans = g_PveConfig.veteranBotCount;
+        if (!veterans)
+            return false;
+
+        uint32 const reserved = g_PveConfig.zoneGuardiansPerZone * uint32(kGuardianZones.size()) +
+            g_PveConfig.pvpOnlyBotCount;
+        uint32 const pool = g_PveConfig.populationTarget > reserved
+            ? g_PveConfig.populationTarget - reserved
+            : g_PveConfig.populationTarget;
+        uint32 const fleet = std::max<uint32>(veterans, pool);
+
+        uint64 value = rawGuid + 0x9E3779B97F4A7C15ull;
+        value = (value ^ (value >> 30)) * 0xBF58476D1CE4E5B9ull;
+        value = (value ^ (value >> 27)) * 0x94D049BB133111EBull;
+        value ^= value >> 31;
+
+        return uint32(value % fleet) < veterans;
+    }
+
+    void BuildBandedZoneAssignmentsOnce()
+    {
+        if (g_BandedZoneAssignmentsBuilt.load(std::memory_order_acquire) || g_RebirthZones.empty())
+            return;
+
+        // Guardian posts are persistent and must be removed from the banded pool
+        // before class balancing. Loading is idempotent and cheap after first use.
+        LoadGuardianPostsOnce();
+
+        std::vector<uint32> configuredAccounts =
+            playerbot::RandomBotParticipationManager::GetConfiguredBotAccountIds();
+        if (configuredAccounts.empty())
+            return; // population config may not have finished bootstrapping yet
+
+        std::vector<uint32> bandedAccounts;
+        bandedAccounts.reserve(configuredAccounts.size());
+        for (uint32 accountId : configuredAccounts)
+            if (!std::binary_search(g_PveConfig.pvpOnlyAccountIds.begin(),
+                g_PveConfig.pvpOnlyAccountIds.end(), accountId))
+                bandedAccounts.push_back(accountId);
+
+        if (bandedAccounts.empty())
+        {
+            std::lock_guard<std::mutex> guard(g_BandedZoneLock);
+            g_BandedZoneAssignmentsBuilt.store(true, std::memory_order_release);
+            return;
+        }
+
+        std::ostringstream accountList;
+        for (size_t index = 0; index < bandedAccounts.size(); ++index)
+            accountList << (index ? "," : "") << bandedAccounts[index];
+
+        std::map<uint8, std::vector<uint64>> guidsByClass;
+        std::string const query =
+            "SELECT guid, class FROM characters WHERE account IN (" + accountList.str() +
+            ") ORDER BY class, guid";
+
+        if (QueryResult result = CharacterDatabase.Query(query.c_str()))
+        {
+            do
+            {
+                Field* fields = result->Fetch();
+                uint32 const lowGuid = fields[0].GetUInt32();
+                uint8 const classId = fields[1].GetUInt8();
+                uint64 const rawGuid = ObjectGuid::Create<HighGuid::Player>(lowGuid).GetRawValue();
+
+                // These populations do not cycle through banded zones.
+                if (GetGuardianZoneId(rawGuid) || IsBandedVeteranGuid(rawGuid))
+                    continue;
+
+                guidsByClass[classId].push_back(rawGuid);
+            } while (result->NextRow());
+        }
+
+        size_t const zoneCount = g_RebirthZones.size();
+        std::unordered_map<uint64, uint32> assignments;
+        std::unordered_map<uint8, std::vector<uint32>> classCounts;
+        size_t remainderCursor = 0;
+        uint32 assignedCount = 0;
+
+        for (auto& [classId, guids] : guidsByClass)
+        {
+            // ORDER BY already gives this, but sorting here makes the stability
+            // property explicit even if the query changes later.
+            std::sort(guids.begin(), guids.end());
+
+            std::vector<uint32>& counts = classCounts[classId];
+            counts.assign(zoneCount, 0);
+
+            size_t const start = remainderCursor % zoneCount;
+            for (size_t index = 0; index < guids.size(); ++index)
+            {
+                size_t const zoneIndex = (start + index) % zoneCount;
+                assignments[guids[index]] = g_RebirthZones[zoneIndex];
+                ++counts[zoneIndex];
+                ++assignedCount;
+            }
+
+            // If this class does not divide evenly by the number of zones, its
+            // remainder occupied [start, start+r). Begin the next class after that
+            // block so every class's extras do not pile into the same zones.
+            remainderCursor = (remainderCursor + (guids.size() % zoneCount)) % zoneCount;
+        }
+
+        TC_LOG_INFO("playerbots.pve",
+            "Built class-balanced band homes for {} bots across {} zones and {} classes.",
+            assignedCount, uint32(zoneCount), uint32(guidsByClass.size()));
+
+        // Useful startup proof: each class must have a per-zone spread of <= 1.
+        // Log from the local table before publishing it, so map-thread lazy
+        // assignments cannot race this diagnostic read.
+        for (auto const& [classId, counts] : classCounts)
+        {
+            if (counts.empty())
+                continue;
+            auto const [minItr, maxItr] = std::minmax_element(counts.begin(), counts.end());
+            TC_LOG_INFO("playerbots.pve",
+                "Band class {} distribution: min {} / max {} bots per zone (spread {}).",
+                uint32(classId), *minItr, *maxItr, *maxItr - *minItr);
+        }
+
+        {
+            std::lock_guard<std::mutex> guard(g_BandedZoneLock);
+            g_BandedZoneByGuid.swap(assignments);
+            g_BandedClassZoneCounts.swap(classCounts);
+        }
+        g_BandedZoneAssignmentsBuilt.store(true, std::memory_order_release);
+    }
+
+    // The zone a bot lives its cycles in. The startup assignment above is
+    // class-balanced and deterministic from the complete configured roster.
+    //
+    // A character created after startup is the only normal miss. Put it in the
+    // currently least-populated zone for its class so even that case preserves the
+    // same <=1 spread as closely as possible for this uptime.
     uint32 GetRebirthZoneId(Player const* bot)
     {
-        if (g_RebirthZones.empty())
+        if (!bot || g_RebirthZones.empty())
             return 0;
 
-        return g_RebirthZones[bot->GetGUID().GetCounter() % g_RebirthZones.size()];
+        uint64 const rawGuid = bot->GetGUID().GetRawValue();
+
+        // These roles are explicitly outside the banded population.
+        if (GetGuardianZoneId(rawGuid) || IsBandedVeteranGuid(rawGuid))
+            return 0;
+        if (bot->GetSession() &&
+            std::binary_search(g_PveConfig.pvpOnlyAccountIds.begin(),
+                g_PveConfig.pvpOnlyAccountIds.end(), bot->GetSession()->GetAccountId()))
+            return 0;
+
+        std::lock_guard<std::mutex> guard(g_BandedZoneLock);
+
+        if (auto itr = g_BandedZoneByGuid.find(rawGuid); itr != g_BandedZoneByGuid.end())
+            return itr->second;
+
+        // Startup may ask before population configuration is ready. Until the
+        // roster build succeeds, retain the old deterministic mapping rather than
+        // mutating an incomplete class-count table.
+        if (!g_BandedZoneAssignmentsBuilt.load(std::memory_order_acquire))
+            return g_RebirthZones[bot->GetGUID().GetCounter() % g_RebirthZones.size()];
+
+        std::vector<uint32>& counts = g_BandedClassZoneCounts[bot->GetClass()];
+        if (counts.size() != g_RebirthZones.size())
+            counts.assign(g_RebirthZones.size(), 0);
+
+        uint32 const minimum = *std::min_element(counts.begin(), counts.end());
+        size_t const tieStart = size_t(bot->GetClass()) % g_RebirthZones.size();
+        size_t chosen = 0;
+        for (size_t step = 0; step < g_RebirthZones.size(); ++step)
+        {
+            size_t const candidate = (tieStart + step) % g_RebirthZones.size();
+            if (counts[candidate] == minimum)
+            {
+                chosen = candidate;
+                break;
+            }
+        }
+
+        ++counts[chosen];
+        uint32 const zoneId = g_RebirthZones[chosen];
+        g_BandedZoneByGuid[rawGuid] = zoneId;
+
+        TC_LOG_INFO("playerbots.pve",
+            "Late-created banded bot {} (class {}) assigned to least-populated home zone {}.",
+            bot->GetName(), uint32(bot->GetClass()), zoneId);
+        return zoneId;
     }
     bool g_GrindSpotsBuilt = false;
 
@@ -8480,6 +8744,12 @@ namespace
 
         EnsureFirstLoginKit(bot, state, cfg);
 
+        // Broken equipped gear is an emergency maintenance condition, not a
+        // normal vendor errand. Run this before rest/quest/vendor scheduling so a
+        // zero-durability weapon cannot lose the race to the 250ms combat picker.
+        if (!bot->IsInCombat() && HasBrokenEquippedItem(bot))
+            RepairBrokenEquippedItems(bot);
+
         if (PveClock::now() >= state.nextWeaponSkillCheckAt)
         {
             state.nextWeaponSkillCheckAt = PveClock::now() + std::chrono::seconds(15);
@@ -9148,7 +9418,8 @@ namespace
             }
             else if (master)
                 target = PickCompanionTarget(bot, state, master, cfg);
-            else if (state.masterGuid.IsEmpty() && PveClock::now() >= state.timidUntil &&
+            else if (state.masterGuid.IsEmpty() && !HasBrokenEquippedItem(bot) &&
+                PveClock::now() >= state.timidUntil &&
                 cfg.guardianPlayerApproachYards > 0.0f &&
                 BarracksHardcore::IsOpenWorldPvpZone(bot->GetZoneId()))
             {
@@ -9160,8 +9431,21 @@ namespace
                 target = PickHuntTarget(bot, cfg.guardianPlayerApproachYards);
             }
 
-            if (!target && cfg.grindEnabled && state.masterGuid.IsEmpty() && !IsRestingNow(bot, state) &&
-                !NeedsRecovery(bot, cfg) && !TryClaimNearbyDeathChest(bot, state, cfg) &&
+            // Death caches are opportunistic loot, not a new combat activity.  A
+            // bot that finished a fight low on health/mana used to skip this call
+            // entirely because TryClaimNearbyDeathChest sat behind
+            // !NeedsRecovery().  That left casters standing directly on their
+            // cache doing nothing until recovery happened (and could deadlock if
+            // they had no drink).  Claim the cache before the recovery/grind gate;
+            // active eating/drinking still wins because opening a chest would
+            // interrupt it.
+            bool claimedDeathChest = false;
+            if (!target && state.masterGuid.IsEmpty() && !IsRestingNow(bot, state))
+                claimedDeathChest = TryClaimNearbyDeathChest(bot, state, cfg);
+
+            if (!target && !claimedDeathChest && cfg.grindEnabled && state.masterGuid.IsEmpty() &&
+                !HasBrokenEquippedItem(bot) &&
+                !IsRestingNow(bot, state) && !NeedsRecovery(bot, cfg) &&
                 state.errandKind == PveErrandKind::None)
             {
                 // Free gear on the floor outranks finding something new to hit, and
@@ -9501,6 +9785,33 @@ namespace
             << " timid_s=" << SecondsRemaining(state.timidUntil);
         lines.push_back(blockers.str());
 
+        uint32 brokenEquipped = 0;
+        uint32 criticalEquipped = 0;
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        {
+            Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+            if (!item)
+                continue;
+
+            uint32 const maxDurability = item->GetUInt32Value(ITEM_FIELD_MAXDURABILITY);
+            if (!maxDurability)
+                continue;
+
+            uint32 const durability = item->GetUInt32Value(ITEM_FIELD_DURABILITY);
+            if (durability == 0)
+                ++brokenEquipped;
+            if (durability * 100 < maxDurability * 10)
+                ++criticalEquipped;
+        }
+
+        std::ostringstream gearDiag;
+        gearDiag << "PB gear diag: broken_equipped=" << brokenEquipped
+            << " critical_lt10=" << criticalEquipped
+            << " money_copper=" << bot->GetMoney()
+            << " vendor_enabled=" << (g_PveConfig.vendorEnabled ? "yes" : "NO")
+            << " repair_block_new_fights=" << (brokenEquipped ? "YES" : "no");
+        lines.push_back(gearDiag.str());
+
         std::ostringstream relocation;
         relocation << "PB relocate diag: cache=" << (g_GrindSpotsBuilt ? "built" : "EMPTY")
             << " queued=" << (pendingRelocation ? "yes" : "no")
@@ -9509,6 +9820,34 @@ namespace
             << " zonefit_next_s=" << SecondsRemaining(state.nextZoneFitCheckAt)
             << " hunt_tp_queued=" << (pendingHuntTeleport ? "yes" : "no");
         lines.push_back(relocation.str());
+
+        // Death-cache diagnostics.  This is deliberately independent of the
+        // current errand so "why" can distinguish "I cannot see a cache" from
+        // "I see it but another gate is winning".
+        std::ostringstream chestDiag;
+        chestDiag << "PB chest diag: entry=" << g_PveConfig.hardcoreLootChestEntry
+            << " recovery=" << (NeedsRecovery(bot, g_PveConfig) ? "YES" : "no")
+            << " resting=" << (IsRestingNow(bot, state) ? "yes" : "no")
+            << " free_slots=" << CountFreeBagSlots(bot)
+            << " pending_loot=" << (state.pendingLootGuid.IsEmpty() ? "no" : "yes")
+            << " errand=" << ErrandKindName(state.errandKind)
+            << " opening=" << (state.chestOpeningGuid.IsEmpty() ? "no" : "yes");
+
+        if (!g_PveConfig.hardcoreLootChestEntry)
+            chestDiag << " nearest=disabled";
+        else if (GameObject* chest = FindRegisteredDeathChest(bot, g_PveConfig.hardcoreLootChestEntry, 200.0f))
+        {
+            chestDiag << " nearest=" << chest->GetEntry()
+                << " dist=" << uint32(bot->GetDistance(chest))
+                << " spawned=" << (chest->isSpawned() ? "yes" : "NO")
+                << " loot_state=" << uint32(chest->getLootState())
+                << " recent=" << (IsRecentErrandTarget(state, chest->GetGUID()) ? "YES" : "no")
+                << " interact_range=" << (bot->IsWithinDistInMap(chest, INTERACTION_DISTANCE + 2.0f) ? "yes" : "no");
+        }
+        else
+            chestDiag << " nearest=none-in-registry";
+
+        lines.push_back(chestDiag.str());
 
         std::ostringstream hunt;
         hunt << "PB hunt diag: aggression=" << uint32(GetBotAggression(bot))
@@ -9767,6 +10106,11 @@ namespace playerbot
         // executor, but a relocation was only queued AFTER the suitability test;
         // an empty cache therefore made every zone look suitable forever.
         BuildGrindSpotCacheOnce();
+
+        // Build stable class-balanced home-zone assignments from the complete
+        // configured bot roster. This retries until population configuration is
+        // available, then becomes a no-op for the rest of the uptime.
+        BuildBandedZoneAssignmentsOnce();
 
         // Hand the fleet a fresh second's worth of navmesh queries. Anything the
         // bots did not spend is deliberately not carried over: the point is a
@@ -10275,30 +10619,7 @@ namespace playerbot
     // - and a hash keeps a bot's role fixed for its entire life, which is the point.
     bool IsVeteranBot(Player const* bot)
     {
-        uint32 const veterans = g_PveConfig.veteranBotCount;
-        if (!veterans)
-            return false;
-
-        // Drawn from the bots that actually cycle, not the whole fleet. Zone
-        // guardians already sit at their zone's cap forever and the PvP-only
-        // accounts are level sixty by definition; neither was ever a rebirth
-        // candidate, so counting them here meant a share of the veteran slots
-        // landed on bots that could not use them and the real number came out
-        // well under what was asked for.
-        uint32 const reserved = g_PveConfig.zoneGuardiansPerZone * uint32(kGuardianZones.size()) +
-            g_PveConfig.pvpOnlyBotCount;
-        uint32 const pool = g_PveConfig.populationTarget > reserved
-            ? g_PveConfig.populationTarget - reserved
-            : g_PveConfig.populationTarget;
-
-        uint32 const fleet = std::max<uint32>(veterans, pool);
-
-        uint64 value = bot->GetGUID().GetRawValue() + 0x9E3779B97F4A7C15ull;
-        value = (value ^ (value >> 30)) * 0xBF58476D1CE4E5B9ull;
-        value = (value ^ (value >> 27)) * 0x94D049BB133111EBull;
-        value ^= value >> 31;
-
-        return uint32(value % fleet) < veterans;
+        return bot && IsBandedVeteranGuid(bot->GetGUID().GetRawValue());
     }
 
     bool GetZoneLevelBand(uint32 zoneId, uint8& bottom, uint8& top)
