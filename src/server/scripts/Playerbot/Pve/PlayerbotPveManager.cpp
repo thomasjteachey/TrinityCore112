@@ -110,9 +110,9 @@ namespace
     constexpr uint32 PvePendingSummonTimeoutMs = 90 * 1000;
     constexpr float PveCompanionTeleportCatchupDistance = 150.0f;
     constexpr float PveRestBreakFollowDistance = 40.0f;
-    // Zone guardians hunt intruders across a wide sweep and patrol far rather
-    // than shuffling in place: a guardian owns its whole zone.
-    constexpr float PveGuardianHuntRadius = 120.0f;
+    // Guardians patrol broadly, but actual player acquisition uses the configured
+    // PlayerApproachYards value (200y by default) so teleport/approach and combat
+    // discovery cannot disagree about whether a human is "nearby".
     constexpr float PveGuardianPatrolRadius = 120.0f;
 
     playerbot::PveConfig g_PveConfig;
@@ -3149,6 +3149,15 @@ namespace
         return bestIndex;
     }
 
+    bool IsSingleClassQuest(Quest const* quest)
+    {
+        if (!quest)
+            return false;
+
+        uint32 const classes = quest->GetRequiredClasses();
+        return classes && (classes & (classes - 1u)) == 0;
+    }
+
     void AcceptAndTurnInQuestsAt(Player* bot, Creature* giver)
     {
         std::vector<uint32> completedQuests;
@@ -3163,7 +3172,7 @@ namespace
                 continue;
 
             Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
-            if (!quest)
+            if (!quest || IsSingleClassQuest(quest))
                 continue;
 
             uint32 const rewardIndex = PickQuestRewardIndex(bot, quest);
@@ -3178,7 +3187,7 @@ namespace
         for (uint32 questId : sObjectMgr->GetCreatureQuestRelations(giver->GetEntry()))
         {
             Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
-            if (!quest)
+            if (!quest || IsSingleClassQuest(quest))
                 continue;
 
             if (bot->CanTakeQuest(quest, false) && bot->CanAddQuest(quest, false))
@@ -3285,7 +3294,9 @@ namespace
         if (cfg.questsEnabled)
             for (auto const& [questId, status] : bot->getQuestStatusMap())
                 if (status.Status == QUEST_STATUS_COMPLETE && !bot->GetQuestRewardStatus(questId))
-                    completedQuests.push_back(questId);
+                    if (Quest const* quest = sObjectMgr->GetQuestTemplate(questId))
+                        if (!IsSingleClassQuest(quest))
+                            completedQuests.push_back(questId);
 
         // A worn-out bot needs a vendor that can actually repair, not just any
         // merchant; try those first.
@@ -3322,7 +3333,8 @@ namespace
 
                 for (uint32 questId : sObjectMgr->GetCreatureQuestRelations(npc->GetEntry()))
                     if (Quest const* quest = sObjectMgr->GetQuestTemplate(questId))
-                        if (bot->CanTakeQuest(quest, false) && bot->CanAddQuest(quest, false))
+                        if (!IsSingleClassQuest(quest) &&
+                            bot->CanTakeQuest(quest, false) && bot->CanAddQuest(quest, false))
                             return beginErrand(npc, PveErrandKind::QuestGiver);
             }
 
@@ -4761,7 +4773,15 @@ namespace
             bot->GetName(), GetBotAggression(bot), idleMinutes);
 
         std::lock_guard<std::mutex> guard(g_PvePendingLock);
-        g_PendingGuardianTeleports[bot->GetGUID().GetRawValue()] = { destination.Guid.GetRawValue(), 210.0f };
+        // Ordinary aggression hunters must arrive INSIDE their proactive player
+        // acquisition radius. Dropping at 210y while acquisition stopped at 200y
+        // made them teleport to a human and then immediately forget why they came.
+        float const huntDropDistance = std::max(20.0f,
+            std::min(190.0f, cfg.guardianPlayerApproachYards > 0.0f
+                ? cfg.guardianPlayerApproachYards - 10.0f
+                : 190.0f));
+        g_PendingGuardianTeleports[bot->GetGUID().GetRawValue()] =
+        { destination.Guid.GetRawValue(), huntDropDistance };
     }
 
     void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
@@ -5047,7 +5067,6 @@ namespace
         std::lock_guard<std::mutex> guard(g_GrindSpotLock);
         if (g_GrindSpotsBuilt)
             return;
-        g_GrindSpotsBuilt = true;
 
         struct SpotBucket
         {
@@ -5196,6 +5215,11 @@ namespace
 
         TC_LOG_INFO("playerbots.pve", "Rebirth zones: {} eligible.", g_RebirthZones.size());
 
+        // Publish completion only after every derived table is populated. Readers
+        // do not take g_GrindSpotLock, so setting this at function entry exposed a
+        // partially-built cache to map-thread suitability checks.
+        g_GrindSpotsBuilt = true;
+
         TC_LOG_INFO("playerbots.pve", "Grind spot cache built: {} clusters across {} level buckets, {} zones counted.",
             spotCount, g_GrindSpotsByLevel.size(), g_ZoneSpotCount.size());
     }
@@ -5211,11 +5235,23 @@ namespace
     bool BotIsInSuitableZone(Player* bot)
     {
         uint32 const zoneId = bot->GetZoneId();
+        uint32 const level = bot->GetLevel();
+
+        // The static classic chart is authoritative for obviously outgrown zones
+        // and does not depend on the runtime spawn cache being populated. This is
+        // the hard safety net for cases like a level-51 bot standing in Durotar.
+        for (ClassicZoneBand const& band : kClassicZoneBands)
+            if (band.zoneId == zoneId && level > uint32(band.maxLevel) + 1)
+                return false;
+
+        // While the world thread is building the dynamic cache, the static chart
+        // above is all we trust. Never read partially-filled unordered_maps.
+        if (!g_GrindSpotsBuilt)
+            return true;
+
         auto totalItr = g_ZoneSpotCount.find(zoneId);
         if (totalItr == g_ZoneSpotCount.end() || !totalItr->second)
             return true; // an uncounted zone is not evidence of anything
-
-        uint32 const level = bot->GetLevel();
 
         // Has the zone simply run out of level? A starter zone stays full of
         // things a higher level bot is still ALLOWED to kill, so the share test
@@ -5333,10 +5369,9 @@ namespace
     // ---------------------------------------------------------------------------
     // Class quests: quests restricted to a single class exist to hand out the
     // class's kit (warlock demons, hunter taming, druid forms, warrior stances,
-    // shaman totems), and none of it is trainer-taught. Bots seek the givers
-    // out across the world via the travel ladder, the normal errand accepts
-    // once nearby, and the ender gets the same treatment when objectives are
-    // done. Level is no obstacle beyond the quest's own minimum.
+    // shaman totems), and none of it is trainer-taught. Managed bots do NOT travel
+    // for these quests: eligible chains are completed/rewarded automatically and
+    // their teaching spells are re-applied idempotently after spell resets.
     // ---------------------------------------------------------------------------
 
     struct ClassQuestSpot
@@ -5445,6 +5480,63 @@ namespace
     // current level (class, race, level and chain prerequisites all honored via
     // CanTakeQuest); repeated passes walk chains link by link. Used for zone
     // guardians, which are pinned in place and can never travel to the givers.
+    void EnsureRewardedClassQuestSpells(Player* bot)
+    {
+        BuildClassQuestCacheOnce();
+
+        std::vector<ClassQuestEntry> const* list = nullptr;
+        {
+            std::lock_guard<std::mutex> guard(g_ClassQuestLock);
+            auto itr = g_ClassQuestsByClass.find(bot->GetClass());
+            if (itr == g_ClassQuestsByClass.end())
+                return;
+            list = &itr->second; // immutable once built
+        }
+
+        for (ClassQuestEntry const& entry : *list)
+        {
+            if (!bot->GetQuestRewardStatus(entry.questId))
+                continue;
+
+            Quest const* quest = sObjectMgr->GetQuestTemplate(entry.questId);
+            if (!quest)
+                continue;
+
+            // Trinity's canonical relearn path handles RewSpellCast wrappers with
+            // SPELL_EFFECT_LEARN_SPELL and is exactly what .reset spells uses.
+            bot->LearnQuestRewardedSpells(quest);
+
+            // Some imported classic rows put the teaching wrapper in RewSpell
+            // (display spell) instead. The core's bulk relearn helper ignores that
+            // field, so repair it explicitly, but only when it really teaches a
+            // spell - never replay one-shot reward/item effects on maintenance.
+            if (quest->GetRewSpellCast() <= 0 && quest->GetRewSpell() > 0)
+            {
+                uint32 const rewardSpell = quest->GetRewSpell();
+                SpellInfo const* info = sSpellMgr->GetSpellInfo(rewardSpell);
+                if (!info)
+                    continue;
+
+                bool missingLearnedSpell = false;
+                for (SpellEffectInfo const& effect : info->GetEffects())
+                    if (effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) && effect.TriggerSpell &&
+                        !bot->HasSpell(effect.TriggerSpell))
+                    {
+                        missingLearnedSpell = true;
+                        break;
+                    }
+
+                if (missingLearnedSpell)
+                    bot->CastSpell(bot, rewardSpell, true);
+            }
+        }
+    }
+
+    // Force-complete/reward every single-class quest the bot is legitimately
+    // eligible for at its current level. Existing incomplete class quests are
+    // completed too: managed bots receive the unlock, they never perform the
+    // objective or travel to a class-quest giver. Repeated passes walk chains as
+    // prerequisites become rewarded.
     void CompleteEligibleClassQuests(Player* bot)
     {
         BuildClassQuestCacheOnce();
@@ -5458,11 +5550,6 @@ namespace
             list = &itr->second; // immutable once built
         }
 
-        // Termination is load-bearing: GetQuestRewardStatus never turns true for
-        // repeatable-family quests (screened out of the cache, but belt and
-        // suspenders here), so the local rewarded set is what guarantees each
-        // quest is handed out at most once per call, and the pass cap bounds the
-        // chain walk regardless.
         uint32 completed = 0;
         std::unordered_set<uint32> rewardedNow;
         bool progressed = true;
@@ -5473,23 +5560,39 @@ namespace
             {
                 if (rewardedNow.count(entry.questId) || bot->GetQuestRewardStatus(entry.questId))
                     continue;
+
                 Quest const* quest = sObjectMgr->GetQuestTemplate(entry.questId);
-                if (!quest || !bot->CanTakeQuest(quest, false))
+                if (!quest)
                     continue;
-                // A reward spell absent from this realm's spell store would
-                // assert/crash inside RewardQuest (B+ rebuilds its Spell.dbc,
-                // and rows do go missing).
+
+                QuestStatus const status = bot->GetQuestStatus(entry.questId);
+                if (status == QUEST_STATUS_NONE && !bot->CanTakeQuest(quest, false))
+                    continue;
+
+                // Invalid imported reward spell rows must never be fed into
+                // RewardQuest, whose RewSpellCast path asserts the spell exists.
                 if ((quest->GetRewSpellCast() > 0 && !sSpellMgr->GetSpellInfo(uint32(quest->GetRewSpellCast()))) ||
                     (quest->GetRewSpell() > 0 && !sSpellMgr->GetSpellInfo(uint32(quest->GetRewSpell()))))
                     continue;
-                bot->RewardQuest(quest, 0, bot, false);
+
+                // CompleteQuest is safe even when the quest was never put in a
+                // quest-log slot. RewardQuest then marks the permanent rewarded
+                // state, which is what prerequisite chains and spell resets use.
+                bot->CompleteQuest(entry.questId);
+                uint32 const rewardIndex = PickQuestRewardIndex(bot, quest);
+                bot->RewardQuest(quest, rewardIndex, bot, false);
                 rewardedNow.insert(entry.questId);
                 ++completed;
                 progressed = true;
             }
         }
+
+        // Idempotent repair is intentional: a custom reset may strip spells while
+        // leaving rewarded quests intact, and those bots must regain class kit.
+        EnsureRewardedClassQuestSpells(bot);
+
         if (completed)
-            TC_LOG_INFO("playerbots.pve", "Bot {} completed {} class quests for its guardian post.",
+            TC_LOG_INFO("playerbots.pve", "Bot {} auto-completed {} class quests/unlocks.",
                 bot->GetName(), completed);
     }
 
@@ -8555,6 +8658,21 @@ namespace
 
         PveTimePoint const now = PveClock::now();
 
+        // Class quests are provisioning, not travel content. Do this before the
+        // generic errand scan so an old/incomplete class quest can never steer the
+        // bot toward its giver or objective. The repeated pass also repairs reward
+        // teaching spells after custom/manual spell resets.
+        if (now >= state.nextClassQuestScanAt)
+        {
+            state.nextClassQuestScanAt = now + std::chrono::seconds(30);
+            CompleteEligibleClassQuests(bot);
+            state.classQuestId = 0;
+            state.classQuestMapId = 0;
+            state.classQuestX = state.classQuestY = state.classQuestZ = 0.0f;
+            std::lock_guard<std::mutex> guard(g_PvePendingLock);
+            g_PendingClassQuestTravels.erase(bot->GetGUID().GetRawValue());
+        }
+
         // Free gear outranks the next pull. A bot that is not fighting picks up a
         // chest lying near it - its own, another bot's, or a player's; ownership is
         // not consulted - instead of walking past it to look for something to hit.
@@ -8589,13 +8707,8 @@ namespace
         RunZoneGuardianTick(bot, state, cfg);
         MaybeHuntPlayersByAggression(bot, state, cfg);
 
-        // Class quests are sought out across the world, not just stumbled upon.
-        if (cfg.questsEnabled && state.masterGuid.IsEmpty() && !state.engaged && !bot->IsInCombat() &&
-            state.errandKind == PveErrandKind::None && !state.journeyActive && now >= state.nextClassQuestScanAt)
-        {
-            state.nextClassQuestScanAt = now + std::chrono::minutes(2);
-            TryStartClassQuestTravel(bot, state);
-        }
+        // Class-quest travel is intentionally disabled. Eligible class quests
+        // were auto-rewarded above before the generic errand scan.
 
         // Taming itself is driven from the fast tick, where it can outrank the
         // grind loop; this only keeps whatever pet the hunter already has fed.
@@ -8869,7 +8982,7 @@ namespace
             PveClock::now() >= state.timidUntil &&
             GetGuardianZoneId(bot->GetGUID().GetRawValue()))
         {
-            if (Player* intruder = PickHuntTarget(bot, PveGuardianHuntRadius))
+            if (Player* intruder = PickHuntTarget(bot, cfg.guardianPlayerApproachYards))
             {
                 target = intruder;
                 state.recentBadTargets.erase(intruder->GetGUID().GetRawValue());
@@ -9035,7 +9148,19 @@ namespace
             }
             else if (master)
                 target = PickCompanionTarget(bot, state, master, cfg);
-            else if (cfg.grindEnabled && state.masterGuid.IsEmpty() && !IsRestingNow(bot, state) &&
+            else if (state.masterGuid.IsEmpty() && PveClock::now() >= state.timidUntil &&
+                cfg.guardianPlayerApproachYards > 0.0f &&
+                BarracksHardcore::IsOpenWorldPvpZone(bot->GetZoneId()))
+            {
+                // Any free open-world bot that finds a lawful real-player target
+                // inside the approach radius should actually go pick the fight.
+                // Previously this proactive selection existed only for guardians;
+                // ordinary aggression hunters could teleport beside a player and
+                // then fall straight back into their creature grind loop.
+                target = PickHuntTarget(bot, cfg.guardianPlayerApproachYards);
+            }
+
+            if (!target && cfg.grindEnabled && state.masterGuid.IsEmpty() && !IsRestingNow(bot, state) &&
                 !NeedsRecovery(bot, cfg) && !TryClaimNearbyDeathChest(bot, state, cfg) &&
                 state.errandKind == PveErrandKind::None)
             {
@@ -9053,7 +9178,7 @@ namespace
                 // anything actually hitting the bot.
                 if (GetGuardianZoneId(bot->GetGUID().GetRawValue()) &&
                     PveClock::now() >= state.timidUntil)
-                    target = PickHuntTarget(bot, PveGuardianHuntRadius);
+                    target = PickHuntTarget(bot, cfg.guardianPlayerApproachYards);
 
                 // Packmates first: adjacent bots fight together (one team),
                 // adopting the fight of any nearby bot already in combat.
@@ -9282,6 +9407,218 @@ namespace
             }
         }
     }
+
+    char const* ErrandKindName(PveErrandKind kind)
+    {
+        switch (kind)
+        {
+        case PveErrandKind::Vendor: return "vendor";
+        case PveErrandKind::QuestGiver: return "quest-giver";
+        case PveErrandKind::QuestObject: return "quest-object";
+        default: return "none";
+        }
+    }
+
+    char const* WalkPathResultName(WalkPathResult result)
+    {
+        switch (result)
+        {
+        case WalkPathResult::Reachable: return "reachable";
+        case WalkPathResult::Unreachable: return "unreachable";
+        case WalkPathResult::Deferred: return "deferred-budget";
+        default: return "unknown";
+        }
+    }
+
+    int64 SecondsRemaining(PveTimePoint until)
+    {
+        if (until == PveTimePoint{})
+            return 0;
+        auto const now = PveClock::now();
+        if (now >= until)
+            return 0;
+        return std::chrono::duration_cast<std::chrono::seconds>(until - now).count();
+    }
+
+    std::vector<std::string> BuildPveWhisperDiagnostics(Player* bot, Player* asker)
+    {
+        std::vector<std::string> lines;
+        if (!bot)
+            return lines;
+
+        uint64 const rawGuid = bot->GetGUID().GetRawValue();
+        PveBotState state;
+        playerbot::LockedGetCopy(g_PveBotStateByGuid, rawGuid, state);
+
+        bool pendingRelocation = false;
+        bool pendingStuckRelocation = false;
+        bool pendingHuntTeleport = false;
+        {
+            std::lock_guard<std::mutex> guard(g_PvePendingLock);
+            pendingRelocation = g_PendingGrindRelocations.count(rawGuid) != 0;
+            pendingStuckRelocation = g_PendingStuckRelocations.count(rawGuid) != 0;
+            pendingHuntTeleport = g_PendingGuardianTeleports.count(rawGuid) != 0;
+        }
+
+        uint32 const zoneId = bot->GetZoneId();
+        uint32 zoneSpots = 0;
+        uint32 zoneTop = 0;
+        if (auto itr = g_ZoneSpotCount.find(zoneId); itr != g_ZoneSpotCount.end())
+            zoneSpots = itr->second;
+        if (auto itr = g_ZoneTopLevel.find(zoneId); itr != g_ZoneTopLevel.end())
+            zoneTop = itr->second;
+
+        bool const guardian = GetGuardianZoneId(rawGuid) != 0;
+        bool const suitable = BotIsInSuitableZone(bot);
+        bool const openWorldPvp = BarracksHardcore::IsOpenWorldPvpZone(zoneId);
+
+        std::ostringstream stateLine;
+        stateLine << "PB PvE diag: lvl=" << uint32(bot->GetLevel())
+            << " map=" << bot->GetMapId() << " zone=" << zoneId
+            << " suitable=" << (suitable ? "yes" : "NO")
+            << " zone_top=" << zoneTop << " spots=" << zoneSpots
+            << " guardian=" << (guardian ? "yes" : "no")
+            << " ow_pvp=" << (openWorldPvp ? "yes" : "no")
+            << " passive=" << (state.passive ? "yes" : "no")
+            << " stay=" << (state.stay ? "yes" : "no")
+            << " engaged=" << (state.engaged ? "yes" : "no")
+            << " combat=" << (bot->IsInCombat() ? "yes" : "no")
+            << " moving=" << (bot->isMoving() ? "yes" : "no");
+        lines.push_back(stateLine.str());
+
+        std::ostringstream blockers;
+        blockers << "PB PvE gates: alive=" << (bot->IsAlive() ? "yes" : "no")
+            << " controlled=" << (bot->HasUnitState(UNIT_STATE_CONTROLLED) ? "YES" : "no")
+            << " casting=" << (bot->HasUnitState(UNIT_STATE_CASTING) ? "yes" : "no")
+            << " channel=" << (bot->GetCurrentSpell(CURRENT_CHANNELED_SPELL) ? "yes" : "no")
+            << " flight=" << (bot->IsInFlight() ? "yes" : "no")
+            << " teleport=" << ((bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear()) ? "yes" : "no")
+            << " errand=" << ErrandKindName(state.errandKind)
+            << " journey=" << (state.journeyActive ? "yes" : "no")
+            << " rest_s=" << SecondsRemaining(state.restingUntil)
+            << " tame_s=" << SecondsRemaining(state.tamingUntil)
+            << " feign_s=" << SecondsRemaining(state.feignHoldUntil)
+            << " timid_s=" << SecondsRemaining(state.timidUntil);
+        lines.push_back(blockers.str());
+
+        std::ostringstream relocation;
+        relocation << "PB relocate diag: cache=" << (g_GrindSpotsBuilt ? "built" : "EMPTY")
+            << " queued=" << (pendingRelocation ? "yes" : "no")
+            << " stuck_queued=" << (pendingStuckRelocation ? "yes" : "no")
+            << " dry=" << state.dryWanderCount << "/" << g_PveConfig.relocateDryWanders
+            << " zonefit_next_s=" << SecondsRemaining(state.nextZoneFitCheckAt)
+            << " hunt_tp_queued=" << (pendingHuntTeleport ? "yes" : "no");
+        lines.push_back(relocation.str());
+
+        std::ostringstream hunt;
+        hunt << "PB hunt diag: aggression=" << uint32(GetBotAggression(bot))
+            << " hunt_after_m=" << AggressionIdleMinutes(bot, g_PveConfig)
+            << " approach_y=" << g_PveConfig.guardianPlayerApproachYards;
+
+        if (!asker)
+        {
+            hunt << " asker=none";
+            lines.push_back(hunt.str());
+            return lines;
+        }
+
+        bool const sameMap = asker->IsInWorld() && asker->GetMapId() == bot->GetMapId();
+        float askerDistance = 0.0f;
+        bool askerAttackable = false;
+        bool askerInApproach = false;
+        bool askerPathChecked = false;
+        WalkPathResult askerPath = WalkPathResult::Deferred;
+
+        hunt << " you=" << asker->GetName()
+            << " same_map=" << (sameMap ? "yes" : "no")
+            << " alive=" << (asker->IsAlive() ? "yes" : "no")
+            << " gm=" << (asker->IsGameMaster() ? "YES" : "no")
+            << " no_pvp=" << (asker->pvpInfo.IsInNoPvPArea ? "YES" : "no");
+
+        if (sameMap)
+        {
+            askerDistance = bot->GetDistance(asker);
+            askerAttackable = bot->IsValidAttackTarget(asker);
+            askerInApproach = g_PveConfig.guardianPlayerApproachYards > 0.0f &&
+                bot->IsWithinDistInMap(asker, g_PveConfig.guardianPlayerApproachYards);
+            bool const los = bot->IsWithinLOSInMap(asker);
+            hunt << " dist=" << uint32(askerDistance)
+                << " attackable=" << (askerAttackable ? "yes" : "NO")
+                << " in_approach=" << (askerInApproach ? "yes" : "NO")
+                << " los=" << (los ? "yes" : "no");
+
+            // An explicit diagnostic request is allowed to spend one path token:
+            // this is exactly the information needed when a bot can see/attack a
+            // player geometrically but cannot navigate to them.
+            askerPath = CheckWalkPath(bot, asker->GetPosition());
+            askerPathChecked = true;
+            hunt << " path=" << WalkPathResultName(askerPath);
+        }
+
+        if (Player* picked = PickHuntTarget(bot, g_PveConfig.guardianPlayerApproachYards))
+            hunt << " picked=" << picked->GetName() << "@" << uint32(bot->GetDistance(picked)) << "y";
+        else
+            hunt << " picked=none";
+
+        lines.push_back(hunt.str());
+
+        std::ostringstream target;
+        target << "PB target diag: selected=";
+        if (Unit* selected = ObjectAccessor::GetUnit(*bot, bot->GetTarget()))
+            target << selected->GetName() << "/" << selected->GetGUID().ToString();
+        else
+            target << "none";
+        target << " victim=";
+        if (Unit* victim = bot->GetVictim())
+            target << victim->GetName() << "/" << victim->GetGUID().ToString();
+        else
+            target << "none";
+        target << " ordered=" << (state.orderedTargetGuid.IsEmpty() ? "none" : state.orderedTargetGuid.ToString())
+            << " bad_targets=" << state.recentBadTargets.size()
+            << " resolve_misses=" << state.targetResolveMisses;
+        lines.push_back(target.str());
+
+        std::string verdict = "eligible; should acquire you on the next fast tick";
+        if (!bot->IsAlive())
+            verdict = "bot is dead";
+        else if (playerbot::PveManager::IsPvpOnlyBot(bot))
+            verdict = "bot is PvP-only; PvE hunt tick is disabled";
+        else if (bot->InBattleground() || bot->duel)
+            verdict = "battleground/duel owns its combat AI";
+        else if (state.passive)
+            verdict = "bot is in passive mode";
+        else if (!state.masterGuid.IsEmpty())
+            verdict = "bot is a companion; master/assist targeting outranks autonomous hunting";
+        else if (bot->HasUnitState(UNIT_STATE_CONTROLLED))
+            verdict = "bot is controlled/rooted/stunned/confused and lifecycle exits before fast combat";
+        else if (SecondsRemaining(state.tamingUntil) || SecondsRemaining(state.feignHoldUntil))
+            verdict = "bot is deliberately held by tame/feign logic";
+        else if (SecondsRemaining(state.timidUntil))
+            verdict = "bot is timid after losing a player fight";
+        else if (!openWorldPvp)
+            verdict = "current zone is not an open-world PvP hunt zone";
+        else if (!sameMap)
+            verdict = "you are not on the bot's map";
+        else if (!asker->IsAlive())
+            verdict = "you are dead";
+        else if (asker->IsGameMaster())
+            verdict = "you are GM-flagged and are intentionally excluded as a hunt target";
+        else if (asker->pvpInfo.IsInNoPvPArea)
+            verdict = "you are in a no-PvP area and are excluded from the human snapshot";
+        else if (!askerAttackable)
+            verdict = "IsValidAttackTarget says you are not attackable";
+        else if (!askerInApproach)
+            verdict = "you are outside the configured proactive hunt radius";
+        else if (askerPathChecked && askerPath == WalkPathResult::Unreachable)
+            verdict = "you are in range/attackable but mmap says there is no walkable path";
+        else if (askerPathChecked && askerPath == WalkPathResult::Deferred)
+            verdict = "path verdict deferred because the navmesh budget is exhausted";
+
+        lines.push_back(std::string("PB verdict: ") + verdict);
+
+        return lines;
+    }
+
 }
 
 namespace playerbot
@@ -9425,6 +9762,12 @@ namespace playerbot
             return;
         lastPassMs = nowMs;
 
+        // Build relocation/suitability data before a bot asks whether its current
+        // zone fits. Previously this cache was first built by the relocation
+        // executor, but a relocation was only queued AFTER the suitability test;
+        // an empty cache therefore made every zone look suitable forever.
+        BuildGrindSpotCacheOnce();
+
         // Hand the fleet a fresh second's worth of navmesh queries. Anything the
         // bots did not spend is deliberately not carried over: the point is a
         // ceiling on per-second map-thread cost, not a total.
@@ -9487,8 +9830,8 @@ namespace playerbot
         if (g_PveConfig.auctionSellEnabled)
             ProcessPendingAuctionSales();
         ProcessPendingSupplyRuns();
-        if (g_PveConfig.questsEnabled)
-            ProcessPendingClassQuestTravels();
+        // Class quests are auto-rewarded on the bot tick; never execute the legacy
+        // cross-world class-quest travel queue.
         // Guardian approaches drain their own queue. Ordinary grind relocation
         // and stuck recovery share the validated grind-spot landing executor but
         // retain independent switches inside it.
@@ -9749,6 +10092,14 @@ namespace playerbot
         if (command == "pve status")
         {
             botReceiver->Whisper(BuildStatusLine(botReceiver), LANG_UNIVERSAL, sender);
+            return true;
+        }
+
+        if (command == "pve diag" || command == "diag" || command == "why" ||
+            command == "why idle" || command == "why fight" || command == "hunt diag")
+        {
+            for (std::string const& line : BuildPveWhisperDiagnostics(botReceiver, sender))
+                botReceiver->Whisper(line, LANG_UNIVERSAL, sender);
             return true;
         }
 
@@ -10295,7 +10646,12 @@ namespace playerbot
             << " mode=" << (!stateCopy.masterGuid.IsEmpty() ? "companion" : (g_PveConfig.grindEnabled ? "grind" : "idle"))
             << " passive=" << (stateCopy.passive ? "yes" : "no")
             << " stay=" << (stateCopy.stay ? "yes" : "no")
-            << " engaged=" << (stateCopy.engaged ? "yes" : "no");
+            << " engaged=" << (stateCopy.engaged ? "yes" : "no")
+            << " level=" << uint32(bot->GetLevel())
+            << " map=" << bot->GetMapId()
+            << " zone=" << bot->GetZoneId()
+            << " suitable=" << (BotIsInSuitableZone(const_cast<Player*>(bot)) ? "yes" : "NO")
+            << " aggression=" << uint32(GetBotAggression(bot));
         return stream.str();
     }
 }
