@@ -11029,6 +11029,114 @@ namespace playerbot
         return HasPendingSummon(player->GetGUID());
     }
 
+    // A stranger who whispers a bot gets attitude, not telemetry. The
+    // diagnostics are a GM tool - they name config keys, hunt radii and
+    // internal verdicts, which is a map of exactly how to game the fleet - so
+    // anyone who is not a GM is answered in character instead. These are bots
+    // on a hardcore PvP realm; being told to get lost IS the correct response.
+    constexpr std::array<char const*, 100> kStrangerTaunts = { {
+        "Ask me again when you can hold a weapon.",
+        "I do not brief the enemy.",
+        "Come closer and find out.",
+        "You get nothing from me but a corpse run.",
+        "Try the guards. They have more patience.",
+        "I have killed better and buried them quieter.",
+        "You are not the first to ask. The others are still face down.",
+        "Words are cheap out here. Draw.",
+        "That is above your rank, and so am I.",
+        "I do not answer to livestock.",
+        "You want my numbers? Earn them.",
+        "Walk away while walking is still an option.",
+        "I have seen your gear. I am not worried.",
+        "Nothing personal. Well. Slightly personal.",
+        "Ask the last one who whispered me. Oh, wait.",
+        "Save your breath. You will want it shortly.",
+        "You are standing awfully close for someone so curious.",
+        "This is a battlefield, not a library.",
+        "The only report you are getting is your own death log.",
+        "You are wasting daylight neither of us has.",
+        "Curiosity is a fine epitaph.",
+        "I am not your quest giver.",
+        "Whispering me was the second mistake. The first was logging in.",
+        "Come find out in person. I will be right here.",
+        "My diagnostics are for people who can survive reading them.",
+        "You look like a repair bill waiting to happen.",
+        "Ask again after you have won something.",
+        "I keep my secrets the way I keep my blade. Close.",
+        "Get bent.",
+        "You are not important enough to lie to.",
+        "I will explain it slowly, with a weapon.",
+        "Try again when your gear stops being grey.",
+        "I have a cooldown for this conversation. It is permanent.",
+        "You are the reason spirit healers stay busy.",
+        "Not a chance. Not a word.",
+        "Interesting question. Terrible timing.",
+        "Speak up. I could not hear you over your low health.",
+        "The information is free. Getting close enough is not.",
+        "Every answer I have is an edged one.",
+        "Go bother a critter.",
+        "I have been ignoring better than you all week.",
+        "That is classified under 'none of your business'.",
+        "You are welcome to take it from my body.",
+        "You do not want to know. You want to seem clever.",
+        "I do not do interviews.",
+        "You are burning my patience and your own hearthstone.",
+        "Nothing to say. Plenty to do.",
+        "Ask the ground. You will be seeing it soon.",
+        "There is no version of this where you leave informed.",
+        "Whisper me again and I will find you the loud way.",
+        "You brought questions. I brought everything else.",
+        "That is a lot of typing for someone about to run.",
+        "The answer is no, and the follow-up is also no.",
+        "You are not owed an explanation.",
+        "Bold of you to open with talking.",
+        "I only debrief the victorious. Come back never.",
+        "Try emoting at me. That works about as well.",
+        "You are one bad decision from a graveyard sprint.",
+        "No.",
+        "Absolutely not, and stop typing.",
+        "Save it for your guild chat.",
+        "I have nothing to declare but hostility.",
+        "You are standing in my zone asking my business. Bold.",
+        "The report is one page long and it says 'no'.",
+        "I would tell you, but then you would still lose.",
+        "This is not a support desk.",
+        "You have mistaken me for something helpful.",
+        "Everything I know, I keep. Everything you have, I take.",
+        "Answer's the same as last time. Swing or leave.",
+        "Do I look like a target dummy to you?",
+        "You will get a full accounting. On your corpse.",
+        "Not while you are breathing, no.",
+        "Ask me on the losing side of a fight. Yours.",
+        "I have a policy about strangers. It involves steel.",
+        "You are wasting a perfectly good ambush.",
+        "The only thing I am sharing is a graveyard.",
+        "Try the auction house. They will talk to anyone.",
+        "That question costs more than you are carrying.",
+        "Go on then. Pull. I will wait.",
+        "Talking is what people do instead of winning.",
+        "I have no notes for you. Only intentions.",
+        "You want data. I want distance closed.",
+        "That is between me and whatever I kill next.",
+        "You are two whispers from finding out.",
+        "Nothing. Not one word. Move along.",
+        "The last person who asked is still running.",
+        "I am busy. You are about to be busier.",
+        "Not interested. Never was.",
+        "You should be watching your back, not your chat log.",
+        "This conversation has a very short cooldown.",
+        "I will send you my report. Posthumously.",
+        "Wrong bot. Wrong day. Wrong everything.",
+        "You have questions. I have a full rage bar.",
+        "Take the hint, then take the hit.",
+        "There is a fight happening. You are in it. Keep up.",
+        "I do not brief tourists.",
+        "You will learn everything you need in about four seconds.",
+        "That is a strange way of saying 'come kill me'.",
+        "I have said too much already. Which is nothing.",
+        "Whispering was brave. Staying is not.",
+    } };
+
     bool PveManager::HandleWhisperCommand(Player* sender, Player* botReceiver, std::string const& command)
     {
         if (!g_PveConfig.enabled || !sender || !botReceiver)
@@ -11043,7 +11151,14 @@ namespace playerbot
         bool const senderIsMaster = state.masterGuid == sender->GetGUID();
         bool const senderIsGm = sender->GetSession() && sender->GetSession()->HasPermission(rbac::RBAC_PERM_COMMAND_GM);
         if (!senderIsMaster && !senderIsGm)
-            return false;
+        {
+            // Answer, but in character. Silence reads like a broken bot and
+            // invites the question again; a hostile line reads like a person who
+            // does not want to talk, which is exactly what this is meant to be.
+            botReceiver->Whisper(kStrangerTaunts[urand(0, uint32(kStrangerTaunts.size()) - 1)],
+                LANG_UNIVERSAL, sender);
+            return true;
+        }
 
         if (command == "follow")
         {
@@ -11097,6 +11212,20 @@ namespace playerbot
         {
             std::string statusMessage;
             RequestCompanionDismiss(sender, botReceiver, statusMessage);
+            return true;
+        }
+
+        // Diagnostics are GM-only, master or not. They print config keys, hunt
+        // radii, path verdicts and level windows - a map of precisely how to
+        // stay outside a bot's engage check - so somebody who merely owns a
+        // companion has no business reading them off the fleet.
+        bool const diagnostic = command == "pve status" || command == "pve diag" ||
+            command == "diag" || command == "why" || command == "why idle" ||
+            command == "why fight" || command == "hunt diag";
+        if (diagnostic && !senderIsGm)
+        {
+            botReceiver->Whisper(kStrangerTaunts[urand(0, uint32(kStrangerTaunts.size()) - 1)],
+                LANG_UNIVERSAL, sender);
             return true;
         }
 
