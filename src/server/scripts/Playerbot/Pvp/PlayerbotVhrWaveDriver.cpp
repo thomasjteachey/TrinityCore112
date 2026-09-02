@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <mutex>
+#include <array>
 #include <shared_mutex>
 #include <unordered_set>
 #include <vector>
@@ -46,16 +47,23 @@ namespace
 std::unordered_set<uint32> g_TornDownInstances;
 
 // The bot population a BotSourced wave draws from: online managed random bots
-// whose level is close enough to the party's to be a fair fight. The band
-// widens if the strict one is empty; an empty result falls back to the party
-// picks the battleground provided, so a wave can never stall on this.
+// whose level is close enough to the party's to be a fair fight.
+//
+// Widening RINGS rather than one strict band and then anybody. The old
+// fallback took every online bot the moment the strict band came up empty,
+// which was survivable while Violet Hold was one 1-80 bracket and everybody
+// queued together. With real brackets it is not: a level 60 cloned into a
+// 10-19 match is not a hard wave, it is an execution.
+//
+// Returning nothing is deliberately allowed. The battleground then clones the
+// party itself, which is level-appropriate by definition - a better answer
+// than a mismatched stranger, and the wave still cannot stall.
 std::vector<ObjectGuid> CollectBotWaveSources(uint32 partyMinLevel, uint32 partyMaxLevel)
 {
-    std::vector<ObjectGuid> strict;
-    std::vector<ObjectGuid> loose;
-
-    uint32 const lowBand = partyMinLevel > 3 ? partyMinLevel - 3 : 1;
-    uint32 const highBand = partyMaxLevel + 3;
+    // Disjoint rings: a bot lands in the tightest one that contains it, so
+    // returning the first non-empty ring returns the closest match available.
+    static constexpr std::array<uint32, 3> kBands = { { 3, 6, 10 } };
+    std::array<std::vector<ObjectGuid>, kBands.size()> rings;
 
     std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
     for (auto const& [guid, candidate] : ObjectAccessor::GetPlayers())
@@ -72,13 +80,24 @@ std::vector<ObjectGuid> CollectBotWaveSources(uint32 partyMinLevel, uint32 party
         if (candidate->InBattleground())
             continue;
 
-        loose.push_back(guid);
         uint32 const level = candidate->GetLevel();
-        if (level >= lowBand && level <= highBand)
-            strict.push_back(guid);
+        for (size_t ring = 0; ring < kBands.size(); ++ring)
+        {
+            uint32 const low = partyMinLevel > kBands[ring] ? partyMinLevel - kBands[ring] : 1;
+            uint32 const high = partyMaxLevel + kBands[ring];
+            if (level >= low && level <= high)
+            {
+                rings[ring].push_back(guid);
+                break;
+            }
+        }
     }
 
-    return strict.empty() ? loose : strict;
+    for (auto& ring : rings)
+        if (!ring.empty())
+            return ring;
+
+    return {};
 }
 
 // Boon of Fellowship: one clone of a random level-appropriate managed bot per
