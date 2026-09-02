@@ -395,6 +395,10 @@ namespace
     // Rebirth-flagged bots that just hit the level cap: full level-1 reset on
     // the world thread.
     std::unordered_set<uint64> g_PendingRebirths;
+    // Guardians sitting above their post's ceiling, and the level to put them
+    // at. A map rather than a set because the target is the post's ceiling,
+    // which the world thread cannot recompute without redoing the slot lookup.
+    std::unordered_map<uint64, uint8> g_PendingGuardianDemotions;
     // Mail collection and auction shopping mutate world-thread-only structures
     // (Player::m_mail, AuctionHouseObject) - executed from OnWorldUpdate.
     std::unordered_set<uint64> g_PendingMailCollections;
@@ -5116,13 +5120,17 @@ namespace
         uint8 const postCeiling = GuardianPostCeiling(zone);
         if (bot->GetLevel() > postCeiling)
         {
-            // Downward needs the full re-kit rather than a bare GiveLevel, which
-            // would reset talents and leave the bot wearing gear it can no longer
-            // use. ResetManagedBotToZoneBand does that work and lands the bot on
-            // a grind spot inside the zone it guards.
-            TC_LOG_INFO("playerbots.pve", "Guardian {} was level {} at a post capped {}; resetting it to the post.",
-                bot->GetName(), uint32(bot->GetLevel()), uint32(postCeiling));
-            playerbot::ResetManagedBotToZoneBand(bot, zone.zoneId, postCeiling);
+            // QUEUED, never done here. Bringing a guardian down needs the full
+            // re-kit rather than a bare GiveLevel, and that teleports the bot and
+            // wipes its PveBotState - while this function is running on the MAP
+            // thread inside Player::Update, holding a reference to exactly that
+            // state. Doing it inline crashed the realm in a loop: the tick around
+            // this call carried on using the wiped state and died in the grind
+            // scan, a null dereference with nothing about it pointing at
+            // guardians. Every other caller of that reset runs on the world
+            // thread behind a queue, and so does this one.
+            std::lock_guard<std::mutex> guard(g_PvePendingLock);
+            g_PendingGuardianDemotions[botRawGuid] = postCeiling;
             return;
         }
 
@@ -10967,6 +10975,34 @@ namespace playerbot
                 if (guild->AddMember(trans, bot->GetGUID()))
                     TC_LOG_INFO("playerbots.pve", "Bot {} joined guild '{}'.", bot->GetName(), g_PveConfig.guildName);
             }
+        }
+
+        // Guardians found sitting above their post's ceiling by the map-thread
+        // tick, which queues rather than acting because this reset teleports and
+        // wipes the bot state the tick is holding a reference to.
+        {
+            std::unordered_map<uint64, uint8> drained;
+            {
+                std::lock_guard<std::mutex> guard(g_PvePendingLock);
+                drained.swap(g_PendingGuardianDemotions);
+            }
+            for (auto const& [botRawGuid, targetLevel] : drained)
+                if (Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid)))
+                    // Same guard as the rebirth drain below, for the same reason:
+                    // teleporting a bot that is already mid-teleport walks into
+                    // RemoveFromGrid's IsInGrid assert and takes the server down.
+                    // A skipped guardian is requeued by the next tick.
+                    if (bot->IsInWorld() && playerbot::IsManagedRandomBot(bot) &&
+                        !bot->IsBeingTeleportedFar() && !bot->IsBeingTeleportedNear() &&
+                        bot->GetLevel() > targetLevel)
+                    {
+                        if (uint32 const zoneId = GetGuardianZoneId(botRawGuid))
+                        {
+                            TC_LOG_INFO("playerbots.pve", "Guardian {} was level {} at a post capped {}; resetting it to the post.",
+                                bot->GetName(), uint32(bot->GetLevel()), uint32(targetLevel));
+                            ResetManagedBotToZoneBand(bot, zoneId, targetLevel);
+                        }
+                    }
         }
 
         // Rebirth-flagged bots that just hit the level cap.
