@@ -110,6 +110,10 @@ namespace
     constexpr uint32 PvePendingSummonTimeoutMs = 90 * 1000;
     constexpr float PveCompanionTeleportCatchupDistance = 150.0f;
     constexpr float PveRestBreakFollowDistance = 40.0f;
+    // A player farther than this is not an immediate combat problem while a mob or
+    // pet is already chewing on the bot. The bot clears the close threat first,
+    // then can chase the player if the player is still attacking.
+    constexpr float PveImmediatePlayerCombatRange = 40.0f;
     // Guardians patrol broadly, but actual player acquisition uses the configured
     // PlayerApproachYards value (200y by default) so teleport/approach and combat
     // discovery cannot disagree about whether a human is "nearby".
@@ -411,6 +415,8 @@ namespace
     void TrySkinCorpse(Player* bot, Creature* corpse);
     bool IsGatherableNodeFor(Player* bot, GameObject const* go, int32* outRequiredSkill);
     uint32 GetGuardianZoneId(uint64 botRawGuid);
+    bool IsProactivePlayerLevelAcceptable(Player const* bot, uint32 playerLevel);
+    bool IsProactivePlayerLevelAcceptable(Player const* bot, Player const* player);
 
     bool IsHumanPlayer(Player const* player)
     {
@@ -1687,6 +1693,12 @@ namespace
             if (foe->GetTypeId() == TYPEID_PLAYER && playerbot::IsManagedRandomBot(foe->ToPlayer()))
                 continue;
 
+            // Joining somebody else's PvP fight is proactive, not self-defense.
+            // Do not let pack-assist drag a lower-level bot into a suicide fight.
+            if (foe->GetTypeId() == TYPEID_PLAYER &&
+                !IsProactivePlayerLevelAcceptable(bot, foe->ToPlayer()))
+                continue;
+
             // Worth crossing the room for, and worth the bot's time when it gets
             // there. Players are exempt from the level band - helping against one
             // is about the fight, not the experience.
@@ -1855,10 +1867,24 @@ namespace
         ObjectGuid Guid;
         uint32 MapId = 0;
         uint32 ZoneId = 0;
+        uint32 Level = 0;
         float X = 0.0f;
         float Y = 0.0f;
         float Z = 0.0f;
     };
+
+    bool IsProactivePlayerLevelAcceptable(Player const* bot, uint32 playerLevel)
+    {
+        // Autonomous bots do not pick fights uphill. Equal/lower-level players are
+        // fair game; higher-level players are treated as danger unless they attack
+        // first. Self-defense paths intentionally do NOT call this helper.
+        return bot && playerLevel <= bot->GetLevel();
+    }
+
+    bool IsProactivePlayerLevelAcceptable(Player const* bot, Player const* player)
+    {
+        return player && IsProactivePlayerLevelAcceptable(bot, player->GetLevel());
+    }
 
     std::mutex g_HumanSpotLock;
     std::vector<HumanSpot> g_HumanSpots;
@@ -1941,16 +1967,16 @@ namespace
     // Ashenvale to fight in Orgrimmar is not guarding anything. When its zone is
     // empty it simply holds, which is the correct answer for a guardian - the
     // roaming is the ordinary bots' job.
-    bool PickHumanSpotInZone(uint32 zoneId, HumanSpot& out)
+    bool PickHumanSpotInZone(Player const* bot, uint32 zoneId, HumanSpot& out)
     {
-        if (!zoneId)
+        if (!bot || !zoneId)
             return false;
 
         std::lock_guard<std::mutex> guard(g_HumanSpotLock);
 
         std::vector<HumanSpot const*> inZone;
         for (HumanSpot const& spot : g_HumanSpots)
-            if (spot.ZoneId == zoneId)
+            if (spot.ZoneId == zoneId && IsProactivePlayerLevelAcceptable(bot, spot.Level))
                 inZone.push_back(&spot);
 
         if (inZone.empty())
@@ -1964,7 +1990,7 @@ namespace
     // zone so that every question it asks about players is scoped to the ground it
     // is responsible for.
     bool FindNearestHumanSpot(uint32 mapId, float x, float y, float z, HumanSpot& out, float& outDistance,
-        uint32 zoneFilter = 0)
+        uint32 zoneFilter = 0, Player const* proactiveBot = nullptr)
     {
         std::lock_guard<std::mutex> guard(g_HumanSpotLock);
 
@@ -1976,6 +2002,9 @@ namespace
                 continue;
 
             if (zoneFilter && spot.ZoneId != zoneFilter)
+                continue;
+
+            if (proactiveBot && !IsProactivePlayerLevelAcceptable(proactiveBot, spot.Level))
                 continue;
 
             float const dx = spot.X - x;
@@ -2029,6 +2058,12 @@ namespace
 
             if (candidate == bot || candidate->IsGameMaster() ||
                 candidate->IsBeingTeleported() || !bot->IsValidAttackTarget(candidate))
+                continue;
+
+            // This function is ONLY proactive acquisition. Never volunteer for an
+            // uphill PvP fight; retaliation is selected from getAttackers() below
+            // and deliberately ignores this level rule.
+            if (!IsProactivePlayerLevelAcceptable(bot, candidate))
                 continue;
 
             // Never each other: bots are one team (the pseudo-faction rule
@@ -4866,7 +4901,7 @@ namespace
         HumanSpot nearest;
         float nearestDistance = 0.0f;
         if (FindNearestHumanSpot(bot->GetMapId(), bot->GetPositionX(), bot->GetPositionY(),
-            bot->GetPositionZ(), nearest, nearestDistance, bot->GetZoneId()) && nearestDistance <= 240.0f)
+            bot->GetPositionZ(), nearest, nearestDistance, bot->GetZoneId(), bot) && nearestDistance <= 240.0f)
             return;
 
         // Only ever within the zone the bot is ALREADY in. Travelling to find a
@@ -4874,7 +4909,7 @@ namespace
         // abandoned wherever it was grinding, and a zone is easily wider than the
         // 240 yards that triggers this, so there is plenty to do without leaving.
         HumanSpot destination;
-        if (!PickHumanSpotInZone(bot->GetZoneId(), destination))
+        if (!PickHumanSpotInZone(bot, bot->GetZoneId(), destination))
             return;   // nobody in this bot's own zone
 
         // Count the trip as its fight for this cycle, so a bot that travels and
@@ -5025,7 +5060,7 @@ namespace
         float humanDistance = 0.0f;
         bool const haveHuman = cfg.guardianPlayerApproachYards > 0.0f &&
             FindNearestHumanSpot(bot->GetMapId(), bot->GetPositionX(), bot->GetPositionY(),
-                bot->GetPositionZ(), nearestHuman, humanDistance, zone.zoneId);
+                bot->GetPositionZ(), nearestHuman, humanDistance, zone.zoneId, bot);
         bool const nearAHuman = haveHuman && humanDistance <= cfg.guardianPlayerApproachYards;
 
         // A guardian with nobody near it goes to somebody. Walking when that is
@@ -5092,7 +5127,7 @@ namespace
                 StartWalkedJourney(state, bot->GetMapId(), nearestHuman.X, nearestHuman.Y,
                     nearestHuman.Z, 0, humanDistance);
             }
-            else if (HumanSpot destination; PickHumanSpotInZone(zone.zoneId, destination))
+            else if (HumanSpot destination; PickHumanSpotInZone(bot, zone.zoneId, destination))
             {
                 // Beyond 240 yards but still inside its own zone - a large zone is
                 // easily wider than that. Nobody in the zone means no teleport at
@@ -7262,6 +7297,11 @@ namespace
             if (!human || !human->IsInWorld() || !human->IsAlive() || human->InBattleground())
                 continue;
 
+            // The request may have sat in the queue while either character leveled.
+            // Revalidate the proactive safety rule at execution time too.
+            if (!IsProactivePlayerLevelAcceptable(bot, human))
+                continue;
+
             // Land at the EDGE of the player's sight, not on top of them. A guardian
             // materialising at ten yards reads as a bug; one appearing at the far
             // edge of vision and walking in reads as somebody hunting you.
@@ -9296,10 +9336,76 @@ namespace
                     return nullptr;   // the no-friendly-fire rule follows the pet home
 
                 if (ownerPlayer->IsAlive() && bot->IsValidAttackTarget(ownerPlayer))
-                    return ownerPlayer;
+                {
+                    // If the owner is already within practical combat range, fight
+                    // the person controlling the pet. If the owner is far away,
+                    // kill the pet that is physically on us instead of running a
+                    // suicide chase while being chewed on.
+                    if (bot->IsWithinDistInMap(ownerPlayer, PveImmediatePlayerCombatRange))
+                        return ownerPlayer;
+                    return attacker;
+                }
             }
 
         return attacker;
+    }
+
+    // Pick what to answer RIGHT NOW when multiple things are attacking us.
+    //
+    // Priority:
+    //   1) a player already within practical combat range;
+    //   2) a monster/pet physically attacking us;
+    //   3) a distant player attacker, but only when no close non-player threat exists.
+    //
+    // This is deliberately different from proactive PvP acquisition. A higher-level
+    // player who attacks first is still eligible here.
+    Unit* PickDefensiveAttacker(Player* bot, Unit const* ignore = nullptr)
+    {
+        Unit* nearPlayer = nullptr;
+        float nearPlayerDistance = 0.0f;
+        Unit* closeNonPlayer = nullptr;
+        float closeNonPlayerDistance = 0.0f;
+        Unit* distantPlayer = nullptr;
+        float distantPlayerDistance = 0.0f;
+
+        for (Unit* attacker : bot->getAttackers())
+        {
+            if (!attacker || !attacker->IsAlive() || !bot->IsValidAttackTarget(attacker))
+                continue;
+
+            Unit* ranked = RankAttackerAsOwner(bot, attacker);
+            if (!ranked || ranked == ignore || !ranked->IsAlive() || !bot->IsValidAttackTarget(ranked))
+                continue;
+
+            float const distance = bot->GetDistance(ranked);
+            if (ranked->GetTypeId() == TYPEID_PLAYER)
+            {
+                if (distance <= PveImmediatePlayerCombatRange)
+                {
+                    if (!nearPlayer || distance < nearPlayerDistance)
+                    {
+                        nearPlayer = ranked;
+                        nearPlayerDistance = distance;
+                    }
+                }
+                else if (!distantPlayer || distance < distantPlayerDistance)
+                {
+                    distantPlayer = ranked;
+                    distantPlayerDistance = distance;
+                }
+            }
+            else if (!closeNonPlayer || distance < closeNonPlayerDistance)
+            {
+                closeNonPlayer = ranked;
+                closeNonPlayerDistance = distance;
+            }
+        }
+
+        if (nearPlayer)
+            return nearPlayer;
+        if (closeNonPlayer)
+            return closeNonPlayer;
+        return distantPlayer;
     }
 
     // Is this unit actually fighting the bot?
@@ -9452,14 +9558,29 @@ namespace
                 if (Player* ownerPlayer = petOwner->ToPlayer())
                 {
                     if (!playerbot::IsManagedRandomBot(ownerPlayer) && ownerPlayer->IsAlive() &&
-                        bot->IsValidAttackTarget(ownerPlayer))
+                        bot->IsValidAttackTarget(ownerPlayer) &&
+                        bot->IsWithinDistInMap(ownerPlayer, PveImmediatePlayerCombatRange))
                     {
-                        TC_LOG_DEBUG("playerbots.pve", "Bot {} switches from pet {} to its owner {}.",
+                        TC_LOG_DEBUG("playerbots.pve", "Bot {} switches from pet {} to nearby owner {}.",
                             bot->GetName(), target->GetName(), ownerPlayer->GetName());
                         target = ownerPlayer;
                     }
                 }
             }
+        }
+
+        // Do not keep an autonomous uphill PvP target merely because it was held
+        // from a previous tick. If the higher-level player has not attacked this
+        // bot, drop the voluntary fight and let normal grind/defense selection run.
+        // Companions are excluded because their human master's orders/assist logic
+        // owns their target choice.
+        if (target && target->GetTypeId() == TYPEID_PLAYER && state.masterGuid.IsEmpty() &&
+            !IsEngagedWithBot(bot, target) &&
+            !IsProactivePlayerLevelAcceptable(bot, target->ToPlayer()))
+        {
+            TC_LOG_DEBUG("playerbots.pve", "Bot {} drops uphill proactive PvP target {} ({} vs {}).",
+                bot->GetName(), target->GetName(), uint32(bot->GetLevel()), uint32(target->GetLevel()));
+            target = nullptr;
         }
 
         if (state.passive)
@@ -9470,80 +9591,14 @@ namespace
         }
         else if (!target)
         {
-            // Self-defense first, with no level window: something outside the
-            // grind filter (a higher-level aggro) beating on the bot must still
-            // be fought back regardless of mode.
-            Unit* nearestAttacker = nullptr;
-            float nearestAttackerDistance = 0.0f;
-            bool nearestAttackerIsPlayer = false;
-            for (Unit* attacker : bot->getAttackers())
+            // Self-defense first, with no level window: a higher-level player that
+            // attacks first is still fought. The defensive picker is distance-aware:
+            // if that player is far away while a monster/pet is physically on the
+            // bot, clear the close threat first instead of suicide-chasing the player.
+            if (Unit* defensive = PickDefensiveAttacker(bot))
             {
-                if (!attacker || !attacker->IsAlive() || !bot->IsValidAttackTarget(attacker))
-                    continue;
-
-                // Hardcore FFA rule: playerbots never fight each other, even
-                // when a stray hit lands - the exchange must fizzle.
-                if (attacker->GetTypeId() == TYPEID_PLAYER && playerbot::IsManagedRandomBot(attacker->ToPlayer()))
-                    continue;
-
-                // No bad-target screen here: that list stops re-PICKING
-                // evade-flickery mobs, but a unit actively hitting the bot is
-                // present and reachable by definition - and a genuinely evading
-                // mob is not in getAttackers() at all. Honoring the list here
-                // left bots standing in place eating hits for its full 60s.
-                // A person outranks anything with fur. When a player and a mob
-                // are both on the bot, the mob is a distraction and the player is
-                // the fight - taking whichever happened to be nearer meant a bot
-                // being ganked would turn its back on the ganker to swat a boar.
-                // ...and a player's PET is not the fight either - its owner is.
-                // A hunter or warlock pet is TYPEID_UNIT, so the person-first rule
-                // above never recognised one, and a bot being attacked by a pet
-                // would dutifully swat the pet while its owner shot the bot in the
-                // back. That is only visible "sometimes" because it needs the owner
-                // to be absent from getAttackers() - which is exactly what happens
-                // while they attack from range.
-                //
-                // Rank a player-controlled attacker as its owner, and fight the
-                // owner. If the owner is not a legal target the pet stays the
-                // candidate, so a bot is never left unable to answer something
-                // actively hitting it.
-                Unit* ranked = attacker;
-                if (attacker->GetTypeId() != TYPEID_PLAYER)
-                {
-                    if (Unit* owner = attacker->GetCharmerOrOwner())
-                    {
-                        if (Player* ownerPlayer = owner->ToPlayer())
-                        {
-                            // The no-friendly-fire rule has to follow the pet home
-                            // too, or bots would happily brawl with each other's
-                            // minions forever.
-                            if (playerbot::IsManagedRandomBot(ownerPlayer))
-                                continue;
-
-                            if (ownerPlayer->IsAlive() && bot->IsValidAttackTarget(ownerPlayer))
-                                ranked = ownerPlayer;
-                        }
-                    }
-                }
-
-                bool const attackerIsPlayer = ranked->GetTypeId() == TYPEID_PLAYER;
-                float const distance = bot->GetDistance(ranked);
-
-                if (!nearestAttacker || (attackerIsPlayer && !nearestAttackerIsPlayer) ||
-                    (attackerIsPlayer == nearestAttackerIsPlayer && distance < nearestAttackerDistance))
-                {
-                    nearestAttacker = ranked;
-                    nearestAttackerDistance = distance;
-                    nearestAttackerIsPlayer = attackerIsPlayer;
-                }
-            }
-
-            if (nearestAttacker)
-            {
-                target = nearestAttacker;
-                // Fighting it voids any stale bad-listing, or the engaged
-                // tick's own resolve would flap on the same stale entry.
-                state.recentBadTargets.erase(nearestAttacker->GetGUID().GetRawValue());
+                target = defensive;
+                state.recentBadTargets.erase(defensive->GetGUID().GetRawValue());
             }
             else if (master)
                 target = PickCompanionTarget(bot, state, master, cfg);
@@ -9607,46 +9662,34 @@ namespace
             }
         }
 
-        // An add picked up on the approach outranks a target that has not
-        // engaged us yet: stop, kill what is already hitting us, then the next
-        // scan re-acquires the original. Never switches off a mob that is
-        // actually fighting the bot, so live duels can't ping-pong.
-        if (target && !IsEngagedWithBot(bot, target))
+        // Even a player who IS actively attacking does not make a close add vanish.
+        // If the current player target is outside practical combat range and a
+        // monster/pet is physically attacking the bot, clear that local threat first.
+        // The player remains in getAttackers(), so once the add dies self-defense
+        // selects the player again and retaliation continues.
+        if (target && target->GetTypeId() == TYPEID_PLAYER &&
+            !bot->IsWithinDistInMap(target, PveImmediatePlayerCombatRange))
         {
-            Unit* nearestAttacker = nullptr;
-            float nearestAttackerDistance = 0.0f;
-            bool nearestAttackerIsPlayer = false;
-            for (Unit* attacker : bot->getAttackers())
+            if (Unit* defensive = PickDefensiveAttacker(bot, target))
             {
-                if (!attacker || !attacker->IsAlive() || !bot->IsValidAttackTarget(attacker))
-                    continue;
-
-                // A pet is not an add - its owner is the fight. Without this the
-                // pet of the person the bot is ALREADY fighting counted as a fresh
-                // add every tick and took the slot back from the owner, so the two
-                // branches fought each other forever and the pet always won, being
-                // the last write before SetSelection.
-                Unit* ranked = RankAttackerAsOwner(bot, attacker);
-                if (!ranked || ranked == target)
-                    continue;
-
-                // A person outranks anything with fur, the same rule the
-                // self-defence branch above applies.
-                bool const rankedIsPlayer = ranked->GetTypeId() == TYPEID_PLAYER;
-                float const distance = bot->GetDistance(ranked);
-                if (!nearestAttacker ||
-                    (rankedIsPlayer && !nearestAttackerIsPlayer) ||
-                    (rankedIsPlayer == nearestAttackerIsPlayer && distance < nearestAttackerDistance))
+                if (defensive->GetTypeId() != TYPEID_PLAYER)
                 {
-                    nearestAttacker = ranked;
-                    nearestAttackerIsPlayer = rankedIsPlayer;
-                    nearestAttackerDistance = distance;
+                    target = defensive;
+                    state.recentBadTargets.erase(defensive->GetGUID().GetRawValue());
                 }
             }
-            if (nearestAttacker)
+        }
+
+        // An add picked up on the approach outranks a target that has not engaged
+        // us yet. A nearby attacking player still wins, but if the player is outside
+        // practical combat range and a monster/pet is already on us, kill the close
+        // threat first. Once it dies, the distant attacker can be chased.
+        if (target && !IsEngagedWithBot(bot, target))
+        {
+            if (Unit* defensive = PickDefensiveAttacker(bot, target))
             {
-                target = nearestAttacker;
-                state.recentBadTargets.erase(nearestAttacker->GetGUID().GetRawValue());
+                target = defensive;
+                state.recentBadTargets.erase(defensive->GetGUID().GetRawValue());
             }
         }
 
@@ -10057,6 +10100,9 @@ namespace
         hunt << " you=" << asker->GetName()
             << " same_map=" << (sameMap ? "yes" : "no")
             << " alive=" << (asker->IsAlive() ? "yes" : "no")
+            << " bot_lvl=" << uint32(bot->GetLevel())
+            << " you_lvl=" << uint32(asker->GetLevel())
+            << " proactive_level_ok=" << (IsProactivePlayerLevelAcceptable(bot, asker) ? "yes" : "NO")
             << " gm=" << (asker->IsGameMaster() ? "YES" : "no")
             << " no_pvp=" << (asker->pvpInfo.IsInNoPvPArea ? "YES" : "no");
 
@@ -10132,6 +10178,8 @@ namespace
             verdict = "you are in a no-PvP area and are excluded from the human snapshot";
         else if (!askerAttackable)
             verdict = "IsValidAttackTarget says you are not attackable";
+        else if (!IsProactivePlayerLevelAcceptable(bot, asker))
+            verdict = "you are higher level; bot will not initiate but will retaliate if attacked";
         else if (!askerInApproach)
             verdict = "you are outside the configured proactive hunt radius";
         else if (askerPathChecked && askerPath == WalkPathResult::Unreachable)
@@ -10325,7 +10373,7 @@ namespace playerbot
                 if (human->pvpInfo.IsInNoPvPArea)
                     continue;
 
-                spots.push_back({ human->GetGUID(), human->GetMapId(), human->GetZoneId(),
+                spots.push_back({ human->GetGUID(), human->GetMapId(), human->GetZoneId(), human->GetLevel(),
                     human->GetPositionX(), human->GetPositionY(), human->GetPositionZ() });
             }
 
