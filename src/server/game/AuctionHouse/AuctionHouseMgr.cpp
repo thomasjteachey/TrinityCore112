@@ -208,6 +208,19 @@ static uint32 AuctionProceedsDelaySeconds()
 
 void AuctionHouseMgr::SendAuctionSalePendingMail(AuctionEntry* auction, CharacterDatabaseTransaction trans)
 {
+    // Nothing is pending when the gold arrives with the sale.
+    //
+    // This invoice exists to say "your money is coming in an hour" - it is the
+    // notice that fills the gap. With no delay there is no gap, so it is a
+    // second mail arriving alongside the one that carries the gold and saying
+    // the same thing.
+    //
+    // Guarded here rather than at the two call sites so it stays true of any
+    // future caller, and so setting ProceedsDelaySeconds back above zero
+    // restores the invoice by itself instead of needing a second edit.
+    if (!AuctionProceedsDelaySeconds())
+        return;
+
     ObjectGuid owner_guid(HighGuid::Player, auction->owner);
     Player* owner = ObjectAccessor::FindConnectedPlayer(owner_guid);
     uint32 owner_accId = sCharacterCache->GetCharacterAccountIdByGuid(owner_guid);
