@@ -15,22 +15,22 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-// Barracks+ hardcore ruleset (config-gated; entirely inert on Legionnaire+):
-//  - Loot drop on death: WORN GREEN-AND-BETTER EQUIPMENT is at stake - a
-//    configurable share drops into a chest at the corpse (Dire Maul beads
-//    style), the rest is destroyed as a deflationary sink. White gear is the
-//    floor and never drops; bags, inventory and money are safe. Whatever the
-//    death took is replaced with plain white field kit on resurrection, so
-//    nobody is ever left unable to fight. World only - BGs/arenas exempt.
-//  - Opt-in free-for-all PvP: a flagger NPC in the capitals toggles it. The
-//    flag only ARMS in zones of a configurable minimum level - never in
-//    starter zones, capitals or sanctuaries - and while armed the player
-//    earns double experience and loot gold.
-//  - Playerbots are ALWAYS armed in eligible zones and render red to
-//    everyone.
-// Item bindings are removed by the core-side Centurion.Hardcore.NoBinding
-// switch (Item::IsSoulBound), which also opens the auction house to
-// everything.
+ // Barracks+ hardcore ruleset (config-gated; entirely inert on Legionnaire+):
+ //  - Loot drop on death: WORN GREEN-AND-BETTER EQUIPMENT is at stake - a
+ //    configurable share drops into a chest at the corpse (Dire Maul beads
+ //    style), the rest is destroyed as a deflationary sink. White gear is the
+ //    floor and never drops; bags, inventory and money are safe. Whatever the
+ //    death took is replaced with plain white field kit on resurrection, so
+ //    nobody is ever left unable to fight. World only - BGs/arenas exempt.
+ //  - Opt-in free-for-all PvP: a flagger NPC in the capitals toggles it. The
+ //    flag only ARMS in zones of a configurable minimum level - never in
+ //    starter zones, capitals or sanctuaries - and while armed the player
+ //    earns double experience and loot gold.
+ //  - Playerbots are ALWAYS armed in eligible zones and render red to
+ //    everyone.
+ // Item bindings are removed by the core-side Centurion.Hardcore.NoBinding
+ // switch (Item::IsSoulBound), which also opens the auction house to
+ // everything.
 
 #include "Bag.h"
 #include "custom_barracks_hardcore.h"
@@ -197,21 +197,21 @@ namespace BarracksHardcore
     {
         switch (zoneId)
         {
-            case 1: case 12: case 14: case 85: case 141: case 215:  return 10; // starter zones
-            case 3430: case 3524:                                   return 10; // Eversong, Azuremyst
-            case 38: case 40: case 130: case 148:                   return 20;
-            case 3433: case 3525:                                   return 20; // Ghostlands, Bloodmyst
-            case 17: case 44:                                       return 25;
-            case 406:                                               return 27;
-            case 10: case 11: case 267: case 331:                   return 30;
-            case 400:                                               return 35;
-            case 36: case 45: case 405:                             return 40;
-            case 3: case 8: case 15: case 33:                       return 45;
-            case 47: case 51: case 357: case 440:                   return 50;
-            case 16: case 361: case 490:                            return 55;
-            case 4: case 28: case 46:                               return 58;
-            case 139: case 618: case 1377:                          return 60;
-            default:                                                return 60; // Outland, Northrend, dungeons
+        case 1: case 12: case 14: case 85: case 141: case 215:  return 10; // starter zones
+        case 3430: case 3524:                                   return 10; // Eversong, Azuremyst
+        case 38: case 40: case 130: case 148:                   return 20;
+        case 3433: case 3525:                                   return 20; // Ghostlands, Bloodmyst
+        case 17: case 44:                                       return 25;
+        case 406:                                               return 27;
+        case 10: case 11: case 267: case 331:                   return 30;
+        case 400:                                               return 35;
+        case 36: case 45: case 405:                             return 40;
+        case 3: case 8: case 15: case 33:                       return 45;
+        case 47: case 51: case 357: case 440:                   return 50;
+        case 16: case 361: case 490:                            return 55;
+        case 4: case 28: case 46:                               return 58;
+        case 139: case 618: case 1377:                          return 60;
+        default:                                                return 60; // Outland, Northrend, dungeons
         }
     }
 
@@ -554,18 +554,18 @@ namespace BarracksHardcore
     {
         switch (player->GetClass())
         {
-            case CLASS_ROGUE:
-            case CLASS_DRUID:
-                return ITEM_SUBCLASS_ARMOR_LEATHER;
-            case CLASS_HUNTER:
-            case CLASS_SHAMAN:
-                return player->GetLevel() >= 40 ? uint32(ITEM_SUBCLASS_ARMOR_MAIL) : uint32(ITEM_SUBCLASS_ARMOR_LEATHER);
-            case CLASS_WARRIOR:
-            case CLASS_PALADIN:
-            case CLASS_DEATH_KNIGHT:
-                return player->GetLevel() >= 40 ? uint32(ITEM_SUBCLASS_ARMOR_PLATE) : uint32(ITEM_SUBCLASS_ARMOR_MAIL);
-            default:
-                return ITEM_SUBCLASS_ARMOR_CLOTH;
+        case CLASS_ROGUE:
+        case CLASS_DRUID:
+            return ITEM_SUBCLASS_ARMOR_LEATHER;
+        case CLASS_HUNTER:
+        case CLASS_SHAMAN:
+            return player->GetLevel() >= 40 ? uint32(ITEM_SUBCLASS_ARMOR_MAIL) : uint32(ITEM_SUBCLASS_ARMOR_LEATHER);
+        case CLASS_WARRIOR:
+        case CLASS_PALADIN:
+        case CLASS_DEATH_KNIGHT:
+            return player->GetLevel() >= 40 ? uint32(ITEM_SUBCLASS_ARMOR_PLATE) : uint32(ITEM_SUBCLASS_ARMOR_MAIL);
+        default:
+            return ITEM_SUBCLASS_ARMOR_CLOTH;
         }
     }
 
@@ -573,21 +573,21 @@ namespace BarracksHardcore
     {
         switch (slot)
         {
-            case EQUIPMENT_SLOT_HEAD:      return { INVTYPE_HEAD };
-            case EQUIPMENT_SLOT_SHOULDERS: return { INVTYPE_SHOULDERS };
-            case EQUIPMENT_SLOT_CHEST:     return { INVTYPE_CHEST, INVTYPE_ROBE };
-            case EQUIPMENT_SLOT_WAIST:     return { INVTYPE_WAIST };
-            case EQUIPMENT_SLOT_LEGS:      return { INVTYPE_LEGS };
-            case EQUIPMENT_SLOT_FEET:      return { INVTYPE_FEET };
-            case EQUIPMENT_SLOT_WRISTS:    return { INVTYPE_WRISTS };
-            case EQUIPMENT_SLOT_HANDS:     return { INVTYPE_HANDS };
-            case EQUIPMENT_SLOT_BACK:      return { INVTYPE_CLOAK };
-            case EQUIPMENT_SLOT_MAINHAND:  return { INVTYPE_WEAPON, INVTYPE_WEAPONMAINHAND, INVTYPE_2HWEAPON };
-            case EQUIPMENT_SLOT_OFFHAND:   return { INVTYPE_SHIELD, INVTYPE_WEAPONOFFHAND, INVTYPE_HOLDABLE };
-            // A hunter without a bow is not a hunter; casters get their wand
-            // and the hybrids their relic out of the same slot.
-            case EQUIPMENT_SLOT_RANGED:    return { INVTYPE_RANGED, INVTYPE_RANGEDRIGHT, INVTYPE_THROWN, INVTYPE_RELIC };
-            default:                       return {};
+        case EQUIPMENT_SLOT_HEAD:      return { INVTYPE_HEAD };
+        case EQUIPMENT_SLOT_SHOULDERS: return { INVTYPE_SHOULDERS };
+        case EQUIPMENT_SLOT_CHEST:     return { INVTYPE_CHEST, INVTYPE_ROBE };
+        case EQUIPMENT_SLOT_WAIST:     return { INVTYPE_WAIST };
+        case EQUIPMENT_SLOT_LEGS:      return { INVTYPE_LEGS };
+        case EQUIPMENT_SLOT_FEET:      return { INVTYPE_FEET };
+        case EQUIPMENT_SLOT_WRISTS:    return { INVTYPE_WRISTS };
+        case EQUIPMENT_SLOT_HANDS:     return { INVTYPE_HANDS };
+        case EQUIPMENT_SLOT_BACK:      return { INVTYPE_CLOAK };
+        case EQUIPMENT_SLOT_MAINHAND:  return { INVTYPE_WEAPON, INVTYPE_WEAPONMAINHAND, INVTYPE_2HWEAPON };
+        case EQUIPMENT_SLOT_OFFHAND:   return { INVTYPE_SHIELD, INVTYPE_WEAPONOFFHAND, INVTYPE_HOLDABLE };
+                                   // A hunter without a bow is not a hunter; casters get their wand
+                                   // and the hybrids their relic out of the same slot.
+        case EQUIPMENT_SLOT_RANGED:    return { INVTYPE_RANGED, INVTYPE_RANGEDRIGHT, INVTYPE_THROWN, INVTYPE_RELIC };
+        default:                       return {};
         }
     }
 
@@ -993,12 +993,15 @@ public:
         return float(zeroDifference + victimLevel - killerLevel) / float(zeroDifference);
     }
 
-    // Experience for killing a playerbot.
+    // Experience for an open-world PvP kill.
     //
     // Counted in BUBBLES: the experience bar is drawn as twenty segments, so a
     // bubble is 5% of a level and the whole bar is twenty of them. The reward
     // is therefore a share of the KILLER's own next-level requirement, which
     // keeps it worth the same at every level instead of becoming irrelevant.
+    //
+    // This custom reward is WORLD PvP only. Battlegrounds and arenas already
+    // have their own reward systems and must never receive this extra XP.
     void AwardPlayerKillExperience(Player* killer, Player* victim)
     {
         if (!s_enabled || s_playerKillXpBubbles <= 0.0f)
@@ -1007,10 +1010,15 @@ public:
         if (!killer || !victim || killer == victim || !killer->IsAlive())
             return;
 
+        if (killer->InBattleground() || victim->InBattleground())
+            return;
+
         // Only real people are paid for this. Bots kill each other constantly
         // on an FFA realm - the zone guardians hunt each other by design - so
         // paying bots would run the entire fleet to the level cap in minutes.
-        if (!IsPlayerbot(victim) || IsPlayerbot(killer))
+        // The VICTIM may be either a playerbot or a real player: this is the
+        // open-world PvP reward, not a playerbot-only reward.
+        if (IsPlayerbot(killer))
             return;
 
         // Zero at the level cap, which is also where GiveXP would refuse it.
@@ -1018,7 +1026,7 @@ public:
         if (!perLevel)
             return;
 
-        // A grey bot is worth nothing, so this exits before paying anything.
+        // A grey player is worth nothing, so this exits before paying anything.
         float const conScale = PlayerKillConScale(killer->GetLevel(), victim->GetLevel());
         if (conScale <= 0.0f)
             return;
@@ -1032,9 +1040,9 @@ public:
         killer->GiveXP(amount, victim);
 
         TC_LOG_INFO("playerbots.hardcore",
-            "{} (level {}) killed playerbot {} (level {}) for {} xp ({} bubbles x{:.2f} con).",
-            killer->GetName(), killer->GetLevel(), victim->GetName(), victim->GetLevel(),
-            amount, s_playerKillXpBubbles, conScale);
+            "{} (level {}) killed {} {} (level {}) in open-world PvP for {} xp ({} bubbles x{:.2f} con).",
+            killer->GetName(), killer->GetLevel(), IsPlayerbot(victim) ? "playerbot" : "player",
+            victim->GetName(), victim->GetLevel(), amount, s_playerKillXpBubbles, conScale);
     }
 
     void OnPVPKill(Player* killer, Player* victim) override
@@ -1054,8 +1062,17 @@ public:
         DropFullLootChest(victim);
     }
 
-    void OnPlayerKilledByCreature(Creature* /*killer*/, Player* victim) override
+    void OnPlayerKilledByCreature(Creature* killer, Player* victim) override
     {
+        // Unit::Kill routes a PET killing blow through OnPlayerKilledByCreature
+        // because the literal attacker is a Creature. Resolve the hunter/warlock
+        // pet back to its real-player owner and award the exact same WORLD-PvP
+        // XP as a direct player killing blow. AwardPlayerKillExperience itself
+        // rejects BGs/arenas, bots as killers, gray victims and level-cap XP.
+        if (killer && killer->IsPet())
+            if (Player* owner = killer->GetCharmerOrOwnerPlayerOrPlayerItself())
+                AwardPlayerKillExperience(owner, victim);
+
         // A bot killed by a mob with nobody around has stripped itself onto an
         // empty hillside: no one can reach the chest before it despawns, so
         // the only lasting effect is the fleet grinding itself out of its own
