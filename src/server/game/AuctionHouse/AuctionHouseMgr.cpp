@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <vector>
 #include "AuctionHouseMgr.h"
+#include "Config.h"
 #include "AuctionHouseBot.h"
 #include "AccountMgr.h"
 #include "Bag.h"
@@ -190,6 +191,21 @@ void AuctionHouseMgr::SendAuctionWonMail(AuctionEntry* auction, CharacterDatabas
     }
 }
 
+// How long auction proceeds take to reach the seller.
+//
+// Deliberately NOT MailDeliveryDelay. That hour exists to make player-to-player
+// item mail hard to abuse, which is a good reason that has nothing to do with an
+// auction house paying out its own sale - and lowering it would take the
+// protection off ordinary mail as a side effect.
+//
+// Read per call rather than cached: a completed auction is rare enough that a
+// config lookup does not matter, and it means a reload takes effect at once.
+static uint32 AuctionProceedsDelaySeconds()
+{
+    int32 const configured = sConfigMgr->GetIntDefault("Centurion.AuctionHouse.ProceedsDelaySeconds", 0);
+    return uint32(std::max(0, configured));
+}
+
 void AuctionHouseMgr::SendAuctionSalePendingMail(AuctionEntry* auction, CharacterDatabaseTransaction trans)
 {
     ObjectGuid owner_guid(HighGuid::Player, auction->owner);
@@ -199,13 +215,13 @@ void AuctionHouseMgr::SendAuctionSalePendingMail(AuctionEntry* auction, Characte
     if ((owner || owner_accId) && !sAuctionBotConfig->IsBotChar(auction->owner))
     {
         WowTime eta = *GameTime::GetUtcWowTime();
-        eta += Seconds(sWorld->getIntConfig(CONFIG_MAIL_DELIVERY_DELAY));
+        eta += Seconds(AuctionProceedsDelaySeconds());
         if (owner)
             eta += owner->GetSession()->GetTimezoneOffset();
 
         MailDraft(auction->BuildAuctionMailSubject(AUCTION_SALE_PENDING),
             AuctionEntry::BuildAuctionInvoiceMailBody(ObjectGuid::Create<HighGuid::Player>(auction->bidder), auction->bid, auction->buyout, auction->deposit,
-                auction->GetAuctionCut(), sWorld->getIntConfig(CONFIG_MAIL_DELIVERY_DELAY), eta.GetPackedTime()))
+                auction->GetAuctionCut(), AuctionProceedsDelaySeconds(), eta.GetPackedTime()))
             .SendMailTo(trans, MailReceiver(owner, auction->owner), auction, MAIL_CHECK_MASK_COPIED);
     }
 }
@@ -265,7 +281,7 @@ void AuctionHouseMgr::SendAuctionSuccessfulMail(AuctionEntry* auction, Character
 
         MailDraft(auction->BuildAuctionMailSubject(AUCTION_SUCCESSFUL), AuctionEntry::BuildAuctionSoldMailBody(ObjectGuid::Create<HighGuid::Player>(auction->bidder), auction->bid, auction->buyout, auction->deposit, auctionCut))
             .AddMoney(profit)
-            .SendMailTo(trans, MailReceiver(owner, auction->owner), auction, MAIL_CHECK_MASK_COPIED, sWorld->getIntConfig(CONFIG_MAIL_DELIVERY_DELAY));
+            .SendMailTo(trans, MailReceiver(owner, auction->owner), auction, MAIL_CHECK_MASK_COPIED, AuctionProceedsDelaySeconds());
     }
 }
 
