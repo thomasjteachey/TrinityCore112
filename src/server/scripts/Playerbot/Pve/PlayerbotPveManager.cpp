@@ -7419,14 +7419,54 @@ namespace
             }
             else
             {
+                uint32 const homeZoneId = g_PveConfig.rebirthZoneBanded ? GetRebirthZoneId(bot) : 0u;
+
+                // A class-balanced home assignment is independent of the bot's
+                // current level. Never let the relocation executor physically send
+                // a below-band bot into that higher-level home before the band-reset
+                // pass has raised it to the zone floor (or leave an over-band bot
+                // grinding there after it should have cycled). The rebirth drain runs
+                // later in this same world update, so queue the correction and skip
+                // relocation entirely until level and home agree.
+                if (homeZoneId)
+                {
+                    if (ClassicZoneBand const* homeBand = FindClassicZoneBand(homeZoneId))
+                    {
+                        uint32 const botLevel = bot->GetLevel();
+                        if (botLevel < homeBand->minLevel || botLevel >= homeBand->maxLevel)
+                        {
+                            {
+                                std::lock_guard<std::mutex> pendingGuard(g_PvePendingLock);
+                                g_PendingRebirths.insert(botRawGuid);
+                            }
+                            TC_LOG_INFO("playerbots.pve",
+                                "Bot {} relocation deferred: level {} does not fit home zone {} band {}-{}; queueing band reset.",
+                                bot->GetName(), botLevel, homeZoneId, uint32(homeBand->minLevel), uint32(homeBand->maxLevel));
+                            continue;
+                        }
+                    }
+                }
+
                 std::lock_guard<std::mutex> guard(g_GrindSpotLock);
                 uint8 level = uint8(std::min<uint32>(bot->GetLevel(), 80));
                 // Walk down a few brackets if the exact level has no clusters.
+                // Also reject anomalous/custom low-level creature clusters that sit
+                // inside a zone whose authoritative Classic band does not contain
+                // this bot's level. Without this, one stray level-10 spawn in STV
+                // can make STV look like a valid level-10 relocation destination.
                 for (uint8 probe = 0; probe < 5 && candidates.empty() && level > probe; ++probe)
                 {
                     auto itr = g_GrindSpotsByLevel.find(level - probe);
-                    if (itr != g_GrindSpotsByLevel.end())
-                        candidates = itr->second;
+                    if (itr == g_GrindSpotsByLevel.end())
+                        continue;
+
+                    for (GrindSpot const& spot : itr->second)
+                    {
+                        if (ClassicZoneBand const* band = FindClassicZoneBand(spot.zoneId))
+                            if (bot->GetLevel() < band->minLevel || bot->GetLevel() > band->maxLevel)
+                                continue;
+                        candidates.push_back(spot);
+                    }
                 }
 
                 // Home first. Being tied to a zone has to mean living in it, not
@@ -7440,7 +7480,7 @@ namespace
                 // Only when the bot's own zone has nothing at its level does it
                 // look further afield, which is also how it climbs out of a zone
                 // it has outgrown before rebirth catches up with it.
-                if (uint32 const homeZoneId = g_PveConfig.rebirthZoneBanded ? GetRebirthZoneId(bot) : 0u)
+                if (homeZoneId)
                 {
                     std::vector<GrindSpot> atHome;
                     for (GrindSpot const& spot : candidates)
