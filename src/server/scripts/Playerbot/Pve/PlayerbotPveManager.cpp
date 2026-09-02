@@ -11945,6 +11945,23 @@ namespace playerbot
         // include GM commands, which have no such check of their own.
         if (bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
             return;
+
+        // And never on a bot that is not in the world, which is what was aborting
+        // the server. Player::DestroyItem sets ITEM_REMOVED unconditionally but
+        // only calls Item::RemoveFromWorld() when the PLAYER is in world:
+        //
+        //     if (IsInWorld() && update)
+        //         pItem->RemoveFromWorld();
+        //     ...
+        //     pItem->SetState(ITEM_REMOVED, this);
+        //
+        // Clear a bot's inventory while it is out of world and every item is
+        // queued for deletion while still flagged in-world. The SaveToDB at the
+        // end of this same function then reaches them, Item::SaveToDB deletes an
+        // ITEM_REMOVED item outright, and ~Object aborts the process on
+        // "deleted but still in world" - taking the world thread with it.
+        if (!bot->IsInWorld())
+            return;
         uint64 const botRawGuid = bot->GetGUID().GetRawValue();
 
         playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), false);
@@ -12027,6 +12044,23 @@ namespace playerbot
         // teleport has not landed trips RemoveFromGrid's IsInGrid assert. Callers
         // include GM commands, which have no such check of their own.
         if (bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
+            return;
+
+        // And never on a bot that is not in the world, which is what was aborting
+        // the server. Player::DestroyItem sets ITEM_REMOVED unconditionally but
+        // only calls Item::RemoveFromWorld() when the PLAYER is in world:
+        //
+        //     if (IsInWorld() && update)
+        //         pItem->RemoveFromWorld();
+        //     ...
+        //     pItem->SetState(ITEM_REMOVED, this);
+        //
+        // Clear a bot's inventory while it is out of world and every item is
+        // queued for deletion while still flagged in-world. The SaveToDB at the
+        // end of this same function then reaches them, Item::SaveToDB deletes an
+        // ITEM_REMOVED item outright, and ~Object aborts the process on
+        // "deleted but still in world" - taking the world thread with it.
+        if (!bot->IsInWorld())
             return;
         {
             uint64 const botRawGuid = bot->GetGUID().GetRawValue();
