@@ -483,6 +483,17 @@ Playerbot.PveGrind.Enable = 0
 
 Playerbot.PveGrind.SearchRadius = 60
 
+#    Playerbot.PveGrind.LevelMatchYards
+#        Description: Yards of detour a bot accepts per level of mismatch when it
+#                     picks something to grind. The level window elsewhere only says
+#                     what is ALLOWED; picking purely by distance inside it had bots
+#                     farming whatever was underfoot - grey mobs worth no experience
+#                     at the bottom of a band, and fights they barely survive at the
+#                     top. Zero restores pure nearest-wins.
+#        Default:     15
+
+Playerbot.PveGrind.LevelMatchYards = 15
+
 #    Playerbot.PveGrind.WanderRadius
 #        Description: When nothing attackable is nearby, the bot strolls to a random reachable
 #                     point within this many yards every 12-25 seconds.
@@ -898,7 +909,7 @@ Centurion.Hardcore.FieldKit.GreyUntilLevel = 15
 #        Default:     200
 #                     0   - (disabled: guardians stand their post and wait)
 #
-Playerbot.Pve.ZoneGuardians.PlayerApproachYards = 200
+Playerbot.Pve.ZoneGuardians.PlayerApproachYards = 225
 
 #
 #    Playerbot.WhoListVisibility

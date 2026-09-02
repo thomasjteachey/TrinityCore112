@@ -69,6 +69,10 @@ struct PveConfig
     float grindWanderRadius = 40.0f;
     uint32 grindMaxLevelAbove = 3;
     uint32 grindMaxLevelBelow = 5;
+    // Yards of detour a bot will accept per level of mismatch when choosing
+    // something to grind. Nearest-wins alone had bots farming whatever was
+    // underfoot; this makes a same-level mob worth walking for.
+    float grindLevelMatchYards = 15.0f;
     bool grindAllowElites = false;
     bool lootEnabled = true;
     bool vendorEnabled = true;
@@ -155,7 +159,11 @@ struct PveConfig
     // people rather than waiting to be found: the server already knows where
     // every player is, so this needs no searching. 0 disables the approach and
     // leaves guardians standing their post.
-    float guardianPlayerApproachYards = 200.0f;
+    // Must stay clear of PvePlayerTeleportMinimumDistance (210y): a bot that
+    // teleports to a person lands at that range, so a smaller radius than the
+    // drop puts it outside its own engage check the instant it arrives and it
+    // just stands there.
+    float guardianPlayerApproachYards = 225.0f;
     // Minutes without a fight against a real player before a guardian starts
     // landing closer and closer, until it is arriving on top of them.
     uint32 guardianEscalateAfterMinutes = 30;

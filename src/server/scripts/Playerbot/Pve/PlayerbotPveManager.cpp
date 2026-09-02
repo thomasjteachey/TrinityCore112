@@ -1852,22 +1852,33 @@ namespace
         if (matches.empty())
             return nullptr;
 
-        Creature* nearest = nullptr;
-        float nearestDistance = 0.0f;
+        // Nearest is not best. The level window above only says what is ALLOWED;
+        // picking purely by distance inside it had bots farming whatever happened
+        // to be underfoot, which at the bottom of a band means grey mobs worth no
+        // experience and at the top means fights they barely survive.
+        //
+        // Score each candidate as its distance plus a fixed number of yards for
+        // every level away from the bot, so a well-matched mob is worth walking
+        // past a poorly-matched closer one - but only so far, which keeps the bot
+        // from crossing the zone for a perfect match.
+        Creature* best = nullptr;
+        float bestScore = 0.0f;
         for (Creature* candidate : matches)
         {
             if (IsRecentBadTarget(state, candidate->GetGUID()))
                 continue;
 
-            float const distance = bot->GetDistance(candidate);
-            if (!nearest || distance < nearestDistance)
+            int32 const levelGap = std::abs(int32(candidate->GetLevel()) - int32(bot->GetLevel()));
+            float const score = bot->GetDistance(candidate) +
+                float(levelGap) * cfg.grindLevelMatchYards;
+            if (!best || score < bestScore)
             {
-                nearest = candidate;
-                nearestDistance = distance;
+                best = candidate;
+                bestScore = score;
             }
         }
 
-        return nearest;
+        return best;
     }
 
     // Where the real people are.
@@ -10363,9 +10374,10 @@ namespace playerbot
         g_PveConfig.autoLearnSpellsOnLevelUp = sConfigMgr->GetBoolDefault("Playerbot.Pve.AutoLearnSpellsOnLevelUp", true);
         g_PveConfig.grindEnabled = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.Enable", false);
         g_PveConfig.grindSearchRadius = sConfigMgr->GetFloatDefault("Playerbot.PveGrind.SearchRadius", 60.0f);
+        g_PveConfig.grindLevelMatchYards = std::max(0.0f, sConfigMgr->GetFloatDefault("Playerbot.PveGrind.LevelMatchYards", 15.0f));
         g_PveConfig.pathBudgetPerSecond = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.PathBudgetPerSecond", 150));
         g_PveConfig.guardianPlayerApproachYards = std::max(0.0f,
-            sConfigMgr->GetFloatDefault("Playerbot.Pve.ZoneGuardians.PlayerApproachYards", 200.0f));
+            sConfigMgr->GetFloatDefault("Playerbot.Pve.ZoneGuardians.PlayerApproachYards", 225.0f));
         g_PveConfig.guardianEscalateAfterMinutes = uint32(std::max(0,
             sConfigMgr->GetIntDefault("Playerbot.Pve.ZoneGuardians.EscalateAfterMinutes", 30)));
         g_PveConfig.aggressionMinMinutes = uint32(std::max(1,

@@ -923,9 +923,21 @@ public:
         ApplyWarModeAura(player);
     }
 
-    void OnGiveXP(Player* player, uint32& amount, Unit* /*victim*/) override
+    void OnGiveXP(Player* player, uint32& amount, Unit* victim) override
     {
         if (!s_enabled || s_rewardMultiplier < 2)
+            return;
+
+        // Experience for killing a PERSON is not a War Mode reward and must not
+        // be multiplied here. That award is already derived from the victim's own
+        // level and split between everyone who shared the kill, so scaling it
+        // again would pay a flagged player several times over for one corpse - on
+        // top of the honor bonus the aura carries in its own right.
+        //
+        // The aura's SPELL_AURA_MOD_XP_PCT never reaches it either: KillRewarder
+        // applies that in _RewardXP, which is the PvE path, and the PvP award
+        // calls GiveXP directly.
+        if (victim && victim->GetTypeId() == TYPEID_PLAYER)
             return;
 
         // The aura's own SPELL_AURA_MOD_XP_PCT has already been applied by
