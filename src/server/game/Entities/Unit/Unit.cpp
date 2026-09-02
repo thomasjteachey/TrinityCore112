@@ -934,6 +934,13 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
         if (player->GetCommandStatus(CHEAT_GOD))
             return 0;
 
+    // Who is actually bringing this person down. The PvP experience award
+    // divides by the share of damage that came from people, so a mob cannot
+    // soften somebody up for a last hit worth full value. Counted after the
+    // god-mode check, since damage that was never taken should not count.
+    if (Player* damagedPlayer = victim->ToPlayer())
+        damagedPlayer->AccumulatePvpDamageShare(attacker, damage);
+
     bool const hasAbsorbedDamage = cleanDamage && cleanDamage->absorbed_damage > 0;
 
     if (damagetype != NODAMAGE && (damage != 0 || hasAbsorbedDamage))

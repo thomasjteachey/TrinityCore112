@@ -26891,9 +26891,46 @@ void Player::AtExitCombat()
         }
 }
 
+void Player::AccumulatePvpDamageShare(Unit const* attacker, uint32 damage)
+{
+    if (!damage)
+        return;
+
+    // A player-owned pet is its owner's damage. The kill reward already
+    // resolves a pet back to the person behind it, so counting it as the world
+    // would let a hunter shoot somebody down through their pet and then be
+    // paid as though a mob had done the work.
+    bool fromPerson = false;
+    if (attacker)
+        fromPerson = attacker->GetTypeId() == TYPEID_PLAYER ||
+            attacker->GetCharmerOrOwnerGUID().IsPlayer();
+
+    if (fromPerson)
+        m_pvpDamageFromPlayers += damage;
+    else
+        m_pvpDamageFromOthers += damage;
+}
+
+float Player::GetPvpDamageShare() const
+{
+    uint64 const total = m_pvpDamageFromPlayers + m_pvpDamageFromOthers;
+    // Nothing recorded means nothing to apportion - a duel opener, a killing
+    // blow that was the first hit of the fight - so pay in full rather than
+    // punishing a case the counters simply never saw.
+    if (!total)
+        return 1.0f;
+
+    return float(m_pvpDamageFromPlayers) / float(total);
+}
+
 void Player::AtEnterCombat()
 {
     Unit::AtEnterCombat();
+    // A new fight, so the damage apportioning starts over. Reset on ENTERING
+    // rather than leaving: a player who dies never leaves combat cleanly, and
+    // the counters have to still describe the fight that killed them.
+    m_pvpDamageFromPlayers = 0;
+    m_pvpDamageFromOthers = 0;
     m_combatDiagnosticCombatTimer = 0;
     m_combatDiagnosticCheckTimer = 0;
     m_combatDiagnosticSent = false;

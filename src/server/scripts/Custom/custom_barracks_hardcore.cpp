@@ -1094,8 +1094,14 @@ public:
         if (!victimLevelXp)
             return;
 
+        // Scaled by how much of the victim's death people were responsible for.
+        // A quarter of the damage from players pays a quarter of the experience,
+        // so letting a mob do the work and last-hitting is worth what it should
+        // be worth. Pets count as their owner.
+        float const playerShare = victim->GetPvpDamageShare();
+
         float const perHead = float(victimLevelXp) * s_playerKillXpBubbles
-            / 20.0f / float(recipients.size());
+            / 20.0f * playerShare / float(recipients.size());
 
         for (Player* member : recipients)
         {
@@ -1134,10 +1140,10 @@ public:
 
             TC_LOG_INFO("playerbots.hardcore",
                 "{} (level {}) shared the kill of {} {} (level {}) for {} xp "
-                "({} bubbles x{:.2f} con x{:.2f} repeat, one of {} shares).",
+                "({} bubbles x{:.2f} con x{:.2f} repeat x{:.2f} player-damage, one of {} shares).",
                 member->GetName(), member->GetLevel(), IsPlayerbot(victim) ? "playerbot" : "player",
                 victim->GetName(), victim->GetLevel(), amount, s_playerKillXpBubbles,
-                conScale, repeat, uint32(recipients.size()));
+                conScale, repeat, playerShare, uint32(recipients.size()));
         }
     }
 

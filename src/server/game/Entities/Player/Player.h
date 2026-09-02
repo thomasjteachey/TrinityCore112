@@ -1061,6 +1061,12 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         // group does not reset it, and somebody who has never killed this victim
         // is not punished for another player's farming.
         float ConsumePvpXpDiminishing(ObjectGuid victimGuid, uint32 windowSeconds);
+        // Who actually did the killing. The PvP experience award scales by the
+        // share of damage that came from players, so a mob cannot soften somebody
+        // up and let a passer-by last-hit them for full value. Reset whenever this
+        // player enters combat, so it always describes the fight they died in.
+        void AccumulatePvpDamageShare(Unit const* attacker, uint32 damage);
+        float GetPvpDamageShare() const;
         // borrowed = a temporary level (Violet Hold's Boon of Ascension and its
         // rollback): the level itself, its stats, skills and talent points are
         // applied, but none of the one-way rewards of really reaching a level -
@@ -2527,6 +2533,11 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         // window, because ConsumePvpXpDiminishing prunes aged-out entries on
         // every call. Map-thread only, like the rest of Player.
         std::unordered_map<ObjectGuid, PvpXpVictimRecord> m_pvpXpVictims;
+
+        // Damage taken during the CURRENT fight, split by whether a person or the
+        // world dealt it. Both reset on entering combat.
+        uint64 m_pvpDamageFromPlayers = 0;
+        uint64 m_pvpDamageFromOthers = 0;
 
         void outDebugValues() const;
         ObjectGuid m_lootGuid;
