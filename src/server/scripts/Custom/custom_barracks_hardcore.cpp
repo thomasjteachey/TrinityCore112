@@ -398,6 +398,17 @@ namespace BarracksHardcore
     // the player reaches rather than starts with.
     std::unordered_map<uint32, std::vector<uint32>> s_greyKitByInvType;
 
+    // Duplicate id -> the real item it was copied from.
+    //
+    // Every duplicate reads artifact quality now, so it is plainly a loaner
+    // on the character sheet and not mistaken for earned gear. That costs us
+    // the one signal that separated the grey tier from the white one: the two
+    // are interleaved across the whole id range, so no range check can stand
+    // in for it. The SOURCE item still carries its own quality, which is what
+    // this map is for - without it every character below GreyUntilLevel would
+    // be quietly promoted from grey kit to white.
+    std::unordered_map<uint32, uint32> s_fieldKitSourceItem;
+
     // Placeholder and developer scaffolding wearing an item's clothes. These
     // sit in item_template at quality white, item level 1 and required level
     // 0, which is exactly the shape of a real starter item - so a level 1 bot
@@ -483,6 +494,44 @@ namespace BarracksHardcore
             uint32(s_obtainableItems.size()));
     }
 
+    // The duplicate -> source pairing the field-kit migration recorded.
+    //
+    // Fails OPEN: with no table, or a row whose source has gone, the
+    // duplicate is judged on its own quality as before. That is the old
+    // behaviour rather than an outage - a realm that never ran the migration
+    // has no duplicates to classify in the first place.
+    void LoadFieldKitSourcesOnce()
+    {
+        QueryResult result = WorldDatabase.Query(
+            "SELECT kit_entry, source_entry FROM zz_fieldkit_map");
+        if (!result)
+        {
+            TC_LOG_INFO("playerbots.hardcore", "Field kit: no zz_fieldkit_map; duplicates will be judged on their own quality.");
+            return;
+        }
+
+        do
+        {
+            s_fieldKitSourceItem[(*result)[0].GetUInt32()] = (*result)[1].GetUInt32();
+        } while (result->NextRow());
+
+        TC_LOG_INFO("playerbots.hardcore", "Field kit: {} duplicates mapped back to their source item.",
+            uint32(s_fieldKitSourceItem.size()));
+    }
+
+    // The quality that decides which tier a kit piece belongs to. Read
+    // through to the original item, because the duplicate itself deliberately
+    // reads artifact quality and no longer says anything about its tier.
+    uint32 KitTierQuality(ItemTemplate const& proto)
+    {
+        auto itr = s_fieldKitSourceItem.find(proto.ItemId);
+        if (itr != s_fieldKitSourceItem.end())
+            if (ItemTemplate const* source = sObjectMgr->GetItemTemplate(itr->second))
+                return source->Quality;
+
+        return proto.Quality;
+    }
+
     void BuildWhiteKitCacheOnce();
 
     // Built once, then read-only.
@@ -495,6 +544,7 @@ namespace BarracksHardcore
 
         ComputeKitItemIdCeiling();
         LoadObtainableItemsOnce();
+        LoadFieldKitSourcesOnce();
 
         // Prefer the non-sellable duplicates. They were filtered by exactly the
         // rules below at the moment they were created, so nothing here has to
@@ -504,7 +554,7 @@ namespace BarracksHardcore
             ItemTemplate const& proto = itemPair.second;
             if (!IsFieldKitDuplicate(proto.ItemId))
                 continue;
-            if (proto.Quality == ITEM_QUALITY_POOR)
+            if (KitTierQuality(proto) == ITEM_QUALITY_POOR)
                 s_greyKitByInvType[proto.InventoryType].push_back(proto.ItemId);
             else
                 s_whiteKitByInvType[proto.InventoryType].push_back(proto.ItemId);
