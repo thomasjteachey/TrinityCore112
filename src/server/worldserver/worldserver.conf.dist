@@ -3249,6 +3249,20 @@ Centurion.Hardcore.FfaPvp.MinZoneLevel = 20
 Centurion.Hardcore.FfaPvp.RewardMultiplier = 2
 Centurion.Hardcore.PlayerKill.ExperienceBubbles = 2
 
+#    Centurion.Hardcore.PlayerKill.DiminishSeconds
+#        Description: How long a victim is remembered when halving repeat kills. Each
+#                     time the SAME killer kills the SAME victim the award halves -
+#                     full, half, quarter, eighth - and the count resets once that
+#                     victim has gone this long without dying to them again.
+#
+#                     The count is held per killer AND per victim, so breaking up a
+#                     group resets nobody's count, and somebody who has never killed
+#                     that victim is not punished for another player's farming.
+#                     Zero disables the halving.
+#        Default:     7200 (2 hours)
+
+Centurion.Hardcore.PlayerKill.DiminishSeconds = 7200
+
 DireMaulBeads.ItemId = 21982
 DireMaulBeads.AuraId = 90002
 DireMaulBeads.AreaIds = 495,496,498,2557,3217

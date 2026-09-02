@@ -49,6 +49,7 @@
 #include "Item.h"
 #include "ItemTemplate.h"
 #include "Map.h"
+#include "Group.h"
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "ScriptedCreature.h"
@@ -90,6 +91,8 @@ namespace BarracksHardcore
     // segments the experience bar is divided into, so one bubble is 5% of a
     // level and twenty is a full bar. Fractions are allowed. 0 disables.
     float s_playerKillXpBubbles = 2.0f;
+    // How long a victim is remembered for the halving below.
+    uint32 s_playerKillDiminishSeconds = 2 * HOUR;
     std::unordered_set<uint32> s_botAccountIds;
 
     std::shared_mutex s_optInLock;
@@ -107,6 +110,8 @@ namespace BarracksHardcore
         s_greyKitMaxLevel = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FieldKit.GreyUntilLevel", 15)));
         s_playerKillXpBubbles = std::clamp(
             sConfigMgr->GetFloatDefault("Centurion.Hardcore.PlayerKill.ExperienceBubbles", 2.0f), 0.0f, 20.0f);
+        s_playerKillDiminishSeconds = uint32(std::max(0,
+            sConfigMgr->GetIntDefault("Centurion.Hardcore.PlayerKill.DiminishSeconds", 2 * HOUR)));
 
         s_botAccountIds.clear();
         std::stringstream stream(sConfigMgr->GetStringDefault("Playerbot.RandomPopulation.BotAccountIds", ""));
@@ -1063,42 +1068,77 @@ public:
         if (!s_enabled || s_playerKillXpBubbles <= 0.0f)
             return;
 
-        if (!killer || !victim || killer == victim || !killer->IsAlive())
+        if (!killer || !victim || killer == victim)
             return;
 
         if (killer->InBattleground() || victim->InBattleground())
             return;
 
-        // Only real people are paid for this. Bots kill each other constantly
-        // on an FFA realm - the zone guardians hunt each other by design - so
-        // paying bots would run the entire fleet to the level cap in minutes.
-        // The VICTIM may be either a playerbot or a real player: this is the
-        // open-world PvP reward, not a playerbot-only reward.
-        if (IsPlayerbot(killer))
+        // Everyone who shared the kill, the way honor divides it: the killer,
+        // plus any group member close enough to have been part of the fight.
+        std::vector<Player*> recipients;
+        if (Group* group = killer->GetGroup())
+        {
+            for (GroupReference* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
+                if (Player* member = itr->GetSource())
+                    if (member == killer || (member->IsAlive() && member->IsAtGroupRewardDistance(victim)))
+                        recipients.push_back(member);
+        }
+        if (recipients.empty())
+            recipients.push_back(killer);
+
+        // Measured on the VICTIM's bar rather than the killer's: what a kill is
+        // worth is decided by who died. A twentieth of that bar is one bubble,
+        // so the same victim is worth the same to everybody who helped.
+        uint32 const victimLevelXp = sObjectMgr->GetXPForLevel(victim->GetLevel());
+        if (!victimLevelXp)
             return;
 
-        // Zero at the level cap, which is also where GiveXP would refuse it.
-        uint32 const perLevel = killer->GetXPForNextLevel();
-        if (!perLevel)
-            return;
+        float const perHead = float(victimLevelXp) * s_playerKillXpBubbles
+            / 20.0f / float(recipients.size());
 
-        // A grey player is worth nothing, so this exits before paying anything.
-        float const conScale = PlayerKillConScale(killer->GetLevel(), victim->GetLevel());
-        if (conScale <= 0.0f)
-            return;
+        for (Player* member : recipients)
+        {
+            if (!member->IsAlive())
+                continue;
 
-        uint32 const amount = uint32(float(perLevel) * s_playerKillXpBubbles / 20.0f * conScale);
-        if (!amount)
-            return;
+            // Only real people are paid. Bots fight each other constantly on an
+            // FFA realm - the zone guardians hunt each other by design - so
+            // paying them would run the whole fleet to the cap in minutes. The
+            // VICTIM may be either: this is the open-world PvP reward, not a
+            // playerbot-only one.
+            if (IsPlayerbot(member))
+                continue;
 
-        // GiveXP walks multiple levels if the award overflows, and honours the
-        // level cap and the XP-frozen flag on its own.
-        killer->GiveXP(amount, victim);
+            // Con is judged per recipient, because a group can be any spread of
+            // levels and a grey victim is worth nothing to the person it is grey
+            // to - even if it was worth something to whoever landed the blow.
+            float const conScale = PlayerKillConScale(member->GetLevel(), victim->GetLevel());
+            if (conScale <= 0.0f)
+                continue;
 
-        TC_LOG_INFO("playerbots.hardcore",
-            "{} (level {}) killed {} {} (level {}) in open-world PvP for {} xp ({} bubbles x{:.2f} con).",
-            killer->GetName(), killer->GetLevel(), IsPlayerbot(victim) ? "playerbot" : "player",
-            victim->GetName(), victim->GetLevel(), amount, s_playerKillXpBubbles, conScale);
+            // And this member's OWN diminishing return against this victim.
+            // Held per killer and per victim, so breaking the group up resets
+            // nobody's count and somebody who has never killed this victim is
+            // not punished for another player's farming.
+            float const repeat = member->ConsumePvpXpDiminishing(victim->GetGUID(),
+                s_playerKillDiminishSeconds);
+
+            uint32 const amount = uint32(perHead * conScale * repeat);
+            if (!amount)
+                continue;
+
+            // GiveXP walks multiple levels if the award overflows, and honours
+            // the level cap and the XP-frozen flag on its own.
+            member->GiveXP(amount, victim);
+
+            TC_LOG_INFO("playerbots.hardcore",
+                "{} (level {}) shared the kill of {} {} (level {}) for {} xp "
+                "({} bubbles x{:.2f} con x{:.2f} repeat, one of {} shares).",
+                member->GetName(), member->GetLevel(), IsPlayerbot(victim) ? "playerbot" : "player",
+                victim->GetName(), victim->GetLevel(), amount, s_playerKillXpBubbles,
+                conScale, repeat, uint32(recipients.size()));
+        }
     }
 
     void OnPVPKill(Player* killer, Player* victim) override
