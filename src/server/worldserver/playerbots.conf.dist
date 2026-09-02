@@ -916,9 +916,9 @@ Centurion.Hardcore.FieldKit.GreyUntilLevel = 15
 #                     piece available for the reduced level, not a patchy mix.
 #                     The grey/white split still keys off the REAL level.
 #                     0 disables (kit matches the wearer's own level).
-#        Default:     5
+#        Default:     10
 #
-Centurion.Hardcore.FieldKit.LevelOffset = 5
+Centurion.Hardcore.FieldKit.LevelOffset = 10
 
 #
 #    Playerbot.Pve.ZoneGuardians.PlayerApproachYards

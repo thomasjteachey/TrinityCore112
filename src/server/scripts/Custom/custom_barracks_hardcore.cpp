@@ -95,7 +95,7 @@ namespace BarracksHardcore
     // the level the item search is run at, so the wearer is still handed the
     // BEST piece for that reduced level - the whole set moves down together
     // rather than becoming patchy. 0 restores the old behaviour.
-    uint32 s_kitLevelOffset = 5;
+    uint32 s_kitLevelOffset = 10;
     // Experience paid for killing a playerbot, counted in BUBBLES - the twenty
     // segments the experience bar is divided into, so one bubble is 5% of a
     // level and twenty is a full bar. Fractions are allowed. 0 disables.
@@ -117,7 +117,7 @@ namespace BarracksHardcore
         s_rewardMultiplier = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Hardcore.FfaPvp.RewardMultiplier", 2), 1, 10));
         s_warModeAuraSpell = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FfaPvp.WarModeAuraSpell", 0)));
         s_greyKitMaxLevel = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FieldKit.GreyUntilLevel", 15)));
-        s_kitLevelOffset = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Hardcore.FieldKit.LevelOffset", 5), 0, 60));
+        s_kitLevelOffset = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Hardcore.FieldKit.LevelOffset", 10), 0, 60));
         s_playerKillXpBubbles = std::clamp(
             sConfigMgr->GetFloatDefault("Centurion.Hardcore.PlayerKill.ExperienceBubbles", 2.0f), 0.0f, 20.0f);
         s_playerKillDiminishSeconds = uint32(std::max(0,
