@@ -140,9 +140,11 @@ struct PveConfig
     // actually is. Split evenly across everyone online; zero disables it.
     uint32 followerCount = 0;
     // How long a person must hold a zone before their companions follow them
-    // into it. Without this, running across a border - or over one on a flight
-    // path - would drag the whole retinue after them and back again.
-    uint32 followerZoneDwellSeconds = 45;
+    // into it, that being just long enough to ignore somebody running across a
+    // border and straight back. A flight path is handled separately and needs no
+    // help from this: a person in the air is not counted as being in the zones
+    // they pass over at all.
+    uint32 followerZoneDwellSeconds = 10;
     // How close a guardian tries to get to a real player. Guardians go to the
     // people rather than waiting to be found: the server already knows where
     // every player is, so this needs no searching. 0 disables the approach and

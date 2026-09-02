@@ -689,15 +689,26 @@ Playerbot.Pve.ZoneGuardians.PerZone = 0
 #                     makes them ineligible.
 #
 #                     ZoneDwellSeconds is how long a person must hold a zone before
-#                     their companions follow them into it. Without it, running
-#                     across a border - or over one on a flight path - would drag the
-#                     whole retinue after them and straight back again. A person in a
-#                     capital, an instance or a battleground is not followed at all;
-#                     their companions simply stay where they were last sent.
-#        Default:     0 (disabled) / 45
+#                     their companions follow them into it - just long enough to
+#                     ignore somebody running across a border and straight back.
+#
+#                     A flight path needs no help from that timer and gets none: a
+#                     person in the air is not counted as being in the zones they
+#                     pass over at all, so a cross-continent flight neither drags the
+#                     retinue through six zones on the way nor releases it. The dwell
+#                     starts from wherever they actually land.
+#
+#                     On a confirmed zone change the companions are ported, levelled
+#                     into the new zone's band, and given an auction sweep once they
+#                     have arrived - the sweep waits for arrival so they shop for the
+#                     character they are becoming, not the one they just left.
+#
+#                     A person in a capital, an instance or a battleground is not
+#                     followed at all; their companions stay where they were sent.
+#        Default:     0 (disabled) / 10
 
 Playerbot.Pve.Followers.Count = 0
-Playerbot.Pve.Followers.ZoneDwellSeconds = 45
+Playerbot.Pve.Followers.ZoneDwellSeconds = 10
 
 
 #    Playerbot.Pve.RebirthAtMaxLevel.Percent

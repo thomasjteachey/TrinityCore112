@@ -10421,7 +10421,7 @@ namespace playerbot
         g_PveConfig.hardcoreChestDespawnSeconds = uint32(std::max(30, sConfigMgr->GetIntDefault("Centurion.Hardcore.FullLoot.ChestDespawnSeconds", 600)));
         g_PveConfig.zoneGuardiansPerZone = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ZoneGuardians.PerZone", 0), 0, 10));
         g_PveConfig.followerCount = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.Followers.Count", 0)));
-        g_PveConfig.followerZoneDwellSeconds = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Followers.ZoneDwellSeconds", 45), 5, 3600));
+        g_PveConfig.followerZoneDwellSeconds = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Followers.ZoneDwellSeconds", 10), 0, 3600));
 
         // Accounts whose bots are PvP-only: parked in their sanctuary, never
         // touched by any PvE system (no grind, errands, gear, talents, economy),
@@ -10490,10 +10490,21 @@ namespace playerbot
 
             uint64 const humanGuid = human->GetGUID().GetRawValue();
             online.insert(humanGuid);
-            uint32 const zoneId = human->GetZoneId();
             auto& settled = s_humanZoneSince[humanGuid];
-            if (settled.first != zoneId)
-                settled = { zoneId, nowMs };
+
+            // Somebody on a flight path is not IN the zones they pass over, they
+            // are above them. Freezing their settled zone for the duration means
+            // a cross-continent flight does not drag the retinue through six
+            // zones on the way - and, just as importantly, does not release them
+            // either: the person is still online and still theirs. The dwell
+            // timer then starts from wherever they actually land.
+            if (!human->IsInFlight())
+            {
+                uint32 const currentZone = human->GetZoneId();
+                if (settled.first != currentZone)
+                    settled = { currentZone, nowMs };
+            }
+            uint32 const zoneId = settled.first;
 
             // Somewhere a banded bot can actually be delivered to. Capitals,
             // instances, battlegrounds and the 55+ veteran zones are not in
@@ -10617,15 +10628,31 @@ namespace playerbot
             TC_LOG_INFO("playerbots.pve", "Companions: {} newly assigned, {} following {} people.",
                 assigned, uint32(g_FollowerHumanByBot.size()), uint32(humanCount));
 
-        // Whoever is standing somewhere other than where they now belong.
+        // Whoever is standing somewhere other than where they now belong, and
+        // whoever has since arrived where they were sent.
+        //
+        // The auction sweep deliberately waits for arrival. Queued at the moment
+        // of departure it would run while the bot was still standing in the old
+        // zone at its old level, and it would shop for the character it is about
+        // to stop being.
+        static std::unordered_set<uint64> s_awaitingArrival;
         std::vector<uint64> misplaced;
+        std::vector<uint64> arrived;
         for (auto const& [botGuid, zoneId] : g_FollowerZoneByBot)
         {
             auto zoneItr = botZoneNow.find(botGuid);
-            if (zoneItr != botZoneNow.end() && zoneItr->second != zoneId)
+            if (zoneItr == botZoneNow.end())
+                continue;
+            if (zoneItr->second != zoneId)
                 misplaced.push_back(botGuid);
+            else if (s_awaitingArrival.erase(botGuid))
+                arrived.push_back(botGuid);
         }
         guard.unlock();
+
+        // Forget anyone who stopped being a follower while in transit.
+        for (auto itr = s_awaitingArrival.begin(); itr != s_awaitingArrival.end(); )
+            itr = botZoneNow.count(*itr) ? std::next(itr) : s_awaitingArrival.erase(itr);
 
         // Nothing else notices that a HOME CHANGED - every existing trigger fires
         // on a level that no longer fits a band, on death, or after five fruitless
@@ -10640,8 +10667,19 @@ namespace playerbot
         {
             std::lock_guard<std::mutex> pendingGuard(g_PvePendingLock);
             for (uint64 botGuid : misplaced)
+            {
                 g_PendingGrindRelocations.insert(botGuid);
+                s_awaitingArrival.insert(botGuid);
+            }
         }
+
+        // Landed and re-levelled: let them re-kit for the band they are now in.
+        // g_PendingAuctionShopping is world-thread only, which is where this runs.
+        for (uint64 botGuid : arrived)
+            g_PendingAuctionShopping.insert(botGuid);
+        if (!arrived.empty())
+            TC_LOG_INFO("playerbots.pve", "{} companions arrived; queued an auction sweep for each.",
+                uint32(arrived.size()));
     }
 
     void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
