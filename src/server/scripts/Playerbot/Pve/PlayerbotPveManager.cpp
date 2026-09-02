@@ -404,6 +404,9 @@ namespace
     // at. A map rather than a set because the target is the post's ceiling,
     // which the world thread cannot recompute without redoing the slot lookup.
     std::unordered_map<uint64, uint8> g_PendingGuardianDemotions;
+    // Guardians that ran out of food or water and have no vendor they are
+    // allowed to reach. Everyone else walks to a merchant and pays.
+    std::unordered_set<uint64> g_PendingGuardianRations;
     // Mail collection and auction shopping mutate world-thread-only structures
     // (Player::m_mail, AuctionHouseObject) - executed from OnWorldUpdate.
     std::unordered_set<uint64> g_PendingMailCollections;
@@ -9347,6 +9350,25 @@ namespace
                     Item* consumable = FindBestConsumable(bot, !needFood);
                     if (!consumable && needDrink)
                         consumable = FindBestConsumable(bot, true);
+
+                    // Nothing to consume, and a guardian has no way to fix that.
+                    // The errand scan only sees NPCs within a 200 yard grid search,
+                    // which from a wilderness grind spot never contains a merchant,
+                    // and the town-run fallback that exists for exactly this case is
+                    // denied to guardians - StartErrandIfNeeded gates it on
+                    // '&& !guardian' so a guardian cannot leave its post to shop.
+                    // Between the two it is structurally unable to restock: every
+                    // guardian on the realm was carrying zero food and zero water.
+                    //
+                    // So deliver instead. Only guardians, and only once actually
+                    // dry - every other bot can walk to a vendor and pay, and
+                    // handing the whole fleet free rations would delete that.
+                    if (!consumable && !ConjureSpellId(bot, needDrink) &&
+                        GetGuardianZoneId(bot->GetGUID().GetRawValue()))
+                    {
+                        std::lock_guard<std::mutex> rationGuard(g_PvePendingLock);
+                        g_PendingGuardianRations.insert(bot->GetGUID().GetRawValue());
+                    }
                     if (!consumable && !bot->HasUnitState(UNIT_STATE_CASTING))
                     {
                         // A mage conjures its own pantry; the next slow tick
@@ -11103,6 +11125,22 @@ namespace playerbot
                             ResetManagedBotToZoneBand(bot, zoneId, targetLevel);
                         }
                     }
+        }
+
+        // Guardians that ran dry with no vendor they are allowed to reach.
+        {
+            std::unordered_set<uint64> drained;
+            {
+                std::lock_guard<std::mutex> guard(g_PvePendingLock);
+                drained.swap(g_PendingGuardianRations);
+            }
+            for (uint64 botRawGuid : drained)
+                if (Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid)))
+                    if (bot->IsInWorld() && playerbot::IsManagedRandomBot(bot))
+                        GrantTravelRations(bot);
+            if (!drained.empty())
+                TC_LOG_INFO("playerbots.pve", "Resupplied {} guardians that had run out where they stand.",
+                    uint32(drained.size()));
         }
 
         // Rebirth-flagged bots that just hit the level cap.
