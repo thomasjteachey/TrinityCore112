@@ -840,24 +840,29 @@ void GameObject::Update(uint32 diff)
                                         CastSpellExtraArgs args(triggerFlags);
                                         args.SetTriggeringGameObject(GetGUID());
 
-                                        // The hunter casts, but the spell happens HERE.
+                                        // The TRAP casts it. The owner only owns it.
                                         //
-                                        // Casting from the owner is what lets a trap fire while
-                                        // its owner is feigning, but it also moved where the
-                                        // spell originates. Anything anchored to a destination
-                                        // rather than to a victim then landed on the hunter:
-                                        // Frost Trap's ice froze the ground under the hunter,
-                                        // yards away from the trap that triggered it.
+                                        // Frost Trap's ice is Frost Trap Aura (13810), which
+                                        // 63487 triggers at TARGET_DEST_CASTER. That target
+                                        // resolves from whoever is casting and DELIBERATELY
+                                        // ignores any destination handed to the cast, so
+                                        // casting from the owner froze the ground under the
+                                        // hunter, yards from the trap that fired. Attaching an
+                                        // explicit destination does not help, for exactly that
+                                        // reason - it is not consulted.
                                         //
-                                        // Passing both keeps each kind of effect right. The
-                                        // unit target still feeds effects that hit whoever
-                                        // stepped on it - Freezing Trap and the like - while the
-                                        // destination pins area effects to the trap.
-                                        SpellCastTargets targets;
-                                        targets.SetUnitTarget(target);
-                                        targets.SetDst(*this);
+                                        // Casting from the game object puts that destination
+                                        // back on the trap, which is how the fallback path
+                                        // below has always done it. OriginalCaster keeps the
+                                        // damage, the combat tag and the PvP attribution with
+                                        // the hunter.
+                                        //
+                                        // The permissive trigger flags are the only thing the
+                                        // owner path was ever needed for, and they still apply,
+                                        // so a trap laid by someone feigning still fires.
+                                        args.SetOriginalCaster(GetOwnerGUID());
 
-                                        if (owner->CastSpell(std::move(targets), goInfo->trap.spellId, args) == SPELL_CAST_OK)
+                                        if (CastSpell(target, goInfo->trap.spellId, args) == SPELL_CAST_OK)
                                             castSucceeded = true;
                                     }
                                 }
