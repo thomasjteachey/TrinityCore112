@@ -96,6 +96,11 @@ namespace BarracksHardcore
     // BEST piece for that reduced level - the whole set moves down together
     // rather than becoming patchy. 0 restores the old behaviour.
     uint32 s_kitLevelOffset = 10;
+    // Bots sit closer to their own level than people do. A person who finds the
+    // kit thin can go and earn better; a bot cannot - it wears what the kit
+    // gives it for good, and ten levels down it stops being able to kill the
+    // things its own zone band is built around.
+    uint32 s_kitBotLevelOffset = 5;
     // Experience paid for killing a playerbot, counted in BUBBLES - the twenty
     // segments the experience bar is divided into, so one bubble is 5% of a
     // level and twenty is a full bar. Fractions are allowed. 0 disables.
@@ -118,6 +123,7 @@ namespace BarracksHardcore
         s_warModeAuraSpell = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FfaPvp.WarModeAuraSpell", 0)));
         s_greyKitMaxLevel = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FieldKit.GreyUntilLevel", 15)));
         s_kitLevelOffset = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Hardcore.FieldKit.LevelOffset", 10), 0, 60));
+        s_kitBotLevelOffset = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Hardcore.FieldKit.BotLevelOffset", 5), 0, 60));
         s_playerKillXpBubbles = std::clamp(
             sConfigMgr->GetFloatDefault("Centurion.Hardcore.PlayerKill.ExperienceBubbles", 2.0f), 0.0f, 20.0f);
         s_playerKillDiminishSeconds = uint32(std::max(0,
@@ -849,7 +855,8 @@ namespace BarracksHardcore
         // The level the ITEM SEARCH runs at, deliberately below the wearer's.
         // Floored at 1 rather than 0 so the bottom of the game still finds the
         // level-1 pieces instead of coming up empty and leaving a slot bare.
-        uint8 const kitLevel = uint8(std::max(1, int32(level) - int32(s_kitLevelOffset)));
+        uint32 const levelOffset = IsPlayerbot(player) ? s_kitBotLevelOffset : s_kitLevelOffset;
+        uint8 const kitLevel = uint8(std::max(1, int32(level) - int32(levelOffset)));
 
         // Read once: it cannot change while the kit is being handed out, and
         // the bag scan behind it is not worth repeating per candidate.

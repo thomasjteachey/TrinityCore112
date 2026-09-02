@@ -921,6 +921,17 @@ Centurion.Hardcore.FieldKit.GreyUntilLevel = 15
 Centurion.Hardcore.FieldKit.LevelOffset = 10
 
 #
+#    Centurion.Hardcore.FieldKit.BotLevelOffset
+#        Description: The same idea for playerbots, held closer to their own level.
+#                     A person who finds the kit thin can go and earn better gear;
+#                     a bot cannot - it wears what the kit gives it for good, and
+#                     ten levels down it stops being able to kill the things its
+#                     own zone band is built around.
+#        Default:     5
+#
+Centurion.Hardcore.FieldKit.BotLevelOffset = 5
+
+#
 #    Playerbot.Pve.ZoneGuardians.PlayerApproachYards
 #        Description: How close a zone guardian tries to get to a real player. Guardians go
 #                     to the people instead of waiting to be found: the server already
