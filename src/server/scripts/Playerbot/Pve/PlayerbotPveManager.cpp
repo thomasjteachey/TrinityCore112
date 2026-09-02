@@ -10630,6 +10630,26 @@ namespace playerbot
             if (nowMs - settled.second < g_PveConfig.drifterZoneDwellSeconds * 1000)
                 continue;
 
+            // And only somebody the zone is actually FOR. A level 60 in the
+            // Barrens is not somewhere a drifter can be sent: it is re-levelled
+            // into the destination zone's band on arrival, so the only two
+            // outcomes available are a level 60 loitering in a 10-25 zone, or a
+            // level 20 standing next to a level 60 it cannot fight. Dropping the
+            // person from the set is the only coherent answer - their share goes
+            // to the people who do fit rather than idling.
+            //
+            // A zone with no band entry is not evidence of anything, so it is
+            // allowed through: g_RebirthZones has already limited this to zones
+            // a banded bot can be delivered to.
+            uint8 bandBottom = 0;
+            uint8 bandTop = 0;
+            if (GetZoneLevelBand(zoneId, bandBottom, bandTop))
+            {
+                uint8 const humanLevel = human->GetLevel();
+                if (humanLevel < bandBottom || humanLevel > bandTop)
+                    continue;
+            }
+
             humans.push_back({ humanGuid, zoneId });
         }
         for (auto itr = s_humanZoneSince.begin(); itr != s_humanZoneSince.end(); )
