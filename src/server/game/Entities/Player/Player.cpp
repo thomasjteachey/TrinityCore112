@@ -14172,11 +14172,24 @@ void Player::DestroyItem(uint8 bag, uint8 slot, bool update)
 
         ItemRemovedQuestCheck(pItem->GetEntry(), pItem->GetCount());
 
+        // Taking the item out of the world depends on the ITEM being in it.
+        // Telling the client is what depends on the player.
+        //
+        // These were one branch, and that was a server-killer: destroying an item
+        // on a player who was not in world skipped RemoveFromWorld while still
+        // marking the item ITEM_REMOVED just below. Item::SaveToDB deletes an
+        // ITEM_REMOVED item outright, and ~Object aborts the process on an object
+        // deleted while still flagged in-world - so one such item anywhere in a
+        // character's inventory took down the whole world thread at the next save.
+        //
+        // RemoveFromWorld() already returns immediately when the object is not in
+        // the world, so calling it unconditionally costs a branch and cannot be
+        // wrong. It also clears the update mask, which keeps the object out of the
+        // update list that ~Object asserts on straight afterwards.
+        pItem->RemoveFromWorld();
+
         if (IsInWorld() && update)
-        {
-            pItem->RemoveFromWorld();
             pItem->DestroyForPlayer(this);
-        }
 
         //pItem->SetOwnerGUID(0);
         pItem->SetGuidValue(ITEM_FIELD_CONTAINED, ObjectGuid::Empty);
