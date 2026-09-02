@@ -19,6 +19,7 @@
 #include "Creature.h"
 #include "DatabaseEnv.h"
 #include "NPCPackets.h"
+#include "Pet.h"
 #include "Player.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
@@ -254,7 +255,16 @@ namespace
 
     SpellState Trainer::GetSpellState(Player const* player, Spell const* trainerSpell) const
     {
-        if (player->HasSpell(trainerSpell->SpellId))
+        // Classic Beast Training rows are deliberately exempt from this test.
+        // Their SpellId is a source/catalog spell that belongs to the HUNTER,
+        // and taming a beast grants those source spells too - so a hunter who
+        // tamed a pet that knew Growl 4 would see Growl 4 greyed as "already
+        // known by your pet" on every pet it ever owned, including ones that
+        // had never learned it. What is known is a property of the pet, and is
+        // decided further down.
+        bool const classicPetTraining = IsClassicPetTrainingSourceSpell(trainerSpell->SpellId);
+
+        if (!classicPetTraining && player->HasSpell(trainerSpell->SpellId))
             return SpellState::Known;
 
         // check race/class requirement
@@ -277,8 +287,39 @@ namespace
         // Do not apply normal LEARN_SPELL rank validation here: these source spells
         // trigger pet spells, and the player is not supposed to know pet spell ranks.
         // Rank prerequisites for these rows must come from trainer_spell.ReqAbility*.
-        if (IsClassicPetTrainingSourceSpell(trainerSpell->SpellId))
+        if (classicPetTraining)
+        {
+            // Known is a question about the PET. With no pet summoned there is
+            // nothing to ask, so the row stays Available as it always did.
+            Pet const* pet = player->GetPet();
+            if (!pet)
+                return SpellState::Available;
+
+            for (SpellEffectInfo const& effect :
+                sSpellMgr->AssertSpellInfo(trainerSpell->SpellId)->GetEffects())
+            {
+                if (!effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) &&
+                    !effect.IsEffect(SPELL_EFFECT_LEARN_PET_SPELL))
+                    continue;
+
+                uint32 const taught = effect.TriggerSpell;
+                if (!taught)
+                    continue;
+
+                // The rank itself, or anything further along its chain. Without
+                // the walk forward, a pet on Rank 3 would light Ranks 1 and 2
+                // back up as though it had forgotten them.
+                if (pet->HasSpell(taught))
+                    return SpellState::Known;
+
+                for (uint32 higher = sSpellMgr->GetNextSpellInChain(taught); higher;
+                    higher = sSpellMgr->GetNextSpellInChain(higher))
+                    if (pet->HasSpell(higher))
+                        return SpellState::Known;
+            }
+
             return SpellState::Available;
+        }
 
         // check ranks
         bool hasLearnSpellEffect = false;
