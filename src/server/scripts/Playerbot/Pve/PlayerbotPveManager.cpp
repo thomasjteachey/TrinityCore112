@@ -4893,7 +4893,7 @@ namespace
     // character is expected to be in, so a bot reborn into one starts at level 1.
     constexpr uint8 kStarterZoneTopLevel = 10;
 
-    // Zones opening at or above this are left to the veterans rather than banded.
+    // Zones opening at or above this are left to the veterans rather than to locals.
     constexpr uint8 kVeteranBandMinLevel = 55;
 
 
@@ -5384,7 +5384,7 @@ namespace
     std::unordered_map<uint32, uint8> g_ZoneTopLevel;
     std::vector<uint32> g_RebirthZones;
 
-    // Class-balanced home-zone assignment for ordinary zone-banded bots.
+    // Class-balanced home-zone assignment for ordinary zone-local bots.
     //
     // The old mapping was simply guid % zoneCount. That spread the fleet overall,
     // but class never entered the decision: one zone could randomly end up with
@@ -5401,17 +5401,17 @@ namespace
     // The map is immutable after its one-time startup build (newly-created bots
     // are assigned lazily to the least-populated zone for their class), so reads
     // from map threads are stable. A roster/config change takes effect on restart.
-    std::mutex g_BandedZoneLock;
-    std::unordered_map<uint64, uint32> g_BandedZoneByGuid;
-    std::unordered_map<uint8, std::vector<uint32>> g_BandedClassZoneCounts;
-    std::atomic<bool> g_BandedZoneAssignmentsBuilt{ false };
+    std::mutex g_LocalZoneLock;
+    std::unordered_map<uint64, uint32> g_LocalZoneByGuid;
+    std::unordered_map<uint8, std::vector<uint32>> g_LocalClassZoneCounts;
+    std::atomic<bool> g_LocalZoneAssignmentsBuilt{ false };
 
     // Drifter assignments, rebuilt once a second on the world thread. The
     // stored value is the ZONE, already resolved: map threads must not be
     // looking up a human by GUID on every band-fit test.
     //
     // Lock order: this is always taken alone. GetRebirthZoneId takes
-    // g_GuardianLock (via GetGuardianZoneId) and g_BandedZoneLock before it,
+    // g_GuardianLock (via GetGuardianZoneId) and g_LocalZoneLock before it,
     // so the builder must finish every one of those lookups BEFORE it takes
     // this one, or the two paths deadlock against each other.
     std::mutex g_DrifterLock;
@@ -5424,7 +5424,7 @@ namespace
         return g_DrifterZoneByBot.count(botRawGuid) != 0;
     }
 
-    bool IsBandedVeteranGuid(uint64 rawGuid)
+    bool IsLocalVeteranGuid(uint64 rawGuid)
     {
         uint32 const veterans = g_PveConfig.veteranBotCount;
         if (!veterans)
@@ -5445,12 +5445,12 @@ namespace
         return uint32(value % fleet) < veterans;
     }
 
-    void BuildBandedZoneAssignmentsOnce()
+    void BuildLocalZoneAssignmentsOnce()
     {
-        if (g_BandedZoneAssignmentsBuilt.load(std::memory_order_acquire) || g_RebirthZones.empty())
+        if (g_LocalZoneAssignmentsBuilt.load(std::memory_order_acquire) || g_RebirthZones.empty())
             return;
 
-        // Guardian posts are persistent and must be removed from the banded pool
+        // Guardian posts are persistent and must be removed from the local pool
         // before class balancing. Loading is idempotent and cheap after first use.
         LoadGuardianPostsOnce();
 
@@ -5459,23 +5459,23 @@ namespace
         if (configuredAccounts.empty())
             return; // population config may not have finished bootstrapping yet
 
-        std::vector<uint32> bandedAccounts;
-        bandedAccounts.reserve(configuredAccounts.size());
+        std::vector<uint32> localAccounts;
+        localAccounts.reserve(configuredAccounts.size());
         for (uint32 accountId : configuredAccounts)
             if (!std::binary_search(g_PveConfig.pvpOnlyAccountIds.begin(),
                 g_PveConfig.pvpOnlyAccountIds.end(), accountId))
-                bandedAccounts.push_back(accountId);
+                localAccounts.push_back(accountId);
 
-        if (bandedAccounts.empty())
+        if (localAccounts.empty())
         {
-            std::lock_guard<std::mutex> guard(g_BandedZoneLock);
-            g_BandedZoneAssignmentsBuilt.store(true, std::memory_order_release);
+            std::lock_guard<std::mutex> guard(g_LocalZoneLock);
+            g_LocalZoneAssignmentsBuilt.store(true, std::memory_order_release);
             return;
         }
 
         std::ostringstream accountList;
-        for (size_t index = 0; index < bandedAccounts.size(); ++index)
-            accountList << (index ? "," : "") << bandedAccounts[index];
+        for (size_t index = 0; index < localAccounts.size(); ++index)
+            accountList << (index ? "," : "") << localAccounts[index];
 
         std::map<uint8, std::vector<uint64>> guidsByClass;
         std::string const query =
@@ -5491,8 +5491,8 @@ namespace
                 uint8 const classId = fields[1].GetUInt8();
                 uint64 const rawGuid = ObjectGuid::Create<HighGuid::Player>(lowGuid).GetRawValue();
 
-                // These populations do not cycle through banded zones.
-                if (GetGuardianZoneId(rawGuid) || IsBandedVeteranGuid(rawGuid))
+                // These populations do not cycle through local zones.
+                if (GetGuardianZoneId(rawGuid) || IsLocalVeteranGuid(rawGuid))
                     continue;
 
                 guidsByClass[classId].push_back(rawGuid);
@@ -5547,11 +5547,11 @@ namespace
         }
 
         {
-            std::lock_guard<std::mutex> guard(g_BandedZoneLock);
-            g_BandedZoneByGuid.swap(assignments);
-            g_BandedClassZoneCounts.swap(classCounts);
+            std::lock_guard<std::mutex> guard(g_LocalZoneLock);
+            g_LocalZoneByGuid.swap(assignments);
+            g_LocalClassZoneCounts.swap(classCounts);
         }
-        g_BandedZoneAssignmentsBuilt.store(true, std::memory_order_release);
+        g_LocalZoneAssignmentsBuilt.store(true, std::memory_order_release);
     }
 
     // The zone a bot lives its cycles in. The startup assignment above is
@@ -5560,33 +5560,33 @@ namespace
     // A character created after startup is the only normal miss. Put it in the
     // currently least-populated zone for its class so even that case preserves the
     // same <=1 spread as closely as possible for this uptime.
-    uint32 GetBandedHomeZoneId(Player const* bot)
+    uint32 GetLocalHomeZoneId(Player const* bot)
     {
         if (!bot || g_RebirthZones.empty())
             return 0;
 
         uint64 const rawGuid = bot->GetGUID().GetRawValue();
 
-        // These roles are explicitly outside the banded population.
-        if (GetGuardianZoneId(rawGuid) || IsBandedVeteranGuid(rawGuid))
+        // These roles are explicitly outside the local population.
+        if (GetGuardianZoneId(rawGuid) || IsLocalVeteranGuid(rawGuid))
             return 0;
         if (bot->GetSession() &&
             std::binary_search(g_PveConfig.pvpOnlyAccountIds.begin(),
                 g_PveConfig.pvpOnlyAccountIds.end(), bot->GetSession()->GetAccountId()))
             return 0;
 
-        std::lock_guard<std::mutex> guard(g_BandedZoneLock);
+        std::lock_guard<std::mutex> guard(g_LocalZoneLock);
 
-        if (auto itr = g_BandedZoneByGuid.find(rawGuid); itr != g_BandedZoneByGuid.end())
+        if (auto itr = g_LocalZoneByGuid.find(rawGuid); itr != g_LocalZoneByGuid.end())
             return itr->second;
 
         // Startup may ask before population configuration is ready. Until the
         // roster build succeeds, retain the old deterministic mapping rather than
         // mutating an incomplete class-count table.
-        if (!g_BandedZoneAssignmentsBuilt.load(std::memory_order_acquire))
+        if (!g_LocalZoneAssignmentsBuilt.load(std::memory_order_acquire))
             return g_RebirthZones[bot->GetGUID().GetCounter() % g_RebirthZones.size()];
 
-        std::vector<uint32>& counts = g_BandedClassZoneCounts[bot->GetClass()];
+        std::vector<uint32>& counts = g_LocalClassZoneCounts[bot->GetClass()];
         if (counts.size() != g_RebirthZones.size())
             counts.assign(g_RebirthZones.size(), 0);
 
@@ -5605,10 +5605,10 @@ namespace
 
         ++counts[chosen];
         uint32 const zoneId = g_RebirthZones[chosen];
-        g_BandedZoneByGuid[rawGuid] = zoneId;
+        g_LocalZoneByGuid[rawGuid] = zoneId;
 
         TC_LOG_INFO("playerbots.pve",
-            "Late-created banded bot {} (class {}) assigned to least-populated home zone {}.",
+            "Late-created local bot {} (class {}) assigned to least-populated home zone {}.",
             bot->GetName(), uint32(bot->GetClass()), zoneId);
         return zoneId;
     }
@@ -5633,7 +5633,7 @@ namespace
                 return itr->second;
         }
 
-        return GetBandedHomeZoneId(bot);
+        return GetLocalHomeZoneId(bot);
     }
     bool g_GrindSpotsBuilt = false;
 
@@ -5787,7 +5787,7 @@ namespace
         // somewhere with nothing to kill.
         for (ClassicZoneBand const& band : kClassicZoneBands)
         {
-            // The top of the chart is not banded. A zone that only opens at
+            // The top of the chart has no local bots. A zone that only opens at
             // fifty-five is five levels from the cap, and the veterans - who make
             // the whole climb once and then stay at sixty - already live up there.
             // Handing those zones to cycling bots as well would put two populations
@@ -10279,26 +10279,31 @@ namespace
 
         uint32 const guardianZoneId = GetGuardianZoneId(rawGuid);
         bool const guardian = guardianZoneId != 0;
-        bool const veteran = IsBandedVeteranGuid(rawGuid);
+        bool const veteran = IsLocalVeteranGuid(rawGuid);
         bool const pvpOnly = playerbot::PveManager::IsPvpOnlyBot(bot);
         bool const companion = !state.masterGuid.IsEmpty();
-        uint32 const bandHomeZoneId = (!guardian && !veteran && !pvpOnly && g_PveConfig.rebirthZoneBanded)
+        uint32 const localHomeZoneId = (!guardian && !veteran && !pvpOnly && g_PveConfig.rebirthZoneBanded)
             ? GetRebirthZoneId(bot) : 0u;
-        uint32 const assignedZoneId = guardian ? guardianZoneId : bandHomeZoneId;
+        uint32 const assignedZoneId = guardian ? guardianZoneId : localHomeZoneId;
         ClassicZoneBand const* assignedBand = assignedZoneId ? FindClassicZoneBand(assignedZoneId) : nullptr;
         bool const suitable = BotIsInSuitableZone(bot);
         bool const openWorldPvp = BarracksHardcore::IsOpenWorldPvpZone(zoneId);
 
+        // A drifter used to report as "banded", which is the one thing it is
+        // not: it does not live anywhere, it follows people. It is checked
+        // before the home-zone test because it HAS a home zone - a borrowed one,
+        // reassigned every time its person moves.
         char const* role = guardian ? "guardian" :
             (companion ? "companion" :
                 (pvpOnly ? "pvp-only" :
                     (veteran ? "veteran" :
-                        (bandHomeZoneId ? "banded" : "unbanded"))));
+                        (IsDrifter(rawGuid) ? "drifter" :
+                            (localHomeZoneId ? "local" : "unassigned")))));
 
         std::ostringstream roleLine;
         roleLine << "PB role diag: role=" << role
             << " guardian_zone=" << guardianZoneId
-            << " band_home=" << bandHomeZoneId
+            << " local_home=" << localHomeZoneId
             << " assigned_zone=" << assignedZoneId;
         if (assignedBand)
             roleLine << " assigned_band=" << uint32(assignedBand->minLevel) << "-" << uint32(assignedBand->maxLevel);
@@ -10736,7 +10741,7 @@ namespace playerbot
             }
             uint32 const zoneId = settled.first;
 
-            // Somewhere a banded bot can actually be delivered to. Capitals,
+            // Somewhere a local bot can actually be delivered to. Capitals,
             // instances, battlegrounds and the 55+ veteran zones are not in
             // g_RebirthZones at all, so this single test covers all of them -
             // and a person standing in one simply keeps the drifters they
@@ -10765,7 +10770,7 @@ namespace playerbot
             //
             // A zone with no band entry is not evidence of anything, so it is
             // allowed through: g_RebirthZones has already limited this to zones
-            // a banded bot can be delivered to.
+            // a local bot can be delivered to.
             uint8 bandBottom = 0;
             uint8 bandTop = 0;
             if (GetZoneLevelBand(zoneId, bandBottom, bandTop))
@@ -10798,9 +10803,9 @@ namespace playerbot
         for (auto const& [guid, zoneId] : humans)
             humanZone[guid] = zoneId;
 
-        // Everything that needs g_GuardianLock or g_BandedZoneLock happens HERE,
+        // Everything that needs g_GuardianLock or g_LocalZoneLock happens HERE,
         // before g_DrifterLock is taken: see the lock-order note on the table.
-        std::unordered_map<uint64, uint32> bandHomeByBot;
+        std::unordered_map<uint64, uint32> localHomeByBot;
         std::unordered_map<uint64, uint32> botZoneNow;
         for (auto const& pair : ObjectAccessor::GetPlayers())
         {
@@ -10809,9 +10814,9 @@ namespace playerbot
                 continue;
             // A band home of zero already means guardian, veteran or PvP-only,
             // which are exactly the roles that must never be drafted.
-            if (uint32 const home = GetBandedHomeZoneId(bot))
+            if (uint32 const home = GetLocalHomeZoneId(bot))
             {
-                bandHomeByBot[bot->GetGUID().GetRawValue()] = home;
+                localHomeByBot[bot->GetGUID().GetRawValue()] = home;
                 botZoneNow[bot->GetGUID().GetRawValue()] = bot->GetZoneId();
             }
         }
@@ -10830,7 +10835,7 @@ namespace playerbot
         std::unordered_map<uint64, uint32> heldBy;
         for (auto itr = g_DrifterHumanByBot.begin(); itr != g_DrifterHumanByBot.end(); )
         {
-            bool const botOk = bandHomeByBot.count(itr->first) != 0;
+            bool const botOk = localHomeByBot.count(itr->first) != 0;
             auto zoneItr = humanZone.find(itr->second);
             if (!botOk || zoneItr == humanZone.end())
             {
@@ -10844,9 +10849,9 @@ namespace playerbot
         }
 
         // Candidates bucketed by band home, so a draft takes them evenly out of
-        // the banded population instead of emptying one zone.
+        // the local population instead of emptying one zone.
         std::map<uint32, std::vector<uint64>> byHome;
-        for (auto const& [botGuid, home] : bandHomeByBot)
+        for (auto const& [botGuid, home] : localHomeByBot)
             if (!g_DrifterHumanByBot.count(botGuid))
                 byHome[home].push_back(botGuid);
         for (auto& [home, guids] : byHome)
@@ -10984,7 +10989,7 @@ namespace playerbot
         // Build stable class-balanced home-zone assignments from the complete
         // configured bot roster. This retries until population configuration is
         // available, then becomes a no-op for the rest of the uptime.
-        BuildBandedZoneAssignmentsOnce();
+        BuildLocalZoneAssignmentsOnce();
 
         // Then point the companions at whoever is online. This must run after
         // the band roster exists, because a bot with no band home is not a
@@ -11170,7 +11175,7 @@ namespace playerbot
                         uint32 const zoneId = g_PveConfig.rebirthZoneBanded ? GetRebirthZoneId(bot) : 0u;
                         if (zoneId && GetZoneLevelBand(zoneId, bottom, top))
                         {
-                            // A banded bot starts at the floor and climbs, which is
+                            // A local bot starts at the floor and climbs, which is
                             // what keeps every level of its zone occupied over time.
                             // A drifter never gets to climb - it is re-levelled again
                             // the moment its person moves - so starting it at the
@@ -11735,7 +11740,7 @@ namespace playerbot
     // - and a hash keeps a bot's role fixed for its entire life, which is the point.
     bool IsVeteranBot(Player const* bot)
     {
-        return bot && IsBandedVeteranGuid(bot->GetGUID().GetRawValue());
+        return bot && IsLocalVeteranGuid(bot->GetGUID().GetRawValue());
     }
 
     bool GetZoneLevelBand(uint32 zoneId, uint8& bottom, uint8& top)
