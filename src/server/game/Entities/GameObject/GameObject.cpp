@@ -839,7 +839,25 @@ void GameObject::Update(uint32 diff)
                                             | TRIGGERED_IGNORE_SET_FACING);
                                         CastSpellExtraArgs args(triggerFlags);
                                         args.SetTriggeringGameObject(GetGUID());
-                                        if (owner->CastSpell(target, goInfo->trap.spellId, args) == SPELL_CAST_OK)
+
+                                        // The hunter casts, but the spell happens HERE.
+                                        //
+                                        // Casting from the owner is what lets a trap fire while
+                                        // its owner is feigning, but it also moved where the
+                                        // spell originates. Anything anchored to a destination
+                                        // rather than to a victim then landed on the hunter:
+                                        // Frost Trap's ice froze the ground under the hunter,
+                                        // yards away from the trap that triggered it.
+                                        //
+                                        // Passing both keeps each kind of effect right. The
+                                        // unit target still feeds effects that hit whoever
+                                        // stepped on it - Freezing Trap and the like - while the
+                                        // destination pins area effects to the trap.
+                                        SpellCastTargets targets;
+                                        targets.SetUnitTarget(target);
+                                        targets.SetDst(*this);
+
+                                        if (owner->CastSpell(std::move(targets), goInfo->trap.spellId, args) == SPELL_CAST_OK)
                                             castSucceeded = true;
                                     }
                                 }
