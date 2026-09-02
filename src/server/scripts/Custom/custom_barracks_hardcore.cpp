@@ -41,6 +41,7 @@
 #include "SpellAuraEffects.h"
 #include "SpellAuras.h"
 #include "Chat.h"
+#include "MotionMaster.h"
 #include "ObjectAccessor.h"
 #include "Creature.h"
 #include "DatabaseEnv.h"
@@ -102,6 +103,9 @@ namespace BarracksHardcore
     // gives it for good, and ten levels down it stops being able to kill the
     // things its own zone band is built around.
     uint32 s_kitBotLevelOffset = 5;
+    // Yards of drift between a bot's real position and the one its packets
+    // carry to observers before it is reported. 0 disables the watch.
+    float s_movementDivergenceYards = 6.0f;
     // Experience paid for killing a playerbot, counted in BUBBLES - the twenty
     // segments the experience bar is divided into, so one bubble is 5% of a
     // level and twenty is a full bar. Fractions are allowed. 0 disables.
@@ -125,6 +129,7 @@ namespace BarracksHardcore
         s_greyKitMaxLevel = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FieldKit.GreyUntilLevel", 15)));
         s_kitLevelOffset = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Hardcore.FieldKit.LevelOffset", 10), 0, 60));
         s_kitBotLevelOffset = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Hardcore.FieldKit.BotLevelOffset", 5), 0, 60));
+        s_movementDivergenceYards = std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Hardcore.Diagnostics.MovementDivergenceYards", 6.0f));
         s_playerKillXpBubbles = std::clamp(
             sConfigMgr->GetFloatDefault("Centurion.Hardcore.PlayerKill.ExperienceBubbles", 2.0f), 0.0f, 20.0f);
         s_playerKillDiminishSeconds = uint32(std::max(0,
@@ -848,6 +853,67 @@ namespace BarracksHardcore
                 uint32(loose.size()), player->GetName());
     }
 
+    // Bot position desync watch.
+    //
+    // m_movementInfo.pos is what player-style packets tell observers; the unit's
+    // own position is where the server actually has it. For a socketless bot
+    // those are kept in step on every authoritative relocation, so a large gap
+    // means something moved the bot without refreshing what observers are told -
+    // which is exactly what a client draws as a bot standing somewhere it is not.
+    //
+    // Silent until it happens, and rate limited per bot: the point is to catch a
+    // sporadic fault during ordinary play, not to add noise while it behaves.
+    std::mutex s_divergenceLock;
+    std::unordered_map<uint64, uint32> s_nextDivergenceCheckMs;
+    std::unordered_map<uint64, uint32> s_nextDivergenceReportMs;
+    constexpr uint32 DIVERGENCE_CHECK_INTERVAL_MS = 2000;
+    constexpr uint32 DIVERGENCE_REPORT_INTERVAL_MS = 30000;
+
+    void WatchMovementDivergence(Player* player)
+    {
+        if (!s_enabled || s_movementDivergenceYards <= 0.0f || !player || !IsPlayerbot(player))
+            return;
+
+        uint64 const rawGuid = player->GetGUID().GetRawValue();
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        {
+            std::lock_guard<std::mutex> guard(s_divergenceLock);
+            auto itr = s_nextDivergenceCheckMs.find(rawGuid);
+            if (itr != s_nextDivergenceCheckMs.end() && nowMs < itr->second)
+                return;
+            s_nextDivergenceCheckMs[rawGuid] = nowMs + DIVERGENCE_CHECK_INTERVAL_MS;
+        }
+
+        Position const& told = player->m_movementInfo.pos;
+        float const drift = player->GetExactDist(told.GetPositionX(), told.GetPositionY(), told.GetPositionZ());
+        if (drift < s_movementDivergenceYards)
+            return;
+
+        {
+            std::lock_guard<std::mutex> guard(s_divergenceLock);
+            auto itr = s_nextDivergenceReportMs.find(rawGuid);
+            if (itr != s_nextDivergenceReportMs.end() && nowMs < itr->second)
+                return;
+            s_nextDivergenceReportMs[rawGuid] = nowMs + DIVERGENCE_REPORT_INTERVAL_MS;
+        }
+
+        MotionMaster* motion = player->GetMotionMaster();
+        TC_LOG_ERROR("playerbots.hardcore",
+            "BOT DESYNC: {} (class {}) drifted {:.1f}y - server ({:.1f}, {:.1f}, {:.1f}) vs told "
+            "({:.1f}, {:.1f}, {:.1f}). moving={} generator={} combat={} casting={} "
+            "speed={:.2f} rooted={} zone={} map={}",
+            player->GetName(), uint32(player->GetClass()), drift,
+            player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
+            told.GetPositionX(), told.GetPositionY(), told.GetPositionZ(),
+            player->isMoving() ? "yes" : "no",
+            motion ? uint32(motion->GetCurrentMovementGeneratorType()) : 999u,
+            player->IsInCombat() ? "yes" : "no",
+            player->HasUnitState(UNIT_STATE_CASTING) ? "yes" : "no",
+            player->GetSpeed(MOVE_RUN),
+            player->HasUnitState(UNIT_STATE_ROOT) ? "yes" : "no",
+            player->GetZoneId(), player->GetMapId());
+    }
+
     // Kit gear belongs in a slot or nowhere, so a copy that turns up in a bag
     // is swept whatever put it there. Throttled: the scan walks the backpack
     // and every bag, which is far too much to repeat on every tick of every
@@ -1216,6 +1282,7 @@ public:
         ApplyFfaState(player);
         ApplyWarModeAura(player);
         SweepLooseFieldKitThrottled(player);
+        WatchMovementDivergence(player);
     }
 
     void OnMapChanged(Player* player) override

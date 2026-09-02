@@ -932,6 +932,21 @@ Centurion.Hardcore.FieldKit.LevelOffset = 10
 Centurion.Hardcore.FieldKit.BotLevelOffset = 5
 
 #
+#    Centurion.Hardcore.Diagnostics.MovementDivergenceYards
+#        Description: Watches for a playerbot whose real position has drifted from
+#                     the position its packets tell observers about. That gap is
+#                     what a client draws as a bot standing somewhere it is not,
+#                     and is the sporadic 'bot porting around' fault.
+#
+#                     Costs one distance check per bot every two seconds and logs
+#                     nothing while they behave. Reports to playerbots.hardcore at
+#                     ERROR level, rate limited to one line per bot per 30s.
+#                     0 disables the watch.
+#        Default:     6.0
+#
+Centurion.Hardcore.Diagnostics.MovementDivergenceYards = 6.0
+
+#
 #    Playerbot.Pve.ZoneGuardians.PlayerApproachYards
 #        Description: How close a zone guardian tries to get to a real player. Guardians go
 #                     to the people instead of waiting to be found: the server already
