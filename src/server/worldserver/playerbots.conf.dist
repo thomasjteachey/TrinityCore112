@@ -672,10 +672,10 @@ Playerbot.Pve.AuctionSell.Enable = 0
 #        Default:     0
 Playerbot.Pve.ZoneGuardians.PerZone = 0
 
-#    Playerbot.Pve.Followers.Count
-#    Playerbot.Pve.Followers.ZoneDwellSeconds
-#        Description: Companions - bots drawn evenly out of the banded population that
-#                     shadow the real people online, so the leveling world looks lived
+#    Playerbot.Pve.Drifters.Count
+#    Playerbot.Pve.Drifters.ZoneDwellSeconds
+#        Description: Drifters - bots drawn evenly out of the banded population that
+#                     drift toward the people online, so the leveling world looks lived
 #                     in wherever somebody actually is.
 #
 #                     Count is the total across the realm, split evenly between
@@ -689,7 +689,7 @@ Playerbot.Pve.ZoneGuardians.PerZone = 0
 #                     makes them ineligible.
 #
 #                     ZoneDwellSeconds is how long a person must hold a zone before
-#                     their companions follow them into it - just long enough to
+#                     their drifters follow them into it - just long enough to
 #                     ignore somebody running across a border and straight back.
 #
 #                     A flight path needs no help from that timer and gets none: a
@@ -698,17 +698,17 @@ Playerbot.Pve.ZoneGuardians.PerZone = 0
 #                     retinue through six zones on the way nor releases it. The dwell
 #                     starts from wherever they actually land.
 #
-#                     On a confirmed zone change the companions are ported, levelled
+#                     On a confirmed zone change the drifters are ported, levelled
 #                     into the new zone's band, and given an auction sweep once they
 #                     have arrived - the sweep waits for arrival so they shop for the
 #                     character they are becoming, not the one they just left.
 #
 #                     A person in a capital, an instance or a battleground is not
-#                     followed at all; their companions stay where they were sent.
+#                     followed at all; their drifters stay where they were sent.
 #        Default:     0 (disabled) / 10
 
-Playerbot.Pve.Followers.Count = 0
-Playerbot.Pve.Followers.ZoneDwellSeconds = 10
+Playerbot.Pve.Drifters.Count = 0
+Playerbot.Pve.Drifters.ZoneDwellSeconds = 10
 
 
 #    Playerbot.Pve.RebirthAtMaxLevel.Percent

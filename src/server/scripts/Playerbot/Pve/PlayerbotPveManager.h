@@ -135,16 +135,16 @@ struct PveConfig
     // Zone guardians: this many bots per classic zone are pinned there at
     // the zone's classic level cap with XP gain frozen. 0 disables.
     uint32 zoneGuardiansPerZone = 0;
-    // Companions: bots drawn evenly out of the banded population that shadow the
+    // Drifters: bots drawn evenly out of the banded population that drift toward the
     // real people online, so the leveling world looks lived in wherever somebody
     // actually is. Split evenly across everyone online; zero disables it.
-    uint32 followerCount = 0;
-    // How long a person must hold a zone before their companions follow them
+    uint32 drifterCount = 0;
+    // How long a person must hold a zone before their drifters follow them
     // into it, that being just long enough to ignore somebody running across a
     // border and straight back. A flight path is handled separately and needs no
     // help from this: a person in the air is not counted as being in the zones
     // they pass over at all.
-    uint32 followerZoneDwellSeconds = 10;
+    uint32 drifterZoneDwellSeconds = 10;
     // How close a guardian tries to get to a real player. Guardians go to the
     // people rather than waiting to be found: the server already knows where
     // every player is, so this needs no searching. 0 disables the approach and

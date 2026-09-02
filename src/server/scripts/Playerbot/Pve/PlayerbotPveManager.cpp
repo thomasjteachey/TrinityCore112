@@ -5258,7 +5258,7 @@ namespace
     std::unordered_map<uint8, std::vector<uint32>> g_BandedClassZoneCounts;
     std::atomic<bool> g_BandedZoneAssignmentsBuilt{ false };
 
-    // Companion assignments, rebuilt once a second on the world thread. The
+    // Drifter assignments, rebuilt once a second on the world thread. The
     // stored value is the ZONE, already resolved: map threads must not be
     // looking up a human by GUID on every band-fit test.
     //
@@ -5266,9 +5266,9 @@ namespace
     // g_GuardianLock (via GetGuardianZoneId) and g_BandedZoneLock before it,
     // so the builder must finish every one of those lookups BEFORE it takes
     // this one, or the two paths deadlock against each other.
-    std::mutex g_FollowerLock;
-    std::unordered_map<uint64, uint32> g_FollowerZoneByBot;
-    std::unordered_map<uint64, uint64> g_FollowerHumanByBot;
+    std::mutex g_DrifterLock;
+    std::unordered_map<uint64, uint32> g_DrifterZoneByBot;
+    std::unordered_map<uint64, uint64> g_DrifterHumanByBot;
 
     bool IsBandedVeteranGuid(uint64 rawGuid)
     {
@@ -5461,7 +5461,7 @@ namespace
 
     // Where a bot should be living right now.
     //
-    // A companion lives where its person is, and everything downstream already
+    // A drifter lives where its person is, and everything downstream already
     // keys off this one answer - the band-fit gate in the relocation executor,
     // the level cycle on ding, the resurrect correction, and the rebirth drain
     // that performs the actual re-level and teleport. So following somebody
@@ -5473,9 +5473,9 @@ namespace
             return 0;
 
         {
-            std::lock_guard<std::mutex> guard(g_FollowerLock);
-            auto itr = g_FollowerZoneByBot.find(bot->GetGUID().GetRawValue());
-            if (itr != g_FollowerZoneByBot.end())
+            std::lock_guard<std::mutex> guard(g_DrifterLock);
+            auto itr = g_DrifterZoneByBot.find(bot->GetGUID().GetRawValue());
+            if (itr != g_DrifterZoneByBot.end())
                 return itr->second;
         }
 
@@ -10420,8 +10420,8 @@ namespace playerbot
         g_PveConfig.hardcoreLootChestEntry = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FullLoot.ChestGameObjectId", 0)));
         g_PveConfig.hardcoreChestDespawnSeconds = uint32(std::max(30, sConfigMgr->GetIntDefault("Centurion.Hardcore.FullLoot.ChestDespawnSeconds", 600)));
         g_PveConfig.zoneGuardiansPerZone = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ZoneGuardians.PerZone", 0), 0, 10));
-        g_PveConfig.followerCount = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.Followers.Count", 0)));
-        g_PveConfig.followerZoneDwellSeconds = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Followers.ZoneDwellSeconds", 10), 0, 3600));
+        g_PveConfig.drifterCount = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.Count", 0)));
+        g_PveConfig.drifterZoneDwellSeconds = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.ZoneDwellSeconds", 10), 0, 3600));
 
         // Accounts whose bots are PvP-only: parked in their sanctuary, never
         // touched by any PvE system (no grind, errands, gear, talents, economy),
@@ -10468,14 +10468,14 @@ namespace playerbot
     bool IsVeteranBot(Player const* bot);
     bool GetZoneLevelBand(uint32 zoneId, uint8& bottom, uint8& top);
 
-    // Keep the companion roster in step with who is actually online.
+    // Keep the drifter roster in step with who is actually online.
     //
     // Sticky on purpose: an assignment that is still valid is kept, and only
-    // vacancies are filled. A companion that flickered in and out of the role
+    // vacancies are filled. A drifter that flickered in and out of the role
     // every second would be re-levelled every second with it.
-    void UpdateFollowerAssignments()
+    void UpdateDrifterAssignments()
     {
-        uint32 const target = g_PveConfig.followerCount;
+        uint32 const target = g_PveConfig.drifterCount;
         uint32 const nowMs = GameTime::GetGameTimeMS();
 
         // Where each real person has settled, and for how long.
@@ -10513,7 +10513,7 @@ namespace playerbot
             // already have, wherever those were last sent.
             if (!std::binary_search(g_RebirthZones.begin(), g_RebirthZones.end(), zoneId))
                 continue;
-            if (nowMs - settled.second < g_PveConfig.followerZoneDwellSeconds * 1000)
+            if (nowMs - settled.second < g_PveConfig.drifterZoneDwellSeconds * 1000)
                 continue;
 
             humans.push_back({ humanGuid, zoneId });
@@ -10523,13 +10523,13 @@ namespace playerbot
 
         if (!target || humans.empty())
         {
-            std::lock_guard<std::mutex> guard(g_FollowerLock);
-            if (!g_FollowerZoneByBot.empty())
+            std::lock_guard<std::mutex> guard(g_DrifterLock);
+            if (!g_DrifterZoneByBot.empty())
             {
-                TC_LOG_INFO("playerbots.pve", "Releasing {} companions: nobody left to follow.",
-                    uint32(g_FollowerZoneByBot.size()));
-                g_FollowerZoneByBot.clear();
-                g_FollowerHumanByBot.clear();
+                TC_LOG_INFO("playerbots.pve", "Releasing {} drifters: nobody left to follow.",
+                    uint32(g_DrifterZoneByBot.size()));
+                g_DrifterZoneByBot.clear();
+                g_DrifterHumanByBot.clear();
             }
             return;
         }
@@ -10540,7 +10540,7 @@ namespace playerbot
             humanZone[guid] = zoneId;
 
         // Everything that needs g_GuardianLock or g_BandedZoneLock happens HERE,
-        // before g_FollowerLock is taken: see the lock-order note on the table.
+        // before g_DrifterLock is taken: see the lock-order note on the table.
         std::unordered_map<uint64, uint32> bandHomeByBot;
         std::unordered_map<uint64, uint32> botZoneNow;
         for (auto const& pair : ObjectAccessor::GetPlayers())
@@ -10565,22 +10565,22 @@ namespace playerbot
 
         // Releasable on purpose: g_PvePendingLock is taken further down and must
         // never be taken while holding this one.
-        std::unique_lock<std::mutex> guard(g_FollowerLock);
+        std::unique_lock<std::mutex> guard(g_DrifterLock);
 
         // Drop assignments whose bot or person is gone, and count what survives.
         std::unordered_map<uint64, uint32> heldBy;
-        for (auto itr = g_FollowerHumanByBot.begin(); itr != g_FollowerHumanByBot.end(); )
+        for (auto itr = g_DrifterHumanByBot.begin(); itr != g_DrifterHumanByBot.end(); )
         {
             bool const botOk = bandHomeByBot.count(itr->first) != 0;
             auto zoneItr = humanZone.find(itr->second);
             if (!botOk || zoneItr == humanZone.end())
             {
-                g_FollowerZoneByBot.erase(itr->first);
-                itr = g_FollowerHumanByBot.erase(itr);
+                g_DrifterZoneByBot.erase(itr->first);
+                itr = g_DrifterHumanByBot.erase(itr);
                 continue;
             }
             ++heldBy[itr->second];
-            g_FollowerZoneByBot[itr->first] = zoneItr->second;
+            g_DrifterZoneByBot[itr->first] = zoneItr->second;
             ++itr;
         }
 
@@ -10588,7 +10588,7 @@ namespace playerbot
         // the banded population instead of emptying one zone.
         std::map<uint32, std::vector<uint64>> byHome;
         for (auto const& [botGuid, home] : bandHomeByBot)
-            if (!g_FollowerHumanByBot.count(botGuid))
+            if (!g_DrifterHumanByBot.count(botGuid))
                 byHome[home].push_back(botGuid);
         for (auto& [home, guids] : byHome)
             std::sort(guids.begin(), guids.end());
@@ -10618,15 +10618,15 @@ namespace playerbot
                 uint64 const botGuid = drawCandidate();
                 if (!botGuid)
                     break;
-                g_FollowerHumanByBot[botGuid] = humanGuid;
-                g_FollowerZoneByBot[botGuid] = zoneId;
+                g_DrifterHumanByBot[botGuid] = humanGuid;
+                g_DrifterZoneByBot[botGuid] = zoneId;
                 ++assigned;
             }
         }
 
         if (assigned)
-            TC_LOG_INFO("playerbots.pve", "Companions: {} newly assigned, {} following {} people.",
-                assigned, uint32(g_FollowerHumanByBot.size()), uint32(humanCount));
+            TC_LOG_INFO("playerbots.pve", "Drifters: {} newly assigned, {} following {} people.",
+                assigned, uint32(g_DrifterHumanByBot.size()), uint32(humanCount));
 
         // Whoever is standing somewhere other than where they now belong, and
         // whoever has since arrived where they were sent.
@@ -10638,7 +10638,7 @@ namespace playerbot
         static std::unordered_set<uint64> s_awaitingArrival;
         std::vector<uint64> misplaced;
         std::vector<uint64> arrived;
-        for (auto const& [botGuid, zoneId] : g_FollowerZoneByBot)
+        for (auto const& [botGuid, zoneId] : g_DrifterZoneByBot)
         {
             auto zoneItr = botZoneNow.find(botGuid);
             if (zoneItr == botZoneNow.end())
@@ -10650,7 +10650,7 @@ namespace playerbot
         }
         guard.unlock();
 
-        // Forget anyone who stopped being a follower while in transit.
+        // Forget anyone who stopped being a drifter while in transit.
         for (auto itr = s_awaitingArrival.begin(); itr != s_awaitingArrival.end(); )
             itr = botZoneNow.count(*itr) ? std::next(itr) : s_awaitingArrival.erase(itr);
 
@@ -10678,7 +10678,7 @@ namespace playerbot
         for (uint64 botGuid : arrived)
             g_PendingAuctionShopping.insert(botGuid);
         if (!arrived.empty())
-            TC_LOG_INFO("playerbots.pve", "{} companions arrived; queued an auction sweep for each.",
+            TC_LOG_INFO("playerbots.pve", "{} drifters arrived; queued an auction sweep for each.",
                 uint32(arrived.size()));
     }
 
@@ -10707,7 +10707,7 @@ namespace playerbot
         // Then point the companions at whoever is online. This must run after
         // the band roster exists, because a bot with no band home is not a
         // candidate and that is how guardians and veterans are excluded.
-        UpdateFollowerAssignments();
+        UpdateDrifterAssignments();
 
         // Hand the fleet a fresh second's worth of navmesh queries. Anything the
         // bots did not spend is deliberately not carried over: the point is a
