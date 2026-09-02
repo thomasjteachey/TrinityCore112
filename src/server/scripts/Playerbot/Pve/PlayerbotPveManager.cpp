@@ -10531,6 +10531,7 @@ namespace playerbot
         // Everything that needs g_GuardianLock or g_BandedZoneLock happens HERE,
         // before g_FollowerLock is taken: see the lock-order note on the table.
         std::unordered_map<uint64, uint32> bandHomeByBot;
+        std::unordered_map<uint64, uint32> botZoneNow;
         for (auto const& pair : ObjectAccessor::GetPlayers())
         {
             Player* bot = pair.second;
@@ -10539,7 +10540,10 @@ namespace playerbot
             // A band home of zero already means guardian, veteran or PvP-only,
             // which are exactly the roles that must never be drafted.
             if (uint32 const home = GetBandedHomeZoneId(bot))
+            {
                 bandHomeByBot[bot->GetGUID().GetRawValue()] = home;
+                botZoneNow[bot->GetGUID().GetRawValue()] = bot->GetZoneId();
+            }
         }
 
         // Even shares, with the remainder spread over the first few people
@@ -10548,7 +10552,9 @@ namespace playerbot
         uint32 const baseShare = target / uint32(humanCount);
         uint32 const remainder = target % uint32(humanCount);
 
-        std::lock_guard<std::mutex> guard(g_FollowerLock);
+        // Releasable on purpose: g_PvePendingLock is taken further down and must
+        // never be taken while holding this one.
+        std::unique_lock<std::mutex> guard(g_FollowerLock);
 
         // Drop assignments whose bot or person is gone, and count what survives.
         std::unordered_map<uint64, uint32> heldBy;
@@ -10610,6 +10616,32 @@ namespace playerbot
         if (assigned)
             TC_LOG_INFO("playerbots.pve", "Companions: {} newly assigned, {} following {} people.",
                 assigned, uint32(g_FollowerHumanByBot.size()), uint32(humanCount));
+
+        // Whoever is standing somewhere other than where they now belong.
+        std::vector<uint64> misplaced;
+        for (auto const& [botGuid, zoneId] : g_FollowerZoneByBot)
+        {
+            auto zoneItr = botZoneNow.find(botGuid);
+            if (zoneItr != botZoneNow.end() && zoneItr->second != zoneId)
+                misplaced.push_back(botGuid);
+        }
+        guard.unlock();
+
+        // Nothing else notices that a HOME CHANGED - every existing trigger fires
+        // on a level that no longer fits a band, on death, or after five fruitless
+        // wander cycles. Without this nudge a companion would drift toward its
+        // person minutes late and look like it was ignoring them.
+        //
+        // Queueing is all that happens here. The executor re-reads the home zone,
+        // defers to the band-reset pass when the level does not fit, and guards
+        // the teleport itself - so a bot in combat, mid-journey or mid-teleport is
+        // simply skipped and picked up on a later pass.
+        if (!misplaced.empty())
+        {
+            std::lock_guard<std::mutex> pendingGuard(g_PvePendingLock);
+            for (uint64 botGuid : misplaced)
+                g_PendingGrindRelocations.insert(botGuid);
+        }
     }
 
     void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
