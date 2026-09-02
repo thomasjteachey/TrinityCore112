@@ -37,6 +37,7 @@
 #include "ScriptMgr.h"
 #include "Configuration/Config.h"
 #include "Formulas.h"
+#include "GameTime.h"
 #include "SpellAuraEffects.h"
 #include "SpellAuras.h"
 #include "Chat.h"
@@ -389,6 +390,13 @@ namespace BarracksHardcore
         return IsFieldKitDuplicateEntry(itemId);
     }
 
+    // When each character's bags were last swept for stray kit pieces.
+    // Player::Update runs on the owning map's thread and maps update in
+    // parallel, so this is shared state and needs the lock.
+    std::mutex s_kitSweepLock;
+    std::unordered_map<uint64, uint32> s_nextKitSweepMs;
+    constexpr uint32 KIT_SWEEP_INTERVAL_MS = 2000;
+
     std::mutex s_whiteKitLock;
     bool s_whiteKitBuilt = false;
     std::unordered_map<uint32, std::vector<uint32>> s_whiteKitByInvType;
@@ -736,6 +744,28 @@ namespace BarracksHardcore
                 uint32(loose.size()), player->GetName());
     }
 
+    // Kit gear belongs in a slot or nowhere, so a copy that turns up in a bag
+    // is swept whatever put it there. Throttled: the scan walks the backpack
+    // and every bag, which is far too much to repeat on every tick of every
+    // bot.
+    void SweepLooseFieldKitThrottled(Player* player)
+    {
+        if (!s_enabled || !player)
+            return;
+
+        uint64 const rawGuid = player->GetGUID().GetRawValue();
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        {
+            std::lock_guard<std::mutex> guard(s_kitSweepLock);
+            auto itr = s_nextKitSweepMs.find(rawGuid);
+            if (itr != s_nextKitSweepMs.end() && nowMs < itr->second)
+                return;
+            s_nextKitSweepMs[rawGuid] = nowMs + KIT_SWEEP_INTERVAL_MS;
+        }
+
+        DestroyLooseFieldKit(player);
+    }
+
     // Fills every empty kit slot with the best plain white piece the wearer's
     // level and proficiency allow. Runs on resurrection (dead players cannot
     // equip anything) and at login, so nobody stays bare.
@@ -1043,6 +1073,7 @@ public:
         EnforceAlwaysPvP(player);
         ApplyFfaState(player);
         ApplyWarModeAura(player);
+        SweepLooseFieldKitThrottled(player);
     }
 
     void OnMapChanged(Player* player) override
