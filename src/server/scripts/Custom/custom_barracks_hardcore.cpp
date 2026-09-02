@@ -272,7 +272,17 @@ namespace BarracksHardcore
 
     bool IsFfaArmed(Player* player)
     {
-        if (!IsWorldContext(player) || !IsFfaEligibleZone(player))
+        if (!IsWorldContext(player))
+            return false;
+
+        // War mode does not reach inside the ropes. Everyone the hourly event
+        // drops into the Battle Ring is there to fight whether they opted in or
+        // not, and stops being a combatant the moment they step out of it - so
+        // this is checked before both the zone gate and the opt-in.
+        if (player->IsInGurubashiBattleRing())
+            return true;
+
+        if (!IsFfaEligibleZone(player))
             return false;
 
         WorldSession const* session = player->GetSession();
@@ -375,9 +385,16 @@ namespace BarracksHardcore
         // re-assert could never take effect and would simply repeat forever.
         // Sanctuary sub-areas sit inside plenty of eligible zones - Blackrock
         // Mountain, the Stair of Destiny, Gurubashi Arena, Acherus.
+        // The Battle Ring is the exception to the arena skip, and it has to be:
+        // the ring carries AREA_FLAG_ARENA like every other arena area, so the
+        // blanket skip made the one place on the realm that IS a free-for-all the
+        // one place this never armed one. The core does not own the flag there
+        // either - UpdatePvPState defers to sanctuary and GM and nothing else -
+        // so asserting it here converges instead of fighting anyone for it.
         AreaTableEntry const* area = sAreaTableStore.LookupEntry(player->GetAreaId());
+        bool const inBattleRing = player->IsInGurubashiBattleRing();
         if (player->pvpInfo.IsInNoPvPArea || player->IsGameMaster() ||
-            (area && (area->Flags & AREA_FLAG_ARENA)))
+            (!inBattleRing && area && (area->Flags & AREA_FLAG_ARENA)))
             return;
 
         bool const shouldFfa = IsFfaArmed(player);
@@ -1136,6 +1153,13 @@ namespace BarracksHardcore
             return;
 
         if (!IsWorldContext(victim))
+            return;
+
+        // The Battle Ring pays out through its own chest and nothing else. The
+        // hourly event is a scrap over one prize, not a gear sink: a cache for
+        // every death in there would bury the prize under a field of loot and
+        // make the ring the cheapest place on the realm to farm gear.
+        if (victim->IsInGurubashiBattleRing())
             return;
 
         CustomLootChests::PlayerChestBuilder chest(victim, s_chestEntry, Seconds(s_chestDespawnSeconds));

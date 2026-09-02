@@ -54,7 +54,11 @@ namespace
 {
 constexpr uint32 GURUBASHI_ARENA_MAP_ID = 0;
 constexpr uint32 STRANGLETHORN_VALE_ZONE_ID = 33;
-constexpr uint32 GURUBASHI_BATTLE_RING_AREA_ID = 30232;
+// The floor's area id as the MAP DATA paints it, which is what the server
+// actually reports from GetAreaId. 30232 exists only as a row in L+'s
+// AreaTable.dbc and is painted nowhere on either realm, so every test against
+// it was false for every player - see Player::IsInGurubashiRingArea.
+constexpr uint32 GURUBASHI_BATTLE_RING_AREA_ID = 2177;
 constexpr float GURUBASHI_BATTLE_RING_MAX_Z = 27.0f;
 constexpr uint32 GURUBASHI_CHEST_ENTRY = 179697;
 constexpr uint32 SHADOW_SIGHT_ENTRY = 184663;
@@ -368,8 +372,19 @@ void TeleportStranglethornPlayersToBattleRing()
         std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
         for (auto const& playerPair : ObjectAccessor::GetPlayers())
         {
+            // Nobody is taken off a gryphon for this. A player teleported while
+            // in flight keeps UNIT_STATE_IN_FLIGHT, and Unit.h defines
+            //
+            //     UNIT_STATE_UNATTACKABLE = UNIT_STATE_IN_FLIGHT
+            //
+            // so they arrive unattackable BY DEFINITION, unable to move (the same
+            // state sits inside UNIT_STATE_NOT_MOVE) and still sitting on the
+            // mount, their flight generator still pointed at a landing pad in
+            // another zone. Ending the flight for them would be worse than
+            // skipping them: a bot that paid for a trip should get the trip.
             Player* player = playerPair.second;
-            if (!player || !player->IsInWorld() || player->IsBeingTeleported() || !player->IsAlive())
+            if (!player || !player->IsInWorld() || player->IsBeingTeleported() ||
+                !player->IsAlive() || player->IsInFlight())
                 continue;
 
             if (player->GetMapId() != GURUBASHI_ARENA_MAP_ID || player->GetZoneId() != STRANGLETHORN_VALE_ZONE_ID)
@@ -381,8 +396,11 @@ void TeleportStranglethornPlayersToBattleRing()
 
     for (ObjectGuid const& guid : playersToTeleport)
     {
+        // Re-checked rather than trusted: the list was built under the player
+        // lock, and anyone on it may have died, left or boarded a flight since.
         Player* player = ObjectAccessor::FindPlayer(guid);
-        if (!player || !player->IsInWorld() || player->IsBeingTeleported() || !player->IsAlive())
+        if (!player || !player->IsInWorld() || player->IsBeingTeleported() ||
+            !player->IsAlive() || player->IsInFlight())
             continue;
 
         if (player->GetGroup())

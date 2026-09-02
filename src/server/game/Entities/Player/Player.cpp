@@ -1640,8 +1640,8 @@ void Player::Update(uint32 p_time)
                 }
                 else
                 {
-                    bool const isCustomGurubashiArea = GetMapId() == 0 && m_zoneUpdateId == 33 && newarea == 30232;
-                    bool const isCustomGurubashiFFAArea = isCustomGurubashiArea && GetPositionZ() <= 27.0f;
+                    bool const isCustomGurubashiArea = IsInGurubashiRingArea(m_zoneUpdateId, newarea);
+                    bool const isCustomGurubashiFFAArea = IsInGurubashiBattleRing(m_zoneUpdateId, newarea);
 
                     // Repair stale FFA state when vertical movement keeps the same Battle Ring area id
                     // but moves between the FFA floor and safe ramp/outer geometry above it.
@@ -7954,7 +7954,7 @@ void Player::UpdateArea(uint32 newArea)
     AreaTableEntry const* area = sAreaTableStore.LookupEntry(newArea);
     bool oldFFAPvPArea = pvpInfo.IsInFFAPvPArea;
 
-    bool const isGurubashiBattleRing = GetMapId() == 0 && m_zoneUpdateId == 33 && newArea == 30232 && GetPositionZ() <= 27.0f;
+    bool const isGurubashiBattleRing = IsInGurubashiBattleRing(m_zoneUpdateId, newArea);
     bool const isGurubashiSafeArea = GetMapId() == 0 && m_zoneUpdateId == 33 && !isGurubashiBattleRing;
 
     static std::array<uint32, 1> const customFFAAreas = { 3217 }; // The Maul
@@ -23845,6 +23845,37 @@ void Player::InitPvP()
     // pvp flag should stay after relog
     if (HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_IN_PVP))
         UpdatePvP(true, true);
+}
+
+// The Gurubashi arena floor.
+//
+// This is area 2177 on BOTH realms, confirmed against the extracted map data
+// rather than the area table: the server reads a player's area from maps/*.map
+// and only afterwards looks that id up in AreaTable.dbc, and here the two
+// disagree. L+'s AreaTable renames 2177 to "Gurubashi Catacombs" and adds a
+// "The Battle Ring" (30232) that the map data was never given; B+ has no such
+// row at all. Every test here used to compare against 30232, which is painted
+// nowhere on map 0 on either realm, so it was false for every player always.
+//
+// That failure inverted the guard built on top of it - the safe area is
+// "Stranglethorn and not the ring", so a ring that never matched made the whole
+// zone safe and FFA never armed inside the ropes.
+bool Player::IsInGurubashiRingArea(uint32 zoneId, uint32 areaId) const
+{
+    return GetMapId() == 0 && zoneId == 33 && areaId == 2177;
+}
+
+// ...and below the ropes. The ramps and terraces above the floor share the
+// area id and are not part of the fight, so height is what separates them.
+bool Player::IsInGurubashiBattleRing(uint32 zoneId, uint32 areaId) const
+{
+    return IsInGurubashiRingArea(zoneId, areaId) && GetPositionZ() <= 27.0f;
+}
+
+// Cached ids - both are plain fields, so this is safe on the per-tick paths.
+bool Player::IsInGurubashiBattleRing() const
+{
+    return IsInGurubashiBattleRing(GetZoneId(), GetAreaId());
 }
 
 void Player::UpdatePvPState(bool onlyFFA)

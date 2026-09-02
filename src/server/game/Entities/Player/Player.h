@@ -1689,6 +1689,14 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         PvPInfo pvpInfo;
         void InitPvP();
         void UpdatePvPState(bool onlyFFA = false);
+
+        // The Gurubashi arena. RingArea is the floor's area at any height;
+        // BattleRing is that area below the ropes, which is the part that
+        // fights. The zone/area overloads are for the update path, which has to
+        // ask about the area being ENTERED before the cached one catches up.
+        bool IsInGurubashiRingArea(uint32 zoneId, uint32 areaId) const;
+        bool IsInGurubashiBattleRing(uint32 zoneId, uint32 areaId) const;
+        bool IsInGurubashiBattleRing() const;
         void SetPvP(bool state) override;
         void UpdatePvP(bool state, bool override = false);
         void UpdateZone(uint32 newZone, uint32 newArea);
