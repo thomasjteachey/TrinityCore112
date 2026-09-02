@@ -42,6 +42,7 @@
 #include "MiscPackets.h"
 #include "Object.h"
 #include "Configuration/Config.h"
+#include <sstream>
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
@@ -258,14 +259,52 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
 
     TC_LOG_DEBUG("network", "Minlvl {}, maxlvl {}, name {}, guild {}, racemask {}, classmask {}, zones {}, strings {}", levelMin, levelMax, packetPlayerName, packetGuildName, racemask, classmask, zonesCount, strCount);
 
-    // A search term that means "people only". There is no way to express NOT in
-    // the /who protocol and no spare permission to hang a new command off, but
-    // a reserved word costs nothing and uses the window the player already has:
-    // /who humans. It is consumed here rather than passed on, so it never also
-    // tries to match a name, guild or zone.
-    std::string const humanOnlyKeyword =
-        sConfigMgr->GetStringDefault("Playerbot.WhoHumanKeyword", "humans");
+    // Search terms that mean "people only" and "bots only". There is no way to
+    // express NOT in the /who protocol and no spare permission to hang a new
+    // command off, but a reserved word costs nothing and uses the window the
+    // player already has: /who humans, /who bots. The word is consumed here
+    // rather than passed on, so it never also tries to match a name, guild or
+    // zone.
+    //
+    // Each key is a comma-separated LIST so the obvious synonyms all work. Read
+    // per query rather than cached, so a config reload takes effect - /who is far
+    // too rare for two short splits to matter.
+    auto const keywordList = [](char const* key, char const* fallback)
+    {
+        std::vector<std::string> words;
+        std::stringstream stream(sConfigMgr->GetStringDefault(key, fallback));
+        std::string word;
+        while (std::getline(stream, word, ','))
+        {
+            // Tolerate spaces around the commas.
+            size_t const begin = word.find_first_not_of(" \t");
+            if (begin == std::string::npos)
+                continue;
+            size_t const end = word.find_last_not_of(" \t");
+            words.push_back(word.substr(begin, end - begin + 1));
+        }
+        return words;
+    };
+
+    std::vector<std::string> const humanKeywords =
+        keywordList("Playerbot.WhoHumanKeyword", "humans,players");
+    std::vector<std::string> const botKeywords =
+        keywordList("Playerbot.WhoBotKeyword", "bots,playerbots");
+
+    auto const matchesKeyword = [](std::vector<std::string> const& words, std::string const& candidate)
+    {
+        for (std::string const& word : words)
+            if (word.size() == candidate.size() &&
+                std::equal(candidate.begin(), candidate.end(), word.begin(),
+                    [](unsigned char left, unsigned char right)
+                    { return std::tolower(left) == std::tolower(right); }))
+                return true;
+
+        return false;
+    };
+
     bool humansOnly = false;
+    bool botsOnly = false;
 
     std::wstring str[4];                                    // 4 is client limit
     uint32 keptStrings = 0;
@@ -274,12 +313,15 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
         std::string temp;
         recvData >> temp;                                   // user entered string, it used as universal search pattern(guild+player name)?
 
-        if (!humanOnlyKeyword.empty() && temp.size() == humanOnlyKeyword.size() &&
-            std::equal(temp.begin(), temp.end(), humanOnlyKeyword.begin(),
-                [](unsigned char left, unsigned char right)
-                { return std::tolower(left) == std::tolower(right); }))
+        if (matchesKeyword(humanKeywords, temp))
         {
             humansOnly = true;
+            continue;
+        }
+
+        if (matchesKeyword(botKeywords, temp))
+        {
+            botsOnly = true;
             continue;
         }
 
@@ -338,13 +380,17 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
     // the one gesture that answers "is anybody actually playing", useless. Two
     // passes over the same filter cost nothing at /who frequency and guarantee
     // no bot ever takes a slot a person could have had.
-    uint32 const passCount = (showPlayerbots && !humansOnly) ? 2u : 1u;
-    for (uint32 pass = 0; pass < passCount; ++pass)
+    // A keyword narrows the run to one of the two passes. Asking for bots by
+    // name does NOT get around Playerbot.WhoListVisibility: on a realm that
+    // hides them from ordinary players the range comes out empty, which is the
+    // same answer an unfiltered /who gives them.
+    uint32 const firstPass = botsOnly ? 1u : 0u;
+    uint32 const lastPass = (humansOnly || !showPlayerbots) ? 0u : 1u;
+    for (uint32 pass = firstPass; pass <= lastPass; ++pass)
     for (WhoListPlayerInfo const& target : whoList)
     {
         bool const targetIsBot = playerbotGuids.count(target.GetGuid().GetRawValue()) != 0;
-        if (humansOnly && targetIsBot)
-            continue;
+        // The pass range already decides which kind is wanted.
         if (targetIsBot != (pass == 1))
             continue;
 

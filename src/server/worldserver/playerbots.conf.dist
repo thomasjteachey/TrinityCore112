@@ -1022,7 +1022,19 @@ Playerbot.WhoListTag = "<Bot>"
 #                     Empty disables it.
 #        Default:     humans
 
-Playerbot.WhoHumanKeyword = "humans"
+Playerbot.WhoHumanKeyword = "humans,players"
+
+#
+#    Playerbot.WhoBotKeyword
+#        Description: Comma-separated search words that make /who list ONLY
+#                     playerbots, e.g. /who bots. The word is consumed, so it is
+#                     never also matched against a name, guild or zone.
+#                     This does not override Playerbot.WhoListVisibility: on a
+#                     realm that hides bots from ordinary players, asking for them
+#                     by name still returns nothing.
+#        Default:     "bots,playerbots"
+#
+Playerbot.WhoBotKeyword = "bots,playerbots"
 
 #
 #    Playerbot.Pve.ZoneGuardians.EscalateAfterMinutes
