@@ -298,6 +298,11 @@ namespace
         PveTimePoint journeyProgressAt{};
         float journeyProgressX = 0.0f;
         float journeyProgressY = 0.0f;
+        // Where the CURRENT hop was aimed, so the next one can be issued as the
+        // bot runs into it rather than after it has stopped dead there.
+        bool journeyStepValid = false;
+        float journeyStepX = 0.0f;
+        float journeyStepY = 0.0f;
         // When this bot was first seen flagged as in flight while no flight
         // generator was actually running. Zero whenever the two agree.
         PveTimePoint strandedFlightSince{};
@@ -2260,6 +2265,7 @@ namespace
         // Generous deadline: walking speed with detours plus fights on the way.
         state.journeyUntil = PveClock::now() + std::chrono::seconds(uint32(distance / 4.0f) + 120);
         state.nextJourneyStepAt = {};
+        state.journeyStepValid = false;
         state.journeyProgressAt = PveClock::now();
         state.journeyProgressX = 0.0f;
         state.journeyProgressY = 0.0f;
@@ -2331,9 +2337,19 @@ namespace
             return false;
         }
 
-        if (now >= state.nextJourneyStepAt && !bot->isMoving())
+        // Hand over to the next hop while the current one is still running: a
+        // spline issued from a bot already in motion continues it, where one
+        // issued after it has stopped is a visible halt every sixty yards.
+        //
+        // Bounded to the tail of the hop on purpose. Re-issuing MovePoint every
+        // tick restarts the spline from scratch and reads as a bot standing
+        // still - the trap the taming path documents - so this fires at most
+        // once per hop, when the bot is nearly on top of the step it was sent to.
+        bool const nearHopEnd = state.journeyStepValid && bot->isMoving() &&
+            bot->GetExactDist2d(state.journeyStepX, state.journeyStepY) <= 12.0f;
+
+        if (now >= state.nextJourneyStepAt && (!bot->isMoving() || nearHopEnd))
         {
-            state.nextJourneyStepAt = now + std::chrono::seconds(2);
             playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
 
             // Step in bounded hops with a ground-snapped Z instead of aiming
@@ -2384,6 +2400,11 @@ namespace
                 bot->SetSwim(false);
 
             WalkPathResult const pathResult = CheckWalkPath(bot, stepX, stepY, stepZ);
+            // Deferred is the fleet path-query budget saying 'not this tick', not
+            // a failure. Returning WITHOUT charging the throttle is the point:
+            // charging it up front meant a deferral cost two seconds of standing
+            // still instead of a single 250ms tick, which is most of what the
+            // stutter actually was.
             if (pathResult == WalkPathResult::Deferred)
                 return true;
             if (pathResult == WalkPathResult::Unreachable)
@@ -2393,6 +2414,10 @@ namespace
             }
 
             bot->GetMotionMaster()->MovePoint(0, Position(stepX, stepY, stepZ), true);
+            state.nextJourneyStepAt = now + std::chrono::seconds(2);
+            state.journeyStepValid = true;
+            state.journeyStepX = stepX;
+            state.journeyStepY = stepY;
         }
 
         return true;
