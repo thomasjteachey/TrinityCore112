@@ -5270,6 +5270,12 @@ namespace
     std::unordered_map<uint64, uint32> g_DrifterZoneByBot;
     std::unordered_map<uint64, uint64> g_DrifterHumanByBot;
 
+    bool IsDrifter(uint64 botRawGuid)
+    {
+        std::lock_guard<std::mutex> guard(g_DrifterLock);
+        return g_DrifterZoneByBot.count(botRawGuid) != 0;
+    }
+
     bool IsBandedVeteranGuid(uint64 rawGuid)
     {
         uint32 const veterans = g_PveConfig.veteranBotCount;
@@ -10509,10 +10515,19 @@ namespace playerbot
             // Somewhere a banded bot can actually be delivered to. Capitals,
             // instances, battlegrounds and the 55+ veteran zones are not in
             // g_RebirthZones at all, so this single test covers all of them -
-            // and a person standing in one simply keeps the companions they
+            // and a person standing in one simply keeps the drifters they
             // already have, wherever those were last sent.
             if (!std::binary_search(g_RebirthZones.begin(), g_RebirthZones.end(), zoneId))
                 continue;
+
+            // And nowhere people cannot fight each other. A drifter in a
+            // protected starter zone adds nothing: it cannot be attacked and
+            // cannot attack, so it is just a stranger farming the same boars.
+            // Asking the FFA ruleset rather than keeping a second zone list of
+            // our own means the two can never drift apart.
+            if (!BarracksHardcore::IsOpenWorldPvpZone(zoneId))
+                continue;
+
             if (nowMs - settled.second < g_PveConfig.drifterZoneDwellSeconds * 1000)
                 continue;
 
@@ -10843,7 +10858,25 @@ namespace playerbot
                         uint8 top = 0;
                         uint32 const zoneId = g_PveConfig.rebirthZoneBanded ? GetRebirthZoneId(bot) : 0u;
                         if (zoneId && GetZoneLevelBand(zoneId, bottom, top))
-                            ResetManagedBotToZoneBand(bot, zoneId, bottom);
+                        {
+                            // A banded bot starts at the floor and climbs, which is
+                            // what keeps every level of its zone occupied over time.
+                            // A drifter never gets to climb - it is re-levelled again
+                            // the moment its person moves - so starting it at the
+                            // floor would stand every drifter in the zone at exactly
+                            // the same level and make the whole retinue read as one
+                            // cohort that arrived together. Scatter them across the
+                            // band instead, which is what a zone full of strangers
+                            // actually looks like.
+                            //
+                            // GetZoneLevelBand guarantees top > bottom, and the
+                            // band-fit test elsewhere treats [bottom, top - 1] as the
+                            // levels that belong here, so this range matches it.
+                            uint8 const level = IsDrifter(botRawGuid)
+                                ? uint8(urand(bottom, top - 1))
+                                : bottom;
+                            ResetManagedBotToZoneBand(bot, zoneId, level);
+                        }
                         else
                             ResetManagedBotToLevelOne(bot);
                     }
