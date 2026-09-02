@@ -10448,6 +10448,7 @@ namespace playerbot
         g_PveConfig.zoneGuardiansPerZone = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ZoneGuardians.PerZone", 0), 0, 10));
         g_PveConfig.drifterCount = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.Count", 0)));
         g_PveConfig.drifterZoneDwellSeconds = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.ZoneDwellSeconds", 10), 0, 3600));
+        g_PveConfig.drifterTeleportGold = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.TeleportGold", 10), 0, 10000));
         g_PveConfig.proactiveMaxLevelsAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveMaxLevelsAbove", 4), 0, 60));
 
         // Accounts whose bots are PvP-only: parked in their sanctuary, never
@@ -10709,13 +10710,31 @@ namespace playerbot
             }
         }
 
-        // Landed and re-levelled: let them re-kit for the band they are now in.
+        // Landed and re-levelled: pay them, THEN let them re-kit for the band
+        // they are now in. The order matters - the sweep deliberately waits for
+        // arrival so the bot shops for the character it is becoming, and a bot
+        // that arrives broke sweeps the auction house and buys nothing.
         // g_PendingAuctionShopping is world-thread only, which is where this runs.
+        uint32 paid = 0;
         for (uint64 botGuid : arrived)
+        {
+            if (g_PveConfig.drifterTeleportGold)
+            {
+                // Not being findable is ordinary here: a drifter can log out or be
+                // released between the arrival check and this loop. It simply goes
+                // unpaid this time and is paid on its next landing.
+                if (Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botGuid)))
+                {
+                    bot->ModifyMoney(int64(g_PveConfig.drifterTeleportGold) * int64(GOLD));
+                    ++paid;
+                }
+            }
+
             g_PendingAuctionShopping.insert(botGuid);
+        }
         if (!arrived.empty())
-            TC_LOG_INFO("playerbots.pve", "{} drifters arrived; queued an auction sweep for each.",
-                uint32(arrived.size()));
+            TC_LOG_INFO("playerbots.pve", "{} drifters arrived; paid {} of them {}g and queued an auction sweep for each.",
+                uint32(arrived.size()), paid, g_PveConfig.drifterTeleportGold);
     }
 
     void PveManager::OnWorldUpdate(uint32 /*diffMs*/)

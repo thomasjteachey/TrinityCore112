@@ -149,6 +149,11 @@ struct PveConfig
     // help from this: a person in the air is not counted as being in the zones
     // they pass over at all.
     uint32 drifterZoneDwellSeconds = 10;
+    // Gold handed to a drifter each time it lands somewhere new, paid before
+    // the auction sweep is queued. A bot that arrives broke sweeps the auction
+    // house and buys nothing, so the purse and the shopping trip have to happen
+    // in that order. Counted in GOLD, not copper. Zero pays nothing.
+    uint32 drifterTeleportGold = 10;
     // How far above its own level a bot will pick a fight with a person.
     // Four is the orange/red boundary the client draws: a target five or more
     // levels up is painted RED, the standard "you will lose this" signal, and a

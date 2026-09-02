@@ -721,6 +721,20 @@ Playerbot.Pve.ZoneGuardians.PerZone = 0
 Playerbot.Pve.Drifters.Count = 0
 Playerbot.Pve.Drifters.ZoneDwellSeconds = 10
 
+#
+#    Playerbot.Pve.Drifters.TeleportGold
+#        Description: Gold handed to a drifter every time it lands somewhere new,
+#                     paid BEFORE the auction sweep is queued. The sweep already
+#                     waits for arrival so the bot shops for the character it is
+#                     becoming rather than the one it left; the purse has to land
+#                     in that same window or the bot walks into the auction house
+#                     broke and buys nothing.
+#
+#                     Counted in gold, not copper. 0 pays nothing.
+#        Default:     10
+#
+Playerbot.Pve.Drifters.TeleportGold = 10
+
 #    Playerbot.Pve.ProactiveMaxLevelsAbove
 #        Description: How far above its own level a bot will PICK a fight with a person.
 #                     Four is the orange/red boundary the client draws: a target five or
