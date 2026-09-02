@@ -19962,6 +19962,21 @@ void Player::_LoadInventory(PreparedQueryResult result, uint32 timeDiff)
                     else
                         slotType = "bag";
 
+                    // A field-kit loaner is never worth posting back. It reaches
+                    // here when a band reset drops a bot below the level of the gear
+                    // it was issued, and mailing it breaks the rule that kit gear only
+                    // ever exists in a slot - it would sit in a mailbox that the bag
+                    // sweep cannot see, which is how 19 pieces accumulated there.
+                    if (IsFieldKitDuplicateEntry(item->GetEntry()))
+                    {
+                        TC_LOG_DEBUG("entities.player", "Player::_LoadInventory: destroying unloadable field kit item {} for {}.",
+                            item->GetEntry(), GetName());
+                        item->DeleteFromInventoryDB(trans);
+                        item->DeleteFromDB(trans);
+                        delete item;
+                        continue;
+                    }
+
                     TC_LOG_ERROR("entities.player", "Player::_LoadInventory: Player '{}' ({}) has item ({}, entry: {}) which can't be loaded (BagGuid {}, slot {}, slot type {}). InventoryResult {}. Item will be sent by mail.",
                         GetName(), GetGUID().ToString(), item->GetGUID().ToString(), item->GetEntry(), bagGuid, slot, slotType, uint32(err));
                     item->DeleteFromInventoryDB(trans);
