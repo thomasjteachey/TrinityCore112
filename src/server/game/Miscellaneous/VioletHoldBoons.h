@@ -265,6 +265,7 @@ namespace VioletHoldBoons
         AlreadyKnown,   // the picker already knows some rank of the spell, or already has the item
         AtCap,          // the boon is at its stack cap for the picker
         LevelCeiling,   // the level boon at LEVEL_BOON_CEILING
+        TooLowLevel,    // the picker is below what this boon or item is for
         NoRoom,         // the item does not fit in the picker's bags
         Failed          // the grant itself did not take
     };
@@ -275,6 +276,15 @@ namespace VioletHoldBoons
     // The level boon is refused past this. Stats already stop scaling at the
     // realm cap; this only keeps the client-side level display sane.
     constexpr uint8 LEVEL_BOON_CEILING = 80;
+
+    // Boon of the Outrider makes mounts summon instantly, which is worth
+    // nothing to somebody who has no mount. Classic hands out riding at 40.
+    //
+    // It is the only boon with a floor, and that is not an oversight: the rest
+    // are percentage increases to stats, costs and crit, as useful at 14 as at
+    // 60. The legendaries are gated on their own item RequiredLevel instead, so
+    // retuning the item moves the gate with it.
+    constexpr uint8 BOON_OUTRIDER_MIN_LEVEL = 40;
 
     TC_GAME_API BoonInfo const& GetBoon(Boon boon);
     TC_GAME_API ClassSpellInfo const& GetClassSpell(uint8 index);

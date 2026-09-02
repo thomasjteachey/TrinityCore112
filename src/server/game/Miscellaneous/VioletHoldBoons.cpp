@@ -570,6 +570,9 @@ PickResult CanTake(Player const* player, Offer offer)
         if (!(info.classMask & player->GetClassMask()))
             return PickResult::WrongClass;
 
+        if (info.boon == Boon::MountSpeed && player->GetLevel() < BOON_OUTRIDER_MIN_LEVEL)
+            return PickResult::TooLowLevel;
+
         if (info.boon == Boon::Level)
             return player->GetLevel() < LEVEL_BOON_CEILING ? PickResult::Ok : PickResult::LevelCeiling;
 
@@ -590,6 +593,12 @@ PickResult CanTake(Player const* player, Offer offer)
         ItemGrantInfo const& info = kItemGrants[offer.index];
         if (!(info.classMask & player->GetClassMask()))
             return PickResult::WrongClass;
+
+        // The item states its own requirement - both legendaries are 60 - so the
+        // number is never repeated here and cannot drift from the item.
+        if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(info.itemEntry))
+            if (player->GetLevel() < proto->RequiredLevel)
+                return PickResult::TooLowLevel;
 
         // One each: a broker copy still in the bags, or a genuinely owned one
         // (the legendaries are unique anyway).
@@ -821,6 +830,7 @@ char const* GetPickResultText(PickResult result)
         case PickResult::AlreadyKnown: return "You already know that.";
         case PickResult::AtCap:        return "You already hold as much of that as you can.";
         case PickResult::LevelCeiling: return "You cannot be raised any higher.";
+        case PickResult::TooLowLevel:  return "You are not yet ready for that.";
         case PickResult::NoRoom:       return "You have no room for that.";
         default:                       return "The broker's offer fizzles.";
     }
@@ -1029,6 +1039,7 @@ static char const* OfferBlockedSuffix(Player const* viewer, Offer offer)
         case PickResult::AlreadyKnown: return " - already yours";
         case PickResult::AtCap:        return " - already at your cap";
         case PickResult::LevelCeiling: return " - you can go no higher";
+        case PickResult::TooLowLevel:  return " - not yet";
         case PickResult::NoRoom:       return " - your bags are full";
         default:                       return "";
     }
