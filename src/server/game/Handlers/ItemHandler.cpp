@@ -196,7 +196,7 @@ void WorldSession::HandleAutoEquipItemOpcode(WorldPacket& recvData)
     {
         _player->RemoveItem(srcbag, srcslot, true);
         _player->EquipItem(dest, pSrcItem, true);
-        _player->AutoUnequipOffhandIfNeed();
+        _player->AutoUnequipOffhandIfNeed(false, true);
     }
     else                                                    // have currently equipped item, not simple case
     {
@@ -210,10 +210,25 @@ void WorldSession::HandleAutoEquipItemOpcode(WorldPacket& recvData)
             return;
         }
 
+        // Field-kit gear is free and comes back on every death, so it never
+        // earns a bag slot: equipping over it destroys it instead.
+        //
+        // Asked BEFORE the store checks below, and that ordering is the point.
+        // Those checks fail the WHOLE equip when the pack is full, which would
+        // leave the player unable to replace the very gear filling them up.
+        //
+        // An equipment-to-equipment move is deliberately excluded: that is a
+        // ring or trinket swap, the piece is still being worn, and destroying
+        // it there would delete gear off the character.
+        bool const destroyDisplaced = IsFieldKitDuplicateEntry(pDstItem->GetEntry()) &&
+            !_player->IsEquipmentPos(src);
+
         // check dest->src move possibility
         ItemPosCountVec sSrc;
         uint16 eSrc = 0;
-        if (_player->IsInventoryPos(src))
+        if (destroyDisplaced)
+            msg = EQUIP_ERR_OK;
+        else if (_player->IsInventoryPos(src))
         {
             msg = _player->CanStoreItem(srcbag, srcslot, sSrc, pDstItem, true);
             if (msg != EQUIP_ERR_OK)
@@ -243,21 +258,27 @@ void WorldSession::HandleAutoEquipItemOpcode(WorldPacket& recvData)
         }
 
         // now do moves, remove...
-        _player->RemoveItem(dstbag, dstslot, false);
+        if (destroyDisplaced)
+            _player->DestroyItem(dstbag, dstslot, true);
+        else
+            _player->RemoveItem(dstbag, dstslot, false);
         _player->RemoveItem(srcbag, srcslot, false);
 
         // add to dest
         _player->EquipItem(dest, pSrcItem, true);
 
-        // add to src
-        if (_player->IsInventoryPos(src))
+        // add to src (nothing to put back when the old piece was destroyed)
+        if (destroyDisplaced)
+        {
+        }
+        else if (_player->IsInventoryPos(src))
             _player->StoreItem(sSrc, pDstItem, true);
         else if (_player->IsBankPos(src))
             _player->BankItem(sSrc, pDstItem, true);
         else if (_player->IsEquipmentPos(src))
             _player->EquipItem(eSrc, pDstItem, true);
 
-        _player->AutoUnequipOffhandIfNeed();
+        _player->AutoUnequipOffhandIfNeed(false, true);
 
         // if inventory item was moved, check if we can remove dependent auras, because they were not removed in Player::RemoveItem (update was set to false)
         // do this after swaps are done, we pass nullptr because both weapons could be swapped and none of them should be ignored

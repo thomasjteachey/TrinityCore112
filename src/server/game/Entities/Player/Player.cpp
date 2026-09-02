@@ -14679,7 +14679,7 @@ void Player::SwapItem(uint16 src, uint16 dst)
 
             RemoveItem(srcbag, srcslot, true);
             EquipItem(dest, pSrcItem, true);
-            AutoUnequipOffhandIfNeed();
+            AutoUnequipOffhandIfNeed(false, true);
         }
 
         return;
@@ -14714,7 +14714,7 @@ void Player::SwapItem(uint16 src, uint16 dst)
                 else if (IsEquipmentPos(dst))
                 {
                     EquipItem(eDest, pSrcItem, true);
-                    AutoUnequipOffhandIfNeed();
+                    AutoUnequipOffhandIfNeed(false, true);
                 }
             }
             else
@@ -14757,10 +14757,20 @@ void Player::SwapItem(uint16 src, uint16 dst)
         return;
     }
 
+    // Field-kit gear is free and comes back on every death, so it never earns a
+    // bag slot: equipping over it destroys it. Asked before the store check for
+    // the same reason as in the auto-equip handler - that check refuses the whole
+    // swap on a full pack. Equipment-to-equipment is excluded: nothing is being
+    // displaced there, the piece just moves to the other worn slot.
+    bool const destroyDisplaced = IsFieldKitDuplicateEntry(pDstItem->GetEntry()) &&
+        !IsEquipmentPos(src);
+
     // check dest->src move possibility
     ItemPosCountVec sDest2;
     uint16 eDest2 = 0;
-    if (IsInventoryPos(src))
+    if (destroyDisplaced)
+        msg = EQUIP_ERR_OK;
+    else if (IsInventoryPos(src))
         msg = CanStoreItem(srcbag, srcslot, sDest2, pDstItem, true);
     else if (IsBankPos(src))
         msg = CanBankItem(srcbag, srcslot, sDest2, pDstItem, true);
@@ -14845,7 +14855,10 @@ void Player::SwapItem(uint16 src, uint16 dst)
     }
 
     // now do moves, remove...
-    RemoveItem(dstbag, dstslot, false);
+    if (destroyDisplaced)
+        DestroyItem(dstbag, dstslot, true);
+    else
+        RemoveItem(dstbag, dstslot, false);
     RemoveItem(srcbag, srcslot, false);
 
     // add to dest
@@ -14856,8 +14869,11 @@ void Player::SwapItem(uint16 src, uint16 dst)
     else if (IsEquipmentPos(dst))
         EquipItem(eDest, pSrcItem, true);
 
-    // add to src
-    if (IsInventoryPos(src))
+    // add to src (nothing to put back when the old piece was destroyed)
+    if (destroyDisplaced)
+    {
+    }
+    else if (IsInventoryPos(src))
         StoreItem(sDest2, pDstItem, true);
     else if (IsBankPos(src))
         BankItem(sDest2, pDstItem, true);
@@ -14908,7 +14924,7 @@ void Player::SwapItem(uint16 src, uint16 dst)
         }
     }
 
-    AutoUnequipOffhandIfNeed();
+    AutoUnequipOffhandIfNeed(false, true);
 }
 
 void Player::AddItemToBuyBackSlot(Item* pItem)
@@ -26047,7 +26063,7 @@ void Player::AutoUnequipMainhandIfNeed(bool force)
     }
 }
 
-void Player::AutoUnequipOffhandIfNeed(bool force /*= false*/)
+void Player::AutoUnequipOffhandIfNeed(bool force /*= false*/, bool equipping /*= false*/)
 {
     Item* offItem = GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
     if (!offItem)
@@ -26060,6 +26076,22 @@ void Player::AutoUnequipOffhandIfNeed(bool force /*= false*/)
     // need unequip offhand for 2h-weapon without TitanGrip (in any from hands)
     if (!force && (CanTitanGrip() || (offItem->GetTemplate()->InventoryType != INVTYPE_2HWEAPON && !IsTwoHandUsed())))
         return;
+
+    // A field-kit off-hand is free and reissued on death. Benching it into the
+    // bags is clutter, and the full-pack branch below MAILS it, which is worse:
+    // it survives as an unread letter on a thirty-day timer. Destroy it.
+    //
+    // Only on a REAL equip. FindEquipSlot is a const query that const_casts its
+    // way in here purely to ask whether a polearm or staff would fit, and
+    // CanEquipItem calls it - so the playerbots reach this while scanning bags,
+    // vendors and the auction house, intending to equip nothing at all. Bagging
+    // an off-hand to answer a question is already wrong; deleting it would be
+    // unrecoverable.
+    if (equipping && IsFieldKitDuplicateEntry(offItem->GetEntry()))
+    {
+        DestroyItem(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND, true);
+        return;
+    }
 
     ItemPosCountVec off_dest;
     if (CanStoreItem(NULL_BAG, NULL_SLOT, off_dest, offItem, false) == EQUIP_ERR_OK)

@@ -147,6 +147,22 @@ enum ItemFieldFlags : uint32
     ITEM_FLAG_MAIL_TEXT_MASK = ITEM_FIELD_FLAG_READABLE | ITEM_FIELD_FLAG_UNK13 | ITEM_FIELD_FLAG_UNK14
 };
 
+// The reserved entry block holding the hardcore field kit's non-sellable
+// duplicates - copies of real white/grey gear with SellPrice and BuyPrice
+// zeroed, created by
+// sql/custom/world/2026_09_02_01_world_fieldkit_nosell_duplicates.sql.
+//
+// This lives here rather than beside the kit itself because the item handler
+// and Player both need it, and the game library cannot include a scripts
+// header - scripts depend on game, not the other way round.
+constexpr uint32 FIELD_KIT_ENTRY_LOW = 92000;
+constexpr uint32 FIELD_KIT_ENTRY_HIGH = 93999;
+
+inline bool IsFieldKitDuplicateEntry(uint32 itemId)
+{
+    return itemId >= FIELD_KIT_ENTRY_LOW && itemId <= FIELD_KIT_ENTRY_HIGH;
+}
+
 enum ItemFlags : uint32
 {
     ITEM_FLAG_NO_PICKUP                         = 0x00000001,

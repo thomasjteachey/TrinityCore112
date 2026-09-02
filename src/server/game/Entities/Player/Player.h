@@ -1207,7 +1207,11 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         Item* StoreItem(ItemPosCountVec const& pos, Item* pItem, bool update);
         Item* EquipNewItem(uint16 pos, uint32 item, bool update);
         Item* EquipItem(uint16 pos, Item* pItem, bool update);
-        void AutoUnequipOffhandIfNeed(bool force = false);
+        // equipping says this is a real equip, not a hypothetical. It gates the
+        // destruction of field-kit gear, because FindEquipSlot const_casts its way
+        // into here just to ASK whether a polearm would fit - and a question must
+        // not delete anything.
+        void AutoUnequipOffhandIfNeed(bool force = false, bool equipping = false);
         void AutoUnequipMainhandIfNeed(bool force = false);
         bool StoreNewItemInBestSlots(uint32 item_id, uint32 item_count);
         void AutoStoreLoot(uint8 bag, uint8 slot, uint32 loot_id, LootStore const& store, bool broadcast = false, bool createdByPlayer = false);

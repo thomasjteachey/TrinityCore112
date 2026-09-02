@@ -368,12 +368,11 @@ namespace BarracksHardcore
     // sell price of zero and merchants refuse - ordinary behaviour for a worthless
     // item, with nothing new to explain to whoever is holding it. The identical
     // item looted or bought normally is untouched and still sells.
-    constexpr uint32 kFieldKitEntryLow = 92000;
-    constexpr uint32 kFieldKitEntryHigh = 93999;
-
     bool IsFieldKitDuplicate(uint32 itemId)
     {
-        return itemId >= kFieldKitEntryLow && itemId <= kFieldKitEntryHigh;
+        // One definition of the range, shared with the item handler and Player,
+        // which destroy a displaced kit piece rather than bagging it.
+        return IsFieldKitDuplicateEntry(itemId);
     }
 
     std::mutex s_whiteKitLock;
