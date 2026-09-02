@@ -434,10 +434,14 @@ namespace BarracksHardcore
     }
 
     // When each character's bags were last swept for stray kit pieces.
-    // Player::Update runs on the owning map's thread and maps update in
-    // parallel, so this is shared state and needs the lock.
-    std::mutex s_kitSweepLock;
-    std::unordered_map<uint64, uint32> s_nextKitSweepMs;
+    //
+    // thread_local, not shared-plus-mutex. A player is updated by exactly one
+    // map thread at a time, so there is nothing to share - and at a 10ms map
+    // interval with a few hundred characters this is reached tens of thousands
+    // of times a second, which is no place for a global lock. A player that
+    // migrates maps leaves a stale entry behind and gets a fresh one, costing at
+    // most one early check.
+    thread_local std::unordered_map<uint64, uint32> s_nextKitSweepMs;
     constexpr uint32 KIT_SWEEP_INTERVAL_MS = 2000;
 
     std::mutex s_whiteKitLock;
@@ -863,9 +867,10 @@ namespace BarracksHardcore
     //
     // Silent until it happens, and rate limited per bot: the point is to catch a
     // sporadic fault during ordinary play, not to add noise while it behaves.
-    std::mutex s_divergenceLock;
-    std::unordered_map<uint64, uint32> s_nextDivergenceCheckMs;
-    std::unordered_map<uint64, uint32> s_nextDivergenceReportMs;
+    // thread_local for the same reason as the kit sweep above: this is on the
+    // per-player tick, and a lock there would cost far more than the check.
+    thread_local std::unordered_map<uint64, uint32> s_nextDivergenceCheckMs;
+    thread_local std::unordered_map<uint64, uint32> s_nextDivergenceReportMs;
     constexpr uint32 DIVERGENCE_CHECK_INTERVAL_MS = 2000;
     constexpr uint32 DIVERGENCE_REPORT_INTERVAL_MS = 30000;
 
@@ -876,26 +881,20 @@ namespace BarracksHardcore
 
         uint64 const rawGuid = player->GetGUID().GetRawValue();
         uint32 const nowMs = GameTime::GetGameTimeMS();
-        {
-            std::lock_guard<std::mutex> guard(s_divergenceLock);
-            auto itr = s_nextDivergenceCheckMs.find(rawGuid);
-            if (itr != s_nextDivergenceCheckMs.end() && nowMs < itr->second)
-                return;
-            s_nextDivergenceCheckMs[rawGuid] = nowMs + DIVERGENCE_CHECK_INTERVAL_MS;
-        }
+        uint32& nextCheckMs = s_nextDivergenceCheckMs[rawGuid];
+        if (nextCheckMs && nowMs < nextCheckMs)
+            return;
+        nextCheckMs = nowMs + DIVERGENCE_CHECK_INTERVAL_MS;
 
         Position const& told = player->m_movementInfo.pos;
         float const drift = player->GetExactDist(told.GetPositionX(), told.GetPositionY(), told.GetPositionZ());
         if (drift < s_movementDivergenceYards)
             return;
 
-        {
-            std::lock_guard<std::mutex> guard(s_divergenceLock);
-            auto itr = s_nextDivergenceReportMs.find(rawGuid);
-            if (itr != s_nextDivergenceReportMs.end() && nowMs < itr->second)
-                return;
-            s_nextDivergenceReportMs[rawGuid] = nowMs + DIVERGENCE_REPORT_INTERVAL_MS;
-        }
+        uint32& nextReportMs = s_nextDivergenceReportMs[rawGuid];
+        if (nextReportMs && nowMs < nextReportMs)
+            return;
+        nextReportMs = nowMs + DIVERGENCE_REPORT_INTERVAL_MS;
 
         MotionMaster* motion = player->GetMotionMaster();
         TC_LOG_ERROR("playerbots.hardcore",
@@ -925,13 +924,10 @@ namespace BarracksHardcore
 
         uint64 const rawGuid = player->GetGUID().GetRawValue();
         uint32 const nowMs = GameTime::GetGameTimeMS();
-        {
-            std::lock_guard<std::mutex> guard(s_kitSweepLock);
-            auto itr = s_nextKitSweepMs.find(rawGuid);
-            if (itr != s_nextKitSweepMs.end() && nowMs < itr->second)
-                return;
-            s_nextKitSweepMs[rawGuid] = nowMs + KIT_SWEEP_INTERVAL_MS;
-        }
+        uint32& nextSweepMs = s_nextKitSweepMs[rawGuid];
+        if (nextSweepMs && nowMs < nextSweepMs)
+            return;
+        nextSweepMs = nowMs + KIT_SWEEP_INTERVAL_MS;
 
         DestroyLooseFieldKit(player);
     }
