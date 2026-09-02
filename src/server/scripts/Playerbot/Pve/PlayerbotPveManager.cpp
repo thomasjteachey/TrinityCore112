@@ -410,6 +410,7 @@ namespace
     bool BotCanTeleportNow(Player* bot);
     void TrySkinCorpse(Player* bot, Creature* corpse);
     bool IsGatherableNodeFor(Player* bot, GameObject const* go, int32* outRequiredSkill);
+    uint32 GetGuardianZoneId(uint64 botRawGuid);
 
     bool IsHumanPlayer(Player const* player)
     {
@@ -3295,9 +3296,14 @@ namespace
         if (!cfg.questsEnabled && !cfg.vendorEnabled)
             return;
 
+        // Guardians are zone sentries, not questing characters. They may still
+        // loot death caches and use vendors for maintenance, but ordinary quest
+        // givers/objects must never take ownership of their movement.
+        bool const guardian = GetGuardianZoneId(bot->GetGUID().GetRawValue()) != 0;
+
         // Gameobject objectives and gather nodes first: they sit inside the
         // grind area, so finishing them costs almost nothing.
-        if ((cfg.questsEnabled && BotHasIncompleteQuest(bot)) || cfg.professionsEnabled)
+        if (!guardian && ((cfg.questsEnabled && BotHasIncompleteQuest(bot)) || cfg.professionsEnabled))
         {
             if (GameObject* questGo = FindNearestQuestGameObject(bot, state, 120.0f))
             {
@@ -3321,7 +3327,8 @@ namespace
         // at running pace, so the walk still fits comfortably.
         if (cfg.hardcoreLootChestEntry)
             if (GameObject* deathChest = FindRegisteredDeathChest(bot, cfg.hardcoreLootChestEntry, 200.0f))
-                if (deathChest->isSpawned() && deathChest->getLootState() == GO_READY &&
+                if ((!guardian || deathChest->GetZoneId() == GetGuardianZoneId(bot->GetGUID().GetRawValue())) &&
+                    deathChest->isSpawned() && deathChest->getLootState() == GO_READY &&
                     !IsRecentErrandTarget(state, deathChest->GetGUID()))
                 {
                     state.errandGuid = deathChest->GetGUID();
@@ -3349,7 +3356,7 @@ namespace
         {
             // Nothing in walking range at all: a bot that needs a vendor gets a
             // town run instead of starving in the wilderness.
-            if (needVendor)
+            if (needVendor && !guardian)
                 RequestSupplyRunIfDue(bot, state);
             return;
         }
@@ -3360,7 +3367,7 @@ namespace
         });
 
         std::vector<uint32> completedQuests;
-        if (cfg.questsEnabled)
+        if (cfg.questsEnabled && !guardian)
             for (auto const& [questId, status] : bot->getQuestStatusMap())
                 if (status.Status == QUEST_STATUS_COMPLETE && !bot->GetQuestRewardStatus(questId))
                     if (Quest const* quest = sObjectMgr->GetQuestTemplate(questId))
@@ -3371,7 +3378,8 @@ namespace
         // merchant; try those first.
         if (needVendor && needRepair)
             for (Creature* npc : serviceNpcs)
-                if (!IsRecentErrandTarget(state, npc->GetGUID()) && npc->IsVendor() && npc->HasNpcFlag(UNIT_NPC_FLAG_REPAIR))
+                if ((!guardian || npc->GetZoneId() == GetGuardianZoneId(bot->GetGUID().GetRawValue())) &&
+                    !IsRecentErrandTarget(state, npc->GetGUID()) && npc->IsVendor() && npc->HasNpcFlag(UNIT_NPC_FLAG_REPAIR))
                 {
                     state.errandGuid = npc->GetGUID();
                     state.errandKind = PveErrandKind::Vendor;
@@ -3390,10 +3398,12 @@ namespace
 
         for (Creature* npc : serviceNpcs)
         {
+            if (guardian && npc->GetZoneId() != GetGuardianZoneId(bot->GetGUID().GetRawValue()))
+                continue;
             if (IsRecentErrandTarget(state, npc->GetGUID()))
                 continue;
 
-            if (cfg.questsEnabled && npc->IsQuestGiver())
+            if (!guardian && cfg.questsEnabled && npc->IsQuestGiver())
             {
                 QuestRelationResult const involved = sObjectMgr->GetCreatureQuestInvolvedRelations(npc->GetEntry());
                 for (uint32 questId : completedQuests)
@@ -3419,7 +3429,7 @@ namespace
 
         // NPCs around, but no usable vendor among them (quest camp, cooldowns):
         // the vendor need still stands, so town-run it.
-        if (needVendor)
+        if (needVendor && !guardian)
             RequestSupplyRunIfDue(bot, state);
     }
 
@@ -3451,6 +3461,32 @@ namespace
             state.errandGuid = ObjectGuid::Empty;
             state.errandKind = PveErrandKind::None;
         };
+
+        // A guardian may have inherited a quest errand from before it was assigned
+        // its post (or from an older build). Drop it immediately. QuestObject is
+        // overloaded for death caches, so preserve only the configured cache entry.
+        if (GetGuardianZoneId(bot->GetGUID().GetRawValue()))
+        {
+            if (state.errandKind == PveErrandKind::QuestGiver)
+            {
+                clearErrand();
+                return false;
+            }
+
+            if (state.errandKind == PveErrandKind::QuestObject)
+            {
+                GameObject* go = ObjectAccessor::GetGameObject(*bot, state.errandGuid);
+                uint32 const guardianZoneId = GetGuardianZoneId(bot->GetGUID().GetRawValue());
+                bool const isDeathCache = go && playerbot::PveManager::GetConfig().hardcoreLootChestEntry &&
+                    go->GetEntry() == playerbot::PveManager::GetConfig().hardcoreLootChestEntry &&
+                    go->GetZoneId() == guardianZoneId;
+                if (!isDeathCache)
+                {
+                    clearErrand();
+                    return false;
+                }
+            }
+        }
 
         // Errands belong to autonomous bots; a bot that just gained a master
         // drops its errand and follows.
@@ -3496,6 +3532,13 @@ namespace
             clearErrand();
             return false;
         }
+
+        if (uint32 const guardianZoneId = GetGuardianZoneId(bot->GetGUID().GetRawValue()))
+            if (npc->GetZoneId() != guardianZoneId)
+            {
+                clearErrand();
+                return false;
+            }
 
         if (!bot->IsWithinDistInMap(npc, INTERACTION_DISTANCE))
         {
@@ -5501,12 +5544,21 @@ namespace
         uint32 const zoneId = bot->GetZoneId();
         uint32 const level = bot->GetLevel();
 
-        // The static classic chart is authoritative for obviously outgrown zones
-        // and does not depend on the runtime spawn cache being populated. This is
-        // the hard safety net for cases like a level-51 bot standing in Durotar.
+        // The static Classic chart is authoritative in BOTH directions and does
+        // not depend on the runtime spawn cache being populated. A level-51 bot in
+        // Durotar is wrong, but so is a level-10 bot in Stranglethorn. The previous
+        // check only rejected over-level bots, which let under-level bots remain in
+        // high zones indefinitely whenever the dynamic cache happened to contain a
+        // low-level/custom spawn there.
         for (ClassicZoneBand const& band : kClassicZoneBands)
-            if (band.zoneId == zoneId && level > uint32(band.maxLevel) + 1)
-                return false;
+            if (band.zoneId == zoneId)
+            {
+                if (level < uint32(band.minLevel))
+                    return false;
+                if (level > uint32(band.maxLevel) + 1)
+                    return false;
+                break;
+            }
 
         // While the world thread is building the dynamic cache, the static chart
         // above is all we trust. Never read partially-filled unordered_maps.
@@ -8486,6 +8538,28 @@ namespace
         ClearResurrectionSickness(bot);
         state.deathObserved = false;
 
+        // A dead bot returns from RunSlowTick before the normal band-maintenance
+        // pass, so an already-stranded below-band bot could resurrect in the same
+        // impossible zone and spend another maintenance interval there. Queue the
+        // band correction immediately on standing up. The world-thread drain below
+        // recomputes the same deterministic home and performs the actual reset.
+        if (g_PveConfig.rebirthZoneBanded && !GetGuardianZoneId(bot->GetGUID().GetRawValue()))
+        {
+            uint32 const homeZoneId = GetRebirthZoneId(bot);
+            if (ClassicZoneBand const* homeBand = homeZoneId ? FindClassicZoneBand(homeZoneId) : nullptr)
+            {
+                uint32 const level = bot->GetLevel();
+                if (level < uint32(homeBand->minLevel) || level >= uint32(homeBand->maxLevel))
+                {
+                    std::lock_guard<std::mutex> guard(g_PvePendingLock);
+                    g_PendingRebirths.insert(bot->GetGUID().GetRawValue());
+                    TC_LOG_INFO("playerbots.pve",
+                        "Bot {} resurrected outside home zone {} band {}-{} at level {}; queueing immediate band reset.",
+                        bot->GetName(), homeZoneId, uint32(homeBand->minLevel), uint32(homeBand->maxLevel), level);
+                }
+            }
+        }
+
         // Queued here rather than at the moment of death because the relocation
         // pass skips corpses.
         if (state.fleeingFromPlayers)
@@ -8783,6 +8857,21 @@ namespace
                 }
 
         EnsureFirstLoginKit(bot, state, cfg);
+
+        // Guardians never leave their post for autonomous town/class/grind travel.
+        // If a bot was promoted to guardian while an older journey/request was still
+        // live, cancel that ownership here and let RunZoneGuardianTick send it home.
+        if (GetGuardianZoneId(bot->GetGUID().GetRawValue()))
+        {
+            if (state.journeyActive && state.journeyFallbackKind != 0)
+            {
+                state.journeyActive = false;
+                state.journeyFallbackKind = 0;
+            }
+            std::lock_guard<std::mutex> guard(g_PvePendingLock);
+            g_PendingSupplyRuns.erase(bot->GetGUID().GetRawValue());
+            g_PendingClassQuestTravels.erase(bot->GetGUID().GetRawValue());
+        }
 
         // Broken equipped gear is an emergency maintenance condition, not a
         // normal vendor errand. Run this before rest/quest/vendor scheduling so a
@@ -9777,11 +9866,15 @@ namespace
         bool pendingRelocation = false;
         bool pendingStuckRelocation = false;
         bool pendingHuntTeleport = false;
+        bool pendingRebirth = false;
+        bool pendingSupplyRun = false;
         {
             std::lock_guard<std::mutex> guard(g_PvePendingLock);
             pendingRelocation = g_PendingGrindRelocations.count(rawGuid) != 0;
             pendingStuckRelocation = g_PendingStuckRelocations.count(rawGuid) != 0;
             pendingHuntTeleport = g_PendingGuardianTeleports.count(rawGuid) != 0;
+            pendingRebirth = g_PendingRebirths.count(rawGuid) != 0;
+            pendingSupplyRun = g_PendingSupplyRuns.count(rawGuid) != 0;
         }
 
         uint32 const zoneId = bot->GetZoneId();
@@ -9792,9 +9885,37 @@ namespace
         if (auto itr = g_ZoneTopLevel.find(zoneId); itr != g_ZoneTopLevel.end())
             zoneTop = itr->second;
 
-        bool const guardian = GetGuardianZoneId(rawGuid) != 0;
+        uint32 const guardianZoneId = GetGuardianZoneId(rawGuid);
+        bool const guardian = guardianZoneId != 0;
+        bool const veteran = IsBandedVeteranGuid(rawGuid);
+        bool const pvpOnly = playerbot::PveManager::IsPvpOnlyBot(bot);
+        bool const companion = !state.masterGuid.IsEmpty();
+        uint32 const bandHomeZoneId = (!guardian && !veteran && !pvpOnly && g_PveConfig.rebirthZoneBanded)
+            ? GetRebirthZoneId(bot) : 0u;
+        uint32 const assignedZoneId = guardian ? guardianZoneId : bandHomeZoneId;
+        ClassicZoneBand const* assignedBand = assignedZoneId ? FindClassicZoneBand(assignedZoneId) : nullptr;
         bool const suitable = BotIsInSuitableZone(bot);
         bool const openWorldPvp = BarracksHardcore::IsOpenWorldPvpZone(zoneId);
+
+        char const* role = guardian ? "guardian" :
+            (companion ? "companion" :
+                (pvpOnly ? "pvp-only" :
+                    (veteran ? "veteran" :
+                        (bandHomeZoneId ? "banded" : "unbanded"))));
+
+        std::ostringstream roleLine;
+        roleLine << "PB role diag: role=" << role
+            << " guardian_zone=" << guardianZoneId
+            << " band_home=" << bandHomeZoneId
+            << " assigned_zone=" << assignedZoneId;
+        if (assignedBand)
+            roleLine << " assigned_band=" << uint32(assignedBand->minLevel) << "-" << uint32(assignedBand->maxLevel);
+        else
+            roleLine << " assigned_band=none";
+        roleLine << " companion=" << (companion ? "yes" : "no")
+            << " veteran=" << (veteran ? "yes" : "no")
+            << " pvp_only=" << (pvpOnly ? "yes" : "no");
+        lines.push_back(roleLine.str());
 
         std::ostringstream stateLine;
         stateLine << "PB PvE diag: lvl=" << uint32(bot->GetLevel())
@@ -9824,6 +9945,29 @@ namespace
             << " feign_s=" << SecondsRemaining(state.feignHoldUntil)
             << " timid_s=" << SecondsRemaining(state.timidUntil);
         lines.push_back(blockers.str());
+
+        std::string errandTarget = "none";
+        if (!state.errandGuid.IsEmpty())
+        {
+            if (Creature* npc = ObjectAccessor::GetCreature(*bot, state.errandGuid))
+                errandTarget = npc->GetName();
+            else if (GameObject* go = ObjectAccessor::GetGameObject(*bot, state.errandGuid))
+                errandTarget = "go:" + std::to_string(go->GetEntry());
+            else
+                errandTarget = "unresolved";
+        }
+
+        std::ostringstream intentLine;
+        intentLine << "PB intent diag: errand=" << ErrandKindName(state.errandKind)
+            << " errand_target=" << errandTarget
+            << " errand_s=" << SecondsRemaining(state.errandUntil)
+            << " journey=" << (state.journeyActive ? "yes" : "no");
+        if (state.journeyActive)
+            intentLine << " journey_map=" << state.journeyMapId
+            << " journey_dest=(" << state.journeyX << "," << state.journeyY << "," << state.journeyZ << ")"
+            << " journey_fallback=" << uint32(state.journeyFallbackKind)
+            << " journey_s=" << SecondsRemaining(state.journeyUntil);
+        lines.push_back(intentLine.str());
 
         uint32 brokenEquipped = 0;
         uint32 criticalEquipped = 0;
@@ -9858,7 +10002,9 @@ namespace
             << " stuck_queued=" << (pendingStuckRelocation ? "yes" : "no")
             << " dry=" << state.dryWanderCount << "/" << g_PveConfig.relocateDryWanders
             << " zonefit_next_s=" << SecondsRemaining(state.nextZoneFitCheckAt)
-            << " hunt_tp_queued=" << (pendingHuntTeleport ? "yes" : "no");
+            << " hunt_tp_queued=" << (pendingHuntTeleport ? "yes" : "no")
+            << " rebirth_queued=" << (pendingRebirth ? "yes" : "no")
+            << " supply_queued=" << (pendingSupplyRun ? "yes" : "no");
         lines.push_back(relocation.str());
 
         // Death-cache diagnostics.  This is deliberately independent of the
