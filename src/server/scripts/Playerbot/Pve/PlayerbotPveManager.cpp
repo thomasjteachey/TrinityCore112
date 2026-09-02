@@ -7203,7 +7203,19 @@ namespace
                     float const priceInLevels = budget
                         ? float(auction->buyout) * float(g_PveConfig.auctionBudgetWorthLevels) / float(budget)
                         : float(g_PveConfig.auctionBudgetWorthLevels);
-                    float const netValue = gain - priceInLevels;
+                    // How far out of date the item is, in the same currency.
+                    //
+                    // Gain alone cannot see this: filling an empty slot with a
+                    // level 10 trinket is a positive gain for almost no gold, so
+                    // it beat a level-appropriate item every time. Counting the
+                    // levels it is behind lets the better item win even when it
+                    // costs more, without banning the cheap one outright - a bot
+                    // with an empty slot and no better offer still takes it.
+                    float const levelsBehind = isContainer ? 0.0f :
+                        std::max(0.0f, float(bot->GetLevel()) - float(proto->RequiredLevel));
+                    float const stalePenalty = levelsBehind * g_PveConfig.auctionLevelsBehindPenalty;
+
+                    float const netValue = gain - priceInLevels - stalePenalty;
 
                     // Must be worth more than it costs, and worth more than whatever is
                     // already the best offer on the house.
@@ -10602,6 +10614,7 @@ namespace playerbot
         g_PveConfig.auctionBuyMaxOverpayPct = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionBuy.MaxOverpayPct", 1200)));
         g_PveConfig.auctionBudgetWorthLevels = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionBuy.BudgetWorthLevels", 15), 1, 200));
+        g_PveConfig.auctionLevelsBehindPenalty = std::max(0.0f, sConfigMgr->GetFloatDefault("Playerbot.Pve.Auction.LevelsBehindPenalty", 0.35f));
         g_PveConfig.professionsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Professions.Enable", false);
         g_PveConfig.relocateEnabled = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.Relocate.Enable", true);
         g_PveConfig.relocateDryWanders = uint32(std::clamp(

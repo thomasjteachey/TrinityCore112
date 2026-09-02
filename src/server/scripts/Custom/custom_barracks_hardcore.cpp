@@ -103,6 +103,10 @@ namespace BarracksHardcore
     // gives it for good, and ten levels down it stops being able to kill the
     // things its own zone band is built around.
     uint32 s_kitBotLevelOffset = 5;
+    // How far a worn kit piece may fall behind the level the kit now dresses
+    // for before it is replaced. Without this a piece issued at level 15 is
+    // still worn at 50, because the kit only fills empty slots.
+    uint32 s_kitStaleLevels = 5;
     // Yards of drift between a bot's real position and the one its packets
     // carry to observers before it is reported. 0 disables the watch.
     float s_movementDivergenceYards = 6.0f;
@@ -129,6 +133,7 @@ namespace BarracksHardcore
         s_greyKitMaxLevel = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FieldKit.GreyUntilLevel", 15)));
         s_kitLevelOffset = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Hardcore.FieldKit.LevelOffset", 10), 0, 60));
         s_kitBotLevelOffset = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Hardcore.FieldKit.BotLevelOffset", 5), 0, 60));
+        s_kitStaleLevels = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Hardcore.FieldKit.StaleLevels", 5), 1, 60));
         s_movementDivergenceYards = std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Hardcore.Diagnostics.MovementDivergenceYards", 6.0f));
         s_playerKillXpBubbles = std::clamp(
             sConfigMgr->GetFloatDefault("Centurion.Hardcore.PlayerKill.ExperienceBubbles", 2.0f), 0.0f, 20.0f);
@@ -969,9 +974,23 @@ namespace BarracksHardcore
                 // Strictly limited to the kit's own duplicates. Gear the
                 // player actually earned is never touched, however far above
                 // the kit level it sits - that gear is the entire point.
+                // Retired in BOTH directions. Only checking for a piece that was
+                // too good left the opposite case running forever: a bot reborn at
+                // the bottom of its band is kitted for that level and then climbs
+                // thirty levels still wearing it, because the kit otherwise only
+                // fills an EMPTY slot. Measured on the fleet, worn kit averaged
+                // 18 levels behind its wearer and reached 41.
+                //
+                // The tolerance stops a piece being rebought every level: within a
+                // few levels the pool rarely holds anything different anyway.
                 ItemTemplate const* wornProto = worn->GetTemplate();
-                if (!wornProto || !IsFieldKitDuplicate(wornProto->ItemId) ||
-                    wornProto->RequiredLevel <= kitLevel)
+                if (!wornProto || !IsFieldKitDuplicate(wornProto->ItemId))
+                    continue;
+
+                bool const tooGood = wornProto->RequiredLevel > kitLevel;
+                bool const fallenBehind = int32(kitLevel) - int32(wornProto->RequiredLevel) >
+                    int32(s_kitStaleLevels);
+                if (!tooGood && !fallenBehind)
                     continue;
 
                 player->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);

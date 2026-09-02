@@ -932,6 +932,17 @@ Centurion.Hardcore.FieldKit.LevelOffset = 10
 Centurion.Hardcore.FieldKit.BotLevelOffset = 5
 
 #
+#    Centurion.Hardcore.FieldKit.StaleLevels
+#        Description: How far a worn kit piece may fall behind the level the kit
+#                     now dresses for before it is replaced. The kit only fills
+#                     EMPTY slots, so without this a piece issued at level 15 is
+#                     still being worn at 50 - measured on the live fleet, worn kit
+#                     averaged 18 levels behind its wearer and reached 41.
+#        Default:     5
+#
+Centurion.Hardcore.FieldKit.StaleLevels = 5
+
+#
 #    Centurion.Hardcore.Diagnostics.MovementDivergenceYards
 #        Description: Watches for a playerbot whose real position has drifted from
 #                     the position its packets tell observers about. That gap is

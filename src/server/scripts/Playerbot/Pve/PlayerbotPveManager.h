@@ -104,6 +104,12 @@ struct PveConfig
     // How many item levels a bot considers its whole auction budget worth.
     // Higher means more willing to pay for an upgrade.
     uint32 auctionBudgetWorthLevels = 15;
+    // Item levels of value knocked off a purchase for each character level the
+    // item sits below the buyer. Without it the scorer weighs item level gained
+    // against price and nothing else, so a cheap scrap wins any slot that is
+    // empty or nearly worthless - which is how level 40 bots ended up wearing
+    // level 10 gear. 0 restores that behaviour.
+    float auctionLevelsBehindPenalty = 0.35f;
     // Bots list the gear they cannot use, undercutting the standing price.
     bool auctionSellEnabled = false;
     // Gathering professions: two of herbalism/mining/skinning per bot,
