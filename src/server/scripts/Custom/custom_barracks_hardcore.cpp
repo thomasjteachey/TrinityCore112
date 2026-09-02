@@ -87,6 +87,14 @@ namespace BarracksHardcore
     uint32 s_warModeAuraSpell = 0;
     // Levels below this are issued GREY field kit instead of white.
     uint32 s_greyKitMaxLevel = 15;
+    // The kit dresses the wearer as though they were this many levels lower.
+    // Issued gear was landing close enough to what the level could actually
+    // earn that there was nothing to look forward to: the kit is meant to stop
+    // a corpse run being naked, not to be the gear you keep. Subtracted from
+    // the level the item search is run at, so the wearer is still handed the
+    // BEST piece for that reduced level - the whole set moves down together
+    // rather than becoming patchy. 0 restores the old behaviour.
+    uint32 s_kitLevelOffset = 5;
     // Experience paid for killing a playerbot, counted in BUBBLES - the twenty
     // segments the experience bar is divided into, so one bubble is 5% of a
     // level and twenty is a full bar. Fractions are allowed. 0 disables.
@@ -108,6 +116,7 @@ namespace BarracksHardcore
         s_rewardMultiplier = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Hardcore.FfaPvp.RewardMultiplier", 2), 1, 10));
         s_warModeAuraSpell = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FfaPvp.WarModeAuraSpell", 0)));
         s_greyKitMaxLevel = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FieldKit.GreyUntilLevel", 15)));
+        s_kitLevelOffset = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Hardcore.FieldKit.LevelOffset", 5), 0, 60));
         s_playerKillXpBubbles = std::clamp(
             sConfigMgr->GetFloatDefault("Centurion.Hardcore.PlayerKill.ExperienceBubbles", 2.0f), 0.0f, 20.0f);
         s_playerKillDiminishSeconds = uint32(std::max(0,
@@ -652,12 +661,32 @@ namespace BarracksHardcore
 
         uint32 const wantedArmorSubclass = DesiredArmorSubclass(player);
         uint8 const level = player->GetLevel();
+
+        // The level the ITEM SEARCH runs at, deliberately below the wearer's.
+        // Floored at 1 rather than 0 so the bottom of the game still finds the
+        // level-1 pieces instead of coming up empty and leaving a slot bare.
+        uint8 const kitLevel = uint8(std::max(1, int32(level) - int32(s_kitLevelOffset)));
         uint32 granted = 0;
 
         for (uint8 slot : kKitSlots)
         {
-            if (player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
-                continue;
+            if (Item* worn = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+            {
+                // A kit piece that outclasses the level the kit now dresses
+                // for is retired here rather than left on. Otherwise lowering
+                // the offset would only ever reach an EMPTY slot, so anyone
+                // already wearing a full kit would keep the old set for good.
+                //
+                // Strictly limited to the kit's own duplicates. Gear the
+                // player actually earned is never touched, however far above
+                // the kit level it sits - that gear is the entire point.
+                ItemTemplate const* wornProto = worn->GetTemplate();
+                if (!wornProto || !IsFieldKitDuplicate(wornProto->ItemId) ||
+                    wornProto->RequiredLevel <= kitLevel)
+                    continue;
+
+                player->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+            }
 
             uint32 bestItemId = 0;
             uint32 bestRequiredLevel = 0;
@@ -689,7 +718,7 @@ namespace BarracksHardcore
                 for (uint32 itemId : *ids)
                 {
                     ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
-                    if (!proto || proto->RequiredLevel > level)
+                    if (!proto || proto->RequiredLevel > kitLevel)
                         continue;
 
                     // Armor proficiency, decided explicitly. Cloaks are cloth

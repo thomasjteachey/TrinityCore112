@@ -893,6 +893,20 @@ Playerbot.PvpClassSpells.Range.Heal = 40.0
 Centurion.Hardcore.FieldKit.GreyUntilLevel = 15
 
 #
+#    Centurion.Hardcore.FieldKit.LevelOffset
+#        Description: The field kit dresses the wearer as though they were this many
+#                     levels lower, so the gear it issues is deliberately behind what
+#                     the level could earn. The kit exists so a corpse run is not made
+#                     naked; it is not meant to be gear worth keeping.
+#                     The whole set shifts together - the wearer still gets the best
+#                     piece available for the reduced level, not a patchy mix.
+#                     The grey/white split still keys off the REAL level.
+#                     0 disables (kit matches the wearer's own level).
+#        Default:     5
+#
+Centurion.Hardcore.FieldKit.LevelOffset = 5
+
+#
 #    Playerbot.Pve.ZoneGuardians.PlayerApproachYards
 #        Description: How close a zone guardian tries to get to a real player. Guardians go
 #                     to the people instead of waiting to be found: the server already
