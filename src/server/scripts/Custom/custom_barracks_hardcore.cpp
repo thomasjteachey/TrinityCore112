@@ -360,6 +360,22 @@ namespace BarracksHardcore
         EQUIPMENT_SLOT_MAINHAND, EQUIPMENT_SLOT_OFFHAND, EQUIPMENT_SLOT_RANGED
     } };
 
+    // The kit issues its own non-sellable DUPLICATES rather than the real
+    // items - see sql/custom/world/2026_09_02_01_world_fieldkit_nosell_duplicates.sql.
+    // Free gear must not be a gold faucet: the kit comes back on every death, so
+    // vendoring the replacements would print money. Each duplicate is a copy of a
+    // real item with SellPrice and BuyPrice zeroed, which the client shows as a
+    // sell price of zero and merchants refuse - ordinary behaviour for a worthless
+    // item, with nothing new to explain to whoever is holding it. The identical
+    // item looted or bought normally is untouched and still sells.
+    constexpr uint32 kFieldKitEntryLow = 92000;
+    constexpr uint32 kFieldKitEntryHigh = 93999;
+
+    bool IsFieldKitDuplicate(uint32 itemId)
+    {
+        return itemId >= kFieldKitEntryLow && itemId <= kFieldKitEntryHigh;
+    }
+
     std::mutex s_whiteKitLock;
     bool s_whiteKitBuilt = false;
     std::unordered_map<uint32, std::vector<uint32>> s_whiteKitByInvType;
@@ -467,46 +483,68 @@ namespace BarracksHardcore
         ComputeKitItemIdCeiling();
         LoadObtainableItemsOnce();
 
+        // Prefer the non-sellable duplicates. They were filtered by exactly the
+        // rules below at the moment they were created, so nothing here has to
+        // judge them again - taking them wholesale is both correct and cheaper.
         for (auto const& itemPair : sObjectMgr->GetItemTemplateStore())
         {
             ItemTemplate const& proto = itemPair.second;
-            if (proto.Quality != ITEM_QUALITY_NORMAL && proto.Quality != ITEM_QUALITY_POOR)
+            if (!IsFieldKitDuplicate(proto.ItemId))
                 continue;
-
-            // Never hand out scaffolding, and never anything the world has no
-            // way of producing on its own.
-            if (LooksLikeScaffolding(proto.Name1))
-                continue;
-            if (!s_obtainableItems.empty() && !s_obtainableItems.count(proto.ItemId))
-                continue;
-            // Nothing from an expansion this realm does not run. Item ids are
-            // laid down in release order, so the realm's level cap picks the
-            // ceiling: a level 60 realm has no business issuing a Totem of the
-            // Earthen Ring, which is perfectly legal data and pure anachronism
-            // in a classic world.
-            if (proto.ItemId > s_kitItemIdCeiling)
-                continue;
-            if (proto.Class != ITEM_CLASS_ARMOR && proto.Class != ITEM_CLASS_WEAPON)
-                continue;
-            if (proto.InventoryType == INVTYPE_NON_EQUIP)
-                continue;
-            // Plain field gear only: nothing gated, zone-locked or bound.
-            if (proto.RequiredLevel > 60 || proto.ItemLevel > 70)
-                continue;
-            if (proto.RequiredSkill || proto.RequiredSpell || proto.RequiredReputationFaction ||
-                proto.RequiredHonorRank || proto.Area || proto.Map)
-                continue;
-            if (proto.Bonding == BIND_QUEST_ITEM)
-                continue;
-            // Nothing that expires: holiday masks and their kin carry a
-            // duration and would rot off the wearer days later.
-            if (proto.Duration)
-                continue;
-
             if (proto.Quality == ITEM_QUALITY_POOR)
                 s_greyKitByInvType[proto.InventoryType].push_back(proto.ItemId);
             else
                 s_whiteKitByInvType[proto.InventoryType].push_back(proto.ItemId);
+        }
+
+        // Fall back to the real items when the duplicates are absent, so a realm
+        // that has not run the migration still gets a field kit rather than none.
+        bool const haveDuplicates = !s_whiteKitByInvType.empty() || !s_greyKitByInvType.empty();
+        if (haveDuplicates)
+            TC_LOG_INFO("scripts", "BarracksHardcore: field kit is using the non-sellable duplicates.");
+        else
+        {
+            for (auto const& itemPair : sObjectMgr->GetItemTemplateStore())
+            {
+                ItemTemplate const& proto = itemPair.second;
+                if (proto.Quality != ITEM_QUALITY_NORMAL && proto.Quality != ITEM_QUALITY_POOR)
+                    continue;
+
+                // Never hand out scaffolding, and never anything the world has no
+                // way of producing on its own.
+                if (LooksLikeScaffolding(proto.Name1))
+                    continue;
+                if (!s_obtainableItems.empty() && !s_obtainableItems.count(proto.ItemId))
+                    continue;
+                // Nothing from an expansion this realm does not run. Item ids are
+                // laid down in release order, so the realm's level cap picks the
+                // ceiling: a level 60 realm has no business issuing a Totem of the
+                // Earthen Ring, which is perfectly legal data and pure anachronism
+                // in a classic world.
+                if (proto.ItemId > s_kitItemIdCeiling)
+                    continue;
+                if (proto.Class != ITEM_CLASS_ARMOR && proto.Class != ITEM_CLASS_WEAPON)
+                    continue;
+                if (proto.InventoryType == INVTYPE_NON_EQUIP)
+                    continue;
+                // Plain field gear only: nothing gated, zone-locked or bound.
+                if (proto.RequiredLevel > 60 || proto.ItemLevel > 70)
+                    continue;
+                if (proto.RequiredSkill || proto.RequiredSpell || proto.RequiredReputationFaction ||
+                    proto.RequiredHonorRank || proto.Area || proto.Map)
+                    continue;
+                if (proto.Bonding == BIND_QUEST_ITEM)
+                    continue;
+                // Nothing that expires: holiday masks and their kin carry a
+                // duration and would rot off the wearer days later.
+                if (proto.Duration)
+                    continue;
+
+                if (proto.Quality == ITEM_QUALITY_POOR)
+                    s_greyKitByInvType[proto.InventoryType].push_back(proto.ItemId);
+                else
+                    s_whiteKitByInvType[proto.InventoryType].push_back(proto.ItemId);
+            }
         }
 
         // Highest required level first, so a search can stop at its first
@@ -545,6 +583,13 @@ namespace BarracksHardcore
     // because a query had not run.
     bool IsObtainableInWorld(uint32 itemId)
     {
+        // A field-kit duplicate is legitimate by construction: it is a copy of an
+        // item that IS obtainable. Judging the copy against the loot tables, which
+        // will never mention it, would have the playerbot manager strip the kit
+        // straight back off as scaffolding.
+        if (IsFieldKitDuplicate(itemId))
+            return true;
+
         BuildWhiteKitCacheOnce();
         return s_obtainableItems.empty() || s_obtainableItems.count(itemId) != 0;
     }
