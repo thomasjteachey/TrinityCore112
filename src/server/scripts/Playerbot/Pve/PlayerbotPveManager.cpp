@@ -287,6 +287,9 @@ namespace
         PveTimePoint journeyProgressAt{};
         float journeyProgressX = 0.0f;
         float journeyProgressY = 0.0f;
+        // When this bot was first seen flagged as in flight while no flight
+        // generator was actually running. Zero whenever the two agree.
+        PveTimePoint strandedFlightSince{};
     };
 
     bool IsRecentErrandTarget(PveBotState& state, ObjectGuid const& guid)
@@ -7234,7 +7237,13 @@ namespace
         for (uint64 botRawGuid : drained)
         {
             Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid));
+            // A bot in the air is left alone. Teleporting mid-taxi tears the
+            // flight generator off without letting it finalize, and finalize is
+            // the only thing that clears UNIT_STATE_IN_FLIGHT and dismounts - so
+            // the bot arrives still wearing the gryphon and frozen. The request
+            // is dropped; whatever wanted it moved asks again once it lands.
             if (!bot || !bot->IsInWorld() || !bot->IsAlive() || bot->InBattleground() ||
+                bot->IsInFlight() ||
                 bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
                 continue;
 
@@ -7327,7 +7336,13 @@ namespace
         for (uint64 botRawGuid : drained)
         {
             Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid));
+            // A bot in the air is left alone. Teleporting mid-taxi tears the
+            // flight generator off without letting it finalize, and finalize is
+            // the only thing that clears UNIT_STATE_IN_FLIGHT and dismounts - so
+            // the bot arrives still wearing the gryphon and frozen. The request
+            // is dropped; whatever wanted it moved asks again once it lands.
             if (!bot || !bot->IsInWorld() || !bot->IsAlive() || bot->InBattleground() ||
+                bot->IsInFlight() ||
                 bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
                 continue;
 
@@ -7592,7 +7607,13 @@ namespace
             }
 
             Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid));
+            // A bot in the air is left alone. Teleporting mid-taxi tears the
+            // flight generator off without letting it finalize, and finalize is
+            // the only thing that clears UNIT_STATE_IN_FLIGHT and dismounts - so
+            // the bot arrives still wearing the gryphon and frozen. The request
+            // is dropped; whatever wanted it moved asks again once it lands.
             if (!bot || !bot->IsInWorld() || !bot->IsAlive() || bot->InBattleground() ||
+                bot->IsInFlight() ||
                 bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
                 continue;
             if (stuckRecovery && bot->GetZoneId() != stuckZoneId)
@@ -10976,6 +10997,35 @@ namespace playerbot
         PveBotState& state = LockedGetOrCreate(g_PveBotStateByGuid, rawGuid);
         if (player->IsInFlight())
         {
+            // A bot flagged as flying with no flight generator behind it is not
+            // flying - it is stranded on the ground still wearing the taxi mount,
+            // and nothing else will ever notice: this tick returns early on
+            // IsInFlight, and the stuck watchdog excludes IsInFlight too.
+            //
+            // Structural rather than positional, so it does not depend on the bot
+            // happening to sit still. The grace period covers the window while a
+            // genuine flight is being set up, when the flag can legitimately be
+            // set before the generator is pushed.
+            if (player->GetMotionMaster()->GetCurrentMovementGeneratorType() != FLIGHT_MOTION_TYPE)
+            {
+                PveTimePoint const flightNow = PveClock::now();
+                if (state.strandedFlightSince == PveTimePoint{})
+                    state.strandedFlightSince = flightNow;
+                else if (flightNow - state.strandedFlightSince >= std::chrono::seconds(10))
+                {
+                    TC_LOG_INFO("playerbots.pve", "Bot {} was stranded in a taxi flight with no flight path; dismounting and releasing it.",
+                        player->GetName());
+                    player->ClearUnitState(UNIT_STATE_IN_FLIGHT);
+                    player->CleanupAfterTaxiFlight();
+                    player->GetMotionMaster()->MoveIdle();
+                    state.strandedFlightSince = {};
+                    ResetStuckWatchdog(state);
+                    return;
+                }
+            }
+            else
+                state.strandedFlightSince = {};
+
             ResetStuckWatchdog(state);
             // Keep the post-landing journey's stuck detector quiet while the
             // taxi does the traveling.
@@ -10983,6 +11033,7 @@ namespace playerbot
                 state.journeyProgressAt = PveClock::now();
             return;
         }
+        state.strandedFlightSince = {};
         PveTimePoint const now = PveClock::now();
         if (state.nextFastTick == PveTimePoint{})
         {
