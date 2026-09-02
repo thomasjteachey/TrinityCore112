@@ -145,6 +145,12 @@ struct PveConfig
     // help from this: a person in the air is not counted as being in the zones
     // they pass over at all.
     uint32 drifterZoneDwellSeconds = 10;
+    // How far above its own level a bot will pick a fight with a person.
+    // Four is the orange/red boundary the client draws: a target five or more
+    // levels up is painted RED, the standard "you will lose this" signal, and a
+    // bot that walks into one is donating a corpse. Everything up to and
+    // including orange is fair game. Self-defence ignores this entirely.
+    uint32 proactiveMaxLevelsAbove = 4;
     // How close a guardian tries to get to a real player. Guardians go to the
     // people rather than waiting to be found: the server already knows where
     // every player is, so this needs no searching. 0 disables the approach and

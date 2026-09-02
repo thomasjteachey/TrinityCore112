@@ -710,6 +710,21 @@ Playerbot.Pve.ZoneGuardians.PerZone = 0
 Playerbot.Pve.Drifters.Count = 0
 Playerbot.Pve.Drifters.ZoneDwellSeconds = 10
 
+#    Playerbot.Pve.ProactiveMaxLevelsAbove
+#        Description: How far above its own level a bot will PICK a fight with a person.
+#                     Four is the orange/red boundary the client draws: a target five or
+#                     more levels up is painted RED, which is the game's own way of
+#                     saying you will lose, and a bot that walks into one is just
+#                     donating a corpse. Everything up to and including orange is fair
+#                     game.
+#
+#                     Self-defence ignores this completely - an attacked bot fights back
+#                     however far above it the attacker is. Zero restores the old
+#                     behaviour of never fighting uphill at all.
+#        Default:     4
+
+Playerbot.Pve.ProactiveMaxLevelsAbove = 4
+
 
 #    Playerbot.Pve.RebirthAtMaxLevel.Percent
 #        Description: This percent of the managed fleet (guid-keyed, deterministic) is reborn

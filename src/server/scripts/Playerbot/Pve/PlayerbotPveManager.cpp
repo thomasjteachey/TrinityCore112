@@ -1894,10 +1894,18 @@ namespace
 
     bool IsProactivePlayerLevelAcceptable(Player const* bot, uint32 playerLevel)
     {
-        // Autonomous bots do not pick fights uphill. Equal/lower-level players are
-        // fair game; higher-level players are treated as danger unless they attack
-        // first. Self-defense paths intentionally do NOT call this helper.
-        return bot && playerLevel <= bot->GetLevel();
+        if (!bot)
+            return false;
+
+        // Autonomous bots will fight uphill, but only so far. The cut-off is the
+        // colour the client would paint the target: five or more levels up is RED,
+        // which is the game's own way of saying you will lose, and a bot that
+        // walks into one is just donating a corpse. Everything up to and including
+        // orange is fair game - see Trinity::XP::GetColorCode for the boundary.
+        //
+        // Self-defence paths intentionally do NOT call this helper: a bot that is
+        // attacked fights back however far above it the attacker is.
+        return playerLevel <= uint32(bot->GetLevel()) + g_PveConfig.proactiveMaxLevelsAbove;
     }
 
     bool IsProactivePlayerLevelAcceptable(Player const* bot, Player const* player)
@@ -10428,6 +10436,7 @@ namespace playerbot
         g_PveConfig.zoneGuardiansPerZone = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ZoneGuardians.PerZone", 0), 0, 10));
         g_PveConfig.drifterCount = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.Count", 0)));
         g_PveConfig.drifterZoneDwellSeconds = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.ZoneDwellSeconds", 10), 0, 3600));
+        g_PveConfig.proactiveMaxLevelsAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveMaxLevelsAbove", 4), 0, 60));
 
         // Accounts whose bots are PvP-only: parked in their sanctuary, never
         // touched by any PvE system (no grind, errands, gear, talents, economy),
