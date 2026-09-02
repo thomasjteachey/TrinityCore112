@@ -685,7 +685,58 @@ namespace BarracksHardcore
         }
     }
 
-    std::vector<uint32> InventoryTypesForSlot(uint8 slot)
+    // The ammo this character actually shoots, as an ITEM_SUBCLASS_ARROW /
+    // ITEM_SUBCLASS_BULLET value, or 0 when they have none.
+    //
+    // The equipped ammo field first, then the bags: a hunter who has arrows but
+    // has not set them as current ammo still plainly shoots arrows, and issuing
+    // them a gun on that technicality is the bug this exists to stop.
+    uint32 CurrentAmmoSubclass(Player const* player)
+    {
+        if (uint32 const ammoId = player->GetUInt32Value(PLAYER_AMMO_ID))
+            if (ItemTemplate const* ammo = sObjectMgr->GetItemTemplate(ammoId))
+                if (ammo->Class == ITEM_CLASS_PROJECTILE)
+                    return ammo->SubClass;
+
+        auto fromItem = [](Item const* item) -> uint32
+        {
+            ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
+            return proto && proto->Class == ITEM_CLASS_PROJECTILE ? proto->SubClass : 0u;
+        };
+
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+            if (uint32 const found = fromItem(player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot)))
+                return found;
+
+        for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+            if (Bag* bag = const_cast<Player*>(player)->GetBagByPos(bagSlot))
+                for (uint32 bagIndex = 0; bagIndex < bag->GetBagSize(); ++bagIndex)
+                    if (uint32 const found = fromItem(bag->GetItemByPos(uint8(bagIndex))))
+                        return found;
+
+        return 0;
+    }
+
+    // Whether a ranged weapon suits the ammo the character is carrying.
+    // Anything that is not ammo-fed - thrown, wands, relics - is unaffected.
+    bool RangedWeaponSuitsAmmo(ItemTemplate const* proto, uint32 ammoSubclass)
+    {
+        if (!ammoSubclass || proto->Class != ITEM_CLASS_WEAPON)
+            return true;
+
+        switch (proto->SubClass)
+        {
+        case ITEM_SUBCLASS_WEAPON_BOW:
+        case ITEM_SUBCLASS_WEAPON_CROSSBOW:
+            return ammoSubclass == ITEM_SUBCLASS_ARROW;
+        case ITEM_SUBCLASS_WEAPON_GUN:
+            return ammoSubclass == ITEM_SUBCLASS_BULLET;
+        default:
+            return true;
+        }
+    }
+
+    std::vector<uint32> InventoryTypesForSlot(uint8 slot, Player const* player)
     {
         switch (slot)
         {
@@ -699,7 +750,22 @@ namespace BarracksHardcore
         case EQUIPMENT_SLOT_HANDS:     return { INVTYPE_HANDS };
         case EQUIPMENT_SLOT_BACK:      return { INVTYPE_CLOAK };
         case EQUIPMENT_SLOT_MAINHAND:  return { INVTYPE_WEAPON, INVTYPE_WEAPONMAINHAND, INVTYPE_2HWEAPON };
-        case EQUIPMENT_SLOT_OFFHAND:   return { INVTYPE_SHIELD, INVTYPE_WEAPONOFFHAND, INVTYPE_HOLDABLE };
+        case EQUIPMENT_SLOT_OFFHAND:
+        {
+            // Dedicated off-hand weapons barely exist: the pool holds three of
+            // them against forty-six ordinary one-handers, which is why a rogue
+            // or hunter with Dual Wield came away with an empty off-hand almost
+            // every time. A dual-wielder can hold INVTYPE_WEAPON in either
+            // hand, so offer those too.
+            //
+            // INVTYPE_WEAPONMAINHAND stays out deliberately - it cannot go in an
+            // off-hand at all, and offering it would just fail CanEquipNewItem
+            // after the scan had already stopped on it.
+            std::vector<uint32> types = { INVTYPE_SHIELD, INVTYPE_WEAPONOFFHAND, INVTYPE_HOLDABLE };
+            if (player && player->CanDualWield())
+                types.push_back(INVTYPE_WEAPON);
+            return types;
+        }
                                    // A hunter without a bow is not a hunter; casters get their wand
                                    // and the hybrids their relic out of the same slot.
         case EQUIPMENT_SLOT_RANGED:    return { INVTYPE_RANGED, INVTYPE_RANGEDRIGHT, INVTYPE_THROWN, INVTYPE_RELIC };
@@ -784,6 +850,10 @@ namespace BarracksHardcore
         // Floored at 1 rather than 0 so the bottom of the game still finds the
         // level-1 pieces instead of coming up empty and leaving a slot bare.
         uint8 const kitLevel = uint8(std::max(1, int32(level) - int32(s_kitLevelOffset)));
+
+        // Read once: it cannot change while the kit is being handed out, and
+        // the bag scan behind it is not worth repeating per candidate.
+        uint32 const ammoSubclass = CurrentAmmoSubclass(player);
         uint32 granted = 0;
 
         for (uint8 slot : kKitSlots)
@@ -810,7 +880,7 @@ namespace BarracksHardcore
             uint32 bestRequiredLevel = 0;
             uint32 bestItemLevel = 0;
 
-            for (uint32 invType : InventoryTypesForSlot(slot))
+            for (uint32 invType : InventoryTypesForSlot(slot, player))
             {
                 std::vector<uint32> const* ids = nullptr;
                 {
@@ -837,6 +907,13 @@ namespace BarracksHardcore
                 {
                     ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
                     if (!proto || proto->RequiredLevel > kitLevel)
+                        continue;
+
+                    // A bow is no use to somebody carrying bullets. Skipping here
+                    // rather than after the scan matters: the list is sorted and
+                    // the loop stops on its first usable entry, so a mismatched
+                    // weapon that got that far would take the slot outright.
+                    if (!RangedWeaponSuitsAmmo(proto, ammoSubclass))
                         continue;
 
                     // Armor proficiency, decided explicitly. Cloaks are cloth
