@@ -10872,10 +10872,26 @@ namespace playerbot
                             // GetZoneLevelBand guarantees top > bottom, and the
                             // band-fit test elsewhere treats [bottom, top - 1] as the
                             // levels that belong here, so this range matches it.
-                            uint8 const level = IsDrifter(botRawGuid)
+                            bool const drifter = IsDrifter(botRawGuid);
+                            uint8 const level = drifter
                                 ? uint8(urand(bottom, top - 1))
                                 : bottom;
                             ResetManagedBotToZoneBand(bot, zoneId, level);
+
+                            // The reset wipes this bot's state, which restarts its
+                            // aggression clock from zero. A batch of drifters that
+                            // ported together would then all come looking for a
+                            // fight on the very same tick - a zone that is quiet for
+                            // an hour and then rushes you all at once. Scatter the
+                            // clock across the whole aggression window instead, so
+                            // some arrive already hungry and others are content for
+                            // another hour.
+                            if (drifter && g_PveConfig.aggressionMaxMinutes)
+                            {
+                                PveBotState& fresh = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+                                fresh.lastPlayerFightAt = PveClock::now() -
+                                    std::chrono::minutes(urand(0, g_PveConfig.aggressionMaxMinutes));
+                            }
                         }
                         else
                             ResetManagedBotToLevelOne(bot);
