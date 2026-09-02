@@ -699,6 +699,43 @@ namespace BarracksHardcore
         }
     }
 
+    // Kit gear belongs in a slot or nowhere. It is issued straight into an
+    // empty slot, a replaced piece is destroyed rather than bagged, and a
+    // duplicate sells for nothing - so a copy sitting in a bag is either debris
+    // from the spell where the kit was briefly lootable out of a death chest,
+    // or a piece somebody moved out of a slot to dodge destroy-on-replace.
+    // Either way it is swept.
+    //
+    // Positions are collected before anything is destroyed. DestroyItem shifts
+    // what is in a slot, so deciding and acting in a single pass over live
+    // containers is how items get missed.
+    void DestroyLooseFieldKit(Player* player)
+    {
+        std::vector<std::pair<uint8, uint8>> loose;
+
+        auto consider = [&loose](Item* item, uint8 bag, uint8 slot)
+        {
+            ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
+            if (proto && IsFieldKitDuplicate(proto->ItemId))
+                loose.push_back({ bag, slot });
+        };
+
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+            consider(player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot), INVENTORY_SLOT_BAG_0, slot);
+
+        for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+            if (Bag* bag = player->GetBagByPos(bagSlot))
+                for (uint32 bagIndex = 0; bagIndex < bag->GetBagSize(); ++bagIndex)
+                    consider(bag->GetItemByPos(uint8(bagIndex)), bagSlot, uint8(bagIndex));
+
+        for (auto const& [bag, slot] : loose)
+            player->DestroyItem(bag, slot, true);
+
+        if (!loose.empty())
+            TC_LOG_INFO("playerbots.hardcore", "Swept {} loose field kit pieces from {}'s bags.",
+                uint32(loose.size()), player->GetName());
+    }
+
     // Fills every empty kit slot with the best plain white piece the wearer's
     // level and proficiency allow. Runs on resurrection (dead players cannot
     // equip anything) and at login, so nobody stays bare.
@@ -708,6 +745,7 @@ namespace BarracksHardcore
             return;
 
         BuildWhiteKitCacheOnce();
+        DestroyLooseFieldKit(player);
 
         uint32 const wantedArmorSubclass = DesiredArmorSubclass(player);
         uint8 const level = player->GetLevel();
@@ -885,10 +923,16 @@ namespace BarracksHardcore
             if (!item)
                 continue;
 
-            // The white floor survives every death; only green and above is
-            // ever lost, so nobody is ever left unable to fight back.
+            // The floor survives every death; only green and above is ever
+            // lost, so nobody is ever left unable to fight back.
+            //
+            // The kit's own duplicates are asked about directly rather than by
+            // colour. They read artifact quality now, so the quality test alone
+            // put the floor itself at stake - and a kit piece is exempt whatever
+            // colour it reads, which makes it the stronger claim of the two.
             ItemTemplate const* proto = item->GetTemplate();
-            if (!proto || proto->Quality < ITEM_QUALITY_UNCOMMON)
+            if (!proto || IsFieldKitDuplicate(proto->ItemId) ||
+                proto->Quality < ITEM_QUALITY_UNCOMMON)
                 continue;
 
             if (urand(0, 99) < s_dropChancePercent)
@@ -912,7 +956,8 @@ namespace BarracksHardcore
             auto stakeCarriedGear = [&](Item* item, uint8 bag, uint8 slot)
             {
                 ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
-                if (!proto || proto->Quality < ITEM_QUALITY_UNCOMMON)
+                if (!proto || IsFieldKitDuplicate(proto->ItemId) ||
+                    proto->Quality < ITEM_QUALITY_UNCOMMON)
                     return;
                 if (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR)
                     return;
