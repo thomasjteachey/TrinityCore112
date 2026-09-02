@@ -118,6 +118,10 @@ namespace
     // PlayerApproachYards value (200y by default) so teleport/approach and combat
     // discovery cannot disagree about whether a human is "nearby".
     constexpr float PveGuardianPatrolRadius = 120.0f;
+    // Player-directed teleports are only coarse repositioning. Bots must never
+    // materialize inside 210 yards of the player they are approaching; after
+    // landing, normal combat movement walks the remaining distance.
+    constexpr float PvePlayerTeleportMinimumDistance = 210.0f;
 
     playerbot::PveConfig g_PveConfig;
 
@@ -412,6 +416,7 @@ namespace
     bool IsStuckWatchdogEligible(Player* bot, PveBotState const& state,
         playerbot::PveConfig const& cfg, PveTimePoint now);
     bool BotCanTeleportNow(Player* bot);
+    void RestorePlayerbotTeleportVitals(Player* bot);
     void TrySkinCorpse(Player* bot, Creature* corpse);
     bool IsGatherableNodeFor(Player* bot, GameObject const* go, int32* outRequiredSkill);
     uint32 GetGuardianZoneId(uint64 botRawGuid);
@@ -4920,15 +4925,11 @@ namespace
             bot->GetName(), GetBotAggression(bot), idleMinutes);
 
         std::lock_guard<std::mutex> guard(g_PvePendingLock);
-        // Ordinary aggression hunters must arrive INSIDE their proactive player
-        // acquisition radius. Dropping at 210y while acquisition stopped at 200y
-        // made them teleport to a human and then immediately forget why they came.
-        float const huntDropDistance = std::max(20.0f,
-            std::min(190.0f, cfg.guardianPlayerApproachYards > 0.0f
-                ? cfg.guardianPlayerApproachYards - 10.0f
-                : 190.0f));
+        // Teleport only to the edge of the encounter. The executor also clamps this
+        // defensively, but asking for the real policy here keeps diagnostics/logs
+        // honest: the bot lands at 210y, then walks the rest under normal class AI.
         g_PendingGuardianTeleports[bot->GetGUID().GetRawValue()] =
-        { destination.Guid.GetRawValue(), huntDropDistance };
+        { destination.Guid.GetRawValue(), PvePlayerTeleportMinimumDistance };
     }
 
     void RunZoneGuardianTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
@@ -5108,9 +5109,10 @@ namespace
             PveClock::now() - state.lastPlayerFightAt).count();
         int64 const hungryMinutes = std::max<int64>(0, idleMinutes - int64(cfg.guardianEscalateAfterMinutes));
 
-        // Six yards closer per idle minute, floored at twenty - close enough to be
-        // standing next to them, which is the loudest the feature can be.
-        float const dropDistance = std::max(20.0f, kGuardianDropYards - float(hungryMinutes) * 6.0f);
+        // Hunger may make a guardian seek players sooner, but never makes the
+        // teleport itself more aggressive. Every player-directed landing stays at
+        // least 210y away; visible movement closes the rest.
+        float const dropDistance = std::max(PvePlayerTeleportMinimumDistance, kGuardianDropYards);
 
         if (eligible && !nearAHuman && !bot->IsInCombat() && !state.engaged &&
             PveClock::now() >= state.timidUntil &&
@@ -7195,10 +7197,13 @@ namespace
             if (!BotCanTeleportNow(bot))
                 continue;
 
-            bot->TeleportTo(nearest->mapId, nearest->x + frand(-3.0f, 3.0f), nearest->y + frand(-3.0f, 3.0f),
-                nearest->z + 0.5f, frand(0.0f, 6.28f));
-            TC_LOG_INFO("playerbots.pve", "Supply run: teleported {} to a vendor cluster on map {}.",
-                bot->GetName(), nearest->mapId);
+            if (bot->TeleportTo(nearest->mapId, nearest->x + frand(-3.0f, 3.0f), nearest->y + frand(-3.0f, 3.0f),
+                nearest->z + 0.5f, frand(0.0f, 6.28f)))
+            {
+                RestorePlayerbotTeleportVitals(bot);
+                TC_LOG_INFO("playerbots.pve", "Supply run: teleported {} to a vendor cluster on map {}.",
+                    bot->GetName(), nearest->mapId);
+            }
         }
     }
 
@@ -7269,8 +7274,11 @@ namespace
             if (!BotCanTeleportNow(bot))
                 continue;
 
-            bot->TeleportTo(mapId, x + frand(-3.0f, 3.0f), y + frand(-3.0f, 3.0f), z + 0.5f, frand(0.0f, 6.28f));
-            TC_LOG_INFO("playerbots.pve", "Class quest travel: teleported {} to map {}.", bot->GetName(), mapId);
+            if (bot->TeleportTo(mapId, x + frand(-3.0f, 3.0f), y + frand(-3.0f, 3.0f), z + 0.5f, frand(0.0f, 6.28f)))
+            {
+                RestorePlayerbotTeleportVitals(bot);
+                TC_LOG_INFO("playerbots.pve", "Class quest travel: teleported {} to map {}.", bot->GetName(), mapId);
+            }
         }
     }
 
@@ -7320,7 +7328,9 @@ namespace
             // landing point on the destination map. Outdoor player navmesh links
             // are bidirectional, making that the same connectivity test the bot
             // will use after it lands.
-            float const dropDistance = request.DropDistance;
+            // Hard safety invariant: no player-directed teleport may land closer
+            // than 210 yards, regardless of what any caller requested.
+            float const dropDistance = std::max(PvePlayerTeleportMinimumDistance, request.DropDistance);
             float const firstAngle = frand(0.0f, 2.0f * float(M_PI));
             constexpr uint8 kLandingAttempts = 8;
 
@@ -7377,9 +7387,28 @@ namespace
             if (!BotCanTeleportNow(bot))
                 continue;
 
-            bot->TeleportTo(human->GetMapId(), x, y, z, frand(0.0f, 6.28f));
-            TC_LOG_INFO("playerbots.pve", "Hunter {} teleported to a path-connected point within {:.0f}y of {}.",
-                bot->GetName(), dropDistance, human->GetName());
+            if (bot->TeleportTo(human->GetMapId(), x, y, z, frand(0.0f, 6.28f)))
+            {
+                RestorePlayerbotTeleportVitals(bot);
+
+                // Teleport only solves the coarse reposition. Do NOT force the human
+                // into orderedTargetGuid here: that bypasses the ordinary proactive
+                // acquisition gate and makes the teleport path own combat targeting.
+                // Instead, use the same generic walked-journey layer used elsewhere
+                // to close the short gap from the 210y landing toward the player's
+                // current position. RunFastTick performs target acquisition BEFORE it
+                // advances the journey, so as soon as the bot crosses inside the
+                // normal ~200y PickHuntTarget radius, the existing combat logic takes
+                // over naturally. No class-specific approach behavior lives here.
+                PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+                state.engaged = false;
+                StartWalkedJourney(state, human->GetMapId(), human->GetPositionX(), human->GetPositionY(),
+                    human->GetPositionZ(), 0, dropDistance);
+
+                TC_LOG_INFO("playerbots.pve",
+                    "Hunter {} teleported to a path-connected point {:.0f}y from {}; generic travel closes into normal acquisition range.",
+                    bot->GetName(), dropDistance, human->GetName());
+            }
         }
     }
 
@@ -7396,6 +7425,21 @@ namespace
     {
         return bot && bot->IsInWorld() && bot->IsInGrid() &&
             !bot->IsBeingTeleportedFar() && !bot->IsBeingTeleportedNear();
+    }
+
+    // Teleports are artificial repositioning, not travel the bot had to survive.
+    // Arrive ready to act instead of carrying half-dead / OOM state across the
+    // map. Only health and mana are restored intentionally; rage/energy/runic
+    // power retain their normal class semantics. Call this only after a
+    // successful TeleportTo(), so a rejected teleport is never a free heal.
+    void RestorePlayerbotTeleportVitals(Player* bot)
+    {
+        if (!bot || !bot->IsAlive())
+            return;
+
+        bot->SetFullHealth();
+        if (bot->GetMaxPower(POWER_MANA) > 0)
+            bot->SetPower(POWER_MANA, bot->GetMaxPower(POWER_MANA));
     }
 
     void ProcessPendingGrindRelocations()
@@ -7719,6 +7763,8 @@ namespace
 
                 if (!bot->TeleportTo(spot.mapId, spot.x, spot.y, ground + 0.05f, frand(0.0f, 6.28f)))
                     continue;
+
+                RestorePlayerbotTeleportVitals(bot);
 
                 if (stuckRecovery)
                 {
@@ -8388,10 +8434,11 @@ namespace
                 if (!BotCanTeleportNow(bot))
                     break;
 
-                bot->TeleportTo(summoner->GetMapId(),
+                if (bot->TeleportTo(summoner->GetMapId(),
                     summoner->GetPositionX() + frand(-2.5f, 2.5f),
                     summoner->GetPositionY() + frand(-2.5f, 2.5f),
-                    summoner->GetPositionZ(), summoner->GetOrientation());
+                    summoner->GetPositionZ(), summoner->GetOrientation()))
+                    RestorePlayerbotTeleportVitals(bot);
                 continue;
             }
 
@@ -10969,8 +11016,8 @@ namespace playerbot
             // Homebind too, so a corpse run or a hearth keeps it in its zone.
             WorldLocation const home(spot.mapId, spot.x, spot.y, spot.z, 0.0f);
             bot->SetHomebind(home, zoneId);
-            if (BotCanTeleportNow(bot))
-                bot->TeleportTo(home);
+            if (BotCanTeleportNow(bot) && bot->TeleportTo(home))
+                RestorePlayerbotTeleportVitals(bot);
         }
 
         bot->SaveToDB();
@@ -11047,8 +11094,8 @@ namespace playerbot
             {
                 WorldLocation const home(info->mapId, info->positionX, info->positionY, info->positionZ, info->orientation);
                 bot->SetHomebind(home, info->areaId);
-                if (BotCanTeleportNow(bot))
-                    bot->TeleportTo(home);
+                if (BotCanTeleportNow(bot) && bot->TeleportTo(home))
+                    RestorePlayerbotTeleportVitals(bot);
             }
             bot->SaveToDB();
             TC_LOG_INFO("playerbots.pve", "Bot {} was reset to level 1 and sent home.", bot->GetName());
