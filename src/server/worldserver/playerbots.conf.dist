@@ -672,6 +672,34 @@ Playerbot.Pve.AuctionSell.Enable = 0
 #        Default:     0
 Playerbot.Pve.ZoneGuardians.PerZone = 0
 
+#    Playerbot.Pve.Followers.Count
+#    Playerbot.Pve.Followers.ZoneDwellSeconds
+#        Description: Companions - bots drawn evenly out of the banded population that
+#                     shadow the real people online, so the leveling world looks lived
+#                     in wherever somebody actually is.
+#
+#                     Count is the total across the realm, split evenly between
+#                     everyone online: thirty companions and three people online is
+#                     ten each. They hold zone parity with the person they follow and
+#                     are re-levelled into that zone's band on arrival, then grind
+#                     there normally. Zero disables the feature.
+#
+#                     Zone guardians, the level-60 veterans and PvP-only bots are
+#                     never drafted - they have no band home, which is exactly what
+#                     makes them ineligible.
+#
+#                     ZoneDwellSeconds is how long a person must hold a zone before
+#                     their companions follow them into it. Without it, running
+#                     across a border - or over one on a flight path - would drag the
+#                     whole retinue after them and straight back again. A person in a
+#                     capital, an instance or a battleground is not followed at all;
+#                     their companions simply stay where they were last sent.
+#        Default:     0 (disabled) / 45
+
+Playerbot.Pve.Followers.Count = 0
+Playerbot.Pve.Followers.ZoneDwellSeconds = 45
+
+
 #    Playerbot.Pve.RebirthAtMaxLevel.Percent
 #        Description: This percent of the managed fleet (guid-keyed, deterministic) is reborn
 #                     on reaching the level cap: the full level-1 reset (gear, spells, talents,

@@ -5258,6 +5258,18 @@ namespace
     std::unordered_map<uint8, std::vector<uint32>> g_BandedClassZoneCounts;
     std::atomic<bool> g_BandedZoneAssignmentsBuilt{ false };
 
+    // Companion assignments, rebuilt once a second on the world thread. The
+    // stored value is the ZONE, already resolved: map threads must not be
+    // looking up a human by GUID on every band-fit test.
+    //
+    // Lock order: this is always taken alone. GetRebirthZoneId takes
+    // g_GuardianLock (via GetGuardianZoneId) and g_BandedZoneLock before it,
+    // so the builder must finish every one of those lookups BEFORE it takes
+    // this one, or the two paths deadlock against each other.
+    std::mutex g_FollowerLock;
+    std::unordered_map<uint64, uint32> g_FollowerZoneByBot;
+    std::unordered_map<uint64, uint64> g_FollowerHumanByBot;
+
     bool IsBandedVeteranGuid(uint64 rawGuid)
     {
         uint32 const veterans = g_PveConfig.veteranBotCount;
@@ -5394,7 +5406,7 @@ namespace
     // A character created after startup is the only normal miss. Put it in the
     // currently least-populated zone for its class so even that case preserves the
     // same <=1 spread as closely as possible for this uptime.
-    uint32 GetRebirthZoneId(Player const* bot)
+    uint32 GetBandedHomeZoneId(Player const* bot)
     {
         if (!bot || g_RebirthZones.empty())
             return 0;
@@ -5445,6 +5457,29 @@ namespace
             "Late-created banded bot {} (class {}) assigned to least-populated home zone {}.",
             bot->GetName(), uint32(bot->GetClass()), zoneId);
         return zoneId;
+    }
+
+    // Where a bot should be living right now.
+    //
+    // A companion lives where its person is, and everything downstream already
+    // keys off this one answer - the band-fit gate in the relocation executor,
+    // the level cycle on ding, the resurrect correction, and the rebirth drain
+    // that performs the actual re-level and teleport. So following somebody
+    // needs no machinery of its own: it is this override and the world-thread
+    // pass that maintains the table.
+    uint32 GetRebirthZoneId(Player const* bot)
+    {
+        if (!bot)
+            return 0;
+
+        {
+            std::lock_guard<std::mutex> guard(g_FollowerLock);
+            auto itr = g_FollowerZoneByBot.find(bot->GetGUID().GetRawValue());
+            if (itr != g_FollowerZoneByBot.end())
+                return itr->second;
+        }
+
+        return GetBandedHomeZoneId(bot);
     }
     bool g_GrindSpotsBuilt = false;
 
@@ -10385,6 +10420,8 @@ namespace playerbot
         g_PveConfig.hardcoreLootChestEntry = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FullLoot.ChestGameObjectId", 0)));
         g_PveConfig.hardcoreChestDespawnSeconds = uint32(std::max(30, sConfigMgr->GetIntDefault("Centurion.Hardcore.FullLoot.ChestDespawnSeconds", 600)));
         g_PveConfig.zoneGuardiansPerZone = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ZoneGuardians.PerZone", 0), 0, 10));
+        g_PveConfig.followerCount = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.Followers.Count", 0)));
+        g_PveConfig.followerZoneDwellSeconds = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Followers.ZoneDwellSeconds", 45), 5, 3600));
 
         // Accounts whose bots are PvP-only: parked in their sanctuary, never
         // touched by any PvE system (no grind, errands, gear, talents, economy),
@@ -10431,6 +10468,150 @@ namespace playerbot
     bool IsVeteranBot(Player const* bot);
     bool GetZoneLevelBand(uint32 zoneId, uint8& bottom, uint8& top);
 
+    // Keep the companion roster in step with who is actually online.
+    //
+    // Sticky on purpose: an assignment that is still valid is kept, and only
+    // vacancies are filled. A companion that flickered in and out of the role
+    // every second would be re-levelled every second with it.
+    void UpdateFollowerAssignments()
+    {
+        uint32 const target = g_PveConfig.followerCount;
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+
+        // Where each real person has settled, and for how long.
+        static std::unordered_map<uint64, std::pair<uint32, uint32>> s_humanZoneSince;
+        std::vector<std::pair<uint64, uint32>> humans;   // human guid -> zone
+        std::unordered_set<uint64> online;
+        for (auto const& pair : ObjectAccessor::GetPlayers())
+        {
+            Player* human = pair.second;
+            if (!human || !human->IsInWorld() || playerbot::IsManagedRandomBot(human))
+                continue;
+
+            uint64 const humanGuid = human->GetGUID().GetRawValue();
+            online.insert(humanGuid);
+            uint32 const zoneId = human->GetZoneId();
+            auto& settled = s_humanZoneSince[humanGuid];
+            if (settled.first != zoneId)
+                settled = { zoneId, nowMs };
+
+            // Somewhere a banded bot can actually be delivered to. Capitals,
+            // instances, battlegrounds and the 55+ veteran zones are not in
+            // g_RebirthZones at all, so this single test covers all of them -
+            // and a person standing in one simply keeps the companions they
+            // already have, wherever those were last sent.
+            if (!std::binary_search(g_RebirthZones.begin(), g_RebirthZones.end(), zoneId))
+                continue;
+            if (nowMs - settled.second < g_PveConfig.followerZoneDwellSeconds * 1000)
+                continue;
+
+            humans.push_back({ humanGuid, zoneId });
+        }
+        for (auto itr = s_humanZoneSince.begin(); itr != s_humanZoneSince.end(); )
+            itr = online.count(itr->first) ? std::next(itr) : s_humanZoneSince.erase(itr);
+
+        if (!target || humans.empty())
+        {
+            std::lock_guard<std::mutex> guard(g_FollowerLock);
+            if (!g_FollowerZoneByBot.empty())
+            {
+                TC_LOG_INFO("playerbots.pve", "Releasing {} companions: nobody left to follow.",
+                    uint32(g_FollowerZoneByBot.size()));
+                g_FollowerZoneByBot.clear();
+                g_FollowerHumanByBot.clear();
+            }
+            return;
+        }
+
+        std::sort(humans.begin(), humans.end());
+        std::unordered_map<uint64, uint32> humanZone;
+        for (auto const& [guid, zoneId] : humans)
+            humanZone[guid] = zoneId;
+
+        // Everything that needs g_GuardianLock or g_BandedZoneLock happens HERE,
+        // before g_FollowerLock is taken: see the lock-order note on the table.
+        std::unordered_map<uint64, uint32> bandHomeByBot;
+        for (auto const& pair : ObjectAccessor::GetPlayers())
+        {
+            Player* bot = pair.second;
+            if (!bot || !bot->IsInWorld() || !playerbot::IsManagedRandomBot(bot))
+                continue;
+            // A band home of zero already means guardian, veteran or PvP-only,
+            // which are exactly the roles that must never be drafted.
+            if (uint32 const home = GetBandedHomeZoneId(bot))
+                bandHomeByBot[bot->GetGUID().GetRawValue()] = home;
+        }
+
+        // Even shares, with the remainder spread over the first few people
+        // rather than all landing on one.
+        size_t const humanCount = humans.size();
+        uint32 const baseShare = target / uint32(humanCount);
+        uint32 const remainder = target % uint32(humanCount);
+
+        std::lock_guard<std::mutex> guard(g_FollowerLock);
+
+        // Drop assignments whose bot or person is gone, and count what survives.
+        std::unordered_map<uint64, uint32> heldBy;
+        for (auto itr = g_FollowerHumanByBot.begin(); itr != g_FollowerHumanByBot.end(); )
+        {
+            bool const botOk = bandHomeByBot.count(itr->first) != 0;
+            auto zoneItr = humanZone.find(itr->second);
+            if (!botOk || zoneItr == humanZone.end())
+            {
+                g_FollowerZoneByBot.erase(itr->first);
+                itr = g_FollowerHumanByBot.erase(itr);
+                continue;
+            }
+            ++heldBy[itr->second];
+            g_FollowerZoneByBot[itr->first] = zoneItr->second;
+            ++itr;
+        }
+
+        // Candidates bucketed by band home, so a draft takes them evenly out of
+        // the banded population instead of emptying one zone.
+        std::map<uint32, std::vector<uint64>> byHome;
+        for (auto const& [botGuid, home] : bandHomeByBot)
+            if (!g_FollowerHumanByBot.count(botGuid))
+                byHome[home].push_back(botGuid);
+        for (auto& [home, guids] : byHome)
+            std::sort(guids.begin(), guids.end());
+
+        auto drawCandidate = [&byHome]() -> uint64
+        {
+            // Always from the home zone with the most to spare.
+            auto best = byHome.end();
+            for (auto itr = byHome.begin(); itr != byHome.end(); ++itr)
+                if (!itr->second.empty() && (best == byHome.end() || itr->second.size() > best->second.size()))
+                    best = itr;
+            if (best == byHome.end())
+                return 0;
+            uint64 const picked = best->second.back();
+            best->second.pop_back();
+            return picked;
+        };
+
+        uint32 assigned = 0;
+        for (size_t index = 0; index < humanCount; ++index)
+        {
+            uint64 const humanGuid = humans[index].first;
+            uint32 const zoneId = humans[index].second;
+            uint32 const share = baseShare + (index < remainder ? 1u : 0u);
+            for (uint32 held = heldBy[humanGuid]; held < share; ++held)
+            {
+                uint64 const botGuid = drawCandidate();
+                if (!botGuid)
+                    break;
+                g_FollowerHumanByBot[botGuid] = humanGuid;
+                g_FollowerZoneByBot[botGuid] = zoneId;
+                ++assigned;
+            }
+        }
+
+        if (assigned)
+            TC_LOG_INFO("playerbots.pve", "Companions: {} newly assigned, {} following {} people.",
+                assigned, uint32(g_FollowerHumanByBot.size()), uint32(humanCount));
+    }
+
     void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
     {
         if (!g_PveConfig.enabled)
@@ -10452,6 +10633,11 @@ namespace playerbot
         // configured bot roster. This retries until population configuration is
         // available, then becomes a no-op for the rest of the uptime.
         BuildBandedZoneAssignmentsOnce();
+
+        // Then point the companions at whoever is online. This must run after
+        // the band roster exists, because a bot with no band home is not a
+        // candidate and that is how guardians and veterans are excluded.
+        UpdateFollowerAssignments();
 
         // Hand the fleet a fresh second's worth of navmesh queries. Anything the
         // bots did not spend is deliberately not carried over: the point is a
