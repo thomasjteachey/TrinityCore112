@@ -862,6 +862,20 @@ Playerbot.Pve.AuctionBuy.MaxOverpayPct = 1200
 
 Playerbot.Pve.AuctionBuy.BudgetWorthLevels = 15
 
+#
+#    Playerbot.Pve.GrantMounts
+#        Description: Hand managed bots riding skill and a mount at level 40 and
+#                     again at 60, without charging them for the training. Bots
+#                     cannot visit a riding trainer or a mount vendor - the
+#                     trainer catch-up only walks class trainers - so with this
+#                     off they run the entire climb from 1 to 60 on foot.
+#                     The mount is picked from the item table to suit the bot's
+#                     race, and flying ranks are never granted.
+#        Default:     1 (enabled)
+#                     0 (disabled)
+#
+Playerbot.Pve.GrantMounts = 1
+
 #    Playerbot.Pve.Professions.Enable
 #        Description: Each bot takes two gathering professions (herbalism/mining/skinning,
 #                     deterministic by character), learns and ranks them automatically, gathers

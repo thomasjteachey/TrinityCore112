@@ -104,6 +104,10 @@ struct PveConfig
     // How many item levels a bot considers its whole auction budget worth.
     // Higher means more willing to pay for an upgrade.
     uint32 auctionBudgetWorthLevels = 15;
+    // Hand bots riding skill and a mount at 40 and 60. They cannot visit a
+    // riding trainer or a mount vendor - the trainer catch-up only walks class
+    // trainers - so without this they run the entire climb on foot.
+    bool grantMounts = true;
     // Item levels of value knocked off a purchase for each character level the
     // item sits below the buyer. Without it the scorer weighs item level gained
     // against price and nothing else, so a cheap scrap wins any slot that is

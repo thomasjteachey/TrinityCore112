@@ -4668,6 +4668,139 @@ namespace
         return learned;
     }
 
+    // Riding, granted rather than bought.
+    //
+    // RunTrainerSpellCatchup walks CLASS trainers, and riding is not sold by
+    // one - it comes from a riding trainer, and the mount from a vendor. A bot
+    // met neither, so it never learned skill 762 and ran the whole climb on
+    // foot while every player around it rode.
+    struct BotMountChoice
+    {
+        uint32 raceMask;
+        uint32 spellId;
+    };
+
+    // Built from the item table rather than a hardcoded list per race, so it
+    // survives edits to the realm's mount roster and cannot put a tauren on a
+    // horse. Keyed by the riding rank the item asks for: 75 is the 60% ground
+    // mounts, 150 the 100% ones. The 225/300 ranks are flying and deliberately
+    // excluded - no bot has anywhere to fly, and a mounted bot in the air is a
+    // bot that cannot be reached.
+    std::unordered_map<uint32, std::vector<BotMountChoice>> const& GetBotMountPools()
+    {
+        static std::unordered_map<uint32, std::vector<BotMountChoice>> const pools = []
+        {
+            std::unordered_map<uint32, std::vector<BotMountChoice>> built;
+            for (auto const& itemPair : sObjectMgr->GetItemTemplateStore())
+            {
+                ItemTemplate const& proto = itemPair.second;
+                if (proto.RequiredSkill != SKILL_RIDING)
+                    continue;
+                if (proto.RequiredSkillRank != 75 && proto.RequiredSkillRank != 150)
+                    continue;
+
+                // The item has to actually BE a mount. Plenty of mount items
+                // carry a teach-this-spell wrapper instead of the mount aura,
+                // and teaching the wrapper to a bot grants nothing it can cast.
+                uint32 mountSpellId = 0;
+                for (_Spell const& itemSpell : proto.Spells)
+                {
+                    SpellInfo const* spellInfo = itemSpell.SpellId > 0 ?
+                        sSpellMgr->GetSpellInfo(uint32(itemSpell.SpellId)) : nullptr;
+                    if (spellInfo && spellInfo->HasAura(SPELL_AURA_MOUNTED))
+                    {
+                        mountSpellId = uint32(itemSpell.SpellId);
+                        break;
+                    }
+                }
+
+                if (!mountSpellId)
+                    continue;
+
+                // An unset race mask means the realm put no restriction on it,
+                // which is common here since the faction split was removed.
+                uint32 const raceMask = proto.AllowableRace ? proto.AllowableRace : 0xFFFFFFFF;
+                built[proto.RequiredSkillRank].push_back({ raceMask, mountSpellId });
+            }
+            return built;
+        }();
+
+        return pools;
+    }
+
+    // Returns true if anything was handed over.
+    bool EnsureBotRidingAndMount(Player* bot)
+    {
+        if (!g_PveConfig.grantMounts || !bot)
+            return false;
+
+        struct RidingTier
+        {
+            uint8 level;
+            uint32 ridingSpell;
+            uint32 rank;
+        };
+
+        // Ascending, and the loop stops at the first tier the bot has not
+        // reached - so a level 45 bot gets apprentice and nothing more.
+        static constexpr std::array<RidingTier, 2> kRidingTiers = { {
+            { 40, 33388, 75 },
+            { 60, 33391, 150 },
+        } };
+
+        bool granted = false;
+        for (RidingTier const& tier : kRidingTiers)
+        {
+            if (bot->GetLevel() < tier.level)
+                break;
+
+            // The riding spell carries the SkillLineAbility row for skill 762,
+            // so learning it is what raises the skill - there is no separate
+            // SetSkill to make, and making one would fight the spell.
+            if (!bot->HasSpell(tier.ridingSpell))
+            {
+                bot->LearnSpell(tier.ridingSpell, false);
+                granted = true;
+            }
+
+            auto const& pools = GetBotMountPools();
+            auto poolItr = pools.find(tier.rank);
+            if (poolItr == pools.end())
+                continue;
+
+            uint32 const raceMask = bot->GetRaceMask();
+            std::vector<uint32> usable;
+            bool alreadyMounted = false;
+            for (BotMountChoice const& choice : poolItr->second)
+            {
+                if (!(choice.raceMask & raceMask))
+                    continue;
+
+                if (bot->HasSpell(choice.spellId))
+                {
+                    alreadyMounted = true;
+                    break;
+                }
+
+                usable.push_back(choice.spellId);
+            }
+
+            if (alreadyMounted || usable.empty())
+                continue;
+
+            // Keyed to the character rather than random, so a bot keeps the
+            // same mount across restarts instead of changing colour whenever
+            // this runs. Sorted first because the item store's iteration order
+            // is not stable between boots, which would otherwise undo that.
+            std::sort(usable.begin(), usable.end());
+            uint32 const pick = usable[bot->GetGUID().GetCounter() % usable.size()];
+            bot->LearnSpell(pick, false);
+            granted = true;
+        }
+
+        return granted;
+    }
+
     // One-time per login: SQL-provisioned bot characters start with an empty
     // spellbook and a bare weapon (the auto-learn hook only fires on level-up,
     // which a level-1 bot has never had). Teach everything trainable, spend any
@@ -4681,6 +4814,11 @@ namespace
         uint32 learned = 0;
         if (cfg.autoLearnSpellsOnLevelUp)
             learned = RunTrainerSpellCatchup(bot);
+
+        // Also here, not only on level-up: the bots already past forty when
+        // this shipped would otherwise wait for their next level to get a
+        // mount, and a veteran sitting at sixty would never get one at all.
+        EnsureBotRidingAndMount(bot);
 
         if (cfg.talentsEnabled)
             SpendPendingTalentPoints(bot);
@@ -10614,6 +10752,7 @@ namespace playerbot
         g_PveConfig.auctionBuyMaxOverpayPct = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionBuy.MaxOverpayPct", 1200)));
         g_PveConfig.auctionBudgetWorthLevels = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionBuy.BudgetWorthLevels", 15), 1, 200));
+        g_PveConfig.grantMounts = sConfigMgr->GetBoolDefault("Playerbot.Pve.GrantMounts", true);
         g_PveConfig.auctionLevelsBehindPenalty = std::max(0.0f, sConfigMgr->GetFloatDefault("Playerbot.Pve.Auction.LevelsBehindPenalty", 0.35f));
         g_PveConfig.professionsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Professions.Enable", false);
         g_PveConfig.relocateEnabled = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.Relocate.Enable", true);
@@ -11679,6 +11818,10 @@ namespace playerbot
                 TC_LOG_DEBUG("playerbots.pve", "Managed bot {} learned {} trainer spells on reaching level {}.",
                     player->GetGUID().ToString(), learned, player->GetLevel());
         }
+
+        if (EnsureBotRidingAndMount(player))
+            TC_LOG_DEBUG("playerbots.pve", "Managed bot {} was granted riding at level {}.",
+                player->GetGUID().ToString(), player->GetLevel());
 
         if (g_PveConfig.talentsEnabled)
             SpendPendingTalentPoints(player);
