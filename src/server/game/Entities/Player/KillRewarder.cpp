@@ -25,6 +25,9 @@
 #include "InstanceScript.h"
 #include "Pet.h"
 #include "Player.h"
+#include "ObjectMgr.h"
+#include "World.h"
+#include <algorithm>
 
  // == KillRewarder ====================================================
  // KillRewarder encapsulates logic of rewarding player upon kill with:
@@ -132,6 +135,64 @@ inline void KillRewarder::_RewardHonor(Player* player)
         player->RewardHonor(_victim, _count, -1, true);
 }
 
+// Experience for killing a person, hung off the same call site as honor so it
+// lands wherever honor would have: once per participant inside reward distance,
+// never in a battleground.
+void KillRewarder::_RewardPvpXp(Player* player)
+{
+    if (!sWorld->getBoolConfig(CONFIG_CENTURION_PVP_XP_ENABLE))
+        return;
+
+    // Only for killing a person. A player-owned pet is not one: the kill that
+    // counts is its owner's, and paying for the pet as well would pay twice.
+    Player* victim = _victim->ToPlayer();
+    if (!victim || victim == player || !player->IsAlive())
+        return;
+
+    if (victim->HasAuraType(SPELL_AURA_NO_PVP_CREDIT))
+        return;
+
+    // Honor rejects a same-team kill unless the realm is flagged FFA. This realm
+    // is factionless - team is an accident of race - and is not flagged FFA, so
+    // inheriting that rule unconditionally would silently zero out most kills.
+    if (sWorld->getBoolConfig(CONFIG_CENTURION_PVP_XP_REQUIRE_OPPOSING_TEAM) &&
+        player->GetTeam() == victim->GetTeam() && !sWorld->IsFFAPvPRealm())
+        return;
+
+    uint8 const killerLevel = player->GetLevel();
+    uint8 const victimLevel = victim->GetLevel();
+    uint8 const grayLevel = Trinity::XP::GetGrayLevel(killerLevel);
+    // Gray victims pay nothing, exactly as they earn no honor. The second test
+    // also keeps the divisor below from reaching zero.
+    if (victimLevel <= grayLevel || killerLevel <= grayLevel)
+        return;
+
+    // A bubble is a twentieth of the experience bar measured at the VICTIM's
+    // level: what a kill is worth is decided by who died, not by who killed.
+    float const bubble = float(sObjectMgr->GetXPForLevel(victimLevel)) / 20.0f;
+    float amount = bubble * sWorld->getFloatConfig(CONFIG_CENTURION_PVP_XP_BUBBLES);
+    if (amount <= 0.0f)
+        return;
+
+    // Honor's own curve: a same-level killer gets exactly the configured bubbles,
+    // a higher-level one gets less as the victim slides towards gray, a lower
+    // level one gets more. Capped, because uncapped this pays a level 30 nearly
+    // five times over for killing a level 60.
+    float scale = float(victimLevel - grayLevel) / float(killerLevel - grayLevel);
+    scale = std::min(scale, sWorld->getFloatConfig(CONFIG_CENTURION_PVP_XP_MAX_LEVEL_SCALE));
+    amount *= scale;
+
+    // Split across everyone who shared the kill, the way honor divides by group.
+    if (_count > 1)
+        amount /= float(_count);
+
+    // Then this killer's own diminishing return against this victim.
+    amount *= player->ConsumePvpXpDiminishing(victim->GetGUID());
+
+    if (uint32 const xp = uint32(amount))
+        player->GiveXP(xp, _victim);
+}
+
 inline void KillRewarder::_RewardXP(Player* player, float rate)
 {
     uint32 xp(_xp);
@@ -186,6 +247,8 @@ void KillRewarder::_RewardPlayer(Player* player, bool isDungeon)
     {
         // 4.1. Give honor (player must be alive and not on BG).
         _RewardHonor(player);
+        // 4.1.0 Experience for the kill, on the same terms as the honor above.
+        _RewardPvpXp(player);
         // 4.1.1 Send player killcredit for quests with PlayerSlain
         if (_victim->GetTypeId() == TYPEID_PLAYER)
             player->KilledPlayerCredit();

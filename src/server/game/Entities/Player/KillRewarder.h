@@ -36,6 +36,7 @@ private:
     void _InitGroupData();
 
     void _RewardHonor(Player* player);
+    void _RewardPvpXp(Player* player);
     void _RewardXP(Player* player, float rate);
     void _RewardReputation(Player* player, float rate);
     void _RewardKillCredit(Player* player);

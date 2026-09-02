@@ -34,6 +34,7 @@
 #include <array>
 #include <memory>
 #include <queue>
+#include <unordered_map>
 #include <unordered_set>
 
 struct AccessRequirement;
@@ -1054,6 +1055,12 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         uint32 GetXPForNextLevel() const { return GetUInt32Value(PLAYER_NEXT_LEVEL_XP); }
         void SetXP(uint32 xp) { SetUInt32Value(PLAYER_XP, xp); }
         void GiveXP(uint32 xp, Unit* victim, float group_rate = 1.0f);
+        // Diminishing experience for killing the same person again. Returns the
+        // multiplier for THIS kill and records it. Keyed per victim and held on
+        // the killer, so it follows the person rather than the group: leaving a
+        // group does not reset it, and somebody who has never killed this victim
+        // is not punished for another player's farming.
+        float ConsumePvpXpDiminishing(ObjectGuid victimGuid);
         // borrowed = a temporary level (Violet Hold's Boon of Ascension and its
         // rollback): the level itself, its stats, skills and talent points are
         // applied, but none of the one-way rewards of really reaching a level -
@@ -2506,6 +2513,16 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         /***                  HONOR SYSTEM                     ***/
         /*********************************************************/
         time_t m_lastHonorUpdateTime;
+
+        struct PvpXpVictimRecord
+        {
+            uint32 Kills = 0;
+            time_t LastKillTime = 0;
+        };
+        // Bounded by the number of distinct people killed inside the decay
+        // window, because ConsumePvpXpDiminishing prunes aged-out entries on
+        // every call. Map-thread only, like the rest of Player.
+        std::unordered_map<ObjectGuid, PvpXpVictimRecord> m_pvpXpVictims;
 
         void outDebugValues() const;
         ObjectGuid m_lootGuid;

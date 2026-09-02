@@ -3078,6 +3078,30 @@ void Player::SendLogXPGain(uint32 GivenXP, Unit* victim, uint32 BonusXP, bool re
     SendDirectMessage(&data);
 }
 
+float Player::ConsumePvpXpDiminishing(ObjectGuid victimGuid)
+{
+    time_t const now = GameTime::GetGameTime();
+    time_t const window = time_t(sWorld->getIntConfig(CONFIG_CENTURION_PVP_XP_DECAY_SECONDS));
+
+    // Drop everything that has aged out first, so this map stays bounded by the
+    // people killed inside the window instead of growing for the whole session.
+    for (auto itr = m_pvpXpVictims.begin(); itr != m_pvpXpVictims.end(); )
+    {
+        if (now - itr->second.LastKillTime >= window)
+            itr = m_pvpXpVictims.erase(itr);
+        else
+            ++itr;
+    }
+
+    PvpXpVictimRecord& record = m_pvpXpVictims[victimGuid];
+    // Halve per prior kill of this victim: full, half, quarter, eighth. The shift
+    // is capped so a long farming session cannot run it off the end of the type.
+    float const multiplier = 1.0f / float(1u << std::min<uint32>(record.Kills, 16u));
+    ++record.Kills;
+    record.LastKillTime = now;
+    return multiplier;
+}
+
 void Player::GiveXP(uint32 xp, Unit* victim, float group_rate)
 {
     if (xp < 1)
