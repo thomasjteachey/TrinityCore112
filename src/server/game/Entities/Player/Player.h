@@ -1060,7 +1060,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         // the killer, so it follows the person rather than the group: leaving a
         // group does not reset it, and somebody who has never killed this victim
         // is not punished for another player's farming.
-        float ConsumePvpXpDiminishing(ObjectGuid victimGuid);
+        float ConsumePvpXpDiminishing(ObjectGuid victimGuid, uint32 windowSeconds);
         // borrowed = a temporary level (Violet Hold's Boon of Ascension and its
         // rollback): the level itself, its stats, skills and talent points are
         // applied, but none of the one-way rewards of really reaching a level -

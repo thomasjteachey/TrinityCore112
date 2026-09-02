@@ -1521,17 +1521,6 @@ void World::LoadConfigSettings(bool reload)
     // live PvP realm ammo costs or decaying pets.
     m_bool_configs[CONFIG_CENTURION_CLASSIC_CONSUME_AMMO] = sConfigMgr->GetBoolDefault("Centurion.Classic.ConsumeAmmo", false);
     m_bool_configs[CONFIG_CENTURION_CLASSIC_PET_HAPPINESS_DECAY] = sConfigMgr->GetBoolDefault("Centurion.Classic.PetHappinessDecay", false);
-    // Experience for killing a person. Bubbles is a fraction of the experience
-    // bar - 1.0 is one bubble (a twentieth of a level), 0.5 half a bubble - and
-    // is measured at the VICTIM's level, so what a kill is worth is decided by
-    // who died rather than who killed. MaxLevelScale caps the low-level-killer
-    // bonus: the uncapped honor curve pays a level 30 nearly five times over for
-    // killing a level 60.
-    m_bool_configs[CONFIG_CENTURION_PVP_XP_ENABLE] = sConfigMgr->GetBoolDefault("Centurion.PvpXp.Enable", true);
-    m_bool_configs[CONFIG_CENTURION_PVP_XP_REQUIRE_OPPOSING_TEAM] = sConfigMgr->GetBoolDefault("Centurion.PvpXp.RequireOpposingTeam", false);
-    m_int_configs[CONFIG_CENTURION_PVP_XP_DECAY_SECONDS] = sConfigMgr->GetIntDefault("Centurion.PvpXp.DecaySeconds", 2 * HOUR);
-    m_float_configs[CONFIG_CENTURION_PVP_XP_BUBBLES] = sConfigMgr->GetFloatDefault("Centurion.PvpXp.Bubbles", 1.0f);
-    m_float_configs[CONFIG_CENTURION_PVP_XP_MAX_LEVEL_SCALE] = sConfigMgr->GetFloatDefault("Centurion.PvpXp.MaxLevelScale", 2.0f);
     m_int_configs[CONFIG_CENTURION_BG_REWARD_HONOR_WINNER] = sConfigMgr->GetIntDefault("Centurion.Battleground.RewardHonorWinner", 100);
     m_int_configs[CONFIG_CENTURION_BG_REWARD_HONOR_LOSER] = sConfigMgr->GetIntDefault("Centurion.Battleground.RewardHonorLoser", 10);
     m_int_configs[CONFIG_CENTURION_BG_REWARD_MONEY_WINNER] = sConfigMgr->GetIntDefault("Centurion.Battleground.RewardMoneyWinner", 100000);

@@ -3078,10 +3078,13 @@ void Player::SendLogXPGain(uint32 GivenXP, Unit* victim, uint32 BonusXP, bool re
     SendDirectMessage(&data);
 }
 
-float Player::ConsumePvpXpDiminishing(ObjectGuid victimGuid)
+float Player::ConsumePvpXpDiminishing(ObjectGuid victimGuid, uint32 windowSeconds)
 {
     time_t const now = GameTime::GetGameTime();
-    time_t const window = time_t(sWorld->getIntConfig(CONFIG_CENTURION_PVP_XP_DECAY_SECONDS));
+    // The window is passed in rather than read from config here, so the
+    // only place that decides what a PvP kill is worth is the one that
+    // awards it.
+    time_t const window = time_t(windowSeconds);
 
     // Drop everything that has aged out first, so this map stays bounded by the
     // people killed inside the window instead of growing for the whole session.

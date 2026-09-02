@@ -4518,51 +4518,6 @@ ClientTweaks.Attest.TimeoutSeconds = 90
 Centurion.Classic.ConsumeAmmo = 0
 Centurion.Classic.PetHappinessDecay = 0
 
-#    Centurion.PvpXp.Enable
-#    Centurion.PvpXp.Bubbles
-#    Centurion.PvpXp.MaxLevelScale
-#    Centurion.PvpXp.DecaySeconds
-#    Centurion.PvpXp.RequireOpposingTeam
-#        Description: Experience for killing a person, awarded at the same call site as
-#                     honor - once per participant inside reward distance, never in a
-#                     battleground - and split between them the way honor divides by
-#                     group size.
-#
-#                     Bubbles is how much a SAME-LEVEL kill is worth, in bubbles of
-#                     experience. A bubble is a twentieth of the experience bar, so
-#                     1.0 is one bubble and 0.5 is half a bubble. Fractions are fine.
-#                     The bar it is measured against is the VICTIM's, so what a kill
-#                     is worth is decided by who died rather than by who killed.
-#
-#                     Against a different level the award follows honor's own curve:
-#                     a higher-level killer gets less as the victim slides towards
-#                     its gray level (and nothing at or below it), a lower-level
-#                     killer gets more. MaxLevelScale caps that bonus - uncapped it
-#                     pays a level 30 nearly five times over for killing a level 60.
-#
-#                     DecaySeconds is the diminishing-returns window. Each repeat kill
-#                     of the SAME victim by the SAME killer is worth half the last
-#                     one - full, half, quarter, eighth - and the count resets once
-#                     that victim has gone this long without being killed again. The
-#                     count is per killer AND per victim, so breaking up a group does
-#                     not reset it, and somebody who has never killed that victim is
-#                     not punished for another player's farming.
-#
-#                     RequireOpposingTeam restores honor's rule that a same-team kill
-#                     pays nothing unless the realm is flagged FFA. Off by default:
-#                     this realm is factionless, team is an accident of race, and it
-#                     is not flagged FFA, so leaving it on would zero out most kills.
-#        Default:     1 (enabled)
-#                     1.0 - Centurion.PvpXp.Bubbles
-#                     2.0 - Centurion.PvpXp.MaxLevelScale
-#                     7200 - Centurion.PvpXp.DecaySeconds (2 hours)
-#                     0 (off) - Centurion.PvpXp.RequireOpposingTeam
-
-Centurion.PvpXp.Enable = 1
-Centurion.PvpXp.Bubbles = 1.0
-Centurion.PvpXp.MaxLevelScale = 2.0
-Centurion.PvpXp.DecaySeconds = 7200
-Centurion.PvpXp.RequireOpposingTeam = 0
 
 
 #

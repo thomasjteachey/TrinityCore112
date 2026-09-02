@@ -195,12 +195,6 @@ enum WorldBoolConfigs : uint32
     // default OFF so a conf that forgets them cannot regress the PvP realm.
     CONFIG_CENTURION_CLASSIC_CONSUME_AMMO,
     CONFIG_CENTURION_CLASSIC_PET_HAPPINESS_DECAY,
-    // Experience for killing a person, awarded where honor would be.
-    CONFIG_CENTURION_PVP_XP_ENABLE,
-    // Honor refuses a same-team kill unless the realm is FFA. This realm is
-    // factionless and not flagged FFA, so inheriting that would zero out most
-    // kills; off by default here, on to restore strict honor semantics.
-    CONFIG_CENTURION_PVP_XP_REQUIRE_OPPOSING_TEAM,
     BOOL_CONFIG_VALUE_COUNT
 };
 
@@ -228,8 +222,6 @@ enum WorldFloatConfigs : uint32
     CONFIG_RESPAWN_DYNAMICRATE_GAMEOBJECT,
     CONFIG_CENTURION_BG_ARENA_REWARD_MULTIPLIER,
     CONFIG_CENTURION_HEARTBEATRESIST_REGRESSION_LERP,
-    CONFIG_CENTURION_PVP_XP_BUBBLES,
-    CONFIG_CENTURION_PVP_XP_MAX_LEVEL_SCALE,
     FLOAT_CONFIG_VALUE_COUNT
 };
 
@@ -449,7 +441,6 @@ enum WorldIntConfigs : uint32
     CONFIG_SOCKET_TIMEOUTTIME_ACTIVE,
     CONFIG_PENDING_MOVE_CHANGES_TIMEOUT,
     CONFIG_CENTURION_PALADIN_SEAL_TWIST_WINDOW_MS,
-    CONFIG_CENTURION_PVP_XP_DECAY_SECONDS,
     INT_CONFIG_VALUE_COUNT
 };
 
