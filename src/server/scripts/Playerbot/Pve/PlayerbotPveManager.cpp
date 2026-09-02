@@ -449,6 +449,20 @@ namespace
             (player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < cfg.restManaPct);
     }
 
+    // Fit to START a fight with a person. NeedsRecovery governs sitting down;
+    // this governs picking a fight, and sits deliberately higher - a bot at 65%
+    // health is finished resting by the thresholds above but has no business
+    // opening on a player. Only INITIATION is gated: a bot that is already being
+    // attacked fights back at any health, which is what the defensive picker is
+    // for.
+    bool ReadyToFightPlayers(Player const* player, playerbot::PveConfig const& cfg)
+    {
+        if (player->GetHealthPct() < cfg.playerEngageMinHealthPct)
+            return false;
+        return !(player->GetMaxPower(POWER_MANA) > 0 &&
+            player->GetPowerPct(POWER_MANA) < cfg.playerEngageMinManaPct);
+    }
+
     bool IsRestingNow(Player const* player, PveBotState const& state)
     {
         if (HasRestAura(player))
@@ -3708,6 +3722,23 @@ namespace
         return bot->GetClass() == CLASS_ROGUE && EquipProfileIndex(bot) == 0;
     }
 
+    // Every rogue build outside Assassination swings sword, mace or fist - those
+    // are its weapon specialisation talents, and the mainhand rule further down
+    // already wants the slow, hard-hitting weapon that goes with them. Without an
+    // explicit type preference a high-stat dagger keeps winning the slot and the
+    // bot fights off-spec with it.
+    bool PrefersNonDaggerMainhand(Player const* bot)
+    {
+        return bot->GetClass() == CLASS_ROGUE && EquipProfileIndex(bot) != 0;
+    }
+
+    bool IsSpecialisedRogueMainhand(ItemTemplate const* proto)
+    {
+        return proto->SubClass == ITEM_SUBCLASS_WEAPON_SWORD ||
+            proto->SubClass == ITEM_SUBCLASS_WEAPON_MACE ||
+            proto->SubClass == ITEM_SUBCLASS_WEAPON_FIST;
+    }
+
     // Beast Mastery hunters want two one-handers, not a two-hander. A hunter's
     // melee weapons are stat sticks it rarely swings, so the slot count is what
     // matters: two one-handers carry two sets of stats, and a two-hander gives
@@ -4027,6 +4058,16 @@ namespace
                 bool const incumbentDagger = incumbent->SubClass == ITEM_SUBCLASS_WEAPON_DAGGER;
                 if (candidateDagger != incumbentDagger)
                     return candidateDagger;
+            }
+
+            // The mirror of that rule for every other rogue build: prefer the
+            // specialised type over a dagger, whatever the dagger stats say.
+            if (slot == EQUIPMENT_SLOT_MAINHAND && PrefersNonDaggerMainhand(bot))
+            {
+                bool const candidateOnType = IsSpecialisedRogueMainhand(candidate);
+                bool const incumbentOnType = IsSpecialisedRogueMainhand(incumbent);
+                if (candidateOnType != incumbentOnType)
+                    return candidateOnType;
             }
 
             // Taking a two-hander forfeits a whole weapon slot, so for a dual
@@ -4890,6 +4931,12 @@ namespace
             now - state.lastPlayerFightAt).count();
         // Recently beaten by a person: leave it alone until the sting wears off.
         if (PveClock::now() < state.timidUntil)
+            return;
+
+        // And not while hurt. Crossing a zone to open on somebody at a third
+        // health is how a bot throws itself away; the rest pass tops it up first
+        // and it comes looking again on a later cycle.
+        if (!ReadyToFightPlayers(bot, cfg))
             return;
 
         // And never in a zone where a fight between people cannot happen at all.
@@ -9057,8 +9104,18 @@ namespace
         if (!state.engaged && !bot->IsInCombat() && !IsRestingNow(bot, state) && masterAllowsRest &&
             (!state.journeyActive || NeedsRecovery(bot, cfg)))
         {
-            bool const needFood = bot->GetHealthPct() < cfg.restHealthPct;
-            bool const needDrink = bot->GetMaxPower(POWER_MANA) > 0 && bot->GetPowerPct(POWER_MANA) < cfg.restManaPct;
+            // Where people can fight, top off to the ENGAGE thresholds rather than
+            // the rest ones. Otherwise a bot parks in the dead band between them:
+            // too healthy to sit down, too hurt to be allowed to open on anybody,
+            // and it just stands there waiting on natural regeneration.
+            bool const topOffForPvp = state.masterGuid.IsEmpty() &&
+                BarracksHardcore::IsOpenWorldPvpZone(bot->GetZoneId());
+            float const healthTarget = topOffForPvp
+                ? std::max(cfg.restHealthPct, cfg.playerEngageMinHealthPct) : cfg.restHealthPct;
+            float const manaTarget = topOffForPvp
+                ? std::max(cfg.restManaPct, cfg.playerEngageMinManaPct) : cfg.restManaPct;
+            bool const needFood = bot->GetHealthPct() < healthTarget;
+            bool const needDrink = bot->GetMaxPower(POWER_MANA) > 0 && bot->GetPowerPct(POWER_MANA) < manaTarget;
             if (needFood || needDrink)
             {
                 if (cfg.restUseConsumables)
@@ -9651,6 +9708,7 @@ namespace
                 target = PickCompanionTarget(bot, state, master, cfg);
             else if (state.masterGuid.IsEmpty() && !HasBrokenEquippedItem(bot) &&
                 PveClock::now() >= state.timidUntil &&
+                ReadyToFightPlayers(bot, cfg) &&
                 cfg.guardianPlayerApproachYards > 0.0f &&
                 BarracksHardcore::IsOpenWorldPvpZone(bot->GetZoneId()))
             {
@@ -10251,6 +10309,8 @@ namespace playerbot
         g_PveConfig.autoReviveSeconds = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.AutoReviveSeconds", 30), 5, 600));
         g_PveConfig.restHealthPct = sConfigMgr->GetFloatDefault("Playerbot.Pve.RestHealthPct", 60.0f);
         g_PveConfig.restManaPct = sConfigMgr->GetFloatDefault("Playerbot.Pve.RestManaPct", 50.0f);
+        g_PveConfig.playerEngageMinHealthPct = sConfigMgr->GetFloatDefault("Playerbot.Pve.PlayerEngageMinHealthPct", 85.0f);
+        g_PveConfig.playerEngageMinManaPct = sConfigMgr->GetFloatDefault("Playerbot.Pve.PlayerEngageMinManaPct", 80.0f);
         g_PveConfig.autoLearnSpellsOnLevelUp = sConfigMgr->GetBoolDefault("Playerbot.Pve.AutoLearnSpellsOnLevelUp", true);
         g_PveConfig.grindEnabled = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.Enable", false);
         g_PveConfig.grindSearchRadius = sConfigMgr->GetFloatDefault("Playerbot.PveGrind.SearchRadius", 60.0f);

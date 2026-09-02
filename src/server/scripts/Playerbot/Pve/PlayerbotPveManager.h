@@ -36,6 +36,11 @@ struct PveConfig
     uint32 autoReviveSeconds = 30;
     float restHealthPct = 60.0f;
     float restManaPct = 50.0f;
+    // Fitness to START a fight with a person. The rest thresholds above only
+    // decide when to sit down; these decide when a bot is fit to open on
+    // somebody, and are deliberately higher.
+    float playerEngageMinHealthPct = 85.0f;
+    float playerEngageMinManaPct = 80.0f;
     bool autoLearnSpellsOnLevelUp = true;
     bool grindEnabled = false;
     float grindSearchRadius = 60.0f;

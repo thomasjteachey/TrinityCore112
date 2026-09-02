@@ -443,6 +443,21 @@ Playerbot.Pve.AutoReviveSeconds = 30
 Playerbot.Pve.RestHealthPct = 60
 Playerbot.Pve.RestManaPct = 50
 
+#    Playerbot.Pve.PlayerEngageMinHealthPct
+#    Playerbot.Pve.PlayerEngageMinManaPct
+#        Description: How healthy a bot must be before it STARTS a fight with a person -
+#                     either by travelling to one it has not seen in a while, or by picking
+#                     a nearby one it is not already fighting. Self-defence ignores this
+#                     entirely: a bot that is attacked fights back at any health.
+#                     These sit above the rest thresholds on purpose, and in zones where
+#                     people can fight each other the rest pass tops bots up to these
+#                     values rather than the rest ones, so they eat and drink to near-full
+#                     instead of parking half-hurt between the two.
+#        Default:     85 / 80
+
+Playerbot.Pve.PlayerEngageMinHealthPct = 85
+Playerbot.Pve.PlayerEngageMinManaPct = 80
+
 #    Playerbot.Pve.AutoLearnSpellsOnLevelUp
 #        Description: When a managed bot levels up, it learns every class-trainer spell it now
 #                     qualifies for (free, rank chains included), so leveling bots keep a usable
