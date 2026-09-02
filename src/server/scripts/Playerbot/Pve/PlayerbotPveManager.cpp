@@ -2583,6 +2583,58 @@ namespace
         return best;
     }
 
+    // Vendor-sold food and drink, sorted by required level descending, so the
+    // first entry at or below a level is the best that level can use.
+    //
+    // Built from npc_vendor on purpose. A vendor-sold consumable is by
+    // construction ordinary, obtainable and unbound, which keeps quest items,
+    // conjured food and developer scaffolding out of the pool without needing a
+    // second filter that tries to describe all of them.
+    std::mutex g_RationLock;
+    bool g_RationsBuilt = false;
+    std::vector<std::pair<uint32, uint32>> g_RationFood;    // requiredLevel, itemId
+    std::vector<std::pair<uint32, uint32>> g_RationDrink;
+
+    void BuildRationPoolOnce()
+    {
+        std::lock_guard<std::mutex> guard(g_RationLock);
+        if (g_RationsBuilt)
+            return;
+        g_RationsBuilt = true;
+
+        QueryResult result = WorldDatabase.Query("SELECT DISTINCT item FROM npc_vendor");
+        if (!result)
+            return;
+
+        do
+        {
+            uint32 const itemId = (*result)[0].GetUInt32();
+            ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
+            if (!proto || proto->RequiredLevel > 60)
+                continue;
+            if (IsFoodTemplate(proto))
+                g_RationFood.push_back({ proto->RequiredLevel, itemId });
+            else if (IsDrinkTemplate(proto))
+                g_RationDrink.push_back({ proto->RequiredLevel, itemId });
+        } while (result->NextRow());
+
+        auto byLevelDesc = [](auto const& l, auto const& r) { return l.first > r.first; };
+        std::sort(g_RationFood.begin(), g_RationFood.end(), byLevelDesc);
+        std::sort(g_RationDrink.begin(), g_RationDrink.end(), byLevelDesc);
+
+        TC_LOG_INFO("playerbots.pve", "Ration pool: {} foods and {} drinks sold by vendors.",
+            uint32(g_RationFood.size()), uint32(g_RationDrink.size()));
+    }
+
+    uint32 BestRationForLevel(std::vector<std::pair<uint32, uint32>> const& pool, uint8 level)
+    {
+        std::lock_guard<std::mutex> guard(g_RationLock);
+        for (auto const& [requiredLevel, itemId] : pool)
+            if (requiredLevel <= level)
+                return itemId;
+        return 0;
+    }
+
     uint32 CountConsumableUnits(Player* bot, bool drink)
     {
         uint32 units = 0;
@@ -10586,6 +10638,24 @@ namespace playerbot
     // Sticky on purpose: an assignment that is still valid is kept, and only
     // vacancies are filled. A drifter that flickered in and out of the role
     // every second would be re-levelled every second with it.
+    // Food, and water for the classes that drink. Quantities and skip rules are
+    // the supply run's: top up to 20 units when below 10, never for a class that
+    // conjures its own. A drifter that ports ends up in the same state as one
+    // that walked to a vendor.
+    void GrantTravelRations(Player* bot)
+    {
+        BuildRationPoolOnce();
+        uint8 const level = bot->GetLevel();
+
+        if (CountConsumableUnits(bot, false) < 10 && !ConjureSpellId(bot, false))
+            if (uint32 const food = BestRationForLevel(g_RationFood, level))
+                bot->AddItem(food, 20);
+
+        if (UsesMana(bot) && CountConsumableUnits(bot, true) < 10 && !ConjureSpellId(bot, true))
+            if (uint32 const drink = BestRationForLevel(g_RationDrink, level))
+                bot->AddItem(drink, 20);
+    }
+
     void UpdateDrifterAssignments()
     {
         uint32 const target = g_PveConfig.drifterCount;
@@ -10831,6 +10901,11 @@ namespace playerbot
                 if (Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botGuid)))
                 {
                     bot->ModifyMoney(int64(g_PveConfig.drifterTeleportGold) * int64(GOLD));
+                    // Rations for the level it has just become. Whatever it was
+                    // carrying is the wrong tier now - it was re-levelled into this
+                    // zone's band on arrival - and a bot that cannot eat between
+                    // fights spends the rest of its life at a fraction of its health.
+                    GrantTravelRations(bot);
                     ++paid;
                 }
             }
