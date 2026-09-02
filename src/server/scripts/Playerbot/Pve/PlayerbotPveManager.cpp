@@ -88,6 +88,17 @@
 #include <unordered_set>
 #include <vector>
 
+namespace playerbot
+{
+    // Defined at the bottom of this file. The zone-guardian tick lives in the
+    // anonymous namespace below and has to drop a guardian that is sitting
+    // above its post, so it needs the name before then. Declared HERE rather
+    // than inside that anonymous namespace on purpose: a copy declared there
+    // is a different function that nothing defines, which compiles cleanly and
+    // then fails at link.
+    void ResetManagedBotToZoneBand(Player* bot, uint32 zoneId, uint8 bottomLevel);
+}
+
 namespace
 {
     using PveClock = std::chrono::steady_clock;
@@ -4728,6 +4739,10 @@ namespace
         uint8 maxLevel;
     };
 
+    // The level a guardian should actually hold at its post. Defined further
+    // down, once the zone-top table it reads exists.
+    uint8 GuardianPostCeiling(GuardianZone const& zone);
+
     // The classic levelling chart, as the zones actually play - not as a
     // percentile of whatever creatures happen to be spawned in them. Derived bands
     // were wrong in both directions: they let The Deadmines in through its Westfall
@@ -5090,18 +5105,41 @@ namespace
         if (!flaggedNoXp)
             bot->SetFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN);
 
+        // The post's level, held in BOTH directions and on every tick rather
+        // than only when the post is claimed.
+        //
+        // A guardian can end up above its post without ever being mis-assigned:
+        // the post is stored as an index into kGuardianZones, so adding or
+        // reordering an entry moves every stored guardian to another zone, and
+        // the level test that runs at assignment never runs again. Checking
+        // every tick makes that drift self-healing however it happened.
+        uint8 const postCeiling = GuardianPostCeiling(zone);
+        if (bot->GetLevel() > postCeiling)
+        {
+            // Downward needs the full re-kit rather than a bare GiveLevel, which
+            // would reset talents and leave the bot wearing gear it can no longer
+            // use. ResetManagedBotToZoneBand does that work and lands the bot on
+            // a grind spot inside the zone it guards.
+            TC_LOG_INFO("playerbots.pve", "Guardian {} was level {} at a post capped {}; resetting it to the post.",
+                bot->GetName(), uint32(bot->GetLevel()), uint32(postCeiling));
+            playerbot::ResetManagedBotToZoneBand(bot, zone.zoneId, postCeiling);
+            return;
+        }
+
+        // Upward is safe at any time and costs nothing when already there, so it
+        // is no longer gated on a fresh assignment either - a guardian below its
+        // post cannot climb out on its own, XP being frozen the moment it takes
+        // one.
+        if (bot->GetLevel() < postCeiling)
+        {
+            bot->GiveLevel(postCeiling);
+            bot->SetUInt32Value(PLAYER_XP, 0);
+        }
+
         if (freshlyAssigned)
         {
             CharacterDatabase.PExecute("REPLACE INTO playerbot_zone_guardian (guid, slotIndex) VALUES ({}, {})",
                 botRawGuid, slotIndex);
-
-            // Only ever levels UP to the post's cap: GiveLevel downward resets
-            // talents and leaves the bot in unusable gear.
-            if (bot->GetLevel() < zone.maxLevel)
-            {
-                bot->GiveLevel(zone.maxLevel);
-                bot->SetUInt32Value(PLAYER_XP, 0);
-            }
             // Guardians never travel for class quests, so their kit spells
             // (Tame Beast, demon summons, stances, totems) are granted as if
             // the chains had been walked. XP is already frozen at this point,
@@ -5510,6 +5548,24 @@ namespace
         return GetBandedHomeZoneId(bot);
     }
     bool g_GrindSpotsBuilt = false;
+
+    // Not simply the declared cap: that is what a zone is SUPPOSED to top out
+    // at, and for some zones the spawns disagree. Badlands is declared 45 while
+    // its content tops out at 42, and the suitability test rejects anything
+    // above the observed top plus one - so a guardian sitting at its own
+    // declared cap could never find a thing to hunt there.
+    //
+    // Falls back to the declared cap while the spot cache is still building.
+    // g_GrindSpotsBuilt is the same guard the suitability test uses: a
+    // half-filled unordered_map must never be read.
+    uint8 GuardianPostCeiling(GuardianZone const& zone)
+    {
+        uint8 ceiling = zone.maxLevel;
+        if (g_GrindSpotsBuilt)
+            if (auto itr = g_ZoneTopLevel.find(zone.zoneId); itr != g_ZoneTopLevel.end())
+                ceiling = std::min<uint8>(ceiling, uint8(std::min<uint32>(255u, uint32(itr->second) + 1u)));
+        return std::max<uint8>(ceiling, 1);
+    }
 
     // World thread only. Mirrors the reference filters: normal-rank lootable
     // mobs with tight level bands and short respawns, excluding service NPCs,
