@@ -1904,7 +1904,19 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void CleanupChannels();
         void UpdateLocalChannels(uint32 newZone);
         void JoinWorldChannelIfNeeded();
+
+        // World is a default channel, so UpdateLocalChannels would rejoin it on
+        // every zone change - which is exactly what stops a player leaving it.
+        // A deliberate leave is remembered so the rejoin does not undo it, and
+        // joining again forgets it. Read lazily, once per session.
+        bool HasOptedOutOfWorldChannel() const;
+        void SetWorldChannelOptOut(bool optOut);
         void LeaveLFGChannel();
+
+        // ChatChannels.dbc id of the World channel. The DBC is not mirrored in
+        // MySQL, so the binary is the source of truth - see
+        // sql/custom/characters/2026_09_02_01_characters_world_channel_optout.sql.
+        static constexpr uint32 WORLD_CHAT_CHANNEL_ID = 27;
 
         typedef std::list<Channel*> JoinedChannelsList;
         JoinedChannelsList const& GetJoinedChannels() const { return m_channels; }
@@ -2634,6 +2646,8 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         WorldSession* m_session;
 
         JoinedChannelsList m_channels;
+        mutable bool m_worldChannelOptOut = false;
+        mutable bool m_worldChannelOptOutLoaded = false;
 
         uint8 m_cinematic;
 

@@ -2114,6 +2114,10 @@ PreserveCustomChannels = 1
 
 #
 #    Channel.World.Enable
+#        SUPERSEDED. World is now a real default channel (ChatChannels.dbc id 27),
+#        joined by the client itself like General, and this creates a SEPARATE
+#        custom channel by name. Leave it off unless you want a second one; with
+#        Channel.World.Name = "World" the two would collide.
 #        Description: Automatically join newly created characters to the configured world chat channel on their first login.
 #        Default:     0 - (Disabled)
 #                     1 - (Enabled)

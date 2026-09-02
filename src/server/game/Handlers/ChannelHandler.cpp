@@ -49,6 +49,11 @@ void WorldSession::HandleJoinChannel(WorldPacket& recvPacket)
             return;
     }
 
+    // Rejoining is how a player opts back in. The client does not resend a join
+    // for a default channel it was told to leave, so this is a real request.
+    if (channelId == Player::WORLD_CHAT_CHANNEL_ID)
+        GetPlayer()->SetWorldChannelOptOut(false);
+
     if (channelName.empty() || isdigit((unsigned char)channelName[0]))
     {
         WorldPacket data(SMSG_CHANNEL_NOTIFY, 1 + channelName.size());
@@ -119,6 +124,11 @@ void WorldSession::HandleLeaveChannel(WorldPacket& recvPacket)
     {
         if (Channel* channel = cMgr->GetChannel(channelId, channelName, GetPlayer(), true, zone))
             channel->LeaveChannel(GetPlayer(), true);
+
+        // Leaving World is meant to stick. Without this the next zone change
+        // puts the player straight back in, because it is a default channel.
+        if (channelId == Player::WORLD_CHAT_CHANNEL_ID)
+            GetPlayer()->SetWorldChannelOptOut(true);
 
         if (channelId)
             cMgr->LeftChannel(channelId, zone);

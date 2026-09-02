@@ -5820,6 +5820,10 @@ void Player::UpdateLocalChannels(uint32 newZone)
         if (!channelEntry)
             continue;
 
+        // The one default channel a player is allowed to stay out of.
+        if (i == WORLD_CHAT_CHANNEL_ID && HasOptedOutOfWorldChannel())
+            continue;
+
         Channel* usedChannel = nullptr;
         for (Channel* channel : m_channels)
         {
@@ -5870,6 +5874,41 @@ void Player::UpdateLocalChannels(uint32 newZone)
             cMgr->LeftChannel(removeChannel->GetChannelId(), removeChannel->GetZoneEntry());    // Delete if empty
         }
     }
+}
+
+// Remembered per character so that leaving the World channel sticks.
+//
+// UpdateLocalChannels rejoins every eligible default channel whenever the zone
+// changes. For General that is harmless, because the zone channel it rejoins is
+// a different one. For a single global channel it means a player who leaves is
+// simply put back a moment later, so the leave has to be recorded to mean
+// anything.
+bool Player::HasOptedOutOfWorldChannel() const
+{
+    if (!m_worldChannelOptOutLoaded)
+    {
+        m_worldChannelOptOutLoaded = true;
+        m_worldChannelOptOut = CharacterDatabase.PQuery(
+            "SELECT 1 FROM character_world_channel_optout WHERE guid = {}",
+            GetGUID().GetCounter()) != nullptr;
+    }
+
+    return m_worldChannelOptOut;
+}
+
+void Player::SetWorldChannelOptOut(bool optOut)
+{
+    m_worldChannelOptOutLoaded = true;
+    if (m_worldChannelOptOut == optOut)
+        return;
+
+    m_worldChannelOptOut = optOut;
+    if (optOut)
+        CharacterDatabase.PExecute(
+            "REPLACE INTO character_world_channel_optout (guid) VALUES ({})", GetGUID().GetCounter());
+    else
+        CharacterDatabase.PExecute(
+            "DELETE FROM character_world_channel_optout WHERE guid = {}", GetGUID().GetCounter());
 }
 
 void Player::JoinWorldChannelIfNeeded()
