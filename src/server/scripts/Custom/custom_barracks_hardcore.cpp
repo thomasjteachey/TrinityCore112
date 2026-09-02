@@ -41,6 +41,7 @@
 #include "SpellAuraEffects.h"
 #include "SpellAuras.h"
 #include "Chat.h"
+#include "ObjectAccessor.h"
 #include "Creature.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
@@ -292,6 +293,37 @@ namespace BarracksHardcore
             player->UpdatePvP(true, true);
             player->RemoveFlag(PLAYER_FLAGS, PLAYER_FLAGS_PVP_TIMER);
         }
+    }
+
+    bool IsWarModeOptedIn(Player const* player)
+    {
+        if (!s_enabled || !player)
+            return false;
+
+        // A bot has no War Mode setting to compare against.
+        WorldSession const* session = player->GetSession();
+        if (!session || IsBotAccount(session->GetAccountId()))
+            return false;
+
+        return IsOptedIn(player->GetGUID().GetCounter());
+    }
+
+    bool WarModeBlocksGrouping(Player const* left, Player const* right)
+    {
+        if (!s_enabled || !left || !right)
+            return false;
+
+        // Bots group with anybody. Enforcing this against them would break
+        // every bot party on the realm for a rule that is about people.
+        auto isBot = [](Player const* p)
+        {
+            WorldSession const* s = p->GetSession();
+            return !s || IsBotAccount(s->GetAccountId());
+        };
+        if (isBot(left) || isBot(right))
+            return false;
+
+        return IsWarModeOptedIn(left) != IsWarModeOptedIn(right);
     }
 
     // The war-mode badge. Tracks the OPT-IN rather than the armed state on
@@ -1152,6 +1184,32 @@ public:
     // No throttle: a PlayerScript is a singleton shared by every player, so a
     // member timer would only ever service one of them. ApplyFfaState costs a
     // couple of hash lookups and does nothing when nothing has drifted.
+    // War Mode is a decision about whether you can be attacked, so a party
+    // split down the middle on it cannot work: half of it is fair game in the
+    // open world and half is not.
+    //
+    // The invite is the one choke point both directions pass through, so it
+    // does not matter who invited whom. The core refuses with
+    // ERR_INVITE_RESTRICTED when this returns false, which renders as a
+    // generic "cannot invite" - so the reason is spelled out first.
+    bool OnCanGroupInvite(Player* player, std::string& memberName) override
+    {
+        if (!s_enabled || !player)
+            return true;
+
+        Player* target = ObjectAccessor::FindPlayerByName(memberName);
+        if (!target || !WarModeBlocksGrouping(player, target))
+            return true;
+
+        ChatHandler(player->GetSession()).PSendSysMessage(
+            "%s has War Mode %s and you have it %s. You cannot group until you both "
+            "set it the same way.",
+            target->GetName().c_str(),
+            IsWarModeOptedIn(target) ? "on" : "off",
+            IsWarModeOptedIn(player) ? "on" : "off");
+        return false;
+    }
+
     void OnUpdate(Player* player, uint32 /*diff*/) override
     {
         EnforceAlwaysPvP(player);
