@@ -840,29 +840,44 @@ void GameObject::Update(uint32 diff)
                                         CastSpellExtraArgs args(triggerFlags);
                                         args.SetTriggeringGameObject(GetGUID());
 
-                                        // The TRAP casts it. The owner only owns it.
+                                        // Who casts is decided by the SPELL, not by the class.
                                         //
-                                        // Frost Trap's ice is Frost Trap Aura (13810), which
-                                        // 63487 triggers at TARGET_DEST_CASTER. That target
-                                        // resolves from whoever is casting and DELIBERATELY
-                                        // ignores any destination handed to the cast, so
-                                        // casting from the owner froze the ground under the
-                                        // hunter, yards from the trap that fired. Attaching an
-                                        // explicit destination does not help, for exactly that
-                                        // reason - it is not consulted.
+                                        // A spell anchored to the caster's own POSITION has to
+                                        // be cast by the trap. Frost Trap's ice sits on
+                                        // TARGET_DEST_CASTER and Explosive Trap's blast on
+                                        // TARGET_SRC_CASTER; both read the caster's position and
+                                        // deliberately ignore any destination handed to the cast,
+                                        // so from the owner they go off wherever the hunter is
+                                        // standing instead of at the trap.
                                         //
-                                        // Casting from the game object puts that destination
-                                        // back on the trap, which is how the fallback path
-                                        // below has always done it. OriginalCaster keeps the
-                                        // damage, the combat tag and the PvP attribution with
-                                        // the hunter.
-                                        //
-                                        // The permissive trigger flags are the only thing the
-                                        // owner path was ever needed for, and they still apply,
-                                        // so a trap laid by someone feigning still fires.
-                                        args.SetOriginalCaster(GetOwnerGUID());
+                                        // Everything else is aimed at whoever stepped on it -
+                                        // Freezing Trap's sleep, Immolation's burn, Snake Trap -
+                                        // and those are cast by the HUNTER on purpose, so the
+                                        // spell belongs to a unit: it can miss, be resisted, be
+                                        // reflected back, and it reads in the combat log against
+                                        // the person who laid it. Casting those from the game
+                                        // object would quietly take all of that away, which is
+                                        // what keying this on CLASS_HUNTER instead of on the
+                                        // spell did.
+                                        bool castFromTrap = false;
+                                        if (SpellInfo const* trapSpell = sSpellMgr->GetSpellInfo(goInfo->trap.spellId))
+                                            for (SpellEffectInfo const& effect : trapSpell->GetEffects())
+                                                for (SpellImplicitTargetInfo const& implicitTarget : { effect.TargetA, effect.TargetB })
+                                                    if (implicitTarget.GetReferenceType() == TARGET_REFERENCE_TYPE_CASTER &&
+                                                        (implicitTarget.GetObjectType() == TARGET_OBJECT_TYPE_SRC ||
+                                                         implicitTarget.GetObjectType() == TARGET_OBJECT_TYPE_DEST))
+                                                        castFromTrap = true;
 
-                                        if (CastSpell(target, goInfo->trap.spellId, args) == SPELL_CAST_OK)
+                                        if (castFromTrap)
+                                        {
+                                            // OriginalCaster keeps the damage, the combat tag and
+                                            // the PvP attribution with the hunter even though the
+                                            // trap is the one casting.
+                                            args.SetOriginalCaster(GetOwnerGUID());
+                                            if (CastSpell(target, goInfo->trap.spellId, args) == SPELL_CAST_OK)
+                                                castSucceeded = true;
+                                        }
+                                        else if (owner->CastSpell(target, goInfo->trap.spellId, args) == SPELL_CAST_OK)
                                             castSucceeded = true;
                                     }
                                 }
