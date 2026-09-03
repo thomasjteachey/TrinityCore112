@@ -10169,15 +10169,22 @@ namespace
             else if (state.masterGuid.IsEmpty() && !HasBrokenEquippedItem(bot) &&
                 PveClock::now() >= state.timidUntil &&
                 ReadyToFightPlayers(bot, cfg) &&
-                cfg.guardianPlayerApproachYards > 0.0f &&
+                cfg.proactiveHuntYards > 0.0f &&
                 BarracksHardcore::IsOpenWorldPvpZone(bot->GetZoneId()))
             {
                 // Any free open-world bot that finds a lawful real-player target
-                // inside the approach radius should actually go pick the fight.
+                // inside its hunt radius should actually go pick the fight.
                 // Previously this proactive selection existed only for guardians;
                 // ordinary aggression hunters could teleport beside a player and
                 // then fall straight back into their creature grind loop.
-                target = PickHuntTarget(bot, cfg.guardianPlayerApproachYards);
+                //
+                // Its own, shorter radius. A guardian holds a zone and is meant
+                // to notice anyone in it; the rest of the fleet reaching just as
+                // far is what left someone grinding alone unable to finish a
+                // pull. The guardian value is deliberately NOT reused here - it
+                // has to stay above the 210 yard teleport landing distance for
+                // reasons that have nothing to do with how far a bot may hunt.
+                target = PickHuntTarget(bot, cfg.proactiveHuntYards);
             }
 
             // Death caches are opportunistic loot, not a new combat activity.  A
@@ -10819,6 +10826,8 @@ namespace playerbot
         g_PveConfig.auctionBudgetWorthLevels = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionBuy.BudgetWorthLevels", 15), 1, 200));
         g_PveConfig.grantMounts = sConfigMgr->GetBoolDefault("Playerbot.Pve.GrantMounts", true);
+        g_PveConfig.proactiveHuntYards = std::max(0.0f,
+            sConfigMgr->GetFloatDefault("Playerbot.Pve.ProactiveHuntYards", 125.0f));
         g_PveConfig.aggroBudgetEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.AggroBudget.Enable", false);
         g_PveConfig.aggroBudgetSolo = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Playerbot.Pve.AggroBudget.Solo", 2), 0, 100));
@@ -10864,6 +10873,8 @@ namespace playerbot
         g_PveConfig.zoneGuardiansPerZone = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ZoneGuardians.PerZone", 0), 0, 10));
         g_PveConfig.drifterCount = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.Count", 0)));
         g_PveConfig.drifterZoneDwellSeconds = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.ZoneDwellSeconds", 10), 0, 3600));
+        g_PveConfig.drifterMaxPerZone = uint32(std::max(0,
+            sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.MaxPerZone", 10)));
         g_PveConfig.drifterTeleportGold = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.TeleportGold", 10), 0, 10000));
         g_PveConfig.proactiveMaxLevelsAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveMaxLevelsAbove", 4), 0, 60));
 
@@ -11059,6 +11070,13 @@ namespace playerbot
         std::unique_lock<std::mutex> guard(g_DrifterLock);
 
         // Drop assignments whose bot or person is gone, and count what survives.
+        //
+        // Anything over the zone's ceiling is released here rather than merely
+        // not topped up, so lowering the cap takes effect on the next pass
+        // instead of waiting for drifters to churn out on their own.
+        uint32 const zoneCap = g_PveConfig.drifterMaxPerZone;
+        std::unordered_map<uint32, uint32> inZone;
+        uint32 released = 0;
         std::unordered_map<uint64, uint32> heldBy;
         for (auto itr = g_DrifterHumanByBot.begin(); itr != g_DrifterHumanByBot.end(); )
         {
@@ -11070,6 +11088,15 @@ namespace playerbot
                 itr = g_DrifterHumanByBot.erase(itr);
                 continue;
             }
+            if (zoneCap && inZone[zoneItr->second] >= zoneCap)
+            {
+                g_DrifterZoneByBot.erase(itr->first);
+                itr = g_DrifterHumanByBot.erase(itr);
+                ++released;
+                continue;
+            }
+
+            ++inZone[zoneItr->second];
             ++heldBy[itr->second];
             g_DrifterZoneByBot[itr->first] = zoneItr->second;
             ++itr;
@@ -11106,18 +11133,25 @@ namespace playerbot
             uint32 const share = baseShare + (index < remainder ? 1u : 0u);
             for (uint32 held = heldBy[humanGuid]; held < share; ++held)
             {
+                // The zone is full. Their share is not redistributed to anyone
+                // else in the same zone - that would just refill it by another
+                // route - so the drifters simply stay where they were.
+                if (zoneCap && inZone[zoneId] >= zoneCap)
+                    break;
+
                 uint64 const botGuid = drawCandidate();
                 if (!botGuid)
                     break;
                 g_DrifterHumanByBot[botGuid] = humanGuid;
                 g_DrifterZoneByBot[botGuid] = zoneId;
+                ++inZone[zoneId];
                 ++assigned;
             }
         }
 
-        if (assigned)
-            TC_LOG_INFO("playerbots.pve", "Drifters: {} newly assigned, {} following {} people.",
-                assigned, uint32(g_DrifterHumanByBot.size()), uint32(humanCount));
+        if (assigned || released)
+            TC_LOG_INFO("playerbots.pve", "Drifters: {} newly assigned, {} released over the {}/zone cap, {} following {} people.",
+                assigned, released, zoneCap, uint32(g_DrifterHumanByBot.size()), uint32(humanCount));
 
         // Whoever is standing somewhere other than where they now belong, and
         // whoever has since arrived where they were sent.

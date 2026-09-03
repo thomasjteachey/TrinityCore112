@@ -115,6 +115,13 @@ struct PveConfig
     // Bots stay flagged and stay hostile: hostility cannot be made per-observer
     // on this core, so the budget decides only whether a bot CHOOSES to pull.
     // Retaliation is never gated - attacking a bot always gets you a fight.
+    // How close an ORDINARY bot must be before it will pick a fight with a
+    // person. Guardians keep their own, longer reach - they hold a zone and
+    // noticing a visitor is the job - and the teleport-approach logic keeps
+    // using the guardian value, because it has to stay above the 210 yard
+    // landing distance to stop a just-dropped guardian re-approaching.
+    float proactiveHuntYards = 125.0f;
+
     bool aggroBudgetEnabled = false;
     uint32 aggroBudgetSolo = 2;
     uint32 aggroBudgetPerExtraMember = 2;
@@ -170,6 +177,10 @@ struct PveConfig
     // border and straight back. A flight path is handled separately and needs no
     // help from this: a person in the air is not counted as being in the zones
     // they pass over at all.
+    // Ceiling on drifters in any ONE zone, counted across everyone standing
+    // in it. The share is per person and the total is global, so without this
+    // five people in one zone draw five shares into it. 0 disables the cap.
+    uint32 drifterMaxPerZone = 10;
     uint32 drifterZoneDwellSeconds = 10;
     // Gold handed to a drifter each time it lands somewhere new, paid before
     // the auction sweep is queued. A bot that arrives broke sweeps the auction

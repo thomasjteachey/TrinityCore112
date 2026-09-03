@@ -684,6 +684,21 @@ Playerbot.Pve.AuctionSell.Enable = 0
 Playerbot.Pve.ZoneGuardians.PerZone = 0
 
 #    Playerbot.Pve.Drifters.Count
+#
+#    Playerbot.Pve.Drifters.MaxPerZone
+#        Description: Ceiling on how many drifters may be in any ONE zone,
+#                     counted across everyone standing in it. The share is per
+#                     person and the total is global, so without a cap five
+#                     people in one zone draw five shares into it - which is the
+#                     whole fleet arriving at once for anyone grinding there.
+#                     Enforced in both directions: a full zone draws no more,
+#                     and assignments over the ceiling are released, so lowering
+#                     this takes effect on the next pass.
+#        Default:     10
+#                     0 - (no ceiling)
+#
+Playerbot.Pve.Drifters.MaxPerZone = 10
+
 #    Playerbot.Pve.Drifters.ZoneDwellSeconds
 #        Description: Drifters - bots drawn evenly out of the banded population that
 #                     drift toward the people online, so the leveling world looks lived
@@ -891,6 +906,22 @@ Playerbot.Pve.GrantMounts = 1
 #        Default:     0 - (Disabled)
 #                     1 - (Enabled)
 #
+#
+#    Playerbot.Pve.ProactiveHuntYards
+#        Description: How close an ORDINARY bot must be before it will pick a
+#                     fight with a person.
+#                     Zone guardians are not affected - they keep
+#                     Playerbot.Pve.ZoneGuardians.PlayerApproachYards, because
+#                     holding a zone and noticing its visitors is the job, and
+#                     because that value also has to stay above the 210 yard
+#                     teleport landing distance to stop a just-dropped guardian
+#                     from re-approaching forever.
+#                     Lower this to give solo players room to grind; it does not
+#                     reduce the bot population or how alive a zone looks.
+#        Default:     125.0
+#
+Playerbot.Pve.ProactiveHuntYards = 125.0
+
 Playerbot.Pve.AggroBudget.Enable = 0
 
 #
