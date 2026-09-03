@@ -1,0 +1,48 @@
+-- Beast Rider (89799) is earned at level 40, not handed to a level 1 hunter.
+--
+-- NO SQL TO RUN. This file is the record; the change is a binary edit, because
+-- SkillLineAbility has no usable MySQL mirror on this realm - the shipped
+-- SkillLineAbility.dbc carries 41 custom-spell rows that dbc.skilllineability_*
+-- never received, Beast Rider among them. The server reads the binary, so the
+-- binary is the only thing that decides this. Applied with
+-- scratchpad/gate_beast_rider.py, which verifies the row before writing.
+--
+-- WHAT WAS WRONG
+--
+-- SkillLineAbility row 22020 grants spell 89799 on skill line 50 (Beast
+-- Mastery, the hunter class skill) with AcquireMethod 2 -
+-- LEARNED_ON_SKILL_LEARN - which fires the moment the skill line itself is
+-- learned. For a class skill that is character creation, so every hunter had
+-- the mount from level 1.
+--
+-- WHAT CHANGED, on both realms' data/dbc/SkillLineAbility.dbc:
+--
+--     ID 22020   AcquireMethod       2  ->  1     (LEARNED_ON_SKILL_VALUE)
+--                MinSkillLineRank    1  ->  200   (level 40)
+--
+-- AcquireMethod 1 is the only mode that honours MinSkillLineRank -
+-- Player::LearnSkillRewardedSpells gates on
+--
+--     if (skillValue < ability->MinSkillLineRank &&
+--         ability->AcquireMethod == SKILL_LINE_ABILITY_LEARNED_ON_SKILL_VALUE)
+--         RemoveSpell(ability->Spell);
+--
+-- Class skill rank tracks level at five per level, so 200 is level 40, which is
+-- when mounts arrive anyway. The same branch REMOVES the spell below that rank,
+-- so the eight hunters who already had it early lose it on their next skill
+-- update - no character sweep needed. Baku, at 40, keeps it.
+--
+-- SERVER ONLY, DELIBERATELY. The client ships its own, different
+-- SkillLineAbility.dbc (stock, ~10,524 rows against the server's 11,238) and
+-- the two are not interchangeable - copying one over the other is what broke
+-- .gm diagnostics with "you cannot speak that language". Nothing here needs the
+-- client: the server decides what a character knows and sends it in
+-- SMSG_INITIAL_SPELLS.
+--
+-- The mirror is intentionally left without the row. Adding just this one would
+-- imply the mirror is authoritative for SkillLineAbility when it is missing 40
+-- others; the drift is a known, guarded condition rather than something to
+-- half-fix here.
+--
+-- TO UNDO: set row 22020 back to AcquireMethod 2, MinSkillLineRank 1 in both
+-- binaries (the .bak-beastrider files beside them are the pre-change copies).
