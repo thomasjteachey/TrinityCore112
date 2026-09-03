@@ -125,6 +125,11 @@ namespace
     // pet is already chewing on the bot. The bot clears the close threat first,
     // then can chase the player if the player is still attacking.
     constexpr float PveImmediatePlayerCombatRange = 40.0f;
+    // How far to look for somebody who is fighting the bot without ever
+    // swinging at it. Wider than the 40y combat range because a caster can
+    // open from further out, and only ever walked when the attacker list is
+    // empty and the bot is in combat anyway.
+    constexpr float PveDefensiveEngagementScanYards = 60.0f;
     // Guardians patrol broadly, but actual player acquisition uses the configured
     // PlayerApproachYards value (200y by default) so teleport/approach and combat
     // discovery cannot disagree about whether a human is "nearby".
@@ -9962,6 +9967,57 @@ namespace
             {
                 closeNonPlayer = ranked;
                 closeNonPlayerDistance = distance;
+            }
+        }
+
+        // Whoever is fighting the bot WITHOUT swinging at it.
+        //
+        // getAttackers() is filled by Unit::Attack, so it lists melee and
+        // auto-attack initiators and nobody else. A player who only casts is
+        // absent from it, and the bot was left with no defensive target at all -
+        // it stood still and died to a mage while fighting back perfectly well
+        // against anyone who swung once. That is what made it look intermittent.
+        //
+        // IsEngagedBy resolves to IsInCombatWith for a player, which has no
+        // threat list, and the combat manager records the engagement however the
+        // damage arrived. Only walked when the attacker list produced nothing and
+        // the bot is in combat regardless - an ordinary melee fight never pays
+        // for the scan, which matters on a 250ms per-bot tick.
+        if (!nearPlayer && !closeNonPlayer && !distantPlayer && bot->IsInCombat())
+        {
+            if (Map* map = bot->FindMap())
+            {
+                for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin();
+                    itr != map->GetPlayers().end(); ++itr)
+                {
+                    Player* engaged = itr->GetSource();
+                    if (!engaged || engaged == bot || !engaged->IsAlive())
+                        continue;
+
+                    // Bots are one team; never let this turn into friendly fire.
+                    if (playerbot::IsManagedRandomBot(engaged))
+                        continue;
+
+                    if (engaged == ignore || !bot->IsEngagedBy(engaged) ||
+                        !bot->IsValidAttackTarget(engaged) ||
+                        !bot->IsWithinDistInMap(engaged, PveDefensiveEngagementScanYards))
+                        continue;
+
+                    float const distance = bot->GetDistance(engaged);
+                    if (distance <= PveImmediatePlayerCombatRange)
+                    {
+                        if (!nearPlayer || distance < nearPlayerDistance)
+                        {
+                            nearPlayer = engaged;
+                            nearPlayerDistance = distance;
+                        }
+                    }
+                    else if (!distantPlayer || distance < distantPlayerDistance)
+                    {
+                        distantPlayer = engaged;
+                        distantPlayerDistance = distance;
+                    }
+                }
             }
         }
 
