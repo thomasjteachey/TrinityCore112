@@ -876,6 +876,59 @@ Playerbot.Pve.AuctionBuy.BudgetWorthLevels = 15
 #
 Playerbot.Pve.GrantMounts = 1
 
+#
+#    Playerbot.Pve.AggroBudget.Enable
+#        Description: Cap how many bots may PROACTIVELY start a fight with one
+#                     person at a time, sized by how much of their party is
+#                     actually standing with them. Solo play stops being a
+#                     dogpile and group play stops being trivial, without
+#                     changing the population - the zone still looks as full as
+#                     it did.
+#                     Bots stay flagged and stay hostile; this decides only
+#                     whether one chooses to pull. RETALIATION IS NEVER GATED:
+#                     attacking a bot always gets you a fight, however many are
+#                     already on you.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+#
+Playerbot.Pve.AggroBudget.Enable = 0
+
+#
+#    Playerbot.Pve.AggroBudget.Solo
+#        Description: Bots that may proactively engage one person who has nobody
+#                     with them.
+#        Default:     2
+#
+Playerbot.Pve.AggroBudget.Solo = 2
+
+#
+#    Playerbot.Pve.AggroBudget.PerExtraMember
+#        Description: Added to the budget for each additional party member who is
+#                     actually nearby. At the defaults a five-man in one place
+#                     draws 10 where a lone player draws 2, so difficulty stays
+#                     roughly flat across group sizes instead of inverting.
+#        Default:     2
+#
+Playerbot.Pve.AggroBudget.PerExtraMember = 2
+
+#
+#    Playerbot.Pve.AggroBudget.MaxPerPlayer
+#        Description: Ceiling on one person's budget, so a raid does not summon
+#                     the whole fleet onto one target.
+#        Default:     10
+#
+Playerbot.Pve.AggroBudget.MaxPerPlayer = 10
+
+#
+#    Playerbot.Pve.AggroBudget.PartyRadiusYards
+#        Description: How close a party member must be to count toward the
+#                     budget. A group spread across a continent is not five
+#                     people helping you, and counting them would hand a solo
+#                     player at the far end of a raid the whole fleet.
+#        Default:     80.0
+#
+Playerbot.Pve.AggroBudget.PartyRadiusYards = 80.0
+
 #    Playerbot.Pve.Professions.Enable
 #        Description: Each bot takes two gathering professions (herbalism/mining/skinning,
 #                     deterministic by character), learns and ranks them automatically, gathers

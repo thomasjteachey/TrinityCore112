@@ -108,6 +108,18 @@ struct PveConfig
     // riding trainer or a mount vendor - the trainer catch-up only walks class
     // trainers - so without this they run the entire climb on foot.
     bool grantMounts = true;
+
+    // How many bots may PROACTIVELY start a fight with one person at a time,
+    // sized by how much of their party is actually standing with them.
+    //
+    // Bots stay flagged and stay hostile: hostility cannot be made per-observer
+    // on this core, so the budget decides only whether a bot CHOOSES to pull.
+    // Retaliation is never gated - attacking a bot always gets you a fight.
+    bool aggroBudgetEnabled = false;
+    uint32 aggroBudgetSolo = 2;
+    uint32 aggroBudgetPerExtraMember = 2;
+    uint32 aggroBudgetMaxPerPlayer = 10;
+    float aggroBudgetPartyRadius = 80.0f;
     // Item levels of value knocked off a purchase for each character level the
     // item sits below the buyer. Without it the scorer weighs item level gained
     // against price and nothing else, so a cheap scrap wins any slot that is

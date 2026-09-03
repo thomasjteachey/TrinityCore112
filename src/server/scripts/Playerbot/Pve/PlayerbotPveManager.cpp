@@ -1693,6 +1693,12 @@ namespace
     // The foe's OWN distance is checked too. Only the ally was, so a packmate
     // could be two paces away while the thing it was chasing sat a hundred yards
     // off, and the assist would send the bot on that walk.
+    // Defined below, beside the snapshot it reads. Declared here rather than
+    // moved: this is the same anonymous namespace, which is the part that
+    // matters - a declaration that drifts into namespace playerbot compiles
+    // clean and fails at link.
+    bool HasAggroSlotFree(ObjectGuid humanGuid);
+
     Unit* PickBotAssistTarget(Player* bot, playerbot::PveConfig const& cfg)
     {
         Map* map = bot->FindMap();
@@ -1742,6 +1748,13 @@ namespace
             // Do not let pack-assist drag a lower-level bot into a suicide fight.
             if (foe->GetTypeId() == TYPEID_PLAYER &&
                 !IsProactivePlayerLevelAcceptable(bot, foe->ToPlayer()))
+                continue;
+
+            // And it is proactive for the aggro budget too. Without this a pack
+            // walks straight around the cap: the first bot pulls within budget
+            // and the rest pile on as 'assist', which is the dogpile the budget
+            // exists to stop.
+            if (foe->GetTypeId() == TYPEID_PLAYER && !HasAggroSlotFree(foe->GetGUID()))
                 continue;
 
             // Worth crossing the room for, and worth the bot's time when it gets
@@ -1927,7 +1940,39 @@ namespace
         float X = 0.0f;
         float Y = 0.0f;
         float Z = 0.0f;
+        // How many more bots may proactively pull this person: their budget
+        // less the bots already on them. Computed on the world thread once a
+        // second. With the budget disabled the world thread writes a sentinel,
+        // so the map-thread gate stays a plain comparison and never has to
+        // read config on the 250 ms path.
+        int32 AggroSlotsFree = std::numeric_limits<int32>::max();
     };
+
+    // Sized on the world thread, where reading Group is legal.
+    //
+    // Only party members actually WITH the person count. A group spread across
+    // a continent is not five people helping you, and letting it read as five
+    // would hand a solo player at the far end of a raid the whole fleet.
+    int32 AggroBudgetFor(Player const* human, playerbot::PveConfig const& cfg)
+    {
+        uint32 nearby = 1;
+        if (Group const* group = human->GetGroup())
+            for (Group::MemberSlot const& slot : group->GetMemberSlots())
+            {
+                if (slot.guid == human->GetGUID())
+                    continue;
+
+                Player const* member = ObjectAccessor::FindConnectedPlayer(slot.guid);
+                if (member && member->IsInWorld() && member->IsAlive() &&
+                    member->GetMapId() == human->GetMapId() &&
+                    member->IsWithinDist3d(human, cfg.aggroBudgetPartyRadius))
+                    ++nearby;
+            }
+
+        int64 const budget = int64(cfg.aggroBudgetSolo) +
+            int64(cfg.aggroBudgetPerExtraMember) * int64(nearby - 1);
+        return int32(std::min<int64>(budget, int64(cfg.aggroBudgetMaxPerPlayer)));
+    }
 
     bool IsProactivePlayerLevelAcceptable(Player const* bot, uint32 playerLevel)
     {
@@ -2094,6 +2139,20 @@ namespace
     // is what makes an armed guardian and a player mutually attackable, so this
     // finds nobody on realms without it - no config coupling needed here.
     // Radius is deliberately wide: a guardian owns its whole zone.
+    // Whether one more bot may pull this person, read from the snapshot.
+    // Someone the snapshot does not carry - not a person, in a sanctuary, just
+    // logged in - is not gated, which matches how the rest of this file treats
+    // an absent spot.
+    bool HasAggroSlotFree(ObjectGuid humanGuid)
+    {
+        std::lock_guard<std::mutex> guard(g_HumanSpotLock);
+        for (HumanSpot const& spot : g_HumanSpots)
+            if (spot.Guid == humanGuid)
+                return spot.AggroSlotsFree > 0;
+
+        return true;
+    }
+
     Player* PickHuntTarget(Player* bot, float radius)
     {
         // Read the snapshot instead of sweeping the grid. This was a
@@ -2133,6 +2192,13 @@ namespace
             // Never each other: bots are one team (the pseudo-faction rule
             // already bans it, but the check keeps this honest if it changes).
             if (playerbot::IsManagedRandomBot(candidate))
+                continue;
+
+            // Already being fought by as many bots as their group can justify.
+            // The bot simply looks elsewhere and falls through to grinding or
+            // travel, which is behaviour it already has. The figure is computed
+            // on the world thread; with the budget off it is INT32_MAX.
+            if (spot.AggroSlotsFree <= 0)
                 continue;
 
             float const distance = bot->GetDistance(candidate);
@@ -10753,6 +10819,15 @@ namespace playerbot
         g_PveConfig.auctionBudgetWorthLevels = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionBuy.BudgetWorthLevels", 15), 1, 200));
         g_PveConfig.grantMounts = sConfigMgr->GetBoolDefault("Playerbot.Pve.GrantMounts", true);
+        g_PveConfig.aggroBudgetEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.AggroBudget.Enable", false);
+        g_PveConfig.aggroBudgetSolo = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Playerbot.Pve.AggroBudget.Solo", 2), 0, 100));
+        g_PveConfig.aggroBudgetPerExtraMember = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Playerbot.Pve.AggroBudget.PerExtraMember", 2), 0, 100));
+        g_PveConfig.aggroBudgetMaxPerPlayer = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Playerbot.Pve.AggroBudget.MaxPerPlayer", 10), 1, 200));
+        g_PveConfig.aggroBudgetPartyRadius = std::max(0.0f,
+            sConfigMgr->GetFloatDefault("Playerbot.Pve.AggroBudget.PartyRadiusYards", 80.0f));
         g_PveConfig.auctionLevelsBehindPenalty = std::max(0.0f, sConfigMgr->GetFloatDefault("Playerbot.Pve.Auction.LevelsBehindPenalty", 0.35f));
         g_PveConfig.professionsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Professions.Enable", false);
         g_PveConfig.relocateEnabled = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.Relocate.Enable", true);
@@ -11157,6 +11232,23 @@ namespace playerbot
         // One pass over the connected players per second, on the world thread,
         // instead of a grid sweep per guardian on the map thread.
         {
+            // How many bots are locked onto each person right now, derived from
+            // the bots' own targets rather than from a registry of claims. A bot
+            // that dies, logs out or picks something else stops counting the
+            // moment it does, so there is nothing to expire and nothing to leak,
+            // and a long fight holds its slot for exactly as long as it lasts.
+            std::unordered_map<uint64, uint32> botsOnTarget;
+            if (g_PveConfig.aggroBudgetEnabled)
+                for (auto const& pair : ObjectAccessor::GetPlayers())
+                {
+                    Player* bot = pair.second;
+                    if (!bot || !bot->IsInWorld() || !playerbot::IsManagedRandomBot(bot))
+                        continue;
+
+                    if (ObjectGuid const target = bot->GetTarget())
+                        ++botsOnTarget[target.GetRawValue()];
+                }
+
             std::vector<HumanSpot> spots;
             for (auto const& pair : ObjectAccessor::GetPlayers())
             {
@@ -11175,8 +11267,16 @@ namespace playerbot
                 if (human->pvpInfo.IsInNoPvPArea)
                     continue;
 
+                int32 slotsFree = std::numeric_limits<int32>::max();
+                if (g_PveConfig.aggroBudgetEnabled)
+                {
+                    auto const taken = botsOnTarget.find(human->GetGUID().GetRawValue());
+                    slotsFree = AggroBudgetFor(human, g_PveConfig) -
+                        int32(taken != botsOnTarget.end() ? taken->second : 0u);
+                }
+
                 spots.push_back({ human->GetGUID(), human->GetMapId(), human->GetZoneId(), human->GetLevel(),
-                    human->GetPositionX(), human->GetPositionY(), human->GetPositionZ() });
+                    human->GetPositionX(), human->GetPositionY(), human->GetPositionZ(), slotsFree });
             }
 
             std::lock_guard<std::mutex> guard(g_HumanSpotLock);
