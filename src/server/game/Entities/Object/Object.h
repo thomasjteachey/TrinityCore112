@@ -471,6 +471,12 @@ class TC_GAME_API WorldObject : public Object, public WorldLocation
         Player* GetCharmerOrOwnerPlayerOrPlayerItself() const;
         Player* GetAffectingPlayer() const;
 
+        // True when a level gap between these two must not decide the fight:
+        // both sides are player controlled, so the stock hit, dodge, parry,
+        // block and spell-hit penalties for attacking somebody higher are
+        // waived. PvE keeps every one of them.
+        static bool IsPvpLevelPenaltyWaived(WorldObject const* attacker, WorldObject const* victim);
+
         Player* GetSpellModOwner() const;
         int32 CalculateSpellDamage(SpellEffectInfo const& spellEffectInfo, int32 const* basePoints = nullptr) const;
 

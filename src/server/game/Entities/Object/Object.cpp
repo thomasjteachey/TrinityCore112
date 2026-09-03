@@ -16,6 +16,7 @@
  */
 
 #include "Object.h"
+#include "Configuration/Config.h"   // IsPvpLevelPenaltyWaived reads a config key
 #include "BattlefieldMgr.h"
 #include "Battleground.h"
 #include "CellImpl.h"
@@ -2533,6 +2534,26 @@ SpellMissInfo WorldObject::MeleeSpellHitResult(Unit* /*victim*/, SpellInfo const
     return SPELL_MISS_NONE;
 }
 
+// A level gap between two PLAYERS must not decide whether an attack lands.
+//
+// Stock charges the lower-level attacker three times over from one level
+// difference - miss, avoidance, and spell hit - and stacked they settle the
+// fight before either side acts. On a realm where people fight across level
+// bands that is most fights.
+//
+// Pets and minions resolve to their owner, so a warlock's felguard mauling a
+// player is PvP. Anything without a controlling player on both sides is PvE
+// and keeps every penalty: a level 12 swinging at a level 60 elite should
+// still miss.
+bool WorldObject::IsPvpLevelPenaltyWaived(WorldObject const* attacker, WorldObject const* victim)
+{
+    static bool const enabled = sConfigMgr->GetBoolDefault("Centurion.Pvp.WaiveLevelHitPenalties", true);
+    if (!enabled || !attacker || !victim)
+        return false;
+
+    return attacker->GetAffectingPlayer() != nullptr && victim->GetAffectingPlayer() != nullptr;
+}
+
 SpellMissInfo WorldObject::MagicSpellHitResult(Unit* victim, SpellInfo const* spellInfo, uint32* heartbeatResistChance) const
 {
     Die<UnitCombatDieSide, UNIT_COMBAT_DIE_HIT, NUM_UNIT_COMBAT_DIE_SIDES> die;
@@ -2551,6 +2572,11 @@ SpellMissInfo WorldObject::MagicSpellHitResult(Unit* victim, SpellInfo const* sp
     if (GetTypeId() == TYPEID_UNIT && ToCreature()->IsTrigger())
         thisLevel = std::max<int32>(thisLevel, spellInfo->SpellLevel);
     int32 leveldif = int32(victim->GetLevelForTarget(this)) - thisLevel;
+
+    // In PvP a higher-level target does not make the spell harder to land.
+    // Clamped rather than zeroed, so casting DOWN keeps its existing edge.
+    if (IsPvpLevelPenaltyWaived(this, victim))
+        leveldif = std::min(leveldif, 0);
 
     // Base hit chance from attacker and victim levels
     int32 modHitChance;

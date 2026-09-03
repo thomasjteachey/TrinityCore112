@@ -3231,6 +3231,23 @@ CharDelete.KeepDays = 30
 #        Default:     50  (Player)
 #                     100 (Bot)
 #
+#
+#    Centurion.Pvp.WaiveLevelHitPenalties
+#        Description: Stop a level gap deciding player-versus-player fights.
+#                     Stock charges a lower-level attacker three times from the
+#                     same difference - miss chance, the target's dodge, parry
+#                     and block, and spell hit - and stacked they settle a fight
+#                     before either side acts.
+#                     Only the PENALTY is removed: attacking somebody higher
+#                     costs nothing, attacking somebody lower keeps its existing
+#                     advantage.
+#                     PvE is untouched - a low level character swinging at a high
+#                     level creature still misses. Pets count as their owner.
+#        Default:     1 - (penalties waived in PvP)
+#                     0 - (stock behaviour)
+#
+Centurion.Pvp.WaiveLevelHitPenalties = 1
+
 Centurion.Chest.SlowOpenPercent.Player = 50
 Centurion.Chest.SlowOpenPercent.Bot = 100
 

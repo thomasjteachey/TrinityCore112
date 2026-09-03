@@ -3059,7 +3059,12 @@ float Unit::GetUnitDodgeChance(WeaponAttackType attType, Unit const* victim) con
 {
     int32 const attackerWeaponSkill = GetWeaponSkillValue(attType, victim);
     int32 const victimMaxSkillValueForLevel = victim->GetMaxSkillValueForLevel(this);
-    int32 const skillDiff = victimMaxSkillValueForLevel - attackerWeaponSkill;
+    int32 skillDiff = victimMaxSkillValueForLevel - attackerWeaponSkill;
+
+    // In PvP the level gap adds no avoidance. Clamped rather than zeroed so
+    // that attacking DOWN keeps the advantage it already had.
+    if (IsPvpLevelPenaltyWaived(this, victim))
+        skillDiff = std::min(skillDiff, 0);
 
     float chance = 0.0f;
     float skillBonus = 0.0f;
@@ -3102,7 +3107,12 @@ float Unit::GetUnitParryChance(WeaponAttackType attType, Unit const* victim) con
 {
     int32 const attackerWeaponSkill = GetWeaponSkillValue(attType, victim);
     int32 const victimMaxSkillValueForLevel = victim->GetMaxSkillValueForLevel(this);
-    int32 const skillDiff = victimMaxSkillValueForLevel - attackerWeaponSkill;
+    int32 skillDiff = victimMaxSkillValueForLevel - attackerWeaponSkill;
+
+    // In PvP the level gap adds no avoidance. Clamped rather than zeroed so
+    // that attacking DOWN keeps the advantage it already had.
+    if (IsPvpLevelPenaltyWaived(this, victim))
+        skillDiff = std::min(skillDiff, 0);
 
     float chance = 0.0f;
     float skillBonus = 0.0f;
@@ -3158,7 +3168,12 @@ float Unit::GetUnitBlockChance(WeaponAttackType attType, Unit const* victim) con
 {
     int32 const attackerWeaponSkill = GetWeaponSkillValue(attType, victim);
     int32 const victimMaxSkillValueForLevel = victim->GetMaxSkillValueForLevel(this);
-    int32 const skillDiff = victimMaxSkillValueForLevel - attackerWeaponSkill;
+    int32 skillDiff = victimMaxSkillValueForLevel - attackerWeaponSkill;
+
+    // In PvP the level gap adds no avoidance. Clamped rather than zeroed so
+    // that attacking DOWN keeps the advantage it already had.
+    if (IsPvpLevelPenaltyWaived(this, victim))
+        skillDiff = std::min(skillDiff, 0);
 
     float chance = 0.0f;
     float skillBonus = 0.0f;
@@ -13826,6 +13841,12 @@ float Unit::MeleeSpellMissChance(Unit const* victim, WeaponAttackType attType, i
     // bonus from skills is 0.04%
     //miss_chance -= skillDiff * 0.04f;
     int32 diff = -skillDiff;
+
+    // Same rule for the hit roll itself. diff is the victim's advantage in
+    // skill, so clamping it at zero removes the penalty for swinging up while
+    // leaving the bonus for swinging down.
+    if (IsPvpLevelPenaltyWaived(this, victim))
+        diff = std::min(diff, 0);
     if (victim->GetTypeId() == TYPEID_PLAYER)
         missChance += diff > 0 ? diff * 0.04f : diff * 0.02f;
     else
