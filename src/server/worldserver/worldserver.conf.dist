@@ -3233,6 +3233,19 @@ CharDelete.KeepDays = 30
 #
 Centurion.Chest.SlowOpenPercent.Player = 50
 Centurion.Chest.SlowOpenPercent.Bot = 100
+
+#
+#    Centurion.Hunter.MongooseBite.ScorpidHealPerStrength
+#        Description: Healing per point of Strength drained, when Mongoose Bite
+#                     consumes a Scorpid Sting. The heal used to be a flat roll
+#                     from spell 81291, which paid the same for a rank 1 sting as
+#                     for a rank 4 one; it now tracks the debuff actually spent.
+#                     Scorpid Sting drains 20 Strength at rank 1 and 68 at rank 4,
+#                     so the default heals for 100 and 340 respectively.
+#                     0 falls back to the spell's own flat value.
+#        Default:     5.0
+#
+Centurion.Hunter.MongooseBite.ScorpidHealPerStrength = 5.0
 #        Description: Death chest lifetime. Default 600.
 #
 #    Centurion.Hardcore.FullLoot.DropChancePercent

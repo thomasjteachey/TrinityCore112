@@ -29,6 +29,7 @@
 #include "SpellHistory.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
+#include "Configuration/Config.h"
 #include "GameTime.h"
 #include "WorldPacket.h"
 #include <algorithm>
@@ -1431,6 +1432,15 @@ class spell_hun_hunters_mark : public AuraScript
     }
 };
 
+// How much healing each point of drained Strength is worth when Mongoose Bite
+// consumes a Scorpid Sting. Read per cast so .reload config retunes it; the
+// call happens once per bite, which is nowhere near hot enough to cache.
+static float ScorpidHealPerStrength()
+{
+    return std::max(0.0f, sConfigMgr->GetFloatDefault(
+        "Centurion.Hunter.MongooseBite.ScorpidHealPerStrength", 5.0f));
+}
+
 // 81286,81287 - Mongoose Bite
 class spell_hun_mongoose_bite : public SpellScript
 {
@@ -1482,9 +1492,32 @@ class spell_hun_mongoose_bite : public SpellScript
 
                         ApplyPct(basePoint, 50);
                     }
-                    // Scorpid Sting - Attempts to Disarm the target for 10 sec. This effect cannot occur more than once per 1 minute.
+                    // Scorpid Sting - heals for a multiple of the Strength the
+                    // sting is draining, rather than a flat amount. A flat heal
+                    // paid the same for a rank 1 sting as for a rank 4 one.
                     else if (familyFlag[0] & 0x00008000)
+                    {
                         spellId = SPELL_HUNTER_SCORPID_HEALING;
+
+                        // Found by MiscValue, not by index: the sting drains
+                        // Strength on one effect and Agility on another, and only
+                        // Strength feeds the heal. GetAmount() is the LIVE applied
+                        // amount - negative, because it is a reduction - so it
+                        // already carries any modifiers and stays right if the
+                        // sting is retuned.
+                        int32 strengthDrained = 0;
+                        for (uint8 statIndex = 0; statIndex < MAX_SPELL_EFFECTS; ++statIndex)
+                            if (AuraEffect const* statEff = aura->GetEffect(statIndex))
+                                if (statEff->GetAuraType() == SPELL_AURA_MOD_STAT &&
+                                    statEff->GetMiscValue() == int32(STAT_STRENGTH))
+                                {
+                                    strengthDrained = -statEff->GetAmount();
+                                    break;
+                                }
+
+                        if (strengthDrained > 0)
+                            basePoint = int32(strengthDrained * ScorpidHealPerStrength());
+                    }
 
                     aa = i->second;
                     // Refresh aura duration
@@ -1502,6 +1535,12 @@ class spell_hun_mongoose_bite : public SpellScript
                 if (spellId == SPELL_HUNTER_SCORPID_HEALING)
                 {
                     CastSpellExtraArgs args(TriggerCastFlags(TRIGGERED_FULL_MASK & ~TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD));
+
+                    // Falls back to the spell's own value if no Strength drain was
+                    // found, so a sting shaped differently than expected still heals.
+                    if (basePoint > 0)
+                        args.AddSpellBP0(basePoint);
+
                     caster->CastSpell(caster, spellId, args);
                     Pet* pet = caster->ToPlayer()->GetPet();
                     if (pet && pet->IsAlive())
