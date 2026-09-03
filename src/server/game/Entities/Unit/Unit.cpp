@@ -2633,7 +2633,7 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
     int32 const victimDefenseSkill = victim->GetDefenseSkillValue(this);
 
     // Miss chance based on melee
-    int32 miss_chance = int32(MeleeSpellMissChance(victim, attType, attackerWeaponSkill - victimMaxSkillValueForLevel, 0) * 100.0f);
+    int32 miss_chance = int32(MeleeSpellMissChance(victim, attType, attackerWeaponSkill - GetOpposedSkillValueForLevel(victim), 0) * 100.0f);
 
     Die<UnitCombatDieSide, UNIT_COMBAT_DIE_HIT, NUM_UNIT_COMBAT_DIE_SIDES> die;
     die.set(UNIT_COMBAT_DIE_MISS, miss_chance);
@@ -2896,7 +2896,7 @@ SpellMissInfo Unit::MeleeSpellHitResult(Unit* victim, SpellInfo const* spellInfo
     else
         attackerWeaponSkill = int32(GetWeaponSkillValue(attType, victim));
 
-    int32 skillDiff = attackerWeaponSkill - int32(victim->GetMaxSkillValueForLevel(this));
+    int32 skillDiff = attackerWeaponSkill - GetOpposedSkillValueForLevel(victim);
 
     uint32 roll = urand(0, 9999);
 
@@ -3055,16 +3055,35 @@ uint32 Unit::GetDefenseSkillValue(Unit const* target) const
         return GetMaxSkillValueForLevel(target);
 }
 
+// The victim's level-derived skill, as this attacker should see it.
+//
+// Every physical hit, dodge, parry and block number below is the difference
+// between the attacker's weapon skill and this value. The value returned here
+// is purely level x 5; the attacker's side is where gear lives (weapon skill
+// rating, the T2 confiscation hook), which is why the level is taken out of
+// THIS half and not by zeroing the difference.
+//
+// Returning the attacker's own value settles a PvP fight as if the two were the
+// same level, in both directions: swinging up costs nothing and swinging down
+// buys nothing. Anything a player earned still counts, because it moves the
+// other side of the subtraction.
+//
+// PvE reads the victim's real level and is completely untouched.
+int32 Unit::GetOpposedSkillValueForLevel(Unit const* victim) const
+{
+    if (IsPvpLevelPenaltyWaived(this, victim))
+        return int32(GetMaxSkillValueForLevel());
+
+    return int32(victim->GetMaxSkillValueForLevel(this));
+}
+
 float Unit::GetUnitDodgeChance(WeaponAttackType attType, Unit const* victim) const
 {
     int32 const attackerWeaponSkill = GetWeaponSkillValue(attType, victim);
-    int32 const victimMaxSkillValueForLevel = victim->GetMaxSkillValueForLevel(this);
-    int32 skillDiff = victimMaxSkillValueForLevel - attackerWeaponSkill;
-
-    // In PvP the level gap adds no avoidance. Clamped rather than zeroed so
-    // that attacking DOWN keeps the advantage it already had.
-    if (IsPvpLevelPenaltyWaived(this, victim))
-        skillDiff = std::min(skillDiff, 0);
+    // In PvP this is the attacker's own value, so no level gap reaches the
+    // avoidance roll from either side.
+    int32 const victimMaxSkillValueForLevel = GetOpposedSkillValueForLevel(victim);
+    int32 const skillDiff = victimMaxSkillValueForLevel - attackerWeaponSkill;
 
     float chance = 0.0f;
     float skillBonus = 0.0f;
@@ -3106,13 +3125,10 @@ float Unit::GetUnitDodgeChance(WeaponAttackType attType, Unit const* victim) con
 float Unit::GetUnitParryChance(WeaponAttackType attType, Unit const* victim) const
 {
     int32 const attackerWeaponSkill = GetWeaponSkillValue(attType, victim);
-    int32 const victimMaxSkillValueForLevel = victim->GetMaxSkillValueForLevel(this);
-    int32 skillDiff = victimMaxSkillValueForLevel - attackerWeaponSkill;
-
-    // In PvP the level gap adds no avoidance. Clamped rather than zeroed so
-    // that attacking DOWN keeps the advantage it already had.
-    if (IsPvpLevelPenaltyWaived(this, victim))
-        skillDiff = std::min(skillDiff, 0);
+    // In PvP this is the attacker's own value, so no level gap reaches the
+    // avoidance roll from either side.
+    int32 const victimMaxSkillValueForLevel = GetOpposedSkillValueForLevel(victim);
+    int32 const skillDiff = victimMaxSkillValueForLevel - attackerWeaponSkill;
 
     float chance = 0.0f;
     float skillBonus = 0.0f;
@@ -3167,13 +3183,10 @@ float Unit::GetUnitMissChance() const
 float Unit::GetUnitBlockChance(WeaponAttackType attType, Unit const* victim) const
 {
     int32 const attackerWeaponSkill = GetWeaponSkillValue(attType, victim);
-    int32 const victimMaxSkillValueForLevel = victim->GetMaxSkillValueForLevel(this);
-    int32 skillDiff = victimMaxSkillValueForLevel - attackerWeaponSkill;
-
-    // In PvP the level gap adds no avoidance. Clamped rather than zeroed so
-    // that attacking DOWN keeps the advantage it already had.
-    if (IsPvpLevelPenaltyWaived(this, victim))
-        skillDiff = std::min(skillDiff, 0);
+    // In PvP this is the attacker's own value, so no level gap reaches the
+    // avoidance roll from either side.
+    int32 const victimMaxSkillValueForLevel = GetOpposedSkillValueForLevel(victim);
+    int32 const skillDiff = victimMaxSkillValueForLevel - attackerWeaponSkill;
 
     float chance = 0.0f;
     float skillBonus = 0.0f;
@@ -13840,13 +13853,9 @@ float Unit::MeleeSpellMissChance(Unit const* victim, WeaponAttackType attType, i
 
     // bonus from skills is 0.04%
     //miss_chance -= skillDiff * 0.04f;
+    // The level is already out of skillDiff for a PvP swing - the callers use
+    // GetOpposedSkillValueForLevel - so there is nothing to correct here.
     int32 diff = -skillDiff;
-
-    // Same rule for the hit roll itself. diff is the victim's advantage in
-    // skill, so clamping it at zero removes the penalty for swinging up while
-    // leaving the bonus for swinging down.
-    if (IsPvpLevelPenaltyWaived(this, victim))
-        diff = std::min(diff, 0);
     if (victim->GetTypeId() == TYPEID_PLAYER)
         missChance += diff > 0 ? diff * 0.04f : diff * 0.02f;
     else

@@ -3238,9 +3238,10 @@ CharDelete.KeepDays = 30
 #                     same difference - miss chance, the target's dodge, parry
 #                     and block, and spell hit - and stacked they settle a fight
 #                     before either side acts.
-#                     Only the PENALTY is removed: attacking somebody higher
-#                     costs nothing, attacking somebody lower keeps its existing
-#                     advantage.
+#                     Both directions go: attacking somebody higher costs
+#                     nothing, and attacking somebody lower buys nothing. Two
+#                     players land blows on each other as if evenly matched,
+#                     and the level gap tells in damage and health instead.
 #                     PvE is untouched - a low level character swinging at a high
 #                     level creature still misses. Pets count as their owner.
 #        Default:     1 - (penalties waived in PvP)

@@ -472,9 +472,10 @@ class TC_GAME_API WorldObject : public Object, public WorldLocation
         Player* GetAffectingPlayer() const;
 
         // True when a level gap between these two must not decide the fight:
-        // both sides are player controlled, so the stock hit, dodge, parry,
-        // block and spell-hit penalties for attacking somebody higher are
-        // waived. PvE keeps every one of them.
+        // both sides are player controlled, so hit, dodge, parry, block and
+        // spell hit are all resolved as if the two were the same level -
+        // neither the penalty for punching up nor the bonus for punching down.
+        // PvE keeps every one of them.
         static bool IsPvpLevelPenaltyWaived(WorldObject const* attacker, WorldObject const* victim);
 
         Player* GetSpellModOwner() const;

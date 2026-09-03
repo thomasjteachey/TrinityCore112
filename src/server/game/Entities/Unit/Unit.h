@@ -1024,6 +1024,10 @@ class TC_GAME_API Unit : public WorldObject
         void Dismount();
 
         uint32 GetMaxSkillValueForLevel(Unit const* target = nullptr) const { return (target ? GetLevelForTarget(target) : GetLevel()) * 5; }
+        // The victim's level-derived skill as this attacker should see it:
+        // the attacker's OWN value in PvP, so the fight resolves as if the two
+        // were the same level. The victim's real value everywhere else.
+        int32 GetOpposedSkillValueForLevel(Unit const* victim) const;
         static void DealDamageMods(Unit const* victim, uint32& damage, uint32* absorb);
         static uint32 DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage const* cleanDamage = nullptr, DamageEffectType damagetype = DIRECT_DAMAGE, SpellSchoolMask damageSchoolMask = SPELL_SCHOOL_MASK_NORMAL, SpellInfo const* spellProto = nullptr, bool durabilityLoss = true);
         static void Kill(Unit* attacker, Unit* victim, bool durabilityLoss = true);

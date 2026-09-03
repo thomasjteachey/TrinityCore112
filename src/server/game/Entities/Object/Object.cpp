@@ -2541,6 +2541,10 @@ SpellMissInfo WorldObject::MeleeSpellHitResult(Unit* /*victim*/, SpellInfo const
 // fight before either side acts. On a realm where people fight across level
 // bands that is most fights.
 //
+// It runs in BOTH directions: a level 60 gains nothing against a level 40
+// either. The two resolve hits as if evenly matched, and the gap shows up in
+// damage, health and cooldowns instead - where it is earned.
+//
 // Pets and minions resolve to their owner, so a warlock's felguard mauling a
 // player is PvP. Anything without a controlling player on both sides is PvE
 // and keeps every penalty: a level 12 swinging at a level 60 elite should
@@ -2571,12 +2575,20 @@ SpellMissInfo WorldObject::MagicSpellHitResult(Unit* victim, SpellInfo const* sp
     int32 thisLevel = GetLevelForTarget(victim);
     if (GetTypeId() == TYPEID_UNIT && ToCreature()->IsTrigger())
         thisLevel = std::max<int32>(thisLevel, spellInfo->SpellLevel);
-    int32 leveldif = int32(victim->GetLevelForTarget(this)) - thisLevel;
+    int32 victimLevel = int32(victim->GetLevelForTarget(this));
 
-    // In PvP a higher-level target does not make the spell harder to land.
-    // Clamped rather than zeroed, so casting DOWN keeps its existing edge.
+    // Between two players the level gap does not move spell hit in either
+    // direction: the victim is read at the caster's own level.
+    //
+    // Substituted rather than differenced away because the rule just below - two
+    // level 60 players miss each other 4% of the time, not 3% - is guarded on the
+    // victim's actual level. Forcing the difference to zero passed its first test
+    // and failed its second, so a 60 casting at a 40 kept the 3% floor that an
+    // even fight does not get. Reading the level itself keeps the two identical.
     if (IsPvpLevelPenaltyWaived(this, victim))
-        leveldif = std::min(leveldif, 0);
+        victimLevel = thisLevel;
+
+    int32 const leveldif = victimLevel - thisLevel;
 
     // Base hit chance from attacker and victim levels
     int32 modHitChance;
@@ -2588,7 +2600,7 @@ SpellMissInfo WorldObject::MagicSpellHitResult(Unit* victim, SpellInfo const* sp
         {
             if (Unit const* casterUnit = ToUnit())
             {
-                if (casterUnit->GetTypeId() == TYPEID_PLAYER && victim->GetTypeId() == TYPEID_PLAYER && thisLevel == 60 && victim->GetLevelForTarget(this) == 60)
+                if (casterUnit->GetTypeId() == TYPEID_PLAYER && victim->GetTypeId() == TYPEID_PLAYER && thisLevel == 60 && victimLevel == 60)
                     modHitChance = 96;
             }
         }
