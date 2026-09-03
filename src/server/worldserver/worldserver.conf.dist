@@ -3215,6 +3215,24 @@ CharDelete.KeepDays = 30
 #        Description: GameObject entry for the death chest. 0 disables the full-loot drop.
 #
 #    Centurion.Hardcore.FullLoot.ChestDespawnSeconds
+
+#
+#    Centurion.Chest.SlowOpenPercent.Player
+#    Centurion.Chest.SlowOpenPercent.Bot
+#        Description: How long a slow-open chest takes to open, as a percent of
+#                     the stock cast time, for a person and for a managed
+#                     playerbot respectively. The pause while opening a corpse
+#                     cache is what decides whether looting a kill in the open
+#                     world is safe, and a bot has nothing to lose by standing
+#                     still for it.
+#                     Only LOCKTYPE_SLOW_OPEN is affected - lockpicking,
+#                     herbalism, mining and quick-open chests keep their timing.
+#                     100 is stock. Clamped to 1-1000.
+#        Default:     50  (Player)
+#                     100 (Bot)
+#
+Centurion.Chest.SlowOpenPercent.Player = 50
+Centurion.Chest.SlowOpenPercent.Bot = 100
 #        Description: Death chest lifetime. Default 600.
 #
 #    Centurion.Hardcore.FullLoot.DropChancePercent

@@ -26,6 +26,9 @@
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "Configuration/Config.h"
+#include "WorldSession.h"
+#include <sstream>
 #include "Random.h"
 #include "Spell.h"
 #include "SpellAuraEffects.h"
@@ -3347,6 +3350,59 @@ int32 SpellInfo::GetMaxDuration() const
     return (DurationEntry->MaxDuration == -1) ? -1 : abs(DurationEntry->MaxDuration);
 }
 
+namespace
+{
+    // Managed playerbot accounts (Playerbot.RandomPopulation.BotAccountIds in
+    // playerbots.conf); parsed once, config loads before any login.
+    // (Object.cpp, Unit.cpp and AuctionHouseMgr.cpp each keep their own copy.)
+    bool IsManagedPlayerbotAccount(uint32 accountId)
+    {
+        static std::vector<uint32> const accountIds = []
+        {
+            std::vector<uint32> ids;
+            std::stringstream stream(sConfigMgr->GetStringDefault("Playerbot.RandomPopulation.BotAccountIds", ""));
+            std::string token;
+            while (std::getline(stream, token, ','))
+                if (!token.empty())
+                    ids.push_back(uint32(std::strtoul(token.c_str(), nullptr, 10)));
+            std::sort(ids.begin(), ids.end());
+            return ids;
+        }();
+        return !accountIds.empty() && std::binary_search(accountIds.begin(), accountIds.end(), accountId);
+    }
+
+    // How long a slow-open chest takes to open, as a percent of the stock cast
+    // time, for whoever is opening it.
+    //
+    // The pause while you open a corpse cache is what decides whether looting a
+    // kill in the open world is safe, and there is no reason for a person and a
+    // bot to be held still for the same length of time - the bot has nothing to
+    // lose by standing there.
+    //
+    // Only LOCKTYPE_SLOW_OPEN is touched. Lockpicking, herbalism, mining and the
+    // quick-open chests all use other lock types and keep their own timing.
+    bool IsSlowOpenLockSpell(SpellInfo const* spellInfo)
+    {
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+            if (effect.IsEffect(SPELL_EFFECT_OPEN_LOCK) && effect.MiscValue == LOCKTYPE_SLOW_OPEN)
+                return true;
+
+        return false;
+    }
+
+    int32 SlowOpenCastTimePercent(WorldObject const* caster)
+    {
+        Player const* player = caster ? caster->ToPlayer() : nullptr;
+        if (!player || !player->GetSession())
+            return 100;   // creatures and anything sessionless keep stock timing
+
+        bool const isBot = IsManagedPlayerbotAccount(player->GetSession()->GetAccountId());
+        return std::clamp(sConfigMgr->GetIntDefault(isBot
+            ? "Centurion.Chest.SlowOpenPercent.Bot"
+            : "Centurion.Chest.SlowOpenPercent.Player", isBot ? 100 : 50), 1, 1000);
+    }
+}
+
 uint32 SpellInfo::CalcCastTime(Spell* spell /*= nullptr*/) const
 {
     // not all spells have cast time index and this is all is pasiive abilities
@@ -3356,7 +3412,15 @@ uint32 SpellInfo::CalcCastTime(Spell* spell /*= nullptr*/) const
     int32 castTime = CastTimeEntry->Base;
 
     if (spell)
+    {
         spell->GetCaster()->ModSpellCastTime(this, castTime, spell);
+
+        // After the ordinary modifiers, so haste and spellmods still apply to
+        // the shortened figure rather than to a number nothing else has seen.
+        // The client draws its bar from SMSG_SPELL_START, so it shows this.
+        if (castTime > 0 && IsSlowOpenLockSpell(this))
+            castTime = castTime * SlowOpenCastTimePercent(spell->GetCaster()) / 100;
+    }
 
     if (HasAttribute(SPELL_ATTR0_REQ_AMMO) && (!IsAutoRepeatRangedSpell()))
         castTime += 500;
