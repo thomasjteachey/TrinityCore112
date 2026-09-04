@@ -847,13 +847,43 @@ local function MakeSlot(slotId, side, row)
 	b.icon:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", -2, 2)
 	b.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
 
-	-- Quality border, the way an item button reads it.
-	b.border = b:CreateTexture(nil, "OVERLAY")
-	b.border:SetPoint("TOPLEFT", b, "TOPLEFT", -1, 1)
-	b.border:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 1, -1)
-	b.border:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
-	b.border:SetBlendMode("ADD")
-	b.border:Hide()
+	-- Quality edge, drawn as four hairlines around the icon.
+	--
+	-- NOT UI-ActionButton-Border: that texture is a soft glow with a large
+	-- transparent margin, meant to be drawn at about 1.6x the button and
+	-- centred. Stretched to the button's own size it collapses into a coloured
+	-- blob sitting in the middle of the icon, which is exactly what it did.
+	-- Four one-pixel bars cost nothing and read as a border at this size.
+	b.edge = {}
+	for e = 1, 4 do
+		local t = b:CreateTexture(nil, "OVERLAY")
+		t:SetTexture("Interface\\Buttons\\WHITE8X8")
+		b.edge[e] = t
+	end
+	b.edge[1]:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+	b.edge[1]:SetPoint("TOPRIGHT", b, "TOPRIGHT", 0, 0)
+	b.edge[1]:SetHeight(1)
+	b.edge[2]:SetPoint("BOTTOMLEFT", b, "BOTTOMLEFT", 0, 0)
+	b.edge[2]:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+	b.edge[2]:SetHeight(1)
+	b.edge[3]:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+	b.edge[3]:SetPoint("BOTTOMLEFT", b, "BOTTOMLEFT", 0, 0)
+	b.edge[3]:SetWidth(1)
+	b.edge[4]:SetPoint("TOPRIGHT", b, "TOPRIGHT", 0, 0)
+	b.edge[4]:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+	b.edge[4]:SetWidth(1)
+
+	b.SetEdgeColor = function(self, r, g, bl, show)
+		for e = 1, 4 do
+			if show then
+				self.edge[e]:SetVertexColor(r, g, bl)
+				self.edge[e]:Show()
+			else
+				self.edge[e]:Hide()
+			end
+		end
+	end
+	b:SetEdgeColor(0, 0, 0, false)
 
 	b.ilvl = b:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
 	b.ilvl:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 1)
@@ -885,15 +915,66 @@ gearFoot:SetPoint("BOTTOM", bot, "BOTTOM", 0, 40)
 ------------------------------------------------------------------
 -- talent page
 ------------------------------------------------------------------
+-- Blizzard's own tree art, on Blizzard's own grid.
+--
+-- The talent frame draws each tree as a 384x384 background split into four
+-- quadrants under Interface\TalentFrame, with talents on a four column by
+-- eleven tier grid laid over it. Both are reproduced here rather than
+-- approximated: the shape of a build is only readable against the background it
+-- was designed on.
+--
+-- The background NAME lives in TalentTab.dbc's BackgroundFile, which this
+-- fork's DBC struct does not load, so the mapping is kept here instead. Ordered
+-- by the same 0/1/2 the server sends.
+local TREE_ART = {
+	[1]  = { "WarriorArms", "WarriorFury", "WarriorProtection" },
+	[2]  = { "PaladinHoly", "PaladinProtection", "PaladinCombat" },
+	[3]  = { "HunterBeastMastery", "HunterMarksmanship", "HunterSurvival" },
+	[4]  = { "RogueAssassination", "RogueCombat", "RogueSubtlety" },
+	[5]  = { "PriestDiscipline", "PriestHoly", "PriestShadow" },
+	[6]  = { "DeathKnightBlood", "DeathKnightFrost", "DeathKnightUnholy" },
+	[7]  = { "ShamanElementalCombat", "ShamanEnhancement", "ShamanRestoration" },
+	[8]  = { "MageArcane", "MageFire", "MageFrost" },
+	[9]  = { "WarlockCurses", "WarlockSummoning", "WarlockDestruction" },
+	[11] = { "DruidBalance", "DruidFeralCombat", "DruidRestoration" },
+}
+
+local TREE_W, TREE_H = 384, 384
+local TALENT_COLS, TALENT_ROWS = 4, 11
+-- Blizzard's own step between talent buttons inside that 384x384.
+local TAL_X0, TAL_Y0, TAL_DX, TAL_DY = 22, 22, 63, 33
+
 local talentPage = CreateFrame("Frame", nil, bot)
 talentPage:SetAllPoints(bot)
 talentPage:Hide()
 
-local treeButtons = {}
-local activeTree = 0
+-- The tree art is four quadrants: 256 wide on the left, 128 on the right, and
+-- the same split top to bottom. Anchored as one block so the grid can be laid
+-- out against its top left corner.
+local treeArt = CreateFrame("Frame", nil, talentPage)
+treeArt:SetWidth(TREE_W)
+treeArt:SetHeight(TREE_H)
+treeArt:SetPoint("TOP", bot, "TOP", 0, -96)
+
+local artPieces = {}
+local ART_LAYOUT = {
+	{ "TopLeft",     256, 256,   0,    0 },
+	{ "TopRight",    128, 256, 256,    0 },
+	{ "BottomLeft",  256, 128,   0, -256 },
+	{ "BottomRight", 128, 128, 256, -256 },
+}
+
+for i = 1, #ART_LAYOUT do
+	local def = ART_LAYOUT[i]
+	local t = treeArt:CreateTexture(nil, "BACKGROUND")
+	t:SetWidth(def[2])
+	t:SetHeight(def[3])
+	t:SetPoint("TOPLEFT", treeArt, "TOPLEFT", def[4], def[5])
+	artPieces[i] = { tex = t, corner = def[1] }
+end
 
 local talentIcons = {}
-local TALENT_COLS, TALENT_ROWS = 4, 11
+local activeTree = 0
 
 for i = 1, TALENT_COLS * TALENT_ROWS do
 	local t = CreateFrame("Button", nil, talentPage)
@@ -902,14 +983,30 @@ for i = 1, TALENT_COLS * TALENT_ROWS do
 
 	local col = math.fmod(i - 1, TALENT_COLS)
 	local row = math.floor((i - 1) / TALENT_COLS)
-	t:SetPoint("TOPLEFT", bot, "TOPLEFT", 60 + col * 74, -104 - row * 34)
+	t:SetPoint("TOPLEFT", treeArt, "TOPLEFT", TAL_X0 + col * TAL_DX, -(TAL_Y0 + row * TAL_DY))
 
 	t.icon = t:CreateTexture(nil, "ARTWORK")
 	t.icon:SetAllPoints(t)
 	t.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
 
-	t.rank = t:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
-	t.rank:SetPoint("BOTTOMRIGHT", t, "BOTTOMRIGHT", 2, -1)
+	-- The gold frame a learned talent wears in the real frame.
+	t.frame = t:CreateTexture(nil, "OVERLAY")
+	t.frame:SetWidth(46)
+	t.frame:SetHeight(46)
+	t.frame:SetPoint("CENTER", t, "CENTER", 0, 0)
+	t.frame:SetTexture("Interface\\TalentFrame\\UI-TalentFrame-Parts")
+	t.frame:SetTexCoord(0, 0.35, 0, 0.36)
+
+	-- Rank in the corner, in its own little box, as the talent frame does it.
+	t.rankBg = t:CreateTexture(nil, "OVERLAY")
+	t.rankBg:SetWidth(16)
+	t.rankBg:SetHeight(16)
+	t.rankBg:SetPoint("BOTTOMRIGHT", t, "BOTTOMRIGHT", 4, -4)
+	t.rankBg:SetTexture("Interface\\TalentFrame\\UI-TalentFrame-Parts")
+	t.rankBg:SetTexCoord(0, 0.0625, 0.6, 0.7)
+
+	t.rank = t:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	t.rank:SetPoint("CENTER", t.rankBg, "CENTER", 0, 0)
 
 	t:SetScript("OnEnter", function()
 		if not this.spellId then
@@ -945,7 +1042,7 @@ DrawGear = function(name)
 	for _, b in pairs(slotButtons) do
 		b.itemId = nil
 		b.icon:SetTexture(nil)
-		b.border:Hide()
+		b:SetEdgeColor(0, 0, 0, false)
 		b.ilvl:SetText("")
 	end
 
@@ -969,8 +1066,7 @@ DrawGear = function(name)
 			if g.quality == 6 then
 				r, gr, bl = 0.8, 0.27, 0.27
 			end
-			b.border:SetVertexColor(r, gr, bl)
-			b.border:Show()
+			b:SetEdgeColor(r, gr, bl, true)
 			b.ilvl:SetText(g.ilvl)
 			worn = worn + 1
 			if QUALITY_RANK[g.quality] and QUALITY_RANK[g.quality] >= 2 then
@@ -999,6 +1095,21 @@ DrawTalents = function(name)
 	if not picks or #picks == 0 then
 		talentFoot:SetText("|cff808080waiting for the server...|r")
 		return
+	end
+
+	-- Point the background at this class and tree.
+	local b = nil
+	for i = 1, #roster do
+		if roster[i].name == name then b = roster[i] break end
+	end
+	local art = b and TREE_ART[b.class] and TREE_ART[b.class][activeTree + 1]
+	for i = 1, #artPieces do
+		if art then
+			artPieces[i].tex:SetTexture("Interface\\TalentFrame\\" .. art .. "-" .. artPieces[i].corner)
+			artPieces[i].tex:Show()
+		else
+			artPieces[i].tex:Hide()
+		end
 	end
 
 	local shown = 0

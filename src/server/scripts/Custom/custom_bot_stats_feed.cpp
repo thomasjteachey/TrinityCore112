@@ -366,7 +366,10 @@ namespace
     // SetModel with the path - which the server can look up and hand over.
     void SendModelTo(Player* viewer, Player* bot)
     {
-        CreatureDisplayInfoEntry const* display = sCreatureDisplayInfoStore.LookupEntry(bot->GetDisplayId());
+        // NATIVE, not current: GetDisplayId returns whatever the bot is
+        // wearing right now, so a druid in moonkin form sent the moonkin and
+        // the pane showed a bird instead of a night elf.
+        CreatureDisplayInfoEntry const* display = sCreatureDisplayInfoStore.LookupEntry(bot->GetNativeDisplayId());
         if (!display)
             return;
 
