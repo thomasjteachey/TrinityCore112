@@ -7062,6 +7062,7 @@ namespace
 
             bool tookAnything = false;
             uint32 tookItems = 0;
+            bool const pvpOnly = playerbot::PveManager::IsPvpOnlyBot(bot);
             time_t const nowTime = GameTime::GetGameTime();
             for (Mail* mail : bot->GetMails())
             {
@@ -7076,7 +7077,19 @@ namespace
 
                 if (mail->money)
                 {
-                    if (bot->ModifyMoney(mail->money, false))
+                    // A PvP-only bot has no use for coin. It never shops the
+                    // auction house, never runs a vendor errand and never lists
+                    // anything, so banking its old proceeds would only park tens
+                    // of thousands of gold somewhere nothing can ever spend it -
+                    // which is exactly the state twenty-four of them were found
+                    // in. The mail is cleared and the money goes with it.
+                    if (pvpOnly)
+                    {
+                        mail->money = 0;
+                        mail->state = MAIL_STATE_CHANGED;
+                        tookAnything = true;
+                    }
+                    else if (bot->ModifyMoney(mail->money, false))
                     {
                         mail->money = 0;
                         mail->state = MAIL_STATE_CHANGED;
@@ -12857,16 +12870,16 @@ namespace playerbot
         // PvP-only bots live outside the PvE world entirely.
         if (IsPvpOnlyBot(player))
         {
-            // Emptying a mailbox is housekeeping, not a PvE behaviour, and it is
-            // the one thing a PvP-only bot still needs. Everything below this
-            // line is skipped for them, so the day an account was moved onto the
-            // PvP-only list its outstanding auction proceeds froze where they
-            // stood: eight level 60s on one account were holding 3,383 mails and
-            // 42,660 gold that had been sitting undeliverable ever since, with
-            // the bots online the whole time and no way to ever collect it.
+            // Emptying a mailbox is housekeeping, not a PvE behaviour, and a
+            // PvP-only bot still needs it done. Everything below this line is
+            // skipped for them, so the day an account was moved onto the
+            // PvP-only list its mail stopped being touched at all: twenty-four
+            // level 60s were holding 3,411 mails between them, undeliverable
+            // ever since, with the bots online the whole time.
             //
-            // They do not touch the auction house any more - that part is
-            // working - but money already owed to them still has to arrive.
+            // The gold in it is discarded rather than banked (see the collector)
+            // - these bots have no use for money - but the rows still have to go
+            // somewhere, and nothing else will ever clear them.
             PveBotState& pvpState = LockedGetOrCreate(g_PveBotStateByGuid, player->GetGUID().GetRawValue());
             PveTimePoint const mailNow = PveClock::now();
             if (mailNow >= pvpState.nextMailCheckAt)
