@@ -120,6 +120,15 @@ namespace AutoBalance
         LevelScalingSettings LevelScalingHeroicRaidSettings{5, 3, -1, -1};
         std::unordered_map<uint32, LevelScalingSettings> LevelScalingOverridesByInstance;
 
+        // Straight proportional scaling instead of the tanh inflection curve:
+        // the multiplier is simply players-present / players-the-instance-is-for,
+        // so one player in a 5-man gets 1/5 and one in a 40-man gets 1/40, for
+        // health, damage and (through the dynamic reward method) experience and
+        // gold alike. The curve is the default because it deliberately flattens
+        // at the bottom - linear means a solo raid boss really does have a
+        // fortieth of its health.
+        bool LinearScaling = false;
+
         bool RewardScalingXP = false;
         bool RewardScalingMoney = false;
         float RewardScalingXPModifier = 1.0f;

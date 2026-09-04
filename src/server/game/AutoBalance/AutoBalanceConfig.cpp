@@ -881,6 +881,7 @@ namespace AutoBalance
         newConfig.LevelScalingHeroicRaidSettings = ParseLevelScalingSettings("AutoBalance.LevelScaling.DynamicLevel.Ceiling.HeroicRaids", "AutoBalance.LevelScaling.DynamicLevel.Floor.HeroicRaids", newConfig.LevelScalingHeroicRaidSettings, logReady);
         newConfig.LevelScalingOverridesByInstance = ParseLevelScalingOverrides(sConfigMgr->GetStringDefault("AutoBalance.LevelScaling.DynamicLevel.PerInstance", ""), logReady);
 
+        newConfig.LinearScaling = sConfigMgr->GetBoolDefault("AutoBalance.LinearScaling", false);
         newConfig.RewardScalingMethod = ParseScalingMethod("AutoBalance.RewardScaling.Method", ScalingMethod::Dynamic, logReady);
         newConfig.RewardScalingXP = sConfigMgr->GetBoolDefault("AutoBalance.RewardScaling.XP", false);
         newConfig.RewardScalingXPModifier = static_cast<float>(sConfigMgr->GetFloatDefault("AutoBalance.RewardScaling.XP.Modifier", 1.0f));

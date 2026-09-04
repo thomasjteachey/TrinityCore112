@@ -82,6 +82,28 @@ namespace
         return false;
     }
 
+    // Straight proportion: what fraction of the group the instance was built for
+    // actually turned up. One player in a 5-man is 0.2, one in a 40-man is 0.025.
+    //
+    // No inflection point, no curve floor or ceiling, and no boss modifier -
+    // that is the entire point of asking for it. The stat modifiers still apply
+    // on top, and MinHPModifier / MinDamageModifier still floor the result, so a
+    // realm can stop it bottoming out completely if it wants to.
+    float LinearMultiplier(uint32 effectivePlayers, uint32 targetPlayers)
+    {
+        if (!effectivePlayers)
+            effectivePlayers = 1;
+
+        if (!targetPlayers)
+            targetPlayers = 1;
+
+        float const multiplier = float(effectivePlayers) / float(targetPlayers);
+        if (!std::isfinite(multiplier) || multiplier <= 0.0f)
+            return 0.01f;
+
+        return multiplier;
+    }
+
     float EvaluateInflectionMultiplier(uint32 effectivePlayers, uint32 targetPlayers, InflectionPointSettings const& settings)
     {
         if (!effectivePlayers)
@@ -448,7 +470,9 @@ void ScaleCreature(Creature* creature)
     uint32 const targetPlayers = GetTargetPlayerCount(map);
     bool const isBoss = IsBossCreature(*creature);
     InflectionPointSettings const inflectionSettings = SelectInflectionSettings(config, map, targetPlayers, isBoss);
-    float const baseMultiplier = EvaluateInflectionMultiplier(effectivePlayers, targetPlayers, inflectionSettings);
+    float const baseMultiplier = config.LinearScaling
+        ? LinearMultiplier(effectivePlayers, targetPlayers)
+        : EvaluateInflectionMultiplier(effectivePlayers, targetPlayers, inflectionSettings);
     StatModifierValues const statModifiers = SelectStatModifiers(config, map, *creature, isBoss, targetPlayers);
 
     auto sanitize = [](float value, float fallback)
