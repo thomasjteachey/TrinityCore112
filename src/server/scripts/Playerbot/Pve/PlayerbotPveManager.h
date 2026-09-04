@@ -326,6 +326,7 @@ public:
     // touching the live map.
     struct BotStatsRow
     {
+        std::string Name;
         uint32 ZoneId = 0;
         uint32 MapId = 0;
         uint32 MoneyCopper = 0;

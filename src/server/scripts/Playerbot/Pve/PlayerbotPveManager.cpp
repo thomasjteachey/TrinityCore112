@@ -12193,6 +12193,7 @@ namespace playerbot
                 continue;
 
             BotStatsRow row;
+            row.Name = bot->GetName();
             row.ZoneId = bot->GetZoneId();
             row.MapId = bot->GetMapId();
             row.MoneyCopper = bot->GetMoney();

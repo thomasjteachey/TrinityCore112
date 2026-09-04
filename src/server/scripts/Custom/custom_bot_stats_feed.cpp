@@ -61,11 +61,13 @@ namespace
 {
     bool s_enabled = true;
     uint32 s_intervalMs = 3000;
+    uint32 s_rosterIntervalMs = 15000;
 
     void LoadBotStatsConfig()
     {
         s_enabled = sConfigMgr->GetBoolDefault("Centurion.BotStats.Feed", true);
         s_intervalMs = uint32(std::max(1000, sConfigMgr->GetIntDefault("Centurion.BotStats.IntervalMs", 3000)));
+        s_rosterIntervalMs = uint32(std::max(5000, sConfigMgr->GetIntDefault("Centurion.BotStats.RosterIntervalMs", 15000)));
     }
 
     void SendTagged(Player* viewer, std::string const& tag, std::string const& payload)
@@ -234,6 +236,51 @@ namespace
         flush("BSTL", byBand, false);
     }
 
+    // The per-bot roster, so the addon can drill from a zone down to the names
+    // standing in it.
+    //
+    // Pushed on its own slower timer rather than answered on request: 3.3.5 has
+    // no clean client-to-server addon channel that does not mean editing the
+    // core's chat handler, and a fleet this size is only about forty whispers.
+    // Sending it unasked also means the drill-down is instant and filtering is
+    // local - the addon already holds every row it could want to show.
+    //
+    // Flags are a bitfield rather than four columns because the whisper is the
+    // scarce thing here: 1 combat, 2 dead, 4 travelling, 8 PvP-only.
+    void PushRoster(Player* viewer, std::vector<playerbot::PveManager::BotStatsRow> const& rows)
+    {
+        std::ostringstream out;
+        uint32 inMessage = 0;
+
+        for (auto const& r : rows)
+        {
+            uint32 flags = 0;
+            if (r.InCombat)   flags |= 1;
+            if (r.Dead)       flags |= 2;
+            if (r.Travelling) flags |= 4;
+            if (r.PvpOnly)    flags |= 8;
+
+            out << r.Name << ',' << uint32(r.Level) << ',' << uint32(r.Class) << ','
+                << r.ZoneId << ',' << uint32(r.Aggression) << ',' << r.TimidSeconds << ','
+                << ToGold(r.MoneyCopper) << ',' << flags << ';';
+
+            if (++inMessage >= 5)
+            {
+                SendTagged(viewer, "BSTI", out.str());
+                out.str(std::string());
+                out.clear();
+                inMessage = 0;
+            }
+        }
+
+        if (inMessage)
+            SendTagged(viewer, "BSTI", out.str());
+
+        // Tells the addon the sweep is complete, so it can swap the new roster
+        // in whole instead of drawing a half-arrived one.
+        SendTagged(viewer, "BSTE", std::to_string(rows.size()));
+    }
+
     class centurion_bot_stats_feed : public WorldScript
     {
     public:
@@ -274,10 +321,20 @@ namespace
 
             for (Player* watcher : watchers)
                 PushTo(watcher, rows, auctions);
+
+            // The roster is forty-odd whispers, so it goes at its own pace.
+            _rosterTimer += s_intervalMs;
+            if (_rosterTimer >= s_rosterIntervalMs)
+            {
+                _rosterTimer = 0;
+                for (Player* watcher : watchers)
+                    PushRoster(watcher, rows);
+            }
         }
 
     private:
         uint32 _timer = 0;
+        uint32 _rosterTimer = 0;
     };
 }
 
