@@ -4475,12 +4475,27 @@ namespace
     {
         switch (quality)
         {
-        case ITEM_QUALITY_POOR:     return 0.60f;
-        case ITEM_QUALITY_NORMAL:   return 1.00f;
-        case ITEM_QUALITY_UNCOMMON: return 1.25f;
-        case ITEM_QUALITY_RARE:     return 1.45f;
-        case ITEM_QUALITY_EPIC:     return 1.65f;
-        default:                    return 1.80f;   // legendary and artifact
+        case ITEM_QUALITY_POOR:      return 0.60f;
+        case ITEM_QUALITY_NORMAL:    return 1.00f;
+        case ITEM_QUALITY_UNCOMMON:  return 1.25f;
+        case ITEM_QUALITY_RARE:      return 1.45f;
+        case ITEM_QUALITY_EPIC:      return 1.65f;
+        case ITEM_QUALITY_LEGENDARY: return 1.80f;
+
+        // ARTIFACT is not the top tier on this realm - it is the red field kit
+        // issued to replace whatever a death took, and every piece is a copy of
+        // a WHITE item, so it is weighed as one. It carries no stats either:
+        // 1,107 of the 1,120 artifact items have StatsCount 0, just armour.
+        //
+        // Falling into the 1.80 default was why bots stopped re-gearing. A kit
+        // chestpiece at item level 50 scored 90 effective levels, so beating it
+        // needed a GREEN at item level 72 or an EPIC at 55 - nothing on the
+        // auction house could clear that bar, and every kit slot became
+        // permanently unupgradeable. That is a level 50 sitting on 428 gold in
+        // full red, which is exactly what the stats window showed.
+        case ITEM_QUALITY_ARTIFACT:  return 1.00f;
+
+        default:                     return 1.00f;
         }
     }
 

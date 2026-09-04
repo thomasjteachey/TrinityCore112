@@ -57,6 +57,7 @@ local selected  = nil   -- a zoneId, when drilled in
 -- in scope inside a closure created above it - the closure would resolve the
 -- name as a global and find nil.
 local shownBot
+local detailTab = "gear"   -- which half of the bot panel is showing
 local DrawGear, DrawTalents
 
 ------------------------------------------------------------------
@@ -253,15 +254,15 @@ end)
 -- Server-side commands are parsed out of an ordinary chat message, so this is
 -- a SAY that never reaches anybody: the handler eats anything starting with a
 -- dot before it is broadcast. None of this is protected in 3.3.5.
+-- Straight down the wire, with no UI involved.
+--
+-- The earlier version went through ChatEdit_ChooseBoxForSend, which OPENS the
+-- chat box - so every click on a bot popped the edit frame open in the player's
+-- face. SendChatMessage sends the literal string as a SAY, the server's chat
+-- handler eats anything beginning with a dot before it is ever broadcast, and
+-- nothing on screen moves.
 local function RunGmCommand(cmd)
-	local edit = ChatEdit_ChooseBoxForSend()
-	if edit then
-		ChatEdit_ActivateChat(edit)
-		edit:SetText(cmd)
-		ChatEdit_SendText(edit, 0)
-	else
-		SendChatMessage(cmd, "SAY")
-	end
+	SendChatMessage(cmd, "SAY")
 end
 
 -- Blizzard's Inspect frame cannot be reused for this, and it is worth writing
@@ -279,6 +280,7 @@ end
 -- channel 3.3.5 otherwise lacks, and it carries the RBAC gate for free - and the
 -- answer comes back over the same CCGAME whisper as the rest of the feed.
 local gearOf   = {}     -- [botName] = { {slot, id, quality, ilvl}, ... }
+local picksOf  = {}     -- [botName] = { {spell, rank, tree, tier}, ... }
 local talentOf = {}     -- [botName] = { t1, t2, t3 }
 
 local SLOT_NAME = {
@@ -299,9 +301,9 @@ local QUALITY_HEX = {
 	[6] = "cc4444", [7] = "e6cc80",
 }
 
+-- The field kit is copied from WHITE items, so it ranks as white.
 local QUALITY_RANK = {
-	[6] = -1,   -- field kit: below everything
-	[0] = 0, [1] = 1, [2] = 2, [3] = 3, [4] = 4, [5] = 5, [7] = 4,
+	[0] = 0, [1] = 1, [2] = 2, [3] = 3, [4] = 4, [5] = 5, [6] = 1, [7] = 4,
 }
 
 -- "name|slot,id,quality,ilvl;..." - chunked, so rows accumulate per bot and the
@@ -334,9 +336,31 @@ local function ParseTalents(payload)
 	end
 end
 
+-- "name|spellId,rank,tree,tier;..." - the talents actually taken.
+local function ParseTalentPicks(payload)
+	local name, rows = string.match(payload, "^([^|]+)|(.*)$")
+	if not name then
+		return
+	end
+
+	picksOf[name] = picksOf[name] or {}
+	for row in string.gmatch(rows, "([^;]+)") do
+		local spell, rank, tree, tier = string.match(row, "^(%d+),(%d+),(%d+),(%d+)$")
+		if spell then
+			table.insert(picksOf[name], {
+				spell = tonumber(spell) or 0,
+				rank  = tonumber(rank) or 0,
+				tree  = tonumber(tree) or 0,
+				tier  = tonumber(tier) or 0,
+			})
+		end
+	end
+end
+
 local function RequestGear(name)
 	gearOf[name] = nil
 	talentOf[name] = nil
+	picksOf[name] = nil
 	RunGmCommand(".botstats gear " .. name)
 end
 
@@ -694,6 +718,9 @@ driver:SetScript("OnEvent", function()
 	elseif tag == "BSTT" then
 		ParseTalents(payload)
 		if shownBot then DrawTalents(shownBot) end
+	elseif tag == "BSTP" then
+		ParseTalentPicks(payload)
+		if shownBot then DrawTalents(shownBot) end
 	else
 		return
 	end
@@ -748,13 +775,13 @@ dBody:SetJustifyV("TOP")
 -- Gear and talents, drawn here because Blizzard's frame cannot be pointed at a
 -- bot (see the note by InspectBot). Two columns of slots, left/right the way
 -- the paper doll reads, so it is recognisable at a glance.
-local dGearTitle = detail:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-dGearTitle:SetPoint("TOPLEFT", detail, "TOPLEFT", 22, -196)
-dGearTitle:SetText("Equipped")
-
 local dTalents = detail:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-dTalents:SetPoint("TOPLEFT", dGearTitle, "TOPRIGHT", 8, 0)
+dTalents:SetPoint("TOPLEFT", detail, "TOPLEFT", 118, -196)
 dTalents:SetJustifyH("LEFT")
+
+-- Gear and talents are the same real estate, so they are tabs rather than two
+-- half-height lists that would fit neither.
+local dTabGear, dTabTalents
 
 -- Icon plus name per slot, which is the inspect frame's own vocabulary. The
 -- icon comes from GetItemIcon, which answers by ITEM ID and needs no unit -
@@ -834,12 +861,45 @@ end
 
 DrawTalents = function(name)
 	local t = talentOf[name]
-	if not t then
+	if t then
+		dTalents:SetText(string.format("|cffffd200%d|r / |cffffd200%d|r / |cffffd200%d|r", t[1], t[2], t[3]))
+	else
 		dTalents:SetText("")
+	end
+
+	if detailTab ~= "talents" then
 		return
 	end
-	dTalents:SetText(string.format("|cff808080talents|r  |cffffd200%d|r / |cffffd200%d|r / |cffffd200%d|r",
-		t[1], t[2], t[3]))
+
+	for i = 1, #gearRows do
+		gearRows[i].text:SetText("")
+		gearRows[i].icon:SetTexture(nil)
+		gearRows[i].itemId = nil
+		gearRows[i].spellId = nil
+	end
+
+	local picks = picksOf[name]
+	if not picks or #picks == 0 then
+		gearRows[1].text:SetText("|cff808080waiting for the server...|r")
+		return
+	end
+
+	-- Tree, then tier: the reading order of the talent frame itself.
+	table.sort(picks, function(a, b)
+		if a.tree ~= b.tree then return a.tree < b.tree end
+		return a.tier < b.tier
+	end)
+
+	for i = 1, math.min(#picks, #gearRows) do
+		local p = picks[i]
+		local r = gearRows[i]
+		local spellName, _, icon = GetSpellInfo(p.spell)
+
+		r.spellId = p.spell
+		r.icon:SetTexture(icon)
+		r.text:SetText(string.format("|cffffffff%s|r |cff606060%d|r",
+			spellName or ("spell " .. p.spell), p.rank))
+	end
 end
 
 local function MakeDetailButton(label, width, onClick)
@@ -851,10 +911,23 @@ local function MakeDetailButton(label, width, onClick)
 	return b
 end
 
-local dInspect = MakeDetailButton("Refresh gear", 100, function()
+dTabGear = MakeDetailButton("Gear", 62, function()
+	detailTab = "gear"
+	if shownBot then DrawGear(shownBot) end
+end)
+dTabGear:SetPoint("TOPLEFT", detail, "TOPLEFT", 20, -192)
+
+dTabTalents = MakeDetailButton("Talents", 62, function()
+	detailTab = "talents"
+	if shownBot then DrawTalents(shownBot) end
+end)
+dTabTalents:SetPoint("LEFT", dTabGear, "RIGHT", 2, 0)
+
+local dInspect = MakeDetailButton("Refresh", 70, function()
 	if shownBot then
 		RequestGear(shownBot)
 		DrawGear(shownBot)
+		DrawTalents(shownBot)
 	end
 end)
 dInspect:SetPoint("BOTTOMLEFT", detail, "BOTTOMLEFT", 22, 22)

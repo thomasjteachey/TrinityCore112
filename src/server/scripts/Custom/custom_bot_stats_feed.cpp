@@ -391,11 +391,17 @@ namespace
         if (inMessage)
             SendTagged(viewer, "BSTG", out.str());
 
-        // Points per talent tree, in OrderIndex order so the client can name
-        // them positionally the way the talent frame does.
+        // Talents: the per-tree totals for the header, and every talent the bot
+        // actually took so the panel can list them the way the talent frame
+        // does. The client names and draws them from the rank spell id, so only
+        // the id and the rank need to travel.
         uint32 points[3] = { 0, 0, 0 };
         uint32 const classMask = 1 << (bot->GetClass() - 1);
         uint8 const spec = uint8(bot->GetActiveSpec());
+
+        std::ostringstream taken;
+        taken << bot->GetName() << '|';
+        uint32 inTaken = 0;
 
         for (TalentEntry const* talent : sTalentStore)
         {
@@ -410,13 +416,28 @@ namespace
             // top one it knows IS the number of points sunk into that talent.
             for (int8 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
             {
-                if (talent->SpellRank[rank] && bot->HasTalent(talent->SpellRank[rank], spec))
+                if (!talent->SpellRank[rank] || !bot->HasTalent(talent->SpellRank[rank], spec))
+                    continue;
+
+                points[tab->OrderIndex] += uint32(rank) + 1;
+
+                taken << talent->SpellRank[rank] << ',' << (uint32(rank) + 1) << ','
+                      << tab->OrderIndex << ',' << talent->TierID << ';';
+
+                if (++inTaken >= 8)
                 {
-                    points[tab->OrderIndex] += uint32(rank) + 1;
-                    break;
+                    SendTagged(viewer, "BSTP", taken.str());
+                    taken.str(std::string());
+                    taken.clear();
+                    taken << bot->GetName() << '|';
+                    inTaken = 0;
                 }
+                break;
             }
         }
+
+        if (inTaken)
+            SendTagged(viewer, "BSTP", taken.str());
 
         std::ostringstream tal;
         tal << bot->GetName() << '|' << points[0] << ',' << points[1] << ',' << points[2];
