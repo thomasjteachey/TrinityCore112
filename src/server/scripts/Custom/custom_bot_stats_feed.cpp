@@ -41,6 +41,8 @@
 #include "Chat.h"
 #include "Configuration/Config.h"
 #include "GameTime.h"
+#include "Item.h"
+#include "ItemTemplate.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
@@ -56,6 +58,8 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+using namespace Trinity::ChatCommands;
 
 namespace
 {
@@ -341,7 +345,125 @@ namespace
     };
 }
 
+// The gear and talent panel's data source.
+//
+// Answered on DEMAND rather than streamed, because a full equipment list for
+// 255 bots every few seconds is an order of magnitude more than the rest of the
+// feed put together, and the window only ever looks at one bot.
+//
+// A GM chat command IS the inbound channel. 3.3.5 has no client-to-server addon
+// channel that does not mean editing the core's chat handler, but a slash
+// command is already parsed out of chat and already carries an RBAC gate - so
+// the addon simply sends ".botstats gear <name>" and reads the reply off the
+// same CCGAME whisper as everything else.
+namespace
+{
+    void SendGearTo(Player* viewer, Player* bot)
+    {
+        std::ostringstream out;
+        out << bot->GetName() << '|';
+
+        uint32 inMessage = 0;
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        {
+            Item const* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+            if (!item)
+                continue;
+
+            ItemTemplate const* proto = item->GetTemplate();
+            if (!proto)
+                continue;
+
+            out << uint32(slot) << ',' << proto->ItemId << ',' << proto->Quality << ','
+                << proto->ItemLevel << ';';
+
+            // Item ids are short, but a full set still overruns one whisper.
+            if (++inMessage >= 6)
+            {
+                SendTagged(viewer, "BSTG", out.str());
+                out.str(std::string());
+                out.clear();
+                out << bot->GetName() << '|';
+                inMessage = 0;
+            }
+        }
+
+        if (inMessage)
+            SendTagged(viewer, "BSTG", out.str());
+
+        // Points per talent tree, in OrderIndex order so the client can name
+        // them positionally the way the talent frame does.
+        uint32 points[3] = { 0, 0, 0 };
+        uint32 const classMask = 1 << (bot->GetClass() - 1);
+        uint8 const spec = uint8(bot->GetActiveSpec());
+
+        for (TalentEntry const* talent : sTalentStore)
+        {
+            if (!talent)
+                continue;
+
+            TalentTabEntry const* tab = sTalentTabStore.LookupEntry(talent->TabID);
+            if (!tab || !(tab->ClassMask & classMask) || tab->OrderIndex > 2)
+                continue;
+
+            // Highest rank the bot actually has; ranks are cumulative, so the
+            // top one it knows IS the number of points sunk into that talent.
+            for (int8 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
+            {
+                if (talent->SpellRank[rank] && bot->HasTalent(talent->SpellRank[rank], spec))
+                {
+                    points[tab->OrderIndex] += uint32(rank) + 1;
+                    break;
+                }
+            }
+        }
+
+        std::ostringstream tal;
+        tal << bot->GetName() << '|' << points[0] << ',' << points[1] << ',' << points[2];
+        SendTagged(viewer, "BSTT", tal.str());
+    }
+
+    class centurion_bot_stats_commands : public CommandScript
+    {
+    public:
+        centurion_bot_stats_commands() : CommandScript("centurion_bot_stats_commands") { }
+
+        ChatCommandTable GetCommands() const override
+        {
+            static ChatCommandTable botStatsTable =
+            {
+                { "gear", HandleBotStatsGear, rbac::RBAC_PERM_COMMAND_GM, Console::No },
+            };
+            static ChatCommandTable commandTable =
+            {
+                { "botstats", botStatsTable },
+            };
+            return commandTable;
+        }
+
+        static bool HandleBotStatsGear(ChatHandler* handler, std::string_view botName)
+        {
+            Player* viewer = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
+            if (!viewer || botName.empty())
+                return false;
+
+            // By name and across the whole realm: the window lists bots the
+            // asker cannot see and often is not on the same continent as.
+            Player* bot = ObjectAccessor::FindPlayerByName(botName);
+            if (!bot || !bot->IsInWorld())
+            {
+                handler->PSendSysMessage("botstats: no bot named %s is online.", std::string(botName).c_str());
+                return true;
+            }
+
+            SendGearTo(viewer, bot);
+            return true;
+        }
+    };
+}
+
 void AddSC_centurion_bot_stats_feed()
 {
     new centurion_bot_stats_feed();
+    new centurion_bot_stats_commands();
 }

@@ -12232,7 +12232,14 @@ namespace playerbot
                         {
                             sum += proto->ItemLevel;
                             ++worn;
-                            if (proto->Quality >= ITEM_QUALITY_UNCOMMON)
+
+                            // ARTIFACT is repurposed on this realm as the FLOOR
+                            // tier - the red field-kit gear handed out to replace
+                            // what a death took. It sorts below green however
+                            // Blizzard's enum orders it, so a plain >= UNCOMMON
+                            // test counted a bot in full kit as fully geared.
+                            if (proto->Quality >= ITEM_QUALITY_UNCOMMON &&
+                                proto->Quality != ITEM_QUALITY_ARTIFACT)
                                 ++greenPlus;
                         }
                 row.ItemLevel = worn ? uint16(sum / worn) : 0;

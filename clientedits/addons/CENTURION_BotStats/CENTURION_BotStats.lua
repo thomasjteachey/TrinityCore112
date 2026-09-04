@@ -52,6 +52,13 @@ local activeTab = "zones"
 local sortKey   = "count"
 local selected  = nil   -- a zoneId, when drilled in
 
+-- Forward declarations. The addon-message handler is built well before the
+-- detail panel it repaints, and a local declared further down the file is not
+-- in scope inside a closure created above it - the closure would resolve the
+-- name as a global and find nil.
+local shownBot
+local DrawGear, DrawTalents
+
 ------------------------------------------------------------------
 -- parsing
 ------------------------------------------------------------------
@@ -257,25 +264,80 @@ local function RunGmCommand(cmd)
 	end
 end
 
--- Blizzard's own gear-and-talents window, reused rather than rebuilt.
+-- Blizzard's Inspect frame cannot be reused for this, and it is worth writing
+-- down why so nobody tries again.
 --
--- The server side of this is unrestricted for a GM: HandleInspectOpcode looks
--- the target up globally and skips the range test, so distance and hostility
--- are no longer the limit. The limit that remains is the CLIENT's - InspectUnit
--- takes a unit token, and the client only has a unit for something in its own
--- object manager. Nothing in the 3.3.5 Lua API inspects by GUID.
+-- InspectUnit takes a UNIT TOKEN. The only way to point one at an arbitrary bot
+-- is TargetByName, which has been protected since 2.0 - an addon calling it does
+-- nothing at all, silently, which is exactly what the button did. Even if it
+-- were callable, the client only has a unit for something already in its object
+-- manager, so a bot in another zone could never be named. Nothing in the 3.3.5
+-- Lua API inspects by GUID.
 --
--- So: try it, and say plainly when the client simply does not have that bot
--- loaded. "Bring here" then makes it possible in one click.
-local function InspectBot(name)
-	TargetByName(name, true)
-	if UnitExists("target") and UnitName("target") == name then
-		if CanInspect("target") then
-			InspectUnit("target")
-			return true
+-- So the gear and talents are served instead, and drawn here. The request goes
+-- out as the GM command ".botstats gear <name>" - a slash command IS the inbound
+-- channel 3.3.5 otherwise lacks, and it carries the RBAC gate for free - and the
+-- answer comes back over the same CCGAME whisper as the rest of the feed.
+local gearOf   = {}     -- [botName] = { {slot, id, quality, ilvl}, ... }
+local talentOf = {}     -- [botName] = { t1, t2, t3 }
+
+local SLOT_NAME = {
+	[0]  = "Head",     [1]  = "Neck",    [2]  = "Shoulder", [3]  = "Shirt",
+	[4]  = "Chest",    [5]  = "Waist",   [6]  = "Legs",     [7]  = "Feet",
+	[8]  = "Wrist",    [9]  = "Hands",   [10] = "Finger 1", [11] = "Finger 2",
+	[12] = "Trinket 1",[13] = "Trinket 2", [14] = "Back",   [15] = "Main hand",
+	[16] = "Off hand", [17] = "Ranged",  [18] = "Tabard",
+}
+
+-- ARTIFACT is not the top tier on this realm, it is the BOTTOM one: the red
+-- field-kit gear handed out to replace whatever a death took. It is deliberately
+-- listed below grey here so the panel sorts and reads the way the realm treats
+-- it, and the server's green-or-better count excludes it for the same reason.
+local QUALITY_HEX = {
+	[0] = "9d9d9d", [1] = "ffffff", [2] = "1eff00",
+	[3] = "0070dd", [4] = "a335ee", [5] = "ff8000",
+	[6] = "cc4444", [7] = "e6cc80",
+}
+
+local QUALITY_RANK = {
+	[6] = -1,   -- field kit: below everything
+	[0] = 0, [1] = 1, [2] = 2, [3] = 3, [4] = 4, [5] = 5, [7] = 4,
+}
+
+-- "name|slot,id,quality,ilvl;..." - chunked, so rows accumulate per bot and the
+-- set is replaced only when a request for that bot starts.
+local function ParseGear(payload)
+	local name, rows = string.match(payload, "^([^|]+)|(.*)$")
+	if not name then
+		return
+	end
+
+	gearOf[name] = gearOf[name] or {}
+	for row in string.gmatch(rows, "([^;]+)") do
+		local slot, id, q, ilvl = string.match(row, "^(%d+),(%d+),(%d+),(%d+)$")
+		if slot then
+			table.insert(gearOf[name], {
+				slot    = tonumber(slot) or 0,
+				id      = tonumber(id) or 0,
+				quality = tonumber(q) or 1,
+				ilvl    = tonumber(ilvl) or 0,
+			})
 		end
 	end
-	return false
+end
+
+-- "name|t1,t2,t3"
+local function ParseTalents(payload)
+	local name, a, b, c = string.match(payload, "^([^|]+)|(%d+),(%d+),(%d+)$")
+	if name then
+		talentOf[name] = { tonumber(a) or 0, tonumber(b) or 0, tonumber(c) or 0 }
+	end
+end
+
+local function RequestGear(name)
+	gearOf[name] = nil
+	talentOf[name] = nil
+	RunGmCommand(".botstats gear " .. name)
 end
 
 ------------------------------------------------------------------
@@ -626,6 +688,12 @@ driver:SetScript("OnEvent", function()
 		ParseRoster(payload)
 	elseif tag == "BSTE" then
 		CommitRoster()
+	elseif tag == "BSTG" then
+		ParseGear(payload)
+		if shownBot then DrawGear(shownBot) end
+	elseif tag == "BSTT" then
+		ParseTalents(payload)
+		if shownBot then DrawTalents(shownBot) end
 	else
 		return
 	end
@@ -650,7 +718,7 @@ end)
 ------------------------------------------------------------------
 local detail = CreateFrame("Frame", "CenturionBotStatsDetail", UIParent)
 detail:SetWidth(300)
-detail:SetHeight(280)
+detail:SetHeight(420)
 detail:SetPoint("LEFT", win, "RIGHT", 4, 0)
 detail:SetBackdrop({
 	bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
@@ -677,12 +745,67 @@ dBody:SetWidth(256)
 dBody:SetJustifyH("LEFT")
 dBody:SetJustifyV("TOP")
 
+-- Gear and talents, drawn here because Blizzard's frame cannot be pointed at a
+-- bot (see the note by InspectBot). Two columns of slots, left/right the way
+-- the paper doll reads, so it is recognisable at a glance.
+local dGearTitle = detail:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+dGearTitle:SetPoint("TOPLEFT", detail, "TOPLEFT", 22, -196)
+dGearTitle:SetText("Equipped")
+
+local dTalents = detail:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+dTalents:SetPoint("TOPLEFT", dGearTitle, "TOPRIGHT", 8, 0)
+dTalents:SetJustifyH("LEFT")
+
+local gearRows = {}
+for i = 1, 19 do
+	local fs = detail:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	local col = (i <= 10) and 0 or 1
+	local row = (i <= 10) and i or (i - 10)
+	fs:SetPoint("TOPLEFT", detail, "TOPLEFT", 22 + col * 152, -206 - row * 12)
+	fs:SetWidth(150)
+	fs:SetJustifyH("LEFT")
+	gearRows[i] = fs
+end
+
 local dNote = detail:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-dNote:SetPoint("BOTTOMLEFT", detail, "BOTTOMLEFT", 22, 58)
+dNote:SetPoint("BOTTOMLEFT", detail, "BOTTOMLEFT", 22, 48)
 dNote:SetWidth(256)
 dNote:SetJustifyH("LEFT")
 
-local shownBot
+DrawGear = function(name)
+	local list = gearOf[name]
+	for i = 1, #gearRows do
+		gearRows[i]:SetText("")
+	end
+
+	if not list or #list == 0 then
+		gearRows[1]:SetText("|cff808080waiting for the server...|r")
+		return
+	end
+
+	table.sort(list, function(a, b) return a.slot < b.slot end)
+
+	for i = 1, math.min(#list, #gearRows) do
+		local g = list[i]
+		-- GetItemInfo answers from the client's cache. A name it has never seen
+		-- comes back nil and fills in later, so the id stands in until then
+		-- rather than the row simply vanishing.
+		local itemName = GetItemInfo(g.id) or ("item " .. g.id)
+		local hex = QUALITY_HEX[g.quality] or "ffffff"
+		gearRows[i]:SetText(string.format("|cff808080%s|r |cff%s%s|r |cff606060%d|r",
+			SLOT_NAME[g.slot] or ("slot " .. g.slot), hex, itemName, g.ilvl))
+	end
+end
+
+DrawTalents = function(name)
+	local t = talentOf[name]
+	if not t then
+		dTalents:SetText("")
+		return
+	end
+	dTalents:SetText(string.format("|cff808080talents|r  |cffffd200%d|r / |cffffd200%d|r / |cffffd200%d|r",
+		t[1], t[2], t[3]))
+end
 
 local function MakeDetailButton(label, width, onClick)
 	local b = CreateFrame("Button", nil, detail, "UIPanelButtonTemplate")
@@ -693,14 +816,10 @@ local function MakeDetailButton(label, width, onClick)
 	return b
 end
 
-local dInspect = MakeDetailButton("Gear & talents", 110, function()
-	if not shownBot then
-		return
-	end
-	if InspectBot(shownBot) then
-		dNote:SetText("")
-	else
-		dNote:SetText("|cffff7f5fThe client has no unit for that bot|r - it is not loaded here. Bring it over and try again.")
+local dInspect = MakeDetailButton("Refresh gear", 100, function()
+	if shownBot then
+		RequestGear(shownBot)
+		DrawGear(shownBot)
 	end
 end)
 dInspect:SetPoint("BOTTOMLEFT", detail, "BOTTOMLEFT", 22, 22)
@@ -757,6 +876,9 @@ function CENTURION_BotStats_ShowBot(name)
 		b.gold, b.ilvl, b.worn, b.greens,
 		b.pvp and "\n|cffff7f5fPvP-only: no PvE, holds no money|r" or ""))
 
+	RequestGear(name)
+	DrawGear(name)
+	DrawTalents(name)
 	dNote:SetText("")
 	detail:Show()
 end
