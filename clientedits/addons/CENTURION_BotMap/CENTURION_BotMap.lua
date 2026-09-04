@@ -26,9 +26,16 @@
 local BOT_ICON  = "Interface\\WorldMap\\WorldMapPartyIcon"
 local MAX_BLIPS = 80
 
-local bots    = {}      -- the completed set: { name, x, y }
-local pending = {}      -- chunks still arriving
+local bots     = {}     -- the completed set: { name, x, y }
+local pending  = {}     -- chunks still arriving
 local surfaces = {}     -- { frame = <Frame>, size = <px>, blips = {} }
+local lastPush = 0      -- GetTime() of the last COMPLETE set
+
+-- The server pushes about every two seconds and says nothing when it stops -
+-- and stopping is normal: standing in a capital disarms War Mode, so the feed
+-- simply ends. Silence has to mean the positions have expired, or the last set
+-- before walking into Orgrimmar would hang on the map forever.
+local STALE_AFTER = 7
 
 local frame = CreateFrame("Frame", "CenturionBotMapFrame", UIParent)
 
@@ -101,6 +108,13 @@ local function DrawOn(surface)
 		return
 	end
 
+	-- Positions are only good for the zone they were sent for, and only while
+	-- they keep arriving.
+	if #bots == 0 or (GetTime() - lastPush) > STALE_AFTER then
+		HideFrom(surface, 1)
+		return
+	end
+
 	local px, py = GetPlayerMapPosition("player")
 	if not px or (px == 0 and py == 0) then
 		HideFrom(surface, 1)
@@ -149,6 +163,7 @@ local function OnPayload(payload)
 	if marker == "E" then
 		bots = pending
 		pending = {}
+		lastPush = GetTime()
 		Redraw()
 	end
 end
@@ -175,9 +190,21 @@ local function TryAttachBattlefieldMinimap()
 end
 TryAttachBattlefieldMinimap()
 
+-- Everything the set is scoped to has changed, so it is not stale data - it is
+-- wrong data, immediately. Dropped rather than redrawn: a zone change used to
+-- be the very event that painted the old zone's bots onto the new map.
+local function Invalidate()
+	bots = {}
+	pending = {}
+	lastPush = 0
+	Redraw()
+end
+
 frame:RegisterEvent("CHAT_MSG_ADDON")
 frame:RegisterEvent("WORLD_MAP_UPDATE")
 frame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+frame:RegisterEvent("ZONE_CHANGED")
+frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 frame:RegisterEvent("ADDON_LOADED")
 frame:SetScript("OnEvent", function(self, event, arg1, arg2)
 	if event == "CHAT_MSG_ADDON" then
@@ -193,8 +220,34 @@ frame:SetScript("OnEvent", function(self, event, arg1, arg2)
 			TryAttachBattlefieldMinimap()
 			Redraw()
 		end
+	elseif event == "ZONE_CHANGED_NEW_AREA" or event == "ZONE_CHANGED"
+		or event == "PLAYER_ENTERING_WORLD" then
+		Invalidate()
 	else
 		Redraw()
+	end
+end)
+
+-- Expiry needs a heartbeat: with the map open and nothing else happening, no
+-- event would fire to notice the feed had stopped, and the last set would sit
+-- there looking current. Throttled to once a second, and it does nothing at all
+-- unless a surface is actually visible.
+local sinceCheck = 0
+frame:SetScript("OnUpdate", function(self, elapsed)
+	sinceCheck = sinceCheck + elapsed
+	if sinceCheck < 1.0 then
+		return
+	end
+	sinceCheck = 0
+
+	if #bots == 0 then
+		return
+	end
+	for i = 1, #surfaces do
+		if surfaces[i].frame:IsShown() then
+			Redraw()
+			return
+		end
 	end
 end)
 
