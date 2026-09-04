@@ -756,15 +756,43 @@ local dTalents = detail:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall
 dTalents:SetPoint("TOPLEFT", dGearTitle, "TOPRIGHT", 8, 0)
 dTalents:SetJustifyH("LEFT")
 
+-- Icon plus name per slot, which is the inspect frame's own vocabulary. The
+-- icon comes from GetItemIcon, which answers by ITEM ID and needs no unit -
+-- the whole reason this panel can show a bot on another continent at all.
 local gearRows = {}
 for i = 1, 19 do
-	local fs = detail:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	local r = CreateFrame("Button", nil, detail)
 	local col = (i <= 10) and 0 or 1
 	local row = (i <= 10) and i or (i - 10)
-	fs:SetPoint("TOPLEFT", detail, "TOPLEFT", 22 + col * 152, -206 - row * 12)
-	fs:SetWidth(150)
-	fs:SetJustifyH("LEFT")
-	gearRows[i] = fs
+	r:SetWidth(148)
+	r:SetHeight(14)
+	r:SetPoint("TOPLEFT", detail, "TOPLEFT", 20 + col * 152, -204 - row * 15)
+
+	r.icon = r:CreateTexture(nil, "ARTWORK")
+	r.icon:SetWidth(13)
+	r.icon:SetHeight(13)
+	r.icon:SetPoint("LEFT", r, "LEFT", 0, 0)
+	-- Trim the border the 3.3.5 icon art carries, the way item buttons do.
+	r.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+
+	r.text = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	r.text:SetPoint("LEFT", r.icon, "RIGHT", 3, 0)
+	r.text:SetWidth(130)
+	r.text:SetJustifyH("LEFT")
+
+	-- The real item tooltip, by link, so hovering a bot's chestpiece shows
+	-- exactly what hovering your own would.
+	r:SetScript("OnEnter", function()
+		if not this.itemId then
+			return
+		end
+		GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+		GameTooltip:SetHyperlink("item:" .. this.itemId)
+		GameTooltip:Show()
+	end)
+	r:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+	gearRows[i] = r
 end
 
 local dNote = detail:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
@@ -775,11 +803,13 @@ dNote:SetJustifyH("LEFT")
 DrawGear = function(name)
 	local list = gearOf[name]
 	for i = 1, #gearRows do
-		gearRows[i]:SetText("")
+		gearRows[i].text:SetText("")
+		gearRows[i].icon:SetTexture(nil)
+		gearRows[i].itemId = nil
 	end
 
 	if not list or #list == 0 then
-		gearRows[1]:SetText("|cff808080waiting for the server...|r")
+		gearRows[1].text:SetText("|cff808080waiting for the server...|r")
 		return
 	end
 
@@ -787,13 +817,18 @@ DrawGear = function(name)
 
 	for i = 1, math.min(#list, #gearRows) do
 		local g = list[i]
+		local r = gearRows[i]
+
 		-- GetItemInfo answers from the client's cache. A name it has never seen
-		-- comes back nil and fills in later, so the id stands in until then
-		-- rather than the row simply vanishing.
-		local itemName = GetItemInfo(g.id) or ("item " .. g.id)
+		-- comes back nil and fills in later, so the slot name stands in until
+		-- then rather than the row simply reading blank.
+		local itemName = GetItemInfo(g.id)
 		local hex = QUALITY_HEX[g.quality] or "ffffff"
-		gearRows[i]:SetText(string.format("|cff808080%s|r |cff%s%s|r |cff606060%d|r",
-			SLOT_NAME[g.slot] or ("slot " .. g.slot), hex, itemName, g.ilvl))
+
+		r.itemId = g.id
+		r.icon:SetTexture(GetItemIcon(g.id))
+		r.text:SetText(string.format("|cff%s%s|r |cff606060%d|r",
+			hex, itemName or (SLOT_NAME[g.slot] or "?"), g.ilvl))
 	end
 end
 
