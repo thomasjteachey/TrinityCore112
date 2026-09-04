@@ -292,6 +292,24 @@ public:
     // PvE system and only answer the battleground orchestration.
     static bool IsPvpOnlyBot(Player const* player);
 
+    // Whether this bot may pick this person as a target ON ITS OWN INITIATIVE.
+    //
+    // NOT a question about attackability - the hardcore pseudo-faction makes an
+    // armed bot and any real player mutually attackable, and that is left alone
+    // so a bot can always defend itself and anyone can always start a fight with
+    // one. This asks the narrower question: may the bot start it?
+    //
+    // No unless the person armed War Mode, or carries a bounty. Consent is
+    // assumed inside a battleground or arena (you queued for it) and in a duel
+    // with the opponent who accepted. Answered from the same once-a-second
+    // snapshot the rest of the proactive machinery reads, so it costs one short
+    // scan and never a database or config lookup.
+    //
+    // Exported because the PvP class engine has its own fallback target scan
+    // that runs outside the manager's engagement, and it must ask the same
+    // question rather than keep a second answer.
+    static bool MayProactivelyEngage(Player const* bot, Player const* human);
+
     // Config-gated trainer-spell catch-up whenever a managed bot levels.
     static void OnManagedBotLevelChanged(Player* player, uint8 oldLevel);
 

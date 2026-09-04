@@ -1704,6 +1704,24 @@ namespace
     // matters - a declaration that drifts into namespace playerbot compiles
     // clean and fails at link.
     bool HasAggroSlotFree(ObjectGuid humanGuid);
+    // Likewise: the snapshot's answer to "may anyone be sent after this person".
+    bool HumanMayBeHunted(ObjectGuid humanGuid);
+
+    // Whether this person, or something they own, is actually swinging at
+    // `subject`. getAttackers() is filled by Unit::Attack, so this is the honest
+    // "they started it" test rather than a guess from who is standing where.
+    bool IsSwingingAt(Unit const* subject, Player const* human)
+    {
+        if (!subject || !human)
+            return false;
+
+        for (Unit* attacker : subject->getAttackers())
+            if (attacker == human ||
+                (attacker && attacker->GetCharmerOrOwnerPlayerOrPlayerItself() == human))
+                return true;
+
+        return false;
+    }
 
     Unit* PickBotAssistTarget(Player* bot, playerbot::PveConfig const& cfg)
     {
@@ -1754,6 +1772,21 @@ namespace
             // Do not let pack-assist drag a lower-level bot into a suicide fight.
             if (foe->GetTypeId() == TYPEID_PLAYER &&
                 !IsProactivePlayerLevelAcceptable(bot, foe->ToPlayer()))
+                continue;
+
+            // And proactive means War Mode or a bounty - with one waiver, which
+            // is the whole reason this check is not the flat one used elsewhere.
+            //
+            // The foe here is taken from the ally's VICTIM first and only then
+            // from its attackers, so this function covers both "my ally started
+            // on this person" and "this person started on my ally". The first is
+            // the fleet picking a fight and is refused; the second is somebody
+            // who opened on a bot, and answering that is not aggression, it is
+            // the pack doing what a pack does. Someone quietly questing beside a
+            // brawl is left out of it either way.
+            if (foe->GetTypeId() == TYPEID_PLAYER &&
+                !HumanMayBeHunted(foe->GetGUID()) &&
+                !IsSwingingAt(ally, foe->ToPlayer()))
                 continue;
 
             // And it is proactive for the aggro budget too. Without this a pack
@@ -1957,6 +1990,22 @@ namespace
         // widens a hunt radius on the 250 ms path, and that path must not take
         // a lock.
         uint32 Bounty = 0;
+        // Whether anyone may be SENT after this person unprompted.
+        //
+        // War Mode is a declaration that you came here for this. Someone who has
+        // not made it is left alone by every proactive path - no hunt, no
+        // guardian closing the gap, no prod, no travelling to their position -
+        // and a bounty overrides it, because a bounty is a standing invitation
+        // you earned by killing people.
+        //
+        // This is emphatically NOT attackability. The pseudo-faction in
+        // Object.cpp stays exactly as it is, so a bot still defends itself, still
+        // retaliates, and can still be attacked first by anyone who fancies it.
+        // The rule is about who STARTS it.
+        //
+        // Decided once a second on the world thread, where reading the opt-in
+        // set is legal, rather than per bot on the 250 ms path.
+        bool Huntable = true;
     };
 
     // Sized on the world thread, where reading Group is legal.
@@ -2096,7 +2145,7 @@ namespace
 
         std::vector<HumanSpot const*> inZone;
         for (HumanSpot const& spot : g_HumanSpots)
-            if (spot.ZoneId == zoneId && IsProactivePlayerLevelAcceptable(bot, spot.Level))
+            if (spot.ZoneId == zoneId && spot.Huntable && IsProactivePlayerLevelAcceptable(bot, spot.Level))
                 inZone.push_back(&spot);
 
         if (inZone.empty())
@@ -2124,7 +2173,12 @@ namespace
             if (zoneFilter && spot.ZoneId != zoneFilter)
                 continue;
 
-            if (proactiveBot && !IsProactivePlayerLevelAcceptable(proactiveBot, spot.Level))
+            // proactiveBot is what marks this call as "I am looking for someone
+            // to go after" rather than "where are the people". The avoidance
+            // caller - a timid bot picking somewhere quiet to grind - passes
+            // nothing, and must keep seeing everybody: giving a wide berth to
+            // someone you are not allowed to attack is still the right move.
+            if (proactiveBot && (!spot.Huntable || !IsProactivePlayerLevelAcceptable(proactiveBot, spot.Level)))
                 continue;
 
             float const dx = spot.X - x;
@@ -2164,6 +2218,22 @@ namespace
         return true;
     }
 
+    // Deliberately the OPPOSITE default to the one above. An absent spot means
+    // sanctuary, a fresh login, or a snapshot that has not caught up - and the
+    // question here is "may I start on this person", where not knowing has to
+    // mean no. The cost of being wrong for one second is a bot that does not
+    // join in; the cost the other way is exactly the thing this rule exists to
+    // stop.
+    bool HumanMayBeHunted(ObjectGuid humanGuid)
+    {
+        std::lock_guard<std::mutex> guard(g_HumanSpotLock);
+        for (HumanSpot const& spot : g_HumanSpots)
+            if (spot.Guid == humanGuid)
+                return spot.Huntable;
+
+        return false;
+    }
+
     Player* PickHuntTarget(Player* bot, float radius)
     {
         // Read the snapshot instead of sweeping the grid. This was a
@@ -2181,6 +2251,13 @@ namespace
         for (HumanSpot const& spot : candidates)
         {
             if (spot.MapId != bot->GetMapId())
+                continue;
+
+            // War Mode off and no bounty: not somebody to start on. This is the
+            // proactive path by its own definition (see the comment below), so
+            // the gate belongs here and nowhere near IsValidAttackTarget - a bot
+            // must still be able to fight this person back.
+            if (!spot.Huntable)
                 continue;
 
             Player* candidate = ObjectAccessor::FindConnectedPlayer(spot.Guid);
@@ -7978,6 +8055,13 @@ namespace
             uint64 const humanGuid = spot.Guid.GetRawValue();
             online.insert(humanGuid);
 
+            // Nobody is "forgotten" who never asked to be found. Being left
+            // alone is the whole point of playing with War Mode off, and a prod
+            // is the single most intrusive thing this file does - it teleports a
+            // bot to 210 yards and points it at you.
+            if (!spot.Huntable)
+                continue;
+
             // Somebody who has just arrived is not being neglected yet, so the
             // clock starts full rather than empty - otherwise a bot would be
             // posted through the door behind every login.
@@ -8097,6 +8181,13 @@ namespace
             // The request may have sat in the queue while either character leveled.
             // Revalidate the proactive safety rule at execution time too.
             if (!IsProactivePlayerLevelAcceptable(bot, human))
+                continue;
+
+            // And while War Mode was switched off, or a bounty ran out. This is
+            // the last line before somebody is teleported at a person, so it is
+            // the one that has to be right even if a queued request outlived the
+            // reason it was queued.
+            if (!HumanMayBeHunted(human->GetGUID()))
                 continue;
 
             // Land at the EDGE of the player's sight, not on top of them. A guardian
@@ -10479,8 +10570,17 @@ namespace
             {
                 if (Player* ownerPlayer = petOwner->ToPlayer())
                 {
+                    // The reason above is retaliation - "the owner shot it in
+                    // the back" - so the promotion is allowed when that is
+                    // actually true, and when the owner is fair game anyway.
+                    // Without this it fires on ANY held pet, including one the
+                    // bot chose for itself, which is a way to reach a person
+                    // through their pet that no other path would allow.
+                    bool const provoked = IsSwingingAt(bot, ownerPlayer);
+
                     if (!playerbot::IsManagedRandomBot(ownerPlayer) && ownerPlayer->IsAlive() &&
                         bot->IsValidAttackTarget(ownerPlayer) &&
+                        (provoked || playerbot::PveManager::MayProactivelyEngage(bot, ownerPlayer)) &&
                         bot->IsWithinDistInMap(ownerPlayer, PveImmediatePlayerCombatRange))
                     {
                         TC_LOG_DEBUG("playerbots.pve", "Bot {} switches from pet {} to nearby owner {}.",
@@ -11279,6 +11379,31 @@ namespace playerbot
             player->GetSession()->GetAccountId());
     }
 
+    bool PveManager::MayProactivelyEngage(Player const* bot, Player const* human)
+    {
+        if (!bot || !human || bot == human)
+            return false;
+
+        // Consent by entry. Everyone inside a battleground or an arena queued
+        // for it, and this rule must never reach in there - a bot that would not
+        // pick a target is a bot standing still in the middle of a match.
+        if (bot->InBattleground() || bot->InArena() || human->InBattleground() || human->InArena())
+            return true;
+
+        // Consent by acceptance, and only with the person who gave it. A bot
+        // duelling somebody may fight THEM; the fallback scan that reaches this
+        // would otherwise happily pick a bystander standing closer.
+        if (bot->duel && bot->duel->Opponent == human)
+            return true;
+
+        // Bot on bot is a different question, answered elsewhere (the open-world
+        // no-friendly-fire rule in Object.cpp). Nothing here should stop it.
+        if (playerbot::IsManagedRandomBot(human))
+            return true;
+
+        return HumanMayBeHunted(human->GetGUID());
+    }
+
     PveConfig const& PveManager::GetConfig()
     {
         return g_PveConfig;
@@ -11746,8 +11871,17 @@ namespace playerbot
                         int32(taken != botsOnTarget.end() ? taken->second : 0u);
                 }
 
+                // War Mode, or a bounty. Nobody else is hunted.
+                //
+                // The spot is still PUBLISHED for someone who is neither - it is
+                // how a timid bot knows where not to go, and how the zone knows
+                // it has people in it. Only the paths that send a bot AT them
+                // read this flag.
+                bool const huntable = bounty > 0 || BarracksHardcore::IsWarModeOptedIn(human);
+
                 spots.push_back({ human->GetGUID(), human->GetMapId(), human->GetZoneId(), human->GetLevel(),
-                    human->GetPositionX(), human->GetPositionY(), human->GetPositionZ(), slotsFree, bounty });
+                    human->GetPositionX(), human->GetPositionY(), human->GetPositionZ(), slotsFree, bounty,
+                    huntable });
             }
 
             // Nobody left alone. Walked here rather than in the loop above

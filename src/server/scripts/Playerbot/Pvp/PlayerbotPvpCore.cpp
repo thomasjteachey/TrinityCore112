@@ -19,6 +19,7 @@
 #include "PlayerbotPvpCore.h"
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotRandomBotParticipation.h"
+#include "Playerbot/Pve/PlayerbotPveManager.h"
 #include "PlayerbotSharedStateGuard.h"
 
 #include "Battleground.h"
@@ -2530,7 +2531,43 @@ bool MeetsCasterAuraStateRequirements(Player const* player, uint32 spellId)
 
     bool HasHostileTarget(Player const* player, Unit const* target)
     {
-        return player && target && target != player && target->IsAlive() && player->IsValidAttackTarget(target);
+        if (!player || !target || target == player || !target->IsAlive() ||
+            !player->IsValidAttackTarget(target))
+            return false;
+
+        // Legal to fight is not the same as free to start.
+        //
+        // Roughly sixty places in this file ask this question, and they split
+        // two ways: map-wide scans looking for somebody to open on, and checks
+        // about a target the bot already has. Gating the scans one by one would
+        // be thirty edits and thirty chances to gate a retaliation path by
+        // mistake, so the rule lives here with the waiver written next to it.
+        //
+        // A person who has not armed War Mode and carries no bounty is not
+        // somebody a bot may pick. That is decided by the PvE manager, which
+        // owns the snapshot and the consent rules (battlegrounds, arenas, an
+        // accepted duel), so there is one answer rather than two.
+        Player const* person = target->ToPlayer();
+        if (!person)
+            if (Unit const* owner = target->GetCharmerOrOwner())
+                person = owner->ToPlayer();   // and not their pet either
+        if (!person)
+            return true;                      // creatures are unchanged
+
+        // THE WAIVER. Already in the fight - the bot's own victim, or somebody
+        // (or something of theirs) swinging at the bot. Self-defence is never
+        // filtered, whatever the target's settings say.
+        if (player->GetVictim() == target)
+            return true;
+        for (Unit* attacker : player->getAttackers())
+            if (attacker == target ||
+                (attacker && attacker->GetCharmerOrOwnerPlayerOrPlayerItself() == person))
+                return true;
+
+        // The lock behind this is only reached for a real person the bot is not
+        // already fighting, which in a battleground is answered before it and in
+        // the open world is a handful of people at most.
+        return playerbot::PveManager::MayProactivelyEngage(player, person);
     }
 
     bool IsFriendlySupportTarget(Player const* player, Unit const* target)
@@ -3664,6 +3701,19 @@ Unit const* SelectClosestEnemyTarget(Player const* player, bool requireReachable
         if (!candidate || !candidate->IsAlive() || candidate == player)
             continue;
         if (!player->IsValidAttackTarget(candidate))
+            continue;
+
+        // IsValidAttackTarget says this person CAN be fought - the hardcore
+        // pseudo-faction makes every armed bot and every real player mutually
+        // attackable - but this scan is the bot choosing a fight for itself, so
+        // it also has to ask whether it MAY start one. War Mode or a bounty
+        // outside consented ground; inside a battleground or against a duel
+        // opponent the answer is always yes and nothing changes.
+        //
+        // Retaliation never comes through here: this whole scan only runs when
+        // the bot has no selected target AND no victim, so anyone already
+        // swinging at it has been picked several branches earlier.
+        if (!playerbot::PveManager::MayProactivelyEngage(player, candidate))
             continue;
 
             float const distance = player->GetDistance(candidate);

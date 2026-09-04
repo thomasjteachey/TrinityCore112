@@ -31,6 +31,15 @@ namespace BarracksHardcore
     // ruleset needs it to decide how much of a corpse's gold burns.
     bool IsPlayerbot(Player const* player);
 
+    // Whether this PERSON has armed War Mode.
+    //
+    // False for every playerbot by construction - a bot has no setting to read -
+    // so this answers "is this someone who came here looking for a fight", which
+    // is the question the playerbot manager asks before it sends anyone after
+    // them. Exported rather than copied because the opt-in set is loaded and
+    // maintained in exactly one place.
+    bool IsWarModeOptedIn(Player const* player);
+
     // True when a fight between people can actually happen in this zone.
     //
     // Exported so the playerbot manager asks the same question the FFA ruleset

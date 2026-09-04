@@ -31,6 +31,7 @@
 #include "ObjectAccessor.h"
 #include "Creature.h"
 #include "CreatureAI.h"
+#include "ScriptedCreature.h"
 #include "Player.h"
 #include "TemporarySummon.h"
 #include "ScriptMgr.h"
@@ -726,9 +727,87 @@ public:
     }
 };
 
+// A Centurion Guard is sent after ONE person and has no other business.
+//
+// The template carries faction 14 - "Monster", hostile to everything alive -
+// because that is what makes it able to attack a player at all. The side effect
+// was that it also aggroed anyone who happened to walk past: a guard summoned
+// onto a bounty in Westfall would break off and chase a level 20 who had never
+// killed anybody, which is precisely the thing a person turns War Mode off to
+// avoid.
+//
+// So the guard is given a target list of one.
+//
+// MoveInLineOfSight is the lever that matters: CreatureAI's version is what
+// turns "somebody walked past" into EngageWithTarget, and it is the only way a
+// bystander gets onto the threat table without hitting the guard first.
+// CanAIAttack covers the rest - re-selection once the quarry is dead or gone,
+// which is exactly when a disengaged guard would otherwise look around and pick
+// the nearest warm body. Neither touches the explicit AttackStart the summon
+// issues, and neither can stop the guard answering somebody who hits it.
+struct centurion_guardAI : public ScriptedAI
+{
+    explicit centurion_guardAI(Creature* creature) : ScriptedAI(creature) {}
+
+    // The one person it was sent after, anyone hitting it, and anyone who armed
+    // War Mode or earned a bounty of their own.
+    bool MayEngage(Unit const* target) const
+    {
+        if (!target)
+            return false;
+
+        // TempSummon remembers its summoner, so no registry lookup and no lock
+        // on the AI path.
+        if (TempSummon const* summon = me->ToTempSummon())
+            if (summon->GetSummonerGUID() == target->GetGUID())
+                return true;
+
+        // Whoever is hitting it, or owns the thing that is. Self-defence is not
+        // negotiable, and it is what "unless provoked" means.
+        for (Unit* attacker : me->getAttackers())
+            if (attacker == target ||
+                (attacker && attacker->GetCharmerOrOwnerPlayerOrPlayerItself() == target))
+                return true;
+
+        // Anything that is not a person - a bot, a mob that picked a fight -
+        // is treated exactly as before.
+        Player const* person = target->ToPlayer();
+        if (!person)
+            return true;
+
+        // And a bystander is only fair game if they came looking for it.
+        return BarracksHardcore::IsWarModeOptedIn(person) || GetStacks(person) > 0;
+    }
+
+    void MoveInLineOfSight(Unit* who) override
+    {
+        if (!MayEngage(who))
+            return;
+
+        ScriptedAI::MoveInLineOfSight(who);
+    }
+
+    bool CanAIAttack(Unit const* target) const override
+    {
+        return MayEngage(target) && ScriptedAI::CanAIAttack(target);
+    }
+};
+
+class npc_centurion_guard : public CreatureScript
+{
+public:
+    npc_centurion_guard() : CreatureScript("npc_centurion_guard") {}
+
+    CreatureAI* GetAI(Creature* creature) const override
+    {
+        return new centurion_guardAI(creature);
+    }
+};
+
 void AddSC_custom_bounty()
 {
     LoadBountyConfig();
     new custom_bounty_player();
     new custom_bounty_world();
+    new npc_centurion_guard();
 }
