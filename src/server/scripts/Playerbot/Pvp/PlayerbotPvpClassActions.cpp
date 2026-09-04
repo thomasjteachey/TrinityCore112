@@ -2518,10 +2518,31 @@ void IssueBehindTargetMeleeMovement(Player* player, Unit* target)
     SetLastMovementDebugStatus(player, diag.str());
 }
 
+// Whether walking around behind this target can ever succeed.
+//
+// A creature in melee turns to face whoever is hitting it, every tick, so
+// circling one is a dance that never ends and never lands the strike - the bot
+// slides around the mob forever while its Backstab stays unusable. Against a
+// PLAYER, flanking is real and worth the walk.
+//
+// This suppresses only the MOVEMENT. PlayerbotPvpCore already refuses a
+// behind-requiring spell whose target has the caster in arc, so the selector
+// falls through to the next usable ability by itself - Sinister Strike for a
+// rogue - and no ability list needs a special case.
+//
+// An opener from stealth is untouched: a target that has not turned yet is not
+// in arc, so no repositioning was ever asked for and Backstab and Ambush stay
+// usable. Only the futile circling goes.
+bool CanBeFlankedMeaningfully(Unit const* target)
+{
+    return target && target->GetTypeId() == TYPEID_PLAYER;
+}
+
 bool IsBehindTargetRequiredAndMissing(Player const* player, Unit const* target, SpellInfo const* spellInfo)
 {
     return player && target && spellInfo &&
         spellInfo->HasAttribute(SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET) &&
+        CanBeFlankedMeaningfully(target) &&
         target->HasInArc(static_cast<float>(M_PI), player);
 }
 
@@ -4792,7 +4813,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         maxRange > 0.0f && maxRange <= 5.5f;
     bool const shouldMoveBehindForEnemySpell =
         shouldUseMeleeApproachForEnemySpell &&
-        spellInfo->HasAttribute(SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET);
+        spellInfo->HasAttribute(SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET) &&
+        CanBeFlankedMeaningfully(target);
     // TEMPORARY diagnostic: the warrior/shaman gap closers (Charge, Intercept,
     // Heroic Leap, Rehgar's Fury) were reported as producing zero whisper output
     // during live kiting tests. NotifyDuelDecision only fires after an actual
