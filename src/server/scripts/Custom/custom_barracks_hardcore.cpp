@@ -21,7 +21,8 @@
  //    style), the rest is destroyed as a deflationary sink. White gear is the
  //    floor and never drops; bags, inventory and money are safe. Whatever the
  //    death took is replaced with plain white field kit on resurrection, so
- //    nobody is ever left unable to fight. World only - BGs/arenas exempt.
+ //    nobody is ever left unable to fight. Open world only - battlegrounds,
+ //    arenas, dungeons and raids all exempt, so a wipe costs a group nothing.
  //  - Opt-in free-for-all PvP: a flagger NPC in the capitals toggles it. The
  //    flag only ARMS in zones of a configurable minimum level - never in
  //    starter zones, capitals or sanctuaries - and while armed the player
@@ -1357,6 +1358,18 @@ namespace BarracksHardcore
             return;
 
         if (!IsWorldContext(victim))
+            return;
+
+        // Nothing is taken inside a dungeon or a raid. A wipe is a group failing
+        // at PvE content, not somebody losing a fight in the open world, and
+        // stripping everyone's gear on a wipe would end instance running on this
+        // realm outright.
+        //
+        // This one gate covers all three ways gear leaves you, because they all
+        // funnel through here: the chest that drops green-and-better worn items,
+        // the white/grey burn (BurnWornFloorGear runs from this function and
+        // nowhere else on the death path), and a bot's carried gear below.
+        if (IsInstancedContent(victim))
             return;
 
         // The Battle Ring pays out through its own chest and nothing else. The
