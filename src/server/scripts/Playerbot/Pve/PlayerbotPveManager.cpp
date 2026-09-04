@@ -2246,7 +2246,11 @@ namespace
     // dropped in walks the rest instead of qualifying to be sent again.
     constexpr float kBountyAnsweringYards = 240.0f;
 
-    Player* PickHuntTarget(Player* bot, float radius)
+    // bountiedOnly: the bot is still timid - it lost to a person recently and is
+    // meant to be leaving people alone. A bounty overrides that, and only a
+    // bounty: hiding behind the corpses of the bots you already beat was the one
+    // way to carry a price on your head and still be left in peace.
+    Player* PickHuntTarget(Player* bot, float radius, bool bountiedOnly = false)
     {
         // Read the snapshot instead of sweeping the grid. This was a
         // Cell::VisitWorldObjects over a 120 yard radius, run per guardian on the
@@ -2270,6 +2274,10 @@ namespace
             // the gate belongs here and nowhere near IsValidAttackTarget - a bot
             // must still be able to fight this person back.
             if (!spot.Huntable)
+                continue;
+
+            // Timid, so only a bounty is worth breaking cover for.
+            if (bountiedOnly && !spot.Bounty)
                 continue;
 
             Player* candidate = ObjectAccessor::FindConnectedPlayer(spot.Guid);
@@ -11201,10 +11209,12 @@ namespace
         // kills, which in a busy zone is almost never - it holds the zone, so
         // the zone's visitors come first.
         if (target && target->GetTypeId() != TYPEID_PLAYER && state.masterGuid.IsEmpty() &&
-            PveClock::now() >= state.timidUntil &&
             GetGuardianZoneId(bot->GetGUID().GetRawValue()))
         {
-            if (Player* intruder = PickHuntTarget(bot, cfg.guardianPlayerApproachYards))
+            // Timidity no longer ends the search, it narrows it: a guardian that
+            // just lost still answers a bounty in its zone.
+            bool const timid = PveClock::now() < state.timidUntil;
+            if (Player* intruder = PickHuntTarget(bot, cfg.guardianPlayerApproachYards, timid))
             {
                 target = intruder;
                 state.recentBadTargets.erase(intruder->GetGUID().GetRawValue());
@@ -11329,7 +11339,6 @@ namespace
             else if (master)
                 target = PickCompanionTarget(bot, state, master, cfg);
             else if (state.masterGuid.IsEmpty() && !HasBrokenEquippedItem(bot) &&
-                PveClock::now() >= state.timidUntil &&
                 ReadyToFightPlayers(bot, cfg) &&
                 cfg.proactiveHuntYards > 0.0f &&
                 BarracksHardcore::IsOpenWorldPvpZone(bot->GetZoneId()))
@@ -11346,7 +11355,15 @@ namespace
                 // pull. The guardian value is deliberately NOT reused here - it
                 // has to stay above the 210 yard teleport landing distance for
                 // reasons that have nothing to do with how far a bot may hunt.
-                target = PickHuntTarget(bot, cfg.proactiveHuntYards);
+                // Timidity is a rule about not re-picking the person who just
+                // beat you, and it used to end this branch outright. A bounty
+                // overrides it: five bots benched for ten minutes each is how a
+                // bountied player could clear an area and then be left alone by
+                // the very fleet their bounty is supposed to summon. Still timid
+                // means bountied targets ONLY - an ordinary player keeps the
+                // reprieve they earned by winning.
+                bool const timid = PveClock::now() < state.timidUntil;
+                target = PickHuntTarget(bot, cfg.proactiveHuntYards, timid);
             }
 
             // Death caches are opportunistic loot, not a new combat activity.  A
@@ -11376,11 +11393,13 @@ namespace
                 // has just been killed by a person - gating only the approach let a
                 // timid guardian stand up at the graveyard and immediately pick its
                 // killer again, which is the whole behaviour this was meant to stop.
+                // That protection now covers everyone EXCEPT a bountied player,
+                // who has explicitly bought the attention back.
                 // Retaliation is unaffected: the attacker branch above still answers
                 // anything actually hitting the bot.
-                if (GetGuardianZoneId(bot->GetGUID().GetRawValue()) &&
-                    PveClock::now() >= state.timidUntil)
-                    target = PickHuntTarget(bot, cfg.guardianPlayerApproachYards);
+                if (GetGuardianZoneId(bot->GetGUID().GetRawValue()))
+                    target = PickHuntTarget(bot, cfg.guardianPlayerApproachYards,
+                        PveClock::now() < state.timidUntil);
 
                 // Packmates first: adjacent bots fight together (one team),
                 // adopting the fight of any nearby bot already in combat.
