@@ -269,7 +269,7 @@ namespace
                 << r.TimidSeconds << ',' << ToGold(r.MoneyCopper) << ','
                 << uint32(r.HealthPct) << ',' << uint32(r.PowerPct) << ','
                 << r.ItemLevel << ',' << uint32(r.WornCount) << ',' << uint32(r.GreenPlus) << ','
-                << flags << ';';
+                << flags << ',' << r.DisplayId << ';';
 
             if (++inMessage >= 4)
             {
@@ -422,7 +422,7 @@ namespace
                 points[tab->OrderIndex] += uint32(rank) + 1;
 
                 taken << talent->SpellRank[rank] << ',' << (uint32(rank) + 1) << ','
-                      << tab->OrderIndex << ',' << talent->TierID << ';';
+                      << tab->OrderIndex << ',' << talent->TierID << ',' << talent->ColumnIndex << ';';
 
                 if (++inTaken >= 8)
                 {

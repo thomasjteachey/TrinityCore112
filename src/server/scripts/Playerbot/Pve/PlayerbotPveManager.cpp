@@ -12234,6 +12234,7 @@ namespace playerbot
                 row.PowerPct = uint8(std::min(100.0f, std::max(0.0f, bot->GetPowerPct(POWER_MANA))));
 
             row.Spec = uint8(EquipProfileIndex(bot));
+            row.DisplayId = bot->GetDisplayId();
 
             // What is actually worn. Mean item level says whether a bot is
             // equipped or running around in field kit, and the green-or-better

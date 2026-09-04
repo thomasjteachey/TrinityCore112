@@ -152,9 +152,9 @@ end
 -- "name,level,class,spec,zone,aggr,timid,gold,hp,mp,ilvl,worn,greens,flags;"
 local function ParseRoster(payload)
 	for row in string.gmatch(payload, "([^;]+)") do
-		local name, lvl, cls, spec, zone, aggr, timid, gold, hp, mp, ilvl, worn, greens, flags =
+		local name, lvl, cls, spec, zone, aggr, timid, gold, hp, mp, ilvl, worn, greens, flags, disp =
 			string.match(row,
-				"^([^,]+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+)$")
+				"^([^,]+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+)$")
 		if name then
 			local f = tonumber(flags) or 0
 			table.insert(incoming, {
@@ -175,6 +175,7 @@ local function ParseRoster(payload)
 				dead   = bit.band(f, 2) > 0,
 				travel = bit.band(f, 4) > 0,
 				pvp    = bit.band(f, 8) > 0,
+				display = tonumber(disp) or 0,
 			})
 		end
 	end
@@ -345,13 +346,14 @@ local function ParseTalentPicks(payload)
 
 	picksOf[name] = picksOf[name] or {}
 	for row in string.gmatch(rows, "([^;]+)") do
-		local spell, rank, tree, tier = string.match(row, "^(%d+),(%d+),(%d+),(%d+)$")
+		local spell, rank, tree, tier, col = string.match(row, "^(%d+),(%d+),(%d+),(%d+),(%d+)$")
 		if spell then
 			table.insert(picksOf[name], {
 				spell = tonumber(spell) or 0,
 				rank  = tonumber(rank) or 0,
 				tree  = tonumber(tree) or 0,
 				tier  = tonumber(tier) or 0,
+				col   = tonumber(col) or 0,
 			})
 		end
 	end
@@ -741,169 +743,282 @@ driver:SetScript("OnUpdate", function()
 end)
 
 ------------------------------------------------------------------
--- one bot
+-- one bot: a character pane and a talent frame of our own
 ------------------------------------------------------------------
-local detail = CreateFrame("Frame", "CenturionBotStatsDetail", UIParent)
-detail:SetWidth(300)
-detail:SetHeight(420)
-detail:SetPoint("LEFT", win, "RIGHT", 4, 0)
-detail:SetBackdrop({
+-- Laid out the way Blizzard's own panes are, because that is the layout every
+-- one of these numbers already lives in for anybody reading them. Slot squares
+-- down both sides of a model, weapons along the bottom; talents as three trees
+-- of icons placed on their real tier and column.
+--
+-- It has to be ours rather than theirs: InspectFrame reads gear through
+-- GetInventoryItemLink(unit, slot) and the model through SetUnit(unit), and the
+-- client has no unit for a bot it has never loaded. Everything here is keyed by
+-- ITEM ID and DISPLAY ID instead, which the server can simply tell us.
+
+local BOT_W, BOT_H = 420, 520
+
+local bot = CreateFrame("Frame", "CenturionBotPane", UIParent)
+bot:SetWidth(BOT_W)
+bot:SetHeight(BOT_H)
+bot:SetPoint("LEFT", win, "RIGHT", 6, 0)
+bot:SetBackdrop({
 	bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
 	edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
 	tile = true, tileSize = 32, edgeSize = 32,
 	insets = { left = 11, right = 12, top = 12, bottom = 11 },
 })
-detail:SetMovable(true)
-detail:EnableMouse(true)
-detail:RegisterForDrag("LeftButton")
-detail:SetScript("OnDragStart", detail.StartMoving)
-detail:SetScript("OnDragStop", detail.StopMovingOrSizing)
-detail:Hide()
+bot:SetMovable(true)
+bot:EnableMouse(true)
+bot:RegisterForDrag("LeftButton")
+bot:SetScript("OnDragStart", bot.StartMoving)
+bot:SetScript("OnDragStop", bot.StopMovingOrSizing)
+bot:SetClampedToScreen(true)
+bot:Hide()
+tinsert(UISpecialFrames, "CenturionBotPane")
 
-local dTitle = detail:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-dTitle:SetPoint("TOP", detail, "TOP", 0, -16)
+local bTitle = bot:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+bTitle:SetPoint("TOP", bot, "TOP", 0, -14)
 
-local dClose = CreateFrame("Button", nil, detail, "UIPanelCloseButton")
-dClose:SetPoint("TOPRIGHT", detail, "TOPRIGHT", -8, -8)
+local bSub = bot:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+bSub:SetPoint("TOP", bTitle, "BOTTOM", 0, -2)
 
-local dBody = detail:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-dBody:SetPoint("TOPLEFT", detail, "TOPLEFT", 22, -46)
-dBody:SetWidth(256)
-dBody:SetJustifyH("LEFT")
-dBody:SetJustifyV("TOP")
+local bClose = CreateFrame("Button", nil, bot, "UIPanelCloseButton")
+bClose:SetPoint("TOPRIGHT", bot, "TOPRIGHT", -6, -6)
 
--- Gear and talents, drawn here because Blizzard's frame cannot be pointed at a
--- bot (see the note by InspectBot). Two columns of slots, left/right the way
--- the paper doll reads, so it is recognisable at a glance.
-local dTalents = detail:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-dTalents:SetPoint("TOPLEFT", detail, "TOPLEFT", 118, -196)
-dTalents:SetJustifyH("LEFT")
+------------------------------------------------------------------
+-- gear page
+------------------------------------------------------------------
+local gearPage = CreateFrame("Frame", nil, bot)
+gearPage:SetAllPoints(bot)
 
--- Gear and talents are the same real estate, so they are tabs rather than two
--- half-height lists that would fit neither.
-local dTabGear, dTabTalents
+-- The bot's own model. SetDisplayInfo takes a DISPLAY ID, so it needs no unit -
+-- which is the whole reason this pane can show somebody on another continent.
+local model = CreateFrame("PlayerModel", nil, gearPage)
+model:SetWidth(150)
+model:SetHeight(280)
+model:SetPoint("TOP", bot, "TOP", 0, -74)
 
--- Icon plus name per slot, which is the inspect frame's own vocabulary. The
--- icon comes from GetItemIcon, which answers by ITEM ID and needs no unit -
--- the whole reason this panel can show a bot on another continent at all.
-local gearRows = {}
-for i = 1, 19 do
-	local r = CreateFrame("Button", nil, detail)
-	local col = (i <= 10) and 0 or 1
-	local row = (i <= 10) and i or (i - 10)
-	r:SetWidth(148)
-	r:SetHeight(14)
-	r:SetPoint("TOPLEFT", detail, "TOPLEFT", 20 + col * 152, -204 - row * 15)
+local SLOT_LAYOUT = {
+	-- slot id, side, row
+	{ 0,  "L", 1 }, { 1,  "L", 2 }, { 2,  "L", 3 }, { 14, "L", 4 },
+	{ 4,  "L", 5 }, { 3,  "L", 6 }, { 18, "L", 7 }, { 8,  "L", 8 },
+	{ 9,  "R", 1 }, { 5,  "R", 2 }, { 6,  "R", 3 }, { 7,  "R", 4 },
+	{ 10, "R", 5 }, { 11, "R", 6 }, { 12, "R", 7 }, { 13, "R", 8 },
+	{ 15, "B", 1 }, { 16, "B", 2 }, { 17, "B", 3 },
+}
 
-	r.icon = r:CreateTexture(nil, "ARTWORK")
-	r.icon:SetWidth(13)
-	r.icon:SetHeight(13)
-	r.icon:SetPoint("LEFT", r, "LEFT", 0, 0)
-	-- Trim the border the 3.3.5 icon art carries, the way item buttons do.
-	r.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+local slotButtons = {}
 
-	r.text = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	r.text:SetPoint("LEFT", r.icon, "RIGHT", 3, 0)
-	r.text:SetWidth(130)
-	r.text:SetJustifyH("LEFT")
+local function MakeSlot(slotId, side, row)
+	local b = CreateFrame("Button", nil, gearPage)
+	b:SetWidth(34)
+	b:SetHeight(34)
 
-	-- The real item tooltip, by link, so hovering a bot's chestpiece shows
-	-- exactly what hovering your own would.
-	r:SetScript("OnEnter", function()
-		if not this.itemId then
+	if side == "L" then
+		b:SetPoint("TOPLEFT", bot, "TOPLEFT", 22, -70 - (row - 1) * 38)
+	elseif side == "R" then
+		b:SetPoint("TOPRIGHT", bot, "TOPRIGHT", -22, -70 - (row - 1) * 38)
+	else
+		b:SetPoint("BOTTOM", bot, "BOTTOM", (row - 2) * 40, 66)
+	end
+
+	b.bg = b:CreateTexture(nil, "BACKGROUND")
+	b.bg:SetAllPoints(b)
+	b.bg:SetTexture("Interface\\Buttons\\UI-EmptySlot")
+	b.bg:SetTexCoord(0.2, 0.8, 0.2, 0.8)
+	b.bg:SetVertexColor(0.4, 0.4, 0.4)
+
+	b.icon = b:CreateTexture(nil, "ARTWORK")
+	b.icon:SetPoint("TOPLEFT", b, "TOPLEFT", 2, -2)
+	b.icon:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", -2, 2)
+	b.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+
+	-- Quality border, the way an item button reads it.
+	b.border = b:CreateTexture(nil, "OVERLAY")
+	b.border:SetPoint("TOPLEFT", b, "TOPLEFT", -1, 1)
+	b.border:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 1, -1)
+	b.border:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
+	b.border:SetBlendMode("ADD")
+	b.border:Hide()
+
+	b.ilvl = b:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
+	b.ilvl:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 1)
+
+	b:SetScript("OnEnter", function()
+		GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+		if this.itemId then
+			GameTooltip:SetHyperlink("item:" .. this.itemId)
+		else
+			GameTooltip:SetText(SLOT_NAME[this.slotId] or "Slot", 1, 1, 1)
+			GameTooltip:AddLine("empty", 0.6, 0.6, 0.6)
+		end
+		GameTooltip:Show()
+	end)
+	b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+	b.slotId = slotId
+	return b
+end
+
+for i = 1, #SLOT_LAYOUT do
+	local def = SLOT_LAYOUT[i]
+	slotButtons[def[1]] = MakeSlot(def[1], def[2], def[3])
+end
+
+local gearFoot = gearPage:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+gearFoot:SetPoint("BOTTOM", bot, "BOTTOM", 0, 40)
+
+------------------------------------------------------------------
+-- talent page
+------------------------------------------------------------------
+local talentPage = CreateFrame("Frame", nil, bot)
+talentPage:SetAllPoints(bot)
+talentPage:Hide()
+
+local treeButtons = {}
+local activeTree = 0
+
+local talentIcons = {}
+local TALENT_COLS, TALENT_ROWS = 4, 11
+
+for i = 1, TALENT_COLS * TALENT_ROWS do
+	local t = CreateFrame("Button", nil, talentPage)
+	t:SetWidth(30)
+	t:SetHeight(30)
+
+	local col = math.fmod(i - 1, TALENT_COLS)
+	local row = math.floor((i - 1) / TALENT_COLS)
+	t:SetPoint("TOPLEFT", bot, "TOPLEFT", 60 + col * 74, -104 - row * 34)
+
+	t.icon = t:CreateTexture(nil, "ARTWORK")
+	t.icon:SetAllPoints(t)
+	t.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+
+	t.rank = t:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
+	t.rank:SetPoint("BOTTOMRIGHT", t, "BOTTOMRIGHT", 2, -1)
+
+	t:SetScript("OnEnter", function()
+		if not this.spellId then
 			return
 		end
 		GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
-		GameTooltip:SetHyperlink("item:" .. this.itemId)
+		GameTooltip:SetHyperlink("spell:" .. this.spellId)
 		GameTooltip:Show()
 	end)
-	r:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	t:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	t:Hide()
 
-	gearRows[i] = r
+	talentIcons[i] = t
 end
 
-local dNote = detail:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-dNote:SetPoint("BOTTOMLEFT", detail, "BOTTOMLEFT", 22, 48)
-dNote:SetWidth(256)
-dNote:SetJustifyH("LEFT")
+local talentFoot = talentPage:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+talentFoot:SetPoint("BOTTOM", bot, "BOTTOM", 0, 40)
 
+------------------------------------------------------------------
+-- drawing
+------------------------------------------------------------------
 DrawGear = function(name)
-	local list = gearOf[name]
-	for i = 1, #gearRows do
-		gearRows[i].text:SetText("")
-		gearRows[i].icon:SetTexture(nil)
-		gearRows[i].itemId = nil
+	for _, b in pairs(slotButtons) do
+		b.itemId = nil
+		b.icon:SetTexture(nil)
+		b.border:Hide()
+		b.ilvl:SetText("")
 	end
 
+	local list = gearOf[name]
 	if not list or #list == 0 then
-		gearRows[1].text:SetText("|cff808080waiting for the server...|r")
+		gearFoot:SetText("|cff808080waiting for the server...|r")
 		return
 	end
 
-	table.sort(list, function(a, b) return a.slot < b.slot end)
-
-	for i = 1, math.min(#list, #gearRows) do
+	local worn, best = 0, 0
+	for i = 1, #list do
 		local g = list[i]
-		local r = gearRows[i]
+		local b = slotButtons[g.slot]
+		if b then
+			b.itemId = g.id
+			b.icon:SetTexture(GetItemIcon(g.id))
 
-		-- GetItemInfo answers from the client's cache. A name it has never seen
-		-- comes back nil and fills in later, so the slot name stands in until
-		-- then rather than the row simply reading blank.
-		local itemName = GetItemInfo(g.id)
-		local hex = QUALITY_HEX[g.quality] or "ffffff"
-
-		r.itemId = g.id
-		r.icon:SetTexture(GetItemIcon(g.id))
-		r.text:SetText(string.format("|cff%s%s|r |cff606060%d|r",
-			hex, itemName or (SLOT_NAME[g.slot] or "?"), g.ilvl))
+			local r, gr, bl = GetItemQualityColor(g.quality)
+			-- Blizzard has no colour for a repurposed artifact tier, so the
+			-- field kit is painted red rather than the gold it would inherit.
+			if g.quality == 6 then
+				r, gr, bl = 0.8, 0.27, 0.27
+			end
+			b.border:SetVertexColor(r, gr, bl)
+			b.border:Show()
+			b.ilvl:SetText(g.ilvl)
+			worn = worn + 1
+			if QUALITY_RANK[g.quality] and QUALITY_RANK[g.quality] >= 2 then
+				best = best + 1
+			end
+		end
 	end
+
+	gearFoot:SetText(string.format("%d equipped, |cff1eff00%d|r green or better", worn, best))
 end
 
 DrawTalents = function(name)
 	local t = talentOf[name]
-	if t then
-		dTalents:SetText(string.format("|cffffd200%d|r / |cffffd200%d|r / |cffffd200%d|r", t[1], t[2], t[3]))
-	else
-		dTalents:SetText("")
+
+	for i = 1, #treeButtons do
+		local points = t and t[i] or 0
+		treeButtons[i]:SetText(string.format("%s (%d)", treeButtons[i].treeName or ("Tree " .. i), points))
 	end
 
-	if detailTab ~= "talents" then
-		return
-	end
-
-	for i = 1, #gearRows do
-		gearRows[i].text:SetText("")
-		gearRows[i].icon:SetTexture(nil)
-		gearRows[i].itemId = nil
-		gearRows[i].spellId = nil
+	for i = 1, #talentIcons do
+		talentIcons[i]:Hide()
+		talentIcons[i].spellId = nil
 	end
 
 	local picks = picksOf[name]
 	if not picks or #picks == 0 then
-		gearRows[1].text:SetText("|cff808080waiting for the server...|r")
+		talentFoot:SetText("|cff808080waiting for the server...|r")
 		return
 	end
 
-	-- Tree, then tier: the reading order of the talent frame itself.
-	table.sort(picks, function(a, b)
-		if a.tree ~= b.tree then return a.tree < b.tree end
-		return a.tier < b.tier
-	end)
-
-	for i = 1, math.min(#picks, #gearRows) do
+	local shown = 0
+	for i = 1, #picks do
 		local p = picks[i]
-		local r = gearRows[i]
-		local spellName, _, icon = GetSpellInfo(p.spell)
-
-		r.spellId = p.spell
-		r.icon:SetTexture(icon)
-		r.text:SetText(string.format("|cffffffff%s|r |cff606060%d|r",
-			spellName or ("spell " .. p.spell), p.rank))
+		if p.tree == activeTree then
+			-- Real tier and column, so the shape of the build is the shape on
+			-- screen rather than a list in pick order.
+			local idx = p.tier * TALENT_COLS + p.col + 1
+			local slot = talentIcons[idx]
+			if slot then
+				local _, _, icon = GetSpellInfo(p.spell)
+				slot.spellId = p.spell
+				slot.icon:SetTexture(icon)
+				slot.rank:SetText(p.rank)
+				slot:Show()
+				shown = shown + 1
+			end
+		end
 	end
+
+	talentFoot:SetText(shown > 0 and "" or "|cff808080nothing spent in this tree|r")
 end
 
-local function MakeDetailButton(label, width, onClick)
-	local b = CreateFrame("Button", nil, detail, "UIPanelButtonTemplate")
+------------------------------------------------------------------
+-- page switching
+------------------------------------------------------------------
+local function ShowGearPage()
+	detailTab = "gear"
+	talentPage:Hide()
+	gearPage:Show()
+	if shownBot then DrawGear(shownBot) end
+end
+
+local function ShowTalentPage(tree)
+	detailTab = "talents"
+	activeTree = tree or activeTree
+	gearPage:Hide()
+	talentPage:Show()
+	if shownBot then DrawTalents(shownBot) end
+end
+
+local function MakeBotButton(parent, label, width, onClick)
+	local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
 	b:SetWidth(width)
 	b:SetHeight(20)
 	b:SetText(label)
@@ -911,36 +1026,38 @@ local function MakeDetailButton(label, width, onClick)
 	return b
 end
 
-dTabGear = MakeDetailButton("Gear", 62, function()
-	detailTab = "gear"
-	if shownBot then DrawGear(shownBot) end
-end)
-dTabGear:SetPoint("TOPLEFT", detail, "TOPLEFT", 20, -192)
+local pageGear = MakeBotButton(bot, "Character", 80, ShowGearPage)
+pageGear:SetPoint("BOTTOMLEFT", bot, "BOTTOMLEFT", 20, 16)
 
-dTabTalents = MakeDetailButton("Talents", 62, function()
-	detailTab = "talents"
-	if shownBot then DrawTalents(shownBot) end
-end)
-dTabTalents:SetPoint("LEFT", dTabGear, "RIGHT", 2, 0)
+local pageTalents = MakeBotButton(bot, "Talents", 70, function() ShowTalentPage(0) end)
+pageTalents:SetPoint("LEFT", pageGear, "RIGHT", 3, 0)
 
-local dInspect = MakeDetailButton("Refresh", 70, function()
+-- One button per tree, filled in with the spec names when a bot is shown.
+for i = 1, 3 do
+	local b = MakeBotButton(talentPage, "Tree " .. i, 108, nil)
+	b:SetPoint("TOPLEFT", bot, "TOPLEFT", 18 + (i - 1) * 128, -70)
+	b:SetScript("OnClick", function() ShowTalentPage(i - 1) end)
+	treeButtons[i] = b
+end
+
+local pageGo = MakeBotButton(bot, "Go to", 62, function()
+	if shownBot then RunGmCommand(".appear " .. shownBot) end
+end)
+pageGo:SetPoint("LEFT", pageTalents, "RIGHT", 3, 0)
+
+local pageBring = MakeBotButton(bot, "Bring", 62, function()
+	if shownBot then RunGmCommand(".summon " .. shownBot) end
+end)
+pageBring:SetPoint("LEFT", pageGo, "RIGHT", 3, 0)
+
+local pageRefresh = MakeBotButton(bot, "Refresh", 68, function()
 	if shownBot then
 		RequestGear(shownBot)
 		DrawGear(shownBot)
 		DrawTalents(shownBot)
 	end
 end)
-dInspect:SetPoint("BOTTOMLEFT", detail, "BOTTOMLEFT", 22, 22)
-
-local dGoto = MakeDetailButton("Go to", 70, function()
-	if shownBot then RunGmCommand(".appear " .. shownBot) end
-end)
-dGoto:SetPoint("LEFT", dInspect, "RIGHT", 4, 0)
-
-local dBring = MakeDetailButton("Bring here", 84, function()
-	if shownBot then RunGmCommand(".summon " .. shownBot) end
-end)
-dBring:SetPoint("LEFT", dGoto, "RIGHT", 4, 0)
+pageRefresh:SetPoint("LEFT", pageBring, "RIGHT", 3, 0)
 
 function CENTURION_BotStats_ShowBot(name)
 	local b
@@ -955,7 +1072,7 @@ function CENTURION_BotStats_ShowBot(name)
 	end
 
 	shownBot = name
-	dTitle:SetText(name)
+	bTitle:SetText(name)
 
 	local state = "idle"
 	if b.dead then
@@ -963,32 +1080,30 @@ function CENTURION_BotStats_ShowBot(name)
 	elseif b.combat then
 		state = "|cffff7f5ffighting|r"
 	elseif b.travel then
-		state = "|cff5f9fffftravelling|r"
+		state = "|cff5f9fftravelling|r"
 	elseif b.timid > 0 then
-		state = string.format("|cffe0c020timid for %ds|r", b.timid)
+		state = string.format("|cffe0c020timid %ds|r", b.timid)
 	end
 
 	local zn = zones[b.zone] and zones[b.zone].name or ("Zone " .. b.zone)
+	bSub:SetText(string.format(
+		"Level |cffffd200%d|r %s %s   %s   |cffffd200%dg|r   aggression |cffffd200%d|r   %s",
+		b.level, SpecName(b.class, b.spec), CLASS_NAME[b.class] or "?", zn, b.gold, b.aggr, state))
 
-	dBody:SetText(string.format(
-		"Level |cffffd200%d|r %s  |cff909090(%s)|r\n%s\n\n"..
-		"State            %s\n"..
-		"Aggression       |cffffd200%d|r / 100\n"..
-		"Health           %d%%%s\n\n"..
-		"Gold             |cffffd200%dg|r\n"..
-		"Gear             |cffffd200%d|r item level\n"..
-		"Equipped         %d pieces, |cff1eff00%d|r green or better\n%s",
-		b.level, CLASS_NAME[b.class] or "?", SpecName(b.class, b.spec), zn,
-		state, b.aggr,
-		b.hp, (b.mp > 0) and string.format("\nMana             %d%%", b.mp) or "",
-		b.gold, b.ilvl, b.worn, b.greens,
-		b.pvp and "\n|cffff7f5fPvP-only: no PvE, holds no money|r" or ""))
+	-- Name the tree buttons for this class, so "Tree 2" reads as Fury.
+	local specs = SPEC_NAME[b.class]
+	for i = 1, 3 do
+		treeButtons[i].treeName = specs and specs[i] or ("Tree " .. i)
+	end
+
+	if b.display and b.display > 0 then
+		model:SetDisplayInfo(b.display)
+	end
 
 	RequestGear(name)
-	DrawGear(name)
+	ShowGearPage()
 	DrawTalents(name)
-	dNote:SetText("")
-	detail:Show()
+	bot:Show()
 end
 
 SLASH_CENTURIONBOTSTATS1 = "/botstats"

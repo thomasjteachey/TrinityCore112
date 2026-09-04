@@ -337,6 +337,7 @@ public:
         uint8 HealthPct = 0;
         uint8 PowerPct = 0;        // mana, when the class has any
         uint16 ItemLevel = 0;      // mean of equipped, 0 when naked
+        uint32 DisplayId = 0;      // for the client's model view
         uint8 WornCount = 0;       // equipped pieces
         uint8 GreenPlus = 0;       // of those, uncommon or better
         uint16 TimidSeconds = 0;   // 0 when not timid
