@@ -1067,12 +1067,20 @@ function CENTURION_BotStats_ShowBot(name)
 			break
 		end
 	end
+
+	-- Show the pane FIRST, and say why when there is nothing to put in it.
+	-- Returning silently here is indistinguishable from a dead button, which is
+	-- exactly how this looked: the roster arrives on its own fifteen second
+	-- timer, so for the first few seconds after login there is a list of bots
+	-- on screen built from an EARLIER sweep and nothing behind it yet.
+	shownBot = name
+	bot:Show()
+	bTitle:SetText(name)
+
 	if not b then
+		bSub:SetText("|cffff7f5fno roster entry yet|r - the fleet sweep lands every 15s")
 		return
 	end
-
-	shownBot = name
-	bTitle:SetText(name)
 
 	local state = "idle"
 	if b.dead then
@@ -1100,10 +1108,12 @@ function CENTURION_BotStats_ShowBot(name)
 		model:SetDisplayInfo(b.display)
 	end
 
-	RequestGear(name)
+	-- The gear request goes out over chat, and anything that can throw between
+	-- here and the end would leave the pane half-drawn. Ask last, and never let
+	-- it take the window down with it.
 	ShowGearPage()
 	DrawTalents(name)
-	bot:Show()
+	pcall(RequestGear, name)
 end
 
 SLASH_CENTURIONBOTSTATS1 = "/botstats"
