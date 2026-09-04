@@ -8939,12 +8939,10 @@ namespace
     // keeps the errand alive instead of clearing it mid-cast.
     bool UseQuestGameObject(Player* bot, PveBotState& state, GameObject* go)
     {
-        // Whatever happens next, do not immediately re-pick this object: a
-        // locked or script-gated one would otherwise loop the errand forever.
-        MarkRecentErrandTarget(state, go->GetGUID());
-
         if (go->GetGoType() == GAMEOBJECT_TYPE_GOOBER)
         {
+            // Nothing to retry on a goober: one Use and it is done either way.
+            MarkRecentErrandTarget(state, go->GetGUID());
             go->Use(bot);
             TC_LOG_INFO("playerbots.pve", "Bot {} used quest object {} ({}).",
                 bot->GetName(), go->GetEntry(), go->GetGOInfo() ? go->GetGOInfo()->name : "");
@@ -8952,7 +8950,10 @@ namespace
         }
 
         if (go->GetGoType() != GAMEOBJECT_TYPE_CHEST)
+        {
+            MarkRecentErrandTarget(state, go->GetGUID());
             return false;
+        }
 
         // Second visit: the open is already under way.
         if (state.chestOpeningGuid == go->GetGUID())
@@ -8963,16 +8964,53 @@ namespace
 
             state.chestOpeningGuid.Clear();
 
-            // The cast is done, so take the contents. The chest loot session
-            // mutates group loot state; execute it on the world thread with the
-            // corpse loot.
+            // FINISHED, or CANCELLED? UNIT_STATE_CASTING cannot tell them apart,
+            // and this used to assume success.
+            //
+            // A successful Opening runs GameObject::Use, which moves the chest to
+            // GO_ACTIVATED. A cancelled channel leaves it exactly as it was, on
+            // GO_READY - and a channel is cancelled by a step of movement, a hit,
+            // or the rogue deciding to stealth. The old code queued a loot
+            // session anyway; the world thread then found the bot had already
+            // walked off, failed its range check and dropped the loot silently.
+            // That is the bot seen walking up to a chest, doing nothing, and
+            // leaving to go and fight something.
+            if (go->getLootState() == GO_READY)
+            {
+                TC_LOG_DEBUG("playerbots.pve", "Bot {} had its open of chest {} cancelled; retrying.",
+                    bot->GetName(), go->GetEntry());
+                return true;                       // hold the errand and try again
+            }
+
+            // Really open. Take the contents - the chest loot session mutates
+            // group loot state, so it executes on the world thread with the
+            // corpse loot - and hold the errand until it has, so nothing walks
+            // the bot out of range in the meantime.
+            MarkRecentErrandTarget(state, go->GetGUID());
+            {
+                std::lock_guard<std::mutex> guard(g_PvePendingLock);
+                g_PendingLootExecutions[bot->GetGUID().GetRawValue()] = go->GetGUID();
+            }
+            state.errandUntil = std::min(state.errandUntil,
+                PveClock::now() + std::chrono::seconds(3));
+            return true;
+        }
+
+        // A loot session is queued for this bot and has not run yet. Stand still
+        // until it does: the executor checks range, and letting the bot pick a
+        // new target in the second before the world tick is what turned an
+        // opened chest into an empty one.
+        {
             std::lock_guard<std::mutex> guard(g_PvePendingLock);
-            g_PendingLootExecutions[bot->GetGUID().GetRawValue()] = go->GetGUID();
-            return false;
+            if (g_PendingLootExecutions.count(bot->GetGUID().GetRawValue()))
+                return true;
         }
 
         if (go->getLootState() != GO_READY)
+        {
+            MarkRecentErrandTarget(state, go->GetGUID());
             return false;
+        }
 
         // Open it the way a player does, mirroring the battleground node
         // interaction that already channels correctly (PlayerbotPvpLifecycleActions,
@@ -13036,15 +13074,38 @@ namespace playerbot
             if (bot->GetMaxPower(POWER_MANA))
                 bot->SetPower(POWER_MANA, bot->GetMaxPower(POWER_MANA));
 
+            bool wentHome = false;
             if (PlayerInfo const* info = sObjectMgr->GetPlayerInfo(bot->GetRace(), bot->GetClass()))
             {
                 WorldLocation const home(info->mapId, info->positionX, info->positionY, info->positionZ, info->orientation);
                 bot->SetHomebind(home, info->areaId);
                 if (BotCanTeleportNow(bot) && bot->TeleportTo(home))
+                {
                     RestorePlayerbotTeleportVitals(bot);
+                    wentHome = true;
+                }
             }
+
+            // The trip home was best-effort, and the log said "sent home" either
+            // way. BotCanTeleportNow refuses for perfectly ordinary reasons - a
+            // teleport already in flight, the wrong map state - and when it did,
+            // the bot was stripped to level 1 and simply left standing where it
+            // was. That is the level 1 druid in the Badlands: the rebirth worked,
+            // the relocation silently did not.
+            //
+            // Queue it instead of dropping it. The relocation executor owns the
+            // teleport, runs on the world thread and already sends a bot to the
+            // zone its level belongs in - which for a freshly reset bot is a
+            // starter zone.
+            if (!wentHome)
+            {
+                std::lock_guard<std::mutex> guard(g_PvePendingLock);
+                g_PendingGrindRelocations.insert(bot->GetGUID().GetRawValue());
+            }
+
             bot->SaveToDB();
-            TC_LOG_INFO("playerbots.pve", "Bot {} was reset to level 1 and sent home.", bot->GetName());
+            TC_LOG_INFO("playerbots.pve", "Bot {} was reset to level 1 and {}.",
+                bot->GetName(), wentHome ? "sent home" : "queued for relocation");
         }
     }
 

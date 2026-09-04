@@ -6334,9 +6334,23 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "rogue kick", isCombatRogue ? "interrupt nearby enemy cast" : "interrupt enemy cast", 1766, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyCastingTarget ? nearbyCastingTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, player->HealthBelowPct(40) && IsSpellReady(player, 5277), 47.0f,
         { "rogue evasion", "defensive survival in melee", 5277, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, (isCombatRogue ? rootedOrSnared : (!player->HealthBelowPct(50) && !player->IsWithinMeleeRange(target) && player->IsWithinDistInMap(target, 30.0f))) && IsSpellReady(player, 90516 /* T2 wrapper: 11305 is now learned as 90516 */), 46.0f,
-        { "rogue sprint", "close gap for melee pressure", 90516, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, isCombatRogue && rootedOrSnared && !IsSpellReady(player, 90516 /* T2 wrapper: 11305 is now learned as 90516 */) && IsSpellReady(player, 26889), 45.8f,
+    // Sprint lives in TWO separate rank chains on this realm and the table only
+    // knew one of them, so no rogue has ever sprinted.
+    //
+    // spell_ranks has 2983 -> 8696 -> 11305 (the stock chain, and the one the
+    // trainer actually teaches: 2984 at level 10, 8697 at 34, 11318 at 58) and a
+    // SEPARATE 90514 -> 90515 -> 90516 chain for the T2 wrapper. Asking for
+    // 90516 resolves down its OWN chain and finds nothing, because
+    // ResolveKnownPlayerSpellInChain cannot cross into a chain the id does not
+    // belong to. Measured live: 16 rogues know 8696, 8 know 2983, and not one
+    // knows any id in the 90514 chain.
+    //
+    // So ask for whichever chain this rogue actually has, top rank first, and
+    // let the resolver walk down to the rank they own.
+    uint32 const sprintSpellId = IsSpellReady(player, 90516) ? 90516u : 11305u;
+    AddDecisionCandidate(candidates, (isCombatRogue ? rootedOrSnared : (!player->HealthBelowPct(50) && !player->IsWithinMeleeRange(target) && player->IsWithinDistInMap(target, 30.0f))) && IsSpellReady(player, sprintSpellId), 46.0f,
+        { "rogue sprint", "close gap for melee pressure", sprintSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, isCombatRogue && rootedOrSnared && !IsSpellReady(player, sprintSpellId) && IsSpellReady(player, 26889), 45.8f,
         { "rogue vanish", "escape root or snare when sprint is unavailable", 26889, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isCombatRogue && player->IsWithinMeleeRange(target) && IsSpellReady(player, 13750), 45.7f,
         { "rogue adrenaline rush", "combat burst when in melee", 13750, playerbot::PvpClassSpellContext::TargetMode::Self });
