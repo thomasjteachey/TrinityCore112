@@ -2239,6 +2239,13 @@ namespace
         return false;
     }
 
+    // How close counts as already on the way to a bounty. Shared by the two
+    // sides that have to agree about it: the hunt reach a bot walks in from,
+    // and the dispatch's refusal to teleport somebody who is already that
+    // near. Comfortably above the 210 yard teleport floor, so a bot that is
+    // dropped in walks the rest instead of qualifying to be sent again.
+    constexpr float kBountyAnsweringYards = 240.0f;
+
     Player* PickHuntTarget(Player* bot, float radius)
     {
         // Read the snapshot instead of sweeping the grid. This was a
@@ -2271,7 +2278,23 @@ namespace
 
             // A bounty is a standing invitation: bots come from further away
             // the higher it is, up to the configured bonus at the cap.
-            if (!bot->IsWithinDistInMap(candidate, radius + Bounty::HuntRadiusBonusYards(spot.Bounty)))
+            // A bounty is a standing invitation: bots come from further away the
+            // higher it is, up to the configured bonus at the cap.
+            //
+            // Floored at the distance the DISPATCH treats as "already answering"
+            // once the bounty is relentless, because otherwise there is a ring
+            // around the target where a bot does neither. At 17 stacks the hunt
+            // reach is about 185 yards while the dispatch refuses to teleport
+            // anybody inside 240, so a bot between the two was not walking in and
+            // was not being sent - it stood there, which is exactly what a bounty
+            // reported seeing. The floor closes the ring, and sits at the
+            // dispatch's own number so a teleported bot lands inside its own
+            // hunt reach and walks the rest rather than being re-sent.
+            float huntReach = radius + Bounty::HuntRadiusBonusYards(spot.Bounty);
+            if (Bounty::IsHuntedRelentlessly(spot.Bounty))
+                huntReach = std::max(huntReach, kBountyAnsweringYards);
+
+            if (!bot->IsWithinDistInMap(candidate, huntReach))
                 continue;
 
             if (candidate == bot || candidate->IsGameMaster() ||
@@ -8220,12 +8243,22 @@ namespace
                 if (!outmatched->IsWithinDistInMap(human, hearingYards))
                     continue;
 
-                // Actually fighting them, not merely standing nearby.
-                if (outmatched->GetVictim() != human && !IsSwingingAt(outmatched, human))
+                // Outmatched: below the level this file would ever let it start
+                // a fight at. THIS IS THE WHOLE TRIGGER, and it used to also
+                // require the bot to already be fighting the person - which is
+                // self-defeating, because a bot below the proactive level range
+                // is exactly the bot that will never aggro them. With
+                // ProactiveMaxLevelsAbove at 4, a level 38 bot cannot start on a
+                // level 43, so it was never anybody's victim and never shouted.
+                //
+                // A bounty walking past is reason enough. It is a lookout calling
+                // in a sighting, not a cry from inside a fight.
+                if (IsProactivePlayerLevelAcceptable(outmatched, human))
                     continue;
 
-                // And genuinely outmatched. A fair fight is not an emergency.
-                if (IsProactivePlayerLevelAcceptable(outmatched, human))
+                // Line of sight, so it is a sighting and not a shout through a
+                // hillside.
+                if (!outmatched->IsWithinLOSInMap(human))
                     continue;
 
                 uint64 const outmatchedGuid = outmatched->GetGUID().GetRawValue();
@@ -8439,7 +8472,7 @@ namespace
             // job; re-sending it is what produced a bot ping-ponging out to 210
             // yards every twenty seconds, because walking in made it the nearest
             // candidate and nearest is what this picks.
-            constexpr float kAlreadyAnsweringYards = 240.0f;
+            constexpr float kAlreadyAnsweringYards = kBountyAnsweringYards;
             uint32 answering = 0;
             if (Map* map = human->FindMap())
                 for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin();
@@ -8448,8 +8481,22 @@ namespace
                     // Not named 'near': that is a legacy Windows macro, and this
                     // file is built by clang on the Jenkins side as well.
                     Player* other = itr->GetSource();
-                    if (other && other != human && playerbot::IsManagedRandomBot(other) &&
-                        other->IsAlive() && other->IsWithinDistInMap(human, kAlreadyAnsweringYards))
+                    if (!other || other == human || !playerbot::IsManagedRandomBot(other) ||
+                        !other->IsAlive() || !other->IsWithinDistInMap(human, kAlreadyAnsweringYards))
+                        continue;
+
+                    // Nearby is not the same as ANSWERING, and counting it that
+                    // way is why a bounty could stand in a zone full of bots and
+                    // have nobody sent: idle bots inside 240 yards filled the
+                    // ceiling, and the ones far enough away to be teleported were
+                    // never dispatched because the ceiling was already full.
+                    //
+                    // A responder is either already fighting this person, or
+                    // carries the pursuit deadline the dispatch stamps on it.
+                    // Anything else is just a bot that happens to be standing
+                    // there - frequently one too low to have aggroed at all.
+                    if (other->GetVictim() == human || IsSwingingAt(other, human) ||
+                        other->GetBountyPursuitStacks())
                         ++answering;
                 }
 
