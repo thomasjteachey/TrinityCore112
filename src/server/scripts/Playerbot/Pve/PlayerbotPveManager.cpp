@@ -7821,10 +7821,40 @@ namespace
             bool const veterans = Bounty::DrawsFromVeterans(spot.Bounty);
             bool const pvpBots = Bounty::DrawsFromPvpBots(spot.Bounty);
 
+            // Who is ALREADY answering. A bot inside the guardian teleport
+            // trigger has arrived, or is close enough that walking finishes the
+            // job; re-sending it is what produced a bot ping-ponging out to 210
+            // yards every twenty seconds, because walking in made it the nearest
+            // candidate and nearest is what this picks.
+            constexpr float kAlreadyAnsweringYards = 240.0f;
+            uint32 answering = 0;
+            if (Map* map = human->FindMap())
+                for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin();
+                    itr != map->GetPlayers().end(); ++itr)
+                {
+                    // Not named 'near': that is a legacy Windows macro, and this
+                    // file is built by clang on the Jenkins side as well.
+                    Player* other = itr->GetSource();
+                    if (other && other != human && playerbot::IsManagedRandomBot(other) &&
+                        other->IsAlive() && other->IsWithinDistInMap(human, kAlreadyAnsweringYards))
+                        ++answering;
+                }
+
+            // Enough is enough. Relentless means a stream that does not stop,
+            // not a pile that never stops growing.
+            if (answering >= Bounty::MaxHuntersOnTarget(spot.Bounty))
+                continue;
+
             std::vector<std::pair<float, Player*>> ranked;
             for (Player* bot : proddableBots)
             {
                 if (bot->GetMapId() != human->GetMapId() || bot == human)
+                    continue;
+
+                // Already there, or close enough to walk. THIS is the guard the
+                // guardian path has always had - its teleport trigger sits above
+                // its drop distance for exactly this reason.
+                if (bot->IsWithinDistInMap(human, kAlreadyAnsweringYards))
                     continue;
 
                 // Still never volunteer somebody into a fight they lose on arrival:
@@ -7863,6 +7893,14 @@ namespace
             Player* chosen = nullptr;
             for (auto const& [score, bot] : ranked)
             {
+                // A bot with a teleport still queued has not arrived yet, and
+                // queueing a second one for it would overwrite the first.
+                {
+                    std::lock_guard<std::mutex> guard(g_PvePendingLock);
+                    if (g_PendingGuardianTeleports.count(bot->GetGUID().GetRawValue()))
+                        continue;
+                }
+
                 PveBotState const* state = playerbot::LockedFind(g_PveBotStateByGuid,
                     bot->GetGUID().GetRawValue());
                 if (!state || state->masterGuid.IsEmpty())

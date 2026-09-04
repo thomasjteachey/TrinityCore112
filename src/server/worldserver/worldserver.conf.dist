@@ -3489,6 +3489,18 @@ Centurion.Bounty.PvpBotStacks = 50
 #        Default:     30 / 900200 / 2 / 45 / 180
 #                     GuardStacks 0 - (disabled)
 #
+#
+#    Centurion.Bounty.MaxHuntersOnTarget
+#        Description: How many bots may already be within 240 yards of a bountied
+#                     player before the relentless dispatch stops sending more.
+#                     Grows with the bounty, so the crowd escalates too.
+#                     Relentless means a stream that does not stop, not a pile
+#                     that never stops growing - without this the dispatcher would
+#                     draw from further and further out until the zone was empty.
+#        Default:     6 - (and up to double that at the stack cap)
+#
+Centurion.Bounty.MaxHuntersOnTarget = 6
+
 Centurion.Bounty.GuardStacks = 30
 Centurion.Bounty.GuardCreatureId = 900200
 Centurion.Bounty.GuardCount = 2

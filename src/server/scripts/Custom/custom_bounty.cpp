@@ -64,6 +64,7 @@ namespace
     uint32 s_relentlessIntervalSeconds = 30;
     uint32 s_veteranStacks = 25;
     uint32 s_pvpBotStacks = 50;
+    uint32 s_maxHuntersOnTarget = 6;
     uint32 s_guardStacks = 30;
     uint32 s_guardEntry = 900200;
     uint32 s_guardCount = 2;
@@ -152,6 +153,8 @@ namespace
             sConfigMgr->GetIntDefault("Centurion.Bounty.VeteranStacks", 25), 0, 255));
         s_pvpBotStacks = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Centurion.Bounty.PvpBotStacks", 50), 0, 255));
+        s_maxHuntersOnTarget = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Centurion.Bounty.MaxHuntersOnTarget", 6), 1, 100));
         s_guardStacks = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Centurion.Bounty.GuardStacks", 30), 0, 255));
         s_guardEntry = uint32(std::max(0,
@@ -505,6 +508,13 @@ bool DrawsFromVeterans(uint32 stacks)
 bool DrawsFromPvpBots(uint32 stacks)
 {
     return s_enabled && s_pvpBotStacks && stacks >= s_pvpBotStacks;
+}
+
+uint32 MaxHuntersOnTarget(uint32 stacks)
+{
+    // Grows with the bounty, so the ceiling escalates alongside everything
+    // else instead of capping the top rungs at the bottom rung's crowd.
+    return s_maxHuntersOnTarget + uint32(Fraction(stacks) * float(s_maxHuntersOnTarget));
 }
 
 bool SummonsGuards(uint32 stacks)

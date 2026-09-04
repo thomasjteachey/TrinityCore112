@@ -98,6 +98,11 @@ namespace Bounty
     // target and set straight onto them.
     bool SummonsGuards(uint32 stacks);
 
+    // How many hunters may be standing on one person before the relentless
+    // dispatch stops adding more. Without a ceiling it would keep drawing from
+    // further and further out until the zone was empty.
+    uint32 MaxHuntersOnTarget(uint32 stacks);
+
     // Coin owed by a death, in copper, taken now and handed to the caller to
     // put in a chest. Zero unless this player died with a bounty and nothing
     // has collected on it yet.
