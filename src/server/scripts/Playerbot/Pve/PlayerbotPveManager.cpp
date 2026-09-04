@@ -8321,11 +8321,36 @@ namespace
                     rescuer->GetAbsoluteAngle(human->GetPositionX(), human->GetPositionY())))
                     continue;
 
+                // WIPE WHAT IT WAS DOING FIRST, or it simply carries on.
+                //
+                // The journey it was on lives in its PvE state, not in its
+                // position, so teleporting it and calling Attack changed nothing:
+                // the next tick read the old state, saw a destination it had not
+                // reached, mounted up and rode off. Which is exactly what was
+                // seen - a rescuer arriving and immediately running away.
+                //
+                // Erasing the state is the same thing a rebirth does, and it
+                // leaves the bot with no errand, no journey and no stay order.
+                playerbot::LockedErase(g_PveBotStateByGuid, rescuer->GetGUID().GetRawValue());
+                playerbot::PvpCore::SetPveCombatEngagement(rescuer->GetGUID(), false);
+
+                if (rescuer->IsMounted())
+                    rescuer->Dismount();
+                if (MotionMaster* motionMaster = rescuer->GetMotionMaster())
+                    motionMaster->Clear();
+                rescuer->StopMoving();
+
                 // Full and ready: it was pulled out of whatever it was doing, and
                 // arriving at half health on a cooldown it already spent would
                 // just be a second corpse.
                 RestorePlayerbotTeleportVitals(rescuer);
                 rescuer->GetSpellHistory()->ResetAllCooldowns();
+
+                // The same stamp the hunt dispatch uses. It is what tells the
+                // rest of the file this bot is on a bounty - the aggro-radius
+                // reduction on the way in, and the damage bonus when it lands -
+                // and without it the rescuer is just a bot standing somewhere new.
+                rescuer->SetBountyPursuit(spot.Bounty, 90 * IN_MILLISECONDS);
                 rescuer->Attack(human, true);
 
                 TC_LOG_INFO("playerbots.pve",

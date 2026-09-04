@@ -924,75 +924,127 @@ namespace
         return pct;
     }
 
+    // The bot behind a unit: the bot itself, or the bot that owns this pet,
+    // guardian or totem.
+    //
+    // Every creature rule here reads through this, so a hunter's pet and a
+    // warlock's minion are treated as the bot they belong to - same reduced
+    // damage taken, same increased damage dealt. A pet fighting at full monster
+    // damage beside a bot on half is the pet dying first, which is the bot
+    // losing anyway.
+    Player const* ManagedPlayerbotBehind(Unit const* unit)
+    {
+        if (!unit)
+            return nullptr;
+
+        Player const* candidate = unit->GetCharmerOrOwnerPlayerOrPlayerItself();
+        if (!candidate || !candidate->GetSession())
+            return nullptr;
+
+        return IsManagedPlayerbotAccountIdForDisplay(candidate->GetSession()->GetAccountId())
+            ? candidate : nullptr;
+    }
+
+    // Wildlife: a creature nobody owns. A pet, guardian, totem or mind-controlled
+    // creature belongs to somebody and is never wildlife.
+    bool IsOwnerlessCreature(Unit const* unit)
+    {
+        return unit && unit->GetTypeId() == TYPEID_UNIT &&
+            !unit->GetCharmerOrOwnerPlayerOrPlayerItself();
+    }
+
+    // How many ordinary creatures are on this bot, counting the ones chewing on
+    // its pet - which matters most for the class it matters most to, since a
+    // hunter whose pet is holding everything would otherwise read as having
+    // aggroed nothing at all.
+    uint32 AggroedCreatureCount(Player const* bot)
+    {
+        if (!bot)
+            return 0;
+
+        uint32 count = 0;
+        for (Unit* attacker : bot->getAttackers())
+            if (IsOwnerlessCreature(attacker))
+                ++count;
+
+        for (Unit const* controlled : bot->m_Controlled)
+            if (controlled)
+                for (Unit* attacker : controlled->getAttackers())
+                    if (IsOwnerlessCreature(attacker))
+                        ++count;
+
+        return count;
+    }
+
+    // What a bot, or its pet, hits an ordinary creature for, as a percentage.
+    //
+    // Two bonuses on top of 100, added rather than multiplied so the result stays
+    // something a person can predict:
+    //
+    //   - the bounty it is pursuing, linear to the configured peak at the stack
+    //     cap. Those stacks are the bounty ON THE PLAYER it was sent after, since
+    //     SetBountyPursuit stamps the target's count onto the hunter.
+    //   - a step per EXTRA creature on it. The first one does not count: a bot
+    //     winning a straight fight needs no help, and this exists for the add
+    //     that turns one fight into three.
+    //
+    // Read once. DealDamage runs for every hit in the world and cannot afford a
+    // config lookup per blow, so like the pursuit keys in Creature.cpp these are
+    // fixed at first use and a .reload config will not move them.
+    uint32 PlayerbotCreatureDamagePct(Unit const* attacker, Unit const* victim)
+    {
+        static uint32 const peakPct = uint32(std::max(100,
+            sConfigMgr->GetIntDefault("Centurion.Bounty.PursuitCreatureDamagePct", 250)));
+        static uint32 const maxStacks = uint32(std::max(1,
+            sConfigMgr->GetIntDefault("Centurion.Bounty.MaxStacks", 50)));
+        static uint32 const perExtraPct = uint32(std::max(0,
+            sConfigMgr->GetIntDefault("Playerbot.Pve.CreatureDamagePctPerExtraAggro", 50)));
+        // 0 means no ceiling, which is what "for every creature" asks for.
+        static uint32 const extraCapPct = uint32(std::max(0,
+            sConfigMgr->GetIntDefault("Playerbot.Pve.CreatureDamageExtraAggroCapPct", 0)));
+
+        if (!attacker || !victim || attacker == victim || !IsOwnerlessCreature(victim))
+            return 100;
+
+        Player const* bot = ManagedPlayerbotBehind(attacker);
+        if (!bot)
+            return 100;
+
+        uint32 bonus = 0;
+
+        if (uint32 const pursuit = bot->GetBountyPursuitStacks(); pursuit && peakPct > 100)
+        {
+            float const fraction = std::min(1.0f, float(pursuit) / float(maxStacks));
+            bonus += uint32(float(peakPct - 100) * fraction);
+        }
+
+        if (perExtraPct)
+            if (uint32 const aggroed = AggroedCreatureCount(bot); aggroed > 1)
+            {
+                uint32 extra = (aggroed - 1) * perExtraPct;
+                if (extraCapPct)
+                    extra = std::min(extra, extraCapPct);
+                bonus += extra;
+            }
+
+        return 100 + bonus;
+    }
+
     // Whether this blow is a MONSTER hitting a member of the fleet.
     //
     // A bot cannot drink between pulls, cannot kite well and cannot decide to
     // come back later - it grinds the same ground for hours, so PvE damage a
     // person takes a few times an hour lands on a bot continuously.
     //
-    // Monsters ONLY. Anything a player owns - a pet, a guardian, a totem, a
-    // mind-controlled creature - is a person fighting a bot on purpose and
-    // keeps its full damage, which is the entire point of the exception.
-    // How hard a bot hits CREATURES while it is on its way to a bounty, as a
-    // percentage. 100 is unchanged; the configured value is what it reaches at
-    // the bounty cap and it scales linearly up to there.
-    //
-    // Same reasoning as the aggro-radius reduction in Creature::GetAttackDistance:
-    // a hunter that has to stop and grind through everything between it and the
-    // target arrives at half health, or never. This is the other half of that -
-    // what it cannot walk past, it goes through.
-    //
-    // Read once. DealDamage runs for every hit in the world, so this cannot be a
-    // config lookup per blow; like the pursuit keys in Creature.cpp it is fixed
-    // at first use and a .reload config will not move it.
-    uint32 BountyPursuitCreatureDamagePct(uint32 pursuitStacks)
-    {
-        static uint32 const peakPct = uint32(std::max(100,
-            sConfigMgr->GetIntDefault("Centurion.Bounty.PursuitCreatureDamagePct", 250)));
-        static uint32 const maxStacks = uint32(std::max(1,
-            sConfigMgr->GetIntDefault("Centurion.Bounty.MaxStacks", 50)));
-
-        if (!pursuitStacks || peakPct <= 100)
-            return 100;
-
-        float const fraction = std::min(1.0f, float(pursuitStacks) / float(maxStacks));
-        return 100 + uint32(float(peakPct - 100) * fraction);
-    }
-
-    // A managed playerbot hunting a bounty, hitting an ordinary creature.
-    //
-    // The stacks are the BOUNTY ON THE PLAYER it was sent after - SetBountyPursuit
-    // stamps the target's count onto the hunter - so the whole world's wildlife
-    // gets easier for the bots converging on one person, and for nobody else.
-    // Anything a player owns is not wildlife and is left alone, exactly as in
-    // IsMonsterHittingPlayerbot below.
-    uint32 BountyPursuitStacksAgainstCreature(Unit const* attacker, Unit const* victim)
-    {
-        if (!attacker || !victim || attacker == victim)
-            return 0;
-
-        if (victim->GetTypeId() != TYPEID_UNIT || victim->GetCharmerOrOwnerPlayerOrPlayerItself())
-            return 0;
-
-        Player const* bot = attacker->ToPlayer();
-        if (!bot || !bot->GetSession() ||
-            !IsManagedPlayerbotAccountIdForDisplay(bot->GetSession()->GetAccountId()))
-            return 0;
-
-        return bot->GetBountyPursuitStacks();
-    }
-
+    // Wildlife ONLY on the attacking side. Anything a player owns is a person
+    // fighting a bot on purpose and keeps its full damage.
     bool IsMonsterHittingPlayerbot(Unit const* attacker, Unit const* victim)
     {
         if (!attacker || !victim || attacker == victim)
             return false;
 
-        if (attacker->GetTypeId() != TYPEID_UNIT || attacker->GetCharmerOrOwnerPlayerOrPlayerItself())
-            return false;
-
-        Player const* bot = victim->ToPlayer();
-        return bot && bot->GetSession() &&
-            IsManagedPlayerbotAccountIdForDisplay(bot->GetSession()->GetAccountId());
+        // Wildlife on one side, a bot or something a bot owns on the other.
+        return IsOwnerlessCreature(attacker) && ManagedPlayerbotBehind(victim) != nullptr;
     }
 }
 
@@ -1004,12 +1056,11 @@ namespace
     if (damage && CreatureDamageToPlayerbotPct() < 100 && IsMonsterHittingPlayerbot(attacker, victim))
         damage = CalculatePct(damage, CreatureDamageToPlayerbotPct());
 
-    // And the other direction: a bot on its way to a bounty cuts through the
-    // wildlife rather than being held up by it.
-    if (damage)
-        if (uint32 const pursuit = BountyPursuitStacksAgainstCreature(attacker, victim))
-            if (uint32 const pct = BountyPursuitCreatureDamagePct(pursuit); pct > 100)
-                damage = CalculatePct(damage, pct);
+    // And the other direction: a bot cuts through wildlife harder the bigger the
+    // bounty it is chasing, and the more of the wildlife is currently on it.
+    if (damage)
+        if (uint32 const pct = PlayerbotCreatureDamagePct(attacker, victim); pct > 100)
+            damage = CalculatePct(damage, pct);
 
     uint32 rage_damage = damage + (cleanDamage ? cleanDamage->absorbed_damage : 0);
 
