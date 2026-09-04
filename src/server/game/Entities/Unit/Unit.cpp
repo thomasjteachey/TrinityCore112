@@ -15261,6 +15261,14 @@ namespace
         }();
         return !accountIds.empty() && std::binary_search(accountIds.begin(), accountIds.end(), accountId);
     }
+
+    // Whether a War Mode player should see the fleet on their minimap.
+    // Parsed once, like the account list above.
+    bool WarModeTracksBots()
+    {
+        static bool const enabled = sConfigMgr->GetBoolDefault("Centurion.WarMode.TrackBots", true);
+        return enabled;
+    }
 }
 
 void Unit::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player const* target) const
@@ -15390,6 +15398,44 @@ void Unit::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player const* t
                 if (dynamicFlags & UNIT_DYNFLAG_TRACK_UNIT)
                     if (!HasAuraTypeWithCaster(SPELL_AURA_MOD_STALKED, target->GetGUID()))
                         dynamicFlags &= ~UNIT_DYNFLAG_TRACK_UNIT;
+
+                // War Mode sees the fleet.
+                //
+                // A player who has opted into War Mode has every playerbot marked
+                // TRACKED in THEIR copy of the update - the same bit Track
+                // Humanoids sets - so the client draws the minimap dots itself.
+                // No addon, no position feed, no coordinate maths: the per-observer
+                // filtering directly above already proves this field can differ per
+                // viewer, and this is the same trick pointed the other way.
+                //
+                // Bounded by ordinary visibility, exactly like real tracking: this
+                // marks what the client already knows about, it does not send
+                // anything new. Showing bots across a whole continent is the WORLD
+                // map's problem and needs its own feed.
+                //
+                // Set AFTER the Hunter's Mark filter on purpose - that block only
+                // ever clears, so ordering cannot fight it, and a bot legitimately
+                // stalked by this observer keeps the bit either way.
+                //
+                // "War Mode is on" is asked as IsFFAPvP() on the OBSERVER, not as
+                // the badge aura: that badge is driven by
+                // Centurion.Hardcore.FfaPvp.WarModeAuraSpell, which is not set on
+                // this realm, so nobody carries it and an aura test would be
+                // silently inert. An opted-in human in an eligible zone is armed,
+                // which is War Mode being both ON and ACTIVE - the pseudo-faction
+                // block below trusts the same signal for the same population.
+                //
+                // The observer must not itself be a bot: every bot is permanently
+                // armed, so without that guard bots would track each other.
+                if (WarModeTracksBots())
+                {
+                    Player const* bot = GetTypeId() == TYPEID_PLAYER ? ToPlayer() : nullptr;
+                    if (bot && target != this && bot->GetSession() && target->GetSession() &&
+                        target->IsFFAPvP() &&
+                        IsManagedPlayerbotAccountIdForDisplay(bot->GetSession()->GetAccountId()) &&
+                        !IsManagedPlayerbotAccountIdForDisplay(target->GetSession()->GetAccountId()))
+                        dynamicFlags |= UNIT_DYNFLAG_TRACK_UNIT;
+                }
 
                 fieldBuffer << dynamicFlags;
             }
