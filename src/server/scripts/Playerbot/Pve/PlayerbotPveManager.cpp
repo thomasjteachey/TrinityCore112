@@ -8306,6 +8306,103 @@ namespace
             itr = now > itr->second + std::chrono::minutes(5) ? s_nextShoutAt.erase(itr) : std::next(itr);
     }
 
+    // The levy: bots conscripted out of their own band to fight a bounty in a
+    // zone they do not belong in, and the memory of where to send them back to.
+    //
+    // World thread only, like the drifter registry it sits beside.
+    struct LeviedBot
+    {
+        uint32 HomeZoneId = 0;    // the band it was taken from
+        uint8  HomeLevel = 1;     // and the level it was living at there
+        uint64 HumanGuid = 0;     // the bounty it was raised for
+    };
+    std::unordered_map<uint64, LeviedBot> g_LeviedBots;
+
+    uint32 LevyStacks()
+    {
+        static uint32 const stacks = uint32(std::max(1,
+            sConfigMgr->GetIntDefault("Centurion.Bounty.LevyStacks", 15)));
+        return stacks;
+    }
+
+    // Whether a real person is playing in this zone right now. A levy is drawn
+    // from empty ground, never out from under somebody.
+    bool ZoneHasPeople(uint32 zoneId)
+    {
+        std::lock_guard<std::mutex> guard(g_HumanSpotLock);
+        for (HumanSpot const& spot : g_HumanSpots)
+            if (spot.ZoneId == zoneId)
+                return true;
+        return false;
+    }
+
+    // Conscript one bot into the zone a bounty is standing in, at the top of that
+    // zone's band, remembering where it came from.
+    //
+    // ResetManagedBotToZoneBand does the whole job - re-level, re-learn, retalent,
+    // and the teleport into a grind spot in the zone - so the levy IS the port.
+    bool LevyBotInto(Player* bot, Player* human, uint8 bandTop)
+    {
+        if (!bot || !human)
+            return false;
+
+        uint64 const botRawGuid = bot->GetGUID().GetRawValue();
+        if (g_LeviedBots.count(botRawGuid))
+            return false;                       // already serving
+
+        LeviedBot record;
+        record.HomeZoneId = bot->GetZoneId();
+        record.HomeLevel = bot->GetLevel();
+        record.HumanGuid = human->GetGUID().GetRawValue();
+
+        uint32 const targetZone = human->GetZoneId();
+        playerbot::ResetManagedBotToZoneBand(bot, targetZone, bandTop);
+
+        // The reset refuses on a bot mid-teleport or out of world; if it did not
+        // move, it was not levied and must not be recorded as such.
+        if (bot->GetZoneId() != targetZone)
+            return false;
+
+        g_LeviedBots[botRawGuid] = record;
+        TC_LOG_INFO("playerbots.pve",
+            "Levy: {} raised from zone {} (level {}) to level {} in zone {} for the bounty on {}.",
+            bot->GetName(), record.HomeZoneId, uint32(record.HomeLevel), uint32(bandTop),
+            targetZone, human->GetName());
+        return true;
+    }
+
+    // And send them home once the bounty they were raised for is finished with.
+    void ReturnLeviedBots()
+    {
+        for (auto itr = g_LeviedBots.begin(); itr != g_LeviedBots.end();)
+        {
+            Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(itr->first));
+            if (!bot || !bot->IsInWorld())
+            {
+                ++itr;                          // offline: keep the record, decide when it returns
+                continue;
+            }
+
+            Player* human = ObjectAccessor::FindConnectedPlayer(ObjectGuid(itr->second.HumanGuid));
+            bool const stillWanted = human && human->IsInWorld() && human->IsAlive() &&
+                Bounty::GetStacks(human) >= LevyStacks() &&
+                human->GetZoneId() == bot->GetZoneId();
+
+            if (stillWanted || bot->IsInCombat())
+            {
+                ++itr;                          // the job is not over
+                continue;
+            }
+
+            LeviedBot const record = itr->second;
+            itr = g_LeviedBots.erase(itr);
+
+            TC_LOG_INFO("playerbots.pve", "Levy: {} released back to zone {} at level {}.",
+                bot->GetName(), record.HomeZoneId, uint32(record.HomeLevel));
+            playerbot::ResetManagedBotToZoneBand(bot, record.HomeZoneId, record.HomeLevel);
+        }
+    }
+
     void HuntTheBountied(std::vector<HumanSpot> const& spots,
         std::vector<Player*> const& proddableBots)
     {
@@ -8379,22 +8476,38 @@ namespace
                 if (!IsProactivePlayerLevelAcceptable(bot, human))
                     continue;
 
-                // And whoever arrives has to belong in the ZONE, not just against
-                // the target. A bounty is not a reason to drop a level 12 into the
-                // Burning Steppes: it has to survive the walk, the wildlife and
-                // whatever else is standing there, and a bot that dies to the zone
-                // on the way is a bot that never arrives.
+                // Out of the target zone's band? Then it is a RECRUIT, not a
+                // rejection.
                 //
-                // Zones without a band - instances, capitals, anything the classic
-                // table does not cover - are not gated, which matches how the rest
-                // of this file treats an unknown zone.
+                // Sending a level 12 into the Burning Steppes as it stands is
+                // pointless - it dies to the zone before it reaches anybody. But
+                // refusing to send it is how a bounty in a high zone runs out of
+                // hunters entirely. So the bot is levied instead: re-levelled to
+                // the top of that zone's band, moved there, and returned to its
+                // own band when the bounty is over.
+                //
+                // Levied bots are the LAST tier, so anybody who already belongs in
+                // the zone goes first and a levy only happens when the zone cannot
+                // field enough of its own. And only above the levy threshold, so an
+                // ordinary bounty never re-levels anyone.
+                bool needsLevy = false;
                 {
                     uint8 bandBottom = 0;
                     uint8 bandTop = 0;
                     if (playerbot::GetZoneLevelBand(human->GetZoneId(), bandBottom, bandTop))
                     {
                         uint8 const botLevel = bot->GetLevel();
-                        if (botLevel < bandBottom || botLevel > bandTop)
+                        needsLevy = botLevel < bandBottom || botLevel > bandTop;
+                    }
+
+                    if (needsLevy)
+                    {
+                        if (spot.Bounty < LevyStacks())
+                            continue;
+
+                        // Drawn from zones nobody is playing in, per the design:
+                        // a levy must not empty a zone out from under a person.
+                        if (ZoneHasPeople(bot->GetZoneId()))
                             continue;
                     }
                 }
@@ -8417,6 +8530,9 @@ namespace
                     tier = 0;
                 else if (veterans && isVeteran)
                     tier = 1;
+
+                if (needsLevy)
+                    tier = 3;
 
                 ranked.push_back({ float(tier) * 100000.0f + bot->GetDistance(human), bot });
             }
@@ -8459,8 +8575,27 @@ namespace
             uint32 const wait = Bounty::RelentlessIntervalSeconds(spot.Bounty);
             s_nextHuntAt[humanGuid] = now + std::chrono::seconds(wait);
 
+            uint8 levyBottom = 0;
+            uint8 levyTop = 0;
+            bool const zoneBanded = playerbot::GetZoneLevelBand(human->GetZoneId(), levyBottom, levyTop);
+
             for (Player* chosen : sending)
             {
+                // A recruit is re-levelled and moved by the levy itself, so it
+                // needs no teleport queued - ResetManagedBotToZoneBand has already
+                // put it in the zone at a level that can survive there.
+                bool const outOfBand = zoneBanded &&
+                    (chosen->GetLevel() < levyBottom || chosen->GetLevel() > levyTop);
+                if (outOfBand)
+                {
+                    if (LevyBotInto(chosen, human, levyTop))
+                    {
+                        chosen->SetBountyPursuit(spot.Bounty, 90 * IN_MILLISECONDS);
+                        continue;
+                    }
+                    continue;                   // levy refused; do not port it as-is
+                }
+
                 // Leave them alone on the way. The window covers the teleport plus
                 // the walk in from 210 yards with room to spare, and lapses by
                 // itself - see Player::SetBountyPursuit for why it is a deadline
@@ -12395,6 +12530,9 @@ namespace playerbot
 
                 // And the fleet answers its own outmatched.
                 CallForHelpAgainstBounties(spots, proddableBots);
+
+                // And send the conscripts home once their bounty is done.
+                ReturnLeviedBots();
 
             std::lock_guard<std::mutex> guard(g_HumanSpotLock);
             g_HumanSpots.swap(spots);
