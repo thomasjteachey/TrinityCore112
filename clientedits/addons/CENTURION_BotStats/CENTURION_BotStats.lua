@@ -214,6 +214,23 @@ win:SetScript("OnMouseWheel", function()
 end)
 
 ------------------------------------------------------------------
+-- GM commands
+------------------------------------------------------------------
+-- Server-side commands are parsed out of an ordinary chat message, so this is
+-- a SAY that never reaches anybody: the handler eats anything starting with a
+-- dot before it is broadcast. None of this is protected in 3.3.5.
+local function RunGmCommand(cmd)
+	local edit = ChatEdit_ChooseBoxForSend()
+	if edit then
+		ChatEdit_ActivateChat(edit)
+		edit:SetText(cmd)
+		ChatEdit_SendText(edit, 0)
+	else
+		SendChatMessage(cmd, "SAY")
+	end
+end
+
+------------------------------------------------------------------
 -- rows
 ------------------------------------------------------------------
 local rows = {}
@@ -224,6 +241,7 @@ local function AcquireRow(i)
 	end
 
 	local r = CreateFrame("Button", nil, win)
+	r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 	r:SetWidth(PANEL_W - 48)
 	r:SetHeight(ROW_H)
 	if i == 1 then
@@ -339,12 +357,15 @@ local function DrawList(list)
 		r.zoneId = e.zoneId
 		r.botName = e.botName
 		r:SetScript("OnClick", function()
-			if IsShiftKeyDown() and this.botName then
-				-- Shift-click puts the name in chat, which is how you actually
-				-- go and look at one: .go creature / target by name.
-				local edit = ChatEdit_ChooseBoxForSend()
-				ChatEdit_ActivateChat(edit)
-				edit:SetText(edit:GetText() .. this.botName)
+			if this.botName then
+				-- Left-click goes to the bot, right-click brings it here. These
+				-- are GM commands, which is the whole point of the window: you
+				-- looked one up because you want to be standing next to it.
+				if arg1 == "RightButton" then
+					RunGmCommand(".summon " .. this.botName)
+				else
+					RunGmCommand(".appear " .. this.botName)
+				end
 				return
 			end
 			if this.zoneId then
@@ -452,7 +473,7 @@ function CENTURION_BotStats_Refresh()
 					timid   = b.timid,
 					gold    = b.gold,
 					tip     = string.format(
-						"%s\nLevel %d %s\n%s\n\naggression %d\ntimid %s\ncarrying %dg%s\n\nShift-click to put the name in chat.",
+						"%s\nLevel %d %s\n%s\n\naggression %d\ntimid %s\ncarrying %dg%s\n\n|cff00ff00Click|r go to it    |cff00ff00Right-click|r summon it",
 						b.name, b.level, CLASS_NAME[b.class] or "?", zn, b.aggr,
 						(b.timid > 0) and (b.timid .. "s remaining") or "no",
 						b.gold, b.pvp and "\n\n|cffff7f5fPvP-only bot|r" or ""),

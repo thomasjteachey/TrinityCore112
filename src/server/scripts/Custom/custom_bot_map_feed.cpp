@@ -46,6 +46,7 @@
 #include "Chat.h"
 #include "Configuration/Config.h"
 #include "DBCStores.h"
+#include "GameTime.h"
 #include "Log.h"
 #include "Map.h"
 #include "ObjectAccessor.h"
@@ -55,6 +56,7 @@
 #include "WorldSession.h"
 
 #include <string>
+#include <unordered_map>
 
 namespace
 {
@@ -156,12 +158,48 @@ namespace
     // looking at a map. IsFFAPvP is the same signal the minimap tracking uses -
     // see the note in Unit::BuildValuesUpdate for why it is asked this way
     // rather than through the badge aura.
+    // How long the feed keeps running after the byte last read as armed.
+    //
+    // Crossing a SUB-AREA boundary strips the FFA byte for at least a tick:
+    // Player::UpdateArea recomputes pvpInfo.IsInFFAPvPArea from the area alone
+    // and re-runs UpdatePvPState, and only the next per-player tick of
+    // ApplyFfaState puts it back. There is no area-change script hook to do it
+    // sooner. Asking the raw byte therefore drops the feed for a second or two
+    // every time somebody walks between two sub-areas of the same zone, which
+    // reads as every bot icon blinking off the map and back.
+    //
+    // A short grace covers the gap without changing what the gate MEANS: walk
+    // into a capital and disarm properly and the feed still stops, just a couple
+    // of seconds later than it used to.
+    constexpr uint32 kArmedGraceMs = 5000;
+    std::unordered_map<uint64, uint32> s_lastArmedAtMs;
+
     bool ShouldFeed(Player* player)
     {
         if (!s_enabled || !player || !player->IsInWorld() || !player->GetSession())
             return false;
 
-        return !BarracksHardcore::IsPlayerbot(player) && player->IsFFAPvP();
+        if (BarracksHardcore::IsPlayerbot(player))
+            return false;
+
+        uint64 const raw = player->GetGUID().GetRawValue();
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+
+        if (player->IsFFAPvP())
+        {
+            s_lastArmedAtMs[raw] = nowMs;
+            return true;
+        }
+
+        auto const itr = s_lastArmedAtMs.find(raw);
+        if (itr == s_lastArmedAtMs.end())
+            return false;
+
+        if (getMSTimeDiff(itr->second, nowMs) <= kArmedGraceMs)
+            return true;
+
+        s_lastArmedAtMs.erase(itr);
+        return false;
     }
 }
 
@@ -171,7 +209,13 @@ public:
     custom_bot_map_feed_player() : PlayerScript("custom_bot_map_feed_player") {}
 
     // Nothing to forget: there is no per-player state to keep.
-    void OnLogout(Player* /*player*/) override { }
+    // The armed-grace stamp is per character and would otherwise outlive
+    // every session on a realm that never restarts.
+    void OnLogout(Player* player) override
+    {
+        if (player)
+            s_lastArmedAtMs.erase(player->GetGUID().GetRawValue());
+    }
 };
 
 class custom_bot_map_feed_world : public WorldScript

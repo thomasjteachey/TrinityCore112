@@ -7642,8 +7642,22 @@ namespace
             // without this the bot would buy every chestpiece in the house, each
             // one still "an upgrade" over the same empty chest slot, until it ran
             // out of gold.
+            // Sixteen: one per equipment slot, which is what slotsBought already
+            // enforces and what the comment above always described. The
+            // steady-state cap of ONE wasted that guard - a bot could fix a
+            // single slot every ten minutes, so filling a set took the better
+            // part of three hours of uninterrupted shopping, which never happens
+            // because the fleet levels and relocates continuously and the gear
+            // falls behind faster than that. It is why a level 60 that has been
+            // running for hours still dies wearing two greens.
+            //
+            // Safe to raise precisely because of slotsBought: each slot can be
+            // bought for once per pass, so the "buy every chestpiece in the
+            // house" runaway cannot happen. The budget is recomputed each round
+            // and shrinks with every purchase, so the pass also stops itself on
+            // money long before it stops on this number.
             std::unordered_set<uint8> slotsBought;
-            uint32 const maxPurchases = catchUp ? 40u : 1u;
+            uint32 const maxPurchases = catchUp ? 40u : 16u;
 
             for (uint32 purchase = 0; purchase < maxPurchases; ++purchase)
             {
