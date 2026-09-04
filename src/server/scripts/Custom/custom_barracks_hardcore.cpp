@@ -224,6 +224,21 @@ namespace BarracksHardcore
         return s_enabled && player && !player->InBattleground() && !player->InArena();
     }
 
+    // Inside a dungeon or a raid. Deliberately NOT folded into IsWorldContext:
+    // that one also gates the full-loot chest, and death in a dungeon is still
+    // meant to cost you your gear. This is only about the War Mode REWARD - the
+    // doubled experience and loot gold ride the risk of being jumped in the open
+    // world, and there is no such risk behind an instance portal.
+    //
+    // Map::IsDungeon covers raids as well (instance types 1 and 2); a
+    // battleground or arena is a different instance type and is handled by
+    // IsWorldContext above.
+    bool IsInstancedContent(Player const* player)
+    {
+        Map const* map = player ? player->FindMap() : nullptr;
+        return map && map->IsDungeon();
+    }
+
     // Classic zone level caps. AreaTableEntry::ExplorationLevel is ZERO for
     // every zone in this realm's rebuilt DBC, so reading it armed nothing,
     // anywhere - the whole FFA system (and every bot's red name) was inert.
@@ -429,7 +444,13 @@ namespace BarracksHardcore
         if (!session || IsBotAccount(session->GetAccountId()))
             return;
 
-        bool const wantsBadge = IsOptedIn(player->GetGUID().GetCounter());
+        // The badge comes OFF inside a dungeon or raid, and this is the only way
+        // to stop it paying there: the experience and gold bonuses are carried by
+        // the aura's own effects and applied by the core (SPELL_AURA_MOD_XP_PCT
+        // in KillRewarder, the DUMMY percentage at loot time), so no hook of ours
+        // gets a say once it is on. It comes straight back on the way out.
+        bool const wantsBadge = IsOptedIn(player->GetGUID().GetCounter()) &&
+            !IsInstancedContent(player);
         if (wantsBadge == player->HasAura(s_warModeAuraSpell))
             return; // converged - the overwhelmingly common case
 
@@ -1587,6 +1608,12 @@ public:
         if (victim && victim->GetTypeId() == TYPEID_PLAYER)
             return;
 
+        // No War Mode reward behind an instance portal. The badge itself is
+        // pulled in there so the aura cannot pay either; this closes the config
+        // fallback for a realm running without the aura.
+        if (IsInstancedContent(player))
+            return;
+
         // The aura's own SPELL_AURA_MOD_XP_PCT has already been applied by
         // KillRewarder before this runs, so the config path is the fallback for
         // a realm with no War Mode aura, exactly as for gold.
@@ -1656,6 +1683,11 @@ public:
             return;
 
         if (!IsFfaArmed(player))
+            return;
+
+        // Same rule as the experience: the doubled gold is paid for carrying the
+        // risk of open-world PvP, and an instance has none.
+        if (IsInstancedContent(player))
             return;
 
         // Prefer the aura's own number; fall back to the config multiplier so a
