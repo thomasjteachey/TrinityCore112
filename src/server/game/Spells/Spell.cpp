@@ -5376,7 +5376,7 @@ namespace
 // landing somewhere that does not stock it runs dry. A dry hunter stops using
 // its ranged attack altogether and walks into melee, which is a far more
 // visible wrong than a free arrow. Real players still pay for their shots.
-bool IsManagedPlayerbotShooter(Player const* player)
+bool IsManagedPlayerbot(Player const* player)
 {
     WorldSession const* session = player ? player->GetSession() : nullptr;
     if (!session)
@@ -5415,7 +5415,7 @@ void Spell::TakeAmmo()
     if (!player)
         return;
 
-    if (IsManagedPlayerbotShooter(player))
+    if (IsManagedPlayerbot(player))
         return;
 
     // only ranged
@@ -5595,6 +5595,13 @@ void Spell::TakeReagents()
 
     Player* p_caster = m_caster->ToPlayer();
     if (p_caster->CanNoReagentCast(m_spellInfo))
+        return;
+
+    // Nothing is taken from a playerbot, because nothing was required of it -
+    // see CheckItems. Without this a bot that happened to loot a Flash Powder
+    // would have it eaten by the first Vanish and then be back to casting for
+    // free, which is just an inventory slot flickering for no reason.
+    if (IsManagedPlayerbot(p_caster))
         return;
 
     for (uint32 x = 0; x < MAX_SPELL_REAGENTS; ++x)
@@ -7519,8 +7526,25 @@ SpellCastResult Spell::CheckItems(uint32* param1 /*= nullptr*/, uint32* param2 /
                     return SPELL_FAILED_EQUIPPED_ITEM_CLASS;
     }
 
+    // A playerbot pays no material cost for anything: no reagents, no totem
+    // item, no totem category.
+    //
+    // Every one of those is a shopping trip a bot cannot reliably make. Flash
+    // Powder, Blinding Powder and the four totems are stocked by PARTICULAR
+    // vendors, so a bot whose supply errand keeps landing somewhere that does
+    // not carry them simply stops using the spell - a shaman with no totems is
+    // not a shaman, and a rogue that never blinds or vanishes is a worse
+    // opponent than one that does. The same reasoning already buys them their
+    // ammunition for free a few hundred lines above.
+    //
+    // Bypassed rather than granted: awarding the items would mean bag space,
+    // restock passes and vendor trips for something no player ever sees. Real
+    // players pay for all of it exactly as before.
+    bool const paysNoMaterialCost = IsManagedPlayerbot(player);
+
     // do not take reagents for these item casts
-    if (!(m_CastItem && m_CastItem->GetTemplate()->HasFlag(ITEM_FLAG_NO_REAGENT_COST)))
+    if (!paysNoMaterialCost &&
+        !(m_CastItem && m_CastItem->GetTemplate()->HasFlag(ITEM_FLAG_NO_REAGENT_COST)))
     {
         bool checkReagents = !(_triggeredCastFlags & (TRIGGERED_IGNORE_POWER_AND_REAGENT_COST | TRIGGERED_IGNORE_POWER_AND_REAGENT_COST_NO_TRIGGER)) && !player->CanNoReagentCast(m_spellInfo);
         // Not own traded item (in trader trade slot) requires reagents even if triggered spell
