@@ -7777,6 +7777,125 @@ namespace
         }
     }
 
+    // World thread. Keep sending somebody at whoever is worth killing.
+    //
+    // The ordinary dispatcher (MaybeHuntPlayersByAggression) only releases a bot
+    // after THAT bot has personally been peaceful for AggressionIdleMinutes, which
+    // is minutes to tens of minutes and per-bot - so help arrives in ones, far
+    // apart. A bounty replaces that clock with its own: one arrival per interval,
+    // for as long as the bounty stands.
+    //
+    // Past the over-level threshold the ranking flips from nearest-first to
+    // highest-level-first, and that is only meaningful because this rides the
+    // guardian TELEPORT queue: that path lands a bot at its real level, where the
+    // drifter path would re-level it into the destination zone's band and quietly
+    // deliver a peer instead.
+    void HuntTheBountied(std::vector<HumanSpot> const& spots,
+        std::vector<Player*> const& proddableBots)
+    {
+        static std::unordered_map<uint64, PveTimePoint> s_nextHuntAt;
+
+        PveTimePoint const now = PveClock::now();
+        std::unordered_set<uint64> online;
+
+        for (HumanSpot const& spot : spots)
+        {
+            uint64 const humanGuid = spot.Guid.GetRawValue();
+            online.insert(humanGuid);
+
+            if (!Bounty::IsHuntedRelentlessly(spot.Bounty))
+                continue;
+
+            auto const next = s_nextHuntAt.find(humanGuid);
+            if (next != s_nextHuntAt.end() && now < next->second)
+                continue;
+
+            Player* human = ObjectAccessor::FindConnectedPlayer(spot.Guid);
+            if (!human || !human->IsInWorld() || !human->IsAlive() ||
+                human->InBattleground() || human->InArena())
+                continue;
+
+            if (!BarracksHardcore::IsOpenWorldPvpZone(human->GetZoneId()))
+                continue;
+
+            bool const veterans = Bounty::DrawsFromVeterans(spot.Bounty);
+            bool const pvpBots = Bounty::DrawsFromPvpBots(spot.Bounty);
+
+            std::vector<std::pair<float, Player*>> ranked;
+            for (Player* bot : proddableBots)
+            {
+                if (bot->GetMapId() != human->GetMapId() || bot == human)
+                    continue;
+
+                // Still never volunteer somebody into a fight they lose on arrival:
+                // this rule is about the bot being too LOW, and raising the bounty
+                // must not start feeding the victim easy kills.
+                if (!IsProactivePlayerLevelAcceptable(bot, human))
+                    continue;
+
+                // Which pool this bot belongs to decides the tier; distance only
+                // breaks ties inside one. Ordinary bots are always the LAST tier
+                // rather than excluded, so a zone holding no veteran and no PvP
+                // bot still sends somebody.
+                bool const isPvpBot = playerbot::PveManager::IsPvpOnlyBot(bot);
+                bool const isVeteran = IsLocalVeteranGuid(bot->GetGUID().GetRawValue());
+
+                // The battleground fleet stays in its battlegrounds until the
+                // bounty is high enough to call it out. Nothing else in this file
+                // pulls a PvP-only bot into the open world.
+                if (isPvpBot && !pvpBots)
+                    continue;
+
+                uint32 tier = 2;
+                if (pvpBots && isPvpBot)
+                    tier = 0;
+                else if (veterans && isVeteran)
+                    tier = 1;
+
+                ranked.push_back({ float(tier) * 100000.0f + bot->GetDistance(human), bot });
+            }
+            std::sort(ranked.begin(), ranked.end(),
+                [](auto const& a, auto const& b) { return a.first < b.first; });
+
+            // The companion question needs the process-wide state lock, so it is
+            // asked only of the bot actually being sent - the same rule the idle
+            // prod follows.
+            Player* chosen = nullptr;
+            for (auto const& [score, bot] : ranked)
+            {
+                PveBotState const* state = playerbot::LockedFind(g_PveBotStateByGuid,
+                    bot->GetGUID().GetRawValue());
+                if (!state || state->masterGuid.IsEmpty())
+                {
+                    chosen = bot;
+                    break;
+                }
+            }
+
+            if (!chosen)
+                continue;
+
+            uint32 const wait = Bounty::RelentlessIntervalSeconds(spot.Bounty);
+            s_nextHuntAt[humanGuid] = now + std::chrono::seconds(wait);
+            {
+                std::lock_guard<std::mutex> guard(g_PvePendingLock);
+                g_PendingGuardianTeleports[chosen->GetGUID().GetRawValue()] =
+                    { humanGuid, PvePlayerTeleportMinimumDistance };
+            }
+
+            TC_LOG_INFO("playerbots.pve",
+                "Bounty {}: sending {} {} (level {}) at {} (level {}); next in {}s.",
+                spot.Bounty,
+                playerbot::PveManager::IsPvpOnlyBot(chosen) ? "[pvp]" :
+                    (IsLocalVeteranGuid(chosen->GetGUID().GetRawValue()) ? "[veteran]" : "[local]"),
+                chosen->GetName(), uint32(chosen->GetLevel()),
+                human->GetName(), uint32(human->GetLevel()), wait);
+        }
+
+        for (auto itr = s_nextHuntAt.begin(); itr != s_nextHuntAt.end(); )
+            itr = online.count(itr->first) ? std::next(itr) : s_nextHuntAt.erase(itr);
+    }
+
     // World thread. Send somebody a fight when the world has stopped bringing
     // them one.
     //
@@ -11569,6 +11688,11 @@ namespace playerbot
             // per-player body that runs every second.
             if (g_PveConfig.idleProdAfterMinutes)
                 ProdForgottenPlayers(spots, humansFightingABot, proddableBots);
+
+            // And the bounty's own clock, which does not care how long any bot
+            // has been idle.
+            if (Bounty::Enabled())
+                HuntTheBountied(spots, proddableBots);
 
             std::lock_guard<std::mutex> guard(g_HumanSpotLock);
             g_HumanSpots.swap(spots);

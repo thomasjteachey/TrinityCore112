@@ -57,6 +57,10 @@ namespace
     uint32 s_drifterZoneBonus = 10;
     int32 s_aggroSlotBonus = 8;
     uint32 s_ignoreAggroBudgetStacks = 40;
+    uint32 s_relentlessStacks = 10;
+    uint32 s_relentlessIntervalSeconds = 30;
+    uint32 s_veteranStacks = 25;
+    uint32 s_pvpBotStacks = 50;
 
     // What a stack is worth, held here so the registry and the aura cannot
     // disagree about the ceiling: the DBC's CumulativeAura is the authority and
@@ -132,6 +136,14 @@ namespace
             sConfigMgr->GetIntDefault("Centurion.Bounty.AggroSlotBonus", 8), 0, 200));
         s_ignoreAggroBudgetStacks = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Centurion.Bounty.IgnoreAggroBudgetStacks", 40), 0, 255));
+        s_relentlessStacks = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Centurion.Bounty.RelentlessStacks", 10), 0, 255));
+        s_relentlessIntervalSeconds = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Centurion.Bounty.RelentlessIntervalSeconds", 30), 5, 3600));
+        s_veteranStacks = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Centurion.Bounty.VeteranStacks", 25), 0, 255));
+        s_pvpBotStacks = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Centurion.Bounty.PvpBotStacks", 50), 0, 255));
 
         TC_LOG_INFO("playerbots.hardcore",
             "Bounty config: enabled={} spell={} perKill={} goldPerStack={}% botMultiplier={} chest={}",
@@ -389,6 +401,31 @@ int32 AggroSlotBonus(uint32 stacks)
 bool IgnoresAggroBudget(uint32 stacks)
 {
     return s_enabled && s_ignoreAggroBudgetStacks && stacks >= s_ignoreAggroBudgetStacks;
+}
+
+bool IsHuntedRelentlessly(uint32 stacks)
+{
+    return s_enabled && s_relentlessStacks && stacks >= s_relentlessStacks;
+}
+
+uint32 RelentlessIntervalSeconds(uint32 stacks)
+{
+    // Thickens with the bounty: the configured interval at the threshold, down
+    // to a third of it at the cap. Never below five seconds, because the arrival
+    // still has to walk in from 210 yards and a faster clock would only queue
+    // bots behind each other.
+    float const scale = 1.0f - (2.0f / 3.0f) * Fraction(stacks);
+    return std::max<uint32>(5, uint32(float(s_relentlessIntervalSeconds) * scale));
+}
+
+bool DrawsFromVeterans(uint32 stacks)
+{
+    return s_enabled && s_veteranStacks && stacks >= s_veteranStacks;
+}
+
+bool DrawsFromPvpBots(uint32 stacks)
+{
+    return s_enabled && s_pvpBotStacks && stacks >= s_pvpBotStacks;
 }
 
 uint32 TakePendingChestGold(Player* victim)

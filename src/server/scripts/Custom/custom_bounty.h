@@ -78,6 +78,22 @@ namespace Bounty
     // them may take one.
     bool IgnoresAggroBudget(uint32 stacks);
 
+    // Past this the fleet stops waiting to get bored and simply keeps sending
+    // somebody, on the bounty's clock rather than each bot's own.
+    bool IsHuntedRelentlessly(uint32 stacks);
+
+    // How long between those arrivals. Shortens as the bounty climbs, so the
+    // stream thickens rather than merely continuing.
+    uint32 RelentlessIntervalSeconds(uint32 stacks);
+
+    // Past this the VETERAN pool is preferred - the fleet's high-band bots,
+    // rather than whoever happens to be nearest.
+    bool DrawsFromVeterans(uint32 stacks);
+
+    // And past this the PvP-only bots are recruited: the fleet held back for
+    // battlegrounds, which nothing else pulls into the open world.
+    bool DrawsFromPvpBots(uint32 stacks);
+
     // Coin owed by a death, in copper, taken now and handed to the caller to
     // put in a chest. Zero unless this player died with a bounty and nothing
     // has collected on it yet.

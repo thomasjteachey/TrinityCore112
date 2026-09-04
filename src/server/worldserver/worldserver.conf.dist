@@ -3432,6 +3432,46 @@ Centurion.Bounty.DrifterZoneBonus = 10
 Centurion.Bounty.AggroSlotBonus = 8
 Centurion.Bounty.IgnoreAggroBudgetStacks = 40
 
+#
+#    Centurion.Bounty.RelentlessStacks
+#    Centurion.Bounty.RelentlessIntervalSeconds
+#        Description: At or above RelentlessStacks the fleet stops waiting for a bot
+#                     to get bored and simply keeps sending one, on the bounty's own
+#                     clock. The ordinary dispatcher only releases a bot after THAT
+#                     bot has been peaceful for Playerbot.Pve.Aggression minutes,
+#                     which is why help otherwise arrives minutes apart.
+#                     The interval is the figure at the threshold and shortens to a
+#                     third of it at the stack cap, so the stream thickens rather
+#                     than merely continuing. Never below five seconds - the arrival
+#                     still has to walk in from 210 yards.
+#        Default:     10 / 30
+#                     RelentlessStacks 0 - (disabled)
+#
+#    Centurion.Bounty.VeteranStacks
+#    Centurion.Bounty.PvpBotStacks
+#        Description: Which POOL the hunters are drawn from as the bounty climbs.
+#                     At or above VeteranStacks the veteran bots are preferred -
+#                     the fleet's high-band population (Playerbot.Pve.Rebirth.
+#                     Veterans), who hold the 55+ zones.
+#                     At or above PvpBotStacks the PvP-ONLY bots are recruited and
+#                     preferred over everyone. Those are the fleet held back for
+#                     battlegrounds, and this is the only thing that pulls them
+#                     into the open world - the top rung is the realm sending the
+#                     people it was saving.
+#                     Ranking is by pool then distance, and ordinary bots are the
+#                     LAST tier rather than excluded, so a zone holding neither
+#                     still sends somebody.
+#                     The too-LOW rule (Playerbot.Pve.ProactiveMaxLevelsAbove)
+#                     applies at every tier, so raising a bounty never starts
+#                     feeding the victim easy kills.
+#        Default:     25 / 50
+#                     0 - (that tier disabled)
+#
+Centurion.Bounty.RelentlessStacks = 10
+Centurion.Bounty.RelentlessIntervalSeconds = 30
+Centurion.Bounty.VeteranStacks = 25
+Centurion.Bounty.PvpBotStacks = 50
+
 
 #    Centurion.Hardcore.PlayerKill.DiminishSeconds
 #        Description: How long a victim is remembered when halving repeat kills. Each
