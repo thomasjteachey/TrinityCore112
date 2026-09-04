@@ -971,10 +971,17 @@ local TREE_ART = {
 	[11] = { "DruidBalance", "DruidFeralCombat", "DruidRestoration" },
 }
 
-local TREE_W, TREE_H = 384, 384
+-- The tree is 384 wide by 512 TALL, not square. All four background quadrants
+-- are 256 high; only the width differs, 256 on the left and 128 on the right.
+-- Drawing the bottom pair at 128 squashed the art into the top two thirds and
+-- left the talents floating over the wrong part of it.
+local TREE_W, TREE_H = 384, 512
 local TALENT_COLS, TALENT_ROWS = 4, 11
--- Blizzard's own step between talent buttons inside that 384x384.
-local TAL_X0, TAL_Y0, TAL_DX, TAL_DY = 22, 22, 63, 33
+-- Blizzard's own metrics: 37 pixel buttons on a 63 by 44 step, inset 22 from
+-- the top left of the art. Four columns come to 248 wide and eleven tiers to
+-- 499 tall, which is what the 384x512 background was drawn for.
+local TAL_SIZE = 37
+local TAL_X0, TAL_Y0, TAL_DX, TAL_DY = 22, 22, 63, 44
 
 local talentPage = CreateFrame("Frame", nil, bot)
 talentPage:SetAllPoints(bot)
@@ -992,8 +999,8 @@ local artPieces = {}
 local ART_LAYOUT = {
 	{ "TopLeft",     256, 256,   0,    0 },
 	{ "TopRight",    128, 256, 256,    0 },
-	{ "BottomLeft",  256, 128,   0, -256 },
-	{ "BottomRight", 128, 128, 256, -256 },
+	{ "BottomLeft",  256, 256,   0, -256 },
+	{ "BottomRight", 128, 256, 256, -256 },
 }
 
 for i = 1, #ART_LAYOUT do
@@ -1014,34 +1021,37 @@ local treeButtons = {}
 
 for i = 1, TALENT_COLS * TALENT_ROWS do
 	local t = CreateFrame("Button", nil, talentPage)
-	t:SetWidth(30)
-	t:SetHeight(30)
+	t:SetWidth(TAL_SIZE)
+	t:SetHeight(TAL_SIZE)
 
 	local col = math.fmod(i - 1, TALENT_COLS)
 	local row = math.floor((i - 1) / TALENT_COLS)
 	t:SetPoint("TOPLEFT", treeArt, "TOPLEFT", TAL_X0 + col * TAL_DX, -(TAL_Y0 + row * TAL_DY))
 
 	t.icon = t:CreateTexture(nil, "ARTWORK")
-	t.icon:SetAllPoints(t)
+	t.icon:SetPoint("TOPLEFT", t, "TOPLEFT", 3, -3)
+	t.icon:SetPoint("BOTTOMRIGHT", t, "BOTTOMRIGHT", -3, 3)
 	t.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
 
-	-- The gold frame a learned talent wears in the real frame.
+	-- The gold ring a learned talent wears. UI-TalentFrame-Parts is an atlas and
+	-- guessing at its coordinates is what produced a smear last time; the border
+	-- from UI-EmptySlot is a known quantity and reads the same at this size.
 	t.frame = t:CreateTexture(nil, "OVERLAY")
-	t.frame:SetWidth(46)
-	t.frame:SetHeight(46)
-	t.frame:SetPoint("CENTER", t, "CENTER", 0, 0)
-	t.frame:SetTexture("Interface\\TalentFrame\\UI-TalentFrame-Parts")
-	t.frame:SetTexCoord(0, 0.35, 0, 0.36)
+	t.frame:SetPoint("TOPLEFT", t, "TOPLEFT", -1, 1)
+	t.frame:SetPoint("BOTTOMRIGHT", t, "BOTTOMRIGHT", 1, -1)
+	t.frame:SetTexture("Interface\\Buttons\\UI-EmptySlot")
+	t.frame:SetTexCoord(0.15, 0.85, 0.15, 0.85)
+	t.frame:SetVertexColor(1, 0.82, 0.2)
 
-	-- Rank in the corner, in its own little box, as the talent frame does it.
+	-- Rank in the bottom right on a dark plate, the way the talent frame does.
 	t.rankBg = t:CreateTexture(nil, "OVERLAY")
-	t.rankBg:SetWidth(16)
-	t.rankBg:SetHeight(16)
-	t.rankBg:SetPoint("BOTTOMRIGHT", t, "BOTTOMRIGHT", 4, -4)
-	t.rankBg:SetTexture("Interface\\TalentFrame\\UI-TalentFrame-Parts")
-	t.rankBg:SetTexCoord(0, 0.0625, 0.6, 0.7)
+	t.rankBg:SetWidth(15)
+	t.rankBg:SetHeight(13)
+	t.rankBg:SetPoint("BOTTOMRIGHT", t, "BOTTOMRIGHT", 2, -2)
+	t.rankBg:SetTexture("Interface\\Buttons\\WHITE8X8")
+	t.rankBg:SetVertexColor(0, 0, 0, 0.75)
 
-	t.rank = t:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	t.rank = t:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
 	t.rank:SetPoint("CENTER", t.rankBg, "CENTER", 0, 0)
 
 	t:SetScript("OnEnter", function()
@@ -1170,9 +1180,15 @@ end
 ------------------------------------------------------------------
 -- page switching
 ------------------------------------------------------------------
+-- The two pages want very different heights - a 512 tall talent tree against
+-- ten rows of gear - so the pane takes the height of whichever is showing
+-- rather than sizing for the taller and leaving the other half empty.
+local GEAR_PAGE_H, TALENT_PAGE_H = 448, 660
+
 local function ShowGearPage()
 	detailTab = "gear"
 	talentPage:Hide()
+	bot:SetHeight(GEAR_PAGE_H)
 	gearPage:Show()
 	if shownBot then DrawGear(shownBot) end
 end
@@ -1181,6 +1197,7 @@ local function ShowTalentPage(tree)
 	detailTab = "talents"
 	activeTree = tree or activeTree
 	gearPage:Hide()
+	bot:SetHeight(TALENT_PAGE_H)
 	talentPage:Show()
 	if shownBot then DrawTalents(shownBot) end
 end
