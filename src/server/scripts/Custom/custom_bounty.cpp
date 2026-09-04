@@ -756,6 +756,16 @@ struct centurion_guardAI : public ScriptedAI
         if (!target)
             return false;
 
+        // Not in a sanctuary, for anybody, including the person it was sent
+        // after. The stock sanctuary rule only covers PLAYER versus player -
+        // IsValidAttackTarget requires UNIT_FLAG_PLAYER_CONTROLLED on both
+        // sides - so a hostile creature is not stopped by it at all, and this
+        // one is hostile to everything by design. A bounty can therefore be
+        // outrun into a capital, which is the same answer the bots already give:
+        // the human snapshot skips anyone in a no-PvP area.
+        if (target->IsInSanctuary() || me->IsInSanctuary())
+            return false;
+
         // TempSummon remembers its summoner, so no registry lookup and no lock
         // on the AI path.
         if (TempSummon const* summon = me->ToTempSummon())

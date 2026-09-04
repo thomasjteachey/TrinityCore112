@@ -3145,6 +3145,25 @@ namespace
         if (map && map->IsBattlegroundOrArena())
             return false;
 
+        // A sanctuary is a sanctuary for this too.
+        //
+        // Stock 3.3.5 refuses a PvP attack when either side stands in one, but
+        // that test lives about forty lines BELOW where this is consulted in
+        // IsValidAttackTarget - it is part of the ordinary PvP ladder, and this
+        // rule returns true before the ladder is ever reached. So an armed bot
+        // could cut somebody down in the middle of a capital, which is exactly
+        // what a sanctuary exists to prevent. Answered here rather than by
+        // moving the stock check, so the pseudo-faction carries its own
+        // exceptions and the stock ordering is left alone.
+        //
+        // Both sides, deliberately: standing in one must protect you from a bot
+        // AND stop you using it as cover to shoot out of.
+        Unit const* selfUnit = self->ToUnit();
+        Unit const* targetUnit = target->ToUnit();
+        if ((selfUnit && selfUnit->IsInSanctuary()) || (targetUnit && targetUnit->IsInSanctuary()) ||
+            selfPlayer->IsInSanctuary() || targetPlayer->IsInSanctuary())
+            return false;
+
         bool const selfIsBot = selfPlayer->GetSession() && IsManagedPlayerbotAccountId(selfPlayer->GetSession()->GetAccountId());
         bool const targetIsBot = targetPlayer->GetSession() && IsManagedPlayerbotAccountId(targetPlayer->GetSession()->GetAccountId());
         if (selfIsBot == targetIsBot)
