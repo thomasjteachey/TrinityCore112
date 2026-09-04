@@ -659,6 +659,17 @@ class TC_GAME_API PlayerScript : public ScriptObject
         // Called when a player is killed by a creature
         virtual void OnPlayerKilledByCreature(Creature* killer, Player* killed);
 
+        // Called for ANY player death, from Unit::Kill, just before
+        // setDeathState tears the victim down.
+        //
+        // This is the last moment a script can see who was fighting the
+        // victim: setDeathState calls CombatStop, which empties both combat
+        // reference maps, and RemoveAllAurasOnDeath runs alongside it. The
+        // kill hooks below fire long after both, and name only the killing
+        // blow. killer is null for a death nobody dealt - a fall, drowning,
+        // lava - which is precisely why this fires for those too.
+        virtual void OnPlayerJustDied(Player* victim, Unit* killer);
+
         // Called when a player's level changes (after the level is applied)
         virtual void OnLevelChanged(Player* player, uint8 oldLevel);
 
@@ -1070,6 +1081,7 @@ class TC_GAME_API ScriptMgr
         void OnPVPKill(Player* killer, Player* killed);
         void OnCreatureKill(Player* killer, Creature* killed);
         void OnPlayerKilledByCreature(Creature* killer, Player* killed);
+        void OnPlayerJustDied(Player* victim, Unit* killer);
         void OnPlayerLevelChanged(Player* player, uint8 oldLevel);
         void OnPlayerFreeTalentPointsChanged(Player* player, uint32 newPoints);
         void OnPlayerTalentsReset(Player* player, bool noCost);

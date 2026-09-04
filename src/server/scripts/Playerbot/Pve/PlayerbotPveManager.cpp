@@ -26,6 +26,7 @@
 #include "Playerbot/Pvp/PlayerbotSharedStateGuard.h"
 
 #include "Custom/custom_loot_chest_helper.h"
+#include "Custom/custom_bounty.h"
 
 #include "Bag.h"
 #include "CellImpl.h"
@@ -1951,6 +1952,11 @@ namespace
         // so the map-thread gate stays a plain comparison and never has to
         // read config on the 250 ms path.
         int32 AggroSlotsFree = std::numeric_limits<int32>::max();
+        // Stacks of bounty on this person, read from the registry on the same
+        // pass. Carried here rather than looked up per bot because the figure
+        // widens a hunt radius on the 250 ms path, and that path must not take
+        // a lock.
+        uint32 Bounty = 0;
     };
 
     // Sized on the world thread, where reading Group is legal.
@@ -2181,7 +2187,9 @@ namespace
             if (!candidate || !candidate->IsInWorld() || !candidate->IsAlive())
                 continue;
 
-            if (!bot->IsWithinDistInMap(candidate, radius))
+            // A bounty is a standing invitation: bots come from further away
+            // the higher it is, up to the configured bonus at the cap.
+            if (!bot->IsWithinDistInMap(candidate, radius + Bounty::HuntRadiusBonusYards(spot.Bounty)))
                 continue;
 
             if (candidate == bot || candidate->IsGameMaster() ||
@@ -7769,6 +7777,125 @@ namespace
         }
     }
 
+    // World thread. Send somebody a fight when the world has stopped bringing
+    // them one.
+    //
+    // The arrival is the guardian arrival, reused wholesale: dropped at 210
+    // yards, which is outside the 200 yard sight range so the port itself is
+    // never seen, then walked in until the ordinary acquisition radius picks the
+    // person up. Nothing here targets anybody - it only decides who is owed a
+    // visit and who is free to pay it.
+    void ProdForgottenPlayers(std::vector<HumanSpot> const& spots,
+        std::unordered_set<uint64> const& humansFightingABot,
+        std::vector<Player*> const& proddableBots)
+    {
+        // Single-threaded state: this runs on the world thread only, like the
+        // drifter dwell clock above it.
+        static std::unordered_map<uint64, PveTimePoint> s_lastBotFightAt;
+        static std::unordered_map<uint64, PveTimePoint> s_nextProdAt;
+
+        PveTimePoint const now = PveClock::now();
+        auto const idleFor = std::chrono::minutes(g_PveConfig.idleProdAfterMinutes);
+
+        std::unordered_set<uint64> online;
+        for (HumanSpot const& spot : spots)
+        {
+            uint64 const humanGuid = spot.Guid.GetRawValue();
+            online.insert(humanGuid);
+
+            // Somebody who has just arrived is not being neglected yet, so the
+            // clock starts full rather than empty - otherwise a bot would be
+            // posted through the door behind every login.
+            auto const inserted = s_lastBotFightAt.emplace(humanGuid, now);
+            if (humansFightingABot.count(humanGuid))
+            {
+                inserted.first->second = now;
+                continue;
+            }
+
+            if (now - inserted.first->second < idleFor)
+                continue;
+
+            // A prod that never landed leaves the person exactly as alone as
+            // before, so the retry clock is separate from the idle clock and
+            // only the retry is reset here. Arriving and starting a fight resets
+            // the idle clock on its own, above.
+            auto const next = s_nextProdAt.find(humanGuid);
+            if (next != s_nextProdAt.end() && now < next->second)
+                continue;
+
+            Player* human = ObjectAccessor::FindConnectedPlayer(spot.Guid);
+            if (!human || !human->IsInWorld() || !human->IsAlive() ||
+                human->InBattleground() || human->InArena())
+                continue;
+
+            // Somewhere a fight is possible at all. A prod into a starter zone
+            // or a sanctuary delivers a stranger who cannot touch them, which is
+            // worse than leaving them alone.
+            if (!BarracksHardcore::IsOpenWorldPvpZone(human->GetZoneId()))
+                continue;
+
+            // Nearest first, and only from the person's own map. Preferring the
+            // same ZONE keeps the arrival local: somebody who wandered in from
+            // the next zone over is a neighbour, one hauled across a continent
+            // is a spawn.
+            std::vector<std::pair<float, Player*>> ranked;
+            for (Player* bot : proddableBots)
+            {
+                if (bot->GetMapId() != human->GetMapId() || bot == human)
+                    continue;
+
+                // Never volunteer somebody into a fight they lose on arrival.
+                if (!IsProactivePlayerLevelAcceptable(bot, human))
+                    continue;
+
+                // Same zone first, then nearest. An arrival from the next zone
+                // over is a neighbour; one hauled across a continent is a spawn.
+                float const distance = bot->GetDistance(human);
+                bool const inZone = bot->GetZoneId() == human->GetZoneId();
+                ranked.push_back({ inZone ? distance : distance + 100000.0f, bot });
+            }
+            std::sort(ranked.begin(), ranked.end(),
+                [](auto const& a, auto const& b) { return a.first < b.first; });
+
+            // The companion question, asked here and only here: it needs the
+            // shared state mutex, and a companion torn away from the person it
+            // is following would be a worse bug than a missed prod. Rare enough
+            // to be a handful of lookups on the rare tick that sends anyone.
+            Player* chosen = nullptr;
+            for (auto const& [score, bot] : ranked)
+            {
+                PveBotState const* state = playerbot::LockedFind(g_PveBotStateByGuid,
+                    bot->GetGUID().GetRawValue());
+                if (!state || state->masterGuid.IsEmpty())
+                {
+                    chosen = bot;
+                    break;
+                }
+            }
+
+            if (!chosen)
+                continue;
+
+            s_nextProdAt[humanGuid] = now + std::chrono::seconds(g_PveConfig.idleProdRetrySeconds);
+            {
+                std::lock_guard<std::mutex> guard(g_PvePendingLock);
+                g_PendingGuardianTeleports[chosen->GetGUID().GetRawValue()] =
+                    { humanGuid, g_PveConfig.idleProdDropYards };
+            }
+
+            TC_LOG_INFO("playerbots.pve",
+                "{} has not been in a fight for {}m; sending {} in from {:.0f}y.",
+                human->GetName(), g_PveConfig.idleProdAfterMinutes, chosen->GetName(),
+                g_PveConfig.idleProdDropYards);
+        }
+
+        for (auto itr = s_lastBotFightAt.begin(); itr != s_lastBotFightAt.end(); )
+            itr = online.count(itr->first) ? std::next(itr) : s_lastBotFightAt.erase(itr);
+        for (auto itr = s_nextProdAt.begin(); itr != s_nextProdAt.end(); )
+            itr = online.count(itr->first) ? std::next(itr) : s_nextProdAt.erase(itr);
+    }
+
     // World thread. Teleports one bot to a random spot for its level, with the
     // reference safety checks: loaded map, no enemy-faction zone, not into
     // water, grounded Z, and never in sight of a real player.
@@ -10931,6 +11058,14 @@ namespace playerbot
         g_PveConfig.drifterZoneDwellSeconds = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.ZoneDwellSeconds", 10), 0, 3600));
         g_PveConfig.drifterMaxPerZone = uint32(std::max(0,
             sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.MaxPerZone", 10)));
+        g_PveConfig.drifterPerExtraPerson = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.PerExtraPersonInZone", 2), 0, 50));
+        g_PveConfig.idleProdAfterMinutes = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Playerbot.Pve.IdleProd.AfterMinutes", 15), 0, 720));
+        g_PveConfig.idleProdDropYards = std::max(0.0f,
+            sConfigMgr->GetFloatDefault("Playerbot.Pve.IdleProd.DropYards", 210.0f));
+        g_PveConfig.idleProdRetrySeconds = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Playerbot.Pve.IdleProd.RetrySeconds", 120), 15, 3600));
         g_PveConfig.drifterTeleportGold = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.TeleportGold", 10), 0, 10000));
         g_PveConfig.proactiveMaxLevelsAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveMaxLevelsAbove", 4), 0, 60));
 
@@ -11010,6 +11145,12 @@ namespace playerbot
         // Where each real person has settled, and for how long.
         static std::unordered_map<uint64, std::pair<uint32, uint32>> s_humanZoneSince;
         std::vector<std::pair<uint64, uint32>> humans;   // human guid -> zone
+        // The largest bounty standing in each zone, gathered on the same pass.
+        // One person on a spree pulls extra company, and the company is for the
+        // whole zone.
+        std::unordered_map<uint32, uint32> zoneBounty;
+        // And how many people are in it, which raises the ceiling on its own.
+        std::unordered_map<uint32, uint32> zonePeople;
         std::unordered_set<uint64> online;
         for (auto const& pair : ObjectAccessor::GetPlayers())
         {
@@ -11075,6 +11216,10 @@ namespace playerbot
             }
 
             humans.push_back({ humanGuid, zoneId });
+
+            uint32& worstInZone = zoneBounty[zoneId];
+            worstInZone = std::max(worstInZone, Bounty::GetStacks(human));
+            ++zonePeople[zoneId];
         }
         for (auto itr = s_humanZoneSince.begin(); itr != s_humanZoneSince.end(); )
             itr = online.count(itr->first) ? std::next(itr) : s_humanZoneSince.erase(itr);
@@ -11130,7 +11275,26 @@ namespace playerbot
         // Anything over the zone's ceiling is released here rather than merely
         // not topped up, so lowering the cap takes effect on the next pass
         // instead of waiting for drifters to churn out on their own.
-        uint32 const zoneCap = g_PveConfig.drifterMaxPerZone;
+        // The ceiling: the base figure, plus room for each person past the
+        // first, plus whatever the biggest bounty in the zone has earned.
+        auto const capForZone = [&zoneBounty, &zonePeople](uint32 zoneId) -> uint32
+        {
+            uint32 const base = g_PveConfig.drifterMaxPerZone;
+            if (!base)
+                return 0;   // uncapped stays uncapped
+
+            uint32 cap = base;
+
+            auto const people = zonePeople.find(zoneId);
+            if (people != zonePeople.end() && people->second > 1)
+                cap += g_PveConfig.drifterPerExtraPerson * (people->second - 1);
+
+            auto const bounty = zoneBounty.find(zoneId);
+            if (bounty != zoneBounty.end())
+                cap += Bounty::DrifterZoneBonus(bounty->second);
+
+            return cap;
+        };
         std::unordered_map<uint32, uint32> inZone;
         uint32 released = 0;
         std::unordered_map<uint64, uint32> heldBy;
@@ -11144,6 +11308,7 @@ namespace playerbot
                 itr = g_DrifterHumanByBot.erase(itr);
                 continue;
             }
+            uint32 const zoneCap = capForZone(zoneItr->second);
             if (zoneCap && inZone[zoneItr->second] >= zoneCap)
             {
                 g_DrifterZoneByBot.erase(itr->first);
@@ -11192,6 +11357,7 @@ namespace playerbot
                 // The zone is full. Their share is not redistributed to anyone
                 // else in the same zone - that would just refill it by another
                 // route - so the drifters simply stay where they were.
+                uint32 const zoneCap = capForZone(zoneId);
                 if (zoneCap && inZone[zoneId] >= zoneCap)
                     break;
 
@@ -11207,7 +11373,8 @@ namespace playerbot
 
         if (assigned || released)
             TC_LOG_INFO("playerbots.pve", "Drifters: {} newly assigned, {} released over the {}/zone cap, {} following {} people.",
-                assigned, released, zoneCap, uint32(g_DrifterHumanByBot.size()), uint32(humanCount));
+                assigned, released, g_PveConfig.drifterMaxPerZone,
+                uint32(g_DrifterHumanByBot.size()), uint32(humanCount));
 
         // Whoever is standing somewhere other than where they now belong, and
         // whoever has since arrived where they were sent.
@@ -11327,17 +11494,38 @@ namespace playerbot
             // that dies, logs out or picks something else stops counting the
             // moment it does, so there is nothing to expire and nothing to leak,
             // and a long fight holds its slot for exactly as long as it lasts.
+            // Also who is FIGHTING each person, and who is free to be sent at
+            // one. Both come from the same pass, and both are field reads: the
+            // world thread must not walk a Unit's combat references.
             std::unordered_map<uint64, uint32> botsOnTarget;
-            if (g_PveConfig.aggroBudgetEnabled)
-                for (auto const& pair : ObjectAccessor::GetPlayers())
-                {
-                    Player* bot = pair.second;
-                    if (!bot || !bot->IsInWorld() || !playerbot::IsManagedRandomBot(bot))
-                        continue;
+            std::unordered_set<uint64> humansFightingABot;
+            std::vector<Player*> proddableBots;
+            for (auto const& pair : ObjectAccessor::GetPlayers())
+            {
+                Player* bot = pair.second;
+                if (!bot || !bot->IsInWorld() || !playerbot::IsManagedRandomBot(bot))
+                    continue;
 
-                    if (ObjectGuid const target = bot->GetTarget())
-                        ++botsOnTarget[target.GetRawValue()];
+                ObjectGuid const target = bot->GetTarget();
+                if (target)
+                {
+                    ++botsOnTarget[target.GetRawValue()];
+                    if (bot->IsInCombat())
+                        humansFightingABot.insert(target.GetRawValue());
                 }
+
+                // A bot worth sending: free and whole. Deliberately only plain
+                // field reads - whether it is somebody's COMPANION lives behind
+                // the process-wide state mutex, which the map thread also takes,
+                // and asking once per bot per second would put hundreds of
+                // acquisitions a second in front of live bot ticks. That
+                // question is asked in ProdForgottenPlayers instead, of the one
+                // bot about to be sent.
+                if (g_PveConfig.idleProdAfterMinutes && bot->IsAlive() && !bot->IsInCombat() &&
+                    !bot->InBattleground() && !bot->InArena() &&
+                    !bot->IsBeingTeleportedFar() && !bot->IsBeingTeleportedNear())
+                    proddableBots.push_back(bot);
+            }
 
             std::vector<HumanSpot> spots;
             for (auto const& pair : ObjectAccessor::GetPlayers())
@@ -11357,17 +11545,30 @@ namespace playerbot
                 if (human->pvpInfo.IsInNoPvPArea)
                     continue;
 
+                uint32 const bounty = Bounty::GetStacks(human);
+
                 int32 slotsFree = std::numeric_limits<int32>::max();
-                if (g_PveConfig.aggroBudgetEnabled)
+                // A big enough bounty suspends the budget outright - the whole
+                // point of the escalation is that it eventually stops being a
+                // fair fight - and below that threshold it simply buys extra
+                // slots in proportion.
+                if (g_PveConfig.aggroBudgetEnabled && !Bounty::IgnoresAggroBudget(bounty))
                 {
                     auto const taken = botsOnTarget.find(human->GetGUID().GetRawValue());
-                    slotsFree = AggroBudgetFor(human, g_PveConfig) -
+                    slotsFree = AggroBudgetFor(human, g_PveConfig) + Bounty::AggroSlotBonus(bounty) -
                         int32(taken != botsOnTarget.end() ? taken->second : 0u);
                 }
 
                 spots.push_back({ human->GetGUID(), human->GetMapId(), human->GetZoneId(), human->GetLevel(),
-                    human->GetPositionX(), human->GetPositionY(), human->GetPositionZ(), slotsFree });
+                    human->GetPositionX(), human->GetPositionY(), human->GetPositionZ(), slotsFree, bounty });
             }
+
+            // Nobody left alone. Walked here rather than in the loop above
+            // because it needs the finished human list AND the bot list, and
+            // because a prod is a rare event that should not sit inside a
+            // per-player body that runs every second.
+            if (g_PveConfig.idleProdAfterMinutes)
+                ProdForgottenPlayers(spots, humansFightingABot, proddableBots);
 
             std::lock_guard<std::mutex> guard(g_HumanSpotLock);
             g_HumanSpots.swap(spots);

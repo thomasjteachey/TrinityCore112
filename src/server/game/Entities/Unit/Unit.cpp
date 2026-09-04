@@ -12579,6 +12579,15 @@ bool Unit::InitTamedPet(Pet* pet, uint8 level, uint32 spell_id)
         if (Player* killerPlayer = attacker->GetCharmerOrOwnerPlayerOrPlayerItself())
             killerPlayer->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_GET_KILLING_BLOWS, 1, 0, victim);
 
+    // Last call before the victim is torn down.
+    //
+    // Above the Spirit of Redemption branch on purpose: that branch calls
+    // RemoveAllAurasOnDeath itself, and setDeathState below calls CombatStop.
+    // A script asked after either one can no longer see the victim's auras or
+    // who was fighting them, which is the whole reason this hook exists.
+    if (Player* dyingPlayer = victim->ToPlayer())
+        sScriptMgr->OnPlayerJustDied(dyingPlayer, attacker);
+
     // Spirit of Redemption
     // if talent known but not triggered
     bool spiritOfRedemption = false;

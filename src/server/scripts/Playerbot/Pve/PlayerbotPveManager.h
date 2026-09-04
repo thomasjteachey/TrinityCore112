@@ -181,6 +181,18 @@ struct PveConfig
     // in it. The share is per person and the total is global, so without this
     // five people in one zone draw five shares into it. 0 disables the cap.
     uint32 drifterMaxPerZone = 10;
+    // Added to drifterMaxPerZone for every person in the zone beyond the
+    // first, so a busier zone holds a bigger crowd rather than a thinner
+    // share of the same one.
+    uint32 drifterPerExtraPerson = 2;
+    // Nobody is left alone for long: a person who has not fought a bot for
+    // this many minutes has one dropped at idleProdDropYards and walked in.
+    // 0 disables the prod entirely.
+    uint32 idleProdAfterMinutes = 15;
+    float idleProdDropYards = 210.0f;
+    // How long before an unanswered prod is tried again. A prod that never
+    // arrives leaves the person just as alone as before.
+    uint32 idleProdRetrySeconds = 120;
     uint32 drifterZoneDwellSeconds = 10;
     // Gold handed to a drifter each time it lands somewhere new, paid before
     // the auction sweep is queued. A bot that arrives broke sweeps the auction

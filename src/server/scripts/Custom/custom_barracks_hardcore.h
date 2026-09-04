@@ -20,8 +20,17 @@
 
 #include "Define.h"
 
+class Player;
+
 namespace BarracksHardcore
 {
+    // Whether this character is one of the fleet, by account id.
+    //
+    // Exported because the bot account set is configured in exactly one
+    // place and a second copy of the answer would drift from it. The bounty
+    // ruleset needs it to decide how much of a corpse's gold burns.
+    bool IsPlayerbot(Player const* player);
+
     // True when a fight between people can actually happen in this zone.
     //
     // Exported so the playerbot manager asks the same question the FFA ruleset

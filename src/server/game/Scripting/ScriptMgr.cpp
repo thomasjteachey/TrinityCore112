@@ -1849,6 +1849,11 @@ void ScriptMgr::OnPlayerKilledByCreature(Creature* killer, Player* killed)
     FOREACH_SCRIPT(PlayerScript)->OnPlayerKilledByCreature(killer, killed);
 }
 
+void ScriptMgr::OnPlayerJustDied(Player* victim, Unit* killer)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnPlayerJustDied(victim, killer);
+}
+
 void ScriptMgr::OnPlayerLevelChanged(Player* player, uint8 oldLevel)
 {
     FOREACH_SCRIPT(PlayerScript)->OnLevelChanged(player, oldLevel);
@@ -2740,6 +2745,10 @@ void PlayerScript::OnCreatureKill(Player* /*killer*/, Creature* /*killed*/)
 }
 
 void PlayerScript::OnPlayerKilledByCreature(Creature* /*killer*/, Player* /*killed*/)
+{
+}
+
+void PlayerScript::OnPlayerJustDied(Player* /*victim*/, Unit* /*killer*/)
 {
 }
 

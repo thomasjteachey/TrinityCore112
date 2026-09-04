@@ -85,7 +85,7 @@ void PlayerChestBuilder::AddItem(Item* item)
 
 GameObject* PlayerChestBuilder::Summon() const
 {
-    if (!_player || !_chestEntry || _items.empty())
+    if (!_player || !_chestEntry || (_items.empty() && !_money))
         return nullptr;
 
     GameObject* chest = _player->SummonGameObject(_chestEntry, _player->GetPosition(), QuaternionData(), _despawnTime, GO_SUMMON_TIMED_DESPAWN);
@@ -121,6 +121,10 @@ GameObject* PlayerChestBuilder::Summon() const
         loot.items.push_back(item);
         ++loot.unlootedCount;
     }
+
+    // Coin is not an item and does not count towards unlootedCount; the
+    // client draws it as its own row and Loot::NotifyMoneyRemoved clears it.
+    loot.gold = _money;
 
     chest->SetLootRecipient(nullptr);
     chest->SetLootState(GO_READY);

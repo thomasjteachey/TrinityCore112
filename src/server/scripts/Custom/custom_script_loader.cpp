@@ -29,6 +29,7 @@ void AddSC_custom_zone_group_rules();
 void AddSC_mod_pvp_titles();
 void AddSC_custom_diremaul_beads();
 void AddSC_custom_barracks_hardcore();
+void AddSC_custom_bounty();
 void AddSC_custom_gurubashi_arena();
 void AddSC_custom_depleted_mark_exchange();
 void AddSC_custom_pvpve_dungeon();
@@ -71,6 +72,7 @@ void AddCustomScripts()
     AddSC_mod_pvp_titles();
     AddSC_custom_diremaul_beads();
     AddSC_custom_barracks_hardcore();
+    AddSC_custom_bounty();
     AddSC_custom_gurubashi_arena();
     AddSC_custom_depleted_mark_exchange();
     AddSC_custom_pvpve_dungeon();

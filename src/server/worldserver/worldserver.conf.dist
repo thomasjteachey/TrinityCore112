@@ -3302,6 +3302,137 @@ Centurion.Hardcore.FfaPvp.MinZoneLevel = 20
 Centurion.Hardcore.FfaPvp.RewardMultiplier = 2
 Centurion.Hardcore.PlayerKill.ExperienceBubbles = 2
 
+###################################################################################################
+# BOUNTY
+#
+#    Killing people makes you worth killing.
+#
+#    Every kill you TAKE PART IN - not only the killing blow - adds a stack of a
+#    fifteen minute aura, and every further kill restarts the fifteen minutes. As it
+#    climbs, playerbots come for you from further away, more of them are allowed into
+#    your zone, and past a threshold they stop respecting the aggro budget entirely.
+#    When you die, a share of your gold is left in a chest for whoever wants it.
+#
+#    It exists to put a ceiling on a killing spree: a run that would otherwise
+#    compound instead builds its own opposition, and pays out to whoever stops it.
+#
+#    Nothing here arms in the Battle Ring, an FFA area, a battleground or an arena.
+#    Dying in one of those does NOT clear a bounty either - if it did, walking into
+#    the ring would be the cheapest way to shed one.
+#
+#    Centurion.Bounty.Enable
+#        Description: Master switch.
+#        Default:     0 - (off)
+#
+#    Centurion.Bounty.AuraSpell
+#        Description: The stacking aura. Its own CumulativeAura in Spell.dbc is what
+#                     really caps the stacks; MaxStacks below is only a fallback for
+#                     a spell that failed to load.
+#        Default:     90701
+#
+#    Centurion.Bounty.StacksPerKill
+#        Description: Stacks added to every participant per kill.
+#        Default:     1
+#
+#    Centurion.Bounty.MaxStacks
+#        Description: Fallback ceiling. Keep it equal to the aura's CumulativeAura.
+#        Default:     50
+#
+#    Centurion.Bounty.GoldPercentPerStack
+#        Description: Share of the victim's gold that reaches the chest, per stack.
+#                     At the default and a full fifty stacks that is half of it.
+#        Default:     1.0
+#
+#    Centurion.Bounty.BotLossMultiplier
+#        Description: A playerbot loses this many times what it drops - the rest is
+#                     destroyed rather than transferred. At 2.0 and a full bounty a
+#                     bot leaves half its gold in the chest and burns the other half,
+#                     which makes a bot on a spree a gold SINK rather than a courier.
+#                     Players are never charged the multiplier: they lose exactly
+#                     what they drop.
+#        Default:     2.0
+#
+#    Centurion.Bounty.ChestGameObjectId
+#    Centurion.Bounty.ChestDespawnSeconds
+#        Description: Where the coin goes. Both default to the hardcore death chest,
+#                     so a bounty payout and a gear payout are the same object in the
+#                     world and the bots already know to go and open it.
+#        Default:     (the Centurion.Hardcore.FullLoot values)
+#
+#    Centurion.Bounty.HuntRadiusBonusYards
+#        Description: Extra yards a bot will cross for a bountied player, scaled
+#                     linearly to the cap. Added on top of the ordinary hunt radius
+#                     (Playerbot.Pve.ProactiveHuntYards), so at the default a full
+#                     bounty is hunted from 125 + 175 = 300 yards.
+#        Default:     175.0
+#
+#    Centurion.Bounty.DrifterZoneBonus
+#        Description: Extra drifters a zone will hold at a full bounty, on top of
+#                     Playerbot.Pve.Drifters.MaxPerZone. Scaled linearly, and driven
+#                     by the LARGEST bounty standing in the zone.
+#        Default:     10
+#
+#    Centurion.Bounty.AggroSlotBonus
+#        Description: Extra bots allowed onto a bountied player over their party's
+#                     ordinary aggro budget, scaled linearly to the cap.
+#        Default:     8
+#
+#    Centurion.Bounty.IgnoreAggroBudgetStacks
+#        Description: At or above this many stacks the aggro budget stops applying to
+#                     them at all - anyone who wants a piece may take one. This is
+#                     the point where the escalation stops being a fair fight, which
+#                     is what a bounty this size is supposed to mean.
+#        Default:     40
+#                     0 - (never; the budget always applies)
+#
+###################################################################################################
+
+#
+#    Playerbot.Pve.Drifters.PerExtraPersonInZone
+#        Description: Added to Playerbot.Pve.Drifters.MaxPerZone for every person
+#                     in the zone beyond the first, so a busy zone holds a bigger
+#                     crowd instead of splitting the same one more thinly.
+#                     Counted over the people drifters can actually be sent to,
+#                     so somebody the zone cannot host does not raise the ceiling.
+#        Default:     2
+#
+Playerbot.Pve.Drifters.PerExtraPersonInZone = 2
+
+#
+#    Playerbot.Pve.IdleProd.AfterMinutes
+#    Playerbot.Pve.IdleProd.DropYards
+#    Playerbot.Pve.IdleProd.RetrySeconds
+#        Description: Nobody is left alone. A player who has not been in a fight
+#                     with a bot for AfterMinutes has one teleported in to
+#                     DropYards away, which then walks the rest of the distance
+#                     and picks them up through the ordinary acquisition rules.
+#                     DropYards must stay outside the 200 yard sight range or the
+#                     arrival is witnessed as a spawn; 210 is the floor the
+#                     teleport code enforces regardless of what is asked for.
+#                     RetrySeconds is how long before a prod that never arrived
+#                     is tried again - a bot that found no walkable landing
+#                     leaves the player exactly as alone as before.
+#                     Only fires in zones where people can fight each other, and
+#                     never into a battleground or arena.
+#        Default:     15 / 210.0 / 120
+#                     AfterMinutes 0 - (disabled)
+#
+Playerbot.Pve.IdleProd.AfterMinutes = 15
+Playerbot.Pve.IdleProd.DropYards = 210.0
+Playerbot.Pve.IdleProd.RetrySeconds = 120
+
+Centurion.Bounty.Enable = 0
+Centurion.Bounty.AuraSpell = 90701
+Centurion.Bounty.StacksPerKill = 1
+Centurion.Bounty.MaxStacks = 50
+Centurion.Bounty.GoldPercentPerStack = 1.0
+Centurion.Bounty.BotLossMultiplier = 2.0
+Centurion.Bounty.HuntRadiusBonusYards = 175.0
+Centurion.Bounty.DrifterZoneBonus = 10
+Centurion.Bounty.AggroSlotBonus = 8
+Centurion.Bounty.IgnoreAggroBudgetStacks = 40
+
+
 #    Centurion.Hardcore.PlayerKill.DiminishSeconds
 #        Description: How long a victim is remembered when halving repeat kills. Each
 #                     time the SAME killer kills the SAME victim the award halves -

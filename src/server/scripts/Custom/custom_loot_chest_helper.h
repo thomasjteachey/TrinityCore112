@@ -39,9 +39,13 @@ class PlayerChestBuilder
 public:
     PlayerChestBuilder(Player* player, uint32 chestEntry, Seconds despawnTime);
 
-    bool HasLoot() const { return !_items.empty(); }
+    bool HasLoot() const { return !_items.empty() || _money > 0; }
     void AddStackableItem(uint32 itemId, uint32 count);
     void AddItem(Item* item);
+    // Coin in the chest, in copper. A chest carrying only money is still
+    // worth summoning - a bounty payout usually has nothing else in it.
+    void AddMoney(uint32 copper) { _money += copper; }
+    uint32 GetMoney() const { return _money; }
 
     GameObject* Summon() const;
 
@@ -51,6 +55,7 @@ private:
     Player* _player = nullptr;
     uint32 _chestEntry = 0;
     Seconds _despawnTime = Seconds(0);
+    uint32 _money = 0;
     mutable std::vector<LootItem> _items;
 };
 

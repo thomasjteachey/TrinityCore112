@@ -34,6 +34,7 @@
 
 #include "Bag.h"
 #include "custom_barracks_hardcore.h"
+#include "custom_bounty.h"
 #include "ScriptMgr.h"
 #include "Configuration/Config.h"
 #include "Formulas.h"
@@ -1227,8 +1228,17 @@ namespace BarracksHardcore
                         stakeCarriedGear(bag->GetItemByPos(uint8(bagIndex)), bagSlot, uint8(bagIndex));
         }
 
-        // Money is SAFE: gold never drops and never burns.
-        if (droppedItems.empty())
+        // Money is SAFE from the GEAR rule - nothing here ever costs a player
+        // a copper for what they were wearing. A bounty is a different debt
+        // entirely (custom_bounty.h) and settles into this same chest, so a
+        // corpse leaves one object behind rather than two stacked on a spot.
+        //
+        // Taking it here is also what deducts it: the debt is recorded at
+        // death and collected only once something exists to hold the coin.
+        uint32 const bountyGold = Bounty::TakePendingChestGold(victim);
+        chest.AddMoney(bountyGold);
+
+        if (droppedItems.empty() && !bountyGold)
             return;
 
         // The chest is only summoned when something actually reached it - an
@@ -1241,8 +1251,8 @@ namespace BarracksHardcore
         for (CustomLootChests::ItemLocation const& dropped : droppedItems)
             victim->DestroyItem(dropped.Bag, dropped.Slot, true);
 
-        TC_LOG_INFO("playerbots.hardcore", "{} lost {} worn items at death; chest spawned: {} ({}% reaches it).",
-            victim->GetName(), uint32(droppedItems.size()), uint32(chestSpawned), s_dropChancePercent);
+        TC_LOG_INFO("playerbots.hardcore", "{} lost {} worn items and {}c bounty at death; chest spawned: {} ({}% of gear reaches it).",
+            victim->GetName(), uint32(droppedItems.size()), bountyGold, uint32(chestSpawned), s_dropChancePercent);
     }
 }
 
