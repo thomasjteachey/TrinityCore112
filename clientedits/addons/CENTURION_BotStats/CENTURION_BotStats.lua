@@ -58,7 +58,7 @@ local selected  = nil   -- a zoneId, when drilled in
 -- name as a global and find nil.
 local shownBot
 local detailTab = "gear"   -- which half of the bot panel is showing
-local DrawGear, DrawTalents, SetBotModel
+local DrawGear, DrawTalents
 
 ------------------------------------------------------------------
 -- parsing
@@ -365,9 +365,6 @@ local function ParseModel(payload)
 	local name, path = string.match(payload, "^([^|]+)|(.+)$")
 	if name and path then
 		modelOf[name] = path
-		if shownBot == name and SetBotModel then
-			SetBotModel(path)
-		end
 	end
 end
 
@@ -769,7 +766,7 @@ end)
 -- client has no unit for a bot it has never loaded. Everything here is keyed by
 -- ITEM ID and DISPLAY ID instead, which the server can simply tell us.
 
-local BOT_W, BOT_H = 420, 520
+local BOT_W, BOT_H = 420, 448
 
 local bot = CreateFrame("Frame", "CenturionBotPane", UIParent)
 bot:SetWidth(BOT_W)
@@ -802,75 +799,75 @@ bClose:SetPoint("TOPRIGHT", bot, "TOPRIGHT", -6, -6)
 ------------------------------------------------------------------
 -- gear page
 ------------------------------------------------------------------
+-- No model, and the layout is built for its absence rather than around a hole
+-- where one used to be.
+--
+-- A character's body texture is a COMPOSITE the client assembles from a unit's
+-- customisation fields, and only SetUnit triggers it. SetModel loads geometry
+-- and nothing else, which is why every bot - druid, priest, paladin - came out
+-- as the same white silhouette. There is no display-id route to a textured
+-- character in 3.3.5, so the picture is gone and the space belongs to the
+-- numbers now.
+--
+-- Two columns of slots, then the attributes underneath. Everything is either a
+-- slot or a stat; there is no middle.
 local gearPage = CreateFrame("Frame", nil, bot)
 gearPage:SetAllPoints(bot)
 
--- The bot's own model. SetDisplayInfo takes a DISPLAY ID, so it needs no unit -
--- which is the whole reason this pane can show somebody on another continent.
-local model = CreateFrame("PlayerModel", nil, gearPage)
-model:SetWidth(150)
-model:SetHeight(280)
-model:SetPoint("TOP", bot, "TOP", 0, -74)
-
-local SLOT_LAYOUT = {
-	-- slot id, side, row
-	{ 0,  "L", 1 }, { 1,  "L", 2 }, { 2,  "L", 3 }, { 14, "L", 4 },
-	{ 4,  "L", 5 }, { 3,  "L", 6 }, { 18, "L", 7 }, { 8,  "L", 8 },
-	{ 9,  "R", 1 }, { 5,  "R", 2 }, { 6,  "R", 3 }, { 7,  "R", 4 },
-	{ 10, "R", 5 }, { 11, "R", 6 }, { 12, "R", 7 }, { 13, "R", 8 },
-	{ 15, "B", 1 }, { 16, "B", 2 }, { 17, "B", 3 },
-}
+local GEAR_ROWS, GEAR_ROW_H = 10, 25
 
 local slotButtons = {}
 
-local function MakeSlot(slotId, side, row)
+-- Down the left in the order the paper doll reads, then down the right, so a
+-- glance finds a slot where the eye expects it.
+local SLOT_ORDER = {
+	0, 1, 2, 14, 4, 3, 18, 8, 9, 5,
+	6, 7, 10, 11, 12, 13, 15, 16, 17,
+}
+
+local function MakeSlot(slotId, index)
 	local b = CreateFrame("Button", nil, gearPage)
-	b:SetWidth(34)
-	b:SetHeight(34)
+	b:SetWidth(190)
+	b:SetHeight(GEAR_ROW_H)
 
-	if side == "L" then
-		b:SetPoint("TOPLEFT", bot, "TOPLEFT", 22, -70 - (row - 1) * 38)
-	elseif side == "R" then
-		b:SetPoint("TOPRIGHT", bot, "TOPRIGHT", -22, -70 - (row - 1) * 38)
-	else
-		b:SetPoint("BOTTOM", bot, "BOTTOM", (row - 2) * 40, 66)
-	end
-
-	b.bg = b:CreateTexture(nil, "BACKGROUND")
-	b.bg:SetAllPoints(b)
-	b.bg:SetTexture("Interface\\Buttons\\UI-EmptySlot")
-	b.bg:SetTexCoord(0.2, 0.8, 0.2, 0.8)
-	b.bg:SetVertexColor(0.4, 0.4, 0.4)
+	local col = (index <= GEAR_ROWS) and 0 or 1
+	local row = (index <= GEAR_ROWS) and index or (index - GEAR_ROWS)
+	b:SetPoint("TOPLEFT", bot, "TOPLEFT", 18 + col * 196, -64 - (row - 1) * GEAR_ROW_H)
 
 	b.icon = b:CreateTexture(nil, "ARTWORK")
-	b.icon:SetPoint("TOPLEFT", b, "TOPLEFT", 2, -2)
-	b.icon:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", -2, 2)
+	b.icon:SetWidth(21)
+	b.icon:SetHeight(21)
+	b.icon:SetPoint("LEFT", b, "LEFT", 0, 0)
 	b.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
 
-	-- Quality edge, drawn as four hairlines around the icon.
-	--
-	-- NOT UI-ActionButton-Border: that texture is a soft glow with a large
-	-- transparent margin, meant to be drawn at about 1.6x the button and
-	-- centred. Stretched to the button's own size it collapses into a coloured
-	-- blob sitting in the middle of the icon, which is exactly what it did.
-	-- Four one-pixel bars cost nothing and read as a border at this size.
+	-- An empty slot still shows its outline, so a bare neck reads as missing
+	-- rather than as a row that failed to draw.
+	b.empty = b:CreateTexture(nil, "BACKGROUND")
+	b.empty:SetAllPoints(b.icon)
+	b.empty:SetTexture("Interface\\Buttons\\UI-EmptySlot")
+	b.empty:SetTexCoord(0.2, 0.8, 0.2, 0.8)
+	b.empty:SetVertexColor(0.35, 0.35, 0.35)
+
+	-- Four hairlines rather than UI-ActionButton-Border, which is a soft glow
+	-- with a wide transparent margin: drawn at the icon's own size it collapses
+	-- into a coloured blob in the middle of the art.
 	b.edge = {}
 	for e = 1, 4 do
 		local t = b:CreateTexture(nil, "OVERLAY")
 		t:SetTexture("Interface\\Buttons\\WHITE8X8")
 		b.edge[e] = t
 	end
-	b.edge[1]:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
-	b.edge[1]:SetPoint("TOPRIGHT", b, "TOPRIGHT", 0, 0)
+	b.edge[1]:SetPoint("TOPLEFT", b.icon, "TOPLEFT", 0, 0)
+	b.edge[1]:SetPoint("TOPRIGHT", b.icon, "TOPRIGHT", 0, 0)
 	b.edge[1]:SetHeight(1)
-	b.edge[2]:SetPoint("BOTTOMLEFT", b, "BOTTOMLEFT", 0, 0)
-	b.edge[2]:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+	b.edge[2]:SetPoint("BOTTOMLEFT", b.icon, "BOTTOMLEFT", 0, 0)
+	b.edge[2]:SetPoint("BOTTOMRIGHT", b.icon, "BOTTOMRIGHT", 0, 0)
 	b.edge[2]:SetHeight(1)
-	b.edge[3]:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
-	b.edge[3]:SetPoint("BOTTOMLEFT", b, "BOTTOMLEFT", 0, 0)
+	b.edge[3]:SetPoint("TOPLEFT", b.icon, "TOPLEFT", 0, 0)
+	b.edge[3]:SetPoint("BOTTOMLEFT", b.icon, "BOTTOMLEFT", 0, 0)
 	b.edge[3]:SetWidth(1)
-	b.edge[4]:SetPoint("TOPRIGHT", b, "TOPRIGHT", 0, 0)
-	b.edge[4]:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+	b.edge[4]:SetPoint("TOPRIGHT", b.icon, "TOPRIGHT", 0, 0)
+	b.edge[4]:SetPoint("BOTTOMRIGHT", b.icon, "BOTTOMRIGHT", 0, 0)
 	b.edge[4]:SetWidth(1)
 
 	b.SetEdgeColor = function(self, r, g, bl, show)
@@ -883,10 +880,14 @@ local function MakeSlot(slotId, side, row)
 			end
 		end
 	end
-	b:SetEdgeColor(0, 0, 0, false)
 
-	b.ilvl = b:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
-	b.ilvl:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 1)
+	b.text = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	b.text:SetPoint("LEFT", b.icon, "RIGHT", 4, 0)
+	b.text:SetWidth(140)
+	b.text:SetJustifyH("LEFT")
+
+	b.ilvl = b:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+	b.ilvl:SetPoint("RIGHT", b, "RIGHT", 0, 0)
 
 	b:SetScript("OnEnter", function()
 		GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
@@ -904,13 +905,44 @@ local function MakeSlot(slotId, side, row)
 	return b
 end
 
-for i = 1, #SLOT_LAYOUT do
-	local def = SLOT_LAYOUT[i]
-	slotButtons[def[1]] = MakeSlot(def[1], def[2], def[3])
+for i = 1, #SLOT_ORDER do
+	slotButtons[SLOT_ORDER[i]] = MakeSlot(SLOT_ORDER[i], i)
+end
+
+-- Attributes, in two columns under the gear, filling the width rather than
+-- stacking down one side of an empty middle.
+local statsRule = gearPage:CreateTexture(nil, "ARTWORK")
+statsRule:SetTexture("Interface\\Buttons\\WHITE8X8")
+statsRule:SetVertexColor(0.3, 0.3, 0.3)
+statsRule:SetHeight(1)
+statsRule:SetPoint("TOPLEFT", bot, "TOPLEFT", 18, -64 - GEAR_ROWS * GEAR_ROW_H - 6)
+statsRule:SetPoint("TOPRIGHT", bot, "TOPRIGHT", -18, -64 - GEAR_ROWS * GEAR_ROW_H - 6)
+
+local statLines = {}
+for i = 1, 8 do
+	local fs = gearPage:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	local col = (i <= 4) and 0 or 1
+	local row = (i <= 4) and i or (i - 4)
+	fs:SetPoint("TOPLEFT", bot, "TOPLEFT", 18 + col * 196,
+		-64 - GEAR_ROWS * GEAR_ROW_H - 14 - (row - 1) * 15)
+	fs:SetWidth(190)
+	fs:SetJustifyH("LEFT")
+	statLines[i] = fs
+end
+
+local function SetStatLine(i, label, value)
+	if not statLines[i] then
+		return
+	end
+	if label then
+		statLines[i]:SetText(string.format("|cff909090%s|r  %s", label, value))
+	else
+		statLines[i]:SetText("")
+	end
 end
 
 local gearFoot = gearPage:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-gearFoot:SetPoint("BOTTOM", bot, "BOTTOM", 0, 40)
+gearFoot:SetPoint("BOTTOM", bot, "BOTTOM", 0, 42)
 
 ------------------------------------------------------------------
 -- talent page
@@ -1028,21 +1060,13 @@ talentFoot:SetPoint("BOTTOM", bot, "BOTTOM", 0, 40)
 ------------------------------------------------------------------
 -- drawing
 ------------------------------------------------------------------
--- Guarded because a bad path throws, and a bot whose model has not arrived yet
--- should leave the frame empty rather than take the pane down.
-SetBotModel = function(path)
-	model:ClearModel()
-	if path and path ~= "" then
-		pcall(function() model:SetModel(path) end)
-		model:SetCamera(0)
-	end
-end
-
 DrawGear = function(name)
 	for _, b in pairs(slotButtons) do
 		b.itemId = nil
 		b.icon:SetTexture(nil)
+		b.empty:Show()
 		b:SetEdgeColor(0, 0, 0, false)
+		b.text:SetText("|cff606060" .. (SLOT_NAME[b.slotId] or "?") .. "|r")
 		b.ilvl:SetText("")
 	end
 
@@ -1057,17 +1081,22 @@ DrawGear = function(name)
 		local g = list[i]
 		local b = slotButtons[g.slot]
 		if b then
-			b.itemId = g.id
-			b.icon:SetTexture(GetItemIcon(g.id))
-
+			local itemName = GetItemInfo(g.id)
 			local r, gr, bl = GetItemQualityColor(g.quality)
 			-- Blizzard has no colour for a repurposed artifact tier, so the
 			-- field kit is painted red rather than the gold it would inherit.
 			if g.quality == 6 then
 				r, gr, bl = 0.8, 0.27, 0.27
 			end
+
+			b.itemId = g.id
+			b.icon:SetTexture(GetItemIcon(g.id))
+			b.empty:Hide()
 			b:SetEdgeColor(r, gr, bl, true)
+			b.text:SetText(itemName or (SLOT_NAME[g.slot] or "?"))
+			b.text:SetTextColor(r, gr, bl)
 			b.ilvl:SetText(g.ilvl)
+
 			worn = worn + 1
 			if QUALITY_RANK[g.quality] and QUALITY_RANK[g.quality] >= 2 then
 				best = best + 1
@@ -1223,15 +1252,24 @@ function CENTURION_BotStats_ShowBot(name)
 	elseif b.combat then
 		state = "|cffff7f5ffighting|r"
 	elseif b.travel then
-		state = "|cff5f9fftravelling|r"
+		state = "|cff5f9ffftravelling|r"
 	elseif b.timid > 0 then
 		state = string.format("|cffe0c020timid %ds|r", b.timid)
 	end
 
 	local zn = zones[b.zone] and zones[b.zone].name or ("Zone " .. b.zone)
-	bSub:SetText(string.format(
-		"Level |cffffd200%d|r %s %s   %s   |cffffd200%dg|r   aggression |cffffd200%d|r   %s",
-		b.level, SpecName(b.class, b.spec), CLASS_NAME[b.class] or "?", zn, b.gold, b.aggr, state))
+	bSub:SetText(string.format("Level |cffffd200%d|r %s %s   %s",
+		b.level, SpecName(b.class, b.spec), CLASS_NAME[b.class] or "?", zn))
+
+	-- The column that replaced the model.
+	SetStatLine(1, "State",      state)
+	SetStatLine(2, "Health",     string.format("|cffffd200%d%%|r", b.hp))
+	SetStatLine(3, b.mp > 0 and "Mana" or nil, string.format("|cffffd200%d%%|r", b.mp))
+	SetStatLine(4, b.pvp and "Role" or nil, "|cffff7f5fPvP only, no PvE|r")
+	SetStatLine(5, "Aggression", string.format("|cffffd200%d|r / 100", b.aggr))
+	SetStatLine(6, "Timid",      b.timid > 0 and string.format("|cffe0c020%ds|r", b.timid) or "no")
+	SetStatLine(7, "Gold",       string.format("|cffffd200%dg|r", b.gold))
+	SetStatLine(8, "Item level", string.format("|cffffd200%d|r", b.ilvl))
 
 	-- Name the tree buttons for this class, so "Tree 2" reads as Fury.
 	local specs = SPEC_NAME[b.class]
@@ -1243,7 +1281,6 @@ function CENTURION_BotStats_ShowBot(name)
 	-- SetDisplayInfo does not exist on a 3.3.5 model frame - it arrives in 4.0 -
 	-- and the two methods that do exist take a unit or a creature id, neither of
 	-- which a remote player bot has.
-	SetBotModel(modelOf[name])
 
 	-- The gear request goes out over chat, and anything that can throw between
 	-- here and the end would leave the pane half-drawn. Ask last, and never let
