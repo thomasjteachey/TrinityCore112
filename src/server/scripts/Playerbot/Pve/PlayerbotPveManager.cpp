@@ -98,6 +98,10 @@ namespace playerbot
     // is a different function that nothing defines, which compiles cleanly and
     // then fails at link.
     void ResetManagedBotToZoneBand(Player* bot, uint32 zoneId, uint8 bottomLevel);
+
+    // Same reasoning: the bounty dispatch below needs to know a zone's level
+    // band before the definition appears.
+    bool GetZoneLevelBand(uint32 zoneId, uint8& bottom, uint8& top);
 }
 
 namespace
@@ -8057,6 +8061,251 @@ namespace
     // guardian TELEPORT queue: that path lands a bot at its real level, where the
     // drifter path would re-level it into the destination zone's band and quietly
     // deliver a peer instead.
+    // A hundred of them, so the fleet does not read like one script.
+    constexpr std::array<char const*, 100> kBountyHelpShouts = { {
+        "Help! I can't take this one alone!",
+        "Someone get over here, now!",
+        "I'm outmatched! Anybody!",
+        "This one's way above me - help!",
+        "I need backup! Right now!",
+        "Get over here, I can't hold them!",
+        "They're killing me! Somebody!",
+        "I can't win this - HELP!",
+        "Anyone! Anyone at all!",
+        "I'm not going to make it alone!",
+        "This one's a killer! Get over here!",
+        "Somebody, please!",
+        "I'm in over my head!",
+        "They're too strong! HELP!",
+        "Backup! I need backup!",
+        "I can't fight this alone!",
+        "Get help! Now!",
+        "Someone come quick!",
+        "I'm going to die out here!",
+        "This isn't a fair fight - help me!",
+        "HELP! There's a bounty here!",
+        "I found them! I can't hold them!",
+        "The bounty's here! Get over here!",
+        "I've got them cornered - I need help!",
+        "They're worth a fortune! Somebody help me kill them!",
+        "Wanted alive or dead - and I can't do either alone!",
+        "I've got eyes on the bounty! HELP!",
+        "The mark is here! Backup!",
+        "Somebody collect on this one with me!",
+        "I can't claim this bounty alone!",
+        "Bring everyone! This one's a killer!",
+        "They've killed too many! Help me!",
+        "I need a hand! A big one!",
+        "I'm losing! Somebody!",
+        "Get down here before I'm dead!",
+        "This one has a price on their head!",
+        "HELP ME!",
+        "I can't do this by myself!",
+        "Someone stronger, please!",
+        "Bring somebody who can fight!",
+        "I'm no match for them!",
+        "They'll kill me! Help!",
+        "Anybody within earshot - HELP!",
+        "I'm bleeding out here!",
+        "Come on, someone! Anyone!",
+        "I'll die before I take them alone!",
+        "This is not a fight I win!",
+        "Get somebody bigger over here!",
+        "Please - I need help!",
+        "They're too much for me!",
+        "Somebody finish what I started!",
+        "I've hurt them! Come finish it!",
+        "I'll hold them - somebody get here!",
+        "Holding on! Hurry!",
+        "I can't last much longer!",
+        "Not much time - HELP!",
+        "They're going to drop me!",
+        "I'm nearly done - help!",
+        "Send anyone! Please!",
+        "Whoever's nearest - I need you!",
+        "I've got a wanted killer here!",
+        "There's blood money standing right here!",
+        "A hand! Somebody give me a hand!",
+        "This one kills for sport - help me!",
+        "I'm outclassed! Backup!",
+        "They out-level me by a mile!",
+        "I can't touch them alone!",
+        "Get me some help before I'm a corpse!",
+        "Help! They're wanted!",
+        "Bounty! Right here! HELP!",
+        "I need somebody who can actually hurt them!",
+        "I'm just slowing them down - hurry!",
+        "Come on! Someone!",
+        "I've made my stand - now help me!",
+        "I won't run. But I need help!",
+        "Someone, anyone, please hurry!",
+        "They're on me! HELP!",
+        "This one's marked - and I'm losing!",
+        "Get here fast or get here late!",
+        "I'd rather not die today - help!",
+        "Backup, and be quick about it!",
+        "I've called it in - somebody answer!",
+        "Answer me! I need help!",
+        "The bounty's mine if someone helps!",
+        "Split the bounty - just get here!",
+        "I can't finish them! Somebody can!",
+        "They're worth more than my life - help me!",
+        "I found the wanted one! HELP!",
+        "A killer! Right here! Help me!",
+        "Nobody should fight this alone!",
+        "I'm badly outmatched - please!",
+        "Send the strongest one you've got!",
+        "Whoever can fight - come now!",
+        "I'm the wrong one for this fight!",
+        "Wrong fight, wrong day - HELP!",
+        "They'll be gone if nobody comes!",
+        "Don't let them get away - help me!",
+        "Hold them with me! Somebody!",
+        "I need one good fighter, now!",
+        "Just one of you! Please!",
+    } };
+
+    // A bot that has bitten off more than it can chew against a bountied player
+    // shouts, and somebody who CAN win the fight drops what they are doing and
+    // comes.
+    //
+    // The trigger is deliberately the mismatch, not just the bounty: a bot that
+    // is a fair match is having an ordinary fight and needs no rescue. What this
+    // answers is the low-level bot that aggroed a killer it cannot hurt - it dies
+    // in seconds, the bounty walks away, and the fleet looks like it has no idea
+    // what it is doing.
+    //
+    // World thread: it teleports, and reads Group state through the rescue.
+    void CallForHelpAgainstBounties(std::vector<HumanSpot> const& spots,
+        std::vector<Player*> const& proddableBots)
+    {
+        static uint32 const minStacks = uint32(std::max(1,
+            sConfigMgr->GetIntDefault("Centurion.Bounty.CallForHelpStacks", 10)));
+        static float const hearingYards = std::max(1.0f,
+            sConfigMgr->GetFloatDefault("Centurion.Bounty.CallForHelpYards", 50.0f));
+        // Only somebody genuinely elsewhere is teleported. A bot already in the
+        // neighbourhood can walk, and porting one four hundred yards is the kind
+        // of thing a player notices happening next to them.
+        static float const rescueFromYards = std::max(0.0f,
+            sConfigMgr->GetFloatDefault("Centurion.Bounty.CallForHelpMinRescueYards", 200.0f));
+
+        // One shout per outmatched bot per cooldown, or a losing fight becomes a
+        // wall of text.
+        static std::unordered_map<uint64, PveTimePoint> s_nextShoutAt;
+        PveTimePoint const now = PveClock::now();
+
+        for (HumanSpot const& spot : spots)
+        {
+            if (spot.Bounty < minStacks)
+                continue;
+
+            Player* human = ObjectAccessor::FindConnectedPlayer(spot.Guid);
+            if (!human || !human->IsInWorld() || !human->IsAlive() ||
+                human->InBattleground() || human->InArena())
+                continue;
+
+            Map* map = human->FindMap();
+            if (!map)
+                continue;
+
+            // Who is losing to this person right now.
+            for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin();
+                itr != map->GetPlayers().end(); ++itr)
+            {
+                Player* outmatched = itr->GetSource();
+                if (!outmatched || outmatched == human || !outmatched->IsAlive() ||
+                    !playerbot::IsManagedRandomBot(outmatched))
+                    continue;
+
+                if (!outmatched->IsWithinDistInMap(human, hearingYards))
+                    continue;
+
+                // Actually fighting them, not merely standing nearby.
+                if (outmatched->GetVictim() != human && !IsSwingingAt(outmatched, human))
+                    continue;
+
+                // And genuinely outmatched. A fair fight is not an emergency.
+                if (IsProactivePlayerLevelAcceptable(outmatched, human))
+                    continue;
+
+                uint64 const outmatchedGuid = outmatched->GetGUID().GetRawValue();
+                auto const shoutItr = s_nextShoutAt.find(outmatchedGuid);
+                if (shoutItr != s_nextShoutAt.end() && now < shoutItr->second)
+                    continue;
+                s_nextShoutAt[outmatchedGuid] = now + std::chrono::seconds(30);
+
+                outmatched->Yell(kBountyHelpShouts[urand(0, uint32(kBountyHelpShouts.size()) - 1)],
+                    LANG_UNIVERSAL);
+
+                // Now find somebody who can actually answer it.
+                Player* rescuer = nullptr;
+                float bestDistance = 0.0f;
+                for (Player* candidate : proddableBots)
+                {
+                    if (candidate == outmatched || candidate == human ||
+                        candidate->GetMapId() != human->GetMapId())
+                        continue;
+
+                    // Far enough away that porting is the only way to arrive.
+                    float const distance = candidate->GetDistance(human);
+                    if (distance < rescueFromYards)
+                        continue;
+
+                    // Able to win the fight it is being sent to.
+                    if (!IsProactivePlayerLevelAcceptable(candidate, human))
+                        continue;
+
+                    // And it has to belong in the zone it is landing in.
+                    uint8 bandBottom = 0;
+                    uint8 bandTop = 0;
+                    if (playerbot::GetZoneLevelBand(human->GetZoneId(), bandBottom, bandTop))
+                    {
+                        uint8 const level = candidate->GetLevel();
+                        if (level < bandBottom || level > bandTop)
+                            continue;
+                    }
+
+                    if (!BotCanTeleportNow(candidate))
+                        continue;
+
+                    if (!rescuer || distance < bestDistance)
+                    {
+                        rescuer = candidate;
+                        bestDistance = distance;
+                    }
+                }
+
+                if (!rescuer)
+                    continue;
+
+                // Arrives beside the bot that called, not on top of the player -
+                // it is answering a shout, not ambushing.
+                float x, y, z;
+                outmatched->GetNearPoint(outmatched, x, y, z, 5.0f, frand(0.0f, 2.0f * float(M_PI)));
+                outmatched->UpdateAllowedPositionZ(x, y, z);
+
+                if (!rescuer->TeleportTo(outmatched->GetMapId(), x, y, z,
+                    rescuer->GetAbsoluteAngle(human->GetPositionX(), human->GetPositionY())))
+                    continue;
+
+                // Full and ready: it was pulled out of whatever it was doing, and
+                // arriving at half health on a cooldown it already spent would
+                // just be a second corpse.
+                RestorePlayerbotTeleportVitals(rescuer);
+                rescuer->GetSpellHistory()->ResetAllCooldowns();
+                rescuer->Attack(human, true);
+
+                TC_LOG_INFO("playerbots.pve",
+                    "{} (level {}) called for help against {} (bounty {}); {} (level {}) answered from {:.0f}y.",
+                    outmatched->GetName(), uint32(outmatched->GetLevel()), human->GetName(),
+                    spot.Bounty, rescuer->GetName(), uint32(rescuer->GetLevel()), bestDistance);
+            }
+        }
+
+        for (auto itr = s_nextShoutAt.begin(); itr != s_nextShoutAt.end();)
+            itr = now > itr->second + std::chrono::minutes(5) ? s_nextShoutAt.erase(itr) : std::next(itr);
+    }
+
     void HuntTheBountied(std::vector<HumanSpot> const& spots,
         std::vector<Player*> const& proddableBots)
     {
@@ -8129,6 +8378,26 @@ namespace
                 // must not start feeding the victim easy kills.
                 if (!IsProactivePlayerLevelAcceptable(bot, human))
                     continue;
+
+                // And whoever arrives has to belong in the ZONE, not just against
+                // the target. A bounty is not a reason to drop a level 12 into the
+                // Burning Steppes: it has to survive the walk, the wildlife and
+                // whatever else is standing there, and a bot that dies to the zone
+                // on the way is a bot that never arrives.
+                //
+                // Zones without a band - instances, capitals, anything the classic
+                // table does not cover - are not gated, which matches how the rest
+                // of this file treats an unknown zone.
+                {
+                    uint8 bandBottom = 0;
+                    uint8 bandTop = 0;
+                    if (playerbot::GetZoneLevelBand(human->GetZoneId(), bandBottom, bandTop))
+                    {
+                        uint8 const botLevel = bot->GetLevel();
+                        if (botLevel < bandBottom || botLevel > bandTop)
+                            continue;
+                    }
+                }
 
                 // Which pool this bot belongs to decides the tier; distance only
                 // breaks ties inside one. Ordinary bots are always the LAST tier
@@ -12123,6 +12392,9 @@ namespace playerbot
             // has been idle.
             if (Bounty::Enabled())
                 HuntTheBountied(spots, proddableBots);
+
+                // And the fleet answers its own outmatched.
+                CallForHelpAgainstBounties(spots, proddableBots);
 
             std::lock_guard<std::mutex> guard(g_HumanSpotLock);
             g_HumanSpots.swap(spots);
