@@ -19,9 +19,9 @@
  //
  // GM ONLY, and deliberately so: this is a live readout of where every bot is,
  // how aggressive it is and how much it is carrying - a map of the fleet that
- // an ordinary player has no business holding. The gate is IsGameMaster(), the
- // same test the whisper diagnostics use, checked on every push rather than at
- // handshake time so dropping GM mode stops the feed immediately.
+ // an ordinary player has no business holding. The gate is the RBAC GM command
+ // permission - the ACCOUNT, not the .gm toggle, which a GM turns off constantly
+ // just to play - checked on every push rather than once at handshake.
  //
  // Transport is the CCGAME addon whisper the bot map already uses
  // (custom_bot_map_feed.cpp), so no new client prefix has to be registered.
@@ -44,6 +44,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "RBAC.h"
 #include "Playerbot/Pve/PlayerbotPveManager.h"
 #include "ScriptMgr.h"
 #include "World.h"
@@ -110,13 +111,48 @@ namespace
     };
 
     // Auction listings, counted once per push rather than per viewer.
+    //
+    // The three house ids are NOT three houses. With cross-faction auctioning
+    // on - which this realm runs, being effectively one faction anyway -
+    // GetAuctionsMapByHouseId returns &mNeutralAuctions for every id, so
+    // summing the three counted the same listings three times and reported
+    // 22,317 against the 7,442 the auction window itself was showing. Distinct
+    // pointers, not distinct ids.
     uint32 CountAuctions()
     {
+        AuctionHouseObject const* counted[3] = { };
+        uint8 distinct = 0;
         uint32 total = 0;
+
         for (uint8 houseId : { uint8(AUCTIONHOUSE_ALLIANCE), uint8(AUCTIONHOUSE_HORDE), uint8(AUCTIONHOUSE_NEUTRAL) })
-            if (AuctionHouseObject* house = sAuctionMgr->GetAuctionsMapByHouseId(houseId))
-                total += house->Getcount();
+        {
+            AuctionHouseObject* house = sAuctionMgr->GetAuctionsMapByHouseId(houseId);
+            if (!house)
+                continue;
+
+            bool seen = false;
+            for (uint8 i = 0; i < distinct; ++i)
+                if (counted[i] == house)
+                    seen = true;
+
+            if (seen)
+                continue;
+
+            counted[distinct++] = house;
+            total += house->Getcount();
+        }
         return total;
+    }
+
+    // A real Game Master, not somebody with .gm mode switched on. IsGameMaster()
+    // is the toggle, which a GM turns off constantly just to play - and the feed
+    // going dark every time they did was never the intent. This is the account
+    // permission, the same test the bot whisper diagnostics use.
+    bool IsGameMasterAccount(Player* player)
+    {
+        // Non-const: HasPermission loads the account's RBAC data on first ask.
+        WorldSession* session = player ? player->GetSession() : nullptr;
+        return session && session->HasPermission(rbac::RBAC_PERM_COMMAND_GM);
     }
 
     void PushTo(Player* viewer, std::vector<playerbot::PveManager::BotStatsRow> const& rows, uint32 auctions)
@@ -225,7 +261,7 @@ namespace
             for (auto const& pair : ObjectAccessor::GetPlayers())
             {
                 Player* player = pair.second;
-                if (player && player->IsInWorld() && player->IsGameMaster() && player->GetSession())
+                if (player && player->IsInWorld() && IsGameMasterAccount(player))
                     watchers.push_back(player);
             }
 
