@@ -3173,6 +3173,63 @@ namespace
         return bot->IsFFAPvP();
     }
 
+    // A real player with War Mode OFF and a playerbot are nothing to each other.
+    //
+    // FFA-ARMED is this library's view of "War Mode on": ApplyFfaState arms the
+    // byte for opted-in players in eligible zones, and every managed bot is armed
+    // wherever it can be. The scripts library owns the opt-in set and the game
+    // library cannot see it, so the byte is the signal - and it is the same one
+    // the minimap tracking and the render override already read.
+    //
+    // Battlegrounds and arenas are excluded: everybody inside queued for it, and
+    // the fleet has a match to play.
+    bool IsPlayerbotAndUnarmedPlayer(WorldObject const* self, WorldObject const* target)
+    {
+        Player const* selfPlayer = self ? self->GetAffectingPlayer() : nullptr;
+        Player const* targetPlayer = target ? target->GetAffectingPlayer() : nullptr;
+        if (!selfPlayer || !targetPlayer || selfPlayer == targetPlayer)
+            return false;
+
+        Map const* map = selfPlayer->FindMap();
+        if (map && map->IsBattlegroundOrArena())
+            return false;
+
+        bool const selfIsBot = selfPlayer->GetSession() &&
+            IsManagedPlayerbotAccountId(selfPlayer->GetSession()->GetAccountId());
+        bool const targetIsBot = targetPlayer->GetSession() &&
+            IsManagedPlayerbotAccountId(targetPlayer->GetSession()->GetAccountId());
+        if (selfIsBot == targetIsBot)
+            return false;
+
+        return !(selfIsBot ? targetPlayer : selfPlayer)->IsFFAPvP();
+    }
+
+    // Whether a positive spell is a person with War Mode OFF trying to support
+    // somebody who has it ON.
+    //
+    // One predicate covers both halves of the rule, because every bot is armed:
+    // "cannot heal or buff a playerbot" and "cannot heal or buff a War Mode
+    // player" are the same sentence once the question is asked as armed/unarmed.
+    // Turning War Mode off steps out of that fight entirely - you are not shot
+    // at, and you do not get to hold anyone's coat either.
+    bool IsUnarmedPlayerAidingArmed(WorldObject const* self, WorldObject const* target)
+    {
+        Player const* caster = self ? self->GetAffectingPlayer() : nullptr;
+        Player const* aided = target ? target->GetAffectingPlayer() : nullptr;
+        if (!caster || !aided || caster == aided)
+            return false;
+
+        Map const* map = caster->FindMap();
+        if (map && map->IsBattlegroundOrArena())
+            return false;
+
+        // A bot may support anybody; this is a rule about people opting out.
+        if (caster->GetSession() && IsManagedPlayerbotAccountId(caster->GetSession()->GetAccountId()))
+            return false;
+
+        return !caster->IsFFAPvP() && aided->IsFFAPvP();
+    }
+
     // Playerbots are one team in the open world: with everyone FFA-flagged
     // on a hardcore realm they would otherwise be legal targets for each
     // other. Battlegrounds keep their normal team rules. Configurable via
@@ -3300,6 +3357,15 @@ bool WorldObject::IsValidAttackTarget(WorldObject const* target, SpellInfo const
                 return IsHostileTo(unitTarget) || unitTarget->IsHostileTo(this);
     }
 
+    // War Mode off: the fleet is scenery, in both directions.
+    //
+    // Checked BEFORE the pseudo-faction so it cannot be overridden by it, and
+    // before the ordinary PvP ladder so a cross-faction bot is not attackable
+    // either - this realm keeps every player permanently flagged, so without
+    // this an opposite-faction bot would still be fair game.
+    if (IsPlayerbotAndUnarmedPlayer(this, target))
+        return false;
+
     // Hardcore pseudo-faction: an armed playerbot and a real player are
     // mutually attackable regardless of faction or the player's own flag.
     // Must precede the friendliness bail - same-faction players would
@@ -3385,6 +3451,13 @@ bool WorldObject::IsValidAssistTarget(WorldObject const* target, SpellInfo const
 
     // can't assist GMs
     if (target->GetTypeId() == TYPEID_PLAYER && target->ToPlayer()->IsGameMaster())
+        return false;
+
+    // War Mode off: no healing, no buffing, of a playerbot or of anybody who has
+    // War Mode on. Placed this early so it covers every route a positive spell
+    // takes - single target, the group and raid frames, and the friendly-target
+    // sweep an area spell does.
+    if (IsUnarmedPlayerAidingArmed(this, target))
         return false;
 
     // Custom-game spectators are inert - see the matching note in

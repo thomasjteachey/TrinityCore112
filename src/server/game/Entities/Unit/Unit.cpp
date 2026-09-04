@@ -15609,11 +15609,28 @@ void Unit::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player const* t
                 // faction, so a same-faction observer's client reads them as
                 // friendly and refuses to fight back against a pet the server
                 // considers a perfectly legal attacker.
+                //
+                // AND ONLY TO AN OBSERVER WHO HAS WAR MODE ON. A player who has
+                // turned it off cannot fight the fleet and cannot help it, so
+                // painting it red would be a lie the client acts on - red
+                // nameplates it cannot click, on units that will not fight back.
+                // They are shown their OWN faction instead, which is the same
+                // trick the two-side-raid branch below uses to make a
+                // cross-faction unit read as friendly: green, whatever team the
+                // bot happens to be.
                 Player const* ffaBotOwner = GetTypeId() == TYPEID_PLAYER ? ToPlayer() : GetAffectingPlayer();
-                if (index == UNIT_FIELD_FACTIONTEMPLATE && target != this && ffaBotOwner &&
-                    IsFFAPvP() && ffaBotOwner->IsFFAPvP() && !GetMap()->IsBattlegroundOrArena() &&
-                    ffaBotOwner->GetSession() && IsManagedPlayerbotAccountIdForDisplay(ffaBotOwner->GetSession()->GetAccountId()) &&
-                    (!target->GetSession() || !IsManagedPlayerbotAccountIdForDisplay(target->GetSession()->GetAccountId())))
+                bool const isArmedBotUnit = ffaBotOwner && IsFFAPvP() && ffaBotOwner->IsFFAPvP() &&
+                    !GetMap()->IsBattlegroundOrArena() && ffaBotOwner->GetSession() &&
+                    IsManagedPlayerbotAccountIdForDisplay(ffaBotOwner->GetSession()->GetAccountId()) &&
+                    (!target->GetSession() || !IsManagedPlayerbotAccountIdForDisplay(target->GetSession()->GetAccountId()));
+
+                if (index == UNIT_FIELD_FACTIONTEMPLATE && target != this && isArmedBotUnit &&
+                    !target->IsFFAPvP())
+                {
+                    // War Mode off: friendly, whatever faction it really is.
+                    fieldBuffer << uint32(target->GetFaction());
+                }
+                else if (index == UNIT_FIELD_FACTIONTEMPLATE && target != this && isArmedBotUnit)
                 {
                     // Show the observer an ENEMY PLAYER faction rather than
                     // Monster: the 3.3.5 client colours other players by the
