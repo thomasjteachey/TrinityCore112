@@ -25,6 +25,10 @@ namespace AutoBalance
     Optional<float> GetDamageHealingMultiplier(Unit const* unit);
     Optional<float> GetCrowdControlDurationMultiplier(Unit const* unit);
 
+    // Empty unless AutoBalance.RewardScaling.XP / .Money are enabled.
+    Optional<float> GetExperienceMultiplier(Unit const* unit);
+    Optional<float> GetMoneyMultiplier(Unit const* unit);
+
     ActiveInflectionInfo GetInflectionInfoForMap(Map const* map, bool forBoss);
 
     void ScaleCreature(Creature* creature);

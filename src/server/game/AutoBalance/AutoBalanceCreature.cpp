@@ -376,6 +376,51 @@ Optional<float> GetCrowdControlDurationMultiplier(Unit const* unit)
     return multiplier;
 }
 
+// The reward side of the scaling. Both of these were computed per creature and
+// stored all along - the .autobalance debug command has always printed them -
+// but nothing ever read them back, so a dungeon scaled down for two players
+// still paid a full group's experience and gold. Both are off unless
+// AutoBalance.RewardScaling.XP / .Money are turned on, in which case the
+// dynamic method tracks the average of the health and damage multipliers, so
+// the reward follows the difficulty in both directions.
+Optional<float> GetExperienceMultiplier(Unit const* unit)
+{
+    if (!IsEnabled())
+        return { };
+
+    AutoBalanceCreatureInfo const* info = TryGetCreatureInfo(unit);
+    if (!info)
+        return { };
+
+    float const multiplier = info->XPModifier;
+    if (!std::isfinite(multiplier) || multiplier <= 0.0f)
+        return { };
+
+    if (std::fabs(multiplier - 1.0f) <= 0.0005f)
+        return { };
+
+    return multiplier;
+}
+
+Optional<float> GetMoneyMultiplier(Unit const* unit)
+{
+    if (!IsEnabled())
+        return { };
+
+    AutoBalanceCreatureInfo const* info = TryGetCreatureInfo(unit);
+    if (!info)
+        return { };
+
+    float const multiplier = info->MoneyModifier;
+    if (!std::isfinite(multiplier) || multiplier <= 0.0f)
+        return { };
+
+    if (std::fabs(multiplier - 1.0f) <= 0.0005f)
+        return { };
+
+    return multiplier;
+}
+
 void ScaleCreature(Creature* creature)
 {
     if (!creature)
