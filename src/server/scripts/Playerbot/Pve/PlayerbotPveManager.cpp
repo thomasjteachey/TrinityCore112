@@ -316,6 +316,13 @@ namespace
         // When this bot was first seen flagged as in flight while no flight
         // generator was actually running. Zero whenever the two agree.
         PveTimePoint strandedFlightSince{};
+        // The other half of the same problem: a flight generator that IS running
+        // but has stopped going anywhere. Anchor position and the moment the bot
+        // was last seen away from it.
+        PveTimePoint flightStillSince{};
+        float flightAnchorX = 0.0f;
+        float flightAnchorY = 0.0f;
+        float flightAnchorZ = 0.0f;
     };
 
     bool IsRecentErrandTarget(PveBotState& state, ObjectGuid const& guid)
@@ -12880,7 +12887,49 @@ namespace playerbot
                 }
             }
             else
+            {
                 state.strandedFlightSince = {};
+
+                // The other half. A flight generator that is still installed but
+                // has stopped moving leaves the bot parked on the taxi mount,
+                // and nothing else will ever disturb it: the structural test
+                // above sees a perfectly good generator, this tick returns early
+                // on IsInFlight, and the stuck watchdog skips flying bots. That
+                // is the "several bots sitting motionless on windriders" report.
+                //
+                // Positional, because there is nothing structural left to look
+                // at - the generator says it is flying and only the coordinates
+                // disagree. Safe here in a way it would not be on the ground: a
+                // real taxi flight never pauses, so a full minute of stillness
+                // cannot be anything else.
+                constexpr float kFlightMovedYards = 5.0f;
+                constexpr auto kFlightStallTimeout = std::chrono::seconds(60);
+
+                PveTimePoint const flightNow = PveClock::now();
+                float const dx = player->GetPositionX() - state.flightAnchorX;
+                float const dy = player->GetPositionY() - state.flightAnchorY;
+                float const dz = player->GetPositionZ() - state.flightAnchorZ;
+                bool const moved = (dx * dx + dy * dy + dz * dz) > (kFlightMovedYards * kFlightMovedYards);
+
+                if (state.flightStillSince == PveTimePoint{} || moved)
+                {
+                    state.flightStillSince = flightNow;
+                    state.flightAnchorX = player->GetPositionX();
+                    state.flightAnchorY = player->GetPositionY();
+                    state.flightAnchorZ = player->GetPositionZ();
+                }
+                else if (flightNow - state.flightStillSince >= kFlightStallTimeout)
+                {
+                    TC_LOG_INFO("playerbots.pve", "Bot {} stalled mid-flight at {:.0f} {:.0f} {:.0f}; dismounting and releasing it.",
+                        player->GetName(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+                    player->ClearUnitState(UNIT_STATE_IN_FLIGHT);
+                    player->CleanupAfterTaxiFlight();
+                    player->GetMotionMaster()->MoveIdle();
+                    state.flightStillSince = {};
+                    ResetStuckWatchdog(state);
+                    return;
+                }
+            }
 
             ResetStuckWatchdog(state);
             // Keep the post-landing journey's stuck detector quiet while the
@@ -12890,6 +12939,7 @@ namespace playerbot
             return;
         }
         state.strandedFlightSince = {};
+        state.flightStillSince = {};
         PveTimePoint const now = PveClock::now();
         if (state.nextFastTick == PveTimePoint{})
         {
