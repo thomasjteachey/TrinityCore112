@@ -358,8 +358,29 @@ namespace
 // same CCGAME whisper as everything else.
 namespace
 {
+    // The bot's model, as a FILE PATH.
+    //
+    // Model:SetDisplayInfo does not exist until 4.0. A 3.3.5 model frame can be
+    // pointed at a unit (which the client does not have for a remote bot) or at
+    // a creature id (which a player has none of), so the only route left is
+    // SetModel with the path - which the server can look up and hand over.
+    void SendModelTo(Player* viewer, Player* bot)
+    {
+        CreatureDisplayInfoEntry const* display = sCreatureDisplayInfoStore.LookupEntry(bot->GetDisplayId());
+        if (!display)
+            return;
+
+        CreatureModelDataEntry const* data = sCreatureModelDataStore.LookupEntry(display->ModelID);
+        if (!data || !data->ModelName || !*data->ModelName)
+            return;
+
+        SendTagged(viewer, "BSTM", bot->GetName() + std::string("|") + data->ModelName);
+    }
+
     void SendGearTo(Player* viewer, Player* bot)
     {
+        SendModelTo(viewer, bot);
+
         std::ostringstream out;
         out << bot->GetName() << '|';
 

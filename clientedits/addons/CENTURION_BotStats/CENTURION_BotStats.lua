@@ -58,7 +58,7 @@ local selected  = nil   -- a zoneId, when drilled in
 -- name as a global and find nil.
 local shownBot
 local detailTab = "gear"   -- which half of the bot panel is showing
-local DrawGear, DrawTalents
+local DrawGear, DrawTalents, SetBotModel
 
 ------------------------------------------------------------------
 -- parsing
@@ -282,6 +282,7 @@ end
 -- answer comes back over the same CCGAME whisper as the rest of the feed.
 local gearOf   = {}     -- [botName] = { {slot, id, quality, ilvl}, ... }
 local picksOf  = {}     -- [botName] = { {spell, rank, tree, tier}, ... }
+local modelOf  = {}     -- [botName] = model file path
 local talentOf = {}     -- [botName] = { t1, t2, t3 }
 
 local SLOT_NAME = {
@@ -355,6 +356,17 @@ local function ParseTalentPicks(payload)
 				tier  = tonumber(tier) or 0,
 				col   = tonumber(col) or 0,
 			})
+		end
+	end
+end
+
+-- "name|Character\Orc\Male\OrcMale.mdx"
+local function ParseModel(payload)
+	local name, path = string.match(payload, "^([^|]+)|(.+)$")
+	if name and path then
+		modelOf[name] = path
+		if shownBot == name and SetBotModel then
+			SetBotModel(path)
 		end
 	end
 end
@@ -720,6 +732,8 @@ driver:SetScript("OnEvent", function()
 	elseif tag == "BSTT" then
 		ParseTalents(payload)
 		if shownBot then DrawTalents(shownBot) end
+	elseif tag == "BSTM" then
+		ParseModel(payload)
 	elseif tag == "BSTP" then
 		ParseTalentPicks(payload)
 		if shownBot then DrawTalents(shownBot) end
@@ -917,6 +931,16 @@ talentFoot:SetPoint("BOTTOM", bot, "BOTTOM", 0, 40)
 ------------------------------------------------------------------
 -- drawing
 ------------------------------------------------------------------
+-- Guarded because a bad path throws, and a bot whose model has not arrived yet
+-- should leave the frame empty rather than take the pane down.
+SetBotModel = function(path)
+	model:ClearModel()
+	if path and path ~= "" then
+		pcall(function() model:SetModel(path) end)
+		model:SetCamera(0)
+	end
+end
+
 DrawGear = function(name)
 	for _, b in pairs(slotButtons) do
 		b.itemId = nil
@@ -1104,9 +1128,11 @@ function CENTURION_BotStats_ShowBot(name)
 		treeButtons[i].treeName = specs and specs[i] or ("Tree " .. i)
 	end
 
-	if b.display and b.display > 0 then
-		model:SetDisplayInfo(b.display)
-	end
+	-- The model arrives separately, as a FILE PATH, with the gear response.
+	-- SetDisplayInfo does not exist on a 3.3.5 model frame - it arrives in 4.0 -
+	-- and the two methods that do exist take a unit or a creature id, neither of
+	-- which a remote player bot has.
+	SetBotModel(modelOf[name])
 
 	-- The gear request goes out over chat, and anything that can throw between
 	-- here and the end would leave the pane half-drawn. Ask last, and never let
