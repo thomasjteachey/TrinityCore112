@@ -215,6 +215,16 @@ void CollectItemsWithQuality(Player* player, ItemQualities quality, PlayerChestB
 
         if (ItemTemplate const* proto = item->GetTemplate())
         {
+            // The hardcore field kit is never collected by ANY chest, whoever
+            // is asking. Its duplicates read artifact quality as a marker that
+            // they are loaners, which made every one of them a match for a
+            // caller asking for artifacts - so dying in outdoor Dire Maul while
+            // carrying beads emptied the wearer's entire issued set into the
+            // bead chest. The kit is the floor: it is exempt by entry range in
+            // the death rule, and it is exempt here for the same reason.
+            if (IsFieldKitDuplicateEntry(item->GetEntry()))
+                return;
+
             if (proto->Quality == quality && !excludedEntries.count(item->GetEntry()))
             {
                 chest.AddItem(item);

@@ -8,7 +8,7 @@
 #include <unordered_map>
 
 class Item;
-class ItemTemplate;
+struct ItemTemplate;
 class Player;
 class Group;
 

@@ -34,6 +34,7 @@
 
 #include "Bag.h"
 #include "custom_barracks_hardcore.h"
+#include "ChallengeModes.h"
 #include "custom_bounty.h"
 #include "Playerbot/Pve/PlayerbotPveManager.h"   // IsPvpOnlyBot
 #include "ScriptMgr.h"
@@ -1017,6 +1018,76 @@ namespace BarracksHardcore
         DestroyLooseFieldKit(player);
     }
 
+    // Whether this character is ALLOWED to wear the kit at all.
+    //
+    // Two challenge modes refuse anything above common quality outright, and
+    // the kit reads artifact - so for a player running either of them every kit
+    // piece is rejected by their own rules. Burning their white gear would
+    // leave them permanently unable to equip ANYTHING, which is not a hardcore
+    // rule, it is a bricked character. One person on the realm is running Iron
+    // Man today; that is one too many to find out the hard way.
+    //
+    // The refusal itself lives in ChallengeModes' OnPlayerCanEquipItem hook,
+    // which needs a real Item to ask, so it cannot be probed from here. The
+    // settings are asked directly instead.
+    bool KitMayDress(Player const* player)
+    {
+        return player && !sChallengeModes->IsEnabledForPlayer(SETTING_IRON_MAN, player) &&
+            !sChallengeModes->IsEnabledForPlayer(SETTING_ITEM_QUALITY_LEVEL, player);
+    }
+
+    // Everything WORN in a slot the kit dresses that is neither issued kit nor
+    // worth putting in a chest.
+    //
+    // The kit is the floor, and it is now the ONLY floor. White and grey gear
+    // used to survive a death on the grounds that it kept the victim able to
+    // swing back - but the kit already does that, and letting earned white gear
+    // stay produced two lasting problems. A slot the player filled with a white
+    // drop was never revisited, because the kit only ever fills an EMPTY slot,
+    // so a level 50 character could still be wearing the white bracers they
+    // picked up at 12. And the result read as neither one thing nor the other:
+    // half issued red, half scavenged white, with no way to tell at a glance
+    // which half a death would take.
+    //
+    // Burned rather than dropped. A corpse's white gear is not a prize, and a
+    // chest full of it would bury the one green piece that is.
+    //
+    // ONLY kKitSlots, which is the whole point: destroy nothing the kit cannot
+    // put back. The death rule's own loop walks all nineteen worn slots because
+    // green and better go to a chest and are meant to be lost - but neck,
+    // rings, trinkets, shirt and tabard have no kit piece behind them, so
+    // burning a white one there would empty the slot for good.
+    //
+    // Positions are collected before anything is destroyed, matching
+    // DestroyLooseFieldKit. Equipment slots are fixed and do not shift the way
+    // a bag's do, but DestroyItem fans out into the set-bonus evaluators, and
+    // those read the very slots being walked.
+    uint32 BurnWornFloorGear(Player* player)
+    {
+        if (!s_enabled || !player || !KitMayDress(player))
+            return 0;
+
+        std::vector<uint8> burning;
+        for (uint8 slot : kKitSlots)
+        {
+            Item const* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+            ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
+            if (!proto)
+                continue;
+            // The kit's own duplicates are asked about directly rather than by
+            // colour: they read artifact quality, so a quality test alone would
+            // put the floor itself on the fire.
+            if (IsFieldKitDuplicate(proto->ItemId) || proto->Quality >= ITEM_QUALITY_UNCOMMON)
+                continue;
+            burning.push_back(slot);
+        }
+
+        for (uint8 slot : burning)
+            player->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+
+        return uint32(burning.size());
+    }
+
     // Fills every empty kit slot with the best plain white piece the wearer's
     // level and proficiency allow. Runs on resurrection (dead players cannot
     // equip anything) and at login, so nobody stays bare.
@@ -1082,79 +1153,105 @@ namespace BarracksHardcore
 
             for (uint32 invType : InventoryTypesForSlot(slot, player))
             {
-                std::vector<uint32> const* ids = nullptr;
+                // Greys below the threshold, whites from there on, and white
+                // as the safety net underneath both.
+                //
+                // The fallback used to fire only when the grey cache held NO
+                // list at all for this inventory type. That is a different
+                // question from the one it meant to ask, and the gap is where
+                // a whole character falls through: the grey pool holds nine
+                // daggers and not one of them below required level 2, so a
+                // brand new character asked for a weapon, was handed the grey
+                // list, found nothing in it it could use, and walked out of the
+                // starting zone bare-handed. Grey helms start at 25 and grey
+                // shoulders at 15, so those two slots were empty for everybody
+                // below level 15 as well.
+                //
+                // Falling through when the grey list yields nothing AT THIS
+                // LEVEL is what "no grey to offer" was always meant to mean.
+                std::vector<std::vector<uint32> const*> tiers;
                 {
                     std::lock_guard<std::mutex> guard(s_whiteKitLock);
-                    // Greys below the threshold, whites from there on. Falls
-                    // back to white when a slot has no grey to offer at all -
-                    // an empty slot helps nobody, and plenty of slots simply
-                    // have no poor-quality item in the game.
-                    auto const& cache = level < s_greyKitMaxLevel ? s_greyKitByInvType : s_whiteKitByInvType;
-                    auto itr = cache.find(invType);
-                    if (itr == cache.end() || itr->second.empty())
+                    auto offer = [&tiers](std::unordered_map<uint32, std::vector<uint32>> const& cache,
+                        uint32 wanted)
                     {
-                        itr = s_whiteKitByInvType.find(invType);
-                        if (itr == s_whiteKitByInvType.end())
-                            continue;
-                    }
-                    ids = &itr->second; // immutable once built
+                        auto itr = cache.find(wanted);
+                        if (itr != cache.end() && !itr->second.empty())
+                            tiers.push_back(&itr->second); // immutable once built
+                    };
+                    if (level < s_greyKitMaxLevel)
+                        offer(s_greyKitByInvType, invType);
+                    offer(s_whiteKitByInvType, invType);
                 }
 
-                // The list is sorted by required level descending: the first
-                // usable entry is already the best this slot can offer, so
-                // the scan stops there.
-                for (uint32 itemId : *ids)
+                for (std::vector<uint32> const* ids : tiers)
                 {
-                    ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
-                    if (!proto || proto->RequiredLevel > kitLevel)
-                        continue;
+                    // Whether this tier had anything wearable at all. A tier that
+                    // produced a candidate settles the inventory type even when
+                    // that candidate lost to one from another type - only a tier
+                    // with nothing to give falls through to the next.
+                    bool tierOffered = false;
 
-                    // A bow is no use to somebody carrying bullets. Skipping here
-                    // rather than after the scan matters: the list is sorted and
-                    // the loop stops on its first usable entry, so a mismatched
-                    // weapon that got that far would take the slot outright.
-                    if (!RangedWeaponSuitsAmmo(proto, ammoSubclass))
-                        continue;
-
-                    // Armor proficiency, decided explicitly. Cloaks are cloth
-                    // for every class; shields and relics (libram, idol,
-                    // totem) are their own subclasses and are gated by the
-                    // proficiency check below instead.
-                    if (proto->Class == ITEM_CLASS_ARMOR &&
-                        proto->InventoryType != INVTYPE_CLOAK &&
-                        proto->InventoryType != INVTYPE_SHIELD &&
-                        proto->InventoryType != INVTYPE_RELIC &&
-                        proto->SubClass != wantedArmorSubclass)
-                        continue;
-
-                    if (player->CanUseItem(proto) != EQUIP_ERR_OK)
-                        continue;
-
-                    // PROFICIENCY. CanUseItem(ItemTemplate const*) does NOT
-                    // check it - the gate lives in the CanUseItem(Item*)
-                    // overload, reached only through CanEquipItem. Without
-                    // this a priest is handed the highest-level two-handed
-                    // axe in the game: StoreNewItemInBestSlots quietly drops
-                    // it in the bags, reports success, and the empty slot
-                    // earns another copy on every single resurrection.
-                    if (uint32 const itemSkill = proto->GetSkill())
-                        if (!player->GetSkillValue(itemSkill))
+                    // The list is sorted by required level descending: the first
+                    // usable entry is already the best this slot can offer, so
+                    // the scan stops there.
+                    for (uint32 itemId : *ids)
+                    {
+                        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
+                        if (!proto || proto->RequiredLevel > kitLevel)
                             continue;
 
-                    // The authority on whether this can actually be worn.
-                    uint16 equipDest = 0;
-                    if (player->CanEquipNewItem(NULL_SLOT, equipDest, itemId, false) != EQUIP_ERR_OK)
-                        continue;
+                        // A bow is no use to somebody carrying bullets. Skipping here
+                        // rather than after the scan matters: the list is sorted and
+                        // the loop stops on its first usable entry, so a mismatched
+                        // weapon that got that far would take the slot outright.
+                        if (!RangedWeaponSuitsAmmo(proto, ammoSubclass))
+                            continue;
 
-                    // Closest to the wearer's own level, then the better item.
-                    if (proto->RequiredLevel > bestRequiredLevel ||
-                        (proto->RequiredLevel == bestRequiredLevel && proto->ItemLevel > bestItemLevel))
-                    {
-                        bestItemId = itemId;
-                        bestRequiredLevel = proto->RequiredLevel;
-                        bestItemLevel = proto->ItemLevel;
+                        // Armor proficiency, decided explicitly. Cloaks are cloth
+                        // for every class; shields and relics (libram, idol,
+                        // totem) are their own subclasses and are gated by the
+                        // proficiency check below instead.
+                        if (proto->Class == ITEM_CLASS_ARMOR &&
+                            proto->InventoryType != INVTYPE_CLOAK &&
+                            proto->InventoryType != INVTYPE_SHIELD &&
+                            proto->InventoryType != INVTYPE_RELIC &&
+                            proto->SubClass != wantedArmorSubclass)
+                            continue;
+
+                        if (player->CanUseItem(proto) != EQUIP_ERR_OK)
+                            continue;
+
+                        // PROFICIENCY. CanUseItem(ItemTemplate const*) does NOT
+                        // check it - the gate lives in the CanUseItem(Item*)
+                        // overload, reached only through CanEquipItem. Without
+                        // this a priest is handed the highest-level two-handed
+                        // axe in the game: StoreNewItemInBestSlots quietly drops
+                        // it in the bags, reports success, and the empty slot
+                        // earns another copy on every single resurrection.
+                        if (uint32 const itemSkill = proto->GetSkill())
+                            if (!player->GetSkillValue(itemSkill))
+                                continue;
+
+                        // The authority on whether this can actually be worn.
+                        uint16 equipDest = 0;
+                        if (player->CanEquipNewItem(NULL_SLOT, equipDest, itemId, false) != EQUIP_ERR_OK)
+                            continue;
+
+                        // Closest to the wearer's own level, then the better item.
+                        if (proto->RequiredLevel > bestRequiredLevel ||
+                            (proto->RequiredLevel == bestRequiredLevel && proto->ItemLevel > bestItemLevel))
+                        {
+                            bestItemId = itemId;
+                            bestRequiredLevel = proto->RequiredLevel;
+                            bestItemLevel = proto->ItemLevel;
+                        }
+                        tierOffered = true;
+                        break;
                     }
-                    break;
+
+                    if (tierOffered)
+                        break;
                 }
             }
 
@@ -1300,15 +1397,16 @@ namespace BarracksHardcore
         uint32 const bountyGold = Bounty::TakePendingChestGold(victim);
         chest.AddMoney(bountyGold);
 
-        if (droppedItems.empty() && !bountyGold)
-            return;
-
-        // The chest is only summoned when something actually reached it - an
-        // empty one would be a cruel joke - but the loss happens either way.
-        // Bailing out here on an empty chest meant a victim wearing a single
+        // The chest is only summoned when something could actually be IN it -
+        // an empty one would be a cruel joke - but the loss happens either way.
+        // Bailing out early on an empty chest meant a victim wearing a single
         // green piece kept it half the time, and the deflationary half of the
         // rule quietly never ran.
-        bool const chestSpawned = chest.Summon() != nullptr;
+        //
+        // White and grey never reach the chest, so they cannot be part of this
+        // decision: a victim wearing nothing but the floor still loses it, and
+        // still leaves no chest behind.
+        bool const chestSpawned = (!droppedItems.empty() || bountyGold) && chest.Summon() != nullptr;
 
         // The PvP-only fleet pays out but is never stripped.
         //
@@ -1326,9 +1424,22 @@ namespace BarracksHardcore
             for (CustomLootChests::ItemLocation const& dropped : droppedItems)
                 victim->DestroyItem(dropped.Bag, dropped.Slot, true);
 
-        TC_LOG_INFO("playerbots.hardcore", "{} {} {} worn items and {}c bounty at death; chest spawned: {} ({}% of gear reaches it).",
+        // ...and the floor burns with it, so what stands back up is wearing
+        // issued kit and nothing else. Same exemption: a PvP-only bot keeps
+        // everything, for the same reason it keeps its greens.
+        //
+        // After the chest, not before, so nothing here can affect what reached
+        // it. The kit itself is untouched - it is re-issued on resurrection
+        // rather than rebought, and a bare corpse run is the same one a death
+        // has always cost.
+        uint32 const burned = keepsGear ? 0u : BurnWornFloorGear(victim);
+
+        if (droppedItems.empty() && !burned && !bountyGold)
+            return;
+
+        TC_LOG_INFO("playerbots.hardcore", "{} {} {} worn items, burned {} of floor gear and {}c bounty at death; chest spawned: {} ({}% of gear reaches it).",
             victim->GetName(), keepsGear ? "copied" : "lost", uint32(droppedItems.size()),
-            bountyGold, uint32(chestSpawned), s_dropChancePercent);
+            burned, bountyGold, uint32(chestSpawned), s_dropChancePercent);
     }
 }
 
@@ -1339,7 +1450,7 @@ class barracks_hardcore_player : public PlayerScript
 public:
     barracks_hardcore_player() : PlayerScript("barracks_hardcore_player") {}
 
-    void OnLogin(Player* player, bool /*firstLogin*/) override
+    void OnLogin(Player* player, bool firstLogin) override
     {
         if (!s_enabled)
             return;
@@ -1352,6 +1463,26 @@ public:
         }
         ApplyFfaState(player);
         ApplyWarModeAura(player);
+
+        // A new character starts in issued kit rather than in the outfit
+        // character creation handed it.
+        //
+        // Done here and not in OnPlayerCreate: that hook fires from inside the
+        // create transaction's completion callback, on a Player that is not in
+        // the world and is about to be destroyed, so equipping through it would
+        // mean a second save racing the first. AT_LOGIN_FIRST is consumed by
+        // HandlePlayerLogin before this runs and OnPlayerLogin is its last
+        // statement, so by here the character is fully in the world and this is
+        // the ordinary equip path.
+        //
+        // The starting outfit is white and grey by definition, so the same rule
+        // that runs at every death does the whole job: burn the floor, then let
+        // the kit dress the slots it emptied. A character therefore meets the
+        // death rule for the first time before it has ever been in danger, and
+        // sees exactly the gear it will keep seeing.
+        if (firstLogin)
+            BurnWornFloorGear(player);
+
         // Anyone already stripped bare (deaths taken before the kit existed)
         // is dressed on the way in.
         IssueWhiteFieldKit(player);
