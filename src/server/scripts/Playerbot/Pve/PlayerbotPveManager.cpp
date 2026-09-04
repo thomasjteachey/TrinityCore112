@@ -12880,6 +12880,13 @@ namespace playerbot
             // The gold in it is discarded rather than banked (see the collector)
             // - these bots have no use for money - but the rows still have to go
             // somewhere, and nothing else will ever clear them.
+            // They hold no coin. Enforced every tick rather than zeroed once,
+            // because a character's money lives in memory while it is online and
+            // the next periodic save writes it straight back over anything set
+            // in the database underneath a running server.
+            if (player->GetMoney())
+                player->SetMoney(0);
+
             PveBotState& pvpState = LockedGetOrCreate(g_PveBotStateByGuid, player->GetGUID().GetRawValue());
             PveTimePoint const mailNow = PveClock::now();
             if (mailNow >= pvpState.nextMailCheckAt)
