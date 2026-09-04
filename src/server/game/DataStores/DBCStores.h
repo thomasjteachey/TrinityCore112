@@ -59,6 +59,10 @@ TC_GAME_API bool IsTotemCategoryCompatiableWith(uint32 itemTotemCategoryId, uint
 
 TC_GAME_API void Zone2MapCoordinates(float &x, float &y, uint32 zone);
 TC_GAME_API void Map2ZoneCoordinates(float &x, float &y, uint32 zone);
+// As above, but returns false when the zone has no map instead of silently
+// leaving world coordinates in the out-params. Use this one for positions that
+// are not already known to be mappable.
+TC_GAME_API bool TryMap2ZoneCoordinates(float &x, float &y, uint32 zone);
 
 typedef std::map<uint32/*pair32(map, diff)*/, MapDifficulty> MapDifficultyMap;
 TC_GAME_API MapDifficulty const* GetMapDifficultyData(uint32 mapId, Difficulty difficulty);

@@ -3294,6 +3294,47 @@ Centurion.Hunter.MongooseBite.ScorpidHealPerStrength = 5.0
 #                     0 - (disabled)
 ###################################################################################################
 
+###################################################################################################
+# WAR MODE VISIBILITY
+#
+#    A player with War Mode on sees the playerbot fleet. The two surfaces need
+#    completely different mechanisms, which is why they are two switches.
+#
+#    Centurion.WarMode.TrackBots
+#        Description: The MINIMAP, and it costs nothing: bots are marked with
+#                     UNIT_DYNFLAG_TRACK_UNIT in that player's copy of the unit
+#                     update - the same bit Track Humanoids sets - so the client
+#                     draws the dots itself. No addon, no position feed.
+#                     Per-observer, so nobody without War Mode is affected, and
+#                     bounded by Visibility.Distance like any other tracking.
+#                     'War Mode is on' is read as the FFA flag rather than the badge
+#                     aura, so it needs no other key set - and it means you see the
+#                     fleet where the fleet can actually fight you.
+#        Default:     1 - (enabled)
+#
+#    Centurion.WarMode.BotMap
+#    Centurion.WarMode.BotMapIntervalMs
+#    Centurion.WarMode.BotMapPerMessage
+#        Description: The WORLD map, which has no engine path. Blizzard's own party
+#                     blips are Lua, and GetPlayerMapPosition answers only for
+#                     'player', 'party1-4' and 'raid1-40' - a bot can never be asked
+#                     about locally. So the server sends bot positions already
+#                     normalised into the same 0..1 space that API returns, and the
+#                     CENTURION_BotMap addon anchors textures with Blizzard's own
+#                     arithmetic. The drawing is copied; only the data differs.
+#                     Covers the viewer's CURRENT ZONE, which is what the map shows
+#                     unless they pan away, and keeps this to a few hundred bytes
+#                     per player per interval.
+#                     Requires the addon. Without it the messages are simply ignored.
+#        Default:     1 / 2000 / 12
+#
+###################################################################################################
+
+Centurion.WarMode.TrackBots = 1
+Centurion.WarMode.BotMap = 1
+Centurion.WarMode.BotMapIntervalMs = 2000
+Centurion.WarMode.BotMapPerMessage = 12
+
 Centurion.Hardcore.Enable = 0
 Centurion.Hardcore.FullLoot.ChestGameObjectId = 0
 Centurion.Hardcore.FullLoot.ChestDespawnSeconds = 600

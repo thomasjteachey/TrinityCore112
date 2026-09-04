@@ -791,6 +791,23 @@ void Zone2MapCoordinates(float& x, float& y, uint32 zone)
     y = y*((maEntry->LocRight-maEntry->LocLeft)/100)+maEntry->LocLeft;      // client y coord from top to down
 }
 
+// Same conversion as Map2ZoneCoordinates, but says whether it happened.
+//
+// The void version returns having changed NOTHING when the zone has no
+// WorldMapArea row, leaving raw WORLD coordinates in variables the caller now
+// believes are 0..100 percentages. That is survivable for callers converting a
+// place they already know is mapped; it is not survivable for anything
+// converting arbitrary positions, which would plot a unit at 4000% across the
+// map rather than skipping it.
+bool TryMap2ZoneCoordinates(float& x, float& y, uint32 zone)
+{
+    if (!sWorldMapAreaStore.LookupEntry(zone))
+        return false;
+
+    Map2ZoneCoordinates(x, y, zone);
+    return true;
+}
+
 void Map2ZoneCoordinates(float& x, float& y, uint32 zone)
 {
     WorldMapAreaEntry const* maEntry = sWorldMapAreaStore.LookupEntry(zone);

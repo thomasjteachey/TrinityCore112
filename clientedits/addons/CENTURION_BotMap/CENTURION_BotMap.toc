@@ -1,0 +1,8 @@
+## Interface: 30300
+## Title: Centurion Bot Map
+## Notes: Shows playerbots on the world map for War Mode players, the way party members are shown.
+## Author: Centurion
+## Version: 1.0
+## DefaultState: Enabled
+
+CENTURION_BotMap.lua
