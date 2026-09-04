@@ -6317,10 +6317,22 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     bool const behindTarget = target && !target->HasInArc(static_cast<float>(M_PI), player);
     AddDecisionCandidate(candidates, hasImprovedBackstab && behindTarget && player->IsWithinMeleeRange(target) && IsSpellReady(player, 53), 20.5f,
         { "rogue backstab", "improved backstab combo point builder", 53, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, hasImprovedBackstab && !behindTarget && IsSpellReady(player, 11294), 20.2f,
-        { "rogue sinister strike", "frontal fallback builder while holding aggro", 11294, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, !hasImprovedBackstab && IsSpellReady(player, isCombatRogue ? uint32(11294) : uint32(16511)), 20.0f,
-        { isCombatRogue ? "rogue sinister strike" : "rogue hemorrhage", isCombatRogue ? "default combat combo point builder" : "default subtlety combo point builder", isCombatRogue ? uint32(11294) : uint32(16511), playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    // Hemorrhage if the rogue actually HAS it, rather than if its spec suggests
+    // it should. IsSpellReady resolves the rank chain and returns false for a
+    // spell the player never learned, so this asks the only question that
+    // matters and needs no talent guess.
+    AddDecisionCandidate(candidates, IsSpellReady(player, 16511), 20.2f,
+        { "rogue hemorrhage", "subtlety combo point builder when known", 16511, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    // And Sinister Strike as the FLOOR, for every rogue of every spec.
+    //
+    // This is what was missing. The builder used to be chosen by inference -
+    // Improved Backstab, else combat gets Sinister Strike and everyone else gets
+    // Hemorrhage - and Hemorrhage is a SUBTLETY talent. An Assassination rogue
+    // without Improved Backstab therefore matched no builder at all and stood
+    // there auto-attacking. Sinister Strike needs no talent and every rogue has
+    // it from level one, so nothing can fall through this.
+    AddDecisionCandidate(candidates, IsSpellReady(player, 11294), 20.0f,
+        { "rogue sinister strike", "universal combo point builder", 11294, playerbot::PvpClassSpellContext::TargetMode::Enemy });
 
         return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
     }
