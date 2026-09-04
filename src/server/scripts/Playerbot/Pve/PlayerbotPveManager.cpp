@@ -12169,6 +12169,60 @@ namespace playerbot
         return AnyRealPersonWithin(of, yards);
     }
 
+    // World thread. Walks the managed roster once and copies out the few fields
+    // the GM stats addon draws, so the feed never has to hold the state lock or
+    // touch a Player while the map thread is running.
+    void PveManager::CollectBotStats(std::vector<PveManager::BotStatsRow>& out)
+    {
+        out.clear();
+
+        PveTimePoint const now = PveClock::now();
+        std::vector<uint64> guids;
+        {
+            std::lock_guard<std::mutex> guard(playerbot::SharedBotStateStructureLock());
+            guids.reserve(g_PveBotStateByGuid.size());
+            for (auto const& entry : g_PveBotStateByGuid)
+                guids.push_back(entry.first);
+        }
+
+        out.reserve(guids.size());
+        for (uint64 rawGuid : guids)
+        {
+            Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(rawGuid));
+            if (!bot || !bot->IsInWorld() || !playerbot::IsManagedRandomBot(bot))
+                continue;
+
+            BotStatsRow row;
+            row.ZoneId = bot->GetZoneId();
+            row.MapId = bot->GetMapId();
+            row.MoneyCopper = bot->GetMoney();
+            row.Level = bot->GetLevel();
+            row.Class = bot->GetClass();
+            row.Aggression = GetBotAggression(bot);
+            row.InCombat = bot->IsInCombat();
+            row.Dead = !bot->IsAlive();
+            row.PvpOnly = PveManager::IsPvpOnlyBot(bot);
+
+            {
+                std::lock_guard<std::mutex> guard(playerbot::SharedBotStateStructureLock());
+                auto const itr = g_PveBotStateByGuid.find(rawGuid);
+                if (itr != g_PveBotStateByGuid.end())
+                {
+                    PveBotState const& state = itr->second;
+                    row.Travelling = state.journeyActive;
+                    if (state.timidUntil > now)
+                    {
+                        auto const left = std::chrono::duration_cast<std::chrono::seconds>(
+                            state.timidUntil - now).count();
+                        row.TimidSeconds = uint16(std::min<int64>(left, 65535));
+                    }
+                }
+            }
+
+            out.push_back(row);
+        }
+    }
+
     PveConfig const& PveManager::GetConfig()
     {
         return g_PveConfig;

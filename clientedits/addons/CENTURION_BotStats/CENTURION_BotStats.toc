@@ -1,0 +1,8 @@
+## Interface: 30300
+## Title: Centurion Bot Stats
+## Notes: GM-only live readout of the playerbot fleet - population by zone and level, aggression, timidity, gold and auctions.
+## Author: Centurion
+## Version: 1.0
+## DefaultState: Enabled
+
+CENTURION_BotStats.lua

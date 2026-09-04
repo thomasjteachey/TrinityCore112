@@ -319,6 +319,27 @@ public:
     // bot's death chest that the remote chest looting asks about a chest.
     static bool AnyPersonWithin(WorldObject const* of, float yards);
 
+    // One row per managed bot currently online, for the GM stats addon.
+    //
+    // The manager owns the per-bot state and its lock, so it does the reading;
+    // callers get a flat snapshot they can aggregate however they like without
+    // touching the live map.
+    struct BotStatsRow
+    {
+        uint32 ZoneId = 0;
+        uint32 MapId = 0;
+        uint32 MoneyCopper = 0;
+        uint8 Level = 0;
+        uint8 Class = 0;
+        uint8 Aggression = 0;
+        uint16 TimidSeconds = 0;   // 0 when not timid
+        bool InCombat = false;
+        bool Travelling = false;
+        bool PvpOnly = false;
+        bool Dead = false;
+    };
+    static void CollectBotStats(std::vector<BotStatsRow>& out);
+
     // Config-gated trainer-spell catch-up whenever a managed bot levels.
     static void OnManagedBotLevelChanged(Player* player, uint8 oldLevel);
 

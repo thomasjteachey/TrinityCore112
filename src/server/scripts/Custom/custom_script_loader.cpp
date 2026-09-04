@@ -31,6 +31,7 @@ void AddSC_custom_diremaul_beads();
 void AddSC_custom_barracks_hardcore();
 void AddSC_custom_bounty();
 void AddSC_custom_bot_map_feed();
+void AddSC_centurion_bot_stats_feed();
 void AddSC_custom_gurubashi_arena();
 void AddSC_custom_depleted_mark_exchange();
 void AddSC_custom_pvpve_dungeon();
@@ -75,6 +76,7 @@ void AddCustomScripts()
     AddSC_custom_barracks_hardcore();
     AddSC_custom_bounty();
     AddSC_custom_bot_map_feed();
+    AddSC_centurion_bot_stats_feed();
     AddSC_custom_gurubashi_arena();
     AddSC_custom_depleted_mark_exchange();
     AddSC_custom_pvpve_dungeon();
