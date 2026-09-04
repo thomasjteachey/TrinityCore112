@@ -1007,6 +1007,10 @@ end
 
 local talentIcons = {}
 local activeTree = 0
+-- Filled in further down, where the buttons are built, but declared here beside
+-- the rest of the talent state: DrawTalents closes over it and is defined
+-- before that point.
+local treeButtons = {}
 
 for i = 1, TALENT_COLS * TALENT_ROWS do
 	local t = CreateFrame("Button", nil, talentPage)
