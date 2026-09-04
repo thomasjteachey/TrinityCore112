@@ -85,6 +85,9 @@ namespace BarracksHardcore
     uint32 s_dropChancePercent = 50;
     uint32 s_minZoneLevel = 20;
     uint32 s_rewardMultiplier = 2;
+    // How close a real person must be for a BOT's death to pay out gear.
+    // 0 means always, which is what this was before.
+    float s_botLootWitnessYards = 200.0f;
     // Visible badge for the war-mode opt-in, so a player can tell at a glance
     // whether their flag is armed. 0 disables it. Configurable because no
     // stock 3.3.5 spell is both named for this and free of side effects -
@@ -140,6 +143,8 @@ namespace BarracksHardcore
         s_kitBotLevelOffset = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Hardcore.FieldKit.BotLevelOffset", 5), 0, 60));
         s_kitStaleLevels = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Hardcore.FieldKit.StaleLevels", 5), 1, 60));
         s_movementDivergenceYards = std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Hardcore.Diagnostics.MovementDivergenceYards", 6.0f));
+        s_botLootWitnessYards = std::max(0.0f,
+            sConfigMgr->GetFloatDefault("Centurion.Hardcore.BotLootWitnessYards", 200.0f));
         s_playerKillXpBubbles = std::clamp(
             sConfigMgr->GetFloatDefault("Centurion.Hardcore.PlayerKill.ExperienceBubbles", 2.0f), 0.0f, 20.0f);
         s_playerKillDiminishSeconds = uint32(std::max(0,
@@ -1370,6 +1375,24 @@ namespace BarracksHardcore
         // the white/grey burn (BurnWornFloorGear runs from this function and
         // nowhere else on the death path), and a bot's carried gear below.
         if (IsInstancedContent(victim))
+            return;
+
+        // A bot only pays out where somebody could actually collect. The fleet
+        // dies to the world about a hundred times more often than to a person -
+        // 8197 creature deaths against 85 player kills in one log window - and
+        // every one of those was quietly deleting a bot's gear into a chest
+        // nobody was ever going to walk to. The corpse run gives up after the
+        // second death, so a bot that gets in over its head never gets it back:
+        // that is how a level 60 ends up grinding Eastern Plaguelands in white
+        // kit nobody took off him.
+        //
+        // Same witness test the remote chest looting uses, so "is anyone
+        // actually here" has one answer on this realm rather than two. Ghosts
+        // count - somebody running their corpse back is still a person who came
+        // for this - and bots do not, or the fleet would witness itself.
+        // 0 restores the old behaviour: a bot always pays out.
+        if (IsPlayerbot(victim) && s_botLootWitnessYards > 0.0f &&
+            !playerbot::PveManager::AnyPersonWithin(victim, s_botLootWitnessYards))
             return;
 
         // The Battle Ring pays out through its own chest and nothing else. The

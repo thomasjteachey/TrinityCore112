@@ -3511,7 +3511,7 @@ namespace
     // DEAD PLAYERS COUNT. A ghost is still a person looking at the world, and
     // running a corpse back past a chest that empties itself is exactly the
     // moment somebody notices. Aliveness is deliberately not tested here.
-    bool AnyPersonWithin(WorldObject const* of, float yards)
+    bool AnyRealPersonWithin(WorldObject const* of, float yards)
     {
         Map* map = of ? of->FindMap() : nullptr;
         if (!map)
@@ -3546,7 +3546,7 @@ namespace
         if (!bot->IsWithinDistInMap(go, RemoteChestRadius()))
             return false;
 
-        return !AnyPersonWithin(go, RemoteChestPrivacyYards());
+        return !AnyRealPersonWithin(go, RemoteChestPrivacyYards());
     }
 
     // World thread. Hands every bot standing near an unwatched chest a loot
@@ -12132,6 +12132,11 @@ namespace playerbot
             return true;
 
         return HumanMayBeHunted(human->GetGUID());
+    }
+
+    bool PveManager::AnyPersonWithin(WorldObject const* of, float yards)
+    {
+        return AnyRealPersonWithin(of, yards);
     }
 
     PveConfig const& PveManager::GetConfig()

@@ -25,6 +25,7 @@
 #include <vector>
 
 class Player;
+class WorldObject;
 
 namespace playerbot
 {
@@ -309,6 +310,14 @@ public:
     // that runs outside the manager's engagement, and it must ask the same
     // question rather than keep a second answer.
     static bool MayProactivelyEngage(Player const* bot, Player const* human);
+
+    // Whether a real person is close enough to see something happen at this
+    // spot. Bots do not count as witnesses, GMs do not either, and DEAD players
+    // DO - a ghost is still somebody looking at the world.
+    //
+    // Exported because the hardcore ruleset asks the same question about a
+    // bot's death chest that the remote chest looting asks about a chest.
+    static bool AnyPersonWithin(WorldObject const* of, float yards);
 
     // Config-gated trainer-spell catch-up whenever a managed bot levels.
     static void OnManagedBotLevelChanged(Player* player, uint8 oldLevel);
