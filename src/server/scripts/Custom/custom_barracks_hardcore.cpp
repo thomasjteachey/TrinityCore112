@@ -42,6 +42,7 @@
 #include "SpellAuraEffects.h"
 #include "SpellAuras.h"
 #include "Chat.h"
+#include "CharacterCache.h"   // offline party members are still party members
 #include "MotionMaster.h"
 #include "ObjectAccessor.h"
 #include "Creature.h"
@@ -345,6 +346,66 @@ namespace BarracksHardcore
             return false;
 
         return IsWarModeOptedIn(left) != IsWarModeOptedIn(right);
+    }
+
+    // Whether this party member's War Mode disagrees with the given player's.
+    //
+    // Answered from the GUID rather than a Player*, so an OFFLINE member counts:
+    // they are still in the party and still coming back, and a rule that only
+    // noticed whoever happened to be logged in could be dodged by waiting for a
+    // friend to step away. IsOptedIn is a guid-keyed set loaded from
+    // character_ffa_optin, so it answers for them either way.
+    //
+    // Bots are exempt, exactly as in WarModeBlocksGrouping: the companion system
+    // puts them in people's parties, and splitting a party over a setting a bot
+    // does not have would break every companion group on the realm.
+    bool MemberDisagreesOnWarMode(Player const* player, ObjectGuid memberGuid)
+    {
+        uint32 const accountId = sCharacterCache->GetCharacterAccountIdByGuid(memberGuid);
+        if (!accountId || IsBotAccount(accountId))
+            return false;
+
+        return IsOptedIn(memberGuid.GetCounter()) != IsWarModeOptedIn(player);
+    }
+
+    // Changing your flag takes you out of a party that does not share it.
+    //
+    // OnCanGroupInvite refuses to BUILD a split party, but it only guards the
+    // moment of joining: a legitimate party becomes illegal the instant somebody
+    // flips their flag at the flagger. Without this the flagger is a way AROUND
+    // the grouping rule rather than the thing that enforces it.
+    void LeavePartyIfWarModeSplit(Player* player)
+    {
+        if (!s_enabled || !player)
+            return;
+
+        Group const* group = player->GetGroup();
+        if (!group)
+            return;
+
+        bool split = false;
+        for (Group::MemberSlot const& slot : group->GetMemberSlots())
+        {
+            if (slot.guid == player->GetGUID())
+                continue;
+
+            if (MemberDisagreesOnWarMode(player, slot.guid))
+            {
+                split = true;
+                break;
+            }
+        }
+
+        if (!split)
+            return;
+
+        // Said before the removal, so it arrives with the party frame still up
+        // and reads as a consequence rather than a mystery.
+        ChatHandler(player->GetSession()).PSendSysMessage(
+            "You have left your party: War Mode is now %s and they do not share it.",
+            IsWarModeOptedIn(player) ? "on" : "off");
+
+        player->RemoveFromGroup();
     }
 
     // The war-mode badge. Tracks the OPT-IN rather than the armed state on
@@ -1664,6 +1725,10 @@ public:
             }
             ApplyFfaState(player);
             ApplyWarModeAura(player);
+
+            // Last, so the badge and flag are already settled and the message
+            // describes the state the player is actually in.
+            LeavePartyIfWarModeSplit(player);
             return true;
         }
     };
