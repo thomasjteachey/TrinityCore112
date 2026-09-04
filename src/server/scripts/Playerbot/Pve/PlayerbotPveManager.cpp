@@ -441,6 +441,7 @@ namespace
     void MoveTowardThrottled(Player* bot, Position const& destination);
     WalkPathResult CheckWalkPath(Player* bot, Position const& destination);
     void ProcessPendingLootExecutions();
+    void QueueUnwatchedChests();
     void GrantGatherSkillCredit(Player* bot, GameObject* go);
     void MaybeQueueOverBandRebirth(Player* bot, PveBotState& state);
     void ClearResurrectionSickness(Player* bot);
@@ -3443,6 +3444,117 @@ namespace
         return false;
     }
 
+    // How far a bot will reach for a chest nobody is watching, and how far away
+    // the nearest person has to be for "nobody is watching" to hold.
+    float RemoteChestRadius()
+    {
+        static float const yards = std::max(0.0f,
+            sConfigMgr->GetFloatDefault("Playerbot.Pve.RemoteChestRadius", 40.0f));
+        return yards;
+    }
+
+    float RemoteChestPrivacyYards()
+    {
+        static float const yards = std::max(0.0f,
+            sConfigMgr->GetFloatDefault("Playerbot.Pve.RemoteChestPrivacyYards", 200.0f));
+        return yards;
+    }
+
+    // Whether a real person is close enough to see this happen.
+    //
+    // The fleet emptying a chest from forty yards with no cast bar is obviously
+    // not something a player does, so it only happens where no player can watch
+    // it. Bots do not count as witnesses - they are the ones doing it.
+    //
+    // DEAD PLAYERS COUNT. A ghost is still a person looking at the world, and
+    // running a corpse back past a chest that empties itself is exactly the
+    // moment somebody notices. Aliveness is deliberately not tested here.
+    bool AnyPersonWithin(WorldObject const* of, float yards)
+    {
+        Map* map = of ? of->FindMap() : nullptr;
+        if (!map)
+            return false;
+
+        for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+        {
+            Player* candidate = itr->GetSource();
+            if (!candidate || !candidate->IsInWorld() || candidate->IsGameMaster())
+                continue;
+            if (playerbot::IsManagedRandomBot(candidate))
+                continue;
+            if (of->IsWithinDistInMap(candidate, yards))
+                return true;
+        }
+        return false;
+    }
+
+    // A chest the bot may empty where it stands, without walking onto it and
+    // without the Opening channel.
+    bool MayLootChestRemotely(Player* bot, GameObject* go)
+    {
+        if (!bot || !go || RemoteChestRadius() <= 0.0f)
+            return false;
+
+        if (go->GetGoType() != GAMEOBJECT_TYPE_CHEST)
+            return false;
+
+        if (!go->isSpawned() || go->getLootState() == GO_JUST_DEACTIVATED)
+            return false;
+
+        if (!bot->IsWithinDistInMap(go, RemoteChestRadius()))
+            return false;
+
+        return !AnyPersonWithin(go, RemoteChestPrivacyYards());
+    }
+
+    // World thread. Hands every bot standing near an unwatched chest a loot
+    // session for it, so the ordinary executor below empties it.
+    //
+    // Queued rather than looted here so there is exactly one place that knows
+    // how to take gold, split it for a group, and store the slots.
+    void QueueUnwatchedChests()
+    {
+        if (RemoteChestRadius() <= 0.0f)
+            return;
+
+        std::vector<Player*> bots;
+        {
+            std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
+            for (auto const& pair : ObjectAccessor::GetPlayers())
+            {
+                Player* bot = pair.second;
+                if (bot && bot->IsInWorld() && bot->IsAlive() && !bot->IsInCombat() &&
+                    playerbot::IsManagedRandomBot(bot) && CountFreeBagSlots(bot) >= 2)
+                    bots.push_back(bot);
+            }
+        }
+
+        for (Player* bot : bots)
+        {
+            {
+                std::lock_guard<std::mutex> guard(g_PvePendingLock);
+                if (g_PendingLootExecutions.count(bot->GetGUID().GetRawValue()))
+                    continue;   // already has a loot session queued this tick
+            }
+
+            std::vector<GameObject*> nearby;
+            Trinity::GameObjectInRangeCheck check(bot->GetPositionX(), bot->GetPositionY(),
+                bot->GetPositionZ(), RemoteChestRadius());
+            Trinity::GameObjectListSearcher<Trinity::GameObjectInRangeCheck> searcher(bot, nearby, check);
+            Cell::VisitGridObjects(bot, searcher, RemoteChestRadius());
+
+            for (GameObject* go : nearby)
+            {
+                if (!MayLootChestRemotely(bot, go))
+                    continue;
+
+                std::lock_guard<std::mutex> guard(g_PvePendingLock);
+                g_PendingLootExecutions[bot->GetGUID().GetRawValue()] = go->GetGUID();
+                break;   // one chest per bot per pass
+            }
+        }
+    }
+
     // World thread. Opens the loot session, takes gold (group-split when the
     // kill was group-tagged), stores every slot and releases.
     void ProcessPendingLootExecutions()
@@ -3483,7 +3595,11 @@ namespace
                 loot = &lootCorpse->loot;
             }
 
-            if (!bot->IsWithinDistInMap(lootObject, INTERACTION_DISTANCE + 2.0f))
+            // Arm's length, unless this is a chest nobody can see being opened -
+            // then the bot takes it from where it stands, with no walk and no
+            // Opening channel. QueueUnwatchedChests is what puts those here.
+            if (!bot->IsWithinDistInMap(lootObject, INTERACTION_DISTANCE + 2.0f) &&
+                !MayLootChestRemotely(bot, lootGameObject))
                 continue;
 
             // Never OPEN a world gameobject the bot has no room to empty.
@@ -11994,6 +12110,9 @@ namespace playerbot
 
         ProcessPendingGroupInviteAccepts();
         ProcessPendingSummons();
+        // Chests nobody is watching are emptied where the bot stands.
+        // Before the executor, so a chest queued this tick is taken this tick.
+        QueueUnwatchedChests();
         ProcessPendingLootExecutions();
         ProcessPendingMailCollections();
         if (g_PveConfig.auctionBuyEnabled)
