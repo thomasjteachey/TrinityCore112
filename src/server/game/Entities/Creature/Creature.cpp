@@ -40,6 +40,7 @@
 #include <vector>
 #include "Formulas.h"
 #include "GameEventMgr.h"
+#include "Configuration/Config.h"   // GetAttackDistance reads the bounty pursuit rate
 #include "GameTime.h"
 #include "GossipDef.h"
 #include "GridNotifiersImpl.h"
@@ -2608,6 +2609,30 @@ float Creature::GetAttackDistance(Unit const* player) const
     // The following code is used for blizzlike behaivior such as skippable bosses
     if (GetLevel() > expansionMaxLevel)
         aggroRadius = baseAggroDistance + float(expansionMaxLevel - player->GetLevel());
+
+    // A playerbot on its way to collect a bounty is not sightseeing.
+    //
+    // Creature aggro range shrinks linearly with the size of the bounty it was
+    // sent after, so a hunter dispatched at fifty stacks walks past most of the
+    // wildlife instead of being pulled into three fights on the way and arriving
+    // at half health - or never arriving at all, which is what a relentless
+    // dispatcher makes very visible.
+    //
+    // Applied BEFORE the range clamps on purpose: the reduction should be able
+    // to take the radius below the ordinary 5 yard floor, because the whole
+    // point at the top of the scale is to be left alone.
+    // The parameter is a Unit: this only ever applies to an actual player.
+    Player const* pursuer = player->ToPlayer();
+    if (uint32 const pursuit = pursuer ? pursuer->GetBountyPursuitStacks() : 0u)
+    {
+        static float const reduction = std::clamp(
+            sConfigMgr->GetFloatDefault("Centurion.Bounty.PursuitAggroReduction", 0.75f), 0.0f, 1.0f);
+        static uint32 const maxStacks = uint32(std::max(1,
+            sConfigMgr->GetIntDefault("Centurion.Bounty.MaxStacks", 50)));
+
+        float const fraction = std::min(1.0f, float(pursuit) / float(maxStacks));
+        return aggroRadius * aggroRate * (1.0f - reduction * fraction);
+    }
 
     // Make sure that we wont go over the total range limits
     if (aggroRadius > maxRadius)

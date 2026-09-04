@@ -23915,6 +23915,20 @@ void Player::InitPvP()
 // That failure inverted the guard built on top of it - the safe area is
 // "Stranglethorn and not the ring", so a ring that never matched made the whole
 // zone safe and FFA never armed inside the ropes.
+void Player::SetBountyPursuit(uint32 stacks, uint32 durationMs)
+{
+    m_bountyPursuitStacks = stacks;
+    m_bountyPursuitUntilMs = stacks ? GameTime::GetGameTimeMS() + durationMs : 0;
+}
+
+uint32 Player::GetBountyPursuitStacks() const
+{
+    if (!m_bountyPursuitUntilMs || GameTime::GetGameTimeMS() >= m_bountyPursuitUntilMs)
+        return 0;
+
+    return m_bountyPursuitStacks;
+}
+
 bool Player::IsInGurubashiRingArea(uint32 zoneId, uint32 areaId) const
 {
     return GetMapId() == 0 && zoneId == 33 && areaId == 2177;

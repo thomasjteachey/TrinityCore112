@@ -3542,6 +3542,25 @@ Centurion.Bounty.PvpBotStacks = 50
 #
 Centurion.Bounty.MaxHuntersOnTarget = 6
 
+#
+#    Centurion.Bounty.PursuitAggroReduction
+#        Description: How much quieter the world is for a bot on its way to
+#                     collect a bounty. Creature aggro range is multiplied by
+#                     (1 - this * stacks/MaxStacks), so it falls off linearly
+#                     with the size of the bounty and is unchanged at zero.
+#                     At the default and a full bounty a hunter is noticed at a
+#                     quarter of the usual distance, which is what lets it
+#                     actually arrive instead of being pulled into three fights
+#                     on the way and turning up at half health.
+#                     Applied before the ordinary 5 yard aggro floor, because at
+#                     the top of the scale the point is to be left alone.
+#                     Only ever affects a bot the bounty dispatcher has just
+#                     sent, and only for as long as the trip should take.
+#        Default:     0.75
+#                     0 - (no reduction; the world notices them normally)
+#
+Centurion.Bounty.PursuitAggroReduction = 0.75
+
 Centurion.Bounty.GuardStacks = 30
 Centurion.Bounty.GuardCreatureId = 900200
 Centurion.Bounty.GuardCount = 2

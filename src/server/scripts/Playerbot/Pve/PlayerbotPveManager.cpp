@@ -7913,6 +7913,12 @@ namespace
             if (!chosen)
                 continue;
 
+            // Leave it alone on the way. The window covers the teleport plus the
+            // walk in from 210 yards with room to spare, and lapses by itself
+            // afterwards - see Player::SetBountyPursuit for why it is a deadline
+            // and not a flag.
+            chosen->SetBountyPursuit(spot.Bounty, 90 * IN_MILLISECONDS);
+
             uint32 const wait = Bounty::RelentlessIntervalSeconds(spot.Bounty);
             s_nextHuntAt[humanGuid] = now + std::chrono::seconds(wait);
             {

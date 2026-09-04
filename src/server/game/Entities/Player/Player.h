@@ -1703,6 +1703,17 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         // BattleRing is that area below the ropes, which is the part that
         // fights. The zone/area overloads are for the update path, which has to
         // ask about the area being ENTERED before the cached one catches up.
+        // Bounty pursuit: how big a bounty this character is currently being
+        // sent to collect, or 0. Creature::GetAttackDistance reads it to leave
+        // a hunter alone on the way, and that lives in the game library where
+        // the playerbot scripts cannot be asked - hence a value here rather
+        // than a predicate over there.
+        //
+        // An expiry rather than a flag, so nothing has to remember to clear it
+        // when the bot dies, is retargeted, gets stuck, or arrives.
+        void SetBountyPursuit(uint32 stacks, uint32 durationMs);
+        uint32 GetBountyPursuitStacks() const;
+
         bool IsInGurubashiRingArea(uint32 zoneId, uint32 areaId) const;
         bool IsInGurubashiBattleRing(uint32 zoneId, uint32 areaId) const;
         bool IsInGurubashiBattleRing() const;
@@ -1919,6 +1930,9 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         // A deliberate leave is remembered so the rejoin does not undo it, and
         // joining again forgets it. Read lazily, once per session.
         bool HasOptedOutOfWorldChannel() const;
+
+        uint32 m_bountyPursuitStacks = 0;
+        uint32 m_bountyPursuitUntilMs = 0;
         void SetWorldChannelOptOut(bool optOut);
         void LeaveLFGChannel();
 
