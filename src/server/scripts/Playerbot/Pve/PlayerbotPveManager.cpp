@@ -2819,16 +2819,90 @@ namespace
         return 0;
     }
 
+    // The required level of the best ration this level can drink or eat, or 0
+    // when the pool has nothing for it.
+    uint32 BestRationTierForLevel(std::vector<std::pair<uint32, uint32>> const& pool, uint8 level)
+    {
+        std::lock_guard<std::mutex> guard(g_RationLock);
+        for (auto const& [requiredLevel, itemId] : pool)
+            if (requiredLevel <= level)
+                return requiredLevel;
+        return 0;
+    }
+
+    // Vendor rations come in tiers ten levels apart - water at required level
+    // 1, 5, 15, 25, 35, 45, each restoring roughly half again as much as the
+    // one below. Anything two tiers or more below what the bot can now drink is
+    // dead weight, and worse than dead weight: see CountConsumableUnits.
+    constexpr uint32 RATION_OBSOLETE_LEVEL_GAP = 10;
+
+    bool IsObsoleteRation(ItemTemplate const* proto, uint32 bestTier)
+    {
+        return proto && bestTier > RATION_OBSOLETE_LEVEL_GAP &&
+            proto->RequiredLevel + RATION_OBSOLETE_LEVEL_GAP < bestTier;
+    }
+
     uint32 CountConsumableUnits(Player* bot, bool drink)
     {
+        // Obsolete stock does NOT count as being supplied.
+        //
+        // This is why a level 38 shaman was still drinking level 1 water: it
+        // counted every drink in its bags, a stack of Refreshing Spring Water
+        // read as "stocked", the vendor visit bought nothing, and FindBestConsumable
+        // then had nothing better to reach for. Counting only rations that are
+        // still worth carrying makes the bot restock at the next vendor.
+        uint32 const bestTier = BestRationTierForLevel(drink ? g_RationDrink : g_RationFood,
+            bot->GetLevel());
+
         uint32 units = 0;
         ForEachBagItem(bot, [&](Item* item, uint8 /*bag*/, uint8 /*slot*/)
         {
             ItemTemplate const* proto = item->GetTemplate();
             if (drink ? IsDrinkTemplate(proto) : IsFoodTemplate(proto))
-                units += item->GetCount();
+                if (!IsObsoleteRation(proto, bestTier))
+                    units += item->GetCount();
         });
         return units;
+    }
+
+    // Throw out rations the bot has outgrown, on the level-up that outgrew them.
+    //
+    // Two tiers of headroom before anything is dropped, so a bot is never left
+    // with nothing to drink: at level 38 the best water is required level 35,
+    // and this discards only tiers below 25 - the level 1, 5 and 15 water -
+    // while keeping Sweet Nectar and Moonberry Juice. Bags free up, the stock
+    // count falls, and the next vendor visit buys the good stuff.
+    //
+    // Positions are collected before anything is destroyed: DestroyItem shifts
+    // what is in a bag slot, so deciding and acting in one pass over live
+    // containers is how items get missed.
+    uint32 DiscardOutclassedRations(Player* bot)
+    {
+        if (!bot)
+            return 0;
+
+        BuildRationPoolOnce();
+
+        uint32 const bestDrinkTier = BestRationTierForLevel(g_RationDrink, bot->GetLevel());
+        uint32 const bestFoodTier = BestRationTierForLevel(g_RationFood, bot->GetLevel());
+
+        std::vector<std::pair<uint8, uint8>> obsolete;
+        ForEachBagItem(bot, [&](Item* item, uint8 bag, uint8 slot)
+        {
+            ItemTemplate const* proto = item->GetTemplate();
+            if (!proto)
+                return;
+            bool const drink = IsDrinkTemplate(proto);
+            if (!drink && !IsFoodTemplate(proto))
+                return;
+            if (IsObsoleteRation(proto, drink ? bestDrinkTier : bestFoodTier))
+                obsolete.push_back({ bag, slot });
+        });
+
+        for (auto const& [bag, slot] : obsolete)
+            bot->DestroyItem(bag, slot, true);
+
+        return uint32(obsolete.size());
     }
 
     // Ammo the bot's ranged weapon feeds on, or 0 when none is needed.
@@ -12527,6 +12601,12 @@ namespace playerbot
 
         // Covers PvP-only bots too: they never reach the PvE slow tick.
         MaxOutWeaponSkills(player);
+
+        // Water and food the bot has outgrown go in the bin on the level that
+        // outgrew them, which is also what frees it to buy the next tier.
+        if (uint32 const binned = DiscardOutclassedRations(player))
+            TC_LOG_DEBUG("playerbots.pve", "Managed bot {} binned {} outclassed ration stack(s) on reaching level {}.",
+                player->GetName(), binned, uint32(player->GetLevel()));
 
         if (g_PveConfig.autoLearnSpellsOnLevelUp)
         {

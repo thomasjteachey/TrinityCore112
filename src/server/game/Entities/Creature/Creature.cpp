@@ -75,6 +75,33 @@ namespace
 {
     constexpr uint32 StockadesMapId = 34;
     constexpr uint32 StockadesBossKeyItemId = 43650;
+
+    // Managed playerbot accounts, by account id.
+    //
+    // The game library cannot include a scripts header, so the account list is
+    // read from config here exactly as Unit.cpp and Object.cpp already do for
+    // the pseudo-faction. Parsed once - GetAttackDistance is on the hot path.
+    bool IsManagedPlayerbotAccountIdForAggro(uint32 accountId)
+    {
+        static std::vector<uint32> const accountIds = []
+        {
+            std::vector<uint32> ids;
+            std::stringstream stream(sConfigMgr->GetStringDefault("Playerbot.RandomPopulation.BotAccountIds", ""));
+            std::string token;
+            while (std::getline(stream, token, ','))
+                if (!token.empty())
+                    ids.push_back(uint32(std::strtoul(token.c_str(), nullptr, 10)));
+            std::sort(ids.begin(), ids.end());
+            return ids;
+        }();
+        return !accountIds.empty() && std::binary_search(accountIds.begin(), accountIds.end(), accountId);
+    }
+
+    bool IsManagedPlayerbot(Player const* player)
+    {
+        return player && player->GetSession() &&
+            IsManagedPlayerbotAccountIdForAggro(player->GetSession()->GetAccountId());
+    }
 }
 
 CreatureMovementData::CreatureMovementData() : Ground(CreatureGroundMovementType::Run), Flight(CreatureFlightMovementType::None), Swim(true), Rooted(false), Chase(CreatureChaseMovementType::Run),
@@ -2632,6 +2659,29 @@ float Creature::GetAttackDistance(Unit const* player) const
 
         float const fraction = std::min(1.0f, float(pursuit) / float(maxStacks));
         return aggroRadius * aggroRate * (1.0f - reduction * fraction);
+    }
+
+    // Playerbots give elites a wide berth.
+    //
+    // A bot already refuses to CHOOSE an elite to grind (GrindTargetCheck, and
+    // Playerbot.PveGrind.AllowElites is off), but nothing stopped one walking
+    // past a level-appropriate elite and being pulled into a fight it cannot
+    // win. It has no way to decide to come back later, so it dies, corpse-runs,
+    // walks the same path and is pulled again.
+    //
+    // Shrinking the elite's aggro radius rather than teaching the bot to path
+    // around one: the bot cannot see an aggro radius, so avoidance has to be
+    // expressed as the thing that actually pulls it. Retaliation is untouched -
+    // an elite that IS pulled fights normally, and so does one the bot attacks
+    // on purpose.
+    //
+    // Before the clamps, like the bounty reduction above, so it can go below the
+    // ordinary five yard floor - being left alone is the entire point.
+    if (pursuer && (isElite() || isWorldBoss()) && IsManagedPlayerbot(pursuer))
+    {
+        static float const eliteReduction = std::clamp(
+            sConfigMgr->GetFloatDefault("Playerbot.Pve.EliteAggroReduction", 0.75f), 0.0f, 1.0f);
+        return aggroRadius * aggroRate * (1.0f - eliteReduction);
     }
 
     // Make sure that we wont go over the total range limits

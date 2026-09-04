@@ -908,8 +908,53 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
     }
 }
 
+namespace
+{
+    // Defined further down beside the rest of the playerbot display helpers,
+    // declared here because DealDamage is a thousand lines above them. Same
+    // anonymous namespace, which is the part that matters.
+    bool IsManagedPlayerbotAccountIdForDisplay(uint32 accountId);
+
+    // What share of a monster's damage actually lands on a playerbot.
+    // Centurion.Playerbot.CreatureDamagePct, default 50 (half). 100 disables.
+    uint32 CreatureDamageToPlayerbotPct()
+    {
+        static uint32 const pct = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Centurion.Playerbot.CreatureDamagePct", 50), 0, 100));
+        return pct;
+    }
+
+    // Whether this blow is a MONSTER hitting a member of the fleet.
+    //
+    // A bot cannot drink between pulls, cannot kite well and cannot decide to
+    // come back later - it grinds the same ground for hours, so PvE damage a
+    // person takes a few times an hour lands on a bot continuously.
+    //
+    // Monsters ONLY. Anything a player owns - a pet, a guardian, a totem, a
+    // mind-controlled creature - is a person fighting a bot on purpose and
+    // keeps its full damage, which is the entire point of the exception.
+    bool IsMonsterHittingPlayerbot(Unit const* attacker, Unit const* victim)
+    {
+        if (!attacker || !victim || attacker == victim)
+            return false;
+
+        if (attacker->GetTypeId() != TYPEID_UNIT || attacker->GetCharmerOrOwnerPlayerOrPlayerItself())
+            return false;
+
+        Player const* bot = victim->ToPlayer();
+        return bot && bot->GetSession() &&
+            IsManagedPlayerbotAccountIdForDisplay(bot->GetSession()->GetAccountId());
+    }
+}
+
 /*static*/ uint32 Unit::DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage const* cleanDamage, DamageEffectType damagetype, SpellSchoolMask damageSchoolMask, SpellInfo const* spellProto, bool durabilityLoss)
 {
+    // Applied at the very top so everything downstream agrees on one number:
+    // the AI hooks, the rage the blow generates, threat, the PvP damage share
+    // and the log all read the damage that was actually taken.
+    if (damage && CreatureDamageToPlayerbotPct() < 100 && IsMonsterHittingPlayerbot(attacker, victim))
+        damage = CalculatePct(damage, CreatureDamageToPlayerbotPct());
+
     uint32 rage_damage = damage + (cleanDamage ? cleanDamage->absorbed_damage : 0);
 
     if (UnitAI* victimAI = victim->GetAI())

@@ -4699,8 +4699,23 @@ namespace playerbot
         // an enemy has actually reached melee. It must not make a hunter begin
         // a melee chase from its 10-yard Mongoose weave position, because that
         // active chase generator immediately breaks the Auto Shot plant window.
-        bool const useMeleeAttack = !profile.primarilyRanged ||
-            (profile.meleeFallbackAcceptable && player->IsWithinMeleeRange(target));
+        // A wand is a ranged AUTO-ATTACK, and the two auto-attacks are mutually
+        // exclusive: a real client never has both running, because starting one
+        // cancels the other. Nothing in the core enforces that - Unit::Attack
+        // sets UNIT_STATE_MELEE_ATTACKING and the auto-repeat spell lives in a
+        // separate slot - so a caster whose enemy walked into melee range ended
+        // up swinging its staff AND firing its wand at the same target.
+        //
+        // The wand wins. It is what the decision engine deliberately reached for
+        // (out of mana, or as the filler when nothing better is up), and a cloth
+        // caster's melee swing is worth a fraction of it. Passing false through
+        // the existing Attack call below is what actually stops the swinging:
+        // on a target already being attacked it clears the melee state and sends
+        // SendMeleeAttackStop.
+        bool const wandFiring = HasActiveWandAutoRepeat(player);
+        bool const useMeleeAttack = !wandFiring &&
+            (!profile.primarilyRanged ||
+             (profile.meleeFallbackAcceptable && player->IsWithinMeleeRange(target)));
         bool const isStealthedMeleeOpener = IsStealthedMeleeOpener(player);
         bool const targetInBreakableCrowdControl = target->HasBreakableByDamageCrowdControlAura();
         bool const alreadyAttackingTarget = player->GetVictim() && player->GetVictim()->GetGUID() == target->GetGUID();
