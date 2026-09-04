@@ -18,6 +18,7 @@
 #include "Chat.h"
 #include "Bag.h"
 #include "Creature.h"
+#include "custom_barracks_hardcore.h"
 #include "DBCStores.h"
 #include "GameObject.h"
 #include "GameObjectAI.h"
@@ -115,6 +116,16 @@ uint32 GetChestMarkRewardCount()
 bool IsPlayerEligible(Player* player)
 {
     if (!player || !player->IsInWorld())
+        return false;
+
+    // The fleet does not count towards the chest, and does not anchor it.
+    //
+    // Stranglethorn is a banded zone with bots living in it around the clock, so
+    // counting them made the hourly event fire on an empty arena every single
+    // hour - and FindEligibleSummoner would then pick one of them to own the
+    // spawn. This is a scrap between people over one prize; if no person is in
+    // the zone there is nothing to scrap over.
+    if (BarracksHardcore::IsPlayerbot(player))
         return false;
 
     if (player->GetMapId() != GURUBASHI_ARENA_MAP_ID)
@@ -385,6 +396,13 @@ void TeleportStranglethornPlayersToBattleRing()
             Player* player = playerPair.second;
             if (!player || !player->IsInWorld() || player->IsBeingTeleported() ||
                 !player->IsAlive() || player->IsInFlight())
+                continue;
+
+            // And the fleet is not dragged into the ring. Bots live in
+            // Stranglethorn permanently, so this emptied the whole band into the
+            // arena on the hour, every hour, and each one arrived stripped of
+            // its group and its cooldowns for a fight it was never in.
+            if (BarracksHardcore::IsPlayerbot(player))
                 continue;
 
             if (player->GetMapId() != GURUBASHI_ARENA_MAP_ID || player->GetZoneId() != STRANGLETHORN_VALE_ZONE_ID)
