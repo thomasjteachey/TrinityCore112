@@ -3472,6 +3472,28 @@ Centurion.Bounty.RelentlessIntervalSeconds = 30
 Centurion.Bounty.VeteranStacks = 25
 Centurion.Bounty.PvpBotStacks = 50
 
+#
+#    Centurion.Bounty.Guard*
+#        Description: At or above GuardStacks the realm stops sending people and
+#                     sends its own: GuardCount Centurion Guards (creature 900200,
+#                     an Orgrimmar Grunt reskinned to faction 14, hostile to every
+#                     player of either side) summoned around the target every
+#                     GuardIntervalSeconds and set straight onto them.
+#                     They arrive 25 yards out so they are seen coming, and
+#                     despawn after GuardLifetimeSeconds, so nothing has to keep
+#                     a register of them.
+#                     900200 carries CREATURE_FLAG_EXTRA_NO_XP: without it, sitting
+#                     at thirty stacks killing the spawns would be a renewable
+#                     experience fountain that paid better the worse you behaved.
+#        Default:     30 / 900200 / 2 / 45 / 180
+#                     GuardStacks 0 - (disabled)
+#
+Centurion.Bounty.GuardStacks = 30
+Centurion.Bounty.GuardCreatureId = 900200
+Centurion.Bounty.GuardCount = 2
+Centurion.Bounty.GuardIntervalSeconds = 45
+Centurion.Bounty.GuardLifetimeSeconds = 180
+
 
 #    Centurion.Hardcore.PlayerKill.DiminishSeconds
 #        Description: How long a victim is remembered when halving repeat kills. Each

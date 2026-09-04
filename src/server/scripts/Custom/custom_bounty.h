@@ -94,6 +94,10 @@ namespace Bounty
     // battlegrounds, which nothing else pulls into the open world.
     bool DrawsFromPvpBots(uint32 stacks);
 
+    // Past this the realm sends its own: Centurion Guards, summoned beside the
+    // target and set straight onto them.
+    bool SummonsGuards(uint32 stacks);
+
     // Coin owed by a death, in copper, taken now and handed to the caller to
     // put in a chest. Zero unless this player died with a bounty and nothing
     // has collected on it yet.

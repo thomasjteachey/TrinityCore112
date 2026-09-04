@@ -29,7 +29,10 @@
 #include "GameTime.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
+#include "Creature.h"
+#include "CreatureAI.h"
 #include "Player.h"
+#include "TemporarySummon.h"
 #include "ScriptMgr.h"
 #include "SpellAuras.h"
 #include "SpellMgr.h"
@@ -61,6 +64,11 @@ namespace
     uint32 s_relentlessIntervalSeconds = 30;
     uint32 s_veteranStacks = 25;
     uint32 s_pvpBotStacks = 50;
+    uint32 s_guardStacks = 30;
+    uint32 s_guardEntry = 900200;
+    uint32 s_guardCount = 2;
+    uint32 s_guardIntervalSeconds = 45;
+    uint32 s_guardLifetimeSeconds = 180;
 
     // What a stack is worth, held here so the registry and the aura cannot
     // disagree about the ceiling: the DBC's CumulativeAura is the authority and
@@ -144,6 +152,16 @@ namespace
             sConfigMgr->GetIntDefault("Centurion.Bounty.VeteranStacks", 25), 0, 255));
         s_pvpBotStacks = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Centurion.Bounty.PvpBotStacks", 50), 0, 255));
+        s_guardStacks = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Centurion.Bounty.GuardStacks", 30), 0, 255));
+        s_guardEntry = uint32(std::max(0,
+            sConfigMgr->GetIntDefault("Centurion.Bounty.GuardCreatureId", 900200)));
+        s_guardCount = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Centurion.Bounty.GuardCount", 2), 0, 20));
+        s_guardIntervalSeconds = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Centurion.Bounty.GuardIntervalSeconds", 45), 10, 3600));
+        s_guardLifetimeSeconds = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Centurion.Bounty.GuardLifetimeSeconds", 180), 30, 3600));
 
         TC_LOG_INFO("playerbots.hardcore",
             "Bounty config: enabled={} spell={} perKill={} goldPerStack={}% botMultiplier={} chest={}",
@@ -327,6 +345,67 @@ namespace
         ClearBounty(victim);
     }
 
+    // Thirty stacks: the realm stops sending people and sends guards.
+    //
+    // MAP thread, from PlayerScript::OnUpdate. That is deliberate and necessary:
+    // summoning into a map is a map-thread operation, and the rest of the bounty
+    // escalation lives on the world thread only because it reads Group and queues
+    // teleports. This needs neither - it wants the player it is already handed.
+    //
+    // They are summoned at a distance and walk in, rather than materialising on
+    // top of somebody, and they despawn on their own timer so nothing has to keep
+    // a register of them.
+    void SummonGuardsFor(Player* player)
+    {
+        // Cheap deadline test FIRST. OnUpdate runs every tick for every player on
+        // the realm, so almost every call must end on this line.
+        static std::unordered_map<uint64, time_t> s_nextGuardAt;
+        uint64 const key = player->GetGUID().GetRawValue();
+        time_t const now = GameTime::GetGameTime();
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            auto const itr = s_nextGuardAt.find(key);
+            if (itr != s_nextGuardAt.end() && now < itr->second)
+                return;
+        }
+
+        uint32 const stacks = GetStacks(player);
+        if (!SummonsGuards(stacks) || !IsBountyContext(player) || !player->IsAlive())
+            return;
+
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            s_nextGuardAt[key] = now + s_guardIntervalSeconds;
+        }
+
+        uint32 summoned = 0;
+        for (uint32 i = 0; i < s_guardCount; ++i)
+        {
+            // Spread around the target rather than stacked on one side, and far
+            // enough out that the arrival is seen coming.
+            float const angle = float(i) * (2.0f * float(M_PI) / float(std::max<uint32>(1, s_guardCount)))
+                + frand(0.0f, 1.0f);
+            float x, y, z;
+            player->GetNearPoint(player, x, y, z, 25.0f, angle);
+            player->UpdateAllowedPositionZ(x, y, z);
+
+            Creature* guard = player->SummonCreature(s_guardEntry, x, y, z,
+                player->GetAbsoluteAngle(x, y) + float(M_PI),
+                TEMPSUMMON_TIMED_DESPAWN, Milliseconds(s_guardLifetimeSeconds * IN_MILLISECONDS));
+            if (!guard)
+                continue;
+
+            ++summoned;
+            if (guard->IsAIEnabled())
+                guard->AI()->AttackStart(player);
+        }
+
+        if (summoned)
+            TC_LOG_INFO("playerbots.hardcore",
+                "Bounty {}: {} Centurion Guard(s) sent after {}.",
+                stacks, summoned, player->GetName());
+    }
+
     // Somewhere for the coin to go when nothing else builds a chest.
     //
     // The hardcore ruleset already summons one for gear on most deaths and
@@ -428,6 +507,12 @@ bool DrawsFromPvpBots(uint32 stacks)
     return s_enabled && s_pvpBotStacks && stacks >= s_pvpBotStacks;
 }
 
+bool SummonsGuards(uint32 stacks)
+{
+    return s_enabled && s_guardStacks && s_guardEntry && s_guardCount &&
+        stacks >= s_guardStacks;
+}
+
 uint32 TakePendingChestGold(Player* victim)
 {
     if (!victim)
@@ -501,6 +586,13 @@ public:
         // shed one.
         if (IsBountyContext(victim))
             RecordDeathDebt(victim);
+    }
+
+    // Thirty stacks and up. Map thread, because summoning is.
+    void OnUpdate(Player* player, uint32 /*diff*/) override
+    {
+        if (s_enabled && player)
+            SummonGuardsFor(player);
     }
 
     // The safety nets, for deaths the hardcore chest does not cover.
