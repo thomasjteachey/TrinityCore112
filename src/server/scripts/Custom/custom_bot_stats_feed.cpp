@@ -261,10 +261,13 @@ namespace
             if (r.PvpOnly)    flags |= 8;
 
             out << r.Name << ',' << uint32(r.Level) << ',' << uint32(r.Class) << ','
-                << r.ZoneId << ',' << uint32(r.Aggression) << ',' << r.TimidSeconds << ','
-                << ToGold(r.MoneyCopper) << ',' << flags << ';';
+                << uint32(r.Spec) << ',' << r.ZoneId << ',' << uint32(r.Aggression) << ','
+                << r.TimidSeconds << ',' << ToGold(r.MoneyCopper) << ','
+                << uint32(r.HealthPct) << ',' << uint32(r.PowerPct) << ','
+                << r.ItemLevel << ',' << uint32(r.WornCount) << ',' << uint32(r.GreenPlus) << ','
+                << flags << ';';
 
-            if (++inMessage >= 5)
+            if (++inMessage >= 4)
             {
                 SendTagged(viewer, "BSTI", out.str());
                 out.str(std::string());

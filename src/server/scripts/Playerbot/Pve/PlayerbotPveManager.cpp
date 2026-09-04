@@ -12214,6 +12214,32 @@ namespace playerbot
             row.Level = bot->GetLevel();
             row.Class = bot->GetClass();
             row.Aggression = GetBotAggression(bot);
+            row.HealthPct = uint8(std::min(100.0f, std::max(0.0f, bot->GetHealthPct())));
+            if (bot->GetMaxPower(POWER_MANA) > 0)
+                row.PowerPct = uint8(std::min(100.0f, std::max(0.0f, bot->GetPowerPct(POWER_MANA))));
+
+            row.Spec = uint8(EquipProfileIndex(bot));
+
+            // What is actually worn. Mean item level says whether a bot is
+            // equipped or running around in field kit, and the green-or-better
+            // count is the same thing from the angle a player sees it: how much
+            // it is carrying that would drop.
+            {
+                uint32 sum = 0, worn = 0, greenPlus = 0;
+                for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+                    if (Item const* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                        if (ItemTemplate const* proto = item->GetTemplate())
+                        {
+                            sum += proto->ItemLevel;
+                            ++worn;
+                            if (proto->Quality >= ITEM_QUALITY_UNCOMMON)
+                                ++greenPlus;
+                        }
+                row.ItemLevel = worn ? uint16(sum / worn) : 0;
+                row.WornCount = uint8(worn);
+                row.GreenPlus = uint8(greenPlus);
+            }
+
             row.InCombat = bot->IsInCombat();
             row.Dead = !bot->IsAlive();
             row.PvpOnly = PveManager::IsPvpOnlyBot(bot);

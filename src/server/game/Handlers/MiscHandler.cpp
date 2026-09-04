@@ -1066,14 +1066,24 @@ void WorldSession::HandleInspectOpcode(WorldPacket& recvData)
 
     TC_LOG_DEBUG("network", "WORLD: Received CMSG_INSPECT");
 
-    Player* player = ObjectAccessor::GetPlayer(*_player, guid);
+    // A GM may inspect anybody, anywhere. ObjectAccessor::GetPlayer resolves
+    // relative to the asker's own visibility, so it cannot even FIND a target
+    // in another zone - hence the global lookup first. The stats addon lists
+    // the whole fleet and the obvious thing to do with a row is look at what
+    // that bot is wearing; making that work only inside ten yards would make
+    // the feature pointless.
+    bool const inspector = GetPlayer() && GetPlayer()->GetSession() &&
+        GetPlayer()->GetSession()->HasPermission(rbac::RBAC_PERM_COMMAND_GM);
+
+    Player* player = inspector ? ObjectAccessor::FindConnectedPlayer(guid)
+                               : ObjectAccessor::GetPlayer(*_player, guid);
     if (!player)
     {
         TC_LOG_DEBUG("network", "CMSG_INSPECT: No player found from {}", guid.ToString());
         return;
     }
 
-    if (!GetPlayer()->IsWithinDistInMap(player, INSPECT_DISTANCE, false))
+    if (!inspector && !GetPlayer()->IsWithinDistInMap(player, INSPECT_DISTANCE, false))
         return;
 
     bool const sameCustomGameLobby = GetPlayer()->IsInSameCustomGameLobby(player);

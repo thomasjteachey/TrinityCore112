@@ -333,6 +333,12 @@ public:
         uint8 Level = 0;
         uint8 Class = 0;
         uint8 Aggression = 0;
+        uint8 Spec = 0;            // EquipProfileIndex: 0/1/2, named client-side
+        uint8 HealthPct = 0;
+        uint8 PowerPct = 0;        // mana, when the class has any
+        uint16 ItemLevel = 0;      // mean of equipped, 0 when naked
+        uint8 WornCount = 0;       // equipped pieces
+        uint8 GreenPlus = 0;       // of those, uncommon or better
         uint16 TimidSeconds = 0;   // 0 when not timid
         bool InCombat = false;
         bool Travelling = false;

@@ -121,21 +121,48 @@ local CLASS_NAME = {
 	[9] = "Warlock", [11] = "Druid",
 }
 
--- "name,level,class,zone,aggr,timid,gold,flags;" repeated
+-- Blizzard's own spec names, keyed the way the server's EquipProfileIndex
+-- orders them (0/1/2 per class), so a row reads the way the armory would.
+local SPEC_NAME = {
+	[1]  = { "Arms", "Fury", "Protection" },
+	[2]  = { "Holy", "Protection", "Retribution" },
+	[3]  = { "Beast Mastery", "Marksmanship", "Survival" },
+	[4]  = { "Assassination", "Combat", "Subtlety" },
+	[5]  = { "Discipline", "Holy", "Shadow" },
+	[6]  = { "Blood", "Frost", "Unholy" },
+	[7]  = { "Elemental", "Enhancement", "Restoration" },
+	[8]  = { "Arcane", "Fire", "Frost" },
+	[9]  = { "Affliction", "Demonology", "Destruction" },
+	[11] = { "Balance", "Feral", "Restoration" },
+}
+
+local function SpecName(class, spec)
+	local list = SPEC_NAME[class]
+	return list and list[(spec or 0) + 1] or "?"
+end
+
+-- "name,level,class,spec,zone,aggr,timid,gold,hp,mp,ilvl,worn,greens,flags;"
 local function ParseRoster(payload)
 	for row in string.gmatch(payload, "([^;]+)") do
-		local name, lvl, cls, zone, aggr, timid, gold, flags =
-			string.match(row, "^([^,]+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+)$")
+		local name, lvl, cls, spec, zone, aggr, timid, gold, hp, mp, ilvl, worn, greens, flags =
+			string.match(row,
+				"^([^,]+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+)$")
 		if name then
 			local f = tonumber(flags) or 0
 			table.insert(incoming, {
-				name  = name,
-				level = tonumber(lvl)   or 0,
-				class = tonumber(cls)   or 0,
-				zone  = tonumber(zone)  or 0,
-				aggr  = tonumber(aggr)  or 0,
-				timid = tonumber(timid) or 0,
-				gold  = tonumber(gold)  or 0,
+				name   = name,
+				level  = tonumber(lvl)   or 0,
+				class  = tonumber(cls)   or 0,
+				spec   = tonumber(spec)  or 0,
+				zone   = tonumber(zone)  or 0,
+				aggr   = tonumber(aggr)  or 0,
+				timid  = tonumber(timid) or 0,
+				gold   = tonumber(gold)  or 0,
+				hp     = tonumber(hp)    or 0,
+				mp     = tonumber(mp)    or 0,
+				ilvl   = tonumber(ilvl)  or 0,
+				worn   = tonumber(worn)  or 0,
+				greens = tonumber(greens) or 0,
 				combat = bit.band(f, 1) > 0,
 				dead   = bit.band(f, 2) > 0,
 				travel = bit.band(f, 4) > 0,
@@ -228,6 +255,27 @@ local function RunGmCommand(cmd)
 	else
 		SendChatMessage(cmd, "SAY")
 	end
+end
+
+-- Blizzard's own gear-and-talents window, reused rather than rebuilt.
+--
+-- The server side of this is unrestricted for a GM: HandleInspectOpcode looks
+-- the target up globally and skips the range test, so distance and hostility
+-- are no longer the limit. The limit that remains is the CLIENT's - InspectUnit
+-- takes a unit token, and the client only has a unit for something in its own
+-- object manager. Nothing in the 3.3.5 Lua API inspects by GUID.
+--
+-- So: try it, and say plainly when the client simply does not have that bot
+-- loaded. "Bring here" then makes it possible in one click.
+local function InspectBot(name)
+	TargetByName(name, true)
+	if UnitExists("target") and UnitName("target") == name then
+		if CanInspect("target") then
+			InspectUnit("target")
+			return true
+		end
+	end
+	return false
 end
 
 ------------------------------------------------------------------
@@ -358,14 +406,7 @@ local function DrawList(list)
 		r.botName = e.botName
 		r:SetScript("OnClick", function()
 			if this.botName then
-				-- Left-click goes to the bot, right-click brings it here. These
-				-- are GM commands, which is the whole point of the window: you
-				-- looked one up because you want to be standing next to it.
-				if arg1 == "RightButton" then
-					RunGmCommand(".summon " .. this.botName)
-				else
-					RunGmCommand(".appear " .. this.botName)
-				end
+				CENTURION_BotStats_ShowBot(this.botName)
 				return
 			end
 			if this.zoneId then
@@ -473,7 +514,7 @@ function CENTURION_BotStats_Refresh()
 					timid   = b.timid,
 					gold    = b.gold,
 					tip     = string.format(
-						"%s\nLevel %d %s\n%s\n\naggression %d\ntimid %s\ncarrying %dg%s\n\n|cff00ff00Click|r go to it    |cff00ff00Right-click|r summon it",
+						"%s\nLevel %d %s\n%s\n\naggression %d\ntimid %s\ncarrying %dg%s\n\n|cff00ff00Click for full stats|r",
 						b.name, b.level, CLASS_NAME[b.class] or "?", zn, b.aggr,
 						(b.timid > 0) and (b.timid .. "s remaining") or "no",
 						b.gold, b.pvp and "\n\n|cffff7f5fPvP-only bot|r" or ""),
@@ -603,6 +644,122 @@ driver:SetScript("OnUpdate", function()
 	ticker = 0
 	CENTURION_BotStats_Refresh()
 end)
+
+------------------------------------------------------------------
+-- one bot
+------------------------------------------------------------------
+local detail = CreateFrame("Frame", "CenturionBotStatsDetail", UIParent)
+detail:SetWidth(300)
+detail:SetHeight(280)
+detail:SetPoint("LEFT", win, "RIGHT", 4, 0)
+detail:SetBackdrop({
+	bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
+	edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+	tile = true, tileSize = 32, edgeSize = 32,
+	insets = { left = 11, right = 12, top = 12, bottom = 11 },
+})
+detail:SetMovable(true)
+detail:EnableMouse(true)
+detail:RegisterForDrag("LeftButton")
+detail:SetScript("OnDragStart", detail.StartMoving)
+detail:SetScript("OnDragStop", detail.StopMovingOrSizing)
+detail:Hide()
+
+local dTitle = detail:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+dTitle:SetPoint("TOP", detail, "TOP", 0, -16)
+
+local dClose = CreateFrame("Button", nil, detail, "UIPanelCloseButton")
+dClose:SetPoint("TOPRIGHT", detail, "TOPRIGHT", -8, -8)
+
+local dBody = detail:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+dBody:SetPoint("TOPLEFT", detail, "TOPLEFT", 22, -46)
+dBody:SetWidth(256)
+dBody:SetJustifyH("LEFT")
+dBody:SetJustifyV("TOP")
+
+local dNote = detail:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+dNote:SetPoint("BOTTOMLEFT", detail, "BOTTOMLEFT", 22, 58)
+dNote:SetWidth(256)
+dNote:SetJustifyH("LEFT")
+
+local shownBot
+
+local function MakeDetailButton(label, width, onClick)
+	local b = CreateFrame("Button", nil, detail, "UIPanelButtonTemplate")
+	b:SetWidth(width)
+	b:SetHeight(20)
+	b:SetText(label)
+	b:SetScript("OnClick", onClick)
+	return b
+end
+
+local dInspect = MakeDetailButton("Gear & talents", 110, function()
+	if not shownBot then
+		return
+	end
+	if InspectBot(shownBot) then
+		dNote:SetText("")
+	else
+		dNote:SetText("|cffff7f5fThe client has no unit for that bot|r - it is not loaded here. Bring it over and try again.")
+	end
+end)
+dInspect:SetPoint("BOTTOMLEFT", detail, "BOTTOMLEFT", 22, 22)
+
+local dGoto = MakeDetailButton("Go to", 70, function()
+	if shownBot then RunGmCommand(".appear " .. shownBot) end
+end)
+dGoto:SetPoint("LEFT", dInspect, "RIGHT", 4, 0)
+
+local dBring = MakeDetailButton("Bring here", 84, function()
+	if shownBot then RunGmCommand(".summon " .. shownBot) end
+end)
+dBring:SetPoint("LEFT", dGoto, "RIGHT", 4, 0)
+
+function CENTURION_BotStats_ShowBot(name)
+	local b
+	for i = 1, #roster do
+		if roster[i].name == name then
+			b = roster[i]
+			break
+		end
+	end
+	if not b then
+		return
+	end
+
+	shownBot = name
+	dTitle:SetText(name)
+
+	local state = "idle"
+	if b.dead then
+		state = "|cff9f9f9fdead|r"
+	elseif b.combat then
+		state = "|cffff7f5ffighting|r"
+	elseif b.travel then
+		state = "|cff5f9fffftravelling|r"
+	elseif b.timid > 0 then
+		state = string.format("|cffe0c020timid for %ds|r", b.timid)
+	end
+
+	local zn = zones[b.zone] and zones[b.zone].name or ("Zone " .. b.zone)
+
+	dBody:SetText(string.format(
+		"Level |cffffd200%d|r %s  |cff909090(%s)|r\n%s\n\n"..
+		"State            %s\n"..
+		"Aggression       |cffffd200%d|r / 100\n"..
+		"Health           %d%%%s\n\n"..
+		"Gold             |cffffd200%dg|r\n"..
+		"Gear             |cffffd200%d|r item level\n"..
+		"Equipped         %d pieces, |cff1eff00%d|r green or better\n%s",
+		b.level, CLASS_NAME[b.class] or "?", SpecName(b.class, b.spec), zn,
+		state, b.aggr,
+		b.hp, (b.mp > 0) and string.format("\nMana             %d%%", b.mp) or "",
+		b.gold, b.ilvl, b.worn, b.greens,
+		b.pvp and "\n|cffff7f5fPvP-only: no PvE, holds no money|r" or ""))
+
+	dNote:SetText("")
+	detail:Show()
+end
 
 SLASH_CENTURIONBOTSTATS1 = "/botstats"
 SLASH_CENTURIONBOTSTATS2 = "/bstats"
