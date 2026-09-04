@@ -79,6 +79,26 @@ end
 ------------------------------------------------------------------
 -- drawing
 ------------------------------------------------------------------
+-- Whether the map is showing the zone the player is actually standing in.
+--
+-- Both halves are stable values that do not flicker: GetCurrentMapZone indexes
+-- into the continent's zone list, and GetRealZoneText is the player's own zone.
+-- Names rather than ids because the client has no zone id for the map, and both
+-- come from the same client tables so the localisation always matches.
+local function ViewingOwnZone()
+	if type(GetMapZones) ~= "function" or type(GetCurrentMapContinent) ~= "function" then
+		return true   -- no way to ask; fall back to drawing rather than blanking
+	end
+
+	local continent = GetCurrentMapContinent()
+	if not continent or continent < 1 then
+		return false
+	end
+
+	local shown = select(GetCurrentMapZone(), GetMapZones(continent))
+	return shown ~= nil and shown == GetRealZoneText()
+end
+
 local function DrawOn(surface)
 	local mapFrame = surface.frame
 	if not mapFrame:IsShown() then
@@ -97,9 +117,7 @@ local function DrawOn(surface)
 	--    coordinates be painted onto a continent, which is what put bots in the
 	--    ocean off the coast.
 	-- 2. And it must be the player's OWN zone rather than another zone on the
-	--    same continent, which is what GetPlayerMapPosition answers: 0,0
-	--    anywhere else. This is the test Blizzard's own code leans on
-	--    (BattlefieldMinimap_OnUpdate, before it calls SetMapToCurrentZone).
+	--    same continent.
 	--
 	-- The type guard is so that a client without the API hides the blips rather
 	-- than erroring every frame.
@@ -115,8 +133,19 @@ local function DrawOn(surface)
 		return
 	end
 
-	local px, py = GetPlayerMapPosition("player")
-	if not px or (px == 0 and py == 0) then
+	-- Test 2 by NAME, not by GetPlayerMapPosition.
+	--
+	-- That API was the obvious way to ask "is this my zone" - it answers 0,0
+	-- for any other zone - but it also answers 0,0 for a frame or two every
+	-- time the map is re-pointed: on open, after SetMapToCurrentZone, through a
+	-- zone change, and while the map animates. Every one of those readings hid
+	-- every blip until the next redraw, and redraws only happen on the 1s
+	-- heartbeat or a 2s push. That is the blinking: not the feed going stale,
+	-- not a dropped chunk, just a transient 0,0 being trusted as an answer.
+	--
+	-- The zone the map is SHOWING, compared against the zone the player is
+	-- STANDING in, is the same question asked of two stable values.
+	if not ViewingOwnZone() then
 		HideFrom(surface, 1)
 		return
 	end
