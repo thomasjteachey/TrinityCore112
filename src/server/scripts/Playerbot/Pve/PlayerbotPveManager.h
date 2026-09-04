@@ -123,6 +123,12 @@ struct PveConfig
     // landing distance to stop a just-dropped guardian re-approaching.
     float proactiveHuntYards = 125.0f;
 
+    // How close a person has to be for a bot to count as having had its
+    // contact. Being near somebody resets the aggression clock the same way
+    // a fight does, so a bot that has been standing beside a player is not
+    // instantly overdue the moment they leave.
+    float aggressionResetYards = 200.0f;
+
     bool aggroBudgetEnabled = false;
     uint32 aggroBudgetSolo = 2;
     uint32 aggroBudgetPerExtraMember = 2;

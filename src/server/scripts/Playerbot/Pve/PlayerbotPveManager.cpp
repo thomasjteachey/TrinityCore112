@@ -5608,14 +5608,29 @@ namespace
         if (!BarracksHardcore::IsOpenWorldPvpZone(bot->GetZoneId()))
             return;
 
-        if (idleMinutes < int64(AggressionIdleMinutes(bot, cfg)))
-            return;
-
-        // Already near somebody: it is not being ignored, so leave it alone.
+        // Being near a person IS the contact this clock counts toward, so it
+        // resets on PROXIMITY rather than only on a fight.
+        //
+        // Checked before the idle gate on purpose. It used to sit below it and
+        // only bail, which left a bot that had been standing beside somebody the
+        // whole time still reading as overdue - so the moment they walked away
+        // it teleported off looking for a fight it had just been having. The
+        // clock now zeroes while anybody is close, and only starts running once
+        // the bot is genuinely on its own.
+        //
+        // Once a minute per bot against a snapshot that is already in memory, so
+        // moving it above the gate costs nothing worth measuring.
         HumanSpot nearest;
         float nearestDistance = 0.0f;
         if (FindNearestHumanSpot(bot->GetMapId(), bot->GetPositionX(), bot->GetPositionY(),
-            bot->GetPositionZ(), nearest, nearestDistance, bot->GetZoneId(), bot) && nearestDistance <= 240.0f)
+            bot->GetPositionZ(), nearest, nearestDistance, bot->GetZoneId(), bot) &&
+            nearestDistance <= g_PveConfig.aggressionResetYards)
+        {
+            state.lastPlayerFightAt = now;
+            return;
+        }
+
+        if (idleMinutes < int64(AggressionIdleMinutes(bot, cfg)))
             return;
 
         // Only ever within the zone the bot is ALREADY in. Travelling to find a
@@ -12075,6 +12090,8 @@ namespace playerbot
         g_PveConfig.grantMounts = sConfigMgr->GetBoolDefault("Playerbot.Pve.GrantMounts", true);
         g_PveConfig.proactiveHuntYards = std::max(0.0f,
             sConfigMgr->GetFloatDefault("Playerbot.Pve.ProactiveHuntYards", 125.0f));
+        g_PveConfig.aggressionResetYards = std::max(0.0f,
+            sConfigMgr->GetFloatDefault("Playerbot.Pve.AggressionResetYards", 200.0f));
         g_PveConfig.aggroBudgetEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.AggroBudget.Enable", false);
         g_PveConfig.aggroBudgetSolo = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Playerbot.Pve.AggroBudget.Solo", 2), 0, 100));
