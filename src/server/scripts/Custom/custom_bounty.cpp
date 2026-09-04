@@ -227,6 +227,20 @@ namespace
         if (!count || !IsBountyContext(killer))
             return;
 
+        // War Mode off is out of the PvP economy in both directions: you are
+        // not hunted, and you do not build a price on your head either. The
+        // flagger already refuses to disarm a bountied player, so together
+        // these two make "bountied" and "War Mode off" mutually exclusive -
+        // which is what keeps the fleet from being dispatched at somebody it
+        // is then forbidden to touch.
+        //
+        // Bots are exempt, and must be: they have no War Mode setting to opt
+        // into, so a bare opted-in test would deny a bounty to every bot on the
+        // realm - and a bot's own bounty is exactly what it pays out when a
+        // player finally puts it down. This is a rule about people opting out.
+        if (!BarracksHardcore::IsPlayerbot(killer) && !BarracksHardcore::IsWarModeOptedIn(killer))
+            return;
+
         Aura* aura = killer->GetAura(s_spellId, killer->GetGUID());
         if (!aura)
         {

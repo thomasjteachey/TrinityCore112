@@ -480,7 +480,30 @@ namespace BarracksHardcore
         // dirtied by the core, but forcing it on a tick where nothing changed
         // is pure broadcast cost.
         if (player->IsFFAPvP() != wasFfa)
+        {
             player->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
+
+            // The bot render override branches on the OBSERVER's byte, but
+            // dirtying this player only rebuilds THIS player's values block.
+            // Bots already on screen keep the colour they were last sent, so
+            // after arming they stay green - and the client refuses to swing at
+            // a friendly unit, leaving a player hunted by bots they cannot hit
+            // until each one happens to re-send. Re-dirty the bots this flip
+            // just re-coloured. Dead ones too, or a corpse keeps a stale colour
+            // through its whole rez. Transitions only: not a hot path.
+            std::vector<Player*> nearby;
+            player->GetPlayerListInGrid(nearby, player->GetVisibilityRange(), false);
+            for (Player* other : nearby)
+                if (other->GetSession() && IsBotAccount(other->GetSession()->GetAccountId()))
+                    other->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
+
+            // Nothing re-checks a fight already under way: the auto-attack swing
+            // loop and periodic aura ticks never re-ask IsValidAttackTarget.
+            // Without this a player engages a bot, steps into a sanctuary or
+            // disarms, and keeps swinging at something that can no longer swing
+            // back. This is the core's own tool for exactly that.
+            player->ValidateAttackersAndOwnTarget();
+        }
 
         // Transitions only - this cannot spam.
         TC_LOG_INFO("playerbots.hardcore", "FFA {} for {} (zone {} area {} account {}): armed={} byteNow={} wasByte={}",
@@ -1866,6 +1889,17 @@ public:
             }
             else
             {
+                // A bounty cannot be walked off. Otherwise the flagger is an
+                // escape hatch: earn a price on your head, stroll back here,
+                // disarm, and keep it - untouchable while the fleet is still
+                // dispatched at you. The debt has to lapse on its own.
+                if (Bounty::GetStacks(player))
+                {
+                    me->Whisper("Your head is bought and paid for. No mark I lift calls off hunters already paid - "
+                        "outlive the price, then come back to me.", LANG_UNIVERSAL, player);
+                    return true;
+                }
+
                 SetOptedIn(guidLow, false);
                 me->Whisper("Your mark is lifted. The wilds are merely dangerous again.", LANG_UNIVERSAL, player);
             }

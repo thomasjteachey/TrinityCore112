@@ -3201,6 +3201,17 @@ namespace
         if (selfIsBot == targetIsBot)
             return false;
 
+        // A duel is consent, and the duel branch sits BELOW this rule in
+        // IsValidAttackTarget - so without an explicit pass here every duel with
+        // a bot dies on the countdown: the bot auto-accepts, the flags go up,
+        // and then neither side can land a blow. People duel in cities, where
+        // nobody is armed, so this is the common case rather than the corner.
+        if ((selfPlayer->duel && selfPlayer->duel->Opponent == targetPlayer &&
+                selfPlayer->duel->State == DUEL_STATE_IN_PROGRESS) ||
+            (targetPlayer->duel && targetPlayer->duel->Opponent == selfPlayer &&
+                targetPlayer->duel->State == DUEL_STATE_IN_PROGRESS))
+            return false;
+
         return !(selfIsBot ? targetPlayer : selfPlayer)->IsFFAPvP();
     }
 
@@ -3225,6 +3236,15 @@ namespace
 
         // A bot may support anybody; this is a rule about people opting out.
         if (caster->GetSession() && IsManagedPlayerbotAccountId(caster->GetSession()->GetAccountId()))
+            return false;
+
+        // Your own party is your own business. Companion bots deliberately join
+        // the player's group and are permanently armed, and the grouping rule
+        // exempts bots from the War Mode split - so without this a War-Mode-off
+        // player cannot heal, buff or resurrect the companions the PvE system
+        // just handed them, in a party it also put them in. The rule is about
+        // propping up strangers' fights from safety, not about your own five.
+        if (caster->IsInRaidWith(aided))
             return false;
 
         return !caster->IsFFAPvP() && aided->IsFFAPvP();
