@@ -35,6 +35,7 @@
 #include "Bag.h"
 #include "custom_barracks_hardcore.h"
 #include "custom_bounty.h"
+#include "Playerbot/Pve/PlayerbotPveManager.h"   // IsPvpOnlyBot
 #include "ScriptMgr.h"
 #include "Configuration/Config.h"
 #include "Formulas.h"
@@ -1309,11 +1310,25 @@ namespace BarracksHardcore
         // rule quietly never ran.
         bool const chestSpawned = chest.Summon() != nullptr;
 
-        for (CustomLootChests::ItemLocation const& dropped : droppedItems)
-            victim->DestroyItem(dropped.Bag, dropped.Slot, true);
+        // The PvP-only fleet pays out but is never stripped.
+        //
+        // Those bots ARE the battleground population, and taking their gear
+        // every time somebody farms one degrades the thing they exist for: a
+        // stripped bot is re-kitted in white, and after a few deaths the
+        // battlegrounds are being fought by naked people. Their gear is what
+        // makes them worth queueing against.
+        //
+        // This does make them a FAUCET rather than a transfer - the chest is a
+        // copy, conjured out of nothing. That is the trade, and it is the only
+        // place on the realm where the deflationary half of this rule is skipped.
+        bool const keepsGear = playerbot::PveManager::IsPvpOnlyBot(victim);
+        if (!keepsGear)
+            for (CustomLootChests::ItemLocation const& dropped : droppedItems)
+                victim->DestroyItem(dropped.Bag, dropped.Slot, true);
 
-        TC_LOG_INFO("playerbots.hardcore", "{} lost {} worn items and {}c bounty at death; chest spawned: {} ({}% of gear reaches it).",
-            victim->GetName(), uint32(droppedItems.size()), bountyGold, uint32(chestSpawned), s_dropChancePercent);
+        TC_LOG_INFO("playerbots.hardcore", "{} {} {} worn items and {}c bounty at death; chest spawned: {} ({}% of gear reaches it).",
+            victim->GetName(), keepsGear ? "copied" : "lost", uint32(droppedItems.size()),
+            bountyGold, uint32(chestSpawned), s_dropChancePercent);
     }
 }
 
