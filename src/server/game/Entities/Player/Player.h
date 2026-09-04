@@ -1070,6 +1070,12 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         // group does not reset it, and somebody who has never killed this victim
         // is not punished for another player's farming.
         float ConsumePvpXpDiminishing(ObjectGuid victimGuid, uint32 windowSeconds);
+        // Forget the kill history against one victim, or against everybody.
+        // Returns how many victim records were dropped, so a GM command can
+        // report what it actually did rather than claim a number. Nothing
+        // persists this map, so forgetting is the whole of the reset.
+        uint32 ClearPvpXpDiminishing(ObjectGuid victimGuid);
+        uint32 ClearPvpXpDiminishing();
         // Who actually did the killing. The PvP experience award scales by the
         // share of damage that came from players, so a mob cannot soften somebody
         // up and let a passer-by last-hit them for full value. Reset whenever this

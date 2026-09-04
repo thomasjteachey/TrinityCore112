@@ -59,6 +59,8 @@
 #include "Map.h"
 #include "Group.h"
 #include "ObjectMgr.h"
+#include "Optional.h"
+#include "RBAC.h"
 #include "Player.h"
 #include "ScriptedCreature.h"
 #include "ScriptedGossip.h"
@@ -1524,6 +1526,7 @@ namespace BarracksHardcore
 }
 
 using namespace BarracksHardcore;
+using namespace Trinity::ChatCommands;
 
 class barracks_hardcore_player : public PlayerScript
 {
@@ -2000,10 +2003,106 @@ public:
     }
 };
 
+// Killing the same person again and again pays less each time, halving on a
+// two-hour memory (Centurion.Hardcore.PlayerKill.DiminishSeconds). That memory
+// lives on the KILLER, keyed by whoever they killed, and bots are never paid
+// so a bot never holds one: "every bot's factor" is really the set of records
+// real players hold AGAINST the fleet. This forgets them.
+class barracks_hardcore_commands : public CommandScript
+{
+public:
+    barracks_hardcore_commands() : CommandScript("barracks_hardcore_commands") { }
+
+    ChatCommandTable GetCommands() const override
+    {
+        static ChatCommandTable hardcoreTable =
+        {
+            { "resetkillxp", HandleResetKillXp, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+        };
+        static ChatCommandTable commandTable =
+        {
+            { "hardcore", hardcoreTable },
+        };
+        return commandTable;
+    }
+
+    // .hardcore resetkillxp [me|all]
+    //
+    //   (nothing)  every online player forgets every online bot
+    //   me         only the caller forgets them
+    //   all        every online player forgets EVERY victim, bot or not - the
+    //              only way to also drop a record held against a bot that has
+    //              since logged out, since an offline victim cannot be listed
+    //
+    // Nothing persists the map, so forgetting is the whole of the reset: the
+    // next kill of that bot pays full price again.
+    static bool HandleResetKillXp(ChatHandler* handler, Optional<std::string> scope)
+    {
+        bool const everyVictim = scope && StringEqualI(*scope, "all");
+        bool const callerOnly = scope && StringEqualI(*scope, "me");
+        if (scope && !everyVictim && !callerOnly)
+            return false;
+
+        Player* caller = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
+        if (callerOnly && !caller)
+        {
+            handler->SendSysMessage("hardcore: \"me\" needs a player to be me.");
+            return true;
+        }
+
+        // One pass to sort the world into the people who hold records and the
+        // bots those records are about.
+        std::vector<Player*> holders;
+        std::vector<ObjectGuid> botGuids;
+        for (auto const& pair : ObjectAccessor::GetPlayers())
+        {
+            Player* player = pair.second;
+            if (!player || !player->IsInWorld())
+                continue;
+
+            if (IsPlayerbot(player))
+                botGuids.push_back(player->GetGUID());
+            else if (!callerOnly || player == caller)
+                holders.push_back(player);
+        }
+
+        uint32 records = 0;
+        uint32 touched = 0;
+        for (Player* holder : holders)
+        {
+            uint32 cleared = 0;
+            if (everyVictim)
+                cleared = holder->ClearPvpXpDiminishing();
+            else
+                for (ObjectGuid const& botGuid : botGuids)
+                    cleared += holder->ClearPvpXpDiminishing(botGuid);
+
+            if (cleared)
+            {
+                ++touched;
+                records += cleared;
+                TC_LOG_INFO("playerbots.hardcore",
+                    "PvP experience diminishing reset: {} forgot {} {}.",
+                    holder->GetName(), cleared, everyVictim ? "victims" : "bots");
+            }
+        }
+
+        if (everyVictim)
+            handler->PSendSysMessage("hardcore: cleared %u kill record%s (every victim) held by %u player%s.",
+                records, records == 1 ? "" : "s", touched, touched == 1 ? "" : "s");
+        else
+            handler->PSendSysMessage("hardcore: cleared %u kill record%s held by %u player%s against %u online bot%s.",
+                records, records == 1 ? "" : "s", touched, touched == 1 ? "" : "s",
+                uint32(botGuids.size()), botGuids.size() == 1 ? "" : "s");
+        return true;
+    }
+};
+
 void AddSC_custom_barracks_hardcore()
 {
     LoadHardcoreConfig();
     new barracks_hardcore_player();
     new npc_ffa_flagger();
     new barracks_hardcore_world();
+    new barracks_hardcore_commands();
 }

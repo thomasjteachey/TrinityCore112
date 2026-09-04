@@ -3105,6 +3105,18 @@ float Player::ConsumePvpXpDiminishing(ObjectGuid victimGuid, uint32 windowSecond
     return multiplier;
 }
 
+uint32 Player::ClearPvpXpDiminishing(ObjectGuid victimGuid)
+{
+    return uint32(m_pvpXpVictims.erase(victimGuid));
+}
+
+uint32 Player::ClearPvpXpDiminishing()
+{
+    uint32 const cleared = uint32(m_pvpXpVictims.size());
+    m_pvpXpVictims.clear();
+    return cleared;
+}
+
 void Player::GiveXP(uint32 xp, Unit* victim, float group_rate)
 {
     if (xp < 1)
