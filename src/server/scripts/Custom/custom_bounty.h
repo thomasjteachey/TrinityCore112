@@ -86,6 +86,10 @@ namespace Bounty
     // stream thickens rather than merely continuing.
     uint32 RelentlessIntervalSeconds(uint32 stacks);
 
+    // How many arrive at once. One reads as a queue of people taking turns to
+    // lose; two starts to read as a hunt.
+    uint32 HuntersPerWave(uint32 stacks);
+
     // Past this the VETERAN pool is preferred - the fleet's high-band bots,
     // rather than whoever happens to be nearest.
     bool DrawsFromVeterans(uint32 stacks);

@@ -3511,6 +3511,11 @@ Centurion.Bounty.IgnoreAggroBudgetStacks = 40
 #
 Centurion.Bounty.RelentlessStacks = 10
 Centurion.Bounty.RelentlessIntervalSeconds = 30
+#    Centurion.Bounty.PairUpStacks - at or above this many stacks the relentless
+#    dispatch sends TWO at a time instead of one. Clamped against
+#    MaxHuntersOnTarget, so a wave fills the remaining room rather than always
+#    adding its full size on top of whoever is already there.
+Centurion.Bounty.PairUpStacks = 15
 Centurion.Bounty.VeteranStacks = 25
 Centurion.Bounty.PvpBotStacks = 50
 

@@ -39,6 +39,15 @@ namespace BarracksHardcore
     // zone where no fight is possible is not aggressive, it is lost.
     bool IsOpenWorldPvpZone(uint32 zoneId);
 
+    // What level this zone tops out at.
+    //
+    // The realm's own table, written because AreaTableEntry::ExplorationLevel is
+    // ZERO for every zone in this rebuilt DBC - reading that armed nothing,
+    // anywhere. Exported so the bounty guards are sized by the same answer the
+    // FFA rules use, rather than a second copy that could drift from it.
+    // Unknown zones (Outland, Northrend, dungeons) return 60.
+    uint8 ZoneTopLevel(uint32 zoneId);
+
     // Whether the world can produce this item at all: sold by a vendor,
     // dropped by something, or handed to a new character. Fails open when the
     // set has not been built, so nothing is destroyed on a cold cache.

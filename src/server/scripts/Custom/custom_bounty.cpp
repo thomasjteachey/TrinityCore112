@@ -62,6 +62,7 @@ namespace
     uint32 s_ignoreAggroBudgetStacks = 40;
     uint32 s_relentlessStacks = 10;
     uint32 s_relentlessIntervalSeconds = 30;
+    uint32 s_pairUpStacks = 15;
     uint32 s_veteranStacks = 25;
     uint32 s_pvpBotStacks = 50;
     uint32 s_maxHuntersOnTarget = 6;
@@ -108,6 +109,9 @@ namespace
     std::mutex g_lock;
     std::unordered_map<uint64, Record> g_stacks;
     std::unordered_map<uint64, Debt> g_debts;
+    // Guards summoned after each victim, so they can be dismissed the moment
+    // the bounty is settled rather than loitering out their timer.
+    std::unordered_map<uint64, std::vector<ObjectGuid>> g_guards;
 
     uint32 MaxStacks()
     {
@@ -149,6 +153,8 @@ namespace
             sConfigMgr->GetIntDefault("Centurion.Bounty.RelentlessStacks", 10), 0, 255));
         s_relentlessIntervalSeconds = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Centurion.Bounty.RelentlessIntervalSeconds", 30), 5, 3600));
+        s_pairUpStacks = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Centurion.Bounty.PairUpStacks", 15), 0, 255));
         s_veteranStacks = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Centurion.Bounty.VeteranStacks", 25), 0, 255));
         s_pvpBotStacks = uint32(std::clamp(
@@ -246,6 +252,42 @@ namespace
         WriteRegistry(killer, aura->GetStackAmount(), aura->GetDuration());
         TC_LOG_DEBUG("playerbots.hardcore", "Bounty: {} now at {} stack(s).",
             killer->GetName(), uint32(aura->GetStackAmount()));
+    }
+
+    // Called the moment the bounty is settled. The guards were an escalation of
+    // a debt that no longer exists, and they are hostile to EVERYONE - leaving
+    // them standing over the corpse would mean whoever collected the bounty then
+    // has to fight the collectors.
+    //
+    // The summon's own timed despawn stays as the backstop, so a guard whose
+    // target logged out mid-fight still leaves on its own.
+    void DismissGuards(Player* victim)
+    {
+        if (!victim)
+            return;
+
+        std::vector<ObjectGuid> guards;
+        {
+            std::lock_guard<std::mutex> lock(g_lock);
+            auto const itr = g_guards.find(victim->GetGUID().GetRawValue());
+            if (itr == g_guards.end())
+                return;
+
+            guards.swap(itr->second);
+            g_guards.erase(itr);
+        }
+
+        uint32 dismissed = 0;
+        for (ObjectGuid const& guid : guards)
+            if (Creature* guard = ObjectAccessor::GetCreature(*victim, guid))
+            {
+                guard->DespawnOrUnsummon();
+                ++dismissed;
+            }
+
+        if (dismissed)
+            TC_LOG_INFO("playerbots.hardcore", "Bounty: {} Centurion Guard(s) dismissed after {} died.",
+                dismissed, victim->GetName());
     }
 
     void ClearBounty(Player* player)
@@ -398,15 +440,39 @@ namespace
             if (!guard)
                 continue;
 
+            // As big as the zone, not the 55 the template inherited from the
+            // Orgrimmar Grunt it was cloned from - which made a guard in Westfall
+            // unfightable and one in the Plaguelands beneath notice.
+            //
+            // NOT capped to the victim's own level: somebody who has run their
+            // bounty up in a zone far above them gets that zone's answer, which
+            // is the correct one.
+            //
+            // UpdateLevelDependantStats must follow SetLevel and reads GetLevel()
+            // to regenerate health, mana and damage from the creature base stats
+            // table. Setting the level alone leaves a level 40 guard carrying a
+            // level 55 health pool.
+            if (uint8 const zoneLevel = BarracksHardcore::ZoneTopLevel(player->GetZoneId()))
+            {
+                guard->SetLevel(zoneLevel);
+                guard->UpdateLevelDependantStats();
+            }
+
             ++summoned;
+            {
+                std::lock_guard<std::mutex> lock(g_lock);
+                g_guards[key].push_back(guard->GetGUID());
+            }
+
             if (guard->IsAIEnabled())
                 guard->AI()->AttackStart(player);
         }
 
         if (summoned)
             TC_LOG_INFO("playerbots.hardcore",
-                "Bounty {}: {} Centurion Guard(s) sent after {}.",
-                stacks, summoned, player->GetName());
+                "Bounty {}: {} Centurion Guard(s) at level {} sent after {}.",
+                stacks, summoned, uint32(BarracksHardcore::ZoneTopLevel(player->GetZoneId())),
+                player->GetName());
     }
 
     // Somewhere for the coin to go when nothing else builds a chest.
@@ -488,6 +554,11 @@ bool IgnoresAggroBudget(uint32 stacks)
 bool IsHuntedRelentlessly(uint32 stacks)
 {
     return s_enabled && s_relentlessStacks && stacks >= s_relentlessStacks;
+}
+
+uint32 HuntersPerWave(uint32 stacks)
+{
+    return (s_pairUpStacks && stacks >= s_pairUpStacks) ? 2u : 1u;
 }
 
 uint32 RelentlessIntervalSeconds(uint32 stacks)
@@ -596,6 +667,10 @@ public:
         // shed one.
         if (IsBountyContext(victim))
             RecordDeathDebt(victim);
+
+        // Whatever the zone rules said about the debt, the guards were sent for
+        // a target who is now dead, so they go either way.
+        DismissGuards(victim);
     }
 
     // Thirty stacks and up. Map thread, because summoning is.
@@ -622,6 +697,9 @@ public:
         std::lock_guard<std::mutex> guard(g_lock);
         g_stacks.erase(player->GetGUID().GetRawValue());
         g_debts.erase(player->GetGUID().GetRawValue());
+        // The guards themselves are left to their timed despawn: the player is
+        // gone, so there is nothing to resolve them against here.
+        g_guards.erase(player->GetGUID().GetRawValue());
     }
 
     // A bounty survives a logout in the aura table, so the registry has to be

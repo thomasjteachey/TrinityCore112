@@ -7887,12 +7887,22 @@ namespace
             std::sort(ranked.begin(), ranked.end(),
                 [](auto const& a, auto const& b) { return a.first < b.first; });
 
+            // How many go at once, clamped against the same ceiling the single
+            // dispatch respected: a bigger wave fills the remaining room and
+            // stops, rather than adding its full size on top of whoever is
+            // already standing there.
+            uint32 const room = Bounty::MaxHuntersOnTarget(spot.Bounty) - answering;
+            uint32 const wave = std::min(Bounty::HuntersPerWave(spot.Bounty), room);
+
             // The companion question needs the process-wide state lock, so it is
-            // asked only of the bot actually being sent - the same rule the idle
+            // asked only of the bots actually being sent - the same rule the idle
             // prod follows.
-            Player* chosen = nullptr;
+            std::vector<Player*> sending;
             for (auto const& [score, bot] : ranked)
             {
+                if (sending.size() >= wave)
+                    break;
+
                 // A bot with a teleport still queued has not arrived yet, and
                 // queueing a second one for it would overwrite the first.
                 {
@@ -7904,36 +7914,38 @@ namespace
                 PveBotState const* state = playerbot::LockedFind(g_PveBotStateByGuid,
                     bot->GetGUID().GetRawValue());
                 if (!state || state->masterGuid.IsEmpty())
-                {
-                    chosen = bot;
-                    break;
-                }
+                    sending.push_back(bot);
             }
 
-            if (!chosen)
+            if (sending.empty())
                 continue;
-
-            // Leave it alone on the way. The window covers the teleport plus the
-            // walk in from 210 yards with room to spare, and lapses by itself
-            // afterwards - see Player::SetBountyPursuit for why it is a deadline
-            // and not a flag.
-            chosen->SetBountyPursuit(spot.Bounty, 90 * IN_MILLISECONDS);
 
             uint32 const wait = Bounty::RelentlessIntervalSeconds(spot.Bounty);
             s_nextHuntAt[humanGuid] = now + std::chrono::seconds(wait);
+
+            for (Player* chosen : sending)
             {
+                // Leave them alone on the way. The window covers the teleport plus
+                // the walk in from 210 yards with room to spare, and lapses by
+                // itself - see Player::SetBountyPursuit for why it is a deadline
+                // and not a flag.
+                chosen->SetBountyPursuit(spot.Bounty, 90 * IN_MILLISECONDS);
+
                 std::lock_guard<std::mutex> guard(g_PvePendingLock);
                 g_PendingGuardianTeleports[chosen->GetGUID().GetRawValue()] =
                     { humanGuid, PvePlayerTeleportMinimumDistance };
             }
 
+            std::string names;
+            for (Player* chosen : sending)
+                names += (names.empty() ? "" : ", ") +
+                    std::string(playerbot::PveManager::IsPvpOnlyBot(chosen) ? "[pvp]" :
+                        (IsLocalVeteranGuid(chosen->GetGUID().GetRawValue()) ? "[veteran]" : "[local]")) +
+                    " " + chosen->GetName();
+
             TC_LOG_INFO("playerbots.pve",
-                "Bounty {}: sending {} {} (level {}) at {} (level {}); next in {}s.",
-                spot.Bounty,
-                playerbot::PveManager::IsPvpOnlyBot(chosen) ? "[pvp]" :
-                    (IsLocalVeteranGuid(chosen->GetGUID().GetRawValue()) ? "[veteran]" : "[local]"),
-                chosen->GetName(), uint32(chosen->GetLevel()),
-                human->GetName(), uint32(human->GetLevel()), wait);
+                "Bounty {}: sending {} at {} (level {}); {} already there; next in {}s.",
+                spot.Bounty, names, human->GetName(), uint32(human->GetLevel()), answering, wait);
         }
 
         for (auto itr = s_nextHuntAt.begin(); itr != s_nextHuntAt.end(); )
