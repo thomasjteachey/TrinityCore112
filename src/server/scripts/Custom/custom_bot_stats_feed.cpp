@@ -436,27 +436,55 @@ namespace
             if (!tab || !(tab->ClassMask & classMask) || tab->OrderIndex > 2)
                 continue;
 
+            // EVERY talent in the class, not only the ones taken. A tree with
+            // the untaken ones missing is not a tree - the shape of a build is
+            // only legible against the empty sockets around it, and the arrows
+            // need the prerequisites of talents the bot never touched.
+            uint32 maxRank = 0;
+            for (uint8 r = 0; r < MAX_TALENT_RANK; ++r)
+                if (talent->SpellRank[r])
+                    maxRank = uint32(r) + 1;
+
+            if (!maxRank)
+                continue;
+
             // Highest rank the bot actually has; ranks are cumulative, so the
             // top one it knows IS the number of points sunk into that talent.
+            uint32 curRank = 0;
             for (int8 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
             {
-                if (!talent->SpellRank[rank] || !bot->HasTalent(talent->SpellRank[rank], spec))
-                    continue;
-
-                points[tab->OrderIndex] += uint32(rank) + 1;
-
-                taken << talent->SpellRank[rank] << ',' << (uint32(rank) + 1) << ','
-                      << tab->OrderIndex << ',' << talent->TierID << ',' << talent->ColumnIndex << ';';
-
-                if (++inTaken >= 8)
+                if (talent->SpellRank[rank] && bot->HasTalent(talent->SpellRank[rank], spec))
                 {
-                    SendTagged(viewer, "BSTP", taken.str());
-                    taken.str(std::string());
-                    taken.clear();
-                    taken << bot->GetName() << '|';
-                    inTaken = 0;
+                    curRank = uint32(rank) + 1;
+                    break;
                 }
-                break;
+            }
+            points[tab->OrderIndex] += curRank;
+
+            // The icon and name come off the rank the bot HAS where it has one,
+            // and off rank 1 otherwise, so an untaken talent still draws.
+            uint32 const showSpell = curRank ? talent->SpellRank[curRank - 1] : talent->SpellRank[0];
+
+            // Prerequisite, as a tier and column rather than a talent id, so the
+            // client can draw the arrow without a second lookup table.
+            int32 preTier = -1, preCol = -1;
+            if (TalentEntry const* pre = sTalentStore.LookupEntry(talent->PrereqTalent))
+            {
+                preTier = int32(pre->TierID);
+                preCol = int32(pre->ColumnIndex);
+            }
+
+            taken << showSpell << ',' << curRank << ',' << maxRank << ','
+                  << tab->OrderIndex << ',' << talent->TierID << ',' << talent->ColumnIndex << ','
+                  << preTier << ',' << preCol << ';';
+
+            if (++inTaken >= 6)
+            {
+                SendTagged(viewer, "BSTP", taken.str());
+                taken.str(std::string());
+                taken.clear();
+                taken << bot->GetName() << '|';
+                inTaken = 0;
             }
         }
 

@@ -347,14 +347,18 @@ local function ParseTalentPicks(payload)
 
 	picksOf[name] = picksOf[name] or {}
 	for row in string.gmatch(rows, "([^;]+)") do
-		local spell, rank, tree, tier, col = string.match(row, "^(%d+),(%d+),(%d+),(%d+),(%d+)$")
+		local spell, rank, maxRank, tree, tier, col, preTier, preCol =
+			string.match(row, "^(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%-?%d+),(%-?%d+)$")
 		if spell then
 			table.insert(picksOf[name], {
-				spell = tonumber(spell) or 0,
-				rank  = tonumber(rank) or 0,
-				tree  = tonumber(tree) or 0,
-				tier  = tonumber(tier) or 0,
-				col   = tonumber(col) or 0,
+				spell   = tonumber(spell) or 0,
+				rank    = tonumber(rank) or 0,
+				maxRank = tonumber(maxRank) or 0,
+				tree    = tonumber(tree) or 0,
+				tier    = tonumber(tier) or 0,
+				col     = tonumber(col) or 0,
+				preTier = tonumber(preTier) or -1,
+				preCol  = tonumber(preCol) or -1,
 			})
 		end
 	end
@@ -1033,15 +1037,34 @@ for i = 1, TALENT_COLS * TALENT_ROWS do
 	t.icon:SetPoint("BOTTOMRIGHT", t, "BOTTOMRIGHT", -3, 3)
 	t.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
 
-	-- The gold ring a learned talent wears. UI-TalentFrame-Parts is an atlas and
-	-- guessing at its coordinates is what produced a smear last time; the border
-	-- from UI-EmptySlot is a known quantity and reads the same at this size.
-	t.frame = t:CreateTexture(nil, "OVERLAY")
-	t.frame:SetPoint("TOPLEFT", t, "TOPLEFT", -1, 1)
-	t.frame:SetPoint("BOTTOMRIGHT", t, "BOTTOMRIGHT", 1, -1)
-	t.frame:SetTexture("Interface\\Buttons\\UI-EmptySlot")
-	t.frame:SetTexCoord(0.15, 0.85, 0.15, 0.85)
-	t.frame:SetVertexColor(1, 0.82, 0.2)
+	-- Four hairlines, NOT UI-EmptySlot. That texture is a filled slot rather
+	-- than a ring, and drawn on OVERLAY it covered the icon completely - which
+	-- is why every talent was a blank plate with a rank number on it. The same
+	-- border the gear slots use, which is known to work at this size.
+	t.edge = {}
+	for e = 1, 4 do
+		local x = t:CreateTexture(nil, "OVERLAY")
+		x:SetTexture("Interface\\Buttons\\WHITE8X8")
+		t.edge[e] = x
+	end
+	t.edge[1]:SetPoint("TOPLEFT", t, "TOPLEFT", 0, 0)
+	t.edge[1]:SetPoint("TOPRIGHT", t, "TOPRIGHT", 0, 0)
+	t.edge[1]:SetHeight(1)
+	t.edge[2]:SetPoint("BOTTOMLEFT", t, "BOTTOMLEFT", 0, 0)
+	t.edge[2]:SetPoint("BOTTOMRIGHT", t, "BOTTOMRIGHT", 0, 0)
+	t.edge[2]:SetHeight(1)
+	t.edge[3]:SetPoint("TOPLEFT", t, "TOPLEFT", 0, 0)
+	t.edge[3]:SetPoint("BOTTOMLEFT", t, "BOTTOMLEFT", 0, 0)
+	t.edge[3]:SetWidth(1)
+	t.edge[4]:SetPoint("TOPRIGHT", t, "TOPRIGHT", 0, 0)
+	t.edge[4]:SetPoint("BOTTOMRIGHT", t, "BOTTOMRIGHT", 0, 0)
+	t.edge[4]:SetWidth(1)
+
+	t.SetEdgeColor = function(self, r, g, b)
+		for e = 1, 4 do
+			self.edge[e]:SetVertexColor(r, g, b)
+		end
+	end
 
 	-- Rank in the bottom right on a dark plate, the way the talent frame does.
 	t.rankBg = t:CreateTexture(nil, "OVERLAY")
@@ -1070,6 +1093,43 @@ end
 
 local talentFoot = talentPage:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 talentFoot:SetPoint("BOTTOM", bot, "BOTTOM", 0, 40)
+
+-- Prerequisite links, pooled. A tree needs at most a dozen and they are rebuilt
+-- on every draw, so they are handed out by index rather than kept per talent.
+local links = {}
+
+local function AcquireLink(i)
+	if not links[i] then
+		local t = talentPage:CreateTexture(nil, "ARTWORK")
+		t:SetTexture("Interface\\Buttons\\WHITE8X8")
+		links[i] = t
+	end
+	links[i]:Show()
+	return links[i]
+end
+
+local function HideLinksFrom(i)
+	for n = i, #links do
+		links[n]:Hide()
+	end
+end
+
+-- A vertical drop when the two share a column, an elbow otherwise. Drawn
+-- BEHIND the buttons, so it runs to the edge of each rather than across them.
+local function PlaceLink(line, from, to, straight)
+	line:ClearAllPoints()
+	if straight then
+		line:SetWidth(3)
+		line:SetPoint("TOP", from, "BOTTOM", 0, 1)
+		line:SetPoint("BOTTOM", to, "TOP", 0, -1)
+	else
+		-- One horizontal bar at the destination's height is enough to show the
+		-- relationship without a second segment and a corner to get wrong.
+		line:SetHeight(3)
+		line:SetPoint("LEFT", from, "RIGHT", -1, 0)
+		line:SetPoint("RIGHT", to, "LEFT", 1, 0)
+	end
+end
 
 ------------------------------------------------------------------
 -- drawing
@@ -1155,7 +1215,9 @@ DrawTalents = function(name)
 		end
 	end
 
-	local shown = 0
+	local shown, spent = 0, 0
+	local placed = {}
+
 	for i = 1, #picks do
 		local p = picks[i]
 		if p.tree == activeTree then
@@ -1167,14 +1229,55 @@ DrawTalents = function(name)
 				local _, _, icon = GetSpellInfo(p.spell)
 				slot.spellId = p.spell
 				slot.icon:SetTexture(icon)
-				slot.rank:SetText(p.rank)
+				slot.rank:SetText(p.rank .. "/" .. p.maxRank)
+				placed[idx] = p
+
+				-- Taken talents are lit with a gold edge; untaken ones are
+				-- drawn anyway, greyed and dimmed. A tree with the empty
+				-- sockets missing is not a tree - the shape only reads against
+				-- what was passed over.
+				if p.rank > 0 then
+					slot.icon:SetDesaturated(false)
+					slot.icon:SetAlpha(1)
+					slot:SetEdgeColor(1, 0.82, 0.2)
+					slot.rank:SetTextColor(1, 0.82, 0.2)
+					spent = spent + p.rank
+				else
+					slot.icon:SetDesaturated(true)
+					slot.icon:SetAlpha(0.45)
+					slot:SetEdgeColor(0.35, 0.35, 0.35)
+					slot.rank:SetTextColor(0.5, 0.5, 0.5)
+				end
+
 				slot:Show()
 				shown = shown + 1
 			end
 		end
 	end
 
-	talentFoot:SetText(shown > 0 and "" or "|cff808080nothing spent in this tree|r")
+	-- Arrows, as plain lines from the prerequisite to the talent that needs it.
+	-- Blizzard draws these out of the UI-TalentArrows atlas; guessing at atlas
+	-- coordinates is what smeared the last two textures, and a line carries the
+	-- same information - which talent gates which - without the guesswork.
+	local usedLinks = 0
+	for idx, p in pairs(placed) do
+		if p.preTier >= 0 and p.preCol >= 0 then
+			local fromIdx = p.preTier * TALENT_COLS + p.preCol + 1
+			local from, to = talentIcons[fromIdx], talentIcons[idx]
+			if from and to and placed[fromIdx] then
+				usedLinks = usedLinks + 1
+				local line = AcquireLink(usedLinks)
+				-- Lit only when the prerequisite is actually met, so a dead
+				-- branch reads as dead.
+				local lit = placed[fromIdx].rank >= placed[fromIdx].maxRank
+				line:SetVertexColor(lit and 1 or 0.35, lit and 0.82 or 0.35, lit and 0.2 or 0.35)
+				PlaceLink(line, from, to, p.preCol == p.col)
+			end
+		end
+	end
+	HideLinksFrom(usedLinks + 1)
+
+	talentFoot:SetText(spent > 0 and "" or "|cff808080nothing spent in this tree|r")
 end
 
 ------------------------------------------------------------------
