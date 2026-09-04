@@ -11640,8 +11640,20 @@ namespace playerbot
                 // acquisitions a second in front of live bot ticks. That
                 // question is asked in ProdForgottenPlayers instead, of the one
                 // bot about to be sent.
-                if (g_PveConfig.idleProdAfterMinutes && bot->IsAlive() && !bot->IsInCombat() &&
+                //
+                // InBattlegroundQueue matters as much as InBattleground: a bot
+                // already inside one was never a candidate, but one WAITING for
+                // a pop was, and teleporting it across the world is exactly how
+                // it misses that pop. Nothing should pull anybody out of a queue,
+                // so the rule lives here rather than in any one caller.
+                //
+                // NOT gated on idleProdAfterMinutes: this pool feeds the bounty
+                // dispatch too, and tying it to an unrelated feature's switch
+                // made the top bounty rungs silently candidate-less whenever the
+                // idle prod was off.
+                if (bot->IsAlive() && !bot->IsInCombat() &&
                     !bot->InBattleground() && !bot->InArena() &&
+                    !bot->InBattlegroundQueue() &&
                     !bot->IsBeingTeleportedFar() && !bot->IsBeingTeleportedNear())
                     proddableBots.push_back(bot);
             }

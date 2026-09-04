@@ -3453,11 +3453,12 @@ Centurion.Bounty.IgnoreAggroBudgetStacks = 40
 #                     At or above VeteranStacks the veteran bots are preferred -
 #                     the fleet's high-band population (Playerbot.Pve.Rebirth.
 #                     Veterans), who hold the 55+ zones.
-#                     At or above PvpBotStacks the PvP-ONLY bots are recruited and
-#                     preferred over everyone. Those are the fleet held back for
-#                     battlegrounds, and this is the only thing that pulls them
-#                     into the open world - the top rung is the realm sending the
-#                     people it was saving.
+#                     At or above PvpBotStacks the PvP-ONLY bots are preferred,
+#                     but ONLY ones that are idle: a bot inside a battleground or
+#                     an arena, or merely QUEUED for one, is never a candidate on
+#                     any path. Nothing is ever taken away from a battleground.
+#                     What the top rung buys is the attention of the PvP fleet
+#                     while it is between matches.
 #                     Ranking is by pool then distance, and ordinary bots are the
 #                     LAST tier rather than excluded, so a zone holding neither
 #                     still sends somebody.
