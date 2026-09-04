@@ -7111,6 +7111,23 @@ namespace
                         ++tookItems;
                     }
                 }
+
+                // A mail with nothing left in it is rubbish. Stock TrinityCore
+                // only removes one when a player clicks delete, and nobody ever
+                // opens a bot's mailbox - so drained rows accumulated without
+                // limit: 103,546 of them carrying no money and no attachment,
+                // against 3,206 that still held something. The table had grown
+                // sevenfold in five days.
+                //
+                // Only when it is genuinely empty. _SaveMail destroys any item
+                // still attached to a mail marked deleted, and an attachment can
+                // legitimately still be there when the bot's bags were full.
+                if (!mail->money && !mail->COD && !mail->HasItems() &&
+                    mail->state != MAIL_STATE_DELETED)
+                {
+                    mail->state = MAIL_STATE_DELETED;
+                    tookAnything = true;
+                }
             }
 
             if (tookAnything)
@@ -12839,7 +12856,27 @@ namespace playerbot
 
         // PvP-only bots live outside the PvE world entirely.
         if (IsPvpOnlyBot(player))
+        {
+            // Emptying a mailbox is housekeeping, not a PvE behaviour, and it is
+            // the one thing a PvP-only bot still needs. Everything below this
+            // line is skipped for them, so the day an account was moved onto the
+            // PvP-only list its outstanding auction proceeds froze where they
+            // stood: eight level 60s on one account were holding 3,383 mails and
+            // 42,660 gold that had been sitting undeliverable ever since, with
+            // the bots online the whole time and no way to ever collect it.
+            //
+            // They do not touch the auction house any more - that part is
+            // working - but money already owed to them still has to arrive.
+            PveBotState& pvpState = LockedGetOrCreate(g_PveBotStateByGuid, player->GetGUID().GetRawValue());
+            PveTimePoint const mailNow = PveClock::now();
+            if (mailNow >= pvpState.nextMailCheckAt)
+            {
+                pvpState.nextMailCheckAt = mailNow + std::chrono::minutes(3);
+                std::lock_guard<std::mutex> guard(g_PvePendingLock);
+                g_PendingMailCollections.insert(player->GetGUID().GetRawValue());
+            }
             return;
+        }
 
         ObjectGuid const guid = player->GetGUID();
         uint64 const rawGuid = guid.GetRawValue();
