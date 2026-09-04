@@ -36,6 +36,7 @@
 #include "World.h"
 
 #include <algorithm>
+#include <string>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -156,7 +157,12 @@ namespace
         if (player->IsInGurubashiBattleRing())
             return false;
 
-        return !player->pvpInfo.IsInFFAPvPArea;
+        // IsInFFAPvPAreaByMap, NOT IsInFFAPvPArea. The latter is reassigned every
+        // tick by the hardcore ruleset to mean 'this unit is FFA armed', and every
+        // playerbot is permanently armed - so reading it here asked "is this a
+        // bot" and refused a bounty for every bot kill on the realm, which is the
+        // one case the whole feature exists for.
+        return !player->pvpInfo.IsInFFAPvPAreaByMap;
     }
 
     void WriteRegistry(Player const* player, uint32 stacks, int32 durationMs)
@@ -431,8 +437,26 @@ public:
         // Whoever helped put them down is now worth putting down. Read the
         // participants before anything else touches the victim.
         if (s_stacksPerKill && IsBountyContext(victim))
-            for (Player* participant : CollectParticipants(victim, killer))
+        {
+            std::vector<Player*> const participants = CollectParticipants(victim, killer);
+            std::string credited;
+            for (Player* participant : participants)
+            {
                 AddStacks(participant, s_stacksPerKill);
+                credited += (credited.empty() ? "" : ", ") + participant->GetName();
+            }
+
+            // INFO, not DEBUG: Logger.playerbots sits at INFO, so a DEBUG line
+            // here is discarded - which is why the first failure looked like
+            // silence and cost a whole build cycle to tell a denied gate from an
+            // empty participant list.
+            TC_LOG_INFO("playerbots.hardcore", "Bounty: {} died; credited {}.",
+                victim->GetName(), credited.empty() ? "nobody" : credited);
+        }
+        else if (s_stacksPerKill)
+            TC_LOG_INFO("playerbots.hardcore",
+                "Bounty: {} died somewhere a bounty does not apply (zone {} area {}); nobody credited.",
+                victim->GetName(), victim->GetZoneId(), victim->GetAreaId());
 
         // And the victim settles up - but only where the bounty applied in the
         // first place. Dying in the Battle Ring deliberately does NOT clear a

@@ -8021,6 +8021,9 @@ void Player::UpdateArea(uint32 newArea)
     }
 
     pvpInfo.IsInFFAPvPArea = isFFAArea;
+    // The same value, kept where nothing reassigns it - see the note on the
+    // field. The hardcore ruleset owns IsInFFAPvPArea from here on.
+    pvpInfo.IsInFFAPvPAreaByMap = isFFAArea;
 
     // check if we were in ffa arena and we left
     if (oldFFAPvPArea && !pvpInfo.IsInFFAPvPArea)

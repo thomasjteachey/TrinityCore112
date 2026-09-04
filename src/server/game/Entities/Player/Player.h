@@ -231,12 +231,21 @@ typedef std::map<uint8, ActionButton> ActionButtonList;
 
 struct PvPInfo
 {
-    PvPInfo() : IsHostile(false), IsInHostileArea(false), IsInNoPvPArea(false), IsInFFAPvPArea(false), EndTimer(0) { }
+    PvPInfo() : IsHostile(false), IsInHostileArea(false), IsInNoPvPArea(false), IsInFFAPvPArea(false), IsInFFAPvPAreaByMap(false), EndTimer(0) { }
 
     bool IsHostile;
     bool IsInHostileArea;               ///> Marks if player is in an area which forces PvP flag
     bool IsInNoPvPArea;                 ///> Marks if player is in a sanctuary or friendly capital city
     bool IsInFFAPvPArea;                ///> Marks if player is in an FFAPvP area (such as Gurubashi Arena)
+    ///> The same question answered from the MAP ALONE, and never overwritten.
+    ///>
+    ///> IsInFFAPvPArea above is set here from the area table and then reassigned
+    ///> by the hardcore ruleset (custom_barracks_hardcore.cpp, ApplyFfaState) to
+    ///> mean 'this unit is FFA ARMED' - which for a playerbot is true in the
+    ///> middle of an ordinary zone. Anything that needs to know whether the
+    ///> PLACE is a free-for-all, rather than whether the unit is flagged in it,
+    ///> must read this one.
+    bool IsInFFAPvPAreaByMap;
     time_t EndTimer;                    ///> Time when player unflags himself for PvP (flag removed after 5 minutes)
 };
 
