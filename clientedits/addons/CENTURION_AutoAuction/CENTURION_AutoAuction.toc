@@ -1,0 +1,7 @@
+## Interface: 30300
+## Title: Centurion Auto Auction
+## Version: 3.3.5
+## Notes: Posts green/blue/epic gear from your bags at a price worked out from each lot's deposit, or undercutting the cheapest listing.
+## SavedVariables: CENTURION_AUTOAUCTION_DB
+
+CENTURION_AutoAuction.lua
