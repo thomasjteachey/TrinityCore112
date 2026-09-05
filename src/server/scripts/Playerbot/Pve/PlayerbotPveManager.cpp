@@ -6202,6 +6202,29 @@ namespace
 
         if (bot->GetZoneId() != zone.zoneId && eligible && !withinPlayerReach)
         {
+            // Break off the chase AT THE BORDER, rather than only walking home
+            // once it is over.
+            //
+            // The leash below waits for the bot to be out of combat, and a
+            // guardian that has chased somebody across the line is in combat for
+            // exactly as long as the chase lasts - so it could follow a player
+            // out of its zone and keep following, which is what a guardian is
+            // least supposed to do. The zone filter on the human search is what
+            // makes this reachable: the person it is chasing is no longer IN the
+            // post zone, so they stop counting as a reason to be here.
+            //
+            // Dropping the engagement is what ends the pursuit. Being attacked is
+            // a different question and is still answered the same way - the
+            // defensive paths deliberately never consult the engagement registry,
+            // so a guardian dragged over the line and beaten on still fights
+            // back. It simply stops doing the chasing.
+            if (state.engaged || bot->GetVictim())
+            {
+                state.engaged = false;
+                playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), false);
+                bot->AttackStop();
+            }
+
             PveTimePoint const now = PveClock::now();
             if (state.guardianOutOfZoneSince == PveTimePoint())
                 state.guardianOutOfZoneSince = now;
