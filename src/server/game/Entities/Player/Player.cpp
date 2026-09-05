@@ -3078,7 +3078,7 @@ void Player::SendLogXPGain(uint32 GivenXP, Unit* victim, uint32 BonusXP, bool re
     SendDirectMessage(&data);
 }
 
-float Player::ConsumePvpXpDiminishing(ObjectGuid victimGuid, uint32 windowSeconds)
+float Player::ConsumePvpXpDiminishing(ObjectGuid victimGuid, uint32 windowSeconds, float decayPerKill)
 {
     time_t const now = GameTime::GetGameTime();
     // The window is passed in rather than read from config here, so the
@@ -3097,9 +3097,18 @@ float Player::ConsumePvpXpDiminishing(ObjectGuid victimGuid, uint32 windowSecond
     }
 
     PvpXpVictimRecord& record = m_pvpXpVictims[victimGuid];
-    // Halve per prior kill of this victim: full, half, quarter, eighth. The shift
-    // is capped so a long farming session cannot run it off the end of the type.
-    float const multiplier = 1.0f / float(1u << std::min<uint32>(record.Kills, 16u));
+
+    // Geometric in the share KEPT, so the curve is smooth and never reaches
+    // zero: at the 0.25 default a repeat kill of the same victim is worth
+    // 1, 0.75, 0.56, 0.42, 0.32 ... of full value. This used to be a halving
+    // bit-shift, which is the same formula at decay 0.5 and nothing else -
+    // there was no way to be gentler than "half every time".
+    //
+    // The exponent is capped rather than the result: pow is perfectly happy to
+    // run a long farming session down to a denormal, and the cap keeps it a
+    // number rather than a curiosity. At 0.75 the cap is already 1e-8.
+    float const keptPerKill = std::clamp(1.0f - decayPerKill, 0.0f, 1.0f);
+    float const multiplier = std::pow(keptPerKill, float(std::min<uint32>(record.Kills, 64u)));
     ++record.Kills;
     record.LastKillTime = now;
     return multiplier;

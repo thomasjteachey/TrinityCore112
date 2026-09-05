@@ -3627,6 +3627,27 @@ Centurion.Bounty.GuardLifetimeSeconds = 180
 
 Centurion.Hardcore.PlayerKill.DiminishSeconds = 7200
 
+#
+#    Centurion.Hardcore.PlayerKill.XpDecayPerKill
+#        Description: How much of a repeat kill's experience is LOST each time
+#                     the same victim is killed again inside the window above.
+#                     It is the share lost, not the share kept.
+#
+#                     0.25 - each repeat is worth three quarters of the last:
+#                            1, 0.75, 0.56, 0.42, 0.32 ...
+#                     0.5  - the old hardcoded halving: 1, 0.5, 0.25, 0.125 ...
+#                     0    - no diminishing at all; every kill pays full.
+#                     1    - a victim is worth nothing after the first kill.
+#
+#                     Lower is more generous to somebody farming the same bot.
+#                     The curve is geometric and never quite reaches zero, so
+#                     there is no cliff at which a victim becomes worthless.
+#        Default:     0.25
+#        Range:       0.0 - 1.0
+#
+
+Centurion.Hardcore.PlayerKill.XpDecayPerKill = 0.25
+
 DireMaulBeads.ItemId = 21982
 DireMaulBeads.AuraId = 90002
 DireMaulBeads.AreaIds = 495,496,498,2557,3217

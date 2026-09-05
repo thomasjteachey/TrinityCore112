@@ -1069,7 +1069,13 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         // the killer, so it follows the person rather than the group: leaving a
         // group does not reset it, and somebody who has never killed this victim
         // is not punished for another player's farming.
-        float ConsumePvpXpDiminishing(ObjectGuid victimGuid, uint32 windowSeconds);
+        //
+        // decayPerKill is the share LOST per prior kill, not the share kept, so
+        // 0.25 means each repeat is worth three quarters of the last one and 0
+        // switches the whole thing off. It is passed in for the same reason the
+        // window is: the only place that decides what a PvP kill is worth is the
+        // one that awards it, and Player has no business reading that config.
+        float ConsumePvpXpDiminishing(ObjectGuid victimGuid, uint32 windowSeconds, float decayPerKill);
         // Forget the kill history against one victim, or against everybody.
         // Returns how many victim records were dropped, so a GM command can
         // report what it actually did rather than claim a number. Nothing

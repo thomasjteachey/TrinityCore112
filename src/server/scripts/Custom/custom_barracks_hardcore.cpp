@@ -124,8 +124,12 @@ namespace BarracksHardcore
     // segments the experience bar is divided into, so one bubble is 5% of a
     // level and twenty is a full bar. Fractions are allowed. 0 disables.
     float s_playerKillXpBubbles = 2.0f;
-    // How long a victim is remembered for the halving below.
+    // How long a victim is remembered for the decay below.
     uint32 s_playerKillDiminishSeconds = 2 * HOUR;
+    // How much of a repeat kill's value is LOST each time, inside the window
+    // above. 0.25 leaves three quarters standing per repeat, which is the
+    // gentle end; 0.5 is the old hardcoded halving; 0 turns it off.
+    float s_playerKillXpDecayPerKill = 0.25f;
     std::unordered_set<uint32> s_botAccountIds;
 
     std::shared_mutex s_optInLock;
@@ -151,6 +155,8 @@ namespace BarracksHardcore
             sConfigMgr->GetFloatDefault("Centurion.Hardcore.PlayerKill.ExperienceBubbles", 2.0f), 0.0f, 20.0f);
         s_playerKillDiminishSeconds = uint32(std::max(0,
             sConfigMgr->GetIntDefault("Centurion.Hardcore.PlayerKill.DiminishSeconds", 2 * HOUR)));
+        s_playerKillXpDecayPerKill = std::clamp(
+            sConfigMgr->GetFloatDefault("Centurion.Hardcore.PlayerKill.XpDecayPerKill", 0.25f), 0.0f, 1.0f);
 
         s_botAccountIds.clear();
         std::stringstream stream(sConfigMgr->GetStringDefault("Playerbot.RandomPopulation.BotAccountIds", ""));
@@ -1842,7 +1848,7 @@ public:
             // nobody's count and somebody who has never killed this victim is
             // not punished for another player's farming.
             float const repeat = member->ConsumePvpXpDiminishing(victim->GetGUID(),
-                s_playerKillDiminishSeconds);
+                s_playerKillDiminishSeconds, s_playerKillXpDecayPerKill);
 
             uint32 const amount = uint32(perHead * conScale * repeat);
             if (!amount)
