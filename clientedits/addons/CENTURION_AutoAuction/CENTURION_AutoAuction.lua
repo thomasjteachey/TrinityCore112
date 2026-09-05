@@ -660,6 +660,20 @@ local function Step()
         deadline = GetTime() + QUERY_TIMEOUT
 
     elseif state == "post" then
+        -- Stop before the purse is empty, not after.
+        --
+        -- The deposit is charged per lot, so a long run spends money the whole
+        -- way down and the last few posts are the ones that cannot be paid for.
+        -- Ending the run here is the honest answer: the alternative is to keep
+        -- trying, be refused, and skip item after item for a reason that has
+        -- nothing to do with the items.
+        local needed = CalculateAuctionDeposit(db.duration) or 0
+        if needed > 0 and GetMoney() < needed then
+            ClearSellSlot()
+            StopRun("Out of gold for the deposit (" .. FormatMoney(needed) .. " needed)")
+            return
+        end
+
         if not PostCurrent() then
             MarkSkipped(current.id)
             state = "next"
@@ -670,9 +684,25 @@ local function Step()
         deadline = GetTime() + POST_TIMEOUT
 
     elseif state == "posting" then
-        -- The sell slot empties itself when the auction is accepted; if it is
-        -- still full the server refused the lot.
-        if not GetAuctionSellItemInfo() then
+        -- An empty sell slot is NOT proof the auction was created.
+        --
+        -- It reads that way, and that was the bug: the slot is equally empty
+        -- when the server REFUSED the lot and handed the item straight back to
+        -- the bag. The refusal that matters is "you cannot afford the deposit",
+        -- which is exactly the state a run ends up in after it has spent the
+        -- purse posting - so the addon announced a post that never happened,
+        -- reset this item's attempt count because it thought it had succeeded,
+        -- rescanned the bags, found the very same item, and did it again. That
+        -- is the wall of identical "posted" lines for an item that never
+        -- reached the auction house, and it never stopped because a success
+        -- always clears the counter that exists to stop it.
+        --
+        -- What actually proves a post is the ITEM BEING GONE. Checked by id
+        -- rather than by "is anything there", so a stack that was split, or a
+        -- slot something else has since fallen into, cannot read as success.
+        local goneFromBag = ItemIdFromLink(GetContainerItemLink(current.bag, current.slot)) ~= current.id
+
+        if not GetAuctionSellItemInfo() and goneFromBag then
             posted   = posted + 1
             failures = 0
             attempts[current.id] = 0
