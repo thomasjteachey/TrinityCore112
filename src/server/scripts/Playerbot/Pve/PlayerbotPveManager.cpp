@@ -4505,6 +4505,40 @@ namespace
         return bot->GetClass() == CLASS_HUNTER && EquipProfileIndex(bot) == 0 && bot->CanDualWield();
     }
 
+    // And the mirror of it: the specs that want the biggest single swing they
+    // can hold, in both hands.
+    //
+    // Arms, Retribution and Enhancement are all built the same way here - every
+    // ability is ONE hit that adds flat damage on top of a swing, and the seals,
+    // imbues and strikes scale off weapon damage - so the larger hit is worth
+    // more than the block and armour a shield brings. Mortal Strike off a slow
+    // two-hander is the whole point of Arms, and at this level cap Enhancement
+    // has no dual wield to fall back on: that is a TBC talent, so a shaman here
+    // is choosing between a two-hander and sword-and-board exactly like the
+    // other two.
+    //
+    // The scorer cannot see that on its own, because it compares slot against
+    // slot: a higher item level one-hander wins the mainhand on stats, and a
+    // shield then wins an offhand that would otherwise sit empty. Both
+    // comparisons are individually correct and the PAIR is wrong, which is why
+    // these three ended up in sword and board for their entire lives. Deciding
+    // it before any score is the same shape as the hunter rule above.
+    //
+    // Profiles are EquipProfileIndex (guid % 3), named client-side in the order
+    // the armory uses: Warrior Arms/Fury/Protection, Paladin Holy/Protection/
+    // Retribution, Shaman Elemental/Enhancement/Restoration.
+    bool PrefersTwoHandedMainhand(Player const* bot)
+    {
+        uint32 const profile = EquipProfileIndex(bot);
+        switch (bot->GetClass())
+        {
+            case CLASS_WARRIOR: return profile == 0;   // Arms
+            case CLASS_PALADIN: return profile == 2;   // Retribution
+            case CLASS_SHAMAN:  return profile == 1;   // Enhancement
+            default:            return false;
+        }
+    }
+
     // Instant attacks add flat damage to a single swing, so at comparable
     // quality the slower, harder-hitting weapon wins: average hit per swing
     // is DPS x speed, which prefers slow weapons at equal DPS by construction.
@@ -4850,6 +4884,17 @@ namespace
                 bool const incumbentTwoHand = incumbent->InventoryType == INVTYPE_2HWEAPON;
                 if (candidateTwoHand != incumbentTwoHand)
                     return !candidateTwoHand;
+            }
+
+            // And the same rule pointing the other way, for the specs that swing
+            // one big weapon. Decided before the score for the same reason: the
+            // one-hander often WINS on stats and is still the wrong answer.
+            if (slot == EQUIPMENT_SLOT_MAINHAND && PrefersTwoHandedMainhand(bot))
+            {
+                bool const candidateTwoHand = candidate->InventoryType == INVTYPE_2HWEAPON;
+                bool const incumbentTwoHand = incumbent->InventoryType == INVTYPE_2HWEAPON;
+                if (candidateTwoHand != incumbentTwoHand)
+                    return candidateTwoHand;
             }
 
             // Stat-stick weapons compare by the spec's stat score; only item
