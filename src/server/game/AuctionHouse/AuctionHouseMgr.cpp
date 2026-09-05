@@ -267,6 +267,68 @@ bool IsPlayerbotAuctionOwner(uint32 ownerAccountId)
     return !botAccountIds.empty() &&
         std::binary_search(botAccountIds.begin(), botAccountIds.end(), ownerAccountId);
 }
+
+// A playerbot's unsold lot is destroyed at expiry rather than posted back - see
+// SendAuctionExpiredMail below for why. That is the right answer for the grey
+// and green churn the fleet lists by the hundred, and plainly the wrong one for
+// a blue or better: the bot went and earned that, it is worth real money, and
+// deleting it because one cycle went by without a buyer is how the fleet's good
+// gear quietly evaporates.
+//
+// Mailing it back is not the answer either - that is exactly the full-pack
+// problem the original comment describes, where a bot with no room cannot
+// collect the mail and the item sits there until it expires for real. So the
+// lot is simply PUT BACK UP: same item, same price, fresh clock. No mail, no
+// bag space needed, no collection pass spent, and nothing destroyed.
+//
+// Quality comes from the template, and ARTIFACT is deliberately NOT included:
+// on this realm quality 6 is the repurposed FLOOR tier - the red field kit -
+// rather than the top one, so a bare ">= RARE" would relist forever exactly the
+// junk this exists to skip.
+bool RelistUnsoldPlayerbotLot(AuctionEntry* auction, CharacterDatabaseTransaction trans)
+{
+    if (!auction)
+        return false;
+
+    ObjectGuid const ownerGuid(HighGuid::Player, auction->owner);
+    if (!IsPlayerbotAuctionOwner(sCharacterCache->GetCharacterAccountIdByGuid(ownerGuid)))
+        return false;
+
+    ItemTemplate const* proto = sObjectMgr->GetItemTemplate(auction->itemEntry);
+    if (!proto || proto->Quality < ITEM_QUALITY_RARE || proto->Quality > ITEM_QUALITY_LEGENDARY)
+        return false;
+
+    // Nothing to put back up if the item itself has gone.
+    if (!sAuctionMgr->GetAItem(auction->itemGUIDLow))
+        return false;
+
+    // Config is read HERE rather than into a function-local static, so both keys
+    // answer to a .reload config. It costs nothing in the common case: every
+    // cheap test above has already run, so only a bot's rare-or-better lot that
+    // is actually expiring ever reaches these two lookups.
+    if (!sConfigMgr->GetBoolDefault("Centurion.Auction.RelistBotRares", true))
+        return false;
+
+    // AuctionEntry::etime is never read back by LoadFromDB, so it is meaningless
+    // for anything that has survived a restart. The relist window is its own
+    // setting rather than a guess at the original listing's.
+    uint32 const relistHours = uint32(std::max(1,
+        sConfigMgr->GetIntDefault("Centurion.Auction.RelistBotHours", 48)));
+
+    auction->expire_time = GameTime::GetGameTime() +
+        time_t(float(relistHours * HOUR) * sWorld->getRate(RATE_AUCTION_TIME));
+
+    // There is no prepared statement that updates the expiry alone, so the row
+    // is rewritten. Both statements go into the caller's transaction, so the
+    // delete and the insert land together or not at all.
+    auction->DeleteFromDB(trans);
+    auction->SaveToDB(trans);
+
+    TC_LOG_INFO("playerbots.pve",
+        "Auction {}: {} x{} went unsold for playerbot {} and was relisted for {}h rather than destroyed.",
+        auction->Id, proto->Name1, auction->itemCount, auction->owner, relistHours);
+    return true;
+}
 }
 
 void AuctionHouseMgr::SendAuctionSuccessfulMail(AuctionEntry* auction, CharacterDatabaseTransaction trans)
@@ -718,6 +780,12 @@ void AuctionHouseObject::Update()
         ///- Either cancel the auction if there was no bidder
         if (auction->bidder == 0 && auction->bid == 0)
         {
+            // Unless it is a bot's blue or better, which goes straight back up
+            // with a fresh clock instead of being binned. The lot stays in this
+            // house's map untouched, so nothing below this may run for it.
+            if (RelistUnsoldPlayerbotLot(auction, trans))
+                continue;
+
             sAuctionMgr->SendAuctionExpiredMail(auction, trans);
             sScriptMgr->OnAuctionExpire(this, auction);
         }
