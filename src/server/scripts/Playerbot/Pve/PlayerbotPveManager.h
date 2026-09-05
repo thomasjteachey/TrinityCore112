@@ -220,6 +220,9 @@ struct PveConfig
     // bot that walks into one is donating a corpse. Everything up to and
     // including orange is fair game. Self-defence ignores this entirely.
     uint32 proactiveMaxLevelsAbove = 4;
+    // And the floor under it: how far BELOW a bot a person may be and still be
+    // picked on unprompted. Symmetric with the ceiling above by default.
+    uint32 proactiveMaxLevelsBelow = 4;
     // How close a guardian tries to get to a real player. Guardians go to the
     // people rather than waiting to be found: the server already knows where
     // every player is, so this needs no searching. 0 disables the approach and

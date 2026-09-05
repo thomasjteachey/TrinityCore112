@@ -12849,6 +12849,7 @@ namespace playerbot
             sConfigMgr->GetIntDefault("Playerbot.Pve.IdleProd.RetrySeconds", 120), 15, 3600));
         g_PveConfig.drifterTeleportGold = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.TeleportGold", 10), 0, 10000));
         g_PveConfig.proactiveMaxLevelsAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveMaxLevelsAbove", 4), 0, 60));
+        g_PveConfig.proactiveMaxLevelsBelow = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveMaxLevelsBelow", 4), 0, 60));
 
         // Accounts whose bots are PvP-only: parked in their sanctuary, never
         // touched by any PvE system (no grind, errands, gear, talents, economy),
@@ -12906,6 +12907,27 @@ namespace playerbot
         // no-friendly-fire rule in Object.cpp). Nothing here should stop it.
         if (playerbot::IsManagedRandomBot(human))
             return true;
+
+        // Nobody gets picked on from far above them.
+        //
+        // The proactive level rule only ever had a CEILING - it refuses a fight
+        // the bot would lose, and said nothing whatever about one the bot cannot
+        // lose. So a level sixty had every reason to open on somebody levelling
+        // through, and being hunted by something you have no answer to is how a
+        // new character stops playing. A zone guardian sits at its post's ceiling
+        // and so was the worst of it, but it was never only guardians.
+        //
+        // A bounty is the exception, and consent is why: it is earned by killing
+        // people, and the entire point of it is that the realm comes for you
+        // whatever you can handle. Read from the registry, which is what every
+        // other rule on the realm reads.
+        //
+        // Only about STARTING it. Self-defence never comes through here, so a bot
+        // still fights back against anyone who opens on it, at any level.
+        if (uint32 const below = g_PveConfig.proactiveMaxLevelsBelow)
+            if (!Bounty::GetStacks(human) &&
+                uint32(human->GetLevel()) + below < uint32(bot->GetLevel()))
+                return false;
 
         return HumanMayBeHunted(human->GetGUID());
     }

@@ -765,6 +765,29 @@ Playerbot.Pve.Drifters.TeleportGold = 10
 
 Playerbot.Pve.ProactiveMaxLevelsAbove = 4
 
+#
+#    Playerbot.Pve.ProactiveMaxLevelsBelow
+#        Description: The floor under the rule above: how many levels BELOW a bot
+#                     a player may be and still be picked on unprompted.
+#
+#                     The ceiling refuses a fight the bot would lose. This
+#                     refuses one the bot cannot lose - being hunted by something
+#                     you have no answer to is how a new character stops playing,
+#                     and a zone guardian sitting at its post's ceiling was the
+#                     worst of it.
+#
+#                     A player carrying a BOUNTY is exempt: a bounty is earned by
+#                     killing people, and the point of it is that the realm comes
+#                     for you whatever you can handle.
+#
+#                     Only governs STARTING a fight. Self-defence never consults
+#                     this, so a bot still fights back at any level difference.
+#                     0 disables the floor.
+#        Default:     4
+#
+
+Playerbot.Pve.ProactiveMaxLevelsBelow = 4
+
 
 #    Playerbot.Pve.RebirthAtMaxLevel.Percent
 #        Description: This percent of the managed fleet (guid-keyed, deterministic) is reborn
