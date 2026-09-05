@@ -71,7 +71,8 @@ enum class GmDiagnosticCategory : uint8
     Channel         = 0x10,
     CustomAuras     = 0x20,
     SacrificialAura = 0x40,
-    All             = 0x7F
+    SpellTarget     = 0x80,
+    All             = 0xFF
 };
 
 namespace lfg

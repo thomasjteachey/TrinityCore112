@@ -2308,7 +2308,21 @@ class ProcReflectDelayed : public BasicEvent
 
 void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*= true*/, bool implicit /*= true*/, Position const* losPosition /*= nullptr*/)
 {
-    bool const sapDiag = (m_spellInfo->Id == 6770 || m_spellInfo->Id == 2070 || m_spellInfo->Id == 11297) && m_caster->IsPlayer() && target && target->IsCreature();
+    // Sap's targeting trace. Kept as a GM tool rather than deleted: it is the
+    // only window into why a Sap silently comes up with no target. Scoped to the
+    // Sap ranks because that is the hunt it was written for - widen the id test
+    // to trace something else.
+    //
+    // It asked only for the spell id and a player caster, so every player who
+    // sapped anything got the whole trace in their chat frame. It is now behind
+    // the same GM diagnostic gate as the rest of this file's tracing, off until
+    // a GM asks for it with ".gm diagnostics on spelltarget".
+    bool sapDiag = false;
+    if ((m_spellInfo->Id == 6770 || m_spellInfo->Id == 2070 || m_spellInfo->Id == 11297) && target && target->IsCreature())
+        if (Player* casterPlayer = m_caster->ToPlayer())
+            if (WorldSession* session = casterPlayer->GetSession())
+                sapDiag = session->IsGmDiagnosticEnabled(GmDiagnosticCategory::SpellTarget);
+
     auto sendSapDiag = [this, sapDiag](char const* fmt, auto&&... args)
     {
         if (!sapDiag)
@@ -2322,10 +2336,17 @@ void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*=
 
     for (SpellEffectInfo const& spellEffectInfo : m_spellInfo->GetEffects())
     {
-        if (!spellEffectInfo.IsEffect() || !CheckEffectTarget(target, spellEffectInfo, losPosition))
+        // Asked once and remembered. The diagnostic used to re-ask
+        // CheckEffectTarget inside its own argument list, and arguments are
+        // evaluated whether or not the diagnostic is switched on - so every
+        // spell cast on the realm paid for a second line-of-sight check that
+        // nothing ever read.
+        bool const isEffect = spellEffectInfo.IsEffect();
+        bool const targetOk = isEffect && CheckEffectTarget(target, spellEffectInfo, losPosition);
+        if (!targetOk)
         {
             sendSapDiag("[SapDiag] AddUnitTarget clear effect=%u isEffect=%u checkEffectTarget=%u",
-                uint32(spellEffectInfo.EffectIndex), spellEffectInfo.IsEffect(), spellEffectInfo.IsEffect() ? CheckEffectTarget(target, spellEffectInfo, losPosition) : false);
+                uint32(spellEffectInfo.EffectIndex), isEffect, targetOk);
             effectMask &= ~(1 << spellEffectInfo.EffectIndex);
         }
     }

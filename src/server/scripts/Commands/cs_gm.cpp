@@ -254,9 +254,11 @@ public:
             diagnosticCategory = GmDiagnosticCategory::CustomAuras;
         else if (category == "sacrificialaura")
             diagnosticCategory = GmDiagnosticCategory::SacrificialAura;
+        else if (category == "spelltarget")
+            diagnosticCategory = GmDiagnosticCategory::SpellTarget;
         else
         {
-            handler->SendSysMessage("Usage: .gm diagnostics on/off [all/heartbeat/combat/playerbot/feign/channel/customauras/sacrificialaura]");
+            handler->SendSysMessage("Usage: .gm diagnostics on/off [all/heartbeat/combat/playerbot/feign/channel/customauras/sacrificialaura/spelltarget]");
             handler->SetSentErrorMessage(true);
             return false;
         }
@@ -264,7 +266,7 @@ public:
         session->SetGmDiagnosticEnabled(diagnosticCategory, enable);
 
         handler->PSendSysMessage(
-            "GM diagnostics %s for %s. Current: heartbeat=%s, combat=%s, playerbot=%s, feign=%s, channel=%s, customauras=%s, sacrificialaura=%s.",
+            "GM diagnostics %s for %s. Current: heartbeat=%s, combat=%s, playerbot=%s, feign=%s, channel=%s, customauras=%s, sacrificialaura=%s, spelltarget=%s.",
             enable ? "enabled" : "disabled", category.c_str(),
             session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Heartbeat) ? "on" : "off",
             session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Combat) ? "on" : "off",
@@ -272,7 +274,8 @@ public:
             session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Feign) ? "on" : "off",
             session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Channel) ? "on" : "off",
             session->IsGmDiagnosticEnabled(GmDiagnosticCategory::CustomAuras) ? "on" : "off",
-            session->IsGmDiagnosticEnabled(GmDiagnosticCategory::SacrificialAura) ? "on" : "off");
+            session->IsGmDiagnosticEnabled(GmDiagnosticCategory::SacrificialAura) ? "on" : "off",
+            session->IsGmDiagnosticEnabled(GmDiagnosticCategory::SpellTarget) ? "on" : "off");
         return true;
     }
 
