@@ -268,24 +268,61 @@ bool IsPlayerbotAuctionOwner(uint32 ownerAccountId)
         std::binary_search(botAccountIds.begin(), botAccountIds.end(), ownerAccountId);
 }
 
-// A playerbot's unsold lot is destroyed at expiry rather than posted back - see
-// SendAuctionExpiredMail below for why. That is the right answer for the grey
-// and green churn the fleet lists by the hundred, and plainly the wrong one for
-// a blue or better: the bot went and earned that, it is worth real money, and
-// deleting it because one cycle went by without a buyer is how the fleet's good
-// gear quietly evaporates.
+// Keep the LAST one alive, so a kind of gear cannot go extinct.
 //
-// Mailing it back is not the answer either - that is exactly the full-pack
-// problem the original comment describes, where a bot with no room cannot
-// collect the mail and the item sits there until it expires for real. So the
-// lot is simply PUT BACK UP: same item, same price, fresh clock. No mail, no
-// bag space needed, no collection pass spent, and nothing destroyed.
+// A playerbot's unsold lot is destroyed at expiry rather than posted back - see
+// SendAuctionExpiredMail below for why. Over a long uptime that is a one-way
+// ratchet on the item TYPES the realm has: every blue that fails to sell is
+// deleted outright, drop tables are the only thing putting more back, and a
+// piece that stops appearing on the house never appears again. The auction
+// house slowly loses whole categories of gear rather than slowly getting
+// cheaper.
+//
+// So the rule is about the LAST copy, not about every copy. If another listing
+// of this same item exists anywhere on the house, this one is redundant and the
+// ordinary destroy is correct - the type survives, the house does not grow, and
+// the fleet's churn still clears. Only when this is the only one left is it put
+// back up: same item, same price, fresh clock. No mail, no bag space, no
+// collection pass, nothing destroyed, and at most ONE of each blue or purple
+// held open indefinitely.
+//
+// Any owner's listing counts as a survivor, not just a bot's: a player with the
+// same piece on the house means the type is not extinct, and a player's expiry
+// mails the item home rather than deleting it, so their copy is not at risk the
+// way this one is.
 //
 // Quality comes from the template, and ARTIFACT is deliberately NOT included:
 // on this realm quality 6 is the repurposed FLOOR tier - the red field kit -
-// rather than the top one, so a bare ">= RARE" would relist forever exactly the
-// junk this exists to skip.
-bool RelistUnsoldPlayerbotLot(AuctionEntry* auction, CharacterDatabaseTransaction trans)
+// rather than the top one, so a bare ">= RARE" would preserve exactly the junk
+// this exists to skip.
+bool AnotherOfThisItemIsListed(AuctionHouseObject* house, AuctionEntry const* auction)
+{
+    // The house this lot lives in is the one that matters. With cross-faction
+    // trading on, all three ids resolve to the same neutral object anyway, so
+    // scanning the owner's own house is scanning the whole market.
+    if (!house)
+        return false;
+
+    for (auto itr = house->GetAuctionsBegin(); itr != house->GetAuctionsEnd(); ++itr)
+    {
+        AuctionEntry const* other = itr->second;
+        if (!other || other->Id == auction->Id || other->itemEntry != auction->itemEntry)
+            continue;
+
+        // Not one that is about to be destroyed on this very pass, or the last
+        // two copies would each see the other as its survivor and both would go.
+        if (other->expire_time <= GameTime::GetGameTime() + 60 &&
+            other->bidder == 0 && other->bid == 0)
+            continue;
+
+        return true;
+    }
+
+    return false;
+}
+
+bool RelistUnsoldPlayerbotLot(AuctionHouseObject* house, AuctionEntry* auction,
+    CharacterDatabaseTransaction trans)
 {
     if (!auction)
         return false;
@@ -309,6 +346,12 @@ bool RelistUnsoldPlayerbotLot(AuctionEntry* auction, CharacterDatabaseTransactio
     if (!sConfigMgr->GetBoolDefault("Centurion.Auction.RelistBotRares", true))
         return false;
 
+    // The whole point: this only rescues the last one. The scan is last because
+    // it is the only expensive test here, and by now it runs for a handful of
+    // lots per expiry sweep rather than for every auction on the realm.
+    if (AnotherOfThisItemIsListed(house, auction))
+        return false;
+
     // AuctionEntry::etime is never read back by LoadFromDB, so it is meaningless
     // for anything that has survived a restart. The relist window is its own
     // setting rather than a guess at the original listing's.
@@ -325,7 +368,8 @@ bool RelistUnsoldPlayerbotLot(AuctionEntry* auction, CharacterDatabaseTransactio
     auction->SaveToDB(trans);
 
     TC_LOG_INFO("playerbots.pve",
-        "Auction {}: {} x{} went unsold for playerbot {} and was relisted for {}h rather than destroyed.",
+        "Auction {}: {} x{} was the last one on the house and went unsold for playerbot {}; "
+        "relisted for {}h rather than destroyed.",
         auction->Id, proto->Name1, auction->itemCount, auction->owner, relistHours);
     return true;
 }
@@ -780,10 +824,11 @@ void AuctionHouseObject::Update()
         ///- Either cancel the auction if there was no bidder
         if (auction->bidder == 0 && auction->bid == 0)
         {
-            // Unless it is a bot's blue or better, which goes straight back up
-            // with a fresh clock instead of being binned. The lot stays in this
+            // Unless it is the LAST blue or better of its kind on the house, in
+            // which case it goes straight back up with a fresh clock instead of
+            // being binned, so the type cannot go extinct. The lot stays in this
             // house's map untouched, so nothing below this may run for it.
-            if (RelistUnsoldPlayerbotLot(auction, trans))
+            if (RelistUnsoldPlayerbotLot(this, auction, trans))
                 continue;
 
             sAuctionMgr->SendAuctionExpiredMail(auction, trans);
