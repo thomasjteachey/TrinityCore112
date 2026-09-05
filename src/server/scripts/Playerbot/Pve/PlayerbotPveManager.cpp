@@ -7838,11 +7838,23 @@ namespace
             }
             size_t const listingLimit = catchUp ? 40u : 3u;
 
-            std::vector<Item*> surplus;
+            // Identities, not pointers.
+            //
+            // The loop below vendors items and commits a whole inventory save
+            // once per lot, and both of those free Item objects - Item::SaveToDB
+            // deletes an ITEM_REMOVED item outright, and _SaveInventory then
+            // clears the update queue. A vector of Item* captured before any of
+            // that runs goes stale as the loop walks it, and a freed block
+            // recycled into some other bot's item is how a bot comes to post an
+            // item it has never owned. Every other bulk pass in this file
+            // collects positions instead, for exactly this reason; stock's own
+            // sell handler re-resolves off the player by GUID immediately before
+            // it posts. Do both: keep GUIDs, and re-resolve each time round.
+            std::vector<ObjectGuid> surplus;
             ForEachBagItem(bot, [&](Item* item, uint8 /*bag*/, uint8 /*slot*/)
             {
                 if (surplus.size() < listingLimit && IsAuctionableSurplus(bot, item))
-                    surplus.push_back(item);
+                    surplus.push_back(item->GetGUID());
             });
 
             if (surplus.empty())
@@ -7871,8 +7883,15 @@ namespace
                     cheapestPerUnit[auction->itemEntry] = perUnit;
             }
 
-            for (Item* item : surplus)
+            for (ObjectGuid const& itemGuid : surplus)
             {
+                // Asked again every iteration, because the previous ones have
+                // vendored items, moved gold and saved the bags since the list
+                // was built. A bot that no longer holds it simply skips it.
+                Item* item = bot->GetItemByGuid(itemGuid);
+                if (!item || !IsAuctionableSurplus(bot, item))
+                    continue;
+
                 ItemTemplate const* proto = item->GetTemplate();
                 uint32 const count = item->GetCount();
                 uint32 const etime = 12 * HOUR;
@@ -7936,6 +7955,46 @@ namespace
                     continue;
                 }
 
+                // Out of the bag FIRST, and nothing is listed until it has gone.
+                //
+                // MoveItemFromInventory takes coordinates, not an item, and is
+                // silent when they hold nothing: Player.cpp opens with
+                // `if (Item* it = GetItemByPos(bag, slot))` and otherwise just
+                // falls through, returning void. Build the auction first and a
+                // failed hand-off leaves the lot on the house with the item
+                // still in the bag - and then SaveInventoryAndGoldToDB, at the
+                // end of this same transaction, walks the update queue the item
+                // never left and REPLACEs the character_inventory row that
+                // DeleteFromInventoryDB removed five statements earlier. The
+                // duplicate commits atomically and looks perfectly healthy on
+                // disk. That is how an item comes to be in a bag and on the
+                // auction house at once, and the second time a bot picks that
+                // item up, AddAItem's ASSERT takes the realm down.
+                uint8 const bagSlot = item->GetBagSlot();
+                uint8 const invSlot = item->GetSlot();
+                if (bot->GetItemByPos(bagSlot, invSlot) != item)
+                {
+                    TC_LOG_ERROR("playerbots.pve",
+                        "Bot {} tried to list {} (item guid {}), but its own recorded position "
+                        "(bag {}, slot {}) does not hold it; not listed.",
+                        bot->GetName(), proto->Name1, item->GetGUID().GetCounter(), bagSlot, invSlot);
+                    continue;
+                }
+
+                bot->MoveItemFromInventory(bagSlot, invSlot, true);
+
+                // If it is still there the move did nothing, so nothing has been
+                // lost by skipping - the item stays in the bag and is offered
+                // again next pass. Bailing here is only ever the no-op path.
+                if (bot->GetItemByGuid(itemGuid))
+                {
+                    TC_LOG_ERROR("playerbots.pve",
+                        "Bot {} could not hand {} (item guid {}) to the auction house - it is "
+                        "still in the bags after the move; not listed.",
+                        bot->GetName(), proto->Name1, item->GetGUID().GetCounter());
+                    continue;
+                }
+
                 AuctionEntry* auction = new AuctionEntry();
                 auction->Id = sObjectMgr->GenerateAuctionID();
                 // Same rule the sell handler uses: one shared neutral house when
@@ -7957,7 +8016,6 @@ namespace
                 auction->Flags = AUCTION_ENTRY_FLAG_NONE;
 
                 bot->ModifyMoney(-int64(deposit));
-                bot->MoveItemFromInventory(item->GetBagSlot(), item->GetSlot(), true);
 
                 CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
                 item->DeleteFromInventoryDB(trans);
