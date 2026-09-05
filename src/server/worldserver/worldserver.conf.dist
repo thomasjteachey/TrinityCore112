@@ -3648,6 +3648,40 @@ Centurion.Hardcore.PlayerKill.DiminishSeconds = 7200
 
 Centurion.Hardcore.PlayerKill.XpDecayPerKill = 0.25
 
+#
+#    Centurion.Shutdown.RequestFile
+#        Description: Path the worldserver watches for a graceful-shutdown
+#                     request, so a deploy can ask the realm to stop politely
+#                     instead of killing the process.
+#
+#                     The file is one line holding the number of SECONDS to
+#                     count down, and every line after it is the message shown
+#                     to everybody online. It is deleted as soon as it is read.
+#
+#                     Written by a deploy as, for example:
+#                         printf '600
+A new patch is on the way...
+' > FILE
+#
+#                     The realm then runs TrinityCore's own countdown, which
+#                     warns clients, blocks new logins near the end and saves
+#                     on the way out, and exits 0 - so a Restart=on-failure
+#                     unit stays down for the installer instead of racing it.
+#
+#                     Empty disables the watcher entirely.
+#        Default:     ""  (disabled)
+#
+
+Centurion.Shutdown.RequestFile = ""
+
+#
+#    Centurion.Shutdown.PollMs
+#        Description: How often the request file above is checked.
+#        Default:     3000
+#
+
+Centurion.Shutdown.PollMs = 3000
+
 DireMaulBeads.ItemId = 21982
 DireMaulBeads.AuraId = 90002
 DireMaulBeads.AreaIds = 495,496,498,2557,3217
