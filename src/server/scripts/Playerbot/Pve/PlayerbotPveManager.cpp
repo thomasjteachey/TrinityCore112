@@ -297,6 +297,17 @@ namespace
         // so the retry actually reaches taxi/teleport instead of re-walking into
         // the same wall forever.
         PveTimePoint walkFallbackUntil{};
+
+        // Out on a bounty, and not this zone's business until it comes back.
+        //
+        // The zone-fit sweep runs on the MAP thread and g_DeployedHunters is
+        // world-thread-only, so the sweep cannot ask the ledger directly. This
+        // flag is the ledger's answer, mirrored somewhere the sweep can read it
+        // under the state lock it already holds. Set when a hunter is dispatched,
+        // cleared when it is brought home, so exactly one owner decides when a
+        // hunter leaves the zone it was sent to - rather than the sweep and the
+        // return pass each acting on a different idea of whether the hunt is over.
+        bool bountyDeployed = false;
         bool journeyActive = false;
         uint8 journeyFallbackKind = 0; // 1 = grind relocation, 2 = supply run
         uint16 journeyMapId = 0;
@@ -8483,6 +8494,62 @@ namespace
         return false;
     }
 
+    // Whose level is theirs, and not the ground's to set.
+    //
+    // A levy re-levels, and for most of the fleet that is harmless: an ordinary
+    // local bot's level IS its zone assignment, so moving it to another band and
+    // back is the same operation the rebirth cycle performs on it anyway.
+    //
+    // Veterans and the PvP-only battleground fleet are not that. Both are
+    // explicitly outside the local zone-band population - BuildLocalZoneAssignmentsOnce
+    // skips them ("these populations do not cycle through local zones") and
+    // GetLocalHomeZoneId returns 0 for them - so their level is who they are
+    // rather than where they are standing. Levying one takes a max-level
+    // battleground regular, strips its spells, talents and quests, drops it to
+    // the top of whatever band the victim happened to be standing in, and saves
+    // that to the database. The pools that only open at the highest bounties
+    // were exactly the ones the levy destroyed. They answer as they are.
+    //
+    // Guardians are the third of those roles and are here for the reason
+    // LoadGuardianPostsOnce already states about them in so many words: a
+    // guardian "GiveLevel'd DOWNWARD ... resets its talents and strands it in
+    // gear it can no longer wear, permanently, since guardians are excluded from
+    // both rebirth and the reset command." Two other places in this file already
+    // treat the three as one set; this is the third.
+    bool KeepsItsOwnLevel(Player const* bot)
+    {
+        if (!bot)
+            return false;
+
+        return playerbot::PveManager::IsPvpOnlyBot(bot) ||
+            IsLocalVeteranGuid(bot->GetGUID().GetRawValue()) ||
+            GetGuardianZoneId(bot->GetGUID().GetRawValue()) != 0;
+    }
+
+    // Where a hunter was standing when it was called out, so it can be put back
+    // the moment there is no longer a reason for it to be where it is.
+    //
+    // POSITION ONLY. That is the whole difference between this and the levy
+    // ledger above it: a bot that kept its own level has nothing else to restore,
+    // so bringing it home is a teleport and not a rebirth.
+    //
+    // It is needed because the ordinary "you have outgrown this zone" sweep
+    // cannot do the job on its own. That sweep never runs for a PvP-only bot at
+    // all (OnPlayerLifecycleTick returns before it), and for everyone else it is
+    // on a sixty second cadence and only fires when the ZONE is wrong - so a
+    // level sixty answering a bounty in a same-band zone two continents from home
+    // would simply stay there. This is the receipt that gets them back.
+    struct DeployedHunter
+    {
+        uint32 MapId = 0;
+        float X = 0.0f;
+        float Y = 0.0f;
+        float Z = 0.0f;
+        float O = 0.0f;
+        uint64 HumanGuid = 0;
+    };
+    std::unordered_map<uint64, DeployedHunter> g_DeployedHunters;
+
     // Conscript one bot into the zone a bounty is standing in, at the top of that
     // zone's band, remembering where it came from.
     //
@@ -8493,9 +8560,21 @@ namespace
         if (!bot || !human)
             return false;
 
+        // The single place this can never be got past. The callers below decide
+        // not to levy these; this makes it true even if a third caller appears.
+        if (KeepsItsOwnLevel(bot))
+            return false;
+
         uint64 const botRawGuid = bot->GetGUID().GetRawValue();
         if (g_LeviedBots.count(botRawGuid))
             return false;                       // already serving
+
+        // Ask the reset's own preconditions BEFORE it, not after. It refuses a bot
+        // that is mid-teleport or out of world, and refusing is the only outcome
+        // that leaves the bot untouched - every other path through it has already
+        // re-levelled and SaveToDB'd by the time it returns.
+        if (!bot->IsInWorld() || bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
+            return false;
 
         LeviedBot record;
         record.HomeZoneId = bot->GetZoneId();
@@ -8503,14 +8582,29 @@ namespace
         record.HumanGuid = human->GetGUID().GetRawValue();
 
         uint32 const targetZone = human->GetZoneId();
+
+        // Recorded BEFORE the reset, because the reset is what makes the record
+        // necessary. It re-levels and saves first and teleports last, so a bot
+        // whose grind spot could not be found - or whose teleport was refused -
+        // has still been dropped to the band and still has to be sent home. The
+        // old order recorded only on success and left that bot at a borrowed
+        // level with nothing holding the receipt: permanent, and silent.
+        g_LeviedBots[botRawGuid] = record;
+
         playerbot::ResetManagedBotToZoneBand(bot, targetZone, bandTop);
 
-        // The reset refuses on a bot mid-teleport or out of world; if it did not
-        // move, it was not levied and must not be recorded as such.
+        // It was re-levelled either way; it just did not arrive. Keep the record
+        // so ReturnLeviedBots takes it home, and tell the caller not to treat it
+        // as a hunter in place.
         if (bot->GetZoneId() != targetZone)
+        {
+            TC_LOG_INFO("playerbots.pve",
+                "Levy: {} was re-levelled for the bounty on {} but did not reach zone {}; it will be returned to zone {} at level {}.",
+                bot->GetName(), human->GetName(), targetZone,
+                record.HomeZoneId, uint32(record.HomeLevel));
             return false;
+        }
 
-        g_LeviedBots[botRawGuid] = record;
         TC_LOG_INFO("playerbots.pve",
             "Levy: {} raised from zone {} (level {}) to level {} in zone {} for the bounty on {}.",
             bot->GetName(), record.HomeZoneId, uint32(record.HomeLevel), uint32(bandTop),
@@ -8547,6 +8641,135 @@ namespace
             TC_LOG_INFO("playerbots.pve", "Levy: {} released back to zone {} at level {}.",
                 bot->GetName(), record.HomeZoneId, uint32(record.HomeLevel));
             playerbot::ResetManagedBotToZoneBand(bot, record.HomeZoneId, record.HomeLevel);
+        }
+    }
+
+    // The same release, for the hunters that were never re-levelled: the instant
+    // the bounty stops being a reason to stand here, they go back to where they
+    // were standing when they were called.
+    //
+    // Checked on the bounty's own once-a-second pass rather than left to the
+    // sixty-second zone-fit sweep, because "there is no longer any reason for a
+    // level sixty to be in Westfall" is true the moment the bounty clears, and a
+    // minute of a max-level bot loitering in a starter zone is exactly what this
+    // is meant to prevent. The sweep remains as the backstop for the ones whose
+    // receipt is lost to a restart.
+    void ReturnDeployedHunters()
+    {
+        for (auto itr = g_DeployedHunters.begin(); itr != g_DeployedHunters.end();)
+        {
+            Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(itr->first));
+            if (!bot || !bot->IsInWorld())
+            {
+                ++itr;                          // offline: decide when it comes back
+                continue;
+            }
+
+            // Still a job? The person is still here, still alive, still hunted.
+            // Anything else - they died, they cleared the bounty, they logged
+            // out - and the errand is over THIS INSTANT.
+            //
+            // Deliberately NOT "and still in the zone the hunter was sent to".
+            // A hunter is dispatched from wherever it was standing and its
+            // teleport lands a tick later, so a zone term would read false for
+            // the whole outbound trip and send it straight home again before it
+            // ever arrived. The question this asks is about the PERSON, not
+            // about where either of them is standing.
+            Player* human = ObjectAccessor::FindConnectedPlayer(ObjectGuid(itr->second.HumanGuid));
+            bool const stillWanted = human && human->IsInWorld() && human->IsAlive() &&
+                Bounty::IsHuntedRelentlessly(Bounty::GetStacks(human));
+
+            if (stillWanted || bot->IsInCombat())
+            {
+                ++itr;                          // the job is not over
+                continue;
+            }
+
+            // The job IS over, so the dispatch's pursuit deadline has nothing
+            // left to protect. Clearing it here is what makes the trip home
+            // immediate: the stamp is a fixed ninety seconds that nothing else
+            // ever clears, so a hunter whose target died at twenty seconds would
+            // otherwise loiter in a starter zone for the remaining seventy - and
+            // the zone-fit sweep is pinned on the same stamp, so it would not
+            // step in either.
+            if (bot->GetBountyPursuitStacks())
+                bot->SetBountyPursuit(0, 0);
+
+            // HELD, not dropped, for every state where moving it would break
+            // something. These are the guards the two sibling executors in this
+            // file already carry, and they are held rather than erased so the
+            // bot still goes home once it lands, leaves the match, or stands up:
+            //
+            //  - a battleground or its queue: TeleportTo's far branch calls
+            //    LeaveBattleground and would pull a bot out of a live match. The
+            //    dispatch side screens these (proddableBots) but nothing stops a
+            //    queue popping for a bot that is ALREADY deployed.
+            //  - a taxi flight: teleporting mid-flight tears the generator off
+            //    without letting it finalise and the bot arrives still wearing
+            //    the gryphon, frozen.
+            //  - dead: leave it with its corpse for the death recovery to run.
+            if (!bot->IsAlive() || bot->IsInFlight() || bot->InBattleground() ||
+                bot->InArena() || bot->InBattlegroundQueue())
+            {
+                ++itr;
+                continue;
+            }
+
+            // Kept, not dropped, when it cannot be moved this instant: a bot mid
+            // teleport or out of its grid is the case the crash comments in this
+            // file are about, and the next pass is a second away.
+            if (!BotCanTeleportNow(bot))
+            {
+                ++itr;
+                continue;
+            }
+
+            DeployedHunter const post = itr->second;
+            uint64 const botRawGuid = itr->first;
+            itr = g_DeployedHunters.erase(itr);
+
+            // Whatever happens below, this bot is no longer the hunt's business,
+            // so the sweep gets its zone back.
+            {
+                PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+                state.bountyDeployed = false;
+            }
+
+            // It may never have gone. A queued dispatch teleport can be refused
+            // outright - no reachable landing on the ring, the path budget
+            // saturated, the bounty gone by the time it was drained - and the
+            // receipt outlives the attempt. Do not teleport a bot back to the spot
+            // it never left.
+            if (bot->GetMapId() == post.MapId && bot->GetExactDist2d(post.X, post.Y) < 60.0f)
+                continue;
+
+            if (bot->TeleportTo(post.MapId, post.X, post.Y, post.Z, post.O))
+            {
+                RestorePlayerbotTeleportVitals(bot);
+
+                // Arrive home with nothing still steering. The dispatch started a
+                // WALKED journey toward where the person was standing, and that
+                // journey outlives the teleport: the candidate loop only ever
+                // picks a bot already on the human's map, so this is a NEAR
+                // teleport and the journey's own map-change cancellation never
+                // fires. Left alone, the bot walks straight back to the bounty it
+                // was just brought home from. Same reasoning, same block, as the
+                // stuck-recovery teleport further down this file.
+                PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+                state.journeyActive = false;
+                state.journeyFallbackKind = 0;
+                state.errandGuid = ObjectGuid::Empty;
+                state.errandKind = PveErrandKind::None;
+                state.errandUntil = {};
+                state.engaged = false;
+                state.dryWanderCount = 0;
+                state.nextWanderAt = {};
+                playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), false);
+
+                TC_LOG_INFO("playerbots.pve",
+                    "Bounty: {} (level {}) sent home from zone {}; the hunt is over.",
+                    bot->GetName(), uint32(bot->GetLevel()), bot->GetZoneId());
+            }
         }
     }
 
@@ -8637,6 +8860,23 @@ namespace
                 if (!IsProactivePlayerLevelAcceptable(bot, human))
                     continue;
 
+                // Which pool this bot belongs to decides the tier; distance only
+                // breaks ties inside one. Ordinary bots are always the LAST tier
+                // rather than excluded, so a zone holding no veteran and no PvP
+                // bot still sends somebody.
+                //
+                // Asked before the band question rather than after it, because
+                // which pool a bot is in decides whether the band is even its
+                // business.
+                bool const isPvpBot = playerbot::PveManager::IsPvpOnlyBot(bot);
+                bool const isVeteran = IsLocalVeteranGuid(bot->GetGUID().GetRawValue());
+
+                // The battleground fleet stays in its battlegrounds until the
+                // bounty is high enough to call it out. Nothing else in this file
+                // pulls a PvP-only bot into the open world.
+                if (isPvpBot && !pvpBots)
+                    continue;
+
                 // Out of the target zone's band? Then it is a RECRUIT, not a
                 // rejection.
                 //
@@ -8651,6 +8891,16 @@ namespace
                 // the zone goes first and a levy only happens when the zone cannot
                 // field enough of its own. And only above the levy threshold, so an
                 // ordinary bounty never re-levels anyone.
+                //
+                // Except the two pools whose level is not the zone's to set - see
+                // KeepsItsOwnLevel. A veteran or a PvP-only bot is never levied:
+                // ABOVE the band it simply goes as it is, which is the whole point
+                // of calling those pools out at all, and BELOW it is refused
+                // rather than raised, because the reason behind the levy was never
+                // bookkeeping - a bot too low for the ground dies to the zone
+                // before it reaches anybody, and that is as true of a veteran as
+                // of anyone else.
+                bool const keepsLevel = KeepsItsOwnLevel(bot);
                 bool needsLevy = false;
                 {
                     uint8 bandBottom = 0;
@@ -8658,7 +8908,32 @@ namespace
                     if (playerbot::GetZoneLevelBand(human->GetZoneId(), bandBottom, bandTop))
                     {
                         uint8 const botLevel = bot->GetLevel();
-                        needsLevy = botLevel < bandBottom || botLevel > bandTop;
+                        if (keepsLevel)
+                        {
+                            if (botLevel < bandBottom)
+                                continue;
+
+                            // Above the band, this is one of those pools being
+                            // called out of its own life, so it answers on its OWN
+                            // rung of the escalation and not on the levy's. The
+                            // levy threshold is the lowest of the three (15,
+                            // against 25 for veterans and 50 for the battleground
+                            // fleet) and it was never theirs to borrow: without
+                            // this, a bounty of fifteen - too small to summon a
+                            // veteran at all - would get a level sixty standing
+                            // over a level twenty, where before the fix it got the
+                            // same veteran cut down to the zone's band. Neither is
+                            // right; not being sent is.
+                            //
+                            // A PvP-only bot was already gated on its own threshold
+                            // further up, so only the veteran rung is left to ask
+                            // about. A guardian has no rung of its own and is left
+                            // on its post.
+                            if (botLevel > bandTop && !isPvpBot && !(isVeteran && veterans))
+                                continue;
+                        }
+                        else
+                            needsLevy = botLevel < bandBottom || botLevel > bandTop;
                     }
 
                     if (needsLevy)
@@ -8672,19 +8947,6 @@ namespace
                             continue;
                     }
                 }
-
-                // Which pool this bot belongs to decides the tier; distance only
-                // breaks ties inside one. Ordinary bots are always the LAST tier
-                // rather than excluded, so a zone holding no veteran and no PvP
-                // bot still sends somebody.
-                bool const isPvpBot = playerbot::PveManager::IsPvpOnlyBot(bot);
-                bool const isVeteran = IsLocalVeteranGuid(bot->GetGUID().GetRawValue());
-
-                // The battleground fleet stays in its battlegrounds until the
-                // bounty is high enough to call it out. Nothing else in this file
-                // pulls a PvP-only bot into the open world.
-                if (isPvpBot && !pvpBots)
-                    continue;
 
                 uint32 tier = 2;
                 if (pvpBots && isPvpBot)
@@ -8745,7 +9007,12 @@ namespace
                 // A recruit is re-levelled and moved by the levy itself, so it
                 // needs no teleport queued - ResetManagedBotToZoneBand has already
                 // put it in the zone at a level that can survive there.
-                bool const outOfBand = zoneBanded &&
+                //
+                // This asks the band question a second time, so it has to answer
+                // the exemption a second time too: a veteran or a PvP-only bot
+                // above the band was selected precisely BECAUSE it is above the
+                // band, and is ported like anybody else.
+                bool const outOfBand = zoneBanded && !KeepsItsOwnLevel(chosen) &&
                     (chosen->GetLevel() < levyBottom || chosen->GetLevel() > levyTop);
                 if (outOfBand)
                 {
@@ -8763,8 +9030,35 @@ namespace
                 // and not a flag.
                 chosen->SetBountyPursuit(spot.Bounty, 90 * IN_MILLISECONDS);
 
+                // Where it stood before it was called. try_emplace, so a hunter
+                // handed a second bounty before it ever got home still remembers
+                // the place it actually came from rather than the last battlefield
+                // it was standing on - but the person it is hunting IS updated,
+                // or the receipt would keep asking about somebody this bot has
+                // long since stopped chasing.
+                //
+                // Never for a bot that is out on levy. That one already has a
+                // receipt, and its release is a full re-level back to its own
+                // band and zone; adding a positional receipt on top means
+                // ReturnLeviedBots sends it home and then this pass teleports it
+                // straight back to the bounty zone it was just recalled from.
+                // One bot, one owner.
+                uint64 const chosenRawGuid = chosen->GetGUID().GetRawValue();
+                if (!g_LeviedBots.count(chosenRawGuid))
+                {
+                    auto const inserted = g_DeployedHunters.try_emplace(chosenRawGuid, DeployedHunter{
+                        chosen->GetMapId(), chosen->GetPositionX(), chosen->GetPositionY(),
+                        chosen->GetPositionZ(), chosen->GetOrientation(), humanGuid });
+                    if (!inserted.second)
+                        inserted.first->second.HumanGuid = humanGuid;
+
+                    // Mirrored where the map-thread zone-fit sweep can see it.
+                    PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, chosenRawGuid);
+                    state.bountyDeployed = true;
+                }
+
                 std::lock_guard<std::mutex> guard(g_PvePendingLock);
-                g_PendingGuardianTeleports[chosen->GetGUID().GetRawValue()] =
+                g_PendingGuardianTeleports[chosenRawGuid] =
                     { humanGuid, PvePlayerTeleportMinimumDistance };
             }
 
@@ -10924,20 +11218,53 @@ namespace
         // Guardians are pinned to their post by design, and companions follow a
         // human, so neither is eligible. A bot mid-journey or mid-errand is left
         // alone until it arrives.
+        //
+        // Nor is a bot that was sent somewhere on purpose. A hunter dispatched at
+        // a bounty is standing in a zone that does not fit it BY DESIGN - that is
+        // what being called out of your own band means - and this sweep would
+        // read that as an outgrown zone and walk it straight back home, inside a
+        // minute, possibly mid-fight. It used to be invisible because the levy
+        // re-levelled the hunter to the zone's band first, which made the zone
+        // fit; the moment a veteran keeps its own level, this sweep is what
+        // undoes the dispatch. The pursuit deadline covers the trip in, and
+        // combat covers the fight itself. Afterwards it is free to walk home
+        // again - which is now how a hunter gets home at all, at its own level
+        // and without a rebirth.
         if (cfg.relocateEnabled && cfg.grindEnabled && state.masterGuid.IsEmpty() &&
             !state.journeyActive && state.errandKind == PveErrandKind::None &&
-            !GetGuardianZoneId(bot->GetGUID().GetRawValue()) &&
-            now >= state.nextZoneFitCheckAt)
+            !GetGuardianZoneId(bot->GetGUID().GetRawValue()))
         {
-            state.nextZoneFitCheckAt = now + std::chrono::seconds(60);
-
-            if (!BotIsInSuitableZone(bot))
+            if (state.bountyDeployed || bot->IsInCombat())
             {
-                TC_LOG_INFO("playerbots.pve", "Bot {} (level {}) has outgrown zone {}; relocating.",
-                    bot->GetName(), bot->GetLevel(), bot->GetZoneId());
-                state.dryWanderCount = 0;
-                std::lock_guard<std::mutex> guard(g_PvePendingLock);
-                g_PendingGrindRelocations.insert(bot->GetGUID().GetRawValue());
+                // HELD, not merely skipped. Pinning the next check to now means
+                // the sweep runs on the very first tick after the hunt ends
+                // instead of up to a minute later: once the bounty is cleared
+                // there is no reason at all for a level sixty to be standing in a
+                // starter zone, and waiting out a cadence to notice is the same as
+                // not noticing.
+                //
+                // Held on the RECEIPT rather than on the pursuit deadline. That
+                // deadline is a fixed ninety seconds from dispatch which nothing
+                // refreshes - the hunt loop cannot even reach a bot already stood
+                // next to its target - so a hunt that outlives it would have this
+                // sweep and the return pass disagreeing about whether the bot is
+                // still working, and the loser is a level sixty put on a flight
+                // path out of the zone mid-fight. The receipt is the return
+                // pass's own state, so the two cannot disagree.
+                state.nextZoneFitCheckAt = now;
+            }
+            else if (now >= state.nextZoneFitCheckAt)
+            {
+                state.nextZoneFitCheckAt = now + std::chrono::seconds(60);
+
+                if (!BotIsInSuitableZone(bot))
+                {
+                    TC_LOG_INFO("playerbots.pve", "Bot {} (level {}) has outgrown zone {}; relocating.",
+                        bot->GetName(), bot->GetLevel(), bot->GetZoneId());
+                    state.dryWanderCount = 0;
+                    std::lock_guard<std::mutex> guard(g_PvePendingLock);
+                    g_PendingGrindRelocations.insert(bot->GetGUID().GetRawValue());
+                }
             }
         }
 
@@ -12793,14 +13120,26 @@ namespace playerbot
 
             // And the bounty's own clock, which does not care how long any bot
             // has been idle.
+            // Braced, and the three below it de-indented to say what they have
+            // always done: only the hunt itself is behind the switch. The other
+            // three ran unconditionally regardless of how they were laid out, and
+            // that is right - CallForHelp no-ops on its own when every bounty is
+            // zero, and both release passes MUST run with the system switched off
+            // or turning it off would strand whoever was already out.
             if (Bounty::Enabled())
+            {
                 HuntTheBountied(spots, proddableBots);
+            }
 
-                // And the fleet answers its own outmatched.
-                CallForHelpAgainstBounties(spots, proddableBots);
+            // And the fleet answers its own outmatched.
+            CallForHelpAgainstBounties(spots, proddableBots);
 
-                // And send the conscripts home once their bounty is done.
-                ReturnLeviedBots();
+            // And send the conscripts home once their bounty is done.
+            ReturnLeviedBots();
+
+            // And the hunters who were never re-levelled, who only need
+            // putting back where they were standing.
+            ReturnDeployedHunters();
 
             std::lock_guard<std::mutex> guard(g_HumanSpotLock);
             g_HumanSpots.swap(spots);
@@ -12945,6 +13284,18 @@ namespace playerbot
                     if (bot->IsInWorld() && playerbot::IsManagedRandomBot(bot) &&
                         !bot->IsBeingTeleportedFar() && !bot->IsBeingTeleportedNear())
                     {
+                        // The pools whose level is their own are never reborn, and
+                        // this is where saying so matters most: the fallback at the
+                        // bottom of this block is ResetManagedBotToLevelOne, and it
+                        // is reached when a bot has no rebirth zone - which is the
+                        // very definition of a veteran, a PvP-only bot or a
+                        // guardian. Every path that queues one currently screens
+                        // them out, so this changes nothing today; it means the day
+                        // one does slip through, it is skipped rather than wiped
+                        // back to a level 1 with no gear, no bags and no bank.
+                        if (KeepsItsOwnLevel(bot))
+                            continue;
+
                         // Recomputed rather than carried on the queue: the mapping
                         // is deterministic, so the answer cannot drift between the
                         // flag and the reset.
