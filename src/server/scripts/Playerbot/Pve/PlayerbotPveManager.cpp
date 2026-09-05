@@ -6770,6 +6770,33 @@ namespace
         return false;
     }
 
+    // How far a player can see a bot appear. Nothing may LAND inside this of
+    // anybody real.
+    //
+    // 200 yards is the client's own visibility distance, so this is not a
+    // comfort margin - it is the line between "a bot walked up" and "a bot
+    // materialised", which is the single most immersion-breaking thing the
+    // fleet can do. The existing guardian drop already reasons in these terms
+    // and lands at 210; the gap this closes is that 210 was measured against
+    // ONE player, the dispatch target, and said nothing about the second person
+    // standing next to the landing point.
+    float TeleportSightYards()
+    {
+        static float const yards = std::max(0.0f,
+            sConfigMgr->GetFloatDefault("Centurion.Playerbot.TeleportSightYards", 200.0f));
+        return yards;
+    }
+
+    // The one question every bot teleport has to ask about its destination.
+    // GMs deliberately COUNT here, unlike the gear-drop witness rule: this is
+    // about who can SEE it happen, and an operator watching their fleet is the
+    // likeliest person on the realm to be looking straight at it.
+    bool WouldLandInSightOfAnybody(Map* map, float x, float y)
+    {
+        float const yards = TeleportSightYards();
+        return yards > 0.0f && HasHumanPlayerNearPosition(map, x, y, yards);
+    }
+
     struct VendorSpot
     {
         uint16 mapId = 0;
@@ -8351,7 +8378,7 @@ namespace
                 continue;
 
             Map* map = sMapMgr->FindMap(nearest->mapId, 0);
-            if (!map || HasHumanPlayerNearPosition(map, nearest->x, nearest->y, 150.0f))
+            if (!map || WouldLandInSightOfAnybody(map, nearest->x, nearest->y))
                 continue;
 
             playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), false);
@@ -8434,7 +8461,7 @@ namespace
                 continue;
 
             Map* map = sMapMgr->FindMap(mapId, 0);
-            if (!map || HasHumanPlayerNearPosition(map, x, y, 150.0f))
+            if (!map || WouldLandInSightOfAnybody(map, x, y))
                 continue;
 
             playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), false);
@@ -9027,6 +9054,24 @@ namespace
             if (bot->GetMapId() == post.MapId && bot->GetExactDist2d(post.X, post.Y) < 60.0f)
                 continue;
 
+            // And do not appear at it in front of somebody. The post is a place
+            // this bot was grinding, which is a place people grind, and the
+            // receipt is reused verbatim however long the hunt lasted - the world
+            // around it may be completely different by now. Held rather than
+            // dropped: the errand is over either way, so there is no hurry, and
+            // the next pass is a second away.
+            //
+            // Only asked when the bot is still on the post's own map, which is
+            // the normal case - the dispatch only ever picks a bot already on the
+            // human's map, so it never left it. A cross-map return would need the
+            // destination map looked up, and there is no such case to serve.
+            if (bot->GetMapId() == post.MapId &&
+                WouldLandInSightOfAnybody(bot->FindMap(), post.X, post.Y))
+            {
+                g_DeployedHunters[botRawGuid] = post;
+                continue;
+            }
+
             if (bot->TeleportTo(post.MapId, post.X, post.Y, post.Z, post.O))
             {
                 RestorePlayerbotTeleportVitals(bot);
@@ -9563,6 +9608,18 @@ namespace
                 // Fix the height against the HUMAN's map: the hunter may still be
                 // on another continent, where that ground does not exist.
                 human->UpdateAllowedPositionZ(x, y, z);
+
+                // Somebody ELSE standing on this side of the ring.
+                //
+                // The drop distance keeps the landing out of the quarry's sight
+                // and says nothing about anyone else: two people questing
+                // together, and the bot lands 210 yards from one of them and
+                // eight from the other. Rejecting the angle costs one more turn
+                // of a ring that is already being walked, and no path budget -
+                // this is a player-list scan, not a navmesh query, so it is
+                // asked BEFORE the expensive test below.
+                if (WouldLandInSightOfAnybody(human->FindMap(), x, y))
+                    continue;
 
                 WalkPathResult const pathResult = CheckWalkPath(human, x, y, z);
                 if (pathResult == WalkPathResult::Deferred)
