@@ -207,18 +207,18 @@ std::mutex g_ManagedBotUpdatePulseLock;
 // absolute terms and where every purchase - first bags, first real weapon,
 // ammunition - costs a disproportionate share of everything it has earned,
 // so they get their own, larger multiplier.
-std::atomic<float> g_PlayerbotGoldGainMultiplier{ 2.0f };
-std::atomic<float> g_PlayerbotLowLevelGoldGainMultiplier{ 5.0f };
+std::atomic<float> g_PlayerbotGoldGainMultiplier{ 1.0f };
+std::atomic<float> g_PlayerbotLowLevelGoldGainMultiplier{ 1.0f };
 std::atomic<uint32> g_PlayerbotLowLevelGoldBandMaxLevel{ 10 };
 
 void LoadPlayerbotGoldGainMultiplier()
 {
     g_PlayerbotGoldGainMultiplier.store(
-        std::max(0.0f, sConfigMgr->GetFloatDefault("Playerbot.GoldGainMultiplier", 2.0f)),
+        std::max(0.0f, sConfigMgr->GetFloatDefault("Playerbot.GoldGainMultiplier", 1.0f)),
         std::memory_order_relaxed);
 
     g_PlayerbotLowLevelGoldGainMultiplier.store(
-        std::max(0.0f, sConfigMgr->GetFloatDefault("Playerbot.GoldGainMultiplier.LowLevel", 5.0f)),
+        std::max(0.0f, sConfigMgr->GetFloatDefault("Playerbot.GoldGainMultiplier.LowLevel", 1.0f)),
         std::memory_order_relaxed);
 
     g_PlayerbotLowLevelGoldBandMaxLevel.store(

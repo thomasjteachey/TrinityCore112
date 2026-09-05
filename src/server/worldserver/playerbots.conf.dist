@@ -322,7 +322,7 @@ Playerbot.Pve.Enable = 0
 #                     1.0 - (face value, no change)
 #                     0.0 - (bots earn nothing)
 
-Playerbot.GoldGainMultiplier = 2.0
+Playerbot.GoldGainMultiplier = 1.0
 
 #    Playerbot.GoldGainMultiplier.LowLevel
 #        Description: The same multiplier, but for bots at or below
@@ -334,7 +334,7 @@ Playerbot.GoldGainMultiplier = 2.0
 #                     starts earning at the other rate when it levels out of the band.
 #        Default:     5.0
 
-Playerbot.GoldGainMultiplier.LowLevel = 5.0
+Playerbot.GoldGainMultiplier.LowLevel = 1.0
 
 #    Playerbot.GoldGainMultiplier.LowLevelMaxLevel
 #        Description: Highest level that still counts as low-level for the multiplier above.
