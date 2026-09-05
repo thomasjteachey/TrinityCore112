@@ -7912,6 +7912,30 @@ namespace
 
                 uint32 const startBid = std::max<uint32>(1, uint32(uint64(buyout) * 80 / 100));
 
+                // Asked AGAIN here, immediately before the point of no return.
+                //
+                // IsAuctionableSurplus already refuses an item that is on the
+                // house, but it answered when the candidate list was BUILT, and
+                // the list is a snapshot of Item pointers that is then walked
+                // while posting. Anything that registers the item in between -
+                // another lot in this same pass, another bot holding the very
+                // same Item (the realm has 26 items that are in a bag and on the
+                // auction house at once, three of them held by a character that
+                // is not the auction's owner) - and the stale answer is acted on.
+                //
+                // AddAItem ASSERTS rather than refusing, so the cost of being
+                // wrong is the whole realm: this is the crash at
+                // AuctionHouseMgr.cpp AddAItem that has taken Barracks Plus down
+                // three times. Skipping one lot is the correct price for that.
+                if (sAuctionMgr->GetAItem(item->GetGUID().GetCounter()))
+                {
+                    TC_LOG_ERROR("playerbots.pve",
+                        "Bot {} nearly listed {} (item guid {}) which is ALREADY on the auction house; "
+                        "skipped. This item is duplicated between a bag and the house.",
+                        bot->GetName(), proto->Name1, item->GetGUID().GetCounter());
+                    continue;
+                }
+
                 AuctionEntry* auction = new AuctionEntry();
                 auction->Id = sObjectMgr->GenerateAuctionID();
                 // Same rule the sell handler uses: one shared neutral house when
