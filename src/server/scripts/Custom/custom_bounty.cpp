@@ -29,6 +29,10 @@
 #include "GameTime.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
+#include "Chat.h"
+#include "ObjectMgr.h"
+#include "RBAC.h"
+#include "WorldSession.h"
 #include "Creature.h"
 #include "CreatureAI.h"
 #include "ScriptedCreature.h"
@@ -828,10 +832,89 @@ public:
     }
 };
 
+// Why are the guards not coming?
+//
+// Every gate in SummonGuardsFor is silent: it returns, it does not log, and
+// there is no way from inside the game to tell "the bounty is too small" from
+// "you are a GM" from "this area is FFA by map" from "the creature id in the
+// config does not exist". This prints all of them at once for one player, in
+// the order they are actually asked, so the first NO is the answer.
+class custom_bounty_commands : public CommandScript
+{
+public:
+    custom_bounty_commands() : CommandScript("custom_bounty_commands") { }
+
+    Trinity::ChatCommands::ChatCommandTable GetCommands() const override
+    {
+        using namespace Trinity::ChatCommands;
+        static ChatCommandTable bountyTable =
+        {
+            { "why", HandleBountyWhy, rbac::RBAC_PERM_COMMAND_GM, Console::No },
+        };
+        static ChatCommandTable commandTable =
+        {
+            { "bounty", bountyTable },
+        };
+        return commandTable;
+    }
+
+    // .bounty why [name] - defaults to yourself.
+    static bool HandleBountyWhy(ChatHandler* handler, Optional<std::string> who)
+    {
+        Player* target = nullptr;
+        if (who && !who->empty())
+            target = ObjectAccessor::FindPlayerByName(*who);
+        else if (handler->GetSession())
+            target = handler->GetSession()->GetPlayer();
+
+        if (!target)
+        {
+            handler->SendSysMessage("bounty: nobody by that name is online.");
+            return true;
+        }
+
+        uint32 const registry = GetStacks(target);
+        Aura const* aura = s_spellId ? target->GetAura(s_spellId, target->GetGUID()) : nullptr;
+        uint32 const onAura = aura ? aura->GetStackAmount() : 0u;
+
+        handler->PSendSysMessage("bounty: %s - registry %u stack(s), aura %u stack(s)%s.",
+            target->GetName().c_str(), registry, onAura,
+            (registry != onAura) ? " |cffff2020(MISMATCH - the registry is what every rule reads)|r" : "");
+
+        // The context gates, in the order IsBountyContext asks them.
+        handler->PSendSysMessage("  system enabled: %s   aura spell: %u",
+            s_enabled ? "yes" : "NO", s_spellId);
+        handler->PSendSysMessage("  gamemaster: %s   battleground/arena: %s   gurubashi ring: %s",
+            target->IsGameMaster() ? "YES - blocks everything" : "no",
+            (target->InBattleground() || target->InArena()) ? "YES - blocks" : "no",
+            target->IsInGurubashiBattleRing() ? "YES - blocks" : "no");
+        handler->PSendSysMessage("  FFA-by-map area: %s   alive: %s",
+            target->pvpInfo.IsInFFAPvPAreaByMap ? "YES - blocks" : "no",
+            target->IsAlive() ? "yes" : "NO - blocks");
+        handler->PSendSysMessage("  => bounty context: %s",
+            IsBountyContext(target) ? "|cff20ff20yes|r" : "|cffff2020NO|r");
+
+        // The guard gates.
+        handler->PSendSysMessage("  guards at: %u stacks   count: %u   creature: %u   every %us for %us",
+            s_guardStacks, s_guardCount, s_guardEntry, s_guardIntervalSeconds, s_guardLifetimeSeconds);
+        handler->PSendSysMessage("  => SummonsGuards(%u): %s", registry,
+            SummonsGuards(registry) ? "|cff20ff20yes|r" : "|cffff2020NO|r");
+
+        if (!sObjectMgr->GetCreatureTemplate(s_guardEntry))
+            handler->PSendSysMessage("  |cffff2020creature %u is not in creature_template on this realm|r",
+                s_guardEntry);
+
+        handler->PSendSysMessage("  zone %u top level: %u (the level a guard is set to)",
+            target->GetZoneId(), uint32(BarracksHardcore::ZoneTopLevel(target->GetZoneId())));
+        return true;
+    }
+};
+
 void AddSC_custom_bounty()
 {
     LoadBountyConfig();
     new custom_bounty_player();
     new custom_bounty_world();
     new npc_centurion_guard();
+    new custom_bounty_commands();
 }
