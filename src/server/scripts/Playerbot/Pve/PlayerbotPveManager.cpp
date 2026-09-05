@@ -3687,36 +3687,35 @@ namespace
             // built for the bot - a player who clicks it afterwards gets an empty
             // window. Corpses are the bot's own kill and are not contested this
             // way, so only gameobjects are gated.
-            if (lootGameObject && CountFreeBagSlots(bot) < 2)
+            //
+            // A cache we built is exempt: its contents are already fixed and
+            // nothing regenerates them, so there is no shared table to spoil -
+            // and by the time the executor runs the chest has usually already
+            // been opened, so bailing here is what LEAVES it spent and dark
+            // rather than what protects it. Take the coin, which needs no slot
+            // at all, and store whatever fits.
+            bool const ourCache = lootGameObject && CustomLootChests::IsPlayerBuiltChest(lootGuid);
+            if (lootGameObject && !ourCache && CountFreeBagSlots(bot) < 2)
                 continue;
 
-            // A hand-built chest must never be handed to SendLoot in GO_READY.
+            // A REGRESSION FENCE, not the cause of anything seen so far.
             //
-            // PlayerChestBuilder writes the dead player's gear and gold straight
-            // into GameObject::loot and leaves the chest in GO_READY, because
-            // that is the state a chest waits in. But Player::SendLoot treats
-            // GO_READY as "this loot has not been generated yet" and regenerates
-            // it from the template:
+            // Player::SendLoot treats a gameobject in GO_READY as "this loot has
+            // not been generated yet" and regenerates it from the template:
             //
             //     if (lootid) { loot->clear(); ... loot->FillLoot(lootid, ...); }
             //
-            // Every stock chest entry carries a lootId, so the cache's entire
-            // contents are cleared and replaced with a roll off whatever table
-            // the borrowed entry happens to own - usually nothing this bot may
-            // take. That is the reported bug exactly: a bot kneels at the cache
-            // (the loot window opening is the kneel), plays no Opening animation
-            // because this path deliberately skips the channel, takes nothing,
-            // and leaves - having destroyed the contents on the way past.
+            // A PlayerChestBuilder chest writes the dead player's gear and gold
+            // straight into GameObject::loot and leaves it in GO_READY, so that
+            // branch would clear the lot. It does NOT fire today: the realm's
+            // cache is a custom row (900002, "Fallen Adventurer's Cache") whose
+            // Data1 lootId is 0, and the live server logs it as such on every
+            // open. The chest is only ever one Data1 edit away from silently
+            // destroying every cache on the realm, though, so the state is
+            // corrected here instead of relying on that column staying zero.
             //
-            // The walked path never showed it: opening the chest properly runs
-            // GameObject::Use, which moves it to GO_ACTIVATED first, and SendLoot
-            // leaves an activated chest's loot alone. Only the remote path, which
-            // exists precisely to skip the walk and the channel, reaches SendLoot
-            // with the chest still READY.
-            //
-            // Moving it to GO_ACTIVATED ourselves is what Use would have done and
-            // is all it takes: the regeneration branch is then unreachable and
-            // the loot the builder wrote is the loot that is served.
+            // Moving it to GO_ACTIVATED is what GameObject::Use would have done
+            // anyway, which makes the regeneration branch unreachable.
             if (lootGameObject && lootGameObject->getLootState() == GO_READY &&
                 CustomLootChests::IsPlayerBuiltChest(lootGuid))
                 lootGameObject->SetLootState(GO_ACTIVATED, bot);
@@ -9920,6 +9919,26 @@ namespace
         }
 
         if (go->getLootState() != GO_READY)
+        {
+            MarkRecentErrandTarget(state, go->GetGUID());
+            return false;
+        }
+
+        // Room to empty it BEFORE it is opened, not after.
+        //
+        // Opening is what CONSUMES a chest: GameObject::Use moves it GO_READY ->
+        // GO_ACTIVATED and hands this bot the loot session. The executor's own
+        // bag-space gate runs a tick later, so a bot with a full pack used to
+        // open the cache, then bail out of taking anything - leaving it spent.
+        // Once it is out of GO_READY it also stops sparkling (GameObject.cpp
+        // only lights a chest that is GO_READY and unlooted), and the very gate
+        // above sends every LATER bot away from it. That is the reported bug:
+        // two bots at a cache, no cast bar, nothing taken, both walk off, and
+        // the cache dead behind them.
+        //
+        // The remote path has always screened this (CountFreeBagSlots >= 2 when
+        // it builds its candidate list); the walked path never did.
+        if (CountFreeBagSlots(bot) < 2)
         {
             MarkRecentErrandTarget(state, go->GetGUID());
             return false;
