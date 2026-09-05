@@ -21,9 +21,9 @@ set -Eeuo pipefail
 
 SERVICE="${1:?usage: graceful-restart.sh <service> <request-file> [seconds] [message...]}"
 REQUEST_FILE="${2:?missing request file path}"
-SECONDS_TO_GO="${3:-600}"
+SECONDS_TO_GO="${3:-60}"
 shift 3 || shift $# || true
-MESSAGE="${*:-A new patch is on the way. The realm will restart shortly - log out somewhere safe.}"
+MESSAGE="${*:-A new patch is on the way. The realm restarts in 1 minute - log out somewhere safe.}"
 
 # Nothing to be polite to.
 if ! systemctl is-active --quiet "$SERVICE"; then
