@@ -269,7 +269,7 @@ namespace
                 << r.TimidSeconds << ',' << ToGold(r.MoneyCopper) << ','
                 << uint32(r.HealthPct) << ',' << uint32(r.PowerPct) << ','
                 << r.ItemLevel << ',' << uint32(r.WornCount) << ',' << uint32(r.GreenPlus) << ','
-                << flags << ',' << r.DisplayId << ';';
+                << flags << ',' << r.DisplayId << ',' << uint32(r.Role) << ';';
 
             if (++inMessage >= 4)
             {

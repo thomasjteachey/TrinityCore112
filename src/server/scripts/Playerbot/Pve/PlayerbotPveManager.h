@@ -351,6 +351,12 @@ public:
         bool Travelling = false;
         bool PvpOnly = false;
         bool Dead = false;
+        // Which population this bot belongs to, resolved server-side because
+        // every input is server-side: the guardian post table, the veteran hash
+        // and its config divisor, the PvP-only account list, the drifter roster
+        // and the companion's master. 0 local, 1 guardian, 2 veteran, 3 pvp,
+        // 4 drifter, 5 companion. Named client-side, like Spec.
+        uint8 Role = 0;
     };
     static void CollectBotStats(std::vector<BotStatsRow>& out);
 

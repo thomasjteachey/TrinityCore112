@@ -12611,6 +12611,22 @@ namespace playerbot
             row.Dead = !bot->IsAlive();
             row.PvpOnly = PveManager::IsPvpOnlyBot(bot);
 
+            // Same order of precedence the whisper diagnostic uses, so the two
+            // can never disagree about what a bot is: a post beats everything, a
+            // companion is whatever it is doing for its master, and drifter is
+            // asked before "local" because a drifter HAS a home zone - a
+            // borrowed one, reassigned every time its person moves.
+            if (GetGuardianZoneId(rawGuid))
+                row.Role = 1;
+            else if (row.PvpOnly)
+                row.Role = 3;
+            else if (IsLocalVeteranGuid(rawGuid))
+                row.Role = 2;
+            else if (IsDrifter(rawGuid))
+                row.Role = 4;
+            else
+                row.Role = 0;
+
             {
                 std::lock_guard<std::mutex> guard(playerbot::SharedBotStateStructureLock());
                 auto const itr = g_PveBotStateByGuid.find(rawGuid);
@@ -12618,6 +12634,14 @@ namespace playerbot
                 {
                     PveBotState const& state = itr->second;
                     row.Travelling = state.journeyActive;
+
+                    // Asked here rather than above because the master link is the
+                    // one input that lives in the state, not in a registry. It
+                    // wins over everything except a guardian post: whatever this
+                    // bot normally is, right now it is somebody's companion.
+                    if (!state.masterGuid.IsEmpty() && row.Role != 1)
+                        row.Role = 5;
+
                     if (state.timidUntil > now)
                     {
                         auto const left = std::chrono::duration_cast<std::chrono::seconds>(
@@ -14068,6 +14092,48 @@ namespace playerbot
         bot->SetUInt32Value(PLAYER_XP, 0);
         bot->LearnDefaultSkills();
         bot->LearnCustomSpells();
+
+        // Now take off anything this level cannot wear.
+        //
+        // The unequip pass above runs BEFORE the level changes, so everything it
+        // looked at was still legal, and it SKIPS any piece it cannot find bag
+        // room for ("no room: keep it worn rather than destroy it"). A bot whose
+        // pack is full - which is most of them, because the pack fills with
+        // poisons, pamphlets and quest scraps nothing ever clears - therefore
+        // comes out of a rebirth still wearing the gear of the level it used to
+        // be. Measured on the live realm: twelve bots wearing fifty-one pieces
+        // above their own level, one of them a level 19 in a level 27 dagger.
+        //
+        // It is not cosmetic. RequiredLevel is checked when equipping, never
+        // afterwards, so the bot keeps the stats and the gear scorer keeps
+        // comparing candidates against a kit it could never buy again - which is
+        // why such a bot sits on a thousand gold and never re-gears.
+        //
+        // Storing is still tried first. If there is no room, the piece is
+        // destroyed rather than left on: at this point the bot has been stripped
+        // back to a level it did not earn, the hardcore ruleset reissues a field
+        // kit for any empty slot on its next pass, and a slot that stays empty
+        // for a minute is a far smaller thing than a permanent lie about what
+        // this character is wearing.
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        {
+            Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+            if (!item)
+                continue;
+
+            ItemTemplate const* proto = item->GetTemplate();
+            if (!proto || proto->RequiredLevel <= bottomLevel)
+                continue;
+
+            ItemPosCountVec dest;
+            if (bot->CanStoreItem(NULL_BAG, NULL_SLOT, dest, item, false) == EQUIP_ERR_OK)
+            {
+                bot->RemoveItem(INVENTORY_SLOT_BAG_0, slot, true);
+                bot->StoreItem(dest, item, true);
+            }
+            else
+                bot->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+        }
         bot->SetFullHealth();
         if (bot->GetMaxPower(POWER_MANA))
             bot->SetPower(POWER_MANA, bot->GetMaxPower(POWER_MANA));

@@ -58,6 +58,8 @@ namespace
     uint32 s_spellId = 0;
     uint32 s_stacksPerKill = 1;
     float s_goldPercentPerStack = 1.0f;
+    // The flat cost of dying, owed with or without a bounty. See TakeDeathTax.
+    float s_deathTaxPercent = 10.0f;
     float s_botLossMultiplier = 2.0f;
     uint32 s_chestEntry = 0;
     uint32 s_chestDespawnSeconds = 600;
@@ -137,6 +139,8 @@ namespace
             sConfigMgr->GetFloatDefault("Centurion.Bounty.GoldPercentPerStack", 1.0f), 0.0f, 10.0f);
         s_botLossMultiplier = std::clamp(
             sConfigMgr->GetFloatDefault("Centurion.Bounty.BotLossMultiplier", 2.0f), 1.0f, 10.0f);
+        s_deathTaxPercent = std::clamp(
+            sConfigMgr->GetFloatDefault("Centurion.Hardcore.DeathGoldLossPercent", 10.0f), 0.0f, 100.0f);
 
         // Defaults to the hardcore death chest, so a bounty payout and a gear
         // payout are the same object in the world and bots already know to go
@@ -373,6 +377,44 @@ namespace
     // bot's gold to the finder and the other half out of the economy entirely,
     // which is the point - a bot on a killing spree is a gold sink, not a
     // transfer.
+    // The plain cost of dying, owed by everybody.
+    //
+    // The bounty debt below only exists for somebody carrying stacks, so until
+    // now a death cost an unbountied character nothing at all - and on a realm
+    // where the fleet dies constantly that is a very large tap with no drain
+    // under it. This is the drain: a flat share of the purse on every death,
+    // bounty or no bounty.
+    //
+    // Taken BEFORE the bounty debt is worked out, so the two do not compound
+    // into more than the percentages say. The bounty's share is then a share of
+    // what is actually left, which is also the order a player would expect: the
+    // house takes its cut, then the killer takes theirs.
+    //
+    // It is a SINK. The money is destroyed rather than added to the chest -
+    // nobody picks this up, it simply leaves the economy. That is the point: it
+    // is the counterweight to every copper the fleet mints by grinding.
+    uint32 TakeDeathTax(Player* victim)
+    {
+        if (!victim || s_deathTaxPercent <= 0.0f)
+            return 0;
+
+        uint64 const money = victim->GetMoney();
+        if (!money)
+            return 0;
+
+        uint32 const taxed = uint32(std::min<uint64>(money,
+            uint64(double(money) * double(s_deathTaxPercent) / 100.0)));
+        if (!taxed)
+            return 0;
+
+        victim->ModifyMoney(-int64(taxed));
+
+        TC_LOG_INFO("playerbots.hardcore",
+            "Death tax: {} lost {}c of {}c ({:.1f}%) on death.",
+            victim->GetName(), taxed, money, s_deathTaxPercent);
+        return taxed;
+    }
+
     void RecordDeathDebt(Player* victim)
     {
         uint32 const stacks = GetStacks(victim);
@@ -684,8 +726,18 @@ public:
         // first place. Dying in the Battle Ring deliberately does NOT clear a
         // bounty: if it did, walking into the ring would be the cheapest way to
         // shed one.
+        //
+        // The flat death tax comes off FIRST and is owed whether or not there is
+        // a bounty; RecordDeathDebt then works the chest's share out of what is
+        // left, so the two never compound past what the percentages say. Same
+        // gate as the debt, so a battleground, an arena, the ring and a GM are
+        // all free of it - dying somewhere a bounty does not apply should not
+        // cost a purse either.
         if (IsBountyContext(victim))
+        {
+            TakeDeathTax(victim);
             RecordDeathDebt(victim);
+        }
 
         // Whatever the zone rules said about the debt, the guards were sent for
         // a target who is now dead, so they go either way.

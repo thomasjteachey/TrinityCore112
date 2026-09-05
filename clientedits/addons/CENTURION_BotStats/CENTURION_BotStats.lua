@@ -149,12 +149,47 @@ local function SpecName(class, spec)
 	return list and list[(spec or 0) + 1] or "?"
 end
 
+-- Which population a bot belongs to, in the server's numbering. Coloured
+-- because the whole reason to show it is to pick these out of a list of two
+-- hundred: the roles that do NOT cycle through zone bands are the ones whose
+-- level and position mean something, and they are the ones worth spotting.
+-- "Local" is deliberately unnamed and uncoloured - it is the default, and
+-- labelling the majority only adds noise to every row.
+local ROLE_NAME = {
+	[1] = { "Guardian",  "ffffd200" },   -- pinned to a zone, level frozen at the post
+	[2] = { "Veteran",   "ffa335ee" },   -- makes the full climb to sixty and stays
+	[3] = { "PvP",       "ffff7f5f" },   -- battleground fleet, outside the PvE world
+	[4] = { "Drifter",   "ff40c0f0" },   -- follows a person rather than living anywhere
+	[5] = { "Companion", "ff20ff20" },   -- summoned, on somebody's heel right now
+}
+
+local function RoleTag(role)
+	local entry = ROLE_NAME[role or 0]
+	if not entry then
+		return ""
+	end
+	return string.format(" |c%s[%s]|r", entry[2], entry[1])
+end
+
+local function RoleName(role)
+	local entry = ROLE_NAME[role or 0]
+	return entry and entry[1] or "Local"
+end
+
 -- "name,level,class,spec,zone,aggr,timid,gold,hp,mp,ilvl,worn,greens,flags;"
 local function ParseRoster(payload)
 	for row in string.gmatch(payload, "([^;]+)") do
-		local name, lvl, cls, spec, zone, aggr, timid, gold, hp, mp, ilvl, worn, greens, flags, disp =
+		-- Role is matched optionally, so a client running ahead of the server
+		-- shows every bot as "local" for one build rather than dropping the
+		-- whole roster on a pattern that no longer fits.
+		local name, lvl, cls, spec, zone, aggr, timid, gold, hp, mp, ilvl, worn, greens, flags, disp, role =
 			string.match(row,
-				"^([^,]+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+)$")
+				"^([^,]+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+)$")
+		if not name then
+			name, lvl, cls, spec, zone, aggr, timid, gold, hp, mp, ilvl, worn, greens, flags, disp =
+				string.match(row,
+					"^([^,]+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+)$")
+		end
 		if name then
 			local f = tonumber(flags) or 0
 			table.insert(incoming, {
@@ -176,6 +211,7 @@ local function ParseRoster(payload)
 				travel = bit.band(f, 4) > 0,
 				pvp    = bit.band(f, 8) > 0,
 				display = tonumber(disp) or 0,
+				role   = tonumber(role) or 0,
 			})
 		end
 	end
@@ -606,8 +642,8 @@ function CENTURION_BotStats_Refresh()
 
 				local zn = zones[b.zone] and zones[b.zone].name or ("Zone " .. b.zone)
 				table.insert(list, {
-					label   = string.format("%s |cff909090%d %s|r%s",
-						b.name, b.level, CLASS_NAME[b.class] or "?", mark),
+					label   = string.format("%s |cff909090%d %s|r%s%s",
+						b.name, b.level, CLASS_NAME[b.class] or "?", RoleTag(b.role), mark),
 					botName = b.name,
 					count   = b.level,
 					level   = b.level,
@@ -615,10 +651,9 @@ function CENTURION_BotStats_Refresh()
 					timid   = b.timid,
 					gold    = b.gold,
 					tip     = string.format(
-						"%s\nLevel %d %s\n%s\n\naggression %d\ntimid %s\ncarrying %dg%s\n\n|cff00ff00Click for full stats|r",
-						b.name, b.level, CLASS_NAME[b.class] or "?", zn, b.aggr,
-						(b.timid > 0) and (b.timid .. "s remaining") or "no",
-						b.gold, b.pvp and "\n\n|cffff7f5fPvP-only bot|r" or ""),
+						"%s\nLevel %d %s\n%s\nRole: %s\n\naggression %d\ntimid %s\ncarrying %dg\n\n|cff00ff00Click for full stats|r",
+						b.name, b.level, CLASS_NAME[b.class] or "?", zn, RoleName(b.role), b.aggr,
+						(b.timid > 0) and (b.timid .. "s remaining") or "no", b.gold),
 				})
 			end
 		end
@@ -1382,8 +1417,8 @@ function CENTURION_BotStats_ShowBot(name)
 	end
 
 	local zn = zones[b.zone] and zones[b.zone].name or ("Zone " .. b.zone)
-	bSub:SetText(string.format("Level |cffffd200%d|r %s %s   %s",
-		b.level, SpecName(b.class, b.spec), CLASS_NAME[b.class] or "?", zn))
+	bSub:SetText(string.format("Level |cffffd200%d|r %s %s   %s%s",
+		b.level, SpecName(b.class, b.spec), CLASS_NAME[b.class] or "?", zn, RoleTag(b.role)))
 
 	-- The column that replaced the model.
 	SetStatLine(1, "State",      state)
