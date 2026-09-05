@@ -3473,6 +3473,29 @@ bool WorldObject::IsValidAssistTarget(WorldObject const* target, SpellInfo const
     if (target->GetTypeId() == TYPEID_PLAYER && target->ToPlayer()->IsGameMaster())
         return false;
 
+    // Playerbots do not fight each other in the open world, so they must be able
+    // to HELP each other there too.
+    //
+    // The no-friendly-fire waiver was mirrored into IsValidAttackTarget when it
+    // was written and never into this function, and the asymmetry is invisible
+    // until you look for it: bots could not hit one another and could not heal
+    // one another either. Every armed bot carries the FFA flag, and GetReactionTo
+    // answers REP_HOSTILE the moment BOTH units have it - which is every pair of
+    // bots on this realm - so the "can't assist non-friendly targets" test below
+    // rejected the lot.
+    //
+    // That is why a healer bot only ever healed itself. It is not a healing bug:
+    // it took blessings, shields, dispels, Innervate and every other supportive
+    // spell with it, for every class, everywhere the hardcore ruleset arms FFA.
+    // Grouped bots were exempt only because IsInRaidWith answers REP_FRIENDLY
+    // higher up, and starter zones because they never arm FFA at all - which is
+    // exactly why this looked like "not really healing" rather than "never".
+    //
+    // Positive spells only. The assist path is also how some negative spells
+    // reach a friendly unit, and this waiver has no business opening that.
+    if ((!bySpell || bySpell->IsPositive()) && AreOpenWorldTeamedPlayerbots(this, target))
+        return true;
+
     // War Mode off: no healing, no buffing, of a playerbot or of anybody who has
     // War Mode on. Placed this early so it covers every route a positive spell
     // takes - single target, the group and raid frames, and the friendly-target

@@ -4273,6 +4273,10 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
         return best ? best : selfCandidate;
     }
 
+    // Defined further down with the other range helpers; needed by the ally
+    // target search below it.
+    bool CanUseHealRangeSpacing(uint8 classId);
+
     Unit const* SelectFriendlyLowestHealthTarget(Player const* player, float maxDistance, float maxHealthPct, uint32 excludedAuraId = 0, bool includeSelf = true)
     {
         if (!player || !player->FindMap())
@@ -5030,20 +5034,37 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
             return ObjectGuid::Empty;
 
         ObjectGuid const selectedGuid = player->GetTarget();
-        if (selectedGuid.IsEmpty() || selectedGuid == player->GetGUID())
+        if (!selectedGuid.IsEmpty() && selectedGuid != player->GetGUID())
+        {
+            Unit const* selected = ObjectAccessor::GetUnit(*player, selectedGuid);
+            if (selected && selected->IsAlive() && IsFriendlySupportTarget(player, selected) &&
+                player->IsWithinLOSInMap(selected))
+                return selectedGuid;
+        }
+
+        // Nothing friendly under the cursor, so go and LOOK for somebody hurt.
+        //
+        // Reading the current selection was the whole of this function, and a bot
+        // in a fight has its enemy selected - so the answer was "nobody", always,
+        // and every caller that keys off an ally target behaved as if the bot were
+        // alone. That is fine in a battleground, where a healer is pointed at its
+        // team; it is useless in the open world, where nothing ever points a bot
+        // at a friend.
+        //
+        // Only for the classes that can actually do something about it. This runs
+        // on the decision tick for every bot on the realm, and the scan walks the
+        // map's player list - there is no reason for a rogue to pay for it.
+        if (!CanUseHealRangeSpacing(player->GetClass()))
             return ObjectGuid::Empty;
 
-        Unit const* selected = ObjectAccessor::GetUnit(*player, selectedGuid);
-        if (!selected || !selected->IsAlive())
-            return ObjectGuid::Empty;
+        // Lowest health first, self excluded: a bot that heals itself does not
+        // need an ally target to do it, and letting self win here would mask the
+        // wounded friend standing next to it.
+        if (Unit const* wounded = SelectFriendlyLowestHealthTarget(player,
+                GetConfiguredHealRange(), 90.0f, 0, false))
+            return wounded->GetGUID();
 
-        if (!IsFriendlySupportTarget(player, selected))
-            return ObjectGuid::Empty;
-
-        if (!player->IsWithinLOSInMap(selected))
-            return ObjectGuid::Empty;
-
-        return selectedGuid;
+        return ObjectGuid::Empty;
     }
 
     SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool inMelee, ClassicProfileSelection const& profileSelection)
