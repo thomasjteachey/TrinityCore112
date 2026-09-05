@@ -257,6 +257,9 @@ namespace
         // Naked recovery: when this bot was first seen stripped of its gear.
         PveTimePoint nakedSince{};
         PveTimePoint nextNakedCheckAt{};
+        // Re-ask throttle for the rogue's Thistle Tea; the item's own cooldown
+        // is the real limit.
+        PveTimePoint nextThistleTeaAt{};
         // Hardcore reclaim: where we last fell - the drop chest stands there.
         uint16 deathSpotMapId = 0;
         float deathSpotX = 0.0f;
@@ -916,6 +919,126 @@ namespace
     // the "collect N of these" requirements of accepted quests and their turn-in
     // items, so anything it disowns is genuinely dead weight - except an item that
     // STARTS a quest, which is still worth something to a bot that may accept it.
+    // Worth nothing to a vendor, worth nothing to use: worth nothing.
+    //
+    // The cap below bounds things a bot has too many of. This is the other half:
+    // things a bot should not be carrying even ONE of, because there is no
+    // action it can ever take with them. No merchant will buy them, they do
+    // nothing when used, and they are not something to wear or carry loot in -
+    // they are a slot that will never be free again. Bulging Sack of Silver and
+    // the Riding Training Pamphlets are exactly this, and between them they held
+    // 21 of Orhild's 80 slots.
+    //
+    // The use-spell test is what makes this safe without a list of exceptions.
+    // A Hearthstone is also white, also worth nothing to a vendor, and also
+    // class Miscellaneous - and it survives, because it carries spell 8690.
+    // Anything a bot can actually DO something with names a spell here.
+    //
+    // A quest starter is not spared. DiscardOrphanedQuestItems keeps those on
+    // the reasoning that a bot "may accept it", but a managed bot never uses an
+    // item to take a quest, so in eight months it has only ever meant the
+    // pamphlets accumulate forever. An item needed by a quest the bot has
+    // ACTUALLY accepted is still protected, by the same HasQuestForItem test
+    // that pass uses.
+    bool IsWorthlessClutter(Player* bot, ItemTemplate const* proto)
+    {
+        if (!bot || !proto)
+            return false;
+
+        // Only the bottom of the range. Anything green or better is somebody's
+        // business even if this bot cannot use it.
+        if (proto->Quality > ITEM_QUALITY_NORMAL)
+            return false;
+
+        // A merchant will take it, so the vendor pass can turn it into money.
+        if (proto->SellPrice)
+            return false;
+
+        switch (proto->Class)
+        {
+            case ITEM_CLASS_QUEST:
+            case ITEM_CLASS_MISC:
+            case ITEM_CLASS_KEY:
+                break;
+            default:
+                return false;     // gear, bags, ammo, reagents, trade goods
+        }
+
+        if (proto->Class == ITEM_CLASS_MISC && proto->ContainerSlots)
+            return false;         // a bag, however cheap
+
+        for (uint8 index = 0; index < MAX_ITEM_PROTO_SPELLS; ++index)
+            if (proto->Spells[index].SpellId)
+                return false;     // it DOES something - Hearthstone lands here
+
+        return !bot->HasQuestForItem(proto->ItemId);
+    }
+
+    // Rogues have been carrying Thistle Tea for months and never drinking it.
+    //
+    // It is an instant 100 energy, usable in combat, and it is the one
+    // consumable a rogue has that changes a fight rather than the walk between
+    // fights - which is why the rest pass never reached it: that pass is gated
+    // on being OUT of combat, sits the bot down, and waits for a food or drink
+    // aura to land. Thistle Tea is none of those things.
+    //
+    // So it is drunk where it is useful: in a fight, energy on the floor. The
+    // item's own cooldown does the real throttling; the timer here only stops
+    // the bot re-trying every tick while that cooldown runs.
+    void MaybeDrinkThistleTea(Player* bot, PveBotState& state, PveTimePoint now)
+    {
+        uint32 const teaEntry = g_PveConfig.thistleTeaItemId;
+        if (!teaEntry || !bot || bot->GetClass() != CLASS_ROGUE || !bot->IsAlive())
+            return;
+
+        if (bot->GetPowerType() != POWER_ENERGY || !bot->IsInCombat())
+            return;
+
+        if (now < state.nextThistleTeaAt)
+            return;
+
+        if (bot->GetPower(POWER_ENERGY) > int32(g_PveConfig.thistleTeaEnergyBelow))
+            return;
+
+        Item* tea = bot->GetItemByEntry(teaEntry);
+        if (!tea)
+            return;
+
+        // Re-asked every few seconds rather than every tick: the item carries a
+        // long shared cooldown and a rogue at zero energy would otherwise spend
+        // the whole fight asking.
+        state.nextThistleTeaAt = now + std::chrono::seconds(5);
+
+        SpellCastTargets targets;
+        targets.SetUnitTarget(bot);
+        bot->CastItemUseSpell(tea, targets, 0, 0);
+    }
+
+    void DiscardWorthlessClutter(Player* bot)
+    {
+        if (!bot)
+            return;
+
+        std::vector<std::pair<uint8, uint8>> doomed;
+        ForEachBagItem(bot, [&](Item* item, uint8 bag, uint8 slot)
+        {
+            if (IsWorthlessClutter(bot, item->GetTemplate()))
+                doomed.emplace_back(bag, slot);
+        });
+
+        for (auto const& [bag, slot] : doomed)
+            if (Item* item = bot->GetItemByPos(bag, slot))
+            {
+                TC_LOG_DEBUG("playerbots.pve", "Bot {} discards worthless {}.",
+                    bot->GetName(), item->GetTemplate()->Name1);
+                bot->DestroyItem(bag, slot, true);
+            }
+
+        if (!doomed.empty())
+            TC_LOG_INFO("playerbots.pve", "Bot {} dropped {} worthless slot(s).",
+                bot->GetName(), uint32(doomed.size()));
+    }
+
     // Nobody needs twenty-eight of anything.
     //
     // A bot buys consumables it never finishes, loots quest starters it will
@@ -11090,6 +11213,7 @@ namespace
             MaybeQueueOverBandRebirth(bot, state);
             DiscardScaffoldingItems(bot);
             DiscardOrphanedQuestItems(bot);
+            DiscardWorthlessClutter(bot);
             DiscardHoardedDuplicates(bot);
 
             // A bot reborn at level 1 has its spellbook stripped and never got
@@ -11419,6 +11543,10 @@ namespace
         // soon as the fight that hurt it ends. Every check in it is cheap and it
         // returns immediately for anything that is not a wounded hunter pet.
         MaybeMendPet(bot);
+
+        // Energy on the floor mid-fight is exactly when the tea is worth
+        // drinking, so this is asked in combat rather than beside the campfire.
+        MaybeDrinkThistleTea(bot, state, now);
 
         // Naked recovery: shop the auction house with the whole purse, and when
         // that has had its chance, issue green field kit. Ordered this way so a
@@ -12533,6 +12661,10 @@ namespace playerbot
         g_PveConfig.auctionUndercutCopper = uint32(std::max(1, sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionUndercutCopper", 1)));
         g_PveConfig.maxSlotsPerItemEntry = uint32(std::max(0,
             sConfigMgr->GetIntDefault("Playerbot.Pve.MaxSlotsPerItem", 3)));
+        g_PveConfig.thistleTeaItemId = uint32(std::max(0,
+            sConfigMgr->GetIntDefault("Playerbot.Pve.ThistleTeaItemId", 7676)));
+        g_PveConfig.thistleTeaEnergyBelow = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Playerbot.Pve.ThistleTeaEnergyBelow", 25), 0, 100));
         g_PveConfig.grindWanderRadius = sConfigMgr->GetFloatDefault("Playerbot.PveGrind.WanderRadius", 40.0f);
         g_PveConfig.grindMaxLevelAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelAbove", 3), 0, 10));
         g_PveConfig.grindMaxLevelBelow = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelBelow", 5), 0, 80));

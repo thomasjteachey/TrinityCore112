@@ -71,6 +71,10 @@ struct PveConfig
     // surplus is thrown away. By slot, not by quantity: one stack of twenty
     // potions is harmless, twenty stacks of one potion is twenty slots.
     uint32 maxSlotsPerItemEntry = 3;
+    // The rogue energy consumable, and the energy level below which it is
+    // worth drinking mid-fight. 0 disables.
+    uint32 thistleTeaItemId = 7676;
+    uint32 thistleTeaEnergyBelow = 25;
     float grindWanderRadius = 40.0f;
     uint32 grindMaxLevelAbove = 3;
     uint32 grindMaxLevelBelow = 5;
