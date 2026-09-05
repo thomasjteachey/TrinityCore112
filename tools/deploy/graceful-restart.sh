@@ -40,6 +40,28 @@ echo "[graceful] message: $MESSAGE"
 printf '%s\n%s\n' "$SECONDS_TO_GO" "$MESSAGE" > "$REQUEST_FILE"
 chmod 0664 "$REQUEST_FILE" || true
 
+# Is anything actually listening?
+#
+# The watcher deletes the request the moment it reads it, so the file still
+# being there after a few poll intervals means this realm is running a build
+# from before the watcher existed, or has the config key unset. Without this
+# probe the first deploy after either of those waits out the entire countdown
+# and the margin - thirteen minutes - before falling back to the hard stop it
+# was always going to do.
+PROBE=0
+while [ -f "$REQUEST_FILE" ]; do
+  if [ "$PROBE" -ge 15 ]; then
+    echo "[graceful] request not picked up in ${PROBE}s - this build has no shutdown watcher."
+    echo "[graceful] falling back to a hard stop; the NEXT deploy will be graceful."
+    rm -f "$REQUEST_FILE" || true
+    sudo systemctl stop "$SERVICE" || true
+    exit 0
+  fi
+  sleep 3
+  PROBE=$(( PROBE + 3 ))
+done
+echo "[graceful] request accepted after ${PROBE}s; the realm is counting down."
+
 # Give it the countdown plus a margin for the save on the way out. The margin is
 # generous on purpose: a realm with a large fleet online spends real time saving
 # characters, and cutting that short is exactly what this script exists to stop.
