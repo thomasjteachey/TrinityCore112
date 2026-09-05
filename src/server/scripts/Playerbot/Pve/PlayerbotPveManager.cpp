@@ -916,6 +916,69 @@ namespace
     // the "collect N of these" requirements of accepted quests and their turn-in
     // items, so anything it disowns is genuinely dead weight - except an item that
     // STARTS a quest, which is still worth something to a bot that may accept it.
+    // Nobody needs twenty-eight of anything.
+    //
+    // A bot buys consumables it never finishes, loots quest starters it will
+    // never accept and containers it will never open, and NOTHING clears them.
+    // The rations pass understands food and drink by tier; everything else in
+    // class Consumable, Quest and Miscellaneous simply accumulates for the life
+    // of the character.
+    //
+    // Measured on the live fleet: 152 of 230 bots carrying sixty items or more,
+    // and the worst of them completely full - Orhild at 16/16 backpack and 64/64
+    // bags, of which 28 slots were Thistle Tea, 15 were Bulging Sacks of Silver
+    // and 6 were Riding Training Pamphlets. A full pack is not a cosmetic
+    // problem: it is why he sits on a thousand gold in a level 32 field kit at
+    // level 42, because an auction purchase arrives by mail and the mail
+    // collector cannot store it; it is why the chest executor refuses to loot;
+    // and it is why a rebirth leaves gear that cannot be unequipped still worn.
+    //
+    // So the count of SLOTS holding a given item is capped, and the surplus goes.
+    // Deliberately by slot rather than by quantity: a stack of twenty potions is
+    // one slot and harmless, twenty stacks of one potion is twenty slots and is
+    // the actual disease. Equipment is never touched, and neither is anything
+    // outside those three classes.
+    void DiscardHoardedDuplicates(Player* bot)
+    {
+        uint32 const cap = g_PveConfig.maxSlotsPerItemEntry;
+        if (!bot || !cap)
+            return;
+
+        std::unordered_map<uint32, uint32> seen;
+        std::vector<std::pair<uint8, uint8>> surplus;
+        ForEachBagItem(bot, [&](Item* item, uint8 bag, uint8 slot)
+        {
+            ItemTemplate const* proto = item->GetTemplate();
+            if (!proto)
+                return;
+
+            if (proto->Class != ITEM_CLASS_CONSUMABLE && proto->Class != ITEM_CLASS_QUEST &&
+                proto->Class != ITEM_CLASS_MISC)
+                return;
+
+            // A bag the bot is carrying spare is the container pass's business,
+            // and destroying one that still has things in it would take them
+            // with it.
+            if (proto->Class == ITEM_CLASS_MISC && item->IsNotEmptyBag())
+                return;
+
+            if (++seen[proto->ItemId] > cap)
+                surplus.emplace_back(bag, slot);
+        });
+
+        for (auto const& [bag, slot] : surplus)
+            if (Item* item = bot->GetItemByPos(bag, slot))
+            {
+                TC_LOG_DEBUG("playerbots.pve", "Bot {} discards a surplus {} (over {} slots).",
+                    bot->GetName(), item->GetTemplate()->Name1, cap);
+                bot->DestroyItem(bag, slot, true);
+            }
+
+        if (!surplus.empty())
+            TC_LOG_INFO("playerbots.pve", "Bot {} dropped {} hoarded duplicate slot(s).",
+                bot->GetName(), uint32(surplus.size()));
+    }
+
     void DiscardOrphanedQuestItems(Player* bot)
     {
         std::vector<std::pair<uint8, uint8>> doomed;
@@ -11027,6 +11090,7 @@ namespace
             MaybeQueueOverBandRebirth(bot, state);
             DiscardScaffoldingItems(bot);
             DiscardOrphanedQuestItems(bot);
+            DiscardHoardedDuplicates(bot);
 
             // A bot reborn at level 1 has its spellbook stripped and never got
             // the class's STARTING spells back. The trainer catch-up only teaches
@@ -12467,6 +12531,8 @@ namespace playerbot
         g_PveConfig.auctionValuableUnitCopper = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionValuableUnitCopper", 1000));
         g_PveConfig.auctionVendorFloorFactor = sConfigMgr->GetFloatDefault("Playerbot.Pve.AuctionVendorFloorFactor", 1.5f);
         g_PveConfig.auctionUndercutCopper = uint32(std::max(1, sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionUndercutCopper", 1)));
+        g_PveConfig.maxSlotsPerItemEntry = uint32(std::max(0,
+            sConfigMgr->GetIntDefault("Playerbot.Pve.MaxSlotsPerItem", 3)));
         g_PveConfig.grindWanderRadius = sConfigMgr->GetFloatDefault("Playerbot.PveGrind.WanderRadius", 40.0f);
         g_PveConfig.grindMaxLevelAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelAbove", 3), 0, 10));
         g_PveConfig.grindMaxLevelBelow = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelBelow", 5), 0, 80));
