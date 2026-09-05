@@ -126,8 +126,8 @@ WorldSession::WorldSession(uint32 id, std::string&& name, std::shared_ptr<WorldS
     // have printed. GM sessions on a dev realm want it on by default; the
     // default of 0 keeps live behaviour unchanged.
     _gmDiagnosticMask(sec > SEC_PLAYER
-        ? uint8(sConfigMgr->GetIntDefault("Centurion.GmDiagnostics.DefaultMask", 0) & 0xFF)
-        : uint8(0)),
+        ? uint16(sConfigMgr->GetIntDefault("Centurion.GmDiagnostics.DefaultMask", 0) & 0xFFFF)
+        : uint16(0)),
     _accountId(id),
     m_sessionMapKey(id),
     _accountName(std::move(name)),

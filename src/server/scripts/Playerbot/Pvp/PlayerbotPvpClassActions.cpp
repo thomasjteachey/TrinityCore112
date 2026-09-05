@@ -5690,7 +5690,10 @@ namespace playerbot
 {
 bool PvpClassActions::AreRehgarMovementDiagnosticsEnabled()
 {
-    return sConfigMgr->GetBoolDefault("Playerbot.PvpClassSpells.RehgarMovementDiagnostics", true);
+    // Off by default. The trace this was written for was captured long ago; left
+    // on, it builds an ostringstream and walks every session on the realm - and
+    // on a realm with a bot fleet that walk is the size of the fleet.
+    return sConfigMgr->GetBoolDefault("Playerbot.PvpClassSpells.RehgarMovementDiagnostics", false);
 }
 
 bool PvpClassActions::IsWarlockCurseTargetCooldownActive(Player const* player, Unit const* target, uint32 spellId)

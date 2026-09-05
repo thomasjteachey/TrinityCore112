@@ -258,7 +258,14 @@ public:
             diagnosticCategory = GmDiagnosticCategory::SpellTarget;
         else
         {
-            handler->SendSysMessage("Usage: .gm diagnostics on/off [all/heartbeat/combat/playerbot/feign/channel/customauras/sacrificialaura/spelltarget]");
+            // Split by blast radius, because the two halves behave very
+            // differently and nothing said so before: the first group reports
+            // only what you yourself do, the second subscribes you to every
+            // player on the realm, with no map or distance filter.
+            handler->SendSysMessage("Usage: .gm diagnostics on/off [category]");
+            handler->SendSysMessage("  About you:       heartbeat, combat, channel, spelltarget");
+            handler->SendSysMessage("  About the realm: feign, playerbot, customauras, sacrificialaura");
+            handler->SendSysMessage("  all - every category. The realm-wide ones are very noisy on a populated realm.");
             handler->SetSentErrorMessage(true);
             return false;
         }

@@ -44,6 +44,7 @@
 #include "Playerbot/Pvp/PlayerbotResourceGovernor.h"
 #include "RBAC.h"
 #include "ScriptMgr.h"
+#include "WorldSession.h"
 #include "Spell.h"
 #include "SpellInfo.h"
 #include "SpellHistory.h"
@@ -867,6 +868,24 @@ public:
             receiver->Whisper("Flag drop requested.", LANG_UNIVERSAL, sender);
             return;
         }
+
+        // Everything below dumps the bot's internals - unit-state flags, spline
+        // indices, motion targets, queue slots and the engage verdict. That is a
+        // map of how the bot decides, so it belongs to whoever is debugging it,
+        // not to whoever whispered it.
+        //
+        // It used to be gated on IsGameMaster. b5621f4ea4 ("always whisper
+        // diagnostics") deleted that line for a debugging session, and d4f071ed40
+        // put the gate back on the PvE manager's path only - this fall-through
+        // never got it back. With Playerbot.Pve.Enable off, which is the default
+        // and what Legionnaire Plus runs, HandleWhisperCommand returns on its
+        // first line and every player who whispered any bot anything landed here.
+        //
+        // Gate on the SENDER's session: bot sessions carry the bot account's own
+        // SEC_PLAYER, so asking the receiver would switch this off permanently.
+        WorldSession const* senderSession = sender->GetSession();
+        if (!senderSession || !senderSession->IsGmDiagnosticEnabled(GmDiagnosticCategory::Playerbot))
+            return;
 
         receiver->Whisper(BuildManagedBotStatusLine(receiver), LANG_UNIVERSAL, sender);
         receiver->Whisper(std::string("PB move diag: ") + playerbot::PvpClassActions::GetLastMovementDebugStatus(receiver), LANG_UNIVERSAL, sender);

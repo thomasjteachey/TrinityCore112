@@ -62,7 +62,10 @@ enum AuctionAction : uint8;
 enum AuctionError : uint8;
 enum InventoryResult : uint8;
 
-enum class GmDiagnosticCategory : uint8
+// uint16, not uint8: the eighth category filled the last bit of a uint8 and a
+// ninth would have truncated to 0 silently - IsGmDiagnosticEnabled would just
+// answer false for every session, with nothing failing to compile.
+enum class GmDiagnosticCategory : uint16
 {
     Heartbeat       = 0x01,
     Combat          = 0x02,
@@ -72,7 +75,7 @@ enum class GmDiagnosticCategory : uint8
     CustomAuras     = 0x20,
     SacrificialAura = 0x40,
     SpellTarget     = 0x80,
-    All             = 0xFF
+    All             = 0xFFFF
 };
 
 namespace lfg
@@ -493,17 +496,17 @@ class TC_GAME_API WorldSession
         AccountTypes GetSecurity() const { return _security; }
         bool IsGmDiagnosticEnabled(GmDiagnosticCategory category) const
         {
-            return (_gmDiagnosticMask & static_cast<uint8>(category)) != 0;
+            return (_gmDiagnosticMask & static_cast<uint16>(category)) != 0;
         }
         void SetGmDiagnosticEnabled(GmDiagnosticCategory category, bool enabled)
         {
-            uint8 const mask = static_cast<uint8>(category);
+            uint16 const mask = static_cast<uint16>(category);
             if (enabled)
                 _gmDiagnosticMask |= mask;
             else
-                _gmDiagnosticMask &= static_cast<uint8>(~mask);
+                _gmDiagnosticMask &= static_cast<uint16>(~mask);
         }
-        uint8 GetGmDiagnosticMask() const { return _gmDiagnosticMask; }
+        uint16 GetGmDiagnosticMask() const { return _gmDiagnosticMask; }
         uint32 GetAccountId() const { return _accountId; }
         std::string const& GetAccountName() const { return _accountName; }
         Player* GetPlayer() const { return _player; }
@@ -1262,7 +1265,7 @@ class TC_GAME_API WorldSession
      // std::string m_LAddress;                             // Last Attempted Remote Adress - we can not set attempted ip for a non-existing session!
 
         AccountTypes _security;
-        uint8 _gmDiagnosticMask;
+        uint16 _gmDiagnosticMask;
         uint32 _accountId;
         uint32 m_sessionMapKey;
         std::string _accountName;

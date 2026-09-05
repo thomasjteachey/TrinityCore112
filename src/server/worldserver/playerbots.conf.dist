@@ -135,11 +135,12 @@ Playerbot.PvpClassSpells.Interrupt.CommitWindowMs = 200
 
 #    Playerbot.PvpClassSpells.RehgarMovementDiagnostics
 #        Description: Sends Rehgar's Fury movement diagnostics as server system messages
-#                     to every online GM. Disable after capturing the live movement trace.
-#        Default:     1 - (Enabled)
-#                     0 - (Disabled)
+#                     to every online GM. Only switch this on while capturing a
+#                     movement trace: it walks every session on the realm.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
 
-Playerbot.PvpClassSpells.RehgarMovementDiagnostics = 1
+Playerbot.PvpClassSpells.RehgarMovementDiagnostics = 0
 
 #    Playerbot.RandomPopulation.Enable
 #        Description: Enables random-bot population manager orchestration. When enabled and runtime started,

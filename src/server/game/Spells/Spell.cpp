@@ -123,8 +123,14 @@ namespace
         if (!ownerPlayer)
             return;
 
+        // Two gates on purpose. The security check stays so an RBAC change can
+        // never be the only thing between a player and this; the diagnostic flag
+        // is added so a GM playing a hunter can switch it off, which until now
+        // was impossible - this was the one diagnostic with no ".gm diagnostics"
+        // command behind it. It is a target-check trace, so it rides SpellTarget.
         WorldSession* session = ownerPlayer->GetSession();
-        if (!session || AccountMgr::IsPlayerAccount(session->GetSecurity()))
+        if (!session || AccountMgr::IsPlayerAccount(session->GetSecurity())
+            || !session->IsGmDiagnosticEnabled(GmDiagnosticCategory::SpellTarget))
             return;
 
         std::string targetName;

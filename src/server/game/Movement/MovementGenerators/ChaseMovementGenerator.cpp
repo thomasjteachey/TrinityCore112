@@ -59,7 +59,15 @@ static bool PositionOkay(Unit* owner, Unit* target, Optional<float> minDistance,
 
 static bool ShouldLogPlayerbotChase(Unit const* owner)
 {
-    return owner && owner->GetTypeId() == TYPEID_PLAYER;
+    // Ask whether anyone is listening BEFORE doing the work, not after. The body
+    // this guards runs IsWithinLOSInMap and then PositionOkay - which ends in a
+    // second IsWithinLOSInMap - and only then reaches a TC_LOG_DEBUG that throws
+    // the lot away. That is two VMAP raycasts per call, and Update() calls it up
+    // to four times a tick for every chasing player, so the whole melee bot
+    // fleet was paying for it continuously, worst where geometry is densest.
+    // Same guard playerbot_loader.cpp:272 already uses for its motion pulse.
+    return owner && owner->GetTypeId() == TYPEID_PLAYER
+        && sLog->ShouldLog("playerbots.pvp.classspell", LOG_LEVEL_DEBUG);
 }
 
 static void LogPlayerbotChaseDiag(Unit* owner, Unit* target, char const* phase, Optional<ChaseRange> const& range,

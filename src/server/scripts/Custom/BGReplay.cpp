@@ -4080,11 +4080,6 @@ std::vector<uint8> payload(packet.size());
 
         ReplayAudit const audit = BuildReplayAudit(record);
 
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay loaded: packets=%u, actors=%u, firstTime=%u, lastTime=%u, firstOpcode=%u",
-            uint32(record.Packets.size()), uint32(record.Actors.size()),
-            record.Packets.empty() ? 0 : record.Packets.front().TimestampMs,
-            record.Packets.empty() ? 0 : record.Packets.back().TimestampMs,
-            record.Packets.empty() ? 0 : record.Packets.front().Packet.GetOpcode());
         (void)0; // replay system message removed
 
         if (!audit.AuraPackets)

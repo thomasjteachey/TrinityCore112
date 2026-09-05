@@ -154,7 +154,7 @@ void PvpveDungeonMgr::OnPlayerEnteredInstance(Player* player, PvpveDungeonInstan
     player->m_InstanceValid = true;
     player->SetInstanceValidityOverride(true);
 
-    if (WorldSession* session = player->GetSession())
+    if (player->GetSession())
     {
         uint32 instanceId = player->GetInstanceId();
         if (!instanceId)
@@ -163,7 +163,11 @@ void PvpveDungeonMgr::OnPlayerEnteredInstance(Player* player, PvpveDungeonInstan
 
         if (instanceId)
         {
-            ChatHandler(session).PSendSysMessage("PvPvE Stockades instance ID: %u", instanceId);
+            // The instance id is a server-side map handle that only ever meant
+            // something next to a log line. It is not news to the player who
+            // just walked in, so it goes to the log instead of their chat frame.
+            TC_LOG_DEBUG("scripts.pvpve", "PvPvE Stockades: player {} entered instance {}.",
+                player->GetName(), instanceId);
 
             // Flag the player as locked to this run as soon as they enter the instance so they cannot
             // re-enter it after leaving, even if they were not eliminated inside the run.
