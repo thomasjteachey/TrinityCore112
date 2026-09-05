@@ -44,6 +44,9 @@
 #include "World.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <limits>
+#include <sstream>
 #include <string>
 #include <mutex>
 #include <unordered_map>
@@ -60,6 +63,26 @@ namespace
     float s_goldPercentPerStack = 1.0f;
     // The flat cost of dying, owed with or without a bounty. See TakeDeathTax.
     float s_deathTaxPercent = 10.0f;
+
+    // And the bot version of it, which is progressive rather than flat.
+    //
+    // A person's purse is spent: on repairs, on reagents, on the auction house.
+    // A bot's is not - it earns constantly, buys narrowly, and has nothing to
+    // save for, so a flat rate that is fair to a person barely dents a bot with
+    // two thousand gold. Brackets fix that without touching the poor end of the
+    // fleet, where taking half of eight gold would stop a bot ever affording the
+    // gear the economy expects it to buy.
+    //
+    // MARGINAL, in the way an income tax is: each slice of the purse is taxed at
+    // its own rate, so there is no cliff and no point at which earning one more
+    // copper costs a bot money. A bot on 2000g pays the top rate only on the
+    // part above the last threshold.
+    struct BotTaxBracket
+    {
+        uint64 UpToCopper = 0;   // 0 = everything above the previous threshold
+        float Percent = 0.0f;
+    };
+    std::vector<BotTaxBracket> s_botTaxBrackets;
     float s_botLossMultiplier = 2.0f;
     uint32 s_chestEntry = 0;
     uint32 s_chestDespawnSeconds = 600;
@@ -141,6 +164,50 @@ namespace
             sConfigMgr->GetFloatDefault("Centurion.Bounty.BotLossMultiplier", 2.0f), 1.0f, 10.0f);
         s_deathTaxPercent = std::clamp(
             sConfigMgr->GetFloatDefault("Centurion.Hardcore.DeathGoldLossPercent", 10.0f), 0.0f, 100.0f);
+
+        // "upToGold:percent" pairs, cheapest bracket first. An upTo of 0 means
+        // "and everything above", and must be last; without one the purse above
+        // the final threshold is simply untaxed.
+        s_botTaxBrackets.clear();
+        {
+            std::string const spec = sConfigMgr->GetStringDefault(
+                "Centurion.Hardcore.BotDeathTaxBrackets", "100:10,500:20,1000:35,2000:50,0:65");
+            std::stringstream stream(spec);
+            std::string token;
+            while (std::getline(stream, token, ','))
+            {
+                size_t const colon = token.find(':');
+                if (colon == std::string::npos)
+                    continue;
+
+                BotTaxBracket bracket;
+                uint64 const gold = std::strtoull(token.substr(0, colon).c_str(), nullptr, 10);
+                bracket.UpToCopper = gold ? gold * 10000ull : std::numeric_limits<uint64>::max();
+                bracket.Percent = std::clamp(float(std::atof(token.substr(colon + 1).c_str())), 0.0f, 100.0f);
+                s_botTaxBrackets.push_back(bracket);
+            }
+
+            // Ascending, because the marginal walk below depends on it and an
+            // operator listing them out of order should get the tax they meant
+            // rather than a silently wrong one.
+            std::sort(s_botTaxBrackets.begin(), s_botTaxBrackets.end(),
+                [](BotTaxBracket const& a, BotTaxBracket const& b) { return a.UpToCopper < b.UpToCopper; });
+
+            std::ostringstream describe;
+            uint64 previous = 0;
+            for (BotTaxBracket const& bracket : s_botTaxBrackets)
+            {
+                describe << (describe.tellp() ? ", " : "") << (previous / 10000) << "g-";
+                if (bracket.UpToCopper == std::numeric_limits<uint64>::max())
+                    describe << "up";
+                else
+                    describe << (bracket.UpToCopper / 10000) << "g";
+                describe << " @ " << bracket.Percent << "%";
+                previous = bracket.UpToCopper;
+            }
+            TC_LOG_INFO("playerbots.hardcore", "Bot death tax brackets: {}",
+                s_botTaxBrackets.empty() ? "none (bots pay the flat rate)" : describe.str());
+        }
 
         // Defaults to the hardcore death chest, so a bounty payout and a gear
         // payout are the same object in the world and bots already know to go
@@ -393,25 +460,57 @@ namespace
     // It is a SINK. The money is destroyed rather than added to the chest -
     // nobody picks this up, it simply leaves the economy. That is the point: it
     // is the counterweight to every copper the fleet mints by grinding.
+    // Walk the brackets, taxing each slice at its own rate.
+    uint64 ProgressiveBotTaxCopper(uint64 money)
+    {
+        uint64 taken = 0;
+        uint64 floorCopper = 0;
+
+        for (BotTaxBracket const& bracket : s_botTaxBrackets)
+        {
+            if (money <= floorCopper)
+                break;
+
+            uint64 const ceilingCopper = std::min(money, bracket.UpToCopper);
+            if (ceilingCopper > floorCopper)
+                taken += uint64(double(ceilingCopper - floorCopper) * double(bracket.Percent) / 100.0);
+
+            floorCopper = bracket.UpToCopper;
+        }
+
+        return std::min(taken, money);
+    }
+
     uint32 TakeDeathTax(Player* victim)
     {
-        if (!victim || s_deathTaxPercent <= 0.0f)
+        if (!victim)
             return 0;
 
         uint64 const money = victim->GetMoney();
         if (!money)
             return 0;
 
-        uint32 const taxed = uint32(std::min<uint64>(money,
-            uint64(double(money) * double(s_deathTaxPercent) / 100.0)));
+        // A bot pays the progressive schedule; a person pays the flat rate.
+        bool const bot = BarracksHardcore::IsPlayerbot(victim);
+        bool const progressive = bot && !s_botTaxBrackets.empty();
+        if (!progressive && s_deathTaxPercent <= 0.0f)
+            return 0;
+
+        uint64 const owed = progressive
+            ? ProgressiveBotTaxCopper(money)
+            : uint64(double(money) * double(s_deathTaxPercent) / 100.0);
+
+        uint32 const taxed = uint32(std::min<uint64>(money, owed));
         if (!taxed)
             return 0;
 
         victim->ModifyMoney(-int64(taxed));
 
         TC_LOG_INFO("playerbots.hardcore",
-            "Death tax: {} lost {}c of {}c ({:.1f}%) on death.",
-            victim->GetName(), taxed, money, s_deathTaxPercent);
+            "Death tax: {} lost {}c of {}c ({:.1f}% effective, {}) on death.",
+            victim->GetName(), taxed, money,
+            100.0 * double(taxed) / double(money),
+            progressive ? "progressive" : "flat");
         return taxed;
     }
 

@@ -3468,6 +3468,46 @@ Centurion.Bounty.StacksPerKill = 1
 Centurion.Bounty.MaxStacks = 50
 Centurion.Bounty.GoldPercentPerStack = 1.0
 Centurion.Bounty.BotLossMultiplier = 2.0
+
+#
+#    Centurion.Hardcore.DeathGoldLossPercent
+#        Description: The flat share of the purse a PERSON loses on death,
+#                     bounty or no bounty. Taken before the bounty debt is
+#                     worked out, so the chest's cut is a cut of what is left
+#                     and the two never compound past their percentages.
+#                     The money is destroyed, not paid to anyone - it is the
+#                     drain under a realm whose fleet mints copper all day.
+#                     Not charged in a battleground, an arena, the Battle Ring,
+#                     or to a GM.
+#        Default:     10.0
+#        Range:       0.0 - 100.0 (0 disables)
+#
+
+Centurion.Hardcore.DeathGoldLossPercent = 10.0
+
+#
+#    Centurion.Hardcore.BotDeathTaxBrackets
+#        Description: The same tax for BOTS, progressive instead of flat.
+#
+#                     A person's purse is spent - repairs, reagents, the
+#                     auction house. A bot's is not: it earns constantly, buys
+#                     narrowly and saves for nothing, so a flat rate that is
+#                     fair to a person barely dents a bot sitting on a thousand
+#                     gold while taking real money off one holding eight.
+#
+#                     Written as "upToGold:percent" pairs, cheapest first. An
+#                     upTo of 0 means "and everything above" and must be last.
+#                     Empty makes bots pay the flat rate above instead.
+#
+#                     MARGINAL, the way an income tax is: each slice of the
+#                     purse is taxed at its own rate, so there is no cliff and
+#                     no point at which earning one more copper costs money.
+#                     On the default schedule a bot on 1462g pays 34% of its
+#                     purse; one on 40g pays 10%; one on nothing pays nothing.
+#        Default:     "100:10,500:20,1000:35,2000:50,0:65"
+#
+
+Centurion.Hardcore.BotDeathTaxBrackets = "100:10,500:20,1000:35,2000:50,0:65"
 Centurion.Bounty.HuntRadiusBonusYards = 175.0
 Centurion.Bounty.DrifterZoneBonus = 10
 Centurion.Bounty.AggroSlotBonus = 8
