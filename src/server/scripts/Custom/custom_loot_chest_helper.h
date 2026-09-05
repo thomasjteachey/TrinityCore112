@@ -89,6 +89,17 @@ struct ChestLocation
 void RegisterChest(GameObject* chest, Seconds despawnTime);
 void ForgetChest(ObjectGuid guid);
 
+// Was this chest built by PlayerChestBuilder?
+//
+// It matters because such a chest's contents were written straight into
+// GameObject::loot by hand, with no loot template behind them. Player::SendLoot
+// REGENERATES the loot of any gameobject it finds in GO_READY whose template
+// carries a lootId - "loot->clear(); ... FillLoot(lootid, ...)" - and every
+// stock chest entry carries one. Anything that opens one of ours therefore has
+// to take it out of GO_READY first, or the dead player's gear and gold are
+// destroyed before a single item can be taken.
+bool IsPlayerBuiltChest(ObjectGuid guid);
+
 // Nearest live chest on this map within maxDistance, or false. Does not touch
 // the grid: the answer comes from the registry.
 // Entry is matched exactly: more than one system builds chests through

@@ -3557,6 +3557,29 @@ namespace
         if (!bot->IsWithinDistInMap(go, RemoteChestRadius()))
             return false;
 
+        // A GM standing over the chest is a witness HERE, even though a GM is
+        // deliberately not one for the gear-drop rule that shares the helper
+        // below. The two ask different questions. That rule asks "is there
+        // anybody this loot could belong to", and a GM should not be able to
+        // make the fleet shed its gear simply by flying past. This one asks "can
+        // anybody SEE this happen", and a GM watching their own cache get
+        // vacuumed from forty yards with no cast bar is the single most likely
+        // person on the realm to be looking straight at it.
+        //
+        // It is also how the operator saw this: two bots knelt at a cache with
+        // no Opening animation, because a GM does not count and the chest read
+        // as unwatched.
+        Map* map = go->FindMap();
+        if (map)
+            for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+            {
+                Player* candidate = itr->GetSource();
+                if (!candidate || !candidate->IsInWorld() || !candidate->IsGameMaster())
+                    continue;
+                if (go->IsWithinDistInMap(candidate, RemoteChestPrivacyYards()))
+                    return false;
+            }
+
         return !AnyRealPersonWithin(go, RemoteChestPrivacyYards());
     }
 
@@ -3666,6 +3689,37 @@ namespace
             // way, so only gameobjects are gated.
             if (lootGameObject && CountFreeBagSlots(bot) < 2)
                 continue;
+
+            // A hand-built chest must never be handed to SendLoot in GO_READY.
+            //
+            // PlayerChestBuilder writes the dead player's gear and gold straight
+            // into GameObject::loot and leaves the chest in GO_READY, because
+            // that is the state a chest waits in. But Player::SendLoot treats
+            // GO_READY as "this loot has not been generated yet" and regenerates
+            // it from the template:
+            //
+            //     if (lootid) { loot->clear(); ... loot->FillLoot(lootid, ...); }
+            //
+            // Every stock chest entry carries a lootId, so the cache's entire
+            // contents are cleared and replaced with a roll off whatever table
+            // the borrowed entry happens to own - usually nothing this bot may
+            // take. That is the reported bug exactly: a bot kneels at the cache
+            // (the loot window opening is the kneel), plays no Opening animation
+            // because this path deliberately skips the channel, takes nothing,
+            // and leaves - having destroyed the contents on the way past.
+            //
+            // The walked path never showed it: opening the chest properly runs
+            // GameObject::Use, which moves it to GO_ACTIVATED first, and SendLoot
+            // leaves an activated chest's loot alone. Only the remote path, which
+            // exists precisely to skip the walk and the channel, reaches SendLoot
+            // with the chest still READY.
+            //
+            // Moving it to GO_ACTIVATED ourselves is what Use would have done and
+            // is all it takes: the regeneration branch is then unreachable and
+            // the loot the builder wrote is the loot that is served.
+            if (lootGameObject && lootGameObject->getLootState() == GO_READY &&
+                CustomLootChests::IsPlayerBuiltChest(lootGuid))
+                lootGameObject->SetLootState(GO_ACTIVATED, bot);
 
             bot->SendLoot(lootGuid, lootType);
             // SendLoot can refuse (permission, despawn race); it releases on its

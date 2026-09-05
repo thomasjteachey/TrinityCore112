@@ -168,6 +168,19 @@ void ForgetChest(ObjectGuid guid)
         [guid](ChestLocation const& record) { return record.Guid == guid; }), g_ChestRegistry.end());
 }
 
+bool IsPlayerBuiltChest(ObjectGuid guid)
+{
+    // Deliberately does NOT prune expired records the way FindNearestChest
+    // does: the question here is "did we build this", and the object in hand is
+    // proof it still exists whatever its despawn deadline says.
+    std::lock_guard<std::mutex> guard(g_ChestRegistryLock);
+    for (ChestLocation const& record : g_ChestRegistry)
+        if (record.Guid == guid)
+            return true;
+
+    return false;
+}
+
 bool FindNearestChest(uint32 entry, uint32 mapId, float x, float y, float z, float maxDistance, ObjectGuid& outGuid)
 {
     time_t const now = GameTime::GetGameTime();
