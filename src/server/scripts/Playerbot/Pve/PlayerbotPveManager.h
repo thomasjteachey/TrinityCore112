@@ -109,6 +109,13 @@ struct PveConfig
     // upgrades (delivered by mail, which bots now collect).
     bool auctionBuyEnabled = false;
     uint32 auctionBuyBudgetPct = 30;
+    // How far BELOW the bot's own level an auction's ITEM LEVEL may sit before
+    // the bot stops considering it at all. A hard floor under
+    // auctionLevelsBehindPenalty, which only made stale gear score worse and
+    // still let it win an empty or nearly worthless slot. Nothing is capped on
+    // the way up: gear above the bot's level is a fine thing to buy.
+    // 0 disables the floor.
+    uint32 auctionMaxItemLevelsBehind = 12;
     uint32 auctionBuyMaxOverpayPct = 1200;
     // How many item levels a bot considers its whole auction budget worth.
     // Higher means more willing to pay for an upgrade.

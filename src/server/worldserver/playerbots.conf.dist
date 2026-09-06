@@ -887,6 +887,25 @@ Playerbot.Pve.AuctionBuy.Enable = 0
 
 Playerbot.Pve.AuctionBuy.BudgetPct = 30
 
+#    Playerbot.Pve.AuctionBuy.MaxItemLevelsBehind
+#        Description: How far BELOW a bot's own character level an auction's item
+#                     level may sit before the bot will not consider it at all.
+#
+#                     A hard floor under AuctionLevelsBehindPenalty, which only
+#                     makes stale gear score worse - and a penalty is a thumb on
+#                     the scale, not a rule. Against an empty or nearly worthless
+#                     slot a cheap scrap still wins, which is how level 40 bots
+#                     ended up wearing level 10 gear.
+#
+#                     Nothing is capped on the way UP: gear above a bot's level
+#                     is a fine thing to buy, and the core has already confirmed
+#                     it can be worn. Bags and quivers are exempt - item level
+#                     says nothing about a bag, slots do.
+#        Default:     12
+#                     0 - (No floor; the penalty alone decides)
+
+Playerbot.Pve.AuctionBuy.MaxItemLevelsBehind = 12
+
 #    Playerbot.Pve.AuctionBuy.MaxOverpayPct
 #        Description: Ceiling on what a bot will ASK for a lot when it undercuts the house, as a
 #                     percentage of the item's face value. This is NOT a purchase limit - bots

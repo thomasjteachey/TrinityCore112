@@ -5414,53 +5414,99 @@ namespace
     // one - it comes from a riding trainer, and the mount from a vendor. A bot
     // met neither, so it never learned skill 762 and ran the whole climb on
     // foot while every player around it rode.
-    struct BotMountChoice
+    // Which vendor sells a given race its OWN mounts.
+    //
+    // The obvious source, ItemTemplate::AllowableRace, cannot answer this: it is
+    // a FACTION mask, not a race one. Every Alliance mount carries 1101 and
+    // every Horde mount 690, so filtering on it says a night elf may ride a
+    // dwarf's ram - and the thirty-five mounts that carry no mask at all
+    // (Deathcharger, the Qiraji crystals, the Zulian tiger, the Riding Turtle)
+    // read as "everyone may have this", which is how a night elf ended up on a
+    // sea turtle.
+    //
+    // The mount vendors DO know. Each race's breeder sells that race's line and
+    // nothing else, so the vendor is the fact we want and the item table is not.
+    // Keyed on vendor ENTRY rather than name, which is stable across locales and
+    // roster edits; the item list stays data-driven, so a new sabre added to
+    // Lelanai reaches the night elves with no code change.
+    struct RacialMountVendors
     {
-        uint32 raceMask;
-        uint32 spellId;
+        uint8 race;
+        std::array<uint32, 4> vendors;   // 0 terminates
     };
 
-    // Built from the item table rather than a hardcoded list per race, so it
-    // survives edits to the realm's mount roster and cannot put a tauren on a
-    // horse. Keyed by the riding rank the item asks for: 75 is the 60% ground
-    // mounts, 150 the 100% ones. The 225/300 ranks are flying and deliberately
-    // excluded - no bot has anywhere to fly, and a mounted bot in the air is a
-    // bot that cannot be reached.
-    std::unordered_map<uint32, std::vector<BotMountChoice>> const& GetBotMountPools()
-    {
-        static std::unordered_map<uint32, std::vector<BotMountChoice>> const pools = []
-        {
-            std::unordered_map<uint32, std::vector<BotMountChoice>> built;
-            for (auto const& itemPair : sObjectMgr->GetItemTemplateStore())
-            {
-                ItemTemplate const& proto = itemPair.second;
-                if (proto.RequiredSkill != SKILL_RIDING)
-                    continue;
-                if (proto.RequiredSkillRank != 75 && proto.RequiredSkillRank != 150)
-                    continue;
+    static constexpr std::array<RacialMountVendors, 10> kRacialMountVendors = { {
+        { RACE_HUMAN,     { 384, 1460, 2357, 4885 } },   // Horse Breeder
+        { RACE_ORC,       { 3362, 0, 0, 0 } },           // Kennel Master (wolves)
+        { RACE_DWARF,     { 1261, 0, 0, 0 } },           // Ram Breeder
+        { RACE_NIGHTELF,  { 4730, 0, 0, 0 } },           // Saber Handler
+        { RACE_UNDEAD_PLAYER, { 4731, 0, 0, 0 } },       // Undead Horse Merchant
+        { RACE_TAUREN,    { 3685, 0, 0, 0 } },           // Kodo Mounts
+        { RACE_GNOME,     { 7955, 0, 0, 0 } },           // Mechanostrider Merchant
+        { RACE_TROLL,     { 7952, 0, 0, 0 } },           // Raptor Handler
+        { RACE_BLOODELF,  { 16264, 0, 0, 0 } },          // Hawkstrider Breeder
+        { RACE_DRAENEI,   { 17584, 0, 0, 0 } },          // Elekk Breeder
+    } };
 
-                // The item has to actually BE a mount. Plenty of mount items
-                // carry a teach-this-spell wrapper instead of the mount aura,
-                // and teaching the wrapper to a bot grants nothing it can cast.
-                uint32 mountSpellId = 0;
-                for (_Spell const& itemSpell : proto.Spells)
+    // race -> riding rank -> the mount spells that race may be given. Rank 75 is
+    // the 60% ground mounts, 150 the 100% ones. The 225/300 ranks are flying and
+    // deliberately excluded - no bot has anywhere to fly, and a mounted bot in
+    // the air is a bot that cannot be reached.
+    using BotMountPools = std::unordered_map<uint8, std::unordered_map<uint32, std::vector<uint32>>>;
+
+    BotMountPools const& GetBotMountPools()
+    {
+        static BotMountPools const pools = []
+        {
+            BotMountPools built;
+            for (RacialMountVendors const& entry : kRacialMountVendors)
+            {
+                for (uint32 const vendorEntry : entry.vendors)
                 {
-                    SpellInfo const* spellInfo = itemSpell.SpellId > 0 ?
-                        sSpellMgr->GetSpellInfo(uint32(itemSpell.SpellId)) : nullptr;
-                    if (spellInfo && spellInfo->HasAura(SPELL_AURA_MOUNTED))
-                    {
-                        mountSpellId = uint32(itemSpell.SpellId);
+                    if (!vendorEntry)
                         break;
+
+                    VendorItemData const* vendorItems = sObjectMgr->GetNpcVendorItemList(vendorEntry);
+                    if (!vendorItems)
+                        continue;
+
+                    for (VendorItem const& vendorItem : vendorItems->m_items)
+                    {
+                        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(vendorItem.item);
+                        if (!proto || proto->RequiredSkill != SKILL_RIDING)
+                            continue;
+                        if (proto->RequiredSkillRank != 75 && proto->RequiredSkillRank != 150)
+                            continue;
+
+                        // The item has to actually BE a mount. Plenty of mount
+                        // items carry a teach-this-spell wrapper instead of the
+                        // mount aura, and teaching the wrapper to a bot grants
+                        // nothing it can cast.
+                        uint32 mountSpellId = 0;
+                        for (_Spell const& itemSpell : proto->Spells)
+                        {
+                            SpellInfo const* spellInfo = itemSpell.SpellId > 0 ?
+                                sSpellMgr->GetSpellInfo(uint32(itemSpell.SpellId)) : nullptr;
+                            if (spellInfo && spellInfo->HasAura(SPELL_AURA_MOUNTED))
+                            {
+                                mountSpellId = uint32(itemSpell.SpellId);
+                                break;
+                            }
+                        }
+
+                        if (!mountSpellId)
+                            continue;
+
+                        std::vector<uint32>& rankPool = built[entry.race][proto->RequiredSkillRank];
+                        if (std::find(rankPool.begin(), rankPool.end(), mountSpellId) == rankPool.end())
+                            rankPool.push_back(mountSpellId);
                     }
                 }
 
-                if (!mountSpellId)
-                    continue;
-
-                // An unset race mask means the realm put no restriction on it,
-                // which is common here since the faction split was removed.
-                uint32 const raceMask = proto.AllowableRace ? proto.AllowableRace : 0xFFFFFFFF;
-                built[proto.RequiredSkillRank].push_back({ raceMask, mountSpellId });
+                if (built.find(entry.race) == built.end())
+                    TC_LOG_ERROR("playerbots.pve",
+                        "No racial mounts found for race {} - its vendors sell none, so bots of that race stay on foot.",
+                        uint32(entry.race));
             }
             return built;
         }();
@@ -5504,25 +5550,25 @@ namespace
             }
 
             auto const& pools = GetBotMountPools();
-            auto poolItr = pools.find(tier.rank);
-            if (poolItr == pools.end())
+            auto raceItr = pools.find(uint8(bot->GetRace()));
+            if (raceItr == pools.end())
                 continue;
 
-            uint32 const raceMask = bot->GetRaceMask();
+            auto poolItr = raceItr->second.find(tier.rank);
+            if (poolItr == raceItr->second.end())
+                continue;
+
             std::vector<uint32> usable;
             bool alreadyMounted = false;
-            for (BotMountChoice const& choice : poolItr->second)
+            for (uint32 const spellId : poolItr->second)
             {
-                if (!(choice.raceMask & raceMask))
-                    continue;
-
-                if (bot->HasSpell(choice.spellId))
+                if (bot->HasSpell(spellId))
                 {
                     alreadyMounted = true;
                     break;
                 }
 
-                usable.push_back(choice.spellId);
+                usable.push_back(spellId);
             }
 
             if (alreadyMounted || usable.empty())
@@ -8223,6 +8269,23 @@ namespace
                     ItemTemplate const* equippedProto = nullptr;
                     if (Item const* equipped = bot->GetItemByPos(dest))
                         equippedProto = equipped->GetTemplate();
+
+                    // Do not shop below your own weight class.
+                    //
+                    // auctionLevelsBehindPenalty already makes stale gear score
+                    // badly, but a penalty is only a thumb on the scale: against
+                    // an empty or nearly worthless slot a cheap scrap still wins,
+                    // which is how level 40 bots ended up wearing level 10 gear.
+                    // This is the floor that a penalty cannot be.
+                    //
+                    // Nothing is capped on the way UP - gear above the bot's
+                    // level is a fine thing to buy, and CanUseItem has already
+                    // said it can be worn. Bags and quivers are exempt: item
+                    // level says nothing about a bag, slots do.
+                    if (isGear && g_PveConfig.auctionMaxItemLevelsBehind &&
+                        int32(bot->GetLevel()) - int32(proto->ItemLevel) >
+                            int32(g_PveConfig.auctionMaxItemLevelsBehind))
+                        continue;
 
                     // Same scorer as the bag equip pass: spec-aware weapon policy,
                     // armor tier before item level.
@@ -12954,6 +13017,8 @@ namespace playerbot
         g_PveConfig.auctionBuyEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.AuctionBuy.Enable", false);
         g_PveConfig.auctionSellEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.AuctionSell.Enable", false);
         g_PveConfig.auctionBuyBudgetPct = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionBuy.BudgetPct", 30), 1, 100));
+        g_PveConfig.auctionMaxItemLevelsBehind = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionBuy.MaxItemLevelsBehind", 12), 0, 300));
         g_PveConfig.auctionBuyMaxOverpayPct = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionBuy.MaxOverpayPct", 1200)));
         g_PveConfig.auctionBudgetWorthLevels = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionBuy.BudgetWorthLevels", 15), 1, 200));
