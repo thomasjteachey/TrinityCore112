@@ -437,7 +437,7 @@ namespace
     std::unordered_map<uint64, uint8> g_PendingGuardianDemotions;
     // Guardians that ran out of food or water and have no vendor they are
     // allowed to reach. Everyone else walks to a merchant and pays.
-    std::unordered_set<uint64> g_PendingGuardianRations;
+    std::unordered_set<uint64> g_PendingRationPurchases;
     // Mail collection and auction shopping mutate world-thread-only structures
     // (Player::m_mail, AuctionHouseObject) - executed from OnWorldUpdate.
     std::unordered_set<uint64> g_PendingMailCollections;
@@ -11705,14 +11705,23 @@ namespace
                     // Between the two it is structurally unable to restock: every
                     // guardian on the realm was carrying zero food and zero water.
                     //
-                    // So deliver instead. Only guardians, and only once actually
-                    // dry - every other bot can walk to a vendor and pay, and
-                    // handing the whole fleet free rations would delete that.
-                    if (!consumable && !ConjureSpellId(bot, needDrink) &&
-                        GetGuardianZoneId(bot->GetGUID().GetRawValue()))
+                    // So let it shop from where it stands - and PAY.
+                    //
+                    // This was guardians only, on the reasoning that everyone else
+                    // can walk to a vendor. They cannot reliably: the errand scan
+                    // only starts a vendor run when errandKind is None, so a bot
+                    // that runs dry during any other errand has no route to a
+                    // merchant until that errand ends, and meanwhile it is below
+                    // the engage floor and cannot fight either. A level 14 paladin
+                    // was found stuck exactly there.
+                    //
+                    // It is a purchase, not a handout: BuyTravelRations charges
+                    // the vendor price, so the gold still leaves the economy and a
+                    // bot too poor to eat still cannot.
+                    if (!consumable && !ConjureSpellId(bot, needDrink))
                     {
                         std::lock_guard<std::mutex> rationGuard(g_PvePendingLock);
-                        g_PendingGuardianRations.insert(bot->GetGUID().GetRawValue());
+                        g_PendingRationPurchases.insert(bot->GetGUID().GetRawValue());
                     }
                     if (!consumable && !bot->HasUnitState(UNIT_STATE_CASTING))
                     {
@@ -13468,18 +13477,46 @@ namespace playerbot
     // the supply run's: top up to 20 units when below 10, never for a class that
     // conjures its own. A drifter that ports ends up in the same state as one
     // that walked to a vendor.
-    void GrantTravelRations(Player* bot)
+    // Buy rations from wherever the bot is standing.
+    //
+    // No vendor is visited and none needs to be: walking to one was never the
+    // interesting part, and the walk was what made bots starve - a bot on an
+    // errand cannot start a second errand to go shopping. The gold is still
+    // spent at the vendor price, so the sink is intact and a bot that cannot
+    // afford food goes without, exactly as it would standing at the counter.
+    void BuyTravelRations(Player* bot)
     {
         BuildRationPoolOnce();
         uint8 const level = bot->GetLevel();
+        constexpr uint32 kStack = 20;
+
+        auto purchase = [bot](uint32 itemId) -> bool
+        {
+            ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
+            if (!proto)
+                return false;
+
+            // BuyPrice is per unit. A zero price is a vendor giving it away,
+            // which some starter rations genuinely are.
+            uint64 const cost = uint64(proto->BuyPrice) * kStack;
+            if (cost && bot->GetMoney() < cost)
+                return false;
+
+            if (!bot->AddItem(itemId, kStack))
+                return false;
+
+            if (cost)
+                bot->ModifyMoney(-int64(cost));
+            return true;
+        };
 
         if (CountConsumableUnits(bot, false) < 10 && !ConjureSpellId(bot, false))
             if (uint32 const food = BestRationForLevel(g_RationFood, level))
-                bot->AddItem(food, 20);
+                purchase(food);
 
         if (UsesMana(bot) && CountConsumableUnits(bot, true) < 10 && !ConjureSpellId(bot, true))
             if (uint32 const drink = BestRationForLevel(g_RationDrink, level))
-                bot->AddItem(drink, 20);
+                purchase(drink);
     }
 
     void UpdateDrifterAssignments()
@@ -13786,7 +13823,7 @@ namespace playerbot
                     // carrying is the wrong tier now - it was re-levelled into this
                     // zone's band on arrival - and a bot that cannot eat between
                     // fights spends the rest of its life at a fraction of its health.
-                    GrantTravelRations(bot);
+                    BuyTravelRations(bot);
                     ++paid;
                 }
             }
@@ -14067,19 +14104,19 @@ namespace playerbot
                     }
         }
 
-        // Guardians that ran dry with no vendor they are allowed to reach.
+        // Anybody that ran dry, wherever they are. They pay for it.
         {
             std::unordered_set<uint64> drained;
             {
                 std::lock_guard<std::mutex> guard(g_PvePendingLock);
-                drained.swap(g_PendingGuardianRations);
+                drained.swap(g_PendingRationPurchases);
             }
             for (uint64 botRawGuid : drained)
                 if (Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid)))
                     if (bot->IsInWorld() && playerbot::IsManagedRandomBot(bot))
-                        GrantTravelRations(bot);
+                        BuyTravelRations(bot);
             if (!drained.empty())
-                TC_LOG_INFO("playerbots.pve", "Resupplied {} guardians that had run out where they stand.",
+                TC_LOG_INFO("playerbots.pve", "Resupplied {} bot(s) that had run out where they stand.",
                     uint32(drained.size()));
         }
 
