@@ -5340,6 +5340,10 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
     bool const arcanePowerReady = arcaneBurstWindow && !HasAuraFromSpellChain(player, 12042) && IsSpellReady(player, 12042);
     bool const presenceOfMindReady = arcaneBurstWindow && player->HasAura(12042) && !player->HasAura(12043) && IsSpellReady(player, 12043);
     bool const burstPyroblastReady = arcaneBurstWindow && player->HasAura(12043) && IsSpellReady(player, 18809);
+    // The spec's preferred filler if the bot owns it, Frostbolt if it does not.
+    uint32 const magePreferredNuke = (isFireMage || isArcaneMage) ? uint32(10207) : uint32(25304);
+    uint32 const mageDefaultNuke = IsSpellReady(player, magePreferredNuke) ? magePreferredNuke : uint32(25304);
+
     return SelectFromTriggerGraph(player, target, nullptr,
     {
         { "critical health", !isFireMage && player->HealthBelowPct(25) && IsSpellReady(player, 11958), 60.0f,
@@ -5381,8 +5385,22 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
             { "mage blizzard", "sustained ranged aoe against a clustered enemy group", 10, playerbot::PvpClassSpellContext::TargetMode::Enemy } },
         { "polymorph", polymorphTarget && !polymorphTarget->HealthBelowPct(75), 29.0f,
             { "mage polymorph", "priority crowd control on non-dotted paladin/priest targets", 12826, playerbot::PvpClassSpellContext::TargetMode::Enemy, polymorphTarget ? polymorphTarget->GetGUID() : ObjectGuid::Empty } },
-        { "default ranged", hasHostileTarget && IsSpellReady(player, (isFireMage || isArcaneMage) ? uint32(10207) : uint32(25304)), 18.0f,
-            { (isFireMage || isArcaneMage) ? "mage scorch" : "mage frostbolt", isFireMage ? "default fire pressure" : (isArcaneMage ? "scorch instead of frostbolt" : "default ranged pressure"), (isFireMage || isArcaneMage) ? uint32(10207) : uint32(25304), playerbot::PvpClassSpellContext::TargetMode::Enemy } },
+        // Frostbolt is the FALLBACK, not the frost spec's private spell.
+        //
+        // This asked fire and arcane mages for Scorch and nobody else for
+        // anything, so a mage who does not know Scorch had no filler at all -
+        // and Scorch is not learnable until level 22. Every fire-spec mage
+        // below that walked up and hit things with its staff, because the
+        // graph returned no decision and melee is what happens when it does.
+        // (Spec is guid % 3, so a third of the fleet is fire at every level.)
+        //
+        // Rank does not matter here: IsSpellReady resolves down the chain to
+        // whatever rank the bot actually owns, so naming the top rank is just
+        // naming the spell.
+        { "default ranged", hasHostileTarget && IsSpellReady(player, mageDefaultNuke), 18.0f,
+            { mageDefaultNuke == uint32(10207) ? "mage scorch" : "mage frostbolt",
+              mageDefaultNuke == uint32(10207) ? "default fire pressure" : "default ranged pressure",
+              mageDefaultNuke, playerbot::PvpClassSpellContext::TargetMode::Enemy } },
         { "maintain buff", !player->IsInCombat() && mageArmorSpellId && mageArmorMissing && IsSpellReady(player, mageArmorSpellId), 9.0f,
             { "mage armor", "maintain ice or frost armor", mageArmorSpellId, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "mana gem missing", !player->IsInCombat() && manaGemItemId && IsSpellReady(player, 10054) && !player->HasItemCount(manaGemItemId), 8.0f,
