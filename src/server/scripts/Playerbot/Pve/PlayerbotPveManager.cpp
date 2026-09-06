@@ -478,7 +478,8 @@ namespace
     void TrySkinCorpse(Player* bot, Creature* corpse);
     bool IsGatherableNodeFor(Player* bot, GameObject const* go, int32* outRequiredSkill);
     uint32 GetGuardianZoneId(uint64 botRawGuid);
-    bool IsProactivePlayerLevelAcceptable(Player const* bot, uint32 playerLevel);
+    bool IsProactiveTargetWithinPower(Player const* bot, uint32 playerLevel);
+    bool IsProactivePlayerLevelAcceptable(Player const* bot, uint32 playerLevel, uint32 bountyStacks);
     bool IsProactivePlayerLevelAcceptable(Player const* bot, Player const* player);
 
     bool IsHumanPlayer(Player const* player)
@@ -2243,25 +2244,64 @@ namespace
         return int32(std::min<int64>(budget, int64(cfg.aggroBudgetMaxPerPlayer)));
     }
 
-    bool IsProactivePlayerLevelAcceptable(Player const* bot, uint32 playerLevel)
+    // The CEILING on its own: is this person weak enough that a bot would take
+    // the fight?
+    //
+    // Autonomous bots will fight uphill, but only so far. The cut-off is the
+    // colour the client would paint the target: five or more levels up is RED,
+    // which is the game's own way of saying you will lose, and a bot that walks
+    // into one is just donating a corpse. Everything up to and including orange
+    // is fair game - see Trinity::XP::GetColorCode for the boundary.
+    //
+    // Separate from the full rule below because one caller genuinely wants only
+    // this half: the outmatched-lookout test in CallForHelpAgainstBounties asks
+    // "is this person too strong for me", and a floor there would have bots
+    // shouting for help about somebody half their level.
+    bool IsProactiveTargetWithinPower(Player const* bot, uint32 playerLevel)
     {
         if (!bot)
             return false;
 
-        // Autonomous bots will fight uphill, but only so far. The cut-off is the
-        // colour the client would paint the target: five or more levels up is RED,
-        // which is the game's own way of saying you will lose, and a bot that
-        // walks into one is just donating a corpse. Everything up to and including
-        // orange is fair game - see Trinity::XP::GetColorCode for the boundary.
-        //
-        // Self-defence paths intentionally do NOT call this helper: a bot that is
-        // attacked fights back however far above it the attacker is.
         return playerLevel <= uint32(bot->GetLevel()) + g_PveConfig.proactiveMaxLevelsAbove;
+    }
+
+    // The whole proactive level rule: the ceiling above, and the floor under it.
+    //
+    // The floor lived only in MayProactivelyEngage, which is the gate on the
+    // final act of attacking. This helper is what the thirteen other proactive
+    // paths ask - target acquisition, the guardian picking somewhere to close
+    // on, FindNearestHumanSpot, pack-assist - and it had a ceiling and nothing
+    // else. So a level fifty guardian would happily select a level forty-five as
+    // a destination, port across the zone, walk up to them, and join in the
+    // moment they swung at anything: every step answered "yes, they are not too
+    // strong for me", and the one place that would have said no was never on
+    // that path.
+    //
+    // Self-defence paths intentionally do NOT call this helper: a bot that is
+    // attacked fights back however far above OR below it the attacker is.
+    bool IsProactivePlayerLevelAcceptable(Player const* bot, uint32 playerLevel, uint32 bountyStacks)
+    {
+        if (!IsProactiveTargetWithinPower(bot, playerLevel))
+            return false;
+
+        // Nobody gets picked on from far above them, and it takes a real bounty
+        // - not one stack - to waive it. See MayProactivelyEngage, which states
+        // the same rule for the attack itself; the two must agree or the bot
+        // travels to somebody it will then refuse to fight.
+        if (uint32 const below = g_PveConfig.proactiveMaxLevelsBelow)
+            if (bountyStacks < g_PveConfig.proactiveBountyStacks &&
+                playerLevel + below < uint32(bot->GetLevel()))
+                return false;
+
+        return true;
     }
 
     bool IsProactivePlayerLevelAcceptable(Player const* bot, Player const* player)
     {
-        return player && IsProactivePlayerLevelAcceptable(bot, player->GetLevel());
+        // Takes the bounty lock, so it is asked only about real people - of whom
+        // there are a handful - exactly as PlayerbotPvpCore.cpp:2570 already does.
+        // The snapshot callers below pass spot.Bounty instead and take no lock.
+        return player && IsProactivePlayerLevelAcceptable(bot, player->GetLevel(), Bounty::GetStacks(player));
     }
 
     std::mutex g_HumanSpotLock;
@@ -2354,7 +2394,8 @@ namespace
 
         std::vector<HumanSpot const*> inZone;
         for (HumanSpot const& spot : g_HumanSpots)
-            if (spot.ZoneId == zoneId && spot.Huntable && IsProactivePlayerLevelAcceptable(bot, spot.Level))
+            if (spot.ZoneId == zoneId && spot.Huntable &&
+                IsProactivePlayerLevelAcceptable(bot, spot.Level, spot.Bounty))
                 inZone.push_back(&spot);
 
         if (inZone.empty())
@@ -2387,7 +2428,8 @@ namespace
             // caller - a timid bot picking somewhere quiet to grind - passes
             // nothing, and must keep seeing everybody: giving a wide berth to
             // someone you are not allowed to attack is still the right move.
-            if (proactiveBot && (!spot.Huntable || !IsProactivePlayerLevelAcceptable(proactiveBot, spot.Level)))
+            if (proactiveBot && (!spot.Huntable ||
+                !IsProactivePlayerLevelAcceptable(proactiveBot, spot.Level, spot.Bounty)))
                 continue;
 
             float const dx = spot.X - x;
@@ -8769,7 +8811,7 @@ namespace
                 //
                 // A bounty walking past is reason enough. It is a lookout calling
                 // in a sighting, not a cry from inside a fight.
-                if (IsProactivePlayerLevelAcceptable(outmatched, human))
+                if (IsProactiveTargetWithinPower(outmatched, human->GetLevel()))
                     continue;
 
                 // Line of sight, so it is a sighting and not a shout through a
