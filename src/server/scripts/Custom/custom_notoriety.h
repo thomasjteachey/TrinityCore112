@@ -107,9 +107,15 @@ namespace Notoriety
         uint8 Level = 0;
     };
 
-    // The ladder of per-checkpoint debuffs: one named aura per StacksPerTier
-    // rung, applied as the count climbs past each and removed as it falls back,
-    // so a player can read what has armed against them off their own debuff bar.
+    // The ladder of per-checkpoint debuffs: one named aura per rung at which
+    // something in the bounty engine actually ARMS, applied as the count climbs
+    // past it and removed as it falls back, so a player can read what has been
+    // turned on against them off their own debuff bar.
+    //
+    // Deliberately not every fifth stack. A debuff is a promise that something
+    // changed, and at 20, 35 and 45 nothing does - the payout tier steps and the
+    // scalars keep sliding, exactly as they did on the stack before. One filler
+    // icon and the player stops reading the rest of them.
     //
     // Called from the per-player update tick on the map thread, on purpose:
     // stacks move on a kill, an expiry, a death, a turn-in, a login and a GM

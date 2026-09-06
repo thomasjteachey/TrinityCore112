@@ -3673,20 +3673,37 @@ Centurion.Notoriety.ClearStacksOnTurnIn   = 1
 Centurion.Notoriety.BotsSeeThroughStealth = 1
 
 #    Centurion.Notoriety.Checkpoint*
-#        The ladder of per-rung debuffs. One named aura per CheckpointStep stacks,
-#        applied as the count climbs past each rung and removed as it decays back,
-#        so a player can read what has armed against them off their own debuff bar.
-#        Rung k (1-based) sits at k * CheckpointStep stacks and uses the spell id
-#        CheckpointAuraBase + k - 1, so the ids must be a contiguous block of
-#        CheckpointCount.
+#        The ladder of per-rung debuffs: one named aura for each stack count at
+#        which something actually arms, applied as the count climbs past it and
+#        removed as it decays back, so a player can read what has been turned on
+#        against them off their own debuff bar.
+#
+#        CheckpointStacks is the list of those counts, and the Nth entry (from 0)
+#        uses spell id CheckpointAuraBase + N - so the ids must be a contiguous
+#        block as long as the list. The list is sorted and de-duplicated on load,
+#        because an entry out of order would point two rungs at one spell.
+#
+#        The default list is NOT every fifth stack, on purpose. These are exactly
+#        the thresholds the bounty engine fires on:
+#            5  zone guardians will chase you for attacking people below you
+#            10 the fleet stops waiting and dispatches on a clock
+#            15 hunters arrive in pairs, out-of-band bots are levied into your
+#               zone, the registrar will write a contract, and every bot in the
+#               zone sees through stealth
+#            25 the veteran pool becomes eligible and preferred
+#            30 the realm sends Centurion Guards
+#            40 the cap on how many may be on you at once stops applying
+#            50 the battleground-only fleet is recruited into the open world
+#        20, 35 and 45 arm nothing - the payout tier steps and the scalars keep
+#        sliding, as they did on the stack before - so they get no icon. One
+#        filler debuff and the player stops reading the rest.
 #
 #        BASE 0 DISABLES THE FEATURE, and that is the default on purpose: an aura
 #        the client has no Spell.dbc row for renders as a blank icon with no name
 #        and no tooltip. Do not set this until the rows are published in the client
 #        patch, and set it back to 0 if you ever roll that patch back.
 Centurion.Notoriety.CheckpointAuraBase    = 0
-Centurion.Notoriety.CheckpointStep        = 5
-Centurion.Notoriety.CheckpointCount       = 10
+Centurion.Notoriety.CheckpointStacks      = "5,10,15,25,30,40,50"
 
 #    The payout. Money is flat copper; experience is counted in BUBBLES of the
 #    seller's own next level, so it stays meaningful at 20 and at 60.

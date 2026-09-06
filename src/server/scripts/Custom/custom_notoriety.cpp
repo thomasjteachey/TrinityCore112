@@ -45,9 +45,14 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <mutex>
+#include <sstream>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace
 {
@@ -63,13 +68,25 @@ namespace
     uint32 s_cooldownSeconds = 0;
     uint32 s_maxRerolls = 2;
     // The per-checkpoint debuffs. Base is the first spell id of a contiguous
-    // block, one per rung; rung k (1-based) is at k * step stacks and uses
-    // base + k - 1. Zero disables the whole thing, which is the DEFAULT and is
-    // deliberate: applying an aura the client has no Spell.dbc row for shows the
-    // player a blank icon with no name, so this stays off until the row ships.
+    // block; the Nth threshold in s_checkpointStacks uses base + N. Zero
+    // disables the whole thing, which is the DEFAULT and is deliberate: applying
+    // an aura the client has no Spell.dbc row for shows the player a blank icon
+    // with no name, so this stays off until the row ships.
     uint32 s_checkpointBase = 0;
-    uint32 s_checkpointStep = 5;
-    uint32 s_checkpointCount = 10;
+
+    // The thresholds themselves, and NOT simply every fifth stack.
+    //
+    // A debuff is a promise that something changed. Twenty, thirty-five and
+    // forty-five arm nothing: the contract payout tier steps and the continuous
+    // scalars keep sliding, but they were sliding on the stack before and will
+    // on the stack after. An icon there says "something happened" when nothing
+    // did, and once one rung is filler the player stops reading the rest.
+    //
+    // So these are exactly the stack counts where a threshold in the bounty
+    // engine actually fires. Kept as config rather than derived because the
+    // thresholds live in a different translation unit's statics, and a list that
+    // silently disagrees with them is worse than one somebody has to update.
+    std::vector<uint32> s_checkpointStacks;
 
     // Last stack count each player's checkpoint auras were synced against.
     // SyncCheckpointAuras is called from the per-tick player update, so the
@@ -126,8 +143,25 @@ namespace
         s_cooldownSeconds = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.CooldownSeconds", 0)));
         s_maxRerolls = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.MaxRerolls", 2), 0, 20));
         s_checkpointBase = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.CheckpointAuraBase", 0)));
-        s_checkpointStep = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.CheckpointStep", 5), 1, 255));
-        s_checkpointCount = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.CheckpointCount", 10), 0, 64));
+
+        // Sorted ascending and de-duplicated, because the id a rung uses is its
+        // INDEX in this list: an unsorted or repeated entry would quietly point
+        // two rungs at one spell and leave another unused.
+        s_checkpointStacks.clear();
+        {
+            std::stringstream stream(sConfigMgr->GetStringDefault(
+                "Centurion.Notoriety.CheckpointStacks", "5,10,15,25,30,40,50"));
+            std::string token;
+            while (std::getline(stream, token, ','))
+            {
+                uint32 const stacks = uint32(std::strtoul(token.c_str(), nullptr, 10));
+                if (stacks)
+                    s_checkpointStacks.push_back(stacks);
+            }
+        }
+        std::sort(s_checkpointStacks.begin(), s_checkpointStacks.end());
+        s_checkpointStacks.erase(std::unique(s_checkpointStacks.begin(), s_checkpointStacks.end()),
+            s_checkpointStacks.end());
         s_fenceAppearYards = std::max(20.0f,
             sConfigMgr->GetFloatDefault("Centurion.Notoriety.FenceAppearYards", 150.0f));
         s_minYards = std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Notoriety.RendezvousMinYards", 500.0f));
@@ -442,7 +476,7 @@ namespace Notoriety
     // one integer compare unless the count actually moved.
     void SyncCheckpointAuras(Player* player)
     {
-        if (!s_enabled || !s_checkpointBase || !s_checkpointCount || !player)
+        if (!s_enabled || !s_checkpointBase || s_checkpointStacks.empty() || !player)
             return;
 
         uint64 const key = player->GetGUID().GetRawValue();
@@ -456,10 +490,10 @@ namespace Notoriety
             g_checkpointSynced[key] = stacks;
         }
 
-        for (uint32 index = 0; index < s_checkpointCount; ++index)
+        for (size_t index = 0; index < s_checkpointStacks.size(); ++index)
         {
-            uint32 const rung = (index + 1) * s_checkpointStep;
-            uint32 const spellId = s_checkpointBase + index;
+            uint32 const rung = s_checkpointStacks[index];
+            uint32 const spellId = s_checkpointBase + uint32(index);
 
             if (stacks >= rung)
             {
