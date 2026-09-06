@@ -12955,6 +12955,7 @@ namespace playerbot
         g_PveConfig.drifterTeleportGold = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.TeleportGold", 10), 0, 10000));
         g_PveConfig.proactiveMaxLevelsAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveMaxLevelsAbove", 4), 0, 60));
         g_PveConfig.proactiveMaxLevelsBelow = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveMaxLevelsBelow", 4), 0, 60));
+        g_PveConfig.proactiveBountyStacks = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveBountyStacks", 5), 0, 255));
 
         // Accounts whose bots are PvP-only: parked in their sanctuary, never
         // touched by any PvE system (no grind, errands, gear, talents, economy),
@@ -13027,10 +13028,16 @@ namespace playerbot
         // whatever you can handle. Read from the registry, which is what every
         // other rule on the realm reads.
         //
+        // But it takes a REAL bounty, not a single stack. One stack is one kill,
+        // and one kill is not somebody the realm should be sending a level sixty
+        // after - a person defending themselves once would have bought a hunter
+        // they cannot fight. The waiver is for somebody who has made a habit of
+        // it, so it starts at Playerbot.Pve.ProactiveBountyStacks (5).
+        //
         // Only about STARTING it. Self-defence never comes through here, so a bot
         // still fights back against anyone who opens on it, at any level.
         if (uint32 const below = g_PveConfig.proactiveMaxLevelsBelow)
-            if (!Bounty::GetStacks(human) &&
+            if (Bounty::GetStacks(human) < g_PveConfig.proactiveBountyStacks &&
                 uint32(human->GetLevel()) + below < uint32(bot->GetLevel()))
                 return false;
 

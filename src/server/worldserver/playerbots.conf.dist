@@ -777,9 +777,10 @@ Playerbot.Pve.ProactiveMaxLevelsAbove = 4
 #                     and a zone guardian sitting at its post's ceiling was the
 #                     worst of it.
 #
-#                     A player carrying a BOUNTY is exempt: a bounty is earned by
-#                     killing people, and the point of it is that the realm comes
-#                     for you whatever you can handle.
+#                     A player carrying enough BOUNTY is exempt: a bounty is earned
+#                     by killing people, and the point of it is that the realm comes
+#                     for you whatever you can handle. See
+#                     Playerbot.Pve.ProactiveBountyStacks for how much is enough.
 #
 #                     Only governs STARTING a fight. Self-defence never consults
 #                     this, so a bot still fights back at any level difference.
@@ -788,6 +789,22 @@ Playerbot.Pve.ProactiveMaxLevelsAbove = 4
 #
 
 Playerbot.Pve.ProactiveMaxLevelsBelow = 4
+
+#
+#    Playerbot.Pve.ProactiveBountyStacks
+#        Description: How many bounty stacks a player must carry before the level
+#                     floor above stops protecting them. One stack is one kill,
+#                     which is not yet somebody the realm should send a max-level
+#                     guardian after; the waiver is meant for a person who has
+#                     made a habit of it.
+#
+#                     Independent of Centurion.Bounty.GuardStacks, which is the
+#                     much higher bar for summoning NPC guards.
+#                     0 means no amount of bounty ever waives the floor.
+#        Default:     5
+#
+
+Playerbot.Pve.ProactiveBountyStacks = 5
 
 
 #    Playerbot.Pve.RebirthAtMaxLevel.Percent
