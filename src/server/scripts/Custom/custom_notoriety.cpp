@@ -371,14 +371,17 @@ namespace Notoriety
         // actually reads. The contract therefore sat in the player's log looking
         // perfectly alive until they relogged.
         //
-        // Player::FailQuest is not the answer either: it returns immediately
-        // unless the quest is INCOMPLETE, or COMPLETE and both TIMED and
-        // COMPLETED_AT_START (Player.cpp:17080-17085). This quest has no
-        // objectives, so it is COMPLETE from the moment it is accepted and none
-        // of those hold. It would have done nothing.
+        // Player::FailQuest is not the answer either, and would be a coin flip
+        // if it were: it returns immediately unless the quest is INCOMPLETE, or
+        // COMPLETE and both TIMED and COMPLETED_AT_START (Player.cpp:17080).
+        // The contract is INCOMPLETE for the length of the walk and COMPLETE the
+        // instant the fence gives its speak-to credit, so whether FailQuest did
+        // anything at all would depend on which side of that click you died on.
         //
         // So the failure is sent explicitly and then the quest is taken out by
-        // the same route the abandon handler uses (QuestHandler.cpp:411-447).
+        // the same route the abandon handler uses (QuestHandler.cpp:411-447),
+        // which does not care what the status was.
+        //
         // Removed rather than left sitting as FAILED on purpose: a quest in any
         // status but NONE fails SatisfyQuestStatus, so a failed row left in the
         // log would block the next contract forever.
@@ -605,6 +608,25 @@ public:
         bool OnGossipHello(Player* player) override
         {
             me->Whisper("Quietly, now. Have you got the page?", LANG_UNIVERSAL, player);
+
+            // Tick the objective BEFORE the menu is built, not after.
+            //
+            // quest_template gives 60001 RequiredNpcOrGo1 = this creature, so
+            // the contract now sits in the log as "Speak to the Quiet Man 0/1"
+            // for the whole walk instead of arriving already complete. Finding
+            // him is the objective, and this is the moment he is found.
+            //
+            // Returning false hands the click on to NPCHandler, which calls
+            // PrepareGossipMenu -> PrepareQuestMenu, and that reads the quest's
+            // status as it is right now. Award the credit afterwards and the
+            // player is looking at a menu built from the incomplete state,
+            // having to shut the window and click again to hand in.
+            //
+            // KilledMonsterCredit is a no-op for anyone not on the quest, so it
+            // needs no guard of its own.
+            if (player)
+                player->KilledMonsterCredit(me->GetEntry(), me->GetGUID());
+
             return false;   // let the quest menu through
         }
 
