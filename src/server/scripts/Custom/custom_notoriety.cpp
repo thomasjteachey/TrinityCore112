@@ -360,13 +360,45 @@ namespace Notoriety
         EraseContract(player->GetGUID().GetRawValue());
         DespawnFence(player);
 
-        // Removed from the log where the player is standing, not silently left
-        // to fail at the fence four hundred yards later.
+        // FAILED in the log where the player is standing, not silently left to
+        // fail at the fence four hundred yards later.
+        //
+        // This was previously RemoveActiveQuest(id, false) and RemoveRewardedQuest,
+        // which between them told the CLIENT nothing at all. The status map lost
+        // the quest server-side, so the fence would have refused it - but the
+        // false suppresses SendQuestUpdate, and neither call touches the quest LOG
+        // SLOT, which is the replicated PLAYER_QUEST_LOG_* field the client
+        // actually reads. The contract therefore sat in the player's log looking
+        // perfectly alive until they relogged.
+        //
+        // Player::FailQuest is not the answer either: it returns immediately
+        // unless the quest is INCOMPLETE, or COMPLETE and both TIMED and
+        // COMPLETED_AT_START (Player.cpp:17080-17085). This quest has no
+        // objectives, so it is COMPLETE from the moment it is accepted and none
+        // of those hold. It would have done nothing.
+        //
+        // So the failure is sent explicitly and then the quest is taken out by
+        // the same route the abandon handler uses (QuestHandler.cpp:411-447).
+        // Removed rather than left sitting as FAILED on purpose: a quest in any
+        // status but NONE fails SatisfyQuestStatus, so a failed row left in the
+        // log would block the next contract forever.
         if (Quest const* quest = sObjectMgr->GetQuestTemplate(s_questId))
         {
-            player->RemoveActiveQuest(s_questId, false);
+            player->SendQuestFailed(s_questId);
+
+            if (quest->HasSpecialFlag(QUEST_SPECIAL_FLAGS_TIMED))
+                player->RemoveTimedQuest(s_questId);
+
+            player->TakeQuestSourceItem(s_questId, false);
+            player->AbandonQuest(s_questId);
+
+            uint16 const logSlot = player->FindQuestSlot(s_questId);
+            if (logSlot < MAX_QUEST_LOG_SIZE)
+                player->SetQuestSlot(logSlot, 0);
+
+            // update defaults to true here, unlike before, so SendQuestUpdate runs.
+            player->RemoveActiveQuest(s_questId);
             player->RemoveRewardedQuest(s_questId);
-            (void)quest;
         }
 
         ChatHandler(player->GetSession()).PSendSysMessage("%s", reason);
