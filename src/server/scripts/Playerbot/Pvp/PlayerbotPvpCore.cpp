@@ -5340,9 +5340,19 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
     bool const arcanePowerReady = arcaneBurstWindow && !HasAuraFromSpellChain(player, 12042) && IsSpellReady(player, 12042);
     bool const presenceOfMindReady = arcaneBurstWindow && player->HasAura(12042) && !player->HasAura(12043) && IsSpellReady(player, 12043);
     bool const burstPyroblastReady = arcaneBurstWindow && player->HasAura(12043) && IsSpellReady(player, 18809);
-    // The spec's preferred filler if the bot owns it, Frostbolt if it does not.
+    // The spec's preferred filler, then Frostbolt, then Fireball.
+    //
+    // Fireball is the floor because it is the one nuke a mage can never be
+    // without: it is the level 1 spell. Frostbolt is not learnable until 4
+    // and Scorch not until 22, so a chain that stopped at Frostbolt still
+    // left the first three levels with no filler and nothing to do but
+    // melee - the same hole this rule exists to close, just narrower.
     uint32 const magePreferredNuke = (isFireMage || isArcaneMage) ? uint32(10207) : uint32(25304);
-    uint32 const mageDefaultNuke = IsSpellReady(player, magePreferredNuke) ? magePreferredNuke : uint32(25304);
+    uint32 mageDefaultNuke = magePreferredNuke;
+    if (!IsSpellReady(player, mageDefaultNuke))
+        mageDefaultNuke = uint32(25304);      // Frostbolt, learned at 4
+    if (!IsSpellReady(player, mageDefaultNuke))
+        mageDefaultNuke = uint32(133);        // Fireball, learned at 1
 
     return SelectFromTriggerGraph(player, target, nullptr,
     {
@@ -5398,7 +5408,8 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
         // whatever rank the bot actually owns, so naming the top rank is just
         // naming the spell.
         { "default ranged", hasHostileTarget && IsSpellReady(player, mageDefaultNuke), 18.0f,
-            { mageDefaultNuke == uint32(10207) ? "mage scorch" : "mage frostbolt",
+            { mageDefaultNuke == uint32(10207) ? "mage scorch" :
+                (mageDefaultNuke == uint32(133) ? "mage fireball" : "mage frostbolt"),
               mageDefaultNuke == uint32(10207) ? "default fire pressure" : "default ranged pressure",
               mageDefaultNuke, playerbot::PvpClassSpellContext::TargetMode::Enemy } },
         { "maintain buff", !player->IsInCombat() && mageArmorSpellId && mageArmorMissing && IsSpellReady(player, mageArmorSpellId), 9.0f,
