@@ -89,6 +89,11 @@ namespace Notoriety
     // Re-send the map marker and the bearing.
     void SendRendezvousPoi(Player* player);
 
+    // Put the fence on the ground when its buyer gets close and take it away
+    // when they leave. Called from the holder's own update tick.
+    void UpdateFence(Player* player);
+    void DespawnFence(Player* player);
+
     // Everything the payout is computed from, in one place, so the goodie bag
     // does not have to re-derive any of it.
     struct Payout

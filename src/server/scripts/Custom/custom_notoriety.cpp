@@ -28,6 +28,7 @@
 #include "Configuration/Config.h"
 #include "Creature.h"
 #include "CreatureAI.h"
+#include "Duration.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
 #include "Log.h"
@@ -40,6 +41,7 @@
 #include "RBAC.h"
 #include "ScriptedCreature.h"
 #include "ScriptMgr.h"
+#include "TemporarySummon.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
 
@@ -59,6 +61,7 @@ namespace
     uint32 s_maxRerolls = 2;
     float s_minYards = 500.0f;
     float s_maxYards = 900.0f;
+    float s_fenceAppearYards = 150.0f;
     bool s_voidOnDeath = true;
     bool s_clearStacksOnTurnIn = false;
 
@@ -85,6 +88,9 @@ namespace
 
     std::mutex g_lock;
     std::unordered_map<uint64, Contract> g_contracts;
+    // The fence currently standing for each holder. Map thread only - it is
+    // written and read from the owner's own update tick and nowhere else.
+    std::unordered_map<uint64, ObjectGuid> g_fenceByHolder;
     std::unordered_map<uint64, time_t> g_cooldownUntil;
 
     // Read on the hot paths before the lock is ever taken. A realm where nobody
@@ -101,6 +107,8 @@ namespace
         s_maxTiers = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.MaxTiers", 7), 0, 100));
         s_cooldownSeconds = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.CooldownSeconds", 600)));
         s_maxRerolls = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.MaxRerolls", 2), 0, 20));
+        s_fenceAppearYards = std::max(20.0f,
+            sConfigMgr->GetFloatDefault("Centurion.Notoriety.FenceAppearYards", 150.0f));
         s_minYards = std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Notoriety.RendezvousMinYards", 500.0f));
         s_maxYards = std::max(s_minYards, sConfigMgr->GetFloatDefault("Centurion.Notoriety.RendezvousMaxYards", 900.0f));
         s_voidOnDeath = sConfigMgr->GetBoolDefault("Centurion.Notoriety.VoidOnDeath", true);
@@ -295,6 +303,7 @@ namespace Notoriety
             return;
 
         EraseContract(player->GetGUID().GetRawValue());
+        DespawnFence(player);
 
         // Removed from the log where the player is standing, not silently left
         // to fail at the fence four hundred yards later.
@@ -328,6 +337,76 @@ namespace Notoriety
         CharacterDatabase.PExecute(
             "UPDATE character_notoriety_contract SET peakStacks = {} WHERE guid = {}",
             newStacks, player->GetGUID().GetCounter());
+    }
+
+    // Take the fence away. Safe to call for somebody who never had one.
+    void DespawnFence(Player* player)
+    {
+        if (!player)
+            return;
+
+        auto itr = g_fenceByHolder.find(player->GetGUID().GetRawValue());
+        if (itr == g_fenceByHolder.end())
+            return;
+
+        if (Creature* fence = ObjectAccessor::GetCreature(*player, itr->second))
+            fence->DespawnOrUnsummon();
+
+        g_fenceByHolder.erase(itr);
+    }
+
+    // Put the fence on the ground when its buyer gets close, and take it away
+    // again when they leave. Summoned rather than spawned because the meeting is
+    // different for every contract, and visibleBySummonerOnly because it is
+    // nobody else's meeting - which also means bots cannot see, target or path
+    // to it, so the errand adds no new work to the fleet.
+    void UpdateFence(Player* player)
+    {
+        if (!s_enabled || !player || !player->IsInWorld())
+            return;
+
+        uint64 const raw = player->GetGUID().GetRawValue();
+
+        uint32 mapId = 0;
+        uint32 zoneId = 0;
+        Position spot;
+        if (!GetRendezvous(player->GetGUID(), mapId, zoneId, spot) || player->GetMapId() != mapId)
+        {
+            DespawnFence(player);
+            return;
+        }
+
+        float const distance = player->GetExactDist2d(spot.GetPositionX(), spot.GetPositionY());
+        auto itr = g_fenceByHolder.find(raw);
+        bool const standing = itr != g_fenceByHolder.end() &&
+            ObjectAccessor::GetCreature(*player, itr->second) != nullptr;
+
+        // Hysteresis on purpose: summon inside the fade-in band, remove well
+        // outside it, so somebody standing on the boundary does not watch him
+        // blink in and out once a second.
+        if (distance <= s_fenceAppearYards)
+        {
+            if (standing)
+                return;
+
+            g_fenceByHolder.erase(raw);
+            if (Creature* fence = player->SummonCreature(s_fenceEntry, spot,
+                TEMPSUMMON_MANUAL_DESPAWN, 0s, 0, 0, /*visibleBySummonerOnly*/ true))
+            {
+                g_fenceByHolder[raw] = fence->GetGUID();
+                TC_LOG_INFO("playerbots.hardcore",
+                    "Notoriety: the fence stands for {} at {:.0f},{:.0f} in zone {}.",
+                    player->GetName(), spot.GetPositionX(), spot.GetPositionY(), zoneId);
+            }
+            else
+                TC_LOG_ERROR("playerbots.hardcore",
+                    "Notoriety: could not summon fence {} for {} - the contract cannot be sold.",
+                    s_fenceEntry, player->GetName());
+            return;
+        }
+
+        if (distance > s_fenceAppearYards * 2.0f)
+            DespawnFence(player);
     }
 
     void GrantGoodieBag(Payout const& payout)
@@ -405,6 +484,7 @@ public:
             Notoriety::GrantGoodieBag(payout);
 
             EraseContract(player->GetGUID().GetRawValue());
+            Notoriety::DespawnFence(player);
             {
                 std::lock_guard<std::mutex> guard(g_lock);
                 g_cooldownUntil[player->GetGUID().GetRawValue()] =
@@ -491,6 +571,23 @@ public:
         std::lock_guard<std::mutex> guard(g_lock);
         g_contracts[player->GetGUID().GetRawValue()] = contract;
         g_anyContract.store(true, std::memory_order_relaxed);
+    }
+
+    void OnUpdate(Player* player, uint32 /*diff*/) override
+    {
+        // One relaxed atomic load for every player on a realm where nobody is
+        // carrying a contract, which is almost always.
+        if (!s_enabled || !g_anyContract.load(std::memory_order_relaxed) || !player)
+            return;
+
+        Notoriety::UpdateFence(player);
+    }
+
+    void OnLogout(Player* player) override
+    {
+        // The summon is private to this player, so it has nobody left to be
+        // visible to. It comes back when they walk in again.
+        Notoriety::DespawnFence(player);
     }
 
     void OnPlayerJustDied(Player* victim, Unit* /*killer*/) override
