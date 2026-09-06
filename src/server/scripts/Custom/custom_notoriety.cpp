@@ -400,14 +400,29 @@ namespace Notoriety
         if (!player)
             return;
 
-        auto itr = g_fenceByHolder.find(player->GetGUID().GetRawValue());
-        if (itr == g_fenceByHolder.end())
-            return;
+        // Under g_lock, like every other file-scope container here. It was not,
+        // and with a single contract holder that never mattered because only one
+        // player's tick ever touched the map. The moment TWO people carry
+        // contracts it is a concurrent find/erase/insert on one unordered_map,
+        // which is undefined behaviour, and the first report of anything odd
+        // came from a party where two members had one each.
+        //
+        // The guid is taken under the lock and the despawn happens outside it:
+        // DespawnOrUnsummon reaches into the map, and holding a global mutex
+        // across that is how two locks come to be taken in two orders.
+        ObjectGuid fenceGuid;
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            auto itr = g_fenceByHolder.find(player->GetGUID().GetRawValue());
+            if (itr == g_fenceByHolder.end())
+                return;
 
-        if (Creature* fence = ObjectAccessor::GetCreature(*player, itr->second))
+            fenceGuid = itr->second;
+            g_fenceByHolder.erase(itr);
+        }
+
+        if (Creature* fence = ObjectAccessor::GetCreature(*player, fenceGuid))
             fence->DespawnOrUnsummon();
-
-        g_fenceByHolder.erase(itr);
     }
 
     // Put the fence on the ground when its buyer gets close, and take it away
@@ -432,9 +447,17 @@ namespace Notoriety
         }
 
         float const distance = player->GetExactDist2d(spot.GetPositionX(), spot.GetPositionY());
-        auto itr = g_fenceByHolder.find(raw);
-        bool const standing = itr != g_fenceByHolder.end() &&
-            ObjectAccessor::GetCreature(*player, itr->second) != nullptr;
+
+        ObjectGuid existing;
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            auto itr = g_fenceByHolder.find(raw);
+            if (itr != g_fenceByHolder.end())
+                existing = itr->second;
+        }
+
+        bool const standing = !existing.IsEmpty() &&
+            ObjectAccessor::GetCreature(*player, existing) != nullptr;
 
         // Hysteresis on purpose: summon inside the fade-in band, remove well
         // outside it, so somebody standing on the boundary does not watch him
@@ -444,11 +467,19 @@ namespace Notoriety
             if (standing)
                 return;
 
-            g_fenceByHolder.erase(raw);
+            {
+                std::lock_guard<std::mutex> guard(g_lock);
+                g_fenceByHolder.erase(raw);
+            }
+
             if (Creature* fence = player->SummonCreature(s_fenceEntry, spot,
                 TEMPSUMMON_MANUAL_DESPAWN, 0s, 0, 0, /*visibleBySummonerOnly*/ true))
             {
-                g_fenceByHolder[raw] = fence->GetGUID();
+                {
+                    std::lock_guard<std::mutex> guard(g_lock);
+                    g_fenceByHolder[raw] = fence->GetGUID();
+                }
+
                 TC_LOG_INFO("playerbots.hardcore",
                     "Notoriety: the fence stands for {} at {:.0f},{:.0f} in zone {}.",
                     player->GetName(), spot.GetPositionX(), spot.GetPositionY(), zoneId);
