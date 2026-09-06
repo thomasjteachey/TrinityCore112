@@ -130,6 +130,93 @@ namespace BarracksHardcore
     // above. 0.25 leaves three quarters standing per repeat, which is the
     // gentle end; 0.5 is the old hardcoded halving; 0 turns it off.
     float s_playerKillXpDecayPerKill = 0.25f;
+
+    // A value that varies with level, written as "level:value" pairs and read
+    // straight out of the config: "1:9, 25:9, 35:6.5, 45:5, 60:4". Between two
+    // points it interpolates; outside the ends it holds the nearest one. A bare
+    // number is a flat curve, so the simple case stays simple.
+    struct LevelCurve
+    {
+        std::vector<std::pair<uint8, float>> Points;
+
+        bool Parse(std::string const& text)
+        {
+            std::vector<std::pair<uint8, float>> parsed;
+            std::stringstream stream(text);
+            std::string token;
+            while (std::getline(stream, token, ','))
+            {
+                size_t const colon = token.find(':');
+                try
+                {
+                    if (colon == std::string::npos)
+                    {
+                        // A bare number: one point, which reads flat everywhere.
+                        parsed.emplace_back(uint8(1), std::stof(token));
+                        continue;
+                    }
+
+                    int const level = std::stoi(token.substr(0, colon));
+                    float const value = std::stof(token.substr(colon + 1));
+                    parsed.emplace_back(uint8(std::clamp(level, 1, 255)), value);
+                }
+                catch (std::exception const&)
+                {
+                    return false;   // a typo must not silently become a curve
+                }
+            }
+
+            if (parsed.empty())
+                return false;
+
+            std::sort(parsed.begin(), parsed.end(),
+                [](auto const& left, auto const& right) { return left.first < right.first; });
+            Points = std::move(parsed);
+            return true;
+        }
+
+        float Get(uint8 level) const
+        {
+            if (Points.empty())
+                return 0.0f;
+
+            if (level <= Points.front().first)
+                return Points.front().second;
+            if (level >= Points.back().first)
+                return Points.back().second;
+
+            for (size_t i = 1; i < Points.size(); ++i)
+            {
+                if (level > Points[i].first)
+                    continue;
+
+                auto const& low = Points[i - 1];
+                auto const& high = Points[i];
+                if (high.first == low.first)
+                    return high.second;
+
+                float const t = float(level - low.first) / float(high.first - low.first);
+                return low.second + (high.second - low.second) * t;
+            }
+
+            return Points.back().second;
+        }
+    };
+
+    // Pay a kill in MOBS rather than in a slice of the victim's experience bar.
+    //
+    // A bubble is a fixed fraction of a level, so a bubble reward is flat in
+    // relative terms - but the thing it competes with is a mob, and mob value
+    // grows 3.6x from level 10 to 59 while the bar grows 23x. One kill is
+    // therefore worth 5.7 same-level mobs at 15 and 24.7 at 58, which is why
+    // levelling on bots is slow at the bottom and trivial at the top. Pricing
+    // the kill in mobs off TrinityCore's own creature curve removes the drift
+    // by construction.
+    //
+    // Off by default: "bubble" is the previous behaviour, bit for bit.
+    bool s_playerKillRewardMob = false;
+    LevelCurve s_playerKillMobsPerKill;
+
     std::unordered_set<uint32> s_botAccountIds;
 
     std::shared_mutex s_optInLock;
@@ -157,6 +244,28 @@ namespace BarracksHardcore
             sConfigMgr->GetIntDefault("Centurion.Hardcore.PlayerKill.DiminishSeconds", 2 * HOUR)));
         s_playerKillXpDecayPerKill = std::clamp(
             sConfigMgr->GetFloatDefault("Centurion.Hardcore.PlayerKill.XpDecayPerKill", 0.25f), 0.0f, 1.0f);
+
+        std::string rewardMode = sConfigMgr->GetStringDefault("Centurion.Hardcore.PlayerKill.RewardMode", "bubble");
+        std::transform(rewardMode.begin(), rewardMode.end(), rewardMode.begin(),
+            [](unsigned char c) { return char(std::tolower(c)); });
+        s_playerKillRewardMob = (rewardMode == "mob");
+
+        // A curve that fails to parse keeps whatever it had and says so. Falling
+        // back to zero would silently stop paying for kills on a realm where
+        // that is the whole point of fighting.
+        std::string const mobsPerKill =
+            sConfigMgr->GetStringDefault("Centurion.Hardcore.PlayerKill.MobsPerKill", "1:9, 25:9, 35:6.5, 45:5, 60:4");
+        if (!s_playerKillMobsPerKill.Parse(mobsPerKill))
+            TC_LOG_ERROR("playerbots.hardcore",
+                "Centurion.Hardcore.PlayerKill.MobsPerKill could not be read from '{}'; keeping the previous curve.",
+                mobsPerKill);
+
+        if (s_playerKillRewardMob)
+            TC_LOG_INFO("playerbots.hardcore",
+                "Player-kill reward: MOB mode, {:.2f} mobs at level 10, {:.2f} at 30, {:.2f} at 60.",
+                s_playerKillMobsPerKill.Get(10), s_playerKillMobsPerKill.Get(30), s_playerKillMobsPerKill.Get(60));
+        else
+            TC_LOG_INFO("playerbots.hardcore", "Player-kill reward: BUBBLE mode, {:.2f} bubbles.", s_playerKillXpBubbles);
 
         s_botAccountIds.clear();
         std::stringstream stream(sConfigMgr->GetStringDefault("Playerbot.RandomPopulation.BotAccountIds", ""));
@@ -1785,7 +1894,18 @@ public:
     // have their own reward systems and must never receive this extra XP.
     void AwardPlayerKillExperience(Player* killer, Player* victim)
     {
-        if (!s_enabled || s_playerKillXpBubbles <= 0.0f)
+        // Each mode has its own "switched off" test. Reading the bubble count in
+        // mob mode would disable the whole feature for anybody who set a curve
+        // without also clearing ExperienceBubbles.
+        if (!s_enabled)
+            return;
+
+        if (s_playerKillRewardMob)
+        {
+            if (s_playerKillMobsPerKill.Points.empty())
+                return;
+        }
+        else if (s_playerKillXpBubbles <= 0.0f)
             return;
 
         if (!killer || !victim || killer == victim)
@@ -1807,11 +1927,29 @@ public:
         if (recipients.empty())
             recipients.push_back(killer);
 
+        // Divide by the people who will actually be PAID. Bots and the dead are
+        // skipped further down, but they were still counted in the divisor, so
+        // a person grouped with a bot quietly received a fraction of what the
+        // rule says - and the rest went nowhere.
+        uint32 payableShares = 0;
+        for (Player const* member : recipients)
+            if (member->IsAlive() && !IsPlayerbot(member))
+                ++payableShares;
+
+        if (!payableShares)
+            return;
+
         // Measured on the VICTIM's bar rather than the killer's: what a kill is
         // worth is decided by who died. A twentieth of that bar is one bubble,
         // so the same victim is worth the same to everybody who helped.
+        //
+        // Only meaningful in bubble mode. It also silently ate every kill of a
+        // level 60: _playerXPperLevel is sized to MaxPlayerLevel, so
+        // GetXPForLevel(60) is out of range and returns 0 on a 60 cap - and the
+        // return below fired before con, decay, damage share or even the log
+        // line. Mob mode prices off the KILLER's level and never asks.
         uint32 const victimLevelXp = sObjectMgr->GetXPForLevel(victim->GetLevel());
-        if (!victimLevelXp)
+        if (!s_playerKillRewardMob && !victimLevelXp)
             return;
 
         // Scaled by how much of the victim's death people were responsible for.
@@ -1821,7 +1959,7 @@ public:
         float const playerShare = victim->GetPvpDamageShare();
 
         float const perHead = float(victimLevelXp) * s_playerKillXpBubbles
-            / 20.0f * playerShare / float(recipients.size());
+            / 20.0f * playerShare / float(payableShares);
 
         for (Player* member : recipients)
         {
@@ -1839,7 +1977,13 @@ public:
             // Con is judged per recipient, because a group can be any spread of
             // levels and a grey victim is worth nothing to the person it is grey
             // to - even if it was worth something to whoever landed the blow.
-            float const conScale = PlayerKillConScale(member->GetLevel(), victim->GetLevel());
+            // Mob mode gets its con from BaseGain, which carries the same curve
+            // internally and returns 0 for a grey victim - so applying this on
+            // top of it would count the level gap twice. Bubble mode still
+            // needs it, because a slice of the victim's bar carries no con.
+            float const conScale = s_playerKillRewardMob
+                ? 1.0f
+                : PlayerKillConScale(member->GetLevel(), victim->GetLevel());
             if (conScale <= 0.0f)
                 continue;
 
@@ -1850,7 +1994,32 @@ public:
             float const repeat = member->ConsumePvpXpDiminishing(victim->GetGUID(),
                 s_playerKillDiminishSeconds, s_playerKillXpDecayPerKill);
 
-            uint32 const amount = uint32(perHead * conScale * repeat);
+            // Mob mode prices the kill off the KILLER's level through the core's
+            // own creature curve: "this bot was worth nine mobs to you". That is
+            // what removes the drift - a bubble is 5% of a level however big the
+            // level is, while a mob is worth what a mob is worth.
+            float perHeadForMember = perHead;
+            if (s_playerKillRewardMob)
+            {
+                // BaseGain already returns 0 for a grey victim, but the
+                // MinCreatureScaledXPRatio tail re-floors using the VICTIM's
+                // level, so say it out loud rather than leaning on that config
+                // being 0.
+                if (victim->GetLevel() <= Trinity::XP::GetGrayLevel(member->GetLevel()))
+                    continue;
+
+                float const mobs = s_playerKillMobsPerKill.Get(member->GetLevel());
+                if (mobs <= 0.0f)
+                    continue;
+
+                // CONTENT_1_60 on purpose rather than read from the map: the
+                // expansion band sets the base constant, and letting a level 60
+                // pick up nBaseExp 235 would pay five times over.
+                perHeadForMember = float(Trinity::XP::BaseGain(member->GetLevel(), victim->GetLevel(), CONTENT_1_60))
+                    * mobs * playerShare / float(payableShares);
+            }
+
+            uint32 const amount = uint32(perHeadForMember * conScale * repeat);
             if (!amount)
                 continue;
 
@@ -1860,10 +2029,12 @@ public:
 
             TC_LOG_INFO("playerbots.hardcore",
                 "{} (level {}) shared the kill of {} {} (level {}) for {} xp "
-                "({} bubbles x{:.2f} con x{:.2f} repeat x{:.2f} player-damage, one of {} shares).",
+                "({} {:.2f} x{:.2f} con x{:.2f} repeat x{:.2f} player-damage, one of {} shares).",
                 member->GetName(), member->GetLevel(), IsPlayerbot(victim) ? "playerbot" : "player",
-                victim->GetName(), victim->GetLevel(), amount, s_playerKillXpBubbles,
-                conScale, repeat, playerShare, uint32(recipients.size()));
+                victim->GetName(), victim->GetLevel(), amount,
+                s_playerKillRewardMob ? "mobs" : "bubbles",
+                s_playerKillRewardMob ? s_playerKillMobsPerKill.Get(member->GetLevel()) : s_playerKillXpBubbles,
+                conScale, repeat, playerShare, payableShares);
         }
     }
 

@@ -3649,6 +3649,53 @@ Centurion.Hardcore.PlayerKill.DiminishSeconds = 7200
 Centurion.Hardcore.PlayerKill.XpDecayPerKill = 0.25
 
 #
+#    Centurion.Hardcore.PlayerKill.RewardMode
+#        Description: How a player kill is priced.
+#
+#                     "bubble" pays a fraction of the VICTIM's experience bar.
+#                     A bubble is 5% of a level, so the reward is flat in
+#                     relative terms at every level - but the thing it competes
+#                     with is a mob, and mob value grows 3.6x from level 10 to
+#                     59 while the bar grows 23x. One kill is therefore worth
+#                     5.7 same-level mobs at level 15 and 24.7 at 58, which is
+#                     why levelling on bots drags at the bottom and is trivial
+#                     at the top.
+#
+#                     "mob" prices the kill in MOBS instead, off the core's own
+#                     creature curve and the KILLER's level: see MobsPerKill.
+#                     This removes the drift by construction, and because the
+#                     base carries the level gap itself, it also stops the gap
+#                     being counted twice and stops a level-60 victim paying
+#                     nothing at all.
+#        Default:     "bubble" - the previous behaviour, bit for bit.
+#
+#                     Switching back to "bubble" is the rollback and needs only
+#                     .reload config.
+#
+
+Centurion.Hardcore.PlayerKill.RewardMode = "bubble"
+
+#
+#    Centurion.Hardcore.PlayerKill.MobsPerKill
+#        Description: In "mob" reward mode, how many same-level mobs one kill is
+#                     worth. Written as "level:value" pairs; it interpolates
+#                     between them and holds the end values outside the range.
+#                     A bare number is a flat curve.
+#
+#                     It falls with level on purpose. It is not the drift being
+#                     reintroduced - the mob base it multiplies already rises
+#                     with level - it is the deliberate shape: a kill should be
+#                     a bigger share of a low-level bar than of a high one.
+#        Default:     "1:9, 25:9, 35:6.5, 45:5, 60:4"
+#
+#                     A curve that cannot be parsed is REFUSED, with an error in
+#                     the log and the previous curve kept, so a typo can never
+#                     silently stop paying for kills.
+#
+
+Centurion.Hardcore.PlayerKill.MobsPerKill = "1:9, 25:9, 35:6.5, 45:5, 60:4"
+
+#
 #    Centurion.Shutdown.RequestFile
 #        Description: Path the worldserver watches for a graceful-shutdown
 #                     request, so a deploy can ask the realm to stop politely
