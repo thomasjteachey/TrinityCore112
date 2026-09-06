@@ -2091,13 +2091,21 @@ public:
         explicit npc_ffa_flaggerAI(Creature* creature) : ScriptedAI(creature) {}
 
         // The ! over his head. No conditions row can express this: CONDITION_AURA
-        // here is a bare HasAuraEffect with no stack count, and the whole point
-        // is the count. Returning {} falls through to the stock path.
+        // is a bare HasAuraEffect with no stack count, and the whole point is the
+        // count.
+        //
+        // DIALOG_STATUS_NONE, not {}. An empty Optional means "no opinion, use
+        // the stock path" - and the stock path sees a questgiver with a
+        // creature_queststarter row and puts a ! over him for anybody the
+        // conditions row admits, which is everyone holding a single mark. Worse,
+        // it does that when the whole system is switched OFF, because
+        // ShouldOffer's first test is s_enabled. Say no, do not decline to
+        // answer.
         Optional<QuestGiverStatus> GetDialogStatus(Player* player) override
         {
             if (Notoriety::ShouldOffer(player))
                 return DIALOG_STATUS_AVAILABLE;
-            return {};
+            return DIALOG_STATUS_NONE;
         }
 
         void OnQuestAccept(Player* player, Quest const* quest) override
