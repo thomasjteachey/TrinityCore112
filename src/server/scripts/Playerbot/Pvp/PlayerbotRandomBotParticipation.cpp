@@ -130,9 +130,31 @@ void ClearActiveMovementForControlLoss(Player* player)
 
     player->AttackStop();
     player->SetSelection(ObjectGuid::Empty);
-    // Preserve server-owned confused movement (e.g. polymorph drift). Clearing
-    // active movement while confused pins the unit in place.
-    if (player->HasUnitState(UNIT_STATE_CONFUSED) || player->HasAuraType(SPELL_AURA_MOD_CONFUSE) || player->IsPolymorphed())
+
+    // Preserve server-owned confused movement (e.g. polymorph drift), and the
+    // flee a fear installs. Clearing active movement while confused pins the
+    // unit in place. Clearing it while FEARED is worse than that, because the
+    // fleeing generator is not merely the fear's movement - it IS the fear.
+    //
+    // MotionMaster::Clear finalizes the top generator with active=true, and
+    // FleeingMovementGenerator<Player>::DoFinalize then calls
+    // RemoveUnitFlag(UNIT_FLAG_FLEEING); ClearBaseUnitStates follows it by
+    // dropping UNIT_STATE_FLEEING as the last holder goes. The AURA survives
+    // untouched - the player watches the debuff tick down on its own frame -
+    // but every rule that reads the state or the flag now says this bot is not
+    // feared. UNIT_STATE_CANNOT_AUTOATTACK stops matching, so white swings land
+    // again (Unit.cpp:2650). UNIT_FLAG_FLEEING is gone, so CheckCasterAuras
+    // stops returning SPELL_FAILED_FLEEING (Spell.cpp:7077). And nothing ever
+    // puts them back: ApplyControlStatesIfNeeded only runs when a control state
+    // is RELEASED, which is the one thing that has not happened.
+    //
+    // What it looked like from the other end: half a second of running away,
+    // then the bot turns round and fights you for the rest of the duration.
+    // Same reasoning as the taunt exemption above - movement the crowd control
+    // itself installed is not ours to clear.
+    if (player->HasUnitState(UNIT_STATE_CONFUSED) || player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
+        player->IsPolymorphed() ||
+        player->HasUnitState(UNIT_STATE_FLEEING) || player->HasAuraType(SPELL_AURA_MOD_FEAR))
         return;
 
     if (MotionMaster* motionMaster = player->GetMotionMaster())

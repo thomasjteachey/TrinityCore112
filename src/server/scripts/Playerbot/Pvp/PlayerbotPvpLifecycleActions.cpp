@@ -1968,9 +1968,16 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
         player->AttackStop();
         player->SetSelection(ObjectGuid::Empty);
-        // Preserve server-side confused wander (e.g. polymorph/sheep). Clearing
-        // the active movement slot repeatedly can freeze the expected drifting.
-        if (player->HasUnitState(UNIT_STATE_CONFUSED) || player->HasAuraType(SPELL_AURA_MOD_CONFUSE) || player->IsPolymorphed())
+        // Preserve server-side confused wander (e.g. polymorph/sheep) and the
+        // flee a fear installs. Clearing the active movement slot repeatedly can
+        // freeze the expected drifting - and for a fear it does far worse, since
+        // finalizing the fleeing generator strips UNIT_FLAG_FLEEING and
+        // UNIT_STATE_FLEEING while the aura stays, which hands the bot its
+        // autoattacks and its casts back mid-fear. The long version of that is
+        // in PlayerbotRandomBotParticipation.cpp's copy of this function.
+        if (player->HasUnitState(UNIT_STATE_CONFUSED) || player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
+            player->IsPolymorphed() ||
+            player->HasUnitState(UNIT_STATE_FLEEING) || player->HasAuraType(SPELL_AURA_MOD_FEAR))
             return;
 
         if (MotionMaster* motionMaster = player->GetMotionMaster())

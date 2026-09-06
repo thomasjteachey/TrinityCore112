@@ -4173,8 +4173,15 @@ void ClearActiveMovementForControlLoss(Player* player)
     player->AttackStop();
     player->SetSelection(ObjectGuid::Empty);
     // Confused/polymorphed units need the server-driven wander movement to
-    // remain intact. Clearing active movement each tick pins them in place.
-    if (player->HasUnitState(UNIT_STATE_CONFUSED) || player->HasAuraType(SPELL_AURA_MOD_CONFUSE) || player->IsPolymorphed())
+    // remain intact, and a feared one needs its flee for the same reason and a
+    // sharper one: finalizing the fleeing generator strips UNIT_FLAG_FLEEING and
+    // UNIT_STATE_FLEEING while the fear aura stays applied, which gives the bot
+    // its autoattacks and its casts back for the rest of the duration. Clearing
+    // active movement each tick pins the confused in place and un-fears the
+    // feared. The long version is in PlayerbotRandomBotParticipation.cpp's copy.
+    if (player->HasUnitState(UNIT_STATE_CONFUSED) || player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
+        player->IsPolymorphed() ||
+        player->HasUnitState(UNIT_STATE_FLEEING) || player->HasAuraType(SPELL_AURA_MOD_FEAR))
         return;
 
     if (MotionMaster* motionMaster = player->GetMotionMaster())
