@@ -473,7 +473,7 @@ namespace
     void ResetStuckWatchdog(PveBotState& state);
     bool IsStuckWatchdogEligible(Player* bot, PveBotState const& state,
         playerbot::PveConfig const& cfg, PveTimePoint now);
-    bool BotCanTeleportNow(Player* bot);
+    bool BotCanTeleportNow(Player* bot, bool ignoreWatchers = false);
     void RestorePlayerbotTeleportVitals(Player* bot);
     void TrySkinCorpse(Player* bot, Creature* corpse);
     bool IsGatherableNodeFor(Player* bot, GameObject const* go, int32* outRequiredSkill);
@@ -9901,10 +9901,37 @@ namespace
     // call, and the bot may be picked up by something else in between.
     //
     // Test the assert's own precondition, immediately before the call.
-    bool BotCanTeleportNow(Player* bot)
+    bool BotCanTeleportNow(Player* bot, bool ignoreWatchers)
     {
-        return bot && bot->IsInWorld() && bot->IsInGrid() &&
-            !bot->IsBeingTeleportedFar() && !bot->IsBeingTeleportedNear();
+        if (!bot || !bot->IsInWorld() || !bot->IsInGrid() ||
+            bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
+            return false;
+
+        // And nobody vanishes while somebody is looking at them.
+        //
+        // The landing rule (WouldLandInSightOfAnybody) closed half of this: a
+        // bot could no longer APPEAR in front of a person. It said nothing
+        // about the other half, so bots still blinked out of existence mid
+        // conversation, mid fight, and in front of whoever was watching -
+        // which is the more jarring of the two, because the player was already
+        // looking at the thing that disappeared.
+        //
+        // Same radius and the same reasoning about GMs as the landing rule:
+        // they COUNT here, because an operator watching their own fleet is the
+        // likeliest person on the realm to be staring straight at it.
+        //
+        // Refusing is always safe. Every caller already treats false as "not
+        // this pass" and comes back on a later tick, by which time the person
+        // has usually walked on.
+        if (!ignoreWatchers)
+        {
+            float const yards = TeleportSightYards();
+            if (yards > 0.0f && HasHumanPlayerNearPosition(bot->FindMap(),
+                bot->GetPositionX(), bot->GetPositionY(), yards))
+                return false;
+        }
+
+        return true;
     }
 
     // Teleports are artificial repositioning, not travel the bot had to survive.
@@ -10995,7 +11022,11 @@ namespace
                     continue;
                 }
 
-                if (!BotCanTeleportNow(bot))
+                // The ONE teleport a watcher does not veto: somebody asked for
+                // this bot by name and is waiting on it. Refusing here would not
+                // preserve an illusion, it would silently break a command - and
+                // the summoner is themselves a person standing at the arrival.
+                if (!BotCanTeleportNow(bot, /*ignoreWatchers*/ true))
                     break;
 
                 if (bot->TeleportTo(summoner->GetMapId(),
