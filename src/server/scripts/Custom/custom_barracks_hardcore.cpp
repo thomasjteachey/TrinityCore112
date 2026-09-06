@@ -131,10 +131,10 @@ namespace BarracksHardcore
     // gentle end; 0.5 is the old hardcoded halving; 0 turns it off.
     float s_playerKillXpDecayPerKill = 0.25f;
 
-    // A value that varies with level, written as "level:value" pairs and read
-    // straight out of the config: "1:9, 25:9, 35:6.5, 45:5, 60:4". Between two
-    // points it interpolates; outside the ends it holds the nearest one. A bare
-    // number is a flat curve, so the simple case stays simple.
+    // A bare number, or a value that varies with level written as "level:value"
+    // pairs: "9" or "1:9, 25:9, 45:5". Between two points it interpolates;
+    // outside the ends it holds the nearest one. Flat is the normal case and
+    // reads as one point, so the simple answer stays simple.
     struct LevelCurve
     {
         std::vector<std::pair<uint8, float>> Points;
@@ -254,7 +254,7 @@ namespace BarracksHardcore
         // back to zero would silently stop paying for kills on a realm where
         // that is the whole point of fighting.
         std::string const mobsPerKill =
-            sConfigMgr->GetStringDefault("Centurion.Hardcore.PlayerKill.MobsPerKill", "1:9, 25:9, 35:6.5, 45:5, 60:4");
+            sConfigMgr->GetStringDefault("Centurion.Hardcore.PlayerKill.MobsPerKill", "9");
         if (!s_playerKillMobsPerKill.Parse(mobsPerKill))
             TC_LOG_ERROR("playerbots.hardcore",
                 "Centurion.Hardcore.PlayerKill.MobsPerKill could not be read from '{}'; keeping the previous curve.",

@@ -3682,18 +3682,25 @@ Centurion.Hardcore.PlayerKill.RewardMode = "bubble"
 #                     between them and holds the end values outside the range.
 #                     A bare number is a flat curve.
 #
-#                     It falls with level on purpose. It is not the drift being
-#                     reintroduced - the mob base it multiplies already rises
-#                     with level - it is the deliberate shape: a kill should be
-#                     a bigger share of a low-level bar than of a high one.
-#        Default:     "1:9, 25:9, 35:6.5, 45:5, 60:4"
+#                     A FLAT number is the right starting point. The experience
+#                     bar is already steeply non-linear, so a constant number of
+#                     mobs slows levelling down on its own: nine mobs is 12.6
+#                     kills a level at 15 and 55.0 at 58, against a flat 20 at
+#                     every level under bubbles. Bending it further would be
+#                     correcting the same thing twice.
+#
+#                     A falling curve says something different and separate -
+#                     that a high-level bot is EASIER to kill than the mobs it
+#                     is priced against, so it should pay fewer of them. That is
+#                     a claim about difficulty; prefer fixing difficulty.
+#        Default:     9
 #
 #                     A curve that cannot be parsed is REFUSED, with an error in
 #                     the log and the previous curve kept, so a typo can never
 #                     silently stop paying for kills.
 #
 
-Centurion.Hardcore.PlayerKill.MobsPerKill = "1:9, 25:9, 35:6.5, 45:5, 60:4"
+Centurion.Hardcore.PlayerKill.MobsPerKill = 9
 
 #
 #    Centurion.Shutdown.RequestFile
