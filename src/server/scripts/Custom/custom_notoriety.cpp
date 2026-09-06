@@ -62,6 +62,19 @@ namespace
     // kills. A timer on top of that is dead waiting, not a limit.
     uint32 s_cooldownSeconds = 0;
     uint32 s_maxRerolls = 2;
+    // The per-checkpoint debuffs. Base is the first spell id of a contiguous
+    // block, one per rung; rung k (1-based) is at k * step stacks and uses
+    // base + k - 1. Zero disables the whole thing, which is the DEFAULT and is
+    // deliberate: applying an aura the client has no Spell.dbc row for shows the
+    // player a blank icon with no name, so this stays off until the row ships.
+    uint32 s_checkpointBase = 0;
+    uint32 s_checkpointStep = 5;
+    uint32 s_checkpointCount = 10;
+
+    // Last stack count each player's checkpoint auras were synced against.
+    // SyncCheckpointAuras is called from the per-tick player update, so the
+    // common case has to be one integer compare and nothing else.
+    std::unordered_map<uint64, uint32> g_checkpointSynced;
     float s_minYards = 500.0f;
     float s_maxYards = 900.0f;
     float s_fenceAppearYards = 150.0f;
@@ -112,6 +125,9 @@ namespace
         s_maxTiers = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.MaxTiers", 7), 0, 100));
         s_cooldownSeconds = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.CooldownSeconds", 0)));
         s_maxRerolls = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.MaxRerolls", 2), 0, 20));
+        s_checkpointBase = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.CheckpointAuraBase", 0)));
+        s_checkpointStep = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.CheckpointStep", 5), 1, 255));
+        s_checkpointCount = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.CheckpointCount", 10), 0, 64));
         s_fenceAppearYards = std::max(20.0f,
             sConfigMgr->GetFloatDefault("Centurion.Notoriety.FenceAppearYards", 150.0f));
         s_minYards = std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Notoriety.RendezvousMinYards", 500.0f));
@@ -412,6 +428,57 @@ namespace Notoriety
 
         if (distance > s_fenceAppearYards * 2.0f)
             DespawnFence(player);
+    }
+
+    // Keep the ladder of checkpoint debuffs in step with the notoriety count.
+    //
+    // Driven from the per-player update tick rather than from the handful of
+    // places the count changes, and that is the whole point. Stacks move on a
+    // kill, on the aura expiring, on death, on a contract turn-in, on login and
+    // on a GM command, and enumerating those was exactly the mistake that let a
+    // feared bot keep swinging - one path nobody thought of and the state is
+    // wrong until something else happens to fix it. Reading the answer every
+    // tick cannot be wrong, so long as it is cheap, and it is: one lookup and
+    // one integer compare unless the count actually moved.
+    void SyncCheckpointAuras(Player* player)
+    {
+        if (!s_enabled || !s_checkpointBase || !s_checkpointCount || !player)
+            return;
+
+        uint64 const key = player->GetGUID().GetRawValue();
+        uint32 const stacks = Bounty::GetStacks(player);
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            auto const itr = g_checkpointSynced.find(key);
+            if (itr != g_checkpointSynced.end() && itr->second == stacks)
+                return;
+
+            g_checkpointSynced[key] = stacks;
+        }
+
+        for (uint32 index = 0; index < s_checkpointCount; ++index)
+        {
+            uint32 const rung = (index + 1) * s_checkpointStep;
+            uint32 const spellId = s_checkpointBase + index;
+
+            if (stacks >= rung)
+            {
+                // AddAura is a no-op when it is already there, but asking first
+                // keeps this off the aura-application path entirely on the ticks
+                // where only ONE rung changed - which is every tick that is not
+                // the very first.
+                if (!player->HasAura(spellId))
+                    player->AddAura(spellId, player);
+            }
+            else
+                player->RemoveAurasDueToSpell(spellId);
+        }
+    }
+
+    void ForgetCheckpointSync(ObjectGuid guid)
+    {
+        std::lock_guard<std::mutex> guard(g_lock);
+        g_checkpointSynced.erase(guid.GetRawValue());
     }
 
     void GrantGoodieBag(Payout const& payout)

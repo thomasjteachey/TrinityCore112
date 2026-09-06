@@ -859,7 +859,12 @@ public:
     void OnUpdate(Player* player, uint32 /*diff*/) override
     {
         if (s_enabled && player)
+        {
             SummonGuardsFor(player);
+            // The checkpoint debuffs read the registry rather than being pushed
+            // from the places that write it, so this is where they resolve.
+            Notoriety::SyncCheckpointAuras(player);
+        }
     }
 
     // The safety nets, for deaths the hardcore chest does not cover.
@@ -875,6 +880,10 @@ public:
         // A corpse that logs out without releasing would otherwise take the
         // debt with it.
         SummonBountyChestIfOwed(player);
+
+        // The checkpoint auras went with the character; forget what they were
+        // synced against so the next login resolves them from scratch.
+        Notoriety::ForgetCheckpointSync(player->GetGUID());
 
         std::lock_guard<std::mutex> guard(g_lock);
         g_stacks.erase(player->GetGUID().GetRawValue());

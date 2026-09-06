@@ -3672,6 +3672,22 @@ Centurion.Notoriety.ClearStacksOnTurnIn   = 1
 #    Read once at startup - .reload config will not move it.
 Centurion.Notoriety.BotsSeeThroughStealth = 1
 
+#    Centurion.Notoriety.Checkpoint*
+#        The ladder of per-rung debuffs. One named aura per CheckpointStep stacks,
+#        applied as the count climbs past each rung and removed as it decays back,
+#        so a player can read what has armed against them off their own debuff bar.
+#        Rung k (1-based) sits at k * CheckpointStep stacks and uses the spell id
+#        CheckpointAuraBase + k - 1, so the ids must be a contiguous block of
+#        CheckpointCount.
+#
+#        BASE 0 DISABLES THE FEATURE, and that is the default on purpose: an aura
+#        the client has no Spell.dbc row for renders as a blank icon with no name
+#        and no tooltip. Do not set this until the rows are published in the client
+#        patch, and set it back to 0 if you ever roll that patch back.
+Centurion.Notoriety.CheckpointAuraBase    = 0
+Centurion.Notoriety.CheckpointStep        = 5
+Centurion.Notoriety.CheckpointCount       = 10
+
 #    The payout. Money is flat copper; experience is counted in BUBBLES of the
 #    seller's own next level, so it stays meaningful at 20 and at 60.
 #    Paid by the fence script, NOT from quest_template - a repeatable quest pays

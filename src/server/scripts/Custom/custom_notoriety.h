@@ -107,6 +107,20 @@ namespace Notoriety
         uint8 Level = 0;
     };
 
+    // The ladder of per-checkpoint debuffs: one named aura per StacksPerTier
+    // rung, applied as the count climbs past each and removed as it falls back,
+    // so a player can read what has armed against them off their own debuff bar.
+    //
+    // Called from the per-player update tick on the map thread, on purpose:
+    // stacks move on a kill, an expiry, a death, a turn-in, a login and a GM
+    // command, and a fixed list of those is a list somebody will one day forget
+    // to add to. Cheap enough for it - one integer compare unless the count
+    // actually moved.
+    void SyncCheckpointAuras(Player* player);
+
+    // Drop the sync cache for somebody who has gone. Their auras left with them.
+    void ForgetCheckpointSync(ObjectGuid guid);
+
     // THE SEAM. Money and experience are paid before this is called; this is
     // where the bag of level-appropriate loot goes when it exists. Deliberately
     // a no-op today so the shape is already right when it lands.
