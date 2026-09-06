@@ -117,8 +117,57 @@ hooksecurefunc("BankFrameItemButton_Update", function(button)
 end)
 
 -- ------------------------------------------------------------ equipped -----
+-- Which unit a paper-doll slot button is actually showing.
+--
+-- This is asked of the BUTTON rather than assumed, because the character sheet
+-- and the inspect window share PaperDollItemSlotButton_Update and that function
+-- hardcodes "player". Tinting an inspect button from the player's own gear puts
+-- a red wash on somebody else's empty shoulders - which is exactly what it did:
+-- a mage wearing ten pieces of Temporal lit up ten slots on every stranger they
+-- inspected.
+--
+-- The default UI names these buttons for the frame they belong to
+-- (CharacterHeadSlot vs InspectHeadSlot), so the name is the reliable signal.
+local function UnitForSlotButton(button)
+    local name = button:GetName()
+    if name and name:find("^Inspect") then
+        return InspectFrame and InspectFrame.unit
+    end
+
+    return "player"
+end
+
+-- Quality by unit and slot, without depending on the item cache.
+--
+-- GetItemInfo returns nil for an item the client has never seen, which is the
+-- normal case when inspecting a stranger - so asking the link first would leave
+-- their Temporal gear untinted until something else happened to cache it.
+-- GetInventoryItemQuality answers straight from the inventory, and the link is
+-- only the fallback.
+local function QualityForUnitSlot(unit, slotId)
+    if not unit or not slotId then
+        return nil
+    end
+
+    local quality = GetInventoryItemQuality(unit, slotId)
+    if quality then
+        return quality
+    end
+
+    local link = GetInventoryItemLink(unit, slotId)
+    if not link then
+        return nil
+    end
+
+    local _, _, linkQuality = GetItemInfo(link)
+    return linkQuality
+end
+
 hooksecurefunc("PaperDollItemSlotButton_Update", function(button)
-    ApplyQuality(button, GetInventoryItemQuality("player", button:GetID()))
+    -- A nil unit CLEARS rather than returns. The inspect frame updates its
+    -- buttons while closing and again before the next target resolves, and an
+    -- early return there leaves the previous player's wash sitting on screen.
+    ApplyQuality(button, QualityForUnitSlot(UnitForSlotButton(button), button:GetID()))
 end)
 
 -- ------------------------------------------------------------- looting -----
@@ -152,14 +201,33 @@ loader:SetScript("OnEvent", function(_, _, addon)
         return
     end
 
+    -- Belt and braces. Whether this function exists at all varies, and when it
+    -- does not the inspect buttons are driven by PaperDollItemSlotButton_Update
+    -- instead - which is why the resolver above asks the button who it belongs
+    -- to rather than trusting either hook to be the one that fires. Both routes
+    -- now end in the same answer, and hooking both twice is harmless because
+    -- ApplyQuality is idempotent.
     if type(InspectPaperDollItemSlotButton_Update) == "function" then
         hooksecurefunc("InspectPaperDollItemSlotButton_Update", function(button)
-            local unit = InspectFrame and InspectFrame.unit
-            if not unit then
-                return
-            end
+            ApplyQuality(button, QualityForUnitSlot(UnitForSlotButton(button), button:GetID()))
+        end)
+    end
 
-            ApplyLink(button, GetInventoryItemLink(unit, button:GetID()))
+    -- Clear the whole inspect sheet when it closes. Nothing guarantees a slot
+    -- update on the way out, and a stale wash that reappears on the next
+    -- stranger reads as the bug this replaced.
+    if InspectFrame then
+        InspectFrame:HookScript("OnHide", function()
+            for _, slotName in ipairs({
+                "Head", "Neck", "Shoulder", "Back", "Chest", "Shirt", "Tabard",
+                "Wrist", "Hands", "Waist", "Legs", "Feet", "Finger0", "Finger1",
+                "Trinket0", "Trinket1", "MainHand", "SecondaryHand", "Ranged",
+            }) do
+                local button = _G["Inspect" .. slotName .. "Slot"]
+                if button then
+                    ApplyQuality(button, nil)
+                end
+            end
         end)
     end
 
