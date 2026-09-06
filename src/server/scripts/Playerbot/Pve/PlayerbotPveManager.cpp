@@ -10612,6 +10612,26 @@ namespace
         // is missing" direction would turn swings on and never off again.
         bool const meleeStateWrong = wantsMeleeSwings != bot->HasUnitState(UNIT_STATE_MELEE_ATTACKING);
 
+        // Never open the swing on a person the proactive rule refuses.
+        //
+        // Attack() sets the victim, and once it is set PlayerbotPvpCore.cpp's
+        // hostile-target check reads it as self-defence and waives everything
+        // downstream - so an unasked-for swing here launders itself into a fight
+        // the bot is allowed to be in. Retaliation is untouched: IsSwingingAt is
+        // the same "they started it" test the rest of this file uses, and
+        // MayProactivelyEngage answers yes for battlegrounds, duels and bot-on-bot
+        // long before it looks at levels.
+        //
+        // Disengage rather than just return, or the bot keeps its selection and
+        // its engaged flag and stands there facing somebody it will never swing at.
+        if (Player* victimPlayer = victim->ToPlayer())
+            if (!playerbot::IsManagedRandomBot(victimPlayer) && !IsSwingingAt(bot, victimPlayer) &&
+                !playerbot::PveManager::MayProactivelyEngage(bot, victimPlayer))
+            {
+                DisengagePveCombat(bot, state);
+                return;
+            }
+
         if ((bot->GetVictim() != victim || meleeStateWrong) && !holdSwingsForOpener)
             bot->Attack(victim, wantsMeleeSwings);
 
@@ -12858,8 +12878,11 @@ namespace
             verdict = "you are in a no-PvP area and are excluded from the human snapshot";
         else if (!askerAttackable)
             verdict = "IsValidAttackTarget says you are not attackable";
-        else if (!IsProactivePlayerLevelAcceptable(bot, asker))
+        else if (!IsProactiveTargetWithinPower(bot, asker->GetLevel()))
             verdict = "you are higher level; bot will not initiate but will retaliate if attacked";
+        else if (!IsProactivePlayerLevelAcceptable(bot, asker))
+            verdict = "you are too far below this bot for it to start anything; it will still "
+                "retaliate if attacked, and a big enough bounty lifts this";
         else if (!askerInApproach)
             verdict = "you are outside the configured proactive hunt radius";
         else if (askerPathChecked && askerPath == WalkPathResult::Unreachable)
@@ -13042,13 +13065,26 @@ namespace playerbot
         // Consent by entry. Everyone inside a battleground or an arena queued
         // for it, and this rule must never reach in there - a bot that would not
         // pick a target is a bot standing still in the middle of a match.
-        if (bot->InBattleground() || bot->InArena() || human->InBattleground() || human->InArena())
+        // Ask the MAP, not Player::InBattleground - that is `m_bgData.bgInstanceID
+        // != 0`, a persisted field restored at login and normally cleared only
+        // inside HandleMoveWorldportAck. A bot taken off a battleground map any
+        // other way would carry this waiver for the rest of its session.
+        Map const* botMap = bot->GetMap();
+        Map const* humanMap = human->GetMap();
+        if ((botMap && botMap->IsBattlegroundOrArena()) ||
+            (humanMap && humanMap->IsBattlegroundOrArena()))
             return true;
 
         // Consent by acceptance, and only with the person who gave it. A bot
         // duelling somebody may fight THEM; the fallback scan that reaches this
         // would otherwise happily pick a bystander standing closer.
-        if (bot->duel && bot->duel->Opponent == human)
+        // In PROGRESS, not merely challenged. DuelInfo::State starts at
+        // DUEL_STATE_CHALLENGED (Player.h:266) and the object is built on both
+        // players the moment somebody right-clicks Duel - so without the state
+        // test, anyone could waive this rule for themselves by offering a duel a
+        // bot never accepted. PlayerbotPvpCore.cpp:2510 already asks it this way.
+        if (bot->duel && bot->duel->Opponent == human &&
+            bot->duel->State == DUEL_STATE_IN_PROGRESS)
             return true;
 
         // Bot on bot is a different question, answered elsewhere (the open-world
