@@ -3650,15 +3650,20 @@ Centurion.Notoriety.RendezvousMaxYards    = 900.0
 Centurion.Notoriety.MaxRerolls            = 2
 
 #    Seconds before the registrar will write another contract after one is sold.
-Centurion.Notoriety.CooldownSeconds       = 600
+#    0 because ClearStacksOnTurnIn already gates it: the sale takes the marks
+#    with it, so the next contract costs another fifteen kills. Raise this only
+#    if you also turn ClearStacksOnTurnIn off.
+Centurion.Notoriety.CooldownSeconds       = 0
 
 #    1 = dying voids the contract at the corpse. The notoriety itself clears on
 #    that same event, so the contract has nothing left to sell.
 Centurion.Notoriety.VoidOnDeath           = 1
 
-#    1 = selling the contract also clears the notoriety. Off by default: the
-#    contract is the payout, and the marks keep running so another can be built.
-Centurion.Notoriety.ClearStacksOnTurnIn   = 0
+#    1 = selling the contract also clears the notoriety. You sold the page, so
+#    the price on your head is settled - and the payout is computed from the
+#    banked peak BEFORE the clear, so it costs the seller nothing. Set 0 to keep
+#    the marks running after a sale instead.
+Centurion.Notoriety.ClearStacksOnTurnIn   = 1
 
 #    The payout. Money is flat copper; experience is counted in BUBBLES of the
 #    seller's own next level, so it stays meaningful at 20 and at 60.

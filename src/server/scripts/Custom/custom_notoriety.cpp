@@ -57,13 +57,18 @@ namespace
     uint32 s_contractStacks = 15;
     uint32 s_stacksPerTier = 5;
     uint32 s_maxTiers = 7;
-    uint32 s_cooldownSeconds = 600;
+    // Zero, because ClearStacksOnTurnIn already gates the repeat: selling the
+    // page takes the marks with it, so another contract costs fifteen more
+    // kills. A timer on top of that is dead waiting, not a limit.
+    uint32 s_cooldownSeconds = 0;
     uint32 s_maxRerolls = 2;
     float s_minYards = 500.0f;
     float s_maxYards = 900.0f;
     float s_fenceAppearYards = 150.0f;
     bool s_voidOnDeath = true;
-    bool s_clearStacksOnTurnIn = false;
+    // Selling the page settles the debt. The payout is computed from the banked
+    // peak before this runs, so clearing costs the seller nothing.
+    bool s_clearStacksOnTurnIn = true;
 
     // Money is copper per tier, experience is a share of the killer's own next
     // level - the same "a fraction of the bar" shape the rest of the realm
@@ -105,14 +110,14 @@ namespace
         s_contractStacks = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.ContractStacks", 15), 1, 255));
         s_stacksPerTier = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.StacksPerTier", 5), 1, 255));
         s_maxTiers = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.MaxTiers", 7), 0, 100));
-        s_cooldownSeconds = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.CooldownSeconds", 600)));
+        s_cooldownSeconds = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.CooldownSeconds", 0)));
         s_maxRerolls = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.MaxRerolls", 2), 0, 20));
         s_fenceAppearYards = std::max(20.0f,
             sConfigMgr->GetFloatDefault("Centurion.Notoriety.FenceAppearYards", 150.0f));
         s_minYards = std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Notoriety.RendezvousMinYards", 500.0f));
         s_maxYards = std::max(s_minYards, sConfigMgr->GetFloatDefault("Centurion.Notoriety.RendezvousMaxYards", 900.0f));
         s_voidOnDeath = sConfigMgr->GetBoolDefault("Centurion.Notoriety.VoidOnDeath", true);
-        s_clearStacksOnTurnIn = sConfigMgr->GetBoolDefault("Centurion.Notoriety.ClearStacksOnTurnIn", false);
+        s_clearStacksOnTurnIn = sConfigMgr->GetBoolDefault("Centurion.Notoriety.ClearStacksOnTurnIn", true);
 
         s_moneyBase = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.MoneyBaseCopper", 5000)));
         s_moneyPerTier = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.MoneyPerTierCopper", 3000)));
