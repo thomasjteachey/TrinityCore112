@@ -8453,6 +8453,26 @@ namespace
         if (!g_PveConfig.travelUseFlightPaths || bot->IsInFlight() || bot->IsInCombat())
             return false;
 
+        // Ask the question the ASSERT asks, not a question near it.
+        //
+        // MotionMaster::MoveTaxiFlight ends in
+        //   ASSERT(!hasExisting, "Duplicate flight path movement generator")
+        // where hasExisting is "a FLIGHT_MOTION_TYPE generator is in the motion
+        // stack". IsInFlight() above is UNIT_STATE_IN_FLIGHT, which the flight
+        // generator sets in its Initialize and clears in its Finalize - so the
+        // two disagree for as long as a generator is queued but not yet
+        // initialised, or is finalising. MotionMaster defers adds while it is
+        // updating, so that window is real and reachable from this world-thread
+        // pass. A second flight for a bot inside it killed the realm at
+        // 2026-09-06 14:43: assert, SIGSEGV at 0x0, everybody dropped.
+        //
+        // Refusing costs nothing. This is a travel convenience with a walked
+        // journey behind it, and the caller falls through to the other arms.
+        if (MotionMaster* motionMaster = bot->GetMotionMaster())
+            if (motionMaster->HasMovementGenerator([](MovementGenerator const* generator)
+                { return generator->GetMovementGeneratorType() == FLIGHT_MOTION_TYPE; }))
+                return false;
+
         uint32 const sourceNode = sObjectMgr->GetNearestTaxiNodeAnyTeam(
             bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(), bot->GetMapId());
         uint32 const destNode = sObjectMgr->GetNearestTaxiNodeAnyTeam(destX, destY, destZ, destMapId);
