@@ -1765,6 +1765,55 @@ bool WorldObject::CanDetectInvisibilityOf(WorldObject const* obj) const
     return true;
 }
 
+#include "Configuration/Config.h"
+
+namespace
+{
+    // Defined further down this same file, so this resolves to that definition
+    // rather than declaring a second internal symbol.
+    bool IsManagedPlayerbotAccountId(uint32 accountId);
+
+    // Notoriety is loud.
+    //
+    // Past the contract threshold the fleet simply knows where you are: every
+    // managed playerbot sharing your zone sees through Stealth and Prowl. It is
+    // the answer to the obvious exploit - a rogue or a feral druid could
+    // otherwise take a contract from Grix, stealth the entire eight hundred
+    // yards to the fence past every hunter the system sent after them, and
+    // collect. The walk is supposed to be the feature.
+    //
+    // Only the fleet gets it, and only against a PERSON. A bot cannot hold a
+    // contract, so a stealthed bot is nobody's business.
+    //
+    // Config is read once. This sits on the visibility path, which runs for
+    // every stealthed pair in range on every update and cannot afford a lookup
+    // per call - so, like the pursuit keys in Creature.cpp, a .reload config
+    // will not move these.
+    bool NotorietyDefeatsStealth(Player const* observer, Player const* target)
+    {
+        static bool const enabled =
+            sConfigMgr->GetBoolDefault("Centurion.Notoriety.BotsSeeThroughStealth", true);
+        static uint32 const auraId = uint32(std::max(0,
+            sConfigMgr->GetIntDefault("Centurion.Bounty.AuraSpell", 90701)));
+        static uint32 const threshold = uint32(std::max(1,
+            sConfigMgr->GetIntDefault("Centurion.Notoriety.ContractStacks", 15)));
+
+        if (!enabled || !auraId || observer == target)
+            return false;
+
+        if (!observer->GetSession() || !IsManagedPlayerbotAccountId(observer->GetSession()->GetAccountId()))
+            return false;
+
+        if (target->GetSession() && IsManagedPlayerbotAccountId(target->GetSession()->GetAccountId()))
+            return false;
+
+        if (observer->GetZoneId() != target->GetZoneId())
+            return false;
+
+        return target->GetAuraCount(auraId) >= threshold;
+    }
+}
+
 bool WorldObject::CanDetectStealthOf(WorldObject const* obj, bool checkAlert) const
 {
     // Combat reach is the minimal distance (both in front and behind),
@@ -1773,6 +1822,14 @@ bool WorldObject::CanDetectStealthOf(WorldObject const* obj, bool checkAlert) co
 
     if (!obj->m_stealth.GetFlags())
         return true;
+
+    // Deliberately above the facing and distance rules below: this is meant to
+    // be truesight, not a better roll. A bot that only spotted a notorious rogue
+    // standing in front of it would still be walked past all day.
+    if (Player const* observer = ToPlayer())
+        if (Player const* notorious = obj->ToPlayer())
+            if (NotorietyDefeatsStealth(observer, notorious))
+                return true;
 
     float distance = GetExactDist(obj);
     float combatReach = 0.0f;

@@ -179,6 +179,11 @@ namespace
         // nobody around.
         PveTimePoint timidUntil{};
         PveTimePoint nextRebirthCheckAt{};
+        // When this bot next feels like a drink, and how long the session lasts
+        // once it starts. Two fields rather than one because getting drunk takes
+        // several goes - one swig is not a story.
+        PveTimePoint nextDrinkAt{};
+        PveTimePoint drinkingUntil{};
         bool fleeingFromPlayers = false;
         // Stamped only while the bot is actually swinging at a person. Kept apart
         // from lastPlayerFightAt, which doubles as the hunt schedule and is also
@@ -689,6 +694,28 @@ namespace
         return proto && proto->Class == ITEM_CLASS_CONSUMABLE &&
             proto->Spells[0].SpellCategory == SPELL_CATEGORY_DRINK &&
             ConsumableRestores(ConsumableUseSpell(proto), SPELL_AURA_MOD_POWER_REGEN);
+    }
+
+    // ...and everything the two tests above throw out is, it turns out, the fun
+    // part. Booze is kept in its own pool rather than deleted: a bot must never
+    // reach for it when it needs mana, and should absolutely reach for it when
+    // it does not. Note this deliberately catches Thunder 45 and Jungle River
+    // Water too - they restore mana AND inebriate, which disqualifies them as
+    // rations and qualifies them here.
+    bool IsBoozeTemplate(ItemTemplate const* proto)
+    {
+        if (!proto || proto->Class != ITEM_CLASS_CONSUMABLE)
+            return false;
+
+        SpellInfo const* spellInfo = ConsumableUseSpell(proto);
+        if (!spellInfo)
+            return false;
+
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+            if (effect.IsEffect(SPELL_EFFECT_INEBRIATE))
+                return true;
+
+        return false;
     }
 
     // Whether this class drinks at all. NOT GetMaxPower(POWER_MANA): a druid in
@@ -3115,6 +3142,7 @@ namespace
     bool g_RationsBuilt = false;
     std::vector<std::pair<uint32, uint32>> g_RationFood;    // requiredLevel, itemId
     std::vector<std::pair<uint32, uint32>> g_RationDrink;
+    std::vector<std::pair<uint32, uint32>> g_RationBooze;   // not a ration at all
 
     void BuildRationPoolOnce()
     {
@@ -3137,14 +3165,21 @@ namespace
                 g_RationFood.push_back({ proto->RequiredLevel, itemId });
             else if (IsDrinkTemplate(proto))
                 g_RationDrink.push_back({ proto->RequiredLevel, itemId });
+            else if (IsBoozeTemplate(proto))
+                g_RationBooze.push_back({ proto->RequiredLevel, itemId });
         } while (result->NextRow());
 
         auto byLevelDesc = [](auto const& l, auto const& r) { return l.first > r.first; };
         std::sort(g_RationFood.begin(), g_RationFood.end(), byLevelDesc);
         std::sort(g_RationDrink.begin(), g_RationDrink.end(), byLevelDesc);
+        // Booze is picked at random rather than by tier - a bot is not trying to
+        // optimise anything - so this one is sorted ASCENDING to make "everything
+        // this level may drink" a prefix of the vector.
+        std::sort(g_RationBooze.begin(), g_RationBooze.end(),
+            [](auto const& l, auto const& r) { return l.first < r.first; });
 
-        TC_LOG_INFO("playerbots.pve", "Ration pool: {} foods and {} drinks sold by vendors.",
-            uint32(g_RationFood.size()), uint32(g_RationDrink.size()));
+        TC_LOG_INFO("playerbots.pve", "Ration pool: {} foods and {} drinks sold by vendors, plus {} things to drink for fun.",
+            uint32(g_RationFood.size()), uint32(g_RationDrink.size()), uint32(g_RationBooze.size()));
     }
 
     uint32 BestRationForLevel(std::vector<std::pair<uint32, uint32>> const& pool, uint8 level)
@@ -3154,6 +3189,19 @@ namespace
             if (requiredLevel <= level)
                 return itemId;
         return 0;
+    }
+
+    // Any bottle this level is allowed to open, chosen at random. Not "the best"
+    // - there is no best, and a fleet that all orders the same drink is less
+    // funny than one that does not. The pool is sorted ascending, so everything
+    // drinkable is a prefix of it.
+    uint32 PickBoozeForLevel(uint8 level)
+    {
+        std::lock_guard<std::mutex> guard(g_RationLock);
+        size_t drinkable = 0;
+        while (drinkable < g_RationBooze.size() && g_RationBooze[drinkable].first <= level)
+            ++drinkable;
+        return drinkable ? g_RationBooze[urand(0, uint32(drinkable - 1))].second : 0;
     }
 
     // The required level of the best ration this level can drink or eat, or 0
@@ -11589,6 +11637,97 @@ namespace
         setAnchor();
     }
 
+    // A bot with nothing to heal, nothing to fight and nowhere to be occasionally
+    // stops and has a drink. This is not recovery and must never be mistaken for
+    // it: the rations pool refuses everything in here, and this refuses to run at
+    // all while the bot needs anything.
+    //
+    // Written as a SESSION rather than a single swig on purpose. One drink is a
+    // typo; three is a night out, and the client's own emotes do the rest -
+    // "getting drunk off of", then "completely smashed". The bot keeps going
+    // until it is smashed or the window shuts, then leaves the bottle alone for
+    // the better part of an hour.
+    void MaybeHaveADrink(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
+    {
+        if (!cfg.tavernEnabled || !bot->IsAlive() || bot->IsInCombat() || state.engaged)
+            return;
+
+        // Not in anything anybody queued for.
+        if (bot->InBattleground() || bot->InArena())
+            return;
+
+        // Never as a substitute for recovery, and never mid-meal.
+        if (NeedsRecovery(bot, cfg) || IsRestingNow(bot, state))
+            return;
+
+        PveTimePoint const now = PveClock::now();
+
+        // First sight of this bot: put the first round somewhere in the future
+        // rather than at zero, or every bot on the realm orders one the moment
+        // the server finishes starting.
+        if (state.nextDrinkAt == PveTimePoint())
+        {
+            state.nextDrinkAt = now + std::chrono::minutes(urand(cfg.tavernMinMinutes, cfg.tavernMaxMinutes));
+            return;
+        }
+
+        if (state.drinkingUntil == PveTimePoint())
+        {
+            if (now < state.nextDrinkAt)
+                return;
+            state.drinkingUntil = now + std::chrono::seconds(45);
+        }
+
+        if (now >= state.drinkingUntil || bot->GetDrunkValue() >= cfg.tavernMaxDrunk)
+        {
+            state.drinkingUntil = PveTimePoint();
+            state.nextDrinkAt = now + std::chrono::minutes(urand(cfg.tavernMinMinutes, cfg.tavernMaxMinutes));
+            return;
+        }
+
+        if (bot->HasUnitState(UNIT_STATE_CASTING))
+            return;
+
+        BuildRationPoolOnce();
+        uint32 const itemId = PickBoozeForLevel(bot->GetLevel());
+        ItemTemplate const* proto = itemId ? sObjectMgr->GetItemTemplate(itemId) : nullptr;
+        if (!proto)
+            return;
+
+        // Bought at the vendor price, one bottle at a time, like everything else
+        // a bot consumes. A bot too poor to drink stays sober.
+        uint64 const cost = uint64(proto->BuyPrice);
+        if (cost && bot->GetMoney() < cost)
+            return;
+
+        // AddItem reports only success, so the bottle is fetched back by entry.
+        // GetItemByEntry can legitimately return an older one the bot already
+        // had, which is fine - it is the same drink either way.
+        if (!bot->AddItem(itemId, 1))
+            return;
+
+        Item* bottle = bot->GetItemByEntry(itemId);
+        if (!bottle)
+            return;
+
+        if (cost)
+            bot->ModifyMoney(-int64(cost));
+
+        // A bear cannot hold a tankard. Dropping the form to drink is the same
+        // concession the eating path already makes.
+        if (bot->GetShapeshiftForm() != FORM_NONE)
+            bot->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
+
+        playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
+        if (MotionMaster* motionMaster = bot->GetMotionMaster())
+            motionMaster->Clear();
+        bot->StopMoving();
+
+        SpellCastTargets targets;
+        targets.SetUnitTarget(bot);
+        bot->CastItemUseSpell(bottle, targets, 0, 0);
+    }
+
     void RunSlowTick(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
     {
         RunDeathRecovery(bot, state, cfg);
@@ -11876,6 +12015,8 @@ namespace
                 }
             }
         }
+
+        MaybeHaveADrink(bot, state, cfg);
 
         RunStuckWatchdog(bot, state, cfg);
 
@@ -13112,6 +13253,11 @@ namespace playerbot
         g_PveConfig.autoReviveSeconds = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.AutoReviveSeconds", 30), 5, 600));
         g_PveConfig.restHealthPct = sConfigMgr->GetFloatDefault("Playerbot.Pve.RestHealthPct", 60.0f);
         g_PveConfig.restManaPct = sConfigMgr->GetFloatDefault("Playerbot.Pve.RestManaPct", 50.0f);
+        g_PveConfig.tavernEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Tavern.Enable", true);
+        g_PveConfig.tavernMinMinutes = uint32(std::max(1, sConfigMgr->GetIntDefault("Playerbot.Pve.Tavern.MinMinutes", 25)));
+        g_PveConfig.tavernMaxMinutes = uint32(std::max<int32>(int32(g_PveConfig.tavernMinMinutes),
+            sConfigMgr->GetIntDefault("Playerbot.Pve.Tavern.MaxMinutes", 90)));
+        g_PveConfig.tavernMaxDrunk = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Tavern.MaxDrunk", 100), 1, 100));
         g_PveConfig.playerEngageMinHealthPct = sConfigMgr->GetFloatDefault("Playerbot.Pve.PlayerEngageMinHealthPct", 85.0f);
         g_PveConfig.playerEngageMinManaPct = sConfigMgr->GetFloatDefault("Playerbot.Pve.PlayerEngageMinManaPct", 80.0f);
         g_PveConfig.autoLearnSpellsOnLevelUp = sConfigMgr->GetBoolDefault("Playerbot.Pve.AutoLearnSpellsOnLevelUp", true);

@@ -3665,6 +3665,13 @@ Centurion.Notoriety.VoidOnDeath           = 1
 #    the marks running after a sale instead.
 Centurion.Notoriety.ClearStacksOnTurnIn   = 1
 
+#    1 = at ContractStacks and above, every managed playerbot sharing the
+#    carrier's zone sees through Stealth and Prowl, from any angle. Without it a
+#    rogue or a feral druid takes the contract and stealths the whole way to the
+#    fence past everyone the system sends, which is the walk not happening.
+#    Read once at startup - .reload config will not move it.
+Centurion.Notoriety.BotsSeeThroughStealth = 1
+
 #    The payout. Money is flat copper; experience is counted in BUBBLES of the
 #    seller's own next level, so it stays meaningful at 20 and at 60.
 #    Paid by the fence script, NOT from quest_template - a repeatable quest pays

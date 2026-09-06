@@ -444,6 +444,23 @@ Playerbot.Pve.AutoReviveSeconds = 30
 Playerbot.Pve.RestHealthPct = 60
 Playerbot.Pve.RestManaPct = 50
 
+#    Playerbot.Pve.Tavern.*
+#        Description: Bots drinking for FUN. A bot with nothing to heal, nothing to fight
+#                     and nowhere to be occasionally buys a drink at the vendor price and
+#                     works through it until it is smashed, then leaves the bottle alone
+#                     for a while. Nothing here touches recovery: alcohol is kept out of
+#                     the ration pool entirely (it restores nothing), and this never runs
+#                     while the bot actually needs food or water.
+#                     MinMinutes/MaxMinutes bound the wait between sessions, per bot.
+#                     MaxDrunk is where a bot stops, 1-100; 100 is "completely smashed".
+#        Default:     1 / 25 / 90 / 100
+#                     Enable 0 - (bots stay sober)
+
+Playerbot.Pve.Tavern.Enable = 1
+Playerbot.Pve.Tavern.MinMinutes = 25
+Playerbot.Pve.Tavern.MaxMinutes = 90
+Playerbot.Pve.Tavern.MaxDrunk = 100
+
 #    Playerbot.Pve.PlayerEngageMinHealthPct
 #    Playerbot.Pve.PlayerEngageMinManaPct
 #        Description: How healthy a bot must be before it STARTS a fight with a person -
