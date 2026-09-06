@@ -102,10 +102,10 @@ BEGIN
         SpellLevel                = 0,
         BaseLevel                 = 0,
         MaxLevel                  = 0,
-        Name_Lang_enUS            = 'Bounty',
+        Name_Lang_enUS            = 'Notoriety',
         NameSubtext_Lang_enUS     = '',
         Description_Lang_enUS     = 'There is a price on your head.',
-        AuraDescription_Lang_enUS = 'There is a price on your head. The wandering rabble hunt you from further off and in greater numbers, and if you die here you will leave $s1% of your gold behind for whoever finds the body.';
+        AuraDescription_Lang_enUS = 'There is a price on your head. The wandering rabble hunt you from further off and in greater numbers, and if you die here you will leave $s1% of your gold behind for whoever finds the body. At fifteen marks a registrar will buy the page off you.';
 
     SET @sql = CONCAT('INSERT INTO dbc.', tableName, ' SELECT * FROM dbc_bounty_tmp');
     PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;

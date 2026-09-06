@@ -37,6 +37,7 @@
 #include "custom_barracks_hardcore.h"
 #include "ChallengeModes.h"
 #include "custom_bounty.h"
+#include "custom_notoriety.h"
 #include "Playerbot/Pve/PlayerbotPveManager.h"   // IsPvpOnlyBot
 #include "ScriptMgr.h"
 #include "Configuration/Config.h"
@@ -2089,6 +2090,35 @@ public:
     {
         explicit npc_ffa_flaggerAI(Creature* creature) : ScriptedAI(creature) {}
 
+        // The ! over his head. No conditions row can express this: CONDITION_AURA
+        // here is a bare HasAuraEffect with no stack count, and the whole point
+        // is the count. Returning {} falls through to the stock path.
+        Optional<QuestGiverStatus> GetDialogStatus(Player* player) override
+        {
+            if (Notoriety::ShouldOffer(player))
+                return DIALOG_STATUS_AVAILABLE;
+            return {};
+        }
+
+        void OnQuestAccept(Player* player, Quest const* quest) override
+        {
+            if (!player || !quest || quest->GetQuestId() != Notoriety::QuestId())
+                return;
+
+            // No ground, no contract. Leaving it in the log would give the
+            // player a delivery with nowhere to deliver it.
+            if (!Notoriety::IssueContract(player))
+            {
+                me->Whisper("My man is not meeting anyone near here today. Try me again elsewhere.",
+                    LANG_UNIVERSAL, player);
+                player->RemoveActiveQuest(quest->GetQuestId(), false);
+                return;
+            }
+
+            me->Whisper("Go where the mark shows. Ask for the Quiet Man - and do not die on the way, "
+                "because nobody buys a dead man's name.", LANG_UNIVERSAL, player);
+        }
+
         bool OnGossipHello(Player* player) override
         {
             if (!s_enabled)
@@ -2112,6 +2142,23 @@ public:
             // a one-option gossip menu, so right-clicking Grix toggled the
             // flag instantly with no window ever shown.
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Farewell.", GOSSIP_SENDER_MAIN, 3);
+
+            // A live contract can be asked about, and moved.
+            if (Notoriety::HasLiveContract(player->GetGUID()))
+            {
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Where is the Quiet Man?", GOSSIP_SENDER_MAIN, 7);
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "The mark has moved.", GOSSIP_SENDER_MAIN, 8);
+            }
+
+            // THE quest row. This hook returns true on every path, and
+            // NPCHandler only calls PrepareGossipMenu - and so PrepareQuestMenu -
+            // when it returns FALSE. Without this line the creature_queststarter
+            // row exists and no player can ever see it. SendGossipMenu packs the
+            // quest menu and the gossip menu into one message, so the offer
+            // simply appears as a row inside Grix's own menu.
+            if (Notoriety::ShouldOffer(player))
+                player->PrepareQuestMenu(me->GetGUID());
+
             // Custom flavor text row (bplusworld.npc_text 900001).
             SendGossipMenuFor(player, 900001, me->GetGUID());
             return true;
@@ -2126,6 +2173,22 @@ public:
             if (player->GetLevel() < 10)
             {
                 me->Whisper("Not yet, greenhorn. Come back at level 10.", LANG_UNIVERSAL, player);
+                return true;
+            }
+
+            // A contract is not a flag change: both of these return before the
+            // FFA state below is touched.
+            if (action == 7)
+            {
+                Notoriety::SendRendezvousPoi(player);
+                return true;
+            }
+            if (action == 8)
+            {
+                if (Notoriety::RerollContract(player))
+                    me->Whisper("Then he has moved. Here is where he stands now.", LANG_UNIVERSAL, player);
+                else
+                    me->Whisper("He has moved for you twice already. Walk it.", LANG_UNIVERSAL, player);
                 return true;
             }
 

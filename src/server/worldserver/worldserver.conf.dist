@@ -3610,6 +3610,65 @@ Centurion.Bounty.GuardStacks = 30
 Centurion.Bounty.GuardCreatureId = 900200
 Centurion.Bounty.GuardCount = 2
 Centurion.Bounty.GuardIntervalSeconds = 45
+
+###############################################################################
+# NOTORIETY - selling the price on your own head
+#
+#    "Bounty" is the internal codename for the whole system and stays that way;
+#    NOTORIETY is what a player reads. Past ContractStacks marks, Grix Warbrand
+#    will write you a contract: a fence stands several hundred yards off and
+#    will buy the page for coin and experience.
+#
+#    Carrying a contract banks the HIGHEST stack count you reach while you hold
+#    it, so every hunter you put down on the road raises the payout and none of
+#    them can lower it. Die and the contract dies at the corpse.
+#
+#    The rendezvous costs ZERO pathfinding queries. It is chosen from the
+#    playerbot grind-spot cache, which is built from creature spawn clusters -
+#    so every candidate is ground where three or more creatures already stand,
+#    reachable and on the ground by construction.
+###############################################################################
+
+Centurion.Notoriety.Enable                = 0
+Centurion.Notoriety.QuestId               = 60001
+Centurion.Notoriety.FenceCreatureId       = 900201
+
+#    Marks needed before a contract is written, and how many more raise the
+#    payout by one tier. 15 + 7*5 = 50, which is the aura's own stack ceiling.
+Centurion.Notoriety.ContractStacks        = 15
+Centurion.Notoriety.StacksPerTier         = 5
+Centurion.Notoriety.MaxTiers              = 7
+
+#    How far the fence stands. Answered from the spot cache, so a band with no
+#    cached ground in it simply refuses the contract rather than stranding
+#    anybody - the whisper says so and the quest is removed.
+Centurion.Notoriety.RendezvousMinYards    = 500.0
+Centurion.Notoriety.RendezvousMaxYards    = 900.0
+
+#    Free to the player, and deliberately: a rendezvous the map stranded them
+#    behind is a support ticket otherwise.
+Centurion.Notoriety.MaxRerolls            = 2
+
+#    Seconds before the registrar will write another contract after one is sold.
+Centurion.Notoriety.CooldownSeconds       = 600
+
+#    1 = dying voids the contract at the corpse. The notoriety itself clears on
+#    that same event, so the contract has nothing left to sell.
+Centurion.Notoriety.VoidOnDeath           = 1
+
+#    1 = selling the contract also clears the notoriety. Off by default: the
+#    contract is the payout, and the marks keep running so another can be built.
+Centurion.Notoriety.ClearStacksOnTurnIn   = 0
+
+#    The payout. Money is flat copper; experience is counted in BUBBLES of the
+#    seller's own next level, so it stays meaningful at 20 and at 60.
+#    Paid by the fence script, NOT from quest_template - a repeatable quest pays
+#    its template rewards exactly once per character, ever, and silently zero
+#    every time after.
+Centurion.Notoriety.MoneyBaseCopper       = 5000
+Centurion.Notoriety.MoneyPerTierCopper    = 3000
+Centurion.Notoriety.XpBubblesBase         = 2.0
+Centurion.Notoriety.XpBubblesPerTier      = 1.0
 Centurion.Bounty.GuardLifetimeSeconds = 180
 
 

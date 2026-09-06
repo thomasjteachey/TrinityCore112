@@ -19,6 +19,7 @@
 // the system is for; this file is how it works.
 
 #include "custom_bounty.h"
+#include "custom_notoriety.h"
 
 #include "custom_barracks_hardcore.h"
 #include "custom_loot_chest_helper.h"
@@ -340,6 +341,11 @@ namespace
             aura->ModStackAmount(int32(count));
 
         WriteRegistry(killer, aura->GetStackAmount(), aura->GetDuration());
+
+        // Map thread, player in hand, on the exact instruction that raises the
+        // stack. A live contract banks its high-water mark here.
+        Notoriety::OnStacksChanged(killer, aura->GetStackAmount());
+
         TC_LOG_DEBUG("playerbots.hardcore", "Bounty: {} now at {} stack(s).",
             killer->GetName(), uint32(aura->GetStackAmount()));
     }

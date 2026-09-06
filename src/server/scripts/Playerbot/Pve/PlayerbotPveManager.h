@@ -340,6 +340,25 @@ public:
     // question rather than keep a second answer.
     static bool MayProactivelyEngage(Player const* bot, Player const* human);
 
+    // A validated patch of ground between minYards and maxYards of (fromX, fromY),
+    // preferring preferredZoneId and falling back to the rest of the map.
+    //
+    // Answered entirely from the grind-spot cache, which is built once from
+    // creature spawn CLUSTERS - so every candidate is somewhere three or more
+    // creatures already stand. That makes it reachable and on the ground by
+    // construction, and it costs ZERO pathfinding queries: no navmesh, no
+    // PathGenerator, nothing that could compete with the fleet's path budget.
+    //
+    // Returns false rather than building the cache: the build stamps a zone id
+    // on ~5900 points via sMapMgr->GetZoneId and must never run inside a map
+    // thread answering a player's gossip click.
+    //
+    // seed makes the choice deterministic per caller, so asking twice for the
+    // same contract gives the same place.
+    static bool PickGroundSpotInBand(uint32 mapId, uint32 preferredZoneId, float fromX, float fromY,
+        float minYards, float maxYards, uint32 seed,
+        float& outX, float& outY, float& outZ, uint32& outZoneId);
+
     // Whether a real person is close enough to see something happen at this
     // spot. Bots do not count as witnesses, GMs do not either, and DEAD players
     // DO - a ghost is still somebody looking at the world.

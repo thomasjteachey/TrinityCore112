@@ -1,0 +1,639 @@
+/*
+ * This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+// Notoriety: selling the price on your own head. See custom_notoriety.h for
+// what the system is for; this file is how it works.
+
+#include "custom_notoriety.h"
+
+#include "custom_bounty.h"
+#include "custom_barracks_hardcore.h"
+#include "Playerbot/Pve/PlayerbotPveManager.h"
+
+#include "Chat.h"
+#include "Configuration/Config.h"
+#include "Creature.h"
+#include "CreatureAI.h"
+#include "DatabaseEnv.h"
+#include "GameTime.h"
+#include "Log.h"
+#include "Map.h"
+#include "ObjectAccessor.h"
+#include "ObjectMgr.h"
+#include "Opcodes.h"
+#include "Player.h"
+#include "QuestDef.h"
+#include "RBAC.h"
+#include "ScriptedCreature.h"
+#include "ScriptMgr.h"
+#include "WorldPacket.h"
+#include "WorldSession.h"
+
+#include <atomic>
+#include <mutex>
+#include <unordered_map>
+
+namespace
+{
+    bool s_enabled = false;
+    uint32 s_questId = 60001;
+    uint32 s_fenceEntry = 900201;
+    uint32 s_contractStacks = 15;
+    uint32 s_stacksPerTier = 5;
+    uint32 s_maxTiers = 7;
+    uint32 s_cooldownSeconds = 600;
+    uint32 s_maxRerolls = 2;
+    float s_minYards = 500.0f;
+    float s_maxYards = 900.0f;
+    bool s_voidOnDeath = true;
+    bool s_clearStacksOnTurnIn = false;
+
+    // Money is copper per tier, experience is a share of the killer's own next
+    // level - the same "a fraction of the bar" shape the rest of the realm
+    // pays in, so it stays meaningful at 20 and at 60.
+    uint32 s_moneyBase = 5000;
+    uint32 s_moneyPerTier = 3000;
+    float s_xpBubblesBase = 2.0f;
+    float s_xpBubblesPerTier = 1.0f;
+
+    struct Contract
+    {
+        uint32 MapId = 0;
+        uint32 ZoneId = 0;
+        float X = 0.0f;
+        float Y = 0.0f;
+        float Z = 0.0f;
+        uint32 StacksAtAccept = 0;
+        uint32 PeakStacks = 0;
+        uint32 Rerolls = 0;
+        time_t AcceptedAt = 0;
+    };
+
+    std::mutex g_lock;
+    std::unordered_map<uint64, Contract> g_contracts;
+    std::unordered_map<uint64, time_t> g_cooldownUntil;
+
+    // Read on the hot paths before the lock is ever taken. A realm where nobody
+    // is carrying a contract - which is almost always - pays one relaxed load.
+    std::atomic<bool> g_anyContract{ false };
+
+    void LoadNotorietyConfig()
+    {
+        s_enabled = sConfigMgr->GetBoolDefault("Centurion.Notoriety.Enable", false);
+        s_questId = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.QuestId", 60001)));
+        s_fenceEntry = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.FenceCreatureId", 900201)));
+        s_contractStacks = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.ContractStacks", 15), 1, 255));
+        s_stacksPerTier = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.StacksPerTier", 5), 1, 255));
+        s_maxTiers = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.MaxTiers", 7), 0, 100));
+        s_cooldownSeconds = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.CooldownSeconds", 600)));
+        s_maxRerolls = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.MaxRerolls", 2), 0, 20));
+        s_minYards = std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Notoriety.RendezvousMinYards", 500.0f));
+        s_maxYards = std::max(s_minYards, sConfigMgr->GetFloatDefault("Centurion.Notoriety.RendezvousMaxYards", 900.0f));
+        s_voidOnDeath = sConfigMgr->GetBoolDefault("Centurion.Notoriety.VoidOnDeath", true);
+        s_clearStacksOnTurnIn = sConfigMgr->GetBoolDefault("Centurion.Notoriety.ClearStacksOnTurnIn", false);
+
+        s_moneyBase = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.MoneyBaseCopper", 5000)));
+        s_moneyPerTier = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.MoneyPerTierCopper", 3000)));
+        s_xpBubblesBase = std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Notoriety.XpBubblesBase", 2.0f));
+        s_xpBubblesPerTier = std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Notoriety.XpBubblesPerTier", 1.0f));
+    }
+
+    uint32 TierFor(uint32 stacks)
+    {
+        if (stacks <= s_contractStacks || !s_stacksPerTier)
+            return 0;
+
+        return std::min(s_maxTiers, (stacks - s_contractStacks) / s_stacksPerTier);
+    }
+
+    void EraseContract(uint64 rawGuid)
+    {
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            g_contracts.erase(rawGuid);
+            g_anyContract.store(!g_contracts.empty(), std::memory_order_relaxed);
+        }
+
+        CharacterDatabase.PExecute("DELETE FROM character_notoriety_contract WHERE guid = {}",
+            ObjectGuid(rawGuid).GetCounter());
+    }
+}
+
+namespace Notoriety
+{
+    bool Enabled() { return s_enabled; }
+    uint32 QuestId() { return s_questId; }
+    uint32 ContractStacks() { return s_contractStacks; }
+
+    bool HasLiveContract(ObjectGuid guid)
+    {
+        if (!g_anyContract.load(std::memory_order_relaxed))
+            return false;
+
+        std::lock_guard<std::mutex> guard(g_lock);
+        return g_contracts.count(guid.GetRawValue()) != 0;
+    }
+
+    bool GetRendezvous(ObjectGuid guid, uint32& mapId, uint32& zoneId, Position& out)
+    {
+        if (!g_anyContract.load(std::memory_order_relaxed))
+            return false;
+
+        std::lock_guard<std::mutex> guard(g_lock);
+        auto itr = g_contracts.find(guid.GetRawValue());
+        if (itr == g_contracts.end())
+            return false;
+
+        mapId = itr->second.MapId;
+        zoneId = itr->second.ZoneId;
+        out.Relocate(itr->second.X, itr->second.Y, itr->second.Z);
+        return true;
+    }
+
+    bool ShouldOffer(Player const* player)
+    {
+        if (!s_enabled || !player || BarracksHardcore::IsPlayerbot(player))
+            return false;
+
+        if (Bounty::GetStacks(player) < s_contractStacks)
+            return false;
+
+        uint64 const raw = player->GetGUID().GetRawValue();
+        std::lock_guard<std::mutex> guard(g_lock);
+        if (g_contracts.count(raw))
+            return false;
+
+        auto itr = g_cooldownUntil.find(raw);
+        return itr == g_cooldownUntil.end() || itr->second <= GameTime::GetGameTime();
+    }
+
+    void SendRendezvousPoi(Player* player)
+    {
+        if (!player)
+            return;
+
+        uint32 mapId = 0;
+        uint32 zoneId = 0;
+        Position spot;
+        if (!GetRendezvous(player->GetGUID(), mapId, zoneId, spot))
+            return;
+
+        // Hand-built because PlayerMenu::SendPointOfInterest can only send a row
+        // out of points_of_interest, and this marker is different for every
+        // contract. Field order is that function's, verbatim.
+        WorldPacket data(SMSG_GOSSIP_POI, 4 + 4 + 4 + 4 + 4 + 16);
+        data << uint32(0);                      // flags
+        data << float(spot.GetPositionX());
+        data << float(spot.GetPositionY());
+        data << uint32(7);                      // icon: a plain marker
+        data << uint32(0);                      // importance
+        data << "The Quiet Man";
+        player->GetSession()->SendPacket(&data);
+
+        float const distance = player->GetExactDist2d(spot.GetPositionX(), spot.GetPositionY());
+        ChatHandler(player->GetSession()).PSendSysMessage(
+            "The meeting is roughly %.0f paces off. Look for the mark on your map.", distance);
+    }
+
+    bool IssueContract(Player* player)
+    {
+        if (!s_enabled || !player)
+            return false;
+
+        uint32 const stacks = Bounty::GetStacks(player);
+
+        // Seeded from the player and the moment, so a re-roll lands somewhere
+        // else while a re-read of the same contract lands in the same place.
+        uint32 const seed = uint32(player->GetGUID().GetCounter()) * 2654435761u
+            + uint32(GameTime::GetGameTime());
+
+        float x = 0.0f, y = 0.0f, z = 0.0f;
+        uint32 zoneId = 0;
+        if (!playerbot::PveManager::PickGroundSpotInBand(player->GetMapId(), player->GetZoneId(),
+            player->GetPositionX(), player->GetPositionY(), s_minYards, s_maxYards, seed, x, y, z, zoneId))
+        {
+            TC_LOG_INFO("playerbots.hardcore",
+                "Notoriety: no rendezvous ground within {:.0f}-{:.0f}y of {} in zone {}.",
+                s_minYards, s_maxYards, player->GetName(), player->GetZoneId());
+            return false;
+        }
+
+        Contract contract;
+        contract.MapId = player->GetMapId();
+        contract.ZoneId = zoneId;
+        contract.X = x;
+        contract.Y = y;
+        contract.Z = z;
+        contract.StacksAtAccept = stacks;
+        contract.PeakStacks = stacks;
+        contract.AcceptedAt = GameTime::GetGameTime();
+
+        uint64 const raw = player->GetGUID().GetRawValue();
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            if (auto existing = g_contracts.find(raw); existing != g_contracts.end())
+                contract.Rerolls = existing->second.Rerolls;
+
+            g_contracts[raw] = contract;
+            g_anyContract.store(true, std::memory_order_relaxed);
+        }
+
+        CharacterDatabase.PExecute(
+            "REPLACE INTO character_notoriety_contract "
+            "(guid, mapId, zoneId, posX, posY, posZ, stacksAtAccept, peakStacks, acceptedAt, rerolls) "
+            "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+            player->GetGUID().GetCounter(), contract.MapId, contract.ZoneId,
+            contract.X, contract.Y, contract.Z, contract.StacksAtAccept, contract.PeakStacks,
+            uint32(contract.AcceptedAt), contract.Rerolls);
+
+        SendRendezvousPoi(player);
+
+        TC_LOG_INFO("playerbots.hardcore",
+            "Notoriety: {} (level {}) took a contract at {} stack(s); fence at {:.0f},{:.0f} in zone {} ({:.0f}y).",
+            player->GetName(), player->GetLevel(), stacks, x, y, zoneId,
+            player->GetExactDist2d(x, y));
+        return true;
+    }
+
+    bool RerollContract(Player* player)
+    {
+        if (!player)
+            return false;
+
+        uint64 const raw = player->GetGUID().GetRawValue();
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            auto itr = g_contracts.find(raw);
+            if (itr == g_contracts.end())
+                return false;
+            if (itr->second.Rerolls >= s_maxRerolls)
+                return false;
+
+            ++itr->second.Rerolls;
+        }
+
+        return IssueContract(player);
+    }
+
+    void VoidContract(Player* player, char const* reason)
+    {
+        if (!player || !HasLiveContract(player->GetGUID()))
+            return;
+
+        EraseContract(player->GetGUID().GetRawValue());
+
+        // Removed from the log where the player is standing, not silently left
+        // to fail at the fence four hundred yards later.
+        if (Quest const* quest = sObjectMgr->GetQuestTemplate(s_questId))
+        {
+            player->RemoveActiveQuest(s_questId, false);
+            player->RemoveRewardedQuest(s_questId);
+            (void)quest;
+        }
+
+        ChatHandler(player->GetSession()).PSendSysMessage("%s", reason);
+
+        TC_LOG_INFO("playerbots.hardcore", "Notoriety: {}'s contract was voided - {}",
+            player->GetName(), reason);
+    }
+
+    void OnStacksChanged(Player* player, uint32 newStacks)
+    {
+        if (!s_enabled || !player || !g_anyContract.load(std::memory_order_relaxed))
+            return;
+
+        std::lock_guard<std::mutex> guard(g_lock);
+        auto itr = g_contracts.find(player->GetGUID().GetRawValue());
+        if (itr == g_contracts.end() || newStacks <= itr->second.PeakStacks)
+            return;
+
+        // Bank the high-water mark. This is what makes the walk aggressive
+        // rather than fearful: every hunter you put down on the road raises the
+        // payout, and nothing that happens afterwards can lower it.
+        itr->second.PeakStacks = newStacks;
+        CharacterDatabase.PExecute(
+            "UPDATE character_notoriety_contract SET peakStacks = {} WHERE guid = {}",
+            newStacks, player->GetGUID().GetCounter());
+    }
+
+    void GrantGoodieBag(Payout const& payout)
+    {
+        // THE SEAM. Money and experience are already paid when this runs.
+        //
+        // When the bag lands it goes here: build a level-appropriate loot set
+        // from payout.Level and payout.Tier and hand it over - most likely
+        // through CustomLootChests::PlayerChestBuilder, which already summons a
+        // chest, registers it and is understood by the bot fleet.
+        (void)payout;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The fence.
+// ---------------------------------------------------------------------------
+class npc_notoriety_fence : public CreatureScript
+{
+public:
+    npc_notoriety_fence() : CreatureScript("npc_notoriety_fence") { }
+
+    struct npc_notoriety_fenceAI : public ScriptedAI
+    {
+        npc_notoriety_fenceAI(Creature* creature) : ScriptedAI(creature) { }
+
+        bool OnGossipHello(Player* player) override
+        {
+            me->Whisper("Quietly, now. Have you got the page?", LANG_UNIVERSAL, player);
+            return false;   // let the quest menu through
+        }
+
+        void OnQuestReward(Player* player, Quest const* quest, uint32 /*opt*/) override
+        {
+            if (!player || !quest || quest->GetQuestId() != Notoriety::QuestId())
+                return;
+
+            uint32 stacks = 0;
+            uint32 rerolls = 0;
+            {
+                std::lock_guard<std::mutex> guard(g_lock);
+                auto itr = g_contracts.find(player->GetGUID().GetRawValue());
+                if (itr == g_contracts.end())
+                    return;
+
+                stacks = std::max(itr->second.PeakStacks, itr->second.StacksAtAccept);
+                rerolls = itr->second.Rerolls;
+            }
+
+            uint32 const tier = TierFor(stacks);
+
+            // Paid HERE and not from quest_template, and that is not taste.
+            // Player.cpp: a repeatable quest pays its template XP exactly once
+            // per character, ever, and silently zero on every hand-in after
+            // that. The first turn-in would work and every one after it would
+            // quietly pay nothing.
+            uint32 const money = s_moneyBase + s_moneyPerTier * tier;
+            float const bubbles = s_xpBubblesBase + s_xpBubblesPerTier * float(tier);
+            uint32 const levelXp = sObjectMgr->GetXPForLevel(player->GetLevel());
+            uint32 const xp = uint32(float(levelXp) * bubbles / 20.0f);
+
+            if (money)
+                player->ModifyMoney(int64(money));
+            if (xp)
+                player->GiveXP(xp, nullptr);
+
+            Notoriety::Payout payout;
+            payout.Who = player;
+            payout.Stacks = stacks;
+            payout.Tier = tier;
+            payout.ZoneId = player->GetZoneId();
+            payout.MoneyPaid = money;
+            payout.XpPaid = xp;
+            payout.Level = player->GetLevel();
+            Notoriety::GrantGoodieBag(payout);
+
+            EraseContract(player->GetGUID().GetRawValue());
+            {
+                std::lock_guard<std::mutex> guard(g_lock);
+                g_cooldownUntil[player->GetGUID().GetRawValue()] =
+                    GameTime::GetGameTime() + time_t(s_cooldownSeconds);
+            }
+
+            if (s_clearStacksOnTurnIn)
+                Bounty::ClearBounty(player);
+
+            me->Whisper("Nobody will hear this from me.", LANG_UNIVERSAL, player);
+
+            TC_LOG_INFO("playerbots.hardcore",
+                "Notoriety: {} (level {}) sold a contract at {} peak stack(s), tier {}, "
+                "for {}c and {} xp ({} reroll(s)).",
+                player->GetName(), player->GetLevel(), stacks, tier, money, xp, rerolls);
+        }
+    };
+
+    CreatureAI* GetAI(Creature* creature) const override
+    {
+        return new npc_notoriety_fenceAI(creature);
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Lifecycle.
+// ---------------------------------------------------------------------------
+class custom_notoriety_world : public WorldScript
+{
+public:
+    custom_notoriety_world() : WorldScript("custom_notoriety_world") { }
+
+    void OnConfigLoad(bool /*reload*/) override
+    {
+        LoadNotorietyConfig();
+        if (s_enabled)
+            CharacterDatabase.DirectExecute(
+                "CREATE TABLE IF NOT EXISTS character_notoriety_contract ("
+                "guid INT UNSIGNED NOT NULL PRIMARY KEY,"
+                "mapId SMALLINT UNSIGNED NOT NULL,"
+                "zoneId INT UNSIGNED NOT NULL,"
+                "posX FLOAT NOT NULL, posY FLOAT NOT NULL, posZ FLOAT NOT NULL,"
+                "stacksAtAccept TINYINT UNSIGNED NOT NULL DEFAULT 0,"
+                "peakStacks TINYINT UNSIGNED NOT NULL DEFAULT 0,"
+                "acceptedAt INT UNSIGNED NOT NULL,"
+                "rerolls TINYINT UNSIGNED NOT NULL DEFAULT 0"
+                ") ENGINE=InnoDB");
+    }
+};
+
+class custom_notoriety_player : public PlayerScript
+{
+public:
+    custom_notoriety_player() : PlayerScript("custom_notoriety_player") { }
+
+    void OnLogin(Player* player, bool /*firstLogin*/) override
+    {
+        // Only for somebody who actually has the quest. The bot fleet is
+        // hundreds of logins and none of them can carry a contract, so this
+        // costs them an in-memory quest-status read and no query at all.
+        if (!s_enabled || !player || BarracksHardcore::IsPlayerbot(player))
+            return;
+        if (player->GetQuestStatus(s_questId) == QUEST_STATUS_NONE)
+            return;
+
+        QueryResult result = CharacterDatabase.PQuery(
+            "SELECT mapId, zoneId, posX, posY, posZ, stacksAtAccept, peakStacks, acceptedAt, rerolls "
+            "FROM character_notoriety_contract WHERE guid = {}", player->GetGUID().GetCounter());
+        if (!result)
+            return;
+
+        Field* fields = result->Fetch();
+        Contract contract;
+        contract.MapId = fields[0].GetUInt32();
+        contract.ZoneId = fields[1].GetUInt32();
+        contract.X = fields[2].GetFloat();
+        contract.Y = fields[3].GetFloat();
+        contract.Z = fields[4].GetFloat();
+        contract.StacksAtAccept = fields[5].GetUInt8();
+        contract.PeakStacks = fields[6].GetUInt8();
+        contract.AcceptedAt = time_t(fields[7].GetUInt32());
+        contract.Rerolls = fields[8].GetUInt8();
+
+        std::lock_guard<std::mutex> guard(g_lock);
+        g_contracts[player->GetGUID().GetRawValue()] = contract;
+        g_anyContract.store(true, std::memory_order_relaxed);
+    }
+
+    void OnPlayerJustDied(Player* victim, Unit* /*killer*/) override
+    {
+        if (!s_enabled || !s_voidOnDeath || !victim)
+            return;
+
+        // At the corpse, immediately, and said out loud. The notoriety itself
+        // clears on this same event, so the contract has nothing left to sell -
+        // failing it here rather than silently at the fence is the difference
+        // between a rule and a trick.
+        Notoriety::VoidContract(victim, "The page burns. Nobody buys a dead man's name.");
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Diagnostics. Every silent gate above gets one visible answer here.
+// ---------------------------------------------------------------------------
+class custom_notoriety_commands : public CommandScript
+{
+public:
+    custom_notoriety_commands() : CommandScript("custom_notoriety_commands") { }
+
+    Trinity::ChatCommands::ChatCommandTable GetCommands() const override
+    {
+        using namespace Trinity::ChatCommands;
+        static ChatCommandTable notorietyTable =
+        {
+            { "why", HandleNotorietyWhy, rbac::RBAC_PERM_COMMAND_GM, Console::No },
+            { "go", HandleNotorietyGo, rbac::RBAC_PERM_COMMAND_GM, Console::No },
+            { "reroll", HandleNotorietyReroll, rbac::RBAC_PERM_COMMAND_GM, Console::No },
+            { "bag", HandleNotorietyBag, rbac::RBAC_PERM_COMMAND_GM, Console::No },
+        };
+        static ChatCommandTable commandTable =
+        {
+            { "notoriety", notorietyTable },
+        };
+        return commandTable;
+    }
+
+    static Player* Resolve(ChatHandler* handler, Optional<std::string> const& name)
+    {
+        if (!name || name->empty())
+            return handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
+
+        return ObjectAccessor::FindPlayerByName(*name);
+    }
+
+    static bool HandleNotorietyWhy(ChatHandler* handler, Optional<std::string> name)
+    {
+        Player* target = Resolve(handler, name);
+        if (!target)
+        {
+            handler->SendSysMessage("No such player.");
+            return true;
+        }
+
+        handler->PSendSysMessage("Notoriety for %s:", target->GetName().c_str());
+        handler->PSendSysMessage("  enabled=%s  quest=%u  contract_at=%u stacks",
+            s_enabled ? "yes" : "NO", s_questId, s_contractStacks);
+        handler->PSendSysMessage("  live stacks=%u  should_offer=%s",
+            Bounty::GetStacks(target), Notoriety::ShouldOffer(target) ? "yes" : "NO");
+
+        uint32 mapId = 0, zoneId = 0;
+        Position spot;
+        if (Notoriety::GetRendezvous(target->GetGUID(), mapId, zoneId, spot))
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            Contract const& c = g_contracts[target->GetGUID().GetRawValue()];
+            handler->PSendSysMessage("  contract: peak=%u accepted_at=%u rerolls=%u tier=%u",
+                c.PeakStacks, c.StacksAtAccept, c.Rerolls, TierFor(std::max(c.PeakStacks, c.StacksAtAccept)));
+            handler->PSendSysMessage("  fence: map %u zone %u at %.0f,%.0f,%.0f (%.0fy away)",
+                mapId, zoneId, spot.GetPositionX(), spot.GetPositionY(), spot.GetPositionZ(),
+                target->GetExactDist2d(spot.GetPositionX(), spot.GetPositionY()));
+        }
+        else
+            handler->SendSysMessage("  contract: none");
+
+        return true;
+    }
+
+    static bool HandleNotorietyGo(ChatHandler* handler, Optional<std::string> name)
+    {
+        Player* target = Resolve(handler, name);
+        Player* me = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
+        if (!target || !me)
+        {
+            handler->SendSysMessage("No such player.");
+            return true;
+        }
+
+        uint32 mapId = 0, zoneId = 0;
+        Position spot;
+        if (!Notoriety::GetRendezvous(target->GetGUID(), mapId, zoneId, spot))
+        {
+            handler->SendSysMessage("That player has no contract.");
+            return true;
+        }
+
+        // The fence is only visible to its own contract holder, so this is the
+        // only way to look at the ground it is standing on.
+        me->TeleportTo(mapId, spot.GetPositionX(), spot.GetPositionY(), spot.GetPositionZ(), 0.0f);
+        return true;
+    }
+
+    static bool HandleNotorietyReroll(ChatHandler* handler, Optional<std::string> name)
+    {
+        Player* target = Resolve(handler, name);
+        if (!target)
+        {
+            handler->SendSysMessage("No such player.");
+            return true;
+        }
+
+        handler->PSendSysMessage("Reroll %s.", Notoriety::RerollContract(target) ? "done" : "REFUSED");
+        return true;
+    }
+
+    static bool HandleNotorietyBag(ChatHandler* handler, uint32 stacks)
+    {
+        Player* me = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
+        uint8 const level = me ? me->GetLevel() : 60;
+        uint32 const levelXp = sObjectMgr->GetXPForLevel(level);
+
+        handler->PSendSysMessage("Reward curve at level %u (bar %u):", level, levelXp);
+        for (uint32 s = s_contractStacks; s <= stacks; s += s_stacksPerTier)
+        {
+            uint32 const tier = TierFor(s);
+            uint32 const money = s_moneyBase + s_moneyPerTier * tier;
+            float const bubbles = s_xpBubblesBase + s_xpBubblesPerTier * float(tier);
+            handler->PSendSysMessage("  %2u stacks -> tier %u: %ug %us %uc, %.1f bubbles = %u xp",
+                s, tier, money / 10000, (money % 10000) / 100, money % 100,
+                bubbles, uint32(float(levelXp) * bubbles / 20.0f));
+        }
+        return true;
+    }
+};
+
+void AddSC_custom_notoriety()
+{
+    LoadNotorietyConfig();
+    new custom_notoriety_world();
+    new custom_notoriety_player();
+    new npc_notoriety_fence();
+    new custom_notoriety_commands();
+}

@@ -8727,16 +8727,16 @@ namespace
         "Someone come quick!",
         "I'm going to die out here!",
         "This isn't a fair fight - help me!",
-        "HELP! There's a bounty here!",
+        "HELP! There's a marked one here!",
         "I found them! I can't hold them!",
-        "The bounty's here! Get over here!",
+        "The mark's here! Get over here!",
         "I've got them cornered - I need help!",
         "They're worth a fortune! Somebody help me kill them!",
         "Wanted alive or dead - and I can't do either alone!",
-        "I've got eyes on the bounty! HELP!",
+        "I've got eyes on the mark! HELP!",
         "The mark is here! Backup!",
         "Somebody collect on this one with me!",
-        "I can't claim this bounty alone!",
+        "I can't collect on this one alone!",
         "Bring everyone! This one's a killer!",
         "They've killed too many! Help me!",
         "I need a hand! A big one!",
@@ -8776,7 +8776,7 @@ namespace
         "I can't touch them alone!",
         "Get me some help before I'm a corpse!",
         "Help! They're wanted!",
-        "Bounty! Right here! HELP!",
+        "Marked one! Right here! HELP!",
         "I need somebody who can actually hurt them!",
         "I'm just slowing them down - hurry!",
         "Come on! Someone!",
@@ -8790,8 +8790,8 @@ namespace
         "Backup, and be quick about it!",
         "I've called it in - somebody answer!",
         "Answer me! I need help!",
-        "The bounty's mine if someone helps!",
-        "Split the bounty - just get here!",
+        "The payout's mine if someone helps!",
+        "Split the payout - just get here!",
         "I can't finish them! Somebody can!",
         "They're worth more than my life - help me!",
         "I found the wanted one! HELP!",
@@ -13190,6 +13190,72 @@ namespace playerbot
     bool PveManager::AnyPersonWithin(WorldObject const* of, float yards)
     {
         return AnyRealPersonWithin(of, yards);
+    }
+
+    bool PveManager::PickGroundSpotInBand(uint32 mapId, uint32 preferredZoneId, float fromX, float fromY,
+        float minYards, float maxYards, uint32 seed,
+        float& outX, float& outY, float& outZ, uint32& outZoneId)
+    {
+        if (minYards > maxYards)
+            std::swap(minYards, maxYards);
+
+        float const minSq = minYards * minYards;
+        float const maxSq = maxYards * maxYards;
+
+        std::lock_guard<std::mutex> guard(g_GrindSpotLock);
+        if (!g_GrindSpotsBuilt)
+            return false;
+
+        // The zone first, the rest of the map only if the zone cannot answer.
+        // A rendezvous in the zone you are already standing in is the point;
+        // crossing a border to reach it is a consolation prize.
+        auto collect = [&](std::vector<GrindSpot> const& spots, std::vector<GrindSpot const*>& out)
+        {
+            for (GrindSpot const& spot : spots)
+            {
+                if (spot.mapId != mapId)
+                    continue;
+
+                float const dx = spot.x - fromX;
+                float const dy = spot.y - fromY;
+                float const distSq = dx * dx + dy * dy;
+                if (distSq < minSq || distSq > maxSq)
+                    continue;
+
+                out.push_back(&spot);
+            }
+        };
+
+        std::vector<GrindSpot const*> candidates;
+        if (preferredZoneId)
+            if (auto itr = g_GrindSpotsByZone.find(preferredZoneId); itr != g_GrindSpotsByZone.end())
+                collect(itr->second, candidates);
+
+        if (candidates.empty())
+            for (auto const& [zoneId, spots] : g_GrindSpotsByZone)
+                collect(spots, candidates);
+
+        if (candidates.empty())
+            return false;
+
+        // Sorted before indexing: the map's iteration order is not stable across
+        // boots, so without this the "same seed, same place" promise would only
+        // hold until the next restart.
+        std::sort(candidates.begin(), candidates.end(), [](GrindSpot const* left, GrindSpot const* right)
+        {
+            if (left->x != right->x)
+                return left->x < right->x;
+            if (left->y != right->y)
+                return left->y < right->y;
+            return left->z < right->z;
+        });
+
+        GrindSpot const* pick = candidates[seed % candidates.size()];
+        outX = pick->x;
+        outY = pick->y;
+        outZ = pick->z;
+        outZoneId = pick->zoneId;
+        return true;
     }
 
     // World thread. Walks the managed roster once and copies out the few fields

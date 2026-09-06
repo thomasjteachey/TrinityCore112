@@ -59,6 +59,10 @@ namespace Bounty
     uint32 GetStacks(ObjectGuid guid);
     uint32 GetStacks(Player const* player);
 
+    // Drop the aura and the registry row together. Exported for the
+    // Notoriety turn-in, which can optionally settle the debt it just sold.
+    void ClearBounty(Player* player);
+
     // 0.0 at no bounty, 1.0 at the cap. Every escalation below is a straight
     // line along this, so one number tunes how fast the world turns on you.
     float Fraction(uint32 stacks);
