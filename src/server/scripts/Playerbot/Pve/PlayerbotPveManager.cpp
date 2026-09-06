@@ -11774,6 +11774,33 @@ namespace
                             TC_LOG_INFO("playerbots.pve", "Bot {} could not eat/drink item {} (use spell {} did not land).",
                                 bot->GetName(), consumableEntry, usedSpellId);
                     }
+                    else if (!bot->HasUnitState(UNIT_STATE_CASTING))
+                    {
+                        // Nothing to eat, nothing to conjure, and no rations
+                        // coming - so eat for free rather than stand there.
+                        //
+                        // Every other arm of this block assumed a bot with no
+                        // food can go and buy some. A bot already on an errand
+                        // cannot: the errand scan at the bottom of this tick only
+                        // starts one when errandKind is None, so a bot that runs
+                        // dry mid-errand has no route to a vendor until the
+                        // errand ends. Meanwhile the engage floor (85/80) is well
+                        // above the rest floor (60/50), so it is simultaneously
+                        // too hurt to start a fight and unable to fix that - it
+                        // just stands there regenerating naturally. A level 14
+                        // paladin was found doing exactly that, carrying five
+                        // kinds of potion and no food at all.
+                        //
+                        // The economy is preserved where it exists: a bot holding
+                        // food still eats its food, and the vendor errand still
+                        // restocks it. This is only for the case where there is
+                        // genuinely nothing.
+                        playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
+                        if (MotionMaster* motionMaster = bot->GetMotionMaster())
+                            motionMaster->Clear();
+                        bot->StopMoving();
+                        bot->CastSpell(bot, needFood ? SPELL_PVE_OUT_OF_COMBAT_EAT : SPELL_PVE_OUT_OF_COMBAT_DRINK, true);
+                    }
                 }
                 else
                 {
