@@ -624,16 +624,71 @@ namespace
     // classic-imported item rows keep the old subclass 0 on basic food/water
     // (Tough Jerky, Refreshing Spring Water), and a subclass==FOOD requirement
     // makes every vendor staple invisible to both the buyer and the eater.
+    // ...but the category alone is not enough either, because a category says
+    // what shares a cooldown, not what a spell DOES - and alcohol sits in the
+    // drink category (59) right beside real water. Of the drinks B+ vendors
+    // sell, 49 restore mana (SPELL_EFFECT_APPLY_AURA + MOD_POWER_REGEN) and 29
+    // are booze (SPELL_EFFECT_INEBRIATE, which restores nothing whatsoever).
+    //
+    // Cherry Grog is the one that gave it away. Required level 25, and every
+    // real drink a bot that age can buy is required level 25 or lower - so with
+    // the ration pool sorted by required level, grog won. A level 25 bot bought
+    // it, drank it, got no mana back, drank again, and told the whole zone it
+    // was completely smashed.
+    //
+    // So ask the SPELL what it does, not the item which shelf it came from.
+    bool ConsumableRestores(SpellInfo const* spellInfo, AuraType wanted, uint8 depth = 0)
+    {
+        if (!spellInfo || depth > 2)
+            return false;
+
+        // Rejection first, and across the WHOLE spell before anything is
+        // accepted. Thunder 45 and Jungle River Water (both spell 44111) restore
+        // mana on effect 1 and inebriate on effect 3, so a single loop that
+        // returned as soon as it saw the restore would never reach the booze and
+        // would hand a bot a drink that gets it drunk anyway. Both have a plain
+        // alternative at the same required level - Sweet Nectar, Green Garden
+        // Tea - so refusing them costs nothing.
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+            if (effect.IsEffect(SPELL_EFFECT_INEBRIATE))
+                return false;
+
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+        {
+            if (!effect.IsEffect())
+                continue;
+
+            if (effect.IsAura(wanted))
+                return true;
+
+            // The holiday "manna" biscuits feed and water through a triggered
+            // spell rather than directly. They are real rations.
+            if (effect.IsEffect(SPELL_EFFECT_TRIGGER_SPELL))
+                if (ConsumableRestores(sSpellMgr->GetSpellInfo(effect.TriggerSpell), wanted, depth + 1))
+                    return true;
+        }
+
+        return false;
+    }
+
+    SpellInfo const* ConsumableUseSpell(ItemTemplate const* proto)
+    {
+        int32 const spellId = proto ? proto->Spells[0].SpellId : 0;
+        return spellId > 0 ? sSpellMgr->GetSpellInfo(uint32(spellId)) : nullptr;
+    }
+
     bool IsFoodTemplate(ItemTemplate const* proto)
     {
         return proto && proto->Class == ITEM_CLASS_CONSUMABLE &&
-            proto->Spells[0].SpellCategory == SPELL_CATEGORY_FOOD;
+            proto->Spells[0].SpellCategory == SPELL_CATEGORY_FOOD &&
+            ConsumableRestores(ConsumableUseSpell(proto), SPELL_AURA_MOD_REGEN);
     }
 
     bool IsDrinkTemplate(ItemTemplate const* proto)
     {
         return proto && proto->Class == ITEM_CLASS_CONSUMABLE &&
-            proto->Spells[0].SpellCategory == SPELL_CATEGORY_DRINK;
+            proto->Spells[0].SpellCategory == SPELL_CATEGORY_DRINK &&
+            ConsumableRestores(ConsumableUseSpell(proto), SPELL_AURA_MOD_POWER_REGEN);
     }
 
     // Whether this class drinks at all. NOT GetMaxPower(POWER_MANA): a druid in
