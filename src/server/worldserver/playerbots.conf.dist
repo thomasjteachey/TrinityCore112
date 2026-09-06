@@ -698,7 +698,7 @@ Playerbot.Pve.ZoneGuardians.PerZone = 0
 #        Default:     10
 #                     0 - (no ceiling)
 #
-Playerbot.Pve.Drifters.MaxPerZone = 10
+Playerbot.Pve.Drifters.MaxPerZone = 15
 
 #    Playerbot.Pve.Drifters.ZoneDwellSeconds
 #        Description: Drifters - bots drawn evenly out of the banded population that

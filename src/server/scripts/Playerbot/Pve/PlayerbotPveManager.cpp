@@ -13073,7 +13073,7 @@ namespace playerbot
         g_PveConfig.drifterCount = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.Count", 0)));
         g_PveConfig.drifterZoneDwellSeconds = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.ZoneDwellSeconds", 10), 0, 3600));
         g_PveConfig.drifterMaxPerZone = uint32(std::max(0,
-            sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.MaxPerZone", 10)));
+            sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.MaxPerZone", 15)));
         g_PveConfig.drifterPerExtraPerson = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.PerExtraPersonInZone", 2), 0, 50));
         g_PveConfig.idleProdAfterMinutes = uint32(std::clamp(
