@@ -1,0 +1,8 @@
+## Interface: 30300
+## Title: Centurion Temporal Tint
+## Notes: Marks Temporal (artifact-quality) gear with a red wash over its icon, wherever an icon is drawn.
+## Author: Centurion
+## Version: 1.0
+## DefaultState: Enabled
+
+CENTURION_TemporalTint.lua
