@@ -386,17 +386,11 @@ namespace
                 dismissed, victim->GetName());
     }
 
-    void ClearBounty(Player* player)
-    {
-        if (!player)
-            return;
-
-        if (s_spellId)
-            player->RemoveAurasDueToSpell(s_spellId);
-
-        std::lock_guard<std::mutex> guard(g_lock);
-        g_stacks.erase(player->GetGUID().GetRawValue());
-    }
+    // ClearBounty is declared in custom_bounty.h at namespace Bounty scope and
+    // defined below, outside this anonymous namespace: the Notoriety turn-in
+    // calls it, so it needs external linkage. Do NOT re-declare it in here -
+    // that names Bounty::{anonymous}::ClearBounty, a different symbol, and the
+    // callers below bind to it and fail at link.
 
     // Everyone who was fighting the victim when they went down.
     //
@@ -657,6 +651,18 @@ namespace
         if (chest.HasLoot())
             chest.Summon();
     }
+}
+
+void ClearBounty(Player* player)
+{
+    if (!player)
+        return;
+
+    if (s_spellId)
+        player->RemoveAurasDueToSpell(s_spellId);
+
+    std::lock_guard<std::mutex> guard(g_lock);
+    g_stacks.erase(player->GetGUID().GetRawValue());
 }
 
 bool Enabled()
