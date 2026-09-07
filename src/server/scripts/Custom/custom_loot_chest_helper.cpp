@@ -21,7 +21,10 @@
 #include "Item.h"
 #include "Log.h"
 #include "GameTime.h"
+#include "Map.h"
 #include "ObjectGuid.h"
+#include "PathGenerator.h"
+#include "Player.h"
 #include <algorithm>
 #include <mutex>
 #include <vector>
@@ -83,12 +86,89 @@ void PlayerChestBuilder::AddItem(Item* item)
     _items.push_back(CreateLootItem(item->GetEntry(), item->GetCount(), item->GetItemSuffixFactor(), item->GetItemRandomPropertyId()));
 }
 
+namespace
+{
+    // How far the chest may be moved from where the player fell to find footing.
+    // A few yards downhill still reads as "where they died"; one that has walked
+    // to the next valley does not, and a chest left awkwardly on a slope beats a
+    // chest nobody can associate with the corpse.
+    constexpr float CHEST_GROUND_MAX_DRIFT = 40.0f;
+
+    // A mid-air death can be a very long way up - fall damage kills at terminal
+    // velocity, not on impact - so the floor search has to reach much further
+    // than DEFAULT_HEIGHT_SEARCH's fifty yards.
+    constexpr float CHEST_GROUND_SEARCH = 500.0f;
+
+    // Where the chest should actually land.
+    //
+    // It used to be summoned at exactly the position the player died at, and
+    // death does not wait for good footing: a fall kills you in mid-air, a cliff
+    // kills you clinging to a face nothing can stand on. The chest stayed where
+    // the body was - hanging in the air, or embedded in a rock wall - and the
+    // gold with it.
+    //
+    // Two steps, because they answer two different questions. GetHeight answers
+    // "where is the floor beneath this point", which fixes mid-air and nothing
+    // else: a cliff face has a perfectly good floor height at every point of it
+    // and none of them can be stood on. The navmesh answers "where is the
+    // nearest place something could actually stand", which is what was asked
+    // for - and it is the same mesh the fleet walks, so a spot it approves of is
+    // a spot a bot can reach and loot.
+    void ResolveChestGround(Player* player, Position& spot)
+    {
+        Map* map = player->GetMap();
+        if (!map)
+            return;
+
+        // A death on a boat, a zeppelin or an elevator is its own problem: the
+        // position travels with the transport, and snapping it to the world
+        // floor would drop the chest into the sea the vessel is crossing. Leave
+        // those exactly where they are rather than making them worse.
+        if (player->GetTransport())
+            return;
+
+        float const startX = spot.GetPositionX();
+        float const startY = spot.GetPositionY();
+        float x = startX;
+        float y = startY;
+        float z = spot.GetPositionZ();
+
+        float const floorZ = map->GetHeight(player->GetPhaseMask(), x, y, z, true, CHEST_GROUND_SEARCH);
+        if (floorZ > INVALID_HEIGHT && floorZ < z)
+            z = floorZ;
+
+        // PathGenerator's nearest-poly search is the part that does the real
+        // work: when the destination is off the mesh it hands back the closest
+        // point that is on it. When mmaps cannot answer - an unbuilt tile, a map
+        // without them - it returns the destination unchanged, which is the
+        // floor position from above, so the mid-air fix survives either way.
+        PathGenerator path(player);
+        path.SetUseStraightPath(true);
+        path.CalculatePath(x, y, z, false);
+
+        G3D::Vector3 const& end = path.GetActualEndPosition();
+        float const driftX = end.x - startX;
+        float const driftY = end.y - startY;
+        if ((driftX * driftX + driftY * driftY) <= CHEST_GROUND_MAX_DRIFT * CHEST_GROUND_MAX_DRIFT)
+        {
+            x = end.x;
+            y = end.y;
+            z = end.z;
+        }
+
+        spot.Relocate(x, y, z, spot.GetOrientation());
+    }
+}
+
 GameObject* PlayerChestBuilder::Summon() const
 {
     if (!_player || !_chestEntry || (_items.empty() && !_money))
         return nullptr;
 
-    GameObject* chest = _player->SummonGameObject(_chestEntry, _player->GetPosition(), QuaternionData(), _despawnTime, GO_SUMMON_TIMED_DESPAWN);
+    Position spot = _player->GetPosition();
+    ResolveChestGround(_player, spot);
+
+    GameObject* chest = _player->SummonGameObject(_chestEntry, spot, QuaternionData(), _despawnTime, GO_SUMMON_TIMED_DESPAWN);
     if (!chest)
     {
         TC_LOG_WARN("playerbots.pve", "CustomLootChests: failed to summon chest {} for player {} ({})", _chestEntry, _player->GetName(), _player->GetGUID().ToString());
