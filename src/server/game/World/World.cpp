@@ -1179,7 +1179,14 @@ void World::LoadConfigSettings(bool reload)
     m_int_configs[CONFIG_QUEST_HIGH_LEVEL_HIDE_DIFF] = sConfigMgr->GetIntDefault("Quests.HighLevelHideDiff", 7);
     if (m_int_configs[CONFIG_QUEST_HIGH_LEVEL_HIDE_DIFF] > MAX_LEVEL)
         m_int_configs[CONFIG_QUEST_HIGH_LEVEL_HIDE_DIFF] = MAX_LEVEL;
-    m_bool_configs[CONFIG_QUEST_IGNORE_RAID] = sConfigMgr->GetBoolDefault("Quests.IgnoreRaid", false);
+    // Default flipped on this fork. Stock refuses every non-raid quest objective
+    // to anybody standing in a raid group - no kill credit, no player-kill
+    // credit, no quest item drops (Player.cpp:18217, 18266, 18521, 26044). That
+    // rule exists to stop forty people trivialising an outdoor quest, which is
+    // not a problem a level-sixty classic realm with a playerbot fleet has; what
+    // it actually does here is silently break questing for anyone who converted
+    // to a raid and forgot, with no message saying why.
+    m_bool_configs[CONFIG_QUEST_IGNORE_RAID] = sConfigMgr->GetBoolDefault("Quests.IgnoreRaid", true);
     m_bool_configs[CONFIG_QUEST_IGNORE_AUTO_ACCEPT] = sConfigMgr->GetBoolDefault("Quests.IgnoreAutoAccept", false);
     m_bool_configs[CONFIG_QUEST_IGNORE_AUTO_COMPLETE] = sConfigMgr->GetBoolDefault("Quests.IgnoreAutoComplete", false);
 

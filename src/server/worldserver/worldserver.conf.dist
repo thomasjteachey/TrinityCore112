@@ -1070,10 +1070,16 @@ Quests.HighLevelHideDiff = 7
 #
 #    Quests.IgnoreRaid
 #        Description: Allow non-raid quests to be completed while in a raid group.
-#        Default:     0 - (Disabled)
-#                     1 - (Enabled)
+#                     Stock refuses EVERY non-raid quest objective to anybody
+#                     standing in a raid: no kill credit, no player-kill credit,
+#                     and quest item drops are suppressed outright - all of it
+#                     silent, with nothing on screen to say why. That rule is
+#                     there to stop forty people trivialising an outdoor quest,
+#                     which is not a problem this realm has.
+#        Default:     1 - (Enabled, this fork)
+#                     0 - (Disabled, stock behaviour)
 
-Quests.IgnoreRaid = 0
+Quests.IgnoreRaid = 1
 
 #
 #    Quests.IgnoreAutoAccept
