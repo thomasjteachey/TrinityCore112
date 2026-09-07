@@ -296,6 +296,59 @@ namespace
         record.ExpiresAt = GameTime::GetGameTime() + std::max<int32>(1, durationMs / IN_MILLISECONDS);
     }
 
+    // Make the registry follow the AURA whenever the two have drifted apart.
+    //
+    // AddStacks writes both together, so they only diverge when something
+    // bypasses it: `.aura 90701` from a GM, a debug tool, or the aura simply
+    // expiring while the registry row sits out its own clock. Before this, any
+    // of those left the player looking at a stack of notoriety that no rule in
+    // the system could see - the fleet did not hunt, the guards did not come,
+    // and the checkpoint debuffs did not arm, because every one of them reads
+    // the registry.
+    //
+    // The aura wins, and that is the right direction: it is the copy the player
+    // can SEE, and a rule that disagrees with what somebody is looking at is the
+    // bug, not the evidence.
+    //
+    // MAP thread with the player in hand, which is what makes reading the aura
+    // map legal here - the world thread must never do this, and that is the
+    // entire reason the registry exists. Throttled to once a second per player
+    // because OnUpdate runs every tick for everyone on the realm.
+    //
+    // Deliberately NOT gated on IsBountyContext or War Mode. Those decide
+    // whether a bounty may be EARNED; this only mirrors one that already exists,
+    // and refusing to mirror it is how a GM ends up staring at five stacks that
+    // do nothing.
+    void ReconcileRegistryWithAura(Player* player)
+    {
+        static std::unordered_map<uint64, time_t> s_nextReconcileAt;
+        uint64 const key = player->GetGUID().GetRawValue();
+        time_t const now = GameTime::GetGameTime();
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            auto const itr = s_nextReconcileAt.find(key);
+            if (itr != s_nextReconcileAt.end() && now < itr->second)
+                return;
+
+            s_nextReconcileAt[key] = now + 1;
+        }
+
+        // Any caster, not just self: a GM applying it to somebody else should
+        // still count, and .aura's self-cast satisfies this either way.
+        Aura const* aura = s_spellId ? player->GetAura(s_spellId) : nullptr;
+        uint32 const onAura = aura ? aura->GetStackAmount() : 0u;
+
+        if (onAura == GetStacks(player->GetGUID()))
+            return;
+
+        // Zero erases the row, which is the aura-expired case.
+        WriteRegistry(player, onAura, aura ? aura->GetDuration() : 0);
+
+        TC_LOG_DEBUG("playerbots.hardcore",
+            "Bounty: registry for {} resynced to the aura at {} stack(s).",
+            player->GetName(), onAura);
+    }
+
     // Put the aura on somebody, or push the one they already carry up a step
     // and start its fifteen minutes again.
     void AddStacks(Player* killer, uint32 count)
@@ -860,6 +913,10 @@ public:
     {
         if (s_enabled && player)
         {
+            // FIRST, so everything below in this same tick reads a registry that
+            // already agrees with the aura the player is wearing.
+            ReconcileRegistryWithAura(player);
+
             SummonGuardsFor(player);
             // The checkpoint debuffs read the registry rather than being pushed
             // from the places that write it, so this is where they resolve.
