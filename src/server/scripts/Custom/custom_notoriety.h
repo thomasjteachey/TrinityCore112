@@ -92,8 +92,14 @@ namespace Notoriety
     // Void it, loudly, wherever the player is standing. Called at the corpse.
     void VoidContract(Player* player, char const* reason);
 
-    // Re-send the map marker and the bearing.
-    void SendRendezvousPoi(Player* player);
+    // Re-send the map marker and the bearing. Quiet omits the spoken bearing,
+    // for the keep-alive that runs behind the player's back.
+    void SendRendezvousPoi(Player* player, bool quiet = false);
+
+    // Push the marker again if the client's copy is close to timing out. A
+    // gossip POI carries an eight-minute fuse the client re-arms only on a fresh
+    // packet, which is shorter than the walk to a rendezvous.
+    void RefreshRendezvousPoi(Player* player);
 
     // Passage back to the registrar who wrote the contract, owed the moment the
     // page is sold. Held open for fifteen minutes and retried, so being dead, in

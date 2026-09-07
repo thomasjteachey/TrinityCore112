@@ -3678,6 +3678,15 @@ Centurion.Notoriety.MaxTiers              = 7
 Centurion.Notoriety.RendezvousMinYards    = 500.0
 Centurion.Notoriety.RendezvousMaxYards    = 900.0
 
+#    How often the map marker is pushed to the holder again while they walk.
+#    The client puts an EIGHT MINUTE fuse on a gossip point of interest and
+#    re-arms it only when another packet arrives; nothing else refreshes it,
+#    and when it burns down the mark is erased. A five-to-nine-hundred yard
+#    walk with fights on the way outlasts that, so the mark used to die
+#    mid-journey with the player still far outside the range the fence appears
+#    at. Must stay under 480 with room for a late tick. Clamped to 30-400.
+Centurion.Notoriety.PoiRefreshSeconds     = 240
+
 #    Free to the player, and deliberately: a rendezvous the map stranded them
 #    behind is a support ticket otherwise.
 Centurion.Notoriety.MaxRerolls            = 2

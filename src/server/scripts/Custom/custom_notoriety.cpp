@@ -103,6 +103,10 @@ namespace
     float s_minYards = 500.0f;
     float s_maxYards = 900.0f;
     float s_fenceAppearYards = 150.0f;
+    // How often the map marker is pushed again while the holder is still walking.
+    // Must stay under the client's own eight-minute fuse on a gossip POI - see
+    // RefreshRendezvousPoi - with room for a tick that ran late.
+    uint32 s_poiRefreshSeconds = 240;
     bool s_voidOnDeath = true;
     // Selling the page settles the debt. The payout is computed from the banked
     // peak before this runs, so clearing costs the seller nothing.
@@ -136,6 +140,9 @@ namespace
         float OriginZ = 0.0f;
         float OriginO = 0.0f;
         bool HasOrigin = false;
+        // When the map marker was last pushed to this holder's client. Not
+        // persisted: a relog re-sends it anyway. See RefreshRendezvousPoi.
+        time_t PoiSentAt = 0;
     };
 
     std::mutex g_lock;
@@ -207,6 +214,10 @@ namespace
             s_checkpointStacks.end());
         s_fenceAppearYards = std::max(20.0f,
             sConfigMgr->GetFloatDefault("Centurion.Notoriety.FenceAppearYards", 150.0f));
+        // Clamped well below 480: at the fuse itself the mark would blink out
+        // between the expiry frame and the next tick.
+        s_poiRefreshSeconds = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Centurion.Notoriety.PoiRefreshSeconds", 240), 30, 400));
         s_minYards = std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Notoriety.RendezvousMinYards", 500.0f));
         s_maxYards = std::max(s_minYards, sConfigMgr->GetFloatDefault("Centurion.Notoriety.RendezvousMaxYards", 900.0f));
         s_voidOnDeath = sConfigMgr->GetBoolDefault("Centurion.Notoriety.VoidOnDeath", true);
@@ -381,15 +392,27 @@ namespace Notoriety
         return itr == g_cooldownUntil.end() || itr->second <= GameTime::GetGameTime();
     }
 
-    void SendRendezvousPoi(Player* player)
+    // Push the mark to the client. Quiet skips the spoken bearing, for the
+    // keep-alive that runs behind the player's back.
+    //
+    // The map guard is not paranoia: SMSG_GOSSIP_POI carries no map id, so the
+    // client stamps the record with whatever map the player is standing on when
+    // it arrives, and its landmark rebuild then filters on that stamp. Sent from
+    // the wrong continent this plants the mark at those raw coordinates on the
+    // CURRENT map and reports a nonsense distance; sent during a transfer it
+    // stamps the wrong map and the pin silently never draws again.
+    void SendRendezvousPoi(Player* player, bool quiet)
     {
-        if (!player)
+        if (!player || !player->GetSession())
             return;
 
         uint32 mapId = 0;
         uint32 zoneId = 0;
         Position spot;
         if (!GetRendezvous(player->GetGUID(), mapId, zoneId, spot))
+            return;
+
+        if (player->GetMapId() != mapId)
             return;
 
         // Hand-built because PlayerMenu::SendPointOfInterest can only send a row
@@ -404,9 +427,57 @@ namespace Notoriety
         data << "The Quiet Man";
         player->GetSession()->SendPacket(&data);
 
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            if (auto itr = g_contracts.find(player->GetGUID().GetRawValue()); itr != g_contracts.end())
+                itr->second.PoiSentAt = GameTime::GetGameTime();
+        }
+
+        if (quiet)
+            return;
+
         float const distance = player->GetExactDist2d(spot.GetPositionX(), spot.GetPositionY());
         ChatHandler(player->GetSession()).PSendSysMessage(
             "The meeting is roughly %.0f paces off. Look for the mark on your map.", distance);
+    }
+
+    // Keep the mark alive on the way out.
+    //
+    // The client puts an EIGHT MINUTE fuse on a gossip POI and then forgets it:
+    // the packet handler stamps time()+480 into a global (WoW.exe 0x007F48D9
+    // add eax,0x1E0 -> 0x007F48DE), and the minimap paint path checks it every
+    // rendered frame (0x007F5BD2) and zeroes the marker's coordinates when it
+    // passes. Nothing re-arms it but another packet. A rendezvous is five to nine
+    // hundred yards out and the walk there is a fight, so eight minutes is an
+    // ordinary trip - and the mark dies mid-journey with the player still far
+    // outside the range the fence appears at. That is the marker "disappearing as
+    // I get close": not distance, elapsed time, which correlates with it.
+    //
+    // Re-sending is free. The client stores a gossip POI in ONE fixed slot - the
+    // handler at 0x0058A870 passes a literal index (push 1 at 0x0058A8DE) to the
+    // single store site 0x007F4870 - so a repeat REPLACES rather than stacking,
+    // and GetNumMapLandmarks can only ever rise by one because of it.
+    //
+    // Not while the fence is already standing. The client wipes the mark by
+    // itself within ten yards (0x007F64CA compares a squared 2D distance against
+    // 100.0f), which is correct behaviour on arrival, and re-sending there would
+    // resurrect a pin the player has walked to.
+    void RefreshRendezvousPoi(Player* player)
+    {
+        if (!player)
+            return;
+
+        time_t const now = GameTime::GetGameTime();
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            auto const itr = g_contracts.find(player->GetGUID().GetRawValue());
+            if (itr == g_contracts.end())
+                return;
+            if (itr->second.PoiSentAt && now < itr->second.PoiSentAt + time_t(s_poiRefreshSeconds))
+                return;
+        }
+
+        SendRendezvousPoi(player, /*quiet*/ true);
     }
 
     bool IssueContract(Player* player, WorldObject const* origin)
@@ -659,6 +730,10 @@ namespace Notoriety
         }
 
         float const distance = player->GetExactDist2d(spot.GetPositionX(), spot.GetPositionY());
+
+        // Still walking: keep the mark from timing out under them.
+        if (distance > s_fenceAppearYards)
+            RefreshRendezvousPoi(player);
 
         ObjectGuid existing;
         {
@@ -1074,9 +1149,22 @@ public:
         // be teleported into. Treat the origin as absent instead.
         contract.HasOrigin = contract.OriginX != 0.0f || contract.OriginY != 0.0f;
 
-        std::lock_guard<std::mutex> guard(g_lock);
-        g_contracts[player->GetGUID().GetRawValue()] = contract;
-        g_anyContract.store(true, std::memory_order_relaxed);
+        // Scoped, because SendRendezvousPoi below takes g_lock itself.
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            g_contracts[player->GetGUID().GetRawValue()] = contract;
+            g_anyContract.store(true, std::memory_order_relaxed);
+        }
+
+        // The contract came back; the marker did not. Nothing re-sent it on
+        // login, so every relog left a live contract, a quest still reading
+        // "Find the Quiet Man", and a blank map - with no way back to it but
+        // walking to a Grix who might be nine hundred yards behind you.
+        //
+        // Spoken rather than quiet: somebody who has just logged in has no idea
+        // how far off the meeting is, and the bearing is half of what the mark
+        // is for.
+        Notoriety::SendRendezvousPoi(player);
     }
 
     void OnUpdate(Player* player, uint32 /*diff*/) override
