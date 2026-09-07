@@ -974,7 +974,19 @@ void WorldSession::BuildPartyMemberStatsChangedPacket(Player* player, WorldPacke
             {
                 AuraApplication const* aurApp = player->GetVisibleAura(i);
                 *data << uint32(aurApp ? aurApp->GetBase()->GetId() : 0);
-                *data << uint8(1);
+                // The REAL flags, as the full stats packet below already sends
+                // (see the GROUP_UPDATE_FLAG_AURAS block in
+                // BuildPartyMemberStatsFull). This used to be a hardcoded 1,
+                // which is AFLAG_EFF_INDEX_0 - "effect zero exists" - and
+                // carries neither AFLAG_POSITIVE nor AFLAG_NEGATIVE, so the
+                // client fell back to drawing every aura on a party member as a
+                // BUFF.
+                //
+                // It looked intermittent because the two packets disagreed: the
+                // full one is correct and is sent when the member first comes
+                // into view, and then the first incremental update after that
+                // quietly moved their debuffs into the buff row.
+                *data << uint8(aurApp ? aurApp->GetFlags() : 0);
             }
         }
     }
