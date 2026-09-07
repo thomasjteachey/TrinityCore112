@@ -4425,7 +4425,21 @@ namespace
 
         // Gameobject objectives and gather nodes first: they sit inside the
         // grind area, so finishing them costs almost nothing.
-        if (!guardian && ((cfg.questsEnabled && BotHasIncompleteQuest(bot)) || cfg.professionsEnabled))
+        //
+        // Unless there is nowhere to put what they hold, and then this branch is
+        // a trap rather than a shortcut. It RETURNS on a hit, so everything below
+        // it - repair, supplies, and the vendor run that is the only thing which
+        // can empty a bag - is unreachable while any node sits within 120 yards.
+        // A bot at 80/80 in an ore field therefore claims a node, walks to it,
+        // bails silently at UseQuestGameObject's own CountFreeBagSlots < 2, marks
+        // it for two minutes, and claims the next one. Forever. That is a bot
+        // seen running up to an iron node, not mining it, and leaving - and it is
+        // also why its supply runs only ever fired in the moments when no node
+        // happened to be in range.
+        //
+        // Same threshold the open itself uses, so the two cannot disagree.
+        if (!guardian && CountFreeBagSlots(bot) >= 2 &&
+            ((cfg.questsEnabled && BotHasIncompleteQuest(bot)) || cfg.professionsEnabled))
         {
             if (GameObject* questGo = FindNearestQuestGameObject(bot, state, 120.0f))
             {
@@ -10854,8 +10868,15 @@ namespace
         //
         // The remote path has always screened this (CountFreeBagSlots >= 2 when
         // it builds its candidate list); the walked path never did.
-        if (CountFreeBagSlots(bot) < 2)
+        if (uint32 const freeSlots = CountFreeBagSlots(bot); freeSlots < 2)
         {
+            // Said out loud. This bail is why a bot walks to a node, does
+            // nothing and leaves, and until now it produced not one line in a
+            // 2.7 GB log - the failure had to be caught by a person watching it
+            // happen. MarkRecentErrandTarget holds the node for two minutes, so
+            // this cannot repeat faster than that per node.
+            TC_LOG_INFO("playerbots.pve", "Bot {} cannot open {} - only {} free bag slot(s).",
+                bot->GetName(), go->GetEntry(), freeSlots);
             MarkRecentErrandTarget(state, go->GetGUID());
             return false;
         }
@@ -13379,6 +13400,7 @@ namespace
             << " recovery=" << (NeedsRecovery(bot, g_PveConfig) ? "YES" : "no")
             << " resting=" << (IsRestingNow(bot, state) ? "yes" : "no")
             << " free_slots=" << CountFreeBagSlots(bot)
+            << (CountFreeBagSlots(bot) < 2 ? " FULL-CANNOT-GATHER" : "")
             << " pending_loot=" << (state.pendingLootGuid.IsEmpty() ? "no" : "yes")
             << " errand=" << ErrandKindName(state.errandKind)
             << " opening=" << (state.chestOpeningGuid.IsEmpty() ? "no" : "yes");
