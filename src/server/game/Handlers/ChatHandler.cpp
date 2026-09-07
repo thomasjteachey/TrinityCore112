@@ -68,8 +68,21 @@ bool IsChromiWhisperTarget(std::string const& targetName)
 
 Player* GetOrCreateChromiWhisperPlayer()
 {
-    static std::unique_ptr<WorldSession> hiddenSession;
-    static std::unique_ptr<Player> hiddenChromi;
+    // Deliberately never destroyed.
+    //
+    // This is a process-lifetime fake Player that exists only to be a whisper source.
+    // Player::Create leaves default auras applied and ~Unit asserts m_appliedAuras
+    // empty (Unit.cpp:561), so letting a static unique_ptr destroy it during STATIC
+    // teardown aborted the process on exit - on any uptime where somebody had actually
+    // whispered Chromie, since this is created lazily on the first whisper. By that
+    // point World, the aura machinery and ObjectAccessor are already gone, and this
+    // object is still registered with ObjectAccessor below, so there is nothing left
+    // to unregister it from either.
+    //
+    // There is exactly one for the life of the process and the OS reclaims it at exit.
+    // Same trade custom_game_lobby.cpp makes for its manager, and for the same reason.
+    static WorldSession* hiddenSession = nullptr;
+    static Player* hiddenChromi = nullptr;
 
     for (std::string_view chromiName : CHROMI_WHISPER_NAMES)
         if (Player* chromi = ObjectAccessor::FindConnectedPlayerByName(chromiName))
@@ -77,10 +90,10 @@ Player* GetOrCreateChromiWhisperPlayer()
 
     if (!hiddenChromi)
     {
-        hiddenSession = std::make_unique<WorldSession>(0, "chromie_hidden", std::shared_ptr<WorldSocket>(), SEC_GAMEMASTER, EXPANSION_WRATH_OF_THE_LICH_KING,
+        hiddenSession = new WorldSession(0, "chromie_hidden", std::shared_ptr<WorldSocket>(), SEC_GAMEMASTER, EXPANSION_WRATH_OF_THE_LICH_KING,
             0, Minutes(0), DEFAULT_LOCALE, 0, false);
 
-        hiddenChromi = std::make_unique<Player>(hiddenSession.get());
+        hiddenChromi = new Player(hiddenSession);
         hiddenChromi->GetMotionMaster()->Initialize();
 
         CharacterCreateInfo createInfo;
@@ -97,8 +110,13 @@ Player* GetOrCreateChromiWhisperPlayer()
 
         if (!hiddenChromi->Create(sObjectMgr->GetGenerator<HighGuid::Player>().Generate(), &createInfo))
         {
-            hiddenChromi.reset();
-            hiddenSession.reset();
+            // Runtime, not teardown, so the world is still up and this is the one
+            // place it is safe to actually destroy it.
+            hiddenChromi->CleanupsBeforeDelete();
+            delete hiddenChromi;
+            hiddenChromi = nullptr;
+            delete hiddenSession;
+            hiddenSession = nullptr;
             return nullptr;
         }
 
@@ -109,11 +127,11 @@ Player* GetOrCreateChromiWhisperPlayer()
         hiddenChromi->SetGameMaster(true);
         hiddenChromi->SetAcceptWhispers(true);
         hiddenChromi->SetGMVisible(false);
-        hiddenSession->SetPlayer(hiddenChromi.get());
-        ObjectAccessor::AddObject(hiddenChromi.get());
+        hiddenSession->SetPlayer(hiddenChromi);
+        ObjectAccessor::AddObject(hiddenChromi);
     }
 
-    return hiddenChromi.get();
+    return hiddenChromi;
 }
 
 std::string_view GetRandomChromiCatFact()
