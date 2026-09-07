@@ -74,11 +74,12 @@ namespace
     // with no name, so this stays off until the row ships.
     uint32 s_checkpointBase = 0;
 
-    // Copper per level to have the ledger amended. Deliberately priced like a
-    // repair bill rather than like a punishment: the point is a way OUT of a
-    // spiral for somebody who has stopped enjoying being hunted, not a gold
-    // sink. 2500 puts it at 15 gold for a sixty and 5 for a twenty.
-    uint32 s_bribePerLevel = 2500;
+    // Copper to have the ledger amended. FLAT, not scaled by level: the point is
+    // a way OUT of a spiral for somebody who has stopped enjoying being hunted,
+    // and a price that climbs with level charges the most to exactly the players
+    // who accumulate notoriety fastest. Three gold is the whole idea - it should
+    // register as a decision and not as a bill.
+    uint32 s_bribeCopper = 3 * GOLD;
 
     // The thresholds themselves, and NOT simply every fifth stack.
     //
@@ -159,7 +160,7 @@ namespace
         s_cooldownSeconds = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.CooldownSeconds", 0)));
         s_maxRerolls = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.MaxRerolls", 2), 0, 20));
         s_checkpointBase = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.CheckpointAuraBase", 0)));
-        s_bribePerLevel = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.BribeCopperPerLevel", 2500)));
+        s_bribeCopper = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.BribeCopper", 3 * GOLD)));
 
         // Entries are "stacks:spellId", and the pairing is EXPLICIT for a reason
         // learned the moment a rung had to be inserted in the middle.
@@ -614,10 +615,10 @@ namespace Notoriety
 
     uint32 BribeCost(Player const* player)
     {
-        if (!s_enabled || !s_bribePerLevel || !player || !Bounty::GetStacks(player))
+        if (!s_enabled || !s_bribeCopper || !player || !Bounty::GetStacks(player))
             return 0;
 
-        return s_bribePerLevel * uint32(player->GetLevel());
+        return s_bribeCopper;
     }
 
     // Buy your way out of the ledger.

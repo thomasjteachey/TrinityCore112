@@ -3718,18 +3718,21 @@ Centurion.Notoriety.BotsSeeThroughStealth = 1
 #        the client has no Spell.dbc row for renders as a blank icon with no name
 #        and no tooltip. Do not set this until the rows are published in the client
 #        patch, and set it back to 0 if you ever roll that patch back.
-#    Centurion.Notoriety.BribeCopperPerLevel
-#        Copper PER LEVEL for Grix to strike your name out of the ledger: clears
-#        every stack, and burns any contract you are carrying with it (the page
-#        has your name on it, and you just paid to have the name removed).
-#        Priced like a repair bill on purpose. This is a door out for somebody who
-#        has stopped enjoying being hunted, not a gold sink - 2500 is 15 gold at
-#        sixty, 5 at twenty. 0 removes the option from Grix's menu entirely.
+#    Centurion.Notoriety.BribeCopper
+#        Flat copper for Grix to strike your name out of the ledger: clears every
+#        stack, and burns any contract you are carrying with it (the page has your
+#        name on it, and you just paid to have the name removed).
+#
+#        FLAT, not scaled by level, on purpose - a price that climbs with level
+#        charges the most to exactly the players who accumulate notoriety fastest.
+#        Three gold should register as a decision and not as a bill. This is a
+#        door out for somebody who has stopped enjoying being hunted, not a gold
+#        sink. 0 removes the option from Grix's menu entirely.
 #
 #        It is a deliberate hole in "a bounty cannot be walked off", which exists
-#        to stop War Mode being a free escape hatch. Money is not free, is paid at
-#        the moment of use, and does not scale away.
-Centurion.Notoriety.BribeCopperPerLevel   = 2500
+#        to stop War Mode being a free escape hatch. Money is not free and is paid
+#        at the moment of use.
+Centurion.Notoriety.BribeCopper           = 30000
 
 Centurion.Notoriety.CheckpointAuraBase    = 0
 Centurion.Notoriety.CheckpointStacks      = "5:90710,10:90711,15:90712,20:90717,25:90713,30:90714,40:90715,50:90716"
