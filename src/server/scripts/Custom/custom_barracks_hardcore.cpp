@@ -82,6 +82,25 @@
 
 namespace BarracksHardcore
 {
+    // Copper as a player reads it: "12g 40s", with zero parts left out, because
+    // "12g 0s 0c" on a gossip row looks like a bug rather than a price.
+    std::string FormatMoney(uint32 copper)
+    {
+        uint32 const gold = copper / GOLD;
+        uint32 const silver = (copper % GOLD) / SILVER;
+        uint32 const rest = copper % SILVER;
+
+        std::string out;
+        if (gold)
+            out = Trinity::StringFormat("{}g", gold);
+        if (silver)
+            out += Trinity::StringFormat("{}{}s", out.empty() ? "" : " ", silver);
+        if (rest || out.empty())
+            out += Trinity::StringFormat("{}{}c", out.empty() ? "" : " ", rest);
+
+        return out;
+    }
+
     bool s_enabled = false;
     uint32 s_chestEntry = 0;
     uint32 s_chestDespawnSeconds = 600;
@@ -2160,6 +2179,14 @@ public:
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, "The mark has moved.", GOSSIP_SENDER_MAIN, 8);
             }
 
+            // The way out, priced like a repair bill. Only shown when there is
+            // something to erase, and the price is in the label so nobody clicks
+            // it to find out.
+            if (uint32 const bribe = Notoriety::BribeCost(player))
+                AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG,
+                    Trinity::StringFormat("Strike my name from the ledger. ({} - this also burns any contract I carry.)",
+                        FormatMoney(bribe)), GOSSIP_SENDER_MAIN, 9);
+
             // THE quest row. This hook returns true on every path, and
             // NPCHandler only calls PrepareGossipMenu - and so PrepareQuestMenu -
             // when it returns FALSE. Without this line the creature_queststarter
@@ -2199,6 +2226,17 @@ public:
                     me->Whisper("Then he has moved. Here is where he stands now.", LANG_UNIVERSAL, player);
                 else
                     me->Whisper("He has moved for you twice already. Walk it.", LANG_UNIVERSAL, player);
+                return true;
+            }
+            if (action == 9)
+            {
+                if (Notoriety::AcceptBribe(player))
+                    me->Whisper("Ink is cheap and memory is dear. Your page is blank - "
+                        "and whoever is still walking towards you will find nothing worth the trip.",
+                        LANG_UNIVERSAL, player);
+                else
+                    me->Whisper("You have not got it. Come back with the coin, or outlive the price.",
+                        LANG_UNIVERSAL, player);
                 return true;
             }
 

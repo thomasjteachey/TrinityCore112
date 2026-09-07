@@ -113,6 +113,15 @@ namespace Notoriety
         uint8 Level = 0;
     };
 
+    // What Grix charges to strike a name out of the ledger, in copper, for this
+    // player at this level. Zero when the bribe is switched off or there is
+    // nothing to erase.
+    uint32 BribeCost(Player const* player);
+
+    // Take the money and clear the record. False if they cannot afford it or
+    // have nothing to pay for, in which case nothing was taken.
+    bool AcceptBribe(Player* player);
+
     // The ladder of per-checkpoint debuffs: one named aura per rung at which
     // something in the bounty engine actually ARMS, applied as the count climbs
     // past it and removed as it falls back, so a player can read what has been

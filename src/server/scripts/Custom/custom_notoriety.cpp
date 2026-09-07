@@ -74,6 +74,12 @@ namespace
     // with no name, so this stays off until the row ships.
     uint32 s_checkpointBase = 0;
 
+    // Copper per level to have the ledger amended. Deliberately priced like a
+    // repair bill rather than like a punishment: the point is a way OUT of a
+    // spiral for somebody who has stopped enjoying being hunted, not a gold
+    // sink. 2500 puts it at 15 gold for a sixty and 5 for a twenty.
+    uint32 s_bribePerLevel = 2500;
+
     // The thresholds themselves, and NOT simply every fifth stack.
     //
     // A debuff is a promise that something changed. Twenty, thirty-five and
@@ -153,6 +159,7 @@ namespace
         s_cooldownSeconds = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.CooldownSeconds", 0)));
         s_maxRerolls = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.MaxRerolls", 2), 0, 20));
         s_checkpointBase = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.CheckpointAuraBase", 0)));
+        s_bribePerLevel = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.BribeCopperPerLevel", 2500)));
 
         // Entries are "stacks:spellId", and the pairing is EXPLICIT for a reason
         // learned the moment a rung had to be inserted in the middle.
@@ -603,6 +610,48 @@ namespace Notoriety
 
         if (distance > s_fenceAppearYards * 2.0f)
             DespawnFence(player);
+    }
+
+    uint32 BribeCost(Player const* player)
+    {
+        if (!s_enabled || !s_bribePerLevel || !player || !Bounty::GetStacks(player))
+            return 0;
+
+        return s_bribePerLevel * uint32(player->GetLevel());
+    }
+
+    // Buy your way out of the ledger.
+    //
+    // This is a deliberate hole in the rule the flagger states one function
+    // away - "a bounty cannot be walked off, the debt has to lapse on its own".
+    // That rule exists to stop War Mode being an escape hatch: earn a price,
+    // stroll back, disarm, and stay untouchable while hunters are still on the
+    // way. Money is a different thing from a free toggle. It is a real cost paid
+    // at the moment of use, it does not scale away, and somebody who has decided
+    // they are done being hunted should have a door that is not "log out".
+    //
+    // The contract goes with it, and that is the honest reading rather than a
+    // penalty: the page has your name on it, and you have just paid to have the
+    // name struck out. Selling a contract for notoriety you no longer carry
+    // would be selling a blank sheet.
+    bool AcceptBribe(Player* player)
+    {
+        uint32 const cost = BribeCost(player);
+        if (!cost || player->GetMoney() < cost)
+            return false;
+
+        player->ModifyMoney(-int64(cost));
+
+        // Order matters: void first, because VoidContract refuses once there is
+        // no live contract and ClearBounty is what the fence's own turn-in uses
+        // to settle. Doing it the other way round leaves the contract standing.
+        VoidContract(player, "You paid for the page. It is ash now.");
+        Bounty::ClearBounty(player);
+
+        TC_LOG_INFO("playerbots.hardcore",
+            "Notoriety: {} (level {}) bribed the ledger clean for {}c.",
+            player->GetName(), player->GetLevel(), cost);
+        return true;
     }
 
     // Keep the ladder of checkpoint debuffs in step with the notoriety count.
