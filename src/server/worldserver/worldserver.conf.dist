@@ -3550,6 +3550,17 @@ Centurion.Bounty.IgnoreAggroBudgetStacks = 40
 #                     0 - (that tier disabled)
 #
 Centurion.Bounty.RelentlessStacks = 10
+
+#    Centurion.Bounty.CallForHelpStacks
+#        At or above this, a playerbot too weak to start a fight with the carrier
+#        stops keeping quiet: it shouts on sight, and a bot that CAN win drops what
+#        it is doing and comes - teleported in from beyond CallForHelpMinRescueYards,
+#        walking if it is nearer. Read ONCE at first use, so a .reload config will
+#        not move it.
+#        Twenty rather than ten, so it does not arm in the same breath as
+#        RelentlessStacks; it is its own rung of the ladder and carries spell 90717
+#        "Word Gets Around" as its debuff.
+Centurion.Bounty.CallForHelpStacks = 20
 Centurion.Bounty.RelentlessIntervalSeconds = 30
 #    Centurion.Bounty.PairUpStacks - at or above this many stacks the relentless
 #    dispatch sends TWO at a time instead of one. Clamped against
@@ -3678,23 +3689,28 @@ Centurion.Notoriety.BotsSeeThroughStealth = 1
 #        removed as it decays back, so a player can read what has been turned on
 #        against them off their own debuff bar.
 #
-#        CheckpointStacks is the list of those counts, and the Nth entry (from 0)
-#        uses spell id CheckpointAuraBase + N - so the ids must be a contiguous
-#        block as long as the list. The list is sorted and de-duplicated on load,
-#        because an entry out of order would point two rungs at one spell.
+#        CheckpointStacks pairs each count with the spell that announces it, as
+#        "stacks:spellId". The pairing is explicit on purpose: it used to be bare
+#        counts with the id derived from position, and inserting a rung in the
+#        middle then slid every debuff below it onto the wrong spell - text that
+#        was correct yesterday, in a client patch already published. A bare number
+#        still means CheckpointAuraBase + index, so old configs keep working; it
+#        is only unsafe to insert into one.
 #
-#        The default list is NOT every fifth stack, on purpose. These are exactly
-#        the thresholds the bounty engine fires on:
+#        The list is NOT every fifth stack, on purpose. These are exactly the
+#        thresholds the bounty engine fires on:
 #            5  zone guardians will chase you for attacking people below you
 #            10 the fleet stops waiting and dispatches on a clock
 #            15 hunters arrive in pairs, out-of-band bots are levied into your
 #               zone, the registrar will write a contract, and every bot in the
 #               zone sees through stealth
+#            20 bots too weak to fight you shout, and one that can win is
+#               teleported in (Centurion.Bounty.CallForHelpStacks)
 #            25 the veteran pool becomes eligible and preferred
 #            30 the realm sends Centurion Guards
 #            40 the cap on how many may be on you at once stops applying
 #            50 the battleground-only fleet is recruited into the open world
-#        20, 35 and 45 arm nothing - the payout tier steps and the scalars keep
+#        35 and 45 arm nothing - the payout tier steps and the scalars keep
 #        sliding, as they did on the stack before - so they get no icon. One
 #        filler debuff and the player stops reading the rest.
 #
@@ -3703,7 +3719,7 @@ Centurion.Notoriety.BotsSeeThroughStealth = 1
 #        and no tooltip. Do not set this until the rows are published in the client
 #        patch, and set it back to 0 if you ever roll that patch back.
 Centurion.Notoriety.CheckpointAuraBase    = 0
-Centurion.Notoriety.CheckpointStacks      = "5,10,15,25,30,40,50"
+Centurion.Notoriety.CheckpointStacks      = "5:90710,10:90711,15:90712,20:90717,25:90713,30:90714,40:90715,50:90716"
 
 #    The payout. Money is flat copper; experience is counted in BUBBLES of the
 #    seller's own next level, so it stays meaningful at 20 and at 60.

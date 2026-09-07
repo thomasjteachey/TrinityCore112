@@ -86,7 +86,8 @@ namespace
     // engine actually fires. Kept as config rather than derived because the
     // thresholds live in a different translation unit's statics, and a list that
     // silently disagrees with them is worse than one somebody has to update.
-    std::vector<uint32> s_checkpointStacks;
+    // stack count -> the spell id that announces it.
+    std::vector<std::pair<uint32, uint32>> s_checkpointStacks;
 
     // Last stack count each player's checkpoint auras were synced against.
     // SyncCheckpointAuras is called from the per-tick player update, so the
@@ -153,23 +154,48 @@ namespace
         s_maxRerolls = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.MaxRerolls", 2), 0, 20));
         s_checkpointBase = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.CheckpointAuraBase", 0)));
 
-        // Sorted ascending and de-duplicated, because the id a rung uses is its
-        // INDEX in this list: an unsorted or repeated entry would quietly point
-        // two rungs at one spell and leave another unused.
+        // Entries are "stacks:spellId", and the pairing is EXPLICIT for a reason
+        // learned the moment a rung had to be inserted in the middle.
+        //
+        // This list used to be bare stack counts with the id derived from the
+        // position - rung N used base+N. That is fine until a new threshold
+        // appears between two existing ones: adding 20 to "5,10,15,25,..." slides
+        // 25 onto the spell that says "Referred Upward", 30 onto 25's, and every
+        // debuff below the insertion point starts lying about what armed. The
+        // ids are already published in a client patch, so renumbering them means
+        // reissuing the whole patch to fix text that was correct yesterday.
+        //
+        // A bare number is still accepted and still means base+index, so an old
+        // config keeps working; it is only unsafe to INSERT into one.
         s_checkpointStacks.clear();
         {
             std::stringstream stream(sConfigMgr->GetStringDefault(
-                "Centurion.Notoriety.CheckpointStacks", "5,10,15,25,30,40,50"));
+                "Centurion.Notoriety.CheckpointStacks",
+                "5:90710,10:90711,15:90712,20:90717,25:90713,30:90714,40:90715,50:90716"));
             std::string token;
+            uint32 index = 0;
             while (std::getline(stream, token, ','))
             {
+                size_t const colon = token.find(':');
                 uint32 const stacks = uint32(std::strtoul(token.c_str(), nullptr, 10));
-                if (stacks)
-                    s_checkpointStacks.push_back(stacks);
+                uint32 const spellId = colon == std::string::npos
+                    ? s_checkpointBase + index
+                    : uint32(std::strtoul(token.c_str() + colon + 1, nullptr, 10));
+
+                if (stacks && spellId)
+                    s_checkpointStacks.push_back({ stacks, spellId });
+
+                ++index;
             }
         }
-        std::sort(s_checkpointStacks.begin(), s_checkpointStacks.end());
-        s_checkpointStacks.erase(std::unique(s_checkpointStacks.begin(), s_checkpointStacks.end()),
+
+        // Sorted by stack count so the ladder is walked in order, and
+        // de-duplicated on the stack count so two entries cannot fight over one
+        // rung.
+        std::sort(s_checkpointStacks.begin(), s_checkpointStacks.end(),
+            [](auto const& l, auto const& r) { return l.first < r.first; });
+        s_checkpointStacks.erase(std::unique(s_checkpointStacks.begin(), s_checkpointStacks.end(),
+            [](auto const& l, auto const& r) { return l.first == r.first; }),
             s_checkpointStacks.end());
         s_fenceAppearYards = std::max(20.0f,
             sConfigMgr->GetFloatDefault("Centurion.Notoriety.FenceAppearYards", 150.0f));
@@ -605,10 +631,8 @@ namespace Notoriety
             g_checkpointSynced[key] = stacks;
         }
 
-        for (size_t index = 0; index < s_checkpointStacks.size(); ++index)
+        for (auto const& [rung, spellId] : s_checkpointStacks)
         {
-            uint32 const rung = s_checkpointStacks[index];
-            uint32 const spellId = s_checkpointBase + uint32(index);
 
             if (stacks >= rung)
             {

@@ -8946,8 +8946,12 @@ namespace
     void CallForHelpAgainstBounties(std::vector<HumanSpot> const& spots,
         std::vector<Player*> const& proddableBots)
     {
+        // Twenty, and it is a rung of the notoriety ladder in its own right -
+        // spell 90717 "Word Gets Around" is the debuff that announces it. It used
+        // to sit at ten, on top of RelentlessStacks, where two separate
+        // escalations arming at once made neither of them legible.
         static uint32 const minStacks = uint32(std::max(1,
-            sConfigMgr->GetIntDefault("Centurion.Bounty.CallForHelpStacks", 10)));
+            sConfigMgr->GetIntDefault("Centurion.Bounty.CallForHelpStacks", 20)));
         static float const hearingYards = std::max(1.0f,
             sConfigMgr->GetFloatDefault("Centurion.Bounty.CallForHelpYards", 50.0f));
         // Only somebody genuinely elsewhere is teleported. A bot already in the
