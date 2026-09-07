@@ -1495,6 +1495,41 @@ namespace
     }
 
     // Keep a working stock of every poison family the bot has access to.
+    // Keep the best rank of each poison ladder; destroy the rest.
+    //
+    // Only ids that appear in the ladders above are ever touched, so a poison
+    // the bot bought, looted or was handed by a player is out of scope.
+    void TrimOutclassedPoisons(Player* bot)
+    {
+        auto trimLadder = [bot](RoguePoisonRank const* ranks, size_t count)
+        {
+            uint32 keep = 0;
+            for (size_t i = 0; i < count; ++i)
+                if (bot->GetLevel() >= ranks[i].requiredLevel)
+                    keep = ranks[i].itemId;
+
+            for (size_t i = 0; i < count; ++i)
+            {
+                uint32 const itemId = ranks[i].itemId;
+                if (itemId == keep)
+                    continue;
+
+                if (uint32 const carried = bot->GetItemCount(itemId))
+                {
+                    bot->DestroyItemCount(itemId, carried, true);
+                    TC_LOG_DEBUG("playerbots.pve", "Bot {} discarded {} outclassed poison(s) {} (keeping {}).",
+                        bot->GetName(), carried, itemId, keep);
+                }
+            }
+        };
+
+        trimLadder(kInstantPoison, std::size(kInstantPoison));
+        trimLadder(kDeadlyPoison, std::size(kDeadlyPoison));
+        trimLadder(kCripplingPoison, std::size(kCripplingPoison));
+        trimLadder(kMindNumbingPoison, std::size(kMindNumbingPoison));
+        trimLadder(kWoundPoison, std::size(kWoundPoison));
+    }
+
     void EnsureRoguePoisons(Player* bot)
     {
         if (bot->GetClass() != CLASS_ROGUE || !bot->IsAlive())
@@ -1517,6 +1552,29 @@ namespace
         stock(BestPoisonForLevel(bot, kCripplingPoison));
         stock(BestPoisonForLevel(bot, kMindNumbingPoison));
         stock(BestPoisonForLevel(bot, kWoundPoison));
+
+        // And throw the outgrown ranks away, which nothing else can.
+        //
+        // This is a one-way ratchet without it: stocking follows the level and
+        // application only ever uses BestPoisonForLevel, so the moment a rogue
+        // crosses a rank threshold the previous rank stops being consumed and
+        // becomes a permanently occupied slot. Nothing reclaims it. It cannot be
+        // vendored - SellVendorJunk sells greys, trade goods and spare bags, and
+        // a poison is a white consumable - and it cannot be listed, because
+        // IsAuctionableSurplus exempts every stocked poison BY ITEM ID so a
+        // rogue does not auction the kit it is about to apply. Five ladders and
+        // up to six ranks each is roughly twenty-five dead slots by sixty, on a
+        // fleet where a full pack silently stops a bot mining, looting and
+        // storing its own auction wins.
+        //
+        // Compared WITHIN a ladder, by rank - never against what the blades are
+        // currently wearing. A loadout diff looks equivalent and is not: with no
+        // Seal Fate, ApplyRoguePoisons coats both weapons with Crippling, so
+        // "not in the loadout" would match every Instant and every Deadly the
+        // bot is carrying, including the ones it is stocked with and about to
+        // need. The best rank of each ladder is always the one applied, so
+        // keeping exactly that is safe in both loadouts.
+        TrimOutclassedPoisons(bot);
     }
 
     // Seal Fate rank 5. Only the highest learned rank of a talent survives in
