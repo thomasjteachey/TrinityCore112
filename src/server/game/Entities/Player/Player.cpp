@@ -823,10 +823,43 @@ void Player::CleanupsBeforeDelete(bool finalCleanup)
 
     Unit::CleanupsBeforeDelete(finalCleanup);
 
-    // clean up player-instance binds, may unload some instance saves
+    // Clean up player-instance binds, which may unload some instance saves.
+    //
+    // InstanceSave::RemovePlayer can `delete this` (InstanceSaveMgr.h:88): a save
+    // unloads the moment it loses its last bound player while its map is not loaded,
+    // and that is the ordinary state for any character carrying a saved dungeon id
+    // they are not currently standing in.
+    //
+    // Upstream gets away with leaving the bind entries in place afterwards only
+    // because this function runs exactly ONCE, from WorldSession::LogoutPlayer. On
+    // this fork it runs TWICE on every logout: d2491c377c added a second call in
+    // Map::DeleteFromWorld, which LogoutPlayer reaches five lines later through
+    // RemovePlayerFromMap. The second pass walked these same entries and dereferenced
+    // InstanceSave pointers the first pass had already freed - lock() on a freed
+    // std::mutex, an unlink through freed list nodes, and then a second `delete this`
+    // on the same pointer. A double free plus pointer-sized writes into a chunk the
+    // allocator has already handed to somebody else, on a realm running four map
+    // threads: it corrupts the allocator's own metadata and scribbles through
+    // whatever object now owns those bytes.
+    //
+    // Player::UnbindInstance has always erased the entry immediately after calling
+    // RemovePlayer, under the comment "save can become invalid". Do the same here, so
+    // this function is idempotent and it stops mattering how many times, or from how
+    // many places, it is called.
+    //
+    // Dropping the binds costs nothing at this point: WorldSession::LogoutPlayer has
+    // already run SaveToDB, binds are persisted to character_instance when they are
+    // taken rather than at logout, and the player object is about to be deleted.
     for (uint8 i = 0; i < MAX_DIFFICULTY; ++i)
-        for (BoundInstancesMap::iterator itr = m_boundInstances[i].begin(); itr != m_boundInstances[i].end(); ++itr)
-            itr->second.save->RemovePlayer(this);
+    {
+        for (BoundInstancesMap::iterator itr = m_boundInstances[i].begin(); itr != m_boundInstances[i].end();)
+        {
+            InstanceSave* save = itr->second.save;
+            m_boundInstances[i].erase(itr++);                // drop it FIRST - RemovePlayer can free it
+            if (save)
+                save->RemovePlayer(this);
+        }
+    }
 }
 
 bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo, bool createStarterItems,
