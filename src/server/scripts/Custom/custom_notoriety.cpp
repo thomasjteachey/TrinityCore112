@@ -119,6 +119,15 @@ namespace
         uint32 PeakStacks = 0;
         uint32 Rerolls = 0;
         time_t AcceptedAt = 0;
+        // Where the registrar who wrote this was standing. There are 48 Grix
+        // spawns on B+, so "back to Grix" has to mean the one you actually took
+        // it from, not the nearest one to wherever the fence turned out to be.
+        uint32 OriginMapId = 0;
+        float OriginX = 0.0f;
+        float OriginY = 0.0f;
+        float OriginZ = 0.0f;
+        float OriginO = 0.0f;
+        bool HasOrigin = false;
     };
 
     std::mutex g_lock;
@@ -272,7 +281,7 @@ namespace Notoriety
             "The meeting is roughly %.0f paces off. Look for the mark on your map.", distance);
     }
 
-    bool IssueContract(Player* player)
+    bool IssueContract(Player* player, WorldObject const* origin)
     {
         if (!s_enabled || !player)
             return false;
@@ -305,11 +314,48 @@ namespace Notoriety
         contract.PeakStacks = stacks;
         contract.AcceptedAt = GameTime::GetGameTime();
 
+        // Where to send them back to. The registrar if we were handed one, the
+        // contract's existing origin on a re-roll, and the player's own feet as
+        // the last resort - they are standing at Grix when they accept, so that
+        // is very nearly the same answer anyway.
+        if (origin)
+        {
+            contract.OriginMapId = origin->GetMapId();
+            contract.OriginX = origin->GetPositionX();
+            contract.OriginY = origin->GetPositionY();
+            contract.OriginZ = origin->GetPositionZ();
+            contract.OriginO = origin->GetOrientation();
+            contract.HasOrigin = true;
+        }
+
         uint64 const raw = player->GetGUID().GetRawValue();
         {
             std::lock_guard<std::mutex> guard(g_lock);
             if (auto existing = g_contracts.find(raw); existing != g_contracts.end())
+            {
                 contract.Rerolls = existing->second.Rerolls;
+
+                // A re-roll moves the meeting, not the man who arranged it.
+                if (!contract.HasOrigin && existing->second.HasOrigin)
+                {
+                    contract.OriginMapId = existing->second.OriginMapId;
+                    contract.OriginX = existing->second.OriginX;
+                    contract.OriginY = existing->second.OriginY;
+                    contract.OriginZ = existing->second.OriginZ;
+                    contract.OriginO = existing->second.OriginO;
+                    contract.HasOrigin = true;
+                }
+            }
+
+            if (!contract.HasOrigin)
+            {
+                contract.OriginMapId = player->GetMapId();
+                contract.OriginX = player->GetPositionX();
+                contract.OriginY = player->GetPositionY();
+                contract.OriginZ = player->GetPositionZ();
+                contract.OriginO = player->GetOrientation();
+                contract.HasOrigin = true;
+            }
 
             g_contracts[raw] = contract;
             g_anyContract.store(true, std::memory_order_relaxed);
@@ -317,11 +363,14 @@ namespace Notoriety
 
         CharacterDatabase.PExecute(
             "REPLACE INTO character_notoriety_contract "
-            "(guid, mapId, zoneId, posX, posY, posZ, stacksAtAccept, peakStacks, acceptedAt, rerolls) "
-            "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+            "(guid, mapId, zoneId, posX, posY, posZ, stacksAtAccept, peakStacks, acceptedAt, rerolls, "
+            "originMapId, originX, originY, originZ, originO) "
+            "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
             player->GetGUID().GetCounter(), contract.MapId, contract.ZoneId,
             contract.X, contract.Y, contract.Z, contract.StacksAtAccept, contract.PeakStacks,
-            uint32(contract.AcceptedAt), contract.Rerolls);
+            uint32(contract.AcceptedAt), contract.Rerolls,
+            contract.OriginMapId, contract.OriginX, contract.OriginY, contract.OriginZ,
+            contract.OriginO);
 
         SendRendezvousPoi(player);
 
@@ -637,6 +686,11 @@ public:
 
             uint32 stacks = 0;
             uint32 rerolls = 0;
+            // Read the ride home out under the same lock as the payout, because
+            // everything below EraseContract has already forgotten it.
+            bool hasOrigin = false;
+            uint32 originMap = 0;
+            float originX = 0.0f, originY = 0.0f, originZ = 0.0f, originO = 0.0f;
             {
                 std::lock_guard<std::mutex> guard(g_lock);
                 auto itr = g_contracts.find(player->GetGUID().GetRawValue());
@@ -645,6 +699,12 @@ public:
 
                 stacks = std::max(itr->second.PeakStacks, itr->second.StacksAtAccept);
                 rerolls = itr->second.Rerolls;
+                hasOrigin = itr->second.HasOrigin;
+                originMap = itr->second.OriginMapId;
+                originX = itr->second.OriginX;
+                originY = itr->second.OriginY;
+                originZ = itr->second.OriginZ;
+                originO = itr->second.OriginO;
             }
 
             uint32 const tier = TierFor(stacks);
@@ -687,6 +747,26 @@ public:
 
             me->Whisper("Nobody will hear this from me.", LANG_UNIVERSAL, player);
 
+            // The ride home. The walk out is the feature; walking back is just
+            // the same ground again with nothing hunting you, because selling
+            // the page took the notoriety with it.
+            //
+            // Delayed rather than immediate so the reward panel and the whisper
+            // land first - a player yanked away mid-sentence has no idea what
+            // they were paid. Captured by GUID, never by pointer: this fires two
+            // seconds later on the map thread, by which time the player may have
+            // logged out and the fence is certainly gone.
+            if (hasOrigin)
+            {
+                ObjectGuid const who = player->GetGUID();
+                player->m_Events.AddEventAtOffset([who, originMap, originX, originY, originZ, originO]()
+                {
+                    if (Player* seller = ObjectAccessor::FindPlayer(who))
+                        if (seller->IsInWorld() && seller->IsAlive() && !seller->IsInCombat())
+                            seller->TeleportTo(originMap, originX, originY, originZ, originO);
+                }, Seconds(2));
+            }
+
             TC_LOG_INFO("playerbots.hardcore",
                 "Notoriety: {} (level {}) sold a contract at {} peak stack(s), tier {}, "
                 "for {}c and {} xp ({} reroll(s)).",
@@ -721,7 +801,17 @@ public:
                 "stacksAtAccept TINYINT UNSIGNED NOT NULL DEFAULT 0,"
                 "peakStacks TINYINT UNSIGNED NOT NULL DEFAULT 0,"
                 "acceptedAt INT UNSIGNED NOT NULL,"
-                "rerolls TINYINT UNSIGNED NOT NULL DEFAULT 0"
+                "rerolls TINYINT UNSIGNED NOT NULL DEFAULT 0,"
+                // Where the registrar who wrote it was standing, so the fence
+                // can send the seller back to that one. Defaulted rather than
+                // NOT NULL so a table predating these columns and ALTERed in
+                // place reads the same as a fresh one; the load treats an
+                // all-zero position as "no origin" rather than as map 0.
+                "originMapId SMALLINT UNSIGNED NOT NULL DEFAULT 0,"
+                "originX FLOAT NOT NULL DEFAULT 0,"
+                "originY FLOAT NOT NULL DEFAULT 0,"
+                "originZ FLOAT NOT NULL DEFAULT 0,"
+                "originO FLOAT NOT NULL DEFAULT 0"
                 ") ENGINE=InnoDB");
     }
 };
@@ -742,7 +832,8 @@ public:
             return;
 
         QueryResult result = CharacterDatabase.PQuery(
-            "SELECT mapId, zoneId, posX, posY, posZ, stacksAtAccept, peakStacks, acceptedAt, rerolls "
+            "SELECT mapId, zoneId, posX, posY, posZ, stacksAtAccept, peakStacks, acceptedAt, rerolls, "
+            "originMapId, originX, originY, originZ, originO "
             "FROM character_notoriety_contract WHERE guid = {}", player->GetGUID().GetCounter());
         if (!result)
             return;
@@ -758,6 +849,15 @@ public:
         contract.PeakStacks = fields[6].GetUInt8();
         contract.AcceptedAt = time_t(fields[7].GetUInt32());
         contract.Rerolls = fields[8].GetUInt8();
+        contract.OriginMapId = fields[9].GetUInt16();
+        contract.OriginX = fields[10].GetFloat();
+        contract.OriginY = fields[11].GetFloat();
+        contract.OriginZ = fields[12].GetFloat();
+        contract.OriginO = fields[13].GetFloat();
+        // Contracts written before the origin columns existed default to all
+        // zeroes, which is a real position on map 0 and not one anybody wants to
+        // be teleported into. Treat the origin as absent instead.
+        contract.HasOrigin = contract.OriginX != 0.0f || contract.OriginY != 0.0f;
 
         std::lock_guard<std::mutex> guard(g_lock);
         g_contracts[player->GetGUID().GetRawValue()] = contract;

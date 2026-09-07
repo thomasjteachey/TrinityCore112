@@ -2115,7 +2115,9 @@ public:
 
             // No ground, no contract. Leaving it in the log would give the
             // player a delivery with nowhere to deliver it.
-            if (!Notoriety::IssueContract(player))
+            // `me` is remembered on the contract: there are dozens of Grix
+            // spawns, and the fence sends the seller back to THIS one.
+            if (!Notoriety::IssueContract(player, me))
             {
                 me->Whisper("My man is not meeting anyone near here today. Try me again elsewhere.",
                     LANG_UNIVERSAL, player);

@@ -24,6 +24,7 @@
 
 class Player;
 class Quest;
+class WorldObject;
 
 // ---------------------------------------------------------------------------
 // Notoriety: selling the price on your own head.
@@ -76,7 +77,12 @@ namespace Notoriety
     // Pick a rendezvous, persist it, tell the player where to go. False if no
     // ground could be found, in which case the caller must not leave the quest
     // in the log.
-    bool IssueContract(Player* player);
+    //
+    // origin is the registrar handing it over, remembered so the fence can send
+    // the seller back to the one they actually took it from. Null on a re-roll,
+    // which keeps whatever the contract already had - re-rolling moves the
+    // meeting, not the man who arranged it.
+    bool IssueContract(Player* player, WorldObject const* origin = nullptr);
 
     // Re-roll an existing contract to a different fence. Free to the player and
     // deliberately so: a rendezvous the map stranded them behind is a support
