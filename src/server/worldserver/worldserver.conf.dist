@@ -1102,6 +1102,22 @@ Quests.IgnoreRaid = 1
 Centurion.AnyClassTrainer.CreatureId = 0
 
 #
+#    Playerbot.PvpClassSpells.UsePotions
+#        Description: Bots reach for a healing potion below fifty percent health
+#                     and a mana potion below twenty-five percent mana, after a
+#                     warlock healthstone (which is free) and before nothing else.
+#                     The potion is found from the SPELL, so it never picks up a
+#                     First Aid bandage (a channel the next hit cancels) or food
+#                     and drink (regeneration auras that do not work in combat).
+#                     Gated separately from the class engine because it changes
+#                     how a bot FIGHTS, and a realm should be able to say no to
+#                     that without giving up the rest of it.
+#        Default:     1 - (enabled)
+#
+
+Playerbot.PvpClassSpells.UsePotions = 1
+
+#
 #    Quests.IgnoreAutoAccept
 #        Description: Ignore auto accept flag. Clients will have to manually accept all quests.
 #        Default:     0 - (Disabled, DB values determine if quest is marked auto accept or not.)

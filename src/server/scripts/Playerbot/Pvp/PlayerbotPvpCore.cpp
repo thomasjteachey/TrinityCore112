@@ -434,7 +434,7 @@ uint32 SelectReadyHealthstoneItemEntry(Player const* player)
 // the shared potion category, so a bot cannot chain two.
 uint32 SelectReadyRestorePotionItemEntry(Player const* player, bool wantMana)
 {
-    if (!player)
+    if (!player || !playerbot::PvpCore::GetConfig().usePotions)
         return 0;
 
     uint32 bestEntry = 0;
@@ -7335,6 +7335,7 @@ void PvpCore::LoadConfig()
     g_PvpCoreConfig.pvpTacticsEnabled = sConfigMgr->GetBoolDefault("Playerbot.PvpTactics.Enable", false);
     g_PvpCoreConfig.pvpLifecycleEnabled = sConfigMgr->GetBoolDefault("Playerbot.PvpLifecycle.Enable", false);
     g_PvpCoreConfig.pvpClassSpellsEnabled = sConfigMgr->GetBoolDefault("Playerbot.PvpClassSpells.Enable", false);
+    g_PvpCoreConfig.usePotions = sConfigMgr->GetBoolDefault("Playerbot.PvpClassSpells.UsePotions", true);
     g_PvpCoreConfig.spellRange = sConfigMgr->GetFloatDefault("Playerbot.PvpClassSpells.Range.Spell", 30.0f);
     g_PvpCoreConfig.healRange = sConfigMgr->GetFloatDefault("Playerbot.PvpClassSpells.Range.Heal", 40.0f);
     g_PvpCoreConfig.meleeRange = sConfigMgr->GetFloatDefault("Playerbot.PvpClassSpells.Range.Melee", 8.0f);

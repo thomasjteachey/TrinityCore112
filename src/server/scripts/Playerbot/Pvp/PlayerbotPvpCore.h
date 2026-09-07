@@ -38,6 +38,10 @@ struct PvpCoreConfig
     bool pvpTacticsEnabled = false;
     bool pvpLifecycleEnabled = false;
     bool pvpClassSpellsEnabled = false;
+    // Bots reaching for a healing or mana potion when a fight turns. Gated
+    // because it changes how a bot fights, and a realm should be able to say no
+    // without giving up the rest of the class engine.
+    bool usePotions = true;
     float spellRange = 30.0f;
     float healRange = 40.0f;
     float meleeRange = 5.0f;
