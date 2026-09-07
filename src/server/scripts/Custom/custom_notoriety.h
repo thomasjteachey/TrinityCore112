@@ -95,6 +95,12 @@ namespace Notoriety
     // Re-send the map marker and the bearing.
     void SendRendezvousPoi(Player* player);
 
+    // Passage back to the registrar who wrote the contract, owed the moment the
+    // page is sold. Held open for fifteen minutes and retried, so being dead, in
+    // combat or logged out delays it rather than cancelling it.
+    void ArmRideHome(Player* player, uint32 mapId, float x, float y, float z, float o);
+    void ResumeRideHome(Player* player);
+
     // Put the fence on the ground when its buyer gets close and take it away
     // when they leave. Called from the holder's own update tick.
     void UpdateFence(Player* player);

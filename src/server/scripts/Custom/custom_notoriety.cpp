@@ -237,6 +237,100 @@ namespace
         CharacterDatabase.PExecute("DELETE FROM character_notoriety_contract WHERE guid = {}",
             ObjectGuid(rawGuid).GetCounter());
     }
+
+    // -----------------------------------------------------------------------
+    // The ride home.
+    //
+    // Selling the page buys passage back to the registrar who wrote it, and that
+    // is a promise, not a courtesy - so it is held open until it can be kept
+    // rather than attempted once and dropped.
+    //
+    // It used to be one delayed event that teleported only somebody alive and
+    // out of combat, which is exactly the seller who most needs it: the meeting
+    // is six hundred yards into hostile ground and being followed home is the
+    // normal way that walk ends.
+    //
+    // Removing those two checks is not enough on its own. The event runs out of
+    // player->m_Events, which is drained by Unit::Update, which Player::Update
+    // brackets with SetCanDelayTeleport(true) (Player.cpp:1446). So a TeleportTo
+    // from in here NEVER executes on the spot: it is parked in m_teleport_dest
+    // and run at the end of that same update - by a line that reads
+    // "we should execute delayed teleports only for alive(!) players"
+    // (Player.cpp:1796). For a dead seller the ride is not postponed there, it is
+    // destroyed: releasing to a graveyard overwrites m_teleport_dest on its way
+    // past. Hence a record that outlives the attempt, and retries.
+    // -----------------------------------------------------------------------
+
+    // Long enough to cover a corpse run and a relog, short enough that nobody is
+    // yanked across the world by a contract they have forgotten selling.
+    constexpr uint32 kRideHomeWindowSeconds = 15 * 60;
+    constexpr uint32 kRideHomeRetrySeconds = 3;
+
+    struct PendingRide
+    {
+        uint32 MapId = 0;
+        float X = 0.0f, Y = 0.0f, Z = 0.0f, O = 0.0f;
+        time_t Until = 0;
+    };
+
+    // Guarded by g_lock, like every other file-scope container here.
+    std::unordered_map<uint64, PendingRide> g_pendingRide;
+
+    void SchedulePendingRide(Player* player, Seconds delay);
+
+    void TakePendingRide(ObjectGuid who)
+    {
+        Player* seller = ObjectAccessor::FindPlayer(who);
+        if (!seller || !seller->IsInWorld())
+            return;   // logged out mid-window; the login hook re-arms it
+
+        uint64 const raw = who.GetRawValue();
+
+        PendingRide ride;
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            auto itr = g_pendingRide.find(raw);
+            if (itr == g_pendingRide.end())
+                return;
+
+            if (GameTime::GetGameTime() > itr->second.Until)
+            {
+                g_pendingRide.erase(itr);
+                return;
+            }
+
+            ride = itr->second;
+        }
+
+        // Wait for a body. See the note above: a ghost's teleport is not late,
+        // it is gone.
+        if (!seller->IsAlive())
+        {
+            SchedulePendingRide(seller, Seconds(kRideHomeRetrySeconds));
+            return;
+        }
+
+        // Being in combat is no obstacle - Player::TeleportTo runs CombatStop()
+        // on the way out (Player.cpp:2177), so whatever was chewing on the seller
+        // loses them cleanly instead of dragging a combat state across the map.
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            g_pendingRide.erase(raw);
+        }
+
+        seller->TeleportTo(ride.MapId, ride.X, ride.Y, ride.Z, ride.O);
+    }
+
+    void SchedulePendingRide(Player* player, Seconds delay)
+    {
+        if (!player)
+            return;
+
+        // By GUID, never by pointer: this fires seconds later on the map thread,
+        // by which time the player may be gone.
+        ObjectGuid const who = player->GetGUID();
+        player->m_Events.AddEventAtOffset([who]() { TakePendingRide(who); }, delay);
+    }
 }
 
 namespace Notoriety
@@ -613,6 +707,57 @@ namespace Notoriety
             DespawnFence(player);
     }
 
+    // Owed the moment the page changes hands, taken as soon as it can be.
+    //
+    // The first attempt is delayed so the reward panel and the fence's parting
+    // whisper land first - a seller yanked away mid-sentence has no idea what
+    // they were paid.
+    void ArmRideHome(Player* player, uint32 mapId, float x, float y, float z, float o)
+    {
+        if (!player)
+            return;
+
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+
+            // A ride owed to somebody who logged out and never came back has
+            // nothing left to expire it - the retry that would have noticed only
+            // runs while they are in the world. Sweep here instead; the map holds
+            // one entry per sale in flight and is never big.
+            time_t const now = GameTime::GetGameTime();
+            for (auto itr = g_pendingRide.begin(); itr != g_pendingRide.end(); )
+                itr = now > itr->second.Until ? g_pendingRide.erase(itr) : std::next(itr);
+
+            PendingRide& ride = g_pendingRide[player->GetGUID().GetRawValue()];
+            ride.MapId = mapId;
+            ride.X = x;
+            ride.Y = y;
+            ride.Z = z;
+            ride.O = o;
+            ride.Until = GameTime::GetGameTime() + time_t(kRideHomeWindowSeconds);
+        }
+
+        SchedulePendingRide(player, Seconds(2));
+    }
+
+    // A ride owed to somebody who logged out before taking it. Called from the
+    // login hook: the record is in memory, so a worldserver restart inside the
+    // window is the one thing that can still lose it.
+    void ResumeRideHome(Player* player)
+    {
+        if (!player)
+            return;
+
+        bool owed = false;
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            owed = g_pendingRide.count(player->GetGUID().GetRawValue()) != 0;
+        }
+
+        if (owed)
+            SchedulePendingRide(player, Seconds(kRideHomeRetrySeconds));
+    }
+
     uint32 BribeCost(Player const* player)
     {
         if (!s_enabled || !s_bribeCopper || !player || !Bounty::GetStacks(player))
@@ -825,21 +970,12 @@ public:
             // the same ground again with nothing hunting you, because selling
             // the page took the notoriety with it.
             //
-            // Delayed rather than immediate so the reward panel and the whisper
-            // land first - a player yanked away mid-sentence has no idea what
-            // they were paid. Captured by GUID, never by pointer: this fires two
-            // seconds later on the map thread, by which time the player may have
-            // logged out and the fence is certainly gone.
+            // Owed unconditionally, and held open until it can be taken - dead,
+            // in combat, or logged out. See the ride-home note above
+            // Notoriety::ArmRideHome for why one delayed TeleportTo was never
+            // going to be enough on its own.
             if (hasOrigin)
-            {
-                ObjectGuid const who = player->GetGUID();
-                player->m_Events.AddEventAtOffset([who, originMap, originX, originY, originZ, originO]()
-                {
-                    if (Player* seller = ObjectAccessor::FindPlayer(who))
-                        if (seller->IsInWorld() && seller->IsAlive() && !seller->IsInCombat())
-                            seller->TeleportTo(originMap, originX, originY, originZ, originO);
-                }, Seconds(2));
-            }
+                Notoriety::ArmRideHome(player, originMap, originX, originY, originZ, originO);
 
             TC_LOG_INFO("playerbots.hardcore",
                 "Notoriety: {} (level {}) sold a contract at {} peak stack(s), tier {}, "
@@ -902,6 +1038,11 @@ public:
         // costs them an in-memory quest-status read and no query at all.
         if (!s_enabled || !player || BarracksHardcore::IsPlayerbot(player))
             return;
+
+        // Before the quest check, not after: somebody owed a ride home has
+        // already handed the page over, so the quest is gone from their log.
+        Notoriety::ResumeRideHome(player);
+
         if (player->GetQuestStatus(s_questId) == QUEST_STATUS_NONE)
             return;
 
