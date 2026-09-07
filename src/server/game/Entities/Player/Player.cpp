@@ -4137,7 +4137,26 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
 
             ///@todo: confirm if rogues start with lockpicking skill at level 1 but only receive the spell to use it at level 16
             // Also added for runeforging. It's already confirmed this happens upon learning for Death Knights, not from character creation.
-            if ((_spell_idx->second->AcquireMethod == SKILL_LINE_ABILITY_LEARNED_ON_SKILL_LEARN && !HasSkill(pSkill->ID)) || ((pSkill->ID == SKILL_LOCKPICKING || pSkill->ID == SKILL_RUNEFORGING) && _spell_idx->second->TrivialSkillLineRankHigh == 0))
+            //
+            // SKILL_POISONS is the third of these, and it is missing upstream only
+            // because 3.0.2 deleted the poison profession before anyone had to
+            // notice. On a classic realm it is live again, and its data is the
+            // same shape as Lockpicking's to the byte: spell 2842 "Poisons" has
+            // SkillLine 40, AcquireMethod 0 and TrivialSkillLineRankHigh 0,
+            // exactly like 1804 "Pick Lock" on SkillLine 633, and both skills sit
+            // in CategoryID 7. The first arm below cannot fire for either of them
+            // because AcquireMethod is 0, which is why the hardcoded list exists.
+            //
+            // Without it the whole classic chain completes and grants nothing:
+            // quest 2359 "Klaven's Tower" rewards spell 2995, which is
+            // SPELL_EFFECT_LEARN_SPELL -> 2842, and learning 2842 then creates no
+            // skill at all. The rogue ends up with "Poisons" in the spellbook
+            // attached to a skill line they do not have, so the trade window has
+            // nothing to open and crafting is impossible. Twenty-one characters on
+            // the realm knew 2842; two had skill 40, and both of those were set by
+            // hand.
+            if ((_spell_idx->second->AcquireMethod == SKILL_LINE_ABILITY_LEARNED_ON_SKILL_LEARN && !HasSkill(pSkill->ID)) ||
+                ((pSkill->ID == SKILL_LOCKPICKING || pSkill->ID == SKILL_RUNEFORGING || pSkill->ID == SKILL_POISONS) && _spell_idx->second->TrivialSkillLineRankHigh == 0))
                 LearnDefaultSkill(pSkill->ID, 0);
 
             if (pSkill->ID == SKILL_MOUNTS && !Has310Flyer(false))
@@ -25524,6 +25543,20 @@ void Player::LearnDefaultSkills()
                 LearnSpell(lang.SpellId, true);
         }
     }
+
+    // Barracks+: the classic poison profession, backfilled.
+    //
+    // Learning spell 2842 is what creates skill 40 - see the SKILL_POISONS arm
+    // in AddSpell - but that only fires at the moment of learning. Every rogue
+    // who finished quest 2359 "Klaven's Tower" before that arm existed is
+    // holding "Poisons" in the spellbook against a skill line they do not have,
+    // which is a trade window that opens onto nothing. The quest is not
+    // repeatable, so there is no way for them to fix it themselves.
+    //
+    // LearnDefaultSkill is a no-op for anybody the skill's SkillRaceClassInfo
+    // row does not cover, so this needs no class test of its own.
+    if (HasSpell(2842) && !HasSkill(SKILL_POISONS))
+        LearnDefaultSkill(SKILL_POISONS, 0);
 }
 
 void Player::LearnDefaultSkill(uint32 skillId, uint16 rank)

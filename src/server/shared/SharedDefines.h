@@ -2888,6 +2888,9 @@ enum SkillType
     SKILL_ARMS                     = 26,
     SKILL_COMBAT                   = 38,
     SKILL_SUBTLETY                 = 39,
+    // Absent from stock 3.3.5 because 3.0.2 deleted the poison profession. It
+    // is a live class skill again on the classic realm, so it needs a name.
+    SKILL_POISONS                  = 40,
     SKILL_SWORDS                   = 43,
     SKILL_AXES                     = 44,
     SKILL_BOWS                     = 45,
