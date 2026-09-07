@@ -6725,7 +6725,7 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
         return holdDecision;
     }
 
-    if (player && player->HealthBelowPct(50))
+    if (player && player->IsInCombat() && player->HealthBelowPct(50))
     {
         if (uint32 const healthstoneItemEntry = SelectReadyHealthstoneItemEntry(player))
         {
@@ -6753,7 +6753,17 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
     // Mana second, and lower, because being out of mana is a losing fight
     // whereas being out of health is a lost one. Only for a class that has a
     // mana bar to empty.
-    if (player && player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 25.0f)
+    //
+    // IN COMBAT ONLY, like the health arm above it. A potion is a combat
+    // resource on a two minute cooldown; a bot standing around at twenty
+    // percent mana should sit down and drink, which the rest of the engine
+    // already handles, not burn a potion it will want in the next fight. It
+    // also keeps the bag walk below out of the idle path entirely - this runs on
+    // the decision tick for every bot, and a hunter holding its kite at low mana
+    // would otherwise pay for a full inventory scan every tick of every fight it
+    // is winning.
+    if (player && player->IsInCombat() && player->GetMaxPower(POWER_MANA) > 0 &&
+        player->GetPowerPct(POWER_MANA) < 25.0f)
         if (uint32 const manaItemEntry = SelectReadyRestorePotionItemEntry(player, true))
             return { "use mana potion", "restore mana below twenty-five percent", 0,
                 playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID(), manaItemEntry };
