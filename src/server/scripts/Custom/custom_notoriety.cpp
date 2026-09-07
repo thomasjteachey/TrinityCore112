@@ -732,8 +732,29 @@ namespace Notoriety
         float const distance = player->GetExactDist2d(spot.GetPositionX(), spot.GetPositionY());
 
         // Still walking: keep the mark from timing out under them.
-        if (distance > s_fenceAppearYards)
-            RefreshRendezvousPoi(player);
+        //
+        // Right up to the doorstep, NOT merely to the fence's appear radius.
+        // Gating this on s_fenceAppearYards left a hundred and fifty yard band
+        // where nothing relit the fuse, and that band is the worst of the trip:
+        // the last stretch into a rendezvous is hostile ground with a bounty on
+        // the holder's head, and taking eight minutes to cross it fighting is
+        // ordinary. The mark died exactly where the walk got hard, which reads
+        // as "it disappears when I get close" - the same complaint the fuse fix
+        // was supposed to answer, arrived at by a shorter route.
+        //
+        // No distance gate at all. The mark belongs to the CONTRACT: it goes away
+        // when the contract does - sold, voided or failed - and at no other time.
+        // Every threshold tried here was a way of quietly deciding the holder no
+        // longer needed it, and each was wrong. First the fence's hundred and
+        // fifty yard radius, which let the mark die in the last and hardest
+        // stretch of the walk; then fifteen yards, the same mistake made smaller.
+        //
+        // The client does erase it by itself inside ten yards (a squared 2D
+        // compare against 100.0f at WoW.exe 0x007F64CA) and nothing on this side
+        // can stop that. What this can do is put it back. Standing on the
+        // rendezvous that costs one redundant packet per refresh interval, which
+        // is by a wide margin the cheaper of the two errors.
+        RefreshRendezvousPoi(player);
 
         ObjectGuid existing;
         {
