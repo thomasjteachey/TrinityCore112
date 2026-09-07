@@ -3490,13 +3490,16 @@ Centurion.Bounty.BotLossMultiplier = 2.0
 #                     and the two never compound past their percentages.
 #                     The money is destroyed, not paid to anyone - it is the
 #                     drain under a realm whose fleet mints copper all day.
+#                     The player is told what it cost them, and separately
+#                     what the bounty put in the cache on their corpse,
+#                     because only one of the two is recoverable.
 #                     Not charged in a battleground, an arena, the Battle Ring,
 #                     or to a GM.
-#        Default:     10.0
+#        Default:     5.0
 #        Range:       0.0 - 100.0 (0 disables)
 #
 
-Centurion.Hardcore.DeathGoldLossPercent = 10.0
+Centurion.Hardcore.DeathGoldLossPercent = 5.0
 
 #
 #    Centurion.Hardcore.BotDeathTaxBrackets

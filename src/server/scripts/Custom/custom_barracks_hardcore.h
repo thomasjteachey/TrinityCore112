@@ -20,10 +20,17 @@
 
 #include "Define.h"
 
+#include <string>
+
 class Player;
 
 namespace BarracksHardcore
 {
+    // Copper as a player reads it: "12g 40s", with zero parts left out.
+    // Exported so a price quoted on a gossip row and a loss reported in chat
+    // are written the same way.
+    std::string FormatMoney(uint32 copper);
+
     // Whether this character is one of the fleet, by account id.
     //
     // Exported because the bot account set is configured in exactly one

@@ -63,7 +63,7 @@ namespace
     uint32 s_stacksPerKill = 1;
     float s_goldPercentPerStack = 1.0f;
     // The flat cost of dying, owed with or without a bounty. See TakeDeathTax.
-    float s_deathTaxPercent = 10.0f;
+    float s_deathTaxPercent = 5.0f;
 
     // And the bot version of it, which is progressive rather than flat.
     //
@@ -164,7 +164,7 @@ namespace
         s_botLossMultiplier = std::clamp(
             sConfigMgr->GetFloatDefault("Centurion.Bounty.BotLossMultiplier", 2.0f), 1.0f, 10.0f);
         s_deathTaxPercent = std::clamp(
-            sConfigMgr->GetFloatDefault("Centurion.Hardcore.DeathGoldLossPercent", 10.0f), 0.0f, 100.0f);
+            sConfigMgr->GetFloatDefault("Centurion.Hardcore.DeathGoldLossPercent", 5.0f), 0.0f, 100.0f);
 
         // "upToGold:percent" pairs, cheapest bracket first. An upTo of 0 means
         // "and everything above", and must be last; without one the purse above
@@ -567,17 +567,19 @@ namespace
         return taxed;
     }
 
-    void RecordDeathDebt(Player* victim)
+    // Returns what was set aside for the corpse's cache, so the caller can say so.
+    uint32 RecordDeathDebt(Player* victim)
     {
         uint32 const stacks = GetStacks(victim);
         if (!stacks)
-            return;
+            return 0;
 
+        uint32 chestCopper = 0;
         uint64 const money = victim->GetMoney();
         if (money)
         {
             float const percent = std::min(100.0f, float(stacks) * s_goldPercentPerStack);
-            uint32 const chestCopper = uint32(double(money) * double(percent) / 100.0);
+            chestCopper = uint32(double(money) * double(percent) / 100.0);
 
             uint32 burnCopper = 0;
             if (BarracksHardcore::IsPlayerbot(victim))
@@ -601,6 +603,33 @@ namespace
         }
 
         ClearBounty(victim);
+        return chestCopper;
+    }
+
+    // Tell them what dying just cost, in the same breath as it costing them.
+    //
+    // Two different amounts leave the purse and they are not the same kind of
+    // loss. The flat tax is destroyed outright and nobody gets it. The bounty's
+    // share is not gone at all - it is sitting in the cache on the corpse for
+    // whoever reaches it first, which is the entire point of carrying notoriety
+    // around. Reporting one total for both would be a lie about where the money
+    // went, and a player who checks their bags against a single number will read
+    // the difference as a bug.
+    void ReportDeathCost(Player* victim, uint32 taxed, uint32 toChest)
+    {
+        if (!victim || !victim->GetSession() || BarracksHardcore::IsPlayerbot(victim))
+            return;
+
+        if (!taxed && !toChest)
+            return;
+
+        ChatHandler handler(victim->GetSession());
+        if (taxed)
+            handler.PSendSysMessage("|cffff2020Dying cost you %s.|r",
+                BarracksHardcore::FormatMoney(taxed).c_str());
+        if (toChest)
+            handler.PSendSysMessage("|cffff2020A further %s of yours is in the cache on your corpse. Somebody else can take it.|r",
+                BarracksHardcore::FormatMoney(toChest).c_str());
     }
 
     // Thirty stacks: the realm stops sending people and sends guards.
@@ -899,8 +928,9 @@ public:
         // cost a purse either.
         if (IsBountyContext(victim))
         {
-            TakeDeathTax(victim);
-            RecordDeathDebt(victim);
+            uint32 const taxed = TakeDeathTax(victim);
+            uint32 const toChest = RecordDeathDebt(victim);
+            ReportDeathCost(victim, taxed, toChest);
         }
 
         // Whatever the zone rules said about the debt, the guards were sent for
