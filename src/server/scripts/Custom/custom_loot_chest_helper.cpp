@@ -78,12 +78,20 @@ void PlayerChestBuilder::AddStackableItem(uint32 itemId, uint32 count)
     }
 }
 
-void PlayerChestBuilder::AddItem(Item* item)
+bool PlayerChestBuilder::AddItem(Item* item)
 {
+    // MAX_NR_LOOT_ITEMS is a HARD client bound, not a tuning value. Wow.exe
+    // 12340 clamps the wire count at 0x006D55E7; its loot array at 0xC9D340 is
+    // exactly eighteen 24-byte records; and the per-item slot index is used as
+    // an array index with NO bounds check at 0x006D5781, where 18 lands on
+    // 0xC9D4F0 - a live neighbouring global with its own accessor. A nineteenth
+    // row corrupts unrelated client state rather than erroring. Nothing may
+    // raise this; overflow has to go into another chest.
     if (!item || _items.size() >= MAX_NR_LOOT_ITEMS)
-        return;
+        return false;
 
     _items.push_back(CreateLootItem(item->GetEntry(), item->GetCount(), item->GetItemSuffixFactor(), item->GetItemRandomPropertyId()));
+    return true;
 }
 
 namespace
@@ -177,6 +185,21 @@ GameObject* PlayerChestBuilder::Summon() const
 
     _player->RemoveGameObject(chest, false);
     chest->SetOwnerGUID(ObjectGuid::Empty);
+
+    // These chests never went away, and GO_SUMMON_TIMED_DESPAWN is why it looked
+    // like they did. WorldObject::SummonGameObject takes the AddGameObject arm
+    // when the summoner is a Player (Object.cpp:2167) and so never reaches the
+    // SetSpawnedByDefault(false) on the line below it; the two lines above then
+    // clear the owner. That closes BOTH Delete() arms in GameObject::Update -
+    // the "GetOwnerGUID() || GetSpellId()" one and the "!m_spawnedByDefault"
+    // one - and for a chest the branch ahead of them returns early with
+    // SetLootState(GO_READY) in any case. The registry only FORGETS a record at
+    // its deadline; it never despawned anything.
+    //
+    // So every death this realm has seen has left an immortal cache standing
+    // where it happened. Ask for the despawn explicitly rather than inferring it
+    // from summon flags.
+    chest->DespawnOrUnsummon(_despawnTime);
 
     // NOTE: an earlier version forced SetSpawnedByDefault(false) here, on the
     // reasoning that a player-summoned GameObject keeps m_spawnedByDefault true
@@ -320,8 +343,12 @@ void CollectItemsWithQuality(Player* player, ItemQualities quality, PlayerChestB
 
             if (proto->Quality == quality && !excludedEntries.count(item->GetEntry()))
             {
-                chest.AddItem(item);
-                removedItems.push_back({ bag, slot });
+                // Only record the removal the chest ACCEPTED. This push_back
+                // used to sit outside the call, so anything past the cap was
+                // stripped from the player by the callers and then existed
+                // nowhere at all.
+                if (chest.AddItem(item))
+                    removedItems.push_back({ bag, slot });
             }
         }
     };

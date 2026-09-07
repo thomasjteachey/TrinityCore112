@@ -40,8 +40,18 @@ public:
     PlayerChestBuilder(Player* player, uint32 chestEntry, Seconds despawnTime);
 
     bool HasLoot() const { return !_items.empty() || _money > 0; }
+    // Rows the chest actually holds, and whether it will take another.
+    //
+    // Exposed because the absence of exactly this is why the cap could eat gear
+    // in silence: a caller had no way to compare what it staked against what
+    // landed, so "staked" and "chested" were indistinguishable at every call
+    // site and the destroy loops used the former.
+    uint32 GetItemCount() const { return uint32(_items.size()); }
+    bool IsFull() const { return _items.size() >= MAX_NR_LOOT_ITEMS; }
     void AddStackableItem(uint32 itemId, uint32 count);
-    void AddItem(Item* item);
+    // FALSE when the chest refused it. A caller that destroys the item on the
+    // assumption this succeeded is deleting it outright.
+    bool AddItem(Item* item);
     // Coin in the chest, in copper. A chest carrying only money is still
     // worth summoning - a bounty payout usually has nothing else in it.
     void AddMoney(uint32 copper) { _money += copper; }

@@ -1541,6 +1541,10 @@ namespace BarracksHardcore
 
         CustomLootChests::PlayerChestBuilder chest(victim, s_chestEntry, Seconds(s_chestDespawnSeconds));
         std::vector<CustomLootChests::ItemLocation> droppedItems;
+        // Eligible pieces the chest had no room for. They stay on the corpse
+        // rather than being destroyed, and they are named in the log, because a
+        // count nobody keeps is how this went unnoticed for so long.
+        uint32 refusedByChest = 0;
 
         // ONLY worn equipment is at stake: bags, their contents and money
         // are safe. Deflation: each worn piece leaves the corpse, but only
@@ -1563,9 +1567,15 @@ namespace BarracksHardcore
                 proto->Quality < ITEM_QUALITY_UNCOMMON)
                 continue;
 
-            if (urand(0, 99) < s_dropChancePercent)
-                chest.AddItem(item);
-            droppedItems.push_back({ INVENTORY_SLOT_BAG_0, slot });
+            // Losing the roll still BURNS the piece - that is the deflation and
+            // it stays. But a chest that REFUSED the item must never produce a
+            // destroy record: the cap is eighteen rows and this loop walks
+            // nineteen worn slots, so the nineteenth was being deleted outright.
+            bool const burns = urand(0, 99) >= s_dropChancePercent;
+            if (burns || chest.AddItem(item))
+                droppedItems.push_back({ INVENTORY_SLOT_BAG_0, slot });
+            else
+                ++refusedByChest;
         }
 
         // Bots put their CARRIED gear at stake as well. A person keeps their
@@ -1590,9 +1600,11 @@ namespace BarracksHardcore
                 if (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR)
                     return;
 
-                if (urand(0, 99) < s_dropChancePercent)
-                    chest.AddItem(item);
-                droppedItems.push_back({ bag, slot });
+                bool const burns = urand(0, 99) >= s_dropChancePercent;
+                if (burns || chest.AddItem(item))
+                    droppedItems.push_back({ bag, slot });
+                else
+                    ++refusedByChest;
             };
 
             for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
@@ -1637,7 +1649,12 @@ namespace BarracksHardcore
         // copy, conjured out of nothing. That is the trade, and it is the only
         // place on the realm where the deflationary half of this rule is skipped.
         bool const keepsGear = playerbot::PveManager::IsPvpOnlyBot(victim);
-        if (!keepsGear)
+        // chestSpawned was computed and then read by nothing but the log line.
+        // Without it here, a summon that failed - a missing gameobject_template
+        // row, no ground - stripped the corpse and left nothing on the floor at
+        // all. The same guard is the established pattern forty lines away in
+        // custom_diremaul_beads.cpp.
+        if (!keepsGear && chestSpawned)
             for (CustomLootChests::ItemLocation const& dropped : droppedItems)
                 victim->DestroyItem(dropped.Bag, dropped.Slot, true);
 
@@ -1654,9 +1671,25 @@ namespace BarracksHardcore
         if (droppedItems.empty() && !burned && !bountyGold)
             return;
 
-        TC_LOG_INFO("playerbots.hardcore", "{} {} {} worn items, burned {} of floor gear and {}c bounty at death; chest spawned: {} ({}% of gear reaches it).",
-            victim->GetName(), keepsGear ? "copied" : "lost", uint32(droppedItems.size()),
-            burned, bountyGold, uint32(chestSpawned), s_dropChancePercent);
+        // The coin was deducted the moment the debt was read, before anything
+        // knew whether a chest would exist to hold it. Hand it back if none did.
+        if (!chestSpawned && bountyGold)
+            victim->ModifyMoney(int64(bountyGold));
+
+        // Says what actually happened, in the terms the code actually has.
+        //
+        // The old line printed droppedItems.size() as "{} worn items" and the
+        // per-item drop CHANCE as "% of gear reaches it". Both were wrong in the
+        // same direction: droppedItems counts a bot's carried gear too, and it
+        // counted items that never reached a chest - so a corpse staking twenty
+        // eligible pieces into an eighteen-row chest logged "lost 20 worn items
+        // (100% of gear reaches it)" while quietly deleting two of them. There
+        // was no number anywhere that could have contradicted it.
+        TC_LOG_INFO("playerbots.hardcore", "{} {} {} item(s) into the cache ({} staked, {} refused for want of room, roll {}%), "
+            "burned {} of floor gear, {}c bounty; chest spawned: {}.",
+            victim->GetName(), keepsGear ? "copied" : "lost", chest.GetItemCount(),
+            uint32(droppedItems.size()) + refusedByChest, refusedByChest, s_dropChancePercent,
+            burned, bountyGold, uint32(chestSpawned));
     }
 }
 
