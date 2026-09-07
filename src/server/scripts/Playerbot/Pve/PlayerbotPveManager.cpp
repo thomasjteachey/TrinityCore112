@@ -556,6 +556,7 @@ namespace
     float ScoreItemForSpec(Player const* bot, ItemTemplate const* proto);
     GameObject* FindRegisteredDeathChest(Player* bot, uint32 entry, float maxDistance);
     bool IsAuctionableSurplus(Player* bot, Item* item);
+    void HoldLootFromAuction(ObjectGuid itemGuid, uint32 seconds);
     uint32 RequiredAmmoSubclass(Player const* bot);
     void MoveTowardThrottled(Player* bot, Position const& destination);
     WalkPathResult CheckWalkPath(Player* bot, Position const& destination);
@@ -4171,9 +4172,43 @@ namespace
                 loot->NotifyMoneyRemoved();
             }
 
+            // A player's death chest: whatever comes out of this is off the
+            // auction house for a while, so the owner can corpse-run back and
+            // take it off the bot instead of finding it already listed.
+            //
+            // StoreLootItem reports nothing about what it created, so the new
+            // items are identified by diffing the bag contents around the loop.
+            // That is a pair of bag walks, which would be silly on every corpse -
+            // it is done ONLY for player-built chests, which are rare.
+            bool const playerChest = CustomLootChests::IsPlayerBuiltChest(lootGuid);
+            std::unordered_set<uint64> before;
+            if (playerChest)
+                ForEachBagItem(bot, [&](Item* item, uint8, uint8)
+                {
+                    before.insert(item->GetGUID().GetRawValue());
+                });
+
             uint32 const maxSlot = std::min<uint32>(loot->GetMaxSlotInLootFor(bot), 255);
             for (uint32 slot = 0; slot < maxSlot; ++slot)
                 bot->StoreLootItem(uint8(slot), loot);
+
+            if (playerChest)
+            {
+                uint32 held = 0;
+                ForEachBagItem(bot, [&](Item* item, uint8, uint8)
+                {
+                    if (before.count(item->GetGUID().GetRawValue()))
+                        return;
+
+                    HoldLootFromAuction(item->GetGUID(), g_PveConfig.deathChestAuctionHoldSeconds);
+                    ++held;
+                });
+
+                if (held)
+                    TC_LOG_INFO("playerbots.pve",
+                        "Bot {} took {} item(s) from a player's chest; held off the auction house for {}s.",
+                        bot->GetName(), held, g_PveConfig.deathChestAuctionHoldSeconds);
+            }
 
             if (bot->GetLootGUID() == lootGuid)
                 bot->GetSession()->DoLootRelease(lootGuid);
@@ -7835,10 +7870,54 @@ namespace
     // ---------------------------------------------------------------------------
 
     // Something the bot owns, cannot use, and can legally part with.
+    // Items a bot pulled out of a PLAYER's death chest, and the moment each stops
+    // being off limits to the auction house.
+    //
+    // A death chest is somebody's gear. The fleet emptying it is correct - a
+    // chest nobody takes just despawns, and the bot walking off with your sword
+    // is the ruleset working - but a bot that lists it thirty seconds later has
+    // put it somewhere the owner cannot follow. Corpse-running back to find your
+    // own weapon already sold is a different game from losing it to whoever got
+    // there first.
+    //
+    // So the gear is held, not protected: the bot keeps it, wears it, and will
+    // list it eventually. The window just has to be long enough to run back.
+    std::mutex g_AuctionHoldLock;
+    std::unordered_map<uint64, time_t> g_AuctionHoldUntil;
+
+    void HoldLootFromAuction(ObjectGuid itemGuid, uint32 seconds)
+    {
+        std::lock_guard<std::mutex> guard(g_AuctionHoldLock);
+        g_AuctionHoldUntil[itemGuid.GetRawValue()] = GameTime::GetGameTime() + time_t(seconds);
+    }
+
+    bool IsHeldFromAuction(ObjectGuid itemGuid)
+    {
+        time_t const now = GameTime::GetGameTime();
+        std::lock_guard<std::mutex> guard(g_AuctionHoldLock);
+        auto itr = g_AuctionHoldUntil.find(itemGuid.GetRawValue());
+        if (itr == g_AuctionHoldUntil.end())
+            return false;
+
+        // Expired entries are dropped as they are asked about, so the map is
+        // bounded by what is actually still held rather than by everything ever
+        // looted. Nothing else sweeps it.
+        if (itr->second > now)
+            return true;
+
+        g_AuctionHoldUntil.erase(itr);
+        return false;
+    }
+
     bool IsAuctionableSurplus(Player* bot, Item* item)
     {
         ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
         if (!proto)
+            return false;
+
+        // Somebody's death chest, still inside the window they have to come back
+        // and take it off the body themselves.
+        if (IsHeldFromAuction(item->GetGUID()))
             return false;
 
         // The core's own rules for what may be listed at all.
@@ -13358,6 +13437,8 @@ namespace playerbot
         g_PveConfig.autoReviveSeconds = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.AutoReviveSeconds", 30), 5, 600));
         g_PveConfig.restHealthPct = sConfigMgr->GetFloatDefault("Playerbot.Pve.RestHealthPct", 60.0f);
         g_PveConfig.restManaPct = sConfigMgr->GetFloatDefault("Playerbot.Pve.RestManaPct", 50.0f);
+        g_PveConfig.deathChestAuctionHoldSeconds = uint32(std::max(0,
+            sConfigMgr->GetIntDefault("Playerbot.Pve.DeathChestAuctionHoldSeconds", 30 * MINUTE)));
         g_PveConfig.tavernEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Tavern.Enable", true);
         g_PveConfig.tavernMinMinutes = uint32(std::max(1, sConfigMgr->GetIntDefault("Playerbot.Pve.Tavern.MinMinutes", 25)));
         g_PveConfig.tavernMaxMinutes = uint32(std::max<int32>(int32(g_PveConfig.tavernMinMinutes),
