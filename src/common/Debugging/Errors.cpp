@@ -234,7 +234,18 @@ namespace
 
         if (EmergencyCrashContext[0])
         {
-            EmergencyWriteLiteral("Last crash context:\n  ");
+            // POSSIBLY STALE, and labelled so because it has already misled a real
+            // investigation. SetCrashContext has around twenty call sites and
+            // ClearCrashContext has none, so this string is the last breadcrumb ANY
+            // instrumented scope on this thread left behind - not necessarily one
+            // the faulting frame ever ran through. Two symbolized cores from the
+            // live realm both reported "Unit::_UpdateSpells after aura updates"
+            // while actually dying in a grid relocation notifier and inside
+            // jemalloc, which sent the hunt into the aura system for a bug that
+            // was never there.
+            //
+            // The resolved frames below are the truth. Read them first.
+            EmergencyWriteLiteral("Last crash context (MAY BE STALE - trust the frames below):\n  ");
             EmergencyWrite(EmergencyCrashContext, EmergencyStringLength(EmergencyCrashContext, EmergencyCrashContextSize));
             EmergencyWriteLiteral("\n");
         }
@@ -244,6 +255,28 @@ namespace
         int32 capturedFrames = backtrace(stack, MaxFrames);
         if (capturedFrames > 0)
         {
+            // Where it ACTUALLY crashed, as module(+offset) plus whatever symbol
+            // the dynamic table can name, so a crash report is self-diagnosing
+            // without anyone having to find and decompress a core.
+            //
+            // backtrace_symbols_fd and NOT backtrace_symbols: only the _fd form
+            // writes straight to the descriptor, and it is documented as not
+            // calling malloc. That is the whole reason it is legal here. One of
+            // the crashes this is meant to explain died INSIDE jemalloc, so a
+            // handler that allocated would fault or deadlock on precisely the
+            // crashes worth reading.
+            //
+            // Offsets feed addr2line against the matching build:
+            //   addr2line -Cfe worldserver 0x<offset>
+            EmergencyWriteLiteral("Resolved frames (module+offset - the REAL crash site):\n");
+            {
+                int const crashFileFd = EmergencyCrashFileDescriptor;
+                if (crashFileFd >= 0 && crashFileFd != STDERR_FILENO)
+                    backtrace_symbols_fd(stack, capturedFrames, crashFileFd);
+
+                backtrace_symbols_fd(stack, capturedFrames, STDERR_FILENO);
+            }
+
             EmergencyWriteLiteral("Raw stack addresses:\n");
             for (int32 i = 0; i < capturedFrames; ++i)
             {
