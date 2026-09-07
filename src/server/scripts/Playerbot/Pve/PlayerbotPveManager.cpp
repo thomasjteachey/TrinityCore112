@@ -118,8 +118,97 @@ namespace
     constexpr uint32 SPELL_PVE_OUT_OF_COMBAT_EAT = 29073;
     constexpr uint32 SPELL_PVE_OUT_OF_COMBAT_DRINK = 22734;
 
-    // "Opening", the channel a player performs to open a locked chest.
-    constexpr uint32 kOpeningSpellId = 3365;
+    // The OPEN_LOCK spell that claims a lock type, taken from the spell store.
+    //
+    // Several spells can claim one type - LOCKTYPE_SLOW_OPEN has both "Opening"
+    // 21651 at ten seconds and 26868 at two - so the longest cast wins. The long
+    // one is the pause a chest is supposed to cost; the short variants are
+    // scripted one-offs. Built once, on first use.
+    uint32 OpenLockSpellForLockType(uint32 lockType)
+    {
+        static std::once_flag onceFlag;
+        static std::unordered_map<uint32, uint32> byLockType;
+
+        std::call_once(onceFlag, []
+        {
+            std::unordered_map<uint32, uint32> bestCastTime;
+            for (uint32 spellId = 1; spellId < sSpellMgr->GetSpellInfoStoreSize(); ++spellId)
+            {
+                SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+                if (!spellInfo || spellInfo->IsPassive())
+                    continue;
+
+                for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+                {
+                    if (!effect.IsEffect(SPELL_EFFECT_OPEN_LOCK) || effect.MiscValue <= 0)
+                        continue;
+
+                    uint32 const lockType = uint32(effect.MiscValue);
+                    uint32 const castTime = spellInfo->CastTimeEntry
+                        ? uint32(std::max(0, spellInfo->CastTimeEntry->Base)) : 0u;
+
+                    auto const itr = byLockType.find(lockType);
+                    if (itr == byLockType.end() || castTime > bestCastTime[lockType] ||
+                        (castTime == bestCastTime[lockType] && spellId < itr->second))
+                    {
+                        byLockType[lockType] = spellId;
+                        bestCastTime[lockType] = castTime;
+                    }
+                    break;
+                }
+            }
+        });
+
+        auto const itr = byLockType.find(lockType);
+        return itr != byLockType.end() ? itr->second : 0u;
+    }
+
+    // The spell that opens this object, for an opener who knows no Opening.
+    //
+    // GameObject::GetSpellForLock answers out of the opener's SPELLBOOK. A
+    // LOCK_KEY_SPELL case resolves for anybody, which is why battleground node
+    // banners channel correctly, but a LOCK_KEY_SKILL case only resolves if the
+    // opener already knows a spell carrying that lock type. "Opening" is not a
+    // learnable spell and no character on this realm has one, so every skill-cased
+    // chest - the corpse cache among them, lock 1599, LOCKTYPE_SLOW_OPEN - came
+    // back nullptr and the caller fell through to an instant GameObject::Use.
+    // That is the missing ten-second cast bar.
+    //
+    // So fall back to the spell store for skill cases that need no actual skill.
+    // Spell::CanOpenLock accepts such a spell against such a lock (it matches the
+    // effect's MiscValue to the lock's Index and asks for no skill when the lock
+    // type has no skill line), the cast runs its full time, and completing it
+    // calls GameObject::Use itself.
+    //
+    // Cases that DO want a profession - mining, herbalism, lockpicking - are left
+    // alone: either the bot knows the gathering spell, in which case GetSpellForLock
+    // already answered, or it has no business opening the node at all.
+    SpellInfo const* ResolveOpenLockSpell(GameObject const* go, Player const* opener)
+    {
+        if (SpellInfo const* known = go->GetSpellForLock(opener))
+            return known;
+
+        GameObjectTemplate const* goInfo = go->GetGOInfo();
+        LockEntry const* lock = goInfo ? sLockStore.LookupEntry(goInfo->GetLockId()) : nullptr;
+        if (!lock)
+            return nullptr;
+
+        for (uint8 caseIndex = 0; caseIndex < MAX_LOCK_CASE; ++caseIndex)
+        {
+            if (lock->Type[caseIndex] != LOCK_KEY_SKILL || !lock->Index[caseIndex])
+                continue;
+
+            LockType const lockType = LockType(lock->Index[caseIndex]);
+            if (SkillByLockType(lockType) != SKILL_NONE)
+                continue;
+
+            if (uint32 const spellId = OpenLockSpellForLockType(lock->Index[caseIndex]))
+                if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId))
+                    return spellInfo;
+        }
+
+        return nullptr;
+    }
     constexpr std::chrono::milliseconds PveFastTickInterval(250);
     constexpr std::chrono::milliseconds PveSlowTickInterval(750);
     constexpr std::chrono::seconds PveGrindScanInterval(2);
@@ -4414,6 +4503,14 @@ namespace
         {
             state.errandGuid = ObjectGuid::Empty;
             state.errandKind = PveErrandKind::None;
+
+            // The open only exists inside the errand. Every other exit from this
+            // function - the 90-second timeout, gaining a master, being made a
+            // guardian - left chestOpeningGuid set behind it, and UseQuestGameObject
+            // reads that guid as "the open is already under way". A bot that came
+            // back to the same chest then skipped the cast entirely and went
+            // straight to taking it.
+            state.chestOpeningGuid.Clear();
         };
 
         // A guardian may have inherited a quest errand from before it was assigned
@@ -4462,7 +4559,7 @@ namespace
             // Use the lock spell's real interaction range rather than a flat
             // INTERACTION_DISTANCE, the same way the battleground node path does -
             // stopping short of it means the cast is refused on arrival.
-            SpellInfo const* const approachLockSpell = questGo->GetSpellForLock(bot);
+            SpellInfo const* const approachLockSpell = ResolveOpenLockSpell(questGo, bot);
             bool const atInteractDistance = approachLockSpell
                 ? questGo->IsAtInteractDistance(bot, approachLockSpell)
                 : questGo->IsAtInteractDistance(bot);
@@ -10603,7 +10700,11 @@ namespace
         // Ask the OBJECT for its lock spell rather than hardcoding Opening: the lock
         // is what decides which spell and how long it takes, and a hardcoded id is
         // wrong the moment a chest carries a different one.
-        SpellInfo const* lockSpell = go->GetSpellForLock(bot);
+        //
+        // Through ResolveOpenLockSpell, not GetSpellForLock directly - the latter
+        // answers nullptr for every skill-cased lock the bot has no spell for,
+        // which is all of them, and nullptr here means the instant Use below.
+        SpellInfo const* lockSpell = ResolveOpenLockSpell(go, bot);
 
         // Both of these cancel an interruptible OPEN_LOCK outright, and the bot
         // arrives here under MoveTowardThrottled - so without stopping first it
