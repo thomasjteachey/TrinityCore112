@@ -1082,6 +1082,26 @@ Quests.HighLevelHideDiff = 7
 Quests.IgnoreRaid = 1
 
 #
+#    Centurion.AnyClassTrainer.CreatureId
+#        Description: One NPC that trains EVERY class.
+#                     The schema cannot express that: a `trainer` row carries a
+#                     single class in Requirement, so a creature can only ever be
+#                     bound to one class's trainer. The creature named here instead
+#                     resolves, per player, to the master trainer of that player's
+#                     own class - the richest class trainer loaded, since a class
+#                     has many and they are not equivalent.
+#                     Every path that reads a creature's trainer honours this: the
+#                     gossip option, the spell list, the purchase, and the talent
+#                     reset test. They must agree, or the option appears and then
+#                     does nothing.
+#                     Give the creature npcflag TRAINER|TRAINER_CLASS and a class
+#                     trainer gossip menu; it needs no `trainer` row of its own.
+#        Default:     0 - (disabled)
+#
+
+Centurion.AnyClassTrainer.CreatureId = 0
+
+#
 #    Quests.IgnoreAutoAccept
 #        Description: Ignore auto accept flag. Clients will have to manually accept all quests.
 #        Default:     0 - (Disabled, DB values determine if quest is marked auto accept or not.)

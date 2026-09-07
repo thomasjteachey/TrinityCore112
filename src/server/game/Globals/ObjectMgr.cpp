@@ -9630,7 +9630,44 @@ void ObjectMgr::LoadCreatureDefaultTrainers()
         } while (result->NextRow());
     }
 
+    // Pick each class's master trainer for the any-class NPC to borrow.
+    //
+    // Richest wins, because a class has many trainers and they are not
+    // equivalent: on this realm the mage set runs from a 9216-spell master down
+    // to a 2-spell specialist, and handing a player the 2-spell one would look
+    // exactly like the bug this exists to fix.
+    _classMasterTrainers = {};
+    for (auto const& [trainerId, trainer] : _trainers)
+    {
+        if (trainer.GetTrainerType() != Trainer::Type::Class)
+            continue;
+
+        uint32 const trainerClass = trainer.GetTrainerRequirement();
+        if (trainerClass >= MAX_CLASSES)
+            continue;
+
+        Trainer::Trainer const* current = _classMasterTrainers[trainerClass];
+        if (!current || trainer.GetSpells().size() > current->GetSpells().size())
+            _classMasterTrainers[trainerClass] = &trainer;
+    }
+
     TC_LOG_INFO("server.loading", ">> Loaded {} default trainers in {} ms", _creatureDefaultTrainers.size(), GetMSTimeDiffToNow(oldMSTime));
+}
+
+Trainer::Trainer const* ObjectMgr::GetTrainerFor(uint32 creatureId, Player const* player) const
+{
+    if (Trainer::Trainer const* trainer = GetTrainer(creatureId))
+        return trainer;
+
+    uint32 const anyClassTrainer = sWorld->getIntConfig(CONFIG_ANY_CLASS_TRAINER_CREATURE);
+    if (!anyClassTrainer || creatureId != anyClassTrainer || !player)
+        return nullptr;
+
+    uint8 const playerClass = player->GetClass();
+    if (playerClass >= MAX_CLASSES)
+        return nullptr;
+
+    return _classMasterTrainers[playerClass];
 }
 
 uint32 ObjectMgr::LoadReferenceVendor(int32 vendor, int32 item, std::set<uint32>* skip_vendors)

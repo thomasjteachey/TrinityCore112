@@ -34,6 +34,7 @@
 #include "SharedDefines.h"
 #include "Trainer.h"
 #include "VehicleDefines.h"
+#include <array>
 #include <iterator>
 #include <map>
 #include <unordered_map>
@@ -1473,6 +1474,21 @@ class TC_GAME_API ObjectMgr
         bool DeleteGameTele(std::string_view name);
 
         Trainer::Trainer const* GetTrainer(uint32 creatureId) const;
+
+        // The trainer THIS player should see on this creature.
+        //
+        // Identical to GetTrainer for every ordinary trainer. The difference is
+        // the any-class trainer: one NPC that trains whoever walks up to it,
+        // which the schema cannot express because a `trainer` row carries a
+        // single class in Requirement. Rather than invent a second table, that
+        // one creature resolves to the master trainer of the asking player's
+        // own class.
+        //
+        // Every path that reads a creature's trainer must use this, not
+        // GetTrainer: the gossip option, the spell list, the purchase, and the
+        // talent-reset test each look it up independently, and one of them
+        // disagreeing means an option that appears and then does nothing.
+        Trainer::Trainer const* GetTrainerFor(uint32 creatureId, Player const* player) const;
         std::vector<Trainer::Trainer const*> const& GetClassTrainers(uint8 classId) const { return _classTrainers.at(classId); }
 
         VendorItemData const* GetNpcVendorItemList(uint32 entry) const
@@ -1710,6 +1726,9 @@ class TC_GAME_API ObjectMgr
         std::unordered_map<uint32, Trainer::Trainer> _trainers;
         std::unordered_map<uint8, std::vector<Trainer::Trainer const*>> _classTrainers;
         std::unordered_map<uint32, Trainer::Trainer const*> _creatureDefaultTrainers;
+        // The richest class trainer found for each class, indexed by class id.
+        // Built at load; see GetTrainerFor.
+        std::array<Trainer::Trainer const*, MAX_CLASSES> _classMasterTrainers = {};
 
         std::set<uint32> _difficultyEntries[MAX_DIFFICULTY - 1]; // already loaded difficulty 1 value in creatures, used in CheckCreatureTemplate
         std::set<uint32> _hasDifficultyEntries[MAX_DIFFICULTY - 1]; // already loaded creatures with difficulty 1 values, used in CheckCreatureTemplate

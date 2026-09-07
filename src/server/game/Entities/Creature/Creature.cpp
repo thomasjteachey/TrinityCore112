@@ -1335,7 +1335,7 @@ bool Creature::isCanInteractWithBattleMaster(Player* player, bool msg) const
 
 bool Creature::CanResetTalents(Player* player, bool pet) const
 {
-    Trainer::Trainer const* trainer = sObjectMgr->GetTrainer(GetEntry());
+    Trainer::Trainer const* trainer = sObjectMgr->GetTrainerFor(GetEntry(), player);
     if (!trainer)
         return false;
 

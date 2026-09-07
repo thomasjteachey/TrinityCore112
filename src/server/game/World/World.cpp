@@ -1187,6 +1187,11 @@ void World::LoadConfigSettings(bool reload)
     // it actually does here is silently break questing for anyone who converted
     // to a raid and forgot, with no message saying why.
     m_bool_configs[CONFIG_QUEST_IGNORE_RAID] = sConfigMgr->GetBoolDefault("Quests.IgnoreRaid", true);
+
+    // One NPC that trains every class. The schema cannot say that - a `trainer`
+    // row carries a single class in Requirement - so the creature named here
+    // resolves to the master trainer of whoever is talking to it. 0 disables.
+    m_int_configs[CONFIG_ANY_CLASS_TRAINER_CREATURE] = sConfigMgr->GetIntDefault("Centurion.AnyClassTrainer.CreatureId", 0);
     m_bool_configs[CONFIG_QUEST_IGNORE_AUTO_ACCEPT] = sConfigMgr->GetBoolDefault("Quests.IgnoreAutoAccept", false);
     m_bool_configs[CONFIG_QUEST_IGNORE_AUTO_COMPLETE] = sConfigMgr->GetBoolDefault("Quests.IgnoreAutoComplete", false);
 
