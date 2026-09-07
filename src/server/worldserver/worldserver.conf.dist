@@ -3462,6 +3462,19 @@ Playerbot.Pve.IdleProd.AfterMinutes = 15
 Playerbot.Pve.IdleProd.DropYards = 210.0
 Playerbot.Pve.IdleProd.RetrySeconds = 120
 
+#
+#    Playerbot.Pve.DeathChestAuctionHoldSeconds
+#        Description: How long a bot must hold an item it took out of a PLAYER's
+#                     death chest before it may list it on the auction house.
+#                     That loot is somebody's gear, and without a hold it could
+#                     be up for sale before its owner finished the corpse run.
+#                     Items a bot found any other way are unaffected.
+#        Default:     1800 - (thirty minutes)
+#                     0    - (no hold)
+#
+
+Playerbot.Pve.DeathChestAuctionHoldSeconds = 1800
+
 Centurion.Bounty.Enable = 0
 Centurion.Bounty.AuraSpell = 90701
 Centurion.Bounty.StacksPerKill = 1
