@@ -17,6 +17,7 @@
 
 #include "Chat.h"
 #include "Bag.h"
+#include "Configuration/Config.h"
 #include "Creature.h"
 #include "custom_barracks_hardcore.h"
 #include "DBCStores.h"
@@ -33,6 +34,7 @@
 #include "SharedDefines.h"
 #include "SpellMgr.h"
 #include "SpellInfo.h"
+#include "StringConvert.h"
 #include "TaskScheduler.h"
 #include "TemporarySummon.h"
 #include "Util.h"
@@ -882,6 +884,58 @@ bool ShouldTrackGurubashiPlayer(Player const* player)
     return player && player->IsInWorld() && player->GetMapId() == GURUBASHI_ARENA_MAP_ID && player->GetZoneId() == STRANGLETHORN_VALE_ZONE_ID;
 }
 
+// Where a player gets their PvP consumable charges topped back up.
+//
+// Deliberately NOT ShouldTrackGurubashiPlayer, even though that is what the refresh
+// used to ask. That predicate also drives the arena exit enforcer, which must keep
+// policing only the people actually inside Gurubashi; widening it would set the
+// enforcer loose on four other zones.
+//
+// Config rather than code for two reasons: both realms build one branch and only L+
+// has malls, so a hardcoded list would change B+ too; and a mall can move or gain a
+// floor without anybody wanting a rebuild for it.
+//
+// Matched against BOTH the zone and the area id, so one entry can name a whole zone
+// (25, Blackrock Mountain) or a single area inside a much bigger one (4024, Coldarra,
+// which sits inside Borean Tundra - matching its zone would cover the entire
+// continent's worth of tundra instead of the mall).
+std::mutex g_PvpConsumableRestoreAreasMutex;
+std::unordered_set<uint32> g_PvpConsumableRestoreAreas;
+
+void LoadPvpConsumableRestoreAreas()
+{
+    std::string const configured = sConfigMgr->GetStringDefault("Centurion.PvpConsumableRestore.AreaIds", "");
+
+    std::unordered_set<uint32> parsed;
+    for (std::string_view token : Trinity::Tokenize(configured, ',', false))
+        if (Optional<uint32> const value = Trinity::StringTo<uint32>(token))
+            if (*value)
+                parsed.insert(*value);
+
+    std::lock_guard<std::mutex> lock(g_PvpConsumableRestoreAreasMutex);
+    g_PvpConsumableRestoreAreas = std::move(parsed);
+}
+
+bool IsInPvpConsumableRestoreArea(Player const* player)
+{
+    if (!player || !player->IsInWorld())
+        return false;
+
+    // Gurubashi keeps working with nothing configured, so B+ is unchanged by this.
+    if (ShouldTrackGurubashiPlayer(player))
+        return true;
+
+    // The set is rebuilt on the world thread by OnConfigLoad while this is read from
+    // whichever map thread owns the player, so the read is locked. It is cheap: the
+    // callers are login, map change and zone change, not a per-tick path.
+    std::lock_guard<std::mutex> lock(g_PvpConsumableRestoreAreasMutex);
+    if (g_PvpConsumableRestoreAreas.empty())
+        return false;
+
+    return g_PvpConsumableRestoreAreas.count(player->GetAreaId()) != 0
+        || g_PvpConsumableRestoreAreas.count(player->GetZoneId()) != 0;
+}
+
 bool HasBelowMaxCharges(Item const* item)
 {
     if (!item)
@@ -978,19 +1032,19 @@ public:
 
     void OnLogin(Player* player, bool /*firstLogin*/) override
     {
-        RefreshPvpConsumablesIfInStranglethorn(player);
+        RefreshPvpConsumablesIfInRestoreArea(player);
         UpdateGurubashiPlayerTracking(player);
     }
 
     void OnMapChanged(Player* player) override
     {
-        RefreshPvpConsumablesIfInStranglethorn(player);
+        RefreshPvpConsumablesIfInRestoreArea(player);
         UpdateGurubashiPlayerTracking(player);
     }
 
     void OnUpdateZone(Player* player, uint32 /*newZone*/, uint32 /*newArea*/) override
     {
-        RefreshPvpConsumablesIfInStranglethorn(player);
+        RefreshPvpConsumablesIfInRestoreArea(player);
         UpdateGurubashiPlayerTracking(player);
     }
 
@@ -1032,9 +1086,9 @@ public:
     }
 
 private:
-    void RefreshPvpConsumablesIfInStranglethorn(Player* player)
+    void RefreshPvpConsumablesIfInRestoreArea(Player* player)
     {
-        if (!ShouldTrackGurubashiPlayer(player))
+        if (!IsInPvpConsumableRestoreArea(player))
             return;
 
         if (RestorePvpConsumableCharges(player))
@@ -1046,6 +1100,12 @@ class gurubashi_arena_exit_enforcer : public WorldScript
 {
 public:
     gurubashi_arena_exit_enforcer() : WorldScript("gurubashi_arena_exit_enforcer") { }
+
+    // Reloadable on purpose: `.reload config` picks up a new mall without a restart.
+    void OnConfigLoad(bool /*reload*/) override
+    {
+        LoadPvpConsumableRestoreAreas();
+    }
 
     void OnUpdate(uint32 diff) override
     {

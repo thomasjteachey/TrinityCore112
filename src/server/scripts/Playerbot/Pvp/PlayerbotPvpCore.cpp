@@ -2312,6 +2312,14 @@ bool MeetsCasterAuraStateRequirements(Player const* player, uint32 spellId)
         static std::unordered_map<uint64, uint32> indoorSinceMsByGuid;
         uint64 const guid = player->GetGUID().GetRawValue();
 
+        // One map, every managed bot, four map-update threads: the erase below and the
+        // emplace further down are structural mutations, so without this the bucket
+        // array can be reallocated out from under a sibling thread mid-lookup.
+        //
+        // The identical function in PlayerbotPvpLifecycleActions.cpp:459 has always
+        // taken this lock. This copy did not, which is an oversight rather than a
+        // deliberate exemption - there is nothing different about the state it keeps.
+        std::lock_guard<std::mutex> stateGuard(playerbot::SharedBotStateStructureLock());
         if (outdoors)
         {
             indoorSinceMsByGuid.erase(guid);

@@ -3960,6 +3960,29 @@ Centurion.Shutdown.RequestFile = ""
 
 Centurion.Shutdown.PollMs = 3000
 
+#
+#    Centurion.PvpConsumableRestore.AreaIds
+#        Description: Comma-separated area or zone IDs where a player's PvP consumable
+#                     charges are topped back up (on login, map change and zone change),
+#                     with a whisper from Chromie. Each entry is tested against BOTH the
+#                     player's area id and zone id, so you can name a whole zone (25 =
+#                     Blackrock Mountain) or a single area inside a larger one (4024 =
+#                     Coldarra, which sits inside Borean Tundra).
+#                     Gurubashi Arena always restores regardless of this setting, so
+#                     leaving it empty preserves the original behaviour.
+#                     Reloadable with `.reload config`.
+#        Default:     "" (Gurubashi only)
+#
+#        Example (Legionnaire Plus malls):
+#            4024  Coldarra
+#            25    Blackrock Mountain
+#            4180  New Hearthglen
+#            1941  Caverns Waste of Time
+#            2300  Caverns Waste of Time (second area row)
+#
+
+Centurion.PvpConsumableRestore.AreaIds = ""
+
 DireMaulBeads.ItemId = 21982
 DireMaulBeads.AuraId = 90002
 DireMaulBeads.AreaIds = 495,496,498,2557,3217
