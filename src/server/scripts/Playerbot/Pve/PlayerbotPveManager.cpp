@@ -7027,6 +7027,24 @@ namespace
     // it "suits" a level 13 - who then spends its time being jumped by level 6s
     // it cannot even choose to fight. What matters is not whether the zone has
     // ANY cluster at the bot's level, but whether it has enough of them.
+
+    // How many of this zone's clusters this bot could actually hunt. The
+    // by-level index was built with a five-level window (mean level L-3 to L+1),
+    // so this is "clusters here I am allowed to fight", not "clusters here".
+    uint32 UsableSpotCountInZone(uint32 level, uint32 zoneId)
+    {
+        auto const levelItr = g_GrindSpotsByLevel.find(uint8(std::min<uint32>(level, 80)));
+        if (levelItr == g_GrindSpotsByLevel.end())
+            return 0;
+
+        uint32 usable = 0;
+        for (GrindSpot const& spot : levelItr->second)
+            if (spot.zoneId == zoneId)
+                ++usable;
+
+        return usable;
+    }
+
     bool BotIsInSuitableZone(Player* bot)
     {
         uint32 const zoneId = bot->GetZoneId();
@@ -7045,7 +7063,39 @@ namespace
                     return false;
                 if (level > uint32(band.maxLevel) + 1)
                     return false;
-                break;
+
+                // Inside its own band, in a zone the chart names: that IS the
+                // answer, and the share test below must not get a vote on it.
+                //
+                // That test asks whether a QUARTER of the zone's clusters are
+                // huntable at this exact level, and a chart zone can almost never
+                // say yes. A bot of level L hunts clusters of mean level L-3 to
+                // L+1 (the five-level window built at the push_back above), while
+                // Hillsbrad, say, spans eleven levels. At the bottom of the band
+                // there is nothing below to widen the window, so a level twenty
+                // in a twenty-to-thirty zone reaches about two elevenths of it and
+                // fails; the same happens at the top. Only a bot in the middle of
+                // a narrow zone ever passed.
+                //
+                // The symptom was a bot standing in the zone the chart assigned
+                // it, being told once a minute that it had "outgrown" the place,
+                // relocating to another spot in that same zone, and being told
+                // again sixty seconds later - which a person watching reads as a
+                // bot pacing back and forth forever. Seen live on Aerhild, level
+                // 20, zone 267, assigned band 20-30.
+                //
+                // What still has to hold is far weaker: the zone must have
+                // SOMETHING this bot can hit. A band it belongs to with nothing at
+                // its level in it is a real problem; a band it belongs to that is
+                // merely mostly aimed higher is not.
+                if (!g_GrindSpotsBuilt)
+                    return true;
+
+                auto const bandTotalItr = g_ZoneSpotCount.find(zoneId);
+                if (bandTotalItr == g_ZoneSpotCount.end() || !bandTotalItr->second)
+                    return true;   // an uncounted zone is not evidence of anything
+
+                return UsableSpotCountInZone(level, zoneId) > 0;
             }
 
         // While the world thread is building the dynamic cache, the static chart
@@ -7067,17 +7117,11 @@ namespace
         if (topItr != g_ZoneTopLevel.end() && level > uint32(topItr->second) + 1)
             return false;
 
-        auto levelItr = g_GrindSpotsByLevel.find(uint8(std::min<uint32>(level, 80)));
-        if (levelItr == g_GrindSpotsByLevel.end())
-            return false;
-
-        uint32 usable = 0;
-        for (GrindSpot const& spot : levelItr->second)
-            if (spot.zoneId == zoneId)
-                ++usable;
-
-        // A quarter of the zone still worth hunting is enough to stay.
-        return usable * 4 >= totalItr->second;
+        // A quarter of the zone still worth hunting is enough to stay. This is
+        // only reached for zones the classic chart does not name - a custom or
+        // unlisted zone, where there is no designed band to trust and the spawn
+        // cache is the only opinion available.
+        return UsableSpotCountInZone(level, zoneId) * 4 >= totalItr->second;
     }
 
     bool HasHumanPlayerNearby(Player* bot, float radius)
@@ -12319,7 +12363,10 @@ namespace
 
                 if (!BotIsInSuitableZone(bot))
                 {
-                    TC_LOG_INFO("playerbots.pve", "Bot {} (level {}) has outgrown zone {}; relocating.",
+                    // "Outgrown" was an assertion the test could not actually
+                    // make - it fails under-level bots too - and it sent whoever
+                    // read the log looking for a levelling bug that was not there.
+                    TC_LOG_INFO("playerbots.pve", "Bot {} (level {}) does not belong in zone {}; relocating.",
                         bot->GetName(), bot->GetLevel(), bot->GetZoneId());
                     state.dryWanderCount = 0;
                     std::lock_guard<std::mutex> guard(g_PvePendingLock);
