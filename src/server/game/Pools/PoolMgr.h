@@ -161,19 +161,29 @@ class TC_GAME_API PoolMgr
         uint64 GetActivePoolDataKey(uint32 mapId, uint32 instanceId) const;
         // Structural access to mSpawnedData is SHARED STATE and must hold this.
         //
-        // MapUpdate.Threads is 4 on the live realms, so four maps update at once,
-        // and every respawn on every one of them reaches GetActivePoolData ->
-        // mSpawnedData[key], which is an INSERT. Concurrent operator[] on one
-        // unordered_map rehashes the bucket array under the other threads' feet:
-        // undefined behaviour whose observable form is corrupted buckets and
-        // freed node arrays - which is what a crash inside jemalloc's own
-        // free-list flush looks like.
+        // MapUpdate.Threads is 4 on the live realms and MapManager::Update schedules
+        // continents into that same pool, so four Map::Update bodies reach
+        // GetActivePoolData -> mSpawnedData[key] at once. operator[] can INSERT, and a
+        // concurrent insert that rehashes reallocates the bucket array under the other
+        // threads' feet.
+        //
+        // Be honest about how often that actually happens: a continent's key is
+        // inserted ONCE and never erased (ClearPoolDataForMap ignores non-instanceable
+        // maps), so after the first pooled respawn on each continent the hot path is a
+        // pure lookup. libstdc++ never shrinks bucket_count either, so the rehash
+        // window is front-loaded into the first minutes of uptime. The remaining
+        // ongoing churn is instance keys being inserted and erased as dungeons load
+        // and unload. So this lock is CORRECTNESS HARDENING against real undefined
+        // behaviour - it is not the explanation for a crash that only shows up after
+        // hours of uptime.
         //
         // The lock covers only the lookup, not the ActivePoolData the caller then
-        // uses: references into an unordered_map survive a rehash (the standard
-        // invalidates iterators, not references), and each map thread works on its
-        // own key. See the comment on GetActivePoolData for the one key that is
-        // NOT private to a single map.
+        // uses. That is sound against rehash, which invalidates iterators but not
+        // references. It is NOT sound against erase: ClearPoolDataForMap can free an
+        // instance's node while another thread still holds the reference this returned.
+        // Narrow (instance ids only, and both erase sites first check the map is gone)
+        // but real, and closing it needs the reference replaced by something the caller
+        // holds a claim on rather than a wider lock here.
         mutable std::mutex mSpawnedDataLock;
         mutable std::unordered_map<uint64, ActivePoolData> mSpawnedData;
 };

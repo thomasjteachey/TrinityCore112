@@ -444,21 +444,21 @@ void PoolMgr::Initialize()
 ActivePoolData& PoolMgr::GetActivePoolData(Map* map) const
 {
     // The insert is what has to be serialised. Four map-update threads reach this
-    // on every respawn (Map::ProcessRespawns -> UpdatePool, Creature::Respawn,
-    // GameObject::Update) and an unsynchronised operator[] on a shared
-    // unordered_map is a data race the moment any of them causes a rehash.
+    // (Map::ProcessRespawns -> UpdatePool at Map.cpp:3328, Creature::Respawn at
+    // Creature.cpp:2840, GameObject::Update) and an unsynchronised operator[] on a
+    // shared unordered_map is a data race the moment any of them causes a rehash.
     //
-    // Returning the reference out of the lock is safe: rehashing invalidates
-    // iterators, never references to the mapped values, and each map thread
-    // then mutates only its own key's ActivePoolData.
+    // Returning the reference out of the lock is sound against rehash - that
+    // invalidates iterators, not references - but see the header: it is NOT sound
+    // against ClearPoolDataForMap's erase.
     //
-    // KNOWN REMAINING HAZARD, deliberately not addressed here: a nested
-    // pool-of-pool roll calls the map-less overloads (Spawn1Object at :378 and
-    // Despawn1Object at :231), which key to 0 - and map 0 keys to 0 as well. So a
-    // child pool rolled on map 1's thread and map 0's own pools share one
-    // ActivePoolData. That is a second race, on the CONTENTS rather than the
-    // container, and fixing it means threading the owning Map through the nested
-    // spawn path rather than widening this lock.
+    // KNOWN REMAINING HAZARD, deliberately not addressed here: a nested pool-of-pool
+    // roll calls the map-less overloads (Spawn1Object at :378 and Despawn1Object at
+    // :231), which key to 0 - and map 0 keys to 0 as well. So a child pool rolled on
+    // map 571's thread and map 0's own pools share ONE ActivePoolData, and the lock is
+    // released before SpawnObject touches its std::set members. That is a live race on
+    // the CONTENTS rather than the container, and this lock does nothing about it;
+    // fixing it means threading the owning Map through the nested spawn path.
     std::lock_guard<std::mutex> guard(mSpawnedDataLock);
     return mSpawnedData[GetActivePoolDataKey(map)];
 }
