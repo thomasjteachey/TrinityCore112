@@ -80,6 +80,11 @@ struct PveConfig
     // surplus is thrown away. By slot, not by quantity: one stack of twenty
     // potions is harmless, twenty stacks of one potion is twenty slots.
     uint32 maxSlotsPerItemEntry = 3;
+    // And the other axis: how many UNITS of one consumable a bot may hold at
+    // all. The slot cap above cannot see a bot carrying one each of forty
+    // different consumables, which is the shape the live fleet actually takes.
+    // 0 disables.
+    uint32 maxUnitsPerConsumable = 20;
     // The rogue energy consumable, and the energy level below which it is
     // worth drinking mid-fight. 0 disables.
     uint32 thistleTeaItemId = 7676;

@@ -559,6 +559,7 @@ namespace
     void HoldLootFromAuction(ObjectGuid itemGuid, uint32 seconds);
     uint32 RequiredAmmoSubclass(Player const* bot);
     void MoveTowardThrottled(Player* bot, Position const& destination);
+    void TrimOverstockedConsumables(Player* bot);
     WalkPathResult CheckWalkPath(Player* bot, Position const& destination);
     void ProcessPendingLootExecutions();
     void QueueUnwatchedChests();
@@ -1273,6 +1274,49 @@ namespace
         if (!surplus.empty())
             TC_LOG_INFO("playerbots.pve", "Bot {} dropped {} hoarded duplicate slot(s).",
                 bot->GetName(), uint32(surplus.size()));
+
+        TrimOverstockedConsumables(bot);
+    }
+
+    // Nobody drinks their twenty-first potion either.
+    //
+    // The slot cap above counts SLOTS holding one item id, which catches twenty
+    // stacks of Thistle Tea and misses the shape the fleet actually reaches:
+    // one stack each of forty different consumables. Quinfyn was found at 80/80
+    // with forty-seven consumable slots - every rank of every poison, five kinds
+    // of potion - and the slot cap never fired once, because no single entry
+    // occupied more than one slot.
+    //
+    // So cap the UNITS of any one consumable as well. Only class Consumable is
+    // touched; trade goods are stock the auction house wants and equipment is
+    // never in scope.
+    void TrimOverstockedConsumables(Player* bot)
+    {
+        uint32 const cap = g_PveConfig.maxUnitsPerConsumable;
+        if (!bot || !cap)
+            return;
+
+        std::unordered_map<uint32, uint32> held;
+        ForEachBagItem(bot, [&](Item* item, uint8 /*bag*/, uint8 /*slot*/)
+        {
+            ItemTemplate const* proto = item->GetTemplate();
+            if (!proto || proto->Class != ITEM_CLASS_CONSUMABLE)
+                return;
+
+            held[proto->ItemId] += item->GetCount();
+        });
+
+        for (auto const& [itemId, count] : held)
+        {
+            if (count <= cap)
+                continue;
+
+            // DestroyItemCount walks the bags itself and takes partial stacks,
+            // so this trims to exactly the cap rather than losing a whole stack.
+            bot->DestroyItemCount(itemId, count - cap, true);
+            TC_LOG_INFO("playerbots.pve", "Bot {} trimmed {} to {} of item {} (held {}).",
+                bot->GetName(), count - cap, cap, itemId, count);
+        }
     }
 
     void DiscardOrphanedQuestItems(Player* bot)
@@ -13517,6 +13561,8 @@ namespace playerbot
         g_PveConfig.auctionUndercutCopper = uint32(std::max(1, sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionUndercutCopper", 1)));
         g_PveConfig.maxSlotsPerItemEntry = uint32(std::max(0,
             sConfigMgr->GetIntDefault("Playerbot.Pve.MaxSlotsPerItem", 3)));
+        g_PveConfig.maxUnitsPerConsumable = uint32(std::max(0,
+            sConfigMgr->GetIntDefault("Playerbot.Pve.MaxUnitsPerConsumable", 20)));
         g_PveConfig.thistleTeaItemId = uint32(std::max(0,
             sConfigMgr->GetIntDefault("Playerbot.Pve.ThistleTeaItemId", 7676)));
         g_PveConfig.thistleTeaEnergyBelow = uint32(std::clamp(

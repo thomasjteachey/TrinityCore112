@@ -3481,6 +3481,27 @@ Playerbot.Pve.IdleProd.RetrySeconds = 120
 
 Playerbot.Pve.DeathChestAuctionHoldSeconds = 1800
 
+#
+#    Playerbot.Pve.MaxSlotsPerItem
+#    Playerbot.Pve.MaxUnitsPerConsumable
+#        Description: Two axes of the same problem - a bot whose bags fill and
+#                     never empty. A full pack is not cosmetic: it silently stops
+#                     the bot mining, looting chests, and storing auction wins.
+#                     MaxSlotsPerItem caps how many SLOTS one item id may occupy,
+#                     which catches twenty stacks of Thistle Tea.
+#                     MaxUnitsPerConsumable caps how many UNITS of one consumable
+#                     it may hold at all, which catches the shape the slot cap
+#                     cannot see - one stack each of forty different consumables.
+#                     Only class Consumable is trimmed by the second; trade goods
+#                     are auction stock and equipment is never in scope.
+#        Default:     3  (slots)
+#                     20 (units)
+#                     0 disables either
+#
+
+Playerbot.Pve.MaxSlotsPerItem            = 3
+Playerbot.Pve.MaxUnitsPerConsumable      = 20
+
 Centurion.Bounty.Enable = 0
 Centurion.Bounty.AuraSpell = 90701
 Centurion.Bounty.StacksPerKill = 1

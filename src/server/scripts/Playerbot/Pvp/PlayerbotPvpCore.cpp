@@ -28,6 +28,7 @@
 #include "BattlegroundWS.h"
 #include "CharacterCache.h"
 #include "Configuration/Config.h"
+#include "Bag.h"
 #include "Creature.h"
 #include "GameObject.h"
 #include "Group.h"
@@ -413,6 +414,76 @@ uint32 SelectReadyHealthstoneItemEntry(Player const* player)
             return itemEntry;
 
     return 0;
+}
+
+// The best restorative potion in the bags, or 0.
+//
+// Discovered from the SPELL rather than from a list of item ids. A hardcoded
+// table would be wrong the moment the realm adds a potion, and this realm adds
+// items constantly - the same reason the food/drink picker asks the spell what
+// it restores instead of matching names.
+//
+// Only a DIRECT restore counts. SPELL_EFFECT_HEAL and SPELL_EFFECT_ENERGIZE are
+// what a potion does; a periodic-heal aura is a First Aid bandage, which is a
+// channel that the next hit cancels, and food and drink are regeneration auras
+// that do not work in combat at all. Selecting on the effect separates all three
+// without needing to know a single item id.
+//
+// Largest first, because this is only ever asked when something has gone wrong.
+// IsOnUseItemReady covers usability and every cooldown that matters, including
+// the shared potion category, so a bot cannot chain two.
+uint32 SelectReadyRestorePotionItemEntry(Player const* player, bool wantMana)
+{
+    if (!player)
+        return 0;
+
+    uint32 bestEntry = 0;
+    int32 bestAmount = 0;
+
+    auto const consider = [&](Item const* item)
+    {
+        if (!item)
+            return;
+
+        ItemTemplate const* proto = item->GetTemplate();
+        if (!proto || proto->Class != ITEM_CLASS_CONSUMABLE)
+            return;
+
+        SpellInfo const* spellInfo = GetFirstOnUseItemSpellInfo(item);
+        if (!spellInfo)
+            return;
+
+        int32 amount = 0;
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+        {
+            if (!effect.IsEffect())
+                continue;
+
+            if (!wantMana && effect.Effect == SPELL_EFFECT_HEAL)
+                amount = std::max(amount, effect.CalcValue(player));
+            else if (wantMana && effect.Effect == SPELL_EFFECT_ENERGIZE && effect.MiscValue == POWER_MANA)
+                amount = std::max(amount, effect.CalcValue(player));
+        }
+
+        if (amount <= 0 || amount <= bestAmount)
+            return;
+
+        if (!IsOnUseItemReady(player, proto->ItemId))
+            return;
+
+        bestEntry = proto->ItemId;
+        bestAmount = amount;
+    };
+
+    for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+        consider(player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot));
+
+    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+        if (Bag* bag = player->GetBagByPos(bagSlot))
+            for (uint32 bagIndex = 0; bagIndex < bag->GetBagSize(); ++bagIndex)
+                consider(bag->GetItemByPos(uint8(bagIndex)));
+
+    return bestEntry;
 }
 
 bool IsWarlockSpellstoneItemEntry(uint32 itemEntry)
@@ -6663,7 +6734,29 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
             return { "use healthstone", "restore health below fifty percent", 0,
                 playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID(), healthstoneItemEntry };
         }
+
+        // After the healthstone, because that one is free and a potion is not.
+        //
+        // Nothing on this realm ever drank one. The only item entries reachable
+        // from the decision table were warlock healthstones and stones, so a bot
+        // carrying five kinds of healing potion died holding all of them - which
+        // is also why they pile up until the bags are full and it stops mining.
+        if (uint32 const potionItemEntry = SelectReadyRestorePotionItemEntry(player, false))
+        {
+            if (player->GetClass() == CLASS_WARRIOR)
+                SetWarriorGapCloserDiagnostic(player, "early_exit=healing_potion");
+            return { "use healing potion", "restore health below fifty percent", 0,
+                playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID(), potionItemEntry };
+        }
     }
+
+    // Mana second, and lower, because being out of mana is a losing fight
+    // whereas being out of health is a lost one. Only for a class that has a
+    // mana bar to empty.
+    if (player && player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 25.0f)
+        if (uint32 const manaItemEntry = SelectReadyRestorePotionItemEntry(player, true))
+            return { "use mana potion", "restore mana below twenty-five percent", 0,
+                playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID(), manaItemEntry };
 
     // Spirit of Redemption must run the priest healing selector even with no
     // selected hostile/ally target; the selector finds the lowest-health ally
