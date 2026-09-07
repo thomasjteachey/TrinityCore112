@@ -2179,6 +2179,11 @@ public:
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, "The mark has moved.", GOSSIP_SENDER_MAIN, 8);
             }
 
+            // The same kit the corpse gets, on demand. Not a second system:
+            // this calls the identical function the resurrection path does, so
+            // "what Grix hands you" and "what you wake up in" can never drift.
+            AddGossipItemFor(player, GOSSIP_ICON_TABARD, "Kit me out.", GOSSIP_SENDER_MAIN, 10);
+
             // The way out, priced like a repair bill. Only shown when there is
             // something to erase, and the price is in the label so nobody clicks
             // it to find out.
@@ -2226,6 +2231,18 @@ public:
                     me->Whisper("Then he has moved. Here is where he stands now.", LANG_UNIVERSAL, player);
                 else
                     me->Whisper("He has moved for you twice already. Walk it.", LANG_UNIVERSAL, player);
+                return true;
+            }
+            if (action == 10)
+            {
+                // Fills empty slots, and replaces worn kit that has fallen far
+                // enough behind the wearer to be useless - the same two rules the
+                // corpse path uses, because it is the same call. Anything that is
+                // not field kit is left alone: gear you went and earned is never
+                // touched.
+                IssueWhiteFieldKit(player);
+                me->Whisper("Then take what the quartermaster leaves out. It is not good, "
+                    "but it is better than bare.", LANG_UNIVERSAL, player);
                 return true;
             }
             if (action == 9)
