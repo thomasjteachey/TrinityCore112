@@ -443,6 +443,23 @@ void PoolMgr::Initialize()
 
 ActivePoolData& PoolMgr::GetActivePoolData(Map* map) const
 {
+    // The insert is what has to be serialised. Four map-update threads reach this
+    // on every respawn (Map::ProcessRespawns -> UpdatePool, Creature::Respawn,
+    // GameObject::Update) and an unsynchronised operator[] on a shared
+    // unordered_map is a data race the moment any of them causes a rehash.
+    //
+    // Returning the reference out of the lock is safe: rehashing invalidates
+    // iterators, never references to the mapped values, and each map thread
+    // then mutates only its own key's ActivePoolData.
+    //
+    // KNOWN REMAINING HAZARD, deliberately not addressed here: a nested
+    // pool-of-pool roll calls the map-less overloads (Spawn1Object at :378 and
+    // Despawn1Object at :231), which key to 0 - and map 0 keys to 0 as well. So a
+    // child pool rolled on map 1's thread and map 0's own pools share one
+    // ActivePoolData. That is a second race, on the CONTENTS rather than the
+    // container, and fixing it means threading the owning Map through the nested
+    // spawn path rather than widening this lock.
+    std::lock_guard<std::mutex> guard(mSpawnedDataLock);
     return mSpawnedData[GetActivePoolDataKey(map)];
 }
 
@@ -479,8 +496,11 @@ void PoolMgr::EnsurePoolDataForMap(Map* map)
         return;
 
     uint64 const key = GetActivePoolDataKey(map);
-    if (mSpawnedData.find(key) != mSpawnedData.end())
-        return;
+    {
+        std::lock_guard<std::mutex> guard(mSpawnedDataLock);
+        if (mSpawnedData.find(key) != mSpawnedData.end())
+            return;
+    }
 
     for (auto const& [poolId, poolTemplate] : mPoolTemplate)
     {
@@ -506,6 +526,7 @@ void PoolMgr::ClearPoolDataForMap(uint32 mapId, uint32 instanceId)
     if (!instanceId)
         return;
 
+    std::lock_guard<std::mutex> guard(mSpawnedDataLock);
     mSpawnedData.erase(GetActivePoolDataKey(mapId, instanceId));
 }
 

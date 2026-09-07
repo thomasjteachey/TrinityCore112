@@ -22,6 +22,8 @@
 #include "Creature.h"
 #include "GameObject.h"
 #include "SpawnData.h"
+#include <mutex>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -157,6 +159,22 @@ class TC_GAME_API PoolMgr
         ActivePoolData& GetActivePoolData(Map* map) const;
         uint64 GetActivePoolDataKey(Map* map) const;
         uint64 GetActivePoolDataKey(uint32 mapId, uint32 instanceId) const;
+        // Structural access to mSpawnedData is SHARED STATE and must hold this.
+        //
+        // MapUpdate.Threads is 4 on the live realms, so four maps update at once,
+        // and every respawn on every one of them reaches GetActivePoolData ->
+        // mSpawnedData[key], which is an INSERT. Concurrent operator[] on one
+        // unordered_map rehashes the bucket array under the other threads' feet:
+        // undefined behaviour whose observable form is corrupted buckets and
+        // freed node arrays - which is what a crash inside jemalloc's own
+        // free-list flush looks like.
+        //
+        // The lock covers only the lookup, not the ActivePoolData the caller then
+        // uses: references into an unordered_map survive a rehash (the standard
+        // invalidates iterators, not references), and each map thread works on its
+        // own key. See the comment on GetActivePoolData for the one key that is
+        // NOT private to a single map.
+        mutable std::mutex mSpawnedDataLock;
         mutable std::unordered_map<uint64, ActivePoolData> mSpawnedData;
 };
 
