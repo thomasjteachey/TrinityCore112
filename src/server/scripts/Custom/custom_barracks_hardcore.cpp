@@ -1061,6 +1061,70 @@ namespace BarracksHardcore
         }
     }
 
+    // What the character was fighting with when it died.
+    //
+    // The kit ranks the pool by required level and then item level, which says
+    // nothing about SHAPE - so a warrior who died holding a two-handed axe was
+    // just as likely to be handed a sword and board, and an axe user spent the
+    // rest of its life re-learning a weapon skill it had no reason to change.
+    // Recorded on the death path and consumed by the next kit issue, so the
+    // replacement comes back the same shape it went out.
+    //
+    // In memory on purpose: death and the kit that follows it are seconds apart,
+    // and if a restart lands between them the miss is harmless - no record means
+    // the old level/item-level ranking, which is exactly the barehanded case the
+    // owner asked to fall through to anyway.
+    struct DiedHoldingWeapon
+    {
+        uint32 mainSubClass = 0;
+        uint32 mainInvType = 0;
+        bool   hadWeapon = false;
+    };
+
+    std::mutex s_diedHoldingLock;
+    std::unordered_map<uint64, DiedHoldingWeapon> s_diedHoldingByGuid;
+
+    void RememberWeaponShapeAtDeath(Player const* player)
+    {
+        if (!player)
+            return;
+
+        DiedHoldingWeapon shape;
+        if (Item const* main = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND))
+        {
+            if (ItemTemplate const* proto = main->GetTemplate())
+            {
+                if (proto->Class == ITEM_CLASS_WEAPON)
+                {
+                    shape.mainSubClass = proto->SubClass;
+                    shape.mainInvType = proto->InventoryType;
+                    shape.hadWeapon = true;
+                }
+            }
+        }
+
+        std::lock_guard<std::mutex> guard(s_diedHoldingLock);
+        s_diedHoldingByGuid[player->GetGUID().GetRawValue()] = shape;
+    }
+
+    // Consumed, not merely read: the shape belongs to ONE death. Leaving it
+    // behind would pin a character to whatever it happened to die with once,
+    // long after it had chosen something else.
+    DiedHoldingWeapon TakeWeaponShapeAtDeath(Player const* player)
+    {
+        if (!player)
+            return {};
+
+        std::lock_guard<std::mutex> guard(s_diedHoldingLock);
+        auto itr = s_diedHoldingByGuid.find(player->GetGUID().GetRawValue());
+        if (itr == s_diedHoldingByGuid.end())
+            return {};
+
+        DiedHoldingWeapon const shape = itr->second;
+        s_diedHoldingByGuid.erase(itr);
+        return shape;
+    }
+
     std::vector<uint32> InventoryTypesForSlot(uint8 slot, Player const* player)
     {
         switch (slot)
@@ -1087,7 +1151,19 @@ namespace BarracksHardcore
             // off-hand at all, and offering it would just fail CanEquipNewItem
             // after the scan had already stopped on it.
             std::vector<uint32> types = { INVTYPE_SHIELD, INVTYPE_WEAPONOFFHAND, INVTYPE_HOLDABLE };
-            if (player && player->CanDualWield())
+
+            // Rogues and hunters get the one-hander offered unconditionally.
+            //
+            // CanDualWield is false until the skill is trained - level 10 for a
+            // rogue, 20 for a hunter - so gating on it meant exactly the classes
+            // that dual wield for a living spent their early levels with a dead
+            // off-hand, and the kit had no way to fill it. It is not the right
+            // authority here either: CanEquipNewItem further down is, and it
+            // refuses the piece harmlessly if the skill really is missing, so
+            // offering the type costs a rejected candidate at worst.
+            bool const dualWieldClass = player &&
+                (player->GetClass() == CLASS_ROGUE || player->GetClass() == CLASS_HUNTER);
+            if (dualWieldClass || (player && player->CanDualWield()))
                 types.push_back(INVTYPE_WEAPON);
             return types;
         }
@@ -1303,6 +1379,11 @@ namespace BarracksHardcore
         // Read once: it cannot change while the kit is being handed out, and
         // the bag scan behind it is not worth repeating per candidate.
         uint32 const ammoSubclass = CurrentAmmoSubclass(player);
+
+        // And what this character was holding when it died, consumed here so a
+        // single death cannot pin its weapon choice forever.
+        DiedHoldingWeapon const diedHolding = TakeWeaponShapeAtDeath(player);
+
         uint32 granted = 0;
 
         for (uint8 slot : kKitSlots)
@@ -1342,6 +1423,31 @@ namespace BarracksHardcore
             uint32 bestItemId = 0;
             uint32 bestRequiredLevel = 0;
             uint32 bestItemLevel = 0;
+
+            // Hand back the shape it died with, if the pool has one.
+            //
+            // Only for the hand that actually held it, and only when this death
+            // took a weapon: a character that fell over barehanded has nothing
+            // to be faithful to and drops straight through to the ordinary
+            // search, which is what the owner asked for.
+            //
+            // Two passes rather than a tie-break, because the scan below stops
+            // at the FIRST usable entry (the tier lists are sorted by required
+            // level descending, so the first hit is already the best that tier
+            // can offer). There is no "best on type" to rank towards - the only
+            // way to prefer a shape is to look for that shape alone first, and
+            // fall back to the unfiltered search when the pool cannot supply it.
+            uint32 const preferredSubClass =
+                (slot == EQUIPMENT_SLOT_MAINHAND && diedHolding.hadWeapon) ? diedHolding.mainSubClass : 0u;
+
+            for (uint8 pass = 0; pass < 2 && !bestItemId; ++pass)
+            {
+                // Pass 0 is the shape-restricted search; pass 1 is the search
+                // this function has always done. With nothing to prefer, pass 0
+                // has no work and is skipped outright.
+                uint32 const requireSubClass = (pass == 0) ? preferredSubClass : 0u;
+                if (pass == 0 && !requireSubClass)
+                    continue;
 
             for (uint32 invType : InventoryTypesForSlot(slot, player))
             {
@@ -1411,6 +1517,12 @@ namespace BarracksHardcore
                             proto->SubClass != wantedArmorSubclass)
                             continue;
 
+                        // The shape-restricted pass. Zero on the second pass, so
+                        // this costs nothing once the preference has had its go.
+                        if (requireSubClass &&
+                            (proto->Class != ITEM_CLASS_WEAPON || proto->SubClass != requireSubClass))
+                            continue;
+
                         if (player->CanUseItem(proto) != EQUIP_ERR_OK)
                             continue;
 
@@ -1446,6 +1558,7 @@ namespace BarracksHardcore
                         break;
                 }
             }
+            }   // shape-restricted pass, then the ordinary one
 
             // Equip or nothing: StoreNewItemInBestSlots would silently bag a
             // piece it could not wear and still report success, which leaves
@@ -1506,6 +1619,13 @@ namespace BarracksHardcore
 
         if (!IsWorldContext(victim))
             return;
+
+        // Before anything is taken, and before every early return below it: what
+        // this character was holding is what the kit should hand back. Recording
+        // it here rather than deeper in costs nothing on the paths that keep the
+        // gear - the record is simply never consumed, because the kit only runs
+        // where a slot came up empty.
+        RememberWeaponShapeAtDeath(victim);
 
         // Nothing is taken inside a dungeon or a raid. A wipe is a group failing
         // at PvE content, not somebody losing a fight in the open world, and
