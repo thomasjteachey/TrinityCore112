@@ -4145,6 +4145,14 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
             if (skill_value < spellLearnSkill->value)
                 skill_value = spellLearnSkill->value;
 
+            // Hand back whatever this skill was worth when it was last
+            // unlearned. Capped by the max computed just below, so a
+            // de-levelled character - which every playerbot is, repeatedly
+            // - cannot end up carrying a skill above its level.
+            if (uint16 const remembered = RecallSkillValue(spellLearnSkill->skill))
+                if (skill_value < remembered)
+                    skill_value = remembered;
+
             uint32 new_skill_max_value = spellLearnSkill->maxvalue == 0 ? GetMaxSkillValueForLevel() : spellLearnSkill->maxvalue;
 
             if (skill_max_value < new_skill_max_value)
@@ -4402,7 +4410,10 @@ void Player::RemoveSpell(uint32 spell_id, bool disabled, bool learn_low_rank)
     {
         uint32 prev_spell = sSpellMgr->GetPrevSpellInChain(spell_id);
         if (!prev_spell)                                    // first rank, remove skill
+        {
+            RememberSkillBeforeUnlearn(spellLearnSkill->skill);
             SetSkill(spellLearnSkill->skill, 0, 0, 0);
+        }
         else
         {
             // search prev. skill setting by spell ranks chain
@@ -4522,6 +4533,13 @@ void Player::RemoveSpell(uint32 spell_id, bool disabled, bool learn_low_rank)
 
     if (spell_id == 16269)
     {
+        // Keyed on the SKILL, not the spell: this hardcode zeroes two
+        // skills that are not its own node's, and ActivateSpec runs it on
+        // every spec swap - it removes every talent the class has before
+        // re-learning the incoming spec's, so this fires even when the
+        // shaman is keeping the talent.
+        RememberSkillBeforeUnlearn(172);
+        RememberSkillBeforeUnlearn(160);
         SetSkill(172, 0, 0, 0);
         SetSkill(160, 0, 0, 0);
         AutoUnequipMainhandIfNeed();
@@ -6902,6 +6920,39 @@ bool IsRidingSkillForPlainsrunning(uint32 skill)
 
 // This functions sets a skill line value (and adds if doesn't exist yet)
 // To "remove" a skill line, set it's values to zero
+// Weapon skill survives a respec.
+//
+// Unlearning the spell that granted a skill destroys the skill outright -
+// SetSkill(id, 0, 0, 0) - and re-learning it reads the now-absent value back as
+// 0 and floors it at the SpellLearnSkillNode's own value, which is 1 for every
+// weapon proficiency. A shaman shifting specs therefore came back with
+// Two-Handed Axes at 1 out of 150 and had to grind it all over again, which is
+// exactly what was reported.
+//
+// The skill genuinely has to go to zero while the talent is gone: CanUseItem
+// gates equipping on GetSkillValue(itemSkill) != 0, so leaving it in place would
+// hand an untalented shaman two-handed weapons. The value is remembered
+// instead, and handed back when the skill is granted again.
+void Player::RememberSkillBeforeUnlearn(uint32 skill)
+{
+    uint16 const value = GetPureSkillValue(skill);
+    if (!value)
+        return;
+
+    // Never downgrade what is already remembered. SetSkill's own removal branch
+    // re-enters RemoveSpell for the same skill line, so a second pass would
+    // otherwise overwrite the real value with the zero it just wrote.
+    uint16& remembered = m_rememberedSkillValues[skill];
+    if (value > remembered)
+        remembered = value;
+}
+
+uint16 Player::RecallSkillValue(uint32 skill) const
+{
+    auto const itr = m_rememberedSkillValues.find(skill);
+    return itr != m_rememberedSkillValues.end() ? itr->second : uint16(0);
+}
+
 void Player::SetSkill(uint32 id, uint16 step, uint16 newVal, uint16 maxVal)
 {
     if (!id)
@@ -26255,7 +26306,15 @@ void Player::AutoUnequipMainhandIfNeed(bool force)
         }
         else
         {
-            MoveItemFromInventory(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND, true);
+            // MAINHAND. This function is a copy of AutoUnequipOffhandIfNeed and
+            // the slot was never changed on the way across, so the full-bags arm
+            // stripped the OFF hand while mailing the main-hand - which was
+            // therefore mailed without ever leaving its equipment slot, existing
+            // in two places at once, and an innocent off-hand was destroyed to
+            // pay for it. Reachable on any shaman with full bags who unlearns
+            // the two-handed talent while holding a two-hander, which the spec
+            // swap below does on its own every time.
+            MoveItemFromInventory(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND, true);
             CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
             mainItem->DeleteFromInventoryDB(trans);                   // deletes item from character's inventory
             mainItem->SaveToDB(trans);                                // recursive and not have transaction guard into self, item not in inventory and can be save standalone

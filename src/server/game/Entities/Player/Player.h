@@ -1961,6 +1961,11 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void UpdateCombatSkills(Unit* victim, WeaponAttackType attType, bool defense);
 
         void SetSkill(uint32 id, uint16 step, uint16 newVal, uint16 maxVal);
+        // A skill about to be destroyed by unlearning the spell that granted it.
+        // Remembered so that re-learning restores the grind instead of starting
+        // over at 1 - see Player::RemoveSpell and Player::AddSpell.
+        void RememberSkillBeforeUnlearn(uint32 skill);
+        uint16 RecallSkillValue(uint32 skill) const;
         void UpdateClassicPetTrainingSkillPoints();
         uint16 GetMaxSkillValue(uint32 skill) const;        // max + perm. bonus + temp bonus
         uint16 GetPureMaxSkillValue(uint32 skill) const;    // max
@@ -2634,6 +2639,11 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         QuestStatusSaveMap m_RewardedQuestsSave;
 
         SkillStatusMap mSkillStatus;
+
+        // skill id -> the value it held when the granting spell was unlearned.
+        // Session-lifetime only, which is enough for the case that hurts: a spec
+        // swap unlearns and re-learns in the same breath.
+        std::unordered_map<uint32, uint16> m_rememberedSkillValues;
 
         uint32 m_GuildIdInvited;
         uint32 m_ArenaTeamIdInvited;
