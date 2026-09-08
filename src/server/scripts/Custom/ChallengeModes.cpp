@@ -85,8 +85,11 @@ void SendChallengeDescription(Player* player, ChallengeModeSettings setting)
             handler.SendSysMessage("Cannot be combined with Semi-Hardcore.");
             break;
         case SETTING_SEMI_HARDCORE:
-            handler.SendSysMessage("Death costs everything you are wearing. When a creature kills you, all 19");
-            handler.SendSysMessage("equipped items are destroyed and your gold is set to zero.");
+            handler.SendSysMessage("Death costs everything you are wearing. However you die - a creature, another");
+            handler.SendSysMessage("player, a long fall, drowning - all 19 equipped items are DELETED outright and");
+            handler.SendSysMessage("your gold is set to zero.");
+            handler.SendSysMessage("They are destroyed, not dropped: nothing is left in a cache for anyone to");
+            handler.SendSysMessage("loot, and there is nothing to corpse-run back for.");
             handler.SendSysMessage("Your bags are left alone, and the character survives.");
             handler.SendSysMessage("Cannot be combined with Hardcore.");
             break;
@@ -484,7 +487,21 @@ public:
     void OnPlayerKilledByCreature(Creature* /*killer*/, Player* killed) override
     {
         MarkHardcoreDead(killed);
-        ApplySemiHardcorePenalty(killed);
+    }
+
+    // Semi-Hardcore charges for DEATH, not for being killed by a creature.
+    //
+    // The penalty used to hang off OnPlayerKilledByCreature alone, so a duel gone
+    // wrong, a gank, a long fall, drowning, lava or fatigue all cost nothing at
+    // all - which made the mode a matter of picking how to die rather than of not
+    // dying. OnPlayerJustDied is the one hook that fires for every death whatever
+    // killed you, which is the same reason the weekly death board counts here.
+    //
+    // Hardcore is deliberately left on its own hooks: it already covers the
+    // killer-less cases through OnPlayerRepop.
+    void OnPlayerJustDied(Player* victim, Unit* /*killer*/) override
+    {
+        ApplySemiHardcorePenalty(victim);
     }
 
     void OnPlayerRepop(Player* player) override
