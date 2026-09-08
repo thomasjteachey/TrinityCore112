@@ -93,6 +93,8 @@ namespace
     uint32 s_ignoreAggroBudgetStacks = 40;
     uint32 s_relentlessStacks = 10;
     uint32 s_relentlessIntervalSeconds = 30;
+    uint32 s_earlyReliefEndStacks = 20;
+    float s_earlyReliefPercent = 25.0f;
     uint32 s_pairUpStacks = 15;
     uint32 s_veteranStacks = 25;
     uint32 s_pvpBotStacks = 50;
@@ -230,6 +232,10 @@ namespace
             sConfigMgr->GetIntDefault("Centurion.Bounty.RelentlessStacks", 10), 0, 255));
         s_relentlessIntervalSeconds = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Centurion.Bounty.RelentlessIntervalSeconds", 30), 5, 3600));
+        s_earlyReliefEndStacks = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Centurion.Bounty.EarlyReliefEndStacks", 20), 0, 255));
+        s_earlyReliefPercent = std::clamp(
+            float(sConfigMgr->GetFloatDefault("Centurion.Bounty.EarlyReliefPercent", 25.0f)), 0.0f, 300.0f);
         s_pairUpStacks = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Centurion.Bounty.PairUpStacks", 15), 0, 255));
         s_veteranStacks = uint32(std::clamp(
@@ -822,7 +828,25 @@ uint32 RelentlessIntervalSeconds(uint32 stacks)
     // still has to walk in from 210 yards and a faster clock would only queue
     // bots behind each other.
     float const scale = 1.0f - (2.0f / 3.0f) * Fraction(stacks);
-    return std::max<uint32>(5, uint32(float(s_relentlessIntervalSeconds) * scale));
+
+    // The first band is a ramp rather than a wall. Crossing the relentless threshold
+    // used to hand a player the full-speed clock immediately, which is the point it
+    // stopped being a fight and started being a queue. So the gap is stretched as they
+    // cross and the stretch tapers to nothing by EarlyReliefEndStacks - the escalation
+    // still arrives on schedule, it just is not all delivered in the first step.
+    //
+    // Guarded on stacks >= s_relentlessStacks because these are unsigned: this is only
+    // ever called for a relentlessly hunted target, but a subtraction that wrapped
+    // would produce an enormous "through" and silently invert the easing.
+    float easing = 1.0f;
+    if (s_earlyReliefPercent > 0.0f && s_earlyReliefEndStacks > s_relentlessStacks &&
+        stacks >= s_relentlessStacks && stacks < s_earlyReliefEndStacks)
+    {
+        float const through = float(stacks - s_relentlessStacks) / float(s_earlyReliefEndStacks - s_relentlessStacks);
+        easing = 1.0f + (s_earlyReliefPercent / 100.0f) * (1.0f - through);
+    }
+
+    return std::max<uint32>(5, uint32(float(s_relentlessIntervalSeconds) * scale * easing));
 }
 
 bool DrawsFromVeterans(uint32 stacks)

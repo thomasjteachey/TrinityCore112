@@ -3641,6 +3641,25 @@ Centurion.Bounty.RelentlessStacks = 10
 #        "Word Gets Around" as its debuff.
 Centurion.Bounty.CallForHelpStacks = 20
 Centurion.Bounty.RelentlessIntervalSeconds = 30
+
+#
+#    Centurion.Bounty.EarlyReliefPercent
+#        Description: How much longer the gap between hunter waves is at the moment a
+#                     player first becomes relentlessly hunted. Tapers linearly to zero
+#                     by EarlyReliefEndStacks, so the escalation still arrives - it is
+#                     just not delivered all at once the instant the threshold is crossed.
+#                     0 restores the old behaviour.
+#        Default:     25   (25% longer between waves at RelentlessStacks)
+#
+#    Centurion.Bounty.EarlyReliefEndStacks
+#        Description: The stack count at which the relief above has fully tapered off and
+#                     the interval is back on its normal curve. Must be above
+#                     Centurion.Bounty.RelentlessStacks or the relief is ignored.
+#        Default:     20
+#
+
+Centurion.Bounty.EarlyReliefPercent = 25
+Centurion.Bounty.EarlyReliefEndStacks = 20
 #    Centurion.Bounty.PairUpStacks - at or above this many stacks the relentless
 #    dispatch sends TWO at a time instead of one. Clamped against
 #    MaxHuntersOnTarget, so a wave fills the remaining room rather than always
