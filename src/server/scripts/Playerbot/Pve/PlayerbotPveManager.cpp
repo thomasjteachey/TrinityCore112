@@ -14562,7 +14562,6 @@ namespace playerbot
         // before g_DrifterLock is taken: see the lock-order note on the table.
         std::unordered_map<uint64, uint32> localHomeByBot;
         std::unordered_map<uint64, uint32> botZoneNow;
-        std::unordered_map<uint64, uint8> botLevelNow;
         for (auto const& pair : ObjectAccessor::GetPlayers())
         {
             Player* bot = pair.second;
@@ -14574,7 +14573,6 @@ namespace playerbot
             {
                 localHomeByBot[bot->GetGUID().GetRawValue()] = home;
                 botZoneNow[bot->GetGUID().GetRawValue()] = bot->GetZoneId();
-                botLevelNow[bot->GetGUID().GetRawValue()] = uint8(bot->GetLevel());
             }
         }
 
@@ -14650,67 +14648,26 @@ namespace playerbot
         for (auto& [home, guids] : byHome)
             std::sort(guids.begin(), guids.end());
 
-        // A drift assignment BECOMES the bot's home for as long as it lasts:
-        // GetRebirthZoneId returns the drifted zone ahead of the local one. So
-        // drafting a bot whose level does not fit the destination's band tells
-        // the relocation pass this bot is in the wrong place, and it queues a
-        // band reset that re-levels it. When the drift is later released the real
-        // home comes back, the NEW level does not fit THAT band either, and it is
-        // re-levelled again - and again, for as long as somebody stands in the
-        // zone.
+        // Deliberately blind to the destination's level band.
         //
-        // That is the level 10 warlock seen standing in Desolace: home Westfall
-        // (10-20), drafted into Desolace (30-40), ping-ponging between 10 and 34.
-        // The churn is not only cosmetic - a band reset re-levels, re-learns,
-        // re-talents and re-gears, which is why a drifted bot turns up naked.
-        //
-        // So the draft only ever takes bots that already belong at the
-        // destination. The band test is the SAME comparison the relocation pass
-        // makes; anything looser and the two disagree again.
-        auto drawCandidate = [&byHome, &botLevelNow](uint32 destZoneId) -> uint64
+        // A drifter is not required to already belong where it is going: the
+        // draft is followed by a band reset that re-levels, re-learns, retalents
+        // and re-kits it for the zone it is being sent to - which is what the
+        // arrival path below means by "it was re-levelled into this zone's band
+        // on arrival". Filtering candidates by band instead would quietly outlaw
+        // most of the fleet from ever drifting, and empty a zone of company
+        // rather than fill it.
+        auto drawCandidate = [&byHome]() -> uint64
         {
-            ClassicZoneBand const* destBand = FindClassicZoneBand(destZoneId);
-            auto fits = [&](uint64 guid)
-            {
-                if (!destBand)
-                    return true;            // unbanded zone: nothing to disagree with
-                auto const lvl = botLevelNow.find(guid);
-                if (lvl == botLevelNow.end())
-                    return false;
-                return lvl->second >= destBand->minLevel && lvl->second < destBand->maxLevel;
-            };
-
-            // Still always from the home zone with the most to spare - but only
-            // counting the ones that can actually go.
+            // Always from the home zone with the most to spare.
             auto best = byHome.end();
-            size_t bestIndex = 0;
             for (auto itr = byHome.begin(); itr != byHome.end(); ++itr)
-            {
-                if (itr->second.empty())
-                    continue;
-                if (best != byHome.end() && itr->second.size() <= best->second.size())
-                    continue;
-
-                size_t found = itr->second.size();
-                for (size_t i = itr->second.size(); i-- > 0; )
-                    if (fits(itr->second[i]))
-                    {
-                        found = i;
-                        break;
-                    }
-
-                if (found == itr->second.size())
-                    continue;               // nobody in this bucket belongs there
-
-                best = itr;
-                bestIndex = found;
-            }
-
+                if (!itr->second.empty() && (best == byHome.end() || itr->second.size() > best->second.size()))
+                    best = itr;
             if (best == byHome.end())
                 return 0;
-
-            uint64 const picked = best->second[bestIndex];
-            best->second.erase(best->second.begin() + ptrdiff_t(bestIndex));
+            uint64 const picked = best->second.back();
+            best->second.pop_back();
             return picked;
         };
 
@@ -14729,7 +14686,7 @@ namespace playerbot
                 if (zoneCap && inZone[zoneId] >= zoneCap)
                     break;
 
-                uint64 const botGuid = drawCandidate(zoneId);
+                uint64 const botGuid = drawCandidate();
                 if (!botGuid)
                     break;
                 g_DrifterHumanByBot[botGuid] = humanGuid;
