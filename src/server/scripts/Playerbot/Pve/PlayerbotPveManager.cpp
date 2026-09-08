@@ -314,6 +314,9 @@ namespace
         float stuckAnchorX = 0.0f;
         float stuckAnchorY = 0.0f;
         PveTimePoint restingUntil{};
+        // Set when a bot has stepped off scenery to sit down. One step per rest,
+        // so a bot in a prop-dense town cannot shuffle instead of eating.
+        PveTimePoint sceneryStepDoneUntil{};
         PveTimePoint nextSupplyRunAt{};
         PveTimePoint nextMailCheckAt{};
         PveTimePoint nextAuctionShopAt{};
@@ -12745,6 +12748,70 @@ namespace
     // "getting drunk off of", then "completely smashed". The bot keeps going
     // until it is smashed or the window shuts, then leaves the bottle alone for
     // the better part of an hour.
+    // Move off whatever the bot is standing inside before it sits down to eat.
+    //
+    // A bot stops where its last fight ended and rests there, and in Razormane
+    // Grounds a lot of fights end beside a bonfire - so one was found sitting IN
+    // the fire, drinking. Nothing is mechanically wrong: that bonfire is a spell
+    // focus, not an area-damage object, and the bot takes no damage from it. It
+    // only READS as broken, which for something meant to pass for a person is
+    // the same problem.
+    //
+    // Any prop, not only fire, because sitting inside a mailbox or an ore vein
+    // looks exactly as wrong and "is this one on fire" is not a question the
+    // data can answer. Chests are the deliberate exception - a bot looting one
+    // is supposed to be standing at it.
+    //
+    // Returns true when it moved, meaning "not resting this tick".
+    bool StepOffScenery(Player* bot, PveBotState& state)
+    {
+        // Close enough to be inside the model rather than beside it. A small
+        // number on purpose: this nudges a bot off a prop, it does not get to
+        // second-guess where the bot chose to stand.
+        constexpr float kInside = 2.0f;
+        constexpr float kStep = 4.0f;
+
+        if (PveClock::now() < state.sceneryStepDoneUntil)
+            return false;   // already stepped for this rest; sit down regardless
+
+        std::vector<GameObject*> nearby;
+        Trinity::GameObjectInRangeCheck check(bot->GetPositionX(), bot->GetPositionY(),
+            bot->GetPositionZ(), kInside);
+        Trinity::GameObjectListSearcher<Trinity::GameObjectInRangeCheck> searcher(bot, nearby, check);
+        Cell::VisitGridObjects(bot, searcher, kInside);
+
+        GameObject* closest = nullptr;
+        float bestDist = kInside;
+        for (GameObject* go : nearby)
+        {
+            if (!go || go->GetGoType() == GAMEOBJECT_TYPE_CHEST)
+                continue;
+
+            float const dist = bot->GetDistance(go);
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                closest = go;
+            }
+        }
+
+        if (!closest)
+            return false;
+
+        // Straight away from the prop, and through MovePositionToFirstCollision
+        // so the step cannot post the bot inside a wall or off a ledge.
+        float const away = closest->GetAbsoluteAngle(bot);
+        Position destination = bot->GetPosition();
+        bot->MovePositionToFirstCollision(destination, kStep, away - bot->GetOrientation());
+
+        // One step per rest. A bot standing in a crowded town would otherwise
+        // find another prop at the far end of every step and shuffle forever
+        // instead of eating.
+        state.sceneryStepDoneUntil = PveClock::now() + std::chrono::seconds(30);
+        MoveTowardThrottled(bot, destination);
+        return true;
+    }
+
     void MaybeHaveADrink(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
     {
         if (!cfg.tavernEnabled || !bot->IsAlive() || bot->IsInCombat() || state.engaged)
@@ -12995,7 +13062,12 @@ namespace
                 ? std::max(cfg.restManaPct, cfg.playerEngageMinManaPct) : cfg.restManaPct;
             bool const needFood = bot->GetHealthPct() < healthTarget;
             bool const needDrink = bot->GetMaxPower(POWER_MANA) > 0 && bot->GetPowerPct(POWER_MANA) < manaTarget;
-            if (needFood || needDrink)
+            // Off the scenery first, which costs one tick and only ever fires
+            // when the bot is genuinely standing inside something. Folded into
+            // the condition rather than returning early: everything after this
+            // block - the stuck watchdog above all - still has to run, and the
+            // watchdog is exactly what would rescue a bot this move wedged.
+            if ((needFood || needDrink) && !StepOffScenery(bot, state))
             {
                 if (cfg.restUseConsumables)
                 {
