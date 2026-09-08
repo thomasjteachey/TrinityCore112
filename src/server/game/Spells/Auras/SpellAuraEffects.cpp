@@ -5938,7 +5938,7 @@ void AuraEffect::HandleBreakableCCAuraProc(AuraApplication* aurApp, ProcEventInf
 
     Unit* caster = GetCaster();
 
-    // Linear from level 1 to the realm's level cap, arriving at 1200 there - which
+    // Linear from level 1 to 60, arriving at 1200 there - which
     // is the number a level 60 caster got before, so nothing changes at the top.
     //
     // The old curve was (level * 25) - 300, and it did not just get smaller at low
@@ -5949,16 +5949,17 @@ void AuraEffect::HandleBreakableCCAuraProc(AuraApplication* aurApp, ProcEventInf
     // pinned the chance at 100%, so a single point of damage popped it. Two
     // opposite bugs three levels apart, on a realm full of low level bots.
     //
-    // Scaled against the configured cap rather than a hardcoded 60, so a realm that
-    // raises its cap keeps the same shape instead of everything above 60 sharing a
-    // threshold.
-    uint32 const capLevel = std::max<uint32>(1, sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL));
-    int32 maxDamage = 1200;
+    // 60 is the ruleset, not a variable. Both realms are classic-capped and a
+    // caster above it should simply sit at the top of the curve.
+    constexpr uint32 CapLevel = 60;
+    constexpr int32 MaxThresholdAtCap = 1200;
+
+    int32 maxDamage = MaxThresholdAtCap;
     if (caster)
     {
-        uint32 const casterLevel = std::min<uint32>(caster->GetLevel(), capLevel);
+        uint32 const casterLevel = std::min<uint32>(caster->GetLevel(), CapLevel);
         // At least 1: the divide below must never see zero again.
-        maxDamage = std::max(1, int32(1200u * casterLevel / capLevel));
+        maxDamage = std::max(1, int32(uint32(MaxThresholdAtCap) * casterLevel / CapLevel));
         if (caster->HasAura(81399) || caster->HasAura(81340))
             maxDamage = int32(float(maxDamage) * 1.2f);
     }
