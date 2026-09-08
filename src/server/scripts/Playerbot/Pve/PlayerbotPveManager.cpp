@@ -4057,7 +4057,6 @@ namespace
         uint32 smallestSize = 0;
         bool haveBeatable = false;
         uint8 beatableSlot = 0;
-        uint32 beatableUsed = 0;
         uint32 beatableSize = 0;
 
         for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
@@ -4088,17 +4087,15 @@ namespace
                 smallestSlot = bagSlot;
             }
 
-            // Of the bags this candidate genuinely beats, remember the one that
-            // is cheapest to clear out.
+            // Of the bags this candidate genuinely beats, remember the
+            // SMALLEST - see the note below the loop for why size and not
+            // fullness.
             if (size < candidate->ContainerSlots)
             {
-                uint32 const used = CountUsedSlotsInBag(bot, worn);
-                if (!haveBeatable || used < beatableUsed ||
-                    (used == beatableUsed && size < beatableSize))
+                if (!haveBeatable || size < beatableSize)
                 {
                     haveBeatable = true;
                     beatableSlot = bagSlot;
-                    beatableUsed = used;
                     beatableSize = size;
                 }
             }
@@ -4111,12 +4108,25 @@ namespace
             return true;
         }
 
-        // Otherwise displace whichever beaten bag is CHEAPEST TO EMPTY, not
-        // simply the smallest. The swap has to relocate every item in the bag
-        // coming off, and with the pack near full that is what decides whether
-        // it happens at all - a twenty-slot bag holding two items and one
-        // holding twenty are the same upgrade and wildly different odds. Sizing
-        // alone picked the latter as readily as the former and then gave up.
+        // Otherwise displace the SMALLEST bag this candidate beats.
+        //
+        // It is tempting to displace whichever beaten bag is emptiest, on the
+        // theory that fewer items to relocate means a likelier swap. That
+        // theory is false, and provably so. CanRehomeBagContents(s) asks
+        // used(s) <= freeOutside(s), and freeOutside(s) is totalFree minus that
+        // bag's own free slots, so the test expands to
+        //     used(s) <= totalFree - (size(s) - used(s))
+        // and used(s) cancels off both sides, leaving size(s) <= totalFree.
+        // Whether a bag can be emptied depends ONLY on how big it is. Aiming at
+        // the emptiest bag optimises a term that is not in the answer, and it
+        // correlates with the LARGER bag, so it steers at the one choice that
+        // cannot work - a big sparsely-filled bag fails where a small full one
+        // would have gone through.
+        //
+        // The smallest beaten bag is therefore right twice over: it is the most
+        // likely to be emptiable, and displacing it is the biggest capacity
+        // gain. It also makes a retry loop unnecessary - if the smallest beaten
+        // bag will not fit, no larger one would either.
         if (haveBeatable)
         {
             dest = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | beatableSlot);
@@ -4161,9 +4171,23 @@ namespace
         if (item->IsNotEmptyBag())
             return false;
 
-        bool quiverWorn = false;
-        uint32 wornQuivers = 0;
+        // A container that only accepts ONE family of goods is not a bag,
+        // whatever its slot count says. A 28-slot mining bag outranks every
+        // general bag on the fleet and holds nothing but ore, so ranking by
+        // capacity alone would have a bot wear it and vendor the pack it was
+        // actually using. Bots do not craft; these are worth several gold at the
+        // auction house and nothing at all on a bot's back.
+        //
+        // BagFamily is the field that decides this, not SubClass: on this realm
+        // Small Soul Pouch and Box of Souls both read subclass "soul container"
+        // and BagFamily 0, which means they accept anything and really are
+        // ordinary bags - and they are the two biggest piles in the fleet.
+        if (proto->Class == ITEM_CLASS_CONTAINER && proto->BagFamily)
+            return true;
+
+        uint32 wornBlockedSlots = 0;
         std::vector<uint32> wornGeneral;
+        std::vector<uint32> wornQuivers;
         for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
         {
             Bag* worn = bot->GetBagByPos(bagSlot);
@@ -4171,23 +4195,70 @@ namespace
                 continue;
 
             ItemTemplate const* wornProto = worn->GetTemplate();
-            if (wornProto && wornProto->Class == ITEM_CLASS_QUIVER)
+            if (!wornProto)
+                continue;
+
+            if (wornProto->Class == ITEM_CLASS_QUIVER)
             {
-                quiverWorn = true;
-                ++wornQuivers;
+                wornQuivers.push_back(worn->GetBagSize());
+                ++wornBlockedSlots;
+                continue;
+            }
+
+            // A restricted bag already on the bot's back eats a slot without
+            // being a general keeper, exactly as a quiver does.
+            if (wornProto->BagFamily)
+            {
+                ++wornBlockedSlots;
                 continue;
             }
 
             wornGeneral.push_back(worn->GetBagSize());
         }
 
-        if (proto->Class == ITEM_CLASS_QUIVER)
-            return quiverWorn;
+        ObjectGuid const selfGuid = item->GetGUID();
 
-        // A worn quiver still occupies one of the four bag slots whatever it
-        // holds, so it is one fewer general bag the bot can keep.
+        if (proto->Class == ITEM_CLASS_QUIVER)
+        {
+            // A quiver is only useful to something that shoots what it holds.
+            // With ammunition now hunter-only, that is every non-hunter - and a
+            // quiver they can never wear was also never sold and never listed,
+            // which is the same deadlock this function was rewritten to break,
+            // left standing for the other class it handles.
+            uint32 const ammoSubclass = RequiredAmmoSubclass(bot);
+            uint32 const wantedSubclass = ammoSubclass == ITEM_SUBCLASS_ARROW ? uint32(ITEM_SUBCLASS_QUIVER)
+                : (ammoSubclass == ITEM_SUBCLASS_BULLET ? uint32(ITEM_SUBCLASS_AMMO_POUCH) : 0u);
+            if (!wantedSubclass || proto->SubClass != wantedSubclass)
+                return true;
+
+            // Exactly one is worth keeping, and it is the biggest.
+            uint32 quiversAhead = 0;
+            for (uint32 size : wornQuivers)
+                if (size >= proto->ContainerSlots)
+                    ++quiversAhead;
+
+            ForEachBagItem(bot, [&](Item* other, uint8 /*bag*/, uint8 /*slot*/)
+            {
+                if (other == item)
+                    return;
+
+                ItemTemplate const* otherProto = other->GetTemplate();
+                if (!otherProto || otherProto->Class != ITEM_CLASS_QUIVER ||
+                    otherProto->SubClass != wantedSubclass)
+                    return;
+
+                if (otherProto->ContainerSlots > proto->ContainerSlots ||
+                    (otherProto->ContainerSlots == proto->ContainerSlots && other->GetGUID() < selfGuid))
+                    ++quiversAhead;
+            });
+
+            return quiversAhead >= 1;
+        }
+
+        // A worn quiver or restricted bag still occupies one of the four slots
+        // whatever it holds, so each is one fewer general bag the bot can keep.
         uint32 const bagSlots = INVENTORY_SLOT_BAG_END - INVENTORY_SLOT_BAG_START;
-        uint32 const keepable = bagSlots > wornQuivers ? bagSlots - wornQuivers : 0u;
+        uint32 const keepable = bagSlots > wornBlockedSlots ? bagSlots - wornBlockedSlots : 0u;
 
         // Count how many containers rank ahead of this one. A worn bag wins
         // ties, because swapping a bag for one the same size buys nothing and
@@ -4198,14 +4269,15 @@ namespace
             if (size >= proto->ContainerSlots)
                 ++ahead;
 
-        ObjectGuid const selfGuid = item->GetGUID();
         ForEachBagItem(bot, [&](Item* other, uint8 /*bag*/, uint8 /*slot*/)
         {
             if (other == item)
                 return;
 
+            // Restricted bags do not compete for the general keep line - they
+            // are surplus in their own right, above.
             ItemTemplate const* otherProto = other->GetTemplate();
-            if (!otherProto || otherProto->Class != ITEM_CLASS_CONTAINER)
+            if (!otherProto || otherProto->Class != ITEM_CLASS_CONTAINER || otherProto->BagFamily)
                 return;
 
             if (otherProto->ContainerSlots > proto->ContainerSlots ||
@@ -5766,10 +5838,24 @@ namespace
 
     bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTemplate const* incumbent, uint8 slot)
     {
-        // Bags compare by slot count, nothing else.
+        // Bags compare by slot count - but only bags that take anything are
+        // worth wearing at all. A 28-slot mining bag beats every general bag a
+        // bot owns on raw capacity and holds nothing but ore, so comparing
+        // capacity alone would put it on the bot's back and cost it a quarter
+        // of its real space. A restricted bag already worn is always worth
+        // replacing with a general one, whatever the sizes say.
         if (candidate->Class == ITEM_CLASS_CONTAINER)
-            return !incumbent || (incumbent->Class == ITEM_CLASS_CONTAINER &&
-                candidate->ContainerSlots > incumbent->ContainerSlots);
+        {
+            if (candidate->BagFamily)
+                return false;
+            if (!incumbent)
+                return true;
+            if (incumbent->Class != ITEM_CLASS_CONTAINER)
+                return false;
+            if (incumbent->BagFamily)
+                return true;
+            return candidate->ContainerSlots > incumbent->ContainerSlots;
+        }
 
         // Quivers and ammo pouches: only the type feeding the equipped ranged
         // weapon, and bigger only.
