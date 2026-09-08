@@ -845,6 +845,50 @@ namespace
         }
     }
 
+    // A consumable whose whole purpose is mana, held by somebody with no mana
+    // bar. Lorhild, a fury warrior, was found carrying four tiers of mana potion
+    // - Minor, Lesser, ordinary and Greater, seven stacks between them. Nothing
+    // bought them: the drink purchase already asks UsesMana. They were LOOTED,
+    // and no pass has ever asked whether a consumable is usable by the class
+    // holding it, so they accumulate for the life of the character.
+    //
+    // Deliberately strict about "whole purpose". A potion that restores health
+    // as well, or carries any other effect, is somebody's emergency button and
+    // is left alone; only something that does nothing but hand back mana is
+    // worthless here. That misses combination potions on purpose - the cost of
+    // being wrong in this direction is a slot, and the cost of being wrong in
+    // the other is throwing away a healthstone.
+    bool IsUselessManaConsumable(Player const* bot, ItemTemplate const* proto)
+    {
+        if (!bot || !proto || proto->Class != ITEM_CLASS_CONSUMABLE || UsesMana(bot))
+            return false;
+
+        SpellInfo const* spellInfo = ConsumableUseSpell(proto);
+        if (!spellInfo)
+            return false;
+
+        bool restoresMana = false;
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+        {
+            if (!effect.IsEffect())
+                continue;
+
+            bool const manaEffect =
+                (effect.Effect == SPELL_EFFECT_ENERGIZE || effect.Effect == SPELL_EFFECT_ENERGIZE_PCT) &&
+                effect.MiscValue == int32(POWER_MANA);
+            if (manaEffect)
+            {
+                restoresMana = true;
+                continue;
+            }
+
+            // Anything else at all and this is not a plain mana potion.
+            return false;
+        }
+
+        return restoresMana;
+    }
+
     void RemoveRestAuras(Player* player)
     {
         player->RemoveAurasDueToSpell(SPELL_PVE_OUT_OF_COMBAT_EAT);
@@ -3516,8 +3560,27 @@ namespace
     }
 
     // Ammo the bot's ranged weapon feeds on, or 0 when none is needed.
+    //
+    // Hunters only. This helper is the single question the whole ammunition
+    // subsystem asks - the vendor errand, which merchants count as useful, the
+    // 200-round purchase, the free in-play restock and whether a quiver is
+    // worth wearing all derive from it - and it used to ask "what does my
+    // ranged weapon eat" rather than "am I a hunter". On a classic ruleset
+    // warriors, rogues and paladins all carry bow and gun proficiency, so the
+    // moment the ordinary gear machinery put a ranged weapon in one of their
+    // hands that bot became a permanent ammo consumer: walking to merchants for
+    // arrows, buying two hundred at a time, and being handed two hundred more
+    // for free every fifteen seconds.
+    //
+    // The starter-kit grant was already written hunter-only, so the intent
+    // existed - it just never reached the other four paths. Asking here covers
+    // all of them at once, and the two combat-side callers already test the
+    // class on their own first line, so nothing downstream changes shape.
     uint32 RequiredAmmoSubclass(Player const* bot)
     {
+        if (!bot || bot->GetClass() != CLASS_HUNTER)
+            return 0;
+
         Item* ranged = bot->GetWeaponForAttack(RANGED_ATTACK, true);
         if (!ranged || !ranged->GetTemplate())
             return 0;
@@ -4087,6 +4150,12 @@ namespace
                 }
                 sellable = !wantsToWear;
             }
+
+            // Mana potions on a rage or energy user. Sold rather than binned,
+            // because a merchant pays for them and the bot will never drink one.
+            if (!sellable && IsUselessManaConsumable(bot, proto) &&
+                !IsQuestRequiredItem(bot, proto->ItemId))
+                sellable = true;
 
             // Every bottle but the one stack it keeps. A bot needs no cellar -
             // MaybeHaveADrink buys one when it wants one - and nothing else in
