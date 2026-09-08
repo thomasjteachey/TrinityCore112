@@ -1,0 +1,8 @@
+## Interface: 30300
+## Title: Centurion Zone Bands
+## Notes: Shows each zone's level band on the world map, and whether drifters will follow you there.
+## Author: Centurion
+## Version: 1.0
+## DefaultState: Enabled
+
+CENTURION_ZoneBands.lua
