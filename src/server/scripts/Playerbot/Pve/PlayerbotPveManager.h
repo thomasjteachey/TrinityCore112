@@ -85,7 +85,15 @@ struct PveConfig
     // all. The slot cap above cannot see a bot carrying one each of forty
     // different consumables, which is the shape the live fleet actually takes.
     // 0 disables.
-    uint32 maxUnitsPerConsumable = 20;
+    //
+    // Five, to match the items that stack lowest - most potions cap at five, so
+    // this is "one stack of the tightest thing you can carry". The ration
+    // restock gate and purchase size are DERIVED from this rather than fixed:
+    // at the old default of twenty nothing collided, but a smaller cap trimmed
+    // a food entry below the hardcoded "buy more when under ten" line and the
+    // bot shuttled between the merchant and the bin forever. See
+    // RationRestockTarget / RationPurchaseUnits.
+    uint32 maxUnitsPerConsumable = 5;
     // The rogue energy consumable, and the energy level below which it is
     // worth drinking mid-fight. 0 disables.
     uint32 thistleTeaItemId = 7676;

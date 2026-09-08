@@ -64,6 +64,7 @@
 #include "AuctionHouseMgr.h"
 #include "Mail.h"
 #include "Player.h"
+#include "Formulas.h"
 #include "QuestDef.h"
 #include "RBAC.h"
 #include "Spell.h"
@@ -1377,6 +1378,129 @@ namespace
             TC_LOG_INFO("playerbots.pve", "Bot {} trimmed {} to {} of item {} (held {}).",
                 bot->GetName(), count - cap, cap, itemId, count);
         }
+    }
+
+    // Is this quest grey to the bot holding it?
+    //
+    // The core's own colour rule, not an invented one, so a bot's idea of grey
+    // matches what a player sees in their log. GetColorCode is inclusive at the
+    // boundary: grey is questLevel <= GetGrayLevel(playerLevel), which at level
+    // 50 means everything at level 39 or below.
+    bool IsQuestGreyFor(Player const* bot, Quest const* quest)
+    {
+        if (!bot || !quest)
+            return false;
+
+        // GetQuestLevel is int32 and -1 means "scales to whoever takes it".
+        // Feeding that straight to the colour test makes every scaled quest read
+        // as grey at every level, so it is excluded rather than compared.
+        int32 const questLevel = quest->GetQuestLevel();
+        if (questLevel <= 0)
+            return false;
+
+        return Trinity::XP::GetColorCode(bot->GetLevel(), uint8(questLevel)) == XP_GRAY;
+    }
+
+    // Quests a bot has outlevelled, and the items they were keeping alive.
+    //
+    // Nothing has ever removed a quest from a bot's log. Acceptance is
+    // one-directional - AcceptAndTurnInQuestsAt takes anything the engine allows
+    // and the engine only enforces a MINIMUM level - so a bot accretes every
+    // zone it passes through and keeps it for life. Ravhild reached level 50
+    // holding 25 quests, which is exactly MAX_QUEST_LOG_SIZE: SatisfyQuestLog
+    // fails, CanAddQuest refuses, and that bot's quest content was over
+    // permanently. Twenty-one of the 25 were level 2-10 starting-zone quests it
+    // will never walk back to finish.
+    //
+    // The items are downstream of that. Every existing bag pass is keyed on the
+    // quest being DEAD - DiscardOrphanedQuestItems and IsWorthlessClutter both
+    // stop at HasQuestForItem, and IsQuestRequiredItem shields the item from the
+    // vendor and auction passes - which is correct, and which means no item-side
+    // rule can ever reach two Red Burlap Bandanas on a level 50 while the level
+    // 3 quest asking for them is still in the log. The quest is what has to go.
+    //
+    // This mirrors WorldSession::HandleQuestLogRemoveQuest step for step. Every
+    // one of those steps is load-bearing: a quest's state lives in the status
+    // map, the replicated log slot array, m_timedquests and m_QuestStatusSave,
+    // and tearing down only some of them does not leak - ItemRemovedQuestCheck
+    // and the timed-quest loop both index the status map with operator[], so a
+    // surviving log slot silently RECREATES the quest in a default state and
+    // saves it back to the database.
+    //
+    // The one deliberate divergence is the items. Player::AbandonQuest destroys
+    // objective items only when Bonding == BIND_QUEST_ITEM, so an ordinary
+    // tradeable objective - which is exactly what a burlap bandana is - falls
+    // straight through and stays in the bags; mirroring the handler alone would
+    // clear the log and leave the hoard, which is half the complaint. So the
+    // items are taken here instead, bound or not, and guarded by HasQuestForItem
+    // the way Player::RewardQuest guards its own item removal: 471 of the
+    // reference data's 3025 objective items are wanted by more than one quest,
+    // and AbandonQuest has no such guard. Clearing the log slot FIRST is what
+    // makes that guard mean "some OTHER quest still wants this".
+    uint32 AbandonOutlevelledQuests(Player* bot)
+    {
+        if (!bot)
+            return 0;
+
+        uint32 dropped = 0;
+        for (uint16 logSlot = 0; logSlot < MAX_QUEST_LOG_SIZE; ++logSlot)
+        {
+            uint32 const questId = bot->GetQuestSlotQuestId(logSlot);
+            if (!questId)
+                continue;
+
+            Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+            if (!quest || !IsQuestGreyFor(bot, quest))
+                continue;
+
+            // The abandon handler treats this as a veto - a source item that
+            // cannot come off, such as a bag with things in it, cancels the
+            // whole abandon rather than being forced. Same here.
+            if (!bot->TakeQuestSourceItem(questId, false))
+                continue;
+
+            if (quest->HasSpecialFlag(QUEST_SPECIAL_FLAGS_TIMED))
+                bot->RemoveTimedQuest(questId);
+
+            bool const wasPvpQuest = quest->HasFlag(QUEST_FLAGS_FLAGS_PVP);
+
+            bot->SetQuestSlot(logSlot, 0);
+            bot->RemoveActiveQuest(questId);
+            bot->RemoveTimedAchievement(ACHIEVEMENT_TIMED_TYPE_QUEST, questId);
+
+            if (wasPvpQuest)
+            {
+                bot->pvpInfo.IsHostile = bot->pvpInfo.IsInHostileArea || bot->HasPvPForcingQuest();
+                bot->UpdatePvPState();
+            }
+
+            auto const takeObjective = [&](uint32 itemId)
+            {
+                if (!itemId || bot->HasQuestForItem(itemId))
+                    return;
+                if (!sObjectMgr->GetItemTemplate(itemId))
+                    return;
+                bot->DestroyItemCount(itemId, 9999, true);
+            };
+
+            for (uint8 i = 0; i < QUEST_ITEM_OBJECTIVES_COUNT; ++i)
+                if (quest->RequiredItemCount[i] > 0)
+                    takeObjective(quest->RequiredItemId[i]);
+
+            for (uint8 i = 0; i < QUEST_SOURCE_ITEM_IDS_COUNT; ++i)
+                if (quest->ItemDropQuantity[i] > 0)
+                    takeObjective(quest->ItemDrop[i]);
+
+            ++dropped;
+            TC_LOG_DEBUG("playerbots.pve", "Bot {} abandons outlevelled quest {} (quest level {}, bot level {}).",
+                bot->GetName(), questId, quest->GetQuestLevel(), uint32(bot->GetLevel()));
+        }
+
+        if (dropped)
+            TC_LOG_INFO("playerbots.pve", "Bot {} abandoned {} outlevelled quest(s).",
+                bot->GetName(), dropped);
+
+        return dropped;
     }
 
     void DiscardOrphanedQuestItems(Player* bot)
@@ -3559,6 +3683,27 @@ namespace
         return uint32(obsolete.size());
     }
 
+    // How thin a bot's rations may get before it goes shopping, and how much it
+    // buys when it does.
+    //
+    // Both are derived from the per-entry unit cap rather than written down,
+    // because they used to disagree with it. The cap trims a single food entry
+    // down to its limit; the restock gate then read the pack as under ten,
+    // bought twenty more, and the next maintenance tick threw them straight
+    // back. At the old cap of twenty the two never met. At five they would have
+    // shuttled the bot between the merchant and the bin forever.
+    uint32 RationRestockTarget()
+    {
+        uint32 const cap = g_PveConfig.maxUnitsPerConsumable;
+        return cap ? std::min<uint32>(10u, cap) : 10u;
+    }
+
+    uint32 RationPurchaseUnits()
+    {
+        uint32 const cap = g_PveConfig.maxUnitsPerConsumable;
+        return cap ? std::min<uint32>(20u, cap) : 20u;
+    }
+
     // Ammo the bot's ranged weapon feeds on, or 0 when none is needed.
     //
     // Hunters only. This helper is the single question the whole ammunition
@@ -3717,10 +3862,10 @@ namespace
         };
 
         // A bot that can conjure its own food or water never buys that kind.
-        if (bestFood && CountConsumableUnits(bot, false) < 10 && !ConjureSpellId(bot, false))
-            buyUnits(bestFoodSlot, bestFood, 20);
-        if (bestDrink && CountConsumableUnits(bot, true) < 10 && !ConjureSpellId(bot, true))
-            buyUnits(bestDrinkSlot, bestDrink, 20);
+        if (bestFood && CountConsumableUnits(bot, false) < RationRestockTarget() && !ConjureSpellId(bot, false))
+            buyUnits(bestFoodSlot, bestFood, RationPurchaseUnits());
+        if (bestDrink && CountConsumableUnits(bot, true) < RationRestockTarget() && !ConjureSpellId(bot, true))
+            buyUnits(bestDrinkSlot, bestDrink, RationPurchaseUnits());
         if (bestAmmo)
         {
             // Count what is actually in the pack, not just the loaded type. Asking
@@ -4854,7 +4999,11 @@ namespace
         for (uint32 questId : sObjectMgr->GetCreatureQuestRelations(giver->GetEntry()))
         {
             Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
-            if (!quest || IsSingleClassQuest(quest))
+            // Grey is refused at the door. The engine enforces a MINIMUM level and
+            // no maximum, so without this the maintenance pass and the quest
+            // giver would fight: abandoned on one tick, taken straight back on
+            // the next walk past the same NPC.
+            if (!quest || IsSingleClassQuest(quest) || IsQuestGreyFor(bot, quest))
                 continue;
 
             if (bot->CanTakeQuest(quest, false) && bot->CanAddQuest(quest, false))
@@ -5039,7 +5188,7 @@ namespace
 
                 for (uint32 questId : sObjectMgr->GetCreatureQuestRelations(npc->GetEntry()))
                     if (Quest const* quest = sObjectMgr->GetQuestTemplate(questId))
-                        if (!IsSingleClassQuest(quest) &&
+                        if (!IsSingleClassQuest(quest) && !IsQuestGreyFor(bot, quest) &&
                             bot->CanTakeQuest(quest, false) && bot->CanAddQuest(quest, false))
                             return beginErrand(npc, PveErrandKind::QuestGiver);
             }
@@ -6408,6 +6557,29 @@ namespace
 
                     ItemTemplate const* proto = sObjectMgr->GetItemTemplate(uint32(outfitItemId));
                     if (!proto)
+                        continue;
+
+                    // Never a second copy of something the bot already has.
+                    //
+                    // This grant is not once-per-character. Its gate is an empty
+                    // chest and legs, and a zone-band rebirth unequips everything
+                    // into the bags immediately before running it, so the test is
+                    // satisfied by construction on EVERY rebirth - Lorhild took
+                    // eight outfits in eleven hours. Gear it can wear is simply
+                    // re-worn, so the duplicates were invisible there; the piece
+                    // that piled up was the one it cannot equip at all.
+                    //
+                    // A troll warrior's outfit contains a Crude Throwing Axe, and
+                    // the warrior has no thrown skill, so CanUseItem refuses it
+                    // and StoreNewItemInBestSlots quietly bags it instead. It can
+                    // never earn the skill either - MaxOutWeaponSkills only grants
+                    // one for a weapon in an equipment SLOT, and this never
+                    // reaches a slot. Four rebirths since its last vendor trip,
+                    // four axes in the bags.
+                    //
+                    // Counting what is already held costs one lookup and closes
+                    // every case at once, worn or carried.
+                    if (bot->GetItemCount(uint32(outfitItemId), true) > 0)
                         continue;
 
                     uint32 count = proto->BuyCount;
@@ -12641,6 +12813,11 @@ namespace
             }
             MaybeQueueOverBandRebirth(bot, state);
             DiscardScaffoldingItems(bot);
+            // Before the orphan sweep, not after: abandoning a quest is what
+            // turns its objectives INTO orphans, and running them in this order
+            // means anything the abandon left behind is collected on the same
+            // tick rather than fifteen seconds later.
+            AbandonOutlevelledQuests(bot);
             DiscardOrphanedQuestItems(bot);
             DiscardWorthlessClutter(bot);
             DiscardHoardedDuplicates(bot);
@@ -14558,9 +14735,9 @@ namespace playerbot
     // vacancies are filled. A drifter that flickered in and out of the role
     // every second would be re-levelled every second with it.
     // Food, and water for the classes that drink. Quantities and skip rules are
-    // the supply run's: top up to 20 units when below 10, never for a class that
-    // conjures its own. A drifter that ports ends up in the same state as one
-    // that walked to a vendor.
+    // the supply run's - both read the same per-consumable cap, and neither buys
+    // for a class that conjures its own. A drifter that ports ends up in the
+    // same state as one that walked to a vendor.
     // Buy rations from wherever the bot is standing.
     //
     // No vendor is visited and none needs to be: walking to one was never the
@@ -14572,9 +14749,9 @@ namespace playerbot
     {
         BuildRationPoolOnce();
         uint8 const level = bot->GetLevel();
-        constexpr uint32 kStack = 20;
+        uint32 const kStack = RationPurchaseUnits();
 
-        auto purchase = [bot](uint32 itemId) -> bool
+        auto purchase = [bot, kStack](uint32 itemId) -> bool
         {
             ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
             if (!proto)
@@ -14594,11 +14771,11 @@ namespace playerbot
             return true;
         };
 
-        if (CountConsumableUnits(bot, false) < 10 && !ConjureSpellId(bot, false))
+        if (CountConsumableUnits(bot, false) < RationRestockTarget() && !ConjureSpellId(bot, false))
             if (uint32 const food = BestRationForLevel(g_RationFood, level))
                 purchase(food);
 
-        if (UsesMana(bot) && CountConsumableUnits(bot, true) < 10 && !ConjureSpellId(bot, true))
+        if (UsesMana(bot) && CountConsumableUnits(bot, true) < RationRestockTarget() && !ConjureSpellId(bot, true))
             if (uint32 const drink = BestRationForLevel(g_RationDrink, level))
                 purchase(drink);
     }
