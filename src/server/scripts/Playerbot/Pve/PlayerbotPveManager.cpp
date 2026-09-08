@@ -4159,6 +4159,47 @@ namespace
 
     // World thread. Opens the loot session, takes gold (group-split when the
     // kill was group-tagged), stores every slot and releases.
+    // A bot that has just walked off with somebody's gear tells them so.
+    //
+    // Only ever to a real, connected person: a bot whispering another bot is noise
+    // nobody reads, and a whisper to somebody offline is dropped on the floor. Never
+    // to the looter itself either - a bot reclaiming its own cache is the common case
+    // and it would be talking to itself.
+    void TauntChestOwner(Player* bot, ObjectGuid chestGuid, uint32 itemsTaken)
+    {
+        if (!bot || !g_PveConfig.chestTauntEnabled || !itemsTaken)
+            return;
+
+        ObjectGuid const owner = CustomLootChests::GetChestOwner(chestGuid);
+        if (owner.IsEmpty() || owner == bot->GetGUID())
+            return;
+
+        Player* victim = ObjectAccessor::FindConnectedPlayer(owner);
+        if (!victim || victim == bot || !IsHumanPlayer(victim))
+            return;
+
+        // Every line takes the count, so the formatter never sees an unused argument.
+        static constexpr std::array<char const*, 8> taunts =
+        {
+            "Thanks for the {} pieces. You won't be needing them where you're standing.",
+            "{} items lighter and you're still lying there. Take your time.",
+            "I'll look after these {} for you. Indefinitely.",
+            "Nice gear. Was. {} pieces of it, anyway.",
+            "You dropped {} things. I picked them up. That is how it works.",
+            "Corpse runs are character building. Enjoy yours, minus {} items.",
+            "{} pieces off a dead man. Barely even feels like work.",
+            "Do not worry, I will wear all {} of them with dignity."
+        };
+
+        // Substituted by hand rather than through StringFormat: fmt checks its format
+        // string at COMPILE time, and one picked out of an array at runtime is not a
+        // constant expression (C7595).
+        std::string line = taunts[urand(0, uint32(taunts.size()) - 1)];
+        if (size_t const at = line.find("{}"); at != std::string::npos)
+            line.replace(at, 2, std::to_string(itemsTaken));
+        bot->Whisper(line, LANG_UNIVERSAL, victim);
+    }
+
     void ProcessPendingLootExecutions()
     {
         std::unordered_map<uint64, ObjectGuid> drained;
@@ -4310,9 +4351,12 @@ namespace
                 });
 
                 if (held)
+                {
                     TC_LOG_INFO("playerbots.pve",
                         "Bot {} took {} item(s) from a player's chest; held off the auction house for {}s.",
                         bot->GetName(), held, g_PveConfig.deathChestAuctionHoldSeconds);
+                    TauntChestOwner(bot, lootGuid, held);
+                }
             }
 
             if (bot->GetLootGUID() == lootGuid)
@@ -13651,6 +13695,7 @@ namespace playerbot
         g_PveConfig.restManaPct = sConfigMgr->GetFloatDefault("Playerbot.Pve.RestManaPct", 50.0f);
         g_PveConfig.deathChestAuctionHoldSeconds = uint32(std::max(0,
             sConfigMgr->GetIntDefault("Playerbot.Pve.DeathChestAuctionHoldSeconds", 30 * MINUTE)));
+        g_PveConfig.chestTauntEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.ChestTaunt.Enable", true);
         g_PveConfig.tavernEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Tavern.Enable", true);
         g_PveConfig.tavernMinMinutes = uint32(std::max(1, sConfigMgr->GetIntDefault("Playerbot.Pve.Tavern.MinMinutes", 25)));
         g_PveConfig.tavernMaxMinutes = uint32(std::max<int32>(int32(g_PveConfig.tavernMinMinutes),

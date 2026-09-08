@@ -94,9 +94,14 @@ struct ChestLocation
     float Y = 0.0f;
     float Z = 0.0f;
     time_t ExpiresAt = 0;
+    // Who died to make this. Kept so a looter can address them by name.
+    ObjectGuid Owner;
 };
 
-void RegisterChest(GameObject* chest, Seconds despawnTime);
+void RegisterChest(GameObject* chest, Seconds despawnTime, ObjectGuid owner = ObjectGuid::Empty);
+
+// Whose death built this chest, or an empty guid if it is not one of ours.
+ObjectGuid GetChestOwner(ObjectGuid chestGuid);
 void ForgetChest(ObjectGuid guid);
 
 // Was this chest built by PlayerChestBuilder?

@@ -236,7 +236,7 @@ GameObject* PlayerChestBuilder::Summon() const
     chest->ForceValuesUpdateAtIndex(GAMEOBJECT_FLAGS);
 
     // Tell the registry where it is, so nothing ever has to search for it.
-    RegisterChest(chest, _despawnTime);
+    RegisterChest(chest, _despawnTime, _player->GetGUID());
     return chest;
 }
 
@@ -246,7 +246,7 @@ namespace
     std::vector<ChestLocation> g_ChestRegistry;
 }
 
-void RegisterChest(GameObject* chest, Seconds despawnTime)
+void RegisterChest(GameObject* chest, Seconds despawnTime, ObjectGuid owner)
 {
     if (!chest)
         return;
@@ -259,9 +259,20 @@ void RegisterChest(GameObject* chest, Seconds despawnTime)
     record.Y = chest->GetPositionY();
     record.Z = chest->GetPositionZ();
     record.ExpiresAt = GameTime::GetGameTime() + despawnTime.count();
+    record.Owner = owner;
 
     std::lock_guard<std::mutex> guard(g_ChestRegistryLock);
     g_ChestRegistry.push_back(record);
+}
+
+ObjectGuid GetChestOwner(ObjectGuid chestGuid)
+{
+    std::lock_guard<std::mutex> guard(g_ChestRegistryLock);
+    for (ChestLocation const& record : g_ChestRegistry)
+        if (record.Guid == chestGuid)
+            return record.Owner;
+
+    return ObjectGuid::Empty;
 }
 
 void ForgetChest(ObjectGuid guid)

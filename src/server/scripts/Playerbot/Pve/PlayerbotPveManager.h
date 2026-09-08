@@ -40,6 +40,7 @@ struct PveConfig
     // Seconds a bot must hold an item taken from a PLAYER's death chest before it
     // may list it. Long enough to corpse-run back and take it off the bot.
     uint32 deathChestAuctionHoldSeconds = 1800;   // 30 minutes
+    bool chestTauntEnabled = true;
     // Bots drinking for fun. Nothing here touches recovery - a bot only opens a
     // bottle when it needs nothing, and never instead of water.
     bool tavernEnabled = true;
