@@ -5937,12 +5937,30 @@ void AuraEffect::HandleBreakableCCAuraProc(AuraApplication* aurApp, ProcEventInf
     }
 
     Unit* caster = GetCaster();
+
+    // Linear from level 1 to the realm's level cap, arriving at 1200 there - which
+    // is the number a level 60 caster got before, so nothing changes at the top.
+    //
+    // The old curve was (level * 25) - 300, and it did not just get smaller at low
+    // level, it CROSSED ZERO at 12. At exactly level 12 maxDamage was 0, the clamp
+    // below set damage to 0 too, and the chance became 0/0 - NaN. Every comparison
+    // against NaN is false, so roll_chance_f never fired and the CC could not be
+    // broken by damage at all. Below 12 both terms were negative, divided to 1, and
+    // pinned the chance at 100%, so a single point of damage popped it. Two
+    // opposite bugs three levels apart, on a realm full of low level bots.
+    //
+    // Scaled against the configured cap rather than a hardcoded 60, so a realm that
+    // raises its cap keeps the same shape instead of everything above 60 sharing a
+    // threshold.
+    uint32 const capLevel = std::max<uint32>(1, sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL));
     int32 maxDamage = 1200;
     if (caster)
     {
-        maxDamage = (caster->GetLevel() * 25) - 300;
+        uint32 const casterLevel = std::min<uint32>(caster->GetLevel(), capLevel);
+        // At least 1: the divide below must never see zero again.
+        maxDamage = std::max(1, int32(1200u * casterLevel / capLevel));
         if (caster->HasAura(81399) || caster->HasAura(81340))
-            maxDamage *= 1.2f;
+            maxDamage = int32(float(maxDamage) * 1.2f);
     }
 
     DamageInfo* damageInfo = eventInfo.GetDamageInfo();
