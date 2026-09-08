@@ -15896,7 +15896,29 @@ namespace playerbot
                 continue;
 
             ItemTemplate const* proto = item->GetTemplate();
-            if (!proto || proto->RequiredLevel <= bottomLevel)
+            if (!proto)
+                continue;
+
+            // RequiredLevel alone is the wrong question, and asking only it is how
+            // a level 5 paladin ends up in a full set of mail.
+            //
+            // Armour and weapon proficiency is a SKILL, not a level. Mail is
+            // learned at 40, but mail ITEMS mostly carry RequiredLevel 1 - so
+            // every one of them passed "RequiredLevel <= bottomLevel" and stayed
+            // on. The spell wipe further up takes the proficiency away with
+            // everything else, so the bot genuinely cannot use what it is still
+            // wearing. Measured live before this: 103 pieces of mail across 14
+            // warriors and 98 across 13 paladins, the lowest of them level 5, and
+            // not one of those characters knew Mail Armor (8737).
+            //
+            // CanUseItem(Item*) asks the whole question in one call - class, race,
+            // required skill AND rank, required spell, level, and the armour or
+            // weapon proficiency behind Item::GetSkill. It is the same test the
+            // equip path itself runs, so anything it rejects is something the bot
+            // could not put back on. not_loading = false because that flag only
+            // gates the "you are dead" early-out, and a bot that happens to be a
+            // corpse right now should still be judged on what it can wear.
+            if (proto->RequiredLevel <= bottomLevel && bot->CanUseItem(item, false) == EQUIP_ERR_OK)
                 continue;
 
             ItemPosCountVec dest;
