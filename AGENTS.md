@@ -4,6 +4,13 @@
 - If playerbot behavior changes are requested, apply them in the active/source code location used by this repository build, not in the reference mirror.
 - Do **not** add new per-battleground gameplay or movement special cases; prefer generic playerbot pathing fixes that work across battlegrounds.
 - Do **not** run builds unless the user explicitly asks for one.
+- Even when asked, **check who is online first**. A build ends in a worldserver
+  restart, which disconnects everyone on the realm. If anyone is logged in other
+  than the owner's own accounts (`BROKILODELUXE` / "Baku", and the alt account
+  `acct3`), say who is on and **ask before triggering the build** — batching
+  several commits into one later build is usually the right answer. Check with:
+  `sqlq.sh <realm>characters "SELECT name, account FROM characters WHERE online = 1"`,
+  resolving account ids against `auth.account.username`.
 
 ---
 
