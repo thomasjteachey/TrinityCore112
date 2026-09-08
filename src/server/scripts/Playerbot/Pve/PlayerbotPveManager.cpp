@@ -9893,12 +9893,43 @@ namespace
                     // ceiling, and the ones far enough away to be teleported were
                     // never dispatched because the ceiling was already full.
                     //
-                    // A responder is either already fighting this person, or
-                    // carries the pursuit deadline the dispatch stamps on it.
-                    // Anything else is just a bot that happens to be standing
-                    // there - frequently one too low to have aggroed at all.
-                    if (other->GetVictim() == human || IsSwingingAt(other, human) ||
-                        other->GetBountyPursuitStacks())
+                    // A responder is either already fighting this person, or was
+                    // dispatched AT this person. Anything else is just a bot that
+                    // happens to be standing there - frequently one too low to
+                    // have aggroed at all.
+                    if (other->GetVictim() == human || IsSwingingAt(other, human))
+                    {
+                        ++answering;
+                        continue;
+                    }
+
+                    // The pursuit stamp used to stand in for that second half,
+                    // and it cannot: it says the bot is out on a bounty, never
+                    // whose. Two hunted players standing together - which is to
+                    // say a group - each counted the other's hunters, so a
+                    // ceiling meant to be per person became a ceiling per huddle
+                    // and the party drew one person's worth of pressure between
+                    // all of them.
+                    //
+                    // Both ledgers are asked because a levy is booked in its own:
+                    // the dispatch writes a hunter to g_DeployedHunters ONLY when
+                    // it is not a levy, so reading just that one would leave
+                    // every conscript uncounted and overfill the ceiling from the
+                    // other side. Read directly, without the state lock's mirror,
+                    // because this runs on the world thread in the same pass as
+                    // ReturnDeployedHunters, which owns them.
+                    uint64 const otherRawGuid = other->GetGUID().GetRawValue();
+
+                    auto const deployed = g_DeployedHunters.find(otherRawGuid);
+                    if (deployed != g_DeployedHunters.end())
+                    {
+                        if (deployed->second.HumanGuid == humanGuid)
+                            ++answering;
+                        continue;
+                    }
+
+                    auto const levied = g_LeviedBots.find(otherRawGuid);
+                    if (levied != g_LeviedBots.end() && levied->second.HumanGuid == humanGuid)
                         ++answering;
                 }
 
