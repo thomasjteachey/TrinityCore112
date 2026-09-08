@@ -3847,6 +3847,10 @@ namespace
         bool haveSmallest = false;
         uint8 smallestSlot = 0;
         uint32 smallestSize = 0;
+        bool haveBeatable = false;
+        uint8 beatableSlot = 0;
+        uint32 beatableUsed = 0;
+        uint32 beatableSize = 0;
 
         for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
         {
@@ -3875,6 +3879,21 @@ namespace
                 smallestSize = size;
                 smallestSlot = bagSlot;
             }
+
+            // Of the bags this candidate genuinely beats, remember the one that
+            // is cheapest to clear out.
+            if (size < candidate->ContainerSlots)
+            {
+                uint32 const used = CountUsedSlotsInBag(bot, worn);
+                if (!haveBeatable || used < beatableUsed ||
+                    (used == beatableUsed && size < beatableSize))
+                {
+                    haveBeatable = true;
+                    beatableSlot = bagSlot;
+                    beatableUsed = used;
+                    beatableSize = size;
+                }
+            }
         }
 
         // An empty slot is always the best answer: nothing has to come off.
@@ -3884,47 +3903,109 @@ namespace
             return true;
         }
 
+        // Otherwise displace whichever beaten bag is CHEAPEST TO EMPTY, not
+        // simply the smallest. The swap has to relocate every item in the bag
+        // coming off, and with the pack near full that is what decides whether
+        // it happens at all - a twenty-slot bag holding two items and one
+        // holding twenty are the same upgrade and wildly different odds. Sizing
+        // alone picked the latter as readily as the former and then gave up.
+        if (haveBeatable)
+        {
+            dest = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | beatableSlot);
+            return true;
+        }
+
         if (!haveSmallest)
             return false;
 
+        // Nothing here is beaten. Still answer with the smallest, so the caller's
+        // own upgrade test is the one that declines it.
         dest = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | smallestSlot);
         return true;
     }
 
+    // Is this carried container surplus to what the bot could ever wear?
+    //
+    // ForEachBagItem never visits an equipped bag, so everything reaching this
+    // is a bag the bot is CARRYING, costing a slot to hold.
+    //
+    // The old rule was "no free bag slot AND no bigger than the smallest bag
+    // worn", and it had the sign of the comparison doing the opposite of the
+    // intent: a spare bag BIGGER than the worn ones was declared not-spare, so
+    // it was never sold and never listed - while the equip pass that should
+    // have worn it bailed, because emptying a worn bag needs free slots and the
+    // pack was full of the very bags it was refusing to sell. The two halves
+    // deadlocked each other. Measured on the live fleet: ~600 spare containers
+    // held fleet-wide, Jorhild at level 10 carrying 79 of them in 100 slots.
+    //
+    // The rule that does not deadlock: rank every container the bot owns, worn
+    // and carried together, and keep the best four - the number it can actually
+    // wear. Anything below that line is surplus whatever its size, so the hoard
+    // drains, the pack opens up, and the equip pass can finally do the swap.
     bool IsSpareContainer(Player* bot, Item* item)
     {
         ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
         if (!proto || (proto->Class != ITEM_CLASS_CONTAINER && proto->Class != ITEM_CLASS_QUIVER))
             return false;
 
+        // Never one with anything still in it - selling the bag takes the
+        // contents with it.
         if (item->IsNotEmptyBag())
             return false;
 
-        bool freeBagSlot = false;
         bool quiverWorn = false;
-        uint32 smallestWorn = 0;
+        uint32 wornQuivers = 0;
+        std::vector<uint32> wornGeneral;
         for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
         {
             Bag* worn = bot->GetBagByPos(bagSlot);
             if (!worn)
+                continue;
+
+            ItemTemplate const* wornProto = worn->GetTemplate();
+            if (wornProto && wornProto->Class == ITEM_CLASS_QUIVER)
             {
-                freeBagSlot = true;
+                quiverWorn = true;
+                ++wornQuivers;
                 continue;
             }
 
-            if (ItemTemplate const* wornProto = worn->GetTemplate())
-                if (wornProto->Class == ITEM_CLASS_QUIVER)
-                    quiverWorn = true;
-
-            uint32 const size = worn->GetBagSize();
-            if (!smallestWorn || size < smallestWorn)
-                smallestWorn = size;
+            wornGeneral.push_back(worn->GetBagSize());
         }
 
         if (proto->Class == ITEM_CLASS_QUIVER)
             return quiverWorn;
 
-        return !freeBagSlot && proto->ContainerSlots <= smallestWorn;
+        // A worn quiver still occupies one of the four bag slots whatever it
+        // holds, so it is one fewer general bag the bot can keep.
+        uint32 const bagSlots = INVENTORY_SLOT_BAG_END - INVENTORY_SLOT_BAG_START;
+        uint32 const keepable = bagSlots > wornQuivers ? bagSlots - wornQuivers : 0u;
+
+        // Count how many containers rank ahead of this one. A worn bag wins
+        // ties, because swapping a bag for one the same size buys nothing and
+        // costs a rehoming; among carried ones the guid breaks ties, purely so
+        // the order is stable and exactly the right number survive.
+        uint32 ahead = 0;
+        for (uint32 size : wornGeneral)
+            if (size >= proto->ContainerSlots)
+                ++ahead;
+
+        ObjectGuid const selfGuid = item->GetGUID();
+        ForEachBagItem(bot, [&](Item* other, uint8 /*bag*/, uint8 /*slot*/)
+        {
+            if (other == item)
+                return;
+
+            ItemTemplate const* otherProto = other->GetTemplate();
+            if (!otherProto || otherProto->Class != ITEM_CLASS_CONTAINER)
+                return;
+
+            if (otherProto->ContainerSlots > proto->ContainerSlots ||
+                (otherProto->ContainerSlots == proto->ContainerSlots && other->GetGUID() < selfGuid))
+                ++ahead;
+        });
+
+        return ahead >= keepable;
     }
 
     uint32 SellVendorJunk(Player* bot)
