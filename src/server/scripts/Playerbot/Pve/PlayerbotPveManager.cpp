@@ -812,6 +812,19 @@ namespace
         return false;
     }
 
+    // One slot of drink, never a cellar.
+    //
+    // MaybeHaveADrink runs on the slow tick - every 750ms - for the whole of its
+    // forty-five second window, and it used to BUY a bottle on all sixty of those
+    // passes while the drink category's shared cooldown meant only the first
+    // could actually be swallowed. Nothing ever removed the rest: booze is a
+    // white CONSUMABLE, so it fell straight past every arm of SellVendorJunk -
+    // the greys, the trade goods, the spare bags, the white weapons and armour.
+    // The whole fleet ended up carrying thirty to forty stacks each, which is
+    // most of a pack, and a priest with no room left for water is a priest that
+    // drinks whatever it happens to have.
+    constexpr uint32 BOOZE_CARRY_LIMIT = 20;
+
     // Whether this class drinks at all. NOT GetMaxPower(POWER_MANA): a druid in
     // bear or cat form reports the form's power, so a shapeshifted druid looked
     // like a warrior to every water check and went thirsty for good.
@@ -3326,6 +3339,23 @@ namespace
         return best;
     }
 
+    // The bottle a bot already owns, so the tavern habit tops up instead of
+    // restocking. Which one it is was never the point, so the first will do.
+    Item* FindBoozeInBags(Player* bot)
+    {
+        Item* found = nullptr;
+        ForEachBagItem(bot, [&](Item* item, uint8 /*bag*/, uint8 /*slot*/)
+        {
+            if (found)
+                return;
+
+            ItemTemplate const* proto = item->GetTemplate();
+            if (IsBoozeTemplate(proto) && proto->RequiredLevel <= bot->GetLevel())
+                found = item;
+        });
+        return found;
+    }
+
     // Vendor-sold food and drink, sorted by required level descending, so the
     // first entry at or below a level is the best that level can use.
     //
@@ -3899,11 +3929,38 @@ namespace
 
     uint32 SellVendorJunk(Player* bot)
     {
+        // Which single alcohol stack survives. Decided BEFORE anything is sold,
+        // so the scan below has one stable answer instead of one that depends on
+        // the order the bags happen to be walked in. Biggest stack wins, since
+        // that is the one that empties the most slots by staying.
+        ObjectGuid keepBooze;
+        uint32 keepCount = 0;
+        ForEachBagItem(bot, [&](Item* item, uint8 /*bag*/, uint8 /*slot*/)
+        {
+            if (!IsBoozeTemplate(item->GetTemplate()))
+                return;
+
+            if (keepBooze.IsEmpty() || item->GetCount() > keepCount)
+            {
+                keepBooze = item->GetGUID();
+                keepCount = item->GetCount();
+            }
+        });
+
         uint32 soldCount = 0;
         ForEachBagItem(bot, [&](Item* item, uint8 bag, uint8 slot)
         {
             ItemTemplate const* proto = item->GetTemplate();
-            if (!proto || !proto->SellPrice)
+            if (!proto)
+                return;
+
+            // Surplus booze is dropped even when no merchant will pay for it: the
+            // point of the cap is the bag slot, not the copper, and a bottle with
+            // no sell price would otherwise sit there for good.
+            bool const surplusBooze = IsBoozeTemplate(proto) && item->GetGUID() != keepBooze &&
+                !IsQuestRequiredItem(bot, proto->ItemId);
+
+            if (!proto->SellPrice && !surplusBooze)
                 return;
 
             // Greys always.
@@ -3950,6 +4007,13 @@ namespace
                 sellable = !wantsToWear;
             }
 
+            // Every bottle but the one stack it keeps. A bot needs no cellar -
+            // MaybeHaveADrink buys one when it wants one - and nothing else in
+            // this function would ever have taken these, which is how the fleet
+            // came to be carrying most of a pack in beer.
+            if (!sellable && surplusBooze)
+                sellable = true;
+
             if (!sellable)
                 return;
 
@@ -3957,6 +4021,14 @@ namespace
             bot->DestroyItem(bag, slot, true);
             ++soldCount;
         });
+
+        // ...and the survivor is capped at one stack. Done after the loop so the
+        // count is measured against what is actually left, and by entry only once
+        // the duplicates are already gone.
+        if (!keepBooze.IsEmpty() && keepCount > BOOZE_CARRY_LIMIT)
+            if (Item const* kept = bot->GetItemByGuid(keepBooze))
+                bot->DestroyItemCount(kept->GetEntry(), keepCount - BOOZE_CARRY_LIMIT, true);
+
         return soldCount;
     }
 
@@ -12282,29 +12354,41 @@ namespace
             return;
 
         BuildRationPoolOnce();
-        uint32 const itemId = PickBoozeForLevel(bot->GetLevel());
-        ItemTemplate const* proto = itemId ? sObjectMgr->GetItemTemplate(itemId) : nullptr;
-        if (!proto)
-            return;
 
-        // Bought at the vendor price, one bottle at a time, like everything else
-        // a bot consumes. A bot too poor to drink stays sober.
-        uint64 const cost = uint64(proto->BuyPrice);
-        if (cost && bot->GetMoney() < cost)
-            return;
-
-        // AddItem reports only success, so the bottle is fetched back by entry.
-        // GetItemByEntry can legitimately return an older one the bot already
-        // had, which is fine - it is the same drink either way.
-        if (!bot->AddItem(itemId, 1))
-            return;
-
-        Item* bottle = bot->GetItemByEntry(itemId);
+        // Drink what is already in the pack. Buying is the exception.
+        //
+        // This is the leak: the window is forty-five seconds and the tick is
+        // 750ms, so this ran sixty times a session and bought a bottle EVERY
+        // time, while the drink category's shared cooldown meant only the first
+        // went down. See BOOZE_CARRY_LIMIT - the fleet was carrying a tavern
+        // each and had no room left for water.
+        Item* bottle = FindBoozeInBags(bot);
         if (!bottle)
-            return;
+        {
+            uint32 const itemId = PickBoozeForLevel(bot->GetLevel());
+            ItemTemplate const* proto = itemId ? sObjectMgr->GetItemTemplate(itemId) : nullptr;
+            if (!proto)
+                return;
 
-        if (cost)
-            bot->ModifyMoney(-int64(cost));
+            // Bought at the vendor price, one bottle at a time, like everything
+            // else a bot consumes. A bot too poor to drink stays sober.
+            uint64 const cost = uint64(proto->BuyPrice);
+            if (cost && bot->GetMoney() < cost)
+                return;
+
+            // AddItem reports only success, so the bottle is fetched back by
+            // entry. GetItemByEntry can legitimately return an older one the bot
+            // already had, which is fine - it is the same drink either way.
+            if (!bot->AddItem(itemId, 1))
+                return;
+
+            bottle = bot->GetItemByEntry(itemId);
+            if (!bottle)
+                return;
+
+            if (cost)
+                bot->ModifyMoney(-int64(cost));
+        }
 
         // A bear cannot hold a tankard. Dropping the form to drink is the same
         // concession the eating path already makes.
