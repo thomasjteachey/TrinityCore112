@@ -4489,6 +4489,36 @@ namespace
                 else if (lootCorpse)
                     TrySkinCorpse(bot, lootCorpse);
             }
+
+            // An emptied cache still has to be told it is spent, and DoLootRelease
+            // is not reliably the thing that tells it.
+            //
+            // Its gameobject arm returns BEFORE touching the loot state unless the
+            // looter owns the object or stands inside GameObject::IsWithinDistInMap
+            // - which resolves to IsAtInteractDistance, about eleven yards for this
+            // chest. PlayerChestBuilder::Summon clears the owner on purpose, and the
+            // unwatched-chest shortcut deliberately empties a cache from as far as
+            // Playerbot.Pve.RemoteChestRadius, forty yards. Everything between those
+            // two distances was looted, released, and then left standing with
+            // nothing inside it for the full hour of its despawn timer. The same
+            // gap catches an ordinary node: the executor admits a bot at
+            // INTERACTION_DISTANCE + 2, which is already past what the release
+            // check accepts.
+            //
+            // Only the loot-state half is missing. Everything else DoLootRelease
+            // does - clearing the loot guid, the release packet, dropping
+            // UNIT_FLAG_LOOTING - happens above its distance check and has already
+            // run, so this completes that call rather than repeating it.
+            //
+            // Gated on the loot genuinely being gone, which is the same test
+            // DoLootRelease applies, so a chest still holding a row that a
+            // full-bagged bot could not carry stays exactly where it is.
+            if (lootGameObject && lootGameObject->loot.isLooted() &&
+                lootGameObject->getLootState() != GO_JUST_DEACTIVATED)
+            {
+                lootGameObject->SetLootState(GO_JUST_DEACTIVATED);
+                lootGameObject->loot.clear();
+            }
         }
     }
 
