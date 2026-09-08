@@ -4178,25 +4178,143 @@ namespace
         if (!victim || victim == bot || !IsHumanPlayer(victim))
             return;
 
-        // Every line takes the count, so the formatter never sees an unused argument.
-        static constexpr std::array<char const*, 8> taunts =
+        // A hundred of them. This fires every time a bot walks off with somebody's
+        // cache, which on a busy night is often enough that a short list stops
+        // reading as a bot with a personality and starts reading as a macro.
+        //
+        // Every line takes the count, so the substitution never has an unused
+        // argument. Beyond {} there are four agreement tokens - {s} {it} {is} {was}
+        // - because a hundred lines cannot all be phrased to survive a haul of
+        // exactly one, and one item is a perfectly ordinary haul. "Your 1 items was
+        // just lying there" is the seam that turns a taunt back into a template.
+        //
+        // The agreement tokens follow the ITEM COUNT, so they belong only where the
+        // items are the subject: "{} item{s} {is} mine" is right, "that {is} {}
+        // item{s}" is not - the subject there is "that", which never pluralises.
+        static constexpr std::array<char const*, 100> taunts =
         {
-            "Thanks for the {} pieces. You won't be needing them where you're standing.",
-            "{} items lighter and you're still lying there. Take your time.",
-            "I'll look after these {} for you. Indefinitely.",
-            "Nice gear. Was. {} pieces of it, anyway.",
-            "You dropped {} things. I picked them up. That is how it works.",
-            "Corpse runs are character building. Enjoy yours, minus {} items.",
-            "{} pieces off a dead man. Barely even feels like work.",
-            "Do not worry, I will wear all {} of them with dignity."
+            "Thanks for the {} piece{s}. You won't be needing {it} where you're standing.",
+            "{} item{s} lighter and you're still lying there. Take your time.",
+            "I'll look after {} item{s} for you. Indefinitely.",
+            "Nice gear. Was. {} piece{s} of it, anyway.",
+            "You dropped {} thing{s}. I picked {it} up. That is how it works.",
+            "Corpse runs are character building. Enjoy yours, minus {} item{s}.",
+            "{} piece{s} off a dead man. Barely even feels like work.",
+            "Do not worry, I will wear {it} with dignity. All {} piece{s}.",
+            "Found {} item{s} just lying around. Finders keepers is the law out here.",
+            "That leaves {} fewer thing{s} to repair. You're welcome.",
+            "I have taken {} item{s} into protective custody.",
+            "Consider your {} piece{s} a donation to the local economy.",
+            "{} item{s}. I counted. Twice. Just to savour it.",
+            "Your gear is in good hands now. All {} piece{s} of it.",
+            "Death and taxes. Today's tax: {} item{s}.",
+            "I would give the {} piece{s} back, but I have grown attached.",
+            "Somebody left {} item{s} unattended. Terrible security.",
+            "{} item{s} acquired. No refunds, no returns.",
+            "You had {} thing{s}. Emphasis on had.",
+            "Every corpse tells a story. Yours ran {} item{s} long.",
+            "You looked fine right up until I took {} piece{s}.",
+            "I took {} item{s} and a small amount of your dignity.",
+            "Inventory management is a skill. I have {} more item{s} to manage.",
+            "{} piece{s} of loot and not one word of thanks.",
+            "The cache had {} item{s}. Had.",
+            "Your gear misses you. All {} piece{s} of it. Briefly.",
+            "I have relocated {} of your item{s} to a better home.",
+            "{} item{s} says you should have run.",
+            "A moment of silence for your {} missing item{s}.",
+            "Look on the bright side: {} fewer item{s} to sort through.",
+            "I am not saying I am better than you. The {} item{s} {is} saying it.",
+            "Congratulations, you have been selected to donate {} item{s}.",
+            "{} item{s}. Same time next week?",
+            "Bag space was tight until you kindly died with {} item{s}.",
+            "I will be honest, {} item{s} {was} more than I expected.",
+            "There {is} {} item{s} here I did not have to grind for. Efficient.",
+            "{} piece{s} of loot, now safe. From you, mostly.",
+            "Sorry about the {} item{s}. Not sorry enough to give {it} back.",
+            "You know what pairs well with dying? Losing {} item{s}.",
+            "{} item{s} richer and I did almost nothing. Beautiful.",
+            "I have logged {} item{s} under 'found'.",
+            "Nothing personal. Just {} item{s} worth of business.",
+            "{} item{s}. Consider it a lesson with a price tag.",
+            "Somewhere out there is a vendor who will love {it}. All {} item{s}.",
+            "I took {} item{s}. The rest looked like it might be cursed.",
+            "That armour did not save you, and now {} piece{s} of it {is} mine.",
+            "You kept your life. I kept {} item{s}. Fair split.",
+            "{} item{s} claimed. Azeroth is a harsh place.",
+            "I would say get better gear, but then I would just take {} more item{s}.",
+            "Your loot is my loot now. {} item{s} worth of paperwork.",
+            "Please rate your looting experience. I took {} item{s}.",
+            "{} item{s} off the top. Standard rate.",
+            "Do you want the {} item{s} back? Too bad.",
+            "I found {} item{s} and a whole lot of regret. The regret is yours.",
+            "Part of you rides in my backpack now. {} piece{s}, to be exact.",
+            "There {was} {} item{s}. Now there is a lesson.",
+            "The cache is empty and I am {} item{s} heavier.",
+            "You fought bravely. I looted efficiently. {} item{s}.",
+            "{} item{s} and the moral high ground. I will take both.",
+            "I hope you were not attached to those {} item{s}.",
+            "Statistically, someone was going to take those {} item{s}. It was me.",
+            "{} item{s} says the graveyard is that way.",
+            "Left unattended for ten seconds. {} item{s} gone. Tragic.",
+            "I have taken {} item{s} and left you the memories.",
+            "It was either me or the wolves. I took {} item{s}, they took nothing.",
+            "{} item{s}. I will think of you every time I repair {it}.",
+            "You will find {} more item{s} eventually. Probably.",
+            "Consider your {} item{s} rehomed.",
+            "I did not kill you, but I did take {} item{s}. Small mercies.",
+            "Your {} item{s}? Doing fine. Thanks for asking.",
+            "{} item{s} lighter. You practically float now.",
+            "This is the part where I take {} item{s} and walk away slowly.",
+            "{} item{s}. A fair price for the entertainment.",
+            "I would leave you something, but I already took {} item{s}.",
+            "Redistribution complete. {} of your item{s} changed hands.",
+            "{} item{s} and not a single trap. Sloppy.",
+            "Loot waits for no one. {} item{s} proved it.",
+            "{} item{s} closer to my next upgrade. Thanks for that.",
+            "I am told stealing is wrong. Your {} item{s} {was} just lying there.",
+            "{} item{s}. You can keep the dirt.",
+            "Ah, {} item{s}. My favourite kind of surprise.",
+            "The dead do not need {} item{s}. The living do.",
+            "I have {} of your item{s} and you have my sympathy. Roughly equal.",
+            "{} item{s} secured. Mission accomplished.",
+            "Corpse looted. {} item{s}. Moving on.",
+            "You are taking this well. Better than the {} item{s} did.",
+            "{} item{s} for me, character growth for you.",
+            "I have seen worse hauls. {} item{s} {is} respectable.",
+            "That cache had your name on it. Now the {} item{s} {is} mine.",
+            "{} item{s}. Do not worry, {it} will be well used.",
+            "Somebody had to take those {} item{s}. I volunteered.",
+            "{} item{s} and I am still not sorry.",
+            "You will want {it} back. All {} item{s}. I understand completely.",
+            "The {} item{s} and I are very happy together.",
+            "I would call it stealing, but you had stopped using {it}. {} item{s}.",
+            "{} item{s}. The circle of life, Azeroth edition.",
+            "Look at it this way: {} item{s} now is {} fewer to lose later.",
+            "Your corpse was very generous. {} item{s} generous.",
+            "{} item{s} down. See you at the graveyard.",
+            "And that is {} item{s} you will never see again."
         };
 
         // Substituted by hand rather than through StringFormat: fmt checks its format
         // string at COMPILE time, and one picked out of an array at runtime is not a
         // constant expression (C7595).
         std::string line = taunts[urand(0, uint32(taunts.size()) - 1)];
-        if (size_t const at = line.find("{}"); at != std::string::npos)
-            line.replace(at, 2, std::to_string(itemsTaken));
+
+        // Resumes PAST the replacement rather than at it, so a token that expands to
+        // nothing ({s} on a haul of one) cannot spin here forever.
+        auto const substitute = [](std::string& text, std::string const& token, std::string const& with)
+        {
+            for (size_t at = text.find(token); at != std::string::npos; at = text.find(token, at + with.size()))
+                text.replace(at, token.size(), with);
+        };
+
+        bool const many = itemsTaken != 1;
+        substitute(line, "{}", std::to_string(itemsTaken));
+        substitute(line, "{s}", many ? "s" : "");
+        substitute(line, "{it}", many ? "them" : "it");
+        substitute(line, "{is}", many ? "are" : "is");
+        substitute(line, "{was}", many ? "were" : "was");
+
         bot->Whisper(line, LANG_UNIVERSAL, victim);
     }
 
