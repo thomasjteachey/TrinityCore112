@@ -786,6 +786,27 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
     if (!motionMaster)
         return false;
 
+    // The destination has NOT moved and the segment in flight is already going
+    // there. The throttle window elapsing is not on its own a reason to redo the
+    // work: reissuing clears a perfectly good spline and starts a new one from
+    // the server's authoritative position, and every observer's client has to
+    // snap the model to that point. The size of that snap is speed times
+    // latency, so on foot it is small enough to read as smooth running and at
+    // mount speed it is twice as far and reads as stutter-stepping.
+    //
+    // Seen closing 211 yards on a player: a guardian mounts, and for the whole
+    // 72-second approach the follow reissues on the 500ms clock - about 144
+    // spline restarts - even across the stretches where the target had barely
+    // moved and the existing segment was still correct.
+    //
+    // The time throttle stays a FLOOR on how often a genuinely changed
+    // destination may be re-pathed; it is no longer a trigger by itself. If the
+    // segment ends, or the bot stops for any other reason, isMoving() goes false
+    // and the next call issues a fresh one.
+    if (!destinationChanged &&
+        player->isMoving() && motionMaster->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE)
+        return true;
+
     if (destinationChanged && !canReissueByTime)
     {
         // The requested destination drifted (e.g. a chased target kept
