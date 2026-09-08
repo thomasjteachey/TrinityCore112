@@ -1667,8 +1667,18 @@ roleButton:SetScript("OnClick", function()
 		roleCycleAt = 1
 	end
 
+	-- Spelled out rather than `(pick == "all") and nil or pick`, which does not
+	-- work: `and nil` yields nil, nil is falsy, so `or pick` always wins and the
+	-- "everything" entry set the filter to the STRING "all". That never equalled
+	-- a numeric role, so the list came back empty and could not be cleared - and
+	-- RoleName did not recognise it either, so the button read "Local" a second
+	-- time instead of "all".
 	local pick = ROLE_CYCLE[roleCycleAt]
-	roleFilter = (pick == "all") and nil or pick
+	if pick == "all" then
+		roleFilter = nil
+	else
+		roleFilter = pick
+	end
 	roleButton:SetText(RoleButtonLabel())
 
 	-- Filtering by role only means anything on the bot list, so land there -
