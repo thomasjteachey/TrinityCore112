@@ -3223,10 +3223,16 @@ uint32 Unit::GetDefenseSkillValue(Unit const* target) const
 // PvE reads the victim's real level and is completely untouched.
 int32 Unit::GetOpposedSkillValueForLevel(Unit const* victim) const
 {
-    if (IsPvpLevelPenaltyWaived(this, victim))
-        return int32(GetMaxSkillValueForLevel());
+    int32 const opposed = int32(victim->GetMaxSkillValueForLevel(this));
+    if (!IsPvpLevelPenaltyWaived(this, victim))
+        return opposed;
 
-    return int32(victim->GetMaxSkillValueForLevel(this));
+    // The waiver is ONE-DIRECTIONAL. It exists so that a level gap cannot
+    // decide a fight against the lower-level attacker, so it caps the opposing
+    // value at the attacker's own and never raises it. Swinging UP stops being
+    // punished; swinging DOWN keeps the ordinary skill advantage, which is
+    // earned and which players expect to see.
+    return std::min(opposed, int32(GetMaxSkillValueForLevel()));
 }
 
 float Unit::GetUnitDodgeChance(WeaponAttackType attType, Unit const* victim) const

@@ -2591,16 +2591,21 @@ SpellMissInfo WorldObject::MeleeSpellHitResult(Unit* /*victim*/, SpellInfo const
     return SPELL_MISS_NONE;
 }
 
-// A level gap between two PLAYERS must not decide whether an attack lands.
+// A level gap between two PLAYERS must not decide whether an attack lands
+// AGAINST the lower-level attacker.
 //
-// Stock charges the lower-level attacker three times over from one level
-// difference - miss, avoidance, and spell hit - and stacked they settle the
-// fight before either side acts. On a realm where people fight across level
-// bands that is most fights.
+// Stock charges that attacker three times over from one level difference -
+// miss, avoidance, and spell hit - and stacked they settle the fight before
+// either side acts. On a realm where people fight across level bands that is
+// most fights.
 //
-// It runs in BOTH directions: a level 60 gains nothing against a level 40
-// either. The two resolve hits as if evenly matched, and the gap shows up in
-// damage, health and cooldowns instead - where it is earned.
+// One direction only. This waives the PENALTY for punching up; it does not
+// take away the BENEFIT of punching down, which is ordinary earned advantage
+// and which players expect to see. The two call sites therefore CAP the
+// opposing value at the attacker's own rather than substituting it outright -
+// see Unit::GetOpposedSkillValueForLevel and MagicSpellHitResult below. An
+// earlier version equalised both ways and quietly cost a level 60 the hit
+// advantage it had over a level 40.
 //
 // Pets and minions resolve to their owner, so a warlock's felguard mauling a
 // player is PvP. Anything without a controlling player on both sides is PvE
@@ -2634,8 +2639,9 @@ SpellMissInfo WorldObject::MagicSpellHitResult(Unit* victim, SpellInfo const* sp
         thisLevel = std::max<int32>(thisLevel, spellInfo->SpellLevel);
     int32 victimLevel = int32(victim->GetLevelForTarget(this));
 
-    // Between two players the level gap does not move spell hit in either
-    // direction: the victim is read at the caster's own level.
+    // Between two players a level gap never counts AGAINST the caster: a victim
+    // above the caster is read at the caster's own level instead. It is capped,
+    // not equalised - casting DOWN keeps the ordinary hit advantage.
     //
     // Substituted rather than differenced away because the rule just below - two
     // level 60 players miss each other 4% of the time, not 3% - is guarded on the
@@ -2643,7 +2649,7 @@ SpellMissInfo WorldObject::MagicSpellHitResult(Unit* victim, SpellInfo const* sp
     // and failed its second, so a 60 casting at a 40 kept the 3% floor that an
     // even fight does not get. Reading the level itself keeps the two identical.
     if (IsPvpLevelPenaltyWaived(this, victim))
-        victimLevel = thisLevel;
+        victimLevel = std::min(victimLevel, thisLevel);
 
     int32 const leveldif = victimLevel - thisLevel;
 
@@ -2664,6 +2670,12 @@ SpellMissInfo WorldObject::MagicSpellHitResult(Unit* victim, SpellInfo const* sp
     }
     else
         modHitChance = 94 - (leveldif - 2) * lchance;
+
+    // Deliberately NOT capped at 100 here. Everything below - the rogue's
+    // Heightened Senses, hit-taken rating, AoE avoidance - subtracts from this
+    // baseline, and a caster who is over the cap is meant to have headroom to
+    // spend against exactly those. Clamping the baseline first would hand the
+    // avoidance back for free. The only clamp is the one on the final roll.
 
     // Spellmod from SPELLMOD_RESIST_MISS_CHANCE
     if (Player* modOwner = GetSpellModOwner())
