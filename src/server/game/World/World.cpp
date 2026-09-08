@@ -3891,7 +3891,10 @@ bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName,
         if (!sCharacterCache->GetCharacterNameByGuid(runnerUpGuid, runnerUpName))
             runnerUpName = "<unknown>";
 
-        UpdateHonorNpc(WarchiefRunnerUpEntry, runnerUpGuid, runnerUpName, nullptr);
+        // On a realm where 110017 is the most-deaths corpse instead, this must not
+        // fight it for the same entry every week.
+        if (sConfigMgr->GetBoolDefault("Centurion.HonorRunnerUp.Enable", true))
+            UpdateHonorNpc(WarchiefRunnerUpEntry, runnerUpGuid, runnerUpName, nullptr);
 
         CharacterDatabaseTransaction runnerUpTrans = CharacterDatabase.BeginTransaction();
         MailDraft("second place", "if you're not first you're last.")
@@ -3919,9 +3922,71 @@ bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName,
     return true;
 }
 
+// Whoever died the most this week gets a copy of their corpse beside every innkeeper.
+//
+// Same machinery as the warchief board, deliberately: UpdateHonorNpc with
+// updateAllSpawns, exactly as third place already does. What differs is only which
+// leaderboard is read and what is being dressed - a lying-down "Trash" corpse rather
+// than a standing hero, and the creature's own stand state is preserved by
+// UpdateHonorNpc, so it stays on the floor while wearing the player's face.
+//
+// It lives here rather than in a script because UpdateHonorNpc is a static in this
+// file's anonymous namespace. The counting half is the PlayerScript in
+// custom_weekly_deaths.cpp; the two meet in character_weekly_deaths.
+bool World::ProcessWeeklyMostDeaths(std::string* winnerName, uint32* deathCount)
+{
+    if (!sConfigMgr->GetBoolDefault("Centurion.MostDeaths.Enable", false))
+        return false;
+
+    // Same NPC on both realms, different meaning. On L+ 110017 is the honor
+    // runner-up and there is one of him; on B+ he is whoever died most and there is
+    // one beside every innkeeper. Which of those a realm gets is configuration, not a
+    // branch difference, so the entry and the spawn breadth are both settings.
+    uint32 const corpseEntry = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.MostDeaths.CreatureEntry", int32(WarchiefRunnerUpEntry))));
+    if (!corpseEntry)
+        return false;
+
+    bool const allSpawns = sConfigMgr->GetBoolDefault("Centurion.MostDeaths.AllSpawns", true);
+
+    QueryResult result = CharacterDatabase.Query(
+        "SELECT guid, deaths FROM character_weekly_deaths ORDER BY deaths DESC, guid ASC LIMIT 1");
+    if (!result)
+    {
+        TC_LOG_INFO("misc", "Weekly most deaths: nobody died this week, so the corpses are left as they are.");
+        return false;
+    }
+
+    Field* fields = result->Fetch();
+    ObjectGuid::LowType const lowGuid = fields[0].GetUInt32();
+    uint32 const deaths = fields[1].GetUInt32();
+
+    ObjectGuid const guid = ObjectGuid::Create<HighGuid::Player>(lowGuid);
+    std::string name;
+    if (!sCharacterCache->GetCharacterNameByGuid(guid, name))
+        name = "<unknown>";
+
+    if (UpdateHonorNpc(corpseEntry, guid, name, nullptr, allSpawns))
+        TC_LOG_INFO("misc", "Weekly most deaths: {} died {} time(s) and now lies at {}.", name, deaths,
+            allSpawns ? "every spawn of the corpse NPC" : "the corpse NPC");
+    else
+        TC_LOG_ERROR("misc", "Weekly most deaths: {} won with {} death(s) but creature entry {} could not be updated.", name, deaths, corpseEntry);
+
+    // The week is over either way. Carrying the counts forward would let one bad week
+    // decide the next one too, which is worse than losing a board nobody saw.
+    CharacterDatabase.Execute("DELETE FROM character_weekly_deaths");
+
+    if (winnerName)
+        *winnerName = name;
+    if (deathCount)
+        *deathCount = deaths;
+
+    return true;
+}
+
 void World::ResetWeeklyQuests()
 {
     ProcessWeeklyHonorWarchief(true);
+    ProcessWeeklyMostDeaths();
 
     // reset all saved quest status
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_RESET_CHARACTER_QUESTSTATUS_WEEKLY);

@@ -126,6 +126,14 @@ public:
         }
 
         handler->PSendSysMessage("Weekly honor winner set to %s with %u honor.", winnerName.c_str(), weeklyHonor);
+
+        // The deaths board rides the same weekly rollover, so forcing one should force
+        // the other - otherwise the only way to see it is to wait a week.
+        std::string deathsName;
+        uint32 deaths = 0;
+        if (sWorld->ProcessWeeklyMostDeaths(&deathsName, &deaths))
+            handler->PSendSysMessage("Weekly most deaths set to %s with %u death(s).", deathsName.c_str(), deaths);
+
         return true;
     }
 };

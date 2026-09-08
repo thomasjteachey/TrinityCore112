@@ -30,6 +30,7 @@ void AddSC_mod_pvp_titles();
 void AddSC_custom_diremaul_beads();
 void AddSC_custom_barracks_hardcore();
 void AddSC_custom_bounty();
+void AddSC_custom_weekly_deaths();
 void AddSC_custom_notoriety();
 void AddSC_custom_graceful_shutdown();
 void AddSC_custom_bot_map_feed();
@@ -77,6 +78,7 @@ void AddCustomScripts()
     AddSC_custom_diremaul_beads();
     AddSC_custom_barracks_hardcore();
     AddSC_custom_bounty();
+    AddSC_custom_weekly_deaths();
     AddSC_custom_notoriety();
     AddSC_custom_graceful_shutdown();
     AddSC_custom_bot_map_feed();

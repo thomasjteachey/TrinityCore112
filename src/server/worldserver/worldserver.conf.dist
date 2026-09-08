@@ -3983,6 +3983,37 @@ Centurion.Shutdown.PollMs = 3000
 
 Centurion.PvpConsumableRestore.AreaIds = ""
 
+#
+#    Centurion.MostDeaths.Enable
+#        Description: Each weekly reset, whoever died the most that week has their
+#                     appearance and name copied onto the corpse NPC. Deaths are counted
+#                     only for real players - playerbots are skipped, or the fleet would
+#                     win every week. Off by default.
+#        Default:     0
+#
+#    Centurion.MostDeaths.CreatureEntry
+#        Description: The NPC dressed as the week's most-killed player. Defaults to
+#                     110017, the same lying-down "Trash" NPC that serves as the honor
+#                     runner-up elsewhere - which is why the two must not both be on.
+#        Default:     110017
+#
+#    Centurion.MostDeaths.AllSpawns
+#        Description: 1 dresses EVERY spawn of that creature (one corpse beside each
+#                     innkeeper); 0 dresses only one.
+#        Default:     1
+#
+#    Centurion.HonorRunnerUp.Enable
+#        Description: Whether the weekly honor runner-up is copied onto creature 110017.
+#                     Turn this OFF on a realm running Centurion.MostDeaths, or the two
+#                     boards overwrite each other on the same NPC every week.
+#        Default:     1
+#
+
+Centurion.MostDeaths.Enable = 0
+Centurion.MostDeaths.CreatureEntry = 110017
+Centurion.MostDeaths.AllSpawns = 1
+Centurion.HonorRunnerUp.Enable = 1
+
 DireMaulBeads.ItemId = 21982
 DireMaulBeads.AuraId = 90002
 DireMaulBeads.AreaIds = 495,496,498,2557,3217
