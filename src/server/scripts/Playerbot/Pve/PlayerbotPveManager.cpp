@@ -257,6 +257,9 @@ namespace
         bool passive = false;
         bool stay = false;
         bool engaged = false;
+        // Last tick's combat flag, so LEAVING a fight can be spotted as an edge
+        // rather than as a state - see the combat-exit chest check.
+        bool wasInCombat = false;
         PveTimePoint nextFastTick{};
         PveTimePoint nextSlowTick{};
         PveTimePoint nextGrindScanAt{};
@@ -4471,6 +4474,42 @@ namespace
         g_PendingSupplyRuns.insert(bot->GetGUID().GetRawValue());
     }
 
+    // The death-chest branch of the errand scan, lifted out so the combat-exit
+    // check can reuse it without dragging quest objects, vendors and repairs along
+    // with it. Returns true when an errand was claimed.
+    //
+    // Hardcore death chests are free treasure lying in the world: bots grab
+    // them like anyone else would - their own, each other's, and players'.
+    // Ownership is deliberately not consulted, so an audience does not stop this:
+    // the bot walks over and opens it with the Opening channel like anybody else.
+    //
+    // 200 yards rather than 60: a bot resurrects at a graveyard, which is
+    // usually further from where it fell than the old radius reached, so the
+    // chest it walked back for was frequently still outside the scan when the
+    // journey ended. The errand allows 90 seconds, and 200 yards is about 29
+    // at running pace, so the walk still fits comfortably.
+    bool TryStartDeathChestErrand(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg, bool guardian)
+    {
+        if (!cfg.hardcoreLootChestEntry)
+            return false;
+
+        GameObject* deathChest = FindRegisteredDeathChest(bot, cfg.hardcoreLootChestEntry, 200.0f);
+        if (!deathChest)
+            return false;
+
+        if ((guardian && deathChest->GetZoneId() != GetGuardianZoneId(bot->GetGUID().GetRawValue())) ||
+            !deathChest->isSpawned() || deathChest->getLootState() != GO_READY ||
+            IsRecentErrandTarget(state, deathChest->GetGUID()))
+            return false;
+
+        state.errandGuid = deathChest->GetGUID();
+        state.errandKind = PveErrandKind::QuestObject;
+        state.errandUntil = PveClock::now() + std::chrono::seconds(90);
+        TC_LOG_DEBUG("playerbots.pve", "Bot {} heading for a death chest at {:.0f}y.",
+            bot->GetName(), bot->GetDistance(deathChest));
+        return true;
+    }
+
     void StartErrandIfNeeded(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
     {
         if (!cfg.questsEnabled && !cfg.vendorEnabled)
@@ -4510,28 +4549,8 @@ namespace
             }
         }
 
-        // Hardcore death chests are free treasure lying in the world: bots grab
-        // them like anyone else would - their own, each other's, and players'.
-        // Ownership is deliberately not consulted.
-        //
-        // 200 yards rather than 60: a bot resurrects at a graveyard, which is
-        // usually further from where it fell than the old radius reached, so the
-        // chest it walked back for was frequently still outside the scan when the
-        // journey ended. The errand allows 90 seconds, and 200 yards is about 29
-        // at running pace, so the walk still fits comfortably.
-        if (cfg.hardcoreLootChestEntry)
-            if (GameObject* deathChest = FindRegisteredDeathChest(bot, cfg.hardcoreLootChestEntry, 200.0f))
-                if ((!guardian || deathChest->GetZoneId() == GetGuardianZoneId(bot->GetGUID().GetRawValue())) &&
-                    deathChest->isSpawned() && deathChest->getLootState() == GO_READY &&
-                    !IsRecentErrandTarget(state, deathChest->GetGUID()))
-                {
-                    state.errandGuid = deathChest->GetGUID();
-                    state.errandKind = PveErrandKind::QuestObject;
-                    state.errandUntil = PveClock::now() + std::chrono::seconds(90);
-                    TC_LOG_DEBUG("playerbots.pve", "Bot {} heading for a death chest at {:.0f}y.",
-                        bot->GetName(), bot->GetDistance(deathChest));
-                    return;
-                }
+        if (TryStartDeathChestErrand(bot, state, cfg, guardian))
+            return;
 
         bool const needRepair = AnyEquippedItemBelowDurabilityPct(bot, 35);
         bool const needSupplies = cfg.restUseConsumables &&
@@ -12405,6 +12424,28 @@ namespace
         // already underfoot.
         // Quest/vendor errands are for autonomous bots; companions stay on their
         // master's heel.
+        // A bot that has just stopped fighting looks for a death chest AT ONCE,
+        // rather than waiting out the errand scan's fifteen second cadence.
+        //
+        // This is the case that read as bots ignoring loot entirely: the bots
+        // standing over a player's cache are usually the ones that just killed him,
+        // so they are in combat for the whole window the scan would have used, and
+        // by the time they are idle the fight has carried them out of the 200 yards
+        // - or killed them, and they wake up at a graveyard.
+        //
+        // Chest only, deliberately. Quests, vendors and repairs keep the slow
+        // cadence: this fires on every combat exit for every bot on the realm, and
+        // the chest lookup is a single registry hit where the full scan sweeps for
+        // quest objects and service NPCs.
+        bool const inCombatNow = bot->IsInCombat();
+        if (state.wasInCombat && !inCombatNow && state.masterGuid.IsEmpty() && !state.engaged &&
+            state.errandKind == PveErrandKind::None && state.pendingLootGuid.IsEmpty() &&
+            !state.journeyActive)
+        {
+            TryStartDeathChestErrand(bot, state, cfg, GetGuardianZoneId(bot->GetGUID().GetRawValue()) != 0);
+        }
+        state.wasInCombat = inCombatNow;
+
         if (state.masterGuid.IsEmpty() && !state.engaged && !bot->IsInCombat() &&
             state.errandKind == PveErrandKind::None && state.pendingLootGuid.IsEmpty() &&
             !state.journeyActive && now >= state.nextErrandScanAt)
