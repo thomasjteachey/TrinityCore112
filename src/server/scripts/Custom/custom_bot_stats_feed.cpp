@@ -41,6 +41,7 @@
 #include "Chat.h"
 #include "Configuration/Config.h"
 #include "GameTime.h"
+#include "Bag.h"
 #include "Item.h"
 #include "ItemTemplate.h"
 #include "ObjectAccessor.h"
@@ -380,6 +381,64 @@ namespace
         SendTagged(viewer, "BSTM", bot->GetName() + std::string("|") + data->ModelName);
     }
 
+    // What the bot is CARRYING, as opposed to wearing.
+    //
+    // On demand for the same reason gear is, only more so: a bag list is far
+    // longer than an equipment list - the fleet averages sixty-odd rows a bot -
+    // and streaming that for 255 bots every few seconds would dwarf the entire
+    // rest of the feed. The window only ever looks at one bot, so it asks.
+    //
+    // Walks the backpack and every equipped bag, which is the same ground
+    // ForEachBagItem covers server-side. Equipped items are NOT repeated here;
+    // they already have their own panel.
+    void SendBagsTo(Player* viewer, Player* bot)
+    {
+        std::ostringstream out;
+        out << bot->GetName() << '|';
+
+        uint32 inMessage = 0;
+        uint32 sent = 0;
+
+        auto const emit = [&](Item const* item)
+        {
+            ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
+            if (!proto)
+                return;
+
+            out << proto->ItemId << ',' << uint32(item->GetCount()) << ','
+                << proto->Quality << ',' << proto->ItemLevel << ';';
+            ++sent;
+
+            // Same whisper budget the gear feed keeps to. Four rows carry more
+            // characters here than six gear rows do, because a stack count and
+            // an item level ride along with every one.
+            if (++inMessage >= 6)
+            {
+                SendTagged(viewer, "BSTB", out.str());
+                out.str(std::string());
+                out.clear();
+                out << bot->GetName() << '|';
+                inMessage = 0;
+            }
+        };
+
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+            emit(bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot));
+
+        for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+            if (Bag const* bag = bot->GetBagByPos(bagSlot))
+                for (uint32 i = 0; i < bag->GetBagSize(); ++i)
+                    emit(bag->GetItemByPos(uint8(i)));
+
+        if (inMessage)
+            SendTagged(viewer, "BSTB", out.str());
+
+        // A terminator, so the panel can tell "still arriving" from "this bot
+        // genuinely carries nothing" - without it an empty pack and a request
+        // that never answered look identical.
+        SendTagged(viewer, "BSTC", bot->GetName() + std::string("|") + std::to_string(sent));
+    }
+
     void SendGearTo(Player* viewer, Player* bot)
     {
         SendModelTo(viewer, bot);
@@ -506,6 +565,7 @@ namespace
             static ChatCommandTable botStatsTable =
             {
                 { "gear", HandleBotStatsGear, rbac::RBAC_PERM_COMMAND_GM, Console::No },
+                { "bags", HandleBotStatsBags, rbac::RBAC_PERM_COMMAND_GM, Console::No },
             };
             static ChatCommandTable commandTable =
             {
@@ -530,6 +590,23 @@ namespace
             }
 
             SendGearTo(viewer, bot);
+            return true;
+        }
+
+        static bool HandleBotStatsBags(ChatHandler* handler, std::string_view botName)
+        {
+            Player* viewer = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
+            if (!viewer || botName.empty())
+                return false;
+
+            Player* bot = ObjectAccessor::FindPlayerByName(botName);
+            if (!bot || !bot->IsInWorld())
+            {
+                handler->PSendSysMessage("botstats: no bot named %s is online.", std::string(botName).c_str());
+                return true;
+            }
+
+            SendBagsTo(viewer, bot);
             return true;
         }
     };

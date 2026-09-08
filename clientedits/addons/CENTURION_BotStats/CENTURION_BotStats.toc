@@ -3,6 +3,7 @@
 ## Notes: GM-only live readout of the playerbot fleet - population by zone and level, aggression, timidity, gold and auctions.
 ## Author: Centurion
 ## Version: 1.0
+## SavedVariables: CENTURION_BotStatsMinimapAngle
 ## DefaultState: Enabled
 
 CENTURION_BotStats.lua

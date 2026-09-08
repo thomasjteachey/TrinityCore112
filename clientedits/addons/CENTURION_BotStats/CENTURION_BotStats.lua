@@ -48,6 +48,18 @@ local incoming = {}     -- roster rows still arriving
 local scrollOffset = 0
 local zoneFilter = nil  -- when set, the Bots tab shows only this zone
 
+-- nil means every role. Otherwise a role id, INCLUDING 0 - "Local" is a real
+-- role worth isolating, so the filter cannot use 0 as its off switch.
+local roleFilter = nil
+-- The cycle order the button walks: "everything" first so one more click always
+-- gets back to it, then the roles in the order ROLE_NAME declares them, with
+-- Local last since it is the majority and the least interesting.
+--
+-- The "everything" entry is the string "all" rather than nil: a nil in a table
+-- constructor is a hole, and # over a table with a hole at [1] is undefined.
+local ROLE_CYCLE = { "all", 4, 1, 2, 5, 3, 0 }
+local roleCycleAt = 1
+
 local activeTab = "zones"
 local sortKey   = "count"
 local selected  = nil   -- a zoneId, when drilled in
@@ -320,6 +332,33 @@ local gearOf   = {}     -- [botName] = { {slot, id, quality, ilvl}, ... }
 local picksOf  = {}     -- [botName] = { {spell, rank, tree, tier}, ... }
 local modelOf  = {}     -- [botName] = model file path
 local talentOf = {}     -- [botName] = { t1, t2, t3 }
+
+-- What the bot is CARRYING. Asked for the same way and for the same reason -
+-- a bag list is longer than an equipment list and the fleet averages sixty-odd
+-- rows a bot, so streaming it for everyone would dwarf the rest of the feed.
+local bagsOf   = {}     -- [botName] = { {id, count, quality, ilvl}, ... }
+local bagsDone = {}     -- [botName] = true once the sweep's terminator arrived
+
+-- Drawn far below, repainted from the message handler above it.
+local DrawBags
+
+-- "name|id,count,quality,ilvl;..."
+local function ParseBags(payload)
+	local name, rows = string.match(payload or "", "^([^|]+)|(.*)$")
+	if not name then
+		return
+	end
+
+	bagsOf[name] = bagsOf[name] or {}
+	for id, count, quality, ilvl in string.gmatch(rows or "", "(%-?%d+),(%d+),(%d+),(%d+);") do
+		table.insert(bagsOf[name], {
+			id      = tonumber(id) or 0,
+			count   = tonumber(count) or 1,
+			quality = tonumber(quality) or 1,
+			ilvl    = tonumber(ilvl) or 0,
+		})
+	end
+end
 
 local SLOT_NAME = {
 	[0]  = "Head",     [1]  = "Neck",    [2]  = "Shoulder", [3]  = "Shirt",
@@ -622,11 +661,18 @@ function CENTURION_BotStats_Refresh()
 		end
 	elseif activeTab == "bots" then
 		local zoneName = zoneFilter and zones[zoneFilter] and zones[zoneFilter].name
-		title:SetText(zoneName and ("Bots in " .. zoneName) or "Every bot")
+		local scope = zoneName and ("Bots in " .. zoneName) or "Every bot"
+		if roleFilter then
+			scope = scope .. " |cff909090- " .. RoleName(roleFilter) .. " only|r"
+		end
+		title:SetText(scope)
 
 		for i = 1, #roster do
 			local b = roster[i]
-			if not zoneFilter or b.zone == zoneFilter then
+			-- Role is matched on the row's own value, so "Local" (0) filters
+			-- exactly like the named roles rather than meaning "no filter".
+			if (not zoneFilter or b.zone == zoneFilter) and
+			   (roleFilter == nil or (b.role or 0) == roleFilter) then
 				-- State reads at a glance in the name, because that is the
 				-- column the eye is already on.
 				local mark = ""
@@ -762,6 +808,18 @@ driver:SetScript("OnEvent", function()
 		ParseRoster(payload)
 	elseif tag == "BSTE" then
 		CommitRoster()
+	elseif tag == "BSTB" then
+		ParseBags(payload)
+		if shownBot and detailTab == "bags" then DrawBags(shownBot) end
+	elseif tag == "BSTC" then
+		-- End of a bag sweep. Marks the list COMPLETE so the panel can tell an
+		-- empty pack from a request that never came back - without it the two
+		-- look identical and the pane sits on "loading" forever.
+		local name = string.match(payload or "", "^([^|]+)|")
+		if name then
+			bagsDone[name] = true
+			if shownBot == name and detailTab == "bags" then DrawBags(name) end
+		end
 	elseif tag == "BSTG" then
 		ParseGear(payload)
 		if shownBot then DrawGear(shownBot) end
@@ -1459,3 +1517,239 @@ SlashCmdList["CENTURIONBOTSTATS"] = function()
 		CENTURION_BotStats_Refresh()
 	end
 end
+
+------------------------------------------------------------------
+-- bags page
+------------------------------------------------------------------
+-- What the bot is carrying, beside what it is wearing.
+--
+-- Requested rather than streamed. The roster is pushed unasked because it is
+-- only about forty whispers for the whole fleet; a bag list is sixty-odd rows
+-- for ONE bot, so the same trick does not scale and this asks the way the gear
+-- panel does - ".botstats bags <name>" out, BSTB rows back.
+local BAGS_PAGE_H = 448
+local BAG_ROWS = 18
+
+local bagsPage = CreateFrame("Frame", nil, bot)
+bagsPage:SetAllPoints(bot)
+bagsPage:Hide()
+
+local bagsTitle = bagsPage:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+bagsTitle:SetPoint("TOPLEFT", bagsPage, "TOPLEFT", 20, -40)
+bagsTitle:SetText("Carried")
+
+local bagsFoot = bagsPage:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+bagsFoot:SetPoint("TOPLEFT", bagsPage, "TOPLEFT", 20, -58)
+
+local bagRows = {}
+for i = 1, BAG_ROWS do
+	local fs = bagsPage:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	fs:SetPoint("TOPLEFT", bagsPage, "TOPLEFT", 22, -78 - (i - 1) * 15)
+	fs:SetWidth(300)
+	fs:SetJustifyH("LEFT")
+	bagRows[i] = fs
+end
+
+-- GetItemInfo answers from the client's own cache, which is cold for anything
+-- this character has never seen. An uncached id returns nil rather than
+-- blocking, so the row falls back to the id and fills in on a later repaint.
+local function BagItemLabel(row)
+	local name, _, quality = GetItemInfo(row.id)
+	local q = quality or row.quality or 1
+	local colour = ITEM_QUALITY_COLORS[q] and ITEM_QUALITY_COLORS[q].hex or "|cffffffff"
+	local text = colour .. (name or ("item " .. row.id)) .. "|r"
+	if (row.count or 1) > 1 then
+		text = text .. string.format(" |cff808080x%d|r", row.count)
+	end
+	if (row.ilvl or 0) > 0 then
+		text = text .. string.format(" |cff606060(%d)|r", row.ilvl)
+	end
+	return text
+end
+
+function DrawBags(name)
+	local rows = bagsOf[name]
+	local done = bagsDone[name]
+
+	for i = 1, BAG_ROWS do
+		bagRows[i]:SetText("")
+	end
+
+	if not rows or (#rows == 0 and not done) then
+		bagsFoot:SetText("|cff808080asking the server...|r")
+		return
+	end
+
+	if #rows == 0 then
+		bagsFoot:SetText("|cff808080carrying nothing|r")
+		return
+	end
+
+	-- Heaviest first: on this realm a bot's pack is mostly consumables, and the
+	-- thing worth seeing is what it has hoarded, not the order the bags happen
+	-- to be walked in.
+	table.sort(rows, function(a, b)
+		if a.quality ~= b.quality then return a.quality > b.quality end
+		return (a.ilvl or 0) > (b.ilvl or 0)
+	end)
+
+	local shown = math.min(#rows, BAG_ROWS)
+	for i = 1, shown do
+		bagRows[i]:SetText(BagItemLabel(rows[i]))
+	end
+
+	if #rows > BAG_ROWS then
+		bagsFoot:SetText(string.format("|cff808080%d items, showing the top %d|r", #rows, BAG_ROWS))
+	else
+		bagsFoot:SetText(string.format("|cff808080%d items|r", #rows))
+	end
+end
+
+local function RequestBags(name)
+	bagsOf[name] = nil
+	bagsDone[name] = nil
+	RunGmCommand(".botstats bags " .. name)
+end
+
+local function ShowBagsPage()
+	detailTab = "bags"
+	gearPage:Hide()
+	talentPage:Hide()
+	bot:SetHeight(BAGS_PAGE_H)
+	bagsPage:Show()
+	if shownBot then
+		DrawBags(shownBot)
+		pcall(RequestBags, shownBot)
+	end
+end
+
+-- The other two pages are switched by functions defined above this point, and
+-- their buttons captured those function VALUES - so rebinding the names here
+-- would not affect the buttons. Hooking the frames is what actually holds.
+gearPage:HookScript("OnShow", function() bagsPage:Hide() end)
+talentPage:HookScript("OnShow", function() bagsPage:Hide() end)
+
+local pageBags = MakeBotButton(bot, "Bags", 56, function()
+	if shownBot then ShowBagsPage() end
+end)
+pageBags:SetPoint("LEFT", pageTalents, "RIGHT", 3, 0)
+
+-- The row of buttons was laid out end to end, so inserting one means moving
+-- everything to its right rather than leaving it overlapping.
+pageGo:ClearAllPoints()
+pageGo:SetPoint("LEFT", pageBags, "RIGHT", 3, 0)
+
+------------------------------------------------------------------
+-- role filter
+------------------------------------------------------------------
+-- A cycling button rather than a dropdown: there are seven states including
+-- "everything", UIDropDownMenu in 3.3.5 is a lot of ceremony for that, and one
+-- click to step is faster than two to pick.
+local roleButton = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
+roleButton:SetWidth(104)
+roleButton:SetHeight(20)
+roleButton:SetPoint("BOTTOMRIGHT", win, "BOTTOMRIGHT", -16, 14)
+
+local function RoleButtonLabel()
+	if roleFilter == nil then
+		return "Role: all"
+	end
+	return "Role: " .. RoleName(roleFilter)
+end
+
+roleButton:SetText(RoleButtonLabel())
+roleButton:SetScript("OnClick", function()
+	roleCycleAt = roleCycleAt + 1
+	if roleCycleAt > #ROLE_CYCLE then
+		roleCycleAt = 1
+	end
+
+	local pick = ROLE_CYCLE[roleCycleAt]
+	roleFilter = (pick == "all") and nil or pick
+	roleButton:SetText(RoleButtonLabel())
+
+	-- Filtering by role only means anything on the bot list, so land there -
+	-- and drop the zone drill-in, or "Drifters" would silently mean "drifters
+	-- in Tanaris" and read as an empty fleet.
+	activeTab = "bots"
+	zoneFilter = nil
+	scrollOffset = 0
+	CENTURION_BotStats_Refresh()
+end)
+
+roleButton:SetScript("OnEnter", function()
+	GameTooltip:SetOwner(roleButton, "ANCHOR_TOPLEFT")
+	GameTooltip:AddLine("Filter the bot list by what a bot IS")
+	GameTooltip:AddLine("Guardian, Veteran, PvP, Drifter, Companion, Local", 0.8, 0.8, 0.8, true)
+	GameTooltip:Show()
+end)
+roleButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+------------------------------------------------------------------
+-- minimap button
+------------------------------------------------------------------
+-- Draggable around the rim, like TrinketMenu's. Pinning it to a fixed angle is
+-- what makes these things a nuisance - the default spot is already crowded on
+-- most setups - so it remembers where it was put.
+CENTURION_BotStatsMinimapAngle = CENTURION_BotStatsMinimapAngle or 200
+
+local minimapButton = CreateFrame("Button", "CENTURION_BotStatsMinimapButton", Minimap)
+minimapButton:SetWidth(31)
+minimapButton:SetHeight(31)
+minimapButton:SetFrameStrata("MEDIUM")
+minimapButton:SetMovable(true)
+minimapButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+
+local mmIcon = minimapButton:CreateTexture(nil, "BACKGROUND")
+mmIcon:SetWidth(20)
+mmIcon:SetHeight(20)
+mmIcon:SetTexture("Interface\\Icons\\INV_Misc_GroupLooking")
+mmIcon:SetPoint("TOPLEFT", minimapButton, "TOPLEFT", 6, -5)
+
+local mmBorder = minimapButton:CreateTexture(nil, "OVERLAY")
+mmBorder:SetWidth(53)
+mmBorder:SetHeight(53)
+mmBorder:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+mmBorder:SetPoint("TOPLEFT", minimapButton, "TOPLEFT", 0, 0)
+
+-- 3.3.5's global cos/sin take DEGREES, unlike math.cos/math.sin. Using the
+-- math library with an explicit conversion says which is meant instead of
+-- relying on remembering that.
+local function PlaceMinimapButton()
+	local angle = math.rad(CENTURION_BotStatsMinimapAngle or 200)
+	minimapButton:SetPoint("CENTER", Minimap, "CENTER",
+		80 * math.cos(angle), 80 * math.sin(angle))
+end
+PlaceMinimapButton()
+
+minimapButton:SetScript("OnDragStart", function()
+	minimapButton:SetScript("OnUpdate", function()
+		local mx, my = Minimap:GetCenter()
+		local cx, cy = GetCursorPosition()
+		local scale = Minimap:GetEffectiveScale()
+		cx, cy = cx / scale, cy / scale
+		CENTURION_BotStatsMinimapAngle = math.deg(math.atan2(cy - my, cx - mx))
+		PlaceMinimapButton()
+	end)
+end)
+minimapButton:SetScript("OnDragStop", function()
+	minimapButton:SetScript("OnUpdate", nil)
+end)
+minimapButton:RegisterForDrag("LeftButton")
+
+minimapButton:SetScript("OnClick", function()
+	if win:IsShown() then
+		win:Hide()
+	else
+		win:Show()
+		CENTURION_BotStats_Refresh()
+	end
+end)
+
+minimapButton:SetScript("OnEnter", function()
+	GameTooltip:SetOwner(minimapButton, "ANCHOR_LEFT")
+	GameTooltip:AddLine("Centurion Bot Stats")
+	GameTooltip:AddLine("Click to open, drag to move", 0.8, 0.8, 0.8)
+	GameTooltip:Show()
+end)
+minimapButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
