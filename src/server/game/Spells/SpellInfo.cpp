@@ -1144,8 +1144,29 @@ bool SpellInfo::IsStackableWithRanks() const
         switch (SpellFamilyName)
         {
             case SPELLFAMILY_PALADIN:
-                // Paladin aura Spell
-                if (effect.Effect == SPELL_EFFECT_APPLY_AREA_AURA_RAID)
+                // Paladin aura Spell. PARTY counts as well as RAID here, which
+                // stock does not need and this realm does.
+                //
+                // The classic rebuild rewrote every paladin aura rank a level 60
+                // realm can actually reach - Devotion 465..10293, Retribution
+                // 7294..10301, Concentration, and the three resistance lines -
+                // from APPLY_AREA_AURA_RAID to APPLY_AREA_AURA_PARTY, alongside
+                // the radius drop 23 -> 10 and the "party and raid" -> "party"
+                // tooltip. Only the WotLK ranks (SpellLevel 70+, unreachable at
+                // this cap) still carry RAID.
+                //
+                // That rewrite silently switched THIS rule off for exactly the
+                // ranks players use, so nothing superseded a lower rank any more:
+                // a paladin accumulated every rank it had ever trained, and the
+                // client - which draws one stance-bar icon per known aura rank,
+                // by design, because retail characters only ever know one -
+                // dutifully drew all ten Devotion Auras at once.
+                //
+                // Fixed here rather than by reverting the effect, because the
+                // party scope is a deliberate classic change and putting 65 back
+                // would quietly make every aura raid-wide again.
+                if (effect.Effect == SPELL_EFFECT_APPLY_AREA_AURA_RAID ||
+                    effect.Effect == SPELL_EFFECT_APPLY_AREA_AURA_PARTY)
                     return false;
                 break;
             case SPELLFAMILY_DRUID:
