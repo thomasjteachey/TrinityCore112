@@ -9230,6 +9230,22 @@ namespace
         }
         playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), false);
 
+        // Nobody swims on a gryphon.
+        //
+        // The SWIMMING flag is not cleared by ActivateTaxiPathTo, so a bot that
+        // was in a pond when the flight started keeps it for the whole route and
+        // the client plays the swim animation across the sky at flight speed -
+        // which is exactly what "swimming through the air really quickly" was.
+        // The walk splines have carried this guard for a while; the taxi path
+        // never got it.
+        //
+        // Unconditional, unlike the walk-spline copies: those ask !IsInWater()
+        // because a bot that really is swimming should keep swimming, but a bot
+        // boarding a flight leaves the water by definition, and it can board
+        // while still standing in it.
+        if (bot->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING))
+            bot->SetSwim(false);
+
         if (!bot->ActivateTaxiPathTo(chain, nullptr))
         {
             // InstantTaxi pays the fare, teleports to the last node and returns
@@ -10724,6 +10740,15 @@ namespace
         bot->SetFullHealth();
         if (bot->GetMaxPower(POWER_MANA) > 0)
             bot->SetPower(POWER_MANA, bot->GetMaxPower(POWER_MANA));
+
+        // And it is not still swimming in whatever it was teleported out of.
+        // Called after every bot teleport in this file, which makes it the one
+        // place that covers all of them. Guarded on the water test rather than
+        // cleared outright, because a relocation can legitimately land a bot in
+        // a lake; on a far teleport the test simply reads the old map and
+        // no-ops, and the walk splines catch that case on the next move.
+        if (bot->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING) && !bot->IsInWater())
+            bot->SetSwim(false);
     }
 
     void ProcessPendingGrindRelocations()
