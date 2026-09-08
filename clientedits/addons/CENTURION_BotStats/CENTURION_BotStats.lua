@@ -1661,12 +1661,42 @@ for i = 1, BAG_SLOTS do
 
 	-- Quality as a border tint on the icon itself. A four-texture frame per slot
 	-- would be forty-two more textures for the same information.
-	b.edge = b:CreateTexture(nil, "OVERLAY")
-	b.edge:SetPoint("TOPLEFT", b, "TOPLEFT", -2, 2)
-	b.edge:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 2, -2)
-	b.edge:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
-	b.edge:SetBlendMode("ADD")
-	b.edge:Hide()
+	-- Four hairlines, the same way the gear panel does it. This grid was still
+	-- stretching UI-ActionButton-Border over a 32px icon, and that texture is a
+	-- soft GLOW with a wide transparent margin - Blizzard draws it at 62px
+	-- around a 36px button, so at icon size the ring itself falls outside the
+	-- crop and all that is left is the blown-out middle, a fat green square
+	-- sitting proud of the slot. Flat lines scale exactly.
+	b.edge = {}
+	for e = 1, 4 do
+		local t = b:CreateTexture(nil, "OVERLAY")
+		t:SetTexture("Interface\\Buttons\\WHITE8X8")
+		b.edge[e] = t
+	end
+	b.edge[1]:SetPoint("TOPLEFT", b.icon, "TOPLEFT", 0, 0)
+	b.edge[1]:SetPoint("TOPRIGHT", b.icon, "TOPRIGHT", 0, 0)
+	b.edge[1]:SetHeight(1)
+	b.edge[2]:SetPoint("BOTTOMLEFT", b.icon, "BOTTOMLEFT", 0, 0)
+	b.edge[2]:SetPoint("BOTTOMRIGHT", b.icon, "BOTTOMRIGHT", 0, 0)
+	b.edge[2]:SetHeight(1)
+	b.edge[3]:SetPoint("TOPLEFT", b.icon, "TOPLEFT", 0, 0)
+	b.edge[3]:SetPoint("BOTTOMLEFT", b.icon, "BOTTOMLEFT", 0, 0)
+	b.edge[3]:SetWidth(1)
+	b.edge[4]:SetPoint("TOPRIGHT", b.icon, "TOPRIGHT", 0, 0)
+	b.edge[4]:SetPoint("BOTTOMRIGHT", b.icon, "BOTTOMRIGHT", 0, 0)
+	b.edge[4]:SetWidth(1)
+
+	b.SetEdgeColor = function(self, r, g, bl, show)
+		for e = 1, 4 do
+			if show then
+				self.edge[e]:SetVertexColor(r, g, bl)
+				self.edge[e]:Show()
+			else
+				self.edge[e]:Hide()
+			end
+		end
+	end
+	b:SetEdgeColor(1, 1, 1, false)
 
 	b:SetScript("OnEnter", function()
 		GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
@@ -1711,7 +1741,7 @@ function DrawBags(name)
 		b.itemId = nil
 		b.icon:SetTexture(nil)
 		b.count:SetText("")
-		b.edge:Hide()
+		b:SetEdgeColor(1, 1, 1, false)
 		b:Hide()
 	end
 
@@ -1731,9 +1761,20 @@ function DrawBags(name)
 
 	-- Best first: a pack is mostly consumables and the thing worth seeing is
 	-- what the bot has hoarded, not the order the bags happen to be walked in.
+	--
+	-- The tail of the comparison exists because table.sort is UNSTABLE and this
+	-- runs on every repaint - the cache-warming ticker alone calls it twenty
+	-- times over eight seconds. Quality and item level alone leave most of a
+	-- pack tied (a wall of white trade goods at item level 0), and tied rows
+	-- came back in a different order each pass, so the top few icons sat still
+	-- while everything below them shuffled continuously. Ordering ties by id
+	-- makes the result depend only on the contents, not on the sort's internals.
 	table.sort(rows, function(a, b)
 		if a.quality ~= b.quality then return a.quality > b.quality end
-		return (a.ilvl or 0) > (b.ilvl or 0)
+		local ailvl, bilvl = a.ilvl or 0, b.ilvl or 0
+		if ailvl ~= bilvl then return ailvl > bilvl end
+		if a.id ~= b.id then return a.id < b.id end
+		return (a.count or 1) > (b.count or 1)
 	end)
 
 	-- Clamp before drawing: the bag can shrink under a scrolled view (an item
@@ -1773,8 +1814,7 @@ function DrawBags(name)
 			local q = quality or r.quality or 1
 			local colour = ITEM_QUALITY_COLORS[q]
 			if colour and q > 1 then
-				b.edge:SetVertexColor(colour.r, colour.g, colour.b, 0.85)
-				b.edge:Show()
+				b:SetEdgeColor(colour.r, colour.g, colour.b, true)
 			end
 
 			if (r.count or 1) > 1 then
