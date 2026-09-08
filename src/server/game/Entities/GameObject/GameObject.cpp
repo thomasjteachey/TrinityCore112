@@ -16,6 +16,8 @@
  */
 
 #include "GameObject.h"
+#include "Configuration/Config.h"
+#include <algorithm>
 #include "Battleground.h"
 #include "CellImpl.h"
 #include "Containers.h"
@@ -2948,6 +2950,23 @@ void GameObject::GetRespawnPosition(float &x, float &y, float &z, float* ori /* 
 
 float GameObject::GetInteractionDistance() const
 {
+    // The full-loot death cache reaches twice as far as an ordinary chest.
+    //
+    // It is a pile of gear dumped wherever somebody happened to die - on a slope,
+    // against a wall, half under their own corpse - rather than a prop placed by a
+    // level designer with room to stand around it. Five yards made it fiddly at
+    // exactly the moment a player is trying to grab their gear back.
+    //
+    // Safe to widen precisely because it is a chest: extra reach only opens loot
+    // here, where on a lever or a door it would let somebody trip it from cover.
+    //
+    // Read once. This sits on the interaction path for every gameobject in the
+    // world, so it must not become a config lookup per click.
+    static uint32 const deathCacheEntry = uint32(std::max(0,
+        sConfigMgr->GetIntDefault("Centurion.Hardcore.FullLoot.ChestGameObjectId", 0)));
+    if (deathCacheEntry && GetEntry() == deathCacheEntry)
+        return INTERACTION_DISTANCE * 2.0f;
+
     switch (GetGoType())
     {
         case GAMEOBJECT_TYPE_AREADAMAGE:

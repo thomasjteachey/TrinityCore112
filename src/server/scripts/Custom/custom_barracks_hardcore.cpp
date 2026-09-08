@@ -103,6 +103,7 @@ namespace BarracksHardcore
 
     bool s_enabled = false;
     uint32 s_chestEntry = 0;
+    size_t s_maxChestsPerDeath = 4;
     uint32 s_chestDespawnSeconds = 600;
     uint32 s_dropChancePercent = 50;
     uint32 s_minZoneLevel = 20;
@@ -246,6 +247,10 @@ namespace BarracksHardcore
     {
         s_enabled = sConfigMgr->GetBoolDefault("Centurion.Hardcore.Enable", false);
         s_chestEntry = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FullLoot.ChestGameObjectId", 0)));
+        // Each cache holds 18 rows (a hard client bound), so 4 is 72 rows - past
+        // any corpse that is not deliberately absurd. Overflow beyond this stays
+        // on the corpse rather than being destroyed, same as before.
+        s_maxChestsPerDeath = size_t(std::clamp(sConfigMgr->GetIntDefault("Centurion.Hardcore.FullLoot.MaxChestsPerDeath", 4), 1, 20));
         s_chestDespawnSeconds = uint32(std::max(30, sConfigMgr->GetIntDefault("Centurion.Hardcore.FullLoot.ChestDespawnSeconds", 600)));
         s_dropChancePercent = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Hardcore.FullLoot.DropChancePercent", 50), 0, 100));
         s_minZoneLevel = uint32(std::max(1, sConfigMgr->GetIntDefault("Centurion.Hardcore.FfaPvp.MinZoneLevel", 20)));
@@ -1539,7 +1544,30 @@ namespace BarracksHardcore
         if (victim->IsInGurubashiBattleRing())
             return;
 
-        CustomLootChests::PlayerChestBuilder chest(victim, s_chestEntry, Seconds(s_chestDespawnSeconds));
+        // One cache holds MAX_NR_LOOT_ITEMS rows - eighteen, and that is a hard
+        // client bound, not a choice. A player can only ever overflow it by one
+        // (nineteen worn slots), but a BOT stakes its carried gear too, so a bot
+        // dying with a full pack of looted weapons and armour had everything past
+        // the eighteenth row left on the corpse where nothing could reach it.
+        //
+        // So caches roll: fill one, start another. They are summoned on the same
+        // spot on purpose - a pile of chests where somebody exploded reads better
+        // than a tidy ring, and bots find them by proximity either way.
+        std::vector<CustomLootChests::PlayerChestBuilder> chests;
+        chests.emplace_back(victim, s_chestEntry, Seconds(s_chestDespawnSeconds));
+
+        // A ceiling so one absurd corpse cannot carpet the floor. Past this the
+        // item is refused and stays on the corpse, exactly as before.
+        auto stakeIntoChest = [&](Item* item) -> bool
+        {
+            if (chests.back().IsFull())
+            {
+                if (chests.size() >= s_maxChestsPerDeath)
+                    return false;
+                chests.emplace_back(victim, s_chestEntry, Seconds(s_chestDespawnSeconds));
+            }
+            return chests.back().AddItem(item);
+        };
         std::vector<CustomLootChests::ItemLocation> droppedItems;
         // Eligible pieces the chest had no room for. They stay on the corpse
         // rather than being destroyed, and they are named in the log, because a
@@ -1572,7 +1600,7 @@ namespace BarracksHardcore
             // destroy record: the cap is eighteen rows and this loop walks
             // nineteen worn slots, so the nineteenth was being deleted outright.
             bool const burns = urand(0, 99) >= s_dropChancePercent;
-            if (burns || chest.AddItem(item))
+            if (burns || stakeIntoChest(item))
                 droppedItems.push_back({ INVENTORY_SLOT_BAG_0, slot });
             else
                 ++refusedByChest;
@@ -1601,7 +1629,7 @@ namespace BarracksHardcore
                     return;
 
                 bool const burns = urand(0, 99) >= s_dropChancePercent;
-                if (burns || chest.AddItem(item))
+                if (burns || stakeIntoChest(item))
                     droppedItems.push_back({ bag, slot });
                 else
                     ++refusedByChest;
@@ -1624,7 +1652,9 @@ namespace BarracksHardcore
         // Taking it here is also what deducts it: the debt is recorded at
         // death and collected only once something exists to hold the coin.
         uint32 const bountyGold = Bounty::TakePendingChestGold(victim);
-        chest.AddMoney(bountyGold);
+        // Coin goes in the first cache; splitting it across a pile would just
+        // make somebody click every one of them to collect it.
+        chests.front().AddMoney(bountyGold);
 
         // The chest is only summoned when something could actually be IN it -
         // an empty one would be a cruel joke - but the loss happens either way.
@@ -1635,7 +1665,16 @@ namespace BarracksHardcore
         // White and grey never reach the chest, so they cannot be part of this
         // decision: a victim wearing nothing but the floor still loses it, and
         // still leaves no chest behind.
-        bool const chestSpawned = (!droppedItems.empty() || bountyGold) && chest.Summon() != nullptr;
+        uint32 chestsSpawned = 0;
+        uint32 itemsChested = 0;
+        for (CustomLootChests::PlayerChestBuilder const& cache : chests)
+        {
+            itemsChested += cache.GetItemCount();
+            if (cache.HasLoot() && cache.Summon())
+                ++chestsSpawned;
+        }
+
+        bool const chestSpawned = chestsSpawned > 0;
 
         // The PvP-only fleet pays out but is never stripped.
         //
@@ -1687,7 +1726,7 @@ namespace BarracksHardcore
         // was no number anywhere that could have contradicted it.
         TC_LOG_INFO("playerbots.hardcore", "{} {} {} item(s) into the cache ({} staked, {} refused for want of room, roll {}%), "
             "burned {} of floor gear, {}c bounty; chest spawned: {}.",
-            victim->GetName(), keepsGear ? "copied" : "lost", chest.GetItemCount(),
+            victim->GetName(), keepsGear ? "copied" : "lost", itemsChested,
             uint32(droppedItems.size()) + refusedByChest, refusedByChest, s_dropChancePercent,
             burned, bountyGold, uint32(chestSpawned));
     }
