@@ -4029,19 +4029,10 @@ namespace
         return yards;
     }
 
-    // How close a person has to be for a chest to count as watched. ZERO DISABLES
-    // THE RULE ENTIRELY: bots take chests in front of an audience, which is the
-    // realm's answer to "free loot on the floor is free loot".
-    //
-    // Default is 0 rather than 200. The old radius meant nobody could ever loot a
-    // player's death cache while the player was anywhere near it, and the player is
-    // always near it - they just died there. Combined with the errand scan being
-    // unreachable for a bot in combat, that made a death cache dropped in a fight
-    // unlootable by every bot present, which is the opposite of what a cache is for.
     float RemoteChestPrivacyYards()
     {
         static float const yards = std::max(0.0f,
-            sConfigMgr->GetFloatDefault("Playerbot.Pve.RemoteChestPrivacyYards", 0.0f));
+            sConfigMgr->GetFloatDefault("Playerbot.Pve.RemoteChestPrivacyYards", 200.0f));
         return yards;
     }
 
@@ -4088,12 +4079,6 @@ namespace
 
         if (!bot->IsWithinDistInMap(go, RemoteChestRadius()))
             return false;
-
-        // No privacy radius means no witnesses to check - not a zero-yard check,
-        // which IsWithinDistInMap would still satisfy for anybody overlapping the
-        // chest's own bounding box.
-        if (RemoteChestPrivacyYards() <= 0.0f)
-            return true;
 
         // A GM standing over the chest is a witness HERE, even though a GM is
         // deliberately not one for the gear-drop rule that shares the helper
