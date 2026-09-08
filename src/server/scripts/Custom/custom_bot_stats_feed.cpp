@@ -422,13 +422,22 @@ namespace
             }
         };
 
+        // Capacity as well as contents. The panel draws a bag, and a bag with no
+        // empty slots in it is a list; the number of places the bot could still
+        // put something is half of what "what is it carrying" means, and the
+        // client has no other way to learn it about somebody else's character.
+        uint32 capacity = INVENTORY_SLOT_ITEM_END - INVENTORY_SLOT_ITEM_START;
+
         for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
             emit(bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot));
 
         for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
             if (Bag const* bag = bot->GetBagByPos(bagSlot))
+            {
+                capacity += bag->GetBagSize();
                 for (uint32 i = 0; i < bag->GetBagSize(); ++i)
                     emit(bag->GetItemByPos(uint8(i)));
+            }
 
         if (inMessage)
             SendTagged(viewer, "BSTB", out.str());
@@ -436,7 +445,8 @@ namespace
         // A terminator, so the panel can tell "still arriving" from "this bot
         // genuinely carries nothing" - without it an empty pack and a request
         // that never answered look identical.
-        SendTagged(viewer, "BSTC", bot->GetName() + std::string("|") + std::to_string(sent));
+        SendTagged(viewer, "BSTC", bot->GetName() + std::string("|") + std::to_string(sent)
+            + std::string("|") + std::to_string(capacity));
     }
 
     void SendGearTo(Player* viewer, Player* bot)

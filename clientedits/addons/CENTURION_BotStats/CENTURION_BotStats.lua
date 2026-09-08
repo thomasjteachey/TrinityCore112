@@ -338,6 +338,7 @@ local talentOf = {}     -- [botName] = { t1, t2, t3 }
 -- rows a bot, so streaming it for everyone would dwarf the rest of the feed.
 local bagsOf   = {}     -- [botName] = { {id, count, quality, ilvl}, ... }
 local bagsDone = {}     -- [botName] = true once the sweep's terminator arrived
+local bagsCap  = {}     -- [botName] = how many slots the bot's bags hold in all
 
 -- Drawn far below, repainted from the message handler above it.
 local DrawBags
@@ -357,6 +358,74 @@ local function ParseBags(payload)
 			quality = tonumber(quality) or 1,
 			ilvl    = tonumber(ilvl) or 0,
 		})
+	end
+end
+
+-- Item clicks, shared by the gear panel and the bag grid.
+--
+-- Uncached ids are the whole difficulty here. Nothing this character has never
+-- seen is in the client's item cache, which is most of what a bot owns, and the
+-- stock helpers all go through GetItemInfo and quietly do nothing when it comes
+-- back nil. So each of these has a hand-built fallback rather than dropping the
+-- click on the floor.
+local function BotStats_ItemLink(id)
+	if not id then
+		return nil
+	end
+	local _, link = GetItemInfo(id)
+	-- The client resolves the name from the id when it draws the chat line, so
+	-- a hand-built link is not a dead one.
+	return link or ("|cffffffff|Hitem:" .. id .. ":0:0:0:0:0:0:0|h[item]|h|r")
+end
+
+local function BotStats_DressUp(id)
+	if not id then
+		return
+	end
+	local link = BotStats_ItemLink(id)
+	-- IsDressableItem, which DressUpItemLink gates on, needs the cache too and
+	-- says no for anything unresolved. Take the answer when it works.
+	if DressUpItemLink and DressUpItemLink(link) then
+		return
+	end
+	if not DressUpFrame or not DressUpModel then
+		return
+	end
+
+	-- A pack is mostly potions and cloth. If the cache does know the item and
+	-- says it is not worn, stop here rather than opening the dressing room on
+	-- nothing; if the cache does not know it yet, fall through and let the
+	-- model ask - refusing there would break the case this exists for.
+	local _, _, _, _, _, _, _, _, equipLoc = GetItemInfo(id)
+	if equipLoc and (equipLoc == "" or equipLoc == "INVTYPE_NON_EQUIP"
+		or equipLoc == "INVTYPE_BAG" or equipLoc == "INVTYPE_QUIVER"
+		or equipLoc == "INVTYPE_AMMO" or equipLoc == "INVTYPE_RELIC") then
+		return
+	end
+	if not DressUpFrame:IsShown() then
+		if SetPortraitTexture and DressUpFramePortrait then
+			SetPortraitTexture(DressUpFramePortrait, "player")
+		end
+		ShowUIPanel(DressUpFrame)
+		DressUpModel:SetUnit("player")
+	end
+	-- TryOn takes a bare id, and unlike the wrapper it does not consult the
+	-- cache first - the model asks the server for the display itself.
+	DressUpModel:TryOn(id)
+end
+
+-- Shift links into chat, ctrl sends it to the dressing room: the same two
+-- gestures every other item frame in the game answers to.
+local function BotStats_ItemClick(id)
+	if not id then
+		return
+	end
+	if IsModifiedClick("CHATLINK") then
+		if ChatEdit_InsertLink then
+			ChatEdit_InsertLink(BotStats_ItemLink(id))
+		end
+	elseif IsModifiedClick("DRESSUP") then
+		BotStats_DressUp(id)
 	end
 end
 
@@ -814,10 +883,16 @@ driver:SetScript("OnEvent", function()
 	elseif tag == "BSTC" then
 		-- End of a bag sweep. Marks the list COMPLETE so the panel can tell an
 		-- empty pack from a request that never came back - without it the two
-		-- look identical and the pane sits on "loading" forever.
-		local name = string.match(payload or "", "^([^|]+)|")
+		-- look identical and the pane sits on "loading" forever. It also carries
+		-- the bag CAPACITY, which is the only way the client can learn how much
+		-- room somebody else's character has.
+		local name, _, cap = string.match(payload or "", "^([^|]+)|(%d*)|?(%d*)")
 		if name then
 			bagsDone[name] = true
+			bagsCap[name] = tonumber(cap or "")
+			-- A bot carrying nothing sends no rows at all, so without this the
+			-- table stays nil and the panel reads as "still asking" forever.
+			bagsOf[name] = bagsOf[name] or {}
 			if shownBot == name and detailTab == "bags" then DrawBags(name) end
 		end
 	elseif tag == "BSTG" then
@@ -998,21 +1073,12 @@ local function MakeSlot(slotId, index)
 	end)
 	b:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
-	-- Shift-click links the piece into chat, the way every other item frame in
-	-- the game does. Worth having here because "look at what this bot is
-	-- wearing" usually ends in showing somebody else.
+	-- Shift-click links the piece into chat, ctrl-click tries it on. Worth
+	-- having here because "look at what this bot is wearing" usually ends in
+	-- either showing somebody else or wanting the piece yourself.
 	b:RegisterForClicks("LeftButtonUp")
 	b:SetScript("OnClick", function()
-		if not this.itemId or not IsModifiedClick("CHATLINK") then
-			return
-		end
-		local _, link = GetItemInfo(this.itemId)
-		-- Uncached items still link: the client fills the name in from the id
-		-- when it draws the chat line, so a hand-built link is not a dead one.
-		link = link or ("|cffffffff|Hitem:" .. this.itemId .. ":0:0:0:0:0:0:0|h[item]|h|r")
-		if ChatEdit_InsertLink then
-			ChatEdit_InsertLink(link)
-		end
+		BotStats_ItemClick(this.itemId)
 	end)
 
 	b.slotId = slotId
@@ -1438,16 +1504,10 @@ for i = 1, 3 do
 	treeButtons[i] = b
 end
 
-local pageGo = MakeBotButton(bot, "Go to", 62, function()
-	if shownBot then RunGmCommand(".appear " .. shownBot) end
-end)
-pageGo:SetPoint("LEFT", pageTalents, "RIGHT", 3, 0)
-
-local pageBring = MakeBotButton(bot, "Bring", 62, function()
-	if shownBot then RunGmCommand(".summon " .. shownBot) end
-end)
-pageBring:SetPoint("LEFT", pageGo, "RIGHT", 3, 0)
-
+-- The "Go to" and "Bring" buttons used to sit here. This window is for looking
+-- at the fleet, and a teleport is one misclick away from moving a bot out of
+-- the zone it was drafted for; .appear and .summon are still a chat line away
+-- for the times that is actually wanted.
 local pageRefresh = MakeBotButton(bot, "Refresh", 68, function()
 	if shownBot then
 		RequestGear(shownBot)
@@ -1455,7 +1515,7 @@ local pageRefresh = MakeBotButton(bot, "Refresh", 68, function()
 		DrawTalents(shownBot)
 	end
 end)
-pageRefresh:SetPoint("LEFT", pageBring, "RIGHT", 3, 0)
+-- Anchored below, once the Bags button it follows has been created.
 
 function CENTURION_BotStats_ShowBot(name)
 	local b
@@ -1576,19 +1636,6 @@ bagsFoot:SetPoint("TOPLEFT", bagsPage, "TOPLEFT", 20, -58)
 local scanTip = CreateFrame("GameTooltip", "CENTURION_BotStatsScanTooltip", UIParent, "GameTooltipTemplate")
 scanTip:SetOwner(UIParent, "ANCHOR_NONE")
 
-local function LinkItem(id)
-	if not id then
-		return
-	end
-	local _, link = GetItemInfo(id)
-	-- Uncached: build the plain link by hand rather than dropping the click.
-	-- The client resolves the name from the id when it renders the chat line.
-	link = link or ("|cffffffff|Hitem:" .. id .. ":0:0:0:0:0:0:0|h[item]|h|r")
-	if ChatEdit_InsertLink then
-		ChatEdit_InsertLink(link)
-	end
-end
-
 local bagSlots = {}
 for i = 1, BAG_SLOTS do
 	local b = CreateFrame("Button", "CENTURION_BotStatsBag" .. i, bagsPage)
@@ -1622,23 +1669,37 @@ for i = 1, BAG_SLOTS do
 	b.edge:Hide()
 
 	b:SetScript("OnEnter", function()
-		if not this.itemId then
-			return
-		end
 		GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
-		GameTooltip:SetHyperlink("item:" .. this.itemId)
+		if this.itemId then
+			GameTooltip:SetHyperlink("item:" .. this.itemId)
+		else
+			GameTooltip:SetText("Empty slot", 0.6, 0.6, 0.6)
+		end
 		GameTooltip:Show()
 	end)
 	b:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
 	b:RegisterForClicks("LeftButtonUp")
 	b:SetScript("OnClick", function()
-		if IsModifiedClick("CHATLINK") then
-			LinkItem(this.itemId)
-		end
+		BotStats_ItemClick(this.itemId)
 	end)
 
 	bagSlots[i] = b
+end
+
+-- How many cells the grid is: the bot's whole carrying capacity, not just the
+-- part of it that is full. The free ones are drawn as empty slots, so the page
+-- answers "has it got room" as well as "what has it got".
+local function BagCellCount(name)
+	local rows = bagsOf[name]
+	local held = rows and #rows or 0
+	local cap = bagsCap[name]
+	if not cap then
+		-- Older worldserver, which sent no capacity. Fall back to drawing only
+		-- what came back rather than inventing a bag size.
+		return held
+	end
+	return math.max(cap, held)
 end
 
 function DrawBags(name)
@@ -1654,14 +1715,16 @@ function DrawBags(name)
 		b:Hide()
 	end
 
-	if not rows or (#rows == 0 and not done) then
+	if not rows or (not done and #rows == 0) then
 		bagsFoot:SetText("|cff808080asking the server...|r")
 		-- Non-zero: the rows themselves have not landed yet, so the repaint
 		-- ticker must keep running. Returning nothing here read as "nothing
 		-- outstanding" and stopped it before there was anything to draw.
 		return 1
 	end
-	if #rows == 0 then
+
+	local cells = BagCellCount(name)
+	if cells == 0 then
 		bagsFoot:SetText("|cff808080carrying nothing|r")
 		return
 	end
@@ -1673,52 +1736,63 @@ function DrawBags(name)
 		return (a.ilvl or 0) > (b.ilvl or 0)
 	end)
 
-	-- Clamp before drawing: the roster can shrink under a scrolled view (an item
+	-- Clamp before drawing: the bag can shrink under a scrolled view (an item
 	-- sold, a smaller bot picked) and an offset left past the end would show an
 	-- empty grid with no way to tell why.
-	local maxRow = math.max(0, math.ceil(#rows / BAG_COLS) - BAG_ROWS_N)
+	local maxRow = math.max(0, math.ceil(cells / BAG_COLS) - BAG_ROWS_N)
 	if bagScrollRow > maxRow then bagScrollRow = maxRow end
 	if bagScrollRow < 0 then bagScrollRow = 0 end
 
 	local first = bagScrollRow * BAG_COLS
 	local pending = 0
-	local shown = math.min(#rows - first, BAG_SLOTS)
+	local shown = math.min(cells - first, BAG_SLOTS)
 	for i = 1, shown do
-		local r = rows[first + i]
 		local b = bagSlots[i]
-		b.itemId = r.id
 		b:Show()
 
-		local _, _, quality, _, _, _, _, _, _, texture = GetItemInfo(r.id)
-		if texture then
-			b.icon:SetTexture(texture)
+		-- Past the end of the item list is a free slot: shown, but left as the
+		-- bare backdrop the button already carries.
+		local r = rows[first + i]
+		if not r then
+			b.itemId = nil
 		else
-			-- Not cached yet. Ask for it, show the placeholder, and repaint when
-			-- the answer arrives.
-			b.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
-			scanTip:SetOwner(UIParent, "ANCHOR_NONE")
-			scanTip:SetHyperlink("item:" .. r.id)
-			pending = pending + 1
-		end
+			b.itemId = r.id
 
-		local q = quality or r.quality or 1
-		local colour = ITEM_QUALITY_COLORS[q]
-		if colour and q > 1 then
-			b.edge:SetVertexColor(colour.r, colour.g, colour.b, 0.85)
-			b.edge:Show()
-		else
-			b.edge:Hide()
-		end
+			local _, _, quality, _, _, _, _, _, _, texture = GetItemInfo(r.id)
+			if texture then
+				b.icon:SetTexture(texture)
+			else
+				-- Not cached yet. Ask for it, show the placeholder, and repaint
+				-- when the answer arrives.
+				b.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+				scanTip:SetOwner(UIParent, "ANCHOR_NONE")
+				scanTip:SetHyperlink("item:" .. r.id)
+				pending = pending + 1
+			end
 
-		if (r.count or 1) > 1 then
-			b.count:SetText(r.count)
+			local q = quality or r.quality or 1
+			local colour = ITEM_QUALITY_COLORS[q]
+			if colour and q > 1 then
+				b.edge:SetVertexColor(colour.r, colour.g, colour.b, 0.85)
+				b.edge:Show()
+			end
+
+			if (r.count or 1) > 1 then
+				b.count:SetText(r.count)
+			end
 		end
 	end
 
-	local note = string.format("|cff808080%d items|r", #rows)
-	if #rows > BAG_SLOTS then
-		note = string.format("|cff808080%d items - showing %d-%d, scroll for more|r",
-			#rows, first + 1, first + shown)
+	local note
+	if bagsCap[name] then
+		note = string.format("|cff808080%d items, %d of %d slots free|r",
+			#rows, math.max(0, bagsCap[name] - #rows), bagsCap[name])
+	else
+		note = string.format("|cff808080%d items|r", #rows)
+	end
+	if cells > BAG_SLOTS then
+		note = note .. string.format("  |cff808080- showing %d-%d, scroll for more|r",
+			first + 1, first + shown)
 	end
 	if pending > 0 then
 		note = note .. string.format("  |cff606060(%d loading)|r", pending)
@@ -1729,8 +1803,7 @@ end
 
 bagsPage:EnableMouseWheel(true)
 bagsPage:SetScript("OnMouseWheel", function()
-	local rows = shownBot and bagsOf[shownBot]
-	if not rows or #rows <= BAG_SLOTS then
+	if not shownBot or BagCellCount(shownBot) <= BAG_SLOTS then
 		return
 	end
 	bagScrollRow = bagScrollRow - arg1      -- wheel up is +1, and up means earlier rows
@@ -1766,6 +1839,7 @@ end)
 local function RequestBags(name)
 	bagsOf[name] = nil
 	bagsDone[name] = nil
+	bagsCap[name] = nil
 	RunGmCommand(".botstats bags " .. name)
 end
 
@@ -1795,10 +1869,9 @@ local pageBags = MakeBotButton(bot, "Bags", 56, function()
 end)
 pageBags:SetPoint("LEFT", pageTalents, "RIGHT", 3, 0)
 
--- The row of buttons was laid out end to end, so inserting one means moving
--- everything to its right rather than leaving it overlapping.
-pageGo:ClearAllPoints()
-pageGo:SetPoint("LEFT", pageBags, "RIGHT", 3, 0)
+-- The row is laid out end to end, and Refresh is the tail of it. It could not
+-- anchor to Bags where it is defined, because Bags does not exist until here.
+pageRefresh:SetPoint("LEFT", pageBags, "RIGHT", 3, 0)
 
 ------------------------------------------------------------------
 -- role filter
