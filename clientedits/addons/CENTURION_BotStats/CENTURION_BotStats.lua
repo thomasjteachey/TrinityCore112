@@ -998,6 +998,23 @@ local function MakeSlot(slotId, index)
 	end)
 	b:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
+	-- Shift-click links the piece into chat, the way every other item frame in
+	-- the game does. Worth having here because "look at what this bot is
+	-- wearing" usually ends in showing somebody else.
+	b:RegisterForClicks("LeftButtonUp")
+	b:SetScript("OnClick", function()
+		if not this.itemId or not IsModifiedClick("CHATLINK") then
+			return
+		end
+		local _, link = GetItemInfo(this.itemId)
+		-- Uncached items still link: the client fills the name in from the id
+		-- when it draws the chat line, so a hand-built link is not a dead one.
+		link = link or ("|cffffffff|Hitem:" .. this.itemId .. ":0:0:0:0:0:0:0|h[item]|h|r")
+		if ChatEdit_InsertLink then
+			ChatEdit_InsertLink(link)
+		end
+	end)
+
 	b.slotId = slotId
 	return b
 end
@@ -1527,8 +1544,15 @@ end
 -- only about forty whispers for the whole fleet; a bag list is sixty-odd rows
 -- for ONE bot, so the same trick does not scale and this asks the way the gear
 -- panel does - ".botstats bags <name>" out, BSTB rows back.
-local BAGS_PAGE_H = 448
-local BAG_ROWS = 18
+-- The pane is 420 wide, which takes ten 32px icons and their gaps with room to
+-- spare. Ninety visible covers the fleet average outright - a bot carries 78.6
+-- inventory rows - and the tail scrolls: bag size is doubled on this realm and
+-- the worst pack measured held 162.
+local BAGS_PAGE_H = 500
+local BAG_COLS, BAG_ROWS_N = 10, 9
+local BAG_SLOTS = BAG_COLS * BAG_ROWS_N
+local BAG_ICON = 32
+local bagScrollRow = 0
 
 local bagsPage = CreateFrame("Frame", nil, bot)
 bagsPage:SetAllPoints(bot)
@@ -1541,69 +1565,203 @@ bagsTitle:SetText("Carried")
 local bagsFoot = bagsPage:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 bagsFoot:SetPoint("TOPLEFT", bagsPage, "TOPLEFT", 20, -58)
 
-local bagRows = {}
-for i = 1, BAG_ROWS do
-	local fs = bagsPage:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	fs:SetPoint("TOPLEFT", bagsPage, "TOPLEFT", 22, -78 - (i - 1) * 15)
-	fs:SetWidth(300)
-	fs:SetJustifyH("LEFT")
-	bagRows[i] = fs
+-- An off-screen tooltip, used to WARM THE CACHE rather than to show anything.
+--
+-- GetItemInfo answers only from the client's own item cache, and that cache is
+-- cold for anything this character has never seen - which is most of what a bot
+-- is carrying. That is why the first cut of this page could only print raw ids.
+-- Pointing a tooltip at "item:<id>" makes the client ask the server for the
+-- item, exactly as hovering it would, and the answer lands in the cache a
+-- moment later. So: ask for everything unresolved, then repaint.
+local scanTip = CreateFrame("GameTooltip", "CENTURION_BotStatsScanTooltip", UIParent, "GameTooltipTemplate")
+scanTip:SetOwner(UIParent, "ANCHOR_NONE")
+
+local function LinkItem(id)
+	if not id then
+		return
+	end
+	local _, link = GetItemInfo(id)
+	-- Uncached: build the plain link by hand rather than dropping the click.
+	-- The client resolves the name from the id when it renders the chat line.
+	link = link or ("|cffffffff|Hitem:" .. id .. ":0:0:0:0:0:0:0|h[item]|h|r")
+	if ChatEdit_InsertLink then
+		ChatEdit_InsertLink(link)
+	end
 end
 
--- GetItemInfo answers from the client's own cache, which is cold for anything
--- this character has never seen. An uncached id returns nil rather than
--- blocking, so the row falls back to the id and fills in on a later repaint.
-local function BagItemLabel(row)
-	local name, _, quality = GetItemInfo(row.id)
-	local q = quality or row.quality or 1
-	local colour = ITEM_QUALITY_COLORS[q] and ITEM_QUALITY_COLORS[q].hex or "|cffffffff"
-	local text = colour .. (name or ("item " .. row.id)) .. "|r"
-	if (row.count or 1) > 1 then
-		text = text .. string.format(" |cff808080x%d|r", row.count)
-	end
-	if (row.ilvl or 0) > 0 then
-		text = text .. string.format(" |cff606060(%d)|r", row.ilvl)
-	end
-	return text
+local bagSlots = {}
+for i = 1, BAG_SLOTS do
+	local b = CreateFrame("Button", "CENTURION_BotStatsBag" .. i, bagsPage)
+	b:SetWidth(BAG_ICON)
+	b:SetHeight(BAG_ICON)
+	local col = (i - 1) % BAG_COLS
+	local row = math.floor((i - 1) / BAG_COLS)
+	b:SetPoint("TOPLEFT", bagsPage, "TOPLEFT", 22 + col * (BAG_ICON + 4), -78 - row * (BAG_ICON + 6))
+
+	b.icon = b:CreateTexture(nil, "BACKGROUND")
+	b.icon:SetAllPoints(b)
+
+	-- The empty-slot backdrop, so an unfilled grid reads as a bag rather than
+	-- as a hole in the frame.
+	b.slotBg = b:CreateTexture(nil, "BORDER")
+	b.slotBg:SetAllPoints(b)
+	b.slotBg:SetTexture("Interface\\Buttons\\UI-EmptySlot-White")
+	b.slotBg:SetTexCoord(0.15, 0.85, 0.15, 0.85)
+	b.slotBg:SetVertexColor(0.35, 0.35, 0.35, 0.7)
+
+	b.count = b:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
+	b.count:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", -1, 1)
+
+	-- Quality as a border tint on the icon itself. A four-texture frame per slot
+	-- would be forty-two more textures for the same information.
+	b.edge = b:CreateTexture(nil, "OVERLAY")
+	b.edge:SetPoint("TOPLEFT", b, "TOPLEFT", -2, 2)
+	b.edge:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 2, -2)
+	b.edge:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
+	b.edge:SetBlendMode("ADD")
+	b.edge:Hide()
+
+	b:SetScript("OnEnter", function()
+		if not this.itemId then
+			return
+		end
+		GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+		GameTooltip:SetHyperlink("item:" .. this.itemId)
+		GameTooltip:Show()
+	end)
+	b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+	b:RegisterForClicks("LeftButtonUp")
+	b:SetScript("OnClick", function()
+		if IsModifiedClick("CHATLINK") then
+			LinkItem(this.itemId)
+		end
+	end)
+
+	bagSlots[i] = b
 end
 
 function DrawBags(name)
 	local rows = bagsOf[name]
 	local done = bagsDone[name]
 
-	for i = 1, BAG_ROWS do
-		bagRows[i]:SetText("")
+	for i = 1, BAG_SLOTS do
+		local b = bagSlots[i]
+		b.itemId = nil
+		b.icon:SetTexture(nil)
+		b.count:SetText("")
+		b.edge:Hide()
+		b:Hide()
 	end
 
 	if not rows or (#rows == 0 and not done) then
 		bagsFoot:SetText("|cff808080asking the server...|r")
-		return
+		-- Non-zero: the rows themselves have not landed yet, so the repaint
+		-- ticker must keep running. Returning nothing here read as "nothing
+		-- outstanding" and stopped it before there was anything to draw.
+		return 1
 	end
-
 	if #rows == 0 then
 		bagsFoot:SetText("|cff808080carrying nothing|r")
 		return
 	end
 
-	-- Heaviest first: on this realm a bot's pack is mostly consumables, and the
-	-- thing worth seeing is what it has hoarded, not the order the bags happen
-	-- to be walked in.
+	-- Best first: a pack is mostly consumables and the thing worth seeing is
+	-- what the bot has hoarded, not the order the bags happen to be walked in.
 	table.sort(rows, function(a, b)
 		if a.quality ~= b.quality then return a.quality > b.quality end
 		return (a.ilvl or 0) > (b.ilvl or 0)
 	end)
 
-	local shown = math.min(#rows, BAG_ROWS)
+	-- Clamp before drawing: the roster can shrink under a scrolled view (an item
+	-- sold, a smaller bot picked) and an offset left past the end would show an
+	-- empty grid with no way to tell why.
+	local maxRow = math.max(0, math.ceil(#rows / BAG_COLS) - BAG_ROWS_N)
+	if bagScrollRow > maxRow then bagScrollRow = maxRow end
+	if bagScrollRow < 0 then bagScrollRow = 0 end
+
+	local first = bagScrollRow * BAG_COLS
+	local pending = 0
+	local shown = math.min(#rows - first, BAG_SLOTS)
 	for i = 1, shown do
-		bagRows[i]:SetText(BagItemLabel(rows[i]))
+		local r = rows[first + i]
+		local b = bagSlots[i]
+		b.itemId = r.id
+		b:Show()
+
+		local _, _, quality, _, _, _, _, _, _, texture = GetItemInfo(r.id)
+		if texture then
+			b.icon:SetTexture(texture)
+		else
+			-- Not cached yet. Ask for it, show the placeholder, and repaint when
+			-- the answer arrives.
+			b.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+			scanTip:SetOwner(UIParent, "ANCHOR_NONE")
+			scanTip:SetHyperlink("item:" .. r.id)
+			pending = pending + 1
+		end
+
+		local q = quality or r.quality or 1
+		local colour = ITEM_QUALITY_COLORS[q]
+		if colour and q > 1 then
+			b.edge:SetVertexColor(colour.r, colour.g, colour.b, 0.85)
+			b.edge:Show()
+		else
+			b.edge:Hide()
+		end
+
+		if (r.count or 1) > 1 then
+			b.count:SetText(r.count)
+		end
 	end
 
-	if #rows > BAG_ROWS then
-		bagsFoot:SetText(string.format("|cff808080%d items, showing the top %d|r", #rows, BAG_ROWS))
-	else
-		bagsFoot:SetText(string.format("|cff808080%d items|r", #rows))
+	local note = string.format("|cff808080%d items|r", #rows)
+	if #rows > BAG_SLOTS then
+		note = string.format("|cff808080%d items - showing %d-%d, scroll for more|r",
+			#rows, first + 1, first + shown)
 	end
+	if pending > 0 then
+		note = note .. string.format("  |cff606060(%d loading)|r", pending)
+	end
+	bagsFoot:SetText(note)
+	return pending
 end
+
+bagsPage:EnableMouseWheel(true)
+bagsPage:SetScript("OnMouseWheel", function()
+	local rows = shownBot and bagsOf[shownBot]
+	if not rows or #rows <= BAG_SLOTS then
+		return
+	end
+	bagScrollRow = bagScrollRow - arg1      -- wheel up is +1, and up means earlier rows
+	DrawBags(shownBot)
+end)
+
+-- Repaint while the item cache is still filling.
+--
+-- 3.3.5 has no GET_ITEM_INFO_RECEIVED event - that arrives in a later expansion
+-- - so there is nothing to listen for. Polling a few times a second for a few
+-- seconds is what is left, and it stops the moment nothing is outstanding
+-- rather than running forever.
+local bagsTicker = CreateFrame("Frame")
+local tickAccum, tickTries = 0, 0
+bagsTicker:Hide()
+bagsTicker:SetScript("OnUpdate", function()
+	tickAccum = tickAccum + arg1
+	if tickAccum < 0.4 then
+		return
+	end
+	tickAccum = 0
+	tickTries = tickTries + 1
+
+	if not shownBot or detailTab ~= "bags" or tickTries > 20 then
+		bagsTicker:Hide()
+		return
+	end
+	if (DrawBags(shownBot) or 0) == 0 then
+		bagsTicker:Hide()
+	end
+end)
 
 local function RequestBags(name)
 	bagsOf[name] = nil
@@ -1618,7 +1776,10 @@ local function ShowBagsPage()
 	bot:SetHeight(BAGS_PAGE_H)
 	bagsPage:Show()
 	if shownBot then
+		bagScrollRow = 0
 		DrawBags(shownBot)
+		tickAccum, tickTries = 0, 0
+		bagsTicker:Show()
 		pcall(RequestBags, shownBot)
 	end
 end
