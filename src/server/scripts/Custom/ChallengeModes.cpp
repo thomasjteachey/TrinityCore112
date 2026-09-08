@@ -86,10 +86,12 @@ void SendChallengeDescription(Player* player, ChallengeModeSettings setting)
             break;
         case SETTING_SEMI_HARDCORE:
             handler.SendSysMessage("Death costs everything you are wearing. However you die - a creature, another");
-            handler.SendSysMessage("player, a long fall, drowning - all 19 equipped items are DELETED outright and");
+            handler.SendSysMessage("player, a long fall, drowning - every equipped item is DELETED outright and");
             handler.SendSysMessage("your gold is set to zero.");
             handler.SendSysMessage("They are destroyed, not dropped: nothing is left in a cache for anyone to");
             handler.SendSysMessage("loot, and there is nothing to corpse-run back for.");
+            handler.SendSysMessage("Your shirt and tabard survive - they carry no armour and no stats, so there");
+            handler.SendSysMessage("is nothing in them for a death to take.");
             handler.SendSysMessage("Your bags are left alone, and the character survives.");
             handler.SendSysMessage("Cannot be combined with Hardcore.");
             break;
@@ -665,6 +667,13 @@ private:
 
         for (uint8 i = 0; i < EQUIPMENT_SLOT_END; ++i)
         {
+            // Shirts and tabards survive. They carry no armour and no stats, so
+            // sparing them costs the mode nothing it was charging for - and a
+            // guild tabard or an RP shirt is identity, not gear, which is a
+            // harsh thing to delete for a death that took no power off you.
+            if (i == EQUIPMENT_SLOT_BODY || i == EQUIPMENT_SLOT_TABARD)
+                continue;
+
             if (Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i))
             {
                 ChatHandler(player->GetSession()).PSendSysMessage("You have lost |Hitem:%u:0:0:0:0:0:0:0:0|h[%s]|h|r.", item->GetEntry(), item->GetTemplate()->Name1.c_str());

@@ -711,6 +711,19 @@ namespace BarracksHardcore
         return IsFieldKitDuplicateEntry(itemId);
     }
 
+    // Worn, but not gear: shirts and tabards carry no armour, no stats and no
+    // effect on a fight, so there is nothing for a death to take off you. They
+    // are identity - a guild tabard, a Lucky Red Shirt, an RP outfit - and the
+    // one class of worn item a death has no business touching.
+    //
+    // Asked by inventory type rather than by equipment slot, so a shirt sitting
+    // in a bot's pack is covered by the same rule as the one it has on.
+    bool IsCosmeticOnly(ItemTemplate const* proto)
+    {
+        return proto && (proto->InventoryType == INVTYPE_BODY ||
+                         proto->InventoryType == INVTYPE_TABARD);
+    }
+
     // When each character's bags were last swept for stray kit pieces.
     //
     // thread_local, not shared-plus-mutex. A player is updated by exactly one
@@ -1715,6 +1728,13 @@ namespace BarracksHardcore
                 proto->Quality < ITEM_QUALITY_UNCOMMON)
                 continue;
 
+            // Shirts and tabards are not gear, they are who you are. Nothing
+            // about a tabard makes the wearer harder to kill, so taking one is
+            // pure loss with no deflation behind it - and a guild tabard or a
+            // rare shirt is not something the winner can hand back.
+            if (IsCosmeticOnly(proto))
+                continue;
+
             // Losing the roll still BURNS the piece - that is the deflation and
             // it stays. But a chest that REFUSED the item must never produce a
             // destroy record: the cap is eighteen rows and this loop walks
@@ -1746,6 +1766,8 @@ namespace BarracksHardcore
                     proto->Quality < ITEM_QUALITY_UNCOMMON)
                     return;
                 if (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR)
+                    return;
+                if (IsCosmeticOnly(proto))
                     return;
 
                 bool const burns = urand(0, 99) >= s_dropChancePercent;
