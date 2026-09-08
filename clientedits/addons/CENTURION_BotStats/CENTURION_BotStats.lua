@@ -1648,7 +1648,10 @@ pageGo:SetPoint("LEFT", pageBags, "RIGHT", 3, 0)
 local roleButton = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
 roleButton:SetWidth(104)
 roleButton:SetHeight(20)
-roleButton:SetPoint("BOTTOMRIGHT", win, "BOTTOMRIGHT", -16, 14)
+-- Left of Back, not anchored to the window corner: Back already lives there
+-- (BOTTOMRIGHT -22, 18) and anchoring both to the same corner put this straight
+-- on top of it.
+roleButton:SetPoint("RIGHT", back, "LEFT", -6, 0)
 
 local function RoleButtonLabel()
 	if roleFilter == nil then
