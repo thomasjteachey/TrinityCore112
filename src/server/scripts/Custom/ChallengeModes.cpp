@@ -19,6 +19,7 @@
 #include "SharedDefines.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "StringFormat.h"
 #include "WorldSession.h"
 
 #include <sstream>
@@ -39,6 +40,9 @@ constexpr char const* ConfigNames[CHALLENGE_MODE_SETTING_MAX] =
 };
 
 constexpr uint32 ACTION_ENABLE_BASE = GOSSIP_ACTION_INFO_DEF + 100;
+// Far enough above the enable range that the two can never be confused, and the
+// select handler can tell them apart by range alone.
+constexpr uint32 ACTION_DESCRIBE_BASE = GOSSIP_ACTION_INFO_DEF + 200;
 
 bool IsRealChallengeMode(ChallengeModeSettings setting)
 {
@@ -58,6 +62,67 @@ char const* GetChallengeDisplayName(ChallengeModeSettings setting)
         case SETTING_QUEST_XP_ONLY:      return "Quest XP Only";
         case SETTING_IRON_MAN:           return "Iron Man";
         default:                         return "Unknown";
+    }
+}
+
+// What each mode actually does, written from the hooks that enforce it rather than
+// from the name - a player picking one of these is committing a character to it, so
+// the text has to match the code exactly. The XP lines read the live multiplier so
+// they cannot drift away from the config.
+void SendChallengeDescription(Player* player, ChallengeModeSettings setting)
+{
+    if (!player || !player->GetSession())
+        return;
+
+    ChatHandler handler(player->GetSession());
+    handler.PSendSysMessage("|cffffd000%s|r", GetChallengeDisplayName(setting));
+
+    switch (setting)
+    {
+        case SETTING_HARDCORE:
+            handler.SendSysMessage("One life. Dying finishes the character - you are kicked immediately, and every");
+            handler.SendSysMessage("later login kills and kicks you again. There is no way back.");
+            handler.SendSysMessage("Cannot be combined with Semi-Hardcore.");
+            break;
+        case SETTING_SEMI_HARDCORE:
+            handler.SendSysMessage("Death costs everything you are wearing. When a creature kills you, all 19");
+            handler.SendSysMessage("equipped items are destroyed and your gold is set to zero.");
+            handler.SendSysMessage("Your bags are left alone, and the character survives.");
+            handler.SendSysMessage("Cannot be combined with Hardcore.");
+            break;
+        case SETTING_SELF_CRAFTED:
+            handler.SendSysMessage("You may only equip items you crafted yourself - the item has to carry your");
+            handler.SendSysMessage("own crafter signature. Anything looted, bought or gifted cannot be worn.");
+            handler.SendSysMessage("Cannot be combined with Iron Man.");
+            break;
+        case SETTING_ITEM_QUALITY_LEVEL:
+            handler.SendSysMessage("You may only equip grey and white items. Nothing green or better, however");
+            handler.SendSysMessage("it was obtained.");
+            break;
+        case SETTING_SLOW_XP_GAIN:
+        case SETTING_VERY_SLOW_XP_GAIN:
+            handler.PSendSysMessage("You earn %.0f%% of the normal experience from everything.",
+                sChallengeModes->GetXpMultiplier(setting) * 100.0f);
+            handler.SendSysMessage("Slow XP and Very Slow XP cannot be combined with each other.");
+            break;
+        case SETTING_QUEST_XP_ONLY:
+            handler.SendSysMessage("Kills award you no experience at all - only quests do.");
+            handler.SendSysMessage("A pet with you still receives its own share.");
+            break;
+        case SETTING_IRON_MAN:
+            handler.SendSysMessage("The strict one. All of the following, together:");
+            handler.SendSysMessage("  - No talent points, ever - they are stripped on login and on every level.");
+            handler.SendSysMessage("  - No resurrection. If you die you are killed again the moment you return.");
+            handler.SendSysMessage("  - Grey and white gear only.");
+            handler.SendSysMessage("  - No potions, elixirs or flasks, and no food that heals you over time.");
+            handler.SendSysMessage("  - No enchantments may be applied.");
+            handler.SendSysMessage("  - No professions - trade skills are unlearned as you learn them.");
+            handler.SendSysMessage("    Runeforging, Poisons and Beast Training are allowed.");
+            handler.SendSysMessage("Cannot be combined with Self Crafted.");
+            break;
+        default:
+            handler.SendSysMessage("No description available.");
+            break;
     }
 }
 
@@ -646,14 +711,21 @@ public:
                 return true;
             }
 
-            AddChallengeOption(player, SETTING_HARDCORE, "Enable Hardcore");
-            AddChallengeOption(player, SETTING_SEMI_HARDCORE, "Enable Semi-Hardcore");
-            AddChallengeOption(player, SETTING_SELF_CRAFTED, "Enable Self Crafted");
-            AddChallengeOption(player, SETTING_ITEM_QUALITY_LEVEL, "Enable Poor/Normal Gear Only");
-            AddChallengeOption(player, SETTING_SLOW_XP_GAIN, "Enable Slow XP");
-            AddChallengeOption(player, SETTING_VERY_SLOW_XP_GAIN, "Enable Very Slow XP");
-            AddChallengeOption(player, SETTING_QUEST_XP_ONLY, "Enable Quest XP Only");
-            AddChallengeOption(player, SETTING_IRON_MAN, "Enable Iron Man");
+            // Enable then describe, mode by mode, so the explanation sits next to the
+            // thing it explains. The describe option is offered even when the mode
+            // cannot be taken - somebody who just picked Hardcore should still be able
+            // to read what Semi-Hardcore would have done.
+            for (uint8 i = SETTING_HARDCORE; i <= SETTING_IRON_MAN; ++i)
+            {
+                ChallengeModeSettings const setting = ChallengeModeSettings(i);
+                if (!sChallengeModes->ChallengeEnabled(setting))
+                    continue;
+
+                AddChallengeOption(player, setting, Trinity::StringFormat("Enable {}", GetChallengeDisplayName(setting)).c_str());
+                AddGossipItemFor(player, GOSSIP_ICON_INTERACT_1,
+                    Trinity::StringFormat("What is {}?", GetChallengeDisplayName(setting)).c_str(),
+                    GOSSIP_SENDER_MAIN, ACTION_DESCRIBE_BASE + uint32(setting));
+            }
 
             SendGossipMenuFor(player, 12669, me->GetGUID());
             return true;
@@ -665,6 +737,17 @@ public:
                 return true;
 
             uint32 const action = player->PlayerTalkClass->GetGossipOptionAction(gossipListId);
+
+            // Describing costs nothing and commits to nothing, so re-open the menu
+            // afterwards instead of closing it - reading about all eight should not
+            // mean clicking the stone eight times.
+            if (action >= ACTION_DESCRIBE_BASE && action <= ACTION_DESCRIBE_BASE + SETTING_IRON_MAN)
+            {
+                SendChallengeDescription(player, ChallengeModeSettings(action - ACTION_DESCRIBE_BASE));
+                OnGossipHello(player);
+                return true;
+            }
+
             if (action < ACTION_ENABLE_BASE || action >= ACTION_ENABLE_BASE + SETTING_IRON_MAN + 1)
             {
                 CloseGossipMenuFor(player);
