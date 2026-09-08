@@ -3776,6 +3776,13 @@ namespace
 
 bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName, uint32* honorGain)
 {
+    // A realm with no honor race should not be handing out warchief titles or posting
+    // Magni's congratulations every week. Gated at the top rather than at each mail:
+    // the titles, the NPC dressing and the mails are one feature, and half of it
+    // running is worse than none of it.
+    if (!sConfigMgr->GetBoolDefault("Centurion.WeeklyHonorWarchief.Enable", true))
+        return false;
+
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_WEEKLY_HONOR_TOP_THREE);
     PreparedQueryResult result = CharacterDatabase.Query(stmt);
 

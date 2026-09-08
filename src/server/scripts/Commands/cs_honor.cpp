@@ -119,16 +119,14 @@ public:
         std::string winnerName;
         uint32 weeklyHonor = 0;
 
-        if (!sWorld->ProcessWeeklyHonorWarchief(true, &winnerName, &weeklyHonor))
-        {
-            handler->SendSysMessage("No weekly honor winner was found.");
-            return true;
-        }
+        // Deliberately NOT an early return on failure. On a realm where the honor
+        // race is switched off entirely this always reports nothing, and letting that
+        // skip the deaths board would leave no way to force it at all.
+        if (sWorld->ProcessWeeklyHonorWarchief(true, &winnerName, &weeklyHonor))
+            handler->PSendSysMessage("Weekly honor winner set to %s with %u honor.", winnerName.c_str(), weeklyHonor);
+        else
+            handler->SendSysMessage("No weekly honor winner was found (or the honor race is disabled here).");
 
-        handler->PSendSysMessage("Weekly honor winner set to %s with %u honor.", winnerName.c_str(), weeklyHonor);
-
-        // The deaths board rides the same weekly rollover, so forcing one should force
-        // the other - otherwise the only way to see it is to wait a week.
         std::string deathsName;
         uint32 deaths = 0;
         if (sWorld->ProcessWeeklyMostDeaths(&deathsName, &deaths))

@@ -4033,6 +4033,19 @@ Centurion.MostDeaths.CreatureEntry = 110017
 Centurion.MostDeaths.AllSpawns = 1
 Centurion.HonorRunnerUp.Enable = 1
 
+#
+#    Centurion.WeeklyHonorWarchief.Enable
+#        Description: The whole weekly honor race - warchief and former-warchief titles,
+#                     the NPC dressing, and the congratulation mails from Magni. Turn it
+#                     off on a realm that is not running an honor race, or it keeps
+#                     awarding a warchief nobody competed for and mailing about it.
+#                     Does not affect Centurion.MostDeaths, which rides the same weekly
+#                     rollover independently.
+#        Default:     1
+#
+
+Centurion.WeeklyHonorWarchief.Enable = 1
+
 DireMaulBeads.ItemId = 21982
 DireMaulBeads.AuraId = 90002
 DireMaulBeads.AreaIds = 495,496,498,2557,3217
