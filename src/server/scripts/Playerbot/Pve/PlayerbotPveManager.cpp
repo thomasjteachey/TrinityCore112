@@ -12244,6 +12244,45 @@ namespace
                 return;
             }
 
+        // A mounted bot cannot attack, and nothing downstream ever tells it so.
+        //
+        // Unit::Attack refuses outright for a mounted player, so the call below
+        // silently does nothing. Because no swing ever lands the bot never enters
+        // combat, so the mount-state directive that would have dismounted it never
+        // arms either, and the chase generator reads "no victim" as a lost target
+        // and stops on every update. Mounted, next to a mob, going nowhere.
+        //
+        // Casting had a way out of this and melee did not: an attempted cast
+        // reaches PvpClassActions::Execute, which dismounts for exactly this
+        // reason. A bot with nothing castable - out of rage or energy, or too low
+        // to have an ability yet - never gets there.
+        //
+        // Gated on actually being in reach, so riding a target down still happens
+        // at mount speed. That is the same rule the battleground objective path
+        // uses: it dismounts at the banner, not when it sets off. Reach is asked
+        // the way the bot intends to fight - melee range for a swing, the real
+        // Auto Shot range for a hunter holding its firing line, rather than one
+        // constant that would be wrong for one of them.
+        if (bot->IsMounted())
+        {
+            bool withinAttackReach = bot->IsWithinMeleeRange(victim);
+            if (!withinAttackReach && !wantsMeleeSwings)
+            {
+                SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(75);
+                float const shootReach = autoShotInfo
+                    ? bot->GetSpellMaxRangeForTarget(victim, autoShotInfo)
+                    : 30.0f;
+                withinAttackReach = shootReach > 0.0f && bot->IsWithinDistInMap(victim, shootReach);
+            }
+
+            if (withinAttackReach)
+            {
+                TC_LOG_DEBUG("playerbots.pve", "Bot {} gets off its mount to fight {}.",
+                    bot->GetName(), victim->GetName());
+                playerbot::PvpClassActions::ForceDismount(bot);
+            }
+        }
+
         if ((bot->GetVictim() != victim || meleeStateWrong) && !holdSwingsForOpener)
             bot->Attack(victim, wantsMeleeSwings);
 
