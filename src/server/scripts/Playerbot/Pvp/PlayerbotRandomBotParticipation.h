@@ -64,6 +64,11 @@ struct RandomBotPopulationSnapshot
 
 bool IsManagedRandomBot(Player const* player);
 
+// The configured gold multiplier for this bot's level band. Defined in
+// playerbot_loader.cpp beside the config that feeds it, and shared so the
+// vendor payout and the looted-coin hook cannot drift apart.
+float PlayerbotGoldGainMultiplierFor(Player const* player);
+
 class RandomBotParticipationManager
 {
 public:

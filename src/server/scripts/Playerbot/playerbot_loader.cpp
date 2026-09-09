@@ -227,13 +227,26 @@ void LoadPlayerbotGoldGainMultiplier()
         std::memory_order_relaxed);
 }
 
+} // anonymous namespace
+
+namespace playerbot
+{
 // The multiplier for the band this bot's level falls in.
+//
+// Outside the anonymous namespace above because the vendor payout in the PvE
+// manager needs the same answer, and a second copy of the band logic would
+// eventually disagree with this one about where the boundary is. The atomics it
+// reads stay file-local.
 float PlayerbotGoldGainMultiplierFor(Player const* player)
 {
     return uint32(player->GetLevel()) <= g_PlayerbotLowLevelGoldBandMaxLevel.load(std::memory_order_relaxed)
         ? g_PlayerbotLowLevelGoldGainMultiplier.load(std::memory_order_relaxed)
         : g_PlayerbotGoldGainMultiplier.load(std::memory_order_relaxed);
 }
+}
+
+namespace
+{
 
 Unit* GetCurrentMotionTarget(Player* bot)
 {
@@ -754,7 +767,7 @@ public:
 
         // Band is chosen by the bot's CURRENT level, so a bot crossing out of
         // the low band simply starts earning at the other rate.
-        float const multiplier = PlayerbotGoldGainMultiplierFor(player);
+        float const multiplier = playerbot::PlayerbotGoldGainMultiplierFor(player);
         if (multiplier <= 1.0f)
             return;
 

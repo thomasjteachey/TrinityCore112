@@ -595,6 +595,9 @@ namespace
     void TrySkinCorpse(Player* bot, Creature* corpse);
     bool IsGatherableNodeFor(Player* bot, GameObject const* go, int32* outRequiredSkill);
     uint32 GetGuardianZoneId(uint64 botRawGuid);
+    // Defined beside VendorPriceFloor, which is the other half of the same
+    // rule; declared here because the junk-selling pass runs long before it.
+    uint64 VendorPayout(Player const* bot, ItemTemplate const* proto, uint32 count);
     bool IsProactiveTargetWithinPower(Player const* bot, uint32 playerLevel);
     bool IsProactivePlayerLevelAcceptable(Player const* bot, uint32 playerLevel, uint32 bountyStacks);
     bool IsProactivePlayerLevelAcceptable(Player const* bot, Player const* player);
@@ -4495,7 +4498,7 @@ namespace
             if (!sellable)
                 return;
 
-            bot->ModifyMoney(int32(proto->SellPrice * item->GetCount()));
+            bot->ModifyMoney(int64(VendorPayout(bot, proto, item->GetCount())));
             bot->DestroyItem(bag, slot, true);
             ++soldCount;
         });
@@ -9093,6 +9096,36 @@ namespace
 
     // What to ask for it. The anchor is the item's own value, then the standing
     // competition decides: a seller who ignores the shelf price never sells.
+    // What a merchant actually hands a bot for a lot.
+    //
+    // Scaled by the same gold multiplier as looted coin, because it is the same
+    // KIND of income. An NPC merchant is not an account: nobody is debited when
+    // it buys something, the copper is created on the spot, and a vendor sale is
+    // a faucet in exactly the way killing something for its purse is.
+    //
+    // The looted-coin hook in playerbot_loader.cpp cannot do this job. It is
+    // handed a Player and a number and has no way to tell a merchant's copper
+    // from an auction settlement, so it admits only money taken with a loot
+    // window open - which is the right call there, since scaling a settlement
+    // WOULD mint gold: the buyer is debited once and the seller credited more.
+    // Vendoring has no counterparty to get that wrong about, so it is done here,
+    // at the two sites that know what the money is.
+    uint64 VendorPayout(Player const* bot, ItemTemplate const* proto, uint32 count)
+    {
+        uint64 const gross = uint64(proto->SellPrice) * uint64(count);
+        if (!bot || !gross)
+            return gross;
+
+        float const multiplier = playerbot::PlayerbotGoldGainMultiplierFor(bot);
+        if (multiplier <= 1.0f)
+            return gross;
+
+        // Saturate rather than wrap. The gross is uint32 arithmetic upstream and
+        // the multiplier puts the overflow within reach of a large stack.
+        double const scaled = double(gross) * double(multiplier);
+        return scaled >= double(MAX_MONEY_AMOUNT) ? uint64(MAX_MONEY_AMOUNT) : uint64(scaled);
+    }
+
     // What a merchant would pay for the lot, times the configured floor factor.
     //
     // The ask never goes below this, and the same number decides whether listing
@@ -9410,7 +9443,7 @@ namespace
                 // Judged on the MARKET price rather than the ask, because the ask
                 // is derived from the floor and comparing the two would be
                 // circular.
-                uint64 const vendorRevenue = uint64(proto->SellPrice) * count;
+                uint64 const vendorRevenue = VendorPayout(bot, proto, count);
                 uint64 const vendorFloor = VendorPriceFloor(proto, count);
                 if (vendorRevenue && uint64(marketPrice) < vendorFloor)
                 {
