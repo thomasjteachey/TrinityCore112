@@ -3999,10 +3999,15 @@ namespace
     // moment where an item exists nowhere. A destination inside the bag being
     // emptied is never considered. Returns true only if the bag ends up empty; a
     // partial move is harmless, since items simply sit in different slots.
-    bool TryEmptyBagForSwap(Player* bot, Bag* bag, uint32* movedOut = nullptr)
+    bool TryEmptyBagForSwap(Player* bot, Bag* bag, uint32* movedOut = nullptr, bool trace = false)
     {
         if (!bag)
             return true;
+
+        // The bag's own slot, read once. Everything below asks the bag where it
+        // is on every line, and a value that is supposed to be constant but is
+        // read repeatedly is worth pinning while this is under investigation.
+        uint8 const sourceSlot = bag->GetSlot();
 
         for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
         {
@@ -4012,6 +4017,7 @@ namespace
 
             ItemPosCountVec destination;
             InventoryResult result = EQUIP_ERR_INVENTORY_FULL;
+            uint8 chosen = 0;
 
             // The backpack first, then every OTHER equipped bag.
             for (uint8 targetBag = INVENTORY_SLOT_BAG_START - 1; targetBag < INVENTORY_SLOT_BAG_END; ++targetBag)
@@ -4023,16 +4029,34 @@ namespace
                 destination.clear();
                 result = bot->CanStoreItem(container, NULL_SLOT, destination, item, false);
                 if (result == EQUIP_ERR_OK)
+                {
+                    chosen = container;
                     break;
+                }
             }
 
             if (result != EQUIP_ERR_OK)
                 return false;
 
+            uint16 const destPos = destination.empty() ? uint16(0xFFFF) : destination.front().pos;
+            uint32 const destCount = uint32(destination.size());
+
             bot->RemoveItem(bag->GetSlot(), uint8(slot), true);
             bot->StoreItem(destination, item, true);
             if (movedOut)
                 ++*movedOut;
+
+            // Where did it ACTUALLY land? Asked of the item afterwards rather
+            // than assumed from the destination we handed StoreItem, because the
+            // whole point of this trace is that the two do not appear to agree.
+            if (trace)
+                TC_LOG_ERROR("playerbots.pve",
+                    "  bagtrace {}: srcSlot {} (bag now says {}) item {} from index {} -> container {}, "
+                    "{} dest(s) first bag {} slot {}; item ended at bag {} slot {}; source bag now holds {}",
+                    bot->GetName(), uint32(sourceSlot), uint32(bag->GetSlot()), item->GetEntry(), slot,
+                    uint32(chosen), destCount, uint32(destPos >> 8), uint32(destPos & 255),
+                    uint32(item->GetBagSlot()), uint32(item->GetSlot()),
+                    CountUsedSlotsInBag(bot, bag));
         }
 
         return true;
@@ -6144,7 +6168,14 @@ namespace
                 {
                     uint32 const before = CountUsedSlotsInBag(bot, equippedBag);
                     uint32 moved = 0;
-                    if (!CanRehomeBagContents(bot, equippedBag) || !TryEmptyBagForSwap(bot, equippedBag, &moved))
+
+                    // Trace the first few of these per uptime. The summary line
+                    // below says the bag is not emptying; this says why, and
+                    // costs nothing once the question is answered.
+                    static std::atomic<uint32> s_bagTraces{ 0 };
+                    bool const trace = s_bagTraces.load(std::memory_order_relaxed) < 3;
+
+                    if (!CanRehomeBagContents(bot, equippedBag) || !TryEmptyBagForSwap(bot, equippedBag, &moved, trace))
                         continue;
 
                     // Checked, not trusted.
@@ -6159,6 +6190,8 @@ namespace
                     uint32 const after = CountUsedSlotsInBag(bot, equippedBag);
                     if (after)
                     {
+                        if (trace)
+                            s_bagTraces.fetch_add(1, std::memory_order_relaxed);
                         TC_LOG_ERROR("playerbots.pve",
                             "Bot {}: {} in slot {} held {}, moved {}, still holds {} - not swapping.",
                             bot->GetName(),
