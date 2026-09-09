@@ -26,6 +26,7 @@ void LoadHiddenItemsetBonuses();
 void AddSC_mod_challenge_modes();
 void AddSC_custom_hidden_itemset_bonus();
 void AddSC_custom_zone_group_rules();
+void AddSC_custom_warmode_zone_gate();
 void AddSC_mod_pvp_titles();
 void AddSC_custom_diremaul_beads();
 void AddSC_custom_barracks_hardcore();
@@ -74,6 +75,7 @@ void AddCustomScripts()
     AddSC_custom_spell_propagate();
     AddBGReplayScripts();
     AddSC_custom_zone_group_rules();
+    AddSC_custom_warmode_zone_gate();
     AddSC_mod_pvp_titles();
     AddSC_custom_diremaul_beads();
     AddSC_custom_barracks_hardcore();

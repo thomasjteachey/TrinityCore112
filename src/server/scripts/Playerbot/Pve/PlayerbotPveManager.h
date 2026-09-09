@@ -430,6 +430,15 @@ public:
 
     static std::string BuildStatusLine(Player const* bot);
 };
+
+// The classic level band a zone is FOR, from kClassicZoneBands. Returns false
+// for a zone with no band - a city, an instance, a battleground - which callers
+// must read as "no opinion" rather than as a band of zero.
+//
+// Exported because the bands are realm rules, not a playerbot detail: the War
+// Mode zone gate asks the same question about a person that the drifter draft
+// asks about a bot, and two copies of this table would drift apart.
+bool GetZoneLevelBand(uint32 zoneId, uint8& bottom, uint8& top);
 }
 
 #endif
