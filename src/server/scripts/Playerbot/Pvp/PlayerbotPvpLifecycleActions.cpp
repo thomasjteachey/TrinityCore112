@@ -4694,10 +4694,34 @@ namespace playerbot
         // here, because the mount selector is already suppressed by an attackable
         // enemy player inside this same envelope.
         //
-        // Safe to leave the bot mounted while it closes because positioning does
-        // not run through Attack(): DriveCombatPositioning below moves the bot on
-        // its own, so a refused attack order costs nothing but the swing itself.
+        // Tested before any movement is chosen, because if the target is already
+        // in reach then riding is over and the positioning below is correct.
         playerbot::PvpClassActions::DismountToFight(player, target);
+
+        // Still mounted means it is NOT in reach yet, so ride the last stretch -
+        // but ride it with point movement, not the chase the positioning code
+        // below would install.
+        //
+        // I claimed in the commit that installed this rule that leaving a bot
+        // mounted while it closed was free, because DriveCombatPositioning moves
+        // it independently of Attack(). That is true for ranged and objective
+        // movement, which are point- and follow-based, and FALSE for melee.
+        // The melee close is MoveChase, and ChaseMovementGenerator pauses itself
+        // whenever owner->GetVictim() is not the target - while Unit::Attack
+        // refuses outright for a mounted player. So a mounted melee bot has no
+        // victim, and the chase it was just handed calls StopMoving on every
+        // update: parked, mounted, motionless, until something puts it in combat.
+        //
+        // MoveTowardUnit has no such test, which is exactly why the long-distance
+        // guard above has always worked. The stop distance is deliberately inside
+        // melee range: it is never actually reached, because DismountToFight fires
+        // first on the way in - at shoot range for a hunter, melee range for
+        // everyone else - and the tick after that this branch is skipped.
+        if (player->IsMounted())
+        {
+            player->AttackStop();
+            return MoveTowardUnit(player, target, 3.0f) || player->isMoving();
+        }
 
         // Playerbots run tactical/lifecycle engagement every fast tick. That
         // loop can select the same enemy immediately after a class gap-closer
