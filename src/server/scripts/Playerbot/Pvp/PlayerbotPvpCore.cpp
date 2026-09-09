@@ -6665,8 +6665,35 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "shaman lesser healing wave", "weave a heal on a low-health ally", 10468, enhLowHealTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, enhLowHealTarget ? enhLowHealTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, inCombat && hasHostileTarget && IsMeleeClass(target) && player->IsWithinDistInMap(target, 10.0f) && !HasActiveEarthTotem(player) && IsSpellReady(player, 2484), 56.0f,
         { "shaman earthbind totem", "kite nearby melee pressure", 2484, playerbot::PvpClassSpellContext::TargetMode::Self });
+    // Flame Shock, which was missing from this table entirely - and it is the
+    // shaman's ONLY spell that is not Nature or physical.
+    //
+    // That absence was invisible until the immunity rule arrived. Every other
+    // offensive candidate here is Nature (Earth Shock, Chain Lightning, Purge,
+    // Lightning Bolt) and Earth Shock only ever fires as an interrupt, so an
+    // elemental or restoration shaman had nothing whatsoever to say to a
+    // nature-immune target - and this realm has 70 creature templates that are,
+    // 88 of them spawned in the Badlands alone. Refusing the Nature casts without
+    // this would have left that shaman walking in to melee for the whole fight.
+    //
+    // Applied as a DoT rather than spammed: the candidate withdraws once OUR
+    // Flame Shock is ticking on the target, which is also how it is meant to be
+    // played. Ranked below Chain Lightning so it does not displace the primary
+    // nuke, and above Frost Shock because the three shocks share a cooldown and
+    // this is the better use of it.
+    AddDecisionCandidate(candidates, !isEnhancementShaman && hasHostileTarget && target &&
+        IsSpellReady(player, 8050) && !HasAuraFromSpellChain(target, 8050, player->GetGUID()),
+        isRestoShaman ? 5.5f : 55.5f,
+        { "shaman flame shock", "keep the fire damage-over-time on the kill target",
+            8050, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    // Frost Shock could never fire against a creature: IsMeleeClass resolves the
+    // unit to a Player and answers false for everything else, so both arms of the
+    // old condition were PvP-only. The snare reasoning still holds against players;
+    // against a mob this is simply the shaman's other off-school shock, and worth
+    // having for the same reason Flame Shock is.
     AddDecisionCandidate(candidates, hasHostileTarget && IsSpellReady(player, 10473) &&
-        ((isEnhancementShaman && enhNeedsGapClose) || (IsMeleeClass(target) && player->IsWithinDistInMap(target, 20.0f))), 55.0f,
+        ((isEnhancementShaman && enhNeedsGapClose) || (IsMeleeClass(target) && player->IsWithinDistInMap(target, 20.0f)) ||
+            (target && target->GetTypeId() != TYPEID_PLAYER && player->IsWithinDistInMap(target, 20.0f))), 55.0f,
         { "shaman frost shock", isEnhancementShaman && enhNeedsGapClose ? "snare the kill target while chasing" : "snare medium-range melee threats",
             10473, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     Unit const* poisonedAllyInTotemRange = inCombat && IsSpellReady(player, 8170) ? SelectFriendlyDispelTarget(player, DISPEL_POISON, 20.0f) : nullptr;
