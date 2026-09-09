@@ -396,6 +396,14 @@ class TC_GAME_API Battleground
         uint32 GetFreeSlotsForTeam(uint32 Team) const;
 
         bool isArena() const        { return m_IsArena; }
+
+        // Does death here follow the arena rules rather than the battleground
+        // ones? Arenas have no spirit guides, no resurrect queue and no way back
+        // into the fight: you stay on your corpse until the round ends. A
+        // battleground that is built as a last-stand wants exactly that even
+        // though it is not an arena, so the question is asked by name instead of
+        // being spelled isArena() at each of the places that care.
+        virtual bool UsesArenaDeathRules() const { return isArena(); }
         bool isBattleground() const { return !m_IsArena; }
         bool isRated() const        { return m_IsRated; }
         bool IsCustomGame() const   { return m_IsCustomGame; }

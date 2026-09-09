@@ -197,6 +197,11 @@ enum BG_VHR_Constants
     BG_VHR_PLAYERS_PER_BUFF = 3,
     BG_VHR_MAX_WAVE_BUFFS   = 4,
 
+    // Below this many people the party gets one extra boon broker per wave. A
+    // boon is bought once and carried by one person, so it does not divide the
+    // way a wave does: a trio shares what eight would.
+    BG_VHR_SHORT_HANDED_PARTY = 4,
+
     // How long a dropped powerup survives before it is taken back, in ms. Waves
     // are composed the moment the previous one dies, so this deliberately
     // outlives the preparation window - the party can grab one while
@@ -334,6 +339,11 @@ public:
     void StartingEventOpenDoors() override;
 
     WorldSafeLocsEntry const* GetClosestGraveyard(Player* player) override;
+
+    // The Hold is a last stand. Dying in it is meant to be final for the round -
+    // no graveyard, no spirit guide, no timer counting down to a release that
+    // leads nowhere - which is the arena contract, not the battleground one.
+    bool UsesArenaDeathRules() const override { return true; }
     void HandleKillPlayer(Player* victim, Player* killer) override;
     void HandlePlayerResurrect(Player* player) override;
     void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet) override;

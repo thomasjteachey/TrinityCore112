@@ -934,7 +934,15 @@ void BattlegroundVHR::SpawnWaveRewardBuffs()
     // that never talks to him fills his slots; once all
     // BG_VHR_CREATURE_BOON_BROKER_MAX are standing no more come until one is
     // used.
-    uint32 const brokersWanted = wanted + _bonusBrokersPerWave;
+    // A short-handed party gets one more.
+    //
+    // The wave scales to the party, but a boon does not: it is bought once and
+    // carried by one person, so three people share the same number of offers
+    // that eight would and each fight is proportionally thinner. The extra
+    // broker is per wave, not per player, so it closes the gap without turning
+    // a duo into the best way to play.
+    uint32 const shortHandedBrokers = GetPartyStrength() < BG_VHR_SHORT_HANDED_PARTY ? 1u : 0u;
+    uint32 const brokersWanted = wanted + _bonusBrokersPerWave + shortHandedBrokers;
     for (uint32 i = 0; i < brokersWanted && brokerSlot < BG_VHR_CREATURE_BOON_BROKER_MAX; ++i)
     {
         Position spot;

@@ -311,7 +311,13 @@ void Battleground::Update(uint32 diff)
             }
             else
             {
-                _ProcessResurrect(diff);
+                // The resurrect queue is what puts a spirit guide's countdown on
+                // a dead player's screen. A battleground that dies like an arena
+                // has no spirit guide to queue for, so running it only produces a
+                // prompt that can never be answered.
+                if (!UsesArenaDeathRules())
+                    _ProcessResurrect(diff);
+
                 if (AllowsPrematureFinish() && sBattlegroundMgr->GetPrematureFinishTime() && (GetPlayersCountByTeam(ALLIANCE) < GetMinPlayersPerTeam() || GetPlayersCountByTeam(HORDE) < GetMinPlayersPerTeam()))
                     _ProcessProgress(diff);
                 else if (m_PrematureCountDown)

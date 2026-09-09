@@ -5445,15 +5445,28 @@ void Player::KillPlayer()
     ReplaceAllDynamicFlags(UNIT_DYNFLAG_NONE);
     ApplyModFlag(PLAYER_FIELD_BYTES, PLAYER_FIELD_BYTE_RELEASE_TIMER, !sMapStore.LookupEntry(GetMapId())->Instanceable() && !HasAuraType(SPELL_AURA_PREVENT_RESURRECTION));
 
+    // Somewhere that dies like an arena has no death timer at all.
+    //
+    // The six minutes exist to move a body that is in the way to a graveyard,
+    // and the reclaim delay exists to price a corpse run. Neither is a thing
+    // here: there is no graveyard to be sent to and no run to make, so all the
+    // countdown does is put a clock on a screen that is going to say the same
+    // thing when it reaches zero.
+    Battleground const* deathBattleground = GetBattleground();
+    bool const arenaDeathRules = deathBattleground && deathBattleground->UsesArenaDeathRules();
+
     // 6 minutes until repop at graveyard
-    m_deathTimer = 6 * MINUTE * IN_MILLISECONDS;
+    m_deathTimer = arenaDeathRules ? 0 : 6 * MINUTE * IN_MILLISECONDS;
 
-    UpdateCorpseReclaimDelay();                             // dependent at use SetDeathPvP() call before kill
+    if (!arenaDeathRules)
+    {
+        UpdateCorpseReclaimDelay();                         // dependent at use SetDeathPvP() call before kill
 
-    int32 corpseReclaimDelay = CalculateCorpseReclaimDelay();
+        int32 corpseReclaimDelay = CalculateCorpseReclaimDelay();
 
-    if (corpseReclaimDelay >= 0)
-        SendCorpseReclaimDelay(corpseReclaimDelay);
+        if (corpseReclaimDelay >= 0)
+            SendCorpseReclaimDelay(corpseReclaimDelay);
+    }
 
     // don't create corpse at this moment, player might be falling
 
