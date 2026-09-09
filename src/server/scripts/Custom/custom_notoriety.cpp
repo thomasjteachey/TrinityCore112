@@ -485,6 +485,17 @@ namespace Notoriety
         if (!s_enabled || !player)
             return false;
 
+        // People only. Delivering a contract is a long walk to a fence summoned
+        // for the holder, and a bot has no route to one - the errand scan looks
+        // for NPCs inside 200 yards and the meeting is set between 400 and 900
+        // away, so a bot that takes one simply stops. Keladan took the first one
+        // ever written and stood in Kargath holding it.
+        //
+        // The bot side refuses the quest as well; this is the backstop, so a
+        // contract can never exist without somebody who can carry it.
+        if (BarracksHardcore::IsPlayerbot(player))
+            return false;
+
         uint32 const stacks = Bounty::GetStacks(player);
 
         // Seeded from the player and the moment, so a re-roll lands somewhere

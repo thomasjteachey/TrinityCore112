@@ -1404,6 +1404,23 @@ namespace
         return Trinity::XP::GetColorCode(bot->GetLevel(), uint8(questLevel)) == XP_GRAY;
     }
 
+    // A quest that only a PERSON can finish.
+    //
+    // The notoriety contract is the whole list. Grix hands it to anybody who
+    // stands in front of him, but delivering it is a walk of four hundred to
+    // nine hundred yards to a fence summoned for the holder - and a bot has no
+    // route to one, because the errand scan only looks for NPCs inside two
+    // hundred yards and nothing else ever points it at the meeting. Keladan took
+    // the first contract ever written on this realm and then stood in Kargath
+    // holding it, because there was nothing else it could do with it.
+    bool IsPersonOnlyQuest(Quest const* quest)
+    {
+        static uint32 const contractQuestId = uint32(std::max(0,
+            sConfigMgr->GetIntDefault("Centurion.Notoriety.QuestId", 60001)));
+
+        return contractQuestId && quest && quest->GetQuestId() == contractQuestId;
+    }
+
     // Quests a bot has outlevelled, and the items they were keeping alive.
     //
     // Nothing has ever removed a quest from a bot's log. Acceptance is
@@ -5078,7 +5095,8 @@ namespace
             // no maximum, so without this the maintenance pass and the quest
             // giver would fight: abandoned on one tick, taken straight back on
             // the next walk past the same NPC.
-            if (!quest || IsSingleClassQuest(quest) || IsQuestGreyFor(bot, quest))
+            if (!quest || IsSingleClassQuest(quest) || IsQuestGreyFor(bot, quest) ||
+                IsPersonOnlyQuest(quest))
                 continue;
 
             if (bot->CanTakeQuest(quest, false) && bot->CanAddQuest(quest, false))
@@ -5264,6 +5282,7 @@ namespace
                 for (uint32 questId : sObjectMgr->GetCreatureQuestRelations(npc->GetEntry()))
                     if (Quest const* quest = sObjectMgr->GetQuestTemplate(questId))
                         if (!IsSingleClassQuest(quest) && !IsQuestGreyFor(bot, quest) &&
+                            !IsPersonOnlyQuest(quest) &&
                             bot->CanTakeQuest(quest, false) && bot->CanAddQuest(quest, false))
                             return beginErrand(npc, PveErrandKind::QuestGiver);
             }
