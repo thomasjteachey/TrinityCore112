@@ -10244,12 +10244,22 @@ namespace
     };
     std::unordered_map<uint64, DeployedHunter> g_DeployedHunters;
 
-    // Conscript one bot into the zone a bounty is standing in, at the top of that
-    // zone's band, remembering where it came from.
+    // Conscript one bot into the zone a bounty is standing in, AT THE BOUNTY'S
+    // OWN LEVEL, remembering where it came from.
+    //
+    // The level comes from the person being hunted, not from the zone's band.
+    // A contract is drawn on a PERSON: the zone they happen to be standing in
+    // decides where the hunters go and nothing else. Levelling to the band top
+    // meant a level 31 with a contract in Arathi - band 30 to 40 - was hunted by
+    // level 40s, which is not a hunt, and a level 41 in the same zone was hunted
+    // by bots a level under them.
+    //
+    // Derived inside rather than passed in, so no caller can hand it a level
+    // that belongs to something other than the target.
     //
     // ResetManagedBotToZoneBand does the whole job - re-level, re-learn, retalent,
     // and the teleport into a grind spot in the zone - so the levy IS the port.
-    bool LevyBotInto(Player* bot, Player* human, uint8 bandTop)
+    bool LevyBotInto(Player* bot, Player* human)
     {
         if (!bot || !human)
             return false;
@@ -10285,7 +10295,7 @@ namespace
         // level with nothing holding the receipt: permanent, and silent.
         g_LeviedBots[botRawGuid] = record;
 
-        playerbot::ResetManagedBotToZoneBand(bot, targetZone, bandTop);
+        playerbot::ResetManagedBotToZoneBand(bot, targetZone, human->GetLevel());
 
         // It was re-levelled either way; it just did not arrive. Keep the record
         // so ReturnLeviedBots takes it home, and tell the caller not to treat it
@@ -10301,7 +10311,7 @@ namespace
 
         TC_LOG_INFO("playerbots.pve",
             "Levy: {} raised from zone {} (level {}) to level {} in zone {} for the bounty on {}.",
-            bot->GetName(), record.HomeZoneId, uint32(record.HomeLevel), uint32(bandTop),
+            bot->GetName(), record.HomeZoneId, uint32(record.HomeLevel), uint32(human->GetLevel()),
             targetZone, human->GetName());
         return true;
     }
@@ -10741,9 +10751,16 @@ namespace
             uint32 const wait = Bounty::RelentlessIntervalSeconds(spot.Bounty);
             s_nextHuntAt[humanGuid] = now + std::chrono::seconds(wait);
 
-            uint8 levyBottom = 0;
-            uint8 levyTop = 0;
-            bool const zoneBanded = playerbot::GetZoneLevelBand(human->GetZoneId(), levyBottom, levyTop);
+            // The band a hunter has to be inside to be a fair fight for THIS
+            // person - centred on the bounty, not on the zone. The bounds are
+            // the fleet's own engagement rule: a bot will open on somebody up to
+            // ProactiveMaxLevelsAbove over it and will not pick on somebody more
+            // than ProactiveMaxLevelsBelow under it, so those same two numbers
+            // describe the levels from which this target can be fought at all.
+            uint32 const bountyLevel = human->GetLevel();
+            uint32 const fairFloor = bountyLevel > g_PveConfig.proactiveMaxLevelsAbove
+                ? bountyLevel - g_PveConfig.proactiveMaxLevelsAbove : 1u;
+            uint32 const fairCeiling = bountyLevel + g_PveConfig.proactiveMaxLevelsBelow;
 
             for (Player* chosen : sending)
             {
@@ -10751,15 +10768,21 @@ namespace
                 // needs no teleport queued - ResetManagedBotToZoneBand has already
                 // put it in the zone at a level that can survive there.
                 //
-                // This asks the band question a second time, so it has to answer
-                // the exemption a second time too: a veteran or a PvP-only bot
-                // above the band was selected precisely BECAUSE it is above the
-                // band, and is ported like anybody else.
-                bool const outOfBand = zoneBanded && !KeepsItsOwnLevel(chosen) &&
-                    (chosen->GetLevel() < levyBottom || chosen->GetLevel() > levyTop);
-                if (outOfBand)
+                // Measured against the BOUNTY, not the zone. A contract is drawn
+                // on a person; the zone only decides where the hunters go. Asking
+                // the zone's band here meant a level 40 hunting a level 31 in
+                // Arathi counted as in-band and was sent as-is, which is not a
+                // hunt - and the levy that did fire raised bots to the band top
+                // rather than to the target.
+                //
+                // The exemption is answered a second time here for the same
+                // reason it always was: a veteran or a PvP-only bot keeps its own
+                // level by design and is ported like anybody else.
+                bool const mismatched = !KeepsItsOwnLevel(chosen) &&
+                    (uint32(chosen->GetLevel()) < fairFloor || uint32(chosen->GetLevel()) > fairCeiling);
+                if (mismatched)
                 {
-                    if (LevyBotInto(chosen, human, levyTop))
+                    if (LevyBotInto(chosen, human))
                     {
                         chosen->SetBountyPursuit(spot.Bounty, 90 * IN_MILLISECONDS);
                         continue;
