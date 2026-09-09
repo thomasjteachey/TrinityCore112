@@ -1642,6 +1642,13 @@ private:
 
         auto detachFromMatch = [bg](Player* player)
         {
+            // Whichever way out this player takes, they leave the fight behind.
+            // RemovePlayerAtLeave does this too, but the branch below exists for
+            // exactly the case where the match object is already gone - and a
+            // player returning to the lobby still blinded is how the realm was
+            // crashed once already.
+            Battleground::ClearCombatControl(player);
+
             if (bg && bg->IsPlayerInBattleground(player->GetGUID()))
                 bg->RemovePlayerAtLeave(player->GetGUID(), false, true);
             else

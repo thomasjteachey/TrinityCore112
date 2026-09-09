@@ -1056,6 +1056,51 @@ void Battleground::BlockMovement(Player* player)
     player->SetClientControl(player, false);
 }
 
+// Crowd control does not follow you out of the gate.
+//
+// Nothing was taking it off. RemoveArenaAuras is keyed on the DESTINATION map,
+// so it runs on the way IN, and it only strips POSITIVE auras - a Blind or a
+// Fear is neither. So the last second of a match could put a player into the
+// world, or back into the custom lobby, still under someone else's control on a
+// map that person is no longer on.
+//
+// That was not merely untidy. A confuse installs a movement generator which
+// caches a PathGenerator, and a teleport does not clear it, so the player
+// carried a pointer to the arena's navmesh out with him and the arena's
+// teardown then freed it. PathGenerator re-resolves across a map change now, so
+// the dangling pointer can no longer be dereferenced - but the effect should
+// never have crossed the gate at all, which is what this fixes.
+//
+// Removed by AURA TYPE rather than by mechanic on purpose: the aura type is what
+// installs the movement generator, while Mechanic is spell data this realm
+// rebuilds and can be wrong. Blind is Mechanic 2, but what matters about it is
+// its second effect, SPELL_AURA_MOD_CONFUSE.
+void Battleground::ClearCombatControl(Player* player)
+{
+    if (!player)
+        return;
+
+    player->RemoveAurasByType(SPELL_AURA_MOD_CONFUSE);
+    player->RemoveAurasByType(SPELL_AURA_MOD_FEAR);
+    player->RemoveAurasByType(SPELL_AURA_MOD_STUN);
+    player->RemoveAurasByType(SPELL_AURA_MOD_ROOT);
+    player->RemoveAurasByType(SPELL_AURA_MOD_CHARM);
+    player->RemoveAurasByType(SPELL_AURA_MOD_POSSESS);
+    player->RemoveAurasByType(SPELL_AURA_MOD_PACIFY);
+    player->RemoveAurasByType(SPELL_AURA_MOD_SILENCE);
+    player->RemoveAurasByType(SPELL_AURA_MOD_PACIFY_SILENCE);
+
+    // Then tear the states down explicitly. An aura is not the only way into one
+    // of these, the movement generator is what actually holds the stale path,
+    // and SetControlled re-checks for a remaining aura of that kind before it
+    // clears - so with the auras gone above, this is the part that guarantees
+    // nothing is left running.
+    player->SetControlled(false, UNIT_STATE_CONFUSED);
+    player->SetControlled(false, UNIT_STATE_FLEEING);
+    player->SetControlled(false, UNIT_STATE_STUNNED);
+    player->SetControlled(false, UNIT_STATE_ROOT);
+}
+
 void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool SendPacket)
 {
     uint32 team = GetPlayerTeam(guid);
@@ -1091,6 +1136,8 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
             player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
 
         player->RemoveAurasByType(SPELL_AURA_MOUNTED);
+
+        ClearCombatControl(player);
 
         if (!player->IsAlive())                              // resurrect on exit
         {

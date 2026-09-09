@@ -404,6 +404,11 @@ class TC_GAME_API Battleground
         // though it is not an arena, so the question is asked by name instead of
         // being spelled isArena() at each of the places that care.
         virtual bool UsesArenaDeathRules() const { return isArena(); }
+
+        // Take every form of combat control off a player who is leaving a match.
+        // Static because not every exit has a Battleground to call it on: a
+        // custom-lobby return can happen after the match object is already gone.
+        static void ClearCombatControl(Player* player);
         bool isBattleground() const { return !m_IsArena; }
         bool isRated() const        { return m_IsRated; }
         bool IsCustomGame() const   { return m_IsCustomGame; }
