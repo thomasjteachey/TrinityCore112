@@ -50,6 +50,10 @@ public:
     // the PvP decision engine and the PvE manager's direct-cast floors need the
     // same answer, and two copies of a rule like this drift.
     static bool IsCastWastedOnTargetImmunity(Unit const* caster, Unit const* target, SpellInfo const* spellInfo);
+
+    // Get a bot off its mount COMPLETELY - flag, model, auras and speed.
+    // Unit::Dismount alone does not: see the definition.
+    static void ForceDismount(Player* player);
     static void RegisterCasterSpellCooldown(Player const* player, uint32 spellId, std::chrono::seconds cooldown);
     static void RegisterCasterSpellCooldown(Player const* player, uint32 spellId, std::chrono::milliseconds cooldown);
     static std::string GetLastExecutionStatus(Player const* player);

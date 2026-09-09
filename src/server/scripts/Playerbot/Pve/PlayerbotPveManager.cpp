@@ -10400,8 +10400,12 @@ namespace
                 playerbot::LockedErase(g_PveBotStateByGuid, rescuer->GetGUID().GetRawValue());
                 playerbot::PvpCore::SetPveCombatEngagement(rescuer->GetGUID(), false);
 
-                if (rescuer->IsMounted())
-                    rescuer->Dismount();
+                // The complete dismount, not Unit::Dismount - and unconditionally,
+                // because the broken state this repairs already reads IsMounted()
+                // as false. Sixteen lines below this the rescuer is handed a
+                // bounty pursuit and told to Attack, so arriving with mounted
+                // speed and a mount aura still on it is exactly the bug.
+                playerbot::PvpClassActions::ForceDismount(rescuer);
                 if (MotionMaster* motionMaster = rescuer->GetMotionMaster())
                     motionMaster->Clear();
                 rescuer->StopMoving();
@@ -12002,8 +12006,7 @@ namespace
         // cancels its own channel on the very next step, which is exactly why no
         // cast bar was ever visible. The battleground path stops movement and
         // dismounts for the same reason.
-        if (bot->IsMounted())
-            bot->Dismount();
+        playerbot::PvpClassActions::ForceDismount(bot);
 
         playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
         if (MotionMaster* motionMaster = bot->GetMotionMaster())

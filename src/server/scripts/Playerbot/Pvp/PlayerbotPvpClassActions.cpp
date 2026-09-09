@@ -5769,6 +5769,22 @@ void PvpClassActions::RegisterWarlockCurseTargetCooldown(Player const* player, U
 // the rest. Refusing on that would delete real damage. The whole-spell test still
 // covers pure crowd control - a Fear into fear immunity has no surviving effect -
 // which is the "immune to an effect" half of this without touching mixed spells.
+// The complete dismount, reachable from outside this file.
+//
+// Unit::Dismount clears the mount flag and the model and sends the packets, and
+// that is all it does: it removes no aura and never recalls UpdateSpeed. The
+// run rate is only re-read under the flag it just cleared, so a bot dismounted
+// that way keeps the mount buff on its frame, keeps moving at mount speed, and
+// reads IsMounted() == false - which is what unlocks casting and melee for it.
+// A player watching sees something at 60% speed with a mount aura, casting.
+//
+// It is also unrecoverable, because every dismount cleanup in this layer is
+// gated on IsMounted(), which is now false. Nothing left can put it right.
+void PvpClassActions::ForceDismount(Player* player)
+{
+    ForcePlayerbotDismount(player);
+}
+
 bool PvpClassActions::IsCastWastedOnTargetImmunity(Unit const* caster, Unit const* target, SpellInfo const* spellInfo)
 {
     if (!caster || !target || !spellInfo)
