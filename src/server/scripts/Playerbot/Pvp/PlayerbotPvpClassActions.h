@@ -54,6 +54,10 @@ public:
     // Get a bot off its mount COMPLETELY - flag, model, auras and speed.
     // Unit::Dismount alone does not: see the definition.
     static void ForceDismount(Player* player);
+
+    // Dismount because the bot is now close enough to fight this target. Shared
+    // by the PvP and PvE engagement paths so both stop riding at the same moment.
+    static void DismountToFight(Player* player, Unit const* victim);
     static void RegisterCasterSpellCooldown(Player const* player, uint32 spellId, std::chrono::seconds cooldown);
     static void RegisterCasterSpellCooldown(Player const* player, uint32 spellId, std::chrono::milliseconds cooldown);
     static std::string GetLastExecutionStatus(Player const* player);

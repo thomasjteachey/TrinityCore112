@@ -5807,6 +5807,50 @@ void PvpClassActions::ForceDismount(Player* player)
     ForcePlayerbotDismount(player);
 }
 
+// Get off the mount because the target is now in reach, not because it exists.
+//
+// Unit::Attack refuses outright for a mounted player, so an attack order from a
+// mounted bot silently does nothing. It never lands a swing, so it never enters
+// combat, so the mount-state directive that would have dismounted it never arms
+// either - the bot sits mounted next to something it means to kill. A cast has a
+// way out of that through the pre-cast rule in Execute; a swing had none.
+//
+// Reach is asked the way the bot intends to fight. A hunter that can actually
+// shoot - ranged weapon equipped, and ammunition for it if its weapon needs any -
+// is in reach at Auto Shot range; everybody else is in reach at melee range. One
+// constant would have been wrong for one of them.
+//
+// Deliberately NOT "has a target": riding a target down is the point, and it
+// should happen at mount speed. This is the same rule the battleground objective
+// path uses, which dismounts at the banner rather than when it sets off.
+void PvpClassActions::DismountToFight(Player* player, Unit const* victim)
+{
+    if (!player || !victim || !player->IsMounted())
+        return;
+
+    bool inReach = player->IsWithinMeleeRange(victim);
+
+    if (!inReach && player->GetClass() == CLASS_HUNTER && player->HasSpell(75) &&
+        player->GetWeaponForAttack(RANGED_ATTACK, true))
+    {
+        uint32 const ammoId = player->GetUInt32Value(PLAYER_AMMO_ID);
+        bool const ammoReady = !ammoId || player->GetItemCount(ammoId) > 0;
+        if (ammoReady)
+            if (SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(75))
+            {
+                float const shootReach = player->GetSpellMaxRangeForTarget(victim, autoShotInfo);
+                inReach = shootReach > 0.0f && player->IsWithinDistInMap(victim, shootReach);
+            }
+    }
+
+    if (!inReach)
+        return;
+
+    TC_LOG_DEBUG("playerbots.pvp.classspell", "Bot {} gets off its mount to fight {}.",
+        player->GetName(), victim->GetName());
+    ForcePlayerbotDismount(player);
+}
+
 bool PvpClassActions::IsCastWastedOnTargetImmunity(Unit const* caster, Unit const* target, SpellInfo const* spellInfo)
 {
     if (!caster || !target || !spellInfo)

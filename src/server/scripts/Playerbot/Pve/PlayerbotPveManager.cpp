@@ -12263,25 +12263,7 @@ namespace
         // the way the bot intends to fight - melee range for a swing, the real
         // Auto Shot range for a hunter holding its firing line, rather than one
         // constant that would be wrong for one of them.
-        if (bot->IsMounted())
-        {
-            bool withinAttackReach = bot->IsWithinMeleeRange(victim);
-            if (!withinAttackReach && !wantsMeleeSwings)
-            {
-                SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(75);
-                float const shootReach = autoShotInfo
-                    ? bot->GetSpellMaxRangeForTarget(victim, autoShotInfo)
-                    : 30.0f;
-                withinAttackReach = shootReach > 0.0f && bot->IsWithinDistInMap(victim, shootReach);
-            }
-
-            if (withinAttackReach)
-            {
-                TC_LOG_DEBUG("playerbots.pve", "Bot {} gets off its mount to fight {}.",
-                    bot->GetName(), victim->GetName());
-                playerbot::PvpClassActions::ForceDismount(bot);
-            }
-        }
+        playerbot::PvpClassActions::DismountToFight(bot, victim);
 
         if ((bot->GetVictim() != victim || meleeStateWrong) && !holdSwingsForOpener)
             bot->Attack(victim, wantsMeleeSwings);

@@ -4682,10 +4682,22 @@ namespace playerbot
             return MoveTowardUnit(player, target, playerbot::PLAYERBOT_MOUNT_ENEMY_AWARENESS_RANGE) || player->isMoving();
         }
 
-        // Inside the same awareness envelope that suppresses mounting, switch
-        // to combat posture for casts, melee attacks, and normal positioning.
-        if (player->IsMounted())
-            ForcePlayerbotDismount(player);
+        // Inside the envelope, stay mounted until the target is actually in
+        // reach - the same rule the PvE tick uses, and now literally the same
+        // function.
+        //
+        // This used to dismount the moment the bot came inside a hundred yards,
+        // which meant it walked the last hundred yards of every engagement. The
+        // guard above still keeps it riding beyond that range, so nothing about
+        // long-distance travel changes; what changes is that the last stretch is
+        // ridden too. The remount loop the guard above warns about cannot start
+        // here, because the mount selector is already suppressed by an attackable
+        // enemy player inside this same envelope.
+        //
+        // Safe to leave the bot mounted while it closes because positioning does
+        // not run through Attack(): DriveCombatPositioning below moves the bot on
+        // its own, so a refused attack order costs nothing but the swing itself.
+        playerbot::PvpClassActions::DismountToFight(player, target);
 
         // Playerbots run tactical/lifecycle engagement every fast tick. That
         // loop can select the same enemy immediately after a class gap-closer
