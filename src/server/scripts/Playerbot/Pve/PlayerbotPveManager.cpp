@@ -9119,6 +9119,13 @@ namespace
     // price would eventually drift into refusing every listing bots themselves post.
     //
     // The figure covers proto->BuyCount units, exactly as a vendor's price does.
+    // What the fleet thinks an item is worth, before any market is consulted.
+    //
+    // Three sources in descending order of trust: the item's own BuyPrice, its
+    // SellPrice marked up, and failing both a curve on item level and quality.
+    constexpr double kEndgameEpicPriceFactor = 10.0;
+    constexpr double kEndgameLegendaryPriceFactor = 100.0;
+
     double ComputeItemFaceValue(ItemTemplate const* proto)
     {
         double value = double(proto->BuyPrice);
@@ -9133,6 +9140,37 @@ namespace
                 double const quality = proto->Quality ? double(proto->Quality) : 1.0;
                 value = level * quality * double(AuctionBotSeller::GetBuyModifier(proto)) * level / divisor;
             }
+        }
+
+        // End-game gear is not on the same curve as everything else.
+        //
+        // Every source above is continuous in item level: a level 60 epic prices
+        // out as a bit more than a level 58 blue. That is fine for the levelling
+        // market these numbers mostly serve and wrong at the top, where the item
+        // is the thing an entire raid was run for and the supply is a handful a
+        // week rather than whatever dropped on the way past. Left alone the fleet
+        // opens those markets at levelling-gear prices and then undercuts itself
+        // down from there.
+        //
+        // Applied to the RESULT rather than inside one of the branches, so it
+        // holds whether the price came from BuyPrice, SellPrice or the item-level
+        // curve - most epics carry a real BuyPrice and never reach the curve at
+        // all.
+        //
+        // And applied HERE rather than at the listing site so the sane-asking
+        // ceiling moves with it. That ceiling is computed from face value too, so
+        // raising only the opening ask would have it clamped straight back down
+        // the first time a bot undercut anybody.
+        //
+        // Sell side only: both callers of this are the asking price and its
+        // ceiling. What a bot is willing to PAY is decided elsewhere, by weighing
+        // an item against its budget, so this cannot make the fleet overpay.
+        if (proto->RequiredLevel >= 60)
+        {
+            if (proto->Quality == ITEM_QUALITY_LEGENDARY)
+                value *= kEndgameLegendaryPriceFactor;
+            else if (proto->Quality == ITEM_QUALITY_EPIC)
+                value *= kEndgameEpicPriceFactor;
         }
 
         return value;
