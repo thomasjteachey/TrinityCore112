@@ -4,18 +4,70 @@
 -- drifting playerbots are only ever sent to people standing inside their zone's
 -- range, and a bot that lands there is re-levelled to fit it. That is invisible
 -- from inside the game. Somebody at 29 in Arathi Highlands - band 30 to 40 -
--- sees an empty zone and no way to find out why, which is exactly how this was
--- reported.
+-- sees an empty zone and no way to find out why.
 --
--- So the band goes on the map, next to the zone name, coloured by where the
--- reader stands relative to it, and it says in as many words whether drifters
--- will follow them there.
+-- Bands are mirrored from kClassicZoneBands in PlayerbotPveManager.cpp.
 --
--- Bands are mirrored from kClassicZoneBands in PlayerbotPveManager.cpp. Keyed by
--- name rather than by area id because the world map hands out a NAME: the
--- continent view's hover label is set from UpdateMapHighlight, which returns the
--- zone's name and nothing else. Single-locale realm, so a name is a safe key.
-local BANDS = {
+-- TWO keys, because the map answers two different questions and neither one
+-- alone covers it.
+--
+-- The first cut of this read WorldMapFrameAreaLabel and nothing else, and
+-- showed nothing at all in the ordinary case. That label is written by
+-- WorldMapButton_OnUpdate from UpdateMapHighlight, which only returns a name
+-- while the cursor is over a zone on a CONTINENT map - so opening the map in
+-- your own zone, which is what pressing M does, leaves it empty and there was
+-- nothing to look up.
+--
+-- So the zone the map is actually SHOWING comes from GetMapInfo(), which
+-- returns the map's art folder name and is stable and English. Those names are
+-- taken from WorldMapArea.dbc and carry Blizzard's own misspellings - Aszhara,
+-- Hilsbrad - which are correct here precisely because they are what the client
+-- returns.
+local BY_MAP_FILE = {
+	DunMorogh           = { 1, 10 },
+	Elwynn              = { 1, 10 },
+	Teldrassil          = { 1, 10 },
+	Tirisfal            = { 1, 10 },
+	Durotar             = { 1, 10 },
+	Mulgore             = { 1, 10 },
+	Westfall            = { 10, 20 },
+	LochModan           = { 10, 20 },
+	Darkshore           = { 10, 20 },
+	Silverpine          = { 10, 20 },
+	Barrens             = { 10, 25 },
+	Redridge            = { 15, 25 },
+	StonetalonMountains = { 15, 27 },
+	Duskwood            = { 18, 30 },
+	Ashenvale           = { 18, 30 },
+	Hilsbrad            = { 20, 30 },
+	Wetlands            = { 20, 30 },
+	ThousandNeedles     = { 24, 35 },
+	Alterac             = { 30, 40 },
+	Arathi              = { 30, 40 },
+	Desolace            = { 30, 40 },
+	Stranglethorn       = { 30, 45 },
+	Badlands            = { 35, 45 },
+	SwampOfSorrows      = { 35, 45 },
+	Dustwallow          = { 35, 45 },
+	Tanaris             = { 40, 50 },
+	Feralas             = { 40, 50 },
+	SearingGorge        = { 43, 50 },
+	Hinterlands         = { 45, 50 },
+	Aszhara             = { 45, 55 },
+	BlastedLands        = { 45, 55 },
+	Felwood             = { 48, 55 },
+	UngoroCrater        = { 48, 55 },
+	BurningSteppes      = { 50, 58 },
+	WesternPlaguelands  = { 51, 58 },
+	EasternPlaguelands  = { 53, 60 },
+	Winterspring        = { 55, 60 },
+	DeadwindPass        = { 55, 60 },
+	Silithus            = { 55, 60 },
+}
+
+-- The second key: the displayed zone NAME, for the continent view, where the
+-- cursor picks a zone the map is not otherwise showing.
+local BY_ZONE_NAME = {
 	["Dun Morogh"]           = { 1, 10 },
 	["Elwynn Forest"]        = { 1, 10 },
 	["Teldrassil"]           = { 1, 10 },
@@ -57,15 +109,45 @@ local BANDS = {
 	["Silithus"]             = { 55, 60 },
 }
 
--- The label sits under the map's own zone name, which is a big centred
--- GameFontNormalHuge. Matching its anchor rather than picking a corner means it
--- follows the name whichever view the map is in.
+-- Anchoring is a fallback chain rather than one global, because anything named
+-- here that turned out not to exist would throw at load - and with script errors
+-- off, which is the default, a dead addon looks exactly like a working one that
+-- has nothing to say.
+local anchor = WorldMapFrameAreaLabel or WorldMapDetailFrame or WorldMapFrame
 local label = WorldMapFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-label:SetPoint("TOP", WorldMapFrameAreaLabel, "BOTTOM", 0, -2)
+if anchor == WorldMapFrameAreaLabel then
+	label:SetPoint("TOP", anchor, "BOTTOM", 0, -2)
+else
+	label:SetPoint("TOP", anchor, "TOP", 0, -8)
+end
 label:SetJustifyH("CENTER")
 
-local function Paint(zoneName)
-	local band = zoneName and BANDS[zoneName]
+local function BandForShownMap()
+	-- Hovering a zone on a continent map wins: it is the zone the reader is
+	-- pointing at, which is a more specific answer than the map as a whole.
+	if WorldMapFrameAreaLabel then
+		local hovered = WorldMapFrameAreaLabel:GetText()
+		if hovered and hovered ~= "" then
+			local band = BY_ZONE_NAME[hovered]
+			if band then
+				return band, hovered
+			end
+			-- A zone we have no band for - a city, an instance, Moonglade.
+			return nil, hovered
+		end
+	end
+
+	-- Otherwise, whatever zone the map itself is displaying.
+	local mapFile = GetMapInfo()
+	if mapFile then
+		return BY_MAP_FILE[mapFile], nil
+	end
+
+	return nil, nil
+end
+
+local function Paint()
+	local band, hoveredName = BandForShownMap()
 	if not band then
 		label:SetText("")
 		return
@@ -75,50 +157,38 @@ local function Paint(zoneName)
 	local level = UnitLevel("player")
 
 	-- Coloured by where the reader actually stands, so the map answers "can I
-	-- be here" at a glance rather than making them do the arithmetic. The three
-	-- colours are the client's own difficulty palette, so they read the way
-	-- quest and mob colours already do.
+	-- be here" at a glance instead of making them do the arithmetic.
 	local colour, note
 	if level < bottom then
-		colour = "|cffff4040"      -- above you
+		colour = "|cffff4040"
 		note = "too high for you"
 	elseif level > top then
-		colour = "|cff808080"      -- below you
+		colour = "|cff808080"
 		note = "below you"
 	else
-		colour = "|cff40ff40"      -- yours
+		colour = "|cff40ff40"
 		note = "drifters follow you here"
 	end
 
-	label:SetText(string.format("%sLevels %d-%d|r  |cff909090(%s)|r", colour, bottom, top, note))
+	local prefix = hoveredName and (hoveredName .. "  ") or ""
+	label:SetText(string.format("%s%sLevels %d-%d|r  |cff909090(%s)|r",
+		prefix, colour, bottom, top, note))
 end
 
--- Which zone the map is actually showing.
---
--- Two cases, and the map does not distinguish them for us. On a CONTINENT map
--- the reader hovers a zone and WorldMapFrameAreaLabel carries that zone's name;
--- on a ZONE map nothing is hovered and the label carries the zone the map is
--- already showing. Reading the label covers both without caring which is which,
--- and it updates as the cursor moves for free.
-local function Refresh()
-	Paint(WorldMapFrameAreaLabel:GetText())
-end
-
--- Polled rather than hooked. WorldMapFrameAreaLabel is written by
--- WorldMapButton's OnUpdate through a plain SetText, so there is no event to
--- listen for, and hooking SetText on the label would fire from inside the very
--- call we would then be reacting to. Ten times a second is far below what the
--- cursor can do and costs one table lookup.
+-- Polled rather than hooked. The hover label is written by WorldMapButton's
+-- OnUpdate through a plain SetText and the displayed map changes with no event
+-- of its own on 3.3.5, so there is nothing to listen for. The ticker is
+-- parented to the map, so it only runs while the map is open.
 local ticker = CreateFrame("Frame", nil, WorldMapFrame)
 local accum = 0
 ticker:SetScript("OnUpdate", function()
-	accum = accum + arg1
+	accum = accum + (arg1 or 0)
 	if accum < 0.1 then
 		return
 	end
 	accum = 0
-	Refresh()
+	Paint()
 end)
 
-WorldMapFrame:HookScript("OnShow", Refresh)
+WorldMapFrame:HookScript("OnShow", Paint)
 WorldMapFrame:HookScript("OnHide", function() label:SetText("") end)
