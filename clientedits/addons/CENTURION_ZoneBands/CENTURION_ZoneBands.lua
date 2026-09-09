@@ -109,16 +109,26 @@ local BY_ZONE_NAME = {
 	["Silithus"]             = { 55, 60 },
 }
 
--- Anchoring is a fallback chain rather than one global, because anything named
--- here that turned out not to exist would throw at load - and with script errors
--- off, which is the default, a dead addon looks exactly like a working one that
--- has nothing to say.
-local anchor = WorldMapFrameAreaLabel or WorldMapDetailFrame or WorldMapFrame
-local label = WorldMapFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-if anchor == WorldMapFrameAreaLabel then
-	label:SetPoint("TOP", anchor, "BOTTOM", 0, -2)
+-- The PARENT matters more than the anchor here, and getting it wrong is
+-- invisible rather than broken.
+--
+-- A FontString created on WorldMapFrame draws at WorldMapFrame's own frame
+-- level, and WorldMapDetailFrame - the map art itself - is a CHILD of it, so it
+-- draws on top. The text was rendering the whole time, underneath the map.
+-- WorldMapFrameAreaFrame is declared inside WorldMapButton, well after the
+-- detail frame, so anything parented there sits above the tiles; it is also
+-- where Blizzard puts its own zone label, which is the same problem solved the
+-- same way.
+--
+-- Fallback chain because anything named here that turned out not to exist would
+-- throw at load, and with script errors off - which is the default - a dead
+-- addon looks exactly like a working one that has nothing to say.
+local host = WorldMapFrameAreaFrame or WorldMapButton or WorldMapFrame
+local label = host:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+if WorldMapFrameAreaLabel then
+	label:SetPoint("TOP", WorldMapFrameAreaLabel, "BOTTOM", 0, -2)
 else
-	label:SetPoint("TOP", anchor, "TOP", 0, -8)
+	label:SetPoint("TOP", host, "TOP", 0, -24)
 end
 label:SetJustifyH("CENTER")
 
