@@ -43,8 +43,10 @@
 #include "custom_barracks_hardcore.h"
 #include "Playerbot/Pve/PlayerbotPveManager.h"
 
+#include <atomic>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace
 {
@@ -79,6 +81,31 @@ namespace
 
     std::mutex g_safeLock;
     std::unordered_map<uint64, SafeSpot> g_lastSafeSpot;
+
+    // Players who crossed into a refused zone while ON A TAXI, to be settled up
+    // the moment they land.
+    //
+    // The counter is read on every player tick and the set only under the lock,
+    // so the overwhelmingly common case - nobody mid-flight anywhere on the
+    // realm - costs one relaxed atomic load per player and no contention.
+    std::unordered_set<uint64> g_pendingAfterFlight;
+    std::atomic<uint32> g_pendingCount{ 0 };
+
+    void MarkPendingAfterFlight(Player const* player)
+    {
+        std::lock_guard<std::mutex> guard(g_safeLock);
+        if (g_pendingAfterFlight.insert(player->GetGUID().GetRawValue()).second)
+            g_pendingCount.store(uint32(g_pendingAfterFlight.size()), std::memory_order_relaxed);
+    }
+
+    bool TakePendingAfterFlight(Player const* player)
+    {
+        std::lock_guard<std::mutex> guard(g_safeLock);
+        if (!g_pendingAfterFlight.erase(player->GetGUID().GetRawValue()))
+            return false;
+        g_pendingCount.store(uint32(g_pendingAfterFlight.size()), std::memory_order_relaxed);
+        return true;
+    }
 
     bool GateEnabled()
     {
@@ -147,6 +174,38 @@ class warmode_zone_gate : public PlayerScript
 public:
     warmode_zone_gate() : PlayerScript("warmode_zone_gate") { }
 
+    // Settle up with anyone who was refused a zone while airborne.
+    //
+    // Deliberately not done at the moment of refusal: see the taxi note in
+    // OnUpdateZone. The flight is allowed to finish and the rule is applied to
+    // where it actually put them, which is also the only position that is safe
+    // to teleport from.
+    void OnUpdate(Player* player, uint32 /*diff*/) override
+    {
+        if (!g_pendingCount.load(std::memory_order_relaxed))
+            return;
+
+        if (!player || !player->IsInWorld() || player->IsInFlight())
+            return;
+
+        if (!TakePendingAfterFlight(player))
+            return;
+
+        if (!GateEnabled() || !player->IsAlive() || player->IsGameMaster())
+            return;
+
+        if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
+            return;
+
+        if (!BarracksHardcore::IsWarModeOptedIn(player) || !ZoneIsBeneath(player, player->GetZoneId()))
+        {
+            RememberSafeSpot(player);
+            return;
+        }
+
+        SendHome(player);
+    }
+
     void OnUpdateZone(Player* player, uint32 newZone, uint32 /*newArea*/) override
     {
         if (!GateEnabled() || !player || !player->IsInWorld())
@@ -161,6 +220,12 @@ public:
         if (player->IsGameMaster())
             return;
 
+        // Never act on somebody the core is already moving. A second teleport
+        // on top of one in flight is how the map code walks into RemoveFromGrid's
+        // IsInGrid assert.
+        if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
+            return;
+
         // Instances, battlegrounds and arenas are not the open world, and the
         // band table has no entry for them anyway.
         Map const* map = player->GetMap();
@@ -172,12 +237,48 @@ public:
 
         // IsWarModeOptedIn already answers false for a bot and for anyone with
         // the system switched off, so this is the whole gate.
-        if (!BarracksHardcore::IsWarModeOptedIn(player) || !ZoneIsBeneath(player, newZone))
+        bool const refused = BarracksHardcore::IsWarModeOptedIn(player) && ZoneIsBeneath(player, newZone);
+
+        // A taxi is not a journey the passenger is steering.
+        //
+        // The route was bought at the other end and cannot be altered in the
+        // air, so a zone crossed on the way is not a destination anybody chose -
+        // and TeleportTo during a flight does not merely redirect it, it ENDS
+        // it: the rider is dropped on foot wherever the bounce lands, mount
+        // gone, at walking speed, halfway to somewhere they paid to reach.
+        // Let the flight finish and apply the rule to where it actually put
+        // them. A mid-air position is also useless as a bounce target, so no
+        // safe spot is recorded while airborne either.
+        if (player->IsInFlight())
+        {
+            if (refused)
+                MarkPendingAfterFlight(player);
+            return;
+        }
+
+        if (!refused)
         {
             RememberSafeSpot(player);
             return;
         }
 
+        SendHome(player);
+    }
+
+    void OnLogout(Player* player) override
+    {
+        if (!player)
+            return;
+
+        TakePendingAfterFlight(player);
+
+        std::lock_guard<std::mutex> guard(g_safeLock);
+        g_lastSafeSpot.erase(player->GetGUID().GetRawValue());
+    }
+
+private:
+    static void SendHome(Player* player)
+    {
         SafeSpot spot;
         bool haveSpot = false;
         {
@@ -224,15 +325,6 @@ public:
         // Nowhere they have been is open to them. A capital always is.
         handler.PSendSysMessage("Your hearth is below your level too. Sending you to Orgrimmar.");
         player->TeleportTo(kFallbackMapId, kFallbackX, kFallbackY, kFallbackZ, kFallbackO);
-    }
-
-    void OnLogout(Player* player) override
-    {
-        if (!player)
-            return;
-
-        std::lock_guard<std::mutex> guard(g_safeLock);
-        g_lastSafeSpot.erase(player->GetGUID().GetRawValue());
     }
 };
 
