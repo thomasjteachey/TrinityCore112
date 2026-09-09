@@ -5036,7 +5036,29 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // execute without unnecessarily dropping travel speed in battlegrounds.
     bool const shouldForceCombatDismount = context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy ||
         player->IsInCombat();
-    if (player->IsMounted() && !isMountSpell && shouldForceCombatDismount)
+
+    // ...and dismount for the actual reason as well: the bot wants to cast
+    // something it has already passed every other check for, and the only thing
+    // left refusing it is the mount.
+    //
+    // The combat test above is a proxy, and it is too narrow. SPELL_FAILED_NOT_-
+    // MOUNTED does not care who the target is, so a Self or Ally cast is refused
+    // exactly as hard as an offensive one - and a mounted bot out of combat would
+    // simply fail those, every tick, with nothing in the game to say why. By this
+    // line the spell has cleared range, facing and position, so reaching here IS
+    // "I am about to cast this".
+    //
+    // Mirrored from Spell::CheckCast rather than approximated, Plainsrunning
+    // carve-out included: a run mount carries no mount display, and the server
+    // DEFERS the dismount for it instead of refusing the cast, so taking it off
+    // here would drop a speed buff the cast was going to be allowed anyway. A
+    // spell flagged castable-while-mounted is likewise left alone, which is the
+    // travel-speed courtesy the comment above was reaching for.
+    bool const mountWouldRefuseThisCast = !spellInfo->IsPassive() &&
+        !spellInfo->HasAttribute(SPELL_ATTR0_CASTABLE_WHILE_MOUNTED) &&
+        !(player->GetMountDisplayId() == 0 && player->HasAura(89153));
+
+    if (player->IsMounted() && !isMountSpell && (shouldForceCombatDismount || mountWouldRefuseThisCast))
         ForcePlayerbotDismount(player);
 
     // Food/drink should immediately break when the bot transitions into active
