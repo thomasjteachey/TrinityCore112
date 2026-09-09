@@ -104,6 +104,8 @@ class TC_GAME_API PathGenerator
         WorldObject const* const _source;       // the object that is moving
         dtNavMesh const* _navMesh;              // the nav mesh
         dtNavMeshQuery const* _navMeshQuery;    // the nav mesh query used to find the path
+        uint32 _navMapId;                       // map the two pointers above were resolved for
+        uint32 _navInstanceId;                  // instance the query above was resolved for
 
         dtQueryFilter _filter;  // use single filter for all movements, update it when needed
 
@@ -111,6 +113,7 @@ class TC_GAME_API PathGenerator
         void SetEndPosition(G3D::Vector3 const& point) { _actualEndPosition = point; _endPosition = point; }
         void SetActualEndPosition(G3D::Vector3 const& point) { _actualEndPosition = point; }
         void NormalizePath();
+        void LoadNavMeshData();
 
         void Clear()
         {

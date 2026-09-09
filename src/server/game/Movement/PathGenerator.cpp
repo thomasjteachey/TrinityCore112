@@ -31,21 +31,38 @@ PathGenerator::PathGenerator(WorldObject const* owner) :
     _polyLength(0), _type(PATHFIND_BLANK), _useStraightPath(false),
     _forceDestination(false), _pointPathLimit(MAX_POINT_PATH_LENGTH), _useRaycast(false),
     _endPosition(G3D::Vector3::zero()), _source(owner), _navMesh(nullptr),
-    _navMeshQuery(nullptr)
+    _navMeshQuery(nullptr), _navMapId(0), _navInstanceId(0)
 {
     memset(_pathPolyRefs, 0, sizeof(_pathPolyRefs));
 
     TC_LOG_DEBUG("maps.mmaps", "++ PathGenerator::PathGenerator for {}", _source->GetGUID().ToString());
 
-    uint32 mapId = _source->GetMapId();
-    if (DisableMgr::IsPathfindingEnabled(mapId))
-    {
-        MMAP::MMapManager* mmap = MMAP::MMapFactory::createOrGetMMapManager();
-        _navMesh = mmap->GetNavMesh(mapId);
-        _navMeshQuery = mmap->GetNavMeshQuery(mapId, _source->GetInstanceId());
-    }
+    LoadNavMeshData();
 
     CreateFilter();
+}
+
+// Resolve the nav data for wherever the owner is NOW, and remember which map
+// and instance the answer belongs to.
+//
+// The pair is the whole point. A dtNavMesh is freed at runtime from exactly one
+// place - MapInstanced::DestroyInstance, when the last instance of an
+// instanceable map is torn down - and a raw pointer to it that outlives that
+// teardown is a use-after-free with no way to detect itself: the pointer is not
+// null, so every guard that tests for null waves it through.
+void PathGenerator::LoadNavMeshData()
+{
+    _navMesh = nullptr;
+    _navMeshQuery = nullptr;
+    _navMapId = _source->GetMapId();
+    _navInstanceId = _source->GetInstanceId();
+
+    if (DisableMgr::IsPathfindingEnabled(_navMapId))
+    {
+        MMAP::MMapManager* mmap = MMAP::MMapFactory::createOrGetMMapManager();
+        _navMesh = mmap->GetNavMesh(_navMapId);
+        _navMeshQuery = mmap->GetNavMeshQuery(_navMapId, _navInstanceId);
+    }
 }
 
 PathGenerator::~PathGenerator()
@@ -60,6 +77,31 @@ bool PathGenerator::CalculatePath(float destX, float destY, float destZ, bool fo
 
     if (!Trinity::IsValidMapCoord(destX, destY, destZ) || !Trinity::IsValidMapCoord(x, y, z))
         return false;
+
+    // This object can outlive the map it was built against.
+    //
+    // Most PathGenerators are stack locals used in the call that made them, but a
+    // crowd-control movement generator caches one across ticks, and nothing
+    // clears a confused or fleeing generator when its owner teleports - the
+    // teleport only removes EFFECT_MOTION_TYPE. So a player who is still confused
+    // when he leaves a battleground carries this object out with him, still
+    // holding the pointer to that battleground's navmesh, which
+    // MapInstanced::DestroyInstance then frees. The next wander tick dereferences
+    // it and takes the realm down.
+    //
+    // Comparing the tuple makes that impossible rather than merely unlikely: a
+    // mesh can only be freed once no unit is left on its map, so if the owner is
+    // still where the pointers were resolved, they cannot have been freed - and
+    // if the owner has moved, this re-resolves before anything is dereferenced.
+    if (_navMapId != _source->GetMapId() || _navInstanceId != _source->GetInstanceId())
+    {
+        if (_navMesh)
+            TC_LOG_WARN("maps.mmaps", "PathGenerator: {} re-resolved navmesh across a map change {}:{} -> {}:{}",
+                _source->GetGUID().ToString(), _navMapId, _navInstanceId,
+                _source->GetMapId(), _source->GetInstanceId());
+
+        LoadNavMeshData();
+    }
 
     TC_METRIC_DETAILED_EVENT("mmap_events", "CalculatePath", "");
 

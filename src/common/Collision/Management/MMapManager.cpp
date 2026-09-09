@@ -266,8 +266,11 @@ namespace MMAP
             }
         }
 
-        delete mmap;
+        // Unpublish before destroying. GetMMapData already treats a nulled slot
+        // as absent, so clearing it first means no other map-update thread can
+        // ever read a pointer to memory that is being freed.
         itr->second = nullptr;
+        delete mmap;
         TC_LOG_DEBUG("maps", "MMAP:unloadMap: Unloaded {:03}.mmap", mapId);
 
         return true;
