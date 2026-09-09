@@ -4028,11 +4028,38 @@ namespace
 
                 destination.clear();
                 result = bot->CanStoreItem(container, NULL_SLOT, destination, item, false);
-                if (result == EQUIP_ERR_OK)
+                if (result != EQUIP_ERR_OK)
+                    continue;
+
+                // CanStoreItem PREFERS the container it is handed. It does not
+                // restrict itself to it.
+                //
+                // Its helpers return EQUIP_ERR_OK to mean "no error", not
+                // "placed" - placement is signalled by the count reaching zero -
+                // so when the named container has no room the function falls
+                // through to a search of everything. That search treats the
+                // moving item's OWN slot as free, because the item is about to
+                // leave it, and hands back the very slot we are trying to empty.
+                //
+                // The bag then reported every item moved and did not get one slot
+                // emptier, the swap was refused with
+                // EQUIP_ERR_CAN_ONLY_DO_WITH_EMPTY_BAGS, and the bot tried again
+                // fifteen seconds later, forever. It only bit bots whose backpack
+                // was full, because a backpack with room answers the first ask
+                // and never reaches the fall-through.
+                bool intoSourceBag = false;
+                for (ItemPosCount const& position : destination)
+                    if (uint8(position.pos >> 8) == bag->GetSlot())
+                        intoSourceBag = true;
+
+                if (intoSourceBag)
                 {
-                    chosen = container;
-                    break;
+                    result = EQUIP_ERR_INVENTORY_FULL;
+                    continue;
                 }
+
+                chosen = container;
+                break;
             }
 
             if (result != EQUIP_ERR_OK)
@@ -6187,11 +6214,12 @@ namespace
                     // reporting an equip that never happened. The pass above has
                     // been observed returning success against a bag that still
                     // held two dozen items, so its own answer is not enough.
+                    if (trace)
+                        s_bagTraces.fetch_add(1, std::memory_order_relaxed);
+
                     uint32 const after = CountUsedSlotsInBag(bot, equippedBag);
                     if (after)
                     {
-                        if (trace)
-                            s_bagTraces.fetch_add(1, std::memory_order_relaxed);
                         TC_LOG_ERROR("playerbots.pve",
                             "Bot {}: {} in slot {} held {}, moved {}, still holds {} - not swapping.",
                             bot->GetName(),
