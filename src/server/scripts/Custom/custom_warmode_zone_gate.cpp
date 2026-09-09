@@ -37,6 +37,7 @@
 #include "Chat.h"
 #include "Config.h"
 #include "Map.h"
+#include "MapManager.h"
 #include "Player.h"
 #include "World.h"
 #include "custom_barracks_hardcore.h"
@@ -56,11 +57,25 @@ namespace
     struct SafeSpot
     {
         uint32 MapId = 0;
+        uint32 ZoneId = 0;
         float X = 0.0f;
         float Y = 0.0f;
         float Z = 0.0f;
         float O = 0.0f;
     };
+
+    // The floor under every decision this script makes.
+    //
+    // A gate that turns people around needs somewhere to turn them around TO,
+    // and it has to be somewhere the gate itself will not object to on arrival -
+    // otherwise the bounce lands in a refused zone, which bounces again. A
+    // capital has no level band at all, so it is allowed to everybody at every
+    // level by construction, and it is the one destination that cannot fail.
+    constexpr uint32 kFallbackMapId = 1;
+    constexpr float kFallbackX = 1629.36f;
+    constexpr float kFallbackY = -4373.39f;
+    constexpr float kFallbackZ = 31.2564f;
+    constexpr float kFallbackO = 3.54839f;
 
     std::mutex g_safeLock;
     std::unordered_map<uint64, SafeSpot> g_lastSafeSpot;
@@ -74,6 +89,7 @@ namespace
     {
         SafeSpot spot;
         spot.MapId = player->GetMapId();
+        spot.ZoneId = player->GetZoneId();
         spot.X = player->GetPositionX();
         spot.Y = player->GetPositionY();
         spot.Z = player->GetPositionZ();
@@ -94,6 +110,19 @@ namespace
             return false;
 
         return uint32(player->GetLevel()) > uint32(top);
+    }
+
+    // Cities, instances and battlegrounds have no entry in the band table, so
+    // ZoneIsBeneath answers false for them and they are open to everybody. That
+    // is deliberate and it is what makes the fallback below safe: no capital is
+    // ever refused, whatever level you are.
+    bool DestinationIsAllowed(Player const* player, uint32 mapId, float x, float y, float z)
+    {
+        uint32 const zoneId = sMapMgr->GetZoneId(player->GetPhaseMask(), mapId, x, y, z);
+        if (!zoneId)
+            return false;
+
+        return !ZoneIsBeneath(player, zoneId);
     }
 }
 
@@ -148,17 +177,37 @@ public:
         ChatHandler handler(player->GetSession());
         handler.PSendSysMessage("You cannot travel here with War Mode on: this zone is below your level.");
 
-        if (haveSpot)
+        // EVERY destination is checked before it is used, including the ones
+        // that look obviously safe.
+        //
+        // This gate fires on arrival, and logging in IS an arrival - so a
+        // destination that is itself refused does not merely fail, it bounces
+        // again on landing, forever. Somebody whose hearthstone was set in
+        // Goldshire could not log in at all: no remembered position existed yet,
+        // so the old code fell back to the home bind, and the home bind was the
+        // very zone it was throwing them out of. The rule turned a hearthstone
+        // into a locked account.
+        //
+        // A remembered spot is allowed at the moment it is recorded, but levels
+        // go up and bands do not move, so it can be refused later. Re-ask.
+        if (haveSpot && !ZoneIsBeneath(player, spot.ZoneId))
         {
             player->TeleportTo(spot.MapId, spot.X, spot.Y, spot.Z, spot.O);
             return;
         }
 
-        // No remembered position on this map - they logged in here, or arrived
-        // by a portal from another continent. The home bind is somewhere they
-        // chose and is guaranteed to exist, which a guessed position is not.
-        handler.PSendSysMessage("Returning you to your home inn.");
-        player->TeleportTo(player->m_homebindMapId, player->m_homebindX, player->m_homebindY, player->m_homebindZ, player->GetOrientation());
+        // The home inn is where they chose to be, so it is tried before anything
+        // is imposed on them - but only if they are allowed to stand in it.
+        if (DestinationIsAllowed(player, player->m_homebindMapId, player->m_homebindX, player->m_homebindY, player->m_homebindZ))
+        {
+            handler.PSendSysMessage("Returning you to your home inn.");
+            player->TeleportTo(player->m_homebindMapId, player->m_homebindX, player->m_homebindY, player->m_homebindZ, player->GetOrientation());
+            return;
+        }
+
+        // Nowhere they have been is open to them. A capital always is.
+        handler.PSendSysMessage("Your hearth is below your level too. Sending you to Orgrimmar.");
+        player->TeleportTo(kFallbackMapId, kFallbackX, kFallbackY, kFallbackZ, kFallbackO);
     }
 
     void OnLogout(Player* player) override
