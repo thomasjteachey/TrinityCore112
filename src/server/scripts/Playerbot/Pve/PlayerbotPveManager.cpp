@@ -16456,6 +16456,19 @@ namespace playerbot
                 RestorePlayerbotTeleportVitals(bot);
         }
 
+        // Dressed before it is saved.
+        //
+        // The reset strips the bot to re-level it, and the kit sweep then
+        // destroys the pieces it just unequipped - correctly, because a kit
+        // piece sitting in a bag is normally debris. But a bot that dies and is
+        // reborn in the same second had its kit issued BEFORE the reset, so the
+        // sweep ate it and the bot stood up wearing whatever the starter outfit
+        // happened to give: Quinfyn came back from a death at level 42 with five
+        // of nineteen slots filled. Issuing here, at the new level and after the
+        // strip, is the order that ends with a dressed bot. Empty slots only, so
+        // anything it actually earned and re-equipped is left alone.
+        BarracksHardcore::IssueWhiteFieldKit(bot);
+
         bot->SaveToDB();
         TC_LOG_INFO("playerbots.pve", "Bot {} reborn at level {} in zone {}.",
             bot->GetName(), uint32(bottomLevel), zoneId);

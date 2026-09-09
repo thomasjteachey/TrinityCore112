@@ -68,6 +68,18 @@ namespace BarracksHardcore
     // dropped by something, or handed to a new character. Fails open when the
     // set has not been built, so nothing is destroyed on a cold cache.
     bool IsObtainableInWorld(uint32 itemId);
+
+    // Fill every empty equipment slot with the white field kit, and replace worn
+    // kit that has fallen too far behind the wearer. Gear the character actually
+    // earned is never touched.
+    //
+    // Exported for the zone-band rebirth. That reset strips the bot to re-level
+    // it, and the loose-kit sweep then destroys the pieces it just unequipped -
+    // correctly, since a kit piece in a bag is normally debris - so a bot that
+    // died and was reborn in the same breath came back with whatever the starter
+    // outfit gave it and nothing else. Issuing the kit at the END of the reset,
+    // at the bot's NEW level, is the order that leaves it dressed.
+    void IssueWhiteFieldKit(Player* player);
 }
 
 #endif
