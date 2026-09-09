@@ -12344,7 +12344,9 @@ namespace
                 if (!bot->HasAura(sealId))
                     bot->CastSpell(bot, sealId, false);
                 else if (bot->HasSpell(20271) && !bot->GetSpellHistory()->HasCooldown(20271) &&
-                    bot->IsWithinDistInMap(victim, 10.0f) && bot->IsWithinLOSInMap(victim))
+                    bot->IsWithinDistInMap(victim, 10.0f) && bot->IsWithinLOSInMap(victim) &&
+                    !playerbot::PvpClassActions::IsCastWastedOnTargetImmunity(bot, victim,
+                        sSpellMgr->GetSpellInfo(20271)))
                     bot->CastSpell(victim, 20271, false); // Judgement
             }
         }
@@ -12354,9 +12356,15 @@ namespace
             if (uint32 const nukeId = BaselineNukeSpellId(bot))
             {
                 SpellInfo const* nukeInfo = sSpellMgr->GetSpellInfo(nukeId);
+                // These two floors only fire when the engine cast nothing, which is
+                // exactly what the immunity veto now causes - so without the same
+                // check here the fix would make the reported bug LOUDER for the
+                // low-level population this bypass exists to serve. The shaman's
+                // baseline nuke is Lightning Bolt.
                 if (nukeInfo && !bot->GetSpellHistory()->HasGlobalCooldown(nukeInfo) &&
                     !bot->GetSpellHistory()->HasCooldown(nukeId) &&
-                    bot->IsWithinDistInMap(victim, 25.0f) && bot->IsWithinLOSInMap(victim))
+                    bot->IsWithinDistInMap(victim, 25.0f) && bot->IsWithinLOSInMap(victim) &&
+                    !playerbot::PvpClassActions::IsCastWastedOnTargetImmunity(bot, victim, nukeInfo))
                 {
                     if (bot->isMoving())
                     {

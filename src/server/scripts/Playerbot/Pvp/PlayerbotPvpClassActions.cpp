@@ -5752,6 +5752,67 @@ void PvpClassActions::RegisterWarlockCurseTargetCooldown(Player const* player, U
     playerbot::LockedSet(g_WarlockCurseTargetCooldowns, WarlockCurseCooldownKey{ player->GetGUID(), target->GetGUID(), spellId }, GameTime::Now() + cooldown);
 }
 
+// Would this cast deliver literally nothing?
+//
+// Asked of Unit::IsImmunedToSpell and nothing else, because that is the same
+// question the server itself asks when it resolves the hit, and it is full of
+// exceptions a hand-rolled school test gets wrong: SPELL_ATTR0_UNAFFECTED_BY_-
+// INVULNERABILITY short-circuits the whole thing, and ATTR1_UNAFFECTED_BY_SCHOOL_-
+// IMMUNE pierces a player's Divine Shield but NOT a creature template's immunity,
+// because template entries register under a placeholder spell id that
+// CanPierceImmuneAura refuses on its first line.
+//
+// It answers true only when EVERY effect is immune, which is the boundary we
+// want. Per-effect immunity is deliberately NOT grounds to refuse: a stun-immune
+// mob still takes Frost Nova's damage and a snare-immune one still takes
+// Hamstring's, because Spell::AddUnitTarget masks the immune effect out and casts
+// the rest. Refusing on that would delete real damage. The whole-spell test still
+// covers pure crowd control - a Fear into fear immunity has no surviving effect -
+// which is the "immune to an effect" half of this without touching mixed spells.
+bool PvpClassActions::IsCastWastedOnTargetImmunity(Unit const* caster, Unit const* target, SpellInfo const* spellInfo)
+{
+    if (!caster || !target || !spellInfo)
+        return false;
+
+    // Nothing on this target is immune to anything, which is the overwhelmingly
+    // common case. Answering it with a handful of empty-container tests is what
+    // keeps this affordable on a path that runs per candidate, per bot, per tick.
+    bool carriesAnyImmunity = false;
+    for (auto const& immunityBucket : target->m_spellImmune)
+        if (!immunityBucket.empty())
+        {
+            carriesAnyImmunity = true;
+            break;
+        }
+
+    if (!carriesAnyImmunity)
+        return false;
+
+    // A spell with no real effects reports immune to everything, forever: both
+    // Unit:: and Creature::IsImmunedToSpell start from "immune to all effects" and
+    // only ever clear that flag from INSIDE the effect loop, so an empty loop
+    // leaves it set. This realm hand-authors spell rows, which makes that a live
+    // possibility rather than a theoretical one, and the failure mode is silent -
+    // a bot would simply stop using the ability, with nothing logged anywhere.
+    bool hasRealEffect = false;
+    for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+        if (effect.IsEffect())
+        {
+            hasRealEffect = true;
+            break;
+        }
+
+    if (!hasRealEffect)
+        return false;
+
+    // An area spell is aimed at a cluster, not at the one unit we happen to have
+    // selected. A single immune anchor must not veto the whole cast.
+    if (spellInfo->IsTargetingArea())
+        return false;
+
+    return target->IsImmunedToSpell(spellInfo, caster);
+}
+
 bool PvpClassActions::IsCasterSpellCooldownActive(Player const* player, uint32 spellId)
 {
     if (!player || !spellId)

@@ -25,6 +25,7 @@
 
 class Player;
 class Unit;
+class SpellInfo;
 
 namespace playerbot
 {
@@ -43,6 +44,12 @@ public:
     static bool IsWarlockCurseTargetCooldownActive(Player const* player, Unit const* target, uint32 spellId);
     static void RegisterWarlockCurseTargetCooldown(Player const* player, Unit const* target, uint32 spellId, std::chrono::seconds cooldown);
     static bool IsCasterSpellCooldownActive(Player const* player, uint32 spellId);
+
+    // True when this cast would deliver literally nothing because the target is
+    // immune to all of it. Lives here rather than in either caller because both
+    // the PvP decision engine and the PvE manager's direct-cast floors need the
+    // same answer, and two copies of a rule like this drift.
+    static bool IsCastWastedOnTargetImmunity(Unit const* caster, Unit const* target, SpellInfo const* spellInfo);
     static void RegisterCasterSpellCooldown(Player const* player, uint32 spellId, std::chrono::seconds cooldown);
     static void RegisterCasterSpellCooldown(Player const* player, uint32 spellId, std::chrono::milliseconds cooldown);
     static std::string GetLastExecutionStatus(Player const* player);

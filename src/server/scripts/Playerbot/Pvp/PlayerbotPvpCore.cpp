@@ -182,7 +182,19 @@ std::mutex g_InterruptReactionStateLock;
 std::unordered_map<ObjectGuid, std::string> g_TauntDiagnosticLastLineByBot;
 std::mutex g_TauntDiagnosticLastLineLock;
 thread_local ObjectGuid g_CurrentDecisionBotGuid = ObjectGuid::Empty;
-thread_local uint32 g_SuppressedDecisionSpellId = 0;
+// Spells the current decision pass has already tried and had refused.
+//
+// This was a single id, overwritten each attempt - which made the retry loop
+// ping-pong between the top two rejected spells and burn all eight attempts
+// without ever surfacing a third. Each attempt rebuilds the whole candidate
+// vector, grid searches and line-of-sight raycasts included, so that was eight
+// full rebuilds to enumerate two spells. A set makes eight attempts mean eight
+// distinct spells, which matters most for exactly the bot this immunity work is
+// for: one whose entire kit is refused, and which therefore never breaks early.
+//
+// A pointer to the caller's vector rather than a container of its own, so the
+// nesting stays scope-based and nothing allocates on the hot path.
+thread_local std::vector<uint32> const* g_SuppressedDecisionSpellIds = nullptr;
 
     bool IsPriestFlashHealSpell(uint32 spellId)
     {
@@ -1392,22 +1404,22 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
     class DecisionEvaluationScope
     {
     public:
-        DecisionEvaluationScope(Player const* player, uint32 suppressedSpellId)
-            : _previousBotGuid(g_CurrentDecisionBotGuid), _previousSuppressedSpellId(g_SuppressedDecisionSpellId)
+        DecisionEvaluationScope(Player const* player, std::vector<uint32> const* suppressedSpellIds)
+            : _previousBotGuid(g_CurrentDecisionBotGuid), _previousSuppressedSpellIds(g_SuppressedDecisionSpellIds)
         {
             g_CurrentDecisionBotGuid = player ? player->GetGUID() : ObjectGuid::Empty;
-            g_SuppressedDecisionSpellId = suppressedSpellId;
+            g_SuppressedDecisionSpellIds = suppressedSpellIds;
         }
 
         ~DecisionEvaluationScope()
         {
             g_CurrentDecisionBotGuid = _previousBotGuid;
-            g_SuppressedDecisionSpellId = _previousSuppressedSpellId;
+            g_SuppressedDecisionSpellIds = _previousSuppressedSpellIds;
         }
 
     private:
         ObjectGuid _previousBotGuid;
-        uint32 _previousSuppressedSpellId = 0;
+        std::vector<uint32> const* _previousSuppressedSpellIds = nullptr;
     };
 
     void AddDecisionCandidate(std::vector<PrioritizedSpellDecision>& candidates, bool condition, float priority, SpellDecision const& decision)
@@ -1415,7 +1427,9 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
         if (!condition || (!decision.spellId && !decision.itemEntry))
             return;
 
-        if (g_SuppressedDecisionSpellId != 0 && decision.spellId != 0 && decision.spellId == g_SuppressedDecisionSpellId)
+        if (g_SuppressedDecisionSpellIds && decision.spellId != 0 &&
+            std::find(g_SuppressedDecisionSpellIds->begin(), g_SuppressedDecisionSpellIds->end(),
+                decision.spellId) != g_SuppressedDecisionSpellIds->end())
             return;
 
         candidates.push_back({ priority, decision });
@@ -1742,6 +1756,26 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
     if (decision.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally && !IsFriendlySupportTarget(player, resolvedTarget))
         return false;
     if (decision.targetMode == playerbot::PvpClassSpellContext::TargetMode::Pet && resolvedTarget != player->GetPet())
+        return false;
+
+    // A cast the target is wholly immune to is a wasted global cooldown, and the
+    // caller takes the FIRST candidate that passes this function - so refusing
+    // here is already "do something else instead", for every class at once, with
+    // no per-class table to keep in step.
+    //
+    // Scoped to Enemy decisions because targetMode is the only polarity this
+    // function has, and it is load-bearing twice: it keeps heals, shields and
+    // self-buffs out, several of which carry a damage school (Power Word: Shield
+    // is Holy, Lightning Shield is Nature), and it neutralises the explicit-guid
+    // override above, which can hand a Self decision an enemy's guid.
+    //
+    // Placed before the line-of-sight raycast, which is the most expensive call
+    // left in the function.
+    if (decision.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        playerbot::PvpClassActions::IsCastWastedOnTargetImmunity(
+            (knownByPet && !knownByPlayer) ? static_cast<Unit const*>(player->GetPet())
+                                           : static_cast<Unit const*>(player),
+            resolvedTarget, spellInfo))
         return false;
 
         if (!player->IsWithinLOSInMap(resolvedTarget))
@@ -7815,12 +7849,13 @@ PvpValues PvpCore::CollectValues(Player const* player)
 
         SpellDecision decision;
         SpellDecision firstDecision;
-        uint32 suppressedSpellId = 0;
+        std::vector<uint32> suppressedSpellIds;
         uint32 attempts = 0;
         constexpr uint32 kMaxDecisionAttempts = 8;
+        suppressedSpellIds.reserve(kMaxDecisionAttempts);
         while (attempts++ < kMaxDecisionAttempts)
         {
-            DecisionEvaluationScope decisionScope(player, suppressedSpellId);
+            DecisionEvaluationScope decisionScope(player, &suppressedSpellIds);
             Unit const* decisionTarget = resolveTargetByGuid(activeTargetGuid);
             Unit const* decisionAllyTarget = resolveTargetByGuid(selectedAllyGuid);
             SpellDecision const candidate = SelectClassOrUtilitySpell(player, decisionTarget, decisionAllyTarget, profileSelection);
@@ -7835,11 +7870,11 @@ PvpValues PvpCore::CollectValues(Player const* player)
             if (IsDecisionImmediatelyCastable(player, candidate, immediateCastTarget, immediateCastAllyTarget))
             {
                 decision = candidate;
-                if (suppressedSpellId != 0)
+                if (!suppressedSpellIds.empty())
                 {
                     TC_LOG_DEBUG("playerbots.pvp.classspell",
-                        "Class spell fallback chain selected castable spell: botGuid={} fallbackSpell={} suppressedSeed={} attempts={} targetGuid={} allyGuid={}.",
-                        player->GetGUID().ToString(), candidate.spellId, suppressedSpellId, attempts,
+                        "Class spell fallback chain selected castable spell: botGuid={} fallbackSpell={} refused={} attempts={} targetGuid={} allyGuid={}.",
+                        player->GetGUID().ToString(), candidate.spellId, suppressedSpellIds.size(), attempts,
                         hasValidTarget ? selectedTargetGuid.ToString() : "none", hasValidAllyTarget ? selectedAllyGuid.ToString() : "none");
                 }
                 break;
@@ -7848,7 +7883,7 @@ PvpValues PvpCore::CollectValues(Player const* player)
             if (!candidate.spellId)
                 break;
 
-            suppressedSpellId = candidate.spellId;
+            suppressedSpellIds.push_back(candidate.spellId);
         }
 
         // If no immediately castable spell or item was found, keep the first decision so execution
@@ -7885,6 +7920,36 @@ PvpValues PvpCore::CollectValues(Player const* player)
             context.targetGuid = context.allyTargetGuid;
         else if (context.targetMode == PvpClassSpellContext::TargetMode::Self)
             context.targetGuid = player->GetGUID();
+
+    // The selector deliberately keeps its highest-priority pick when nothing was
+    // castable, so execution can still drive movement and range correction. That
+    // is right, except when the reason nothing was castable is that the target is
+    // immune to the bot's entire kit: an elemental shaman's every offensive
+    // candidate is Nature, so against a nature-immune elemental it would answer
+    // the refusal by casting the MORE expensive Chain Lightning at it.
+    //
+    // Clearing the spell hands the bot to the existing "no spell" cascade below,
+    // which closes the distance and swings - and white damage has no school to be
+    // immune to. No movement directive is installed here on purpose: setting one
+    // would out-prioritise the healer's reach-an-ally arm and drag a healer toward
+    // the enemy it cannot hurt instead of the ally it can heal.
+    if (context.spellId && context.targetMode == PvpClassSpellContext::TargetMode::Enemy)
+    {
+        if (Unit const* immunityTarget = resolveTargetByGuid(context.targetGuid))
+            if (SpellInfo const* committedSpellInfo = sSpellMgr->GetSpellInfo(context.spellId))
+                if (PvpClassActions::IsCastWastedOnTargetImmunity(player, immunityTarget, committedSpellInfo))
+                {
+                    TC_LOG_DEBUG("playerbots.pvp.classspell",
+                        "Immunity veto: botGuid={} spell={} target={} action={}.",
+                        player->GetGUID().ToString(), context.spellId,
+                        context.targetGuid.ToString(), context.actionName ? context.actionName : "-");
+                    context.spellId = 0;
+                    context.itemEntry = 0;
+                    context.targetMode = PvpClassSpellContext::TargetMode::None;
+                    context.targetGuid = ObjectGuid::Empty;
+                    context.selfCast = false;
+                }
+    }
 
     if (context.spellId &&
         (context.targetMode == PvpClassSpellContext::TargetMode::Enemy || context.targetMode == PvpClassSpellContext::TargetMode::Ally))
