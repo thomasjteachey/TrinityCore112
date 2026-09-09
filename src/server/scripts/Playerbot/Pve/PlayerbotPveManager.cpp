@@ -585,6 +585,7 @@ namespace
     void GrantGatherSkillCredit(Player* bot, GameObject* go);
     void MaybeQueueOverBandRebirth(Player* bot, PveBotState& state);
     void ClearResurrectionSickness(Player* bot);
+    WorldSafeLocsEntry const* PickAlternateGraveyard(Player* bot, PveBotState const& state);
     void ResetStuckWatchdog(PveBotState& state);
     bool IsStuckWatchdogEligible(Player* bot, PveBotState const& state,
         playerbot::PveConfig const& cfg, PveTimePoint now);
@@ -12602,7 +12603,18 @@ namespace
         if (!bot->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         {
             bot->BuildPlayerRepop();
-            bot->RepopAtGraveyard();
+
+            if (WorldSafeLocsEntry const* alternate = PickAlternateGraveyard(bot, state))
+            {
+                TC_LOG_INFO("playerbots.pve",
+                    "Bot {} has died {} times in five minutes in zone {}; rising at a further graveyard.",
+                    bot->GetName(), uint32(state.recentDeathCount), bot->GetZoneId());
+                bot->TeleportTo(alternate->Continent, alternate->Loc.X, alternate->Loc.Y, alternate->Loc.Z,
+                    bot->GetOrientation());
+            }
+            else
+                bot->RepopAtGraveyard();
+
             return;
         }
 
@@ -12784,6 +12796,78 @@ namespace
     // own sickness spell through ChrRaces, and an aura saved on a character before
     // this rule existed is restored on login and would otherwise sit there for its
     // full ten minutes. Strip it wherever it came from.
+    // Which stone should a bot that keeps dying rise at?
+    //
+    // Rising at the nearest graveyard is right the first time and wrong the
+    // second: the nearest stone to where you died is, by construction, the one
+    // that walks you back into whatever killed you. A camped road, an elite
+    // that respawned, a pull the bot cannot win - the bot returns to it on the
+    // shortest path available and dies again, and the pair of them sit there
+    // trading the same fight until something else moves.
+    //
+    // So on a repeat death the bot takes the NEXT stone out, and one further for
+    // each death after that, which puts it back in the zone from a different
+    // direction. It stops at the furthest the zone has rather than wrapping
+    // around to the one that is already not working.
+    //
+    // Only in the open world. A battleground's graveyards are an objective and
+    // an instance's are a fixed route, so neither is a menu to choose from - and
+    // a zone with a single stone has no second answer to give.
+    WorldSafeLocsEntry const* PickAlternateGraveyard(Player* bot, PveBotState const& state)
+    {
+        if (!bot || bot->InBattleground())
+            return nullptr;
+
+        Map const* map = bot->GetMap();
+        if (!map || map->Instanceable())
+            return nullptr;
+
+        // One death is not a pattern. The window itself is maintained where the
+        // death is first observed, so this only has to read the count.
+        if (state.recentDeathCount < 2)
+            return nullptr;
+
+        uint32 const zoneId = bot->GetZoneId();
+        if (!zoneId)
+            return nullptr;
+
+        uint32 const team = bot->GetTeam();
+        std::vector<std::pair<float, WorldSafeLocsEntry const*>> candidates;
+
+        // GraveyardStore is a public multimap keyed by ghost zone; the faction
+        // test is the same one ObjectMgr::GetClosestGraveyard applies, so a bot
+        // is never offered a stone it could not have been sent to anyway.
+        GraveyardMapBounds range = sObjectMgr->GraveyardStore.equal_range(zoneId);
+        for (; range.first != range.second; ++range.first)
+        {
+            GraveyardData const& data = range.first->second;
+            if (data.team != 0 && team != 0 && data.team != team)
+                continue;
+
+            WorldSafeLocsEntry const* entry = sWorldSafeLocsStore.LookupEntry(data.safeLocId);
+            // Same map only. A graveyard on another continent is the instance
+            // exit case, not a second choice within the zone.
+            if (!entry || entry->Continent != bot->GetMapId())
+                continue;
+
+            float const dx = entry->Loc.X - bot->GetPositionX();
+            float const dy = entry->Loc.Y - bot->GetPositionY();
+            float const dz = entry->Loc.Z - bot->GetPositionZ();
+            candidates.emplace_back(dx * dx + dy * dy + dz * dz, entry);
+        }
+
+        if (candidates.size() < 2)
+            return nullptr;
+
+        std::sort(candidates.begin(), candidates.end(),
+            [](std::pair<float, WorldSafeLocsEntry const*> const& left,
+               std::pair<float, WorldSafeLocsEntry const*> const& right)
+            { return left.first < right.first; });
+
+        size_t const step = std::min<size_t>(size_t(state.recentDeathCount) - 1, candidates.size() - 1);
+        return candidates[step].second;
+    }
+
     void ClearResurrectionSickness(Player* bot)
     {
         constexpr uint32 kSharedResurrectionSickness = 15007;
