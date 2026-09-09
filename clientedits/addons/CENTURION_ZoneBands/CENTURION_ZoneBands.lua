@@ -167,22 +167,21 @@ local function Paint()
 	local level = UnitLevel("player")
 
 	-- Coloured by where the reader actually stands, so the map answers "can I
-	-- be here" at a glance instead of making them do the arithmetic.
-	local colour, note
+	-- be here" at a glance instead of making them do the arithmetic. The colour
+	-- is the whole message: red is above the band, grey is below it, green is
+	-- inside. Saying so in words as well was the addon talking rather than
+	-- reporting.
+	local colour
 	if level < bottom then
 		colour = "|cffff4040"
-		note = "too high for you"
 	elseif level > top then
 		colour = "|cff808080"
-		note = "below you"
 	else
 		colour = "|cff40ff40"
-		note = "drifters follow you here"
 	end
 
 	local prefix = hoveredName and (hoveredName .. "  ") or ""
-	label:SetText(string.format("%s%sLevels %d-%d|r  |cff909090(%s)|r",
-		prefix, colour, bottom, top, note))
+	label:SetText(string.format("%s%sLevels %d-%d|r", prefix, colour, bottom, top))
 end
 
 -- Polled rather than hooked. The hover label is written by WorldMapButton's
