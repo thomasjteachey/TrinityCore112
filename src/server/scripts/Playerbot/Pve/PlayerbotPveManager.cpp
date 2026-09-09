@@ -585,6 +585,7 @@ namespace
     void GrantGatherSkillCredit(Player* bot, GameObject* go);
     void MaybeQueueOverBandRebirth(Player* bot, PveBotState& state);
     void ClearResurrectionSickness(Player* bot);
+    void EnsureBotPetIsResponsive(Player* bot);
     WorldSafeLocsEntry const* PickAlternateGraveyard(Player* bot, PveBotState const& state);
     void ResetStuckWatchdog(PveBotState& state);
     bool IsStuckWatchdogEligible(Player* bot, PveBotState const& state,
@@ -2225,6 +2226,33 @@ namespace
         return 0;
     }
 
+    // A passive pet neither attacks nor autocasts.
+    //
+    // This used to be a closing line inside the Growl helper, which returns
+    // early for anything that is not a HUNTER pet - so it only ever ran for
+    // hunters, and every other bot pet sat on whatever react state it was
+    // summoned with. Measured on the live realm: 26 of 31 hunter pets were
+    // DEFENSIVE against 70 of 78 warlock pets still PASSIVE. Those imps knew
+    // Firebolt and had autocast ENABLED and never cast it once, because a
+    // passive pet does not act at all.
+    //
+    // Defensive rather than aggressive on purpose: it answers what attacks the
+    // bot and what the bot attacks, which is what the fleet wants, without
+    // pulling extra packs on its own.
+    void EnsureBotPetIsResponsive(Player* bot)
+    {
+        Pet* pet = bot ? bot->GetPet() : nullptr;
+        if (!pet || !pet->IsAlive())
+            return;
+
+        if (pet->GetReactState() == REACT_PASSIVE)
+        {
+            pet->SetReactState(REACT_DEFENSIVE);
+            TC_LOG_INFO("playerbots.pve", "Bot {} took its {} off passive.",
+                bot->GetName(), pet->GetName());
+        }
+    }
+
     // Give the pet the best Growl it could train for, and switch autocast on -
     // knowing the spell is not the same as casting it.
     void EnsurePetKnowsGrowl(Player* bot)
@@ -2263,9 +2291,6 @@ namespace
             charmInfo->SetSpellAutocast(growlInfo, true);
         }
 
-        // A passive pet neither attacks nor growls.
-        if (pet->GetReactState() == REACT_PASSIVE)
-            pet->SetReactState(REACT_DEFENSIVE);
     }
 
     // Cast Growl outright rather than trusting the autocast flag.
@@ -13677,6 +13702,7 @@ namespace
         if (now >= state.nextPetGrowlCheckAt)
         {
             state.nextPetGrowlCheckAt = now + std::chrono::seconds(20);
+            EnsureBotPetIsResponsive(bot);
             EnsurePetKnowsGrowl(bot);
             KeepPetHappy(bot);
         }
