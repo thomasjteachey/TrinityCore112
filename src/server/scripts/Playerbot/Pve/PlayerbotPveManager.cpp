@@ -292,6 +292,9 @@ namespace
         PveTimePoint nextChestScanAt{};
         ObjectGuid chestOpeningGuid;
         PveTimePoint nextEquipCheckAt{};
+        // Set only when a container swap is REFUSED, so a bag the core will not
+        // let go of is not fought over four times a minute for hours.
+        PveTimePoint nextContainerRetryAt{};
         PveTimePoint nextTalentCheckAt{};
         PveTimePoint nextCombatDiagAt{};
         // Errand targets (NPCs and quest objects) visited recently, whether or
@@ -532,6 +535,15 @@ namespace
     // Rebirth-flagged bots that just hit the level cap: full level-1 reset on
     // the world thread.
     std::unordered_set<uint64> g_PendingRebirths;
+
+    // When each bot was last actually reborn.
+    //
+    // The per-bot throttle for this lives in PveBotState, and the rebirth itself
+    // erases that state - so the throttle is destroyed by the very act it was
+    // meant to space out, and any decision that keeps coming back true runs at
+    // tick rate. This map is not wiped by anything, which is the whole point: it
+    // is the floor under a mistake, not the schedule.
+    std::unordered_map<uint64, PveTimePoint> g_LastRebirthAt;
     // Guardians sitting above their post's ceiling, and the level to put them
     // at. A map rather than a set because the target is the post's ceiling,
     // which the world thread cannot recompute without redoing the slot lookup.
@@ -6022,7 +6034,46 @@ namespace
         return EffectiveItemLevel(candidate) > EffectiveItemLevel(incumbent);
     }
 
-    void TryEquipUpgrades(Player* bot)
+    // Why an equip did not happen.
+    //
+    // Player::SwapItem answers a client: on a refusal it calls SendEquipError and
+    // returns, and there is no client behind a bot to read it. So a swap that was
+    // refused looks exactly like one that worked, and the pass simply tries again
+    // fifteen seconds later - which is how twenty-five bots came to log the same
+    // "equipped" line four times a pass for an hour and a half against a bag set
+    // that never moved a single item. Re-ask the three questions SwapItem asks
+    // and print the codes.
+    void ReportEquipRefusal(Player* bot, Item* item, ItemTemplate const* proto, uint16 dest)
+    {
+        uint8 const dstSlot = uint8(dest & 255);
+        Item* incumbent = bot->GetItemByPos(dest);
+
+        uint16 equipDest = 0;
+        InventoryResult const equipResult = bot->CanEquipItem(dstSlot, equipDest, item, true);
+        InventoryResult const unequipResult = bot->CanUnequipItem(dest, true);
+
+        // The one SwapItem asks last and the one a bag swap actually fails on:
+        // can the displaced item go back where the new one came from.
+        ItemPosCountVec back;
+        InventoryResult const storeBackResult = incumbent
+            ? bot->CanStoreItem(item->GetBagSlot(), item->GetSlot(), back, incumbent, true)
+            : EQUIP_ERR_OK;
+
+        Bag* incumbentBag = incumbent ? incumbent->ToBag() : nullptr;
+
+        TC_LOG_ERROR("playerbots.pve",
+            "Bot {} could not equip {} into slot {}: equip={} unequip={} storeBack={}; "
+            "incumbent {} holds {} of {}, {} free elsewhere, candidate at bag {} slot {}.",
+            bot->GetName(), proto->Name1, uint32(dstSlot), uint32(equipResult), uint32(unequipResult),
+            uint32(storeBackResult),
+            incumbent && incumbent->GetTemplate() ? incumbent->GetTemplate()->Name1 : std::string("nothing"),
+            incumbentBag ? CountUsedSlotsInBag(bot, incumbentBag) : 0u,
+            incumbentBag ? incumbentBag->GetBagSize() : 0u,
+            CountFreeSlotsOutsideBag(bot, dstSlot),
+            uint32(item->GetBagSlot()), uint32(item->GetSlot()));
+    }
+
+    void TryEquipUpgrades(Player* bot, PveBotState& state)
     {
         TryRestoreShieldProfile(bot);
 
@@ -6049,6 +6100,15 @@ namespace
                 bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND))
                 continue;
 
+            bool const isContainer = proto->Class == ITEM_CLASS_CONTAINER || proto->Class == ITEM_CLASS_QUIVER;
+
+            // A container swap that the core refuses is refused for a reason that
+            // will still be true in fifteen seconds, so stop asking for a while.
+            // Ordinary gear is not held back by this: it is the bag path that can
+            // fail silently and repeat.
+            if (isContainer && PveClock::now() < state.nextContainerRetryAt)
+                continue;
+
             uint16 dest = 0;
             if (bot->CanEquipItem(NULL_SLOT, dest, item, true) != EQUIP_ERR_OK)
                 continue;
@@ -6056,7 +6116,7 @@ namespace
             // CanEquipItem still does the real validation above - combat state,
             // proficiency, ownership - but its choice of WHICH bag slot is not
             // usable for an upgrade decision, so containers pick their own.
-            if (proto->Class == ITEM_CLASS_CONTAINER || proto->Class == ITEM_CLASS_QUIVER)
+            if (isContainer)
                 if (!SelectContainerUpgradeSlot(bot, proto, dest))
                     continue;
 
@@ -6064,6 +6124,8 @@ namespace
             // first, so a dead off hand would never be challenged.
             if (ShouldRedirectToOffHand(bot, proto, dest))
                 dest = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | EQUIPMENT_SLOT_OFFHAND);
+
+            ObjectGuid const itemGuid = item->GetGUID();
 
             if (Item* equipped = bot->GetItemByPos(dest))
             {
@@ -6090,6 +6152,17 @@ namespace
                 bot->RemoveItem(position.first, position.second, true);
                 bot->EquipItem(dest, item, true);
                 bot->AutoUnequipOffhandIfNeed();
+            }
+
+            // Read the answer back rather than assuming it. Nothing above this
+            // line reports failure to a bot.
+            Item const* nowWorn = bot->GetItemByPos(dest);
+            if (!nowWorn || nowWorn->GetGUID() != itemGuid)
+            {
+                ReportEquipRefusal(bot, item, proto, dest);
+                if (isContainer)
+                    state.nextContainerRetryAt = PveClock::now() + std::chrono::minutes(10);
+                continue;
             }
 
             TC_LOG_INFO("playerbots.pve", "Bot {} equipped {} (item level {}).",
@@ -7116,15 +7189,38 @@ namespace
         uint32 slotIndex = 0;
         bool assigned = false;
         bool freshlyAssigned = false;
+        bool disowned = false;
         {
             std::lock_guard<std::mutex> guard(g_GuardianLock);
             auto itr = g_GuardianZoneByGuid.find(botRawGuid);
-            if (itr != g_GuardianZoneByGuid.end() && itr->second < totalSlots)
+            // A post is only a post while its zone still arms for open-world PvP.
+            // GetGuardianZoneId already says so and answers 0 for the rest, but
+            // this tick used to read the raw table instead - so a bot could be
+            // disowned by every other subsystem and still be held at its post's
+            // level here, once per tick, forever. That is not hypothetical: the
+            // six starter-zone slots were persisted before the arming screen
+            // existed, and the holder of the Teldrassil post spent an entire
+            // uptime being levelled to 10 by this function and reborn at 1 by the
+            // band rebirth, twenty thousand times, because each one's write was
+            // the other's trigger. Ask the same question everybody else asks.
+            bool const stillAPost = itr != g_GuardianZoneByGuid.end() && itr->second < totalSlots &&
+                BarracksHardcore::IsOpenWorldPvpZone(kGuardianZones[itr->second % kGuardianZones.size()].zoneId);
+
+            if (stillAPost)
             {
                 assigned = true;
                 slotIndex = itr->second;
             }
-            else if (itr == g_GuardianZoneByGuid.end() && eligible)
+            else if (itr != g_GuardianZoneByGuid.end())
+            {
+                // Hand the slot back so a bot that can actually hold it gets it,
+                // and forget the row - otherwise the next restart reloads the
+                // same ghost.
+                g_GuardianTakenSlots.erase(itr->second);
+                g_GuardianZoneByGuid.erase(itr);
+                disowned = true;
+            }
+            else if (eligible)
             {
                 // Pick the best free post this bot can actually hold: its own
                 // faction's ground, never one that would cost it levels, and
@@ -7171,6 +7267,13 @@ namespace
                     freshlyAssigned = true;
                 }
             }
+        }
+
+        if (disowned)
+        {
+            CharacterDatabase.PExecute("DELETE FROM playerbot_zone_guardian WHERE guid = {}", botRawGuid);
+            TC_LOG_INFO("playerbots.pve", "Bot {} held a guardian post in a zone that no longer arms; released it.",
+                bot->GetName());
         }
 
         if (!assigned)
@@ -13451,7 +13554,7 @@ namespace
         if (cfg.equipUpgradesEnabled && !bot->IsInCombat() && now >= state.nextEquipCheckAt)
         {
             state.nextEquipCheckAt = now + std::chrono::seconds(15);
-            TryEquipUpgrades(bot);
+            TryEquipUpgrades(bot, state);
             // Companions never run vendor errands (they stay on their master's
             // heel), so critical durability gets the field repair here.
             if (!state.masterGuid.IsEmpty())
@@ -15621,6 +15724,19 @@ namespace playerbot
                         if (KeepsItsOwnLevel(bot))
                             continue;
 
+                        // No bot is reborn twice inside a minute, whatever the
+                        // flag says. A rebirth costs a teleport, a re-kit and a
+                        // full item wipe; a decision that is wrong AND repeating
+                        // should cost the realm one of those a minute, not one a
+                        // tick.
+                        {
+                            PveTimePoint const now = PveClock::now();
+                            auto const last = g_LastRebirthAt.find(botRawGuid);
+                            if (last != g_LastRebirthAt.end() && now - last->second < std::chrono::seconds(60))
+                                continue;
+                            g_LastRebirthAt[botRawGuid] = now;
+                        }
+
                         // Recomputed rather than carried on the queue: the mapping
                         // is deterministic, so the answer cannot drift between the
                         // flag and the reset.
@@ -16252,7 +16368,7 @@ namespace playerbot
                     player->GetName(), rebirthZoneId, uint32(player->GetLevel()), uint32(bandBottom));
             else if (banded)
                 TC_LOG_INFO("playerbots.pve", "Bot {} topped out zone {} at level {}; rebirth to {}.",
-                    player->GetName(), rebirthZoneId, uint32(bandTop), uint32(bandBottom));
+                    player->GetName(), rebirthZoneId, uint32(player->GetLevel()), uint32(bandBottom));
             else
                 TC_LOG_INFO("playerbots.pve", "Bot {} reached the level cap and is flagged for rebirth.", player->GetName());
             std::lock_guard<std::mutex> guard(g_PvePendingLock);
