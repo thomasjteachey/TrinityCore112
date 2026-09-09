@@ -9124,7 +9124,7 @@ namespace
     // Three sources in descending order of trust: the item's own BuyPrice, its
     // SellPrice marked up, and failing both a curve on item level and quality.
     constexpr double kEndgameEpicPriceFactor = 5.0;
-    constexpr double kEndgameLegendaryPriceFactor = 15.0;
+    constexpr double kEndgameLegendaryPriceFactor = 25.0;
 
     double ComputeItemFaceValue(ItemTemplate const* proto)
     {
