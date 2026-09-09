@@ -104,6 +104,22 @@ namespace
     // zone is still doing that zone's content.
     bool ZoneIsBeneath(Player const* player, uint32 zoneId)
     {
+        // A zone where War Mode does not arm has nothing to protect.
+        //
+        // The whole rule exists because someone who opted in to being attackable
+        // should not carry that into a place where the residents did not. Where
+        // the flag never arms in the first place, nobody there is attackable by
+        // them and they are not attackable either - so refusing the journey buys
+        // nothing and costs a great deal, because the capitals and the roads to
+        // them are exactly where people need to go.
+        //
+        // Asked of the FFA ruleset rather than answered here, so the two can
+        // never disagree about which zones those are. It says no to every
+        // capital and sanctuary (the flag is disarmed inside the walls) and to
+        // the starter zones, which it declines to arm at all.
+        if (!BarracksHardcore::IsOpenWorldPvpZone(zoneId))
+            return false;
+
         uint8 bottom = 0;
         uint8 top = 0;
         if (!playerbot::GetZoneLevelBand(zoneId, bottom, top))

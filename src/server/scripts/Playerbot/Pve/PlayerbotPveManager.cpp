@@ -3998,7 +3998,7 @@ namespace
     // moment where an item exists nowhere. A destination inside the bag being
     // emptied is never considered. Returns true only if the bag ends up empty; a
     // partial move is harmless, since items simply sit in different slots.
-    bool TryEmptyBagForSwap(Player* bot, Bag* bag)
+    bool TryEmptyBagForSwap(Player* bot, Bag* bag, uint32* movedOut = nullptr)
     {
         if (!bag)
             return true;
@@ -4030,6 +4030,8 @@ namespace
 
             bot->RemoveItem(bag->GetSlot(), uint8(slot), true);
             bot->StoreItem(destination, item, true);
+            if (movedOut)
+                ++*movedOut;
         }
 
         return true;
@@ -6139,8 +6141,31 @@ namespace
                 // leave everything exactly as it was.
                 if (Bag* equippedBag = equipped->ToBag())
                 {
-                    if (!CanRehomeBagContents(bot, equippedBag) || !TryEmptyBagForSwap(bot, equippedBag))
+                    uint32 const before = CountUsedSlotsInBag(bot, equippedBag);
+                    uint32 moved = 0;
+                    if (!CanRehomeBagContents(bot, equippedBag) || !TryEmptyBagForSwap(bot, equippedBag, &moved))
                         continue;
+
+                    // Checked, not trusted.
+                    //
+                    // Player::SwapItem refuses outright with
+                    // EQUIP_ERR_CAN_ONLY_DO_WITH_EMPTY_BAGS if the displaced bag
+                    // still holds anything, and it refuses SILENTLY to a bot -
+                    // which is how twenty-five bots spent an hour and a half
+                    // reporting an equip that never happened. The pass above has
+                    // been observed returning success against a bag that still
+                    // held two dozen items, so its own answer is not enough.
+                    uint32 const after = CountUsedSlotsInBag(bot, equippedBag);
+                    if (after)
+                    {
+                        TC_LOG_ERROR("playerbots.pve",
+                            "Bot {}: {} in slot {} held {}, moved {}, still holds {} - not swapping.",
+                            bot->GetName(),
+                            equippedBag->GetTemplate() ? equippedBag->GetTemplate()->Name1 : std::string("a bag"),
+                            uint32(dest & 255), before, moved, after);
+                        state.nextContainerRetryAt = PveClock::now() + std::chrono::minutes(10);
+                        continue;
+                    }
                 }
 
                 // Re-read the position: emptying the old bag may have shuffled
