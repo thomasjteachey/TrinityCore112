@@ -1773,14 +1773,23 @@ namespace
     // rather than declaring a second internal symbol.
     bool IsManagedPlayerbotAccountId(uint32 accountId);
 
-    // Notoriety is loud.
+    // Carrying a contract is loud.
     //
-    // Past the contract threshold the fleet simply knows where you are: every
-    // managed playerbot sharing your zone sees through Stealth and Prowl. It is
-    // the answer to the obvious exploit - a rogue or a feral druid could
+    // While the contract is in your log the fleet simply knows where you are:
+    // every managed playerbot sharing your zone sees through Stealth and Prowl.
+    // It is the answer to the obvious exploit - a rogue or a feral druid could
     // otherwise take a contract from Grix, stealth the entire eight hundred
     // yards to the fence past every hunter the system sent after them, and
     // collect. The walk is supposed to be the feature.
+    //
+    // Keyed on the QUEST, not on a stack count. It used to trip at fifteen
+    // stacks of notoriety, which caught the wrong people twice over: somebody
+    // who had earned fifteen stacks and wanted nothing to do with a contract
+    // lost stealth for as long as the stacks lasted, and somebody who took a
+    // contract at a lower count kept it. The quest is the thing the block
+    // exists to protect, so the quest is what it should follow - it lands when
+    // Grix writes the page and lifts the moment the fence takes it, whether
+    // that is a turn-in, an abandon or a void.
     //
     // Only the fleet gets it, and only against a PERSON. A bot cannot hold a
     // contract, so a stealthed bot is nobody's business.
@@ -1793,12 +1802,10 @@ namespace
     {
         static bool const enabled =
             sConfigMgr->GetBoolDefault("Centurion.Notoriety.BotsSeeThroughStealth", true);
-        static uint32 const auraId = uint32(std::max(0,
-            sConfigMgr->GetIntDefault("Centurion.Bounty.AuraSpell", 90701)));
-        static uint32 const threshold = uint32(std::max(1,
-            sConfigMgr->GetIntDefault("Centurion.Notoriety.ContractStacks", 15)));
+        static uint32 const contractQuestId = uint32(std::max(0,
+            sConfigMgr->GetIntDefault("Centurion.Notoriety.QuestId", 60001)));
 
-        if (!enabled || !auraId || observer == target)
+        if (!enabled || !contractQuestId || observer == target)
             return false;
 
         if (!observer->GetSession() || !IsManagedPlayerbotAccountId(observer->GetSession()->GetAccountId()))
@@ -1810,7 +1817,11 @@ namespace
         if (observer->GetZoneId() != target->GetZoneId())
             return false;
 
-        return target->GetAuraCount(auraId) >= threshold;
+        // In the log and not yet handed over. REWARDED is deliberately not here:
+        // the page is sold, the walk is done, and stealth comes back the instant
+        // the fence pays out.
+        QuestStatus const status = target->GetQuestStatus(contractQuestId);
+        return status == QUEST_STATUS_INCOMPLETE || status == QUEST_STATUS_COMPLETE;
     }
 }
 
