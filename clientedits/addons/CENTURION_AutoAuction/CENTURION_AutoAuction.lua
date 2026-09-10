@@ -53,6 +53,21 @@ local EXCLUDED_EQUIP_SLOTS = {
     ["INVTYPE_NON_EQUIP"] = true,
 }
 
+-- Rarities the filter offers. Artifact (6) exists in the client and on nothing a
+-- player will ever hold, so the list stops at Legendary.
+local MAX_QUALITY = 5
+
+-- What people actually type. Colours are in here because that is how everyone
+-- talks about rarity - "stop selling my blues" long before "stop selling rare".
+local QUALITY_WORDS = {
+    ["0"] = 0, ["poor"] = 0, ["junk"] = 0, ["grey"] = 0, ["gray"] = 0,
+    ["1"] = 1, ["common"] = 1, ["white"] = 1,
+    ["2"] = 2, ["uncommon"] = 2, ["green"] = 2,
+    ["3"] = 3, ["rare"] = 3, ["blue"] = 3,
+    ["4"] = 4, ["epic"] = 4, ["purple"] = 4,
+    ["5"] = 5, ["legendary"] = 5, ["orange"] = 5,
+}
+
 -- Duration is an index, not a number of hours: 1 = 12h, 2 = 24h, 3 = 48h. Both
 -- CalculateAuctionDeposit and StartAuction take it in that form.
 local DURATION_HOURS   = { [1] = 12, [2] = 24, [3] = 48 }
@@ -70,8 +85,12 @@ local defaults = {
     minBuyout     = 1,      -- copper floor on the finished asking price
 
     gearOnly      = true,   -- only things you can wear or wield
-    minQuality    = 2,      -- 2 = Uncommon (green)
-    maxQuality    = 4,      -- 4 = Epic (purple)
+
+    -- One switch per rarity rather than a floor and a ceiling. "Greens and
+    -- epics but not blues" is a real thing to want - you are still gearing in
+    -- that slot - and a range cannot say it.
+    qualities     = { [0] = false, [1] = false, [2] = true,
+                      [3] = true,  [4] = true,  [5] = false },
 
     undercut      = false,  -- THE FLAG: price against the market, not the deposit
     -- Undercutting is a FLAT amount of copper, not a percentage. A percentage
@@ -122,7 +141,10 @@ local warnedDeposit = false
 -- turned the panel off or hid the interface.
 local frame                             -- driver: events and the ticker
 local panel                             -- the little window at the auction house
-local statusText, ruleText, sellButton, undercutBox, buyoutBox, bidBox, undercutFlatBox
+local statusText, ruleText, sellButton, undercutBox, buyoutBox, bidBox
+local undercutFlatBox, undercutPctBox
+local scopeCaption
+local qualityBoxes = {}                 -- [quality index] = its checkbox
 
 --=============================================================================
 -- Small helpers
@@ -169,16 +191,49 @@ local function QualityName(index)
     return (color and color.hex or "") .. name .. "|r"
 end
 
--- One line saying what a run will touch, e.g. "Uncommon to Epic gear".
-local function ScopeText()
-    local range
-    if db.minQuality == db.maxQuality then
-        range = QualityName(db.minQuality)
-    else
-        range = QualityName(db.minQuality) .. " to " .. QualityName(db.maxQuality)
+-- Is anything at all switched on to sell?
+local function AnyQuality()
+    for index = 0, MAX_QUALITY do
+        if db.qualities[index] then
+            return true
+        end
     end
 
-    return range .. (db.gearOnly and " gear" or " items")
+    return false
+end
+
+-- One line saying what a run will touch, e.g. "Uncommon to Epic gear", or
+-- "Uncommon, Epic gear" once the set stops being a straight run.
+local function ScopeText()
+    local names = {}
+    local first, last, contiguous = nil, nil, true
+
+    for index = 0, MAX_QUALITY do
+        if db.qualities[index] then
+            table.insert(names, QualityName(index))
+
+            if not first then
+                first = index
+            end
+            if last and index ~= last + 1 then
+                contiguous = false
+            end
+            last = index
+        end
+    end
+
+    if #names == 0 then
+        return "|cffff2020nothing|r - every rarity is switched off"
+    end
+
+    local what = db.gearOnly and " gear" or " items"
+
+    -- A run of three or more reads better as a range than as a list.
+    if contiguous and (last - first) >= 2 then
+        return QualityName(first) .. " to " .. QualityName(last) .. what
+    end
+
+    return table.concat(names, ", ") .. what
 end
 
 -- "5g", "50s", "250c" or a bare number of copper.
@@ -296,9 +351,7 @@ local function NextCandidate()
                 end
 
                 if eligible then
-                    eligible = quality ~= nil
-                        and quality >= db.minQuality
-                        and quality <= db.maxQuality
+                    eligible = quality ~= nil and db.qualities[quality] == true
                 end
 
                 -- Marked by id so the tooltip is read once per item, not once
@@ -474,28 +527,48 @@ local function UpdateRule()
         undercutFlatBox:SetText(NumText(db.undercutFlat))
     end
 
+    if undercutPctBox and not undercutPctBox:HasFocus() then
+        undercutPctBox:SetText(NumText(db.undercutPct))
+    end
+
     if undercutBox then
         undercutBox:SetChecked(db.undercut)
+    end
+
+    for index = 0, MAX_QUALITY do
+        if qualityBoxes[index] then
+            qualityBoxes[index]:SetChecked(db.qualities[index] and true or false)
+        end
+    end
+
+    -- The caption carries the gear switch, which has no box of its own: the
+    -- ticks say which rarities, this says whether they have to be wearable.
+    if scopeCaption then
+        scopeCaption:SetText(db.gearOnly and "Sell which gear" or "Sell which items")
     end
 
     if not ruleText then
         return
     end
 
+    -- Pricing only. What gets sold is the row of ticks above, and repeating it
+    -- here made a line long enough to wrap into the Sell button.
     if db.undercut then
-        -- The flat amount leads, because it is the one with a box. A leftover
-        -- percentage is still shown when somebody has one saved, so a price
-        -- that is not simply "lowest minus N" says so rather than looking wrong.
+        -- Both cuts are shown, flat first, because a price that is not simply
+        -- "lowest minus N" has to say so rather than looking wrong. Reading
+        -- "1c + 5%" is how the leftover 5% from the old default got noticed.
         local by = FormatMoney(db.undercutFlat)
         if db.undercutPct > 0 then
             by = by .. " + " .. db.undercutPct .. "%"
         end
+
         if db.undercutFlat == 0 and db.undercutPct == 0 then
-            by = "matching the lowest"
+            ruleText:SetText("|cff888888Matching the lowest listing|r")
+        else
+            ruleText:SetText("|cff888888Undercutting by|r " .. by .. " |cff888888per item|r")
         end
-        ruleText:SetText(ScopeText() .. " |cff888888- undercutting by " .. by .. "|r")
     else
-        ruleText:SetText(ScopeText() .. " |cff888888only|r")
+        ruleText:SetText("|cff888888Priced from the deposit|r")
     end
 end
 
@@ -738,6 +811,13 @@ local function StartRun(filter)
         return
     end
 
+    -- Say so rather than walking the bags and reporting nothing found, which
+    -- looks like a broken addon instead of a filter switched off.
+    if not AnyQuality() then
+        Print("Every rarity is switched off - tick one, or |cffffff00/aa rarity green on|r.")
+        return
+    end
+
     filterText = filter and string.lower(filter) or nil
     posted     = 0
     skipped    = 0
@@ -769,8 +849,10 @@ end
 
 local function BuildPanel()
     panel = CreateFrame("Frame", "CenturionAutoAuctionPanel", UIParent)
-    panel:SetWidth(252)
-    panel:SetHeight(214)
+    -- Wide enough that the longest suffix ("copper under the lowest") clears the
+    -- frame border with room to spare; it used to run out through the edge.
+    panel:SetWidth(292)
+    panel:SetHeight(312)
     panel:SetBackdrop({
         bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
         edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
@@ -797,7 +879,10 @@ local function BuildPanel()
     -- allowZero: the undercut amount is legitimately zero (match the lowest
     -- price rather than beat it), where a multiplier of zero would post the
     -- whole run at one copper.
-    local function MakeNumberBox(key, label, yOffset, suffixText, allowZero)
+    -- maxValue: a ceiling for the ones that have a real one. A percentage over
+    -- a hundred would price the lot below nothing, and the arithmetic downstream
+    -- would quietly floor it at a copper rather than say so.
+    local function MakeNumberBox(key, label, yOffset, suffixText, allowZero, maxValue)
         local caption = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         caption:SetPoint("TOPLEFT", 20, yOffset - 4)
         caption:SetText(label)
@@ -817,6 +902,10 @@ local function BuildPanel()
         local function Commit()
             local value = tonumber(box:GetText())
             if value and (value > 0 or (allowZero and value == 0)) then
+                if maxValue and value > maxValue then
+                    value = maxValue
+                end
+
                 db[key] = value
                 -- The cache holds prices worked out under the OLD undercut, so
                 -- it has to go or the next run posts at yesterday's number.
@@ -859,16 +948,53 @@ local function BuildPanel()
         UpdateRule()
     end)
 
-    -- Flat copper, not a percentage. A percentage walks the market down
-    -- geometrically - every pass takes a slice of an ever smaller number, so
-    -- prices collapse toward the vendor floor. A fixed step just moves the
-    -- price down by that much, which is the same rule the bots undercut by.
-    undercutFlatBox = MakeNumberBox("undercutFlat", "Undercut", -112,
-        "copper below the lowest", true)
+    -- Two ways to cut, and they stack: the percentage comes off the lowest
+    -- price first, then the flat step comes off what is left.
+    --
+    -- Flat is the one that ships switched on, because a percentage walks the
+    -- market down geometrically - every pass takes a slice of an ever smaller
+    -- number, so prices slide toward the vendor floor - where a fixed step just
+    -- moves the price down by that much, which is the rule the bots undercut by.
+    -- The percentage is here for the other half of the problem: a copper off a
+    -- two hundred gold sword is not an undercut anybody will notice.
+    undercutFlatBox = MakeNumberBox("undercutFlat", "Flat",    -112,
+        "copper under the lowest", true)
+    undercutPctBox  = MakeNumberBox("undercutPct",  "Percent", -136,
+        "% under the lowest", true, 100)
+
+    -- One tick per rarity, in two columns of three: the junk on the left, the
+    -- gear worth money on the right, each in its own colour so the row you want
+    -- is found by colour rather than by reading.
+    scopeCaption = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    scopeCaption:SetPoint("TOPLEFT", 20, -164)
+
+    for index = 0, MAX_QUALITY do
+        local column = (index >= 3) and 1 or 0
+        local row    = index - column * 3
+
+        local box = CreateFrame("CheckButton", "CenturionAutoAuctionQuality" .. index,
+            panel, "UICheckButtonTemplate")
+        box:SetWidth(20)
+        box:SetHeight(20)
+        box:SetPoint("TOPLEFT", 24 + column * 130, -182 - row * 22)
+
+        local label = _G["CenturionAutoAuctionQuality" .. index .. "Text"]
+        if label then
+            label:SetFontObject(GameFontHighlightSmall)
+            label:SetText(QualityName(index))
+        end
+
+        box:SetScript("OnClick", function(self)
+            db.qualities[index] = self:GetChecked() and true or false
+            UpdateRule()
+        end)
+
+        qualityBoxes[index] = box
+    end
 
     ruleText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    ruleText:SetPoint("TOPLEFT", 22, -138)
-    ruleText:SetPoint("TOPRIGHT", -16, -138)
+    ruleText:SetPoint("TOPLEFT", 22, -254)
+    ruleText:SetPoint("TOPRIGHT", -16, -254)
     ruleText:SetJustifyH("LEFT")
 
     sellButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
@@ -926,7 +1052,7 @@ local function ShowHelp()
     Print("|cffffff00/aa stop|r   |cffffff00/aa buyout <n>|r   |cffffff00/aa bid <n>|r   (multiples of the deposit)")
     Print("|cffffff00/aa undercut on / off|r   |cffffff00/aa undercut <n>%|r   |cffffff00/aa undercut <n>g|r   (per item)")
     Print("|cffffff00/aa undercutbid <n>|r   |cffffff00/aa floor <n>|r   |cffffff00/aa duration 12 / 24 / 48|r   |cffffff00/aa normalize on / off|r")
-    Print("|cffffff00/aa gear on / off|r   |cffffff00/aa quality <min> [max]|r   (0 poor, 2 uncommon, 3 rare, 4 epic)")
+    Print("|cffffff00/aa gear on / off|r   |cffffff00/aa rarity|r list   |cffffff00/aa rarity blue off|r   |cffffff00/aa rarity 2 4|r   (names, colours or 0-5)")
     Print("|cffffff00/aa min <price>|r   |cffffff00/aa mindeposit <price>|r   |cffffff00/aa pages <n>|r   |cffffff00/aa auto on / off|r")
     Print("|cffffff00/aa skip [link]|r   |cffffff00/aa unskip [link]|r   |cffffff00/aa skiplist|r   |cffffff00/aa panel|r   |cffffff00/aa reset|r")
 end
@@ -999,7 +1125,8 @@ local function HandleCommand(msg)
             Print("Undercutting " .. (db.undercut and "|cff00ff00on|r - it overrides the deposit multiple whenever the item is already listed."
                                                   or "|cffff0000off|r - back to the deposit multiple."))
         elseif string.match(arg, "^%d+%.?%d*%%$") then
-            db.undercutPct = tonumber(string.match(arg, "^(%d+%.?%d*)%%$"))
+            -- Capped the same as the box, so the two ways in cannot disagree.
+            db.undercutPct = math.min(100, tonumber(string.match(arg, "^(%d+%.?%d*)%%$")))
             priceCache = {}
             UpdateRule()
             Print("Undercutting by |cffffff00" .. db.undercutPct .. "%|r per item.")
@@ -1050,25 +1177,45 @@ local function HandleCommand(msg)
         db.gearOnly = (string.lower(rest) ~= "off")
         UpdateRule()
         Print(db.gearOnly and "Only things you can wear or wield - no recipes, reagents or trade goods."
-                           or "Anything in the quality range, gear or not.")
+                           or "Anything of a ticked rarity, gear or not.")
 
-    elseif cmd == "quality" then
-        local minText, maxText = string.match(rest, "^(%d)%s*(%d?)$")
-        local minQ = tonumber(minText)
+    elseif cmd == "quality" or cmd == "rarity" then
+        local first, second = string.match(string.lower(rest), "^(%S*)%s*(%S*)$")
+        local index = QUALITY_WORDS[first or ""]
+        local other = QUALITY_WORDS[second or ""]
 
-        if minQ then
-            db.minQuality = minQ
-            local maxQ = tonumber(maxText)
-            if maxQ then
-                db.maxQuality = maxQ
+        if not index then
+            Print("Rarities - selling " .. ScopeText())
+            for quality = 0, MAX_QUALITY do
+                Print("   " .. QualityName(quality) .. " " ..
+                      (db.qualities[quality] and "|cff00ff00on|r" or "|cffff0000off|r"))
             end
-            if db.maxQuality < db.minQuality then
-                db.maxQuality = db.minQuality
+            Print("|cffffff00/aa rarity blue off|r, |cffffff00/aa rarity purple|r to toggle, |cffffff00/aa rarity 2 4|r for a range")
+
+        elseif other then
+            -- Two named: that range on and everything else off, which is the
+            -- old min/max command still working the way it used to.
+            local low, high = math.min(index, other), math.max(index, other)
+            for quality = 0, MAX_QUALITY do
+                db.qualities[quality] = (quality >= low and quality <= high)
             end
             UpdateRule()
             Print("Selling " .. ScopeText() .. ".")
+
         else
-            Print("Usage: /aa quality <min> [max] - 0 poor, 1 common, 2 uncommon, 3 rare, 4 epic, 5 legendary")
+            local on
+            if second == "on" or second == "yes" then
+                on = true
+            elseif second == "off" or second == "no" then
+                on = false
+            else
+                on = not db.qualities[index]        -- a bare name toggles
+            end
+
+            db.qualities[index] = on
+            UpdateRule()
+            Print(QualityName(index) .. (on and " will be sold." or " will be left alone.") ..
+                  " |cff888888Selling " .. ScopeText() .. ".|r")
         end
 
     elseif cmd == "min" then
@@ -1127,7 +1274,17 @@ local function HandleCommand(msg)
         local skip = db.skip
         for key, value in pairs(defaults) do
             if key ~= "skip" and key ~= "point" then
-                db[key] = value
+                if type(value) == "table" then
+                    -- A copy, or ticking a rarity box after a reset would be
+                    -- editing the defaults table itself.
+                    local copy = {}
+                    for subKey, subValue in pairs(value) do
+                        copy[subKey] = subValue
+                    end
+                    db[key] = copy
+                else
+                    db[key] = value
+                end
             end
         end
         db.skip = skip
@@ -1163,10 +1320,43 @@ frame:SetScript("OnEvent", function(self, event, arg1)
         CENTURION_AUTOAUCTION_DB = CENTURION_AUTOAUCTION_DB or {}
         db = CENTURION_AUTOAUCTION_DB
 
+        -- Settings saved before rarities became individual switches carry a
+        -- floor and a ceiling instead. Turn that range into the set it stood
+        -- for, so an existing filter is kept rather than quietly reset.
+        if db.qualities == nil and db.minQuality then
+            db.qualities = {}
+            for quality = 0, MAX_QUALITY do
+                db.qualities[quality] = (quality >= db.minQuality
+                    and quality <= (db.maxQuality or db.minQuality))
+            end
+        end
+
+        db.minQuality = nil
+        db.maxQuality = nil
+
+        -- The undercut used to be a percentage and shipped at 5. Lowering the
+        -- DEFAULT to zero does nothing for a character that has already saved
+        -- the key, so every existing setup carried on quietly taking 5% off the
+        -- top of the flat step and the panel dutifully said "1c + 5%".
+        --
+        -- Cleared once, behind a marker, so somebody who deliberately sets a
+        -- percentage afterwards keeps it instead of losing it on every login.
+        if not db.flatUndercutDone then
+            db.undercutPct = 0
+            db.flatUndercutDone = true
+        end
+
         for key, value in pairs(defaults) do
             if db[key] == nil then
                 if type(value) == "table" then
-                    db[key] = {}
+                    -- Copied, not shared. Handing over the defaults table itself
+                    -- would let a saved setting edit the defaults, and an empty
+                    -- table here would leave every rarity switched off.
+                    local copy = {}
+                    for subKey, subValue in pairs(value) do
+                        copy[subKey] = subValue
+                    end
+                    db[key] = copy
                 else
                     db[key] = value
                 end

@@ -75,55 +75,60 @@ void SendChallengeDescription(Player* player, ChallengeModeSettings setting)
         return;
 
     ChatHandler handler(player->GetSession());
+
+    // ONE MESSAGE PER IDEA, never per line.
+    //
+    // These used to be hard-wrapped at about eighty characters, a message each,
+    // which is wrong twice over: the chat frame already wraps to whatever width
+    // the player has set, and every message carries its own timestamp - so one
+    // sentence arrived as three stamped fragments split mid-clause ("a creature,
+    // another" / "player, a long fall"). Whole sentences let the client do the
+    // wrapping it was always going to do, and each timestamp then marks a
+    // complete thought.
+    //
+    // Colour carries the structure that layout cannot: gold names the mode and
+    // the numbers, red marks what a death actually takes, grey marks the rules
+    // about what a mode cannot be combined with.
     handler.PSendSysMessage("|cffffd000%s|r", GetChallengeDisplayName(setting));
 
     switch (setting)
     {
         case SETTING_HARDCORE:
-            handler.SendSysMessage("One life. Dying finishes the character - you are kicked immediately, and every");
-            handler.SendSysMessage("later login kills and kicks you again. There is no way back.");
-            handler.SendSysMessage("Cannot be combined with Semi-Hardcore.");
+            handler.SendSysMessage("One life. Dying |cffff2020finishes the character|r - you are kicked immediately, and every later login kills and kicks you again. There is no way back.");
+            handler.SendSysMessage("|cff909090Cannot be combined with Semi-Hardcore.|r");
             break;
         case SETTING_SEMI_HARDCORE:
-            handler.SendSysMessage("Death costs everything you are wearing. However you die - a creature, another");
-            handler.SendSysMessage("player, a long fall, drowning - every equipped item is DELETED outright and");
-            handler.SendSysMessage("your gold is set to zero.");
-            handler.SendSysMessage("They are destroyed, not dropped: nothing is left in a cache for anyone to");
-            handler.SendSysMessage("loot, and there is nothing to corpse-run back for.");
-            handler.SendSysMessage("Your shirt and tabard survive - they carry no armour and no stats, so there");
-            handler.SendSysMessage("is nothing in them for a death to take.");
+            handler.SendSysMessage("Death costs everything you are wearing. However you die - a creature, another player, a long fall, drowning - every equipped item is |cffff2020deleted outright|r and your gold is set to zero.");
+            handler.SendSysMessage("They are destroyed, not dropped: nothing is left in a cache for anyone to loot, and there is nothing to corpse-run back for.");
+            handler.SendSysMessage("Your shirt and tabard survive - they carry no armour and no stats, so there is nothing in them for a death to take.");
             handler.SendSysMessage("Your bags are left alone, and the character survives.");
-            handler.SendSysMessage("Cannot be combined with Hardcore.");
+            handler.SendSysMessage("|cff909090Cannot be combined with Hardcore.|r");
             break;
         case SETTING_SELF_CRAFTED:
-            handler.SendSysMessage("You may only equip items you crafted yourself - the item has to carry your");
-            handler.SendSysMessage("own crafter signature. Anything looted, bought or gifted cannot be worn.");
-            handler.SendSysMessage("Cannot be combined with Iron Man.");
+            handler.SendSysMessage("You may only equip items you crafted yourself - the item has to carry your own crafter signature. Anything looted, bought or gifted cannot be worn.");
+            handler.SendSysMessage("|cff909090Cannot be combined with Iron Man.|r");
             break;
         case SETTING_ITEM_QUALITY_LEVEL:
-            handler.SendSysMessage("You may only equip grey and white items. Nothing green or better, however");
-            handler.SendSysMessage("it was obtained.");
+            handler.SendSysMessage("You may only equip grey and white items. Nothing green or better, however it was obtained.");
             break;
         case SETTING_SLOW_XP_GAIN:
         case SETTING_VERY_SLOW_XP_GAIN:
-            handler.PSendSysMessage("You earn %.0f%% of the normal experience from everything.",
+            handler.PSendSysMessage("You earn |cffffd000%.0f%%|r of the normal experience from everything.",
                 sChallengeModes->GetXpMultiplier(setting) * 100.0f);
-            handler.SendSysMessage("Slow XP and Very Slow XP cannot be combined with each other.");
+            handler.SendSysMessage("|cff909090Slow XP and Very Slow XP cannot be combined with each other.|r");
             break;
         case SETTING_QUEST_XP_ONLY:
-            handler.SendSysMessage("Kills award you no experience at all - only quests do.");
-            handler.SendSysMessage("A pet with you still receives its own share.");
+            handler.SendSysMessage("Kills award you no experience at all - only quests do. A pet with you still receives its own share.");
             break;
         case SETTING_IRON_MAN:
             handler.SendSysMessage("The strict one. All of the following, together:");
-            handler.SendSysMessage("  - No talent points, ever - they are stripped on login and on every level.");
-            handler.SendSysMessage("  - No resurrection. If you die you are killed again the moment you return.");
-            handler.SendSysMessage("  - Grey and white gear only.");
-            handler.SendSysMessage("  - No potions, elixirs or flasks, and no food that heals you over time.");
-            handler.SendSysMessage("  - No enchantments may be applied.");
-            handler.SendSysMessage("  - No professions - trade skills are unlearned as you learn them.");
-            handler.SendSysMessage("    Runeforging, Poisons and Beast Training are allowed.");
-            handler.SendSysMessage("Cannot be combined with Self Crafted.");
+            handler.SendSysMessage("  |cffffd000-|r No talent points, ever - they are stripped on login and on every level.");
+            handler.SendSysMessage("  |cffffd000-|r No resurrection. If you die you are killed again the moment you return.");
+            handler.SendSysMessage("  |cffffd000-|r Grey and white gear only.");
+            handler.SendSysMessage("  |cffffd000-|r No potions, elixirs or flasks, and no food that heals you over time.");
+            handler.SendSysMessage("  |cffffd000-|r No enchantments may be applied.");
+            handler.SendSysMessage("  |cffffd000-|r No professions - trade skills are unlearned as you learn them. Runeforging, Poisons and Beast Training are allowed.");
+            handler.SendSysMessage("|cff909090Cannot be combined with Self Crafted.|r");
             break;
         default:
             handler.SendSysMessage("No description available.");
