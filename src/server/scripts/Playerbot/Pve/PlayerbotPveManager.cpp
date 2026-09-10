@@ -5828,7 +5828,35 @@ namespace
     // really is worse than a two-hander and this must not fire.
     bool PrefersDualWield(Player const* bot)
     {
-        return bot->GetClass() == CLASS_HUNTER && EquipProfileIndex(bot) == 0 && bot->CanDualWield();
+        if (!bot->CanDualWield())
+            return false;
+
+        switch (bot->GetClass())
+        {
+            // Beast mastery. The pet carries the damage, so the hunter's own two
+            // hands are stat sticks and two of them beat one.
+            case CLASS_HUNTER:  return EquipProfileIndex(bot) == 0;
+
+            // FURY. The warrior tree built entirely around holding two weapons:
+            // Bloodthirst and Whirlwind swing whatever is in each hand, and Dual
+            // Wield Specialization is the tree's own talent.
+            //
+            // It was in neither this rule nor PrefersTwoHandedMainhand, which
+            // claims only Arms - so a fury warrior fell through both and was left
+            // to the plain slot-by-slot scorer, which does exactly what the
+            // comment on the two-hander rule warns about. Measured on the live
+            // realm before this line existed: of twenty fury warriors, nineteen
+            // were carrying a SHIELD and not one carried a second weapon.
+            //
+            // Rogues need no entry here. They dual wield too, but they can hold
+            // neither a two-hander nor a shield, so both of the rules this
+            // predicate guards are no-ops for them - which is also why the fault
+            // only ever showed on warriors. A warrior is the one class that can
+            // dual wield AND carry a shield.
+            case CLASS_WARRIOR: return EquipProfileIndex(bot) == 1;
+
+            default:            return false;
+        }
     }
 
     // And the mirror of it: the specs that want the biggest single swing they
@@ -6191,6 +6219,25 @@ namespace
         // An empty slot is not a licence to buy anything at all.
         if (!incumbent)
             return HasFightingValue(candidate);
+
+        // THE OFF HAND OF A DUAL WIELDER IS A WEAPON SLOT, not a shield slot.
+        //
+        // Decided before any score, and for the same reason the two-hander rule
+        // is: the scorer weighs one slot at a time, so a shield that beats a
+        // one-hander on effective item level wins an off-hand that ought to be
+        // holding a second weapon. Neither comparison is wrong on its own; the
+        // PAIR is, and only a spec-aware rule can see that.
+        //
+        // This sits ABOVE the weapon-versus-weapon block deliberately, because
+        // the case it exists for is a weapon against a SHIELD - armour, not a
+        // weapon - which that block never sees.
+        if (slot == EQUIPMENT_SLOT_OFFHAND && PrefersDualWield(bot))
+        {
+            bool const candidateWeapon = candidate->Class == ITEM_CLASS_WEAPON;
+            bool const incumbentWeapon = incumbent->Class == ITEM_CLASS_WEAPON;
+            if (candidateWeapon != incumbentWeapon)
+                return candidateWeapon;
+        }
 
         if (candidate->Class == ITEM_CLASS_WEAPON && incumbent->Class == ITEM_CLASS_WEAPON)
         {
