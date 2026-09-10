@@ -575,7 +575,8 @@ namespace
     float ScoreItemForSpec(Player const* bot, ItemTemplate const* proto);
     GameObject* FindRegisteredDeathChest(Player* bot, uint32 entry, float maxDistance);
     bool IsAuctionableSurplus(Player* bot, Item* item);
-    void HoldLootFromAuction(ObjectGuid itemGuid, uint32 seconds);
+    void HoldLootFromAuction(ObjectGuid itemGuid, uint32 seconds, ObjectGuid owner);
+    bool IsHeldFromAuction(ObjectGuid itemGuid);
     uint32 RequiredAmmoSubclass(Player const* bot);
     void MoveTowardThrottled(Player* bot, Position const& destination);
     void TrimOverstockedConsumables(Player* bot);
@@ -4486,6 +4487,19 @@ namespace
             if (!proto)
                 return;
 
+            // HELD MEANS UNTOUCHABLE, and it did not before.
+            //
+            // The trade-goods and spare-container branches below both read
+            // `!IsAuctionableSurplus(...)` as a reason to SELL - the reasoning
+            // being that an item the house will not take may as well go to the
+            // merchant. For a held item that is exactly backwards: it is off the
+            // auction house precisely BECAUSE somebody may still want it back, and
+            // the branch turned that protection into an execution order. A dead
+            // player's cloth, ore and bags were vendored during the very window
+            // they were supposed to be recoverable in.
+            if (IsHeldFromAuction(item->GetGUID()))
+                return;
+
             // Surplus booze is dropped even when no merchant will pay for it: the
             // point of the cap is the bag slot, not the copper, and a bottle with
             // no sell price would otherwise sit there for good.
@@ -4928,6 +4942,90 @@ namespace
         bot->Whisper(line, LANG_UNIVERSAL, victim);
     }
 
+    // What one person's gear did over a single listing pass.
+    //
+    // Gathered rather than sent per item, because a catch-up pass lists up to
+    // forty lots in one go and somebody who died with a full pack should get one
+    // whisper about it, not forty.
+    struct AuctionNoticeForOwner
+    {
+        std::string ItemName;       // the dearest lot: the one worth naming
+        uint32 Buyout = 0;
+        uint32 Count = 0;
+        uint32 Total = 0;           // how many of their things went up this pass
+    };
+
+    void WhisperAuctionNotice(Player* bot, ObjectGuid ownerGuid, AuctionNoticeForOwner const& notice)
+    {
+        if (!bot || !g_PveConfig.chestAuctionNoticeEnabled || notice.ItemName.empty())
+            return;
+
+        if (ownerGuid.IsEmpty() || ownerGuid == bot->GetGUID())
+            return;
+
+        // Offline is ordinary and costs nothing. The record has already been
+        // claimed by the caller, so all that is lost is a line of chat nobody
+        // could have read. Mail would be the obvious alternative and it is the
+        // wrong one: a letter about a lot that expires in twelve hours is a letter
+        // about nothing by the time it is opened.
+        Player* owner = ObjectAccessor::FindConnectedPlayer(ownerGuid);
+        if (!owner || owner == bot || !IsHumanPlayer(owner))
+            return;
+
+        // Twenty of them, in the same three registers the fleet taunts in - the
+        // mock-official notice, the openly smug, and the flatly helpful - ordered
+        // so that two neighbours never share one, because somebody who loses
+        // several pieces sees several of these in a row.
+        //
+        // {price} is the load-bearing token: the whole point of telling them is
+        // that they can still buy it back, and a notice without the number is just
+        // gloating.
+        static constexpr std::array<char const*, 20> notices =
+        {
+            "Notice of listing: {item} has been entered on the auction house at {price}. The holding period elapsed. Your claim is now a purchase.",
+            "Bag space is finite and my patience rather less so. Your {item} is up at {price}.",
+            "The corpse run was the difficult part. Getting {item} back from the auction house is only {price}.",
+            "This is your final notification regarding {item}. Status: listed. Buyout: {price}. Remedy available: pay it.",
+            "{item} posted at {price}. If a stranger takes it first, I expect I shall cope.",
+            "Your {item} is on the auction house, filed under its own name. Buyout is {price}. I have not hidden it from you.",
+            "Notice of sale by the holder: {item}, quantity {count}, listed at {price}. Absence of a corpse run is taken as consent.",
+            "I tried your {item} on for an afternoon. It suits neither of us. Auction house, {price}.",
+            "{item} is listed at {price}. I would tell you to hurry, but the auction runs its full length whether you do or not.",
+            "Kindly note that {item} is now the auction house problem, and {price} is now yours. The transfer of concern is complete.",
+            "Listed your {item} at {price}. May the best bidder win, though you already lost it once.",
+            "{item} is with the auctioneer at {price}. He takes his cut whether you buy it back or a stranger does.",
+            "Filed under lost property, held the statutory while, then moved to goods for sale. {item}, {price}. The clerk was me throughout.",
+            "Your {item} has gone to auction at {price}. The deposit came out of my own purse, so do try to be prompt.",
+            "The buyout on {item} is {price}. Whoever pays it owns it, and nothing at all is stopping that being you.",
+            "{item} has been reclassified from held goods to open stock. The ask is {price}. Stock does not remember its previous owner.",
+            "{item} on the auction house at {price}. Honest work, in a manner of speaking.",
+            "Lot of {count}: {item}, buyout {price}. Consider it a second chance, priced accordingly.",
+            "For the record, {item} is now in the public ledger at {price}. Prior ownership is noted in the margin and carries no discount.",
+            "{item} sits on the auction house at {price}. I mention it only because you seemed fond of it at the time.",
+        };
+
+        std::string line = notices[urand(0, uint32(notices.size()) - 1)];
+
+        // Resumes PAST the replacement, so a token whose value contains the token
+        // cannot spin here forever. Same rule as the taunt substitution above.
+        auto const substitute = [](std::string& text, std::string const& token, std::string const& with)
+        {
+            for (size_t at = text.find(token); at != std::string::npos; at = text.find(token, at + with.size()))
+                text.replace(at, token.size(), with);
+        };
+
+        substitute(line, "{item}", notice.ItemName);
+        substitute(line, "{price}", BarracksHardcore::FormatMoney(notice.Buyout));
+        substitute(line, "{count}", std::to_string(notice.Count));
+
+        bot->Whisper(line, LANG_UNIVERSAL, owner);
+
+        // The rest are counted rather than named. One line, whatever the haul.
+        if (notice.Total > 1)
+            bot->Whisper(Trinity::StringFormat("...and {} more of your things went up with it.",
+                notice.Total - 1), LANG_UNIVERSAL, owner);
+    }
+
     void ProcessPendingLootExecutions()
     {
         std::unordered_map<uint64, ObjectGuid> drained;
@@ -5055,6 +5153,13 @@ namespace
             // That is a pair of bag walks, which would be silly on every corpse -
             // it is done ONLY for player-built chests, which are rare.
             bool const playerChest = CustomLootChests::IsPlayerBuiltChest(lootGuid);
+
+            // Read ONCE for the whole haul, and read here rather than when the
+            // hold lapses: the chest registry is pruned as chests despawn, so ten
+            // minutes from now this question has no answer.
+            ObjectGuid const chestOwner = playerChest
+                ? CustomLootChests::GetChestOwner(lootGuid) : ObjectGuid::Empty;
+
             std::unordered_set<uint64> before;
             if (playerChest)
                 ForEachBagItem(bot, [&](Item* item, uint8, uint8)
@@ -5074,7 +5179,8 @@ namespace
                     if (before.count(item->GetGUID().GetRawValue()))
                         return;
 
-                    HoldLootFromAuction(item->GetGUID(), g_PveConfig.deathChestAuctionHoldSeconds);
+                    HoldLootFromAuction(item->GetGUID(), g_PveConfig.deathChestAuctionHoldSeconds,
+                        chestOwner);
                     ++held;
                 });
 
@@ -9068,31 +9174,86 @@ namespace
     //
     // So the gear is held, not protected: the bot keeps it, wears it, and will
     // list it eventually. The window just has to be long enough to run back.
-    std::mutex g_AuctionHoldLock;
-    std::unordered_map<uint64, time_t> g_AuctionHoldUntil;
+    // WHOSE it was, as well as until when.
+    //
+    // The owner has to be captured at loot time and carried here. It cannot be
+    // looked up later: CustomLootChests::GetChestOwner reads a registry that is
+    // pruned as chests despawn, and the chest is long gone by the time the hold
+    // lapses. The chest also stores loot DESCRIPTORS rather than items, so the
+    // Item the bot ends up holding has a brand new guid with no link back - this
+    // record is the only place that link can live.
+    struct AuctionHold
+    {
+        time_t Until = 0;
+        ObjectGuid Owner;
+    };
 
-    void HoldLootFromAuction(ObjectGuid itemGuid, uint32 seconds)
+    std::mutex g_AuctionHoldLock;
+    std::unordered_map<uint64, AuctionHold> g_AuctionHoldByItem;
+
+    void HoldLootFromAuction(ObjectGuid itemGuid, uint32 seconds, ObjectGuid owner)
     {
         std::lock_guard<std::mutex> guard(g_AuctionHoldLock);
-        g_AuctionHoldUntil[itemGuid.GetRawValue()] = GameTime::GetGameTime() + time_t(seconds);
+        AuctionHold& hold = g_AuctionHoldByItem[itemGuid.GetRawValue()];
+        hold.Until = GameTime::GetGameTime() + time_t(seconds);
+        hold.Owner = owner;
     }
 
+    // A PURE PREDICATE. It used to erase the entry the moment it found one
+    // expired, and that quietly made the notice below impossible.
+    //
+    // This is asked FOUR times per item, and never once at the moment the item is
+    // listed: twice by the vendor errand, which runs on the bot's own tick every
+    // fifteen seconds, and twice by the listing pass - once while collecting
+    // candidates and once per item before posting. The first of those to see an
+    // expired hold destroyed the record, so by the time the item actually reached
+    // the auction house there was nothing left to say who it had belonged to. The
+    // vendor errand alone could do it minutes ahead of the listing pass.
+    //
+    // The old comment claimed the erase kept the map bounded. It never did: the
+    // candidate scan stops asking once it has its three lots, so anything further
+    // down a full pack was never queried, and an item the bot equips is never
+    // walked at all. SweepAuctionHolds is the real bound.
     bool IsHeldFromAuction(ObjectGuid itemGuid)
     {
         time_t const now = GameTime::GetGameTime();
         std::lock_guard<std::mutex> guard(g_AuctionHoldLock);
-        auto itr = g_AuctionHoldUntil.find(itemGuid.GetRawValue());
-        if (itr == g_AuctionHoldUntil.end())
+        auto itr = g_AuctionHoldByItem.find(itemGuid.GetRawValue());
+        return itr != g_AuctionHoldByItem.end() && itr->second.Until > now;
+    }
+
+    // Claim the record, once, atomically. Find-then-erase as two steps would let
+    // the vendor errand on another thread slip between them, and would let two
+    // overlapping passes both send the notice.
+    bool TakeAuctionHold(ObjectGuid itemGuid, ObjectGuid& outOwner)
+    {
+        std::lock_guard<std::mutex> guard(g_AuctionHoldLock);
+        auto itr = g_AuctionHoldByItem.find(itemGuid.GetRawValue());
+        if (itr == g_AuctionHoldByItem.end())
             return false;
 
-        // Expired entries are dropped as they are asked about, so the map is
-        // bounded by what is actually still held rather than by everything ever
-        // looted. Nothing else sweeps it.
-        if (itr->second > now)
-            return true;
+        outOwner = itr->second.Owner;
+        g_AuctionHoldByItem.erase(itr);
+        return true;
+    }
 
-        g_AuctionHoldUntil.erase(itr);
-        return false;
+    // Now that nothing erases on read, this is what stops the map growing for the
+    // rest of the process. There is no point chasing the individual exits - an
+    // item can be vendored, destroyed, mailed, traded, trimmed out of a stack, or
+    // simply worn, and being WORN is not an event at all - so the bound is time.
+    //
+    // A day, which is far longer than the few minutes between a hold lapsing and
+    // the next listing pass, so a record is never swept out from under an item
+    // that was still going to be listed. At a few dozen bytes per player death the
+    // steady state is a day's deaths, which is nothing.
+    constexpr time_t kAuctionHoldGraceSeconds = time_t(DAY);
+
+    void SweepAuctionHolds()
+    {
+        time_t const cutoff = GameTime::GetGameTime() - kAuctionHoldGraceSeconds;
+        std::lock_guard<std::mutex> guard(g_AuctionHoldLock);
+        for (auto itr = g_AuctionHoldByItem.begin(); itr != g_AuctionHoldByItem.end(); )
+            itr = itr->second.Until < cutoff ? g_AuctionHoldByItem.erase(itr) : std::next(itr);
     }
 
     bool IsAuctionableSurplus(Player* bot, Item* item)
@@ -9420,6 +9581,11 @@ namespace
 
     void ProcessPendingAuctionSales()
     {
+        // The only thing bounding the hold map. Cheap - it is a handful of entries
+        // per player death - and this is the pass that consumes them, so it is the
+        // natural place to drop the ones no listing will ever claim.
+        SweepAuctionHolds();
+
         std::unordered_set<uint64> drained;
         {
             std::lock_guard<std::mutex> guard(g_PvePendingLock);
@@ -9477,6 +9643,10 @@ namespace
                 if (surplus.size() < listingLimit && IsAuctionableSurplus(bot, item))
                     surplus.push_back(item->GetGUID());
             });
+
+            // Whose death chest any of this came out of, gathered across the pass
+            // and sent after it. See AuctionNoticeForOwner.
+            std::unordered_map<uint64, AuctionNoticeForOwner> noticesForOwner;
 
             if (surplus.empty())
                 continue;
@@ -9650,10 +9820,40 @@ namespace
                 TC_LOG_INFO("playerbots.pve", "Bot {} listed {} x{} for {} copper (deposit {}).",
                     bot->GetName(), proto->Name1, count, buyout, deposit);
 
+                // THE FIRST POINT AT WHICH THIS IS TRUE.
+                //
+                // The transaction above has committed and the lot is on the house;
+                // every path higher up can still bail with the item unlisted, and
+                // one of them - the vendor-floor branch - destroys it instead. So
+                // the record is claimed here and nowhere earlier, which also makes
+                // the claim the once-only guarantee.
+                //
+                // proto, count and buyout are locals and stay valid: the item was
+                // detached from the bags rather than deleted, and AddAItem now owns
+                // it.
+                ObjectGuid heldFor;
+                if (TakeAuctionHold(itemGuid, heldFor) && !heldFor.IsEmpty())
+                {
+                    AuctionNoticeForOwner& notice = noticesForOwner[heldFor.GetRawValue()];
+                    ++notice.Total;
+
+                    // Name the dearest lot. It is the one they will care about, and
+                    // the one whose price is worth quoting.
+                    if (notice.ItemName.empty() || buyout > notice.Buyout)
+                    {
+                        notice.ItemName = proto->Name1;
+                        notice.Buyout = buyout;
+                        notice.Count = count;
+                    }
+                }
+
                 // The next listing this pass undercuts its own price too, so a bot
                 // dumping duplicates does not stack them all at the same number.
                 cheapestPerUnit[proto->ItemId] = std::max<uint32>(1, buyout / count);
             }
+
+            for (auto const& [ownerRawGuid, notice] : noticesForOwner)
+                WhisperAuctionNotice(bot, ObjectGuid(ownerRawGuid), notice);
         }
     }
 
@@ -15093,6 +15293,7 @@ namespace playerbot
         g_PveConfig.deathChestAuctionHoldSeconds = uint32(std::max(0,
             sConfigMgr->GetIntDefault("Playerbot.Pve.DeathChestAuctionHoldSeconds", 10 * MINUTE)));
         g_PveConfig.chestTauntEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.ChestTaunt.Enable", true);
+        g_PveConfig.chestAuctionNoticeEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.ChestAuctionNotice.Enable", true);
         g_PveConfig.tavernEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Tavern.Enable", true);
         g_PveConfig.tavernMinMinutes = uint32(std::max(1, sConfigMgr->GetIntDefault("Playerbot.Pve.Tavern.MinMinutes", 25)));
         g_PveConfig.tavernMaxMinutes = uint32(std::max<int32>(int32(g_PveConfig.tavernMinMinutes),

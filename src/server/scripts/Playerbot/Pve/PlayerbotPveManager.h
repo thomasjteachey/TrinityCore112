@@ -41,6 +41,11 @@ struct PveConfig
     // may list it. Long enough to corpse-run back and take it off the bot.
     uint32 deathChestAuctionHoldSeconds = 600;    // 10 minutes
     bool chestTauntEnabled = true;
+    // And the follow-up, sent when the hold lapses and the gear is actually
+    // listed. Separate from the taunt because it is a different message doing a
+    // different job: the taunt gloats at the moment of theft, this one tells
+    // somebody where their sword went and what it costs to get it back.
+    bool chestAuctionNoticeEnabled = true;
     // Bots drinking for fun. Nothing here touches recovery - a bot only opens a
     // bottle when it needs nothing, and never instead of water.
     bool tavernEnabled = true;
