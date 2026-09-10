@@ -1938,7 +1938,19 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         else if (warlockOwner->HasSpell(18692) || warlockOwner->HasAura(18692))
             createHealthstoneSpellId = 23820;
 
-        ForcePlayerbotDismount(player);
+        // No dismount here on purpose. This cast passes `true`, which is
+        // TRIGGERED_FULL_MASK, and that mask contains
+        // TRIGGERED_IGNORE_CASTER_MOUNTED_OR_ON_VEHICLE - Spell::CheckCast wraps
+        // its ENTIRE mounted refusal in a test for that flag, so IsMounted() is
+        // never even evaluated for this one. The mount was never in the way.
+        //
+        // Taking it off was a net loss. The helper only runs out of combat, which
+        // is exactly when a bot is mounted, so this fired on essentially every
+        // soulwell pickup and forced a remount afterwards. And the complete
+        // dismount strips the Plainsrunning run-mount too, which the core
+        // deliberately defers rather than refuses - making this site MORE
+        // aggressive than the general pre-cast rule it looked like a special case
+        // of.
         StopVirtualPlayerbotMovement(player);
         SpellCastResult const castResult = player->CastSpell(player, createHealthstoneSpellId, true);
         if (castResult != SPELL_CAST_OK || !playerbot::PvpCore::HasHealthstone(player))
