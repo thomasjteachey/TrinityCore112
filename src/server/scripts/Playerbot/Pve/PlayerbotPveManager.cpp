@@ -13202,14 +13202,52 @@ namespace
 
         // Only autonomous open-world bots. Companions have their own master
         // catch-up teleport, while a stay order is intentional immobility.
-        if (!state.masterGuid.IsEmpty() || state.stay || state.engaged || bot->IsInCombat() ||
-            IsRestingNow(bot, state))
+        if (!state.masterGuid.IsEmpty() || state.stay || state.passive || IsRestingNow(bot, state))
             return false;
+
+        // Being in a FIGHT is not a reason to be exempt; being in a fight the bot
+        // is actually having is.
+        //
+        // This used to bail on state.engaged or IsInCombat() outright, and that
+        // made the one recovery built for wedged bots blind to the exact shape a
+        // wedge takes. Halfyn stood motionless for eight minutes: in combat, no
+        // live victim, health stuck at 82 of about 300 and not regenerating,
+        // alone. Nothing was watching him, and nothing could - rest cannot START
+        // in combat, so he was below the rest floor too, and neither grind
+        // re-acquisition nor the wander branch runs from there. A player noticing
+        // is what surfaced it.
+        //
+        // The discriminator is a live victim, not the combat flag. A bot in a real
+        // fight has one and can never be teleported out of it by this. A bot with
+        // no live valid victim that has also not moved fifteen yards in two
+        // minutes is not fighting anything, whatever its combat flag says.
+        //
+        // The recovery is what actually clears the stale state: its near-teleport
+        // runs CombatStop, which drops the combat flag the bot could not shed.
+        if (state.engaged || bot->IsInCombat())
+        {
+            Unit const* victim = bot->GetVictim();
+            if (victim && victim->IsAlive() && bot->IsValidAttackTarget(victim))
+                return false;
+        }
 
         // Do not count scripted/legitimate holds toward the timeout. Swimming is
         // intentionally NOT excluded: a bot wedged in a river is one of the cases
         // this recovery exists to catch.
-        if (bot->HasUnitState(UNIT_STATE_CONTROLLED) || bot->HasUnitState(UNIT_STATE_CASTING) ||
+        // UNIT_STATE_CASTING is asked WITH a spell to back it up, deliberately.
+        //
+        // The bare state test was unbounded: a bot whose casting state latches on
+        // without a spell behind it was exempt from this recovery for the rest of
+        // its life - and a latched casting state also suppresses every white swing
+        // (Player::Update gates melee on not being in it), so the bot deals no
+        // damage, its target never dies, and it never leaves combat either. That
+        // is precisely the wedge this function exists to undo, so it must not be
+        // the thing that hides it.
+        bool const genuinelyCasting = bot->HasUnitState(UNIT_STATE_CASTING) &&
+            (bot->GetCurrentSpell(CURRENT_GENERIC_SPELL) || bot->GetCurrentSpell(CURRENT_MELEE_SPELL) ||
+                bot->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL));
+
+        if (bot->HasUnitState(UNIT_STATE_CONTROLLED) || genuinelyCasting ||
             bot->GetCurrentSpell(CURRENT_CHANNELED_SPELL) || bot->GetTransport() ||
             bot->GetVehicleBase() || bot->IsInFlight() || now < state.tamingUntil ||
             now < state.feignHoldUntil)
