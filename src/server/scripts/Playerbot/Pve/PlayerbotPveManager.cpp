@@ -148,8 +148,38 @@ namespace
                     uint32 const castTime = spellInfo->CastTimeEntry
                         ? uint32(std::max(0, spellInfo->CastTimeEntry->Base)) : 0u;
 
+                    // THE SHORTEST REAL CAST, not the longest.
+                    //
+                    // This took the LONGEST, on the reasoning that a visible cast
+                    // bar beats an instant open. The first half of that is right
+                    // and the second half was a trap.
+                    //
+                    // Lock type 17 is what a player's death cache carries, and the
+                    // game ships two Opening spells for it: 21651 at TEN SECONDS
+                    // and 26868 at one. Taking the longer asked a bot to stand
+                    // still for ten seconds without moving and without being hit -
+                    // InterruptFlags 31 cancels on both - which in a zone with
+                    // anything alive in it is not a cast, it is a wish. Measured
+                    // on the live realm before this line changed: 2,916 attempts
+                    // at player death caches yielded 32 takes, about one percent,
+                    // and the cancel is logged at DEBUG so it left no trace at all.
+                    // A person would watch bots walk to their cache, stand there,
+                    // and wander off.
+                    //
+                    // Ordinary world chests are lock type 13 and top out at five
+                    // seconds, which is exactly why those were being opened and
+                    // caches were not.
+                    //
+                    // Zero is still skipped rather than preferred, so the cast bar
+                    // the original reasoning wanted is still there. It is simply
+                    // the cheapest one on offer instead of the dearest. A lock type
+                    // with nothing but instant spells falls through to 0, and the
+                    // caller reads that as "use it outright", which it already did.
+                    if (!castTime)
+                        break;
+
                     auto const itr = byLockType.find(lockType);
-                    if (itr == byLockType.end() || castTime > bestCastTime[lockType] ||
+                    if (itr == byLockType.end() || castTime < bestCastTime[lockType] ||
                         (castTime == bestCastTime[lockType] && spellId < itr->second))
                     {
                         byLockType[lockType] = spellId;
@@ -11972,15 +12002,35 @@ namespace
             }
 
             Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid));
-            // A bot in the air is left alone. Teleporting mid-taxi tears the
-            // flight generator off without letting it finalize, and finalize is
-            // the only thing that clears UNIT_STATE_IN_FLIGHT and dismounts - so
-            // the bot arrives still wearing the gryphon and frozen. The request
-            // is dropped; whatever wanted it moved asks again once it lands.
-            if (!bot || !bot->IsInWorld() || !bot->IsAlive() || bot->InBattleground() ||
-                bot->IsInFlight() ||
-                bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
+
+            // Gone, or busy elsewhere. Nothing to move and nothing to remember.
+            if (!bot || !bot->IsInWorld() || bot->InBattleground())
                 continue;
+
+            // A TRANSIENT state must not CONSUME the request.
+            //
+            // The pending set was drained with a swap, so a plain continue here
+            // throws the rescue away - and the bot that most needs rescuing is
+            // precisely the one this guard skips. A level 18 stranded in a level
+            // 40 zone is dead most of the time, so nearly every rescue queued for
+            // it arrived while it was a corpse and was discarded; the sixty-second
+            // sweep then re-queued, the bot died again, and it never got out. That
+            // is the reported bug, and it is a loop the bot cannot break by itself.
+            //
+            // A bot in the air is still left alone for its own sake - teleporting
+            // mid-taxi tears the flight generator off without letting it finalize,
+            // and finalize is the only thing that clears UNIT_STATE_IN_FLIGHT and
+            // dismounts, so the bot would arrive still wearing the gryphon and
+            // frozen. The difference is that now it is asked again on the next
+            // pass rather than forgotten.
+            if (!bot->IsAlive() || bot->IsInFlight() ||
+                bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
+            {
+                std::lock_guard<std::mutex> pendingGuard(g_PvePendingLock);
+                g_PendingGrindRelocations.insert(botRawGuid);
+                continue;
+            }
+
             if (stuckRecovery && bot->GetZoneId() != stuckZoneId)
                 continue;
             if (stuckRecovery)
@@ -12121,8 +12171,24 @@ namespace
                 }
             }
 
+            // Nowhere to send it, and until now that was silent.
+            //
+            // This is the other half of a stranded bot: the sweep says "does not
+            // belong in this zone" once a minute, the executor finds no cluster it
+            // may legally use, and drops the request without a word. From the log
+            // it looks exactly like a relocation that worked. Say it out loud, and
+            // requeue, so the bot is retried rather than abandoned - the cluster
+            // cache is rebuilt as the world loads, so "nothing at this level" is
+            // often temporary.
             if (candidates.empty())
+            {
+                TC_LOG_INFO("playerbots.pve",
+                    "Bot {} (level {}) has nowhere to relocate to - no usable grind cluster; will retry.",
+                    bot->GetName(), uint32(bot->GetLevel()));
+                std::lock_guard<std::mutex> pendingGuard(g_PvePendingLock);
+                g_PendingGrindRelocations.insert(botRawGuid);
                 continue;
+            }
 
             if (!stuckRecovery && fleeing && g_PveConfig.timidFleeYards > 0.0f)
             {
