@@ -1660,6 +1660,62 @@ namespace
         if (!ammoId)
             return;
 
+        // Shed the rungs it has outgrown, and cap what is left.
+        //
+        // Rogues have had this for their poisons for a long time; hunters never
+        // got the equivalent, so every rung of the ladder a hunter passed stayed
+        // in its bags for the rest of its life. Found on the live realm: a level
+        // 39 hunter carrying 5,200 Light Shot - the level ONE rung - across 26
+        // stacks, holding none at all of the rung it was actually due. Another
+        // was sitting on 11,000 rounds in 55 stacks. That is most of a pack spent
+        // on ammunition the bot had outgrown by thirty levels.
+        //
+        // Destroying the loaded stack is deliberately allowed. Emptying it is
+        // what makes the reload below notice and re-point PLAYER_AMMO_ID at the
+        // right rung, which is the same latch this function already exists to
+        // break - so the trim repairs the field rather than stranding it.
+        //
+        // Only ids from the ladder are ever touched, so ammunition a bot looted
+        // or a player handed it is out of scope, exactly as for poisons.
+        {
+            RoguePoisonRank const* ladder = nullptr;
+            size_t ladderSize = 0;
+            if (wantedSubclass == ITEM_SUBCLASS_ARROW)
+            {
+                ladder = kArrowLadder;
+                ladderSize = std::size(kArrowLadder);
+            }
+            else if (wantedSubclass == ITEM_SUBCLASS_BULLET)
+            {
+                ladder = kBulletLadder;
+                ladderSize = std::size(kBulletLadder);
+            }
+
+            for (size_t i = 0; ladder && i < ladderSize; ++i)
+            {
+                uint32 const outclassed = ladder[i].itemId;
+                if (outclassed == ammoId)
+                    continue;
+
+                if (uint32 const held = bot->GetItemCount(outclassed))
+                {
+                    bot->DestroyItemCount(outclassed, held, true);
+                    TC_LOG_INFO("playerbots.pve", "Bot {} dropped {} rounds of outclassed ammunition {} (due {}).",
+                        bot->GetName(), held, outclassed, ammoId);
+                }
+            }
+
+            // Two stacks is already generous: the vendor pass tops up below 200
+            // and the issue below fires at 50, so nothing here can run a bot dry.
+            constexpr uint32 kAmmoCarryLimit = 400;
+            if (uint32 const held = bot->GetItemCount(ammoId); held > kAmmoCarryLimit)
+            {
+                bot->DestroyItemCount(ammoId, held - kAmmoCarryLimit, true);
+                TC_LOG_INFO("playerbots.pve", "Bot {} trimmed {} surplus rounds of {} down to {}.",
+                    bot->GetName(), held - kAmmoCarryLimit, ammoId, kAmmoCarryLimit);
+            }
+        }
+
         // Count what is actually in the pack, not just the loaded type - the same
         // trap the vendor pass already learned about.
         uint32 const loadedId = bot->GetUInt32Value(PLAYER_AMMO_ID);
