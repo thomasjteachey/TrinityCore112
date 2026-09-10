@@ -3450,6 +3450,24 @@ namespace
     // A guid that no longer resolves has been looted or despawned, so it is
     // dropped and the next nearest tried. The only way that misfires is a chest on
     // a grid this bot cannot see - which it could not have walked to anyway.
+    // Whose cache this is, for the log only. Empty when the registry has no record
+    // - a world chest rather than one of ours - which reads as "-" on the line.
+    std::string OwnerNameForChest(ObjectGuid chestGuid)
+    {
+        ObjectGuid const owner = CustomLootChests::GetChestOwner(chestGuid);
+        if (owner.IsEmpty())
+            return "-";
+
+        if (Player const* player = ObjectAccessor::FindConnectedPlayer(owner))
+            return player->GetName();
+
+        std::string name;
+        if (sCharacterCache->GetCharacterNameByGuid(owner, name))
+            return name;
+
+        return owner.ToString();
+    }
+
     GameObject* FindRegisteredDeathChest(Player* bot, uint32 entry, float maxDistance)
     {
         if (!entry)
@@ -5187,8 +5205,9 @@ namespace
                 if (held)
                 {
                     TC_LOG_INFO("playerbots.pve",
-                        "Bot {} took {} item(s) from a player's chest; held off the auction house for {}s.",
-                        bot->GetName(), held, g_PveConfig.deathChestAuctionHoldSeconds);
+                        "Bot {} took {} item(s) from {}'s chest {}; held off the auction house for {}s.",
+                        bot->GetName(), held, OwnerNameForChest(lootGuid),
+                        lootGuid.GetCounter(), g_PveConfig.deathChestAuctionHoldSeconds);
                     TauntChestOwner(bot, lootGuid, held);
                 }
             }
@@ -12523,8 +12542,8 @@ namespace
             bot->CastSpell(go, lockSpell->Id, false);
         else
             go->Use(bot);
-        TC_LOG_INFO("playerbots.pve", "Bot {} begins opening chest {} ({:.0f}y).",
-            bot->GetName(), go->GetEntry(), bot->GetDistance(go));
+        TC_LOG_INFO("playerbots.pve", "Bot {} begins opening chest {} guid {} ({:.0f}y).",
+            bot->GetName(), go->GetEntry(), go->GetGUID().GetCounter(), bot->GetDistance(go));
         return true;
     }
 
@@ -13440,8 +13459,18 @@ namespace
         state.errandGuid = chest->GetGUID();
         state.errandKind = PveErrandKind::QuestObject;
         state.errandUntil = now + std::chrono::seconds(180);
-        TC_LOG_INFO("playerbots.pve", "Bot {} breaks off for a death chest {:.0f}y away.",
-            bot->GetName(), bot->GetDistance(chest));
+        // The guid, because "a death chest" is unfollowable.
+        //
+        // On a busy minute six or seven caches spawn within a few seconds of each
+        // other, and with no identifier on the line there is no way to tell whether
+        // the bots that broke off went to the cache somebody is standing over or to
+        // a neighbouring one. That ambiguity is what stopped this being diagnosable
+        // from the log at all. The owner's name comes along for the same reason: it
+        // is the only way to see, at a glance, that a PLAYER's cache is the one
+        // being ignored.
+        TC_LOG_INFO("playerbots.pve", "Bot {} breaks off for death chest {} (owner {}) {:.0f}y away.",
+            bot->GetName(), chest->GetGUID().GetCounter(),
+            OwnerNameForChest(chest->GetGUID()), bot->GetDistance(chest));
         return true;
     }
 
