@@ -598,6 +598,7 @@ namespace
     // Defined beside VendorPriceFloor, which is the other half of the same
     // rule; declared here because the junk-selling pass runs long before it.
     uint64 VendorPayout(Player const* bot, ItemTemplate const* proto, uint32 count);
+    bool ClassQuestMintsGear(uint32 questId);
     bool IsProactiveTargetWithinPower(Player const* bot, uint32 playerLevel);
     bool IsProactivePlayerLevelAcceptable(Player const* bot, uint32 playerLevel, uint32 bountyStacks);
     bool IsProactivePlayerLevelAcceptable(Player const* bot, Player const* player);
@@ -8452,6 +8453,18 @@ namespace
                     bot->CastSpell(bot, rewardSpell, true);
             }
         }
+    }
+
+    // True when re-earning this quest would put another copy of an ITEM in a
+    // bot's bags. The auto-completer below rewards every single-class quest
+    // outright, so anything it can hand out, it can hand out again.
+    bool ClassQuestMintsGear(uint32 questId)
+    {
+        Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+        if (!quest || !quest->GetRequiredClasses())
+            return false;
+
+        return quest->GetRewItemsCount() > 0 || quest->GetRewChoiceItemsCount() > 0;
     }
 
     // Force-complete/reward every single-class quest the bot is legitimately
@@ -16771,8 +16784,23 @@ namespace playerbot
                 bot->RemoveActiveQuest(questId, false);
                 bot->SetQuestSlot(slot, 0);
             }
+
+        // ...but a class quest that hands over GEAR keeps its stamp.
+        //
+        // The auto-completer walks every single-class quest and rewards it
+        // outright. Wipe the rewarded set on a re-level and it walks them all
+        // again, so each pass mints another copy of the same item - and the
+        // fleet sells what it cannot wear. Four warrior quests alone
+        // (Grimand's, Klockmort's, Mathiel's, Furen's Armor) mint the whole
+        // Fire Hardened set, which is why those kept appearing on the house.
+        //
+        // Only the gear ones are held back. A class quest that grants a SPELL is
+        // still cleared, because the kit has to be re-earned at the new level and
+        // re-granting a spell costs nothing - that is the whole point of the
+        // wipe, and EnsureRewardedClassQuestSpells depends on it.
         for (uint32 questId : std::vector<uint32>(bot->getRewardedQuests().begin(), bot->getRewardedQuests().end()))
-            bot->RemoveRewardedQuest(questId);
+            if (!ClassQuestMintsGear(questId))
+                bot->RemoveRewardedQuest(questId);
 
         for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
         {
@@ -16947,8 +16975,11 @@ namespace playerbot
                     bot->RemoveActiveQuest(questId, false);
                     bot->SetQuestSlot(slot, 0);
                 }
+            // Same rule as the re-level wipe above: gear-granting class quests
+            // keep their stamp so they cannot be re-earned into a second copy.
             for (uint32 questId : std::vector<uint32>(bot->getRewardedQuests().begin(), bot->getRewardedQuests().end()))
-                bot->RemoveRewardedQuest(questId);
+                if (!ClassQuestMintsGear(questId))
+                    bot->RemoveRewardedQuest(questId);
 
             // Bag and bank-bag contents first, then every direct slot.
             for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
