@@ -8997,15 +8997,46 @@ namespace
             if (lockType != LOCKTYPE_HERBALISM && lockType != LOCKTYPE_MINING)
                 continue;
 
+            // The profession draw is deliberately NOT reported. It rejects a third
+            // of the fleet on every node it walks past, which would bury the two
+            // answers that matter under its own noise - and it says nothing about
+            // the node, only about the bot.
             if (!BotHasProfession(bot, lockType))
                 return false;
 
+            // What the fleet can actually SEE. The database says a Gold Vein is
+            // spawned 1,461 times, is weighted above Truesilver in every pool it
+            // shares, and yields ore on a certain roll - and yet three Gold Ore
+            // exist on the whole realm against a hundred and thirteen Truesilver.
+            // Every static explanation has been eliminated, so the remaining
+            // question is a runtime one: does a bot ever lay eyes on the thing.
+            //
+            // Two outcomes are reported and they answer it between them. If the
+            // node never appears here at all it is not spawning; if it appears and
+            // is refused, the skill line says why. Aggregate with
+            //   grep '\[gather\]' Playerbot.log | sed 's/.*sees //' | sort | uniq -c
             uint32 const skillId = SkillByLockType(lockType);
-            if (!skillId || bot->GetSkillValue(skillId) < lock->Skill[caseIndex])
+            uint32 const have = skillId ? bot->GetSkillValue(skillId) : 0u;
+            uint32 const need = lock->Skill[caseIndex];
+
+            if (!skillId || have < need)
+            {
+                if (g_PveConfig.gatherDiagnostics)
+                    TC_LOG_INFO("playerbots.pve", "[gather] REFUSED {} (entry {}) - {} {}/{} - {}",
+                        goInfo->name, goInfo->entry,
+                        lockType == LOCKTYPE_MINING ? "mining" : "herbalism",
+                        have, need, bot->GetName());
                 return false;
+            }
+
+            if (g_PveConfig.gatherDiagnostics)
+                TC_LOG_INFO("playerbots.pve", "[gather] SEES {} (entry {}) - {} {}/{} - {}",
+                    goInfo->name, goInfo->entry,
+                    lockType == LOCKTYPE_MINING ? "mining" : "herbalism",
+                    have, need, bot->GetName());
 
             if (outRequiredSkill)
-                *outRequiredSkill = int32(lock->Skill[caseIndex]);
+                *outRequiredSkill = int32(need);
             return true;
         }
 
@@ -15404,6 +15435,7 @@ namespace playerbot
         g_PveConfig.buffsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Buffs.Enable", true);
         g_PveConfig.talentsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Talents.Enable", true);
         g_PveConfig.combatDiagnostics = sConfigMgr->GetBoolDefault("Playerbot.Pve.CombatDiagnostics", false);
+        g_PveConfig.gatherDiagnostics = sConfigMgr->GetBoolDefault("Playerbot.Pve.GatherDiagnostics", false);
         g_PveConfig.restUseConsumables = sConfigMgr->GetBoolDefault("Playerbot.Pve.Rest.UseConsumables", false);
         g_PveConfig.travelWalkMaxDistance = sConfigMgr->GetFloatDefault("Playerbot.Pve.Travel.WalkMaxDistance", 900.0f);
         g_PveConfig.travelUseFlightPaths = sConfigMgr->GetBoolDefault("Playerbot.Pve.Travel.UseFlightPaths", true);

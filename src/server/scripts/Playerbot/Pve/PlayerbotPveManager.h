@@ -127,6 +127,10 @@ struct PveConfig
     float stuckRecoveryDistanceYards = 15.0f;
     uint32 stuckRecoverySeconds = 120;
     bool combatDiagnostics = false;
+    // Temporary, and off by default: one line per gathering node a bot looks at
+    // and could or could not take. Answers the only question the database cannot -
+    // whether a given node type is actually out there being seen.
+    bool gatherDiagnostics = false;
     // Journeys: destinations within this range are WALKED (segmented mmap
     // pathing) instead of teleported; 0 restores teleport-only travel.
     float travelWalkMaxDistance = 900.0f;
