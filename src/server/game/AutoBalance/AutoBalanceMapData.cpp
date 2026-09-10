@@ -228,6 +228,14 @@ uint32 GetEffectivePlayerCount(Map const* map)
     return GetMapData(map).EffectivePlayerCount;
 }
 
+uint32 GetMinimumPlayers(Map const* map)
+{
+    if (!map)
+        return 0;
+
+    return GetMinimumPlayersForMap(map);
+}
+
 uint8 GetHighestPlayerLevel(Map const* map)
 {
     if (!map)

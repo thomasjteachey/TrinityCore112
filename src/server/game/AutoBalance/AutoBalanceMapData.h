@@ -17,5 +17,9 @@ namespace AutoBalance
 
     uint32 GetActivePlayerCount(Map const* map);
     uint32 GetEffectivePlayerCount(Map const* map);
+    // The floor the effective count is raised to: per-instance override first,
+    // then AutoBalance.MinPlayers.Raid / .RaidHeroic for raids, and
+    // AutoBalance.MinPlayers / .Heroic for everything else.
+    uint32 GetMinimumPlayers(Map const* map);
     uint8 GetHighestPlayerLevel(Map const* map);
 }

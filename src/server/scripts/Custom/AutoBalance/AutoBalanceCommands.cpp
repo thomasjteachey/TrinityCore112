@@ -108,18 +108,6 @@ namespace
 
         return config.EnableDungeons;
     }
-
-    uint32 CalculateMinimumPlayers(Map const* map, AutoBalance::ModuleConfig const& config)
-    {
-        if (!map)
-            return 0;
-
-        auto const& overrides = map->IsHeroic() ? config.MinPlayersOverridesHeroic : config.MinPlayersOverridesNormal;
-        if (auto const itr = overrides.find(map->GetId()); itr != overrides.end())
-            return itr->second;
-
-        return map->IsHeroic() ? config.MinimumPlayersHeroic : config.MinimumPlayers;
-    }
 }
 
 class AutoBalanceCommandScript final : public CommandScript
@@ -296,7 +284,11 @@ public:
 
         handler->PSendSysMessage("Players on map: %u (Lvl %u - %u)", nonGMPlayers, lowestLevel, highestLevel);
 
-        uint32 const minimumPlayers = CalculateMinimumPlayers(map, config);
+        // Asked of the engine rather than worked out again here. The copy this
+        // replaces had no raid branch, so once raids were given their own floor
+        // (AutoBalance.MinPlayers.Raid) it reported the dungeon minimum inside a
+        // raid, and mislabelled a raid being held at its floor as unadjusted.
+        uint32 const minimumPlayers = AutoBalance::GetMinimumPlayers(map);
         if (data.CombatLocked && data.CombatLockTripped)
             handler->PSendSysMessage("Adjusted player count: %u (combat locked)", data.EffectivePlayerCount);
         else if (nonGMPlayers < minimumPlayers && data.QueueOffset)
