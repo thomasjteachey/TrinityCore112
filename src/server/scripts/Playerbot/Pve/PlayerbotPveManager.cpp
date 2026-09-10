@@ -17156,6 +17156,14 @@ namespace playerbot
         return bot && IsLocalVeteranGuid(bot->GetGUID().GetRawValue());
     }
 
+    // The exported face of the anonymous-namespace predicate above. Kept as a
+    // thin forwarder rather than moved out, so the gear scorer and the field kit
+    // are provably asking the same question.
+    bool SpecPrefersDualWield(Player const* bot)
+    {
+        return bot && PrefersDualWield(bot);
+    }
+
     bool GetZoneLevelBand(uint32 zoneId, uint8& bottom, uint8& top)
     {
         ClassicZoneBand const* band = FindClassicZoneBand(zoneId);

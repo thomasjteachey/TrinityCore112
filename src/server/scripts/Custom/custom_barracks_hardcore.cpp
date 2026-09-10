@@ -1179,6 +1179,22 @@ namespace BarracksHardcore
             // INVTYPE_WEAPONMAINHAND stays out deliberately - it cannot go in an
             // off-hand at all, and offering it would just fail CanEquipNewItem
             // after the scan had already stopped on it.
+            // A spec that fights with two weapons is never handed a shield.
+            //
+            // The gear scorer refuses one for these specs, but the kit does not go
+            // through the scorer - it fills an EMPTY slot straight from the white
+            // and grey pools, and those pools hold fifty-three shields. So the kit
+            // was quietly re-arming the exact fault the scorer had just fixed:
+            // measured live, eight of the seventeen shields on the fleet's fury
+            // warriors were kit issue.
+            //
+            // Proficiency cannot decide this. Every warrior can hold a shield and
+            // every warrior past twenty can dual wield, so only the spec separates
+            // fury from protection - which is why this asks the playerbot side
+            // rather than CanDualWield.
+            if (playerbot::SpecPrefersDualWield(player))
+                return { INVTYPE_WEAPONOFFHAND, INVTYPE_WEAPON };
+
             std::vector<uint32> types = { INVTYPE_SHIELD, INVTYPE_WEAPONOFFHAND, INVTYPE_HOLDABLE };
 
             // Rogues and hunters get the one-hander offered unconditionally.

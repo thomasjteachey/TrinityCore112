@@ -444,6 +444,17 @@ public:
 // Mode zone gate asks the same question about a person that the drifter draft
 // asks about a bot, and two copies of this table would drift apart.
 bool GetZoneLevelBand(uint32 zoneId, uint8& bottom, uint8& top);
+
+// Whether this character's SPEC fights with a weapon in each hand.
+//
+// Exported for the same reason the zone bands are: the field kit has to answer
+// it too, and it is not a question the kit can answer for itself. Proficiency
+// is not the answer - every warrior can hold a shield and every warrior past
+// twenty can dual wield, so only the spec separates a fury warrior from a
+// protection one. Two copies of that rule would drift apart, and the drift
+// would be silent: the kit would go on issuing shields to a spec the gear
+// scorer was busy taking them off.
+bool SpecPrefersDualWield(Player const* bot);
 }
 
 #endif
