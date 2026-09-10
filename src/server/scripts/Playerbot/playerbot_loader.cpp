@@ -35,6 +35,7 @@
 #include "BattlegroundMgr.h"
 #include "BattlegroundQueue.h"
 #include "Playerbot/Pve/PlayerbotPveManager.h"
+#include "Playerbot/Pvp/PlayerbotBgFillDriver.h"
 #include "Playerbot/Pvp/PlayerbotObcClone.h"
 #include "Playerbot/Pvp/PlayerbotVhrWaveDriver.h"
 #include "Playerbot/Pvp/PlayerbotPvpClassActions.h"
@@ -653,6 +654,7 @@ public:
         playerbot::RandomBotParticipationManager::LoadPopulationConfig();
         playerbot::PlayerbotObcCloneManager::LoadConfig();
         playerbot::ResourceGovernor::LoadConfig();
+        playerbot::PlayerbotBgFillDriver::LoadConfig();
         playerbot::PveManager::LoadConfig();
         LoadPlayerbotGoldGainMultiplier();
     }
@@ -666,6 +668,7 @@ public:
         playerbot::PlayerbotObcCloneManager::LoadConfig();
         playerbot::PlayerbotObcCloneManager::OnStartupSweep();
         playerbot::ResourceGovernor::LoadConfig();
+        playerbot::PlayerbotBgFillDriver::LoadConfig();
         playerbot::PveManager::LoadConfig();
         LoadPlayerbotGoldGainMultiplier();
         playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
@@ -688,6 +691,7 @@ public:
         playerbot::RandomBotParticipationManager::OnWorldUpdate(diff);
         playerbot::PlayerbotObcCloneManager::OnWorldUpdate(diff);
         playerbot::PlayerbotVhrWaveDriver::OnWorldUpdate(diff);
+        playerbot::PlayerbotBgFillDriver::OnWorldUpdate(diff);
         playerbot::PveManager::OnWorldUpdate(diff);
     }
 

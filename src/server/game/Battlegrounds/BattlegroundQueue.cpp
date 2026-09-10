@@ -31,6 +31,7 @@
 #include "WorldSession.h"
 #include "World.h"
 
+#include <algorithm>
 #include <vector>
 
 namespace
@@ -54,6 +55,9 @@ bool GroupHasRealPlayerInvitee(GroupQueueInfo const* ginfo)
     return false;
 }
 
+// "Virtual" throughout this file means a bot occupant the queue may displace
+// for a real player: a socketless virtual session, or a transient clone in a
+// bot-filled match. Battleground::IsBotParticipantSession is the one judge.
 uint32 CountVirtualPlayersOnTeam(Battleground* battleground, uint32 team)
 {
     if (!battleground)
@@ -69,8 +73,7 @@ uint32 CountVirtualPlayersOnTeam(Battleground* battleground, uint32 team)
         if (!candidate)
             continue;
 
-        WorldSession* session = candidate->GetSession();
-        if (!session || !session->IsVirtualSession())
+        if (!battleground->IsBotParticipantSession(candidate->GetSession()))
             continue;
 
         ++count;
@@ -116,8 +119,17 @@ bool RemoveVirtualPlayersFromTeam(Battleground* battleground, uint32 team, uint3
     if (!battleground || !count)
         return false;
 
-    std::vector<ObjectGuid> playersToRemove;
-    playersToRemove.reserve(count);
+    // Transient clones have nowhere to be sent home to (no entry point, no
+    // client), so they are only unseated here; the playerbot clone manager
+    // notices a clone that is no longer on its match's roster and takes it
+    // down on the next world tick. Dead clones go first: nobody misses them.
+    struct Removal
+    {
+        ObjectGuid guid;
+        bool transient = false;
+    };
+
+    std::vector<Removal> candidates;
     for (auto const& [memberGuid, bgPlayer] : battleground->GetPlayers())
     {
         if (bgPlayer.Team != team)
@@ -127,22 +139,41 @@ bool RemoveVirtualPlayersFromTeam(Battleground* battleground, uint32 team, uint3
         if (!candidate)
             continue;
 
-        WorldSession* session = candidate->GetSession();
-        if (!session || !session->IsVirtualSession())
+        WorldSession const* session = candidate->GetSession();
+        if (!battleground->IsBotParticipantSession(session))
             continue;
 
-        playersToRemove.push_back(memberGuid);
-        if (playersToRemove.size() >= count)
-            break;
+        Removal removal;
+        removal.guid = memberGuid;
+        removal.transient = session->IsTransientPlayerSession();
+        if (!candidate->IsAlive())
+            candidates.insert(candidates.begin(), removal);
+        else
+            candidates.push_back(removal);
     }
 
-    if (playersToRemove.size() < count)
+    if (candidates.size() < count)
         return false;
 
-    for (ObjectGuid const& playerGuid : playersToRemove)
-        battleground->RemovePlayerAtLeave(playerGuid, true, true);
+    candidates.resize(count);
+    for (Removal const& removal : candidates)
+        battleground->RemovePlayerAtLeave(removal.guid, !removal.transient, !removal.transient);
 
     return true;
+}
+
+// Seats on a team still open to somebody arriving now: capacity less the
+// people already in and the invites still outstanding. This is the same sum
+// FillPlayersToBG works from; GetFreeSlotsForTeam is not usable for it since
+// this fork consumes the invite counter on entry, which leaves that function
+// reporting a seat on a full team whenever the two sides are level.
+int32 TeamSeatsLeft(Battleground const* battleground, uint32 team)
+{
+    if (!battleground)
+        return 0;
+
+    int32 const occupied = int32(battleground->GetInvitedCount(team) + battleground->GetPlayersCountByTeam(team));
+    return int32(battleground->GetMaxPlayersPerTeam()) - occupied;
 }
 }
 
@@ -639,13 +670,13 @@ bool BattlegroundQueue::InviteGroupToBG(GroupQueueInfo* ginfo, Battleground* bg,
         ginfo->Team = side;
 
     // Let bots fully populate battlegrounds, but if a real queued group needs room in an
-    // already-running battleground, only admit it by dropping the same number of bots from
-    // that target side. If that side has fewer bots than the queued group size, leave the
-    // battleground as-is so grouped players are not partially admitted or split by side.
-    if (bg && bg->isBattleground() && GroupHasRealPlayerInvitee(ginfo) &&
-        bg->GetFreeSlotsForTeam(ginfo->Team) < ginfo->Players.size())
+    // already-running battleground, admit it by dropping as many bots from that target
+    // side as it is short of seats. If that side has fewer bots than the shortfall, leave
+    // the battleground as-is so grouped players are not partially admitted or split by side.
+    if (bg && bg->isBattleground() && GroupHasRealPlayerInvitee(ginfo))
     {
-        if (!RemoveVirtualPlayersFromTeam(bg, ginfo->Team, ginfo->Players.size()))
+        int32 const shortfall = int32(ginfo->Players.size()) - std::max<int32>(TeamSeatsLeft(bg, ginfo->Team), 0);
+        if (shortfall > 0 && !RemoveVirtualPlayersFromTeam(bg, ginfo->Team, uint32(shortfall)))
             return false;
     }
 
@@ -1005,6 +1036,73 @@ void BattlegroundQueue::UpdateEvents(uint32 diff)
     m_events.Update(diff);
 }
 
+bool BattlegroundQueue::TryStartBotFilledMatch(BattlegroundTypeId bgTypeId, PvPDifficultyEntry const* bracketEntry, BattlegroundBracketId bracket_id, uint32 maxPlayersPerTeam)
+{
+    // CheckNormalMatch leaves whatever it had gathered in the pools when it
+    // gives up; start from nothing.
+    m_SelectionPools[TEAM_ALLIANCE].Init();
+    m_SelectionPools[TEAM_HORDE].Init();
+
+    // Every real group waiting in this bracket rides along on whichever side
+    // the queue assigned it, premades included - the thirty-minute premade
+    // hold exists to find them premade opponents, and here the opponents are
+    // clones. Groups made only of managed bots are left waiting as stock: a
+    // match is summoned for people, and the bots can fill one that exists.
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32 const waitMs = sBattlegroundMgr->GetBotFillQueueWaitMs();
+    bool someoneHasWaitedLongEnough = false;
+    for (uint32 queueIndex = BG_QUEUE_PREMADE_ALLIANCE; queueIndex < BG_QUEUE_GROUP_TYPES_COUNT; ++queueIndex)
+    {
+        for (GroupQueueInfo* ginfo : m_QueuedGroups[bracket_id][queueIndex])
+        {
+            if (ginfo->IsInvitedToBGInstanceGUID || !GroupHasRealPlayerInvitee(ginfo))
+                continue;
+
+            TeamId const teamIndex = ginfo->Team == HORDE ? TEAM_HORDE : TEAM_ALLIANCE;
+            uint32 const before = m_SelectionPools[teamIndex].GetPlayerCount();
+            m_SelectionPools[teamIndex].AddGroup(ginfo, maxPlayersPerTeam, teamIndex);
+            if (m_SelectionPools[teamIndex].GetPlayerCount() == before)
+                continue;   // too large for what is left of that side
+
+            if (getMSTimeDiff(ginfo->JoinTime, nowMs) >= waitMs)
+                someoneHasWaitedLongEnough = true;
+        }
+    }
+
+    uint32 const selected = m_SelectionPools[TEAM_ALLIANCE].GetPlayerCount() + m_SelectionPools[TEAM_HORDE].GetPlayerCount();
+    if (!selected || !someoneHasWaitedLongEnough)
+    {
+        m_SelectionPools[TEAM_ALLIANCE].Init();
+        m_SelectionPools[TEAM_HORDE].Init();
+        return false;
+    }
+
+    Battleground* bg = sBattlegroundMgr->CreateNewBattleground(bgTypeId, bracketEntry, 0, false);
+    if (!bg)
+    {
+        TC_LOG_ERROR("bg.battleground", "BattlegroundQueue::TryStartBotFilledMatch - Cannot create battleground: {}", uint32(bgTypeId));
+        m_SelectionPools[TEAM_ALLIANCE].Init();
+        m_SelectionPools[TEAM_HORDE].Init();
+        return false;
+    }
+
+    // Flagged before anyone is invited so the first person's entry is
+    // accounted as a human's under the bot-fill reading of the roster.
+    bg->SetBotFillMatch(true);
+
+    for (uint32 i = 0; i < PVP_TEAMS_COUNT; ++i)
+        for (GroupQueueInfo* ginfo : m_SelectionPools[TEAM_ALLIANCE + i].SelectedGroups)
+            InviteGroupToBG(ginfo, bg, ginfo->Team);
+
+    TC_LOG_DEBUG("bg.battleground", "BattlegroundQueue::TryStartBotFilledMatch: started bot-filled match type {} instance {} bracket {} for {} real player(s).",
+        uint32(bgTypeId), bg->GetInstanceID(), uint32(bracket_id), selected);
+
+    bg->StartBattleground();
+    m_SelectionPools[TEAM_ALLIANCE].Init();
+    m_SelectionPools[TEAM_HORDE].Init();
+    return true;
+}
+
 /*
 this method is called when group is inserted, or player / group is removed from BG Queue - there is only one player's status changed, so we don't use while (true) cycles to invite whole queue
 it must be called after fully adding the members of a group to ensure group joining
@@ -1201,6 +1299,11 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
             // start bg
             bg2->StartBattleground();
         }
+        // Not enough people for a stock match. Where the playerbot module
+        // pads battlegrounds with clones, the people waiting get one anyway
+        // once they have waited long enough for company to show up.
+        else if (bg_template->isBattleground() && sBattlegroundMgr->IsBotFillBattleground(bgTypeId))
+            TryStartBotFilledMatch(bgTypeId, bracketEntry, bracket_id, MaxPlayersPerTeam);
     }
     else if (bg_template->isArena())
     {

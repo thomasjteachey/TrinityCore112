@@ -23,6 +23,7 @@
 #include "Position.h"
 
 #include <string>
+#include <vector>
 
 class Battleground;
 class Player;
@@ -78,6 +79,22 @@ public:
     // (the Violet Hold driver tears the enemy wave down between waves and
     // leaves the party's Fellowship allies standing).
     static void DestroyCustomGameClones(uint32 battlegroundInstanceId, uint32 team = 0);
+
+    // The live custom-game clones seated in one battleground instance, for
+    // callers that keep a roster topped up (the battleground fill driver):
+    // which side each stands on and whom it copies, so the same source is not
+    // dealt twice into one match.
+    struct CustomGameCloneInfo
+    {
+        ObjectGuid cloneGuid;
+        ObjectGuid sourceGuid;
+        uint32 team = 0;
+    };
+    static std::vector<CustomGameCloneInfo> GetCustomGameClones(uint32 battlegroundInstanceId);
+
+    // Tear down one specific clone. False when the guid is not a live
+    // custom-game clone (already gone, or never one).
+    static bool DestroyCustomGameClone(ObjectGuid cloneGuid);
 
     // Resource-governor load shedding: remove a single clone from a running
     // custom match. Picks the team currently fielding more clones and prefers

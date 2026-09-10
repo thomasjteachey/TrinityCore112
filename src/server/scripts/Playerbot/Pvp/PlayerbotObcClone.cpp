@@ -1083,6 +1083,11 @@ void PlayerbotObcCloneManager::OnWorldUpdate(uint32 diffMs)
             Battleground* bg = sBattlegroundMgr->GetBattleground(record.battlegroundInstanceId, record.battlegroundType);
             if (!bg || bg->GetStatus() == STATUS_NONE || bg->GetStatus() == STATUS_WAIT_LEAVE)
                 expiredCustomClones.push_back(cloneGuid);
+            // A clone the match itself has unseated - the queue drops one to
+            // admit a queued person - is left standing on the map with no
+            // roster entry and no way home. It is done; take it down.
+            else if (!bg->IsPlayerInBattleground(cloneGuid))
+                expiredCustomClones.push_back(cloneGuid);
         }
     }
     for (ObjectGuid cloneGuid : expiredCustomClones)
@@ -1527,6 +1532,37 @@ bool PlayerbotObcCloneManager::ShedOneCustomGameClone(uint32 battlegroundInstanc
         "Resource governor shed custom-match clone: bgInstanceId={} team={} clone={} preferredDead={}.",
         battlegroundInstanceId, shedTeam, target.ToString(), deadCloneGuid.IsEmpty() ? 0 : 1);
     TeardownCustomGameClone(target);
+    return true;
+}
+
+std::vector<PlayerbotObcCloneManager::CustomGameCloneInfo> PlayerbotObcCloneManager::GetCustomGameClones(uint32 battlegroundInstanceId)
+{
+    std::vector<CustomGameCloneInfo> clones;
+    std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+    for (auto const& [cloneGuid, record] : g_CustomGameClones)
+    {
+        if (record.battlegroundInstanceId != battlegroundInstanceId)
+            continue;
+
+        CustomGameCloneInfo info;
+        info.cloneGuid = cloneGuid;
+        info.sourceGuid = record.sourceGuid;
+        info.team = record.team;
+        clones.push_back(info);
+    }
+
+    return clones;
+}
+
+bool PlayerbotObcCloneManager::DestroyCustomGameClone(ObjectGuid cloneGuid)
+{
+    {
+        std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+        if (g_CustomGameClones.find(cloneGuid) == g_CustomGameClones.end())
+            return false;
+    }
+
+    TeardownCustomGameClone(cloneGuid);
     return true;
 }
 

@@ -44,6 +44,7 @@ class Transport;
 class Unit;
 class WorldObject;
 class WorldPacket;
+class WorldSession;
 
 struct BattlegroundScore;
 struct PvPDifficultyEntry;
@@ -412,6 +413,21 @@ class TC_GAME_API Battleground
         bool isBattleground() const { return !m_IsArena; }
         bool isRated() const        { return m_IsRated; }
         bool IsCustomGame() const   { return m_IsCustomGame; }
+        // A public match padded with transient clones by the playerbot module
+        // (see PlayerbotBgFillDriver). In such a match the clones are bots for
+        // every purpose the queue and the empty-match rules care about, so a
+        // queued person displaces one and the match ends when the last person
+        // is gone. Ordinary matches keep the stock reading: a transient clone
+        // there (an Obsidian Colosseum mirror, a Violet Hold wave) is somebody
+        // else's business and counts as a participant.
+        bool IsBotFillMatch() const { return m_IsBotFillMatch; }
+        void SetBotFillMatch(bool enabled) { m_IsBotFillMatch = enabled; }
+        // True when the session belongs to a bot occupant of this match rather
+        // than a person: any socketless virtual session, and a transient
+        // in-memory clone when the match is bot-filled. The human accounting,
+        // the free-slot queue and the displacement-on-invite path all ask this
+        // so the two kinds of bot are treated alike. A null session is not a bot.
+        bool IsBotParticipantSession(WorldSession const* session) const;
         void ConfigureCustomGame(BattlegroundCustomRules const& rules) { m_IsCustomGame = true; m_CustomRules = rules; }
         void SetCustomGameBotOnlyPreparation(bool enabled) { m_CustomGameBotOnlyPreparation = enabled; }
         bool HasCustomGameBotOnlyPreparation() const { return m_CustomGameBotOnlyPreparation; }
@@ -727,6 +743,7 @@ class TC_GAME_API Battleground
         bool   m_CustomGameBotOnlyPreparation;
         uint32 m_CustomGamePendingCloneCount;
         BattlegroundCustomRules m_CustomRules;
+        bool   m_IsBotFillMatch;                            // padded with transient clones, see IsBotFillMatch()
         bool   m_IsArena;
         PvPTeamId _winnerTeamId;
         int32  m_StartDelayTime;

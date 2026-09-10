@@ -67,7 +67,7 @@ bool HasAnyNonVirtualHumanParticipant(Battleground const* battleground)
             continue;
 
         WorldSession const* session = participant->GetSession();
-        if (session && !session->IsVirtualSession())
+        if (session && !battleground->IsBotParticipantSession(session))
             return true;
     }
 
@@ -173,6 +173,7 @@ Battleground::Battleground()
     m_CustomGameBotOnlyPreparation = false;
     m_CustomGamePendingCloneCount = 0;
     m_CustomRules       = BattlegroundCustomRules();
+    m_IsBotFillMatch    = false;
 
     m_MaxPlayersPerTeam = 0;
     m_MaxPlayers        = 0;
@@ -1125,7 +1126,7 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
     RemovePlayerFromResurrectQueue(guid);
 
     Player* player = ObjectAccessor::FindPlayer(guid);
-    bool const removedNonVirtualHuman = player && player->GetSession() && !player->GetSession()->IsVirtualSession();
+    bool const removedNonVirtualHuman = player && player->GetSession() && !IsBotParticipantSession(player->GetSession());
 
     if (player)
     {
@@ -1425,7 +1426,7 @@ void Battleground::AddPlayer(Player* player)
     if (!isInBattleground)
         DecreaseInvitedCount(team);
 
-    if (WorldSession const* session = player->GetSession(); session && !session->IsVirtualSession())
+    if (WorldSession const* session = player->GetSession(); session && !IsBotParticipantSession(session))
     {
         m_HasEverHadNonVirtualHumanParticipant = true;
         m_NoNonVirtualHumanElapsed = 0;
@@ -1697,9 +1698,10 @@ bool Battleground::HasFreeSlots() const
     if (GetPlayersSize() < GetMaxPlayers())
         return true;
 
-    // Treat virtual-session participants as replaceable occupancy for battlegrounds:
-    // this keeps full bot-populated matches in the free-slot queue so queued real
-    // players can displace one virtual actor on invite.
+    // Treat bot participants (virtual sessions, and the transient clones of a
+    // bot-filled match) as replaceable occupancy for battlegrounds: this keeps
+    // full bot-populated matches in the free-slot queue so queued real players
+    // can displace one bot on invite.
     if (!isBattleground())
         return false;
 
@@ -1709,12 +1711,22 @@ bool Battleground::HasFreeSlots() const
         if (!player)
             continue;
 
-        WorldSession* session = player->GetSession();
-        if (session && session->IsVirtualSession())
+        if (IsBotParticipantSession(player->GetSession()))
             return true;
     }
 
     return false;
+}
+
+bool Battleground::IsBotParticipantSession(WorldSession const* session) const
+{
+    if (!session)
+        return false;
+
+    if (session->IsVirtualSession())
+        return true;
+
+    return m_IsBotFillMatch && session->IsTransientPlayerSession();
 }
 
 void Battleground::BuildPvPLogDataPacket(WorldPacket& data)

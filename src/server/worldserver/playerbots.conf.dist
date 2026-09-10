@@ -95,6 +95,75 @@ Playerbot.PvpLifecycle.ObsidianColosseum.Clone.Enable = 0
 # Legacy enable fallback. Nonzero enables clones only when Clone.Enable is absent.
 Playerbot.PvpLifecycle.ObsidianColosseum.CloneAccountId = 0
 
+###################################################################################################
+# PLAYERBOT BATTLEGROUND FILL (TRANSIENT CLONES)
+#
+#    Pads public battlegrounds with in-memory copies of the managed playerbots instead of pulling
+#    the bots themselves out of the world. A real player who queues alone gets a match after a
+#    short wait; both teams are then filled with clones matched to the bracket's level range.
+#    The clones step aside one at a time as more real players are invited, refill seats people
+#    leave, and are gone once the last real player is. The resource governor above applies to
+#    them as it does to custom-game bots.
+###################################################################################################
+
+#    Playerbot.BgFill.Enable
+#        Description: Master switch. Needs Playerbot.Enable and the PvP modules for the clones
+#                     to fight.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Playerbot.BgFill.Enable = 0
+
+#    Playerbot.BgFill.BattlegroundTypes
+#        Description: Comma-separated battleground type IDs to fill (2 Warsong Gulch, 3 Arathi
+#                     Basin, 7 Eye of the Storm, 30 Isle of Conquest, 32 Random Battleground,
+#                     100 Scarlet Chapel, 108 Twin Peaks, 120 Battle for Gilneas, ...).
+#                     Empty = every battleground except Violet Hold, whose enemies come in waves
+#                     of its own. Arenas are never filled.
+#        Default:     "" (all battlegrounds)
+
+Playerbot.BgFill.BattlegroundTypes = ""
+
+#    Playerbot.BgFill.QueueWaitSeconds
+#        Description: How long the longest-waiting real player sits in a queue that cannot form
+#                     a stock match before a clone-filled one is started for everyone waiting
+#                     in that bracket. Gives other people a moment to queue into the same pop.
+#                     The queue is only re-examined every few seconds, so treat this as a floor.
+#        Default:     15
+
+Playerbot.BgFill.QueueWaitSeconds = 15
+
+#    Playerbot.BgFill.MaxPerTeam
+#        Description: Team size the clones fill up to, capped by the battleground's own maximum
+#                     (so 10 for Warsong Gulch whatever this says). Real players are always
+#                     admitted up to the battleground's maximum regardless. 0 = the
+#                     battleground's maximum.
+#        Default:     15
+
+Playerbot.BgFill.MaxPerTeam = 15
+
+#    Playerbot.BgFill.ClonesPerTick
+#        Description: Clones created per match per half-second tick while a team is short.
+#                     Spreads the cost of building copies over a few ticks.
+#        Default:     2
+
+Playerbot.BgFill.ClonesPerTick = 2
+
+#    Playerbot.BgFill.UseOfflineBots
+#        Description: When no online managed bot fits the bracket, copy offline characters from
+#                     the bot accounts (loaded from the database in the background). Keeps low
+#                     brackets fillable when the online population is levelled past them.
+#        Default:     1
+
+Playerbot.BgFill.UseOfflineBots = 1
+
+#    Playerbot.BgFill.AllowHumanMirrors
+#        Description: Last resort when no bot fits the bracket at all: seat a "Dark <name>" copy
+#                     of a real participant on the opposing team, one per person.
+#        Default:     1
+
+Playerbot.BgFill.AllowHumanMirrors = 1
+
 #    Playerbot.PvpClassSpells.Enable
 #        Description: Enables Phase-4 class/spec PvP spell decision slices.
 #                     Current implementation provides reference-aligned trigger/action vocabulary

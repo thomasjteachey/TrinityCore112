@@ -22,6 +22,7 @@
 #include "DBCEnums.h"
 #include "Battleground.h"
 #include "BattlegroundQueue.h"
+#include <set>
 #include <unordered_map>
 
 struct BattlemasterListEntry;
@@ -124,6 +125,24 @@ class TC_GAME_API BattlegroundMgr
         bool isArenaTesting() const { return m_ArenaTesting; }
         bool isTesting() const { return m_Testing; }
 
+        // Bot-filled battlegrounds. For the types this policy covers, a match
+        // may start for real players alone once the longest-waiting one has
+        // been queued QueueWaitMs; the playerbot module then pads both teams
+        // with transient clones. The module installs the policy on config
+        // load, so a build or a realm without it leaves the queue exactly as
+        // stock: nothing here reads the playerbot configuration directly.
+        struct BotFillPolicy
+        {
+            bool enabled = false;
+            // Empty set = every battleground except Violet Hold. Arenas are
+            // never covered whatever the set says.
+            std::set<uint32> battlegroundTypes;
+            uint32 queueWaitMs = 0;
+        };
+        void SetBotFillPolicy(BotFillPolicy policy) { _botFillPolicy = std::move(policy); }
+        bool IsBotFillBattleground(BattlegroundTypeId bgTypeId) const;
+        uint32 GetBotFillQueueWaitMs() const { return _botFillPolicy.queueWaitMs; }
+
         static BattlegroundQueueTypeId BGQueueTypeId(BattlegroundTypeId bgTypeId, uint8 arenaType);
         static BattlegroundTypeId BGTemplateId(BattlegroundQueueTypeId bgQueueTypeId);
         static uint8 BGArenaType(BattlegroundQueueTypeId bgQueueTypeId);
@@ -198,6 +217,7 @@ class TC_GAME_API BattlegroundMgr
         typedef std::map<uint32 /*mapId*/, BattlegroundTemplate*> BattlegroundMapTemplateContainer;
         BattlegroundTemplateMap _battlegroundTemplates;
         BattlegroundMapTemplateContainer _battlegroundMapTemplates;
+        BotFillPolicy _botFillPolicy;
 };
 
 #define sBattlegroundMgr BattlegroundMgr::instance()

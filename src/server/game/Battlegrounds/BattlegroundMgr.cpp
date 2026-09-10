@@ -854,6 +854,23 @@ void BattlegroundMgr::SendAreaSpiritHealerQueryOpcode(Player* player, Battlegrou
     player->SendDirectMessage(&data);
 }
 
+bool BattlegroundMgr::IsBotFillBattleground(BattlegroundTypeId bgTypeId) const
+{
+    if (!_botFillPolicy.enabled || bgTypeId == BATTLEGROUND_TYPE_NONE)
+        return false;
+
+    // Violet Hold summons its own enemies wave by wave; padding its teams
+    // would break the survival curve, so it stays out even of "everything".
+    if (bgTypeId == BATTLEGROUND_VHR || IsArenaType(bgTypeId))
+        return false;
+
+    auto templateItr = _battlegroundTemplates.find(bgTypeId);
+    if (templateItr == _battlegroundTemplates.end() || templateItr->second.IsArena())
+        return false;
+
+    return _botFillPolicy.battlegroundTypes.empty() || _botFillPolicy.battlegroundTypes.count(uint32(bgTypeId)) != 0;
+}
+
 bool BattlegroundMgr::IsArenaType(BattlegroundTypeId bgTypeId)
 {
     return bgTypeId == BATTLEGROUND_AA
