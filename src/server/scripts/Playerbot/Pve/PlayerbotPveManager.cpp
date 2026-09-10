@@ -6216,28 +6216,43 @@ namespace
         if (LooksLikeScaffoldingItem(candidate))
             return false;
 
+        // THE OFF HAND OF A DUAL WIELDER IS A WEAPON SLOT, not a shield slot.
+        //
+        // Decided before any score, for the same reason the two-hander rule is:
+        // the scorer weighs one slot at a time, so a shield that beats a
+        // one-hander on effective item level wins an off hand that ought to be
+        // holding a second weapon. Neither comparison is wrong on its own. The
+        // PAIR is, and only a spec-aware rule can see it.
+        //
+        // ASKED BEFORE THE EMPTY-SLOT RULE BELOW, because the empty slot is how
+        // the shield got in. That rule takes anything with fighting value, a
+        // shield included, and shields are far and away the commonest off-hand
+        // item in the world - so a fury warrior picked one up the moment its off
+        // hand came free, and from then on only a weapon that ALSO beat it on
+        // score could displace it. Having the rule fire only against an incumbent
+        // fixed the second half of that and left the first, which is why the
+        // fleet went on equipping shields after it shipped: measured live, a fury
+        // warrior put on two of them within a minute of the change going in.
+        //
+        // So the rule has to say both things - never take a non-weapon into that
+        // hand, and always prefer a weapon to a non-weapon already in it.
+        //
+        // The consequence is deliberate: a fury warrior with nothing better holds
+        // an EMPTY off hand rather than a shield. That is the honest state for
+        // the spec, it is what makes the slot visibly wrong until it is filled,
+        // and the field kit issues a one-hander into it on the next pass anyway.
+        if (slot == EQUIPMENT_SLOT_OFFHAND && PrefersDualWield(bot))
+        {
+            if (candidate->Class != ITEM_CLASS_WEAPON)
+                return false;
+
+            if (incumbent && incumbent->Class != ITEM_CLASS_WEAPON)
+                return true;
+        }
+
         // An empty slot is not a licence to buy anything at all.
         if (!incumbent)
             return HasFightingValue(candidate);
-
-        // THE OFF HAND OF A DUAL WIELDER IS A WEAPON SLOT, not a shield slot.
-        //
-        // Decided before any score, and for the same reason the two-hander rule
-        // is: the scorer weighs one slot at a time, so a shield that beats a
-        // one-hander on effective item level wins an off-hand that ought to be
-        // holding a second weapon. Neither comparison is wrong on its own; the
-        // PAIR is, and only a spec-aware rule can see that.
-        //
-        // This sits ABOVE the weapon-versus-weapon block deliberately, because
-        // the case it exists for is a weapon against a SHIELD - armour, not a
-        // weapon - which that block never sees.
-        if (slot == EQUIPMENT_SLOT_OFFHAND && PrefersDualWield(bot))
-        {
-            bool const candidateWeapon = candidate->Class == ITEM_CLASS_WEAPON;
-            bool const incumbentWeapon = incumbent->Class == ITEM_CLASS_WEAPON;
-            if (candidateWeapon != incumbentWeapon)
-                return candidateWeapon;
-        }
 
         if (candidate->Class == ITEM_CLASS_WEAPON && incumbent->Class == ITEM_CLASS_WEAPON)
         {
