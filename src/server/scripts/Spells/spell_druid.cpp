@@ -41,6 +41,8 @@ enum DruidSpells
     SPELL_DRUID_FERAL_SWIFTNESS_R2 = 24866,
     SPELL_DRUID_FERAL_SWIFTNESS_PASSIVE_1 = 24867,
     SPELL_DRUID_FERAL_SWIFTNESS_PASSIVE_2 = 24864,
+    SPELL_DRUID_CAT_FORM                    = 768,
+    SPELL_GHOSTWALK                         = 90218,
     SPELL_DRUID_BEAR_FORM_PASSIVE           = 1178,
     SPELL_DRUID_DIRE_BEAR_FORM_PASSIVE      = 9635,
     SPELL_DRUID_ECLIPSE_LUNAR_PROC          = 48518,
@@ -234,6 +236,57 @@ class spell_dru_feral_swiftness : public AuraScript
     }
 };
 
+
+// 768 - Cat Form: Feline Swiftness also lets the cat slip through other units.
+//
+// The collision bypass is Ghostwalk 90218, the same aura rogues carry. It is
+// entirely inert server-side - a SPELL_AURA_DUMMY with no script - because all
+// of the behaviour lives in the client tweak DLL, which lists 90218 in its
+// ExcludeAuras set and vetoes the wearer in BlocksMe before any positive
+// collision rule runs. Reusing the rogue id rather than minting a druid one is
+// deliberate: the DLL matches on that exact id, so a new id would mean editing
+// the DLL and republishing the client to every player for no behavioural gain.
+//
+// Hung on CAT FORM, not on the talent, and that distinction is the whole reason
+// this is a separate script. Feline Swiftness 17002/24866 carry
+// SPELL_ATTR0_OUTDOORS_ONLY (0x81D0), so their aura fails to apply indoors and
+// is stripped the moment the druid walks inside - which is correct for the
+// movement-speed half the tooltip already qualifies with "while outdoors", and
+// wrong for a collision rule that should hold everywhere. Cat Form itself has no
+// such attribute, so it is the honest carrier for "while in Cat Form".
+//
+// The talent is still what gates it: HasTalent is asked directly rather than
+// relying on the talent's aura being present, precisely because that aura is not
+// present indoors.
+//
+// AfterEffectApply rather than OnEffectApply so the shapeshift handler has
+// already run and the druid really is in Cat Form by the time this fires.
+class spell_dru_cat_form_ghostwalk : public AuraScript
+{
+    PrepareAuraScript(spell_dru_cat_form_ghostwalk);
+
+    void AfterApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Player* player = GetTarget()->ToPlayer();
+        if (!player)
+            return;
+
+        if (player->HasTalent(SPELL_DRUID_FERAL_SWIFTNESS_R1, player->GetActiveSpec()) ||
+            player->HasTalent(SPELL_DRUID_FERAL_SWIFTNESS_R2, player->GetActiveSpec()))
+            player->CastSpell(player, SPELL_GHOSTWALK, true);
+    }
+
+    void AfterRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        GetTarget()->RemoveAurasDueToSpell(SPELL_GHOSTWALK);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(spell_dru_cat_form_ghostwalk::AfterApply, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_dru_cat_form_ghostwalk::AfterRemove, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
 
 // 50334 - Berserk
 class spell_dru_berserk : public AuraScript
@@ -2350,6 +2403,7 @@ void AddSC_druid_spell_scripts()
     RegisterSpellScript(spell_dru_bear_form_passive);
     RegisterSpellScript(spell_dru_berserk);
     RegisterSpellScript(spell_dru_feral_swiftness);
+    RegisterSpellScript(spell_dru_cat_form_ghostwalk);
     RegisterSpellScript(spell_dru_dash);
     RegisterSpellScript(spell_dru_eclipse);
     RegisterSpellScript(spell_dru_enrage);
