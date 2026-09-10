@@ -18,10 +18,10 @@
  // Barracks+ hardcore ruleset (config-gated; entirely inert on Legionnaire+):
  //  - Loot drop on death: WORN GREEN-AND-BETTER EQUIPMENT is at stake - a
  //    configurable share drops into a chest at the corpse (Dire Maul beads
- //    style), the rest is destroyed as a deflationary sink. White gear is the
- //    floor and never drops; bags, inventory and money are safe. Whatever the
- //    death took is replaced with plain white field kit on resurrection, so
- //    nobody is ever left unable to fight. Open world only - battlegrounds,
+ //    style), the rest is destroyed as a deflationary sink. White and grey gear
+ //    are the floor: they neither drop nor burn, and bags, inventory and money
+ //    are safe. Whatever the death took is replaced with plain white field kit
+ //    on resurrection, so nobody is ever left unable to fight. Open world only - battlegrounds,
  //    arenas, dungeons and raids all exempt, so a wipe costs a group nothing.
  //  - Opt-in free-for-all PvP: a flagger NPC in the capitals toggles it. The
  //    flag only ARMS in zones of a configurable minimum level - never in
@@ -1645,10 +1645,9 @@ namespace BarracksHardcore
         // stripping everyone's gear on a wipe would end instance running on this
         // realm outright.
         //
-        // This one gate covers all three ways gear leaves you, because they all
-        // funnel through here: the chest that drops green-and-better worn items,
-        // the white/grey burn (BurnWornFloorGear runs from this function and
-        // nowhere else on the death path), and a bot's carried gear below.
+        // This one gate covers both ways gear leaves you, because they funnel
+        // through here: the chest that drops green-and-better worn items, and a
+        // bot's carried gear below. White and grey no longer leave at all.
         if (IsInstancedContent(victim))
             return;
 
@@ -1839,15 +1838,19 @@ namespace BarracksHardcore
             for (CustomLootChests::ItemLocation const& dropped : droppedItems)
                 victim->DestroyItem(dropped.Bag, dropped.Slot, true);
 
-        // ...and the floor burns with it, so what stands back up is wearing
-        // issued kit and nothing else. Same exemption: a PvP-only bot keeps
-        // everything, for the same reason it keeps its greens.
+        // The floor SURVIVES the death. Realm owner's call, reversing my own.
         //
-        // After the chest, not before, so nothing here can affect what reached
-        // it. The kit itself is untouched - it is re-issued on resurrection
-        // rather than rebought, and a bare corpse run is the same one a death
-        // has always cost.
-        uint32 const burned = keepsGear ? 0u : BurnWornFloorGear(victim);
+        // I burned it on 2026-09-04 to make the issued kit the only floor, on
+        // the argument that a slot filled with a white drop was never revisited
+        // because the kit only fills an EMPTY slot. That reasoning was about the
+        // kit's refill rule, and taking a player's earned gear was too blunt an
+        // answer to it - the cost lands on somebody who found or bought a white
+        // piece and had it burned for wearing it in the wrong slot.
+        //
+        // Green and better still go to the chest and still burn on a lost roll;
+        // that is the deflation and it is untouched. White and grey are the
+        // floor again, as they were before that commit.
+        uint32 const burned = 0u;
 
         if (droppedItems.empty() && !burned && !bountyGold)
             return;
@@ -1907,11 +1910,13 @@ public:
         // statement, so by here the character is fully in the world and this is
         // the ordinary equip path.
         //
-        // The starting outfit is white and grey by definition, so the same rule
-        // that runs at every death does the whole job: burn the floor, then let
-        // the kit dress the slots it emptied. A character therefore meets the
-        // death rule for the first time before it has ever been in danger, and
-        // sees exactly the gear it will keep seeing.
+        // The starting outfit is white and grey by definition, so it is burned
+        // once here and the kit dresses the slots it emptied - everyone starts
+        // in issued kit rather than in whatever their race and class hands out.
+        //
+        // This is now the ONLY caller: death stopped burning the floor when the
+        // realm owner reversed that rule. Starting clothes are the server's to
+        // take; a white piece the player went and found is not.
         if (firstLogin)
             BurnWornFloorGear(player);
 
