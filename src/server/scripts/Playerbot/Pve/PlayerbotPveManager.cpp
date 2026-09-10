@@ -10592,6 +10592,53 @@ namespace
         return false;
     }
 
+    // The same question at arm's length instead of zone-wide: is anybody real
+    // close enough to WATCH this bot.
+    //
+    // It is asked by every path that re-levels a bot in order to move it
+    // somewhere else. A draft or a reset is not a quiet operation - the bot is
+    // stripped, dropped or raised to another band, re-taught its spells,
+    // retalented, re-kitted and teleported away - and doing all of that to the
+    // level 40 standing beside somebody turns them into a level 12 and vanishes
+    // them mid-conversation. The fleet reads as machinery for exactly as long as
+    // that takes.
+    //
+    // Two hundred yards, per the owner: comfortably outside the hundred-yard
+    // envelope the bots themselves use to notice people, so a bot that passes
+    // this really is on its own.
+    //
+    // A PRIORITY AND NEVER A VETO at both call sites. A rule that refused
+    // outright would leave a zone without the company it was promised for as long
+    // as the fleet happened to be standing near anybody, which trades a small
+    // cosmetic problem for a real one.
+    constexpr float kQuietRelevelYards = 200.0f;
+
+    bool IsWatchedByAnyPerson(Player const* bot, float yards = kQuietRelevelYards)
+    {
+        if (!bot)
+            return false;
+
+        uint32 const mapId = bot->GetMapId();
+        float const x = bot->GetPositionX();
+        float const y = bot->GetPositionY();
+        float const z = bot->GetPositionZ();
+        float const limitSq = yards * yards;
+
+        std::lock_guard<std::mutex> guard(g_HumanSpotLock);
+        for (HumanSpot const& spot : g_HumanSpots)
+        {
+            if (spot.MapId != mapId)
+                continue;
+
+            float const dx = spot.X - x;
+            float const dy = spot.Y - y;
+            float const dz = spot.Z - z;
+            if (dx * dx + dy * dy + dz * dz <= limitSq)
+                return true;
+        }
+        return false;
+    }
+
     // Whose level is theirs, and not the ground's to set.
     //
     // A levy re-levels, and for most of the fleet that is harmless: an ordinary
@@ -15624,6 +15671,11 @@ namespace playerbot
         // before g_DrifterLock is taken: see the lock-order note on the table.
         std::unordered_map<uint64, uint32> localHomeByBot;
         std::unordered_map<uint64, uint32> botZoneNow;
+        // Who has somebody standing over them. Gathered on this pass because it is
+        // already the pass that walks every bot, and because g_HumanSpotLock has to
+        // be taken before g_DrifterLock like every other lock this function uses -
+        // see the note above.
+        std::unordered_set<uint64> watchedBots;
         for (auto const& pair : ObjectAccessor::GetPlayers())
         {
             Player* bot = pair.second;
@@ -15635,6 +15687,8 @@ namespace playerbot
             {
                 localHomeByBot[bot->GetGUID().GetRawValue()] = home;
                 botZoneNow[bot->GetGUID().GetRawValue()] = bot->GetZoneId();
+                if (IsWatchedByAnyPerson(bot))
+                    watchedBots.insert(bot->GetGUID().GetRawValue());
             }
         }
 
@@ -15707,8 +15761,22 @@ namespace playerbot
         for (auto const& [botGuid, home] : localHomeByBot)
             if (!g_DrifterHumanByBot.count(botGuid))
                 byHome[home].push_back(botGuid);
+        // Ordered so the bots NOBODY is near end up at the back, because
+        // drawCandidate pops from the back. Guid order breaks the tie inside each
+        // half, which leaves the draft as deterministic as it has always been.
+        //
+        // Sorting rather than filtering is what makes this a priority: the watched
+        // bots are still in the bucket, just behind everyone else, so a zone that
+        // needs more company than the fleet can quietly supply still gets it.
         for (auto& [home, guids] : byHome)
-            std::sort(guids.begin(), guids.end());
+            std::sort(guids.begin(), guids.end(), [&watchedBots](uint64 lhs, uint64 rhs)
+            {
+                bool const lhsWatched = watchedBots.count(lhs) != 0;
+                bool const rhsWatched = watchedBots.count(rhs) != 0;
+                if (lhsWatched != rhsWatched)
+                    return lhsWatched;      // watched first, so the quiet ones are drawn first
+                return lhs < rhs;
+            });
 
         // Deliberately blind to the destination's level band.
         //
@@ -17236,6 +17304,18 @@ namespace playerbot
         }
 
         Trinity::Containers::RandomShuffle(managedBots);
+
+        // Quiet bots first, for the reason given on IsWatchedByAnyPerson: a reset
+        // to level one is the loudest thing done to a bot anywhere in this file,
+        // and it should not happen in front of somebody while there is anybody
+        // else to do it to.
+        //
+        // stable_partition rather than a sort, so the shuffle above still decides
+        // the order inside each half - the randomness is the point of it, and a
+        // comparator would quietly replace it with guid order.
+        std::stable_partition(managedBots.begin(), managedBots.end(),
+            [](Player const* bot) { return !IsWatchedByAnyPerson(bot); });
+
         uint32 const resetCount = uint32(managedBots.size()) * percent / 100;
         for (uint32 index = 0; index < resetCount; ++index)
             ResetManagedBotToLevelOne(managedBots[index]);
