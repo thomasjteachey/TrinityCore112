@@ -9455,7 +9455,15 @@ void ObjectMgr::LoadTrainers()
     uint32 oldMSTime = getMSTime();
 
     // For reload case
+    //
+    // _classTrainers holds RAW POINTERS into _trainers (see the push_back at the
+    // bottom of this function), so clearing one without the other left every
+    // .reload trainer walking freed Trainer objects - and appending a second set
+    // of pointers on top, so the vector grew by a whole realm's worth of class
+    // trainers each time. RunTrainerSpellCatchup walks exactly this vector on
+    // every bot level-up, hundreds of times a minute.
     _trainers.clear();
+    _classTrainers.clear();
 
     std::unordered_map<int32, std::vector<Trainer::Spell>> spellsByTrainer;
     if (QueryResult trainerSpellsResult = WorldDatabase.Query("SELECT TrainerId, SpellId, MoneyCost, ReqSkillLine, ReqSkillRank, ReqAbility1, ReqAbility2, ReqAbility3, ReqLevel FROM trainer_spell"))
