@@ -8455,16 +8455,42 @@ namespace
         }
     }
 
-    // True when re-earning this quest would put another copy of an ITEM in a
-    // bot's bags. The auto-completer below rewards every single-class quest
-    // outright, so anything it can hand out, it can hand out again.
+    // True when re-earning this quest would put another piece of GEAR in a bot's
+    // bags. The auto-completer below rewards every single-class quest outright,
+    // so anything it can hand out, it can hand out again.
+    //
+    // Armour and weapons only, deliberately. Those are what a bot keeps, outgrows
+    // and then sells, so a second copy is pure supply. Everything else a class
+    // quest might award - reagents, a consumable, a container - is either spent
+    // or worth little, and holding those back would stop a re-levelled bot
+    // re-earning things it genuinely needs again at its new size.
+    //
+    // Both reward lists are checked: the fixed rewards everyone gets, and the
+    // choice rewards the bot picks one of.
     bool ClassQuestMintsGear(uint32 questId)
     {
         Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
         if (!quest || !quest->GetRequiredClasses())
             return false;
 
-        return quest->GetRewItemsCount() > 0 || quest->GetRewChoiceItemsCount() > 0;
+        auto isWearable = [](uint32 itemId) -> bool
+        {
+            if (!itemId)
+                return false;
+
+            ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
+            return proto && (proto->Class == ITEM_CLASS_ARMOR || proto->Class == ITEM_CLASS_WEAPON);
+        };
+
+        for (uint32 i = 0; i < QUEST_REWARDS_COUNT; ++i)
+            if (isWearable(quest->RewardItemId[i]))
+                return true;
+
+        for (uint32 i = 0; i < QUEST_REWARD_CHOICES_COUNT; ++i)
+            if (isWearable(quest->RewardChoiceItemId[i]))
+                return true;
+
+        return false;
     }
 
     // Force-complete/reward every single-class quest the bot is legitimately
