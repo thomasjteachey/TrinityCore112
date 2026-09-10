@@ -15091,7 +15091,7 @@ namespace playerbot
         g_PveConfig.restHealthPct = sConfigMgr->GetFloatDefault("Playerbot.Pve.RestHealthPct", 60.0f);
         g_PveConfig.restManaPct = sConfigMgr->GetFloatDefault("Playerbot.Pve.RestManaPct", 50.0f);
         g_PveConfig.deathChestAuctionHoldSeconds = uint32(std::max(0,
-            sConfigMgr->GetIntDefault("Playerbot.Pve.DeathChestAuctionHoldSeconds", 30 * MINUTE)));
+            sConfigMgr->GetIntDefault("Playerbot.Pve.DeathChestAuctionHoldSeconds", 10 * MINUTE)));
         g_PveConfig.chestTauntEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.ChestTaunt.Enable", true);
         g_PveConfig.tavernEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Tavern.Enable", true);
         g_PveConfig.tavernMinMinutes = uint32(std::max(1, sConfigMgr->GetIntDefault("Playerbot.Pve.Tavern.MinMinutes", 25)));

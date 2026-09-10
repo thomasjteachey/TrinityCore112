@@ -3511,11 +3511,11 @@ Playerbot.Pve.IdleProd.RetrySeconds = 120
 #                     That loot is somebody's gear, and without a hold it could
 #                     be up for sale before its owner finished the corpse run.
 #                     Items a bot found any other way are unaffected.
-#        Default:     1800 - (thirty minutes)
-#                     0    - (no hold)
+#        Default:     600 - (ten minutes)
+#                     0   - (no hold)
 #
 
-Playerbot.Pve.DeathChestAuctionHoldSeconds = 1800
+Playerbot.Pve.DeathChestAuctionHoldSeconds = 600
 
 #
 #    Playerbot.Pve.MaxSlotsPerItem
