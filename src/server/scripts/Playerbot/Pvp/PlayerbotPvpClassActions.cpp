@@ -6005,9 +6005,41 @@ bool PvpClassActions::TryIssueShadowWraithFleeMovement(Player* player, Unit* thr
     if (wraith->GetDistance(threat) > kWraithFleeDistance)
         return false;
 
+    // ...and only when the last flee has actually finished.
+    //
+    // The check above was the whole throttle, and it never fired: the wraith
+    // could not gain distance (see below), so every tick found it inside 15
+    // yards and handed it a fresh MovePoint. MotionMaster's anti-restart guard
+    // does not help here - it lives entirely inside the TYPEID_PLAYER branch and
+    // the wraith is a Creature, so the creature path restarts the spline
+    // unconditionally. This is the selection function, which runs every fast
+    // tick regardless of whether the bot acts, so in a battleground that was a
+    // new spline every 100ms.
+    if (!wraith->movespline->Finalized())
+        return false;
+
+    // Build the destination in WORLD space, by hand.
+    //
+    // This used to be Position::RelocateOffset, which is the bug. That function
+    // takes a BODY-LOCAL offset and rotates it by the position's own
+    // orientation - so handing it an already-world-space away-vector rotated it
+    // a second time, and the wraith was actually sent toward
+    // awayAngle + its own facing.
+    //
+    // A moving unit's orientation is set from its spline's travel direction, so
+    // that fed back on itself: each tick's heading was the previous heading plus
+    // the away-angle again, and the wraith was ordered fifteen yards away in a
+    // substantially different direction ten times a second. It never gained
+    // ground, which is exactly why the distance bail-out above could never
+    // trigger. What a player saw was the priest's model - the wraith wears her
+    // appearance - lurching a yard or two in a new direction, over and over,
+    // while her real body stood rooted somewhere else entirely.
     float const awayAngle = wraith->GetAbsoluteAngle(threat->GetPosition()) + static_cast<float>(M_PI);
-    Position destination = wraith->GetPosition();
-    destination.RelocateOffset({ std::cos(awayAngle) * kWraithFleeDistance, std::sin(awayAngle) * kWraithFleeDistance, 0.0f, 0.0f });
+    Position destination(
+        wraith->GetPositionX() + std::cos(awayAngle) * kWraithFleeDistance,
+        wraith->GetPositionY() + std::sin(awayAngle) * kWraithFleeDistance,
+        wraith->GetPositionZ(),
+        wraith->GetOrientation());
 
     float adjustedZ = destination.GetPositionZ();
     wraith->UpdateAllowedPositionZ(destination.GetPositionX(), destination.GetPositionY(), adjustedZ);
