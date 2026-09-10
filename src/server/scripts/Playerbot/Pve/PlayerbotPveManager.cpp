@@ -148,38 +148,8 @@ namespace
                     uint32 const castTime = spellInfo->CastTimeEntry
                         ? uint32(std::max(0, spellInfo->CastTimeEntry->Base)) : 0u;
 
-                    // THE SHORTEST REAL CAST, not the longest.
-                    //
-                    // This took the LONGEST, on the reasoning that a visible cast
-                    // bar beats an instant open. The first half of that is right
-                    // and the second half was a trap.
-                    //
-                    // Lock type 17 is what a player's death cache carries, and the
-                    // game ships two Opening spells for it: 21651 at TEN SECONDS
-                    // and 26868 at one. Taking the longer asked a bot to stand
-                    // still for ten seconds without moving and without being hit -
-                    // InterruptFlags 31 cancels on both - which in a zone with
-                    // anything alive in it is not a cast, it is a wish. Measured
-                    // on the live realm before this line changed: 2,916 attempts
-                    // at player death caches yielded 32 takes, about one percent,
-                    // and the cancel is logged at DEBUG so it left no trace at all.
-                    // A person would watch bots walk to their cache, stand there,
-                    // and wander off.
-                    //
-                    // Ordinary world chests are lock type 13 and top out at five
-                    // seconds, which is exactly why those were being opened and
-                    // caches were not.
-                    //
-                    // Zero is still skipped rather than preferred, so the cast bar
-                    // the original reasoning wanted is still there. It is simply
-                    // the cheapest one on offer instead of the dearest. A lock type
-                    // with nothing but instant spells falls through to 0, and the
-                    // caller reads that as "use it outright", which it already did.
-                    if (!castTime)
-                        break;
-
                     auto const itr = byLockType.find(lockType);
-                    if (itr == byLockType.end() || castTime < bestCastTime[lockType] ||
+                    if (itr == byLockType.end() || castTime > bestCastTime[lockType] ||
                         (castTime == bestCastTime[lockType] && spellId < itr->second))
                     {
                         byLockType[lockType] = spellId;
