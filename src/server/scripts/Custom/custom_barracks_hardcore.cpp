@@ -1092,6 +1092,14 @@ namespace BarracksHardcore
         uint32 mainSubClass = 0;
         uint32 mainInvType = 0;
         bool   hadWeapon = false;
+
+        // The off-hand, recorded for its own sake and not as a detail of the main
+        // one. A character that died with a weapon in EACH hand is a dual-wielder,
+        // and that fact changes what the main hand may be handed back - see the
+        // two-hander rule in the kit.
+        uint32 offSubClass = 0;
+        uint32 offInvType = 0;
+        bool   hadOffHandWeapon = false;
     };
 
     std::mutex s_diedHoldingLock;
@@ -1103,18 +1111,26 @@ namespace BarracksHardcore
             return;
 
         DiedHoldingWeapon shape;
-        if (Item const* main = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND))
+        auto const remember = [player](uint8 slot, uint32& subClass, uint32& invType, bool& held)
         {
-            if (ItemTemplate const* proto = main->GetTemplate())
-            {
-                if (proto->Class == ITEM_CLASS_WEAPON)
-                {
-                    shape.mainSubClass = proto->SubClass;
-                    shape.mainInvType = proto->InventoryType;
-                    shape.hadWeapon = true;
-                }
-            }
-        }
+            Item const* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+            if (!item)
+                return;
+
+            ItemTemplate const* proto = item->GetTemplate();
+            // ITEM_CLASS_WEAPON is what decides, which is the point of asking it
+            // of the off-hand too: a shield or a held-in-off-hand trinket is
+            // armour, and holding one does not make this a dual-wielder.
+            if (!proto || proto->Class != ITEM_CLASS_WEAPON)
+                return;
+
+            subClass = proto->SubClass;
+            invType = proto->InventoryType;
+            held = true;
+        };
+
+        remember(EQUIPMENT_SLOT_MAINHAND, shape.mainSubClass, shape.mainInvType, shape.hadWeapon);
+        remember(EQUIPMENT_SLOT_OFFHAND, shape.offSubClass, shape.offInvType, shape.hadOffHandWeapon);
 
         std::lock_guard<std::mutex> guard(s_diedHoldingLock);
         s_diedHoldingByGuid[player->GetGUID().GetRawValue()] = shape;
@@ -1450,20 +1466,61 @@ namespace BarracksHardcore
             // can offer). There is no "best on type" to rank towards - the only
             // way to prefer a shape is to look for that shape alone first, and
             // fall back to the unfiltered search when the pool cannot supply it.
-            uint32 const preferredSubClass =
-                (slot == EQUIPMENT_SLOT_MAINHAND && diedHolding.hadWeapon) ? diedHolding.mainSubClass : 0u;
+            // ZERO IS A REAL SUBCLASS. ITEM_SUBCLASS_WEAPON_AXE is 0, so somebody
+            // who died holding a one-handed axe - about as ordinary a weapon as
+            // this game has - produced a preference of 0, which the pass gate read
+            // as "nothing to prefer" and skipped outright. That dropped them into
+            // the unfiltered search, which ranks by required level across
+            // INVTYPE_WEAPON, INVTYPE_WEAPONMAINHAND and INVTYPE_2HWEAPON
+            // TOGETHER - and a polearm wins that on required level. A flag says
+            // whether there is a preference; the number only says what it is.
+            //
+            // The off-hand is asked the same question now that the shape records
+            // it: a hand that held a sword gets a sword back where the pool has
+            // one, exactly as the main hand always has.
+            bool preferShape = false;
+            uint32 preferredSubClass = 0;
+            if (slot == EQUIPMENT_SLOT_MAINHAND && diedHolding.hadWeapon)
+            {
+                preferShape = true;
+                preferredSubClass = diedHolding.mainSubClass;
+            }
+            else if (slot == EQUIPMENT_SLOT_OFFHAND && diedHolding.hadOffHandWeapon)
+            {
+                preferShape = true;
+                preferredSubClass = diedHolding.offSubClass;
+            }
+
+            // Somebody who died with a weapon in each hand gets one hand back at a
+            // time, never a two-hander that swallows both.
+            //
+            // CanEquipNewItem will not refuse this for us. A two-hander offered for
+            // the main hand is ACCEPTED with the off-hand occupied - Player::
+            // CanEquipItem simply pushes the off-hand item into the bags - and the
+            // off-hand pass that follows this one in kKitSlots then comes back
+            // EQUIP_ERR_CANT_EQUIP_WITH_TWOHANDED and leaves the slot empty. So a
+            // hunter who fell over holding an axe and a sword stood back up holding
+            // a polearm and nothing else.
+            bool const diedDualWielding = diedHolding.hadWeapon && diedHolding.hadOffHandWeapon;
+            bool const excludeTwoHanded = diedDualWielding && slot == EQUIPMENT_SLOT_MAINHAND;
 
             for (uint8 pass = 0; pass < 2 && !bestItemId; ++pass)
             {
                 // Pass 0 is the shape-restricted search; pass 1 is the search
                 // this function has always done. With nothing to prefer, pass 0
                 // has no work and is skipped outright.
-                uint32 const requireSubClass = (pass == 0) ? preferredSubClass : 0u;
-                if (pass == 0 && !requireSubClass)
+                bool const restrictToShape = (pass == 0) && preferShape;
+                if (pass == 0 && !restrictToShape)
                     continue;
 
             for (uint32 invType : InventoryTypesForSlot(slot, player))
             {
+                // Applied to BOTH passes deliberately. The preference is a
+                // courtesy that the pool may not be able to honour; this is a
+                // rule, and falling back is not a reason to break it.
+                if (excludeTwoHanded && invType == INVTYPE_2HWEAPON)
+                    continue;
+
                 // Greys below the threshold, whites from there on, and white
                 // as the safety net underneath both.
                 //
@@ -1530,10 +1587,10 @@ namespace BarracksHardcore
                             proto->SubClass != wantedArmorSubclass)
                             continue;
 
-                        // The shape-restricted pass. Zero on the second pass, so
+                        // The shape-restricted pass. Off on the second pass, so
                         // this costs nothing once the preference has had its go.
-                        if (requireSubClass &&
-                            (proto->Class != ITEM_CLASS_WEAPON || proto->SubClass != requireSubClass))
+                        if (restrictToShape &&
+                            (proto->Class != ITEM_CLASS_WEAPON || proto->SubClass != preferredSubClass))
                             continue;
 
                         if (player->CanUseItem(proto) != EQUIP_ERR_OK)
