@@ -110,6 +110,53 @@ namespace
 
         return false;
     }
+
+    // Every prerequisite GetSpellState() enforces that the trainer row does not
+    // spell out, written into the packet's ReqAbility slots.
+    //
+    // The client colours the list from the server's verdict when the window
+    // opens, but after a purchase it re-colours every row BY ITSELF, and all it
+    // has to go on is the level, skill and ReqAbility fields of this packet. The
+    // rank chain lives only on the server, so to the client a row with empty
+    // ReqAbility looks unconditional: buy anything and Aimed Shot Rank 2 turns
+    // green for a hunter who never learned Rank 1. Re-sending the list after the
+    // purchase (TeachSpell, below) did not stop it.
+    //
+    // Stock TrinityCore carries the previous rank in trainer_spell.ReqAbility1,
+    // and before the trainer refactor it wrote it here in code. The Classic
+    // trainer import left that column empty on 2,401 of Barracks+'s 5,341 rows,
+    // so it is derived again from the two sources GetSpellState() reads: the rank
+    // before each spell the row teaches (or before the row's own spell when it
+    // teaches none), and spell_required. Slots the row already fills are kept,
+    // duplicates are skipped, and a full packet stops at three.
+    void AddImpliedRequirements(SpellInfo const* trainerSpellInfo, std::array<int32, 3>& reqAbility)
+    {
+        auto add = [&reqAbility](uint32 spellId)
+        {
+            if (!spellId || std::find(reqAbility.begin(), reqAbility.end(), int32(spellId)) != reqAbility.end())
+                return;
+
+            auto const empty = std::find(reqAbility.begin(), reqAbility.end(), 0);
+            if (empty != reqAbility.end())
+                *empty = int32(spellId);
+        };
+
+        bool hasLearnSpellEffect = false;
+        for (SpellEffectInfo const& spellEffectInfo : trainerSpellInfo->GetEffects())
+        {
+            if (!spellEffectInfo.IsEffect(SPELL_EFFECT_LEARN_SPELL))
+                continue;
+
+            hasLearnSpellEffect = true;
+            add(sSpellMgr->GetPrevSpellInChain(spellEffectInfo.TriggerSpell));
+        }
+
+        if (!hasLearnSpellEffect)
+            add(sSpellMgr->GetPrevSpellInChain(trainerSpellInfo->Id));
+
+        for (auto const& requirePair : sSpellMgr->GetSpellsRequiredForSpellBounds(trainerSpellInfo->Id))
+            add(requirePair.second);
+    }
 }
 
     bool Spell::IsCastable() const
@@ -160,6 +207,12 @@ namespace
             trainerListSpell.ReqSkillLine = trainerSpell.ReqSkillLine;
             trainerListSpell.ReqSkillRank = trainerSpell.ReqSkillRank;
             std::copy(trainerSpell.ReqAbility.begin(), trainerSpell.ReqAbility.end(), trainerListSpell.ReqAbility.begin());
+
+            // Beast Training source spells are exempt here for the same reason
+            // they are exempt from the rank check in GetSpellState(): the ranks
+            // belong to the pet, and the hunter never knows them.
+            if (!IsClassicPetTrainingSourceSpell(trainerSpell.SpellId))
+                AddImpliedRequirements(trainerSpellInfo, trainerListSpell.ReqAbility);
         }
 
         player->SendDirectMessage(trainerList.Write());
