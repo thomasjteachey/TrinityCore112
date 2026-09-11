@@ -1195,7 +1195,18 @@ namespace BarracksHardcore
             if (playerbot::SpecPrefersDualWield(player))
                 return { INVTYPE_WEAPONOFFHAND, INVTYPE_WEAPON };
 
-            std::vector<uint32> types = { INVTYPE_SHIELD, INVTYPE_WEAPONOFFHAND, INVTYPE_HOLDABLE };
+            std::vector<uint32> types = { INVTYPE_SHIELD, INVTYPE_WEAPONOFFHAND };
+
+            // A held off-hand - a tome, an orb, a rose - only does anything for a
+            // class that casts. On a warrior, rogue or hunter it has no swing and
+            // nothing to cast with, and once worn it keeps the kit from ever
+            // putting a weapon in that hand, because the kit leaves a filled slot
+            // alone. Those three are never handed one; the playerbot side takes
+            // one off them too.
+            bool const heldItemUser = !player || (player->GetClass() != CLASS_WARRIOR &&
+                player->GetClass() != CLASS_ROGUE && player->GetClass() != CLASS_HUNTER);
+            if (heldItemUser)
+                types.push_back(INVTYPE_HOLDABLE);
 
             // Rogues and hunters get the one-hander offered unconditionally.
             //
@@ -1407,6 +1418,14 @@ namespace BarracksHardcore
     void IssueWhiteFieldKit(Player* player)
     {
         if (!s_enabled || !player || !player->IsAlive() || player->IsGameMaster())
+            return;
+
+        // Nothing can be equipped mid-cast, stunned or charmed (CanEquipItem
+        // refuses all three), and the stale-piece pass below destroys BEFORE it
+        // re-issues - so running now would only take gear away. None of the
+        // usual callers (login, resurrection, the quartermaster) happen in that
+        // state; the playerbot off-hand shed can, and it waits for the next pass.
+        if (player->IsNonMeleeSpellCast(false) || player->HasUnitState(UNIT_STATE_STUNNED) || player->IsCharmed())
             return;
 
         BuildWhiteKitCacheOnce();

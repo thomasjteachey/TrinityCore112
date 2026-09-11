@@ -2667,6 +2667,18 @@ namespace
         GrindTargetCheck check{ bot, cfg };
         Trinity::CreatureListSearcher<GrindTargetCheck> searcher(bot, matches, check);
         Cell::VisitGridObjects(bot, searcher, cfg.grindSearchRadius);
+
+        // The grid visit hands over every creature in the CELLS the radius
+        // touches, not just those inside it, and GrindTargetCheck has no
+        // distance test of its own (FindGrindProspect shares it at three times
+        // the reach). So the 60 yard search chose targets out past 95: Doradan
+        // rose at the Stratholme graveyard and pulled the Cursed Mage standing 95
+        // yards off, eleven times in one morning. Anything farther is the
+        // prospect walk's to approach on foot.
+        matches.erase(std::remove_if(matches.begin(), matches.end(), [bot, &cfg](Creature* candidate)
+        {
+            return !bot->IsWithinDistInMap(candidate, cfg.grindSearchRadius);
+        }), matches.end());
         if (matches.empty())
             return nullptr;
 
@@ -3705,6 +3717,46 @@ namespace
                 for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
                     if (Item* item = bot->GetItemByPos(bagSlot, uint8(slot)))
                         fn(item, bagSlot, uint8(slot));
+    }
+
+    // Would asking CanEquipItem / FindEquipSlot about this item take the bot's
+    // off hand OFF?
+    //
+    // It is not a pure question. Player::FindEquipSlot, which CanEquipItem calls
+    // first, meets a two-handed staff or polearm - or any two-hander while a
+    // staff or polearm is in the main hand - by const_casting its way into
+    // AutoUnequipOffhandIfNeed(true), stock TrinityCore, for Titan Grip. The off
+    // hand goes into the bags before a single other check has run, whether or
+    // not the answer then turns out to be no. A bot asks that question about
+    // things it has no intention of equipping - every gear auction it can
+    // afford, bags it might sell, quest rewards - and the auction house always
+    // has a Sturdy Quarterstaff up. So the shopping pass stripped the off hand
+    // of every bot rich enough to look, every ten minutes; a field-kit off hand
+    // benched that way is then swept as loose kit and destroyed. That is how
+    // Doradan, a level 56 rogue, lost his second dagger and ended up holding a
+    // Red Rose.
+    //
+    // Mirrors FindEquipSlot's two conditions exactly. Callers skip the probe
+    // when this is true; the bag pass already never equips a two-hander over a
+    // held off hand, so skipping it changes no decision.
+    bool EquipProbeWouldBenchOffhand(Player const* bot, ItemTemplate const* proto)
+    {
+        if (!proto || proto->InventoryType != INVTYPE_2HWEAPON)
+            return false;
+        if (!bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND))
+            return false;
+
+        auto const isLongWeapon = [](ItemTemplate const* weapon)
+        {
+            return weapon->SubClass == ITEM_SUBCLASS_WEAPON_POLEARM || weapon->SubClass == ITEM_SUBCLASS_WEAPON_STAFF;
+        };
+
+        if (isLongWeapon(proto))
+            return true;
+
+        Item const* mainHand = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
+        ItemTemplate const* mainProto = mainHand ? mainHand->GetTemplate() : nullptr;
+        return mainProto && isLongWeapon(mainProto);
     }
 
     uint32 CountFreeBagSlots(Player* bot)
@@ -4761,7 +4813,8 @@ namespace
             {
                 uint16 dest = 0;
                 bool wantsToWear = false;
-                if (bot->CanEquipItem(NULL_SLOT, dest, item, false) == EQUIP_ERR_OK)
+                if (!EquipProbeWouldBenchOffhand(bot, proto) &&
+                    bot->CanEquipItem(NULL_SLOT, dest, item, false) == EQUIP_ERR_OK)
                 {
                     ItemTemplate const* equipped = nullptr;
                     if (Item const* worn = bot->GetItemByPos(dest))
@@ -5597,7 +5650,7 @@ namespace
             // stat gain so an upgrade can never lose to a merely expensive item.
             float score = float(proto->SellPrice) / 10000.0f;
 
-            if (bot->CanUseItem(proto) == EQUIP_ERR_OK)
+            if (bot->CanUseItem(proto) == EQUIP_ERR_OK && !EquipProbeWouldBenchOffhand(bot, proto))
             {
                 uint8 const slot = bot->FindEquipSlot(proto, NULL_SLOT, true);
                 if (slot < INVENTORY_SLOT_BAG_END)
@@ -6196,12 +6249,16 @@ namespace
             // realm before this line existed: of twenty fury warriors, nineteen
             // were carrying a SHIELD and not one carried a second weapon.
             //
-            // Rogues need no entry here. They dual wield too, but they can hold
-            // neither a two-hander nor a shield, so both of the rules this
-            // predicate guards are no-ops for them - which is also why the fault
-            // only ever showed on warriors. A warrior is the one class that can
-            // dual wield AND carry a shield.
             case CLASS_WARRIOR: return EquipProfileIndex(bot) == 1;
+
+            // ROGUES, every spec. They were left out on the grounds that they can
+            // hold neither a two-hander nor a shield, so the rules this predicate
+            // guards looked like no-ops for them. But a rogue CAN hold a held
+            // item - a tome, an orb, a rose - and both the scorer's weapon-only
+            // off hand and the field kit's weapon-only off hand (through
+            // SpecPrefersDualWield) key on this. Doradan fought with a Red Rose
+            // in his left hand for seven hours.
+            case CLASS_ROGUE:   return true;
 
             default:            return false;
         }
@@ -6728,9 +6785,61 @@ namespace
             uint32(item->GetBagSlot()), uint32(item->GetSlot()));
     }
 
+    // An off hand that fights for nobody. A warrior, rogue or hunter holding a
+    // held item (a tome, a rose), or a spec that fights with two weapons holding
+    // anything but a weapon, has lost an attack and its off-hand poison - and
+    // nothing ever took one off: the bag pass only challenged it with a weapon
+    // the bot happened to carry, and the field kit leaves any worn piece that is
+    // not its own issue alone.
+    //
+    // So it comes off into the bags - IsEquipUpgrade will not put it back, and
+    // the vendor pass sells it - and the kit fills the hand now rather than at
+    // the next death. That cannot loop: the kit never hands those three classes
+    // a held item, nor a dual-wield spec anything but a weapon.
+    void ShedDeadOffhand(Player* bot)
+    {
+        Item* offhand = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
+        ItemTemplate const* proto = offhand ? offhand->GetTemplate() : nullptr;
+        if (!proto)
+            return;
+
+        uint8 const playerClass = bot->GetClass();
+        bool const weaponClass = playerClass == CLASS_WARRIOR || playerClass == CLASS_ROGUE || playerClass == CLASS_HUNTER;
+        bool const deadHeldItem = weaponClass && proto->InventoryType == INVTYPE_HOLDABLE;
+        bool const notAWeapon = PrefersDualWield(bot) && proto->Class != ITEM_CLASS_WEAPON;
+        if (!deadHeldItem && !notAWeapon)
+            return;
+
+        // Not while equipping is refused. CanEquipItem turns everything away
+        // mid-cast, stunned or charmed, and the kit destroys its stale pieces
+        // BEFORE it looks for their replacements - so a shed landing during a
+        // gather or a poison application would strip the hand, and possibly
+        // more, and put nothing back until the next death. It waits for the
+        // next pass instead.
+        if (bot->IsNonMeleeSpellCast(false) || bot->HasUnitState(UNIT_STATE_STUNNED) || bot->IsCharmed())
+            return;
+
+        uint16 const offhandPos = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | EQUIPMENT_SLOT_OFFHAND);
+        if (bot->CanUnequipItem(offhandPos, false) != EQUIP_ERR_OK)
+            return;
+
+        ItemPosCountVec dest;
+        if (bot->CanStoreItem(NULL_BAG, NULL_SLOT, dest, offhand, false) != EQUIP_ERR_OK)
+            return;
+
+        std::string const itemName = proto->Name1;
+        bot->RemoveItem(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND, true);
+        bot->StoreItem(dest, offhand, true);
+        TC_LOG_INFO("playerbots.pve", "Bot {} took {} out of its off hand: that hand fights with a weapon.",
+            bot->GetName(), itemName);
+
+        BarracksHardcore::IssueWhiteFieldKit(bot);
+    }
+
     void TryEquipUpgrades(Player* bot, PveBotState& state)
     {
         TryRestoreShieldProfile(bot);
+        ShedDeadOffhand(bot);
 
         std::vector<std::pair<uint8, uint8>> positions;
         ForEachBagItem(bot, [&](Item* /*item*/, uint8 bag, uint8 slot)
@@ -6837,6 +6946,22 @@ namespace
             }
             else
             {
+                // An EMPTY slot is asked the same question as an occupied one.
+                // It never was, and IsEquipUpgrade's off-hand rules - no held
+                // item for anyone who does not cast from that hand, nothing but a
+                // weapon for a dual wielder - and its "an empty slot is not a
+                // licence" rule all lived past that branch. So whatever
+                // CanEquipItem would fit went straight in: a Red Rose into a
+                // rogue's free off hand, a shield into a fury warrior's.
+                //
+                // Shirts and tabards excepted. They carry nothing, so the
+                // "licence" rule would refuse them, but they are worn for how the
+                // bot looks, not how it fights, and cost it nothing to wear.
+                bool const cosmetic = proto->InventoryType == INVTYPE_BODY || proto->InventoryType == INVTYPE_TABARD;
+                if (cosmetic ? (proto->Duration || LooksLikeScaffoldingItem(proto))
+                    : !IsEquipUpgrade(bot, proto, nullptr, uint8(dest & 255)))
+                    continue;
+
                 bot->RemoveItem(position.first, position.second, true);
                 bot->EquipItem(dest, item, true);
                 bot->AutoUnequipOffhandIfNeed();
@@ -9937,7 +10062,8 @@ namespace
 
             // Gear it would rather wear than sell.
             uint16 dest = 0;
-            if (bot->CanEquipItem(NULL_SLOT, dest, item, false) == EQUIP_ERR_OK)
+            if (!EquipProbeWouldBenchOffhand(bot, proto) &&
+                bot->CanEquipItem(NULL_SLOT, dest, item, false) == EQUIP_ERR_OK)
             {
                 ItemTemplate const* equipped = nullptr;
                 if (Item const* worn = bot->GetItemByPos(dest))
@@ -10581,6 +10707,16 @@ namespace
                     if (bot->CanUseItem(proto) != EQUIP_ERR_OK)
                         continue;
 
+                    // Never bench an equipped off hand for a two-hander (same rule
+                    // as the local equip pass) - and asked BEFORE the probe, not
+                    // after it. CanEquipItem answers a staff or polearm by taking
+                    // the off hand off first (EquipProbeWouldBenchOffhand), so with
+                    // this guard below the probe it protected nothing: the pass
+                    // stripped every affluent bot's off hand every ten minutes.
+                    if (proto->InventoryType == INVTYPE_2HWEAPON &&
+                        bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND))
+                        continue;
+
                     uint16 dest = 0;
                     if (bot->CanEquipItem(NULL_SLOT, dest, item, true) != EQUIP_ERR_OK)
                         continue;
@@ -10592,12 +10728,6 @@ namespace
                     // And value a one-hander against the hand that actually needs it.
                     if (ShouldRedirectToOffHand(bot, proto, dest))
                         dest = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | EQUIPMENT_SLOT_OFFHAND);
-
-                    // Never bench an equipped off hand for a two-hander (same rule
-                    // as the local equip pass).
-                    if (proto->InventoryType == INVTYPE_2HWEAPON &&
-                        bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND))
-                        continue;
 
                     ItemTemplate const* equippedProto = nullptr;
                     if (Item const* equipped = bot->GetItemByPos(dest))
@@ -13980,7 +14110,18 @@ namespace
             float const distance = bot->GetDistance(state.deathSpotX, state.deathSpotY, state.deathSpotZ);
             int64 const travelSeconds = int64(distance / 7.0f) + 15;
 
-            if (chestAge + travelSeconds < int64(cfg.hardcoreChestDespawnSeconds) &&
+            // ...and only if a chest is actually standing there. A bot killed
+            // with nobody inside the witness range drops no chest at all
+            // (custom_barracks_hardcore, BotLootWitnessYards), which is nearly
+            // every creature death, and this walked it back anyway - at two
+            // thirds health, straight into whatever had just killed it. 45 of
+            // Doradan's 78 deaths in one morning came right after a walk back to
+            // nothing. The registry knows every chest; no grid search needed.
+            ObjectGuid standingChest;
+            bool const chestStanding = CustomLootChests::FindNearestChest(cfg.hardcoreLootChestEntry,
+                state.deathSpotMapId, state.deathSpotX, state.deathSpotY, state.deathSpotZ, 40.0f, standingChest);
+
+            if (chestStanding && chestAge + travelSeconds < int64(cfg.hardcoreChestDespawnSeconds) &&
                 distance > 20.0f && cfg.travelWalkMaxDistance > 0.0f && distance < cfg.travelWalkMaxDistance)
             {
                 TC_LOG_INFO("playerbots.pve", "Bot {} walks {} yards back to reclaim its death chest ({}s old).",
@@ -14476,7 +14617,12 @@ namespace
 
             // Bought at the vendor price, one bottle at a time, like everything
             // else a bot consumes. A bot too poor to drink stays sober.
-            uint64 const cost = uint64(proto->BuyPrice);
+            //
+            // One BOTTLE's share of the lot price: BuyPrice pays for BuyCount of
+            // them, and charging all of it for the one bottle taken is the same
+            // overcharge the ration purchase had.
+            uint64 const perLot = std::max<uint32>(1, proto->BuyCount);
+            uint64 const cost = (uint64(proto->BuyPrice) + perLot - 1) / perLot;
             if (cost && bot->GetMoney() < cost)
                 return;
 
@@ -16571,17 +16717,33 @@ namespace playerbot
             if (!proto)
                 return false;
 
-            // BuyPrice is per unit. A zero price is a vendor giving it away,
-            // which some starter rations genuinely are.
-            uint64 const cost = uint64(proto->BuyPrice) * kStack;
+            // BuyPrice is the price of one vendor LOT of BuyCount items, not of
+            // one item: Player::BuyItemFromVendorSlot charges BuyPrice per lot and
+            // hands over BuyCount per lot, and TryBuySupplies already buys that
+            // way. This charged it per ITEM, so twenty of a ration sold five to a
+            // lot cost five times the counter price - 112,000 copper for twenty
+            // Jessen's Special Slop at level 55, which took a level 56 rogue's
+            // whole purse in one silent line, left him unable to afford food ever
+            // after, and cost him about 460 gold in a day. A zero price is a
+            // vendor giving it away, which some starter rations genuinely are.
+            uint32 const perLot = std::max<uint32>(1, proto->BuyCount);
+            uint32 const lots = std::max<uint32>(1, (kStack + perLot - 1) / perLot);
+            uint32 const units = lots * perLot;
+            uint64 const cost = uint64(proto->BuyPrice) * lots;
             if (cost && bot->GetMoney() < cost)
                 return false;
 
-            if (!bot->AddItem(itemId, kStack))
+            if (!bot->AddItem(itemId, units))
                 return false;
 
             if (cost)
                 bot->ModifyMoney(-int64(cost));
+
+            // Said per bot. The drain's "Resupplied N bot(s)" line counts queue
+            // entries, not purchases, and names nobody - which is why this sink
+            // went unseen.
+            TC_LOG_INFO("playerbots.pve", "Bot {} bought {} x{} for {} copper (rations).",
+                bot->GetName(), proto->Name1, units, cost);
             return true;
         };
 
