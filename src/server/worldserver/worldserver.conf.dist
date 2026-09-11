@@ -2843,6 +2843,24 @@ Battleground.PremadeGroupWaitForMatch = 1800000
 Battleground.GiveXPForKills = 0
 
 #
+#    Centurion.Battleground.XpInsteadOfHonor
+#        Description: Below the level cap, battleground and arena honor (objectives,
+#                     wins, losses) is paid as experience instead. Scaled by bracket:
+#                     each point is a fixed share of a level at the bracket's midpoint
+#                     level. Level-capped players, bots and anyone with the experience
+#                     toggle off keep earning honor.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+#
+#    Centurion.Battleground.XpInsteadOfHonor.HonorPerLevel
+#        Description: How much honor equals one full level at the bracket's midpoint.
+#                     2240 makes a 280-honor match worth an eighth of a level.
+#        Default:     2240
+
+Centurion.Battleground.XpInsteadOfHonor = 0
+Centurion.Battleground.XpInsteadOfHonor.HonorPerLevel = 2240
+
+#
 #    Battleground.Random.ResetHour
 #        Description: Hour of the day when the global instance resets occur.
 #        Range:       0-23

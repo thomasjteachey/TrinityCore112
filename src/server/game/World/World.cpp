@@ -1538,6 +1538,11 @@ void World::LoadConfigSettings(bool reload)
     m_int_configs[CONFIG_CENTURION_BG_REWARD_MONEY_WINNER] = sConfigMgr->GetIntDefault("Centurion.Battleground.RewardMoneyWinner", 100000);
     m_int_configs[CONFIG_CENTURION_BG_REWARD_MONEY_LOSER] = sConfigMgr->GetIntDefault("Centurion.Battleground.RewardMoneyLoser", 100000);
     m_int_configs[CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP] = sConfigMgr->GetIntDefault("Centurion.Battleground.RewardHonorFlagCap", 10);
+    // Below the level cap, battleground and arena honor is paid as experience
+    // instead (Player::RewardHonor). HonorPerLevel is how much honor equals one
+    // full level at the bracket's midpoint level.
+    m_bool_configs[CONFIG_CENTURION_BG_XP_INSTEAD_OF_HONOR] = sConfigMgr->GetBoolDefault("Centurion.Battleground.XpInsteadOfHonor", false);
+    m_int_configs[CONFIG_CENTURION_BG_XP_HONOR_PER_LEVEL] = std::max(1, sConfigMgr->GetIntDefault("Centurion.Battleground.XpInsteadOfHonor.HonorPerLevel", 2240));
     // Percent chance a Violet Hold wave mirrors the party itself rather than
     // being drawn from the playerbot population (the 2.5% mono and full-roster
     // specials roll first and are unaffected).
