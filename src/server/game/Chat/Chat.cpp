@@ -292,7 +292,15 @@ size_t ChatHandler::BuildChatPacket(WorldPacket& data, ChatMsg chatType, Languag
     bool gmMessage = false;
     ObjectGuid receiverGUID;
     std::string receiverName = "";
-    language = LANG_UNIVERSAL;
+    // Every spoken language is Universal on these realms (one team, everybody
+    // understands everybody) - but LANG_ADDON is not a language, it is what
+    // tells the client "this is addon data, raise CHAT_MSG_ADDON and show
+    // nothing". Rewriting it too turned every addon whisper sent through here
+    // into a visible whisper: the core's own TrinityCore command-channel
+    // replies, player-to-player addon traffic, and the GM online feed, whose
+    // rows landed in the chat frame as "CCGAMEGMOP:..." instead of its window.
+    if (language != LANG_ADDON)
+        language = LANG_UNIVERSAL;
     if (sender)
     {
         senderGUID = sender->GetGUID();

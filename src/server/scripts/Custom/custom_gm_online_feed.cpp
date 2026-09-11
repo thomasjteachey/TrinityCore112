@@ -341,15 +341,20 @@ namespace
         } while (result->NextRow());
     }
 
-    // From the viewer to the viewer, the way the core's own addon channel
-    // replies (AddonChannelCommandHandler::Send). The addon accepts the feed only
-    // as a whisper from its own character: nobody else can send one of those,
-    // so a player cannot plant rows in a GM's list.
+    // From the viewer to the viewer. The addon accepts the feed only as a whisper
+    // from its own character: nobody else can send one of those, so a player
+    // cannot plant rows in a GM's list.
+    //
+    // Built with the GUID overload on purpose. The WorldObject overload decides
+    // the language for its caller, and this fork once had it force everything to
+    // Universal - LANG_ADDON included - which put this feed in the chat frame as
+    // plain whispers. The GUID overload writes the language it is given.
     void SendTagged(Player* viewer, std::string const& tag, std::string const& payload)
     {
         std::string const message = "CCGAME\t" + tag + ":" + payload;
         WorldPacket data;
-        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, viewer, viewer, message);
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, viewer->GetGUID(), viewer->GetGUID(),
+            message, 0, viewer->GetName(), viewer->GetName());
         viewer->SendDirectMessage(&data);
     }
 
