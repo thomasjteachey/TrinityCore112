@@ -16724,7 +16724,7 @@ namespace playerbot
             // lot cost five times the counter price - 112,000 copper for twenty
             // Jessen's Special Slop at level 55, which took a level 56 rogue's
             // whole purse in one silent line, left him unable to afford food ever
-            // after, and cost him about 460 gold in a day. A zero price is a
+            // after, and cost him about 46 gold in a day. A zero price is a
             // vendor giving it away, which some starter rations genuinely are.
             uint32 const perLot = std::max<uint32>(1, proto->BuyCount);
             uint32 const lots = std::max<uint32>(1, (kStack + perLot - 1) / perLot);
