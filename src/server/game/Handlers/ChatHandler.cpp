@@ -454,6 +454,14 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
         if (ClientTweaksAttest::HandleToken(sender, type, lang, msg))
             return;
 
+        // CCGAME is the server's own channel TO the Centurion addons (bot map,
+        // bot stats, GM online list, battleground rules). A client never sends
+        // on it - the requests travel as CCGAMEREQ, CCGACK, CWSGREQ and the
+        // TrinityCore command channel, none of which this matches - so one sent
+        // by a player is a forgery meant to plant data in somebody's window.
+        if (lang == LANG_ADDON && StringStartsWith(msg, "CCGAME\t"))
+            return;
+
         if (lang == LANG_ADDON)
         {
             if (AddonChannelCommandHandler(this).ParseCommands(msg.c_str()))

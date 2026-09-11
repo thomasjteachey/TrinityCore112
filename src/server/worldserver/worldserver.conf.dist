@@ -3395,6 +3395,38 @@ Centurion.WarMode.BotMap = 1
 Centurion.WarMode.BotMapIntervalMs = 2000
 Centurion.WarMode.BotMapPerMessage = 12
 
+###################################################################################################
+#
+#    Centurion.GMOnline.Enable
+#        Description: The GM command .gmonline and the CENTURION_GMOnline addon: who is
+#                     online on every realm - names, levels, zones and ACCOUNT names, with
+#                     the bot fleet counted (or listed with "bots"). GM accounts only (RBAC
+#                     GM command permission). ".gmonline" prints to chat; ".gmonline addon"
+#                     feeds the addon over the CCGAME whisper.
+#        Default:     1 - (enabled)
+#
+#    Centurion.GMOnline.Realms
+#        Description: Every realm to show, as realmId:charactersSchema pairs. The realm the
+#                     GM is on answers from its live session list (its own entry's schema
+#                     is not used); every other realm is read from its characters database
+#                     (online = 1, so as fresh as that realm's last character save). All
+#                     realms must share this realm's MySQL server, and the character
+#                     database user needs SELECT on the other schemas. The login schema is
+#                     taken from LoginDatabaseInfo. Empty = this realm only.
+#        Example:     "5:bpluscharacters,4:lpluscharacters"
+#        Default:     ""
+#
+#    Centurion.GMOnline.BotAccountPrefix
+#        Description: Accounts whose name starts with this are counted as bots (virtual and
+#                     transient bot sessions on this realm always are).
+#        Default:     "PLAYERBOT"
+#
+###################################################################################################
+
+Centurion.GMOnline.Enable = 1
+Centurion.GMOnline.Realms = ""
+Centurion.GMOnline.BotAccountPrefix = "PLAYERBOT"
+
 #
 #    Centurion.WarMode.ZoneCapStopsXp
 #        Description: With War Mode on, a player stops gaining experience at the top level

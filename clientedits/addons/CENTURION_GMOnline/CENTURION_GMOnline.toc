@@ -1,0 +1,9 @@
+## Interface: 30300
+## Title: Centurion GM Online
+## Notes: GM-only list of who is online on every realm - people, their zones and accounts, with the bot fleet counted or listed.
+## Author: Centurion
+## Version: 1.0
+## SavedVariables: CENTURION_GMOnlineDB
+## DefaultState: Enabled
+
+CENTURION_GMOnline.lua

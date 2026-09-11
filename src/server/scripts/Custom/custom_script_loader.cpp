@@ -36,6 +36,7 @@ void AddSC_custom_notoriety();
 void AddSC_custom_graceful_shutdown();
 void AddSC_custom_bot_map_feed();
 void AddSC_centurion_bot_stats_feed();
+void AddSC_centurion_gm_online_feed();
 void AddSC_custom_gurubashi_arena();
 void AddSC_custom_depleted_mark_exchange();
 void AddSC_custom_pvpve_dungeon();
@@ -85,6 +86,7 @@ void AddCustomScripts()
     AddSC_custom_graceful_shutdown();
     AddSC_custom_bot_map_feed();
     AddSC_centurion_bot_stats_feed();
+    AddSC_centurion_gm_online_feed();
     AddSC_custom_gurubashi_arena();
     AddSC_custom_depleted_mark_exchange();
     AddSC_custom_pvpve_dungeon();
