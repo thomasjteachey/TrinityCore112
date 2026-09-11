@@ -351,6 +351,15 @@ namespace
         // Zone guardians: when this bot was first seen away from its post.
         PveTimePoint guardianOutOfZoneSince{};
         PveTimePoint nextGuardianApproachAt{};
+        // A guardian's walk to a merchant inside its zone (journey kind 4). The
+        // spot a walk failed to reach is passed over for a while, so the next
+        // try goes to the next-nearest merchant instead of the same wall; and on
+        // arrival the errand scan gets the first look before the approach can
+        // send the guardian back toward a player.
+        float guardianVendorBlockedX = 0.0f;
+        float guardianVendorBlockedY = 0.0f;
+        PveTimePoint guardianVendorBlockedUntil{};
+        PveTimePoint guardianShoppingUntil{};
         // When this guardian last fought an actual person. Drives the escalation:
         // a guardian nobody has fought in a while stops being polite about where it
         // lands.
@@ -416,7 +425,7 @@ namespace
         // return pass each acting on a different idea of whether the hunt is over.
         bool bountyDeployed = false;
         bool journeyActive = false;
-        uint8 journeyFallbackKind = 0; // 1 = grind relocation, 2 = supply run
+        uint8 journeyFallbackKind = 0; // 1 = grind relocation, 2 = supply run, 3 = class quest, 4 = guardian vendor walk (no fallback)
         uint16 journeyMapId = 0;
         float journeyX = 0.0f;
         float journeyY = 0.0f;
@@ -601,6 +610,7 @@ namespace
     // Defined beside VendorPriceFloor, which is the other half of the same
     // rule; declared here because the junk-selling pass runs long before it.
     uint64 VendorPayout(Player const* bot, ItemTemplate const* proto, uint32 count);
+    uint32 DiscardGreyJunkForRoom(Player* bot, uint32 wantedFreeSlots);
     bool ClassQuestMintsGear(uint32 questId);
     bool IsProactiveTargetWithinPower(Player const* bot, uint32 playerLevel);
     bool IsProactivePlayerLevelAcceptable(Player const* bot, uint32 playerLevel, uint32 bountyStacks);
@@ -3420,8 +3430,26 @@ namespace
         state.journeyProgressY = 0.0f;
     }
 
+    // A guardian's walk to a merchant (journey kind 4) ended short of it - timed
+    // out, stuck, rescued, or dead on the way. The spot is passed over for two
+    // hours, so the next try goes to the next-nearest merchant in the zone
+    // instead of back into whatever stopped this one. Call it BEFORE the journey
+    // is cleared; it reads the destination off the journey.
+    void BlockGuardianVendorSpot(Player* bot, PveBotState& state, char const* why)
+    {
+        if (!state.journeyActive || state.journeyFallbackKind != 4)
+            return;
+
+        state.guardianVendorBlockedX = state.journeyX;
+        state.guardianVendorBlockedY = state.journeyY;
+        state.guardianVendorBlockedUntil = PveClock::now() + std::chrono::hours(2);
+        TC_LOG_INFO("playerbots.pve", "Guardian {} did not reach the vendor at {:.0f} {:.0f} ({}); trying another for two hours.",
+            bot->GetName(), state.journeyX, state.journeyY, why);
+    }
+
     void CancelJourneyWithFallback(Player* bot, PveBotState& state)
     {
+        BlockGuardianVendorSpot(bot, state, "walk failed");
         uint8 const fallbackKind = state.journeyFallbackKind;
         state.journeyActive = false;
         state.journeyFallbackKind = 0;
@@ -3429,6 +3457,12 @@ namespace
         // nearest-destination pick re-walks into the same unreachable wall
         // forever and the teleport fallback is never reached.
         state.walkFallbackUntil = PveClock::now() + std::chrono::minutes(10);
+
+        // A guardian's walk to a merchant has no teleport behind it - it must not
+        // leave its zone - so what it gets instead is a different merchant next
+        // time, which BlockGuardianVendorSpot above has already arranged.
+        if (fallbackKind == 4)
+            return;
 
         // The walk failed (timeout or stuck); the old teleport still delivers.
         std::lock_guard<std::mutex> guard(g_PvePendingLock);
@@ -3465,6 +3499,16 @@ namespace
         float const dy = bot->GetPositionY() - state.journeyY;
         if (dx * dx + dy * dy < 20.0f * 20.0f)
         {
+            // A guardian that walked to a merchant: the walk sets no errand, so
+            // the errand scan has to claim the merchant, and the approach runs in
+            // the same slow tick with nothing to stop it sending the guardian
+            // back toward a player first - after a walk across the whole zone,
+            // for nothing. So the scan is due at once, and the approach waits.
+            if (state.journeyFallbackKind == 4)
+            {
+                state.nextErrandScanAt = {};
+                state.guardianShoppingUntil = now + std::chrono::seconds(30);
+            }
             state.journeyActive = false;
             state.journeyFallbackKind = 0;
             TC_LOG_INFO("playerbots.pve", "Bot {} finished its walked journey.", bot->GetName());
@@ -4749,6 +4793,93 @@ namespace
         return soldCount;
     }
 
+    // Throw grey junk out of a full pack, the least valuable stacks first, until
+    // `wantedFreeSlots` are free or there is no grey left. Returns how many
+    // stacks went.
+    //
+    // What a person does standing over something worth having with a pack full
+    // of tattered cloth: drop the cloth. The vendor is still the right home for
+    // greys - this is only for the moment when the pack is full and the thing on
+    // the ground will not wait.
+    //
+    // Never an item held off the auction house (it may be a dead player's, and
+    // the hold is there so they can have it back) and never one a quest wants.
+    // Positions are collected before anything is destroyed, as in
+    // DiscardOutclassedRations.
+    //
+    // Measured in GENERAL slots - the backpack and bags of no family. A quiver,
+    // soul bag or herb bag cannot take what a cache holds, and counting their
+    // empty slots would have a hunter with half a quiver free throw out one grey
+    // and call it room for ten.
+    uint32 CountFreeGeneralBagSlots(Player* bot)
+    {
+        uint32 freeSlots = 0;
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+            if (!bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                ++freeSlots;
+
+        for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+            if (Bag* bag = bot->GetBagByPos(bagSlot))
+                if (ItemTemplate const* bagProto = bag->GetTemplate(); bagProto && !bagProto->BagFamily)
+                    freeSlots += bag->GetFreeSlots();
+
+        return freeSlots;
+    }
+
+    // Grey stacks a merchant would take off this bot - the same greys
+    // SellVendorJunk sells: priced, and not held for a dead player.
+    uint32 CountSellableGreys(Player* bot)
+    {
+        uint32 greys = 0;
+        ForEachBagItem(bot, [&](Item* item, uint8 /*bag*/, uint8 /*slot*/)
+        {
+            ItemTemplate const* proto = item->GetTemplate();
+            if (proto && proto->Quality == ITEM_QUALITY_POOR && proto->SellPrice &&
+                !IsHeldFromAuction(item->GetGUID()))
+                ++greys;
+        });
+        return greys;
+    }
+
+    uint32 DiscardGreyJunkForRoom(Player* bot, uint32 wantedFreeSlots)
+    {
+        uint32 freeSlots = CountFreeGeneralBagSlots(bot);
+        if (freeSlots >= wantedFreeSlots)
+            return 0;
+
+        struct Junk
+        {
+            uint64 value;
+            uint8 bag;
+            uint8 slot;
+        };
+        std::vector<Junk> junk;
+        ForEachBagItem(bot, [&](Item* item, uint8 bag, uint8 slot)
+        {
+            ItemTemplate const* proto = item->GetTemplate();
+            if (!proto || proto->Quality != ITEM_QUALITY_POOR || IsHeldFromAuction(item->GetGUID()) ||
+                IsQuestRequiredItem(bot, proto->ItemId))
+                return;
+            junk.push_back({ VendorPayout(bot, proto, item->GetCount()), bag, slot });
+        });
+
+        std::sort(junk.begin(), junk.end(), [](Junk const& left, Junk const& right)
+        {
+            return left.value < right.value;
+        });
+
+        uint32 dropped = 0;
+        for (Junk const& piece : junk)
+        {
+            if (freeSlots >= wantedFreeSlots)
+                break;
+            bot->DestroyItem(piece.bag, piece.slot, true);
+            ++freeSlots;
+            ++dropped;
+        }
+        return dropped;
+    }
+
     // The kill loop leaves the bot targeting its dead victim for one tick; grab
     // the corpse for looting before the disengage path clears the target.
     void DetectFreshKillForLoot(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
@@ -5664,6 +5795,16 @@ namespace
         bool const needVendor = cfg.vendorEnabled &&
             (CountFreeBagSlots(bot) < 4 || needRepair || needSupplies);
 
+        // A guardian walks to a merchant for ONE reason: a pack filling up with
+        // greys a merchant will buy. Its rations are bought on the spot at rest
+        // (BuyTravelRations) and its gear is field-repaired, so those needs never
+        // justify a walk across its zone - and a pack full of what no merchant
+        // takes (greens waiting for the auction pass, a dead player's held gear)
+        // would only send it there to sell nothing, every five minutes. Each
+        // visit sells every grey it counts, so this cannot repeat on its own.
+        bool const guardianNeedsMerchant = guardian && needVendor &&
+            CountFreeBagSlots(bot) < 4 && CountSellableGreys(bot) > 0;
+
         std::vector<Creature*> serviceNpcs;
         ErrandNpcCheck check{ bot };
         Trinity::CreatureListSearcher<ErrandNpcCheck> searcher(bot, serviceNpcs, check);
@@ -5672,7 +5813,14 @@ namespace
         {
             // Nothing in walking range at all: a bot that needs a vendor gets a
             // town run instead of starving in the wilderness.
-            if (needVendor && !guardian)
+            //
+            // Guardians too. They used to be left out, which left a guardian
+            // with no merchant inside this 200 yard scan with no way to empty a
+            // bag at all: Brenadan held Felwood with the nearest vendor 1,800
+            // yards off, filled four bags with greys, and was then too full to
+            // open a player's cache. ProcessPendingSupplyRuns keeps a guardian's
+            // run inside its own zone and on foot, so it never leaves its post.
+            if (needVendor && (!guardian || guardianNeedsMerchant))
                 RequestSupplyRunIfDue(bot, state);
             return;
         }
@@ -5744,9 +5892,10 @@ namespace
             }
         }
 
-        // NPCs around, but no usable vendor among them (quest camp, cooldowns):
+        // NPCs around, but no usable vendor among them (quest camp, cooldowns,
+        // or - for a guardian - merchants that stand across its zone border):
         // the vendor need still stands, so town-run it.
-        if (needVendor && !guardian)
+        if (needVendor && (!guardian || guardianNeedsMerchant))
             RequestSupplyRunIfDue(bot, state);
     }
 
@@ -7985,7 +8134,7 @@ namespace
         float const dropDistance = std::max(PvePlayerTeleportMinimumDistance, kGuardianDropYards);
 
         if (eligible && !nearAHuman && !bot->IsInCombat() && !state.engaged &&
-            PveClock::now() >= state.timidUntil &&
+            PveClock::now() >= state.timidUntil && PveClock::now() >= state.guardianShoppingUntil &&
             !state.journeyActive && state.errandKind == PveErrandKind::None &&
             cfg.guardianPlayerApproachYards > 0.0f &&
             PveClock::now() >= state.nextGuardianApproachAt)
@@ -8694,6 +8843,8 @@ namespace
         float x = 0.0f;
         float y = 0.0f;
         float z = 0.0f;
+        uint32 zoneId = 0;
+        uint32 faction = 0;  // the merchant's faction template, to ask whether it serves the bot
     };
 
     std::mutex g_VendorSpotLock;
@@ -8729,14 +8880,21 @@ namespace
                 continue;
 
             // Same zone screen as the grind clusters: no supply runs into the
-            // DK intro area or GM Island.
-            if (Map* map = sMapMgr->FindMap(data.mapId, 0))
-                if (IsForbiddenGrindZone(map->GetZoneId(PHASEMASK_NORMAL, data.spawnPoint.GetPositionX(),
-                    data.spawnPoint.GetPositionY(), data.spawnPoint.GetPositionZ())))
-                    continue;
+            // DK intro area or GM Island. The zone is kept, too: a guardian may
+            // only shop inside the zone it holds.
+            //
+            // Through sMapMgr->GetZoneId, not FindMap: FindMap answers null for a
+            // continent nobody has entered yet, and this cache is built once - a
+            // first supply run from Eastern Kingdoms would have stamped every
+            // Kalimdor merchant zone 0 for the whole uptime, where no guardian's
+            // zone could ever match it. The grind cache learned the same lesson.
+            uint32 const zoneId = sMapMgr->GetZoneId(PHASEMASK_NORMAL, data.mapId, data.spawnPoint.GetPositionX(),
+                data.spawnPoint.GetPositionY(), data.spawnPoint.GetPositionZ());
+            if (IsForbiddenGrindZone(zoneId))
+                continue;
 
             g_VendorSpots.push_back({ uint16(data.mapId), data.spawnPoint.GetPositionX(),
-                data.spawnPoint.GetPositionY(), data.spawnPoint.GetPositionZ() });
+                data.spawnPoint.GetPositionY(), data.spawnPoint.GetPositionZ(), zoneId, proto->faction });
         }
 
         TC_LOG_INFO("playerbots.pve", "Vendor spot cache built: {} vendors.", g_VendorSpots.size());
@@ -10737,6 +10895,21 @@ namespace
                 bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
                 continue;
 
+            // Asked before the spot lock is taken: GetGuardianZoneId takes the
+            // guardian lock, and the two are never held together.
+            uint32 const guardianZoneId = GetGuardianZoneId(botRawGuid);
+
+            float blockedX = 0.0f;
+            float blockedY = 0.0f;
+            bool blockedSpot = false;
+            if (guardianZoneId)
+            {
+                PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+                blockedSpot = PveClock::now() < state.guardianVendorBlockedUntil;
+                blockedX = state.guardianVendorBlockedX;
+                blockedY = state.guardianVendorBlockedY;
+            }
+
             VendorSpot const* nearest = nullptr;
             float nearestDist2 = 0.0f;
             {
@@ -10745,15 +10918,29 @@ namespace
                 {
                     if (spot.mapId != bot->GetMapId())
                         continue;
+                    if (guardianZoneId && spot.zoneId != guardianZoneId)
+                        continue;
 
                     float const dx = spot.x - bot->GetPositionX();
                     float const dy = spot.y - bot->GetPositionY();
                     float const dist2 = dx * dx + dy * dy;
-                    if (!nearest || dist2 < nearestDist2)
-                    {
-                        nearest = &spot;
-                        nearestDist2 = dist2;
-                    }
+                    if (nearest && dist2 >= nearestDist2)
+                        continue;
+
+                    if (blockedSpot && std::fabs(spot.x - blockedX) < 5.0f && std::fabs(spot.y - blockedY) < 5.0f)
+                        continue;
+
+                    // A merchant who will not serve this bot is no destination.
+                    // The errand scan only takes a FRIENDLY one (ErrandNpcCheck),
+                    // so a run into a town of the other faction ends with nothing
+                    // bought, a fight with its guards, and the same run five
+                    // minutes later. Same test that check makes, from the faction
+                    // alone - there is no creature to ask from here.
+                    if (WorldObject::GetFactionReactionTo(sFactionTemplateStore.LookupEntry(spot.faction), bot) < REP_FRIENDLY)
+                        continue;
+
+                    nearest = &spot;
+                    nearestDist2 = dist2;
                 }
             }
 
@@ -10765,6 +10952,33 @@ namespace
             {
                 PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
                 walkAllowed = PveClock::now() >= state.walkFallbackUntil;
+            }
+
+            // A guardian shops on foot, inside the zone it holds, or not at all.
+            // A flight or a teleport would carry it off its post, and the leash
+            // would drag it home before it had sold a thing. The walk is kind 4,
+            // which has no fallback for the same reason - a failed walk must not
+            // turn into a teleport; it marks the spot so the next try picks
+            // another merchant - and which the lifecycle's guardian guard lets
+            // run. No walking cap either: the merchant is in the same zone, and
+            // a long zone is the whole reason this guardian had none in reach.
+            if (guardianZoneId)
+            {
+                if (!walkAllowed)
+                    continue;
+
+                float const walkDistance = bot->GetDistance(nearest->x, nearest->y, nearest->z);
+                playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), false);
+                PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+                state.engaged = false;
+                StartWalkedJourney(state, nearest->mapId, nearest->x, nearest->y, nearest->z, 4, walkDistance);
+                // One trip per half hour at most, whatever happens on it. A
+                // successful one sells every grey, so the next is a long way off
+                // anyway; this only bounds the cases where a trip does not help.
+                state.nextSupplyRunAt = PveClock::now() + std::chrono::minutes(30);
+                TC_LOG_INFO("playerbots.pve", "Guardian {} walking {:.0f}y to a vendor inside zone {}.",
+                    bot->GetName(), walkDistance, guardianZoneId);
+                continue;
             }
             if (walkAllowed && g_PveConfig.travelWalkMaxDistance > 0.0f && nearest->mapId == bot->GetMapId())
             {
@@ -12642,6 +12856,7 @@ namespace
                     // steer the bot back into the same mountain or river.
                     PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
                     ResetStuckWatchdog(state);
+                    BlockGuardianVendorSpot(bot, state, "stuck");
                     state.journeyActive = false;
                     state.journeyFallbackKind = 0;
                     state.errandGuid = ObjectGuid::Empty;
@@ -12819,6 +13034,18 @@ namespace
         //
         // The remote path has always screened this (CountFreeBagSlots >= 2 when
         // it builds its candidate list); the walked path never did.
+        //
+        // A dead player's cache gets room made for it first. It will not wait -
+        // the next bot along takes it, or it despawns - and it is worth more
+        // than any grey in the pack, so the junk goes: enough of it for
+        // everything the cache holds, as far as the pack has grey to give.
+        // Before this, a bot with four bags of junk walked up to a player's
+        // cache, said it had one free slot, and walked away from it.
+        if (CustomLootChests::IsPlayerBuiltChest(go->GetGUID()))
+            if (uint32 const dropped = DiscardGreyJunkForRoom(bot, std::max<uint32>(2, go->loot.unlootedCount)))
+                TC_LOG_INFO("playerbots.pve", "Bot {} threw out {} grey item(s) to make room for cache {} ({} item(s) in it).",
+                    bot->GetName(), dropped, go->GetGUID().GetCounter(), uint32(go->loot.unlootedCount));
+
         if (uint32 const freeSlots = CountFreeBagSlots(bot); freeSlots < 2)
         {
             // Said out loud. This bail is why a bot walks to a node, does
@@ -13585,6 +13812,7 @@ namespace
             }
             // Dying voids any trek in progress: resuming the same walk would
             // march straight back through whatever killed us.
+            BlockGuardianVendorSpot(bot, state, "died on the way");
             state.journeyActive = false;
             state.journeyFallbackKind = 0;
             if (state.recentDeathWindowStart == PveTimePoint() ||
@@ -14236,15 +14464,19 @@ namespace
         // Guardians never leave their post for autonomous town/class/grind travel.
         // If a bot was promoted to guardian while an older journey/request was still
         // live, cancel that ownership here and let RunZoneGuardianTick send it home.
+        //
+        // A pending supply run is NOT thrown away any more: ProcessPendingSupplyRuns
+        // turns a guardian's into a walk to a merchant inside its own zone, which
+        // is the only way a guardian with none in reach can empty its bags.
         if (GetGuardianZoneId(bot->GetGUID().GetRawValue()))
         {
-            if (state.journeyActive && state.journeyFallbackKind != 0)
+            // Kind 4 is the guardian's own walk to a merchant in its zone.
+            if (state.journeyActive && state.journeyFallbackKind != 0 && state.journeyFallbackKind != 4)
             {
                 state.journeyActive = false;
                 state.journeyFallbackKind = 0;
             }
             std::lock_guard<std::mutex> guard(g_PvePendingLock);
-            g_PendingSupplyRuns.erase(bot->GetGUID().GetRawValue());
             g_PendingClassQuestTravels.erase(bot->GetGUID().GetRawValue());
         }
 
