@@ -574,7 +574,7 @@ namespace
     bool IsEquipUpgrade(Player const* bot, ItemTemplate const* candidate, ItemTemplate const* incumbent, uint8 slot);
     float ScoreItemForSpec(Player const* bot, ItemTemplate const* proto);
     GameObject* FindRegisteredDeathChest(Player* bot, uint32 entry, float maxDistance);
-    bool IsAuctionableSurplus(Player* bot, Item* item);
+    bool IsAuctionableSurplus(Player* bot, Item* item, bool ignoreLotSize = false);
     void HoldLootFromAuction(ObjectGuid itemGuid, uint32 seconds, ObjectGuid owner);
     bool IsHeldFromAuction(ObjectGuid itemGuid);
     uint32 RequiredAmmoSubclass(Player const* bot);
@@ -4536,10 +4536,26 @@ namespace
             // auction route is closed to them: selling switched off, the item not
             // listable at all (soulbound gathers), or the pack too full to afford
             // waiting for the next listing run.
+            //
+            // SHORT OF A LOT IS NOT "THE ROUTE IS CLOSED". IsAuctionableSurplus
+            // refuses a common material held in less than a full lot (ten ore,
+            // twenty leather), which is right for the LISTING pass - one ore is
+            // noise on the house - but this branch read that refusal as "cannot
+            // ever be auctioned" and sold the stack. Anything gathered one piece at
+            // a time from a rare node therefore never reached ten: Gold Ore, one
+            // per vein, went to the merchant after every mining trip, and 49 gold
+            // veins opened in a day left four Gold Ore on the entire realm against
+            // 553 Truesilver. Nothing logged it, because this path is silent.
+            //
+            // So the house is asked whether the stack could EVER be listed, lot
+            // size aside. A partial stack waits in the pack until the lot fills and
+            // the listing pass takes it. The two escapes that remain are the real
+            // ones: selling switched off, and a pack down to its last slot, where
+            // holding partial stacks would stop the bot looting anything at all.
             if (!sellable && playerbot::PveManager::GetConfig().professionsEnabled &&
                 proto->Class == ITEM_CLASS_TRADE_GOODS && !IsQuestRequiredItem(bot, proto->ItemId))
                 sellable = !playerbot::PveManager::GetConfig().auctionSellEnabled ||
-                CountFreeBagSlots(bot) < 2 || !IsAuctionableSurplus(bot, item);
+                CountFreeBagSlots(bot) < 2 || !IsAuctionableSurplus(bot, item, /*ignoreLotSize*/ true);
 
             // Spare bags and quivers. A bag is worth real money to another
             // player and a pittance to a merchant, so these go to the house by
@@ -9431,7 +9447,7 @@ namespace
             itr = itr->second.Until < cutoff ? g_AuctionHoldByItem.erase(itr) : std::next(itr);
     }
 
-    bool IsAuctionableSurplus(Player* bot, Item* item)
+    bool IsAuctionableSurplus(Player* bot, Item* item, bool ignoreLotSize)
     {
         ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
         if (!proto)
@@ -9492,7 +9508,10 @@ namespace
             if (maxStack > 1 && uint32(proto->SellPrice) < auctionCfg.auctionValuableUnitCopper)
             {
                 uint32 const wantedLot = std::min<uint32>(maxStack, auctionCfg.auctionMinTradeGoodStack);
-                if (item->GetCount() < wantedLot)
+                // ignoreLotSize: the vendor errand asks "could this EVER go to the
+                // house?", and a stack that is merely short of a lot can - it only
+                // has to wait. See SellVendorJunk.
+                if (!ignoreLotSize && item->GetCount() < wantedLot)
                     return false;
             }
         }
