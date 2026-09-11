@@ -612,8 +612,11 @@ Playerbot.PveGrind.AllowElites = 0
 #                     than MaxLevelsAbove below it; it looks SeekYards out for one.
 #                     While fighting one it wears BuffSpell, and the blows between that
 #                     bot and that dinosaur ONLY are rescaled: DamageDonePct more dealt,
-#                     DamageTakenPct of the dinosaur's damage taken. A player ganking the
-#                     hunter fights it at normal strength.
+#                     and DamageTakenPct of the dinosaur's STOCK damage taken (this
+#                     replaces the general creature-damage cut for that fight rather than
+#                     stacking on it). A player ganking the hunter fights it at normal
+#                     strength. Read ONCE at startup - restart after changing these keys.
+#                     BuffSpell must be a spell the server knows or the hunt stays off.
 #        Default:     0 (Enable), "6498,6499,6500" (Entries), 0 (BuffSpell - needs a client
 #                     Spell.dbc row; 90720 on Barracks+), 100 (DamageDonePct),
 #                     50 (DamageTakenPct), 150 (SeekYards), 3 (MaxLevelsAbove)

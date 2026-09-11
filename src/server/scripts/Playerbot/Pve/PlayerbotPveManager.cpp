@@ -1031,8 +1031,12 @@ namespace
                 (levelDelta > int32(cfg.grindMaxLevelAbove) || -levelDelta > int32(cfg.grindMaxLevelBelow)))
                 return false;
 
-            // Never steal a mob someone else is already fighting.
-            if (creature->IsInCombat() && creature->GetVictim() != bot)
+            // Never steal a mob someone else is already fighting. A devilsaur the
+            // bot's own pet is holding is the bot's fight, not somebody else's -
+            // without this a hunter that let its pet tank could never take the
+            // dinosaur back after dealing with an add.
+            if (creature->IsInCombat() && creature->GetVictim() != bot &&
+                !(huntTarget && creature->GetVictim() && creature->GetVictim()->GetCharmerOrOwnerOrSelf() == bot))
                 return false;
 
             return bot->IsValidAttackTarget(creature);
@@ -2599,8 +2603,19 @@ namespace
 
             if (foe->GetTypeId() != TYPEID_PLAYER)
             {
+                // Elites are out of a pack's reach just as they are out of the
+                // grind's. Joining a devilsaur fight is for a bot that can hunt one
+                // - anyone else would fight a level 55 elite at stock numbers, with
+                // no marker and no rescale, and be the one that dies.
+                Creature const* creature = foe->ToCreature();
+                bool const huntTarget = creature && CanHuntDevilsaur(bot, creature);
+                if (creature && !cfg.grindAllowElites && (creature->isElite() || creature->isWorldBoss()) &&
+                    (creature->isWorldBoss() || !huntTarget))
+                    continue;
+
                 int32 const levelDelta = int32(foe->GetLevel()) - int32(bot->GetLevel());
-                if (levelDelta > int32(cfg.grindMaxLevelAbove) || -levelDelta > int32(cfg.grindMaxLevelBelow))
+                if (!huntTarget &&
+                    (levelDelta > int32(cfg.grindMaxLevelAbove) || -levelDelta > int32(cfg.grindMaxLevelBelow)))
                     continue;
             }
 
@@ -2722,33 +2737,66 @@ namespace
     // and hands back the nearest reachable one as its target. It runs on the grind
     // scan's own timer and only for bots that skin, so the wider sweep costs
     // nothing for anybody else.
+    // The listed dinosaurs' spawns, by spawn id - four on the whole realm.
+    //
+    // Built once, from the spawn table, and read-only after that. The entries are
+    // latched at first load (see LoadConfig), so a list built from them cannot go
+    // stale under a .reload.
+    std::vector<std::pair<ObjectGuid::LowType, uint32>> const& DevilsaurSpawns()
+    {
+        static std::vector<std::pair<ObjectGuid::LowType, uint32>> const spawns = []
+        {
+            std::vector<std::pair<ObjectGuid::LowType, uint32>> found;
+            playerbot::PveConfig const& cfg = g_PveConfig;
+            for (auto const& [spawnId, data] : sObjectMgr->GetAllCreatureData())
+                if (std::find(cfg.devilsaurHuntEntries.begin(), cfg.devilsaurHuntEntries.end(), data.id) !=
+                    cfg.devilsaurHuntEntries.end())
+                    found.emplace_back(spawnId, data.mapId);
+            return found;
+        }();
+        return spawns;
+    }
+
     Unit* PickDevilsaurHuntTarget(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
     {
-        if (!cfg.devilsaurHuntEnabled || cfg.devilsaurHuntEntries.empty() ||
+        if (!cfg.devilsaurHuntEnabled || !cfg.devilsaurHuntBuffSpell ||
             !BotSkins(bot) || !bot->HasSkill(SKILL_SKINNING))
             return nullptr;
 
-        struct DevilsaurCheck
-        {
-            Player* bot;
-
-            bool operator()(Creature* creature) const
-            {
-                if (!creature->IsAlive() || creature->IsInEvadeMode())
-                    return false;
-
-                // Somebody else's fight stays theirs.
-                if (creature->IsInCombat() && creature->GetVictim() != bot)
-                    return false;
-
-                return CanHuntDevilsaur(bot, creature) && bot->IsValidAttackTarget(creature);
-            }
-        };
-
+        // Asked of the map BY SPAWN ID, not swept for. A SeekYards grid visit ran
+        // for every skinner on the realm - two thirds of the fleet, wherever they
+        // were, 25-32 cells every scan - to find the same four dinosaurs. Looking
+        // those four up directly costs a handful of hash lookups, and nothing at
+        // all for a bot on another map.
+        Map* map = bot->GetMap();
         std::vector<Creature*> matches;
-        DevilsaurCheck check{ bot };
-        Trinity::CreatureListSearcher<DevilsaurCheck> searcher(bot, matches, check);
-        Cell::VisitGridObjects(bot, searcher, cfg.devilsaurHuntSeekYards);
+        for (auto const& [spawnId, mapId] : DevilsaurSpawns())
+        {
+            if (mapId != map->GetId())
+                continue;
+
+            auto const bounds = map->GetCreatureBySpawnIdStore().equal_range(spawnId);
+            for (auto itr = bounds.first; itr != bounds.second; ++itr)
+            {
+                Creature* creature = itr->second;
+                if (!creature || !creature->IsInWorld() || !creature->IsAlive() || creature->IsInEvadeMode())
+                    continue;
+
+                if (bot->GetDistance(creature) > cfg.devilsaurHuntSeekYards)
+                    continue;
+
+                // Somebody else's fight stays theirs - but the bot's own pet's is the bot's.
+                if (creature->IsInCombat())
+                    if (Unit* victim = creature->GetVictim(); victim && victim != bot && victim->GetCharmerOrOwnerOrSelf() != bot)
+                        continue;
+
+                if (!CanHuntDevilsaur(bot, creature) || !bot->IsValidAttackTarget(creature))
+                    continue;
+
+                matches.push_back(creature);
+            }
+        }
+
         if (matches.empty())
             return nullptr;
 
@@ -2757,6 +2805,7 @@ namespace
             return bot->GetDistance(left) < bot->GetDistance(right);
         });
 
+        size_t pathProbesLeft = 2;
         for (Creature* candidate : matches)
         {
             if (IsRecentBadTarget(state, candidate->GetGUID()))
@@ -2765,6 +2814,8 @@ namespace
             // Across the crater is not a road: only a walkable one is a target.
             if (bot->GetDistance(candidate) > 25.0f)
             {
+                if (!pathProbesLeft--)
+                    break;
                 WalkPathResult const pathResult = CheckWalkPath(bot, candidate->GetPosition());
                 if (pathResult == WalkPathResult::Deferred)
                     return nullptr;
@@ -9077,7 +9128,10 @@ namespace
     bool CanHuntDevilsaur(Player const* bot, Creature const* creature)
     {
         playerbot::PveConfig const& cfg = g_PveConfig;
-        if (!cfg.devilsaurHuntEnabled || !bot || !creature)
+        // No marker, no rescale: never send a bot after an elite it would then
+        // fight at stock numbers. LoadConfig switches the hunt off outright when
+        // the configured spell does not exist.
+        if (!cfg.devilsaurHuntEnabled || !cfg.devilsaurHuntBuffSpell || !bot || !creature)
             return false;
 
         if (std::find(cfg.devilsaurHuntEntries.begin(), cfg.devilsaurHuntEntries.end(),
@@ -9121,6 +9175,31 @@ namespace
                             hunting = true;
                             break;
                         }
+
+            // The pet's fight is the bot's. Hunters deliberately put the pet on
+            // the target and hold range, so the dinosaur is usually on the PET -
+            // and Unit::DealDamage covers the pet - so the marker must stay up
+            // while the pet holds it, even if the bot turns to deal with an add.
+            if (!hunting)
+                for (Unit* controlled : bot->m_Controlled)
+                {
+                    if (!controlled)
+                        continue;
+                    if (Unit* victim = controlled->GetVictim())
+                        if (Creature* creature = victim->ToCreature(); creature && CanHuntDevilsaur(bot, creature))
+                        {
+                            hunting = true;
+                            break;
+                        }
+                    for (Unit* attacker : controlled->getAttackers())
+                        if (Creature* creature = attacker->ToCreature(); creature && CanHuntDevilsaur(bot, creature))
+                        {
+                            hunting = true;
+                            break;
+                        }
+                    if (hunting)
+                        break;
+                }
         }
 
         bool const wearing = bot->HasAura(spell);
@@ -15738,11 +15817,28 @@ namespace playerbot
         g_PveConfig.grindMaxLevelAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelAbove", 3), 0, 10));
         g_PveConfig.grindMaxLevelBelow = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelBelow", 5), 0, 80));
         g_PveConfig.grindAllowElites = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.AllowElites", false);
+        // LATCHED at first load, like its other half in Unit::DealDamage, which is
+        // read once on the hot path. Letting only this side move on a .reload
+        // config would split them: bots sent after elites with the rescale off,
+        // or a marker the damage code no longer recognises. A restart changes
+        // these keys.
+        static bool devilsaurHuntLatched = false;
+        if (!devilsaurHuntLatched)
+        {
+        devilsaurHuntLatched = true;
         g_PveConfig.devilsaurHuntEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.DevilsaurHunt.Enable", false);
         g_PveConfig.devilsaurHuntBuffSpell = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.DevilsaurHunt.BuffSpell", 0)));
         g_PveConfig.devilsaurHuntSeekYards = std::clamp(sConfigMgr->GetFloatDefault("Playerbot.Pve.DevilsaurHunt.SeekYards", 150.0f), 20.0f, 400.0f);
         g_PveConfig.devilsaurHuntMaxLevelsAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.DevilsaurHunt.MaxLevelsAbove", 3), 0, 10));
         g_PveConfig.devilsaurHuntEntries.clear();
+        if (g_PveConfig.devilsaurHuntEnabled &&
+            (!g_PveConfig.devilsaurHuntBuffSpell || !sSpellMgr->GetSpellInfo(g_PveConfig.devilsaurHuntBuffSpell)))
+        {
+            TC_LOG_ERROR("playerbots.pve", "Playerbot.Pve.DevilsaurHunt.BuffSpell {} is not a spell this server knows; "
+                "the devilsaur hunt is OFF (it would send bots after elites with no rescale).",
+                g_PveConfig.devilsaurHuntBuffSpell);
+            g_PveConfig.devilsaurHuntEnabled = false;
+        }
         {
             uint32 value = 0;
             bool inNumber = false;
@@ -15760,6 +15856,7 @@ namespace playerbot
                     inNumber = false;
                 }
             }
+        }
         }
         g_PveConfig.lootEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Loot.Enable", true);
         g_PveConfig.vendorEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Vendor.Enable", true);

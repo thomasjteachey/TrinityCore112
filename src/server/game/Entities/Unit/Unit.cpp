@@ -1124,14 +1124,26 @@ namespace
     // Applied at the very top so everything downstream agrees on one number:
     // the AI hooks, the rage the blow generates, threat, the PvP damage share
     // and the log all read the damage that was actually taken.
-    if (damage && CreatureDamageToPlayerbotPct() < 100 && IsMonsterHittingPlayerbot(attacker, victim))
-        damage = CalculatePct(damage, CreatureDamageToPlayerbotPct());
+    if (damage && (CreatureDamageToPlayerbotPct() < 100 || GetDevilsaurHuntTuning().markerAura) &&
+        IsMonsterHittingPlayerbot(attacker, victim))
+    {
+        uint32 pct = CreatureDamageToPlayerbotPct();
 
-    // ...and a hunted dinosaur hits its hunter (or the hunter's pet) for less.
-    // Its hunter only: see IsDevilsaurHuntPair.
-    if (damage && IsMonsterHittingPlayerbot(attacker, victim))
-        if (Player const* hunter = ManagedPlayerbotBehind(victim); hunter && IsDevilsaurHuntPair(hunter, attacker))
-            damage = CalculatePct(damage, GetDevilsaurHuntTuning().damageTakenPct);
+        // A hunted dinosaur hits its hunter (or the hunter's pet) for
+        // DamageTakenPct of its STOCK damage - in place of the general cut, not on
+        // top of it, so the configured number is the number that lands (50 is
+        // half, not a quarter). Its hunter only: see IsDevilsaurHuntPair. Cheapest
+        // tests first, since this runs for every wildlife-on-bot hit, and the bot
+        // is looked up once.
+        DevilsaurHuntTuning const& tuning = GetDevilsaurHuntTuning();
+        if (tuning.markerAura && attacker->GetTypeId() == TYPEID_UNIT &&
+            std::find(tuning.entries.begin(), tuning.entries.end(), attacker->GetEntry()) != tuning.entries.end())
+            if (Player const* hunter = ManagedPlayerbotBehind(victim); hunter && hunter->HasAura(tuning.markerAura))
+                pct = tuning.damageTakenPct;
+
+        if (pct < 100)
+            damage = CalculatePct(damage, pct);
+    }
 
     // And the other direction: a bot cuts through wildlife harder the bigger the
     // bounty it is chasing, and the more of the wildlife is currently on it.
