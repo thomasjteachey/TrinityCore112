@@ -101,6 +101,11 @@ namespace playerbot
     // Same reasoning: the bounty dispatch below needs to know a zone's level
     // band before the definition appears.
     bool GetZoneLevelBand(uint32 zoneId, uint8& bottom, uint8& top);
+
+    // And again: the ordinary auction passes below must leave a drifter whose
+    // landing is still owed to that landing (RunDrifterArrival), which sells,
+    // pays and shops in the right order. World thread only.
+    bool IsDrifterLandingPending(uint64 botRawGuid);
 }
 
 namespace
@@ -2809,6 +2814,16 @@ namespace
     {
         if (!cfg.devilsaurHuntEnabled || !cfg.devilsaurHuntBuffSpell ||
             !BotSkins(bot) || !bot->HasSkill(SKILL_SKINNING))
+            return nullptr;
+
+        // Only from full health. This is where a hunt STARTS - the bot has no
+        // target and it is the grind scan's turn - so a hunt already under way is
+        // never abandoned for a scratch. Ravel went after a Tyrant Devilsaur eight
+        // times on 2026-09-11 and died every time, twice within a minute of
+        // standing up at the graveyard; an elite is not a fight to walk into
+        // half dead. The level half of the same rule - never a dinosaur above the
+        // bot - is Playerbot.Pve.DevilsaurHunt.MaxLevelsAbove = 0.
+        if (bot->GetHealth() < bot->GetMaxHealth())
             return nullptr;
 
         // Asked of the map BY SPAWN ID, not swept for. A SeekYards grid visit ran
@@ -9534,11 +9549,25 @@ namespace
                 }
         }
 
+        // Said when it changes. Whether the marker was actually on is the whole
+        // question when a hunter dies - the damage rescale keys on it - and there
+        // was no way to tell from the log.
         bool const wearing = bot->HasAura(spell);
         if (hunting && !wearing)
-            bot->AddAura(spell, bot);
+        {
+            if (bot->AddAura(spell, bot))
+                TC_LOG_INFO("playerbots.pve", "Bot {} (level {}, {}% health) takes up the devilsaur hunt: marker {} on.",
+                    bot->GetName(), uint32(bot->GetLevel()), uint32(bot->GetHealthPct()), spell);
+            else
+                TC_LOG_ERROR("playerbots.pve", "Bot {} is fighting a devilsaur but marker {} would not apply - "
+                    "it is taking unscaled damage.", bot->GetName(), spell);
+        }
         else if (!hunting && wearing)
+        {
             bot->RemoveAurasDueToSpell(spell);
+            TC_LOG_INFO("playerbots.pve", "Bot {} ends the devilsaur hunt ({}): marker {} off.",
+                bot->GetName(), bot->IsAlive() ? "alive" : "dead", spell);
+        }
     }
 
     void EnsureProfessionTier(Player* bot, std::array<ProfessionTier, 4> const& tiers, uint32 skillId)
@@ -10713,7 +10742,9 @@ namespace
         return true;
     }
 
-    void ProcessPendingAuctionSales()
+    // sellersLeft: full-house scans this pass may spend - two, less whatever the
+    // drifter landings took (OnWorldUpdate).
+    void ProcessPendingAuctionSales(uint32 sellersLeft)
     {
         // The only thing bounding the hold map. Cheap - it is a handful of entries
         // per player death - and this is the pass that consumes them, so it is the
@@ -10726,7 +10757,6 @@ namespace
             drained.swap(g_PendingAuctionSales);
         }
 
-        uint32 sellersLeft = 2; // the full-house scan is the expensive part
         for (auto itr = drained.begin(); itr != drained.end(); ++itr)
         {
             if (!sellersLeft)
@@ -10735,6 +10765,12 @@ namespace
                 g_PendingAuctionSales.insert(itr, drained.end());
                 break;
             }
+
+            // A drifter still owed its landing lists there, in order, before it is
+            // paid and shops. Dropped here, not requeued: the landing does the job,
+            // and the catch-up flag is left for it to take.
+            if (playerbot::IsDrifterLandingPending(*itr))
+                continue;
 
             Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(*itr));
             if (!bot || !bot->IsInWorld() || !bot->IsAlive() || bot->IsInCombat())
@@ -11017,7 +11053,10 @@ namespace
         return true;
     }
 
-    void ProcessPendingAuctionShopping()
+    // scansLeft: a full-house scan is the expensive part - two shoppers per world
+    // pass, less whatever the drifter landings took (OnWorldUpdate); the rest
+    // keep their place in line.
+    void ProcessPendingAuctionShopping(uint32 scansLeft)
     {
         std::unordered_set<uint64> drained;
         {
@@ -11025,9 +11064,6 @@ namespace
             drained.swap(g_PendingAuctionShopping);
         }
 
-        // A full-house scan is the expensive part; two shoppers per world pass,
-        // the rest keep their place in line.
-        uint32 scansLeft = 2;
         for (auto itr = drained.begin(); itr != drained.end(); ++itr)
         {
             if (!scansLeft)
@@ -11036,6 +11072,14 @@ namespace
                 g_PendingAuctionShopping.insert(itr, drained.end());
                 break;
             }
+
+            // A drifter still owed its landing shops there, AFTER it has sold and
+            // been paid. A reborn drifter's fresh state asks for a catch-up shop at
+            // once, and taking it here first spent the purse before the stipend
+            // and then had the landing buy the same slots over again - the wins
+            // are still in the mailbox, so the old kit is still "in" every slot.
+            if (playerbot::IsDrifterLandingPending(*itr))
+                continue;
 
             Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(*itr));
             if (!bot || !bot->IsInWorld() || !bot->IsAlive())
@@ -16967,8 +17011,13 @@ namespace playerbot
     };
     std::unordered_map<uint64, PendingDrifterArrival> g_PendingDrifterArrivals;
 
-    // How long a landing waits for a bot that is not ready for it - dead, or
-    // still between maps. Long enough for a resurrection or a slow world port;
+    bool IsDrifterLandingPending(uint64 botRawGuid)
+    {
+        return g_PendingDrifterArrivals.count(botRawGuid) != 0;
+    }
+
+    // How long a landing waits for a bot that is not ready for it - dead, in a
+    // fight, or still between maps. Long enough for a resurrection or a slow world port;
     // past it the bot has almost certainly been reborn and sent somewhere else,
     // and that trip will be a landing of its own.
     constexpr uint32 kDrifterArrivalPatienceMs = 5 * MINUTE * IN_MILLISECONDS;
@@ -16995,19 +17044,21 @@ namespace playerbot
     {
         uint64 const botRawGuid = bot->GetGUID().GetRawValue();
 
-        // 1. Sell.
+        // 1. Sell - the house first, then the merchant. A listing run frees bag
+        //    room, so the merchant pass after it never reaches SellVendorJunk's
+        //    tight-pack escape (trade goods and spare bags vendored while under two
+        //    slots are free) for lots the house was about to take. The landing
+        //    only runs out of combat (ProcessPendingDrifterArrivals): in a fight
+        //    CanEquipItem refuses every piece of armour, and that is the test both
+        //    of these use for "never something it would rather be wearing".
+        uint32 listed = 0;
+        bool listingRan = false;
+        if (g_PveConfig.auctionSellEnabled)
+            listingRan = ListAuctionSurplus(bot, true, &listed);
+
         uint64 const purseBeforeSale = bot->GetMoney();
         uint32 const junkSold = SellVendorJunk(bot);
         uint64 const junkCopper = bot->GetMoney() > purseBeforeSale ? bot->GetMoney() - purseBeforeSale : 0;
-
-        // Never mid-fight, the one rule the ordinary listing pass has always kept:
-        // the house takes items out of the bags and saves the inventory once per
-        // lot. The junk sale above needs no such care, and a landing that is in a
-        // fight simply leaves its old gear for the regular listing pass.
-        uint32 listed = 0;
-        bool listingRan = false;
-        if (g_PveConfig.auctionSellEnabled && !bot->IsInCombat())
-            listingRan = ListAuctionSurplus(bot, true, &listed);
 
         // 2. Get paid, by the band of where it landed - see DrifterArrivalPayCopper.
         uint64 const pay = DrifterArrivalPayCopper(landedZoneId);
@@ -17059,19 +17110,21 @@ namespace playerbot
             double(pay) / double(GOLD), shopOutcome, double(purseAtShop) / double(GOLD), freeSlotsAtShop, bought);
     }
 
-    // Two landings per world pass. Each is up to two full-house scans - the
-    // listing pass's going rate and the shopping pass - and fifteen drifters
-    // routinely land in the same second, so running them all at once would hand
-    // one world tick the cost of thirty. Two a pass has all fifteen through in
-    // about eight seconds.
-    void ProcessPendingDrifterArrivals()
+    // Up to two landings per world pass, out of the SAME budget as the ordinary
+    // auction passes: OnWorldUpdate hands those whatever the landings left.
+    // A landing is one going-rate scan of the house for its listing plus one
+    // catch-up shopping run, which is what one ordinary catch-up seller and one
+    // catch-up shopper cost - so a pass never does more auction work than it did
+    // before landings existed, and fifteen drifters landing together are all
+    // through in about eight seconds. Returns how many landings ran.
+    uint32 ProcessPendingDrifterArrivals()
     {
         if (g_PendingDrifterArrivals.empty())
-            return;
+            return 0;
 
         uint32 const nowMs = GameTime::GetGameTimeMS();
-        uint32 landingsLeft = 2;
-        for (auto itr = g_PendingDrifterArrivals.begin(); itr != g_PendingDrifterArrivals.end() && landingsLeft; )
+        uint32 landingsRun = 0;
+        for (auto itr = g_PendingDrifterArrivals.begin(); itr != g_PendingDrifterArrivals.end() && landingsRun < 2; )
         {
             uint64 const botRawGuid = itr->first;
             PendingDrifterArrival const arrival = itr->second;
@@ -17102,13 +17155,20 @@ namespace playerbot
             // Not ready YET is no reason to lose the landing. The old sweep was
             // simply dropped for a bot that was dead or between maps when its turn
             // came, and nothing ever queued it again.
-            if (!bot->IsInWorld() || bot->IsBeingTeleported() || !bot->IsAlive())
+            //
+            // A fight is "not yet" too. A landing teleports the bot onto a grind
+            // spot, so it is often already swinging, and in a fight CanEquipItem
+            // refuses every piece of armour - which is how both sale steps tell
+            // what the bot would rather be wearing. Run mid-fight, they would sell
+            // the armour it wanted. Bots break off between pulls every few seconds.
+            if (!bot->IsInWorld() || bot->IsBeingTeleported() || !bot->IsAlive() || bot->IsInCombat())
             {
                 if (nowMs - arrival.landedAtMs >= kDrifterArrivalPatienceMs)
                 {
                     TC_LOG_INFO("playerbots.pve",
                         "Drifter {} was never ready for its landing in zone {} ({}); dropped after {}s.",
-                        bot->GetName(), arrival.zoneId, bot->IsAlive() ? "between maps" : "dead",
+                        bot->GetName(), arrival.zoneId,
+                        !bot->IsAlive() ? "dead" : bot->IsInCombat() ? "in combat" : "between maps",
                         kDrifterArrivalPatienceMs / IN_MILLISECONDS);
                     itr = g_PendingDrifterArrivals.erase(itr);
                 }
@@ -17118,9 +17178,10 @@ namespace playerbot
             }
 
             itr = g_PendingDrifterArrivals.erase(itr);
-            --landingsLeft;
+            ++landingsRun;
             RunDrifterArrival(bot, arrival.zoneId);
         }
+        return landingsRun;
     }
 
     void UpdateDrifterAssignments()
@@ -17640,13 +17701,16 @@ namespace playerbot
         QueueUnwatchedChests();
         ProcessPendingLootExecutions();
         // Before the mail pass, so the wins a landing buys are out of the
-        // mailbox on this same tick.
-        ProcessPendingDrifterArrivals();
+        // mailbox on this same tick. The auction passes after it share one budget
+        // with the landings - two catch-up sellers and two shoppers a pass - so a
+        // landing takes the place of one of each rather than adding to them.
+        uint32 const landingsRun = ProcessPendingDrifterArrivals();
+        uint32 const auctionScansLeft = landingsRun < 2 ? 2 - landingsRun : 0;
         ProcessPendingMailCollections();
         if (g_PveConfig.auctionBuyEnabled)
-            ProcessPendingAuctionShopping();
+            ProcessPendingAuctionShopping(auctionScansLeft);
         if (g_PveConfig.auctionSellEnabled)
-            ProcessPendingAuctionSales();
+            ProcessPendingAuctionSales(auctionScansLeft);
         ProcessPendingSupplyRuns();
         // Class quests are auto-rewarded on the bot tick; never execute the legacy
         // cross-world class-quest travel queue.

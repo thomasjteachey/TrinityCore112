@@ -102,6 +102,35 @@ namespace
         return player && player->GetSession() &&
             IsManagedPlayerbotAccountIdForAggro(player->GetSession()->GetAccountId());
     }
+
+    // Playerbot.Pve.DevilsaurHunt, as far as aggro is concerned: the marker aura
+    // a hunting bot wears, and the dinosaurs that are allowed to notice it.
+    // Latched at first use, like its twins in Unit::DealDamage and the PvE
+    // manager - GetAttackDistance runs for every creature's every sighting.
+    struct DevilsaurHuntAggro
+    {
+        uint32 markerAura = 0;
+        std::vector<uint32> entries;
+    };
+
+    DevilsaurHuntAggro const& GetDevilsaurHuntAggro()
+    {
+        static DevilsaurHuntAggro const aggro = []
+        {
+            DevilsaurHuntAggro parsed;
+            if (!sConfigMgr->GetBoolDefault("Playerbot.Pve.DevilsaurHunt.Enable", false))
+                return parsed;
+
+            parsed.markerAura = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.DevilsaurHunt.BuffSpell", 0)));
+            std::stringstream stream(sConfigMgr->GetStringDefault("Playerbot.Pve.DevilsaurHunt.Entries", "6498,6499,6500"));
+            std::string token;
+            while (std::getline(stream, token, ','))
+                if (uint32 const entry = uint32(std::strtoul(token.c_str(), nullptr, 10)))
+                    parsed.entries.push_back(entry);
+            return parsed;
+        }();
+        return aggro;
+    }
 }
 
 CreatureMovementData::CreatureMovementData() : Ground(CreatureGroundMovementType::Run), Flight(CreatureFlightMovementType::None), Swim(true), Rooted(false), Chase(CreatureChaseMovementType::Run),
@@ -2636,6 +2665,27 @@ float Creature::GetAttackDistance(Unit const* player) const
     // The following code is used for blizzlike behaivior such as skippable bosses
     if (GetLevel() > expansionMaxLevel)
         aggroRadius = baseAggroDistance + float(expansionMaxLevel - player->GetLevel());
+
+    // A playerbot on a devilsaur hunt is noticed by the dinosaurs and nothing else.
+    //
+    // While it wears the hunt's marker (Playerbot.Pve.DevilsaurHunt.BuffSpell -
+    // the PvE manager puts it on for exactly as long as the bot is fighting a
+    // devilsaur it can skin), every creature that is not a listed dinosaur has
+    // an aggro radius of nothing for it, and for its pet. A Tyrant Devilsaur
+    // fears its attacker every ten seconds, and a feared bot runs blind through
+    // the most crowded valley in Un'Goro; whatever it brushed past joined in.
+    // The damage cut on the marker only covers the dinosaur's own blows, so the
+    // hangers-on hit at the ordinary bot rate - the likeliest reason Ravel died on all
+    // eight of his hunts on 2026-09-11 against an animal that hits for about
+    // sixty. Retaliation is untouched: anything the hunter actually hits still
+    // fights back, and so does anything that bumps straight into it.
+    if (Player const* hunter = player->GetCharmerOrOwnerPlayerOrPlayerItself())
+    {
+        DevilsaurHuntAggro const& hunt = GetDevilsaurHuntAggro();
+        if (hunt.markerAura && hunter->HasAura(hunt.markerAura) &&
+            std::find(hunt.entries.begin(), hunt.entries.end(), GetEntry()) == hunt.entries.end())
+            return 0.0f;
+    }
 
     // A playerbot on its way to collect a bounty is not sightseeing.
     //
