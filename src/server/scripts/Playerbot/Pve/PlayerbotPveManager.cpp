@@ -351,15 +351,16 @@ namespace
         // Zone guardians: when this bot was first seen away from its post.
         PveTimePoint guardianOutOfZoneSince{};
         PveTimePoint nextGuardianApproachAt{};
-        // A guardian's walk to a merchant inside its zone (journey kind 4). The
-        // spot a walk failed to reach is passed over for a while, so the next
-        // try goes to the next-nearest merchant instead of the same wall; and on
-        // arrival the errand scan gets the first look before the approach can
-        // send the guardian back toward a player.
-        float guardianVendorBlockedX = 0.0f;
-        float guardianVendorBlockedY = 0.0f;
-        PveTimePoint guardianVendorBlockedUntil{};
+        // A guardian that has just reached a merchant inside its zone (walked,
+        // journey kind 4, or teleported): the errand scan gets the first look
+        // before the approach can send it back toward a player.
         PveTimePoint guardianShoppingUntil{};
+        // After a guardian's walk to a merchant is lost, its trips teleport
+        // (inside its zone) until this passes. Its own field, not
+        // walkFallbackUntil: every failed walk of any kind rewrites that one to
+        // ten minutes - a guardian's approach walks fail routinely - and a longer
+        // ban there would also turn its leash relocations into flights.
+        PveTimePoint guardianVendorTeleportUntil{};
         // When this guardian last fought an actual person. Drives the escalation:
         // a guardian nobody has fought in a while stops being polite about where it
         // lands.
@@ -425,7 +426,7 @@ namespace
         // return pass each acting on a different idea of whether the hunt is over.
         bool bountyDeployed = false;
         bool journeyActive = false;
-        uint8 journeyFallbackKind = 0; // 1 = grind relocation, 2 = supply run, 3 = class quest, 4 = guardian vendor walk (no fallback)
+        uint8 journeyFallbackKind = 0; // 1 = grind relocation, 2 = supply run, 3 = class quest, 4 = guardian vendor walk (falls back to an in-zone teleport)
         uint16 journeyMapId = 0;
         float journeyX = 0.0f;
         float journeyY = 0.0f;
@@ -3430,26 +3431,25 @@ namespace
         state.journeyProgressY = 0.0f;
     }
 
-    // A guardian's walk to a merchant (journey kind 4) ended short of it - timed
-    // out, stuck, rescued, or dead on the way. The spot is passed over for two
-    // hours, so the next try goes to the next-nearest merchant in the zone
-    // instead of back into whatever stopped this one. Call it BEFORE the journey
-    // is cleared; it reads the destination off the journey.
-    void BlockGuardianVendorSpot(Player* bot, PveBotState& state, char const* why)
+    // A guardian's walk to a merchant (journey kind 4) was cut short by
+    // something other than the walk itself - death on the way, or the stuck
+    // watchdog rescuing it out of a stall. Whatever did it still stands between
+    // the guardian and that merchant, so the NEXT trip skips the walk and takes
+    // the in-zone teleport. Forty minutes, to outlast the half hour
+    // ProcessPendingSupplyRuns puts between trips. Call it BEFORE the journey is
+    // cleared.
+    void NoteGuardianVendorWalkLost(Player* bot, PveBotState& state, char const* why)
     {
         if (!state.journeyActive || state.journeyFallbackKind != 4)
             return;
 
-        state.guardianVendorBlockedX = state.journeyX;
-        state.guardianVendorBlockedY = state.journeyY;
-        state.guardianVendorBlockedUntil = PveClock::now() + std::chrono::hours(2);
-        TC_LOG_INFO("playerbots.pve", "Guardian {} did not reach the vendor at {:.0f} {:.0f} ({}); trying another for two hours.",
-            bot->GetName(), state.journeyX, state.journeyY, why);
+        state.guardianVendorTeleportUntil = PveClock::now() + std::chrono::minutes(40);
+        TC_LOG_INFO("playerbots.pve", "Guardian {} did not reach the vendor ({}); its next trip will be a teleport inside its zone.",
+            bot->GetName(), why);
     }
 
     void CancelJourneyWithFallback(Player* bot, PveBotState& state)
     {
-        BlockGuardianVendorSpot(bot, state, "walk failed");
         uint8 const fallbackKind = state.journeyFallbackKind;
         state.journeyActive = false;
         state.journeyFallbackKind = 0;
@@ -3458,11 +3458,20 @@ namespace
         // forever and the teleport fallback is never reached.
         state.walkFallbackUntil = PveClock::now() + std::chrono::minutes(10);
 
-        // A guardian's walk to a merchant has no teleport behind it - it must not
-        // leave its zone - so what it gets instead is a different merchant next
-        // time, which BlockGuardianVendorSpot above has already arranged.
+        // A guardian's walk to a merchant gets the same teleport, and it stays
+        // inside the guardian's zone: ProcessPendingSupplyRuns only ever offers
+        // a guardian merchants in its own zone, and never a flight. The walk is
+        // a straight line of 60 yard hops that gives up at the first ridge or
+        // lake across it - on a 2,000 yard trip, usually inside a minute - so
+        // without this most guardians never reached a merchant at all. The
+        // teleport preference outlasts the half hour between guardian trips, so
+        // the next trip teleports too rather than walking into the same ridge.
         if (fallbackKind == 4)
-            return;
+        {
+            state.guardianVendorTeleportUntil = PveClock::now() + std::chrono::minutes(40);
+            TC_LOG_INFO("playerbots.pve", "Guardian {} could not walk to the vendor; it will teleport to it inside its zone when unseen.",
+                bot->GetName());
+        }
 
         // The walk failed (timeout or stuck); the old teleport still delivers.
         std::lock_guard<std::mutex> guard(g_PvePendingLock);
@@ -3470,7 +3479,7 @@ namespace
             g_PendingClassQuestTravels.insert(bot->GetGUID().GetRawValue());
         else if (fallbackKind == 1)
             g_PendingGrindRelocations.insert(bot->GetGUID().GetRawValue());
-        else if (fallbackKind == 2)
+        else if (fallbackKind == 2 || fallbackKind == 4)
             g_PendingSupplyRuns.insert(bot->GetGUID().GetRawValue());
     }
 
@@ -10899,17 +10908,6 @@ namespace
             // guardian lock, and the two are never held together.
             uint32 const guardianZoneId = GetGuardianZoneId(botRawGuid);
 
-            float blockedX = 0.0f;
-            float blockedY = 0.0f;
-            bool blockedSpot = false;
-            if (guardianZoneId)
-            {
-                PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
-                blockedSpot = PveClock::now() < state.guardianVendorBlockedUntil;
-                blockedX = state.guardianVendorBlockedX;
-                blockedY = state.guardianVendorBlockedY;
-            }
-
             VendorSpot const* nearest = nullptr;
             float nearestDist2 = 0.0f;
             {
@@ -10925,9 +10923,6 @@ namespace
                     float const dy = spot.y - bot->GetPositionY();
                     float const dist2 = dx * dx + dy * dy;
                     if (nearest && dist2 >= nearestDist2)
-                        continue;
-
-                    if (blockedSpot && std::fabs(spot.x - blockedX) < 5.0f && std::fabs(spot.y - blockedY) < 5.0f)
                         continue;
 
                     // A merchant who will not serve this bot is no destination.
@@ -10949,38 +10944,58 @@ namespace
 
             // Walking distance? Make it a real trip to town.
             bool walkAllowed;
+            bool guardianTeleports = false;
             {
                 PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
                 walkAllowed = PveClock::now() >= state.walkFallbackUntil;
+                guardianTeleports = PveClock::now() < state.guardianVendorTeleportUntil;
             }
 
-            // A guardian shops on foot, inside the zone it holds, or not at all.
-            // A flight or a teleport would carry it off its post, and the leash
-            // would drag it home before it had sold a thing. The walk is kind 4,
-            // which has no fallback for the same reason - a failed walk must not
-            // turn into a teleport; it marks the spot so the next try picks
-            // another merchant - and which the lifecycle's guardian guard lets
-            // run. No walking cap either: the merchant is in the same zone, and
-            // a long zone is the whole reason this guardian had none in reach.
-            if (guardianZoneId)
+            // A guardian bound for a merchant drops any move queued for it in the
+            // same slow tick - an approach teleport toward a player, a leash or
+            // dry-wander relocation. Those were decided without knowing about this
+            // trip (the supply request sets no errand and no journey, so the
+            // approach's own gate could not see it), and the executors for them
+            // run after this one in the same world pass: left in the queue, one
+            // would carry the guardian straight back out of town before it had
+            // sold anything. The merchant is in its zone, so a relocation home is
+            // moot; the approach decides again after the shopping hold.
+            auto dropQueuedGuardianMoves = [botRawGuid]()
             {
-                if (!walkAllowed)
-                    continue;
+                std::lock_guard<std::mutex> guard(g_PvePendingLock);
+                g_PendingGuardianTeleports.erase(botRawGuid);
+                g_PendingGrindRelocations.erase(botRawGuid);
+            };
 
+            // A guardian shops inside the zone it holds: every spot it was
+            // offered above is in that zone. It walks first - journey kind 4,
+            // which the lifecycle's guardian guard lets run, with no walking cap
+            // because a long zone is the whole reason it had no merchant in
+            // reach. When a walk has just failed (walkFallbackUntil), it falls
+            // through to the vanish-guarded teleport below, to the same merchant,
+            // still inside its zone. Never the flight: a flight path can route
+            // out of the zone, and the leash would drag it home before it had
+            // sold a thing.
+            if (guardianZoneId && walkAllowed && !guardianTeleports)
+            {
                 float const walkDistance = bot->GetDistance(nearest->x, nearest->y, nearest->z);
                 playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), false);
-                PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
-                state.engaged = false;
-                StartWalkedJourney(state, nearest->mapId, nearest->x, nearest->y, nearest->z, 4, walkDistance);
-                // One trip per half hour at most, whatever happens on it. A
-                // successful one sells every grey, so the next is a long way off
-                // anyway; this only bounds the cases where a trip does not help.
-                state.nextSupplyRunAt = PveClock::now() + std::chrono::minutes(30);
+                {
+                    PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+                    state.engaged = false;
+                    StartWalkedJourney(state, nearest->mapId, nearest->x, nearest->y, nearest->z, 4, walkDistance);
+                    // One trip per half hour at most, whatever happens on it. A
+                    // successful one sells every grey, so the next is a long way
+                    // off anyway; this only bounds the cases where a trip does
+                    // not help.
+                    state.nextSupplyRunAt = PveClock::now() + std::chrono::minutes(30);
+                }
+                dropQueuedGuardianMoves();
                 TC_LOG_INFO("playerbots.pve", "Guardian {} walking {:.0f}y to a vendor inside zone {}.",
                     bot->GetName(), walkDistance, guardianZoneId);
                 continue;
             }
-            if (walkAllowed && g_PveConfig.travelWalkMaxDistance > 0.0f && nearest->mapId == bot->GetMapId())
+            if (!guardianZoneId && walkAllowed && g_PveConfig.travelWalkMaxDistance > 0.0f && nearest->mapId == bot->GetMapId())
             {
                 float const walkDistance = bot->GetDistance(nearest->x, nearest->y, nearest->z);
                 if (walkDistance <= g_PveConfig.travelWalkMaxDistance)
@@ -10995,7 +11010,7 @@ namespace
                 }
             }
 
-            if (TryTaxiTravel(bot, botRawGuid, nearest->mapId, nearest->x, nearest->y, nearest->z, 2))
+            if (!guardianZoneId && TryTaxiTravel(bot, botRawGuid, nearest->mapId, nearest->x, nearest->y, nearest->z, 2))
                 continue;
 
             // Walking and flying are visible, legitimate travel; only the
@@ -11023,6 +11038,34 @@ namespace
                 RestorePlayerbotTeleportVitals(bot);
                 TC_LOG_INFO("playerbots.pve", "Supply run: teleported {} to a vendor cluster on map {}.",
                     bot->GetName(), nearest->mapId);
+
+                // Same as a guardian arriving on foot: shop first, then go back
+                // to the players.
+                //
+                // Steering is cleared first. A near teleport never trips a
+                // journey's map-change cancel, so an approach walk started this
+                // tick would march the guardian straight back out of town, with
+                // the errand scan blocked by it all the way - the trap the bounty
+                // return documents. Same half-hour trip cap as the walk.
+                if (guardianZoneId)
+                {
+                    {
+                        PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+                        state.journeyActive = false;
+                        state.journeyFallbackKind = 0;
+                        state.journeyStepValid = false;
+                        state.dryWanderCount = 0;
+                        // Held for the shopping window, not released: the fast
+                        // tick's wander runs before the slow tick's errand scan,
+                        // and would start a patrol leg away from the merchant
+                        // before the scan had claimed it.
+                        state.nextWanderAt = PveClock::now() + std::chrono::seconds(30);
+                        state.nextErrandScanAt = {};
+                        state.guardianShoppingUntil = PveClock::now() + std::chrono::seconds(30);
+                        state.nextSupplyRunAt = PveClock::now() + std::chrono::minutes(30);
+                    }
+                    dropQueuedGuardianMoves();
+                }
             }
         }
     }
@@ -12287,6 +12330,17 @@ namespace
                 bot->InBattleground() || bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
                 continue;
 
+            // A guardian on its way to a merchant, or just arrived at one, is
+            // left to shop. Requests reach this queue from more than the
+            // guardian's own approach (which already waits): the forgotten-player
+            // prod, the bounty dispatch, a path-budget requeue. Any of them would
+            // carry it back out of town before it sold a thing. Dropped - the
+            // approach queues again once the window is over.
+            if (PveBotState const* state = playerbot::LockedFind(g_PveBotStateByGuid, botRawGuid))
+                if (PveClock::now() < state->guardianShoppingUntil ||
+                    (state->journeyActive && state->journeyFallbackKind == 4))
+                    continue;
+
             Player* human = ObjectAccessor::FindConnectedPlayer(ObjectGuid(request.HumanRawGuid));
             if (!human || !human->IsInWorld() || !human->IsAlive() || human->InBattleground())
                 continue;
@@ -12519,11 +12573,22 @@ namespace
             // path below may skip this bot, and a flag left set would follow it
             // into some later, unrelated relocation.
             bool fleeing = false;
+            bool guardianShopping = false;
             {
                 PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
                 fleeing = state.fleeingFromPlayers;
                 state.fleeingFromPlayers = false;
+                guardianShopping = PveClock::now() < state.guardianShoppingUntil ||
+                    (state.journeyActive && state.journeyFallbackKind == 4);
             }
+
+            // A guardian walking to, or standing at, a merchant inside its zone
+            // is left to shop: a leash or dry-wander request queued beside its
+            // supply run would fly or port it out of town first. Dropped, not
+            // requeued - the merchant is in its zone, and the leash and the
+            // wander decide again afterwards. A stuck rescue still goes ahead.
+            if (guardianShopping && !stuckRecovery)
+                continue;
 
             Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid));
 
@@ -12751,6 +12816,7 @@ namespace
                 candidates.swap(quiet);
             }
 
+            bool const isGuardian = GetGuardianZoneId(botRawGuid) != 0;
             uint8 const maxAttempts = uint8(std::min<size_t>(10, candidates.size()));
             for (uint8 attempt = 0; attempt < maxAttempts; ++attempt)
             {
@@ -12785,7 +12851,15 @@ namespace
                 }
 
                 // A real flight beats teleporting when a route exists.
-                if (!stuckRecovery && TryTaxiTravel(bot, botRawGuid, spot.mapId, spot.x, spot.y, spot.z, 1))
+                //
+                // Never for a guardian. Its relocation is the leash, or a move
+                // inside the zone it holds, and a flight path lands at whatever
+                // node is nearest the spot - often across the zone line, where
+                // the leash picks it up again and, with walking banned after a
+                // failed walk, flies it again. The source-guarded teleport below
+                // keeps it inside its zone.
+                if (!stuckRecovery && !isGuardian &&
+                    TryTaxiTravel(bot, botRawGuid, spot.mapId, spot.x, spot.y, spot.z, 1))
                     break;
 
                 // Somebody is watching, so a teleport would be seen - normally reason
@@ -12856,7 +12930,7 @@ namespace
                     // steer the bot back into the same mountain or river.
                     PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
                     ResetStuckWatchdog(state);
-                    BlockGuardianVendorSpot(bot, state, "stuck");
+                    NoteGuardianVendorWalkLost(bot, state, "stuck");
                     state.journeyActive = false;
                     state.journeyFallbackKind = 0;
                     state.errandGuid = ObjectGuid::Empty;
@@ -13812,7 +13886,7 @@ namespace
             }
             // Dying voids any trek in progress: resuming the same walk would
             // march straight back through whatever killed us.
-            BlockGuardianVendorSpot(bot, state, "died on the way");
+            NoteGuardianVendorWalkLost(bot, state, "died on the way");
             state.journeyActive = false;
             state.journeyFallbackKind = 0;
             if (state.recentDeathWindowStart == PveTimePoint() ||
