@@ -530,9 +530,7 @@ driver:SetScript("OnUpdate", function(self, elapsed)
 	CENTURION_GMOnline_Refresh()
 end)
 
-SLASH_CENTURIONGMONLINE1 = "/gmo"
-SLASH_CENTURIONGMONLINE2 = "/gmonline"
-SlashCmdList["CENTURIONGMONLINE"] = function()
+local function ToggleWindow()
 	if win:IsShown() then
 		win:Hide()
 	else
@@ -541,3 +539,90 @@ SlashCmdList["CENTURIONGMONLINE"] = function()
 		CENTURION_GMOnline_Refresh()
 	end
 end
+
+SLASH_CENTURIONGMONLINE1 = "/gmo"
+SLASH_CENTURIONGMONLINE2 = "/gmonline"
+SlashCmdList["CENTURIONGMONLINE"] = ToggleWindow
+
+------------------------------------------------------------------
+-- minimap button
+------------------------------------------------------------------
+-- The same button Bot Stats has: draggable around the rim, remembers where it
+-- was put. It starts at a different angle so the two do not sit on each other.
+--
+-- Placed again once the saved variables are in. They load AFTER this file
+-- runs, so a position read at load time is always the default - which is why
+-- a button placed only then forgets where it was dragged on every login.
+local DEFAULT_ANGLE = 235
+
+local minimapButton = CreateFrame("Button", "CENTURION_GMOnlineMinimapButton", Minimap)
+minimapButton:SetWidth(31)
+minimapButton:SetHeight(31)
+minimapButton:SetFrameStrata("MEDIUM")
+minimapButton:SetMovable(true)
+minimapButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+minimapButton:RegisterForDrag("LeftButton")
+
+local mmIcon = minimapButton:CreateTexture(nil, "BACKGROUND")
+mmIcon:SetWidth(20)
+mmIcon:SetHeight(20)
+mmIcon:SetTexture("Interface\\Icons\\INV_Misc_GroupNeedMore")
+mmIcon:SetPoint("TOPLEFT", minimapButton, "TOPLEFT", 6, -5)
+
+local mmBorder = minimapButton:CreateTexture(nil, "OVERLAY")
+mmBorder:SetWidth(53)
+mmBorder:SetHeight(53)
+mmBorder:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+mmBorder:SetPoint("TOPLEFT", minimapButton, "TOPLEFT", 0, 0)
+
+-- 3.3.5's global cos/sin take DEGREES; the math library with an explicit
+-- conversion says which is meant.
+local function PlaceMinimapButton()
+	local angle = math.rad(DB().minimapAngle or DEFAULT_ANGLE)
+	minimapButton:ClearAllPoints()
+	minimapButton:SetPoint("CENTER", Minimap, "CENTER", 80 * math.cos(angle), 80 * math.sin(angle))
+end
+PlaceMinimapButton()
+
+minimapButton:SetScript("OnDragStart", function(self)
+	self:SetScript("OnUpdate", function()
+		local mx, my = Minimap:GetCenter()
+		local cx, cy = GetCursorPosition()
+		local scale = Minimap:GetEffectiveScale()
+		cx, cy = cx / scale, cy / scale
+		DB().minimapAngle = math.deg(math.atan2(cy - my, cx - mx))
+		PlaceMinimapButton()
+	end)
+end)
+minimapButton:SetScript("OnDragStop", function(self)
+	self:SetScript("OnUpdate", nil)
+end)
+
+minimapButton:SetScript("OnClick", ToggleWindow)
+
+-- The counts from the last reply, so a hover answers "is anybody on" without
+-- opening the window.
+minimapButton:SetScript("OnEnter", function(self)
+	GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+	GameTooltip:AddLine("Centurion GM Online")
+	if data then
+		for _, realmId in ipairs(data.order) do
+			local realm = data.realms[realmId]
+			GameTooltip:AddDoubleLine(realm.name, string.format("%s, %s",
+				Plural(realm.people, "person", "people"), Plural(realm.bots, "bot", "bots")),
+				1, 0.82, 0, 1, 1, 1)
+		end
+	end
+	GameTooltip:AddLine("Click to open, drag to move", 0.8, 0.8, 0.8)
+	GameTooltip:Show()
+end)
+minimapButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+local loader = CreateFrame("Frame")
+loader:RegisterEvent("ADDON_LOADED")
+loader:SetScript("OnEvent", function(self, event, name)
+	if name == "CENTURION_GMOnline" then
+		PlaceMinimapButton()
+		self:UnregisterEvent("ADDON_LOADED")
+	end
+end)
