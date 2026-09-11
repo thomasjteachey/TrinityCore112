@@ -1484,6 +1484,17 @@ std::vector<RandomBotPoolCandidate> QueryOfflinePool(RandomBotPopulationConfig c
         candidate.account = fields[1].GetUInt32();
         candidate.level = fields[2].GetUInt8();
         candidate.race = fields[3].GetUInt8();
+
+        // `online = 0` is not proof a bot is offline. Every bot account holds
+        // hundreds of characters online at once, and any writer that clears the
+        // flag account-wide (stock LogoutPlayer did, for every bot logout) leaves
+        // live siblings looking offline until their next save. Logging one of
+        // those in again built a second Player for a live character - the
+        // 2026-09-10 Barracks+ abort in Aura::UpdateTargetMap. The in-memory
+        // player list is the truth.
+        if (ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(candidate.lowGuid)))
+            continue;
+
         candidates.push_back(candidate);
     }
     while (result->NextRow());

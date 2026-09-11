@@ -639,6 +639,7 @@ void WorldSession::LogoutPlayer(bool save)
         TC_LOG_INFO("entities.player.character", "Account: {} (IP: {}) Logout Character:[{}] {} Level: {}, XP: {}/{} ({} left)",
             GetAccountId(), GetRemoteAddress(), _player->GetName(), _player->GetGUID().ToString(), _player->GetLevel(),
             _player->GetXP(), _player->GetXPForNextLevel(), std::max(0, (int32)_player->GetXPForNextLevel() - (int32)_player->GetXP()));
+        ObjectGuid::LowType const loggedOutGuidLow = _player->GetGUID().GetCounter();
         if (Map* _map = _player->FindMap())
             _map->RemovePlayerFromMap(_player, true);
 
@@ -652,9 +653,20 @@ void WorldSession::LogoutPlayer(bool save)
         //! Since each account can only have one online character at any given time, ensure all characters for active account are marked as offline
         if (!m_transientPlayerSession)
         {
-            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_ACCOUNT_ONLINE);
-            stmt->setUInt32(0, GetAccountId());
-            CharacterDatabase.Execute(stmt);
+            // ...except that a virtual (bot) session is one of hundreds of
+            // characters online on its account at once. The account-wide reset
+            // marked every sibling bot offline while it was still in the world,
+            // the bot population read `online = 0` as free to log in, and a
+            // second Player was loaded for a live character (see
+            // RefuseLoginOfCharacterInWorld in CharacterHandler.cpp).
+            if (m_virtualSession)
+                CharacterDatabase.PExecute("UPDATE characters SET online = 0 WHERE guid = {}", loggedOutGuidLow);
+            else
+            {
+                CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_ACCOUNT_ONLINE);
+                stmt->setUInt32(0, GetAccountId());
+                CharacterDatabase.Execute(stmt);
+            }
         }
     }
 

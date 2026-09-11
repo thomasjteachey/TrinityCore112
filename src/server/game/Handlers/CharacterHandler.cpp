@@ -749,6 +749,49 @@ void WorldSession::HandleCharDeleteOpcode(WorldPacket& recvData)
     SendCharDelete(CHAR_DELETE_SUCCESS);
 }
 
+// One character, one Player. Stock guarantees it through the account singleton
+// in World::AddSession_: a second login on an account replaces the first
+// session, whose destructor logs its character out before anything new loads.
+// Managed bots run many characters per account on virtual sessions that bypass
+// that singleton by design, so nothing stopped a second session from loading a
+// character that was still in the world. The twin shares the live Player's
+// GUID, and ObjectAccessor hands the twin's own loading auras the LIVE object as
+// their target (UnitAura::FillTargetMap), which Aura::UpdateTargetMap aborts on
+// ("owner is not in the same map as target") - the Barracks+ crashes of
+// 2026-08-29 and 2026-09-10. A twin with no saved auras loaded cleanly and left
+// two Players under one GUID in the world.
+//
+// Returns true when the login is refused. A bot's new virtual session is simply
+// dropped. A real client is sent back to its character list with the stock
+// "duplicate character" result, and a bot still holding the character is
+// stopped, so the client's next attempt finds it free.
+static bool RefuseLoginOfCharacterInWorld(WorldSession* session, ObjectGuid playerGuid)
+{
+    Player* existing = ObjectAccessor::FindConnectedPlayer(playerGuid);
+    if (!existing)
+        return false;
+
+    WorldSession* holder = existing->GetSession();
+    TC_LOG_ERROR("network", "Account {} tried to log in {} while it is still in the world (held by account {}{}); login refused.",
+        session->GetAccountId(), playerGuid.ToString(), holder ? holder->GetAccountId() : 0,
+        holder && holder->IsVirtualSession() ? ", virtual session" : "");
+
+    if (session->IsVirtualSession())
+    {
+        session->KickPlayer("WorldSession::HandlePlayerLogin character already in world");
+        return true;
+    }
+
+    WorldPacket data(SMSG_CHARACTER_LOGIN_FAILED, 1);
+    data << uint8(CHAR_LOGIN_DUPLICATE_CHARACTER);
+    session->SendPacket(&data);
+
+    if (holder && holder != session && holder->IsVirtualSession())
+        holder->KickPlayer("WorldSession::HandlePlayerLogin a client is logging in this character");
+
+    return true;
+}
+
 void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recvData)
 {
     if (PlayerLoading() || GetPlayer() != nullptr)
@@ -770,6 +813,12 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recvData)
         return;
     }
 
+    if (RefuseLoginOfCharacterInWorld(this, playerGuid))
+    {
+        m_playerLoading = false;
+        return;
+    }
+
     std::shared_ptr<LoginQueryHolder> holder = std::make_shared<LoginQueryHolder>(GetAccountId(), playerGuid);
     if (!holder->Initialize())
     {
@@ -786,6 +835,15 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recvData)
 void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
 {
     ObjectGuid playerGuid = holder.GetGuid();
+
+    // Asked again now that the character data is here: two logins for one
+    // character can both be in flight, and only this callback can see the one
+    // that finished first.
+    if (RefuseLoginOfCharacterInWorld(this, playerGuid))
+    {
+        m_playerLoading = false;
+        return;
+    }
 
     Player* pCurrChar = new Player(this);
      // for send server info and strings (config)
