@@ -242,8 +242,14 @@ namespace DireMaulBeads
             victim->DestroyItemCount(beadItemId, beadCount, true);
             if (honorTokenCount)
                 victim->DestroyItemCount(HonorTokenItemId, honorTokenCount, true);
+            // DESTROYED, not merely unlinked. The chest holds loot rows built
+            // from each item's entry and count (PlayerChestBuilder::AddItem), so
+            // the original has nowhere left to be. RemoveItem only took it out
+            // of the slot: still in world, still in the update queue - and the
+            // next save found no item at that position, deleted it in world,
+            // and ~Object aborted the realm.
             for (CustomLootChests::ItemLocation const& removed : artifactItems)
-                victim->RemoveItem(removed.Bag, removed.Slot, true);
+                victim->DestroyItem(removed.Bag, removed.Slot, true);
             UpdateBeadAura(victim);
         }
     }

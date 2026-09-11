@@ -644,6 +644,46 @@ bool AuctionHouseMgr::PendingAuctionAdd(Player* player, AuctionEntry* aEntry)
     return true;
 }
 
+// An auction leaving the house before its seller's deposit was taken.
+//
+// A player's new listings wait in pendingAuctionMap for a pass or two so a burst
+// of posts is charged one deposit - but the entries there are the same raw
+// pointers the house map owns, and nothing took one out when its auction went
+// away. RemoveAuction deleted it and the next UpdatePendingAuctions read, and
+// wrote, freed memory. Playerbots shop the house every second and will buy a
+// human's fresh listing well inside that quarter-second window, which made this
+// a quiet source of heap corruption.
+//
+// The deposit that auction owed is collected here: the pending pass that would
+// have charged it will never see the entry now, and a successful sale refunds
+// the deposit, so leaving it uncharged would hand the seller free money.
+void AuctionHouseMgr::PendingAuctionRemove(AuctionEntry const* aEntry)
+{
+    if (!aEntry || pendingAuctionMap.empty())
+        return;
+
+    auto itr = pendingAuctionMap.find(ObjectGuid::Create<HighGuid::Player>(aEntry->owner));
+    if (itr == pendingAuctionMap.end())
+        return;
+
+    PlayerAuctions* auctions = itr->second.first;
+    auto const found = std::find(auctions->begin(), auctions->end(), aEntry);
+    if (found == auctions->end())
+        return;
+
+    auctions->erase(found);
+
+    if (aEntry->deposit)
+        if (Player* seller = ObjectAccessor::FindConnectedPlayer(itr->first))
+            seller->ModifyMoney(-int32(std::min<uint64>(aEntry->deposit, seller->GetMoney())));
+
+    if (auctions->empty())
+    {
+        pendingAuctionMap.erase(itr);
+        delete auctions;
+    }
+}
+
 uint32 AuctionHouseMgr::PendingAuctionCount(Player const* player) const
 {
     auto const itr = pendingAuctionMap.find(player->GetGUID());
@@ -783,6 +823,9 @@ bool AuctionHouseObject::RemoveAuction(AuctionEntry* auction)
     bool wasInMap = AuctionsMap.erase(auction->Id) ? true : false;
 
     sScriptMgr->OnAuctionRemove(this, auction);
+
+    // ...by the house map. The seller's pending-deposit list may still hold it.
+    sAuctionMgr->PendingAuctionRemove(auction);
 
     // we need to delete the entry, it is not referenced any more
     delete auction;

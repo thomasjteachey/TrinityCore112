@@ -55,6 +55,32 @@ namespace
             item->RemoveFromWorld();
             item->DestroyForPlayer(player);
         }
+
+        // A BAG takes its contents with it.
+        //
+        // Player::RemoveItem cleans up only the item it was handed, so a stored
+        // bank bag left everything inside it in the player's update queue,
+        // enchant-duration list and duration list while its position was gone.
+        // A detached child's container reports slot 255 - which is also
+        // INVENTORY_SLOT_BAG_0 - so the next inventory save looked the child up
+        // in the PLAYER's slot array, found an empty slot or a different item,
+        // called the row incorrect, deleted it from the database and freed it:
+        // a player's bank bag emptying itself, and a freed item still in world
+        // aborting the realm at the following save.
+        Bag* bag = item->ToBag();
+        if (!bag)
+            return;
+
+        for (uint32 index = 0; index < bag->GetBagSize(); ++index)
+            if (Item* child = bag->GetItemByPos(uint8(index)))
+            {
+                // The dequeue goes LAST: the three calls above write the
+                // remaining duration back into the child, which re-queues it.
+                player->RemoveEnchantmentDurations(child);
+                player->RemoveItemDurations(child);
+                player->RemoveTradeableItem(child);
+                RemoveItemFromUpdateQueueOf(child, player);
+            }
     }
 
     struct StoredBankItem
@@ -206,7 +232,22 @@ namespace
 
             ItemPosCountVec dest;
             dest.emplace_back(ItemPosCount((stored.Bag << 8) | stored.Slot, stored.ItemData->GetCount()));
-            player->StoreItem(dest, stored.ItemData, true);
+            Item* const restored = player->StoreItem(dest, stored.ItemData, true);
+
+            // ...and a restored bag's contents rejoin the lists they were taken
+            // out of in CleanupRemovedItem, so their timers run again and
+            // anything that changed before the bank was opened is still saved.
+            if (Bag* bag = restored ? restored->ToBag() : nullptr)
+                for (uint32 index = 0; index < bag->GetBagSize(); ++index)
+                    if (Item* child = bag->GetItemByPos(uint8(index)))
+                    {
+                        player->AddEnchantmentDurations(child);
+                        player->AddItemDurations(child);
+                        // Never ITEM_REMOVED here: SetState keeps a new item new
+                        // and simply re-queues anything else.
+                        if (child->GetState() != ITEM_UNCHANGED)
+                            child->SetState(ITEM_CHANGED, player);
+                    }
         }
 
         session.StoredItems.clear();

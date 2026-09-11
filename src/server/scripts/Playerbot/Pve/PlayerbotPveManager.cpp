@@ -1136,6 +1136,17 @@ namespace
             proto->Class != ITEM_CLASS_CONTAINER && proto->Class != ITEM_CLASS_QUIVER)
             return false;
 
+        // ...and gear means something that goes in a slot. The class alone is not
+        // proof: ObjectMgr overwrites a template's class with Item.dbc's at load,
+        // and B+'s Item.dbc says Mana Agate (5514) is ARMOUR. So a conjured mana
+        // gem read as white armour no loot table drops, the obtainability test
+        // below called it scaffolding, and every mage between 28 and 37 lost its
+        // gem to the bag sweep within fifteen seconds of making it - seen the
+        // moment that sweep started logging. Nothing with no equip slot can be
+        // worn, whatever the DBC says it is.
+        if (proto->InventoryType == INVTYPE_NON_EQUIP)
+            return false;
+
         // Lowercased once, so the markers need not enumerate every casing.
         std::string name = proto->Name1;
         std::transform(name.begin(), name.end(), name.begin(),
@@ -17192,6 +17203,9 @@ namespace playerbot
         // Where each real person has settled, and for how long.
         static std::unordered_map<uint64, std::pair<uint32, uint32>> s_humanZoneSince;
         std::vector<std::pair<uint64, uint32>> humans;   // human guid -> zone
+        // ...and the same list for the people with War Mode on, who get first
+        // call on the fleet (see below).
+        std::vector<std::pair<uint64, uint32>> warModeHumans;
         // The largest bounty standing in each zone, gathered on the same pass.
         // One person on a spree pulls extra company, and the company is for the
         // whole zone.
@@ -17263,10 +17277,29 @@ namespace playerbot
             }
 
             humans.push_back({ humanGuid, zoneId });
+            if (BarracksHardcore::IsWarModeOptedIn(human))
+                warModeHumans.push_back({ humanGuid, zoneId });
 
             uint32& worstInZone = zoneBounty[zoneId];
             worstInZone = std::max(worstInZone, Bounty::GetStacks(human));
             ++zonePeople[zoneId];
+        }
+
+        // War Mode gets the company.
+        //
+        // The point of a drifter is somebody in your zone who can be fought and
+        // can fight back - and a drifter is FFA-armed, so to a player with War
+        // Mode off it is just a stranger farming the same boars, while to a
+        // player with it on the zone is now inhabited. So whenever anyone online
+        // has War Mode on, the whole fleet goes to those people and nobody else
+        // is followed; with nobody flagged at all the shares fall back to
+        // everyone, which is better than parking fifteen bots in their home
+        // bands for want of a flag.
+        if (!warModeHumans.empty() && warModeHumans.size() != humans.size())
+        {
+            TC_LOG_DEBUG("playerbots.pve", "Drifters: following {} of {} people (War Mode only).",
+                uint32(warModeHumans.size()), uint32(humans.size()));
+            humans.swap(warModeHumans);
         }
         for (auto itr = s_humanZoneSince.begin(); itr != s_humanZoneSince.end(); )
             itr = online.count(itr->first) ? std::next(itr) : s_humanZoneSince.erase(itr);

@@ -387,8 +387,10 @@ namespace
             if (bossKeyCount)
                 victim->DestroyItemCount(StockadesPvPvE::BossKeyItemId, bossKeyCount, true);
 
+            // Destroyed, not unlinked - see DireMaulBeads::DropBeadChest. The
+            // chest's loot is a copy; an unlinked original aborts the next save.
             for (CustomLootChests::ItemLocation const& removed : artifactItems)
-                victim->RemoveItem(removed.Bag, removed.Slot, true);
+                victim->DestroyItem(removed.Bag, removed.Slot, true);
 
             if (beadCount)
                 DireMaulBeads::UpdateBeadAura(victim);
