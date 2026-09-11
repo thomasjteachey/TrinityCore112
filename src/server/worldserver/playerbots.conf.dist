@@ -604,6 +604,28 @@ Playerbot.PveGrind.MaxLevelBelow = 5
 
 Playerbot.PveGrind.AllowElites = 0
 
+#
+#    Playerbot.Pve.DevilsaurHunt.Enable
+#        Description: Let bots that SKIN hunt the elite devilsaurs of Un'Goro, on their
+#                     own switch - AllowElites stays off. A bot qualifies when its
+#                     skinning covers the dinosaur's level (5 x level) and it is no more
+#                     than MaxLevelsAbove below it; it looks SeekYards out for one.
+#                     While fighting one it wears BuffSpell, and the blows between that
+#                     bot and that dinosaur ONLY are rescaled: DamageDonePct more dealt,
+#                     DamageTakenPct of the dinosaur's damage taken. A player ganking the
+#                     hunter fights it at normal strength.
+#        Default:     0 (Enable), "6498,6499,6500" (Entries), 0 (BuffSpell - needs a client
+#                     Spell.dbc row; 90720 on Barracks+), 100 (DamageDonePct),
+#                     50 (DamageTakenPct), 150 (SeekYards), 3 (MaxLevelsAbove)
+#
+Playerbot.Pve.DevilsaurHunt.Enable = 0
+Playerbot.Pve.DevilsaurHunt.Entries = "6498,6499,6500"
+Playerbot.Pve.DevilsaurHunt.BuffSpell = 0
+Playerbot.Pve.DevilsaurHunt.DamageDonePct = 100
+Playerbot.Pve.DevilsaurHunt.DamageTakenPct = 50
+Playerbot.Pve.DevilsaurHunt.SeekYards = 150
+Playerbot.Pve.DevilsaurHunt.MaxLevelsAbove = 3
+
 # The in-game command surface for PvE bots:
 #   .playerbot pve summon <name>   - log a bot-account character in, teleport it to you and
 #                                    join it to your group (it follows and assists from then on)

@@ -111,6 +111,16 @@ struct PveConfig
     // underfoot; this makes a same-level mob worth walking for.
     float grindLevelMatchYards = 15.0f;
     bool grindAllowElites = false;
+    // Devilsaur hunting (Playerbot.Pve.DevilsaurHunt.*), separate from
+    // grindAllowElites: a bot that SKINS, with the skill to skin the dinosaur in
+    // front of it, may seek out and fight the listed elites. The fight is
+    // rescaled in Unit::DealDamage while BuffSpell - the hunter's marker - is
+    // worn; DamageDonePct and DamageTakenPct are read there, not here.
+    bool devilsaurHuntEnabled = false;
+    std::vector<uint32> devilsaurHuntEntries;
+    uint32 devilsaurHuntBuffSpell = 0;
+    float devilsaurHuntSeekYards = 150.0f;
+    uint32 devilsaurHuntMaxLevelsAbove = 3;
     bool lootEnabled = true;
     bool vendorEnabled = true;
     bool questsEnabled = true;

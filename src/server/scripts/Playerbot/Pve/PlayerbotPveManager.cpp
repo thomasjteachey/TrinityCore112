@@ -575,6 +575,8 @@ namespace
     float ScoreItemForSpec(Player const* bot, ItemTemplate const* proto);
     GameObject* FindRegisteredDeathChest(Player* bot, uint32 entry, float maxDistance);
     bool IsAuctionableSurplus(Player* bot, Item* item, bool ignoreLotSize = false);
+    bool BotSkins(Player const* bot);
+    bool CanHuntDevilsaur(Player const* bot, Creature const* creature);
     void HoldLootFromAuction(ObjectGuid itemGuid, uint32 seconds, ObjectGuid owner);
     bool IsHeldFromAuction(ObjectGuid itemGuid);
     uint32 RequiredAmmoSubclass(Player const* bot);
@@ -1016,11 +1018,17 @@ namespace
             if (creature->IsPet() || creature->IsTotem() || creature->IsControlledByPlayer())
                 return false;
 
-            if (!cfg.grindAllowElites && (creature->isElite() || creature->isWorldBoss()))
+            // The elite gate has one exception, on its own switch: a devilsaur a
+            // skinner can take (CanHuntDevilsaur). It also carries its own level
+            // window, since the grind window is tuned for ordinary mobs.
+            bool const huntTarget = CanHuntDevilsaur(bot, creature);
+            if (!cfg.grindAllowElites && (creature->isElite() || creature->isWorldBoss()) &&
+                (creature->isWorldBoss() || !huntTarget))
                 return false;
 
             int32 const levelDelta = int32(creature->GetLevel()) - int32(bot->GetLevel());
-            if (levelDelta > int32(cfg.grindMaxLevelAbove) || -levelDelta > int32(cfg.grindMaxLevelBelow))
+            if (!huntTarget &&
+                (levelDelta > int32(cfg.grindMaxLevelAbove) || -levelDelta > int32(cfg.grindMaxLevelBelow)))
                 return false;
 
             // Never steal a mob someone else is already fighting.
@@ -2698,6 +2706,78 @@ namespace
                 }
             }
 
+            return candidate;
+        }
+
+        return nullptr;
+    }
+
+    // A skinner that can take a devilsaur goes looking for one.
+    //
+    // There are four on the whole continent, wandering Un'Goro, and every one is
+    // elite - so the ordinary grind scan, which stops at the grind radius and
+    // refuses elites, never so much as sees them, and Devilsaur Leather had simply
+    // stopped existing: not one on the realm. This looks much further out
+    // (Playerbot.Pve.DevilsaurHunt.SeekYards) for a live one the bot could skin,
+    // and hands back the nearest reachable one as its target. It runs on the grind
+    // scan's own timer and only for bots that skin, so the wider sweep costs
+    // nothing for anybody else.
+    Unit* PickDevilsaurHuntTarget(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
+    {
+        if (!cfg.devilsaurHuntEnabled || cfg.devilsaurHuntEntries.empty() ||
+            !BotSkins(bot) || !bot->HasSkill(SKILL_SKINNING))
+            return nullptr;
+
+        struct DevilsaurCheck
+        {
+            Player* bot;
+
+            bool operator()(Creature* creature) const
+            {
+                if (!creature->IsAlive() || creature->IsInEvadeMode())
+                    return false;
+
+                // Somebody else's fight stays theirs.
+                if (creature->IsInCombat() && creature->GetVictim() != bot)
+                    return false;
+
+                return CanHuntDevilsaur(bot, creature) && bot->IsValidAttackTarget(creature);
+            }
+        };
+
+        std::vector<Creature*> matches;
+        DevilsaurCheck check{ bot };
+        Trinity::CreatureListSearcher<DevilsaurCheck> searcher(bot, matches, check);
+        Cell::VisitGridObjects(bot, searcher, cfg.devilsaurHuntSeekYards);
+        if (matches.empty())
+            return nullptr;
+
+        std::sort(matches.begin(), matches.end(), [bot](Creature* left, Creature* right)
+        {
+            return bot->GetDistance(left) < bot->GetDistance(right);
+        });
+
+        for (Creature* candidate : matches)
+        {
+            if (IsRecentBadTarget(state, candidate->GetGUID()))
+                continue;
+
+            // Across the crater is not a road: only a walkable one is a target.
+            if (bot->GetDistance(candidate) > 25.0f)
+            {
+                WalkPathResult const pathResult = CheckWalkPath(bot, candidate->GetPosition());
+                if (pathResult == WalkPathResult::Deferred)
+                    return nullptr;
+                if (pathResult == WalkPathResult::Unreachable)
+                {
+                    MarkRecentBadTarget(state, candidate->GetGUID());
+                    continue;
+                }
+            }
+
+            TC_LOG_INFO("playerbots.pve", "Bot {} (skinning {}) sets out after {} (level {}) {:.0f}y away.",
+                bot->GetName(), bot->GetSkillValue(SKILL_SKINNING), candidate->GetName(),
+                uint32(candidate->GetLevel()), bot->GetDistance(candidate));
             return candidate;
         }
 
@@ -8990,6 +9070,66 @@ namespace
         return bot->GetGUID().GetCounter() % 3 != 2;
     }
 
+    // May this bot hunt this creature: the switch is on, it is a listed
+    // devilsaur, the bot skins and its skill covers the creature's level
+    // (the same requirement TrySkinCorpse enforces - a hunt that ends in a corpse
+    // the bot cannot skin is a wasted fight), and it is not too far above the bot.
+    bool CanHuntDevilsaur(Player const* bot, Creature const* creature)
+    {
+        playerbot::PveConfig const& cfg = g_PveConfig;
+        if (!cfg.devilsaurHuntEnabled || !bot || !creature)
+            return false;
+
+        if (std::find(cfg.devilsaurHuntEntries.begin(), cfg.devilsaurHuntEntries.end(),
+            creature->GetEntry()) == cfg.devilsaurHuntEntries.end())
+            return false;
+
+        if (!BotSkins(bot) || !bot->HasSkill(SKILL_SKINNING))
+            return false;
+
+        int32 const targetLevel = int32(creature->GetLevel());
+        int32 const requiredValue = targetLevel < 10 ? 0 : (targetLevel < 20 ? (targetLevel - 10) * 10 : targetLevel * 5);
+        if (int32(bot->GetSkillValue(SKILL_SKINNING)) < requiredValue)
+            return false;
+
+        return targetLevel - int32(bot->GetLevel()) <= int32(cfg.devilsaurHuntMaxLevelsAbove);
+    }
+
+    // The hunter's marker: on while the bot is actually fighting a devilsaur it
+    // can skin, off at every other moment. Unit::DealDamage keys the fight's
+    // rescaling on it, so it has to come off the instant the fight ends - which
+    // is why it is re-read every tick rather than set on engage and trusted.
+    void SyncDevilsaurHuntAura(Player* bot)
+    {
+        playerbot::PveConfig const& cfg = g_PveConfig;
+        uint32 const spell = cfg.devilsaurHuntBuffSpell;
+        if (!spell || !bot)
+            return;
+
+        bool hunting = false;
+        if (cfg.devilsaurHuntEnabled && bot->IsAlive())
+        {
+            if (Unit* victim = bot->GetVictim())
+                if (Creature* creature = victim->ToCreature())
+                    hunting = CanHuntDevilsaur(bot, creature);
+
+            if (!hunting)
+                for (Unit* attacker : bot->getAttackers())
+                    if (Creature* creature = attacker->ToCreature())
+                        if (CanHuntDevilsaur(bot, creature))
+                        {
+                            hunting = true;
+                            break;
+                        }
+        }
+
+        bool const wearing = bot->HasAura(spell);
+        if (hunting && !wearing)
+            bot->AddAura(spell, bot);
+        else if (!hunting && wearing)
+            bot->RemoveAurasDueToSpell(spell);
+    }
+
     void EnsureProfessionTier(Player* bot, std::array<ProfessionTier, 4> const& tiers, uint32 skillId)
     {
         uint16 const skillValue = bot->GetSkillValue(skillId);
@@ -14994,7 +15134,10 @@ namespace
                 if (!target && now >= state.nextGrindScanAt)
                 {
                     state.nextGrindScanAt = now + PveGrindScanInterval;
-                    target = PickGrindTarget(bot, state, cfg);
+                    // A skinner that can take a devilsaur looks for one first.
+                    target = PickDevilsaurHuntTarget(bot, state, cfg);
+                    if (!target)
+                        target = PickGrindTarget(bot, state, cfg);
                 }
             }
         }
@@ -15595,6 +15738,29 @@ namespace playerbot
         g_PveConfig.grindMaxLevelAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelAbove", 3), 0, 10));
         g_PveConfig.grindMaxLevelBelow = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelBelow", 5), 0, 80));
         g_PveConfig.grindAllowElites = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.AllowElites", false);
+        g_PveConfig.devilsaurHuntEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.DevilsaurHunt.Enable", false);
+        g_PveConfig.devilsaurHuntBuffSpell = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.DevilsaurHunt.BuffSpell", 0)));
+        g_PveConfig.devilsaurHuntSeekYards = std::clamp(sConfigMgr->GetFloatDefault("Playerbot.Pve.DevilsaurHunt.SeekYards", 150.0f), 20.0f, 400.0f);
+        g_PveConfig.devilsaurHuntMaxLevelsAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.DevilsaurHunt.MaxLevelsAbove", 3), 0, 10));
+        g_PveConfig.devilsaurHuntEntries.clear();
+        {
+            uint32 value = 0;
+            bool inNumber = false;
+            for (char ch : sConfigMgr->GetStringDefault("Playerbot.Pve.DevilsaurHunt.Entries", "6498,6499,6500") + ",")
+            {
+                if (ch >= '0' && ch <= '9')
+                {
+                    value = value * 10 + uint32(ch - '0');
+                    inNumber = true;
+                }
+                else if (inNumber)
+                {
+                    g_PveConfig.devilsaurHuntEntries.push_back(value);
+                    value = 0;
+                    inNumber = false;
+                }
+            }
+        }
         g_PveConfig.lootEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Loot.Enable", true);
         g_PveConfig.vendorEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Vendor.Enable", true);
         g_PveConfig.questsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Quests.Enable", true);
@@ -16814,6 +16980,7 @@ namespace playerbot
             return;
 
         PveBotState& state = LockedGetOrCreate(g_PveBotStateByGuid, rawGuid);
+        SyncDevilsaurHuntAura(player);
         if (player->IsInFlight())
         {
             // A bot flagged as flying with no flight generator behind it is not

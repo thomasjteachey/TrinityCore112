@@ -991,6 +991,73 @@ namespace
     // Read once. DealDamage runs for every hit in the world and cannot afford a
     // config lookup per blow, so like the pursuit keys in Creature.cpp these are
     // fixed at first use and a .reload config will not move them.
+    // Devilsaur hunters.
+    //
+    // A skinner bot sent after the elite dinosaurs of Un'Goro wears a visible
+    // marker aura (Playerbot.Pve.DevilsaurHunt.BuffSpell) for exactly as long as
+    // it is fighting one - the PvE manager puts it on and takes it off. While it
+    // is worn, the blows between THAT bot and a listed dinosaur are rescaled: the
+    // bot deals DamageDonePct more, and takes DamageTakenPct of what the dinosaur
+    // deals. Nothing else moves. A player who ganks the bot mid-hunt, or anything
+    // the bot hits that is not a listed dinosaur, sees stock numbers - which is
+    // why this lives here, beside the other bot-versus-wildlife scaling, and not
+    // on the aura as a flat damage buff.
+    //
+    // Read once, like the rest of this block: DealDamage runs for every hit.
+    struct DevilsaurHuntTuning
+    {
+        uint32 markerAura = 0;
+        uint32 damageDonePct = 0;
+        uint32 damageTakenPct = 100;
+        std::vector<uint32> entries;
+    };
+
+    DevilsaurHuntTuning const& GetDevilsaurHuntTuning()
+    {
+        static DevilsaurHuntTuning const tuning = []
+        {
+            DevilsaurHuntTuning parsed;
+            if (!sConfigMgr->GetBoolDefault("Playerbot.Pve.DevilsaurHunt.Enable", false))
+                return parsed;
+
+            parsed.markerAura = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.DevilsaurHunt.BuffSpell", 0)));
+            parsed.damageDonePct = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.DevilsaurHunt.DamageDonePct", 100)));
+            parsed.damageTakenPct = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.DevilsaurHunt.DamageTakenPct", 50), 0, 100));
+
+            uint32 value = 0;
+            bool inNumber = false;
+            for (char ch : sConfigMgr->GetStringDefault("Playerbot.Pve.DevilsaurHunt.Entries", "6498,6499,6500") + ",")
+            {
+                if (ch >= '0' && ch <= '9')
+                {
+                    value = value * 10 + uint32(ch - '0');
+                    inNumber = true;
+                }
+                else if (inNumber)
+                {
+                    parsed.entries.push_back(value);
+                    value = 0;
+                    inNumber = false;
+                }
+            }
+            return parsed;
+        }();
+        return tuning;
+    }
+
+    // The bot is wearing the hunter's marker, and the other party is a listed dinosaur.
+    bool IsDevilsaurHuntPair(Player const* bot, Unit const* creature)
+    {
+        DevilsaurHuntTuning const& tuning = GetDevilsaurHuntTuning();
+        if (!tuning.markerAura || !bot || !creature || creature->GetTypeId() != TYPEID_UNIT)
+            return false;
+
+        if (std::find(tuning.entries.begin(), tuning.entries.end(), creature->GetEntry()) == tuning.entries.end())
+            return false;
+
+        return bot->HasAura(tuning.markerAura);
+    }
+
     uint32 PlayerbotCreatureDamagePct(Unit const* attacker, Unit const* victim)
     {
         static uint32 const peakPct = uint32(std::max(100,
@@ -1027,6 +1094,10 @@ namespace
                 bonus += extra;
             }
 
+        // A hunter's marker makes it (and its pet) cut through the dinosaur it is after.
+        if (IsDevilsaurHuntPair(bot, victim))
+            bonus += GetDevilsaurHuntTuning().damageDonePct;
+
         return 100 + bonus;
     }
 
@@ -1053,9 +1124,15 @@ namespace
     // Applied at the very top so everything downstream agrees on one number:
     // the AI hooks, the rage the blow generates, threat, the PvP damage share
     // and the log all read the damage that was actually taken.
-    if (damage && CreatureDamageToPlayerbotPct() < 100 && IsMonsterHittingPlayerbot(attacker, victim))
-        damage = CalculatePct(damage, CreatureDamageToPlayerbotPct());
-
+    if (damage && CreatureDamageToPlayerbotPct() < 100 && IsMonsterHittingPlayerbot(attacker, victim))
+        damage = CalculatePct(damage, CreatureDamageToPlayerbotPct());
+
+    // ...and a hunted dinosaur hits its hunter (or the hunter's pet) for less.
+    // Its hunter only: see IsDevilsaurHuntPair.
+    if (damage && IsMonsterHittingPlayerbot(attacker, victim))
+        if (Player const* hunter = ManagedPlayerbotBehind(victim); hunter && IsDevilsaurHuntPair(hunter, attacker))
+            damage = CalculatePct(damage, GetDevilsaurHuntTuning().damageTakenPct);
+
     // And the other direction: a bot cuts through wildlife harder the bigger the
     // bounty it is chasing, and the more of the wildlife is currently on it.
     if (damage)
