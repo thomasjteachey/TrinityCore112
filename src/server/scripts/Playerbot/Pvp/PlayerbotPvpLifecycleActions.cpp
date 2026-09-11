@@ -4520,19 +4520,21 @@ namespace playerbot
             return true;
         }
 
-        // An Assassination rogue's configured stealth opener is Garrote.  The
-        // normal melee distance-band code intentionally does not move a bot
-        // that is already in melee range, but Garrote cannot be used while the
-        // target still has the rogue in its frontal arc.  Relying exclusively
-        // on the class cast-failure recovery leaves a deadlock if that class
-        // tick is delayed or rejected: the hidden rogue has no victim and the
-        // enemy cannot detect it, so both units simply stand still.  Keep the
-        // lifecycle moving toward the required rear arc as a generic rogue
-        // opener invariant; the class action will cast Garrote once it arrives.
+        // A rogue whose stealth opener is Garrote - Asphyxiate, or too young
+        // for Cheap Shot; PvpCore::GetRogueStealthOpenerSpellId decides, the
+        // same answer the class selector uses.  The normal melee distance-band
+        // code intentionally does not move a bot that is already in melee
+        // range, but Garrote cannot be used while the target still has the
+        // rogue in its frontal arc.  Relying exclusively on the class
+        // cast-failure recovery leaves a deadlock if that class tick is delayed
+        // or rejected: the hidden rogue has no victim and the enemy cannot
+        // detect it, so both units simply stand still.  Keep the lifecycle
+        // moving toward the required rear arc as a generic rogue opener
+        // invariant; the class action will cast Garrote once it arrives.
         bool const isAssassinationStealthOpener =
             player->GetClass() == CLASS_ROGUE &&
             player->HasStealthAura() &&
-            player->HasTalent(81302, player->GetActiveSpec());
+            playerbot::PvpCore::GetRogueStealthOpenerSpellId(player) == 703;
         if (isAssassinationStealthOpener &&
             player->IsWithinMeleeRange(target) &&
             target->HasInArc(static_cast<float>(M_PI), player))

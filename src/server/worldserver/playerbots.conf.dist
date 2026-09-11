@@ -437,10 +437,10 @@ Playerbot.Pve.AuctionPriceMultiplier = 10.0
 #                     STANDING lot, it also drags the going rate down for every full stack
 #                     already up there. Below the minimum the material is simply held, and
 #                     the vendor pass still clears it if the pack gets tight.
-#        Default:     10
+#        Default:     5
 #                     1 - (list any amount, the old behaviour)
 
-Playerbot.Pve.AuctionMinTradeGoodStack = 10
+Playerbot.Pve.AuctionMinTradeGoodStack = 5
 
 #    Playerbot.Pve.AuctionValuableUnitCopper
 #        Description: Per-unit vendor value at or above which a material is worth listing on
@@ -637,9 +637,8 @@ Playerbot.Pve.DevilsaurHunt.MaxLevelsAbove = 3
 # Whisper commands a master can send their companion:
 #   follow / stay / attack / passive / come / dismiss
 #
-# Auction-house population is handled by the core AuctionHouseBot again (it was previously
-# hard-disabled in this fork): configure the AuctionHouseBot.* block in worldserver.conf,
-# most importantly AuctionHouseBot.Account plus Seller/Buyer.Enabled.
+# The auction house is populated by the bots themselves (AuctionSell / AuctionBuy below).
+# There is no auction house bot in this fork: the core one has been removed.
 
 #    Playerbot.Pve.Loot.Enable
 #        Description: Bots loot gold and items from their own (or their group's) kills,
@@ -850,12 +849,13 @@ Playerbot.Pve.Drifters.ZoneDwellSeconds = 10
 
 #
 #    Playerbot.Pve.Drifters.TeleportGold
-#        Description: Gold handed to a drifter every time it lands somewhere new,
-#                     paid BEFORE the auction sweep is queued. The sweep already
-#                     waits for arrival so the bot shops for the character it is
-#                     becoming rather than the one it left; the purse has to land
-#                     in that same window or the bot walks into the auction house
-#                     broke and buys nothing.
+#        Description: Gold handed to a drifter every time it lands somewhere new.
+#                     A landing runs in a fixed order: the bot sells its junk
+#                     where it stands (no trip to a merchant) and lists its old
+#                     gear on the auction house, THEN it is paid, THEN it shops
+#                     the house - so it shops with room in its bags and money in
+#                     its purse, for the character it has just become rather
+#                     than the one it left.
 #
 #                     Counted in gold, not copper.
 #
@@ -863,13 +863,13 @@ Playerbot.Pve.Drifters.ZoneDwellSeconds = 10
 #                     TeleportGold is what the lowest band pays (the 1-10 starter
 #                     zones), TeleportGold.Max what the highest pays (55-60), and
 #                     every band in between sits on the straight line through the
-#                     two by its midpoint - Feralas (40-50) pays about 40g at the
+#                     two by its midpoint - Feralas (40-50) pays about 18g at the
 #                     defaults. A zone with no band pays TeleportGold. Max at or
 #                     below TeleportGold pays TeleportGold flat; both 0 pays nothing.
-#        Default:     10 (TeleportGold), 50 (TeleportGold.Max)
+#        Default:     10 (TeleportGold), 20 (TeleportGold.Max)
 #
 Playerbot.Pve.Drifters.TeleportGold = 10
-Playerbot.Pve.Drifters.TeleportGold.Max = 50
+Playerbot.Pve.Drifters.TeleportGold.Max = 20
 
 #    Playerbot.Pve.ProactiveMaxLevelsAbove
 #        Description: How far above its own level a bot will PICK a fight with a person.
@@ -995,8 +995,8 @@ Playerbot.Pve.Travel.UseFlightPaths = 1
 #    Playerbot.Pve.AuctionBuy.Enable
 #        Description: Bots browse their faction auction house every ~10 minutes and buy out one
 #                     affordable gear upgrade (best item-level gain within budget), collect the
-#                     win from their mailbox and equip it. Characters on the AuctionHouseBot
-#                     account never shop (the core destroys AHBot-flagged buyers' wins).
+#                     win from their mailbox and equip it. A drifter also shops the moment
+#                     it lands somewhere new, after selling and being paid.
 #        Default:     0 - (Disabled)
 
 Playerbot.Pve.AuctionBuy.Enable = 0

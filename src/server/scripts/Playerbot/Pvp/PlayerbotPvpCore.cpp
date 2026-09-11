@@ -6462,6 +6462,42 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         return SelectHighestPriorityCastableDecision(candidates, player, activeTarget, nullptr);
     }
 
+    // The spell a stealthed rogue opens with, or 0 when it knows none.
+    //
+    // Asphyxiate (81302, the Assassination capstone) makes Garrote silence and
+    // carry both weapons' poisons, so a rogue who took it opens with Garrote.
+    // Everyone else opens with Cheap Shot, and a rogue not yet trained in it
+    // (26; Garrote comes at 14) opens with Garrote instead. A rogue with
+    // neither gets 0 and fights from stealth off the ordinary table, which
+    // means Sinister Strike.
+    //
+    // It is the TALENT that decides, not the spec guess. The Assassination
+    // profile also covers a rogue that merely has most of its points in the
+    // tree, and that rogue was being held to Garrote - a positional opener
+    // that anyone facing it refuses - with no Cheap Shot on offer at all.
+    //
+    // Asked of the whole rank chain: Garrote's later ranks are unrelated ids,
+    // so HasSpell(703) is false for anyone who trained past rank 1. Cooldown
+    // is deliberately left out, so which opener is "mine" cannot flicker.
+    uint32 SelectRogueStealthOpenerSpellId(Player const* player)
+    {
+        if (!player || player->GetClass() != CLASS_ROGUE)
+            return 0;
+
+        constexpr uint32 kRogueGarroteSpellId = 703;
+        constexpr uint32 kRogueCheapShotSpellId = 1833;
+        constexpr uint32 kRogueAsphyxiateTalentSpellId = 81302;
+
+        bool const knowsGarrote = ResolveKnownPlayerSpellInChain(player, kRogueGarroteSpellId) != 0;
+        bool const knowsCheapShot = ResolveKnownPlayerSpellInChain(player, kRogueCheapShotSpellId) != 0;
+
+        if (knowsGarrote && player->HasTalent(kRogueAsphyxiateTalentSpellId, player->GetActiveSpec()))
+            return kRogueGarroteSpellId;
+        if (knowsCheapShot)
+            return kRogueCheapShotSpellId;
+        return knowsGarrote ? kRogueGarroteSpellId : 0;
+    }
+
     SpellDecision SelectRogueSpell(Player const* player, Unit const* target, ClassicProfileSelection const& profileSelection)
     {
         SpellDecision decision;
@@ -6485,14 +6521,23 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
 
     AddDecisionCandidate(candidates, !player->IsInCombat() && !HasAuraFromSpellChain(player, 1784) && IsSpellReady(player, 1784), 50.0f,
         { "rogue stealth", "enter stealth before engagement", 1784, playerbot::PvpClassSpellContext::TargetMode::Self });
-    // Assassination opens with Garrote instead of Cheap Shot. Garrote carries
-    // SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET, so the shared cast-failure
-    // handling in CastDirectSpell already repositions the bot behind the
+    // The stealth opener: Garrote with Asphyxiate, otherwise Cheap Shot, and
+    // Garrote for a rogue too young for Cheap Shot (SelectRogueStealthOpenerSpellId).
+    // Garrote carries SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET, so the shared
+    // cast-failure handling in CastDirectSpell repositions the bot behind the
     // target (IssueBehindTargetMeleeMovement) before retrying the cast.
-    AddDecisionCandidate(candidates, isAssassinationRogue && player->HasStealthAura() && player->IsWithinMeleeRange(target) && IsSpellReady(player, 703), 49.2f,
-        { "rogue garrote", "assassination opener from stealth", 703, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, !isAssassinationRogue && player->HasStealthAura() && player->IsWithinMeleeRange(target) && IsSpellReady(player, 1833), 49.0f,
-        { "rogue cheap shot", "default opener", 1833, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    //
+    // No IsWithinMeleeRange gate, on purpose. That test is centre to centre
+    // with no allowance for two units running, while the castability test and
+    // the core's own range check both allow more - so the gate hid the opener
+    // for the last few yards of every chase, which is exactly where Sinister
+    // Strike (never gated) went off instead. Out of reach the opener is simply
+    // not castable yet, and as the fallback decision it becomes the walk in.
+    uint32 const stealthOpenerSpellId = SelectRogueStealthOpenerSpellId(player);
+    bool const holdStealthForOpener = player->HasStealthAura() && stealthOpenerSpellId != 0;
+    AddDecisionCandidate(candidates, holdStealthForOpener && IsSpellReady(player, stealthOpenerSpellId), 49.0f,
+        { stealthOpenerSpellId == 703 ? "rogue garrote" : "rogue cheap shot", "stealth opener",
+          stealthOpenerSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, nearbyCastingTarget && IsSpellReady(player, 1766), 48.0f,
         { "rogue kick", isCombatRogue ? "interrupt nearby enemy cast" : "interrupt enemy cast", 1766, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyCastingTarget ? nearbyCastingTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, player->HealthBelowPct(40) && IsSpellReady(player, 5277), 47.0f,
@@ -6560,6 +6605,23 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     // it from level one, so nothing can fall through this.
     AddDecisionCandidate(candidates, IsSpellReady(player, 11294), 20.0f,
         { "rogue sinister strike", "universal combo point builder", 11294, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+
+    // While the opener is on offer, nothing else is.
+    //
+    // Every other strike here breaks stealth, and each one used to win the
+    // moment the opener was merely not castable THIS tick: Sinister Strike
+    // with energy between its cost and Cheap Shot's (45 against 60), Sinister
+    // Strike again while Garrote was refused for facing, Deadly Shot while
+    // still closing. That is how Quinfyn walked up to a player and opened with
+    // Sinister Strike. Now the rogue opens or keeps closing: the fallback keeps
+    // the opener as the decision, which drives the approach and waits out the
+    // energy. Sprint stays - it closes the gap without breaking stealth.
+    if (holdStealthForOpener)
+        candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+            [stealthOpenerSpellId, sprintSpellId](PrioritizedSpellDecision const& candidate)
+            {
+                return candidate.decision.spellId != stealthOpenerSpellId && candidate.decision.spellId != sprintSpellId;
+            }), candidates.end());
 
         return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
     }
@@ -7483,6 +7545,11 @@ bool PvpCore::CanHunterBestialWrathOutOfControl(Player const* player)
 bool PvpCore::IsEffectivelyImmuneTarget(Player const* player, Unit const* target)
 {
     return IsTargetEffectivelyImmune(player, target);
+}
+
+uint32 PvpCore::GetRogueStealthOpenerSpellId(Player const* player)
+{
+    return SelectRogueStealthOpenerSpellId(player);
 }
 
 bool PvpCore::IsMovementPreventedByRoot(Player const* player)

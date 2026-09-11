@@ -265,6 +265,10 @@ public:
     static bool CanHunterBestialWrathOutOfControl(Player const* player);
     static bool IsEffectivelyImmuneTarget(Player const* player, Unit const* target);
     static bool IsMovementPreventedByRoot(Player const* player);
+    // The spell a stealthed rogue opens with (Garrote 703 or Cheap Shot 1833),
+    // or 0 when it knows neither. One answer for the class selector and the
+    // lifecycle's move-behind, so the two can never disagree about the opener.
+    static uint32 GetRogueStealthOpenerSpellId(Player const* player);
     static bool IsTriggerActive(PvpTrigger trigger, PvpValues const& values);
     static BattlegroundTacticalContext BuildBattlegroundTacticalContext(Player const* player, PvpValues const& values);
     static BattlegroundLifecycleContext BuildBattlegroundLifecycleContext(Player const* player, PvpValues const& values);

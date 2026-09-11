@@ -5089,7 +5089,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && target && CanIssueFollowCommands(player))
             {
                 IssueMeleeApproachMovement(player, target);
-                if (player->GetVictim() != target || !player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
+                // Close, but never swing, from stealth. A rogue waiting on the
+                // energy for its opener would otherwise open with a white hit,
+                // which breaks the stealth the opener needs - and the very next
+                // tick picks Sinister Strike.
+                if (!player->HasStealthAura() &&
+                    (player->GetVictim() != target || !player->HasUnitState(UNIT_STATE_MELEE_ATTACKING)))
                     player->Attack(target, true);
             }
 

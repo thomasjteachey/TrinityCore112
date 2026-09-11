@@ -645,21 +645,7 @@ enum RBACPermissions
     RBAC_PERM_COMMAND_DEBUG_PHASE                            = 776, // not on 3.3.5a
     RBAC_PERM_COMMAND_MAILBOX                                = 777,
     // 778 previously used, do not reuse
-    RBAC_PERM_COMMAND_AHBOT_ITEMS                            = 779,
-    RBAC_PERM_COMMAND_AHBOT_ITEMS_GRAY                       = 780,
-    RBAC_PERM_COMMAND_AHBOT_ITEMS_WHITE                      = 781,
-    RBAC_PERM_COMMAND_AHBOT_ITEMS_GREEN                      = 782,
-    RBAC_PERM_COMMAND_AHBOT_ITEMS_BLUE                       = 783,
-    RBAC_PERM_COMMAND_AHBOT_ITEMS_PURPLE                     = 784,
-    RBAC_PERM_COMMAND_AHBOT_ITEMS_ORANGE                     = 785,
-    RBAC_PERM_COMMAND_AHBOT_ITEMS_YELLOW                     = 786,
-    RBAC_PERM_COMMAND_AHBOT_RATIO                            = 787,
-    RBAC_PERM_COMMAND_AHBOT_RATIO_ALLIANCE                   = 788,
-    RBAC_PERM_COMMAND_AHBOT_RATIO_HORDE                      = 789,
-    RBAC_PERM_COMMAND_AHBOT_RATIO_NEUTRAL                    = 790,
-    RBAC_PERM_COMMAND_AHBOT_REBUILD                          = 791,
-    RBAC_PERM_COMMAND_AHBOT_RELOAD                           = 792,
-    RBAC_PERM_COMMAND_AHBOT_STATUS                           = 793,
+    // 779-793 previously used (auction house bot commands), do not reuse
     RBAC_PERM_COMMAND_GUILD_INFO                             = 794,
     RBAC_PERM_COMMAND_INSTANCE_SET_BOSS_STATE                = 795,
     RBAC_PERM_COMMAND_INSTANCE_GET_BOSS_STATE                = 796,

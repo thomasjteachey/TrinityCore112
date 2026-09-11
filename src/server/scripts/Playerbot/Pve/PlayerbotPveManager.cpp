@@ -59,8 +59,6 @@
 #include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "Pet.h"
-#include "AuctionHouseBot/AuctionHouseBot.h"
-#include "AuctionHouseBot/AuctionHouseBotSeller.h"
 #include "AuctionHouseMgr.h"
 #include "Mail.h"
 #include "Player.h"
@@ -1120,17 +1118,37 @@ namespace
         if (!proto)
             return false;
 
+        // Only things a bot might WEAR or carry loot in. Test and placeholder
+        // stock that matters is gear - "Monster - Mace", "OLD Leather Belt",
+        // "[PH] Shoulders" - and every caller asks about gear. Asked of anything
+        // else the name markers misfire, and they did: DiscardScaffoldingItems
+        // runs over the bags every fifteen seconds and destroys what this
+        // accepts without a word, so every bot threw away its Gold Ore within
+        // fifteen seconds of mining it ("g-OLD O-re") and the realm never saw
+        // one on the auction house. Gold Bar, Gold Dust, "Scale of Old
+        // Murk-Eye" and Recipe: Monster Omelet went the same way.
+        if (proto->Class != ITEM_CLASS_ARMOR && proto->Class != ITEM_CLASS_WEAPON &&
+            proto->Class != ITEM_CLASS_CONTAINER && proto->Class != ITEM_CLASS_QUIVER)
+            return false;
+
         // Lowercased once, so the markers need not enumerate every casing.
         std::string name = proto->Name1;
         std::transform(name.begin(), name.end(), name.begin(),
             [](unsigned char c) { return char(std::tolower(c)); });
 
+        // Each marker only at the START of a word. As bare substrings "old "
+        // also matched inside "gold ", "bold " and "household ".
+        auto const startsWord = [&name](size_t at)
+        {
+            return at == 0 || !std::isalpha(static_cast<unsigned char>(name[at - 1]));
+        };
         static constexpr char const* kMarkers[] = {
             "[ph]", "crobinson", "monster ", "old ", "deprecated", "unused", "placeholder"
         };
         for (char const* marker : kMarkers)
-            if (name.find(marker) != std::string::npos)
-                return true;
+            for (size_t at = name.find(marker); at != std::string::npos; at = name.find(marker, at + 1))
+                if (startsWord(at))
+                    return true;
 
         // "test" as a WORD, however punctuated. The old list matched "Test " with
         // a trailing space, so "Pirates Patch (Test)" went straight through and
@@ -1180,8 +1198,15 @@ namespace
                 doomed.emplace_back(bag, slot);
         });
 
+        // Said out loud, like the worn branch above. This one was silent, which
+        // is how it spent twelve days destroying every bot's Gold Ore unseen.
         for (auto const& position : doomed)
+        {
+            if (Item const* item = bot->GetItemByPos(position.first, position.second))
+                TC_LOG_INFO("playerbots.pve", "Bot {} discards test item {} from its bags.",
+                    bot->GetName(), item->GetTemplate()->Name1);
             bot->DestroyItem(position.first, position.second, true);
+        }
     }
 
     // Quest items are the one kind of loot a bot can never shed. The auction
@@ -4407,22 +4432,37 @@ namespace
 
             uint16 const destPos = destination.empty() ? uint16(0xFFFF) : destination.front().pos;
             uint32 const destCount = uint32(destination.size());
+            uint32 const itemEntry = item->GetEntry();
 
             bot->RemoveItem(bag->GetSlot(), uint8(slot), true);
-            bot->StoreItem(destination, item, true);
+
+            // `item` IS NOT SAFE TO TOUCH AFTER THIS LINE.
+            //
+            // StoreItem merges into an existing stack whenever the destination
+            // holds one, and the merged-away item is set ITEM_REMOVED - which,
+            // for an item created this session and never saved (ITEM_NEW), is
+            // Item::SetState deleting it on the spot. The trace below read
+            // item->GetEntry() off that freed item and took Barracks Plus down
+            // five times in six minutes on 2026-09-11: one warlock's bag swap,
+            // retried on every login, moving a freshly made stack onto another.
+            // What StoreItem returns is the item that now holds the stack, which
+            // is the only thing worth asking where it went.
+            Item const* const landed = bot->StoreItem(destination, item, true);
+            item = nullptr;
             if (movedOut)
                 ++*movedOut;
 
-            // Where did it ACTUALLY land? Asked of the item afterwards rather
-            // than assumed from the destination we handed StoreItem, because the
-            // whole point of this trace is that the two do not appear to agree.
+            // Where did it ACTUALLY land? Asked of the stored item afterwards
+            // rather than assumed from the destination we handed StoreItem,
+            // because the whole point of this trace is that the two do not
+            // appear to agree.
             if (trace)
                 TC_LOG_ERROR("playerbots.pve",
                     "  bagtrace {}: srcSlot {} (bag now says {}) item {} from index {} -> container {}, "
                     "{} dest(s) first bag {} slot {}; item ended at bag {} slot {}; source bag now holds {}",
-                    bot->GetName(), uint32(sourceSlot), uint32(bag->GetSlot()), item->GetEntry(), slot,
+                    bot->GetName(), uint32(sourceSlot), uint32(bag->GetSlot()), itemEntry, slot,
                     uint32(chosen), destCount, uint32(destPos >> 8), uint32(destPos & 255),
-                    uint32(item->GetBagSlot()), uint32(item->GetSlot()),
+                    landed ? uint32(landed->GetBagSlot()) : 255u, landed ? uint32(landed->GetSlot()) : 255u,
                     CountUsedSlotsInBag(bot, bag));
         }
 
@@ -4774,8 +4814,8 @@ namespace
             // waiting for the next listing run.
             //
             // SHORT OF A LOT IS NOT "THE ROUTE IS CLOSED". IsAuctionableSurplus
-            // refuses a common material held in less than a full lot (ten ore,
-            // twenty leather), which is right for the LISTING pass - one ore is
+            // refuses a common material held in less than a full lot
+            // (AuctionMinTradeGoodStack), which is right for the LISTING pass - one ore is
             // noise on the house - but this branch read that refusal as "cannot
             // ever be auctioned" and sold the stack. Anything gathered one piece at
             // a time from a rare node therefore never reached ten: Gold Ore, one
@@ -9842,6 +9882,14 @@ namespace
                 // mail rows and the moved items consistent in one transaction.
                 bot->SaveToDB();
                 TC_LOG_INFO("playerbots.pve", "Bot {} collected its mail ({} items).", bot->GetName(), tookItems);
+
+                // Whatever just came out of the mailbox is usually an auction win,
+                // and a win is bought to be worn. Put it on at the bot's next tick
+                // rather than at the next fifteen second equip check - which was
+                // the gap between Orhild buying six pieces and wearing them.
+                if (tookItems)
+                    if (PveBotState* state = playerbot::LockedFind(g_PveBotStateByGuid, botRawGuid))
+                        state->nextEquipCheckAt = PveTimePoint();
             }
         }
     }
@@ -10120,8 +10168,110 @@ namespace
         return uint64(double(proto->SellPrice) * double(count) * double(factor));
     }
 
-    // What the thing is worth, by the same reckoning the auction house stocker
-    // uses (AuctionBotSeller::SetPricesOfItem):
+    // The two per-class multipliers the face value below is built on. They were
+    // the auction house stocker's (AuctionBotSeller::GetSellModifier and
+    // GetBuyModifier) until the stocker was taken out of the core; the numbers
+    // are its numbers, unchanged, so nothing the fleet asks or pays moved when
+    // it went.
+    //
+    // What a sell price is marked up by, for an item no vendor sells.
+    uint32 FaceValueSellModifier(ItemTemplate const* proto)
+    {
+        switch (proto->Class)
+        {
+            case ITEM_CLASS_WEAPON:
+            case ITEM_CLASS_ARMOR:
+            case ITEM_CLASS_REAGENT:
+            case ITEM_CLASS_PROJECTILE:
+                return 5;
+            default:
+                return 4;
+        }
+    }
+
+    // What item level and quality are scaled by, for an item with no price at all.
+    uint32 FaceValueBuyModifier(ItemTemplate const* proto)
+    {
+        switch (proto->Class)
+        {
+            case ITEM_CLASS_CONSUMABLE:
+                switch (proto->SubClass)
+                {
+                    case ITEM_SUBCLASS_CONSUMABLE:       return 100;
+                    case ITEM_SUBCLASS_FLASK:            return 400;
+                    case ITEM_SUBCLASS_SCROLL:           return 15;
+                    case ITEM_SUBCLASS_ITEM_ENHANCEMENT: return 250;
+                    case ITEM_SUBCLASS_BANDAGE:          return 125;
+                    default:                             return 300;
+                }
+            case ITEM_CLASS_WEAPON:
+                switch (proto->SubClass)
+                {
+                    case ITEM_SUBCLASS_WEAPON_AXE:
+                    case ITEM_SUBCLASS_WEAPON_MACE:
+                    case ITEM_SUBCLASS_WEAPON_SWORD:
+                    case ITEM_SUBCLASS_WEAPON_FIST:
+                    case ITEM_SUBCLASS_WEAPON_DAGGER:
+                        return 1200;
+                    case ITEM_SUBCLASS_WEAPON_AXE2:
+                    case ITEM_SUBCLASS_WEAPON_MACE2:
+                    case ITEM_SUBCLASS_WEAPON_POLEARM:
+                    case ITEM_SUBCLASS_WEAPON_SWORD2:
+                    case ITEM_SUBCLASS_WEAPON_STAFF:
+                        return 1500;
+                    case ITEM_SUBCLASS_WEAPON_THROWN:
+                        return 350;
+                    default:
+                        return 1000;
+                }
+            case ITEM_CLASS_ARMOR:
+                switch (proto->SubClass)
+                {
+                    case ITEM_SUBCLASS_ARMOR_MISC:
+                    case ITEM_SUBCLASS_ARMOR_CLOTH:
+                        return 500;
+                    case ITEM_SUBCLASS_ARMOR_LEATHER:
+                        return 600;
+                    case ITEM_SUBCLASS_ARMOR_MAIL:
+                        return 700;
+                    case ITEM_SUBCLASS_ARMOR_PLATE:
+                    case ITEM_SUBCLASS_ARMOR_SHIELD:
+                        return 800;
+                    default:
+                        return 400;
+                }
+            case ITEM_CLASS_REAGENT:
+            case ITEM_CLASS_PROJECTILE:
+                return 50;
+            case ITEM_CLASS_TRADE_GOODS:
+                switch (proto->SubClass)
+                {
+                    case ITEM_SUBCLASS_TRADE_GOODS:
+                    case ITEM_SUBCLASS_PARTS:
+                    case ITEM_SUBCLASS_MEAT:
+                        return 50;
+                    case ITEM_SUBCLASS_EXPLOSIVES:
+                        return 250;
+                    case ITEM_SUBCLASS_DEVICES:
+                        return 500;
+                    case ITEM_SUBCLASS_ELEMENTAL:
+                    case ITEM_SUBCLASS_TRADE_GOODS_OTHER:
+                    case ITEM_SUBCLASS_ENCHANTING:
+                        return 300;
+                    default:
+                        return 100;
+                }
+            case ITEM_CLASS_QUEST:
+                return 1000;
+            case ITEM_CLASS_KEY:
+                return 3000;
+            default:
+                return 500;
+        }
+    }
+
+    // What the thing is worth, by the reckoning the old auction house stocker
+    // priced its own lots with:
     //   vendor buy price, or failing that the sell price times a per-class
     //   modifier, or failing THAT a value derived from item level and quality -
     //   level squared times quality times a per-subclass modifier.
@@ -10147,13 +10297,13 @@ namespace
         if (value <= 0.0)
         {
             if (proto->SellPrice > 0)
-                value = double(proto->SellPrice) * AuctionBotSeller::GetSellModifier(proto);
+                value = double(proto->SellPrice) * FaceValueSellModifier(proto);
             else
             {
                 double const divisor = (proto->Class == ITEM_CLASS_WEAPON || proto->Class == ITEM_CLASS_ARMOR) ? 284.0 : 80.0;
                 double const level = proto->ItemLevel ? double(proto->ItemLevel) : 1.0;
                 double const quality = proto->Quality ? double(proto->Quality) : 1.0;
-                value = level * quality * double(AuctionBotSeller::GetBuyModifier(proto)) * level / divisor;
+                value = level * quality * double(FaceValueBuyModifier(proto)) * level / divisor;
             }
         }
 
@@ -10221,7 +10371,7 @@ namespace
         // Never refuse a price our own seller would ASK. The buy ceiling and the
         // sell markup are two independent config keys with nothing tying them
         // together, so a raised AuctionPriceMultiplier would otherwise freeze every
-        // bot-to-bot sale silently - and with the core's auction stocker disabled,
+        // bot-to-bot sale silently - and with no auction stocker in the core,
         // bot listings are very nearly the whole market. Taking the larger of the
         // two makes that deadlock unrepresentable rather than merely documented.
         ceiling = std::max(ceiling, uint64(lotFace * double(std::max(0.01f, cfg.auctionPriceMultiplier))));
@@ -10285,7 +10435,7 @@ namespace
             // work back down to the unmultiplied value.
             value *= double(std::max(0.01f, playerbot::PveManager::GetConfig().auctionPriceMultiplier));
 
-            // Spread over the units that price covers, exactly as the stocker does.
+            // Spread over the units that price covers, exactly as a vendor's does.
             uint32 const buyCount = std::max<uint32>(1, proto->BuyCount);
             price = uint64(std::max(1.0, value * count / buyCount));
         }
@@ -10303,6 +10453,264 @@ namespace
         price = std::max(price, VendorPriceFloor(proto, count));
 
         return uint32(std::min<uint64>(price, uint64(MAX_MONEY_AMOUNT)));
+    }
+
+    // One bot's listing run - what ProcessPendingAuctionSales does for each bot
+    // it drains, split out so a drifter that has just landed can put its old
+    // life's gear on the house BEFORE it is paid and goes shopping (see
+    // RunDrifterArrival). forceCatchUp lifts the per-pass listing cap the way
+    // the post-login catch-up does.
+    //
+    // Returns false when there was nothing to list, which means no full-house
+    // scan was spent and the caller's budget is untouched. outListed, when
+    // given, is the number of lots actually posted.
+    bool ListAuctionSurplus(Player* bot, bool forceCatchUp, uint32* outListed = nullptr)
+    {
+        AuctionHouseObject* auctionHouse = sAuctionMgr->GetAuctionsMap(bot->GetFaction());
+        AuctionHouseEntry const* houseEntry = AuctionHouseMgr::GetAuctionHouseEntry(bot->GetFaction());
+        if (!auctionHouse || !houseEntry)
+            return false;
+
+        // The catch-up pass empties the bags in one go; the steady state posts
+        // a few at a time so the house is not flooded by one bot. The flag is
+        // taken whether or not the caller forces a catch-up, so a forced run
+        // is not followed by a second one seconds later.
+        bool catchUp = false;
+        {
+            PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, bot->GetGUID().GetRawValue());
+            catchUp = state.auctionCatchUpSell || forceCatchUp;
+            state.auctionCatchUpSell = false;
+        }
+        size_t const listingLimit = catchUp ? 40u : 3u;
+
+        // Identities, not pointers.
+        //
+        // The loop below vendors items and commits a whole inventory save
+        // once per lot, and both of those free Item objects - Item::SaveToDB
+        // deletes an ITEM_REMOVED item outright, and _SaveInventory then
+        // clears the update queue. A vector of Item* captured before any of
+        // that runs goes stale as the loop walks it, and a freed block
+        // recycled into some other bot's item is how a bot comes to post an
+        // item it has never owned. Every other bulk pass in this file
+        // collects positions instead, for exactly this reason; stock's own
+        // sell handler re-resolves off the player by GUID immediately before
+        // it posts. Do both: keep GUIDs, and re-resolve each time round.
+        std::vector<ObjectGuid> surplus;
+        ForEachBagItem(bot, [&](Item* item, uint8 /*bag*/, uint8 /*slot*/)
+        {
+            if (surplus.size() < listingLimit && IsAuctionableSurplus(bot, item))
+                surplus.push_back(item->GetGUID());
+        });
+
+        // Whose death chest any of this came out of, gathered across the pass
+        // and sent after it. See AuctionNoticeForOwner.
+        std::unordered_map<uint64, AuctionNoticeForOwner> noticesForOwner;
+
+        if (surplus.empty())
+            return false;
+
+        // One pass over the house for the going rate of everything at once.
+        // Every lot on it is a real seller's - a player's or another bot's -
+        // and every one of them is undercut.
+        std::unordered_map<uint32, uint32> cheapestPerUnit;
+        for (auto houseItr = auctionHouse->GetAuctionsBegin(); houseItr != auctionHouse->GetAuctionsEnd(); ++houseItr)
+        {
+            AuctionEntry const* auction = houseItr->second;
+            if (!auction || !auction->buyout || !auction->itemCount)
+                continue;
+
+            uint32 const perUnit = auction->buyout / auction->itemCount;
+            auto existing = cheapestPerUnit.find(auction->itemEntry);
+            if (existing == cheapestPerUnit.end() || perUnit < existing->second)
+                cheapestPerUnit[auction->itemEntry] = perUnit;
+        }
+
+        uint32 listed = 0;
+        for (ObjectGuid const& itemGuid : surplus)
+        {
+            // Asked again every iteration, because the previous ones have
+            // vendored items, moved gold and saved the bags since the list
+            // was built. A bot that no longer holds it simply skips it.
+            Item* item = bot->GetItemByGuid(itemGuid);
+            if (!item || !IsAuctionableSurplus(bot, item))
+                continue;
+
+            ItemTemplate const* proto = item->GetTemplate();
+            uint32 const count = item->GetCount();
+            uint32 const etime = 12 * HOUR;
+
+            // Playerbots post for free. A deposit is a risk premium for a
+            // player who might misprice something; the fleet lists its whole
+            // surplus constantly, so all a deposit does is bleed gold out of
+            // the simulation on lots that were never going to sell anyway.
+            uint32 const deposit = 0;
+
+            uint32 marketPrice = 0;
+            uint32 const buyout = ComputeAuctionBuyout(proto, count, cheapestPerUnit, &marketPrice);
+
+            // Has the market fallen below what we would have to ask? The ask
+            // never goes under 1.5x vendor price, so whenever the MARKET price
+            // is under that floor the bot would be posting above what anyone
+            // is currently paying - a listing that sits for twelve hours and
+            // then, since unsold bot lots are destroyed at expiry, takes the
+            // item and the vendor money with it.
+            //
+            // So the floor doubles as the threshold: at or above it the item
+            // is worth listing, below it the merchant is the better customer.
+            // Judged on the MARKET price rather than the ask, because the ask
+            // is derived from the floor and comparing the two would be
+            // circular.
+            uint64 const vendorRevenue = VendorPayout(bot, proto, count);
+            uint64 const vendorFloor = VendorPriceFloor(proto, count);
+            if (vendorRevenue && uint64(marketPrice) < vendorFloor)
+            {
+                bot->ModifyMoney(int64(vendorRevenue));
+                TC_LOG_INFO("playerbots.pve",
+                    "Bot {} vendored {} x{} for {} copper: market {} is under the {} floor.",
+                    bot->GetName(), proto->Name1, count, vendorRevenue, marketPrice, vendorFloor);
+                bot->DestroyItem(item->GetBagSlot(), item->GetSlot(), true);
+                continue;
+            }
+
+            uint32 const startBid = std::max<uint32>(1, uint32(uint64(buyout) * 80 / 100));
+
+            // Asked AGAIN here, immediately before the point of no return.
+            //
+            // IsAuctionableSurplus already refuses an item that is on the
+            // house, but it answered when the candidate list was BUILT, and
+            // the list is a snapshot of Item pointers that is then walked
+            // while posting. Anything that registers the item in between -
+            // another lot in this same pass, another bot holding the very
+            // same Item (the realm has 26 items that are in a bag and on the
+            // auction house at once, three of them held by a character that
+            // is not the auction's owner) - and the stale answer is acted on.
+            //
+            // AddAItem ASSERTS rather than refusing, so the cost of being
+            // wrong is the whole realm: this is the crash at
+            // AuctionHouseMgr.cpp AddAItem that has taken Barracks Plus down
+            // three times. Skipping one lot is the correct price for that.
+            if (sAuctionMgr->GetAItem(item->GetGUID().GetCounter()))
+            {
+                TC_LOG_ERROR("playerbots.pve",
+                    "Bot {} nearly listed {} (item guid {}) which is ALREADY on the auction house; "
+                    "skipped. This item is duplicated between a bag and the house.",
+                    bot->GetName(), proto->Name1, item->GetGUID().GetCounter());
+                continue;
+            }
+
+            // Out of the bag FIRST, and nothing is listed until it has gone.
+            //
+            // MoveItemFromInventory takes coordinates, not an item, and is
+            // silent when they hold nothing: Player.cpp opens with
+            // `if (Item* it = GetItemByPos(bag, slot))` and otherwise just
+            // falls through, returning void. Build the auction first and a
+            // failed hand-off leaves the lot on the house with the item
+            // still in the bag - and then SaveInventoryAndGoldToDB, at the
+            // end of this same transaction, walks the update queue the item
+            // never left and REPLACEs the character_inventory row that
+            // DeleteFromInventoryDB removed five statements earlier. The
+            // duplicate commits atomically and looks perfectly healthy on
+            // disk. That is how an item comes to be in a bag and on the
+            // auction house at once, and the second time a bot picks that
+            // item up, AddAItem's ASSERT takes the realm down.
+            uint8 const bagSlot = item->GetBagSlot();
+            uint8 const invSlot = item->GetSlot();
+            if (bot->GetItemByPos(bagSlot, invSlot) != item)
+            {
+                TC_LOG_ERROR("playerbots.pve",
+                    "Bot {} tried to list {} (item guid {}), but its own recorded position "
+                    "(bag {}, slot {}) does not hold it; not listed.",
+                    bot->GetName(), proto->Name1, item->GetGUID().GetCounter(), bagSlot, invSlot);
+                continue;
+            }
+
+            bot->MoveItemFromInventory(bagSlot, invSlot, true);
+
+            // If it is still there the move did nothing, so nothing has been
+            // lost by skipping - the item stays in the bag and is offered
+            // again next pass. Bailing here is only ever the no-op path.
+            if (bot->GetItemByGuid(itemGuid))
+            {
+                TC_LOG_ERROR("playerbots.pve",
+                    "Bot {} could not hand {} (item guid {}) to the auction house - it is "
+                    "still in the bags after the move; not listed.",
+                    bot->GetName(), proto->Name1, item->GetGUID().GetCounter());
+                continue;
+            }
+
+            AuctionEntry* auction = new AuctionEntry();
+            auction->Id = sObjectMgr->GenerateAuctionID();
+            // Same rule the sell handler uses: one shared neutral house when
+            // cross-faction trading is on, otherwise the faction's own.
+            auction->houseId = sWorld->getBoolConfig(CONFIG_ALLOW_TWO_SIDE_INTERACTION_AUCTION)
+                ? uint8(AUCTIONHOUSE_NEUTRAL) : uint8(houseEntry->ID);
+            auction->itemGUIDLow = item->GetGUID().GetCounter();
+            auction->itemEntry = item->GetEntry();
+            auction->itemCount = count;
+            auction->owner = bot->GetGUID().GetCounter();
+            auction->startbid = startBid;
+            auction->bidder = 0;
+            auction->bid = 0;
+            auction->buyout = buyout;
+            auction->deposit = deposit;
+            auction->etime = etime;
+            auction->expire_time = GameTime::GetGameTime() + uint32(etime * sWorld->getRate(RATE_AUCTION_TIME));
+            auction->auctionHouseEntry = houseEntry;
+            auction->Flags = AUCTION_ENTRY_FLAG_NONE;
+
+            bot->ModifyMoney(-int64(deposit));
+
+            CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+            item->DeleteFromInventoryDB(trans);
+            item->SaveToDB(trans);
+            sAuctionMgr->AddAItem(item);
+            auctionHouse->AddAuction(auction);
+            auction->SaveToDB(trans);
+            bot->SaveInventoryAndGoldToDB(trans);
+            CharacterDatabase.CommitTransaction(trans);
+
+            TC_LOG_INFO("playerbots.pve", "Bot {} listed {} x{} for {} copper (deposit {}).",
+                bot->GetName(), proto->Name1, count, buyout, deposit);
+            ++listed;
+
+            // THE FIRST POINT AT WHICH THIS IS TRUE.
+            //
+            // The transaction above has committed and the lot is on the house;
+            // every path higher up can still bail with the item unlisted, and
+            // one of them - the vendor-floor branch - destroys it instead. So
+            // the record is claimed here and nowhere earlier, which also makes
+            // the claim the once-only guarantee.
+            //
+            // proto, count and buyout are locals and stay valid: the item was
+            // detached from the bags rather than deleted, and AddAItem now owns
+            // it.
+            ObjectGuid heldFor;
+            if (TakeAuctionHold(itemGuid, heldFor) && !heldFor.IsEmpty())
+            {
+                AuctionNoticeForOwner& notice = noticesForOwner[heldFor.GetRawValue()];
+                ++notice.Total;
+
+                // Name the dearest lot. It is the one they will care about, and
+                // the one whose price is worth quoting.
+                if (notice.ItemName.empty() || buyout > notice.Buyout)
+                {
+                    notice.ItemName = proto->Name1;
+                    notice.Buyout = buyout;
+                    notice.Count = count;
+                }
+            }
+
+            // The next listing this pass undercuts its own price too, so a bot
+            // dumping duplicates does not stack them all at the same number.
+            cheapestPerUnit[proto->ItemId] = std::max<uint32>(1, buyout / count);
+        }
+
+        for (auto const& [ownerRawGuid, notice] : noticesForOwner)
+            WhisperAuctionNotice(bot, ObjectGuid(ownerRawGuid), notice);
+
+        if (outListed)
+            *outListed = listed;
+        return true;
     }
 
     void ProcessPendingAuctionSales()
@@ -10332,255 +10740,281 @@ namespace
             if (!bot || !bot->IsInWorld() || !bot->IsAlive() || bot->IsInCombat())
                 continue;
 
-            // AHBot destroys auction proceeds paid to its own characters.
-            if (sAuctionBotConfig->IsBotChar(bot->GetGUID().GetCounter()))
-                continue;
+            if (ListAuctionSurplus(bot, false))
+                --sellersLeft;
+        }
+    }
 
-            AuctionHouseObject* auctionHouse = sAuctionMgr->GetAuctionsMap(bot->GetFaction());
-            AuctionHouseEntry const* houseEntry = AuctionHouseMgr::GetAuctionHouseEntry(bot->GetFaction());
-            if (!auctionHouse || !houseEntry)
-                continue;
+    // One bot's shopping run - what ProcessPendingAuctionShopping does for each
+    // bot it drains, split out so a drifter that has just landed and been paid
+    // can shop in the same breath (see RunDrifterArrival). forceCatchUp lifts
+    // the per-pass purchase cap the way the post-login catch-up does.
+    //
+    // Returns false when the bot could not shop at all - no bag room, no house -
+    // which means no full-house scan was spent. outBought, when given, is the
+    // number of lots bought.
+    bool ShopAuctionHouse(Player* bot, bool forceCatchUp, uint32* outBought = nullptr)
+    {
+        uint64 const botRawGuid = bot->GetGUID().GetRawValue();
 
-            // The catch-up pass empties the bags in one go; the steady state posts
-            // a few at a time so the house is not flooded by one bot.
-            bool catchUp = false;
+        // A win that cannot be pocketed burns gold on mail that rots, so one
+        // free slot is always required - the win arrives by mail and has to
+        // land somewhere. But a bot with a nearly full pack is precisely the
+        // bot that most needs a bigger bag, and skipping the pass outright
+        // left it stuck there forever. A tight pack now NARROWS the pass to
+        // containers rather than cancelling it.
+        uint32 const freeBagSlots = CountFreeBagSlots(bot);
+        if (!freeBagSlots)
+            return false;
+
+        bool const containersOnly = freeBagSlots < 2;
+
+        AuctionHouseObject* auctionHouse = sAuctionMgr->GetAuctionsMap(bot->GetFaction());
+        if (!auctionHouse)
+            return false;
+
+        uint32 const botAccountId = bot->GetSession() ? bot->GetSession()->GetAccountId() : 0;
+
+        // The catch-up pass keeps buying until nothing left is an upgrade it
+        // can afford; the steady state takes one item and comes back later.
+        // Taken even when the caller forces a catch-up, for the same reason
+        // as in ListAuctionSurplus.
+        bool catchUp = false;
+        {
+            PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+            catchUp = state.auctionCatchUpBuy || forceCatchUp;
+            state.auctionCatchUpBuy = false;
+        }
+
+        // One purchase per equipment slot per pass. Auction wins arrive by
+        // MAIL, so the equipped item does not change while the pass runs -
+        // without this the bot would buy every chestpiece in the house, each
+        // one still "an upgrade" over the same empty chest slot, until it ran
+        // out of gold.
+        // Sixteen: one per equipment slot, which is what slotsBought already
+        // enforces and what the comment above always described. The
+        // steady-state cap of ONE wasted that guard - a bot could fix a
+        // single slot every ten minutes, so filling a set took the better
+        // part of three hours of uninterrupted shopping, which never happens
+        // because the fleet levels and relocates continuously and the gear
+        // falls behind faster than that. It is why a level 60 that has been
+        // running for hours still dies wearing two greens.
+        //
+        // Safe to raise precisely because of slotsBought: each slot can be
+        // bought for once per pass, so the "buy every chestpiece in the
+        // house" runaway cannot happen. The budget is recomputed each round
+        // and shrinks with every purchase, so the pass also stops itself on
+        // money long before it stops on this number.
+        std::unordered_set<uint8> slotsBought;
+        uint32 bought = 0;
+        uint32 const maxPurchases = catchUp ? 40u : 16u;
+
+        for (uint32 purchase = 0; purchase < maxPurchases; ++purchase)
+        {
+            // Recomputed every round: the purse shrinks with each buy. A stripped
+            // bot spends everything it has - the usual budget slice is for
+            // shopping upgrades, and this bot cannot fight at all.
+            uint32 const budget = IsBotStrippedBare(bot)
+                ? bot->GetMoney()
+                : CalculatePct(bot->GetMoney(), g_PveConfig.auctionBuyBudgetPct);
+
+            AuctionEntry* bestAuction = nullptr;
+            float bestGain = 0.0f;
+            float bestValue = 0.0f;
+            uint8 bestSlot = 0;
+            for (auto itr = auctionHouse->GetAuctionsBegin(); itr != auctionHouse->GetAuctionsEnd(); ++itr)
             {
-                PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, *itr);
-                catchUp = state.auctionCatchUpSell;
-                state.auctionCatchUpSell = false;
-            }
-            size_t const listingLimit = catchUp ? 40u : 3u;
-
-            // Identities, not pointers.
-            //
-            // The loop below vendors items and commits a whole inventory save
-            // once per lot, and both of those free Item objects - Item::SaveToDB
-            // deletes an ITEM_REMOVED item outright, and _SaveInventory then
-            // clears the update queue. A vector of Item* captured before any of
-            // that runs goes stale as the loop walks it, and a freed block
-            // recycled into some other bot's item is how a bot comes to post an
-            // item it has never owned. Every other bulk pass in this file
-            // collects positions instead, for exactly this reason; stock's own
-            // sell handler re-resolves off the player by GUID immediately before
-            // it posts. Do both: keep GUIDs, and re-resolve each time round.
-            std::vector<ObjectGuid> surplus;
-            ForEachBagItem(bot, [&](Item* item, uint8 /*bag*/, uint8 /*slot*/)
-            {
-                if (surplus.size() < listingLimit && IsAuctionableSurplus(bot, item))
-                    surplus.push_back(item->GetGUID());
-            });
-
-            // Whose death chest any of this came out of, gathered across the pass
-            // and sent after it. See AuctionNoticeForOwner.
-            std::unordered_map<uint64, AuctionNoticeForOwner> noticesForOwner;
-
-            if (surplus.empty())
-                continue;
-
-            --sellersLeft;
-
-            // One pass over the house for the going rate of everything at once.
-            // The stocker's own listings are NOT competition: they are generated
-            // from nothing at a fixed formula, and undercutting them would walk
-            // every price down forever against a seller that never runs out.
-            // Only real sellers - players and other bots - are undercut.
-            std::unordered_map<uint32, uint32> cheapestPerUnit;
-            for (auto houseItr = auctionHouse->GetAuctionsBegin(); houseItr != auctionHouse->GetAuctionsEnd(); ++houseItr)
-            {
-                AuctionEntry const* auction = houseItr->second;
-                if (!auction || !auction->buyout || !auction->itemCount)
+                AuctionEntry* auction = itr->second;
+                if (!auction || !auction->buyout || auction->buyout > budget)
                     continue;
 
-                if (sAuctionBotConfig->IsBotChar(auction->owner))
+                if (auction->owner == bot->GetGUID().GetCounter())
                     continue;
 
-                uint32 const perUnit = auction->buyout / auction->itemCount;
-                auto existing = cheapestPerUnit.find(auction->itemEntry);
-                if (existing == cheapestPerUnit.end() || perUnit < existing->second)
-                    cheapestPerUnit[auction->itemEntry] = perUnit;
-            }
-
-            for (ObjectGuid const& itemGuid : surplus)
-            {
-                // Asked again every iteration, because the previous ones have
-                // vendored items, moved gold and saved the bags since the list
-                // was built. A bot that no longer holds it simply skips it.
-                Item* item = bot->GetItemByGuid(itemGuid);
-                if (!item || !IsAuctionableSurplus(bot, item))
+                Item* item = sAuctionMgr->GetAItem(auction->itemGUIDLow);
+                if (!item)
                     continue;
 
                 ItemTemplate const* proto = item->GetTemplate();
-                uint32 const count = item->GetCount();
-                uint32 const etime = 12 * HOUR;
-
-                // Playerbots post for free. A deposit is a risk premium for a
-                // player who might misprice something; the fleet lists its whole
-                // surplus constantly, so all a deposit does is bleed gold out of
-                // the simulation on lots that were never going to sell anyway.
-                uint32 const deposit = 0;
-
-                uint32 marketPrice = 0;
-                uint32 const buyout = ComputeAuctionBuyout(proto, count, cheapestPerUnit, &marketPrice);
-
-                // Has the market fallen below what we would have to ask? The ask
-                // never goes under 1.5x vendor price, so whenever the MARKET price
-                // is under that floor the bot would be posting above what anyone
-                // is currently paying - a listing that sits for twelve hours and
-                // then, since unsold bot lots are destroyed at expiry, takes the
-                // item and the vendor money with it.
-                //
-                // So the floor doubles as the threshold: at or above it the item
-                // is worth listing, below it the merchant is the better customer.
-                // Judged on the MARKET price rather than the ask, because the ask
-                // is derived from the floor and comparing the two would be
-                // circular.
-                uint64 const vendorRevenue = VendorPayout(bot, proto, count);
-                uint64 const vendorFloor = VendorPriceFloor(proto, count);
-                if (vendorRevenue && uint64(marketPrice) < vendorFloor)
-                {
-                    bot->ModifyMoney(int64(vendorRevenue));
-                    TC_LOG_INFO("playerbots.pve",
-                        "Bot {} vendored {} x{} for {} copper: market {} is under the {} floor.",
-                        bot->GetName(), proto->Name1, count, vendorRevenue, marketPrice, vendorFloor);
-                    bot->DestroyItem(item->GetBagSlot(), item->GetSlot(), true);
+                if (!proto)
                     continue;
-                }
 
-                uint32 const startBid = std::max<uint32>(1, uint32(uint64(buyout) * 80 / 100));
-
-                // Asked AGAIN here, immediately before the point of no return.
-                //
-                // IsAuctionableSurplus already refuses an item that is on the
-                // house, but it answered when the candidate list was BUILT, and
-                // the list is a snapshot of Item pointers that is then walked
-                // while posting. Anything that registers the item in between -
-                // another lot in this same pass, another bot holding the very
-                // same Item (the realm has 26 items that are in a bag and on the
-                // auction house at once, three of them held by a character that
-                // is not the auction's owner) - and the stale answer is acted on.
-                //
-                // AddAItem ASSERTS rather than refusing, so the cost of being
-                // wrong is the whole realm: this is the crash at
-                // AuctionHouseMgr.cpp AddAItem that has taken Barracks Plus down
-                // three times. Skipping one lot is the correct price for that.
-                if (sAuctionMgr->GetAItem(item->GetGUID().GetCounter()))
-                {
-                    TC_LOG_ERROR("playerbots.pve",
-                        "Bot {} nearly listed {} (item guid {}) which is ALREADY on the auction house; "
-                        "skipped. This item is duplicated between a bag and the house.",
-                        bot->GetName(), proto->Name1, item->GetGUID().GetCounter());
+                // Bags and quivers are shopped for exactly like gear. The scorer
+                // and the local equip pass already understand both - only this
+                // filter was keeping them out of the house.
+                bool const isContainer = proto->Class == ITEM_CLASS_CONTAINER || proto->Class == ITEM_CLASS_QUIVER;
+                bool const isGear = proto->Class == ITEM_CLASS_WEAPON || proto->Class == ITEM_CLASS_ARMOR;
+                if (!isContainer && !isGear)
                     continue;
-                }
 
-                // Out of the bag FIRST, and nothing is listed until it has gone.
-                //
-                // MoveItemFromInventory takes coordinates, not an item, and is
-                // silent when they hold nothing: Player.cpp opens with
-                // `if (Item* it = GetItemByPos(bag, slot))` and otherwise just
-                // falls through, returning void. Build the auction first and a
-                // failed hand-off leaves the lot on the house with the item
-                // still in the bag - and then SaveInventoryAndGoldToDB, at the
-                // end of this same transaction, walks the update queue the item
-                // never left and REPLACEs the character_inventory row that
-                // DeleteFromInventoryDB removed five statements earlier. The
-                // duplicate commits atomically and looks perfectly healthy on
-                // disk. That is how an item comes to be in a bag and on the
-                // auction house at once, and the second time a bot picks that
-                // item up, AddAItem's ASSERT takes the realm down.
-                uint8 const bagSlot = item->GetBagSlot();
-                uint8 const invSlot = item->GetSlot();
-                if (bot->GetItemByPos(bagSlot, invSlot) != item)
-                {
-                    TC_LOG_ERROR("playerbots.pve",
-                        "Bot {} tried to list {} (item guid {}), but its own recorded position "
-                        "(bag {}, slot {}) does not hold it; not listed.",
-                        bot->GetName(), proto->Name1, item->GetGUID().GetCounter(), bagSlot, invSlot);
+                if (containersOnly && !isContainer)
                     continue;
-                }
 
-                bot->MoveItemFromInventory(bagSlot, invSlot, true);
-
-                // If it is still there the move did nothing, so nothing has been
-                // lost by skipping - the item stays in the bag and is offered
-                // again next pass. Bailing here is only ever the no-op path.
-                if (bot->GetItemByGuid(itemGuid))
-                {
-                    TC_LOG_ERROR("playerbots.pve",
-                        "Bot {} could not hand {} (item guid {}) to the auction house - it is "
-                        "still in the bags after the move; not listed.",
-                        bot->GetName(), proto->Name1, item->GetGUID().GetCounter());
+                if (bot->CanUseItem(proto) != EQUIP_ERR_OK)
                     continue;
-                }
 
-                AuctionEntry* auction = new AuctionEntry();
-                auction->Id = sObjectMgr->GenerateAuctionID();
-                // Same rule the sell handler uses: one shared neutral house when
-                // cross-faction trading is on, otherwise the faction's own.
-                auction->houseId = sWorld->getBoolConfig(CONFIG_ALLOW_TWO_SIDE_INTERACTION_AUCTION)
-                    ? uint8(AUCTIONHOUSE_NEUTRAL) : uint8(houseEntry->ID);
-                auction->itemGUIDLow = item->GetGUID().GetCounter();
-                auction->itemEntry = item->GetEntry();
-                auction->itemCount = count;
-                auction->owner = bot->GetGUID().GetCounter();
-                auction->startbid = startBid;
-                auction->bidder = 0;
-                auction->bid = 0;
-                auction->buyout = buyout;
-                auction->deposit = deposit;
-                auction->etime = etime;
-                auction->expire_time = GameTime::GetGameTime() + uint32(etime * sWorld->getRate(RATE_AUCTION_TIME));
-                auction->auctionHouseEntry = houseEntry;
-                auction->Flags = AUCTION_ENTRY_FLAG_NONE;
+                // Never bench an equipped off hand for a two-hander (same rule
+                // as the local equip pass) - and asked BEFORE the probe, not
+                // after it. CanEquipItem answers a staff or polearm by taking
+                // the off hand off first (EquipProbeWouldBenchOffhand), so with
+                // this guard below the probe it protected nothing: the pass
+                // stripped every affluent bot's off hand every ten minutes.
+                if (proto->InventoryType == INVTYPE_2HWEAPON &&
+                    bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND))
+                    continue;
 
-                bot->ModifyMoney(-int64(deposit));
+                uint16 dest = 0;
+                if (bot->CanEquipItem(NULL_SLOT, dest, item, true) != EQUIP_ERR_OK)
+                    continue;
 
-                CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-                item->DeleteFromInventoryDB(trans);
-                item->SaveToDB(trans);
-                sAuctionMgr->AddAItem(item);
-                auctionHouse->AddAuction(auction);
-                auction->SaveToDB(trans);
-                bot->SaveInventoryAndGoldToDB(trans);
-                CharacterDatabase.CommitTransaction(trans);
+                // Value the bag against the one it would actually replace.
+                if (isContainer && !SelectContainerUpgradeSlot(bot, proto, dest))
+                    continue;
 
-                TC_LOG_INFO("playerbots.pve", "Bot {} listed {} x{} for {} copper (deposit {}).",
-                    bot->GetName(), proto->Name1, count, buyout, deposit);
+                // And value a one-hander against the hand that actually needs it.
+                if (ShouldRedirectToOffHand(bot, proto, dest))
+                    dest = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | EQUIPMENT_SLOT_OFFHAND);
 
-                // THE FIRST POINT AT WHICH THIS IS TRUE.
+                ItemTemplate const* equippedProto = nullptr;
+                if (Item const* equipped = bot->GetItemByPos(dest))
+                    equippedProto = equipped->GetTemplate();
+
+                // Do not shop below your own weight class.
                 //
-                // The transaction above has committed and the lot is on the house;
-                // every path higher up can still bail with the item unlisted, and
-                // one of them - the vendor-floor branch - destroys it instead. So
-                // the record is claimed here and nowhere earlier, which also makes
-                // the claim the once-only guarantee.
+                // auctionLevelsBehindPenalty already makes stale gear score
+                // badly, but a penalty is only a thumb on the scale: against
+                // an empty or nearly worthless slot a cheap scrap still wins,
+                // which is how level 40 bots ended up wearing level 10 gear.
+                // This is the floor that a penalty cannot be.
                 //
-                // proto, count and buyout are locals and stay valid: the item was
-                // detached from the bags rather than deleted, and AddAItem now owns
-                // it.
-                ObjectGuid heldFor;
-                if (TakeAuctionHold(itemGuid, heldFor) && !heldFor.IsEmpty())
+                // Nothing is capped on the way UP - gear above the bot's
+                // level is a fine thing to buy, and CanUseItem has already
+                // said it can be worn. Bags and quivers are exempt: item
+                // level says nothing about a bag, slots do.
+                if (isGear && g_PveConfig.auctionMaxItemLevelsBehind &&
+                    int32(bot->GetLevel()) - int32(proto->ItemLevel) >
+                        int32(g_PveConfig.auctionMaxItemLevelsBehind))
+                    continue;
+
+                // Same scorer as the bag equip pass: spec-aware weapon policy,
+                // armor tier before item level.
+                if (slotsBought.count(uint8(dest & 255)))
+                    continue;
+
+                if (!IsEquipUpgrade(bot, proto, equippedProto, uint8(dest & 255)))
+                    continue;
+
+                // Do not buy a bag the bot could never put on. Replacing a bag
+                // means emptying it first, and a bot whose bags are all full has
+                // nowhere to put the contents - it would pay for an upgrade that
+                // then occupies a slot indefinitely, leaving it worse off than
+                // before. Checked here, before the gold is spent.
+                if (isContainer)
                 {
-                    AuctionNoticeForOwner& notice = noticesForOwner[heldFor.GetRawValue()];
-                    ++notice.Total;
-
-                    // Name the dearest lot. It is the one they will care about, and
-                    // the one whose price is worth quoting.
-                    if (notice.ItemName.empty() || buyout > notice.Buyout)
-                    {
-                        notice.ItemName = proto->Name1;
-                        notice.Buyout = buyout;
-                        notice.Count = count;
-                    }
+                    if (Item* occupant = bot->GetItemByPos(dest))
+                        if (Bag* occupantBag = occupant->ToBag(); occupantBag && !CanRehomeBagContents(bot, occupantBag))
+                            continue;
                 }
 
-                // The next listing this pass undercuts its own price too, so a bot
-                // dumping duplicates does not stack them all at the same number.
-                cheapestPerUnit[proto->ItemId] = std::max<uint32>(1, buyout / count);
+                // Item level says nothing about a bag; slots do. For gear it is
+                // weighed by quality, because nothing else in this path looks at
+                // an item's actual stats - a white and a green of the same level
+                // would otherwise be the same purchase.
+                float const gain = isContainer
+                    ? std::max<float>(1.0f, float(proto->ContainerSlots) -
+                        float(equippedProto ? equippedProto->ContainerSlots : 0))
+                    : std::max<float>(1.0f, EffectiveItemLevel(proto) - EffectiveItemLevel(equippedProto));
+
+                // What it is worth MINUS what it costs, both in item levels.
+                //
+                // Ranking on gain alone made price a gate and nothing more: among
+                // everything it could afford a bot took the largest jump, so it
+                // would hand over its entire purse for one item level because that
+                // happened to be the biggest number on the house. Nor is the
+                // opposite - cheapest per level - any better on its own: it buys a
+                // one copper trinket for one item level and never improves.
+                //
+                // Price is converted into the currency the gain is already in. The
+                // bot treats its whole budget as worth a fixed number of item
+                // levels, so an item costing half the budget has to be worth half
+                // that many levels before it is worth buying at all. Wealth scales
+                // it automatically: a rich bot will pay real gold for a real
+                // upgrade, a poor one holds out for a bargain, and neither pays a
+                // fortune for a trinket.
+                float const priceInLevels = budget
+                    ? float(auction->buyout) * float(g_PveConfig.auctionBudgetWorthLevels) / float(budget)
+                    : float(g_PveConfig.auctionBudgetWorthLevels);
+                // How far out of date the item is, in the same currency.
+                //
+                // Gain alone cannot see this: filling an empty slot with a
+                // level 10 trinket is a positive gain for almost no gold, so
+                // it beat a level-appropriate item every time. Counting the
+                // levels it is behind lets the better item win even when it
+                // costs more, without banning the cheap one outright - a bot
+                // with an empty slot and no better offer still takes it.
+                float const levelsBehind = isContainer ? 0.0f :
+                    std::max(0.0f, float(bot->GetLevel()) - float(proto->RequiredLevel));
+                float const stalePenalty = levelsBehind * g_PveConfig.auctionLevelsBehindPenalty;
+
+                float const netValue = gain - priceInLevels - stalePenalty;
+
+                // Must be worth more than it costs, and worth more than whatever is
+                // already the best offer on the house.
+                if (netValue <= 0.0f || netValue <= bestValue)
+                    continue;
+
+                // No trading with the bot's own account.
+                if (botAccountId && sCharacterCache->GetCharacterAccountIdByGuid(
+                    ObjectGuid::Create<HighGuid::Player>(auction->owner)) == botAccountId)
+                    continue;
+
+                bestAuction = auction;
+                bestGain = gain;
+                bestValue = netValue;
+                bestSlot = uint8(dest & 255);
             }
 
-            for (auto const& [ownerRawGuid, notice] : noticesForOwner)
-                WhisperAuctionNotice(bot, ObjectGuid(ownerRawGuid), notice);
+            if (!bestAuction)
+                break;
+            slotsBought.insert(bestSlot);
+
+            // Buyout replica: bidder/bid assigned BEFORE the mails (they read
+            // them), won-mail before RemoveAItem, RemoveAuction last.
+            CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+            bot->ModifyMoney(-int32(bestAuction->buyout));
+            if (bestAuction->bidder)
+                sAuctionMgr->SendAuctionOutbiddedMail(bestAuction, bestAuction->buyout, bot, trans);
+            bestAuction->bidder = bot->GetGUID().GetCounter();
+            bestAuction->bid = bestAuction->buyout;
+            // Bots hold no GM permission; same clear as the handler's else arm.
+            bestAuction->Flags = AuctionEntryFlag(bestAuction->Flags & ~AUCTION_ENTRY_FLAG_GM_LOG_BUYER);
+
+            sAuctionMgr->SendAuctionSalePendingMail(bestAuction, trans);
+            sAuctionMgr->SendAuctionSuccessfulMail(bestAuction, trans);
+            sAuctionMgr->SendAuctionWonMail(bestAuction, trans);
+
+            TC_LOG_INFO("playerbots.pve",
+                "Bot {} bought auction {} (item {} for {} copper, +{:.1f} quality-weighted item levels).",
+                bot->GetName(), bestAuction->Id, bestAuction->itemEntry, bestAuction->buyout, bestGain);
+            ++bought;
+
+            bestAuction->DeleteFromDB(trans);
+            sAuctionMgr->RemoveAItem(bestAuction->itemGUIDLow);
+            auctionHouse->RemoveAuction(bestAuction);
+
+            bot->SaveInventoryAndGoldToDB(trans);
+            CharacterDatabase.CommitTransaction(trans);
         }
+
+        // Fetch the wins right away.
+        {
+            std::lock_guard<std::mutex> guard(g_PvePendingLock);
+            g_PendingMailCollections.insert(botRawGuid);
+        }
+
+        if (outBought)
+            *outBought = bought;
+        return true;
     }
 
     void ProcessPendingAuctionShopping()
@@ -10603,265 +11037,12 @@ namespace
                 break;
             }
 
-            uint64 const botRawGuid = *itr;
-            Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid));
+            Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(*itr));
             if (!bot || !bot->IsInWorld() || !bot->IsAlive())
                 continue;
 
-            // The fork destroys auction wins whose buyer is an AHBot character
-            // (SendAuctionWonMail's IsBotChar gate) - those bots must not shop.
-            if (sAuctionBotConfig->IsBotChar(bot->GetGUID().GetCounter()))
-                continue;
-
-            // A win that cannot be pocketed burns gold on mail that rots, so one
-            // free slot is always required - the win arrives by mail and has to
-            // land somewhere. But a bot with a nearly full pack is precisely the
-            // bot that most needs a bigger bag, and skipping the pass outright
-            // left it stuck there forever. A tight pack now NARROWS the pass to
-            // containers rather than cancelling it.
-            uint32 const freeBagSlots = CountFreeBagSlots(bot);
-            if (!freeBagSlots)
-                continue;
-
-            bool const containersOnly = freeBagSlots < 2;
-
-            AuctionHouseObject* auctionHouse = sAuctionMgr->GetAuctionsMap(bot->GetFaction());
-            if (!auctionHouse)
-                continue;
-
-            --scansLeft;
-            uint32 const botAccountId = bot->GetSession() ? bot->GetSession()->GetAccountId() : 0;
-
-            // The catch-up pass keeps buying until nothing left is an upgrade it
-            // can afford; the steady state takes one item and comes back later.
-            bool catchUp = false;
-            {
-                PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
-                catchUp = state.auctionCatchUpBuy;
-                state.auctionCatchUpBuy = false;
-            }
-
-            // One purchase per equipment slot per pass. Auction wins arrive by
-            // MAIL, so the equipped item does not change while the pass runs -
-            // without this the bot would buy every chestpiece in the house, each
-            // one still "an upgrade" over the same empty chest slot, until it ran
-            // out of gold.
-            // Sixteen: one per equipment slot, which is what slotsBought already
-            // enforces and what the comment above always described. The
-            // steady-state cap of ONE wasted that guard - a bot could fix a
-            // single slot every ten minutes, so filling a set took the better
-            // part of three hours of uninterrupted shopping, which never happens
-            // because the fleet levels and relocates continuously and the gear
-            // falls behind faster than that. It is why a level 60 that has been
-            // running for hours still dies wearing two greens.
-            //
-            // Safe to raise precisely because of slotsBought: each slot can be
-            // bought for once per pass, so the "buy every chestpiece in the
-            // house" runaway cannot happen. The budget is recomputed each round
-            // and shrinks with every purchase, so the pass also stops itself on
-            // money long before it stops on this number.
-            std::unordered_set<uint8> slotsBought;
-            uint32 const maxPurchases = catchUp ? 40u : 16u;
-
-            for (uint32 purchase = 0; purchase < maxPurchases; ++purchase)
-            {
-                // Recomputed every round: the purse shrinks with each buy. A stripped
-                // bot spends everything it has - the usual budget slice is for
-                // shopping upgrades, and this bot cannot fight at all.
-                uint32 const budget = IsBotStrippedBare(bot)
-                    ? bot->GetMoney()
-                    : CalculatePct(bot->GetMoney(), g_PveConfig.auctionBuyBudgetPct);
-
-                AuctionEntry* bestAuction = nullptr;
-                float bestGain = 0.0f;
-                float bestValue = 0.0f;
-                uint8 bestSlot = 0;
-                for (auto itr = auctionHouse->GetAuctionsBegin(); itr != auctionHouse->GetAuctionsEnd(); ++itr)
-                {
-                    AuctionEntry* auction = itr->second;
-                    if (!auction || !auction->buyout || auction->buyout > budget)
-                        continue;
-
-                    if (auction->owner == bot->GetGUID().GetCounter())
-                        continue;
-
-                    Item* item = sAuctionMgr->GetAItem(auction->itemGUIDLow);
-                    if (!item)
-                        continue;
-
-                    ItemTemplate const* proto = item->GetTemplate();
-                    if (!proto)
-                        continue;
-
-                    // Bags and quivers are shopped for exactly like gear. The scorer
-                    // and the local equip pass already understand both - only this
-                    // filter was keeping them out of the house.
-                    bool const isContainer = proto->Class == ITEM_CLASS_CONTAINER || proto->Class == ITEM_CLASS_QUIVER;
-                    bool const isGear = proto->Class == ITEM_CLASS_WEAPON || proto->Class == ITEM_CLASS_ARMOR;
-                    if (!isContainer && !isGear)
-                        continue;
-
-                    if (containersOnly && !isContainer)
-                        continue;
-
-                    if (bot->CanUseItem(proto) != EQUIP_ERR_OK)
-                        continue;
-
-                    // Never bench an equipped off hand for a two-hander (same rule
-                    // as the local equip pass) - and asked BEFORE the probe, not
-                    // after it. CanEquipItem answers a staff or polearm by taking
-                    // the off hand off first (EquipProbeWouldBenchOffhand), so with
-                    // this guard below the probe it protected nothing: the pass
-                    // stripped every affluent bot's off hand every ten minutes.
-                    if (proto->InventoryType == INVTYPE_2HWEAPON &&
-                        bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND))
-                        continue;
-
-                    uint16 dest = 0;
-                    if (bot->CanEquipItem(NULL_SLOT, dest, item, true) != EQUIP_ERR_OK)
-                        continue;
-
-                    // Value the bag against the one it would actually replace.
-                    if (isContainer && !SelectContainerUpgradeSlot(bot, proto, dest))
-                        continue;
-
-                    // And value a one-hander against the hand that actually needs it.
-                    if (ShouldRedirectToOffHand(bot, proto, dest))
-                        dest = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | EQUIPMENT_SLOT_OFFHAND);
-
-                    ItemTemplate const* equippedProto = nullptr;
-                    if (Item const* equipped = bot->GetItemByPos(dest))
-                        equippedProto = equipped->GetTemplate();
-
-                    // Do not shop below your own weight class.
-                    //
-                    // auctionLevelsBehindPenalty already makes stale gear score
-                    // badly, but a penalty is only a thumb on the scale: against
-                    // an empty or nearly worthless slot a cheap scrap still wins,
-                    // which is how level 40 bots ended up wearing level 10 gear.
-                    // This is the floor that a penalty cannot be.
-                    //
-                    // Nothing is capped on the way UP - gear above the bot's
-                    // level is a fine thing to buy, and CanUseItem has already
-                    // said it can be worn. Bags and quivers are exempt: item
-                    // level says nothing about a bag, slots do.
-                    if (isGear && g_PveConfig.auctionMaxItemLevelsBehind &&
-                        int32(bot->GetLevel()) - int32(proto->ItemLevel) >
-                            int32(g_PveConfig.auctionMaxItemLevelsBehind))
-                        continue;
-
-                    // Same scorer as the bag equip pass: spec-aware weapon policy,
-                    // armor tier before item level.
-                    if (slotsBought.count(uint8(dest & 255)))
-                        continue;
-
-                    if (!IsEquipUpgrade(bot, proto, equippedProto, uint8(dest & 255)))
-                        continue;
-
-                    // Do not buy a bag the bot could never put on. Replacing a bag
-                    // means emptying it first, and a bot whose bags are all full has
-                    // nowhere to put the contents - it would pay for an upgrade that
-                    // then occupies a slot indefinitely, leaving it worse off than
-                    // before. Checked here, before the gold is spent.
-                    if (isContainer)
-                    {
-                        if (Item* occupant = bot->GetItemByPos(dest))
-                            if (Bag* occupantBag = occupant->ToBag(); occupantBag && !CanRehomeBagContents(bot, occupantBag))
-                                continue;
-                    }
-
-                    // Item level says nothing about a bag; slots do. For gear it is
-                    // weighed by quality, because nothing else in this path looks at
-                    // an item's actual stats - a white and a green of the same level
-                    // would otherwise be the same purchase.
-                    float const gain = isContainer
-                        ? std::max<float>(1.0f, float(proto->ContainerSlots) -
-                            float(equippedProto ? equippedProto->ContainerSlots : 0))
-                        : std::max<float>(1.0f, EffectiveItemLevel(proto) - EffectiveItemLevel(equippedProto));
-
-                    // What it is worth MINUS what it costs, both in item levels.
-                    //
-                    // Ranking on gain alone made price a gate and nothing more: among
-                    // everything it could afford a bot took the largest jump, so it
-                    // would hand over its entire purse for one item level because that
-                    // happened to be the biggest number on the house. Nor is the
-                    // opposite - cheapest per level - any better on its own: it buys a
-                    // one copper trinket for one item level and never improves.
-                    //
-                    // Price is converted into the currency the gain is already in. The
-                    // bot treats its whole budget as worth a fixed number of item
-                    // levels, so an item costing half the budget has to be worth half
-                    // that many levels before it is worth buying at all. Wealth scales
-                    // it automatically: a rich bot will pay real gold for a real
-                    // upgrade, a poor one holds out for a bargain, and neither pays a
-                    // fortune for a trinket.
-                    float const priceInLevels = budget
-                        ? float(auction->buyout) * float(g_PveConfig.auctionBudgetWorthLevels) / float(budget)
-                        : float(g_PveConfig.auctionBudgetWorthLevels);
-                    // How far out of date the item is, in the same currency.
-                    //
-                    // Gain alone cannot see this: filling an empty slot with a
-                    // level 10 trinket is a positive gain for almost no gold, so
-                    // it beat a level-appropriate item every time. Counting the
-                    // levels it is behind lets the better item win even when it
-                    // costs more, without banning the cheap one outright - a bot
-                    // with an empty slot and no better offer still takes it.
-                    float const levelsBehind = isContainer ? 0.0f :
-                        std::max(0.0f, float(bot->GetLevel()) - float(proto->RequiredLevel));
-                    float const stalePenalty = levelsBehind * g_PveConfig.auctionLevelsBehindPenalty;
-
-                    float const netValue = gain - priceInLevels - stalePenalty;
-
-                    // Must be worth more than it costs, and worth more than whatever is
-                    // already the best offer on the house.
-                    if (netValue <= 0.0f || netValue <= bestValue)
-                        continue;
-
-                    // No trading with the bot's own account.
-                    if (botAccountId && sCharacterCache->GetCharacterAccountIdByGuid(
-                        ObjectGuid::Create<HighGuid::Player>(auction->owner)) == botAccountId)
-                        continue;
-
-                    bestAuction = auction;
-                    bestGain = gain;
-                    bestValue = netValue;
-                    bestSlot = uint8(dest & 255);
-                }
-
-                if (!bestAuction)
-                    break;
-                slotsBought.insert(bestSlot);
-
-                // Buyout replica: bidder/bid assigned BEFORE the mails (they read
-                // them), won-mail before RemoveAItem, RemoveAuction last.
-                CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-                bot->ModifyMoney(-int32(bestAuction->buyout));
-                if (bestAuction->bidder)
-                    sAuctionMgr->SendAuctionOutbiddedMail(bestAuction, bestAuction->buyout, bot, trans);
-                bestAuction->bidder = bot->GetGUID().GetCounter();
-                bestAuction->bid = bestAuction->buyout;
-                // Bots hold no GM permission; same clear as the handler's else arm.
-                bestAuction->Flags = AuctionEntryFlag(bestAuction->Flags & ~AUCTION_ENTRY_FLAG_GM_LOG_BUYER);
-
-                sAuctionMgr->SendAuctionSalePendingMail(bestAuction, trans);
-                sAuctionMgr->SendAuctionSuccessfulMail(bestAuction, trans);
-                sAuctionMgr->SendAuctionWonMail(bestAuction, trans);
-
-                TC_LOG_INFO("playerbots.pve",
-                    "Bot {} bought auction {} (item {} for {} copper, +{:.1f} quality-weighted item levels).",
-                    bot->GetName(), bestAuction->Id, bestAuction->itemEntry, bestAuction->buyout, bestGain);
-
-                bestAuction->DeleteFromDB(trans);
-                sAuctionMgr->RemoveAItem(bestAuction->itemGUIDLow);
-                auctionHouse->RemoveAuction(bestAuction);
-
-                bot->SaveInventoryAndGoldToDB(trans);
-                CharacterDatabase.CommitTransaction(trans);
-            }
-
-            // Fetch the wins right away.
-            std::lock_guard<std::mutex> guard(g_PvePendingLock);
-            g_PendingMailCollections.insert(botRawGuid);
+            if (ShopAuctionHouse(bot, false))
+                --scansLeft;
         }
     }
 
@@ -13463,11 +13644,25 @@ namespace
         // but only briefly once in melee range. A bot with no opener to cast
         // (a B+ fresh rogue knows ONLY Stealth) would otherwise stand next to
         // its target forever; a real player in that spot just starts attacking.
+        //
+        // How long depends on whether there is an opener to wait for. A rogue
+        // that has one (PvpCore::GetRogueStealthOpenerSpellId - Garrote with
+        // Asphyxiate, else Cheap Shot, else Garrote) gets long enough to
+        // regenerate Cheap Shot's sixty energy from nothing: the class selector
+        // now waits for the opener instead of reaching for Sinister Strike, and
+        // a white hit here would throw that wait away. A rogue with neither has
+        // nothing to wait for and swings at once. Anyone else stealthed - a
+        // prowling druid - keeps the old four seconds.
         bool const stealthed = bot->HasAuraType(SPELL_AURA_MOD_STEALTH);
         if (!stealthed)
             state.stealthOpenerDeadline = PveTimePoint();
         else if (bot->IsWithinMeleeRange(victim) && state.stealthOpenerDeadline == PveTimePoint())
-            state.stealthOpenerDeadline = PveClock::now() + std::chrono::seconds(4);
+        {
+            std::chrono::seconds holdFor(4);
+            if (bot->GetClass() == CLASS_ROGUE)
+                holdFor = std::chrono::seconds(playerbot::PvpCore::GetRogueStealthOpenerSpellId(bot) ? 8 : 0);
+            state.stealthOpenerDeadline = PveClock::now() + holdFor;
+        }
 
         bool const holdSwingsForOpener = stealthed &&
             (state.stealthOpenerDeadline == PveTimePoint() || PveClock::now() < state.stealthOpenerDeadline);
@@ -16253,7 +16448,7 @@ namespace playerbot
         g_PveConfig.timidFleeYards = std::max(0.0f,
             sConfigMgr->GetFloatDefault("Playerbot.Pve.Aggression.TimidFleeYards", 500.0f));
         g_PveConfig.auctionPriceMultiplier = sConfigMgr->GetFloatDefault("Playerbot.Pve.AuctionPriceMultiplier", 10.0f);
-        g_PveConfig.auctionMinTradeGoodStack = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionMinTradeGoodStack", 10));
+        g_PveConfig.auctionMinTradeGoodStack = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionMinTradeGoodStack", 5));
         g_PveConfig.auctionValuableUnitCopper = uint32(sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionValuableUnitCopper", 1000));
         g_PveConfig.auctionVendorFloorFactor = sConfigMgr->GetFloatDefault("Playerbot.Pve.AuctionVendorFloorFactor", 1.5f);
         g_PveConfig.auctionUndercutCopper = uint32(std::max(1, sConfigMgr->GetIntDefault("Playerbot.Pve.AuctionUndercutCopper", 1)));
@@ -16390,7 +16585,7 @@ namespace playerbot
         g_PveConfig.idleProdRetrySeconds = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Playerbot.Pve.IdleProd.RetrySeconds", 120), 15, 3600));
         g_PveConfig.drifterTeleportGold = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.TeleportGold", 10), 0, 10000));
-        g_PveConfig.drifterTeleportGoldMax = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.TeleportGold.Max", 50), 0, 10000));
+        g_PveConfig.drifterTeleportGoldMax = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.TeleportGold.Max", 20), 0, 10000));
         g_PveConfig.proactiveMaxLevelsAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveMaxLevelsAbove", 4), 0, 60));
         g_PveConfig.proactiveMaxLevelsBelow = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveMaxLevelsBelow", 4), 0, 60));
         g_PveConfig.proactiveBountyStacks = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveBountyStacks", 5), 0, 255));
@@ -16756,6 +16951,178 @@ namespace playerbot
                 purchase(drink);
     }
 
+    // ---------------------------------------------------------------------------
+    // A drifter's landing: sell, THEN get paid, THEN shop.
+    // ---------------------------------------------------------------------------
+
+    // Drifters that have landed where they were sent and are still owed the
+    // landing itself. Filled by the arrival check in UpdateDrifterAssignments and
+    // drained by ProcessPendingDrifterArrivals, both on the world thread, so it
+    // takes no lock. Keyed by bot: a drifter that lands again before its landing
+    // has run is owed the newer one, not two stipends.
+    struct PendingDrifterArrival
+    {
+        uint32 zoneId = 0;
+        uint32 landedAtMs = 0;
+    };
+    std::unordered_map<uint64, PendingDrifterArrival> g_PendingDrifterArrivals;
+
+    // How long a landing waits for a bot that is not ready for it - dead, or
+    // still between maps. Long enough for a resurrection or a slow world port;
+    // past it the bot has almost certainly been reborn and sent somewhere else,
+    // and that trip will be a landing of its own.
+    constexpr uint32 kDrifterArrivalPatienceMs = 5 * MINUTE * IN_MILLISECONDS;
+
+    // The landing itself, for a drifter that is in the world and standing.
+    //
+    // SELL, THEN GET PAID, THEN SHOP - all of it at once, where it stands. A
+    // drifter lands straight out of a rebirth, with the gear of the life it just
+    // left stripped into its bags, which is when its bags are at their fullest;
+    // and the auction pass will not buy for a bot with no room to take the win
+    // home. Paying first and queueing a sweep behind the stipend was not enough:
+    // the sweep ran on whatever the bags held at that instant, and was simply
+    // dropped if the bot was dead or between maps when its turn came. Orhild
+    // landed in the Hinterlands with 258 gold, bought nothing, and walked round
+    // in field kit until the ordinary ten minute pass came by and dressed him.
+    //
+    // So the merchant's pass runs first, with no merchant - greys, spare whites,
+    // the drink it will never touch - and the house takes whatever the house
+    // wants. Then the stipend, then rations for the level it has just become, and
+    // only then the shopping, with room in the bags and money in the purse. Both
+    // auction runs are forced into their catch-up form: a landing is the one
+    // moment the whole kit is wrong at once.
+    void RunDrifterArrival(Player* bot, uint32 landedZoneId)
+    {
+        uint64 const botRawGuid = bot->GetGUID().GetRawValue();
+
+        // 1. Sell.
+        uint64 const purseBeforeSale = bot->GetMoney();
+        uint32 const junkSold = SellVendorJunk(bot);
+        uint64 const junkCopper = bot->GetMoney() > purseBeforeSale ? bot->GetMoney() - purseBeforeSale : 0;
+
+        // Never mid-fight, the one rule the ordinary listing pass has always kept:
+        // the house takes items out of the bags and saves the inventory once per
+        // lot. The junk sale above needs no such care, and a landing that is in a
+        // fight simply leaves its old gear for the regular listing pass.
+        uint32 listed = 0;
+        bool listingRan = false;
+        if (g_PveConfig.auctionSellEnabled && !bot->IsInCombat())
+            listingRan = ListAuctionSurplus(bot, true, &listed);
+
+        // 2. Get paid, by the band of where it landed - see DrifterArrivalPayCopper.
+        uint64 const pay = DrifterArrivalPayCopper(landedZoneId);
+        if (pay)
+            bot->ModifyMoney(int64(pay));
+
+        // Rations for the level it has just become. Whatever it was carrying is
+        // the wrong tier now, and a bot that cannot eat between fights spends the
+        // rest of its life at a fraction of its health.
+        BuyTravelRations(bot);
+
+        // 3. Shop.
+        uint64 const purseAtShop = bot->GetMoney();
+        uint32 const freeSlotsAtShop = CountFreeBagSlots(bot);
+        uint32 bought = 0;
+        bool shopped = false;
+        if (g_PveConfig.auctionBuyEnabled)
+            shopped = ShopAuctionHouse(bot, true, &bought);
+
+        // Whichever auction run actually happened pushes its ordinary cadence
+        // back, so it does not run again seconds from now - a second shopping
+        // pass before the wins are out of the mailbox and on the bot would see
+        // the same field kit in every slot and buy the same upgrades twice. A run
+        // that could not happen (no bag room, in a fight, nothing to list) leaves
+        // its cadence and its catch-up alone, for the ordinary pass to pick up.
+        {
+            std::lock_guard<std::mutex> guard(g_PvePendingLock);
+            if (shopped)
+                g_PendingAuctionShopping.erase(botRawGuid);
+            if (listingRan)
+                g_PendingAuctionSales.erase(botRawGuid);
+        }
+        if (shopped || listingRan)
+        {
+            PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+            PveTimePoint const now = PveClock::now();
+            if (shopped)
+                state.nextAuctionShopAt = now + std::chrono::minutes(10);
+            if (listingRan)
+                state.nextAuctionSellAt = now + std::chrono::minutes(8);
+        }
+
+        char const* const shopOutcome = !g_PveConfig.auctionBuyEnabled ? "did not shop (buying is off)"
+            : shopped ? "shopped" : "could not shop";
+        TC_LOG_INFO("playerbots.pve",
+            "Drifter {} landed in zone {} at level {}: sold {} junk for {} copper, listed {} on the house, "
+            "was paid {:.2f}g, then {} with {:.2f}g and {} free bag slot(s) - bought {}.",
+            bot->GetName(), landedZoneId, uint32(bot->GetLevel()), junkSold, junkCopper, listed,
+            double(pay) / double(GOLD), shopOutcome, double(purseAtShop) / double(GOLD), freeSlotsAtShop, bought);
+    }
+
+    // Two landings per world pass. Each is up to two full-house scans - the
+    // listing pass's going rate and the shopping pass - and fifteen drifters
+    // routinely land in the same second, so running them all at once would hand
+    // one world tick the cost of thirty. Two a pass has all fifteen through in
+    // about eight seconds.
+    void ProcessPendingDrifterArrivals()
+    {
+        if (g_PendingDrifterArrivals.empty())
+            return;
+
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        uint32 landingsLeft = 2;
+        for (auto itr = g_PendingDrifterArrivals.begin(); itr != g_PendingDrifterArrivals.end() && landingsLeft; )
+        {
+            uint64 const botRawGuid = itr->first;
+            PendingDrifterArrival const arrival = itr->second;
+
+            // Logged out since it landed: unpaid this time, paid on its next landing.
+            Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botRawGuid));
+            if (!bot)
+            {
+                itr = g_PendingDrifterArrivals.erase(itr);
+                continue;
+            }
+
+            // Released, or sent somewhere else, while it waited: it is not staying,
+            // so it is owed nothing here. The next place it lands pays.
+            uint32 assignedZoneId = 0;
+            {
+                std::lock_guard<std::mutex> guard(g_DrifterLock);
+                auto const assigned = g_DrifterZoneByBot.find(botRawGuid);
+                if (assigned != g_DrifterZoneByBot.end())
+                    assignedZoneId = assigned->second;
+            }
+            if (assignedZoneId != arrival.zoneId)
+            {
+                itr = g_PendingDrifterArrivals.erase(itr);
+                continue;
+            }
+
+            // Not ready YET is no reason to lose the landing. The old sweep was
+            // simply dropped for a bot that was dead or between maps when its turn
+            // came, and nothing ever queued it again.
+            if (!bot->IsInWorld() || bot->IsBeingTeleported() || !bot->IsAlive())
+            {
+                if (nowMs - arrival.landedAtMs >= kDrifterArrivalPatienceMs)
+                {
+                    TC_LOG_INFO("playerbots.pve",
+                        "Drifter {} was never ready for its landing in zone {} ({}); dropped after {}s.",
+                        bot->GetName(), arrival.zoneId, bot->IsAlive() ? "between maps" : "dead",
+                        kDrifterArrivalPatienceMs / IN_MILLISECONDS);
+                    itr = g_PendingDrifterArrivals.erase(itr);
+                }
+                else
+                    ++itr;
+                continue;
+            }
+
+            itr = g_PendingDrifterArrivals.erase(itr);
+            --landingsLeft;
+            RunDrifterArrival(bot, arrival.zoneId);
+        }
+    }
+
     void UpdateDrifterAssignments()
     {
         uint32 const target = g_PveConfig.drifterCount;
@@ -17070,39 +17437,16 @@ namespace playerbot
             }
         }
 
-        // Landed and re-levelled: pay them, THEN let them re-kit for the band
-        // they are now in. The order matters - the sweep deliberately waits for
-        // arrival so the bot shops for the character it is becoming, and a bot
-        // that arrives broke sweeps the auction house and buys nothing.
-        // g_PendingAuctionShopping is world-thread only, which is where this runs.
-        uint32 paid = 0;
-        uint64 paidCopper = 0;
+        // Landed and re-levelled. What a landing is owed - a sale where it stands,
+        // its stipend, then a shopping trip, in that order - is RunDrifterArrival's
+        // business, two bots a world pass (ProcessPendingDrifterArrivals). The
+        // sweep waits for arrival on purpose, so the bot shops for the character
+        // it is becoming rather than the one it left.
         for (auto const& [botGuid, landedZoneId] : arrived)
-        {
-            // By the band of where it landed - see DrifterArrivalPayCopper.
-            if (uint64 const pay = DrifterArrivalPayCopper(landedZoneId))
-            {
-                // Not being findable is ordinary here: a drifter can log out or be
-                // released between the arrival check and this loop. It simply goes
-                // unpaid this time and is paid on its next landing.
-                if (Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botGuid)))
-                {
-                    bot->ModifyMoney(int32(pay));
-                    paidCopper += pay;
-                    // Rations for the level it has just become. Whatever it was
-                    // carrying is the wrong tier now - it was re-levelled into this
-                    // zone's band on arrival - and a bot that cannot eat between
-                    // fights spends the rest of its life at a fraction of its health.
-                    BuyTravelRations(bot);
-                    ++paid;
-                }
-            }
-
-            g_PendingAuctionShopping.insert(botGuid);
-        }
+            g_PendingDrifterArrivals[botGuid] = { landedZoneId, nowMs };
         if (!arrived.empty())
-            TC_LOG_INFO("playerbots.pve", "{} drifters arrived; paid {} of them {:.2f}g in all ({}g-{}g by zone band) and queued an auction sweep for each.",
-                uint32(arrived.size()), paid, double(paidCopper) / double(GOLD), g_PveConfig.drifterTeleportGold,
+            TC_LOG_INFO("playerbots.pve", "{} drifters arrived; each will sell, collect its stipend ({}g-{}g by zone band), then shop.",
+                uint32(arrived.size()), g_PveConfig.drifterTeleportGold,
                 std::max(g_PveConfig.drifterTeleportGold, g_PveConfig.drifterTeleportGoldMax));
     }
 
@@ -17295,6 +17639,9 @@ namespace playerbot
         // Before the executor, so a chest queued this tick is taken this tick.
         QueueUnwatchedChests();
         ProcessPendingLootExecutions();
+        // Before the mail pass, so the wins a landing buys are out of the
+        // mailbox on this same tick.
+        ProcessPendingDrifterArrivals();
         ProcessPendingMailCollections();
         if (g_PveConfig.auctionBuyEnabled)
             ProcessPendingAuctionShopping();
