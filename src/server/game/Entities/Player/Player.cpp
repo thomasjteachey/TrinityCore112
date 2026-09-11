@@ -3177,6 +3177,12 @@ void Player::GiveXP(uint32 xp, Unit* victim, float group_rate)
 
     sScriptMgr->OnGivePlayerXP(this, xp, victim);
 
+    // A script that zeroed the award has withheld it. Stop here, the way the
+    // stock NO_XP_GAIN toggle does above, rather than log "you gain 0
+    // experience" - the War Mode zone cap (custom_warmode_zone_gate) is one.
+    if (!xp)
+        return;
+
     // XP to money conversion processed in Player::RewardQuest
     if (IsMaxLevel())
         return;

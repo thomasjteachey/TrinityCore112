@@ -975,6 +975,7 @@ public:
             // The checkpoint debuffs read the registry rather than being pushed
             // from the places that write it, so this is where they resolve.
             Notoriety::SyncCheckpointAuras(player);
+            Notoriety::SyncContractAura(player);
         }
     }
 

@@ -3377,6 +3377,27 @@ Centurion.WarMode.BotMap = 1
 Centurion.WarMode.BotMapIntervalMs = 2000
 Centurion.WarMode.BotMapPerMessage = 12
 
+#
+#    Centurion.WarMode.ZoneCapStopsXp
+#        Description: With War Mode on, a player stops gaining experience at the top level
+#                     of the open-world zone they are standing in, and is told so. Going to
+#                     a higher-level zone turns it back on. Pairs with the rule that turns
+#                     War Mode players out of zones they have outlevelled: without it, the
+#                     level that takes them past a zone's ceiling bounces them out of it.
+#                     Separate from the stock experience toggle - either one stops XP.
+#                     Starter zones, capitals, instances and the level cap are never capped.
+#        Default:     1
+#
+#    Centurion.WarMode.ZoneCapAuraSpell
+#        Description: Visible aura worn while the cap is in force. Needs a client Spell.dbc
+#                     row - without one it is a blank, nameless icon - so 0 here; 90718
+#                     ("Experience Halted") on Barracks+. The cap itself works without it.
+#        Default:     0
+#
+
+Centurion.WarMode.ZoneCapStopsXp = 1
+Centurion.WarMode.ZoneCapAuraSpell = 0
+
 Centurion.Hardcore.Enable = 0
 Centurion.Hardcore.FullLoot.ChestGameObjectId = 0
 Centurion.Hardcore.FullLoot.ChestDespawnSeconds = 600
@@ -3842,6 +3863,12 @@ Centurion.Notoriety.BotsSeeThroughStealth = 1
 Centurion.Notoriety.BribeCopper           = 30000
 
 Centurion.Notoriety.CheckpointAuraBase    = 0
+
+#    Worn while the contract quest is in the log - exactly while playerbots in the
+#    holder's zone see through Stealth and Prowl (BotsSeeThroughStealth). A notice
+#    only: the rule reads the quest, not the aura. Needs a client Spell.dbc row, so 0
+#    here; 90719 ("Carrying a Contract") on Barracks+.
+Centurion.Notoriety.ContractAuraSpell     = 0
 Centurion.Notoriety.CheckpointStacks      = "5:90710,10:90711,15:90712,20:90717,25:90713,30:90714,40:90715,50:90716"
 
 #    The payout. Money is flat copper; experience is counted in BUBBLES of the

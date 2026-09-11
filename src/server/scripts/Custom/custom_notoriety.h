@@ -151,6 +151,11 @@ namespace Notoriety
     // actually moved.
     void SyncCheckpointAuras(Player* player);
 
+    // The contract's own badge (Centurion.Notoriety.ContractAuraSpell, 0 = off):
+    // worn for exactly as long as the contract quest is in the log, which is
+    // exactly as long as the fleet sees through the holder's stealth.
+    void SyncContractAura(Player* player);
+
     // Drop the sync cache for somebody who has gone. Their auras left with them.
     void ForgetCheckpointSync(ObjectGuid guid);
 

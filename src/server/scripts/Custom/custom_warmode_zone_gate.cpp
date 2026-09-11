@@ -36,10 +36,12 @@
 #include "ScriptMgr.h"
 #include "Chat.h"
 #include "Config.h"
+#include "DBCStores.h"
 #include "Map.h"
 #include "MapManager.h"
 #include "Player.h"
 #include "World.h"
+#include "WorldSession.h"
 #include "custom_barracks_hardcore.h"
 #include "Playerbot/Pve/PlayerbotPveManager.h"
 
@@ -167,7 +169,112 @@ namespace
 
         return !ZoneIsBeneath(player, zoneId);
     }
+
+    // War Mode stops paying experience at the top of a zone's band.
+    //
+    // The gate turns a flagged player out of any zone they have outlevelled, so
+    // the level that carries them past a zone's ceiling is the level that gets
+    // them bounced out of the zone they are standing in - by their own
+    // experience bar, possibly mid-fight. Stopping experience AT the ceiling lets
+    // them stay and fight there at that level for as long as they like; the way
+    // to level on is to go somewhere higher, which is what the gate wants from
+    // them anyway.
+    //
+    // Separate from the stock toggle (PLAYER_FLAGS_NO_XP_GAIN) on purpose. Either
+    // one stops experience; nothing here ever sets or clears the player's own.
+    //
+    // Cached from config (WorldScript below): OnUpdate asks this every tick.
+    std::atomic<bool> s_zoneCapStopsXp{ true };
+    std::atomic<uint32> s_zoneCapAuraSpell{ 0 };
+
+    // Same conditions as ZoneIsBeneath, one level lower: where that would bounce
+    // them at level+1, this stops the experience that would take them there.
+    // The top band on the realm tops out at the level cap, where there is no
+    // experience to stop, so a max-level player is never capped.
+    bool ZoneCapStopsXp(Player const* player, uint8* outTop = nullptr)
+    {
+        if (!s_zoneCapStopsXp.load(std::memory_order_relaxed) || !player)
+            return false;
+
+        if (player->IsGameMaster() || player->IsMaxLevel())
+            return false;
+
+        if (!BarracksHardcore::IsWarModeOptedIn(player))
+            return false;
+
+        Map const* map = player->GetMap();
+        if (!map || map->Instanceable())
+            return false;
+
+        uint32 const zoneId = player->GetZoneId();
+        if (!BarracksHardcore::IsOpenWorldPvpZone(zoneId))
+            return false;
+
+        uint8 bottom = 0;
+        uint8 top = 0;
+        if (!playerbot::GetZoneLevelBand(zoneId, bottom, top))
+            return false;
+
+        if (outTop)
+            *outTop = top;
+        return uint32(player->GetLevel()) >= uint32(top);
+    }
+
+    // The aura IS the state: on while capped, off while not, and the message is
+    // spoken on the change. No bookkeeping to go stale across a logout - the
+    // aura persists with the character, so a login inside a capped zone says
+    // nothing new, and one outside it lifts the aura with the "again" line.
+    void SyncZoneCapAura(Player* player)
+    {
+        uint32 const spell = s_zoneCapAuraSpell.load(std::memory_order_relaxed);
+        if (!spell || !player || !player->IsInWorld())
+            return;
+
+        uint8 top = 0;
+        bool const capped = ZoneCapStopsXp(player, &top);
+        bool const wearing = player->HasAura(spell);
+        if (capped == wearing)
+            return;
+
+        ChatHandler handler(player->GetSession());
+        if (capped)
+        {
+            player->AddAura(spell, player);
+
+            char const* zoneName = "this zone";
+            if (AreaTableEntry const* zone = sAreaTableStore.LookupEntry(player->GetZoneId()))
+                if (char const* name = zone->AreaName[player->GetSession()->GetSessionDbcLocale()])
+                    if (*name)
+                        zoneName = name;
+
+            handler.PSendSysMessage("You have reached level %u, the top of %s's level range. With War Mode on you no longer gain experience here - travel to a higher-level zone to turn it back on.",
+                uint32(top), zoneName);
+            return;
+        }
+
+        player->RemoveAurasDueToSpell(spell);
+        if (player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN))
+            handler.PSendSysMessage("War Mode's experience stop has lifted, but your own experience toggle is still off.");
+        else
+            handler.PSendSysMessage("You are earning experience again.");
+    }
 }
+
+class warmode_zone_gate_config : public WorldScript
+{
+public:
+    warmode_zone_gate_config() : WorldScript("warmode_zone_gate_config") { }
+
+    void OnConfigLoad(bool /*reload*/) override
+    {
+        s_zoneCapStopsXp.store(sConfigMgr->GetBoolDefault("Centurion.WarMode.ZoneCapStopsXp", true),
+            std::memory_order_relaxed);
+        // 0 in the dist: an aura with no client Spell.dbc row is a blank icon.
+        // 90718 on B+. The experience stop does not depend on it - only the badge.
+        s_zoneCapAuraSpell.store(uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.WarMode.ZoneCapAuraSpell", 0))),
+            std::memory_order_relaxed);
+    }
+};
 
 class warmode_zone_gate : public PlayerScript
 {
@@ -182,6 +289,11 @@ public:
     // to teleport from.
     void OnUpdate(Player* player, uint32 /*diff*/) override
     {
+        // Every tick, like the notoriety checkpoints: level, zone and the War
+        // Mode flag all move it, and a list of those is a list somebody forgets
+        // to add to. Cheap - one opt-in lookup, then nothing, for anyone unflagged.
+        SyncZoneCapAura(player);
+
         if (!g_pendingCount.load(std::memory_order_relaxed))
             return;
 
@@ -204,6 +316,15 @@ public:
         }
 
         SendHome(player);
+    }
+
+    // The stop. Checked at the award rather than trusted to the aura, so it holds
+    // in the tick between a level-up and the badge appearing. Zeroing is enough:
+    // Player::GiveXP returns on a withheld award without logging a gain of 0.
+    void OnGiveXP(Player* player, uint32& amount, Unit* /*victim*/) override
+    {
+        if (amount && ZoneCapStopsXp(player))
+            amount = 0;
     }
 
     void OnUpdateZone(Player* player, uint32 newZone, uint32 /*newArea*/) override
@@ -330,5 +451,6 @@ private:
 
 void AddSC_custom_warmode_zone_gate()
 {
+    new warmode_zone_gate_config();
     new warmode_zone_gate();
 }

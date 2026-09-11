@@ -73,6 +73,8 @@ namespace
     // an aura the client has no Spell.dbc row for shows the player a blank icon
     // with no name, so this stays off until the row ships.
     uint32 s_checkpointBase = 0;
+    uint32 s_contractAuraSpell = 0;
+    bool s_botsSeeThroughStealth = true;
 
     // Copper to have the ledger amended. FLAT, not scaled by level: the point is
     // a way OUT of a spiral for somebody who has stopped enjoying being hunted,
@@ -167,6 +169,12 @@ namespace
         s_cooldownSeconds = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.CooldownSeconds", 0)));
         s_maxRerolls = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.MaxRerolls", 2), 0, 20));
         s_checkpointBase = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.CheckpointAuraBase", 0)));
+        // 0 in the dist for the same reason as CheckpointAuraBase: an aura with
+        // no client Spell.dbc row is a blank, nameless icon. 90719 on B+.
+        s_contractAuraSpell = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.ContractAuraSpell", 0)));
+        // Read here too so the badge never claims a rule that is switched off.
+        // Object.cpp reads the same key once at first use.
+        s_botsSeeThroughStealth = sConfigMgr->GetBoolDefault("Centurion.Notoriety.BotsSeeThroughStealth", true);
         s_bribeCopper = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.BribeCopper", 3 * GOLD)));
 
         // Entries are "stacks:spellId", and the pairing is EXPLICIT for a reason
@@ -954,6 +962,36 @@ namespace Notoriety
     {
         std::lock_guard<std::mutex> guard(g_lock);
         g_checkpointSynced.erase(guid.GetRawValue());
+    }
+
+    // Carrying a contract is loud, and until now it was silent about it.
+    //
+    // While the page is in the log, every managed playerbot in the zone sees
+    // through Stealth and Prowl - NotorietyDefeatsStealth in Object.cpp, the
+    // answer to a rogue sneaking the whole walk to the fence. Nothing on the
+    // player said the rule was in force, so a rogue found out by being opened on
+    // mid-stealth. This aura is the notice. It is not the mechanism: the rule
+    // still reads the quest itself, so the two can disagree for one tick at most.
+    //
+    // Same test as the rule, deliberately - INCOMPLETE or COMPLETE, and REWARDED
+    // is off, because stealth comes back the moment the fence pays out.
+    void SyncContractAura(Player* player)
+    {
+        if (!s_contractAuraSpell || !player)
+            return;
+
+        bool carrying = false;
+        if (s_enabled && s_questId && s_botsSeeThroughStealth)
+        {
+            QuestStatus const status = player->GetQuestStatus(s_questId);
+            carrying = status == QUEST_STATUS_INCOMPLETE || status == QUEST_STATUS_COMPLETE;
+        }
+
+        bool const wearing = player->HasAura(s_contractAuraSpell);
+        if (carrying && !wearing)
+            player->AddAura(s_contractAuraSpell, player);
+        else if (!carrying && wearing)
+            player->RemoveAurasDueToSpell(s_contractAuraSpell);
     }
 
     void GrantGoodieBag(Payout const& payout)
