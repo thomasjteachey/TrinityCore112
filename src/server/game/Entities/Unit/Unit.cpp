@@ -1127,22 +1127,19 @@ namespace
     if (damage && (CreatureDamageToPlayerbotPct() < 100 || GetDevilsaurHuntTuning().markerAura) &&
         IsMonsterHittingPlayerbot(attacker, victim))
     {
-        uint32 pct = CreatureDamageToPlayerbotPct();
+        if (CreatureDamageToPlayerbotPct() < 100)
+            damage = CalculatePct(damage, CreatureDamageToPlayerbotPct());
 
-        // A hunted dinosaur hits its hunter (or the hunter's pet) for
-        // DamageTakenPct of its STOCK damage - in place of the general cut, not on
-        // top of it, so the configured number is the number that lands (50 is
-        // half, not a quarter). Its hunter only: see IsDevilsaurHuntPair. Cheapest
-        // tests first, since this runs for every wildlife-on-bot hit, and the bot
-        // is looked up once.
+        // ...and a hunted dinosaur hits its hunter (or the hunter's pet) for
+        // DamageTakenPct of THAT - ON TOP of the general cut, by design: with both
+        // at 50 the hunter takes a quarter of stock. Its hunter only: see
+        // IsDevilsaurHuntPair. Cheapest tests first, since this runs for every
+        // wildlife-on-bot hit, and the bot is looked up once.
         DevilsaurHuntTuning const& tuning = GetDevilsaurHuntTuning();
-        if (tuning.markerAura && attacker->GetTypeId() == TYPEID_UNIT &&
+        if (damage && tuning.markerAura && tuning.damageTakenPct < 100 && attacker->GetTypeId() == TYPEID_UNIT &&
             std::find(tuning.entries.begin(), tuning.entries.end(), attacker->GetEntry()) != tuning.entries.end())
             if (Player const* hunter = ManagedPlayerbotBehind(victim); hunter && hunter->HasAura(tuning.markerAura))
-                pct = tuning.damageTakenPct;
-
-        if (pct < 100)
-            damage = CalculatePct(damage, pct);
+                damage = CalculatePct(damage, tuning.damageTakenPct);
     }
 
     // And the other direction: a bot cuts through wildlife harder the bigger the
