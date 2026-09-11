@@ -5085,9 +5085,33 @@ namespace
             // Arm's length, unless this is a chest nobody can see being opened -
             // then the bot takes it from where it stands, with no walk and no
             // Opening channel. QueueUnwatchedChests is what puts those here.
-            if (!bot->IsWithinDistInMap(lootObject, INTERACTION_DISTANCE + 2.0f) &&
-                !MayLootChestRemotely(bot, lootGameObject))
+            //
+            // For a gameobject, arm's length is the reach the bot was allowed to
+            // OPEN it from - the same IsAtInteractDistance test the errand walks
+            // to and the core checks the Opening cast against - not a flat seven
+            // yards. The death cache reaches twice as far as an ordinary chest
+            // (GameObject::GetInteractionDistance) and is measured from the edge
+            // of its model rather than its centre, so a bot stops and finishes
+            // the ten-second Opening from nine to fourteen yards. This gate then
+            // turned it away without a word: the cache was opened, nothing came
+            // out, and the bot wandered off. Measured over a day of the live log,
+            // opens begun within six yards took something two times in three;
+            // opens begun from nine yards or more - 85% of them - about one in
+            // twenty. A person watching saw the cast bar fill and the cache stay
+            // full.
+            bool inReach = bot->IsWithinDistInMap(lootObject, INTERACTION_DISTANCE + 2.0f);
+            if (!inReach && lootGameObject)
+                inReach = lootGameObject->IsAtInteractDistance(bot, ResolveOpenLockSpell(lootGameObject, bot));
+
+            if (!inReach && !MayLootChestRemotely(bot, lootGameObject))
+            {
+                // Said out loud from now on, for our caches at least - this exit
+                // was the whole bug and it never produced a line.
+                if (lootGameObject && CustomLootChests::IsPlayerBuiltChest(lootGuid))
+                    TC_LOG_INFO("playerbots.pve", "Bot {} is {:.0f}y from cache {} - out of reach to take from it; dropped.",
+                        bot->GetName(), bot->GetDistance(lootGameObject), lootGuid.GetCounter());
                 continue;
+            }
 
             // Never OPEN a world gameobject the bot has no room to empty.
             //
