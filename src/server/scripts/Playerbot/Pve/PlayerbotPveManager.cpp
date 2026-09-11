@@ -9448,7 +9448,27 @@ namespace
             return false;
 
         // Worthless to everyone: vendor trash goes to the vendor, not the house.
-        if (proto->Quality == ITEM_QUALITY_POOR || !proto->SellPrice)
+        if (proto->Quality == ITEM_QUALITY_POOR)
+            return false;
+
+        // No sell price is NOT the same as worthless.
+        //
+        // For gear it usually means a quest reward the merchant will not buy: the
+        // Royal Seal of Eldre'Thalas is a level 57 blue with SellPrice 0. Ruling
+        // those out here left them with no way out of a bag at all - the vendor
+        // refuses them, this refused them, and nothing else ever drops them - so a
+        // bot that earned one at 57 and was reborn at level 7 carried it for the
+        // rest of its life, where people saw it and reasonably asked why a level 7
+        // had it. Measured on the live realm: 27 seals and 31 such pieces in bot
+        // packs, 22 of them above their holder's level.
+        //
+        // Green-and-better weapons and armour with no sell price are priced off the
+        // item-level curve in ComputeItemFaceValue, which exists for exactly this
+        // case, and listed like anything else. Soulbound pieces (the field kit)
+        // were already refused by CanBeTraded above. Everything else with no sell
+        // price - scraps, pamphlets, oddments - is still refused.
+        bool const wearable = proto->Class == ITEM_CLASS_WEAPON || proto->Class == ITEM_CLASS_ARMOR;
+        if (!proto->SellPrice && !(wearable && proto->Quality >= ITEM_QUALITY_UNCOMMON))
             return false;
 
         // Kit the bot was handed for its own use. Checked before the class switch
