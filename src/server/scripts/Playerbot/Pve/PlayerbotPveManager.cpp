@@ -4780,8 +4780,81 @@ namespace
         return ahead >= keepable;
     }
 
+    // Is a spell actually in flight? - which is NOT what IsNonMeleeSpellCast(false)
+    // answers for a hunter.
+    //
+    // An auto-repeat HOLDER counts as a cast in that predicate (Unit.cpp), and Auto
+    // Shot's holder is effectively permanent: Unit exempts spell 75 from the
+    // movement interrupt and from the failed-CheckCast interrupt, AttackStop clears
+    // only the melee slot, and nothing else here cancels it - so once a hunter has
+    // fired one shot the predicate is true for the rest of its life. That matters
+    // far beyond a gate, because Player::CanEquipItem asks the very same question
+    // and answers EQUIP_ERR_CANT_DO_RIGHT_NOW to every item while it is true: a
+    // hunter would never list, never vendor and never buy anything again.
+    //
+    // So drop the stale holder first. This is only ever asked of a bot that is out
+    // of combat, where the holder is aimed at a corpse and worth nothing; the
+    // ranged drive arms a fresh Auto Shot on the next pull.
+    bool BotHasSpellInFlight(Player* bot)
+    {
+        if (bot->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL) &&
+            !bot->IsNonMeleeSpellCast(false, /*skipChanneled*/ false, /*skipAutorepeat*/ true))
+            bot->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
+
+        return bot->IsNonMeleeSpellCast(false);
+    }
+
+    // A two-hander is never put on over a worn off hand - TryEquipUpgrades and the
+    // auction pass both refuse one outright, before any probe. The sell probes have
+    // to ask the same question, or a two-hander the bot will never wear reads as
+    // "gear it would rather wear than sell" and is kept for good.
+    bool EquipPassWouldRefuseTwoHander(Player const* bot, ItemTemplate const* proto)
+    {
+        return proto->InventoryType == INVTYPE_2HWEAPON &&
+            bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND) != nullptr;
+    }
+
+    // Is this refusal a permanent property of the ITEM, or just "not right now"?
+    //
+    // The sell probes ask CanEquipItem what the bot would do with a piece, and a
+    // refusal is only evidence that it does not want it when the reason can never
+    // change: a level, a skill, a proficiency, a slot it can never go in. Every
+    // other answer - stunned, in a fight, mid-cast, a two-hander in the way while
+    // a shield waits in the bags for TryRestoreShieldProfile - is a moment, and
+    // reading one as "does not want it" sells the gear the bot was about to wear.
+    // Listed the permanent way round on purpose: an unfamiliar code keeps the item
+    // and is asked again next pass, which costs a bag slot rather than the piece.
+    bool EquipRefusalIsPermanent(InventoryResult result)
+    {
+        switch (result)
+        {
+            case EQUIP_ERR_CANT_EQUIP_LEVEL_I:
+            case EQUIP_ERR_CANT_EQUIP_SKILL:
+            case EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT:
+            case EQUIP_ERR_NO_REQUIRED_PROFICIENCY:
+            case EQUIP_ERR_YOU_CAN_NEVER_USE_THAT_ITEM:
+            case EQUIP_ERR_YOU_CAN_NEVER_USE_THAT_ITEM2:
+            case EQUIP_ERR_CANT_DUAL_WIELD:
+            case EQUIP_ERR_CANT_EQUIP_RANK:
+            case EQUIP_ERR_CANT_EQUIP_REPUTATION:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     uint32 SellVendorJunk(Player* bot)
     {
+        // For its side effect: a hunter's stale Auto Shot holder would otherwise
+        // have CanEquipItem refuse every probe below, and the white-gear branch
+        // reads a refusal it cannot explain as "keep this".
+        //
+        // Out of combat ONLY. This one is also reached from the vendor errand,
+        // which runs whenever the bot has no target - and a hunter whose pet is
+        // holding a mob has no target while its Auto Shot is genuinely firing.
+        if (!bot->IsInCombat())
+            BotHasSpellInFlight(bot);
+
         // Which single alcohol stack survives. Decided BEFORE anything is sold,
         // so the scan below has one stable answer instead of one that depends on
         // the order the bags happen to be walked in. Biggest stack wins, since
@@ -4877,15 +4950,35 @@ namespace
                 (proto->Class == ITEM_CLASS_WEAPON || proto->Class == ITEM_CLASS_ARMOR) &&
                 !IsQuestRequiredItem(bot, proto->ItemId))
             {
+                // swap = TRUE, and a transient refusal means KEEP.
+                //
+                // With swap false, FindEquipSlot hands back NULL_SLOT for any
+                // slot that is already occupied, so this guard was dead for every
+                // slot the bot had something in - which, with the field kit, is
+                // most of them. And CanEquipItem refuses everything mid-cast or,
+                // for armour, in a fight; reading that as "it does not want this"
+                // is how a bot sells the upgrade it was about to put on. Anything
+                // but a plain no means keep the piece and ask again later.
                 uint16 dest = 0;
                 bool wantsToWear = false;
-                if (!EquipProbeWouldBenchOffhand(bot, proto) &&
-                    bot->CanEquipItem(NULL_SLOT, dest, item, false) == EQUIP_ERR_OK)
+                if (!EquipProbeWouldBenchOffhand(bot, proto) && !EquipPassWouldRefuseTwoHander(bot, proto))
                 {
-                    ItemTemplate const* equipped = nullptr;
-                    if (Item const* worn = bot->GetItemByPos(dest))
-                        equipped = worn->GetTemplate();
-                    wantsToWear = IsEquipUpgrade(bot, proto, equipped, uint8(dest & 255));
+                    InventoryResult const probe = bot->CanEquipItem(NULL_SLOT, dest, item, true);
+                    if (probe == EQUIP_ERR_OK)
+                    {
+                        // The hand the equip pass would actually use: a one-hander
+                        // over a dead off hand is judged against THAT, not against
+                        // the main hand it would never replace.
+                        if (ShouldRedirectToOffHand(bot, proto, dest))
+                            dest = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | EQUIPMENT_SLOT_OFFHAND);
+
+                        ItemTemplate const* equipped = nullptr;
+                        if (Item const* worn = bot->GetItemByPos(dest))
+                            equipped = worn->GetTemplate();
+                        wantsToWear = IsEquipUpgrade(bot, proto, equipped, uint8(dest & 255));
+                    }
+                    else if (!EquipRefusalIsPermanent(probe))
+                        wantsToWear = true;
                 }
                 sellable = !wantsToWear;
             }
@@ -6526,6 +6619,16 @@ namespace
     // yet every one of them beats an empty slot on item level alone, so a bot
     // with money and bare shoulders bought them off the auction house until it
     // was broke. Real gear has armour, a stat, a swing, or an equip effect.
+    // A template whose stats are ROLLED carries none of them in item_template:
+    // "of the Bear", "of the Eagle" and the rest live on the item, in
+    // item_instance.randomPropertyId. So every template-reading judgement about
+    // such a piece - is it worth wearing, how good is it - is blind, and must say
+    // so rather than read the zeros as a measurement.
+    bool RollsItsOwnStats(ItemTemplate const* proto)
+    {
+        return proto && (proto->RandomProperty || proto->RandomSuffix);
+    }
+
     bool HasFightingValue(ItemTemplate const* proto)
     {
         if (proto->Duration)
@@ -6535,6 +6638,20 @@ namespace
             return proto->Damage[0].DamageMax > 0.0f;
 
         if (proto->Armor)
+            return true;
+
+        // Classic jewellery keeps its stats on the ITEM, not on the template.
+        // Marble Necklace, Onyx Ring, Tellurium Band and the rest carry no
+        // armour, no stat line and no equip spell in item_template - "of the
+        // Bear", "of the Eagle" and the rest are rolled per item and live in
+        // item_instance.randomPropertyId. Judged by the template alone they read
+        // as costume, so an empty neck, finger or trinket slot refused 123 of the
+        // 139 such lots on the house - and those are precisely the lots an empty
+        // slot most wants, since the whole item level counts as gain. A template
+        // that rolls a suffix has real stats by construction; which ones is a
+        // question this function cannot ask, and the price and staleness tests
+        // still have to be passed afterwards.
+        if (RollsItsOwnStats(proto))
             return true;
 
         for (uint32 statIndex = 0; statIndex < proto->StatsCount && statIndex < MAX_ITEM_PROTO_STATS; ++statIndex)
@@ -6778,7 +6895,9 @@ namespace
             {
                 float const candidateScore = ScoreItemForSpec(bot, candidate);
                 float const incumbentScore = ScoreItemForSpec(bot, incumbent);
-                if (std::fabs(candidateScore - incumbentScore) > 0.5f)
+                // Blind when either side rolls its stats - see the same rule below.
+                if (!RollsItsOwnStats(candidate) && !RollsItsOwnStats(incumbent) &&
+                    std::fabs(candidateScore - incumbentScore) > 0.5f)
                     return candidateScore > incumbentScore;
                 return EffectiveItemLevel(candidate) > EffectiveItemLevel(incumbent);
             }
@@ -6804,9 +6923,17 @@ namespace
 
         // Spec stat score before raw item level for every slot: ret paladins
         // want strength and crit plate, not higher-ilvl spell-damage plate.
+        //
+        // Unless one of the two rolls its own stats, in which case the scorer is
+        // reading zeros off a template that never held the stats (RollsItsOwnStats)
+        // - HasFightingValue admits such a piece on the argument that a rolled
+        // suffix IS stats, and this comparison has to honour the same argument or
+        // the ring a bot just paid for is displaced by any trinket with a single
+        // point of stamina on it, and bought again the pass after that.
         float const candidateScore = ScoreItemForSpec(bot, candidate);
         float const incumbentScore = ScoreItemForSpec(bot, incumbent);
-        if (std::fabs(candidateScore - incumbentScore) > 0.5f)
+        if (!RollsItsOwnStats(candidate) && !RollsItsOwnStats(incumbent) &&
+            std::fabs(candidateScore - incumbentScore) > 0.5f)
             return candidateScore > incumbentScore;
 
         return EffectiveItemLevel(candidate) > EffectiveItemLevel(incumbent);
@@ -6882,7 +7009,12 @@ namespace
         // gather or a poison application would strip the hand, and possibly
         // more, and put nothing back until the next death. It waits for the
         // next pass instead.
-        if (bot->IsNonMeleeSpellCast(false) || bot->HasUnitState(UNIT_STATE_STUNNED) || bot->IsCharmed())
+        //
+        // BotHasSpellInFlight rather than the bare predicate: a hunter's parked
+        // Auto Shot holder reads as a cast for the rest of its life, which would
+        // mean no hunter ever sheds a dead off hand. This pass only runs out of
+        // combat, which is exactly where that holder is worth nothing.
+        if (BotHasSpellInFlight(bot) || bot->HasUnitState(UNIT_STATE_STUNNED) || bot->IsCharmed())
             return;
 
         uint16 const offhandPos = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | EQUIPMENT_SLOT_OFFHAND);
@@ -10148,16 +10280,30 @@ namespace
             if (proto->Quality < ITEM_QUALITY_UNCOMMON)
                 return false;
 
-            // Gear it would rather wear than sell.
+            // Gear it would rather wear than sell. swap = TRUE, and a transient
+            // refusal means keep - see the same probe in SellVendorJunk. With
+            // swap false this asked nothing at all about an occupied slot, which
+            // is how a bot listed a green cloak while wearing a level 14 kit one
+            // and another bot bought it back sixteen gold later.
             uint16 dest = 0;
-            if (!EquipProbeWouldBenchOffhand(bot, proto) &&
-                bot->CanEquipItem(NULL_SLOT, dest, item, false) == EQUIP_ERR_OK)
+            if (!EquipProbeWouldBenchOffhand(bot, proto) && !EquipPassWouldRefuseTwoHander(bot, proto))
             {
-                ItemTemplate const* equipped = nullptr;
-                if (Item const* worn = bot->GetItemByPos(dest))
-                    equipped = worn->GetTemplate();
-                if (IsEquipUpgrade(bot, proto, equipped, uint8(dest & 255)))
+                InventoryResult const probe = bot->CanEquipItem(NULL_SLOT, dest, item, true);
+                if (!EquipRefusalIsPermanent(probe) && probe != EQUIP_ERR_OK)
                     return false;
+
+                if (probe == EQUIP_ERR_OK)
+                {
+                    // The hand the equip pass would actually use - see SellVendorJunk.
+                    if (ShouldRedirectToOffHand(bot, proto, dest))
+                        dest = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | EQUIPMENT_SLOT_OFFHAND);
+
+                    ItemTemplate const* equipped = nullptr;
+                    if (Item const* worn = bot->GetItemByPos(dest))
+                        equipped = worn->GetTemplate();
+                    if (IsEquipUpgrade(bot, proto, equipped, uint8(dest & 255)))
+                        return false;
+                }
             }
         }
 
@@ -10506,6 +10652,17 @@ namespace
     // given, is the number of lots actually posted.
     bool ListAuctionSurplus(Player* bot, bool forceCatchUp, uint32* outListed = nullptr)
     {
+        // Same reason as ShopAuctionHouse: IsAuctionableSurplus decides "gear it
+        // would rather wear than sell" with an equip probe, and mid-cast or in a
+        // fight that probe refuses everything - so the bot would list the very
+        // upgrades it was about to put on. Requeued for the same reason too.
+        if (bot->IsInCombat() || BotHasSpellInFlight(bot))
+        {
+            std::lock_guard<std::mutex> guard(g_PvePendingLock);
+            g_PendingAuctionSales.insert(bot->GetGUID().GetRawValue());
+            return false;
+        }
+
         AuctionHouseObject* auctionHouse = sAuctionMgr->GetAuctionsMap(bot->GetFaction());
         AuctionHouseEntry const* houseEntry = AuctionHouseMgr::GetAuctionHouseEntry(bot->GetFaction());
         if (!auctionHouse || !houseEntry)
@@ -10804,6 +10961,29 @@ namespace
     {
         uint64 const botRawGuid = bot->GetGUID().GetRawValue();
 
+        // A bot mid-cast or in a fight cannot judge ANY lot, so it must not try.
+        //
+        // The per-lot probe below is Player::CanEquipItem, and that answers
+        // EQUIP_ERR_CANT_DO_RIGHT_NOW to everything while a spell is going out,
+        // and EQUIP_ERR_NOT_IN_COMBAT to every piece of armour in a fight. Asked
+        // nineteen thousand times it says no nineteen thousand times, and the
+        // pass then reports "bought 0" - having consumed the catch-up flag and
+        // pushed the next trip ten minutes away. It is not rare: a rebirth coats
+        // a rogue's weapon one tick before its landing runs, and that poison is a
+        // three second cast, so Orhild, Zarfyn and Fenhild all landed with a full
+        // purse, empty slots and bought nothing on 2026-09-11.
+        //
+        // Put back in the queue, not just refused: the ten minute cadence is
+        // written when the bot is ENQUEUED, so dropping it here would cost the
+        // whole slot over a three second cast. The catch-up flag is untouched
+        // because this returns before it is taken.
+        if (bot->IsInCombat() || BotHasSpellInFlight(bot))
+        {
+            std::lock_guard<std::mutex> guard(g_PvePendingLock);
+            g_PendingAuctionShopping.insert(botRawGuid);
+            return false;
+        }
+
         // A win that cannot be pocketed burns gold on mail that rots, so one
         // free slot is always required - the win arrives by mail and has to
         // land somewhere. But a bot with a nearly full pack is precisely the
@@ -10849,21 +11029,50 @@ namespace
         //
         // Safe to raise precisely because of slotsBought: each slot can be
         // bought for once per pass, so the "buy every chestpiece in the
-        // house" runaway cannot happen. The budget is recomputed each round
-        // and shrinks with every purchase, so the pass also stops itself on
-        // money long before it stops on this number.
+        // house" runaway cannot happen. The purse stops the pass long before
+        // this number does - every buy leaves less to spend, and the last one
+        // can only be as big as what is left.
         std::unordered_set<uint8> slotsBought;
         uint32 bought = 0;
         uint32 const maxPurchases = catchUp ? 40u : 16u;
 
+        // The percentage is what ONE ITEM may cost, not what the whole trip may.
+        //
+        // It used to be both: the budget was a slice of the purse, recomputed
+        // every round, and it was also the spending cap. Each buy shrank the
+        // next round's slice, so the slices decayed geometrically and the bot
+        // stopped while still holding most of its gold - and because the price
+        // conversion below divides by that same number, every remaining lot got
+        // dearer in item levels as the purse fell, which stopped it sooner
+        // still. Live: drifters landing with 40-70 gold bought nothing at all
+        // while lots they could afford sat on the house.
+        //
+        // So: one ceiling per item, fixed for the whole trip from the purse it
+        // started with, and the bot keeps buying until its money runs out or
+        // nothing left is worth having. It spends its gold on several sensible
+        // items instead of hoarding it against one it will never find. A bot
+        // stripped bare may put everything into a single lot - it cannot fight
+        // at all, so the usual restraint is the wrong instinct.
+        bool const strippedBare = IsBotStrippedBare(bot);
+        uint32 const perItemCap = strippedBare
+            ? bot->GetMoney()
+            : CalculatePct(bot->GetMoney(), g_PveConfig.auctionBuyBudgetPct);
+
+        // ...but a trip never spends the LAST of it. A repair is all or nothing -
+        // DurabilityRepairAll simply does nothing when the bill is more than the
+        // purse - and BuyTravelRations refuses outright, so a bot that walks away
+        // from the house at zero copper grinds on in breaking gear with nothing to
+        // eat until something else pays it. A tenth of what it arrived with is
+        // plenty for both at any level. A bot stripped bare keeps nothing back: it
+        // cannot fight at all, and gear is the only thing worth having.
+        uint32 const purseFloor = strippedBare ? 0u : CalculatePct(bot->GetMoney(), 10);
+
         for (uint32 purchase = 0; purchase < maxPurchases; ++purchase)
         {
-            // Recomputed every round: the purse shrinks with each buy. A stripped
-            // bot spends everything it has - the usual budget slice is for
-            // shopping upgrades, and this bot cannot fight at all.
-            uint32 const budget = IsBotStrippedBare(bot)
-                ? bot->GetMoney()
-                : CalculatePct(bot->GetMoney(), g_PveConfig.auctionBuyBudgetPct);
+            // What it may pay for the next lot: its own ceiling, and never more
+            // than it holds above the floor.
+            uint32 const spendable = bot->GetMoney() > purseFloor ? bot->GetMoney() - purseFloor : 0u;
+            uint32 const budget = std::min<uint32>(perItemCap, spendable);
 
             AuctionEntry* bestAuction = nullptr;
             float bestGain = 0.0f;
@@ -10982,14 +11191,18 @@ namespace
                 // one copper trinket for one item level and never improves.
                 //
                 // Price is converted into the currency the gain is already in. The
-                // bot treats its whole budget as worth a fixed number of item
-                // levels, so an item costing half the budget has to be worth half
-                // that many levels before it is worth buying at all. Wealth scales
-                // it automatically: a rich bot will pay real gold for a real
+                // bot treats one item's ceiling as worth a fixed number of item
+                // levels, so a lot costing half of it has to be worth half that
+                // many levels before it is worth buying at all. Wealth scales it
+                // automatically: a rich bot will pay real gold for a real
                 // upgrade, a poor one holds out for a bargain, and neither pays a
                 // fortune for a trinket.
-                float const priceInLevels = budget
-                    ? float(auction->buyout) * float(g_PveConfig.auctionBudgetWorthLevels) / float(budget)
+                //
+                // Against perItemCap, not what is left in the purse: the price of
+                // a lot must not climb in item levels just because the bot has
+                // already bought something else this trip.
+                float const priceInLevels = perItemCap
+                    ? float(auction->buyout) * float(g_PveConfig.auctionBudgetWorthLevels) / float(perItemCap)
                     : float(g_PveConfig.auctionBudgetWorthLevels);
                 // How far out of date the item is, in the same currency.
                 //
@@ -17167,19 +17380,23 @@ namespace playerbot
             // simply dropped for a bot that was dead or between maps when its turn
             // came, and nothing ever queued it again.
             //
-            // A fight is "not yet" too. A landing teleports the bot onto a grind
-            // spot, so it is often already swinging, and in a fight CanEquipItem
-            // refuses every piece of armour - which is how both sale steps tell
-            // what the bot would rather be wearing. Run mid-fight, they would sell
-            // the armour it wanted. Bots break off between pulls every few seconds.
-            if (!bot->IsInWorld() || bot->IsBeingTeleported() || !bot->IsAlive() || bot->IsInCombat())
+            // A fight is "not yet" too, and so is a cast. Every step of a landing
+            // is decided by CanEquipItem - which refuses every piece of armour in
+            // combat and EVERYTHING while a spell is going out - so a landing run
+            // in either state sells the gear the bot wanted and buys nothing. The
+            // rebirth that precedes a landing coats a rogue's weapon, and that
+            // poison is a three second cast: waiting is one world pass, not ten
+            // minutes. Bots break off between pulls every few seconds.
+            if (!bot->IsInWorld() || bot->IsBeingTeleported() || !bot->IsAlive() ||
+                bot->IsInCombat() || BotHasSpellInFlight(bot))
             {
                 if (nowMs - arrival.landedAtMs >= kDrifterArrivalPatienceMs)
                 {
                     TC_LOG_INFO("playerbots.pve",
                         "Drifter {} was never ready for its landing in zone {} ({}); dropped after {}s.",
                         bot->GetName(), arrival.zoneId,
-                        !bot->IsAlive() ? "dead" : bot->IsInCombat() ? "in combat" : "between maps",
+                        !bot->IsAlive() ? "dead" : bot->IsInCombat() ? "in combat"
+                            : bot->IsNonMeleeSpellCast(false) ? "casting" : "between maps",
                         kDrifterArrivalPatienceMs / IN_MILLISECONDS);
                     itr = g_PendingDrifterArrivals.erase(itr);
                 }

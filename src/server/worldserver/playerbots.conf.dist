@@ -1003,6 +1003,14 @@ Playerbot.Pve.AuctionBuy.Enable = 0
 
 #    Playerbot.Pve.AuctionBuy.BudgetPct
 #        Description: Maximum share of a bot's money a single auction buyout may cost.
+#                     PER ITEM, and that is the only spending limit: a shopping trip
+#                     keeps buying - one lot per equipment slot - until the purse
+#                     cannot pay for the next one or nothing left on the house is
+#                     worth having. The ceiling is fixed from the purse the trip
+#                     started with, so a lot does not become dearer (in the item
+#                     levels the scorer weighs it against) just because the bot has
+#                     already bought something. A bot stripped bare ignores the
+#                     share and may put everything into one lot.
 #        Default:     30
 
 Playerbot.Pve.AuctionBuy.BudgetPct = 30
