@@ -832,10 +832,19 @@ Playerbot.Pve.Drifters.ZoneDwellSeconds = 10
 #                     in that same window or the bot walks into the auction house
 #                     broke and buys nothing.
 #
-#                     Counted in gold, not copper. 0 pays nothing.
-#        Default:     10
+#                     Counted in gold, not copper.
+#
+#                     Scaled by the level band of the zone it lands in:
+#                     TeleportGold is what the lowest band pays (the 1-10 starter
+#                     zones), TeleportGold.Max what the highest pays (55-60), and
+#                     every band in between sits on the straight line through the
+#                     two by its midpoint - Feralas (40-50) pays about 40g at the
+#                     defaults. A zone with no band pays TeleportGold. Max at or
+#                     below TeleportGold pays TeleportGold flat; both 0 pays nothing.
+#        Default:     10 (TeleportGold), 50 (TeleportGold.Max)
 #
 Playerbot.Pve.Drifters.TeleportGold = 10
+Playerbot.Pve.Drifters.TeleportGold.Max = 50
 
 #    Playerbot.Pve.ProactiveMaxLevelsAbove
 #        Description: How far above its own level a bot will PICK a fight with a person.

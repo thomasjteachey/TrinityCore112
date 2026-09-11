@@ -251,8 +251,15 @@ struct PveConfig
     // Gold handed to a drifter each time it lands somewhere new, paid before
     // the auction sweep is queued. A bot that arrives broke sweeps the auction
     // house and buys nothing, so the purse and the shopping trip have to happen
-    // in that order. Counted in GOLD, not copper. Zero pays nothing.
+    // in that order. Counted in GOLD, not copper.
+    //
+    // Scaled by the level band of the zone it lands in: drifterTeleportGold is
+    // what the lowest band on the realm pays, drifterTeleportGoldMax what the
+    // highest pays, and every band in between sits on the straight line through
+    // those two by its midpoint. Max at or below the floor pays the floor flat;
+    // both zero pays nothing.
     uint32 drifterTeleportGold = 10;
+    uint32 drifterTeleportGoldMax = 50;
     // How far above its own level a bot will pick a fight with a person.
     // Four is the orange/red boundary the client draws: a target five or more
     // levels up is painted RED, the standard "you will lose this" signal, and a

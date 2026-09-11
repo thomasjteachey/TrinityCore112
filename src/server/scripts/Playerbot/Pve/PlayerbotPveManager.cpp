@@ -7333,6 +7333,45 @@ namespace
         return nullptr;
     }
 
+    // What a drifter is handed on landing in zoneId, in copper.
+    //
+    // A straight line by the midpoint of the zone's band, anchored to the table
+    // above rather than to level 1 and the cap: the lowest band on the realm (the
+    // starter zones, 1-10) pays exactly Drifters.TeleportGold and the highest
+    // (55-60) exactly Drifters.TeleportGold.Max, so the two config values mean
+    // what they say. Feralas at 40-50 lands about three quarters of the way up.
+    //
+    // A zone with no band - somewhere a person can stand that is not a levelling
+    // zone - pays the floor, which is what every landing paid before this scaled.
+    uint64 DrifterArrivalPayCopper(uint32 zoneId)
+    {
+        uint64 const low = uint64(g_PveConfig.drifterTeleportGold) * GOLD;
+        uint64 const high = uint64(g_PveConfig.drifterTeleportGoldMax) * GOLD;
+        if (high <= low)
+            return low;
+
+        static std::pair<float, float> const span = []
+        {
+            float lowest = 1000.0f;
+            float highest = 0.0f;
+            for (ClassicZoneBand const& band : kClassicZoneBands)
+            {
+                float const mid = (band.minLevel + band.maxLevel) * 0.5f;
+                lowest = std::min(lowest, mid);
+                highest = std::max(highest, mid);
+            }
+            return std::make_pair(lowest, highest);
+        }();
+
+        ClassicZoneBand const* band = FindClassicZoneBand(zoneId);
+        if (!band || span.second <= span.first)
+            return low;
+
+        float const mid = (band->minLevel + band->maxLevel) * 0.5f;
+        float const t = std::clamp((mid - span.first) / (span.second - span.first), 0.0f, 1.0f);
+        return low + uint64(double(high - low) * double(t) + 0.5);
+    }
+
     // The cap of a starter zone. Zones topping out here are the ones a brand new
     // character is expected to be in, so a bot reborn into one starts at level 1.
     constexpr uint8 kStarterZoneTopLevel = 10;
@@ -15597,6 +15636,7 @@ namespace playerbot
         g_PveConfig.idleProdRetrySeconds = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Playerbot.Pve.IdleProd.RetrySeconds", 120), 15, 3600));
         g_PveConfig.drifterTeleportGold = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.TeleportGold", 10), 0, 10000));
+        g_PveConfig.drifterTeleportGoldMax = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.TeleportGold.Max", 50), 0, 10000));
         g_PveConfig.proactiveMaxLevelsAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveMaxLevelsAbove", 4), 0, 60));
         g_PveConfig.proactiveMaxLevelsBelow = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveMaxLevelsBelow", 4), 0, 60));
         g_PveConfig.proactiveBountyStacks = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveBountyStacks", 5), 0, 255));
@@ -16224,7 +16264,7 @@ namespace playerbot
         // to stop being.
         static std::unordered_set<uint64> s_awaitingArrival;
         std::vector<uint64> misplaced;
-        std::vector<uint64> arrived;
+        std::vector<std::pair<uint64, uint32>> arrived;   // bot, the zone it landed in
         for (auto const& [botGuid, zoneId] : g_DrifterZoneByBot)
         {
             auto zoneItr = botZoneNow.find(botGuid);
@@ -16233,7 +16273,7 @@ namespace playerbot
             if (zoneItr->second != zoneId)
                 misplaced.push_back(botGuid);
             else if (s_awaitingArrival.erase(botGuid))
-                arrived.push_back(botGuid);
+                arrived.emplace_back(botGuid, zoneId);
         }
         guard.unlock();
 
@@ -16266,16 +16306,19 @@ namespace playerbot
         // that arrives broke sweeps the auction house and buys nothing.
         // g_PendingAuctionShopping is world-thread only, which is where this runs.
         uint32 paid = 0;
-        for (uint64 botGuid : arrived)
+        uint64 paidCopper = 0;
+        for (auto const& [botGuid, landedZoneId] : arrived)
         {
-            if (g_PveConfig.drifterTeleportGold)
+            // By the band of where it landed - see DrifterArrivalPayCopper.
+            if (uint64 const pay = DrifterArrivalPayCopper(landedZoneId))
             {
                 // Not being findable is ordinary here: a drifter can log out or be
                 // released between the arrival check and this loop. It simply goes
                 // unpaid this time and is paid on its next landing.
                 if (Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(botGuid)))
                 {
-                    bot->ModifyMoney(int64(g_PveConfig.drifterTeleportGold) * int64(GOLD));
+                    bot->ModifyMoney(int32(pay));
+                    paidCopper += pay;
                     // Rations for the level it has just become. Whatever it was
                     // carrying is the wrong tier now - it was re-levelled into this
                     // zone's band on arrival - and a bot that cannot eat between
@@ -16288,8 +16331,9 @@ namespace playerbot
             g_PendingAuctionShopping.insert(botGuid);
         }
         if (!arrived.empty())
-            TC_LOG_INFO("playerbots.pve", "{} drifters arrived; paid {} of them {}g and queued an auction sweep for each.",
-                uint32(arrived.size()), paid, g_PveConfig.drifterTeleportGold);
+            TC_LOG_INFO("playerbots.pve", "{} drifters arrived; paid {} of them {:.2f}g in all ({}g-{}g by zone band) and queued an auction sweep for each.",
+                uint32(arrived.size()), paid, double(paidCopper) / double(GOLD), g_PveConfig.drifterTeleportGold,
+                std::max(g_PveConfig.drifterTeleportGold, g_PveConfig.drifterTeleportGoldMax));
     }
 
     void PveManager::OnWorldUpdate(uint32 /*diffMs*/)
