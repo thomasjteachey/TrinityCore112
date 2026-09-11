@@ -17295,14 +17295,44 @@ namespace playerbot
         // is followed; with nobody flagged at all the shares fall back to
         // everyone, which is better than parking fifteen bots in their home
         // bands for want of a flag.
-        if (!warModeHumans.empty() && warModeHumans.size() != humans.size())
+        //
+        // But an EMPTY flagged list is not the same question as "nobody is
+        // flagged". Every filter above drops a person from BOTH lists while they
+        // are between zones (the dwell timer), in a capital, in an instance, or
+        // out of their zone's band - and the release loop below erases every
+        // drifter whose person is not in the list that survives here. So with one
+        // flagged player, each of those ordinary gaps would hand the whole fleet
+        // to everybody else - teleported, band-reset and paid an arrival stipend
+        // - and then take it back a few seconds later and pay again. The fleet
+        // would spend its life being re-drafted. When the flagged set has merely
+        // gone quiet, the last decision is held instead.
+        static uint32 s_warModeSeenMs = 0;
+        if (!warModeHumans.empty())
         {
-            TC_LOG_DEBUG("playerbots.pve", "Drifters: following {} of {} people (War Mode only).",
-                uint32(warModeHumans.size()), uint32(humans.size()));
-            humans.swap(warModeHumans);
+            s_warModeSeenMs = nowMs ? nowMs : 1;
+            if (warModeHumans.size() != humans.size())
+            {
+                TC_LOG_DEBUG("playerbots.pve", "Drifters: following {} of {} people (War Mode only).",
+                    uint32(warModeHumans.size()), uint32(humans.size()));
+                humans.swap(warModeHumans);
+            }
         }
+
+        // Longer than the dwell on purpose, so somebody walking over a zone line
+        // is always back inside the grace before it expires.
+        bool const holdForWarMode = warModeHumans.empty() && s_warModeSeenMs &&
+            nowMs - s_warModeSeenMs < (g_PveConfig.drifterZoneDwellSeconds + 30) * 1000;
+
         for (auto itr = s_humanZoneSince.begin(); itr != s_humanZoneSince.end(); )
             itr = online.count(itr->first) ? std::next(itr) : s_humanZoneSince.erase(itr);
+
+        // Somebody flagged was here a moment ago and is only unplaceable right
+        // now. Change nothing: the assignments they hold are still the right
+        // ones, and rebuilding them costs the fleet a teleport and a band reset
+        // each. Everything skipped here is per-pass bookkeeping that the next
+        // pass redoes - and this returns before g_DrifterLock is taken.
+        if (holdForWarMode)
+            return;
 
         if (!target || humans.empty())
         {

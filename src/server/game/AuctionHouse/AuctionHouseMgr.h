@@ -203,9 +203,12 @@ class TC_GAME_API AuctionHouseMgr
         bool RemoveAItem(ObjectGuid::LowType id, bool deleteItem = false, CharacterDatabaseTransaction* trans = nullptr);
         bool PendingAuctionAdd(Player* player, AuctionEntry* aEntry);
         // Takes an auction that is leaving the house out of its seller's
-        // pending list; AuctionHouseObject::RemoveAuction calls it before the
-        // entry is deleted.
-        void PendingAuctionRemove(AuctionEntry const* aEntry);
+        // pending list and collects the deposit it still owes;
+        // AuctionHouseObject::RemoveAuction calls it before the entry is
+        // deleted. Returns how much of the deposit was actually collected -
+        // aEntry->deposit when the auction was not pending at all, because
+        // PendingAuctionProcess has already charged it.
+        uint32 PendingAuctionRemove(AuctionEntry const* aEntry);
         uint32 PendingAuctionCount(Player const* player) const;
         void PendingAuctionProcess(Player* player);
         void UpdatePendingAuctions();

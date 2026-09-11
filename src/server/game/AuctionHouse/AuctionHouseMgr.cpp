@@ -376,6 +376,16 @@ bool RelistUnsoldPlayerbotLot(AuctionHouseObject* house, AuctionEntry* auction,
 
 void AuctionHouseMgr::SendAuctionSuccessfulMail(AuctionEntry* auction, CharacterDatabaseTransaction trans)
 {
+    // Settle the deposit BEFORE the refund is worked out.
+    //
+    // A listing still waiting in pendingAuctionMap has not been charged yet, and
+    // a seller who spent that gold - or logged out - inside the quarter-second
+    // before the pending pass runs pays less than it owes. Refunding the full
+    // deposit anyway would mint the difference, so the refund below pays back
+    // exactly what was collected. An auction that was never pending returns its
+    // whole deposit here, because PendingAuctionProcess already took it.
+    uint32 const depositPaid = PendingAuctionRemove(auction);
+
     ObjectGuid owner_guid(HighGuid::Player, auction->owner);
     Player* owner = ObjectAccessor::FindConnectedPlayer(owner_guid);
     uint32 owner_accId = sCharacterCache->GetCharacterAccountIdByGuid(owner_guid);
@@ -386,7 +396,7 @@ void AuctionHouseMgr::SendAuctionSuccessfulMail(AuctionEntry* auction, Character
         // it earns, and skimming a cut off every sale only moves gold out of
         // the simulation into nowhere.
         uint32 const auctionCut = IsPlayerbotAuctionOwner(owner_accId) ? 0u : auction->GetAuctionCut();
-        uint32 profit = auction->bid + auction->deposit - auctionCut;
+        uint32 profit = auction->bid + depositPaid - auctionCut;
 
         //FIXME: what do if owner offline
         if (owner)
@@ -657,31 +667,46 @@ bool AuctionHouseMgr::PendingAuctionAdd(Player* player, AuctionEntry* aEntry)
 // The deposit that auction owed is collected here: the pending pass that would
 // have charged it will never see the entry now, and a successful sale refunds
 // the deposit, so leaving it uncharged would hand the seller free money.
-void AuctionHouseMgr::PendingAuctionRemove(AuctionEntry const* aEntry)
+//
+// What was ACTUALLY collected is returned, and a sale refunds that rather than
+// the full deposit - a seller who spent the gold in the same quarter-second, or
+// logged out inside it, pays less than it owes, and refunding the difference
+// would mint the rest. Not pending means PendingAuctionProcess already charged
+// the whole deposit, which is what the caller is told.
+uint32 AuctionHouseMgr::PendingAuctionRemove(AuctionEntry const* aEntry)
 {
-    if (!aEntry || pendingAuctionMap.empty())
-        return;
+    if (!aEntry)
+        return 0;
+
+    if (pendingAuctionMap.empty())
+        return aEntry->deposit;
 
     auto itr = pendingAuctionMap.find(ObjectGuid::Create<HighGuid::Player>(aEntry->owner));
     if (itr == pendingAuctionMap.end())
-        return;
+        return aEntry->deposit;
 
     PlayerAuctions* auctions = itr->second.first;
     auto const found = std::find(auctions->begin(), auctions->end(), aEntry);
     if (found == auctions->end())
-        return;
+        return aEntry->deposit;
 
     auctions->erase(found);
 
+    uint32 collected = 0;
     if (aEntry->deposit)
         if (Player* seller = ObjectAccessor::FindConnectedPlayer(itr->first))
-            seller->ModifyMoney(-int32(std::min<uint64>(aEntry->deposit, seller->GetMoney())));
+        {
+            collected = uint32(std::min<uint64>(aEntry->deposit, seller->GetMoney()));
+            seller->ModifyMoney(-int32(collected));
+        }
 
     if (auctions->empty())
     {
         pendingAuctionMap.erase(itr);
         delete auctions;
     }
+
+    return collected;
 }
 
 uint32 AuctionHouseMgr::PendingAuctionCount(Player const* player) const
