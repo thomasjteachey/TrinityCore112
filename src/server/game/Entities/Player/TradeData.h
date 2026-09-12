@@ -20,6 +20,8 @@
 
 #include "ObjectGuid.h"
 
+#include <ctime>
+
 enum TradeSlots
 {
     TRADE_SLOT_COUNT          = 7,
@@ -34,9 +36,7 @@ class Player;
 class TC_GAME_API TradeData
 {
 public:
-    TradeData(Player* player, Player* trader) :
-        _player(player), _trader(trader), _accepted(false), _acceptProccess(false),
-        _money(0), _spell(0), _spellCastItem() { }
+    TradeData(Player* player, Player* trader);
 
     Player* GetTrader() const { return _trader; }
     TradeData* GetTraderData() const;
@@ -61,6 +61,19 @@ public:
     bool IsInAcceptProcess() const { return _acceptProccess; }
     void SetInAcceptProcess(bool state) { _acceptProccess = state; }
 
+    // Whether the other end ever put the trade window on screen (CMSG_BEGIN_TRADE).
+    //
+    // A trade is created for BOTH players the moment one of them asks for it, but
+    // the target's client answers only if it can actually open the window - with
+    // the auction house, or another full-screen frame, already up it says nothing
+    // at all. Neither a begin nor a cancel then arrives, and both players keep a
+    // trade object for the rest of the session: one is told "you are already
+    // trading", everybody else is told that character is busy. So a trade that was
+    // never opened is allowed to go stale, and the next trade attempt clears it.
+    bool IsOpened() const { return _opened; }
+    void SetOpened() { _opened = true; }
+    time_t GetStartedAt() const { return _startedAt; }
+
 private:
     void Update(bool for_trader = true) const;
 
@@ -69,6 +82,8 @@ private:
 
     bool       _accepted;                              // _player press accept for trade list
     bool       _acceptProccess;                        // one from player/trader press accept and this processed
+    bool       _opened;                                // the trade window was actually opened by the client
+    time_t     _startedAt;                             // when the trade was created, for the stale sweep
 
     uint32     _money;                                 // _player place money to trade
 

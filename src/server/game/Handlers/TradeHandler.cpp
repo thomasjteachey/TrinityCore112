@@ -19,6 +19,7 @@
 #include "AccountMgr.h"
 #include "Common.h"
 #include "DatabaseEnv.h"
+#include "GameTime.h"
 #include "Item.h"
 #include "Language.h"
 #include "Log.h"
@@ -564,6 +565,11 @@ void WorldSession::HandleBeginTradeOpcode(WorldPacket& /*recvPacket*/)
     if (!my_trade)
         return;
 
+    // The window is on screen at both ends now, so neither side is stale.
+    my_trade->SetOpened();
+    if (TradeData* his_trade = my_trade->GetTraderData())
+        his_trade->SetOpened();
+
     TradeStatusInfo info;
     info.Status = TRADE_STATUS_OPEN_WINDOW;
     my_trade->GetTrader()->GetSession()->SendTradeStatus(info);
@@ -587,10 +593,27 @@ void WorldSession::HandleCancelTradeOpcode(WorldPacket& /*recvPacket*/)
         _player->TradeCancel(true);
 }
 
+// A trade that was asked for but never opened, long enough ago that nobody is
+// waiting on the popup any more. See TradeData::IsOpened: the target's client
+// stays silent when it cannot show the window - the auction house being the way
+// people find this - and without a sweep both players carry the dead trade until
+// they log out.
+static bool IsStaleUnopenedTrade(TradeData const* trade)
+{
+    constexpr time_t kUnopenedTradeSeconds = 15;
+    return trade && !trade->IsOpened() &&
+        GameTime::GetGameTime() - trade->GetStartedAt() >= kUnopenedTradeSeconds;
+}
+
 void WorldSession::HandleInitiateTradeOpcode(WorldPacket& recvPacket)
 {
     ObjectGuid ID;
     recvPacket >> ID;
+
+    // Asking again is what clears the dead one: TradeCancel takes down both ends,
+    // so a player who got stuck simply trades again instead of relogging.
+    if (IsStaleUnopenedTrade(GetPlayer()->m_trade))
+        GetPlayer()->TradeCancel(true);
 
     if (GetPlayer()->m_trade)
         return;
@@ -656,6 +679,11 @@ void WorldSession::HandleInitiateTradeOpcode(WorldPacket& recvPacket)
         SendTradeStatus(info);
         return;
     }
+
+    // Their leftover is what answers "that character is busy" to everyone who
+    // tries them, so it goes the same way.
+    if (pOther != GetPlayer() && IsStaleUnopenedTrade(pOther->m_trade))
+        pOther->TradeCancel(true);
 
     if (pOther == GetPlayer() || pOther->m_trade)
     {

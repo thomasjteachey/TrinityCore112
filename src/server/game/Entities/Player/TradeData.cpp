@@ -16,9 +16,14 @@
  */
 
 #include "TradeData.h"
+#include "GameTime.h"
 #include "Item.h"
 #include "Player.h"
 #include "WorldSession.h"
+
+TradeData::TradeData(Player* player, Player* trader) :
+    _player(player), _trader(trader), _accepted(false), _acceptProccess(false),
+    _opened(false), _startedAt(GameTime::GetGameTime()), _money(0), _spell(0), _spellCastItem() { }
 
 TradeData* TradeData::GetTraderData() const
 {
