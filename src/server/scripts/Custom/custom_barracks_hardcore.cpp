@@ -1448,6 +1448,35 @@ namespace BarracksHardcore
         // single death cannot pin its weapon choice forever.
         DiedHoldingWeapon const diedHolding = TakeWeaponShapeAtDeath(player);
 
+        // What it is holding RIGHT NOW, read before the stale pass below starts
+        // retiring pieces.
+        //
+        // The died-holding record only exists after a death. A LEVEL-UP re-issue
+        // has none - the kit simply retires what has fallen behind and searches
+        // again - and with no shape to prefer that search ranks one-handers and
+        // two-handers together by required level, where a staff or a polearm wins.
+        // That is how Baku logged out holding an axe and a sword, levelled, and
+        // logged back in holding a staff: the two-hander took the main hand,
+        // shoved the sword into the bags, and the loose-kit sweep on the same pass
+        // destroyed it. The shape a character is wearing is as good an answer as
+        // the shape it died in, and it is the only one a level-up has.
+        uint32 wornMainSubClass = 0;
+        bool wornMainIsWeapon = false;
+        bool wornMainTwoHanded = false;
+        bool wornOffHandWeapon = false;
+        if (Item const* mainHand = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND))
+            if (ItemTemplate const* mainProto = mainHand->GetTemplate();
+                mainProto && mainProto->Class == ITEM_CLASS_WEAPON)
+            {
+                wornMainIsWeapon = true;
+                wornMainSubClass = mainProto->SubClass;
+                wornMainTwoHanded = mainProto->InventoryType == INVTYPE_2HWEAPON;
+            }
+        if (Item const* offHand = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND))
+            if (ItemTemplate const* offProto = offHand->GetTemplate();
+                offProto && offProto->Class == ITEM_CLASS_WEAPON)
+                wornOffHandWeapon = true;
+
         uint32 granted = 0;
 
         for (uint8 slot : kKitSlots)
@@ -1525,6 +1554,13 @@ namespace BarracksHardcore
                 preferShape = true;
                 preferredSubClass = diedHolding.offSubClass;
             }
+            else if (slot == EQUIPMENT_SLOT_MAINHAND && wornMainIsWeapon)
+            {
+                // No death to be faithful to: be faithful to the hand instead, so
+                // an axe comes back an axe across a level-up.
+                preferShape = true;
+                preferredSubClass = wornMainSubClass;
+            }
 
             // Somebody who died with a weapon in each hand gets one hand back at a
             // time, never a two-hander that swallows both.
@@ -1536,8 +1572,14 @@ namespace BarracksHardcore
             // EQUIP_ERR_CANT_EQUIP_WITH_TWOHANDED and leaves the slot empty. So a
             // hunter who fell over holding an axe and a sword stood back up holding
             // a polearm and nothing else.
+            // ...and the same for a character that is dual wielding RIGHT NOW,
+            // which is the level-up case: the off hand it is about to swallow is
+            // not empty, and everything the comment above describes happens just
+            // the same when nobody died to record it.
             bool const diedDualWielding = diedHolding.hadWeapon && diedHolding.hadOffHandWeapon;
-            bool const excludeTwoHanded = diedDualWielding && slot == EQUIPMENT_SLOT_MAINHAND;
+            bool const dualWieldingNow = wornOffHandWeapon && !wornMainTwoHanded;
+            bool const excludeTwoHanded = (diedDualWielding || dualWieldingNow) &&
+                slot == EQUIPMENT_SLOT_MAINHAND;
 
             for (uint8 pass = 0; pass < 2 && !bestItemId; ++pass)
             {
