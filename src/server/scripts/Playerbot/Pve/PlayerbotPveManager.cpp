@@ -592,6 +592,7 @@ namespace
     bool CanHuntDevilsaur(Player const* bot, Creature const* creature);
     void HoldLootFromAuction(ObjectGuid itemGuid, uint32 seconds, ObjectGuid owner);
     bool IsHeldFromAuction(ObjectGuid itemGuid);
+    bool IsHeldOrPacedFromAuction(ObjectGuid itemGuid);
     uint32 RequiredAmmoSubclass(Player const* bot);
     void MoveTowardThrottled(Player* bot, Position const& destination);
     void TrimOverstockedConsumables(Player* bot);
@@ -10144,9 +10145,51 @@ namespace
         return itr != g_AuctionHoldByItem.end() && itr->second.Until > now;
     }
 
+    // When the hold lapses, the owner's things go up ONE AT A TIME.
+    //
+    // The window ending used to open the gate on all of them at once: a bot that
+    // emptied a nine piece chest posted all nine on its next listing pass, and the
+    // owner - who had just run back to an empty chest - watched their kit appear on
+    // the house in a single breath. Paced, there is always a queue still to catch:
+    // something to buy back, or a bot to whisper about the next piece.
+    //
+    // Counted per OWNER across the whole fleet rather than per bot, because a chest
+    // is emptied by whoever is standing there - nine pieces can be nine bots, and
+    // pacing each of them separately would pace nothing at all.
+    std::unordered_map<uint64, time_t> g_AuctionReleasedByOwner;
+
+    // The listing question: is this somebody's death-chest loot that may not go up
+    // yet - either still inside their run-back window, or waiting its turn in the
+    // queue behind another of their pieces? Only the auction path asks it; the
+    // vendor and the discard paths keep asking IsHeldFromAuction, since neither
+    // puts the item anywhere the owner could have chased it to anyway.
+    bool IsHeldOrPacedFromAuction(ObjectGuid itemGuid)
+    {
+        time_t const now = GameTime::GetGameTime();
+        uint32 const spacing = playerbot::PveManager::GetConfig().deathChestAuctionReleaseSeconds;
+
+        std::lock_guard<std::mutex> guard(g_AuctionHoldLock);
+        auto itr = g_AuctionHoldByItem.find(itemGuid.GetRawValue());
+        if (itr == g_AuctionHoldByItem.end())
+            return false;
+
+        if (itr->second.Until > now)
+            return true;
+
+        if (!spacing || itr->second.Owner.IsEmpty())
+            return false;
+
+        auto const released = g_AuctionReleasedByOwner.find(itr->second.Owner.GetRawValue());
+        return released != g_AuctionReleasedByOwner.end() && now - released->second < time_t(spacing);
+    }
+
     // Claim the record, once, atomically. Find-then-erase as two steps would let
     // the vendor errand on another thread slip between them, and would let two
     // overlapping passes both send the notice.
+    //
+    // This is also where the queue above advances, because it is called at the one
+    // moment a held item is actually on the auction house - not when it was merely
+    // considered.
     bool TakeAuctionHold(ObjectGuid itemGuid, ObjectGuid& outOwner)
     {
         std::lock_guard<std::mutex> guard(g_AuctionHoldLock);
@@ -10155,6 +10198,8 @@ namespace
             return false;
 
         outOwner = itr->second.Owner;
+        if (!outOwner.IsEmpty())
+            g_AuctionReleasedByOwner[outOwner.GetRawValue()] = GameTime::GetGameTime();
         g_AuctionHoldByItem.erase(itr);
         return true;
     }
@@ -10176,6 +10221,11 @@ namespace
         std::lock_guard<std::mutex> guard(g_AuctionHoldLock);
         for (auto itr = g_AuctionHoldByItem.begin(); itr != g_AuctionHoldByItem.end(); )
             itr = itr->second.Until < cutoff ? g_AuctionHoldByItem.erase(itr) : std::next(itr);
+
+        // The queue marks go the same way; one per player who has died is nothing,
+        // but nothing is not zero over an uptime.
+        for (auto itr = g_AuctionReleasedByOwner.begin(); itr != g_AuctionReleasedByOwner.end(); )
+            itr = itr->second < cutoff ? g_AuctionReleasedByOwner.erase(itr) : std::next(itr);
     }
 
     bool IsAuctionableSurplus(Player* bot, Item* item, bool ignoreLotSize)
@@ -10184,9 +10234,10 @@ namespace
         if (!proto)
             return false;
 
-        // Somebody's death chest, still inside the window they have to come back
-        // and take it off the body themselves.
-        if (IsHeldFromAuction(item->GetGUID()))
+        // Somebody's death chest: still inside the window they have to come back
+        // and take it off the body themselves, or waiting its turn in that owner's
+        // one-a-minute queue afterwards.
+        if (IsHeldOrPacedFromAuction(item->GetGUID()))
             return false;
 
         // The field kit is a LOANER, and it is never merchandise.
@@ -16709,7 +16760,9 @@ namespace playerbot
         g_PveConfig.restHealthPct = sConfigMgr->GetFloatDefault("Playerbot.Pve.RestHealthPct", 60.0f);
         g_PveConfig.restManaPct = sConfigMgr->GetFloatDefault("Playerbot.Pve.RestManaPct", 50.0f);
         g_PveConfig.deathChestAuctionHoldSeconds = uint32(std::max(0,
-            sConfigMgr->GetIntDefault("Playerbot.Pve.DeathChestAuctionHoldSeconds", 10 * MINUTE)));
+            sConfigMgr->GetIntDefault("Playerbot.Pve.DeathChestAuctionHoldSeconds", 5 * MINUTE)));
+        g_PveConfig.deathChestAuctionReleaseSeconds = uint32(std::max(0,
+            sConfigMgr->GetIntDefault("Playerbot.Pve.DeathChestAuctionReleaseSeconds", MINUTE)));
         g_PveConfig.chestTauntEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.ChestTaunt.Enable", true);
         g_PveConfig.chestAuctionNoticeEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.ChestAuctionNotice.Enable", true);
         g_PveConfig.tavernEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Tavern.Enable", true);

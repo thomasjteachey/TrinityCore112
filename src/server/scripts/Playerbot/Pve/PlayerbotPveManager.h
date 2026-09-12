@@ -39,7 +39,8 @@ struct PveConfig
     float restManaPct = 50.0f;
     // Seconds a bot must hold an item taken from a PLAYER's death chest before it
     // may list it. Long enough to corpse-run back and take it off the bot.
-    uint32 deathChestAuctionHoldSeconds = 600;    // 10 minutes
+    uint32 deathChestAuctionHoldSeconds = 300;    // 5 minutes to run back for it
+    uint32 deathChestAuctionReleaseSeconds = 60;  // ...then one of that owner's things a minute
     bool chestTauntEnabled = true;
     // And the follow-up, sent when the hold lapses and the gear is actually
     // listed. Separate from the taunt because it is a different message doing a

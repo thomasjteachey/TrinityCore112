@@ -786,6 +786,28 @@ Playerbot.OpenWorldNoFriendlyFire = 1
 #        Default:     0
 Playerbot.Pve.AuctionSell.Enable = 0
 
+#    Playerbot.Pve.DeathChestAuctionHoldSeconds
+#        Description: How long loot taken from a player's death chest is kept OFF the
+#                     auction house. The bot keeps it, wears it and will list it in the
+#                     end - this is only the window the owner has to run back and deal
+#                     with the bot that has it. 0 lists it as soon as the bot gets round
+#                     to it.
+#        Default:     300 (5 minutes)
+
+Playerbot.Pve.DeathChestAuctionHoldSeconds = 300
+
+#    Playerbot.Pve.DeathChestAuctionReleaseSeconds
+#        Description: Once the window above has passed, how long the fleet waits between
+#                     posting one of that owner's pieces and the next. Counted per owner
+#                     across every bot holding their things, so a nine piece chest goes up
+#                     over nine minutes rather than in one breath, and there is always
+#                     something left to buy back or whisper about. 0 posts them all at
+#                     the first opportunity.
+#        Default:     60 (one a minute)
+
+Playerbot.Pve.DeathChestAuctionReleaseSeconds = 60
+
+
 #    Playerbot.Pve.ZoneGuardians.PerZone
 #        Description: This many bots per classic zone become that zone's permanent guardians:
 #                     set to the zone's classic level cap, XP gain frozen, relocated only within
