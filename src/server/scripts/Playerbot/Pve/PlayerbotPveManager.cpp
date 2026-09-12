@@ -10189,6 +10189,20 @@ namespace
         if (IsHeldFromAuction(item->GetGUID()))
             return false;
 
+        // The field kit is a LOANER, and it is never merchandise.
+        //
+        // The note further down says soulbinding keeps the kit off the house, and
+        // on a realm where the kit is soulbound it does - but Barracks Plus unbinds
+        // everything by design (item_template bonding zeroed), so CanBeTraded says
+        // yes to every kit piece, and a spare one in the bags is artifact quality
+        // with no sell price: straight past the quality gate, priced off the
+        // item-level curve, and posted. Live: six kit lots on the house, including
+        // Orhild's own Rondel at 49 gold. Asked by entry range, which is what the
+        // kit actually is, rather than by a binding rule that only holds on the
+        // other realm.
+        if (IsFieldKitDuplicateEntry(proto->ItemId))
+            return false;
+
         // The core's own rules for what may be listed at all.
         if (!item->CanBeTraded() || item->IsNotEmptyBag() || item->GetUInt32Value(ITEM_FIELD_DURATION) ||
             proto->HasFlag(ITEM_FLAG_CONJURED) || sAuctionMgr->GetAItem(item->GetGUID().GetCounter()))
@@ -11093,6 +11107,13 @@ namespace
 
                 ItemTemplate const* proto = item->GetTemplate();
                 if (!proto)
+                    continue;
+
+                // Never another bot's field kit. It is a loaner the hardcore
+                // ruleset hands out for free and reissues on death, so paying gold
+                // for one is pure loss - and the buyer's own kit sweep destroys it
+                // as a loose piece the moment it lands.
+                if (IsFieldKitDuplicateEntry(proto->ItemId))
                     continue;
 
                 // Bags and quivers are shopped for exactly like gear. The scorer
