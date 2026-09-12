@@ -1828,6 +1828,36 @@ void Player::Update(uint32 p_time)
     //because we don't want player's ghost teleported from graveyard
     if (IsHasDelayedTeleport() && IsAlive())
         TeleportTo(m_teleport_dest, m_teleport_options);
+    else if (IsHasDelayedTeleport())
+    {
+        // Dead, so the line above declined to finish the teleport - and for a
+        // socketless bot nothing else ever will. A near teleport cast from inside
+        // Unit::Update always parks itself in the delayed arm of TeleportTo first
+        // (see the IsHasDelayedTeleport() early return there), which sets the near
+        // semaphore and stores the destination without moving anything; normally
+        // the call above completes it later in this same Update. Die in between -
+        // a mage blinking as it goes down in a battleground is the common case -
+        // and both the flag and the semaphore stay set instead.
+        //
+        // Two things then go wrong. The stuck semaphore leaves the bot permanently
+        // "mid-teleport", which is the state the socketless branch of TeleportTo
+        // exists to prevent, and the stored destination is still pending, so the
+        // line above fires the moment the bot revives and ports it back to wherever
+        // it blinked from however long ago.
+        //
+        // Discard the teleport rather than performing it late: it never took
+        // effect, the bot is still standing where it really was, so dropping the
+        // flags leaves it consistent. SaveToDB keys off IsBeingTeleported(), so
+        // clearing the semaphore also stops the stale destination being written out
+        // as the character's position. Real players are left alone - they keep the
+        // ghost-at-graveyard behaviour the comment above describes.
+        WorldSession const* session = GetSession();
+        if (session && (session->IsVirtualSession() || session->IsTransientPlayerSession()))
+        {
+            SetDelayedTeleportFlag(false);
+            SetSemaphoreTeleportNear(false);
+        }
+    }
 }
 
 void Player::setDeathState(DeathState s)
@@ -2218,8 +2248,36 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
         // code for finish transfer called in WorldSession::HandleMovementOpcodes()
         // at client packet MSG_MOVE_TELEPORT_ACK
         SetSemaphoreTeleportNear(true);
+
+        // Observers follow a socketless server-driven player purely through spline
+        // playback (SMSG_MONSTER_MOVE), and MSG_MOVE_TELEPORT carries a full
+        // MovementInfo block. Sending one switches the observing client over to the
+        // client-movement stream for this unit - a stream a bot with no client never
+        // produces - so it is left holding a position nothing refreshes and renders
+        // the unit flicking between that stale point and wherever the next spline
+        // says it is. The server-side position stays correct throughout, which is
+        // why pets and AI keep tracking the bot perfectly while only players
+        // watching it see the porting.
+        //
+        // Same rule MovementPacketSender::SendSpeedChangeToObservers already applies
+        // to MSG_MOVE_SET_*_SPEED, for the same reason; the teleport packet was never
+        // given the same treatment. The two spells that expose it are the only self
+        // near-teleports a bot casts in normal combat: mage Blink, and the shadow
+        // priest's Shadow Wraith Fade (89784), whose expiry ports the body to the
+        // wraith. The socketless branch below republishes the landing on the spline
+        // protocol instead.
+        //
+        // Deliberately gated here rather than inside Unit::SendTeleportPacket: the
+        // custom-game lobby preview clones are socketless too, but they are static
+        // and have no spline to conflict with, so the teleport packet is the only
+        // thing that repositions them for observers (PlayerbotObcCloneManager calls
+        // it directly, bypassing this function).
+        bool socketlessServerDriven = false;
+        if (WorldSession const* session = GetSession())
+            socketlessServerDriven = session->IsVirtualSession() || session->IsTransientPlayerSession();
+
         // near teleport, triggering send MSG_MOVE_TELEPORT_ACK from client at landing
-        if (!GetSession()->PlayerLogout())
+        if (!GetSession()->PlayerLogout() && !socketlessServerDriven)
             SendTeleportPacket(m_teleport_dest, (options & TELE_TO_TRANSPORT_TELEPORT) != 0);
 
         // A SERVER-DRIVEN BOT NEVER SENDS THAT ACK, and nothing else clears the
@@ -2239,14 +2297,28 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
         // and completing a teleport must not depend on a bot session's mover
         // bookkeeping being intact. These are the same three steps the
         // forceNearFallback branch of ResolvePendingTeleport performs.
-        if (WorldSession const* session = GetSession())
+        if (socketlessServerDriven)
         {
-            if (session->IsVirtualSession() || session->IsTransientPlayerSession())
-            {
-                SetSemaphoreTeleportNear(false);
-                UpdatePosition(m_teleport_dest, true);
-                SetFallInformation(0, GetPositionZ());
-            }
+            SetSemaphoreTeleportNear(false);
+            UpdatePosition(m_teleport_dest, true);
+            SetFallInformation(0, GetPositionZ());
+
+            // Observers were told nothing above, because the MSG_MOVE_TELEPORT
+            // broadcast was skipped. Publish the landing on the protocol those
+            // clients are actually following instead.
+            //
+            // Order matters. The stop is emitted after UpdatePosition, so the
+            // SMSG_MONSTER_MOVE it sends carries the destination rather than the
+            // point the bot blinked away from; it also cancels the spline observers
+            // are still interpolating, which would otherwise walk the model back out
+            // of the destination until the next order arrived. Clearing the
+            // generator afterwards makes the bot's AI re-path from where it actually
+            // is on its next tick - the same two steps
+            // TryFinalizePendingVirtualPlayerTeleport already performs before it
+            // finalizes a pending bot teleport.
+            StopMoving();
+            if (MotionMaster* motionMaster = GetMotionMaster())
+                motionMaster->Clear();
         }
     }
     else
