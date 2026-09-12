@@ -6338,6 +6338,13 @@ namespace
         {
         case CLASS_WARRIOR:
         case CLASS_PALADIN:
+        // Listed explicitly because the field kit's own copy of this rule
+        // (DesiredArmorSubclass in custom_barracks_hardcore.cpp) already names
+        // death knights alongside warriors and paladins. Falling through to the
+        // cloth default here was harmless while nothing consulted the tier at an
+        // empty slot; now that something does, the two tables disagreeing would
+        // have a DK refuse plate because cloth was "on tier".
+        case CLASS_DEATH_KNIGHT:
             return bot->GetLevel() >= 40 ? ITEM_SUBCLASS_ARMOR_PLATE : ITEM_SUBCLASS_ARMOR_MAIL;
         case CLASS_HUNTER:
         case CLASS_SHAMAN:
@@ -6348,6 +6355,113 @@ namespace
         default:
             return ITEM_SUBCLASS_ARMOR_CLOTH;
         }
+    }
+
+    // Which equipment slot a piece of armour belongs in. Deliberately a plain
+    // table rather than Player::FindEquipSlot: that function is a probe with side
+    // conditions (it benches an off hand for a two-hander, and answers NULL_SLOT
+    // for an occupied slot), and all that is wanted here is "is this item for the
+    // same slot as the one being filled".
+    uint8 ArmorSlotForInventoryType(uint32 inventoryType)
+    {
+        switch (inventoryType)
+        {
+        case INVTYPE_HEAD:      return EQUIPMENT_SLOT_HEAD;
+        case INVTYPE_SHOULDERS: return EQUIPMENT_SLOT_SHOULDERS;
+        case INVTYPE_CHEST:
+        case INVTYPE_ROBE:      return EQUIPMENT_SLOT_CHEST;
+        case INVTYPE_WAIST:     return EQUIPMENT_SLOT_WAIST;
+        case INVTYPE_LEGS:      return EQUIPMENT_SLOT_LEGS;
+        case INVTYPE_FEET:      return EQUIPMENT_SLOT_FEET;
+        case INVTYPE_WRISTS:    return EQUIPMENT_SLOT_WRISTS;
+        case INVTYPE_HANDS:     return EQUIPMENT_SLOT_HANDS;
+        default:                return NULL_SLOT;
+        }
+    }
+
+    bool HasFightingValue(ItemTemplate const* proto);
+
+    // Does the bot actually know how to wear its own tier?
+    //
+    // Proficiency is a SKILL, not a level, and the two disagree more often than is
+    // comfortable: measured on the live fleet, two level 60 characters whose tier
+    // PreferredArmorSubclass calls PLATE do not know Plate Mail at all. Anything
+    // that strips a bot on the strength of "this is off tier" has to ask this
+    // first, because the field kit refuses to issue off its own wanted subclass -
+    // so for those two the strip would not be replaced, only undone.
+    bool KnowsArmorProficiency(Player const* bot, uint32 armorSubclass)
+    {
+        switch (armorSubclass)
+        {
+        case ITEM_SUBCLASS_ARMOR_PLATE:   return bot->HasSkill(SKILL_PLATE_MAIL);
+        case ITEM_SUBCLASS_ARMOR_MAIL:    return bot->HasSkill(SKILL_MAIL);
+        case ITEM_SUBCLASS_ARMOR_LEATHER: return bot->HasSkill(SKILL_LEATHER);
+        case ITEM_SUBCLASS_ARMOR_CLOTH:   return bot->HasSkill(SKILL_CLOTH);
+        default:                          return false;
+        }
+    }
+
+    // Is something of the class's own armour tier already sitting in the bags,
+    // waiting for this very slot?
+    //
+    // This is what lets the empty-slot rule below prefer mail for a shaman
+    // without ever refusing it clothes. It answers a question about ALTERNATIVES,
+    // which the candidate-versus-incumbent comparison further down cannot ask: at
+    // an empty slot there is no incumbent to lose to, so "leather is a tier down"
+    // has nothing to bite on.
+    //
+    // Only the eight tiered slots can answer yes. Cloaks are cloth for every
+    // class and there is no such thing as a mail cloak, so a cloak can never be
+    // refused by this - the scan simply finds nothing.
+    bool HasOnTierArmorInBagsForSlot(Player const* bot, uint8 slot, uint32 preferredSubclass)
+    {
+        auto matches = [&](Item* item) -> bool
+        {
+            if (!item)
+                return false;
+            ItemTemplate const* proto = item->GetTemplate();
+            // CanUseItem(Item*), NOT a RequiredLevel compare. Refusing the
+            // off-tier piece is only safe while the on-tier one it defers to
+            // would actually be accepted, and the equip pass gates on
+            // AllowableClass, AllowableRace, faction, RequiredSkill and its rank,
+            // RequiredSpell, reputation, binding, and the armour proficiency
+            // behind Item::GetSkill - none of which a level compare can see.
+            // Defer to a piece the equip pass would itself reject and the slot
+            // stays BARE; worse, SellVendorJunk and IsAuctionableSurplus ask this
+            // same predicate, so the piece the bot COULD have worn gets vendored
+            // or listed as well. Measured on the live fleet before this was
+            // tightened: a level 28 shaman carrying a druid-only leather belt was
+            // one bare waist away from exactly that, and two level 60
+            // warriors/paladins do not know Plate Mail at all while this function
+            // names plate as their tier.
+            //
+            // not_loading = false for the reason the rebirth keep-decision below
+            // documents: that flag gates only the "you are dead" early-out, and on
+            // a realm where a bot dies every few minutes the rule has to keep
+            // working during the very death refill it exists for. Subsumes the
+            // RequiredLevel test.
+            return proto && proto->Class == ITEM_CLASS_ARMOR &&
+                proto->SubClass == preferredSubclass &&
+                ArmorSlotForInventoryType(proto->InventoryType) == slot &&
+                bot->CanUseItem(item, false) == EQUIP_ERR_OK &&
+                HasFightingValue(proto) && !LooksLikeScaffoldingItem(proto);
+        };
+
+        for (uint8 i = INVENTORY_SLOT_ITEM_START; i < INVENTORY_SLOT_ITEM_END; ++i)
+            if (matches(bot->GetItemByPos(INVENTORY_SLOT_BAG_0, i)))
+                return true;
+
+        for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+        {
+            Bag const* bag = bot->GetBagByPos(bagSlot);
+            if (!bag)
+                continue;
+            for (uint32 i = 0; i < bag->GetBagSize(); ++i)
+                if (matches(bag->GetItemByPos(uint8(i))))
+                    return true;
+        }
+
+        return false;
     }
 
     // The same deterministic profile index that drives talent donors decides
@@ -6841,7 +6955,38 @@ namespace
 
         // An empty slot is not a licence to buy anything at all.
         if (!incumbent)
-            return HasFightingValue(candidate);
+        {
+            if (!HasFightingValue(candidate))
+                return false;
+
+            // ...nor a licence to dress out of tier. The comparison below refuses
+            // to equip DOWN a tier at any item level, but it only ever runs
+            // against an incumbent, and an empty slot has none - so nothing
+            // stopped a level 54 shaman putting on item level 30 LEATHER legs,
+            // and on a realm where a bot dies every few minutes, refilling bare
+            // slots is most of how it dresses. That is why a mail-wearing fleet
+            // drops leather when you kill it.
+            //
+            // Refuse the off-tier piece only while something on tier is actually
+            // in the bags for this slot. Bare is worse than leather: with nothing
+            // better the leather still goes on, and the moment a mail piece turns
+            // up the comparison path displaces it at any item level.
+            //
+            // The off-hand rule above had to learn this same lesson - an empty
+            // slot is how the wrong thing gets in - and fixed it for one slot
+            // without generalising it to armour tiers.
+            if (candidate->Class == ITEM_CLASS_ARMOR &&
+                candidate->SubClass >= ITEM_SUBCLASS_ARMOR_CLOTH &&
+                candidate->SubClass <= ITEM_SUBCLASS_ARMOR_PLATE)
+            {
+                uint32 const preferred = PreferredArmorSubclass(bot);
+                if (candidate->SubClass != preferred &&
+                    HasOnTierArmorInBagsForSlot(bot, slot, preferred))
+                    return false;
+            }
+
+            return true;
+        }
 
         if (candidate->Class == ITEM_CLASS_WEAPON && incumbent->Class == ITEM_CLASS_WEAPON)
         {
@@ -19048,7 +19193,30 @@ namespace playerbot
             // could not put back on. not_loading = false because that flag only
             // gates the "you are dead" early-out, and a bot that happens to be a
             // corpse right now should still be judged on what it can wear.
-            if (proto->RequiredLevel <= bottomLevel && bot->CanUseItem(item, false) == EQUIP_ERR_OK)
+            // Off-tier armour does not survive a level jump either, and THIS is
+            // the door a level 54 shaman in leather actually comes through.
+            //
+            // A rebirth sets the new level first (GiveLevel above) and asks this
+            // question after, and CanUseItem happily approves leather on a shaman -
+            // so gear bought at 35, where leather genuinely WAS his tier, stayed on
+            // at 54 where mail is. Nothing downstream removed it: the equip pass
+            // only displaces off-tier when an on-tier candidate turns up to do the
+            // displacing. Shed it into the bags instead and IssueWhiteFieldKit
+            // below refills the slot on tier in the same breath - it fills empty
+            // slots only, which is exactly what this leaves it.
+            //
+            // Guarded on actually knowing the tier, for the reason
+            // KnowsArmorProficiency documents: strip a bot whose tier it cannot
+            // wear and the kit will not dress it again.
+            uint32 const preferredTier = PreferredArmorSubclass(bot);
+            bool const sheddableOffTier = proto->Class == ITEM_CLASS_ARMOR &&
+                proto->SubClass >= ITEM_SUBCLASS_ARMOR_CLOTH &&
+                proto->SubClass <= ITEM_SUBCLASS_ARMOR_PLATE &&
+                proto->SubClass != preferredTier &&
+                KnowsArmorProficiency(bot, preferredTier);
+
+            if (!sheddableOffTier && proto->RequiredLevel <= bottomLevel &&
+                bot->CanUseItem(item, false) == EQUIP_ERR_OK)
                 continue;
 
             ItemPosCountVec dest;
