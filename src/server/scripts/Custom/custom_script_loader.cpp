@@ -53,6 +53,7 @@ void AddSC_custom_t2_priest_mage();
 void AddSC_custom_t2_rogue_armor();
 void AddSC_custom_southpark_nolife();
 void AddSC_custom_sucky_demon();
+void AddSC_custom_starter_booster();
 void AddSC_GOMove_commandscript();
 void AddSC_GOEditor();
 void AddSC_rts_building();
@@ -103,6 +104,7 @@ void AddCustomScripts()
     AddSC_custom_t2_rogue_armor();
     AddSC_custom_southpark_nolife();
     AddSC_custom_sucky_demon();
+    AddSC_custom_starter_booster();
     AddSC_GOMove_commandscript();
     AddSC_GOEditor();
     AddSC_rts_building();
