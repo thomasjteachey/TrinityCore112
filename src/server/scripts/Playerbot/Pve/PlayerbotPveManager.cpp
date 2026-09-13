@@ -17965,6 +17965,8 @@ namespace playerbot
         // before g_DrifterLock is taken: see the lock-order note on the table.
         std::unordered_map<uint64, uint32> localHomeByBot;
         std::unordered_map<uint64, uint32> botZoneNow;
+        // bot -> classId * 3 + spec, for the class/spec spread of the draft below.
+        std::unordered_map<uint64, uint32> comboByBot;
         // Who has somebody standing over them. Gathered on this pass because it is
         // already the pass that walks every bot, and because g_HumanSpotLock has to
         // be taken before g_DrifterLock like every other lock this function uses -
@@ -17981,6 +17983,12 @@ namespace playerbot
             {
                 localHomeByBot[bot->GetGUID().GetRawValue()] = home;
                 botZoneNow[bot->GetGUID().GetRawValue()] = bot->GetZoneId();
+                // Class and build together, so the draft can spread itself over
+                // all twenty-seven of them. BotSpreadIndex is the same answer the
+                // talent donor and the weapon policy use, so this IS the bot's
+                // spec and not a second opinion about it.
+                comboByBot[bot->GetGUID().GetRawValue()] =
+                    uint32(bot->GetClass()) * 3 + BotSpreadIndex(bot, 3);
                 if (IsWatchedByAnyPerson(bot))
                     watchedBots.insert(bot->GetGUID().GetRawValue());
             }
@@ -18024,6 +18032,8 @@ namespace playerbot
         std::unordered_map<uint32, uint32> inZone;
         uint32 released = 0;
         std::unordered_map<uint64, uint32> heldBy;
+        // Which class/spec combinations the retinue already contains.
+        std::unordered_set<uint32> covered;
 
         // A drifter that is let go keeps the band it has been living in.
         //
@@ -18074,6 +18084,8 @@ namespace playerbot
 
             ++inZone[zoneItr->second];
             ++heldBy[itr->second];
+            if (auto const combo = comboByBot.find(itr->first); combo != comboByBot.end())
+                covered.insert(combo->second);
             g_DrifterZoneByBot[itr->first] = zoneItr->second;
             ++itr;
         }
@@ -18110,18 +18122,58 @@ namespace playerbot
         // on arrival". Filtering candidates by band instead would quietly outlaw
         // most of the fleet from ever drifting, and empty a zone of company
         // rather than fill it.
-        auto drawCandidate = [&byHome]() -> uint64
+        //
+        // Composition first, though. Nine classes by three builds is twenty-seven
+        // combinations and the fleet fields thirty drifters, so the retinue can
+        // hold one of everything and still have three spare - but only if the
+        // draft asks. Drawing purely by home zone gave whatever the biggest
+        // bucket happened to hold, which is how a retinue ends up as four
+        // Balance druids and no rogue at all.
+        //
+        // A combination nobody is covering wins outright; the home-zone balance
+        // below survives as the tie-break among equals, and as the whole rule
+        // again once every combination is spoken for.
+        auto drawCandidate = [&byHome, &comboByBot, &covered]() -> uint64
         {
-            // Always from the home zone with the most to spare.
+            auto const take = [&comboByBot, &covered](std::vector<uint64>& bucket, size_t pos) -> uint64
+            {
+                uint64 const picked = bucket[pos];
+                bucket.erase(bucket.begin() + ptrdiff_t(pos));
+                if (auto const combo = comboByBot.find(picked); combo != comboByBot.end())
+                    covered.insert(combo->second);
+                return picked;
+            };
+
+            // Scanned from the BACK of each bucket, because that is where the
+            // sort above put the bots nobody is standing over.
+            auto newest = byHome.end();
+            size_t newestPos = 0;
+            size_t newestBucket = 0;
+            for (auto itr = byHome.begin(); itr != byHome.end(); ++itr)
+                for (size_t i = itr->second.size(); i-- > 0; )
+                {
+                    auto const combo = comboByBot.find(itr->second[i]);
+                    if (combo == comboByBot.end() || covered.count(combo->second))
+                        continue;
+                    if (newest == byHome.end() || itr->second.size() > newestBucket)
+                    {
+                        newest = itr;
+                        newestPos = i;
+                        newestBucket = itr->second.size();
+                    }
+                    break;
+                }
+            if (newest != byHome.end())
+                return take(newest->second, newestPos);
+
+            // Nothing new to add: the home zone with the most to spare.
             auto best = byHome.end();
             for (auto itr = byHome.begin(); itr != byHome.end(); ++itr)
                 if (!itr->second.empty() && (best == byHome.end() || itr->second.size() > best->second.size()))
                     best = itr;
             if (best == byHome.end())
                 return 0;
-            uint64 const picked = best->second.back();
-            best->second.pop_back();
-            return picked;
+            return take(best->second, best->second.size() - 1);
         };
 
         uint32 assigned = 0;
