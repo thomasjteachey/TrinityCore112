@@ -8292,16 +8292,28 @@ void Player::UpdateArea(uint32 newArea)
     bool oldFFAPvPArea = pvpInfo.IsInFFAPvPArea;
 
     bool const isGurubashiBattleRing = IsInGurubashiBattleRing(m_zoneUpdateId, newArea);
-    bool const isGurubashiSafeArea = GetMapId() == 0 && m_zoneUpdateId == 33 && !isGurubashiBattleRing;
 
     static std::array<uint32, 1> const customFFAAreas = { 3217 }; // The Maul
     bool const isCustomFFAArea = std::find(customFFAAreas.begin(), customFFAAreas.end(), newArea) != customFFAAreas.end();
 
     bool isFFAArea = isCustomFFAArea || isGurubashiBattleRing;
     // Walk the area hierarchy in case the arena flag is defined on a parent zone.
-    // Gurubashi has safe ramp/outer areas under the same parent arena hierarchy, so
-    // do not let parent AREA_FLAG_ARENA bleed FFA PvP into non-Battle Ring areas.
-    if (!isFFAArea && !isGurubashiSafeArea)
+    //
+    // This walk used to be skipped for the whole of Stranglethorn unless the player
+    // was inside the Battle Ring, to stop a parent AREA_FLAG_ARENA bleeding FFA into
+    // "safe ramp/outer areas". There are none: nothing in AreaTable.dbc names 2177 as
+    // its parent on either realm, and the only other Stranglethorn area carrying the
+    // arena flag is 30232, which the map data paints nowhere. The guard protected
+    // nothing and cost the arena its whole floor.
+    //
+    // The floor is area 2177 at about z 31, and IsInGurubashiBattleRing only matches
+    // at or below z 27 - which is the catacombs UNDER the arena, not the sand. So the
+    // floor fell into the "safe" branch, the arena flag was never read, and two people
+    // standing in the ring on a one-faction realm stayed friendly, while the same two
+    // in the catacombs went hostile. Area 2177 carries AREA_FLAG_ARENA and stock
+    // TrinityCore arms FFA across all of it; an FFA area arms FFA, whatever else is
+    // configured.
+    if (!isFFAArea)
     {
         for (AreaTableEntry const* currentArea = area; currentArea;)
         {
