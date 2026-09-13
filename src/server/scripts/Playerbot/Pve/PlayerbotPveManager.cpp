@@ -18024,12 +18024,40 @@ namespace playerbot
         std::unordered_map<uint32, uint32> inZone;
         uint32 released = 0;
         std::unordered_map<uint64, uint32> heldBy;
+
+        // A drifter that is let go keeps the band it has been living in.
+        //
+        // Reverting to the home zone it was drafted out of is what was wiping
+        // bots to level 1. Being released is neither rare nor deliberate: it
+        // happens whenever the person steps somewhere a drifter cannot follow,
+        // including every zone crossing while the dwell timer runs - and by then
+        // the bot has been re-levelled into wherever it was sent. A level 49 in
+        // Felwood whose home is Dun Morogh is thirty-nine levels over that home's
+        // band, so the fallback reads as "topped out" and rebirths it to the
+        // home's FLOOR, which is one. Torhild, 345 hours old, rode that loop every
+        // few minutes: drafted to Felwood at 49, released, wiped to 1, drafted
+        // back at 52, wiped again.
+        //
+        // Adopting the zone it is standing in makes that fallback a no-op: its
+        // level already fits that band, because being sent there is what set it.
+        // Collected here and applied once g_DrifterLock is dropped, because the
+        // lock-order note on the table requires g_LocalZoneLock to be taken
+        // BEFORE this one and never while holding it.
+        std::vector<std::pair<uint64, uint32>> rehome;
+        auto const keepBandOnRelease = [&rehome](uint64 botRawGuid)
+        {
+            auto const living = g_DrifterZoneByBot.find(botRawGuid);
+            if (living != g_DrifterZoneByBot.end() && living->second)
+                rehome.emplace_back(botRawGuid, living->second);
+        };
+
         for (auto itr = g_DrifterHumanByBot.begin(); itr != g_DrifterHumanByBot.end(); )
         {
             bool const botOk = localHomeByBot.count(itr->first) != 0;
             auto zoneItr = humanZone.find(itr->second);
             if (!botOk || zoneItr == humanZone.end())
             {
+                keepBandOnRelease(itr->first);
                 g_DrifterZoneByBot.erase(itr->first);
                 itr = g_DrifterHumanByBot.erase(itr);
                 continue;
@@ -18037,6 +18065,7 @@ namespace playerbot
             uint32 const zoneCap = capForZone(zoneItr->second);
             if (zoneCap && inZone[zoneItr->second] >= zoneCap)
             {
+                keepBandOnRelease(itr->first);
                 g_DrifterZoneByBot.erase(itr->first);
                 itr = g_DrifterHumanByBot.erase(itr);
                 ++released;
@@ -18146,6 +18175,14 @@ namespace playerbot
                 arrived.emplace_back(botGuid, zoneId);
         }
         guard.unlock();
+
+        // ...and now that g_DrifterLock is gone, the lock order permits this.
+        if (!rehome.empty())
+        {
+            std::lock_guard<std::mutex> homeGuard(g_LocalZoneLock);
+            for (auto const& [botRawGuid, zoneId] : rehome)
+                g_LocalZoneByGuid[botRawGuid] = zoneId;
+        }
 
         // Forget anyone who stopped being a drifter while in transit.
         for (auto itr = s_awaitingArrival.begin(); itr != s_awaitingArrival.end(); )
