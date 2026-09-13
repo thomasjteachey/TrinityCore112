@@ -4809,10 +4809,26 @@ namespace
     // auction pass both refuse one outright, before any probe. The sell probes have
     // to ask the same question, or a two-hander the bot will never wear reads as
     // "gear it would rather wear than sell" and is kept for good.
+    bool PrefersTwoHandedMainhand(Player const* bot);   // defined with the other weapon policy
+
+    // "You already have something in the off hand, so no two-hander" - which is
+    // right for a prot warrior and exactly wrong for the specs built around one
+    // big weapon. A retribution paladin that had picked up a shield could never
+    // take a two-hander again: every one was refused here before it was ever
+    // scored, and nothing takes the shield off because it has no two-hander to
+    // take it off FOR. Mergorn levelled to 52 sword-and-boarding as ret.
+    //
+    // So ask the spec first. For a bot that wants a two-hander the shield is the
+    // thing that gives way, and Player::EquipItem benches it through
+    // AutoUnequipOffhandIfNeed on its own.
     bool EquipPassWouldRefuseTwoHander(Player const* bot, ItemTemplate const* proto)
     {
-        return proto->InventoryType == INVTYPE_2HWEAPON &&
-            bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND) != nullptr;
+        if (proto->InventoryType != INVTYPE_2HWEAPON)
+            return false;
+        if (PrefersTwoHandedMainhand(bot))
+            return false;
+
+        return bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND) != nullptr;
     }
 
     // Is this refusal a permanent property of the ITEM, or just "not right now"?
@@ -6279,6 +6295,15 @@ namespace
         default:
             return;
         }
+
+        // Only for the builds that actually want a shield. This asked the CLASS
+        // and not the spec, so it was the other half of the trap that kept a ret
+        // paladin in sword and board: even once one got a two-hander equipped,
+        // the first pass with a one-hander and a shield still in the bags put
+        // them straight back on. Arms, Retribution and Enhancement keep the big
+        // weapon; Protection and Holy are the ones this is for.
+        if (PrefersTwoHandedMainhand(bot))
+            return;
 
         Item* mainHand = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
         if (!mainHand || !mainHand->GetTemplate() || mainHand->GetTemplate()->InventoryType != INVTYPE_2HWEAPON)
@@ -11392,8 +11417,12 @@ namespace
                 // the off hand off first (EquipProbeWouldBenchOffhand), so with
                 // this guard below the probe it protected nothing: the pass
                 // stripped every affluent bot's off hand every ten minutes.
-                if (proto->InventoryType == INVTYPE_2HWEAPON &&
-                    bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND))
+                //
+                // Through the shared helper rather than inline, so the spec
+                // exception lives in one place: a bot built around one big weapon
+                // must be allowed to BUY one, or a ret paladin that ever picked
+                // up a shield skips every two-hander in the house forever.
+                if (EquipPassWouldRefuseTwoHander(bot, proto))
                     continue;
 
                 uint16 dest = 0;
