@@ -24,6 +24,7 @@
 #include "MotionMaster.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "World.h"
 #include "WorldSession.h"
 #include "WorldStatePackets.h"
 
@@ -97,7 +98,6 @@ void BattlegroundAV::HandleKillUnit(Creature* unit, Player* killer)
     {
         CastSpellOnTeam(23658, HORDE); //this is a spell which finishes a quest where a player has to kill the boss
         RewardReputationToTeam(729, BG_AV_REP_BOSS, HORDE);
-        RewardHonorToTeam(GetBonusHonorFromKill(BG_AV_KILL_BOSS), HORDE);
         EndBattleground(HORDE);
         DelCreature(AV_CPLACE_TRIGGER17);
     }
@@ -105,7 +105,6 @@ void BattlegroundAV::HandleKillUnit(Creature* unit, Player* killer)
     {
         CastSpellOnTeam(23658, ALLIANCE); //this is a spell which finishes a quest where a player has to kill the boss
         RewardReputationToTeam(730, BG_AV_REP_BOSS, ALLIANCE);
-        RewardHonorToTeam(GetBonusHonorFromKill(BG_AV_KILL_BOSS), ALLIANCE);
         EndBattleground(ALLIANCE);
         DelCreature(AV_CPLACE_TRIGGER19);
     }
@@ -118,7 +117,7 @@ void BattlegroundAV::HandleKillUnit(Creature* unit, Player* killer)
         }
         m_CaptainAlive[0]=false;
         RewardReputationToTeam(729, BG_AV_REP_CAPTAIN, HORDE);
-        RewardHonorToTeam(GetBonusHonorFromKill(BG_AV_KILL_CAPTAIN), HORDE);
+        RewardHonorToTeam(sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP), HORDE);
         UpdateScore(ALLIANCE, (-1)*BG_AV_RES_CAPTAIN);
         //spawn destroyed aura
         for (uint8 i=0; i <= 9; i++)
@@ -137,7 +136,7 @@ void BattlegroundAV::HandleKillUnit(Creature* unit, Player* killer)
         }
         m_CaptainAlive[1]=false;
         RewardReputationToTeam(730, BG_AV_REP_CAPTAIN, ALLIANCE);
-        RewardHonorToTeam(GetBonusHonorFromKill(BG_AV_KILL_CAPTAIN), ALLIANCE);
+        RewardHonorToTeam(sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP), ALLIANCE);
         UpdateScore(HORDE, (-1)*BG_AV_RES_CAPTAIN);
         //spawn destroyed aura
         for (uint8 i=0; i <= 9; i++)
@@ -454,38 +453,32 @@ void BattlegroundAV::AddPlayer(Player* player)
 
 void BattlegroundAV::EndBattleground(uint32 winner)
 {
-    //calculate bonuskills for both teams:
-    //first towers:
-    uint8 kills[2] = {0, 0}; // 0 = Alliance 1 = Horde
+    // Surviving towers and captains still earn REPUTATION here. The matching
+    // honor bonus is gone: end-of-match honor on this realm is the flat
+    // Centurion.Battleground.RewardHonorWinner / _LOSER that
+    // Battleground::EndBattleground pays every participant, and a second
+    // stock-priced award on top of it is exactly the double payment the custom
+    // reward system exists to replace. What a team held at the end still shows
+    // up in its honor through the towers and captains it took DURING the match,
+    // which are paid from RewardHonorFlagCap.
     uint8 rep[2] = {0, 0};   // 0 = Alliance 1 = Horde
     for (BG_AV_Nodes i = BG_AV_NODES_DUNBALDAR_SOUTH; i <= BG_AV_NODES_FROSTWOLF_WTOWER; ++i)
     {
             if (m_Nodes[i].State == POINT_CONTROLED)
             {
                 if (m_Nodes[i].Owner == ALLIANCE)
-                {
-                    rep[0]   += BG_AV_REP_SURVIVING_TOWER;
-                    kills[0] += BG_AV_KILL_SURVIVING_TOWER;
-                }
+                    rep[0] += BG_AV_REP_SURVIVING_TOWER;
                 else
-                {
-                    rep[0]   += BG_AV_KILL_SURVIVING_TOWER;
-                    kills[1] += BG_AV_KILL_SURVIVING_TOWER;
-                }
+                    rep[0] += BG_AV_KILL_SURVIVING_TOWER;
             }
     }
 
     for (int i = TEAM_ALLIANCE; i <= TEAM_HORDE; ++i)
     {
         if (m_CaptainAlive[i])
-        {
-            kills[i] += BG_AV_KILL_SURVIVING_CAPTAIN;
-            rep[i]   += BG_AV_REP_SURVIVING_CAPTAIN;
-        }
+            rep[i] += BG_AV_REP_SURVIVING_CAPTAIN;
         if (rep[i] != 0)
             RewardReputationToTeam(i == 0 ? 730 : 729, rep[i], i == 0 ? ALLIANCE : HORDE);
-        if (kills[i] != 0)
-            RewardHonorToTeam(GetBonusHonorFromKill(kills[i]), i == 0 ? ALLIANCE : HORDE);
     }
 
     /// @todo add enterevademode for all attacking creatures
@@ -589,7 +582,7 @@ void BattlegroundAV::EventPlayerDestroyedPoint(BG_AV_Nodes node)
 
         UpdateScore((owner == ALLIANCE) ? HORDE : ALLIANCE, -1 * BG_AV_RES_TOWER);
         RewardReputationToTeam(owner == ALLIANCE ? 730 : 729, BG_AV_REP_TOWER, owner);
-        RewardHonorToTeam(GetBonusHonorFromKill(BG_AV_KILL_TOWER), owner);
+        RewardHonorToTeam(sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP) / 2, owner);
 
         SpawnBGObject(BG_AV_OBJECT_TAURA_A_DUNBALDAR_SOUTH + uint32(GetTeamIndexByTeamId(owner)) + (2 * tmp), RESPAWN_ONE_DAY);
         SpawnBGObject(BG_AV_OBJECT_TFLAG_A_DUNBALDAR_SOUTH + uint32(GetTeamIndexByTeamId(owner)) + (2 * tmp), RESPAWN_ONE_DAY);

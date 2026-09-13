@@ -68,8 +68,6 @@ BattlegroundWS::BattlegroundWS()
     _flagsDropTimer[TEAM_HORDE] = 0;
     _lastFlagCaptureTeam = 0;
     m_ReputationCapture = 0;
-    m_HonorWinKills = 0;
-    m_HonorEndKills = 0;
     _minutesElapsed = 0;
 }
 
@@ -1011,18 +1009,10 @@ void BattlegroundWS::Reset()
     m_TeamScores[TEAM_ALLIANCE]      = 0;
     m_TeamScores[TEAM_HORDE]         = 0;
 
-    if (sBattlegroundMgr->IsBGWeekend(GetTypeID()))
-    {
-        m_ReputationCapture = 45;
-        m_HonorWinKills = 3;
-        m_HonorEndKills = 4;
-    }
-    else
-    {
-        m_ReputationCapture = 35;
-        m_HonorWinKills = 1;
-        m_HonorEndKills = 2;
-    }
+    // Only reputation still varies on a Call to Arms here - the honor counters
+    // this used to set had no reader left, and honor is doubled once, centrally,
+    // in Battleground::EndBattleground.
+    m_ReputationCapture = sBattlegroundMgr->IsBGWeekend(GetTypeID()) ? 45 : 35;
     _minutesElapsed                  = 0;
     _lastFlagCaptureTeam             = 0;
     _bothFlagsKept                   = false;
@@ -1036,16 +1026,10 @@ void BattlegroundWS::Reset()
 
 void BattlegroundWS::EndBattleground(uint32 winner)
 {
-    // Win reward
-    /*
-    if (winner == ALLIANCE)
-        RewardHonorToTeam(GetBonusHonorFromKill(m_HonorWinKills), ALLIANCE);
-    if (winner == HORDE)
-        RewardHonorToTeam(GetBonusHonorFromKill(m_HonorWinKills), HORDE);
-    // Complete map_end rewards (even if no team wins)
-    RewardHonorToTeam(GetBonusHonorFromKill(m_HonorEndKills), ALLIANCE);
-    RewardHonorToTeam(GetBonusHonorFromKill(m_HonorEndKills), HORDE);
-    */
+    // End-of-match honor is the flat Centurion.Battleground.RewardHonorWinner /
+    // _LOSER that Battleground::EndBattleground pays every participant, doubled
+    // there on a Call to Arms. The stock per-kill awards that used to sit here
+    // paid a second, unconfigurable amount on top of it.
     Battleground::EndBattleground(winner);
 }
 

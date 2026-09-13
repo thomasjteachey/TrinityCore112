@@ -661,15 +661,10 @@ void BattlegroundAB::Reset()
 
 void BattlegroundAB::EndBattleground(uint32 winner)
 {
-    // Win reward
-    if (winner == ALLIANCE)
-        RewardHonorToTeam(GetBonusHonorFromKill(1), ALLIANCE);
-    if (winner == HORDE)
-        RewardHonorToTeam(GetBonusHonorFromKill(1), HORDE);
-    // Complete map_end rewards (even if no team wins)
-    RewardHonorToTeam(GetBonusHonorFromKill(1), HORDE);
-    RewardHonorToTeam(GetBonusHonorFromKill(1), ALLIANCE);
-
+    // End-of-match honor is the flat Centurion.Battleground.RewardHonorWinner /
+    // _LOSER that Battleground::EndBattleground pays every participant, doubled
+    // there on a Call to Arms. The stock per-kill awards that used to sit here
+    // paid a second, unconfigurable amount on top of it.
     Battleground::EndBattleground(winner);
 }
 

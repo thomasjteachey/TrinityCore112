@@ -151,8 +151,12 @@ void BattlegroundBFG::PostUpdateImpl(uint32 diff)
                     if (m_TeamScores[teamId] > scoreLimit)
                         m_TeamScores[teamId] = scoreLimit;
 
+                    // teamId is a TeamId (0/1) and RewardHonorToTeam matches on
+                    // Team (ALLIANCE 469 / HORDE 67), so this paid nobody anything
+                    // for as long as it has existed. Corrected AND moved onto the
+                    // configured value, so Gilneas finally pays for holding nodes.
                     if (_honorTics && honorRewards < uint8(m_TeamScores[teamId] / _honorTics))
-                        RewardHonorToTeam(GetBonusHonorFromKill(1), teamId);
+                        RewardHonorToTeam(sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP) / 2, teamId == TEAM_ALLIANCE ? ALLIANCE : HORDE);
                     if (_reputationTics && reputationRewards < uint8(m_TeamScores[teamId] / _reputationTics))
                         RewardReputationToTeam(teamId == TEAM_ALLIANCE ? 509 : 510, 10, teamId);
 
@@ -165,8 +169,13 @@ void BattlegroundBFG::PostUpdateImpl(uint32 diff)
                     UpdateWorldState(teamId == TEAM_ALLIANCE ? GILNEAS_BG_OP_RESOURCES_ALLY : GILNEAS_BG_OP_RESOURCES_HORDE, m_TeamScores[teamId]);
                     if (m_TeamScores[teamId] > m_TeamScores[GetOtherGilneasTeamId(teamId)] + 500)
                         _teamScores500Disadvantage[GetOtherGilneasTeamId(teamId)] = true;
+                    // A Team, not a TeamId: EndBattleground matches the winner
+                    // against each player's Team (ALLIANCE 469 / HORDE 67), so a 0
+                    // or 1 here matched nobody and paid the winning side the LOSER
+                    // award. Harmless while the end-of-match honor was dead; it now
+                    // decides what everyone in Gilneas is paid.
                     if (m_TeamScores[teamId] >= scoreLimit)
-                        EndBattleground(teamId);
+                        EndBattleground(teamId == TEAM_ALLIANCE ? ALLIANCE : HORDE);
 
                     _bgEvents.ScheduleEvent(eventId, Milliseconds(GILNEAS_BG_TickIntervals[controlledPoints]));
                     break;
@@ -439,9 +448,10 @@ void BattlegroundBFG::EventPlayerClickedOnFlag(Player* player, GameObject* gameO
 
 uint32 BattlegroundBFG::GetPrematureWinner()
 {
+    // Same reason as EndBattleground above: the caller wants a Team, not a TeamId.
     if (_controlledPoints[TEAM_ALLIANCE] > _controlledPoints[TEAM_HORDE])
-        return TEAM_ALLIANCE;
-    return _controlledPoints[TEAM_HORDE] > _controlledPoints[TEAM_ALLIANCE] ? TEAM_HORDE : Battleground::GetPrematureWinner();
+        return ALLIANCE;
+    return _controlledPoints[TEAM_HORDE] > _controlledPoints[TEAM_ALLIANCE] ? HORDE : Battleground::GetPrematureWinner();
 }
 
 bool BattlegroundBFG::SetupBattleground() {
@@ -515,9 +525,10 @@ void BattlegroundBFG::Init()
 
 void BattlegroundBFG::EndBattleground(uint32 winnerTeamId)
 {
-    RewardHonorToTeam(GetBonusHonorFromKill(1), winnerTeamId);
-    RewardHonorToTeam(GetBonusHonorFromKill(1), TEAM_HORDE);
-    RewardHonorToTeam(GetBonusHonorFromKill(1), TEAM_ALLIANCE);
+    // End-of-match honor is the flat Centurion.Battleground.RewardHonorWinner /
+    // _LOSER that Battleground::EndBattleground pays every participant, doubled
+    // there on a Call to Arms. The stock per-kill awards that used to sit here
+    // paid a second, unconfigurable amount on top of it.
     Battleground::EndBattleground(winnerTeamId);
     _bgEvents.Reset();
 }

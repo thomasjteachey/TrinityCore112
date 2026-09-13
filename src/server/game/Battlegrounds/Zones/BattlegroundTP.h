@@ -258,9 +258,6 @@ class BattlegroundTP : public Battleground
         ObjectGuid _droppedFlagGUID[2];
         uint8  _flagState[2];
         TeamId _lastFlagCaptureTeam;
-        uint32 _reputationCapture;
-        uint32 _honorWinKills;
-        uint32 _honorEndKills;
 
         void PostUpdateImpl(uint32 diff) override;
 };

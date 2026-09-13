@@ -26,6 +26,7 @@
 #include "Player.h"
 #include "Random.h"
 #include "Util.h"
+#include "World.h"
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
 
@@ -155,7 +156,7 @@ void BattlegroundEY::AddPoints(uint32 Team, uint32 Points)
     m_HonorScoreTics[team_index] += Points;
     if (m_HonorScoreTics[team_index] >= m_HonorTics)
     {
-        RewardHonorToTeam(GetBonusHonorFromKill(1), Team);
+        RewardHonorToTeam(sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP) / 2, Team);
         m_HonorScoreTics[team_index] -= m_HonorTics;
     }
     UpdateTeamScore(team_index);
@@ -315,15 +316,10 @@ void BattlegroundEY::UpdateTeamScore(uint32 Team)
 
 void BattlegroundEY::EndBattleground(uint32 winner)
 {
-    // Win reward
-    if (winner == ALLIANCE)
-        RewardHonorToTeam(GetBonusHonorFromKill(1), ALLIANCE);
-    if (winner == HORDE)
-        RewardHonorToTeam(GetBonusHonorFromKill(1), HORDE);
-    // Complete map reward
-    RewardHonorToTeam(GetBonusHonorFromKill(1), ALLIANCE);
-    RewardHonorToTeam(GetBonusHonorFromKill(1), HORDE);
-
+    // End-of-match honor is the flat Centurion.Battleground.RewardHonorWinner /
+    // _LOSER that Battleground::EndBattleground pays every participant, doubled
+    // there on a Call to Arms. The stock per-kill awards that used to sit here
+    // paid a second, unconfigurable amount on top of it.
     Battleground::EndBattleground(winner);
 }
 

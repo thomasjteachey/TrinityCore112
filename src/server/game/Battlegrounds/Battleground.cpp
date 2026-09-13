@@ -969,6 +969,22 @@ void Battleground::EndBattleground(uint32 winner)
         }
 
         ModifyEndOfMatchHonorRewards(winner, team, winner_honor, loser_honor);
+
+        // Call to Arms doubles what the match is already worth rather than paying
+        // anything of its own, so every honor number on this realm still comes out
+        // of Centurion.Battleground.*.
+        //
+        // GetTypeID(true) is the REAL map: m_TypeID is BATTLEGROUND_RB for anyone
+        // who came through the random queue, and BGTypeToWeekendHolidayId only
+        // knows real maps. After ModifyEndOfMatchHonorRewards, not before, because
+        // that hook does not merely scale - BattlegroundVHR's override assigns the
+        // reward outright, so a doubling applied first would simply be discarded.
+        if (isBattleground() && BattlegroundMgr::IsBGWeekend(GetTypeID(true)))
+        {
+            winner_honor *= 2;
+            loser_honor *= 2;
+        }
+
         ModifyEndOfMatchMoneyRewards(winner, team, winner_money, loser_money);
 
         // Rewards

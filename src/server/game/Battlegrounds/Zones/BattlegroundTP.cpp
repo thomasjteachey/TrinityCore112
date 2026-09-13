@@ -80,9 +80,6 @@ BattlegroundTP::BattlegroundTP()
     _flagState[TEAM_ALLIANCE]   = BG_TP_FLAG_STATE_ON_BASE;
     _flagState[TEAM_HORDE]      = BG_TP_FLAG_STATE_ON_BASE;
     _lastFlagCaptureTeam        = TEAM_NEUTRAL;
-    _reputationCapture = 0;
-    _honorWinKills = 0;
-    _honorEndKills = 0;
 }
 
 BattlegroundTP::~BattlegroundTP() { }
@@ -446,7 +443,13 @@ void BattlegroundTP::EventPlayerCapturedFlag(Player* player)
     if (GetTeamScore(TEAM_ALLIANCE) >= captureLimit || GetTeamScore(TEAM_HORDE) >= captureLimit)
     {
         UpdateWorldState(BG_TP_STATE_TIMER_ACTIVE, 0);
-        EndBattleground(GetTeamScore(TEAM_HORDE) >= captureLimit ? TEAM_HORDE : TEAM_ALLIANCE);
+        // HORDE/ALLIANCE, not TEAM_HORDE/TEAM_ALLIANCE. EndBattleground compares
+        // the winner against each player's Team (ALLIANCE 469 / HORDE 67), so
+        // handing it a TeamId of 0 or 1 matched nobody and paid the LOSER award to
+        // the winning side. It went unnoticed while the end-of-match honor here
+        // was dead anyway; now that the flat Centurion reward is the only payout,
+        // it decides what everyone in Twin Peaks is paid.
+        EndBattleground(GetTeamScore(TEAM_HORDE) >= captureLimit ? HORDE : ALLIANCE);
     }
     else
         _bgEvents.ScheduleEvent(BG_TP_EVENT_RESPAWN_BOTH_FLAGS, Milliseconds(BG_TP_FLAG_RESPAWN_TIME));
@@ -779,29 +782,16 @@ void BattlegroundTP::Init()
     _flagState[TEAM_HORDE]          = BG_TP_FLAG_STATE_ON_BASE;
     _lastFlagCaptureTeam            = TEAM_NEUTRAL;
 
-    if (sBattlegroundMgr->IsBGWeekend(GetTypeID()))
-    {
-        _reputationCapture = 45;
-        _honorWinKills = 3;
-        _honorEndKills = 4;
-    }
-    else
-    {
-        _reputationCapture = 35;
-        _honorWinKills = 1;
-        _honorEndKills = 2;
-    }
 }
 
 void BattlegroundTP::EndBattleground(uint32 winnerTeamId)
 {
-    // Win reward
-    RewardHonorToTeam(GetBonusHonorFromKill(_honorWinKills), winnerTeamId);
-
-    // Complete map_end rewards (even if no team wins)
-    RewardHonorToTeam(GetBonusHonorFromKill(_honorEndKills), TEAM_ALLIANCE);
-    RewardHonorToTeam(GetBonusHonorFromKill(_honorEndKills), TEAM_HORDE);
-
+    // End-of-match honor is the flat Centurion.Battleground.RewardHonorWinner /
+    // _LOSER paid centrally by Battleground::EndBattleground, doubled there on a
+    // Call to Arms. The awards that stood here were dead twice over anyway: they
+    // passed a TeamId where RewardHonorToTeam matches on Team (ALLIANCE 469 /
+    // HORDE 67), and BattlegroundTP::Init - the only thing that ever set the two
+    // counters above zero - has no caller anywhere in the tree.
     Battleground::EndBattleground(winnerTeamId);
 }
 
@@ -877,10 +867,11 @@ void BattlegroundTP::FillInitialWorldStates(WorldPackets::WorldState::InitWorldS
 
 uint32 BattlegroundTP::GetPrematureWinner()
 {
+    // Same reason as EndBattleground above: the caller wants a Team, not a TeamId.
     if (GetTeamScore(TEAM_ALLIANCE) > GetTeamScore(TEAM_HORDE))
-        return TEAM_ALLIANCE;
+        return ALLIANCE;
     else if (GetTeamScore(TEAM_HORDE) > GetTeamScore(TEAM_ALLIANCE))
-        return TEAM_HORDE;
+        return HORDE;
 
     return Battleground::GetPrematureWinner();
 }

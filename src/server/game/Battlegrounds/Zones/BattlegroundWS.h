@@ -286,8 +286,6 @@ class BattlegroundWS : public Battleground
         uint32 _lastFlagCaptureTeam;                       // Winner is based on this if score is equal
 
         uint32 m_ReputationCapture;
-        uint32 m_HonorWinKills;
-        uint32 m_HonorEndKills;
         int32 _flagSpellForceTimer;
         bool _bothFlagsKept;
         uint8 _flagDebuffState;                            // 0 - no debuffs, 1 - focused assault, 2 - brutal assault

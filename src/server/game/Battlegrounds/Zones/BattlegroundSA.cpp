@@ -26,6 +26,7 @@
 #include "Player.h"
 #include "ScriptedCreature.h"
 #include "UpdateData.h"
+#include "World.h"
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
 
@@ -620,7 +621,7 @@ void BattlegroundSA::ProcessEvent(WorldObject* obj, uint32 eventId, WorldObject*
                                 {
                                     UpdatePlayerScore(player, SCORE_DESTROYED_WALL, 1);
                                     if (rewardHonor)
-                                        UpdatePlayerScore(player, SCORE_BONUS_HONOR, GetBonusHonorFromKill(1));
+                                        UpdatePlayerScore(player, SCORE_BONUS_HONOR, sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP));
                                 }
                             }
                         }
@@ -967,16 +968,10 @@ void BattlegroundSA::ToggleTimer()
 
 void BattlegroundSA::EndBattleground(uint32 winner)
 {
-    // honor reward for winning
-    if (winner == ALLIANCE)
-        RewardHonorToTeam(GetBonusHonorFromKill(1), ALLIANCE);
-    else if (winner == HORDE)
-        RewardHonorToTeam(GetBonusHonorFromKill(1), HORDE);
-
-    // complete map_end rewards (even if no team wins)
-    RewardHonorToTeam(GetBonusHonorFromKill(2), ALLIANCE);
-    RewardHonorToTeam(GetBonusHonorFromKill(2), HORDE);
-
+    // End-of-match honor is the flat Centurion.Battleground.RewardHonorWinner /
+    // _LOSER that Battleground::EndBattleground pays every participant, doubled
+    // there on a Call to Arms. The stock per-kill awards that used to sit here
+    // paid a second, unconfigurable amount on top of it.
     Battleground::EndBattleground(winner);
 }
 
