@@ -26946,6 +26946,26 @@ uint32 Player::GetBaseWeaponSkillValue(WeaponAttackType attType) const
 
 void Player::ResurrectUsingRequestData()
 {
+    // Somebody else picked this player up, so the death behind them is paid
+    // for: the recent-death count that KillPlayer started is cleared here.
+    //
+    // UpdateCorpseReclaimDelay bumps m_deathExpireTime on EVERY death, and the
+    // corpse reclaim delay it drives escalates 30s -> 1m -> 2m for deaths inside
+    // a five minute window. Nothing takes it back down except waiting it out, so
+    // a group that keeps rezzing its casualties still pays a growing wait on the
+    // first death it actually has to run back from - priced by deaths nobody
+    // ever made a corpse run for.
+    //
+    // Only a resurrection cast by somebody ELSE lands here. Spell::EffectResurrect
+    // is the one route that fills the request data, and it always names its own
+    // caster; a self resurrect (Reincarnation, a soulstone spent on yourself) runs
+    // EffectSelfResurrect, and the battleground spirit guide's thirty second cycle
+    // runs Battleground::Update - both call ResurrectPlayer directly and neither
+    // can reach this. The GUID test is belt and braces for anything that ever
+    // hands a player their own resurrection request.
+    if (_resurrectionData && _resurrectionData->GUID != GetGUID())
+        m_deathExpireTime = 0;
+
     RemoveGhoul();
 
     if (uint32 aura = _resurrectionData->Aura)
