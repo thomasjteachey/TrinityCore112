@@ -17,6 +17,7 @@
  * nothing beyond it.
  */
 
+#include "ChallengeModes.h"
 #include "Creature.h"
 #include "Map.h"
 #include "ObjectMgr.h"
@@ -69,6 +70,17 @@ namespace
         if (Map const* map = player->FindMap())
             if (map->IsBattlegroundOrArena())
                 return "Not from inside a battleground.";
+
+        // Anyone who has taken a challenge has opted INTO the first ten levels.
+        // Iron Man, hardcore, self-crafted, the slowed experience modes - every
+        // one of them is a promise about how the climb is made, and handing over
+        // ten free levels and a spellbook is the one thing that cannot be
+        // reconciled with any of them. HARDCORE_DEAD is deliberately not in this
+        // range: it is a headstone rather than a mode, and a character wearing it
+        // is already refused by the modes it sits beside.
+        for (uint8 setting = SETTING_HARDCORE; setting <= SETTING_IRON_MAN; ++setting)
+            if (sChallengeModes->IsEnabledForPlayer(ChallengeModeSettings(setting), player))
+                return "You are under a challenge. Those ten levels are yours to earn.";
 
         return nullptr;
     }
