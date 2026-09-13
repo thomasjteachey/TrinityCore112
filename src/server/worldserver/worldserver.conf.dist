@@ -2861,6 +2861,23 @@ Centurion.Battleground.XpInsteadOfHonor = 0
 Centurion.Battleground.XpInsteadOfHonor.HonorPerLevel = 2240
 
 #
+#    Centurion.Battleground.BlockArtifactGear
+#        Description: Refuse entry to a battleground or arena to anyone wearing an
+#                     artifact quality item, teleporting them to Gurubashi instead.
+#                     Artifact quality is what the levelling KIT is marked with on
+#                     Barracks+ - Recruit's Shirt, Squire's Boots and 1,141 more,
+#                     all item level 1 - so with this on, a levelling character is
+#                     bounced out of the battleground they just queued for, for
+#                     wearing the gear the realm gave them. Off since the kit was
+#                     reworked. Turn it on only if the realm hands out the stock
+#                     artifact items (Martin Fury, Frostmourne, the Warglaives),
+#                     which are the only artifact quality items on Legionnaire+.
+#        Default:     0 - (Disabled, artifact gear may be worn into battlegrounds)
+#                     1 - (Enabled)
+
+Centurion.Battleground.BlockArtifactGear = 0
+
+#
 #    Battleground.Random.ResetHour
 #        Description: Hour of the day when the global instance resets occur.
 #        Range:       0-23

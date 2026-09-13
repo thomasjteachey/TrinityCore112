@@ -22,6 +22,7 @@
 #include "BattlegroundMgr.h"
 #include "Chat.h"
 #include "Common.h"
+#include "Configuration/Config.h"
 #include "Creature.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
@@ -67,9 +68,27 @@ namespace
         return true;
     }
 
+    // Artifact quality is what the levelling KIT is marked with on Barracks+:
+    // "Recruit's Shirt", "Squire's Boots", "Neophyte's Pants" and 1,141 more,
+    // entry 92000 up, every one of them item level 1 and required level 0-11.
+    // So this test used to catch an ordinary levelling character wearing the
+    // gear the realm itself handed them, teleport them to Gurubashi and whisper
+    // that they may not enter - for the battleground they had just queued for
+    // and been invited to. Since the kit was reworked there is nothing left to
+    // protect against, so the door is open by default.
+    //
+    // The check is kept behind a key rather than deleted because the same
+    // quality also covers a handful of stock GM items - Martin Fury, Frostmourne,
+    // the Warglaives of Azzinoth - which is the whole of it on Legionnaire+ (15
+    // items there against 1,144 on Barracks+). A realm that ever puts one of
+    // those in a player's hands can shut the door again with a config reload
+    // instead of a rebuild.
     bool HasArtifactEquipment(Player const* player)
     {
         if (!player)
+            return false;
+
+        if (!sConfigMgr->GetBoolDefault("Centurion.Battleground.BlockArtifactGear", false))
             return false;
 
         for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
