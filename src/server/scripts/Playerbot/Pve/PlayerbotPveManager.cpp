@@ -8268,6 +8268,31 @@ namespace
         return nullptr;
     }
 
+    // May a drifter be sent to follow somebody into this zone?
+    //
+    // Being drafted is not a visit: the draft is followed by a band reset that
+    // re-levels, re-learns, re-talents and re-kits the bot for wherever it is
+    // being sent - gear, bags, bank, money, spells, talents, quests and pet. So
+    // following a level 52 into Elwynn means WIPING a bot to level 1 to keep them
+    // company, and wiping it again when they walk back out. Torhild - 345 hours
+    // old - cycled 1 -> 52 -> 16 -> 1 -> 51 in twenty-six minutes doing exactly
+    // that, which is what this rule exists to stop.
+    //
+    // Two exclusions, both from the same question "does this zone have a real
+    // leveling band above the starter range":
+    //
+    //   - The 1-10 starter zones. Nobody should be reduced to level 1 as company.
+    //   - Anything with NO band at all, which is every city and instance. That
+    //     case is worse than the starter zones rather than milder: the rebirth
+    //     drain falls through to ResetManagedBotToLevelOne, so a person idling in
+    //     Ironforge would strip their whole retinue to level 1 AND scatter it to
+    //     racial starting spots.
+    bool IsDrifterEligibleZone(uint32 zoneId)
+    {
+        ClassicZoneBand const* band = FindClassicZoneBand(zoneId);
+        return band && band->minLevel > 1;
+    }
+
     // What a drifter is handed on landing in zoneId, in copper.
     //
     // A straight line by the midpoint of the zone's band, anchored to the table
@@ -18034,8 +18059,32 @@ namespace playerbot
                 itr = g_DrifterHumanByBot.erase(itr);
                 continue;
             }
-            uint32 const zoneCap = capForZone(zoneItr->second);
-            if (zoneCap && inZone[zoneItr->second] >= zoneCap)
+            // Where this drifter will actually be, which is only the person's
+            // zone when the person is somewhere a drifter may be sent. Somebody
+            // stepping into a starter zone or a city does not drag their retinue
+            // down with them: it stays parked in the last zone it was properly
+            // drafted into, still theirs, and picks the person up again the moment
+            // they walk back out into real content.
+            //
+            // Parked rather than released on purpose. Releasing would hand every
+            // one of them back to the band rebirth, and THAT is a full wipe each -
+            // the very cost this is avoiding.
+            uint32 effectiveZone = zoneItr->second;
+            if (!IsDrifterEligibleZone(effectiveZone))
+            {
+                auto const parked = g_DrifterZoneByBot.find(itr->first);
+                if (parked == g_DrifterZoneByBot.end() || !IsDrifterEligibleZone(parked->second))
+                {
+                    // Nowhere legitimate to hold it: let it go home instead.
+                    g_DrifterZoneByBot.erase(itr->first);
+                    itr = g_DrifterHumanByBot.erase(itr);
+                    continue;
+                }
+                effectiveZone = parked->second;
+            }
+
+            uint32 const zoneCap = capForZone(effectiveZone);
+            if (zoneCap && inZone[effectiveZone] >= zoneCap)
             {
                 g_DrifterZoneByBot.erase(itr->first);
                 itr = g_DrifterHumanByBot.erase(itr);
@@ -18043,9 +18092,9 @@ namespace playerbot
                 continue;
             }
 
-            ++inZone[zoneItr->second];
+            ++inZone[effectiveZone];
             ++heldBy[itr->second];
-            g_DrifterZoneByBot[itr->first] = zoneItr->second;
+            g_DrifterZoneByBot[itr->first] = effectiveZone;
             ++itr;
         }
 
@@ -18100,6 +18149,15 @@ namespace playerbot
         {
             uint64 const humanGuid = humans[index].first;
             uint32 const zoneId = humans[index].second;
+
+            // Nobody is drafted into a starter zone or a city - see
+            // IsDrifterEligibleZone. Their share is simply not filled while they
+            // are in one; the fleet is not redistributed to cover it, because the
+            // point is that these bots carry on with their own lives instead of
+            // being wiped for somebody passing through Goldshire.
+            if (!IsDrifterEligibleZone(zoneId))
+                continue;
+
             uint32 const share = baseShare + (index < remainder ? 1u : 0u);
             for (uint32 held = heldBy[humanGuid]; held < share; ++held)
             {
