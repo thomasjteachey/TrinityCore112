@@ -73,6 +73,48 @@ namespace
         return nullptr;
     }
 
+    // Weapon skills the character ALREADY has, plus defence, taken to the cap for
+    // its level - which in 3.3.5 is simply level times five.
+    //
+    // Already has, on purpose. The boost is meant to hand somebody a level 10
+    // that is ready to be played, not to teach proficiencies their class was
+    // never going to own: a mage does not walk out of this holding axes. Run
+    // after the trainer catch-up rather than before it, so a proficiency the
+    // boost itself just granted is capped too instead of starting at one.
+    //
+    // Defence is in the same list because it is the same kind of skill and the
+    // same cap, and a level 10 whose defence is still 5 is hit by everything.
+    uint32 MaxOutCombatSkillsForLevel(Player* player)
+    {
+        static constexpr uint32 kCappedSkills[] = {
+            SKILL_SWORDS, SKILL_AXES, SKILL_BOWS, SKILL_GUNS, SKILL_MACES,
+            SKILL_2H_SWORDS, SKILL_STAVES, SKILL_2H_MACES, SKILL_UNARMED,
+            SKILL_2H_AXES, SKILL_DAGGERS, SKILL_THROWN, SKILL_CROSSBOWS,
+            SKILL_WANDS, SKILL_POLEARMS, SKILL_FIST_WEAPONS, SKILL_DEFENSE
+        };
+
+        uint16 const cap = uint16(player->GetLevel()) * 5;
+        if (!cap)
+            return 0;
+
+        uint32 raised = 0;
+        for (uint32 skillId : kCappedSkills)
+        {
+            if (!player->HasSkill(skillId))
+                continue;
+
+            // Both halves, or a skill whose VALUE is already at the cap but whose
+            // ceiling is not keeps being capped one point later by the next hit.
+            if (player->GetSkillValue(skillId) >= cap && player->GetMaxSkillValue(skillId) >= cap)
+                continue;
+
+            player->SetSkill(skillId, player->GetSkillStep(skillId), cap, cap);
+            ++raised;
+        }
+
+        return raised;
+    }
+
     uint32 LearnClassSpellsForCurrentLevel(Player* player)
     {
         std::vector<Trainer::Trainer const*> const& trainers = sObjectMgr->GetClassTrainers(player->GetClass());
@@ -165,10 +207,11 @@ public:
 
             player->GiveLevel(BOOSTER_TARGET_LEVEL);
             uint32 const learned = LearnClassSpellsForCurrentLevel(player);
+            uint32 const capped = MaxOutCombatSkillsForLevel(player);
 
             if (WorldSession* session = player->GetSession())
-                session->SendNotification("Level %u, %u spells learned. Good luck out there.",
-                    uint32(BOOSTER_TARGET_LEVEL), learned);
+                session->SendNotification("Level %u, %u spells learned, %u skills capped. Good luck out there.",
+                    uint32(BOOSTER_TARGET_LEVEL), learned, capped);
 
             // Last, because it is the only step that can leave the player looking
             // at a loading screen; the level and spellbook are already committed
