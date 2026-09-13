@@ -292,6 +292,7 @@ namespace
         PveErrandKind errandKind = PveErrandKind::None;
         PveTimePoint errandUntil{};
         PveTimePoint nextErrandScanAt{};
+        PveTimePoint nextFieldSellAt{};
         PveTimePoint nextChestScanAt{};
         ObjectGuid chestOpeningGuid;
         PveTimePoint nextEquipCheckAt{};
@@ -6152,6 +6153,81 @@ namespace
 
         bot->DurabilityRepairAll(true, 1.0f, false);
         TC_LOG_INFO("playerbots.pve", "Bot {} field-repaired its gear (no vendor within reach).", bot->GetName());
+    }
+
+    // The same idea for a pack that has backed up, and for the same reason.
+    //
+    // A wilderness grind spot can be hundreds of yards from the nearest merchant,
+    // and unlike durability a full pack has no loud symptom: the bot simply stops
+    // being able to loot, to take a quest reward, or to shop at all -
+    // ShopAuctionHouse refuses a pass outright with no free slot, so a bot stuffed
+    // with vendor trash quietly stops buying its own upgrades. The fleet was
+    // carrying 3,756 grey items with a hundred and twenty bots holding ten or
+    // more, purely because the vendor errand only ever fires when a merchant
+    // happens to be standing nearby.
+    //
+    // So settle with the merchant the bot cannot walk to. Nothing here is a
+    // shortcut around a real vendor visit: SellVendorJunk never needed an NPC -
+    // it pays VendorPayout and destroys the item, exactly as it does on arrival -
+    // and the merchant was always pacing rather than mechanism. Full price for
+    // the same reason: the bot is denied a vendor by geography, not choosing to
+    // skip one.
+    //
+    // The grid is ASKED rather than the errand state inferred from, which is what
+    // this did first and got wrong in a way that inverted the whole feature. The
+    // gather branch of the errand scan claims an errand whenever a node sits
+    // within 120 yards and the pack still has two free slots, so a gathering bot -
+    // precisely the population holding the backlog - always left the scan with an
+    // errand and never reached this at 2 or 3 free slots. What was left was 0 and
+    // 1, and that is the exact band where the trade-goods rule in SellVendorJunk
+    // starts selling ore and herbs to stop a full pack blocking every drop. The
+    // feature would have fired only where it did harm.
+    void MaybeFieldSellJunk(Player* bot, PveBotState& state, playerbot::PveConfig const& cfg)
+    {
+        if (!cfg.vendorEnabled || bot->IsInCombat())
+            return;
+
+        // Already walking to one: it sells on arrival, and emptying the pack here
+        // would just abandon the trip it is still making for repair or supplies.
+        if (state.errandKind == PveErrandKind::Vendor)
+            return;
+
+        PveTimePoint const now = PveClock::now();
+        if (now < state.nextFieldSellAt)
+            return;
+
+        // The same threshold that makes needVendor true, so this fires exactly
+        // when the bot wanted a merchant - and comfortably above the two-slot
+        // floor where trade goods become sellable.
+        if (CountFreeBagSlots(bot) >= 4)
+            return;
+
+        // Same reach and the same friendly-and-alive test the errand scan uses, so
+        // "no vendor near" means the same thing in both places. Deliberately
+        // blind to the errand scan's own skips (recent-target cooldowns, guardian
+        // zone borders): a merchant in reach is a merchant, and walking to a real
+        // one is always preferred to settling in the field.
+        std::vector<Creature*> serviceNpcs;
+        ErrandNpcCheck check{ bot };
+        Trinity::CreatureListSearcher<ErrandNpcCheck> searcher(bot, serviceNpcs, check);
+        Cell::VisitGridObjects(bot, searcher, 200.0f);
+        for (Creature* npc : serviceNpcs)
+            if (npc->IsVendor())
+                return;
+
+        uint32 const sold = SellVendorJunk(bot);
+
+        // Backed off hard when there was nothing to sell. A bot can sit under the
+        // slot threshold indefinitely holding only things this will never take -
+        // a dead player's gear on auction hold, quest items, greens waiting for
+        // the listing pass - and re-walking every bag, with an equip probe per
+        // piece, every fifteen seconds forever is a standing cost across the
+        // whole fleet for no result.
+        state.nextFieldSellAt = now + (sold ? std::chrono::seconds(30) : std::chrono::minutes(5));
+
+        if (sold)
+            TC_LOG_INFO("playerbots.pve",
+                "Bot {} sold {} junk items where it stood (no vendor within 200y).", bot->GetName(), sold);
     }
 
     // Returns true while the bot is still busy walking to the errand target.
@@ -15785,6 +15861,14 @@ namespace
             TryStartDeathChestErrand(bot, state, cfg, GetGuardianZoneId(bot->GetGUID().GetRawValue()) != 0);
         }
         state.wasInCombat = inCombatNow;
+
+        // Outside the errand block on purpose, and for both kinds of bot. A
+        // companion never reaches that block at all (it requires an empty
+        // masterGuid), and a grind bot reaches it only when the gather branch has
+        // not already claimed an errand - which for anyone standing in a node
+        // field is never. MaybeFieldSellJunk carries its own cadence, so calling
+        // it here costs a timestamp compare on the ticks it does nothing.
+        MaybeFieldSellJunk(bot, state, cfg);
 
         if (state.masterGuid.IsEmpty() && !state.engaged && !bot->IsInCombat() &&
             state.errandKind == PveErrandKind::None && state.pendingLootGuid.IsEmpty() &&
