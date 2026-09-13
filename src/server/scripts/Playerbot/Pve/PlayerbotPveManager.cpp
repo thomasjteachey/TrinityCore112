@@ -7511,6 +7511,34 @@ namespace
     std::mutex g_TalentRecipeLock;
     std::unordered_map<uint32, std::vector<uint32>> g_TalentRecipesByKey;
 
+    // Asked once, because a MISSING table here is fatal, not graceful:
+    // MySQLConnection::_HandleMySQLErrno treats errno 1146 (no such table) as
+    // unrecoverable and calls Trinity::Abort, which takes the realm down with a
+    // SIGSEGV. playerbot_talent_recipe is a custom addition, so any characters
+    // database that predates it - or was cloned before it, or is a dev copy -
+    // would be killed by the first bot that tried to spend a talent point.
+    // Legionnaire+ had no such table and `.playerbot pve respec` duly crashed it.
+    //
+    // Querying information_schema cannot itself be fatal, and a function-local
+    // static is initialised exactly once even with several map threads arriving
+    // together.
+    bool TalentRecipeTableExists()
+    {
+        static bool const exists = []
+        {
+            QueryResult result = CharacterDatabase.Query(
+                "SELECT 1 FROM information_schema.TABLES "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'playerbot_talent_recipe' LIMIT 1");
+            if (!result)
+                TC_LOG_WARN("playerbots.pve",
+                    "This realm's characters database has no `playerbot_talent_recipe` table; bot talent "
+                    "builds will come from donor characters, or from a greedy tab fill if there are none.");
+            return bool(result);
+        }();
+
+        return exists;
+    }
+
     std::vector<uint32> GetTalentRecipe(Player* bot, uint32 pick)
     {
         uint32 const key = uint32(bot->GetClass()) * 4 + (pick % 3);
@@ -7526,9 +7554,11 @@ namespace
         // its own - Barracks+ has none, the hand-built specs live on the other
         // realm - reads the builds from this table, which a one-shot export
         // populates. The engine still only ever reads its own database.
-        if (QueryResult exported = CharacterDatabase.PQuery(
-            "SELECT spell FROM playerbot_talent_recipe WHERE class = {} AND pick = {}",
-            uint32(bot->GetClass()), pick % 3))
+        if (QueryResult exported = TalentRecipeTableExists()
+            ? CharacterDatabase.PQuery(
+                "SELECT spell FROM playerbot_talent_recipe WHERE class = {} AND pick = {}",
+                uint32(bot->GetClass()), pick % 3)
+            : QueryResult())
         {
             do
             {
