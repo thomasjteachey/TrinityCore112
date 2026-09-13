@@ -6464,11 +6464,40 @@ namespace
         return false;
     }
 
+    // Deterministic per-character spread across `buckets` choices.
+    //
+    // NOT the raw guid modulo, which is what this used to be. The fleet is
+    // created class by class in cycles, so a class's bots land on guids NINE
+    // apart - and nine is a multiple of three, so `counter % 3` is CONSTANT
+    // within a class. Every druid on Barracks+ drew the same pick, and each class
+    // levelled exactly one spec: 22 of 25 druids Balance, 23 of 26 mages Fire,
+    // 24 of 26 paladins Retribution, every priest Shadow. It hid perfectly well
+    // because the FLEET-wide totals came out at 75/76/77 - dead even - and only
+    // the per-class breakdown showed a single spec each.
+    //
+    // Mixing the bits first (the lowbias32 finalizer) breaks the aliasing for any
+    // stride, while staying a pure function of the guid - so a bot still keeps the
+    // same build and the same weapon policy for its whole life.
+    uint32 BotSpreadIndex(Player const* bot, uint32 buckets)
+    {
+        if (!bot || !buckets)
+            return 0;
+
+        uint32 hash = uint32(bot->GetGUID().GetCounter());
+        hash ^= hash >> 16;
+        hash *= 0x7feb352du;
+        hash ^= hash >> 15;
+        hash *= 0x846ca68bu;
+        hash ^= hash >> 16;
+        return hash % buckets;
+    }
+
     // The same deterministic profile index that drives talent donors decides
-    // weapon policy, so gear and spec always agree.
+    // weapon policy, so gear and spec always agree. Both go through
+    // BotSpreadIndex for that reason: change one and you must change the other.
     uint32 EquipProfileIndex(Player const* bot)
     {
-        return uint32(bot->GetGUID().GetCounter() % 3);
+        return BotSpreadIndex(bot, 3);
     }
 
     // Only Assassination is built around daggers (Mutilate/Backstab); Combat
@@ -7591,8 +7620,9 @@ namespace
             return;
 
         // Deterministic per-character profile so a class's bots spread across
-        // specs but each keeps the same build for life.
-        uint32 const profileIndex = uint32(bot->GetGUID().GetCounter() % 3);
+        // specs but each keeps the same build for life. Must stay identical to
+        // EquipProfileIndex, which picks the weapons for this same build.
+        uint32 const profileIndex = BotSpreadIndex(bot, 3);
 
         // The owner's hand-built donor spec first; greedy filling only mops up
         // what the recipe can't place (no donor, or points beyond its build).

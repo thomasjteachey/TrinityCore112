@@ -16,6 +16,7 @@
  */
 
 #include "BattlegroundNL.h"
+#include "DBCStores.h"
 #include "GameObject.h"
 #include "Log.h"
 #include "Player.h"
@@ -72,6 +73,28 @@ void BattlegroundNL::FillInitialWorldStates(WorldPackets::WorldState::InitWorldS
     packet.Worldstates.emplace_back(3002, 1); // BATTLEGROUND_NEFARIAN_ARENA_SHOW
 
     Arena::FillInitialWorldStates(packet);
+}
+
+// Map 1572 is a copy of Blackwing Lair and its tiles still carry BWL's area id
+// 2677, not this arena's own 30231 - AreaTable has the row, but nothing bakes it
+// into the map data. `graveyard_zone` maps zone 2677 to WorldSafeLocs 1469,
+// "Burning Steppes, Blackrock Mountain" on map 0, so releasing in here used to
+// teleport the ghost clean out of the arena and onto the continent.
+//
+// Answering with the arena's own rows takes the zone out of the decision.
+//
+// GetBGTeam() rather than GetTeam(), because the side someone was drafted onto
+// is the question being asked here - it is what the start positions are keyed on
+// too (Battleground::AddPlayer). Race is a poor stand-in for it on a realm where
+// everybody starts Alliance and the queue flips the loser's faction to make the
+// scoreboard colour right.
+WorldSafeLocsEntry const* BattlegroundNL::GetClosestGraveyard(Player* player)
+{
+    if (!player)
+        return nullptr;
+
+    return sWorldSafeLocsStore.LookupEntry(
+        player->GetBGTeam() == ALLIANCE ? BG_NL_GY_ALLIANCE : BG_NL_GY_HORDE);
 }
 
 bool BattlegroundNL::SetupBattleground()

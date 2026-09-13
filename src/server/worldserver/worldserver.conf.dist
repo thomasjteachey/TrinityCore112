@@ -4057,6 +4057,18 @@ Centurion.Shutdown.RequestFile = ""
 Centurion.Shutdown.PollMs = 3000
 
 #
+#    Centurion.Shutdown.StatusFile
+#        Description: Where the realm publishes what it did with the shutdown
+#                     timer, so a deploy can tell its own countdown from one an
+#                     operator set with .server restart / .server shutdown and
+#                     stand down instead of overriding it. Written as
+#                     state=/seconds=/ours=/serial= lines.
+#        Default:     ""  - the request file above with ".status" appended.
+#
+
+Centurion.Shutdown.StatusFile = ""
+
+#
 #    Centurion.PvpConsumableRestore.AreaIds
 #        Description: Comma-separated area or zone IDs where a player's PvP consumable
 #                     charges are topped back up (on login, map change and zone change),

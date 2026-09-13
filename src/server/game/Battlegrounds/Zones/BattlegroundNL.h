@@ -41,6 +41,15 @@ enum BattlegroundNLGameObjects
     BG_NL_OBJECT_TYPE_BUFF_2 = 184664  // Shadow Sight
 };
 
+// The only WorldSafeLocs rows on map 1572. There is no separate graveyard row:
+// releasing puts the ghost back at its own start, which is out of the way of the
+// fight and still inside the arena to watch it.
+enum BattlegroundNLGraveyards
+{
+    BG_NL_GY_ALLIANCE = 52410, // "Nefarian's Arena - Alliance Start"
+    BG_NL_GY_HORDE    = 52411  // "Nefarian's Arena - Horde Start"
+};
+
 class BattlegroundNL : public Arena
 {
 public:
@@ -53,6 +62,7 @@ public:
     void HandleAreaTrigger(Player* player, uint32 trigger) override;
     bool SetupBattleground() override;
     void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet) override;
+    WorldSafeLocsEntry const* GetClosestGraveyard(Player* player) override;
 
 private:
     void ApplyNonInteractableObjectFlags();

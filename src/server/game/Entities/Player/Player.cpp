@@ -2249,29 +2249,28 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
         // at client packet MSG_MOVE_TELEPORT_ACK
         SetSemaphoreTeleportNear(true);
 
-        // Observers follow a socketless server-driven player purely through spline
-        // playback (SMSG_MONSTER_MOVE), and MSG_MOVE_TELEPORT carries a full
-        // MovementInfo block. Sending one switches the observing client over to the
-        // client-movement stream for this unit - a stream a bot with no client never
-        // produces - so it is left holding a position nothing refreshes and renders
-        // the unit flicking between that stale point and wherever the next spline
-        // says it is. The server-side position stays correct throughout, which is
-        // why pets and AI keep tracking the bot perfectly while only players
-        // watching it see the porting.
+        // The normal near-teleport below is only half of a handshake: it announces
+        // the teleport and then waits for the client's MSG_MOVE_TELEPORT_ACK to
+        // actually move the unit server-side and clear the semaphore. Fine for a
+        // real player, useless for a bot, which has no client to answer with one.
         //
-        // Same rule MovementPacketSender::SendSpeedChangeToObservers already applies
-        // to MSG_MOVE_SET_*_SPEED, for the same reason; the teleport packet was never
-        // given the same treatment. The two spells that expose it are the only self
-        // near-teleports a bot casts in normal combat: mage Blink, and the shadow
-        // priest's Shadow Wraith Fade (89784), whose expiry ports the body to the
-        // wraith. The socketless branch below republishes the landing on the spline
-        // protocol instead.
+        // Left on the normal path a bot stays "mid-teleport" for the rest of its
+        // session: observers were snapped to the destination by the broadcast while
+        // the SERVER still has it at the origin, so its AI keeps issuing splines
+        // from the origin and every one of them yanks the model back. That is the
+        // porting-around - the destination and the origin fighting each other - and
+        // it compounds, because the stuck semaphore breaks every later teleport too.
+        // The two spells that expose it are the only self near-teleports a bot casts
+        // in normal combat: mage Blink, and the shadow priest's Shadow Wraith Fade
+        // (89784), whose expiry ports the body to the wraith.
         //
-        // Deliberately gated here rather than inside Unit::SendTeleportPacket: the
-        // custom-game lobby preview clones are socketless too, but they are static
-        // and have no spline to conflict with, so the teleport packet is the only
-        // thing that repositions them for observers (PlayerbotObcCloneManager calls
-        // it directly, bypassing this function).
+        // So the socketless branch below does the whole thing inline instead -
+        // broadcast AND landing together, with nothing left waiting on an ack.
+        //
+        // Gated here rather than inside Unit::SendTeleportPacket, which is correct
+        // as it stands and is called directly by PlayerbotObcCloneManager for the
+        // custom-game lobby preview clones; they are socketless too, and for them
+        // the broadcast on its own is exactly right.
         bool socketlessServerDriven = false;
         if (WorldSession const* session = GetSession())
             socketlessServerDriven = session->IsVirtualSession() || session->IsTransientPlayerSession();
@@ -2295,28 +2294,39 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
         // Finished inline rather than by synthesising the ack packet: the ack
         // handler resolves its mover through GameClient::GetActivelyMovedUnit,
         // and completing a teleport must not depend on a bot session's mover
-        // bookkeeping being intact. These are the same three steps the
-        // forceNearFallback branch of ResolvePendingTeleport performs.
+        // bookkeeping being intact.
+        //
+        // Deliberately narrower than the full ack path, which also runs the
+        // honorless-target check, ProcessDelayedOperations and a position-Z clamp.
+        // This exists for one thing - a bot's own short self-teleport, Blink and
+        // the Shadow Wraith swap - where the destination came from the spell's own
+        // validated target point and there is no queued client operation to drain.
         if (socketlessServerDriven)
         {
             SetSemaphoreTeleportNear(false);
+
+            // The same two calls, in the same order, that Unit::NearTeleportTo
+            // makes for a unit nobody is steering from a client. The spline was
+            // already interrupted unconditionally near the top of this function, so
+            // nothing is left playing that could contradict the destination.
+            //
+            // StopMoving() was the obvious-looking way to publish this and is the
+            // wrong call twice over. Standing still - which is when a bot blinks -
+            // it returns having sent nothing at all, because movespline->Finalized()
+            // is true; observers were never told the bot moved and the model sat at
+            // the old spot until some later order happened to refresh it. Mid-run it
+            // calls UpdateSplinePosition first, which drags the unit back onto the
+            // path it was walking and undoes the landing.
+            //
+            // UpdatePosition covers the rest: Unit::UpdatePosition relocates through
+            // Map::PlayerRelocation, which refreshes visibility, and Player's
+            // override picks up the zone change and the group position flag.
+            SendTeleportPacket(m_teleport_dest, (options & TELE_TO_TRANSPORT_TELEPORT) != 0);
             UpdatePosition(m_teleport_dest, true);
             SetFallInformation(0, GetPositionZ());
 
-            // Observers were told nothing above, because the MSG_MOVE_TELEPORT
-            // broadcast was skipped. Publish the landing on the protocol those
-            // clients are actually following instead.
-            //
-            // Order matters. The stop is emitted after UpdatePosition, so the
-            // SMSG_MONSTER_MOVE it sends carries the destination rather than the
-            // point the bot blinked away from; it also cancels the spline observers
-            // are still interpolating, which would otherwise walk the model back out
-            // of the destination until the next order arrived. Clearing the
-            // generator afterwards makes the bot's AI re-path from where it actually
-            // is on its next tick - the same two steps
-            // TryFinalizePendingVirtualPlayerTeleport already performs before it
-            // finalizes a pending bot teleport.
-            StopMoving();
+            // Re-path from where the bot actually is on its next tick, rather than
+            // resuming an order issued from the point it blinked away from.
             if (MotionMaster* motionMaster = GetMotionMaster())
                 motionMaster->Clear();
         }
@@ -10300,9 +10310,16 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
     // id, and each arena has its own new zone, so serving them there would mean
     // fourteen copies of the same three lines -- and an arena whose case was
     // forgotten would show no score at all, silently, with nothing in the log to
-    // say why. Tol'viron (zone 6296) and Tiger's Peak (6732) still have their
-    // cases below; this covers every arena added since.
-    else if (battleground && IsDataDrivenArena(battleground->GetTypeID(true)))
+    // say why.
+    //
+    // Every arena, not just the data-driven ones, because an arena on a COPIED
+    // map cannot be reached by zone id at all: map 1572 (Nefarian's Arena) is a
+    // copy of Blackwing Lair and its tiles still report BWL's area 2677, so
+    // `case 30231` below never ran and the score bar never appeared. The zone
+    // cases for the stock arenas do nothing but call this same method when a
+    // battleground is present, so routing them here changes nothing for them.
+    // Visitors with no battleground still fall through to the switch.
+    else if (battleground && (battleground->isArena() || IsDataDrivenArena(battleground->GetTypeID(true))))
         battleground->FillInitialWorldStates(packet);
     else
     switch (zoneId)
