@@ -26832,8 +26832,28 @@ bool Player::GetsRecruitAFriendBonus(bool forXP)
                             continue;
                 }
 
-                bool ARecruitedB = (player->GetSession()->GetRecruiterId() == GetSession()->GetAccountId());
-                bool BRecruitedA = (GetSession()->GetRecruiterId() == player->GetSession()->GetAccountId());
+                // A recruiter id of ZERO means nobody recruited this account, and
+                // it must never match anything - least of all another zero.
+                //
+                // The playerbot fill clones are built on sessions with account id
+                // 0 (PlayerbotObcClone.cpp), and a battleground puts every
+                // participant in one raid group, inside RaF distance of each
+                // other. So for any real player who had never been recruited -
+                // recruiter 0 - the second test below read 0 == 0, RaF turned
+                // itself on, and a solo battleground against bots paid TRIPLE
+                // experience with "(+N exp Refer-A-Friend bonus)" in the log.
+                WorldSession const* mySession = GetSession();
+                WorldSession const* theirSession = player->GetSession();
+                if (!mySession || !theirSession)
+                    continue;
+
+                uint32 const myAccount = mySession->GetAccountId();
+                uint32 const myRecruiter = mySession->GetRecruiterId();
+                uint32 const theirAccount = theirSession->GetAccountId();
+                uint32 const theirRecruiter = theirSession->GetRecruiterId();
+
+                bool ARecruitedB = theirRecruiter != 0 && theirRecruiter == myAccount;
+                bool BRecruitedA = myRecruiter != 0 && myRecruiter == theirAccount;
                 if (ARecruitedB || BRecruitedA)
                 {
                     recruitAFriend = true;
