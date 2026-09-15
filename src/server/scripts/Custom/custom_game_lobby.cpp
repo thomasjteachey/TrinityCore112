@@ -40,6 +40,7 @@
 
 namespace
 {
+constexpr uint32 CUSTOM_GAME_HOST_ENTRY = 900001;
 constexpr uint32 CUSTOM_GAME_BLUE_ENTRY = 900002;
 constexpr uint32 CUSTOM_GAME_RED_ENTRY = 900003;
 constexpr uint32 CUSTOM_GAME_CHROMIE_ENTRY = 900004;
@@ -2137,12 +2138,7 @@ public:
         bool OnGossipHello(Player* player) override
         {
             player->PlayerTalkClass->ClearMenus();
-            // The persistent gamesmaster is the only lobby NPC outside the
-            // server-only Map 1 staging instances.  Do not identify it by a
-            // creature entry: Barracks+ uses a different entry for the same
-            // template, while the blue/red captains and Chromie are summoned
-            // inside Map 1.
-            if (me->GetMapId() != CUSTOM_GAME_MAP_ID)
+            if (me->GetEntry() == CUSTOM_GAME_HOST_ENTRY)
             {
                 Group const* group = player->GetGroup();
                 std::string const rosterName = !group ? "solo" : group->isRaidGroup() ? "raid" : "party";
