@@ -9557,9 +9557,11 @@ namespace
     // ---------------------------------------------------------------------------
     // Class quests: quests restricted to a single class exist to hand out the
     // class's kit (warlock demons, hunter taming, druid forms, warrior stances,
-    // shaman totems), and none of it is trainer-taught. Managed bots do NOT travel
-    // for these quests: eligible chains are completed/rewarded automatically and
-    // their teaching spells are re-applied idempotently after spell resets.
+    // shaman totems), and none of it is trainer-taught. They are not synthetic
+    // rewards: a class quest is only paid out after the normal quest system has
+    // marked it complete and its required objectives/items still pass the core
+    // reward checks. Their teaching spells are re-applied idempotently after
+    // spell resets.
     // ---------------------------------------------------------------------------
 
     struct ClassQuestSpot
@@ -9721,8 +9723,9 @@ namespace
     }
 
     // True when re-earning this quest would put another piece of GEAR in a bot's
-    // bags. The auto-completer below rewards every single-class quest outright,
-    // so anything it can hand out, it can hand out again.
+    // bags. This is used by the re-level maintenance path, which may deliberately
+    // reset old class-quest rewards before a bot earns them again through normal
+    // quest completion.
     //
     // Armour and weapons only, deliberately. Those are what a bot keeps, outgrows
     // and then sells, so a second copy is pure supply. Everything else a class
@@ -9758,11 +9761,10 @@ namespace
         return false;
     }
 
-    // Force-complete/reward every single-class quest the bot is legitimately
-    // eligible for at its current level. Existing incomplete class quests are
-    // completed too: managed bots receive the unlock, they never perform the
-    // objective or travel to a class-quest giver. Repeated passes walk chains as
-    // prerequisites become rewarded.
+    // Reward single-class quests only after the ordinary quest system has marked
+    // them complete. In particular, do not call CompleteQuest here: eligibility
+    // is not completion, and doing so bypasses required kills, required items,
+    // and dungeon/raid participation.
     void CompleteEligibleClassQuests(Player* bot)
     {
         BuildClassQuestCacheOnce();
@@ -9792,7 +9794,14 @@ namespace
                     continue;
 
                 QuestStatus const status = bot->GetQuestStatus(entry.questId);
-                if (status == QUEST_STATUS_NONE && !bot->CanTakeQuest(quest, false))
+                if (status != QUEST_STATUS_COMPLETE)
+                    continue;
+
+                uint32 const rewardIndex = PickQuestRewardIndex(bot, quest);
+                // CanRewardQuest is the authoritative final gate: it checks the
+                // completed objectives and required-item counts before consuming
+                // anything or granting the reward.
+                if (!bot->CanRewardQuest(quest, false) || !bot->CanRewardQuest(quest, rewardIndex, false))
                     continue;
 
                 // Invalid imported reward spell rows must never be fed into
@@ -9801,11 +9810,6 @@ namespace
                     (quest->GetRewSpell() > 0 && !sSpellMgr->GetSpellInfo(uint32(quest->GetRewSpell()))))
                     continue;
 
-                // CompleteQuest is safe even when the quest was never put in a
-                // quest-log slot. RewardQuest then marks the permanent rewarded
-                // state, which is what prerequisite chains and spell resets use.
-                bot->CompleteQuest(entry.questId);
-                uint32 const rewardIndex = PickQuestRewardIndex(bot, quest);
                 bot->RewardQuest(quest, rewardIndex, bot, false);
                 rewardedNow.insert(entry.questId);
                 ++completed;
@@ -9818,7 +9822,7 @@ namespace
         EnsureRewardedClassQuestSpells(bot);
 
         if (completed)
-            TC_LOG_INFO("playerbots.pve", "Bot {} auto-completed {} class quests/unlocks.",
+            TC_LOG_INFO("playerbots.pve", "Bot {} rewarded {} legitimately completed class quests/unlocks.",
                 bot->GetName(), completed);
     }
 
@@ -15854,10 +15858,10 @@ namespace
 
         PveTimePoint const now = PveClock::now();
 
-        // Class quests are provisioning, not travel content. Do this before the
-        // generic errand scan so an old/incomplete class quest can never steer the
-        // bot toward its giver or objective. The repeated pass also repairs reward
-        // teaching spells after custom/manual spell resets.
+        // Class-quest maintenance is not a source of progress. Do this before the
+        // generic errand scan so only a quest already completed by normal gameplay
+        // can be rewarded, while the repeated pass still repairs teaching spells
+        // after custom/manual spell resets.
         if (now >= state.nextClassQuestScanAt)
         {
             state.nextClassQuestScanAt = now + std::chrono::seconds(30);
@@ -15933,8 +15937,8 @@ namespace
         RunZoneGuardianTick(bot, state, cfg);
         MaybeHuntPlayersByAggression(bot, state, cfg);
 
-        // Class-quest travel is intentionally disabled. Eligible class quests
-        // were auto-rewarded above before the generic errand scan.
+        // Class-quest travel remains disabled for now. Class rewards are never
+        // fabricated here; they require a normal quest completion first.
 
         // Taming itself is driven from the fast tick, where it can outrank the
         // grind loop; this only keeps whatever pet the hunter already has fed.
@@ -18544,8 +18548,8 @@ namespace playerbot
         if (g_PveConfig.auctionSellEnabled)
             ProcessPendingAuctionSales(auctionScansLeft);
         ProcessPendingSupplyRuns();
-        // Class quests are auto-rewarded on the bot tick; never execute the legacy
-        // cross-world class-quest travel queue.
+        // Class-quest maintenance only rewards quests already completed by the
+        // normal quest system; never execute the legacy cross-world travel queue.
         // Guardian approaches drain their own queue. Ordinary grind relocation
         // and stuck recovery share the validated grind-spot landing executor but
         // retain independent switches inside it.
@@ -19425,12 +19429,10 @@ namespace playerbot
 
         // ...but a class quest that hands over GEAR keeps its stamp.
         //
-        // The auto-completer walks every single-class quest and rewards it
-        // outright. Wipe the rewarded set on a re-level and it walks them all
-        // again, so each pass mints another copy of the same item - and the
-        // fleet sells what it cannot wear. Four warrior quests alone
-        // (Grimand's, Klockmort's, Mathiel's, Furen's Armor) mint the whole
-        // Fire Hardened set, which is why those kept appearing on the house.
+        // Preserve the stamp for class quests that legitimately granted gear.
+        // This prevents a re-level reset from making the bot repeat an already
+        // earned class reward, while the normal quest system still controls any
+        // future completion.
         //
         // Only the gear ones are held back. A class quest that grants a SPELL is
         // still cleared, because the kit has to be re-earned at the new level and
