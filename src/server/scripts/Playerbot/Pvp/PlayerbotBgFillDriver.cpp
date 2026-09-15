@@ -59,6 +59,8 @@ struct BgFillConfig
     bool enabled = false;
     std::set<uint32> battlegroundTypes;
     uint32 queueWaitMs = 15 * IN_MILLISECONDS;
+    bool skirmishArenasEnabled = true;
+    uint32 skirmishArenaQueueWaitMs = 15 * IN_MILLISECONDS;
     uint32 maxPerTeam = 15;
     uint32 clonesPerTick = 2;
     bool useOfflineBots = true;
@@ -151,8 +153,11 @@ MatchTally TallyMatch(Battleground const* bg)
 
 bool IsFillCandidate(Battleground const* bg, uint32 instanceId)
 {
-    if (!instanceId || !bg || !bg->isBattleground() || bg->IsCustomGame() || bg->isRated())
+    if (!instanceId || !bg || bg->IsCustomGame() || bg->isRated())
         return false;
+
+    if (bg->isArena())
+        return sBattlegroundMgr->IsBotFillSkirmishArena(bg->GetArenaType());
 
     // A Random Battleground instance carries the queued-for type and the
     // rolled one; both have to be covered, or the roll could land on a
@@ -494,8 +499,10 @@ std::vector<LiveMatch> CollectLiveMatches()
     std::vector<LiveMatch> matches;
     for (int queueType = BATTLEGROUND_QUEUE_NONE + 1; queueType < MAX_BATTLEGROUND_QUEUE_TYPES; ++queueType)
     {
-        BattlegroundTypeId const bgTypeId = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(queueType));
-        if (!sBattlegroundMgr->IsBotFillBattleground(bgTypeId))
+        BattlegroundQueueTypeId const queueTypeId = BattlegroundQueueTypeId(queueType);
+        BattlegroundTypeId const bgTypeId = BattlegroundMgr::BGTemplateId(queueTypeId);
+        uint8 const arenaType = BattlegroundMgr::BGArenaType(queueTypeId);
+        if (arenaType ? !sBattlegroundMgr->IsBotFillSkirmishArena(arenaType) : !sBattlegroundMgr->IsBotFillBattleground(bgTypeId))
             continue;
 
         BattlegroundContainer const* instances = sBattlegroundMgr->GetBattlegroundsByType(bgTypeId);
@@ -504,6 +511,12 @@ std::vector<LiveMatch> CollectLiveMatches()
 
         for (auto const& [instanceId, bg] : *instances)
         {
+            // All arena sizes are stored under BATTLEGROUND_AA. Visit an
+            // instance only from its own size's queue or it would be filled
+            // once for every enabled arena queue.
+            if (arenaType && bg->GetArenaType() != arenaType)
+                continue;
+
             if (!IsFillCandidate(bg, instanceId))
                 continue;
 
@@ -550,6 +563,7 @@ void FillMatch(LiveMatch& match, uint32& totalClones, uint32 nowMs)
     std::vector<playerbot::PlayerbotObcCloneManager::CustomGameCloneInfo> const clones =
         playerbot::PlayerbotObcCloneManager::GetCustomGameClones(match.instanceId);
     uint32 matchClones = match.tally.Clones();
+    bool const arenaRosterLocked = bg->isArena() && bg->GetStatus() != STATUS_WAIT_JOIN;
 
     for (uint32 teamIndex = TEAM_ALLIANCE; teamIndex < PVP_TEAMS_COUNT; ++teamIndex)
     {
@@ -564,7 +578,7 @@ void FillMatch(LiveMatch& match, uint32& totalClones, uint32 nowMs)
 
         if (present > desired)
             ShedClonesFromTeam(bg, team, present - desired, clones);
-        else if (present < desired)
+        else if (present < desired && !arenaRosterLocked)
         {
             uint32 const wanted = std::min(desired - present, std::max<uint32>(g_Config.clonesPerTick, 1));
             AddClonesToTeam(bg, team, wanted, match.tally, clones, matchClones, totalClones, nowMs);
@@ -600,8 +614,11 @@ void WakeQueuesForWaitingPlayers(uint32 nowMs)
     {
         BattlegroundQueueTypeId const queueTypeId = BattlegroundQueueTypeId(queueType);
         BattlegroundTypeId const bgTypeId = BattlegroundMgr::BGTemplateId(queueTypeId);
-        if (!sBattlegroundMgr->IsBotFillBattleground(bgTypeId))
+        uint8 const arenaType = BattlegroundMgr::BGArenaType(queueTypeId);
+        if (arenaType ? !sBattlegroundMgr->IsBotFillSkirmishArena(arenaType) : !sBattlegroundMgr->IsBotFillBattleground(bgTypeId))
             continue;
+
+        uint32 const queueWaitMs = sBattlegroundMgr->GetBotFillQueueWaitMs(arenaType);
 
         BattlegroundQueue& queue = sBattlegroundMgr->GetBattlegroundQueue(queueTypeId);
         for (uint32 bracket = BG_BRACKET_ID_FIRST; bracket < MAX_BATTLEGROUND_BRACKETS; ++bracket)
@@ -611,7 +628,8 @@ void WakeQueuesForWaitingPlayers(uint32 nowMs)
             {
                 for (GroupQueueInfo const* ginfo : queue.m_QueuedGroups[bracket][index])
                 {
-                    if (ginfo->IsInvitedToBGInstanceGUID || getMSTimeDiff(ginfo->JoinTime, nowMs) < g_Config.queueWaitMs)
+                    if (ginfo->IsInvitedToBGInstanceGUID || ginfo->IsRated ||
+                        (arenaType && ginfo->ArenaType != arenaType) || getMSTimeDiff(ginfo->JoinTime, nowMs) < queueWaitMs)
                         continue;
 
                     for (auto const& [playerGuid, playerInfo] : ginfo->Players)
@@ -632,7 +650,7 @@ void WakeQueuesForWaitingPlayers(uint32 nowMs)
             }
 
             if (wake)
-                sBattlegroundMgr->ScheduleQueueUpdate(0, 0, queueTypeId, bgTypeId, BattlegroundBracketId(bracket));
+                sBattlegroundMgr->ScheduleQueueUpdate(0, arenaType, queueTypeId, bgTypeId, BattlegroundBracketId(bracket));
         }
     }
 }
@@ -645,6 +663,9 @@ void PlayerbotBgFillDriver::LoadConfig()
     BgFillConfig config;
     config.enabled = sConfigMgr->GetBoolDefault("Playerbot.BgFill.Enable", false) && PvpCore::GetConfig().moduleEnabled;
     config.queueWaitMs = uint32(std::max<int32>(sConfigMgr->GetIntDefault("Playerbot.BgFill.QueueWaitSeconds", 15), 0)) * IN_MILLISECONDS;
+    config.skirmishArenasEnabled = sConfigMgr->GetBoolDefault("Playerbot.BgFill.SkirmishArena.Enable", true);
+    config.skirmishArenaQueueWaitMs = uint32(std::max<int32>(
+        sConfigMgr->GetIntDefault("Playerbot.BgFill.SkirmishArena.QueueWaitSeconds", 15), 0)) * IN_MILLISECONDS;
     config.maxPerTeam = uint32(std::max<int32>(sConfigMgr->GetIntDefault("Playerbot.BgFill.MaxPerTeam", 15), 0));
     config.clonesPerTick = uint32(std::max<int32>(sConfigMgr->GetIntDefault("Playerbot.BgFill.ClonesPerTick", 2), 1));
     config.useOfflineBots = sConfigMgr->GetBoolDefault("Playerbot.BgFill.UseOfflineBots", true);
@@ -663,6 +684,8 @@ void PlayerbotBgFillDriver::LoadConfig()
     policy.enabled = g_Config.enabled;
     policy.battlegroundTypes = g_Config.battlegroundTypes;
     policy.queueWaitMs = g_Config.queueWaitMs;
+    policy.skirmishArenasEnabled = g_Config.skirmishArenasEnabled;
+    policy.skirmishArenaQueueWaitMs = g_Config.skirmishArenaQueueWaitMs;
     sBattlegroundMgr->SetBotFillPolicy(std::move(policy));
 
     if (g_Config.enabled)
@@ -672,9 +695,10 @@ void PlayerbotBgFillDriver::LoadConfig()
             TC_LOG_WARN("server.loading", "Playerbot battleground fill is enabled but the PvP core/lifecycle modules are off; clones would stand idle.");
     }
 
-    TC_LOG_INFO("server.loading", "Playerbot battleground fill config: enabled={}, types={}, queueWait={} ms, maxPerTeam={}, clonesPerTick={}, offlineBots={}, humanMirrors={}.",
+    TC_LOG_INFO("server.loading", "Playerbot battleground fill config: enabled={}, types={}, queueWait={} ms, skirmishArenas={}, skirmishQueueWait={} ms, maxPerTeam={}, clonesPerTick={}, offlineBots={}, humanMirrors={}.",
         g_Config.enabled ? "true" : "false", g_Config.battlegroundTypes.empty() ? "all" : types,
-        g_Config.queueWaitMs, g_Config.maxPerTeam, g_Config.clonesPerTick,
+        g_Config.queueWaitMs, g_Config.skirmishArenasEnabled ? "true" : "false", g_Config.skirmishArenaQueueWaitMs,
+        g_Config.maxPerTeam, g_Config.clonesPerTick,
         g_Config.useOfflineBots ? "true" : "false", g_Config.allowHumanMirrors ? "true" : "false");
 }
 

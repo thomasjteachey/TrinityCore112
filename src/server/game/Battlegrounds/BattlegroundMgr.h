@@ -125,23 +125,29 @@ class TC_GAME_API BattlegroundMgr
         bool isArenaTesting() const { return m_ArenaTesting; }
         bool isTesting() const { return m_Testing; }
 
-        // Bot-filled battlegrounds. For the types this policy covers, a match
-        // may start for real players alone once the longest-waiting one has
-        // been queued QueueWaitMs; the playerbot module then pads both teams
-        // with transient clones. The module installs the policy on config
-        // load, so a build or a realm without it leaves the queue exactly as
-        // stock: nothing here reads the playerbot configuration directly.
+        // Bot-filled battlegrounds and unrated arena skirmishes. For queues
+        // this policy covers, a match may start for real players alone once
+        // the longest-waiting one has reached the applicable wait; the
+        // playerbot module then pads both teams with transient clones. The
+        // module installs the policy on config load, so a build or a realm
+        // without it leaves the queue exactly as stock: nothing here reads
+        // the playerbot configuration directly.
         struct BotFillPolicy
         {
             bool enabled = false;
-            // Empty set = every battleground except Violet Hold. Arenas are
-            // never covered whatever the set says.
+            // Empty set = every battleground except Violet Hold.
             std::set<uint32> battlegroundTypes;
             uint32 queueWaitMs = 0;
+            bool skirmishArenasEnabled = false;
+            uint32 skirmishArenaQueueWaitMs = 15 * IN_MILLISECONDS;
         };
         void SetBotFillPolicy(BotFillPolicy policy) { _botFillPolicy = std::move(policy); }
         bool IsBotFillBattleground(BattlegroundTypeId bgTypeId) const;
-        uint32 GetBotFillQueueWaitMs() const { return _botFillPolicy.queueWaitMs; }
+        bool IsBotFillSkirmishArena(uint8 arenaType) const;
+        uint32 GetBotFillQueueWaitMs(uint8 arenaType = 0) const
+        {
+            return arenaType ? _botFillPolicy.skirmishArenaQueueWaitMs : _botFillPolicy.queueWaitMs;
+        }
 
         static BattlegroundQueueTypeId BGQueueTypeId(BattlegroundTypeId bgTypeId, uint8 arenaType);
         static BattlegroundTypeId BGTemplateId(BattlegroundQueueTypeId bgQueueTypeId);

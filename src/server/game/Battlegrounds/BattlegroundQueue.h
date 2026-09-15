@@ -131,11 +131,13 @@ class TC_GAME_API BattlegroundQueue
     private:
 
         bool InviteGroupToBG(GroupQueueInfo* ginfo, Battleground* bg, uint32 side);
-        // Bot-filled battlegrounds (BattlegroundMgr::BotFillPolicy): start a
-        // match for the real players waiting in this bracket, however few,
-        // once the longest-waiting of them has been queued the policy's wait.
-        // The playerbot module fills the rest of both teams afterwards.
-        bool TryStartBotFilledMatch(BattlegroundTypeId bgTypeId, PvPDifficultyEntry const* bracketEntry, BattlegroundBracketId bracket_id, uint32 maxPlayersPerTeam);
+        // Bot-filled battlegrounds and skirmishes
+        // (BattlegroundMgr::BotFillPolicy): start a match for the real players
+        // waiting in this bracket, however few, once the longest-waiting one
+        // has been queued the policy's wait. The playerbot module fills the
+        // rest of both teams afterwards. Rated groups are never selected.
+        bool TryStartBotFilledMatch(BattlegroundTypeId bgTypeId, PvPDifficultyEntry const* bracketEntry,
+            BattlegroundBracketId bracket_id, uint32 maxPlayersPerTeam, uint8 arenaType, uint32 queueWaitMs);
         uint32 m_WaitTimes[PVP_TEAMS_COUNT][MAX_BATTLEGROUND_BRACKETS][COUNT_OF_PLAYERS_TO_AVERAGE_WAIT_TIME];
         uint32 m_WaitTimeLastPlayer[PVP_TEAMS_COUNT][MAX_BATTLEGROUND_BRACKETS];
         uint32 m_SumOfWaitTimes[PVP_TEAMS_COUNT][MAX_BATTLEGROUND_BRACKETS];

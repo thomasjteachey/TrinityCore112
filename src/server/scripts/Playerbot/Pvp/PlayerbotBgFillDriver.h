@@ -22,18 +22,19 @@
 
 namespace playerbot
 {
-// Pads public battlegrounds with transient clones of the managed playerbots.
+// Pads public battlegrounds and unrated arena skirmishes with transient clones
+// of the managed playerbots. Rated arenas are never filled.
 //
 // The bots themselves stay out in the world. What enters a Warsong Gulch or a
 // Battle for Gilneas is an in-memory copy of one of them - same gear, talents
 // and level, made by PlayerbotObcCloneManager exactly as the Violet Hold waves
 // and the custom-game rosters are - and the copy is thrown away when the match
 // is over. Real players come first at every turn: a person queuing alone gets a
-// match after BattlegroundMgr::BotFillPolicy's wait (the queue's
-// TryStartBotFilledMatch), a person invited into a full match displaces a clone
-// (the queue's ordinary bot-displacement path, extended to transient clones by
-// Battleground::IsBotFillMatch), a person leaving has the seat refilled here,
-// and the last person leaving ends the match through the stock no-humans rule.
+// match after BattlegroundMgr::BotFillPolicy's applicable wait (the queue's
+// TryStartBotFilledMatch). In battlegrounds, a later person can displace a clone
+// and a vacated seat is refilled. Arena rosters instead lock at creation: no
+// replacements enter after the skirmish pops. The last person leaving ends a
+// bot-filled match through the stock no-humans rule.
 //
 // Each half-second the driver visits every live public battleground of an
 // enabled type and, once at least one real player has actually entered, tops

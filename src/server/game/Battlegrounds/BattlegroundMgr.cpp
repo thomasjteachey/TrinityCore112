@@ -871,6 +871,15 @@ bool BattlegroundMgr::IsBotFillBattleground(BattlegroundTypeId bgTypeId) const
     return _botFillPolicy.battlegroundTypes.empty() || _botFillPolicy.battlegroundTypes.count(uint32(bgTypeId)) != 0;
 }
 
+bool BattlegroundMgr::IsBotFillSkirmishArena(uint8 arenaType) const
+{
+    if (!_botFillPolicy.enabled || !_botFillPolicy.skirmishArenasEnabled)
+        return false;
+
+    return arenaType == ARENA_TYPE_2v2 || arenaType == ARENA_TYPE_3v3 ||
+        arenaType == ARENA_TYPE_4v4 || arenaType == ARENA_TYPE_5v5;
+}
+
 bool BattlegroundMgr::IsArenaType(BattlegroundTypeId bgTypeId)
 {
     return bgTypeId == BATTLEGROUND_AA

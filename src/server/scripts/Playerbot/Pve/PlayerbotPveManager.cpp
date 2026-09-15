@@ -594,6 +594,7 @@ namespace
     void HoldLootFromAuction(ObjectGuid itemGuid, uint32 seconds, ObjectGuid owner);
     bool IsHeldFromAuction(ObjectGuid itemGuid);
     bool IsHeldOrPacedFromAuction(ObjectGuid itemGuid);
+    bool CarriesQueuedChestLoot(Player* bot);
     uint32 RequiredAmmoSubclass(Player const* bot);
     void MoveTowardThrottled(Player* bot, Position const& destination);
     void TrimOverstockedConsumables(Player* bot);
@@ -5750,6 +5751,20 @@ namespace
                         bot->GetName(), held, OwnerNameForChest(lootGuid),
                         lootGuid.GetCounter(), g_PveConfig.deathChestAuctionHoldSeconds);
                     TauntChestOwner(bot, lootGuid, held);
+
+                    // The taunt and the hold start in the same breath. Make the
+                    // first auction pass due when that hold ends instead of
+                    // leaving it on the ordinary eight-minute seller cadence.
+                    // Preserve an already-earlier pass: it will find the pieces
+                    // held, then CarriesQueuedChestLoot keeps retrying at the
+                    // one-minute pacing interval until the window expires.
+                    PveBotState& state = playerbot::LockedGetOrCreate(
+                        g_PveBotStateByGuid, bot->GetGUID().GetRawValue());
+                    PveTimePoint const firstListingAt = PveClock::now() +
+                        std::chrono::seconds(g_PveConfig.deathChestAuctionHoldSeconds);
+                    if (state.nextAuctionSellAt == PveTimePoint() ||
+                        firstListingAt < state.nextAuctionSellAt)
+                        state.nextAuctionSellAt = firstListingAt;
                 }
             }
 
@@ -10449,6 +10464,37 @@ namespace
         std::lock_guard<std::mutex> guard(g_AuctionHoldLock);
         auto itr = g_AuctionHoldByItem.find(itemGuid.GetRawValue());
         return itr != g_AuctionHoldByItem.end() && itr->second.Until > now;
+    }
+
+    // Is this bot still carrying somebody's death-chest loot - held, or merely
+    // waiting its turn in that owner's queue?
+    //
+    // IsHeldFromAuction is NOT the question to ask here. It goes false the moment
+    // the five minute window lapses, which is precisely when the queue starts
+    // draining and precisely when the bot needs to come back often. What matters
+    // is whether a hold RECORD still exists for anything in the bags.
+    bool CarriesQueuedChestLoot(Player* bot)
+    {
+        if (!bot)
+            return false;
+
+        std::vector<uint64> carried;
+        ForEachBagItem(bot, [&carried](Item* item, uint8, uint8)
+        {
+            if (item)
+                carried.push_back(item->GetGUID().GetRawValue());
+        });
+
+        if (carried.empty())
+            return false;
+
+        // One lock for the whole pack rather than one per slot.
+        std::lock_guard<std::mutex> guard(g_AuctionHoldLock);
+        for (uint64 raw : carried)
+            if (g_AuctionHoldByItem.find(raw) != g_AuctionHoldByItem.end())
+                return true;
+
+        return false;
     }
 
     // When the hold lapses, the owner's things go up ONE AT A TIME.
@@ -16058,7 +16104,13 @@ namespace
             }
             if (cfg.auctionSellEnabled && state.auctionCatchUpSell)
             {
-                state.nextAuctionSellAt = now + std::chrono::minutes(8);
+                // Do not let the login catch-up overwrite a nearer death-chest
+                // deadline. The catch-up still runs immediately; this timestamp
+                // controls the pass after it.
+                PveTimePoint const ordinaryNextSell = now + std::chrono::minutes(8);
+                if (state.nextAuctionSellAt == PveTimePoint() ||
+                    ordinaryNextSell < state.nextAuctionSellAt)
+                    state.nextAuctionSellAt = ordinaryNextSell;
                 g_PendingAuctionSales.insert(bot->GetGUID().GetRawValue());
             }
         }
@@ -16073,7 +16125,26 @@ namespace
                 state.nextAuctionSellAt = now + std::chrono::seconds(120 + bot->GetGUID().GetCounter() % 420);
             else
             {
-                state.nextAuctionSellAt = now + std::chrono::minutes(8);
+                // A bot holding a dead player's kit comes back at the PACING
+                // interval, not the leisurely one.
+                //
+                // The queue hands over one of an owner's pieces every
+                // deathChestAuctionReleaseSeconds, but a piece can only be handed
+                // over on a listing pass, and the ordinary pass is eight minutes
+                // away. So a fifteen piece chest drained at one item per EIGHT
+                // minutes - two hours - and the owner got a single taunt and then
+                // silence, because the only thing that ever brought the bot back
+                // sooner was a drifter landing happening to fall in the gap.
+                //
+                // The intended cadence is the one the config already describes:
+                // killed, taunted, five minutes, then one piece and one whisper a
+                // minute until the kit is gone.
+                uint32 const paceSeconds = cfg.deathChestAuctionReleaseSeconds;
+                if (paceSeconds && CarriesQueuedChestLoot(bot))
+                    state.nextAuctionSellAt = now + std::chrono::seconds(paceSeconds);
+                else
+                    state.nextAuctionSellAt = now + std::chrono::minutes(8);
+
                 std::lock_guard<std::mutex> guard(g_PvePendingLock);
                 g_PendingAuctionSales.insert(bot->GetGUID().GetRawValue());
             }

@@ -98,9 +98,10 @@ Playerbot.PvpLifecycle.ObsidianColosseum.CloneAccountId = 0
 ###################################################################################################
 # PLAYERBOT BATTLEGROUND FILL (TRANSIENT CLONES)
 #
-#    Pads public battlegrounds with in-memory copies of the managed playerbots instead of pulling
-#    the bots themselves out of the world. A real player who queues alone gets a match after a
-#    short wait; both teams are then filled with clones matched to the bracket's level range.
+#    Pads public battlegrounds and unrated arena skirmishes with in-memory copies of the managed
+#    playerbots instead of pulling the bots themselves out of the world. A real player who queues
+#    alone gets a match after a short wait; both teams are then filled with clones matched to the
+#    bracket's level range. Rated arenas are never filled.
 #    The clones step aside one at a time as more real players are invited, refill seats people
 #    leave, and are gone once the last real player is. The resource governor above applies to
 #    them as it does to custom-game bots.
@@ -119,7 +120,7 @@ Playerbot.BgFill.Enable = 0
 #                     Basin, 7 Eye of the Storm, 30 Isle of Conquest, 32 Random Battleground,
 #                     100 Scarlet Chapel, 108 Twin Peaks, 120 Battle for Gilneas, ...).
 #                     Empty = every battleground except Violet Hold, whose enemies come in waves
-#                     of its own. Arenas are never filled.
+#                     of its own. Arena skirmishes are controlled separately below.
 #        Default:     "" (all battlegrounds)
 
 Playerbot.BgFill.BattlegroundTypes = ""
@@ -132,6 +133,21 @@ Playerbot.BgFill.BattlegroundTypes = ""
 #        Default:     15
 
 Playerbot.BgFill.QueueWaitSeconds = 15
+
+#    Playerbot.BgFill.SkirmishArena.Enable
+#        Description: Fill unrated arena skirmishes with the same transient bot clones used by
+#                     battleground fill. Rated arenas are always excluded.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+
+Playerbot.BgFill.SkirmishArena.Enable = 1
+
+#    Playerbot.BgFill.SkirmishArena.QueueWaitSeconds
+#        Description: How long a real player must wait in an unrated arena queue before a
+#                     clone-filled skirmish is created. Independent of the battleground wait.
+#        Default:     15
+
+Playerbot.BgFill.SkirmishArena.QueueWaitSeconds = 15
 
 #    Playerbot.BgFill.MaxPerTeam
 #        Description: Team size the clones fill up to, capped by the battleground's own maximum

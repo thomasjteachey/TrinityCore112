@@ -1036,7 +1036,8 @@ void BattlegroundQueue::UpdateEvents(uint32 diff)
     m_events.Update(diff);
 }
 
-bool BattlegroundQueue::TryStartBotFilledMatch(BattlegroundTypeId bgTypeId, PvPDifficultyEntry const* bracketEntry, BattlegroundBracketId bracket_id, uint32 maxPlayersPerTeam)
+bool BattlegroundQueue::TryStartBotFilledMatch(BattlegroundTypeId bgTypeId, PvPDifficultyEntry const* bracketEntry,
+    BattlegroundBracketId bracket_id, uint32 maxPlayersPerTeam, uint8 arenaType, uint32 queueWaitMs)
 {
     // CheckNormalMatch leaves whatever it had gathered in the pools when it
     // gives up; start from nothing.
@@ -1049,13 +1050,13 @@ bool BattlegroundQueue::TryStartBotFilledMatch(BattlegroundTypeId bgTypeId, PvPD
     // clones. Groups made only of managed bots are left waiting as stock: a
     // match is summoned for people, and the bots can fill one that exists.
     uint32 const nowMs = GameTime::GetGameTimeMS();
-    uint32 const waitMs = sBattlegroundMgr->GetBotFillQueueWaitMs();
     bool someoneHasWaitedLongEnough = false;
     for (uint32 queueIndex = BG_QUEUE_PREMADE_ALLIANCE; queueIndex < BG_QUEUE_GROUP_TYPES_COUNT; ++queueIndex)
     {
         for (GroupQueueInfo* ginfo : m_QueuedGroups[bracket_id][queueIndex])
         {
-            if (ginfo->IsInvitedToBGInstanceGUID || !GroupHasRealPlayerInvitee(ginfo))
+            if (ginfo->IsInvitedToBGInstanceGUID || ginfo->IsRated ||
+                (arenaType && ginfo->ArenaType != arenaType) || !GroupHasRealPlayerInvitee(ginfo))
                 continue;
 
             TeamId const teamIndex = ginfo->Team == HORDE ? TEAM_HORDE : TEAM_ALLIANCE;
@@ -1064,7 +1065,7 @@ bool BattlegroundQueue::TryStartBotFilledMatch(BattlegroundTypeId bgTypeId, PvPD
             if (m_SelectionPools[teamIndex].GetPlayerCount() == before)
                 continue;   // too large for what is left of that side
 
-            if (getMSTimeDiff(ginfo->JoinTime, nowMs) >= waitMs)
+            if (getMSTimeDiff(ginfo->JoinTime, nowMs) >= queueWaitMs)
                 someoneHasWaitedLongEnough = true;
         }
     }
@@ -1077,7 +1078,7 @@ bool BattlegroundQueue::TryStartBotFilledMatch(BattlegroundTypeId bgTypeId, PvPD
         return false;
     }
 
-    Battleground* bg = sBattlegroundMgr->CreateNewBattleground(bgTypeId, bracketEntry, 0, false);
+    Battleground* bg = sBattlegroundMgr->CreateNewBattleground(bgTypeId, bracketEntry, arenaType, false);
     if (!bg)
     {
         TC_LOG_ERROR("bg.battleground", "BattlegroundQueue::TryStartBotFilledMatch - Cannot create battleground: {}", uint32(bgTypeId));
@@ -1094,10 +1095,13 @@ bool BattlegroundQueue::TryStartBotFilledMatch(BattlegroundTypeId bgTypeId, PvPD
         for (GroupQueueInfo* ginfo : m_SelectionPools[TEAM_ALLIANCE + i].SelectedGroups)
             InviteGroupToBG(ginfo, bg, ginfo->Team);
 
-    TC_LOG_DEBUG("bg.battleground", "BattlegroundQueue::TryStartBotFilledMatch: started bot-filled match type {} instance {} bracket {} for {} real player(s).",
-        uint32(bgTypeId), bg->GetInstanceID(), uint32(bracket_id), selected);
+    TC_LOG_DEBUG("bg.battleground", "BattlegroundQueue::TryStartBotFilledMatch: started bot-filled match type {} instance {} bracket {} arenaType {} for {} real player(s).",
+        uint32(bgTypeId), bg->GetInstanceID(), uint32(bracket_id), uint32(arenaType), selected);
 
     bg->StartBattleground();
+    if (arenaType)
+        bg->RemoveFromBGFreeSlotQueue();
+
     m_SelectionPools[TEAM_ALLIANCE].Init();
     m_SelectionPools[TEAM_HORDE].Init();
     return true;
@@ -1172,8 +1176,15 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
     for (BGFreeSlotQueueContainer::iterator itr = bgQueues.begin(); itr != bgQueues.end();)
     {
         Battleground* bg = *itr; ++itr;
+        // A skirmish roster locks when its instance is created. Humans who
+        // queue after a bot-filled arena pops must wait for their own match;
+        // arena combat never admits replacements or backfills.
+        if (bg->isArena() && bg->IsBotFillMatch())
+            continue;
+
         // DO NOT allow queue manager to invite new player to rated games
         if (!bg->isRated() && bg->GetTypeID() == bgTypeId && bg->GetBracketId() == bracket_id &&
+            (!bg->isArena() || bg->GetArenaType() == arenaType) &&
             bg->GetStatus() > STATUS_WAIT_QUEUE && bg->GetStatus() < STATUS_WAIT_LEAVE)
         {
             // clear selection pools
@@ -1303,7 +1314,11 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
         // pads battlegrounds with clones, the people waiting get one anyway
         // once they have waited long enough for company to show up.
         else if (bg_template->isBattleground() && sBattlegroundMgr->IsBotFillBattleground(bgTypeId))
-            TryStartBotFilledMatch(bgTypeId, bracketEntry, bracket_id, MaxPlayersPerTeam);
+            TryStartBotFilledMatch(bgTypeId, bracketEntry, bracket_id, MaxPlayersPerTeam, 0,
+                sBattlegroundMgr->GetBotFillQueueWaitMs());
+        else if (bg_template->isArena() && sBattlegroundMgr->IsBotFillSkirmishArena(arenaType))
+            TryStartBotFilledMatch(bgTypeId, bracketEntry, bracket_id, MaxPlayersPerTeam, arenaType,
+                sBattlegroundMgr->GetBotFillQueueWaitMs(arenaType));
     }
     else if (bg_template->isArena())
     {
