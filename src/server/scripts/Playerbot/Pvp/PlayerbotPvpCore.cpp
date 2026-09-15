@@ -7478,6 +7478,8 @@ void PvpCore::LoadConfig()
     g_PvpCoreConfig.pvpCoreEnabled = sConfigMgr->GetBoolDefault("Playerbot.PvpCore.Enable", false);
     g_PvpCoreConfig.pvpTacticsEnabled = sConfigMgr->GetBoolDefault("Playerbot.PvpTactics.Enable", false);
     g_PvpCoreConfig.pvpLifecycleEnabled = sConfigMgr->GetBoolDefault("Playerbot.PvpLifecycle.Enable", false);
+    g_PvpCoreConfig.pvpPersistentLifecycleEnabled = sConfigMgr->GetBoolDefault(
+        "Playerbot.PvpLifecycle.PersistentBots.Enable", true);
     g_PvpCoreConfig.pvpClassSpellsEnabled = sConfigMgr->GetBoolDefault("Playerbot.PvpClassSpells.Enable", false);
     g_PvpCoreConfig.usePotions = sConfigMgr->GetBoolDefault("Playerbot.PvpClassSpells.UsePotions", true);
     g_PvpCoreConfig.spellRange = sConfigMgr->GetFloatDefault("Playerbot.PvpClassSpells.Range.Spell", 30.0f);

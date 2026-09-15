@@ -37,6 +37,9 @@ struct PvpCoreConfig
     bool pvpCoreEnabled = false;
     bool pvpTacticsEnabled = false;
     bool pvpLifecycleEnabled = false;
+    // Keep transient OBC/arena clones fighting while allowing persistent
+    // open-world bots to remain out of the PvP queue lifecycle.
+    bool pvpPersistentLifecycleEnabled = true;
     bool pvpClassSpellsEnabled = false;
     // Bots reaching for a healing or mana potion when a fight turns. Gated
     // because it changes how a bot fights, and a realm should be able to say no

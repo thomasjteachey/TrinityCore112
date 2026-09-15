@@ -651,9 +651,23 @@ bool BattlegroundQueue::IsPlayerInvited(ObjectGuid pl_guid, const uint32 bgInsta
 
 bool BattlegroundQueue::GetPlayerGroupInfoData(ObjectGuid guid, GroupQueueInfo* ginfo)
 {
+    if (!ginfo)
+        return false;
+
     QueuedPlayersMap::const_iterator qItr = m_QueuedPlayers.find(guid);
     if (qItr == m_QueuedPlayers.end())
         return false;
+
+    // A stale queue entry can survive a bot lifecycle transition with its
+    // group pointer cleared. Treat it as absent so callers can prune the
+    // player's local queue slot instead of dereferencing null and taking down
+    // the worldserver while the client is waiting for a battleground status.
+    if (!qItr->second.GroupInfo)
+    {
+        TC_LOG_ERROR("bg.battleground", "BattlegroundQueue: null groupinfo for {}", guid.ToString());
+        return false;
+    }
+
     *ginfo = *(qItr->second.GroupInfo);
     return true;
 }

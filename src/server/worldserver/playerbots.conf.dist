@@ -55,6 +55,16 @@ Playerbot.PvpTactics.Enable = 0
 
 Playerbot.PvpLifecycle.Enable = 0
 
+#    Playerbot.PvpLifecycle.PersistentBots.Enable
+#        Description: Enables the queue/invite/in-progress PvP lifecycle for persistent
+#                     account-backed random bots. Transient OBC/arena clones continue to use
+#                     the PvP lifecycle when Playerbot.PvpLifecycle.Enable is enabled, even if
+#                     this is 0. Set this to 0 when persistent bots should remain in the open
+#                     world and only transient clones should fight instanced PvP.
+#        Default: 1
+
+Playerbot.PvpLifecycle.PersistentBots.Enable = 1
+
 #    Playerbot.PvpLifecycle.QueueOnly.ScarletChapelAccounts
 #    Playerbot.PvpLifecycle.QueueOnly.BlackrockThroneAccounts
 #    Playerbot.PvpLifecycle.QueueOnly.BattleForGilneasAccounts

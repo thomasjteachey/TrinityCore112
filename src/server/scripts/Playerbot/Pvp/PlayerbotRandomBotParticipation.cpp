@@ -247,6 +247,11 @@ bool IsLifecycleGateEnabled()
     return config.moduleEnabled && config.pvpCoreEnabled && config.pvpLifecycleEnabled;
 }
 
+bool IsPersistentLifecycleEnabled()
+{
+    return playerbot::PvpCore::GetConfig().pvpPersistentLifecycleEnabled;
+}
+
 using LifecycleCadenceClock = std::chrono::steady_clock;
 using LifecycleCadenceTimePoint = LifecycleCadenceClock::time_point;
 
@@ -895,6 +900,16 @@ bool CanProcessPlayerLifecycle(Player const* player)
         return false;
     }
 
+    if (!IsPersistentLifecycleEnabled())
+    {
+        ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Lifecycle blocked: guid={} reason=persistent-bot-gate-disabled",
+            guid.ToString());
+        EmitLifecycleGmDebug(player, "can-process=no persistent-bot-gate-disabled");
+        return false;
+    }
+
     if (!player->IsInWorld())
     {
         ObserveLifecycleReason(LifecycleObservationReason::InvalidPlayerState, guid);
@@ -1011,6 +1026,9 @@ void ProcessBattlegroundPlayerbotTick(Player* player)
         return;
 
     bool const activeClone = playerbot::PlayerbotObcCloneManager::IsActiveClone(player);
+    if (!activeClone && !IsPersistentLifecycleEnabled())
+        return;
+
     if (!playerbot::IsManagedRandomBot(player) && !activeClone)
         return;
 
