@@ -392,8 +392,7 @@ void ShedClonesFromTeam(Battleground* bg, uint32 team, uint32 count,
 // requested. `matchClones` and `totalClones` feed the governor and are
 // advanced as seats are taken.
 uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally const& tally,
-    std::vector<playerbot::PlayerbotObcCloneManager::CustomGameCloneInfo> const& clones,
-    uint32& matchClones, uint32& totalClones, uint32 nowMs)
+    std::unordered_set<ObjectGuid>& usedSources, uint32& matchClones, uint32& totalClones, uint32 nowMs)
 {
     if (!wanted)
         return 0;
@@ -401,7 +400,6 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
     uint32 const minLevel = bg->GetMinLevel();
     uint32 const maxLevel = std::max(bg->GetMaxLevel(), minLevel);
     TeamId const teamIndex = Battleground::GetTeamIndexByTeamId(team);
-    std::unordered_set<ObjectGuid> used = CollectUsedSources(bg->GetInstanceID(), clones);
 
     uint32 added = 0;
     auto governorAllows = [&]()
@@ -410,7 +408,7 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
     };
 
     // 1. Online bots in the bracket.
-    std::vector<ObjectGuid> online = CollectOnlineSources(minLevel, maxLevel, used);
+    std::vector<ObjectGuid> online = CollectOnlineSources(minLevel, maxLevel, usedSources);
     for (ObjectGuid const& sourceGuid : online)
     {
         if (added >= wanted || !governorAllows())
@@ -429,7 +427,7 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
             continue;
         }
 
-        used.insert(sourceGuid);
+        usedSources.insert(sourceGuid);
         ++added;
         ++matchClones;
         ++totalClones;
@@ -441,7 +439,7 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
     if (added < wanted && g_Config.useOfflineBots)
     {
         RefreshOfflinePoolIfStale(nowMs);
-        std::vector<ObjectGuid> offline = CollectOfflineSources(minLevel, maxLevel, used);
+        std::vector<ObjectGuid> offline = CollectOfflineSources(minLevel, maxLevel, usedSources);
         WorldSession* callbackSession = offline.empty() ? nullptr : FindCallbackSession(tally, teamIndex);
         for (ObjectGuid const& sourceGuid : offline)
         {
@@ -458,7 +456,7 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
             pending.requestedMs = nowMs;
             g_PendingOfflineClones.push_back(pending);
 
-            used.insert(sourceGuid);
+            usedSources.insert(sourceGuid);
             ++added;
             ++matchClones;
             ++totalClones;
@@ -476,7 +474,7 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
             if (added >= wanted || !governorAllows())
                 break;
 
-            if (used.count(humanGuid))
+            if (usedSources.count(humanGuid))
                 continue;
 
             Player* human = ObjectAccessor::FindConnectedPlayer(humanGuid);
@@ -487,7 +485,7 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
             if (!clone)
                 continue;
 
-            used.insert(humanGuid);
+            usedSources.insert(humanGuid);
             ++added;
             ++matchClones;
             ++totalClones;
@@ -577,6 +575,10 @@ void FillMatch(LiveMatch& match, uint32& totalClones, uint32 nowMs)
 
     std::vector<playerbot::PlayerbotObcCloneManager::CustomGameCloneInfo> const clones =
         playerbot::PlayerbotObcCloneManager::GetCustomGameClones(match.instanceId);
+    // This set must live across both team passes. A per-team set lets the
+    // same source be selected once for Alliance and once for Horde in the
+    // same 2v2/3v3 match, producing two clones with the same displayed name.
+    std::unordered_set<ObjectGuid> usedSources = CollectUsedSources(match.instanceId, clones);
     uint32 matchClones = match.tally.Clones();
     bool const arenaRosterLocked = bg->isArena() && bg->GetStatus() != STATUS_WAIT_JOIN;
 
@@ -596,7 +598,7 @@ void FillMatch(LiveMatch& match, uint32& totalClones, uint32 nowMs)
         else if (present < desired && !arenaRosterLocked)
         {
             uint32 const wanted = std::min(desired - present, std::max<uint32>(g_Config.clonesPerTick, 1));
-            AddClonesToTeam(bg, team, wanted, match.tally, clones, matchClones, totalClones, nowMs);
+            AddClonesToTeam(bg, team, wanted, match.tally, usedSources, matchClones, totalClones, nowMs);
         }
     }
 }
