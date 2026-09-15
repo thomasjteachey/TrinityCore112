@@ -24264,7 +24264,12 @@ void Player::UpdatePvPState(bool onlyFFA)
 {
     /// @todo should we always synchronize UNIT_FIELD_BYTES_2, 1 of controller and controlled?
     // no, we shouldn't, those are checked for affecting player by client
-    if (!pvpInfo.IsInNoPvPArea && !IsGameMaster()
+    // Battlegrounds and arenas have their own team hostility model.  Never
+    // re-arm the open-world FFA byte from an AREA_FLAG_ARENA/FFA area while a
+    // player is inside one; otherwise a real player can carry FFA in from the
+    // world, get cleared by Battleground::AddPlayer, and then be re-armed on
+    // the next area/PvP-state update while an OBC clone remains clean.
+    if (!InBattleground() && !pvpInfo.IsInNoPvPArea && !IsGameMaster()
         && (pvpInfo.IsInFFAPvPArea || sWorld->IsFFAPvPRealm()))
     {
         if (!IsFFAPvP())
