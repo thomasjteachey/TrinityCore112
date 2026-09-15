@@ -8305,11 +8305,14 @@ void Player::UpdateArea(uint32 newArea)
     static std::array<uint32, 1> const customFFAAreas = { 3217 }; // The Maul
     bool const isCustomFFAArea = std::find(customFFAAreas.begin(), customFFAAreas.end(), newArea) != customFFAAreas.end();
 
-    bool isFFAArea = isCustomFFAArea || isGurubashiBattleRing;
+    // Battlegrounds and arenas use their own team relationship.  Do not let
+    // an AREA_FLAG_ARENA on the destination map recreate the open-world FFA
+    // state after Battleground::AddPlayer has cleared it.
+    bool isFFAArea = !InBattleground() && (isCustomFFAArea || isGurubashiBattleRing);
     // Walk the area hierarchy in case the arena flag is defined on a parent zone.
     // Gurubashi has safe ramp/outer areas under the same parent arena hierarchy, so
     // do not let parent AREA_FLAG_ARENA bleed FFA PvP into non-Battle Ring areas.
-    if (!isFFAArea && !isGurubashiSafeArea)
+    if (!isFFAArea && !InBattleground() && !isGurubashiSafeArea)
     {
         for (AreaTableEntry const* currentArea = area; currentArea;)
         {

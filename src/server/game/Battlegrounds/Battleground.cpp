@@ -1450,9 +1450,10 @@ void Battleground::AddPlayer(Player* player)
     // created in the arena with a clean byte, which made real players and
     // clones disagree: the real player rendered dark-blue/hostile and party
     // aura behavior diverged even though both were in the same BG raid.
-    if (player->IsFFAPvP())
+    if (player->IsFFAPvP() || player->pvpInfo.IsInFFAPvPArea || player->pvpInfo.IsInFFAPvPAreaByMap)
     {
         player->pvpInfo.IsInFFAPvPArea = false;
+        player->pvpInfo.IsInFFAPvPAreaByMap = false;
         player->RemovePvpFlag(UNIT_BYTE2_FLAG_FFA_PVP);
         player->ForceValuesUpdateAtIndex(UNIT_FIELD_BYTES_2);
         player->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
