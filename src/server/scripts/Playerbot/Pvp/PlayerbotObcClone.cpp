@@ -111,6 +111,16 @@ bool IsObcCloneFeatureConfigured()
     return g_ObcCloneConfig.enabled;
 }
 
+bool IsRunningArenaClone(CustomGameCloneRecord const& record)
+{
+    Battleground* bg = sBattlegroundMgr->GetBattleground(record.battlegroundInstanceId, record.battlegroundType);
+    if (!bg || !bg->isArena())
+        return false;
+
+    BattlegroundStatus const status = bg->GetStatus();
+    return status == STATUS_WAIT_JOIN || status == STATUS_IN_PROGRESS;
+}
+
 uint32 OppositeTeam(uint32 team)
 {
     return team == ALLIANCE ? HORDE : ALLIANCE;
@@ -1475,7 +1485,15 @@ void PlayerbotObcCloneManager::DestroyCustomGameClones(uint32 battlegroundInstan
         std::lock_guard<std::mutex> lock(g_ObcCloneLock);
         for (auto const& [cloneGuid, record] : g_CustomGameClones)
             if (record.battlegroundInstanceId == battlegroundInstanceId && (!team || record.team == team))
+            {
+                // Arena rosters are immutable from preparation through the
+                // result. A lobby close ends the arena immediately after this
+                // call, and the normal WAIT_LEAVE cleanup removes the clones on
+                // the following world tick.
+                if (IsRunningArenaClone(record))
+                    continue;
                 cloneGuids.push_back(cloneGuid);
+            }
     }
 
     for (ObjectGuid cloneGuid : cloneGuids)
@@ -1493,6 +1511,11 @@ bool PlayerbotObcCloneManager::ShedOneCustomGameClone(uint32 battlegroundInstanc
     }
 
     if (records.empty())
+        return false;
+
+    // Resource pressure may cull an entire match through EndBattleground, but
+    // it must never silently remove one transient combatant from a live arena.
+    if (IsRunningArenaClone(records.front()))
         return false;
 
     uint32 allianceClones = 0;
@@ -1556,11 +1579,17 @@ std::vector<PlayerbotObcCloneManager::CustomGameCloneInfo> PlayerbotObcCloneMana
 
 bool PlayerbotObcCloneManager::DestroyCustomGameClone(ObjectGuid cloneGuid)
 {
+    CustomGameCloneRecord record;
     {
         std::lock_guard<std::mutex> lock(g_ObcCloneLock);
-        if (g_CustomGameClones.find(cloneGuid) == g_CustomGameClones.end())
+        auto itr = g_CustomGameClones.find(cloneGuid);
+        if (itr == g_CustomGameClones.end())
             return false;
+        record = itr->second;
     }
+
+    if (IsRunningArenaClone(record))
+        return false;
 
     TeardownCustomGameClone(cloneGuid);
     return true;

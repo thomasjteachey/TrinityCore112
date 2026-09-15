@@ -93,12 +93,13 @@ public:
     static std::vector<CustomGameCloneInfo> GetCustomGameClones(uint32 battlegroundInstanceId);
 
     // Tear down one specific clone. False when the guid is not a live
-    // custom-game clone (already gone, or never one).
+    // custom-game clone (already gone, or never one), or while its arena is
+    // preparing/in progress. Arena clones remain until the result state.
     static bool DestroyCustomGameClone(ObjectGuid cloneGuid);
 
     // Resource-governor load shedding: remove a single clone from a running
-    // custom match. Picks the team currently fielding more clones and prefers
-    // a dead clone so the removal is as unobtrusive as possible. Returns true
+    // custom match. Live arenas refuse shedding; other matches pick the team
+    // currently fielding more clones and prefer a dead clone. Returns true
     // when a clone was removed.
     static bool ShedOneCustomGameClone(uint32 battlegroundInstanceId);
 

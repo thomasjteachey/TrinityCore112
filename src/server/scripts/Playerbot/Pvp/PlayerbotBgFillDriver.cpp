@@ -580,7 +580,9 @@ void FillMatch(LiveMatch& match, uint32& totalClones, uint32 nowMs)
     // same 2v2/3v3 match, producing two clones with the same displayed name.
     std::unordered_set<ObjectGuid> usedSources = CollectUsedSources(match.instanceId, clones);
     uint32 matchClones = match.tally.Clones();
-    bool const arenaRosterLocked = bg->isArena() && bg->GetStatus() != STATUS_WAIT_JOIN;
+    bool const arenaRemovalLocked = bg->isArena() &&
+        (bg->GetStatus() == STATUS_WAIT_JOIN || bg->GetStatus() == STATUS_IN_PROGRESS);
+    bool const arenaAdditionsLocked = bg->isArena() && bg->GetStatus() != STATUS_WAIT_JOIN;
 
     for (uint32 teamIndex = TEAM_ALLIANCE; teamIndex < PVP_TEAMS_COUNT; ++teamIndex)
     {
@@ -593,9 +595,9 @@ void FillMatch(LiveMatch& match, uint32& totalClones, uint32 nowMs)
         uint32 const desired = cap > taken ? cap - taken : 0;
         uint32 const present = tally.clones + CountPendingOfflineClones(match.instanceId, team);
 
-        if (present > desired)
+        if (present > desired && !arenaRemovalLocked)
             ShedClonesFromTeam(bg, team, present - desired, clones);
-        else if (present < desired && !arenaRosterLocked)
+        else if (present < desired && !arenaAdditionsLocked)
         {
             uint32 const wanted = std::min(desired - present, std::max<uint32>(g_Config.clonesPerTick, 1));
             AddClonesToTeam(bg, team, wanted, match.tally, usedSources, matchClones, totalClones, nowMs);

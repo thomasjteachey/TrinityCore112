@@ -144,6 +144,13 @@ bool RemoveVirtualPlayersFromTeam(Battleground* battleground, uint32 team, uint3
     if (!battleground || !count)
         return false;
 
+    // A transient arena roster is final once its instance exists. Do not
+    // displace a clone for a late invite during preparation or combat; the
+    // queued person must be matched into a different arena instead. Persistent
+    // virtual bots retain the old displacement policy.
+    bool const protectTransientArenaRoster = battleground->isArena() &&
+        (battleground->GetStatus() == STATUS_WAIT_JOIN || battleground->GetStatus() == STATUS_IN_PROGRESS);
+
     // Transient clones have nowhere to be sent home to (no entry point, no
     // client), so they are only unseated here; the playerbot clone manager
     // notices a clone that is no longer on its match's roster and takes it
@@ -166,6 +173,8 @@ bool RemoveVirtualPlayersFromTeam(Battleground* battleground, uint32 team, uint3
 
         WorldSession const* session = candidate->GetSession();
         if (!battleground->IsBotParticipantSession(session))
+            continue;
+        if (protectTransientArenaRoster && session->IsTransientPlayerSession())
             continue;
 
         Removal removal;
