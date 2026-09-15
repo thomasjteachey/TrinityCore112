@@ -1425,6 +1425,21 @@ void Battleground::AddPlayer(Player* player)
     // end timer can otherwise turn their overhead names blue mid-match.
     player->UpdatePvP(true, true);
 
+    // A player can enter carrying the open-world FFA byte from the area they
+    // came from.  Battleground teams (including custom arenas) are not FFA:
+    // the client must use the battleground team/raid relationship, and party
+    // aura target scans must not inherit the stale FFA state.  OBC clones are
+    // created in the arena with a clean byte, which made real players and
+    // clones disagree: the real player rendered dark-blue/hostile and party
+    // aura behavior diverged even though both were in the same BG raid.
+    if (player->IsFFAPvP())
+    {
+        player->pvpInfo.IsInFFAPvPArea = false;
+        player->RemovePvpFlag(UNIT_BYTE2_FLAG_FFA_PVP);
+        player->ForceValuesUpdateAtIndex(UNIT_FIELD_BYTES_2);
+        player->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
+    }
+
     BattlegroundPlayer bp;
     bp.OfflineRemoveTime = 0;
     bp.Team = team;
