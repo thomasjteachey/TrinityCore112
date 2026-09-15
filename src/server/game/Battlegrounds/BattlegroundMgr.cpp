@@ -383,9 +383,10 @@ uint32 BattlegroundMgr::CreateClientVisibleInstanceId(BattlegroundTypeId bgTypeI
 }
 
 // create a new battleground that will really be used to play
-Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundTypeId originalBgTypeId, PvPDifficultyEntry const* bracketEntry, uint8 arenaType, bool isRated, bool isPrivate)
+Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundTypeId originalBgTypeId, PvPDifficultyEntry const* bracketEntry,
+    uint8 arenaType, bool isRated, bool isPrivate, bool hasBotParticipants)
 {
-    BattlegroundTypeId bgTypeId = GetRandomBG(originalBgTypeId);
+    BattlegroundTypeId bgTypeId = GetRandomBG(originalBgTypeId, hasBotParticipants && !isPrivate);
 
     // get the template BG
     Battleground* bg_template = GetBattlegroundTemplate(bgTypeId);
@@ -1237,7 +1238,7 @@ std::vector<BattlegroundTypeId> BattlegroundMgr::GetRandomPoolMembers(Battlegrou
     return members;
 }
 
-BattlegroundTypeId BattlegroundMgr::GetRandomBG(BattlegroundTypeId bgTypeId)
+BattlegroundTypeId BattlegroundMgr::GetRandomBG(BattlegroundTypeId bgTypeId, bool hasBotParticipants)
 {
     std::vector<BattlegroundTypeId> ids;
     std::vector<double> weights;
@@ -1257,6 +1258,14 @@ BattlegroundTypeId BattlegroundMgr::GetRandomBG(BattlegroundTypeId bgTypeId)
     {
         for (auto const& [memberId, weight] : poolItr->second)
         {
+            // Managed bots can leave the playable bounds on these two maps.
+            // Exclude them only from an All Arenas roll for a public match that
+            // contains (or will be filled by) bots. Human-only rolls and manual
+            // or private Custom Games selections retain the full arena list.
+            if (hasBotParticipants && bgTypeId == BATTLEGROUND_AA &&
+                (memberId == BATTLEGROUND_NGA || memberId == BATTLEGROUND_RL))
+                continue;
+
             // Disabled, or no template: configured in the pool but not runnable.
             // Rolling it would hand back a type id CreateNewBattleground cannot
             // instantiate.
@@ -1284,6 +1293,10 @@ BattlegroundTypeId BattlegroundMgr::GetRandomBG(BattlegroundTypeId bgTypeId)
 
             if (BattlegroundTemplate const* bg = GetBattlegroundTemplateByMapId(mapId))
             {
+                if (hasBotParticipants && bgTypeId == BATTLEGROUND_AA &&
+                    (bg->Id == BATTLEGROUND_NGA || bg->Id == BATTLEGROUND_RL))
+                    continue;
+
                 ids.push_back(bg->Id);
                 weights.push_back(bg->Weight);
             }

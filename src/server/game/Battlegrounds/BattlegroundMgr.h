@@ -91,7 +91,8 @@ class TC_GAME_API BattlegroundMgr
         // driver, which lives in the scripts library and has to find instances
         // waiting on a wave without holding a guid to any of them.
         BattlegroundContainer const* GetBattlegroundsByType(BattlegroundTypeId bgTypeId) const;
-        Battleground* CreateNewBattleground(BattlegroundTypeId bgTypeId, PvPDifficultyEntry const* bracketEntry, uint8 arenaType, bool isRated, bool isPrivate = false);
+        Battleground* CreateNewBattleground(BattlegroundTypeId bgTypeId, PvPDifficultyEntry const* bracketEntry, uint8 arenaType,
+            bool isRated, bool isPrivate = false, bool hasBotParticipants = false);
 
         void AddBattleground(Battleground* bg);
         void RemoveBattleground(BattlegroundTypeId bgTypeId, uint32 instanceId);
@@ -175,7 +176,7 @@ class TC_GAME_API BattlegroundMgr
         bool IsPoolMemberSelectable(BattlegroundTypeId bgTypeId);
         uint32 CreateClientVisibleInstanceId(BattlegroundTypeId bgTypeId, BattlegroundBracketId bracket_id);
         static bool IsArenaType(BattlegroundTypeId bgTypeId);
-        BattlegroundTypeId GetRandomBG(BattlegroundTypeId id);
+        BattlegroundTypeId GetRandomBG(BattlegroundTypeId id, bool hasBotParticipants);
 
         typedef std::map<BattlegroundTypeId, BattlegroundData> BattlegroundDataContainer;
         BattlegroundDataContainer bgDataStore;

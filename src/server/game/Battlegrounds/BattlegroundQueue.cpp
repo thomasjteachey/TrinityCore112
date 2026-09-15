@@ -55,6 +55,31 @@ bool GroupHasRealPlayerInvitee(GroupQueueInfo const* ginfo)
     return false;
 }
 
+bool GroupHasBotInvitee(GroupQueueInfo const* ginfo)
+{
+    if (!ginfo)
+        return false;
+
+    for (auto const& playerEntry : ginfo->Players)
+    {
+        Player* player = ObjectAccessor::FindConnectedPlayer(playerEntry.first);
+        if (player && player->GetSession() && player->GetSession()->IsVirtualSession())
+            return true;
+    }
+
+    return false;
+}
+
+bool SelectionPoolsHaveBotInvitees(BattlegroundQueue::SelectionPool const selectionPools[PVP_TEAMS_COUNT])
+{
+    for (uint32 team = 0; team < PVP_TEAMS_COUNT; ++team)
+        for (GroupQueueInfo const* ginfo : selectionPools[team].SelectedGroups)
+            if (GroupHasBotInvitee(ginfo))
+                return true;
+
+    return false;
+}
+
 // "Virtual" throughout this file means a bot occupant the queue may displace
 // for a real player: a socketless virtual session, or a transient clone in a
 // bot-filled match. Battleground::IsBotParticipantSession is the one judge.
@@ -1092,7 +1117,9 @@ bool BattlegroundQueue::TryStartBotFilledMatch(BattlegroundTypeId bgTypeId, PvPD
         return false;
     }
 
-    Battleground* bg = sBattlegroundMgr->CreateNewBattleground(bgTypeId, bracketEntry, arenaType, false);
+    // This path creates a clone-filled match even though its queued groups are
+    // real-player groups, so select from the bot-safe arena subset.
+    Battleground* bg = sBattlegroundMgr->CreateNewBattleground(bgTypeId, bracketEntry, arenaType, false, false, true);
     if (!bg)
     {
         TC_LOG_ERROR("bg.battleground", "BattlegroundQueue::TryStartBotFilledMatch - Cannot create battleground: {}", uint32(bgTypeId));
@@ -1310,7 +1337,9 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
             || (bg_template->isArena() && CheckSkirmishForSameFaction(bracket_id, MinPlayersPerTeam)))
         {
             // we successfully created a pool
-            Battleground* bg2 = sBattlegroundMgr->CreateNewBattleground(bgTypeId, bracketEntry, arenaType, false);
+            bool const hasBotParticipants = SelectionPoolsHaveBotInvitees(m_SelectionPools);
+            Battleground* bg2 = sBattlegroundMgr->CreateNewBattleground(bgTypeId, bracketEntry, arenaType, false,
+                false, hasBotParticipants);
             if (!bg2)
             {
                 TC_LOG_ERROR("bg.battleground", "BattlegroundQueue::Update - Cannot create battleground: {}", bgTypeId);
@@ -1421,7 +1450,9 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
         {
             GroupQueueInfo* aTeam = *itr_teams[TEAM_ALLIANCE];
             GroupQueueInfo* hTeam = *itr_teams[TEAM_HORDE];
-            Battleground* arena = sBattlegroundMgr->CreateNewBattleground(bgTypeId, bracketEntry, arenaType, true);
+            bool const hasBotParticipants = GroupHasBotInvitee(aTeam) || GroupHasBotInvitee(hTeam);
+            Battleground* arena = sBattlegroundMgr->CreateNewBattleground(bgTypeId, bracketEntry, arenaType, true,
+                false, hasBotParticipants);
             if (!arena)
             {
                 TC_LOG_ERROR("bg.battleground", "BattlegroundQueue::Update couldn't create arena instance for rated arena match!");
