@@ -258,6 +258,40 @@ class spell_gen_adaptive_warding : public AuraScript
     }
 };
 
+// 28771 - Elemental Vulnerability (Frostfire Regalia 6 piece bonus)
+enum ElementalVulnerability
+{
+    SPELL_GEN_ELEMENTAL_VULNERABILITY_DEBUFF = 28772
+};
+
+class spell_gen_elemental_vulnerability : public AuraScript
+{
+    PrepareAuraScript(spell_gen_elemental_vulnerability);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_GEN_ELEMENTAL_VULNERABILITY_DEBUFF });
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        Unit* target = eventInfo.GetProcTarget();
+        if (!target)
+            return;
+
+        // The generic proc handler is supposed to do this from the DBC trigger
+        // spell, but this classic set bonus needs an explicit triggered cast so
+        // 28772 is applied to the unit damaged by the Frostfire wearer.
+        PreventDefaultAction();
+        GetTarget()->CastSpell(target, SPELL_GEN_ELEMENTAL_VULNERABILITY_DEBUFF, aurEff);
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(spell_gen_elemental_vulnerability::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
 class spell_gen_allow_cast_from_item_only : public SpellScript
 {
     PrepareSpellScript(spell_gen_allow_cast_from_item_only);
@@ -4870,6 +4904,7 @@ void AddSC_generic_spell_scripts()
 {
     RegisterSpellScript(spell_gen_absorb0_hitlimit1);
     RegisterSpellScript(spell_gen_adaptive_warding);
+    RegisterSpellScript(spell_gen_elemental_vulnerability);
     RegisterSpellScript(spell_gen_allow_cast_from_item_only);
     RegisterSpellScript(spell_gen_animal_blood);
     RegisterSpellScript(spell_spawn_blood_pool);
