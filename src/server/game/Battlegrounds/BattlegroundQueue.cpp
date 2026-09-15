@@ -48,7 +48,7 @@ bool GroupHasRealPlayerInvitee(GroupQueueInfo const* ginfo)
             continue;
 
         WorldSession* session = player->GetSession();
-        if (!session || !session->IsVirtualSession())
+        if (!session || (!session->IsVirtualSession() && !session->IsTransientPlayerSession()))
             return true;
     }
 
@@ -63,8 +63,12 @@ bool GroupHasBotInvitee(GroupQueueInfo const* ginfo)
     for (auto const& playerEntry : ginfo->Players)
     {
         Player* player = ObjectAccessor::FindConnectedPlayer(playerEntry.first);
-        if (player && player->GetSession() && player->GetSession()->IsVirtualSession())
-            return true;
+        if (player && player->GetSession())
+        {
+            WorldSession const* session = player->GetSession();
+            if (session->IsVirtualSession() || session->IsTransientPlayerSession())
+                return true;
+        }
     }
 
     return false;

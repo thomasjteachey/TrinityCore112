@@ -117,6 +117,13 @@ game. Work the full grid, both columns:
 | world DB | `lplusworld` | `bplusworld` |
 | service | `legionnaireplusworld.service` | `barracksplusworld.service` |
 
+Verified 2026-09-15: the B+ mirror set is incomplete. In particular,
+`dbc.worldstateui_bplus` does not exist; B+ `WorldStateUI.dbc` is currently
+maintained directly as a binary. Do not assume the L+ mirror represents the B+
+binary. For B+ WorldStateUI changes, patch and verify the current B+ server
+binary, local B+ reference, and `patch-enUS-A` independently until that mirror
+is created.
+
 Patch→realm mapping is defined in `FileMap` in
 `C:\Projects\Gamedev\wow\tools\centurionlauncher\src\common\constants.ts` — that
 file is the authority. Do **not** infer it from file sizes, and do not read
