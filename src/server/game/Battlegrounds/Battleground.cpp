@@ -1015,12 +1015,30 @@ void Battleground::EndBattleground(uint32 winner)
                         player->AddItem(Trinity::Custom::ITEM_RESTORED_MARK_OF_HONOR, 1); // restored mark of honor
                 }
                 player->ModifyMoney(winner_money);
+                if (winner_money)
+                {
+                    // ModifyMoney updates the purse but does not produce the
+                    // loot-style chat notification.  Send the same packet
+                    // used when a player loots gold so BG/arena payouts are
+                    // visible instead of appearing silently.
+                    WorldPacket moneyNotify(SMSG_LOOT_MONEY_NOTIFY, 4 + 1);
+                    moneyNotify << uint32(winner_money);
+                    moneyNotify << uint8(1); // "You loot..."
+                    player->SendDirectMessage(&moneyNotify);
+                }
             }
             else
             {
                 if (!m_IsCustomGame)
                     player->RewardHonor(nullptr, 1, loser_honor);
                 player->ModifyMoney(loser_money);
+                if (loser_money)
+                {
+                    WorldPacket moneyNotify(SMSG_LOOT_MONEY_NOTIFY, 4 + 1);
+                    moneyNotify << uint32(loser_money);
+                    moneyNotify << uint8(1); // "You loot..."
+                    player->SendDirectMessage(&moneyNotify);
+                }
             }
         }
         player->ResetAllPowers();
