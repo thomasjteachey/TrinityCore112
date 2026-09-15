@@ -173,7 +173,15 @@ namespace
         std::vector<ReplayActor> Actors;
         std::vector<PacketRecord> Packets;
 
-        // Not serialized. Used only while recording to collapse duplicate cross-team broadcasts.
+        // Not serialized. Recording-only state.
+        //
+        // Sticky because transient arena-fill clones can be removed before the
+        // battleground-end callback. Once a bot has occupied the arena, that
+        // match must never become a saved replay even if the final roster is all
+        // human by the time SaveReplay runs.
+        bool ContainsBotParticipant = false;
+
+        // Used only while recording to collapse duplicate cross-team broadcasts.
         std::unordered_map<uint64, uint32> RecentPacketHashTimes;
     };
 
@@ -517,6 +525,9 @@ namespace
             Player* player = bg->_GetPlayer(it.first, it.second.OfflineRemoveTime != 0, "arena replay actor capture");
             if (!player)
                 continue;
+
+            if (bg->IsBotParticipantSession(player->GetSession()))
+                match.ContainsBotParticipant = true;
 
             ReplayActor actor;
             actor.OriginalGuid = player->GetGUID();
@@ -4182,10 +4193,11 @@ std::vector<uint8> payload(packet.size());
         if (!bg)
             return;
 
-        // Custom games are private, non-standard matches and must never be
-        // persisted as arena replays. Discard any record that may have been
-        // created before the battleground was marked as a custom game.
-        if (bg->IsCustomGame())
+        // Custom games and bot-filled skirmishes are non-standard matches and
+        // must never be persisted as arena replays. IsBotFillMatch is sticky,
+        // so it still answers correctly after the transient clones are gone.
+        // Discard any record created before either flag was applied.
+        if (bg->IsCustomGame() || bg->IsBotFillMatch())
         {
             Records.erase(bg->GetInstanceID());
             return;
@@ -4203,6 +4215,14 @@ std::vector<uint8> payload(packet.size());
 
         MatchRecord& match = recordItr->second;
         RefreshActorsFromBattleground(bg, match);
+
+        if (match.ContainsBotParticipant)
+        {
+            TC_LOG_INFO("arena.replay", "Skipped arena replay containing bots instance={} map={} arenaType={}",
+                bg->GetInstanceID(), bg->GetMapId(), uint32(match.ArenaTypeId));
+            Records.erase(recordItr);
+            return;
+        }
 
         if (match.Packets.empty())
         {
@@ -4437,7 +4457,7 @@ public:
         Player* player = session->GetPlayer();
         Battleground* bg = player->GetBattleground();
 
-        if (!bg || bg->IsReplay() || bg->IsCustomGame())
+        if (!bg || bg->IsReplay() || bg->IsCustomGame() || bg->IsBotFillMatch())
             return;
 
         if (!bg->isArena())

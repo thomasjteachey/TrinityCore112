@@ -7997,7 +7997,15 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
                 referenceLevel = std::clamp<uint32>(GetLevel(), low, high);
 
             uint32 const honorPerLevel = std::max<uint32>(1, sWorld->getIntConfig(CONFIG_CENTURION_BG_XP_HONOR_PER_LEVEL));
-            uint64 const xp = uint64(honor) * uint64(sObjectMgr->GetXPForLevel(uint8(referenceLevel))) / honorPerLevel;
+            uint64 xp = uint64(honor) * uint64(sObjectMgr->GetXPForLevel(uint8(referenceLevel))) / honorPerLevel;
+
+            // Arena matches already have their own reward multiplier before
+            // honor reaches this conversion. This second, XP-only multiplier
+            // deliberately reduces the leveling payout without also reducing
+            // arena money or the honor earned by level-capped players.
+            if (bg->isArena())
+                xp = uint64(double(xp) *
+                    double(sWorld->getFloatConfig(CONFIG_CENTURION_BG_ARENA_EXPERIENCE_MULTIPLIER)));
 
             // Never past the cap. GiveXP stops leveling at max level and parks the
             // rest where nothing reads it, so the share of an award that would
