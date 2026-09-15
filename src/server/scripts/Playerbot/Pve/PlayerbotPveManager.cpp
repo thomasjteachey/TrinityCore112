@@ -8706,10 +8706,9 @@ namespace
         {
             CharacterDatabase.PExecute("REPLACE INTO playerbot_zone_guardian (guid, slotIndex) VALUES ({}, {})",
                 botRawGuid, slotIndex);
-            // Guardians never travel for class quests, so their kit spells
-            // (Tame Beast, demon summons, stances, totems) are granted as if
-            // the chains had been walked. XP is already frozen at this point,
-            // so the quest rewards cannot push the level.
+            // Guardians never travel for class quests, so provision their kit
+            // spells (Tame Beast, demon summons, stances, totems) directly.
+            // No quest is completed and no quest reward is created here.
             CompleteEligibleClassQuests(bot);
             TC_LOG_INFO("playerbots.pve", "Bot {} is now the level-{} guardian of zone {}.",
                 bot->GetName(), zone.maxLevel, zone.zoneId);
@@ -9555,13 +9554,14 @@ namespace
     }
 
     // ---------------------------------------------------------------------------
-    // Class quests: quests restricted to a single class exist to hand out the
-    // class's kit (warlock demons, hunter taming, druid forms, warrior stances,
-    // shaman totems), and none of it is trainer-taught. They are not synthetic
-    // rewards: a class quest is only paid out after the normal quest system has
-    // marked it complete and its required objectives/items still pass the core
-    // reward checks. Their teaching spells are re-applied idempotently after
-    // spell resets.
+    // Class quests: quests restricted to a single class exist to hand out much
+    // of the class's kit (warlock demons, hunter taming, druid forms, warrior
+    // stances, shaman totems), and none of it is trainer-taught. Bots receive
+    // those learned spells directly once they reach the quest's minimum level;
+    // this does NOT mark the quest complete or create its item/money rewards.
+    // A class quest itself is paid out only after the normal quest system has
+    // marked it complete and its required objectives/items pass the core reward
+    // checks.
     // ---------------------------------------------------------------------------
 
     struct ClassQuestSpot
@@ -9573,7 +9573,7 @@ namespace
     struct ClassQuestEntry
     {
         uint32 questId = 0;
-        uint32 questLevel = 0;
+        uint32 unlockLevel = 0;
         std::vector<ClassQuestSpot> giverSpots;
         std::vector<ClassQuestSpot> enderSpots;
     };
@@ -9618,7 +9618,10 @@ namespace
             entryIndexByQuest[questPair.first] = { questClass, list.size() };
             ClassQuestEntry entry;
             entry.questId = questPair.first;
-            entry.questLevel = uint32(std::max<int32>(1, quest->GetQuestLevel()));
+            // QuestLevel is frequently -1 for imported Classic quests. MinLevel
+            // is the actual eligibility boundary and therefore the safe point at
+            // which to provision the corresponding class ability.
+            entry.unlockLevel = std::max<uint32>(1, quest->GetMinLevel());
             list.push_back(entry);
         }
 
@@ -9659,17 +9662,15 @@ namespace
         {
             std::sort(list.begin(), list.end(), [](ClassQuestEntry const& left, ClassQuestEntry const& right)
             {
-                return left.questLevel < right.questLevel;
+                return left.unlockLevel < right.unlockLevel;
             });
             total += uint32(list.size());
         }
         TC_LOG_INFO("playerbots.pve", "Class quest cache built: {} single-class quests.", total);
     }
 
-    // Force-rewards every class quest the bot could legitimately take at its
-    // current level (class, race, level and chain prerequisites all honored via
-    // CanTakeQuest); repeated passes walk chains link by link. Used for zone
-    // guardians, which are pinned in place and can never travel to the givers.
+    // Re-apply teaching wrappers only for class quests the bot really has
+    // rewarded. This is the canonical repair path after a spell reset.
     void EnsureRewardedClassQuestSpells(Player* bot)
     {
         BuildClassQuestCacheOnce();
@@ -9720,6 +9721,67 @@ namespace
                     bot->CastSpell(bot, rewardSpell, true);
             }
         }
+    }
+
+    // Provision the permanent abilities carried by class-quest teaching spells
+    // without fabricating quest progress or rewards. Only LEARN_SPELL effects
+    // are copied; the wrapper's other effects are deliberately not cast.
+    void EnsureEligibleClassQuestSkills(Player* bot)
+    {
+        BuildClassQuestCacheOnce();
+
+        std::vector<ClassQuestEntry> const* list = nullptr;
+        {
+            std::lock_guard<std::mutex> guard(g_ClassQuestLock);
+            auto itr = g_ClassQuestsByClass.find(bot->GetClass());
+            if (itr == g_ClassQuestsByClass.end())
+                return;
+            list = &itr->second; // immutable once built
+        }
+
+        uint32 learned = 0;
+        for (ClassQuestEntry const& entry : *list)
+        {
+            if (bot->GetLevel() < entry.unlockLevel)
+                break; // cache is sorted by unlock level
+
+            Quest const* quest = sObjectMgr->GetQuestTemplate(entry.questId);
+            if (!quest)
+                continue;
+
+            uint32 const races = quest->GetAllowableRaces();
+            if (races && !(races & bot->GetRaceMask()))
+                continue;
+
+            auto learnFromWrapper = [bot, &learned](int32 wrapperSpellId)
+            {
+                if (wrapperSpellId <= 0)
+                    return;
+
+                SpellInfo const* wrapper = sSpellMgr->GetSpellInfo(uint32(wrapperSpellId));
+                if (!wrapper)
+                    return;
+
+                for (SpellEffectInfo const& effect : wrapper->GetEffects())
+                {
+                    if (!effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) || !effect.TriggerSpell ||
+                        bot->HasSpell(effect.TriggerSpell) || !sSpellMgr->GetSpellInfo(effect.TriggerSpell))
+                        continue;
+
+                    bot->LearnSpell(effect.TriggerSpell, false);
+                    ++learned;
+                }
+            };
+
+            // Normal TC rows put the teaching wrapper in RewardSpell. Several
+            // imported Classic rows put it in RewardDisplaySpell instead.
+            learnFromWrapper(quest->GetRewSpellCast());
+            learnFromWrapper(int32(quest->GetRewSpell()));
+        }
+
+        if (learned)
+            TC_LOG_INFO("playerbots.pve", "Bot {} learned {} level-appropriate class-quest abilities without completing quests.",
+                bot->GetName(), learned);
     }
 
     // True when re-earning this quest would put another piece of GEAR in a bot's
@@ -9817,9 +9879,11 @@ namespace
             }
         }
 
-        // Idempotent repair is intentional: a custom reset may strip spells while
-        // leaving rewarded quests intact, and those bots must regain class kit.
+        // Class abilities are independent of synthetic quest completion. Already
+        // rewarded quests use the core repair path; not-yet-completed quests only
+        // contribute their permanent LEARN_SPELL effects at the proper level.
         EnsureRewardedClassQuestSpells(bot);
+        EnsureEligibleClassQuestSkills(bot);
 
         if (completed)
             TC_LOG_INFO("playerbots.pve", "Bot {} rewarded {} legitimately completed class quests/unlocks.",
@@ -15858,10 +15922,9 @@ namespace
 
         PveTimePoint const now = PveClock::now();
 
-        // Class-quest maintenance is not a source of progress. Do this before the
-        // generic errand scan so only a quest already completed by normal gameplay
-        // can be rewarded, while the repeated pass still repairs teaching spells
-        // after custom/manual spell resets.
+        // Class-quest maintenance is not a source of quest progress. It turns in
+        // only quests completed by normal gameplay and separately provisions
+        // level-appropriate class skills after custom/manual spell resets.
         if (now >= state.nextClassQuestScanAt)
         {
             state.nextClassQuestScanAt = now + std::chrono::seconds(30);
@@ -19434,10 +19497,10 @@ namespace playerbot
         // earned class reward, while the normal quest system still controls any
         // future completion.
         //
-        // Only the gear ones are held back. A class quest that grants a SPELL is
-        // still cleared, because the kit has to be re-earned at the new level and
-        // re-granting a spell costs nothing - that is the whole point of the
-        // wipe, and EnsureRewardedClassQuestSpells depends on it.
+        // Only the gear ones are held back. Other rewarded stamps are cleared as
+        // part of the new life, but class abilities no longer depend on those
+        // stamps: EnsureEligibleClassQuestSkills grants the appropriate kit for
+        // the bot's new level without recreating any quest rewards.
         for (uint32 questId : std::vector<uint32>(bot->getRewardedQuests().begin(), bot->getRewardedQuests().end()))
             if (!ClassQuestMintsGear(questId))
                 bot->RemoveRewardedQuest(questId);
