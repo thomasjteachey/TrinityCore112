@@ -175,10 +175,15 @@ ROWS = {
     "PvpDifficulty.dbc": [
         # Without a bracket row the queue silently refuses everyone --
         # GetBattlegroundBracketByLevel just fails and logs nothing.
-        # Id follows the existing 9<mapid> convention (91620 for Tanaris).
-        # One 1-80 bracket: 60 is this server's level cap, so a 60-69 bracket
-        # (the older custom BGs' shape) locks out every leveling character.
-        [90000 + MAP_ID, MAP_ID, 0, 1, 80, 0],
+        # Keep the client and server on the same six bands used by the other
+        # custom battlegrounds. The first row retains the old 91608 id; the
+        # following ids stay above the existing custom DBC rows.
+        [91608, MAP_ID, 0, 10, 19, 0],
+        [93224, MAP_ID, 1, 20, 29, 0],
+        [93225, MAP_ID, 2, 30, 39, 0],
+        [93226, MAP_ID, 3, 40, 49, 0],
+        [93227, MAP_ID, 4, 50, 59, 0],
+        [93228, MAP_ID, 5, 60, 69, 0],
     ],
     "WorldSafeLocs.dbc": [
         # Deliberately NO graveyard entries: death in the gauntlet is final

@@ -37,6 +37,23 @@ INSERT INTO dbc.pvpdifficulty_lplus (ID, MapID, RangeIndex, MinLevel, MaxLevel, 
   (93227, 1608, 4, 50, 59, 0),
   (93228, 1608, 5, 60, 69, 0);
 
+-- Scarlet Chapel and Blackrock Throne use the same six level bands. Their
+-- original single rows are retained as the first bracket IDs for compatibility.
+DELETE FROM dbc.pvpdifficulty_lplus WHERE MapID IN (1189, 1230);
+INSERT INTO dbc.pvpdifficulty_lplus (ID, MapID, RangeIndex, MinLevel, MaxLevel, Difficulty) VALUES
+  (91189, 1189, 0, 10, 19, 0),
+  (93229, 1189, 1, 20, 29, 0),
+  (93230, 1189, 2, 30, 39, 0),
+  (93231, 1189, 3, 40, 49, 0),
+  (93232, 1189, 4, 50, 59, 0),
+  (93233, 1189, 5, 60, 69, 0),
+  (91230, 1230, 0, 10, 19, 0),
+  (93234, 1230, 1, 20, 29, 0),
+  (93235, 1230, 2, 30, 39, 0),
+  (93236, 1230, 3, 40, 49, 0),
+  (93237, 1230, 4, 50, 59, 0),
+  (93238, 1230, 5, 60, 69, 0);
+
 -- To undo:
 --   DELETE FROM dbc.pvpdifficulty_lplus WHERE MapID = 1608;
 --   INSERT INTO dbc.pvpdifficulty_lplus (ID, MapID, RangeIndex, MinLevel, MaxLevel, Difficulty)

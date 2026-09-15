@@ -17,6 +17,7 @@
 
 #include "PlayerbotPvpLifecycleActions.h"
 #include "PlayerbotObcClone.h"
+#include "Playerbot/Pve/PlayerbotPveManager.h"
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotRandomBotParticipation.h"
 #include "PlayerbotSharedStateGuard.h"
@@ -3914,6 +3915,12 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
                     continue;
 
                 if (!IsScmManagedBotCandidate(participant))
+                    continue;
+
+                // Dedicated PvP-only accounts are intended for the cap-level
+                // pool. Pre-60 queues should use ordinary random bots from the
+                // matching level band instead of pulling those characters in.
+                if (participant->GetLevel() < 60 && playerbot::PveManager::IsPvpOnlyBot(participant))
                     continue;
 
                 managedBotGuids.push_back(guid);

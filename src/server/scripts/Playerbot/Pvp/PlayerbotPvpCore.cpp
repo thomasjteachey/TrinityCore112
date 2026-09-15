@@ -446,7 +446,10 @@ uint32 SelectReadyHealthstoneItemEntry(Player const* player)
 // the shared potion category, so a bot cannot chain two.
 uint32 SelectReadyRestorePotionItemEntry(Player const* player, bool wantMana)
 {
-    if (!player || !playerbot::PvpCore::GetConfig().usePotions)
+    // Arena rules here ban restorative health/mana potions only. Other item
+    // consumables remain valid: food/drink, healthstones, poisons,
+    // spellstones/firestones, and mana gems are intentionally not filtered.
+    if (!player || !playerbot::PvpCore::GetConfig().usePotions || player->InArena())
         return 0;
 
     uint32 bestEntry = 0;

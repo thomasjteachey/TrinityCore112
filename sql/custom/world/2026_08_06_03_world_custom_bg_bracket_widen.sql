@@ -11,3 +11,8 @@
 --
 -- Replayable.
 UPDATE battleground_template SET MinLvl = 1, MaxLvl = 80 WHERE ID IN (104, 105);
+
+-- The custom battlegrounds now use six level bands (10-19 through 60-69).
+-- These template bounds are the outer access gate; PvpDifficulty supplies the
+-- actual bracket selected by the queue.
+UPDATE battleground_template SET MinLvl = 10, MaxLvl = 69 WHERE ID IN (100, 101, 105);

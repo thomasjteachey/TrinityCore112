@@ -28,6 +28,7 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "PlayerbotObcClone.h"
+#include "Playerbot/Pve/PlayerbotPveManager.h"
 #include "PlayerbotPvpCore.h"
 #include "PlayerbotRandomBotParticipation.h"
 #include "PlayerbotResourceGovernor.h"
@@ -76,6 +77,7 @@ uint32 g_QueueWakeAccumulatorMs = 0;
 struct OfflineCandidate
 {
     uint32 lowGuid = 0;
+    uint32 accountId = 0;
     uint8 level = 1;
 };
 
@@ -215,6 +217,11 @@ std::vector<ObjectGuid> CollectOnlineSources(uint32 minLevel, uint32 maxLevel, s
             if (level < minLevel || level > maxLevel)
                 continue;
 
+            // Dedicated PvP-only accounts are the level-cap pool. Pre-60
+            // brackets should draw ordinary random-bot characters instead.
+            if (maxLevel < 60 && playerbot::PveManager::IsPvpOnlyBot(candidate))
+                continue;
+
             if (excluded.count(guid))
                 continue;
 
@@ -251,7 +258,7 @@ void RefreshOfflinePoolIfStale(uint32 nowMs)
     // Same shape as the population manager's own pool query. The Obcc names
     // are the legacy on-disk Obsidian Colosseum clones: not real characters.
     QueryResult result = CharacterDatabase.PQuery(
-        "SELECT guid, level FROM characters WHERE online = 0 AND account IN ({}) AND name NOT LIKE 'Obcc%'", accountList);
+        "SELECT guid, account, level FROM characters WHERE online = 0 AND account IN ({}) AND name NOT LIKE 'Obcc%'", accountList);
     if (!result)
         return;
 
@@ -260,7 +267,8 @@ void RefreshOfflinePoolIfStale(uint32 nowMs)
         Field* fields = result->Fetch();
         OfflineCandidate candidate;
         candidate.lowGuid = fields[0].GetUInt32();
-        candidate.level = fields[1].GetUInt8();
+        candidate.accountId = fields[1].GetUInt32();
+        candidate.level = fields[2].GetUInt8();
         g_OfflinePool.entries.push_back(candidate);
     } while (result->NextRow());
 
@@ -273,6 +281,13 @@ std::vector<ObjectGuid> CollectOfflineSources(uint32 minLevel, uint32 maxLevel, 
     for (OfflineCandidate const& candidate : g_OfflinePool.entries)
     {
         if (candidate.level < minLevel || candidate.level > maxLevel)
+            continue;
+
+        // Keep pre-60 clone fill on ordinary random bots. The PvP-only
+        // account list is exposed by the PvE manager so offline characters
+        // receive the same policy as online sources.
+        auto const& pvpOnlyAccounts = playerbot::PveManager::GetConfig().pvpOnlyAccountIds;
+        if (maxLevel < 60 && std::binary_search(pvpOnlyAccounts.begin(), pvpOnlyAccounts.end(), candidate.accountId))
             continue;
 
         ObjectGuid const guid = ObjectGuid::Create<HighGuid::Player>(candidate.lowGuid);

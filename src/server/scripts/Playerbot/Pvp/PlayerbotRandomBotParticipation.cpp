@@ -1413,6 +1413,12 @@ void ForceManagedScmQueueSweep(ManagedBotAccountIds const& botAccounts)
             if (!IsManagedRandomBotImpl(player, botAccounts))
                 continue;
 
+            // The reactive SCM sweep must follow the same level-band policy
+            // as the normal queue filler: pre-60 players use ordinary random
+            // bots, while the dedicated PvP-only pool is reserved for the cap.
+            if (player->GetLevel() < 60 && playerbot::PveManager::IsPvpOnlyBot(player))
+                continue;
+
             managedGuids.push_back(guid);
         }
     }
