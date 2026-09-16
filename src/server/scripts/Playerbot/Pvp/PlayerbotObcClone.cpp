@@ -1478,6 +1478,55 @@ bool PlayerbotObcCloneManager::QueueCustomGameClone(ObjectGuid sourceGuid, World
     return true;
 }
 
+bool PlayerbotObcCloneManager::LoadOfflineCloneSource(ObjectGuid sourceGuid, WorldSession* callbackSession,
+    std::function<void(Player* source)> onResolved)
+{
+    if (!sourceGuid || !callbackSession || !onResolved)
+        return false;
+
+    CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByGuid(sourceGuid);
+    if (!characterInfo)
+        return false;
+
+    auto holder = std::make_shared<LoginQueryHolder>(characterInfo->AccountId, sourceGuid);
+    if (!holder->Initialize())
+        return false;
+
+    SQLQueryHolderCallback& callback = callbackSession->AddQueryHolderCallback(CharacterDatabase.DelayQueryHolder(holder));
+    callback.AfterComplete([sourceGuid, onResolved](SQLQueryHolderBase const& queryHolder)
+    {
+        // Never build a second Player under the guid of a live one.
+        if (Player* onlineSource = ObjectAccessor::FindConnectedPlayer(sourceGuid))
+        {
+            onResolved(onlineSource);
+            return;
+        }
+
+        LoginQueryHolder const& loginHolder = static_cast<LoginQueryHolder const&>(queryHolder);
+        uint8 const expansion = static_cast<uint8>(sWorld->getIntConfig(CONFIG_EXPANSION));
+        auto sourceSession = std::make_unique<WorldSession>(loginHolder.GetAccountId(), "offline_clone_source",
+            nullptr, SEC_PLAYER, expansion, 0, Minutes(0), LOCALE_enUS, 0, false);
+        sourceSession->SetTransientPlayerSession();
+
+        Player* offlineSource = new Player(sourceSession.get());
+        if (offlineSource->LoadFromDB(sourceGuid, loginHolder, false))
+        {
+            offlineSource->GetMotionMaster()->Initialize();
+            // Clones read identity, spells, talents, glyph ids and equipment
+            // from their source. Runtime auras are neither copied nor safe to
+            // keep on a Player that never enters the world.
+            offlineSource->RemoveAllAuras();
+            onResolved(offlineSource);
+        }
+        else
+            onResolved(nullptr);
+
+        DestroyUnseatedClone(sourceSession, offlineSource);
+    });
+
+    return true;
+}
+
 void PlayerbotObcCloneManager::DestroyCustomGameClones(uint32 battlegroundInstanceId, uint32 team)
 {
     std::vector<ObjectGuid> cloneGuids;

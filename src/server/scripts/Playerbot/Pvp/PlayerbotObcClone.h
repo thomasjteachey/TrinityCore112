@@ -22,6 +22,7 @@
 #include "ObjectGuid.h"
 #include "Position.h"
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -75,6 +76,18 @@ public:
     static Player* CreateCustomGameClone(Player* source, Battleground* bg, uint32 team, std::string const& displayPrefix);
     static bool QueueCustomGameClone(ObjectGuid sourceGuid, WorldSession* callbackSession, Battleground* bg,
         uint32 team, std::string const& displayPrefix);
+
+    // Load a character that is not logged in into a temporary Player that never
+    // enters the world, and hand it to onResolved as a clone source. It is
+    // destroyed as soon as onResolved returns, so keep nothing from it but the
+    // clones made from it. A character that logged in meanwhile is handed over
+    // live instead. onResolved runs once when the load completes - with nullptr
+    // if the character could not be loaded - on whichever thread next updates
+    // callbackSession. If that session is gone first it never runs, so a caller
+    // waiting on it needs its own timeout. Returns false, and never calls
+    // onResolved, when nothing could be queued.
+    static bool LoadOfflineCloneSource(ObjectGuid sourceGuid, WorldSession* callbackSession,
+        std::function<void(Player* source)> onResolved);
     // team 0 = every clone of the instance; otherwise only that team's
     // (the Violet Hold driver tears the enemy wave down between waves and
     // leaves the party's Fellowship allies standing).

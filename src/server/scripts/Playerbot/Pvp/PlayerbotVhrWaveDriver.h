@@ -22,15 +22,20 @@
 
 namespace playerbot
 {
-// Fulfils BattlegroundVHR wave spawn requests.
+// Fulfils BattlegroundVHR wave spawn requests and Fellowship ally requests.
 //
 // The battleground (game lib) decides what a wave contains - which humans the
 // clones copy and where each one stands - but cannot summon anything, because
 // clone creation lives in PlayerbotObcCloneManager over here in the scripts
 // lib. This driver is the bridge: each world tick it visits the live Violet
-// Hold instances, and for any with a pending request it creates one "Dark"
-// clone per roster entry, moves it onto its cell position, and reports back so
-// the battleground can start the preparation window.
+// Hold instances, and for any with a pending request it creates one clone per
+// roster entry on its cell position, and reports back so the battleground can
+// start the preparation window.
+//
+// Bot-sourced waves and allies draw on the whole managed bot roster, offline
+// characters included. An offline bot is loaded from the database on a party
+// member's session first, so a wave dealt one is reported only once those
+// loads have answered or timed out.
 //
 // Clone teardown is not handled here: the clones are ordinary custom-game
 // clones, so the existing DestroyCustomGameClones path cleans an instance up
