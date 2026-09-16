@@ -869,6 +869,18 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
 
     // load player specific part before send times
     LoadAccountData(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_DATA), PER_CHARACTER_CACHE_MASK);
+
+    // A chat config saved before World became a default channel keeps the
+    // client out of World for good. Give it World, and date it past the
+    // client's own copy: a newer time is what makes the client download this
+    // one at this login instead of reading its file.
+    if (AccountData const* chatCache = GetAccountData(PER_CHARACTER_CHAT_CACHE))
+    {
+        std::string seeded = chatCache->Data;
+        if (pCurrChar->AddWorldChannelToChatCache(seeded))
+            SetAccountData(PER_CHARACTER_CHAT_CACHE, std::max<time_t>(GameTime::GetGameTime(), chatCache->Time + 1), seeded);
+    }
+
     SendAccountDataTimes(PER_CHARACTER_CACHE_MASK);
 
     SendFeatureSystemStatus();

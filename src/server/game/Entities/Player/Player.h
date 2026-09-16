@@ -1937,15 +1937,30 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void UpdateLocalChannels(uint32 newZone);
         void JoinWorldChannelIfNeeded();
 
-        // World is a default channel, so UpdateLocalChannels would rejoin it on
-        // every zone change - which is exactly what stops a player leaving it.
-        // A deliberate leave is remembered so the rejoin does not undo it, and
-        // joining again forgets it. Read lazily, once per session.
+        // The system channels (ChatChannels.dbc ids) this player's client has
+        // asked to join and not left since. The client keeps its own channel
+        // list and ignores a "joined" notice for a channel it never asked for,
+        // so these are the only system channels the server may put the player
+        // into on its own - see UpdateLocalChannels. Per session: the client
+        // sends its joins again at every login.
+        void SetSystemChannelRequested(uint32 channelId, bool requested);
+        bool IsSystemChannelRequested(uint32 channelId) const;
+
+        // Remembers a deliberate /leave of World, so that the saved chat config
+        // of a player who left is never given World back - see
+        // AddWorldChannelToChatCache. Joining again forgets it. Read lazily,
+        // once per session.
         bool HasOptedOutOfWorldChannel() const;
 
         uint32 m_bountyPursuitStacks = 0;
         uint32 m_bountyPursuitUntilMs = 0;
         void SetWorldChannelOptOut(bool optOut);
+
+        // Gives a saved per-character chat config (account data type 7) the
+        // World channel when it was saved before World existed. The client
+        // joins its default channels from that config, not from its DBC.
+        // Returns true when chatCache was changed.
+        bool AddWorldChannelToChatCache(std::string& chatCache) const;
         void LeaveLFGChannel();
 
         // ChatChannels.dbc id of the World channel. The DBC is not mirrored in
@@ -2689,6 +2704,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         JoinedChannelsList m_channels;
         mutable bool m_worldChannelOptOut = false;
         mutable bool m_worldChannelOptOutLoaded = false;
+        uint32 m_requestedSystemChannels = 0;               // bit (id - 1), like the client's ZONECHANNELS
 
         uint8 m_cinematic;
 

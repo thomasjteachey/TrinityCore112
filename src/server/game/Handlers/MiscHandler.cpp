@@ -954,6 +954,13 @@ void WorldSession::HandleUpdateAccountData(WorldPacket& recvData)
     std::string adata;
     dest >> adata;
 
+    // A client can still upload a chat config without World: one this realm
+    // had no copy of to fix at login, or a local copy that won the sync over
+    // the fixed one. Keep World in it, and store it a second newer than the
+    // client's copy so that the next login downloads this one.
+    if (type == PER_CHARACTER_CHAT_CACHE && _player && _player->AddWorldChannelToChatCache(adata))
+        ++timestamp;
+
     SetAccountData(AccountDataType(type), timestamp, adata);
 
     WorldPacket data(SMSG_UPDATE_ACCOUNT_DATA_COMPLETE, 4+4);

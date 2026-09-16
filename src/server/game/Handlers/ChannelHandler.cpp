@@ -45,7 +45,14 @@ void WorldSession::HandleJoinChannel(WorldPacket& recvPacket)
         if (!channel)
             return;
 
-        if (!zone || !GetPlayer()->CanJoinConstantChannelInZone(channel, zone))
+        // Recorded even when the zone turns the join down below: the client
+        // keeps the channel as pending and expects to be put in once the player
+        // is somewhere it applies (Trade, on reaching a city).
+        GetPlayer()->SetSystemChannelRequested(channelId, true);
+
+        // A global channel is the same channel everywhere, so it does not need
+        // the zone every other system channel is named after.
+        if (zone ? !GetPlayer()->CanJoinConstantChannelInZone(channel, zone) : !(channel->Flags & CHANNEL_DBC_FLAG_GLOBAL))
             return;
     }
 
@@ -116,7 +123,11 @@ void WorldSession::HandleLeaveChannel(WorldPacket& recvPacket)
         if (!channel)
             return;
 
-        if (!zone || !GetPlayer()->CanJoinConstantChannelInZone(channel, zone))
+        // The client has already dropped the channel from its own list, so the
+        // next zone change must not join it again, whatever happens below.
+        GetPlayer()->SetSystemChannelRequested(channelId, false);
+
+        if (zone ? !GetPlayer()->CanJoinConstantChannelInZone(channel, zone) : !(channel->Flags & CHANNEL_DBC_FLAG_GLOBAL))
             return;
     }
 
@@ -125,8 +136,8 @@ void WorldSession::HandleLeaveChannel(WorldPacket& recvPacket)
         if (Channel* channel = cMgr->GetChannel(channelId, channelName, GetPlayer(), true, zone))
             channel->LeaveChannel(GetPlayer(), true);
 
-        // Leaving World is meant to stick. Without this the next zone change
-        // puts the player straight back in, because it is a default channel.
+        // Leaving World is meant to stick: the saved chat config drops World on
+        // its own, and this stops AddWorldChannelToChatCache putting it back.
         if (channelId == Player::WORLD_CHAT_CHANNEL_ID)
             GetPlayer()->SetWorldChannelOptOut(true);
 

@@ -6016,10 +6016,6 @@ void Player::UpdateLocalChannels(uint32 newZone)
         if (!channelEntry)
             continue;
 
-        // The one default channel a player is allowed to stay out of.
-        if (i == WORLD_CHAT_CHANNEL_ID && HasOptedOutOfWorldChannel())
-            continue;
-
         Channel* usedChannel = nullptr;
         for (Channel* channel : m_channels)
         {
@@ -6029,6 +6025,18 @@ void Player::UpdateLocalChannels(uint32 newZone)
                 break;
             }
         }
+
+        // Never join a player to a channel their client did not ask for. The
+        // client ignores the "joined" notice for one, so the server would count
+        // the player in while the client shows nothing - and the player's own
+        // /join afterwards is swallowed as "already a member". That is how
+        // /join World came to do nothing at all, and how /join General did the
+        // same after a /leave General and a zone change. A channel the client
+        // did ask for is still joined here once the player is somewhere it
+        // applies (Trade, on reaching a city), and a channel the player is in
+        // is still renamed or suspended below as they move.
+        if (!usedChannel && !IsSystemChannelRequested(i))
+            continue;
 
         Channel* removeChannel = nullptr;
         Channel* joinChannel = nullptr;
@@ -6072,13 +6080,34 @@ void Player::UpdateLocalChannels(uint32 newZone)
     }
 }
 
+// The client refuses ids past 32 when it builds this mask itself, so the same
+// range is all a channel request can name.
+void Player::SetSystemChannelRequested(uint32 channelId, bool requested)
+{
+    if (channelId < 1 || channelId > 32)
+        return;
+
+    uint32 const bit = 1u << (channelId - 1);
+    if (requested)
+        m_requestedSystemChannels |= bit;
+    else
+        m_requestedSystemChannels &= ~bit;
+}
+
+bool Player::IsSystemChannelRequested(uint32 channelId) const
+{
+    if (channelId < 1 || channelId > 32)
+        return false;
+
+    return (m_requestedSystemChannels & (1u << (channelId - 1))) != 0;
+}
+
 // Remembered per character so that leaving the World channel sticks.
 //
-// UpdateLocalChannels rejoins every eligible default channel whenever the zone
-// changes. For General that is harmless, because the zone channel it rejoins is
-// a different one. For a single global channel it means a player who leaves is
-// simply put back a moment later, so the leave has to be recorded to mean
-// anything.
+// Which channels a client joins at login comes from the chat config it saved,
+// and a /leave drops World from that config by itself. What needs remembering
+// server-side is that the leave was deliberate: AddWorldChannelToChatCache
+// gives World to every saved config that lacks it, and must not undo a leave.
 bool Player::HasOptedOutOfWorldChannel() const
 {
     if (!m_worldChannelOptOutLoaded)
@@ -6094,10 +6123,13 @@ bool Player::HasOptedOutOfWorldChannel() const
 
 void Player::SetWorldChannelOptOut(bool optOut)
 {
-    m_worldChannelOptOutLoaded = true;
-    if (m_worldChannelOptOut == optOut)
+    // Only skip the write once the stored state is known. Before the first
+    // read "not opted out" is merely the default, and a row left behind by an
+    // earlier session would survive a rejoin.
+    if (m_worldChannelOptOutLoaded && m_worldChannelOptOut == optOut)
         return;
 
+    m_worldChannelOptOutLoaded = true;
     m_worldChannelOptOut = optOut;
     if (optOut)
         CharacterDatabase.PExecute(
@@ -6105,6 +6137,134 @@ void Player::SetWorldChannelOptOut(bool optOut)
     else
         CharacterDatabase.PExecute(
             "DELETE FROM character_world_channel_optout WHERE guid = {}", GetGUID().GetCounter());
+}
+
+namespace
+{
+    // Adds a default channel to a chat config the client saved before that
+    // channel existed. This is the upgrade the client applies itself, from a
+    // table compiled into Wow.exe, to configs saved before LookingForGroup
+    // became a default (12340, chat-cache parser near 0x508B18): set the
+    // channel's bit in the top-level ZONECHANNELS mask - the channels the
+    // client joins at login - and list the channel in the CHANNELS block of
+    // WINDOW 1, the General tab, so its messages are shown.
+    //
+    // The config is the client's own text: a top-level section (a CHANNELS
+    // block of custom channels, then "ZONECHANNELS <mask>"), followed by
+    // "WINDOW <n>" sections that each carry their own CHANNELS block. Returns
+    // false, leaving chatCache untouched, when the mask already has the bit or
+    // the text is not laid out that way.
+    bool AddDefaultChannelToChatCache(std::string& chatCache, uint32 channelId, std::string_view channelName)
+    {
+        if (channelId < 1 || channelId > 32 || channelName.empty())
+            return false;
+
+        std::string_view const maskKey = "ZONECHANNELS ";
+        size_t maskBegin = std::string::npos;
+        size_t maskEnd = std::string::npos;
+        size_t windowOneChannelsEnd = std::string::npos;
+        bool windowOneListsChannel = false;
+        bool inWindow = false;
+        bool inWindowOne = false;
+        bool inChannels = false;
+
+        for (size_t lineBegin = 0; lineBegin < chatCache.size();)
+        {
+            size_t lineEnd = chatCache.find('\n', lineBegin);
+            if (lineEnd == std::string::npos)
+                lineEnd = chatCache.size();
+
+            std::string_view line(chatCache.data() + lineBegin, lineEnd - lineBegin);
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+                line.remove_suffix(1);
+
+            if (inChannels)
+            {
+                if (line == "END")
+                {
+                    inChannels = false;
+                    if (inWindowOne)
+                        windowOneChannelsEnd = lineBegin;
+                }
+                else if (inWindowOne && StringEqualI(line, channelName))
+                    windowOneListsChannel = true;
+            }
+            else if (StringStartsWith(line, "WINDOW "))
+            {
+                inWindow = true;
+                inWindowOne = line.substr(7) == "1";
+            }
+            else if (line == "CHANNELS")
+                inChannels = true;
+            else if (!inWindow && maskBegin == std::string::npos && StringStartsWith(line, maskKey))
+            {
+                maskBegin = lineBegin + maskKey.size();
+                maskEnd = lineBegin + line.size();
+            }
+
+            lineBegin = lineEnd + 1;
+        }
+
+        if (maskBegin == std::string::npos)
+            return false;
+
+        // Written with %d, so a mask with bit 31 set reads back negative.
+        Optional<int64> savedMask = Trinity::StringTo<int64>(std::string_view(chatCache).substr(maskBegin, maskEnd - maskBegin));
+        if (!savedMask)
+            return false;
+
+        uint32 const bit = 1u << (channelId - 1);
+        uint32 const mask = uint32(*savedMask);
+        if (mask & bit)
+            return false;
+
+        // The window edit sits after the mask, so it goes first and leaves the
+        // mask's offsets valid.
+        if (windowOneChannelsEnd != std::string::npos && !windowOneListsChannel)
+        {
+            std::string entry(channelName);
+            entry += chatCache.find("\r\n") != std::string::npos ? "\r\n" : "\n";
+            chatCache.insert(windowOneChannelsEnd, entry);
+        }
+
+        chatCache.replace(maskBegin, maskEnd - maskBegin, std::to_string(int32(mask | bit)));
+        return true;
+    }
+}
+
+// World only became a default channel on 2026-09-02. The client joins its
+// default channels from the chat config it saved, not from its ChatChannels.dbc,
+// and keeps saving back the mask it loaded - so a character whose config already
+// existed then has never had World, however recently it logged in. A new
+// character is unaffected: with nothing saved, the client builds its defaults
+// from the DBC, World included.
+bool Player::AddWorldChannelToChatCache(std::string& chatCache) const
+{
+    if (chatCache.empty())
+        return false;
+
+    ChatChannelsEntry const* world = sChatChannelsStore.LookupEntry(WORLD_CHAT_CHANNEL_ID);
+    if (!world || !(world->Flags & CHANNEL_DBC_FLAG_INITIAL))
+        return false;
+
+    // The name the client lists the channel under in a window. World has no
+    // "%s" zone part, so its DBC name is exactly that.
+    char const* worldName = world->Name[GetSession()->GetSessionDbcLocale()];
+    if (!*worldName)
+        worldName = world->Name[LOCALE_enUS];
+
+    // Rewrite a copy first: the opt-out is a query, and only worth asking about
+    // for a config that actually lacks World.
+    std::string seeded = chatCache;
+    if (!AddDefaultChannelToChatCache(seeded, WORLD_CHAT_CHANNEL_ID, worldName))
+        return false;
+
+    // A saved config lacks World after a deliberate /leave World too.
+    if (HasOptedOutOfWorldChannel())
+        return false;
+
+    chatCache.swap(seeded);
+    return true;
 }
 
 void Player::JoinWorldChannelIfNeeded()
