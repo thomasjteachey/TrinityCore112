@@ -2844,16 +2844,20 @@ Battleground.GiveXPForKills = 0
 
 #
 #    Centurion.Battleground.XpInsteadOfHonor
-#        Description: Below the level cap, battleground and arena honor (objectives,
-#                     wins, losses) is paid as experience instead. Scaled by bracket:
-#                     each point is a fixed share of a level at the bracket's midpoint
-#                     level. Level-capped players, bots and anyone with the experience
-#                     toggle off keep earning honor.
+#        Description: Below the level cap no honor is paid at all. Every award -
+#                     battleground and arena objectives, wins and losses, Violet Hold
+#                     runs, quests, honor spells, world PvP - is paid as experience
+#                     instead. In a battleground it is scaled by bracket: each point is
+#                     a fixed share of a level at the bracket's midpoint level; outside
+#                     one, at the character's own level. Bots and anyone with the
+#                     experience toggle off get neither. The share of an award past
+#                     the cap is paid as honor.
 #        Default:     0 - (Disabled)
 #                     1 - (Enabled)
 #
 #    Centurion.Battleground.XpInsteadOfHonor.HonorPerLevel
-#        Description: How much honor equals one full level at the bracket's midpoint.
+#        Description: How much honor equals one full level at the bracket's midpoint
+#                     (outside a battleground, at the character's own level).
 #                     2240 makes a 280-honor match worth an eighth of a level.
 #        Default:     2240
 #

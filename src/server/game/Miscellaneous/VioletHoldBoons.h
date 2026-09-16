@@ -345,6 +345,12 @@ namespace VioletHoldBoons
     // pre-boon level while boosted, GetLevel() otherwise.
     TC_GAME_API uint8 GetBaseLevel(Player const* player);
 
+    // End of a run: roll the character back to its real level and retire the
+    // Ascension marker, leaving every other boon for StripAll. The run's payout
+    // is paid against the real level (BattlegroundVHR::EndBattleground calls
+    // this just before paying). Idempotent.
+    TC_GAME_API void ReturnBorrowedLevels(Player* player);
+
     // Destroy one broker-granted weapon by its item low guid (cache marker
     // slot content). False if the character no longer has it.
     TC_GAME_API bool DestroyGrantedItemByGuidLow(Player* player, uint32 itemGuidLow);

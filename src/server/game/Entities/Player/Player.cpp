@@ -7955,59 +7955,76 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
     // Back to int now
     honor = int32(honor_f);
 
-    // Below the level cap, battleground and arena honor is paid as EXPERIENCE.
+    // Below the level cap there is no honor: every award is paid as EXPERIENCE
+    // instead, or not at all.
     //
-    // Until a character reaches the cap, a match should level them rather than
-    // fill an honor bar they have no use for yet. Every battleground and arena
-    // award reaches this function - objective ticks through RewardHonorToTeam,
-    // the end-of-match payout directly - so converting here covers them all.
-    // Player kills already pay no honor in this fork (honor_f is zeroed above),
-    // so what converts is the bonus honor: objectives, wins and losses.
+    // Until a character reaches the cap, earning should level them rather than
+    // fill an honor bar they have no use for yet. Every honor award reaches this
+    // function - battleground objectives through RewardHonorToTeam, match and
+    // Violet Hold payouts directly, and outside battlegrounds quest rewards,
+    // honor spells, world PvP and racial leader kills - so converting here
+    // covers them all. Player kills already pay no honor in this fork (honor_f
+    // is zeroed above).
     //
-    // Scaled by BRACKET. Each point of honor is worth a fixed share of a level
-    // at the bracket's midpoint level: HonorPerLevel honor is one full level
-    // there. The realm's match payouts are flat (the same 280 in a 10-19 and a
-    // 50-59), so a flat rate would pay both brackets the same XP; this pays each
-    // the same share of a level at its own size - a level 14's worth in 10-19,
-    // a level 54's worth in 50-59, a level 57's in a 55-59 arena.
+    // Scaled by BRACKET in a battleground. Each point of honor is worth a fixed
+    // share of a level at the bracket's midpoint level: HonorPerLevel honor is
+    // one full level there. The realm's match payouts are flat (the same 280 in
+    // a 10-19 and a 50-59), so a flat rate would pay both brackets the same XP;
+    // this pays each the same share of a level at its own size - a level 14's
+    // worth in 10-19, a level 54's worth in 50-59, a level 57's in a 55-59
+    // arena. Outside a battleground there is no bracket, so the character's own
+    // level stands in for it.
     //
-    // Not converted, and paid honor as before: the level cap itself; bots, whose
-    // levels belong to the PvE manager; and anyone with the stock experience
-    // toggle off, who has opted out of experience and would otherwise get
-    // nothing at all.
-    bool paidAsXp = false;
-    if (honor > 0 && !IsMaxLevel() && sWorld->getBoolConfig(CONFIG_CENTURION_BG_XP_INSTEAD_OF_HONOR) &&
-        !HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN) && GetSession() && !GetSession()->IsVirtualSession())
+    // Paid nothing at all below the cap, neither experience nor honor: bots,
+    // whose levels belong to the PvE manager; anyone with the stock experience
+    // toggle off; and a character standing on borrowed Violet Hold levels.
+    //
+    // The cap test is made on the character's REAL level. Violet Hold's Boon of
+    // Ascension lends levels that leaving the run takes back, so a borrowed
+    // level can put a 59 at the cap; and experience landing on top of borrowed
+    // levels would buy a real level - firing its one-way rewards (mail,
+    // achievements) - that the rollback then strips. The hold hands the loan
+    // back before it pays out a run (BattlegroundVHR::EndBattleground), so the
+    // borrowed-level refusal only ever meets an award that arrives mid-run.
+    bool heldBelowCap = false;
+    uint8 const realLevel = VioletHoldBoons::GetBaseLevel(this);
+    if (honor > 0 && realLevel < GetUInt32Value(PLAYER_FIELD_MAX_LEVEL) &&
+        sWorld->getBoolConfig(CONFIG_CENTURION_BG_XP_INSTEAD_OF_HONOR))
     {
-        Battleground const* bg = GetBattleground();
+        uint32 const awarded = uint32(honor);
+        honor = 0;
+        heldBelowCap = true;
 
-        // Violet Hold stays on honor. Its boons hand out BORROWED levels that the
-        // end of the run rolls back, so experience landing mid-run would buy a
-        // real level on top of a borrowed one - firing the one-way level rewards
-        // (mail, achievements, challenge-mode titles) - and then have that level
-        // stripped away along with the experience that paid for it.
-        if (bg && bg->GetTypeID() != BATTLEGROUND_VHR && bg->GetTypeID(true) != BATTLEGROUND_VHR)
+        if (realLevel == GetLevel() && !HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN) &&
+            GetSession() && !GetSession()->IsVirtualSession())
         {
-            uint32 const cap = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
-            uint32 const low = std::max<uint32>(1, bg->GetMinLevel());
-            uint32 const high = std::max<uint32>(low, std::min<uint32>(bg->GetMaxLevel(), cap > 1 ? cap - 1 : 1));
+            Battleground const* bg = GetBattleground();
+            uint32 const cap = GetUInt32Value(PLAYER_FIELD_MAX_LEVEL);
+            uint32 const topLevelBelowCap = cap > 1 ? cap - 1 : 1;
 
-            // The midpoint stands for an ordinary ten-level bracket. A queue with
-            // one wide bracket (a custom game open to 1-80) has no meaningful
-            // middle - it would pay every level from 1 to 59 a level-30 rate - so
-            // there the character's own level, held inside the bracket, is used.
-            uint32 referenceLevel = (low + high) / 2;
-            if (high - low > 10)
-                referenceLevel = std::clamp<uint32>(GetLevel(), low, high);
+            uint32 referenceLevel = std::clamp<uint32>(GetLevel(), 1, topLevelBelowCap);
+            if (bg)
+            {
+                uint32 const low = std::max<uint32>(1, bg->GetMinLevel());
+                uint32 const high = std::max<uint32>(low, std::min<uint32>(bg->GetMaxLevel(), topLevelBelowCap));
+
+                // The midpoint stands for an ordinary ten-level bracket. A queue with
+                // one wide bracket (a custom game open to 1-80) has no meaningful
+                // middle - it would pay every level from 1 to 59 a level-30 rate - so
+                // there the character's own level, held inside the bracket, is used.
+                referenceLevel = (low + high) / 2;
+                if (high - low > 10)
+                    referenceLevel = std::clamp<uint32>(GetLevel(), low, high);
+            }
 
             uint32 const honorPerLevel = std::max<uint32>(1, sWorld->getIntConfig(CONFIG_CENTURION_BG_XP_HONOR_PER_LEVEL));
-            uint64 xp = uint64(honor) * uint64(sObjectMgr->GetXPForLevel(uint8(referenceLevel))) / honorPerLevel;
+            uint64 xp = uint64(awarded) * uint64(sObjectMgr->GetXPForLevel(uint8(referenceLevel))) / honorPerLevel;
 
             // Arena matches already have their own reward multiplier before
             // honor reaches this conversion. This second, XP-only multiplier
             // deliberately reduces the leveling payout without also reducing
             // arena money or the honor earned by level-capped players.
-            if (bg->isArena())
+            if (bg && bg->isArena())
                 xp = uint64(double(xp) *
                     double(sWorld->getFloatConfig(CONFIG_CENTURION_BG_ARENA_EXPERIENCE_MULTIPLIER)));
 
@@ -8023,11 +8040,14 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
 
             uint64 const grant = std::min(xp, toCap);
             if (grant)
-            {
                 GiveXP(uint32(grant), nullptr);
-                paidAsXp = true;
-                honor = int32(uint64(honor) * (xp - grant) / xp);
-            }
+
+            // That leftover only once this award has really reached the cap. An
+            // experience hook - a challenge mode's rate, the War Mode zone stop -
+            // can leave the character short of it, and short of it they get no
+            // honor.
+            if (xp > grant && IsMaxLevel())
+                honor = int32(uint64(awarded) * (xp - grant) / xp);
         }
     }
     // honor - for show honor points in log
@@ -8035,10 +8055,10 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
     // victim_rank [1..4]  HK: <dishonored rank>
     // victim_rank [5..19] HK: <alliance\horde rank>
     // victim_rank [0, 20+] HK: <>
-    // Paid as experience: the XP log already said what they got, and a credit
-    // line for 0 honor would only contradict it. What is left over at the cap
-    // is real honor and is announced as usual.
-    if (!paidAsXp || honor > 0)
+    // Held below the cap: the XP log already said what they got, if anything,
+    // and a credit line for 0 honor would only contradict it. What is left over
+    // at the cap is real honor and is announced as usual.
+    if (!heldBelowCap || honor > 0)
     {
         WorldPacket data(SMSG_PVP_CREDIT, 4 + 8 + 4);
         data << uint32(honor);

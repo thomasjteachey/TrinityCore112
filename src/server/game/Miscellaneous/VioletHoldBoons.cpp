@@ -961,6 +961,22 @@ uint8 GetBaseLevel(Player const* player)
     return player->GetLevel();
 }
 
+void ReturnBorrowedLevels(Player* player)
+{
+    if (!player)
+        return;
+
+    uint8 const baseLevel = GetBaseLevel(player);
+    if (baseLevel < player->GetLevel())
+        RollbackBorrowedLevels(player, baseLevel);
+
+    // The marker goes too, and only after the rollback (its removal script
+    // then finds nothing left to undo). Left on, it would still name the
+    // pre-boon level after the payout had levelled the character for real,
+    // and StripAll would take that earned level away as if it were borrowed.
+    player->RemoveAurasDueToSpell(SPELL_BOON_LEVEL);
+}
+
 bool DestroyGrantedItemByGuidLow(Player* player, uint32 itemGuidLow)
 {
     if (!player || !itemGuidLow)

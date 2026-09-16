@@ -1528,5 +1528,15 @@ void BattlegroundVHR::EndBattleground(uint32 winner)
 {
     UpdateScoreWorldStates();
     DespawnMenagerie();
+
+    // Borrowed levels go back BEFORE the base class pays out. Below the cap the
+    // payout is experience (Player::RewardHonor), which has to be sized by and
+    // added to the level the character really has - on borrowed levels it is
+    // not paid at all. The run is over, so nothing is lost by it; every other
+    // boon stays until the player leaves (RemovePlayer -> StripAll).
+    for (ObjectGuid guid : GetHumanRoster(false))
+        if (Player* player = ObjectAccessor::FindPlayer(guid))
+            VioletHoldBoons::ReturnBorrowedLevels(player);
+
     Battleground::EndBattleground(winner);
 }
