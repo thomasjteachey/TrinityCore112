@@ -343,18 +343,28 @@ public:
     // drifter/local roles, local home zones, and death-chest auction holds.
     //
     // Priority 0 means do not log this bot out. Higher values are more
-    // disposable. Starter-zone non-drifters rank first, then ordinary local
-    // bots in zones with no human players.
+    // disposable. Starter bots rank first, then ordinary local bots in zones
+    // with no human players.
     static uint8 GetWorldPopulationPrunePriority(Player* player, bool currentZoneHasHuman);
 
-    // Offline ordinary locals assigned to a starter-zone home stay out of the
-    // world population. Among the rest, a local whose home currently contains
-    // a human is preferred when a slot is restored. 0=exclude, 1=ordinary,
-    // 2=preferred. The assignment table is built from the complete bot roster,
-    // so this does not require the character to be online.
-    static uint8 GetWorldPopulationLoginPriority(uint32 characterLowGuid, bool homeZoneHasHuman);
+    // A starter bot is a local (banded) bot whose band home is a starter zone
+    // and whose level is 10 or below. Where it is standing does not matter: a
+    // level 50 crossing Elwynn is not one, and a level 5 whose home is Elwynn is
+    // one even while it visits Stormwind. Starter bots stay out of the world
+    // population. The home table is built from the complete bot roster, so this
+    // answers for offline characters too.
+    static bool IsWorldPopulationStarterBot(uint32 characterLowGuid, uint8 level);
+
+    // Login preference for an offline character: 0=exclude (a starter bot),
+    // 1=ordinary, 2=preferred (a local whose home currently contains a human).
+    static uint8 GetWorldPopulationLoginPriority(uint32 characterLowGuid, uint8 level, bool homeZoneHasHuman);
     static uint32 GetWorldPopulationHomeZone(uint32 characterLowGuid);
     static bool IsWorldPopulationStarterZone(uint32 zoneId);
+
+    // False until the once-per-uptime band-home table exists. Until then no
+    // starter bot can be recognised, so the population manager holds its logins
+    // instead of logging starter bots in only to log them straight back out.
+    static bool AreWorldPopulationHomesReady();
 
     // True while a bot is companion-bound to a human (or mid-summon): such a
     // bot must not be queued for battlegrounds or logged out by the

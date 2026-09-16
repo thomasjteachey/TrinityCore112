@@ -786,7 +786,7 @@ struct RandomBotPoolCandidate
     uint32 account = 0;
     uint8 level = 1;
     uint8 race = 0;
-    uint32 zone = 0;
+    uint16 atLoginFlags = 0;
 };
 
 struct RandomBotPopulationState
@@ -1533,7 +1533,7 @@ std::vector<RandomBotPoolCandidate> QueryOfflinePool(RandomBotPopulationConfig c
     }
 
     QueryResult result = CharacterDatabase.PQuery(
-        "SELECT guid, account, level, race, zone FROM characters "
+        "SELECT guid, account, level, race, at_login FROM characters "
         "WHERE online = 0 AND account IN ({}) AND name NOT LIKE 'Obcc%' AND level >= {} AND level <= {}",
         accountList, config.minLevel, config.maxLevel);
 
@@ -1548,7 +1548,14 @@ std::vector<RandomBotPoolCandidate> QueryOfflinePool(RandomBotPopulationConfig c
         candidate.account = fields[1].GetUInt32();
         candidate.level = fields[2].GetUInt8();
         candidate.race = fields[3].GetUInt8();
-        candidate.zone = fields[4].GetUInt32();
+        candidate.atLoginFlags = fields[4].GetUInt16();
+
+        // Player::LoadFromDB refuses a character that is waiting to be renamed,
+        // so dispatching one only repeats a login that cannot succeed. Under the
+        // dynamic world budget it would also count as a bot able to come online
+        // and hold a real player's slot open for good (Lordros on Barracks+).
+        if (config.dynamicWorldLoadEnabled && (candidate.atLoginFlags & AT_LOGIN_RENAME))
+            continue;
 
         // `online = 0` is not proof a bot is offline. Every bot account holds
         // hundreds of characters online at once, and any writer that clears the
@@ -1643,15 +1650,13 @@ std::vector<RandomBotPoolCandidate> PickLoginCandidates(RandomBotPopulationState
         uint8 priority = 1;
         if (state.config.dynamicWorldLoadEnabled)
         {
-            if (playerbot::PveManager::IsWorldPopulationStarterZone(candidate.zone))
-            {
-                priorityByGuid[candidate.lowGuid] = 0;
-                continue;
-            }
-
+            // Starter bots come back as 0 and are dropped below. Where the
+            // character was last saved is deliberately not consulted: a
+            // traveller logged out on a road through a starter zone is not one.
             uint32 const homeZone = playerbot::PveManager::GetWorldPopulationHomeZone(candidate.lowGuid);
             bool const homeZoneHasHuman = homeZone && humanZones.find(homeZone) != humanZones.end();
-            priority = playerbot::PveManager::GetWorldPopulationLoginPriority(candidate.lowGuid, homeZoneHasHuman);
+            priority = playerbot::PveManager::GetWorldPopulationLoginPriority(candidate.lowGuid, candidate.level,
+                homeZoneHasHuman);
         }
         priorityByGuid[candidate.lowGuid] = priority;
     }
@@ -1900,12 +1905,6 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
         }
     }
 
-    // Barracks+ keeps a fixed combined human+persistent-bot world budget. Each
-    // real login consumes one persistent-bot slot; transient PvP clones are
-    // created from the offline roster and therefore do not need parked bots.
-    if (state.config.dynamicWorldLoadEnabled)
-        target = target > humans.total ? target - humans.total : 0;
-
     if (emitDiag)
         TC_LOG_ERROR("playerbots.population", "DIAG startup-hang: Rebalance after human-interest check target={}.", target);
 
@@ -1943,9 +1942,9 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
     std::unordered_set<uint64> prunedGuids;
     bool changed = false;
 
-    // Starter-zone non-drifters are forbidden independently of the configured
-    // population target. A successful logout immediately returns the character
-    // to the same offline pool used as transient BG/arena clone sources.
+    // Starter bots are forbidden independently of the configured population
+    // target. A successful logout immediately returns the character to the
+    // same offline pool used as transient BG/arena clone sources.
     if (state.config.dynamicWorldLoadEnabled)
         for (PruneCandidate const& candidate : pruneCandidates)
         {
@@ -1965,9 +1964,51 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
                 state.skippedIntegrationGap++;
         }
 
-    TC_LOG_INFO("playerbots.population", "Random bot population rebalance tick={} online={} humans={} target={} range=[{}, {}] enabled={} dynamic={} runtime={}",
+    // Barracks+ keeps a fixed combined human+persistent-bot world budget: each
+    // real player online takes one persistent bot's slot, and transient PvP
+    // clones come from the offline roster, so they need no parked bots.
+    //
+    // The configured target is only a ceiling. On Barracks+ it sits above the
+    // whole bot roster, and starter bots are held offline on top of that, so
+    // subtracting players from it removed nobody. Cap it first at the bots that
+    // can really be online: those online now plus the offline characters that
+    // are allowed to log in.
+    std::vector<RandomBotPoolCandidate> eligibleOffline;
+    uint32 eligibleRoster = 0;
+    if (state.config.dynamicWorldLoadEnabled)
+    {
+        // Band homes are built by PveManager's world update, which runs after
+        // this one, so they do not exist yet on the first tick after startup.
+        // Without them no starter bot can be recognised, and a login burst now
+        // would bring every starter bot in only to throw it back out. Wait for
+        // them; that normally takes one world update.
+        if (!playerbot::PveManager::AreWorldPopulationHomesReady())
+        {
+            TC_LOG_INFO("playerbots.population",
+                "Random bot population rebalance tick={} deferred until band homes are built: online={} humans={}.",
+                state.rebalanceTicks, online.total, humans.total);
+            // Retry in about a second instead of a whole interval.
+            state.rebalanceTimerMs = state.config.rebalanceIntervalMs > 1000u
+                ? state.config.rebalanceIntervalMs - 1000u : 0u;
+            return changed;
+        }
+
+        eligibleOffline = QueryOfflinePool(state.config);
+        eligibleOffline.erase(std::remove_if(eligibleOffline.begin(), eligibleOffline.end(),
+            [](RandomBotPoolCandidate const& candidate)
+            {
+                return playerbot::PveManager::IsWorldPopulationStarterBot(candidate.lowGuid, candidate.level);
+            }), eligibleOffline.end());
+
+        eligibleRoster = effectiveOnlineCount + static_cast<uint32>(eligibleOffline.size());
+        target = std::min(target, eligibleRoster);
+        target = target > humans.total ? target - humans.total : 0;
+    }
+
+    TC_LOG_INFO("playerbots.population", "Random bot population rebalance tick={} online={} humans={} target={} range=[{}, {}] enabled={} dynamic={} runtime={} eligible={}",
         state.rebalanceTicks, online.total, humans.total, target, state.config.targetMin, state.config.targetMax,
-        state.config.enabled ? 1 : 0, state.config.dynamicWorldLoadEnabled ? 1 : 0, state.runtimeEnabled ? 1 : 0);
+        state.config.enabled ? 1 : 0, state.config.dynamicWorldLoadEnabled ? 1 : 0, state.runtimeEnabled ? 1 : 0,
+        eligibleRoster);
 
     if (effectiveOnlineCount < target)
     {
@@ -1981,7 +2022,9 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
             return changed;
         }
 
-        std::vector<RandomBotPoolCandidate> pool = QueryOfflinePool(state.config);
+        // The dynamic budget above has already read and filtered the roster.
+        std::vector<RandomBotPoolCandidate> pool = state.config.dynamicWorldLoadEnabled
+            ? std::move(eligibleOffline) : QueryOfflinePool(state.config);
         std::unordered_map<uint32, uint32> const onlineByAccount = QueryOnlineBotCountsByAccount(state.config);
         if (pool.empty())
         {
@@ -2044,12 +2087,12 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
 
         if (victim != pruneCandidates.end())
         {
-            std::vector<RandomBotPoolCandidate> pool = QueryOfflinePool(state.config);
+            std::vector<RandomBotPoolCandidate> pool = std::move(eligibleOffline);
             pool.erase(std::remove_if(pool.begin(), pool.end(), [&](RandomBotPoolCandidate const& candidate)
             {
                 uint32 const homeZone = playerbot::PveManager::GetWorldPopulationHomeZone(candidate.lowGuid);
                 return !homeZone || humans.zones.find(homeZone) == humans.zones.end() ||
-                    playerbot::PveManager::GetWorldPopulationLoginPriority(candidate.lowGuid, true) != 2;
+                    playerbot::PveManager::GetWorldPopulationLoginPriority(candidate.lowGuid, candidate.level, true) != 2;
             }), pool.end());
 
             std::unordered_map<uint32, uint32> const onlineByAccount = QueryOnlineBotCountsByAccount(state.config);

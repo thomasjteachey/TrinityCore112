@@ -19024,15 +19024,10 @@ namespace playerbot
         return itr != g_LocalZoneByGuid.end() ? itr->second : 0;
     }
 
-    uint8 PveManager::GetWorldPopulationLoginPriority(uint32 characterLowGuid, bool homeZoneHasHuman)
+    uint8 PveManager::GetWorldPopulationLoginPriority(uint32 characterLowGuid, uint8 level, bool homeZoneHasHuman)
     {
-        uint32 const homeZone = GetWorldPopulationHomeZone(characterLowGuid);
-        if (!homeZone)
-            return 1;
-
-        if (ClassicZoneBand const* band = FindClassicZoneBand(homeZone))
-            if (band->maxLevel <= kStarterZoneTopLevel)
-                return 0;
+        if (IsWorldPopulationStarterBot(characterLowGuid, level))
+            return 0;
 
         return homeZoneHasHuman ? 2 : 1;
     }
@@ -19041,6 +19036,33 @@ namespace playerbot
     {
         ClassicZoneBand const* band = FindClassicZoneBand(zoneId);
         return band && band->maxLevel <= kStarterZoneTopLevel;
+    }
+
+    bool PveManager::IsWorldPopulationStarterBot(uint32 characterLowGuid, uint8 level)
+    {
+        if (!characterLowGuid || level > kStarterZoneTopLevel)
+            return false;
+
+        // Guardians and veterans have no band home, even if the startup table
+        // still lists one for them (a post can be handed out after the build).
+        uint64 const rawGuid = ObjectGuid::Create<HighGuid::Player>(characterLowGuid).GetRawValue();
+        if (GetGuardianZoneId(rawGuid) || IsLocalVeteranGuid(rawGuid))
+            return false;
+
+        uint32 const homeZone = GetWorldPopulationHomeZone(characterLowGuid);
+        return homeZone && IsWorldPopulationStarterZone(homeZone);
+    }
+
+    bool PveManager::AreWorldPopulationHomesReady()
+    {
+        // No PvE layer means no band homes, so there is nothing to wait for.
+        // Neither is there on a realm whose relocation maps produced no rebirth
+        // zones: BuildLocalZoneAssignmentsOnce never finishes there.
+        if (!g_PveConfig.enabled)
+            return true;
+
+        return g_LocalZoneAssignmentsBuilt.load(std::memory_order_acquire) ||
+            (g_GrindSpotsBuilt && g_RebirthZones.empty());
     }
 
     uint8 PveManager::GetWorldPopulationPrunePriority(Player* player, bool currentZoneHasHuman)
@@ -19061,18 +19083,21 @@ namespace playerbot
         if (IsDrifter(rawGuid) || CarriesQueuedChestLoot(player))
             return 0;
 
-        // Starter-zone residents are removed regardless of the normal target.
-        // This deliberately precedes ordinary activity protections: the user
-        // asked for every non-drifter starter bot to leave the world, with the
-        // unresolved chest-loot pin above as the sole operational exception.
-        if (IsWorldPopulationStarterZone(player->GetZoneId()))
-            return 100;
-
         // Never pull a human's companion, a queued/matched bot, or a bot in an
         // unsafe transition out from under the subsystem currently owning it.
+        // Starter bots included: a later pass removes them once released.
         if (IsExemptFromBattlegroundOrchestration(player) || player->InBattleground() ||
-            player->InBattlegroundQueue() || player->IsInCombat() ||
-            player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
+            player->InBattlegroundQueue() || player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
+            return 0;
+
+        // Starter bots are removed regardless of the normal target, in combat
+        // or not. The test is the band home and the level, never the zone the
+        // bot is standing in: judging by position logged out every bot that
+        // merely crossed Elwynn or The Bulwark on its way somewhere else.
+        if (IsWorldPopulationStarterBot(player->GetGUID().GetCounter(), player->GetLevel()))
+            return 100;
+
+        if (player->IsInCombat())
             return 0;
 
         bool const ordinaryLocal = GetGuardianZoneId(rawGuid) == 0 &&

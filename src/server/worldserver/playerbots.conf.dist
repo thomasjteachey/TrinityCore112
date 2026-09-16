@@ -312,11 +312,18 @@ Playerbot.RandomPopulation.SelectionHistorySize = 48
 
 #    Playerbot.RandomPopulation.DynamicWorldLoad.Enable
 #        Description: Keep a fixed combined real-player plus persistent-bot world budget.
-#                     Each real player online removes one persistent bot; logout restores one.
+#                     The budget is TargetMin/TargetMax capped at the bots that can actually be
+#                     online (online now plus offline characters allowed to log in), so each
+#                     real player online removes one persistent bot and a logout restores one
+#                     even when the configured target is larger than the bot roster.
 #                     Zone changes prefer swapping ordinary local bots out of human-empty zones
-#                     for locals assigned to zones containing humans. Non-drifter bots in starter
-#                     zones are kept offline. Drifters, human companions, queued/matched bots, and
+#                     for locals assigned to zones containing humans.
+#                     Starter bots are kept offline: local bots whose band home is a starter
+#                     (1-10) zone and whose level is 10 or below, wherever they are standing.
+#                     A higher-level bot passing through a starter zone is not a starter bot.
+#                     Drifters, human companions, queued/matched bots, bots mid-teleport, and
 #                     bots carrying unresolved player death-chest auction loot are never pruned.
+#                     Characters waiting for a forced rename cannot log in and are skipped.
 #                     Offline characters remain available to the transient BG/arena clone filler.
 #                     Intended for Barracks+; leave disabled on Legionnaire+.
 #        Default:     0
