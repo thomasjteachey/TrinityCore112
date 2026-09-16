@@ -445,7 +445,6 @@ private:
     uint32 GetPrepWindowMs() const;
     void SetWaveEnemyImmunity(bool immune);
     void CheckRunState();
-    void TeleportSurvivorsToGurubashi();
 
     // Fall-through guard: everyone in the instance below BG_VHR_MIN_SAFE_Z is
     // handed to HandlePlayerUnderMap. Runs on BG_VHR_FLOOR_CHECK_INTERVAL from

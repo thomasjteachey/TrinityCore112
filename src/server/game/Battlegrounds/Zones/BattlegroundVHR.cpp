@@ -70,11 +70,6 @@ Position const kPlayerStart = { 1848.03f, 804.62f, 44.07f, 0.027476f };
 // is about to open gets moved here - it is the furthest point from every cell.
 Position const kChamberCentre = { 1886.251f, 803.0743f, 38.42326f, 3.211406f };
 
-// Gurubashi arena, where a wiped party is returned to. Kept in step with
-// GurubashiGamesmasterLocation in scripts/Custom/custom_game_lobby.cpp, which
-// is the same spot every other custom mode drops players back onto.
-WorldLocation const kGurubashiReturn(0, -13235.707031f, 214.336441f, 31.276190f, 1.010225f);
-
 // Clones are placed in a ring around the cell's release point so forty of them
 // do not end up inside one another.
 constexpr float kCloneRingSpacing = 1.6f;
@@ -1529,35 +1524,9 @@ void BattlegroundVHR::ModifyEndOfMatchMoneyRewards(uint32 /*winner*/, uint32 tea
     loserMoney = reward;
 }
 
-// Rewrite where leaving this battleground drops the party. The base exit path
-// reads the stored entry point in RemovePlayerAtLeave, well after this runs, so
-// overriding it here is enough - no second teleport, and the usual mount, taxi
-// and group restores still happen on the way out.
-void BattlegroundVHR::TeleportSurvivorsToGurubashi()
-{
-    for (auto const& itr : GetPlayers())
-    {
-        Player* player = ObjectAccessor::FindPlayer(itr.first);
-        if (!player || player->GetBGTeam() != _humanTeam)
-            continue;
-
-        WorldSession const* session = player->GetSession();
-        if (!session || session->IsTransientPlayerSession())
-            continue;
-
-        player->SetBattlegroundEntryPoint(kGurubashiReturn);
-    }
-}
-
 void BattlegroundVHR::EndBattleground(uint32 winner)
 {
     UpdateScoreWorldStates();
     DespawnMenagerie();
-
-    // Only a wipe sends the party to Gurubashi. Surviving all forty leaves the
-    // normal entry point alone, so a winning party returns where they queued.
-    if (winner == _enemyTeam)
-        TeleportSurvivorsToGurubashi();
-
     Battleground::EndBattleground(winner);
 }
