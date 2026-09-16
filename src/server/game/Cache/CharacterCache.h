@@ -36,6 +36,7 @@ struct CharacterCacheEntry
     uint8 Level;
     ObjectGuid::LowType GuildId;
     uint32 ArenaTeamId[MAX_ARENA_SLOT];
+    bool TournamentMode = false;                // PLAYER_EXTRA_TOURNAMENT_MODE, for offline mail/queue checks
 };
 
 class TC_GAME_API CharacterCache
@@ -55,6 +56,7 @@ class TC_GAME_API CharacterCache
         void UpdateCharacterAccountId(ObjectGuid const& guid, uint32 accountId);
         void UpdateCharacterGuildId(ObjectGuid const& guid, ObjectGuid::LowType guildId);
         void UpdateCharacterArenaTeamId(ObjectGuid const& guid, uint8 slot, uint32 arenaTeamId);
+        void UpdateCharacterTournamentMode(ObjectGuid const& guid, bool tournament);
 
         bool HasCharacterCacheEntry(ObjectGuid const& guid) const;
         CharacterCacheEntry const* GetCharacterCacheByGuid(ObjectGuid const& guid) const;
@@ -69,6 +71,7 @@ class TC_GAME_API CharacterCache
         uint8 GetCharacterLevelByGuid(ObjectGuid guid) const;
         ObjectGuid::LowType GetCharacterGuildIdByGuid(ObjectGuid guid) const;
         uint32 GetCharacterArenaTeamIdByGuid(ObjectGuid guid, uint8 type) const;
+        bool IsTournamentCharacterByGuid(ObjectGuid guid) const;
 };
 
 #define sCharacterCache CharacterCache::instance()

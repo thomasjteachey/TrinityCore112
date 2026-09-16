@@ -63,6 +63,7 @@ void AddSC_custom_global_collision();
 void AddSC_custom_client_attest();
 void AddSC_violet_hold_boons();
 void AddSC_custom_spell_propagate();
+void AddSC_custom_tournament_mode();
 
 void AddCustomScripts()
 {
@@ -75,6 +76,7 @@ void AddCustomScripts()
     AddSC_custom_global_collision();
     AddSC_custom_client_attest();
     AddSC_custom_spell_propagate();
+    AddSC_custom_tournament_mode();
     AddBGReplayScripts();
     AddSC_custom_zone_group_rules();
     AddSC_custom_warmode_zone_gate();

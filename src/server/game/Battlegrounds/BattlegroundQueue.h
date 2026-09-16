@@ -42,6 +42,7 @@ struct GroupQueueInfo                                       // stores informatio
     std::map<ObjectGuid, PlayerQueueInfo*> Players;         // player queue info map
     uint32  Team;                                           // Player team (ALLIANCE/HORDE)
     bool    IsForcedTeam;                                   // True when a queue entry must stay on Team instead of being rebalanced
+    bool    TournamentPool;                                 // CENTURION: matched only with tournament-pool groups (TournamentMode.h)
     BattlegroundTypeId BgTypeId;                            // battleground type id
     bool    IsRated;                                        // rated
     uint8   ArenaType;                                      // 2v2, 3v3, 4v4, 5v5 or 0 when BG
@@ -131,6 +132,18 @@ class TC_GAME_API BattlegroundQueue
     private:
 
         bool InviteGroupToBG(GroupQueueInfo* ginfo, Battleground* bg, uint32 side);
+
+        // CENTURION queue pools (Miscellaneous/TournamentMode.h). Tournament-pool
+        // groups - tournament characters, and world characters who opted into the
+        // tournament queue - are matched only with each other, and world groups
+        // only with world groups. BattlegroundQueueUpdate runs the whole matching
+        // pass once per pool with m_ActiveTournamentPool set, and every step that
+        // picks queued groups or a running match skips the other pool.
+        void UpdatePool(BattlegroundTypeId bgTypeId, BattlegroundBracketId bracket_id, uint8 arenaType, bool isRated, uint32 arenaRating);
+        bool HasWaitingGroupsInPool(BattlegroundBracketId bracket_id, bool tournamentPool) const;
+        bool InActivePool(GroupQueueInfo const* ginfo) const { return ginfo->TournamentPool == m_ActiveTournamentPool; }
+        bool InActivePool(Battleground const* bg) const { return bg->IsTournamentPool() == m_ActiveTournamentPool; }
+        bool m_ActiveTournamentPool = false;
         // Bot-filled battlegrounds and skirmishes
         // (BattlegroundMgr::BotFillPolicy): start a match for the real players
         // waiting in this bracket, however few, once the longest-waiting one

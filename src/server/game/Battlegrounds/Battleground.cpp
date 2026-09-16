@@ -174,6 +174,7 @@ Battleground::Battleground()
     m_CustomGamePendingCloneCount = 0;
     m_CustomRules       = BattlegroundCustomRules();
     m_IsBotFillMatch    = false;
+    m_IsTournamentPool  = false;
 
     m_MaxPlayersPerTeam = 0;
     m_MaxPlayers        = 0;
@@ -1012,7 +1013,7 @@ void Battleground::EndBattleground(uint32 winner)
                     bool canRestoreMark = (isArena() || GetTypeID(true) == BATTLEGROUND_WS || IsCustomBattleground(GetTypeID(true)))
                         && GetTypeID(true) != BATTLEGROUND_VHR;
                     if (canRestoreMark && Trinity::Custom::ConsumeEligibleDepletedMarks(player, 1))
-                        player->AddItem(Trinity::Custom::ITEM_RESTORED_MARK_OF_HONOR, 1); // restored mark of honor
+                        player->AddItem(Trinity::Custom::GetRestoredMarkEntry(), 1); // restored mark of honor
                 }
                 player->ModifyMoney(winner_money);
                 if (winner_money)

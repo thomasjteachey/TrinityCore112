@@ -388,6 +388,7 @@ class CharacterCreateInfo
         CharacterCreateInfo& SetHairColor(uint8 hairColor) { HairColor = hairColor; return *this; }
         CharacterCreateInfo& SetFacialHair(uint8 facialHair) { FacialHair = facialHair; return *this; }
         CharacterCreateInfo& SetOutfitId(uint8 outfitId) { OutfitId = outfitId; return *this; }
+        CharacterCreateInfo& SetTournamentMode(bool tournament) { TournamentMode = tournament; return *this; }
 
     protected:
         /// User specified variables
@@ -401,6 +402,7 @@ class CharacterCreateInfo
         uint8 HairColor  = 0;
         uint8 FacialHair = 0;
         uint8 OutfitId   = 0;
+        bool TournamentMode = false;    // create a tournament (Legionnaire+) character, see TournamentMode.h
 
         /// Server side data
         uint8 CharCount = 0;

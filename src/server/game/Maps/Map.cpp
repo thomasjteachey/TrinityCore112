@@ -29,6 +29,7 @@
 #include "Group.h"
 #include "InstanceScript.h"
 #include "Log.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "MapInstanced.h"
 #include "MapManager.h"
 #include "Metric.h"
@@ -3890,6 +3891,12 @@ Map::EnterState InstanceMap::CannotEnter(Player* player)
     // allow GM's to enter
     if (player->IsGameMaster())
         return Map::CannotEnter(player);
+
+    // Tournament characters never enter dungeons or raids (TournamentMode.h) -
+    // this is the check a login inside an instance and a finished loading screen
+    // run, MapManager::PlayerCannotEnter the one every teleport runs.
+    if (Tournament::IsTournamentCharacter(player) && IsDungeon())
+        return CANNOT_ENTER_UNSPECIFIED_REASON;
 
     // cannot enter if the instance is full (player cap), GMs don't count
     uint32 maxPlayers = GetMaxPlayers();

@@ -26,6 +26,7 @@
 #include "GossipDef.h"
 #include "Group.h"
 #include "Log.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
@@ -235,6 +236,15 @@ void WorldSession::HandleQuestgiverQueryQuestOpcode(WorldPacket& recvData)
         _player->PlayerTalkClass->SendCloseGossip();
         return;
     }
+
+    // Quest details skip the interaction check, so the tournament NPC allowlist
+    // is applied here too (TournamentMode.h).
+    if (Creature const* questGiver = object->ToCreature())
+        if (!Tournament::CanInteractWithCreature(_player, questGiver, 0))
+        {
+            _player->PlayerTalkClass->SendCloseGossip();
+            return;
+        }
 
     if (Quest const* quest = sObjectMgr->GetQuestTemplate(questId))
     {

@@ -39,7 +39,7 @@ public:
             if (!AccountBank::OpenAccountBank(player, me->GetGUID()))
             {
                 if (WorldSession* session = player->GetSession())
-                    session->SendNotification("Unable to open the shared account bank.");
+                    session->SendNotification("Unable to open your %s.", AccountBank::GetBankName(player));
                 return false;
             }
 

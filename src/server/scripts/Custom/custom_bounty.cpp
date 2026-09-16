@@ -23,6 +23,7 @@
 
 #include "custom_barracks_hardcore.h"
 #include "custom_loot_chest_helper.h"
+#include "Miscellaneous/TournamentMode.h"
 
 #include "CombatManager.h"
 #include "Configuration/Config.h"
@@ -273,6 +274,12 @@ namespace
         if (!s_enabled || !s_spellId || !player || player->IsGameMaster())
             return false;
 
+        // Tournament characters are outside the bounty economy entirely: they
+        // build no bounty, killing one builds none, they pay no death tax, leave
+        // no bounty chest and draw no guards.
+        if (Tournament::IsTournamentCharacter(player))
+            return false;
+
         if (player->InBattleground() || player->InArena())
             return false;
 
@@ -374,6 +381,11 @@ namespace
         // realm - and a bot's own bounty is exactly what it pays out when a
         // player finally puts it down. This is a rule about people opting out.
         if (!BarracksHardcore::IsPlayerbot(killer) && !BarracksHardcore::IsWarModeOptedIn(killer))
+            return;
+
+        // Nor does a tournament character, whom every bot (and so every bounty
+        // hunter and guard) ignores.
+        if (Tournament::IsTournamentCharacter(killer))
             return;
 
         Aura* aura = killer->GetAura(s_spellId, killer->GetGUID());

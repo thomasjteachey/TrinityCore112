@@ -4941,6 +4941,182 @@ ClientTweaks.Attest.TimeoutSeconds = 90
 Centurion.Classic.ConsumeAmmo = 0
 Centurion.Classic.PetHappinessDecay = 0
 
+#
+###################################################################################################
+#   CENTURION CHARACTER MODES (world characters and tournament characters on one realm)
+#
+#    A character is created as a WORLD character (Barracks+ rules) or a TOURNAMENT character
+#    (Legionnaire+ rules). The choice is stored in characters.extra_flags (0x1000 tournament,
+#    0x2000 world character opted into the tournament queue), so no schema change is involved.
+#    The character-create screen marks a tournament character by sending the name as
+#    first-letter-lowercase, rest-uppercase ("eLGROM"); GMs can use
+#    .tournament info [$player] / set $player world|tournament / queue $player on|off.
+#
+#    With Enable = 0 nothing below applies to anyone, flags or not.
+#
+#    Tournament characters:
+#      - cannot be summoned, trade with or mail world characters, use the auction house, the
+#        account bank (the account banker opens a separate tournament bank instead), flight
+#        masters, dungeons, raids or the dungeon finder, or teleport out of AllowedZones;
+#      - loot nothing outside battlegrounds and arenas (corpses, chests, nodes, fishing,
+#        skinning, pickpocketing, death chests), take no part in group loot or shared coin,
+#        and cannot use the guild bank or repair from it; their own item containers stay open;
+#      - are exempt from the hardcore ruleset (no full-loot death chest, field kit or War
+#        Mode), from bounties and notoriety, and from challenge modes;
+#      - are matched in battlegrounds and arenas only with the tournament queue pool;
+#      - may talk only to AllowedCreatures (plus spirit healers, battlemasters, their own pets,
+#        and anything on a battleground map or in the custom-game lobby);
+#      - learn InnateSpells and max every ProfessionSpells profession at each login;
+#      - are ignored by every playerbot outside battlegrounds and arenas.
+#
+#    Tournament character creation (Legionnaire+'s starting kit), all optional:
+#      - world tables playercreateinfo_tournament, playercreateinfo_item_tournament and
+#        playercreateinfo_spell_custom_tournament (same columns as the stock tables) replace the
+#        start position, starting items and playercreateinfo_spell_custom list for tournament
+#        characters. Probed at startup; a table that does not exist leaves that part to the
+#        world data.
+#      - the characters-DB procedure createTournamentKit(class, race, guid, petIds) copies the
+#        template characters' (Startwarrior, Startmage...) spells, talents, action bars and hunter
+#        pets onto each new tournament character, in place of createCopyOfChar. Pet numbers are
+#        reserved by the server and passed in petIds.
+#
+#    Centurion.Tournament.Enable
+#        Description: Turns world/tournament character modes on.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+#
+#    Centurion.Tournament.StartLevel
+#        Description: Level a new tournament character starts at.
+#        Default:     60
+#
+#    Centurion.Tournament.HomeLocation
+#        Description: "map x y z orientation". Where new tournament characters start (unless
+#                     playercreateinfo_tournament has a position for the race and class), their
+#                     hearthstone is bound, and where one found outside AllowedZones is sent.
+#                     Should lie inside AllowedZones; within 40 yards of it counts as inside.
+#        Default:     "" - (race start position; nobody can be sent back)
+#
+#    Centurion.Tournament.AllowedZones
+#        Description: Comma-separated zone or area ids tournament characters may stand in.
+#                     Battlegrounds, arenas and the custom-game lobby are always allowed.
+#                     Checked every update; outside them a tournament character is sent to
+#                     HomeLocation, and teleports, portals and area triggers leading out of
+#                     them are refused.
+#        Default:     "" - (no confinement)
+#
+#    Centurion.Tournament.AllowedCreatures
+#        Description: Comma-separated creature entries tournament characters may interact with;
+#                     ranges are written first-last ("920000-920212,900001").
+#                     Auctioneers and flight masters are refused even when listed.
+#        Default:     "" - (every NPC except auctioneers and flight masters)
+#
+#    Centurion.Tournament.PhaseMask
+#        Description: Phase bit(s) tournament characters carry on top of their normal phase.
+#                     Spawn tournament-only NPCs in this phase (creature.phaseMask): tournament
+#                     characters see and use them, world characters neither see nor reach them.
+#                     The normal phase (1) is not allowed here.
+#        Default:     0 - (no tournament phase)
+#
+#    Centurion.Tournament.AlwaysMaxWeaponSkill
+#    Centurion.Tournament.AlwaysMaxSkillForLevel
+#        Description: AlwaysMaxWeaponSkill and AlwaysMaxSkillForLevel for tournament characters
+#                     (Legionnaire+ ran with both on); world characters follow the realm-wide keys.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+#
+#    Centurion.Tournament.DeathSicknessLevel
+#        Description: Death.SicknessLevel for tournament characters (61 = never at level 60).
+#        Default:     61
+#
+#    Centurion.Tournament.ConsumeAmmo
+#    Centurion.Tournament.PetHappinessDecay
+#        Description: Centurion.Classic.ConsumeAmmo / .PetHappinessDecay for tournament characters
+#                     (the pet's owner decides).
+#        Default:     0 - (Disabled, as on Legionnaire+)
+#
+#    Centurion.Tournament.ResetDuelCooldowns
+#    Centurion.Tournament.ResetDuelHealthMana
+#        Description: ResetDuelCooldowns / ResetDuelHealthMana for any duel with a tournament
+#                     character on either side (both duelists are reset).
+#        Default:     1 - (Enabled, as on Legionnaire+)
+#
+#    Centurion.PvpConsumableRestore.AreaIds (its own section) tops PvP consumables up in the listed
+#    areas; with character modes enabled it only does so for tournament characters.
+#
+#    Centurion.Tournament.AllowedLootObjects
+#        Description: Comma-separated gameobject entries tournament characters may loot outside
+#                     battlegrounds and arenas anyway - for a PvP objective chest. Scripted
+#                     rewards that do not open a loot window (the Gurubashi hourly chest) need
+#                     no entry here.
+#        Default:     "" - (none)
+#
+#    Centurion.Tournament.InnateSpells
+#        Description: Spells every tournament character knows, as spell[:classmask].
+#        Default:     "29073,18610,22734:1494" - (Eat, First Aid rank 10, Drink for mana classes)
+#
+#    Centurion.Tournament.ProfessionSpells
+#        Description: Profession rank spells to learn; each profession is raised to that rank's
+#                     cap, so profession-gated gear (reflectors, engineering trinkets) is usable.
+#        Default:     "11611,9785,13920,12656,10662,12180"
+#                     - (Artisan Alchemy, Blacksmithing, Enchanting, Engineering,
+#                        Leatherworking, Tailoring)
+#
+#    Centurion.Tournament.QueueMinLevel
+#        Description: Level a world character needs to opt into the tournament queue
+#                     (the Battlegrounds-tab toggle; addon message CCGAMEREQ TQUEUE).
+#        Default:     60
+
+Centurion.Tournament.Enable = 0
+Centurion.Tournament.StartLevel = 60
+Centurion.Tournament.HomeLocation = ""
+Centurion.Tournament.AllowedZones = ""
+Centurion.Tournament.AllowedCreatures = ""
+Centurion.Tournament.PhaseMask = 0
+Centurion.Tournament.AlwaysMaxWeaponSkill = 1
+Centurion.Tournament.AlwaysMaxSkillForLevel = 1
+Centurion.Tournament.DeathSicknessLevel = 61
+Centurion.Tournament.ConsumeAmmo = 0
+Centurion.Tournament.PetHappinessDecay = 0
+Centurion.Tournament.ResetDuelCooldowns = 1
+Centurion.Tournament.ResetDuelHealthMana = 1
+Centurion.Tournament.AllowedLootObjects = ""
+Centurion.Tournament.InnateSpells = "29073,18610,22734:1494"
+Centurion.Tournament.ProfessionSpells = "11611,9785,13920,12656,10662,12180"
+Centurion.Tournament.QueueMinLevel = 60
+
+#
+#    Centurion.Pvp.WaiveReagentsAndAmmo
+#        Description: Every character casts combat spells without reagents and fires without
+#                     using up ammunition in battlegrounds, arenas and duels in progress.
+#                     Crafting, enchanting, item creation, portals, teleports and summons still
+#                     need their reagents. The waiver is shown to the client through the
+#                     no-reagent-cost field; ammunition must still be equipped to fire.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Centurion.Pvp.WaiveReagentsAndAmmo = 0
+
+#
+###################################################################################################
+#   CENTURION MARKS OF HONOR
+#
+#    Legionnaire Marks of Honor are restored by winning battlegrounds and arenas (consuming a
+#    depleted mark the character can use), paid by the Gurubashi hourly chest, and converted by the
+#    Mark Transmuter (3 depleted marks the character cannot use -> 1 it can). The transmog token is
+#    set separately (Centurion.Transmog.TokenEntry).
+#
+#    Centurion.Marks.RestoredEntry
+#        Description: Item id of the Legionnaire Mark of Honor.
+#        Default:     20558 - (Legionnaire+ and Barracks+; Centurion uses its own copy)
+#
+#    Centurion.Marks.DepletedEntries
+#        Description: Item ids of the depleted marks, comma-separated or as first-last ranges, at
+#                     most 32. Each is matched to characters by its AllowableClass/AllowableRace.
+#        Default:     "20559-20575"
+
+Centurion.Marks.RestoredEntry = 20558
+Centurion.Marks.DepletedEntries = "20559-20575"
+
 
 
 #

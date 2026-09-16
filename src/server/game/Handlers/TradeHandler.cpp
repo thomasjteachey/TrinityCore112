@@ -23,6 +23,7 @@
 #include "Item.h"
 #include "Language.h"
 #include "Log.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "Spell.h"
@@ -675,6 +676,16 @@ void WorldSession::HandleInitiateTradeOpcode(WorldPacket& recvPacket)
     if (pOther->IsInCustomGameLobby())
     {
         SendNotification("Trading is disabled inside custom-game lobbies.");
+        info.Status = TRADE_STATUS_CLOSE_WINDOW;
+        SendTradeStatus(info);
+        return;
+    }
+
+    // Tournament and world characters never trade with each other
+    // (TournamentMode.h); either side may be the one asking.
+    if (Tournament::AreSeparated(GetPlayer(), pOther))
+    {
+        SendNotification("Tournament characters and world characters cannot trade with each other.");
         info.Status = TRADE_STATUS_CLOSE_WINDOW;
         SendTradeStatus(info);
         return;

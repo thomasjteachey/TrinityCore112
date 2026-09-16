@@ -20,6 +20,8 @@
 */
 
 #include "World.h"
+#include "Miscellaneous/DepletedMarks.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "AutoBalance/AutoBalanceConfig.h"
 #include "AccountMgr.h"
 #include "AchievementMgr.h"
@@ -1594,6 +1596,13 @@ void World::LoadConfigSettings(bool reload)
     // another seal, letting one melee swing benefit from both. 0 disables.
     m_int_configs[CONFIG_CENTURION_PALADIN_SEAL_TWIST_WINDOW_MS] = sConfigMgr->GetIntDefault("Centurion.Paladin.SealTwistWindowMs", 400);
 
+    // World-mode vs tournament-mode characters (Miscellaneous/TournamentMode.h).
+    // Its lists live in that module; reloading here keeps `.reload config` live.
+    Tournament::LoadConfig();
+
+    // Legionnaire Mark of Honor item ids for this realm (Miscellaneous/DepletedMarks.h).
+    Trinity::Custom::LoadMarkConfig();
+
     // Transmogrification
     m_bool_configs[CONFIG_CENTURION_TRANSMOG_ENABLE] = sConfigMgr->GetBoolDefault("Centurion.Transmog.Enable", true);
     // Opt-in: a character sees (and shows) transmogs only after switching it on.
@@ -2089,6 +2098,9 @@ void World::SetInitialWorldSettings()
 
     TC_LOG_INFO("server.loading", "Loading Player Create Data...");
     sObjectMgr->LoadPlayerInfo();
+
+    TC_LOG_INFO("server.loading", "Loading Tournament Character Create Data...");
+    Tournament::LoadCreateInfo();
 
     TC_LOG_INFO("server.loading", "Loading Exploration BaseXP Data...");
     sObjectMgr->LoadExplorationBaseXP();

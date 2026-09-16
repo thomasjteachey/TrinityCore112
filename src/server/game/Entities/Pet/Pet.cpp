@@ -23,6 +23,7 @@
 #include "Group.h"
 #include "InstanceScript.h"
 #include "Log.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "ObjectMgr.h"
 #include "PetPackets.h"
 #include "Player.h"
@@ -746,7 +747,8 @@ void Pet::LoseHappiness()
     // merged it did that by having this function top the pet back up instead of
     // draining it. Barracks+ (classic PvE) wants the real decay. Gated here rather
     // than at the caller so both realms keep the same 7.5s tick and call site.
-    if (!sWorld->getBoolConfig(CONFIG_CENTURION_CLASSIC_PET_HAPPINESS_DECAY))
+    // On a mixed realm the owner decides: tournament characters follow L+.
+    if (!Tournament::PetHappinessDecays(GetOwner()))
     {
         if (int32 const maxHappiness = int32(GetMaxPower(POWER_HAPPINESS)))
             SetPower(POWER_HAPPINESS, maxHappiness);

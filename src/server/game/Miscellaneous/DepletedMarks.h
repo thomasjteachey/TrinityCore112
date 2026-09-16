@@ -19,22 +19,24 @@
 #define TRINITYCORE_DEPLETED_MARKS_H
 
 #include "Define.h"
-#include <array>
+#include <span>
 
 class Player;
 
 namespace Trinity::Custom
 {
-    inline constexpr uint32 ITEM_RESTORED_MARK_OF_HONOR = 20558;
-    inline constexpr uint32 DEPLETED_MARK_FIRST_ENTRY    = 20559;
-    inline constexpr uint32 DEPLETED_MARK_LAST_ENTRY     = 20575;
     inline constexpr uint32 DEPLETED_MARK_CONVERSION_COST = 3;
+    inline constexpr std::size_t MAX_DEPLETED_MARK_ENTRIES = 32;
 
-    inline constexpr std::array<uint32, DEPLETED_MARK_LAST_ENTRY - DEPLETED_MARK_FIRST_ENTRY + 1> DepletedMarkEntries =
-    {
-        20559, 20560, 20561, 20562, 20563, 20564, 20565, 20566, 20567,
-        20568, 20569, 20570, 20571, 20572, 20573, 20574, 20575
-    };
+    // The Legionnaire Mark of Honor and its depleted class/race variants are
+    // item ids chosen per realm (Centurion.Marks.*). Legionnaire+ and
+    // Barracks+ keep the stock ids L+ reused (20558, 20559-20575); Centurion
+    // points at its own copies, because there those stock ids are B+'s
+    // battleground marks, Hallow's End masks and Black Whelp Tunic.
+    // Loaded from World::LoadConfigSettings, so `.reload config` applies it.
+    void LoadMarkConfig();
+    uint32 GetRestoredMarkEntry();
+    std::span<uint32 const> GetDepletedMarkEntries();
 
     uint32 GetTotalDepletedMarkCount(Player const* player, bool includeBank = false);
     bool HasEnoughDepletedMarks(Player const* player, uint32 requiredCount, bool includeBank = false);

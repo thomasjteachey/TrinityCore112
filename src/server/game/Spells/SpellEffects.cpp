@@ -34,6 +34,7 @@
 #include "Item.h"
 #include "Language.h"
 #include "Log.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "LootMgr.h"
 #include "MiscPackets.h"
 #include "MotionMaster.h"
@@ -1431,6 +1432,18 @@ void Spell::EffectTeleportUnits()
 
     if (!targetDest.GetOrientation() && m_targets.GetUnitTarget())
         targetDest.SetOrientation(m_targets.GetUnitTarget()->GetOrientation());
+
+    // Tournament characters stay on the tournament grounds (TournamentMode.h):
+    // no portal, teleport or hearthstone takes them anywhere else. Portal
+    // objects cast their teleport on the player, so this is the one place that
+    // sees them. Teleports between allowed zones still work.
+    if (Player* player = unitTarget->ToPlayer())
+        if (Tournament::IsTournamentCharacter(player) && !player->IsGameMaster() &&
+            !Tournament::IsLocationAllowed(targetDest.GetMapId(), targetDest.GetPositionX(), targetDest.GetPositionY(), targetDest.GetPositionZ()))
+        {
+            Tournament::SendRefusal(player, "leave the tournament grounds");
+            return;
+        }
 
     if (targetDest.GetMapId() == unitTarget->GetMapId())
         unitTarget->NearTeleportTo(targetDest, unitTarget == m_caster);

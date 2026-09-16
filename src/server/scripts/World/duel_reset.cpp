@@ -17,6 +17,7 @@
 
 #include "ScriptMgr.h"
 #include "GameTime.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "Pet.h"
 #include "Player.h"
 #include "SpellHistory.h"
@@ -32,15 +33,16 @@ class DuelResetScript : public PlayerScript
         // Called when a duel starts (after 3s countdown)
         void OnDuelStart(Player* player1, Player* player2) override
         {
-            // Cooldowns reset
-            if (sWorld->getBoolConfig(CONFIG_RESET_DUEL_COOLDOWNS))
+            // Cooldowns reset (a duel with a tournament character follows the
+            // tournament rule, Centurion.Tournament.ResetDuel*)
+            if (Tournament::ResetsDuelCooldowns(player1, player2))
             {
                 player1->RemoveArenaSpellCooldowns(true);
                 player2->RemoveArenaSpellCooldowns(true);
             }
 
             // Health and mana reset
-            if (sWorld->getBoolConfig(CONFIG_RESET_DUEL_HEALTH_MANA))
+            if (Tournament::ResetsDuelHealthMana(player1, player2))
             {
                 player1->ResetAllPowers();
                 player2->ResetAllPowers();
@@ -53,14 +55,14 @@ class DuelResetScript : public PlayerScript
         void OnDuelEnd(Player* winner, Player* loser, DuelCompleteType type) override
         {
             // Cooldown restore
-            if (sWorld->getBoolConfig(CONFIG_RESET_DUEL_COOLDOWNS))
+            if (Tournament::ResetsDuelCooldowns(winner, loser))
             {
                 winner->RemoveArenaSpellCooldowns(true);
                 loser->RemoveArenaSpellCooldowns(true);
             }
 
             // Health and mana restore
-            if (sWorld->getBoolConfig(CONFIG_RESET_DUEL_HEALTH_MANA))
+            if (Tournament::ResetsDuelHealthMana(winner, loser))
             {
                 winner->ResetAllPowers();
                 loser->ResetAllPowers();

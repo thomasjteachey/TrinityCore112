@@ -32,6 +32,20 @@ namespace AccountBank
 {
     static constexpr uint16 MAX_SLOTS = 28;
 
+    // Tournament characters (Miscellaneous/TournamentMode.h) never see the
+    // account bank. The same banker opens their TOURNAMENT bank instead: one more
+    // account-wide bank, shared only by that account's tournament characters.
+    // Its rows live in account_bank_item under the account id with this bit set,
+    // which keeps the two banks apart without a schema change - nothing keyed on
+    // a real account id (this file's own clears included) can read or delete
+    // them, on this realm or any other running an older build.
+    static constexpr uint32 TOURNAMENT_BANK_ACCOUNT_FLAG = 0x80000000;
+
+    // The account_bank_item key for this character's bank.
+    uint32 GetStorageAccountId(Player const* player);
+    // "account bank" or "tournament bank", for messages.
+    char const* GetBankName(Player const* player);
+
     bool IsDepositable(Item const* item);
 
     bool List(ChatHandler* handler);

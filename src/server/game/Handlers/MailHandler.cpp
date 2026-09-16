@@ -24,6 +24,7 @@
 #include "Item.h"
 #include "Language.h"
 #include "Log.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "Mail.h"
 #include "MailPackets.h"
 #include "ObjectAccessor.h"
@@ -57,6 +58,17 @@ bool WorldSession::CanOpenMailBox(ObjectGuid guid)
         return false;
 
     return true;
+}
+
+// Player-to-player mail between a tournament and a world character. System,
+// auction, GM and self mail are never affected.
+static bool IsMailAcrossCharacterModes(Player const* receiver, Mail const* mail)
+{
+    if (!mail || mail->messageType != MAIL_NORMAL || !mail->sender || mail->sender == mail->receiver ||
+        mail->stationery == MAIL_STATIONERY_GM || receiver->IsGameMaster())
+        return false;
+
+    return Tournament::AreSeparated(receiver->GetGUID(), ObjectGuid::Create<HighGuid::Player>(mail->sender));
 }
 
 void WorldSession::HandleSendMail(WorldPackets::Mail::SendMail& sendMail)
@@ -113,6 +125,16 @@ void WorldSession::HandleSendMail(WorldPackets::Mail::SendMail& sendMail)
     if (player->GetGUID() == receiverGuid)
     {
         player->SendMailResult(0, MAIL_SEND, MAIL_ERR_CANNOT_SEND_TO_SELF);
+        return;
+    }
+
+    // Tournament and world characters send each other nothing, not even a
+    // letter (TournamentMode.h). The receiver may be offline: the character
+    // cache knows their mode.
+    if (!player->IsGameMaster() && Tournament::AreSeparated(player->GetGUID(), receiverGuid))
+    {
+        SendNotification("Tournament characters and world characters cannot mail each other.");
+        player->SendMailResult(0, MAIL_SEND, MAIL_ERR_NOT_YOUR_TEAM);
         return;
     }
 
@@ -434,6 +456,16 @@ void WorldSession::HandleMailTakeItem(WorldPackets::Mail::MailTakeItem& takeItem
         return;
     }
 
+    // Player mail between a tournament and a world character stays sealed -
+    // including mail already on its way when one of them changed mode. It can
+    // still be returned to its sender.
+    if (IsMailAcrossCharacterModes(player, m))
+    {
+        SendNotification("Tournament characters and world characters cannot mail each other.");
+        player->SendMailResult(takeItem.MailID, MAIL_ITEM_TAKEN, MAIL_ERR_INTERNAL_ERROR);
+        return;
+    }
+
     // prevent cheating with skip client money check
     /*
     if (!player->HasEnoughMoney(m->COD))
@@ -521,6 +553,13 @@ void WorldSession::HandleMailTakeMoney(WorldPackets::Mail::MailTakeMoney& takeMo
     Mail* m = player->GetMail(takeMoney.MailID);
     if (!m || m->state == MAIL_STATE_DELETED || m->deliver_time > GameTime::GetGameTime())
     {
+        player->SendMailResult(takeMoney.MailID, MAIL_MONEY_TAKEN, MAIL_ERR_INTERNAL_ERROR);
+        return;
+    }
+
+    if (IsMailAcrossCharacterModes(player, m))
+    {
+        SendNotification("Tournament characters and world characters cannot mail each other.");
         player->SendMailResult(takeMoney.MailID, MAIL_MONEY_TAKEN, MAIL_ERR_INTERNAL_ERROR);
         return;
     }

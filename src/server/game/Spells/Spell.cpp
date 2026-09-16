@@ -42,6 +42,7 @@
 #include "InstanceScript.h"
 #include "Item.h"
 #include "Log.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "LootMgr.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
@@ -5431,18 +5432,24 @@ bool IsManagedPlayerbot(Player const* player)
 
 void Spell::TakeAmmo()
 {
-    // Legionnaire+ (PvP) has never charged for ammo; Barracks+ (classic PvE) does.
-    // This used to be a bare `return;` on the PvP branch, which is exactly the kind
-    // of divergence that made the two cores impossible to merge - keep it a config.
-    if (!sWorld->getBoolConfig(CONFIG_CENTURION_CLASSIC_CONSUME_AMMO))
-        return;
-
     // Only players use ammo
     Player* player = m_caster->ToPlayer();
     if (!player)
         return;
 
+    // Legionnaire+ (PvP) has never charged for ammo; Barracks+ (classic PvE) does.
+    // This used to be a bare `return;` on the PvP branch, which is exactly the kind
+    // of divergence that made the two cores impossible to merge - keep it a config,
+    // and on a mixed realm a per-character one (tournament characters follow L+).
+    if (!Tournament::ConsumesAmmo(player))
+        return;
+
     if (IsManagedPlayerbot(player))
+        return;
+
+    // Battlegrounds, arenas and duels in progress never cost ammunition
+    // (Centurion.Pvp.WaiveReagentsAndAmmo).
+    if (Tournament::IsFreeReagentContext(player))
         return;
 
     // only ranged
@@ -6562,6 +6569,10 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
 
                 if (target->HasSummonPending())
                     return SPELL_FAILED_SUMMON_PENDING;
+
+                // Tournament characters cannot be summoned (TournamentMode.h).
+                if (Tournament::IsTournamentCharacter(target))
+                    return SPELL_FAILED_BAD_TARGETS;
 
                 // check if our map is dungeon
                 MapEntry const* map = sMapStore.LookupEntry(m_caster->GetMapId());
@@ -7940,8 +7951,8 @@ SpellCastResult Spell::CheckItems(uint32* param1 /*= nullptr*/, uint32* param2 /
                         uint32 const ammo = player->GetUInt32Value(PLAYER_AMMO_ID);
                         if (!ammo)
                         {
-                            // Requires No Ammo
-                            if (player->HasAura(46699))
+                            // Requires No Ammo, or a PvP ammunition waiver
+                            if (player->HasAura(46699) || Tournament::IsFreeReagentContext(player))
                                 break;                      // skip other checks
 
                             return SPELL_FAILED_NO_AMMO;

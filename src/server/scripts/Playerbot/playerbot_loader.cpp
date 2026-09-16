@@ -26,6 +26,7 @@
 #include "Globals/ObjectAccessor.h"
 #include "Item.h"
 #include "Map.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "MotionMaster.h"
 #include "Optional.h"
 #include "MoveSpline.h"
@@ -820,6 +821,10 @@ public:
         if (!playerbot::IsManagedRandomBot(target))
             return;
 
+        // Bots ignore tournament characters: the challenge is left unanswered.
+        if (Tournament::IsTournamentCharacter(challenger))
+            return;
+
         if (!target->duel || !challenger->duel || target->duel->State != DUEL_STATE_CHALLENGED)
             return;
 
@@ -863,6 +868,10 @@ public:
         // bot must never be interpreted as a fresh command by another bot, or
         // Whisper -> OnPlayerChat -> Whisper recursively re-enters forever.
         if (!receiverIsPlayerbot || senderIsPlayerbot || sender == receiver)
+            return;
+
+        // Bots ignore tournament characters, whispers included.
+        if (Tournament::IsTournamentCharacter(sender) && !sender->IsGameMaster())
             return;
 
         std::string command = msg;

@@ -70,6 +70,7 @@
 #include "World.h"
 #include "WorldSession.h"
 #include "custom_loot_chest_helper.h"
+#include "Miscellaneous/TournamentMode.h"
 #include <algorithm>
 #include <cctype>
 #include <array>
@@ -449,6 +450,11 @@ namespace BarracksHardcore
         if (player->IsInGurubashiBattleRing())
             return true;
 
+        // Tournament characters are not part of the hardcore world: War Mode
+        // never arms them, whatever their saved opt-in says.
+        if (Tournament::IsTournamentCharacter(player))
+            return false;
+
         if (!IsFfaEligibleZone(player))
             return false;
 
@@ -492,6 +498,10 @@ namespace BarracksHardcore
         if (!session || IsBotAccount(session->GetAccountId()))
             return false;
 
+        // Nor does a tournament character: the hardcore world is not theirs.
+        if (Tournament::IsTournamentCharacter(player))
+            return false;
+
         return IsOptedIn(player->GetGUID().GetCounter());
     }
 
@@ -508,6 +518,11 @@ namespace BarracksHardcore
             return !s || IsBotAccount(s->GetAccountId());
         };
         if (isBot(left) || isBot(right))
+            return false;
+
+        // Tournament characters have no War Mode, so there is nothing to split
+        // a party over; they group (and play custom games) with anyone.
+        if (Tournament::IsTournamentCharacter(left) || Tournament::IsTournamentCharacter(right))
             return false;
 
         return IsWarModeOptedIn(left) != IsWarModeOptedIn(right);
@@ -528,6 +543,9 @@ namespace BarracksHardcore
     {
         uint32 const accountId = sCharacterCache->GetCharacterAccountIdByGuid(memberGuid);
         if (!accountId || IsBotAccount(accountId))
+            return false;
+
+        if (Tournament::IsTournamentCharacter(player) || Tournament::IsTournamentCharacter(memberGuid))
             return false;
 
         return IsOptedIn(memberGuid.GetCounter()) != IsWarModeOptedIn(player);
@@ -598,7 +616,7 @@ namespace BarracksHardcore
         // in KillRewarder, the DUMMY percentage at loot time), so no hook of ours
         // gets a say once it is on. It comes straight back on the way out.
         bool const wantsBadge = IsOptedIn(player->GetGUID().GetCounter()) &&
-            !IsInstancedContent(player);
+            !IsInstancedContent(player) && !Tournament::IsTournamentCharacter(player);
         if (wantsBadge == player->HasAura(s_warModeAuraSpell))
             return; // converged - the overwhelmingly common case
 
@@ -1329,7 +1347,7 @@ namespace BarracksHardcore
     // bot.
     void SweepLooseFieldKitThrottled(Player* player)
     {
-        if (!s_enabled || !player)
+        if (!s_enabled || !player || Tournament::IsTournamentCharacter(player))
             return;
 
         uint64 const rawGuid = player->GetGUID().GetRawValue();
@@ -1388,7 +1406,7 @@ namespace BarracksHardcore
     // those read the very slots being walked.
     uint32 BurnWornFloorGear(Player* player)
     {
-        if (!s_enabled || !player || !KitMayDress(player))
+        if (!s_enabled || !player || !KitMayDress(player) || Tournament::IsTournamentCharacter(player))
             return 0;
 
         std::vector<uint8> burning;
@@ -1417,7 +1435,9 @@ namespace BarracksHardcore
     // equip anything) and at login, so nobody stays bare.
     void IssueWhiteFieldKit(Player* player)
     {
-        if (!s_enabled || !player || !player->IsAlive() || player->IsGameMaster())
+        // Tournament characters lose no gear, so there is nothing to replace -
+        // and a white kit is no part of their loadout.
+        if (!s_enabled || !player || !player->IsAlive() || player->IsGameMaster() || Tournament::IsTournamentCharacter(player))
             return;
 
         // Nothing can be equipped mid-cast, stunned or charmed (CanEquipItem
@@ -1762,6 +1782,11 @@ namespace BarracksHardcore
     void DropFullLootChest(Player* victim)
     {
         if (!s_enabled || !s_chestEntry || !victim || victim->IsGameMaster())
+            return;
+
+        // Tournament characters are exempt from the hardcore death rules: their
+        // gear never drops and nothing is burned.
+        if (Tournament::IsTournamentCharacter(victim))
             return;
 
         if (!IsWorldContext(victim))
@@ -2489,7 +2514,7 @@ public:
         // answer.
         Optional<QuestGiverStatus> GetDialogStatus(Player* player) override
         {
-            if (Notoriety::ShouldOffer(player))
+            if (!Tournament::IsTournamentCharacter(player) && Notoriety::ShouldOffer(player))
                 return DIALOG_STATUS_AVAILABLE;
             return DIALOG_STATUS_NONE;
         }
@@ -2498,6 +2523,13 @@ public:
         {
             if (!player || !quest || quest->GetQuestId() != Notoriety::QuestId())
                 return;
+
+            // No contracts for tournament characters: bounties are not theirs.
+            if (Tournament::IsTournamentCharacter(player))
+            {
+                player->RemoveActiveQuest(quest->GetQuestId(), false);
+                return;
+            }
 
             // No ground, no contract. Leaving it in the log would give the
             // player a delivery with nowhere to deliver it.
@@ -2519,6 +2551,15 @@ public:
         {
             if (!s_enabled)
             {
+                SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me->GetGUID());
+                return true;
+            }
+
+            // War Mode, contracts, kits and bribes all belong to the hardcore
+            // world, which tournament characters are not part of.
+            if (Tournament::IsTournamentCharacter(player))
+            {
+                me->Whisper("I have no business with tournament fighters.", LANG_UNIVERSAL, player);
                 SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me->GetGUID());
                 return true;
             }

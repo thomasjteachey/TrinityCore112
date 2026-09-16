@@ -27,6 +27,8 @@
 #include "Item.h"
 #include "Map.h"
 #include "MapManager.h"
+#include "Miscellaneous/DepletedMarks.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "RBAC.h"
@@ -65,7 +67,6 @@ constexpr uint32 GURUBASHI_BATTLE_RING_AREA_ID = 2177;
 constexpr float GURUBASHI_BATTLE_RING_MAX_Z = 27.0f;
 constexpr uint32 GURUBASHI_CHEST_ENTRY = 179697;
 constexpr uint32 SHADOW_SIGHT_ENTRY = 184663;
-constexpr uint32 LEGIONNAIRE_MARK_OF_HONOR = 20558;
 constexpr uint32 CHROMIE_ENTRY = 10667;
 constexpr uint32 PVP_CONSUMABLE_ITEM_LIMIT_CATEGORY = 5;
 constexpr uint32 TELEPORT_VISUAL_SPELL = 64446;
@@ -128,6 +129,10 @@ bool IsPlayerEligible(Player* player)
     // spawn. This is a scrap between people over one prize; if no person is in
     // the zone there is nothing to scrap over.
     if (BarracksHardcore::IsPlayerbot(player))
+        return false;
+
+    // Opted out on the Battlegrounds tab: not counted, not a summoner.
+    if (player->HasGurubashiChestOptOut())
         return false;
 
     if (player->GetMapId() != GURUBASHI_ARENA_MAP_ID)
@@ -407,6 +412,11 @@ void TeleportStranglethornPlayersToBattleRing()
             if (BarracksHardcore::IsPlayerbot(player))
                 continue;
 
+            // Nor anyone who switched the chest off on the Battlegrounds tab -
+            // a character levelling in Stranglethorn can keep levelling.
+            if (player->HasGurubashiChestOptOut())
+                continue;
+
             if (player->GetMapId() != GURUBASHI_ARENA_MAP_ID || player->GetZoneId() != STRANGLETHORN_VALE_ZONE_ID)
                 continue;
 
@@ -481,16 +491,19 @@ public:
             if (!player)
                 return;
 
+            // The Legionnaire Mark of Honor, whichever item id this realm
+            // gives it (Centurion.Marks.RestoredEntry).
+            uint32 const markEntry = Trinity::Custom::GetRestoredMarkEntry();
             uint32 const rewardCount = GetChestMarkRewardCount();
             ItemPosCountVec dest;
-            if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, LEGIONNAIRE_MARK_OF_HONOR, rewardCount) != EQUIP_ERR_OK)
+            if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, markEntry, rewardCount) != EQUIP_ERR_OK)
             {
                 player->SendEquipError(EQUIP_ERR_INVENTORY_FULL, nullptr, nullptr);
                 me->SetLootState(GO_READY);
                 return;
             }
 
-            if (Item* item = player->StoreNewItem(dest, LEGIONNAIRE_MARK_OF_HONOR, true))
+            if (Item* item = player->StoreNewItem(dest, markEntry, true))
                 player->SendNewItem(item, rewardCount, true, false);
 
             _rewardGranted = true;
@@ -924,6 +937,11 @@ bool IsInPvpConsumableRestoreArea(Player const* player)
     // Gurubashi keeps working with nothing configured, so B+ is unchanged by this.
     if (ShouldTrackGurubashiPlayer(player))
         return true;
+
+    // The configured malls are Legionnaire+'s tournament grounds: on a realm with
+    // character modes only tournament characters are topped up there.
+    if (Tournament::IsEnabled() && !Tournament::IsTournamentCharacter(player))
+        return false;
 
     // The set is rebuilt on the world thread by OnConfigLoad while this is read from
     // whichever map thread owns the player, so the read is locked. It is cheap: the

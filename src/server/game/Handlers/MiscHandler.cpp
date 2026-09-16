@@ -38,6 +38,7 @@
 #include "GuildMgr.h"
 #include "Language.h"
 #include "Log.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "MapManager.h"
 #include "MiscPackets.h"
 #include "Object.h"
@@ -904,7 +905,17 @@ void WorldSession::HandleAreaTriggerOpcode(WorldPacket& recvData)
     }
 
     if (!teleported)
+    {
+        // Tournament characters stay on the tournament grounds (TournamentMode.h).
+        if (Tournament::IsTournamentCharacter(player) && !player->IsGameMaster() &&
+            !Tournament::IsLocationAllowed(at->target_mapId, at->target_X, at->target_Y, at->target_Z))
+        {
+            Tournament::SendRefusal(player, "leave the tournament grounds");
+            return;
+        }
+
         player->TeleportTo(at->target_mapId, at->target_X, at->target_Y, at->target_Z, at->target_Orientation, TELE_TO_NOT_LEAVE_TRANSPORT);
+    }
 }
 
 void WorldSession::HandleUpdateAccountData(WorldPacket& recvData)

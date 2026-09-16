@@ -474,6 +474,12 @@ enum PlayerExtraFlags
     PLAYER_EXTRA_HAS_RACE_CHANGED           = 0x0200,
     PLAYER_EXTRA_GRANTED_LEVELS_FROM_RAF    = 0x0400,
     PLAYER_EXTRA_LEVEL_BOOSTED              = 0x0800,       // reserved for master branch
+
+    // CENTURION character modes, see Miscellaneous/TournamentMode.h. Unlike the
+    // markers above, these survive a load (Player::LoadFromDB restores them).
+    PLAYER_EXTRA_TOURNAMENT_MODE            = 0x1000,       // created as a tournament (Legionnaire+) character
+    PLAYER_EXTRA_TOURNAMENT_QUEUE           = 0x2000,       // world character opted into the tournament battleground queue
+    PLAYER_EXTRA_GURUBASHI_CHEST_OPT_OUT    = 0x4000,       // not counted for, nor pulled into the ring by, the hourly Gurubashi chest
 };
 
 // 2^n values
@@ -1059,6 +1065,14 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void SetBeenGrantedLevelsFromRaF() { m_ExtraFlags |= PLAYER_EXTRA_GRANTED_LEVELS_FROM_RAF; }
         bool HasLevelBoosted() const { return (m_ExtraFlags & PLAYER_EXTRA_LEVEL_BOOSTED) != 0; }
         void SetHasLevelBoosted() { m_ExtraFlags |= PLAYER_EXTRA_LEVEL_BOOSTED; }
+        // Raw flags only. Ask Tournament::IsTournamentCharacter, which also
+        // honours Centurion.Tournament.Enable.
+        bool HasTournamentModeFlag() const { return (m_ExtraFlags & PLAYER_EXTRA_TOURNAMENT_MODE) != 0; }
+        void SetTournamentModeFlag(bool on) { if (on) m_ExtraFlags |= PLAYER_EXTRA_TOURNAMENT_MODE; else m_ExtraFlags &= ~PLAYER_EXTRA_TOURNAMENT_MODE; }
+        bool HasTournamentQueueFlag() const { return (m_ExtraFlags & PLAYER_EXTRA_TOURNAMENT_QUEUE) != 0; }
+        void SetTournamentQueueFlag(bool on) { if (on) m_ExtraFlags |= PLAYER_EXTRA_TOURNAMENT_QUEUE; else m_ExtraFlags &= ~PLAYER_EXTRA_TOURNAMENT_QUEUE; }
+        bool HasGurubashiChestOptOut() const { return (m_ExtraFlags & PLAYER_EXTRA_GURUBASHI_CHEST_OPT_OUT) != 0; }
+        void SetGurubashiChestOptOut(bool on) { if (on) m_ExtraFlags |= PLAYER_EXTRA_GURUBASHI_CHEST_OPT_OUT; else m_ExtraFlags &= ~PLAYER_EXTRA_GURUBASHI_CHEST_OPT_OUT; }
 
         uint32 GetXP() const { return GetUInt32Value(PLAYER_XP); }
         uint32 GetXPForNextLevel() const { return GetUInt32Value(PLAYER_NEXT_LEVEL_XP); }
@@ -1209,6 +1223,9 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void ScheduleUnarmedWaiverSync() { m_unarmedWaiverSyncPending = true; }
         void SyncUnarmedWaiverPassives();
         bool CanNoReagentCast(SpellInfo const* spellInfo) const;
+        // Rebuilds PLAYER_NO_REAGENT_COST from SPELL_AURA_NO_REAGENT_USE auras, or
+        // fills it while reagents are waived (Tournament::IsFreeReagentContext).
+        void UpdateNoReagentCostMask();
         bool HasItemOrGemWithIdEquipped(uint32 item, uint32 count, uint8 except_slot = NULL_SLOT) const;
         bool HasItemWithLimitCategoryEquipped(uint32 limitCategory, uint32 count, uint8 except_slot = NULL_SLOT) const;
         bool HasGemWithLimitCategoryEquipped(uint32 limitCategory, uint32 count, uint8 except_slot = NULL_SLOT) const;

@@ -24,6 +24,7 @@
 #include <unordered_set>
 #include "AccountMgr.h"
 #include "AccountBankMgr.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "AchievementMgr.h"
 #include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
@@ -883,7 +884,19 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
     for (uint8 i = 0; i < PLAYER_SLOTS_COUNT; i++)
         m_items[i] = nullptr;
 
-    Relocate(info->positionX, info->positionY, info->positionZ, info->orientation);
+    // Tournament characters (Centurion.Tournament.*) start on the tournament
+    // grounds at the tournament level, from their own create data, instead of
+    // in their race's start zone.
+    bool const tournament = createInfo->TournamentMode && Tournament::IsEnabled();
+    SetTournamentModeFlag(tournament);
+    Tournament::CreateInfo const* tournamentInfo = tournament ? Tournament::GetCreateInfo(createInfo->Race, createInfo->Class) : nullptr;
+    WorldLocation tournamentHome;
+    bool const tournamentStart = tournament && Tournament::GetStartLocation(createInfo->Race, createInfo->Class, tournamentHome);
+
+    if (tournamentStart)
+        Relocate(tournamentHome);
+    else
+        Relocate(info->positionX, info->positionY, info->positionZ, info->orientation);
 
     ChrClassesEntry const* cEntry = sChrClassesStore.LookupEntry(createInfo->Class);
     if (!cEntry)
@@ -893,7 +906,7 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
         return false;
     }
 
-    SetMap(sMapMgr->CreateMap(info->mapId, this));
+    SetMap(sMapMgr->CreateMap(tournamentStart ? tournamentHome.GetMapId() : info->mapId, this));
 
     uint8 powertype = cEntry->DisplayPower;
 
@@ -959,6 +972,9 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
         ? sWorld->getIntConfig(CONFIG_START_PLAYER_LEVEL)
         : sWorld->getIntConfig(CONFIG_START_DEATH_KNIGHT_PLAYER_LEVEL);
 
+    if (tournament)
+        start_level = std::max<uint32>(start_level, Tournament::GetStartLevel());
+
     if (m_session->HasPermission(rbac::RBAC_PERM_USE_START_GM_LEVEL))
     {
         uint32 gm_level = GetClass() != CLASS_DEATH_KNIGHT
@@ -1019,6 +1035,9 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
                 if (!iProto)
                     continue;
 
+                if (tournamentInfo && std::find(tournamentInfo->RemovedOutfitItems.begin(), tournamentInfo->RemovedOutfitItems.end(), itemId) != tournamentInfo->RemovedOutfitItems.end())
+                    continue;
+
                 // BuyCount by default
                 uint32 count = iProto->BuyCount;
 
@@ -1041,8 +1060,16 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
             }
         }
 
-        for (PlayerCreateInfoItems::const_iterator item_id_itr = info->item.begin(); item_id_itr != info->item.end(); ++item_id_itr)
-            StoreNewItemInBestSlots(item_id_itr->item_id, item_id_itr->item_amount);
+        if (tournamentInfo && tournamentInfo->HasItems)
+        {
+            for (auto const& [itemId, count] : tournamentInfo->Items)
+                StoreNewItemInBestSlots(itemId, count);
+        }
+        else
+        {
+            for (PlayerCreateInfoItems::const_iterator item_id_itr = info->item.begin(); item_id_itr != info->item.end(); ++item_id_itr)
+                StoreNewItemInBestSlots(item_id_itr->item_id, item_id_itr->item_amount);
+        }
 
         // bags and main-hand weapon must equipped at this moment
         // now second pass for not equipped (offhand weapon/shield if it attempt equipped before main-hand weapon)
@@ -2943,6 +2970,12 @@ Creature* Player::GetNPCIfCanInteractWith(ObjectGuid const& guid, NPCFlags npcFl
     if (!creature->IsWithinDistInMap(this, creature->GetCombatReach() + 4.0f))
         return nullptr;
 
+    // Tournament characters (TournamentMode.h): no auction house, no flight
+    // masters, and only the NPCs the realm allows them. Every NPC service goes
+    // through here - gossip, vendors, trainers, bankers, quest givers.
+    if (!Tournament::CanInteractWithCreature(this, creature, npcFlags))
+        return nullptr;
+
     return creature;
 }
 
@@ -2979,6 +3012,11 @@ GameObject* Player::GetGameObjectIfCanInteractWith(ObjectGuid const& guid, Gameo
         return nullptr;
 
     if (go->GetGoType() != type)
+        return nullptr;
+
+    // Every guild bank action - opening the vault, tabs, items, money - asks for
+    // the vault through here. Closed to tournament characters (TournamentMode.h).
+    if (type == GAMEOBJECT_TYPE_GUILD_BANK && !Tournament::CanUseGuildBank(this))
         return nullptr;
 
     return go;
@@ -3365,7 +3403,7 @@ void Player::GiveLevel(uint8 level, bool borrowed /*= false*/)
 
     UpdateAllStats();
 
-    if (sWorld->getBoolConfig(CONFIG_ALWAYS_MAXSKILL)) // Max weapon skill when leveling up
+    if (Tournament::AlwaysMaxWeaponSkill(this)) // Max weapon skill when leveling up
         UpdateWeaponsSkillsToMaxSkillsForLevel();
 
     _ApplyAllLevelScaleItemMods(true);
@@ -4250,7 +4288,7 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
             if (skill_max_value < new_skill_max_value)
                 skill_max_value = new_skill_max_value;
 
-            if (sWorld->getBoolConfig(CONFIG_ALWAYS_MAXSKILL) && !IsProfessionOrRidingSkill(spellLearnSkill->skill))
+            if (Tournament::AlwaysMaxWeaponSkill(this) && !IsProfessionOrRidingSkill(spellLearnSkill->skill))
                 skill_value = skill_max_value;
 
             SetSkill(spellLearnSkill->skill, spellLearnSkill->step, skill_value, skill_max_value);
@@ -5496,7 +5534,7 @@ void Player::ResurrectPlayer(float restore_percent, bool applySickness)
     //Characters from level 11-19 will suffer from one minute of sickness
     //for each level they are above 10.
     //Characters level 20 and up suffer from ten minutes of sickness.
-    int32 startLevel = sWorld->getIntConfig(CONFIG_DEATH_SICKNESS_LEVEL);
+    int32 startLevel = Tournament::GetDeathSicknessLevel(this);
     uint32 resSicknessSpellId = GetResurrectionSicknessSpellId(this);
 
     if (int32(GetLevel()) >= startLevel)
@@ -5794,6 +5832,10 @@ void Player::DurabilityRepairAll(bool takeCost, float discountMod, bool guildBan
     {
         // Handling a repair for guild money case.
         // We have to repair items one by one until the guild bank has enough money available for withdrawal or until all items are repaired.
+
+        // Guild money is the guild bank, which tournament characters do not use.
+        if (!Tournament::CanUseGuildBank(this))
+            return;
 
         Guild* guild = GetGuild();
         if (!guild)
@@ -7094,7 +7136,7 @@ void Player::UpdateSkillsForLevel()
     uint16 maxconfskill = sWorld->GetConfigMaxSkillValue();
     uint32 maxSkill = GetMaxSkillValueForLevel();
 
-    bool alwaysMaxSkill = sWorld->getBoolConfig(CONFIG_ALWAYS_MAX_SKILL_FOR_LEVEL);
+    bool alwaysMaxSkill = Tournament::AlwaysMaxSkillForLevel(this);
 
     for (SkillStatusMap::iterator itr = mSkillStatus.begin(); itr != mSkillStatus.end(); ++itr)
     {
@@ -10028,6 +10070,16 @@ void Player::SendLoot(ObjectGuid guid, LootType loot_type)
 {
     if (ObjectGuid lguid = GetLootGUID())
         m_session->DoLootRelease(lguid);
+
+    // Tournament characters loot nothing in PvE (TournamentMode.h): corpses,
+    // chests, nodes, fishing, skinning, pickpocketing and death chests all come
+    // through here. Refused before any loot is generated, so the corpse or chest
+    // is left exactly as it was for somebody else.
+    if (!Tournament::CanOpenLoot(this, guid))
+    {
+        SendLootRelease(guid);
+        return;
+    }
 
     Loot* loot;
     PermissionTypes permission = ALL_PERMISSION;
@@ -19476,6 +19528,17 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     SetClass(fields[4].GetUInt8());
     SetGender(gender);
 
+    // Character-mode markers are persistent state, not GM toggles, so they are
+    // restored as they were - or the next save would quietly turn a tournament
+    // character back into a world one. Restored this early so the home bind,
+    // OnPlayerBeforeMapLoad, map entry and the first zone update all see them.
+    m_ExtraFlags |= fields[36].GetUInt16() & (PLAYER_EXTRA_TOURNAMENT_MODE | PLAYER_EXTRA_TOURNAMENT_QUEUE | PLAYER_EXTRA_GURUBASHI_CHEST_OPT_OUT);
+
+    // And in the tournament phase before the map is entered, so the first
+    // visibility update already shows the tournament NPCs.
+    if (HasTournamentModeFlag())
+        SetPhaseMask(GetPhaseMask(), false);
+
     // check if race/class combination is valid
     PlayerInfo const* info = sObjectMgr->GetPlayerInfo(GetRace(), GetClass());
     if (!info)
@@ -21589,6 +21652,18 @@ bool Player::_LoadHomeBind(PreparedQueryResult result)
         m_homebindX = info->positionX;
         m_homebindY = info->positionY;
         m_homebindZ = info->positionZ;
+
+        // A tournament character's hearthstone must not point out of the
+        // tournament grounds, so it binds to where tournament characters start.
+        WorldLocation tournamentHome;
+        if (Tournament::IsTournamentCharacter(this) && Tournament::GetStartLocation(GetRace(), GetClass(), tournamentHome))
+        {
+            m_homebindMapId = tournamentHome.GetMapId();
+            m_homebindAreaId = sMapMgr->GetAreaId(PHASEMASK_NORMAL, tournamentHome);
+            m_homebindX = tournamentHome.GetPositionX();
+            m_homebindY = tournamentHome.GetPositionY();
+            m_homebindZ = tournamentHome.GetPositionZ();
+        }
 
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_PLAYER_HOMEBIND);
         stmt->setUInt32(0, GetGUID().GetCounter());
@@ -23772,6 +23847,15 @@ bool Player::ActivateTaxiPathTo(std::vector<uint32> const& nodes, Creature* npc 
     if (nodes.size() < 2)
         return false;
 
+    // Tournament characters never fly (TournamentMode.h) - flight master,
+    // express flight or flight spell alike.
+    if (Tournament::IsTournamentCharacter(this) && !IsGameMaster())
+    {
+        GetSession()->SendActivateTaxiReply(ERR_TAXIUNSPECIFIEDSERVERERROR);
+        Tournament::SendRefusal(this, "use flight masters");
+        return false;
+    }
+
     // not let cheating with start flight in time of logout process || while in combat || has type state: stunned || has type state: root
     if (GetSession()->isLogingOut() || IsInCombat() || HasUnitState(UNIT_STATE_STUNNED) || HasUnitState(UNIT_STATE_ROOT))
     {
@@ -25423,6 +25507,12 @@ void Player::UpdateVisibilityForPlayer()
 
 void Player::SetPhaseMask(uint32 newPhaseMask, bool update)
 {
+    // Tournament characters carry the tournament phase on top of whatever they
+    // are given (Centurion.Tournament.PhaseMask), so the NPCs spawned there
+    // stay theirs through phase auras, GM mode and back.
+    if (newPhaseMask != uint32(PHASEMASK_ANYWHERE))
+        newPhaseMask |= Tournament::GetExtraPhaseMask(this);
+
     if (newPhaseMask == GetPhaseMask())
         return;
 
@@ -25846,7 +25936,9 @@ void Player::ResetNonQuestAndMountSpells()
     std::unordered_set<uint32> mountSpells;
     std::unordered_set<uint32> customSpells;
 
-    if (PlayerInfo const* playerInfo = sObjectMgr->GetPlayerInfo(GetRace(), GetClass()))
+    if (std::vector<uint32> const* tournamentSpells = Tournament::GetCustomSpells(this))
+        customSpells.insert(tournamentSpells->begin(), tournamentSpells->end());
+    else if (PlayerInfo const* playerInfo = sObjectMgr->GetPlayerInfo(GetRace(), GetClass()))
         customSpells.insert(playerInfo->customSpells.begin(), playerInfo->customSpells.end());
 
     // Preserve mount spells explicitly so class spell pruning does not remove them.
@@ -25945,7 +26037,10 @@ void Player::LearnCustomSpells()
     // learn default race/class spells
     PlayerInfo const* info = sObjectMgr->GetPlayerInfo(GetRace(), GetClass());
     ASSERT(info);
-    for (PlayerCreateInfoSpells::const_iterator itr = info->customSpells.begin(); itr != info->customSpells.end(); ++itr)
+    // Tournament characters are taught their own list (Legionnaire+'s).
+    std::vector<uint32> const* tournamentSpells = Tournament::GetCustomSpells(this);
+    PlayerCreateInfoSpells const& customSpells = tournamentSpells ? *tournamentSpells : info->customSpells;
+    for (PlayerCreateInfoSpells::const_iterator itr = customSpells.begin(); itr != customSpells.end(); ++itr)
     {
         uint32 tspell = *itr;
         TC_LOG_DEBUG("entities.player.loading", "Player::LearnCustomSpells: Player '{}' ({}, Class: {} Race: {}): Adding initial spell (SpellID: {})",
@@ -26040,7 +26135,7 @@ void Player::LearnDefaultSkill(uint32 skillId, uint16 rank)
     {
         uint16 skillValue = 1;
         uint16 maxValue = GetMaxSkillValueForLevel();
-        if (sWorld->getBoolConfig(CONFIG_ALWAYS_MAXSKILL) && !IsProfessionOrRidingSkill(skillId))
+        if (Tournament::AlwaysMaxWeaponSkill(this) && !IsProfessionOrRidingSkill(skillId))
             skillValue = maxValue;
         else if (rcInfo->Flags & SKILL_FLAG_ALWAYS_MAX_VALUE)
             skillValue = maxValue;
@@ -26613,6 +26708,15 @@ void Player::SendSummonRequestFrom(Unit* summoner)
     if (HasAura(23445))
         return;
 
+    // Tournament characters cannot be summoned (TournamentMode.h). Spell casts
+    // are already refused in Spell::CheckCast; this catches every other path.
+    if (Tournament::IsTournamentCharacter(this))
+    {
+        if (Player const* summonerPlayer = summoner->ToPlayer())
+            Tournament::SendRefusal(summonerPlayer, "be summoned");
+        return;
+    }
+
     m_summon_expire = GameTime::GetGameTime() + MAX_PLAYER_SUMMON_DELAY;
     m_summon_location.WorldRelocate(*summoner);
 
@@ -26866,6 +26970,12 @@ bool Player::IsWeaponRequirementWaived(SpellInfo const* spellInfo) const
 
 bool Player::CanNoReagentCast(SpellInfo const* spellInfo) const
 {
+    // Combat spells cost no reagents in battlegrounds, arenas and duels in
+    // progress (Centurion.Pvp.WaiveReagentsAndAmmo). This covers both the
+    // requirement (Spell::CheckItems) and the consumption (Spell::TakeReagents).
+    if (Tournament::IsReagentWaived(this, spellInfo))
+        return true;
+
     // don't take reagents for spells with SPELL_ATTR5_NO_REAGENT_WHILE_PREP
     if (spellInfo->HasAttribute(SPELL_ATTR5_NO_REAGENT_WHILE_PREP) &&
         HasUnitFlag(UNIT_FLAG_PREPARATION))
@@ -26880,6 +26990,24 @@ bool Player::CanNoReagentCast(SpellInfo const* spellInfo) const
         return true;
 
     return false;
+}
+
+// The client checks reagents on its own before a cast ever reaches the server,
+// so a waiver the server alone knows about would still be refused with "Missing
+// reagent". While the waiver applies the mask covers every class spell; outside
+// it the mask is the auras' own again.
+void Player::UpdateNoReagentCostMask()
+{
+    flag96 mask;
+    if (Tournament::IsFreeReagentContext(this))
+        mask = flag96(0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
+    else
+        for (AuraEffect const* effect : GetAuraEffectsByType(SPELL_AURA_NO_REAGENT_USE))
+            mask |= effect->GetSpellEffectInfo().SpellClassMask;
+
+    for (uint8 i = 0; i < 3; ++i)
+        if (GetUInt32Value(PLAYER_NO_REAGENT_COST_1 + i) != mask[i])
+            SetUInt32Value(PLAYER_NO_REAGENT_COST_1 + i, mask[i]);
 }
 
 void Player::RemoveItemDependentAurasAndCasts(Item* pItem)

@@ -3,6 +3,7 @@
 #include "BattlegroundQueue.h"
 #include "Group.h"
 #include "GroupReference.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "ScriptedCreature.h"
@@ -107,6 +108,10 @@ bool QueueGroup(Player* leader, Group* group, BattlegroundTypeId bgTypeId, uint3
         if (!member || member->IsInCustomGameLobby() || !member->GetBGAccessByLevel(bgTypeId) ||
             !member->HasFreeBattlegroundQueueId() ||
             member->GetBattlegroundQueueIndex(queueTypeId) < PLAYER_MAX_BATTLEGROUND_QUEUES)
+            return false;
+
+        // The tournament and world queue pools never share a match.
+        if (Tournament::QueuesInTournamentPool(member) != Tournament::QueuesInTournamentPool(leader))
             return false;
     }
 

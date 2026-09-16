@@ -21,6 +21,7 @@
 #include "Creature.h"
 #include "DatabaseEnv.h"
 #include "Item.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "Bag.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
@@ -262,8 +263,9 @@ namespace
         if (!session)
             return false;
 
+        uint32 const storageAccountId = GetStorageAccountId(player);
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_BANK_ITEM_FULL);
-        stmt->setUInt32(0, session->GetAccountId());
+        stmt->setUInt32(0, storageAccountId);
 
         PreparedQueryResult result = CharacterDatabase.Query(stmt);
         if (!result)
@@ -278,7 +280,7 @@ namespace
             if (slot >= MAX_SLOTS)
             {
                 CharacterDatabasePreparedStatement* deleteStmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_ACCOUNT_BANK_ITEM);
-                deleteStmt->setUInt32(0, session->GetAccountId());
+                deleteStmt->setUInt32(0, storageAccountId);
                 deleteStmt->setUInt16(1, slot);
                 CharacterDatabase.Execute(deleteStmt);
                 continue;
@@ -291,7 +293,7 @@ namespace
             if (!proto)
             {
                 CharacterDatabasePreparedStatement* deleteStmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_ACCOUNT_BANK_ITEM);
-                deleteStmt->setUInt32(0, session->GetAccountId());
+                deleteStmt->setUInt32(0, storageAccountId);
                 deleteStmt->setUInt16(1, slot);
                 CharacterDatabase.Execute(deleteStmt);
                 continue;
@@ -301,7 +303,7 @@ namespace
             if (!item->LoadFromDB(itemGuid, ObjectGuid::Empty, itemFields, itemEntry))
             {
                 CharacterDatabasePreparedStatement* deleteStmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_ACCOUNT_BANK_ITEM);
-                deleteStmt->setUInt32(0, session->GetAccountId());
+                deleteStmt->setUInt32(0, storageAccountId);
                 deleteStmt->setUInt16(1, slot);
                 CharacterDatabase.Execute(deleteStmt);
                 delete item;
@@ -344,7 +346,7 @@ namespace
         if (!session)
             return;
 
-        uint32 const accountId = session->GetAccountId();
+        uint32 const accountId = GetStorageAccountId(player);
         CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
 
         CharacterDatabasePreparedStatement* clearStmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_ACCOUNT_BANK_ITEMS_BY_ACCOUNT);
@@ -385,12 +387,27 @@ namespace
         if (player && IsAccountBankOpen(player))
         {
             if (handler)
-                handler->PSendSysMessage("Close the account bank NPC before using account bank chat commands.");
+                handler->PSendSysMessage("Close the %s NPC before using account bank chat commands.", GetBankName(player));
             return false;
         }
 
         return true;
     }
+}
+
+uint32 GetStorageAccountId(Player const* player)
+{
+    WorldSession const* session = player ? player->GetSession() : nullptr;
+    if (!session)
+        return 0;
+
+    uint32 const accountId = session->GetAccountId();
+    return Tournament::IsTournamentCharacter(player) ? (accountId | TOURNAMENT_BANK_ACCOUNT_FLAG) : accountId;
+}
+
+char const* GetBankName(Player const* player)
+{
+    return Tournament::IsTournamentCharacter(player) ? "tournament bank" : "account bank";
 }
 
 bool IsDepositable(Item const* item)
@@ -410,17 +427,18 @@ bool List(ChatHandler* handler)
     if (!EnsureCommandAllowed(session->GetPlayer(), handler))
         return false;
 
+    Player const* player = session->GetPlayer();
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_BANK_ITEMS);
-    stmt->setUInt32(0, session->GetAccountId());
+    stmt->setUInt32(0, GetStorageAccountId(player));
 
     PreparedQueryResult result = CharacterDatabase.Query(stmt);
     if (!result)
     {
-        handler->PSendSysMessage("Account bank is empty (0/%u slots used).", MAX_SLOTS);
+        handler->PSendSysMessage("Your %s is empty (0/%u slots used).", GetBankName(player), MAX_SLOTS);
         return true;
     }
 
-    handler->PSendSysMessage("Account bank contents:");
+    handler->PSendSysMessage("Your %s contains:", GetBankName(player));
     uint32 used = 0;
     do
     {
@@ -458,10 +476,11 @@ bool Deposit(ChatHandler* handler, Player* player, Item* item)
     if (!session)
         return false;
 
-    Optional<uint16> freeSlot = GetFreeSlot(session->GetAccountId());
+    uint32 const storageAccountId = GetStorageAccountId(player);
+    Optional<uint16> freeSlot = GetFreeSlot(storageAccountId);
     if (!freeSlot)
     {
-        handler->PSendSysMessage("Account bank is full (%u slots).", MAX_SLOTS);
+        handler->PSendSysMessage("Your %s is full (%u slots).", GetBankName(player), MAX_SLOTS);
         return false;
     }
 
@@ -485,7 +504,7 @@ bool Deposit(ChatHandler* handler, Player* player, Item* item)
     item->SaveToDB(trans);
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_ACCOUNT_BANK_ITEM);
-    stmt->setUInt32(0, session->GetAccountId());
+    stmt->setUInt32(0, storageAccountId);
     stmt->setUInt16(1, *freeSlot);
     stmt->setUInt32(2, itemGuid);
     trans->Append(stmt);
@@ -493,7 +512,7 @@ bool Deposit(ChatHandler* handler, Player* player, Item* item)
     player->SaveInventoryAndGoldToDB(trans);
     CharacterDatabase.CommitTransaction(trans);
 
-    handler->PSendSysMessage("Deposited %s into account bank slot %u.", itemName.c_str(), *freeSlot);
+    handler->PSendSysMessage("Deposited %s into %s slot %u.", itemName.c_str(), GetBankName(player), *freeSlot);
     delete item;
     return true;
 }
@@ -510,8 +529,9 @@ bool Withdraw(ChatHandler* handler, Player* player, uint16 slot)
     if (!session)
         return false;
 
+    uint32 const storageAccountId = GetStorageAccountId(player);
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_BANK_ITEM_DATA);
-    stmt->setUInt32(0, session->GetAccountId());
+    stmt->setUInt32(0, storageAccountId);
     stmt->setUInt16(1, slot);
 
     PreparedQueryResult result = CharacterDatabase.Query(stmt);
@@ -529,7 +549,7 @@ bool Withdraw(ChatHandler* handler, Player* player, uint16 slot)
     {
         handler->PSendSysMessage("Item template %u is invalid, removing entry.", itemEntry);
         CharacterDatabasePreparedStatement* deleteStmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_ACCOUNT_BANK_ITEM);
-        deleteStmt->setUInt32(0, session->GetAccountId());
+        deleteStmt->setUInt32(0, storageAccountId);
         deleteStmt->setUInt16(1, slot);
         CharacterDatabase.Execute(deleteStmt);
         return true;
@@ -540,7 +560,7 @@ bool Withdraw(ChatHandler* handler, Player* player, uint16 slot)
     {
         handler->PSendSysMessage("Stored item data is invalid, removing entry.");
         CharacterDatabasePreparedStatement* deleteStmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_ACCOUNT_BANK_ITEM);
-        deleteStmt->setUInt32(0, session->GetAccountId());
+        deleteStmt->setUInt32(0, storageAccountId);
         deleteStmt->setUInt16(1, slot);
         CharacterDatabase.Execute(deleteStmt);
         delete item;
@@ -557,14 +577,14 @@ bool Withdraw(ChatHandler* handler, Player* player, uint16 slot)
     }
 
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-    RemoveStoredItem(session->GetAccountId(), slot, trans);
+    RemoveStoredItem(storageAccountId, slot, trans);
 
     item->SetOwnerGUID(player->GetGUID());
     player->MoveItemToInventory(dest, item, true);
     player->SaveInventoryAndGoldToDB(trans);
     CharacterDatabase.CommitTransaction(trans);
 
-    handler->PSendSysMessage("Withdrew %s from account bank slot %u.", proto->Name1.c_str(), slot);
+    handler->PSendSysMessage("Withdrew %s from %s slot %u.", proto->Name1.c_str(), GetBankName(player), slot);
     return true;
 }
 

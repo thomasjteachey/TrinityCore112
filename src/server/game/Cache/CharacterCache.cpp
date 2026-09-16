@@ -73,7 +73,7 @@ void CharacterCache::LoadCharacterCacheStorage()
     _characterCacheStore.clear();
     uint32 oldMSTime = getMSTime();
 
-    QueryResult result = CharacterDatabase.Query("SELECT guid, name, account, race, gender, class, level FROM characters");
+    QueryResult result = CharacterDatabase.Query("SELECT guid, name, account, race, gender, class, level, extra_flags FROM characters");
     if (!result)
     {
         TC_LOG_INFO("server.loading", "No character name data loaded, empty query");
@@ -83,8 +83,11 @@ void CharacterCache::LoadCharacterCacheStorage()
     do
     {
         Field* fields = result->Fetch();
-        AddCharacterCacheEntry(ObjectGuid::Create<HighGuid::Player>(fields[0].GetUInt32()) /*guid*/, fields[2].GetUInt32() /*account*/, fields[1].GetString() /*name*/,
+        ObjectGuid const guid = ObjectGuid::Create<HighGuid::Player>(fields[0].GetUInt32());
+        AddCharacterCacheEntry(guid, fields[2].GetUInt32() /*account*/, fields[1].GetString() /*name*/,
             fields[4].GetUInt8() /*gender*/, fields[3].GetUInt8() /*race*/, fields[5].GetUInt8() /*class*/, fields[6].GetUInt8() /*level*/);
+        if (fields[7].GetUInt16() & PLAYER_EXTRA_TOURNAMENT_MODE)
+            UpdateCharacterTournamentMode(guid, true);
     } while (result->NextRow());
 
     TC_LOG_INFO("server.loading", "Loaded character infos for {} characters in {} ms", _characterCacheStore.size(), GetMSTimeDiffToNow(oldMSTime));
@@ -107,6 +110,7 @@ void CharacterCache::AddCharacterCacheEntry(ObjectGuid const& guid, uint32 accou
     data.GuildId = 0;                           // Will be set in guild loading or guild setting
     for (uint8 i = 0; i < MAX_ARENA_SLOT; ++i)
         data.ArenaTeamId[i] = 0;                // Will be set in arena teams loading
+    data.TournamentMode = false;                // Will be set by UpdateCharacterTournamentMode
 
     // Transient copies need GUID-to-name query data, but may intentionally use
     // the same visible name as their source character. Do not replace the real
@@ -267,6 +271,24 @@ std::vector<ObjectGuid> CharacterCache::GetCharacterGuidsByAccountIds(std::vecto
             characterGuids.push_back(guid);
 
     return characterGuids;
+}
+
+void CharacterCache::UpdateCharacterTournamentMode(ObjectGuid const& guid, bool tournament)
+{
+    auto itr = _characterCacheStore.find(guid);
+    if (itr == _characterCacheStore.end())
+        return;
+
+    itr->second.TournamentMode = tournament;
+}
+
+bool CharacterCache::IsTournamentCharacterByGuid(ObjectGuid guid) const
+{
+    auto itr = _characterCacheStore.find(guid);
+    if (itr == _characterCacheStore.end())
+        return false;
+
+    return itr->second.TournamentMode;
 }
 
 uint8 CharacterCache::GetCharacterLevelByGuid(ObjectGuid guid) const

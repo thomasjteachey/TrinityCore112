@@ -30,6 +30,7 @@
 #include "LFGScripts.h"
 #include "LFGQueue.h"
 #include "Log.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "Map.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
@@ -443,6 +444,8 @@ void LFGMgr::JoinLfg(Player* player, uint8 roles, LfgDungeonSet& dungeons, const
         joinData.result = LFG_JOIN_NOT_MEET_REQS;
     else if (player->HasAura(9454)) // check Freeze debuff
         joinData.result = LFG_JOIN_NOT_MEET_REQS;
+    else if (Tournament::IsTournamentCharacter(player)) // no dungeons for tournament characters
+        joinData.result = LFG_JOIN_NOT_MEET_REQS;
     else if (grp)
     {
         if (grp->GetMembersCount() > MAX_GROUP_SIZE)
@@ -463,6 +466,8 @@ void LFGMgr::JoinLfg(Player* player, uint8 roles, LfgDungeonSet& dungeons, const
                     else if (plrg->InBattleground() || plrg->InArena() || plrg->InBattlegroundQueue())
                         joinData.result = LFG_JOIN_USING_BG_SYSTEM;
                     else if (plrg->HasAura(9454)) // check Freeze debuff
+                        joinData.result = LFG_JOIN_PARTY_NOT_MEET_REQS;
+                    else if (Tournament::IsTournamentCharacter(plrg)) // no dungeons for tournament characters
                         joinData.result = LFG_JOIN_PARTY_NOT_MEET_REQS;
                     ++memberCount;
                     players.insert(plrg->GetGUID());

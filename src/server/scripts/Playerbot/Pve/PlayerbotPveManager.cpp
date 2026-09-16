@@ -19,6 +19,7 @@
 #include "GuildMgr.h"
 #include "Custom/custom_barracks_hardcore.h"
 #include "Playerbot/Pve/PlayerbotPveManager.h"
+#include "Miscellaneous/TournamentMode.h"
 
 #include "Playerbot/Pvp/PlayerbotPvpClassActions.h"
 #include "Playerbot/Pvp/PlayerbotPvpCore.h"
@@ -17976,6 +17977,11 @@ namespace playerbot
             if (!human || !human->IsInWorld() || playerbot::IsManagedRandomBot(human))
                 continue;
 
+            // Drifters keep the world company; tournament characters are not
+            // in it, and every bot ignores them.
+            if (Tournament::IsTournamentCharacter(human))
+                continue;
+
             uint64 const humanGuid = human->GetGUID().GetRawValue();
             online.insert(humanGuid);
             auto& settled = s_humanZoneSince[humanGuid];
@@ -18544,7 +18550,10 @@ namespace playerbot
                 // how a timid bot knows where not to go, and how the zone knows
                 // it has people in it. Only the paths that send a bot AT them
                 // read this flag.
-                bool const huntable = bounty > 0 || BarracksHardcore::IsWarModeOptedIn(human);
+                //
+                // Never a tournament character: every bot ignores them.
+                bool const huntable = (bounty > 0 || BarracksHardcore::IsWarModeOptedIn(human)) &&
+                    !Tournament::IsTournamentCharacter(human);
 
                 spots.push_back({ human->GetGUID(), human->GetMapId(), human->GetZoneId(), human->GetLevel(),
                     human->GetPositionX(), human->GetPositionY(), human->GetPositionZ(), slotsFree, bounty,

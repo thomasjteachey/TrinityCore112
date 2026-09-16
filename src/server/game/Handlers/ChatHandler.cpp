@@ -36,6 +36,7 @@
 #include "GuildMgr.h"
 #include "Language.h"
 #include "Log.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "MotionMaster.h"
@@ -450,6 +451,8 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
         if (HandleWSGFlagSyncRequest(sender, type, lang, msg))
             return;
         if (HandleCustomGameRulesRequest(sender, type, lang, msg))
+            return;
+        if (Tournament::HandleAddonRequest(sender, lang, msg))
             return;
         if (ClientTweaksAttest::HandleToken(sender, type, lang, msg))
             return;

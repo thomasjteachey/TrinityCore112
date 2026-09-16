@@ -39,6 +39,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "Metric.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "MotionMaster.h"
 #include "ObjectAccessor.h"
 #include "StringFormat.h"
@@ -291,6 +292,15 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
              >> createInfo->HairColor
              >> createInfo->FacialHair
              >> createInfo->OutfitId;
+
+    // The tournament-mode checkbox on the character-create screen. Glue cannot
+    // add a field to CMSG_CHAR_CREATE - the client hard-codes the outfit byte and
+    // validates the name before sending - but it does send the name's letter
+    // case exactly as typed, and normalizePlayerName below discards case anyway.
+    // So the Centurion glue sends a tournament character's name as "eLGROM",
+    // a shape nobody types, and it is normalized back to "Elgrom" as usual.
+    // Must be read here, before the normalization.
+    createInfo->TournamentMode = Tournament::IsEnabled() && Tournament::IsTournamentNameMarker(createInfo->Name);
 
     if (!HasPermission(rbac::RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_TEAMMASK))
     {
@@ -637,7 +647,11 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
                 {
                     TC_LOG_DEBUG("entities.player.character", "Account: {} (IP: {}) Creation transaction committed for {} {}, invoking createCopyOfChar.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
 
-                    if (CharacterDatabasePreparedStatement* copyStmt = CharacterDatabase.GetPreparedStatement(CHAR_CALL_CREATE_COPY_OF_CHAR))
+                    // Tournament characters are built from the template
+                    // characters instead (Legionnaire+'s createCopyOfChar).
+                    if (newChar->HasTournamentModeFlag() && Tournament::IsEnabled())
+                        Tournament::RunKitProcedure(newChar.get());
+                    else if (CharacterDatabasePreparedStatement* copyStmt = CharacterDatabase.GetPreparedStatement(CHAR_CALL_CREATE_COPY_OF_CHAR))
                     {
                         copyStmt->setUInt8(0, newChar->GetClass());
                         copyStmt->setUInt8(1, newChar->GetRace());
@@ -655,6 +669,8 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
                     TC_LOG_INFO("entities.player.character", "Account: {} (IP: {}) Create Character: {} {}", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
                     sScriptMgr->OnPlayerCreate(newChar.get());
                     sCharacterCache->AddCharacterCacheEntry(newChar->GetGUID(), GetAccountId(), newChar->GetName(), newChar->GetNativeGender(), newChar->GetRace(), newChar->GetClass(), newChar->GetLevel());
+                    if (newChar->HasTournamentModeFlag())
+                        sCharacterCache->UpdateCharacterTournamentMode(newChar->GetGUID(), true);
                     SendCharCreate(CHAR_CREATE_SUCCESS);
                 }
                 else

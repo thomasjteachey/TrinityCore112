@@ -37,6 +37,7 @@
 #include "Item.h"
 #include "Log.h"
 #include "Map.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "MotionMaster.h"
 #include "MoveSpline.h"
 #include "Opcodes.h"
@@ -1378,7 +1379,13 @@ HumanPopulationMetrics CollectHumanPopulationMetrics(ManagedBotAccountIds const&
         if (!IsRealHumanForPopulation(player, botAccounts))
             continue;
 
+        // A tournament character still takes its share of the world budget -
+        // it is a login like any other - but draws no bots to its zone: they
+        // ignore it.
         ++metrics.total;
+        if (Tournament::IsTournamentCharacter(player))
+            continue;
+
         if (uint32 const zoneId = player->GetZoneId())
             metrics.zones.insert(zoneId);
     }
@@ -1407,6 +1414,11 @@ bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType, Mana
         WorldSession const* session = participant->GetSession();
         bool const isVirtualSession = session && session->IsVirtualSession();
         if (isVirtualSession || IsManagedRandomBotImpl(participant, botAccounts))
+            continue;
+
+        // The fleet queues in the world pool; somebody in the tournament pool
+        // can never be matched with it.
+        if (Tournament::QueuesInTournamentPool(participant))
             continue;
 
         if (participant->InBattleground() && participant->GetBattlegroundTypeId() == targetBgType &&

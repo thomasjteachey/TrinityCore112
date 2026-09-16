@@ -26,6 +26,7 @@
 #include "Group.h"
 #include "Language.h"
 #include "Log.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "WorldSession.h"
@@ -339,6 +340,10 @@ GroupQueueInfo* BattlegroundQueue::AddGroup(Player* leader, Group* grp, Battlegr
     ginfo->PreviousOpponentsTeamId = PreviousOpponentsArenaTeamId;
     ginfo->OpponentsTeamRating = 0;
     ginfo->OpponentsMatchmakerRating = 0;
+    // Captured once, from the leader: Group::CanJoinBattlegroundQueue refuses a
+    // party that straddles the pools, and the opt-in cannot be toggled while
+    // queued, so nothing later moves a group from one pool to the other.
+    ginfo->TournamentPool = Tournament::QueuesInTournamentPool(leader);
 
     // For battlegrounds we use synthetic queue sides instead of the player's real faction.
     // This keeps the first waiting team on one side and pushes the next waiting team to the
@@ -360,7 +365,8 @@ GroupQueueInfo* BattlegroundQueue::AddGroup(Player* leader, Group* grp, Battlegr
 
         for (GroupsQueueType::const_iterator itr = m_QueuedGroups[bracketId][allianceIndex].begin(); itr != m_QueuedGroups[bracketId][allianceIndex].end(); ++itr)
         {
-            if ((*itr)->IsInvitedToBGInstanceGUID)
+            // Only groups this one can be matched with count toward its side.
+            if ((*itr)->IsInvitedToBGInstanceGUID || (*itr)->TournamentPool != ginfo->TournamentPool)
                 continue;
 
             alliancePlayers += (*itr)->Players.size();
@@ -369,7 +375,7 @@ GroupQueueInfo* BattlegroundQueue::AddGroup(Player* leader, Group* grp, Battlegr
 
         for (GroupsQueueType::const_iterator itr = m_QueuedGroups[bracketId][hordeIndex].begin(); itr != m_QueuedGroups[bracketId][hordeIndex].end(); ++itr)
         {
-            if ((*itr)->IsInvitedToBGInstanceGUID)
+            if ((*itr)->IsInvitedToBGInstanceGUID || (*itr)->TournamentPool != ginfo->TournamentPool)
                 continue;
 
             hordePlayers += (*itr)->Players.size();
@@ -400,7 +406,7 @@ GroupQueueInfo* BattlegroundQueue::AddGroup(Player* leader, Group* grp, Battlegr
                 if (!bg)
                     continue;
 
-                if (bg->GetBracketId() != bracketId)
+                if (bg->GetBracketId() != bracketId || bg->IsTournamentPool() != ginfo->TournamentPool)
                     continue;
 
                 uint32 const allianceFree = bg->GetFreeSlotsForTeam(ALLIANCE);
@@ -717,6 +723,10 @@ uint32 BattlegroundQueue::GetPlayersInQueue(TeamId id)
 
 bool BattlegroundQueue::InviteGroupToBG(GroupQueueInfo* ginfo, Battleground* bg, uint32 side)
 {
+    // Never across the queue pools, whatever path got here.
+    if (bg && ginfo->TournamentPool != bg->IsTournamentPool())
+        return false;
+
     // set side if needed
     if (side)
         ginfo->Team = side;
@@ -813,7 +823,7 @@ void BattlegroundQueue::FillPlayersToBG(Battleground* bg, BattlegroundBracketId 
     uint32 aliIndex = 0;
     for (; aliIndex < aliCount; aliIndex++)
     {
-        if ((*Ali_itr)->IsInvitedToBGInstanceGUID)
+        if ((*Ali_itr)->IsInvitedToBGInstanceGUID || !InActivePool(*Ali_itr))
         {
             ++Ali_itr;
             continue;
@@ -867,7 +877,7 @@ void BattlegroundQueue::FillPlayersToBG(Battleground* bg, BattlegroundBracketId 
     uint32 hordeIndex = 0;
     for (; hordeIndex < hordeCount; hordeIndex++)
     {
-        if ((*Horde_itr)->IsInvitedToBGInstanceGUID)
+        if ((*Horde_itr)->IsInvitedToBGInstanceGUID || !InActivePool(*Horde_itr))
         {
             ++Horde_itr;
             continue;
@@ -932,11 +942,15 @@ bool BattlegroundQueue::CheckPremadeMatch(BattlegroundBracketId bracket_id, uint
         //start premade match
         //if groups aren't invited
         GroupsQueueType::const_iterator ali_group, horde_group;
+        // The first waiting premade of THIS pool on each side. It has to be
+        // filtered here, not only by the selection pools below: a first premade
+        // from the other pool would leave both pools empty, and an empty
+        // "match" still returns true and creates a battleground.
         for (ali_group = m_QueuedGroups[bracket_id][BG_QUEUE_PREMADE_ALLIANCE].begin(); ali_group != m_QueuedGroups[bracket_id][BG_QUEUE_PREMADE_ALLIANCE].end(); ++ali_group)
-            if (!(*ali_group)->IsInvitedToBGInstanceGUID)
+            if (!(*ali_group)->IsInvitedToBGInstanceGUID && InActivePool(*ali_group))
                 break;
         for (horde_group = m_QueuedGroups[bracket_id][BG_QUEUE_PREMADE_HORDE].begin(); horde_group != m_QueuedGroups[bracket_id][BG_QUEUE_PREMADE_HORDE].end(); ++horde_group)
-            if (!(*horde_group)->IsInvitedToBGInstanceGUID)
+            if (!(*horde_group)->IsInvitedToBGInstanceGUID && InActivePool(*horde_group))
                 break;
 
         if (ali_group != m_QueuedGroups[bracket_id][BG_QUEUE_PREMADE_ALLIANCE].end() && horde_group != m_QueuedGroups[bracket_id][BG_QUEUE_PREMADE_HORDE].end())
@@ -951,7 +965,7 @@ bool BattlegroundQueue::CheckPremadeMatch(BattlegroundBracketId bracket_id, uint
                 for (itr = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_ALLIANCE + i].begin(); itr != m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_ALLIANCE + i].end(); ++itr)
                 {
                     //if itr can join BG and player count is less that maxPlayers, then add group to selectionpool
-                    if (!(*itr)->IsInvitedToBGInstanceGUID && !m_SelectionPools[i].AddGroup((*itr), maxPlayers, TEAM_ALLIANCE + i))
+                    if (!(*itr)->IsInvitedToBGInstanceGUID && InActivePool(*itr) && !m_SelectionPools[i].AddGroup((*itr), maxPlayers, TEAM_ALLIANCE + i))
                         break;
                 }
             }
@@ -990,7 +1004,7 @@ bool BattlegroundQueue::CheckNormalMatch(Battleground* bg_template, Battleground
         itr_team[i] = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_ALLIANCE + i].begin();
         for (; itr_team[i] != m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_ALLIANCE + i].end(); ++(itr_team[i]))
         {
-            if (!(*(itr_team[i]))->IsInvitedToBGInstanceGUID)
+            if (!(*(itr_team[i]))->IsInvitedToBGInstanceGUID && InActivePool(*(itr_team[i])))
             {
                 m_SelectionPools[i].AddGroup(*(itr_team[i]), maxPlayers, TEAM_ALLIANCE + i);
                 if (m_SelectionPools[i].GetPlayerCount() >= minPlayers)
@@ -1009,7 +1023,7 @@ bool BattlegroundQueue::CheckNormalMatch(Battleground* bg_template, Battleground
         ++(itr_team[j]);                                         //this will not cause a crash, because for cycle above reached break;
         for (; itr_team[j] != m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_ALLIANCE + j].end(); ++(itr_team[j]))
         {
-            if (!(*(itr_team[j]))->IsInvitedToBGInstanceGUID)
+            if (!(*(itr_team[j]))->IsInvitedToBGInstanceGUID && InActivePool(*(itr_team[j])))
                 if (!m_SelectionPools[j].AddGroup(*(itr_team[j]), m_SelectionPools[(j + 1) % PVP_TEAMS_COUNT].GetPlayerCount(), TEAM_ALLIANCE + j))
                     break;
         }
@@ -1055,7 +1069,7 @@ bool BattlegroundQueue::CheckSkirmishForSameFaction(BattlegroundBracketId bracke
     for (; itr_team2 != m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_ALLIANCE + teamIndex].end(); ++itr_team2)
     {
         //if selection pool is full then break;
-        if (!(*itr_team2)->IsInvitedToBGInstanceGUID && !m_SelectionPools[otherTeam].AddGroup(*itr_team2, minPlayersPerTeam, TEAM_ALLIANCE + teamIndex))
+        if (!(*itr_team2)->IsInvitedToBGInstanceGUID && InActivePool(*itr_team2) && !m_SelectionPools[otherTeam].AddGroup(*itr_team2, minPlayersPerTeam, TEAM_ALLIANCE + teamIndex))
             break;
     }
     if (m_SelectionPools[otherTeam].GetPlayerCount() != minPlayersPerTeam)
@@ -1107,7 +1121,7 @@ bool BattlegroundQueue::TryStartBotFilledMatch(BattlegroundTypeId bgTypeId, PvPD
     {
         for (GroupQueueInfo* ginfo : m_QueuedGroups[bracket_id][queueIndex])
         {
-            if (ginfo->IsInvitedToBGInstanceGUID || ginfo->IsRated ||
+            if (ginfo->IsInvitedToBGInstanceGUID || ginfo->IsRated || !InActivePool(ginfo) ||
                 (arenaType && ginfo->ArenaType != arenaType) || !GroupHasRealPlayerInvitee(ginfo))
                 continue;
 
@@ -1144,6 +1158,7 @@ bool BattlegroundQueue::TryStartBotFilledMatch(BattlegroundTypeId bgTypeId, PvPD
     // Flagged before anyone is invited so the first person's entry is
     // accounted as a human's under the bot-fill reading of the roster.
     bg->SetBotFillMatch(true);
+    bg->SetTournamentPool(m_ActiveTournamentPool);
 
     for (uint32 i = 0; i < PVP_TEAMS_COUNT; ++i)
         for (GroupQueueInfo* ginfo : m_SelectionPools[TEAM_ALLIANCE + i].SelectedGroups)
@@ -1175,6 +1190,34 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
         m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_HORDE].empty())
         return;
 
+    // One full matching pass per queue pool, world first. A pool with nobody
+    // waiting has nothing to invite, refill or start, so it is skipped - which
+    // on a realm without tournament characters leaves exactly one pass, as before.
+    for (bool const tournamentPool : { false, true })
+    {
+        if (!HasWaitingGroupsInPool(bracket_id, tournamentPool))
+            continue;
+
+        m_ActiveTournamentPool = tournamentPool;
+        UpdatePool(bgTypeId, bracket_id, arenaType, isRated, arenaRating);
+    }
+
+    m_ActiveTournamentPool = false;
+}
+
+bool BattlegroundQueue::HasWaitingGroupsInPool(BattlegroundBracketId bracket_id, bool tournamentPool) const
+{
+    for (uint32 queueIndex = BG_QUEUE_PREMADE_ALLIANCE; queueIndex < BG_QUEUE_GROUP_TYPES_COUNT; ++queueIndex)
+        for (GroupQueueInfo const* ginfo : m_QueuedGroups[bracket_id][queueIndex])
+            if (!ginfo->IsInvitedToBGInstanceGUID && ginfo->TournamentPool == tournamentPool)
+                return true;
+
+    return false;
+}
+
+// The matching pass for the pool in m_ActiveTournamentPool.
+void BattlegroundQueue::UpdatePool(BattlegroundTypeId bgTypeId, BattlegroundBracketId bracket_id, uint8 arenaType, bool isRated, uint32 arenaRating)
+{
     // Violet Hold never waits for an opponent. The enemy side is summoned by the
     // clone driver once the match is live, so there is no second team to match
     // against and no reason to hold anyone in the queue: every waiting group is
@@ -1203,7 +1246,7 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
         {
             for (GroupQueueInfo* ginfo : m_QueuedGroups[bracket_id][queueIndex])
             {
-                if (ginfo->IsInvitedToBGInstanceGUID)
+                if (ginfo->IsInvitedToBGInstanceGUID || !InActivePool(ginfo))
                     continue;
 
                 Battleground* vhr = sBattlegroundMgr->CreateNewBattleground(bgTypeId, vhrBracket, 0, false);
@@ -1212,6 +1255,8 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
                     TC_LOG_ERROR("bg.battleground", "BattlegroundQueue::Update - Cannot create Violet Hold battleground: {}", bgTypeId);
                     return;
                 }
+
+                vhr->SetTournamentPool(m_ActiveTournamentPool);
 
                 // The party always holds one side outright, whatever their real
                 // factions are, so the clones have the other to themselves.
@@ -1230,6 +1275,10 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
     for (BGFreeSlotQueueContainer::iterator itr = bgQueues.begin(); itr != bgQueues.end();)
     {
         Battleground* bg = *itr; ++itr;
+        // A running match only ever takes groups of its own pool.
+        if (!InActivePool(bg))
+            continue;
+
         // A skirmish roster locks when its instance is created. Humans who
         // queue after a bot-filled arena pops must wait for their own match;
         // arena combat never admits replacements or backfills.
@@ -1277,7 +1326,9 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
             if (!bg)
                 continue;
 
-            if (bg->GetTypeID() != bgTypeId || bg->GetBracketId() != bracket_id)
+            // Only a match this pool could join holds back a new one; a world
+            // match with seats open must not stall the tournament queue.
+            if (bg->GetTypeID() != bgTypeId || bg->GetBracketId() != bracket_id || !InActivePool(bg))
                 continue;
 
             if (bg->GetStatus() <= STATUS_WAIT_QUEUE || bg->GetStatus() >= STATUS_WAIT_LEAVE)
@@ -1330,6 +1381,7 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
                 TC_LOG_ERROR("bg.battleground", "BattlegroundQueue::Update - Cannot create battleground: {}", bgTypeId);
                 return;
             }
+            bg2->SetTournamentPool(m_ActiveTournamentPool);
             // invite those selection pools
             for (uint32 i = 0; i < PVP_TEAMS_COUNT; i++)
                 for (GroupsQueueType::const_iterator citr = m_SelectionPools[TEAM_ALLIANCE + i].SelectedGroups.begin(); citr != m_SelectionPools[TEAM_ALLIANCE + i].SelectedGroups.end(); ++citr)
@@ -1358,6 +1410,7 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
                 TC_LOG_ERROR("bg.battleground", "BattlegroundQueue::Update - Cannot create battleground: {}", bgTypeId);
                 return;
             }
+            bg2->SetTournamentPool(m_ActiveTournamentPool);
 
             // invite those selection pools
             for (uint32 i = 0; i < PVP_TEAMS_COUNT; i++)
@@ -1383,18 +1436,21 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
         // 0 is on (automatic update call) and we must set it to team's with longest wait time
         if (!arenaRating)
         {
-            GroupQueueInfo* front1 = nullptr;
-            GroupQueueInfo* front2 = nullptr;
-            if (!m_QueuedGroups[bracket_id][BG_QUEUE_PREMADE_ALLIANCE].empty())
+            // The front of each list, counting only this pool's teams.
+            auto const firstInPool = [this](GroupsQueueType const& groups) -> GroupQueueInfo*
             {
-                front1 = m_QueuedGroups[bracket_id][BG_QUEUE_PREMADE_ALLIANCE].front();
+                for (GroupQueueInfo* ginfo : groups)
+                    if (InActivePool(ginfo))
+                        return ginfo;
+                return nullptr;
+            };
+
+            GroupQueueInfo* front1 = firstInPool(m_QueuedGroups[bracket_id][BG_QUEUE_PREMADE_ALLIANCE]);
+            GroupQueueInfo* front2 = firstInPool(m_QueuedGroups[bracket_id][BG_QUEUE_PREMADE_HORDE]);
+            if (front1)
                 arenaRating = front1->ArenaMatchmakerRating;
-            }
-            if (!m_QueuedGroups[bracket_id][BG_QUEUE_PREMADE_HORDE].empty())
-            {
-                front2 = m_QueuedGroups[bracket_id][BG_QUEUE_PREMADE_HORDE].front();
+            if (front2)
                 arenaRating = front2->ArenaMatchmakerRating;
-            }
             if (front1 && front2)
             {
                 if (front1->JoinTime < front2->JoinTime)
@@ -1429,7 +1485,7 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
             for (; itr2 != m_QueuedGroups[bracket_id][i].end(); ++itr2)
             {
                 // if group match conditions, then add it to pool
-                if (!(*itr2)->IsInvitedToBGInstanceGUID
+                if (!(*itr2)->IsInvitedToBGInstanceGUID && InActivePool(*itr2)
                     && (((*itr2)->ArenaMatchmakerRating >= arenaMinRating && (*itr2)->ArenaMatchmakerRating <= arenaMaxRating)
                         || (int32)(*itr2)->JoinTime < discardTime))
                 {
@@ -1447,7 +1503,7 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
         {
             for (GroupsQueueType::iterator itr3 = itr_teams[0]; itr3 != m_QueuedGroups[bracket_id][team].end(); ++itr3)
             {
-                if (!(*itr3)->IsInvitedToBGInstanceGUID
+                if (!(*itr3)->IsInvitedToBGInstanceGUID && InActivePool(*itr3)
                     && (((*itr3)->ArenaMatchmakerRating >= arenaMinRating && (*itr3)->ArenaMatchmakerRating <= arenaMaxRating) || (int32)(*itr3)->JoinTime < discardTime)
                     && ((*itr_teams[0])->ArenaTeamId != (*itr3)->PreviousOpponentsTeamId || ((int32)(*itr3)->JoinTime < discardOpponentsTime))
                     && (*itr_teams[0])->ArenaTeamId != (*itr3)->ArenaTeamId)
@@ -1471,6 +1527,7 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
                 TC_LOG_ERROR("bg.battleground", "BattlegroundQueue::Update couldn't create arena instance for rated arena match!");
                 return;
             }
+            arena->SetTournamentPool(m_ActiveTournamentPool);
 
             aTeam->OpponentsTeamRating = hTeam->ArenaTeamRating;
             hTeam->OpponentsTeamRating = aTeam->ArenaTeamRating;

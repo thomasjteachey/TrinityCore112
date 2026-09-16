@@ -50,6 +50,7 @@
 #include "Item.h"
 #include "Log.h"
 #include "LootMgr.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "MotionMaster.h"
 #include "MovementGenerator.h"
 #include "MovementPacketBuilder.h"
@@ -15712,7 +15713,7 @@ void Unit::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player const* t
                 {
                     Player const* bot = GetTypeId() == TYPEID_PLAYER ? ToPlayer() : nullptr;
                     if (bot && target != this && bot->GetSession() && target->GetSession() &&
-                        target->IsFFAPvP() &&
+                        target->IsFFAPvP() && !Tournament::IsTournamentCharacter(target) &&
                         IsManagedPlayerbotAccountIdForDisplay(bot->GetSession()->GetAccountId()) &&
                         !IsManagedPlayerbotAccountIdForDisplay(target->GetSession()->GetAccountId()))
                         dynamicFlags |= UNIT_DYNFLAG_TRACK_UNIT;
@@ -15754,9 +15755,10 @@ void Unit::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player const* t
                     (!target->GetSession() || !IsManagedPlayerbotAccountIdForDisplay(target->GetSession()->GetAccountId()));
 
                 if (index == UNIT_FIELD_FACTIONTEMPLATE && target != this && isArmedBotUnit &&
-                    !target->IsFFAPvP())
+                    (!target->IsFFAPvP() || Tournament::IsTournamentCharacter(target)))
                 {
-                    // War Mode off: friendly, whatever faction it really is.
+                    // War Mode off, or a tournament character, whom the fleet
+                    // ignores: friendly, whatever faction it really is.
                     fieldBuffer << uint32(target->GetFaction());
                 }
                 else if (index == UNIT_FIELD_FACTIONTEMPLATE && target != this && isArmedBotUnit)

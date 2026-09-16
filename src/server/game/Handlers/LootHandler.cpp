@@ -23,6 +23,7 @@
 #include "Group.h"
 #include "Item.h"
 #include "Log.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "LootItemStorage.h"
 #include "LootMgr.h"
 #include "Map.h"
@@ -175,6 +176,10 @@ void WorldSession::HandleLootMoneyOpcode(WorldPacket& /*recvData*/)
             {
                 Player* member = itr->GetSource();
                 if (!member)
+                    continue;
+
+                // No share of looted coin for tournament characters (TournamentMode.h).
+                if (!Tournament::MayReceiveGroupLoot(member))
                     continue;
 
                 if (player->IsAtGroupRewardDistance(member))
@@ -425,6 +430,13 @@ void WorldSession::HandleLootMasterGiveOpcode(WorldPacket& recvData)
     {
         _player->SendLootError(lootguid, LOOT_ERROR_MASTER_OTHER);
         TC_LOG_INFO("entities.player.cheat", "MasterLootItem: Player {} tried to give an item to ineligible player {} !", GetPlayer()->GetName(), target->GetName());
+        return;
+    }
+
+    // Tournament characters are handed no loot (TournamentMode.h).
+    if (!Tournament::MayReceiveGroupLoot(target))
+    {
+        _player->SendLootError(lootguid, LOOT_ERROR_MASTER_OTHER);
         return;
     }
 

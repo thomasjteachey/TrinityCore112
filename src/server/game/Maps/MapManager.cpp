@@ -19,6 +19,7 @@
 #include "InstanceSaveMgr.h"
 #include "DatabaseEnv.h"
 #include "Log.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "ObjectAccessor.h"
 #include "Transport.h"
 #include "GridDefines.h"
@@ -213,6 +214,14 @@ Map::EnterState MapManager::PlayerCannotEnter(uint32 mapid, Player* player, bool
     //Bypass checks for GMs
     if (player->IsGameMaster())
         return Map::CAN_ENTER;
+
+    // Tournament characters never enter dungeons or raids (TournamentMode.h).
+    // Battlegrounds and arenas are not dungeons and returned above.
+    if (Tournament::IsTournamentCharacter(player))
+    {
+        Tournament::SendRefusal(player, "enter dungeons or raids");
+        return Map::CANNOT_ENTER_UNSPECIFIED_REASON;
+    }
 
     //Other requirements
     if (!player->Satisfy(sObjectMgr->GetAccessRequirement(mapid, targetDifficulty), mapid, true))

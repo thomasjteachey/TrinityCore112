@@ -21,6 +21,7 @@
 #include "Creature.h"
 #include "DatabaseEnv.h"
 #include "Log.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "DBCStores.h"
 #include "GameClient.h"
 #include "GameObject.h"
@@ -633,6 +634,11 @@ void WorldSession::HandleSpellClick(WorldPacket& recvData)
 
     /// @todo Unit::SetCharmedBy: 28782 is not in world but 0 is trying to charm it! -> crash
     if (!unit->IsInWorld())
+        return;
+
+    // Click-to-use NPCs skip the interaction check; the tournament allowlist
+    // still applies (TournamentMode.h).
+    if (!Tournament::CanInteractWithCreature(_player, unit, 0))
         return;
 
     unit->HandleSpellClick(_player);

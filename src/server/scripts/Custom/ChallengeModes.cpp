@@ -12,6 +12,7 @@
 #include "Item.h"
 #include "ItemTemplate.h"
 #include "Log.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "Pet.h"
 #include "Player.h"
 #include "ScriptMgr.h"
@@ -320,6 +321,11 @@ bool ChallengeModes::IsEnabledForPlayer(ChallengeModeSettings setting, Player co
     if (!_enabled || !ChallengeEnabled(setting) || !player)
         return false;
 
+    // Challenge modes are a world-character undertaking: none applies to a
+    // tournament character, even one converted with modes still saved.
+    if (Tournament::IsTournamentCharacter(player))
+        return false;
+
     return (GetPlayerMask(player) & Bit(setting)) != 0;
 }
 
@@ -348,7 +354,7 @@ bool ChallengeModes::SetEnabledForPlayer(ChallengeModeSettings setting, Player* 
 
 bool ChallengeModes::CanActivate(Player const* player) const
 {
-    if (!_enabled || !player)
+    if (!_enabled || !player || Tournament::IsTournamentCharacter(player))
         return false;
 
     if (player->GetClass() == CLASS_DEATH_KNIGHT)
@@ -362,7 +368,9 @@ bool ChallengeModes::CanActivateMode(Player const* player, ChallengeModeSettings
     if (!CanActivate(player))
     {
         if (error)
-            *error = "Challenge modes can only be enabled at level 1, or level 55 for Death Knights.";
+            *error = Tournament::IsTournamentCharacter(player)
+                ? "Tournament characters cannot take challenge modes."
+                : "Challenge modes can only be enabled at level 1, or level 55 for Death Knights.";
         return false;
     }
 

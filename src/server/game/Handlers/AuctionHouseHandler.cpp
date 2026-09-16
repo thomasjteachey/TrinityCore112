@@ -26,6 +26,7 @@
 #include "Item.h"
 #include "Language.h"
 #include "Log.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "Mail.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
@@ -58,6 +59,15 @@ void WorldSession::HandleAuctionHelloOpcode(WorldPacket& recvData)
 //this void causes that auction window is opened
 void WorldSession::SendAuctionHello(ObjectGuid guid, Creature* unit)
 {
+    // Tournament characters never use the auction house (TournamentMode.h).
+    // The auction opcodes are refused in GetNPCIfCanInteractWith; this is the
+    // auctioneer's gossip option.
+    if (Tournament::IsTournamentCharacter(GetPlayer()) && !GetPlayer()->IsGameMaster())
+    {
+        Tournament::SendRefusal(GetPlayer(), "use the auction house");
+        return;
+    }
+
     if (GetPlayer()->GetLevel() < sWorld->getIntConfig(CONFIG_AUCTION_LEVEL_REQ))
     {
         SendNotification(GetTrinityString(LANG_AUCTION_REQ), sWorld->getIntConfig(CONFIG_AUCTION_LEVEL_REQ));

@@ -37,6 +37,7 @@
 #include "Chat.h"
 #include "Log.h"
 #include "Map.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "MotionMaster.h"
 #include "Movement/AbstractFollower.h"
 #include "MoveSpline.h"
@@ -369,6 +370,10 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             WorldSession const* session = participant->GetSession();
             bool const isVirtualSession = session && session->IsVirtualSession();
             if (isVirtualSession || playerbot::IsManagedRandomBot(participant))
+                continue;
+
+            // Queued in the tournament pool: no bot can be matched with them.
+            if (Tournament::QueuesInTournamentPool(participant))
                 continue;
 
             return true;

@@ -33,6 +33,7 @@
 #include "MapManager.h"
 #include "Log.h"
 #include "LFGMgr.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "Random.h"
 #include "SpellAuras.h"
 #include "UpdateData.h"
@@ -1053,6 +1054,11 @@ void Group::SendLooter(Creature* creature, Player* groupLooter)
 
 bool CanRollOnItem(const LootItem& item, Player const* player)
 {
+    // A tournament character never wins group loot outside a battleground or
+    // arena (TournamentMode.h): it passes automatically and sees no roll.
+    if (!Tournament::MayReceiveGroupLoot(player))
+        return false;
+
     // Players can't roll on unique items if they already reached the maximum quantity of that item
     ItemTemplate const* proto = sObjectMgr->GetItemTemplate(item.itemid);
     if (!proto)
@@ -1410,7 +1416,7 @@ void Group::MasterLoot(Loot* loot, WorldObject* pLootedObject)
         if (!looter->IsInWorld())
             continue;
 
-        if (looter->IsAtGroupRewardDistance(pLootedObject))
+        if (looter->IsAtGroupRewardDistance(pLootedObject) && Tournament::MayReceiveGroupLoot(looter))
         {
             data << uint64(looter->GetGUID());
             ++real_count;
@@ -2000,7 +2006,7 @@ void Group::UpdateLooterGuid(WorldObject* pLootedObject, bool ifneed)
         {
             // not update if only update if need and ok
             Player* looter = ObjectAccessor::FindPlayer(guid_itr->guid);
-            if (looter && looter->IsAtGroupRewardDistance(pLootedObject))
+            if (looter && looter->IsAtGroupRewardDistance(pLootedObject) && Tournament::MayReceiveGroupLoot(looter))
                 return;
         }
         ++guid_itr;
@@ -2010,8 +2016,10 @@ void Group::UpdateLooterGuid(WorldObject* pLootedObject, bool ifneed)
     Player* pNewLooter = nullptr;
     for (member_citerator itr = guid_itr; itr != m_memberSlots.end(); ++itr)
     {
+        // A tournament character's turn would lock the items for everyone else,
+        // since it cannot open the loot to pass them on.
         if (Player* player = ObjectAccessor::FindPlayer(itr->guid))
-            if (player->IsAtGroupRewardDistance(pLootedObject))
+            if (player->IsAtGroupRewardDistance(pLootedObject) && Tournament::MayReceiveGroupLoot(player))
             {
                 pNewLooter = player;
                 break;
@@ -2024,7 +2032,7 @@ void Group::UpdateLooterGuid(WorldObject* pLootedObject, bool ifneed)
         for (member_citerator itr = m_memberSlots.begin(); itr != guid_itr; ++itr)
         {
             if (Player* player = ObjectAccessor::FindPlayer(itr->guid))
-                if (player->IsAtGroupRewardDistance(pLootedObject))
+                if (player->IsAtGroupRewardDistance(pLootedObject) && Tournament::MayReceiveGroupLoot(player))
                 {
                     pNewLooter = player;
                     break;
@@ -2094,6 +2102,10 @@ GroupJoinBattlegroundResult Group::CanJoinBattlegroundQueue(Battleground const* 
         if (member->GetTeam() != team)
             return ERR_BATTLEGROUND_JOIN_TIMED_OUT;
         */
+        // Tournament and world queue pools never share a match, so a party
+        // queues together only when every member is in the same one.
+        if (Tournament::QueuesInTournamentPool(member) != Tournament::QueuesInTournamentPool(reference))
+            return ERR_BATTLEGROUND_JOIN_FAILED;
         // not in the same battleground level braket, don't let join
         PvPDifficultyEntry const* memberBracketEntry = GetBattlegroundBracketByLevel(bracketEntry->MapID, member->GetLevel());
         if (memberBracketEntry != bracketEntry)

@@ -422,6 +422,12 @@ class TC_GAME_API Battleground
         // else's business and counts as a participant.
         bool IsBotFillMatch() const { return m_IsBotFillMatch; }
         void SetBotFillMatch(bool enabled) { m_IsBotFillMatch = enabled; }
+        // CENTURION queue pool (Miscellaneous/TournamentMode.h): the queue only
+        // ever seats tournament-pool groups in a tournament-pool match and world
+        // groups in a world match. Set by BattlegroundQueue when it creates the
+        // match; everything else (custom games, templates) stays world.
+        bool IsTournamentPool() const { return m_IsTournamentPool; }
+        void SetTournamentPool(bool tournament) { m_IsTournamentPool = tournament; }
         // True when the session belongs to a bot occupant of this match rather
         // than a person: any socketless virtual session, and a transient
         // in-memory clone when the match is bot-filled. The human accounting,
@@ -744,6 +750,7 @@ class TC_GAME_API Battleground
         uint32 m_CustomGamePendingCloneCount;
         BattlegroundCustomRules m_CustomRules;
         bool   m_IsBotFillMatch;                            // padded with transient clones, see IsBotFillMatch()
+        bool   m_IsTournamentPool;                          // made from the tournament queue pool, see IsTournamentPool()
         bool   m_IsArena;
         PvPTeamId _winnerTeamId;
         int32  m_StartDelayTime;

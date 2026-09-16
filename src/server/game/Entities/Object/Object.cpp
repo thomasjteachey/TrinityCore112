@@ -30,6 +30,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "MiscPackets.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "MovementInfo.h"
 #include "MovementPacketBuilder.h"
 #include "ObjectAccessor.h"
@@ -3292,7 +3293,35 @@ namespace
                 targetPlayer->duel->State == DUEL_STATE_IN_PROGRESS))
             return false;
 
-        return !(selfIsBot ? targetPlayer : selfPlayer)->IsFFAPvP();
+        // Tournament characters are not part of the world the fleet lives in:
+        // to every bot they are scenery, armed or not, and the other way round.
+        Player const* human = selfIsBot ? targetPlayer : selfPlayer;
+        if (Tournament::IsTournamentCharacter(human))
+            return true;
+
+        return !human->IsFFAPvP();
+    }
+
+    // Bots and tournament characters do not help each other either: no heals,
+    // no buffs, no resurrections, in either direction, outside battlegrounds
+    // and arenas (where the match decides who is on whose side).
+    bool IsPlayerbotTournamentAid(WorldObject const* self, WorldObject const* target)
+    {
+        Player const* caster = self ? self->GetAffectingPlayer() : nullptr;
+        Player const* aided = target ? target->GetAffectingPlayer() : nullptr;
+        if (!caster || !aided || caster == aided || !Tournament::IsEnabled())
+            return false;
+
+        Map const* map = caster->FindMap();
+        if (map && map->IsBattlegroundOrArena())
+            return false;
+
+        bool const casterIsBot = caster->GetSession() && IsManagedPlayerbotAccountId(caster->GetSession()->GetAccountId());
+        bool const aidedIsBot = aided->GetSession() && IsManagedPlayerbotAccountId(aided->GetSession()->GetAccountId());
+        if (casterIsBot == aidedIsBot)
+            return false;
+
+        return Tournament::IsTournamentCharacter(casterIsBot ? aided : caster);
     }
 
     // Whether a positive spell is a person with War Mode OFF trying to support
@@ -3581,6 +3610,9 @@ bool WorldObject::IsValidAssistTarget(WorldObject const* target, SpellInfo const
     // takes - single target, the group and raid frames, and the friendly-target
     // sweep an area spell does.
     if (IsUnarmedPlayerAidingArmed(this, target))
+        return false;
+
+    if (IsPlayerbotTournamentAid(this, target))
         return false;
 
     // Custom-game spectators are inert - see the matching note in
