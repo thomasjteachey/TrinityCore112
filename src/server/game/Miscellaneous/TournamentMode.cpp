@@ -239,7 +239,13 @@ void LoadConfig()
         Optional<float> z = parts.size() >= 4 ? Trinity::StringTo<float>(parts[3]) : Optional<float>();
         Optional<float> o = parts.size() >= 5 ? Trinity::StringTo<float>(parts[4]) : Optional<float>(0.0f);
 
-        if (map && x && y && z && o && MapManager::IsValidMapCoord(*map, *x, *y, *z, *o))
+        // At startup the config is read before the DBCs load, so the map store
+        // is still empty and every map id would look invalid: check only the
+        // coordinates then, and the map too on a `.reload config`.
+        // LoadCreateInfo checks the map once the DBCs are in.
+        bool const mapStoreLoaded = sMapStore.GetNumRows() != 0;
+        if (map && x && y && z && o && Trinity::IsValidMapCoord(*x, *y, *z, *o)
+            && (!mapStoreLoaded || MapManager::IsValidMapCoord(*map, *x, *y, *z, *o)))
         {
             loaded.HasHome = true;
             loaded.HomeMap = *map;
@@ -680,6 +686,14 @@ void LoadCreateInfo()
     uint32 const oldMSTime = getMSTime();
     CreateInfoStore.clear();
     KitProcedureExists = false;
+
+    // LoadConfig could only check HomeLocation's coordinates: the DBCs had not
+    // loaded yet at startup.
+    if (Config.HasHome && !MapManager::IsValidMapCoord(Config.HomeMap, Config.HomeX, Config.HomeY, Config.HomeZ, Config.HomeO))
+    {
+        TC_LOG_ERROR("server.loading", "Centurion.Tournament.HomeLocation: map {} does not exist on this realm.", Config.HomeMap);
+        Config.HasHome = false;
+    }
 
     // Probe before querying: a missing table aborts the server
     // (MySQLConnection, ER_NO_SUCH_TABLE), and only the Centurion realms have
