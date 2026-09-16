@@ -80,6 +80,7 @@
 #include "MapManager.h"
 #include "MiscPackets.h"
 #include "MotionMaster.h"
+#include "MoveSplineInit.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
@@ -2264,8 +2265,9 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
         // in normal combat: mage Blink, and the shadow priest's Shadow Wraith Fade
         // (89784), whose expiry ports the body to the wraith.
         //
-        // So the socketless branch below does the whole thing inline instead -
-        // broadcast AND landing together, with nothing left waiting on an ack.
+        // So the socketless branch below completes the landing inline and
+        // publishes it on the server-driven spline stream, with nothing left
+        // waiting on an ack.
         //
         // Gated here rather than inside Unit::SendTeleportPacket, which is correct
         // as it stands and is called directly by PlayerbotObcCloneManager for the
@@ -2305,25 +2307,19 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
         {
             SetSemaphoreTeleportNear(false);
 
-            // The same two calls, in the same order, that Unit::NearTeleportTo
-            // makes for a unit nobody is steering from a client. The spline was
-            // already interrupted unconditionally near the top of this function, so
-            // nothing is left playing that could contradict the destination.
+            // MSG_MOVE_TELEPORT is a client-movement packet. Broadcasting it for
+            // a socketless player makes observing clients expect subsequent
+            // client movement that can never arrive; the next server spline then
+            // fights the stale client-side location and the model appears to port
+            // around even though combat uses the correct server position.
             //
-            // StopMoving() was the obvious-looking way to publish this and is the
-            // wrong call twice over. Standing still - which is when a bot blinks -
-            // it returns having sent nothing at all, because movespline->Finalized()
-            // is true; observers were never told the bot moved and the model sat at
-            // the old spot until some later order happened to refresh it. Mid-run it
-            // calls UpdateSplinePosition first, which drags the unit back onto the
-            // path it was walking and undoes the landing.
-            //
-            // UpdatePosition covers the rest: Unit::UpdatePosition relocates through
-            // Map::PlayerRelocation, which refreshes visibility, and Player's
-            // override picks up the zone change and the group position flag.
-            SendTeleportPacket(m_teleport_dest, (options & TELE_TO_TRANSPORT_TELEPORT) != 0);
+            // Relocate first, then publish an unconditional MonsterMove stop at
+            // that authoritative destination. Ordinary StopMoving() cannot do
+            // this: it sends nothing for an already-finalized spline and otherwise
+            // recomputes the old spline position before sending the stop.
             UpdatePosition(m_teleport_dest, true);
             SetFallInformation(0, GetPositionZ());
+            Movement::MoveSplineInit(this).StopAtCurrentPosition();
 
             // Re-path from where the bot actually is on its next tick, rather than
             // resuming an order issued from the point it blinked away from.

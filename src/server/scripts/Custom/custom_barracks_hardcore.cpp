@@ -2116,6 +2116,20 @@ public:
     {
         ApplyFfaState(player);
         ApplyWarModeAura(player);
+
+        // A transient battleground clone copies its source's equipment exactly,
+        // including empty slots.  It never passes through the ordinary login or
+        // resurrection hooks that issue the Barracks field kit, so a poorly
+        // equipped source could produce a naked clone.  Persistent managed bots
+        // can reach the same state after a lifecycle transfer.  Map entry is the
+        // common point where both are alive and equip-capable.
+        //
+        // IssueWhiteFieldKit only fills missing kit slots (or refreshes an older
+        // issued piece); earned equipment is never replaced.
+        if (player && player->InBattleground())
+            if (WorldSession const* session = player->GetSession();
+                session && (session->IsVirtualSession() || session->IsTransientPlayerSession()))
+                IssueWhiteFieldKit(player);
     }
 
     void OnGiveXP(Player* player, uint32& amount, Unit* victim) override

@@ -64,6 +64,14 @@ namespace Movement
          */
         void Stop();
 
+        /*
+         * Publishes a stop at the unit's authoritative current position even
+         * when its previous spline is already finalized.  This is used after
+         * a server-driven relocation, where Stop() would otherwise send
+         * nothing or first recompute a stale pre-relocation spline position.
+         */
+        void StopAtCurrentPosition();
+
         /* Adds movement by parabolic trajectory
          * @param amplitude  - the maximum height of parabola, value could be negative and positive
          * @param start_time - delay between movement starting time and beginning to move by parabolic trajectory
