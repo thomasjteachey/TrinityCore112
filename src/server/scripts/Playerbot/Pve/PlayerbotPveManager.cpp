@@ -10547,6 +10547,16 @@ namespace
             return false;
 
         std::vector<uint64> carried;
+
+        // A bot can equip a piece from the chest before its auction turn.  Bag
+        // iteration deliberately does not include equipped slots, but the
+        // population governor must still keep that bot online: the hold record
+        // is the authority until the item is actually listed or otherwise
+        // resolved.
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+            if (Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                carried.push_back(item->GetGUID().GetRawValue());
+
         ForEachBagItem(bot, [&carried](Item* item, uint8, uint8)
         {
             if (item)
@@ -19001,6 +19011,77 @@ namespace playerbot
             return true;
 
         return HasPendingSummon(player->GetGUID());
+    }
+
+    uint32 PveManager::GetWorldPopulationHomeZone(uint32 characterLowGuid)
+    {
+        if (!characterLowGuid)
+            return 0;
+
+        uint64 const rawGuid = ObjectGuid::Create<HighGuid::Player>(characterLowGuid).GetRawValue();
+        std::lock_guard<std::mutex> guard(g_LocalZoneLock);
+        auto const itr = g_LocalZoneByGuid.find(rawGuid);
+        return itr != g_LocalZoneByGuid.end() ? itr->second : 0;
+    }
+
+    uint8 PveManager::GetWorldPopulationLoginPriority(uint32 characterLowGuid, bool homeZoneHasHuman)
+    {
+        uint32 const homeZone = GetWorldPopulationHomeZone(characterLowGuid);
+        if (!homeZone)
+            return 1;
+
+        if (ClassicZoneBand const* band = FindClassicZoneBand(homeZone))
+            if (band->maxLevel <= kStarterZoneTopLevel)
+                return 0;
+
+        return homeZoneHasHuman ? 2 : 1;
+    }
+
+    bool PveManager::IsWorldPopulationStarterZone(uint32 zoneId)
+    {
+        ClassicZoneBand const* band = FindClassicZoneBand(zoneId);
+        return band && band->maxLevel <= kStarterZoneTopLevel;
+    }
+
+    uint8 PveManager::GetWorldPopulationPrunePriority(Player* player, bool currentZoneHasHuman)
+    {
+        // The population manager has already checked the managed-account
+        // boundary before entering this policy function. Do not repeat that
+        // check here: this function is called while its population mutex is
+        // held, and a non-virtual allow-listed session would otherwise try to
+        // acquire the same mutex recursively.
+        if (!player)
+            return 0;
+
+        uint64 const rawGuid = player->GetGUID().GetRawValue();
+
+        // Drifters exist specifically to follow real players between zones.
+        // Auction-held chest loot is also a hard pin: logging its carrier out
+        // strands the owner's paced recovery queue indefinitely.
+        if (IsDrifter(rawGuid) || CarriesQueuedChestLoot(player))
+            return 0;
+
+        // Starter-zone residents are removed regardless of the normal target.
+        // This deliberately precedes ordinary activity protections: the user
+        // asked for every non-drifter starter bot to leave the world, with the
+        // unresolved chest-loot pin above as the sole operational exception.
+        if (IsWorldPopulationStarterZone(player->GetZoneId()))
+            return 100;
+
+        // Never pull a human's companion, a queued/matched bot, or a bot in an
+        // unsafe transition out from under the subsystem currently owning it.
+        if (IsExemptFromBattlegroundOrchestration(player) || player->InBattleground() ||
+            player->InBattlegroundQueue() || player->IsInCombat() ||
+            player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
+            return 0;
+
+        bool const ordinaryLocal = GetGuardianZoneId(rawGuid) == 0 &&
+            !IsLocalVeteranGuid(rawGuid) && !IsPvpOnlyBot(player);
+
+        if (ordinaryLocal)
+            return currentZoneHasHuman ? 60 : 80;
+
+        return currentZoneHasHuman ? 20 : 40;
     }
 
     // A stranger who whispers a bot gets attitude, not telemetry. The

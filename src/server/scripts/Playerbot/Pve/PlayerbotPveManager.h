@@ -338,6 +338,24 @@ public:
 
     static void OnBotLogout(Player const* player);
 
+    // World-population shedding policy. The population manager owns sessions
+    // and login/logout; the PvE manager owns the facts those decisions need:
+    // drifter/local roles, local home zones, and death-chest auction holds.
+    //
+    // Priority 0 means do not log this bot out. Higher values are more
+    // disposable. Starter-zone non-drifters rank first, then ordinary local
+    // bots in zones with no human players.
+    static uint8 GetWorldPopulationPrunePriority(Player* player, bool currentZoneHasHuman);
+
+    // Offline ordinary locals assigned to a starter-zone home stay out of the
+    // world population. Among the rest, a local whose home currently contains
+    // a human is preferred when a slot is restored. 0=exclude, 1=ordinary,
+    // 2=preferred. The assignment table is built from the complete bot roster,
+    // so this does not require the character to be online.
+    static uint8 GetWorldPopulationLoginPriority(uint32 characterLowGuid, bool homeZoneHasHuman);
+    static uint32 GetWorldPopulationHomeZone(uint32 characterLowGuid);
+    static bool IsWorldPopulationStarterZone(uint32 zoneId);
+
     // True while a bot is companion-bound to a human (or mid-summon): such a
     // bot must not be queued for battlegrounds or logged out by the
     // population rebalancer.

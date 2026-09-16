@@ -724,6 +724,16 @@ class PlayerbotLifecyclePlayerScript final : public PlayerScript
 public:
     PlayerbotLifecyclePlayerScript() : PlayerScript("PlayerbotLifecyclePlayerScript") { }
 
+    void OnLogin(Player* player, bool /*firstLogin*/) override
+    {
+        playerbot::RandomBotParticipationManager::NotifyHumanPopulationChanged(player);
+    }
+
+    void OnUpdateZone(Player* player, uint32 /*newZone*/, uint32 /*newArea*/) override
+    {
+        playerbot::RandomBotParticipationManager::NotifyHumanPopulationChanged(player);
+    }
+
     void OnUpdate(Player* player, uint32 diff) override
     {
         RecordManagedBotUpdatePulse(player, diff);
@@ -786,6 +796,7 @@ public:
 
     void OnLogout(Player* player) override
     {
+        playerbot::RandomBotParticipationManager::NotifyHumanPopulationChanged(player);
         playerbot::PveManager::OnBotLogout(player);
         playerbot::RandomBotParticipationManager::OnPlayerLogout(player);
         playerbot::PlayerbotObcCloneManager::OnPlayerLogout(player);

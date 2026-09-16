@@ -768,6 +768,7 @@ LifecycleObservationCounters g_LifecycleObservationCounters;
 struct RandomBotPopulationConfig
 {
     bool enabled = false;
+    bool dynamicWorldLoadEnabled = false;
     uint32 targetMin = 0;
     uint32 targetMax = 0;
     uint32 rebalanceIntervalMs = 15000;
@@ -785,6 +786,7 @@ struct RandomBotPoolCandidate
     uint32 account = 0;
     uint8 level = 1;
     uint8 race = 0;
+    uint32 zone = 0;
 };
 
 struct RandomBotPopulationState
@@ -793,6 +795,7 @@ struct RandomBotPopulationState
     bool runtimeEnabled = false;
     bool startupBootstrapDone = false;
     bool rebalanceRequested = false;
+    bool humanZoneSnapshotInitialized = false;
     uint32 rebalanceTimerMs = 0;
     uint64 rebalanceEpoch = 0;
     uint64 rebalanceTicks = 0;
@@ -806,6 +809,7 @@ struct RandomBotPopulationState
     uint64 lastRebalanceUnixTime = 0;
     std::deque<uint32> recentSelectedLowGuids;
     std::unordered_set<uint32> recentSelectedLowGuidSet;
+    std::unordered_set<uint32> lastHumanZones;
 };
 
 RandomBotPopulationState g_RandomPopulation;
@@ -1346,6 +1350,42 @@ struct OnlineRandomBotMetrics
     std::vector<ObjectGuid> guids;
 };
 
+struct HumanPopulationMetrics
+{
+    uint32 total = 0;
+    std::unordered_set<uint32> zones;
+};
+
+bool IsRealHumanForPopulation(Player const* player, ManagedBotAccountIds const& botAccounts)
+{
+    if (!player || !player->IsInWorld())
+        return false;
+
+    WorldSession const* session = player->GetSession();
+    if (!session || session->IsVirtualSession() || session->IsTransientPlayerSession())
+        return false;
+
+    return !IsManagedRandomBotImpl(player, botAccounts);
+}
+
+HumanPopulationMetrics CollectHumanPopulationMetrics(ManagedBotAccountIds const& botAccounts)
+{
+    HumanPopulationMetrics metrics;
+    std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
+    for (auto const& [guid, player] : ObjectAccessor::GetPlayers())
+    {
+        (void)guid;
+        if (!IsRealHumanForPopulation(player, botAccounts))
+            continue;
+
+        ++metrics.total;
+        if (uint32 const zoneId = player->GetZoneId())
+            metrics.zones.insert(zoneId);
+    }
+
+    return metrics;
+}
+
 bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType, ManagedBotAccountIds const& botAccounts)
 {
     if (targetBgType == BATTLEGROUND_TYPE_NONE)
@@ -1493,7 +1533,7 @@ std::vector<RandomBotPoolCandidate> QueryOfflinePool(RandomBotPopulationConfig c
     }
 
     QueryResult result = CharacterDatabase.PQuery(
-        "SELECT guid, account, level, race FROM characters "
+        "SELECT guid, account, level, race, zone FROM characters "
         "WHERE online = 0 AND account IN ({}) AND name NOT LIKE 'Obcc%' AND level >= {} AND level <= {}",
         accountList, config.minLevel, config.maxLevel);
 
@@ -1508,6 +1548,7 @@ std::vector<RandomBotPoolCandidate> QueryOfflinePool(RandomBotPopulationConfig c
         candidate.account = fields[1].GetUInt32();
         candidate.level = fields[2].GetUInt8();
         candidate.race = fields[3].GetUInt8();
+        candidate.zone = fields[4].GetUInt32();
 
         // `online = 0` is not proof a bot is offline. Every bot account holds
         // hundreds of characters online at once, and any writer that clears the
@@ -1590,13 +1631,43 @@ uint64 ComputeDeterministicCandidateScore(RandomBotPoolCandidate const& candidat
 
 std::vector<RandomBotPoolCandidate> PickLoginCandidates(RandomBotPopulationState const& state,
     std::vector<RandomBotPoolCandidate> pool, uint32 requiredCount, uint32 currentAllianceOnline, uint32 currentHordeOnline,
-    std::unordered_map<uint32, uint32> onlineByAccount)
+    std::unordered_map<uint32, uint32> onlineByAccount, std::unordered_set<uint32> const& humanZones)
 {
     if (!requiredCount || pool.empty())
         return {};
 
+    std::unordered_map<uint32, uint8> priorityByGuid;
+    priorityByGuid.reserve(pool.size());
+    for (RandomBotPoolCandidate const& candidate : pool)
+    {
+        uint8 priority = 1;
+        if (state.config.dynamicWorldLoadEnabled)
+        {
+            if (playerbot::PveManager::IsWorldPopulationStarterZone(candidate.zone))
+            {
+                priorityByGuid[candidate.lowGuid] = 0;
+                continue;
+            }
+
+            uint32 const homeZone = playerbot::PveManager::GetWorldPopulationHomeZone(candidate.lowGuid);
+            bool const homeZoneHasHuman = homeZone && humanZones.find(homeZone) != humanZones.end();
+            priority = playerbot::PveManager::GetWorldPopulationLoginPriority(candidate.lowGuid, homeZoneHasHuman);
+        }
+        priorityByGuid[candidate.lowGuid] = priority;
+    }
+
+    pool.erase(std::remove_if(pool.begin(), pool.end(), [&](RandomBotPoolCandidate const& candidate)
+    {
+        return priorityByGuid[candidate.lowGuid] == 0;
+    }), pool.end());
+
     std::stable_sort(pool.begin(), pool.end(), [&](RandomBotPoolCandidate const& left, RandomBotPoolCandidate const& right)
     {
+        uint8 const leftPriority = priorityByGuid[left.lowGuid];
+        uint8 const rightPriority = priorityByGuid[right.lowGuid];
+        if (leftPriority != rightPriority)
+            return leftPriority > rightPriority;
+
         bool const leftRecent = state.recentSelectedLowGuidSet.find(left.lowGuid) != state.recentSelectedLowGuidSet.end();
         bool const rightRecent = state.recentSelectedLowGuidSet.find(right.lowGuid) != state.recentSelectedLowGuidSet.end();
         uint64 const leftScore = ComputeDeterministicCandidateScore(left, state.rebalanceEpoch + 1, leftRecent);
@@ -1653,8 +1724,10 @@ std::vector<RandomBotPoolCandidate> PickLoginCandidates(RandomBotPopulationState
             return value.lowGuid == candidate.lowGuid;
         });
 
-        if (exists == selected.end())
-            selected.push_back(candidate);
+        if (exists != selected.end())
+            continue;
+
+        selected.push_back(candidate);
     }
 
     return selected;
@@ -1798,6 +1871,11 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
             online.total, online.alliance, online.horde);
     }
 
+    HumanPopulationMetrics const humans = CollectHumanPopulationMetrics(state.config.botAccountIds);
+    bool const humanZonesChanged = state.humanZoneSnapshotInitialized && humans.zones != state.lastHumanZones;
+    state.humanZoneSnapshotInitialized = true;
+    state.lastHumanZones = humans.zones;
+
     uint32 target = state.config.targetMin;
     if (state.config.targetMax > state.config.targetMin)
     {
@@ -1805,26 +1883,91 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
         target = state.config.targetMin + static_cast<uint32>(state.rebalanceEpoch % span);
     }
 
-    if (emitDiag)
-        TC_LOG_ERROR("playerbots.population", "DIAG startup-hang: Rebalance before human-interest check bgTypeId={}.", uint32(kManagedBattleground));
-    bool const hasHumanInterest = HasAnyRealHumanInterestInBattleground(kManagedBattleground, state.config.botAccountIds);
-    if (hasHumanInterest)
+    bool hasHumanInterest = false;
+    if (!state.config.dynamicWorldLoadEnabled)
     {
-        if (Battleground* battlegroundTemplate = sBattlegroundMgr->GetBattlegroundTemplate(kManagedBattleground))
+        if (emitDiag)
+            TC_LOG_ERROR("playerbots.population", "DIAG startup-hang: Rebalance before human-interest check bgTypeId={}.", uint32(kManagedBattleground));
+        hasHumanInterest = HasAnyRealHumanInterestInBattleground(kManagedBattleground, state.config.botAccountIds);
+        if (hasHumanInterest)
         {
-            uint32 const fillTarget = battlegroundTemplate->GetMaxPlayersPerTeam() * 2u;
-            if (fillTarget > target)
-                target = fillTarget;
+            if (Battleground* battlegroundTemplate = sBattlegroundMgr->GetBattlegroundTemplate(kManagedBattleground))
+            {
+                uint32 const fillTarget = battlegroundTemplate->GetMaxPlayersPerTeam() * 2u;
+                if (fillTarget > target)
+                    target = fillTarget;
+            }
         }
     }
+
+    // Barracks+ keeps a fixed combined human+persistent-bot world budget. Each
+    // real login consumes one persistent-bot slot; transient PvP clones are
+    // created from the offline roster and therefore do not need parked bots.
+    if (state.config.dynamicWorldLoadEnabled)
+        target = target > humans.total ? target - humans.total : 0;
+
     if (emitDiag)
         TC_LOG_ERROR("playerbots.population", "DIAG startup-hang: Rebalance after human-interest check target={}.", target);
 
     uint32 effectiveOnlineCount = online.total;
 
-    TC_LOG_INFO("playerbots.population", "Random bot population rebalance tick={} online={} target={} range=[{}, {}] enabled={} runtime={}",
-        state.rebalanceTicks, online.total, target, state.config.targetMin, state.config.targetMax,
-        state.config.enabled ? 1 : 0, state.runtimeEnabled ? 1 : 0);
+    struct PruneCandidate
+    {
+        ObjectGuid guid;
+        uint8 priority = 0;
+    };
+
+    std::vector<PruneCandidate> pruneCandidates;
+    pruneCandidates.reserve(online.guids.size());
+    for (ObjectGuid const& guid : online.guids)
+    {
+        Player* player = ObjectAccessor::FindConnectedPlayer(guid);
+        if (!player || !IsManagedRandomBotImpl(player, state.config.botAccountIds))
+            continue;
+
+        bool const currentZoneHasHuman = humans.zones.find(player->GetZoneId()) != humans.zones.end();
+        uint8 const priority = state.config.dynamicWorldLoadEnabled
+            ? playerbot::PveManager::GetWorldPopulationPrunePriority(player, currentZoneHasHuman)
+            : (playerbot::PveManager::IsExemptFromBattlegroundOrchestration(player) ? 0 : 1);
+        if (priority)
+            pruneCandidates.push_back({ guid, priority });
+    }
+
+    std::sort(pruneCandidates.begin(), pruneCandidates.end(), [](PruneCandidate const& left, PruneCandidate const& right)
+    {
+        if (left.priority != right.priority)
+            return left.priority > right.priority;
+        return left.guid.GetRawValue() < right.guid.GetRawValue();
+    });
+
+    std::unordered_set<uint64> prunedGuids;
+    bool changed = false;
+
+    // Starter-zone non-drifters are forbidden independently of the configured
+    // population target. A successful logout immediately returns the character
+    // to the same offline pool used as transient BG/arena clone sources.
+    if (state.config.dynamicWorldLoadEnabled)
+        for (PruneCandidate const& candidate : pruneCandidates)
+        {
+            if (candidate.priority < 100)
+                break;
+
+            state.logoutAttempts++;
+            if (TryLogoutRandomBot(candidate.guid))
+            {
+                state.logoutSuccess++;
+                prunedGuids.insert(candidate.guid.GetRawValue());
+                if (effectiveOnlineCount)
+                    --effectiveOnlineCount;
+                changed = true;
+            }
+            else
+                state.skippedIntegrationGap++;
+        }
+
+    TC_LOG_INFO("playerbots.population", "Random bot population rebalance tick={} online={} humans={} target={} range=[{}, {}] enabled={} dynamic={} runtime={}",
+        state.rebalanceTicks, online.total, humans.total, target, state.config.targetMin, state.config.targetMax,
+        state.config.enabled ? 1 : 0, state.config.dynamicWorldLoadEnabled ? 1 : 0, state.runtimeEnabled ? 1 : 0);
 
     if (effectiveOnlineCount < target)
     {
@@ -1835,7 +1978,7 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
             TC_LOG_WARN("playerbots.population",
                 "Random bot login orchestration is not supported in this build/runtime path; skipping {} planned login attempts.",
                 needed);
-            return false;
+            return changed;
         }
 
         std::vector<RandomBotPoolCandidate> pool = QueryOfflinePool(state.config);
@@ -1843,10 +1986,11 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
         if (pool.empty())
         {
             state.skippedNoCandidatePool++;
-            return false;
+            return changed;
         }
 
-        std::vector<RandomBotPoolCandidate> const selection = PickLoginCandidates(state, pool, needed, online.alliance, online.horde, onlineByAccount);
+        std::vector<RandomBotPoolCandidate> const selection = PickLoginCandidates(state, pool, needed,
+            online.alliance, online.horde, onlineByAccount, humans.zones);
         for (RandomBotPoolCandidate const& candidate : selection)
         {
             state.loginAttempts++;
@@ -1857,54 +2001,87 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
                 state.skippedIntegrationGap++;
         }
 
-        return !selection.empty();
+        return changed || !selection.empty();
     }
 
-    if (!hasHumanInterest && online.total > target)
+    if ((state.config.dynamicWorldLoadEnabled || !hasHumanInterest) && effectiveOnlineCount > target)
     {
-        uint32 const excess = online.total - target;
+        uint32 const excess = effectiveOnlineCount - target;
         uint32 processed = 0;
-        for (ObjectGuid const& guid : online.guids)
+        for (PruneCandidate const& candidate : pruneCandidates)
         {
             if (processed >= excess)
                 break;
 
-            if (Player const* player = ObjectAccessor::FindConnectedPlayer(guid))
-            {
-                if (!IsManagedRandomBotImpl(player, state.config.botAccountIds))
-                {
-                    state.skippedSafetyRealPlayers++;
-                    TC_LOG_WARN("playerbots.population", "Random bot logout safety skip: guid={} account={} is not a managed random bot.",
-                        guid.ToString(), ResolvePlayerAccountId(player));
-                    continue;
-                }
-
-                // Companions grouped with a human are pinned online; shedding
-                // them mid-dungeon because the population is over target would
-                // dissolve the human's party from under them.
-                if (playerbot::PveManager::IsExemptFromBattlegroundOrchestration(player))
-                    continue;
-            }
+            if (prunedGuids.find(candidate.guid.GetRawValue()) != prunedGuids.end())
+                continue;
 
             state.logoutAttempts++;
-            if (TryLogoutRandomBot(guid))
+            if (TryLogoutRandomBot(candidate.guid))
+            {
                 state.logoutSuccess++;
+                changed = true;
+            }
             else
                 state.skippedIntegrationGap++;
 
             ++processed;
         }
 
-        return processed > 0;
+        return changed;
     }
 
-    return false;
+    // A zone transition does not alter the combined population target, but it
+    // can make a different local bot useful. Swap at most one quiet-zone local
+    // for an offline local whose assigned home now contains a real player.
+    if (state.config.dynamicWorldLoadEnabled && !changed && humanZonesChanged &&
+        effectiveOnlineCount == target && !humans.zones.empty())
+    {
+        auto victim = std::find_if(pruneCandidates.begin(), pruneCandidates.end(), [&](PruneCandidate const& candidate)
+        {
+            return candidate.priority >= 80 && prunedGuids.find(candidate.guid.GetRawValue()) == prunedGuids.end();
+        });
+
+        if (victim != pruneCandidates.end())
+        {
+            std::vector<RandomBotPoolCandidate> pool = QueryOfflinePool(state.config);
+            pool.erase(std::remove_if(pool.begin(), pool.end(), [&](RandomBotPoolCandidate const& candidate)
+            {
+                uint32 const homeZone = playerbot::PveManager::GetWorldPopulationHomeZone(candidate.lowGuid);
+                return !homeZone || humans.zones.find(homeZone) == humans.zones.end() ||
+                    playerbot::PveManager::GetWorldPopulationLoginPriority(candidate.lowGuid, true) != 2;
+            }), pool.end());
+
+            std::unordered_map<uint32, uint32> const onlineByAccount = QueryOnlineBotCountsByAccount(state.config);
+            std::vector<RandomBotPoolCandidate> const selection = PickLoginCandidates(state, pool, 1,
+                online.alliance, online.horde, onlineByAccount, humans.zones);
+            if (!selection.empty())
+            {
+                state.logoutAttempts++;
+                if (TryLogoutRandomBot(victim->guid))
+                {
+                    state.logoutSuccess++;
+                    state.loginAttempts++;
+                    TrackRecentSelection(state, selection.front().lowGuid);
+                    if (TryLoginBotCharacter(selection.front()))
+                        state.loginSuccess++;
+                    else
+                        state.skippedIntegrationGap++;
+                    return true;
+                }
+                state.skippedIntegrationGap++;
+            }
+        }
+    }
+
+    return changed;
 }
 
 void LoadPopulationConfigLocked(RandomBotPopulationState& state)
 {
     RandomBotPopulationConfig config;
     config.enabled = sConfigMgr->GetBoolDefault("Playerbot.RandomPopulation.Enable", false);
+    config.dynamicWorldLoadEnabled = sConfigMgr->GetBoolDefault("Playerbot.RandomPopulation.DynamicWorldLoad.Enable", false);
     config.targetMin = std::max<int32>(0, sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.TargetMin", 0));
     config.targetMax = std::max<int32>(0, sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.TargetMax", 0));
     config.rebalanceIntervalMs = std::max<int32>(1000, sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.RebalanceIntervalMs", 15000));
@@ -1932,6 +2109,8 @@ void LoadPopulationConfigLocked(RandomBotPopulationState& state)
     state.runtimeEnabled = state.config.enabled;
     state.rebalanceTimerMs = 0;
     state.rebalanceRequested = false;
+    state.humanZoneSnapshotInitialized = false;
+    state.lastHumanZones.clear();
 
     while (state.recentSelectedLowGuids.size() > state.config.selectionHistorySize)
     {
@@ -1940,8 +2119,9 @@ void LoadPopulationConfigLocked(RandomBotPopulationState& state)
         state.recentSelectedLowGuidSet.erase(guid);
     }
 
-    TC_LOG_INFO("playerbots.population", "Random bot population config loaded: enabled={}, targetMin={}, targetMax={}, intervalMs={}, levelRange=[{}, {}], allianceRatio={}, maxPerAccount={}, accountPoolSize={}.",
-        state.config.enabled ? 1 : 0, state.config.targetMin, state.config.targetMax, state.config.rebalanceIntervalMs,
+    TC_LOG_INFO("playerbots.population", "Random bot population config loaded: enabled={}, dynamicWorldLoad={}, targetMin={}, targetMax={}, intervalMs={}, levelRange=[{}, {}], allianceRatio={}, maxPerAccount={}, accountPoolSize={}.",
+        state.config.enabled ? 1 : 0, state.config.dynamicWorldLoadEnabled ? 1 : 0,
+        state.config.targetMin, state.config.targetMax, state.config.rebalanceIntervalMs,
         state.config.minLevel, state.config.maxLevel, state.config.allianceRatioPercent, state.config.maxOnlineBotsPerAccount, state.config.botAccountIds.size());
 }
 }
@@ -2070,6 +2250,27 @@ void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
         g_NextPlayerbotInsigniaCheckTimeByGuid.erase(rawGuid);
         g_PlayerbotInsigniaBreakableAuraFirstSeenTimeByGuid.erase(rawGuid);
     }
+}
+
+void RandomBotParticipationManager::NotifyHumanPopulationChanged(Player const* player)
+{
+    if (!player)
+        return;
+
+    // The population manager itself synchronously logs virtual sessions out
+    // while holding its state mutex. Reject those before taking the mutex so a
+    // PlayerScript logout callback cannot re-enter and deadlock it.
+    WorldSession const* session = player->GetSession();
+    if (!session || session->IsVirtualSession() || session->IsTransientPlayerSession())
+        return;
+
+    std::lock_guard<std::mutex> lock(g_RandomPopulationLock);
+    if (!g_RandomPopulation.config.dynamicWorldLoadEnabled ||
+        IsManagedRandomBotImpl(player, g_RandomPopulation.config.botAccountIds))
+        return;
+
+    g_RandomPopulation.rebalanceRequested = true;
+    g_RandomPopulation.rebalanceTimerMs = g_RandomPopulation.config.rebalanceIntervalMs;
 }
 
 // Real players get an under-map recovery for free: MovementHandler.cpp's

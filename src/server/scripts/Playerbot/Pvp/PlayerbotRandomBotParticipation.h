@@ -77,6 +77,10 @@ public:
     static void OnStartupBootstrap();
     static void OnWorldUpdate(uint32 diffMs);
     static void OnPlayerLogout(Player const* player);
+    // Real-player login/logout/zone changes use this to request an immediate
+    // dynamic world-population rebalance. Managed and transient players are
+    // ignored inside the implementation.
+    static void NotifyHumanPopulationChanged(Player const* player);
     static void ProcessPlayerLifecycle(Player* player);
     static void FinalizePendingVirtualPlayerTeleport(Player* player);
 
