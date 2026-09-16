@@ -112,6 +112,34 @@ bool IsSocketlessServerDrivenPlayer(Unit const* unit)
     return session && (session->IsVirtualSession() || session->IsTransientPlayerSession());
 }
 
+// Movement flags a socketless playerbot must never publish inside a
+// MovementInfo-carrying MSG_MOVE_* packet (teleport, turn-in-place).
+//
+// Observing clients do not apply those packets on arrival. The 3.3.5a client
+// replays a remote unit's MSG_MOVE_* through a per-unit queue ordered by a time
+// derived from the packet's own timestamp, and SMSG_FORCE_MOVE_ROOT/UNROOT go
+// into that same queue stamped with their receive time (Wow.exe 12340:
+// 0x6EC8B0 and 0x6EEFF0, both inserting through 0x6EC090). A MSG_MOVE_* that
+// maps a few ms into the future therefore applies AFTER an unroot sent right
+// behind it, and it copies its movement flags verbatim, root included. The
+// observer is left believing the bot is rooted, and the client will not start
+// a spline for a rooted unit (0x6EB680): every later SMSG_MONSTER_MOVE is
+// resolved by placing the model at the spline's end point instead. The bot hops
+// from destination to destination while its server position, and anything
+// chasing it, stay right.
+//
+// Shadow Wraith Fade (89784) sets this up on every cast: its expiry
+// near-teleports the still-rooted body and the unroot follows right behind.
+// Root state reaches observers through the root/unroot opcodes alone.
+//
+// The motion flags go for the same reason they always did: a bot never sends
+// the stop that would end an observer's dead reckoning.
+static uint32 constexpr SOCKETLESS_OBSERVER_STRIPPED_MOVEMENT_FLAGS =
+    MOVEMENTFLAG_MASK_MOVING | MOVEMENTFLAG_MASK_TURNING | MOVEMENTFLAG_SPLINE_ENABLED |
+    MOVEMENTFLAG_ROOT | MOVEMENTFLAG_PENDING_ROOT |
+    MOVEMENTFLAG_PENDING_STOP | MOVEMENTFLAG_PENDING_STRAFE_STOP | MOVEMENTFLAG_PENDING_FORWARD | MOVEMENTFLAG_PENDING_BACKWARD |
+    MOVEMENTFLAG_PENDING_STRAFE_LEFT | MOVEMENTFLAG_PENDING_STRAFE_RIGHT;
+
 void SyncSocketlessServerDrivenMovementInfo(Unit* unit, float x, float y, float z, float orientation)
 {
     if (!IsSocketlessServerDrivenPlayer(unit))
@@ -169,9 +197,7 @@ void BroadcastSocketlessServerDrivenFacing(Unit* unit)
         return;
 
     MovementInfo movementInfo = unit->m_movementInfo;
-    movementInfo.RemoveMovementFlag(MOVEMENTFLAG_MASK_MOVING | MOVEMENTFLAG_MASK_TURNING | MOVEMENTFLAG_SPLINE_ENABLED |
-        MOVEMENTFLAG_PENDING_STOP | MOVEMENTFLAG_PENDING_STRAFE_STOP | MOVEMENTFLAG_PENDING_FORWARD | MOVEMENTFLAG_PENDING_BACKWARD |
-        MOVEMENTFLAG_PENDING_STRAFE_LEFT | MOVEMENTFLAG_PENDING_STRAFE_RIGHT | MOVEMENTFLAG_PENDING_ROOT);
+    movementInfo.RemoveMovementFlag(SOCKETLESS_OBSERVER_STRIPPED_MOVEMENT_FLAGS);
     movementInfo.pos.Relocate(unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ(), unit->GetOrientation());
     movementInfo.time = GameTime::GetGameTimeMS();
     movementInfo.fallTime = 0;
@@ -14892,6 +14918,17 @@ void Unit::SendTeleportPacket(Position const& pos, bool teleportingTransport /*=
 
     MovementInfo teleportMovementInfo = m_movementInfo;
     teleportMovementInfo.pos.Relocate(pos);
+
+    // A playerbot has no client of its own to settle these flags afterwards; a
+    // rooted bot's teleport in particular must not re-root it on observers after
+    // its unroot (see SOCKETLESS_OBSERVER_STRIPPED_MOVEMENT_FLAGS). Harmless for
+    // the static lobby preview clones, which reach this directly.
+    if (IsSocketlessServerDrivenPlayer(this))
+    {
+        teleportMovementInfo.RemoveMovementFlag(SOCKETLESS_OBSERVER_STRIPPED_MOVEMENT_FLAGS);
+        teleportMovementInfo.fallTime = 0;
+    }
+
     Position transportPos = m_movementInfo.transport.pos;
     if (TransportBase* transportBase = GetDirectTransport())
     {

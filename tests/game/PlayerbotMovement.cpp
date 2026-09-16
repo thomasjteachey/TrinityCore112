@@ -52,7 +52,37 @@ TEST_CASE("Socketless playerbot turn-in-place is published to observers", "[play
     CHECK(body.find("if (unit->movespline && !unit->movespline->Finalized())") != std::string::npos);
     CHECK(body.find("WorldPacket data(MSG_MOVE_SET_FACING, 64);") != std::string::npos);
     CHECK(body.find("movementInfo.pos.Relocate(unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ(), unit->GetOrientation());") != std::string::npos);
-    CHECK(body.find("MOVEMENTFLAG_SPLINE_ENABLED") != std::string::npos);
+    CHECK(body.find("movementInfo.RemoveMovementFlag(SOCKETLESS_OBSERVER_STRIPPED_MOVEMENT_FLAGS);") != std::string::npos);
+}
+
+TEST_CASE("Socketless playerbot MSG_MOVE broadcasts never carry root", "[playerbot][movement]")
+{
+    std::string const unitSource = ReadFile("src/server/game/Entities/Unit/Unit.cpp");
+    // Observers queue MSG_MOVE_* by packet time but force root/unroot by receive
+    // time, so a root flag in a bot's teleport or facing packet can land after the
+    // unroot and leave the bot rooted client-side (splines snap to their end point).
+    std::size_t const maskPos = unitSource.find("static uint32 constexpr SOCKETLESS_OBSERVER_STRIPPED_MOVEMENT_FLAGS =");
+    REQUIRE(maskPos != std::string::npos);
+    std::string const mask = unitSource.substr(maskPos, unitSource.find(';', maskPos) - maskPos);
+    CHECK(mask.find("MOVEMENTFLAG_ROOT") != std::string::npos);
+    CHECK(mask.find("MOVEMENTFLAG_PENDING_ROOT") != std::string::npos);
+    CHECK(mask.find("MOVEMENTFLAG_MASK_MOVING") != std::string::npos);
+    CHECK(mask.find("MOVEMENTFLAG_SPLINE_ENABLED") != std::string::npos);
+
+    std::size_t const teleportPos = unitSource.find("void Unit::SendTeleportPacket(Position const& pos, bool teleportingTransport");
+    REQUIRE(teleportPos != std::string::npos);
+    std::string const teleportBody = unitSource.substr(teleportPos, unitSource.find("BuildMovementPacket(pos, transportPos, teleportMovementInfo, &moveUpdateTeleport)", teleportPos) - teleportPos);
+    CHECK(teleportBody.find("if (IsSocketlessServerDrivenPlayer(this))") != std::string::npos);
+    CHECK(teleportBody.find("teleportMovementInfo.RemoveMovementFlag(SOCKETLESS_OBSERVER_STRIPPED_MOVEMENT_FLAGS);") != std::string::npos);
+
+    // A near teleport must reach observers as MSG_MOVE_TELEPORT: a SMSG_MONSTER_MOVE
+    // stop that lands far from the drawn model is walked there by the client.
+    std::string const playerSource = ReadFile("src/server/game/Entities/Player/Player.cpp");
+    std::size_t const branchPos = playerSource.find("        if (socketlessServerDriven)");
+    REQUIRE(branchPos != std::string::npos);
+    std::string const branch = playerSource.substr(branchPos, 3000);
+    CHECK(branch.find("SendTeleportPacket(m_teleport_dest, (options & TELE_TO_TRANSPORT_TELEPORT) != 0);") != std::string::npos);
+    CHECK(playerSource.find("StopAtCurrentPosition") == std::string::npos);
 }
 
 TEST_CASE("Socketless pure vertical knock-up uses a closed client-timed spline", "[playerbot][movement]")

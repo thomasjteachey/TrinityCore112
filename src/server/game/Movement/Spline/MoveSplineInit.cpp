@@ -189,36 +189,6 @@ namespace Movement
         unit->SendMessageToSet(&data, true);
     }
 
-    void MoveSplineInit::StopAtCurrentPosition()
-    {
-        MoveSpline& move_spline = *unit->movespline;
-        bool const transport = unit->HasUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT) && unit->GetTransGUID();
-
-        Position const* pos = transport ? &unit->m_movementInfo.transport.pos : unit;
-        Location loc;
-        loc.x = pos->GetPositionX();
-        loc.y = pos->GetPositionY();
-        loc.z = pos->GetPositionZ();
-        loc.orientation = unit->GetOrientation();
-
-        args.flags = MoveSplineFlag::Done;
-        unit->m_movementInfo.RemoveMovementFlag(MOVEMENTFLAG_FORWARD | MOVEMENTFLAG_SPLINE_ENABLED);
-        move_spline.onTransport = transport;
-        move_spline.Initialize(args);
-
-        WorldPacket data(SMSG_MONSTER_MOVE, 64);
-        data << unit->GetPackGUID();
-        if (transport)
-        {
-            data.SetOpcode(SMSG_MONSTER_MOVE_TRANSPORT);
-            data << unit->GetTransGUID().WriteAsPacked();
-            data << int8(unit->GetTransSeat());
-        }
-
-        PacketBuilder::WriteStopMovement(loc, args.splineId, data);
-        unit->SendMessageToSet(&data, true);
-    }
-
     MoveSplineInit::MoveSplineInit(Unit* m) : unit(m)
     {
         args.splineId = splineIdGen.NewId();
