@@ -29,6 +29,7 @@
 #include "Player.h"
 #include "PlayerbotObcClone.h"
 #include "PlayerbotRandomBotParticipation.h"
+#include "Playerbot/Pve/PlayerbotPveManager.h"
 #include "VioletHoldBoons.h"
 #include "Random.h"
 #include "SharedDefines.h"
@@ -53,13 +54,25 @@ namespace
 std::unordered_set<uint32> g_TornDownInstances;
 
 // The offline half of the bot roster: characters on the managed bot accounts
-// that are not logged in. Read on the world thread and kept for a minute, so
-// the waves of one run do not query the database one after another.
+// and the PvP-only accounts that are not logged in. Read on the world thread
+// and kept for a minute, so the waves of one run do not query the database one
+// after another.
 struct OfflineWaveBot
 {
     uint32 lowGuid = 0;
     uint8 level = 0;
+    bool pvpOnly = false;
 };
+
+// The same split the battleground fill makes (PlayerbotBgFillDriver.cpp): a
+// bracket that reaches the level cap draws only from the PvP-only accounts, and
+// every lower bracket only from the random population.
+constexpr uint32 kPvpOnlyPoolBracketLevel = 60;
+
+bool DrawsFromPvpOnlyPool(Battleground const* bg)
+{
+    return bg && bg->GetMaxLevel() >= kPvpOnlyPoolBracketLevel;
+}
 
 constexpr uint32 kOfflineBotPoolRefreshMs = 60 * IN_MILLISECONDS;
 std::vector<OfflineWaveBot> g_OfflineWaveBots;
@@ -104,7 +117,13 @@ void RefreshOfflineWaveBotsIfStale()
     g_OfflineWaveBotsLoadedMs = nowMs;
     g_OfflineWaveBots.clear();
 
-    std::vector<uint32> const accounts = playerbot::RandomBotParticipationManager::GetConfiguredBotAccountIds();
+    // The PvP-only accounts are kept out of Playerbot.RandomPopulation.BotAccountIds
+    // so nothing ever logs those characters in; they are only ever copied.
+    std::vector<uint32> accounts = playerbot::RandomBotParticipationManager::GetConfiguredBotAccountIds();
+    std::vector<uint32> const& pvpOnlyAccounts = playerbot::PveManager::GetConfig().pvpOnlyAccountIds;
+    accounts.insert(accounts.end(), pvpOnlyAccounts.begin(), pvpOnlyAccounts.end());
+    std::sort(accounts.begin(), accounts.end());
+    accounts.erase(std::unique(accounts.begin(), accounts.end()), accounts.end());
     if (accounts.empty())
         return;
 
@@ -118,7 +137,7 @@ void RefreshOfflineWaveBotsIfStale()
 
     // Obcc names are the legacy on-disk Obsidian Colosseum clones, not characters.
     QueryResult result = CharacterDatabase.PQuery(
-        "SELECT guid, level, at_login FROM characters WHERE online = 0 AND account IN ({}) AND name NOT LIKE 'Obcc%'",
+        "SELECT guid, level, at_login, account FROM characters WHERE online = 0 AND account IN ({}) AND name NOT LIKE 'Obcc%'",
         accountList);
     if (!result)
         return;
@@ -134,6 +153,7 @@ void RefreshOfflineWaveBotsIfStale()
         OfflineWaveBot bot;
         bot.lowGuid = fields[0].GetUInt32();
         bot.level = fields[1].GetUInt8();
+        bot.pvpOnly = std::binary_search(pvpOnlyAccounts.begin(), pvpOnlyAccounts.end(), fields[3].GetUInt32());
         g_OfflineWaveBots.push_back(bot);
     } while (result->NextRow());
 }
@@ -155,7 +175,11 @@ void RefreshOfflineWaveBotsIfStale()
 // Returning nothing is deliberately allowed. The battleground then clones the
 // party itself, which is level-appropriate by definition - a better answer
 // than a mismatched stranger, and the wave still cannot stall.
-std::vector<ObjectGuid> CollectBotWaveSources(uint32 partyMinLevel, uint32 partyMaxLevel, bool includeOffline)
+//
+// pvpOnlyPool (DrawsFromPvpOnlyPool): the bracket reaches the level cap, so the
+// PvP-only characters are the whole population and nobody else is offered.
+std::vector<ObjectGuid> CollectBotWaveSources(uint32 partyMinLevel, uint32 partyMaxLevel, bool includeOffline,
+    bool pvpOnlyPool)
 {
     // Disjoint rings: a bot lands in the tightest one that contains it, so
     // returning the first non-empty ring returns the closest match available.
@@ -185,6 +209,9 @@ std::vector<ObjectGuid> CollectBotWaveSources(uint32 partyMinLevel, uint32 party
             if (!playerbot::IsManagedRandomBot(candidate))
                 continue;
 
+            if (pvpOnlyPool != playerbot::PveManager::IsPvpOnlyBot(candidate))
+                continue;
+
             // A bot already inside a battleground or arena is mid-match somewhere;
             // cloning it works, but its double walking out of a cell while the
             // original fights elsewhere reads as a bug to anyone who knows it.
@@ -203,6 +230,9 @@ std::vector<ObjectGuid> CollectBotWaveSources(uint32 partyMinLevel, uint32 party
         RefreshOfflineWaveBotsIfStale();
         for (OfflineWaveBot const& bot : g_OfflineWaveBots)
         {
+            if (pvpOnlyPool != bot.pvpOnly)
+                continue;
+
             size_t const ring = ringOf(bot.level);
             if (ring >= kBands.size())
                 continue;
@@ -345,7 +375,7 @@ void FulfilAllyRequests(BattlegroundVHR* bg)
         }
 
         std::vector<ObjectGuid> bots = CollectBotWaveSources(request.partyMinLevel, request.partyMaxLevel,
-            loadSession != nullptr);
+            loadSession != nullptr, DrawsFromPvpOnlyPool(bg));
         Player* source = nullptr;
         ObjectGuid offlineSource;
         while (!bots.empty() && !source && !offlineSource)
@@ -650,7 +680,7 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
     if (request->composition == VhrWaveComposition::BotSourced)
     {
         std::vector<ObjectGuid> bots = CollectBotWaveSources(request->partyMinLevel, request->partyMaxLevel,
-            loadSession != nullptr);
+            loadSession != nullptr, DrawsFromPvpOnlyPool(bg));
         if (!bots.empty())
         {
             // Shuffle and deal without repeats until the pool runs dry, so a
