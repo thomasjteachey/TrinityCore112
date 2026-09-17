@@ -42,6 +42,7 @@
 #include <set>
 #include <shared_mutex>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -55,6 +56,13 @@ constexpr uint32 kOfflinePoolRefreshMs = 60 * IN_MILLISECONDS;
 // callback logged out, most likely) and the seat is tried again.
 constexpr uint32 kOfflineCloneTimeoutMs = 10 * IN_MILLISECONDS;
 
+// Difficulty tiers, weakest first; the names are the config key segments.
+constexpr uint8 kTierCount = 3;
+constexpr uint8 kNoTier = kTierCount;
+constexpr char const* kTierNames[kTierCount] = { "Easy", "Medium", "Hard" };
+// A typo such as "1-900000" must not build a table the size of the character list.
+constexpr uint32 kMaxTierIdRange = 100000;
+
 struct BgFillConfig
 {
     bool enabled = false;
@@ -66,6 +74,10 @@ struct BgFillConfig
     uint32 clonesPerTick = 2;
     bool useOfflineBots = true;
     bool allowHumanMirrors = true;
+    // Playerbot.BgFill.Tier.*: the tier of each listed character (low guid) and
+    // the tier each listed battleground type is filled for.
+    std::unordered_map<uint32, uint8> tierByCharacter;
+    std::unordered_map<uint32, uint8> tierByBattleground;
 };
 
 BgFillConfig g_Config;
@@ -191,6 +203,49 @@ std::unordered_set<ObjectGuid> CollectUsedSources(uint32 instanceId,
             used.insert(pending.sourceGuid);
 
     return used;
+}
+
+// The tier a battleground is filled for. The battleground actually played
+// decides, so a Random Battleground that rolled a tiered one is dealt like it.
+uint8 TierOfBattleground(Battleground const* bg)
+{
+    auto itr = g_Config.tierByBattleground.find(uint32(bg->GetTypeID(true)));
+    if (itr == g_Config.tierByBattleground.end())
+        itr = g_Config.tierByBattleground.find(uint32(bg->GetTypeID()));
+    return itr != g_Config.tierByBattleground.end() ? itr->second : kNoTier;
+}
+
+uint8 TierOfSource(ObjectGuid const& guid)
+{
+    auto const itr = g_Config.tierByCharacter.find(guid.GetCounter());
+    return itr != g_Config.tierByCharacter.end() ? itr->second : kNoTier;
+}
+
+// A tiered battleground's bots go where they make the difference. The team the
+// real players are up against is dealt the battleground's own tier first, then
+// the tier beside it, then the far one, and bots in no tier last. The players'
+// own team is dealt that tier last, which keeps it for the other side. Sources
+// arrive shuffled and the sort is stable, so bots of equal rank stay in random
+// order.
+void OrderSourcesByTier(std::vector<ObjectGuid>& sources, uint8 matchTier, bool facesPlayers)
+{
+    if (matchTier == kNoTier)
+        return;
+
+    auto const rank = [matchTier, facesPlayers](ObjectGuid const& guid) -> uint8
+    {
+        uint8 const tier = TierOfSource(guid);
+        if (!facesPlayers)
+            return tier == matchTier ? 1 : 0;
+
+        if (tier == kNoTier)
+            return kTierCount;
+
+        return tier > matchTier ? uint8(tier - matchTier) : uint8(matchTier - tier);
+    };
+
+    std::stable_sort(sources.begin(), sources.end(),
+        [&rank](ObjectGuid const& left, ObjectGuid const& right) { return rank(left) < rank(right); });
 }
 
 // Online managed bots whose level sits inside the bracket, shuffled. A bot
@@ -410,6 +465,9 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
     uint32 const minLevel = bg->GetMinLevel();
     uint32 const maxLevel = std::max(bg->GetMaxLevel(), minLevel);
     TeamId const teamIndex = Battleground::GetTeamIndexByTeamId(team);
+    TeamId const otherIndex = teamIndex == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
+    uint8 const matchTier = TierOfBattleground(bg);
+    bool const facesPlayers = tally.teams[otherIndex].humans != 0;
 
     uint32 added = 0;
     auto governorAllows = [&]()
@@ -419,6 +477,7 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
 
     // 1. Online bots in the bracket.
     std::vector<ObjectGuid> online = CollectOnlineSources(minLevel, maxLevel, usedSources);
+    OrderSourcesByTier(online, matchTier, facesPlayers);
     for (ObjectGuid const& sourceGuid : online)
     {
         if (added >= wanted || !governorAllows())
@@ -450,6 +509,7 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
     {
         RefreshOfflinePoolIfStale(nowMs);
         std::vector<ObjectGuid> offline = CollectOfflineSources(minLevel, maxLevel, usedSources);
+        OrderSourcesByTier(offline, matchTier, facesPlayers);
         WorldSession* callbackSession = offline.empty() ? nullptr : FindCallbackSession(tally, teamIndex);
         for (ObjectGuid const& sourceGuid : offline)
         {
@@ -481,7 +541,6 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
     // come from PlayerbotObcCloneManager, not from here.)
     if (added < wanted && g_Config.allowHumanMirrors && maxLevel < 60)
     {
-        TeamId const otherIndex = teamIndex == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
         for (ObjectGuid const& humanGuid : tally.teams[otherIndex].humanGuids)
         {
             if (added >= wanted || !governorAllows())
@@ -583,8 +642,12 @@ void FillMatch(LiveMatch& match, uint32& totalClones, uint32 nowMs)
         return;
 
     if (g_AnnouncedInstances.insert(match.instanceId).second)
-        TC_LOG_INFO("playerbots.bgfill", "PlayerbotBgFillDriver: filling {} instance {} (levels {}-{}) around {} real player(s), up to {} a side.",
-            bg->GetName(), match.instanceId, bg->GetMinLevel(), bg->GetMaxLevel(), match.tally.Humans(), cap);
+    {
+        uint8 const matchTier = TierOfBattleground(bg);
+        TC_LOG_INFO("playerbots.bgfill", "PlayerbotBgFillDriver: filling {} instance {} (levels {}-{}) around {} real player(s), up to {} a side, tier {}.",
+            bg->GetName(), match.instanceId, bg->GetMinLevel(), bg->GetMaxLevel(), match.tally.Humans(), cap,
+            matchTier == kNoTier ? "none" : kTierNames[matchTier]);
+    }
 
     std::vector<playerbot::PlayerbotObcCloneManager::CustomGameCloneInfo> const clones =
         playerbot::PlayerbotObcCloneManager::GetCustomGameClones(match.instanceId);
@@ -686,6 +749,44 @@ void WakeQueuesForWaitingPlayers(uint32 nowMs)
         }
     }
 }
+
+std::string_view TrimToken(std::string_view token)
+{
+    while (!token.empty() && (token.front() == ' ' || token.front() == '\t'))
+        token.remove_prefix(1);
+    while (!token.empty() && (token.back() == ' ' || token.back() == '\t'))
+        token.remove_suffix(1);
+    return token;
+}
+
+// "100955-100963, 101158" -> every id named or covered by a range. Trinity::StringTo
+// does not skip whitespace, so tokens are trimmed first; a token that does not
+// parse is reported rather than silently dropped.
+std::vector<uint32> ParseIdList(std::string const& key)
+{
+    std::vector<uint32> ids;
+    std::string const raw = sConfigMgr->GetStringDefault(key, "");
+    for (std::string_view token : Trinity::Tokenize(raw, ',', false))
+    {
+        token = TrimToken(token);
+        if (token.empty())
+            continue;
+
+        std::size_t const dash = token.find('-');
+        Optional<uint32> const first = Trinity::StringTo<uint32>(TrimToken(token.substr(0, dash)));
+        Optional<uint32> const last = dash == std::string_view::npos ? first : Trinity::StringTo<uint32>(TrimToken(token.substr(dash + 1)));
+        if (!first || !last || !*first || *first > *last || *last - *first >= kMaxTierIdRange)
+        {
+            TC_LOG_ERROR("server.loading", "{}: ignoring '{}', expected an id or a range first-last.", key, token);
+            continue;
+        }
+
+        for (uint32 offset = 0; offset <= *last - *first; ++offset)
+            ids.push_back(*first + offset);
+    }
+
+    return ids;
+}
 }
 
 namespace playerbot
@@ -708,6 +809,32 @@ void PlayerbotBgFillDriver::LoadConfig()
         if (Optional<uint32> typeId = Trinity::StringTo<uint32>(token))
             if (*typeId)
                 config.battlegroundTypes.insert(*typeId);
+
+    uint32 tierCharacters[kTierCount] = {};
+    uint32 tierBattlegrounds[kTierCount] = {};
+    for (uint8 tier = 0; tier < kTierCount; ++tier)
+    {
+        std::string const prefix = std::string("Playerbot.BgFill.Tier.") + kTierNames[tier];
+        for (uint32 guid : ParseIdList(prefix + ".Characters"))
+        {
+            auto const [itr, inserted] = config.tierByCharacter.emplace(guid, tier);
+            if (inserted)
+                ++tierCharacters[tier];
+            else if (itr->second != tier)
+                TC_LOG_ERROR("server.loading", "{}.Characters: character {} is already in the {} tier; it stays there.",
+                    prefix, guid, kTierNames[itr->second]);
+        }
+
+        for (uint32 typeId : ParseIdList(prefix + ".BattlegroundTypes"))
+        {
+            auto const [itr, inserted] = config.tierByBattleground.emplace(typeId, tier);
+            if (inserted)
+                ++tierBattlegrounds[tier];
+            else if (itr->second != tier)
+                TC_LOG_ERROR("server.loading", "{}.BattlegroundTypes: battleground type {} is already in the {} tier; it stays there.",
+                    prefix, typeId, kTierNames[itr->second]);
+        }
+    }
 
     g_Config = std::move(config);
     g_OfflinePool.loaded = false;
@@ -732,6 +859,10 @@ void PlayerbotBgFillDriver::LoadConfig()
         g_Config.queueWaitMs, g_Config.skirmishArenasEnabled ? "true" : "false", g_Config.skirmishArenaQueueWaitMs,
         g_Config.maxPerTeam, g_Config.clonesPerTick,
         g_Config.useOfflineBots ? "true" : "false", g_Config.allowHumanMirrors ? "true" : "false");
+
+    if (!g_Config.tierByCharacter.empty() || !g_Config.tierByBattleground.empty())
+        TC_LOG_INFO("server.loading", "Playerbot battleground fill tiers (bots/battlegrounds): easy {}/{}, medium {}/{}, hard {}/{}.",
+            tierCharacters[0], tierBattlegrounds[0], tierCharacters[1], tierBattlegrounds[1], tierCharacters[2], tierBattlegrounds[2]);
 }
 
 void PlayerbotBgFillDriver::OnWorldUpdate(uint32 diffMs)

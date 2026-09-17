@@ -44,6 +44,12 @@ namespace playerbot
 // the people in the match. Teams over the target - a person was admitted, or
 // the cap was lowered - shed clones, dead ones first. The resource governor
 // gates every addition and can shed clones under sustained pressure.
+//
+// Bots can be sorted into easy, medium and hard tiers (Playerbot.BgFill.Tier.*),
+// each owning some battleground types. In a battleground that belongs to a
+// tier, the team the real players are fighting is dealt that tier's bots first
+// and the players' own team gets them last, so one battleground can be the
+// easy fight and another the hard one while every copy comes from one pool.
 class PlayerbotBgFillDriver
 {
 public:

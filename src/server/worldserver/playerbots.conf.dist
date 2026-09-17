@@ -190,6 +190,34 @@ Playerbot.BgFill.UseOfflineBots = 1
 
 Playerbot.BgFill.AllowHumanMirrors = 1
 
+#    Playerbot.BgFill.Tier.Easy.Characters
+#    Playerbot.BgFill.Tier.Medium.Characters
+#    Playerbot.BgFill.Tier.Hard.Characters
+#        Description: Difficulty tiers for the bots the fill copies: character guids,
+#                     comma-separated, "first-last" for a range. A bot in no tier is dealt like
+#                     any other. A guid listed in two tiers stays in the easier one.
+#        Default:     "" (no tiers)
+
+Playerbot.BgFill.Tier.Easy.Characters = ""
+Playerbot.BgFill.Tier.Medium.Characters = ""
+Playerbot.BgFill.Tier.Hard.Characters = ""
+
+#    Playerbot.BgFill.Tier.Easy.BattlegroundTypes
+#    Playerbot.BgFill.Tier.Medium.BattlegroundTypes
+#    Playerbot.BgFill.Tier.Hard.BattlegroundTypes
+#        Description: Battleground type IDs that belong to each tier (100 Scarlet Chapel,
+#                     101 Blackrock Throne, 102 Obsidian Colosseum, ...). When one of these is
+#                     filled, the team the real players are fighting is dealt that tier's bots
+#                     first, then the tier next to it, then the far one; the players' own team
+#                     gets that tier's bots only once nobody else is left. A battleground in no
+#                     tier draws its bots at random. An arena skirmish matches its own arena's
+#                     type, or 6 for every arena.
+#        Default:     "" (no tiers)
+
+Playerbot.BgFill.Tier.Easy.BattlegroundTypes = ""
+Playerbot.BgFill.Tier.Medium.BattlegroundTypes = ""
+Playerbot.BgFill.Tier.Hard.BattlegroundTypes = ""
+
 #    Playerbot.PvpClassSpells.Enable
 #        Description: Enables Phase-4 class/spec PvP spell decision slices.
 #                     Current implementation provides reference-aligned trigger/action vocabulary
