@@ -11,6 +11,7 @@
 
 #include "PlayerbotRandomBotParticipation.h"
 #include "AsyncCallbackProcessor.h"
+#include "Custom/custom_barracks_hardcore.h"
 #include "MotionMaster.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
@@ -223,6 +224,15 @@ bool CopyEquipment(Player* clone, Player const* human)
         clone->StoreNewItemInBestSlots(sourceAmmoId, 2000);
         clone->SetAmmo(sourceAmmoId);
     }
+
+    // The source's EMPTY slots come over as well, and a copy has no login or
+    // resurrection of its own to be dressed at - so the field kit fills them
+    // here, by the source's rules (a no-op where Centurion.Hardcore.Enable is
+    // off). It has to be now: every caller seats the copy after this, and in a
+    // battleground only weapons and trinkets may change, which is how copies
+    // walked into Warsong Gulch with no chest and no bracers. After the ammo,
+    // so a ranged weapon the kit picks suits what the copy carries.
+    BarracksHardcore::IssueWhiteFieldKitToCopy(clone, human);
 
     return true;
 }

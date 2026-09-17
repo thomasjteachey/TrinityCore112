@@ -85,7 +85,20 @@ namespace BarracksHardcore
     // died and was reborn in the same breath came back with whatever the starter
     // outfit gave it and nothing else. Issuing the kit at the END of the reset,
     // at the bot's NEW level, is the order that leaves it dressed.
+    //
+    // Transient copies are left alone here; see IssueWhiteFieldKitToCopy.
     void IssueWhiteFieldKit(Player* player);
+
+    // The same kit for a transient copy - a battleground fill clone, an Obsidian
+    // Colosseum mirror, a custom-game, Violet Hold or bounty copy - judged by its
+    // SOURCE: a copy of a playerbot gets the playerbot level offset, and a copy
+    // of a tournament character gets no kit at all. The copy's own session has
+    // no account, so judged by itself it would be kitted as a person.
+    //
+    // Call it while the copy is being built, before it is seated anywhere: in
+    // a battleground only weapons and trinkets may change, so a copy that is
+    // not dressed on the way in stays short of armour for the whole match.
+    void IssueWhiteFieldKitToCopy(Player* copy, Player const* source);
 }
 
 #endif

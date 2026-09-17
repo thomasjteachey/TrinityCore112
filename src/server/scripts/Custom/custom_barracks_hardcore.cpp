@@ -1481,11 +1481,24 @@ namespace BarracksHardcore
     // Fills every empty kit slot with the best plain white piece the wearer's
     // level and proficiency allow. Runs on resurrection (dead players cannot
     // equip anything) and at login, so nobody stays bare.
-    void IssueWhiteFieldKit(Player* player)
+    //
+    // `rules` is the character whose standing decides the kit - the playerbot
+    // level offset, the tournament exemption, a challenge mode's refusal. That
+    // is the wearer itself for everybody except a transient copy, which is
+    // judged by the character it copies.
+    void IssueFieldKitAs(Player* player, Player const* rules)
     {
         // Tournament characters lose no gear, so there is nothing to replace -
         // and a white kit is no part of their loadout.
-        if (!s_enabled || !player || !player->IsAlive() || player->IsGameMaster() || Tournament::IsTournamentCharacter(player))
+        if (!s_enabled || !player || !rules || !player->IsAlive() || player->IsGameMaster() ||
+            Tournament::IsTournamentCharacter(rules))
+            return;
+
+        // A person the kit may not dress refuses every piece through the
+        // ChallengeModes equip hook. A copy has no challenge settings of its
+        // own for that hook to find, so the source is asked here - an Iron Man's
+        // mirror stays as bare as the Iron Man.
+        if (!KitMayDress(rules))
             return;
 
         // Nothing can be equipped mid-cast, stunned or charmed (CanEquipItem
@@ -1505,7 +1518,8 @@ namespace BarracksHardcore
         // The level the ITEM SEARCH runs at, deliberately below the wearer's.
         // Floored at 1 rather than 0 so the bottom of the game still finds the
         // level-1 pieces instead of coming up empty and leaving a slot bare.
-        uint32 const levelOffset = IsPlayerbot(player) ? s_kitBotLevelOffset : s_kitLevelOffset;
+        uint32 const levelOffset = IsPlayerbot(rules) || playerbot::PveManager::IsPvpOnlyBot(rules)
+            ? s_kitBotLevelOffset : s_kitLevelOffset;
         uint8 const kitLevel = uint8(std::max(1, int32(level) - int32(levelOffset)));
 
         // Read once: it cannot change while the kit is being handed out, and
@@ -1576,6 +1590,18 @@ namespace BarracksHardcore
                 bool const fallenBehind = int32(kitLevel) - int32(wornProto->RequiredLevel) >
                     int32(s_kitStaleLevels);
                 if (!tooGood && !fallenBehind)
+                    continue;
+
+                // Retire only what could be taken off right now. The replacement
+                // goes on through CanEquipNewItem, which refuses armour in combat,
+                // in a running arena and in any ordinary battleground (only
+                // weapons and trinkets change there - IsBattlegroundEquipChange-
+                // Allowed in Player.cpp) - and DestroyItem asks none of that. So a
+                // resurrection in Warsong Gulch burned a stale cloak off a person
+                // and could not put one back, and a battleground copy stood at its
+                // start with no chest and no bracers. A stale piece is still gear:
+                // it waits for the next pass outside.
+                if (player->CanUnequipItem(uint16(INVENTORY_SLOT_BAG_0) << 8 | slot, false) != EQUIP_ERR_OK)
                     continue;
 
                 player->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
@@ -1816,12 +1842,51 @@ namespace BarracksHardcore
             }
         }
 
-        if (granted)
+        if (rules != player)
+        {
+            // A copy is dressed once, as it is built, so this is the one record of
+            // what it went in wearing - including any slot the pool had nothing
+            // for. Its name is an internal one, so it is logged by its source's.
+            // The off hand behind a two-hander is not a gap.
+            std::string empty;
+            for (uint8 slot : kKitSlots)
+            {
+                if (player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot) ||
+                    (slot == EQUIPMENT_SLOT_OFFHAND && player->IsTwoHandUsed()))
+                    continue;
+                if (!empty.empty())
+                    empty += ",";
+                empty += std::to_string(slot);
+            }
+
+            if (granted || !empty.empty())
+                TC_LOG_INFO("playerbots.hardcore", "Issued {} pieces of white field kit to a copy of {}; empty kit slots [{}].",
+                    granted, rules->GetName(), empty);
+        }
+        else if (granted)
         {
             player->SaveToDB(false);
             TC_LOG_INFO("playerbots.hardcore", "Issued {} pieces of white field kit to {}.",
                 granted, player->GetName());
         }
+    }
+
+    void IssueWhiteFieldKit(Player* player)
+    {
+        // A transient copy was dressed while it was built, by its source's rules.
+        // Judged here it would be judged by its own account-less session, as a
+        // person - and a resurrection in a battleground, where its weapons can
+        // still change, would retire the playerbot-level ones as too good for it.
+        if (WorldSession const* session = player ? player->GetSession() : nullptr;
+            session && session->IsTransientPlayerSession())
+            return;
+
+        IssueFieldKitAs(player, player);
+    }
+
+    void IssueWhiteFieldKitToCopy(Player* copy, Player const* source)
+    {
+        IssueFieldKitAs(copy, source);
     }
 
     // Full loot: worn GREEN AND BETTER equipment is at stake. White and grey
@@ -2192,18 +2257,23 @@ public:
         ApplyFfaState(player);
         ApplyWarModeAura(player);
 
-        // A transient battleground clone copies its source's equipment exactly,
-        // including empty slots.  It never passes through the ordinary login or
-        // resurrection hooks that issue the Barracks field kit, so a poorly
-        // equipped source could produce a naked clone.  Persistent managed bots
-        // can reach the same state after a lifecycle transfer.  Map entry is the
-        // common point where both are alive and equip-capable.
+        // A persistent managed bot that reaches a battleground short of kit -
+        // after a lifecycle transfer - is topped up on the way in. In an
+        // ordinary battleground only its weapons can change by now (armour is
+        // locked there, IsBattlegroundEquipChangeAllowed in Player.cpp), so this
+        // arms it and no more.
+        //
+        // Transient copies are not dressed here. This used to try, and it is
+        // why battleground copies came in with no chest and no bracers: by map
+        // entry the copy is already seated, the kit could still retire its
+        // armour but not replace it, and it judged the copy as a person. A
+        // copy is dressed while it is built, by its source's rules
+        // (IssueWhiteFieldKitToCopy, from the clone manager's CopyEquipment).
         //
         // IssueWhiteFieldKit only fills missing kit slots (or refreshes an older
         // issued piece); earned equipment is never replaced.
         if (player && player->InBattleground())
-            if (WorldSession const* session = player->GetSession();
-                session && (session->IsVirtualSession() || session->IsTransientPlayerSession()))
+            if (WorldSession const* session = player->GetSession(); session && session->IsVirtualSession())
                 IssueWhiteFieldKit(player);
     }
 
