@@ -78,6 +78,7 @@ namespace
         std::vector<InnateSpell> InnateSpells;
         std::vector<uint32> ProfessionSpells;
         uint32 PhaseMask = 0;
+        uint32 WorldPhaseMask = 0;
         bool MaxWeaponSkill = true;
         bool MaxSkillForLevel = true;
         int32 DeathSicknessLevel = 61;
@@ -217,6 +218,22 @@ void LoadConfig()
         // from world characters, so the bit adds nothing but confusion.
         TC_LOG_WARN("server.loading", "Centurion.Tournament.PhaseMask includes the normal phase (1); ignoring that bit.");
         loaded.PhaseMask &= ~uint32(PHASEMASK_NORMAL);
+    }
+
+    // The mirror image: a phase only world characters carry, for world creatures
+    // tournament characters must not see (New Hearthglen's stock town under the
+    // tournament vendors). The normal phase and the tournament phase are both
+    // shared or taken, so neither bit can be in it.
+    loaded.WorldPhaseMask = uint32(sConfigMgr->GetIntDefault("Centurion.Tournament.WorldPhaseMask", 0));
+    if (loaded.WorldPhaseMask == uint32(PHASEMASK_ANYWHERE))
+    {
+        TC_LOG_ERROR("server.loading", "Centurion.Tournament.WorldPhaseMask cannot be every phase; world-only phasing is off.");
+        loaded.WorldPhaseMask = 0;
+    }
+    else if (loaded.WorldPhaseMask & (PHASEMASK_NORMAL | loaded.PhaseMask))
+    {
+        TC_LOG_WARN("server.loading", "Centurion.Tournament.WorldPhaseMask shares bits with the normal or tournament phase; ignoring those bits.");
+        loaded.WorldPhaseMask &= ~(uint32(PHASEMASK_NORMAL) | loaded.PhaseMask);
     }
 
     loaded.MaxWeaponSkill = sConfigMgr->GetBoolDefault("Centurion.Tournament.AlwaysMaxWeaponSkill", true);
@@ -543,7 +560,10 @@ bool EnforceConfinement(Player* player)
 
 uint32 GetExtraPhaseMask(Player const* player)
 {
-    return (Config.PhaseMask && IsTournamentCharacter(player)) ? Config.PhaseMask : 0;
+    if (!Config.Enabled || !player)
+        return 0;
+
+    return IsTournamentCharacter(player) ? Config.PhaseMask : Config.WorldPhaseMask;
 }
 
 void RefreshPhase(Player* player)
@@ -566,12 +586,13 @@ void RefreshPhase(Player* player)
 
 bool IsPhaseStale(Player const* player)
 {
-    if (!Config.PhaseMask || !player || player->IsGameMaster())
+    if (!player || player->IsGameMaster())
         return false;
 
-    bool const wanted = IsTournamentCharacter(player);
-    bool const carried = (player->GetPhaseMask() & Config.PhaseMask) == Config.PhaseMask;
-    return wanted != carried;
+    // Carries its own mode's phase and not the other mode's.
+    uint32 const wanted = GetExtraPhaseMask(player);
+    uint32 const unwanted = (Config.PhaseMask | Config.WorldPhaseMask) & ~wanted;
+    return (player->GetPhaseMask() & wanted) != wanted || (player->GetPhaseMask() & unwanted) != 0;
 }
 
 bool CanInteractWithCreature(Player const* player, Creature const* creature, uint32 npcFlags)

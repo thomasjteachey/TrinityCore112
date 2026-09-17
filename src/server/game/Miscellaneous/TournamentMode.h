@@ -109,7 +109,9 @@ namespace Tournament
     // Centurion.Tournament.PhaseMask: the phase the tournament NPCs are spawned
     // in. Tournament characters carry it on top of their normal phase, so they
     // see both worlds; world characters never do, so they can neither see nor
-    // reach those NPCs. Player::SetPhaseMask adds it; 0 for everyone else.
+    // reach those NPCs. Centurion.Tournament.WorldPhaseMask is the mirror image,
+    // carried by world characters only, for world creatures hidden from
+    // tournament characters. Player::SetPhaseMask adds whichever applies.
     uint32 GetExtraPhaseMask(Player const* player);
     // Recomputes the phase from the character's phase auras plus the tournament
     // phase - after a mode change, a `.reload config`, or a login.

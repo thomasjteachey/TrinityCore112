@@ -5021,6 +5021,14 @@ Centurion.Items.QuiversHoldAnyItem = 0
 #                     The normal phase (1) is not allowed here.
 #        Default:     0 - (no tournament phase)
 #
+#    Centurion.Tournament.WorldPhaseMask
+#        Description: Phase bit(s) world characters carry on top of their normal phase - the
+#                     mirror image of PhaseMask. Move world creatures tournament characters must
+#                     not see into this phase (creature.phaseMask), e.g. New Hearthglen's stock
+#                     town under the tournament vendors. Neither the normal phase (1) nor the
+#                     tournament phase is allowed here.
+#        Default:     0 - (no world-only phase)
+#
 #    Centurion.Tournament.AlwaysMaxWeaponSkill
 #    Centurion.Tournament.AlwaysMaxSkillForLevel
 #        Description: AlwaysMaxWeaponSkill and AlwaysMaxSkillForLevel for tournament characters
@@ -5085,6 +5093,7 @@ Centurion.Tournament.HomeLocation = ""
 Centurion.Tournament.AllowedZones = ""
 Centurion.Tournament.AllowedCreatures = ""
 Centurion.Tournament.PhaseMask = 0
+Centurion.Tournament.WorldPhaseMask = 0
 Centurion.Tournament.AlwaysMaxWeaponSkill = 1
 Centurion.Tournament.AlwaysMaxSkillForLevel = 1
 Centurion.Tournament.DeathSicknessLevel = 61
