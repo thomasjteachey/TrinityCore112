@@ -30,6 +30,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "MiscPackets.h"
+#include "Miscellaneous/BotUpdatePolicy.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "MovementInfo.h"
 #include "MovementPacketBuilder.h"
@@ -240,6 +241,11 @@ void Object::BuildCreateUpdateBlockForPlayer(UpdateData* data, Player* target) c
     if (!target)
         return;
 
+    // Nothing reads what a client-less bot is sent. The Player and Bag overrides
+    // only loop down into this, so this one early out covers them too.
+    if (BotUpdatePolicy::SkipsClientPackets(target))
+        return;
+
     uint8  updateType = m_isNewObject ? UPDATETYPE_CREATE_OBJECT2 : UPDATETYPE_CREATE_OBJECT;
     uint16 flags      = m_updateFlag;
 
@@ -267,6 +273,9 @@ void Object::BuildCreateUpdateBlockForPlayer(UpdateData* data, Player* target) c
 
 void Object::SendUpdateToPlayer(Player* player)
 {
+    if (BotUpdatePolicy::SkipsClientPackets(player))
+        return;
+
     // send create update to player
     UpdateData upd;
     WorldPacket packet;
@@ -281,6 +290,9 @@ void Object::SendUpdateToPlayer(Player* player)
 
 void Object::BuildValuesUpdateBlockForPlayer(UpdateData* data, Player const* target) const
 {
+    if (BotUpdatePolicy::SkipsClientPackets(target))
+        return;
+
     ByteBuffer& buf = data->GetBuffer();
 
     buf << uint8(UPDATETYPE_VALUES);
@@ -590,6 +602,11 @@ void Object::ClearUpdateMask(bool remove)
 
 void Object::BuildFieldsUpdate(Player* player, UpdateDataMapType& data_map) const
 {
+    // The per-tick field updates. Bail before the map entry too, or
+    // Map::SendObjectUpdates would still build an empty packet for the bot.
+    if (BotUpdatePolicy::SkipsClientPackets(player))
+        return;
+
     UpdateDataMapType::iterator iter = data_map.find(player);
 
     if (iter == data_map.end())
@@ -1559,6 +1576,14 @@ float WorldObject::GetGridActivationRange() const
     {
         if (GetTypeId() == TYPEID_PLAYER && ToPlayer()->GetCinematicMgr()->IsOnCinematic())
             return std::max(DEFAULT_VISIBILITY_INSTANCE, GetMap()->GetVisibilityRange());
+
+        // A bot renders nothing, so on a continent it may keep a smaller area
+        // around itself awake. Map::Update still visits whatever it is fighting,
+        // whatever put an aura on it, and its pet, totems and guardians when they
+        // are outside that area.
+        if (Player const* player = ToPlayer())
+            if (float const reduced = BotUpdatePolicy::GetReducedGridActivationRange(player); reduced > 0.0f)
+                return reduced;
 
         return GetMap()->GetVisibilityRange();
     }

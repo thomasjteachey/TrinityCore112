@@ -17,6 +17,7 @@
 
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
+#include "Miscellaneous/BotUpdatePolicy.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include "UpdateData.h"
@@ -72,6 +73,20 @@ void VisibleNotifier::SendToSelf()
             if (player && !player->isNeedNotify(NOTIFY_VISIBILITY_CHANGED))
                 player->UpdateVisibilityOf(&i_player);
         }
+    }
+
+    // A client-less bot: everything above (what it now counts as seen, and other
+    // players' view of it) stands, but no packet is built for it - create blocks
+    // were already skipped (BotUpdatePolicy), and SendInitialVisiblePackets would
+    // only add an aura list for it. Its other half, SMSG_ATTACKSTART, is a
+    // broadcast the people nearby receive, so that part still goes out for exactly
+    // the units it went out for before (i_visibleNow non-empty = data was built).
+    if (BotUpdatePolicy::SkipsClientPackets(&i_player))
+    {
+        for (Unit* unit : i_visibleNow)
+            if (unit->IsAlive() && unit->HasUnitState(UNIT_STATE_MELEE_ATTACKING) && unit->GetVictim())
+                unit->SendMeleeAttackStart(unit->GetVictim());
+        return;
     }
 
     if (!i_data.HasData())

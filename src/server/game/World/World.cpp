@@ -20,6 +20,7 @@
 */
 
 #include "World.h"
+#include "Miscellaneous/BotUpdatePolicy.h"
 #include "Miscellaneous/CharacterScreen.h"
 #include "Miscellaneous/DepletedMarks.h"
 #include "Miscellaneous/TournamentMode.h"
@@ -1604,6 +1605,9 @@ void World::LoadConfigSettings(bool reload)
     // World-mode vs tournament-mode characters (Miscellaneous/TournamentMode.h).
     // Its lists live in that module; reloading here keeps `.reload config` live.
     Tournament::LoadConfig();
+
+    // How much per-tick work a client-less bot session gets (Miscellaneous/BotUpdatePolicy.h).
+    BotUpdatePolicy::LoadConfig();
 
     // Legionnaire Mark of Honor item ids for this realm (Miscellaneous/DepletedMarks.h).
     Trinity::Custom::LoadMarkConfig();

@@ -850,13 +850,19 @@ void Map::Update(uint32 t_diff)
         if (WorldObject* viewPoint = player->GetViewpoint())
             VisitNearbyCellsOf(viewPoint, grid_object_update, world_object_update);
 
+        // The radius VisitNearbyCellsOf just covered. For a person that is the view
+        // distance, exactly as before; a client-less bot on a continent can be given
+        // less (BotUpdatePolicy), and the passes below must reach out from THAT, or
+        // a mob fighting the bot from past it would stop moving.
+        float const visitedRange = player->GetGridActivationRange();
+
         // Handle updates for creatures in combat with player and are more than 60 yards away
         if (player->IsInCombat())
         {
             std::vector<Unit*> toVisit;
             for (auto const& pair : player->GetCombatManager().GetPvECombatRefs())
                 if (Creature* unit = pair.second->GetOther(player)->ToCreature())
-                    if (unit->GetMapId() == player->GetMapId() && !unit->IsWithinDistInMap(player, GetVisibilityRange(), false))
+                    if (unit->GetMapId() == player->GetMapId() && !unit->IsWithinDistInMap(player, visitedRange, false))
                         toVisit.push_back(unit);
             for (Unit* unit : toVisit)
                 VisitNearbyCellsOf(unit, grid_object_update, world_object_update);
@@ -867,7 +873,7 @@ void Map::Update(uint32 t_diff)
             for (std::pair<uint32, AuraApplication*> pair : player->GetAppliedAuras())
             {
                 if (Unit* caster = pair.second->GetBase()->GetCaster())
-                    if (caster->GetTypeId() != TYPEID_PLAYER && !caster->IsWithinDistInMap(player, GetVisibilityRange(), false))
+                    if (caster->GetTypeId() != TYPEID_PLAYER && !caster->IsWithinDistInMap(player, visitedRange, false))
                         toVisit.insert(caster);
             }
             for (Unit* unit : toVisit)
@@ -881,8 +887,18 @@ void Map::Update(uint32 t_diff)
             for (ObjectGuid const& summonGuid : player->m_SummonSlot)
                 if (summonGuid)
                     if (Creature* unit = GetCreature(summonGuid))
-                        if (unit->GetMapId() == player->GetMapId() && !unit->IsWithinDistInMap(player, GetVisibilityRange(), false))
+                        if (unit->GetMapId() == player->GetMapId() && !unit->IsWithinDistInMap(player, visitedRange, false))
                             toVisit.push_back(unit);
+
+            // Pet, guardians and charmed units, for a bot on the smaller radius only.
+            // The full view distance always covered these; the smaller radius must
+            // not freeze a pet left behind, which would stop it following and skip
+            // its own leash check (Pet::Update, PET_MAX_OWNER_DISTANCE).
+            if (visitedRange < GetVisibilityRange())
+                for (Unit* controlled : player->m_Controlled)
+                    if (controlled->IsInWorld() && controlled->GetMapId() == player->GetMapId() &&
+                        !controlled->IsWithinDistInMap(player, visitedRange, false))
+                        toVisit.push_back(controlled);
 
             for (Unit* unit : toVisit)
                 VisitNearbyCellsOf(unit, grid_object_update, world_object_update);
