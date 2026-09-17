@@ -21,8 +21,10 @@
 #include "Playerbot/Pve/PlayerbotPveManager.h"
 #include "Miscellaneous/TournamentMode.h"
 
+#include "Playerbot/Pvp/PlayerbotObcClone.h"
 #include "Playerbot/Pvp/PlayerbotPvpClassActions.h"
 #include "Playerbot/Pvp/PlayerbotPvpCore.h"
+#include "Playerbot/Pvp/PlayerbotResourceGovernor.h"
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
 #include "Playerbot/Pvp/PlayerbotSharedStateGuard.h"
 
@@ -17214,6 +17216,551 @@ namespace
         return lines;
     }
 
+    // ---------------------------------------------------------------------------
+    // Transient bounty hunters.
+    //
+    // At the bounty's PvP-bot rung (Centurion.Bounty.PvpBotStacks) the realm used
+    // to recruit the PvP-only bots. Those characters are no longer logged in - a
+    // world session each, around the clock, for a rung that is reached a few
+    // times a week - so the rung is answered with copies: a PvP-only character
+    // loaded from the database, copied into the world out of its quarry's sight
+    // (PlayerbotObcCloneManager::CreateWorldClone), walked to them, and thrown away
+    // when the hunt is over.
+    //
+    // Deliberately narrow. A hunter has one target and nothing else to do: it
+    // never loots, shops, rests or grinds, and creatures and the hunter are
+    // nothing to each other in either direction (the copy and whatever it
+    // controls carry IMMUNE_TO_NPC), so nothing aggroes on it on the way. It is
+    // FFA-armed like a War Mode player (IsFfaArmed, custom_barracks_hardcore.cpp),
+    // which is what lets it fight a bountied person at all - a bounty is only
+    // ever earned with War Mode on - and keeps everyone with War Mode off out of
+    // it. Its death drops a death chest like anyone's. The gear in it is the
+    // copy's, so the source keeps its own: the faucet the PvP-only fleet always
+    // was (DropFullLootChest says so where it skips destroying their gear).
+    //
+    // Threads: the ledger is written on the world thread (spawn, review, retire)
+    // and read on the hunters' map threads (the tick, the FFA question), so it
+    // sits behind its own lock. The lock is a leaf: nothing is called under it.
+    // ---------------------------------------------------------------------------
+    struct TransientHunter
+    {
+        uint64 requestId = 0;
+        ObjectGuid cloneGuid;          // empty while the source is still loading
+        ObjectGuid sourceGuid;
+        ObjectGuid humanGuid;
+        uint32 requestedAtMs = 0;
+        uint32 unneededSinceMs = 0;    // 0 while the hunt is still on
+        uint32 deadSinceMs = 0;
+        uint32 outOfReachSinceMs = 0;
+    };
+
+    std::mutex g_TransientHunterLock;
+    std::vector<TransientHunter> g_TransientHunters;
+    // Hunter copy (raw guid) -> its quarry, for the map-thread readers.
+    std::unordered_map<uint64, ObjectGuid> g_TransientHunterQuarry;
+
+    // World thread only, all three.
+    uint64 g_NextTransientHunterRequestId = 0;
+    // Per quarry: when the next wave may set off.
+    std::unordered_map<uint64, uint32> g_TransientHunterNextWaveMs;
+    // The PvP-only characters a hunter can be copied from, reloaded at most once
+    // a minute and only while somebody is actually worth hunting.
+    std::vector<ObjectGuid> g_TransientHunterSources;
+    uint32 g_TransientHunterSourcesLoadedMs = 0;
+
+    // Long enough that a quarry's loading screen or a moment out of range does
+    // not end a hunt.
+    constexpr uint32 kTransientHunterRetireGraceMs = 10 * IN_MILLISECONDS;
+    // Long enough to be seen falling, and far short of the six-minute auto-release
+    // that would write a corpse row for a guid that is no character at all.
+    constexpr uint32 kTransientHunterCorpseMs = 10 * IN_MILLISECONDS;
+    // A source load that never answered.
+    constexpr uint32 kTransientHunterLoadTimeoutMs = 30 * IN_MILLISECONDS;
+    // Stuck on the far side of something. A fresh hunter lands somewhere else.
+    constexpr uint32 kTransientHunterOutOfReachMs = 180 * IN_MILLISECONDS;
+    constexpr float kTransientHunterReachYards = 60.0f;
+    // Opens the fight inside this, in sight; keeps it going a little beyond, so a
+    // pillar or a few steps back does not flip the hunter back to walking.
+    constexpr float kTransientHunterEngageYards = 40.0f;
+    constexpr float kTransientHunterDisengageYards = 55.0f;
+
+    // Whether this person may have hunters sent at them, or kept on them. The
+    // places the logged-in dispatch refuses are refused here too, and so are the
+    // ones a copy has no business in: any instanced map, a custom-game lobby, and
+    // the arenas (Gurubashi included), where a bounty does not even grow.
+    // World thread.
+    bool QualifiesForTransientHunters(Player const* human)
+    {
+        // On a flight path nobody can be fought, and a hunter on foot is not
+        // following a gryphon.
+        if (!human || !human->IsInWorld() || !human->IsAlive() || human->IsGameMaster() ||
+            human->IsBeingTeleportedFar() || human->IsInFlight())
+            return false;
+
+        if (!Bounty::DrawsFromPvpBots(Bounty::GetStacks(human)))
+            return false;
+
+        // Every bot ignores a tournament character.
+        if (Tournament::IsTournamentCharacter(human))
+            return false;
+
+        Map const* map = human->FindMap();
+        if (!map || map->Instanceable() || human->HasWorldSubMap())
+            return false;
+
+        if (human->pvpInfo.IsInNoPvPArea || human->IsInSanctuary() ||
+            human->pvpInfo.IsInFFAPvPAreaByMap || human->IsInGurubashiBattleRing())
+            return false;
+
+        return BarracksHardcore::IsOpenWorldPvpZone(human->GetZoneId());
+    }
+
+    void RefreshTransientHunterSources(uint32 nowMs)
+    {
+        if (g_TransientHunterSourcesLoadedMs && nowMs - g_TransientHunterSourcesLoadedMs < 60 * IN_MILLISECONDS)
+            return;
+
+        g_TransientHunterSourcesLoadedMs = nowMs ? nowMs : 1;
+        g_TransientHunterSources.clear();
+        if (g_PveConfig.pvpOnlyAccountIds.empty())
+            return;
+
+        std::ostringstream accountList;
+        for (size_t index = 0; index < g_PveConfig.pvpOnlyAccountIds.size(); ++index)
+            accountList << (index ? "," : "") << g_PveConfig.pvpOnlyAccountIds[index];
+
+        // A character flagged for rename is left out: the copy would wear a name
+        // that is about to change (the character port flags every clash).
+        std::string const query = "SELECT guid FROM characters WHERE account IN (" + accountList.str() +
+            ") AND (at_login & " + std::to_string(uint32(AT_LOGIN_RENAME)) + ") = 0";
+        if (QueryResult result = CharacterDatabase.Query(query.c_str()))
+        {
+            do
+                g_TransientHunterSources.push_back(ObjectGuid::Create<HighGuid::Player>((*result)[0].GetUInt32()));
+            while (result->NextRow());
+        }
+    }
+
+    // Out of the quarry's sight and everybody else's, on dry ground the quarry
+    // could walk to: the ring the logged-in dispatch drops a hunter on
+    // (ProcessPendingGuardianTeleports), probed from the quarry because the copy
+    // does not exist yet. World thread.
+    WalkPathResult PickTransientHunterLanding(Player* human, Position& landing)
+    {
+        float const firstAngle = frand(0.0f, 2.0f * float(M_PI));
+        constexpr uint8 kLandingAttempts = 8;
+
+        for (uint8 attempt = 0; attempt < kLandingAttempts; ++attempt)
+        {
+            float const angle = firstAngle + (2.0f * float(M_PI) * float(attempt) / float(kLandingAttempts));
+            float x = 0.0f;
+            float y = 0.0f;
+            float z = 0.0f;
+            human->GetNearPoint(human, x, y, z, PvePlayerTeleportMinimumDistance, angle);
+            human->UpdateAllowedPositionZ(x, y, z);
+
+            if (WouldLandInSightOfAnybody(human->FindMap(), x, y))
+                continue;
+
+            if (human->GetMap()->IsInWater(PHASEMASK_NORMAL, x, y, z))
+                continue;
+
+            WalkPathResult const pathResult = CheckWalkPath(human, x, y, z);
+            if (pathResult == WalkPathResult::Deferred)
+                return pathResult;
+
+            if (pathResult == WalkPathResult::Reachable)
+            {
+                // Facing the quarry.
+                landing.Relocate(x, y, z, Position::NormalizeOrientation(human->GetAbsoluteAngle(x, y) + float(M_PI)));
+                return pathResult;
+            }
+        }
+
+        return WalkPathResult::Unreachable;
+    }
+
+    void ForgetTransientHunterRequest(uint64 requestId)
+    {
+        std::lock_guard<std::mutex> guard(g_TransientHunterLock);
+        g_TransientHunters.erase(std::remove_if(g_TransientHunters.begin(), g_TransientHunters.end(),
+            [requestId](TransientHunter const& hunter) { return hunter.requestId == requestId; }),
+            g_TransientHunters.end());
+    }
+
+    // The source has loaded (or failed to). World thread, from the clone
+    // manager's tick, so the copy may go straight onto the quarry's map.
+    void SeatTransientHunter(uint64 requestId, ObjectGuid humanGuid, uint32 mapId, Position const& landing, Player* source)
+    {
+        {
+            // Still wanted: the review drops a load that took too long.
+            std::lock_guard<std::mutex> guard(g_TransientHunterLock);
+            if (std::none_of(g_TransientHunters.begin(), g_TransientHunters.end(), [requestId](TransientHunter const& hunter)
+                {
+                    return hunter.requestId == requestId && hunter.cloneGuid.IsEmpty();
+                }))
+                return;
+        }
+
+        Player* human = ObjectAccessor::FindConnectedPlayer(humanGuid);
+        if (!source || !g_PveConfig.transientBountyHunters || !human || human->GetMapId() != mapId ||
+            !QualifiesForTransientHunters(human))
+        {
+            ForgetTransientHunterRequest(requestId);
+            return;
+        }
+
+        Player* hunter = playerbot::PlayerbotObcCloneManager::CreateWorldClone(source, human->GetMap(), landing);
+        if (!hunter)
+        {
+            ForgetTransientHunterRequest(requestId);
+            return;
+        }
+
+        {
+            std::lock_guard<std::mutex> guard(g_TransientHunterLock);
+            for (TransientHunter& record : g_TransientHunters)
+                if (record.requestId == requestId)
+                    record.cloneGuid = hunter->GetGUID();
+            g_TransientHunterQuarry[hunter->GetGUID().GetRawValue()] = humanGuid;
+        }
+
+        TC_LOG_INFO("playerbots.pve", "Bounty hunter: a copy of {} ({}) is coming for {} ({} stacks) from {:.0f} yards.",
+            source->GetName(), hunter->GetGUID().ToString(), human->GetName(), Bounty::GetStacks(human),
+            hunter->GetDistance(human));
+    }
+
+    bool RequestTransientHunter(ObjectGuid sourceGuid, Player* human, Position const& landing, uint32 nowMs)
+    {
+        uint64 const requestId = ++g_NextTransientHunterRequestId;
+        ObjectGuid const humanGuid = human->GetGUID();
+        uint32 const mapId = human->GetMapId();
+        {
+            std::lock_guard<std::mutex> guard(g_TransientHunterLock);
+            TransientHunter pending;
+            pending.requestId = requestId;
+            pending.sourceGuid = sourceGuid;
+            pending.humanGuid = humanGuid;
+            pending.requestedAtMs = nowMs;
+            g_TransientHunters.push_back(pending);
+        }
+
+        bool const queued = playerbot::PlayerbotObcCloneManager::LoadOfflineCloneSourceOnWorldThread(sourceGuid,
+            [requestId, humanGuid, mapId, landing](Player* source)
+            {
+                SeatTransientHunter(requestId, humanGuid, mapId, landing, source);
+            });
+
+        if (!queued)
+            ForgetTransientHunterRequest(requestId);
+
+        return queued;
+    }
+
+    // World thread.
+    void RetireTransientHunter(ObjectGuid cloneGuid, char const* why)
+    {
+        {
+            std::lock_guard<std::mutex> guard(g_TransientHunterLock);
+            g_TransientHunterQuarry.erase(cloneGuid.GetRawValue());
+        }
+
+        playerbot::PvpCore::SetPveCombatEngagement(cloneGuid, false);
+        playerbot::LockedErase(g_PveBotStateByGuid, cloneGuid.GetRawValue());
+        playerbot::PlayerbotObcCloneManager::DestroyWorldClone(cloneGuid);
+
+        TC_LOG_INFO("playerbots.pve", "Bounty hunter {} gone: {}.", cloneGuid.ToString(), why);
+    }
+
+    // Once a second, world thread: retire the hunters that are done, then send
+    // more at whoever the PvP-bot rung has reached.
+    void ManageTransientBountyHunters(std::vector<HumanSpot> const& spots)
+    {
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        bool const active = g_PveConfig.transientBountyHunters && Bounty::Enabled() &&
+            !g_PveConfig.pvpOnlyAccountIds.empty();
+
+        std::vector<TransientHunter> ledger;
+        {
+            std::lock_guard<std::mutex> guard(g_TransientHunterLock);
+            ledger = g_TransientHunters;
+        }
+
+        if (!active && ledger.empty())
+            return;
+
+        std::vector<std::pair<ObjectGuid, char const*>> retirements;
+        std::unordered_set<uint64> finishedRequests;
+        for (TransientHunter& hunter : ledger)
+        {
+            if (hunter.cloneGuid.IsEmpty())
+            {
+                if (nowMs - hunter.requestedAtMs >= kTransientHunterLoadTimeoutMs)
+                    finishedRequests.insert(hunter.requestId);
+                continue;
+            }
+
+            auto retire = [&](char const* why)
+            {
+                retirements.emplace_back(hunter.cloneGuid, why);
+                finishedRequests.insert(hunter.requestId);
+            };
+
+            Player* clone = ObjectAccessor::FindConnectedPlayer(hunter.cloneGuid);
+            if (!clone || !clone->IsInWorld())
+            {
+                retire("left the world");
+                continue;
+            }
+
+            if (!clone->IsAlive())
+            {
+                if (!hunter.deadSinceMs)
+                    hunter.deadSinceMs = nowMs ? nowMs : 1;
+                else if (nowMs - hunter.deadSinceMs >= kTransientHunterCorpseMs)
+                    retire("killed");
+                continue;
+            }
+            hunter.deadSinceMs = 0;
+
+            Player* human = ObjectAccessor::FindConnectedPlayer(hunter.humanGuid);
+            // FindMap, not GetMap: a quarry mid-teleport has no map, and GetMap asserts one.
+            bool const wanted = active && human && QualifiesForTransientHunters(human) &&
+                human->FindMap() == clone->FindMap();
+            if (!wanted)
+            {
+                hunter.outOfReachSinceMs = 0;
+                if (!hunter.unneededSinceMs)
+                    hunter.unneededSinceMs = nowMs ? nowMs : 1;
+                else if (nowMs - hunter.unneededSinceMs >= kTransientHunterRetireGraceMs)
+                    retire("the hunt is over");
+                continue;
+            }
+            hunter.unneededSinceMs = 0;
+
+            if (clone->GetDistance(human) > kTransientHunterReachYards)
+            {
+                if (!hunter.outOfReachSinceMs)
+                    hunter.outOfReachSinceMs = nowMs ? nowMs : 1;
+                else if (nowMs - hunter.outOfReachSinceMs >= kTransientHunterOutOfReachMs)
+                    retire("could not reach its quarry");
+            }
+            else
+                hunter.outOfReachSinceMs = 0;
+        }
+
+        {
+            std::lock_guard<std::mutex> guard(g_TransientHunterLock);
+            for (TransientHunter& record : g_TransientHunters)
+                for (TransientHunter const& reviewed : ledger)
+                    if (reviewed.requestId == record.requestId)
+                    {
+                        record.unneededSinceMs = reviewed.unneededSinceMs;
+                        record.deadSinceMs = reviewed.deadSinceMs;
+                        record.outOfReachSinceMs = reviewed.outOfReachSinceMs;
+                    }
+
+            g_TransientHunters.erase(std::remove_if(g_TransientHunters.begin(), g_TransientHunters.end(),
+                [&finishedRequests](TransientHunter const& hunter) { return finishedRequests.count(hunter.requestId) != 0; }),
+                g_TransientHunters.end());
+        }
+
+        for (auto const& [cloneGuid, why] : retirements)
+            RetireTransientHunter(cloneGuid, why);
+
+        if (!active)
+            return;
+
+        // Nothing new while the realm is already struggling to keep up.
+        if (playerbot::ResourceGovernor::GetPressureLevel() == playerbot::ResourcePressureLevel::Hard)
+            return;
+
+        uint32 live = 0;
+        std::unordered_map<uint64, uint32> onQuarry;
+        std::unordered_set<uint64> busySources;
+        {
+            std::lock_guard<std::mutex> guard(g_TransientHunterLock);
+            live = uint32(g_TransientHunters.size());
+            for (TransientHunter const& hunter : g_TransientHunters)
+            {
+                ++onQuarry[hunter.humanGuid.GetRawValue()];
+                busySources.insert(hunter.sourceGuid.GetRawValue());
+            }
+        }
+
+        for (HumanSpot const& spot : spots)
+        {
+            if (live >= g_PveConfig.transientBountyHunterMax)
+                break;
+
+            if (!spot.Huntable || !Bounty::DrawsFromPvpBots(spot.Bounty))
+                continue;
+
+            uint64 const quarryKey = spot.Guid.GetRawValue();
+            auto const wave = g_TransientHunterNextWaveMs.find(quarryKey);
+            if (wave != g_TransientHunterNextWaveMs.end() && nowMs < wave->second)
+                continue;
+
+            Player* human = ObjectAccessor::FindConnectedPlayer(spot.Guid);
+            if (!human || !QualifiesForTransientHunters(human))
+                continue;
+
+            uint32 const ceiling = Bounty::MaxHuntersOnTarget(spot.Bounty);
+            uint32 const already = onQuarry.count(quarryKey) ? onQuarry[quarryKey] : 0;
+            if (already >= ceiling)
+                continue;
+
+            RefreshTransientHunterSources(nowMs);
+            std::vector<ObjectGuid> freeSources;
+            for (ObjectGuid const& source : g_TransientHunterSources)
+                if (!busySources.count(source.GetRawValue()))
+                    freeSources.push_back(source);
+
+            if (freeSources.empty())
+                break;
+
+            Trinity::Containers::RandomShuffle(freeSources);
+
+            uint32 const waveSize = std::min({ Bounty::HuntersPerWave(spot.Bounty), ceiling - already,
+                g_PveConfig.transientBountyHunterMax - live, uint32(freeSources.size()) });
+
+            uint32 sent = 0;
+            bool noLanding = false;
+            for (uint32 index = 0; index < waveSize; ++index)
+            {
+                Position landing;
+                WalkPathResult const landingResult = PickTransientHunterLanding(human, landing);
+                // Deferred is the path budget saying "not this second".
+                if (landingResult == WalkPathResult::Deferred)
+                    break;
+
+                if (landingResult == WalkPathResult::Unreachable)
+                {
+                    noLanding = true;
+                    break;
+                }
+
+                if (!RequestTransientHunter(freeSources[index], human, landing, nowMs))
+                    continue;
+
+                busySources.insert(freeSources[index].GetRawValue());
+                ++onQuarry[quarryKey];
+                ++sent;
+                ++live;
+            }
+
+            // The bounty's own clock between waves. With no walkable landing
+            // anywhere around them (an island, a ledge) the ring is not tried
+            // again every second: eight path queries a second is the whole
+            // fleet's navmesh budget.
+            if (sent)
+                g_TransientHunterNextWaveMs[quarryKey] = nowMs + Bounty::RelentlessIntervalSeconds(spot.Bounty) * IN_MILLISECONDS;
+            else if (noLanding)
+                g_TransientHunterNextWaveMs[quarryKey] = nowMs + 10 * IN_MILLISECONDS;
+        }
+
+        // Forget the clocks of anybody nobody is hunting and who is not due again.
+        for (auto itr = g_TransientHunterNextWaveMs.begin(); itr != g_TransientHunterNextWaveMs.end();)
+        {
+            if (!onQuarry.count(itr->first) && nowMs >= itr->second)
+                itr = g_TransientHunterNextWaveMs.erase(itr);
+            else
+                ++itr;
+        }
+    }
+
+    // Creatures and a hunter are nothing to each other, and neither are
+    // creatures and anything it summons: a warlock copy's imp or a shaman copy's
+    // totem is re-flagged the tick after it appears. Converges - the flag is
+    // only written when missing.
+    void KeepTransientHunterClearOfCreatures(Player* hunter)
+    {
+        if (!hunter->IsImmuneToNPC())
+            hunter->SetImmuneToNPC(true);
+
+        for (Unit* controlled : hunter->m_Controlled)
+            if (controlled && !controlled->IsImmuneToNPC())
+                controlled->SetImmuneToNPC(true);
+    }
+
+    // Map thread: walk to the quarry, then fight it with the same engaged-combat
+    // tick the fleet uses against a person.
+    void RunTransientHunterTick(Player* hunter, ObjectGuid humanGuid)
+    {
+        KeepTransientHunterClearOfCreatures(hunter);
+
+        if (!hunter->IsAlive())
+            return;
+
+        PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, hunter->GetGUID().GetRawValue());
+        PveTimePoint const now = PveClock::now();
+        if (now < state.nextFastTick)
+            return;
+        state.nextFastTick = now + std::chrono::milliseconds(250);
+
+        // Stunned, feared, confused: nothing to decide until it wears off.
+        if (hunter->HasUnitState(UNIT_STATE_CONTROLLED))
+            return;
+
+        Player* human = ObjectAccessor::GetPlayer(*hunter, humanGuid);
+        if (!human || !human->IsInWorld() || !human->IsAlive())
+        {
+            // Whether the hunt is over is the world tick's call. Until then, stand.
+            if (state.engaged)
+                DisengagePveCombat(hunter, state);
+            state.journeyActive = false;
+            return;
+        }
+
+        float const distance = hunter->GetDistance(human);
+        // Legal to attack AND actually visible: a stealthed quarry is walked
+        // towards, never swung at out of nowhere.
+        bool const attackable = hunter->IsValidAttackTarget(human) && hunter->CanSeeOrDetect(human);
+        bool const keepsFighting = state.engaged && attackable && distance <= kTransientHunterDisengageYards;
+        bool const opensFight = !state.engaged && attackable && distance <= kTransientHunterEngageYards &&
+            hunter->IsWithinLOSInMap(human);
+
+        if (keepsFighting || opensFight)
+        {
+            state.journeyActive = false;
+            if (opensFight || hunter->GetTarget() != human->GetGUID())
+            {
+                hunter->SetSelection(human->GetGUID());
+                playerbot::PvpCore::SetPveCombatEngagement(hunter->GetGUID(), true);
+                state.engaged = true;
+                state.engagedSince = now;
+            }
+
+            ExecuteEngagedCombatTick(hunter, state);
+            return;
+        }
+
+        if (state.engaged)
+            DisengagePveCombat(hunter, state);
+
+        // No walkable route last time: close in directly for a while. The world
+        // tick retires a hunter that stays out of reach.
+        if (now < state.walkFallbackUntil)
+        {
+            if (!hunter->isMoving())
+                playerbot::PvpClassActions::IssueFollowMovement(hunter, human, 1.0f);
+            return;
+        }
+
+        // Re-aimed as the quarry moves.
+        if (!state.journeyActive || human->GetExactDist2d(state.journeyX, state.journeyY) > 25.0f)
+            StartWalkedJourney(state, uint16(hunter->GetMapId()), human->GetPositionX(), human->GetPositionY(),
+                human->GetPositionZ(), 0, distance);
+
+        PveTimePoint const walkBanBefore = state.walkFallbackUntil;
+        AdvanceWalkedJourney(hunter, state);
+        // A walk that gave up (no route, or stuck) bans walking for ten minutes,
+        // which suits an errand that has a teleport to fall back on. A hunter has
+        // only its feet.
+        if (state.walkFallbackUntil != walkBanBefore)
+            state.walkFallbackUntil = now + std::chrono::seconds(15);
+    }
+
 }
 
 namespace playerbot
@@ -17423,6 +17970,10 @@ namespace playerbot
                 ("SELECT COUNT(*) FROM characters WHERE account IN (" + accountList.str() + ")").c_str()))
                 g_PveConfig.pvpOnlyBotCount = (*result)[0].GetUInt32();
         }
+
+        g_PveConfig.transientBountyHunters = sConfigMgr->GetBoolDefault("Playerbot.Pve.TransientBountyHunters.Enable", false);
+        g_PveConfig.transientBountyHunterMax = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Playerbot.Pve.TransientBountyHunters.MaxTotal", 12), 0, 100));
     }
 
     bool PveManager::IsPvpOnlyBot(Player const* player)
@@ -18522,6 +19073,12 @@ namespace playerbot
                 if (human->IsGameMaster() || playerbot::IsManagedRandomBot(human))
                     continue;
 
+                // Nor a transient copy - a bounty hunter, a lobby mannequin, a
+                // battleground fill clone. Nobody is playing it, so it is not a
+                // destination, not a witness and not a reason a zone has people.
+                if (WorldSession const* session = human->GetSession(); !session || session->IsTransientPlayerSession())
+                    continue;
+
                 // Somebody standing in a sanctuary or their own capital cannot be
                 // fought there, so they are not a destination - a bot teleported
                 // into Orgrimmar to reach a Horde player can do nothing but be cut
@@ -18589,6 +19146,12 @@ namespace playerbot
             // And the hunters who were never re-levelled, who only need
             // putting back where they were standing.
             ReturnDeployedHunters();
+
+            // And the PvP-bot rung, answered with transient copies: retire the
+            // ones that are done, send more where the bounty calls for them.
+            // Runs with the bounty switched off too, so turning it off brings
+            // every copy home.
+            ManageTransientBountyHunters(spots);
 
             std::lock_guard<std::mutex> guard(g_HumanSpotLock);
             g_HumanSpots.swap(spots);
@@ -18984,6 +19547,33 @@ namespace playerbot
         state.nextFastTick = now + PveFastTickInterval;
 
         RunFastTick(player, state, cfg);
+    }
+
+    void PveManager::OnTransientHunterTick(Player* player)
+    {
+        if (!player || !player->IsInWorld())
+            return;
+
+        ObjectGuid humanGuid;
+        {
+            std::lock_guard<std::mutex> guard(g_TransientHunterLock);
+            auto const itr = g_TransientHunterQuarry.find(player->GetGUID().GetRawValue());
+            if (itr == g_TransientHunterQuarry.end())
+                return;
+            humanGuid = itr->second;
+        }
+
+        RunTransientHunterTick(player, humanGuid);
+    }
+
+    bool PveManager::IsTransientBountyHunter(Player const* player)
+    {
+        WorldSession const* session = player ? player->GetSession() : nullptr;
+        if (!session || !session->IsTransientPlayerSession())
+            return false;
+
+        std::lock_guard<std::mutex> guard(g_TransientHunterLock);
+        return g_TransientHunterQuarry.count(player->GetGUID().GetRawValue()) != 0;
     }
 
     void PveManager::OnBotLogout(Player const* player)

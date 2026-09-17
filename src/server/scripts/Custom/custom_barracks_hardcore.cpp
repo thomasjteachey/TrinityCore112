@@ -319,6 +319,47 @@ namespace BarracksHardcore
         return session && IsBotAccount(session->GetAccountId());
     }
 
+    std::mutex s_suppressedChestLock;
+    std::unordered_set<ObjectGuid> s_suppressedChestGuids;
+
+    void SetDeathChestSuppressed(Player const* player, bool suppressed)
+    {
+        if (!player)
+            return;
+
+        std::lock_guard<std::mutex> guard(s_suppressedChestLock);
+        if (suppressed)
+            s_suppressedChestGuids.insert(player->GetGUID());
+        else
+            s_suppressedChestGuids.erase(player->GetGUID());
+    }
+
+    bool IsDeathChestSuppressed(Player const* player)
+    {
+        std::lock_guard<std::mutex> guard(s_suppressedChestLock);
+        return s_suppressedChestGuids.count(player->GetGUID()) != 0;
+    }
+
+    // The Gurubashi Arena as a whole: Gurubashi Arena itself (1741), the
+    // Gurubashi Catacombs (2177 - B+'s AreaTable calls the same id "Battle
+    // Ring", L+'s names it correctly) and The Battle Ring (30232, a
+    // WMOAreaTable id).
+    bool IsInGurubashiArena(Player const* player)
+    {
+        if (player->GetMapId() != 0)
+            return false;
+
+        switch (player->GetAreaId())
+        {
+            case 1741:
+            case 2177:
+            case 30232:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     // Is there a real person close enough for this death to mean anything?
     // Bots and companion/virtual sessions do not count - a hillside full of
     // other bots is still an empty hillside.
@@ -460,6 +501,13 @@ namespace BarracksHardcore
 
         WorldSession const* session = player->GetSession();
         if (session && IsBotAccount(session->GetAccountId()))
+            return true;
+
+        // A transient bounty hunter is armed like a War Mode player. It has no
+        // opt-in of its own and no bot account, and unarmed it could never lay a
+        // finger on the bountied person it was sent after - who is always armed,
+        // since a bounty is only earned with War Mode on.
+        if (playerbot::PveManager::IsTransientBountyHunter(player))
             return true;
 
         return IsOptedIn(player->GetGUID().GetCounter());
@@ -1828,11 +1876,13 @@ namespace BarracksHardcore
             !playerbot::PveManager::AnyPersonWithin(victim, s_botLootWitnessYards))
             return;
 
-        // The Battle Ring pays out through its own chest and nothing else. The
-        // hourly event is a scrap over one prize, not a gear sink: a cache for
-        // every death in there would bury the prize under a field of loot and
-        // make the ring the cheapest place on the realm to farm gear.
-        if (victim->IsInGurubashiBattleRing())
+        // The Gurubashi Arena pays out through its own chest and nothing else -
+        // the Battle Ring, the stands and the tunnels under them alike - and
+        // neither does a death Chromie hands out. The hourly event is a scrap
+        // over one prize, not a gear sink: a cache for every death in there
+        // would bury the prize under a field of loot and make the arena the
+        // cheapest place on the realm to farm gear.
+        if (IsInGurubashiArena(victim) || IsDeathChestSuppressed(victim))
             return;
 
         // One cache holds MAX_NR_LOOT_ITEMS rows - eighteen, and that is a hard

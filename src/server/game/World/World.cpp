@@ -3786,6 +3786,26 @@ namespace
         return !CharacterDatabase.Query(stmt);
     }
 
+    // Every account the bot systems run characters from: the random population
+    // and the PvP-only pool. Read from their own settings (playerbots.conf is
+    // loaded into the same config), because game/ cannot ask the scripts that own
+    // them.
+    std::unordered_set<uint32> ConfiguredBotAccountIds()
+    {
+        std::unordered_set<uint32> accounts;
+        for (char const* key : { "Playerbot.RandomPopulation.BotAccountIds", "Playerbot.Pve.PvpOnlyAccountIds" })
+        {
+            // Kept in a local: the tokens are views into it.
+            std::string const list = sConfigMgr->GetStringDefault(key, "");
+            for (std::string_view token : Trinity::Tokenize(list, ',', false))
+                if (Optional<uint32> accountId = Trinity::StringTo<uint32>(token))
+                    if (*accountId)
+                        accounts.insert(*accountId);
+        }
+
+        return accounts;
+    }
+
     // Asked before touching a table only some realms have: a query on a missing
     // table aborts the worldserver.
     template<class T>
@@ -3872,27 +3892,28 @@ bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName,
         return false;
     }
 
-    Field* fields = result->Fetch();
-    ObjectGuid::LowType winnerLowGuid = fields[0].GetUInt32();
-    uint32 weeklyHonor = fields[1].GetUInt32();
-    ObjectGuid::LowType runnerUpLowGuid = 0;
-    uint32 runnerUpHonor = 0;
-    ObjectGuid::LowType thirdPlaceLowGuid = 0;
-    uint32 thirdPlaceHonor = 0;
-
-    if (result->NextRow())
+    // Bots take no part in the honor race. What a bot or a transient clone earns
+    // is never recorded (Player::AddWeeklyHonorPoints skips socketless sessions),
+    // but rows written before that rule, or carried over from another realm, are
+    // passed over here rather than trusted.
+    std::unordered_set<uint32> const botAccounts = ConfiguredBotAccountIds();
+    std::array<std::pair<ObjectGuid::LowType, uint32>, 3> places = {};
+    size_t placed = 0;
+    do
     {
-        fields = result->Fetch();
-        runnerUpLowGuid = fields[0].GetUInt32();
-        runnerUpHonor = fields[1].GetUInt32();
-    }
+        Field* fields = result->Fetch();
+        if (botAccounts.count(fields[2].GetUInt32()))
+            continue;
 
-    if (result->NextRow())
-    {
-        fields = result->Fetch();
-        thirdPlaceLowGuid = fields[0].GetUInt32();
-        thirdPlaceHonor = fields[1].GetUInt32();
-    }
+        places[placed++] = { fields[0].GetUInt32(), fields[1].GetUInt32() };
+    } while (placed < places.size() && result->NextRow());
+
+    ObjectGuid::LowType winnerLowGuid = places[0].first;
+    uint32 weeklyHonor = places[0].second;
+    ObjectGuid::LowType runnerUpLowGuid = places[1].first;
+    uint32 runnerUpHonor = places[1].second;
+    ObjectGuid::LowType thirdPlaceLowGuid = places[2].first;
+    uint32 thirdPlaceHonor = places[2].second;
 
     if (!winnerLowGuid || weeklyHonor == 0)
     {

@@ -10,6 +10,7 @@
 #include "PlayerbotObcClone.h"
 
 #include "PlayerbotRandomBotParticipation.h"
+#include "AsyncCallbackProcessor.h"
 #include "MotionMaster.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
@@ -79,6 +80,13 @@ struct CustomGameLobbyCloneRecord
     bool isPlayerbot = false;
 };
 
+struct WorldCloneRecord
+{
+    ObjectGuid cloneGuid;
+    ObjectGuid sourceGuid;
+    uint32 mapId = 0;
+};
+
 struct PendingCustomGameLobbyClone
 {
     ObjectGuid sourceGuid;
@@ -103,6 +111,11 @@ std::unordered_map<ObjectGuid, ObjectGuid> g_HumanByClone;
 std::unordered_map<ObjectGuid, CustomGameCloneRecord> g_CustomGameClones;
 std::unordered_map<ObjectGuid, CustomGameLobbyCloneRecord> g_CustomGameLobbyClones;
 std::vector<PendingCustomGameLobbyClone> g_PendingCustomGameLobbyClones;
+std::unordered_map<ObjectGuid, WorldCloneRecord> g_WorldClones;
+
+// Offline source loads answered on the world thread (LoadOfflineCloneSourceOnWorldThread).
+// Only the world thread adds to it and drains it, so it takes no lock.
+AsyncCallbackProcessor<SQLQueryHolderCallback> g_WorldThreadSourceLoads;
 
 uint32 g_CloneTickAccumulatorMs = 0;
 
@@ -1043,6 +1056,62 @@ void TeardownAllCustomGameLobbyClones()
     for (ObjectGuid cloneGuid : cloneGuids)
         TeardownCustomGameLobbyClone(cloneGuid);
 }
+
+void TeardownWorldClone(ObjectGuid cloneGuid)
+{
+    std::unique_ptr<WorldSession> session;
+    {
+        std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+        auto recordItr = g_WorldClones.find(cloneGuid);
+        if (recordItr == g_WorldClones.end())
+            return;
+        g_WorldClones.erase(recordItr);
+        // A hunter pet mirrored from an offline source asks for its trained
+        // spells on the source's session, which is gone before the answer.
+        g_PendingHunterPetSpellQueryByClone.erase(cloneGuid);
+
+        auto sessionItr = g_CloneSessions.find(cloneGuid);
+        if (sessionItr != g_CloneSessions.end())
+        {
+            session = std::move(sessionItr->second);
+            g_CloneSessions.erase(sessionItr);
+        }
+    }
+
+    Player* clone = session ? session->GetPlayer() : nullptr;
+    if (!clone)
+        return;
+
+    playerbot::RandomBotParticipationManager::OnPlayerLogout(clone);
+
+    std::string cachedName;
+    sCharacterCache->GetCharacterNameByGuid(cloneGuid, cachedName);
+    if (Map* map = clone->FindMap())
+        map->RemovePlayerFromMap(clone, true);
+    else
+    {
+        ObjectAccessor::RemoveObject(clone);
+        delete clone;
+    }
+    session->SetPlayer(nullptr);
+
+    if (!cachedName.empty())
+        sCharacterCache->DeleteCharacterCacheEntry(cloneGuid, cachedName);
+}
+
+void TeardownAllWorldClones()
+{
+    std::vector<ObjectGuid> cloneGuids;
+    {
+        std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+        cloneGuids.reserve(g_WorldClones.size());
+        for (auto const& [cloneGuid, record] : g_WorldClones)
+            cloneGuids.push_back(cloneGuid);
+    }
+
+    for (ObjectGuid cloneGuid : cloneGuids)
+        TeardownWorldClone(cloneGuid);
+}
 }
 
 namespace playerbot
@@ -1068,6 +1137,7 @@ void PlayerbotObcCloneManager::OnStartupSweep()
 
 void PlayerbotObcCloneManager::OnShutdown()
 {
+    TeardownAllWorldClones();
     TeardownAllCustomGameLobbyClones();
     TeardownAllCustomGameClones();
     TeardownAllClones();
@@ -1075,6 +1145,27 @@ void PlayerbotObcCloneManager::OnShutdown()
 
 void PlayerbotObcCloneManager::OnWorldUpdate(uint32 diffMs)
 {
+    // Offline loads for open-world copies, answered here because no map is
+    // updating now. Ahead of every gate below: none of them is about these.
+    g_WorldThreadSourceLoads.ProcessReadyCallbacks();
+
+    // An open-world copy that has left the world without being destroyed -
+    // its map unloaded under it - is finished. The PvE manager notices its
+    // hunter is gone on its own next pass.
+    std::vector<ObjectGuid> lostWorldClones;
+    {
+        std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+        for (auto const& [cloneGuid, record] : g_WorldClones)
+        {
+            auto sessionItr = g_CloneSessions.find(cloneGuid);
+            Player* clone = sessionItr != g_CloneSessions.end() && sessionItr->second ? sessionItr->second->GetPlayer() : nullptr;
+            if (!clone || !clone->IsInWorld())
+                lostWorldClones.push_back(cloneGuid);
+        }
+    }
+    for (ObjectGuid cloneGuid : lostWorldClones)
+        TeardownWorldClone(cloneGuid);
+
     std::vector<ObjectGuid> expiredLobbyClones;
     {
         std::lock_guard<std::mutex> lock(g_ObcCloneLock);
@@ -1524,6 +1615,159 @@ bool PlayerbotObcCloneManager::LoadOfflineCloneSource(ObjectGuid sourceGuid, Wor
         DestroyUnseatedClone(sourceSession, offlineSource);
     });
 
+    return true;
+}
+
+bool PlayerbotObcCloneManager::LoadOfflineCloneSourceOnWorldThread(ObjectGuid sourceGuid,
+    std::function<void(Player* source)> onResolved)
+{
+    if (!sourceGuid || !onResolved)
+        return false;
+
+    CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByGuid(sourceGuid);
+    if (!characterInfo)
+        return false;
+
+    auto holder = std::make_shared<LoginQueryHolder>(characterInfo->AccountId, sourceGuid);
+    if (!holder->Initialize())
+        return false;
+
+    g_WorldThreadSourceLoads.AddCallback(CharacterDatabase.DelayQueryHolder(holder)).AfterComplete(
+        [sourceGuid, onResolved](SQLQueryHolderBase const& queryHolder)
+    {
+        // Never build a second Player under the guid of a live one.
+        if (Player* onlineSource = ObjectAccessor::FindConnectedPlayer(sourceGuid))
+        {
+            onResolved(onlineSource);
+            return;
+        }
+
+        LoginQueryHolder const& loginHolder = static_cast<LoginQueryHolder const&>(queryHolder);
+        uint8 const expansion = static_cast<uint8>(sWorld->getIntConfig(CONFIG_EXPANSION));
+        auto sourceSession = std::make_unique<WorldSession>(loginHolder.GetAccountId(), "offline_clone_source",
+            nullptr, SEC_PLAYER, expansion, 0, Minutes(0), LOCALE_enUS, 0, false);
+        sourceSession->SetTransientPlayerSession();
+
+        Player* offlineSource = new Player(sourceSession.get());
+        if (offlineSource->LoadFromDB(sourceGuid, loginHolder, false))
+        {
+            offlineSource->GetMotionMaster()->Initialize();
+            // Clones read identity, spells, talents, glyph ids and equipment
+            // from their source. Runtime auras are neither copied nor safe to
+            // keep on a Player that never enters the world.
+            offlineSource->RemoveAllAuras();
+            onResolved(offlineSource);
+        }
+        else
+            onResolved(nullptr);
+
+        DestroyUnseatedClone(sourceSession, offlineSource);
+    });
+
+    return true;
+}
+
+Player* PlayerbotObcCloneManager::CreateWorldClone(Player* source, Map* map, Position const& position)
+{
+    if (!source || !map || map->Instanceable())
+        return nullptr;
+
+    std::string const internalName = GenerateCloneInternalName();
+    if (internalName.empty())
+        return nullptr;
+
+    uint8 const expansion = static_cast<uint8>(sWorld->getIntConfig(CONFIG_EXPANSION));
+    auto session = std::make_unique<WorldSession>(0, "world_in_memory_clone", nullptr, SEC_PLAYER, expansion, 0,
+        Minutes(0), LOCALE_enUS, 0, false);
+    session->SetTransientPlayerSession();
+
+    Player* clone = new Player(session.get());
+    CharacterCreateInfo createInfo;
+    createInfo.SetName(internalName)
+        .SetRace(source->GetRace()).SetClass(source->GetClass()).SetGender(source->GetNativeGender())
+        .SetSkin(source->GetSkinId()).SetFace(source->GetFaceId()).SetHairStyle(source->GetHairStyleId())
+        .SetHairColor(source->GetHairColorId()).SetFacialHair(source->GetFacialStyle()).SetOutfitId(0);
+
+    ObjectGuid::LowType const cloneLowGuid = sObjectMgr->GetGenerator<HighGuid::Player>().Generate();
+    if (!clone->Create(cloneLowGuid, &createInfo, false, false))
+    {
+        DestroyUnseatedClone(session, clone);
+        return nullptr;
+    }
+
+    clone->SetGender(source->GetNativeGender());
+    clone->SetNativeGender(source->GetNativeGender());
+    clone->InitDisplayIds();
+    // Server-created player: LoadFromDB never runs, so PlayerSocial is
+    // null unless we make one. Channel::SendToAll and friends call
+    // GetSocial()->HasIgnore() on every player they touch.
+    clone->EnsureSocial();
+    session->SetPlayer(clone);
+    clone->GetMotionMaster()->Initialize();
+    clone->SetLevel(source->GetLevel(), false);
+    clone->InitStatsForLevel();
+    clone->InitTalentForLevel();
+    clone->InitGlyphsForLevel();
+    CopySkills(clone, source);
+    CopySpellsTalentsAndGlyphs(clone, source);
+    if (!CopyEquipment(clone, source))
+    {
+        DestroyUnseatedClone(session, clone);
+        return nullptr;
+    }
+
+    // See CreateCustomGameClone: without it no later stat or damage modifier
+    // is ever applied to a server-built copy.
+    clone->SetCanModifyStats(true);
+    clone->UpdateAllStats();
+    clone->SetFullHealth();
+    for (uint8 power = POWER_MANA; power < MAX_POWERS; ++power)
+        clone->SetFullPower(Powers(power));
+
+    // Creatures and this copy are nothing to each other, in both directions:
+    // IsValidAttackTarget refuses a creature attacking an IMMUNE_TO_NPC unit
+    // and an IMMUNE_TO_NPC unit attacking a creature, so nothing aggroes on it
+    // on the way and it never picks a fight with the wildlife. Players are
+    // untouched - the flag only answers units that are not player-controlled.
+    // After InitStatsForLevel, which clears it.
+    clone->SetImmuneToNPC(true);
+
+    clone->ResetMap();
+    clone->Relocate(position);
+    clone->SetMap(map);
+    if (!map->AddPlayerToMap(clone))
+    {
+        DestroyUnseatedClone(session, clone);
+        return nullptr;
+    }
+
+    ObjectGuid const cloneGuid = clone->GetGUID();
+    sCharacterCache->AddCharacterCacheEntry(cloneGuid, 0, source->GetName(), clone->GetNativeGender(), clone->GetRace(),
+        clone->GetClass(), clone->GetLevel(), false);
+    ObjectAccessor::AddObject(clone);
+    clone->SetInGameTime(GameTime::GetGameTimeMS());
+    SynchronizeHunterPetMirror(source, clone);
+    if (Pet* pet = clone->GetPet())
+        pet->SetImmuneToNPC(true);
+
+    {
+        std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+        g_CloneSessions.emplace(cloneGuid, std::move(session));
+        g_WorldClones.emplace(cloneGuid, WorldCloneRecord{ cloneGuid, source->GetGUID(), map->GetId() });
+    }
+
+    return clone;
+}
+
+bool PlayerbotObcCloneManager::DestroyWorldClone(ObjectGuid cloneGuid)
+{
+    {
+        std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+        if (g_WorldClones.find(cloneGuid) == g_WorldClones.end())
+            return false;
+    }
+
+    TeardownWorldClone(cloneGuid);
     return true;
 }
 

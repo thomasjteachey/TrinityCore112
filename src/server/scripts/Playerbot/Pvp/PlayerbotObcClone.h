@@ -27,6 +27,7 @@
 #include <vector>
 
 class Battleground;
+class Map;
 class Player;
 class WorldSession;
 
@@ -88,6 +89,23 @@ public:
     // onResolved, when nothing could be queued.
     static bool LoadOfflineCloneSource(ObjectGuid sourceGuid, WorldSession* callbackSession,
         std::function<void(Player* source)> onResolved);
+
+    // The same load with no callback session: onResolved runs on the WORLD
+    // thread, from OnWorldUpdate, while no map is updating - so it may put a
+    // copy on any map. A session's callback can run on a map thread, where
+    // Player::Create and LoadFromDB (both link into some other map) are unsafe.
+    // World thread only.
+    static bool LoadOfflineCloneSourceOnWorldThread(ObjectGuid sourceGuid,
+        std::function<void(Player* source)> onResolved);
+
+    // Open-world copies: the transient bounty hunters (PlayerbotPveManager.cpp).
+    // A copy of source standing at position on map - a continent, never a
+    // battleground, dungeon or lobby - under the source's own name, immune to
+    // creatures in both directions, never saved, and owned here until
+    // DestroyWorldClone. The PvE manager decides what it does and when it goes.
+    // World thread only.
+    static Player* CreateWorldClone(Player* source, Map* map, Position const& position);
+    static bool DestroyWorldClone(ObjectGuid cloneGuid);
     // team 0 = every clone of the instance; otherwise only that team's
     // (the Violet Hold driver tears the enemy wave down between waves and
     // leaves the party's Fellowship allies standing).

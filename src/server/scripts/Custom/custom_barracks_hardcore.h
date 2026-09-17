@@ -38,6 +38,12 @@ namespace BarracksHardcore
     // ruleset needs it to decide how much of a corpse's gold burns.
     bool IsPlayerbot(Player const* player);
 
+    // A death that must not leave a death chest. Chromie's executions in the
+    // Gurubashi Arena (custom_gurubashi_arena.cpp) set it around their
+    // Unit::Kill and clear it right after, so the mark never outlives the kill
+    // it was set for.
+    void SetDeathChestSuppressed(Player const* player, bool suppressed);
+
     // Whether this PERSON has armed War Mode.
     //
     // False for every playerbot by construction - a bot has no setting to read -

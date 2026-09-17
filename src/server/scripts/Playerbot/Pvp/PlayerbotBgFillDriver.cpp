@@ -217,9 +217,12 @@ std::vector<ObjectGuid> CollectOnlineSources(uint32 minLevel, uint32 maxLevel, s
             if (level < minLevel || level > maxLevel)
                 continue;
 
-            // Dedicated PvP-only accounts are the level-cap pool. Pre-60
-            // brackets should draw ordinary random-bot characters instead.
-            if (maxLevel < 60 && playerbot::PveManager::IsPvpOnlyBot(candidate))
+            // Dedicated PvP-only accounts are the level-cap pool, and the only
+            // one: pre-60 brackets draw ordinary random-bot characters, a
+            // level-60 bracket draws nothing else. PvP-only characters are never
+            // logged in as persistent bots, so at 60 this pass finds nobody and
+            // the offline pass clones them instead.
+            if ((maxLevel < 60) == playerbot::PveManager::IsPvpOnlyBot(candidate))
                 continue;
 
             if (excluded.count(guid))
@@ -242,7 +245,15 @@ void RefreshOfflinePoolIfStale(uint32 nowMs)
     g_OfflinePool.loadedMs = nowMs;
     g_OfflinePool.entries.clear();
 
-    std::vector<uint32> const accounts = playerbot::RandomBotParticipationManager::GetConfiguredBotAccountIds();
+    // The random population's accounts plus the PvP-only pool. The PvP-only
+    // accounts are deliberately left out of Playerbot.RandomPopulation.BotAccountIds
+    // so nothing ever logs those characters in; they exist here only as sources
+    // for transient copies.
+    std::vector<uint32> accounts = playerbot::RandomBotParticipationManager::GetConfiguredBotAccountIds();
+    auto const& pvpOnlyAccounts = playerbot::PveManager::GetConfig().pvpOnlyAccountIds;
+    accounts.insert(accounts.end(), pvpOnlyAccounts.begin(), pvpOnlyAccounts.end());
+    std::sort(accounts.begin(), accounts.end());
+    accounts.erase(std::unique(accounts.begin(), accounts.end()), accounts.end());
     if (accounts.empty())
         return;
 
@@ -283,11 +294,10 @@ std::vector<ObjectGuid> CollectOfflineSources(uint32 minLevel, uint32 maxLevel, 
         if (candidate.level < minLevel || candidate.level > maxLevel)
             continue;
 
-        // Keep pre-60 clone fill on ordinary random bots. The PvP-only
-        // account list is exposed by the PvE manager so offline characters
-        // receive the same policy as online sources.
+        // Same policy as the online pass: ordinary random bots below 60, the
+        // PvP-only pool and nothing else at 60.
         auto const& pvpOnlyAccounts = playerbot::PveManager::GetConfig().pvpOnlyAccountIds;
-        if (maxLevel < 60 && std::binary_search(pvpOnlyAccounts.begin(), pvpOnlyAccounts.end(), candidate.accountId))
+        if ((maxLevel < 60) == std::binary_search(pvpOnlyAccounts.begin(), pvpOnlyAccounts.end(), candidate.accountId))
             continue;
 
         ObjectGuid const guid = ObjectGuid::Create<HighGuid::Player>(candidate.lowGuid);
@@ -465,8 +475,11 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
         }
     }
 
-    // 3. Mirrors of the people on the other side, one each.
-    if (added < wanted && g_Config.allowHumanMirrors)
+    // 3. Mirrors of the people on the other side, one each. Never at 60: a
+    // level-60 match is filled from the PvP-only pool or not at all. (The
+    // Obsidian Colosseum's own "Dark" copies are that battleground's design and
+    // come from PlayerbotObcCloneManager, not from here.)
+    if (added < wanted && g_Config.allowHumanMirrors && maxLevel < 60)
     {
         TeamId const otherIndex = teamIndex == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
         for (ObjectGuid const& humanGuid : tally.teams[otherIndex].humanGuids)

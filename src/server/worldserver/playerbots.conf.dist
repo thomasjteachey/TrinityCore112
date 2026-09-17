@@ -1437,3 +1437,26 @@ Playerbot.Pve.Aggression.TimidMinutes = 20
 #        Default:     500
 
 Playerbot.Pve.Aggression.TimidFleeYards = 500
+
+#    Playerbot.Pve.TransientBountyHunters.Enable
+#        Description: Answers the bounty's PvP-bot rung (Centurion.Bounty.PvpBotStacks) with
+#                     transient copies of the characters on Playerbot.Pve.PvpOnlyAccountIds
+#                     instead of logged-in bots, which never exist on a realm that keeps those
+#                     characters offline. Each copy appears out of sight of the bountied player,
+#                     walks to them and fights them. Creatures and the copy ignore each other,
+#                     it dies like anyone (death chest included) and it is gone once the hunt
+#                     is over: its quarry died, left, lost the bounty or reached a sanctuary,
+#                     an arena or an instance. Needs Playerbot.Pve.Enable, Centurion.Bounty.Enable,
+#                     and Playerbot.Enable with the PvP class spells for the copies to fight.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Playerbot.Pve.TransientBountyHunters.Enable = 0
+
+#    Playerbot.Pve.TransientBountyHunters.MaxTotal
+#        Description: How many of those copies may exist at once, realm-wide. Per player the
+#                     bounty's own ceiling applies (Bounty MaxHuntersOnTarget), and nothing new
+#                     is sent while the resource governor reports hard pressure.
+#        Default:     12
+
+Playerbot.Pve.TransientBountyHunters.MaxTotal = 12

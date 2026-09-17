@@ -40,6 +40,7 @@
 #include "TaskScheduler.h"
 #include "TemporarySummon.h"
 #include "Util.h"
+#include "WorldSession.h"
 
 #include <algorithm>
 #include <atomic>
@@ -117,6 +118,15 @@ void MarkChestParticipants(std::vector<ObjectGuid> const& participantGuids);
 bool IsChestParticipant(ObjectGuid guid);
 std::vector<ObjectGuid> GetChestParticipants();
 
+// A character with no client behind it: a bot on a virtual session, or a
+// transient copy (the bounty hunters, battleground fill). Neither counts toward
+// the chest nor is ported to it - it is a scrap between people.
+bool IsWithoutAPlayer(Player const* player)
+{
+    WorldSession const* session = player->GetSession();
+    return !session || session->IsVirtualSession() || session->IsTransientPlayerSession();
+}
+
 uint32 GetChestMarkRewardCount()
 {
     time_t const now = GameTime::GetGameTime();
@@ -142,6 +152,11 @@ bool IsPlayerEligible(Player* player)
     // spawn. This is a scrap between people over one prize; if no person is in
     // the zone there is nothing to scrap over.
     if (BarracksHardcore::IsPlayerbot(player))
+        return false;
+
+    // Nor is anything else nobody is playing: a copy (a bounty hunter chasing
+    // somebody through Stranglethorn), or any other character without a client.
+    if (IsWithoutAPlayer(player))
         return false;
 
     // Opted out on the Battlegrounds tab: not counted, not a summoner.
@@ -226,6 +241,16 @@ void PlayForcedDeathStarfireVisual(Player* player)
         return;
 
     player->SendPlaySpellVisual(visualKit);
+}
+
+// Chromie's executions: the re-entry and late-entry rules and the exit kill.
+// They leave no death chest, wherever the body falls.
+void ExecuteByChromie(Player* player)
+{
+    PlayForcedDeathStarfireVisual(player);
+    BarracksHardcore::SetDeathChestSuppressed(player, true);
+    Unit::Kill(player, player);
+    BarracksHardcore::SetDeathChestSuppressed(player, false);
 }
 
 bool HasLivingHostileInGurubashiBattleRing(Player const* player)
@@ -439,7 +464,7 @@ void TeleportStranglethornPlayersToBattleRing()
             // Stranglethorn permanently, so this emptied the whole band into the
             // arena on the hour, every hour, and each one arrived stripped of
             // its group and its cooldowns for a fight it was never in.
-            if (BarracksHardcore::IsPlayerbot(player))
+            if (BarracksHardcore::IsPlayerbot(player) || IsWithoutAPlayer(player))
                 continue;
 
             // Nor anyone who switched the chest off on the Battlegrounds tab -
@@ -1309,14 +1334,12 @@ public:
             bool const ringLocked = event && event->IsRingLocked();
             if (ringLocked && IsChestDeathLockoutActive(guid) && currentState == GurubashiAreaState::BattleRing && player->IsAlive() && !player->IsGameMaster())
             {
-                PlayForcedDeathStarfireVisual(player);
-                Unit::Kill(player, player);
+                ExecuteByChromie(player);
                 WhisperFromChromi(player, GURUBASHI_REENTRY_RULE_WHISPER);
             }
             else if (ringLocked && currentState == GurubashiAreaState::BattleRing && player->IsAlive() && !player->IsGameMaster() && !IsChestParticipant(guid))
             {
-                PlayForcedDeathStarfireVisual(player);
-                Unit::Kill(player, player);
+                ExecuteByChromie(player);
                 WhisperFromChromi(player, GURUBASHI_LATE_ENTRY_RULE_WHISPER);
                 MarkChestDeathLockout(guid);
             }
@@ -1331,8 +1354,7 @@ public:
                 if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive() &&
                     HasLivingHostileInGurubashiBattleRing(player))
                 {
-                    PlayForcedDeathStarfireVisual(player);
-                    Unit::Kill(player, player);
+                    ExecuteByChromie(player);
                     MarkChestDeathLockout(guid);
 
                     WhisperRandomExitKillLineFromChromie(player);

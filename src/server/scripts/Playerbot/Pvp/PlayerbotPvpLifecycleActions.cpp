@@ -3922,10 +3922,11 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
                 if (!IsScmManagedBotCandidate(participant))
                     continue;
 
-                // Dedicated PvP-only accounts are intended for the cap-level
-                // pool. Pre-60 queues should use ordinary random bots from the
-                // matching level band instead of pulling those characters in.
-                if (participant->GetLevel() < 60 && playerbot::PveManager::IsPvpOnlyBot(participant))
+                // Dedicated PvP-only accounts are the cap-level pool and the only
+                // one at 60: pre-60 queues use ordinary random bots from the
+                // matching level band, and no random-population bot is queued
+                // at 60 (the PvP-only characters take part as transient copies).
+                if ((participant->GetLevel() < 60) == playerbot::PveManager::IsPvpOnlyBot(participant))
                     continue;
 
                 managedBotGuids.push_back(guid);

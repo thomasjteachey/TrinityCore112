@@ -222,6 +222,11 @@ struct PveConfig
     uint32 populationTarget = 256;
     // Characters sitting on the PvP-only accounts, counted at config load.
     uint32 pvpOnlyBotCount = 0;
+    // At the bounty's PvP-bot rung, send transient copies of the PvP-only
+    // characters instead of logged-in bots (PveManager::OnTransientHunterTick).
+    bool transientBountyHunters = false;
+    // How many of those copies may exist at once, realm-wide.
+    uint32 transientBountyHunterMax = 12;
     // Hardcore realms: bots never join groups - invites are declined and
     // companion summons refused.
     bool declineGroupInvites = false;
@@ -335,6 +340,24 @@ public:
     // bot's map-update thread (under the per-map decision lock). Internally
     // cadence-gated; inert inside battlegrounds and duels.
     static void OnPlayerLifecycleTick(Player* player);
+
+    // The transient bounty hunters: copies of the PvP-only characters sent at a
+    // player carrying a bounty at the PvP-bot rung (Centurion.Bounty.PvpBotStacks),
+    // instead of logging those characters in. Each walks to its quarry and
+    // fights it, is left alone by creatures and leaves them alone, and is gone
+    // once the hunt is over. Spawned and retired on the world thread by
+    // OnWorldUpdate.
+    //
+    // The tick: called from RandomBotParticipationManager::ProcessPlayerLifecycle
+    // for every transient copy outside a battleground, on its map thread. A copy
+    // that is not a hunter returns at once.
+    static void OnTransientHunterTick(Player* player);
+
+    // Whether this player is one of those hunters. Cheap for everyone else: a
+    // session flag answers before any lock is taken. The hardcore ruleset asks it
+    // to arm the FFA byte, which is the only way a copy with no War Mode setting
+    // can fight the person it was sent after.
+    static bool IsTransientBountyHunter(Player const* player);
 
     static void OnBotLogout(Player const* player);
 

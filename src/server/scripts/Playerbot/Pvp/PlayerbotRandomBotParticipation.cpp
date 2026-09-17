@@ -1485,8 +1485,8 @@ void ForceManagedScmQueueSweep(ManagedBotAccountIds const& botAccounts)
 
             // The reactive SCM sweep must follow the same level-band policy
             // as the normal queue filler: pre-60 players use ordinary random
-            // bots, while the dedicated PvP-only pool is reserved for the cap.
-            if (player->GetLevel() < 60 && playerbot::PveManager::IsPvpOnlyBot(player))
+            // bots, and at 60 only the dedicated PvP-only pool may take part.
+            if ((player->GetLevel() < 60) == playerbot::PveManager::IsPvpOnlyBot(player))
                 continue;
 
             managedGuids.push_back(guid);
@@ -2400,8 +2400,16 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
     // Their death/release/resurrection state is handled above, but do not let
     // the normal persistent-bot lifecycle queue, leave, or rebalance these
     // transient players after their tactical tick has run.
+    //
+    // A copy outside a battleground may be a transient bounty hunter, which the
+    // PvE manager drives (walk to the quarry, fight it); anything else it
+    // ignores at the cost of one lookup.
     if (isTransientClone)
+    {
+        if (!player->InBattleground())
+            playerbot::PveManager::OnTransientHunterTick(player);
         return;
+    }
 
     // Open-world PvE behavior (companion follow/assist, grinding, rest,
     // death recovery). Internally cadence-gated and inert inside

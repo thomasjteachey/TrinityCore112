@@ -31,6 +31,7 @@
 #include "Log.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "WorldSession.h"
 
 #include <atomic>
 
@@ -75,6 +76,12 @@ public:
         // filter at all: the fleet dies hundreds of times a day while grinding, so a
         // bot would win every single week and the board would never show a person.
         if (BarracksHardcore::IsPlayerbot(victim))
+            return;
+
+        // IsPlayerbot only knows the random-population accounts. The PvP-only
+        // pool and every transient clone (bounty hunters, battleground fill) run
+        // on socketless sessions, and a clone's guid is not even a character.
+        if (WorldSession const* session = victim->GetSession(); !session || session->IsVirtualSession())
             return;
 
         // Counted against the zone the victim died in: each inn's corpse shows its
