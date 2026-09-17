@@ -1262,8 +1262,7 @@ BattlegroundTypeId BattlegroundMgr::GetRandomBG(BattlegroundTypeId bgTypeId, boo
             // Exclude them only from an All Arenas roll for a public match that
             // contains (or will be filled by) bots. Human-only rolls and manual
             // or private Custom Games selections retain the full arena list.
-            if (hasBotParticipants && bgTypeId == BATTLEGROUND_AA &&
-                (memberId == BATTLEGROUND_NGA || memberId == BATTLEGROUND_RL || memberId == BATTLEGROUND_TV))
+            if (hasBotParticipants && bgTypeId == BATTLEGROUND_AA && IsArenaUnfitForBots(memberId))
                 continue;
 
             // Disabled, or no template: configured in the pool but not runnable.
@@ -1293,8 +1292,7 @@ BattlegroundTypeId BattlegroundMgr::GetRandomBG(BattlegroundTypeId bgTypeId, boo
 
             if (BattlegroundTemplate const* bg = GetBattlegroundTemplateByMapId(mapId))
             {
-                if (hasBotParticipants && bgTypeId == BATTLEGROUND_AA &&
-                    (bg->Id == BATTLEGROUND_NGA || bg->Id == BATTLEGROUND_RL || bg->Id == BATTLEGROUND_TV))
+                if (hasBotParticipants && bgTypeId == BATTLEGROUND_AA && IsArenaUnfitForBots(bg->Id))
                     continue;
 
                 ids.push_back(bg->Id);

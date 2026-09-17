@@ -3596,6 +3596,23 @@ constexpr bool IsDataDrivenArena(BattlegroundTypeId bgTypeId)
         && bgTypeId <= BATTLEGROUND_CUSTOM_ARENA_LAST;
 }
 
+// Arenas a managed bot cannot be trusted to stay inside - it walks off the
+// playable area, or cannot path back to the fight. An All Arenas roll skips
+// these for a public match that holds, or will be filled with, bots; a
+// human-only roll and a manual Custom Games pick still offer them, which is
+// why this is not just `Enabled = 0` in battleground_random_pool.
+//
+// Both routes in BattlegroundMgr::GetRandomBG - the pool table and the
+// BattlemasterList.dbc fallback - ask this. They used to spell the list out
+// separately, so an arena added to one was still rolled by the other.
+constexpr bool IsArenaUnfitForBots(BattlegroundTypeId bgTypeId)
+{
+    return bgTypeId == BATTLEGROUND_NGA
+        || bgTypeId == BATTLEGROUND_RL
+        || bgTypeId == BATTLEGROUND_TV
+        || bgTypeId == BATTLEGROUND_ASF;
+}
+
 enum BattlefieldBattleId : uint8
 {
     BATTLEFIELD_BATTLEID_WINTERGRASP = 1, // Wintergrasp battle
