@@ -2121,8 +2121,8 @@ public:
             if (lobby->SelectedType == BATTLEGROUND_AB || lobby->SelectedType == BATTLEGROUND_BFG)
             {
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT,
-                    "Flag interaction: " + ConfiguredSeconds(lobby->Rules.NodeFlagCaptureTimeMs, 5000),
-                    GOSSIP_SENDER_MAIN, ACTION_RULE_NODE_FLAG_TIME, "Seconds (1-120; 0 restores DBC default)", 0, true);
+                    "Flag interaction: " + ConfiguredSeconds(lobby->Rules.NodeFlagCaptureTimeMs, NODE_FLAG_INTERACTION_TIME),
+                    GOSSIP_SENDER_MAIN, ACTION_RULE_NODE_FLAG_TIME, "Seconds (1-120; 0 restores default)", 0, true);
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT,
                     "Base capture after assault: " + ConfiguredSeconds(lobby->Rules.NodeBaseCaptureTimeMs, 60000),
                     GOSSIP_SENDER_MAIN, ACTION_RULE_NODE_BASE_TIME, "Seconds (1-600; 0 restores default)", 0, true);

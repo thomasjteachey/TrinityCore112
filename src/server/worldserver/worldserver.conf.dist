@@ -3311,17 +3311,22 @@ CharDelete.KeepDays = 30
 #
 #    Centurion.Chest.SlowOpenPercent.Player
 #    Centurion.Chest.SlowOpenPercent.Bot
-#        Description: How long a slow-open chest takes to open, as a percent of
-#                     the stock cast time, for a person and for a managed
-#                     playerbot respectively. The pause while opening a corpse
-#                     cache is what decides whether looting a kill in the open
-#                     world is safe, and a bot has nothing to lose by standing
-#                     still for it.
-#                     Only LOCKTYPE_SLOW_OPEN is affected - lockpicking,
-#                     herbalism, mining and quick-open chests keep their timing.
+#        Description: How long the full-loot death cache (the gameobject named
+#                     by Centurion.Hardcore.FullLoot.ChestGameObjectId - the
+#                     Fallen Adventurer's Cache) takes to open, as a percent of
+#                     its stock ten-second Opening cast, for a person and for a
+#                     managed playerbot respectively. The pause while opening a
+#                     corpse cache is what decides whether looting a kill in the
+#                     open world is safe, and a bot has nothing to lose by
+#                     standing still for it.
+#                     Nothing else is affected: every other chest, banner and
+#                     flag keeps its own timing, even where it shares the
+#                     cache's slow-open lock (AB/BFG banners take 10 seconds
+#                     unless a custom game's lobby sets otherwise). The cache
+#                     entry is read once at startup; these percents on use.
 #                     100 is stock. Clamped to 1-1000.
-#        Default:     50  (Player)
-#                     100 (Bot)
+#        Default:     50  (Player - 5 seconds)
+#                     100 (Bot - 10 seconds)
 #
 #
 #    Centurion.Pvp.WaiveLevelHitPenalties

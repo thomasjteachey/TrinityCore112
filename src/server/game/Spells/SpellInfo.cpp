@@ -21,6 +21,7 @@
 #include "Creature.h"
 #include "DBCStores.h"
 #include "FlatSet.h"
+#include "GameObject.h"
 #include "Item.h"
 #include "ItemTemplate.h"
 #include "Log.h"
@@ -3392,18 +3393,32 @@ namespace
         return !accountIds.empty() && std::binary_search(accountIds.begin(), accountIds.end(), accountId);
     }
 
-    // How long a slow-open chest takes to open, as a percent of the stock cast
-    // time, for whoever is opening it.
+    // How long the full-loot death cache - the Fallen Adventurer's Cache, named
+    // by Centurion.Hardcore.FullLoot.ChestGameObjectId - takes to open, as a
+    // percent of the stock cast time, for whoever is opening it.
     //
     // The pause while you open a corpse cache is what decides whether looting a
     // kill in the open world is safe, and there is no reason for a person and a
     // bot to be held still for the same length of time - the bot has nothing to
     // lose by standing there.
     //
-    // Only LOCKTYPE_SLOW_OPEN is touched. Lockpicking, herbalism, mining and the
-    // quick-open chests all use other lock types and keep their own timing.
-    bool IsSlowOpenLockSpell(SpellInfo const* spellInfo)
+    // Only that cache is touched. Its lock is LOCKTYPE_SLOW_OPEN, which it
+    // shares with every other slow-open object - the Gurubashi Arena Treasure
+    // Chest, the AB/BFG/AV banners, the EotS flag - and all of those keep the
+    // stock ten-second Opening.
+    bool IsDeathCacheOpenCast(SpellInfo const* spellInfo, Spell const* spell)
     {
+        GameObject const* target = spell->m_targets.GetGOTarget();
+        if (!target)
+            return false;
+
+        // Read once, as GameObject::GetInteractionDistance does: this sits on
+        // every cast aimed at a gameobject.
+        static uint32 const deathCacheEntry = uint32(std::max(0,
+            sConfigMgr->GetIntDefault("Centurion.Hardcore.FullLoot.ChestGameObjectId", 0)));
+        if (!deathCacheEntry || target->GetEntry() != deathCacheEntry)
+            return false;
+
         for (SpellEffectInfo const& effect : spellInfo->GetEffects())
             if (effect.IsEffect(SPELL_EFFECT_OPEN_LOCK) && effect.MiscValue == LOCKTYPE_SLOW_OPEN)
                 return true;
@@ -3439,7 +3454,7 @@ uint32 SpellInfo::CalcCastTime(Spell* spell /*= nullptr*/) const
         // After the ordinary modifiers, so haste and spellmods still apply to
         // the shortened figure rather than to a number nothing else has seen.
         // The client draws its bar from SMSG_SPELL_START, so it shows this.
-        if (castTime > 0 && IsSlowOpenLockSpell(this))
+        if (castTime > 0 && IsDeathCacheOpenCast(this, spell))
             castTime = castTime * SlowOpenCastTimePercent(spell->GetCaster()) / 100;
     }
 

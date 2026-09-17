@@ -194,6 +194,7 @@ enum BattlegroundTimeIntervals
 {
     CHECK_PLAYER_POSITION_INVERVAL  = 1000,                 // ms
     RESURRECTION_INTERVAL           = 30000,                // ms
+    NODE_FLAG_INTERACTION_TIME      = 10000,                // ms, AB/BFG banner click unless a custom game's lobby sets its own
     //REMIND_INTERVAL                 = 10000,                // ms
     INVITATION_REMIND_TIME          = 10000,                // ms
     INVITE_ACCEPT_WAIT_TIME         = 30000,                // ms
