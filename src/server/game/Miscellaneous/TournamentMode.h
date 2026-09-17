@@ -222,6 +222,12 @@ namespace Tournament
     // character on either side follows the tournament setting, for both duelists.
     bool ResetsDuelCooldowns(Player const* a, Player const* b);
     bool ResetsDuelHealthMana(Player const* a, Player const* b);
+    // The honor cap. MaxHonorPoints and its ConditionalMaxHonorPoints steps (a
+    // spell known, a quest done) are Legionnaire+'s ladder and bind tournament
+    // characters; a world character holds up to
+    // Centurion.Tournament.WorldMaxHonorPoints instead. 0 = the ladder applies
+    // (a tournament character, modes off, or the key set to 0).
+    uint32 GetWorldMaxHonorPoints(Player const* player);
 
     // --- all characters ---------------------------------------------------
 

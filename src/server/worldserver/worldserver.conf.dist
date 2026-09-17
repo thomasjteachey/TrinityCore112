@@ -853,7 +853,9 @@ StartPlayerMoney = 0
 
 #
 #    MaxHonorPoints
-#        Description: Maximum honor points a character can have.
+#        Description: Maximum honor points a character can have. With
+#                     Centurion.Tournament.Enable = 1 this and the conditional caps below bind
+#                     tournament characters only (see Centurion.Tournament.WorldMaxHonorPoints).
 #        Default:     75000
 
 MaxHonorPoints = 75000
@@ -5110,6 +5112,13 @@ Centurion.Items.QuiversHoldAnyItem = 0
 #        Description: Level a world character needs to opt into the tournament queue
 #                     (the Battlegrounds-tab toggle; addon message CCGAMEREQ TQUEUE).
 #        Default:     60
+#
+#    Centurion.Tournament.WorldMaxHonorPoints
+#        Description: Honor a world character can hold. MaxHonorPoints and the
+#                     ConditionalMaxHonorPoints steps (Legionnaire+'s cap ladder) then bind
+#                     tournament characters only. At most 2147483647.
+#        Default:     2147483647 - (effectively no cap)
+#                     0          - (world characters follow MaxHonorPoints too)
 
 Centurion.Tournament.Enable = 0
 Centurion.Tournament.StartLevel = 60
@@ -5129,6 +5138,7 @@ Centurion.Tournament.ResetDuelHealthMana = 1
 Centurion.Tournament.AllowedLootObjects = ""
 Centurion.Tournament.InnateSpells = "29073,18610,22734:1494"
 Centurion.Tournament.QueueMinLevel = 60
+Centurion.Tournament.WorldMaxHonorPoints = 2147483647
 
 #
 #    Centurion.CharacterSelect.Reorder

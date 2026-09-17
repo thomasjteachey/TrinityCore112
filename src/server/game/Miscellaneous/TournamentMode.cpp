@@ -44,6 +44,7 @@
 #include <atomic>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -85,6 +86,7 @@ namespace
         bool PetHappinessDecay = false;
         bool ResetDuelCooldowns = true;
         bool ResetDuelHealthMana = true;
+        uint32 WorldMaxHonorPoints = uint32(std::numeric_limits<int32>::max());
     };
 
     Settings Config;
@@ -239,6 +241,13 @@ void LoadConfig()
     loaded.PetHappinessDecay = sConfigMgr->GetBoolDefault("Centurion.Tournament.PetHappinessDecay", false);
     loaded.ResetDuelCooldowns = sConfigMgr->GetBoolDefault("Centurion.Tournament.ResetDuelCooldowns", true);
     loaded.ResetDuelHealthMana = sConfigMgr->GetBoolDefault("Centurion.Tournament.ResetDuelHealthMana", true);
+
+    // A config int stops at 2147483647 (a larger number falls back to this
+    // default), which is also as far as the client's signed honor field goes.
+    int32 const worldMaxHonor = sConfigMgr->GetIntDefault("Centurion.Tournament.WorldMaxHonorPoints", std::numeric_limits<int32>::max());
+    if (worldMaxHonor < 0)
+        TC_LOG_ERROR("server.loading", "Centurion.Tournament.WorldMaxHonorPoints ({}) can't be negative; world characters follow MaxHonorPoints.", worldMaxHonor);
+    loaded.WorldMaxHonorPoints = uint32(std::max<int32>(0, worldMaxHonor));
 
     // "map x y z o"
     std::string const rawHome = sConfigMgr->GetStringDefault("Centurion.Tournament.HomeLocation", "");
@@ -1093,6 +1102,14 @@ bool ResetsDuelHealthMana(Player const* a, Player const* b)
         return Config.ResetDuelHealthMana;
 
     return sWorld->getBoolConfig(CONFIG_RESET_DUEL_HEALTH_MANA);
+}
+
+uint32 GetWorldMaxHonorPoints(Player const* player)
+{
+    if (!Config.Enabled || !player || IsTournamentCharacter(player))
+        return 0;
+
+    return Config.WorldMaxHonorPoints;
 }
 
 bool IsFreeReagentContext(Player const* player)

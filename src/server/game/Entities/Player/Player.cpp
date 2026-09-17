@@ -8323,6 +8323,11 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
 
 uint32 Player::GetMaxHonorPoints() const
 {
+    // The ladder below is for tournament characters; a world character on a
+    // realm with character modes has a cap of its own.
+    if (uint32 worldCap = Tournament::GetWorldMaxHonorPoints(this))
+        return worldCap;
+
     uint32 baseCap = sWorld->getIntConfig(CONFIG_MAX_HONOR_POINTS);
     uint32 maxCap = baseCap;
 
@@ -8389,9 +8394,9 @@ void Player::ModifyHonorPoints(int32 value, CharacterDatabaseTransaction trans, 
         value = int32(modifiedHonor);
     }
 
-    int32 newValue = int32(GetHonorPoints()) + value;
-    if (newValue < 0)
-        newValue = 0;
+    // 64-bit sum: a world character's cap can sit at the top of the int32
+    // range, where adding to a full purse would wrap negative and zero it.
+    int64 const newValue = std::clamp<int64>(int64(GetHonorPoints()) + value, 0, std::numeric_limits<int32>::max());
     if (value > 0)
     {
         if (AddItem(40752, value))
@@ -8408,7 +8413,7 @@ void Player::ModifyHonorPoints(int32 value, CharacterDatabaseTransaction trans, 
         return;
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_HONOR_POINTS);
-    stmt->setUInt32(0, newValue);
+    stmt->setUInt32(0, uint32(newValue));
     stmt->setUInt32(1, GetGUID().GetCounter());
 
     if (trans)

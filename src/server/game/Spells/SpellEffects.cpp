@@ -3021,8 +3021,8 @@ void Spell::EffectAddHonor()
         return;
 
     Player* target = unitTarget->ToPlayer();
-    int value = target->GetHonorPoints() + damage;
-    if (value > int32(target->GetMaxHonorPoints()))
+    int64 value = int64(target->GetHonorPoints()) + damage;
+    if (value > int64(target->GetMaxHonorPoints()))
         return;
 
     //maybe we have correct honor_gain in damage already
