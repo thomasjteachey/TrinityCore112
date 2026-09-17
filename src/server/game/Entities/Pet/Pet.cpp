@@ -283,7 +283,12 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
             ReplaceAllPetFlags(petInfo->WasRenamed ? UNIT_PET_FLAG_CAN_BE_ABANDONED : (UNIT_PET_FLAG_CAN_BE_RENAMED | UNIT_PET_FLAG_CAN_BE_ABANDONED));
             ReplaceAllUnitFlags(UNIT_FLAG_PLAYER_CONTROLLED); // this enables popup window (pet abandon, cancel)
             SetMaxPower(POWER_HAPPINESS, GetCreatePowerValue(POWER_HAPPINESS));
-            SetPower(POWER_HAPPINESS, petInfo->Happiness);
+            // Where happiness never decays (see LoseHappiness) the pet comes back full
+            // whatever was saved - it died, or was tamed, copied or ported in low.
+            if (Tournament::PetHappinessDecays(owner))
+                SetPower(POWER_HAPPINESS, petInfo->Happiness);
+            else
+                SetFullPower(POWER_HAPPINESS);
             break;
         default:
             if (!IsPetGhoul())
@@ -618,8 +623,9 @@ void Pet::setDeathState(DeathState s)                       // overwrite virtual
             ReplaceAllDynamicFlags(UNIT_DYNFLAG_NONE);
             RemoveUnitFlag(UNIT_FLAG_SKINNABLE);
 
-            // lose happiness when died and not in BG/Arena
-            if (!GetMap()->IsBattlegroundOrArena())
+            // lose happiness when died and not in BG/Arena - unless happiness never
+            // decays for this owner (see LoseHappiness): the Gurubashi ring is neither
+            if (!GetMap()->IsBattlegroundOrArena() && Tournament::PetHappinessDecays(GetOwner()))
                 ModifyPower(POWER_HAPPINESS, -HAPPINESS_LEVEL_SIZE);
 
             //SetUnitFlag(UNIT_FLAG_STUNNED);
@@ -748,6 +754,8 @@ void Pet::LoseHappiness()
     // draining it. Barracks+ (classic PvE) wants the real decay. Gated here rather
     // than at the caller so both realms keep the same 7.5s tick and call site.
     // On a mixed realm the owner decides: tournament characters follow L+.
+    // The same rule skips the death penalty (setDeathState) and fills the pet on
+    // load and tame, so a held pet is full from the start, not from the next tick.
     if (!Tournament::PetHappinessDecays(GetOwner()))
     {
         if (int32 const maxHappiness = int32(GetMaxPower(POWER_HAPPINESS)))
@@ -890,7 +898,11 @@ bool Pet::CreateBaseAtTamed(CreatureTemplate const* cinfo, Map* map, uint32 phas
         return false;
 
     SetMaxPower(POWER_HAPPINESS, GetCreatePowerValue(POWER_HAPPINESS));
-    SetPower(POWER_HAPPINESS, 166500);
+    // A fresh tame starts unhappy - except where happiness never decays (see LoseHappiness).
+    if (Tournament::PetHappinessDecays(GetOwner()))
+        SetPower(POWER_HAPPINESS, 166500);
+    else
+        SetFullPower(POWER_HAPPINESS);
     SetPetNameTimestamp(0);
     SetPetExperience(0);
     SetPetNextLevelExperience(uint32(sObjectMgr->GetXPForLevel(GetLevel()+1)*PET_XP_FACTOR));

@@ -4957,8 +4957,10 @@ ClientTweaks.Attest.TimeoutSeconds = 90
 #
 #    Centurion.Classic.PetHappinessDecay
 #        Description: Hunter pet happiness decays over time and must be fed.
-#                     0 - happiness is refilled on every tick, pets never go unhappy (Legionnaire+)
-#                     1 - classic decay, faster in combat (Barracks+)
+#                     0 - pets are held at full happiness: refilled on every tick, no loss on
+#                         death, full when tamed or summoned (Legionnaire+)
+#                     1 - classic decay, faster in combat, a third lost on death outside
+#                         battlegrounds and arenas (Barracks+)
 #        Default:     0
 
 Centurion.Classic.ConsumeAmmo = 0
