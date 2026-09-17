@@ -24,6 +24,7 @@
 #include <unordered_set>
 #include "AccountMgr.h"
 #include "AccountBankMgr.h"
+#include "Miscellaneous/CharacterScreen.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "AchievementMgr.h"
 #include "ArenaTeam.h"
@@ -2004,7 +2005,15 @@ bool Player::BuildEnumData(PreparedQueryResult result, WorldPacket* data)
     *data << uint8(facialStyle);
 
     *data << uint8(fields[10].GetUInt8());                   // level
-    *data << uint32(fields[11].GetUInt16());                 // zone
+
+    // The list carries no field the glue screens can read a character's mode
+    // from, so on realms that badge tournament characters their zone is sent as
+    // the configured area instead (Miscellaneous/CharacterScreen.h). Display only:
+    // the client places the character from the map and position below.
+    uint32 zone = fields[11].GetUInt16();
+    if (uint32 const tournamentZone = CharacterScreen::GetTournamentListZone(); tournamentZone && sCharacterCache->IsTournamentCharacterByGuid(ObjectGuid(HighGuid::Player, guid)))
+        zone = tournamentZone;
+    *data << uint32(zone);                                   // zone
     *data << uint32(fields[12].GetUInt16());                 // map
 
     *data << fields[13].GetFloat();                         // x

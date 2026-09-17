@@ -130,7 +130,9 @@ void OpcodeTable::Initialize()
     ValidateAndSetServerOpcode(opcode, #opcode, status)
 
     /*0x001*/ DEFINE_HANDLER(CMSG_BOOTME,                                  STATUS_NEVER,    PROCESS_INPLACE,      &WorldSession::Handle_NULL                     );
-    /*0x002*/ DEFINE_HANDLER(CMSG_DBLOOKUP,                                STATUS_NEVER,    PROCESS_INPLACE,      &WorldSession::Handle_NULL                     );
+    // Never sent by the stock client: the client-tweaks DLL uses it to carry the
+    // Centurion character screens' requests (Miscellaneous/CharacterScreen.h).
+    /*0x002*/ DEFINE_HANDLER(CMSG_DBLOOKUP,                                STATUS_AUTHED,   PROCESS_THREADUNSAFE, &WorldSession::HandleCenturionGlueRequest      );
     /*0x003*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_DBLOOKUP,                  STATUS_NEVER);
     /*0x004*/ DEFINE_HANDLER(CMSG_QUERY_OBJECT_POSITION,                   STATUS_NEVER,    PROCESS_INPLACE,      &WorldSession::Handle_NULL                     );
     /*0x005*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_QUERY_OBJECT_POSITION,     STATUS_NEVER);

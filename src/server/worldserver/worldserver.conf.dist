@@ -773,8 +773,12 @@ CharactersPerAccount = 50
 
 #
 #    CharactersPerRealm
-#        Description: Limit number of characters per account on this realm.
-#        Range:       1-10
+#        Description: Limit number of characters per account on this realm. Also caps the
+#                     character list the realm sends.
+#        Important:   A stock 3.3.5a client rejects a list of more than 10 characters. Above 10
+#                     needs the Centurion launcher's Wow.exe patch (file offset 0x6404F 0A -> 14)
+#                     and its character select screen, which scrolls.
+#        Range:       1-20
 #        Default:     10 - (Client limitation)
 
 CharactersPerRealm = 10
@@ -5083,6 +5087,32 @@ Centurion.Tournament.AllowedLootObjects = ""
 Centurion.Tournament.InnateSpells = "29073,18610,22734:1494"
 Centurion.Tournament.ProfessionSpells = "11611,9785,13920,12656,10662,12180"
 Centurion.Tournament.QueueMinLevel = 60
+
+#
+#    Centurion.CharacterSelect.Reorder
+#        Description: Players arrange their own character list. The order is saved in the
+#                     characters table `character_select_order` (the realm keeps creation order
+#                     without it) and sent by the character select screen through the
+#                     client-tweaks DLL (CenturionGlueRequest).
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+#
+#    Centurion.CharacterSelect.TournamentZoneId
+#        Description: Zone id the character list sends for a tournament character, so the
+#                     character select screen can badge it (the list has no other field the
+#                     glue screens can read). Display only. 4658 = Argent Tournament Grounds.
+#        Default:     0 - (Disabled, real zones are sent)
+#
+#    Centurion.CharacterCreate.Challenges
+#        Description: Accept challenge modes ticked on the character create screen. They go
+#                     through the same checks as the challenge stones when the character is
+#                     created.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Centurion.CharacterSelect.Reorder = 0
+Centurion.CharacterSelect.TournamentZoneId = 0
+Centurion.CharacterCreate.Challenges = 0
 
 #
 #    Centurion.Pvp.WaiveReagentsAndAmmo

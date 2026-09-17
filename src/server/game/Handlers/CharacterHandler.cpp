@@ -39,6 +39,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "Metric.h"
+#include "Miscellaneous/CharacterScreen.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "MotionMaster.h"
 #include "ObjectAccessor.h"
@@ -59,6 +60,8 @@
 #include "QueryHolder.h"
 #include "VioletHoldBoons.h"
 #include "World.h"
+#include <algorithm>
+#include <vector>
 
 bool LoginQueryHolder::Initialize()
 {
@@ -236,27 +239,65 @@ void WorldSession::HandleCharEnum(PreparedQueryResult result)
     _legitCharacters.clear();
     if (result)
     {
+        // Each character is built on its own so the list can go out in the
+        // account's saved order where players may arrange it
+        // (Miscellaneous/CharacterScreen.h); the query returns creation order.
+        struct ListEntry
+        {
+            uint32 Position;
+            ObjectGuid Guid;
+            bool Banned;
+            WorldPacket Data;
+        };
+        std::vector<ListEntry> entries;
+        bool const ordered = CharacterScreen::ReorderEnabled();
+
         do
         {
             ObjectGuid guid(HighGuid::Player, (*result)[0].GetUInt32());
             TC_LOG_INFO("network", "Loading {} from account {}.", guid.ToString(), GetAccountId());
-            if (Player::BuildEnumData(result, &data))
+            WorldPacket entryData;
+            if (Player::BuildEnumData(result, &entryData))
             {
-                // Do not allow banned characters to log in
-                if (!(*result)[23].GetUInt32())
-                    _legitCharacters.insert(guid);
-
                 if (!sCharacterCache->HasCharacterCacheEntry(guid)) // This can happen if characters are inserted into the database manually. Core hasn't loaded name data yet.
                     sCharacterCache->AddCharacterCacheEntry(guid, GetAccountId(), (*result)[1].GetString(), (*result)[4].GetUInt8(), (*result)[2].GetUInt8(), (*result)[3].GetUInt8(), (*result)[10].GetUInt8());
-                ++num;
+
+                entries.push_back({ ordered ? CharacterScreen::GetListPosition(guid.GetCounter()) : 0, guid, (*result)[23].GetUInt32() != 0, std::move(entryData) });
             }
         }
-        while (result->NextRow() && num < MAX_CHARACTERS_PER_REALM); // client shows an error if more than 10 characters are listed
+        while (result->NextRow());
+
+        if (ordered)
+            std::stable_sort(entries.begin(), entries.end(), [](ListEntry const& a, ListEntry const& b) { return a.Position < b.Position; });
+
+        // The client rejects the whole list past its limit (see MAX_CHARACTERS_PER_REALM).
+        uint32 const limit = sWorld->getIntConfig(CONFIG_CHARACTERS_PER_REALM);
+        for (ListEntry const& entry : entries)
+        {
+            if (num >= limit)
+                break;
+
+            // Do not allow banned characters to log in
+            if (!entry.Banned)
+                _legitCharacters.insert(entry.Guid);
+
+            data.append(entry.Data.contents(), entry.Data.wpos());
+            ++num;
+        }
     }
 
     data.put<uint8>(0, num);
 
     SendPacket(&data);
+}
+
+// The Centurion character screens' requests, sent by the client-tweaks DLL
+// (Miscellaneous/CharacterScreen.h).
+void WorldSession::HandleCenturionGlueRequest(WorldPacket& recvData)
+{
+    std::string text;
+    recvData >> text;
+    CharacterScreen::HandleGlueRequest(this, text);
 }
 
 void WorldSession::HandleCharEnumOpcode(WorldPacket& /*recvData*/)

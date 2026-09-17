@@ -273,7 +273,11 @@ enum AccountDataType
 #define GLOBAL_CACHE_MASK           0x15
 #define PER_CHARACTER_CACHE_MASK    0xEA
 
-uint32 constexpr MAX_CHARACTERS_PER_REALM = 10; // max supported by client in char enum
+// The stock 3.3.5a client rejects a character list longer than 10
+// (cmp byte [ebp-1], 0Ah at Wow.exe 0x464C4C). The Centurion launcher patches
+// that byte to 14h (file offset 0x6404F), so 20 is the hard ceiling here;
+// CharactersPerRealm must stay at 10 on any realm players reach with a stock client.
+uint32 constexpr MAX_CHARACTERS_PER_REALM = 20;
 
 struct AccountData
 {
@@ -680,6 +684,7 @@ class TC_GAME_API WorldSession
         void HandleCharCreateOpcode(WorldPacket& recvPacket);
         void HandlePlayerLoginOpcode(WorldPacket& recvPacket);
         void HandleCharEnum(PreparedQueryResult result);
+        void HandleCenturionGlueRequest(WorldPacket& recvData);
         void HandlePlayerLogin(LoginQueryHolder const& holder);
         void HandleCharFactionOrRaceChange(WorldPacket& recvData);
         void HandleCharFactionOrRaceChangeCallback(std::shared_ptr<CharacterFactionChangeInfo> factionChangeInfo, PreparedQueryResult result);

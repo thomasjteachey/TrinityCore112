@@ -20,6 +20,7 @@
 */
 
 #include "World.h"
+#include "Miscellaneous/CharacterScreen.h"
 #include "Miscellaneous/DepletedMarks.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "AutoBalance/AutoBalanceConfig.h"
@@ -1603,6 +1604,10 @@ void World::LoadConfigSettings(bool reload)
     // Legionnaire Mark of Honor item ids for this realm (Miscellaneous/DepletedMarks.h).
     Trinity::Custom::LoadMarkConfig();
 
+    // Character select/create screen extras: reordering, the tournament badge,
+    // challenge modes chosen at creation (Miscellaneous/CharacterScreen.h).
+    CharacterScreen::LoadConfig();
+
     // Transmogrification
     m_bool_configs[CONFIG_CENTURION_TRANSMOG_ENABLE] = sConfigMgr->GetBoolDefault("Centurion.Transmog.Enable", true);
     // Opt-in: a character sees (and shows) transmogs only after switching it on.
@@ -2101,6 +2106,9 @@ void World::SetInitialWorldSettings()
 
     TC_LOG_INFO("server.loading", "Loading Tournament Character Create Data...");
     Tournament::LoadCreateInfo();
+
+    TC_LOG_INFO("server.loading", "Loading Character List Order...");
+    CharacterScreen::LoadOrder();
 
     TC_LOG_INFO("server.loading", "Loading Exploration BaseXP Data...");
     sObjectMgr->LoadExplorationBaseXP();

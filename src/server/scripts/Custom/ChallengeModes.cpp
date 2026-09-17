@@ -12,6 +12,7 @@
 #include "Item.h"
 #include "ItemTemplate.h"
 #include "Log.h"
+#include "Miscellaneous/CharacterScreen.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "Pet.h"
 #include "Player.h"
@@ -469,6 +470,39 @@ class challenge_modes_player_script : public PlayerScript
 {
 public:
     challenge_modes_player_script() : PlayerScript("challenge_modes_player_script") { }
+
+    // Modes ticked on the character create screen (Miscellaneous/CharacterScreen.h).
+    // Each goes through the same checks as the challenge stone, in setting order,
+    // so of an exclusive pair only the first one sticks.
+    void OnCreate(Player* player) override
+    {
+        if (!player || !player->GetSession())
+            return;
+
+        uint32 const mask = CharacterScreen::TakeCreateChallenges(player->GetSession()->GetAccountId(), player->GetName());
+        if (!mask)
+            return;
+
+        for (uint8 i = SETTING_HARDCORE; i <= SETTING_IRON_MAN; ++i)
+        {
+            ChallengeModeSettings const setting = ChallengeModeSettings(i);
+            if (!(mask & (1u << i)))
+                continue;
+
+            std::string error;
+            if (!sChallengeModes->CanActivateMode(player, setting, &error))
+            {
+                TC_LOG_INFO("server.custom", "ChallengeModes: {} ({}) was created without {}: {}", player->GetName(), player->GetGUID().ToString(), GetChallengeDisplayName(setting), error);
+                continue;
+            }
+
+            sChallengeModes->SetEnabledForPlayer(setting, player, true);
+            TC_LOG_INFO("server.custom", "ChallengeModes: {} ({}) was created with {}.", player->GetName(), player->GetGUID().ToString(), GetChallengeDisplayName(setting));
+        }
+
+        // Saved; OnLogin loads them again. This Player object is only the creation copy.
+        sChallengeModes->UnloadPlayer(player);
+    }
 
     void OnLogin(Player* player, bool /*firstLogin*/) override
     {
