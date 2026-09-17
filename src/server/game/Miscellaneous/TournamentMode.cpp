@@ -509,9 +509,22 @@ bool IsLocationAllowed(uint32 mapId, float x, float y, float z)
         std::abs(x - Config.HomeX) < 1.0f && std::abs(y - Config.HomeY) < 1.0f && std::abs(z - Config.HomeZ) < 5.0f)
         return true;
 
+    if (!MapManager::IsValidMapCoord(mapId, x, y))
+        return false;
+
+    // An area inside a WMO (the Caverns of Time hub is WMO area 1941/2300 under
+    // Tanaris terrain) comes from the grid's collision tile, and Map::GetAreaInfo
+    // queries that tile before Map::GetGrid creates the grid that loads it. For a
+    // grid nobody stands in, the first lookup saw only the terrain and refused a
+    // teleport into an allowed area. GetGridHeight creates the grid first.
     uint32 zoneId = 0;
     uint32 areaId = 0;
-    sMapMgr->GetZoneAndAreaId(PHASEMASK_NORMAL, zoneId, areaId, mapId, x, y, z);
+    Map const* map = sMapMgr->CreateBaseMap(mapId);
+    if (!map)
+        return false;
+
+    map->GetGridHeight(x, y);
+    map->GetZoneAndAreaId(PHASEMASK_NORMAL, zoneId, areaId, x, y, z);
     return IsLocationAllowed(mapId, zoneId, areaId);
 }
 
