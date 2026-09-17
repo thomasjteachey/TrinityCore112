@@ -1110,6 +1110,12 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         // instead of refilling.
         void GiveLevel(uint8 level, bool borrowed = false);
         bool IsMaxLevel() const;
+        // Experience is stopped for this character although they are under the
+        // cap - their own toggle at the experience eliminator, or a script that
+        // withholds the award outright. Asked by anything that has to pay them
+        // in something other than experience; a quest pays the max-level money
+        // instead (Quest::GetRewOrReqMoney).
+        bool IsXpGainHalted() const;
 
         void InitStatsForLevel(bool reapplyMods = false);
 

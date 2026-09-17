@@ -1884,6 +1884,16 @@ void ScriptMgr::OnGivePlayerXP(Player* player, uint32& amount, Unit* victim)
     FOREACH_SCRIPT(PlayerScript)->OnGiveXP(player, amount, victim);
 }
 
+bool ScriptMgr::OnPlayerIsXpGainHalted(Player const* player)
+{
+    // One stop is enough: the character gains nothing, whichever script it was.
+    FOR_SCRIPTS(PlayerScript, itr, end)
+        if (itr->second->OnIsXpGainHalted(player))
+            return true;
+
+    return false;
+}
+
 bool ScriptMgr::OnPlayerCanEquipItem(Player* player, uint8 slot, uint16& dest, Item* item, bool swap, bool notLoading)
 {
     FOR_SCRIPTS(PlayerScript, itr, end)
@@ -2774,6 +2784,11 @@ void PlayerScript::OnMoneyLimit(Player* /*player*/, int32 /*amount*/)
 
 void PlayerScript::OnGiveXP(Player* /*player*/, uint32& /*amount*/, Unit* /*victim*/)
 {
+}
+
+bool PlayerScript::OnIsXpGainHalted(Player const* /*player*/)
+{
+    return false;
 }
 
 bool PlayerScript::OnCanEquipItem(Player* /*player*/, uint8 /*slot*/, uint16& /*dest*/, Item* /*item*/, bool /*swap*/, bool /*notLoading*/)

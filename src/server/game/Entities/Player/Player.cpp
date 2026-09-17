@@ -3476,6 +3476,25 @@ bool Player::IsMaxLevel() const
     return GetLevel() >= GetUInt32Value(PLAYER_FIELD_MAX_LEVEL);
 }
 
+// Experience is not moving for this character, though they are under the cap.
+//
+// Two stops answer here and they are independent. One is the character's own,
+// set at the experience eliminator (npc_experience) and obeyed by GiveXP before
+// anything else. The other belongs to a script that zeroes the award as it
+// passes - the War Mode zone cap is the realm's one - and only the script knows
+// whether it is on, which is what the query hook is for.
+//
+// Asked by whatever has to pay a stopped character in something else: a quest
+// hands over its max-level money (Quest::GetRewOrReqMoney), the same way
+// battleground honor stays honor instead of being converted (RewardHonor).
+bool Player::IsXpGainHalted() const
+{
+    if (HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN))
+        return true;
+
+    return sScriptMgr->OnPlayerIsXpGainHalted(this);
+}
+
 // Rebuild m_usedTalentCount from the TALENT map rather than from the spellbook.
 //
 // Until this existed, the count was whatever Player::AddSpell had accumulated
@@ -19138,7 +19157,11 @@ void Player::SendQuestReward(Quest const* quest, uint32 XP) const
     WorldPacket data(SMSG_QUESTGIVER_QUEST_COMPLETE, (4 + 4 + 4 + 4 + 4));
     data << uint32(questid);
 
-    if (!IsMaxLevel())
+    // Only experience that really moved. A stopped bar - at the cap or by the
+    // toggle or the zone stop - was paid in the money below instead, and naming
+    // an experience figure here would contradict the coins the player is
+    // watching arrive.
+    if (!IsMaxLevel() && !IsXpGainHalted())
         data << uint32(XP);
     else
         data << uint32(0);

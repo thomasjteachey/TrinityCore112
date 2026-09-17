@@ -264,7 +264,16 @@ void Quest::BuildQuestRewards(WorldPackets::Quest::QuestRewards& rewards, Player
         }
 
         rewards.RewardMoney = GetRewOrReqMoney(player);
-        rewards.RewardXPDifficulty = GetXPReward(player) * sWorld->getRate(RATE_XP_QUEST);
+
+        // Advertise no experience to somebody who cannot gain any: the money
+        // above is already the converted reward, and an experience line printed
+        // beside it would be promising something turn-in does not pay.
+        //
+        // The zero has to come from here. The reward frame prints the figure the
+        // server hands it, and this side is the only one that knows both what
+        // this realm's cap is and whether the bar has been stopped below it.
+        bool const noXp = player->IsMaxLevel() || player->IsXpGainHalted();
+        rewards.RewardXPDifficulty = noXp ? 0 : uint32(GetXPReward(player) * sWorld->getRate(RATE_XP_QUEST));
     }
 
     rewards.RewardHonor = 10 * CalculateHonorGain(player->GetQuestLevel(this)); // rewarded honor points. Multiply with 10 to satisfy client
@@ -290,10 +299,19 @@ int32 Quest::GetRewOrReqMoney(Player const* player) const
     if (_rewardMoney < 0)
         return _rewardMoney;
 
+    // A character whose experience is stopped is paid like one at the cap.
+    //
+    // The bonus money exists because a quest that can no longer pay experience
+    // has to pay something, and it makes no difference to the quest whether the
+    // bar is full or switched off: either way the experience it was worth is
+    // thrown away on turn-in. So the experience toggle and the War Mode zone
+    // stop buy the same conversion the level cap does.
+    bool const payInMoney = player && (player->IsMaxLevel() || player->IsXpGainHalted());
+
     // RewardMoney: the positive amount
-    if (!player || !player->IsMaxLevel())
+    if (!payInMoney)
         return int32(_rewardMoney * sWorld->getRate(RATE_MONEY_QUEST));
-    else // At level cap, the money reward is the maximum amount between normal and bonus money reward
+    else // Paying instead of levelling, the money reward is the maximum amount between normal and bonus money reward
         return std::max(int32(GetRewMoneyMaxLevel()), int32(_rewardMoney * sWorld->getRate(RATE_MONEY_QUEST)));
 }
 

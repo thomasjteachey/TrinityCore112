@@ -327,6 +327,17 @@ public:
             amount = 0;
     }
 
+    // The same stop, asked without an award in hand.
+    //
+    // A quest turned in under the cap pays its max-level money instead of
+    // experience (Quest::GetRewOrReqMoney), and the reward window has to say so
+    // before the player clicks Complete - by which point OnGiveXP is too late to
+    // be asked. Staying to fight a zone at its ceiling now pays in coin.
+    bool OnIsXpGainHalted(Player const* player) override
+    {
+        return ZoneCapStopsXp(player);
+    }
+
     void OnUpdateZone(Player* player, uint32 newZone, uint32 /*newArea*/) override
     {
         if (!GateEnabled() || !player || !player->IsInWorld())

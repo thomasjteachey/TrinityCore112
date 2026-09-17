@@ -688,6 +688,15 @@ class TC_GAME_API PlayerScript : public ScriptObject
         // Called when a player gains XP (before anything is given)
         virtual void OnGiveXP(Player* player, uint32& amount, Unit* victim);
 
+        // Asked whether this script is stopping the player's experience outright
+        // rather than scaling an award. Return true to say so.
+        //
+        // A stop has to be answerable with no award in hand, because what it
+        // decides is how the character is paid instead - see
+        // Player::IsXpGainHalted. A script that only multiplies an award, even
+        // by zero, is not a stop and should leave this alone.
+        virtual bool OnIsXpGainHalted(Player const* player);
+
         // Called before a player equips an item. Return false to block the equip.
         virtual bool OnCanEquipItem(Player* player, uint8 slot, uint16& dest, Item* item, bool swap, bool notLoading);
 
@@ -1088,6 +1097,7 @@ class TC_GAME_API ScriptMgr
         void OnPlayerMoneyChanged(Player* player, int32& amount);
         void OnPlayerMoneyLimit(Player* player, int32 amount);
         void OnGivePlayerXP(Player* player, uint32& amount, Unit* victim);
+        bool OnPlayerIsXpGainHalted(Player const* player);
         bool OnPlayerCanEquipItem(Player* player, uint8 slot, uint16& dest, Item* item, bool swap, bool notLoading);
         bool OnPlayerCanUseItem(Player* player, ItemTemplate const* proto, InventoryResult& result);
         bool OnPlayerCanApplyEnchantment(Player* player, Item* item, EnchantmentSlot slot, bool apply, bool applyDur, bool ignoreCondition);
