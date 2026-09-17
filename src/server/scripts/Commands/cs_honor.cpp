@@ -130,7 +130,7 @@ public:
         std::string deathsName;
         uint32 deaths = 0;
         if (sWorld->ProcessWeeklyMostDeaths(&deathsName, &deaths))
-            handler->PSendSysMessage("Weekly most deaths set to %s with %u death(s).", deathsName.c_str(), deaths);
+            handler->PSendSysMessage("Weekly most deaths: inn corpses redressed per zone; the worst was %s with %u death(s) in one zone.", deathsName.c_str(), deaths);
 
         return true;
     }

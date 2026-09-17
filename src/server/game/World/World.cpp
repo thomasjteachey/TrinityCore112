@@ -103,6 +103,8 @@
 #include <array>
 #include <memory>
 #include <sstream>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <boost/asio/ip/address.hpp>
 
@@ -3783,6 +3785,66 @@ namespace
         stmt->setUInt32(1, WarchiefMailSpellCheck);
         return !CharacterDatabase.Query(stmt);
     }
+
+    // Asked before touching a table only some realms have: a query on a missing
+    // table aborts the worldserver.
+    template<class T>
+    bool TableExists(DatabaseWorkerPool<T>& database, std::string_view table)
+    {
+        return bool(database.PQuery("SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{}'", table));
+    }
+
+    enum WeeklyBoard : uint8
+    {
+        WEEKLY_BOARD_HONOR       = 1,   // place 1-3: most weekly honor, second, third
+        WEEKLY_BOARD_ZONE_DEATHS = 2    // most deaths this week in the zone the NPC stands in
+    };
+
+    // Which NPCs wear the weekly leaderboards. The world table centurion_weekly_npc
+    // (entry, board, place) names them, and every spawn of a listed entry is
+    // dressed. A realm without the table keeps Legionnaire+'s fixed three - the
+    // warchief, the trash at his feet, the target dummies - and has no deaths
+    // board.
+    struct WeeklyBoardNpcs
+    {
+        bool FromTable = false;
+        std::array<std::vector<uint32>, 3> HonorPlaces;
+        std::vector<uint32> ZoneDeaths;
+    };
+
+    WeeklyBoardNpcs LoadWeeklyBoardNpcs()
+    {
+        WeeklyBoardNpcs npcs;
+        if (!TableExists(WorldDatabase, "centurion_weekly_npc"))
+        {
+            npcs.HonorPlaces = { { { WarchiefNpcEntry }, { WarchiefRunnerUpEntry }, { WarchiefThirdPlaceEntry } } };
+            return npcs;
+        }
+
+        npcs.FromTable = true;
+        QueryResult result = WorldDatabase.Query("SELECT entry, board, place FROM centurion_weekly_npc ORDER BY entry");
+        if (!result)
+            return npcs;
+
+        do
+        {
+            Field* fields = result->Fetch();
+            uint32 const entry = fields[0].GetUInt32();
+            uint8 const board = fields[1].GetUInt8();
+            uint8 const place = fields[2].GetUInt8();
+
+            if (!sObjectMgr->GetCreatureTemplate(entry))
+                TC_LOG_ERROR("sql.sql", "centurion_weekly_npc: creature entry {} does not exist, skipped.", entry);
+            else if (board == WEEKLY_BOARD_HONOR && place >= 1 && place <= 3)
+                npcs.HonorPlaces[place - 1].push_back(entry);
+            else if (board == WEEKLY_BOARD_ZONE_DEATHS)
+                npcs.ZoneDeaths.push_back(entry);
+            else
+                TC_LOG_ERROR("sql.sql", "centurion_weekly_npc: entry {} has board {} place {}, which is no board, skipped.", entry, board, place);
+        } while (result->NextRow());
+
+        return npcs;
+    }
 }
 
 bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName, uint32* honorGain)
@@ -3866,7 +3928,12 @@ bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName,
         previousWarchiefName = warchiefFields[1].GetString();
     }
 
-    UpdateHonorNpc(WarchiefNpcEntry, winnerGuid, resolvedWinnerName, &previousWarchiefName);
+    // Legionnaire+'s own warchief and runner-up are one spawn each, the first found
+    // on Eastern Kingdoms; NPCs named by the table are dressed wherever they stand.
+    WeeklyBoardNpcs const boardNpcs = LoadWeeklyBoardNpcs();
+    for (uint32 entry : boardNpcs.HonorPlaces[0])
+        UpdateHonorNpc(entry, winnerGuid, resolvedWinnerName, &previousWarchiefName, boardNpcs.FromTable);
+
     if (previousWarchiefGuid && previousWarchiefGuid != winnerLowGuid)
         UpdateWarchiefTitles(ObjectGuid::Create<HighGuid::Player>(previousWarchiefGuid), FormerWarchiefTitleId, WarchiefTitleId);
 
@@ -3909,10 +3976,8 @@ bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName,
         if (!sCharacterCache->GetCharacterNameByGuid(runnerUpGuid, runnerUpName))
             runnerUpName = "<unknown>";
 
-        // On a realm where 110017 is the most-deaths corpse instead, this must not
-        // fight it for the same entry every week.
-        if (sConfigMgr->GetBoolDefault("Centurion.HonorRunnerUp.Enable", true))
-            UpdateHonorNpc(WarchiefRunnerUpEntry, runnerUpGuid, runnerUpName, nullptr);
+        for (uint32 entry : boardNpcs.HonorPlaces[1])
+            UpdateHonorNpc(entry, runnerUpGuid, runnerUpName, nullptr, boardNpcs.FromTable);
 
         CharacterDatabaseTransaction runnerUpTrans = CharacterDatabase.BeginTransaction();
         MailDraft("second place", "if you're not first you're last.")
@@ -3927,7 +3992,8 @@ bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName,
         if (!sCharacterCache->GetCharacterNameByGuid(thirdPlaceGuid, thirdPlaceName))
             thirdPlaceName = "<unknown>";
 
-        UpdateHonorNpc(WarchiefThirdPlaceEntry, thirdPlaceGuid, thirdPlaceName, nullptr, true);
+        for (uint32 entry : boardNpcs.HonorPlaces[2])
+            UpdateHonorNpc(entry, thirdPlaceGuid, thirdPlaceName, nullptr, true);
     }
 
     if (resetHonor)
@@ -3940,63 +4006,105 @@ bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName,
     return true;
 }
 
-// Whoever died the most this week gets a copy of their corpse beside every innkeeper.
+// Each inn's corpse becomes whoever died the most this week in the zone that inn is in.
 //
 // Same machinery as the warchief board, deliberately: UpdateHonorNpc with
-// updateAllSpawns, exactly as third place already does. What differs is only which
-// leaderboard is read and what is being dressed - a lying-down "Trash" corpse rather
-// than a standing hero, and the creature's own stand state is preserved by
-// UpdateHonorNpc, so it stays on the floor while wearing the player's face.
+// updateAllSpawns. What differs is which leaderboard is read and what is being
+// dressed - a lying-down "Trash" corpse rather than a standing hero, and the
+// creature's own stand state is preserved by UpdateHonorNpc, so it stays on the
+// floor while wearing the player's face.
+//
+// The corpses are the board-2 entries of centurion_weekly_npc, one entry per inn:
+// the name and the copied look belong to the creature TEMPLATE, so two inns in
+// different zones can only show different people as different entries. A zone
+// nobody died in this week leaves its corpse exactly as it was.
 //
 // It lives here rather than in a script because UpdateHonorNpc is a static in this
 // file's anonymous namespace. The counting half is the PlayerScript in
-// custom_weekly_deaths.cpp; the two meet in character_weekly_deaths.
+// custom_weekly_deaths.cpp; the two meet in character_weekly_zone_deaths.
 bool World::ProcessWeeklyMostDeaths(std::string* winnerName, uint32* deathCount)
 {
     if (!sConfigMgr->GetBoolDefault("Centurion.MostDeaths.Enable", false))
         return false;
 
-    // Same NPC on both realms, different meaning. On L+ 110017 is the honor
-    // runner-up and there is one of him; on B+ he is whoever died most and there is
-    // one beside every innkeeper. Which of those a realm gets is configuration, not a
-    // branch difference, so the entry and the spawn breadth are both settings.
-    uint32 const corpseEntry = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.MostDeaths.CreatureEntry", int32(WarchiefRunnerUpEntry))));
-    if (!corpseEntry)
-        return false;
-
-    bool const allSpawns = sConfigMgr->GetBoolDefault("Centurion.MostDeaths.AllSpawns", true);
-
-    QueryResult result = CharacterDatabase.Query(
-        "SELECT guid, deaths FROM character_weekly_deaths ORDER BY deaths DESC, guid ASC LIMIT 1");
-    if (!result)
+    if (!TableExists(CharacterDatabase, "character_weekly_zone_deaths"))
     {
-        TC_LOG_INFO("misc", "Weekly most deaths: nobody died this week, so the corpses are left as they are.");
+        TC_LOG_ERROR("misc", "Weekly most deaths: table character_weekly_zone_deaths is missing, so no deaths were counted.");
         return false;
     }
 
-    Field* fields = result->Fetch();
-    ObjectGuid::LowType const lowGuid = fields[0].GetUInt32();
-    uint32 const deaths = fields[1].GetUInt32();
+    // Each zone's leader: most deaths, ties to the lower guid.
+    struct ZoneLeader
+    {
+        ObjectGuid::LowType Guid = 0;
+        uint32 Deaths = 0;
+    };
 
-    ObjectGuid const guid = ObjectGuid::Create<HighGuid::Player>(lowGuid);
-    std::string name;
-    if (!sCharacterCache->GetCharacterNameByGuid(guid, name))
-        name = "<unknown>";
+    std::unordered_map<uint32, ZoneLeader> leaders;
+    if (QueryResult result = CharacterDatabase.Query("SELECT zone, guid, deaths FROM character_weekly_zone_deaths ORDER BY zone, deaths DESC, guid ASC"))
+    {
+        do
+        {
+            Field* fields = result->Fetch();
+            leaders.try_emplace(fields[0].GetUInt32(), ZoneLeader{ fields[1].GetUInt32(), fields[2].GetUInt32() });
+        } while (result->NextRow());
+    }
 
-    if (UpdateHonorNpc(corpseEntry, guid, name, nullptr, allSpawns))
-        TC_LOG_INFO("misc", "Weekly most deaths: {} died {} time(s) and now lies at {}.", name, deaths,
-            allSpawns ? "every spawn of the corpse NPC" : "the corpse NPC");
-    else
-        TC_LOG_ERROR("misc", "Weekly most deaths: {} won with {} death(s) but creature entry {} could not be updated.", name, deaths, corpseEntry);
+    WeeklyBoardNpcs const boardNpcs = LoadWeeklyBoardNpcs();
+    std::unordered_set<uint32> const corpseEntries(boardNpcs.ZoneDeaths.begin(), boardNpcs.ZoneDeaths.end());
+
+    // The zone each corpse stands in, worked out the way a player's own zone is, so a
+    // death and the corpse it dresses always agree on the zone. An entry spread over
+    // several zones is a data mistake; it follows the first spawn found.
+    std::unordered_map<uint32, uint32> corpseZones;
+    for (auto const& [spawnId, data] : sObjectMgr->GetAllCreatureData())
+    {
+        if (!corpseEntries.count(data.id))
+            continue;
+
+        uint32 const zoneId = sMapMgr->GetZoneId(data.phaseMask, data.mapId, data.spawnPoint);
+        auto const [itr, inserted] = corpseZones.try_emplace(data.id, zoneId);
+        if (!inserted && itr->second != zoneId)
+            TC_LOG_ERROR("sql.sql", "centurion_weekly_npc: corpse entry {} has spawns in zones {} and {}; it shows zone {}.", data.id, itr->second, zoneId, itr->second);
+    }
+
+    uint32 dressed = 0;
+    for (auto const& [entry, zoneId] : corpseZones)
+    {
+        auto const leader = leaders.find(zoneId);
+        if (leader == leaders.end())
+            continue;
+
+        ObjectGuid const guid = ObjectGuid::Create<HighGuid::Player>(leader->second.Guid);
+        std::string name;
+        if (!sCharacterCache->GetCharacterNameByGuid(guid, name))
+            name = "<unknown>";
+
+        if (UpdateHonorNpc(entry, guid, name, nullptr, true))
+            ++dressed;
+        else
+            TC_LOG_ERROR("misc", "Weekly most deaths: {} died {} time(s) in zone {} but corpse entry {} could not be updated.", name, leader->second.Deaths, zoneId, entry);
+    }
+
+    // For the report: the worst week anybody had in one zone.
+    ZoneLeader worst;
+    for (auto const& [zoneId, leader] : leaders)
+        if (leader.Deaths > worst.Deaths || (leader.Deaths == worst.Deaths && leader.Guid < worst.Guid))
+            worst = leader;
+
+    TC_LOG_INFO("misc", "Weekly most deaths: {} zone(s) had deaths, {} corpse NPC(s) redressed.", leaders.size(), dressed);
 
     // The week is over either way. Carrying the counts forward would let one bad week
     // decide the next one too, which is worse than losing a board nobody saw.
-    CharacterDatabase.Execute("DELETE FROM character_weekly_deaths");
+    CharacterDatabase.Execute("DELETE FROM character_weekly_zone_deaths");
 
-    if (winnerName)
-        *winnerName = name;
+    if (!worst.Guid)
+        return false;
+
+    if (winnerName && !sCharacterCache->GetCharacterNameByGuid(ObjectGuid::Create<HighGuid::Player>(worst.Guid), *winnerName))
+        *winnerName = "<unknown>";
     if (deathCount)
-        *deathCount = deaths;
+        *deathCount = worst.Deaths;
 
     return true;
 }

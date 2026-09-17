@@ -4125,34 +4125,19 @@ Centurion.PvpConsumableRestore.AreaIds = ""
 
 #
 #    Centurion.MostDeaths.Enable
-#        Description: Each weekly reset, whoever died the most that week has their
-#                     appearance and name copied onto the corpse NPC. Deaths are counted
-#                     only for real players - playerbots are skipped, or the fleet would
-#                     win every week. Off by default.
+#        Description: Each weekly reset, every inn corpse NPC becomes whoever died the most
+#                     that week in the zone the corpse lies in; a zone nobody died in keeps
+#                     its corpse as it was. Deaths are counted per zone for real players
+#                     only - playerbots are skipped, or the fleet would win every week.
+#                     The corpses are the board 2 rows of the world table
+#                     centurion_weekly_npc (one creature entry per inn, because the name
+#                     and the copied look belong to the entry), and the counts live in
+#                     the characters table character_weekly_zone_deaths. Without that
+#                     table nothing is counted. Off by default.
 #        Default:     0
-#
-#    Centurion.MostDeaths.CreatureEntry
-#        Description: The NPC dressed as the week's most-killed player. Defaults to
-#                     110017, the same lying-down "Trash" NPC that serves as the honor
-#                     runner-up elsewhere - which is why the two must not both be on.
-#        Default:     110017
-#
-#    Centurion.MostDeaths.AllSpawns
-#        Description: 1 dresses EVERY spawn of that creature (one corpse beside each
-#                     innkeeper); 0 dresses only one.
-#        Default:     1
-#
-#    Centurion.HonorRunnerUp.Enable
-#        Description: Whether the weekly honor runner-up is copied onto creature 110017.
-#                     Turn this OFF on a realm running Centurion.MostDeaths, or the two
-#                     boards overwrite each other on the same NPC every week.
-#        Default:     1
 #
 
 Centurion.MostDeaths.Enable = 0
-Centurion.MostDeaths.CreatureEntry = 110017
-Centurion.MostDeaths.AllSpawns = 1
-Centurion.HonorRunnerUp.Enable = 1
 
 #
 #    Centurion.WeeklyHonorWarchief.Enable
@@ -4160,6 +4145,11 @@ Centurion.HonorRunnerUp.Enable = 1
 #                     the NPC dressing, and the congratulation mails from Magni. Turn it
 #                     off on a realm that is not running an honor race, or it keeps
 #                     awarding a warchief nobody competed for and mailing about it.
+#                     The NPCs dressed as the week's top three are the board 1 rows of the
+#                     world table centurion_weekly_npc (entry, board 1, place 1-3; every
+#                     spawn of a listed entry). A realm without that table dresses
+#                     Legionnaire+'s fixed three: 31412 (most honor), 110017 (second)
+#                     and every 32666 (third).
 #                     Does not affect Centurion.MostDeaths, which rides the same weekly
 #                     rollover independently.
 #        Default:     1
