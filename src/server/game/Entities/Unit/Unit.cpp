@@ -15774,6 +15774,17 @@ void Unit::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player const* t
                     // this resolves exactly like an enemy player.
                     fieldBuffer << uint32(target->GetTeamId() == TEAM_ALLIANCE ? 2 : 1);
                 }
+                else if (index == UNIT_FIELD_BYTES_2 && target != this &&
+                    (m_uint32Values[UNIT_FIELD_BYTES_2] & (uint32(UNIT_BYTE2_FLAG_FFA_PVP) << 8)) &&
+                    Tournament::AreKeptFromFighting(GetAffectingPlayer(), target))
+                {
+                    // A tournament character and a world character are only
+                    // enemies on the sand of the Battle Ring. Anywhere else each
+                    // sees the other's FFA flag down, so the client neither paints
+                    // them red nor lets them swing - GetReactionTo already says
+                    // friendly. Pets and totems follow their owner.
+                    fieldBuffer << (m_uint32Values[UNIT_FIELD_BYTES_2] & ~(uint32(UNIT_BYTE2_FLAG_FFA_PVP) << 8));
+                }
                 else if (IsControlledByPlayer() && target != this && sWorld->getBoolConfig(CONFIG_ALLOW_TWO_SIDE_INTERACTION_GROUP) && IsInRaidWith(target))
                 {
                     FactionTemplateEntry const* ft1 = GetFactionTemplateEntry();

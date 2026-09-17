@@ -8542,6 +8542,13 @@ void Player::UpdateArea(uint32 newArea)
     bool const isGurubashiBattleRing = IsInGurubashiBattleRing(m_zoneUpdateId, newArea);
     bool const isGurubashiSafeArea = GetMapId() == 0 && m_zoneUpdateId == 33 && !isGurubashiBattleRing;
 
+    if (isGurubashiBattleRing != m_inGurubashiBattleRing)
+    {
+        m_inGurubashiBattleRing = isGurubashiBattleRing;
+        if (Tournament::IsEnabled() && IsInWorld())
+            ResendFfaFlagViews();
+    }
+
     static std::array<uint32, 1> const customFFAAreas = { 3217 }; // The Maul
     bool const isCustomFFAArea = std::find(customFFAAreas.begin(), customFFAAreas.end(), newArea) != customFFAAreas.end();
 
@@ -24546,6 +24553,29 @@ bool Player::IsInGurubashiBattleRing(uint32 zoneId, uint32 areaId) const
 bool Player::IsInGurubashiBattleRing() const
 {
     return IsInGurubashiBattleRing(GetZoneId(), GetAreaId());
+}
+
+void Player::ResendFfaFlagViews()
+{
+    ForceValuesUpdateAtIndex(UNIT_FIELD_BYTES_2);
+    for (Unit* controlled : m_Controlled)
+        controlled->ForceValuesUpdateAtIndex(UNIT_FIELD_BYTES_2);
+
+    std::vector<Player*> nearby;
+    GetPlayerListInGrid(nearby, GetVisibilityRange(), false);
+    for (Player* other : nearby)
+    {
+        if (other == this)
+            continue;
+
+        other->ForceValuesUpdateAtIndex(UNIT_FIELD_BYTES_2);
+        for (Unit* controlled : other->m_Controlled)
+            controlled->ForceValuesUpdateAtIndex(UNIT_FIELD_BYTES_2);
+    }
+
+    // Auto-attack and periodic ticks never re-ask IsValidAttackTarget, so a
+    // fight across the rope would otherwise carry on.
+    ValidateAttackersAndOwnTarget();
 }
 
 void Player::UpdatePvPState(bool onlyFFA)

@@ -1746,6 +1746,12 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         bool IsInGurubashiRingArea(uint32 zoneId, uint32 areaId) const;
         bool IsInGurubashiBattleRing(uint32 zoneId, uint32 areaId) const;
         bool IsInGurubashiBattleRing() const;
+        // Stepping on or off the Battle Ring's sand changes whom a tournament or
+        // world character may fight (Tournament::AreKeptFromFighting) without
+        // necessarily moving anyone's FFA flag: resend this player's flag to
+        // everyone around, theirs to this player, and drop fights that just
+        // became illegal.
+        void ResendFfaFlagViews();
         void SetPvP(bool state) override;
         void UpdatePvP(bool state, bool override = false);
         void UpdateZone(uint32 newZone, uint32 newArea);
@@ -1971,6 +1977,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
 
         uint32 m_bountyPursuitStacks = 0;
         uint32 m_bountyPursuitUntilMs = 0;
+        bool m_inGurubashiBattleRing = false;   // last ring state UpdateArea saw
         void SetWorldChannelOptOut(bool optOut);
 
         // Gives a saved per-character chat config (account data type 7) the

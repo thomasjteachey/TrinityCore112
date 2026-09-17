@@ -3009,8 +3009,11 @@ ReputationRank WorldObject::GetReactionTo(WorldObject const* target) const
                                          // return GetFactionReactionTo(GetFactionTemplateEntry(), target);
             }
 
-            // check FFA_PVP
-            if (unit->IsFFAPvP() && targetUnit->IsFFAPvP())
+            // check FFA_PVP - except between a tournament character and a world
+            // character, who are only enemies on the sand of the Battle Ring
+            // (Tournament::AreKeptFromFighting), whatever else armed them
+            if (unit->IsFFAPvP() && targetUnit->IsFFAPvP() &&
+                !(selfPlayerOwner && targetPlayerOwner && Tournament::AreKeptFromFighting(selfPlayerOwner, targetPlayerOwner)))
                 return REP_HOSTILE;
 
             if (selfPlayerOwner)

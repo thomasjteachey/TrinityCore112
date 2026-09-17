@@ -56,6 +56,14 @@ namespace Tournament
     bool AreSeparated(Player const* a, Player const* b);
     bool AreSeparated(ObjectGuid a, ObjectGuid b);
 
+    // A tournament character and a world character are only ever enemies on the
+    // sand of the Gurubashi Battle Ring, and only while both stand on it. True
+    // for such a pair anywhere else, whichever of them happens to be FFA-armed
+    // (War Mode, the ring). Battlegrounds and arenas keep their own sides, and a
+    // duel is settled before this is asked. WorldObject::GetReactionTo and
+    // Unit::BuildValuesUpdate both use it, so the server and the client agree.
+    bool AreKeptFromFighting(Player const* a, Player const* b);
+
     // Battleground/arena queue pool. Tournament characters always queue in the
     // tournament pool; world characters only when they opted in (and are at
     // least Centurion.Tournament.QueueMinLevel).

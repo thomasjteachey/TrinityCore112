@@ -313,6 +313,18 @@ bool AreSeparated(ObjectGuid a, ObjectGuid b)
     return IsTournamentCharacter(a) != IsTournamentCharacter(b);
 }
 
+bool AreKeptFromFighting(Player const* a, Player const* b)
+{
+    if (a == b || !AreSeparated(a, b))
+        return false;
+
+    if (Map const* map = a->FindMap())
+        if (map->IsBattlegroundOrArena())
+            return false;
+
+    return !(a->IsInGurubashiBattleRing() && b->IsInGurubashiBattleRing());
+}
+
 bool QueuesInTournamentPool(Player const* player)
 {
     if (!Config.Enabled || !player)
