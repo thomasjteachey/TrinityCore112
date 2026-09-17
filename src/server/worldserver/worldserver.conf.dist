@@ -4970,7 +4970,7 @@ Centurion.Items.QuiversHoldAnyItem = 0
 #      - are matched in battlegrounds and arenas only with the tournament queue pool;
 #      - may talk only to AllowedCreatures (plus spirit healers, battlemasters, their own pets,
 #        and anything on a battleground map or in the custom-game lobby);
-#      - learn InnateSpells and max every ProfessionSpells profession at each login;
+#      - learn InnateSpells at each login and have no professions;
 #      - are ignored by every playerbot outside battlegrounds and arenas.
 #
 #    Tournament character creation (Legionnaire+'s starting kit), all optional:
@@ -5075,13 +5075,6 @@ Centurion.Items.QuiversHoldAnyItem = 0
 #        Description: Spells every tournament character knows, as spell[:classmask].
 #        Default:     "29073,18610,22734:1494" - (Eat, First Aid rank 10, Drink for mana classes)
 #
-#    Centurion.Tournament.ProfessionSpells
-#        Description: Profession rank spells to learn; each profession is raised to that rank's
-#                     cap, so profession-gated gear (reflectors, engineering trinkets) is usable.
-#        Default:     "11611,9785,13920,12656,10662,12180"
-#                     - (Artisan Alchemy, Blacksmithing, Enchanting, Engineering,
-#                        Leatherworking, Tailoring)
-#
 #    Centurion.Tournament.QueueMinLevel
 #        Description: Level a world character needs to opt into the tournament queue
 #                     (the Battlegrounds-tab toggle; addon message CCGAMEREQ TQUEUE).
@@ -5104,7 +5097,6 @@ Centurion.Tournament.ResetDuelCooldowns = 1
 Centurion.Tournament.ResetDuelHealthMana = 1
 Centurion.Tournament.AllowedLootObjects = ""
 Centurion.Tournament.InnateSpells = "29073,18610,22734:1494"
-Centurion.Tournament.ProfessionSpells = "11611,9785,13920,12656,10662,12180"
 Centurion.Tournament.QueueMinLevel = 60
 
 #

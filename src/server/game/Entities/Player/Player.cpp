@@ -27155,9 +27155,39 @@ uint32 Player::GetResurrectionSpellId()
         }
     }
 
-    // Reincarnation (passive spell)  // prio: 1                  // Glyph of Renewed Life
+    // Reincarnation (passive spell)  // prio: 1
+    //
+    // This is the whole decision. The death screen only offers the button when
+    // clicking it will work, so HandleSelfResOpcode has nothing left to refuse -
+    // which means anything the cast would still check that cannot change while
+    // the player lies there has to be checked here:
+    //  - the cost. The realm's own spell data says whether an Ankh is owed. The
+    //    hardcoded Ankh test that used to sit here went with L+'s Ankh-free data,
+    //    and a realm whose data still charges one offered a button that failed on
+    //    "Missing reagent".
+    //  - where it may be used. Spell::CheckCast keeps cooldowns over ten minutes
+    //    out of arenas, and Reincarnation's is an hour.
     if (prio < 1 && HasSpell(20608) && !GetSpellHistory()->HasCooldown(21169))
-        spell_id = 21169;
+    {
+        if (SpellInfo const* reincarnation = sSpellMgr->GetSpellInfo(21169))
+        {
+            bool usable = true;
+
+            if (!CanNoReagentCast(reincarnation))
+                for (uint32 i = 0; i < MAX_SPELL_REAGENTS; ++i)
+                    if (reincarnation->Reagent[i] > 0 && !HasItemCount(uint32(reincarnation->Reagent[i]), reincarnation->ReagentCount[i]))
+                        usable = false;
+
+            if (reincarnation->HasAttribute(SPELL_ATTR4_NOT_USABLE_IN_ARENA) ||
+                (reincarnation->GetRecoveryTime() > 10 * MINUTE * IN_MILLISECONDS && !reincarnation->HasAttribute(SPELL_ATTR4_USABLE_IN_ARENA)))
+                if (MapEntry const* mapEntry = sMapStore.LookupEntry(GetMapId()))
+                    if (mapEntry->IsBattleArena())
+                        usable = false;
+
+            if (usable)
+                spell_id = 21169;
+        }
+    }
 
     return spell_id;
 }

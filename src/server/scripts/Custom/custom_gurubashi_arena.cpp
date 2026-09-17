@@ -68,6 +68,9 @@ constexpr float GURUBASHI_BATTLE_RING_MAX_Z = 27.0f;
 constexpr uint32 GURUBASHI_CHEST_ENTRY = 179697;
 constexpr uint32 SHADOW_SIGHT_ENTRY = 184663;
 constexpr uint32 CHROMIE_ENTRY = 10667;
+// Centurion's tournament hub Chromie: a copy of Legionnaire+'s 10667, so the
+// Andorhal quest giver there keeps the stock template.
+constexpr uint32 HUB_CHROMIE_ENTRY = 920213;
 constexpr uint32 PVP_CONSUMABLE_ITEM_LIMIT_CATEGORY = 5;
 constexpr uint32 TELEPORT_VISUAL_SPELL = 64446;
 constexpr uint32 FORCED_DEATH_STARFIRE_SPELL_ID = 48465;
@@ -319,7 +322,8 @@ void YellFromChromie(char const* yellText)
         {
             if (Creature* creature = spawnPair.second)
             {
-                if (creature->GetEntry() == CHROMIE_ENTRY && creature->IsAlive() && signaledChromies.insert(creature).second)
+                if ((creature->GetEntry() == CHROMIE_ENTRY || creature->GetEntry() == HUB_CHROMIE_ENTRY) &&
+                    creature->IsAlive() && signaledChromies.insert(creature).second)
                     creature->Yell(yellText, LANG_UNIVERSAL);
             }
         }

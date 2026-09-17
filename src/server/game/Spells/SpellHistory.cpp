@@ -191,7 +191,12 @@ void SpellHistory::HandleCooldowns(SpellInfo const* spellInfo, uint32 itemID, Sp
 
 bool SpellHistory::IsReady(SpellInfo const* spellInfo, uint32 itemId /*= 0*/, bool ignoreCategoryCooldown /*= false*/) const
 {
-    if (IsSchoolLocked(spellInfo->GetSchoolMask()))
+    // Lockouts reach every spell of the school here, not only the ones the DBC
+    // marks as silenceable - except a self resurrection. That is used from the
+    // death screen, after the fight the lockout belongs to, and Reincarnation is
+    // Nature like every shaman heal and bolt: a kick landed just before the
+    // killing blow turned the death-screen button into "Spell is not ready yet".
+    if (!spellInfo->HasEffect(SPELL_EFFECT_SELF_RESURRECT) && IsSchoolLocked(spellInfo->GetSchoolMask()))
         return false;
 
     if (HasCooldown(spellInfo->Id, itemId, ignoreCategoryCooldown))
@@ -623,6 +628,12 @@ void SpellHistory::LockSpellSchool(SpellSchoolMask schoolMask, uint32 lockoutTim
     {
         SpellInfo const* spellInfo = sSpellMgr->AssertSpellInfo(spellId);
         if (spellInfo->IsCooldownStartedOnEvent())
+            continue;
+
+        // A passive is never cast, so there is nothing to lock. Reincarnation's
+        // passive is Nature, and it must never show a lockout the resurrection
+        // itself no longer has (see IsReady).
+        if (spellInfo->IsPassive())
             continue;
 
         if ((schoolMask & spellInfo->GetSchoolMask()) && GetRemainingCooldown(spellInfo) < lockoutTime)

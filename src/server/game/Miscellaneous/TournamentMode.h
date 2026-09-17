@@ -149,7 +149,7 @@ namespace Tournament
     // name first-letter-lowercase, rest-uppercase ("eLGROM"). Checked on the raw
     // name, before normalizePlayerName.
     bool IsTournamentNameMarker(std::string const& rawName);
-    // Innate eat/drink/bandage spells and maxed crafting professions.
+    // Innate eat/drink/bandage spells. Tournament characters have no professions.
     // Idempotent; run at every login of a tournament character.
     void ApplyCharacterKit(Player* player);
 

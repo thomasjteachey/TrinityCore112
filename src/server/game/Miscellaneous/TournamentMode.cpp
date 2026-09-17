@@ -76,7 +76,6 @@ namespace
         std::unordered_set<uint32> AllowedCreatures;
         std::unordered_set<uint32> AllowedLootObjects;
         std::vector<InnateSpell> InnateSpells;
-        std::vector<uint32> ProfessionSpells;
         uint32 PhaseMask = 0;
         uint32 WorldPhaseMask = 0;
         bool MaxWeaponSkill = true;
@@ -203,9 +202,6 @@ void LoadConfig()
         loaded.InnateSpells.push_back(innate);
     }
 
-    loaded.ProfessionSpells = ParseIdList("Centurion.Tournament.ProfessionSpells",
-        sConfigMgr->GetStringDefault("Centurion.Tournament.ProfessionSpells", "11611,9785,13920,12656,10662,12180"));
-
     loaded.PhaseMask = uint32(sConfigMgr->GetIntDefault("Centurion.Tournament.PhaseMask", 0));
     if (loaded.PhaseMask == uint32(PHASEMASK_ANYWHERE))
     {
@@ -287,8 +283,8 @@ void LoadConfig()
         if (loaded.AllowedCreatures.empty())
             TC_LOG_WARN("server.loading", "Centurion.Tournament.AllowedCreatures is empty: tournament characters may talk to every NPC.");
 
-        TC_LOG_INFO("server.loading", "Tournament characters enabled: {} zone(s), {} creature(s), {} innate spell(s), {} profession(s), phase mask {}.",
-            loaded.AllowedZones.size(), loaded.AllowedCreatures.size(), loaded.InnateSpells.size(), loaded.ProfessionSpells.size(), loaded.PhaseMask);
+        TC_LOG_INFO("server.loading", "Tournament characters enabled: {} zone(s), {} creature(s), {} innate spell(s), phase mask {}.",
+            loaded.AllowedZones.size(), loaded.AllowedCreatures.size(), loaded.InnateSpells.size(), loaded.PhaseMask);
     }
 
     Config = std::move(loaded);
@@ -733,27 +729,6 @@ void ApplyCharacterKit(Player* player)
         }
 
         player->LearnSpell(innate.SpellId, false);
-    }
-
-    // Each entry is a profession RANK spell (Artisan Blacksmithing 9785...).
-    // Its SPELL_EFFECT_SKILL names the skill and the rank's cap; learning it
-    // opens the profession, and the skill is then raised straight to that cap
-    // so profession-gated gear (reflectors, engineering trinkets) is usable.
-    for (uint32 rankSpell : Config.ProfessionSpells)
-    {
-        SpellLearnSkillNode const* node = sSpellMgr->GetSpellLearnSkill(rankSpell);
-        if (!node || !node->skill)
-        {
-            TC_LOG_ERROR("entities.player", "Centurion.Tournament.ProfessionSpells: spell {} does not teach a skill.", rankSpell);
-            continue;
-        }
-
-        if (!player->HasSpell(rankSpell))
-            player->LearnSpell(rankSpell, false);
-
-        uint16 const cap = node->maxvalue ? node->maxvalue : uint16(player->GetMaxSkillValueForLevel());
-        if (player->GetPureSkillValue(node->skill) < cap || player->GetPureMaxSkillValue(node->skill) < cap)
-            player->SetSkill(node->skill, std::max<uint16>(node->step, player->GetSkillStep(node->skill)), cap, cap);
     }
 }
 

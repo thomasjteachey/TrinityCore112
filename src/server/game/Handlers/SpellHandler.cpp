@@ -616,7 +616,27 @@ void WorldSession::HandleSelfResOpcode(WorldPacket & /*recvData*/)
         if (_player->HasAuraType(SPELL_AURA_PREVENT_RESURRECTION) && !spell->HasAttribute(SPELL_ATTR7_BYPASS_NO_RESURRECT_AURA))
             return; // silent return, client should display error by itself and not send this opcode
 
-        _player->CastSpell(_player, spell->Id);
+        // The button was only offered because this works - Player::GetResurrectionSpellId
+        // made that call when the player died - so the cast is not asked again about the
+        // fight that ended: a stun, fear or charm state that outlived the body, the combat
+        // and aura-state rules, the global cooldown. It still pays: the reagent where the
+        // realm's data charges one, and the cooldown starts as usual.
+        CastSpellExtraArgs args(TriggerCastFlags(TRIGGERED_IGNORE_GCD | TRIGGERED_IGNORE_CAST_IN_PROGRESS |
+            TRIGGERED_IGNORE_SHAPESHIFT | TRIGGERED_IGNORE_CASTER_AURASTATE |
+            TRIGGERED_IGNORE_CASTER_MOUNTED_OR_ON_VEHICLE | TRIGGERED_IGNORE_CASTER_AURAS));
+
+        SpellCastResult const result = _player->CastSpell(_player, spell->Id, args);
+        if (result != SPELL_CAST_OK)
+        {
+            // Nothing should get here any more. If something does, the button stays -
+            // it used to be cleared whether or not the cast landed, which is what left
+            // players lying dead with no way up - and the reason is logged, so that
+            // check can be moved behind the prompt as well.
+            TC_LOG_ERROR("spells", "HandleSelfResOpcode: {} ({}) was offered self resurrection {} but the cast failed (SpellCastResult {})",
+                _player->GetName(), _player->GetGUID().ToString(), spell->Id, uint32(result));
+            return;
+        }
+
         _player->SetUInt32Value(PLAYER_SELF_RES_SPELL, 0);
     }
 }
