@@ -1110,13 +1110,16 @@ bool BattlegroundQueue::TryStartBotFilledMatch(BattlegroundTypeId bgTypeId, PvPD
     m_SelectionPools[TEAM_ALLIANCE].Init();
     m_SelectionPools[TEAM_HORDE].Init();
 
-    // Every real group waiting in this bracket rides along on whichever side
-    // the queue assigned it, premades included - the thirty-minute premade
-    // hold exists to find them premade opponents, and here the opponents are
-    // clones. Groups made only of managed bots are left waiting as stock: a
-    // match is summoned for people, and the bots can fill one that exists.
-    uint32 const nowMs = GameTime::GetGameTimeMS();
-    bool someoneHasWaitedLongEnough = false;
+    // Every real group waiting in this bracket rides along, premades included -
+    // the thirty-minute premade hold exists to find them premade opponents, and
+    // here the opponents are clones. Groups made only of managed bots are left
+    // waiting as stock: a match is summoned for people, and the bots can fill
+    // one that exists.
+    //
+    // Collected before any of them is seated, because seating a group can move
+    // it from one side's queue list to the other and cut this walk out from
+    // under itself.
+    std::vector<GroupQueueInfo*> waiting;
     for (uint32 queueIndex = BG_QUEUE_PREMADE_ALLIANCE; queueIndex < BG_QUEUE_GROUP_TYPES_COUNT; ++queueIndex)
     {
         for (GroupQueueInfo* ginfo : m_QueuedGroups[bracket_id][queueIndex])
@@ -1125,22 +1128,64 @@ bool BattlegroundQueue::TryStartBotFilledMatch(BattlegroundTypeId bgTypeId, PvPD
                 (arenaType && ginfo->ArenaType != arenaType) || !GroupHasRealPlayerInvitee(ginfo))
                 continue;
 
-            TeamId const teamIndex = ginfo->Team == HORDE ? TEAM_HORDE : TEAM_ALLIANCE;
-            uint32 const before = m_SelectionPools[teamIndex].GetPlayerCount();
-            m_SelectionPools[teamIndex].AddGroup(ginfo, maxPlayersPerTeam, teamIndex);
-            if (m_SelectionPools[teamIndex].GetPlayerCount() == before)
-                continue;   // too large for what is left of that side
-
-            if (getMSTimeDiff(ginfo->JoinTime, nowMs) >= queueWaitMs)
-                someoneHasWaitedLongEnough = true;
+            waiting.push_back(ginfo);
         }
     }
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    bool someoneHasWaitedLongEnough = false;
+    std::vector<GroupQueueInfo*> crossedOver;   // seated opposite the side they queued on
+
+    for (GroupQueueInfo* ginfo : waiting)
+    {
+        TeamId const queuedSide = ginfo->Team == HORDE ? TEAM_HORDE : TEAM_ALLIANCE;
+        uint32 before = m_SelectionPools[queuedSide].GetPlayerCount();
+        m_SelectionPools[queuedSide].AddGroup(ginfo, maxPlayersPerTeam, queuedSide);
+        bool seated = m_SelectionPools[queuedSide].GetPlayerCount() != before;
+
+        // The side the queue put this group on is full, so try the other one.
+        // An arena queue never really picks a side - AddGroup only balances
+        // sides for battlegrounds - so on a realm where everybody shares a
+        // faction every arena group is nominally Alliance, and the second party
+        // waiting used to be dropped here and handed a clone-filled match of its
+        // own instead of being seated opposite the first. Battleground sides are
+        // already balanced when the group joins and Scarlet Chapel asks for its
+        // side outright, so only an arena group reaches across.
+        if (!seated && arenaType && !ginfo->IsForcedTeam)
+        {
+            TeamId const otherSide = queuedSide == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
+            before = m_SelectionPools[otherSide].GetPlayerCount();
+            m_SelectionPools[otherSide].AddGroup(ginfo, maxPlayersPerTeam, otherSide);
+            if (m_SelectionPools[otherSide].GetPlayerCount() != before)
+            {
+                seated = true;
+                crossedOver.push_back(ginfo);
+            }
+        }
+
+        if (!seated)
+            continue;   // too large for what is left of either side
+
+        if (getMSTimeDiff(ginfo->JoinTime, nowMs) >= queueWaitMs)
+            someoneHasWaitedLongEnough = true;
+    }
+
+    // Nothing starts, so nothing moved: AddGroup already rewrote the team of
+    // everyone it seated, and the groups that crossed over have to keep waiting
+    // on the side they queued on.
+    auto const abandonSelection = [this, &crossedOver]()
+    {
+        for (GroupQueueInfo* ginfo : crossedOver)
+            ginfo->Team = ginfo->Team == HORDE ? ALLIANCE : HORDE;
+
+        m_SelectionPools[TEAM_ALLIANCE].Init();
+        m_SelectionPools[TEAM_HORDE].Init();
+    };
 
     uint32 const selected = m_SelectionPools[TEAM_ALLIANCE].GetPlayerCount() + m_SelectionPools[TEAM_HORDE].GetPlayerCount();
     if (!selected || !someoneHasWaitedLongEnough)
     {
-        m_SelectionPools[TEAM_ALLIANCE].Init();
-        m_SelectionPools[TEAM_HORDE].Init();
+        abandonSelection();
         return false;
     }
 
@@ -1150,9 +1195,28 @@ bool BattlegroundQueue::TryStartBotFilledMatch(BattlegroundTypeId bgTypeId, PvPD
     if (!bg)
     {
         TC_LOG_ERROR("bg.battleground", "BattlegroundQueue::TryStartBotFilledMatch - Cannot create battleground: {}", uint32(bgTypeId));
-        m_SelectionPools[TEAM_ALLIANCE].Init();
-        m_SelectionPools[TEAM_HORDE].Init();
+        abandonSelection();
         return false;
+    }
+
+    // A group that crossed over belongs in the other side's queue list, the way
+    // CheckSkirmishForSameFaction moves one, so that everything reading those
+    // lists by side agrees with the team the group is about to play on.
+    for (GroupQueueInfo* ginfo : crossedOver)
+    {
+        TeamId const seatedSide = ginfo->Team == HORDE ? TEAM_HORDE : TEAM_ALLIANCE;
+        TeamId const queuedSide = seatedSide == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
+        for (uint32 base : { uint32(BG_QUEUE_PREMADE_ALLIANCE), uint32(BG_QUEUE_NORMAL_ALLIANCE) })
+        {
+            GroupsQueueType& from = m_QueuedGroups[bracket_id][base + queuedSide];
+            GroupsQueueType::iterator itr = std::find(from.begin(), from.end(), ginfo);
+            if (itr == from.end())
+                continue;
+
+            from.erase(itr);
+            m_QueuedGroups[bracket_id][base + seatedSide].push_front(ginfo);
+            break;
+        }
     }
 
     // Flagged before anyone is invited so the first person's entry is
