@@ -3554,6 +3554,7 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
     bool const needsMountMovementInterrupt = m_spellInfo->HasAura(SPELL_AURA_MOUNTED);
     bool const requiresMovementInterrupt = (m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) || needsStarfireMovementInterrupt || needsHurricaneMovementInterrupt || needsArcaneMissilesMovementInterrupt || needsMountMovementInterrupt;
 
+    //i'm modifying code blah blah blah
     // don't allow channeled spells / spells with cast time to be cast while moving
     // exception are only channeled spells that have no casttime and SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING
     // (even if they are interrupted on moving, spells with almost immediate effect get to have their effect processed before movement interrupter kicks in)
