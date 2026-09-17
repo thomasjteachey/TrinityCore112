@@ -12226,7 +12226,7 @@ InventoryResult Player::CanStoreItem_InSpecificSlot(uint8 bag, uint8 slot, ItemP
             if (slot >= pBagProto->ContainerSlots)
                 return EQUIP_ERR_ITEM_DOESNT_GO_INTO_BAG;
 
-            if (!ItemCanGoIntoBag(pProto, pBagProto))
+            if (!BagHoldsAnyItem(pBagProto) && !ItemCanGoIntoBag(pProto, pBagProto))
                 return EQUIP_ERR_ITEM_DOESNT_GO_INTO_BAG;
         }
 
@@ -12275,11 +12275,14 @@ InventoryResult Player::CanStoreItem_InBag(uint8 bag, ItemPosCountVec& dest, Ite
     if (!pBagProto)
         return EQUIP_ERR_ITEM_DOESNT_GO_INTO_BAG;
 
-    // specialized bag mode or non-specialized
-    if (non_specialized != (pBagProto->Class == ITEM_CLASS_CONTAINER && pBagProto->SubClass == ITEM_SUBCLASS_CONTAINER))
+    // specialized bag mode or non-specialized. A quiver that holds any item
+    // (BagHoldsAnyItem) takes part in both: its own ammunition still goes there
+    // first, and everything else uses it like an ordinary bag.
+    bool const specialBag = pBagProto->Class != ITEM_CLASS_CONTAINER || pBagProto->SubClass != ITEM_SUBCLASS_CONTAINER;
+    if (non_specialized ? !BagHoldsAnyItem(pBagProto) : !specialBag)
         return EQUIP_ERR_ITEM_DOESNT_GO_INTO_BAG;
 
-    if (!ItemCanGoIntoBag(pProto, pBagProto))
+    if (!non_specialized && !ItemCanGoIntoBag(pProto, pBagProto))
         return EQUIP_ERR_ITEM_DOESNT_GO_INTO_BAG;
 
     for (uint32 j = 0; j < pBag->GetBagSize(); j++)
@@ -12973,7 +12976,7 @@ InventoryResult Player::CanStoreItems(Item** items, int count, uint32* itemLimit
             {
                 if (Bag* bag = GetBagByPos(t))
                 {
-                    if (!ItemCanGoIntoBag(item->GetTemplate(), bag->GetTemplate()))
+                    if (!BagHoldsAnyItem(bag->GetTemplate()) && !ItemCanGoIntoBag(item->GetTemplate(), bag->GetTemplate()))
                         continue;
 
                     for (uint32 j = 0; j < bag->GetBagSize(); j++)
@@ -13093,8 +13096,8 @@ InventoryResult Player::CanStoreItems(Item** items, int count, uint32* itemLimit
             {
                 pBagProto = bag->GetTemplate();
 
-                // special bag already checked
-                if (pBagProto && (pBagProto->Class != ITEM_CLASS_CONTAINER || pBagProto->SubClass != ITEM_SUBCLASS_CONTAINER))
+                // special bag already checked, unless it holds anything as well
+                if (pBagProto && !BagHoldsAnyItem(pBagProto))
                     continue;
 
                 for (uint32 j = 0; j < bag->GetBagSize(); j++)
@@ -15443,7 +15446,7 @@ void Player::SwapItem(uint16 src, uint16 dst)
                         continue;
 
                     ItemTemplate const* bagItemProto = bagItem->GetTemplate();
-                    if (!bagItemProto || !ItemCanGoIntoBag(bagItemProto, emptyProto))
+                    if (!bagItemProto || (!BagHoldsAnyItem(emptyProto) && !ItemCanGoIntoBag(bagItemProto, emptyProto)))
                     {
                         // one from items not go to empty target bag
                         SendEquipError(EQUIP_ERR_NONEMPTY_BAG_OVER_OTHER_BAG, pSrcItem, pDstItem);

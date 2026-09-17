@@ -4946,6 +4946,16 @@ Centurion.Classic.ConsumeAmmo = 0
 Centurion.Classic.PetHappinessDecay = 0
 
 #
+#    Centurion.Items.QuiversHoldAnyItem
+#        Description: Quivers and ammo pouches take any item, like an ordinary bag. Arrows and
+#                     bullets still go to them first; anything else fills them in bag order.
+#                     Items left in one after turning this off are mailed back at login.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Centurion.Items.QuiversHoldAnyItem = 0
+
+#
 ###################################################################################################
 #   CENTURION CHARACTER MODES (world characters and tournament characters on one realm)
 #

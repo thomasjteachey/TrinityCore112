@@ -244,6 +244,17 @@ bool ItemCanGoIntoBag(ItemTemplate const* pProto, ItemTemplate const* pBagProto)
     return false;
 }
 
+bool BagHoldsAnyItem(ItemTemplate const* pBagProto)
+{
+    if (!pBagProto)
+        return false;
+
+    if (pBagProto->Class == ITEM_CLASS_CONTAINER && pBagProto->SubClass == ITEM_SUBCLASS_CONTAINER)
+        return true;
+
+    return pBagProto->Class == ITEM_CLASS_QUIVER && sWorld->getBoolConfig(CONFIG_CENTURION_QUIVERS_HOLD_ANY_ITEM);
+}
+
 Item::Item()
 {
     m_objectType |= TYPEMASK_ITEM;

@@ -57,6 +57,10 @@ enum ItemUpdateState
 };
 
 bool ItemCanGoIntoBag(ItemTemplate const* proto, ItemTemplate const* pBagProto);
+// Whether a bag takes any item: an ordinary bag, and a quiver or ammo pouch when
+// Centurion.Items.QuiversHoldAnyItem is on. ItemCanGoIntoBag keeps the stock family
+// rules, which still send arrows and bullets to a quiver first.
+bool BagHoldsAnyItem(ItemTemplate const* pBagProto);
 
 class TC_GAME_API Item : public Object
 {

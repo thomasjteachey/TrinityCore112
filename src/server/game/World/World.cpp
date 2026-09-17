@@ -1535,6 +1535,8 @@ void World::LoadConfigSettings(bool reload)
     // live PvP realm ammo costs or decaying pets.
     m_bool_configs[CONFIG_CENTURION_CLASSIC_CONSUME_AMMO] = sConfigMgr->GetBoolDefault("Centurion.Classic.ConsumeAmmo", false);
     m_bool_configs[CONFIG_CENTURION_CLASSIC_PET_HAPPINESS_DECAY] = sConfigMgr->GetBoolDefault("Centurion.Classic.PetHappinessDecay", false);
+    // Quivers and ammo pouches take any item, like an ordinary bag (BagHoldsAnyItem).
+    m_bool_configs[CONFIG_CENTURION_QUIVERS_HOLD_ANY_ITEM] = sConfigMgr->GetBoolDefault("Centurion.Items.QuiversHoldAnyItem", false);
     m_int_configs[CONFIG_CENTURION_BG_REWARD_HONOR_WINNER] = sConfigMgr->GetIntDefault("Centurion.Battleground.RewardHonorWinner", 100);
     m_int_configs[CONFIG_CENTURION_BG_REWARD_HONOR_LOSER] = sConfigMgr->GetIntDefault("Centurion.Battleground.RewardHonorLoser", 10);
     m_int_configs[CONFIG_CENTURION_BG_REWARD_MONEY_WINNER] = sConfigMgr->GetIntDefault("Centurion.Battleground.RewardMoneyWinner", 100000);
