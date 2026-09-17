@@ -24505,13 +24505,13 @@ void Player::InitPvP()
 
 // The Gurubashi arena floor.
 //
-// This is area 2177 on BOTH realms, confirmed against the extracted map data
-// rather than the area table: the server reads a player's area from maps/*.map
-// and only afterwards looks that id up in AreaTable.dbc, and here the two
-// disagree. L+'s AreaTable renames 2177 to "Gurubashi Catacombs" and adds a
-// "The Battle Ring" (30232) that the map data was never given; B+ has no such
-// row at all. Every test here used to compare against 30232, which is painted
-// nowhere on map 0 on either realm, so it was false for every player always.
+// The sand is area 30232 "The Battle Ring", and that id does not come from the
+// terrain grid. maps/*.map paints 2177 across the whole bowl and the catacombs
+// under it, but the sand is its own WMO (Stranglegladiatorarena_Battlering.wmo,
+// WMOAreaTable 51120: group 2861 -> 30232), and Map::GetAreaId takes the WMO's
+// area whenever the vmap has one. Every realm now carries that vmap and both
+// table rows. Testing 2177 instead matched nobody standing on the sand and armed
+// the catacombs at z -37 in its place.
 //
 // That failure inverted the guard built on top of it - the safe area is
 // "Stranglethorn and not the ring", so a ring that never matched made the whole
@@ -24532,7 +24532,7 @@ uint32 Player::GetBountyPursuitStacks() const
 
 bool Player::IsInGurubashiRingArea(uint32 zoneId, uint32 areaId) const
 {
-    return GetMapId() == 0 && zoneId == 33 && areaId == 2177;
+    return GetMapId() == 0 && zoneId == 33 && areaId == 30232;
 }
 
 // ...and below the ropes. The ramps and terraces above the floor share the

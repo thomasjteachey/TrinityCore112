@@ -59,11 +59,10 @@ namespace
 {
 constexpr uint32 GURUBASHI_ARENA_MAP_ID = 0;
 constexpr uint32 STRANGLETHORN_VALE_ZONE_ID = 33;
-// The floor's area id as the MAP DATA paints it, which is what the server
-// actually reports from GetAreaId. 30232 exists only as a row in L+'s
-// AreaTable.dbc and is painted nowhere on either realm, so every test against
-// it was false for every player - see Player::IsInGurubashiRingArea.
-constexpr uint32 GURUBASHI_BATTLE_RING_AREA_ID = 2177;
+// The floor's area id as GetAreaId reports it: the sand is its own WMO, whose
+// WMOAreaTable row gives 30232, while the terrain grid underneath says 2177 -
+// see Player::IsInGurubashiRingArea.
+constexpr uint32 GURUBASHI_BATTLE_RING_AREA_ID = 30232;
 constexpr float GURUBASHI_BATTLE_RING_MAX_Z = 27.0f;
 constexpr uint32 GURUBASHI_CHEST_ENTRY = 179697;
 constexpr uint32 SHADOW_SIGHT_ENTRY = 184663;
