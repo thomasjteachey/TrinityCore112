@@ -82,7 +82,10 @@ explicitly (`SELECT table_name AS t`).
   console. GM commands must be typed in game.
 - `Spell.dbc` and other DBCs are read once at startup and are **not**
   runtime-reloadable. A new spell needs a worldserver restart.
-- `item_template` IS reloadable: `.reload item_template`.
+- `item_template` is **not** reloadable, despite what this file said until
+  2026-09-17. `cs_reload.cpp` only registers `item_template_locale`, and the
+  single `LoadItemTemplates()` caller is `World::SetInitialWorldSettings`
+  (`World.cpp:1945`), so an item row edit needs a worldserver restart.
 
 Source tree (Windows): `C:\Projects\Gamedev\wow\servers\tc-lplus`, branch
 `LEGIONNAIRE_PLUS`. No compiler in the agent sandbox — C++ changes must go
