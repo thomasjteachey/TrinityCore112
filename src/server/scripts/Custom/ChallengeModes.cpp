@@ -508,6 +508,17 @@ public:
     {
         sChallengeModes->LoadPlayer(player);
 
+        // The titles for levels the character had already reached when it took a
+        // mode. OnLevelChanged only rewards the level just reached, so a level-1
+        // title (every *.TitleRewards "1 <title>") never reached a character that
+        // chose its modes on the create screen or at a stone at level 1.
+        for (uint8 i = SETTING_HARDCORE; i <= SETTING_IRON_MAN; ++i)
+        {
+            ChallengeModeSettings const setting = ChallengeModeSettings(i);
+            if (sChallengeModes->IsEnabledForPlayer(setting, player))
+                GiveTitlesUpToLevel(player, setting, player->GetLevel());
+        }
+
         if (sChallengeModes->IsEnabledForPlayer(SETTING_IRON_MAN, player))
             player->SetFreeTalentPoints(0);
 
@@ -729,6 +740,27 @@ private:
         }
 
         player->SetMoney(0);
+    }
+
+    // Titles only: granting a known title again does nothing, which is not true of
+    // talent points, achievements or mailed items, so this is safe on every login.
+    static void GiveTitlesUpToLevel(Player* player, ChallengeModeSettings setting, uint8 level)
+    {
+        for (auto const& [rewardLevel, titleId] : sChallengeModes->GetTitleRewards(setting))
+        {
+            if (rewardLevel > level)
+                continue;
+
+            CharTitlesEntry const* titleInfo = sCharTitlesStore.LookupEntry(titleId);
+            if (!titleInfo)
+            {
+                TC_LOG_ERROR("server.custom", "ChallengeModes: invalid title reward {} for mode {}", titleId, GetChallengeDisplayName(setting));
+                continue;
+            }
+
+            if (!player->HasTitle(titleInfo))
+                player->SetTitle(titleInfo);
+        }
     }
 
     static void GiveRewardsForLevel(Player* player, ChallengeModeSettings setting, uint8 level)
