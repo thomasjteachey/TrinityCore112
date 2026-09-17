@@ -1022,43 +1022,48 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
     // original items
     if (createStarterItems)
     {
-        if (CharStartOutfitEntry const* oEntry = GetCharStartOutfitEntry(createInfo->Race, createInfo->Class, createInfo->Gender))
+        // A tournament character starts in Legionnaire+'s outfit, mapped to the
+        // tournament item copies, instead of this realm's DBC outfit
+        // (Miscellaneous/TournamentMode.h, CreateInfo::Outfit).
+        std::vector<uint32> outfitItems;
+        if (tournamentInfo && createInfo->Gender < tournamentInfo->Outfit.size() && !tournamentInfo->Outfit[createInfo->Gender].empty())
+            outfitItems = tournamentInfo->Outfit[createInfo->Gender];
+        else if (CharStartOutfitEntry const* oEntry = GetCharStartOutfitEntry(createInfo->Race, createInfo->Class, createInfo->Gender))
         {
             for (int j = 0; j < MAX_OUTFIT_ITEMS; ++j)
+                if (oEntry->ItemID[j] > 0)
+                    outfitItems.push_back(oEntry->ItemID[j]);
+        }
+
+        for (uint32 itemId : outfitItems)
+        {
+            // just skip, reported in ObjectMgr::LoadItemTemplates
+            ItemTemplate const* iProto = sObjectMgr->GetItemTemplate(itemId);
+            if (!iProto)
+                continue;
+
+            if (tournamentInfo && std::find(tournamentInfo->RemovedOutfitItems.begin(), tournamentInfo->RemovedOutfitItems.end(), itemId) != tournamentInfo->RemovedOutfitItems.end())
+                continue;
+
+            // BuyCount by default
+            uint32 count = iProto->BuyCount;
+
+            // special amount for food/drink
+            if (iProto->Class == ITEM_CLASS_CONSUMABLE && iProto->SubClass == ITEM_SUBCLASS_FOOD)
             {
-                if (oEntry->ItemID[j] <= 0)
-                    continue;
-
-                uint32 itemId = oEntry->ItemID[j];
-
-                // just skip, reported in ObjectMgr::LoadItemTemplates
-                ItemTemplate const* iProto = sObjectMgr->GetItemTemplate(itemId);
-                if (!iProto)
-                    continue;
-
-                if (tournamentInfo && std::find(tournamentInfo->RemovedOutfitItems.begin(), tournamentInfo->RemovedOutfitItems.end(), itemId) != tournamentInfo->RemovedOutfitItems.end())
-                    continue;
-
-                // BuyCount by default
-                uint32 count = iProto->BuyCount;
-
-                // special amount for food/drink
-                if (iProto->Class == ITEM_CLASS_CONSUMABLE && iProto->SubClass == ITEM_SUBCLASS_FOOD)
+                switch (iProto->Spells[0].SpellCategory)
                 {
-                    switch (iProto->Spells[0].SpellCategory)
-                    {
-                    case SPELL_CATEGORY_FOOD:                                // food
-                        count = GetClass() == CLASS_DEATH_KNIGHT ? 10 : 4;
-                        break;
-                    case SPELL_CATEGORY_DRINK:                                // drink
-                        count = 2;
-                        break;
-                    }
-                    if (iProto->GetMaxStackSize() < count)
-                        count = iProto->GetMaxStackSize();
+                case SPELL_CATEGORY_FOOD:                                // food
+                    count = GetClass() == CLASS_DEATH_KNIGHT ? 10 : 4;
+                    break;
+                case SPELL_CATEGORY_DRINK:                                // drink
+                    count = 2;
+                    break;
                 }
-                StoreNewItemInBestSlots(itemId, count);
+                if (iProto->GetMaxStackSize() < count)
+                    count = iProto->GetMaxStackSize();
             }
+            StoreNewItemInBestSlots(itemId, count);
         }
 
         if (tournamentInfo && tournamentInfo->HasItems)

@@ -20,6 +20,7 @@
 
 #include "Define.h"
 #include "ObjectGuid.h"
+#include <array>
 #include <string>
 #include <utility>
 #include <vector>
@@ -135,7 +136,8 @@ namespace Tournament
     // Legionnaire+'s create data for tournament characters, from the world
     // tables playercreateinfo_tournament (start position),
     // playercreateinfo_item_tournament (items; amount -1 drops an item from
-    // the DBC starting outfit) and playercreateinfo_spell_custom_tournament
+    // the starting outfit), playercreateinfo_outfit_tournament (the outfit) and
+    // playercreateinfo_spell_custom_tournament
     // (taught at creation and at every login, like playercreateinfo_spell_custom).
     // A table that does not exist leaves that part to the world data, so a realm
     // without them loads nothing and changes nothing.
@@ -151,6 +153,12 @@ namespace Tournament
         bool HasItems = false;
         std::vector<std::pair<uint32 /*itemId*/, uint32 /*count*/>> Items;
         std::vector<uint32> RemovedOutfitItems;
+
+        // Legionnaire+'s starting outfit (its CharStartOutfit.dbc, table
+        // playercreateinfo_outfit_tournament) with item ids mapped to the tournament
+        // copies, one list per gender. Given instead of this realm's DBC outfit;
+        // an empty list = the DBC outfit.
+        std::array<std::vector<uint32>, 2> Outfit;
 
         bool HasCustomSpells = false;
         std::vector<uint32> CustomSpells;

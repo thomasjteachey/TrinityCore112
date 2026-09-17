@@ -700,7 +700,7 @@ void LoadCreateInfo()
     // these. Every other realm on the branch stops right here.
     std::unordered_set<std::string> tables;
     if (QueryResult result = WorldDatabase.Query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN "
-        "('playercreateinfo_tournament', 'playercreateinfo_item_tournament', 'playercreateinfo_spell_custom_tournament')"))
+        "('playercreateinfo_tournament', 'playercreateinfo_item_tournament', 'playercreateinfo_spell_custom_tournament', 'playercreateinfo_outfit_tournament')"))
     {
         do
             tables.insert(result->Fetch()[0].GetString());
@@ -871,8 +871,49 @@ void LoadCreateInfo()
         }
     }
 
-    TC_LOG_INFO("server.loading", ">> Loaded tournament create data: {} start position(s), {} item row(s), {} spell row(s) for {} race/class pair(s); kit procedure {} in {} ms",
-        positions, items, spells, CreateInfoStore.size(), KitProcedureExists ? "present" : "ABSENT", GetMSTimeDiffToNow(oldMSTime));
+    // Legionnaire+'s CharStartOutfit.dbc, which geared its characters at creation;
+    // Centurion's own DBC outfits are Barracks+'s. Item ids are already mapped to
+    // the tournament copies in the table.
+    uint32 outfitItems = 0;
+    if (tables.count("playercreateinfo_outfit_tournament"))
+    {
+        //                                                  0     1      2       3
+        if (QueryResult result = WorldDatabase.Query("SELECT race, class, gender, itemid FROM playercreateinfo_outfit_tournament ORDER BY race, class, gender, slot"))
+        {
+            do
+            {
+                Field* fields = result->Fetch();
+                uint32 const race = fields[0].GetUInt8();
+                uint32 const playerClass = fields[1].GetUInt8();
+                uint8 const gender = fields[2].GetUInt8();
+                uint32 const itemId = fields[3].GetUInt32();
+
+                // Pairs this realm cannot create are simply not needed.
+                auto itr = CreateInfoStore.find(CreateInfoKey(race, playerClass));
+                if (itr == CreateInfoStore.end())
+                    continue;
+
+                if (gender >= itr->second.Outfit.size())
+                {
+                    TC_LOG_ERROR("sql.sql", "Invalid gender {} for race {} class {} in `playercreateinfo_outfit_tournament`, ignoring.", uint32(gender), race, playerClass);
+                    continue;
+                }
+
+                if (!sObjectMgr->GetItemTemplate(itemId))
+                {
+                    TC_LOG_ERROR("sql.sql", "Item {} (race {} class {} gender {}) in `playercreateinfo_outfit_tournament` does not exist, ignoring.", itemId, race, playerClass, uint32(gender));
+                    continue;
+                }
+
+                itr->second.Outfit[gender].push_back(itemId);
+                ++outfitItems;
+            }
+            while (result->NextRow());
+        }
+    }
+
+    TC_LOG_INFO("server.loading", ">> Loaded tournament create data: {} start position(s), {} item row(s), {} spell row(s), {} outfit item(s) for {} race/class pair(s); kit procedure {} in {} ms",
+        positions, items, spells, outfitItems, CreateInfoStore.size(), KitProcedureExists ? "present" : "ABSENT", GetMSTimeDiffToNow(oldMSTime));
 }
 
 CreateInfo const* GetCreateInfo(uint8 race, uint8 playerClass)
