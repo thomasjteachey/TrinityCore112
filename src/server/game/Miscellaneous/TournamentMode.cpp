@@ -41,6 +41,7 @@
 #include "WorldSession.h"
 #include "WorldPacket.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <functional>
 #include <mutex>
@@ -380,10 +381,50 @@ void SendGurubashiChestState(Player* player)
     player->SendDirectMessage(&data);
 }
 
+namespace
+{
+    // Written from the world thread (the hourly check, the despawn) and from the
+    // chest's map thread (looting), read by whichever thread answers the request.
+    std::atomic<int64> GurubashiChestNextCheck{ 0 };
+    std::atomic<int64> GurubashiChestExpiresAt{ 0 };
+}
+
+void SetGurubashiChestClock(time_t nextCheck, time_t chestExpiresAt)
+{
+    GurubashiChestNextCheck = int64(nextCheck);
+    GurubashiChestExpiresAt = int64(chestExpiresAt);
+}
+
+void SendGurubashiChestTimer(Player* player)
+{
+    if (!player || !player->GetSession() || player->GetSession()->IsVirtualSession())
+        return;
+
+    int64 const now = int64(GameTime::GetGameTime());
+    int64 const expiresAt = GurubashiChestExpiresAt;
+    bool const chestOut = expiresAt > now;
+    int64 const until = chestOut ? expiresAt : int64(GurubashiChestNextCheck);
+    if (until <= 0)
+        return;
+
+    std::string const message = Trinity::StringFormat("CCGAME\tGURUTIMER:{}:{}", chestOut ? 1 : 0, std::max<int64>(0, until - now));
+    WorldPacket data;
+    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player->GetGUID(), player->GetGUID(),
+        message, 0, player->GetName(), player->GetName());
+    player->SendDirectMessage(&data);
+}
+
 bool HandleAddonRequest(Player* sender, uint32 lang, std::string const& msg)
 {
     if (!sender || lang != LANG_ADDON)
         return false;
+
+    // The Gurubashi chest's clock beside that toggle (read only).
+    if (msg == "CCGAMEREQ\tGURUTIMER")
+    {
+        SendGurubashiChestTimer(sender);
+        return true;
+    }
 
     // The Gurubashi chest toggle (Battlegrounds tab): whether the hourly chest
     // counts this character and pulls it into the Battle Ring. Realm-agnostic -

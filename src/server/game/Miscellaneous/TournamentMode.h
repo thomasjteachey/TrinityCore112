@@ -82,6 +82,16 @@ namespace Tournament
     void SendQueueState(Player* player);
     void SendGurubashiChestState(Player* player);
 
+    // The hourly Gurubashi chest's clock, shown beside that toggle. The chest
+    // event (scripts/Custom/custom_gurubashi_arena.cpp) writes it - game/ never
+    // calls into scripts, so the two meet here. "CCGAMEREQ\tGURUTIMER" is
+    // answered "CCGAME\tGURUTIMER:<out>:<seconds>": out = 1 and the seconds until
+    // the chest despawns, or out = 0 and the seconds until the next hourly check.
+    // Both times are GameTime seconds, 0 for none; a realm whose event never
+    // wrote a clock gets no answer, so its timer stays hidden.
+    void SetGurubashiChestClock(time_t nextCheck, time_t chestExpiresAt);
+    void SendGurubashiChestTimer(Player* player);
+
     // --- confinement ------------------------------------------------------
 
     // Battleground and arena maps are always allowed; elsewhere the zone or

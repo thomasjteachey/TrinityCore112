@@ -42,6 +42,7 @@
 #include "Util.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <ctime>
@@ -70,8 +71,10 @@ constexpr uint32 CHROMIE_ENTRY = 10667;
 constexpr uint32 PVP_CONSUMABLE_ITEM_LIMIT_CATEGORY = 5;
 constexpr uint32 TELEPORT_VISUAL_SPELL = 64446;
 constexpr uint32 FORCED_DEATH_STARFIRE_SPELL_ID = 48465;
-constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
-constexpr Seconds CHEST_DESPAWN_TIME = 15min;
+// One person in Stranglethorn is enough: IsPlayerEligible already leaves out
+// bots and anyone who switched the chest off.
+constexpr uint32 REQUIRED_PLAYER_COUNT = 1;
+constexpr Seconds CHEST_DESPAWN_TIME = 5min;
 
 namespace GurubashiShadowSight
 {
@@ -94,14 +97,22 @@ char const* const GURUBASHI_EXIT_KILL_WHISPERS[] =
 };
 
 Position const ChestSpawnPosition = { -13205.281250f, 273.045685f, 20.550077f, 4.423725f };
-char const* const GURUBASHI_REENTRY_RULE_WHISPER = "You died while the chest is active. No re-entry to the Battle Ring until the chest is looted or despawns.";
+char const* const GURUBASHI_REENTRY_RULE_WHISPER = "You died in the chest battle. No re-entry to the Battle Ring until it opens to all.";
 char const* const GURUBASHI_LATE_ENTRY_RULE_WHISPER = "You were not part of this chest battle. Entering the Battle Ring now is forbidden.";
+char const* const GURUBASHI_CHEST_APPEARED_YELL = "The Gurubashi Arena chest has appeared!";
+char const* const GURUBASHI_RING_OPEN_YELL = "The Battle Ring is open to all!";
+
+// How often an emptied ring is looked for, and how long after the chest appears
+// before it may count as empty - the players pulled in are still arriving.
+constexpr uint32 RING_EMPTY_CHECK_MS = 500;
+constexpr Seconds RING_EMPTY_GRACE = 10s;
 
 void ClearChestDeathLockouts();
 void ClearChestParticipants();
 void StopGurubashiShadowSightSpawns();
 void MarkChestParticipants(std::vector<ObjectGuid> const& participantGuids);
 bool IsChestParticipant(ObjectGuid guid);
+std::vector<ObjectGuid> GetChestParticipants();
 
 uint32 GetChestMarkRewardCount()
 {
@@ -242,6 +253,24 @@ bool HasLivingHostileInGurubashiBattleRing(Player const* player)
     return false;
 }
 
+// Whether anybody pulled into this chest's fight still stands on the sand. One
+// still arriving counts as there.
+bool HasLivingParticipantInBattleRing()
+{
+    for (ObjectGuid const& guid : GetChestParticipants())
+    {
+        Player* player = ObjectAccessor::FindPlayer(guid);
+        if (!player || !player->IsInWorld() || player->IsGameMaster() || !player->IsAlive())
+            continue;
+
+        if (player->IsBeingTeleported() ||
+            GetGurubashiAreaState(player, player->GetZoneId(), player->GetAreaId()) == GurubashiAreaState::BattleRing)
+            return true;
+    }
+
+    return false;
+}
+
 uint32 CountEligiblePlayers(ObjectGuid* firstEligibleGuid = nullptr)
 {
     uint32 playerCount = 0;
@@ -280,13 +309,11 @@ Player* FindEligibleSummoner(ObjectGuid preferredGuid)
     return nullptr;
 }
 
-void YellFromChromie()
+void YellFromChromie(char const* yellText)
 {
-    static char const* const yellText = "The Gurubashi Arena chest has appeared!";
-
     std::unordered_set<Creature*> signaledChromies;
 
-    sMapMgr->DoForAllMaps([&signaledChromies](Map* map)
+    sMapMgr->DoForAllMaps([&signaledChromies, yellText](Map* map)
     {
         for (auto const& spawnPair : map->GetCreatureBySpawnIdStore())
         {
@@ -556,10 +583,15 @@ public:
         StopShadowSightSpawns();
         _currentChestGuid.Clear();
         _nextCheckTimeMs = 0;
+        _nextCheckTime = 0;
+        _chestExpiresAt = 0;
         _lastEligibleCount = 0;
         _chestActive = false;
+        _ringLocked = false;
+        _ringOpenYellPending = false;
         ClearChestDeathLockouts();
         ClearChestParticipants();
+        PublishClock();
     }
 
     void OnUpdate(uint32 diff) override
@@ -568,14 +600,43 @@ public:
         _shadowSightScheduler.Update(diff);
         DespawnTriggeredShadowSights();
 
+        // The summon's own despawn timer does not run: AttemptSpawn hands the chest
+        // to everyone with SetRespawnTime(0), which switches it off, so the chest
+        // used to stay until somebody looted it. Its lifetime is kept here instead,
+        // and it is what the Battlegrounds-tab timer counts down to.
+        if (_chestActive && _chestExpiresAt && GameTime::GetGameTime() >= _chestExpiresAt)
+            DespawnChest();
+
         if (_chestActive && !IsChestGuidActiveInWorld(_currentChestGuid))
         {
             _currentChestGuid.Clear();
             _chestActive = false;
+            _chestExpiresAt = 0;
             StopShadowSightSpawns();
             ClearChestDeathLockouts();
             ClearChestParticipants();
+            OpenRing();
+            PublishClock();
         }
+
+        // Everybody who was pulled in is dead or gone - two last fighters killing
+        // each other at once used to leave the chest standing with every one of them
+        // locked out. The ring opens to all and the chest stays up for the taking.
+        if (IsRingLocked())
+        {
+            _ringEmptyCheckMs += diff;
+            if (_ringEmptyCheckMs >= RING_EMPTY_CHECK_MS)
+            {
+                _ringEmptyCheckMs = 0;
+                if (GameTime::GetGameTime() >= _chestSpawnedAt + RING_EMPTY_GRACE.count() && !HasLivingParticipantInBattleRing())
+                    OpenRing();
+            }
+        }
+
+        // Every way the ring opens ends here, looting included, which happens on the
+        // chest's map thread; the yell walks every map, so it waits for this thread.
+        if (_ringOpenYellPending.exchange(false))
+            YellFromChromie(GURUBASHI_RING_OPEN_YELL);
     }
 
     static gurubashi_arena_hourly_event* GetInstance()
@@ -610,11 +671,27 @@ public:
         return _currentChestGuid && _chestActive;
     }
 
+    // While the chest is up and the ring locked, only the players pulled in may be
+    // on the sand and a death there keeps them out. It opens to all when the chest
+    // is looted or despawns, or when none of those players still stands in it.
+    bool IsRingLocked() const
+    {
+        return IsChestActive() && _ringLocked;
+    }
+
+    time_t GetChestExpiresAt() const
+    {
+        return _chestExpiresAt;
+    }
+
     void OnChestLooted()
     {
         _currentChestGuid.Clear();
         _chestActive = false;
+        _chestExpiresAt = 0;
         StopShadowSightSpawns();
+        OpenRing();
+        PublishClock();
     }
 
 private:
@@ -642,9 +719,48 @@ private:
         return localTime.tm_hour == 21;
     }
 
+    // Tell the Battlegrounds-tab timer (Tournament::SendGurubashiChestTimer).
+    void PublishClock() const
+    {
+        Tournament::SetGurubashiChestClock(_nextCheckTime, _chestActive ? _chestExpiresAt : 0);
+    }
+
+    // Lifts the chest battle's rules. Callable from the chest's map thread: the
+    // lockout sets have their own lock, and the yell is left to OnUpdate.
+    void OpenRing()
+    {
+        if (!_ringLocked.exchange(false))
+            return;
+
+        ClearChestDeathLockouts();
+        ClearChestParticipants();
+        _ringOpenYellPending = true;
+    }
+
+    void DespawnChest()
+    {
+        ObjectGuid const chestGuid = _currentChestGuid;
+        sMapMgr->DoForAllMaps([&chestGuid](Map* map)
+        {
+            if (GameObject* chest = map->GetGameObject(chestGuid))
+                chest->DespawnOrUnsummon();
+        });
+
+        _currentChestGuid.Clear();
+        _chestActive = false;
+        _chestExpiresAt = 0;
+        StopShadowSightSpawns();
+        ClearChestDeathLockouts();
+        ClearChestParticipants();
+        OpenRing();
+        PublishClock();
+    }
+
     void ScheduleNextCheck(std::chrono::milliseconds delay)
     {
         _nextCheckTimeMs = GameTime::GetGameTimeMS() + static_cast<uint32>(delay.count());
+        _nextCheckTime = GameTime::GetGameTime() + time_t(std::chrono::duration_cast<std::chrono::seconds>(delay).count());
+        PublishClock();
         _scheduler.Schedule(delay, [this](TaskContext /*context*/)
         {
             AttemptSpawn(false);
@@ -677,6 +793,8 @@ private:
 
             _currentChestGuid.Clear();
             _chestActive = false;
+            _chestExpiresAt = 0;
+            _ringLocked = false;
             StopShadowSightSpawns();
             ClearChestDeathLockouts();
             ClearChestParticipants();
@@ -689,10 +807,15 @@ private:
             chest->SetRespawnTime(0);
             _currentChestGuid = chest->GetGUID();
             _chestActive = true;
+            _chestSpawnedAt = GameTime::GetGameTime();
+            _chestExpiresAt = _chestSpawnedAt + CHEST_DESPAWN_TIME.count();
+            _ringLocked = true;
+            _ringEmptyCheckMs = 0;
+            PublishClock();
             ClearChestDeathLockouts();
             TeleportStranglethornPlayersToBattleRing();
             ScheduleShadowSightSpawns();
-            YellFromChromie();
+            YellFromChromie(GURUBASHI_CHEST_APPEARED_YELL);
             return SpawnResult::Success;
         }
 
@@ -826,6 +949,12 @@ private:
     TaskScheduler _shadowSightScheduler;
     ObjectGuid _currentChestGuid;
     uint32 _nextCheckTimeMs = 0;
+    time_t _nextCheckTime = 0;
+    time_t _chestSpawnedAt = 0;
+    time_t _chestExpiresAt = 0;
+    std::atomic<bool> _ringLocked{ false };
+    std::atomic<bool> _ringOpenYellPending{ false };
+    uint32 _ringEmptyCheckMs = 0;
     bool _chestActive = false;
     uint32 _lastEligibleCount = 0;
     std::vector<ObjectGuid> _shadowSightGuids;
@@ -888,6 +1017,12 @@ bool IsChestParticipant(ObjectGuid guid)
 {
     std::lock_guard<std::mutex> lock(g_GurubashiTrackedPlayersMutex);
     return g_GurubashiChestParticipants.find(guid) != g_GurubashiChestParticipants.end();
+}
+
+std::vector<ObjectGuid> GetChestParticipants()
+{
+    std::lock_guard<std::mutex> lock(g_GurubashiTrackedPlayersMutex);
+    return std::vector<ObjectGuid>(g_GurubashiChestParticipants.begin(), g_GurubashiChestParticipants.end());
 }
 
 
@@ -1074,7 +1209,7 @@ public:
     void OnPVPKill(Player* /*killer*/, Player* killed) override
     {
         gurubashi_arena_hourly_event* event = gurubashi_arena_hourly_event::GetInstance();
-        if (!killed || !event || !event->IsChestActive())
+        if (!killed || !event || !event->IsRingLocked())
             return;
 
         GurubashiAreaState const areaState = GetGurubashiAreaState(killed, killed->GetZoneId(), killed->GetAreaId());
@@ -1085,7 +1220,7 @@ public:
     void OnPlayerKilledByCreature(Creature* /*killer*/, Player* killed) override
     {
         gurubashi_arena_hourly_event* event = gurubashi_arena_hourly_event::GetInstance();
-        if (!killed || !event || !event->IsChestActive())
+        if (!killed || !event || !event->IsRingLocked())
             return;
 
         GurubashiAreaState const areaState = GetGurubashiAreaState(killed, killed->GetZoneId(), killed->GetAreaId());
@@ -1096,7 +1231,7 @@ public:
     void OnPlayerRepop(Player* player) override
     {
         gurubashi_arena_hourly_event* event = gurubashi_arena_hourly_event::GetInstance();
-        if (!player || !event || !event->IsChestActive() || !IsChestDeathLockoutActive(player->GetGUID()))
+        if (!player || !event || !event->IsRingLocked() || !IsChestDeathLockoutActive(player->GetGUID()))
             return;
 
         WhisperFromChromi(player, GURUBASHI_REENTRY_RULE_WHISPER);
@@ -1167,14 +1302,14 @@ public:
             GurubashiAreaState const currentState = GetGurubashiAreaState(player, player->GetZoneId(), player->GetAreaId());
 
             gurubashi_arena_hourly_event* event = gurubashi_arena_hourly_event::GetInstance();
-            bool const chestActive = event && event->IsChestActive();
-            if (chestActive && IsChestDeathLockoutActive(guid) && currentState == GurubashiAreaState::BattleRing && player->IsAlive() && !player->IsGameMaster())
+            bool const ringLocked = event && event->IsRingLocked();
+            if (ringLocked && IsChestDeathLockoutActive(guid) && currentState == GurubashiAreaState::BattleRing && player->IsAlive() && !player->IsGameMaster())
             {
                 PlayForcedDeathStarfireVisual(player);
                 Unit::Kill(player, player);
                 WhisperFromChromi(player, GURUBASHI_REENTRY_RULE_WHISPER);
             }
-            else if (chestActive && currentState == GurubashiAreaState::BattleRing && player->IsAlive() && !player->IsGameMaster() && !IsChestParticipant(guid))
+            else if (ringLocked && currentState == GurubashiAreaState::BattleRing && player->IsAlive() && !player->IsGameMaster() && !IsChestParticipant(guid))
             {
                 PlayForcedDeathStarfireVisual(player);
                 Unit::Kill(player, player);
@@ -1272,6 +1407,9 @@ public:
         {
             handler->PSendSysMessage("Last eligible players counted: %u", event->GetLastEligibleCount());
             handler->PSendSysMessage("Next automatic scan in: %s", FormatDuration(event->GetTimeUntilNextScan()).c_str());
+            if (event->IsChestActive() && event->GetChestExpiresAt())
+                handler->PSendSysMessage("Chest despawns in: %s", FormatDuration(std::chrono::seconds(std::max<time_t>(0, event->GetChestExpiresAt() - GameTime::GetGameTime()))).c_str());
+            handler->PSendSysMessage("Battle Ring: %s", event->IsRingLocked() ? "locked to the chest battle" : "open to all");
             return true;
         }
 
