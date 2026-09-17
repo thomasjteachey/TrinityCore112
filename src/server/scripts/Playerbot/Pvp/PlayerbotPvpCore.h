@@ -95,6 +95,22 @@ struct PvpValues
     uint32 nodeObjectiveId = 0;
     uint32 battlegroundTeamHumanCount = 0;
     bool battlegroundTeamHasHumans = false;
+
+    // Two-flag capture the flag (Warsong Gulch, Twin Peaks) team play, filled
+    // from CtfCoordinator orders. ctfRole is a CtfRole; 0 means the match is
+    // not one the coordinator runs, and every flag value above then keeps its
+    // plain meaning. When it is set, flagPickupAvailable/flagPickupNearby
+    // describe the flag THIS bot was told to take, not merely any usable flag.
+    uint8 ctfRole = 0;
+    bool ctfDesignatedRunner = false;
+    bool ctfEnemyFlagPickable = false;
+    bool ctfPickupIsReturn = false;
+    bool ctfOpportunisticPickup = false;
+    bool ctfTeamCarrierActive = false;
+    float ctfTeamCarrierDistance = 0.0f;
+    bool ctfCarrierHolding = false;
+    bool ctfHandoffGive = false;
+    bool ctfHandoffReceive = false;
 };
 
 enum class PvpTrigger : uint8
@@ -156,6 +172,7 @@ struct BattlegroundTacticalContext
     BattlegroundMovementPrimitive movement = BattlegroundMovementPrimitive::None;
     FlagCarrierDirective flagCarrierDirective = FlagCarrierDirective::None;
     bool nearbyEnemyActive = false;
+    uint8 ctfRole = 0;
 };
 
 enum class QueueOperationType : uint8
@@ -216,6 +233,15 @@ struct PvpClassSpellContext
     float movementPriority = 0.0f;
     bool preserveFlagObjectiveMovement = false;
     bool preserveFlagCarrierMovement = false;
+    // A flag runner's escape or speed move (Blink, a form shift, Concussive
+    // Shot at a chaser). It is chosen for the run, so the executor lets it
+    // through the flag-route movement guard, turns to fire at a chaser behind
+    // the bot, and allows the Blink leap.
+    bool flagManeuver = false;
+    // Carrying, with our own flag away, and already waiting in our flag room.
+    // Still no movement orders, but any spell usable from where it stands may
+    // be cast, cast times included.
+    bool flagCarrierHolding = false;
     uint32 itemEntry = 0;
 };
 
@@ -285,6 +311,9 @@ public:
     static bool HasHealthstone(Player const* player);
     static bool IsBattlegroundFlagCarrier(Player const* player);
     static bool SpellWouldBreakFlagCarry(uint32 spellId);
+    // How well this bot runs a flag: 4 druid, 3 protection warrior, 2 mage,
+    // 1 hunter, 0 anyone else. The team's designated runner is the highest.
+    static uint8 GetFlagRunnerPriority(Player const* player);
     static bool TeamHasHumanPlayers(Player const* player);
     // Records why a warrior did or did not pick a gap closer on its last
     // decision pass. Every gate can fail silently and look identical from

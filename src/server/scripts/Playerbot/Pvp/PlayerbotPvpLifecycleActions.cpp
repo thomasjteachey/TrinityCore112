@@ -16,6 +16,7 @@
  */
 
 #include "PlayerbotPvpLifecycleActions.h"
+#include "PlayerbotCtfCoordinator.h"
 #include "PlayerbotObcClone.h"
 #include "Playerbot/Pve/PlayerbotPveManager.h"
 #include "PlayerbotPvpClassActions.h"
@@ -1141,7 +1142,10 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             {
                 Position destination = player->GetPosition();
                 float const angle = baseAngle + offset;
-                destination.RelocateOffset({ std::cos(angle) * distance, std::sin(angle) * distance, 0.0f, 0.0f });
+                // World space by hand: angle already includes the facing, which
+                // RelocateOffset would add a second time.
+                destination.Relocate(player->GetPositionX() + std::cos(angle) * distance,
+                    player->GetPositionY() + std::sin(angle) * distance, player->GetPositionZ());
                 destination = BuildCollisionSafeDestination(player, destination);
                 if (IsHazardousLiquidDestination(player, destination))
                     continue;
@@ -1167,7 +1171,10 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             {
                 Position destination = player->GetPosition();
                 float const angle = baseAngle + offset;
-                destination.RelocateOffset({ std::cos(angle) * distance, std::sin(angle) * distance, 0.0f, 0.0f });
+                // World space by hand: angle already includes the facing, which
+                // RelocateOffset would add a second time.
+                destination.Relocate(player->GetPositionX() + std::cos(angle) * distance,
+                    player->GetPositionY() + std::sin(angle) * distance, player->GetPositionZ());
                 destination = BuildCollisionSafeDestination(player, destination);
                 if (!IsValidatedPathingHazardEgress(player, destination))
                     continue;
@@ -3624,6 +3631,8 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
     std::unordered_map<uint64, DroppedFlagPickupDelay> g_DroppedFlagPickupDelayByBotGuid;
     constexpr uint32 PLAYERBOT_DROPPED_FLAG_PICKUP_DELAY_MS = 1 * IN_MILLISECONDS;
+    // A flag dropped at the runner's feet on purpose is not a surprise to it.
+    constexpr uint32 PLAYERBOT_HANDOFF_FLAG_PICKUP_DELAY_MS = 150;
 
     bool TryAdvanceFlagObjective(Player* player, Battleground* battleground)
     {
@@ -3671,7 +3680,11 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return moved || player->isMoving();
         }
 
-        ObjectGuid const pickupGuid = battleground->GetFlagPickupGUID(player->GetGUID());
+        // Warsong Gulch and Twin Peaks: the flag this bot was SENT for, not any
+        // flag the battleground would let it use (see CtfCoordinator).
+        playerbot::CtfBotOrders ctfOrders;
+        bool const ctfOrdered = playerbot::CtfCoordinator::GetOrders(player, ctfOrders);
+        ObjectGuid const pickupGuid = ctfOrdered ? ctfOrders.pickupGuid : battleground->GetFlagPickupGUID(player->GetGUID());
         if (pickupGuid.IsEmpty())
         {
             std::lock_guard<std::mutex> stateGuard(playerbot::SharedBotStateStructureLock());
@@ -3699,7 +3712,10 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
                 // deadline when the new object GUID becomes visible; ordinary
                 // dropped flags retain the short anti-instant-reclick delay.
                 if (nowMs >= delay.pickupNotBeforeMs)
-                    delay.pickupNotBeforeMs = nowMs + PLAYERBOT_DROPPED_FLAG_PICKUP_DELAY_MS;
+                    delay.pickupNotBeforeMs = nowMs +
+                        (ctfOrdered && playerbot::CtfCoordinator::IsHandoffReceiverFor(player, pickupGuid)
+                            ? PLAYERBOT_HANDOFF_FLAG_PICKUP_DELAY_MS
+                            : PLAYERBOT_DROPPED_FLAG_PICKUP_DELAY_MS);
             }
 
             if (flag->IsAtInteractDistance(player) && nowMs < delay.pickupNotBeforeMs)
@@ -5273,7 +5289,12 @@ namespace playerbot
             battleground && battleground->GetStatus() == STATUS_IN_PROGRESS &&
             !playerbot::PvpCore::IsBattlegroundFlagCarrier(player))
         {
-            ObjectGuid const pickupGuid = battleground->GetFlagPickupGUID(player->GetGUID());
+            // In Warsong Gulch and Twin Peaks only a flag this bot was sent for
+            // counts: a flag just dropped for the runner is not up for grabs.
+            playerbot::CtfBotOrders ctfOrders;
+            ObjectGuid const pickupGuid = playerbot::CtfCoordinator::GetOrders(player, ctfOrders)
+                ? ctfOrders.pickupGuid
+                : battleground->GetFlagPickupGUID(player->GetGUID());
             if (!pickupGuid.IsEmpty())
             {
                 GameObject* flag = player->FindMap() ? player->FindMap()->GetGameObject(pickupGuid) : nullptr;
@@ -5345,6 +5366,14 @@ namespace playerbot
             return AttackEnemyFlagCarrierPrimitive(player, context);
         if (IsTacticalAction(context.actionName, "bg protect fc"))
             return ProtectFlagCarrierPrimitive(player, context);
+        if (IsTacticalAction(context.actionName, "bg flag handoff"))
+            return FlagHandoffPrimitive(player);
+        if (IsTacticalAction(context.actionName, "bg escort flag runner"))
+            return EscortFlagRunnerPrimitive(player);
+        if (IsTacticalAction(context.actionName, "bg defend flag room"))
+            return DefendFlagRoomPrimitive(player);
+        if (IsTacticalAction(context.actionName, "bg flag runner stage"))
+            return FlagRunnerStagePrimitive(player);
 
         return false;
     }
@@ -5411,7 +5440,10 @@ namespace playerbot
 
             // A non-carrier heading for a live flag fights local enemies first,
             // but does not abandon the objective for a distant map-wide chase.
-            if (context.nearbyEnemyActive)
+            // Not in Warsong Gulch or Twin Peaks: there a bot is only sent for a
+            // flag when taking it beats the fight - it is the runner, it is
+            // standing near the flag, or the flag is ours and lying loose.
+            if (context.nearbyEnemyActive && context.ctfRole == 0)
             {
                 float const localCombatRange = std::max(playerbot::PvpCore::GetConfig().longRange, 35.0f);
                 if (Player* nearbyEnemy = FindNearestEnemyBattlegroundPlayer(player, localCombatRange, nullptr, nullptr))
@@ -5581,6 +5613,194 @@ namespace playerbot
                 player->GetGUID().ToString(), teamCarrier->GetGUID().ToString());
         }
         return MoveTowardUnit(player, teamCarrier, 18.0f);
+    }
+
+    namespace
+    {
+        constexpr float kCtfEscortFollowDistance = 8.0f;
+        // An escort peels whatever threatens the player it guards, but is not
+        // led across the map chasing it.
+        constexpr float kCtfEscortPeelRange = 30.0f;
+        constexpr float kCtfEscortLeashRange = 45.0f;
+        constexpr float kCtfHandoffDropDistance = 5.0f;
+        constexpr float kCtfHandoffMeetDistance = 2.5f;
+        constexpr uint32 kCtfHandoffGiverRegrabDelayMs = 5 * IN_MILLISECONDS;
+        // A defender owns our end of the map, not midfield.
+        constexpr float kCtfDefenderZoneRadius = 60.0f;
+        constexpr float kCtfDefenderScanRange = 45.0f;
+        constexpr float kCtfPostTolerance = 8.0f;
+        constexpr float kCtfSelfDefenseRange = 10.0f;
+        // A runner waiting for the enemy flag fights anyone inside this radius
+        // of the flag, from this far away.
+        constexpr float kCtfStageRoomRadius = 40.0f;
+        constexpr float kCtfStageFightRange = 30.0f;
+
+        Player* FindCtfEscortThreat(Player* escort, Player* escorted)
+        {
+            Map* map = escort->FindMap();
+            if (!map)
+                return nullptr;
+
+            TeamId const escortTeam = ResolveBotTeamId(escort);
+            Player* best = nullptr;
+            float bestScore = std::numeric_limits<float>::max();
+            Map::PlayerList const& players = map->GetPlayers();
+            for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+            {
+                Player* enemy = itr->GetSource();
+                if (!enemy || enemy == escort || !enemy->IsAlive() || enemy->GetBattlegroundId() != escort->GetBattlegroundId())
+                    continue;
+                if (ResolveBotTeamId(enemy) == escortTeam)
+                    continue;
+
+                float const distanceToEscorted = enemy->GetDistance(escorted);
+                if (distanceToEscorted > kCtfEscortPeelRange || !escort->IsWithinDistInMap(enemy, kCtfEscortLeashRange))
+                    continue;
+                if (!escort->IsValidAttackTarget(enemy) || PvpCore::IsEffectivelyImmuneTarget(escort, enemy))
+                    continue;
+
+                // Whoever is already hitting the escorted player comes first.
+                float const score = distanceToEscorted - (enemy->GetVictim() == escorted ? 100.0f : 0.0f);
+                if (score < bestScore)
+                {
+                    best = enemy;
+                    bestScore = score;
+                }
+            }
+
+            return best;
+        }
+    }
+
+    bool BattlegroundTacticalActions::FlagHandoffPrimitive(Player* player)
+    {
+        if (!player || !player->InBattleground())
+            return false;
+
+        CtfBotOrders orders;
+        if (!CtfCoordinator::GetOrders(player, orders) || orders.handoffPartnerGuid.IsEmpty() ||
+            (!orders.handoffGive && !orders.handoffReceive))
+            return false;
+
+        Player* partner = ObjectAccessor::GetPlayer(*player, orders.handoffPartnerGuid);
+        if (!partner || !partner->IsAlive())
+            return false;
+
+        if (orders.handoffGive && player->IsWithinDistInMap(partner, kCtfHandoffDropDistance))
+        {
+            if (!CtfCoordinator::DropFlagForHandoff(player))
+                return false;
+
+            // The runner gets the flag, not a race for it.
+            DelayFlagPickup(player, kCtfHandoffGiverRegrabDelayMs);
+            StopVirtualPlayerbotMovement(player);
+            return true;
+        }
+
+        // Walk into each other. The carrier drops on its own tick once they
+        // meet; the runner's pickup then runs through the nearby-flag path.
+        if (player->GetExactDist(partner) <= kCtfHandoffMeetDistance)
+        {
+            if (player->isMoving())
+                StopVirtualPlayerbotMovement(player);
+            return true;
+        }
+
+        if (!CanIssueBotMovement(player))
+            return false;
+
+        return IssueMovePointThrottled(player, partner->GetPosition(), 2.0f, 500) || player->isMoving();
+    }
+
+    bool BattlegroundTacticalActions::EscortFlagRunnerPrimitive(Player* player)
+    {
+        if (!player || !player->InBattleground())
+            return false;
+
+        CtfBotOrders orders;
+        if (!CtfCoordinator::GetOrders(player, orders))
+            return TryPursueNearestEnemyInBattleground(player);
+
+        // Our carrier first - human or bot - and otherwise ride with the runner.
+        ObjectGuid escortedGuid;
+        if (!orders.teamCarrierGuid.IsEmpty() && orders.teamCarrierGuid != player->GetGUID())
+            escortedGuid = orders.teamCarrierGuid;
+        else if (!orders.runnerGuid.IsEmpty() && orders.runnerGuid != player->GetGUID())
+            escortedGuid = orders.runnerGuid;
+
+        Player* escorted = escortedGuid.IsEmpty() ? nullptr : ObjectAccessor::GetPlayer(*player, escortedGuid);
+        if (!escorted || !escorted->IsAlive())
+            return TryPursueNearestEnemyInBattleground(player);
+
+        if (Player* threat = FindCtfEscortThreat(player, escorted))
+            return EngageSelectedEnemyPlayer(player, threat, "escort-flag-runner");
+
+        return MoveTowardUnit(player, escorted, kCtfEscortFollowDistance);
+    }
+
+    bool BattlegroundTacticalActions::DefendFlagRoomPrimitive(Player* player)
+    {
+        if (!player || !player->InBattleground())
+            return false;
+
+        Battleground* battleground = player->GetBattleground();
+        CtfBotOrders orders;
+        if (!battleground || !CtfCoordinator::GetOrders(player, orders))
+            return TryPursueNearestEnemyInBattleground(player);
+
+        // Anything in our end of the map, and anything already on the defender.
+        if (Player* intruder = FindNearestEnemyBattlegroundPlayer(player, kCtfDefenderScanRange, nullptr, nullptr))
+        {
+            bool const inOurEnd = intruder->GetExactDist(orders.ownFlagStand) <= kCtfDefenderZoneRadius;
+            bool const onDefender = intruder->GetVictim() == player || player->IsWithinDistInMap(intruder, kCtfSelfDefenseRange);
+            if (inOurEnd || onDefender)
+                return EngageSelectedEnemyPlayer(player, intruder, "defend-flag-room");
+        }
+
+        Position post = orders.ownFlagStand;
+        ApplyDeterministicObjectiveOffset(battleground, player, post);
+        if (player->IsWithinDist3d(post.GetPositionX(), post.GetPositionY(), post.GetPositionZ(), kCtfPostTolerance))
+            return true;
+
+        if (!CanIssueBotMovement(player))
+            return false;
+
+        return IssueMovePointThrottled(player, post) || player->isMoving();
+    }
+
+    bool BattlegroundTacticalActions::FlagRunnerStagePrimitive(Player* player)
+    {
+        if (!player || !player->InBattleground())
+            return false;
+
+        Battleground* battleground = player->GetBattleground();
+        CtfBotOrders orders;
+        if (!battleground || !CtfCoordinator::GetOrders(player, orders))
+            return TryPursueNearestEnemyInBattleground(player);
+
+        // In the enemy flag room, fight for the room: anyone in it is engaged
+        // and stays engaged until they leave it. Holding a spot instead made a
+        // melee runner chase a defender off the spot, walk back, and turn
+        // around again every couple of seconds.
+        if (Player* enemy = FindNearestEnemyBattlegroundPlayer(player, kCtfStageFightRange, nullptr, nullptr))
+        {
+            bool const inEnemyFlagRoom = enemy->GetExactDist(orders.enemyFlagStand) <= kCtfStageRoomRadius;
+            bool const onRunner = enemy->GetVictim() == player && player->IsWithinDistInMap(enemy, kCtfSelfDefenseRange);
+            // On the way over, only a fight that is already on the runner is taken.
+            if (inEnemyFlagRoom || onRunner)
+                return EngageSelectedEnemyPlayer(player, enemy, inEnemyFlagRoom ? "flag-runner-fights-for-flag-room" : "flag-runner-self-defense");
+        }
+
+        // Wait at the enemy flag for it to come back.
+        Position post = orders.enemyFlagStand;
+        ApplyDeterministicObjectiveOffset(battleground, player, post);
+        if (player->IsWithinDist3d(post.GetPositionX(), post.GetPositionY(), post.GetPositionZ(), kCtfPostTolerance))
+            return true;
+
+        if (!CanIssueBotMovement(player))
+            return false;
+
+        return IssueMovePointThrottled(player, post) || player->isMoving();
     }
 
     bool ArenaLifecycleActions::Execute(Player* player, ArenaLifecycleContext const& context)

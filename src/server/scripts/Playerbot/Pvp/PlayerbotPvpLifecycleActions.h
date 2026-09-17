@@ -55,6 +55,12 @@ public:
     static bool AttackEnemyFlagCarrierPrimitive(Player* player, BattlegroundTacticalContext const& context);
     static bool ProtectFlagCarrierPrimitive(Player* player, BattlegroundTacticalContext const& context);
     static void DelayFlagPickup(Player* player, uint32 delayMs);
+
+    // Warsong Gulch / Twin Peaks team play (CtfCoordinator orders).
+    static bool FlagHandoffPrimitive(Player* player);
+    static bool EscortFlagRunnerPrimitive(Player* player);
+    static bool DefendFlagRoomPrimitive(Player* player);
+    static bool FlagRunnerStagePrimitive(Player* player);
 };
 
 class ArenaLifecycleActions

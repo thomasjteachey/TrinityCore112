@@ -17,6 +17,7 @@
 
 #include "GameTime.h"
 #include "PlayerbotPvpCore.h"
+#include "PlayerbotCtfCoordinator.h"
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotRandomBotParticipation.h"
 #include "Playerbot/Pve/PlayerbotPveManager.h"
@@ -95,6 +96,9 @@ constexpr uint32 kHunterCallPetSpellId = 883;
 constexpr uint32 kHunterRevivePetSpellId = 982;
 constexpr uint32 kPlayerbotHunterStationaryCastLockToken = 900006;
 constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
+// Armed by the executor after a flag runner changes form; see
+// SelectDruidFlagRunSpell. Same value in PlayerbotPvpClassActions.cpp.
+constexpr uint32 kPlayerbotFlagRunFormShiftToken = 900008;
 constexpr uint32 kWandShootSpellId = 5019;
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
@@ -1111,6 +1115,16 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
             return state;
         }
 
+        // Mounting parks the pet (Unit::Mount -> UnsummonPetTemporaryIfAny) and
+        // dismounting brings it back by itself, so it is not missing and there is
+        // nothing to call or revive. Answering "call it" was a loop: Call Pet is a
+        // cast the mount refuses, PvpClassActions::Execute dismounts for exactly
+        // that, the dismount returns the pet, and the out-of-combat mount rule puts
+        // the bot straight back in the saddle. A hunter riding at a target more
+        // than a hundred yards off did nothing else.
+        if (player->IsMounted() && player->GetTemporaryUnsummonedPetNumber())
+            return state;
+
         PetStable const* petStable = player->GetPetStable();
         if (!petStable)
             return state;
@@ -1181,6 +1195,36 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
 
             values.nearbyEnemyActive = true;
             break;
+        }
+    }
+
+    // Warsong Gulch and Twin Peaks are played as a team: one designated flag
+    // runner, everyone else near a flag, returning ours, escorting or holding.
+    // From here on flagPickupAvailable/Nearby describe the flag THIS bot was
+    // told to take; the battleground's own pickup answer is any usable flag,
+    // which sent the whole team after it at once.
+    playerbot::CtfBotOrders ctfOrders;
+    if (playerbot::CtfCoordinator::GetOrders(player, ctfOrders))
+    {
+        values.ctfRole = uint8(ctfOrders.role);
+        values.ctfDesignatedRunner = ctfOrders.isDesignatedRunner;
+        values.ctfEnemyFlagPickable = ctfOrders.enemyFlagPickable;
+        values.ctfPickupIsReturn = ctfOrders.pickupIsReturn;
+        values.ctfOpportunisticPickup = ctfOrders.pickupIsOpportunistic;
+        values.ctfCarrierHolding = ctfOrders.carrierHolding;
+        values.ctfHandoffGive = ctfOrders.handoffGive;
+        values.ctfHandoffReceive = ctfOrders.handoffReceive;
+        values.flagPickupAvailable = !ctfOrders.pickupGuid.IsEmpty();
+        values.flagPickupNearby = ctfOrders.pickupNearby;
+
+        if (!ctfOrders.teamCarrierGuid.IsEmpty() && ctfOrders.teamCarrierGuid != playerGuid)
+        {
+            if (Player const* teamCarrier = ObjectAccessor::GetPlayer(*player, ctfOrders.teamCarrierGuid);
+                teamCarrier && teamCarrier->IsAlive())
+            {
+                values.ctfTeamCarrierActive = true;
+                values.ctfTeamCarrierDistance = player->GetDistance(teamCarrier);
+            }
         }
     }
 
@@ -4340,6 +4384,19 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
         return best;
     }
 
+    // Health as a healer should rank it. A flag carrier counts as twenty points
+    // more hurt than it is: the whole match rides on keeping that one player
+    // up. Whether it needs healing at all still reads the real health.
+    float GetHealTriageHealthPct(Unit const* candidate)
+    {
+        constexpr float kFlagCarrierTriageBonusPct = 20.0f;
+        float const healthPct = candidate->GetHealthPct();
+        Player const* candidatePlayer = candidate->ToPlayer();
+        return candidatePlayer && playerbot::PvpCore::IsBattlegroundFlagCarrier(candidatePlayer)
+            ? healthPct - kFlagCarrierTriageBonusPct
+            : healthPct;
+    }
+
     Unit const* SelectFriendlyHealthTarget(Player const* player, float maxDistance, float maxHealthPct, uint32 excludedAuraId = 0)
     {
         if (!player || !player->FindMap())
@@ -4372,10 +4429,11 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
                 return;
             }
 
-            if (healthPct < bestHealth || (std::abs(healthPct - bestHealth) < 0.1f && distance < bestDistance))
+            float const triageHealth = GetHealTriageHealthPct(candidate);
+            if (triageHealth < bestHealth || (std::abs(triageHealth - bestHealth) < 0.1f && distance < bestDistance))
             {
                 best = candidate;
-                bestHealth = healthPct;
+                bestHealth = triageHealth;
                 bestDistance = distance;
             }
         };
@@ -4420,10 +4478,11 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
                 return;
 
             float const distance = player->GetDistance(candidate);
-            if (healthPct < bestHealth || (std::abs(healthPct - bestHealth) < 0.1f && distance < bestDistance))
+            float const triageHealth = GetHealTriageHealthPct(candidate);
+            if (triageHealth < bestHealth || (std::abs(triageHealth - bestHealth) < 0.1f && distance < bestDistance))
             {
                 best = candidate;
-                bestHealth = healthPct;
+                bestHealth = triageHealth;
                 bestDistance = distance;
             }
         };
@@ -7100,6 +7159,528 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
         return IsPrimaryMeleeClassForSpacing(player->GetClass());
     }
 
+    // Flag running (Warsong Gulch, Twin Peaks).
+    //
+    // What a player does with their hands while carrying a flag, or while the
+    // designated runner is on its way to one. Tactical movement owns the route;
+    // these are the casts made along it. Each class returns its first usable
+    // move, in priority order.
+    //
+    // Castability is decided here and not by IsDecisionImmediatelyCastable,
+    // which refuses every druid form change ("not while shapeshifted"). The
+    // executor cancels the current form and casts the new one, which is how a
+    // real swap between forms works - and how a powershift out of a root works,
+    // since entering a form strips roots and snares (RemoveAurasByShapeShift).
+    struct FlagRunThreats
+    {
+        Unit const* nearestEnemy = nullptr;
+        float nearestEnemyDistance = std::numeric_limits<float>::max();
+        Unit const* nearestMeleeEnemy = nullptr;
+        float nearestMeleeDistance = std::numeric_limits<float>::max();
+        uint32 enemiesWithin10 = 0;
+    };
+
+    bool IsMeleeChaser(Player const* enemy)
+    {
+        if (IsMeleeClass(enemy))
+            return true;
+
+        if (enemy->GetClass() != CLASS_DRUID)
+            return false;
+
+        ShapeshiftForm const form = enemy->GetShapeshiftForm();
+        return form == FORM_CAT || form == FORM_BEAR || form == FORM_DIREBEAR;
+    }
+
+    FlagRunThreats ScanFlagRunThreats(Player const* player)
+    {
+        constexpr float kThreatScanRange = 45.0f;
+
+        FlagRunThreats threats;
+        Map const* map = player->FindMap();
+        if (!map)
+            return threats;
+
+        Map::PlayerList const& players = map->GetPlayers();
+        for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+        {
+            Player const* enemy = itr->GetSource();
+            if (!enemy || enemy == player || !player->IsWithinDistInMap(enemy, kThreatScanRange) || !HasHostileTarget(player, enemy))
+                continue;
+
+            float const distance = player->GetDistance(enemy);
+            if (distance <= 10.0f)
+                ++threats.enemiesWithin10;
+
+            if (distance < threats.nearestEnemyDistance)
+            {
+                threats.nearestEnemy = enemy;
+                threats.nearestEnemyDistance = distance;
+            }
+
+            if (distance < threats.nearestMeleeDistance && IsMeleeChaser(enemy))
+            {
+                threats.nearestMeleeEnemy = enemy;
+                threats.nearestMeleeDistance = distance;
+            }
+        }
+
+        return threats;
+    }
+
+    bool IsFlagRunSpellCastable(Player const* player, uint32 spellId, Unit const* target, bool formChangeAllowed)
+    {
+        uint32 const knownSpellId = ResolveKnownPlayerSpellInChain(player, spellId);
+        SpellInfo const* spellInfo = knownSpellId ? sSpellMgr->GetSpellInfo(knownSpellId) : nullptr;
+        if (!spellInfo)
+            return false;
+
+        SpellHistory const* history = player->GetSpellHistory();
+        if (history->HasCooldown(knownSpellId) || history->HasGlobalCooldown(spellInfo) ||
+            player->IsNonMeleeSpellCast(false, false, true))
+            return false;
+
+        // It has to go off at a run.
+        if (spellInfo->CalcCastTime() > 0 || spellInfo->IsChanneled())
+            return false;
+
+        if (playerbot::PvpCore::IsBattlegroundFlagCarrier(player) && playerbot::PvpCore::SpellWouldBreakFlagCarry(knownSpellId))
+            return false;
+
+        // Silence, pacify and a school lockout refuse the cast without starting
+        // the global cooldown, so an unusable pick here would be picked again
+        // every tick for the whole effect - and hold back the healthstone.
+        if ((spellInfo->PreventionType == SPELL_PREVENTION_TYPE_SILENCE && player->HasUnitFlag(UNIT_FLAG_SILENCED)) ||
+            (spellInfo->PreventionType == SPELL_PREVENTION_TYPE_PACIFY && player->HasUnitFlag(UNIT_FLAG_PACIFIED)) ||
+            history->IsSchoolLocked(spellInfo->GetSchoolMask()))
+            return false;
+
+        if (spellInfo->EquippedItemClass >= 0 && !player->HasItemFitToSpellRequirements(spellInfo))
+            return false;
+
+        SpellCastResult const formResult = spellInfo->CheckShapeshift(player->GetShapeshiftForm());
+        if (formResult != SPELL_CAST_OK && !(formChangeAllowed && formResult == SPELL_FAILED_NOT_SHAPESHIFT))
+            return false;
+
+        if (!MeetsCasterAuraStateRequirements(player, knownSpellId))
+            return false;
+
+        if (spellInfo->HasAttribute(SPELL_ATTR0_OUTDOORS_ONLY) && !player->IsOutdoors())
+            return false;
+
+        if (spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
+        {
+            int32 const cost = spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask());
+            if (cost > 0 && player->GetPower(Powers(spellInfo->PowerType)) < uint32(cost))
+                return false;
+        }
+
+        if (!target || target == player)
+            return true;
+
+        if (!target->IsAlive() || !player->IsValidAttackTarget(target, spellInfo))
+            return false;
+
+        float const maxRange = spellInfo->GetMaxRange(false);
+        float const minRange = spellInfo->GetMinRange(false);
+        if ((maxRange > 0.0f && !player->IsWithinDistInMap(target, maxRange)) ||
+            (minRange > 0.0f && player->IsWithinDistInMap(target, minRange)))
+            return false;
+
+        return player->IsWithinLOSInMap(target);
+    }
+
+    // Blink leaps twenty yards straight ahead; the spell works the landing
+    // out from the facing (TARGET_DEST_CASTER_FRONT_LEAP). It is only worth it
+    // on a straight stretch the bot is already running down, facing along it,
+    // with room to land.
+    bool IsBlinkDownRouteClear(Player const* player)
+    {
+        constexpr float kBlinkDistance = 20.0f;
+        constexpr float kMinimumStraightLeg = 18.0f;
+        constexpr float kMaximumFacingDeviation = 0.35f;
+
+        Movement::MoveSpline const* spline = player->movespline;
+        if (!spline || !spline->Initialized() || spline->Finalized())
+            return false;
+
+        G3D::Vector3 const next = spline->CurrentDestination();
+        float const dx = next.x - player->GetPositionX();
+        float const dy = next.y - player->GetPositionY();
+        if (dx * dx + dy * dy < kMinimumStraightLeg * kMinimumStraightLeg)
+            return false;
+
+        float const deviation = std::abs(Position::NormalizeOrientation(
+            std::atan2(dy, dx) - player->GetOrientation() + float(M_PI)) - float(M_PI));
+        if (deviation > kMaximumFacingDeviation)
+            return false;
+
+        Position const landing = const_cast<Player*>(player)->GetFirstCollisionPosition(kBlinkDistance, 0.0f);
+        return player->GetExactDist2d(landing) >= 12.0f &&
+            std::abs(landing.GetPositionZ() - player->GetPositionZ()) <= 6.0f;
+    }
+
+    // A slow or root that entering a form actually strips: exactly the test
+    // Unit::RemoveAurasByShapeShift applies. A daze or any crowd-control-flagged
+    // slow survives the shift, and powershifting at one only burns mana.
+    bool HasShapeshiftRemovableMovementImpairment(Unit const* unit)
+    {
+        constexpr uint32 kRemovableMechanicMask = (1 << MECHANIC_SNARE) | (1 << MECHANIC_ROOT);
+        for (auto const& appliedAura : unit->GetAppliedAuras())
+        {
+            Aura const* aura = appliedAura.second ? appliedAura.second->GetBase() : nullptr;
+            SpellInfo const* spellInfo = aura ? aura->GetSpellInfo() : nullptr;
+            if (spellInfo && (spellInfo->GetAllEffectsMechanicMask() & kRemovableMechanicMask) &&
+                !spellInfo->HasAttribute(SPELL_ATTR0_CU_AURA_CC))
+                return true;
+        }
+
+        return false;
+    }
+
+    // Travel Form, Aquatic Form, or a carrier's Cat Form, while on a flag run.
+    bool IsDruidInFlagRunForm(Player const* player, playerbot::PvpValues const& values)
+    {
+        if (!player || player->GetClass() != CLASS_DRUID || values.ctfCarrierHolding)
+            return false;
+
+        bool const carrying = values.playerHasFlag;
+        bool const runningForFlag = values.ctfDesignatedRunner && values.flagPickupAvailable && !values.ctfPickupIsReturn;
+        if (!carrying && !runningForFlag)
+            return false;
+
+        ShapeshiftForm const form = player->GetShapeshiftForm();
+        return form == FORM_TRAVEL || form == FORM_AQUA || (carrying && form == FORM_CAT);
+    }
+
+    SpellDecision SelectDruidFlagRunSpell(Player const* player, FlagRunThreats const& threats, bool carrying)
+    {
+        constexpr uint32 kTravelForm = 783;
+        constexpr uint32 kCatForm = 768;
+        constexpr uint32 kAquaticForm = 1066;
+        constexpr uint32 kDash = 1850;
+        constexpr uint32 kRejuvenation = 774;
+        using TargetMode = playerbot::PvpClassSpellContext::TargetMode;
+
+        ShapeshiftForm const form = player->GetShapeshiftForm();
+
+        // The fastest form for what is underfoot: water, open ground, or the
+        // flag room, where Travel Form is refused and a carrier runs as a cat
+        // for Dash. A runner not carrying yet only shifts where it gains speed,
+        // and the flag click takes the form off again anyway.
+        uint32 movementForm = 0;
+        ShapeshiftForm wantedForm = FORM_NONE;
+        char const* formAction = nullptr;
+        if (player->IsInWater())
+        {
+            movementForm = kAquaticForm;
+            wantedForm = FORM_AQUA;
+            formAction = "druid aquatic form";
+        }
+        else if (player->IsOutdoors())
+        {
+            movementForm = kTravelForm;
+            wantedForm = FORM_TRAVEL;
+            formAction = "druid travel form";
+        }
+        else if (carrying)
+        {
+            movementForm = kCatForm;
+            wantedForm = FORM_CAT;
+            formAction = "druid cat form";
+        }
+
+        // Shifting is on a short leash: a slow standing in a Frost Trap comes
+        // straight back, and a doorway can flip indoors/outdoors every step.
+        bool const mayShift = movementForm != 0 &&
+            !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotFlagRunFormShiftToken);
+
+        if (mayShift && HasShapeshiftRemovableMovementImpairment(player) && IsFlagRunSpellCastable(player, movementForm, nullptr, true))
+            return { formAction, "powershift out of a root or snare on the flag run", movementForm, TargetMode::Self, player->GetGUID() };
+
+        if (carrying && player->GetHealthPct() < 55.0f && threats.nearestEnemyDistance > 25.0f &&
+            !HasAuraFromSpellChain(player, kRejuvenation) && IsFlagRunSpellCastable(player, kRejuvenation, nullptr, true))
+            return { "druid rejuvenation", "flag carrier heals while nobody is close", kRejuvenation, TargetMode::Self, player->GetGUID() };
+
+        if (mayShift && form != wantedForm && (carrying || !player->IsMounted()) &&
+            IsFlagRunSpellCastable(player, movementForm, nullptr, true))
+            return { formAction, carrying ? "flag carrier shifts into its fastest form" : "flag runner shifts for speed on the way to the flag",
+                movementForm, TargetMode::Self, player->GetGUID() };
+
+        if (carrying && form == FORM_CAT && threats.nearestEnemyDistance <= 35.0f && !HasAuraFromSpellChain(player, kDash) &&
+            IsFlagRunSpellCastable(player, kDash, nullptr, false))
+            return { "druid dash", "flag carrier sprints away from pursuit", kDash, TargetMode::Self, player->GetGUID() };
+
+        return {};
+    }
+
+    SpellDecision SelectMageFlagRunSpell(Player const* player, FlagRunThreats const& threats, bool carrying)
+    {
+        constexpr uint32 kBlink = 1953;
+        constexpr uint32 kFrostNova = 122;
+        constexpr uint32 kIceBarrier = 11426;
+        constexpr uint32 kManaShield = 1463;
+        using TargetMode = playerbot::PvpClassSpellContext::TargetMode;
+
+        if (!carrying)
+            return {};
+
+        // Stunned or rooted, Blink is the answer whichever way it points, and
+        // nothing else may be picked while it is ready: the stun fast path
+        // (TryMageBlinkOutOfControl) only acts on a Blink decision, and a Frost
+        // Nova picked ahead of it would leave the carrier standing in the stun.
+        if (IsMageBlinkableControl(player) && IsSpellReady(player, kBlink))
+        {
+            if (IsFlagRunSpellCastable(player, kBlink, nullptr, false))
+                return { "mage blink", "flag carrier blinks out of a stun or root", kBlink, TargetMode::Self, player->GetGUID() };
+            return {};
+        }
+
+        bool const pursued = threats.nearestEnemyDistance <= 25.0f;
+        bool const slowed = IsRootedOrSnared(player);
+
+        // Blink is the mage's flag run: whenever something is chasing, down every
+        // straight stretch of the route. With nobody near it is kept, so it is
+        // ready for the stun that ends most runs.
+        if ((pursued || slowed) && IsFlagRunSpellCastable(player, kBlink, nullptr, false) && IsBlinkDownRouteClear(player))
+            return { "mage blink", slowed ? "flag carrier blinks out of a slow" : "flag carrier blinks away from pursuit",
+                kBlink, TargetMode::Self, player->GetGUID() };
+
+        if (threats.enemiesWithin10 > 0 && IsFlagRunSpellCastable(player, kFrostNova, nullptr, false))
+            return { "mage frost nova", "flag carrier roots the chasers in place", kFrostNova, TargetMode::Self, player->GetGUID() };
+
+        if (pursued && !HasAuraFromSpellChain(player, kIceBarrier) && IsFlagRunSpellCastable(player, kIceBarrier, nullptr, false))
+            return { "mage ice barrier", "flag carrier shields up under pursuit", kIceBarrier, TargetMode::Self, player->GetGUID() };
+
+        if (threats.nearestEnemyDistance <= 15.0f && player->GetHealthPct() < 80.0f &&
+            !HasAuraFromSpellChain(player, kIceBarrier) && !HasAuraFromSpellChain(player, kManaShield) &&
+            IsFlagRunSpellCastable(player, kManaShield, nullptr, false))
+            return { "mage mana shield", "flag carrier absorbs hits it cannot outrun", kManaShield, TargetMode::Self, player->GetGUID() };
+
+        return {};
+    }
+
+    SpellDecision SelectHunterFlagRunTrap(Player const* player, FlagRunThreats const& threats)
+    {
+        constexpr uint32 kFrostTrap = 13809;
+        constexpr uint32 kFreezingTrap = 1499;
+
+        if (player->GetClass() != CLASS_HUNTER || player->IsInCombat() || threats.nearestEnemyDistance > 35.0f)
+            return {};
+
+        uint32 const trapSpellId = IsSpellReady(player, kFrostTrap) ? kFrostTrap : kFreezingTrap;
+        if (!IsFlagRunSpellCastable(player, trapSpellId, nullptr, false))
+            return {};
+
+        return { trapSpellId == kFrostTrap ? "hunter frost trap" : "hunter freezing trap",
+            "flag carrier leaves a trap for the chasers", trapSpellId,
+            playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+    }
+
+    SpellDecision SelectHunterFlagRunSpell(Player const* player, FlagRunThreats const& threats, bool carrying)
+    {
+        constexpr uint32 kAspectOfTheCheetah = 5118;
+        constexpr uint32 kConcussiveShot = 5116;
+        constexpr uint32 kWingClip = 2974;
+        constexpr uint32 kScatterShot = 19503;
+        using TargetMode = playerbot::PvpClassSpellContext::TargetMode;
+
+        Unit const* chaser = threats.nearestEnemy;
+        Unit const* meleeChaser = threats.nearestMeleeEnemy;
+
+        if (carrying)
+        {
+            if (meleeChaser && threats.nearestMeleeDistance <= 5.0f && !IsRootedOrSnared(meleeChaser) &&
+                IsFlagRunSpellCastable(player, kWingClip, meleeChaser, false))
+                return { "hunter wing clip", "flag carrier clips the chaser that caught it", kWingClip, TargetMode::Enemy, meleeChaser->GetGUID() };
+
+            if (meleeChaser && threats.nearestMeleeDistance <= 15.0f && !HasBreakableCrowdControl(meleeChaser) &&
+                IsFlagRunSpellCastable(player, kScatterShot, meleeChaser, false))
+                return { "hunter scatter shot", "flag carrier disorients a melee chaser", kScatterShot, TargetMode::Enemy, meleeChaser->GetGUID() };
+
+            // Traps only go down out of combat on this realm, and any shot puts
+            // the hunter in combat - so the trap goes on the route first, while
+            // the chasers are still closing.
+            if (SpellDecision const trap = SelectHunterFlagRunTrap(player, threats); trap.spellId)
+                return trap;
+
+            if (chaser && threats.nearestEnemyDistance <= 30.0f && !IsRootedOrSnared(chaser) && !HasBreakableCrowdControl(chaser) &&
+                IsFlagRunSpellCastable(player, kConcussiveShot, chaser, false))
+                return { "hunter concussive shot", "flag carrier slows the nearest chaser", kConcussiveShot, TargetMode::Enemy, chaser->GetGUID() };
+        }
+
+        // Cheetah dazes on every hit, so it is for open ground with nobody in
+        // range. SelectBattlegroundFlagRunSpell takes it off again, for any
+        // hunter, before anybody closes.
+        if (!HasAuraFromSpellChain(player, kAspectOfTheCheetah) && threats.nearestEnemyDistance > 30.0f &&
+            (carrying || !player->IsMounted()) && IsFlagRunSpellCastable(player, kAspectOfTheCheetah, nullptr, false))
+            return { "hunter aspect of the cheetah", carrying ? "flag carrier runs in cheetah with nobody in range" :
+                "flag runner runs in cheetah on the way to the flag", kAspectOfTheCheetah, TargetMode::Self, player->GetGUID() };
+
+        return {};
+    }
+
+    // Monkey, else Hawk, in place of Cheetah once an enemy is close enough to
+    // land the hit that would daze.
+    SpellDecision SelectHunterCheetahDrop(Player const* player, FlagRunThreats const& threats)
+    {
+        constexpr uint32 kAspectOfTheCheetah = 5118;
+        constexpr uint32 kAspectOfTheMonkey = 13163;
+        constexpr uint32 kAspectOfTheHawk = 13165;
+
+        if (threats.nearestEnemyDistance > 20.0f || !HasAuraFromSpellChain(player, kAspectOfTheCheetah))
+            return {};
+
+        uint32 const combatAspect = ResolveKnownPlayerSpellInChain(player, kAspectOfTheMonkey) ? kAspectOfTheMonkey : kAspectOfTheHawk;
+        if (!IsFlagRunSpellCastable(player, combatAspect, nullptr, false))
+            return {};
+
+        return { "hunter aspect swap", "drop cheetah before a hit dazes", combatAspect,
+            playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+    }
+
+    SpellDecision SelectWarriorFlagRunSpell(Player const* player, FlagRunThreats const& threats)
+    {
+        constexpr uint32 kLastStand = 12975;
+        constexpr uint32 kShieldWall = 871;
+        constexpr uint32 kShieldBlock = 2565;
+        constexpr uint32 kIntimidatingShout = 5246;
+        constexpr uint32 kPiercingHowl = 12323;
+        constexpr uint32 kHamstring = 1715;
+        using TargetMode = playerbot::PvpClassSpellContext::TargetMode;
+
+        float const healthPct = player->GetHealthPct();
+        bool const underAttack = threats.nearestEnemyDistance <= 30.0f;
+        Unit const* meleeChaser = threats.nearestMeleeEnemy;
+
+        if (underAttack && healthPct < 30.0f && IsFlagRunSpellCastable(player, kLastStand, nullptr, false))
+            return { "warrior last stand", "flag carrier buys health at the brink", kLastStand, TargetMode::Self, player->GetGUID() };
+
+        if (underAttack && healthPct < 40.0f && IsFlagRunSpellCastable(player, kShieldWall, nullptr, false))
+            return { "warrior shield wall", "flag carrier walls up while low", kShieldWall, TargetMode::Self, player->GetGUID() };
+
+        if (meleeChaser && threats.nearestMeleeDistance <= 8.0f && (threats.enemiesWithin10 >= 2 || healthPct < 60.0f) &&
+            IsFlagRunSpellCastable(player, kIntimidatingShout, meleeChaser, false))
+            return { "warrior intimidating shout", "flag carrier fears off the chasers", kIntimidatingShout, TargetMode::Enemy, meleeChaser->GetGUID() };
+
+        if (threats.enemiesWithin10 > 0 && meleeChaser && !IsRootedOrSnared(meleeChaser) &&
+            IsFlagRunSpellCastable(player, kPiercingHowl, nullptr, false))
+            return { "warrior piercing howl", "flag carrier slows everything around it", kPiercingHowl, TargetMode::Self, player->GetGUID() };
+
+        if (meleeChaser && threats.nearestMeleeDistance <= 5.0f && !IsRootedOrSnared(meleeChaser) &&
+            IsFlagRunSpellCastable(player, kHamstring, meleeChaser, false))
+            return { "warrior hamstring", "flag carrier hamstrings the chaser on it", kHamstring, TargetMode::Enemy, meleeChaser->GetGUID() };
+
+        if (meleeChaser && threats.nearestMeleeDistance <= 5.0f && IsFlagRunSpellCastable(player, kShieldBlock, nullptr, false))
+            return { "warrior shield block", "flag carrier blocks the chaser on it", kShieldBlock, TargetMode::Self, player->GetGUID() };
+
+        return {};
+    }
+
+    // The classes without a named flag-run kit still use what they have.
+    SpellDecision SelectGenericFlagRunSpell(Player const* player, FlagRunThreats const& threats)
+    {
+        using TargetMode = playerbot::PvpClassSpellContext::TargetMode;
+        Unit const* chaser = threats.nearestEnemy;
+        bool const pursued = threats.nearestEnemyDistance <= 30.0f;
+
+        switch (player->GetClass())
+        {
+            case CLASS_ROGUE:
+            {
+                constexpr uint32 kSprint = 2983;
+                constexpr uint32 kEvasion = 5277;
+                if (pursued && !HasAuraFromSpellChain(player, kSprint) && IsFlagRunSpellCastable(player, kSprint, nullptr, false))
+                    return { "rogue sprint", "flag carrier sprints away from pursuit", kSprint, TargetMode::Self, player->GetGUID() };
+                if (threats.nearestMeleeDistance <= 5.0f && player->GetHealthPct() < 70.0f &&
+                    IsFlagRunSpellCastable(player, kEvasion, nullptr, false))
+                    return { "rogue evasion", "flag carrier dodges the chaser on it", kEvasion, TargetMode::Self, player->GetGUID() };
+                break;
+            }
+            case CLASS_PALADIN:
+            {
+                constexpr uint32 kFreedom = 1044;
+                if (IsRootedOrSnared(player) && IsFlagRunSpellCastable(player, kFreedom, nullptr, false))
+                    return { "paladin freedom", "flag carrier frees itself from a root or snare", kFreedom, TargetMode::Self, player->GetGUID() };
+                break;
+            }
+            case CLASS_PRIEST:
+            {
+                constexpr uint32 kPowerWordShield = 17;
+                constexpr uint32 kRenew = 139;
+                if (pursued && !HasAuraFromSpellChain(player, kPowerWordShield) && !player->HasAura(kPriestWeakenedSoulSpellId) &&
+                    IsFlagRunSpellCastable(player, kPowerWordShield, nullptr, false))
+                    return { "priest power word: shield", "flag carrier shields up under pursuit", kPowerWordShield, TargetMode::Self, player->GetGUID() };
+                if (player->GetHealthPct() < 80.0f && !HasAuraFromSpellChain(player, kRenew) &&
+                    IsFlagRunSpellCastable(player, kRenew, nullptr, false))
+                    return { "priest renew", "flag carrier heals on the move", kRenew, TargetMode::Self, player->GetGUID() };
+                break;
+            }
+            case CLASS_SHAMAN:
+            {
+                constexpr uint32 kFrostShock = 8056;
+                if (chaser && threats.nearestEnemyDistance <= 20.0f && !IsRootedOrSnared(chaser) &&
+                    IsFlagRunSpellCastable(player, kFrostShock, chaser, false))
+                    return { "shaman frost shock", "flag carrier slows the nearest chaser", kFrostShock, TargetMode::Enemy, chaser->GetGUID() };
+                break;
+            }
+            case CLASS_WARLOCK:
+            {
+                constexpr uint32 kDeathCoil = 6789;
+                Unit const* meleeChaser = threats.nearestMeleeEnemy;
+                if (meleeChaser && threats.nearestMeleeDistance <= 20.0f && player->GetHealthPct() < 60.0f &&
+                    !HasBreakableCrowdControl(meleeChaser) && IsFlagRunSpellCastable(player, kDeathCoil, meleeChaser, false))
+                    return { "warlock death coil", "flag carrier horrifies the chaser on it", kDeathCoil, TargetMode::Enemy, meleeChaser->GetGUID() };
+                break;
+            }
+            default:
+                break;
+        }
+
+        return {};
+    }
+
+    SpellDecision SelectBattlegroundFlagRunSpell(Player const* player, playerbot::PvpValues const& values)
+    {
+        bool const carrying = values.playerHasFlag;
+        // The runner's trip to the enemy flag gets the speed moves only.
+        bool const runningForFlag = !carrying && values.ctfDesignatedRunner && values.flagPickupAvailable &&
+            !values.ctfPickupIsReturn;
+        // Nothing else in the engine touches aspects, so a hunter that ran in
+        // Cheetah and has since captured, stopped to hold, or become an escort
+        // is still wearing it - and would be dazed by every hit.
+        bool const hunterInCheetah = player->GetClass() == CLASS_HUNTER && HasAuraFromSpellChain(player, 5118);
+        if (!carrying && !runningForFlag && !hunterInCheetah)
+            return {};
+
+        FlagRunThreats const threats = ScanFlagRunThreats(player);
+
+        if (hunterInCheetah)
+            if (SpellDecision const cheetahDrop = SelectHunterCheetahDrop(player, threats); cheetahDrop.spellId)
+                return cheetahDrop;
+
+        if (!carrying && !runningForFlag)
+            return {};
+
+        // A carrier waiting in its own flag room is not running anywhere; the
+        // rotation fights from there. A hunter still traps the doorway.
+        if (values.ctfCarrierHolding)
+            return SelectHunterFlagRunTrap(player, threats);
+        switch (player->GetClass())
+        {
+            case CLASS_DRUID:
+                return SelectDruidFlagRunSpell(player, threats, carrying);
+            case CLASS_MAGE:
+                return SelectMageFlagRunSpell(player, threats, carrying);
+            case CLASS_HUNTER:
+                return SelectHunterFlagRunSpell(player, threats, carrying);
+            case CLASS_WARRIOR:
+                return carrying ? SelectWarriorFlagRunSpell(player, threats) : SpellDecision{};
+            default:
+                return carrying ? SelectGenericFlagRunSpell(player, threats) : SpellDecision{};
+        }
+    }
+
     void ConsiderMovementDirective(playerbot::PvpClassSpellContext& context, playerbot::PvpClassSpellContext::MovementDirective directive,
         ObjectGuid targetGuid, float followRange, char const* actionName, char const* reason, float priority)
     {
@@ -7139,6 +7720,59 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
         // chase carriers instead of defaulting to midfield skirmishes.
         bool const enemyFlagCarrierActive = values.enemyFlagCarrierActive;
         bool const teamFlagCarrierNear = values.teamFlagCarrierNear;
+
+        // Warsong Gulch and Twin Peaks, played as a team (CtfCoordinator). Only
+        // the designated runner heads for the enemy flag from afar; a bot takes
+        // a flag it is standing near, returns ours when it is one of the closest,
+        // and otherwise does its role: escorts stay on our carrier (or ride with
+        // the runner), defenders hold the flag room, and everyone but an escort
+        // with a carrier to guard turns on an enemy carrier.
+        if (values.ctfRole != 0)
+        {
+            playerbot::CtfRole const role = playerbot::CtfRole(values.ctfRole);
+            bool const isRunner = role == playerbot::CtfRole::Runner;
+            bool const isEscort = role == playerbot::CtfRole::Escort;
+            bool const isDefender = role == playerbot::CtfRole::Defender;
+            bool const teamCarrierClose = values.ctfTeamCarrierActive && values.ctfTeamCarrierDistance <= 60.0f;
+
+            std::array<TacticalRule, 14> const ctfRules =
+            {{
+                { "flag handoff give", bgActive && values.ctfHandoffGive, "bg flag handoff", 101.0f },
+                { "player has flag", bgActive && values.playerHasFlag, "bg move to objective", 100.0f },
+                { "flag pickup nearby", bgActive && values.flagPickupNearby, "bg move to objective", 99.0f },
+                { "flag handoff receive", bgActive && values.ctfHandoffReceive, "bg flag handoff", 98.0f },
+                { "own flag return", bgActive && values.flagPickupAvailable && values.ctfPickupIsReturn, "bg move to objective", 97.0f },
+                { "flag runner goes for the flag", bgActive && isRunner && values.flagPickupAvailable, "bg move to objective", 96.0f },
+                { "flag near", bgActive && values.flagPickupAvailable, "bg move to objective", 95.5f },
+                { "escort team carrier", bgActive && isEscort && values.ctfTeamCarrierActive, "bg escort flag runner", 95.2f },
+                { "enemy flag carrier active", bgActive && enemyFlagCarrierActive, "attack enemy flag carrier", 95.0f },
+                { "flag runner joins team carrier", bgActive && isRunner && values.ctfTeamCarrierActive, "bg escort flag runner", 90.0f },
+                { "flag runner waits at enemy flag", bgActive && isRunner, "bg flag runner stage", 88.0f },
+                { "escort flag runner", bgActive && isEscort, "bg escort flag runner", 85.0f },
+                { "defend flag room", bgActive && isDefender, "bg defend flag room", 80.0f },
+                { "team flag carrier near", bgActive && teamCarrierClose, "bg escort flag runner", 70.0f }
+            }};
+
+            for (TacticalRule const& rule : ctfRules)
+            {
+                if (rule.condition)
+                {
+                    decision.triggerName = rule.triggerName;
+                    decision.actionName = rule.actionName;
+                    decision.priority = rule.priority;
+                    return decision;
+                }
+            }
+
+            if (bgActive)
+            {
+                decision.triggerName = "bg active";
+                decision.actionName = "bg pursue enemy";
+                decision.priority = 60.0f;
+            }
+
+            return decision;
+        }
 
     std::array<TacticalRule, 11> const rules =
     {{
@@ -7326,6 +7960,26 @@ bool PvpCore::SpellWouldBreakFlagCarry(uint32 spellId)
 {
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
     return spellInfo && spellInfo->WouldDropBattlegroundFlag();
+}
+
+uint8 PvpCore::GetFlagRunnerPriority(Player const* player)
+{
+    if (!player)
+        return 0;
+
+    switch (player->GetClass())
+    {
+        case CLASS_DRUID:
+            return 4;
+        case CLASS_WARRIOR:
+            return DetectClassicClassProfile(player).profile == ClassicClassProfile::TertiaryClassic ? 3 : 0;
+        case CLASS_MAGE:
+            return 2;
+        case CLASS_HUNTER:
+            return 1;
+        default:
+            return 0;
+    }
 }
 
 // Guarded through PlayerbotSharedStateGuard: the PvE manager flips engagement
@@ -7663,6 +8317,7 @@ PvpValues PvpCore::CollectValues(Player const* player)
     context.movement = SelectMovementPrimitiveSkeleton(values, context.objective);
     context.flagCarrierDirective = SelectFlagCarrierDirectiveSkeleton(values);
     context.nearbyEnemyActive = values.nearbyEnemyActive;
+    context.ctfRole = values.ctfRole;
     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
         "Playerbot PvP human-first context: guid={} human_count={} has_humans={} player_has_flag={} flag_pickup_available={} nearby_enemy={} directive={} action={}.",
         player->GetGUID().ToString(), values.battlegroundTeamHumanCount, values.battlegroundTeamHasHumans, values.playerHasFlag,
@@ -7709,10 +8364,20 @@ PvpValues PvpCore::CollectValues(Player const* player)
     // deliberately hand movement back to combat. Without this shared decision,
     // class range/facing and tactical navmesh movement replace each other on
     // alternating cadences and produce the visible run/turn/stop loop.
+    //
+    // Warsong Gulch and Twin Peaks give flag orders instead (ctfRole set). A
+    // bot sent for a flag - the runner, a bot standing near one, a bot
+    // returning ours - was sent for it BECAUSE it matters more than the fight
+    // around it, so it keeps its route and fires what it can on the move.
     context.preserveFlagObjectiveMovement = inActiveBattleground &&
-        (values.playerHasFlag || values.flagPickupNearby ||
-            (values.flagPickupAvailable && !values.nearbyEnemyActive));
+        (values.ctfRole != 0
+            ? (values.playerHasFlag || values.flagPickupAvailable)
+            : (values.playerHasFlag || values.flagPickupNearby ||
+                (values.flagPickupAvailable && !values.nearbyEnemyActive)));
     context.preserveFlagCarrierMovement = inActiveBattleground && values.playerHasFlag;
+    // A carrier waiting in its own flag room for our flag to come home still
+    // must not wander off, but it is not running either: it may stop and cast.
+    context.flagCarrierHolding = context.preserveFlagCarrierMovement && values.ctfCarrierHolding;
     bool const inBattlegroundPreparation = player->InBattleground() &&
         (player->HasAura(SPELL_PREPARATION) || player->HasAura(SPELL_ARENA_PREPARATION) || player->HasUnitFlag(UNIT_FLAG_PREPARATION));
     bool const inActiveDuel = player->duel && player->duel->State == DUEL_STATE_IN_PROGRESS;
@@ -7744,7 +8409,11 @@ PvpValues PvpCore::CollectValues(Player const* player)
         return context;
     }
 
-    if (!player->IsInCombat() && !inPveEngagement)
+    // A flag run does not stop to buff the team: a druid would leave Travel
+    // Form for every Mark of the Wild and shift straight back.
+    bool const onFlagRun = values.playerHasFlag ||
+        (values.ctfDesignatedRunner && values.flagPickupAvailable && !values.ctfPickupIsReturn);
+    if (!player->IsInCombat() && !inPveEngagement && !onFlagRun)
     {
         SpellDecision const raidBuffDecision = SelectMissingBattlegroundRaidBuff(player);
         if (raidBuffDecision.spellId)
@@ -7844,6 +8513,56 @@ PvpValues PvpCore::CollectValues(Player const* player)
     if (player->HasAura(kPriestElunesGraceSpellId) || player->HasInvisibilityAura() ||
         (player->GetClass() == CLASS_PRIEST && player->HasAura(kPriestWispFormSpellId)))
         return context;
+
+    // The flag run's own moves - forms, Blink, aspects, slows on the chasers -
+    // come before the rotation. They are picked and checked by the flag-run
+    // selectors, so they bypass the castability retry loop below, which would
+    // refuse every druid form change.
+    if (inActiveBattleground && values.ctfRole != 0)
+    {
+        SpellDecision const flagRunDecision = SelectBattlegroundFlagRunSpell(player, values);
+        if (flagRunDecision.spellId)
+        {
+            context.actionName = flagRunDecision.actionName;
+            context.reason = flagRunDecision.reason;
+            context.spellId = flagRunDecision.spellId;
+            context.targetMode = flagRunDecision.targetMode;
+            context.targetGuid = flagRunDecision.targetGuid;
+            context.selfCast = context.targetMode == PvpClassSpellContext::TargetMode::Self;
+            context.flagManeuver = true;
+            context.shouldExecute = true;
+            return context;
+        }
+
+        // A druid in its running form stays in it. Every rotation pick from
+        // Travel, Aquatic or a carrier's Cat Form - Moonkin Form, Cat Form for
+        // a target, a Rejuvenation on a teammate - cancels the form first, and
+        // the run only shifts back a global cooldown and a spacing token later,
+        // so the druid would spend most of its run on foot paying for two forms.
+        // Only a healthstone or potion still goes down.
+        if (IsDruidInFlagRunForm(player, values))
+        {
+            if (player->IsInCombat() && player->HealthBelowPct(50))
+            {
+                uint32 itemEntry = SelectReadyHealthstoneItemEntry(player);
+                if (!itemEntry)
+                    itemEntry = SelectReadyRestorePotionItemEntry(player, false);
+
+                if (itemEntry)
+                {
+                    context.actionName = "use healing consumable";
+                    context.reason = "flag run heals without leaving its form";
+                    context.itemEntry = itemEntry;
+                    context.targetMode = PvpClassSpellContext::TargetMode::Self;
+                    context.targetGuid = player->GetGUID();
+                    context.selfCast = true;
+                    context.shouldExecute = true;
+                }
+            }
+
+            return context;
+        }
+    }
 
     bool const inSpiritOfRedemption = IsPriestInSpiritOfRedemption(player);
     bool const movementPreventedByRoot = PvpCore::IsMovementPreventedByRoot(player);

@@ -37,6 +37,7 @@
 #include "BattlegroundQueue.h"
 #include "Playerbot/Pve/PlayerbotPveManager.h"
 #include "Playerbot/Pvp/PlayerbotBgFillDriver.h"
+#include "Playerbot/Pvp/PlayerbotCtfCoordinator.h"
 #include "Playerbot/Pvp/PlayerbotObcClone.h"
 #include "Playerbot/Pvp/PlayerbotVhrWaveDriver.h"
 #include "Playerbot/Pvp/PlayerbotPvpClassActions.h"
@@ -998,6 +999,7 @@ public:
     }
 
     static bool HandlePlayerbotPvpLifecycleSnapshotCommand(ChatHandler* handler)
+            { "ctf", HandlePlayerbotPvpCtfCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
     {
         if (!handler)
             return false;
@@ -1053,6 +1055,37 @@ public:
             std::sort(bots.begin(), bots.end(), [player](Player const* left, Player const* right)
             {
                 return player->GetDistance(left) < player->GetDistance(right);
+    // Warsong Gulch / Twin Peaks team play: each side's flag runner, escorts,
+    // defenders and any handoff under way. Select a bot to see its own orders.
+    static bool HandlePlayerbotPvpCtfCommand(ChatHandler* handler)
+    {
+        if (!handler)
+            return false;
+
+        Player* player = handler->GetPlayer();
+        if (!player)
+            return false;
+
+        Player* selected = handler->getSelectedPlayer();
+        Player* observer = selected && selected->GetBattleground() ? selected : player;
+        for (std::string const& line : playerbot::CtfCoordinator::DescribeTeams(observer))
+            handler->PSendSysMessage("%s", line.c_str());
+
+        playerbot::CtfBotOrders orders;
+        if (selected && selected != player && playerbot::CtfCoordinator::GetOrders(selected, orders))
+        {
+            handler->PSendSysMessage("%s: %s%s, pickup %s%s%s, handoff %s",
+                selected->GetName().c_str(), playerbot::GetCtfRoleName(orders.role),
+                orders.isDesignatedRunner ? " (designated runner)" : "",
+                orders.pickupGuid.IsEmpty() ? "none" : (orders.pickupIsReturn ? "our flag" : "their flag"),
+                orders.pickupIsOpportunistic ? " (standing near it)" : "",
+                orders.pickupNearby ? " (in reach)" : "",
+                orders.handoffGive ? "giving" : (orders.handoffReceive ? "receiving" : "none"));
+        }
+
+        return true;
+    }
+
             });
         }
 

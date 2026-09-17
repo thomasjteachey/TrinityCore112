@@ -365,6 +365,10 @@ constexpr uint32 kHunterRevivePetSpellId = 982;
 constexpr uint32 kPlayerbotHunterStationaryCastLockToken = 900006;
 constexpr uint32 kRacialNightElfShadowmeldSpellId = 20580;
 constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
+// Same value in PlayerbotPvpCore.cpp: armed after a flag runner changes form,
+// read by SelectDruidFlagRunSpell.
+constexpr uint32 kPlayerbotFlagRunFormShiftToken = 900008;
+constexpr std::chrono::milliseconds kPlayerbotFlagRunFormShiftSpacing(2500);
 // Environmental Magma periodically damages units standing on hazardous ground.
 // Some custom terrain does not expose the matching liquid flags, so the aura is
 // also a generic signal that the bot is currently standing in a hazard.
@@ -1739,8 +1743,10 @@ void IssueHunterDeadZoneRetreatMovement(Player* player, Unit* target, char const
     float const angleToTarget = player->GetAbsoluteAngle(target->GetPosition());
 
     Position destination = player->GetPosition();
-    destination.RelocateOffset({ std::cos(angleToTarget + static_cast<float>(M_PI)) * retreatStep,
-        std::sin(angleToTarget + static_cast<float>(M_PI)) * retreatStep, 0.0f, 0.0f });
+    // World space by hand: RelocateOffset would turn this offset by the bot's
+    // facing too, aiming it at away + facing (see TryIssueShadowWraithFleeMovement).
+    destination.Relocate(player->GetPositionX() + std::cos(angleToTarget + static_cast<float>(M_PI)) * retreatStep,
+        player->GetPositionY() + std::sin(angleToTarget + static_cast<float>(M_PI)) * retreatStep, player->GetPositionZ());
 
     MovementGeneratorType const motionBefore = motionMaster->GetCurrentMovementGeneratorType();
     bool issuedStrict = false;
@@ -3924,7 +3930,10 @@ bool TryMoveOutOfHazardousLiquid(Player* player)
         {
             Position destination = player->GetPosition();
             float const angle = baseAngle + offset;
-            destination.RelocateOffset({ std::cos(angle) * distance, std::sin(angle) * distance, 0.0f, 0.0f });
+            // World space by hand: angle already includes the facing, which
+            // RelocateOffset would add a second time.
+            destination.Relocate(player->GetPositionX() + std::cos(angle) * distance,
+                player->GetPositionY() + std::sin(angle) * distance, player->GetPositionZ());
             destination = BuildCollisionSafeDestination(player, destination);
             if (IsHazardousLiquidDestination(player, destination))
                 continue;
@@ -3943,7 +3952,10 @@ bool TryMoveOutOfHazardousLiquid(Player* player)
         {
             Position destination = player->GetPosition();
             float const angle = baseAngle + offset;
-            destination.RelocateOffset({ std::cos(angle) * distance, std::sin(angle) * distance, 0.0f, 0.0f });
+            // World space by hand: angle already includes the facing, which
+            // RelocateOffset would add a second time.
+            destination.Relocate(player->GetPositionX() + std::cos(angle) * distance,
+                player->GetPositionY() + std::sin(angle) * distance, player->GetPositionZ());
             destination = BuildCollisionSafeDestination(player, destination);
             if (IssueValidatedPathingHazardEgress(player, destination, "hazardous_liquid_pathing_move_out"))
                 return true;
@@ -4285,8 +4297,10 @@ void RepositionDruidAfterTravelFormRecovery(Player* player)
     Position destination = player->GetPosition();
     float const retreatDistance = std::max(8.0f, std::min(16.0f, nearestDistance + 6.0f));
     float const angleToEnemy = player->GetAbsoluteAngle(nearestEnemy->GetPosition());
-    destination.RelocateOffset({ std::cos(angleToEnemy + static_cast<float>(M_PI)) * retreatDistance,
-        std::sin(angleToEnemy + static_cast<float>(M_PI)) * retreatDistance, 0.0f, 0.0f });
+    // World space by hand: RelocateOffset would turn this offset by the bot's
+    // facing too, aiming it at away + facing (see TryIssueShadowWraithFleeMovement).
+    destination.Relocate(player->GetPositionX() + std::cos(angleToEnemy + static_cast<float>(M_PI)) * retreatDistance,
+        player->GetPositionY() + std::sin(angleToEnemy + static_cast<float>(M_PI)) * retreatDistance, player->GetPositionZ());
 
     if (RequiresStrictHumanPathing(player))
         IssueStrictHumanMove(player, destination);
@@ -4694,10 +4708,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // Rehgar's Fury). 82419 itself is exempted for the same reason as the
     // matching check in IsDecisionImmediatelyCastable - it is specifically
     // meant to be cast while shapeshifted into Ghost Wolf.
-    if (resolvedSpellId != 82419 && (player->GetClass() == CLASS_DRUID || player->GetClass() == CLASS_SHAMAN) && player->HasAuraType(SPELL_AURA_MOD_SHAPESHIFT))
-        if (spellInfo->CheckShapeshift(player->GetShapeshiftForm()) == SPELL_FAILED_NOT_SHAPESHIFT)
-            player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
-
+    //
+    // Only once the cast can actually go: this used to run before the cooldown
+    // check, so a pick refused for the global cooldown still cost the druid its
+    // form - Travel Form on a flag run included.
     if (player->GetSpellHistory()->HasCooldown(resolvedSpellId) ||
         player->GetSpellHistory()->HasGlobalCooldown(spellInfo) ||
         player->IsNonMeleeSpellCast(false, false, true))
@@ -4705,6 +4719,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         failureReason = "cooldown_or_casting";
         return false;
     }
+
+    if (resolvedSpellId != 82419 && (player->GetClass() == CLASS_DRUID || player->GetClass() == CLASS_SHAMAN) && player->HasAuraType(SPELL_AURA_MOD_SHAPESHIFT))
+        if (spellInfo->CheckShapeshift(player->GetShapeshiftForm()) == SPELL_FAILED_NOT_SHAPESHIFT)
+            player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
 
     DruidShapeshiftMovementResumeState const shapeshiftMovementResume = CaptureDruidShapeshiftMovementResume(player, context, spellInfo);
 
@@ -4852,6 +4870,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // misselected one from the whisper log alone. This makes that branch
     // visible so the next test can tell them apart. Remove once confirmed.
     bool const isGapCloserDiagnosticSpell = IsGapCloserSpell(resolvedSpellId);
+    // A bot on a flag route - carrying, sent for a flag, or holding its flag
+    // room - never walks after a cast target. A refused cast just waits; the
+    // route is worth more than the spell.
+    bool const castMayMoveBot = !context.preserveFlagObjectiveMovement;
 
     if (!itemTarget && !player->IsWithinLOSInMap(target))
     {
@@ -4862,7 +4884,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             WhisperPlayerbotDiagnostic(player, diag.str());
         }
 
-        if (CanIssueFollowCommands(player))
+        if (castMayMoveBot && CanIssueFollowCommands(player))
         {
             if (shouldMoveBehindForEnemySpell)
                 IssueBehindTargetMeleeMovement(player, target);
@@ -4903,8 +4925,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         // Hunter exception: if ranged weapon Auto Shot is already valid, leave
         // movement untouched. DriveHunterKiteLoop owns both the ideal-range
         // pursuit and the final weapon-timer plant.
-        if (player->GetClass() == CLASS_HUNTER && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
-            IsHunterAutoShotBand(player, target))
+        if (!castMayMoveBot ||
+            (player->GetClass() == CLASS_HUNTER && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+                IsHunterAutoShotBand(player, target)))
         {
             // No class-side movement or Auto Shot toggle here.
         }
@@ -4949,7 +4972,11 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
         // Mirror reference-style spacing control for ranged casts: when too close,
         // immediately re-establish spell distance instead of repeatedly failing.
-        if (player->GetClass() == CLASS_HUNTER && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
+        if (!castMayMoveBot)
+        {
+            // On a flag route: no spacing dance.
+        }
+        else if (player->GetClass() == CLASS_HUNTER && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
         {
             IssueHunterDeadZoneRetreatMovement(player, target, "hunter_cast_too_close_retreat_no_follow");
         }
@@ -4970,7 +4997,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     if (!itemTarget && shouldMoveBehindForEnemySpell && IsBehindTargetRequiredAndMissing(player, target, spellInfo))
     {
-        if (CanIssueFollowCommands(player))
+        if (castMayMoveBot && CanIssueFollowCommands(player))
             IssueBehindTargetMeleeMovement(player, target);
 
         failureReason = "not_behind";
@@ -5086,7 +5113,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         {
             // If we cannot pay for the selected enemy spell, immediately
             // transition to melee pressure so bots do not idle while OOM.
-            if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && target && CanIssueFollowCommands(player))
+            if (castMayMoveBot && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && target && CanIssueFollowCommands(player))
             {
                 IssueMeleeApproachMovement(player, target);
                 // Close, but never swing, from stealth. A rogue waiting on the
@@ -5208,8 +5235,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         NotifyWandDiagnostic(player, target, "post_stationary_stop", resolvedSpellId);
     }
 
+    // A flag runner's slow on a chaser behind it turns to fire (orientation
+    // only while running, so the route spline is untouched), as does a carrier
+    // holding its flag room.
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
-        !context.preserveFlagObjectiveMovement && !player->isInFront(target))
+        (!context.preserveFlagObjectiveMovement || context.flagManeuver || context.flagCarrierHolding) &&
+        !player->isInFront(target))
     {
         bool const hasActiveMovementSpline = !player->IsStopped() ||
             (player->movespline && !player->movespline->Finalized());
@@ -5282,7 +5313,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         // destination floating or clipped into the ground, which reads as the
         // bot falling through the map after the leap lands. Re-ground it the
         // same way regular movement destinations already do.
-        Position const dest = BuildCollisionSafeDestination(player, player->GetFirstCollisionPosition(20.0f, player->GetOrientation()));
+        // The angle is relative to facing, so 0 is straight ahead. Blink drops
+        // this dest anyway (its explicit target mask has no DEST_LOCATION) and
+        // lands via TARGET_DEST_CASTER_FRONT_LEAP, the same raycast from facing.
+        Position const dest = BuildCollisionSafeDestination(player, player->GetFirstCollisionPosition(20.0f, 0.0f));
         castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
     }
     else if (resolvedSpellId == 89160 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && target)
@@ -5301,10 +5335,15 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     else if (resolvedSpellId == 81271 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
     {
         Unit* threat = player->GetVictim();
-        float const awayAngle = threat ? player->GetAbsoluteAngle(threat->GetPosition()) + static_cast<float>(M_PI) : player->GetOrientation();
+        // Unlike Blink, this spell lands on exactly the dest it is given, and
+        // GetFirstCollisionPosition's angle is relative to facing: turn the
+        // away-from-threat bearing into an offset (0 = straight ahead).
+        float const relativeAwayAngle = threat
+            ? player->ToRelativeAngle(player->GetAbsoluteAngle(threat->GetPosition()) + static_cast<float>(M_PI))
+            : 0.0f;
         // See the Blink comment above: re-ground the raycast destination so the
         // leap cannot land the warrior clipped into or floating above terrain.
-        Position dest = BuildCollisionSafeDestination(player, player->GetFirstCollisionPosition(20.0f, awayAngle));
+        Position dest = BuildCollisionSafeDestination(player, player->GetFirstCollisionPosition(20.0f, relativeAwayAngle));
         castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
     }
     // 82419 - Rehgar's Fury uses the same SPELL_EFFECT_JUMP_DEST mechanic as
@@ -5389,7 +5428,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             }
         }
 
-        if (castResult != SPELL_CAST_OK && !itemTarget && target && CanIssueFollowCommands(player))
+        if (castResult != SPELL_CAST_OK && castMayMoveBot && !itemTarget && target && CanIssueFollowCommands(player))
         {
             if (castResult == SPELL_FAILED_OUT_OF_RANGE)
             {
@@ -6212,15 +6251,31 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
             bool const stopsForHunterShot = spellInfo && player->GetClass() == CLASS_HUNTER && IsHunterCastTimeShot(player, spellInfo);
             bool const stopsForRecovery = resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT ||
                 resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
-            allowInstantSpell = spellInfo && spellInfo->CalcCastTime() <= 0 && !spellInfo->IsChanneled() &&
+            bool const breaksCarry = context.preserveFlagCarrierMovement && PvpCore::SpellWouldBreakFlagCarry(resolvedSpellId);
+            // A flag run's own move (Blink, a form, a slow on a chaser) was
+            // chosen FOR the run: it may leap, and it may turn to fire behind.
+            bool const flagRunManeuver = context.flagManeuver && spellInfo && spellInfo->CalcCastTime() <= 0 &&
+                !spellInfo->IsChanneled() && !breaksCarry &&
+                IsSpellReadyAtCurrentPosition(player, target, spellInfo, context.targetMode);
+            // A carrier waiting in its own flag room stops to cast anything that
+            // works from where it stands; it just never walks off for it.
+            bool const holdingCarrierCast = context.flagCarrierHolding && spellInfo && !repositionsCaster &&
+                !breaksCarry && !stopsForRecovery &&
+                IsSpellReadyAtCurrentPosition(player, target, spellInfo, context.targetMode);
+            allowInstantSpell = flagRunManeuver || holdingCarrierCast ||
+                (spellInfo && spellInfo->CalcCastTime() <= 0 && !spellInfo->IsChanneled() &&
                 !spellInfo->IsAutoRepeatRangedSpell() && !stopsForHunterShot && !stopsForRecovery && !repositionsCaster &&
                 resolvedSpellId != kRacialNightElfShadowmeldSpellId &&
                 (!context.preserveFlagCarrierMovement || !PvpCore::SpellWouldBreakFlagCarry(resolvedSpellId)) &&
                 (!context.preserveFlagObjectiveMovement ||
                     context.targetMode != PvpClassSpellContext::TargetMode::Enemy ||
                     (target && player->isInFront(target))) &&
-                IsSpellReadyAtCurrentPosition(player, target, spellInfo, context.targetMode);
+                IsSpellReadyAtCurrentPosition(player, target, spellInfo, context.targetMode));
         }
+        // A healthstone or potion goes down at a run: a flag route is no reason
+        // to die holding one.
+        else if (context.itemEntry && context.preserveFlagObjectiveMovement)
+            allowInstantSpell = true;
 
         if (!allowInstantSpell)
         {
@@ -6354,8 +6409,11 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 float const fleeDistance = std::max(1.0f,
                     context.movementFollowRange > 0.0f ? context.movementFollowRange : PvpCore::GetConfig().closeRange);
                 float const angleToTarget = player->GetAbsoluteAngle(movementTarget->GetPosition());
-                destination.RelocateOffset({ std::cos(angleToTarget + static_cast<float>(M_PI)) * fleeDistance,
-                    std::sin(angleToTarget + static_cast<float>(M_PI)) * fleeDistance, 0.0f, 0.0f });
+                // World space by hand: RelocateOffset would turn this offset by the
+                // bot's facing too, aiming it at away + facing (see
+                // TryIssueShadowWraithFleeMovement).
+                destination.Relocate(player->GetPositionX() + std::cos(angleToTarget + static_cast<float>(M_PI)) * fleeDistance,
+                    player->GetPositionY() + std::sin(angleToTarget + static_cast<float>(M_PI)) * fleeDistance, player->GetPositionZ());
                 if (RequiresStrictHumanPathing(player))
                 {
                     // If strict segment pathing fails to resolve, PathGenerator
@@ -6492,6 +6550,12 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
     {
         if (context.spellId == 783 && context.reason && std::string_view(context.reason) == "recovering from polymorph by travel-form reposition")
             RepositionDruidAfterTravelFormRecovery(player);
+        // Space a flag runner's form changes out: a slow it stands in comes
+        // back at once, and a doorway can read indoors and outdoors in turn.
+        if (context.flagManeuver)
+            if (SpellInfo const* maneuverInfo = sSpellMgr->GetSpellInfo(context.spellId);
+                maneuverInfo && maneuverInfo->HasAura(SPELL_AURA_MOD_SHAPESHIFT))
+                RegisterCasterSpellCooldown(player, kPlayerbotFlagRunFormShiftToken, kPlayerbotFlagRunFormShiftSpacing);
         // Record which spell, not just that something happened. Without the id
         // and the selector's own reason string, "cast_executed" cannot answer
         // the only question worth asking when a bot misbehaves: what did it

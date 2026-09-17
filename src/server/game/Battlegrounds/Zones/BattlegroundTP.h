@@ -206,7 +206,14 @@ class BattlegroundTP : public Battleground
         void StartingEventOpenDoors() override;
 
         /* BG Flags */
-        ObjectGuid GetFlagPickerGUID(int32 teamId) const override { return _flagKeepers[teamId];  }
+        // Callers through a Battleground pointer get the base default of -1
+        // ("any carrier"), so the index has to be checked like WS does.
+        ObjectGuid GetFlagPickerGUID(int32 teamId) const override
+        {
+            if (teamId == TEAM_ALLIANCE || teamId == TEAM_HORDE)
+                return _flagKeepers[teamId];
+            return ObjectGuid::Empty;
+        }
         void SetFlagPicker(ObjectGuid guid, TeamId teamId) { _flagKeepers[teamId] = guid; }
         void RespawnFlagAfterDrop(TeamId teamId);
         uint8 GetFlagState(TeamId teamId) const { return _flagState[teamId]; }
