@@ -574,7 +574,17 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
                 break;
             }
 
-            Player* receiver = ObjectAccessor::FindConnectedPlayerByName(to);
+            // A transient clone in the sender's match (battleground fill, a
+            // Violet Hold ally, a "Dark" mirror) plays under an internal name
+            // and is shown under its character-cache one - the name typed here.
+            // The name index never holds that, so the plain lookup finds nobody,
+            // or the clone's source character somewhere in the world, which is
+            // not the unit the sender is looking at. Ask the match first.
+            Player* receiver = nullptr;
+            if (Battleground* battleground = sender->GetBattleground())
+                receiver = battleground->FindTransientPlayerByDisplayName(to, sender->GetBGTeam());
+            if (!receiver)
+                receiver = ObjectAccessor::FindConnectedPlayerByName(to);
             if (!receiver || (lang != LANG_ADDON && !receiver->isAcceptWhispers() && receiver->GetSession()->HasPermission(rbac::RBAC_PERM_CAN_FILTER_WHISPERS) && !receiver->IsInWhisperWhiteList(sender->GetGUID())))
             {
                 SendPlayerNotFoundNotice(to);

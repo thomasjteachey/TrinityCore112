@@ -1789,6 +1789,29 @@ std::string Battleground::GetPlayerDisplayName(Player const* player)
     return name;
 }
 
+Player* Battleground::FindTransientPlayerByDisplayName(std::string_view name, uint32 preferredTeam) const
+{
+    Player* otherSide = nullptr;
+    for (auto const& [guid, participant] : m_Players)
+    {
+        Player* player = ObjectAccessor::FindPlayer(guid);
+        if (!player || !player->GetSession() || !player->GetSession()->IsTransientPlayerSession())
+            continue;
+
+        std::string displayName;
+        if (!sCharacterCache->GetCharacterNameByGuid(guid, displayName) || !StringEqualI(displayName, name))
+            continue;
+
+        if (participant.Team == preferredTeam)
+            return player;
+
+        if (!otherSide)
+            otherSide = player;
+    }
+
+    return otherSide;
+}
+
 void Battleground::BuildPvPLogDataPacket(WorldPacket& data)
 {
     uint8 type = (isArena() ? 1 : 0);

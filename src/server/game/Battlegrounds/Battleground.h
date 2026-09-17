@@ -441,6 +441,14 @@ class TC_GAME_API Battleground
         // addon payload must come from here or the client can neither show it
         // nor /target it.
         static std::string GetPlayerDisplayName(Player const* player);
+        // The other direction: the transient clone seated in this match that
+        // clients know as `name`. Nothing indexes that name - the name map holds
+        // the internal one, and the cache entry has no name index because the
+        // clone's source character usually owns the name - so a by-name request
+        // aimed at a clone (a whisper) finds nobody, or the source out in the
+        // world, unless it asks the roster. Compared without case: client names
+        // arrive normalized. A clone on `preferredTeam` wins a tie.
+        Player* FindTransientPlayerByDisplayName(std::string_view name, uint32 preferredTeam) const;
         void ConfigureCustomGame(BattlegroundCustomRules const& rules) { m_IsCustomGame = true; m_CustomRules = rules; }
         void SetCustomGameBotOnlyPreparation(bool enabled) { m_CustomGameBotOnlyPreparation = enabled; }
         bool HasCustomGameBotOnlyPreparation() const { return m_CustomGameBotOnlyPreparation; }

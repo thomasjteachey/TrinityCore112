@@ -895,9 +895,19 @@ public:
 
         if (command == "drop")
         {
+            // An order to a teammate. Now that a clone can be whispered by the
+            // name players see, anyone could otherwise give it - including an
+            // opponent telling the bot carrying their own flag to let go of it.
+            // Both must be seated in the same match on the same side; a GM in
+            // GM mode may order any bot in a match.
+            Battleground* battleground = receiver->GetBattleground();
+            uint32 const botTeam = battleground ? battleground->GetPlayerTeam(receiver->GetGUID()) : 0;
+            bool const fromTeammate = botTeam && battleground->GetPlayerTeam(sender->GetGUID()) == botTeam;
+            if (!battleground || (!fromTeammate && !sender->IsGameMaster()))
+                return;
+
             bool const wasFlagCarrier = playerbot::PvpCore::IsBattlegroundFlagCarrier(receiver);
-            if (Battleground* battleground = receiver->GetBattleground())
-                battleground->EventPlayerDroppedFlag(receiver);
+            battleground->EventPlayerDroppedFlag(receiver);
 
             if (wasFlagCarrier)
                 playerbot::BattlegroundTacticalActions::DelayFlagPickup(receiver, 5 * IN_MILLISECONDS);
