@@ -58,7 +58,9 @@ namespace
 {
     bool s_enabled = false;
     uint32 s_questId = 60001;
-    uint32 s_fenceEntry = 900201;
+    // 900202, not 900201: Grix Warbrand moved onto 900201 when the Custom Games
+    // host took his old 900001, and that overwrote the fence that lived there.
+    uint32 s_fenceEntry = 900202;
     uint32 s_contractStacks = 15;
     uint32 s_stacksPerTier = 5;
     uint32 s_maxTiers = 7;
@@ -162,7 +164,7 @@ namespace
     {
         s_enabled = sConfigMgr->GetBoolDefault("Centurion.Notoriety.Enable", false);
         s_questId = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.QuestId", 60001)));
-        s_fenceEntry = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.FenceCreatureId", 900201)));
+        s_fenceEntry = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.FenceCreatureId", 900202)));
         s_contractStacks = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.ContractStacks", 15), 1, 255));
         s_stacksPerTier = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.StacksPerTier", 5), 1, 255));
         s_maxTiers = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Notoriety.MaxTiers", 7), 0, 100));

@@ -3872,7 +3872,7 @@ Centurion.Bounty.GuardIntervalSeconds = 45
 
 Centurion.Notoriety.Enable                = 0
 Centurion.Notoriety.QuestId               = 60001
-Centurion.Notoriety.FenceCreatureId       = 900201
+Centurion.Notoriety.FenceCreatureId       = 900202
 
 #    Marks needed before a contract is written, and how many more raise the
 #    payout by one tier. 15 + 7*5 = 50, which is the aura's own stack ceiling.
