@@ -66,6 +66,22 @@ void WorldSession::HandleClientCastFlags(WorldPacket& recvPacket, uint8 castFlag
     }
 }
 
+namespace
+{
+    // A first aid bandage is only recognisable by the spell it casts. The item rows are no help:
+    // the classic ranks sit on subclass 5 where the later ones use ITEM_SUBCLASS_BANDAGE, and
+    // Powerful Anti-Venom shares their First Aid requirement without being a bandage at all.
+    bool IsFirstAidBandage(ItemTemplate const* proto)
+    {
+        for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+            if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(proto->Spells[i].SpellId))
+                if (spellInfo->Mechanic == MECHANIC_BANDAGE)
+                    return true;
+
+        return false;
+    }
+}
+
 void WorldSession::HandleUseItemOpcode(WorldPacket& recvPacket)
 {
     /// @todo add targets.read() check
@@ -134,9 +150,10 @@ void WorldSession::HandleUseItemOpcode(WorldPacket& recvPacket)
     // only allow conjured consumable, bandage, poisons (all should have the 2^21 item flag set in DB)
     // Blizzard only ever set that flag on the ranks that were current once arenas existed, so the
     // classic conjured items carry no flag at all: healthstones below Major, the first three mana
-    // gems, every conjured food and water. Read the conjured flag itself as permission as well.
+    // gems, every conjured food and water, and every bandage below Heavy Runecloth. Read the
+    // conjured flag and the bandage mechanic as permission as well.
     if (proto->Class == ITEM_CLASS_CONSUMABLE && !proto->HasFlag(ITEM_FLAG_IGNORE_DEFAULT_ARENA_RESTRICTIONS)
-        && !proto->IsConjuredConsumable() && pUser->InArena())
+        && !proto->IsConjuredConsumable() && !IsFirstAidBandage(proto) && pUser->InArena())
     {
         pUser->SendEquipError(EQUIP_ERR_NOT_DURING_ARENA_MATCH, pItem, nullptr);
         return;
