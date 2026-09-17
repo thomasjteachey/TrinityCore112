@@ -17922,8 +17922,14 @@ namespace playerbot
         g_PveConfig.rebirthZoneBanded = sConfigMgr->GetBoolDefault("Playerbot.Pve.Rebirth.ZoneBanded", true);
         g_PveConfig.guildName = sConfigMgr->GetStringDefault("Playerbot.Pve.GuildName", "AI Uprising");
         g_PveConfig.veteranBotCount = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.Rebirth.Veterans", 20)));
-        // Read from the population manager's own target so a count means what it says.
-        g_PveConfig.populationTarget = uint32(std::max(1, sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.TargetMax", 256)));
+        // Read from the population manager's own target so a count means what it says,
+        // unless the fleet is pinned. This share decides every bot's role for life and
+        // the band homes are dealt out from whoever is not a veteran, so lowering
+        // TargetMax unpinned turns veterans into locals (band-reset on the spot) and
+        // re-deals most homes at the next restart.
+        int32 const veteranFleetSize = sConfigMgr->GetIntDefault("Playerbot.Pve.Rebirth.VeteranFleetSize", 0);
+        g_PveConfig.populationTarget = uint32(std::max(1, veteranFleetSize > 0 ? veteranFleetSize :
+            sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.TargetMax", 256)));
         g_PveConfig.declineGroupInvites = sConfigMgr->GetBoolDefault("Playerbot.Pve.DeclineGroupInvites", false);
         g_PveConfig.hardcoreLootChestEntry = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Hardcore.FullLoot.ChestGameObjectId", 0)));
         g_PveConfig.hardcoreChestDespawnSeconds = uint32(std::max(30, sConfigMgr->GetIntDefault("Centurion.Hardcore.FullLoot.ChestDespawnSeconds", 600)));
@@ -19627,6 +19633,14 @@ namespace playerbot
     {
         if (IsWorldPopulationStarterBot(characterLowGuid, level))
             return 0;
+
+        // Guardians and veterans before any banded local. A target below the
+        // roster is there to shed locals: the prune order already logs those out
+        // first, but without this a restart would refill the lower target in hash
+        // order and leave a share of the posts and the sixties offline.
+        uint64 const rawGuid = ObjectGuid::Create<HighGuid::Player>(characterLowGuid).GetRawValue();
+        if (GetGuardianZoneId(rawGuid) || IsLocalVeteranGuid(rawGuid))
+            return 3;
 
         return homeZoneHasHuman ? 2 : 1;
     }

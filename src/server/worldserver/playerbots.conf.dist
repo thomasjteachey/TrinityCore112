@@ -257,6 +257,9 @@ Playerbot.RandomPopulation.TargetMin = 0
 #    Playerbot.RandomPopulation.TargetMax
 #        Description: Maximum target number of online random bots maintained by the population manager.
 #                     If greater than TargetMin, rebalance deterministically rotates target in range.
+#                     With DynamicWorldLoad on, zone guardians and veterans log in first and banded
+#                     locals log out first, so a lower target sheds locals. Pin
+#                     Playerbot.Pve.Rebirth.VeteranFleetSize before lowering it.
 #        Default:     0
 
 Playerbot.RandomPopulation.TargetMax = 0
@@ -1034,6 +1037,18 @@ Playerbot.Pve.Rebirth.ZoneBanded = 1
 #        Default:     20
 
 Playerbot.Pve.Rebirth.Veterans = 20
+
+#    Playerbot.Pve.Rebirth.VeteranFleetSize
+#        Description: The fleet size Playerbot.Pve.Rebirth.Veterans is turned into a share of.
+#                     0 uses Playerbot.RandomPopulation.TargetMax. The share picks each bot's
+#                     role by guid and the band homes are dealt out from the bots that are not
+#                     veterans, so changing the fleet reshuffles both: bots that stop being
+#                     veterans are band-reset on the spot, and most locals get new homes (and
+#                     resets) at the next restart. Pin this to the current TargetMax before
+#                     lowering the population target.
+#        Default:     0 - (Use Playerbot.RandomPopulation.TargetMax)
+
+Playerbot.Pve.Rebirth.VeteranFleetSize = 0
 
 #    Playerbot.Pve.GuildName
 #        Description: Guild every managed playerbot is put into. It is created around the first

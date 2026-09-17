@@ -379,7 +379,8 @@ public:
     static bool IsWorldPopulationStarterBot(uint32 characterLowGuid, uint8 level);
 
     // Login preference for an offline character: 0=exclude (a starter bot),
-    // 1=ordinary, 2=preferred (a local whose home currently contains a human).
+    // 1=ordinary, 2=preferred (a local whose home currently contains a human),
+    // 3=first (a zone guardian or a veteran, so a lower target sheds locals).
     static uint8 GetWorldPopulationLoginPriority(uint32 characterLowGuid, uint8 level, bool homeZoneHasHuman);
     static uint32 GetWorldPopulationHomeZone(uint32 characterLowGuid);
     static bool IsWorldPopulationStarterZone(uint32 zoneId);
