@@ -79,6 +79,18 @@ bool IsChromieWhisperFacade(Player const* player)
     return name == "Chromie" || name == "Chromi";
 }
 
+// The two players are seated in the same battleground or arena instance. Used
+// to tell an order given inside a match, by somebody playing it, from a
+// whisper out in the world.
+bool SharesMatch(Player const* sender, Player const* receiver)
+{
+    if (!sender || !receiver)
+        return false;
+
+    Battleground const* battleground = sender->GetBattleground();
+    return battleground && receiver->GetBattleground() == battleground;
+}
+
 char const* ToString(playerbot::BattlegroundState state)
 {
     switch (state)
@@ -871,8 +883,14 @@ public:
         if (!receiverIsPlayerbot || senderIsPlayerbot || sender == receiver)
             return;
 
-        // Bots ignore tournament characters, whispers included.
-        if (Tournament::IsTournamentCharacter(sender) && !sender->IsGameMaster())
+        // Bots ignore tournament characters - out in the world. Inside a match
+        // the two modes are seated together on purpose: tournament characters
+        // queue in their own pool and the fill deals bots into it, so a bot
+        // that answers nothing at all to the side it is playing for reads as
+        // broken. Tournament::AreKeptFromFighting draws the same line, exempting
+        // battleground and arena maps from the separation.
+        if (Tournament::IsTournamentCharacter(sender) && !sender->IsGameMaster() &&
+            !SharesMatch(sender, receiver))
             return;
 
         std::string command = msg;
@@ -889,11 +907,10 @@ public:
             return static_cast<char>(std::tolower(character));
         });
 
-        // PvE companion orders ("follow", "stay", "attack", "passive", "come",
-        // "dismiss") take precedence over the diagnostic dump below.
-        if (playerbot::PveManager::HandleWhisperCommand(sender, receiver, command))
-            return;
-
+        // A battleground order, and it comes before the companion orders below:
+        // "drop" is given inside a match by whoever is playing it, while the PvE
+        // companion handler answers anybody who is not that bot's own master
+        // with a taunt and swallows the line.
         if (command == "drop")
         {
             // An order to a teammate. Now that a clone can be whispered by the
@@ -901,21 +918,43 @@ public:
             // opponent telling the bot carrying their own flag to let go of it.
             // Both must be seated in the same match on the same side; a GM in
             // GM mode may order any bot in a match.
+            //
+            // Every refusal answers. A silent one is indistinguishable from a
+            // bot that ignored the order, and the whisper can reach a copy's
+            // source character out in the world instead of the copy playing the
+            // match - which is exactly what the first reply below names.
             Battleground* battleground = receiver->GetBattleground();
-            uint32 const botTeam = battleground ? battleground->GetPlayerTeam(receiver->GetGUID()) : 0;
-            bool const fromTeammate = botTeam && battleground->GetPlayerTeam(sender->GetGUID()) == botTeam;
-            if (!battleground || (!fromTeammate && !sender->IsGameMaster()))
+            if (!battleground)
+            {
+                receiver->Whisper("I am not in a battleground.", LANG_UNIVERSAL, sender);
                 return;
+            }
 
-            bool const wasFlagCarrier = playerbot::PvpCore::IsBattlegroundFlagCarrier(receiver);
+            uint32 const botTeam = battleground->GetPlayerTeam(receiver->GetGUID());
+            bool const fromTeammate = botTeam && battleground->GetPlayerTeam(sender->GetGUID()) == botTeam;
+            if (!fromTeammate && !sender->IsGameMaster())
+            {
+                receiver->Whisper("Give that order to your own side.", LANG_UNIVERSAL, sender);
+                return;
+            }
+
+            if (!playerbot::PvpCore::IsBattlegroundFlagCarrier(receiver))
+            {
+                receiver->Whisper("I am not carrying a flag.", LANG_UNIVERSAL, sender);
+                return;
+            }
+
             battleground->EventPlayerDroppedFlag(receiver);
+            playerbot::BattlegroundTacticalActions::DelayFlagPickup(receiver, 5 * IN_MILLISECONDS);
 
-            if (wasFlagCarrier)
-                playerbot::BattlegroundTacticalActions::DelayFlagPickup(receiver, 5 * IN_MILLISECONDS);
-
-            receiver->Whisper("Flag drop requested.", LANG_UNIVERSAL, sender);
+            receiver->Whisper("Flag dropped.", LANG_UNIVERSAL, sender);
             return;
         }
+
+        // PvE companion orders ("follow", "stay", "attack", "passive", "come",
+        // "dismiss") take precedence over the diagnostic dump below.
+        if (playerbot::PveManager::HandleWhisperCommand(sender, receiver, command))
+            return;
 
         // Everything below dumps the bot's internals - unit-state flags, spline
         // indices, motion targets, queue slots and the engage verdict. That is a
@@ -960,6 +999,7 @@ public:
             { "lifecycle", playerbotPvpLifecycleTable },
             { "forcequeue", HandlePlayerbotPvpForceQueueCurrentCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
             { "movediag", HandlePlayerbotPvpMoveDiagCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
+            { "ctf", HandlePlayerbotPvpCtfCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
         };
 
         static ChatCommandTable playerbotRandomPopulationTable =
@@ -999,7 +1039,6 @@ public:
     }
 
     static bool HandlePlayerbotPvpLifecycleSnapshotCommand(ChatHandler* handler)
-            { "ctf", HandlePlayerbotPvpCtfCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
     {
         if (!handler)
             return false;
@@ -1013,6 +1052,37 @@ public:
         handler->PSendSysMessage(" - noLifecycleHooksActive: " UI64FMTD, snapshot.noLifecycleHooksActive);
         handler->PSendSysMessage(" - battlegroundLifecycleExecuted: " UI64FMTD, snapshot.battlegroundLifecycleExecuted);
         handler->PSendSysMessage(" - arenaLifecycleExecuted: " UI64FMTD, snapshot.arenaLifecycleExecuted);
+        return true;
+    }
+
+    // Warsong Gulch / Twin Peaks team play: each side's flag runner, escorts,
+    // defenders and any handoff under way. Select a bot to see its own orders.
+    static bool HandlePlayerbotPvpCtfCommand(ChatHandler* handler)
+    {
+        if (!handler)
+            return false;
+
+        Player* player = handler->GetPlayer();
+        if (!player)
+            return false;
+
+        Player* selected = handler->getSelectedPlayer();
+        Player* observer = selected && selected->GetBattleground() ? selected : player;
+        for (std::string const& line : playerbot::CtfCoordinator::DescribeTeams(observer))
+            handler->PSendSysMessage("%s", line.c_str());
+
+        playerbot::CtfBotOrders orders;
+        if (selected && selected != player && playerbot::CtfCoordinator::GetOrders(selected, orders))
+        {
+            handler->PSendSysMessage("%s: %s%s, pickup %s%s%s, handoff %s",
+                selected->GetName().c_str(), playerbot::GetCtfRoleName(orders.role),
+                orders.isDesignatedRunner ? " (designated runner)" : "",
+                orders.pickupGuid.IsEmpty() ? "none" : (orders.pickupIsReturn ? "our flag" : "their flag"),
+                orders.pickupIsOpportunistic ? " (standing near it)" : "",
+                orders.pickupNearby ? " (in reach)" : "",
+                orders.handoffGive ? "giving" : (orders.handoffReceive ? "receiving" : "none"));
+        }
+
         return true;
     }
 
@@ -1055,37 +1125,6 @@ public:
             std::sort(bots.begin(), bots.end(), [player](Player const* left, Player const* right)
             {
                 return player->GetDistance(left) < player->GetDistance(right);
-    // Warsong Gulch / Twin Peaks team play: each side's flag runner, escorts,
-    // defenders and any handoff under way. Select a bot to see its own orders.
-    static bool HandlePlayerbotPvpCtfCommand(ChatHandler* handler)
-    {
-        if (!handler)
-            return false;
-
-        Player* player = handler->GetPlayer();
-        if (!player)
-            return false;
-
-        Player* selected = handler->getSelectedPlayer();
-        Player* observer = selected && selected->GetBattleground() ? selected : player;
-        for (std::string const& line : playerbot::CtfCoordinator::DescribeTeams(observer))
-            handler->PSendSysMessage("%s", line.c_str());
-
-        playerbot::CtfBotOrders orders;
-        if (selected && selected != player && playerbot::CtfCoordinator::GetOrders(selected, orders))
-        {
-            handler->PSendSysMessage("%s: %s%s, pickup %s%s%s, handoff %s",
-                selected->GetName().c_str(), playerbot::GetCtfRoleName(orders.role),
-                orders.isDesignatedRunner ? " (designated runner)" : "",
-                orders.pickupGuid.IsEmpty() ? "none" : (orders.pickupIsReturn ? "our flag" : "their flag"),
-                orders.pickupIsOpportunistic ? " (standing near it)" : "",
-                orders.pickupNearby ? " (in reach)" : "",
-                orders.handoffGive ? "giving" : (orders.handoffReceive ? "receiving" : "none"));
-        }
-
-        return true;
-    }
-
             });
         }
 
