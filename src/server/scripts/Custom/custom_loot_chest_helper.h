@@ -57,7 +57,10 @@ public:
     void AddMoney(uint32 copper) { _money += copper; }
     uint32 GetMoney() const { return _money; }
 
-    GameObject* Summon() const;
+    // heightOffset lifts the chest that far above the ground it lands on, so a
+    // death that fills several chests can stack them instead of spawning them
+    // inside each other.
+    GameObject* Summon(float heightOffset = 0.0f) const;
 
 private:
     LootItem CreateLootItem(uint32 itemId, uint8 count, uint32 randomSuffix, int32 randomPropertyId) const;

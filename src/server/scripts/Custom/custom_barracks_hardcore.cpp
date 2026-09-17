@@ -1956,9 +1956,9 @@ namespace BarracksHardcore
         // dying with a full pack of looted weapons and armour had everything past
         // the eighteenth row left on the corpse where nothing could reach it.
         //
-        // So caches roll: fill one, start another. They are summoned on the same
-        // spot on purpose - a pile of chests where somebody exploded reads better
-        // than a tidy ring, and bots find them by proximity either way.
+        // So caches roll: fill one, start another. They stack on the spot, each
+        // one on top of the last - summoned at the same height they sat inside
+        // each other and a pile of four read as a single chest.
         std::vector<CustomLootChests::PlayerChestBuilder> chests;
         chests.emplace_back(victim, s_chestEntry, Seconds(s_chestDespawnSeconds));
 
@@ -2082,10 +2082,14 @@ namespace BarracksHardcore
         // still leaves no chest behind.
         uint32 chestsSpawned = 0;
         uint32 itemsChested = 0;
+        // The cache model (TreasureChest01, stock display 259) is 1.3 yards tall
+        // with its lid shut, so each further cache sits on the lid of the one
+        // below it.
+        constexpr float cacheStackHeight = 1.3f;
         for (CustomLootChests::PlayerChestBuilder const& cache : chests)
         {
             itemsChested += cache.GetItemCount();
-            if (cache.HasLoot() && cache.Summon())
+            if (cache.HasLoot() && cache.Summon(float(chestsSpawned) * cacheStackHeight))
                 ++chestsSpawned;
         }
 

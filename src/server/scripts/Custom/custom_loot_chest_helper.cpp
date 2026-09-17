@@ -168,13 +168,14 @@ namespace
     }
 }
 
-GameObject* PlayerChestBuilder::Summon() const
+GameObject* PlayerChestBuilder::Summon(float heightOffset) const
 {
     if (!_player || !_chestEntry || (_items.empty() && !_money))
         return nullptr;
 
     Position spot = _player->GetPosition();
     ResolveChestGround(_player, spot);
+    spot.m_positionZ += heightOffset;
 
     GameObject* chest = _player->SummonGameObject(_chestEntry, spot, QuaternionData(), _despawnTime, GO_SUMMON_TIMED_DESPAWN);
     if (!chest)
