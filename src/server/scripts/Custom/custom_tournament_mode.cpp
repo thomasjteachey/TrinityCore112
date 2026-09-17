@@ -56,12 +56,13 @@ public:
     // test is two set lookups and returns at once for everyone else.
     void OnUpdate(Player* player, uint32 /*diff*/) override
     {
-        // The PvP reagent waiver (every character) has to be visible to the
-        // client, which checks reagents before it sends a cast. Follow it as it
-        // comes and goes - battleground or arena entry and exit, duel start and
-        // end, and InitStatsForLevel zeroing the field on a level-up. Two field
-        // reads when nothing changed.
-        bool const waived = Tournament::IsFreeReagentContext(player);
+        // The reagent waiver (PvP for every character, always for tournament
+        // characters) has to be visible to the client, which checks reagents
+        // before it sends a cast. Follow it as it comes and goes - battleground
+        // or arena entry and exit, duel start and end, a mode change, and
+        // InitStatsForLevel zeroing the field on a level-up. Two field reads when
+        // nothing changed.
+        bool const waived = Tournament::HasReagentWaiver(player);
         bool const shown = player->GetUInt32Value(PLAYER_NO_REAGENT_COST_1) == 0xFFFFFFFF;
         if (waived != shown)
             player->UpdateNoReagentCostMask();

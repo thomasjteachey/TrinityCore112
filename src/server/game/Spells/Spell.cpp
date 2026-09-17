@@ -7951,8 +7951,9 @@ SpellCastResult Spell::CheckItems(uint32* param1 /*= nullptr*/, uint32* param2 /
                         uint32 const ammo = player->GetUInt32Value(PLAYER_AMMO_ID);
                         if (!ammo)
                         {
-                            // Requires No Ammo, or a PvP ammunition waiver
-                            if (player->HasAura(46699) || Tournament::IsFreeReagentContext(player))
+                            // Requires No Ammo. The PvP and tournament waivers only
+                            // stop ammunition being used up (Spell::TakeAmmo).
+                            if (player->HasAura(46699))
                                 break;                      // skip other checks
 
                             return SPELL_FAILED_NO_AMMO;

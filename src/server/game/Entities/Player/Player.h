@@ -1224,7 +1224,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void SyncUnarmedWaiverPassives();
         bool CanNoReagentCast(SpellInfo const* spellInfo) const;
         // Rebuilds PLAYER_NO_REAGENT_COST from SPELL_AURA_NO_REAGENT_USE auras, or
-        // fills it while reagents are waived (Tournament::IsFreeReagentContext).
+        // fills it while reagents are waived (Tournament::HasReagentWaiver).
         void UpdateNoReagentCostMask();
         bool HasItemOrGemWithIdEquipped(uint32 item, uint32 count, uint8 except_slot = NULL_SLOT) const;
         bool HasItemWithLimitCategoryEquipped(uint32 limitCategory, uint32 count, uint8 except_slot = NULL_SLOT) const;

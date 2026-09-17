@@ -205,9 +205,13 @@ namespace Tournament
 
     // --- all characters ---------------------------------------------------
 
-    // Reagents and ammunition are not consumed (or required) in battlegrounds,
-    // arenas and duels in progress (Centurion.Pvp.WaiveReagentsAndAmmo).
+    // Battlegrounds, arenas and duels in progress (Centurion.Pvp.WaiveReagentsAndAmmo):
+    // reagents are neither consumed nor required there, and ammunition is not
+    // consumed (it must still be equipped).
     bool IsFreeReagentContext(Player const* player);
+    // Whether the character's reagents are waived right now: in that context, and
+    // anywhere for a tournament character (Centurion.Tournament.WaiveReagents).
+    bool HasReagentWaiver(Player const* player);
     // The reagent half, per spell: combat spells only - never crafting,
     // enchanting, item creation, portals, teleports or summons.
     bool IsReagentWaived(Player const* player, SpellInfo const* spellInfo);

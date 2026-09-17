@@ -5038,6 +5038,15 @@ Centurion.Classic.PetHappinessDecay = 0
 #                     (the pet's owner decides).
 #        Default:     0 - (Disabled, as on Legionnaire+)
 #
+#    Centurion.Tournament.WaiveReagents
+#        Description: Tournament characters cast combat spells without reagents everywhere, as
+#                     Centurion.Pvp.WaiveReagentsAndAmmo lets everyone do in battlegrounds, arenas
+#                     and duels. Crafting, enchanting, item creation, portals, teleports and
+#                     summoning rituals still need their reagents; ammunition follows
+#                     ConsumeAmmo above.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+#
 #    Centurion.Tournament.ResetDuelCooldowns
 #    Centurion.Tournament.ResetDuelHealthMana
 #        Description: ResetDuelCooldowns / ResetDuelHealthMana for any duel with a tournament
@@ -5081,6 +5090,7 @@ Centurion.Tournament.AlwaysMaxSkillForLevel = 1
 Centurion.Tournament.DeathSicknessLevel = 61
 Centurion.Tournament.ConsumeAmmo = 0
 Centurion.Tournament.PetHappinessDecay = 0
+Centurion.Tournament.WaiveReagents = 1
 Centurion.Tournament.ResetDuelCooldowns = 1
 Centurion.Tournament.ResetDuelHealthMana = 1
 Centurion.Tournament.AllowedLootObjects = ""

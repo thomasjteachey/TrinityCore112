@@ -26985,7 +26985,8 @@ bool Player::IsWeaponRequirementWaived(SpellInfo const* spellInfo) const
 bool Player::CanNoReagentCast(SpellInfo const* spellInfo) const
 {
     // Combat spells cost no reagents in battlegrounds, arenas and duels in
-    // progress (Centurion.Pvp.WaiveReagentsAndAmmo). This covers both the
+    // progress (Centurion.Pvp.WaiveReagentsAndAmmo), and never for a tournament
+    // character (Centurion.Tournament.WaiveReagents). This covers both the
     // requirement (Spell::CheckItems) and the consumption (Spell::TakeReagents).
     if (Tournament::IsReagentWaived(this, spellInfo))
         return true;
@@ -27013,7 +27014,7 @@ bool Player::CanNoReagentCast(SpellInfo const* spellInfo) const
 void Player::UpdateNoReagentCostMask()
 {
     flag96 mask;
-    if (Tournament::IsFreeReagentContext(this))
+    if (Tournament::HasReagentWaiver(this))
         mask = flag96(0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
     else
         for (AuraEffect const* effect : GetAuraEffectsByType(SPELL_AURA_NO_REAGENT_USE))

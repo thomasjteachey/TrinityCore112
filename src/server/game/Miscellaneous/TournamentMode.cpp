@@ -62,6 +62,7 @@ namespace
     {
         bool Enabled = false;
         bool WaiveReagents = false;
+        bool TournamentWaiveReagents = true;
         uint8 StartLevel = 60;
         uint32 QueueMinLevel = 60;
         bool HasHome = false;
@@ -157,6 +158,7 @@ void LoadConfig()
     Settings loaded;
     loaded.Enabled = sConfigMgr->GetBoolDefault("Centurion.Tournament.Enable", false);
     loaded.WaiveReagents = sConfigMgr->GetBoolDefault("Centurion.Pvp.WaiveReagentsAndAmmo", false);
+    loaded.TournamentWaiveReagents = sConfigMgr->GetBoolDefault("Centurion.Tournament.WaiveReagents", true);
     loaded.StartLevel = uint8(std::clamp<int32>(sConfigMgr->GetIntDefault("Centurion.Tournament.StartLevel", 60), 1, STRONG_MAX_LEVEL));
     loaded.QueueMinLevel = uint32(std::max<int32>(1, sConfigMgr->GetIntDefault("Centurion.Tournament.QueueMinLevel", 60)));
 
@@ -1043,9 +1045,17 @@ bool IsFreeReagentContext(Player const* player)
     return player->duel && player->duel->State == DUEL_STATE_IN_PROGRESS;
 }
 
+bool HasReagentWaiver(Player const* player)
+{
+    if (Config.TournamentWaiveReagents && IsTournamentCharacter(player))
+        return true;
+
+    return IsFreeReagentContext(player);
+}
+
 bool IsReagentWaived(Player const* player, SpellInfo const* spellInfo)
 {
-    if (!spellInfo || !IsFreeReagentContext(player))
+    if (!spellInfo || !HasReagentWaiver(player))
         return false;
 
     // Combat spells only. The waiver is there so a fight is not decided by who
