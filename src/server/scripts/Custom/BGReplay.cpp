@@ -531,7 +531,7 @@ namespace
 
             ReplayActor actor;
             actor.OriginalGuid = player->GetGUID();
-            actor.Name = player->GetName();
+            actor.Name = Battleground::GetPlayerDisplayName(player);
             actor.Race = player->GetRace();
             actor.Class = player->GetClass();
             actor.Gender = uint8(player->GetGender());

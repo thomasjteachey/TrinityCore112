@@ -435,6 +435,12 @@ class TC_GAME_API Battleground
         // the free-slot queue and the displacement-on-invite path all ask this
         // so the two kinds of bot are treated alike. A null session is not a bot.
         bool IsBotParticipantSession(WorldSession const* session) const;
+        // The name clients know a participant by. A transient clone (bot fill,
+        // "Dark" mirror) plays under an internal "Obcm..." Player name and is
+        // shown under the one in the character cache, so any name sent in an
+        // addon payload must come from here or the client can neither show it
+        // nor /target it.
+        static std::string GetPlayerDisplayName(Player const* player);
         void ConfigureCustomGame(BattlegroundCustomRules const& rules) { m_IsCustomGame = true; m_CustomRules = rules; }
         void SetCustomGameBotOnlyPreparation(bool enabled) { m_CustomGameBotOnlyPreparation = enabled; }
         bool HasCustomGameBotOnlyPreparation() const { return m_CustomGameBotOnlyPreparation; }

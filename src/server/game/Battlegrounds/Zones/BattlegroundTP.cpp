@@ -196,10 +196,10 @@ std::string BattlegroundTP::BuildCTFFlagFullPayload(Player const* viewer) const
 
     if (showAllianceFlag && _flagState[TEAM_ALLIANCE] == BG_TP_FLAG_STATE_ON_PLAYER)
         if (Player* carrier = ObjectAccessor::FindPlayer(_flagKeepers[TEAM_ALLIANCE]))
-            allianceCarrier = carrier->GetName();
+            allianceCarrier = GetPlayerDisplayName(carrier);
     if (showHordeFlag && _flagState[TEAM_HORDE] == BG_TP_FLAG_STATE_ON_PLAYER)
         if (Player* carrier = ObjectAccessor::FindPlayer(_flagKeepers[TEAM_HORDE]))
-            hordeCarrier = carrier->GetName();
+            hordeCarrier = GetPlayerDisplayName(carrier);
 
     float x = 0.0f;
     float y = 0.0f;
@@ -542,7 +542,7 @@ void BattlegroundTP::EventPlayerClickedOnFlag(Player* player, GameObject* gameOb
         float x = player->GetPositionX();
         float y = player->GetPositionY();
         Map2ZoneCoordinates(x, y, 5031);
-        SendCTFFlagAddonMessage(std::string("A:PICKUP:") + player->GetName() + ":" + FormatCTFCoord(x / 100.0f) + ":" + FormatCTFCoord(y / 100.0f));
+        SendCTFFlagAddonMessage(std::string("A:PICKUP:") + GetPlayerDisplayName(player) + ":" + FormatCTFCoord(x / 100.0f) + ":" + FormatCTFCoord(y / 100.0f));
         BroadcastCTFFlagFullState();
 
         if (GetFlagState(TEAM_HORDE) != BG_TP_FLAG_STATE_ON_BASE)
@@ -569,7 +569,7 @@ void BattlegroundTP::EventPlayerClickedOnFlag(Player* player, GameObject* gameOb
         float x = player->GetPositionX();
         float y = player->GetPositionY();
         Map2ZoneCoordinates(x, y, 5031);
-        SendCTFFlagAddonMessage(std::string("H:PICKUP:") + player->GetName() + ":" + FormatCTFCoord(x / 100.0f) + ":" + FormatCTFCoord(y / 100.0f));
+        SendCTFFlagAddonMessage(std::string("H:PICKUP:") + GetPlayerDisplayName(player) + ":" + FormatCTFCoord(x / 100.0f) + ":" + FormatCTFCoord(y / 100.0f));
         BroadcastCTFFlagFullState();
 
         if (GetFlagState(TEAM_ALLIANCE) != BG_TP_FLAG_STATE_ON_BASE)
@@ -621,7 +621,7 @@ void BattlegroundTP::EventPlayerClickedOnFlag(Player* player, GameObject* gameOb
             float x = player->GetPositionX();
             float y = player->GetPositionY();
             Map2ZoneCoordinates(x, y, 5031);
-            SendCTFFlagAddonMessage(std::string("A:PICKUP:") + player->GetName() + ":" + FormatCTFCoord(x / 100.0f) + ":" + FormatCTFCoord(y / 100.0f));
+            SendCTFFlagAddonMessage(std::string("A:PICKUP:") + GetPlayerDisplayName(player) + ":" + FormatCTFCoord(x / 100.0f) + ":" + FormatCTFCoord(y / 100.0f));
             BroadcastCTFFlagFullState();
             return;
         }
@@ -664,7 +664,7 @@ void BattlegroundTP::EventPlayerClickedOnFlag(Player* player, GameObject* gameOb
             float x = player->GetPositionX();
             float y = player->GetPositionY();
             Map2ZoneCoordinates(x, y, 5031);
-            SendCTFFlagAddonMessage(std::string("H:PICKUP:") + player->GetName() + ":" + FormatCTFCoord(x / 100.0f) + ":" + FormatCTFCoord(y / 100.0f));
+            SendCTFFlagAddonMessage(std::string("H:PICKUP:") + GetPlayerDisplayName(player) + ":" + FormatCTFCoord(x / 100.0f) + ":" + FormatCTFCoord(y / 100.0f));
             BroadcastCTFFlagFullState();
             return;
         }

@@ -19,6 +19,7 @@
 #include "ArenaScore.h"
 #include "BattlegroundMgr.h"
 #include "BattlegroundScore.h"
+#include "CharacterCache.h"
 #include "Chat.h"
 #include "ChatTextBuilder.h"
 #include "Configuration/Config.h"
@@ -1778,6 +1779,14 @@ bool Battleground::IsBotParticipantSession(WorldSession const* session) const
         return true;
 
     return m_IsBotFillMatch && session->IsTransientPlayerSession();
+}
+
+std::string Battleground::GetPlayerDisplayName(Player const* player)
+{
+    std::string name;
+    if (!sCharacterCache->GetCharacterNameByGuid(player->GetGUID(), name))
+        name = player->GetName();
+    return name;
 }
 
 void Battleground::BuildPvPLogDataPacket(WorldPacket& data)

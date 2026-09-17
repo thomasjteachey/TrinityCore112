@@ -204,13 +204,13 @@ std::string BattlegroundWS::BuildWSGFlagFullPayload(Player const* viewer) const
     if (showAllianceFlag && _flagState[TEAM_ALLIANCE] == BG_WS_FLAG_STATE_ON_PLAYER)
     {
         if (Player* carrier = ObjectAccessor::FindPlayer(m_FlagKeepers[TEAM_ALLIANCE]))
-            allianceCarrier = carrier->GetName();
+            allianceCarrier = GetPlayerDisplayName(carrier);
     }
 
     if (showHordeFlag && _flagState[TEAM_HORDE] == BG_WS_FLAG_STATE_ON_PLAYER)
     {
         if (Player* carrier = ObjectAccessor::FindPlayer(m_FlagKeepers[TEAM_HORDE]))
-            hordeCarrier = carrier->GetName();
+            hordeCarrier = GetPlayerDisplayName(carrier);
     }
 
     float x = 0.0f;
@@ -735,7 +735,7 @@ void BattlegroundWS::EventPlayerClickedOnFlag(Player* player, GameObject* target
         float x = player->GetPositionX();
         float y = player->GetPositionY();
         Map2ZoneCoordinates(x, y, 3277);
-        SendWSGFlagAddonMessage(std::string("A:PICKUP:") + player->GetName() + ":" + FormatWSGCoord(x / 100.0f) + ":" + FormatWSGCoord(y / 100.0f));
+        SendWSGFlagAddonMessage(std::string("A:PICKUP:") + GetPlayerDisplayName(player) + ":" + FormatWSGCoord(x / 100.0f) + ":" + FormatWSGCoord(y / 100.0f));
         BroadcastWSGFlagFullState();
     }
 
@@ -763,7 +763,7 @@ void BattlegroundWS::EventPlayerClickedOnFlag(Player* player, GameObject* target
         float x = player->GetPositionX();
         float y = player->GetPositionY();
         Map2ZoneCoordinates(x, y, 3277);
-        SendWSGFlagAddonMessage(std::string("H:PICKUP:") + player->GetName() + ":" + FormatWSGCoord(x / 100.0f) + ":" + FormatWSGCoord(y / 100.0f));
+        SendWSGFlagAddonMessage(std::string("H:PICKUP:") + GetPlayerDisplayName(player) + ":" + FormatWSGCoord(x / 100.0f) + ":" + FormatWSGCoord(y / 100.0f));
         BroadcastWSGFlagFullState();
     }
 
@@ -801,7 +801,7 @@ void BattlegroundWS::EventPlayerClickedOnFlag(Player* player, GameObject* target
             float x = player->GetPositionX();
             float y = player->GetPositionY();
             Map2ZoneCoordinates(x, y, 3277);
-            SendWSGFlagAddonMessage(std::string("A:PICKUP:") + player->GetName() + ":" + FormatWSGCoord(x / 100.0f) + ":" + FormatWSGCoord(y / 100.0f));
+            SendWSGFlagAddonMessage(std::string("A:PICKUP:") + GetPlayerDisplayName(player) + ":" + FormatWSGCoord(x / 100.0f) + ":" + FormatWSGCoord(y / 100.0f));
             BroadcastWSGFlagFullState();
         }
         //called in HandleGameObjectUseOpcode:
@@ -842,7 +842,7 @@ void BattlegroundWS::EventPlayerClickedOnFlag(Player* player, GameObject* target
             float x = player->GetPositionX();
             float y = player->GetPositionY();
             Map2ZoneCoordinates(x, y, 3277);
-            SendWSGFlagAddonMessage(std::string("H:PICKUP:") + player->GetName() + ":" + FormatWSGCoord(x / 100.0f) + ":" + FormatWSGCoord(y / 100.0f));
+            SendWSGFlagAddonMessage(std::string("H:PICKUP:") + GetPlayerDisplayName(player) + ":" + FormatWSGCoord(x / 100.0f) + ":" + FormatWSGCoord(y / 100.0f));
             BroadcastWSGFlagFullState();
         }
         //called in HandleGameObjectUseOpcode:
