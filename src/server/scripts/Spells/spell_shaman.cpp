@@ -2738,6 +2738,67 @@ class spell_totem_cd_reduce : public SpellScript
     }
 };
 
+// The totem creatures the Autumn's Leaves 10-piece (ItemSet 1034, aura 81469)
+// summons in place of the stock ones, through the accelerated summon spells
+// 81479/81480/81481 the wrapper scripts below pick.
+enum AutumnTotemCreatures : uint32
+{
+    NPC_AUTUMN_TREMOR_TOTEM           = 50000,
+    NPC_AUTUMN_POISON_CLEANSING_TOTEM = 50001,
+    NPC_AUTUMN_GROUNDING_TOTEM        = 50002
+};
+
+// 8145 Tremor Totem (4s), 8167 Poison Cleansing Totem (5s), 8179 Grounding
+// Totem (10s) - the periodic auras a totem casts on ITSELF when it is summoned,
+// which is where its tick lives. The set's own aura cannot carry this: a spell
+// mod only reaches spells the player casts, and these are cast by the totem.
+//
+// So the acceleration keys off the creature, not off the wearer: the wrapper
+// already swapped in a different totem entry, and only those entries tick
+// faster. The stock totems share these spells and are left alone.
+//
+// This is what `spell_script_names` has been pointing 81469 at since the set
+// was built; the script never existed, so the 10-piece summoned distinct totems
+// that ticked at exactly stock speed.
+class spell_sha_totem_tick_acceleration : public AuraScript
+{
+    PrepareAuraScript(spell_sha_totem_tick_acceleration);
+
+    static constexpr int32 TickReductionMs = 2 * IN_MILLISECONDS;
+    // A period that reached zero would tick every server update, so the
+    // reduction stops short of it rather than trusting the data to stay above
+    // two seconds.
+    static constexpr int32 MinimumPeriodMs = 1 * IN_MILLISECONDS;
+
+    void CalcPeriodic(AuraEffect const* /*aurEff*/, bool& isPeriodic, int32& amplitude)
+    {
+        if (!isPeriodic || amplitude <= 0)
+            return;
+
+        Creature const* totem = GetUnitOwner() ? GetUnitOwner()->ToCreature() : nullptr;
+        if (!totem)
+            return;
+
+        switch (totem->GetEntry())
+        {
+            case NPC_AUTUMN_TREMOR_TOTEM:
+            case NPC_AUTUMN_POISON_CLEANSING_TOTEM:
+            case NPC_AUTUMN_GROUNDING_TOTEM:
+                break;
+            default:
+                return;
+        }
+
+        amplitude = std::max(amplitude - TickReductionMs, MinimumPeriodMs);
+    }
+
+    void Register() override
+    {
+        DoEffectCalcPeriodic += AuraEffectCalcPeriodicFn(spell_sha_totem_tick_acceleration::CalcPeriodic,
+            EFFECT_0, SPELL_AURA_PERIODIC_TRIGGER_SPELL);
+    }
+};
+
 //81477 poison cleansing totem wrapper
 class spell_sha_poison_cleaning_totem_wrapper : public SpellScript
 {
@@ -2880,4 +2941,5 @@ void AddSC_shaman_spell_scripts()
     RegisterSpellScript(spell_sha_poison_cleaning_totem_wrapper);
     RegisterSpellScript(spell_sha_tremor_totem_wrapper);
     RegisterSpellScript(spell_sha_grounding_totem_wrapper);
+    RegisterSpellScript(spell_sha_totem_tick_acceleration);
 }
