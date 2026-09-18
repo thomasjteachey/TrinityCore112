@@ -5152,6 +5152,17 @@ Centurion.Items.QuiversHoldAnyItem = 0
 #                     no other potion, elixir, food, bandage, scroll or grenade.
 #        Default:     1 - (Enabled)
 #
+#    Centurion.Tournament.BgStarterVendors
+#        Description: The shops a replacement weapon comes off, matched against
+#                     creature_template.subname with LIKE. A worn weapon, shield or
+#                     holdable with no tournament twin is answered by one of the same
+#                     shape from these shelves - a one-handed axe for a one-handed axe -
+#                     rather than by whatever the class template happens to hold. Empty
+#                     disables the shape match, leaving the class template to answer.
+#        Default:     "Starter %" - (Starter 1H Melee Weapons, Starter Shields,
+#                     Starter Wands and the rest of that shop front; nothing from the
+#                     Grand Marshal's stock)
+#
 #    Centurion.Tournament.BgConsumables
 #        Description: The consumables a tournament match allows, comma separated. Both sides of
 #                     a world/tournament pair are allowed whichever one is listed.
@@ -5182,6 +5193,7 @@ Centurion.Tournament.WorldMaxHonorPoints = 2147483647
 Centurion.Tournament.BgLoadout = 1
 Centurion.Tournament.BgBanConsumables = 1
 Centurion.Tournament.BgConsumables = "200026,200030,200041,200991,200992"
+Centurion.Tournament.BgStarterVendors = "Starter %"
 
 #
 #    Centurion.CharacterSelect.Reorder

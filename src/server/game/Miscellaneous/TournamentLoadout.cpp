@@ -23,9 +23,9 @@
 // answered in this order:
 //
 //   1. it has a tournament twin (`item_tournament_link`)  -> the twin,
-//   2. it is a weapon, a shield or a holdable with no twin -> a tournament one
-//      of the SAME shape (a one-handed axe for a one-handed axe, a bow for a
-//      bow), no better than the class template's piece for that slot,
+//   2. it is a weapon, a shield or a holdable with no twin -> one of the SAME
+//      shape off the STARTER VENDORS' shelves (a one-handed axe for a one-handed
+//      axe, a bow for a bow), no better than the class template's piece,
 //   3. anything else worn with no twin                    -> the same slot from
 //      its class's starter template (`tournament_loadout_template`: the gear
 //      Startrogue, Startwarrior and the rest are wearing),
@@ -110,6 +110,10 @@ namespace
         bool Enabled = true;
         bool BanConsumables = true;
         std::unordered_set<uint32> AllowedConsumables;
+        // The vendors a replacement weapon may come from, matched on
+        // creature_template.subname: "Starter 1H Melee Weapons", "Starter
+        // Shields", "Starter Wands" and the rest of that shop front.
+        std::string StarterVendorSubname;
     };
 
     LoadoutSettings LoadoutConfig;
@@ -122,10 +126,16 @@ namespace
     // item data instead of a list somebody has to maintain in two places.
     std::unordered_map<uint32 /*InventoryType*/, std::vector<uint32>> KitPieces;
 
-    // Every weapon, shield and holdable the tournament sells, by class and
-    // subclass, highest item level first. A hand that held a one-handed axe gets
-    // a one-handed axe back: the class template can only offer one shape per
-    // slot, and its sword is no answer for somebody who fights with axes.
+    // The starter vendors' weapon rack, by class and subclass, highest item
+    // level first. A hand that held a one-handed axe gets a one-handed axe back:
+    // the class template can only offer one shape per slot, and its sword is no
+    // answer for somebody who fights with axes.
+    //
+    // ONLY what the starter vendors sell - "Starter 1H Melee Weapons", "Starter
+    // Shields", "Starter Wands" and their neighbours, nothing above item level
+    // 63. The tournament also sells Grand Marshal epics, and drawing the shape
+    // match from every tournament weapon handed a hunter a Crunched Grand
+    // Marshal's Dirk for the dagger in its off hand.
     std::unordered_map<uint32 /*class << 8 | subclass*/, std::vector<uint32>> TournamentWeapons;
     // Whether this realm has the stash table at all. Probed at load: a realm
     // without it never queries it, and every path here does nothing.
@@ -792,10 +802,22 @@ uint32 SweepTournamentItems(Player* player)
         return 0;
 
     std::vector<std::pair<uint8, uint8>> confiscate;
-    ForEachHeldItem(player, [&confiscate](uint8 bag, uint8 slot, Item* item)
+    ForEachHeldItem(player, [&confiscate, player](uint8 bag, uint8 slot, Item* item)
     {
-        if (IsTournamentItem(item->GetEntry()))
-            confiscate.emplace_back(bag, slot);
+        if (!IsTournamentItem(item->GetEntry()))
+            return;
+
+        // The tournament sells five containers, and destroying a bag destroys
+        // what is inside it. A bag is not power; somebody's packed belongings
+        // are. It keeps the bag and gets told about it.
+        if (item->IsNotEmptyBag())
+        {
+            TC_LOG_WARN("entities.player.items", "Tournament loadout: {} holds tournament container {} with items in it; left alone.",
+                player->GetName(), item->GetEntry());
+            return;
+        }
+
+        confiscate.emplace_back(bag, slot);
     });
 
     if (confiscate.empty())
@@ -821,6 +843,13 @@ void LoadLoadoutConfig()
     LoadoutSettings loaded;
     loaded.Enabled = sConfigMgr->GetBoolDefault("Centurion.Tournament.BgLoadout", true);
     loaded.BanConsumables = sConfigMgr->GetBoolDefault("Centurion.Tournament.BgBanConsumables", true);
+
+    // The shops a replacement weapon may come off. Matched against
+    // creature_template.subname with LIKE; quotes and backslashes are dropped
+    // rather than escaped, because this is a shop sign and not a query.
+    loaded.StarterVendorSubname = sConfigMgr->GetStringDefault("Centurion.Tournament.BgStarterVendors", "Starter %");
+    loaded.StarterVendorSubname.erase(std::remove_if(loaded.StarterVendorSubname.begin(), loaded.StarterVendorSubname.end(),
+        [](char c) { return c == '\'' || c == '"' || c == '\\'; }), loaded.StarterVendorSubname.end());
 
     // The tournament PvP consumables: what Jazzik (creature 920027) sells. Both
     // sides of each pair are allowed, so the rule does not depend on which one
@@ -854,10 +883,26 @@ void LoadLoadoutData()
 
     StashTablePresent = CharacterDatabase.Query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'character_tournament_loadout'") != nullptr;
 
-    // The field kit pool and the tournament's own weapon rack, straight out of
-    // the item templates. The rack is every weapon, shield and holdable the
-    // tournament sells - the item links say which items those are, so it is
-    // built after LoadItemLinks.
+    // What the starter vendors are selling. A replacement weapon comes from
+    // their shelves and nowhere else, so the shape match cannot reach past them
+    // into the Grand Marshal's stock.
+    std::unordered_set<uint32> starterStock;
+    if (!LoadoutConfig.StarterVendorSubname.empty())
+    {
+        if (QueryResult result = WorldDatabase.PQuery("SELECT DISTINCT v.item FROM npc_vendor v "
+            "JOIN creature_template c ON c.entry = v.entry WHERE c.subname LIKE '{}'", LoadoutConfig.StarterVendorSubname))
+        {
+            do
+                starterStock.insert(result->Fetch()[0].GetUInt32());
+            while (result->NextRow());
+        }
+    }
+
+    if (starterStock.empty())
+        TC_LOG_WARN("server.loading", "Centurion.Tournament.BgStarterVendors ('{}') matches no vendor stock: a weapon with no twin will be answered by the class template alone.",
+            LoadoutConfig.StarterVendorSubname);
+
+    // The field kit pool and the starter weapon rack, out of the item templates.
     size_t kitPieces = 0;
     size_t weapons = 0;
     for (auto const& itemPair : sObjectMgr->GetItemTemplateStore())
@@ -873,7 +918,7 @@ void LoadLoadoutData()
             continue;
         }
 
-        if (!IsTournamentItem(itemPair.first))
+        if (!starterStock.count(itemPair.first))
             continue;
 
         bool const armsAndShields = proto.Class == ITEM_CLASS_WEAPON ||
@@ -951,7 +996,7 @@ void LoadLoadoutData()
         while (result->NextRow());
     }
 
-    TC_LOG_INFO("server.loading", ">> Loaded {} tournament loadout template piece(s), {} skipped, {} field kit piece(s) and {} tournament weapon(s) indexed, in {} ms",
+    TC_LOG_INFO("server.loading", ">> Loaded {} tournament loadout template piece(s), {} skipped, {} field kit piece(s) and {} starter vendor weapon(s) indexed, in {} ms",
         TemplateGear.size(), skipped, kitPieces, weapons, GetMSTimeDiffToNow(oldMSTime));
 }
 
