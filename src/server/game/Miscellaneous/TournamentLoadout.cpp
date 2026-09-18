@@ -654,21 +654,35 @@ namespace
         if (!proto || proto->Class != ITEM_CLASS_CONSUMABLE)
             return false;
 
+        bool eatOrDrink = false;
         for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
         {
             SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(proto->Spells[i].SpellId);
             if (!spellInfo)
                 continue;
 
+            // A bandage is let through on its mechanic alone. The tournament
+            // hands out the bandage spell anyway, and the classic ranks carry no
+            // arena flag - refusing Heavy Linen while granting the ability would
+            // be a strange thing to explain.
             if (spellInfo->Mechanic == MECHANIC_BANDAGE)
                 return true;
 
             if ((spellInfo->HasAura(SPELL_AURA_MOD_REGEN) || spellInfo->HasAura(SPELL_AURA_MOD_POWER_REGEN)) &&
                 (spellInfo->AuraInterruptFlags & AURA_INTERRUPT_FLAG_NOT_SEATED))
-                return true;
+                eatOrDrink = true;
         }
 
-        return false;
+        if (!eatOrDrink)
+            return false;
+
+        // Buff food is outlawed, by the realm's own hand: the arena flag has been
+        // cleared off everything that grants Well Fed - Grilled Squid, Nightfin
+        // Soup, Smoked Desert Dumplings and the rest read 0 - while plain food
+        // and drink keep it. So a meal has to carry that flag, or be conjured,
+        // which no buff food is. The behaviour test above does the other half:
+        // a flagged healthstone is not a meal and never reaches this line.
+        return proto->HasFlag(ITEM_FLAG_IGNORE_DEFAULT_ARENA_RESTRICTIONS) || proto->IsConjuredConsumable();
     }
 
     bool InTournamentMatch(Player const* player)
