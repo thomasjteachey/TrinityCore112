@@ -509,6 +509,9 @@ namespace
     void StashOriginal(Player* player, LoadoutEntry const& entry, CharacterDatabaseTransaction& trans)
     {
         Item* item = entry.Original;
+        if (!item)
+            return;   // an empty slot being dressed has nothing to put away
+
         ObjectGuid::LowType const itemGuid = item->GetGUID().GetCounter();
 
         player->MoveItemFromInventory(entry.Bag, entry.Slot, true);
@@ -1002,6 +1005,11 @@ void ApplyBattlegroundLoadout(Player* player)
 
     for (LoadoutEntry const& entry : entries)
     {
+        // An entry with nothing in it is an empty slot being dressed: there is
+        // nothing to put away, only something to put on.
+        if (!entry.Original)
+            continue;
+
         if (transient)
             player->DestroyItem(entry.Bag, entry.Slot, true);
         else
