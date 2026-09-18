@@ -150,6 +150,18 @@ public:
     void SaveCooldownStateBeforeDuel();
     void RestoreCooldownStateAfterDuel();
 
+    // Every cooldown this unit is carrying, as rows that can be written down and
+    // read back later - the battleground cooldown stash
+    // (Miscellaneous/CooldownStash.h) keeps a character's world cooldowns this
+    // way while it fights. Entries on hold are left out, exactly as SaveToDB
+    // leaves them out.
+    std::vector<CooldownEntry> GetCooldownSnapshot() const;
+
+    // Rebuild the client's cooldown records for these spells from what this
+    // history holds: one SMSG_SPELL_COOLDOWN carrying what is left of each.
+    // Used where cooldowns appear without the client having watched them start.
+    void SendCooldowns(std::vector<uint32> const& spellIds) const;
+
 private:
     Player* GetPlayerOwner() const;
     void SendClearCooldowns(std::vector<int32> const& cooldowns) const;

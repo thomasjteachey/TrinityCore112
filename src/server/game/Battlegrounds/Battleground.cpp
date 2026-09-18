@@ -37,6 +37,7 @@
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "ReputationMgr.h"
+#include "Miscellaneous/CooldownStash.h"
 #include "Miscellaneous/DepletedMarks.h"
 #include "SpellAuras.h"
 #include "TemporarySummon.h"
@@ -1171,6 +1172,11 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
         // that is not here to be handed it - logged out, disconnected, cut off
         // by a crash - is given it at its next login instead.
         Tournament::RestoreBattlegroundLoadout(player);
+
+        // And the cooldowns it walked in with, on top of whatever the match
+        // itself left it holding (Miscellaneous/CooldownStash.h). Same rule for
+        // a character that is not here to be handed them: its next login.
+        CooldownStash::RestoreAfterMatch(player);
 
         RemoveSpectator(player);
 

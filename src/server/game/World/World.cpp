@@ -22,6 +22,7 @@
 #include "World.h"
 #include "Miscellaneous/BotUpdatePolicy.h"
 #include "Miscellaneous/CharacterScreen.h"
+#include "Miscellaneous/CooldownStash.h"
 #include "Miscellaneous/DepletedMarks.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "AutoBalance/AutoBalanceConfig.h"
@@ -1606,6 +1607,10 @@ void World::LoadConfigSettings(bool reload)
     // Its lists live in that module; reloading here keeps `.reload config` live.
     Tournament::LoadConfig();
 
+    // The world cooldowns a character keeps while it fights a battleground or an
+    // arena (Miscellaneous/CooldownStash.h).
+    CooldownStash::LoadConfig();
+
     // How much per-tick work a client-less bot session gets (Miscellaneous/BotUpdatePolicy.h).
     BotUpdatePolicy::LoadConfig();
 
@@ -2120,6 +2125,9 @@ void World::SetInitialWorldSettings()
 
     TC_LOG_INFO("server.loading", "Loading Tournament Battleground Loadout...");
     Tournament::LoadLoadoutData();
+
+    TC_LOG_INFO("server.loading", "Checking Battleground Cooldown Stash...");
+    CooldownStash::ProbeStorage();
 
     TC_LOG_INFO("server.loading", "Loading Character List Order...");
     CharacterScreen::LoadOrder();

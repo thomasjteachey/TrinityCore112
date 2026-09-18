@@ -25,6 +25,7 @@
 #include "AccountMgr.h"
 #include "AccountBankMgr.h"
 #include "Miscellaneous/CharacterScreen.h"
+#include "Miscellaneous/CooldownStash.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "AchievementMgr.h"
 #include "ArenaTeam.h"
@@ -2441,6 +2442,13 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
             // remove arena spell coldowns/buffs now to also remove pet's cooldowns before it's temporarily unsummoned
             if (mEntry->IsBattlegroundOrArena() && !IsGameMaster() && (HasPendingSpectatorForBG(0) || !HasPendingSpectatorForBG(GetBattlegroundId())))
             {
+                // What a world-mode character had on cooldown out in the world is
+                // written down before the wipe takes it, and given back when it
+                // leaves the match - whichever way it leaves
+                // (Miscellaneous/CooldownStash.h). Tournament characters, copies
+                // and realms without the table fall straight through.
+                CooldownStash::StashBeforeMatch(this);
+
                 RemoveArenaSpellCooldowns(true);
                 RemoveArenaAuras();
                 if (mEntry->IsBattleArena())
@@ -20207,6 +20215,13 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
 
     GetSpellHistory()->LoadFromDB<Player>(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_SPELL_COOLDOWNS));
 
+    // A character that logged out, was disconnected or was cut off by a crash or
+    // a restart in the middle of a battleground never got the cooldowns it walked
+    // in with back. It gets them here, on top of the history just read, and they
+    // ride out to the client with the initial spells a moment later. One that is
+    // walking back INTO its match keeps the clean slate it is fighting with.
+    CooldownStash::RestoreAtLogin(this);
+
     uint32 savedHealth = fields[55].GetUInt32();
     if (!savedHealth)
         m_deathState = CORPSE;
@@ -25881,6 +25896,12 @@ void Player::SendInitialPacketsAfterAddToMap()
         else
             ClearQuestSharingInfo();
     }
+
+    // A character whose world cooldowns were handed back as it left a
+    // battleground was told about them while it was still porting out. Now that
+    // it has arrived, say it again (Miscellaneous/CooldownStash.h). One relaxed
+    // atomic read when nobody is waiting.
+    CooldownStash::ResendIfPending(this);
 }
 
 void Player::SendUpdateToOutOfRangeGroupMembers()

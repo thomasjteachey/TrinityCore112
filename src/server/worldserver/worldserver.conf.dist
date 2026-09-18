@@ -2919,6 +2919,30 @@ Centurion.Battleground.ArenaExperienceMultiplier = 0.2
 Centurion.Battleground.BlockArtifactGear = 0
 
 #
+#    Centurion.Battleground.KeepWorldCooldowns
+#        Description: Entering a battleground or an arena clears every cooldown a
+#                     character is carrying, so a match is always fought with
+#                     everything ready. With this on, what a WORLD-MODE character
+#                     was carrying is kept aside first and given back when it
+#                     leaves - so the door into a battleground is not also a free
+#                     reset of the hearthstone, the trinket and the twenty-minute
+#                     bubble. The clock keeps running meanwhile: what comes back
+#                     is what was left at the door, less the time the match took,
+#                     and a cooldown the match itself started is never shortened.
+#                     Leaving by any route ends the same way - a logout, a
+#                     disconnect, a crash or a restart mid-match is given back at
+#                     the next login instead. Tournament characters (a clean slate
+#                     is the point of that side), Game Masters and battleground
+#                     fill clones are not kept.
+#                     Needs the `character_battleground_cooldown` table in the
+#                     characters database; a realm without it behaves as before,
+#                     whatever this says.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled, cooldowns are cleared for good)
+
+Centurion.Battleground.KeepWorldCooldowns = 1
+
+#
 #    Battleground.Random.ResetHour
 #        Description: Hour of the day when the global instance resets occur.
 #        Range:       0-23
