@@ -155,10 +155,11 @@ public:
 
         bool tournament = false;
         bool queue = false;
-        if (Player const* player = target->GetConnectedPlayer())
+        Player const* online = target->GetConnectedPlayer();
+        if (online)
         {
-            tournament = player->HasTournamentModeFlag();
-            queue = player->HasTournamentQueueFlag();
+            tournament = online->HasTournamentModeFlag();
+            queue = online->HasTournamentQueueFlag();
         }
         else if (QueryResult result = CharacterDatabase.PQuery("SELECT extra_flags FROM characters WHERE guid = {}", target->GetGUID().GetCounter()))
         {
@@ -172,9 +173,21 @@ public:
             return true;
         }
 
+        // The stored opt-in stops deciding anything once the level rule takes
+        // over, so say which of the two put them in the tournament queue.
+        char const* queueNote = "";
+        if (!tournament)
+        {
+            if (online && Tournament::QueuesInTournamentPool(online))
+                queueNote = Tournament::GetQueueLockReason(online) == Tournament::QUEUE_LOCK_FORCED
+                    ? ", held in the tournament queue by its level"
+                    : ", opted into the tournament queue";
+            else if (!online && queue)
+                queueNote = ", opted into the tournament queue";
+        }
+
         handler->PSendSysMessage("%s: %s character%s%s.", target->GetName().c_str(),
-            tournament ? "tournament" : "world",
-            (!tournament && queue) ? ", opted into the tournament queue" : "",
+            tournament ? "tournament" : "world", queueNote,
             Tournament::IsEnabled() ? "" : " (Centurion.Tournament.Enable is off: no rules apply)");
         return true;
     }
@@ -241,6 +254,13 @@ public:
             player->SetTournamentQueueFlag(on);
             player->SaveToDB();
             Tournament::SendQueueState(player);
+
+            // Set it anyway - it is what they go back to if the level rule is
+            // ever lifted - but do not let a GM think it changed their queue.
+            if (Tournament::GetQueueLockReason(player) == Tournament::QUEUE_LOCK_FORCED)
+                handler->PSendSysMessage("%s is level %u and queues with tournament characters either way "
+                    "(Centurion.Tournament.ForceQueueAtMinLevel); the flag is kept for if that rule is lifted.",
+                    target.GetName().c_str(), player->GetLevel());
         }
         else
             CharacterDatabase.PExecute("UPDATE characters SET extra_flags = (extra_flags & {}) | {} WHERE guid = {}",

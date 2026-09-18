@@ -69,6 +69,7 @@ namespace
         bool TournamentWaiveReagents = true;
         uint8 StartLevel = 60;
         uint32 QueueMinLevel = 60;
+        bool ForceQueueAtMinLevel = true;
         bool HasHome = false;
         uint32 HomeMap = 0;
         float HomeX = 0.0f;
@@ -168,6 +169,7 @@ void LoadConfig()
     loaded.TournamentWaiveReagents = sConfigMgr->GetBoolDefault("Centurion.Tournament.WaiveReagents", true);
     loaded.StartLevel = uint8(std::clamp<int32>(sConfigMgr->GetIntDefault("Centurion.Tournament.StartLevel", 60), 1, STRONG_MAX_LEVEL));
     loaded.QueueMinLevel = uint32(std::max<int32>(1, sConfigMgr->GetIntDefault("Centurion.Tournament.QueueMinLevel", 60)));
+    loaded.ForceQueueAtMinLevel = sConfigMgr->GetBoolDefault("Centurion.Tournament.ForceQueueAtMinLevel", true);
 
     for (uint32 id : ParseIdList("Centurion.Tournament.AllowedZones", sConfigMgr->GetStringDefault("Centurion.Tournament.AllowedZones", "")))
         loaded.AllowedZones.insert(id);
@@ -408,17 +410,62 @@ bool QueuesInTournamentPool(Player const* player)
     if (IsTournamentCharacter(player))
         return true;
 
-    return player->HasTournamentQueueFlag() && player->GetLevel() >= Config.QueueMinLevel;
+    if (player->GetLevel() < Config.QueueMinLevel)
+        return false;
+
+    // At the tournament level there is no world queue left to join: every
+    // battleground and arena a world character queues for from here on is
+    // fought under tournament rules. The opt-in flag is still read and still
+    // kept, so turning the rule back off hands everybody the choice they last
+    // made, exactly as they left it.
+    return Config.ForceQueueAtMinLevel || player->HasTournamentQueueFlag();
+}
+
+QueueLockReason GetQueueLockReason(Player const* player)
+{
+    if (!Config.Enabled || !player)
+        return QUEUE_LOCK_DISABLED;
+
+    if (IsTournamentCharacter(player))
+        return QUEUE_LOCK_TOURNAMENT_CHARACTER;
+
+    if (player->GetLevel() < Config.QueueMinLevel)
+        return QUEUE_LOCK_BELOW_LEVEL;
+
+    if (Config.ForceQueueAtMinLevel)
+        return QUEUE_LOCK_FORCED;
+
+    // A queued group keeps the pool it joined with, so the switch waits until
+    // the character is out of every queue and every match.
+    if (player->InBattlegroundQueue() || player->InBattleground())
+        return QUEUE_LOCK_BUSY;
+
+    return QUEUE_LOCK_NONE;
 }
 
 bool CanToggleTournamentQueue(Player const* player)
 {
-    if (!Config.Enabled || !player || IsTournamentCharacter(player) || player->GetLevel() < Config.QueueMinLevel)
+    return GetQueueLockReason(player) == QUEUE_LOCK_NONE;
+}
+
+bool IsReachableByWorldBots(Player const* player)
+{
+    if (!Config.Enabled || !player)
+        return true;
+
+    // A tournament character is the one thing the fleet can never meet: no bot
+    // is one.
+    if (IsTournamentCharacter(player))
         return false;
 
-    // A queued group keeps the pool it joined with, so the switch waits until
-    // the character is out of every queue and every match.
-    return !player->InBattlegroundQueue() && !player->InBattleground();
+    // Everything else is a world character, and a bot of the same level follows
+    // the very same pool rule - forced in at the tournament level, out below it.
+    // Only a world character who opted in by hand (the rule off) is somewhere
+    // the fleet is not.
+    if (Config.ForceQueueAtMinLevel && player->GetLevel() >= Config.QueueMinLevel)
+        return true;
+
+    return !QueuesInTournamentPool(player);
 }
 
 uint32 GetQueueMinLevel()
@@ -426,21 +473,42 @@ uint32 GetQueueMinLevel()
     return Config.QueueMinLevel;
 }
 
-void SendQueueState(Player* player)
+namespace
 {
-    if (!player || !player->GetSession() || player->GetSession()->IsVirtualSession())
-        return;
-
-    bool const on = QueuesInTournamentPool(player);
-    bool const locked = !Config.Enabled || IsTournamentCharacter(player) || player->GetLevel() < Config.QueueMinLevel;
-    std::string const message = Trinity::StringFormat("CCGAME\tTQUEUE:{}:{}", on ? 1 : 0, locked ? 1 : 0);
-
     // The GUID overload: the Player* one rewrites LANG_ADDON to Universal and
     // the addon data would show up as a whisper.
-    WorldPacket data;
-    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player->GetGUID(), player->GetGUID(),
-        message, 0, player->GetName(), player->GetName());
-    player->SendDirectMessage(&data);
+    void SendAddonLine(Player* player, std::string const& message)
+    {
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player->GetGUID(), player->GetGUID(),
+            message, 0, player->GetName(), player->GetName());
+        player->SendDirectMessage(&data);
+    }
+}
+
+void SendQueueState(Player* player)
+{
+    // A realm without character modes answers nothing, and the Battlegrounds
+    // tab keeps the toggle hidden.
+    if (!Config.Enabled || !player || !player->GetSession() || player->GetSession()->IsVirtualSession())
+        return;
+
+    QueueLockReason const reason = GetQueueLockReason(player);
+    SendAddonLine(player, Trinity::StringFormat("CCGAME\tTQUEUE:{}:{}",
+        QueuesInTournamentPool(player) ? 1 : 0, reason != QUEUE_LOCK_NONE ? 1 : 0));
+
+    // Why it reads the way it does, and which match rules this realm is
+    // actually running, so the tooltip promises nothing that is switched off.
+    // Its own line on purpose: a client built before this existed matches the
+    // TQUEUE line whole and would lose the toggle altogether if fields were
+    // added to it, while a line it has never heard of it simply ignores.
+    uint32 rules = 0;
+    if (IsBgLoadoutEnabled())
+        rules |= QUEUE_RULE_LOADOUT;
+    if (AreMatchConsumablesBanned())
+        rules |= QUEUE_RULE_BAN_CONSUMABLES;
+
+    SendAddonLine(player, Trinity::StringFormat("CCGAME\tTQUEUEWHY:{}:{}:{}", uint32(reason), Config.QueueMinLevel, rules));
 }
 
 void SendGurubashiChestState(Player* player)
@@ -448,11 +516,7 @@ void SendGurubashiChestState(Player* player)
     if (!player || !player->GetSession() || player->GetSession()->IsVirtualSession())
         return;
 
-    std::string const message = Trinity::StringFormat("CCGAME\tGURUCHEST:{}", player->HasGurubashiChestOptOut() ? 0 : 1);
-    WorldPacket data;
-    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player->GetGUID(), player->GetGUID(),
-        message, 0, player->GetName(), player->GetName());
-    player->SendDirectMessage(&data);
+    SendAddonLine(player, Trinity::StringFormat("CCGAME\tGURUCHEST:{}", player->HasGurubashiChestOptOut() ? 0 : 1));
 }
 
 namespace
@@ -481,11 +545,7 @@ void SendGurubashiChestTimer(Player* player)
     if (until <= 0)
         return;
 
-    std::string const message = Trinity::StringFormat("CCGAME\tGURUTIMER:{}:{}", chestOut ? 1 : 0, std::max<int64>(0, until - now));
-    WorldPacket data;
-    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player->GetGUID(), player->GetGUID(),
-        message, 0, player->GetName(), player->GetName());
-    player->SendDirectMessage(&data);
+    SendAddonLine(player, Trinity::StringFormat("CCGAME\tGURUTIMER:{}:{}", chestOut ? 1 : 0, std::max<int64>(0, until - now)));
 }
 
 bool HandleAddonRequest(Player* sender, uint32 lang, std::string const& msg)

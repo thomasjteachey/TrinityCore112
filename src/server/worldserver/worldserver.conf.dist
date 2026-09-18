@@ -5186,6 +5186,17 @@ Centurion.Items.QuiversHoldAnyItem = 0
 #                     (the Battlegrounds-tab toggle; addon message CCGAMEREQ TQUEUE).
 #        Default:     60
 #
+#    Centurion.Tournament.ForceQueueAtMinLevel
+#        Description: From QueueMinLevel up, a world character has no world queue left:
+#                     every battleground and arena it queues for is a tournament match,
+#                     fought in tournament gear (Centurion.Tournament.BgLoadout) against
+#                     tournament characters. The Battlegrounds-tab toggle is then locked
+#                     on and only explains itself. Each character's own opt-in is still
+#                     kept, so switching this off hands everyone back the choice they
+#                     last made.
+#        Default:     1 - (Enabled, no world queue at QueueMinLevel and above)
+#                     0 - (world characters choose, as before)
+#
 #    Centurion.Tournament.WorldMaxHonorPoints
 #        Description: Honor a world character can hold. MaxHonorPoints and the
 #                     ConditionalMaxHonorPoints steps (Legionnaire+'s cap ladder) then bind
@@ -5252,6 +5263,7 @@ Centurion.Tournament.ResetDuelHealthMana = 1
 Centurion.Tournament.AllowedLootObjects = ""
 Centurion.Tournament.InnateSpells = "29073,18610,22734:1494"
 Centurion.Tournament.QueueMinLevel = 60
+Centurion.Tournament.ForceQueueAtMinLevel = 1
 Centurion.Tournament.WorldMaxHonorPoints = 2147483647
 Centurion.Tournament.BgLoadout = 1
 Centurion.Tournament.BgBanConsumables = 1

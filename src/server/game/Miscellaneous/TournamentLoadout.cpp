@@ -921,6 +921,18 @@ uint32 SweepTournamentItems(Player* player)
     return uint32(confiscate.size());
 }
 
+// What a tournament match does to a character, as the Battlegrounds-tab
+// tooltip has to describe it: only the rules that are actually switched on.
+bool IsBgLoadoutEnabled()
+{
+    return IsEnabled() && LoadoutConfig.Enabled;
+}
+
+bool AreMatchConsumablesBanned()
+{
+    return IsEnabled() && LoadoutConfig.BanConsumables;
+}
+
 void LoadLoadoutConfig()
 {
     LoadoutSettings loaded;

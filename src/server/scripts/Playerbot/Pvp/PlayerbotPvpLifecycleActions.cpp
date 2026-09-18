@@ -373,8 +373,8 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             if (isVirtualSession || playerbot::IsManagedRandomBot(participant))
                 continue;
 
-            // Queued in the tournament pool: no bot can be matched with them.
-            if (Tournament::QueuesInTournamentPool(participant))
+            // Queued somewhere no bot goes: nothing the fleet does reaches them.
+            if (!Tournament::IsReachableByWorldBots(participant))
                 continue;
 
             return true;

@@ -1416,9 +1416,10 @@ bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType, Mana
         if (isVirtualSession || IsManagedRandomBotImpl(participant, botAccounts))
             continue;
 
-        // The fleet queues in the world pool; somebody in the tournament pool
-        // can never be matched with it.
-        if (Tournament::QueuesInTournamentPool(participant))
+        // The fleet follows the same pool rule everybody else does - forced into
+        // the tournament pool at the tournament level, in the world pool below
+        // it - so only somebody it can never be matched with is skipped here.
+        if (!Tournament::IsReachableByWorldBots(participant))
             continue;
 
         if (participant->InBattleground() && participant->GetBattlegroundTypeId() == targetBgType &&

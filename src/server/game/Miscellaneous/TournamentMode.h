@@ -67,16 +67,53 @@ namespace Tournament
     bool AreKeptFromFighting(Player const* a, Player const* b);
 
     // Battleground/arena queue pool. Tournament characters always queue in the
-    // tournament pool; world characters only when they opted in (and are at
-    // least Centurion.Tournament.QueueMinLevel).
+    // tournament pool. So does every world character from
+    // Centurion.Tournament.QueueMinLevel up, because
+    // Centurion.Tournament.ForceQueueAtMinLevel leaves them no world queue to
+    // join; with that rule off they are back to queueing there only when they
+    // opted in.
     bool QueuesInTournamentPool(Player const* player);
+
+    // Why the Battlegrounds-tab toggle cannot be moved, which is also what its
+    // tooltip explains. Sent to the client as it stands, so the numbers are
+    // part of the protocol.
+    enum QueueLockReason : uint8
+    {
+        QUEUE_LOCK_NONE                 = 0,   // theirs to set
+        QUEUE_LOCK_TOURNAMENT_CHARACTER = 1,   // born to the tournament
+        QUEUE_LOCK_BELOW_LEVEL          = 2,   // world character under QueueMinLevel
+        QUEUE_LOCK_FORCED               = 3,   // world character at QueueMinLevel, ForceQueueAtMinLevel
+        QUEUE_LOCK_BUSY                 = 4,   // in a queue or a match right now
+        QUEUE_LOCK_DISABLED             = 5    // no character modes on this realm
+    };
+
+    // The match rules the tooltip lists, as the bits of the TQUEUEWHY line.
+    // Also part of the protocol.
+    enum QueueRuleFlags : uint32
+    {
+        QUEUE_RULE_LOADOUT          = 0x1,   // gear is swapped for the tournament's
+        QUEUE_RULE_BAN_CONSUMABLES  = 0x2    // only PvP consumables work inside
+    };
+
+    QueueLockReason GetQueueLockReason(Player const* player);
     bool CanToggleTournamentQueue(Player const* player);
     uint32 GetQueueMinLevel();
+
+    // True when a managed world-mode bot could end up in the same match. Bots
+    // are world characters, so one at this character's level follows the same
+    // pool rule they do; only a tournament character - or a world character who
+    // opted into the tournament pool by hand, which needs the forcing rule off -
+    // is somewhere the fleet never goes.
+    bool IsReachableByWorldBots(Player const* player);
 
     // The Battlegrounds-tab toggles. The client asks with the addon message
     // "CCGAMEREQ\tTQUEUE" (query) or "CCGAMEREQ\tTQUEUE:1" / ":0" (set) and is
     // answered "CCGAME\tTQUEUE:<on>:<locked>" - locked on for tournament
-    // characters, locked off below QueueMinLevel. "CCGAMEREQ\tGURUCHEST[:0|1]"
+    // characters and for world characters from QueueMinLevel up, locked off
+    // below it - followed by
+    // "CCGAME\tTQUEUEWHY:<QueueLockReason>:<minLevel>:<QueueRuleFlags>", which
+    // is what the tooltip reads. Its own line so that a client that predates it
+    // keeps matching the TQUEUE line whole. "CCGAMEREQ\tGURUCHEST[:0|1]"
     // is answered "CCGAME\tGURUCHEST:<on>": whether the hourly Gurubashi chest
     // counts the character and pulls it into the Battle Ring (every realm).
     // Returns true when the message was one of these (the caller drops it).
@@ -280,6 +317,11 @@ namespace Tournament
     // way out: the next login hands the character its own gear back.
     void LoadLoadoutConfig();   // from LoadConfig, so `.reload config` applies
     void LoadLoadoutData();     // startup (after the item templates) and `.tournament reloaditems`
+
+    // Which of these rules a match is actually run under, for the tooltip that
+    // promises them (TQUEUEWHY, below).
+    bool IsBgLoadoutEnabled();          // Centurion.Tournament.BgLoadout
+    bool AreMatchConsumablesBanned();   // Centurion.Tournament.BgBanConsumables
 
     void ApplyBattlegroundLoadout(Player* player);    // Battleground::AddPlayer
     void RestoreBattlegroundLoadout(Player* player);  // Battleground::RemovePlayerAtLeave
