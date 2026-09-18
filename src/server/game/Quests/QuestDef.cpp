@@ -110,7 +110,11 @@ Quest::Quest(Field* questRecord)
     for (uint32 i = 0; i < QUEST_ITEM_OBJECTIVES_COUNT; ++i)
     {
         RequiredItemId[i] = questRecord[87+i].GetUInt32();
-        RequiredItemCount[i] = questRecord[93+i].GetUInt16();
+        // Read as uint32: Quest::RequiredItemCount and the field the quest packets
+        // carry are both uint32, and Field::GetUInt16 aborts the server on a count
+        // that does not fit - a currency quest asking for more than 65535 of an
+        // item is a legitimate thing to write, and the stock column is only narrow.
+        RequiredItemCount[i] = questRecord[93+i].GetUInt32();
 
         if (RequiredItemId[i])
             ++_reqItemsCount;
