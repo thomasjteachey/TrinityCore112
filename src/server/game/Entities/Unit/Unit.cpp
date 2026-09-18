@@ -4156,7 +4156,18 @@ void Unit::ProcessTerrainStatusUpdate(ZLiquidStatus /*oldLiquidStatus*/, Optiona
                 else if (depth > 0.35f)
                     desiredSwimming = true;
             }
-            SetSwim(desiredSwimming);
+            // A spline picks its speed exactly once, when it launches, from the
+            // movement flags of that moment (MoveSplineInit::Launch ->
+            // SelectSpeedType). A bot that starts a path on dry ground and then
+            // wades in therefore crosses the whole pond at run speed, and one
+            // that launched in the water keeps swim speed up the far bank. Hand
+            // the active movement generator the same notification a speed-rate
+            // change gives it, so it relaunches the remainder of the path at the
+            // speed the bot is actually travelling at. UnitSpeedChanged only
+            // marks the generator, it does not relaunch here, so this is safe to
+            // call from inside a relocation.
+            if (SetSwim(desiredSwimming))
+                PropagateSpeedChange();
         }
     }
 
