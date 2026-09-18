@@ -75,6 +75,7 @@ enum class GmDiagnosticCategory : uint16
     CustomAuras     = 0x20,
     SacrificialAura = 0x40,
     SpellTarget     = 0x80,
+    Pet             = 0x100,
     All             = 0xFFFF
 };
 

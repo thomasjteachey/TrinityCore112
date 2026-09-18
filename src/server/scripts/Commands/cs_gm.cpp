@@ -26,12 +26,15 @@ EndScriptData */
 #include "AccountMgr.h"
 #include "Battleground.h"
 #include "Chat.h"
+#include "Creature.h"
 #include "DatabaseEnv.h"
 #include "Language.h"
 #include "ObjectAccessor.h"
 #include "Opcodes.h"
+#include "Pet.h"
 #include "Player.h"
 #include "Realm.h"
+#include "TemporarySummon.h"
 #include "World.h"
 #include "WorldSession.h"
 
@@ -256,6 +259,8 @@ public:
             diagnosticCategory = GmDiagnosticCategory::SacrificialAura;
         else if (category == "spelltarget")
             diagnosticCategory = GmDiagnosticCategory::SpellTarget;
+        else if (category == "pet")
+            diagnosticCategory = GmDiagnosticCategory::Pet;
         else
         {
             // Split by blast radius, because the two halves behave very
@@ -263,7 +268,7 @@ public:
             // only what you yourself do, the second subscribes you to every
             // player on the realm, with no map or distance filter.
             handler->SendSysMessage("Usage: .gm diagnostics on/off [category]");
-            handler->SendSysMessage("  About you:       heartbeat, combat, channel, spelltarget");
+            handler->SendSysMessage("  About you:       heartbeat, combat, channel, spelltarget, pet");
             handler->SendSysMessage("  About the realm: feign, playerbot, customauras, sacrificialaura");
             handler->SendSysMessage("  all - every category. The realm-wide ones are very noisy on a populated realm.");
             handler->SetSentErrorMessage(true);
@@ -273,7 +278,7 @@ public:
         session->SetGmDiagnosticEnabled(diagnosticCategory, enable);
 
         handler->PSendSysMessage(
-            "GM diagnostics %s for %s. Current: heartbeat=%s, combat=%s, playerbot=%s, feign=%s, channel=%s, customauras=%s, sacrificialaura=%s, spelltarget=%s.",
+            "GM diagnostics %s for %s. Current: heartbeat=%s, combat=%s, playerbot=%s, feign=%s, channel=%s, customauras=%s, sacrificialaura=%s, spelltarget=%s, pet=%s.",
             enable ? "enabled" : "disabled", category.c_str(),
             session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Heartbeat) ? "on" : "off",
             session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Combat) ? "on" : "off",
@@ -282,8 +287,89 @@ public:
             session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Channel) ? "on" : "off",
             session->IsGmDiagnosticEnabled(GmDiagnosticCategory::CustomAuras) ? "on" : "off",
             session->IsGmDiagnosticEnabled(GmDiagnosticCategory::SacrificialAura) ? "on" : "off",
-            session->IsGmDiagnosticEnabled(GmDiagnosticCategory::SpellTarget) ? "on" : "off");
+            session->IsGmDiagnosticEnabled(GmDiagnosticCategory::SpellTarget) ? "on" : "off",
+            session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Pet) ? "on" : "off");
+
+        // Switching the pet trace on prints the pet's state once, immediately.
+        // The trace itself only speaks when something changes, so without this
+        // you would have to provoke the pet before learning anything - and the
+        // state it is already stuck in is usually half the answer.
+        if (enable && session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Pet))
+            SendPetDiagnosticSnapshot(handler);
+
         return true;
+    }
+
+    // One-shot dump of the caller's pet. Deliberately reports raw state and
+    // nothing interpreted: the running commentary in PetAI explains the "why",
+    // this answers "what is it right now".
+    static void SendPetDiagnosticSnapshot(ChatHandler* handler)
+    {
+        Player* player = handler->GetSession()->GetPlayer();
+        if (!player)
+            return;
+
+        Unit* petUnit = player->GetPet();
+        if (!petUnit)
+            petUnit = player->GetGuardianPet();
+        if (!petUnit)
+            petUnit = player->GetFirstControlled();
+
+        Creature* pet = petUnit ? petUnit->ToCreature() : nullptr;
+        if (!pet)
+        {
+            handler->SendSysMessage("[PetDiag] No pet or guardian active - the trace will start when one is summoned.");
+            return;
+        }
+
+        CharmInfo const* charmInfo = pet->GetCharmInfo();
+        if (!charmInfo)
+        {
+            handler->PSendSysMessage("[PetDiag] %s has no charm info, so it is not driven by PetAI.", pet->GetName().c_str());
+            return;
+        }
+
+        char const* react = "unknown";
+        switch (pet->GetReactState())
+        {
+            case REACT_PASSIVE:    react = "passive";    break;
+            case REACT_DEFENSIVE:  react = "defensive";  break;
+            case REACT_AGGRESSIVE: react = "aggressive"; break;
+            default: break;
+        }
+
+        char const* command = "unknown";
+        switch (charmInfo->GetCommandState())
+        {
+            case COMMAND_STAY:   command = "stay";   break;
+            case COMMAND_FOLLOW: command = "follow"; break;
+            case COMMAND_ATTACK: command = "attack"; break;
+            case COMMAND_ABANDON: command = "abandon"; break;
+            case COMMAND_MOVE_TO: command = "moveto"; break;
+            default: break;
+        }
+
+        handler->PSendSysMessage("[PetDiag] %s (entry %u) react=%s command=%s owner_dist=%.1f leash=%.1f",
+            pet->GetName().c_str(), pet->GetEntry(), react, command,
+            player->GetExactDist(pet), player->GetVisibilityRange() - 10.0f);
+
+        // Non-const because the CharmInfo state accessors are non-const.
+        CharmInfo* mutableCharmInfo = pet->GetCharmInfo();
+        handler->PSendSysMessage("[PetDiag] flags: commandAttack=%u commandFollow=%u atStay=%u following=%u returning=%u",
+            uint32(mutableCharmInfo->IsCommandAttack()), uint32(mutableCharmInfo->IsCommandFollow()),
+            uint32(mutableCharmInfo->IsAtStay()), uint32(mutableCharmInfo->IsFollowing()),
+            uint32(mutableCharmInfo->IsReturning()));
+
+        Unit* victim = pet->GetVictim();
+        if (!victim)
+        {
+            handler->SendSysMessage("[PetDiag] target: none.");
+            return;
+        }
+
+        handler->PSendSysMessage("[PetDiag] target: %s - validAttackTarget=%u breakableControlAura=%u dist=%.1f",
+            victim->GetName().c_str(), uint32(pet->IsValidAttackTarget(victim)),
+            uint32(victim->HasBreakableByDamageCrowdControlAura(pet)), pet->GetExactDist(victim));
     }
 
     static bool HandleGMOnCommand(ChatHandler* handler)

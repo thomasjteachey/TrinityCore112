@@ -166,7 +166,7 @@ class spell_pet_moveto : public SpellScript
         //pet->GetMotionMaster()->MoveChase();
         CreatureAI* AI = pet->ToCreature()->AI();
         if (PetAI* petAI = dynamic_cast<PetAI*>(AI))
-            petAI->HandleReturnMovement();
+            petAI->HandleReturnMovement("you sent it to a spot with the move-to command");
     }
 
     void Register() override
