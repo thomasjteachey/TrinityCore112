@@ -17,6 +17,7 @@
 
 #include "PetAI.h"
 #include "AIException.h"
+#include "Chat.h"
 #include "Creature.h"
 #include "Errors.h"
 #include "Group.h"
@@ -26,10 +27,13 @@
 #include "Pet.h"
 #include "Player.h"
 #include "Spell.h"
+#include "SpellAuraEffects.h"
+#include "SpellAuras.h"
 #include "SpellHistory.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "Util.h"
+#include "WorldSession.h"
 
 namespace
 {
@@ -63,6 +67,148 @@ namespace
             return effect.IsEffect(SPELL_EFFECT_HEAL);
         });
     }
+
+    // ---------------------------------------------------------------------
+    // ".gm diagnostics on pet"
+    //
+    // A running commentary on why a pet engaged, disengaged or refused to
+    // engage, delivered to the pet's own owner and to nobody else. It exists
+    // because the pet re-validates its target on EVERY tick while the player
+    // who ordered the attack validated it once, so a pet can walk home from a
+    // target its owner is still happily hitting, with nothing on screen to say
+    // why.
+    //
+    // Two rules keep it honest and cheap:
+    //
+    //  - Every line is a STATE CHANGE, never a per-tick sample. PetAI::UpdateAI
+    //    runs for every pet on the realm every world tick; a line per tick would
+    //    be unreadable and would drown the chat frame in seconds.
+    //  - Nothing is computed before the listener is known. PetDiagListener() is
+    //    three pointer hops and a mask test, and it comes FIRST - the aura walks
+    //    and the string building below only ever run for a pet somebody asked
+    //    about. (An earlier diagnostic in this codebase got this wrong and paid
+    //    for two VMAP raycasts per chase tick on every player-owned unit whether
+    //    or not anyone was listening.)
+    Player* PetDiagListener(Creature const* me)
+    {
+        Unit* owner = me->GetCharmerOrOwner();
+        if (!owner)
+            return nullptr;
+
+        Player* player = owner->ToPlayer();
+        if (!player)
+            return nullptr;
+
+        WorldSession* session = player->GetSession();
+        if (!session || !session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Pet))
+            return nullptr;
+
+        return player;
+    }
+
+    char const* ControlAuraTypeName(AuraType type)
+    {
+        switch (type)
+        {
+            case SPELL_AURA_MOD_CONFUSE: return "confuse";
+            case SPELL_AURA_MOD_FEAR:    return "fear";
+            case SPELL_AURA_MOD_STUN:    return "stun";
+            case SPELL_AURA_MOD_ROOT:    return "root";
+            case SPELL_AURA_TRANSFORM:   return "transform";
+            default:                     return "control";
+        }
+    }
+
+    // Mirrors Unit::HasBreakableByDamageCrowdControlAura - the same five aura
+    // types, the same "ignore my own channel" rule - but hands back the aura
+    // that answered yes instead of a bare bool.
+    //
+    // Naming the spell is the entire point. That function's idea of "crowd
+    // control" is much wider than a player's: any ROOT, STUN, FEAR, CONFUSE or
+    // TRANSFORM whose spell carries AURA_INTERRUPT_FLAG_TAKE_DAMAGE counts. A
+    // Frost Nova, an Entangling Roots, a Freezing Trap or a scripted knockdown
+    // all qualify, and none of them look like crowd control to the person
+    // watching their pet turn around and walk away.
+    AuraEffect const* FindBreakableControlAura(Unit const* victim, Unit* excludeCasterChannel, AuraType& typeOut)
+    {
+        uint32 excludeAura = 0;
+        if (Spell* channeled = excludeCasterChannel ? excludeCasterChannel->GetCurrentSpell(CURRENT_CHANNELED_SPELL) : nullptr)
+            excludeAura = channeled->GetSpellInfo()->Id;
+
+        AuraType const controlTypes[] =
+        {
+            SPELL_AURA_MOD_CONFUSE,
+            SPELL_AURA_MOD_FEAR,
+            SPELL_AURA_MOD_STUN,
+            SPELL_AURA_MOD_ROOT,
+            SPELL_AURA_TRANSFORM
+        };
+
+        for (AuraType type : controlTypes)
+            for (AuraEffect const* effect : victim->GetAuraEffectsByType(type))
+                if ((!excludeAura || excludeAura != effect->GetSpellInfo()->Id) &&
+                    (effect->GetSpellInfo()->AuraInterruptFlags & AURA_INTERRUPT_FLAG_TAKE_DAMAGE))
+                {
+                    typeOut = type;
+                    return effect;
+                }
+
+        return nullptr;
+    }
+
+    // Why WorldObject::IsValidAttackTarget said no, walked in the same order it
+    // walks so the answer is the check the pet actually tripped over.
+    //
+    // The friendliness answer at the bottom is the interesting one on this
+    // realm. Everything is one faction here, so an enemy player or playerbot is
+    // only attackable because a pseudo-faction rule higher up in that function
+    // says so - and those rules read live state (the bot's FFA byte, sanctuary,
+    // War Mode). The moment one of them goes quiet mid-fight the target reads
+    // as friendly, and the pet, unlike its owner, notices immediately.
+    char const* DescribeInvalidAttackTarget(Creature const* me, Unit const* victim)
+    {
+        if (!victim->IsAlive())
+            return "target is dead";
+
+        if (victim->HasUnitState(UNIT_STATE_UNATTACKABLE))
+            return "target is in an unattackable state (evading, or mid-teleport)";
+
+        if (victim->GetTypeId() == TYPEID_PLAYER && victim->ToPlayer()->IsGameMaster())
+            return "target is a game master";
+
+        if (me->GetPhaseMask() != victim->GetPhaseMask())
+            return "phase mismatch - pet and target are no longer in the same phase";
+
+        if (!me->CanSeeOrDetect(victim))
+            return "pet can no longer see or detect the target (stealth, invisibility or visibility rules)";
+
+        if (victim->HasUnitFlag(UNIT_FLAG_UNINTERACTIBLE))
+            return "target is flagged uninteractible";
+
+        if (victim->HasUnitFlag(UNIT_FLAG_ON_TAXI))
+            return "target boarded a taxi";
+
+        if (victim->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_NOT_ATTACKABLE_1 | UNIT_FLAG_NON_ATTACKABLE_2))
+            return "target carries a non-attackable unit flag";
+
+        if (victim->IsImmuneToNPC())
+            return "target is immune to NPCs, and a pet is an NPC (its owner is not)";
+
+        if (me->IsInSanctuary())
+            return "pet is standing in a sanctuary";
+
+        if (victim->IsInSanctuary())
+            return "target is standing in a sanctuary";
+
+        if (Player const* victimPlayer = victim->ToPlayer())
+            if (!victimPlayer->IsPvP() && !victimPlayer->IsFFAPvP())
+                return "target player is no longer PvP or FFA flagged";
+
+        if (me->IsFriendlyTo(victim) || victim->IsFriendlyTo(me))
+            return "target now reads as friendly to the pet";
+
+        return "IsValidAttackTarget refused for a reason not broken out here";
+    }
 }
 
 int32 PetAI::Permissible(Creature const* creature)
@@ -82,7 +228,9 @@ int32 PetAI::Permissible(Creature const* creature)
     return PERMIT_BASE_NO;
 }
 
-PetAI::PetAI(Creature* creature) : CreatureAI(creature), _tracker(TIME_INTERVAL_LOOK), _lastCrowdControlledVictim(ObjectGuid::Empty), _queuedSpellTarget(ObjectGuid::Empty), _queuedSpellId(0)
+PetAI::PetAI(Creature* creature) : CreatureAI(creature), _tracker(TIME_INTERVAL_LOOK), _lastCrowdControlledVictim(ObjectGuid::Empty), _queuedSpellTarget(ObjectGuid::Empty), _queuedSpellId(0),
+    _diagnosticVictim(ObjectGuid::Empty), _diagnosticRefusedTarget(ObjectGuid::Empty), _diagnosticRefusalReason(nullptr),
+    _diagnosticMotionType(MAX_MOTION_TYPE)
 {
     if (!me->GetCharmInfo())
         throw InvalidAIException("Creature doesn't have a valid charm info");
@@ -171,6 +319,8 @@ void PetAI::UpdateAI(uint32 diff)
 
     Unit* owner = me->GetCharmerOrOwner();
 
+    ReportDiagnosticVictimChange();
+
     ProcessSpellQueue();
 
     if (_updateAlliesTimer <= diff)
@@ -191,18 +341,45 @@ void PetAI::UpdateAI(uint32 diff)
             {
                 _lastCrowdControlledVictim = victimGuid;
 
+                // Name the spell, not just the verdict. "Its target isn't crowd
+                // controlled" is the commonest thing an owner says about this
+                // branch, and they are usually right by their own definition and
+                // wrong by HasBreakableByDamageCrowdControlAura's.
+                if (Player* listener = PetDiagListener(me))
+                {
+                    ChatHandler handler(listener->GetSession());
+                    AuraType controlType = SPELL_AURA_NONE;
+                    if (AuraEffect const* control = FindBreakableControlAura(victim, me, controlType))
+                    {
+                        SpellInfo const* controlSpell = control->GetSpellInfo();
+                        char const* spellName = controlSpell->SpellName[handler.GetSessionDbcLocale()];
+                        if (!spellName)
+                            spellName = controlSpell->SpellName[LOCALE_enUS];
+
+                        handler.PSendSysMessage(
+                            "[PetDiag] Breaking off %s: \"%s\" (spell %u) is on it - a %s that breaks on damage, %d ms left.",
+                            victim->GetName().c_str(), spellName ? spellName : "<unnamed>", controlSpell->Id,
+                            ControlAuraTypeName(controlType), control->GetBase()->GetDuration());
+                    }
+                    else
+                        handler.PSendSysMessage(
+                            "[PetDiag] Breaking off %s: it has a damage-breakable control aura (it expired before it could be named).",
+                            victim->GetName().c_str());
+                }
+
                 me->InterruptNonMeleeSpells(false);
-                StopAttack();
+                StopAttack("its target picked up a damage-breakable control aura");
                 return;
             }
         }
         else if (!_lastCrowdControlledVictim.IsEmpty() && _lastCrowdControlledVictim == victim->GetGUID())
             _lastCrowdControlledVictim.Clear();
 
-        if (NeedToStop())
+        char const* stopReason = nullptr;
+        if (NeedToStop(&stopReason))
         {
             TC_LOG_TRACE("scripts.ai.petai", "PetAI::UpdateAI: AI stopped attacking {}", me->GetGUID().ToString());
-            StopAttack();
+            StopAttack(stopReason);
             return;
         }
 
@@ -231,10 +408,10 @@ void PetAI::UpdateAI(uint32 diff)
             if (nextTarget)
                 AttackStart(nextTarget);
             else
-                HandleReturnMovement();
+                HandleReturnMovement("it has no target and found nothing worth picking up");
         }
         else
-            HandleReturnMovement();
+            HandleReturnMovement("it has no target, and a non-aggressive pet does not go looking for one");
     }
 
     // Autocast (cast only in combat or persistent spells in any state)
@@ -376,11 +553,15 @@ void PetAI::KilledUnit(Unit* victim)
     me->AttackStop();
     me->InterruptNonMeleeSpells(false);
 
+    // A kill is an ordinary end to a fight, not a target snatched away, so the
+    // trace should not go on to report it as one.
+    _diagnosticVictim.Clear();
+
     // Before returning to owner, see if there are more things to attack
     if (Unit* nextTarget = SelectNextTarget(false))
         AttackStart(nextTarget);
     else
-        HandleReturnMovement(); // Return
+        HandleReturnMovement("its target is dead and there is nothing else nearby to pick up"); // Return
 }
 
 void PetAI::AttackStart(Unit* target)
@@ -398,8 +579,27 @@ void PetAI::AttackStart(Unit* target)
 void PetAI::_AttackStart(Unit* target)
 {
     // Check all pet states to decide if we can attack this target
-    if (!CanAttack(target))
+    char const* refusalReason = nullptr;
+    if (!CanAttack(target, &refusalReason))
+    {
+        // DamageTaken routes every single hit through here, so a refusal is
+        // only worth reporting when the target or the reason changes -
+        // otherwise a pet being beaten on would repeat one line per swing.
+        ObjectGuid const targetGuid = target ? target->GetGUID() : ObjectGuid::Empty;
+        if (_diagnosticRefusedTarget != targetGuid || _diagnosticRefusalReason != refusalReason)
+        {
+            _diagnosticRefusedTarget = targetGuid;
+            _diagnosticRefusalReason = refusalReason;
+
+            if (Player* listener = PetDiagListener(me))
+                ChatHandler(listener->GetSession()).PSendSysMessage("[PetDiag] Will not engage %s: %s.",
+                    target ? target->GetName().c_str() : "<nothing>", refusalReason ? refusalReason : "no reason recorded");
+        }
         return;
+    }
+
+    _diagnosticRefusedTarget.Clear();
+    _diagnosticRefusalReason = nullptr;
 
     if (target->HasBreakableByDamageCrowdControlAura(me) && me->GetCharmInfo()->IsCommandAttack())
         _lastCrowdControlledVictim = target->GetGUID();
@@ -493,7 +693,7 @@ Unit* PetAI::SelectNextTarget(bool allowAutoSelect) const
     return nullptr;
 }
 
-void PetAI::HandleReturnMovement()
+void PetAI::HandleReturnMovement(char const* diagnosticReason)
 {
     // Handles moving the pet back to stay or owner
 
@@ -516,6 +716,14 @@ void PetAI::HandleReturnMovement()
             float x, y, z;
 
             me->GetCharmInfo()->GetStayPosition(x, y, z);
+
+            // Inside the guard on purpose: the guard is what makes this a
+            // transition. HandleReturnMovement itself is called on every tick
+            // the pet has no target.
+            if (Player* listener = PetDiagListener(me))
+                ChatHandler(listener->GetSession()).PSendSysMessage(
+                    "[PetDiag] Walking back to its stay spot because %s.", diagnosticReason);
+
             ClearCharmInfoFlags();
             me->GetCharmInfo()->SetIsReturning(true);
 
@@ -529,6 +737,10 @@ void PetAI::HandleReturnMovement()
     {
         if (!me->GetCharmInfo()->IsFollowing() && !me->GetCharmInfo()->IsReturning())
         {
+            if (Player* listener = PetDiagListener(me))
+                ChatHandler(listener->GetSession()).PSendSysMessage(
+                    "[PetDiag] Running back to you because %s.", diagnosticReason);
+
             ClearCharmInfoFlags();
             me->GetCharmInfo()->SetIsReturning(true);
             me->GetCharmInfo()->SetIsCommandAttack(false);
@@ -596,6 +808,9 @@ void PetAI::MovementInform(uint32 type, uint32 id)
             // pet's GUIDLow since we set that as the waypoint ID
             if (id == me->GetGUID().GetCounter() && me->GetCharmInfo()->IsReturning())
             {
+                if (Player* listener = PetDiagListener(me))
+                    ChatHandler(listener->GetSession()).SendSysMessage("[PetDiag] Reached its stay spot; it is idle and will pick up targets in melee reach only.");
+
                 ClearCharmInfoFlags();
                 me->GetCharmInfo()->SetIsAtStay(true);
                 me->GetMotionMaster()->MoveIdle();
@@ -608,6 +823,13 @@ void PetAI::MovementInform(uint32 type, uint32 id)
             // otherwise we're probably chasing a creature
             if (me->GetCharmerOrOwner() && me->GetCharmInfo() && id == me->GetCharmerOrOwner()->GetGUID().GetCounter() && me->GetCharmInfo()->IsReturning())
             {
+                // Worth watching for: until this arrives the pet still counts as
+                // "returning", and a returning pet told to follow refuses every
+                // target. A return that never reports arrival is a pet that has
+                // gone deaf, not a pet that is being fussy.
+                if (Player* listener = PetDiagListener(me))
+                    ChatHandler(listener->GetSession()).SendSysMessage("[PetDiag] Got back to you; it is following again and free to take targets.");
+
                 ClearCharmInfoFlags();
                 me->GetCharmInfo()->SetIsFollowing(true);
             }
@@ -618,14 +840,24 @@ void PetAI::MovementInform(uint32 type, uint32 id)
     }
 }
 
-bool PetAI::CanAttack(Unit* target)
+bool PetAI::CanAttack(Unit* target, char const** refusalReason)
 {
     // Evaluates wether a pet can attack a specific target based on CommandState, ReactState and other flags
     // IMPORTANT: The order in which things are checked is important, be careful if you add or remove checks
 
+    // Written straight into the out-parameter at each refusal rather than
+    // reconstructed afterwards by a parallel helper - a second copy of this
+    // ladder would start lying the first time somebody reordered this one.
+    auto refuse = [refusalReason](char const* why)
+    {
+        if (refusalReason)
+            *refusalReason = why;
+        return false;
+    };
+
     // Hmmm...
     if (!target)
-        return false;
+        return refuse("there is no target");
 
     if (!target->IsAlive())
     {
@@ -633,30 +865,46 @@ bool PetAI::CanAttack(Unit* target)
         // Clear target to prevent getting stuck on dead targets
         //me->AttackStop();
         //me->InterruptNonMeleeSpells(false);
-        return false;
+        return refuse("the target is dead");
     }
 
     if (!me->GetCharmInfo())
     {
         TC_LOG_WARN("scripts.ai.petai", "me->GetCharmInfo() is NULL in PetAI::CanAttack(). Debug info: {}", GetDebugInfo());
-        return false;
+        return refuse("the pet has no charm info");
     }
 
     // Passive - passive pets can attack if told to
     if (me->HasReactState(REACT_PASSIVE))
-        return me->GetCharmInfo()->IsCommandAttack();
+    {
+        if (!me->GetCharmInfo()->IsCommandAttack())
+            return refuse("it is passive and was not told to attack");
+        return true;
+    }
 
     // CC - mobs under crowd control can be attacked if owner commanded
     if (target->HasBreakableByDamageCrowdControlAura())
-        return me->GetCharmInfo()->IsCommandAttack();
+    {
+        if (!me->GetCharmInfo()->IsCommandAttack())
+            return refuse("the target has a damage-breakable control aura and you did not order the attack");
+        return true;
+    }
 
     // Returning - pets ignore attacks only if owner clicked follow
     if (me->GetCharmInfo()->IsReturning())
-        return !me->GetCharmInfo()->IsCommandFollow();
+    {
+        if (me->GetCharmInfo()->IsCommandFollow())
+            return refuse("it is on its way back to you and you told it to follow");
+        return true;
+    }
 
     // Stay - can attack if target is within range or commanded to
     if (me->GetCharmInfo()->HasCommandState(COMMAND_STAY))
-        return (me->IsWithinMeleeRange(target) || me->GetCharmInfo()->IsCommandAttack());
+    {
+        if (!me->IsWithinMeleeRange(target) && !me->GetCharmInfo()->IsCommandAttack())
+            return refuse("it was told to stay and the target is out of melee reach of its stay spot");
+        return true;
+    }
 
     //  Pets attacking something (or chasing) should only switch targets if owner tells them to
     if (me->GetVictim() && me->GetVictim() != target)
@@ -669,15 +917,23 @@ bool PetAI::CanAttack(Unit* target)
             ownerTarget = me->GetCharmerOrOwner()->GetVictim();
 
         if (ownerTarget && me->GetCharmInfo()->IsCommandAttack())
-            return (target->GetGUID() == ownerTarget->GetGUID());
+        {
+            if (target->GetGUID() != ownerTarget->GetGUID())
+                return refuse("it is already on the target you ordered, and this is a different one");
+            return true;
+        }
     }
 
     // Follow
     if (me->GetCharmInfo()->HasCommandState(COMMAND_FOLLOW))
-        return !me->GetCharmInfo()->IsReturning();
+    {
+        if (me->GetCharmInfo()->IsReturning())
+            return refuse("it is following you and still on its way back");
+        return true;
+    }
 
     // default, though we shouldn't ever get here
-    return false;
+    return refuse("no rule allowed the attack (command state fell through)");
 }
 
 void PetAI::ReceiveEmote(Player* player, uint32 emote)
@@ -706,21 +962,40 @@ void PetAI::ReceiveEmote(Player* player, uint32 emote)
     }
 }
 
-bool PetAI::NeedToStop()
+bool PetAI::NeedToStop(char const** reason)
 {
     // This is needed for charmed creatures, as once their target was reset other effects can trigger threat
     if (me->IsCharmed() && me->GetVictim() == me->GetCharmer())
+    {
+        if (reason)
+            *reason = "it is charmed and its target is whoever is charming it";
         return true;
+    }
 
     // dont allow pets to follow targets far away from owner
     if (Unit* owner = me->GetCharmerOrOwner())
         if (owner->GetExactDist(me) >= (owner->GetVisibilityRange() - 10.0f))
+        {
+            if (reason)
+                *reason = "it hit the leash - it got further from you than the visibility range allows";
             return true;
+        }
 
-    return !me->IsValidAttackTarget(me->GetVictim());
+    // Re-asked every single tick, which the owner's own attack is not. Anything
+    // that flips here mid-fight sends the pet home while its owner carries on
+    // swinging, and that asymmetry is what most "why did my pet run back?"
+    // reports turn out to be.
+    if (!me->IsValidAttackTarget(me->GetVictim()))
+    {
+        if (reason)
+            *reason = DescribeInvalidAttackTarget(me, me->GetVictim());
+        return true;
+    }
+
+    return false;
 }
 
-void PetAI::StopAttack()
+void PetAI::StopAttack(char const* diagnosticReason)
 {
     if (!me->IsAlive())
     {
@@ -730,11 +1005,15 @@ void PetAI::StopAttack()
         return;
     }
 
+    // Claimed here so ReportDiagnosticVictimChange does not also announce the
+    // target loss next tick as if something outside the AI had caused it.
+    _diagnosticVictim.Clear();
+
     me->AttackStop();
     me->InterruptNonMeleeSpells(false);
     me->GetCharmInfo()->SetIsCommandAttack(false);
     ClearCharmInfoFlags();
-    HandleReturnMovement();
+    HandleReturnMovement(diagnosticReason ? diagnosticReason : "the pet AI stopped the attack");
 }
 
 void PetAI::UpdateAllies()
@@ -796,4 +1075,76 @@ void PetAI::ClearCharmInfoFlags()
         ci->SetIsFollowing(false);
         ci->SetIsReturning(false);
     }
+}
+
+void PetAI::ReportDiagnosticVictimChange()
+{
+    ReportDiagnosticMovementChange();
+
+    // Runs before anything else in UpdateAI and costs one GUID compare on the
+    // overwhelmingly common tick where the target has not changed.
+    Unit* victim = me->GetVictim();
+    ObjectGuid const victimGuid = victim ? victim->GetGUID() : ObjectGuid::Empty;
+    if (victimGuid == _diagnosticVictim)
+        return;
+
+    ObjectGuid const previousGuid = _diagnosticVictim;
+    _diagnosticVictim = victimGuid;
+
+    Player* listener = PetDiagListener(me);
+    if (!listener)
+        return;
+
+    ChatHandler handler(listener->GetSession());
+
+    if (victim)
+    {
+        CharmInfo* charmInfo = me->GetCharmInfo();
+        handler.PSendSysMessage("[PetDiag] Engaging %s, %.1f yd away (%s).", victim->GetName().c_str(), me->GetExactDist(victim),
+            charmInfo && charmInfo->IsCommandAttack() ? "you ordered it" : "it chose this itself");
+        return;
+    }
+
+    if (previousGuid.IsEmpty())
+        return;
+
+    // StopAttack and KilledUnit both clear _diagnosticVictim themselves, so
+    // getting here means the target was taken away by something OUTSIDE the pet
+    // AI - the mob evaded or reset, combat was dropped, a charm or a script
+    // called AttackStop. From the owner's chair that looks exactly like the pet
+    // deciding to leave, which is why it gets its own line.
+    Unit* previous = ObjectAccessor::GetUnit(*me, previousGuid);
+    if (!previous)
+    {
+        handler.SendSysMessage("[PetDiag] Its target is no longer visible to the pet (died, despawned, phased or went out of range).");
+        return;
+    }
+
+    handler.PSendSysMessage("[PetDiag] Its target %s was cleared by something outside the pet AI - alive=%u, in combat=%u, %.1f yd away. Likely an evade, a reset, or combat being dropped.",
+        previous->GetName().c_str(), uint32(previous->IsAlive()), uint32(previous->IsInCombat()), me->GetExactDist(previous));
+}
+
+void PetAI::ReportDiagnosticMovementChange()
+{
+    // The blind spot every other line here shares: a pet can be walked home
+    // without PetAI deciding anything at all, if something else puts a follow on
+    // top of its motion stack while the fight is still on. That looks identical
+    // from the owner's chair and leaves no trace anywhere else, so the motion
+    // type is watched directly. One enum compare per tick.
+    MovementGeneratorType const motionType = me->GetMotionMaster()->GetCurrentMovementGeneratorType();
+    if (motionType == _diagnosticMotionType)
+        return;
+
+    MovementGeneratorType const previousType = _diagnosticMotionType;
+    _diagnosticMotionType = motionType;
+
+    // Only worth a line while there is a fight to be pulled out of. Out of
+    // combat the pet is supposed to be following, and saying so every time it
+    // idles and re-follows is noise.
+    if (!me->GetVictim() || motionType != FOLLOW_MOTION_TYPE || previousType != CHASE_MOTION_TYPE)
+        return;
+
+    if (Player* listener = PetDiagListener(me))
+        ChatHandler(listener->GetSession()).SendSysMessage(
+            "[PetDiag] It swapped from chasing to following you while it still has a target - something outside the pet AI moved it, the pet AI did not give up.");
 }

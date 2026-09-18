@@ -1363,6 +1363,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void RemoveItemDurations(Item* item);
         void SendItemDurations();
         void LoadCorpse(PreparedQueryResult result);
+        void FinishBattlegroundReviveAtLogin();
         void LoadPet();
 
         bool AddItem(uint32 itemId, uint32 count);
@@ -2529,6 +2530,12 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         BGData                    m_bgData;
 
         bool m_IsBGRandomWinner;
+
+        // "This login owes the character a full bar." Raised in LoadFromDB when
+        // the login carries the character out of a battleground that no longer
+        // holds it, narrowed by LoadCorpse to the characters that were actually
+        // dead, and cleared by FinishBattlegroundReviveAtLogin.
+        bool m_battlegroundReviveAtLogin;
 
         /*********************************************************/
         /***                   ENTRY POINT                     ***/

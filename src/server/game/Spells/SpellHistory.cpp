@@ -1108,6 +1108,55 @@ void SpellHistory::RestoreCooldownStateAfterDuel()
     }
 }
 
+std::vector<SpellHistory::CooldownEntry> SpellHistory::GetCooldownSnapshot() const
+{
+    std::vector<CooldownEntry> snapshot;
+    snapshot.reserve(_spellCooldowns.size());
+
+    for (auto const& p : _spellCooldowns)
+    {
+        if (p.second.OnHold)
+            continue;
+
+        CooldownEntry entry = p.second;
+        entry.SpellId = p.first;
+        snapshot.push_back(entry);
+    }
+
+    return snapshot;
+}
+
+void SpellHistory::SendCooldowns(std::vector<uint32> const& spellIds) const
+{
+    Player* playerOwner = GetPlayerOwner();
+    if (!playerOwner || spellIds.empty())
+        return;
+
+    Clock::time_point const now = GameTime::GetSystemTime();
+
+    // No ten-minute ceiling here, unlike the duel restore above: the cooldowns
+    // worth putting back are mostly the long ones - a hearthstone, a trinket, a
+    // twenty-minute bubble - and a capped value would tell the client a shorter
+    // story than the server's. The client builds {id, ms, category half 0} out
+    // of this, which is the same record SMSG_INITIAL_SPELLS gives it at login.
+    PacketCooldowns cooldowns;
+    for (uint32 spellId : spellIds)
+    {
+        auto itr = _spellCooldowns.find(spellId);
+        if (itr == _spellCooldowns.end() || itr->second.OnHold || itr->second.CooldownEnd <= now)
+            continue;
+
+        cooldowns[spellId] = uint32(std::chrono::duration_cast<std::chrono::milliseconds>(itr->second.CooldownEnd - now).count());
+    }
+
+    if (cooldowns.empty())
+        return;
+
+    WorldPacket data;
+    BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_EVENT_COOLDOWNS, cooldowns);
+    playerOwner->SendDirectMessage(&data);
+}
+
 template void SpellHistory::LoadFromDB<Player>(PreparedQueryResult cooldownsResult);
 template void SpellHistory::LoadFromDB<Pet>(PreparedQueryResult cooldownsResult);
 template void SpellHistory::SaveToDB<Player>(CharacterDatabaseTransaction trans);

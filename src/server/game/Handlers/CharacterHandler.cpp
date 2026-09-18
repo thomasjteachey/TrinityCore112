@@ -1233,6 +1233,12 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
 
     sScriptMgr->OnPlayerLogin(pCurrChar, firstLogin);
 
+    // Last, because the login scripts above are what hand a tournament
+    // character its own gear back: a character revived on its way out of a
+    // battleground gets the bars it will actually play with, not the ones it
+    // had while it was still wearing the battleground's loadout.
+    pCurrChar->FinishBattlegroundReviveAtLogin();
+
     TC_METRIC_EVENT("player_events", "Login", pCurrChar->GetName());
 }
 
