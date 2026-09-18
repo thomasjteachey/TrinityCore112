@@ -221,23 +221,22 @@ uint8 TierOfSource(ObjectGuid const& guid)
     return itr != g_Config.tierByCharacter.end() ? itr->second : kNoTier;
 }
 
-// A tiered battleground's bots go where they make the difference. The team the
-// real players are up against is dealt the battleground's own tier first, then
-// the tier beside it, then the far one, and bots in no tier last. The players'
-// own team is dealt that tier last, which keeps it for the other side. Sources
+// A tiered battleground is filled from its own tier first, then the tier
+// beside it, then the far one, and bots in no tier last - on both teams, so
+// the battleground plays at the difficulty it is meant to have whichever side
+// you are on. A tier holds nine bots and Scarlet Chapel seats eleven of them
+// around one player, so reserving the tier for the opposing team only left
+// easy bots on the bench and put hard ones in the easy battleground. Sources
 // arrive shuffled and the sort is stable, so bots of equal rank stay in random
 // order.
-void OrderSourcesByTier(std::vector<ObjectGuid>& sources, uint8 matchTier, bool facesPlayers)
+void OrderSourcesByTier(std::vector<ObjectGuid>& sources, uint8 matchTier)
 {
     if (matchTier == kNoTier)
         return;
 
-    auto const rank = [matchTier, facesPlayers](ObjectGuid const& guid) -> uint8
+    auto const rank = [matchTier](ObjectGuid const& guid) -> uint8
     {
         uint8 const tier = TierOfSource(guid);
-        if (!facesPlayers)
-            return tier == matchTier ? 1 : 0;
-
         if (tier == kNoTier)
             return kTierCount;
 
@@ -467,7 +466,6 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
     TeamId const teamIndex = Battleground::GetTeamIndexByTeamId(team);
     TeamId const otherIndex = teamIndex == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
     uint8 const matchTier = TierOfBattleground(bg);
-    bool const facesPlayers = tally.teams[otherIndex].humans != 0;
 
     uint32 added = 0;
     auto governorAllows = [&]()
@@ -477,7 +475,7 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
 
     // 1. Online bots in the bracket.
     std::vector<ObjectGuid> online = CollectOnlineSources(minLevel, maxLevel, usedSources);
-    OrderSourcesByTier(online, matchTier, facesPlayers);
+    OrderSourcesByTier(online, matchTier);
     for (ObjectGuid const& sourceGuid : online)
     {
         if (added >= wanted || !governorAllows())
@@ -509,7 +507,7 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
     {
         RefreshOfflinePoolIfStale(nowMs);
         std::vector<ObjectGuid> offline = CollectOfflineSources(minLevel, maxLevel, usedSources);
-        OrderSourcesByTier(offline, matchTier, facesPlayers);
+        OrderSourcesByTier(offline, matchTier);
         WorldSession* callbackSession = offline.empty() ? nullptr : FindCallbackSession(tally, teamIndex);
         for (ObjectGuid const& sourceGuid : offline)
         {
