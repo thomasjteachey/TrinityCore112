@@ -152,6 +152,13 @@ namespace BarracksHardcore
     // above. 0.25 leaves three quarters standing per repeat, which is the
     // gentle end; 0.5 is the old hardcoded halving; 0 turns it off.
     float s_playerKillXpDecayPerKill = 0.25f;
+    // Honor paid for the same open-world kill once the killer is AT THE LEVEL
+    // CAP, where experience has nowhere left to go. Flat, and with no decay of
+    // its own: the tenth kill of the same bot is worth what the first was. 0
+    // disables it, and a levelling character never sees it - below the cap every
+    // honor award on this realm is paid as experience instead
+    // (Player::RewardHonor).
+    uint32 s_playerKillMaxLevelHonor = 10;
 
     // A bare number, or a value that varies with level written as "level:value"
     // pairs: "9" or "1:9, 25:9, 45:5". Between two points it interpolates;
@@ -270,6 +277,8 @@ namespace BarracksHardcore
             sConfigMgr->GetIntDefault("Centurion.Hardcore.PlayerKill.DiminishSeconds", 2 * HOUR)));
         s_playerKillXpDecayPerKill = std::clamp(
             sConfigMgr->GetFloatDefault("Centurion.Hardcore.PlayerKill.XpDecayPerKill", 0.25f), 0.0f, 1.0f);
+        s_playerKillMaxLevelHonor = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Centurion.Hardcore.PlayerKill.MaxLevelHonor", 10), 0, 10000));
 
         std::string rewardMode = sConfigMgr->GetStringDefault("Centurion.Hardcore.PlayerKill.RewardMode", "bubble");
         std::transform(rewardMode.begin(), rewardMode.end(), rewardMode.begin(),
@@ -292,6 +301,13 @@ namespace BarracksHardcore
                 s_playerKillMobsPerKill.Get(10), s_playerKillMobsPerKill.Get(30), s_playerKillMobsPerKill.Get(60));
         else
             TC_LOG_INFO("playerbots.hardcore", "Player-kill reward: BUBBLE mode, {:.2f} bubbles.", s_playerKillXpBubbles);
+
+        if (s_playerKillMaxLevelHonor)
+            TC_LOG_INFO("playerbots.hardcore",
+                "Player-kill reward at the level cap: {} honor per non-grey playerbot, no decay.",
+                s_playerKillMaxLevelHonor);
+        else
+            TC_LOG_INFO("playerbots.hardcore", "Player-kill reward at the level cap: none.");
 
         s_botAccountIds.clear();
         std::stringstream stream(sConfigMgr->GetStringDefault("Playerbot.RandomPopulation.BotAccountIds", ""));
@@ -2419,35 +2435,48 @@ public:
         return float(zeroDifference + victimLevel - killerLevel) / float(zeroDifference);
     }
 
-    // Experience for an open-world PvP kill.
+    // What an open-world PvP kill is worth.
     //
-    // Counted in BUBBLES: the experience bar is drawn as twenty segments, so a
-    // bubble is 5% of a level and the whole bar is twenty of them. The reward
-    // is therefore a share of the KILLER's own next-level requirement, which
-    // keeps it worth the same at every level instead of becoming irrelevant.
+    // While levelling, EXPERIENCE. Counted in BUBBLES: the experience bar is
+    // drawn as twenty segments, so a bubble is 5% of a level and the whole bar is
+    // twenty of them. The reward is therefore a share of the KILLER's own
+    // next-level requirement, which keeps it worth the same at every level
+    // instead of becoming irrelevant.
+    //
+    // At the LEVEL CAP, HONOR - experience has nowhere left to go there. See the
+    // recipient loop, which decides per person, so a mixed-level group pays each
+    // member in whichever of the two is worth having.
     //
     // This custom reward is WORLD PvP only. Battlegrounds and arenas already
-    // have their own reward systems and must never receive this extra XP.
-    void AwardPlayerKillExperience(Player* killer, Player* victim)
+    // have their own reward systems and must never receive either half of it.
+    void AwardPlayerKillReward(Player* killer, Player* victim)
     {
-        // Each mode has its own "switched off" test. Reading the bubble count in
-        // mob mode would disable the whole feature for anybody who set a curve
-        // without also clearing ExperienceBubbles.
         if (!s_enabled)
-            return;
-
-        if (s_playerKillRewardMob)
-        {
-            if (s_playerKillMobsPerKill.Points.empty())
-                return;
-        }
-        else if (s_playerKillXpBubbles <= 0.0f)
             return;
 
         if (!killer || !victim || killer == victim)
             return;
 
         if (killer->InBattleground() || victim->InBattleground())
+            return;
+
+        // Each half of the reward has its own "switched off" test, and each is
+        // asked separately: a realm that turns the experience off still pays its
+        // level-capped players, and one that sets MaxLevelHonor to 0 still pays
+        // everybody who is levelling. Reading the bubble count in mob mode would
+        // disable the whole feature for anybody who set a curve without also
+        // clearing ExperienceBubbles, which is why the mode decides which figure
+        // is consulted.
+        bool const xpEnabled = s_playerKillRewardMob
+            ? !s_playerKillMobsPerKill.Points.empty()
+            : s_playerKillXpBubbles > 0.0f;
+
+        // Honor is paid for a PLAYERBOT only. A flat amount with no decay is
+        // farmable by arrangement between two real people - one stands still and
+        // dies over and over - while a bot has to be fought, and fights back.
+        bool const honorEnabled = s_playerKillMaxLevelHonor > 0 && IsPlayerbot(victim);
+
+        if (!xpEnabled && !honorEnabled)
             return;
 
         // Everyone who shared the kill, the way honor divides it: the killer,
@@ -2485,7 +2514,12 @@ public:
         // return below fired before con, decay, damage share or even the log
         // line. Mob mode prices off the KILLER's level and never asks.
         uint32 const victimLevelXp = sObjectMgr->GetXPForLevel(victim->GetLevel());
-        if (!s_playerKillRewardMob && !victimLevelXp)
+
+        // Whether there is any experience to hand out at all. It is no longer a
+        // reason to leave: a level-capped killer is paid in honor, and that does
+        // not care what the victim's bar is worth.
+        bool const canPayXp = xpEnabled && (s_playerKillRewardMob || victimLevelXp);
+        if (!canPayXp && !honorEnabled)
             return;
 
         // Scaled by how much of the victim's death people were responsible for.
@@ -2508,6 +2542,42 @@ public:
             // VICTIM may be either: this is the open-world PvP reward, not a
             // playerbot-only one.
             if (IsPlayerbot(member))
+                continue;
+
+            // AT THE CAP the kill pays HONOR instead. GiveXP returns without
+            // doing anything once a character is at max level, so the fight that
+            // levels a recruit paid the veteran standing next to them nothing at
+            // all; now it pays them in the currency they actually have a use for.
+            //
+            // Flat, and with no decay: the tenth kill of the same bot is worth
+            // what the first was. Con is not applied either - the only line honor
+            // keeps is the GREY one, the same threshold the client draws the name
+            // out at, so farming twenty-somethings is worth nothing.
+            //
+            // Paid through RewardHonor rather than ModifyHonorPoints on purpose:
+            // that is the one place the realm decides what an honor award
+            // becomes, so the honor-gain aura and the below-the-cap experience
+            // rule both apply here without this code restating either. A
+            // character standing at the cap on BORROWED Violet Hold levels is
+            // refused there, as everywhere else.
+            if (member->IsMaxLevel())
+            {
+                if (!honorEnabled)
+                    continue;
+
+                if (victim->GetLevel() <= Trinity::XP::GetGrayLevel(member->GetLevel()))
+                    continue;
+
+                member->RewardHonor(nullptr, 1, int32(s_playerKillMaxLevelHonor));
+
+                TC_LOG_INFO("playerbots.hardcore",
+                    "{} (level {}) shared the kill of playerbot {} (level {}) for {} honor at the level cap.",
+                    member->GetName(), member->GetLevel(), victim->GetName(), victim->GetLevel(),
+                    s_playerKillMaxLevelHonor);
+                continue;
+            }
+
+            if (!canPayXp)
                 continue;
 
             // Con is judged per recipient, because a group can be any spread of
@@ -2576,7 +2646,7 @@ public:
 
     void OnPVPKill(Player* killer, Player* victim) override
     {
-        AwardPlayerKillExperience(killer, victim);
+        AwardPlayerKillReward(killer, victim);
 
         // Bots are players, so bot-on-bot kills land here rather than in the
         // creature hook - and on a full-loot FFA realm the guardians hunt each
@@ -2596,11 +2666,12 @@ public:
         // Unit::Kill routes a PET killing blow through OnPlayerKilledByCreature
         // because the literal attacker is a Creature. Resolve the hunter/warlock
         // pet back to its real-player owner and award the exact same WORLD-PvP
-        // XP as a direct player killing blow. AwardPlayerKillExperience itself
-        // rejects BGs/arenas, bots as killers, gray victims and level-cap XP.
+        // reward as a direct player killing blow. AwardPlayerKillReward itself
+        // rejects BGs/arenas, bots as killers and gray victims, and chooses
+        // experience or cap honor per recipient.
         if (killer && killer->IsPet())
             if (Player* owner = killer->GetCharmerOrOwnerPlayerOrPlayerItself())
-                AwardPlayerKillExperience(owner, victim);
+                AwardPlayerKillReward(owner, victim);
 
         // A bot killed by a mob with nobody around has stripped itself onto an
         // empty hillside: no one can reach the chest before it despawns, so

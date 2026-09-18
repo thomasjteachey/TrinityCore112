@@ -2876,8 +2876,10 @@ Battleground.GiveXPForKills = 0
 #    Centurion.Battleground.XpInsteadOfHonor
 #        Description: Below the level cap no honor is paid at all. Every award -
 #                     battleground and arena objectives, wins and losses, Violet Hold
-#                     runs, quests, honor spells, world PvP - is paid as experience
-#                     instead. In a battleground it is scaled by bracket: each point is
+#                     runs, quests, world PvP, and honor spells, which is what an item
+#                     such as the Centurion Mark of Honor casts when it is used - is
+#                     paid as experience instead.
+#                     In a battleground it is scaled by bracket: each point is
 #                     a fixed share of a level at the bracket's midpoint level; outside
 #                     one, at the character's own level. Bots and anyone with the
 #                     experience toggle off get neither. The share of an award past
@@ -4108,6 +4110,37 @@ Centurion.Hardcore.PlayerKill.RewardMode = "bubble"
 #
 
 Centurion.Hardcore.PlayerKill.MobsPerKill = 9
+
+#
+#    Centurion.Hardcore.PlayerKill.MaxLevelHonor
+#        Description: Honor for an open-world kill once the killer is AT THE
+#                     LEVEL CAP. Experience has nowhere to go there - GiveXP
+#                     returns without doing anything at max level - so the fight
+#                     that levels a recruit used to pay the veteran beside them
+#                     nothing at all.
+#
+#                     Flat, and with NO decay: the tenth kill of the same bot is
+#                     worth what the first was, and the level gap is not applied
+#                     either. The one line it keeps is GREY - the same threshold
+#                     the client greys the name out at - so a level 60 farming
+#                     level-20 bots is paid nothing.
+#
+#                     PLAYERBOT victims only. A flat amount with no decay is
+#                     farmable by arrangement between two real people; a bot has
+#                     to be fought, and fights back.
+#
+#                     Paid through Player::RewardHonor, so the War Mode honor
+#                     bonus aura and Rate.Honor apply, and it is the honor a
+#                     level-capped character actually banks - a character below
+#                     the cap is paid in experience by that same function
+#                     (Centurion.Battleground.XpInsteadOfHonor) and never reaches
+#                     this reward.
+#        Default:     10
+#                     0 - off, and level-capped players get nothing for a kill
+#                         again.
+#
+
+Centurion.Hardcore.PlayerKill.MaxLevelHonor = 10
 
 #
 #    Centurion.Shutdown.RequestFile

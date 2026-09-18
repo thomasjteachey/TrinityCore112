@@ -766,6 +766,15 @@ void Battleground::RemoveAuraOnTeam(uint32 SpellID, uint32 TeamID)
             player->RemoveAura(SpellID);
 }
 
+// Honor to a team WITHOUT touching the scoreboard - RewardHonorToTeam feeds the
+// bonus-honor column, and a payout that is not an objective has no business
+// showing up there.
+//
+// It still pays through RewardHonor rather than ModifyHonorPoints, because that
+// is where the realm decides what an honor award becomes: below the level cap it
+// is experience instead (Centurion.Battleground.XpInsteadOfHonor), and reaching
+// into the purse directly is how a character under the cap ends up holding honor
+// nobody meant them to have.
 void Battleground::CenturionRewardHonorToTeam(uint32 Honor, uint32 TeamID)
 {
     if (m_IsCustomGame)
@@ -773,7 +782,7 @@ void Battleground::CenturionRewardHonorToTeam(uint32 Honor, uint32 TeamID)
 
     for (BattlegroundPlayerMap::const_iterator itr = m_Players.begin(); itr != m_Players.end(); ++itr)
         if (Player* player = _GetPlayerForTeam(TeamID, itr, "CenturionRewardHonorToTeam"))
-            player->ModifyHonorPoints(int32(Honor));
+            player->RewardHonor(nullptr, 1, int32(Honor));
 }
 
 void Battleground::RewardHonorToTeam(uint32 Honor, uint32 TeamID)
