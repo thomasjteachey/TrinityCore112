@@ -311,6 +311,14 @@ namespace Tournament
     // handler about anything a character tries to eat, drink, quaff or throw.
     bool IsConsumableAllowedInMatch(Player const* player, ItemTemplate const* proto);
 
+    // Eat, drink and bandage out of your own bags for free. The tournament hands
+    // those out as spells, so a character using its own food, drink or bandage
+    // in a tournament match spends nothing: Spell::TakeCastItem asks before it
+    // takes a charge or the item. Only what an arena already allows (the arena
+    // flag, a conjured consumable, a real First Aid bandage) and only that
+    // family - a healthstone is not a meal.
+    bool KeepsCastItem(Player const* player, ItemTemplate const* proto);
+
     // Centurion.Tournament.InnateSpells as spell -> class mask (0 = every
     // class): the eat/drink/bandage a tournament character knows without being
     // taught, lent to a world-mode character for the length of a match.

@@ -5285,6 +5285,12 @@ void Spell::TakeCastItem()
         return;
     }
 
+    // A tournament match feeds everyone for free (Miscellaneous/TournamentMode.h):
+    // eating, drinking and bandaging are granted there as spells, so doing it out
+    // of your own bags costs the item nothing.
+    if (Tournament::KeepsCastItem(player, proto))
+        return;
+
     bool expendable = false;
     bool withoutCharges = false;
 

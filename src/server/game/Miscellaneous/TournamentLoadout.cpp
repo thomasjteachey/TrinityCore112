@@ -74,6 +74,7 @@
 #include "Mail.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "StringConvert.h"
 #include "StringFormat.h"
@@ -619,6 +620,44 @@ namespace
         return taught;
     }
 
+    // Eat, drink and bandage out of a character's own bags, for free. The
+    // tournament hands those out as spells, so somebody who reaches for the food
+    // in their pack instead of the innate one is not spending anything either -
+    // the item is used and stays where it is (Spell::TakeCastItem asks).
+    //
+    // Only what this realm already lets anyone use in an arena - the arena flag,
+    // a conjured consumable, or a real First Aid bandage, exactly as
+    // Handlers/SpellHandler.cpp judges it - and only the eat/drink/bandage
+    // family: a healthstone is not a meal, and an endless one would be a hole.
+    // Classic bandage ranks sit on the food subclass, which is why both are here.
+    bool IsFreeMatchConsumable(ItemTemplate const* proto)
+    {
+        if (!proto || proto->Class != ITEM_CLASS_CONSUMABLE)
+            return false;
+
+        if (proto->SubClass != ITEM_SUBCLASS_FOOD && proto->SubClass != ITEM_SUBCLASS_BANDAGE)
+            return false;
+
+        if (proto->HasFlag(ITEM_FLAG_IGNORE_DEFAULT_ARENA_RESTRICTIONS) || proto->IsConjuredConsumable())
+            return true;
+
+        for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+            if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(proto->Spells[i].SpellId))
+                if (spellInfo->Mechanic == MECHANIC_BANDAGE)
+                    return true;
+
+        return false;
+    }
+
+    bool InTournamentMatch(Player const* player)
+    {
+        if (!player || !IsEnabled())
+            return false;
+
+        Battleground const* battleground = player->GetBattleground();
+        return battleground && battleground->IsTournamentPool();
+    }
+
     // Chromie keeps the tournament's clock, and she is already the voice that
     // turns people away from a battleground door (Handlers/BattleGroundHandler.cpp),
     // so she is the one who explains what just happened to a world-mode
@@ -659,6 +698,8 @@ namespace
 
         if (spells)
             WhisperAsChromie(player, "You also know how to eat, drink and bandage while you are here, whether or not you ever learned them. That knowledge leaves with the match.");
+
+        WhisperAsChromie(player, "Your own food, drink and bandages still work in here, and using one costs you nothing - you will walk out with everything you walked in with.");
 
         if (LoadoutConfig.BanConsumables)
             WhisperAsChromie(player, "Nothing else out of your bags works in here: no potions, elixirs, food or grenades but the tournament's own, which Jazzik sells.");
@@ -1161,6 +1202,17 @@ bool IsConsumableAllowedInMatch(Player const* player, ItemTemplate const* proto)
     if (!consumable)
         return true;
 
+    // Eating, drinking and bandaging are what the tournament gives everyone for
+    // nothing; doing it out of your own bags is the same thing by another route,
+    // and costs the item nothing either (KeepsCastItem).
+    if (IsFreeMatchConsumable(proto))
+        return true;
+
     return LoadoutConfig.AllowedConsumables.count(proto->ItemId) != 0;
+}
+
+bool KeepsCastItem(Player const* player, ItemTemplate const* proto)
+{
+    return InTournamentMatch(player) && IsFreeMatchConsumable(proto);
 }
 }
