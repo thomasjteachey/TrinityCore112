@@ -691,34 +691,23 @@ namespace
         player->SendDirectMessage(&data);
     }
 
-    void BriefWorldCharacter(Player* player, uint32 swapped, uint32 putAway, uint32 spells)
+    // The owner's words, verbatim. The counts and the borrowed spells are not
+    // mentioned: what somebody needs on the way in is that their gear is safe and
+    // what still works, not an inventory report.
+    void BriefWorldCharacter(Player* player)
     {
         WorldSession const* session = player->GetSession();
         if (!session || session->IsVirtualSession() || IsTournamentCharacter(player))
             return;
 
-        WhisperAsChromie(player, "Welcome to the tournament. Everyone fights on the same footing in here, so I have taken care of your equipment.");
-
-        if (swapped || putAway)
-        {
-            std::string what = "You are wearing tournament gear for this match";
-            if (swapped)
-                what += Trinity::StringFormat(" - {} piece(s) of it", swapped);
-            if (putAway)
-                what += Trinity::StringFormat(", and {} thing(s) you were carrying are being kept aside", putAway);
-            what += ". Any enchants and gems you paid for came across with it.";
-            WhisperAsChromie(player, what);
-        }
-
+        WhisperAsChromie(player, "Welcome to the tournament. We've made some changes to your gear to keep things competitive.");
         WhisperAsChromie(player, "Everything of yours comes straight back the moment you leave - a win, a loss, a disconnect, a crash, it makes no difference. None of it is lost.");
-
-        if (spells)
-            WhisperAsChromie(player, "You also know how to eat, drink and bandage while you are here, whether or not you ever learned them. That knowledge leaves with the match.");
-
         WhisperAsChromie(player, "Your own food, drink and bandages still work in here, and using one costs you nothing - you will walk out with everything you walked in with.");
 
+        // Only when it is true: with the ban off, everything out of their bags
+        // works and telling them otherwise would be a lie.
         if (LoadoutConfig.BanConsumables)
-            WhisperAsChromie(player, "Nothing else out of your bags works in here: no potions, elixirs, food or grenades but the tournament's own, which Jazzik sells.");
+            WhisperAsChromie(player, "Nothing else out of your bags works in here: no potions, flasks, scrolls or grenades. Only our special PvP Consumables.");
     }
 
     // Puts one stashed item back: where it came from when that is free, anywhere
@@ -1084,11 +1073,11 @@ void ApplyBattlegroundLoadout(Player* player)
         CharacterDatabase.CommitTransaction(trans);
         MarkActive(player->GetGUID(), true);
 
-        BriefWorldCharacter(player, issued, putAway, taught);
+        BriefWorldCharacter(player);
     }
 
-    TC_LOG_DEBUG("bg.battleground", "Tournament loadout: dressed {} on map {} ({} item(s) swapped).",
-        player->GetName(), battleground->GetMapId(), entries.size());
+    TC_LOG_DEBUG("bg.battleground", "Tournament loadout: dressed {} on map {}: {} issued, {} put away, {} spell(s) taught.",
+        player->GetName(), battleground->GetMapId(), issued, putAway, taught);
 }
 
 void RestoreBattlegroundLoadout(Player* player)
