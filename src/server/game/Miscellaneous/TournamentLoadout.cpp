@@ -1003,6 +1003,13 @@ void ApplyBattlegroundLoadout(Player* player)
     // A copy writes nothing down, so it needs no transaction either.
     CharacterDatabaseTransaction trans = transient ? CharacterDatabaseTransaction(nullptr) : CharacterDatabase.BeginTransaction();
 
+    // Counted before anything moves: once an original is put away its Item is
+    // gone, and the entry's pointer with it.
+    uint32 putAway = 0;
+    for (LoadoutEntry const& entry : entries)
+        if (entry.Original && !entry.Worn)
+            ++putAway;
+
     for (LoadoutEntry const& entry : entries)
     {
         // An entry with nothing in it is an empty slot being dressed: there is
@@ -1028,11 +1035,6 @@ void ApplyBattlegroundLoadout(Player* player)
         player->SaveInventoryAndGoldToDB(trans);
         CharacterDatabase.CommitTransaction(trans);
         MarkActive(player->GetGUID(), true);
-
-        uint32 putAway = 0;
-        for (LoadoutEntry const& entry : entries)
-            if (entry.Original && !entry.Worn)
-                ++putAway;
 
         BriefWorldCharacter(player, issued, putAway, taught);
     }
