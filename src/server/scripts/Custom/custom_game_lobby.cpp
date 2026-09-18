@@ -19,6 +19,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "Playerbot/Pve/PlayerbotPveManager.h"
 #include "Playerbot/Pvp/PlayerbotObcClone.h"
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
 #include "Playerbot/Pvp/PlayerbotResourceGovernor.h"
@@ -68,6 +69,7 @@ enum GossipAction : uint32
     ACTION_LEAVE_TEAM,
     ACTION_ADD_BOT,
     ACTION_ADD_RANDOM_BOT,
+    ACTION_ADD_RANDOM_PVP_BOT,
     ACTION_REMOVE_BOT_OR_CLONE,
     ACTION_DUPLICATE_TEAM_MEMBER,
     ACTION_DUPLICATE_HUMAN_MEMBER,
@@ -188,6 +190,14 @@ struct CustomGameLobby
 char const* TeamName(uint32 team)
 {
     return team == ALLIANCE ? "Blue" : team == HORDE ? "Red" : "Spectator";
+}
+
+// Names that belong to a copy rather than to a character somebody built:
+// "Obcm" is a live transient clone, "Obcc" a leftover on-disk Obsidian
+// Colosseum one. Copying a copy is never what the host meant.
+bool IsInternalCloneName(std::string const& name)
+{
+    return name.rfind("Obcm", 0) == 0 || name.rfind("Obcc", 0) == 0;
 }
 
 std::string BattlegroundNameByType(BattlegroundTypeId type)
@@ -624,8 +634,15 @@ public:
         }
 
         Player* source = ObjectAccessor::FindConnectedPlayer(sourceGuid);
-        std::vector<uint32> const botAccountIds = playerbot::RandomBotParticipationManager::GetConfiguredBotAccountIds();
-        bool const configuredBotAccount = std::find(botAccountIds.begin(), botAccountIds.end(), characterInfo->AccountId) != botAccountIds.end();
+        // Both bot pools, so that naming a bot and picking one at random give
+        // the same kind of copy. The PvP-only accounts are the ones the random
+        // world population deliberately leaves out, and a character on them is
+        // no less a bot for having been asked for by name.
+        std::vector<uint32> const randomBotAccountIds = playerbot::RandomBotParticipationManager::GetConfiguredBotAccountIds();
+        std::vector<uint32> const& pvpBotAccountIds = playerbot::PveManager::GetConfig().pvpOnlyAccountIds;
+        bool const configuredBotAccount =
+            std::find(randomBotAccountIds.begin(), randomBotAccountIds.end(), characterInfo->AccountId) != randomBotAccountIds.end() ||
+            std::find(pvpBotAccountIds.begin(), pvpBotAccountIds.end(), characterInfo->AccountId) != pvpBotAccountIds.end();
         bool const managedBot = configuredBotAccount || (source && playerbot::IsManagedRandomBot(source));
 
         lobby->CloneRequests.push_back({ lobby->NextCloneRosterSlotId++, sourceGuid, characterInfo->Name, team,
@@ -635,7 +652,10 @@ public:
         return true;
     }
 
-    bool AddRandomPlayerbotClone(Player* player, uint32 team)
+    // Both random-add entries run through here; they differ only in which
+    // account pool they draw from and what the notice calls the bot.
+    bool AddRandomCloneFromAccounts(Player* player, uint32 team, std::vector<uint32> const& botAccountIds,
+        std::string const& poolLabel)
     {
         CustomGameLobby* lobby = GetLobby(player);
         if (!lobby || lobby->ActiveBattlegroundId || (team != ALLIANCE && team != HORDE))
@@ -658,10 +678,9 @@ public:
             return false;
         }
 
-        std::vector<uint32> const botAccountIds = playerbot::RandomBotParticipationManager::GetConfiguredBotAccountIds();
         if (botAccountIds.empty())
         {
-            Notify(player, "No playerbot account IDs are configured.");
+            Notify(player, "No " + poolLabel + " account IDs are configured.");
             return false;
         }
 
@@ -669,12 +688,12 @@ public:
         allCandidates.erase(std::remove_if(allCandidates.begin(), allCandidates.end(), [&](ObjectGuid sourceGuid)
         {
             CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByGuid(sourceGuid);
-            return !characterInfo || characterInfo->Name.rfind("Obcm", 0) == 0;
+            return !characterInfo || IsInternalCloneName(characterInfo->Name);
         }), allCandidates.end());
 
         if (allCandidates.empty())
         {
-            Notify(player, "No eligible characters exist on the configured playerbot accounts.");
+            Notify(player, "No eligible characters exist on the configured " + poolLabel + " accounts.");
             return false;
         }
 
@@ -699,8 +718,23 @@ public:
 
         lobby->CloneRequests.push_back({ lobby->NextCloneRosterSlotId++, sourceGuid, characterInfo->Name, team, true });
         RefreshLobbyClonePreviews(*lobby);
-        Notify(player, "Added playerbot " + characterInfo->Name + " to team " + TeamName(team) + ".");
+        Notify(player, "Added " + poolLabel + " " + characterInfo->Name + " to team " + TeamName(team) + ".");
         return true;
+    }
+
+    bool AddRandomPlayerbotClone(Player* player, uint32 team)
+    {
+        return AddRandomCloneFromAccounts(player, team,
+            playerbot::RandomBotParticipationManager::GetConfiguredBotAccountIds(), "playerbot");
+    }
+
+    // The PvP-only accounts are a pool of their own on purpose: those
+    // characters never log themselves in, they exist only as sources for
+    // copies, and they are built for battlegrounds rather than for the world.
+    bool AddRandomPvpPlayerbotClone(Player* player, uint32 team)
+    {
+        return AddRandomCloneFromAccounts(player, team,
+            playerbot::PveManager::GetConfig().pvpOnlyAccountIds, "PvP playerbot");
     }
 
     bool DuplicateTeamMember(Player* player, uint32 expectedTeam, uint32 selectionId, bool cloneRequest)
@@ -1824,6 +1858,7 @@ public:
 
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add playerbot", team, ACTION_ADD_BOT, "Enter player name", 0, true);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add random playerbot", team, ACTION_ADD_RANDOM_BOT);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add random PvP playerbot", team, ACTION_ADD_RANDOM_PVP_BOT);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Duplicate existing team member...", team, ACTION_DUPLICATE_TEAM_MEMBER);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove playerbot", team, ACTION_REMOVE_BOT_OR_CLONE);
             SendGossipMenuFor(player, 1, me->GetGUID());
@@ -2205,6 +2240,7 @@ public:
                 case ACTION_JOIN_TEAM: manager.SetTeam(player, sender); ShowTeamMenu(player, sender); return true;
                 case ACTION_LEAVE_TEAM: manager.LeaveTeam(player); ShowTeamMenu(player, sender); return true;
                 case ACTION_ADD_RANDOM_BOT: manager.AddRandomPlayerbotClone(player, sender); ShowTeamMenu(player, sender); return true;
+                case ACTION_ADD_RANDOM_PVP_BOT: manager.AddRandomPvpPlayerbotClone(player, sender); ShowTeamMenu(player, sender); return true;
                 case ACTION_DUPLICATE_TEAM_MEMBER: ShowDuplicateTeamMemberMenu(player, sender); return true;
                 case ACTION_DUPLICATE_PAGE:
                     ShowDuplicateTeamMemberMenu(player, GetPagedTeam(sender), GetPagedPage(sender)); return true;
