@@ -700,7 +700,7 @@ namespace
         if (!session || session->IsVirtualSession() || IsTournamentCharacter(player))
             return;
 
-        WhisperAsChromie(player, "Welcome to the tournament. We've made some changes to your gear to keep things competitive.");
+        WhisperAsChromie(player, "Welcome to the tournament. We've made some changes to your gear to keep things competitive. If you were wearing something not on our tournament whitelist, it was replaced.");
         WhisperAsChromie(player, "Everything of yours comes straight back the moment you leave - a win, a loss, a disconnect, a crash, it makes no difference. None of it is lost.");
         WhisperAsChromie(player, "Your own food, drink and bandages still work in here, and using one costs you nothing - you will walk out with everything you walked in with.");
 
