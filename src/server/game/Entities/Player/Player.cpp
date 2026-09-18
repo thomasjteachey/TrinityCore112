@@ -719,6 +719,7 @@ Player::Player(WorldSession* session) : Unit(true)
     m_lastHonorUpdateTime = GameTime::GetGameTime();
 
     m_IsBGRandomWinner = false;
+    m_battlegroundReviveAtLogin = false;
 
     // Player summoning
     m_summon_expire = 0;
@@ -19805,6 +19806,12 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
 
             // We are not in BG anymore
             m_bgData.bgInstanceID = 0;
+
+            // This character is being carried out of a battleground it did not
+            // walk out of. If it is dead it has nothing to run back to - a
+            // battleground never saves a corpse - so LoadCorpse revives it once
+            // the death state is known.
+            m_battlegroundReviveAtLogin = true;
         }
     }
     // currently we do not support transport in bg
@@ -20497,12 +20504,23 @@ void Player::_LoadGlyphAuras()
 
 void Player::LoadCorpse(PreparedQueryResult result)
 {
-    if (IsAlive() || HasAtLoginFlag(AT_LOGIN_RESURRECT))
+    // Dying in a battleground and then leaving it any way but walking out - the
+    // battleground evicting the character while it was offline, a restart, a
+    // crash - leaves nothing to run back to, because battleground maps never
+    // save a corpse. Stand the character back up whole, the way walking out of
+    // a battleground dead already does (Battleground::RemovePlayerAtLeave).
+    // A character that came out of one alive owes nothing, so drop the flag.
+    bool const reviveOutOfBattleground = m_battlegroundReviveAtLogin && !IsAlive();
+    m_battlegroundReviveAtLogin = reviveOutOfBattleground;
+
+    if (IsAlive() || HasAtLoginFlag(AT_LOGIN_RESURRECT) || reviveOutOfBattleground)
         SpawnCorpseBones(false);
 
     if (!IsAlive())
     {
-        if (HasAtLoginFlag(AT_LOGIN_RESURRECT))
+        if (reviveOutOfBattleground)
+            ResurrectPlayer(1.0f);
+        else if (HasAtLoginFlag(AT_LOGIN_RESURRECT))
             ResurrectPlayer(0.5f);
         else if (result)
         {
@@ -20513,6 +20531,27 @@ void Player::LoadCorpse(PreparedQueryResult result)
     }
 
     RemoveAtLoginFlag(AT_LOGIN_RESURRECT);
+}
+
+void Player::FinishBattlegroundReviveAtLogin()
+{
+    if (!m_battlegroundReviveAtLogin)
+        return;
+
+    m_battlegroundReviveAtLogin = false;
+
+    if (!IsAlive())
+        return;
+
+    // LoadCorpse filled the bars while the character was still wearing whatever
+    // the battleground had put on it. The rest of the login has since handed it
+    // its own gear back, which moves maximum health and mana, and a raised
+    // maximum does not carry the current value up with it. Fill them again
+    // against the numbers the character is actually going to play with.
+    SetFullHealth();
+    SetPower(POWER_MANA, GetMaxPower(POWER_MANA));
+    SetPower(POWER_RAGE, 0);
+    SetPower(POWER_ENERGY, GetMaxPower(POWER_ENERGY));
 }
 
 void Player::_LoadInventory(PreparedQueryResult result, uint32 timeDiff)
