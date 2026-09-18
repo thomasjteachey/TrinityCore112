@@ -8232,6 +8232,14 @@ namespace
         float y = 0.0f;
         float z = 0.0f;
         uint32 zoneId = 0;
+        // The inhabited zone this ground is routed FROM, which is not always the
+        // zone it stands in. The Wailing Caverns bowl is the case that proves it:
+        // AreaTable 718 has no parent and names continent 43, because the instance's
+        // own zone id was reused for the outdoor entrance sunk into the Barrens. So
+        // every deviate cell reads zone 718, 718 is in no band of the classic chart,
+        // no bot is ever homed there, and a home-zone match rejected all 26 grounds
+        // while the devilsaurs - standing in Un'Goro, a real zone - routed fine.
+        uint32 routeZoneId = 0;
         uint8 level = 0;
     };
 
@@ -9374,7 +9382,7 @@ namespace
                 HuntSpot& spot = huntCells[key];
                 if (!spot.level)
                     spot = { uint16(data.mapId), data.spawnPoint.GetPositionX(), data.spawnPoint.GetPositionY(),
-                        data.spawnPoint.GetPositionZ(), 0, 0 };
+                        data.spawnPoint.GetPositionZ(), /*zoneId*/ 0, /*routeZoneId*/ 0, /*level*/ 0 };
 
                 // The toughest of the cell, so the skinning and level tests a bot
                 // passes to be SENT here are the ones it meets on arrival.
@@ -9391,12 +9399,58 @@ namespace
                 if (IsForbiddenGrindZone(spot.zoneId))
                     continue;
 
+                // Whose ground is this, for a bot that lives somewhere? Usually its
+                // own zone - but a zone the classic chart never posts anybody to can
+                // never be anybody's home, so a home-zone match against it refuses
+                // every bot on the realm (see HuntSpot::routeZoneId). Adopt the zone
+                // of the nearest ordinary grind cluster instead: that is the spawn
+                // data's own answer to which inhabited zone this ground sits in, and
+                // it keeps the rule "routing chooses ground, it does not migrate".
+                spot.routeZoneId = spot.zoneId;
+                if (!FindClassicZoneBand(spot.zoneId))
+                {
+                    // Bounded, so a genuinely isolated ground is left alone rather
+                    // than glued to whatever distant zone happens to be closest.
+                    float bestDistanceSq = 500.0f * 500.0f;
+                    for (auto const& [clusterZoneId, clusters] : g_GrindSpotsByZone)
+                    {
+                        if (!FindClassicZoneBand(clusterZoneId))
+                            continue;
+
+                        for (GrindSpot const& cluster : clusters)
+                        {
+                            if (cluster.mapId != spot.mapId)
+                                continue;
+
+                            float const dx = cluster.x - spot.x;
+                            float const dy = cluster.y - spot.y;
+                            float const distanceSq = dx * dx + dy * dy;
+                            if (distanceSq < bestDistanceSq)
+                            {
+                                bestDistanceSq = distanceSq;
+                                spot.routeZoneId = clusterZoneId;
+                            }
+                        }
+                    }
+                }
+
                 g_HuntSpots.push_back(spot);
             }
         }
 
-        TC_LOG_INFO("playerbots.pve", "Hunting grounds: {} cell(s) from {} listed entry(ies).",
-            g_HuntSpots.size(), g_PveConfig.devilsaurHuntEntries.size());
+        uint32 adoptedGrounds = 0;
+        for (HuntSpot const& ground : g_HuntSpots)
+            if (ground.routeZoneId != ground.zoneId)
+                ++adoptedGrounds;
+
+        TC_LOG_INFO("playerbots.pve",
+            "Hunting grounds: {} cell(s) from {} listed entry(ies); {} routed from a neighbouring zone.",
+            g_HuntSpots.size(), g_PveConfig.devilsaurHuntEntries.size(), adoptedGrounds);
+
+        for (HuntSpot const& ground : g_HuntSpots)
+            if (ground.routeZoneId != ground.zoneId)
+                TC_LOG_DEBUG("playerbots.pve", "Hunting ground at ({:.0f}, {:.0f}) stands in zone {} and is routed from zone {}.",
+                    ground.x, ground.y, ground.zoneId, ground.routeZoneId);
 
         // Publish completion only after every derived table is populated. Readers
         // do not take g_GrindSpotLock, so setting this at function entry exposed a
@@ -10176,7 +10230,7 @@ namespace
 
         std::vector<GrindSpot> grounds;
         for (HuntSpot const& spot : g_HuntSpots)
-            if (spot.zoneId == zoneId && HuntSpotSuitsBot(bot, spot))
+            if (spot.routeZoneId == zoneId && HuntSpotSuitsBot(bot, spot))
                 grounds.push_back(GrindSpot{ spot.mapId, spot.x, spot.y, spot.z, spot.zoneId });
 
         if (grounds.empty())
