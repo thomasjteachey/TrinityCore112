@@ -66,6 +66,8 @@ void AddSC_instance_maraudon();
 void AddSC_boss_onyxia();
 void AddSC_instance_onyxias_lair();
 void AddSC_boss_onyxia_40();   // vanilla, 40-player - raid difficulty 2
+void AddSC_onyxia_entrance_40();
+void AddSC_onyxia40_spells();
 // Razorfen Downs
 void AddSC_boss_tuten_kash();
 void AddSC_boss_mordresh_fire_eye();
@@ -180,6 +182,8 @@ void AddKalimdorScripts()
     AddSC_boss_onyxia();
     AddSC_instance_onyxias_lair();
     AddSC_boss_onyxia_40();
+    AddSC_onyxia_entrance_40();
+    AddSC_onyxia40_spells();
     // Razorfen Downs
     AddSC_boss_tuten_kash();
     AddSC_boss_mordresh_fire_eye();
