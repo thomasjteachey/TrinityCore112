@@ -671,20 +671,23 @@ namespace
         return battleground && battleground->IsTournamentPool();
     }
 
-    // Chromie keeps the tournament's clock, and she is already the voice that
-    // turns people away from a battleground door (Handlers/BattleGroundHandler.cpp),
-    // so she is the one who explains what just happened to a world-mode
-    // character's gear. Tournament characters have always lived by these rules
-    // and are told nothing.
-    uint32 constexpr ChromieEntry = 27915;
+    // Chromie keeps the tournament's clock, so she is the one who explains what
+    // just happened to a world-mode character's gear. Tournament characters have
+    // always lived by these rules and are told nothing.
+    //
+    // The same packet the Gurubashi ring sends (scripts/Custom/custom_gurubashi_arena.cpp,
+    // WhisperFromChromi): CHAT_MSG_WHISPER_FOREIGN from a PLAYER guid, so the
+    // client reads it as an ordinary whisper from somebody called Chromie rather
+    // than as a creature's monster-whisper, and it lands in the same place her
+    // other lines do. The two cannot share code - game/ cannot call into scripts -
+    // so they have to be kept in step by hand.
     char const* const ChromieName = "Chromie";
 
     void WhisperAsChromie(Player* player, std::string const& message)
     {
+        ObjectGuid const chromieGuid = ObjectGuid::Create<HighGuid::Player>(1);
         WorldPacket data;
-        ObjectGuid const chromieGuid = ObjectGuid::Create<HighGuid::Unit>(ChromieEntry, 1);
-        ChatHandler::BuildChatPacket(data, CHAT_MSG_MONSTER_WHISPER, LANG_UNIVERSAL, chromieGuid, player->GetGUID(), message,
-            0, ChromieName, player->GetName());
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER_FOREIGN, LANG_UNIVERSAL, chromieGuid, player->GetGUID(), message, 0, ChromieName);
         player->SendDirectMessage(&data);
     }
 
