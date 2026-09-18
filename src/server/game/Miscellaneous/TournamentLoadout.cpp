@@ -638,26 +638,35 @@ namespace
     // in their pack instead of the innate one is not spending anything either -
     // the item is used and stays where it is (Spell::TakeCastItem asks).
     //
-    // Only what this realm already lets anyone use in an arena - the arena flag,
-    // a conjured consumable, or a real First Aid bandage, exactly as
-    // Handlers/SpellHandler.cpp judges it - and only the eat/drink/bandage
-    // family: a healthstone is not a meal, and an endless one would be a hole.
-    // Classic bandage ranks sit on the food subclass, which is why both are here.
+    // Judged by what the item DOES, never by its subclass. Morning Glory Dew and
+    // Roasted Quail are class 0 subclass 0 - the classic ranks sit on the plain
+    // consumable subclass, where the later ones use Food & Drink and Bandage -
+    // so a subclass test refused a drink at the door with "you can't do that
+    // right now" while letting the modern rank through.
+    //
+    // Food and drink are told apart from an elixir the way the core tells them
+    // apart everywhere else (Player.cpp, Unit.cpp): a regeneration aura that
+    // ends when you stand up. Mageblood and its like restore mana over time too
+    // and are not a meal - nor is a healthstone, and an endless one would be a
+    // hole in the no-consumables rule rather than a convenience.
     bool IsFreeMatchConsumable(ItemTemplate const* proto)
     {
         if (!proto || proto->Class != ITEM_CLASS_CONSUMABLE)
             return false;
 
-        if (proto->SubClass != ITEM_SUBCLASS_FOOD && proto->SubClass != ITEM_SUBCLASS_BANDAGE)
-            return false;
-
-        if (proto->HasFlag(ITEM_FLAG_IGNORE_DEFAULT_ARENA_RESTRICTIONS) || proto->IsConjuredConsumable())
-            return true;
-
         for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
-            if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(proto->Spells[i].SpellId))
-                if (spellInfo->Mechanic == MECHANIC_BANDAGE)
-                    return true;
+        {
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(proto->Spells[i].SpellId);
+            if (!spellInfo)
+                continue;
+
+            if (spellInfo->Mechanic == MECHANIC_BANDAGE)
+                return true;
+
+            if ((spellInfo->HasAura(SPELL_AURA_MOD_REGEN) || spellInfo->HasAura(SPELL_AURA_MOD_POWER_REGEN)) &&
+                (spellInfo->AuraInterruptFlags & AURA_INTERRUPT_FLAG_NOT_SEATED))
+                return true;
+        }
 
         return false;
     }
