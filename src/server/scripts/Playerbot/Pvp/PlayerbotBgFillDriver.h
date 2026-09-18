@@ -46,10 +46,10 @@ namespace playerbot
 // gates every addition and can shed clones under sustained pressure.
 //
 // Bots can be sorted into easy, medium and hard tiers (Playerbot.BgFill.Tier.*),
-// each owning some battleground types. In a battleground that belongs to a
-// tier, the team the real players are fighting is dealt that tier's bots first
-// and the players' own team gets them last, so one battleground can be the
-// easy fight and another the hard one while every copy comes from one pool.
+// each owning some battleground types. Both teams of such a battleground are
+// filled from its tier first and from the tier next to it once that one runs
+// out, so one battleground can be the easy fight and another the hard one
+// while every copy comes from one pool.
 class PlayerbotBgFillDriver
 {
 public:
