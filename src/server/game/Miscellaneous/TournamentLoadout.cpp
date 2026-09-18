@@ -33,8 +33,12 @@
 //      armour, an off hand behind a two-hander - -> a field kit piece for the
 //      slot, and nothing at all when the kit has none for it (neck, rings and
 //      trinkets have none),
-//   5. it is carried and has no twin                      -> it is put away for
-//      the match, so nothing untwinned can be swapped in mid-fight.
+//
+// A spare in the BAGS is answered the same way, measured against the slot it
+// would go in: its twin, one of the same shape off the starter vendors, or the
+// class template's piece. Somebody who packed a second weapon still has a second
+// weapon, a tournament one - and only what none of those can answer is put away
+// for the match, so nothing untwinned can be swapped in mid-fight.
 //
 // An EMPTY equipment slot is dressed from the class template too: somebody who
 // walked in without a neck, rings or trinkets fights in the tournament's and
@@ -348,9 +352,13 @@ namespace
     // slot and its sword is no answer for somebody who fights with axes. Held to
     // the template piece's item level, so matching the shape cannot hand out
     // something better than the loadout is meant to give.
-    uint32 PickTournamentWeapon(Player* player, LoadoutEntry const& entry)
+    // `slot` is the equipment slot the answer is measured against: the one the item
+    // came off for a worn piece, or the one it WOULD go in for a spare in a bag.
+    // `mustEquip` is false for a spare, which is going into a bag and has no
+    // business being refused for a hand that is already full.
+    uint32 PickTournamentWeapon(Player* player, LoadoutEntry const& entry, uint8 slot, bool mustEquip)
     {
-        if (!entry.OriginalInventoryType || !IsHandSlot(entry.Slot))
+        if (!entry.OriginalInventoryType || !IsHandSlot(slot))
             return 0;
 
         auto itr = TournamentWeapons.find(WeaponKey(entry.OriginalClass, entry.OriginalSubClass));
@@ -358,7 +366,7 @@ namespace
             return 0;
 
         uint32 cap = 0;
-        if (ItemTemplate const* templateProto = sObjectMgr->GetItemTemplate(GetLoadoutTemplateItem(player->GetClass(), entry.Slot)))
+        if (ItemTemplate const* templateProto = sObjectMgr->GetItemTemplate(GetLoadoutTemplateItem(player->GetClass(), slot)))
             cap = templateProto->ItemLevel;
 
         bool const twoHanded = entry.OriginalInventoryType == INVTYPE_2HWEAPON;
@@ -376,12 +384,50 @@ namespace
             if (cap && proto->ItemLevel > cap)
                 continue;
 
+            if (!mustEquip)
+                return candidate;
+
             uint16 dest = 0;
-            if (player->CanEquipNewItem(entry.Slot, dest, candidate, false) == EQUIP_ERR_OK)
+            if (player->CanEquipNewItem(slot, dest, candidate, false) == EQUIP_ERR_OK)
                 return candidate;
         }
 
         return 0;
+    }
+
+    // Which equipment slot a spare would go in, so a weapon in the bags can be
+    // measured against the hand it belongs to and a spare chest against the
+    // chest. NULL_SLOT for anything with no home - the loadout then has no
+    // answer for it and it is put away instead.
+    uint8 EquipmentSlotForInventoryType(uint32 inventoryType)
+    {
+        switch (inventoryType)
+        {
+            case INVTYPE_HEAD:            return EQUIPMENT_SLOT_HEAD;
+            case INVTYPE_NECK:            return EQUIPMENT_SLOT_NECK;
+            case INVTYPE_SHOULDERS:       return EQUIPMENT_SLOT_SHOULDERS;
+            case INVTYPE_CHEST:
+            case INVTYPE_ROBE:            return EQUIPMENT_SLOT_CHEST;
+            case INVTYPE_WAIST:           return EQUIPMENT_SLOT_WAIST;
+            case INVTYPE_LEGS:            return EQUIPMENT_SLOT_LEGS;
+            case INVTYPE_FEET:            return EQUIPMENT_SLOT_FEET;
+            case INVTYPE_WRISTS:          return EQUIPMENT_SLOT_WRISTS;
+            case INVTYPE_HANDS:           return EQUIPMENT_SLOT_HANDS;
+            case INVTYPE_FINGER:          return EQUIPMENT_SLOT_FINGER1;
+            case INVTYPE_TRINKET:         return EQUIPMENT_SLOT_TRINKET1;
+            case INVTYPE_CLOAK:           return EQUIPMENT_SLOT_BACK;
+            case INVTYPE_WEAPON:
+            case INVTYPE_2HWEAPON:
+            case INVTYPE_WEAPONMAINHAND:  return EQUIPMENT_SLOT_MAINHAND;
+            case INVTYPE_SHIELD:
+            case INVTYPE_WEAPONOFFHAND:
+            case INVTYPE_HOLDABLE:        return EQUIPMENT_SLOT_OFFHAND;
+            case INVTYPE_RANGED:
+            case INVTYPE_RANGEDRIGHT:
+            case INVTYPE_THROWN:
+            case INVTYPE_RELIC:           return EQUIPMENT_SLOT_RANGED;
+            default:                      return NULL_SLOT;
+        }
     }
 
     // The enchants, gems and bonuses the original was carrying go onto the item
@@ -464,12 +510,19 @@ namespace
 
         if (twin)
         {
-            entry.Substitute = twin;                                              // rule 1
+            entry.Substitute = twin;
             entry.Twinned = true;
         }
-        else if (worn)
-            entry.Substitute = GetLoadoutTemplateItem(player->GetClass(), slot);  // rule 2
-        // rule 4: carried and untwinned - put away, nothing in its place
+        else
+        {
+            // Worn or carried, the answer is the same: the class template's
+            // piece for the slot this belongs in. A spare in the bags is
+            // replaced rather than simply taken, so somebody who packed a second
+            // weapon still has a second weapon - a tournament one.
+            uint8 const homeSlot = worn ? slot : EquipmentSlotForInventoryType(proto->InventoryType);
+            if (homeSlot != NULL_SLOT)
+                entry.Substitute = GetLoadoutTemplateItem(player->GetClass(), homeSlot);
+        }
 
         out.push_back(entry);
     }
@@ -552,7 +605,7 @@ namespace
                 candidates.push_back(entry.Substitute);
 
             if (!entry.Twinned)
-                if (uint32 const shaped = PickTournamentWeapon(player, entry))
+                if (uint32 const shaped = PickTournamentWeapon(player, entry, entry.Slot, true))
                     candidates.push_back(shaped);
 
             if (!entry.Twinned && entry.Substitute)
@@ -578,8 +631,20 @@ namespace
             if (wanted)
                 issued = player->EquipNewItem(dest, wanted, true);
         }
-        else if (wanted)
+        else
         {
+            // A spare follows the same order as a worn piece: its own twin, then
+            // one of the same shape off the starter vendors, then the class
+            // template's piece for the slot it belongs in. Only what none of
+            // those can answer is simply put away. It goes into a bag, not onto
+            // the character, so nothing here is asked whether it can be equipped.
+            if (!entry.Twinned)
+                if (uint32 const shaped = PickTournamentWeapon(player, entry, EquipmentSlotForInventoryType(entry.OriginalInventoryType), false))
+                    wanted = shaped;
+
+            if (!wanted)
+                return false;
+
             ItemPosCountVec dest;
             if (player->CanStoreNewItem(entry.Bag, entry.Slot, dest, wanted, entry.Count) != EQUIP_ERR_OK &&
                 player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, wanted, entry.Count) != EQUIP_ERR_OK)
