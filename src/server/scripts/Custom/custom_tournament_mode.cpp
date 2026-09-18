@@ -22,6 +22,10 @@
 //   .tournament info [$player]
 //   .tournament set $player world|tournament
 //   .tournament queue $player on|off
+//   .tournament item $item        - the world/tournament pair an item belongs to
+//   .tournament reloaditems       - re-read `item_tournament_link` and the loadout data
+//   .tournament loadout [$player] [restore] - the battleground loadout a character
+//                                   is wearing, and a way to hand its gear back
 
 #include "AccountBankMgr.h"
 #include "CharacterCache.h"
@@ -29,8 +33,10 @@
 #include "ChatCommand.h"
 #include "custom_bounty.h"
 #include "DatabaseEnv.h"
+#include "ItemTemplate.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "ObjectAccessor.h"
+#include "ObjectMgr.h"
 #include "Player.h"
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
 #include "RBAC.h"
@@ -48,6 +54,11 @@ public:
     void OnLogin(Player* player, bool /*firstLogin*/) override
     {
         Tournament::ApplyCharacterKit(player);
+
+        // A character that logged out, was disconnected or was cut off by a
+        // restart in the middle of a tournament match is still wearing the
+        // loadout. Give it its own gear back before it does anything with it.
+        Tournament::RestoreLoadoutAfterLogin(player);
     }
 
     // Confinement is checked continuously rather than on zone change alone, so
@@ -116,9 +127,12 @@ public:
     {
         static ChatCommandTable tournamentTable =
         {
-            { "info",  HandleInfo,  rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
-            { "set",   HandleSet,   rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
-            { "queue", HandleQueue, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "info",        HandleInfo,        rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "set",         HandleSet,         rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "queue",       HandleQueue,       rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "item",        HandleItem,        rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "reloaditems", HandleReloadItems, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "loadout",     HandleLoadout,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
         };
         static ChatCommandTable commandTable =
         {
@@ -228,6 +242,74 @@ public:
                 uint32(0xFFFF & ~uint32(PLAYER_EXTRA_TOURNAMENT_QUEUE)), on ? uint32(PLAYER_EXTRA_TOURNAMENT_QUEUE) : 0u, guid.GetCounter());
 
         handler->PSendSysMessage("%s: tournament queue %s.", target.GetName().c_str(), on ? "on" : "off");
+        return true;
+    }
+
+    // Reads the link both ways, so an item link or an id from either side
+    // answers the same question: which item is this one in the other mode?
+    static bool HandleItem(ChatHandler* handler, ItemTemplate const* item)
+    {
+        Optional<Tournament::ItemLink> const link = Tournament::GetItemLink(item->ItemId);
+        if (!link)
+        {
+            handler->PSendSysMessage("%s (%u): a world-mode item with no tournament copy (%u tournament item(s) known).",
+                item->Name1.c_str(), item->ItemId, Tournament::GetItemLinkCount());
+            return true;
+        }
+
+        ItemTemplate const* tournamentItem = sObjectMgr->GetItemTemplate(link->TournamentEntry);
+        ItemTemplate const* worldItem = link->WorldEntry ? sObjectMgr->GetItemTemplate(link->WorldEntry) : nullptr;
+
+        if (!worldItem)
+        {
+            handler->PSendSysMessage("%s (%u): a tournament-only item - nothing stands for it in world mode.",
+                tournamentItem ? tournamentItem->Name1.c_str() : "?", link->TournamentEntry);
+            return true;
+        }
+
+        handler->PSendSysMessage("world %u \"%s\" (item level %u)", worldItem->ItemId, worldItem->Name1.c_str(), worldItem->ItemLevel);
+        handler->PSendSysMessage("  <-> tournament %u \"%s\" (item level %u)%s", link->TournamentEntry,
+            tournamentItem ? tournamentItem->Name1.c_str() : "?", tournamentItem ? tournamentItem->ItemLevel : 0,
+            link->Crunched ? ", crunched" : "");
+        return true;
+    }
+
+    static bool HandleReloadItems(ChatHandler* handler)
+    {
+        Tournament::LoadItemLinks();
+        Tournament::LoadLoadoutData();
+        handler->PSendSysMessage("`item_tournament_link` and `tournament_loadout_template` reloaded: %u tournament item(s) known.",
+            Tournament::GetItemLinkCount());
+        return true;
+    }
+
+    // What a character is fighting in, and the way out when something went
+    // wrong: `restore` hands its own gear back on the spot.
+    static bool HandleLoadout(ChatHandler* handler, Optional<PlayerIdentifier> target, Optional<std::string_view> action)
+    {
+        if (!target)
+            target = PlayerIdentifier::FromTargetOrSelf(handler);
+        if (!target)
+            return false;
+
+        Player* player = target->GetConnectedPlayer();
+        if (!player)
+        {
+            handler->PSendSysMessage("%s is offline; the loadout is handed back at their next login.", target->GetName().c_str());
+            return true;
+        }
+
+        bool const wearing = Tournament::HasBattlegroundLoadout(player);
+        if (action && StringEqualI(*action, "restore"))
+        {
+            Tournament::RestoreBattlegroundLoadout(player);
+            handler->PSendSysMessage("%s: loadout restored%s.", player->GetName().c_str(), wearing ? "" : " (nothing was recorded)");
+            return true;
+        }
+
+        handler->PSendSysMessage("%s: %s a tournament loadout. Template pieces for class %u: %s.",
+            player->GetName().c_str(), wearing ? "wearing" : "not wearing", uint32(player->GetClass()),
+            Tournament::GetLoadoutTemplateItem(player->GetClass(), EQUIPMENT_SLOT_CHEST) ? "loaded" : "none");
         return true;
     }
 };

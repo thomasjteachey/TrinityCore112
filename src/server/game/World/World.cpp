@@ -2115,6 +2115,12 @@ void World::SetInitialWorldSettings()
     TC_LOG_INFO("server.loading", "Loading Tournament Character Create Data...");
     Tournament::LoadCreateInfo();
 
+    TC_LOG_INFO("server.loading", "Loading Tournament Item Links...");
+    Tournament::LoadItemLinks();
+
+    TC_LOG_INFO("server.loading", "Loading Tournament Battleground Loadout...");
+    Tournament::LoadLoadoutData();
+
     TC_LOG_INFO("server.loading", "Loading Character List Order...");
     CharacterScreen::LoadOrder();
 

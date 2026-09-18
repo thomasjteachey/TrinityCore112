@@ -50,6 +50,7 @@
 #include <algorithm>
 #include <cstdarg>
 #include <vector>
+#include "Miscellaneous/TournamentMode.h"
 
 namespace
 {
@@ -1166,6 +1167,11 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
 
     if (player)
     {
+        // Its own gear back, before anything else undoes the join. A character
+        // that is not here to be handed it - logged out, disconnected, cut off
+        // by a crash - is given it at its next login instead.
+        Tournament::RestoreBattlegroundLoadout(player);
+
         RemoveSpectator(player);
 
         // should remove spirit of redemption
@@ -1523,6 +1529,12 @@ void Battleground::AddPlayer(Player* player)
     // Relying only on zone-change driven updates can delay top-frame UI setup
     // on maps that report transitional/non-canonical zone ids near spawn.
     player->SendInitWorldStates(player->GetZoneId(), player->GetAreaId());
+
+    // A tournament-pool match is fought in tournament gear: the swap happens
+    // here, with everything else about the join already settled, and is undone
+    // in RemovePlayerAtLeave (Miscellaneous/TournamentLoadout.cpp). Every other
+    // match returns at once.
+    Tournament::ApplyBattlegroundLoadout(player);
 }
 
 void Battleground::SendCustomGameRulesTo(Player* player) const

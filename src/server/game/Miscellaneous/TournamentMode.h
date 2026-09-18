@@ -20,6 +20,7 @@
 
 #include "Define.h"
 #include "ObjectGuid.h"
+#include "Optional.h"
 #include <array>
 #include <string>
 #include <utility>
@@ -29,6 +30,7 @@ class Creature;
 class Player;
 class SpellInfo;
 class WorldLocation;
+struct ItemTemplate;
 
 // CENTURION runs Barracks+ ("world mode") and Legionnaire+ ("tournament mode")
 // characters on one realm. The choice is made at character creation and lives
@@ -207,6 +209,92 @@ namespace Tournament
     // .AlwaysMaxSkillForLevel, everyone else the realm-wide keys.
     bool AlwaysMaxWeaponSkill(Player const* player);
     bool AlwaysMaxSkillForLevel(Player const* player);
+
+    // --- item links -------------------------------------------------------
+
+    // Centurion carries most gear twice: the world-mode (Barracks+) item and the
+    // tournament-mode (Legionnaire+) copy in the 200000 range. Cryptstalker
+    // Wristguards 22443 and Crunched Cryptstalker Wristguards 201978 are the same
+    // bracers in two modes; Beaststalker's Mantle 16679 and 200487 share even the
+    // name. Nothing tied them together - `zz_tmode_item_map` only records which
+    // row each copy was made from, which is provenance and not equivalence (it
+    // also pairs the 61 Legionnaire+ items that squat on a stock id, where the
+    // world side is a different item entirely).
+    //
+    // The world table `item_tournament_link` is the equivalence, and this is the
+    // lookup over it, both ways. Knowing the pair changes nothing by itself: no
+    // item is substituted, hidden or rewritten anywhere in core. It is the
+    // groundwork for swapping a character's gear between the two modes.
+    struct ItemLink
+    {
+        uint32 TournamentEntry = 0;
+        uint32 WorldEntry = 0;    // 0 = the tournament item stands for nothing in
+                                  // world mode: weapon boxes, the marks, the Mark
+                                  // Transmuter - Legionnaire+ items whose source
+                                  // id holds an unrelated item on the world side
+        bool Crunched = false;    // the tournament side was retuned - a lower item
+                                  // level and stats, named "Crunched <name>"
+    };
+
+    // Startup, after the item templates are in, and `.tournament reloaditems`.
+    // A realm without the table loads nothing and every lookup below says "no
+    // link", so the branch's other realms are unaffected.
+    void LoadItemLinks();
+    uint32 GetItemLinkCount();
+
+    // Either side of a pair; empty when the entry is in no pair at all. Returned
+    // by value: a reload may replace the store while a caller holds this.
+    Optional<ItemLink> GetItemLink(uint32 entry);
+    // True for an item that belongs to the tournament side, twin or no twin.
+    bool IsTournamentItem(uint32 entry);
+    // The other side, or 0 when this item does not have one.
+    uint32 GetTournamentItem(uint32 worldEntry);
+    uint32 GetWorldItem(uint32 tournamentEntry);
+    // The counterpart of whichever side the entry is on, 0 when it has none.
+    uint32 GetCounterpartItem(uint32 entry);
+    // What a character in this mode holds in place of `entry`: the item itself
+    // when it already belongs to that side, its counterpart when it has one, and
+    // 0 when the item cannot cross - a tournament-only item asked for in world
+    // mode, or a world item with no tournament copy (most of them: 2,999 of the
+    // realm's 27,334 equippable world items have one). What 0 means - leave the
+    // item alone, refuse it, strip it - is the caller's to decide.
+    uint32 GetItemForMode(uint32 entry, bool tournamentMode);
+
+    // --- the battleground loadout -----------------------------------------
+
+    // Stepping into a TOURNAMENT-POOL battleground or arena normalises what a
+    // character fights in, and leaving - by any route, chosen or not - gives it
+    // everything back. Miscellaneous/TournamentLoadout.cpp holds the rules and
+    // the reasoning; in short, each equippable item it owns becomes its
+    // tournament twin, or the same slot from its class's starter template, or a
+    // field kit piece, or nothing, and the originals are kept aside meanwhile.
+    //
+    // Every move is written to `character_tournament_loadout` as it is made, so
+    // a logout, a disconnect, a crash or a restart mid-match is just a slower
+    // way out: the next login hands the character its own gear back.
+    void LoadLoadoutConfig();   // from LoadConfig, so `.reload config` applies
+    void LoadLoadoutData();     // startup (after the item templates) and `.tournament reloaditems`
+
+    void ApplyBattlegroundLoadout(Player* player);    // Battleground::AddPlayer
+    void RestoreBattlegroundLoadout(Player* player);  // Battleground::RemovePlayerAtLeave
+    void RestoreLoadoutAfterLogin(Player* player);    // the crash and logout route
+    bool HasBattlegroundLoadout(Player const* player);
+    // True while this thread is dressing or undressing that character: the
+    // battleground armour lock (Player.cpp) stands aside for the swap, which is
+    // the one pass that has to change every slot.
+    bool IsLoadoutSwapInProgress(Player const* player);
+    // The starter-template item a class wears in an equipment slot, 0 for none.
+    uint32 GetLoadoutTemplateItem(uint8 playerClass, uint8 slot);
+
+    // Inside a tournament match only the tournament PvP consumables work
+    // (Centurion.Tournament.BgConsumables - what Jazzik sells). Asked by the use
+    // handler about anything a character tries to eat, drink, quaff or throw.
+    bool IsConsumableAllowedInMatch(Player const* player, ItemTemplate const* proto);
+
+    // Centurion.Tournament.InnateSpells as spell -> class mask (0 = every
+    // class): the eat/drink/bandage a tournament character knows without being
+    // taught, lent to a world-mode character for the length of a match.
+    std::vector<std::pair<uint32, uint32>> GetInnateSpells();
 
     // --- Legionnaire+ realm rules, per character --------------------------
 

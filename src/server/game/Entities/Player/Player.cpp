@@ -415,6 +415,13 @@ namespace
 {
     bool IsBattlegroundEquipChangeAllowed(Player const* player, uint8 slot)
     {
+        // The tournament loadout is the server dressing the character, not the
+        // character changing clothes: it has to reach every slot, and it is the
+        // same pass that hands the original gear back afterwards
+        // (Miscellaneous/TournamentLoadout.cpp).
+        if (Tournament::IsLoadoutSwapInProgress(player))
+            return true;
+
         if (Battleground const* battleground = player->GetBattleground())
             if (IsCustomBattleground(battleground->GetTypeID(true)))
                 return true;

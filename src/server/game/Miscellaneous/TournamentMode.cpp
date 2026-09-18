@@ -45,6 +45,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -297,11 +298,25 @@ void LoadConfig()
     }
 
     Config = std::move(loaded);
+
+    // The battleground loadout reads its own keys; it is part of the same
+    // feature and follows the same `.reload config`.
+    LoadLoadoutConfig();
 }
 
 bool IsEnabled()
 {
     return Config.Enabled;
+}
+
+std::vector<std::pair<uint32, uint32>> GetInnateSpells()
+{
+    std::vector<std::pair<uint32, uint32>> spells;
+    spells.reserve(Config.InnateSpells.size());
+    for (InnateSpell const& innate : Config.InnateSpells)
+        spells.emplace_back(innate.SpellId, innate.ClassMask);
+
+    return spells;
 }
 
 bool IsTournamentCharacter(Player const* player)
@@ -1062,6 +1077,193 @@ bool AlwaysMaxSkillForLevel(Player const* player)
         return Config.MaxSkillForLevel;
 
     return sWorld->getBoolConfig(CONFIG_ALWAYS_MAX_SKILL_FOR_LEVEL);
+}
+
+namespace
+{
+    // The item links, indexed from both sides. Built whole and swapped in, never
+    // edited in place: `.tournament reloaditems` runs on the world thread while
+    // map threads are looking items up, so a reader takes a reference to the
+    // store it started with and the replaced one dies with the last reader.
+    struct ItemLinkStore
+    {
+        std::unordered_map<uint32, ItemLink> ByTournamentEntry;
+        std::unordered_map<uint32, uint32> WorldToTournament;
+    };
+
+    std::mutex ItemLinkMutex;
+    std::shared_ptr<ItemLinkStore const> ItemLinkData;
+
+    std::shared_ptr<ItemLinkStore const> GetItemLinkData()
+    {
+        std::lock_guard<std::mutex> guard(ItemLinkMutex);
+        return ItemLinkData;
+    }
+}
+
+void LoadItemLinks()
+{
+    uint32 const oldMSTime = getMSTime();
+
+    auto store = std::make_shared<ItemLinkStore>();
+    auto const publish = [&store]()
+    {
+        std::shared_ptr<ItemLinkStore const> loaded = std::move(store);
+        std::lock_guard<std::mutex> guard(ItemLinkMutex);
+        ItemLinkData = std::move(loaded);
+    };
+
+    // Probe before querying: a missing table aborts the server (see
+    // LoadCreateInfo), and only the Centurion realms have this one.
+    if (!WorldDatabase.Query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'item_tournament_link'"))
+    {
+        publish();
+        TC_LOG_INFO("server.loading", ">> No tournament item links on this realm (`item_tournament_link` absent).");
+        return;
+    }
+
+    //                                                   0                 1            2
+    if (QueryResult result = WorldDatabase.Query("SELECT tournament_entry, world_entry, crunched FROM item_tournament_link"))
+    {
+        do
+        {
+            Field* fields = result->Fetch();
+
+            ItemLink link;
+            link.TournamentEntry = fields[0].GetUInt32();
+            link.WorldEntry = fields[1].IsNull() ? 0 : fields[1].GetUInt32();
+            link.Crunched = fields[2].GetBool();
+
+            if (!sObjectMgr->GetItemTemplate(link.TournamentEntry))
+            {
+                TC_LOG_ERROR("sql.sql", "Item {} in `item_tournament_link`.tournament_entry does not exist, ignoring.", link.TournamentEntry);
+                continue;
+            }
+
+            if (link.WorldEntry == link.TournamentEntry)
+            {
+                TC_LOG_ERROR("sql.sql", "Item {} in `item_tournament_link` is its own twin, ignoring.", link.TournamentEntry);
+                continue;
+            }
+
+            if (link.WorldEntry && !sObjectMgr->GetItemTemplate(link.WorldEntry))
+            {
+                TC_LOG_ERROR("sql.sql", "World item {} in `item_tournament_link` (tournament item {}) does not exist; the tournament item is kept unlinked.", link.WorldEntry, link.TournamentEntry);
+                link.WorldEntry = 0;
+            }
+
+            // The table's unique key already forbids this; a realm whose table
+            // was made by hand without it would otherwise get a silent winner.
+            if (link.WorldEntry)
+            {
+                auto const inserted = store->WorldToTournament.try_emplace(link.WorldEntry, link.TournamentEntry);
+                if (!inserted.second)
+                {
+                    TC_LOG_ERROR("sql.sql", "World item {} in `item_tournament_link` is claimed by tournament items {} and {}; keeping the first, leaving {} unlinked.", link.WorldEntry, inserted.first->second, link.TournamentEntry, link.TournamentEntry);
+                    link.WorldEntry = 0;
+                }
+            }
+
+            store->ByTournamentEntry[link.TournamentEntry] = link;
+        }
+        while (result->NextRow());
+    }
+
+    size_t const items = store->ByTournamentEntry.size();
+    size_t const linked = store->WorldToTournament.size();
+    publish();
+
+    TC_LOG_INFO("server.loading", ">> Loaded {} tournament item(s), {} of them tied to a world item, in {} ms", items, linked, GetMSTimeDiffToNow(oldMSTime));
+}
+
+uint32 GetItemLinkCount()
+{
+    std::shared_ptr<ItemLinkStore const> const store = GetItemLinkData();
+    return store ? uint32(store->ByTournamentEntry.size()) : 0;
+}
+
+Optional<ItemLink> GetItemLink(uint32 entry)
+{
+    std::shared_ptr<ItemLinkStore const> const store = GetItemLinkData();
+    if (!store || !entry)
+        return {};
+
+    auto itr = store->ByTournamentEntry.find(entry);
+    if (itr == store->ByTournamentEntry.end())
+    {
+        auto worldItr = store->WorldToTournament.find(entry);
+        if (worldItr == store->WorldToTournament.end())
+            return {};
+
+        itr = store->ByTournamentEntry.find(worldItr->second);
+        if (itr == store->ByTournamentEntry.end())
+            return {};
+    }
+
+    return itr->second;
+}
+
+bool IsTournamentItem(uint32 entry)
+{
+    std::shared_ptr<ItemLinkStore const> const store = GetItemLinkData();
+    return store && store->ByTournamentEntry.count(entry) != 0;
+}
+
+uint32 GetTournamentItem(uint32 worldEntry)
+{
+    std::shared_ptr<ItemLinkStore const> const store = GetItemLinkData();
+    if (!store)
+        return 0;
+
+    auto itr = store->WorldToTournament.find(worldEntry);
+    return itr != store->WorldToTournament.end() ? itr->second : 0;
+}
+
+uint32 GetWorldItem(uint32 tournamentEntry)
+{
+    std::shared_ptr<ItemLinkStore const> const store = GetItemLinkData();
+    if (!store)
+        return 0;
+
+    auto itr = store->ByTournamentEntry.find(tournamentEntry);
+    return itr != store->ByTournamentEntry.end() ? itr->second.WorldEntry : 0;
+}
+
+uint32 GetCounterpartItem(uint32 entry)
+{
+    std::shared_ptr<ItemLinkStore const> const store = GetItemLinkData();
+    if (!store || !entry)
+        return 0;
+
+    auto itr = store->ByTournamentEntry.find(entry);
+    if (itr != store->ByTournamentEntry.end())
+        return itr->second.WorldEntry;
+
+    auto worldItr = store->WorldToTournament.find(entry);
+    return worldItr != store->WorldToTournament.end() ? worldItr->second : 0;
+}
+
+uint32 GetItemForMode(uint32 entry, bool tournamentMode)
+{
+    if (!entry)
+        return 0;
+
+    std::shared_ptr<ItemLinkStore const> const store = GetItemLinkData();
+    if (!store)
+        return tournamentMode ? 0 : entry;
+
+    // A tournament item stays as it is in tournament mode and becomes its world
+    // twin - if it has one - in world mode.
+    auto itr = store->ByTournamentEntry.find(entry);
+    if (itr != store->ByTournamentEntry.end())
+        return tournamentMode ? entry : itr->second.WorldEntry;
+
+    // Everything else is a world item, linked or not.
+    if (!tournamentMode)
+        return entry;
+
+    auto worldItr = store->WorldToTournament.find(entry);
+    return worldItr != store->WorldToTournament.end() ? worldItr->second : 0;
 }
 
 int32 GetDeathSicknessLevel(Player const* player)

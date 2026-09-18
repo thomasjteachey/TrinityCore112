@@ -137,6 +137,16 @@ void WorldSession::HandleUseItemOpcode(WorldPacket& recvPacket)
         return;
     }
 
+    // A tournament match is fought on what the tournament sells: no potions, no
+    // elixirs, no food, no bandages, no grenades but the ones on the PvP list
+    // (Centurion.Tournament.BgConsumables - what Jazzik stocks). Every other
+    // match, and every other realm, is unaffected.
+    if (!Tournament::IsConsumableAllowedInMatch(pUser, proto))
+    {
+        pUser->SendEquipError(EQUIP_ERR_CANT_DO_RIGHT_NOW, pItem, nullptr);
+        return;
+    }
+
     // Keep stat scrolls disabled inside battlegrounds (but still allow other inventory items)
     if (pUser->InBattleground() && !pUser->InArena() && !pItem->IsEquipped())
     {

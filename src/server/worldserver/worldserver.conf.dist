@@ -5120,6 +5120,31 @@ Centurion.Items.QuiversHoldAnyItem = 0
 #        Default:     2147483647 - (effectively no cap)
 #                     0          - (world characters follow MaxHonorPoints too)
 
+#    Centurion.Tournament.BgLoadout
+#        Description: A tournament-pool battleground or arena is fought in tournament gear.
+#                     On the way in, every equippable item a character has - worn or carried -
+#                     becomes its tournament twin (item_tournament_link); a worn item with no
+#                     twin becomes that slot from its class's starter template
+#                     (tournament_loadout_template); anything that still cannot be equipped
+#                     becomes a field kit piece, or nothing where the kit has none; a carried
+#                     item with no twin is put away. Everything comes back on the way out,
+#                     however the character leaves - a logout, a disconnect or a crash hands it
+#                     back at the next login. A world character also borrows the InnateSpells
+#                     above for the match.
+#        Default:     1 - (Enabled)
+#
+#    Centurion.Tournament.BgBanConsumables
+#        Description: Inside a tournament-pool match only the consumables listed below work -
+#                     no other potion, elixir, food, bandage, scroll or grenade.
+#        Default:     1 - (Enabled)
+#
+#    Centurion.Tournament.BgConsumables
+#        Description: The consumables a tournament match allows, comma separated. Both sides of
+#                     a world/tournament pair are allowed whichever one is listed.
+#        Default:     "200026,200030,200041,200991,200992" - (what Jazzik, creature 920027,
+#                     sells: Limited Invulnerability and Free Action Potions, Iron Grenade,
+#                     Combat Healing and Mana Potions)
+
 Centurion.Tournament.Enable = 0
 Centurion.Tournament.StartLevel = 60
 Centurion.Tournament.HomeLocation = ""
@@ -5139,6 +5164,9 @@ Centurion.Tournament.AllowedLootObjects = ""
 Centurion.Tournament.InnateSpells = "29073,18610,22734:1494"
 Centurion.Tournament.QueueMinLevel = 60
 Centurion.Tournament.WorldMaxHonorPoints = 2147483647
+Centurion.Tournament.BgLoadout = 1
+Centurion.Tournament.BgBanConsumables = 1
+Centurion.Tournament.BgConsumables = "200026,200030,200041,200991,200992"
 
 #
 #    Centurion.CharacterSelect.Reorder
