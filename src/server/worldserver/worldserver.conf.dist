@@ -2881,9 +2881,11 @@ Battleground.GiveXPForKills = 0
 #                     paid as experience instead.
 #                     In a battleground it is scaled by bracket: each point is
 #                     a fixed share of a level at the bracket's midpoint level; outside
-#                     one, at the character's own level. Bots and anyone with the
-#                     experience toggle off get neither. The share of an award past
-#                     the cap is paid as honor.
+#                     one, at the character's own level. Bots get neither - their levels
+#                     belong to the playerbot manager - while a person who stopped their
+#                     own experience at the eliminator keeps the HONOR, since for them
+#                     there is no experience to be paid instead. The share of an award
+#                     past the cap is paid as honor.
 #        Default:     0 - (Disabled)
 #                     1 - (Enabled)
 #

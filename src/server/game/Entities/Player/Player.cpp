@@ -8233,8 +8233,23 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
     // level stands in for it.
     //
     // Paid nothing at all below the cap, neither experience nor honor: bots,
-    // whose levels belong to the PvE manager; anyone with the stock experience
-    // toggle off; and a character standing on borrowed Violet Hold levels.
+    // whose levels belong to the PvE manager, and a character standing on
+    // borrowed Violet Hold levels.
+    //
+    // A person who has STOPPED THEIR OWN EXPERIENCE is the exception and keeps
+    // the honor. The rule below the cap is "paid in experience instead", and for
+    // them there is no instead: the eliminator's flag makes GiveXP a no-op, so
+    // converting the award only destroyed it - a Mark of Honor used by a level 19
+    // with its experience frozen paid absolutely nothing (owner's call,
+    // 2026-09-18).
+    //
+    // Their own permanent stop only, and only a real person's. A passing script
+    // stop - the War Mode zone cap - must not become a way to turn an award into
+    // honor by standing in the right zone; and a bot chose nothing, the zone
+    // guardians wear this same flag to hold them at their post's level. A bot
+    // therefore still reaches the conversion and is refused inside it, which is
+    // also why the branch below no longer has to test the flag again: a real
+    // person carrying it never gets here.
     //
     // The cap test is made on the character's REAL level. Violet Hold's Boon of
     // Ascension lends levels that leaving the run takes back, so a borrowed
@@ -8245,15 +8260,16 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
     // borrowed-level refusal only ever meets an award that arrives mid-run.
     bool heldBelowCap = false;
     uint8 const realLevel = VioletHoldBoons::GetBaseLevel(this);
-    if (honor > 0 && realLevel < GetUInt32Value(PLAYER_FIELD_MAX_LEVEL) &&
+    bool const ownSession = GetSession() && !GetSession()->IsVirtualSession();
+    bool const keepsHonorBelowCap = ownSession && HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN);
+    if (honor > 0 && !keepsHonorBelowCap && realLevel < GetUInt32Value(PLAYER_FIELD_MAX_LEVEL) &&
         sWorld->getBoolConfig(CONFIG_CENTURION_BG_XP_INSTEAD_OF_HONOR))
     {
         uint32 const awarded = uint32(honor);
         honor = 0;
         heldBelowCap = true;
 
-        if (realLevel == GetLevel() && !HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN) &&
-            GetSession() && !GetSession()->IsVirtualSession())
+        if (realLevel == GetLevel() && ownSession)
         {
             Battleground const* bg = GetBattleground();
             uint32 const cap = GetUInt32Value(PLAYER_FIELD_MAX_LEVEL);
