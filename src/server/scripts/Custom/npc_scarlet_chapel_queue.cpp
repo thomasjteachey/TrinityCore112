@@ -12,6 +12,7 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include <DBCStores.h>
+#include <algorithm>
 #include <string>
 
 namespace
@@ -236,6 +237,32 @@ public:
                 if (!member)
                 {
                     SendQueueError(player, "All party members must be online.");
+                    return true;
+                }
+            }
+
+            // A party bigger than one team can hold must be turned away here.
+            // QueueGroup enters it as ONE GroupQueueInfo and BattlegroundQueue
+            // only ever seats a group whole, so an oversized party waits for a
+            // number of free slots its side can never have - it sits in the
+            // queue forever with no error. The honor-tab path is guarded by
+            // Group::CanJoinBattlegroundQueue (BattlemasterList MaxGroupSize);
+            // this NPC bypasses that check, so apply both limits ourselves.
+            // Reachable since Scarlet Chapel dropped to a 5-player cap: a
+            // six-man party is an ordinary thing to walk up with.
+            if (Battleground const* sizeTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId))
+            {
+                uint32 partyCap = sizeTemplate->GetMaxPlayersPerTeam();
+                if (BattlemasterListEntry const* bl = sBattlemasterListStore.LookupEntry(bgTypeId))
+                    partyCap = std::min(partyCap, bl->MaxGroupSize);
+
+                if (partyCap && group->GetMembersCount() > partyCap)
+                {
+                    std::string error = battlegroundName;
+                    error += " holds only ";
+                    error += std::to_string(partyCap);
+                    error += " per side - your party is too large.";
+                    SendQueueError(player, error.c_str());
                     return true;
                 }
             }
