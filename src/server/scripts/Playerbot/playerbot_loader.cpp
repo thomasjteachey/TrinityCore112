@@ -135,6 +135,7 @@ char const* ToString(playerbot::PvpClassSpellContext::MovementDirective directiv
         case playerbot::PvpClassSpellContext::MovementDirective::FaceSpellTarget: return "face_target";
         case playerbot::PvpClassSpellContext::MovementDirective::DropInvalidTarget: return "drop_target";
         case playerbot::PvpClassSpellContext::MovementDirective::CheckMountState: return "check_mount";
+        case playerbot::PvpClassSpellContext::MovementDirective::LeaveShapeshiftForm: return "leave_form";
         case playerbot::PvpClassSpellContext::MovementDirective::ResetCombatState: return "reset_combat";
         case playerbot::PvpClassSpellContext::MovementDirective::None:
         default: return "none";

@@ -17,6 +17,19 @@
 #include "Config.h"
 #include "ScriptMgr.h"
 
+// Node and faction names are trinity_string entries, but the announcements that
+// use them are formats with %s in them and PSendMessageToAll hands its arguments
+// straight to vsnprintf. Passing the bare entry id made vsnprintf read a small
+// integer as a char* - the only reason that has never crashed the realm is that
+// the strings were missing from the database, so the format came back as
+// "<error>" with no %s left in it. Resolve the entry to its text first. The
+// lookup is on the DBC locale rather than the recipient's, which is what every
+// other script that formats a string into a broadcast does.
+static char const* BG_SV_Text(uint32 entry)
+{
+	return sObjectMgr->GetTrinityStringForDBCLocale(entry);
+}
+
 void BattlegroundSVScore::BuildObjectivesBlock(WorldPacket& data)
 {
     data << uint32(1);
@@ -113,7 +126,7 @@ void BattlegroundSV::PostUpdateImpl(uint32 diff)
 						BG_SV_UpdateNodeWorldState(&nodePoint[i]);
 						BG_SV_HandleCapturedNodes(&nodePoint[i], false);
 
-						PSendMessageToAll(LANG_BG_SV_TAKEN, nodePoint[i].faction == TEAM_ALLIANCE ? CHAT_MSG_BG_SYSTEM_ALLIANCE : CHAT_MSG_BG_SYSTEM_HORDE, nullptr, (nodePoint[i].faction == TEAM_ALLIANCE ? LANG_BG_SV_ALLY : LANG_BG_SV_HORDE), nodePoint[i].string);
+						PSendMessageToAll(LANG_BG_SV_TAKEN, nodePoint[i].faction == TEAM_ALLIANCE ? CHAT_MSG_BG_SYSTEM_ALLIANCE : CHAT_MSG_BG_SYSTEM_HORDE, nullptr, BG_SV_Text(nodePoint[i].faction == TEAM_ALLIANCE ? LANG_BG_SV_ALLY : LANG_BG_SV_HORDE), BG_SV_Text(nodePoint[i].string));
 						PlaySoundToAll(nodePoint[i].faction == TEAM_ALLIANCE ? BG_SV_SOUND_NODE_CAPTURED_ALLIANCE : BG_SV_SOUND_NODE_CAPTURED_HORDE);
 
 						nodePoint[i].needChange = false;
@@ -499,7 +512,7 @@ void BattlegroundSV::EventPlayerClickedOnFlag(Player *player, GameObject *target
 					if (BgCreatures[BG_SV_NPC_SPIRIT_GUIDE_1 + (nodePoint[i].nodeType) - 2])
 						DelCreature(BG_SV_NPC_SPIRIT_GUIDE_1 + (nodePoint[i].nodeType) - 2);
 
-				PSendMessageToAll(LANG_BG_SV_ASSAULTED, teamId == TEAM_ALLIANCE ? CHAT_MSG_BG_SYSTEM_ALLIANCE : CHAT_MSG_BG_SYSTEM_HORDE, player, nodePoint[i].string);
+				PSendMessageToAll(LANG_BG_SV_ASSAULTED, teamId == TEAM_ALLIANCE ? CHAT_MSG_BG_SYSTEM_ALLIANCE : CHAT_MSG_BG_SYSTEM_HORDE, player, BG_SV_Text(nodePoint[i].string));
 				PlaySoundToAll(nodePoint[i].faction == TEAM_ALLIANCE ? BG_SV_SOUND_NODE_ASSAULTED_ALLIANCE : BG_SV_SOUND_NODE_ASSAULTED_HORDE);
 				BG_SV_HandleContestedNodes(&nodePoint[i]);
 			}
@@ -507,7 +520,7 @@ void BattlegroundSV::EventPlayerClickedOnFlag(Player *player, GameObject *target
 			{
 				nodePoint[i].timer = BG_SV_BANNER_STATE_CHANGE_TIME;
 				nodePoint[i].needChange = false;
-				PSendMessageToAll(LANG_BG_SV_DEFENDED, teamId == TEAM_ALLIANCE ? CHAT_MSG_BG_SYSTEM_ALLIANCE : CHAT_MSG_BG_SYSTEM_HORDE, player, nodePoint[i].string);
+				PSendMessageToAll(LANG_BG_SV_DEFENDED, teamId == TEAM_ALLIANCE ? CHAT_MSG_BG_SYSTEM_ALLIANCE : CHAT_MSG_BG_SYSTEM_HORDE, player, BG_SV_Text(nodePoint[i].string));
 				PlaySoundToAll(nodePoint[i].faction == TEAM_ALLIANCE ? BG_SV_SOUND_NODE_CAPTURED_ALLIANCE : BG_SV_SOUND_NODE_CAPTURED_HORDE);
 				BG_SV_HandleCapturedNodes(&nodePoint[i], true);
 			}

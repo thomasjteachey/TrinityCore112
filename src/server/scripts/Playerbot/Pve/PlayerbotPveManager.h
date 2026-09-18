@@ -208,6 +208,12 @@ struct PveConfig
     // Gathering professions: two of herbalism/mining/skinning per bot,
     // auto-learned and ranked, nodes gathered mid-grind, corpses skinned.
     bool professionsEnabled = false;
+    // What share of a miner's haul goes to the forge instead of to the house as
+    // raw ore. The same share is applied a second time to the bars that come
+    // back, which is what puts bronze and steel on the house alongside the
+    // copper, tin and iron they are made from. 0 switches smelting off and the
+    // fleet sells ore only.
+    uint32 smeltSharePercent = 50;
     // Realm economy switch: off = the free eat/drink spells (L+ style);
     // on = bots buy real food/water/ammo from vendors and consume them (B+).
     bool restUseConsumables = false;

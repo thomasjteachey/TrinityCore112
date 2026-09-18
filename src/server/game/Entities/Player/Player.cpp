@@ -2636,6 +2636,14 @@ void Player::RemoveFromWorld()
             m_session->DoLootRelease(lootGuid);
         sOutdoorPvPMgr->HandlePlayerLeaveZone(this, m_zoneUpdateId);
         sBattlefieldMgr->HandlePlayerLeaveZone(this, m_zoneUpdateId);
+
+        ///- Sever anything still listed as moved by this client. StopCastingCharm()
+        ///- above covers the ordinary case; this catches whatever it missed, while
+        ///- the units are all still resolvable on this map. Skipping it leaves them
+        ///- pointing at a GameClient that dies with the session. Client control of
+        ///- the player itself is re-established by SendInitialPacketsBeforeAddToMap
+        ///- on the next world entry, so doing this on a map change is harmless.
+        GetGameClient()->ReleaseAllMovers();
     }
 
     // Remove items from world before self - player must be found in Item::RemoveFromObjectUpdate

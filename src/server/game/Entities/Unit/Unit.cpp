@@ -590,7 +590,10 @@ Unit::~Unit()
     ASSERT(m_removedAuras.empty());
     ASSERT(m_gameObj.empty());
     ASSERT(m_dynObj.empty());
-    ASSERT(!_gameClientMovingMe || _gameClientMovingMe->GetBasePlayer() == this);
+    // Compared by guid rather than by asking the client who its player is: reaching
+    // into it here would be reading a controller that may well have been freed first,
+    // which is the very thing this destructor is trying to catch.
+    ASSERT(!_gameClientMovingMe || _gameClientMovingMeOwner == GetGUID());
 }
 
 void Unit::DefensiveCleanupAurasBeforeDelete()
@@ -1003,10 +1006,38 @@ namespace
         return count;
     }
 
+    // Whether a bot is fighting a PERSON and wildlife at the same time.
+    //
+    // Both halves come from the combat manager, which is the one place that
+    // already knows the difference: a reference is PvP when both ends are
+    // player-controlled, PvE otherwise. Suppressed references (vanish, feign
+    // death) do not count on either side, which is right - a bot nobody can
+    // currently reach is not being pressed.
+    //
+    // The bot's pets answer for the PvP half too, since a player who opens on
+    // the minion is on the bot whether or not the bot has been touched yet.
+    bool IsPlayerbotFightingBoth(Player const* bot)
+    {
+        if (!bot)
+            return false;
+
+        bool pressed = bot->GetCombatManager().HasPvPCombat();
+
+        if (!pressed)
+            for (Unit const* controlled : bot->m_Controlled)
+                if (controlled && controlled->GetCombatManager().HasPvPCombat())
+                {
+                    pressed = true;
+                    break;
+                }
+
+        return pressed && bot->GetCombatManager().HasPvECombat();
+    }
+
     // What a bot, or its pet, hits an ordinary creature for, as a percentage.
     //
-    // Two bonuses on top of 100, added rather than multiplied so the result stays
-    // something a person can predict:
+    // Three bonuses on top of 100, added rather than multiplied so the result
+    // stays something a person can predict:
     //
     //   - the bounty it is pursuing, linear to the configured peak at the stack
     //     cap. Those stacks are the bounty ON THE PLAYER it was sent after, since
@@ -1014,6 +1045,11 @@ namespace
     //   - a step per EXTRA creature on it. The first one does not count: a bot
     //     winning a straight fight needs no help, and this exists for the add
     //     that turns one fight into three.
+    //   - a flat step while a person is on it AND wildlife is on it, so the bot
+    //     can put the creatures down and answer the player instead of losing to
+    //     both. The wildlife only: the blow that lands on the PERSON is never
+    //     touched by any of this, because a creature victim is the first thing
+    //     this function checks.
     //
     // Read once. DealDamage runs for every hit in the world and cannot afford a
     // config lookup per blow, so like the pursuit keys in Creature.cpp these are
@@ -1096,6 +1132,8 @@ namespace
         // 0 means no ceiling, which is what "for every creature" asks for.
         static uint32 const extraCapPct = uint32(std::max(0,
             sConfigMgr->GetIntDefault("Playerbot.Pve.CreatureDamageExtraAggroCapPct", 0)));
+        static uint32 const inPvpPct = uint32(std::max(0,
+            sConfigMgr->GetIntDefault("Playerbot.Pve.CreatureDamageBonusPctInPvp", 300)));
 
         if (!attacker || !victim || attacker == victim || !IsOwnerlessCreature(victim))
             return 100;
@@ -1120,6 +1158,10 @@ namespace
                     extra = std::min(extra, extraCapPct);
                 bonus += extra;
             }
+
+        // Pressed by a person while wildlife is on it: cut through the wildlife.
+        if (inPvpPct && IsPlayerbotFightingBoth(bot))
+            bonus += inPvpPct;
 
         // A hunter's marker makes it (and its pet) cut through the dinosaur it is after.
         if (IsDevilsaurHuntPair(bot, victim))
@@ -11295,6 +11337,33 @@ void Unit::AddToWorld()
     i_motionMaster->AddToWorld();
 }
 
+void Unit::SetGameClientMovingMe(GameClient* gameClientMovingMe)
+{
+    _gameClientMovingMe = gameClientMovingMe;
+    _gameClientMovingMeOwner.Clear();
+
+    if (gameClientMovingMe)
+        if (Player* owner = gameClientMovingMe->GetBasePlayer())
+            _gameClientMovingMeOwner = owner->GetGUID();
+}
+
+GameClient* Unit::GetLiveGameClientMovingMe() const
+{
+    if (!_gameClientMovingMe)
+        return nullptr;
+
+    // A GameClient belongs to a WorldSession and dies with it, while this unit can
+    // easily outlive both. Nothing notifies the unit when that happens, so the only
+    // way to separate a live controller from a freed one is to go looking for the
+    // owner: if the player is still connected and its session still hands out this
+    // exact client, the pointer is good. Anything else means it is gone.
+    Player* owner = ObjectAccessor::FindConnectedPlayer(_gameClientMovingMeOwner);
+    if (!owner || owner->GetGameClient() != _gameClientMovingMe)
+        return nullptr;
+
+    return _gameClientMovingMe;
+}
+
 void Unit::RemoveFromWorld()
 {
     // cleanup
@@ -11316,9 +11385,19 @@ void Unit::RemoveFromWorld()
         // deleted. Always sever non-player client movement ownership before the
         // unit leaves the world; normal charm cleanup may do this earlier, but this
         // is the last safe point before destruction.
+        //
+        // The controller is frequently already gone by the time we get here - a
+        // creature stranded by its owner's logout is removed when its map is torn
+        // down, long after that session was freed - so the client has to be proven
+        // alive before it is touched. Reaching into a freed GameClient to tidy up
+        // is how this crashed instead of asserting.
         if (GetTypeId() != TYPEID_PLAYER)
-            if (GameClient* gameClient = GetGameClientMovingMe())
+        {
+            if (GameClient* gameClient = GetLiveGameClientMovingMe())
                 gameClient->RemoveAllowedMover(this);
+            else
+                SetGameClientMovingMe(nullptr);
+        }
 
         RemoveCharmAuras();
         RemoveBindSightAuras();
@@ -15095,7 +15174,17 @@ void Unit::CheckPendingMovementAcks()
         if (oldestChangeToAck.movementChangeType == MovementChangeType::TELEPORT)
             return;
 
-        GameClient* controller = GetGameClientMovingMe();
+        // A unit can still be holding unacked changes after its controller is gone -
+        // a possessed creature outliving the session that possessed it. There is
+        // nobody left to kick and nobody left to wait for, so drop the changes rather
+        // than reaching through a controller that is not there any more.
+        GameClient* controller = GetLiveGameClientMovingMe();
+        if (!controller)
+        {
+            PurgeAndApplyPendingMovementChanges();
+            return;
+        }
+
         controller->GetWorldSession()->KickPlayer("Took too long to ack a movement change");
         TC_LOG_INFO("cheat", "Unit::CheckPendingMovementAcks: Player GUID: {} took too long to acknowledge a movement change. He was therefore kicked.", controller->GetBasePlayer()->GetGUID().ToString());
     }

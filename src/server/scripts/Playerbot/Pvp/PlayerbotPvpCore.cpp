@@ -2443,6 +2443,39 @@ bool MeetsCasterAuraStateRequirements(Player const* player, uint32 spellId)
         return false;
     }
 
+    // Both Warsong Gulch keeps are areas of their own under the gulch, flag
+    // rooms included, and every group of both keep models resolves to one of
+    // them. The outdoors flag cannot answer "am I inside the base": WMOAreaTable
+    // forces indoors on only part of each keep (the flag room among them), and
+    // the groups it leaves alone carry the WMO outdoor bit - so the ramp down
+    // and the tunnel read as open sky. Spell::CheckCast lets a druid shift into
+    // Travel Form standing in there, and Player::CheckAreaExploreAndOutdoor
+    // never takes it off again, because both read that same flag. To everyone
+    // else in the match it is a cheetah trotting around inside a building.
+    bool IsInsideWarsongKeep(Player const* player)
+    {
+        if (!player)
+            return false;
+
+        switch (player->GetAreaId())
+        {
+            case 3320: // Warsong Lumber Mill
+            case 3321: // Silverwing Hold
+            case 4571: // Silverwing Flag Room
+            case 4572: // Warsong Flag Room
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // Where a form that belongs under open sky may be worn. Stricter than the
+    // core's own outdoors test by exactly the keeps above.
+    bool IsUnderOpenSkyForDruidForm(Player const* player)
+    {
+        return player && player->IsOutdoors() && !IsInsideWarsongKeep(player);
+    }
+
     bool CanAttemptMount(Player const* player, SpellInfo const* mountSpellInfo)
     {
         if (!player || !mountSpellInfo)
@@ -5915,7 +5948,7 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
     Unit const* balanceRejuvTarget = (isBalanceDruid && player->HasAura(81343)) ? SelectFriendlyLowestHealthTarget(player, 40.0f, 80.0f) : nullptr;
 
     std::vector<PrioritizedSpellDecision> candidates;
-    AddDecisionCandidate(candidates, recoveredFromPolymorph && IsSpellReady(player, 783), 55.0f,
+    AddDecisionCandidate(candidates, recoveredFromPolymorph && IsUnderOpenSkyForDruidForm(player) && IsSpellReady(player, 783), 55.0f,
         { "druid travel form recovery", "recovering from polymorph by travel-form reposition", 783, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isBalanceDruid && !HasAuraFromSpellChain(player, 24858) && IsSpellReady(player, 24858), 54.8f,
         { "druid moonkin form", "always stay in moonkin form", 24858, playerbot::PvpClassSpellContext::TargetMode::Self });
@@ -7338,6 +7371,89 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
         return false;
     }
 
+    // A flag run is expensive to a shapeshifter: every root and snare on the
+    // route buys a powershift, and every powershift buys the shift back, so a
+    // druid was arriving at the flag with an empty bar and nothing left to run
+    // it home with. On a clear route it now does what a player does - sits
+    // down, drinks it back, and carries on.
+    //
+    // The clear radius is deliberately far wider than the 35 yard combat-posture
+    // boundary the ordinary recovery selector uses. A runner caught sitting is a
+    // lost flag, so the rule is not "nobody is on me" but "nobody is anywhere
+    // near the route".
+    // Starting is this rule's own decision; ending is deliberately the same
+    // "nothing left to recover, or something hit me" the ordinary recovery
+    // selector uses. Two selectors that disagree about when a drink should end
+    // would take the aura off each other's hands on alternate ticks and stutter
+    // the bot, so while a flag-route bot is recovering, this branch owns it end
+    // to end and the ordinary selector never sees it.
+    constexpr float kFlagRunRecoveryClearRadius = 100.0f;
+    constexpr float kFlagRunRecoveryStartPct = 50.0f;
+
+    bool IsRecoveringOnFlagRun(Player const* player)
+    {
+        return player && (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT) ||
+            player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK));
+    }
+
+    bool WantsFlagRunRecovery(Player const* player)
+    {
+        if (!player || !player->IsAlive() || player->IsInCombat() || IsHardControlled(player))
+            return false;
+
+        // A real player cannot eat or drink while swimming, and would not sit
+        // down in lava to do it either.
+        if (player->IsInWater() || IsInHazardousLiquidForRecovery(player))
+            return false;
+
+        float const manaPct = player->GetMaxPower(POWER_MANA) > 0 ? player->GetPowerPct(POWER_MANA) : 100.0f;
+        if (manaPct >= kFlagRunRecoveryStartPct && player->GetHealthPct() >= kFlagRunRecoveryStartPct)
+            return false;
+
+        return !HasNearbyAttackableEnemyPlayer(player, kFlagRunRecoveryClearRadius);
+    }
+
+    bool CanContinueFlagRunRecovery(Player const* player)
+    {
+        if (!player || !player->IsAlive() || player->IsInCombat())
+            return false;
+
+        bool const needsDrink = player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 100.0f;
+        return needsDrink || player->GetHealthPct() < 100.0f;
+    }
+
+    void ClearFlagRunRecovery(Player const* player)
+    {
+        if (!player)
+            return;
+
+        Player* mutablePlayer = const_cast<Player*>(player);
+        if (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT))
+            mutablePlayer->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
+        if (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK))
+            mutablePlayer->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
+    }
+
+    SpellDecision SelectFlagRunRecoverySpell(Player const* player)
+    {
+        using TargetMode = playerbot::PvpClassSpellContext::TargetMode;
+
+        bool const needsFood = player->GetHealthPct() < 100.0f;
+        bool const needsDrink = player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 100.0f;
+
+        // Food first, then drink beside it, mirroring the ordinary recovery
+        // selector: both auras run at once so the one pause covers both bars.
+        if (needsFood && !player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT) &&
+            IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT))
+            return { "eat", "flag route is clear enough to eat", SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT, TargetMode::Self, player->GetGUID() };
+
+        if (needsDrink && !player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK) &&
+            IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK))
+            return { "drink", "flag route is clear enough to drink back the shift cost", SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK, TargetMode::Self, player->GetGUID() };
+
+        return {};
+    }
+
     // Travel Form, Aquatic Form, or a carrier's Cat Form, while on a flag run.
     bool IsDruidInFlagRunForm(Player const* player, playerbot::PvpValues const& values)
     {
@@ -7365,8 +7481,8 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
         ShapeshiftForm const form = player->GetShapeshiftForm();
 
         // The fastest form for what is underfoot: water, open ground, or the
-        // flag room, where Travel Form is refused and a carrier runs as a cat
-        // for Dash. A runner not carrying yet only shifts where it gains speed,
+        // keep, where Travel Form is refused and a carrier runs as a cat for
+        // Dash. A runner not carrying yet only shifts where it gains speed,
         // and the flag click takes the form off again anyway.
         uint32 movementForm = 0;
         ShapeshiftForm wantedForm = FORM_NONE;
@@ -7377,7 +7493,7 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
             wantedForm = FORM_AQUA;
             formAction = "druid aquatic form";
         }
-        else if (player->IsOutdoors())
+        else if (IsUnderOpenSkyForDruidForm(player))
         {
             movementForm = kTravelForm;
             wantedForm = FORM_TRAVEL;
@@ -8468,6 +8584,22 @@ PvpValues PvpCore::CollectValues(Player const* player)
         ObjectGuid const selectedAllyGuid = SelectAllyTargetGuid(player);
         bool const hasValidAllyTarget = resolveTargetByGuid(selectedAllyGuid) != nullptr;
 
+        // Gating the shift is not enough on its own: a druid shifts out on the
+        // field and then runs the flag home through its own keep, where the core
+        // will not strip an outdoors-only aura it has been told is under open
+        // sky. Take the form off on arrival, the way a mount comes off indoors.
+        // No linger here - an area id changes once at the door, it does not
+        // flicker step to step the way a terrain query does. Both tests read a
+        // cached field, so this costs an unshifted bot nothing.
+        if (player->GetShapeshiftForm() == FORM_TRAVEL && IsInsideWarsongKeep(player))
+        {
+            context.movementDirective = PvpClassSpellContext::MovementDirective::LeaveShapeshiftForm;
+            context.actionName = "leave travel form";
+            context.reason = "travel form inside the keep";
+            context.shouldExecute = true;
+            return context;
+        }
+
         // Reference parity guard: never allow mounted state indoors. In addition,
         // while in combat always force mount-state correction immediately. When a
         // mounted bot is simply traveling, do not let class spell selection break
@@ -8520,6 +8652,57 @@ PvpValues PvpCore::CollectValues(Player const* player)
     // refuse every druid form change.
     if (inActiveBattleground && values.ctfRole != 0)
     {
+        // Before the run's own moves, because the run is what empties the bar:
+        // a clear route is the only chance the bot gets to put mana back, and
+        // the shift it would pick on this tick is part of what drained it.
+        //
+        // The outbound leg only, plus a carrier parked in its own flag room
+        // waiting for its flag to come back. A carrier actually running one home
+        // has somewhere to be and does not stop for a drink.
+        bool const flagRouteAllowsRecovery =
+            (values.ctfDesignatedRunner && values.flagPickupAvailable && !values.ctfPickupIsReturn && !values.playerHasFlag) ||
+            values.ctfCarrierHolding;
+        if (flagRouteAllowsRecovery)
+        {
+            bool const recovering = IsRecoveringOnFlagRun(player);
+            if (recovering && !CanContinueFlagRunRecovery(player))
+            {
+                // Hit, or both bars back. Drop the auras here rather than leave
+                // them holding the bot still, and let the run resume this tick.
+                ClearFlagRunRecovery(player);
+            }
+            else if (recovering || WantsFlagRunRecovery(player))
+            {
+                // Nothing is eaten or drunk in a form, so the form comes off
+                // first - the same order a player has to do it in.
+                if (player->GetShapeshiftForm() != FORM_NONE)
+                {
+                    context.movementDirective = PvpClassSpellContext::MovementDirective::LeaveShapeshiftForm;
+                    context.actionName = "leave form";
+                    context.reason = "sit down to recover on a clear flag route";
+                    context.shouldExecute = true;
+                    return context;
+                }
+
+                if (SpellDecision const recoveryDecision = SelectFlagRunRecoverySpell(player); recoveryDecision.spellId)
+                {
+                    context.actionName = recoveryDecision.actionName;
+                    context.reason = recoveryDecision.reason;
+                    context.spellId = recoveryDecision.spellId;
+                    context.targetMode = recoveryDecision.targetMode;
+                    context.targetGuid = recoveryDecision.targetGuid;
+                    context.selfCast = true;
+                    context.shouldExecute = true;
+                    return context;
+                }
+
+                // Sitting through one already. Hold the tick here: the run's own
+                // selector would shift the bot straight back into Travel Form
+                // and pull it up off the food it just sat down to.
+                return context;
+            }
+        }
+
         SpellDecision const flagRunDecision = SelectBattlegroundFlagRunSpell(player, values);
         if (flagRunDecision.spellId)
         {

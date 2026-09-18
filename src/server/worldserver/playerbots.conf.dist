@@ -105,6 +105,20 @@ Playerbot.PvpLifecycle.ObsidianColosseum.Clone.Enable = 0
 # Legacy enable fallback. Nonzero enables clones only when Clone.Enable is absent.
 Playerbot.PvpLifecycle.ObsidianColosseum.CloneAccountId = 0
 
+#    Playerbot.Pvp.GuildName
+#        Description: Guild worn by every transient PvP copy - battleground fill, custom games,
+#                     the Obsidian Colosseum "Dark <name>" mirrors, the lobby mannequins and the
+#                     open-world bounty hunters - so a person fighting one can tell it apart from
+#                     a real player at a glance. A copy has no character row and is never a real
+#                     member: it carries the guild's id and the client resolves the name from it.
+#                     The PvP-only characters behind the copies (Playerbot.Pve.PvpOnlyAccountIds)
+#                     ARE joined for real, which is what gives the guild its master and roster;
+#                     the first of them founds it. Empty disables the whole behaviour. Nothing is
+#                     created while no PvP-only account is configured.
+#        Default:     The Robot Masters
+
+Playerbot.Pvp.GuildName = "The Robot Masters"
+
 ###################################################################################################
 # PLAYERBOT BATTLEGROUND FILL (TRANSIENT CLONES)
 #
@@ -206,12 +220,12 @@ Playerbot.BgFill.Tier.Hard.Characters = ""
 #    Playerbot.BgFill.Tier.Medium.BattlegroundTypes
 #    Playerbot.BgFill.Tier.Hard.BattlegroundTypes
 #        Description: Battleground type IDs that belong to each tier (100 Scarlet Chapel,
-#                     101 Blackrock Throne, 102 Obsidian Colosseum, ...). Both teams of such a
-#                     battleground are filled from its own tier first, then from the tier next
-#                     to it, then the far one, so it plays at the difficulty it is meant to
-#                     have whichever side you are on. A battleground in no tier draws its bots
-#                     at random. An arena skirmish matches its own arena's type, or 6 for
-#                     every arena.
+#                     101 Blackrock Throne, 102 Obsidian Colosseum, ...). When one of these is
+#                     filled, the team the real players are fighting is dealt that tier's bots
+#                     first, then the tier next to it, then the far one; the players' own team
+#                     gets that tier's bots only once nobody else is left. A battleground in no
+#                     tier draws its bots at random. An arena skirmish matches its own arena's
+#                     type, or 6 for every arena.
 #        Default:     "" (no tiers)
 
 Playerbot.BgFill.Tier.Easy.BattlegroundTypes = ""
@@ -723,6 +737,20 @@ Playerbot.Pve.DevilsaurHunt.DamageTakenPct = 50
 Playerbot.Pve.DevilsaurHunt.SeekYards = 150
 Playerbot.Pve.DevilsaurHunt.MaxLevelsAbove = 3
 Playerbot.Pve.DevilsaurHunt.RouteChancePct = 50
+
+#    Playerbot.Pve.CreatureDamageBonusPctInPvp
+#        Description: Extra damage a bot deals to WILDLIFE while it is fighting a player
+#                     and creatures at the same time, as a percentage added on top of
+#                     100. 300 means such a bot hits creatures for four times the usual
+#                     number until one side of the fight is over; 0 disables the rule.
+#                     A bot jumped mid-pull otherwise loses to the pair - this lets it
+#                     clear the adds and answer the person. Its damage TO the player is
+#                     untouched, as is any bot that is only grinding, and the step adds
+#                     to the per-extra-creature one rather than replacing it.
+#                     Read ONCE at startup - restart after changing this key.
+#        Default:     300
+
+Playerbot.Pve.CreatureDamageBonusPctInPvp = 300
 
 # The in-game command surface for PvE bots:
 #   .playerbot pve summon <name>   - log a bot-account character in, teleport it to you and
@@ -1285,6 +1313,28 @@ Playerbot.Pve.AggroBudget.PartyRadiusYards = 80.0
 #        Default:     0 - (Disabled)
 
 Playerbot.Pve.Professions.Enable = 0
+
+#
+#    Playerbot.Pve.Professions.SmeltPercent
+#        Description: What share of a miner's ore goes to the forge instead of to the
+#                     auction house as raw ore. The bars come back to the bags and are
+#                     listed by the ordinary trade-goods path, so the house carries
+#                     copper, tin, silver, iron, gold, mithril, truesilver and thorium
+#                     bars alongside the ore they were poured from.
+#
+#                     The same share is then applied to the bars themselves, which is
+#                     what puts bronze (copper bar + tin bar) and steel (iron bar +
+#                     coal) on the house next to their ingredients rather than instead
+#                     of them. Coal is not mined: a bot short of it buys the shortfall
+#                     out of its own purse at the merchant's asking price.
+#
+#                     Counted on the ore as it ARRIVES, not on what is in the bag, so
+#                     the share means what it says however long a bot holds a stack.
+#                     Requires Playerbot.Pve.Professions.Enable.
+#        Default:     50
+#                     0 - (Disabled: the fleet sells raw ore only)
+#
+Playerbot.Pve.Professions.SmeltPercent = 50
 
 #
 #    Playerbot.Pve.PathBudgetPerSecond

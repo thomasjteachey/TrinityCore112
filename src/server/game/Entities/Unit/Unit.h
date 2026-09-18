@@ -1318,7 +1318,12 @@ class TC_GAME_API Unit : public WorldObject
         bool IsMovedByClient() const { return _gameClientMovingMe != nullptr; }
         bool IsMovedByServer() const { return !IsMovedByClient(); }
         GameClient* GetGameClientMovingMe() const { return _gameClientMovingMe; }
-        void SetGameClientMovingMe(GameClient* gameClientMovingMe) { _gameClientMovingMe = gameClientMovingMe; }
+        // A possessed unit can outlive the session controlling it, and nothing clears
+        // this pointer when that session dies. Never dereference the raw getter from a
+        // cleanup path: use this one, which hands back the client only while its owning
+        // session is provably still there, and nullptr once it is gone.
+        GameClient* GetLiveGameClientMovingMe() const;
+        void SetGameClientMovingMe(GameClient* gameClientMovingMe);
 
         SharedVisionList const& GetSharedVisionList() { return m_sharedVision; }
         void AddPlayerToVision(Player* player);
@@ -1912,6 +1917,7 @@ class TC_GAME_API Unit : public WorldObject
         CharmInfo* m_charmInfo;
         SharedVisionList m_sharedVision;
         GameClient* _gameClientMovingMe;
+        ObjectGuid _gameClientMovingMeOwner; // controller's player guid; tells a live _gameClientMovingMe from a freed one
 
         MotionMaster* i_motionMaster;
 

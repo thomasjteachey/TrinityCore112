@@ -55,6 +55,13 @@ public:
     // Compatibility hook; transient clones cannot survive a process restart.
     static void OnStartupSweep();
 
+    // The guild every copy made here wears (Playerbot.Pvp.GuildName). 0 while
+    // it is disabled or has not been resolved yet. A copy is never a real
+    // member - it has no character row to be one with - so this is the id its
+    // guild field carries and nothing more; the PvP-only characters the copies
+    // are made from hold the real membership.
+    static uint32 GetBotGuildId();
+
     // Destroy transient clones while map and battleground services are still alive.
     static void OnShutdown();
 

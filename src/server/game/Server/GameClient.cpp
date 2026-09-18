@@ -17,6 +17,7 @@
 
 #include "GameClient.h"
 #include "WorldSession.h"
+#include "ObjectAccessor.h"
 #include "Unit.h"
 #include "Player.h"
 
@@ -43,6 +44,30 @@ void GameClient::RemoveAllowedMover(Unit* unit)
         unit->SetGameClientMovingMe(nullptr);
         SetActivelyMovedUnit(nullptr);
     }
+}
+
+void GameClient::ReleaseAllMovers()
+{
+    // An allowed mover is always on the owner's map, so this is the last moment the
+    // units can be found at all: once the owner leaves, a possessed creature left
+    // behind keeps pointing at a GameClient that is about to be freed with the
+    // session, and the next thing to touch it reads freed memory.
+    //
+    // The set is swapped out first because RemoveAllowedMover erases from it as it
+    // goes. Going through it rather than clearing the back-pointer directly matters:
+    // it is also what drains the movement changes the unit is still owed acks for,
+    // and a unit left holding those with no controller is a null dereference on its
+    // very next update.
+    Player* owner = GetBasePlayer();
+    GuidUnorderedSet movers;
+    movers.swap(_allowedMovers);
+
+    for (ObjectGuid const& guid : movers)
+        if (Unit* unit = owner ? ObjectAccessor::GetUnit(*owner, guid) : nullptr)
+            if (unit->GetGameClientMovingMe() == this)
+                RemoveAllowedMover(unit);
+
+    SetActivelyMovedUnit(nullptr);
 }
 
 bool GameClient::IsAllowedToMove(Unit* unit) const

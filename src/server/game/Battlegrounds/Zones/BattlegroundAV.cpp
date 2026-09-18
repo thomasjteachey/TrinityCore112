@@ -448,7 +448,20 @@ void BattlegroundAV::AddPlayer(Player* player)
     bool const isInBattleground = IsPlayerInBattleground(player->GetGUID());
     Battleground::AddPlayer(player);
     if (!isInBattleground)
-        PlayerScores[player->GetGUID().GetCounter()] = new BattlegroundAVScore(player->GetGUID());
+    {
+        BattlegroundAVScore* scoreEntry = new BattlegroundAVScore(player->GetGUID());
+        // Scoreboard team marker. Every race is Alliance on this realm, so the
+        // client cannot derive a scoreboard row from the race it gets back from
+        // a name query, and the bonus honor column is free: this realm pays a
+        // flat end-of-match award instead of per-objective bonus honor. The
+        // other battlegrounds already carry it; without it the client has no
+        // way to tell which side of the Alterac Valley scoreboard is yours.
+        if (player->GetBGTeam() == HORDE)
+        {
+            scoreEntry->BonusHonor = 1;
+        }
+        PlayerScores[player->GetGUID().GetCounter()] = scoreEntry;
+    }
 }
 
 void BattlegroundAV::EndBattleground(uint32 winner)

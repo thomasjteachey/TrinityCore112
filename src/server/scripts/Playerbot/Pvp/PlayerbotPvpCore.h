@@ -207,6 +207,7 @@ struct PvpClassSpellContext
         FaceSpellTarget,
         DropInvalidTarget,
         CheckMountState,
+        LeaveShapeshiftForm,
         ResetCombatState
     };
 

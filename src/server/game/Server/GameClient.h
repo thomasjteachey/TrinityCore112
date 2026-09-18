@@ -30,6 +30,9 @@ class TC_GAME_API GameClient
 
         void AddAllowedMover(Unit* unit);
         void RemoveAllowedMover(Unit* unit);
+        // Drop every mover and sever the back-pointers they hold to this client.
+        // Call it while the owner is still in its map, before the session can die.
+        void ReleaseAllMovers();
         bool IsAllowedToMove(Unit* unit) const;
         bool IsAllowedToMove(ObjectGuid guid) const;
         void SetMovedUnit(Unit* target, bool allowMove);

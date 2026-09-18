@@ -24,6 +24,7 @@
 #include "ScriptMgr.h"
 #include "Creature.h"
 #include "Errors.h"
+#include "GameClient.h"
 #include "GameTime.h"
 #include "GridNotifiers.h"
 #include "ObjectAccessor.h"
@@ -38,6 +39,7 @@
 #include "TemporarySummon.h"
 #include "SpellHistory.h"
 #include "WorldPacket.h"
+#include "WorldSession.h"
 #include <algorithm>
 #include <chrono>
 
@@ -1791,6 +1793,34 @@ namespace ShadowPriestWraith
         }
     }
 
+    // Last resort for a wraith whose owner is gone before the deferred release runs.
+    // The wraith is summoned TEMPSUMMON_MANUAL_DESPAWN with no timer, so no other
+    // code will ever remove it: left alone it loiters in the map for the rest of the
+    // instance's life, holding a pointer to a GameClient that has been freed with the
+    // owner's session. This is cleanup done purely from the wraith's own side, since
+    // there is no owner left to route it through.
+    void AbandonWraith(Creature* wraith)
+    {
+        if (!wraith)
+            return;
+
+        wraith->m_Events.KillAllEvents(false);
+        wraith->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_VISUAL);
+
+        if (wraith->IsCharmed())
+            wraith->RemoveCharmedBy(nullptr);
+
+        // The charmer may already be freed, so the client is only safe to touch
+        // while its session can still be found.
+        if (GameClient* client = wraith->GetLiveGameClientMovingMe())
+            client->RemoveAllowedMover(wraith);
+        else
+            wraith->SetGameClientMovingMe(nullptr);
+
+        wraith->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_CHARM);
+        wraith->DespawnOrUnsummon();
+    }
+
     void ScheduleWraithCleanup(Player* player, Creature* wraith)
     {
         if (!player)
@@ -1809,11 +1839,19 @@ namespace ShadowPriestWraith
         // in the same stack as the teleport. This gives the client one frame where
         // the real player body is already exactly at the possessed wraith location
         // and facing before the camera owner is returned from wraith -> player.
-        wraith->m_Events.AddEventAtOffset([playerGuid, wraithGuid]()
+        //
+        // Capturing the wraith is safe because the event lives on its own processor
+        // and cannot outlive it. That matters when the owner does not survive the
+        // wait: the wraith still has to be disposed of, and it is the only party
+        // left to do it.
+        wraith->m_Events.AddEventAtOffset([playerGuid, wraithGuid, wraith]()
         {
             Player* owner = ObjectAccessor::FindPlayer(playerGuid);
             if (!owner)
+            {
+                AbandonWraith(wraith);
                 return;
+            }
 
             Creature* ownedWraith = ObjectAccessor::GetCreature(*owner, wraithGuid);
             FinishWraithCleanup(owner, ownedWraith);
@@ -2129,7 +2167,16 @@ class spell_pri_shadow_wraith_aura : public AuraScript
         Creature* wraith = _wraithGuid.IsEmpty() ? nullptr : ObjectAccessor::GetCreature(*player, _wraithGuid);
 
         AuraRemoveMode const removeMode = GetTargetApplication() ? GetTargetApplication()->GetRemoveMode() : AURA_REMOVE_BY_DEFAULT;
-        bool const shouldTeleport = wraith && player->IsAlive() && removeMode != AURA_REMOVE_BY_DEATH;
+
+        // Deferring the release needs the player to still be here one map update
+        // later. When the aura is coming off because the player is on the way out -
+        // a logout, or a transient bot clone being torn down - that never happens:
+        // the scheduled handler finds no owner and the wraith is stranded. There is
+        // also nothing worth teleporting by then. Finish it synchronously instead.
+        bool const leavingWorld = !player->IsInWorld() || player->IsDuringRemoveFromWorld()
+            || (player->GetSession() && player->GetSession()->PlayerLogout());
+
+        bool const shouldTeleport = wraith && player->IsAlive() && removeMode != AURA_REMOVE_BY_DEATH && !leavingWorld;
 
         if (shouldTeleport)
         {

@@ -18,9 +18,12 @@
 #include "CharacterCache.h"
 #include "Configuration/Config.h"
 #include "DataStores/DBCStores.h"
+#include "DatabaseEnv.h"
 #include "Duration.h"
 #include "GameTime.h"
 #include "Globals/ObjectAccessor.h"
+#include "Guild.h"
+#include "GuildMgr.h"
 #include "Item.h"
 #include "LoginQueryHolder.h"
 #include "Log.h"
@@ -29,6 +32,7 @@
 #include "ObjectMgr.h"
 #include "Pet.h"
 #include "Player.h"
+#include "Playerbot/Pve/PlayerbotPveManager.h"
 #include "SharedDefines.h"
 #include "SpellAuras.h"
 #include "World.h"
@@ -48,10 +52,16 @@ namespace
 constexpr uint32 kBloodlustSpellId = 2825;
 constexpr uint32 kBloodlustDurationMs = 60 * IN_MILLISECONDS;
 constexpr uint32 kCloneTickThrottleMs = 1000;
+// How long between attempts to find or found the copies' guild. The first
+// attempt is on the first world tick, which is where the startup one happens.
+constexpr uint32 kPvpBotGuildRetryMs = 60 * IN_MILLISECONDS;
 
 struct ObcCloneConfig
 {
     bool enabled = false;
+    // Guild worn by every copy made in this file (Playerbot.Pvp.GuildName).
+    // Empty leaves them guildless.
+    std::string guildName;
 };
 
 struct ObcCloneRecord
@@ -119,6 +129,177 @@ std::unordered_map<ObjectGuid, WorldCloneRecord> g_WorldClones;
 AsyncCallbackProcessor<SQLQueryHolderCallback> g_WorldThreadSourceLoads;
 
 uint32 g_CloneTickAccumulatorMs = 0;
+
+// The guild every copy wears. Read from map threads (copies are built there),
+// written only by the world thread.
+std::atomic<uint32> g_PvpBotGuildId{ 0 };
+// A founder is being loaded; hold the next attempt rather than starting a
+// second load for the same guild.
+bool g_PvpBotGuildFounderPending = false;
+uint32 g_PvpBotGuildRetryMs = kPvpBotGuildRetryMs;
+// The "no PvP-only account is configured" notice, said once per uptime.
+bool g_PvpBotGuildRosterNoticeSaid = false;
+
+// A copy has no character row, so it can never be a real guild member: joining
+// it for real would write a guild_member row under a guid that does not exist
+// and leave it behind when the copy goes. Writing the id into its guild field
+// is all the client needs - it asks for the name with an ordinary guild query,
+// which answers for anyone, member or not.
+void ApplyPvpBotGuild(Player* clone)
+{
+    uint32 const guildId = g_PvpBotGuildId.load(std::memory_order_relaxed);
+    if (!clone || !guildId)
+        return;
+
+    // The field itself, not Player::SetInGuild: that also stamps the character
+    // cache, which would be telling it a membership that does not exist - and
+    // it is reached from map threads, where the cache is not ours to touch.
+    clone->SetUInt32Value(PLAYER_GUILDID, guildId);
+    clone->SetRank(GR_INITIATE);
+}
+
+// The characters the copies are made from that exist only to be PvP bots. They
+// are the ones joined for real: the first founds the guild and the rest fill
+// its roster. Ordinary managed bots are deliberately left out - they belong to
+// the PvE guild (Playerbot.Pve.GuildName), and a bot that has not logged in yet
+// is guildless, so sweeping them in here would take them from it.
+std::vector<ObjectGuid> SelectPvpBotGuildRoster()
+{
+    std::vector<uint32> const& accounts = playerbot::PveManager::GetConfig().pvpOnlyAccountIds;
+    if (accounts.empty())
+        return {};
+
+    std::string accountList;
+    for (uint32 accountId : accounts)
+    {
+        if (!accountList.empty())
+            accountList += ',';
+        accountList += std::to_string(accountId);
+    }
+
+    // Same shape as the battleground fill driver's source pool: the Obcc names
+    // are the legacy on-disk Obsidian Colosseum clones, not real characters.
+    QueryResult result = CharacterDatabase.PQuery(
+        "SELECT guid FROM characters WHERE account IN ({}) AND deleteInfos_Account IS NULL "
+        "AND name NOT LIKE 'Obcc%' ORDER BY guid", accountList);
+    if (!result)
+        return {};
+
+    std::vector<ObjectGuid> roster;
+    do
+    {
+        roster.push_back(ObjectGuid::Create<HighGuid::Player>((*result)[0].GetUInt32()));
+    } while (result->NextRow());
+
+    return roster;
+}
+
+void JoinPvpBotCharacters(Guild* guild, std::vector<ObjectGuid> const& roster)
+{
+    if (!guild)
+        return;
+
+    uint32 joined = 0;
+    for (ObjectGuid guid : roster)
+    {
+        // Already somewhere - its own guild, or this one from an earlier run.
+        if (sCharacterCache->GetCharacterGuildIdByGuid(guid))
+            continue;
+
+        CharacterDatabaseTransaction trans(nullptr);
+        if (guild->AddMember(trans, guid))
+            ++joined;
+    }
+
+    if (joined)
+        TC_LOG_INFO("playerbots.pvp", "PvP bot guild '{}': {} character(s) joined.", guild->GetName(), joined);
+}
+
+void AdoptPvpBotGuild(Guild* guild, std::vector<ObjectGuid> const& roster)
+{
+    g_PvpBotGuildId.store(guild->GetId(), std::memory_order_relaxed);
+    JoinPvpBotCharacters(guild, roster);
+}
+
+// World thread only. Cheap once the guild is known.
+void EnsurePvpBotGuild()
+{
+    if (g_PvpBotGuildId.load(std::memory_order_relaxed) || g_PvpBotGuildFounderPending)
+        return;
+
+    std::string guildName;
+    {
+        std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+        guildName = g_ObcCloneConfig.guildName;
+    }
+
+    if (guildName.empty())
+        return;
+
+    std::vector<ObjectGuid> roster = SelectPvpBotGuildRoster();
+
+    if (Guild* guild = sGuildMgr->GetGuildByName(guildName))
+    {
+        TC_LOG_INFO("playerbots.pvp", "PvP bot guild '{}' (id {}) in use.", guildName, guild->GetId());
+        AdoptPvpBotGuild(guild, roster);
+        return;
+    }
+
+    // Guild::Create needs a real character to make guild master, and the
+    // characters the copies stand in for are exactly that. It must be one that
+    // is in no guild yet: Create writes the guild rows before it discovers its
+    // master cannot join, and what it leaves behind is a guild with nobody in
+    // it. Without such a character there is nothing to found a guild around, so
+    // the copies stay guildless.
+    ObjectGuid founderGuid;
+    for (ObjectGuid guid : roster)
+        if (!sCharacterCache->GetCharacterGuildIdByGuid(guid))
+        {
+            founderGuid = guid;
+            break;
+        }
+
+    if (!founderGuid)
+    {
+        if (!g_PvpBotGuildRosterNoticeSaid)
+        {
+            g_PvpBotGuildRosterNoticeSaid = true;
+            TC_LOG_INFO("playerbots.pvp", "PvP bot guild '{}' not created: no guildless character on Playerbot.Pve.PvpOnlyAccountIds to found it.",
+                guildName);
+        }
+        return;
+    }
+
+    g_PvpBotGuildFounderPending = true;
+    bool const queued = playerbot::PlayerbotObcCloneManager::LoadOfflineCloneSourceOnWorldThread(founderGuid,
+        [guildName, roster](Player* founder)
+    {
+        g_PvpBotGuildFounderPending = false;
+        if (!founder)
+            return;
+
+        // Another founder may have got there first between the load and its answer.
+        if (Guild* existing = sGuildMgr->GetGuildByName(guildName))
+        {
+            AdoptPvpBotGuild(existing, roster);
+            return;
+        }
+
+        // Guild::Create adds the leader as guild master itself.
+        std::unique_ptr<Guild> created = std::make_unique<Guild>();
+        if (!created->Create(founder, guildName))
+            return;
+
+        Guild* guild = created.release();
+        sGuildMgr->AddGuild(guild);
+        TC_LOG_INFO("playerbots.pvp", "Created PvP bot guild '{}' (id {}) with {} as guild master.",
+            guildName, guild->GetId(), founder->GetName());
+        AdoptPvpBotGuild(guild, roster);
+    });
+
+    if (!queued)
+        g_PvpBotGuildFounderPending = false;
+}
 
 bool IsObcCloneFeatureConfigured()
 {
@@ -636,6 +817,8 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
     // update-field storage and GUID do not exist until Player::Create succeeds.
     session->SetPlayer(clone);
 
+    ApplyPvpBotGuild(clone);
+
     clone->GetMotionMaster()->Initialize();
     clone->SetLevel(human->GetLevel(), false);
     clone->InitStatsForLevel();
@@ -905,6 +1088,12 @@ Player* CreateCustomGameLobbyClone(Player* source, uint32 mapId, uint32 lobbyIns
     // GetSocial()->HasIgnore() on every player they touch.
     clone->EnsureSocial();
     session->SetPlayer(clone);
+
+    // Roster mannequins stand in for people too; only the ones standing in
+    // for a bot wear the bot guild.
+    if (isPlayerbot)
+        ApplyPvpBotGuild(clone);
+
     clone->GetMotionMaster()->Initialize();
     clone->SetLevel(source->GetLevel(), false);
     clone->InitStatsForLevel();
@@ -1131,12 +1320,38 @@ void PlayerbotObcCloneManager::LoadConfig()
     int32 const legacyEnableValue = std::max<int32>(0,
         sConfigMgr->GetIntDefault("Playerbot.PvpLifecycle.ObsidianColosseum.CloneAccountId", 0));
 
+    std::string guildName = sConfigMgr->GetStringDefault("Playerbot.Pvp.GuildName", "The Robot Masters");
+    // Held to the same standard as the guild a person could found: a name the
+    // database column cannot hold, or one the realm reserves, is refused here
+    // rather than at the INSERT.
+    if (!guildName.empty() && (sObjectMgr->IsReservedName(guildName) || !sObjectMgr->IsValidCharterName(guildName)))
+    {
+        TC_LOG_ERROR("server.loading", "Playerbot.Pvp.GuildName '{}' is not a usable guild name; PvP copies stay guildless.",
+            guildName);
+        guildName.clear();
+    }
+
     std::lock_guard<std::mutex> lock(g_ObcCloneLock);
     g_ObcCloneConfig.enabled = sConfigMgr->GetBoolDefault(
         "Playerbot.PvpLifecycle.ObsidianColosseum.Clone.Enable", legacyEnableValue != 0);
 
-    TC_LOG_INFO("server.loading", "OBC in-memory clone mirror config: enabled={}.",
-        g_ObcCloneConfig.enabled ? "true" : "false");
+    // A renamed guild is a different guild: drop the resolved id so the next
+    // tick finds or founds the new one. Copies already standing keep the old
+    // one until they go, which is not long.
+    if (g_ObcCloneConfig.guildName != guildName)
+    {
+        g_ObcCloneConfig.guildName = guildName;
+        g_PvpBotGuildId.store(0, std::memory_order_relaxed);
+        g_PvpBotGuildRosterNoticeSaid = false;
+    }
+
+    TC_LOG_INFO("server.loading", "OBC in-memory clone mirror config: enabled={}, pvp copy guild='{}'.",
+        g_ObcCloneConfig.enabled ? "true" : "false", g_ObcCloneConfig.guildName);
+}
+
+uint32 PlayerbotObcCloneManager::GetBotGuildId()
+{
+    return g_PvpBotGuildId.load(std::memory_order_relaxed);
 }
 
 void PlayerbotObcCloneManager::OnStartupSweep()
@@ -1158,6 +1373,20 @@ void PlayerbotObcCloneManager::OnWorldUpdate(uint32 diffMs)
     // Offline loads for open-world copies, answered here because no map is
     // updating now. Ahead of every gate below: none of them is about these.
     g_WorldThreadSourceLoads.ProcessReadyCallbacks();
+
+    // The copies' guild. Resolved off the tick rather than at config load
+    // because guilds are not loaded yet when the configuration is, and because
+    // founding one waits on a character load. Cheap once it is known; retried
+    // slowly while it is not, since each attempt is a query.
+    if (!g_PvpBotGuildId.load(std::memory_order_relaxed))
+    {
+        g_PvpBotGuildRetryMs += diffMs;
+        if (g_PvpBotGuildRetryMs >= kPvpBotGuildRetryMs)
+        {
+            g_PvpBotGuildRetryMs = 0;
+            EnsurePvpBotGuild();
+        }
+    }
 
     // An open-world copy that has left the world without being destroyed -
     // its map unloaded under it - is finished. The PvE manager notices its
@@ -1426,6 +1655,9 @@ Player* PlayerbotObcCloneManager::CreateCustomGameClone(Player* source, Battlegr
     // GetSocial()->HasIgnore() on every player they touch.
     clone->EnsureSocial();
     session->SetPlayer(clone);
+
+    ApplyPvpBotGuild(clone);
+
     clone->GetMotionMaster()->Initialize();
     clone->SetLevel(source->GetLevel(), false);
     clone->InitStatsForLevel();
@@ -1713,6 +1945,9 @@ Player* PlayerbotObcCloneManager::CreateWorldClone(Player* source, Map* map, Pos
     // GetSocial()->HasIgnore() on every player they touch.
     clone->EnsureSocial();
     session->SetPlayer(clone);
+
+    ApplyPvpBotGuild(clone);
+
     clone->GetMotionMaster()->Initialize();
     clone->SetLevel(source->GetLevel(), false);
     clone->InitStatsForLevel();

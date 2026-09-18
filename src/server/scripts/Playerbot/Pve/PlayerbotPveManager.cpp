@@ -337,6 +337,17 @@ namespace
         bool auctionCatchUpBuy = true;
         bool auctionCatchUpSell = true;
         PveTimePoint nextProfessionCheckAt{};
+        // The smelter's ledger, in hundredths of an item, keyed by ore entry
+        // (and by bar entry for the alloys). A haul adds count x share to its
+        // entry, whole units are taken out of it and smelted, and the remainder
+        // carries to the next node.
+        //
+        // A ledger rather than "smelt half of what is in the bag": that rule
+        // reads the same stack again on the next haul and halves what is left of
+        // it a second time, so a miner who never sells ends up having smelted
+        // everything it ever mined. Counting the ORE IN as it arrives is the only
+        // way the share means what it says.
+        std::unordered_map<uint32, uint32> smeltCredit;
         uint32 engagedStallTicks = 0;
         // When the current fight started - a bail-out only makes sense once a
         // fight has actually been joined.
@@ -598,6 +609,9 @@ namespace
     bool IsHeldFromAuction(ObjectGuid itemGuid);
     bool IsHeldOrPacedFromAuction(ObjectGuid itemGuid);
     bool CarriesQueuedChestLoot(Player* bot);
+    bool IsSmeltableOre(uint32 itemEntry);
+    void EnsureSmeltingRecipes(Player* bot);
+    void SmeltGatheredOre(Player* bot, std::unordered_map<uint32, uint32> const& gathered);
     uint32 RequiredAmmoSubclass(Player const* bot);
     void MoveTowardThrottled(Player* bot, Position const& destination);
     void TrimOverstockedConsumables(Player* bot);
@@ -5737,6 +5751,26 @@ namespace
                     before.insert(item->GetGUID().GetRawValue());
                 });
 
+            // Ore on its way in, counted so a share of it can go to the forge.
+            //
+            // Read off the loot rather than off the bags: the counts have to be
+            // what this haul ADDED, and StoreLootItem reports nothing, so the
+            // holdings are diffed either side of the store loop. The scan of the
+            // loot list costs a handful of comparisons and skips the diff
+            // entirely for the overwhelming majority of hauls, which are corpses
+            // and herbs and hold no ore at all.
+            //
+            // Never a player's death chest. That ore is held off the auction
+            // house so its owner can corpse-run back for it, and a bar is a
+            // different item from the ore it was poured from - smelting it would
+            // launder it straight out of the hold.
+            std::unordered_map<uint32, uint32> oreBefore;
+            if (!playerChest && g_PveConfig.smeltSharePercent &&
+                playerbot::PveManager::GetConfig().professionsEnabled)
+                for (LootItem const& lootItem : loot->items)
+                    if (IsSmeltableOre(lootItem.itemid))
+                        oreBefore.try_emplace(lootItem.itemid, bot->GetItemCount(lootItem.itemid, false));
+
             uint32 const maxSlot = std::min<uint32>(loot->GetMaxSlotInLootFor(bot), 255);
             for (uint32 slot = 0; slot < maxSlot; ++slot)
                 bot->StoreLootItem(uint8(slot), loot);
@@ -5789,6 +5823,19 @@ namespace
                     GrantGatherSkillCredit(bot, lootGameObject);
                 else if (lootCorpse)
                     TrySkinCorpse(bot, lootCorpse);
+
+                // And the ore that just arrived gets its share put to the forge.
+                // After the release, like the two above: this moves items in and
+                // out of the bags, and doing that under an open loot window is
+                // work nobody has to reason about.
+                if (!oreBefore.empty())
+                {
+                    std::unordered_map<uint32, uint32> gathered;
+                    for (auto const& [oreEntry, before] : oreBefore)
+                        if (uint32 const now = bot->GetItemCount(oreEntry, false); now > before)
+                            gathered[oreEntry] = now - before;
+                    SmeltGatheredOre(bot, gathered);
+                }
             }
 
             // An emptied cache still has to be told it is spent, and DoLootRelease
@@ -8368,6 +8415,27 @@ namespace
     // Zones opening at or above this are left to the veterans rather than to locals.
     constexpr uint8 kVeteranBandMinLevel = 55;
 
+    // ...except these two, which a drifter may still be sent into.
+    //
+    // The rule above is about where a bot LIVES. A cycling bot reborn five levels
+    // from the cap would spend its whole life in content the veterans already
+    // hold, so the three 55-60 zones are nobody's home and never enter
+    // g_RebirthZones. That list then also, as a side effect nobody chose, decided
+    // where a drifter could follow a person - and those are not the same
+    // question. Following is temporary and leaves no population behind: the bot
+    // is sent while somebody stands there and released the moment they leave.
+    //
+    // So the two are split. Silithus and Deadwind Pass are meant to be dangerous
+    // ground: stand in either and strangers who can fight back turn up. The
+    // absence of Winterspring is the other half of the same decision, not an
+    // oversight - it stays quiet, and it is the one zone at the top of the chart
+    // a person can work in without company arriving.
+    //
+    // Nothing else about these zones changes. They are still not rebirth zones
+    // and still not local home zones, so no bot moves in permanently, and the
+    // drifters sent here are let go the moment their person moves on.
+    constexpr std::array<uint32, 2> kDrifterVeteranZones = { { 41, 1377 } };  // Deadwind Pass, Silithus
+
 
     // Classic zone level caps.
     constexpr std::array<GuardianZone, 38> kGuardianZones = { {
@@ -8926,6 +8994,19 @@ namespace
     // which is a different question from "is anything here still killable".
     std::unordered_map<uint32, uint8> g_ZoneTopLevel;
     std::vector<uint32> g_RebirthZones;
+    // The veteran zones nobody lives in but a drifter may still be sent to:
+    // kDrifterVeteranZones, put through the same two delivery tests
+    // g_RebirthZones applies. Built beside it and read on the world thread under
+    // the same one-shot guard, so it needs no lock of its own.
+    std::vector<uint32> g_DrifterOnlyZones;
+
+    // Somewhere a drifter can be delivered to in order to follow somebody. Wider
+    // than "somewhere a bot can be reborn" by exactly the two zones above.
+    bool IsDrifterFollowableZone(uint32 zoneId)
+    {
+        return std::binary_search(g_RebirthZones.begin(), g_RebirthZones.end(), zoneId) ||
+            std::binary_search(g_DrifterOnlyZones.begin(), g_DrifterOnlyZones.end(), zoneId);
+    }
 
     // Class-balanced home-zone assignment for ordinary zone-local bots.
     //
@@ -9324,10 +9405,23 @@ namespace
             g_ZoneTopLevel[zoneId] = levels[std::min(index, levels.size() - 1)];
         }
 
+        // Can this realm actually put a bot down in that zone? The zone must sit
+        // on a scanned continent and must have grind clusters, or the bot would be
+        // posted somewhere with nothing to kill - and, worse, ResetManagedBotToZoneBand
+        // only teleports when FindGrindSpotInZone answers, so a zone with no
+        // clusters would leave it re-levelled where it already stood.
+        auto const canDeliverTo = [](uint32 zoneId)
+        {
+            AreaTableEntry const* zoneEntry = sAreaTableStore.LookupEntry(zoneId);
+            if (!zoneEntry || !std::binary_search(g_PveConfig.relocateMaps.begin(),
+                g_PveConfig.relocateMaps.end(), zoneEntry->ContinentID))
+                return false;
+
+            return g_ZoneSpotCount.count(zoneId) != 0;
+        };
+
         // Eligible rebirth zones are the classic levelling chart, filtered to the
-        // ones this realm can actually deliver a bot to: the zone must sit on a
-        // scanned continent and must have grind clusters, or a bot would be posted
-        // somewhere with nothing to kill.
+        // ones this realm can deliver to.
         for (ClassicZoneBand const& band : kClassicZoneBands)
         {
             // The top of the chart has no local bots. A zone that only opens at
@@ -9338,12 +9432,7 @@ namespace
             if (band.minLevel >= kVeteranBandMinLevel)
                 continue;
 
-            AreaTableEntry const* zoneEntry = sAreaTableStore.LookupEntry(band.zoneId);
-            if (!zoneEntry || !std::binary_search(g_PveConfig.relocateMaps.begin(),
-                g_PveConfig.relocateMaps.end(), zoneEntry->ContinentID))
-                continue;
-
-            if (!g_ZoneSpotCount.count(band.zoneId))
+            if (!canDeliverTo(band.zoneId))
                 continue;
 
             g_RebirthZones.push_back(band.zoneId);
@@ -9355,6 +9444,26 @@ namespace
         std::sort(g_RebirthZones.begin(), g_RebirthZones.end());
 
         TC_LOG_INFO("playerbots.pve", "Rebirth zones: {} eligible.", g_RebirthZones.size());
+
+        // And the veteran zones opened to drifters alone - see kDrifterVeteranZones.
+        // Same delivery test, deliberately not the same list: nobody is reborn here
+        // and nobody is homed here, but a person standing in one draws company.
+        g_DrifterOnlyZones.clear();
+        for (uint32 zoneId : kDrifterVeteranZones)
+        {
+            if (!canDeliverTo(zoneId))
+            {
+                TC_LOG_INFO("playerbots.pve",
+                    "Drifter zone {} has no deliverable grind clusters; drifters cannot be sent there.", zoneId);
+                continue;
+            }
+
+            g_DrifterOnlyZones.push_back(zoneId);
+        }
+        std::sort(g_DrifterOnlyZones.begin(), g_DrifterOnlyZones.end());
+
+        TC_LOG_INFO("playerbots.pve", "Drifter-only zones: {} of {} eligible.",
+            g_DrifterOnlyZones.size(), kDrifterVeteranZones.size());
 
         // The hunting grounds, from the same spawn table, under the same lock and
         // the same one-shot guard - and with none of the grind cache's filters,
@@ -10361,6 +10470,7 @@ namespace
             EnsureProfessionTier(bot, kMiningTiers, SKILL_MINING);
         if (BotSkins(bot))
             EnsureProfessionTier(bot, kSkinningTiers, SKILL_SKINNING);
+        EnsureSmeltingRecipes(bot);
     }
 
     // Gathering skill only rises when a node is actually gathered, and a bot levels
@@ -10417,6 +10527,363 @@ namespace
                 continue;
 
             bot->SetSkill(line.skillId, bot->GetSkillStep(line.skillId), cap, std::max<uint16>(cap, trained));
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Smelting: a share of every ore haul goes to the forge and comes back as
+    // bars, which then reach the auction house through exactly the same trade
+    // goods path the raw ore already used.
+    //
+    // A miner who only ever posts ore leaves the house with no bars at all on it,
+    // which is the state the realm has been in: 8,497 units of ore standing on
+    // the Centurion house against ten Silver Bars, eleven Gold and nothing else,
+    // so every blacksmith, engineer and jewelcrafter buying materials had to buy
+    // ore and own mining to use it. The fleet is the only supplier at that end of
+    // the market, so the bars have to come from the fleet.
+    //
+    // Not a real cast. The smelt spells want a forge and the bot is standing at a
+    // vein in Loch Modan, and sending the fleet to a capital and back for every
+    // haul would cost more travel than the whole feature is worth. The ore is
+    // converted where it is found, on the recipes' own reagents and the trainer's
+    // own skill gates, and the bot has to KNOW the smelt before it can use it.
+    // Coal, the one reagent that is bought rather than dug, is paid for out of
+    // the bot's purse at the merchant's price - see kCoalEntry.
+    // ---------------------------------------------------------------------------
+
+    struct SmeltRecipe
+    {
+        uint32 spellId;
+        // The mining rank the trainer asks for. The SkillLineAbility rows for
+        // every smelt say 1 - the real gate is on the teaching spell - so these
+        // are the realm's own trainer_spell.ReqSkillRank values, read off the
+        // live world database rather than assumed.
+        uint16 requiredSkill;
+        uint32 productEntry;
+        uint32 productCount;
+        // Second ingredient is 0 for a plain ore smelt.
+        uint32 ingredientEntry[2];
+        uint32 ingredientCount[2];
+    };
+
+    // Coal is not dug out of a vein: it is trade stock off a shelf, and the only
+    // smelt that wants it is steel. The shortfall is bought rather than mined -
+    // the copper comes out of the bot's own purse at the merchant's asking price,
+    // which is what a player pays for it.
+    //
+    // Steel LOSES the bot money, and does so by design rather than by mistake.
+    // Coal is 500 copper and Iron Bar sells to a vendor for 200, so a steel bar
+    // that vendors for 60 costs more to make than it is worth - that is Classic's
+    // own pricing, not this fork's. It is kept because the point of the fleet at
+    // this end of the market is to have the material ON the house for the players
+    // who need it, and because the copper it burns is a sink rather than a
+    // transfer. Setting SmeltPercent to 0 switches the whole pass off; taking the
+    // steel row out of the table below stops just this one.
+    constexpr uint32 kCoalEntry = 3857;
+
+    // Verified against this realm's Spell.dbc (reagents and EffectItemType) and
+    // its trainer_spell ranks. Dark Iron (14891) is deliberately absent: it wants
+    // eight ore per bar AND the Black Forge in Blackrock Depths, and no bot is
+    // ever going to be standing at it. Elementium likewise - its reagent list is
+    // an Arcanite/Fiery Core raid affair.
+    constexpr std::array<SmeltRecipe, 10> kSmeltRecipes = { {
+        // Ore into bars.
+        {  2657,   1,  2840, 1, {  2770,     0 }, { 1, 0 } }, // Copper
+        {  3304,  65,  3576, 1, {  2771,     0 }, { 1, 0 } }, // Tin
+        {  2658,  75,  2842, 1, {  2775,     0 }, { 1, 0 } }, // Silver
+        {  3307, 125,  3575, 1, {  2772,     0 }, { 1, 0 } }, // Iron
+        {  3308, 155,  3577, 1, {  2776,     0 }, { 1, 0 } }, // Gold
+        { 10097, 175,  3860, 1, {  3858,     0 }, { 1, 0 } }, // Mithril
+        { 10098, 230,  6037, 1, {  7911,     0 }, { 1, 0 } }, // Truesilver
+        { 16153, 250, 12359, 1, { 10620,     0 }, { 1, 0 } }, // Thorium
+        // Bars into alloys. These are what the second application of the share
+        // is for, and they are the reason bronze and steel ever exist.
+        {  2659,  65,  2841, 2, {  2840,  3576 }, { 1, 1 } }, // Bronze
+        {  3569, 165,  3859, 1, {  3575, kCoalEntry }, { 1, 1 } }, // Steel
+    } };
+
+    // The plain ore smelt for an ore, if there is one.
+    SmeltRecipe const* OreSmeltFor(uint32 oreEntry)
+    {
+        for (SmeltRecipe const& recipe : kSmeltRecipes)
+            if (!recipe.ingredientEntry[1] && recipe.ingredientEntry[0] == oreEntry)
+                return &recipe;
+        return nullptr;
+    }
+
+    // The alloy this bar leads on to - matched on the PRIMARY metal only, which
+    // is the copper of bronze and the iron of steel.
+    //
+    // Deliberately one-sided. Matching either ingredient looks more helpful and
+    // is wrong: a fleet that mines copper and tin evenly would then take the
+    // share once off the new copper bars and again off the new tin bars, and
+    // since one firing eats one of each, twice the share would go into the alloy
+    // - 10 copper and 10 tin ore end up as 8 bronze bars and one bar of each
+    // ingredient instead of an even split. A pair is one decision, so it is
+    // taken once, on one side.
+    SmeltRecipe const* AlloyFrom(uint32 barEntry)
+    {
+        for (SmeltRecipe const& recipe : kSmeltRecipes)
+            if (recipe.ingredientEntry[1] && recipe.ingredientEntry[0] == barEntry)
+                return &recipe;
+        return nullptr;
+    }
+
+    bool IsSmeltableOre(uint32 itemEntry)
+    {
+        return OreSmeltFor(itemEntry) != nullptr;
+    }
+
+    // For the log lines below. Entry numbers are what the code deals in, but a
+    // person reading Playerbot.log wants to see "Iron Bar".
+    std::string SmeltItemName(uint32 entry)
+    {
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry);
+        return proto ? proto->Name1 : std::to_string(entry);
+    }
+
+    // The recipes a miner knows, ranked off mining the same way the gathering
+    // tiers are. Learned rather than assumed, so the gate on smelting is the
+    // bot's own spellbook and there is only one place that decides it.
+    void EnsureSmeltingRecipes(Player* bot)
+    {
+        if (!g_PveConfig.smeltSharePercent || !BotHasProfession(bot, LOCKTYPE_MINING) ||
+            !bot->HasSkill(SKILL_MINING))
+            return;
+
+        // The Smelting button itself. Learning the recipes without it leaves a
+        // spellbook that cannot explain where the bars came from.
+        constexpr uint32 kSmeltingSpell = 2656;
+        if (!bot->HasSpell(kSmeltingSpell))
+            bot->LearnSpell(kSmeltingSpell, false);
+
+        uint16 const skill = bot->GetSkillValue(SKILL_MINING);
+        for (SmeltRecipe const& recipe : kSmeltRecipes)
+        {
+            if (bot->HasSpell(recipe.spellId) || skill < recipe.requiredSkill)
+                continue;
+
+            bot->LearnSpell(recipe.spellId, false);
+            TC_LOG_INFO("playerbots.pve", "Bot {} learned smelting recipe {} (mining {}).",
+                bot->GetName(), recipe.spellId, skill);
+        }
+    }
+
+    // How much of this the bot may actually put in the furnace: what it holds,
+    // less anything a dead player is still entitled to come back for and less
+    // anything a quest wants. Melting a corpse-run's ore down into bars would
+    // launder it out of the hold - the hold is keyed on the item, and the bar is
+    // a different item.
+    uint32 SmeltableStockOf(Player* bot, uint32 entry)
+    {
+        if (IsQuestRequiredItem(bot, entry))
+            return 0;
+
+        uint32 free = 0;
+        ForEachBagItem(bot, [&](Item* item, uint8, uint8)
+        {
+            if (item->GetEntry() == entry && !IsHeldFromAuction(item->GetGUID()))
+                free += item->GetCount();
+        });
+        return free;
+    }
+
+    // Take reagents out of the bags, skipping the held stacks SmeltableStockOf
+    // did not count. Player::DestroyItemCount(entry, ...) cannot do this - it
+    // walks the bags itself and would eat the held stack first.
+    uint32 ConsumeSmeltingReagent(Player* bot, uint32 entry, uint32 count)
+    {
+        uint32 remaining = count;
+        std::vector<std::pair<uint8, uint8>> positions;
+        ForEachBagItem(bot, [&](Item* item, uint8 bag, uint8 slot)
+        {
+            if (item->GetEntry() == entry && !IsHeldFromAuction(item->GetGUID()))
+                positions.emplace_back(bag, slot);
+        });
+
+        for (auto const& position : positions)
+        {
+            if (!remaining)
+                break;
+
+            // Re-resolved: the previous iteration destroyed a stack, and a
+            // destroyed item's slot holds nothing.
+            Item* item = bot->GetItemByPos(position.first, position.second);
+            if (!item || item->GetEntry() != entry)
+                continue;
+
+            uint32 take = std::min(remaining, item->GetCount());
+            uint32 requested = take;
+            bot->DestroyItemCount(item, take, true);
+            // DestroyItemCount decrements what it was handed, so what is left in
+            // `take` is what it could NOT destroy.
+            remaining -= requested - take;
+        }
+
+        return count - remaining;
+    }
+
+    // One recipe, up to `firings` times. Returns how many times it actually ran.
+    uint32 RunSmeltRecipe(Player* bot, SmeltRecipe const& recipe, uint32 firings)
+    {
+        if (!firings || !bot->HasSpell(recipe.spellId))
+            return 0;
+
+        // What the ingredients allow. Coal is the one thing the bot may not have
+        // and can still get, so it is measured against the purse instead.
+        uint32 coalToBuy = 0;
+        for (uint8 index = 0; index < 2 && firings; ++index)
+        {
+            uint32 const entry = recipe.ingredientEntry[index];
+            if (!entry)
+                continue;
+
+            uint32 const per = std::max<uint32>(1, recipe.ingredientCount[index]);
+            uint32 const held = SmeltableStockOf(bot, entry);
+            if (entry != kCoalEntry)
+            {
+                firings = std::min(firings, held / per);
+                continue;
+            }
+
+            ItemTemplate const* coal = sObjectMgr->GetItemTemplate(entry);
+            uint32 const price = coal ? coal->BuyPrice : 0;
+            uint32 affordable = 0;
+            if (price)
+                affordable = uint32(std::min<uint64>(bot->GetMoney() / price, 0xFFFFFFFFull));
+            else if (coal)
+                affordable = firings * per; // free stock: nothing to ration
+
+            firings = std::min(firings, (held + affordable) / per);
+            if (firings && held < firings * per)
+                coalToBuy = firings * per - held;
+        }
+
+        if (!firings)
+            return 0;
+
+        // The bars have to have somewhere to go BEFORE the ore is destroyed.
+        // Asked conservatively - the ingredients are still occupying their slots
+        // at this point - which is the right way round: a refusal here costs one
+        // pass, and the ore is offered again at the next node.
+        ItemPosCountVec dest;
+        while (firings && bot->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, recipe.productEntry,
+            firings * recipe.productCount) != EQUIP_ERR_OK)
+        {
+            --firings;
+            dest.clear();
+        }
+
+        if (!firings)
+            return 0;
+
+        if (coalToBuy)
+        {
+            ItemTemplate const* coal = sObjectMgr->GetItemTemplate(kCoalEntry);
+            uint64 const cost = uint64(coal ? coal->BuyPrice : 0) * coalToBuy;
+            if (cost > uint64(bot->GetMoney()))
+                return 0;
+            bot->ModifyMoney(-int32(cost));
+        }
+
+        for (uint8 index = 0; index < 2; ++index)
+        {
+            uint32 const entry = recipe.ingredientEntry[index];
+            if (!entry || entry == kCoalEntry)
+                continue;
+            ConsumeSmeltingReagent(bot, entry, firings * std::max<uint32>(1, recipe.ingredientCount[index]));
+        }
+
+        // Whatever coal the bot already had goes in as well; the rest was bought.
+        if (recipe.ingredientEntry[0] == kCoalEntry || recipe.ingredientEntry[1] == kCoalEntry)
+        {
+            uint32 const per = recipe.ingredientEntry[0] == kCoalEntry
+                ? recipe.ingredientCount[0] : recipe.ingredientCount[1];
+            uint32 const needed = firings * std::max<uint32>(1, per);
+            ConsumeSmeltingReagent(bot, kCoalEntry, needed - std::min(needed, coalToBuy));
+        }
+
+        if (!bot->StoreNewItem(dest, recipe.productEntry, true))
+        {
+            // Unreachable: CanStoreNewItem answered for this very dest a few
+            // statements ago, and nothing between the two takes a slot - the
+            // consume above only frees them. Said out loud anyway, because the
+            // reagents are already gone by this point and the loss would
+            // otherwise be silent.
+            TC_LOG_ERROR("playerbots.pve",
+                "Bot {} smelted {} x{} and the bars would not go in the bags - they are lost.",
+                bot->GetName(), SmeltItemName(recipe.productEntry), firings * recipe.productCount);
+            return 0;
+        }
+
+        return firings;
+    }
+
+    // Hand `units` of something to the ledger and take back the whole units that
+    // are due the forge. See PveBotState::smeltCredit.
+    uint32 TakeSmeltShare(PveBotState& state, uint32 entry, uint32 units)
+    {
+        uint32 const share = std::min<uint32>(100, g_PveConfig.smeltSharePercent);
+        if (!share || !units)
+            return 0;
+
+        uint32& credit = state.smeltCredit[entry];
+        credit += units * share;
+        uint32 const due = credit / 100;
+        credit -= due * 100;
+        return due;
+    }
+
+    // Called with what a haul actually added to the bags, on the world thread,
+    // straight after the loot is stored.
+    void SmeltGatheredOre(Player* bot, std::unordered_map<uint32, uint32> const& gathered)
+    {
+        if (gathered.empty() || !g_PveConfig.smeltSharePercent)
+            return;
+
+        PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, bot->GetGUID().GetRawValue());
+
+        for (auto const& [oreEntry, count] : gathered)
+        {
+            SmeltRecipe const* smelt = OreSmeltFor(oreEntry);
+            if (!smelt || !bot->HasSpell(smelt->spellId))
+                continue;
+
+            uint32 const per = std::max<uint32>(1, smelt->ingredientCount[0]);
+            uint32 const dueUnits = TakeSmeltShare(state, oreEntry, count);
+            uint32 const fired = RunSmeltRecipe(bot, *smelt, dueUnits / per);
+
+            // Whatever the forge did not take goes straight back on the ledger -
+            // both the ore of a firing that was refused (a full pack, most
+            // often) and the part of a firing that did not round up to one. A
+            // bot that could not smelt today has not forfeited the ore's turn.
+            state.smeltCredit[oreEntry] += (dueUnits - fired * per) * 100;
+            if (!fired)
+                continue;
+
+            uint32 const bars = fired * smelt->productCount;
+            TC_LOG_INFO("playerbots.pve", "Bot {} smelted {} x{} into {} x{}.",
+                bot->GetName(), SmeltItemName(oreEntry), fired * per,
+                SmeltItemName(smelt->productEntry), bars);
+
+            // The same share again, on the bars just poured: that is what puts
+            // bronze on the house next to the copper and tin it is made of, and
+            // steel next to the iron, instead of one or the other.
+            SmeltRecipe const* alloy = AlloyFrom(smelt->productEntry);
+            if (!alloy || !bot->HasSpell(alloy->spellId))
+                continue;
+
+            // AlloyFrom matched the primary ingredient, so that is the one the
+            // share is counted in.
+            uint32 const barPer = std::max<uint32>(1, alloy->ingredientCount[0]);
+            uint32 const alloyDueUnits = TakeSmeltShare(state, smelt->productEntry, bars);
+            uint32 const alloyed = RunSmeltRecipe(bot, *alloy, alloyDueUnits / barPer);
+            state.smeltCredit[smelt->productEntry] += (alloyDueUnits - alloyed * barPer) * 100;
+
+            if (alloyed)
+                TC_LOG_INFO("playerbots.pve", "Bot {} alloyed {} x{} into {} x{}.",
+                    bot->GetName(), SmeltItemName(smelt->productEntry), alloyed * barPer,
+                    SmeltItemName(alloy->productEntry), alloyed * alloy->productCount);
         }
     }
 
@@ -18138,6 +18605,8 @@ namespace playerbot
             sConfigMgr->GetFloatDefault("Playerbot.Pve.AggroBudget.PartyRadiusYards", 80.0f));
         g_PveConfig.auctionLevelsBehindPenalty = std::max(0.0f, sConfigMgr->GetFloatDefault("Playerbot.Pve.Auction.LevelsBehindPenalty", 0.35f));
         g_PveConfig.professionsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Professions.Enable", false);
+        g_PveConfig.smeltSharePercent = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Playerbot.Pve.Professions.SmeltPercent", 50), 0, 100));
         g_PveConfig.relocateEnabled = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.Relocate.Enable", true);
         g_PveConfig.relocateDryWanders = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Playerbot.PveGrind.Relocate.DryWandersBeforeMove", 5), 2, 100));
@@ -18491,6 +18960,38 @@ namespace playerbot
     void ResetManagedBotToZoneBand(Player* bot, uint32 zoneId, uint8 bottomLevel);
     bool IsVeteranBot(Player const* bot);
     bool GetZoneLevelBand(uint32 zoneId, uint8& bottom, uint8& top);
+    bool FindGrindSpotInZone(uint32 zoneId, uint8 level, GrindSpot& out);
+
+    // Where in a zone's band a drifter can actually be put down.
+    //
+    // A zone's band and its spawns do not have to agree, and in one zone they
+    // badly do not. Deadwind Pass opens at 55 on the chart, but every grind
+    // cluster it owns is the level 59-60 ground around Karazhan - nothing else
+    // in the zone survives the cluster filters at all. A drifter rolled at 55,
+    // 56 or 57 therefore asks FindGrindSpotInZone for somewhere to stand, is
+    // told there is nowhere, and ResetManagedBotToZoneBand re-levels it and
+    // returns WITHOUT teleporting: the bot is left where it already was, at a
+    // level that now fits neither zone. Three rolls in five, silently.
+    //
+    // So the floor of the roll is the lowest level the zone can actually field,
+    // found by asking the spot cache the same question the reset will ask it.
+    // A zone whose band and spawns agree - which is most of them - answers at
+    // the band floor on the first probe and rolls exactly as before.
+    uint8 RollDrifterLevelInZone(uint32 zoneId, uint8 bottom, uint8 top)
+    {
+        GrindSpot spot;
+        uint8 floorLevel = bottom;
+        for (uint8 level = bottom; level < top; ++level)
+            if (FindGrindSpotInZone(zoneId, level, spot))
+            {
+                floorLevel = level;
+                break;
+            }
+
+        // Nothing in the band answered: leave the roll as it was rather than
+        // inventing a level. The bot is no worse off than before this existed.
+        return uint8(urand(floorLevel, top - 1));
+    }
 
     // Keep the drifter roster in step with who is actually online.
     //
@@ -18799,12 +19300,21 @@ namespace playerbot
             }
             uint32 const zoneId = settled.first;
 
-            // Somewhere a local bot can actually be delivered to. Capitals,
-            // instances, battlegrounds and the 55+ veteran zones are not in
-            // g_RebirthZones at all, so this single test covers all of them -
-            // and a person standing in one simply keeps the drifters they
-            // already have, wherever those were last sent.
-            if (!std::binary_search(g_RebirthZones.begin(), g_RebirthZones.end(), zoneId))
+            // Somewhere a drifter can actually be delivered to. Capitals,
+            // instances and battlegrounds are in neither list, so this single
+            // test covers all of them.
+            //
+            // The 55-60 zones are absent from g_RebirthZones because nobody LIVES
+            // there, which is a different question from whether somebody may be
+            // sent there to follow you - so Silithus and Deadwind Pass are opened
+            // here by kDrifterVeteranZones and Winterspring, on purpose, is not.
+            //
+            // Failing this does not merely stop new drifters arriving: the release
+            // loop below drops every assignment pointing at a person who is not in
+            // this list, so the retinue is let go and stays wherever it was last
+            // sent. Standing somewhere unfollowable empties your retinue rather
+            // than parking it.
+            if (!IsDrifterFollowableZone(zoneId))
                 continue;
 
             // And nowhere people cannot fight each other. A drifter in a
@@ -19595,10 +20105,13 @@ namespace playerbot
                             //
                             // GetZoneLevelBand guarantees top > bottom, and the
                             // band-fit test elsewhere treats [bottom, top - 1] as the
-                            // levels that belong here, so this range matches it.
+                            // levels that belong here, so this range matches it -
+                            // raised, where a zone's spawns sit above its band floor,
+                            // to a level that zone can actually field. See
+                            // RollDrifterLevelInZone.
                             bool const drifter = IsDrifter(botRawGuid);
                             uint8 const level = drifter
-                                ? uint8(urand(bottom, top - 1))
+                                ? RollDrifterLevelInZone(zoneId, bottom, top)
                                 : bottom;
                             ResetManagedBotToZoneBand(bot, zoneId, level);
 

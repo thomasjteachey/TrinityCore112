@@ -12,13 +12,13 @@ const uint32 BG_SV_Factions[2] =
     1735  // Horde
 };
 
+// The start warnings used to live at 1500-1503, which are core command-parser
+// strings ("Either:", "Or:", ...). Claiming them meant whichever realm loaded
+// Slavery Valley's SQL got those command replies overwritten with battleground
+// countdowns. They are broadcast texts now, below; nothing may be put back here
+// below 20000.
 enum SlaveryValleyStrings
 {
-    LANG_BG_SV_START_TWO_MINUTES                = 1500,
-    LANG_BG_SV_START_ONE_MINUTE                 = 1501,
-    LANG_BG_SV_START_HALF_MINUTE                = 1502,
-    LANG_BG_SV_HAS_BEGUN                        = 1503,
-
     LANG_BG_SV_TAKEN                            = 3001,
     LANG_BG_SV_DEFENDED                         = 3002,
     LANG_BG_SV_ASSAULTED                        = 3003,
@@ -31,14 +31,18 @@ enum SlaveryValleyStrings
     LANG_BG_SV_BOSS_INC_NOW                     = 3010
 };
 
-// StartMessageIds are sent through Battleground::SendBroadcastText(),
-// so they must point at lplusworld.broadcast_text rows, not trinity_string rows.
+// StartMessageIds are sent through Battleground::SendBroadcastText(), so they
+// must point at `broadcast_text` rows, not trinity_string rows. 910060-910063
+// was the first pick and it belongs to Battle for Gilneas - see BFGNodes in
+// BattlegroundBFG.h - so Slavery Valley's two-minute warning announced that
+// somebody had defended the Lighthouse. The custom block runs to 910079 (Violet
+// Hold), so these start at 910080.
 enum SlaveryValleyBroadcastTexts
 {
-    BG_SV_BROADCAST_START_TWO_MINUTES           = 910060,
-    BG_SV_BROADCAST_START_ONE_MINUTE            = 910061,
-    BG_SV_BROADCAST_START_HALF_MINUTE           = 910062,
-    BG_SV_BROADCAST_HAS_BEGUN                   = 910063
+    BG_SV_BROADCAST_START_TWO_MINUTES           = 910080,
+    BG_SV_BROADCAST_START_ONE_MINUTE            = 910081,
+    BG_SV_BROADCAST_START_HALF_MINUTE           = 910082,
+    BG_SV_BROADCAST_HAS_BEGUN                   = 910083
 };
 
 enum BG_SV_Creatures

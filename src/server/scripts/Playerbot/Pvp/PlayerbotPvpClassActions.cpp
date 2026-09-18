@@ -6459,6 +6459,15 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 if (player->IsMounted())
                     ForcePlayerbotDismount(player);
                 break;
+            case PvpClassSpellContext::MovementDirective::LeaveShapeshiftForm:
+                // A form the bot is no longer entitled to wear (Travel Form
+                // carried into a keep) or one that is in the way of what it
+                // wants to do next (nothing is eaten or drunk shapeshifted).
+                // Same hand the core uses on an outdoors-only aura it decides
+                // no longer applies, and the same one the PvE manager uses to
+                // get a druid out of a form: drop the shapeshift itself.
+                player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
+                break;
             case PvpClassSpellContext::MovementDirective::ResetCombatState:
                 player->SetSelection(ObjectGuid::Empty);
                 player->AttackStop();
