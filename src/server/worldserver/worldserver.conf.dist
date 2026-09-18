@@ -5254,9 +5254,12 @@ Centurion.Items.QuiversHoldAnyItem = 0
 #    Centurion.Tournament.BgConsumables
 #        Description: The consumables a tournament match allows, comma separated. Both sides of
 #                     a world/tournament pair are allowed whichever one is listed.
-#        Default:     "200026,200030,200041,200991,200992" - (what Jazzik, creature 920027,
-#                     sells: Limited Invulnerability and Free Action Potions, Iron Grenade,
-#                     Combat Healing and Mana Potions)
+#        Default:     "200026,200030,200041,200991,200992,203640,203641" - (what Jazzik,
+#                     creature 920027, sells: Limited Invulnerability and Free Action
+#                     Potions, Iron Grenade, Combat Healing and Mana Potions; plus the
+#                     Alliance and Horde Battle Standards off the Caverns of Time hub,
+#                     which are consumables by item class and would otherwise be banned
+#                     along with the potions)
 
 Centurion.Tournament.Enable = 0
 Centurion.Tournament.StartLevel = 60
@@ -5281,7 +5284,7 @@ Centurion.Tournament.ForceQueueAtMinLevel = 1
 Centurion.Tournament.WorldMaxHonorPoints = 2147483647
 Centurion.Tournament.BgLoadout = 1
 Centurion.Tournament.BgBanConsumables = 1
-Centurion.Tournament.BgConsumables = "200026,200030,200041,200991,200992"
+Centurion.Tournament.BgConsumables = "200026,200030,200041,200991,200992,203640,203641"
 Centurion.Tournament.BgStarterVendors = "Starter %"
 
 #

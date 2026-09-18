@@ -946,11 +946,13 @@ void LoadLoadoutConfig()
     loaded.StarterVendorSubname.erase(std::remove_if(loaded.StarterVendorSubname.begin(), loaded.StarterVendorSubname.end(),
         [](char c) { return c == '\'' || c == '"' || c == '\\'; }), loaded.StarterVendorSubname.end());
 
-    // The tournament PvP consumables: what Jazzik (creature 920027) sells. Both
-    // sides of each pair are allowed, so the rule does not depend on which one
-    // a character happens to be holding - and the loadout has already turned
-    // every twinned item it owns into the tournament one anyway.
-    std::string const raw = sConfigMgr->GetStringDefault("Centurion.Tournament.BgConsumables", "200026,200030,200041,200991,200992");
+    // The tournament PvP consumables: what Jazzik (creature 920027) sells, plus
+    // the two battle standards the Caverns of Time hub stocks (203640/203641),
+    // which are consumables by item class and would otherwise be swept up by
+    // the same ban. Either side of a world/tournament pair passes on whichever
+    // one is listed - resolved where the rule is asked rather than here, see
+    // IsConsumableAllowedInMatch.
+    std::string const raw = sConfigMgr->GetStringDefault("Centurion.Tournament.BgConsumables", "200026,200030,200041,200991,200992,203640,203641");
     for (std::string_view token : Trinity::Tokenize(raw, ',', false))
     {
         Optional<uint32> const entry = Trinity::StringTo<uint32>(token);
@@ -961,8 +963,6 @@ void LoadLoadoutConfig()
         }
 
         loaded.AllowedConsumables.insert(*entry);
-        if (uint32 const counterpart = GetCounterpartItem(*entry))
-            loaded.AllowedConsumables.insert(counterpart);
     }
 
     LoadoutConfig = std::move(loaded);
@@ -1367,7 +1367,18 @@ bool IsConsumableAllowedInMatch(Player const* player, ItemTemplate const* proto)
     if (proto->IsConjuredConsumable())
         return true;
 
-    return LoadoutConfig.AllowedConsumables.count(proto->ItemId) != 0;
+    if (LoadoutConfig.AllowedConsumables.count(proto->ItemId) != 0)
+        return true;
+
+    // Either side of a world/tournament pair is allowed on whichever one the
+    // config names, so the rule does not depend on which of the two a character
+    // happens to be holding. The pairing is read here and not folded into the
+    // list at load time because the config is read long before the item links
+    // are - World::LoadConfigSettings runs near the top of SetInitialWorldSettings
+    // and LoadItemLinks near the bottom - so on a cold start there would be
+    // nothing to fold in.
+    uint32 const counterpart = GetCounterpartItem(proto->ItemId);
+    return counterpart && LoadoutConfig.AllowedConsumables.count(counterpart) != 0;
 }
 
 bool KeepsCastItem(Player const* player, ItemTemplate const* proto)
