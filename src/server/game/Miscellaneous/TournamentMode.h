@@ -369,6 +369,22 @@ namespace Tournament
     // taught, lent to a world-mode character for the length of a match.
     std::vector<std::pair<uint32, uint32>> GetInnateSpells();
 
+    // --- inside a tournament match ----------------------------------------
+
+    // A match fought under the tournament's rules: one made from the tournament
+    // queue pool, or a custom game whose host asked for them. It is the match
+    // that is bound and not the character, so a world character who queued there
+    // lives by these rules for as long as it lasts, and a tournament character
+    // in an ordinary world-queue match does not.
+    bool IsInTournamentMatch(Player const* player);
+
+    // Talents and the second spec are what the character walked in with: a
+    // tournament match is settled by the build brought to it, not by one
+    // assembled against what the other side turned out to be. Refuses out loud
+    // and returns true when it did - the client shows no error of its own for a
+    // talent it was told to learn and never sees learned.
+    bool RefuseTalentChangeInMatch(Player* player, char const* what);
+
     // --- Legionnaire+ realm rules, per character --------------------------
 
     // Legionnaire+ ran these realm-wide; on a mixed realm tournament characters

@@ -19,6 +19,7 @@
 #include "Common.h"
 #include "DBCStores.h"
 #include "Log.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "ObjectAccessor.h"
 #include "Pet.h"
 #include "Player.h"
@@ -28,6 +29,11 @@ void WorldSession::HandleLearnTalentOpcode(WorldPacket& recvData)
 {
     uint32 talent_id, requested_rank;
     recvData >> talent_id >> requested_rank;
+
+    // Spending a point held back for the match is a respec by instalments, so
+    // it is refused by the same rule (TournamentMode.h).
+    if (Tournament::RefuseTalentChangeInMatch(_player, "spend talent points"))
+        return;
 
     _player->LearnTalent(talent_id, requested_rank);
     _player->SendTalentsInfoData(false);
@@ -39,6 +45,12 @@ void WorldSession::HandleLearnPreviewTalents(WorldPacket& recvPacket)
 
     uint32 talentsCount;
     recvPacket >> talentsCount;
+
+    if (Tournament::RefuseTalentChangeInMatch(_player, "spend talent points"))
+    {
+        recvPacket.rfinish();
+        return;
+    }
 
     uint32 talentId, talentRank;
 
@@ -62,6 +74,9 @@ void WorldSession::HandleTalentWipeConfirmOpcode(WorldPacket& recvData)
     TC_LOG_DEBUG("network", "MSG_TALENT_WIPE_CONFIRM");
     ObjectGuid guid;
     recvData >> guid;
+
+    if (Tournament::RefuseTalentChangeInMatch(_player, "unlearn your talents"))
+        return;
 
     Creature* unit = GetPlayer()->GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_NONE);
     if (!unit)

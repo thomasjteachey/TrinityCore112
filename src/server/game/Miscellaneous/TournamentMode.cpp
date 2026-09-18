@@ -16,6 +16,7 @@
  */
 
 #include "Miscellaneous/TournamentMode.h"
+#include "Battleground.h"
 #include "CharacterCache.h"
 #include "Chat.h"
 #include "Config.h"
@@ -1422,14 +1423,38 @@ uint32 GetWorldMaxHonorPoints(Player const* player)
     return Config.WorldMaxHonorPoints;
 }
 
+bool IsInTournamentMatch(Player const* player)
+{
+    if (!Config.Enabled || !player)
+        return false;
+
+    Battleground const* battleground = player->GetBattleground();
+    return battleground && battleground->IsTournamentPool();
+}
+
+bool RefuseTalentChangeInMatch(Player* player, char const* what)
+{
+    if (!IsInTournamentMatch(player))
+        return false;
+
+    if (WorldSession* session = player->GetSession())
+        if (!session->IsVirtualSession())
+            session->SendNotification("You cannot %s in a tournament match.", what);
+
+    return true;
+}
+
 bool IsFreeReagentContext(Player const* player)
 {
     if (!Config.WaiveReagents || !player)
         return false;
 
-    if (Map const* map = player->FindMap())
-        if (map->IsBattlegroundOrArena())
-            return true;
+    // The tournament's matches only. A world-queue battleground or arena is
+    // fought with the ammunition and the reagents the character brought, the
+    // way the rest of the world is; the waiver is one of the things that makes
+    // a tournament match a tournament match.
+    if (IsInTournamentMatch(player))
+        return true;
 
     return player->duel && player->duel->State == DUEL_STATE_IN_PROGRESS;
 }

@@ -5943,6 +5943,11 @@ void Spell::EffectActivateSpec()
     if (!unitTarget || unitTarget->GetTypeId() != TYPEID_PLAYER)
         return;
 
+    // Switching to the other spec is the fastest respec there is, so it stops
+    // at the door of a tournament match like the rest (TournamentMode.h).
+    if (Tournament::RefuseTalentChangeInMatch(unitTarget->ToPlayer(), "change specialization"))
+        return;
+
     unitTarget->ToPlayer()->ActivateSpec(damage-1);  // damage is 1 or 2, spec is 0 or 1
 }
 

@@ -750,15 +750,6 @@ namespace
         return proto->HasFlag(ITEM_FLAG_IGNORE_DEFAULT_ARENA_RESTRICTIONS) || proto->IsConjuredConsumable();
     }
 
-    bool InTournamentMatch(Player const* player)
-    {
-        if (!player || !IsEnabled())
-            return false;
-
-        Battleground const* battleground = player->GetBattleground();
-        return battleground && battleground->IsTournamentPool();
-    }
-
     // Chromie keeps the tournament's clock, so she is the one who explains what
     // just happened to a world-mode character's gear. Tournament characters have
     // always lived by these rules and are told nothing.
@@ -1381,6 +1372,6 @@ bool IsConsumableAllowedInMatch(Player const* player, ItemTemplate const* proto)
 
 bool KeepsCastItem(Player const* player, ItemTemplate const* proto)
 {
-    return InTournamentMatch(player) && IsFreeMatchConsumable(proto);
+    return IsInTournamentMatch(player) && IsFreeMatchConsumable(proto);
 }
 }

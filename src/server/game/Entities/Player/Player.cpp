@@ -424,9 +424,14 @@ namespace
         if (Tournament::IsLoadoutSwapInProgress(player))
             return true;
 
-        if (Battleground const* battleground = player->GetBattleground())
-            if (IsCustomBattleground(battleground->GetTypeID(true)))
-                return true;
+        // The armour lock is a tournament rule, not a battleground one: a match
+        // fought under the tournament's rules is fought in the armour it was
+        // entered in, and every other match - the world queue's, a custom game
+        // nobody asked these rules for - lets people change as they always have.
+        // Stock TrinityCore still stops a non-weapon swap in an in-progress
+        // arena and in combat; that check is upstream of this one.
+        if (!Tournament::IsInTournamentMatch(player))
+            return true;
 
         switch (slot)
         {
@@ -27134,10 +27139,10 @@ bool Player::IsWeaponRequirementWaived(SpellInfo const* spellInfo) const
 
 bool Player::CanNoReagentCast(SpellInfo const* spellInfo) const
 {
-    // Combat spells cost no reagents in battlegrounds, arenas and duels in
-    // progress (Centurion.Pvp.WaiveReagentsAndAmmo), and never for a tournament
-    // character (Centurion.Tournament.WaiveReagents). This covers both the
-    // requirement (Spell::CheckItems) and the consumption (Spell::TakeReagents).
+    // Combat spells cost no reagents in a tournament match or a duel in progress
+    // (Centurion.Pvp.WaiveReagentsAndAmmo), and never for a tournament character
+    // (Centurion.Tournament.WaiveReagents). This covers both the requirement
+    // (Spell::CheckItems) and the consumption (Spell::TakeReagents).
     if (Tournament::IsReagentWaived(this, spellInfo))
         return true;
 

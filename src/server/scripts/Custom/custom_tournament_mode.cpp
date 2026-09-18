@@ -67,12 +67,12 @@ public:
     // test is two set lookups and returns at once for everyone else.
     void OnUpdate(Player* player, uint32 /*diff*/) override
     {
-        // The reagent waiver (PvP for every character, always for tournament
-        // characters) has to be visible to the client, which checks reagents
-        // before it sends a cast. Follow it as it comes and goes - battleground
-        // or arena entry and exit, duel start and end, a mode change, and
-        // InitStatsForLevel zeroing the field on a level-up. Two field reads when
-        // nothing changed.
+        // The reagent waiver (a tournament match or a duel for every character,
+        // always for tournament characters) has to be visible to the client,
+        // which checks reagents before it sends a cast. Follow it as it comes
+        // and goes - tournament match entry and exit, duel start and end, a mode
+        // change, and InitStatsForLevel zeroing the field on a level-up. Two
+        // field reads when nothing changed.
         // The battleground loadout's last step: a client that was mid-world-port
         // when its own gear came back is told again, now that it has arrived.
         // One relaxed atomic read when nobody is waiting.

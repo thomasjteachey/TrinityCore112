@@ -5454,8 +5454,8 @@ void Spell::TakeAmmo()
     if (IsManagedPlayerbot(player))
         return;
 
-    // Battlegrounds, arenas and duels in progress never cost ammunition
-    // (Centurion.Pvp.WaiveReagentsAndAmmo).
+    // Tournament matches and duels in progress never cost ammunition
+    // (Centurion.Pvp.WaiveReagentsAndAmmo). A world-queue battleground does.
     if (Tournament::IsFreeReagentContext(player))
         return;
 
