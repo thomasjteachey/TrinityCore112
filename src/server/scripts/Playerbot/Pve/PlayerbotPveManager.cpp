@@ -10182,10 +10182,11 @@ namespace
     // creature the ground holds. Routing a bot somewhere it would then refuse to
     // fight is how a bot ends up standing in Un'Goro doing nothing.
     //
-    // Deliberately no zone-band test. The band chart says where a bot of a given
-    // level LIVES, and the best devilsaur skinner on the realm is a sixty whose
-    // band is long past Un'Goro; skill and MaxLevelsAbove are the hunt's own
-    // rule and they are the stricter pair anyway.
+    // No zone-band test HERE - this answers "could this bot take what is on that
+    // ground", and a sixty passing through Un'Goro can take a devilsaur whatever
+    // the chart says about where it lives. Whether it may be SENT there is a
+    // different question, and PreferHuntingGround asks it: routing a bot into a
+    // zone the suitability sweep will evict it from just makes the two fight.
     bool HuntSpotSuitsBot(Player const* bot, HuntSpot const& spot)
     {
         playerbot::PveConfig const& cfg = g_PveConfig;
@@ -10220,6 +10221,25 @@ namespace
     {
         if (!g_PveConfig.devilsaurHuntEnabled || !g_PveConfig.devilsaurHuntRouteChancePct || !zoneId)
             return;
+
+        // Never answer an eviction with the zone it is evicting from.
+        //
+        // Most relocations are queued by the sweep that asks BotIsInSuitableZone,
+        // and "does not belong in zone 17" is one of them. Handing that bot a
+        // hunting ground in zone 17 is the pacing-back-and-forth loop the
+        // suitability comment was written about, rebuilt for hunters: the sweep
+        // evicts, this routes it straight back, and sixty seconds later the sweep
+        // says the same thing again. Seen live the moment routing first worked -
+        // Lorel, level 27, evicted from the Barrens at 02:32:55 and sent to the
+        // deviate bowl inside the same second.
+        //
+        // The chart half of that predicate, asked of the DESTINATION rather than
+        // of where the bot stands, which is the question this needs and the
+        // function cannot answer. The +1 tolerance is copied deliberately: the two
+        // must agree about the boundary or the loop comes back at one level.
+        if (ClassicZoneBand const* band = FindClassicZoneBand(zoneId))
+            if (bot->GetLevel() < uint32(band->minLevel) || bot->GetLevel() > uint32(band->maxLevel) + 1)
+                return;
 
         // Not every trip, or the zone's other clusters would never be picked
         // again by anyone who can skin and the ground would hold the same bots
