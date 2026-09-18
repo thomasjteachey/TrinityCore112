@@ -1396,6 +1396,11 @@ Playerbot.Pve.ZoneGuardians.PlayerApproachYards = 225
 #        Description: Whether playerbots appear in /who. They fill the list with names
 #                     nobody can talk to, but on a realm where the bots ARE the
 #                     population, hiding them makes the realm look empty.
+#                     Tournament characters (Centurion.Tournament.Enable) are the one
+#                     exception at every setting: bots queue in the world pool and live
+#                     in zones a tournament character may not enter, so their /who is
+#                     people-only unless they ask for bots by name with the keyword
+#                     below.
 #        Default:     1 - (only a GM in GM mode sees them)
 #                     0 - (never listed)
 #                     2 - (listed to everyone)

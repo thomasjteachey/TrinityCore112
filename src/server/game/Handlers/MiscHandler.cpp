@@ -336,6 +336,15 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
     }
     strCount = keptStrings;
 
+    // A tournament character's /who is asking who it can actually play with,
+    // and the world-mode bot fleet is never that: it queues in the other pool
+    // and lives in zones a tournament character may not stand in, so every bot
+    // listed is a line spent on somebody unreachable. People by default, then.
+    // Curiosity is still served - /who bots asks for them by name, and that is
+    // read before this, so it still answers.
+    if (!botsOnly && Tournament::IsTournamentCharacter(_player))
+        humansOnly = true;
+
     std::wstring wpacketPlayerName;
     std::wstring wpacketGuildName;
     if (!(Utf8toWStr(packetPlayerName, wpacketPlayerName) && Utf8toWStr(packetGuildName, wpacketGuildName)))
