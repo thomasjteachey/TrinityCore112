@@ -2,6 +2,7 @@
 
 #include "AchievementMgr.h"
 #include "Chat.h"
+#include "custom_barracks_hardcore.h"   // IsDeathProofItem
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
@@ -734,6 +735,13 @@ private:
 
             if (Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i))
             {
+                // The class insignia survives, for the same reason it survives a
+                // full-loot death: every innkeeper hands it out free, so deleting
+                // it charges nothing and only sends the player back to an inn.
+                // One list answers this, in custom_barracks_hardcore.cpp.
+                if (BarracksHardcore::IsDeathProofItem(item->GetEntry()))
+                    continue;
+
                 ChatHandler(player->GetSession()).PSendSysMessage("You have lost |Hitem:%u:0:0:0:0:0:0:0:0|h[%s]|h|r.", item->GetEntry(), item->GetTemplate()->Name1.c_str());
                 player->DestroyItem(INVENTORY_SLOT_BAG_0, item->GetSlot(), true);
             }

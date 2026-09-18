@@ -75,6 +75,19 @@ namespace BarracksHardcore
     // set has not been built, so nothing is destroyed on a cold cache.
     bool IsObtainableInWorld(uint32 itemId);
 
+    // An item no death ever takes: never staked into the full-loot cache, never
+    // burned by the deflation roll, and skipped by the Semi-Hardcore penalty.
+    //
+    // Written for the class Insignias, which every innkeeper on the realm hands
+    // out free. There is nothing to win by taking one - the loser walks to the
+    // nearest inn and asks for another - and a PvP trinket that disappears on
+    // death is missing exactly when the next fight starts.
+    //
+    // Configured as Centurion.Hardcore.DeathProofItems. Exported because the
+    // Semi-Hardcore penalty lives in ChallengeModes.cpp and has to answer this
+    // the same way the cache does; two lists would drift.
+    bool IsDeathProofItem(uint32 itemId);
+
     // Fill every empty equipment slot with the white field kit, and replace worn
     // kit that has fallen too far behind the wearer. Gear the character actually
     // earned is never touched.

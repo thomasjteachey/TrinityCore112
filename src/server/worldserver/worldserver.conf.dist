@@ -3421,6 +3421,19 @@ Centurion.Hunter.MongooseBite.ScorpidHealPerStrength = 5.0
 #        Description: Deflation: per-item chance to reach the chest; the rest is destroyed.
 #                     Money is always safe. Default 50.
 #
+#    Centurion.Hardcore.DeathProofItems
+#        Description: Items no death ever takes. They are never staked into the full-loot
+#                     cache, never burned by the deflation roll above, and the Semi-Hardcore
+#                     challenge mode leaves them on the corpse too.
+#                     Item ids and first-last ranges, comma separated; empty switches the
+#                     exemption off. Read whether or not Centurion.Hardcore.Enable is set,
+#                     because Semi-Hardcore is a challenge mode of its own.
+#                     Default: the nine class Insignias, which every innkeeper on the realm
+#                     hands out free - taking one transfers nothing and only costs the loser
+#                     a trip to an inn.
+#
+#        Default:     "200990,200994-201000,201002"
+#
 #    Centurion.Hardcore.FfaPvp.MinZoneLevel
 #        Description: The FFA flag only arms in zones of at least this level - never in starter
 #                     zones, capitals or sanctuaries. Default 20.
@@ -3543,6 +3556,7 @@ Centurion.Hardcore.Enable = 0
 Centurion.Hardcore.FullLoot.ChestGameObjectId = 0
 Centurion.Hardcore.FullLoot.ChestDespawnSeconds = 600
 Centurion.Hardcore.FullLoot.DropChancePercent = 50
+Centurion.Hardcore.DeathProofItems = "200990,200994-201000,201002"
 Centurion.Hardcore.FfaPvp.MinZoneLevel = 20
 Centurion.Hardcore.FfaPvp.RewardMultiplier = 2
 Centurion.Hardcore.PlayerKill.ExperienceBubbles = 2

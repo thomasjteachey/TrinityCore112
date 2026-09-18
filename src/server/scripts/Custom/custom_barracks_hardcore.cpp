@@ -66,6 +66,7 @@
 #include "ScriptedCreature.h"
 #include "ScriptedGossip.h"
 #include "SharedDefines.h"
+#include "StringConvert.h"
 #include "Util.h"
 #include "World.h"
 #include "WorldSession.h"
@@ -77,6 +78,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <sstream>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -248,8 +250,79 @@ namespace BarracksHardcore
 
     std::unordered_set<uint32> s_botAccountIds;
 
+    // Items a death never takes - see IsDeathProofItem in the header.
+    //
+    // A fixed array rather than a set: map threads walk this while a
+    // `.reload config` may be rewriting it, and an array never reallocates.
+    // Count is what bounds a read, so a slot past it holding a stale id is
+    // harmless.
+    constexpr std::size_t MAX_DEATH_PROOF_ITEMS = 64;
+    struct DeathProofItemList
+    {
+        std::array<uint32, MAX_DEATH_PROOF_ITEMS> Entries = {};
+        std::size_t Count = 0;
+    };
+    DeathProofItemList s_deathProofItems;
+
     std::shared_mutex s_optInLock;
     std::unordered_set<uint32> s_optInGuids; // low guids of opted-in players
+
+    std::string_view TrimToken(std::string_view token)
+    {
+        while (!token.empty() && (token.front() == ' ' || token.front() == '\t'))
+            token.remove_prefix(1);
+        while (!token.empty() && (token.back() == ' ' || token.back() == '\t'))
+            token.remove_suffix(1);
+        return token;
+    }
+
+    // "200990, 200994-201000" -> the nine class Insignias. Written the same way
+    // Centurion.Marks.DepletedEntries is read (DepletedMarks.cpp), so an item
+    // list in this realm's config always means the same thing.
+    void LoadDeathProofItems()
+    {
+        DeathProofItemList loaded;
+
+        // The default IS the nine class Insignias, which is where this rule came
+        // from. Set the key to nothing to switch the exemption off entirely.
+        std::string const raw = sConfigMgr->GetStringDefault("Centurion.Hardcore.DeathProofItems",
+            "200990,200994-201000,201002");
+
+        std::size_t count = 0;
+        for (std::string_view token : Trinity::Tokenize(raw, ',', false))
+        {
+            token = TrimToken(token);
+            if (token.empty())
+                continue;
+
+            std::size_t const dash = token.find('-');
+            Optional<uint32> const first = Trinity::StringTo<uint32>(TrimToken(token.substr(0, dash)));
+            Optional<uint32> const last = dash == std::string_view::npos
+                ? first : Trinity::StringTo<uint32>(TrimToken(token.substr(dash + 1)));
+            if (!first || !last || *first > *last)
+            {
+                TC_LOG_ERROR("server.loading",
+                    "Centurion.Hardcore.DeathProofItems: ignoring '{}', expected an item id or a range first-last.", token);
+                continue;
+            }
+
+            for (uint32 entry = *first; ; ++entry)
+            {
+                if (count == loaded.Entries.size())
+                {
+                    TC_LOG_ERROR("server.loading",
+                        "Centurion.Hardcore.DeathProofItems: more than {} entries, the rest are ignored.", loaded.Entries.size());
+                    break;
+                }
+                loaded.Entries[count++] = entry;
+                if (entry == *last)
+                    break;
+            }
+        }
+
+        loaded.Count = count;
+        s_deathProofItems = loaded;
+    }
 
     void LoadHardcoreConfig()
     {
@@ -316,12 +389,24 @@ namespace BarracksHardcore
             if (!token.empty())
                 s_botAccountIds.insert(uint32(std::strtoul(token.c_str(), nullptr, 10)));
 
+        // Read whether or not the hardcore rules are armed: Semi-Hardcore is a
+        // challenge mode of its own and asks the same question.
+        LoadDeathProofItems();
+
         // The "scripts" logger has no configuration, so it falls back to root,
         // which is ERROR-only: anything logged there is invisible. Everything
         // diagnostic here goes to playerbots.* instead, which reaches
         // Playerbot.log.
-        TC_LOG_INFO("playerbots.hardcore", "Hardcore config: enabled={} chest={} minZoneLevel={} botAccounts={}",
-            uint32(s_enabled), s_chestEntry, s_minZoneLevel, uint32(s_botAccountIds.size()));
+        TC_LOG_INFO("playerbots.hardcore", "Hardcore config: enabled={} chest={} minZoneLevel={} botAccounts={} deathProofItems={}",
+            uint32(s_enabled), s_chestEntry, s_minZoneLevel, uint32(s_botAccountIds.size()),
+            uint32(s_deathProofItems.Count));
+    }
+
+    bool IsDeathProofItem(uint32 itemId)
+    {
+        DeathProofItemList const& items = s_deathProofItems;
+        uint32 const* const end = items.Entries.data() + items.Count;
+        return std::find(items.Entries.data(), end, itemId) != end;
     }
 
     bool IsBotAccount(uint32 accountId)
@@ -2024,6 +2109,13 @@ namespace BarracksHardcore
             if (IsCosmeticOnly(proto))
                 continue;
 
+            // The insignia every innkeeper gives away is not a prize. Taking it
+            // transfers nothing - the loser walks to an inn and asks for another -
+            // and burning it leaves them without a trinket break for the fight
+            // that follows, which is the one thing a death here should not decide.
+            if (IsDeathProofItem(proto->ItemId))
+                continue;
+
             // Losing the roll still BURNS the piece - that is the deflation and
             // it stays. But a chest that REFUSED the item must never produce a
             // destroy record: the cap is eighteen rows and this loop walks
@@ -2056,7 +2148,7 @@ namespace BarracksHardcore
                     return;
                 if (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR)
                     return;
-                if (IsCosmeticOnly(proto))
+                if (IsCosmeticOnly(proto) || IsDeathProofItem(proto->ItemId))
                     return;
 
                 bool const burns = urand(0, 99) >= s_dropChancePercent;
