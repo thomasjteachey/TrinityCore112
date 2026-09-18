@@ -118,10 +118,14 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
 // taught as they are - ResolveRank falls back to the first rank. Lava Burst,
 // Nourish and Spell Reflection DO scale (or, for Spell Reflection, no longer
 // exist as an active here), so they got level-60 editions.
+//
+// The hunter's second pick is Backflip (90263), not Disengage. 781 is the
+// CLASSIC Disengage here - a threat drop every hunter already has at 20 - so
+// offering it taught nobody anything; 90263 is the WotLK leap on its own id.
 ClassSpellInfo const kClassSpells[CLASS_SPELL_COUNT] =
 {
     { CLASS_HUNTER,  34490, 0,     0,     "Silencing Shot" },
-    { CLASS_HUNTER,    781, 0,     0,     "Disengage" },
+    { CLASS_HUNTER,  SPELL_BACKFLIP, 0, 0, "Backflip" },
     { CLASS_HUNTER,  53271, 0,     0,     "Master's Call" },
 
     { CLASS_MAGE,    11129, 0,     0,     "Combustion" },

@@ -4958,7 +4958,20 @@ void Spell::EffectLeapBack()
     float speedxy = effectInfo->MiscValue / 10.f;
     float speedz = damage/ 10.f;
     //1891: Disengage
-    unitTarget->JumpTo(speedxy, speedz, m_spellInfo->SpellIconID != 1891);
+    bool forward = m_spellInfo->SpellIconID != 1891;
+
+    // A NEGATIVE horizontal speed means "the same leap, the other way": the
+    // icon test above is the only direction control stock data has, and it
+    // costs a spell its artwork to use (1891 is a pair of cloth boots). No
+    // stock leap carries a negative MiscValue, so nothing else changes shape.
+    // 90263 Backflip is the one that asks for it.
+    if (speedxy < 0.f)
+    {
+        speedxy = -speedxy;
+        forward = false;
+    }
+
+    unitTarget->JumpTo(speedxy, speedz, forward);
 
     // changes fall time
     if (m_caster->GetTypeId() == TYPEID_PLAYER)

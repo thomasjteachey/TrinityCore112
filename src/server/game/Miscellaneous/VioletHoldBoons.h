@@ -189,7 +189,15 @@ namespace VioletHoldBoons
         // stock data. See sql/custom/dbc/2026_08_15_01_dbc_violet_hold_class_spells.sql.
         SPELL_L60_SPELL_REFLECTION = 90260,   // 23920 was repurposed as the passive "Shield Reflection" here
         SPELL_L60_LAVA_BURST       = 90261,
-        SPELL_L60_NOURISH          = 90262
+        SPELL_L60_NOURISH          = 90262,
+
+        // The realm merge gave 781 Disengage back its CLASSIC shape - drop
+        // threat and leave combat - which every hunter already trains at 20,
+        // so the broker's Disengage offer could never roll. Backflip is the
+        // WotLK Disengage rebuilt as its own spell: the backwards leap, and
+        // nothing else. See the deploy notes in the handoff; EffectLeapBack
+        // reads its negative EffectMiscValue as "jump the other way".
+        SPELL_BACKFLIP = 90263
     };
 
     struct BoonInfo
