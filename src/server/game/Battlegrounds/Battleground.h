@@ -91,6 +91,11 @@ struct BattlegroundCustomRules
     uint32 NodeBaseCaptureTimeMs = 0;
     bool ShowEnemyFlagOnMap = true;
     bool ShowAllyFlagOnMap = true;
+    // Fight this one under the tournament's rules: the gear swap and the
+    // consumable ban a tournament-pool match runs under (TournamentMode.h).
+    // The lobby turns it into SetTournamentPool on the match it creates, which
+    // is what every one of those rules actually reads.
+    bool TournamentRules = false;
     BattlegroundCustomWeather Weather = BattlegroundCustomWeather::Normal;
 };
 

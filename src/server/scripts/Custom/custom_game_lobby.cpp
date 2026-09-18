@@ -16,6 +16,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "MapManager.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
@@ -120,6 +121,7 @@ enum GossipAction : uint32
     ACTION_TOGGLE_ENEMY_FLAG = 450,
     ACTION_TOGGLE_ALLY_FLAG,
     ACTION_CYCLE_WEATHER,
+    ACTION_TOGGLE_TOURNAMENT_RULES,
     ACTION_KICK_PLAYER = 470,
     ACTION_START = 500,
     ACTION_CLOSE,
@@ -921,6 +923,9 @@ public:
             case ACTION_TOGGLE_ALLY_FLAG:
                 lobby->Rules.ShowAllyFlagOnMap = !lobby->Rules.ShowAllyFlagOnMap;
                 break;
+            case ACTION_TOGGLE_TOURNAMENT_RULES:
+                lobby->Rules.TournamentRules = !lobby->Rules.TournamentRules;
+                break;
             case ACTION_CYCLE_WEATHER:
             {
                 uint8 next = uint8(lobby->Rules.Weather) + 1;
@@ -1072,6 +1077,11 @@ public:
         }
 
         bg->ConfigureCustomGame(lobby->Rules);
+        // What the host asked for under "Tournament rules": every one of those
+        // rules - the gear swap on the way in, the gear back on the way out,
+        // the consumable ban in between - reads this one flag, the same flag a
+        // match made from the tournament queue pool carries.
+        bg->SetTournamentPool(lobby->Rules.TournamentRules);
         bg->SetCustomGameBotOnlyPreparation(!hasHumanTeamParticipant);
         bg->SetCustomGamePendingCloneCount(uint32(lobby->CloneRequests.size()));
         // Custom matches enter directly and never use the public queue's arena
@@ -2115,6 +2125,15 @@ public:
             if (!lobby || !CustomGameLobbyManager::Instance().IsOwner(player, lobby))
                 return;
 
+            // First, and offered for every game type: it is the only rule here
+            // that changes what the players themselves bring to the match
+            // rather than how the map is scored. Hidden on a realm where it
+            // would promise rules that nothing applies.
+            if (Tournament::IsEnabled() && (Tournament::IsBgLoadoutEnabled() || Tournament::AreMatchConsumablesBanned()))
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    std::string("Tournament rules: ") + (lobby->Rules.TournamentRules ? "On" : "Off"),
+                    GOSSIP_SENDER_MAIN, ACTION_TOGGLE_TOURNAMENT_RULES);
+
             if (lobby->SelectedType == BATTLEGROUND_WS || lobby->SelectedType == BATTLEGROUND_TP)
             {
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT,
@@ -2294,6 +2313,7 @@ public:
                 case ACTION_BATTLEGROUND_OPTIONS_BACK: ShowChromieMenu(player); return true;
                 case ACTION_TOGGLE_ENEMY_FLAG:
                 case ACTION_TOGGLE_ALLY_FLAG:
+                case ACTION_TOGGLE_TOURNAMENT_RULES:
                 case ACTION_CYCLE_WEATHER:
                     manager.ToggleRule(player, action);
                     ShowBattlegroundOptions(player);
