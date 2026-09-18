@@ -49,6 +49,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace Tournament
@@ -80,6 +81,8 @@ namespace
         std::vector<InnateSpell> InnateSpells;
         uint32 PhaseMask = 0;
         uint32 WorldPhaseMask = 0;
+        std::vector<std::pair<uint32 /*questId*/, uint32 /*phaseMask*/>> WorldQuestPhases;
+        uint32 WorldQuestPhaseMask = 0;   // every bit WorldQuestPhases can hand out
         bool MaxWeaponSkill = true;
         bool MaxSkillForLevel = true;
         int32 DeathSicknessLevel = 61;
@@ -233,6 +236,40 @@ void LoadConfig()
     {
         TC_LOG_WARN("server.loading", "Centurion.Tournament.WorldPhaseMask shares bits with the normal or tournament phase; ignoring those bits.");
         loaded.WorldPhaseMask &= ~(uint32(PHASEMASK_NORMAL) | loaded.PhaseMask);
+    }
+
+    // "quest:phase" pairs. A world character that has been rewarded the quest
+    // carries that phase from then on, so a hub spawned in it appears the moment
+    // its teleport is earned and never before - the socks chain opens Gurubashi,
+    // then Blackrock and Coldarra, then New Hearthglen, then the Caverns. A
+    // tournament character carries PhaseMask instead and sees none of them.
+    std::string const rawQuestPhases = sConfigMgr->GetStringDefault("Centurion.Tournament.WorldQuestPhases", "");
+    for (std::string_view token : Trinity::Tokenize(rawQuestPhases, ',', false))
+    {
+        token = Trim(token);
+        if (token.empty())
+            continue;
+
+        std::size_t const colon = token.find(':');
+        Optional<uint32> const quest = colon == std::string_view::npos ? Optional<uint32>() : Trinity::StringTo<uint32>(Trim(token.substr(0, colon)));
+        Optional<uint32> const phase = colon == std::string_view::npos ? Optional<uint32>() : Trinity::StringTo<uint32>(Trim(token.substr(colon + 1)));
+        if (!quest || !phase || !*quest || !*phase || *phase == uint32(PHASEMASK_ANYWHERE))
+        {
+            TC_LOG_ERROR("server.loading", "Centurion.Tournament.WorldQuestPhases: ignoring '{}', expected quest:phase.", token);
+            continue;
+        }
+
+        // The normal phase is everyone's and the tournament phase is taken, so a
+        // quest can hand out neither: doing so would show the hub to a character
+        // that has not earned it, or to the other mode entirely.
+        uint32 const bits = *phase & ~(uint32(PHASEMASK_NORMAL) | loaded.PhaseMask);
+        if (bits != *phase)
+            TC_LOG_WARN("server.loading", "Centurion.Tournament.WorldQuestPhases: quest {} asks for the normal or tournament phase; ignoring those bits.", *quest);
+        if (!bits)
+            continue;
+
+        loaded.WorldQuestPhases.emplace_back(*quest, bits);
+        loaded.WorldQuestPhaseMask |= bits;
     }
 
     loaded.MaxWeaponSkill = sConfigMgr->GetBoolDefault("Centurion.Tournament.AlwaysMaxWeaponSkill", true);
@@ -596,7 +633,17 @@ uint32 GetExtraPhaseMask(Player const* player)
     if (!Config.Enabled || !player)
         return 0;
 
-    return IsTournamentCharacter(player) ? Config.PhaseMask : Config.WorldPhaseMask;
+    if (IsTournamentCharacter(player))
+        return Config.PhaseMask;
+
+    // Plus one phase per hub the character has paid for. The bit test first
+    // keeps this to one comparison per quest once a phase is already granted,
+    // and two quests may share a bit (Blackrock and Coldarra open together).
+    uint32 mask = Config.WorldPhaseMask;
+    for (auto const& [questId, phase] : Config.WorldQuestPhases)
+        if ((mask & phase) != phase && player->IsQuestRewarded(questId))
+            mask |= phase;
+    return mask;
 }
 
 void RefreshPhase(Player* player)
@@ -622,9 +669,10 @@ bool IsPhaseStale(Player const* player)
     if (!player || player->IsGameMaster())
         return false;
 
-    // Carries its own mode's phase and not the other mode's.
+    // Carries its own mode's phase, and the hub phases it has earned, and
+    // neither the other mode's phase nor a hub it has not earned yet.
     uint32 const wanted = GetExtraPhaseMask(player);
-    uint32 const unwanted = (Config.PhaseMask | Config.WorldPhaseMask) & ~wanted;
+    uint32 const unwanted = (Config.PhaseMask | Config.WorldPhaseMask | Config.WorldQuestPhaseMask) & ~wanted;
     return (player->GetPhaseMask() & wanted) != wanted || (player->GetPhaseMask() & unwanted) != 0;
 }
 

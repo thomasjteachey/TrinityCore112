@@ -114,6 +114,12 @@ namespace Tournament
     // reach those NPCs. Centurion.Tournament.WorldPhaseMask is the mirror image,
     // carried by world characters only, for world creatures hidden from
     // tournament characters. Player::SetPhaseMask adds whichever applies.
+    //
+    // A world character also carries one phase per quest listed in
+    // Centurion.Tournament.WorldQuestPhases ("quest:phase, ..."), from the
+    // moment that quest is rewarded: the world copies of the Legionnaire+ hubs
+    // are spawned in those phases, so each hub appears when its teleport is
+    // earned and stays hidden before. Tournament characters never carry them.
     uint32 GetExtraPhaseMask(Player const* player);
     // Recomputes the phase from the character's phase auras plus the tournament
     // phase - after a mode change, a `.reload config`, or a login.

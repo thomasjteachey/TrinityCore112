@@ -5062,6 +5062,20 @@ Centurion.Items.QuiversHoldAnyItem = 0
 #                     tournament phase is allowed here.
 #        Default:     0 - (no world-only phase)
 #
+#    Centurion.Tournament.WorldQuestPhases
+#        Description: Phase bit(s) a world character earns by finishing a quest, written
+#                     "quest:phase" and separated by commas. From the moment the quest is
+#                     rewarded the character carries that phase for good; before that it is
+#                     stripped again on the next update. The world copies of the Legionnaire+
+#                     hub vendors are spawned in these phases, so each hub appears exactly when
+#                     its teleport quest is done. Two quests may share a bit. Neither the normal
+#                     phase (1) nor the tournament phase is allowed here, and tournament
+#                     characters never carry any of them.
+#        Example:     "60002:262144,60007:4194304,60004:524288,60005:1048576,60006:2097152"
+#                     (Gurubashi, Thrall's vendors inside it, Blackrock + Coldarra,
+#                     New Hearthglen, Caverns Waste of Time)
+#        Default:     "" - (no quest-earned phases)
+#
 #    Centurion.Tournament.AlwaysMaxWeaponSkill
 #    Centurion.Tournament.AlwaysMaxSkillForLevel
 #        Description: AlwaysMaxWeaponSkill and AlwaysMaxSkillForLevel for tournament characters
@@ -5152,6 +5166,7 @@ Centurion.Tournament.AllowedZones = ""
 Centurion.Tournament.AllowedCreatures = ""
 Centurion.Tournament.PhaseMask = 0
 Centurion.Tournament.WorldPhaseMask = 0
+Centurion.Tournament.WorldQuestPhases = ""
 Centurion.Tournament.AlwaysMaxWeaponSkill = 1
 Centurion.Tournament.AlwaysMaxSkillForLevel = 1
 Centurion.Tournament.DeathSicknessLevel = 61
