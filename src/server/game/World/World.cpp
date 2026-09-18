@@ -26,6 +26,7 @@
 #include "Miscellaneous/DepletedMarks.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "AutoBalance/AutoBalanceConfig.h"
+#include "VanillaRaids/VanillaRaids.h"
 #include "AccountMgr.h"
 #include "AchievementMgr.h"
 #include "AddonMgr.h"
@@ -1620,6 +1621,11 @@ void World::LoadConfigSettings(bool reload)
     // Character select/create screen extras: reordering, the tournament badge,
     // challenge modes chosen at creation (Miscellaneous/CharacterScreen.h).
     CharacterScreen::LoadConfig();
+
+    // Vanilla 40-player Naxxramas and Onyxia, riding on raid difficulty 2 of
+    // maps 533 and 249 so the level 80 versions keep difficulties 0 and 1
+    // (VanillaRaids/VanillaRaids.h).
+    VanillaRaids::LoadConfig();
 
     // Transmogrification
     m_bool_configs[CONFIG_CENTURION_TRANSMOG_ENABLE] = sConfigMgr->GetBoolDefault("Centurion.Transmog.Enable", true);

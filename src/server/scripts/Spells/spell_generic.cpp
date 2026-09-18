@@ -46,6 +46,7 @@
 #include "SpellHistory.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
+#include "VanillaRaids/VanillaRaids.h"
 #include "Vehicle.h"
 #include "PetAI.h"
 
@@ -1172,6 +1173,14 @@ class spell_gen_consumption : public SpellScript
         Creature* caster = GetCaster()->ToCreature();
         if (!caster)
             return;
+
+        // The vanilla 40-player Naxxramas sludge belchers carry their own value;
+        // the summoning spell there has none to read (VanillaRaids/VanillaRaids.h).
+        if (VanillaRaids::IsNaxx40(caster))
+        {
+            SetEffectValue(int32(urand(3960, 4840)));
+            return;
+        }
 
         uint32 damage = 0;
         if (SpellInfo const* createdBySpell = sSpellMgr->GetSpellInfo(caster->GetUInt32Value(UNIT_CREATED_BY_SPELL)))

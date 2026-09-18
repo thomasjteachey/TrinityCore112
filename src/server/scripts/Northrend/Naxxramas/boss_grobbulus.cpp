@@ -27,6 +27,7 @@
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
+#include "VanillaRaids/VanillaRaids.h"
 
 enum GrobbulusTexts
 {
@@ -199,7 +200,14 @@ class spell_grobbulus_mutating_injection : public AuraScript
 
         if (Unit* caster = GetCaster())
         {
-            caster->CastSpell(GetTarget(), SPELL_MUTATING_EXPLOSION, true);
+            // The vanilla 40-player wing runs the same spell at its own, much
+            // lower damage; everything else keeps the spell's own value.
+            if (VanillaRaids::IsNaxx40(caster))
+                caster->CastSpell(GetTarget(), SPELL_MUTATING_EXPLOSION,
+                    CastSpellExtraArgs(true).AddSpellBP0(2379));
+            else
+                caster->CastSpell(GetTarget(), SPELL_MUTATING_EXPLOSION, true);
+
             GetTarget()->CastSpell(GetTarget(), SPELL_POISON_CLOUD, { aurEff, GetCasterGUID() });
         }
     }

@@ -21,7 +21,7 @@
 #include "GameObject.h"
 #include "InstanceScript.h"
 #include "Map.h"
-#include "naxxramas.h"
+#include "naxxramas40.h"
 #include "TemporarySummon.h"
 
 BossBoundaryData const boundaries =
@@ -131,48 +131,63 @@ class instance_naxxramas : public InstanceMapScript
                 switch (creature->GetEntry())
                 {
                     case NPC_ANUBREKHAN:
+                    case NPC_ANUBREKHAN_40:
                         AnubRekhanGUID = creature->GetGUID();
                         break;
                     case NPC_FAERLINA:
+                    case NPC_FAERLINA_40:
                         FaerlinaGUID = creature->GetGUID();
                         break;
                     case NPC_RAZUVIOUS:
+                    case NPC_RAZUVIOUS_40:
                         RazuviousGUID = creature->GetGUID();
                         break;
                     case NPC_GOTHIK:
+                    case NPC_GOTHIK_40:
                         GothikGUID = creature->GetGUID();
                         break;
                     case NPC_THANE:
+                    case NPC_THANE_KORTHAZZ_40:
                         ThaneGUID = creature->GetGUID();
                         break;
                     case NPC_LADY:
+                    case NPC_LADY_BLAUMEUX_40:
                         LadyGUID = creature->GetGUID();
                         break;
                     case NPC_BARON:
+                    case NPC_HIGHLORD_MOGRAINE_40:
                         BaronGUID = creature->GetGUID();
                         break;
                     case NPC_SIR:
+                    case NPC_SIR_ZELIEK_40:
                         SirGUID = creature->GetGUID();
                         break;
                     case NPC_GLUTH:
+                    case NPC_GLUTH_40:
                         GluthGUID = creature->GetGUID();
                         break;
                     case NPC_HEIGAN:
+                    case NPC_HEIGAN_40:
                         HeiganGUID = creature->GetGUID();
                         break;
                     case NPC_THADDIUS:
+                    case NPC_THADDIUS_40_BOSS:
                         ThaddiusGUID = creature->GetGUID();
                         break;
                     case NPC_FEUGEN:
+                    case NPC_FEUGEN_40:
                         FeugenGUID = creature->GetGUID();
                         break;
                     case NPC_STALAGG:
+                    case NPC_STALAGG_40:
                         StalaggGUID = creature->GetGUID();
                         break;
                     case NPC_SAPPHIRON:
+                    case NPC_SAPPHIRON_40:
                         SapphironGUID = creature->GetGUID();
                         break;
                     case NPC_KEL_THUZAD:
+                    case NPC_KELTHUZAD_40:
                         KelthuzadGUID = creature->GetGUID();
                         break;
                     case NPC_LICH_KING:

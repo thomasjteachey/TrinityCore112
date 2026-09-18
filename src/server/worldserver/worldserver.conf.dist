@@ -5352,3 +5352,93 @@ Centurion.VioletHold.PartyWaveChancePercent = 10
 #        Default:     "" - (Disabled, no aura waives anything)
 
 Centurion.Unarmed.WaiverAuras = ""
+
+###################################################################################################
+# VANILLA RAIDS
+#
+#    The patch-1.12 versions of Naxxramas and Onyxia's Lair, ported from
+#    mod-individual-progression (ZhengPeiRu21, AzerothCore); the Naxxramas 40
+#    scripts and data there are by Sogladev.
+#
+#    They do not replace the Wrath versions. Both raids ride on raid difficulty 2
+#    (RAID_DIFFICULTY_10MAN_HEROIC), a slot neither map uses at level 80 -
+#    Naxxramas has no heroic mode and Onyxia's Lair only ships 10- and 25-player
+#    normal. Difficulties 0 and 1 stay exactly as they are, so the level 80 raids
+#    remain reachable whatever is set below. Difficulty 2 gets the 40-player
+#    level 60 version: its own creature entries, its own spawns and its own
+#    scripts, entered through the Plaguewood gate outside Stratholme (Naxxramas)
+#    or the lair entrance (Onyxia) rather than the Northrend portals.
+#
+#    VanillaRaids.Enable
+#        Description: Master switch for everything in this section. With it off,
+#                     nothing here runs and both maps serve only their level 80
+#                     versions.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+VanillaRaids.Enable = 0
+
+#
+#    VanillaRaids.Naxx40.Enable
+#    VanillaRaids.Onyxia40.Enable
+#        Description: Per-raid switches, each meaningful only while
+#                     VanillaRaids.Enable is on.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+
+VanillaRaids.Naxx40.Enable = 1
+VanillaRaids.Onyxia40.Enable = 1
+
+#
+#    VanillaRaids.Attunement.Enable
+#        Description: Require the vanilla Naxxramas attunement (the Argent Dawn
+#                     chain, quests 9121/9122/9123) before a character may be
+#                     taken in. Off means anyone within the level cap can enter.
+#        Default:     0 - (Not required)
+#                     1 - (Required)
+
+VanillaRaids.Attunement.Enable = 0
+
+#
+#    VanillaRaids.RequireStratholmeEntrance
+#        Description: Require a character to have walked in through the
+#                     Plaguewood gate at least once (quest flag 9378) before the
+#                     teleporter will take them. Off lets the teleporter serve
+#                     anyone who meets the other rules.
+#        Default:     0 - (Not required)
+#                     1 - (Required)
+
+VanillaRaids.RequireStratholmeEntrance = 0
+
+#
+#    VanillaRaids.MaxEntryLevel
+#        Description: Highest character level allowed into the 40-player
+#                     versions. Death knights start above this by design, which
+#                     is what keeps them out of a level 60 raid.
+#        Default:     70
+
+VanillaRaids.MaxEntryLevel = 70
+
+#
+#    VanillaRaids.Naxx40.Nerf.FourHorsemen
+#    VanillaRaids.Naxx40.Nerf.Patchwerk
+#    VanillaRaids.Naxx40.Nerf.Razuvious
+#    VanillaRaids.Naxx40.Nerf.Gluth
+#        Description: Soften four encounters that a short or undergeared raid
+#                     cannot otherwise clear - upstream's "doable" toggles.
+#                     Off is the authentic 1.12 tuning.
+#
+#                     FourHorsemen: weaker Holy Wrath, no Void Zone, a gentler
+#                                   Mark damage table.
+#                     Patchwerk:    Hateful Strike at 80% damage.
+#                     Razuvious:    Disrupting Shout instead of Mana Burn.
+#                     Gluth:        12 seconds between Decimate chow waves
+#                                   instead of 3.
+#        Default:     0 - (Authentic)
+#                     1 - (Softened)
+
+VanillaRaids.Naxx40.Nerf.FourHorsemen = 0
+VanillaRaids.Naxx40.Nerf.Patchwerk = 0
+VanillaRaids.Naxx40.Nerf.Razuvious = 0
+VanillaRaids.Naxx40.Nerf.Gluth = 0
+

@@ -18,7 +18,7 @@
 #include "ScriptMgr.h"
 #include "InstanceScript.h"
 #include "MotionMaster.h"
-#include "naxxramas.h"
+#include "naxxramas40.h"
 #include "ObjectAccessor.h"
 #include "ScriptedCreature.h"
 #include "SpellScript.h"
@@ -326,7 +326,9 @@ class spell_gluth_decimate : public SpellScript
 
     bool Load() override
     {
-        return GetCaster() && GetCaster()->GetEntry() == NPC_GLUTH;
+        // The vanilla 40-player Gluth is a separate creature entry casting the
+        // same Decimate, so it has to pass this gate too or nothing is damaged.
+        return GetCaster() && (GetCaster()->GetEntry() == NPC_GLUTH || GetCaster()->GetEntry() == NPC_GLUTH_40);
     }
 };
 

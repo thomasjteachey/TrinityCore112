@@ -75,6 +75,25 @@ void AddSC_boss_gothik();
 void AddSC_boss_thaddius();
 void AddSC_naxxramas();
 void AddSC_instance_naxxramas();
+// Naxxramas (vanilla, 40-player - raid difficulty 2)
+void AddSC_boss_anubrekhan_40();
+void AddSC_boss_faerlina_40();
+void AddSC_boss_maexxna_40();
+void AddSC_boss_noth_40();
+void AddSC_boss_heigan_40();
+void AddSC_boss_loatheb_40();
+void AddSC_boss_patchwerk_40();
+void AddSC_boss_grobbulus_40();
+void AddSC_boss_gluth_40();
+void AddSC_boss_thaddius_40();
+void AddSC_boss_razuvious_40();
+void AddSC_boss_gothik_40();
+void AddSC_boss_four_horsemen_40();
+void AddSC_boss_sapphiron_40();
+void AddSC_boss_kelthuzad_40();
+void AddSC_naxxramas40_entrance();
+void AddSC_naxxramas40_spells();
+void AddSC_npc_omarion_40();
 // The Nexus Nexus
 void AddSC_boss_nexus_commanders();
 void AddSC_boss_magus_telestra();
@@ -273,6 +292,25 @@ void AddNorthrendScripts()
     AddSC_boss_thaddius();
     AddSC_naxxramas();
     AddSC_instance_naxxramas();
+    // Naxxramas (vanilla, 40-player - raid difficulty 2)
+    AddSC_boss_anubrekhan_40();
+    AddSC_boss_faerlina_40();
+    AddSC_boss_maexxna_40();
+    AddSC_boss_noth_40();
+    AddSC_boss_heigan_40();
+    AddSC_boss_loatheb_40();
+    AddSC_boss_patchwerk_40();
+    AddSC_boss_grobbulus_40();
+    AddSC_boss_gluth_40();
+    AddSC_boss_thaddius_40();
+    AddSC_boss_razuvious_40();
+    AddSC_boss_gothik_40();
+    AddSC_boss_four_horsemen_40();
+    AddSC_boss_sapphiron_40();
+    AddSC_boss_kelthuzad_40();
+    AddSC_naxxramas40_entrance();
+    AddSC_naxxramas40_spells();
+    AddSC_npc_omarion_40();
     // The Nexus: Nexus
     AddSC_boss_nexus_commanders();
     AddSC_boss_magus_telestra();

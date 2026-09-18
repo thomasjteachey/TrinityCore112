@@ -27,6 +27,7 @@
 #include "Miscellaneous/CharacterScreen.h"
 #include "Miscellaneous/CooldownStash.h"
 #include "Miscellaneous/TournamentMode.h"
+#include "VanillaRaids/VanillaRaids.h"
 #include "AchievementMgr.h"
 #include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
@@ -5987,8 +5988,13 @@ void Player::RepopAtGraveyard()
 
     WorldSafeLocsEntry const* ClosestGrave;
 
+    // The vanilla 40-player Naxxramas shares its zone with the Wrath wing, so
+    // the zone's own graveyard would drop a level 60 raid at the wrong end of
+    // the necropolis (VanillaRaids/VanillaRaids.h).
+    if (VanillaRaids::IsNaxx40Map(GetMap()))
+        ClosestGrave = sWorldSafeLocsStore.LookupEntry(VanillaRaids::NAXX40_GRAVEYARD);
     // Special handle for battleground maps
-    if (Battleground* bg = GetBattleground())
+    else if (Battleground* bg = GetBattleground())
         ClosestGrave = bg->GetClosestGraveyard(this);
     else
     {

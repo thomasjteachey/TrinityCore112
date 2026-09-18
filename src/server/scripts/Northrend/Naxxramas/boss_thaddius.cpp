@@ -25,6 +25,7 @@
 #include "ScriptedCreature.h"
 #include "SpellInfo.h"
 #include "SpellScript.h"
+#include "VanillaRaids/VanillaRaids.h"
 
 enum Phases
 {
@@ -73,6 +74,11 @@ enum Misc
 {
     MAX_POLARITY_10M        =  5,
     MAX_POLARITY_25M        = 13,
+    MAX_POLARITY_40M        = 40,   // vanilla, raid difficulty 2
+
+    // Charge damage in the vanilla 40-player wing, where the spell's own
+    // Wrath-era value would be far too high for level 60 players.
+    POLARITY_CHARGE_DAMAGE_40M = 2000,
 
     DATA_POLARITY_CROSSED   =  1,
 };
@@ -989,6 +995,10 @@ class spell_thaddius_polarity_charge : public SpellScript
                     maxStacks = MAX_POLARITY_25M;
                     break;
                 default:
+                    // The vanilla 40-player wing runs on the otherwise unused
+                    // raid difficulty 2 and never capped the amplifier.
+                    if (VanillaRaids::IsNaxx40(GetCaster()))
+                        maxStacks = MAX_POLARITY_40M;
                     break;
             }
 
@@ -1024,8 +1034,15 @@ class spell_thaddius_polarity_charge : public SpellScript
         }
     }
 
+    void HandleDamage(SpellEffIndex /*effIndex*/)
+    {
+        if (VanillaRaids::IsNaxx40(GetCaster()))
+            SetHitDamage(POLARITY_CHARGE_DAMAGE_40M);
+    }
+
     void Register() override
     {
+        OnEffectHitTarget += SpellEffectFn(spell_thaddius_polarity_charge::HandleDamage, EFFECT_0, SPELL_EFFECT_SCHOOL_DAMAGE);
         OnObjectAreaTargetSelect += SpellObjectAreaTargetSelectFn(spell_thaddius_polarity_charge::HandleTargets, EFFECT_0, TARGET_UNIT_SRC_AREA_ALLY);
     }
 };

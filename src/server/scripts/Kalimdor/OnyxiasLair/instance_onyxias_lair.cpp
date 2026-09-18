@@ -69,6 +69,7 @@ public:
             switch (creature->GetEntry())
             {
                 case NPC_ONYXIA:
+                case NPC_ONYXIA_40:
                     onyxiaGUID = creature->GetGUID();
                     break;
             }
@@ -194,6 +195,7 @@ public:
             switch (data)
             {
                 case NPC_ONYXIA:
+                case NPC_ONYXIA_40:
                     return onyxiaGUID;
             }
 

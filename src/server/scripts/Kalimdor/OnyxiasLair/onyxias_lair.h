@@ -55,7 +55,13 @@ enum OLCreatureIds
     NPC_WHELP                   = 11262,
     NPC_LAIRGUARD               = 36561,
     NPC_ONYXIA                  = 10184,
-    NPC_TRIGGER                 = 14495
+    NPC_TRIGGER                 = 14495,
+
+    // The vanilla 40-player lair, on raid difficulty 2 of the same map. See
+    // VanillaRaids/VanillaRaids.h for the gate that turns it on.
+    NPC_ONYXIA_40               = 301000,
+    NPC_ONYXIAN_WHELP_40        = 301001,
+    NPC_ONYXIAN_LAIR_GUARD_40   = 301002
 };
 
 enum OLGameObjectIds
@@ -78,6 +84,8 @@ inline AI* GetOnyxiasLairAI(T* obj)
 {
     return GetInstanceAI<AI>(obj, OnyxiaScriptName);
 }
+
+#define RegisterOnyxiasLairCreatureAI(ai_name) RegisterCreatureAIWithFactory(ai_name, GetOnyxiasLairAI)
 
 #define RegisterOnyxiasLairCreatureAI(ai_name) RegisterCreatureAIWithFactory(ai_name, GetOnyxiasLairAI)
 

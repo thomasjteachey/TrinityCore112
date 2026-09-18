@@ -27,6 +27,7 @@
 #include "ScriptedCreature.h"
 #include "SpellAuraEffects.h"
 #include "SpellScript.h"
+#include "VanillaRaids/VanillaRaids.h"
 
 enum Horseman
 {
@@ -659,6 +660,32 @@ class spell_four_horsemen_mark : public AuraScript
         if (Unit* caster = GetCaster())
         {
             int32 damage;
+
+            // The vanilla 40-player wing shares these four spells but runs its
+            // own, much flatter damage table, softened again when the realm asks
+            // for a short raid to be able to clear it.
+            if (VanillaRaids::IsNaxx40(caster))
+            {
+                bool const nerfed = VanillaRaids::NerfFourHorsemen();
+                switch (GetStackAmount())
+                {
+                    case 1:  damage = 0; break;
+                    case 2:  damage = nerfed ? 25 : 250; break;
+                    case 3:  damage = nerfed ? 100 : 1000; break;
+                    case 4:  damage = nerfed ? 300 : 3000; break;
+                    default: damage = (nerfed ? 100 : 1000) * GetStackAmount(); break;
+                }
+
+                if (damage)
+                {
+                    CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+                    args.AddSpellBP0(damage);
+                    caster->CastSpell(GetTarget(), SPELL_MARK_DAMAGE, args);
+                }
+
+                return;
+            }
+
             switch (GetStackAmount())
             {
                 case 1:
