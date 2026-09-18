@@ -795,7 +795,10 @@ namespace
         // Only when it is true: with the ban off, everything out of their bags
         // works and telling them otherwise would be a lie.
         if (LoadoutConfig.BanConsumables)
+        {
+            WhisperAsChromie(player, "Anything your own class conjured works too - healthstones, mana gems, soulstones - though those are spent as usual.");
             WhisperAsChromie(player, "Nothing else out of your bags works in here: no potions, flasks, scrolls or grenades. Only our special PvP Consumables.");
+        }
     }
 
     // Puts one stashed item back: where it came from when that is free, anywhere
@@ -1341,6 +1344,15 @@ bool IsConsumableAllowedInMatch(Player const* player, ItemTemplate const* proto)
     // nothing; doing it out of your own bags is the same thing by another route,
     // and costs the item nothing either (KeepsCastItem).
     if (IsFreeMatchConsumable(proto))
+        return true;
+
+    // A conjured item was neither bought nor looted nor crafted: a class made it
+    // out of nothing, and it belongs to that class as much as the spell that made
+    // it does. A warlock's healthstone, a mage's mana gem, a soulstone - what an
+    // arena has always allowed, for the reason this rule exists at all. Unlike
+    // the meal above it is spent: a healthstone is gone and a gem is a charge
+    // down, because KeepsCastItem answers only for food, drink and bandages.
+    if (proto->IsConjuredConsumable())
         return true;
 
     return LoadoutConfig.AllowedConsumables.count(proto->ItemId) != 0;

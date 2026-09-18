@@ -138,9 +138,10 @@ void WorldSession::HandleUseItemOpcode(WorldPacket& recvPacket)
     }
 
     // A tournament match is fought on what the tournament sells: no potions, no
-    // elixirs, no food, no bandages, no grenades but the ones on the PvP list
-    // (Centurion.Tournament.BgConsumables - what Jazzik stocks). Every other
-    // match, and every other realm, is unaffected.
+    // elixirs, no grenades but the ones on the PvP list
+    // (Centurion.Tournament.BgConsumables - what Jazzik stocks). What a character
+    // brought of its own still works: food, drink, bandages, and anything a class
+    // conjured. Every other match, and every other realm, is unaffected.
     if (!Tournament::IsConsumableAllowedInMatch(pUser, proto))
     {
         pUser->SendEquipError(EQUIP_ERR_CANT_DO_RIGHT_NOW, pItem, nullptr);

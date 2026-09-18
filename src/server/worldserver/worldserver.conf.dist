@@ -5173,7 +5173,11 @@ Centurion.Items.QuiversHoldAnyItem = 0
 #
 #    Centurion.Tournament.BgBanConsumables
 #        Description: Inside a tournament-pool match only the consumables listed below work -
-#                     no other potion, elixir, food, bandage, scroll or grenade.
+#                     no other potion, elixir, scroll or grenade. Two things a character
+#                     brought of its own are never banned: plain food, drink and bandages
+#                     (which cost it nothing to use in there), and anything a class
+#                     conjured - healthstones, mana gems, soulstones - which are spent
+#                     as usual.
 #        Default:     1 - (Enabled)
 #
 #    Centurion.Tournament.BgStarterVendors

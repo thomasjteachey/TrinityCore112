@@ -307,8 +307,11 @@ namespace Tournament
     uint32 GetLoadoutTemplateItem(uint8 playerClass, uint8 slot);
 
     // Inside a tournament match only the tournament PvP consumables work
-    // (Centurion.Tournament.BgConsumables - what Jazzik sells). Asked by the use
-    // handler about anything a character tries to eat, drink, quaff or throw.
+    // (Centurion.Tournament.BgConsumables - what Jazzik sells), plus what a
+    // character brought of its own: food, drink and bandages, and anything a
+    // class conjured - healthstones, mana gems, soulstones, conjured food and
+    // water. Asked by the use handler about anything a character tries to eat,
+    // drink, quaff or throw.
     bool IsConsumableAllowedInMatch(Player const* player, ItemTemplate const* proto);
 
     // Eat, drink and bandage out of your own bags for free. The tournament hands
