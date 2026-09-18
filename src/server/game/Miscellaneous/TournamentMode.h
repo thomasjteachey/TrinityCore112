@@ -285,6 +285,20 @@ namespace Tournament
     void RestoreBattlegroundLoadout(Player* player);  // Battleground::RemovePlayerAtLeave
     void RestoreLoadoutAfterLogin(Player* player);    // the crash and logout route
     bool HasBattlegroundLoadout(Player const* player);
+
+    // Tournament gear never leaves a tournament match on a world-mode character.
+    // The rows are the bookkeeping; this is the guarantee that does not depend on
+    // them - every tournament item a world character holds is taken off it on the
+    // way out and again at every login, which is where a realm that was killed
+    // outright is caught. Returns how many were taken. A tournament character
+    // keeps its gear and a Game Master is left alone.
+    uint32 SweepTournamentItems(Player* player);
+
+    // The gear is handed back while the character is on its way out of the
+    // battleground map, and a client mid-world-port can keep showing the weapon
+    // it just put down. Called every update by the tournament player script; it
+    // returns at once unless that character is waiting for exactly this.
+    void RefreshLoadoutVisuals(Player* player);
     // True while this thread is dressing or undressing that character: the
     // battleground armour lock (Player.cpp) stands aside for the swap, which is
     // the one pass that has to change every slot.

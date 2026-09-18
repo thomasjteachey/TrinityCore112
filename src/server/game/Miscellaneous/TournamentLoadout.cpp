@@ -23,14 +23,22 @@
 // answered in this order:
 //
 //   1. it has a tournament twin (`item_tournament_link`)  -> the twin,
-//   2. it is worn and has no twin                         -> the same slot from
+//   2. it is a weapon, a shield or a holdable with no twin -> a tournament one
+//      of the SAME shape (a one-handed axe for a one-handed axe, a bow for a
+//      bow), no better than the class template's piece for that slot,
+//   3. anything else worn with no twin                    -> the same slot from
 //      its class's starter template (`tournament_loadout_template`: the gear
 //      Startrogue, Startwarrior and the rest are wearing),
-//   3. what that offered cannot be equipped - unique, no proficiency, the wrong
-//      armour - -> a field kit piece for the slot, and nothing at all when the
-//      kit has none for it (neck, rings and trinkets have none),
-//   4. it is carried and has no twin                      -> it is put away for
+//   4. what that offered cannot be equipped - unique, no proficiency, the wrong
+//      armour, an off hand behind a two-hander - -> a field kit piece for the
+//      slot, and nothing at all when the kit has none for it (neck, rings and
+//      trinkets have none),
+//   5. it is carried and has no twin                      -> it is put away for
 //      the match, so nothing untwinned can be swapped in mid-fight.
+//
+// An EMPTY equipment slot is dressed from the class template too: somebody who
+// walked in without a neck, rings or trinkets fights in the tournament's and
+// loses them again on the way out. Shirts and tabards are nobody's business.
 //
 // The originals are neither destroyed nor rebuilt from a description: the item
 // rows are moved aside exactly as an account bank deposit moves them
@@ -39,6 +47,12 @@
 // `character_tournament_loadout` in the same transaction that makes it, so a
 // logout, a disconnect, a crash or a restart mid-match all end the same way: the
 // next login gives the character its own gear back.
+//
+// And none of it leaves with a world-mode character: SweepTournamentItems takes
+// every tournament item off one that is outside a tournament match, on the way
+// out and again at every login. The rows are the bookkeeping; the sweep is the
+// guarantee that survives a realm being killed outright, a row nobody wrote, or
+// an item handed over inside the match.
 //
 // Two more match rules live here because they start and end at the same moments:
 // a world-mode character is taught the eat/drink/bandage spells a tournament
@@ -67,6 +81,8 @@
 #include "World.h"
 #include "WorldSession.h"
 #include <algorithm>
+#include <atomic>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -102,6 +118,12 @@ namespace
     // kit's entry block is a constant (ItemTemplate.h), so the pool follows the
     // item data instead of a list somebody has to maintain in two places.
     std::unordered_map<uint32 /*InventoryType*/, std::vector<uint32>> KitPieces;
+
+    // Every weapon, shield and holdable the tournament sells, by class and
+    // subclass, highest item level first. A hand that held a one-handed axe gets
+    // a one-handed axe back: the class template can only offer one shape per
+    // slot, and its sword is no answer for somebody who fights with axes.
+    std::unordered_map<uint32 /*class << 8 | subclass*/, std::vector<uint32>> TournamentWeapons;
     // Whether this realm has the stash table at all. Probed at load: a realm
     // without it never queries it, and every path here does nothing.
     bool StashTablePresent = false;
@@ -110,6 +132,16 @@ namespace
     // survives a restart; this is what the hot paths ask.
     std::mutex ActiveLoadoutMutex;
     std::unordered_set<ObjectGuid> ActiveLoadouts;
+
+    // Characters whose gear was handed back while they were on their way out of
+    // the battleground map. The field values are right the moment the swap ends,
+    // but a client in the middle of a world port can be shown the old weapon
+    // until something makes the server say it again - which is why logging out
+    // and back in used to be the cure. Refreshed on the first update after the
+    // character is back in a world, by the tournament player script.
+    std::atomic<size_t> PendingVisualCount{ 0 };
+    std::mutex PendingVisualMutex;
+    std::unordered_set<ObjectGuid> PendingVisuals;
 
     // Set while this thread is dressing or undressing a character, so the
     // battleground armour lock (Player.cpp IsBattlegroundEquipChangeAllowed)
@@ -147,6 +179,41 @@ namespace
             ActiveLoadouts.insert(guid);
         else
             ActiveLoadouts.erase(guid);
+    }
+
+    void MarkVisualsStale(ObjectGuid guid)
+    {
+        std::lock_guard<std::mutex> lock(PendingVisualMutex);
+        PendingVisuals.insert(guid);
+        PendingVisualCount.store(PendingVisuals.size(), std::memory_order_relaxed);
+    }
+
+    // Every position a character can keep an item in: what it is wearing, its
+    // bags and their contents, the bank and its bags. The keyring holds keys.
+    void ForEachHeldItem(Player* player, std::function<void(uint8 /*bag*/, uint8 /*slot*/, Item*)> const& visit)
+    {
+        auto const visitRange = [&](uint8 bag, uint8 first, uint8 last)
+        {
+            for (uint8 slot = first; slot < last; ++slot)
+                if (Item* item = player->GetItemByPos(bag, slot))
+                    visit(bag, slot, item);
+        };
+
+        visitRange(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_START, EQUIPMENT_SLOT_END);
+        visitRange(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START, INVENTORY_SLOT_ITEM_END);
+        visitRange(INVENTORY_SLOT_BAG_0, BANK_SLOT_ITEM_START, BANK_SLOT_ITEM_END);
+
+        auto const visitBags = [&](uint8 first, uint8 last)
+        {
+            for (uint8 bag = first; bag < last; ++bag)
+                if (Bag const* container = player->GetBagByPos(bag))
+                    for (uint32 slot = 0; slot < container->GetBagSize(); ++slot)
+                        if (Item* item = player->GetItemByPos(bag, uint8(slot)))
+                            visit(bag, uint8(slot), item);
+        };
+
+        visitBags(INVENTORY_SLOT_BAG_START, INVENTORY_SLOT_BAG_END);
+        visitBags(BANK_SLOT_BAG_START, BANK_SLOT_BAG_END);
     }
 
     // Shirts and tabards carry no fight in them - a guild's colours and a red
@@ -192,6 +259,16 @@ namespace
             case EQUIPMENT_SLOT_RANGED:    return { INVTYPE_RANGED, INVTYPE_RANGEDRIGHT, INVTYPE_THROWN, INVTYPE_RELIC };
             default:                       return { };   // neck, rings, trinkets: the kit has none
         }
+    }
+
+    uint32 WeaponKey(uint32 itemClass, uint32 subClass)
+    {
+        return (itemClass << 8) | subClass;
+    }
+
+    bool IsHandSlot(uint8 slot)
+    {
+        return slot == EQUIPMENT_SLOT_MAINHAND || slot == EQUIPMENT_SLOT_OFFHAND || slot == EQUIPMENT_SLOT_RANGED;
     }
 
     // The first kit piece for this slot the character can actually put on, or 0.
@@ -240,14 +317,59 @@ namespace
     // been put away and its Item object is gone.
     struct LoadoutEntry
     {
-        Item* Original = nullptr;   // valid only until the item is stashed
+        Item* Original = nullptr;   // valid only until the item is stashed; null for an empty slot being dressed
         uint8 Bag = 0;
         uint8 Slot = 0;
         uint32 Count = 1;
-        uint32 Substitute = 0;      // 0 = the slot or the bag space is left empty
+        uint32 Substitute = 0;      // the twin when there is one, else the class's template piece
         bool Worn = false;
+        bool Twinned = false;       // the substitute above is this item's own tournament twin
+        uint32 OriginalClass = 0;   // what the hand was holding, for the shape match below
+        uint32 OriginalSubClass = 0;
+        uint32 OriginalInventoryType = 0;
         std::array<CarriedEnchant, CarriedEnchantSlots.size()> Enchants = { };
     };
+
+    // A hand keeps its shape: a one-handed axe comes back a one-handed axe, a
+    // bow a bow, a shield a shield - the class template only has one weapon per
+    // slot and its sword is no answer for somebody who fights with axes. Held to
+    // the template piece's item level, so matching the shape cannot hand out
+    // something better than the loadout is meant to give.
+    uint32 PickTournamentWeapon(Player* player, LoadoutEntry const& entry)
+    {
+        if (!entry.OriginalInventoryType || !IsHandSlot(entry.Slot))
+            return 0;
+
+        auto itr = TournamentWeapons.find(WeaponKey(entry.OriginalClass, entry.OriginalSubClass));
+        if (itr == TournamentWeapons.end())
+            return 0;
+
+        uint32 cap = 0;
+        if (ItemTemplate const* templateProto = sObjectMgr->GetItemTemplate(GetLoadoutTemplateItem(player->GetClass(), entry.Slot)))
+            cap = templateProto->ItemLevel;
+
+        bool const twoHanded = entry.OriginalInventoryType == INVTYPE_2HWEAPON;
+        for (uint32 candidate : itr->second)
+        {
+            ItemTemplate const* proto = sObjectMgr->GetItemTemplate(candidate);
+            if (!proto)
+                continue;
+
+            // Never turn one hand into two, or two into one: the other hand is
+            // being answered by its own rule and the two have to agree.
+            if ((proto->InventoryType == INVTYPE_2HWEAPON) != twoHanded)
+                continue;
+
+            if (cap && proto->ItemLevel > cap)
+                continue;
+
+            uint16 dest = 0;
+            if (player->CanEquipNewItem(entry.Slot, dest, candidate, false) == EQUIP_ERR_OK)
+                return candidate;
+        }
+
+        return 0;
+    }
 
     // The enchants, gems and bonuses the original was carrying go onto the item
     // that stands in for it - the character keeps what it paid for. A gem only
@@ -280,7 +402,26 @@ namespace
     {
         Item* item = player->GetItemByPos(bag, slot);
         if (!item)
+        {
+            // An empty equipment slot is dressed from the class's template: a
+            // character that walked in without a neck, rings or trinkets fights
+            // in the tournament's, and loses them again on the way out. Shirt and
+            // tabard are not the loadout's business, and neither is bag space.
+            if (!worn || slot == EQUIPMENT_SLOT_BODY || slot == EQUIPMENT_SLOT_TABARD)
+                return;
+
+            uint32 const piece = GetLoadoutTemplateItem(player->GetClass(), slot);
+            if (!piece)
+                return;
+
+            LoadoutEntry empty;
+            empty.Bag = bag;
+            empty.Slot = slot;
+            empty.Worn = true;
+            empty.Substitute = piece;
+            out.push_back(empty);
             return;
+        }
 
         ItemTemplate const* proto = item->GetTemplate();
         if (!IsLoadoutRelevant(proto))
@@ -296,6 +437,9 @@ namespace
         entry.Slot = slot;
         entry.Count = item->GetCount();
         entry.Worn = worn;
+        entry.OriginalClass = proto->Class;
+        entry.OriginalSubClass = proto->SubClass;
+        entry.OriginalInventoryType = proto->InventoryType;
 
         for (size_t index = 0; index < CarriedEnchantSlots.size(); ++index)
         {
@@ -306,7 +450,10 @@ namespace
         }
 
         if (twin)
+        {
             entry.Substitute = twin;                                              // rule 1
+            entry.Twinned = true;
+        }
         else if (worn)
             entry.Substitute = GetLoadoutTemplateItem(player->GetClass(), slot);  // rule 2
         // rule 4: carried and untwinned - put away, nothing in its place
@@ -320,7 +467,8 @@ namespace
 
         // Worn first and in slot order, which puts the main hand before the off
         // hand: a two-hander has to settle before anything is offered the slot
-        // it swallows.
+        // it swallows. Empty slots are collected in the same pass, so they keep
+        // their place in that order.
         for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
             CollectFrom(player, INVENTORY_SLOT_BAG_0, slot, true, entries);
 
@@ -378,17 +526,36 @@ namespace
 
         if (entry.Worn)
         {
-            uint16 dest = 0;
-            if (wanted && player->CanEquipNewItem(entry.Slot, dest, wanted, false) != EQUIP_ERR_OK)
-                wanted = 0;
+            // In order: this item's own twin, then a tournament weapon of the
+            // same shape for a hand, then the class's template piece, then a kit
+            // piece - and an empty slot when even that cannot be worn (unique,
+            // no proficiency, the wrong armour, an off hand behind a two-hander).
+            std::vector<uint32> candidates;
+            if (entry.Twinned && entry.Substitute)
+                candidates.push_back(entry.Substitute);
 
-            // Rule 3: unique, no proficiency, the wrong armour - whatever the
-            // reason, the slot falls back to the kit, and to nothing after that.
-            if (!wanted)
+            if (!entry.Twinned)
+                if (uint32 const shaped = PickTournamentWeapon(player, entry))
+                    candidates.push_back(shaped);
+
+            if (!entry.Twinned && entry.Substitute)
+                candidates.push_back(entry.Substitute);
+            else if (entry.Twinned)
+                if (uint32 const fromTemplate = GetLoadoutTemplateItem(player->GetClass(), entry.Slot))
+                    candidates.push_back(fromTemplate);
+
+            if (uint32 const kit = PickKitPiece(player, entry.Slot))
+                candidates.push_back(kit);
+
+            uint16 dest = 0;
+            wanted = 0;
+            for (uint32 candidate : candidates)
             {
-                wanted = PickKitPiece(player, entry.Slot);
-                if (wanted && player->CanEquipNewItem(entry.Slot, dest, wanted, false) != EQUIP_ERR_OK)
-                    wanted = 0;
+                if (player->CanEquipNewItem(entry.Slot, dest, candidate, false) != EQUIP_ERR_OK)
+                    continue;
+
+                wanted = candidate;
+                break;
             }
 
             if (wanted)
@@ -511,6 +678,46 @@ namespace
     }
 }
 
+// Tournament gear does not leave the arena on a world-mode character. The rows
+// in `character_tournament_loadout` are the bookkeeping, and this is the
+// guarantee that does not depend on it: whatever the tournament owns is taken
+// off a world character the moment it is outside a tournament match - on the way
+// out, and again at EVERY login, which is where an ungraceful shutdown, a lost
+// row, a trade inside the match and anything else nobody thought of is caught.
+//
+// A tournament character keeps its gear, of course, and a Game Master is left
+// alone: they can conjure anything anyway, and eating a GM's test items would be
+// its own bug.
+uint32 SweepTournamentItems(Player* player)
+{
+    if (!player || !IsEnabled() || IsTournamentCharacter(player) || player->IsGameMaster())
+        return 0;
+
+    std::vector<std::pair<uint8, uint8>> confiscate;
+    ForEachHeldItem(player, [&confiscate](uint8 bag, uint8 slot, Item* item)
+    {
+        if (IsTournamentItem(item->GetEntry()))
+            confiscate.emplace_back(bag, slot);
+    });
+
+    if (confiscate.empty())
+        return 0;
+
+    // The swap itself reaches every slot, so it takes the same waiver: a
+    // character swept while still standing on the battleground map would
+    // otherwise keep whatever its armour slots were holding.
+    SwapGuard guard(player);
+
+    for (auto const& position : confiscate)
+        player->DestroyItem(position.first, position.second, true);
+
+    player->SaveToDB(false);
+
+    TC_LOG_INFO("entities.player.items", "Tournament loadout: took {} tournament item(s) off {} outside a tournament match.",
+        confiscate.size(), player->GetName());
+    return uint32(confiscate.size());
+}
+
 void LoadLoadoutConfig()
 {
     LoadoutSettings loaded;
@@ -545,18 +752,53 @@ void LoadLoadoutData()
 
     TemplateGear.clear();
     KitPieces.clear();
+    TournamentWeapons.clear();
 
     StashTablePresent = CharacterDatabase.Query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'character_tournament_loadout'") != nullptr;
 
-    // The field kit pool, straight out of the item templates.
+    // The field kit pool and the tournament's own weapon rack, straight out of
+    // the item templates. The rack is every weapon, shield and holdable the
+    // tournament sells - the item links say which items those are, so it is
+    // built after LoadItemLinks.
     size_t kitPieces = 0;
+    size_t weapons = 0;
     for (auto const& itemPair : sObjectMgr->GetItemTemplateStore())
     {
-        if (!IsFieldKitDuplicateEntry(itemPair.first) || itemPair.second.InventoryType == INVTYPE_NON_EQUIP)
+        ItemTemplate const& proto = itemPair.second;
+        if (proto.InventoryType == INVTYPE_NON_EQUIP)
             continue;
 
-        KitPieces[itemPair.second.InventoryType].push_back(itemPair.first);
-        ++kitPieces;
+        if (IsFieldKitDuplicateEntry(itemPair.first))
+        {
+            KitPieces[proto.InventoryType].push_back(itemPair.first);
+            ++kitPieces;
+            continue;
+        }
+
+        if (!IsTournamentItem(itemPair.first))
+            continue;
+
+        bool const armsAndShields = proto.Class == ITEM_CLASS_WEAPON ||
+            (proto.Class == ITEM_CLASS_ARMOR && (proto.InventoryType == INVTYPE_SHIELD || proto.InventoryType == INVTYPE_HOLDABLE));
+        if (!armsAndShields)
+            continue;
+
+        TournamentWeapons[WeaponKey(proto.Class, proto.SubClass)].push_back(itemPair.first);
+        ++weapons;
+    }
+
+    for (auto& weaponPair : TournamentWeapons)
+    {
+        std::sort(weaponPair.second.begin(), weaponPair.second.end(), [](uint32 left, uint32 right)
+        {
+            ItemTemplate const* leftProto = sObjectMgr->GetItemTemplate(left);
+            ItemTemplate const* rightProto = sObjectMgr->GetItemTemplate(right);
+            uint32 const leftLevel = leftProto ? leftProto->ItemLevel : 0;
+            uint32 const rightLevel = rightProto ? rightProto->ItemLevel : 0;
+            if (leftLevel != rightLevel)
+                return leftLevel > rightLevel;
+            return left < right;
+        });
     }
 
     for (auto& kitPair : KitPieces)
@@ -611,8 +853,8 @@ void LoadLoadoutData()
         while (result->NextRow());
     }
 
-    TC_LOG_INFO("server.loading", ">> Loaded {} tournament loadout template piece(s), {} skipped, {} field kit piece(s) indexed, in {} ms",
-        TemplateGear.size(), skipped, kitPieces, GetMSTimeDiffToNow(oldMSTime));
+    TC_LOG_INFO("server.loading", ">> Loaded {} tournament loadout template piece(s), {} skipped, {} field kit piece(s) and {} tournament weapon(s) indexed, in {} ms",
+        TemplateGear.size(), skipped, kitPieces, weapons, GetMSTimeDiffToNow(oldMSTime));
 }
 
 uint32 GetLoadoutTemplateItem(uint8 playerClass, uint8 slot)
@@ -771,15 +1013,21 @@ void RestoreBattlegroundLoadout(Player* player)
 
     MarkActive(player->GetGUID(), false);
 
+    // Anything of the tournament's that the rows did not account for - traded
+    // inside the match, left over from an interrupted swap - goes here.
+    SweepTournamentItems(player);
+
+    // The character is usually on its way to the entry point as this runs, and a
+    // client in the middle of a world port can keep showing the weapon it just
+    // put down. Say it again once it has arrived.
+    MarkVisualsStale(player->GetGUID());
+
     TC_LOG_DEBUG("bg.battleground", "Tournament loadout: gave {} back {} item(s).", player->GetName(), stashed.size());
 }
 
 void RestoreLoadoutAfterLogin(Player* player)
 {
-    if (!player || !StashTablePresent)
-        return;
-
-    if (!CharacterDatabase.PQuery("SELECT 1 FROM character_tournament_loadout WHERE guid = {} LIMIT 1", player->GetGUID().GetCounter()))
+    if (!player)
         return;
 
     // Logged back into the match it left: it is wearing the loadout for a
@@ -787,11 +1035,47 @@ void RestoreLoadoutAfterLogin(Player* player)
     Battleground const* battleground = player->GetBattleground();
     if (battleground && battleground->IsTournamentPool())
     {
-        MarkActive(player->GetGUID(), true);
+        if (StashTablePresent && CharacterDatabase.PQuery("SELECT 1 FROM character_tournament_loadout WHERE guid = {} LIMIT 1", player->GetGUID().GetCounter()))
+            MarkActive(player->GetGUID(), true);
         return;
     }
 
-    RestoreBattlegroundLoadout(player);
+    if (StashTablePresent && CharacterDatabase.PQuery("SELECT 1 FROM character_tournament_loadout WHERE guid = {} LIMIT 1", player->GetGUID().GetCounter()))
+        RestoreBattlegroundLoadout(player);
+
+    // Swept whether or not there were rows to restore. A realm that was killed
+    // outright - no shutdown, no save, no chance to hand anything back - is the
+    // case this catches: the character logs in wearing the tournament's gear and
+    // takes it off here, at the door.
+    SweepTournamentItems(player);
+}
+
+void RefreshLoadoutVisuals(Player* player)
+{
+    if (!player || PendingVisualCount.load(std::memory_order_relaxed) == 0)
+        return;
+
+    {
+        std::lock_guard<std::mutex> lock(PendingVisualMutex);
+        if (!PendingVisuals.count(player->GetGUID()))
+            return;
+    }
+
+    // Wait for the world port to finish: told now, the client would drop it
+    // again, and this is what the stale weapon was in the first place.
+    if (!player->IsInWorld() || player->IsBeingTeleported())
+        return;
+
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        player->SetVisibleItemSlot(slot, player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot));
+        player->ForceValuesUpdateAtIndex(PLAYER_VISIBLE_ITEM_1_ENTRYID + (slot * 2));
+        player->ForceValuesUpdateAtIndex(PLAYER_VISIBLE_ITEM_1_ENCHANTMENT + (slot * 2));
+    }
+
+    std::lock_guard<std::mutex> lock(PendingVisualMutex);
+    PendingVisuals.erase(player->GetGUID());
+    PendingVisualCount.store(PendingVisuals.size(), std::memory_order_relaxed);
 }
 
 bool IsConsumableAllowedInMatch(Player const* player, ItemTemplate const* proto)

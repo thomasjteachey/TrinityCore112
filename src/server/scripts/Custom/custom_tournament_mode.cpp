@@ -73,6 +73,11 @@ public:
         // or arena entry and exit, duel start and end, a mode change, and
         // InitStatsForLevel zeroing the field on a level-up. Two field reads when
         // nothing changed.
+        // The battleground loadout's last step: a client that was mid-world-port
+        // when its own gear came back is told again, now that it has arrived.
+        // One relaxed atomic read when nobody is waiting.
+        Tournament::RefreshLoadoutVisuals(player);
+
         bool const waived = Tournament::HasReagentWaiver(player);
         bool const shown = player->GetUInt32Value(PLAYER_NO_REAGENT_COST_1) == 0xFFFFFFFF;
         if (waived != shown)
