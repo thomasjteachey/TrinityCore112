@@ -122,6 +122,11 @@ struct PveConfig
     uint32 devilsaurHuntBuffSpell = 0;
     float devilsaurHuntSeekYards = 150.0f;
     uint32 devilsaurHuntMaxLevelsAbove = 3;
+    // How often a qualifying skinner's relocation picks the hunting ground
+    // instead of an ordinary cluster. Without this the hunt had no routing at
+    // all: the seek below only ever found what the bot happened to be standing
+    // next to, and nothing ever put it there.
+    uint32 devilsaurHuntRouteChancePct = 50;
     bool lootEnabled = true;
     bool vendorEnabled = true;
     bool questsEnabled = true;

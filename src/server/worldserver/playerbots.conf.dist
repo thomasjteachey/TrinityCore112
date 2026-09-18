@@ -683,28 +683,46 @@ Playerbot.PveGrind.AllowElites = 0
 
 #
 #    Playerbot.Pve.DevilsaurHunt.Enable
-#        Description: Let bots that SKIN hunt the elite devilsaurs of Un'Goro, on their
-#                     own switch - AllowElites stays off. A bot qualifies when its
-#                     skinning covers the dinosaur's level (5 x level) and it is no more
-#                     than MaxLevelsAbove below it; it looks SeekYards out for one.
-#                     While fighting one it wears BuffSpell, and the blows between that
-#                     bot and that dinosaur ONLY are rescaled: DamageDonePct more dealt,
-#                     and DamageTakenPct of the dinosaur's damage taken, multiplied ON TOP
-#                     of the general creature-damage cut (both 50 = a quarter of stock).
-#                     A player ganking the hunter fights it at normal strength.
+#        Description: Let bots that SKIN hunt listed ELITES, on their own switch -
+#                     AllowElites stays off. Despite the key's name the list is not
+#                     only dinosaurs: it is whatever elite's skin the economy needs.
+#                     A bot qualifies when its skinning covers the creature's level
+#                     (5 x level, or (level - 10) x 10 under 20) and the creature is
+#                     no more than MaxLevelsAbove over it; it looks SeekYards out
+#                     for one. While fighting one it wears BuffSpell, and the blows
+#                     between that bot and that creature ONLY are rescaled:
+#                     DamageDonePct more dealt, and DamageTakenPct of its damage
+#                     taken, multiplied ON TOP of the general creature-damage cut
+#                     (both 50 = a quarter of stock). A player ganking the hunter
+#                     fights it at normal strength.
 #                     Read ONCE at startup - restart after changing these keys.
 #                     BuffSpell must be a spell the server knows or the hunt stays off.
-#        Default:     0 (Enable), "6498,6499,6500" (Entries), 0 (BuffSpell - needs a client
-#                     Spell.dbc row; 90720 on Barracks+), 100 (DamageDonePct),
-#                     50 (DamageTakenPct), 150 (SeekYards), 3 (MaxLevelsAbove)
+#        Default:     0 (Enable), "6498,6499,6500,3630,3631,3632,3633,3634,3641"
+#                     (Entries - Un'Goro's devilsaurs plus the Barrens deviates, which
+#                     are elite on classic data and normal on Wrath data), 0 (BuffSpell
+#                     - needs a client Spell.dbc row; 90720 on Barracks+),
+#                     100 (DamageDonePct), 50 (DamageTakenPct), 150 (SeekYards),
+#                     3 (MaxLevelsAbove)
+#
+#    Playerbot.Pve.DevilsaurHunt.RouteChancePct
+#        Description: How often a qualifying skinner's relocation picks a hunting
+#                     ground in its own zone instead of an ordinary grind cluster.
+#                     Seeking alone is not enough: the grind cache refuses elites, so
+#                     nothing ever carried a bot within SeekYards of the game and the
+#                     hunt produced nothing for days after it shipped. Never leaves
+#                     the bot's home zone (or the zone it stands in, with banded
+#                     rebirth off), so it chooses ground rather than migrating.
+#                     0 disables the routing and leaves the hunt seek-only.
+#        Default:     50
 #
 Playerbot.Pve.DevilsaurHunt.Enable = 0
-Playerbot.Pve.DevilsaurHunt.Entries = "6498,6499,6500"
+Playerbot.Pve.DevilsaurHunt.Entries = "6498,6499,6500,3630,3631,3632,3633,3634,3641"
 Playerbot.Pve.DevilsaurHunt.BuffSpell = 0
 Playerbot.Pve.DevilsaurHunt.DamageDonePct = 100
 Playerbot.Pve.DevilsaurHunt.DamageTakenPct = 50
 Playerbot.Pve.DevilsaurHunt.SeekYards = 150
 Playerbot.Pve.DevilsaurHunt.MaxLevelsAbove = 3
+Playerbot.Pve.DevilsaurHunt.RouteChancePct = 50
 
 # The in-game command surface for PvE bots:
 #   .playerbot pve summon <name>   - log a bot-account character in, teleport it to you and

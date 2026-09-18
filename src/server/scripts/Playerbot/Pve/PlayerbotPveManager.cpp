@@ -2797,17 +2797,24 @@ namespace
         return nullptr;
     }
 
-    // A skinner that can take a devilsaur goes looking for one.
+    // A skinner that can take a piece of the listed game goes looking for one.
     //
-    // There are four on the whole continent, wandering Un'Goro, and every one is
-    // elite - so the ordinary grind scan, which stops at the grind radius and
-    // refuses elites, never so much as sees them, and Devilsaur Leather had simply
-    // stopped existing: not one on the realm. This looks much further out
+    // The list is not only dinosaurs, whatever the key is called: it is every
+    // elite whose skin the economy wants. Un'Goro's four devilsaurs wander a
+    // continent; the Barrens deviates are elite on a classic-data realm where
+    // Wrath left them normal. Either way the ordinary grind scan stops at the
+    // grind radius and refuses elites, so it never so much as sees them, and the
+    // mats had simply stopped existing - not one Devilsaur Leather on the realm,
+    // and three Deviate Scale. This looks much further out
     // (Playerbot.Pve.DevilsaurHunt.SeekYards) for a live one the bot could skin,
     // and hands back the nearest reachable one as its target. It runs on the grind
     // scan's own timer and only for bots that skin, so the wider sweep costs
     // nothing for anybody else.
-    // The listed dinosaurs' spawns, by spawn id - four on the whole realm.
+    //
+    // Seeking is only half of it - something has to put the bot within SeekYards
+    // in the first place, which is PreferHuntingGround down in the relocation
+    // executor. Without that half this scan shipped and found nothing for days.
+    // The listed game's spawns, by spawn id - a handful on the whole realm.
     //
     // Built once, from the spawn table, and read-only after that. The entries are
     // latched at first load (see LoadConfig), so a list built from them cannot go
@@ -8207,6 +8214,27 @@ namespace
         uint32 zoneId = 0;
     };
 
+    // Where the listed big game actually lives.
+    //
+    // A hunting ground is NOT a grind cluster and cannot be found by the grind
+    // cache: that cache refuses elites outright and wants three spawns to a
+    // fifty-yard cell, and the whole point of the hunt is elites that are thin on
+    // the ground - four devilsaurs on a continent. So the same spawn table is read
+    // a second time, for the listed entries only, with no density rule. One cell
+    // holding one dinosaur is a destination.
+    //
+    // level is the toughest listed creature in the cell, so the skinning test a
+    // bot passes to be sent here is the one it will actually face on arrival.
+    struct HuntSpot
+    {
+        uint16 mapId = 0;
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        uint32 zoneId = 0;
+        uint8 level = 0;
+    };
+
     // ---------------------------------------------------------------------------
     // Zone guardians: a configurable number of bots per classic zone live there
     // permanently at the zone's classic level cap, XP frozen, grinding forever.
@@ -8872,6 +8900,10 @@ namespace
 
     std::mutex g_GrindSpotLock;
     std::unordered_map<uint8, std::vector<GrindSpot>> g_GrindSpotsByLevel;
+    // The listed big game's hunting grounds, built beside the grind clusters and
+    // under the same lock and the same one-shot guard. Small - one entry per
+    // fifty-yard cell that holds a listed creature - so relocation scans it flat.
+    std::vector<HuntSpot> g_HuntSpots;
     // One copy of every accepted spawn cluster keyed by its actual zone. The
     // stuck watchdog uses this to stay in the bot's current zone even when none
     // of that zone's creatures fall inside the bot's preferred level bracket.
@@ -9315,6 +9347,56 @@ namespace
         std::sort(g_RebirthZones.begin(), g_RebirthZones.end());
 
         TC_LOG_INFO("playerbots.pve", "Rebirth zones: {} eligible.", g_RebirthZones.size());
+
+        // The hunting grounds, from the same spawn table, under the same lock and
+        // the same one-shot guard - and with none of the grind cache's filters,
+        // because every one of them exists to keep bots away from exactly these
+        // creatures. No density rule either: the listed game is meant to be rare.
+        g_HuntSpots.clear();
+        if (g_PveConfig.devilsaurHuntEnabled && !g_PveConfig.devilsaurHuntEntries.empty())
+        {
+            std::map<std::tuple<uint16, int32, int32>, HuntSpot> huntCells;
+            for (auto const& [spawnId, data] : sObjectMgr->GetAllCreatureData())
+            {
+                if (std::find(g_PveConfig.devilsaurHuntEntries.begin(), g_PveConfig.devilsaurHuntEntries.end(),
+                    data.id) == g_PveConfig.devilsaurHuntEntries.end())
+                    continue;
+
+                if (!std::binary_search(g_PveConfig.relocateMaps.begin(), g_PveConfig.relocateMaps.end(), data.mapId))
+                    continue;
+
+                CreatureTemplate const* proto = sObjectMgr->GetCreatureTemplate(data.id);
+                if (!proto || !proto->maxlevel)
+                    continue;
+
+                auto const key = std::make_tuple(uint16(data.mapId),
+                    int32(data.spawnPoint.GetPositionX()) / 50, int32(data.spawnPoint.GetPositionY()) / 50);
+                HuntSpot& spot = huntCells[key];
+                if (!spot.level)
+                    spot = { uint16(data.mapId), data.spawnPoint.GetPositionX(), data.spawnPoint.GetPositionY(),
+                        data.spawnPoint.GetPositionZ(), 0, 0 };
+
+                // The toughest of the cell, so the skinning and level tests a bot
+                // passes to be SENT here are the ones it meets on arrival.
+                spot.level = std::max(spot.level, uint8(std::min<uint32>(proto->maxlevel, 80)));
+            }
+
+            for (auto& [key, spot] : huntCells)
+            {
+                // Same on-demand zone lookup as the clusters above: FindMap is null
+                // for every map not already loaded this early, which would stamp
+                // every ground zone 0 and make the home-zone test below refuse
+                // all of them.
+                spot.zoneId = sMapMgr->GetZoneId(PHASEMASK_NORMAL, spot.mapId, spot.x, spot.y, spot.z);
+                if (IsForbiddenGrindZone(spot.zoneId))
+                    continue;
+
+                g_HuntSpots.push_back(spot);
+            }
+        }
+
+        TC_LOG_INFO("playerbots.pve", "Hunting grounds: {} cell(s) from {} listed entry(ies).",
+            g_HuntSpots.size(), g_PveConfig.devilsaurHuntEntries.size());
 
         // Publish completion only after every derived table is populated. Readers
         // do not take g_GrindSpotLock, so setting this at function entry exposed a
@@ -10004,6 +10086,16 @@ namespace
         return bot->GetGUID().GetCounter() % 3 != 2;
     }
 
+    // What skinning a corpse of this level demands - the same rule TrySkinCorpse
+    // enforces. Shared so the test that SENDS a bot to a hunting ground and the
+    // test that lets it engage there can never disagree: a hunt that ends in a
+    // corpse the bot cannot skin is a wasted fight, and a trip to a ground full
+    // of them is a wasted bot.
+    int32 HuntSkinningSkillRequired(int32 level)
+    {
+        return level < 10 ? 0 : (level < 20 ? (level - 10) * 10 : level * 5);
+    }
+
     // May this bot hunt this creature: the switch is on, it is a listed
     // devilsaur, the bot skins and its skill covers the creature's level
     // (the same requirement TrySkinCorpse enforces - a hunt that ends in a corpse
@@ -10025,11 +10117,75 @@ namespace
             return false;
 
         int32 const targetLevel = int32(creature->GetLevel());
-        int32 const requiredValue = targetLevel < 10 ? 0 : (targetLevel < 20 ? (targetLevel - 10) * 10 : targetLevel * 5);
-        if (int32(bot->GetSkillValue(SKILL_SKINNING)) < requiredValue)
+        if (int32(bot->GetSkillValue(SKILL_SKINNING)) < HuntSkinningSkillRequired(targetLevel))
             return false;
 
         return targetLevel - int32(bot->GetLevel()) <= int32(cfg.devilsaurHuntMaxLevelsAbove);
+    }
+
+    // May this bot be SENT to this hunting ground: the same two questions
+    // CanHuntDevilsaur asks of the creature in front of it, asked of the toughest
+    // creature the ground holds. Routing a bot somewhere it would then refuse to
+    // fight is how a bot ends up standing in Un'Goro doing nothing.
+    //
+    // Deliberately no zone-band test. The band chart says where a bot of a given
+    // level LIVES, and the best devilsaur skinner on the realm is a sixty whose
+    // band is long past Un'Goro; skill and MaxLevelsAbove are the hunt's own
+    // rule and they are the stricter pair anyway.
+    bool HuntSpotSuitsBot(Player const* bot, HuntSpot const& spot)
+    {
+        playerbot::PveConfig const& cfg = g_PveConfig;
+        if (!cfg.devilsaurHuntEnabled || !cfg.devilsaurHuntBuffSpell || !bot || !spot.level)
+            return false;
+
+        if (!BotSkins(bot) || !bot->HasSkill(SKILL_SKINNING))
+            return false;
+
+        if (int32(bot->GetSkillValue(SKILL_SKINNING)) < HuntSkinningSkillRequired(int32(spot.level)))
+            return false;
+
+        return int32(spot.level) - int32(bot->GetLevel()) <= int32(cfg.devilsaurHuntMaxLevelsAbove);
+    }
+
+    // Send a qualifying skinner to the game instead of to an ordinary cluster.
+    //
+    // Until now the hunt was seek-only: PickDevilsaurHuntTarget looked SeekYards
+    // out from wherever the bot already happened to be, and nothing in the fleet
+    // ever put one near the game. The grind cache cannot do it either - it
+    // refuses elites by design, which is the whole reason the carve-out exists.
+    // So the carve-out shipped, ran for days and produced nothing: Devilsaur
+    // Leather stayed at zero on the house, and Deviate Scale at three units on
+    // the entire realm, every one of them skinned by a bot that was jumped rather
+    // than by one that went hunting.
+    //
+    // Confined to the zone the bot already belongs to, so this is a choice of
+    // ground WITHIN the fleet's existing spread and never a licence to cross the
+    // world - the home-zone rule immediately above exists for a reason.
+    // Caller holds g_GrindSpotLock.
+    void PreferHuntingGround(Player* bot, uint32 zoneId, std::vector<GrindSpot>& candidates)
+    {
+        if (!g_PveConfig.devilsaurHuntEnabled || !g_PveConfig.devilsaurHuntRouteChancePct || !zoneId)
+            return;
+
+        // Not every trip, or the zone's other clusters would never be picked
+        // again by anyone who can skin and the ground would hold the same bots
+        // permanently. The roll is taken before the scan so the common case -
+        // a zone with no game in it - costs nothing.
+        if (urand(0, 99) >= g_PveConfig.devilsaurHuntRouteChancePct)
+            return;
+
+        std::vector<GrindSpot> grounds;
+        for (HuntSpot const& spot : g_HuntSpots)
+            if (spot.zoneId == zoneId && HuntSpotSuitsBot(bot, spot))
+                grounds.push_back(GrindSpot{ spot.mapId, spot.x, spot.y, spot.z, spot.zoneId });
+
+        if (grounds.empty())
+            return;
+
+        candidates.swap(grounds);
+        TC_LOG_INFO("playerbots.pve",
+            "Bot {} (level {}, skinning {}) is heading for a hunting ground in zone {}.",
+            bot->GetName(), uint32(bot->GetLevel()), uint32(bot->GetSkillValue(SKILL_SKINNING)), zoneId);
     }
 
     // The hunter's marker: on while the bot is actually fighting a devilsaur it
@@ -13772,6 +13928,11 @@ namespace
                         for (GrindSpot const& spot : spots)
                             if (spot.zoneId == guardianZoneId)
                                 candidates.push_back(spot);
+
+                // A guardian is the steadiest hunter there is: frozen at its
+                // zone's cap, never outgrows the ground, never moves on. Its post
+                // is the zone, so hunting inside it is holding it.
+                PreferHuntingGround(bot, guardianZoneId, candidates);
             }
             else
             {
@@ -13846,6 +14007,11 @@ namespace
                     if (!atHome.empty())
                         candidates.swap(atHome);
                 }
+
+                // Home is where the hunt is looked for too: with banded rebirth
+                // off there is no home, so the ground under the bot's feet is the
+                // only zone it can be said to belong to.
+                PreferHuntingGround(bot, homeZoneId ? homeZoneId : bot->GetZoneId(), candidates);
             }
 
             // Nowhere to send it, and until now that was silent.
@@ -17833,6 +17999,7 @@ namespace playerbot
         g_PveConfig.devilsaurHuntBuffSpell = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Pve.DevilsaurHunt.BuffSpell", 0)));
         g_PveConfig.devilsaurHuntSeekYards = std::clamp(sConfigMgr->GetFloatDefault("Playerbot.Pve.DevilsaurHunt.SeekYards", 150.0f), 20.0f, 400.0f);
         g_PveConfig.devilsaurHuntMaxLevelsAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.DevilsaurHunt.MaxLevelsAbove", 3), 0, 10));
+        g_PveConfig.devilsaurHuntRouteChancePct = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.DevilsaurHunt.RouteChancePct", 50), 0, 100));
         g_PveConfig.devilsaurHuntEntries.clear();
         if (g_PveConfig.devilsaurHuntEnabled &&
             (!g_PveConfig.devilsaurHuntBuffSpell || !sSpellMgr->GetSpellInfo(g_PveConfig.devilsaurHuntBuffSpell)))
@@ -17845,7 +18012,8 @@ namespace playerbot
         {
             uint32 value = 0;
             bool inNumber = false;
-            for (char ch : sConfigMgr->GetStringDefault("Playerbot.Pve.DevilsaurHunt.Entries", "6498,6499,6500") + ",")
+            for (char ch : sConfigMgr->GetStringDefault("Playerbot.Pve.DevilsaurHunt.Entries",
+                "6498,6499,6500,3630,3631,3632,3633,3634,3641") + ",")
             {
                 if (ch >= '0' && ch <= '9')
                 {
