@@ -32,6 +32,7 @@
 #include "VanillaRaids/VanillaRaidsAI.h"
 #include "naxxramas40.h"
 #include <algorithm>
+#include <iterator>
 #include <vector>
 
 enum SapphironYells40

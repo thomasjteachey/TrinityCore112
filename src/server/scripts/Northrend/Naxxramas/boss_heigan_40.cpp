@@ -28,6 +28,7 @@
 #include "VanillaRaids/VanillaRaidsAI.h"
 #include "naxxramas40.h"
 #include <algorithm>
+#include <iterator>
 #include <list>
 #include <unordered_map>
 #include <vector>

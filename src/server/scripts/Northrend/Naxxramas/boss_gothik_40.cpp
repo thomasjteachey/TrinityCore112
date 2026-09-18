@@ -29,6 +29,7 @@
 #include "ThreatManager.h"
 #include "VanillaRaids/VanillaRaidsAI.h"
 #include "naxxramas40.h"
+#include <iterator>
 #include <list>
 #include <vector>
 

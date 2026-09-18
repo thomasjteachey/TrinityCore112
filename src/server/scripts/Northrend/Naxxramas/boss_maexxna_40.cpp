@@ -30,6 +30,7 @@
 #include "VanillaRaids/VanillaRaidsAI.h"
 #include "naxxramas40.h"
 #include <cmath>
+#include <iterator>
 #include <list>
 #include <vector>
 

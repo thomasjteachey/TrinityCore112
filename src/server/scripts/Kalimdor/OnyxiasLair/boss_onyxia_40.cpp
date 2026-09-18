@@ -41,7 +41,10 @@ enum Onyxia40Spells
     SPELL_FIREBALL                  = 18392,
     SPELL_BELLOWINGROAR             = 18431,
 
-    SPELL_SUMMON_WHELP              = 91003, // summons the level 60 whelp entry
+    // 92000, not the module's 91003: this realm's own Spell.dbc already defines
+    // 91003, and TrinityCore aborts at startup when spell_dbc repeats an id the
+    // binary DBC already has ("Index N already exists in dbc").
+    SPELL_SUMMON_WHELP              = 92000,
     SPELL_SUMMON_LAIR_GUARD         = 68968,
     SPELL_ERUPTION                  = 17731,
 
