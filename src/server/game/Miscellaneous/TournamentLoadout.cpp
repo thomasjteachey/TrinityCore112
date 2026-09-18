@@ -779,26 +779,24 @@ namespace
         player->SendDirectMessage(&data);
     }
 
-    // The owner's words, verbatim. The counts and the borrowed spells are not
-    // mentioned: what somebody needs on the way in is that their gear is safe and
-    // what still works, not an inventory report.
+    // The owner's words, verbatim. Only what somebody could be surprised by is
+    // said: the gear swap and, when it is on, the consumable ban. That their own
+    // food and their class's conjured items still work, and that everything comes
+    // back whole however the match ends, goes without saying - the welcome line
+    // already promises the gear back, and a brief nobody reads is worse than a
+    // short one.
     void BriefWorldCharacter(Player* player)
     {
         WorldSession const* session = player->GetSession();
         if (!session || session->IsVirtualSession() || IsTournamentCharacter(player))
             return;
 
-        WhisperAsChromie(player, "Welcome to the tournament. We've made some changes to your gear to keep things competitive. If you were wearing something not on our tournament whitelist, it was replaced.");
-        WhisperAsChromie(player, "Everything of yours comes straight back the moment you leave - a win, a loss, a disconnect, a crash, it makes no difference. None of it is lost.");
-        WhisperAsChromie(player, "Your own food, drink and bandages still work in here, and using one costs you nothing - you will walk out with everything you walked in with.");
+        WhisperAsChromie(player, "Welcome to the tournament. We've made some changes to your gear to keep things competitive. If you were wearing something not on our tournament whitelist, it was replaced and will be given back to you after you leave.");
 
         // Only when it is true: with the ban off, everything out of their bags
         // works and telling them otherwise would be a lie.
         if (LoadoutConfig.BanConsumables)
-        {
-            WhisperAsChromie(player, "Anything your own class conjured works too - healthstones, mana gems, soulstones - though those are spent as usual.");
-            WhisperAsChromie(player, "Nothing else out of your bags works in here: no potions, flasks, scrolls or grenades. Only our special PvP Consumables.");
-        }
+            WhisperAsChromie(player, "No potions, flasks, scrolls or grenades out of your bags work in here. Only our special PvP Consumables.");
     }
 
     // Puts one stashed item back: where it came from when that is free, anywhere
