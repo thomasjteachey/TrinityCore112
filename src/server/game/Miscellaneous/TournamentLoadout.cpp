@@ -65,6 +65,7 @@
 #include "Miscellaneous/TournamentMode.h"
 #include "Bag.h"
 #include "Battleground.h"
+#include "Chat.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "Item.h"
@@ -79,6 +80,7 @@
 #include "Timer.h"
 #include "Util.h"
 #include "World.h"
+#include "WorldPacket.h"
 #include "WorldSession.h"
 #include <algorithm>
 #include <atomic>
@@ -519,7 +521,8 @@ namespace
         delete item;
     }
 
-    void IssueSubstitute(Player* player, LoadoutEntry const& entry, CharacterDatabaseTransaction& trans, bool record)
+    // Returns true when something was actually issued.
+    bool IssueSubstitute(Player* player, LoadoutEntry const& entry, CharacterDatabaseTransaction& trans, bool record)
     {
         uint32 wanted = entry.Substitute;
         Item* issued = nullptr;
@@ -566,31 +569,34 @@ namespace
             ItemPosCountVec dest;
             if (player->CanStoreNewItem(entry.Bag, entry.Slot, dest, wanted, entry.Count) != EQUIP_ERR_OK &&
                 player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, wanted, entry.Count) != EQUIP_ERR_OK)
-                return;
+                return false;
 
             issued = player->StoreNewItem(dest, wanted, true);
         }
 
         if (!issued)
-            return;
+            return false;
 
         CarryEnchants(player, entry, issued);
 
-        if (!record)
-            return;
+        if (record)
+            InsertRow(trans, player->GetGUID().GetCounter(), LOADOUT_ROW_SUBSTITUTE, issued->GetGUID().GetCounter(),
+                PackPosition(issued->GetBagSlot(), issued->GetSlot()));
 
-        InsertRow(trans, player->GetGUID().GetCounter(), LOADOUT_ROW_SUBSTITUTE, issued->GetGUID().GetCounter(),
-            PackPosition(issued->GetBagSlot(), issued->GetSlot()));
+        return true;
     }
 
     // A world-mode character borrows the eat/drink/bandage spells a tournament
     // character has always known, for the length of the match. One it already
     // knows is left alone and not written down, so leaving can never take away
     // something it learned for itself.
-    void GrantMatchSpells(Player* player, CharacterDatabaseTransaction& trans, bool record)
+    // Returns how many spells were actually taught.
+    uint32 GrantMatchSpells(Player* player, CharacterDatabaseTransaction& trans, bool record)
     {
         if (IsTournamentCharacter(player))
-            return;
+            return 0;
+
+        uint32 taught = 0;
 
         uint32 const classMask = player->GetClassMask();
         for (auto const& innate : GetInnateSpells())
@@ -605,9 +611,57 @@ namespace
                 continue;
 
             player->LearnSpell(spellId, false);
+            ++taught;
             if (record)
                 InsertRow(trans, player->GetGUID().GetCounter(), LOADOUT_ROW_SPELL, spellId, 0);
         }
+
+        return taught;
+    }
+
+    // Chromie keeps the tournament's clock, and she is already the voice that
+    // turns people away from a battleground door (Handlers/BattleGroundHandler.cpp),
+    // so she is the one who explains what just happened to a world-mode
+    // character's gear. Tournament characters have always lived by these rules
+    // and are told nothing.
+    uint32 constexpr ChromieEntry = 27915;
+    char const* const ChromieName = "Chromie";
+
+    void WhisperAsChromie(Player* player, std::string const& message)
+    {
+        WorldPacket data;
+        ObjectGuid const chromieGuid = ObjectGuid::Create<HighGuid::Unit>(ChromieEntry, 1);
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_MONSTER_WHISPER, LANG_UNIVERSAL, chromieGuid, player->GetGUID(), message,
+            0, ChromieName, player->GetName());
+        player->SendDirectMessage(&data);
+    }
+
+    void BriefWorldCharacter(Player* player, uint32 swapped, uint32 putAway, uint32 spells)
+    {
+        WorldSession const* session = player->GetSession();
+        if (!session || session->IsVirtualSession() || IsTournamentCharacter(player))
+            return;
+
+        WhisperAsChromie(player, "Welcome to the tournament. Everyone fights on the same footing in here, so I have taken care of your equipment.");
+
+        if (swapped || putAway)
+        {
+            std::string what = "You are wearing tournament gear for this match";
+            if (swapped)
+                what += Trinity::StringFormat(" - {} piece(s) of it", swapped);
+            if (putAway)
+                what += Trinity::StringFormat(", and {} thing(s) you were carrying are being kept aside", putAway);
+            what += ". Any enchants and gems you paid for came across with it.";
+            WhisperAsChromie(player, what);
+        }
+
+        WhisperAsChromie(player, "Everything of yours comes straight back the moment you leave - a win, a loss, a disconnect, a crash, it makes no difference. None of it is lost.");
+
+        if (spells)
+            WhisperAsChromie(player, "You also know how to eat, drink and bandage while you are here, whether or not you ever learned them. That knowledge leaves with the match.");
+
+        if (LoadoutConfig.BanConsumables)
+            WhisperAsChromie(player, "Nothing else out of your bags works in here: no potions, elixirs, food or grenades but the tournament's own, which Jazzik sells.");
     }
 
     // Puts one stashed item back: where it came from when that is free, anywhere
@@ -913,16 +967,25 @@ void ApplyBattlegroundLoadout(Player* player)
             StashOriginal(player, entry, trans);
     }
 
+    uint32 issued = 0;
     for (LoadoutEntry const& entry : entries)
-        IssueSubstitute(player, entry, trans, !transient);
+        if (IssueSubstitute(player, entry, trans, !transient))
+            ++issued;
 
-    GrantMatchSpells(player, trans, !transient);
+    uint32 const taught = GrantMatchSpells(player, trans, !transient);
 
     if (!transient)
     {
         player->SaveInventoryAndGoldToDB(trans);
         CharacterDatabase.CommitTransaction(trans);
         MarkActive(player->GetGUID(), true);
+
+        uint32 putAway = 0;
+        for (LoadoutEntry const& entry : entries)
+            if (entry.Original && !entry.Worn)
+                ++putAway;
+
+        BriefWorldCharacter(player, issued, putAway, taught);
     }
 
     TC_LOG_DEBUG("bg.battleground", "Tournament loadout: dressed {} on map {} ({} item(s) swapped).",
