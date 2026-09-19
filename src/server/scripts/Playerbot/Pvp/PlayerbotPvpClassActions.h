@@ -70,6 +70,23 @@ public:
     // is not attacking cannot growl, cannot hold threat and contributes
     // nothing, and the PvE tick had no way to command one at all.
     static void CommandPetAttack(Player* player, Unit* target);
+
+    // Health (food) or mana (drink) per five seconds that the free eat/drink
+    // fallback should restore to a bot of this level.
+    //
+    // A bot with something edible in its bags eats the real item and gets that
+    // item's own level-appropriate aura. A bot with nothing eats for free
+    // instead of standing there, and the two spells that pays for - 29073 "Eat"
+    // and 22734 "Drink" - carry flat level-65 amounts, 530 health and 700 mana
+    // per five seconds. Player::RegenerateHealth pays out two fifths of that
+    // every two-second tick, so on a low level bot whose whole pool is a few
+    // hundred points the first tick is the whole bar. That is what players were
+    // seeing in the open world: a wounded bot sits down and is instantly full.
+    //
+    // Shared rather than duplicated because the PvE manager and the PvP cast
+    // dispatcher both reach for this fallback, and a ladder kept in two places
+    // is a ladder that drifts.
+    static int32 FreeRefreshmentAmount(Player const* player, bool drink);
 };
 }
 

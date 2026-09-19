@@ -5370,6 +5370,21 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     }
     else if (itemTarget)
         castResult = player->CastSpell(CastSpellTargetArg(itemTarget), resolvedSpellId);
+    // The free eat/drink fallback restores what this bot's level is worth, not
+    // the flat level-65 amount the two spells carry - see
+    // PvpClassActions::FreeRefreshmentAmount. Overriding the base point rather
+    // than casting a different spell per tier keeps 29073/22734 as the single
+    // marker every HasAura/RemoveAura check in the bot state machines looks for.
+    //
+    // Last in the chain on purpose: this is the one cast that used to fall
+    // through to the plain unit-target call below, so nothing else moves.
+    else if (isFoodOrDrinkSpell)
+    {
+        CastSpellExtraArgs args(false);
+        args.AddSpellBP0(playerbot::PvpClassActions::FreeRefreshmentAmount(player,
+            resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK));
+        castResult = player->CastSpell(target, resolvedSpellId, args);
+    }
     else
         castResult = player->CastSpell(target, resolvedSpellId, false);
 
@@ -6123,6 +6138,45 @@ bool PvpClassActions::IssueFollowMovement(Player* player, Unit* target, float de
 void PvpClassActions::CommandPetAttack(Player* player, Unit* target)
 {
     CommandPetAttackTarget(player, target);
+}
+
+int32 PvpClassActions::FreeRefreshmentAmount(Player const* player, bool drink)
+{
+    struct RefreshmentTier
+    {
+        uint8 Level;
+        int32 Food;
+        int32 Drink;
+    };
+
+    // The vanilla food and drink ladders, read out of Spell.dbc rather than
+    // invented: Food 433/434/435/1127/1129/1131 and Drink 430/431/432/1133/
+    // 1135/1137 carry exactly these amounts at exactly these levels, and they
+    // are the buffs a player of that level would be eating anyway.
+    //
+    // The last row is the pair of values the two free spells already had, so a
+    // bot that genuinely is level 65 eats precisely what it ate before this
+    // existed. Everyone below it now eats what their own level is worth. The
+    // realm caps at 60, so that row only stops the ladder running off its end.
+    static constexpr RefreshmentTier kTiers[] =
+    {
+        {  1,  17,  42 },
+        { 15,  58, 104 },
+        { 25, 115, 174 },
+        { 35, 162, 249 },
+        { 45, 232, 332 },
+        { 55, 358, 489 },
+        { 65, 530, 700 },
+    };
+
+    uint8 const level = player ? player->GetLevel() : 1;
+
+    RefreshmentTier const* tier = &kTiers[0];
+    for (RefreshmentTier const& candidate : kTiers)
+        if (level >= candidate.Level)
+            tier = &candidate;
+
+    return drink ? tier->Drink : tier->Food;
 }
 
 bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& context)

@@ -954,6 +954,21 @@ namespace
         player->RemoveAurasDueToSpell(SPELL_PVE_OUT_OF_COMBAT_DRINK);
     }
 
+    // Eat or drink for free, at the amount this bot's level is entitled to.
+    //
+    // The two spells carry flat level-65 amounts, which on a low level bot is
+    // its entire health bar in the first regen tick - the reason the open world
+    // looked like bots healing instantly off one bite. Overriding the base
+    // point keeps the spell id itself unchanged, so every rest aura check in
+    // this file still recognises what the bot is doing.
+    // See PvpClassActions::FreeRefreshmentAmount for the ladder.
+    void CastFreeRefreshment(Player* bot, bool food)
+    {
+        CastSpellExtraArgs args(true);
+        args.AddSpellBP0(playerbot::PvpClassActions::FreeRefreshmentAmount(bot, !food));
+        bot->CastSpell(bot, food ? SPELL_PVE_OUT_OF_COMBAT_EAT : SPELL_PVE_OUT_OF_COMBAT_DRINK, args);
+    }
+
     Unit* ResolveAttackableByGuid(Player* bot, ObjectGuid const& guid)
     {
         if (guid.IsEmpty() || guid == bot->GetGUID())
@@ -16677,7 +16692,7 @@ namespace
                         if (MotionMaster* motionMaster = bot->GetMotionMaster())
                             motionMaster->Clear();
                         bot->StopMoving();
-                        bot->CastSpell(bot, needFood ? SPELL_PVE_OUT_OF_COMBAT_EAT : SPELL_PVE_OUT_OF_COMBAT_DRINK, true);
+                        CastFreeRefreshment(bot, needFood);
                     }
                 }
                 else
@@ -16686,7 +16701,7 @@ namespace
                     if (MotionMaster* motionMaster = bot->GetMotionMaster())
                         motionMaster->Clear();
                     bot->StopMoving();
-                    bot->CastSpell(bot, needFood ? SPELL_PVE_OUT_OF_COMBAT_EAT : SPELL_PVE_OUT_OF_COMBAT_DRINK, true);
+                    CastFreeRefreshment(bot, needFood);
                 }
             }
         }
