@@ -93,6 +93,16 @@ namespace
         bool ResetDuelCooldowns = true;
         bool ResetDuelHealthMana = true;
         uint32 WorldMaxHonorPoints = uint32(std::numeric_limits<int32>::max());
+        bool WorldPricesEnabled = false;
+        // ExtendedCost id the world hub vendors were built with -> honor it costs today.
+        std::unordered_map<uint32, uint32> WorldVendorHonor;
+        // Quest id -> Warchief's Socks its first objective asks for.
+        std::unordered_map<uint32, uint32> WorldQuestSocks;
+        // The text the two lists were parsed from, and a counter that moves when
+        // it does. The prices are applied where the vendor and quest caches are
+        // filled, so World has to know when a `.reload config` made them stale.
+        std::string WorldPriceText;
+        uint32 WorldPriceRevision = 0;
     };
 
     Settings Config;
@@ -154,6 +164,114 @@ namespace
                 ids.push_back(*first + offset);
         }
         return ids;
+    }
+
+    // "3006:200, 60007:1500" -> {{3006, 200}, {60007, 1500}}. Same trimming and
+    // the same "say what was dropped" rule as ParseIdList. A price of zero is
+    // refused rather than stored: for a vendor tier it would mean free, and for
+    // a quest it would leave an objective asking for none of an item.
+    std::unordered_map<uint32, uint32> ParsePairList(char const* key, std::string const& raw)
+    {
+        std::unordered_map<uint32, uint32> pairs;
+        for (std::string_view token : Trinity::Tokenize(raw, ',', false))
+        {
+            token = Trim(token);
+            if (token.empty())
+                continue;
+
+            std::size_t const colon = token.find(':');
+            Optional<uint32> const id = colon == std::string_view::npos ? Optional<uint32>() : Trinity::StringTo<uint32>(Trim(token.substr(0, colon)));
+            Optional<uint32> const value = colon == std::string_view::npos ? Optional<uint32>() : Trinity::StringTo<uint32>(Trim(token.substr(colon + 1)));
+            if (!id || !value || !*id)
+            {
+                TC_LOG_ERROR("server.loading", "{}: ignoring '{}', expected id:price.", key, token);
+                continue;
+            }
+
+            if (!*value)
+            {
+                TC_LOG_ERROR("server.loading", "{}: ignoring '{}', zero is not a price.", key, token);
+                continue;
+            }
+
+            pairs[*id] = *value;
+        }
+        return pairs;
+    }
+
+    // Every ItemExtendedCost row that asks for honor and nothing else, indexed
+    // by the honor it asks for. This is the whole reason world prices can move
+    // without a client patch: the honor number lives in the DBC, so re-pricing a
+    // tier means finding another row that already carries the wanted number. The
+    // lowest id wins, which prefers the stock rows the tournament vendors
+    // themselves use over anything added later for the same number.
+    //
+    // Built once. The DBC store is read-only after startup, and everything here
+    // runs on the world thread (ObjectMgr::LoadVendors, at startup or from
+    // `.reload`), never under a map tick.
+    std::unordered_map<uint32, uint32> HonorOnlyCosts;
+    bool HonorOnlyCostsBuilt = false;
+
+    void BuildHonorOnlyCosts()
+    {
+        HonorOnlyCostsBuilt = true;
+        for (uint32 i = 0; i < sItemExtendedCostStore.GetNumRows(); ++i)
+        {
+            ItemExtendedCostEntry const* cost = sItemExtendedCostStore.LookupEntry(i);
+            if (!cost || !cost->HonorPoints || cost->ArenaPoints || cost->ArenaBracket || cost->RequiredArenaRating)
+                continue;
+
+            bool wantsAnItem = false;
+            for (uint8 slot = 0; slot < MAX_ITEM_EXTENDED_COST_REQUIREMENTS; ++slot)
+                if (cost->ItemID[slot])
+                    wantsAnItem = true;
+            if (wantsAnItem)
+                continue;
+
+            auto const placed = HonorOnlyCosts.try_emplace(cost->HonorPoints, cost->ID);
+            if (!placed.second && cost->ID < placed.first->second)
+                placed.first->second = cost->ID;
+        }
+    }
+
+    // Centurion.WorldPrices.VendorHonor resolved against that index: the id a
+    // world hub vendor row was built with -> the id it is served as. Built on
+    // first use rather than in LoadConfig, because at startup the config is read
+    // before the DBCs are loaded and there would be nothing to search.
+    std::unordered_map<uint32, uint32> ResolvedVendorCosts;
+    uint32 ResolvedVendorCostRevision = 0;
+
+    void ResolveVendorCosts()
+    {
+        ResolvedVendorCosts.clear();
+        ResolvedVendorCostRevision = Config.WorldPriceRevision;
+
+        if (!Config.WorldPricesEnabled || Config.WorldVendorHonor.empty())
+            return;
+
+        if (!HonorOnlyCostsBuilt)
+            BuildHonorOnlyCosts();
+
+        // Plain locals rather than a structured binding: the log macros the loop
+        // body uses take their arguments by lambda capture, which C++17 refuses
+        // for a binding name and the Linux build would reject.
+        for (auto const& tier : Config.WorldVendorHonor)
+        {
+            uint32 const costId = tier.first;
+            uint32 const honor = tier.second;
+
+            auto const row = HonorOnlyCosts.find(honor);
+            if (row == HonorOnlyCosts.end())
+            {
+                TC_LOG_ERROR("server.loading", "Centurion.WorldPrices.VendorHonor: no ItemExtendedCost row asks for exactly {} honor and nothing else, "
+                    "so tier {} keeps the price it shipped with. An honor amount cannot be invented at runtime - add the row to ItemExtendedCost.dbc "
+                    "(server AND client) or pick a number that already has one.", honor, costId);
+                continue;
+            }
+
+            ResolvedVendorCosts[costId] = row->second;
+            TC_LOG_INFO("server.loading", "Centurion world prices: vendor tier {} charges {} honor (ItemExtendedCost {}).", costId, honor, row->second);
+        }
     }
 
     bool IsPlainPlayer(Player const* player)
@@ -323,6 +441,23 @@ void LoadConfig()
         else
             TC_LOG_ERROR("server.loading", "Centurion.Tournament.HomeLocation: '{}' is not a valid \"map x y z o\" position.", rawHome);
     }
+
+    // What the world hub charges. Its own switch, not Tournament.Enable's: the
+    // prices are world-character rules, and the owner re-tunes them far more
+    // often than anything else here. Off = the vendor rows and quest_template
+    // speak for themselves, which is the economy the hub shipped with.
+    loaded.WorldPricesEnabled = sConfigMgr->GetBoolDefault("Centurion.WorldPrices.Enable", false);
+    std::string const rawVendorHonor = sConfigMgr->GetStringDefault("Centurion.WorldPrices.VendorHonor", "");
+    std::string const rawQuestSocks = sConfigMgr->GetStringDefault("Centurion.WorldPrices.QuestSocks", "");
+    loaded.WorldVendorHonor = ParsePairList("Centurion.WorldPrices.VendorHonor", rawVendorHonor);
+    loaded.WorldQuestSocks = ParsePairList("Centurion.WorldPrices.QuestSocks", rawQuestSocks);
+
+    loaded.WorldPriceText = (loaded.WorldPricesEnabled ? "1|" : "0|") + rawVendorHonor + "|" + rawQuestSocks;
+    loaded.WorldPriceRevision = Config.WorldPriceRevision + (loaded.WorldPriceText != Config.WorldPriceText ? 1 : 0);
+
+    if (loaded.WorldPricesEnabled)
+        TC_LOG_INFO("server.loading", "Centurion world prices enabled: {} vendor tier(s), {} quest price(s).",
+            loaded.WorldVendorHonor.size(), loaded.WorldQuestSocks.size());
 
     if (loaded.Enabled)
     {
@@ -1440,6 +1575,34 @@ uint32 GetWorldMaxHonorPoints(Player const* player)
         return 0;
 
     return Config.WorldMaxHonorPoints;
+}
+
+uint32 GetWorldVendorCost(uint32 extendedCost)
+{
+    // A tier the list does not name, a gold price, or the feature switched off:
+    // the row is served exactly as the database wrote it.
+    if (!extendedCost)
+        return extendedCost;
+
+    if (ResolvedVendorCostRevision != Config.WorldPriceRevision)
+        ResolveVendorCosts();
+
+    auto const itr = ResolvedVendorCosts.find(extendedCost);
+    return itr != ResolvedVendorCosts.end() ? itr->second : extendedCost;
+}
+
+uint32 GetWorldQuestItemCount(uint32 questId, uint32 dbValue)
+{
+    if (!Config.WorldPricesEnabled)
+        return dbValue;
+
+    auto const itr = Config.WorldQuestSocks.find(questId);
+    return itr != Config.WorldQuestSocks.end() ? itr->second : dbValue;
+}
+
+uint32 GetWorldPriceRevision()
+{
+    return Config.WorldPriceRevision;
 }
 
 bool IsInTournamentMatch(Player const* player)

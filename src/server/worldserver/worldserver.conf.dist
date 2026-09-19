@@ -5312,6 +5312,52 @@ Centurion.Tournament.BgConsumables = "200026,200030,200041,200991,200992,203640,
 Centurion.Tournament.BgStarterVendors = "Starter %"
 
 #
+#    Centurion.WorldPrices.Enable
+#        Description: What the world-mode copies of the hub charge, and what the world-mode
+#                     teleport quests cost, are read from the two lists below instead of from
+#                     `npc_vendor` and `quest_template`. Switching this off puts the database
+#                     back in charge with no other change, so an economy can be tried and
+#                     taken back with one key and a `.reload config`. Changing any of the
+#                     three reloads `npc_vendor` and `quest_template` by itself.
+#        Default:     0 - (Disabled, the database prices apply)
+#
+#    Centurion.WorldPrices.VendorHonor
+#        Description: "extendedcost:honor, ..." - what a world hub vendor tier costs today.
+#                     The key is the ItemExtendedCost id the world hub's `npc_vendor` rows
+#                     were built with, one per tier, and the value is the honor a world
+#                     character pays for anything on that tier.
+#
+#                     An honor amount lives in ItemExtendedCost.dbc, which the client reads
+#                     for itself, so a price cannot simply be invented at startup. What
+#                     happens instead is a swap: the tier is served as whichever row already
+#                     asks for exactly that much honor and nothing else (lowest id wins).
+#                     Re-pricing to a number some row carries is therefore a config edit and
+#                     nothing more - no client patch, no rebuild. A number no row carries is
+#                     refused with an error and that tier keeps the price it shipped with, so
+#                     a typo cannot make a shop free or unbuyable. Centurion ships a ladder of
+#                     honor-only rows (3100 and up) to make most round numbers work.
+#
+#                     Only the ids named here are touched, so the tournament vendors - which
+#                     use their own cost rows - are never affected.
+#        Example:     "3004:20,3005:100,3006:200,3007:400,3008:600,3009:1000,3010:1500,
+#                      3011:1800,3012:3000" - the Centurion world hub at twice the
+#                     tournament price, with the starter tier flat at 100.
+#        Default:     "" - (no tier is re-priced)
+#
+#    Centurion.WorldPrices.QuestSocks
+#        Description: "quest:count, ..." - what a quest's first objective asks for, overriding
+#                     quest_template.RequiredItemCount1. Written for the world hub's teleport
+#                     chain, which is paid for in Warchief's Socks (item 40752, the honor
+#                     mirror), but it will re-price the first objective of any quest.
+#                     A quest that is not listed is left alone.
+#        Example:     "60002:1500,60007:1500,60004:3000,60005:8000,60006:130000"
+#        Default:     "" - (no quest is re-priced)
+
+Centurion.WorldPrices.Enable = 0
+Centurion.WorldPrices.VendorHonor = ""
+Centurion.WorldPrices.QuestSocks = ""
+
+#
 #    Centurion.CharacterSelect.Reorder
 #        Description: Players arrange their own character list. The order is saved in the
 #                     characters table `character_select_order` (the realm keeps creation order

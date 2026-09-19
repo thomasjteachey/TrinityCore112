@@ -38,6 +38,7 @@
 #include "LootMgr.h"
 #include "Mail.h"
 #include "MapManager.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "MotionMaster.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
@@ -4892,6 +4893,28 @@ void ObjectMgr::LoadQuests()
         _questTemplates.emplace(std::piecewise_construct, std::forward_as_tuple(questId), std::forward_as_tuple(fields));
     } while (result->NextRow());
 
+    // Centurion: the world hub's teleport chain is paid for in Warchief's Socks,
+    // and what each step costs is a config knob (Centurion.WorldPrices.QuestSocks,
+    // Miscellaneous/TournamentMode.h) so the economy can be re-tuned with a
+    // `.reload config` instead of a data migration. Applied here, before any
+    // quest packet is cached, so the log entry, the query response and the
+    // turn-in all ask for the same number.
+    for (auto& questPair : _questTemplates)
+    {
+        uint32 const questId = questPair.first;
+        Quest& quest = questPair.second;
+        if (!quest.RequiredItemId[0])
+            continue;
+
+        uint32 const priced = Tournament::GetWorldQuestItemCount(questId, quest.RequiredItemCount[0]);
+        if (priced != quest.RequiredItemCount[0])
+        {
+            TC_LOG_INFO("server.loading", "Centurion world prices: quest {} asks for {} of item {} instead of {}.",
+                questId, priced, quest.RequiredItemId[0], quest.RequiredItemCount[0]);
+            quest.RequiredItemCount[0] = priced;
+        }
+    }
+
     std::unordered_map<uint32, uint32> usedMailTemplates;
 
     struct QuestLoaderHelper
@@ -9702,7 +9725,11 @@ uint32 ObjectMgr::LoadReferenceVendor(int32 vendor, int32 item, std::set<uint32>
         {
             int32  maxcount     = fields[1].GetUInt8();
             uint32 incrtime     = fields[2].GetUInt32();
-            uint32 ExtendedCost = fields[3].GetUInt32();
+            // Centurion: a world hub tier may be served at a different price
+            // than it shipped with (Miscellaneous/TournamentMode.h). Swapped
+            // here, before the row is validated and cached, so the packet, the
+            // purchase check, the charge and the refund all see one id.
+            uint32 ExtendedCost = Tournament::GetWorldVendorCost(fields[3].GetUInt32());
 
             if (!IsVendorItemValid(vendor, item_id, maxcount, incrtime, ExtendedCost, nullptr, skip_vendors))
                 continue;
@@ -9752,7 +9779,8 @@ void ObjectMgr::LoadVendors()
         {
             uint32 maxcount     = fields[2].GetUInt8();
             uint32 incrtime     = fields[3].GetUInt32();
-            uint32 ExtendedCost = fields[4].GetUInt32();
+            // Centurion world prices, as in LoadReferenceVendor above.
+            uint32 ExtendedCost = Tournament::GetWorldVendorCost(fields[4].GetUInt32());
 
             if (!IsVendorItemValid(entry, item_id, maxcount, incrtime, ExtendedCost, nullptr, &skip_vendors))
                 continue;

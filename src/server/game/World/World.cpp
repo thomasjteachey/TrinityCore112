@@ -1606,7 +1606,20 @@ void World::LoadConfigSettings(bool reload)
 
     // World-mode vs tournament-mode characters (Miscellaneous/TournamentMode.h).
     // Its lists live in that module; reloading here keeps `.reload config` live.
+    uint32 const worldPriceRevision = Tournament::GetWorldPriceRevision();
     Tournament::LoadConfig();
+
+    // World hub prices are stamped into the vendor and quest caches as those are
+    // filled, so a re-tune only reaches players once they are rebuilt. Doing it
+    // here is what makes `.reload config` alone enough to move the economy; a
+    // reload that left the prices alone costs nothing.
+    if (reload && worldPriceRevision != Tournament::GetWorldPriceRevision())
+    {
+        TC_LOG_INFO("server.loading", "Centurion.WorldPrices.* changed: reloading `npc_vendor` and `quest_template`.");
+        sObjectMgr->LoadVendors();
+        sObjectMgr->LoadQuests();
+        sObjectMgr->InitializeQueriesData(QUERY_DATA_QUESTS);
+    }
 
     // The world cooldowns a character keeps while it fights a battleground or an
     // arena (Miscellaneous/CooldownStash.h).

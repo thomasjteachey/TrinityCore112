@@ -407,6 +407,39 @@ namespace Tournament
     // (a tournament character, modes off, or the key set to 0).
     uint32 GetWorldMaxHonorPoints(Player const* player);
 
+    // --- what the world hub charges (Centurion.WorldPrices.*) -------------
+
+    // World characters shop at a clone of the tournament hub, priced as a
+    // multiple of what a tournament character pays. The multiple is deliberately
+    // NOT baked into the vendor rows: `npc_vendor.ExtendedCost` keeps the ids
+    // the world hub was built with (3004-3012, one per tier), and
+    // Centurion.WorldPrices.VendorHonor says what each of those tiers costs
+    // today. An ItemExtendedCost row is a DBC record, so the honor number itself
+    // cannot be invented at runtime - what this does instead is swap the id for
+    // another row that already asks for exactly that much honor and nothing
+    // else. Re-tuning is then a config edit plus `.reload config`, with no
+    // client patch, as long as some row carries the wanted number; the realm
+    // ships a ladder of them for that purpose.
+    //
+    // ObjectMgr::LoadVendors calls this as it fills the vendor cache, so the
+    // vendor list packet, the affordability check, the charge and the refund
+    // record all quote one id and nothing downstream knows any of this happened.
+    // With Centurion.WorldPrices.Enable off the id is handed straight back and
+    // the DBC rows speak for themselves.
+    uint32 GetWorldVendorCost(uint32 extendedCost);
+
+    // The price in Warchief's Socks (item 40752, the honor mirror) of a world
+    // hub teleport quest, from Centurion.WorldPrices.QuestSocks. Overrides the
+    // first objective's RequiredItemCount; returns dbValue for a quest that is
+    // not listed, or when the feature is off. ObjectMgr::LoadQuests applies it
+    // before anything caches a quest packet, so the log, the query response and
+    // the turn-in all agree on the number.
+    uint32 GetWorldQuestItemCount(uint32 questId, uint32 dbValue);
+
+    // Bumped whenever a `.reload config` changes either list, so World knows to
+    // rebuild the vendor and quest caches that hold the applied values.
+    uint32 GetWorldPriceRevision();
+
     // --- all characters ---------------------------------------------------
 
     // Battlegrounds, arenas and duels in progress (Centurion.Pvp.WaiveReagentsAndAmmo):
