@@ -523,10 +523,21 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPacket &recvData)
     TC_LOG_DEBUG("bg.battleground", "CMSG_BATTLEFIELD_PORT {} ArenaType: {}, Unk: {}, BgType: {}, Action: {}.",
         GetPlayerInfo(), type, unk2, bgTypeId_, action);
 
-    // expected bracket entry
+    // The bracket is wanted for one thing only - re-running the queue when
+    // somebody leaves it - and it is looked up against the map this match
+    // ROLLED ONTO, which is not the map the queue bracketed the player against.
+    // "All Arenas" hands out one of thirteen arenas and only the pool's own
+    // template is guaranteed to carry a band for every level; Nefarian's Arena
+    // shipped with a single 60-69 row, so a level 59 pair who rolled it landed
+    // here with no band at all. Returning on that is a dead "Enter Battle"
+    // button: no packet, no message, and twenty seconds later the invite expires
+    // as though nobody had pressed it.
+    //
+    // The match is already formed with this player in it, so a map that cannot
+    // name their level is no reason to refuse them. Fall back to the bracket the
+    // match itself was created with, which is the one the queue used.
     PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketByLevel(bg->GetMapId(), _player->GetLevel());
-    if (!bracketEntry)
-        return;
+    BattlegroundBracketId const bracketId = bracketEntry ? bracketEntry->GetBracketId() : bg->GetBracketId();
 
     bool const artifactEquipped = HasArtifactEquipment(_player);
 
@@ -641,7 +652,7 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPacket &recvData)
         bgQueue.RemovePlayer(_player->GetGUID(), true);
         // player left queue, we should update it - do not update Arena Queue
         if (!ginfo.ArenaType)
-            sBattlegroundMgr->ScheduleQueueUpdate(ginfo.ArenaMatchmakerRating, ginfo.ArenaType, bgQueueTypeId, bgTypeId, bracketEntry->GetBracketId());
+            sBattlegroundMgr->ScheduleQueueUpdate(ginfo.ArenaMatchmakerRating, ginfo.ArenaType, bgQueueTypeId, bgTypeId, bracketId);
         SendPacket(&data);
         TC_LOG_DEBUG("bg.battleground", "Battleground: player {} {} left queue for bgtype {}, queue type {}.", _player->GetName(), _player->GetGUID().ToString(), bg->GetTypeID(), bgQueueTypeId);
 
