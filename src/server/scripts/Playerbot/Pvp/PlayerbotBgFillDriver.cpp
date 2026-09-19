@@ -69,7 +69,7 @@ struct BgFillConfig
     std::set<uint32> battlegroundTypes;
     uint32 queueWaitMs = 15 * IN_MILLISECONDS;
     bool skirmishArenasEnabled = true;
-    uint32 skirmishArenaQueueWaitMs = 15 * IN_MILLISECONDS;
+    uint32 skirmishArenaQueueWaitMs = 0;
     uint32 maxPerTeam = 15;
     uint32 clonesPerTick = 2;
     bool useOfflineBots = true;
@@ -730,7 +730,11 @@ void WakeQueuesForWaitingPlayers(uint32 nowMs)
                         (void)playerInfo;
                         Player const* player = ObjectAccessor::FindConnectedPlayer(playerGuid);
                         WorldSession const* session = player ? player->GetSession() : nullptr;
-                        if (session && !session->IsVirtualSession())
+                        // Somebody who switched the arena toggle off is waiting
+                        // for people, not for this; waking the bracket for them
+                        // would only have the queue decline once a tick.
+                        if (session && !session->IsVirtualSession() &&
+                            !(arenaType && player->HasArenaBotFillOptOut()))
                         {
                             wake = true;
                             break;
@@ -796,7 +800,7 @@ void PlayerbotBgFillDriver::LoadConfig()
     config.queueWaitMs = uint32(std::max<int32>(sConfigMgr->GetIntDefault("Playerbot.BgFill.QueueWaitSeconds", 15), 0)) * IN_MILLISECONDS;
     config.skirmishArenasEnabled = sConfigMgr->GetBoolDefault("Playerbot.BgFill.SkirmishArena.Enable", true);
     config.skirmishArenaQueueWaitMs = uint32(std::max<int32>(
-        sConfigMgr->GetIntDefault("Playerbot.BgFill.SkirmishArena.QueueWaitSeconds", 15), 0)) * IN_MILLISECONDS;
+        sConfigMgr->GetIntDefault("Playerbot.BgFill.SkirmishArena.QueueWaitSeconds", 0), 0)) * IN_MILLISECONDS;
     config.maxPerTeam = uint32(std::max<int32>(sConfigMgr->GetIntDefault("Playerbot.BgFill.MaxPerTeam", 15), 0));
     config.clonesPerTick = uint32(std::max<int32>(sConfigMgr->GetIntDefault("Playerbot.BgFill.ClonesPerTick", 2), 1));
     config.useOfflineBots = sConfigMgr->GetBoolDefault("Playerbot.BgFill.UseOfflineBots", true);

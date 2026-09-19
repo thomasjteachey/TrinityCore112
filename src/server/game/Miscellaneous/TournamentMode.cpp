@@ -17,6 +17,7 @@
 
 #include "Miscellaneous/TournamentMode.h"
 #include "Battleground.h"
+#include "BattlegroundMgr.h"
 #include "CharacterCache.h"
 #include "Chat.h"
 #include "Config.h"
@@ -645,6 +646,19 @@ void SendGurubashiChestState(Player* player)
     SendAddonLine(player, Trinity::StringFormat("CCGAME\tGURUCHEST:{}", player->HasGurubashiChestOptOut() ? 0 : 1));
 }
 
+void SendArenaBotFillState(Player* player)
+{
+    if (!player || !player->GetSession() || player->GetSession()->IsVirtualSession())
+        return;
+
+    // A realm that never fills skirmishes has nothing to offer here, and an
+    // unanswered request leaves the box hidden rather than lying about it.
+    if (!sBattlegroundMgr->IsBotFillSkirmishArenaEnabled())
+        return;
+
+    SendAddonLine(player, Trinity::StringFormat("CCGAME\tARENABOTS:{}", player->HasArenaBotFillOptOut() ? 0 : 1));
+}
+
 namespace
 {
     // Written from the world thread (the hourly check, the despawn) and from the
@@ -697,6 +711,22 @@ bool HandleAddonRequest(Player* sender, uint32 lang, std::string const& msg)
             sender->SetGurubashiChestOptOut(argument == ":0");
 
         SendGurubashiChestState(sender);
+        return true;
+    }
+
+    // The arena bot-fill toggle (Battlegrounds tab): whether a skirmish queue
+    // this character is waiting in may be started as a clone-filled match.
+    // Also realm-agnostic, and answered only where the realm fills skirmishes
+    // at all. The switch is free at any time - it is read when a match is about
+    // to be made, so flipping it mid-queue simply decides the next pop.
+    static constexpr std::string_view ArenaBotsRequest = "CCGAMEREQ\tARENABOTS";
+    if (StringStartsWith(msg, ArenaBotsRequest))
+    {
+        std::string_view const argument = std::string_view(msg).substr(ArenaBotsRequest.size());
+        if (argument == ":1" || argument == ":0")
+            sender->SetArenaBotFillOptOut(argument == ":0");
+
+        SendArenaBotFillState(sender);
         return true;
     }
 

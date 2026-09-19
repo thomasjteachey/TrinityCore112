@@ -169,9 +169,12 @@ Playerbot.BgFill.SkirmishArena.Enable = 1
 #    Playerbot.BgFill.SkirmishArena.QueueWaitSeconds
 #        Description: How long a real player must wait in an unrated arena queue before a
 #                     clone-filled skirmish is created. Independent of the battleground wait.
-#        Default:     15
+#                     0 pops the skirmish as soon as the queue is examined, which is still
+#                     after the stock rules have had their go at forming a match out of the
+#                     people already waiting.
+#        Default:     0
 
-Playerbot.BgFill.SkirmishArena.QueueWaitSeconds = 15
+Playerbot.BgFill.SkirmishArena.QueueWaitSeconds = 0
 
 #    Playerbot.BgFill.MaxPerTeam
 #        Description: Team size the clones fill up to, capped by the battleground's own maximum

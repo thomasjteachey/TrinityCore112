@@ -116,10 +116,15 @@ namespace Tournament
     // keeps matching the TQUEUE line whole. "CCGAMEREQ\tGURUCHEST[:0|1]"
     // is answered "CCGAME\tGURUCHEST:<on>": whether the hourly Gurubashi chest
     // counts the character and pulls it into the Battle Ring (every realm).
+    // "CCGAMEREQ\tARENABOTS[:0|1]" is answered "CCGAME\tARENABOTS:<on>": whether
+    // an unrated arena queue this character is waiting in may be popped as a
+    // clone-filled skirmish. A realm that does not fill skirmishes answers
+    // nothing, so that box stays hidden too.
     // Returns true when the message was one of these (the caller drops it).
     bool HandleAddonRequest(Player* sender, uint32 lang, std::string const& msg);
     void SendQueueState(Player* player);
     void SendGurubashiChestState(Player* player);
+    void SendArenaBotFillState(Player* player);
 
     // The hourly Gurubashi chest's clock, shown beside that toggle. The chest
     // event (scripts/Custom/custom_gurubashi_arena.cpp) writes it - game/ never

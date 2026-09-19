@@ -56,6 +56,32 @@ bool GroupHasRealPlayerInvitee(GroupQueueInfo const* ginfo)
     return false;
 }
 
+// The Battlegrounds tab's "Arena bots" box, read for a whole group. An arena
+// group IS the team, so one member's refusal speaks for all of it: seating the
+// group would hand everyone in it the clone-filled match that member said no
+// to. Bots in the group have no say - they are the fill.
+bool GroupAllowsArenaBotFill(GroupQueueInfo const* ginfo)
+{
+    if (!ginfo)
+        return false;
+
+    for (auto const& playerEntry : ginfo->Players)
+    {
+        Player const* player = ObjectAccessor::FindConnectedPlayer(playerEntry.first);
+        if (!player)
+            continue;
+
+        WorldSession const* session = player->GetSession();
+        if (!session || session->IsVirtualSession() || session->IsTransientPlayerSession())
+            continue;
+
+        if (player->HasArenaBotFillOptOut())
+            return false;
+    }
+
+    return true;
+}
+
 bool GroupHasBotInvitee(GroupQueueInfo const* ginfo)
 {
     if (!ginfo)
@@ -1126,6 +1152,12 @@ bool BattlegroundQueue::TryStartBotFilledMatch(BattlegroundTypeId bgTypeId, PvPD
         {
             if (ginfo->IsInvitedToBGInstanceGUID || ginfo->IsRated || !InActivePool(ginfo) ||
                 (arenaType && ginfo->ArenaType != arenaType) || !GroupHasRealPlayerInvitee(ginfo))
+                continue;
+
+            // Arenas only, and only where somebody asked to be left out: they
+            // keep waiting for people the way the stock queue would, while the
+            // rest of the bracket is seated around them.
+            if (arenaType && !GroupAllowsArenaBotFill(ginfo))
                 continue;
 
             waiting.push_back(ginfo);

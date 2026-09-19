@@ -480,6 +480,7 @@ enum PlayerExtraFlags
     PLAYER_EXTRA_TOURNAMENT_MODE            = 0x1000,       // created as a tournament (Legionnaire+) character
     PLAYER_EXTRA_TOURNAMENT_QUEUE           = 0x2000,       // world character opted into the tournament battleground queue
     PLAYER_EXTRA_GURUBASHI_CHEST_OPT_OUT    = 0x4000,       // not counted for, nor pulled into the ring by, the hourly Gurubashi chest
+    PLAYER_EXTRA_ARENA_BOT_FILL_OPT_OUT     = 0x8000,       // no clone-filled arena skirmish is ever started for this character's queue
 };
 
 // 2^n values
@@ -1073,6 +1074,8 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void SetTournamentQueueFlag(bool on) { if (on) m_ExtraFlags |= PLAYER_EXTRA_TOURNAMENT_QUEUE; else m_ExtraFlags &= ~PLAYER_EXTRA_TOURNAMENT_QUEUE; }
         bool HasGurubashiChestOptOut() const { return (m_ExtraFlags & PLAYER_EXTRA_GURUBASHI_CHEST_OPT_OUT) != 0; }
         void SetGurubashiChestOptOut(bool on) { if (on) m_ExtraFlags |= PLAYER_EXTRA_GURUBASHI_CHEST_OPT_OUT; else m_ExtraFlags &= ~PLAYER_EXTRA_GURUBASHI_CHEST_OPT_OUT; }
+        bool HasArenaBotFillOptOut() const { return (m_ExtraFlags & PLAYER_EXTRA_ARENA_BOT_FILL_OPT_OUT) != 0; }
+        void SetArenaBotFillOptOut(bool on) { if (on) m_ExtraFlags |= PLAYER_EXTRA_ARENA_BOT_FILL_OPT_OUT; else m_ExtraFlags &= ~PLAYER_EXTRA_ARENA_BOT_FILL_OPT_OUT; }
 
         uint32 GetXP() const { return GetUInt32Value(PLAYER_XP); }
         uint32 GetXPForNextLevel() const { return GetUInt32Value(PLAYER_NEXT_LEVEL_XP); }

@@ -140,11 +140,15 @@ class TC_GAME_API BattlegroundMgr
             std::set<uint32> battlegroundTypes;
             uint32 queueWaitMs = 0;
             bool skirmishArenasEnabled = false;
-            uint32 skirmishArenaQueueWaitMs = 15 * IN_MILLISECONDS;
+            uint32 skirmishArenaQueueWaitMs = 0;
         };
         void SetBotFillPolicy(BotFillPolicy policy) { _botFillPolicy = std::move(policy); }
         bool IsBotFillBattleground(BattlegroundTypeId bgTypeId) const;
         bool IsBotFillSkirmishArena(uint8 arenaType) const;
+        // Without an arena size: whether this realm fills skirmishes at all,
+        // which is what decides if the Battlegrounds tab offers the "Arena
+        // bots" toggle. IsBotFillSkirmishArena answers for one size.
+        bool IsBotFillSkirmishArenaEnabled() const { return _botFillPolicy.enabled && _botFillPolicy.skirmishArenasEnabled; }
         uint32 GetBotFillQueueWaitMs(uint8 arenaType = 0) const
         {
             return arenaType ? _botFillPolicy.skirmishArenaQueueWaitMs : _botFillPolicy.queueWaitMs;
