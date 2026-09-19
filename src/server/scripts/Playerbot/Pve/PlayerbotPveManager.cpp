@@ -1008,18 +1008,43 @@ namespace
         return g_PendingSummonsByBotGuid.find(botGuid.GetRawValue()) != g_PendingSummonsByBotGuid.end();
     }
 
+    // What the creature IS, leaving aside how it is behaving this second.
+    //
     // Training and target dummies are attackable and level-appropriate but
-    // effectively immortal: a bot that picks one attacks it until the end of
-    // time. The many variants (classic engineering dummies, test dummies, the
-    // wotlk trainer dummies) share no single template flag, but they all carry
-    // the name, and the scripted ones additionally sit perma-stunned.
-    bool IsTargetDummyCreature(Creature const* creature)
+    // effectively immortal - npc_training_dummy zeroes every hit - so a bot that
+    // picks one attacks it until the end of time. The variants share no single
+    // template flag, so three signals, any of which is conclusive:
+    //
+    //   Name     - the stock dummies ("Training Dummy", "Target Dummy").
+    //   Title    - the DB `subname`, which is where a dummy given a PERSONAL
+    //              name keeps the word: Centurion's hub dummies are "Xabt"
+    //              <Target Dummy>, and matching on Name alone did not see them.
+    //              That is the bug this list exists for.
+    //   ScriptID - the script that makes it a dummy at all, and the one signal
+    //              that cannot be renamed out from under us.
+    bool IsTargetDummyByIdentity(Creature const* creature)
     {
-        if (creature->HasUnitFlag(UNIT_FLAG_STUNNED))
+        CreatureTemplate const* proto = creature->GetCreatureTemplate();
+        if (!proto)
+            return false;
+
+        if (proto->Name.find("Dummy") != std::string::npos ||
+            proto->Title.find("Dummy") != std::string::npos)
             return true;
 
-        CreatureTemplate const* proto = creature->GetCreatureTemplate();
-        return proto && proto->Name.find("Dummy") != std::string::npos;
+        return sObjectMgr->GetScriptName(proto->ScriptID) == "npc_training_dummy";
+    }
+
+    // The same question for a target the bot is merely CONSIDERING, where the
+    // scripted dummies' perma-stun is one more cheap hint and a false positive
+    // costs a single tick.
+    //
+    // Never ask this about a victim the bot is already fighting: a bot's own
+    // crowd control raises UNIT_FLAG_STUNNED on its target, so Cheap Shot or
+    // Hammer of Justice would read back as proof it had picked a dummy.
+    bool IsTargetDummyCreature(Creature const* creature)
+    {
+        return creature->HasUnitFlag(UNIT_FLAG_STUNNED) || IsTargetDummyByIdentity(creature);
     }
 
     // Zones no bot should ever grind or shop in even when their spawns form
@@ -2627,9 +2652,10 @@ namespace
             // yards on a training dummy. Screened here as well as at the
             // companion path because this one feeds on itself: pack-assist reads
             // another bot's victim, so a single bad pick propagates through the
-            // fleet.
+            // fleet. By identity, for the same reason as there - an ally's stun
+            // is not evidence of a dummy.
             if (Creature const* foeCreature = foe->ToCreature())
-                if (IsTargetDummyCreature(foeCreature))
+                if (IsTargetDummyByIdentity(foeCreature))
                     continue;
 
             // Assist onto the PERSON, not their pet. Resolved before the two
@@ -14996,9 +15022,10 @@ namespace
 
             // Assisting a master who is beating on a training dummy is how a bot
             // ends up in a fight that cannot end - the dummy is never anyone's
-            // real victim, it is target practice. Same screen the grind uses.
+            // real victim, it is target practice. By name, not by the stun flag:
+            // the master's own crowd control would otherwise hide a real mob.
             if (Creature const* candidateCreature = candidate->ToCreature())
-                if (IsTargetDummyCreature(candidateCreature))
+                if (IsTargetDummyByIdentity(candidateCreature))
                     return;
 
             float const distance = bot->GetDistance(candidate);
@@ -17196,8 +17223,12 @@ namespace
         // until it logs out. Checked on the resolved victim rather than only at
         // selection so a bot already stuck on one recovers on its next tick,
         // without waiting for a restart.
+        //
+        // BY IDENTITY. This one judges a victim, not a candidate, and the stun
+        // half of the fuller test is set by the bot's own opener - see
+        // IsTargetDummyByIdentity.
         if (Creature const* targetCreature = target ? target->ToCreature() : nullptr)
-            if (IsTargetDummyCreature(targetCreature))
+            if (IsTargetDummyByIdentity(targetCreature))
             {
                 MarkRecentBadTarget(state, target->GetGUID());
                 DisengagePveCombat(bot, state);
