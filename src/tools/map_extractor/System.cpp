@@ -1163,7 +1163,30 @@ void LoadLocaleMPQFiles(int const locale)
 
         fileName = Trinity::StringFormat("{}/Data/{}/patch-{}{}.MPQ", input_path, langs[locale], langs[locale], ext);
         if (boost::filesystem::exists(fileName))
+        {
+            printf("Loading archive patch-%s%s.MPQ\n", langs[locale], ext.c_str());
             new MPQArchive(fileName.c_str());
+        }
+    }
+
+    // Custom lettered locale patches: patch-<locale>-A.MPQ ... -Z.MPQ, after
+    // the numeric ones so they win override priority.
+    //
+    // LoadCommonMPQFiles and vmap4_extractor's scan_patches both already do
+    // this for the archives beside them; only the locale directory was still
+    // numeric-only, and that asymmetry is expensive. This realm ships its
+    // custom DBCs in patch-enUS-A.MPQ, so the extractor was reading a Map.dbc
+    // with 135 maps in it - none of the ported arenas - and answering
+    // "map id 983 is not in the client's Map.dbc, nothing will be extracted"
+    // for every one of them, while the client itself loaded them fine.
+    for (char c = 'A'; c <= 'Z'; ++c)
+    {
+        fileName = Trinity::StringFormat("{}/Data/{}/patch-{}-{}.MPQ", input_path, langs[locale], langs[locale], c);
+        if (boost::filesystem::exists(fileName))
+        {
+            printf("Loading archive patch-%s-%c.MPQ\n", langs[locale], c);
+            new MPQArchive(fileName.c_str());
+        }
     }
 }
 
