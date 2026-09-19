@@ -832,125 +832,69 @@ large groups are disadvantageous, because they will be kicked first if invitatio
 */
 void BattlegroundQueue::FillPlayersToBG(Battleground* bg, BattlegroundBracketId bracket_id)
 {
-    int32 numHordeInGame = bg->GetInvitedCount(HORDE) + bg->GetPlayersCountByTeam(HORDE);
-    int32 numAliInGame = bg->GetInvitedCount(ALLIANCE) + bg->GetPlayersCountByTeam(ALLIANCE);
+    int32 const numHordeInGame = bg->GetInvitedCount(HORDE) + bg->GetPlayersCountByTeam(HORDE);
+    int32 const numAliInGame = bg->GetInvitedCount(ALLIANCE) + bg->GetPlayersCountByTeam(ALLIANCE);
 
-    int32 hordeFree = bg->GetMaxPlayersPerTeam() - numHordeInGame;
-    int32 aliFree = bg->GetMaxPlayersPerTeam() - numAliInGame;
-
-    uint32 aliCount = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_ALLIANCE].size();
-    uint32 hordeCount = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_HORDE].size();
-
-    //iterator for iterating through bg queue
-    GroupsQueueType::const_iterator Ali_itr = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_ALLIANCE].begin();
-    //count of groups in queue - used to stop cycles
-
-    //index to queue which group is current
-    uint32 aliIndex = 0;
-    for (; aliIndex < aliCount; aliIndex++)
+    // One waiting group's turn at this match. False means the selection pools
+    // are full, which is where the walk over a queue list stops.
+    auto const offerSeats = [&](GroupQueueInfo* ginfo) -> bool
     {
-        if ((*Ali_itr)->IsInvitedToBGInstanceGUID || !InActivePool(*Ali_itr))
-        {
-            ++Ali_itr;
-            continue;
-        }
+        int32 const projectedHordeInGame = numHordeInGame + int32(m_SelectionPools[TEAM_HORDE].GetPlayerCount());
+        int32 const projectedAliInGame = numAliInGame + int32(m_SelectionPools[TEAM_ALLIANCE].GetPlayerCount());
+        int32 const hordeFree = bg->GetMaxPlayersPerTeam() - projectedHordeInGame;
+        int32 const aliFree = bg->GetMaxPlayersPerTeam() - projectedAliInGame;
 
-        int32 projectedHordeInGame = numHordeInGame + int32(m_SelectionPools[TEAM_HORDE].GetPlayerCount());
-        int32 projectedAliInGame = numAliInGame + int32(m_SelectionPools[TEAM_ALLIANCE].GetPlayerCount());
-        int32 hordeFree = bg->GetMaxPlayersPerTeam() - projectedHordeInGame;
-        int32 aliFree = bg->GetMaxPlayersPerTeam() - projectedAliInGame;
+        if (ginfo->IsForcedTeam)
+            return AddForcedGroupToSelectionPool(m_SelectionPools, ginfo, bg, hordeFree, aliFree);
 
-        uint32 aliCount = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_ALLIANCE].size();
-        uint32 hordeCount = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_HORDE].size();
-        if ((*Ali_itr)->IsForcedTeam)
+        bool addToHorde = (projectedHordeInGame < projectedAliInGame) ||
+            (projectedHordeInGame == projectedAliInGame && roll_chance_i(50));
+
+        uint32 const hordeDesired = GetDesiredSelectionCount(m_SelectionPools[TEAM_HORDE], ginfo, bg,
+            HORDE, hordeFree);
+        uint32 const allianceDesired = GetDesiredSelectionCount(m_SelectionPools[TEAM_ALLIANCE], ginfo, bg,
+            ALLIANCE, aliFree);
+        bool const hordeCanFit = SelectionCanFitGroup(m_SelectionPools[TEAM_HORDE], ginfo, hordeDesired);
+        bool const allianceCanFit = SelectionCanFitGroup(m_SelectionPools[TEAM_ALLIANCE], ginfo, allianceDesired);
+        if (addToHorde && !hordeCanFit && allianceCanFit)
+            addToHorde = false;
+        else if (!addToHorde && !allianceCanFit && hordeCanFit)
+            addToHorde = true;
+
+        if (addToHorde)
+            return m_SelectionPools[TEAM_HORDE].AddGroup(ginfo, hordeDesired, TEAM_HORDE);
+
+        return m_SelectionPools[TEAM_ALLIANCE].AddGroup(ginfo, allianceDesired, TEAM_ALLIANCE);
+    };
+
+    auto const fillFromQueue = [&](uint32 queueIndex)
+    {
+        for (GroupQueueInfo* ginfo : m_QueuedGroups[bracket_id][queueIndex])
         {
-            if (!AddForcedGroupToSelectionPool(m_SelectionPools, *Ali_itr, bg, hordeFree, aliFree))
+            if (ginfo->IsInvitedToBGInstanceGUID || !InActivePool(ginfo))
+                continue;
+
+            if (!offerSeats(ginfo))
                 break;
         }
-        else
-        {
-            bool addToHorde = (projectedHordeInGame < projectedAliInGame) ||
-                (projectedHordeInGame == projectedAliInGame && roll_chance_i(50));
+    };
 
-            uint32 const hordeDesired = GetDesiredSelectionCount(m_SelectionPools[TEAM_HORDE], *Ali_itr, bg,
-                HORDE, hordeFree);
-            uint32 const allianceDesired = GetDesiredSelectionCount(m_SelectionPools[TEAM_ALLIANCE], *Ali_itr, bg,
-                ALLIANCE, aliFree);
-            bool const hordeCanFit = SelectionCanFitGroup(m_SelectionPools[TEAM_HORDE], *Ali_itr, hordeDesired);
-            bool const allianceCanFit = SelectionCanFitGroup(m_SelectionPools[TEAM_ALLIANCE], *Ali_itr,
-                allianceDesired);
-            if (addToHorde && !hordeCanFit && allianceCanFit)
-                addToHorde = false;
-            else if (!addToHorde && !allianceCanFit && hordeCanFit)
-                addToHorde = true;
-
-            if (addToHorde)
-            {
-                if (!m_SelectionPools[TEAM_HORDE].AddGroup((*Ali_itr), hordeDesired, TEAM_HORDE))
-                    break;
-            }
-            else
-            {
-                if (!m_SelectionPools[TEAM_ALLIANCE].AddGroup((*Ali_itr), allianceDesired, TEAM_ALLIANCE))
-                    break;
-            }
-        }
-        ++Ali_itr;
+    // A party big enough to be a team waits in the premade queue, and the stock
+    // rules only ever offer a running match to the loose queue - a party is held
+    // back so the matchmaker can find it another party to play. In a clone-padded
+    // match there is no other party coming, and every seat is held by a bot that
+    // stands up for anyone real, so holding the party back only buys it an empty
+    // battleground of its own while the one already running goes short. Offered
+    // first, because a party cannot be split across what few seats are left.
+    if (bg->IsBotFillMatch())
+    {
+        fillFromQueue(BG_QUEUE_PREMADE_ALLIANCE);
+        fillFromQueue(BG_QUEUE_PREMADE_HORDE);
     }
+
+    fillFromQueue(BG_QUEUE_NORMAL_ALLIANCE);
     //the same thing for horde
-    GroupsQueueType::const_iterator Horde_itr = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_HORDE].begin();
-
-    uint32 hordeIndex = 0;
-    for (; hordeIndex < hordeCount; hordeIndex++)
-    {
-        if ((*Horde_itr)->IsInvitedToBGInstanceGUID || !InActivePool(*Horde_itr))
-        {
-            ++Horde_itr;
-            continue;
-        }
-
-        int32 projectedHordeInGame = numHordeInGame + int32(m_SelectionPools[TEAM_HORDE].GetPlayerCount());
-        int32 projectedAliInGame = numAliInGame + int32(m_SelectionPools[TEAM_ALLIANCE].GetPlayerCount());
-        int32 hordeFree = bg->GetMaxPlayersPerTeam() - projectedHordeInGame;
-        int32 aliFree = bg->GetMaxPlayersPerTeam() - projectedAliInGame;
-
-        uint32 aliCount = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_ALLIANCE].size();
-        uint32 hordeCount = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_HORDE].size();
-        if ((*Horde_itr)->IsForcedTeam)
-        {
-            if (!AddForcedGroupToSelectionPool(m_SelectionPools, *Horde_itr, bg, hordeFree, aliFree))
-                break;
-        }
-        else
-        {
-            bool addToHorde = (projectedHordeInGame < projectedAliInGame) ||
-                (projectedHordeInGame == projectedAliInGame && roll_chance_i(50));
-
-            uint32 const hordeDesired = GetDesiredSelectionCount(m_SelectionPools[TEAM_HORDE], *Horde_itr, bg,
-                HORDE, hordeFree);
-            uint32 const allianceDesired = GetDesiredSelectionCount(m_SelectionPools[TEAM_ALLIANCE], *Horde_itr, bg,
-                ALLIANCE, aliFree);
-            bool const hordeCanFit = SelectionCanFitGroup(m_SelectionPools[TEAM_HORDE], *Horde_itr, hordeDesired);
-            bool const allianceCanFit = SelectionCanFitGroup(m_SelectionPools[TEAM_ALLIANCE], *Horde_itr,
-                allianceDesired);
-            if (addToHorde && !hordeCanFit && allianceCanFit)
-                addToHorde = false;
-            else if (!addToHorde && !allianceCanFit && hordeCanFit)
-                addToHorde = true;
-
-            if (addToHorde)
-            {
-                if (!m_SelectionPools[TEAM_HORDE].AddGroup((*Horde_itr), hordeDesired, TEAM_HORDE))
-                    break;
-            }
-            else
-            {
-                if (!m_SelectionPools[TEAM_ALLIANCE].AddGroup((*Horde_itr), allianceDesired, TEAM_ALLIANCE))
-                    break;
-            }
-        }
-        ++Horde_itr;
-    }
+    fillFromQueue(BG_QUEUE_NORMAL_HORDE);
 
     //if ofc like BG queue invitation is set in config, then we are happy
     if (sWorld->getIntConfig(CONFIG_BATTLEGROUND_INVITATION_TYPE) == BG_QUEUE_INVITATION_TYPE_NO_BALANCE)
