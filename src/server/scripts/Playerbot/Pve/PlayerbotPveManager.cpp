@@ -2623,6 +2623,15 @@ namespace
             if (!foe || !foe->IsAlive() || !bot->IsValidAttackTarget(foe))
                 continue;
 
+            // One bot on a training dummy must not become every bot within 30
+            // yards on a training dummy. Screened here as well as at the
+            // companion path because this one feeds on itself: pack-assist reads
+            // another bot's victim, so a single bad pick propagates through the
+            // fleet.
+            if (Creature const* foeCreature = foe->ToCreature())
+                if (IsTargetDummyCreature(foeCreature))
+                    continue;
+
             // Assist onto the PERSON, not their pet. Resolved before the two
             // screens below on purpose: before the managed-bot check so bots do
             // not brawl with each other's minions, and before the level band so a
@@ -14985,6 +14994,13 @@ namespace
             if (IsRecentBadTarget(state, candidate->GetGUID()))
                 return;
 
+            // Assisting a master who is beating on a training dummy is how a bot
+            // ends up in a fight that cannot end - the dummy is never anyone's
+            // real victim, it is target practice. Same screen the grind uses.
+            if (Creature const* candidateCreature = candidate->ToCreature())
+                if (IsTargetDummyCreature(candidateCreature))
+                    return;
+
             float const distance = bot->GetDistance(candidate);
             if (distance > cfg.companionAssistRadius)
                 return;
@@ -17169,6 +17185,24 @@ namespace
 
         ObjectGuid const previousTargetGuid = bot->GetTarget();
         Unit* target = ResolveAttackableByGuid(bot, previousTargetGuid);
+
+        // Let go of a training dummy, however the bot came by one.
+        //
+        // The grind path screens dummies out, but the assist paths did not, so a
+        // bot could still end up holding one - and then nothing let go. The only
+        // escape in the combat tick is the unreachable-target guard, and a dummy
+        // is standing right there: reachable, immortal, never evades, never
+        // leaves. Such a bot runs the full combat engine four times a second
+        // until it logs out. Checked on the resolved victim rather than only at
+        // selection so a bot already stuck on one recovers on its next tick,
+        // without waiting for a restart.
+        if (Creature const* targetCreature = target ? target->ToCreature() : nullptr)
+            if (IsTargetDummyCreature(targetCreature))
+            {
+                MarkRecentBadTarget(state, target->GetGUID());
+                DisengagePveCombat(bot, state);
+                return;
+            }
 
         // Zone guardians hunt: an intruder outranks whatever creature is being
         // farmed. Without this the guardian only ever notices players between
