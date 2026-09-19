@@ -349,16 +349,6 @@ bool IsEnabled()
     return Config.Enabled;
 }
 
-std::vector<std::pair<uint32, uint32>> GetInnateSpells()
-{
-    std::vector<std::pair<uint32, uint32>> spells;
-    spells.reserve(Config.InnateSpells.size());
-    for (InnateSpell const& innate : Config.InnateSpells)
-        spells.emplace_back(innate.SpellId, innate.ClassMask);
-
-    return spells;
-}
-
 bool IsTournamentCharacter(Player const* player)
 {
     return Config.Enabled && player && player->HasTournamentModeFlag();
@@ -876,6 +866,35 @@ void ApplyCharacterKit(Player* player)
 
         player->LearnSpell(innate.SpellId, false);
     }
+}
+
+void ClearCharacterKit(Player* player)
+{
+    if (!Config.Enabled || !player)
+        return;
+
+    ObjectGuid::LowType const guid = player->GetGUID().GetCounter();
+    for (InnateSpell const& innate : Config.InnateSpells)
+    {
+        if (!player->HasSpell(innate.SpellId))
+            continue;
+
+        player->RemoveSpell(innate.SpellId, false, false);
+
+        // In the same breath as the un-learn rather than at the character's next
+        // save: a crash in between would otherwise hand the spell back at the
+        // next login, with nothing left to say it was never the character's.
+        CharacterDatabase.PExecute("DELETE FROM character_spell WHERE guid = {} AND spell = {}", guid, innate.SpellId);
+    }
+}
+
+void ClearCharacterKit(ObjectGuid guid)
+{
+    if (!Config.Enabled || !guid.IsPlayer())
+        return;
+
+    for (InnateSpell const& innate : Config.InnateSpells)
+        CharacterDatabase.PExecute("DELETE FROM character_spell WHERE guid = {} AND spell = {}", guid.GetCounter(), innate.SpellId);
 }
 
 void LoadCreateInfo()

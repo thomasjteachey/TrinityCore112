@@ -58,10 +58,19 @@
 // guarantee that survives a realm being killed outright, a row nobody wrote, or
 // an item handed over inside the match.
 //
-// Two more match rules live here because they start and end at the same moments:
-// a world-mode character is taught the eat/drink/bandage spells a tournament
-// character knows innately (and untaught on the way out, unless it knew them
-// already), and no consumable works inside except the tournament PvP ones.
+// One more match rule lives here because it starts and ends at the same moments:
+// no consumable works inside except the tournament PvP ones.
+//
+// A world-mode character is lent nothing from the tournament's spellbook. It
+// borrowed the eat/drink/bandage a tournament character knows innately, once,
+// and the loan did not survive contact with the realm: the un-learn lived in
+// memory until the character's next save, while the row that recorded the debt
+// was deleted at once, so any crash or hard restart in between left the spell in
+// `character_spell` with nothing left to say it was borrowed. A character that
+// kept one kept it for good, and silently - every later match found it already
+// known, taught nothing and wrote nothing down. It eats, drinks and bandages out
+// of its own bags instead, which costs it nothing either (KeepsCastItem) and was
+// what the loan was for.
 //
 // None of it runs unless Centurion.Tournament.Enable is on AND the match came
 // from the tournament queue pool (Battleground::IsTournamentPool).
@@ -106,7 +115,11 @@ namespace
     {
         LOADOUT_ROW_STASHED    = 0,   // an original that was taken off or out
         LOADOUT_ROW_SUBSTITUTE = 1,   // an item this system issued in its place
-        LOADOUT_ROW_SPELL      = 2    // a spell this system taught for the match
+        LOADOUT_ROW_SPELL      = 2    // a spell this system taught for the match.
+                                      // Nothing writes these any more; they are
+                                      // still read so a character caught inside a
+                                      // match by the build that dropped the loan
+                                      // is not left holding it.
     };
 
     struct LoadoutSettings
@@ -665,43 +678,12 @@ namespace
         return true;
     }
 
-    // A world-mode character borrows the eat/drink/bandage spells a tournament
-    // character has always known, for the length of the match. One it already
-    // knows is left alone and not written down, so leaving can never take away
-    // something it learned for itself.
-    // Returns how many spells were actually taught.
-    uint32 GrantMatchSpells(Player* player, CharacterDatabaseTransaction& trans, bool record)
-    {
-        if (IsTournamentCharacter(player))
-            return 0;
-
-        uint32 taught = 0;
-
-        uint32 const classMask = player->GetClassMask();
-        for (auto const& innate : GetInnateSpells())
-        {
-            uint32 const spellId = innate.first;
-            uint32 const spellClassMask = innate.second;
-
-            if (spellClassMask && !(spellClassMask & classMask))
-                continue;
-
-            if (player->HasSpell(spellId) || !sSpellMgr->GetSpellInfo(spellId))
-                continue;
-
-            player->LearnSpell(spellId, false);
-            ++taught;
-            if (record)
-                InsertRow(trans, player->GetGUID().GetCounter(), LOADOUT_ROW_SPELL, spellId, 0);
-        }
-
-        return taught;
-    }
-
-    // Eat, drink and bandage out of a character's own bags, for free. The
-    // tournament hands those out as spells, so somebody who reaches for the food
-    // in their pack instead of the innate one is not spending anything either -
-    // the item is used and stays where it is (Spell::TakeCastItem asks).
+    // Eat, drink and bandage out of a character's own bags, for free. A
+    // tournament character has those as spells and spends nothing on them, so
+    // somebody who reaches into their pack instead is not spending anything
+    // either - the item is used and stays where it is (Spell::TakeCastItem
+    // asks). For a world character this is the whole of it: it is lent no
+    // spells, and its own food, drink and bandages are what it fights with.
     //
     // Judged by what the item DOES, never by its subclass. Morning Glory Dew and
     // Roasted Quail are class 0 subclass 0 - the classic ranks sit on the plain
@@ -726,10 +708,10 @@ namespace
             if (!spellInfo)
                 continue;
 
-            // A bandage is let through on its mechanic alone. The tournament
-            // hands out the bandage spell anyway, and the classic ranks carry no
-            // arena flag - refusing Heavy Linen while granting the ability would
-            // be a strange thing to explain.
+            // A bandage is let through on its mechanic alone: the classic ranks
+            // carry no arena flag, and refusing Heavy Linen in a match a
+            // tournament character bandages freely in would be a strange thing
+            // to explain.
             if (spellInfo->Mechanic == MECHANIC_BANDAGE)
                 return true;
 
@@ -1157,8 +1139,6 @@ void ApplyBattlegroundLoadout(Player* player)
         if (IssueSubstitute(player, entry, trans, !transient))
             ++issued;
 
-    uint32 const taught = GrantMatchSpells(player, trans, !transient);
-
     if (!transient)
     {
         player->SaveInventoryAndGoldToDB(trans);
@@ -1168,8 +1148,8 @@ void ApplyBattlegroundLoadout(Player* player)
         BriefWorldCharacter(player);
     }
 
-    TC_LOG_DEBUG("bg.battleground", "Tournament loadout: dressed {} on map {}: {} issued, {} put away, {} spell(s) taught.",
-        player->GetName(), battleground->GetMapId(), issued, putAway, taught);
+    TC_LOG_DEBUG("bg.battleground", "Tournament loadout: dressed {} on map {}: {} issued, {} put away.",
+        player->GetName(), battleground->GetMapId(), issued, putAway);
 }
 
 void RestoreBattlegroundLoadout(Player* player)
@@ -1245,9 +1225,18 @@ void RestoreBattlegroundLoadout(Player* player)
                 missing.first, player->GetName());
     }
 
+    // Only ever a row an older build wrote. The un-learn is put in the same
+    // transaction as the row that records it, rather than left in memory for the
+    // character's next save: that gap is how the loan became permanent in the
+    // first place.
     for (uint32 spellId : spells)
-        if (player->HasSpell(spellId))
-            player->RemoveSpell(spellId, false, false);
+    {
+        if (!player->HasSpell(spellId))
+            continue;
+
+        player->RemoveSpell(spellId, false, false);
+        trans->Append(Trinity::StringFormat("DELETE FROM character_spell WHERE guid = {} AND spell = {}", guid, spellId).c_str());
+    }
 
     trans->Append(Trinity::StringFormat("DELETE FROM character_tournament_loadout WHERE guid = {}", guid).c_str());
 

@@ -197,6 +197,12 @@ namespace Tournament
     // Innate eat/drink/bandage spells. Tournament characters have no professions.
     // Idempotent; run at every login of a tournament character.
     void ApplyCharacterKit(Player* player);
+    // And takes them back when a character stops being one: the kit is what a
+    // tournament character is, not something it gets to keep. A world character
+    // is never given these, so there is nothing of its own to lose. The offline
+    // form is for `.tournament set` on a character that is not here to be told.
+    void ClearCharacterKit(Player* player);
+    void ClearCharacterKit(ObjectGuid guid);
 
     // Legionnaire+'s create data for tournament characters, from the world
     // tables playercreateinfo_tournament (start position),
@@ -356,18 +362,13 @@ namespace Tournament
     // drink, quaff or throw.
     bool IsConsumableAllowedInMatch(Player const* player, ItemTemplate const* proto);
 
-    // Eat, drink and bandage out of your own bags for free. The tournament hands
-    // those out as spells, so a character using its own food, drink or bandage
-    // in a tournament match spends nothing: Spell::TakeCastItem asks before it
-    // takes a charge or the item. Only what an arena already allows (the arena
-    // flag, a conjured consumable, a real First Aid bandage) and only that
-    // family - a healthstone is not a meal.
+    // Eat, drink and bandage out of your own bags for free. A tournament
+    // character has those as spells and spends nothing on them, so nobody else
+    // should either: Spell::TakeCastItem asks before it takes a charge or the
+    // item. Only what an arena already allows (the arena flag, a conjured
+    // consumable, a real First Aid bandage) and only that family - a healthstone
+    // is not a meal.
     bool KeepsCastItem(Player const* player, ItemTemplate const* proto);
-
-    // Centurion.Tournament.InnateSpells as spell -> class mask (0 = every
-    // class): the eat/drink/bandage a tournament character knows without being
-    // taught, lent to a world-mode character for the length of a match.
-    std::vector<std::pair<uint32, uint32>> GetInnateSpells();
 
     // --- inside a tournament match ----------------------------------------
 

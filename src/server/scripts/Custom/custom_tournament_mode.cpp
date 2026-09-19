@@ -225,6 +225,8 @@ public:
 
             if (tournament)
                 Tournament::ApplyCharacterKit(player);
+            else
+                Tournament::ClearCharacterKit(player);
             Tournament::RefreshPhase(player);
         }
         else
@@ -232,6 +234,9 @@ public:
             uint32 const clear = PLAYER_EXTRA_TOURNAMENT_MODE | PLAYER_EXTRA_TOURNAMENT_QUEUE;
             CharacterDatabase.PExecute("UPDATE characters SET extra_flags = (extra_flags & {}) | {} WHERE guid = {}",
                 uint32(0xFFFF & ~clear), tournament ? uint32(PLAYER_EXTRA_TOURNAMENT_MODE) : 0u, guid.GetCounter());
+
+            if (!tournament)
+                Tournament::ClearCharacterKit(guid);
         }
 
         sCharacterCache->UpdateCharacterTournamentMode(guid, tournament);

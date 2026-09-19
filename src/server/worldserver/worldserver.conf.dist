@@ -5192,7 +5192,9 @@ Centurion.Items.QuiversHoldAnyItem = 0
 #        Default:     "" - (none)
 #
 #    Centurion.Tournament.InnateSpells
-#        Description: Spells every tournament character knows, as spell[:classmask].
+#        Description: Spells every tournament character knows, as spell[:classmask]. Taught
+#                     at each of its logins and taken back if it is ever made a world
+#                     character. World characters are never given these.
 #        Default:     "29073,18610,22734:1494" - (Eat, First Aid rank 10, Drink for mana classes)
 #
 #    Centurion.Tournament.QueueMinLevel
@@ -5227,8 +5229,8 @@ Centurion.Items.QuiversHoldAnyItem = 0
 #                     becomes a field kit piece, or nothing where the kit has none; a carried
 #                     item with no twin is put away. Everything comes back on the way out,
 #                     however the character leaves - a logout, a disconnect or a crash hands it
-#                     back at the next login. A world character also borrows the InnateSpells
-#                     above for the match.
+#                     back at the next login. Gear only: a world character is lent none of the
+#                     InnateSpells above, and eats, drinks and bandages out of its own bags.
 #        Default:     1 - (Enabled)
 #
 #    Centurion.Tournament.BgBanConsumables
