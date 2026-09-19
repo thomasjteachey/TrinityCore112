@@ -2136,8 +2136,14 @@ GroupJoinBattlegroundResult Group::CanJoinBattlegroundQueue(Battleground const* 
             return ERR_BATTLEGROUND_JOIN_FAILED;
     }
 
-    // only check for MinPlayerCount since MinPlayerCount == MaxPlayerCount for arenas...
-    if (bgOrTemplate->isArena() && memberscount != MinPlayerCount)
+    // A rated arena IS its team, so it plays at exactly the bracket's size. A
+    // skirmish is not: a party smaller than the bracket queues as it stands and
+    // the queue finishes the side - with whoever else is waiting, or with clones
+    // where the realm fills skirmishes - exactly as it already does for the lone
+    // player who queues with no party at all. Only an oversized party is still
+    // refused: no side has room for it, so the queue would hold it forever
+    // without ever saying why.
+    if (bgOrTemplate->isArena() && (isRated ? memberscount != MinPlayerCount : memberscount > MinPlayerCount))
         return ERR_ARENA_TEAM_PARTY_SIZE;
 
     return GroupJoinBattlegroundResult(bgOrTemplate->GetTypeID());
