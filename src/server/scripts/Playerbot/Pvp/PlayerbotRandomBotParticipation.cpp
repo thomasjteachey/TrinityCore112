@@ -26,6 +26,7 @@
 
 #include "AccountMgr.h"
 #include "Battleground.h"
+#include "BattlegroundFence.h"
 #include "BattlegroundMgr.h"
 #include "Configuration/Config.h"
 #include "CharacterCache.h"
@@ -2288,12 +2289,21 @@ void RandomBotParticipationManager::OnWorldUpdate(uint32 diffMs)
     ForceManagedScmQueueSweep(botAccountsForSweep);
 }
 
+// Per-bot time at which the bot was first seen outside its battleground fence,
+// or 0 while it is inside. Cross-map shared, so it goes through the structure
+// lock like every other by-GUID container in this module. Read by
+// TryRecoverPlayerbotOutsideFence below; declared here so the logout sweep can
+// drop the entry.
+std::unordered_map<uint64, uint32> g_PlayerbotFenceBreachStartMsByGuid;
+
 void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
 {
     if (!player)
         return;
 
     uint64 const rawGuid = player->GetGUID().GetRawValue();
+
+    playerbot::LockedErase(g_PlayerbotFenceBreachStartMsByGuid, rawGuid);
 
     {
         std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
@@ -2363,6 +2373,133 @@ bool TryRecoverPlayerbotFromUnderMap(Player* player)
     return true;
 }
 
+// How far past the measured wall a bot may be before this considers it out.
+// The fence is measured from static collision, not surveyed, so a bot standing
+// flush against a wall can read a yard or two beyond it.
+constexpr float PLAYERBOT_FENCE_MARGIN = 8.0f;
+
+// Walk the bot back first; only teleport if it is still out after this long.
+// A bot that was knocked over a rail can usually run back in on its own, and a
+// teleport mid-match is far more visible to the humans watching than a bot
+// jogging back through the doorway it left by.
+constexpr uint32 PLAYERBOT_FENCE_WALKBACK_MS = 4000;
+
+// The companion to the under-map recovery above, for the other direction a bot
+// can leave a map it should not be able to leave.
+//
+// A player is held inside an arena by their own client's collision. A bot moves
+// by server-side splines, which collide with nothing, so its only confinement
+// is PathGenerator returning a navmesh route - and PathGenerator degrades to a
+// straight line through solid geometry whenever a start or end position has no
+// loaded mmap tile, reporting that line as PATHFIND_NORMAL |
+// PATHFIND_NOT_USING_PATH. ChaseMovementGenerator only rejects PATHFIND_NOPATH,
+// so it accepts and flies it. Separately, the ported arenas are whole ADT
+// worlds whose navmesh covers all the open ground outside the arena, and gates
+// are gameobjects that no navmesh contains, so a gate doorway is an open
+// corridor out. Both routes end with a bot fighting somewhere it cannot be
+// reached, and neither is something the pathfinder can be asked to prevent.
+//
+// BattlegroundFence measures where the walls actually are and this brings back
+// anything found beyond them, whatever put it there - pathing, a knockback, a
+// bug not yet found. Returns true when it owns the tick.
+bool TryRecoverPlayerbotOutsideFence(Player* player)
+{
+    if (!player || !player->IsInWorld() || player->IsGameMaster() || player->IsSpectator())
+        return false;
+
+    // A teleport in flight has not moved the bot yet, so its position is still
+    // the one that triggered the teleport. Judging it again here would start a
+    // second recovery on top of the one already in progress.
+    if (player->IsBeingTeleportedNear() || player->IsBeingTeleportedFar())
+        return false;
+
+    Battleground* bg = player->GetBattleground();
+    if (!bg)
+        return false;
+
+    // Before the gates open, confinement to the starting pen is
+    // Battleground::_CheckSafePositions' job and it uses a different (much
+    // tighter) shape. Do not fight it for ownership of the same bot.
+    if (bg->GetStatus() != STATUS_IN_PROGRESS)
+        return false;
+
+    BattlegroundFence::Fence const* fence = BattlegroundFence::GetForBattleground(bg);
+    if (!fence)
+        return false;
+
+    uint64 const rawGuid = player->GetGUID().GetRawValue();
+    uint32& breachStartMs = playerbot::LockedGetOrCreate(g_PlayerbotFenceBreachStartMsByGuid, rawGuid);
+
+    if (fence->Contains(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), PLAYERBOT_FENCE_MARGIN))
+    {
+        breachStartMs = 0;
+        return false;
+    }
+
+    // A dead bot is about to be released to a graveyard inside the arena
+    // anyway, and dragging a corpse around would fight that.
+    if (!player->IsAlive())
+        return false;
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+
+    if (!breachStartMs)
+    {
+        breachStartMs = nowMs;
+
+        float insideX = player->GetPositionX();
+        float insideY = player->GetPositionY();
+        fence->NearestInsidePoint(player->GetPositionX(), player->GetPositionY(), insideX, insideY);
+
+        Position destination(insideX, insideY, fence->CentreZ, player->GetOrientation());
+        player->UpdateAllowedPositionZ(insideX, insideY, destination.m_positionZ);
+
+        if (player->isMoving())
+            player->StopMoving();
+
+        if (MotionMaster* motionMaster = player->GetMotionMaster())
+        {
+            motionMaster->Clear(MOTION_SLOT_ACTIVE);
+            motionMaster->MovePoint(0, destination, true);
+        }
+
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot fence: bot={} map={} bg={} left the arena at ({:.1f}, {:.1f}, {:.1f}); walking back to ({:.1f}, {:.1f}, {:.1f}).",
+            player->GetGUID().ToString(), bg->GetMapId(), uint32(bg->GetTypeID()),
+            player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
+            destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
+
+        return true;
+    }
+
+    if (nowMs - breachStartMs < PLAYERBOT_FENCE_WALKBACK_MS)
+        return true;
+
+    // The walk back did not land - most likely there is no navmesh route from
+    // wherever it ended up, which is exactly the case a straight-line shortcut
+    // created. Put it back on its own start position, which is always inside.
+    breachStartMs = 0;
+
+    Position const* startPosition = bg->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(player->GetBGTeam()));
+    if (!startPosition)
+        return true;
+
+    if (player->isMoving())
+        player->StopMoving();
+
+    if (MotionMaster* motionMaster = player->GetMotionMaster())
+        motionMaster->Clear(MOTION_SLOT_ACTIVE);
+
+    player->TeleportTo(bg->GetMapId(), startPosition->GetPositionX(), startPosition->GetPositionY(),
+        startPosition->GetPositionZ(), startPosition->GetOrientation());
+
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+        "Playerbot fence: bot={} map={} bg={} could not walk back inside within {} ms; returned to its team start.",
+        player->GetGUID().ToString(), bg->GetMapId(), uint32(bg->GetTypeID()), PLAYERBOT_FENCE_WALKBACK_MS);
+
+    return true;
+}
+
 void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
 {
     if (!player)
@@ -2385,6 +2522,13 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
     // Issuing combat movement immediately after the synthetic ACK can launch
     // observer-visible movement from both the old and new positions.
     if (TryFinalizePendingVirtualPlayerTeleport(player))
+        return;
+    // After the teleport finalizer, so a bot whose fence teleport is still
+    // waiting for its synthetic ACK is judged on where it has arrived rather
+    // than on the stale position it is being moved from. Owns the tick while
+    // it is bringing the bot back: a bot outside the arena has no business
+    // picking targets or casting until it is inside again.
+    if (TryRecoverPlayerbotOutsideFence(player))
         return;
     TryUsePlayerbotInsigniaBreaker(player);
     TryUsePlayerbotStoneformBreaker(player);

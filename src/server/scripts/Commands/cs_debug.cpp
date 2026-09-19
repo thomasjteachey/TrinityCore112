@@ -24,7 +24,9 @@ EndScriptData */
 
 #include "ScriptMgr.h"
 #include "Bag.h"
+#include "Battleground.h"
 #include "BattlefieldMgr.h"
+#include "BattlegroundFence.h"
 #include "BattlegroundMgr.h"
 #include "CellImpl.h"
 #include "Channel.h"
@@ -93,6 +95,7 @@ public:
             { "anim",               HandleDebugAnimCommand,                rbac::RBAC_PERM_COMMAND_DEBUG,   Console::No },
             { "arena",              HandleDebugArenaCommand,               rbac::RBAC_PERM_COMMAND_DEBUG,   Console::Yes },
             { "bg",                 HandleDebugBattlegroundCommand,        rbac::RBAC_PERM_COMMAND_DEBUG,   Console::Yes },
+            { "bgfence",            HandleDebugBattlegroundFenceCommand,   rbac::RBAC_PERM_COMMAND_DEBUG,   Console::No },
             { "getitemstate",       HandleDebugGetItemStateCommand,        rbac::RBAC_PERM_COMMAND_DEBUG,   Console::No },
             { "lootrecipient",      HandleDebugGetLootRecipientCommand,    rbac::RBAC_PERM_COMMAND_DEBUG,   Console::No },
             { "getvalue",           HandleDebugGetValueCommand,            rbac::RBAC_PERM_COMMAND_DEBUG,   Console::No },
@@ -821,6 +824,47 @@ public:
     static bool HandleDebugArenaCommand(ChatHandler* /*handler*/)
     {
         sBattlegroundMgr->ToggleArenaTesting();
+        return true;
+    }
+
+    // Read out the containment fence for the battleground you are standing in.
+    // The fence is measured from static collision rather than surveyed, so this
+    // is how you check that the measurement matched the arena: stand in the
+    // middle and at each wall, and see whether the numbers agree with what you
+    // can see. "no fence" on an open battleground is the correct answer.
+    static bool HandleDebugBattlegroundFenceCommand(ChatHandler* handler)
+    {
+        Player* player = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
+        if (!player)
+            return false;
+
+        Battleground* bg = player->GetBattleground();
+        if (!bg)
+        {
+            handler->SendSysMessage("You are not in a battleground.");
+            return true;
+        }
+
+        BattlegroundFence::Fence const* fence = BattlegroundFence::GetForBattleground(bg);
+        if (!fence)
+        {
+            handler->PSendSysMessage("Battleground %u on map %u has no usable fence (open geometry, or the fence is switched off).",
+                uint32(bg->GetTypeID()), bg->GetMapId());
+            return true;
+        }
+
+        float const dx = player->GetPositionX() - fence->CentreX;
+        float const dy = player->GetPositionY() - fence->CentreY;
+        float const distance = std::sqrt(dx * dx + dy * dy);
+        float const here = fence->RadiusAt(player->GetPositionX(), player->GetPositionY());
+
+        handler->PSendSysMessage("Fence for bg %u map %u: centre (%.1f, %.1f, %.1f), reference radius %.1f, z band %.1f..%.1f.",
+            uint32(bg->GetTypeID()), bg->GetMapId(), fence->CentreX, fence->CentreY, fence->CentreZ,
+            fence->ReferenceRadius, fence->FloorZ, fence->CeilZ);
+        handler->PSendSysMessage("You are %.1f yd from the centre; the wall in this direction is at %.1f yd. %s",
+            distance, here,
+            fence->Contains(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), 0.0f)
+                ? "Inside." : "OUTSIDE - a bot here would be brought back.");
         return true;
     }
 

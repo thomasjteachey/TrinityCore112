@@ -34,6 +34,7 @@
 #include "MotionMaster.h"
 #include "Player.h"
 #include "Battleground.h"
+#include "BattlegroundFence.h"
 #include "PathGenerator.h"
 #include "Pet.h"
 #include "Position.h"
@@ -519,6 +520,11 @@ bool RequiresStrictHumanPathing(Player const* player)
     return player && player->InBattleground();
 }
 
+// Matches the lifecycle module's margin: a destination is pulled in a little
+// before it would count as a breach, rather than landing on the line the
+// fence recovery is watching.
+constexpr float PLAYERBOT_BG_FENCE_DESTINATION_MARGIN = 4.0f;
+
 Position BuildCollisionSafeDestination(Player* player, Position const& destination)
 {
     if (!player)
@@ -545,6 +551,13 @@ Position BuildCollisionSafeDestination(Player* player, Position const& destinati
     }
 
     adjustedDestination.Relocate(adjustedDestination.GetPositionX(), adjustedDestination.GetPositionY(), adjustedZ, adjustedDestination.GetOrientation());
+
+    // Class movement - Blink, charges, the melee repositioning probes - goes
+    // through this copy rather than the lifecycle one, so it needs the same
+    // arena containment or a Blink could still pick a landing spot outside the
+    // wall. Inert outside a battleground and on any map with no usable fence.
+    if (Battleground const* bg = player->GetBattleground())
+        BattlegroundFence::ClampToFence(bg, adjustedDestination, PLAYERBOT_BG_FENCE_DESTINATION_MARGIN);
 
     return adjustedDestination;
 }

@@ -17,6 +17,7 @@
 
 #include "MoveSplineInit.h"
 #include "Creature.h"
+#include "Log.h"
 #include "MoveSpline.h"
 #include "MovementPacketBuilder.h"
 #include "Unit.h"
@@ -286,6 +287,34 @@ namespace Movement
 
             PathGenerator path(unit);
             bool result = path.CalculatePath(dest.x, dest.y, dest.z, forceDestination);
+
+            // Every movement order a bot receives ends here, whichever generator
+            // issued it. Chase and Follow each log their own resolved path type,
+            // but MovePoint - and anything else that reaches a spline directly -
+            // logged nothing, which was the one blind spot left when a bot was
+            // seen walking through an arena wall and neither of those two
+            // generators had produced a single non-navmesh path in ~72,000
+            // samples. Name the outcome here so the next occurrence identifies
+            // its own cause without another live logging session.
+            //
+            // Off unless playerbots.movement.spline is switched on, and only
+            // ever evaluated for a session with no client of its own.
+            auto const logServerDrivenSplineDecision = [&](char const* outcome)
+            {
+                if (!serverDrivenPlayer)
+                    return;
+
+                TC_LOG_DEBUG("playerbots.movement.spline",
+                    "PB spline: bot={} outcome={} calc_ok={} path_type={} navmesh={} points={} force_dest={} "
+                    "from=({}, {}, {}) requested=({}, {}, {}) actual_end=({}, {}, {}).",
+                    unit->GetGUID().ToString(), outcome, result ? 1 : 0,
+                    uint32(path.GetPathType()), path.HasNavigationData() ? 1 : 0,
+                    uint32(path.GetPath().size()), forceDestination ? 1 : 0,
+                    unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ(),
+                    dest.x, dest.y, dest.z,
+                    path.GetActualEndPosition().x, path.GetActualEndPosition().y, path.GetActualEndPosition().z);
+            };
+
             if (result)
             {
                 PathType const pathType = path.GetPathType();
@@ -300,6 +329,7 @@ namespace Movement
 
                     if (!(strictPlayerRejectPath || serverDrivenPlayerRejectPath))
                     {
+                        logServerDrivenSplineDecision("accepted-navmesh-path");
                         MovebyPath(path.GetPath());
                         return;
                     }
@@ -307,6 +337,7 @@ namespace Movement
 
                 if (serverDrivenPlayer && ((pathType & PATHFIND_NOPATH) || usesUnsafePathMode))
                 {
+                    logServerDrivenSplineDecision("held-position-unsafe-route");
                     buildStayPath();
                     return;
                 }
@@ -320,6 +351,7 @@ namespace Movement
             }
             else if (serverDrivenPlayer)
             {
+                logServerDrivenSplineDecision("held-position-path-calc-failed");
                 // A server-controlled Player has no client movement input to
                 // repair a failed generated route. Falling through to the raw
                 // two-point spline below lets it cut through walls or descend
@@ -329,6 +361,21 @@ namespace Movement
                 return;
             }
         }
+
+        // The raw two-point spline: start to destination, straight through
+        // whatever lies between. Every guarded branch above returns before this
+        // for a server-driven player, so a bot arriving here is the exact shape
+        // of bug this diagnostic exists to catch - which is why it is a warning
+        // rather than a debug line, and why it names how it got here.
+        if (Player const* moverPlayer = unit->ToPlayer())
+            if (WorldSession const* session = moverPlayer->GetSession())
+                if (session->IsVirtualSession() || session->IsTransientPlayerSession())
+                    TC_LOG_WARN("playerbots.movement.spline",
+                        "PB spline: bot={} outcome=raw-direct-spline generate_path={} force_dest={} "
+                        "from=({}, {}, {}) dest=({}, {}, {}).",
+                        unit->GetGUID().ToString(), generatePath ? 1 : 0, forceDestination ? 1 : 0,
+                        unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ(),
+                        dest.x, dest.y, dest.z);
 
         args.path_Idx_offset = 0;
         args.path.resize(2);

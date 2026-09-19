@@ -24,6 +24,7 @@
 #include "PlayerbotSharedStateGuard.h"
 #include "SpellHistory.h"
 #include "BattlegroundMgr.h"
+#include "BattlegroundFence.h"
 #include "Battleground.h"
 #include "BattlegroundQueue.h"
 #include "BattlegroundTP.h"
@@ -831,6 +832,11 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return true;
     }
 
+    // Slightly tighter than the recovery's own margin so a destination is
+    // pulled in before it becomes a breach, rather than landing exactly on the
+    // line the recovery is watching.
+    constexpr float PLAYERBOT_BG_FENCE_DESTINATION_MARGIN = 4.0f;
+
     Position BuildCollisionSafeDestination(Player const* player, Position const& destination)
     {
         if (!player)
@@ -859,6 +865,14 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         }
 
         adjustedDestination.Relocate(adjustedDestination.GetPositionX(), adjustedDestination.GetPositionY(), adjustedZ, adjustedDestination.GetOrientation());
+
+        // Never set off for somewhere the fence recovery would only drag the
+        // bot back from. Inert outside a battleground, and inert inside one
+        // whose geometry produced no usable fence, so this costs a null check
+        // on every open battleground and changes nothing there.
+        if (Battleground const* bg = player->GetBattleground())
+            BattlegroundFence::ClampToFence(bg, adjustedDestination, PLAYERBOT_BG_FENCE_DESTINATION_MARGIN);
+
         return adjustedDestination;
     }
 

@@ -2389,6 +2389,37 @@ Centurion.Bots.SkipClientPackets = 0
 Centurion.Bots.GridActivationRange = 0
 
 #
+#    Centurion.Playerbot.BattlegroundFence.Enable
+#        Description: Keep playerbots inside the arena they are fighting in. A player is held in
+#                     by their own client's collision; a bot moves by server splines, which
+#                     collide with nothing, so its only confinement is the navmesh - and the
+#                     navmesh both degrades to a straight line through walls when a tile is
+#                     missing, and legitimately leads out through gate doorways, which no navmesh
+#                     contains. On first use each arena is measured by tracing rays outward from
+#                     the centre against the map's own collision; a bot found beyond that wall is
+#                     walked back, and teleported to its team start if it cannot walk. Nothing is
+#                     enforced on a map whose geometry is not an enclosure, and real players are
+#                     never touched. Read the measured shape in-game with `.debug bgfence`.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+
+Centurion.Playerbot.BattlegroundFence.Enable = 1
+
+#
+#    Centurion.Playerbot.BattlegroundFence.NonArenaBattlegrounds
+#        Description: Extend the fence above to battlegrounds that are not arenas. Off by default:
+#                     the rays are traced against WMOs and doodads, not terrain, so an arena's
+#                     walls are found exactly while an open battleground's real bounds - hills,
+#                     map edges - are invisible, and a battleground with buildings near its centre
+#                     could be handed a fence that has nothing to do with where it ends. Turn this
+#                     on only for an enclosed custom battleground, and check the shape with
+#                     `.debug bgfence` first.
+#        Default:     0 - (Arenas only)
+#                     1 - (Every battleground with enclosing geometry)
+
+Centurion.Playerbot.BattlegroundFence.NonArenaBattlegrounds = 0
+
+#
 ###################################################################################################
 
 ###################################################################################################
