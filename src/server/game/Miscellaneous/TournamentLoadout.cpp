@@ -849,7 +849,8 @@ namespace
 //
 // A tournament character keeps its gear, of course, and a Game Master is left
 // alone: they can conjure anything anyway, and eating a GM's test items would be
-// its own bug.
+// its own bug. So is anything the realm marks ITEM_FLAG_NO_USER_DESTROY - see
+// the flag test below for why that is the right claim and not a coincidence.
 uint32 SweepTournamentItems(Player* player)
 {
     if (!player || !IsEnabled() || IsTournamentCharacter(player) || player->IsGameMaster())
@@ -859,6 +860,23 @@ uint32 SweepTournamentItems(Player* player)
     ForEachHeldItem(player, [&confiscate, player](uint8 bag, uint8 slot, Item* item)
     {
         if (!IsTournamentItem(item->GetEntry()))
+            return;
+
+        // An item the realm marks indestructible is not the tournament's to
+        // take back. The nine class Insignias are tournament copies by birth -
+        // the stock ids they were cloned from hold something else here - but
+        // every innkeeper in the world hands one out free, so a world character
+        // wearing one came by it honestly. This sweep runs at EVERY login, so
+        // what an inn gave away at noon was gone by the next log in, and the
+        // player saw only that their PvP trinket keeps vanishing.
+        //
+        // The flag is the right authority and not a convenient one: it already
+        // means "nothing destroys this" everywhere else (ItemHandler.cpp
+        // refuses the destroy opcode on it), and a tournament item the world is
+        // meant to hand out is exactly an item the realm does not want deleted.
+        // Any future one only has to carry the flag.
+        ItemTemplate const* proto = item->GetTemplate();
+        if (proto && proto->HasFlag(ITEM_FLAG_NO_USER_DESTROY))
             return;
 
         // The tournament sells five containers, and destroying a bag destroys
