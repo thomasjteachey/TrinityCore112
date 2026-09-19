@@ -1012,27 +1012,39 @@ namespace
     //
     // Training and target dummies are attackable and level-appropriate but
     // effectively immortal - npc_training_dummy zeroes every hit - so a bot that
-    // picks one attacks it until the end of time. The variants share no single
-    // template flag, so three signals, any of which is conclusive:
+    // picks one attacks it until the end of time.
     //
-    //   Name     - the stock dummies ("Training Dummy", "Target Dummy").
-    //   Title    - the DB `subname`, which is where a dummy given a PERSONAL
-    //              name keeps the word: Centurion's hub dummies are "Xabt"
-    //              <Target Dummy>, and matching on Name alone did not see them.
-    //              That is the bug this list exists for.
-    //   ScriptID - the script that makes it a dummy at all, and the one signal
-    //              that cannot be renamed out from under us.
+    // THE SCRIPT IS THE SIGNAL. It is what makes a dummy a dummy, and the one
+    // property an owner does not rewrite while dressing the hub: Centurion's
+    // dummies are called "Xabt", and the word "dummy" appears only in a subname
+    // that is the owner's to change whenever he likes. Nothing here may depend
+    // on it.
+    //
+    // The name is kept as a second signal purely for the stock 3.3.5 dummies
+    // that predate the script - the engineering Target Dummy, the Unkillable
+    // Test Dummy family - which carry the word in the name proper. That is
+    // fixed Blizzard data and does not move.
     bool IsTargetDummyByIdentity(Creature const* creature)
     {
         CreatureTemplate const* proto = creature->GetCreatureTemplate();
         if (!proto)
             return false;
 
-        if (proto->Name.find("Dummy") != std::string::npos ||
-            proto->Title.find("Dummy") != std::string::npos)
+        // Resolved once, from a store that is built long before any bot ticks.
+        // A zero is never cached: it means the question was asked too early, not
+        // that the script is absent.
+        static std::atomic<uint32> s_dummyScriptId{ 0 };
+        uint32 dummyScriptId = s_dummyScriptId.load(std::memory_order_relaxed);
+        if (!dummyScriptId)
+        {
+            dummyScriptId = sObjectMgr->GetScriptId("npc_training_dummy");
+            s_dummyScriptId.store(dummyScriptId, std::memory_order_relaxed);
+        }
+
+        if (dummyScriptId && proto->ScriptID == dummyScriptId)
             return true;
 
-        return sObjectMgr->GetScriptName(proto->ScriptID) == "npc_training_dummy";
+        return proto->Name.find("Dummy") != std::string::npos;
     }
 
     // The same question for a target the bot is merely CONSIDERING, where the
