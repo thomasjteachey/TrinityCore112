@@ -294,6 +294,10 @@ public:
     static bool CanMageBlinkOutOfControl(Player const* player);
     static bool CanHunterBestialWrathOutOfControl(Player const* player);
     static bool IsEffectivelyImmuneTarget(Player const* player, Unit const* target);
+    // True when this cast is allowed to ignore - and must not arm - the shared
+    // playerbot dispel throttle. Only an enhancement shaman's Purge qualifies:
+    // purging on every available global is the point of the spec.
+    static bool IsDispelThrottleExempt(Player const* player, uint32 spellId);
     static bool IsMovementPreventedByRoot(Player const* player);
     // The spell a stealthed rogue opens with (Garrote 703 or Cheap Shot 1833),
     // or 0 when it knows neither. One answer for the class selector and the

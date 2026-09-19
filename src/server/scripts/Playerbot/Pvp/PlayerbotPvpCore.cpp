@@ -81,6 +81,7 @@ uint32 CountNearbyEnemies(Player const* player, float maxDistance);
 SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player);
 SpellDecision SelectRacialSpell(Player const* player, Unit const* target, Unit const* allyTarget);
 bool HasActiveMovementEffectSpline(Player const* player);
+bool IsDispelThrottleExemptCast(Player const* player, uint32 spellId);
 
 constexpr float kReferenceHunterMeleeDistance = 5.0f;
 constexpr float kReferenceHunterSwitchDistance = 8.0f;
@@ -817,6 +818,11 @@ bool HasCastTimeSpellTargetingPlayer(Unit const* caster, Player const* target)
         case 2782: // Remove Curse
         case 2893: // Abolish Poison
         case 4987: // Cleanse
+        // The T2 Purge wrappers (81324/81325). Effect 0 is TRIGGER_SPELL, not
+        // DISPEL, and spell_ranks makes them their OWN chain rather than ranks
+        // of 370 - so neither test below sees them, and restoration's purge
+        // (which casts the wrapper) answered to no throttle at all.
+        case 81324:
             return true;
         default:
             break;
@@ -829,6 +835,46 @@ bool HasCastTimeSpellTargetingPlayer(Unit const* caster, Player const* target)
 
     return false;
 }
+
+    // A spell whose ONLY effect is "cast that other spell" - the shape of this
+    // fork's Purge wrappers (81324 -> 370, 81325 -> 8012). Every declarative
+    // cast requirement lives on the payload; the wrapper itself declares
+    // nothing, so a check that reads the wrapper waves through a cast the real
+    // spell would refuse. Returns null for anything that also does work of its
+    // own, so a spell that triggers something ALONGSIDE its own effects is
+    // still judged on its own terms.
+    SpellInfo const* GetPureTriggerPayload(SpellInfo const* spellInfo)
+    {
+        if (!spellInfo)
+            return nullptr;
+
+        SpellInfo const* payload = nullptr;
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+        {
+            if (!effect.IsEffect())
+                continue;
+
+            if (effect.Effect != SPELL_EFFECT_TRIGGER_SPELL || !effect.TriggerSpell || payload)
+                return nullptr;
+
+            payload = sSpellMgr->GetSpellInfo(effect.TriggerSpell);
+        }
+
+        return payload;
+    }
+
+    // Both Purge chains: the stock 370/8012 and the T2 wrappers 81324/81325
+    // that trigger it. The bot's shaman table reaches for either one.
+    bool IsPurgeFamilySpell(uint32 spellId)
+    {
+        if (!spellId)
+            return false;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+        uint32 const firstRankSpellId = spellInfo && spellInfo->GetFirstRankSpell() ? spellInfo->GetFirstRankSpell()->Id : spellId;
+
+        return firstRankSpellId == 370 || firstRankSpellId == 81324;
+    }
 
     bool IsHunterInRangedMode(Player const* player)
     {
@@ -1566,6 +1612,7 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
         // failure so the same decision pass suppresses this dispel and selects the
         // next available action instead of returning an idle cooldown attempt.
         if (IsPlayerbotDispelSpell(decision.spellId) &&
+            !IsDispelThrottleExemptCast(player, decision.spellId) &&
             playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken))
             return false;
 
@@ -1615,8 +1662,18 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
         // Offensive dispels (Purge, Spellsteal): SPELL_FAILED_NOTHING_TO_DISPEL
         // against a target carrying nothing of the matching dispel type - the
         // default state of every grind creature.
+        //
+        // Read the mask off the payload when the pick is a pure wrapper: the
+        // shaman casts 81324/81325, whose own effect list is a single
+        // TRIGGER_SPELL and so declares no dispel type at all. Without this the
+        // guard finds an empty mask, skips itself, and the bot spends every
+        // global purging a target with nothing to take.
+        SpellInfo const* dispelSourceInfo = spellInfo;
+        if (SpellInfo const* triggerPayload = GetPureTriggerPayload(spellInfo))
+            dispelSourceInfo = triggerPayload;
+
         uint32 dispelMask = 0;
-        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+        for (SpellEffectInfo const& effect : dispelSourceInfo->GetEffects())
             if (effect.Effect == SPELL_EFFECT_DISPEL)
                 dispelMask |= SpellInfo::GetDispelMask(DispelType(effect.MiscValue));
 
@@ -2134,6 +2191,26 @@ struct TacticalDecision
 
         return selection;
     }
+
+// The shared dispel throttle exists so a bot cannot burn every global casting
+// into a protected or undispellable aura. Enhancement is the one spec whose
+// whole job in a fight is to purge, so its Purge is let through: it neither
+// waits on the throttle nor arms it, since arming it on the first cast is the
+// same as waiting on it for the second.
+//
+// Scoped to Purge on purpose. A shaman's OTHER dispels (Cure Poison, Cure
+// Disease) still answer to the throttle like everyone else's, and because the
+// exemption is asked per spell rather than per bot, one of those arming the
+// token never locks Purge out.
+bool IsDispelThrottleExemptCast(Player const* player, uint32 spellId)
+{
+    // Cheap gates first: spec detection can fall through to a full pass over
+    // the talent store, and this is asked from the castability check.
+    if (!player || player->GetClass() != CLASS_SHAMAN || !IsPurgeFamilySpell(spellId))
+        return false;
+
+    return DetectClassicClassProfile(player).profile == ClassicClassProfile::SecondaryClassic;
+}
 
 bool PartyBenefitsFromWindfuryTotem(Player const* player)
 {
@@ -6748,7 +6825,11 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken);
     // 89745 lets an enhancement shaman weave in a low-priority heal.
     Unit const* enhLowHealTarget = (isEnhancementShaman && player->HasAura(89745) && IsSpellReady(player, 10468)) ? SelectFriendlyHealthTarget(player, 40.0f, 50.0f) : nullptr;
-    Unit const* enhPurgeTarget = (isEnhancementShaman && !dispelThrottleActive && hasHostileTarget && IsSpellReady(player, 370)) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, 30.0f) : nullptr;
+    // No throttle test: enhancement purges on every global it can. The dead
+    // cast that the throttle protects everyone else from cannot happen here
+    // anyway - SelectEnemyDispelTarget only answers with a target that is
+    // actually carrying a dispellable magic aura.
+    Unit const* enhPurgeTarget = (isEnhancementShaman && hasHostileTarget && IsSpellReady(player, 81325)) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, 30.0f) : nullptr;
     Unit const* chainHealTarget = isRestoShaman && IsSpellReady(player, 10623) ? SelectFriendlyHealthTarget(player, 40.0f, 95.0f) : nullptr;
     Unit const* lesserHealTarget = isRestoShaman && IsSpellReady(player, 10468) ? SelectFriendlyHealthTarget(player, 40.0f, 90.0f) : nullptr;
     Unit const* nsHealTarget = isRestoShaman && IsSpellReady(player, 16188) && IsSpellReady(player, 25357) ? SelectFriendlyHealthTarget(player, 40.0f, 35.0f) : nullptr;
@@ -6817,7 +6898,7 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "shaman stormstrike", "primary melee burst on the kill target", 17364, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     // Enhancement leans on purge harder than the default cross-spec candidate below.
     AddDecisionCandidate(candidates, enhPurgeTarget, 54.5f,
-        { "shaman purge", "heavier purge priority for enhancement", 370, playerbot::PvpClassSpellContext::TargetMode::Enemy, enhPurgeTarget ? enhPurgeTarget->GetGUID() : ObjectGuid::Empty });
+        { "shaman purge", "heavier purge priority for enhancement", 81325, playerbot::PvpClassSpellContext::TargetMode::Enemy, enhPurgeTarget ? enhPurgeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, enhLowHealTarget, 30.5f,
         { "shaman lesser healing wave", "weave a heal on a low-health ally", 10468, enhLowHealTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, enhLowHealTarget ? enhLowHealTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, inCombat && hasHostileTarget && IsMeleeClass(target) && player->IsWithinDistInMap(target, 10.0f) && !HasActiveEarthTotem(player) && IsSpellReady(player, 2484), 56.0f,
@@ -6885,8 +6966,8 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "shaman purge", "purge enemy magic buffs", 81325, playerbot::PvpClassSpellContext::TargetMode::Enemy, purgeTarget ? purgeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isRestoShaman && allyMagicTarget, 53.2f,
         { "shaman purge ally", "purge sheep or fear magic effects from allies", 81325, allyMagicTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, allyMagicTarget ? allyMagicTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !dispelThrottleActive && hasHostileTarget && IsSpellReady(player, 370), 40.0f,
-        { "shaman purge", "strip enemy magical effects by default", 370, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, (isEnhancementShaman || !dispelThrottleActive) && hasHostileTarget && IsSpellReady(player, 81325), 40.0f,
+        { "shaman purge", "strip enemy magical effects by default", 81325, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, isRestoShaman && lesserHealTarget, 51.0f,
         { "shaman lesser healing wave", "restoration fallback heal", 10468, lesserHealTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, lesserHealTarget ? lesserHealTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !isEnhancementShaman && hasHostileTarget && IsSpellReady(player, 15208), isRestoShaman ? 5.0f : 39.0f,
@@ -8320,6 +8401,11 @@ bool PvpCore::CanHunterBestialWrathOutOfControl(Player const* player)
 bool PvpCore::IsEffectivelyImmuneTarget(Player const* player, Unit const* target)
 {
     return IsTargetEffectivelyImmune(player, target);
+}
+
+bool PvpCore::IsDispelThrottleExempt(Player const* player, uint32 spellId)
+{
+    return IsDispelThrottleExemptCast(player, spellId);
 }
 
 uint32 PvpCore::GetRogueStealthOpenerSpellId(Player const* player)

@@ -373,7 +373,7 @@ constexpr std::chrono::milliseconds kPlayerbotFlagRunFormShiftSpacing(2500);
 // Some custom terrain does not expose the matching liquid flags, so the aura is
 // also a generic signal that the bot is currently standing in a hazard.
 constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
-constexpr std::chrono::seconds kPlayerbotDispelCooldown = std::chrono::seconds(5);
+constexpr std::chrono::seconds kPlayerbotDispelCooldown = std::chrono::seconds(8);
 constexpr std::chrono::seconds kDruidCasterFaerieFireCooldown = std::chrono::seconds(10);
 constexpr std::chrono::seconds kPlayerbotAutoRepeatRangedStartCooldown = std::chrono::seconds(2);
 constexpr std::chrono::seconds kHunterPetFailureBackoff = std::chrono::seconds(12);
@@ -394,6 +394,10 @@ bool IsPlayerbotDispelSpell(uint32 spellId)
         case 2782: // Remove Curse
         case 2893: // Abolish Poison
         case 4987: // Cleanse
+        // The T2 Purge wrappers (81324/81325) - own rank chain, and Effect 0 is
+        // TRIGGER_SPELL rather than DISPEL, so nothing else here catches them.
+        // Keep in step with the copy in PlayerbotPvpCore.cpp.
+        case 81324:
             return true;
         default:
             break;
@@ -5500,7 +5504,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             // dispels, so a target the core deems undispellable (while the
             // selector's own check disagrees) had the decision loop re-pick
             // the same dead Purge every tick. Arm it on the refusal too.
-            if (castResult == SPELL_FAILED_NOTHING_TO_DISPEL && IsPlayerbotDispelSpell(resolvedSpellId))
+            if (castResult == SPELL_FAILED_NOTHING_TO_DISPEL && IsPlayerbotDispelSpell(resolvedSpellId) &&
+                !playerbot::PvpCore::IsDispelThrottleExempt(player, resolvedSpellId))
                 playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kPlayerbotDispelCooldownToken, kPlayerbotDispelCooldown);
 
             NotifySpellCastFailureToDiagnosticObservers(player, context, castResult);
@@ -5691,7 +5696,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // Shared tactical cooldown for dispel/decurse effects. This keeps
     // playerbots from spam-casting into protected or undispellable auras while
     // allowing the next decision tick to fall through to another action.
-    if (IsPlayerbotDispelSpell(resolvedSpellId))
+    // PvpCore::IsDispelThrottleExempt names the one cast that is meant to be
+    // spammed - an enhancement shaman's Purge - which must not arm the token
+    // either, or its own next Purge would be the cast that waits.
+    if (IsPlayerbotDispelSpell(resolvedSpellId) && !playerbot::PvpCore::IsDispelThrottleExempt(player, resolvedSpellId))
         playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kPlayerbotDispelCooldownToken, kPlayerbotDispelCooldown);
 
     // Warlock curse openers are instant and can leave the bot with an idle
@@ -5789,7 +5797,7 @@ bool UseDirectItem(Player* player, playerbot::PvpClassSpellContext const& contex
     // Give the PvP decision layer a tiny local throttle so this item action cannot
     // monopolize several AI ticks if the item spell was rejected internally.
     playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, context.spellId ? context.spellId : itemSpellInfo->Id, std::chrono::seconds(2));
-    if (IsPlayerbotDispelSpell(itemSpellInfo->Id))
+    if (IsPlayerbotDispelSpell(itemSpellInfo->Id) && !playerbot::PvpCore::IsDispelThrottleExempt(player, itemSpellInfo->Id))
         playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kPlayerbotDispelCooldownToken, kPlayerbotDispelCooldown);
     return true;
 }
