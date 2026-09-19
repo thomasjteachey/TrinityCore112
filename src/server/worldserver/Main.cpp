@@ -31,6 +31,7 @@
 #include "DatabaseEnv.h"
 #include "DatabaseLoader.h"
 #include "DeadlineTimer.h"
+#include "Errors.h"
 #include "GitRevision.h"
 #include "InstanceSaveMgr.h"
 #include "IoContext.h"
@@ -62,6 +63,8 @@
 #include <boost/filesystem/operations.hpp>
 #include <boost/program_options.hpp>
 #include <csignal>
+#include <cstdlib>
+#include <fstream>
 #include <iostream>
 
 using namespace boost::program_options;
@@ -85,8 +88,44 @@ char serviceDescription[] = "TrinityCore World of Warcraft emulator world servic
 int m_ServiceStatus = -1;
 
 #include <boost/dll/shared_library.hpp>
+// Windows.h for IsDebuggerPresent() in DebuggerAttached() below, and because
+// timeapi.h wants the Windows types in scope before it.
+#include <Windows.h>
 #include <timeapi.h>
 #endif
+
+// Is something holding this process under a debugger right now?
+//
+// The freeze detector's only test is "has the world loop counter moved", and a
+// breakpoint stops the world thread dead - so an ordinary debugging session is
+// indistinguishable from a hang by that test alone. That is why the handler
+// below spent a while commented out rather than fixed: armed, it shot every
+// local debugging session it saw. Asking the OS is the piece that was missing.
+//
+// Re-read on every poll instead of cached once at startup, because a debugger
+// can attach to an already-running server (gdb -p) and detach again later.
+static bool DebuggerAttached()
+{
+#ifdef _WIN32
+    return IsDebuggerPresent() != FALSE;
+#else
+    // Linux publishes its tracer in /proc/self/status. Non-zero means some
+    // process holds us under ptrace - gdb, lldb, strace. Zero, or a file that
+    // cannot be read at all, means nobody is watching and a stalled counter is
+    // a real hang.
+    std::ifstream status("/proc/self/status");
+    std::string line;
+    while (std::getline(status, line))
+    {
+        if (line.rfind("TracerPid:", 0) != 0)
+            continue;
+
+        return std::strtol(line.c_str() + (sizeof("TracerPid:") - 1), nullptr, 10) != 0;
+    }
+
+    return false;
+#endif
+}
 
 class FreezeDetector
 {
@@ -389,12 +428,20 @@ extern int main(int argc, char** argv)
 
     // Start the freeze check callback cycle in 5 seconds (cycle itself is 1 sec)
     std::shared_ptr<FreezeDetector> freezeDetector;
+#ifdef TRINITY_DEBUG
+    // A debug build is a build somebody is stepping through, so the detector is
+    // never armed there at all - DebuggerAttached() covers a debugger that comes
+    // and goes, this covers the local build that exists to be broken into.
+    // Nothing is lost on a live realm: those are RelWithDebInfo.
+    TC_LOG_INFO("server.worldserver", "Debug build - anti-freeze thread not started.");
+#else
     if (int coreStuckTime = sConfigMgr->GetIntDefault("MaxCoreStuckTime", 60))
     {
         freezeDetector = std::make_shared<FreezeDetector>(*ioContext, coreStuckTime * 1000);
         FreezeDetector::Start(freezeDetector);
         TC_LOG_INFO("server.worldserver", "Starting up anti-freeze thread ({} seconds max stuck time)...", coreStuckTime);
     }
+#endif
 
     TC_LOG_INFO("server.worldserver", "{} (worldserver-daemon) ready...", GitRevision::GetFullVersion());
 
@@ -552,39 +599,56 @@ void SignalHandler(boost::system::error_code const& error, int /*signalNumber*/)
 
 void FreezeDetector::Handler(std::weak_ptr<FreezeDetector> freezeDetectorRef, boost::system::error_code const& error)
 {
-    //todo thomas freeze handler comment
-    /*
-    if (!error)
+    if (error)
+        return;
+
+    std::shared_ptr<FreezeDetector> freezeDetector = freezeDetectorRef.lock();
+    if (!freezeDetector)
+        return;
+
+    uint32 const curtime = getMSTime();
+    uint32 const worldLoopCounter = World::m_worldLoopCounter;
+
+    if (freezeDetector->_worldLoopCounter != worldLoopCounter)
     {
-        if (std::shared_ptr<FreezeDetector> freezeDetector = freezeDetectorRef.lock())
+        // The loop moved, so the world thread is alive. This is the only place
+        // the clock is reset in the ordinary course of things.
+        freezeDetector->_lastChangeMsTime = curtime;
+        freezeDetector->_worldLoopCounter = worldLoopCounter;
+    }
+    else if (DebuggerAttached())
+    {
+        // Stopped, but stopped on purpose. The clock is pushed forward rather
+        // than the abort merely being skipped: skipping alone would leave every
+        // second spent at a breakpoint on the meter, so the first poll after
+        // detaching would fire on time the process spent stopped rather than
+        // stuck - which is the same lost debugging session by a slower route.
+        freezeDetector->_lastChangeMsTime = curtime;
+    }
+    // possible freeze
+    else
+    {
+        uint32 const msTimeDiff = getMSTimeDiff(freezeDetector->_lastChangeMsTime, curtime);
+        if (msTimeDiff > freezeDetector->_maxCoreStuckTimeInMs)
         {
-            uint32 curtime = getMSTime();
-
-            uint32 worldLoopCounter = World::m_worldLoopCounter;
-            if (freezeDetector->_worldLoopCounter != worldLoopCounter)
-            {
-                freezeDetector->_lastChangeMsTime = curtime;
-                freezeDetector->_worldLoopCounter = worldLoopCounter;
-            }
-            // possible freeze
-            else
-            {
-                uint32 msTimeDiff = getMSTimeDiff(freezeDetector->_lastChangeMsTime, curtime);
-                if (msTimeDiff > freezeDetector->_maxCoreStuckTimeInMs)
-                {
-                    TC_LOG_ERROR("server.worldserver", "World Thread hangs for {} ms, forcing a crash!", msTimeDiff);
-                    ABORT_MSG("World Thread hangs for %u ms, forcing a crash!", msTimeDiff);
-                }
-            }
-
-            freezeDetector->_timer.expires_from_now(boost::posix_time::seconds(1));
-            freezeDetector->_timer.async_wait([freezeDetectorRef](boost::system::error_code const& timerError)
-            {
-                return Handler(freezeDetectorRef, timerError);
-            });
+            // Deliberately a crash rather than a graceful stop. A graceful stop
+            // is read *by the world loop*, which is the very thing that is
+            // wedged, so it would never be acted on - proven on 2026-09-19,
+            // when a hung realm ignored SIGTERM for 20s and needed SIGKILL.
+            // The abort raises SIGABRT instead, which systemd-coredump turns
+            // into a core naming the loop, and Restart=always has the realm
+            // back in seconds. Sitting hung indefinitely while leaving nothing
+            // to read is the worse outcome of the two.
+            TC_LOG_ERROR("server.worldserver", "World Thread hangs for {} ms, forcing a crash!", msTimeDiff);
+            ABORT_MSG("World Thread hangs for %u ms, forcing a crash!", msTimeDiff);
         }
     }
-    */
+
+    freezeDetector->_timer.expires_from_now(boost::posix_time::seconds(1));
+    freezeDetector->_timer.async_wait([freezeDetectorRef](boost::system::error_code const& timerError)
+    {
+        return Handler(freezeDetectorRef, timerError);
+    });
 }
 
 AsyncAcceptor* StartRaSocketAcceptor(Trinity::Asio::IoContext& ioContext)

@@ -3435,6 +3435,49 @@ Centurion.Chest.SlowOpenPercent.Player = 50
 Centurion.Chest.SlowOpenPercent.Bot = 100
 
 #
+#    Centurion.AuctionHouse.ProceedsDelaySeconds
+#        Description: How long the gold from a sale takes to reach the seller.
+#                     Deliberately NOT MailDeliveryDelay: that hour exists to make
+#                     player-to-player item mail hard to abuse, which has nothing
+#                     to do with the auction house paying out its own sale, and
+#                     lowering it would take the protection off ordinary mail as a
+#                     side effect.
+#                     At 0 there is no gap to explain, so the "your money is
+#                     coming" invoice is not sent either - it would otherwise
+#                     arrive beside the mail already carrying the gold and say the
+#                     same thing. Raising this above 0 restores the invoice by
+#                     itself.
+#        Default:     0  (proceeds arrive with the sale, no invoice)
+#
+#    Centurion.Auction.RelistBotRares
+#        Description: Put a playerbot's unsold blue-or-better lot back up instead
+#                     of destroying it, but ONLY when it is the last one of its
+#                     kind on the house.
+#                     A bot's unsold lot is destroyed at expiry rather than mailed
+#                     home, which over a long uptime is a one-way ratchet on the
+#                     item TYPES the realm has: every blue that fails to sell is
+#                     deleted, drop tables are the only thing putting more back,
+#                     and a piece that stops appearing never appears again. This
+#                     rescues the last copy only - same item, same price, fresh
+#                     clock - so at most one of each blue or purple is held open
+#                     and the house still churns. Any owner's listing counts as a
+#                     survivor, including a player's.
+#        Default:     1 - (rescue the last copy)
+#                     0 - (stock behaviour, always destroy)
+#
+#    Centurion.Auction.RelistBotHours
+#        Description: How long a rescued lot is relisted for. AuctionEntry::etime
+#                     is never read back by LoadFromDB, so the original listing's
+#                     window is meaningless for anything that has survived a
+#                     restart; this is its own setting rather than a guess at it.
+#                     Scaled by Rate.Auction.Time. Minimum 1.
+#        Default:     48
+#
+Centurion.AuctionHouse.ProceedsDelaySeconds = 0
+Centurion.Auction.RelistBotRares = 1
+Centurion.Auction.RelistBotHours = 48
+
+#
 #    Centurion.Hunter.MongooseBite.ScorpidHealPerStrength
 #        Description: Healing per point of Strength drained, when Mongoose Bite
 #                     consumes a Scorpid Sting. The heal used to be a flat roll
