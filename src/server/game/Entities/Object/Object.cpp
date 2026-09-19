@@ -3387,6 +3387,41 @@ namespace
         return !caster->IsFFAPvP() && aided->IsFFAPvP();
     }
 
+    // Whether either side of this is a player whose War Mode is PAUSED - opted
+    // in, but standing in an open world zone they have outlevelled.
+    //
+    // A paused player is not a combatant, in either direction and for every
+    // kind of interaction: they cannot be hit and they cannot hit, and they
+    // cannot heal, shield, buff, dispel, resurrect, crowd-control or slow
+    // another player either. The second half is the point. Disarming FFA alone
+    // would have produced something worse than the ganking it was written to
+    // stop: an untouchable level 60 standing behind his level 20 friend with a
+    // healbook, safe from everyone in the zone while the friend worked.
+    //
+    // PvE is deliberately untouched. Pulling threat, tanking, helping with a
+    // quest mob - all of that still works down there; a zone beneath your level
+    // is somewhere you are welcome to be, just not somewhere you are allowed to
+    // fight people.
+    //
+    // Asked through GetAffectingPlayer on BOTH sides, so a pet, totem,
+    // guardian or mind-controlled unit is exactly as inert as its owner - a
+    // neutered owner with a live pet is the same gank with an extra step.
+    // Battlegrounds and arenas keep their own rules: the match decides who may
+    // hit whom, and nobody is there by accident.
+    bool IsWarModePausedInteraction(WorldObject const* self, WorldObject const* target)
+    {
+        Player const* actor = self ? self->GetAffectingPlayer() : nullptr;
+        Player const* other = target ? target->GetAffectingPlayer() : nullptr;
+        if (!actor || !other || actor == other)
+            return false;
+
+        Map const* map = actor->FindMap();
+        if (map && map->IsBattlegroundOrArena())
+            return false;
+
+        return actor->IsWarModePaused() || other->IsWarModePaused();
+    }
+
     // Playerbots are one team in the open world: with everyone FFA-flagged
     // on a hardcore realm they would otherwise be legal targets for each
     // other. Battlegrounds keep their normal team rules. Configurable via
@@ -3429,6 +3464,15 @@ bool WorldObject::IsValidAttackTarget(WorldObject const* target, SpellInfo const
 
     // Playerbots never fight each other outside battlegrounds.
     if (AreOpenWorldTeamedPlayerbots(this, target))
+        return false;
+
+    // War Mode paused on either side: no player may attack, and no player may
+    // be attacked. The FFA ruleset already disarms a paused player, so on a
+    // one-faction realm this is usually belt and braces - but "usually" is not
+    // a thing to leave a gank hanging on, and a duel, a mind control or a
+    // reaction computed from anything other than the FFA byte would all slip
+    // past the flag on its own.
+    if (IsWarModePausedInteraction(this, target))
         return false;
 
     // can't attack unattackable units
@@ -3632,6 +3676,19 @@ bool WorldObject::IsValidAssistTarget(WorldObject const* target, SpellInfo const
     // reach a friendly unit, and this waiver has no business opening that.
     if ((!bySpell || bySpell->IsPositive()) && AreOpenWorldTeamedPlayerbots(this, target))
         return true;
+
+    // War Mode paused on either side: no heals, no shields, no buffs, no
+    // dispels, no resurrections, to or from another player.
+    //
+    // ABOVE the party exemptions below, because this is the rule they would
+    // otherwise reopen. A paused level 60
+    // and the level 20 he is pocket-healing are in a PARTY - that is the whole
+    // shape of the exploit - and IsUnarmedPlayerAidingArmed deliberately waives
+    // itself for your own group. Turning War Mode off to heal your friends is
+    // still fine and still works; what is not on offer is being unkillable and
+    // useful at the same time.
+    if (IsWarModePausedInteraction(this, target))
+        return false;
 
     // War Mode off: no healing, no buffing, of a playerbot or of anybody who has
     // War Mode on. Placed this early so it covers every route a positive spell

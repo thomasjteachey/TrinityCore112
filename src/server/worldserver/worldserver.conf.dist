@@ -3532,23 +3532,45 @@ Centurion.GMOnline.Realms = ""
 Centurion.GMOnline.BotAccountPrefix = "PLAYERBOT"
 
 #
+#    Centurion.WarMode.PauseInLowerZones
+#        Description: With War Mode on, a player standing in an open-world zone whose level
+#                     band they are ABOVE stops being a combatant: they cannot be attacked,
+#                     and they cannot attack, heal, buff, dispel, crowd-control or resurrect
+#                     another player either - in either direction, pets and totems included.
+#                     PvE is untouched: they can still pull, tank and help with quest mobs.
+#                     Turning War Mode off lifts it and restores normal support of friends.
+#                     Replaces Centurion.WarMode.BlockLowerZones, which moved people instead.
+#                     Starter zones, capitals, instances, battlegrounds and the Gurubashi
+#                     Battle Ring never pause. Strictly above the band's top, so a max-level
+#                     player is never paused in a zone that tops out at the cap.
+#        Default:     1
+#
+#    Centurion.WarMode.BlockLowerZones
+#        Description: The older rule: teleport a War Mode player out of any zone they have
+#                     outlevelled, back to where they last legally stood, their home inn, or
+#                     a capital. Off by default - it refused innocent travel (flight paths,
+#                     roads to capitals, a low hearthstone) to stop one thing the pause above
+#                     now stops without moving anybody. Both can run at once.
+#        Default:     0
+#
 #    Centurion.WarMode.ZoneCapStopsXp
 #        Description: With War Mode on, a player stops gaining experience at the top level
 #                     of the open-world zone they are standing in, and is told so. Going to
-#                     a higher-level zone turns it back on. Pairs with the rule that turns
-#                     War Mode players out of zones they have outlevelled: without it, the
-#                     level that takes them past a zone's ceiling bounces them out of it.
+#                     a higher-level zone turns it back on. Fires one level BELOW the pause
+#                     above, so anyone who stays put never crosses into it.
 #                     Separate from the stock experience toggle - either one stops XP.
 #                     Starter zones, capitals, instances and the level cap are never capped.
 #        Default:     1
 #
 #    Centurion.WarMode.ZoneCapAuraSpell
-#        Description: Visible aura worn while the cap is in force. Needs a client Spell.dbc
-#                     row - without one it is a blank, nameless icon - so 0 here; 90718
-#                     ("Experience Halted") on Barracks+. The cap itself works without it.
+#        Description: Visible aura worn while either of the two above is in force. Needs a
+#                     client Spell.dbc row - without one it is a blank, nameless icon - so 0
+#                     here; 90718 ("War Mode Paused") on Barracks+. Both rules work without it.
 #        Default:     0
 #
 
+Centurion.WarMode.PauseInLowerZones = 1
+Centurion.WarMode.BlockLowerZones = 0
 Centurion.WarMode.ZoneCapStopsXp = 1
 Centurion.WarMode.ZoneCapAuraSpell = 0
 

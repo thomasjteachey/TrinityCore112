@@ -1753,6 +1753,21 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         bool IsInGurubashiRingArea(uint32 zoneId, uint32 areaId) const;
         bool IsInGurubashiBattleRing(uint32 zoneId, uint32 areaId) const;
         bool IsInGurubashiBattleRing() const;
+
+        // War Mode paused: opted in, but standing in an open world zone this
+        // character has outlevelled. While it is set they may neither harm nor
+        // help another player - see WorldObject::IsValidAttackTarget and
+        // ::IsValidAssistTarget, which are the only readers.
+        //
+        // A value here rather than a predicate in the scripts, for the same
+        // reason the bounty pursuit above is: the answer is computed by
+        // BarracksHardcore::IsWarModePaused in the script library, and the two
+        // target checks live in the game library where that cannot be called.
+        // Written once per player tick by the War Mode gate script; never
+        // saved, because a level or a zone can change while you are logged out
+        // and a stale "you are safe" is the one state worth never restoring.
+        bool IsWarModePaused() const { return m_warModePaused; }
+        void SetWarModePaused(bool paused) { m_warModePaused = paused; }
         // Stepping on or off the Battle Ring's sand changes whom a tournament or
         // world character may fight (Tournament::AreKeptFromFighting) without
         // necessarily moving anyone's FFA flag: resend this player's flag to
@@ -1984,6 +1999,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
 
         uint32 m_bountyPursuitStacks = 0;
         uint32 m_bountyPursuitUntilMs = 0;
+        bool m_warModePaused = false;
         bool m_inGurubashiBattleRing = false;   // last ring state UpdateArea saw
         void SetWorldChannelOptOut(bool optOut);
 

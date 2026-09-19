@@ -600,6 +600,20 @@ namespace BarracksHardcore
         if (!IsFfaEligibleZone(player))
             return false;
 
+        // War Mode is paused in a zone beneath you: you are not a combatant
+        // here. This is the whole of the "no ganking lowbies" rule on the
+        // attack side - a realm where everybody is one faction has no hostility
+        // to draw on except the FFA byte, so disarming it here is what makes a
+        // level 60 in the Barrens unable to swing at anyone, and equally unable
+        // to be swung at. The assist side cannot be answered from a flag and is
+        // handled in WorldObject::IsValidAssistTarget.
+        //
+        // Asked before the bot branch on purpose: a bot is never paused (it has
+        // no opt-in), so the cost is one early false for the fleet and the
+        // answer cannot depend on which branch got there first.
+        if (IsWarModePaused(player))
+            return false;
+
         WorldSession const* session = player->GetSession();
         if (session && IsBotAccount(session->GetAccountId()))
             return true;
@@ -652,6 +666,73 @@ namespace BarracksHardcore
             return false;
 
         return IsOptedIn(player->GetGUID().GetCounter());
+    }
+
+    // See the header for why this exists. Computed from scratch on every ask
+    // rather than read from a cached flag, because IsFfaArmed asks it on the
+    // same tick that the gate script writes the flag and the order the two
+    // PlayerScripts run in is nobody's business to rely on.
+    bool IsWarModePaused(Player const* player)
+    {
+        if (!s_enabled || !player || !player->IsInWorld())
+            return false;
+
+        // A GM is not a combatant in the first place, and the FFA ruleset
+        // already leaves them alone.
+        if (player->IsGameMaster())
+            return false;
+
+        // Somebody who has not opted in has nothing to pause. This also answers
+        // false for every playerbot and every tournament character.
+        if (!IsWarModeOptedIn(player))
+            return false;
+
+        // The Battle Ring is checked FIRST for the same reason IsFfaArmed
+        // checks it first: everyone the hourly event drops in there is a
+        // combatant whatever their level, and the ring sits inside Stranglethorn
+        // - a zone most of its entrants have long outlevelled. Pausing them
+        // would leave the one place on the realm that is always a fight full of
+        // people who cannot throw a punch.
+        if (player->IsInGurubashiBattleRing())
+            return false;
+
+        // Instances, battlegrounds and arenas are not the open world, and the
+        // band table has no entry for them anyway.
+        Map const* map = player->FindMap();
+        if (!map || map->Instanceable())
+            return false;
+
+        uint32 const zoneId = player->GetZoneId();
+        if (!IsOpenWorldPvpZone(zoneId))
+            return false;
+
+        // The realm's own bands, shared with the drifter draft and the zone-band
+        // addon rather than copied. A zone with no band has no opinion: cities,
+        // instances and battlegrounds are all unbanded and are all places a War
+        // Mode player is entitled to fight in.
+        uint8 bottom = 0;
+        uint8 top = 0;
+        if (!playerbot::GetZoneLevelBand(zoneId, bottom, top))
+            return false;
+
+        if (uint32(player->GetLevel()) <= uint32(top))
+            return false;
+
+        // A fight you are already in does not end because you crossed a line.
+        //
+        // Without this the pause is an escape hatch: lose a fight in a zone
+        // your own size, run downhill over the border, and become untouchable
+        // mid-swing with your opponent left standing there. Held off until the
+        // PvP combat references drain on their own - PvE combat is deliberately
+        // not counted, or a level 60 grinding mobs in the Barrens would stay a
+        // legal target for as long as he kept pulling.
+        //
+        // It converges: nothing here keeps combat alive, so the pause lands a
+        // few seconds later instead of never.
+        if (!player->GetCombatManager().GetPvPCombatRefs().empty())
+            return false;
+
+        return true;
     }
 
     bool WarModeBlocksGrouping(Player const* left, Player const* right)

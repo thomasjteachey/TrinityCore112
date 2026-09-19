@@ -53,6 +53,27 @@ namespace BarracksHardcore
     // maintained in exactly one place.
     bool IsWarModeOptedIn(Player const* player);
 
+    // Whether War Mode is PAUSED for this person: opted in, standing in an open
+    // world zone whose level band they are above.
+    //
+    // War Mode does not travel downhill, but it is suspended rather than
+    // refused. The earlier rule turned people out of the zone altogether and it
+    // was a wall in front of the 99% of journeys that were innocent - flying
+    // over Mulgore, riding to a capital, helping a friend through Westfall. So
+    // nobody is moved any more: they simply stop being a combatant while they
+    // are down there, in both directions.
+    //
+    // "Above the band's top", not "above its bottom": a level 35 in a 30-40
+    // zone is doing that zone's content. Strictly above, so a max-level player
+    // is never paused in a zone that tops out at the cap - which is every zone
+    // they have left to play in.
+    //
+    // Exported because three separate places need the same answer and none of
+    // them may keep its own copy: the FFA ruleset (which disarms), the gate
+    // script (which wears the aura and speaks the lines) and, through
+    // Player::IsWarModePaused, the core's attack and assist checks.
+    bool IsWarModePaused(Player const* player);
+
     // True when a fight between people can actually happen in this zone.
     //
     // Exported so the playerbot manager asks the same question the FFA ruleset

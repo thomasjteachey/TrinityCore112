@@ -21,17 +21,29 @@
 // beneath them. The whole point of the opt-in is a fight; a level 50 in Westfall
 // is not offering one, and the people who live there did not agree to it.
 //
-// Enforced on ARRIVAL rather than on departure, because there is nowhere else to
-// stand. There is no script hook on the flight master, the hearthstone or a
-// portal, so "refuse the journey" is not available without editing every travel
-// path in the core - and a rule that only covered some of them would just teach
-// people which one still worked. OnUpdateZone catches all of them at once, at
-// the cost of the player crossing the line before being turned around.
+// THE RULE IS A PAUSE, NOT A WALL. This file first enforced it by turning people
+// out of the zone, and that was the wrong question to ask: "where may you stand"
+// is innocent nearly every time it comes up - a flight path over Mulgore, the
+// ride to a capital, walking a friend through Westfall, a hearthstone set in
+// Goldshire - and all of it was refused alongside the one case anybody minded.
+// So nobody is moved any more. While you are in a zone you have outlevelled you
+// simply stop being a combatant: you cannot be attacked, and you cannot attack,
+// heal, buff, dispel, crowd-control or resurrect another player either. PvE is
+// untouched - pull what you like, tank for whoever you like. The bounce survives
+// behind Centurion.WarMode.BlockLowerZones, switched off.
+//
+// The second half of that sentence is the load-bearing one. Disarming alone
+// would have produced something worse than the ganking it was written to stop:
+// an untouchable level 60 standing behind his level 20 friend with a healbook.
+// Turning War Mode OFF still lets you support your friends anywhere, which is
+// the trade - safe and useful is what is not on offer. The enforcement lives in
+// WorldObject::IsValidAttackTarget and ::IsValidAssistTarget, reached through
+// Player::IsWarModePaused, which this script writes once per tick.
 //
 // The bands are the realm's own, shared with the drifter draft and the zone-band
 // addon rather than copied - see playerbot::GetZoneLevelBand. A zone with no
 // band has no opinion: cities, instances and battlegrounds are all unbanded and
-// are all places a War Mode player is entitled to be.
+// are all places a War Mode player is entitled to fight in.
 
 #include "ScriptMgr.h"
 #include "Chat.h"
@@ -109,9 +121,19 @@ namespace
         return true;
     }
 
+    // The original rule, kept behind a switch that is now OFF by default.
+    //
+    // Turning people out of a zone answered the wrong question - "where may you
+    // stand" - and presence is innocent almost every time it is asked about.
+    // Flying over Mulgore, riding to a capital, walking a friend through
+    // Westfall and logging in at a low hearthstone were all refused alongside
+    // the one case anybody wanted stopped. What replaced it is the pause below:
+    // nobody is moved, they simply stop being a combatant while they are down
+    // there. Left in place rather than deleted so the old behaviour is one
+    // config line away if the pause ever proves too soft.
     bool GateEnabled()
     {
-        return sConfigMgr->GetBoolDefault("Centurion.WarMode.BlockLowerZones", true);
+        return sConfigMgr->GetBoolDefault("Centurion.WarMode.BlockLowerZones", false);
     }
 
     void RememberSafeSpot(Player const* player)
@@ -220,39 +242,102 @@ namespace
         return uint32(player->GetLevel()) >= uint32(top);
     }
 
-    // The aura IS the state: on while capped, off while not, and the message is
-    // spoken on the change. No bookkeeping to go stale across a logout - the
-    // aura persists with the character, so a login inside a capped zone says
-    // nothing new, and one outside it lifts the aura with the "again" line.
-    void SyncZoneCapAura(Player* player)
+    // Whether War Mode is paused here - the rule that replaced the bounce.
+    //
+    // Answered by the FFA ruleset rather than recomputed, so the zone this
+    // script talks about and the zone the FFA byte disarms in can never be two
+    // different zones. Config gives it an off switch of its own; the ruleset is
+    // the only thing that decides WHO, this only decides WHETHER.
+    std::atomic<bool> s_pauseInLowerZones{ true };
+
+    bool WarModePaused(Player const* player)
     {
-        uint32 const spell = s_zoneCapAuraSpell.load(std::memory_order_relaxed);
-        if (!spell || !player || !player->IsInWorld())
+        return s_pauseInLowerZones.load(std::memory_order_relaxed) &&
+            BarracksHardcore::IsWarModePaused(player);
+    }
+
+    // The player's zone name, or "this zone" when the DBC has nothing to say.
+    char const* ZoneNameFor(Player const* player)
+    {
+        if (AreaTableEntry const* zone = sAreaTableStore.LookupEntry(player->GetZoneId()))
+            if (char const* name = zone->AreaName[player->GetSession()->GetSessionDbcLocale()])
+                if (*name)
+                    return name;
+
+        return "this zone";
+    }
+
+    // The aura IS the state: on while the zone is beneath you, off while it is
+    // not, and the message is spoken on the change. No bookkeeping to go stale
+    // across a logout - the aura persists with the character, so a login inside
+    // such a zone says nothing new, and one outside it lifts the aura with the
+    // "again" line.
+    //
+    // ONE aura for two consequences, because to a player they are one fact:
+    // this zone is below you and War Mode is on here. The pause needs the
+    // player to be strictly ABOVE the band's top (a level 60 must still be able
+    // to fight in a zone that tops out at 60 - that is every zone left to him),
+    // while the experience stop fires AT the top, one level earlier, precisely
+    // so that nobody who stays put ever crosses into the pause. So the aura is
+    // the union of the two, and the lines below say which one just happened.
+    void SyncWarModeZoneState(Player* player)
+    {
+        if (!player || !player->IsInWorld())
             return;
+
+        bool const wasPaused = player->IsWarModePaused();
+        bool const paused = WarModePaused(player);
+
+        // Written every tick rather than on the change, for the same reason the
+        // FFA byte is: level, zone, map and the War Mode setting all move it,
+        // and a list of the things that move it is a list somebody forgets to
+        // add to. It is a plain bool assignment - no packet, no broadcast.
+        player->SetWarModePaused(paused);
 
         uint8 top = 0;
         bool const capped = ZoneCapStopsXp(player, &top);
-        bool const wearing = player->HasAura(spell);
-        if (capped == wearing)
+
+        uint32 const spell = s_zoneCapAuraSpell.load(std::memory_order_relaxed);
+        bool const marked = paused || capped;
+        bool const wearing = spell && player->HasAura(spell);
+
+        // Nothing has drifted - the overwhelmingly common case, and the one
+        // this runs per player per tick to reach.
+        if (paused == wasPaused && (!spell || marked == wearing))
             return;
 
         ChatHandler handler(player->GetSession());
-        if (capped)
-        {
+
+        if (spell && marked && !wearing)
             player->AddAura(spell, player);
+        else if (spell && !marked && wearing)
+            player->RemoveAurasDueToSpell(spell);
 
-            char const* zoneName = "this zone";
-            if (AreaTableEntry const* zone = sAreaTableStore.LookupEntry(player->GetZoneId()))
-                if (char const* name = zone->AreaName[player->GetSession()->GetSessionDbcLocale()])
-                    if (*name)
-                        zoneName = name;
-
-            handler.PSendSysMessage("You have reached level %u, the top of %s's level range. With War Mode on you no longer gain experience here - travel to a higher-level zone to turn it back on.",
-                uint32(top), zoneName);
+        if (paused && !wasPaused)
+        {
+            handler.PSendSysMessage("%s is below your level. War Mode is paused here: you cannot harm or help other players, and you earn no experience. Travel somewhere your own size, or turn War Mode off.",
+                ZoneNameFor(player));
             return;
         }
 
-        player->RemoveAurasDueToSpell(spell);
+        if (!paused && wasPaused)
+        {
+            if (capped)
+                handler.PSendSysMessage("War Mode is active again. You still earn no experience at the top of this zone's level range.");
+            else
+                handler.PSendSysMessage("War Mode is active again.");
+            return;
+        }
+
+        // Neither side of the pause moved, so this is the experience stop on
+        // its own, arriving or lifting at the band's ceiling.
+        if (marked)
+        {
+            handler.PSendSysMessage("You have reached level %u, the top of %s's level range. With War Mode on you no longer gain experience here - travel to a higher-level zone to turn it back on.",
+                uint32(top), ZoneNameFor(player));
+            return;
+        }
+
         if (player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN))
             handler.PSendSysMessage("War Mode's experience stop has lifted, but your own experience toggle is still off.");
         else
@@ -273,6 +358,8 @@ public:
         // 90718 on B+. The experience stop does not depend on it - only the badge.
         s_zoneCapAuraSpell.store(uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.WarMode.ZoneCapAuraSpell", 0))),
             std::memory_order_relaxed);
+        s_pauseInLowerZones.store(sConfigMgr->GetBoolDefault("Centurion.WarMode.PauseInLowerZones", true),
+            std::memory_order_relaxed);
     }
 };
 
@@ -292,7 +379,7 @@ public:
         // Every tick, like the notoriety checkpoints: level, zone and the War
         // Mode flag all move it, and a list of those is a list somebody forgets
         // to add to. Cheap - one opt-in lookup, then nothing, for anyone unflagged.
-        SyncZoneCapAura(player);
+        SyncWarModeZoneState(player);
 
         if (!g_pendingCount.load(std::memory_order_relaxed))
             return;
@@ -403,6 +490,11 @@ public:
             return;
 
         TakePendingAfterFlight(player);
+
+        // The flag is per-session state, not character state: clear it on the
+        // way out so a Player object reused from the pool cannot start life
+        // wearing somebody else's truce.
+        player->SetWarModePaused(false);
 
         std::lock_guard<std::mutex> guard(g_safeLock);
         g_lastSafeSpot.erase(player->GetGUID().GetRawValue());
