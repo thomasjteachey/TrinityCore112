@@ -39,6 +39,17 @@
 //   .gmonline addon      the addon's feed, nothing printed
 //   .gmonline addon bots
 //
+// And the other half of the staff question - "who else is this?" - every
+// character one account owns, on every realm, offline ones included:
+//
+//   .gmonline alts <who>        <who> is an account name OR a character name
+//   .gmonline addon alts <who>
+//
+// That one is all database: an offline character is in no session list, so
+// even this realm's own rows come from `characters`. The realm the GM is
+// standing on then has its live sessions laid over the top, because a saved
+// zone is only as fresh as the last PlayerSaveInterval.
+//
 // Replies ride the CCGAME addon whisper everything else uses. One reply is:
 //
 //   GMOB:<seq>|<withBots>                           begin; the addon starts a fresh list
@@ -47,7 +58,17 @@
 //   GMOP:<realmId>|<name>,<lvl>,<class>,<race>,<zone>,<flags>,<account>;...
 //   GMOE:<seq>                                      end; the addon swaps the list in
 //
-// flags: 1 bot, 2 GM account, 4 in a battleground or arena, 8 dead.
+// and an account listing is the same shape with its own tags:
+//
+//   GMAB:<seq>|<asked>|<found>                      begin; <asked> is what was typed
+//   GMAI:<id>|<account>|<security>|<online>|<banned>|<muted>|<lastLoginAgo>|<joinedAgo>|<lastIp>
+//   GMAR:<realmId>|<name>|<characters>|<live>       one per realm
+//   GMAZ:<zoneId>,<name>;...
+//   GMAC:<realmId>|<name>,<lvl>,<class>,<race>,<zone>,<flags>,<idleSecs>,<gold>,<hours>;...
+//   GMAE:<seq>
+//
+// flags: 1 bot, 2 GM account, 4 in a battleground or arena, 8 dead,
+//        16 online, 32 a deleted character (the last two, an alt listing only).
 //
 // Config:
 //   Centurion.GMOnline.Enable            1
@@ -62,6 +83,7 @@
 #include "Configuration/Config.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
+#include "GameTime.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
@@ -78,10 +100,12 @@
 
 #include <algorithm>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace Trinity::ChatCommands;
@@ -108,10 +132,42 @@ namespace
 
     enum OnlineRowFlags : uint32
     {
-        ROW_BOT  = 1,
-        ROW_GM   = 2,
-        ROW_BG   = 4,
-        ROW_DEAD = 8,
+        ROW_BOT     = 1,
+        ROW_GM      = 2,
+        ROW_BG      = 4,
+        ROW_DEAD    = 8,
+        // An online listing is online by definition; these two say something
+        // only in an account listing, which carries offline rows as well.
+        ROW_ONLINE  = 16,
+        ROW_DELETED = 32,
+    };
+
+    // One account's whole roster: what a GM wants alongside the names.
+    struct AltAccount
+    {
+        uint32 id = 0;
+        std::string username;
+        std::string lastIp;
+        uint32 lastLoginAgo = 0;    // seconds; 0 = never logged in
+        uint32 joinedAgo = 0;       // seconds; 0 = unknown
+        uint32 security = 0;
+        bool online = false;
+        bool banned = false;
+        bool muted = false;
+    };
+
+    struct AltRow
+    {
+        uint32 realmId = 0;
+        std::string name;
+        uint32 level = 0;
+        uint32 playerClass = 0;
+        uint32 race = 0;
+        uint32 zoneId = 0;
+        uint32 flags = 0;
+        uint32 idleSeconds = 0;     // since logout; 0 while online
+        uint32 gold = 0;
+        uint32 hoursPlayed = 0;
     };
 
     bool s_enabled = true;
@@ -375,6 +431,30 @@ namespace
         return ids;
     }
 
+    // The same realms, each with the table its characters live in. This realm's
+    // schema need not be configured at all: the character database this
+    // worldserver is connected to IS that schema, so it is named plainly. The
+    // order matches RealmsToReport so both feeds list the realms alike.
+    std::vector<std::pair<uint32, std::string>> RealmTables()
+    {
+        std::vector<std::pair<uint32, std::string>> tables;
+        uint32 const thisRealm = realm.Id.Realm;
+        bool listedThis = false;
+        for (OnlineRealm const& entry : s_realms)
+        {
+            if (entry.id == thisRealm)
+            {
+                listedThis = true;
+                tables.emplace_back(entry.id, "characters");
+            }
+            else
+                tables.emplace_back(entry.id, "`" + entry.schema + "`.characters");
+        }
+        if (!listedThis)
+            tables.insert(tables.begin(), { thisRealm, "characters" });
+        return tables;
+    }
+
     // One whisper stays well inside what the client takes in an addon message.
     constexpr std::size_t kMaxPayload = 200;
 
@@ -489,6 +569,302 @@ namespace
         }
     }
 
+    // ------------------------------------------------------------------ alts
+    //
+    // Two statements, chained on one callback. The first turns whatever was
+    // typed into an account; the second lists that account's characters on
+    // every realm. They are separate because the answer to the first is what
+    // the second asks about - and because a name that matches nothing has to
+    // come back as "no such account" rather than as an empty roster.
+
+    // What was typed can be an account name or a character name, on any realm,
+    // and a character that has since been deleted still answers - TrinityCore
+    // blanks a deleted character's name and account and keeps both in the
+    // deleteInfos_ columns. Account names win over character names, and the
+    // realms are tried in their configured order.
+    std::string BuildAccountLookupQuery(std::string const& escaped)
+    {
+        if (s_authSchema.empty())
+            return std::string();
+
+        std::ostringstream match;
+        match << "SELECT a2.id AS id FROM `" << s_authSchema << "`.account a2 WHERE a2.username = '" << escaped << "'";
+        for (auto const& entry : RealmTables())
+        {
+            match << " UNION ALL SELECT c2.account FROM " << entry.second << " c2"
+                  << " WHERE c2.name = '" << escaped << "' AND c2.account <> 0"
+                  << " UNION ALL SELECT c2.deleteInfos_Account FROM " << entry.second << " c2"
+                  << " WHERE c2.deleteInfos_Name = '" << escaped << "' AND c2.deleteInfos_Account <> 0";
+        }
+
+        // Same rule as the online feed: every computed column is CAST to an
+        // integer, or an aggregate comes back as DECIMAL and reads as 0.
+        std::ostringstream sql;
+        sql << "SELECT CAST(a.id AS UNSIGNED), a.username, a.last_ip,"
+            << " CAST(COALESCE(UNIX_TIMESTAMP(a.last_login), 0) AS UNSIGNED),"
+            << " CAST(COALESCE(UNIX_TIMESTAMP(a.joindate), 0) AS UNSIGNED),"
+            << " CAST(a.online AS UNSIGNED), CAST(COALESCE(a.mutetime, 0) AS SIGNED),"
+            << " CAST(COALESCE((SELECT MAX(aa.SecurityLevel) FROM `" << s_authSchema << "`.account_access aa"
+            << " WHERE aa.AccountID = a.id), 0) AS UNSIGNED),"
+            << " CAST(COALESCE((SELECT MAX(ab.active) FROM `" << s_authSchema << "`.account_banned ab"
+            << " WHERE ab.id = a.id AND ab.active = 1), 0) AS UNSIGNED)"
+            << " FROM `" << s_authSchema << "`.account a"
+            << " JOIN (" << match.str() << " LIMIT 1) m ON m.id = a.id LIMIT 1";
+        return sql.str();
+    }
+
+    bool ReadAltAccount(QueryResult result, AltAccount& account)
+    {
+        if (!result)
+            return false;
+
+        time_t const now = GameTime::GetGameTime();
+        Field* fields = result->Fetch();
+        account.id = fields[0].GetUInt32();
+        account.username = Scrub(fields[1].GetString());
+        account.lastIp = Scrub(fields[2].GetString());
+        uint32 const lastLogin = fields[3].GetUInt32();
+        uint32 const joined = fields[4].GetUInt32();
+        account.online = fields[5].GetUInt32() != 0;
+        // mutetime is when the mute ENDS, so a stale one is not a mute.
+        account.muted = fields[6].GetInt64() > int64(now);
+        account.security = fields[7].GetUInt32();
+        account.banned = fields[8].GetUInt32() != 0;
+        if (lastLogin && uint32(now) > lastLogin)
+            account.lastLoginAgo = uint32(now) - lastLogin;
+        if (joined && uint32(now) > joined)
+            account.joinedAgo = uint32(now) - joined;
+        return true;
+    }
+
+    std::string BuildAltsQuery(uint32 accountId)
+    {
+        std::ostringstream sql;
+        bool first = true;
+        for (auto const& entry : RealmTables())
+        {
+            if (!first)
+                sql << " UNION ALL ";
+            first = false;
+
+            sql << "SELECT CAST(" << entry.first << " AS UNSIGNED),"
+                << " CASE WHEN c.deleteDate IS NULL THEN c.name ELSE c.deleteInfos_Name END,"
+                << " CAST(c.level AS UNSIGNED), CAST(c.class AS UNSIGNED), CAST(c.race AS UNSIGNED),"
+                << " CAST(c.zone AS UNSIGNED), CAST(c.map AS UNSIGNED), CAST(c.online AS UNSIGNED),"
+                << " CAST(c.logout_time AS UNSIGNED), CAST(c.money AS UNSIGNED), CAST(c.totaltime AS UNSIGNED),"
+                // Dead: no health, or a released ghost (PLAYER_FLAGS_GHOST) - a
+                // ghost is saved with 1 health, so both are needed.
+                << " CAST((c.health = 0 OR (c.playerFlags & 16) <> 0) AS UNSIGNED),"
+                << " CAST((c.deleteDate IS NOT NULL) AS UNSIGNED)"
+                << " FROM " << entry.second << " c"
+                << " WHERE c.account = " << accountId
+                << " OR (c.deleteDate IS NOT NULL AND c.deleteInfos_Account = " << accountId << ")";
+        }
+
+        return sql.str();
+    }
+
+    void AppendAltRows(QueryResult result, std::map<std::string, OnlineRow> const& live, std::vector<AltRow>& alts)
+    {
+        if (!result)
+            return;
+
+        uint32 const thisRealm = realm.Id.Realm;
+        uint32 const now = uint32(GameTime::GetGameTime());
+        do
+        {
+            Field* fields = result->Fetch();
+            AltRow row;
+            row.realmId = fields[0].GetUInt32();
+            row.name = Scrub(fields[1].GetString());
+            row.level = fields[2].GetUInt32();
+            row.playerClass = fields[3].GetUInt32();
+            row.race = fields[4].GetUInt32();
+            row.zoneId = fields[5].GetUInt32();
+            uint32 const mapId = fields[6].GetUInt32();
+            bool const online = fields[7].GetUInt32() != 0;
+            uint32 const logoutTime = fields[8].GetUInt32();
+            row.gold = fields[9].GetUInt32() / 10000;
+            row.hoursPlayed = fields[10].GetUInt32() / 3600;
+            if (fields[11].GetUInt32())
+                row.flags |= ROW_DEAD;
+            if (fields[12].GetUInt32())
+                row.flags |= ROW_DELETED;
+            if (online)
+                row.flags |= ROW_ONLINE;
+            if (IsBattlegroundMap(mapId))
+                row.flags |= ROW_BG;
+            if (!online && logoutTime && now > logoutTime)
+                row.idleSeconds = now - logoutTime;
+
+            // On this realm the session beats the save: a character logged in
+            // right now is where its session says it is, not where the last
+            // PlayerSaveInterval left it. Bot and GM tags only exist there too.
+            if (row.realmId == thisRealm)
+            {
+                auto const itr = live.find(row.name);
+                if (itr != live.end())
+                {
+                    row.level = itr->second.level;
+                    row.zoneId = itr->second.zoneId;
+                    row.idleSeconds = 0;
+                    row.flags &= ~(ROW_BG | ROW_DEAD);
+                    row.flags |= ROW_ONLINE | (itr->second.flags & (ROW_BOT | ROW_GM | ROW_BG | ROW_DEAD));
+                }
+            }
+
+            alts.push_back(std::move(row));
+        } while (result->NextRow());
+
+        // Highest level first, then by name. Realms are grouped only so the
+        // comparison stays a real ordering - which realm comes first in the
+        // feed is RealmTables', and that is what both feeds walk.
+        std::sort(alts.begin(), alts.end(), [](AltRow const& a, AltRow const& b)
+        {
+            if (a.realmId != b.realmId)
+                return a.realmId < b.realmId;
+            if (a.level != b.level)
+                return a.level > b.level;
+            return a.name < b.name;
+        });
+    }
+
+    void SendAltsFeed(Player* viewer, std::string const& asked, AltAccount const& account,
+        std::vector<AltRow> const& alts, uint32 sequence, bool found)
+    {
+        SendTagged(viewer, "GMAB", std::to_string(sequence) + "|" + asked + "|" + (found ? "1" : "0"));
+
+        if (!found)
+        {
+            SendTagged(viewer, "GMAE", std::to_string(sequence));
+            return;
+        }
+
+        SendTagged(viewer, "GMAI", std::to_string(account.id) + "|" + account.username + "|" +
+            std::to_string(account.security) + "|" + (account.online ? "1" : "0") + "|" +
+            (account.banned ? "1" : "0") + "|" + (account.muted ? "1" : "0") + "|" +
+            std::to_string(account.lastLoginAgo) + "|" + std::to_string(account.joinedAgo) + "|" +
+            account.lastIp);
+
+        uint32 const thisRealm = realm.Id.Realm;
+        for (auto const& entry : RealmTables())
+        {
+            uint32 const realmId = entry.first;
+            uint32 count = 0;
+            std::set<uint32> zones;
+            for (AltRow const& row : alts)
+            {
+                if (row.realmId != realmId)
+                    continue;
+                ++count;
+                zones.insert(row.zoneId);
+            }
+
+            SendTagged(viewer, "GMAR", std::to_string(realmId) + "|" + RealmName(realmId) + "|" +
+                std::to_string(count) + "|" + (realmId == thisRealm ? "1" : "0"));
+
+            std::string zonePayload;
+            for (uint32 zoneId : zones)
+            {
+                std::string const zoneEntry = std::to_string(zoneId) + "," + ZoneName(zoneId) + ";";
+                if (!zonePayload.empty() && zonePayload.size() + zoneEntry.size() > kMaxPayload)
+                {
+                    SendTagged(viewer, "GMAZ", zonePayload);
+                    zonePayload.clear();
+                }
+                zonePayload += zoneEntry;
+            }
+            if (!zonePayload.empty())
+                SendTagged(viewer, "GMAZ", zonePayload);
+
+            std::string const head = std::to_string(realmId) + "|";
+            std::string rowPayload;
+            for (AltRow const& row : alts)
+            {
+                if (row.realmId != realmId)
+                    continue;
+
+                std::string const rowEntry = row.name + "," + std::to_string(row.level) + "," +
+                    std::to_string(row.playerClass) + "," + std::to_string(row.race) + "," +
+                    std::to_string(row.zoneId) + "," + std::to_string(row.flags) + "," +
+                    std::to_string(row.idleSeconds) + "," + std::to_string(row.gold) + "," +
+                    std::to_string(row.hoursPlayed) + ";";
+                if (!rowPayload.empty() && head.size() + rowPayload.size() + rowEntry.size() > kMaxPayload)
+                {
+                    SendTagged(viewer, "GMAC", head + rowPayload);
+                    rowPayload.clear();
+                }
+                rowPayload += rowEntry;
+            }
+            if (!rowPayload.empty())
+                SendTagged(viewer, "GMAC", head + rowPayload);
+        }
+
+        SendTagged(viewer, "GMAE", std::to_string(sequence));
+    }
+
+    // The same account listing as chat lines, for a GM without the addon.
+    void PrintAlts(Player* viewer, std::string const& asked, AltAccount const& account,
+        std::vector<AltRow> const& alts, bool found)
+    {
+        ChatHandler chat(viewer->GetSession());
+        if (!found)
+        {
+            chat.PSendSysMessage("No account or character named '%s'.", asked.c_str());
+            return;
+        }
+
+        std::string const gm = account.security ? Trinity::StringFormat(" - GM level {}", account.security) : "";
+        std::string const seen = account.lastLoginAgo
+            ? secsToTimeString(account.lastLoginAgo, TimeFormat::ShortText) + " ago" : "never";
+
+        chat.PSendSysMessage("Account %s (id %u) - %u character%s%s%s%s.", account.username.c_str(), account.id,
+            uint32(alts.size()), alts.size() == 1 ? "" : "s", gm.c_str(),
+            account.banned ? " - BANNED" : "", account.muted ? " - muted" : "");
+        chat.PSendSysMessage("  last login %s%s%s.", seen.c_str(),
+            account.lastIp.empty() ? "" : " from ", account.lastIp.c_str());
+
+        uint32 const thisRealm = realm.Id.Realm;
+        for (auto const& entry : RealmTables())
+        {
+            uint32 const realmId = entry.first;
+            bool any = false;
+            for (AltRow const& row : alts)
+            {
+                if (row.realmId != realmId)
+                    continue;
+
+                if (!any)
+                {
+                    any = true;
+                    chat.PSendSysMessage("%s%s:", RealmName(realmId).c_str(), realmId == thisRealm ? "" : " (last save)");
+                }
+
+                std::string const when = (row.flags & ROW_ONLINE) ? "online"
+                    : row.idleSeconds ? secsToTimeString(row.idleSeconds, TimeFormat::ShortText) + " ago"
+                    : "never played";
+
+                chat.PSendSysMessage("  %s - %u %s - %s - %s%s%s%s%s", row.name.c_str(), row.level,
+                    ClassName(row.playerClass), ZoneName(row.zoneId).c_str(), when.c_str(),
+                    (row.flags & ROW_DELETED) ? " [deleted]" : "", (row.flags & ROW_GM) ? " [GM]" : "",
+                    (row.flags & ROW_BG) ? " [BG]" : "", (row.flags & ROW_DEAD) ? " [dead]" : "");
+            }
+        }
+    }
+
+    void DeliverAlts(ObjectGuid viewerGuid, std::string const& asked, AltAccount const& account,
+        std::vector<AltRow> const& alts, bool addon, uint32 sequence, bool found)
+    {
+        Player* viewer = ObjectAccessor::FindConnectedPlayer(viewerGuid);
+        if (!viewer || !viewer->GetSession())
+            return;
+
+        if (addon)
+            SendAltsFeed(viewer, asked, account, alts, sequence, found);
+        else
+            PrintAlts(viewer, asked, account, alts, found);
+    }
+
     void Deliver(ObjectGuid viewerGuid, std::vector<OnlineRow> const& rows, bool addon, bool withBots, uint32 sequence)
     {
         Player* viewer = ObjectAccessor::FindConnectedPlayer(viewerGuid);
@@ -541,15 +917,31 @@ namespace
 
             bool addon = false;
             bool withBots = false;
+            bool wantAlts = false;
+            std::string target;
             for (std::string_view word : Trinity::Tokenize(args, ' ', false))
             {
                 if (word == "addon")
                     addon = true;
                 else if (word == "bots")
                     withBots = true;
+                else if (word == "alts" || word == "account")
+                    wantAlts = true;    // a keyword; the name follows
+                else if (target.empty())
+                    target = std::string(word);
             }
 
             uint32 const sequence = ++s_sequence;
+
+            // A name turns the command into the account listing, with or
+            // without the "alts" keyword: ".gmonline Koda" is what a GM types.
+            if (wantAlts && target.empty())
+            {
+                handler->SendSysMessage("Usage: .gmonline alts <account or character name>.");
+                return true;
+            }
+            if (!target.empty())
+                return HandleGmAlts(handler, viewer, std::move(target), addon, sequence);
 
             // Realm names come from a blocking login-database read the first
             // time they are asked for. Asked here, on the command's world-thread
@@ -576,6 +968,64 @@ namespace
                 {
                     AppendOtherRealmRows(result, rows);
                     Deliver(viewerGuid, rows, addon, withBots, sequence);
+                }));
+            return true;
+        }
+
+        // Every character on one account. Two chained queries: resolve the name
+        // to an account, then list that account's characters everywhere. Both
+        // run on this session's query processor, so they cannot outlive the GM,
+        // and neither callback touches anything but the rows it was handed -
+        // they may run on a map thread, which is why this realm's live sessions
+        // are snapshotted HERE, on the command's own world-thread turn.
+        static bool HandleGmAlts(ChatHandler* handler, Player* viewer, std::string target, bool addon, uint32 sequence)
+        {
+            if (s_authSchema.empty())
+            {
+                handler->SendSysMessage("gmonline cannot read the login database schema out of LoginDatabaseInfo.");
+                return true;
+            }
+
+            // Both an account name and a character name fit in 32 bytes; a
+            // longer one matches nothing, so it is cut rather than refused.
+            if (target.size() > 32)
+                target.resize(32);
+
+            std::string escaped = target;
+            CharacterDatabase.EscapeString(escaped);
+            std::string const asked = Scrub(target);
+
+            RealmName(realm.Id.Realm);
+
+            std::map<std::string, OnlineRow> live;
+            for (OnlineRow& row : SnapshotThisRealm())
+            {
+                std::string name = row.name;
+                live.emplace(std::move(name), std::move(row));
+            }
+
+            ObjectGuid const viewerGuid = viewer->GetGUID();
+            auto account = std::make_shared<AltAccount>();
+
+            handler->GetSession()->GetQueryProcessor().AddCallback(
+                CharacterDatabase.AsyncQuery(BuildAccountLookupQuery(escaped).c_str())
+                .WithChainingCallback([viewerGuid, asked, addon, sequence, account](QueryCallback& chain, QueryResult result)
+                {
+                    // Nothing matched: say so and let the chain end here. A
+                    // callback that sets no next query simply stops.
+                    if (!ReadAltAccount(std::move(result), *account))
+                    {
+                        DeliverAlts(viewerGuid, asked, *account, {}, addon, sequence, false);
+                        return;
+                    }
+
+                    chain.SetNextQuery(CharacterDatabase.AsyncQuery(BuildAltsQuery(account->id).c_str()));
+                })
+                .WithCallback([viewerGuid, asked, addon, sequence, account, live = std::move(live)](QueryResult result)
+                {
+                    std::vector<AltRow> alts;
+                    AppendAltRows(std::move(result), live, alts);
+                    DeliverAlts(viewerGuid, asked, *account, alts, addon, sequence, true);
                 }));
             return true;
         }

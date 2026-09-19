@@ -23,10 +23,25 @@
 --   GMOP  character rows           <realmId>|<name>,<lvl>,<class>,<race>,<zone>,<flags>,<account>;...
 --   GMOE  end of the reply         <seq>
 --
--- The feed is accepted only as a WHISPER whose sender is this character. The
--- server sends it that way, and nobody else can, so another player cannot plant
--- rows in the list. A reply is assembled on the side and only swapped in at
--- GMOE, so a list that is still arriving never replaces a complete one.
+-- The window has a second page for the other half of the same question: who
+-- ELSE is this person. "gmonline addon alts <who>" takes an account name or
+-- any character name and answers with every character that account owns, on
+-- every realm, offline and deleted ones included - all of it from the
+-- databases, so nobody has to be logged in for it to answer:
+--
+--   GMAB  begin an account reply   <seq>|<asked>|<found>
+--   GMAI  the account itself       <id>|<account>|<security>|<online>|<banned>|<muted>|<lastLoginAgo>|<joinedAgo>|<lastIp>
+--   GMAR  one realm's header       <realmId>|<name>|<characters>|<live>
+--   GMAZ  zone names               <zoneId>,<name>;...
+--   GMAC  character rows           <realmId>|<name>,<lvl>,<class>,<race>,<zone>,<flags>,<idleSecs>,<gold>,<hours>;...
+--   GMAE  end of the reply         <seq>
+--
+-- Either feed is accepted only as a WHISPER whose sender is this character.
+-- The server sends it that way, and nobody else can, so another player cannot
+-- plant rows in the list. A reply is assembled on the side and only swapped in
+-- at its end tag, so a list that is still arriving never replaces a complete
+-- one - and the two pages assemble separately, so a background auto-refresh of
+-- one never half-writes the other.
 
 local PANEL_W, PANEL_H = 640, 500
 local ROW_H = 16
@@ -36,6 +51,9 @@ local NO_REPLY_SECONDS = 10
 local ECHO = "GMO1"         -- four characters, echoed back by the command channel
 
 local FLAG_BOT, FLAG_GM, FLAG_BG, FLAG_DEAD = 1, 2, 4, 8
+-- Only an account listing carries these: an online listing is online by
+-- definition and never holds a deleted character.
+local FLAG_ONLINE, FLAG_DELETED = 16, 32
 
 local CLASS_FILE = {
 	[1] = "WARRIOR", [2] = "PALADIN", [3] = "HUNTER", [4] = "ROGUE", [5] = "PRIEST",
@@ -60,6 +78,16 @@ local noReply = false   -- asked, and never once answered
 local serverNote = nil  -- text the command channel sent back, if any
 local scrollOffset = 0
 
+-- The account page. Its own reply, its own scroll position, so switching back
+-- to the online list lands where it was left.
+local mode = "online"   -- "online" or "account"
+local account = nil     -- the last complete account reply
+local incomingAccount = nil
+local accountAsked = 0
+local accountReply = 0
+local accountName = ""  -- what was typed, echoed back with the reply
+local accountScroll = 0
+
 ------------------------------------------------------------------
 -- settings
 ------------------------------------------------------------------
@@ -82,6 +110,34 @@ local function Ask()
 	serverNote = nil
 	SendAddonMessage("TrinityCore", "i" .. ECHO .. "gmonline addon" .. (DB().showBots and " bots" or ""),
 		"WHISPER", UnitName("player"))
+end
+
+-- One word, and one the command parser will not read as a keyword. Anything
+-- else is a typo that would quietly turn into "list who is online" instead.
+-- Not always a string either: a slash command hands over whatever it was given
+-- and the minimap button hands over its own frame.
+local function CleanName(text)
+	if type(text) ~= "string" then
+		return nil
+	end
+	text = string.match(text, "^%s*(%S*)") or ""
+	if text == "" or text == "addon" or text == "bots" or text == "alts" or text == "account" then
+		return nil
+	end
+	return string.sub(text, 1, 32)
+end
+
+local function AskAccount(who)
+	who = CleanName(who)
+	if not who then
+		return
+	end
+	accountName = who
+	accountAsked = GetTime()
+	noReply = false
+	unavailable = false
+	serverNote = nil
+	SendAddonMessage("TrinityCore", "i" .. ECHO .. "gmonline addon alts " .. who, "WHISPER", UnitName("player"))
 end
 
 ------------------------------------------------------------------
@@ -158,6 +214,103 @@ local function Commit(payload)
 end
 
 ------------------------------------------------------------------
+-- parsing: the account page
+------------------------------------------------------------------
+local function BeginAccount(payload)
+	local seq, asked, found = string.match(payload or "", "^(%d+)|([^|]*)|(%d)$")
+	if not seq then
+		return
+	end
+	incomingAccount = {
+		seq = seq, asked = asked, found = found == "1",
+		info = nil, realms = {}, order = {}, zones = {}, rows = {},
+	}
+end
+
+local function ParseAccountInfo(payload)
+	if not incomingAccount then return end
+	local id, name, security, online, banned, muted, seen, joined, ip =
+		string.match(payload or "", "^(%d+)|([^|]*)|(%d+)|(%d)|(%d)|(%d)|(%d+)|(%d+)|([^|]*)$")
+	if not id then
+		return
+	end
+	incomingAccount.info = {
+		id       = tonumber(id) or 0,
+		name     = name,
+		security = tonumber(security) or 0,
+		online   = online == "1",
+		banned   = banned == "1",
+		muted    = muted == "1",
+		seen     = tonumber(seen) or 0,
+		joined   = tonumber(joined) or 0,
+		ip       = ip,
+	}
+end
+
+local function ParseAccountRealm(payload)
+	if not incomingAccount then return end
+	local id, name, count, live = string.match(payload or "", "^(%d+)|([^|]*)|(%d+)|(%d)$")
+	if not id then
+		return
+	end
+	id = tonumber(id)
+	incomingAccount.realms[id] = {
+		id = id,
+		name = (name ~= "" and name) or ("Realm " .. id),
+		count = tonumber(count) or 0,
+		live = live == "1",
+	}
+	table.insert(incomingAccount.order, id)
+end
+
+local function ParseAccountZones(payload)
+	if not incomingAccount then return end
+	for id, name in string.gmatch(payload or "", "(%d+),([^;]*);") do
+		incomingAccount.zones[tonumber(id)] = name
+	end
+end
+
+local function ParseAccountRows(payload)
+	if not incomingAccount then return end
+	local realmId, rows = string.match(payload or "", "^(%d+)|(.*)$")
+	if not realmId then
+		return
+	end
+	realmId = tonumber(realmId)
+	for name, lvl, cls, race, zone, flags, idle, gold, hours in
+		string.gmatch(rows, "([^,;]+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+);") do
+		-- The server scrubs every pipe out of what it sends, so one here is not
+		-- from the server; never hand a stray escape sequence to SetText.
+		if not string.find(name, "|", 1, true) then
+			table.insert(incomingAccount.rows, {
+				realm = realmId,
+				name  = name,
+				level = tonumber(lvl) or 0,
+				class = tonumber(cls) or 0,
+				race  = tonumber(race) or 0,
+				zone  = tonumber(zone) or 0,
+				flags = tonumber(flags) or 0,
+				idle  = tonumber(idle) or 0,
+				gold  = tonumber(gold) or 0,
+				hours = tonumber(hours) or 0,
+			})
+		end
+	end
+end
+
+local function CommitAccount(payload)
+	if not incomingAccount or payload ~= incomingAccount.seq then
+		return
+	end
+	account = incomingAccount
+	incomingAccount = nil
+	accountReply = GetTime()
+	answered = true
+	noReply = false
+	unavailable = false
+end
+
+------------------------------------------------------------------
 -- window
 ------------------------------------------------------------------
 local win = CreateFrame("Frame", "CenturionGMOnlineFrame", UIParent)
@@ -227,29 +380,74 @@ refresh:SetPoint("TOPRIGHT", win, "TOPRIGHT", -24, -100)
 refresh:SetText("Refresh")
 refresh:SetScript("OnClick", function() Ask() end)
 
--- Column layout: x offset and width inside a row.
+-- Type an account or a character name here and the window turns into that
+-- account's roster. A character name is enough - the server resolves it.
+local search = CreateFrame("EditBox", "CenturionGMOnlineSearch", win, "InputBoxTemplate")
+search:SetWidth(150)
+search:SetHeight(20)
+search:SetPoint("TOPRIGHT", win, "TOPRIGHT", -116, -100)
+search:SetAutoFocus(false)
+search:SetMaxLetters(32)
+search:SetScript("OnEnterPressed", function(self)
+	local who = self:GetText()
+	self:ClearFocus()
+	CENTURION_GMOnline_ShowAccount(who)
+end)
+search:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+
+local searchLabel = win:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+searchLabel:SetPoint("RIGHT", search, "LEFT", -4, 0)
+searchLabel:SetText("Look up")
+
+-- Only on the account page, and where Refresh sits on the online one.
+local back = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
+back:SetWidth(80)
+back:SetHeight(20)
+back:SetPoint("TOPRIGHT", win, "TOPRIGHT", -24, -100)
+back:SetText("Back")
+back:Hide()
+back:SetScript("OnClick", function() CENTURION_GMOnline_ShowOnline() end)
+
+-- Column layout: x offset and width inside a row. The fifth column carries the
+-- account name on the online page and, on the account page - where every row
+-- is the same account - when that character was last seen instead.
 local COLUMNS = {
 	{ key = "name",    x = 0,   w = 130, title = "Name" },
 	{ key = "level",   x = 132, w = 30,  title = "Lvl" },
 	{ key = "race",    x = 164, w = 70,  title = "Race" },
 	{ key = "zone",    x = 236, w = 170, title = "Zone" },
-	{ key = "account", x = 408, w = 110, title = "Account" },
+	{ key = "account", x = 408, w = 110, title = "Account", altTitle = "Last seen" },
 	{ key = "tags",    x = 520, w = 76,  title = "" },
 }
 
 -- Twenty rows from here end at -462, clear of the footer at the bottom of a
 -- 500-high window.
 local LIST_TOP = -128
+local headers = {}
+local headerCol = {}
 for _, col in ipairs(COLUMNS) do
 	local fs = win:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 	fs:SetPoint("TOPLEFT", win, "TOPLEFT", 24 + col.x, LIST_TOP)
 	fs:SetWidth(col.w)
 	fs:SetJustifyH("LEFT")
 	fs:SetText(col.title)
+	headers[col.key] = fs
+	headerCol[col.key] = col
 end
 
 local rows = {}
 local display = {}      -- flattened list the rows draw from
+
+-- Ages arrive as plain seconds - the client has no idea what the server thinks
+-- the time is, so the server sends the difference and this only reads it out.
+local function FormatAge(seconds)
+	seconds = tonumber(seconds) or 0
+	if seconds <= 0 then return "just now" end
+	if seconds < 60 then return seconds .. "s ago" end
+	if seconds < 3600 then return math.floor(seconds / 60) .. "m ago" end
+	if seconds < 86400 then return math.floor(seconds / 3600) .. "h ago" end
+	return math.floor(seconds / 86400) .. "d ago"
+end
 
 local function ShowTooltip(row)
 	local entry = row.entry
@@ -261,14 +459,28 @@ local function ShowTooltip(row)
 	GameTooltip:AddLine(p.name, 1, 1, 1)
 	GameTooltip:AddLine(string.format("Level %d %s %s", p.level, RACE_NAME[p.race] or "?", CLASS_NAME[p.class] or "?"), 0.9, 0.9, 0.9)
 	GameTooltip:AddLine(entry.zoneName, 0.6, 0.8, 1)
-	GameTooltip:AddLine("Account: " .. (p.account ~= "" and p.account or "?"), 0.8, 0.8, 0.8)
+	if entry.alt then
+		if bit.band(p.flags, FLAG_ONLINE) > 0 then
+			GameTooltip:AddLine("Online now", 0.5, 1, 0.5)
+		else
+			GameTooltip:AddLine("Last seen " .. (p.idle > 0 and FormatAge(p.idle) or "never"), 0.8, 0.8, 0.8)
+		end
+		GameTooltip:AddDoubleLine("Played", p.hours .. "h", 0.8, 0.8, 0.8, 1, 1, 1)
+		GameTooltip:AddDoubleLine("Gold", tostring(p.gold), 0.8, 0.8, 0.8, 1, 0.82, 0)
+	else
+		GameTooltip:AddLine("Account: " .. (p.account ~= "" and p.account or "?"), 0.8, 0.8, 0.8)
+	end
 	GameTooltip:AddLine(entry.realmName .. (entry.live and "" or "  (as of its last save)"), 0.8, 0.7, 0.3)
 	if bit.band(p.flags, FLAG_BOT) > 0 then GameTooltip:AddLine("Playerbot", 0.6, 0.6, 0.6) end
 	if bit.band(p.flags, FLAG_GM) > 0 then GameTooltip:AddLine("GM account", 1, 0.5, 0.2) end
 	if bit.band(p.flags, FLAG_BG) > 0 then GameTooltip:AddLine("In a battleground or arena", 1, 0.8, 0.2) end
 	if bit.band(p.flags, FLAG_DEAD) > 0 then GameTooltip:AddLine("Dead", 1, 0.3, 0.3) end
-	if entry.live and bit.band(p.flags, FLAG_BOT) == 0 then
+	if bit.band(p.flags, FLAG_DELETED) > 0 then GameTooltip:AddLine("Deleted character", 1, 0.3, 0.3) end
+	if entry.whisperable then
 		GameTooltip:AddLine("Click to whisper", 0.5, 1, 0.5)
+	end
+	if not entry.alt then
+		GameTooltip:AddLine("Right-click for this account's characters", 0.5, 0.8, 1)
 	end
 	GameTooltip:Show()
 end
@@ -279,6 +491,7 @@ for i = 1, MAX_ROWS do
 	row:SetPoint("TOPLEFT", win, "TOPLEFT", 22, LIST_TOP - 14 - (i - 1) * ROW_H)
 	row:SetPoint("RIGHT", win, "RIGHT", -22, 0)
 	row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+	row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 	row.cells = {}
 	for _, col in ipairs(COLUMNS) do
 		local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -289,11 +502,23 @@ for i = 1, MAX_ROWS do
 	end
 	row:SetScript("OnEnter", ShowTooltip)
 	row:SetScript("OnLeave", function() GameTooltip:Hide() end)
-	row:SetScript("OnClick", function(self)
+	row:SetScript("OnClick", function(self, button)
 		local entry = self.entry
+		if not entry or entry.kind ~= "player" then
+			return
+		end
+		-- Right-click asks who else that account plays. On the online page the
+		-- account name is right there in the row; on the account page every row
+		-- is already the same account, so there is nothing to ask.
+		if button == "RightButton" then
+			if not entry.alt and entry.player.account ~= "" then
+				CENTURION_GMOnline_ShowAccount(entry.player.account)
+			end
+			return
+		end
 		-- Only somebody on THIS realm can be whispered; a name on another realm
 		-- would whisper nobody, or the wrong person.
-		if entry and entry.kind == "player" and entry.live and bit.band(entry.player.flags, FLAG_BOT) == 0 then
+		if entry.whisperable then
 			ChatFrame_SendTell(entry.player.name)
 		end
 	end)
@@ -302,11 +527,16 @@ end
 
 local footer = win:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 footer:SetPoint("BOTTOMLEFT", win, "BOTTOMLEFT", 24, 18)
-footer:SetText("/gmo  -  wheel to scroll  -  hover for details  -  click a name on this realm to whisper")
+footer:SetText("/gmo [name]  -  wheel to scroll  -  right-click a row for that account's characters")
 
 win:EnableMouseWheel(true)
 win:SetScript("OnMouseWheel", function(self, delta)
-	scrollOffset = scrollOffset - (delta or 0) * 3
+	local step = (delta or 0) * 3
+	if mode == "account" then
+		accountScroll = accountScroll - step
+	else
+		scrollOffset = scrollOffset - step
+	end
 	CENTURION_GMOnline_Refresh()
 end)
 
@@ -361,8 +591,112 @@ local function BuildDisplay()
 				live = realm.live,
 				realmName = realm.name,
 				zoneName = data.zones[p.zone] or ("Zone " .. p.zone),
+				whisperable = realm.live and bit.band(p.flags, FLAG_BOT) == 0,
 			})
 		end
+	end
+end
+
+-- The same flattened list for the account page. The server has already put the
+-- rows in order, so this only groups them under their realm headers.
+local function BuildAccountDisplay()
+	display = {}
+	if not account or not account.found then
+		return
+	end
+
+	for _, realmId in ipairs(account.order) do
+		local realm = account.realms[realmId]
+		table.insert(display, { kind = "realm", realm = realm, alt = true })
+
+		local any = false
+		for _, p in ipairs(account.rows) do
+			if p.realm == realmId then
+				any = true
+				table.insert(display, {
+					kind = "player",
+					player = p,
+					alt = true,
+					live = realm.live,
+					realmName = realm.name,
+					zoneName = account.zones[p.zone] or ("Zone " .. p.zone),
+					whisperable = realm.live and bit.band(p.flags, FLAG_ONLINE) > 0
+						and bit.band(p.flags, FLAG_BOT) == 0,
+				})
+			end
+		end
+		if not any then
+			table.insert(display, { kind = "empty", alt = true })
+		end
+	end
+end
+
+-- The four lines under the title: one per realm on the online page, and the
+-- account itself on the account page.
+local function DrawSummaries()
+	for i = 1, #summaries do
+		summaries[i]:SetText("")
+	end
+
+	if mode == "account" then
+		if not account then
+			return
+		end
+		if not account.found then
+			summaries[1]:SetText(string.format("|cffff5050No account or character named '%s'.|r", account.asked))
+			return
+		end
+
+		local info = account.info
+		if not info then
+			return
+		end
+		summaries[1]:SetText(string.format("|cffffd200%s|r  account %d, %s", info.name, info.id,
+			Plural(#account.rows, "character", "characters")))
+
+		local marks = ""
+		if info.security > 0 then marks = marks .. string.format("  |cffff8030GM level %d|r", info.security) end
+		if info.banned then marks = marks .. "  |cffff5050banned|r" end
+		if info.muted then marks = marks .. "  |cffff8030muted|r" end
+		if info.online then marks = marks .. "  |cff80ff80logged in|r" end
+		summaries[2]:SetText(string.format("last login %s%s%s", info.seen > 0 and FormatAge(info.seen) or "never",
+			info.ip ~= "" and ("  from " .. info.ip) or "", marks))
+
+		if info.joined > 0 then
+			summaries[3]:SetText(string.format("|cff999999created %s|r", FormatAge(info.joined)))
+		end
+		return
+	end
+
+	if not data then
+		return
+	end
+	for i, realmId in ipairs(data.order) do
+		if summaries[i] then
+			local realm = data.realms[realmId]
+			summaries[i]:SetText(string.format("|cffffd200%s|r  %s, %s%s", realm.name,
+				Plural(realm.people, "person", "people"), Plural(realm.bots, "bot", "bots"),
+				realm.live and "  |cff80ff80live|r" or "  |cff999999last save|r"))
+		end
+	end
+end
+
+local function DrawStatus()
+	local now = GetTime()
+	local asked = mode == "account" and accountAsked or lastAsked
+	local replied = mode == "account" and accountReply or lastReply
+	local have = mode == "account" and account or data
+
+	if unavailable then
+		status:SetText("|cffff5050Not available - needs a GM account, on a realm built with .gmonline.|r")
+	elseif noReply then
+		status:SetText("|cffff5050No reply - is this a GM account?|r")
+	elseif answered and asked > replied and now - asked > NO_REPLY_SECONDS then
+		status:SetText("no reply, retrying")
+	elseif have then
+		status:SetText(string.format("updated %ds ago", math.floor(now - replied)))
+	else
+		status:SetText(serverNote or "asking...")
 	end
 end
 
@@ -371,43 +705,30 @@ function CENTURION_GMOnline_Refresh()
 		return
 	end
 
-	-- Summary lines.
-	for i = 1, #summaries do
-		summaries[i]:SetText("")
-	end
-	if data then
-		for i, realmId in ipairs(data.order) do
-			if summaries[i] then
-				local realm = data.realms[realmId]
-				summaries[i]:SetText(string.format("|cffffd200%s|r  %s, %s%s", realm.name,
-					Plural(realm.people, "person", "people"), Plural(realm.bots, "bot", "bots"),
-					realm.live and "  |cff80ff80live|r" or "  |cff999999last save|r"))
-			end
-		end
-	end
+	local onAccount = mode == "account"
+	title:SetText(onAccount and ("Account: " .. (accountName ~= "" and accountName or "?")) or "Online")
+	headers.account:SetText(onAccount and headerCol.account.altTitle or headerCol.account.title)
+	if onAccount then back:Show() else back:Hide() end
+	if onAccount then refresh:Hide() else refresh:Show() end
 
-	-- Status.
-	local now = GetTime()
-	if unavailable then
-		status:SetText("|cffff5050Not available - needs a GM account, on a realm built with .gmonline.|r")
-	elseif noReply then
-		status:SetText("|cffff5050No reply - is this a GM account?|r")
-	elseif answered and lastAsked > lastReply and now - lastAsked > NO_REPLY_SECONDS then
-		status:SetText("no reply, retrying")
-	elseif data then
-		status:SetText(string.format("updated %ds ago", math.floor(now - lastReply)))
+	DrawSummaries()
+	DrawStatus()
+
+	if onAccount then
+		BuildAccountDisplay()
 	else
-		status:SetText(serverNote or "asking...")
+		BuildDisplay()
 	end
 
-	BuildDisplay()
 	local maxOffset = math.max(0, #display - MAX_ROWS)
-	if scrollOffset > maxOffset then scrollOffset = maxOffset end
-	if scrollOffset < 0 then scrollOffset = 0 end
+	local offset = onAccount and accountScroll or scrollOffset
+	if offset > maxOffset then offset = maxOffset end
+	if offset < 0 then offset = 0 end
+	if onAccount then accountScroll = offset else scrollOffset = offset end
 
 	for i = 1, MAX_ROWS do
 		local row = rows[i]
-		local entry = display[i + scrollOffset]
+		local entry = display[i + offset]
 		row.entry = entry
 		for _, fs in pairs(row.cells) do
 			fs:SetText("")
@@ -419,28 +740,77 @@ function CENTURION_GMOnline_Refresh()
 			row:Show()
 			if entry.kind == "realm" then
 				row.cells.name:SetText("|cffffd200" .. entry.realm.name .. "|r")
+				if entry.alt and not entry.realm.live then
+					row.cells.account:SetText("|cff999999last save|r")
+				end
 			elseif entry.kind == "empty" then
-				row.cells.name:SetText("|cff808080nobody|r")
+				row.cells.name:SetText(entry.alt and "|cff808080no characters|r" or "|cff808080nobody|r")
 			else
 				local p = entry.player
-				local isBot = bit.band(p.flags, FLAG_BOT) > 0
-				local dim = isBot and "|cff808080" or ""
-				local dimEnd = isBot and "|r" or ""
-				row.cells.name:SetText(isBot and ("|cff808080" .. p.name .. "|r")
+				-- A bot on the online page and a deleted character on the
+				-- account page both read as "not really here": greyed out.
+				local faded = bit.band(p.flags, FLAG_BOT) > 0 or bit.band(p.flags, FLAG_DELETED) > 0
+				local dim = faded and "|cff808080" or ""
+				local dimEnd = faded and "|r" or ""
+				row.cells.name:SetText(faded and ("|cff808080" .. p.name .. "|r")
 					or ("|c" .. ClassColor(p.class) .. p.name .. "|r"))
 				row.cells.level:SetText(dim .. p.level .. dimEnd)
 				row.cells.race:SetText(dim .. (RACE_NAME[p.race] or "?") .. dimEnd)
 				row.cells.zone:SetText(dim .. entry.zoneName .. dimEnd)
-				row.cells.account:SetText(dim .. p.account .. dimEnd)
+				if entry.alt then
+					if bit.band(p.flags, FLAG_ONLINE) > 0 then
+						row.cells.account:SetText("|cff80ff80online|r")
+					elseif p.idle > 0 then
+						row.cells.account:SetText(dim .. FormatAge(p.idle) .. dimEnd)
+					else
+						row.cells.account:SetText("|cff808080never played|r")
+					end
+				else
+					row.cells.account:SetText(dim .. p.account .. dimEnd)
+				end
 
 				local tags = ""
 				if bit.band(p.flags, FLAG_GM) > 0 then tags = tags .. "|cffff8030GM|r " end
 				if bit.band(p.flags, FLAG_BG) > 0 then tags = tags .. "|cffffd200BG|r " end
+				if bit.band(p.flags, FLAG_DELETED) > 0 then tags = tags .. "|cffff5050del|r " end
 				if bit.band(p.flags, FLAG_DEAD) > 0 then tags = tags .. "|cffff5050dead|r" end
 				row.cells.tags:SetText(tags)
 			end
 		end
 	end
+end
+
+-- Switching pages. Both ask straight away: an account page that is a minute
+-- old is worse than a blank one, and the online page auto-refreshes anyway.
+function CENTURION_GMOnline_ShowAccount(who)
+	who = CleanName(who)
+	if not who then
+		return
+	end
+	if mode ~= "account" or accountName ~= who then
+		accountScroll = 0
+	end
+	-- A different account than the one on screen: drop the old rows rather than
+	-- showing them under the new name until the reply lands.
+	if accountName ~= who then
+		account = nil
+		incomingAccount = nil
+	end
+	mode = "account"
+	search:SetText(who)
+	if not win:IsShown() then
+		win:Show()
+	end
+	AskAccount(who)
+	CENTURION_GMOnline_Refresh()
+end
+
+function CENTURION_GMOnline_ShowOnline()
+	mode = "online"
+	search:SetText("")
+	search:ClearFocus()
+	Ask()
+	CENTURION_GMOnline_Refresh()
 end
 
 ------------------------------------------------------------------
@@ -454,7 +824,11 @@ driver:SetScript("OnEvent", function(self, event, prefix, message, channel, send
 	-- server, so ask again the moment the world is back.
 	if event == "PLAYER_ENTERING_WORLD" then
 		if win:IsShown() and answered then
-			Ask()
+			if mode == "account" then
+				AskAccount(accountName)
+			else
+				Ask()
+			end
 		end
 		return
 	end
@@ -482,7 +856,7 @@ driver:SetScript("OnEvent", function(self, event, prefix, message, channel, send
 		return
 	end
 
-	local tag, payload = string.match(message, "^(GMO%u):(.*)$")
+	local tag, payload = string.match(message, "^(GM[OA]%u):(.*)$")
 	if not tag then
 		return
 	end
@@ -497,6 +871,19 @@ driver:SetScript("OnEvent", function(self, event, prefix, message, channel, send
 		ParseRows(payload)
 	elseif tag == "GMOE" then
 		Commit(payload)
+		CENTURION_GMOnline_Refresh()
+	elseif tag == "GMAB" then
+		BeginAccount(payload)
+	elseif tag == "GMAI" then
+		ParseAccountInfo(payload)
+	elseif tag == "GMAR" then
+		ParseAccountRealm(payload)
+	elseif tag == "GMAZ" then
+		ParseAccountZones(payload)
+	elseif tag == "GMAC" then
+		ParseAccountRows(payload)
+	elseif tag == "GMAE" then
+		CommitAccount(payload)
 		CENTURION_GMOnline_Refresh()
 	end
 end)
@@ -519,23 +906,38 @@ driver:SetScript("OnUpdate", function(self, elapsed)
 	end
 
 	local now = GetTime()
-	if not answered and lastAsked > lastReply and now - lastAsked > NO_REPLY_SECONDS then
+	local asked = mode == "account" and accountAsked or lastAsked
+	local replied = mode == "account" and accountReply or lastReply
+	if not answered and asked > replied and now - asked > NO_REPLY_SECONDS then
 		noReply = true
 	end
 
-	if DB().auto and not noReply and not unavailable and now - lastAsked >= AUTO_SECONDS then
-		Ask()
+	if DB().auto and not noReply and not unavailable and now - asked >= AUTO_SECONDS then
+		if mode ~= "account" then
+			Ask()
+		elseif accountName ~= "" then
+			AskAccount(accountName)
+		end
 	end
 
 	CENTURION_GMOnline_Refresh()
 end)
 
-local function ToggleWindow()
+local function ToggleWindow(arg)
+	local who = CleanName(arg)
+	if who then
+		CENTURION_GMOnline_ShowAccount(who)
+		return
+	end
 	if win:IsShown() then
 		win:Hide()
 	else
 		win:Show()
-		Ask()
+		if mode == "account" then
+			AskAccount(accountName)
+		else
+			Ask()
+		end
 		CENTURION_GMOnline_Refresh()
 	end
 end
