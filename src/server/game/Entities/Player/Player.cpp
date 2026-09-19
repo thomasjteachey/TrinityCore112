@@ -26321,8 +26321,24 @@ void Player::LearnDefaultSkill(uint32 skillId, uint16 rank)
             skillValue = std::min(std::max<uint16>({ 1, uint16((GetLevel() - 1) * 5) }), maxValue);
         else if (skillId == SKILL_FIST_WEAPONS)
             skillValue = std::max<uint16>(1, GetSkillValue(SKILL_UNARMED));
-        else if (skillId == SKILL_LOCKPICKING)
-            skillValue = std::max<uint16>(1, GetSkillValue(SKILL_LOCKPICKING));
+        // Lockpicking and Poisons are handed back every time their defining
+        // spell is added, and that includes every login: _LoadSpells replays
+        // character_spell, AddSpell walks the spell's SkillLineAbility rows, and
+        // the hardcoded arm there calls this function with no HasSkill guard -
+        // deliberately, because neither skill can be reached any other way.
+        //
+        // So this line is not a nicety, it is the whole of what stops the skill
+        // being re-granted at 1. Upstream wrote it for Lockpicking alone;
+        // Poisons was added to that arm without being added here, and a rogue's
+        // poison skill was therefore back at 1 the next time they logged in. Of
+        // the 28 characters on the realm holding skill 40, 27 sat at exactly 1
+        // and the one above it had skilled up since its last login.
+        //
+        // The current value, not the pure one: no aura or item on this realm
+        // modifies either skill, so the two are the same number, and matching
+        // the upstream idiom keeps the line recognisable against a merge.
+        else if (skillId == SKILL_LOCKPICKING || skillId == SKILL_POISONS)
+            skillValue = std::max<uint16>(1, GetSkillValue(skillId));
 
         SetSkill(skillId, 0, skillValue, maxValue);
         break;
