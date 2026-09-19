@@ -156,7 +156,9 @@ void Totem::UnSummon(uint32 msTime)
         }
     }
 
-    if (Unit* owner = GetOwner())
+    // A player who loses their last totem should drop out of combat; a creature
+    // must not, or killing a mob's totem sends the mob home to evade.
+    if (Unit* owner = GetOwner(); owner && owner->GetTypeId() == TYPEID_PLAYER)
     {
         if (!owner->GetCombatManager().HasPvPCombat() && owner->IsInCombat() && !owner->GetThreatManager().IsThreateningAnyone())
             owner->GetCombatManager().EndAllPvECombat();
