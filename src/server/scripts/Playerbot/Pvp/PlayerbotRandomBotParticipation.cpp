@@ -2376,7 +2376,13 @@ bool TryRecoverPlayerbotFromUnderMap(Player* player)
 // How far past the measured wall a bot may be before this considers it out.
 // The fence is measured from static collision, not surveyed, so a bot standing
 // flush against a wall can read a yard or two beyond it.
-constexpr float PLAYERBOT_FENCE_MARGIN = 8.0f;
+// Measured from real collision, so a bot past the wall on its own bearing is
+// genuinely outside; this only absorbs sector interpolation, which is under a
+// tenth of a yard at 5 degree steps. It was 8, then 2, and both were larger
+// than the escapes they were meant to catch: bots found sitting outside the
+// Imperial Arena were 0.8 and 1.8 yd past the fence, so every tolerance tried
+// so far swallowed the breach whole.
+constexpr float PLAYERBOT_FENCE_MARGIN = 0.5f;
 
 // Walk the bot back first; only teleport if it is still out after this long.
 // A bot that was knocked over a rail can usually run back in on its own, and a
@@ -2430,8 +2436,42 @@ bool TryRecoverPlayerbotOutsideFence(Player* player)
     uint64 const rawGuid = player->GetGUID().GetRawValue();
     uint32& breachStartMs = playerbot::LockedGetOrCreate(g_PlayerbotFenceBreachStartMsByGuid, rawGuid);
 
+    // Report the geometry whether or not this crosses the acting threshold.
+    // Catching an escape used to mean standing next to it as it happened, and
+    // the numbers that matter - how far out, against what the rays measured -
+    // were exactly the ones nobody could read afterwards. A bot past the
+    // measured wall but inside the tolerance is the interesting case: it is
+    // visibly outside the arena while the recovery still calls it in.
+    float const centreDx = player->GetPositionX() - fence->CentreX;
+    float const centreDy = player->GetPositionY() - fence->CentreY;
+    float const centreDistance = std::sqrt(centreDx * centreDx + centreDy * centreDy);
+    float const fenceHere = fence->RadiusAt(player->GetPositionX(), player->GetPositionY());
+    bool const pastMeasuredWall = centreDistance > fenceHere;
+
     if (fence->Contains(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), PLAYERBOT_FENCE_MARGIN))
     {
+        // Its own throttle, not the walk-back timer: this branch resets that
+        // timer on the way out, so keying the report off it would repeat the
+        // line on every tick the bot spent in the band.
+        static std::unordered_map<uint64, uint32> toleranceReportMsByGuid;
+        uint32& lastReportMs = playerbot::LockedGetOrCreate(toleranceReportMsByGuid, rawGuid);
+        uint32 const nowMsForReport = GameTime::GetGameTimeMS();
+        bool const reportDue = !lastReportMs || nowMsForReport - lastReportMs >= 10000;
+
+        if (pastMeasuredWall && reportDue)
+        {
+            lastReportMs = nowMsForReport;
+            MotionMaster const* motionMaster = player->GetMotionMaster();
+            TC_LOG_WARN("playerbots.pvp.lifecycle",
+                "Playerbot fence: bot={} name={} map={} bg={} is {:.1f} yd from centre, {:.1f} yd past the measured wall ({:.1f}) "
+                "but inside the {:.1f} yd tolerance - NOT acting. pos=({:.1f}, {:.1f}, {:.1f}) motion={} moving={}.",
+                player->GetGUID().ToString(), player->GetName(), bg->GetMapId(), uint32(bg->GetTypeID()),
+                centreDistance, centreDistance - fenceHere, fenceHere, PLAYERBOT_FENCE_MARGIN,
+                player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
+                motionMaster ? uint32(motionMaster->GetCurrentMovementGeneratorType()) : 0u,
+                player->isMoving() ? 1 : 0);
+        }
+
         breachStartMs = 0;
         return false;
     }

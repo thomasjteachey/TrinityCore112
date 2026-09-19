@@ -27,6 +27,9 @@ EndScriptData */
 #include "Battleground.h"
 #include "BattlefieldMgr.h"
 #include "BattlegroundFence.h"
+#include "VMapFactory.h"
+#include "VMapManager2.h"
+#include "MotionMaster.h"
 #include "BattlegroundMgr.h"
 #include "CellImpl.h"
 #include "Channel.h"
@@ -861,10 +864,64 @@ public:
         handler->PSendSysMessage("Fence for bg %u map %u: centre (%.1f, %.1f, %.1f), reference radius %.1f, z band %.1f..%.1f.",
             uint32(bg->GetTypeID()), bg->GetMapId(), fence->CentreX, fence->CentreY, fence->CentreZ,
             fence->ReferenceRadius, fence->FloorZ, fence->CeilZ);
-        handler->PSendSysMessage("You are %.1f yd from the centre; the wall in this direction is at %.1f yd. %s",
+        handler->PSendSysMessage("You are %.1f yd from the centre; the fence on your bearing from it is at %.1f yd. %s",
             distance, here,
             fence->Contains(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), 0.0f)
                 ? "Inside." : "OUTSIDE - a bot here would be brought back.");
+
+        // The line above is a property of where you STAND - the fence radius
+        // along the ray from the centre through you - so turning on the spot
+        // cannot change it. Saying "in this direction" made it read as broken.
+        // This is the question turning should answer, and the one worth asking
+        // of a map whose collision has been wrong before: cast the server's own
+        // ray along your facing and report what it hits. Stand at a wall you
+        // can see and compare.
+        float const facing = player->GetOrientation();
+        float const eyeZ = player->GetPositionZ() + 2.0f;
+        float const probeDistance = 150.0f;
+        float const endX = player->GetPositionX() + std::cos(facing) * probeDistance;
+        float const endY = player->GetPositionY() + std::sin(facing) * probeDistance;
+
+        float hitX = endX;
+        float hitY = endY;
+        float hitZ = eyeZ;
+        if (VMAP::VMapFactory::createOrGetVMapManager()->getObjectHitPos(player->GetMapId(),
+            player->GetPositionX(), player->GetPositionY(), eyeZ, endX, endY, eyeZ, hitX, hitY, hitZ, 0.0f))
+        {
+            float const hx = hitX - player->GetPositionX();
+            float const hy = hitY - player->GetPositionY();
+            handler->PSendSysMessage("Facing: server collision %.1f yd ahead.", std::sqrt(hx * hx + hy * hy));
+        }
+        else
+            handler->PSendSysMessage("Facing: NO server collision within %.0f yd - if you can see a wall there, the server cannot.",
+                probeDistance);
+
+        // Everyone in the match, judged against the same fence. Finding a stray
+        // bot used to mean spotting it, .appear-ing onto it and reading one
+        // position at a time, which is a poor way to answer "is anything out?"
+        // - especially when the bot fights back. One line each, so the answer
+        // is the shape of the list rather than a hunt.
+        handler->SendSysMessage("Roster (distance from centre / fence on that bearing):");
+        for (auto const& itr : bg->GetPlayers())
+        {
+            Player* member = ObjectAccessor::FindPlayer(itr.first);
+            if (!member)
+                continue;
+
+            float const mdx = member->GetPositionX() - fence->CentreX;
+            float const mdy = member->GetPositionY() - fence->CentreY;
+            float const mdist = std::sqrt(mdx * mdx + mdy * mdy);
+            float const mfence = fence->RadiusAt(member->GetPositionX(), member->GetPositionY());
+            bool const inside = fence->Contains(member->GetPositionX(), member->GetPositionY(), member->GetPositionZ(), 0.0f);
+
+            MotionMaster const* mm = member->GetMotionMaster();
+            handler->PSendSysMessage("  %-14s %6.1f / %6.1f  %-8s motion=%u %s",
+                member->GetName().c_str(), mdist, mfence,
+                inside ? "in" : "OUT",
+                mm ? uint32(mm->GetCurrentMovementGeneratorType()) : 0u,
+                member->isMoving() ? "moving" : "still");
+        }
+
         return true;
     }
 

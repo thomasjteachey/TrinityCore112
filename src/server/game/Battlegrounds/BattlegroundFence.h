@@ -100,6 +100,21 @@ namespace BattlegroundFence
         // to instrument anything.
         float ReferenceRadius = 0.0f;
 
+        // The WMO the arena's own floor sits in, or -1 when its floor is
+        // terrain. When it is set, containment is this and nothing else: a
+        // position in a different WMO, or in none, is outside, exactly and
+        // without a radius or a tolerance. The radial shape below is then only
+        // used to pull a destination back to somewhere sensible.
+        //
+        // This is strictly better than measuring a radius wherever it applies.
+        // An arena is not a circle - the Imperial Arena's wall is 55 yd out in
+        // one bearing and 69 in another - so a radial fence has to choose
+        // between missing a bot a yard past a near wall and dragging back one
+        // standing legitimately inside a far one. WMO identity has no such
+        // trade: the server already knows which building you are in.
+        int32 WmoRootId = -1;
+        uint32 MapId = 0;
+
         float RadiusAt(float x, float y) const;
         bool Contains(float x, float y, float z, float margin) const;
 

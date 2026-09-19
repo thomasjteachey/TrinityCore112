@@ -51,11 +51,19 @@ namespace
     // enclosure and the fence refuses to be used. Open battlegrounds land here.
     constexpr float MinimumEnclosedFraction = 0.60f;
 
-    // Seals doorways above, ignores pillars below. Both relative to the 75th
-    // percentile of the hit distances, which tracks the outer wall even when a
-    // third of the rays are stopped early by interior geometry.
-    constexpr float DoorwaySealFactor = 1.20f;
-    constexpr float PillarIgnoreFactor = 0.80f;
+    // A sector that found no wall is a doorway looking out; give it the 75th
+    // percentile plus a little, which seals it without knowing where it is.
+    constexpr float DoorwaySealFactor = 1.10f;
+
+    // A sector that DID find a wall keeps what it measured. These two only
+    // fence off nonsense - a ray stopped by something up against the centre, or
+    // one that escaped through a gap and struck scenery far outside. The floor
+    // used to be 0.80 of the reference, which quietly overrode real
+    // measurements: where the Imperial Arena's wall stands 55 yd out the fence
+    // was raised to 55 and sat LOOSER than the wall it was meant to trace, so a
+    // bot a yard past it still read as inside.
+    constexpr float MeasuredFloorFactor = 0.50f;
+    constexpr float MeasuredCeilingFactor = 1.35f;
 
     // How far past the measured enclosure a team start may sit before the
     // measurement is judged to be of something other than the boundary.
@@ -225,14 +233,19 @@ namespace
         }
 
         float const seal = reference * DoorwaySealFactor;
-        float const ignorePillars = reference * PillarIgnoreFactor;
+        float const measuredFloor = reference * MeasuredFloorFactor;
+        float const measuredCeiling = reference * MeasuredCeilingFactor;
 
         for (uint32 sector = 0; sector < BattlegroundFence::SectorCount; ++sector)
         {
-            // A sector that found no wall is a doorway looking out of the
-            // arena, so it gets the sealed radius rather than the probe limit.
-            float const measured = raw[sector] > 0.0f ? raw[sector] : seal;
-            fence.SectorRadius[sector] = std::clamp(measured, ignorePillars, seal);
+            // Trust the measurement wherever there is one. An arena is not a
+            // circle - this one's wall is 55 yd out on one bearing and 69 on
+            // another - and smoothing every sector toward the average is
+            // exactly how a bot ends up standing outside a near wall while the
+            // fence reports it comfortably inside an average one.
+            fence.SectorRadius[sector] = raw[sector] > 0.0f
+                ? std::clamp(raw[sector], measuredFloor, measuredCeiling)
+                : seal;
         }
 
         // A fence that excludes a team's own start position would teleport that
@@ -247,7 +260,12 @@ namespace
             if (distance < 0.01f)
                 continue;
 
-            float const needed = distance * 1.15f;
+            // Just enough room to stand, and only where the start would
+            // otherwise fall outside. Widening these sectors unconditionally to
+            // 1.15x the start distance pushed them ~10 yd past the wall the
+            // rays actually found, which opened a band where a bot is plainly
+            // outside the arena and the recovery still calls it inside.
+            float const needed = distance + 2.0f;
             float const angle = NormalizeAngle(std::atan2(dy, dx));
             int32 const centreSector = int32(angle / SectorArc);
 
@@ -264,7 +282,31 @@ namespace
         fence.FloorZ = std::min({ allianceStart->GetPositionZ(), hordeStart->GetPositionZ(), floorZ }) - verticalBand;
         fence.CeilZ = std::max({ allianceStart->GetPositionZ(), hordeStart->GetPositionZ(), floorZ }) + verticalBand;
         fence.ReferenceRadius = reference;
+        fence.MapId = map->GetId();
         fence.Usable = true;
+
+        // Which building the arena floor is in, sampled at a team start rather
+        // than the geometric centre - the centre can sit over a pit or a gap,
+        // while a start is by definition somewhere a player stands. Any hit
+        // makes containment exact; none means the floor is terrain and the
+        // radial shape above stays in charge.
+        if (VMAP::VMapManager2* vmap = VMAP::VMapFactory::createOrGetVMapManager())
+        {
+            for (Position const* start : { allianceStart, hordeStart })
+            {
+                float sampleZ = start->GetPositionZ() + 2.0f;
+                uint32 areaFlags = 0;
+                int32 adtId = 0;
+                int32 rootId = -1;
+                int32 groupId = 0;
+                if (vmap->getAreaInfo(map->GetId(), start->GetPositionX(), start->GetPositionY(),
+                    sampleZ, areaFlags, adtId, rootId, groupId) && rootId >= 0)
+                {
+                    fence.WmoRootId = rootId;
+                    break;
+                }
+            }
+        }
 
         float const smallest = *std::min_element(fence.SectorRadius.begin(), fence.SectorRadius.end());
         float const largest = *std::max_element(fence.SectorRadius.begin(), fence.SectorRadius.end());
@@ -306,6 +348,27 @@ bool Fence::Contains(float x, float y, float z, float margin) const
 
     if (z < FloorZ - margin || z > CeilZ + margin)
         return false;
+
+    // Exact when it applies: the same building as the arena floor, or not in
+    // the arena. No radius, no tolerance, and no argument about whether a bot
+    // 1.7 yd past a 55 yd sector is really outside - the server either places
+    // it in the arena's WMO or it does not.
+    if (WmoRootId >= 0)
+    {
+        VMAP::VMapManager2* vmap = VMAP::VMapFactory::createOrGetVMapManager();
+        if (vmap)
+        {
+            float sampleZ = z + 2.0f;
+            uint32 flags = 0;
+            int32 adtId = 0;
+            int32 rootId = -1;
+            int32 groupId = 0;
+            if (!vmap->getAreaInfo(MapId, x, y, sampleZ, flags, adtId, rootId, groupId))
+                return false;
+
+            return rootId == WmoRootId;
+        }
+    }
 
     float const dx = x - CentreX;
     float const dy = y - CentreY;
