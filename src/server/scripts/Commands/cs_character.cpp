@@ -436,9 +436,26 @@ public:
         else
         {
             LocaleConstant const locale = player->IsConnected() ? player->GetConnectedPlayer()->GetSession()->GetSessionDbcLocale() : sWorld->GetDefaultDbcLocale();
-            if (Surnames::Check(surname, locale) != CHAR_NAME_SUCCESS)
+            if (ResponseCodes const res = Surnames::Check(surname, locale); res != CHAR_NAME_SUCCESS)
             {
-                handler->SendSysMessage(LANG_BAD_VALUE);
+                // "Incorrect values" leaves a GM guessing which of the rules it
+                // was, and one of them is a reserved-name regex in the client's
+                // own DBC that nothing else here can show.
+                char const* why;
+                switch (res)
+                {
+                    case CHAR_NAME_TOO_SHORT:        why = "too short"; break;
+                    case CHAR_NAME_TOO_LONG:         why = "too long (12 letters at most)"; break;
+                    case CHAR_NAME_INVALID_SPACE:    why = "one word only"; break;
+                    case CHAR_NAME_THREE_CONSECUTIVE: why = "three of the same letter in a row"; break;
+                    case CHAR_NAME_MIXED_LANGUAGES:  why = "letters of one alphabet only"; break;
+                    case CHAR_NAME_INVALID_CHARACTER: why = "letters only"; break;
+                    case CHAR_NAME_PROFANE:          why = "profane"; break;
+                    case CHAR_NAME_RESERVED:         why = "reserved"; break;
+                    case CHAR_NAME_NO_NAME:          why = "empty"; break;
+                    default:                         why = "refused"; break;
+                }
+                handler->PSendSysMessage("%s is not a surname this realm will take: %s.", std::string(*surnameV).c_str(), why);
                 handler->SetSentErrorMessage(true);
                 return false;
             }

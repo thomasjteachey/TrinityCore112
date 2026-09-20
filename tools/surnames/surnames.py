@@ -12,7 +12,9 @@ what it wrote.
     clear --confirm          blank every surname again (the undo)
     show <name>              one character's name, race and surname
 
-Only `apply` and `clear` write anything, and only with --confirm.
+Only `apply` and `clear` write anything, and only with --confirm. `--realm`
+chooses which realm, and defaults to centuriondev - naming a whole roster is a
+thing to try on dev first.
 
 The surname lives in `characters`.`surname` (see game/Miscellaneous/Surnames.h
 for how it reaches the client); the first name is never touched, so nothing
@@ -28,9 +30,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-CONF = Path.home() / "wow/servers/tc-centurion/etc/worldserver.conf"
 SOAPCMD = Path.home() / "wow/bin/soapcmd.sh"
-REALM = "centurion"
+
+# --realm picks which worldserver.conf the database credentials (and so the
+# database itself) are read out of. Its default is deliberately the dev realm:
+# naming a whole roster is a thing to try there first.
+REALMS = {
+    "centuriondev": Path.home() / "wow/servers/tc-centuriondev/etc/worldserver.conf",
+    "centurion": Path.home() / "wow/servers/tc-centurion/etc/worldserver.conf",
+}
+REALM = "centuriondev"
+CONF = REALMS[REALM]
 
 RACES = {
     1: "Human", 2: "Orc", 3: "Dwarf", 4: "Night Elf", 5: "Undead",
@@ -329,14 +339,20 @@ def cmd_show(args):
         sys.exit(f"no character called {args.name}")
     for row in rows:
         race = RACES.get(int(row["race"]), row["race"])
-        current = row["surname"] or "(none)"
         would = surname_for(row["guid"], row["race"])
-        print(f"{row['name']} {current}   ({race}, level {row['level']}, guid {row['guid']})")
-        print(f"  unnamed, this character would get: {would}")
+        if row["surname"]:
+            print(f"{row['name']} {row['surname']}   ({race}, level {row['level']}, guid {row['guid']})")
+        else:
+            print(f"{row['name']}   ({race}, level {row['level']}, guid {row['guid']}) - no surname")
+            print(f"  would be given: {would}")
 
 
 def main():
+    global REALM, CONF
+
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--realm", choices=sorted(REALMS), default=REALM,
+                        help=f"which realm's database and SOAP port to use (default {REALM})")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("pools").set_defaults(func=cmd_pools)
@@ -358,9 +374,15 @@ def main():
     p.set_defaults(func=cmd_show)
 
     args = parser.parse_args()
+    REALM, CONF = args.realm, REALMS[args.realm]
+
     check_pools()
-    if args.command != "pools" and not column_exists():
-        sys.exit("`characters` has no `surname` column - apply the ALTER TABLE in README.md first")
+    if args.command != "pools":
+        if not CONF.exists():
+            sys.exit(f"no {CONF} - is {REALM} the right realm?")
+        if not column_exists():
+            sys.exit(f"{REALM}: `characters` has no `surname` column - apply the ALTER TABLE in README.md first")
+        print(f"[{REALM}]")
     args.func(args)
 
 
