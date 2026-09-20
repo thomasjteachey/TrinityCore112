@@ -565,6 +565,16 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
         }
         case CHAT_MSG_WHISPER:
         {
+            // The Centurion whisper box keeps two words together as the target,
+            // since nearly every name now has a family name
+            // (Miscellaneous/Surnames.h). Chromi has none: "/w Chromi hi there"
+            // arrives as "Chromi Hi" and "there".
+            if (lang != LANG_ADDON && to.find(' ') != std::string::npos && IsChromiWhisperTarget(to.substr(0, to.find(' '))))
+            {
+                msg = to.substr(to.find(' ') + 1) + ' ' + msg;
+                to.erase(to.find(' '));
+            }
+
             if (IsChromiWhisperTarget(to))
             {
                 if (Player* chromi = GetOrCreateChromiWhisperPlayer())
@@ -585,8 +595,11 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
             // "/w Elgrom Fernbloom hi" reached us split on the space inside the
             // name: the target is "Elgrom" and the family name is at the front
             // of the message (Miscellaneous/Surnames.h). Put them back together.
-            if (lang != LANG_ADDON)
-                Surnames::JoinWhisperTarget(to, msg);
+            // And the other way round: the whisper box sends two words, so a
+            // character with no family name comes as "Bob Hello". Hand the
+            // second word back to the message.
+            if (lang != LANG_ADDON && !Surnames::JoinWhisperTarget(to, msg))
+                Surnames::SplitWhisperTarget(to, msg);
 
             // A transient clone in the sender's match (battleground fill, a
             // Violet Hold ally, a "Dark" mirror) plays under an internal name
@@ -597,8 +610,11 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
             Player* receiver = nullptr;
             if (Battleground* battleground = sender->GetBattleground())
                 receiver = battleground->FindTransientPlayerByDisplayName(to, sender->GetBGTeam());
+            // The whole name (Miscellaneous/Surnames.h): the online name map
+            // knows first names only, which since family names arrived no
+            // longer say who is meant.
             if (!receiver)
-                receiver = ObjectAccessor::FindConnectedPlayerByName(to);
+                receiver = ObjectAccessor::FindConnectedPlayerByFullName(to);
             if (!receiver || (lang != LANG_ADDON && !receiver->isAcceptWhispers() && receiver->GetSession()->HasPermission(rbac::RBAC_PERM_CAN_FILTER_WHISPERS) && !receiver->IsInWhisperWhiteList(sender->GetGUID())))
             {
                 SendPlayerNotFoundNotice(to);

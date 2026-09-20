@@ -256,6 +256,24 @@ void HandleCreateRequest(WorldSession* session, std::string_view name, std::stri
     pending.Expires = GameTime::GetGameTime() + PendingLifetime;
 }
 
+bool SplitWhisperTarget(std::string& to, std::string& msg)
+{
+    std::size_t const space = to.find(' ');
+    if (space == std::string::npos)
+        return false;
+
+    if (sCharacterCache->GetCharacterCacheByFullName(to))
+        return false;
+
+    std::string first = to.substr(0, space);
+    if (!sCharacterCache->GetCharacterCacheByFullName(first))
+        return false;
+
+    msg = to.substr(space + 1) + ' ' + msg;
+    to = std::move(first);
+    return true;
+}
+
 std::string PeekPending(uint32 accountId, std::string const& name)
 {
     auto itr = PendingByAccount.find(accountId);
@@ -269,7 +287,7 @@ std::string PeekPending(uint32 accountId, std::string const& name)
     return pending.Surname;
 }
 
-void ApplyOnCreate(uint32 accountId, ObjectGuid guid, std::string const& name)
+void ApplyPending(uint32 accountId, ObjectGuid guid, std::string const& name, char const* what)
 {
     auto itr = PendingByAccount.find(accountId);
     if (itr == PendingByAccount.end())
@@ -282,6 +300,6 @@ void ApplyOnCreate(uint32 accountId, ObjectGuid guid, std::string const& name)
         return;
 
     if (Set(guid, pending.Surname))
-        TC_LOG_INFO("entities.player.character", "Account: {} Created character {} {} with the surname {}.", accountId, name, guid.ToString(), pending.Surname);
+        TC_LOG_INFO("entities.player.character", "Account: {} {} character {} {} with the surname {}.", accountId, what, name, guid.ToString(), pending.Surname);
 }
 }

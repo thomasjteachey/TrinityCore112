@@ -475,10 +475,16 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
     std::string const pendingSurname = surnames ? Surnames::PeekPending(GetAccountId(), createInfo->Name) : "";
     if (surnames)
     {
-        std::string fullName = createInfo->Name;
-        if (!pendingSurname.empty())
-            fullName += ' ' + pendingSurname;
+        // Every character has a family name where they are on; the create
+        // screen will not send the request without one, so an empty one here
+        // is a client that never got the LAST NAME box.
+        if (pendingSurname.empty())
+        {
+            SendCharCreate(CHAR_NAME_NO_NAME);
+            return;
+        }
 
+        std::string const fullName = createInfo->Name + ' ' + pendingSurname;
         if (sCharacterCache->GetCharacterCacheByFullName(fullName))
         {
             SendCharCreate(CHAR_CREATE_NAME_IN_USE);
@@ -735,7 +741,7 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
                     sCharacterCache->AddCharacterCacheEntry(newChar->GetGUID(), GetAccountId(), newChar->GetName(), newChar->GetNativeGender(), newChar->GetRace(), newChar->GetClass(), newChar->GetLevel());
                     // The family name typed on the create screen, now that the
                     // row it updates exists (Miscellaneous/Surnames.h).
-                    Surnames::ApplyOnCreate(GetAccountId(), newChar->GetGUID(), newChar->GetName());
+                    Surnames::ApplyPending(GetAccountId(), newChar->GetGUID(), newChar->GetName(), "Created");
                     if (newChar->HasTournamentModeFlag())
                         sCharacterCache->UpdateCharacterTournamentMode(newChar->GetGUID(), true);
                     SendCharCreate(CHAR_CREATE_SUCCESS);
@@ -1387,11 +1393,27 @@ void WorldSession::HandleCharRenameOpcode(WorldPacket& recvData)
     }
 
     // What has to be free is the whole name: the new first name together with
-    // the family name this character keeps (Miscellaneous/Surnames.h). Without
-    // family names the cache is keyed on the first name alone, so this is the
-    // same test it always was.
+    // the family name the character will have afterwards (Miscellaneous/
+    // Surnames.h) - the one typed on the rename prompt, or the one it already
+    // has when the prompt sent none. Without family names the cache is keyed
+    // on the first name alone, so this is the same test it always was.
+    std::string surname;
+    if (Surnames::Enabled())
+    {
+        surname = Surnames::PeekPending(GetAccountId(), renameInfo->Name);
+        if (surname.empty())
+            surname = Surnames::Get(renameInfo->Guid);
+
+        // A family name is required wherever they are on.
+        if (surname.empty())
+        {
+            SendCharRename(CHAR_NAME_NO_NAME, renameInfo.get());
+            return;
+        }
+    }
+
     std::string fullName = renameInfo->Name;
-    if (std::string const& surname = Surnames::Get(renameInfo->Guid); !surname.empty())
+    if (!surname.empty())
         fullName += ' ' + surname;
 
     if (CharacterCacheEntry const* taken = sCharacterCache->GetCharacterCacheByFullName(fullName))
@@ -1456,9 +1478,13 @@ void WorldSession::HandleCharRenameCallBack(std::shared_ptr<CharacterRenameInfo>
 
     TC_LOG_INFO("entities.player.character", "Account: {} (IP: {}) Character:[{}] ({}) Changed name to: {}", GetAccountId(), GetRemoteAddress(), oldName, renameInfo->Guid.ToString(), renameInfo->Name);
 
-    SendCharRename(RESPONSE_SUCCESS, renameInfo.get());
-
+    // Name first, then the family name typed on the prompt, then the answer:
+    // the client writes the name in the answer straight into its character
+    // list, so it has to be the whole new name (Miscellaneous/Surnames.h).
     sCharacterCache->UpdateCharacterData(renameInfo->Guid, renameInfo->Name);
+    Surnames::ApplyPending(GetAccountId(), renameInfo->Guid, renameInfo->Name, "Renamed");
+
+    SendCharRename(RESPONSE_SUCCESS, renameInfo.get());
 }
 
 void WorldSession::HandleSetPlayerDeclinedNames(WorldPacket& recvData)
@@ -2437,7 +2463,8 @@ void WorldSession::SendCharRename(ResponseCodes result, CharacterRenameInfo cons
     if (result == RESPONSE_SUCCESS)
     {
         data << renameInfo->Guid;
-        data << renameInfo->Name;
+        // Shown in the character list as it stands, so with the family name.
+        data << Surnames::Decorated(renameInfo->Guid, renameInfo->Name);
     }
     SendPacket(&data);
 }

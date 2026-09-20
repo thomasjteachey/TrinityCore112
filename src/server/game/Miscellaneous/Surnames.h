@@ -79,6 +79,13 @@ namespace Surnames
     // character, and says whether it did.
     bool JoinWhisperTarget(std::string& to, std::string& msg);
 
+    // The reverse. The Centurion whisper box keeps TWO words together as the
+    // target, since a name is first and last now, so "/w Bob hello there" to
+    // a character without a family name arrives as "Bob Hello" and "there".
+    // Hands the second word back to the message when the two words name
+    // nobody and the first alone does.
+    bool SplitWhisperTarget(std::string& to, std::string& msg);
+
     // The surname waiting for the character about to be created on this
     // account, without consuming it: the name it will be created under has to
     // be checked as a pair.
@@ -89,11 +96,13 @@ namespace Surnames
     // surnames are off or the character is unknown.
     bool Set(ObjectGuid guid, std::string surname);
 
-    // "SURNAME\t<name>\t<surname>" from the create screen, kept until that
-    // character is created (Miscellaneous/CharacterScreen.h).
+    // "SURNAME\t<name>\t<surname>" from the create screen or the rename prompt,
+    // kept until that character is created or renamed
+    // (Miscellaneous/CharacterScreen.h).
     void HandleCreateRequest(WorldSession* session, std::string_view name, std::string_view surname);
-    // Consumes the pending choice and writes it to the new character.
-    void ApplyOnCreate(uint32 accountId, ObjectGuid guid, std::string const& name);
+    // Consumes the pending choice and writes it to the character that has just
+    // been created or renamed to `name`. The log line says which, from `what`.
+    void ApplyPending(uint32 accountId, ObjectGuid guid, std::string const& name, char const* what);
 }
 
 #endif // TRINITYCORE_SURNAMES_H
