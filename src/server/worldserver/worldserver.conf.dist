@@ -5349,6 +5349,16 @@ Centurion.Items.QuiversHoldAnyItem = 0
 #                     Starter Wands and the rest of that shop front; nothing from the
 #                     Grand Marshal's stock)
 #
+#    Centurion.Tournament.BgKeepItems
+#        Description: Equippable items the loadout does not touch, comma separated - the
+#                     whitelist a character's own gear can be on. They stay worn or packed
+#                     exactly as they are, and nothing is issued in their place. Both sides
+#                     of a world/tournament pair are kept whichever one is listed.
+#        Default:     "5522,13602,13603,1254,13699,13700,13701" - (every rank of the
+#                     warlock's spellstone and firestone: armour by item class, worn in the
+#                     relic slot, and conjured out of a soul shard rather than bought, so no
+#                     vendor stocks one and no tournament twin exists to stand in for it)
+#
 #    Centurion.Tournament.BgConsumables
 #        Description: The consumables a tournament match allows, comma separated. Both sides of
 #                     a world/tournament pair are allowed whichever one is listed.
@@ -5383,6 +5393,7 @@ Centurion.Tournament.WorldMaxHonorPoints = 2147483647
 Centurion.Tournament.BgLoadout = 1
 Centurion.Tournament.BgBanConsumables = 1
 Centurion.Tournament.BgConsumables = "200026,200030,200041,200991,200992,203640,203641"
+Centurion.Tournament.BgKeepItems = "5522,13602,13603,1254,13699,13700,13701"
 Centurion.Tournament.BgStarterVendors = "Starter %"
 
 #

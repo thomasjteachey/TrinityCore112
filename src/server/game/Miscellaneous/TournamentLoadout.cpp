@@ -44,6 +44,11 @@
 // walked in without a neck, rings or trinkets fights in the tournament's and
 // loses them again on the way out. Shirts and tabards are nobody's business.
 //
+// And a named few are left exactly where they are, worn or packed
+// (Centurion.Tournament.BgKeepItems): the warlock's spellstones and firestones,
+// which are conjured out of a soul shard rather than bought. No shop stocks one,
+// so no twin exists to answer it with, and a wand is no substitute for it.
+//
 // The originals are neither destroyed nor rebuilt from a description: the item
 // rows are moved aside exactly as an account bank deposit moves them
 // (Accounts/AccountBankMgr.cpp) and handed back with their enchants, charges,
@@ -127,6 +132,11 @@ namespace
         bool Enabled = true;
         bool BanConsumables = true;
         std::unordered_set<uint32> AllowedConsumables;
+        // Equippable items the loadout does not touch at all - the whitelist a
+        // character's own gear can be on. A warlock's spellstones and firestones
+        // are conjured out of a soul shard rather than bought, so no vendor
+        // stocks them and no twin exists to stand in for one.
+        std::unordered_set<uint32> KeptItems;
         // The vendors a replacement weapon may come from, matched on
         // creature_template.subname: "Starter 1H Melee Weapons", "Starter
         // Shields", "Starter Wands" and the rest of that shop front.
@@ -134,6 +144,25 @@ namespace
     };
 
     LoadoutSettings LoadoutConfig;
+
+    // A comma-separated list of item entries out of the config. A token that is
+    // not a number is named in the log rather than quietly dropped, so a typo in
+    // a list of numbers is findable.
+    void ReadEntryList(char const* key, char const* defaultValue, std::unordered_set<uint32>& out)
+    {
+        std::string const raw = sConfigMgr->GetStringDefault(key, defaultValue);
+        for (std::string_view token : Trinity::Tokenize(raw, ',', false))
+        {
+            Optional<uint32> const entry = Trinity::StringTo<uint32>(token);
+            if (!entry)
+            {
+                TC_LOG_ERROR("server.loading", "{}: ignoring '{}', not a number.", key, token);
+                continue;
+            }
+
+            out.insert(*entry);
+        }
+    }
 
     // class << 8 | equipment slot -> item entry. Read-only once loaded.
     std::unordered_map<uint16, uint32> TemplateGear;
@@ -266,6 +295,27 @@ namespace
             default:
                 return true;
         }
+    }
+
+    // The whitelist proper: items the loadout leaves exactly where they are,
+    // worn or packed, named by entry in Centurion.Tournament.BgKeepItems. What
+    // belongs on it is what a class makes for itself - a warlock's spellstone
+    // and firestone, conjured out of a soul shard and worn in the relic slot.
+    // No vendor sells one, so there is no tournament twin to answer it with, and
+    // the swap would otherwise put the stone away and hand back a wand.
+    //
+    // Either side of a world/tournament pair passes on whichever one the config
+    // names, and the pairing is resolved here rather than folded into the list
+    // at load time for the reason IsConsumableAllowedInMatch gives: the config
+    // is read near the top of SetInitialWorldSettings and the item links near
+    // the bottom, so on a cold start there would be nothing to fold in.
+    bool IsKeptItem(uint32 entry)
+    {
+        if (LoadoutConfig.KeptItems.count(entry) != 0)
+            return true;
+
+        uint32 const counterpart = GetCounterpartItem(entry);
+        return counterpart && LoadoutConfig.KeptItems.count(counterpart) != 0;
     }
 
     // What the field kit may offer for an equipment slot, in the order it is
@@ -498,6 +548,9 @@ namespace
         ItemTemplate const* proto = item->GetTemplate();
         if (!IsLoadoutRelevant(proto))
             return;
+
+        if (IsKeptItem(proto->ItemId))
+            return;                      // on the whitelist by entry: left alone
 
         uint32 const twin = GetItemForMode(proto->ItemId, true);
         if (twin == proto->ItemId)
@@ -941,18 +994,15 @@ void LoadLoadoutConfig()
     // the same ban. Either side of a world/tournament pair passes on whichever
     // one is listed - resolved where the rule is asked rather than here, see
     // IsConsumableAllowedInMatch.
-    std::string const raw = sConfigMgr->GetStringDefault("Centurion.Tournament.BgConsumables", "200026,200030,200041,200991,200992,203640,203641");
-    for (std::string_view token : Trinity::Tokenize(raw, ',', false))
-    {
-        Optional<uint32> const entry = Trinity::StringTo<uint32>(token);
-        if (!entry)
-        {
-            TC_LOG_ERROR("server.loading", "Centurion.Tournament.BgConsumables: ignoring '{}', not a number.", token);
-            continue;
-        }
+    ReadEntryList("Centurion.Tournament.BgConsumables", "200026,200030,200041,200991,200992,203640,203641", loaded.AllowedConsumables);
 
-        loaded.AllowedConsumables.insert(*entry);
-    }
+    // The gear whitelist: every rank of the warlock's spellstone (5522, 13602,
+    // 13603) and firestone (1254, 13699, 13700, 13701). They are armour by item
+    // class and worn in the relic slot, so the swap took them like any other
+    // piece - but a warlock pays a soul shard for one and no shop sells it, so
+    // there is nothing to trade it for and nothing fairer about a wand in its
+    // place. The stone stays where it is, in the bags or on the character.
+    ReadEntryList("Centurion.Tournament.BgKeepItems", "5522,13602,13603,1254,13699,13700,13701", loaded.KeptItems);
 
     LoadoutConfig = std::move(loaded);
 }
