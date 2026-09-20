@@ -41,7 +41,7 @@ BattlegroundAB::BattlegroundAB()
     m_IsInformedNearVictory = false;
     m_BuffChange = true;
     BgObjects.resize(BG_AB_OBJECT_MAX);
-    BgCreatures.resize(BG_AB_ALL_NODES_COUNT + 5);//+5 for aura triggers
+    BgCreatures.resize(BG_AB_ALL_NODES_COUNT);//one spirit guide per node
 
     for (uint8 i = 0; i < BG_AB_DYNAMIC_NODES_COUNT; ++i)
     {
@@ -416,19 +416,6 @@ void BattlegroundAB::_NodeOccupied(uint8 node, Team team)
         CastSpellOnTeam(SPELL_AB_QUEST_REWARD_5_BASES, team);
     if (capturedNodes >= 4)
         CastSpellOnTeam(SPELL_AB_QUEST_REWARD_4_BASES, team);
-
-    Creature* trigger = !BgCreatures[node + 7] ? GetBGCreature(node + 7) : nullptr; // 0-6 spirit guides
-    if (!trigger)
-        trigger = AddCreature(WORLD_TRIGGER, node+7, BG_AB_NodePositions[node], GetTeamIndexByTeamId(team));
-
-    //add bonus honor aura trigger creature when node is accupied
-    //cast bonus aura (+50% honor in 25yards)
-    //aura should only apply to players who have accupied the node, set correct faction for trigger
-    if (trigger)
-    {
-        trigger->SetFaction(team == ALLIANCE ? FACTION_ALLIANCE_GENERIC : FACTION_HORDE_GENERIC);
-        trigger->CastSpell(trigger, SPELL_HONORABLE_DEFENDER_25Y, false);
-    }
 }
 
 void BattlegroundAB::_NodeDeOccupied(uint8 node)
@@ -436,9 +423,6 @@ void BattlegroundAB::_NodeDeOccupied(uint8 node)
     //only dynamic nodes, no start points
     if (node >= BG_AB_DYNAMIC_NODES_COUNT)
         return;
-
-    //remove bonus honor aura trigger creature when node is lost
-    DelCreature(node+7);//NULL checks are in DelCreature! 0-6 spirit guides
 
     RelocateDeadPlayers(BgCreatures[node]);
 

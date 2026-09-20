@@ -46,7 +46,7 @@ BattlegroundBFG::BattlegroundBFG()
 {
     m_BuffChange = true;
     BgObjects.resize(GILNEAS_BG_OBJECT_MAX);
-    BgCreatures.resize(GILNEAS_BG_ALL_NODES_COUNT + GILNEAS_BG_DYNAMIC_NODES_COUNT); // +GILNEAS_BG_DYNAMIC_NODES_COUNT buff triggers
+    BgCreatures.resize(GILNEAS_BG_ALL_NODES_COUNT); // one spirit guide per node
 
     _controlledPoints[TEAM_ALLIANCE] = 0;
     _controlledPoints[TEAM_HORDE] = 0;
@@ -348,17 +348,6 @@ void BattlegroundBFG::NodeOccupied(uint8 node)
     //     CastSpellOnTeam(SPELL_AB_QUEST_REWARD_5_BASES, _capturePointInfo[node]._ownerTeamId);
     // if (_controlledPoints[_capturePointInfo[node]._ownerTeamId] >= 4)
     //     CastSpellOnTeam(SPELL_AB_QUEST_REWARD_4_BASES, _capturePointInfo[node]._ownerTeamId);
-
-    // Creature* trigger = BgCreatures[node + 5] ? GetBGCreature(node + 5) : NULL; // 0-5 spirit guides
-    Creature* trigger = GetBgMap()->GetCreature(BgCreatures[GILNEAS_BG_ALL_NODES_COUNT + node]);
-    if (!trigger)
-        trigger = AddCreature(WORLD_TRIGGER, GILNEAS_BG_ALL_NODES_COUNT + node, GILNEAS_BG_NodePositions[node][0], GILNEAS_BG_NodePositions[node][1], GILNEAS_BG_NodePositions[node][2], GILNEAS_BG_NodePositions[node][3]);
-
-    if (trigger)
-    {
-        trigger->SetFaction(_capturePointInfo[node]._ownerTeamId == TEAM_ALLIANCE ? FACTION_ALLIANCE_GENERIC : FACTION_HORDE_GENERIC);
-        trigger->CastSpell(trigger, SPELL_HONORABLE_DEFENDER_25Y, false);
-    }
 }
 
 void BattlegroundBFG::NodeDeoccupied(uint8 node)
@@ -369,7 +358,6 @@ void BattlegroundBFG::NodeDeoccupied(uint8 node)
     RelocateDeadPlayers(BgCreatures[node]);
 
     DelCreature(node); // Delete spirit healer
-    DelCreature(GILNEAS_BG_ALL_NODES_COUNT + node); // Delete aura trigger
 }
 
 /* Invoked if a player used a banner as a gameobject */

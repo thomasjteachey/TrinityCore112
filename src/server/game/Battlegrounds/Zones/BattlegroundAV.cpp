@@ -83,30 +83,17 @@ void BattlegroundAV::HandleKillUnit(Creature* unit, Player* killer)
     if (GetStatus() != STATUS_IN_PROGRESS)
         return;
     uint32 entry = unit->GetEntry();
-    /*
-    uint32 triggerSpawnID = 0;
-    if (creature->GetEntry() == BG_AV_CreatureInfo[AV_NPC_A_CAPTAIN][0])
-        triggerSpawnID = AV_CPLACE_TRIGGER16;
-    else if (creature->GetEntry() == BG_AV_CreatureInfo[AV_NPC_A_BOSS][0])
-        triggerSpawnID = AV_CPLACE_TRIGGER17;
-    else if (creature->GetEntry() == BG_AV_CreatureInfo[AV_NPC_H_CAPTAIN][0])
-        triggerSpawnID = AV_CPLACE_TRIGGER18;
-    else if (creature->GetEntry() == BG_AV_CreatureInfo[AV_NPC_H_BOSS][0])
-        triggerSpawnID = AV_CPLACE_TRIGGER19;
-    */
     if (entry == BG_AV_CreatureInfo[AV_NPC_A_BOSS])
     {
         CastSpellOnTeam(23658, HORDE); //this is a spell which finishes a quest where a player has to kill the boss
         RewardReputationToTeam(729, BG_AV_REP_BOSS, HORDE);
         EndBattleground(HORDE);
-        DelCreature(AV_CPLACE_TRIGGER17);
     }
     else if (entry == BG_AV_CreatureInfo[AV_NPC_H_BOSS])
     {
         CastSpellOnTeam(23658, ALLIANCE); //this is a spell which finishes a quest where a player has to kill the boss
         RewardReputationToTeam(730, BG_AV_REP_BOSS, ALLIANCE);
         EndBattleground(ALLIANCE);
-        DelCreature(AV_CPLACE_TRIGGER19);
     }
     else if (entry == BG_AV_CreatureInfo[AV_NPC_A_CAPTAIN])
     {
@@ -122,7 +109,6 @@ void BattlegroundAV::HandleKillUnit(Creature* unit, Player* killer)
         //spawn destroyed aura
         for (uint8 i=0; i <= 9; i++)
             SpawnBGObject(BG_AV_OBJECT_BURN_BUILDING_ALLIANCE+i, RESPAWN_IMMEDIATELY);
-        DelCreature(AV_CPLACE_TRIGGER16);
 
         if (Creature* herold = GetBGCreature(AV_CPLACE_HERALD))
             herold->AI()->Talk(TEXT_STORMPIKE_GENERAL_DEAD);
@@ -141,7 +127,6 @@ void BattlegroundAV::HandleKillUnit(Creature* unit, Player* killer)
         //spawn destroyed aura
         for (uint8 i=0; i <= 9; i++)
             SpawnBGObject(BG_AV_OBJECT_BURN_BUILDING_HORDE+i, RESPAWN_IMMEDIATELY);
-        DelCreature(AV_CPLACE_TRIGGER18);
 
         if (Creature* herold = GetBGCreature(AV_CPLACE_HERALD))
             herold->AI()->Talk(TEXT_FROSTWOLF_GENERAL_DEAD);
@@ -323,37 +308,6 @@ Creature* BattlegroundAV::AddAVCreature(uint16 cinfoid, uint16 type)
         creature->Respawn();
         /// @todo find a way to add a motionmaster without killing the creature (i
         //just copied this code from a gm-command
-    }
-
-    uint32 triggerSpawnID = 0;
-    uint32 newFaction = 0;
-    if (creature->GetEntry() == BG_AV_CreatureInfo[AV_NPC_A_CAPTAIN])
-    {
-        triggerSpawnID = AV_CPLACE_TRIGGER16;
-        newFaction = 84;
-    }
-    else if (creature->GetEntry() == BG_AV_CreatureInfo[AV_NPC_A_BOSS])
-    {
-        triggerSpawnID = AV_CPLACE_TRIGGER17;
-        newFaction = 84;
-    }
-    else if (creature->GetEntry() == BG_AV_CreatureInfo[AV_NPC_H_CAPTAIN])
-    {
-        triggerSpawnID = AV_CPLACE_TRIGGER18;
-        newFaction = 83;
-    }
-    else if (creature->GetEntry() == BG_AV_CreatureInfo[AV_NPC_H_BOSS])
-    {
-        triggerSpawnID = AV_CPLACE_TRIGGER19;
-        newFaction = 83;
-    }
-    if (triggerSpawnID && newFaction)
-    {
-        if (Creature* trigger = AddCreature(WORLD_TRIGGER, triggerSpawnID, BG_AV_CreaturePos[triggerSpawnID]))
-        {
-            trigger->SetFaction(newFaction);
-            trigger->CastSpell(trigger, SPELL_HONORABLE_DEFENDER_25Y, false);
-        }
     }
 
     return creature;
@@ -750,31 +704,6 @@ void BattlegroundAV::PopulateNode(BG_AV_Nodes node)
     }
     for (uint8 i=0; i<4; i++)
         AddAVCreature(creatureid, c_place+i);
-
-    if (node >= BG_AV_NODES_MAX)//fail safe
-        return;
-    Creature* trigger = GetBGCreature(node + 302, false);//0-302 other creatures
-    if (!trigger)
-    {
-       trigger = AddCreature(WORLD_TRIGGER,
-                             node + 302,
-                             BG_AV_CreaturePos[node + 302],
-                             GetTeamIndexByTeamId(owner));
-    }
-
-    //add bonus honor aura trigger creature when node is accupied
-    //cast bonus aura (+50% honor in 25yards)
-    //aura should only apply to players who have accupied the node, set correct faction for trigger
-    if (trigger)
-    {
-        if (owner != ALLIANCE && owner != HORDE)//node can be neutral, remove trigger
-        {
-            DelCreature(node + 302);
-            return;
-        }
-        trigger->SetFaction(owner == ALLIANCE ? FACTION_ALLIANCE_GENERIC : FACTION_HORDE_GENERIC);
-        trigger->CastSpell(trigger, SPELL_HONORABLE_DEFENDER_25Y, false);
-    }
 }
 void BattlegroundAV::DePopulateNode(BG_AV_Nodes node)
 {
@@ -785,10 +714,6 @@ void BattlegroundAV::DePopulateNode(BG_AV_Nodes node)
     //spiritguide
     if (!IsTower(node) && BgCreatures[node])
         DelCreature(node);
-
-    //remove bonus honor aura trigger creature when node is lost
-    if (node < BG_AV_NODES_MAX)//fail safe
-        DelCreature(node + 302);//NULL checks are in DelCreature! 0-302 spirit guides
 }
 
 BG_AV_Nodes BattlegroundAV::GetNodeThroughObject(uint32 object)

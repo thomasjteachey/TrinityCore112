@@ -712,9 +712,6 @@ void BattlegroundEY::EventTeamLostPoint(Player* player, uint32 Point)
 
     UpdatePointsIcons(Team, Point);
     UpdatePointsCount(Team);
-
-    //remove bonus honor aura trigger creature when node is lost
-    DelCreature(Point + 6);//NULL checks are in DelCreature! 0-5 spirit guides
 }
 
 void BattlegroundEY::EventTeamCapturedPoint(Player* player, uint32 Point)
@@ -765,19 +762,6 @@ void BattlegroundEY::EventTeamCapturedPoint(Player* player, uint32 Point)
 
     UpdatePointsIcons(Team, Point);
     UpdatePointsCount(Team);
-
-    Creature* trigger = GetBGCreature(Point + 6, false);//0-5 spirit guides
-    if (!trigger)
-        trigger = AddCreature(WORLD_TRIGGER, Point+6, BG_EY_TriggerPositions[Point], GetTeamIndexByTeamId(Team));
-
-    //add bonus honor aura trigger creature when node is accupied
-    //cast bonus aura (+50% honor in 25yards)
-    //aura should only apply to players who have accupied the node, set correct faction for trigger
-    if (trigger)
-    {
-        trigger->SetFaction(Team == ALLIANCE ? FACTION_ALLIANCE_GENERIC : FACTION_HORDE_GENERIC);
-        trigger->CastSpell(trigger, SPELL_HONORABLE_DEFENDER_25Y, false);
-    }
 }
 
 void BattlegroundEY::EventPlayerCapturedFlag(Player* player, uint32 BgObjectType)
