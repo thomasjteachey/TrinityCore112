@@ -85,11 +85,6 @@ public:
         Mokgora::OnLogin(player);
     }
 
-    void OnDelete(ObjectGuid guid, uint32 /*accountId*/) override
-    {
-        Mokgora::OnPlayerDeleted(guid);
-    }
-
     // The countdown has run out and the two of them are free to swing.
     void OnDuelStart(Player* first, Player* second) override
     {
@@ -166,10 +161,6 @@ public:
             target->GetName().c_str(),
             Mokgora::IsMokgoraDuel(target) ? "yes" : "no",
             Mokgora::HasPendingOffer(target) ? "yes" : "no");
-
-        handler->PSendSysMessage("  records: %s %u-%u, %s %u-%u (won-lost)",
-            challenger->GetName().c_str(), Mokgora::Wins(challenger), Mokgora::Losses(challenger),
-            target->GetName().c_str(), Mokgora::Wins(target), Mokgora::Losses(target));
 
         return true;
     }

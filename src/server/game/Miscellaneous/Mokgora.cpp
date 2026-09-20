@@ -148,83 +148,39 @@ namespace
     // through the ordinary PvP-death hooks in ChallengeModes, as it would to a
     // wolf; anybody else takes an ordinary death.
     //
-    // This IS the whole record of a win now: the String of Ears aura it used to
-    // back was cut before the feature went to the live realm, so wins and losses
-    // live here and nowhere else, read by `.mokgora why`, `/mokgora stats` and
-    // the addon.
-    struct Record
-    {
-        uint32 Wins = 0;
-        uint32 Losses = 0;
-    };
+    // NO PER-CHARACTER TALLY. Nobody is told, or reminded, what their record is.
+    //
+    // There was one, and the addon asked for it on PLAYER_ENTERING_WORLD - which
+    // fires on every loading screen, so the realm greeted you with "Mok'gora: 0
+    // won, 0 lost" every time you took a boat. A scoreboard nobody asked for,
+    // read out on a loop. The whole thing is gone rather than merely quietened:
+    // no counters, no `character_mokgora`, no STATS verb on the wire.
+    //
+    // `mokgora_log` below still records that a match happened, for whoever has
+    // to answer "what did this corpse come from". It never speaks to a player.
 
-    std::unordered_map<ObjectGuid::LowType, Record> Records;
-
-    // Whether `character_mokgora` is actually there. A realm that has the build
-    // but not the schema still plays Mok'gora - it simply keeps no tally - and
-    // above all does not take the worldserver down with a query against a table
-    // that does not exist.
-    bool RecordsPersisted = false;
+    // Whether `mokgora_log` is actually there. A realm with the build but not
+    // the schema still plays Mok'gora - it simply keeps no history - and above
+    // all does not take the worldserver down with a query against a table that
+    // does not exist.
+    bool HistoryPersisted = false;
 
     void ProbeSchema()
     {
-        RecordsPersisted = false;
+        HistoryPersisted = false;
 
         QueryResult result = CharacterDatabase.Query(
             "SELECT COUNT(*) FROM `information_schema`.`TABLES` "
-            "WHERE `TABLE_SCHEMA` = DATABASE() AND `TABLE_NAME` = 'character_mokgora'");
+            "WHERE `TABLE_SCHEMA` = DATABASE() AND `TABLE_NAME` = 'mokgora_log'");
 
         if (result && (*result)[0].GetUInt64() > 0)
         {
-            RecordsPersisted = true;
+            HistoryPersisted = true;
             return;
         }
 
-        TC_LOG_WARN("server.loading", "Mok'gora: `character_mokgora` is missing from the characters "
-            "database - the duel works, but nobody's record survives a restart. Apply "
-            "sql/custom/characters/*_characters_mokgora.sql to fix it.");
-    }
-
-    Record LoadRecord(ObjectGuid::LowType guid)
-    {
-        Record record;
-        if (!RecordsPersisted)
-            return record;
-
-        if (QueryResult result = CharacterDatabase.PQuery(
-            "SELECT `wins`, `losses` FROM `character_mokgora` WHERE `guid` = {}", guid))
-        {
-            Field* fields = result->Fetch();
-            record.Wins = fields[0].GetUInt32();
-            record.Losses = fields[1].GetUInt32();
-        }
-
-        return record;
-    }
-
-    Record& RecordFor(Player const* player)
-    {
-        ObjectGuid::LowType const guid = player->GetGUID().GetCounter();
-
-        auto itr = Records.find(guid);
-        if (itr != Records.end())
-            return itr->second;
-
-        // No entry means this character's login never read one - it was already
-        // in the world when the feature was switched on. Reading it here rather
-        // than starting from zero is what stops a first win from overwriting a
-        // tally the character already had.
-        return Records.emplace(guid, LoadRecord(guid)).first->second;
-    }
-
-    void SaveRecord(ObjectGuid::LowType guid, Record const& record)
-    {
-        if (!RecordsPersisted)
-            return;
-
-        CharacterDatabase.Execute(
-            "REPLACE INTO `character_mokgora` (`guid`, `wins`, `losses`) VALUES ({}, {}, {})",
-            guid, record.Wins, record.Losses);
+        TC_LOG_WARN("server.loading", "Mok'gora: `mokgora_log` is missing from the characters "
+            "database - the duel works, but no history of one survives a restart.");
     }
 
     // ---------------------------------------------------------------------
@@ -264,13 +220,6 @@ namespace
         SendAddonLine(player, Trinity::StringFormat("CCGAME\tMOKGORA:RULES:{}:{}:{}:{}:{}",
             Config.Enabled ? 1 : 0, uint32(Config.ChallengeRange), Config.OfferSeconds,
             uint32(Config.BoundsYards), Config.CowardDays));
-    }
-
-    void SendTally(Player* player)
-    {
-        Record const& record = RecordFor(player);
-        SendAddonLine(player, Trinity::StringFormat("CCGAME\tMOKGORA:STATS:{}:{}",
-            record.Wins, record.Losses));
     }
 
     void CloseBox(Player* player, char const* reason)
@@ -533,21 +482,12 @@ namespace
         }
     }
 
-    void RecordOutcome(Player* winner, Player* loser, DuelCompleteType type)
+    // History, not a scoreboard: one row per settled Mok'gora, for whoever has
+    // to answer "where did this corpse come from". Nothing here is ever read
+    // back to a player.
+    void LogOutcome(Player* winner, Player* loser, DuelCompleteType type)
     {
-        Record& winnerRecord = RecordFor(winner);
-        Record& loserRecord = RecordFor(loser);
-
-        ++winnerRecord.Wins;
-        ++loserRecord.Losses;
-
-        SaveRecord(winner->GetGUID().GetCounter(), winnerRecord);
-        SaveRecord(loser->GetGUID().GetCounter(), loserRecord);
-
-        SendTally(winner);
-        SendTally(loser);
-
-        if (RecordsPersisted)
+        if (HistoryPersisted)
         {
             // Character names cannot hold a quote, but the names are written
             // into the statement rather than bound, so they are escaped anyway
@@ -597,7 +537,7 @@ void LoadConfig()
     Config.FlagGameObjectId = uint32(std::max(1,
         sConfigMgr->GetIntDefault("Centurion.Mokgora.FlagGameObjectId", 21680)));
 
-    if (Config.Enabled && !RecordsPersisted)
+    if (Config.Enabled && !HistoryPersisted)
         ProbeSchema();
 }
 
@@ -628,18 +568,6 @@ bool HasPendingOffer(Player const* player)
         return false;
 
     return FindOfferTo(player->GetGUID()) != nullptr || FindOfferFrom(player->GetGUID()) != nullptr;
-}
-
-uint32 Wins(Player const* player)
-{
-    auto itr = Records.find(player->GetGUID().GetCounter());
-    return itr != Records.end() ? itr->second.Wins : 0;
-}
-
-uint32 Losses(Player const* player)
-{
-    auto itr = Records.find(player->GetGUID().GetCounter());
-    return itr != Records.end() ? itr->second.Losses : 0;
 }
 
 std::string Explain(Player* challenger, Player* target)
@@ -866,7 +794,7 @@ void OnDuelEnd(Player* winner, Player* loser, DuelCompleteType type)
         return;
     }
 
-    RecordOutcome(winner, loser, type);
+    LogOutcome(winner, loser, type);
 
     for (Player* who : { winner, loser })
         SendAddonLine(who, Trinity::StringFormat("CCGAME\tMOKGORA:END:{}:{}:{}",
@@ -922,15 +850,8 @@ void OnLogout(Player* player)
         }
     }
 
-    // The cached tally is dropped at the very END of this function, never here:
-    // the flight below resolves the duel, and resolving it writes to the
-    // record. Erasing first would hand that write a zeroed one and overwrite
-    // everything the character had won.
     if (!IsFighting(player) || !player->IsAlive())
-    {
-        Records.erase(player->GetGUID().GetCounter());
         return;
-    }
 
     // "Fleeing a duel to the death by leaving the large duel radius OR BY
     // LOGGING OUT". The exit door is a door out of the ring, not an escape
@@ -953,8 +874,6 @@ void OnLogout(Player* player)
 
     if (Config.CowardSpell && !player->HasAura(Config.CowardSpell))
         WearCoward(player->GetGUID());
-
-    Records.erase(player->GetGUID().GetCounter());
 }
 
 void OnLogin(Player* player)
@@ -962,33 +881,10 @@ void OnLogin(Player* player)
     if (!player || !Config.Enabled)
         return;
 
-    Record record;
-    if (RecordsPersisted)
-    {
-        if (QueryResult result = CharacterDatabase.PQuery(
-            "SELECT `wins`, `losses` FROM `character_mokgora` WHERE `guid` = {}",
-            player->GetGUID().GetCounter()))
-        {
-            Field* fields = result->Fetch();
-            record.Wins = fields[0].GetUInt32();
-            record.Losses = fields[1].GetUInt32();
-        }
-    }
-
-    Records[player->GetGUID().GetCounter()] = record;
-
+    // Only the rules, so the warning box can word itself. Nothing is said to
+    // the player and nothing is read from the database: logging in is not an
+    // occasion for being told how you have done.
     SendRules(player);
-    SendTally(player);
-}
-
-void OnPlayerDeleted(ObjectGuid guid)
-{
-    Records.erase(guid.GetCounter());
-
-    if (!RecordsPersisted)
-        return;
-
-    CharacterDatabase.Execute("DELETE FROM `character_mokgora` WHERE `guid` = {}", guid.GetCounter());
 }
 
 void Update()
@@ -1094,8 +990,6 @@ bool HandleChatMessage(Player* sender, uint32 type, uint32 lang, std::string con
             argument = "DECLINE";
         else if (StringEqualI(text, "withdraw") || StringEqualI(text, "cancel"))
             argument = "WITHDRAW";
-        else if (StringEqualI(text, "stats") || StringEqualI(text, "record"))
-            argument = "STATS";
         else
         {
             // ".mokgora <name>"
@@ -1128,13 +1022,6 @@ bool HandleChatMessage(Player* sender, uint32 type, uint32 lang, std::string con
     if (argument == "WITHDRAW")
     {
         Withdraw(sender);
-        return true;
-    }
-    if (argument == "STATS")
-    {
-        SendTally(sender);
-        Say(sender, Banner(Trinity::StringFormat("Mok'gora: {} won, {} lost.",
-            Wins(sender), Losses(sender))));
         return true;
     }
     if (argument == "RULES")

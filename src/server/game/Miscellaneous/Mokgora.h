@@ -61,7 +61,6 @@ enum DuelCompleteType : uint8;
 //                      CCGAMEREQ\tMOKGORA:ACCEPT
 //                      CCGAMEREQ\tMOKGORA:DECLINE
 //                      CCGAMEREQ\tMOKGORA:WITHDRAW
-//                      CCGAMEREQ\tMOKGORA:STATS
 //                      CCGAMEREQ\tMOKGORA:RULES
 //
 //   server -> client   CCGAME\tMOKGORA:RULES:<on>:<range>:<secs>:<ring>:<cowarddays>
@@ -71,7 +70,6 @@ enum DuelCompleteType : uint8;
 //                      CCGAME\tMOKGORA:INCOMING:<who>       (auto-accept the duel)
 //                      CCGAME\tMOKGORA:BEGIN:<who>
 //                      CCGAME\tMOKGORA:END:<winner>:<loser>:<how>
-//                      CCGAME\tMOKGORA:STATS:<wins>:<losses>
 //
 // Every field is ":"-separated and no field can contain a colon: character
 // names cannot, and the rest are numbers or one of a fixed set of words.
@@ -151,15 +149,9 @@ namespace Mokgora
     void OnLogout(Player* player);
 
     void OnLogin(Player* player);
-    void OnPlayerDeleted(ObjectGuid guid);
 
     // Once a second from World::Update: expires offers nobody answered.
     void Update();
-
-    // --- the tally --------------------------------------------------------
-
-    uint32 Wins(Player const* player);
-    uint32 Losses(Player const* player);
 
     // For `.mokgora why`, the GM-side account of which gate said no.
     std::string Explain(Player* challenger, Player* target);
