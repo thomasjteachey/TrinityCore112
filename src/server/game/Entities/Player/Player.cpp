@@ -26,6 +26,7 @@
 #include "AccountBankMgr.h"
 #include "Miscellaneous/CharacterScreen.h"
 #include "Miscellaneous/CooldownStash.h"
+#include "Miscellaneous/Mokgora.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "VanillaRaids/VanillaRaids.h"
 #include "AchievementMgr.h"
@@ -8803,11 +8804,18 @@ void Player::CheckDuelDistance(time_t currTime)
     if (!obj)
         return;
 
+    // A Mok'gora draws its own ring. The stock 50 yards and 10 seconds are
+    // room enough to kite someone indefinitely, which is fine for a duel that
+    // ends at one health and wrong for one that ends in a corpse - so a realm
+    // can pull the ground in around it. An ordinary duel is untouched.
+    float const bounds = duel->Mokgora ? Mokgora::BoundsYards() : 50.0f;
+    time_t const grace = duel->Mokgora ? time_t(Mokgora::BoundsGraceSeconds()) : time_t(10);
+
     if (!duel->OutOfBoundsTime)
     {
-        if (!IsWithinDistInMap(obj, 50))
+        if (!IsWithinDistInMap(obj, bounds))
         {
-            duel->OutOfBoundsTime = currTime + 10;
+            duel->OutOfBoundsTime = currTime + grace;
 
             WorldPacket data(SMSG_DUEL_OUTOFBOUNDS, 0);
             SendDirectMessage(&data);
@@ -8815,7 +8823,7 @@ void Player::CheckDuelDistance(time_t currTime)
     }
     else
     {
-        if (IsWithinDistInMap(obj, 50))
+        if (IsWithinDistInMap(obj, bounds))
         {
             duel->OutOfBoundsTime = 0;
 

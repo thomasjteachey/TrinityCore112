@@ -36,6 +36,7 @@
 #include "GuildMgr.h"
 #include "Language.h"
 #include "Log.h"
+#include "Miscellaneous/Mokgora.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
@@ -455,6 +456,12 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
         if (Tournament::HandleAddonRequest(sender, lang, msg))
             return;
         if (ClientTweaksAttest::HandleToken(sender, type, lang, msg))
+            return;
+        // Above the command parser on purpose: Mok'gora is a player-facing
+        // feature and _ParseCommands refuses regular accounts outright, so a
+        // spoken ".mokgora" would never reach a handler registered as a
+        // command. This takes both that and the addon's own protocol.
+        if (Mokgora::HandleChatMessage(sender, type, lang, msg))
             return;
 
         // CCGAME is the server's own channel TO the Centurion addons (bot map,

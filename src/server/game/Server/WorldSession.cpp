@@ -37,6 +37,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "Metric.h"
+#include "Miscellaneous/Mokgora.h"
 #include "MoveSpline.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
@@ -523,6 +524,12 @@ void WorldSession::LogoutPlayer(bool save)
 
     if (_player)
     {
+        // Before anything else, and a long way before SaveToDB: leaving the
+        // world in the middle of a Mok'gora is running away from it, and the
+        // forfeit has to be written to the character rather than lost with the
+        // session. Also drops any challenge this character had outstanding.
+        Mokgora::OnLogout(_player);
+
         if (ObjectGuid lguid = _player->GetLootGUID())
             DoLootRelease(lguid);
 

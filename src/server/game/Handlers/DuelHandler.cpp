@@ -74,6 +74,17 @@ void WorldSession::HandleDuelCancelledOpcode(WorldPacket& recvPacket)
     // player surrendered in a duel using /forfeit
     if (GetPlayer()->duel->State == DUEL_STATE_IN_PROGRESS)
     {
+        // There is no concession in a Duel to the Death. /forfeit is simply
+        // refused - you may run, and wear Coward! for three days, or you may
+        // die, but you may not tap out. Without this the surrender path would
+        // hand the other side a win with both of you still breathing, which is
+        // the one outcome a Mok'gora has no room for.
+        if (GetPlayer()->duel->Mokgora)
+        {
+            SendNotification("There is no concession in a Duel to the Death, coward!");
+            return;
+        }
+
         GetPlayer()->CombatStopWithPets(true);
         GetPlayer()->duel->Opponent->CombatStopWithPets(true);
 

@@ -1393,10 +1393,18 @@ namespace
 
     uint32 health = victim->GetHealth();
 
+    // A Mok'gora is a duel to the death, so none of the clamping below applies
+    // to one: the killing blow lands, the victim dies, and Unit::Kill settles
+    // the duel on the corpse. It also means a Mok'gora can be lost to a fall,
+    // to lava or to drowning, which the stock rule below refuses outright - in
+    // a fight with no rules, the ground counts.
+    bool const mokgoraDuel = victim->GetTypeId() == TYPEID_PLAYER && victim->ToPlayer()->duel &&
+        victim->ToPlayer()->duel->Mokgora;
+
     // duel ends when player has 1 or less hp
     bool duel_hasEnded = false;
     bool duel_wasMounted = false;
-    if (victim->GetTypeId() == TYPEID_PLAYER && victim->ToPlayer()->duel && damage >= (health-1))
+    if (!mokgoraDuel && victim->GetTypeId() == TYPEID_PLAYER && victim->ToPlayer()->duel && damage >= (health-1))
     {
         if (!attacker)
             return 0;
@@ -13068,7 +13076,18 @@ bool Unit::InitTamedPet(Pet* pet, uint8 level, uint32 spell_id)
         {
             plrVictim->duel->Opponent->CombatStopWithPets(true);
             plrVictim->CombatStopWithPets(true);
-            plrVictim->DuelComplete(DUEL_INTERRUPTED);
+
+            // A Mok'gora is decided by the corpse, so this death IS the end of
+            // it and not an interruption of it - provided nobody else put the
+            // body there. The opponent's own blow settles it, and so does a
+            // fall or a lungful of water (no killer at all, and a fight with no
+            // rules includes the ground). A third party's killing blow is
+            // interference, and that voids the match exactly the way the stock
+            // rule voids an ordinary duel.
+            bool const mokgoraSettled = plrVictim->duel->Mokgora &&
+                (!player || player == plrVictim->duel->Opponent);
+
+            plrVictim->DuelComplete(mokgoraSettled ? DUEL_WON : DUEL_INTERRUPTED);
         }
     }
     else                                                // creature died

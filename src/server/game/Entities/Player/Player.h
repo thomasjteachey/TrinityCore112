@@ -266,6 +266,14 @@ struct DuelInfo
     DuelState State = DUEL_STATE_CHALLENGED;
     time_t StartTime = 0;
     time_t OutOfBoundsTime = 0;
+
+    // A Mok'gora: the duel to the death. Set only by Mokgora::StartDuel, and
+    // read in exactly two places - Unit::DealDamage, where the blow that would
+    // ordinarily stop at one health is allowed to land instead, and Unit::Kill,
+    // where the resulting corpse is what decides the duel rather than voiding
+    // it. Every other part of the duel - the flag, the boundary, the countdown,
+    // DuelComplete - is untouched and does not know the difference.
+    bool Mokgora = false;
 };
 
 struct Areas

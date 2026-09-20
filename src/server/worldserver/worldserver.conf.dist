@@ -3385,6 +3385,117 @@ CharDelete.KeepDays = 30
 #        Default:     300
 
 ###################################################################################################
+# CENTURION MOK'GORA (Duel to the Death; every key inert unless Centurion.Mokgora.Enable = 1)
+#
+#    A port of Blizzard's "Duel to the Death", the feature Classic Hardcore
+#    calls Mak'gora. An ordinary duel with one rule removed: the blow that
+#    would normally stop at one health is allowed to land.
+#
+#    Both sides must agree, twice. The challenger confirms, then the challenged
+#    player is asked, and each confirmation is a box you have to TYPE
+#    "I Agree" into - Blizzard's wording, and Blizzard's bar for consent.
+#
+#    Winning a kill grants a stack of String of Ears, a permanent trophy buff
+#    the winner keeps through their own later deaths. Running away - leaving
+#    the ring OR logging out - grants Coward! for three days instead, and does
+#    NOT kill you. There is no /forfeit: it is refused outright.
+#
+#    The duel supplies a corpse and nothing more. Whether that death is
+#    permanent is the character's own business: a Hardcore-mode character dies
+#    for good through the ordinary PvP-death hooks, exactly as it would to a
+#    wolf, and anybody else takes an ordinary death. That is why there is no
+#    "permadeath for everyone" key - Blizzard's own warning reads "death is
+#    permanent on Hardcore Realms", not "this duel is permanent".
+#
+#    Issued with /mokgora <name> (the CENTURION_Mokgora addon) or by saying
+#    ".mokgora <name>".
+#
+#    Centurion.Mokgora.Enable
+#        Description: Master switch. 0 leaves every duel on the realm ordinary.
+#        Default:     0
+#
+#    Centurion.Mokgora.ChallengeRange
+#        Description: How close, in yards, the two must stand for a challenge to
+#                     be issued. You say this to someone's face.
+#        Default:     10
+#
+#    Centurion.Mokgora.OfferSeconds
+#        Description: How long the challenge stands before it lapses unanswered.
+#        Default:     30
+#
+#    Centurion.Mokgora.BoundsYards
+#        Description: The ring. "The large duel radius" - a Duel to the Death is
+#                     fought on wider ground than an ordinary duel's 50 yards,
+#                     and leaving it is what fleeing means.
+#        Default:     150
+#
+#    Centurion.Mokgora.BoundsGraceSeconds
+#        Description: How long they have to come back inside before it counts as
+#                     fleeing.
+#        Default:     10
+#
+#    Centurion.Mokgora.TrophySpell
+#        Description: The String of Ears aura: one stack per kill, permanent,
+#                     kept through the winner's own later deaths. 0 means the
+#                     realm has no such spell and only the tally moves.
+#        Default:     0
+#
+#    Centurion.Mokgora.CowardSpell
+#        Description: The Coward! aura, worn by anyone who leaves the ring or
+#                     logs out of it. Blizzard's is -20% to all attributes,
+#                     damage done, armour and resistances. 0 disables the brand.
+#        Default:     0
+#
+#    Centurion.Mokgora.CowardDays
+#        Description: How long Coward! is advertised as lasting, for the text the
+#                     warning box shows. The real duration is the spell's own.
+#        Default:     3
+#
+#    Centurion.Mokgora.RewardMinLevel
+#        Description: No String of Ears below this level, on either side. The
+#                     FIGHT is never gated - anyone may challenge anyone; a
+#                     mismatch costs you the trophy, not the duel.
+#        Default:     10
+#
+#    Centurion.Mokgora.RewardMaxLevelGap
+#        Description: No String of Ears when the two are further apart in level
+#                     than this. 0 turns the check off.
+#        Default:     10
+#
+#    Centurion.Mokgora.RequireDuelArea
+#        Description: Whether the area must be one duels are allowed in.
+#        Default:     1
+#
+#    Centurion.Mokgora.AnnounceStart
+#        Description: Announce to the realm when a Mok'gora begins.
+#        Default:     1
+#
+#    Centurion.Mokgora.AnnounceEnd
+#        Description: Announce to the realm who fell, or who fled.
+#        Default:     1
+#
+#    Centurion.Mokgora.FlagGameObjectId
+#        Description: The marker planted between the two. 194 is the flag the
+#                     Duel spell itself plants.
+#        Default:     194
+#
+
+Centurion.Mokgora.Enable = 0
+Centurion.Mokgora.ChallengeRange = 10
+Centurion.Mokgora.OfferSeconds = 30
+Centurion.Mokgora.BoundsYards = 150
+Centurion.Mokgora.BoundsGraceSeconds = 10
+Centurion.Mokgora.TrophySpell = 0
+Centurion.Mokgora.CowardSpell = 0
+Centurion.Mokgora.CowardDays = 3
+Centurion.Mokgora.RewardMinLevel = 10
+Centurion.Mokgora.RewardMaxLevelGap = 10
+Centurion.Mokgora.RequireDuelArea = 1
+Centurion.Mokgora.AnnounceStart = 1
+Centurion.Mokgora.AnnounceEnd = 1
+Centurion.Mokgora.FlagGameObjectId = 194
+
+###################################################################################################
 # CENTURION HARDCORE (Barracks+ ruleset; every key inert unless Centurion.Hardcore.Enable = 1)
 #
 #    Centurion.Hardcore.Enable

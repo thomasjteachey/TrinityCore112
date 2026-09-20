@@ -24,6 +24,7 @@
 #include "Miscellaneous/CharacterScreen.h"
 #include "Miscellaneous/CooldownStash.h"
 #include "Miscellaneous/DepletedMarks.h"
+#include "Miscellaneous/Mokgora.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "AutoBalance/AutoBalanceConfig.h"
 #include "VanillaRaids/VanillaRaids.h"
@@ -1627,6 +1628,11 @@ void World::LoadConfigSettings(bool reload)
 
     // How much per-tick work a client-less bot session gets (Miscellaneous/BotUpdatePolicy.h).
     BotUpdatePolicy::LoadConfig();
+
+    // The duel to the death (Miscellaneous/Mokgora.h). Inert unless
+    // Centurion.Mokgora.Enable = 1, and it probes for its own table here rather
+    // than assuming a realm on this branch has been given one.
+    Mokgora::LoadConfig();
 
     // Legionnaire Mark of Honor item ids for this realm (Miscellaneous/DepletedMarks.h).
     Trinity::Custom::LoadMarkConfig();

@@ -64,6 +64,7 @@ void AddSC_custom_client_attest();
 void AddSC_violet_hold_boons();
 void AddSC_custom_spell_propagate();
 void AddSC_custom_tournament_mode();
+void AddSC_custom_mokgora();
 
 void AddCustomScripts()
 {
@@ -77,6 +78,7 @@ void AddCustomScripts()
     AddSC_custom_client_attest();
     AddSC_custom_spell_propagate();
     AddSC_custom_tournament_mode();
+    AddSC_custom_mokgora();
     AddBGReplayScripts();
     AddSC_custom_zone_group_rules();
     AddSC_custom_warmode_zone_gate();
