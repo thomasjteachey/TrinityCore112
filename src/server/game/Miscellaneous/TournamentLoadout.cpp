@@ -64,7 +64,8 @@
 // an item handed over inside the match.
 //
 // One more match rule lives here because it starts and ends at the same moments:
-// no consumable works inside except the tournament PvP ones.
+// no consumable works inside except the tournament PvP ones, a meal, a bandage
+// and a rogue's poisons - and those last cost nothing while the match lasts.
 //
 // A world-mode character is lent nothing from the tournament's spellbook. It
 // borrowed the eat/drink/bandage a tournament character knows innately, once,
@@ -85,6 +86,7 @@
 #include "Battleground.h"
 #include "Chat.h"
 #include "Config.h"
+#include "DBCStores.h"
 #include "DatabaseEnv.h"
 #include "Item.h"
 #include "ItemTemplate.h"
@@ -376,12 +378,20 @@ namespace
     }
 
     // An enchant, gem or bonus read off an original before it is put away, to
-    // be put on whatever takes its place. TEMP_ENCHANTMENT_SLOT is left out:
-    // poisons, oils and sharpening stones are applied from a consumable, run on
-    // a clock, and a battleground strips them on the way in anyway.
-    constexpr std::array<EnchantmentSlot, 6> CarriedEnchantSlots = { {
-        PERM_ENCHANTMENT_SLOT, SOCK_ENCHANTMENT_SLOT, SOCK_ENCHANTMENT_SLOT_2,
-        SOCK_ENCHANTMENT_SLOT_3, BONUS_ENCHANTMENT_SLOT, PRISMATIC_ENCHANTMENT_SLOT
+    // be put on whatever takes its place - the temporary slot with the rest. A
+    // rogue who walks in poisoned fights poisoned: poisons carry the
+    // arena-preserve flag, so the strip at the door (Battleground::AddPlayer ->
+    // RemoveArenaEnchantments) spares them and this swap was the only thing that
+    // ever took them off. The original keeps its own copy in the stash and gets
+    // it back after the match; what goes onto the twin dies with the twin.
+    //
+    // A shaman's imbue, a sharpening stone and an oil carry no such flag and are
+    // already gone by the time this runs, so there is nothing of theirs left
+    // here to carry - which is the rule working, not an omission.
+    constexpr std::array<EnchantmentSlot, 7> CarriedEnchantSlots = { {
+        PERM_ENCHANTMENT_SLOT, TEMP_ENCHANTMENT_SLOT, SOCK_ENCHANTMENT_SLOT,
+        SOCK_ENCHANTMENT_SLOT_2, SOCK_ENCHANTMENT_SLOT_3, BONUS_ENCHANTMENT_SLOT,
+        PRISMATIC_ENCHANTMENT_SLOT
     } };
 
     struct CarriedEnchant
@@ -731,7 +741,55 @@ namespace
         return true;
     }
 
-    // Eat, drink and bandage out of a character's own bags, for free. A
+    // A rogue's poisons are its weapon imbue, not a consumable the tournament is
+    // trying to keep out of the match: every other melee class puts an imbue on
+    // by casting a spell, for nothing, as often as it likes. A rogue buys its
+    // own in the world, and a match that both took the coat off at the door and
+    // refused to let it be put back on was a rogue fighting every battleground
+    // on this realm without poisons at all.
+    //
+    // Recognised by what the item DOES, the same way Player::CastItemCombatSpell
+    // recognises one at the other end: the use spell coats the weapon
+    // (SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY) and the enchant it lays down procs a
+    // spell that dispels as a poison. A sharpening stone, a weightstone and an
+    // oil all coat a weapon too, and none of them answer the second half.
+    bool IsPoisonConsumable(ItemTemplate const* proto)
+    {
+        if (!proto)
+            return false;
+
+        for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+        {
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(proto->Spells[i].SpellId);
+            if (!spellInfo)
+                continue;
+
+            for (SpellEffectInfo const& spellEffectInfo : spellInfo->GetEffects())
+            {
+                if (spellEffectInfo.Effect != SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY)
+                    continue;
+
+                SpellItemEnchantmentEntry const* enchant = sSpellItemEnchantmentStore.LookupEntry(uint32(spellEffectInfo.MiscValue));
+                if (!enchant)
+                    continue;
+
+                for (uint8 effect = 0; effect < MAX_ITEM_ENCHANTMENT_EFFECTS; ++effect)
+                {
+                    if (enchant->Effect[effect] != ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL)
+                        continue;
+
+                    SpellInfo const* proc = sSpellMgr->GetSpellInfo(enchant->EffectArg[effect]);
+                    if (proc && proc->Dispel == DISPEL_POISON)
+                        return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    // Eat, drink and bandage out of a character's own bags, for free - and a
+    // rogue's poisons on the same terms, for the reason above. A
     // tournament character has those as spells and spends nothing on them, so
     // somebody who reaches into their pack instead is not spending anything
     // either - the item is used and stays where it is (Spell::TakeCastItem
@@ -753,6 +811,9 @@ namespace
     {
         if (!proto || proto->Class != ITEM_CLASS_CONSUMABLE)
             return false;
+
+        if (IsPoisonConsumable(proto))
+            return true;
 
         bool eatOrDrink = false;
         for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
