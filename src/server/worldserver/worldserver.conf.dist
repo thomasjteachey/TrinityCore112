@@ -3475,9 +3475,12 @@ CharDelete.KeepDays = 30
 #        Default:     1
 #
 #    Centurion.Mokgora.FlagGameObjectId
-#        Description: The marker planted between the two. 194 is the flag the
-#                     Duel spell itself plants.
-#        Default:     194
+#        Description: The marker planted between the two. 21680 is the flag the
+#                     Duel spell (7266) itself plants on this realm - it names it
+#                     in its own EffectMiscValue. Stock TrinityCore's 194 is NOT
+#                     in this world's gameobject_template, and pointing at a
+#                     template that does not exist stops every Mok'gora.
+#        Default:     21680
 #
 
 Centurion.Mokgora.Enable = 0
@@ -3493,7 +3496,7 @@ Centurion.Mokgora.RewardMaxLevelGap = 10
 Centurion.Mokgora.RequireDuelArea = 1
 Centurion.Mokgora.AnnounceStart = 1
 Centurion.Mokgora.AnnounceEnd = 1
-Centurion.Mokgora.FlagGameObjectId = 194
+Centurion.Mokgora.FlagGameObjectId = 21680
 
 ###################################################################################################
 # CENTURION HARDCORE (Barracks+ ruleset; every key inert unless Centurion.Hardcore.Enable = 1)

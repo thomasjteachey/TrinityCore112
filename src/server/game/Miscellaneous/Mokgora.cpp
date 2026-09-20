@@ -96,9 +96,11 @@ namespace
         bool AnnounceStart = true;
         bool AnnounceEnd = true;
 
-        // The duel flag. 194 is the one the Duel spell itself plants; a realm
-        // that wants a different marker for these can say so.
-        uint32 FlagGameObjectId = 194;
+        // The duel flag. 21680 is the one the Duel spell (7266) itself plants
+        // on this realm - read off its own EffectMiscValue rather than assumed.
+        // 194 is stock TrinityCore's id and is NOT in this world's
+        // gameobject_template, which is how the first attempt failed.
+        uint32 FlagGameObjectId = 21680;
     };
 
     MokgoraConfig Config;
@@ -329,18 +331,20 @@ namespace
         if (FindOfferTo(target->GetGUID()) || FindOfferFrom(target->GetGUID()))
             return Trinity::StringFormat("{} is already settling a Mok'gora.", target->GetName());
 
-        if (challenger->IsInCombat() || target->IsInCombat())
-            return "Not in the middle of a fight. Finish what you are doing.";
-
+        // Deliberately NOT gated on combat, and not on the Gurubashi ring.
+        //
+        // The rule is "anywhere you could have an ordinary duel", so the only
+        // place checks allowed here are the ones Spell::EffectDuel itself
+        // makes: the area's ALLOW_DUELS flag (below) and the custom-game lobby.
+        // A combat check and a ring check were mine, and both made Mok'gora
+        // narrower than the duel it is built on - the Gurubashi sand being
+        // exactly where somebody would want one.
         if (challenger->InBattleground() || target->InBattleground() ||
             challenger->InArena() || target->InArena())
             return "Not in a battleground or an arena.";
 
         if (challenger->IsInCustomGameLobby() || target->IsInCustomGameLobby())
             return "Not in a custom-game lobby.";
-
-        if (challenger->IsInGurubashiBattleRing() || target->IsInGurubashiBattleRing())
-            return "Not in the Gurubashi ring.";
 
         if (Tournament::AreSeparated(challenger, target))
             return "A tournament character and a world character cannot meet in a Mok'gora.";
@@ -381,16 +385,28 @@ namespace
     // answers it for the player so the stock "duel?" popup never appears. A
     // player without the addon sees that popup and clicks Accept, which is a
     // second confirmation of something they have already agreed to in words.
-    bool StartDuel(Player* challenger, Player* target)
+    // `why` is filled with something the player can act on. One message for
+    // three different failures sent the first bug report to the wrong place
+    // entirely - a missing gameobject template reads exactly like standing
+    // somewhere awkward, and "move and try again" is advice that could never
+    // have worked.
+    bool StartDuel(Player* challenger, Player* target, std::string& why)
     {
         Map* map = challenger->GetMap();
         if (!map || target->GetMap() != map)
+        {
+            why = "You are not on the same ground.";
             return false;
+        }
 
         if (!sObjectMgr->GetGameObjectTemplate(Config.FlagGameObjectId))
         {
             TC_LOG_ERROR("misc", "Mok'gora: gameobject {} (Centurion.Mokgora.FlagGameObjectId) is not in "
-                "gameobject_template - no Mok'gora can be started.", Config.FlagGameObjectId);
+                "gameobject_template - no Mok'gora can be started anywhere. The Duel spell 7266 names "
+                "this realm's flag in its own EffectMiscValue; 21680 is the usual answer.",
+                Config.FlagGameObjectId);
+            why = "This realm has no duel flag to plant. A Game Master needs to set "
+                  "Centurion.Mokgora.FlagGameObjectId - nothing you do will help.";
             return false;
         }
 
@@ -408,6 +424,7 @@ namespace
             challenger->GetPhaseMask(), pos, rot, 0, GO_STATE_READY))
         {
             delete flag;
+            why = "The ground between you will not take the flag. Move and try again.";
             return false;
         }
 
@@ -625,7 +642,7 @@ void LoadConfig()
     Config.AnnounceStart = sConfigMgr->GetBoolDefault("Centurion.Mokgora.AnnounceStart", true);
     Config.AnnounceEnd = sConfigMgr->GetBoolDefault("Centurion.Mokgora.AnnounceEnd", true);
     Config.FlagGameObjectId = uint32(std::max(1,
-        sConfigMgr->GetIntDefault("Centurion.Mokgora.FlagGameObjectId", 194)));
+        sConfigMgr->GetIntDefault("Centurion.Mokgora.FlagGameObjectId", 21680)));
 
     if (Config.Enabled && !RecordsPersisted)
         ProbeSchema();
@@ -780,10 +797,11 @@ bool Accept(Player* target)
         return true;
     }
 
-    if (!StartDuel(challenger, target))
+    std::string why;
+    if (!StartDuel(challenger, target, why))
     {
-        Say(target, Banner("The ground will not take the flag. Move and try again."));
-        Say(challenger, Banner("The ground will not take the flag. Move and try again."));
+        Say(target, Banner(why));
+        Say(challenger, Banner(why));
         CloseBox(target, "FAILED");
         return true;
     }
