@@ -86,7 +86,7 @@ bool BattlegroundBFG::GetDynamicNodeInfo(ObjectGuid playerGuid, uint32 nodeId, B
         node.Status = BattlegroundNodeStatus::FriendlyControlled;
     else if (state == uint8(GILNEAS_BG_NODE_STATUS_ALLY_CONTESTED) + uint8(teamId))
         node.Status = BattlegroundNodeStatus::FriendlyContested;
-    else if (state >= GILNEAS_BG_NODE_STATUS_ALLY_CONTESTED && _capturePointInfo[nodeId]._captured)
+    else if (state >= GILNEAS_BG_NODE_STATUS_ALLY_CONTESTED && _capturePointInfo[nodeId]._prevOwnerTeamId == teamId)
         node.Status = BattlegroundNodeStatus::FriendlyUnderAttack;
     else if (state <= GILNEAS_BG_NODE_STATUS_HORDE_OCCUPIED)
         node.Status = BattlegroundNodeStatus::EnemyControlled;
@@ -117,6 +117,7 @@ void BattlegroundBFG::PostUpdateImpl(uint32 diff)
                     TeamId teamId = _capturePointInfo[node]._state == GILNEAS_BG_NODE_STATUS_ALLY_CONTESTED ? TEAM_ALLIANCE : TEAM_HORDE;
                     DeleteBanner(node);
                     _capturePointInfo[node]._ownerTeamId = teamId;
+                    _capturePointInfo[node]._prevOwnerTeamId = TEAM_NEUTRAL;
                     _capturePointInfo[node]._state = teamId == TEAM_ALLIANCE ? GILNEAS_BG_NODE_STATUS_ALLY_OCCUPIED : GILNEAS_BG_NODE_STATUS_HORDE_OCCUPIED;
                     _capturePointInfo[node]._captured = true;
 
@@ -354,6 +355,7 @@ void BattlegroundBFG::NodeDeoccupied(uint8 node)
 {
     --_controlledPoints[_capturePointInfo[node]._ownerTeamId];
 
+    _capturePointInfo[node]._prevOwnerTeamId = _capturePointInfo[node]._ownerTeamId;
     _capturePointInfo[node]._ownerTeamId = TEAM_NEUTRAL;
     RelocateDeadPlayers(BgCreatures[node]);
 
@@ -410,6 +412,7 @@ void BattlegroundBFG::EventPlayerClickedOnFlag(Player* player, GameObject* gameO
             UpdatePlayerScore(player, SCORE_BASES_DEFENDED, 1);
             _capturePointInfo[node]._state = static_cast<uint8>(GILNEAS_BG_NODE_STATUS_ALLY_OCCUPIED) + player->GetTeamId();
             _capturePointInfo[node]._ownerTeamId = player->GetTeamId();
+            _capturePointInfo[node]._prevOwnerTeamId = TEAM_NEUTRAL;
             _bgEvents.CancelEvent(BG_BFG_EVENT_CAPTURE_LIGHTHOUSE + node);
             NodeOccupied(node); // after setting team owner
             message = player->GetTeamId() == TEAM_ALLIANCE ? BFGNodes[node].TextAllianceDefended : BFGNodes[node].TextHordeDefended;
@@ -496,6 +499,7 @@ void BattlegroundBFG::Init()
     for (uint8 node = 0; node < GILNEAS_BG_DYNAMIC_NODES_COUNT; ++node)
     {
         _capturePointInfo[node]._ownerTeamId = TEAM_NEUTRAL;
+        _capturePointInfo[node]._prevOwnerTeamId = TEAM_NEUTRAL;
         _capturePointInfo[node]._state = GILNEAS_BG_NODE_TYPE_NEUTRAL;
         _capturePointInfo[node]._captured = false;
     }

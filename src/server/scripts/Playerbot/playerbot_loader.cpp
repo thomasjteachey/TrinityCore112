@@ -38,6 +38,7 @@
 #include "Playerbot/Pve/PlayerbotPveManager.h"
 #include "Playerbot/Pvp/PlayerbotBgFillDriver.h"
 #include "Playerbot/Pvp/PlayerbotCtfCoordinator.h"
+#include "Playerbot/Pvp/PlayerbotNodeCoordinator.h"
 #include "Playerbot/Pvp/PlayerbotObcClone.h"
 #include "Playerbot/Pvp/PlayerbotVhrWaveDriver.h"
 #include "Playerbot/Pvp/PlayerbotPvpClassActions.h"
@@ -1001,6 +1002,7 @@ public:
             { "forcequeue", HandlePlayerbotPvpForceQueueCurrentCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
             { "movediag", HandlePlayerbotPvpMoveDiagCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
             { "ctf", HandlePlayerbotPvpCtfCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
+            { "nodes", HandlePlayerbotPvpNodesCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
         };
 
         static ChatCommandTable playerbotRandomPopulationTable =
@@ -1053,6 +1055,39 @@ public:
         handler->PSendSysMessage(" - noLifecycleHooksActive: " UI64FMTD, snapshot.noLifecycleHooksActive);
         handler->PSendSysMessage(" - battlegroundLifecycleExecuted: " UI64FMTD, snapshot.battlegroundLifecycleExecuted);
         handler->PSendSysMessage(" - arenaLifecycleExecuted: " UI64FMTD, snapshot.arenaLifecycleExecuted);
+        return true;
+    }
+
+    // Arathi Basin / Battle for Gilneas team play: what each base is worth to
+    // each side, how many bodies it asked for and how many were sent. Select a
+    // bot to see the base it was given.
+    static bool HandlePlayerbotPvpNodesCommand(ChatHandler* handler)
+    {
+        if (!handler)
+            return false;
+
+        Player* player = handler->GetPlayer();
+        if (!player)
+            return false;
+
+        Player* selected = handler->getSelectedPlayer();
+        Player* observer = selected && selected->GetBattleground() ? selected : player;
+        for (std::string const& line : playerbot::NodeCoordinator::DescribeTeams(observer))
+            handler->PSendSysMessage("%s", line.c_str());
+
+        playerbot::NodeBotOrders orders;
+        if (selected && selected != player && playerbot::NodeCoordinator::GetOrders(selected, orders))
+        {
+            if (orders.hasNode)
+                handler->PSendSysMessage("%s: %s base %u, %s, enemies on it %u%s.",
+                    selected->GetName().c_str(), playerbot::GetNodeRoleName(orders.role), orders.nodeId,
+                    orders.interact ? "clicking the banner" : "holding it", orders.enemiesAtNode,
+                    orders.leash ? " (leashed to it)" : "");
+            else
+                handler->PSendSysMessage("%s: %s, no base assigned.",
+                    selected->GetName().c_str(), playerbot::GetNodeRoleName(orders.role));
+        }
+
         return true;
     }
 

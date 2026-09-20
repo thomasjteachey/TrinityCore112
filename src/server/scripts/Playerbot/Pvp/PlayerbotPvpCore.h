@@ -93,6 +93,12 @@ struct PvpValues
     bool nodeAssaultAvailable = false;
     bool nodeDefenseAvailable = false;
     uint32 nodeObjectiveId = 0;
+    // Base-capture team play (NodeCoordinator, Arathi Basin and The Battle for
+    // Gilneas). nodeRole is a NodeRole; it is set whenever the coordinator
+    // planned for this bot, and nodeUrgent means the base it was sent to is
+    // one of ours that the enemy is taking right now.
+    uint8 nodeRole = 0;
+    bool nodeUrgent = false;
     uint32 battlegroundTeamHumanCount = 0;
     bool battlegroundTeamHasHumans = false;
 

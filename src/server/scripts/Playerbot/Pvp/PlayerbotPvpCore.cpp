@@ -18,6 +18,7 @@
 #include "GameTime.h"
 #include "PlayerbotPvpCore.h"
 #include "PlayerbotCtfCoordinator.h"
+#include "PlayerbotNodeCoordinator.h"
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotRandomBotParticipation.h"
 #include "Playerbot/Pve/PlayerbotPveManager.h"
@@ -1274,8 +1275,22 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
         }
     }
 
-    BattlegroundNodeObjective nodeObjective;
-    if (battleground->GetNodeObjective(playerGuid, nodeObjective))
+    // Arathi Basin and The Battle for Gilneas are played as a team: the
+    // coordinator hands out the bases, with a quota of bodies per base driven
+    // by who is standing on it, so a base of ours under attack pulls the
+    // nearest bots back instead of the fixed third of the roster a guid hash
+    // used to park there. Every other node battleground keeps the plain
+    // per-bot answer below.
+    playerbot::NodeBotOrders nodeOrders;
+    if (playerbot::NodeCoordinator::GetOrders(player, nodeOrders) && nodeOrders.hasNode)
+    {
+        values.nodeObjectiveId = nodeOrders.nodeId;
+        values.nodeRole = uint8(nodeOrders.role);
+        values.nodeUrgent = nodeOrders.role == playerbot::NodeRole::Recapture;
+        values.nodeDefenseAvailable = !nodeOrders.interact;
+        values.nodeAssaultAvailable = nodeOrders.interact;
+    }
+    else if (BattlegroundNodeObjective nodeObjective; battleground->GetNodeObjective(playerGuid, nodeObjective))
     {
         values.nodeObjectiveId = nodeObjective.NodeId;
         bool const isDefense = nodeObjective.Status == BattlegroundNodeStatus::FriendlyControlled ||
@@ -7971,13 +7986,16 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
             return decision;
         }
 
-    std::array<TacticalRule, 11> const rules =
+    std::array<TacticalRule, 12> const rules =
     {{
         { "bg waiting", bgWaiting, "bg move to start", 50.0f },
         { "player has flag", bgActive && values.playerHasFlag, "bg move to objective", 100.0f },
         { "flag pickup nearby", bgActive && values.flagPickupNearby, "bg move to objective", 99.0f },
         { "enemy flag carrier active", bgActive && enemyFlagCarrierActive, "attack enemy flag carrier", 95.0f },
         { "flag pickup available", bgActive && values.flagPickupAvailable, "bg move to objective", 90.0f },
+        // A base of ours being taken is the cheapest base on the map and it is
+        // lost on a timer, so it outranks escorting a carrier around.
+        { "node under attack", bgActive && values.nodeUrgent, "bg move to objective", 86.0f },
         { "team flag carrier near", bgActive && teamFlagCarrierNear, "bg protect fc", 80.0f },
         { "node assault available", bgActive && values.nodeAssaultAvailable, "bg move to objective", 75.0f },
         { "node defense available", bgActive && values.nodeDefenseAvailable, "bg move to objective", 74.0f },

@@ -17,6 +17,7 @@
 
 #include "PlayerbotPvpLifecycleActions.h"
 #include "PlayerbotCtfCoordinator.h"
+#include "PlayerbotNodeCoordinator.h"
 #include "PlayerbotObcClone.h"
 #include "Playerbot/Pve/PlayerbotPveManager.h"
 #include "PlayerbotPvpClassActions.h"
@@ -3752,10 +3753,13 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return true;
     }
 
-    bool TryAdvanceNodeObjective(Player* player, Battleground* battleground)
+    // The base the coordinator planned for this bot, or, where it does not
+    // plan - a battleground with capturable bases it does not cover, or a bot
+    // it has no assignment for - the battleground's own per-bot answer.
+    bool ResolveNodeOrders(Player* player, Battleground* battleground, playerbot::NodeBotOrders& orders)
     {
-        if (!player || !battleground || !player->FindMap())
-            return false;
+        if (playerbot::NodeCoordinator::GetOrders(player, orders) && orders.hasNode)
+            return true;
 
         BattlegroundNodeObjective objective;
         if (!battleground->GetNodeObjective(player->GetGUID(), objective))
@@ -3764,12 +3768,55 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         bool const isDefense = objective.Status == BattlegroundNodeStatus::FriendlyControlled ||
             objective.Status == BattlegroundNodeStatus::FriendlyContested ||
             objective.Status == BattlegroundNodeStatus::FriendlyUnderAttack;
-        bool const needsInteraction = !isDefense || objective.Status == BattlegroundNodeStatus::FriendlyUnderAttack;
-        Position destination = objective.Location;
 
-        // Friendly/claimed nodes are defended by holding nearby and engaging
-        // attackers.
-        if (!needsInteraction)
+        orders = playerbot::NodeBotOrders();
+        orders.hasNode = true;
+        orders.nodeId = objective.NodeId;
+        orders.status = objective.Status;
+        orders.location = objective.Location;
+        orders.bannerGuid = objective.BannerGuid;
+        orders.role = isDefense ? playerbot::NodeRole::Defend : playerbot::NodeRole::Assault;
+        orders.interact = !isDefense || objective.Status == BattlegroundNodeStatus::FriendlyUnderAttack;
+        return true;
+    }
+
+    // A bot holding a base walks back once a fight has dragged it off it.
+    // Pulling the guard away and clicking the banner behind it is the other
+    // half of the one-player capture. Only the movement is taken back: spells
+    // still go out at whatever followed the bot home.
+    bool TryReturnToLeashedNode(Player* player, Battleground* battleground)
+    {
+        if (!player || !battleground)
+            return false;
+
+        playerbot::NodeBotOrders orders;
+        if (!playerbot::NodeCoordinator::GetOrders(player, orders) || !orders.hasNode || !orders.leash)
+            return false;
+
+        if (player->IsWithinDist3d(orders.location.GetPositionX(), orders.location.GetPositionY(),
+            orders.location.GetPositionZ(), orders.leashRange))
+            return false;
+
+        Position destination = orders.location;
+        playerbot::ApplyDeterministicObjectiveOffset(battleground, player, destination);
+        EmitBattlegroundGmDebug(player, "node-leash=return node=" + std::to_string(orders.nodeId), 1500);
+        return IssueMovePointThrottled(player, destination, 6.0f, 500) || player->isMoving();
+    }
+
+    bool TryAdvanceNodeObjective(Player* player, Battleground* battleground)
+    {
+        if (!player || !battleground || !player->FindMap())
+            return false;
+
+        playerbot::NodeBotOrders orders;
+        if (!ResolveNodeOrders(player, battleground, orders))
+            return false;
+
+        Position destination = orders.location;
+
+        // A base that is already ours is defended by holding on it and
+        // engaging whoever walks up.
+        if (!orders.interact)
         {
             playerbot::ApplyDeterministicObjectiveOffset(battleground, player, destination);
             if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
@@ -3778,7 +3825,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return true;
         }
 
-        GameObject* banner = player->FindMap()->GetGameObject(objective.BannerGuid);
+        GameObject* banner = player->FindMap()->GetGameObject(orders.bannerGuid);
         if (!banner || !banner->IsInWorld() || !banner->isSpawned())
             return true;
 
@@ -3810,8 +3857,9 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             banner->Use(player);
 
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP node interaction attempted: guid={} node={} status={} banner_guid={} spell={} result={} fallback_use={}.",
-            player->GetGUID().ToString(), objective.NodeId, static_cast<uint8>(objective.Status), objective.BannerGuid.ToString(),
+            "Playerbot PvP node interaction attempted: guid={} node={} status={} role={} banner_guid={} spell={} result={} fallback_use={}.",
+            player->GetGUID().ToString(), orders.nodeId, static_cast<uint8>(orders.status),
+            playerbot::GetNodeRoleName(orders.role), orders.bannerGuid.ToString(),
             interactionSpell ? interactionSpell->Id : 0, static_cast<uint32>(castResult), interactionSpell == nullptr);
         return true;
     }
@@ -4894,6 +4942,14 @@ namespace playerbot
         if (battleground->GetTypeID(true) == BATTLEGROUND_VHR)
             return false;
 
+        playerbot::NodeBotOrders nodeOrders;
+        if (playerbot::NodeCoordinator::GetOrders(player, nodeOrders) && nodeOrders.hasNode)
+        {
+            destination = nodeOrders.location;
+            ApplyDeterministicObjectiveOffset(battleground, player, destination);
+            return true;
+        }
+
         BattlegroundNodeObjective nodeObjective;
         if (battleground->GetNodeObjective(player->GetGUID(), nodeObjective))
         {
@@ -5473,6 +5529,14 @@ namespace playerbot
             if (TryAdvanceFlagObjective(player, battleground))
                 return true;
         }
+
+        // Checked before the combat branch below: a bot holding a base is worth
+        // more standing on it than finishing the fight that walked it away, and
+        // that branch chases a hundred yards.
+        if ((context.objective.type == BattlegroundObjectiveType::AssaultNode ||
+            context.objective.type == BattlegroundObjectiveType::DefendNode) &&
+            TryReturnToLeashedNode(player, battleground))
+            return true;
 
         if (player->IsInCombat())
         {

@@ -344,11 +344,15 @@ private:
 
     struct CapturePointInfo
     {
-        CapturePointInfo() : _ownerTeamId(TEAM_NEUTRAL), _iconNone(0), _iconCapture(0), _state(GILNEAS_BG_NODE_TYPE_NEUTRAL), _captured(false)
+        CapturePointInfo() : _ownerTeamId(TEAM_NEUTRAL), _prevOwnerTeamId(TEAM_NEUTRAL), _iconNone(0), _iconCapture(0), _state(GILNEAS_BG_NODE_TYPE_NEUTRAL), _captured(false)
         {
         }
 
         TeamId _ownerTeamId;
+        // Who held the base before this assault started, so a bot can tell a
+        // base of its own being taken from one it never held. _captured says
+        // only that SOMEBODY once held the base, and never goes back to false.
+        TeamId _prevOwnerTeamId;
         uint32 _iconNone;
         uint32 _iconCapture;
         uint8 _state;
