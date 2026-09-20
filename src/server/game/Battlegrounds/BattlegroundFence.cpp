@@ -412,12 +412,20 @@ Fence const* GetForBattleground(Battleground const* bg)
     if (!bg)
         return nullptr;
 
-    // A kill switch, read once. The fence already declines to act on anything
-    // that is not an enclosure, so this exists for the case where a fence is
-    // measured correctly and is still the wrong answer for some arena, and the
-    // realm needs it off now rather than after a build.
-    static bool const enabled = sConfigMgr->GetBoolDefault("Centurion.Playerbot.BattlegroundFence.Enable", true);
-    if (!enabled)
+    // Off unless a realm asks for it, and re-read on every call so
+    // `.reload config` turns it on and off without a restart.
+    //
+    // It defaulted to on and was read once into a static, which is how a build
+    // of an unrelated change carried it onto the live realm - both jobs build
+    // the same branch - and pinned every bot inside its arena: they would not
+    // follow anyone out through the doors, and only fought whoever came inside.
+    // A containment rule that has been wrong twice does not get to be the
+    // default, and a switch that needs a restart is not a switch you can use
+    // while the thing it controls is misbehaving.
+    //
+    // A config lookup here is a string map hit, against a fence query that
+    // already takes a mutex and can raycast; it does not register.
+    if (!sConfigMgr->GetBoolDefault("Centurion.Playerbot.BattlegroundFence.Enable", false))
         return nullptr;
 
     // The probe rays are traced against the vmap model tree, which holds WMOs
@@ -432,8 +440,7 @@ Fence const* GetForBattleground(Battleground const* bg)
     // that is the default scope. An enclosed custom battleground (the Violet
     // Hold gauntlet, for one) benefits from the same treatment, but only on
     // purpose and after someone has checked the shape with `.debug bgfence`.
-    static bool const nonArenasToo = sConfigMgr->GetBoolDefault("Centurion.Playerbot.BattlegroundFence.NonArenaBattlegrounds", false);
-    if (!bg->isArena() && !nonArenasToo)
+    if (!bg->isArena() && !sConfigMgr->GetBoolDefault("Centurion.Playerbot.BattlegroundFence.NonArenaBattlegrounds", false))
         return nullptr;
 
     uint64 const key = MakeFenceKey(bg);

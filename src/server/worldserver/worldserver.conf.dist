@@ -2400,10 +2400,15 @@ Centurion.Bots.GridActivationRange = 0
 #                     walked back, and teleported to its team start if it cannot walk. Nothing is
 #                     enforced on a map whose geometry is not an enclosure, and real players are
 #                     never touched. Read the measured shape in-game with `.debug bgfence`.
-#        Default:     1 - (Enabled)
-#                     0 - (Disabled)
+#                     Off by default. This is containment for bots and it has been mis-tuned
+#                     before - once tightly enough that bots would not follow anyone out through
+#                     an arena's doors and only fought whoever came inside. Turn it on per realm,
+#                     deliberately. Re-read on every query, so `.reload config` switches it
+#                     without a restart.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
 
-Centurion.Playerbot.BattlegroundFence.Enable = 1
+Centurion.Playerbot.BattlegroundFence.Enable = 0
 
 #
 #    Centurion.Playerbot.BattlegroundFence.NonArenaBattlegrounds
