@@ -1566,7 +1566,7 @@ void World::LoadConfigSettings(bool reload)
     m_int_configs[CONFIG_CENTURION_VHR_COUNTDOWN_FROM_SECONDS] = std::clamp<int32>(sConfigMgr->GetIntDefault("Centurion.VioletHold.CountdownFromSeconds", 15), 0, int32(m_int_configs[CONFIG_CENTURION_VHR_PREP_SECONDS]));
     m_float_configs[CONFIG_CENTURION_BG_ARENA_REWARD_MULTIPLIER] = sConfigMgr->GetFloatDefault("Centurion.Battleground.ArenaRewardMultiplier", .2f);
     m_float_configs[CONFIG_CENTURION_BG_ARENA_EXPERIENCE_MULTIPLIER] = std::max(0.0f,
-        sConfigMgr->GetFloatDefault("Centurion.Battleground.ArenaExperienceMultiplier", .2f));
+        sConfigMgr->GetFloatDefault("Centurion.Battleground.ArenaExperienceMultiplier", .4f));
 
     m_int_configs[CONFIG_CENTURION_LEAP_XY_SPEED] = sConfigMgr->GetIntDefault("Centurion.LeapXYSpeed", 100);
     m_int_configs[CONFIG_CENTURION_LEAP_Z_SPEED] = sConfigMgr->GetIntDefault("Centurion.LeapZSpeed", 20);

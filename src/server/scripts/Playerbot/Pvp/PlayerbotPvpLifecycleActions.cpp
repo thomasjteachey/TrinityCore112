@@ -689,6 +689,23 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return config.moduleEnabled && config.pvpCoreEnabled && config.pvpLifecycleEnabled;
     }
 
+    // Whether this bot may be put in a battleground or arena queue by anything
+    // running on its own. With Playerbot.PvpLifecycle.PersistentBots.Enable off
+    // the persistent, account-backed fleet stays in the open world and instanced
+    // PvP is filled entirely by transient clones - so for those bots the answer
+    // is simply no, and every automatic queue path has to ask.
+    //
+    // A transient clone is never refused: it exists for one match, the fill
+    // driver seats it, and the switch is what put it there in the first place.
+    bool MayQueueForInstancedPvp(Player const* player)
+    {
+        if (playerbot::PvpCore::GetConfig().pvpPersistentLifecycleEnabled)
+            return true;
+
+        WorldSession const* session = player ? player->GetSession() : nullptr;
+        return session && session->IsTransientPlayerSession();
+    }
+
     std::array<BattlegroundTypeId, 6> BuildRandomBattlegroundOrder()
     {
         std::array<BattlegroundTypeId, 6> battlegroundTypes =
@@ -1445,17 +1462,39 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return true;
     }
 
-    bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
+    // `forced` is a GM saying so out loud (.playerbot pvp forcequeue), and is the
+    // one thing that puts a persistent bot in a queue on a realm that has retired
+    // them from instanced PvP.
+    bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType, bool forced = false)
     {
         if (!player || player->InBattleground())
             return false;
 
-        // Allow managed bots to keep participating in queue/invite lifecycle even if
-        // they died in the open world. Battleground queue/port handlers can reject
-        // dead actors, so recover to alive before queueing.
-        if (!player->IsAlive())
-            player->ResurrectPlayer(1.0f);
+        // The one door every automatic queue path comes through, which is why the
+        // switch is enforced here rather than at each of them. The per-bot
+        // lifecycle already honoured it; the population's own SCM sweep called the
+        // lifecycle actions directly and walked straight past it, so a fleet
+        // configured never to queue made 227,000 queue additions in twenty minutes
+        // the last time a person waited in a battleground queue.
+        if (!forced && !MayQueueForInstancedPvp(player))
+            return false;
 
+        // A dead bot queues as it lies, and nothing below needs a living body:
+        // BattlegroundQueue::AddGroup takes a ghost the same way it takes a
+        // person who queued while running back, and the port that follows an
+        // invite stands the bot up itself (HandleBattleFieldPortOpcode
+        // resurrects whoever it ports, at the battleground's own door).
+        //
+        // Standing it up HERE was the "bot instantly respawning on his corpse"
+        // report. While a human shows battleground interest this sweep runs
+        // over every managed bot many times a second, so a bot that died out in
+        // the world was back on its feet at full health, on the spot where it
+        // fell, inside a second - and then walked into whatever had just killed
+        // it and did it again, over and over, in front of whoever killed it.
+        //
+        // Death in the open world belongs to the PvE manager's recovery:
+        // release, graveyard, resurrect, the way a person's corpse run looks.
+        // Nothing is skipped by leaving the body where it is.
         Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
         if (!bgTemplate)
             return false;
@@ -1608,11 +1647,17 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (!player || player->InBattleground())
             return false;
 
-        // Keep battleground/arena participation consistent for dead managed bots:
-        // invites should still be accepted and transitioned immediately.
-        if (!player->IsAlive())
-            player->ResurrectPlayer(1.0f);
+        // Retired from instanced PvP means retired from the invites too. A stale
+        // invite left over from before the switch was thrown is declined by the
+        // ordinary expiry rather than accepted here.
+        if (!MayQueueForInstancedPvp(player))
+            return false;
 
+        // Being dead is no reason to turn an invite down, and no reason to
+        // resurrect here either: the HandleBattleFieldPortOpcode call below
+        // stands up whoever it ports, on arrival, inside the battleground.
+        // Doing it at this point would raise the bot in the open world first -
+        // on its corpse, in front of anyone standing over it. See QueuePlayer.
         for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
         {
             BattlegroundQueueTypeId const bgQueueTypeId = player->GetBattlegroundQueueTypeId(i);
@@ -3989,6 +4034,18 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
     uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType, bool respectQueueOnlySegments)
     {
+        // Every candidate this sweep can find is a persistent, account-backed bot
+        // (IsScmManagedBotCandidate), so with those retired from instanced PvP the
+        // whole pass has nothing to do. Answered before the roster scan rather than
+        // per bot: this runs from each bot's own tick, and a fleet of 178 walking
+        // the full player list for each of them is the O(n^2) that filled the log
+        // with a thousand lines a second.
+        //
+        // respectQueueOnlySegments is false only for the GM forcequeue command,
+        // which is allowed to reach for them anyway.
+        if (respectQueueOnlySegments && !playerbot::PvpCore::GetConfig().pvpPersistentLifecycleEnabled)
+            return 0;
+
         std::vector<ObjectGuid> managedBotGuids;
         {
             std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
@@ -4048,7 +4105,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
                 }
             }
 
-            if (QueuePlayer(managedBot, bgTypeId, arenaType))
+            if (QueuePlayer(managedBot, bgTypeId, arenaType, !respectQueueOnlySegments))
                 ++queuedCount;
         }
 
@@ -5072,6 +5129,12 @@ namespace playerbot
     bool BattlegroundLifecycleActions::JoinQueuePrimitive(Player* player)
     {
         if (!player || !IsLifecycleGateEnabled())
+            return false;
+
+        // Before the human-interest scan below, which walks every player online:
+        // a bot that may not queue has no reason to ask whether anybody wants a
+        // battleground.
+        if (!MayQueueForInstancedPvp(player))
             return false;
 
         if (IsArenaOnlyManagedBotAccount(player))

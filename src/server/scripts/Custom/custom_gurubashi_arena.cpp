@@ -1063,9 +1063,11 @@ bool ShouldTrackGurubashiPlayer(Player const* player)
 // Where a player gets their PvP consumable charges topped back up.
 //
 // Deliberately NOT ShouldTrackGurubashiPlayer, even though that is what the refresh
-// used to ask. That predicate also drives the arena exit enforcer, which must keep
-// policing only the people actually inside Gurubashi; widening it would set the
-// enforcer loose on four other zones.
+// used to ask. That predicate is the whole of Stranglethorn Vale - it drives the
+// arena exit enforcer, which has to watch people walk towards the ring from a long
+// way off - and it handed out free charges to anybody questing in the jungle. The
+// arena is BarracksHardcore::IsInGurubashiArena: the grounds, the catacombs and the
+// sand, and nothing outside the bowl.
 //
 // Config rather than code for two reasons: both realms build one branch and only L+
 // has malls, so a hardcoded list would change B+ too; and a mall can move or gain a
@@ -1097,8 +1099,15 @@ bool IsInPvpConsumableRestoreArea(Player const* player)
     if (!player || !player->IsInWorld())
         return false;
 
-    // Gurubashi keeps working with nothing configured, so B+ is unchanged by this.
-    if (ShouldTrackGurubashiPlayer(player))
+    // The arena tops EVERYBODY up - world characters included, and deliberately
+    // above the mode test below.
+    //
+    // The malls are the tournament's own ground and a world character has no
+    // business being resupplied there. The Gurubashi Arena is the one place on
+    // the realm where the two modes fight each other, and a fight where one side's
+    // vials refill and the other's do not is not a fight. Gurubashi also keeps
+    // working with nothing configured, so B+ still has it.
+    if (BarracksHardcore::IsInGurubashiArena(player))
         return true;
 
     // The configured malls are Legionnaire+'s tournament grounds: on a realm with
@@ -1107,8 +1116,10 @@ bool IsInPvpConsumableRestoreArea(Player const* player)
         return false;
 
     // The set is rebuilt on the world thread by OnConfigLoad while this is read from
-    // whichever map thread owns the player, so the read is locked. It is cheap: the
-    // callers are login, map change and zone change, not a per-tick path.
+    // whichever map thread owns the player, so the read is locked. It is cheap to
+    // hold: the callers are login, map change, zone change, and the arena scan,
+    // which reaches this line only for the handful of people in Stranglethorn who
+    // are not in the bowl - everyone inside it has already returned above.
     std::lock_guard<std::mutex> lock(g_PvpConsumableRestoreAreasMutex);
     if (g_PvpConsumableRestoreAreas.empty())
         return false;
@@ -1204,6 +1215,15 @@ void RemoveGurubashiPlayerTracking(ObjectGuid guid)
     std::lock_guard<std::mutex> lock(g_GurubashiTrackedPlayersMutex);
     g_GurubashiTrackedPlayers.erase(guid);
 }
+
+void RefreshPvpConsumablesIfInRestoreArea(Player* player)
+{
+    if (!IsInPvpConsumableRestoreArea(player))
+        return;
+
+    if (RestorePvpConsumableCharges(player))
+        WhisperFromChromi(player, "Your PvP consumable charges have been restored.");
+}
 }
 
 class gurubashi_arena_exit_tracker : public PlayerScript
@@ -1264,16 +1284,6 @@ public:
             return;
 
         WhisperFromChromi(player, GURUBASHI_REENTRY_RULE_WHISPER);
-    }
-
-private:
-    void RefreshPvpConsumablesIfInRestoreArea(Player* player)
-    {
-        if (!IsInPvpConsumableRestoreArea(player))
-            return;
-
-        if (RestorePvpConsumableCharges(player))
-            WhisperFromChromi(player, "Your PvP consumable charges have been restored.");
     }
 };
 
@@ -1361,6 +1371,22 @@ public:
                 }
             }
 
+            // Walking in through the gate is an AREA change inside Stranglethorn,
+            // and an area change fires no script hook - PlayerScript::OnUpdateZone
+            // only runs when the ZONE moves. So while the top-up was the whole of
+            // Stranglethorn the border did the work, and now that it is the arena
+            // alone this scan is what notices somebody arriving. Login, teleport
+            // and map change still come in through the tracker's own hooks.
+            //
+            // On the EDGE and nowhere else: charges that refilled themselves while
+            // the fight was still going would not be charges at all. A fresh entry
+            // starts outside, so anyone already standing in the bowl when this first
+            // sees them is topped up once and then left alone.
+            bool const inRestoreArea = IsInPvpConsumableRestoreArea(player);
+            if (inRestoreArea && !tracked.InRestoreArea)
+                RefreshPvpConsumablesIfInRestoreArea(player);
+
+            tracked.InRestoreArea = inRestoreArea;
             tracked.AreaState = currentState;
             tracked.LastPosition = currentPosition;
             tracked.MapId = player->GetMapId();
@@ -1381,6 +1407,7 @@ private:
         Position LastPosition;
         uint32 MapId = 0;
         bool HasPosition = false;
+        bool InRestoreArea = false;
     };
 
     std::unordered_map<ObjectGuid, TrackedState> _trackedPlayers;

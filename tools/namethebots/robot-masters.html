@@ -1,0 +1,365 @@
+<title>The Robot Masters</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --ground:#E8E5DE;
+    --plate:#F6F4EF;
+    --plate-2:#EFECE5;
+    --ink:#1F262A;
+    --ink-soft:#4A565B;
+    --muted:#77838A;
+    --hairline:#CDC8BE;
+    --hairline-strong:#B3ACA0;
+    --brass:#8A6410;
+    --brass-soft:#A98436;
+    --slot:#E2DDD2;
+    --shadow:rgba(31,38,42,.10);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --ground:#12171A;
+      --plate:#1A2125;
+      --plate-2:#1F282C;
+      --ink:#E2E7E7;
+      --ink-soft:#AEBABD;
+      --muted:#7D8C91;
+      --hairline:#2B353A;
+      --hairline-strong:#3B474D;
+      --brass:#D7A631;
+      --brass-soft:#B08B33;
+      --slot:#151C20;
+      --shadow:rgba(0,0,0,.45);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#12171A;
+    --plate:#1A2125;
+    --plate-2:#1F282C;
+    --ink:#E2E7E7;
+    --ink-soft:#AEBABD;
+    --muted:#7D8C91;
+    --hairline:#2B353A;
+    --hairline-strong:#3B474D;
+    --brass:#D7A631;
+    --brass-soft:#B08B33;
+    --slot:#151C20;
+    --shadow:rgba(0,0,0,.45);
+  }
+
+  body{
+    background:var(--ground);
+    color:var(--ink);
+    font-family:"IBM Plex Sans",system-ui,sans-serif;
+    line-height:1.5;
+    padding-inline:20px;
+    padding-block:0;
+  }
+  .wrap{max-width:1080px;margin:0 auto;}
+
+  /* ---- masthead ---- */
+  header.mast{padding-block:52px 34px;border-bottom:2px solid var(--hairline-strong);}
+  .eyebrow{
+    font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.22em;
+    text-transform:uppercase;color:var(--muted);margin:0 0 14px;
+  }
+  h1{
+    font-family:"Saira Condensed",system-ui,sans-serif;font-weight:700;
+    font-size:clamp(46px,10vw,88px);line-height:.92;letter-spacing:-.005em;
+    text-transform:uppercase;margin:0;text-wrap:balance;
+  }
+  .lede{
+    max-width:60ch;margin:20px 0 0;color:var(--ink-soft);font-size:16px;
+  }
+  .lede strong{color:var(--ink);font-weight:600;}
+  code{font-family:"IBM Plex Mono",monospace;font-size:.88em;color:var(--brass);}
+
+  .tally{
+    display:flex;flex-wrap:wrap;gap:0;margin-top:30px;
+    border:1px solid var(--hairline);background:var(--plate);
+  }
+  .tally div{
+    flex:1 1 150px;padding:16px 18px;border-right:1px solid var(--hairline);
+  }
+  .tally div:last-child{border-right:0;}
+  .tally dt{
+    font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.18em;
+    text-transform:uppercase;color:var(--muted);margin:0 0 6px;
+  }
+  .tally dd{
+    margin:0;font-family:"Saira Condensed",system-ui,sans-serif;font-weight:700;
+    font-size:30px;line-height:1;font-variant-numeric:tabular-nums;
+  }
+  .tally dd small{font-size:15px;color:var(--muted);font-weight:500;}
+
+  nav.jump{display:flex;flex-wrap:wrap;gap:8px;margin-top:26px;}
+  nav.jump a{
+    font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.12em;
+    text-transform:uppercase;text-decoration:none;color:var(--ink-soft);
+    border:1px solid var(--hairline-strong);padding:7px 12px;background:transparent;
+  }
+  nav.jump a:hover{color:var(--brass);border-color:var(--brass);}
+  nav.jump a:focus-visible{outline:2px solid var(--brass);outline-offset:2px;}
+
+  /* ---- wave band ---- */
+  section.wave{padding-block:46px 8px;}
+  .band{
+    display:flex;align-items:flex-end;justify-content:space-between;gap:18px;
+    flex-wrap:wrap;border-bottom:1px solid var(--hairline-strong);padding-bottom:12px;
+  }
+  .band h2{
+    font-family:"Saira Condensed",system-ui,sans-serif;font-weight:700;
+    font-size:clamp(28px,5vw,42px);line-height:1;text-transform:uppercase;margin:0;
+  }
+  .band .meta{
+    font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--muted);text-align:right;
+  }
+  .gen{display:flex;gap:3px;margin-bottom:9px;}
+  .gen i{display:block;width:16px;height:4px;background:var(--brass);}
+  .wave p.note{margin:14px 0 0;color:var(--ink-soft);max-width:62ch;font-size:15px;}
+
+  /* ---- unit plates ---- */
+  .grid{
+    display:grid;gap:14px;margin-top:22px;
+    grid-template-columns:repeat(auto-fill,minmax(290px,1fr));
+  }
+  article.unit{
+    background:var(--plate);border:1px solid var(--hairline);
+    display:flex;flex-direction:column;
+  }
+  .serial{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:9px 14px;border-bottom:1px solid var(--hairline);background:var(--plate-2);
+    font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.08em;
+  }
+  .serial b{color:var(--brass);font-weight:500;}
+  .serial span{color:var(--muted);text-transform:uppercase;}
+  .body{padding:16px 14px 14px;flex:1;}
+  .role{
+    font-family:"Saira Condensed",system-ui,sans-serif;font-weight:700;
+    font-size:27px;line-height:1.02;text-transform:uppercase;margin:0 0 3px;
+  }
+  .origin{
+    font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.09em;
+    text-transform:uppercase;color:var(--muted);margin:0 0 14px;
+  }
+  dl.spec{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:0;font-size:13px;}
+  dl.spec dt{
+    font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--muted);padding-top:2px;
+  }
+  dl.spec dd{margin:0;color:var(--ink-soft);}
+  dl.spec dd.kills{
+    font-variant-numeric:tabular-nums;color:var(--ink);font-weight:600;
+  }
+  .hook{
+    margin:14px 0 0;padding-top:12px;border-top:1px dashed var(--hairline);
+    font-size:14px;color:var(--ink-soft);
+  }
+
+  .nameplate{
+    margin:14px 14px 14px;padding:13px 14px;background:var(--slot);
+    border:1px solid var(--hairline-strong);
+    background-image:repeating-linear-gradient(135deg,transparent 0 7px,var(--hairline) 7px 8px);
+  }
+  .nameplate .awaiting{
+    font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.2em;
+    text-transform:uppercase;color:var(--muted);margin:0;text-align:center;
+  }
+  .unit.named .nameplate{background-image:none;background:var(--plate-2);border-color:var(--brass-soft);}
+  .nameplate .given{
+    font-family:"Saira Condensed",system-ui,sans-serif;font-weight:700;
+    font-size:29px;line-height:1;text-transform:uppercase;letter-spacing:.03em;
+    color:var(--brass);margin:0;text-align:center;
+  }
+  .nameplate .by{
+    font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--muted);margin:6px 0 0;text-align:center;
+  }
+
+  /* ---- how it works ---- */
+  footer.how{
+    margin-block:56px 40px;padding-top:26px;border-top:2px solid var(--hairline-strong);
+  }
+  footer.how h2{
+    font-family:"Saira Condensed",system-ui,sans-serif;font-weight:700;
+    font-size:30px;text-transform:uppercase;margin:0 0 18px;
+  }
+  .steps{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));}
+  .steps section h3{
+    font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--brass);margin:0 0 7px;
+  }
+  .steps section p{margin:0;font-size:14px;color:var(--ink-soft);}
+  ul.rules{
+    margin:26px 0 0;padding:16px 18px 16px 34px;background:var(--plate);
+    border:1px solid var(--hairline);font-size:14px;color:var(--ink-soft);
+  }
+  ul.rules li{margin-bottom:5px;}
+  ul.rules li:last-child{margin-bottom:0;}
+  ul.rules code{
+    font-family:"IBM Plex Mono",monospace;font-size:12.5px;color:var(--ink);
+  }
+  .colophon{
+    margin-top:26px;font-family:"IBM Plex Mono",monospace;font-size:10.5px;
+    letter-spacing:.12em;text-transform:uppercase;color:var(--muted);
+  }
+  @media (max-width:420px){
+    .tally div{flex-basis:100%;border-right:0;border-bottom:1px solid var(--hairline);}
+    .tally div:last-child{border-bottom:0;}
+    .band .meta{text-align:left;}
+  }
+</style>
+
+<div class="wrap">
+  <header class="mast">
+    <p class="eyebrow">Centurion · Guild roster · &lt;The Robot Masters&gt;</p>
+    <h1>The Robot<br>Masters</h1>
+    <p class="lede">Twenty-seven machines fight in our battlegrounds. Between them they hold
+      <strong>503,387 honorable kills</strong> — more than any player on the realm. Every one of
+      them is called something like <code>Botwarrarms</code>. Over three weeks, the community
+      decides what they are actually called, and the winning name goes live in-game the night
+      its poll closes.</p>
+    <dl class="tally">
+      <div><dt>Units</dt><dd id="t-units">27</dd></div>
+      <div><dt>Named so far</dt><dd><span id="t-named">0</span><small> / 27</small></dd></div>
+      <div><dt>Honorable kills</dt><dd id="t-kills">503,387</dd></div>
+      <div><dt>Waves</dt><dd>3<small> · one a week</small></dd></div>
+    </dl>
+    <nav class="jump">
+      <a href="#wave1">Wave 1 — Veterans</a>
+      <a href="#wave2">Wave 2 — The Line</a>
+      <a href="#wave3">Wave 3 — Prototypes</a>
+      <a href="#how">How to take part</a>
+    </nav>
+  </header>
+
+  <main id="waves"></main>
+
+  <footer class="how" id="how">
+    <h2>How to take part</h2>
+    <div class="steps">
+      <section>
+        <h3>01 · Submit</h3>
+        <p>Monday to Thursday, every unit in the open wave has its own thread in Discord.
+          Reply with one name. Submit for as many units as you like.</p>
+      </section>
+      <section>
+        <h3>02 · Back a name</h3>
+        <p>React 👍 on the names you want to see win. The ten most-backed per unit go to a
+          poll on Friday. A name two people suggest independently jumps the queue.</p>
+      </section>
+      <section>
+        <h3>03 · Vote</h3>
+        <p>Nine polls, one per unit, open all weekend. Most votes wins outright — no
+          shortlist by committee, no tiebreak by the owner.</p>
+      </section>
+      <section>
+        <h3>04 · It goes live</h3>
+        <p>Sunday night the names are applied to the realm. Queue a battleground and you'll
+          fight them under their new names. Your handle goes in the unit's guild note.</p>
+      </section>
+    </div>
+    <ul class="rules">
+      <li>2–12 letters, <code>A–Z</code> only — no numbers, spaces, apostrophes or punctuation.</li>
+      <li>No letter three times in a row — <code>Throgggg</code> is rejected by the client, not by us.</li>
+      <li>Not already taken by a character on the realm.</li>
+      <li>Everything else is fair game. A name is only vetoed if it would get the realm in
+        trouble, and the veto is announced when it happens.</li>
+    </ul>
+    <p class="colophon">Kill counts read from the realm database · updated 2026-09-20</p>
+  </footer>
+</div>
+
+<script>
+  const WAVES = [
+    {
+      id: "wave1", n: 1, title: "The Veterans", tier: "Easy tier", kills: "379,001",
+      note: "The oldest chassis we field: blue gear, no set bonuses, and roughly forty " +
+            "thousand kills apiece. They have been in more battlegrounds than anyone reading this."
+    },
+    {
+      id: "wave2", n: 2, title: "The Line", tier: "Medium tier", kills: "105,735",
+      note: "The working middle — epic weapons, eleven thousand kills each, and the nine " +
+            "units you are most likely to actually meet in a match."
+    },
+    {
+      id: "wave3", n: 3, title: "The Prototypes", tier: "Hard tier", kills: "18,651",
+      note: "Newest units, hardest tier, full epic sets. Barely two thousand kills each " +
+            "because they have not been running long — not because they lose."
+    }
+  ];
+
+  const UNITS = [
+    [1,1,"Warrior","Arms","Human","male","Botwarrarms","Arcanite Reaper",40773,"One axe. Forty thousand answers."],
+    [2,1,"Paladin","Holy","Dwarf","male","Botpalholy","Cold Forged Hammer",45453,"The highest kill count of all 27. He is a healer."],
+    [3,1,"Hunter","Marksmanship","Night Elf","female","Bothuntmarks","Barbarous Blade + Bloodseeker",40409,"Brought a sword to a bow fight and kept both."],
+    [4,1,"Rogue","Subtlety","Gnome","male","Botrogsub","Dal'Rend's Sacred Charge",40919,"Knee height. Forty thousand kills."],
+    [5,1,"Priest","Discipline","Undead","female","Botpridisc","Lord Valthalak's Staff of Command",41860,"Has outlived everyone who ever called for a swap onto her."],
+    [6,1,"Shaman","Elemental","Orc","female","Botshamele","Cold Forged Hammer + Totem of the Storm",43277,"Still drops the totem before she drops you."],
+    [7,1,"Mage","Frost","Troll","male","Botmagfrost","Lord Valthalak's Staff of Command",43659,"Nobody has ever reached him."],
+    [8,1,"Warlock","Demonology","Undead","female","Botwarldemo","Lord Valthalak's Staff of Command",43177,"Sends the dog in first. Always has."],
+    [9,1,"Druid","Restoration","Tauren","female","Botdruidrest","Lord Valthalak's Staff of Command",39474,"Lowest count in the wave — she spends the match keeping the other eight alive."],
+    [10,2,"Warrior","Protection","Tauren","female","Botwarrprot","Crunched Quel'Serrar",12200,"Holds the door. That is the entire job."],
+    [11,2,"Paladin","Retribution","Human","female","Botpalret","Earthshaker",11205,"Two-handed and extremely patient."],
+    [12,2,"Hunter","Survival","Orc","male","Bothuntsurv","Lok'delar + Rhok'delar",11724,"Carries the full matched set and fights with the staff."],
+    [13,2,"Rogue","Combat","Tauren","male","Botrogcombat","Thekal's Grasp",10470,"Fewest kills in the wave, and still ten thousand of them."],
+    [14,2,"Priest","Holy","Dwarf","male","Botpriholy","Crunched Benediction",11909,"Benediction. On a bot. Yes, really."],
+    [15,2,"Shaman","Restoration","Troll","male","Botshamresto","Jin'do's Hexxer",13607,"Most kills in the wave. He came here to heal."],
+    [16,2,"Mage","Fire","Undead","female","Botmagfire","Amberseal Keeper",11784,"Opens with the biggest number she has and hopes."],
+    [17,2,"Warlock","Affliction","Gnome","female","Botwarlaffl","Crunched Staff of the Qiraji Prophets",12070,"Wins arguments that ended four minutes ago."],
+    [18,2,"Druid","Feral","Night Elf","male","Botdruferal","Crunched Herald of Woe",10766,"Half of every fight is him not being where you swung."],
+    [19,3,"Warrior","Fury","Night Elf","male","Botwarrfury","Crunched Bonereaver's Edge",1975,"Newest chassis, oldest idea: hit it twice."],
+    [20,3,"Paladin","Protection","Dwarf","female","Botpalprot","Crunched Hammer of the Twisting Nether",2231,"Unkillable, and in no hurry about it."],
+    [21,3,"Hunter","Beast Mastery","Dwarf","male","Bothuntbeast","Crunched Nightmare Blade",2134,"He does not need to be there when it happens."],
+    [22,3,"Rogue","Assassination","Undead","male","Botrogass","Crunched Fang of the Faceless",1712,"The lowest kill count of all 27. Ask anyone who has played against him how much that means."],
+    [23,3,"Priest","Shadow","Troll","female","Botprishadow","Crunched Anathema",2083,"Anathema, and she means it."],
+    [24,3,"Shaman","Enhancement","Orc","female","Botshamenh","Crunched Might of Menethil",1932,"Two weapons, no conversation."],
+    [25,3,"Mage","Arcane","Gnome","female","Botmagarcane","Crunched Azuresong Mageblade",2284,"Does the arithmetic, then the damage."],
+    [26,3,"Warlock","Destruction","Human","male","Botwarldest","Amberseal Keeper",1984,"One button, correctly timed, every time."],
+    [27,3,"Druid","Balance","Tauren","male","Botdruidbal","Crunched Stinger of Ayamiss",2316,"Most kills of the prototypes, all of them from maximum range."]
+  ];
+
+  // Fill in as each wave lands: 12 -> { name: "Ironclad", namer: "@someone" }
+  const NAMED = {};
+
+  const esc = s => String(s).replace(/[&<>"]/g, c =>
+    ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+
+  const plate = u => {
+    const [n, wave, klass, spec, race, gender, designation, weapon, kills, hook] = u;
+    const given = NAMED[n];
+    return `<article class="unit${given ? " named" : ""}">
+      <div class="serial"><b>#${String(n).padStart(2, "0")}</b>
+        <span>${esc(designation)}</span></div>
+      <div class="body">
+        <p class="role">${esc(klass)}<br>${esc(spec)}</p>
+        <p class="origin">${esc(race)} ${esc(gender)}</p>
+        <dl class="spec">
+          <dt>Kills</dt><dd class="kills">${kills.toLocaleString("en-US")}</dd>
+          <dt>Weapon</dt><dd>${esc(weapon)}</dd>
+        </dl>
+        <p class="hook">${esc(hook)}</p>
+      </div>
+      <div class="nameplate">${given
+        ? `<p class="given">${esc(given.name)}</p>
+           <p class="by">Named by ${esc(given.namer)}</p>`
+        : `<p class="awaiting">Awaiting designation</p>`}</div>
+    </article>`;
+  };
+
+  document.getElementById("waves").innerHTML = WAVES.map(w => `
+    <section class="wave" id="${w.id}">
+      <div class="band">
+        <div>
+          <div class="gen">${"<i></i>".repeat(w.n)}</div>
+          <h2>Wave ${w.n} — ${esc(w.title)}</h2>
+        </div>
+        <p class="meta">${esc(w.tier)}<br>9 units · ${w.kills} kills</p>
+      </div>
+      <p class="note">${esc(w.note)}</p>
+      <div class="grid">${UNITS.filter(u => u[1] === w.n).map(plate).join("")}</div>
+    </section>`).join("");
+
+  document.getElementById("t-named").textContent = Object.keys(NAMED).length;
+</script>

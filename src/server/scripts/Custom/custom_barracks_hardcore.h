@@ -44,6 +44,16 @@ namespace BarracksHardcore
     // it was set for.
     void SetDeathChestSuppressed(Player const* player, bool suppressed);
 
+    // The Gurubashi Arena as a whole: the grounds (1741), the catacombs under
+    // them (2177) and the sand itself (30232, a WMOAreaTable id).
+    //
+    // Exported because the arena is one place that happens to be spelled with
+    // three area ids, and a second copy of that list would be one edit away
+    // from disagreeing about where the arena ends. The PvP consumable top-up
+    // in custom_gurubashi_arena.cpp asks the same question this file's War
+    // Mode and death-chest rules do.
+    bool IsInGurubashiArena(Player const* player);
+
     // Whether this PERSON has armed War Mode.
     //
     // False for every playerbot by construction - a bot has no setting to read -

@@ -1554,11 +1554,14 @@ void Player::Update(uint32 p_time)
 
     Unit::AIUpdateTick(p_time);
 
-    // Once per second, update items that have just a limited lifetime
+    // Once per second: items that have just a limited lifetime, and the honor
+    // cap, which moves when a quest is turned in rather than when honor changes
+    // and so has nowhere cheaper to be noticed.
     if (now > m_Last_tick)
     {
         UpdateItemDuration(uint32(now - m_Last_tick));
         UpdateSoulboundTradeItems();
+        UpdateHonorCapNotice();
     }
 
     // If mute expired, remove it from the DB
@@ -2459,7 +2462,7 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                 RemoveArenaSpellCooldowns(true);
                 RemoveArenaAuras();
                 if (mEntry->IsBattleArena())
-                    pet = EnsureArenaPetResurrected();
+                    pet = EnsureOwnedPetResurrected();
                 else
                     pet = GetPet();
 
@@ -8392,6 +8395,15 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
     return true;
 }
 
+// Warchief's Socks: ModifyHonorPoints mirrors every point of honor it pays into
+// one of these, and the quests that raise the honor cap are what they are spent
+// on. Uncapped on purpose - the socks are the record of honor EARNED, which is
+// what the next rung of the ladder is priced in.
+static constexpr uint32 HONOR_MIRROR_ITEM_ID = 40752;
+
+// How long the "your purse is full" notice holds its tongue after saying itself.
+static constexpr uint32 HONOR_CAP_NOTICE_INTERVAL = 2 * MINUTE * IN_MILLISECONDS;
+
 uint32 Player::GetMaxHonorPoints() const
 {
     // The ladder below is for tournament characters; a world character on a
@@ -8437,6 +8449,137 @@ uint32 Player::GetMaxHonorPoints() const
     return maxCap;
 }
 
+uint32 Player::GetNextHonorCapStep(uint32* gateSpellId /*= nullptr*/, uint32* gateQuestId /*= nullptr*/) const
+{
+    if (gateSpellId)
+        *gateSpellId = 0;
+    if (gateQuestId)
+        *gateQuestId = 0;
+
+    // A world character holds its own cap and never climbs anything.
+    if (Tournament::GetWorldMaxHonorPoints(this))
+        return 0;
+
+    uint32 const current = GetMaxHonorPoints();
+    uint32 next = 0;
+
+    // A step at or below the cap already held has either been climbed - the
+    // ladder raises the cap to it the moment its spell or quest is satisfied -
+    // or is one the realm switched off by leaving it at MaxHonorPoints. Of what
+    // remains, the nearest step is the one worth naming.
+    auto Consider = [&](uint32 step, uint32 spellId, uint32 questId)
+    {
+        if (step <= current || (next && step >= next))
+            return;
+
+        next = step;
+        if (gateSpellId)
+            *gateSpellId = spellId;
+        if (gateQuestId)
+            *gateQuestId = questId;
+    };
+
+    Consider(sWorld->getIntConfig(CONFIG_CONDITIONAL_MAX_HONOR_POINTS),
+        sWorld->getIntConfig(CONFIG_CONDITIONAL_MAX_HONOR_SPELL),
+        sWorld->getIntConfig(CONFIG_CONDITIONAL_MAX_HONOR_QUEST));
+
+    Consider(sWorld->getIntConfig(CONFIG_CONDITIONAL_MAX_HONOR_POINTS_2),
+        sWorld->getIntConfig(CONFIG_CONDITIONAL_MAX_HONOR_SPELL_2),
+        sWorld->getIntConfig(CONFIG_CONDITIONAL_MAX_HONOR_QUEST_2));
+
+    return next;
+}
+
+void Player::SendHonorCapNotice(uint32 lostHonor)
+{
+    // Nobody is reading: a managed bot on a virtual session, or one of the
+    // transient copies a battleground fills itself with.
+    WorldSession* session = GetSession();
+    if (!session || session->IsVirtualSession() || session->IsTransientPlayerSession())
+        return;
+
+    // Honor arrives in bursts - a battleground pays its objectives, its kills
+    // and its end bonus within seconds of one another - so a line per award
+    // would bury everything else said in the match. Say it, then hold off long
+    // enough that the next one reads as news rather than nagging.
+    uint32 const now = GameTime::GetGameTimeMS();
+    if (m_honorCapNoticeMs && getMSTimeDiff(m_honorCapNoticeMs, now) < HONOR_CAP_NOTICE_INTERVAL)
+        return;
+
+    m_honorCapNoticeMs = now;
+
+    uint32 const cap = GetMaxHonorPoints();
+    ChatHandler chat(session);
+    if (lostHonor)
+        chat.PSendSysMessage("Your honor is capped at %u. %u honor was paid and could not be held.", cap, lostHonor);
+    else
+        chat.PSendSysMessage("Your honor is capped at %u and your purse has no room for that.", cap);
+
+    uint32 gateSpellId = 0;
+    uint32 gateQuestId = 0;
+    uint32 const next = GetNextHonorCapStep(&gateSpellId, &gateQuestId);
+    if (!next)
+    {
+        chat.SendSysMessage("There is no higher cap to earn: spend some before you earn more.");
+        return;
+    }
+
+    Quest const* gate = gateQuestId ? sObjectMgr->GetQuestTemplate(gateQuestId) : nullptr;
+    if (!gate)
+    {
+        chat.PSendSysMessage("The next step holds %u.", next);
+        return;
+    }
+
+    chat.PSendSysMessage("Completing \"%s\" raises the cap to %u.", gate->GetTitle().c_str(), next);
+
+    // What that quest is bought with, and how far along they are. The honor
+    // mirror is the reassuring part: ModifyHonorPoints pays one of those for
+    // every point of honor awarded, before the cap has had its say, so an award
+    // the purse could not hold still bought its way toward the next step.
+    for (uint8 i = 0; i < QUEST_ITEM_OBJECTIVES_COUNT; ++i)
+    {
+        uint32 const itemId = gate->RequiredItemId[i];
+        uint32 const needed = gate->RequiredItemCount[i];
+        if (!itemId || !needed)
+            continue;
+
+        ItemTemplate const* item = sObjectMgr->GetItemTemplate(itemId);
+        if (!item)
+            continue;
+
+        if (itemId == HONOR_MIRROR_ITEM_ID)
+            chat.PSendSysMessage("You hold %u of the %u %s it asks for - you are paid one for every point of honor earned, capped or not.",
+                GetItemCount(itemId, true), needed, item->Name1.c_str());
+        else
+            chat.PSendSysMessage("You hold %u of the %u %s it asks for.",
+                GetItemCount(itemId, true), needed, item->Name1.c_str());
+    }
+}
+
+void Player::UpdateHonorCapNotice()
+{
+    WorldSession* session = GetSession();
+    if (!session || session->IsVirtualSession() || session->IsTransientPlayerSession())
+        return;
+
+    uint32 const cap = GetMaxHonorPoints();
+    if (cap == m_honorCapSeen)
+        return;
+
+    // The first look of the session only records where the character stands: it
+    // logged in on this rung, it did not just climb onto it.
+    bool const climbed = m_honorCapSeen && cap > m_honorCapSeen;
+    m_honorCapSeen = cap;
+    if (!climbed)
+        return;
+
+    ChatHandler chat(session);
+    chat.PSendSysMessage("Your honor cap is now %u.", cap);
+    if (uint32 const next = GetNextHonorCapStep())
+        chat.PSendSysMessage("The step above it holds %u.", next);
+}
+
 void Player::SetHonorPoints(uint32 value)
 {
     uint32 maxHonor = GetMaxHonorPoints();
@@ -8470,12 +8613,19 @@ void Player::ModifyHonorPoints(int32 value, CharacterDatabaseTransaction trans, 
     int64 const newValue = std::clamp<int64>(int64(GetHonorPoints()) + value, 0, std::numeric_limits<int32>::max());
     if (value > 0)
     {
-        if (AddItem(40752, value))
-            RefreshQuestItemCounts(40752);
+        if (AddItem(HONOR_MIRROR_ITEM_ID, value))
+            RefreshQuestItemCounts(HONOR_MIRROR_ITEM_ID);
         else
-            ItemAddedQuestCheck(40752, value);
+            ItemAddedQuestCheck(HONOR_MIRROR_ITEM_ID, value);
     }
     SetHonorPoints(uint32(newValue));
+
+    // What the cap ate, said out loud. SetHonorPoints clamps in silence and no
+    // part of the client shows a cap at all, so an award that vanished on
+    // arrival would leave the number standing still with nothing to explain it.
+    if (value > 0)
+        if (uint32 const lost = uint32(std::max<int64>(0, newValue - int64(GetHonorPoints()))))
+            SendHonorCapNotice(lost);
 
     if (value > 0)
         AddWeeklyHonorPoints(uint32(value), trans);
@@ -29720,7 +29870,7 @@ void Player::UpdateFallInformationIfNeed(MovementInfo const& minfo, uint16 opcod
         SetFallInformation(minfo.fallTime, minfo.pos.GetPositionZ());
 }
 
-Pet* Player::EnsureArenaPetResurrected()
+Pet* Player::EnsureOwnedPetResurrected()
 {
     Pet* pet = GetPet();
 
@@ -29762,6 +29912,37 @@ Pet* Player::EnsureArenaPetResurrected()
     }
 
     return pet;
+}
+
+void Player::ResurrectPetAtSpiritGuide()
+{
+    // Only the hunter's companion comes back for free. A warlock still pays the
+    // shard for his, the way he does everywhere else.
+    if (GetClass() != CLASS_HUNTER)
+        return;
+
+    // Clone bots keep no pet of their own in the database - theirs is a mirror of
+    // the character they were copied from, rebuilt by the clone manager - so
+    // calling one up from their stable here would produce a pet with no spells
+    // that the mirror sync then refuses to replace.
+    if (WorldSession const* session = GetSession())
+        if (session->IsTransientPlayerSession())
+            return;
+
+    Pet* pet = EnsureOwnedPetResurrected();
+    if (!pet || pet->getPetType() != HUNTER_PET)
+        return;
+
+    pet->SetFullHealth();
+
+    // Happiness included on purpose: the pet is handed back content, not sulking
+    // from the death it just shared with its owner.
+    for (uint8 i = POWER_MANA; i < MAX_POWERS; ++i)
+    {
+        Powers powerType = Powers(i);
+        if (pet->GetMaxPower(powerType))
+            pet->SetFullPower(powerType);
+    }
 }
 
 void Player::UnsummonPetTemporaryIfAny()

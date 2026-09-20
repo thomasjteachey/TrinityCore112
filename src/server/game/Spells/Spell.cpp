@@ -6222,7 +6222,15 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
             {
                 if (Player* playerCaster = m_caster->ToPlayer())
                     if (spellEffectInfo.BasePoints + 1 + playerCaster->GetHonorPoints() > playerCaster->GetMaxHonorPoints())
+                    {
+                        // A mark of honor worth more than the purse has room for
+                        // is refused whole, and "You can't do that right now" is
+                        // all the client can be made to say about it. Explain the
+                        // cap in chat, where there is room to name it and to say
+                        // what raises it.
+                        playerCaster->SendHonorCapNotice(0);
                         return SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW;
+                    }
                 break;
             }
             case SPELL_EFFECT_LEARN_SPELL:

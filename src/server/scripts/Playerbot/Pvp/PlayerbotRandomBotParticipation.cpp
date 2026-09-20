@@ -1452,6 +1452,15 @@ bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType, Mana
 
 void ForceManagedScmQueueSweep(ManagedBotAccountIds const& botAccounts)
 {
+    // This sweep is the one place that reached the queue lifecycle without
+    // going through CanProcessRandomBotLifecycle, so it was the one place that
+    // never asked whether persistent bots take part in instanced PvP at all. It
+    // calls BattlegroundLifecycleActions::Execute directly, twice, for every
+    // managed bot online - which is why the fleet kept queueing for Scarlet
+    // Chapel long after the realm had handed battlegrounds to transient clones.
+    if (!IsPersistentLifecycleEnabled())
+        return;
+
     constexpr BattlegroundTypeId kManagedBattleground = BATTLEGROUND_SCM;
     if (!HasAnyRealHumanInterestInBattleground(kManagedBattleground, botAccounts))
         return;

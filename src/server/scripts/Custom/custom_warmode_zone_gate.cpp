@@ -295,7 +295,9 @@ namespace
         player->SetWarModePaused(paused);
 
         uint8 top = 0;
+        bool const wasCapped = player->IsWarModeXpCapped();
         bool const capped = ZoneCapStopsXp(player, &top);
+        player->SetWarModeXpCapped(capped);
 
         uint32 const spell = s_zoneCapAuraSpell.load(std::memory_order_relaxed);
         bool const marked = paused || capped;
@@ -303,12 +305,19 @@ namespace
 
         // Nothing has drifted - the overwhelmingly common case, and the one
         // this runs per player per tick to reach.
-        if (paused == wasPaused && (!spell || marked == wearing))
+        //
+        // The badge is chased only while the player is alive to take it. A
+        // corpse refuses auras, so retrying one on a ghost is a mismatch that
+        // never closes - and it used to drag a line of chat along with it every
+        // tick. What the player is TOLD hangs on the two booleans above, which
+        // is where the truth actually lives; the aura is only the icon.
+        bool const chaseBadge = spell && player->IsAlive();
+        if (paused == wasPaused && capped == wasCapped && (!chaseBadge || marked == wearing))
             return;
 
         ChatHandler handler(player->GetSession());
 
-        if (spell && marked && !wearing)
+        if (chaseBadge && marked && !wearing)
             player->AddAura(spell, player);
         else if (spell && !marked && wearing)
             player->RemoveAurasDueToSpell(spell);
@@ -329,9 +338,14 @@ namespace
             return;
         }
 
-        // Neither side of the pause moved, so this is the experience stop on
-        // its own, arriving or lifting at the band's ceiling.
-        if (marked)
+        // Neither side of the pause moved. Anything left to say is the
+        // experience stop on its own, arriving or lifting at the band's
+        // ceiling - and only if IT moved. A badge that merely failed to stick
+        // says nothing.
+        if (capped == wasCapped)
+            return;
+
+        if (capped)
         {
             handler.PSendSysMessage("You have reached level %u, the top of %s's level range. With War Mode on you no longer gain experience here - travel to a higher-level zone to turn it back on.",
                 uint32(top), ZoneNameFor(player));

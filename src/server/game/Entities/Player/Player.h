@@ -1179,7 +1179,13 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         // temporarily unsummoned (mounted, mounted at login, ...), or a dismissed hunter
         // pet still callable via Call Pet. 0 when there is no such pet or it is dead.
         uint32 GetLivingPetDisplayId() const;
-        Pet* EnsureArenaPetResurrected();
+        // Brings the owner's pet back out and alive: calls it up from the stable when
+        // death already dismissed it, then clears the death state. Returns nullptr when
+        // there is no pet left to bring back.
+        Pet* EnsureOwnedPetResurrected();
+        // A battleground spirit guide puts a hunter's pet back on its feet with him,
+        // whole and fully happy, rather than leaving him to Revive Pet under fire.
+        void ResurrectPetAtSpiritGuide();
         Pet* SummonPet(uint32 entry, float x, float y, float z, float ang, PetType petType, uint32 despwtime);
         void RemovePet(Pet* pet, PetSaveMode mode, bool returnreagent = false);
         uint32 GetPhaseMaskForSpawn() const;                // used for proper set phase for DB at GM-mode creature/GO spawn
@@ -1779,6 +1785,12 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         // and a stale "you are safe" is the one state worth never restoring.
         bool IsWarModePaused() const { return m_warModePaused; }
         void SetWarModePaused(bool paused) { m_warModePaused = paused; }
+        // The zone-ceiling experience stop, kept beside the pause and for the
+        // same reason: the gate script has to know what it said last tick, and
+        // the badge aura cannot answer that - a corpse refuses auras, so an
+        // aura that failed to land is not proof the state changed.
+        bool IsWarModeXpCapped() const { return m_warModeXpCapped; }
+        void SetWarModeXpCapped(bool capped) { m_warModeXpCapped = capped; }
         // Stepping on or off the Battle Ring's sand changes whom a tournament or
         // world character may fight (Tournament::AreKeptFromFighting) without
         // necessarily moving anyone's FFA flag: resend this player's flag to
@@ -2010,7 +2022,10 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
 
         uint32 m_bountyPursuitStacks = 0;
         uint32 m_bountyPursuitUntilMs = 0;
+        uint32 m_honorCapNoticeMs = 0;          // last "your purse is full" line
+        uint32 m_honorCapSeen = 0;              // cap last reported; 0 = not looked yet
         bool m_warModePaused = false;
+        bool m_warModeXpCapped = false;
         bool m_inGurubashiBattleRing = false;   // last ring state UpdateArea saw
         void SetWorldChannelOptOut(bool optOut);
 
@@ -2099,6 +2114,21 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         bool RewardHonor(Unit* victim, uint32 groupsize, int32 honor = -1, bool pvptoken = false);
         uint32 GetHonorPoints() const { return GetUInt32Value(PLAYER_FIELD_HONOR_CURRENCY); }
         uint32 GetMaxHonorPoints() const;
+        // The next rung of the honor cap ladder: the lowest cap above the one
+        // this character already holds, and the spell or quest that opens it.
+        // 0 when the character stands on the top rung - or is not on the ladder
+        // at all, which is where a world character stands.
+        uint32 GetNextHonorCapStep(uint32* gateSpellId = nullptr, uint32* gateQuestId = nullptr) const;
+        // Says out loud that the purse is full, how much of an award that cost,
+        // and what would make the purse bigger. Nothing in the client shows an
+        // honor cap, so this is the only place a character hears about one.
+        // Throttled: honor arrives in bursts and a line per award would bury a
+        // battleground's chat.
+        void SendHonorCapNotice(uint32 lostHonor);
+        // Watches for a cap that has just gone up and says so. What raises it is
+        // a quest turn-in whose own reward is a spell about something else
+        // entirely, so the rung is otherwise climbed in silence.
+        void UpdateHonorCapNotice();
         uint32 GetArenaPoints() const { return GetUInt32Value(PLAYER_FIELD_ARENA_CURRENCY); }
         void ModifyHonorPoints(int32 value, CharacterDatabaseTransaction trans = CharacterDatabaseTransaction(nullptr), bool applyHonorGainAuras = true);      //! If trans is specified, honor save query will be added to trans, otherwise saved immediately
         void AddWeeklyHonorPoints(uint32 value, CharacterDatabaseTransaction trans = CharacterDatabaseTransaction(nullptr));

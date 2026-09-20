@@ -39,8 +39,10 @@
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
+#include "QuestDef.h"
 #include "RBAC.h"
 #include "ScriptMgr.h"
+#include "StringFormat.h"
 #include "Util.h"
 #include "WorldSession.h"
 
@@ -189,6 +191,43 @@ public:
         handler->PSendSysMessage("%s: %s character%s%s.", target->GetName().c_str(),
             tournament ? "tournament" : "world", queueNote,
             Tournament::IsEnabled() ? "" : " (Centurion.Tournament.Enable is off: no rules apply)");
+
+        // Where the character stands on the honor cap ladder. Only answerable
+        // for someone online: the rungs are a spell known and a quest done, and
+        // neither is loaded for an offline character.
+        if (online)
+        {
+            uint32 gateSpellId = 0;
+            uint32 gateQuestId = 0;
+            uint32 const next = online->GetNextHonorCapStep(&gateSpellId, &gateQuestId);
+
+            handler->PSendSysMessage("  honor %u/%u.", online->GetHonorPoints(), online->GetMaxHonorPoints());
+
+            Quest const* gate = gateQuestId ? sObjectMgr->GetQuestTemplate(gateQuestId) : nullptr;
+            if (!next)
+                handler->SendSysMessage("  top of the honor cap ladder.");
+            else
+            {
+                std::string opened;
+                if (gateSpellId)
+                    opened = Trinity::StringFormat("spell {}", gateSpellId);
+                if (gateQuestId)
+                    opened += Trinity::StringFormat("{}quest {} ({})", opened.empty() ? "" : " or ", gateQuestId,
+                        gate ? gate->GetTitle() : "no such quest");
+                if (opened.empty())
+                    opened = "nothing - neither a spell nor a quest is configured for it";
+
+                handler->PSendSysMessage("  next step %u, opened by %s.", next, opened.c_str());
+            }
+
+            // What the gate quest is bought with, so the ladder can be told
+            // apart from a character who simply has not earned its price yet.
+            if (gate)
+                for (uint8 i = 0; i < QUEST_ITEM_OBJECTIVES_COUNT; ++i)
+                    if (gate->RequiredItemId[i] && gate->RequiredItemCount[i])
+                        handler->PSendSysMessage("    item %u: %u/%u held.", gate->RequiredItemId[i],
+                            online->GetItemCount(gate->RequiredItemId[i], true), gate->RequiredItemCount[i]);
+        }
         return true;
     }
 

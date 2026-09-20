@@ -687,13 +687,19 @@ namespace BarracksHardcore
         if (!IsWarModeOptedIn(player))
             return false;
 
-        // The Battle Ring is checked FIRST for the same reason IsFfaArmed
-        // checks it first: everyone the hourly event drops in there is a
-        // combatant whatever their level, and the ring sits inside Stranglethorn
+        // The Gurubashi Arena is checked FIRST for the same reason IsFfaArmed
+        // checks the ring first: everyone the hourly event drops in there is a
+        // combatant whatever their level, and the arena sits inside Stranglethorn
         // - a zone most of its entrants have long outlevelled. Pausing them
         // would leave the one place on the realm that is always a fight full of
         // people who cannot throw a punch.
-        if (player->IsInGurubashiBattleRing())
+        //
+        // The whole arena, not just the sand: the grounds and the catacombs are
+        // where a fight is opened, broken off and picked back up, and a rule
+        // that only held inside the ropes made the ramp two steps away a place
+        // where nobody could be touched. Somebody who wants out of a fight has
+        // the same way out they have everywhere else, which is to leave.
+        if (IsInGurubashiArena(player))
             return false;
 
         // Instances, battlegrounds and arenas are not the open world, and the

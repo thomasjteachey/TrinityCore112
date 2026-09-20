@@ -20265,6 +20265,17 @@ namespace playerbot
                 std::lock_guard<std::mutex> guard(g_PvePendingLock);
                 g_PendingMailCollections.insert(player->GetGUID().GetRawValue());
             }
+
+            // The death recovery further down is skipped for them along with
+            // everything else, and nothing else in the server stands a bot back
+            // up in the open world: the battleground queue used to, by accident,
+            // on the spot where it fell, and does not any more. So a PvP-only bot
+            // gets the graveyard walk here and nothing besides - the rebirth and
+            // guardian machinery inside it is already inert for these accounts.
+            // A battleground death belongs to the battleground's own spirit wave.
+            if (!player->InBattleground() && !player->duel)
+                RunDeathRecovery(player, pvpState, cfg);
+
             return;
         }
 

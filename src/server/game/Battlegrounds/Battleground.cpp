@@ -482,6 +482,10 @@ inline void Battleground::_ProcessResurrect(uint32 diff)
             player->CastSpell(player, 6962, true);
             player->CastSpell(player, SPELL_SPIRIT_HEAL_MANA, true);
             player->SpawnCorpseBones(false);
+            // A hunter gets up with his pet beside him, alive and fully happy -
+            // the wave would otherwise send him back in alone, casting Revive Pet
+            // in the middle of a fight he just died to.
+            player->ResurrectPetAtSpiritGuide();
         }
         m_ResurrectQueue.clear();
     }

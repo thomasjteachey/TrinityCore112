@@ -716,6 +716,9 @@ void BfGraveyard::Resurrect()
         player->CastSpell(player, SPELL_SPIRIT_HEAL_MANA, true);
 
         player->SpawnCorpseBones(false);
+
+        // Same deal as a battleground spirit guide: a hunter is raised with his pet.
+        player->ResurrectPetAtSpiritGuide();
     }
 
     m_ResurrectQueue.clear();

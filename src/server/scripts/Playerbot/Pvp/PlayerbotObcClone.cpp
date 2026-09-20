@@ -130,8 +130,8 @@ AsyncCallbackProcessor<SQLQueryHolderCallback> g_WorldThreadSourceLoads;
 
 uint32 g_CloneTickAccumulatorMs = 0;
 
-// The guild every copy wears. Read from map threads (copies are built there),
-// written only by the world thread.
+// The guild a copy wears when its source has none of its own. Read from map
+// threads (copies are built there), written only by the world thread.
 std::atomic<uint32> g_PvpBotGuildId{ 0 };
 // A founder is being loaded; hold the next attempt rather than starting a
 // second load for the same guild.
@@ -140,22 +140,74 @@ uint32 g_PvpBotGuildRetryMs = kPvpBotGuildRetryMs;
 // The "no PvP-only account is configured" notice, said once per uptime.
 bool g_PvpBotGuildRosterNoticeSaid = false;
 
+// Only a bot lends its guild to the copy made from it. A person does not: the
+// "Dark <name>" mirror of a player is not theirs and has no business wearing
+// their guild's tag at them.
+bool SourceLendsItsGuild(Player const* source)
+{
+    if (!source || !source->GetGuildId() || !source->GetSession())
+        return false;
+
+    if (playerbot::PveManager::IsPvpOnlyBot(source))
+        return true;
+
+    // A snapshot taken under the population lock, so this is safe to ask from
+    // the map threads the copies are built on.
+    std::vector<uint32> const botAccounts = playerbot::RandomBotParticipationManager::GetConfiguredBotAccountIds();
+    return std::binary_search(botAccounts.begin(), botAccounts.end(), source->GetSession()->GetAccountId());
+}
+
 // A copy has no character row, so it can never be a real guild member: joining
 // it for real would write a guild_member row under a guid that does not exist
 // and leave it behind when the copy goes. Writing the id into its guild field
 // is all the client needs - it asks for the name with an ordinary guild query,
 // which answers for anyone, member or not.
-void ApplyPvpBotGuild(Player* clone)
+//
+// The guild it writes is the one the copy's source really is in, so a copy and
+// the bot behind it never wear different tags at the same moment: a world bot
+// filling a sub-60 battleground keeps the PvE guild it is a member of, and the
+// PvP-only characters bring the PvP guild in with them because that is the
+// guild they joined. The PvP guild is the fallback for a source with no guild
+// to lend - a human being mirrored, or a bot the PvE guild has not taken in yet.
+void ApplyCloneGuild(Player* clone, Player const* source)
 {
-    uint32 const guildId = g_PvpBotGuildId.load(std::memory_order_relaxed);
-    if (!clone || !guildId)
+    if (!clone)
         return;
 
     // The field itself, not Player::SetInGuild: that also stamps the character
     // cache, which would be telling it a membership that does not exist - and
     // it is reached from map threads, where the cache is not ours to touch.
+    if (SourceLendsItsGuild(source))
+    {
+        clone->SetUInt32Value(PLAYER_GUILDID, source->GetGuildId());
+        clone->SetRank(source->GetRank());
+        return;
+    }
+
+    uint32 const guildId = g_PvpBotGuildId.load(std::memory_order_relaxed);
+    if (!guildId)
+        return;
+
     clone->SetUInt32Value(PLAYER_GUILDID, guildId);
     clone->SetRank(GR_INITIATE);
+}
+
+// Guild membership is not something LoadFromDB carries - the login handler
+// applies it, out of this same holder - so a source loaded for a copy rather
+// than logged in has no guild until this puts one on it, and the copy made
+// from it would fall back to the PvP guild while the character it was made
+// from sits in another one. Fields only: this Player never enters the world.
+void ApplyOfflineSourceGuild(Player* source, CharacterDatabaseQueryHolder const& holder)
+{
+    if (!source)
+        return;
+
+    if (PreparedQueryResult guildResult = holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_GUILD))
+    {
+        Field* guildFields = guildResult->Fetch();
+        source->SetUInt32Value(PLAYER_GUILDID, guildFields[0].GetUInt32());
+        source->SetRank(guildFields[1].GetUInt8());
+    }
 }
 
 // The characters the copies are made from that exist only to be PvP bots. They
@@ -817,7 +869,7 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
     // update-field storage and GUID do not exist until Player::Create succeeds.
     session->SetPlayer(clone);
 
-    ApplyPvpBotGuild(clone);
+    ApplyCloneGuild(clone, human);
 
     clone->GetMotionMaster()->Initialize();
     clone->SetLevel(human->GetLevel(), false);
@@ -1090,9 +1142,9 @@ Player* CreateCustomGameLobbyClone(Player* source, uint32 mapId, uint32 lobbyIns
     session->SetPlayer(clone);
 
     // Roster mannequins stand in for people too; only the ones standing in
-    // for a bot wear the bot guild.
+    // for a bot wear a bot's guild.
     if (isPlayerbot)
-        ApplyPvpBotGuild(clone);
+        ApplyCloneGuild(clone, source);
 
     clone->GetMotionMaster()->Initialize();
     clone->SetLevel(source->GetLevel(), false);
@@ -1656,7 +1708,7 @@ Player* PlayerbotObcCloneManager::CreateCustomGameClone(Player* source, Battlegr
     clone->EnsureSocial();
     session->SetPlayer(clone);
 
-    ApplyPvpBotGuild(clone);
+    ApplyCloneGuild(clone, source);
 
     clone->GetMotionMaster()->Initialize();
     clone->SetLevel(source->GetLevel(), false);
@@ -1793,6 +1845,7 @@ bool PlayerbotObcCloneManager::QueueCustomGameClone(ObjectGuid sourceGuid, World
                 Player* offlineSource = new Player(sourceSession.get());
                 if (offlineSource->LoadFromDB(sourceGuid, loginHolder, false))
                 {
+                    ApplyOfflineSourceGuild(offlineSource, loginHolder);
                     offlineSource->GetMotionMaster()->Initialize();
                     // Dark copies only read identity, spells, talents, glyph ids, and
                     // equipment from this temporary source. Runtime auras are neither
@@ -1844,6 +1897,7 @@ bool PlayerbotObcCloneManager::LoadOfflineCloneSource(ObjectGuid sourceGuid, Wor
         Player* offlineSource = new Player(sourceSession.get());
         if (offlineSource->LoadFromDB(sourceGuid, loginHolder, false))
         {
+            ApplyOfflineSourceGuild(offlineSource, loginHolder);
             offlineSource->GetMotionMaster()->Initialize();
             // Clones read identity, spells, talents, glyph ids and equipment
             // from their source. Runtime auras are neither copied nor safe to
@@ -1893,6 +1947,7 @@ bool PlayerbotObcCloneManager::LoadOfflineCloneSourceOnWorldThread(ObjectGuid so
         Player* offlineSource = new Player(sourceSession.get());
         if (offlineSource->LoadFromDB(sourceGuid, loginHolder, false))
         {
+            ApplyOfflineSourceGuild(offlineSource, loginHolder);
             offlineSource->GetMotionMaster()->Initialize();
             // Clones read identity, spells, talents, glyph ids and equipment
             // from their source. Runtime auras are neither copied nor safe to
@@ -1946,7 +2001,7 @@ Player* PlayerbotObcCloneManager::CreateWorldClone(Player* source, Map* map, Pos
     clone->EnsureSocial();
     session->SetPlayer(clone);
 
-    ApplyPvpBotGuild(clone);
+    ApplyCloneGuild(clone, source);
 
     clone->GetMotionMaster()->Initialize();
     clone->SetLevel(source->GetLevel(), false);
@@ -2199,6 +2254,7 @@ bool PlayerbotObcCloneManager::QueueCustomGameLobbyClone(ObjectGuid sourceGuid, 
         Player* offlineSource = new Player(sourceSession.get());
         if (offlineSource->LoadFromDB(sourceGuid, loginHolder, false))
         {
+            ApplyOfflineSourceGuild(offlineSource, loginHolder);
             offlineSource->GetMotionMaster()->Initialize();
             // Equipment loading can still apply passive effects even when
             // persisted and glyph auras are skipped. The preview copy does
