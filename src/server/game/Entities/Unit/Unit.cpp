@@ -4326,6 +4326,25 @@ Aura* Unit::_TryStackingOrRefreshingExistingAura(AuraCreateInfo& createInfo)
     return nullptr;
 }
 
+// Centurion: Nature's Reach widens the druid's root net - one extra Entangling Roots target per rank.
+static uint32 const SPELL_DRUID_NATURES_REACH_RANK_1 = 16819;
+static uint32 const SPELL_DRUID_NATURES_REACH_RANK_2 = 16820;
+static uint32 const SPELLFAMILYFLAG_DRUID_ENTANGLING_ROOTS = 0x00000200;
+
+// How many targets one caster may hold a given single-target aura on at once (stock rule: one).
+static uint32 GetSingleTargetAuraLimit(Unit const* caster, SpellInfo const* spellInfo)
+{
+    if (spellInfo->SpellFamilyName == SPELLFAMILY_DRUID && (spellInfo->SpellFamilyFlags[0] & SPELLFAMILYFLAG_DRUID_ENTANGLING_ROOTS))
+    {
+        if (caster->HasAura(SPELL_DRUID_NATURES_REACH_RANK_2))
+            return 3;
+        if (caster->HasAura(SPELL_DRUID_NATURES_REACH_RANK_1))
+            return 2;
+    }
+
+    return 1;
+}
+
 void Unit::_AddAura(UnitAura* aura, Unit* caster)
 {
     ASSERT(!m_cleanupDone);
@@ -4347,18 +4366,26 @@ void Unit::_AddAura(UnitAura* aura, Unit* caster)
 
         // register single target aura
         caster->GetSingleCastAuras().push_back(aura);
-        // remove other single target auras
+        // remove the other single target auras that no longer fit under the caster's limit
+        uint32 const limit = GetSingleTargetAuraLimit(caster, aura->GetSpellInfo());
         Unit::AuraList& scAuras = caster->GetSingleCastAuras();
-        for (Unit::AuraList::iterator itr = scAuras.begin(); itr != scAuras.end();)
+
+        uint32 others = 0;
+        for (Aura const* other : scAuras)
+            if (other != aura && other->IsSingleTargetWith(aura))
+                ++others;
+
+        // oldest first, drop just enough of them to make room for the new one
+        for (uint32 excess = others >= limit ? others - limit + 1 : 0; excess; --excess)
         {
-            if ((*itr) != aura &&
-                (*itr)->IsSingleTargetWith(aura))
+            for (Aura* other : scAuras)
             {
-                (*itr)->Remove();
-                itr = scAuras.begin();
+                if (other == aura || !other->IsSingleTargetWith(aura))
+                    continue;
+
+                other->Remove();    // unregisters itself from scAuras, so the list is walked again for the next one
+                break;
             }
-            else
-                ++itr;
         }
     }
 }
