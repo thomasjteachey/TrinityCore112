@@ -7241,8 +7241,48 @@ WorldSafeLocsEntry const* ObjectMgr::GetDefaultGraveyard(uint32 team) const
     else return nullptr;
 }
 
+// An instance zone with no graveyard of its own sends the ghost to the
+// graveyard nearest the instance's entrance (Map.dbc corpse point) rather
+// than to the faction default across the world. Scarlet Monastery's Cathedral
+// needs this: its WMO rows report the Scarlet Chapel battleground area
+// (30189), which has no graveyard_zone row, so ghosts landed in Westfall.
+static WorldSafeLocsEntry const* GetGraveyardNearInstanceEntrance(MapEntry const* map, GraveyardContainer const& graveyards)
+{
+    if (!map || !map->Instanceable() || map->CorpseMapID < 0 || (map->Corpse.X == 0 && map->Corpse.Y == 0))
+        return nullptr;
+
+    WorldSafeLocsEntry const* nearest = nullptr;
+    float nearestDist2 = 0.0f;
+    for (auto const& [zone, data] : graveyards)
+    {
+        WorldSafeLocsEntry const* entry = sWorldSafeLocsStore.LookupEntry(data.safeLocId);
+        if (!entry || entry->Continent != uint32(map->CorpseMapID))
+            continue;
+
+        float dx = entry->Loc.X - map->Corpse.X;
+        float dy = entry->Loc.Y - map->Corpse.Y;
+        float dist2 = dx * dx + dy * dy;
+        if (!nearest || dist2 < nearestDist2)
+        {
+            nearest = entry;
+            nearestDist2 = dist2;
+        }
+    }
+
+    return nearest;
+}
+
 WorldSafeLocsEntry const* ObjectMgr::GetClosestGraveyard(float x, float y, float z, uint32 MapId, uint32 team) const
 {
+    MapEntry const* map = sMapStore.LookupEntry(MapId);
+
+    // The realm is factionless: outside battlegrounds and arenas any graveyard
+    // serves anyone (team 0 skips the faction filter below). The real team is
+    // kept only to pick the last-resort default graveyard.
+    uint32 const defaultTeam = team;
+    if (map && !map->IsBattlegroundOrArena())
+        team = 0;
+
     // search for zone associated closest graveyard
     uint32 zoneId = sMapMgr->GetZoneId(PHASEMASK_NORMAL, MapId, x, y, z);
 
@@ -7251,7 +7291,9 @@ WorldSafeLocsEntry const* ObjectMgr::GetClosestGraveyard(float x, float y, float
         if (z > -500)
         {
             TC_LOG_ERROR("misc", "ZoneId not found for map {} coords ({}, {}, {})", MapId, x, y, z);
-            return GetDefaultGraveyard(team);
+            if (WorldSafeLocsEntry const* entrance = GetGraveyardNearInstanceEntrance(map, GraveyardStore))
+                return entrance;
+            return GetDefaultGraveyard(defaultTeam);
         }
     }
 
@@ -7263,14 +7305,16 @@ WorldSafeLocsEntry const* ObjectMgr::GetClosestGraveyard(float x, float y, float
     //   if mapId != graveyard.mapId (ghost in instance) and search any graveyard associated
     //     then check faction
     GraveyardMapBounds range = GraveyardStore.equal_range(zoneId);
-    MapEntry const* map = sMapStore.LookupEntry(MapId);
 
     // not need to check validity of map object; MapId _MUST_ be valid here
     if (range.first == range.second && !map->IsBattlegroundOrArena())
     {
+        if (WorldSafeLocsEntry const* entrance = GetGraveyardNearInstanceEntrance(map, GraveyardStore))
+            return entrance;
+
         if (zoneId != 0) // zone == 0 can't be fixed, used by bliz for bugged zones
-            TC_LOG_ERROR("sql.sql", "Table `graveyard_zone` incomplete: Zone {} Team {} does not have a linked graveyard.", zoneId, team);
-        return GetDefaultGraveyard(team);
+            TC_LOG_ERROR("sql.sql", "Table `graveyard_zone` incomplete: Zone {} Team {} does not have a linked graveyard.", zoneId, defaultTeam);
+        return GetDefaultGraveyard(defaultTeam);
     }
 
     // at corpse map
