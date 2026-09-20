@@ -99,6 +99,15 @@ void Load()
         while (result->NextRow());
     }
 
+    // The character cache indexes characters under their full name, so it has
+    // to hear about every surname that appeared OR disappeared. This runs on
+    // the world thread, which is the only thread that touches those indexes.
+    for (auto const& [guid, surname] : Store)
+        if (!loaded.count(guid))
+            sCharacterCache->UpdateCharacterSurname(guid, "");
+    for (auto const& [guid, surname] : loaded)
+        sCharacterCache->UpdateCharacterSurname(guid, surname);
+
     {
         std::unique_lock lock(StoreLock);
         Store = std::move(loaded);
@@ -169,29 +178,30 @@ std::string Decorated(ObjectGuid guid, std::string_view name)
     return decorated;
 }
 
-void StripLeadingSurname(std::string const& name, std::string& msg)
+bool JoinWhisperTarget(std::string& to, std::string& msg)
 {
-    if (!Enabled())
-        return;
+    if (!Enabled() || to.empty())
+        return false;
 
+    // The client cut "/w Elgrom Fernbloom hi" at the first space, so the
+    // surname is sitting at the front of the message. Take the word back only
+    // if the two of them together name somebody.
     std::size_t const space = msg.find(' ');
     if (space == std::string::npos)
-        return;
+        return false;
 
-    // What is left has to be an actual message.
+    // Whatever follows has to still be a message.
     std::size_t const rest = msg.find_first_not_of(' ', space);
     if (rest == std::string::npos)
-        return;
+        return false;
 
-    ObjectGuid const guid = sCharacterCache->GetCharacterGuidByName(name);
-    if (guid.IsEmpty())
-        return;
+    std::string candidate = to + ' ' + msg.substr(0, space);
+    if (!normalizePlayerName(candidate) || !sCharacterCache->GetCharacterCacheByFullName(candidate))
+        return false;
 
-    std::string const& surname = Get(guid);
-    if (surname.empty() || surname.size() != space || !StringEqualI(std::string_view(msg).substr(0, space), surname))
-        return;
-
+    to = std::move(candidate);
     msg.erase(0, rest);
+    return true;
 }
 
 bool Set(ObjectGuid guid, std::string surname)
@@ -205,6 +215,10 @@ bool Set(ObjectGuid guid, std::string surname)
 
     CharacterDatabase.EscapeString(surname);
     CharacterDatabase.PExecute("UPDATE `characters` SET `surname` = '{}' WHERE `guid` = {}", surname, guid.GetCounter());
+
+    // Re-index under the new full name first: that is the name everything
+    // resolves by.
+    sCharacterCache->UpdateCharacterSurname(guid, surname);
 
     {
         std::unique_lock lock(StoreLock);
@@ -240,6 +254,19 @@ void HandleCreateRequest(WorldSession* session, std::string_view name, std::stri
     pending.Name = std::move(owner);
     pending.Surname = std::move(chosen);
     pending.Expires = GameTime::GetGameTime() + PendingLifetime;
+}
+
+std::string PeekPending(uint32 accountId, std::string const& name)
+{
+    auto itr = PendingByAccount.find(accountId);
+    if (itr == PendingByAccount.end() || !Enabled())
+        return "";
+
+    PendingSurname const& pending = itr->second;
+    if (pending.Expires < GameTime::GetGameTime() || !StringEqualI(pending.Name, name))
+        return "";
+
+    return pending.Surname;
 }
 
 void ApplyOnCreate(uint32 accountId, ObjectGuid guid, std::string const& name)

@@ -99,7 +99,7 @@ void WorldSession::HandleArenaTeamInviteOpcode(WorldPacket& recvData)
         if (!normalizePlayerName(invitedName))
             return;
 
-        player = ObjectAccessor::FindPlayerByName(invitedName);
+        player = ObjectAccessor::FindConnectedPlayerByFullName(invitedName);
     }
 
     if (!player)

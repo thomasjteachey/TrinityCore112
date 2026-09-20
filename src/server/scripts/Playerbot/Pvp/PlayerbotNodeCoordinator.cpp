@@ -67,9 +67,9 @@ namespace
 
     // Per enemy standing on a base of ours. Sixty is enough that one attacker
     // lifts a quiet base above an enemy base worth taking, which is the whole
-    // point: somebody comes back.
+    // point: somebody comes back. A base still capping for us counts the same:
+    // one click from him and the minute we have spent on it is gone.
     constexpr int32 kScorePerEnemyOnOurs = 60;
-    constexpr int32 kScorePerEnemyOnContestedOurs = 30;
     // Per enemy on a base we want. They are in the way, not an invitation.
     constexpr int32 kScorePerEnemyOnTheirs = 10;
 
@@ -83,10 +83,27 @@ namespace
     // stacks, so the squad arrives together instead of feeding in one by one.
     constexpr int32 kCrowdPenaltyDefense = 22;
     constexpr int32 kCrowdPenaltyAssault = 8;
-    // What a base that already has its quota gives up to one that does not.
-    constexpr int32 kQuotaMetPenalty = 60;
+    // What each body past a base's quota costs. It is charged per body over,
+    // not once, so a near base cannot quietly swallow every spare just because
+    // it is the cheapest place to walk to.
+    constexpr int32 kOverflowPenalty = 45;
     // Ties between equal bases go to the one our nearest free bot can reach.
     constexpr float kDistanceScoreWeight = 0.15f;
+
+    // A free base belongs to whichever side starts nearer it. Two thirds of
+    // the map is genuinely contested ground under this test: in Arathi Basin
+    // only the Stables and the Farm come out as home ground (190 y against
+    // 674, and 196 against 671), while the Blacksmith is 430 against 433.
+    constexpr float kHomeGroundRatio = 0.75f;
+
+    // Which side reaches a base first from the starting gates. It decides
+    // nothing once a base has been claimed - only how the opening is spread.
+    enum class NodeGround : uint8
+    {
+        Contested,  // both gates are about as far away: this is the match
+        Ours,       // ours to walk into, so one bot is sent to claim it
+        Theirs      // theirs to walk into: not worth a body while it is free
+    };
 
     bool IsFriendlySideStatus(BattlegroundNodeStatus status)
     {
@@ -109,6 +126,17 @@ namespace
         }
     }
 
+    char const* GetNodeGroundName(NodeGround ground)
+    {
+        switch (ground)
+        {
+            case NodeGround::Ours:   return "our side";
+            case NodeGround::Theirs: return "their side";
+            case NodeGround::Contested:
+            default:                 return "midfield";
+        }
+    }
+
     struct NodeState
     {
         uint32 nodeId = 0;
@@ -117,6 +145,7 @@ namespace
         ObjectGuid bannerGuid;
         uint32 enemiesNear = 0;
         uint32 alliesNear = 0;   // living friendly humans, who fill a quota too
+        NodeGround ground = NodeGround::Contested;
         uint32 quota = 0;
         int32 score = 0;
         uint32 assigned = 0;
@@ -238,6 +267,27 @@ namespace
             nodes.push_back(state);
         }
 
+        // Home ground, from the gates the two sides actually start at rather
+        // than from a table of base names. A battleground that does not
+        // declare starting positions simply has no home ground and opens the
+        // way it always did.
+        if (Position const* ourStart = battleground->GetTeamStartPosition(team))
+        {
+            if (Position const* theirStart = battleground->GetTeamStartPosition(
+                team == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE))
+            {
+                for (NodeState& state : nodes)
+                {
+                    float const fromUs = state.location.GetExactDist(ourStart);
+                    float const fromThem = state.location.GetExactDist(theirStart);
+                    if (fromUs < fromThem * kHomeGroundRatio)
+                        state.ground = NodeGround::Ours;
+                    else if (fromThem < fromUs * kHomeGroundRatio)
+                        state.ground = NodeGround::Theirs;
+                }
+            }
+        }
+
         Map::PlayerList const& players = map->GetPlayers();
         for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
         {
@@ -286,8 +336,29 @@ namespace
         }
     }
 
-    void ScoreNodes(std::vector<NodeState>& nodes, bool needBases, bool aheadOnBases, uint32 baseGarrison)
+    void ScoreNodes(std::vector<NodeState>& nodes, bool needBases, bool aheadOnBases, uint32 baseGarrison,
+        uint32 livingCount)
     {
+        // The opening. One bot is enough to claim a free base nobody else can
+        // reach first, so the rest of the team is shared over the bases the
+        // match is actually decided on, and none is walked across the map to
+        // a base the enemy will have clicked before it arrives.
+        uint32 homeBases = 0;
+        uint32 contestedBases = 0;
+        for (NodeState const& state : nodes)
+        {
+            if (state.status != BattlegroundNodeStatus::Neutral)
+                continue;
+            if (state.ground == NodeGround::Ours)
+                ++homeBases;
+            else if (state.ground == NodeGround::Contested)
+                ++contestedBases;
+        }
+
+        uint32 const spare = livingCount > homeBases ? livingCount - homeBases : 0u;
+        uint32 const contestedQuota = contestedBases ?
+            std::max<uint32>(2, (spare + contestedBases - 1) / contestedBases) : 0u;
+
         for (NodeState& state : nodes)
         {
             switch (state.status)
@@ -296,9 +367,12 @@ namespace
                     state.score = kScoreUnderAttack + int32(state.enemiesNear) * kScorePerEnemyOnOurs;
                     state.quota = std::max<uint32>(2, state.enemiesNear + 1);
                     break;
+                // A base capping for us is held exactly like one we own, and
+                // it is the more fragile of the two: the minute it has been
+                // standing there dies the moment an enemy clicks the banner.
                 case BattlegroundNodeStatus::FriendlyContested:
-                    state.score = kScoreFriendlyContested + int32(state.enemiesNear) * kScorePerEnemyOnContestedOurs;
-                    state.quota = std::max<uint32>(1, state.enemiesNear + 1);
+                    state.score = kScoreFriendlyContested + int32(state.enemiesNear) * kScorePerEnemyOnOurs;
+                    state.quota = std::max<uint32>(2, state.enemiesNear + 1);
                     break;
                 case BattlegroundNodeStatus::FriendlyControlled:
                     state.score = kScoreFriendlyControlled + int32(state.enemiesNear) * kScorePerEnemyOnOurs;
@@ -306,7 +380,18 @@ namespace
                     break;
                 case BattlegroundNodeStatus::Neutral:
                     state.score = kScoreNeutral - int32(state.enemiesNear) * kScorePerEnemyOnTheirs;
-                    state.quota = std::max<uint32>(2, state.enemiesNear + 1);
+                    switch (state.ground)
+                    {
+                        case NodeGround::Ours:
+                            state.quota = std::max<uint32>(1, state.enemiesNear + 1);
+                            break;
+                        case NodeGround::Theirs:
+                            state.quota = 0;
+                            break;
+                        default:
+                            state.quota = std::max<uint32>(contestedQuota, state.enemiesNear + 1);
+                            break;
+                    }
                     break;
                 case BattlegroundNodeStatus::EnemyContested:
                     state.score = kScoreEnemyContested - int32(state.enemiesNear) * kScorePerEnemyOnTheirs;
@@ -377,7 +462,7 @@ namespace
 
         bool const needBases = owned <= enemyOwned;
         uint32 const baseGarrison = owned > enemyOwned ? 2u : 1u;
-        ScoreNodes(nodes, needBases, owned > enemyOwned, baseGarrison);
+        ScoreNodes(nodes, needBases, owned > enemyOwned, baseGarrison, uint32(living.size()));
 
         // Bases win these matches, so a side that is not ahead may never talk
         // itself into sitting on everything it has. Recapturing a base of ours
@@ -425,29 +510,39 @@ namespace
             std::size_t chosenBot = living.size();
             float chosenScore = 0.0f;
 
-            for (NodeState& state : nodes)
+            // Quotas are filled before anybody is stacked past one. Without
+            // the first pass the nearest base wins every spare body on
+            // distance alone, and the opening is a ball on the home base
+            // instead of a team spread over the bases that decide the match.
+            for (int pass = 0; pass < 2 && !chosen; ++pass)
             {
-                bool const defensive = IsFriendlySideStatus(state.status) &&
-                    state.status != BattlegroundNodeStatus::FriendlyUnderAttack;
-                if (defensive && capDefenders && defenders >= maxDefenders)
-                    continue;
-
-                float cost = 0.0f;
-                std::size_t const candidate = findNearestFreeBot(state, cost);
-                if (candidate == living.size())
-                    continue;
-
-                float score = float(state.score);
-                score -= float(state.assigned) * float(defensive ? kCrowdPenaltyDefense : kCrowdPenaltyAssault);
-                if (state.assigned >= state.quota)
-                    score -= float(kQuotaMetPenalty);
-                score -= std::max(0.0f, cost) * kDistanceScoreWeight;
-
-                if (!chosen || score > chosenScore)
+                for (NodeState& state : nodes)
                 {
-                    chosen = &state;
-                    chosenBot = candidate;
-                    chosenScore = score;
+                    if (pass == 0 && state.assigned >= state.quota)
+                        continue;
+
+                    bool const defensive = IsFriendlySideStatus(state.status) &&
+                        state.status != BattlegroundNodeStatus::FriendlyUnderAttack;
+                    if (defensive && capDefenders && defenders >= maxDefenders)
+                        continue;
+
+                    float cost = 0.0f;
+                    std::size_t const candidate = findNearestFreeBot(state, cost);
+                    if (candidate == living.size())
+                        continue;
+
+                    float score = float(state.score);
+                    score -= float(state.assigned) * float(defensive ? kCrowdPenaltyDefense : kCrowdPenaltyAssault);
+                    if (state.assigned >= state.quota)
+                        score -= float(kOverflowPenalty) * float(state.assigned - state.quota + 1);
+                    score -= std::max(0.0f, cost) * kDistanceScoreWeight;
+
+                    if (!chosen || score > chosenScore)
+                    {
+                        chosen = &state;
+                        chosenBot = candidate;
+                        chosenScore = score;
+                    }
                 }
             }
 
@@ -643,6 +738,7 @@ std::vector<std::string> NodeCoordinator::DescribeTeams(Player const* observer)
         {
             std::ostringstream line;
             line << "  base " << state.nodeId << " " << GetNodeStatusName(state.status)
+                << " (" << GetNodeGroundName(state.ground) << ")"
                 << ": score " << state.score << ", wants " << state.quota
                 << ", sent " << assignedByNode[state.nodeId]
                 << ", enemies " << state.enemiesNear << ", allies " << state.alliesNear << ".";

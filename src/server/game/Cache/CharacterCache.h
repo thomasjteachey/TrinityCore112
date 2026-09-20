@@ -29,6 +29,10 @@ struct CharacterCacheEntry
 {
     ObjectGuid Guid;
     std::string Name;
+    // The family name, or "" (Miscellaneous/Surnames.h). Kept here because the
+    // name indexes below are built from "<Name> <Surname>": the pair is what
+    // identifies a character, and only the pair has to be unique.
+    std::string Surname;
     uint32 AccountId;
     uint8 Class;
     uint8 Race;
@@ -57,9 +61,22 @@ class TC_GAME_API CharacterCache
         void UpdateCharacterGuildId(ObjectGuid const& guid, ObjectGuid::LowType guildId);
         void UpdateCharacterArenaTeamId(ObjectGuid const& guid, uint8 slot, uint32 arenaTeamId);
         void UpdateCharacterTournamentMode(ObjectGuid const& guid, bool tournament);
+        // Re-indexes the character under its new full name.
+        void UpdateCharacterSurname(ObjectGuid const& guid, std::string const& surname);
 
         bool HasCharacterCacheEntry(ObjectGuid const& guid) const;
         CharacterCacheEntry const* GetCharacterCacheByGuid(ObjectGuid const& guid) const;
+
+        // "Elgrom Fernbloom" exactly, or "Elgrom" for a character with no
+        // surname. Nothing else resolves: this is what a player types, and a
+        // first name on its own no longer names anybody in particular.
+        CharacterCacheEntry const* GetCharacterCacheByFullName(std::string const& name) const;
+        ObjectGuid GetCharacterGuidByFullName(std::string const& name) const;
+
+        // The full name, or a first name that only one character answers to.
+        // For GM commands, the console and everything inside the server that
+        // knows characters by their first name - the playerbots above all.
+        // Ambiguous first names resolve to nobody rather than to a guess.
         CharacterCacheEntry const* GetCharacterCacheByName(std::string const& name) const;
 
         ObjectGuid GetCharacterGuidByName(std::string const& name) const;

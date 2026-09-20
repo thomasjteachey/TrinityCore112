@@ -57,6 +57,10 @@ void CharacterDatabaseConnection::DoPrepareStatements()
                      "LEFT JOIN character_declinedname AS cd ON c.guid = cd.guid LEFT JOIN guild_member AS gm ON c.guid = gm.guid "
                      "LEFT JOIN character_banned AS cb ON c.guid = cb.guid AND cb.active = 1 WHERE c.account = ?  AND c.deleteInfos_Name IS NULL ORDER BY c.guid", CONNECTION_ASYNC);
     PrepareStatement(CHAR_SEL_FREE_NAME, "SELECT guid, name, at_login FROM characters WHERE guid = ? AND account = ? AND NOT EXISTS (SELECT NULL FROM characters WHERE name = ?)", CONNECTION_ASYNC);
+    // Same row, without the "is the new name free" test: a family name makes
+    // the answer a pair, which the character cache knows and this cannot ask
+    // for without naming a column some realms do not have (Surnames.h).
+    PrepareStatement(CHAR_SEL_RENAME_TARGET, "SELECT guid, name, at_login FROM characters WHERE guid = ? AND account = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_SEL_CHAR_ZONE, "SELECT zone FROM characters WHERE guid = ?", CONNECTION_SYNCH);
     PrepareStatement(CHAR_SEL_CHARACTER_NAME_DATA, "SELECT race, class, gender, level, name FROM characters WHERE guid = ?", CONNECTION_SYNCH);
     PrepareStatement(CHAR_SEL_CHAR_POSITION_XYZ, "SELECT map, position_x, position_y, position_z FROM characters WHERE guid = ?", CONNECTION_SYNCH);

@@ -145,27 +145,44 @@ bool normalizePlayerName(std::string& name)
     if (name.empty())
         return false;
 
-    // Names leave the server with the character's family name attached
-    // (Miscellaneous/Surnames.h), so an invite, a mail or a /who typed off the
-    // screen comes back as "Elgrom Doomhammer". Only the first name is a key -
-    // it is still unique - so everything from the first space is dropped here,
-    // which covers every handler that resolves a name.
-    if (std::size_t const space = name.find(' '); space != std::string::npos)
-    {
-        name.erase(space);
-        if (name.empty())
-            return false;
-    }
-
     std::wstring tmp;
     if (!Utf8toWStr(name, tmp))
         return false;
 
+    // Names come back from the client with the family name on them
+    // (Miscellaneous/Surnames.h) - an invite, a mail or a friend addressed to
+    // "Elgrom Fernbloom" - and the pair is what identifies a character, so both
+    // halves are normalized and kept. A name typed with stray or doubled spaces
+    // still has to match one that was stored without them.
     wstrToLower(tmp);
-    if (!tmp.empty())
-        tmp[0] = wcharToUpper(tmp[0]);
+    std::wstring normalized;
+    normalized.reserve(tmp.size());
+    bool startOfWord = true;
+    for (wchar_t c : tmp)
+    {
+        if (c == L' ')
+        {
+            // Leading and doubled spaces are dropped by never opening a word
+            // for them; a trailing one is trimmed below.
+            if (!normalized.empty() && !startOfWord)
+            {
+                normalized += c;
+                startOfWord = true;
+            }
+            continue;
+        }
 
-    if (!WStrToUtf8(tmp, name))
+        normalized += startOfWord ? wcharToUpper(c) : c;
+        startOfWord = false;
+    }
+
+    if (!normalized.empty() && normalized.back() == L' ')
+        normalized.pop_back();
+
+    if (normalized.empty())
+        return false;
+
+    if (!WStrToUtf8(normalized, name))
         return false;
 
     return true;

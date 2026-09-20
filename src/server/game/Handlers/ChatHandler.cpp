@@ -582,11 +582,11 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
                 break;
             }
 
-            // "/w Elgrom Doomhammer hi" reached us split on the space inside the
-            // name: the target is already "Elgrom", and the family name is
-            // sitting at the front of the message (Miscellaneous/Surnames.h).
+            // "/w Elgrom Fernbloom hi" reached us split on the space inside the
+            // name: the target is "Elgrom" and the family name is at the front
+            // of the message (Miscellaneous/Surnames.h). Put them back together.
             if (lang != LANG_ADDON)
-                Surnames::StripLeadingSurname(to, msg);
+                Surnames::JoinWhisperTarget(to, msg);
 
             // A transient clone in the sender's match (battleground fill, a
             // Violet Hold ally, a "Dark" mirror) plays under an internal name

@@ -326,18 +326,24 @@ public:
                 }
             }
 
-            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHECK_NAME);
-            stmt->setString(0, newName);
-            PreparedQueryResult result = CharacterDatabase.Query(stmt);
-            if (result)
+            // The whole name has to be free - the new first name with the family
+            // name this character keeps (Miscellaneous/Surnames.h). With no
+            // family names the cache is keyed on the first name alone, which is
+            // the check this always was.
+            std::string fullName = newName;
+            if (std::string const& surname = Surnames::Get(player->GetGUID()); !surname.empty())
+                fullName += ' ' + surname;
+
+            CharacterCacheEntry const* taken = sCharacterCache->GetCharacterCacheByFullName(fullName);
+            if (taken && taken->Guid != player->GetGUID())
             {
-                handler->PSendSysMessage(LANG_RENAME_PLAYER_ALREADY_EXISTS, newName.c_str());
+                handler->PSendSysMessage(LANG_RENAME_PLAYER_ALREADY_EXISTS, fullName.c_str());
                 handler->SetSentErrorMessage(true);
                 return false;
             }
 
             // Remove declined name from db
-            stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_DECLINED_NAME);
+            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_DECLINED_NAME);
             stmt->setUInt32(0, player->GetGUID().GetCounter());
             CharacterDatabase.Execute(stmt);
 

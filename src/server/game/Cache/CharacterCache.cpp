@@ -30,7 +30,62 @@
 namespace
 {
     std::unordered_map<ObjectGuid, CharacterCacheEntry> _characterCacheStore;
+    // Keyed on the FULL name, "<Name> <Surname>", which is what identifies a
+    // character now that two of them may share a first name
+    // (Miscellaneous/Surnames.h). A character with no surname is keyed on its
+    // first name alone, so a realm without surnames behaves exactly as before.
     std::unordered_map<std::string, CharacterCacheEntry*> _characterCacheByNameStore;
+    // Every character answering to a first name. Almost always one; more than
+    // one means the first name on its own names nobody, which is the safe
+    // answer for the callers that still look characters up that way.
+    std::unordered_map<std::string, std::vector<CharacterCacheEntry*>> _characterCacheByFirstNameStore;
+
+    std::string FullName(std::string const& name, std::string const& surname)
+    {
+        if (surname.empty())
+            return name;
+
+        std::string full;
+        full.reserve(name.size() + surname.size() + 1);
+        full += name;
+        full += ' ';
+        full += surname;
+        return full;
+    }
+
+    void IndexByName(CharacterCacheEntry& data)
+    {
+        _characterCacheByNameStore[FullName(data.Name, data.Surname)] = &data;
+        _characterCacheByFirstNameStore[data.Name].push_back(&data);
+    }
+
+    // False for an entry that was never indexed - a transient copy playing
+    // under a name that belongs to somebody else.
+    bool UnindexByName(CharacterCacheEntry& data)
+    {
+        bool indexed = false;
+
+        std::string const full = FullName(data.Name, data.Surname);
+        auto itr = _characterCacheByNameStore.find(full);
+        if (itr != _characterCacheByNameStore.end() && itr->second == &data)
+        {
+            _characterCacheByNameStore.erase(itr);
+            indexed = true;
+        }
+
+        auto firstItr = _characterCacheByFirstNameStore.find(data.Name);
+        if (firstItr == _characterCacheByFirstNameStore.end())
+            return indexed;
+
+        std::vector<CharacterCacheEntry*>& sharing = firstItr->second;
+        std::size_t const before = sharing.size();
+        sharing.erase(std::remove(sharing.begin(), sharing.end(), &data), sharing.end());
+        indexed = indexed || sharing.size() != before;
+        if (sharing.empty())
+            _characterCacheByFirstNameStore.erase(firstItr);
+
+        return indexed;
+    }
 }
 
 CharacterCache::CharacterCache()
@@ -111,21 +166,25 @@ void CharacterCache::AddCharacterCacheEntry(ObjectGuid const& guid, uint32 accou
     for (uint8 i = 0; i < MAX_ARENA_SLOT; ++i)
         data.ArenaTeamId[i] = 0;                // Will be set in arena teams loading
     data.TournamentMode = false;                // Will be set by UpdateCharacterTournamentMode
+    data.Surname.clear();                       // Will be set by UpdateCharacterSurname
 
     // Transient copies need GUID-to-name query data, but may intentionally use
     // the same visible name as their source character. Do not replace the real
     // character's global name lookup entry in that case.
     if (indexByName)
-        _characterCacheByNameStore[name] = &data;
+        IndexByName(data);
 }
 
-void CharacterCache::DeleteCharacterCacheEntry(ObjectGuid const& guid, std::string const& name)
+void CharacterCache::DeleteCharacterCacheEntry(ObjectGuid const& guid, std::string const& /*name*/)
 {
-    auto nameItr = _characterCacheByNameStore.find(name);
-    if (nameItr != _characterCacheByNameStore.end() && nameItr->second && nameItr->second->Guid == guid)
-        _characterCacheByNameStore.erase(nameItr);
+    auto itr = _characterCacheStore.find(guid);
+    if (itr == _characterCacheStore.end())
+        return;
 
-    _characterCacheStore.erase(guid);
+    // The entry's own name, not the caller's: a surname makes them differ, and
+    // a transient copy was never indexed under either.
+    UnindexByName(itr->second);
+    _characterCacheStore.erase(itr);
 }
 
 void CharacterCache::UpdateCharacterData(ObjectGuid const& guid, std::string const& name, Optional<uint8> gender /*= {}*/, Optional<uint8> race /*= {}*/)
@@ -134,7 +193,7 @@ void CharacterCache::UpdateCharacterData(ObjectGuid const& guid, std::string con
     if (itr == _characterCacheStore.end())
         return;
 
-    std::string oldName = itr->second.Name;
+    UnindexByName(itr->second);
     itr->second.Name = name;
 
     if (gender)
@@ -147,8 +206,21 @@ void CharacterCache::UpdateCharacterData(ObjectGuid const& guid, std::string con
     sWorld->SendGlobalMessage(packet.Write());
 
     // Correct name -> pointer storage
-    _characterCacheByNameStore.erase(oldName);
-    _characterCacheByNameStore[name] = &itr->second;
+    IndexByName(itr->second);
+}
+
+void CharacterCache::UpdateCharacterSurname(ObjectGuid const& guid, std::string const& surname)
+{
+    auto itr = _characterCacheStore.find(guid);
+    if (itr == _characterCacheStore.end() || itr->second.Surname == surname)
+        return;
+
+    // A transient copy is not in the name index and must not be put into it by
+    // being given a surname.
+    bool const indexed = UnindexByName(itr->second);
+    itr->second.Surname = surname;
+    if (indexed)
+        IndexByName(itr->second);
 }
 
 void CharacterCache::UpdateCharacterLevel(ObjectGuid const& guid, uint8 level)
@@ -205,7 +277,7 @@ CharacterCacheEntry const* CharacterCache::GetCharacterCacheByGuid(ObjectGuid co
     return nullptr;
 }
 
-CharacterCacheEntry const* CharacterCache::GetCharacterCacheByName(std::string const& name) const
+CharacterCacheEntry const* CharacterCache::GetCharacterCacheByFullName(std::string const& name) const
 {
     auto itr = _characterCacheByNameStore.find(name);
     if (itr != _characterCacheByNameStore.end())
@@ -214,13 +286,31 @@ CharacterCacheEntry const* CharacterCache::GetCharacterCacheByName(std::string c
     return nullptr;
 }
 
+ObjectGuid CharacterCache::GetCharacterGuidByFullName(std::string const& name) const
+{
+    CharacterCacheEntry const* entry = GetCharacterCacheByFullName(name);
+    return entry ? entry->Guid : ObjectGuid::Empty;
+}
+
+CharacterCacheEntry const* CharacterCache::GetCharacterCacheByName(std::string const& name) const
+{
+    if (CharacterCacheEntry const* entry = GetCharacterCacheByFullName(name))
+        return entry;
+
+    // A first name on its own, which is what the server itself and every GM
+    // command knows characters by. It answers only while it is unambiguous;
+    // guessing between two characters would mail, invite or ban the wrong one.
+    auto itr = _characterCacheByFirstNameStore.find(name);
+    if (itr != _characterCacheByFirstNameStore.end() && itr->second.size() == 1)
+        return itr->second.front();
+
+    return nullptr;
+}
+
 ObjectGuid CharacterCache::GetCharacterGuidByName(std::string const& name) const
 {
-    auto itr = _characterCacheByNameStore.find(name);
-    if (itr != _characterCacheByNameStore.end())
-        return itr->second->Guid;
-
-    return ObjectGuid::Empty;
+    CharacterCacheEntry const* entry = GetCharacterCacheByName(name);
+    return entry ? entry->Guid : ObjectGuid::Empty;
 }
 
 bool CharacterCache::GetCharacterNameByGuid(ObjectGuid guid, std::string& name) const

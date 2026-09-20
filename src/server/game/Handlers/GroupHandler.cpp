@@ -102,7 +102,7 @@ void WorldSession::HandleGroupInviteOpcode(WorldPacket& recvData)
         return;
     }
 
-    Player* invitedPlayer = ObjectAccessor::FindPlayerByName(membername);
+    Player* invitedPlayer = ObjectAccessor::FindConnectedPlayerByFullName(membername);
 
     // no player
     if (!invitedPlayer)

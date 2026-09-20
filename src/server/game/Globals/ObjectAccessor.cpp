@@ -16,6 +16,7 @@
  */
 
 #include "ObjectAccessor.h"
+#include "CharacterCache.h"
 #include "Corpse.h"
 #include "Creature.h"
 #include "DynamicObject.h"
@@ -262,6 +263,12 @@ Player* ObjectAccessor::FindConnectedPlayer(ObjectGuid const& guid)
 Player* ObjectAccessor::FindConnectedPlayerByName(std::string_view name)
 {
     return PlayerNameMapHolder::Find(name);
+}
+
+Player* ObjectAccessor::FindConnectedPlayerByFullName(std::string_view name)
+{
+    ObjectGuid const guid = sCharacterCache->GetCharacterGuidByFullName(std::string(name));
+    return guid.IsEmpty() ? nullptr : FindConnectedPlayer(guid);
 }
 
 void ObjectAccessor::SaveAllPlayers()

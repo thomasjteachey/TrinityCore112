@@ -89,7 +89,7 @@ void WorldSession::HandleSendMail(WorldPackets::Mail::SendMail& sendMail)
 
     ObjectGuid receiverGuid;
     if (normalizePlayerName(sendMail.Info.Target))
-        receiverGuid = sCharacterCache->GetCharacterGuidByName(sendMail.Info.Target);
+        receiverGuid = sCharacterCache->GetCharacterGuidByFullName(sendMail.Info.Target);
 
     if (!receiverGuid)
     {

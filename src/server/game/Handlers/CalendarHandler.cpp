@@ -450,7 +450,7 @@ void WorldSession::HandleCalendarEventInvite(WorldPackets::Calendar::CalendarInv
         }
     };
 
-    if (Player* player = ObjectAccessor::FindConnectedPlayerByName(calendarEventInvite.Name))
+    if (Player* player = ObjectAccessor::FindConnectedPlayerByFullName(calendarEventInvite.Name))
     {
         // Invitee is online
         createInvite(player->GetGUID(), player->GetTeam(), player->GetGuildId(), player->GetSocial()->HasIgnore(playerGuid));
@@ -458,7 +458,7 @@ void WorldSession::HandleCalendarEventInvite(WorldPackets::Calendar::CalendarInv
     else
     {
         // Invitee offline, get data from storage
-        CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByName(inviteeName);
+        CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByFullName(inviteeName);
         if (!characterInfo)
         {
             sCalendarMgr->SendCalendarCommandResult(playerGuid, CALENDAR_ERROR_PLAYER_NOT_FOUND);

@@ -46,7 +46,7 @@ void WorldSession::HandleAddFriendOpcode(WorldPacket& recvData)
     TC_LOG_DEBUG("network", "WorldSession::HandleAddFriendOpcode: {} asked to add friend: {}",
         GetPlayer()->GetName(), friendName);
 
-    CharacterCacheEntry const* friendCharacterInfo = sCharacterCache->GetCharacterCacheByName(friendName);
+    CharacterCacheEntry const* friendCharacterInfo = sCharacterCache->GetCharacterCacheByFullName(friendName);
     if (!friendCharacterInfo)
     {
         sSocialMgr->SendFriendStatus(GetPlayer(), FRIEND_NOT_FOUND, ObjectGuid::Empty);
@@ -140,7 +140,7 @@ void WorldSession::HandleAddIgnoreOpcode(WorldPacket& recvData)
     TC_LOG_DEBUG("network", "WorldSession::HandleAddIgnoreOpcode: {} asked to Ignore: {}",
         GetPlayer()->GetName(), ignoreName);
 
-    ObjectGuid ignoreGuid = sCharacterCache->GetCharacterGuidByName(ignoreName);
+    ObjectGuid ignoreGuid = sCharacterCache->GetCharacterGuidByFullName(ignoreName);
     FriendsResult ignoreResult = FRIEND_IGNORE_NOT_FOUND;
     if (!ignoreGuid.IsEmpty())
     {

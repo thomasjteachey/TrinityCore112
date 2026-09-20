@@ -466,13 +466,35 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
         }
     }
 
+    // What has to be free is the whole name, first and family together
+    // (Miscellaneous/Surnames.h): two characters may share a first name as long
+    // as their family names differ. The character cache knows every pair; the
+    // query below still catches a first name taken by a character that has no
+    // family name of its own.
+    bool const surnames = Surnames::Enabled();
+    std::string const pendingSurname = surnames ? Surnames::PeekPending(GetAccountId(), createInfo->Name) : "";
+    if (surnames)
+    {
+        std::string fullName = createInfo->Name;
+        if (!pendingSurname.empty())
+            fullName += ' ' + pendingSurname;
+
+        if (sCharacterCache->GetCharacterCacheByFullName(fullName))
+        {
+            SendCharCreate(CHAR_CREATE_NAME_IN_USE);
+            return;
+        }
+    }
+
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHECK_NAME);
     stmt->setString(0, createInfo->Name);
 
     _queryProcessor.AddCallback(CharacterDatabase.AsyncQuery(stmt)
-        .WithChainingPreparedCallback([this](QueryCallback& queryCallback, PreparedQueryResult result)
+        .WithChainingPreparedCallback([this, surnames](QueryCallback& queryCallback, PreparedQueryResult result)
     {
-        if (result)
+        // With family names on, the pair was checked above and a shared first
+        // name is allowed.
+        if (result && !surnames)
         {
             SendCharCreate(CHAR_CREATE_NAME_IN_USE);
             return;
@@ -1364,13 +1386,29 @@ void WorldSession::HandleCharRenameOpcode(WorldPacket& recvData)
         return;
     }
 
-    // Ensure that the character belongs to the current account, that rename at login is enabled
-    // and that there is no character with the desired new name
-    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_FREE_NAME);
+    // What has to be free is the whole name: the new first name together with
+    // the family name this character keeps (Miscellaneous/Surnames.h). Without
+    // family names the cache is keyed on the first name alone, so this is the
+    // same test it always was.
+    std::string fullName = renameInfo->Name;
+    if (std::string const& surname = Surnames::Get(renameInfo->Guid); !surname.empty())
+        fullName += ' ' + surname;
+
+    if (CharacterCacheEntry const* taken = sCharacterCache->GetCharacterCacheByFullName(fullName))
+    {
+        if (taken->Guid != renameInfo->Guid)
+        {
+            SendCharRename(CHAR_CREATE_NAME_IN_USE, renameInfo.get());
+            return;
+        }
+    }
+
+    // Ensure that the character belongs to the current account and that rename
+    // at login is enabled.
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_RENAME_TARGET);
 
     stmt->setUInt32(0, renameInfo->Guid.GetCounter());
     stmt->setUInt32(1, GetAccountId());
-    stmt->setString(2, renameInfo->Name);
 
     _queryProcessor.AddCallback(CharacterDatabase.AsyncQuery(stmt)
         .WithPreparedCallback(std::bind(&WorldSession::HandleCharRenameCallBack, this, renameInfo, std::placeholders::_1)));

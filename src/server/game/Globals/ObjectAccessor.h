@@ -81,6 +81,12 @@ namespace ObjectAccessor
     TC_GAME_API Player* FindConnectedPlayer(ObjectGuid const&);
     TC_GAME_API Player* FindConnectedPlayerByName(std::string_view name);
 
+    // The online player a PLAYER typed the name of: "Elgrom Fernbloom", or
+    // "Elgrom" for a character with no family name, and nothing else
+    // (Miscellaneous/Surnames.h). Goes through the character cache rather than
+    // the online name map, which only knows first names.
+    TC_GAME_API Player* FindConnectedPlayerByFullName(std::string_view name);
+
     // when using this, you must use the hashmapholder's lock
     TC_GAME_API HashMapHolder<Player>::MapType const& GetPlayers();
 

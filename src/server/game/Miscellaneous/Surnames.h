@@ -73,11 +73,16 @@ namespace Surnames
     void Decorate(ObjectGuid guid, std::string& name);
     std::string Decorated(ObjectGuid guid, std::string_view name);
 
-    // A whisper is the one line the client splits for us: "/w Elgrom Doomhammer
-    // hi" arrives as the target "Elgrom" and the message "Doomhammer hi". Drops
-    // that first word when it is exactly the target's family name and something
-    // follows it.
-    void StripLeadingSurname(std::string const& name, std::string& msg);
+    // A whisper is the one line the client splits for us: "/w Elgrom Fernbloom
+    // hi" arrives as the target "Elgrom" and the message "Fernbloom hi". Moves
+    // that first word back onto the target when the two together name a real
+    // character, and says whether it did.
+    bool JoinWhisperTarget(std::string& to, std::string& msg);
+
+    // The surname waiting for the character about to be created on this
+    // account, without consuming it: the name it will be created under has to
+    // be checked as a pair.
+    std::string PeekPending(uint32 accountId, std::string const& name);
 
     // Writes `characters`.`surname`, updates the cache and tells every client
     // holding the old name to ask again. An empty surname clears it. False if

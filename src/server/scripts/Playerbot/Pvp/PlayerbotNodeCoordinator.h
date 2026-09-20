@@ -47,11 +47,19 @@ namespace playerbot
 //   - a base of ours that is being taken outranks everything on the map, and
 //     wants two bots plus one per enemy standing on it;
 //   - a base of ours with enemies on it climbs by sixty a head, so a lone
-//     attacker pulls the two nearest bots off whatever they were doing;
-//   - a free base wants a pair, which is why the opening is still a spread
-//     across the map and not a single ball;
+//     attacker pulls the two nearest bots off whatever they were doing, and
+//     one still capping for us is held the same way: it is the more fragile
+//     of the two, since one click ends the minute it has been standing there;
 //   - a base the enemy holds wants a squad of at least three, so the bots
 //     arrive together rather than feeding in one at a time.
+//
+// A FREE base is read off the starting gates instead. One bot is sent to
+// claim the base only we can reach first, none is walked across the map to
+// the one only they can, and the whole rest of the team is shared over the
+// bases in between - the midfield, which is where these matches are decided.
+// Home ground is geometry, not a table of base names: a base counts as one
+// side's when it is within three quarters of the distance from that side's
+// gate. In Arathi Basin that is the Stables and the Farm and nothing else.
 //
 // Bodies are then handed out nearest-first, quotas before spares, with the
 // base a bot already had worth a discount so assignments do not churn. Only
