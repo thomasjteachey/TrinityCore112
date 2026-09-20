@@ -23,6 +23,7 @@
 #include "GameTime.h"
 #include "Log.h"
 #include "MapManager.h"
+#include "Miscellaneous/Surnames.h"
 #include "NPCHandler.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
@@ -46,7 +47,7 @@ void WorldSession::SendNameQueryOpcode(ObjectGuid guid)
     }
 
     data << uint8(0);                               // name known
-    data << nameData->Name;                         // played name
+    data << Surnames::Decorated(guid, nameData->Name); // played name, plus the family name if there is one
     data << uint8(0);                               // realm name - only set for cross realm interaction (such as Battlegrounds)
     data << uint8(nameData->Race);
     data << uint8(nameData->Sex);

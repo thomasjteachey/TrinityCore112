@@ -40,6 +40,7 @@
 #include "Map.h"
 #include "Metric.h"
 #include "Miscellaneous/CharacterScreen.h"
+#include "Miscellaneous/Surnames.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "MotionMaster.h"
 #include "ObjectAccessor.h"
@@ -710,6 +711,9 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
                     TC_LOG_INFO("entities.player.character", "Account: {} (IP: {}) Create Character: {} {}", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
                     sScriptMgr->OnPlayerCreate(newChar.get());
                     sCharacterCache->AddCharacterCacheEntry(newChar->GetGUID(), GetAccountId(), newChar->GetName(), newChar->GetNativeGender(), newChar->GetRace(), newChar->GetClass(), newChar->GetLevel());
+                    // The family name typed on the create screen, now that the
+                    // row it updates exists (Miscellaneous/Surnames.h).
+                    Surnames::ApplyOnCreate(GetAccountId(), newChar->GetGUID(), newChar->GetName());
                     if (newChar->HasTournamentModeFlag())
                         sCharacterCache->UpdateCharacterTournamentMode(newChar->GetGUID(), true);
                     SendCharCreate(CHAR_CREATE_SUCCESS);

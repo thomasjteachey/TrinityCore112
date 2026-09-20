@@ -16,6 +16,7 @@
  */
 
 #include "Miscellaneous/CharacterScreen.h"
+#include "Miscellaneous/Surnames.h"
 #include "CharacterCache.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
@@ -206,6 +207,8 @@ void HandleGlueRequest(WorldSession* session, std::string const& text)
         HandleOrder(session, parts[1]);
     else if (parts.size() == 3 && parts[0] == "CREATE")
         HandleCreate(session, parts[1], parts[2]);
+    else if (parts.size() == 3 && parts[0] == "SURNAME")
+        Surnames::HandleCreateRequest(session, parts[1], parts[2]);
     else
         TC_LOG_DEBUG("network", "CharacterScreen: account {} sent an unrecognised glue request.", session->GetAccountId());
 }

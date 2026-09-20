@@ -29,6 +29,7 @@ EndScriptData */
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
 #include "Log.h"
+#include "Miscellaneous/Surnames.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
@@ -71,6 +72,8 @@ public:
             { "level",         HandleCharacterLevelCommand,          rbac::RBAC_PERM_COMMAND_CHARACTER_LEVEL,           Console::Yes },
             { "rename",        HandleCharacterRenameCommand,         rbac::RBAC_PERM_COMMAND_CHARACTER_RENAME,          Console::Yes },
             { "reputation",    HandleCharacterReputationCommand,     rbac::RBAC_PERM_COMMAND_CHARACTER_REPUTATION,      Console::Yes },
+            // Same permission as a rename: it is the other half of a name.
+            { "surname",       HandleCharacterSurnameCommand,        rbac::RBAC_PERM_COMMAND_CHARACTER_RENAME,          Console::Yes },
             { "titles",        HandleCharacterTitlesCommand,         rbac::RBAC_PERM_COMMAND_CHARACTER_TITLES,          Console::Yes },
         };
 
@@ -386,6 +389,77 @@ public:
                 CharacterDatabase.Execute(stmt);
             }
         }
+
+        return true;
+    }
+
+    // .character surname [$name] [$surname|none]
+    //
+    // The family name shown after the character's own name everywhere
+    // (Miscellaneous/Surnames.h). With no surname it reports the one on file;
+    // "none" takes it away. Held to the same rules as a first name, and it does
+    // not have to be unique.
+    static bool HandleCharacterSurnameCommand(ChatHandler* handler, Optional<PlayerIdentifier> player, Optional<std::string_view> surnameV)
+    {
+        if (!player && surnameV)
+            return false;
+
+        if (!player)
+            player = PlayerIdentifier::FromTarget(handler);
+        if (!player)
+            return false;
+
+        if (!Surnames::Enabled())
+        {
+            handler->SendSysMessage("Surnames are off on this realm (Centurion.Surnames.Enable, and the `characters`.`surname` column).");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        if (handler->HasLowerSecurity(nullptr, player->GetGUID()))
+            return false;
+
+        if (!surnameV)
+        {
+            std::string const& current = Surnames::Get(player->GetGUID());
+            if (current.empty())
+                handler->PSendSysMessage("%s has no surname.", player->GetName());
+            else
+                handler->PSendSysMessage("%s %s (%s).", player->GetName(), current, player->GetGUID().ToString());
+            return true;
+        }
+
+        std::string surname{ *surnameV };
+        bool const clearing = StringEqualI(surname, "none") || surname == "-";
+        if (clearing)
+            surname.clear();
+        else
+        {
+            LocaleConstant const locale = player->IsConnected() ? player->GetConnectedPlayer()->GetSession()->GetSessionDbcLocale() : sWorld->GetDefaultDbcLocale();
+            if (Surnames::Check(surname, locale) != CHAR_NAME_SUCCESS)
+            {
+                handler->SendSysMessage(LANG_BAD_VALUE);
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+        }
+
+        if (!Surnames::Set(player->GetGUID(), surname))
+        {
+            handler->SendSysMessage(LANG_BAD_VALUE);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        if (clearing)
+            handler->PSendSysMessage("%s has no surname any more.", player->GetName());
+        else
+            handler->PSendSysMessage("%s is now %s %s.", player->GetName(), player->GetName(), surname);
+
+        if (WorldSession* session = handler->GetSession())
+            sLog->OutCommand(session->GetAccountId(), "GM {} (Account: {}) set the surname of {} ({}) to '{}'", session->GetPlayerName(), session->GetAccountId(), player->GetName(), player->GetGUID().ToString(), surname);
+        else
+            sLog->OutCommand(0, "CONSOLE set the surname of {} ({}) to '{}'", player->GetName(), player->GetGUID().ToString(), surname);
 
         return true;
     }

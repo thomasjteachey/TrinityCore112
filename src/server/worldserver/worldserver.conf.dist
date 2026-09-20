@@ -5576,10 +5576,28 @@ Centurion.WorldPrices.QuestSocks = ""
 #                     created.
 #        Default:     0 - (Disabled)
 #                     1 - (Enabled)
+#
+#    Centurion.Surnames.Enable
+#        Description: Family names. A character may be given a second name, typed on the
+#                     character create screen next to the first one, and it is shown after
+#                     the character's own name everywhere the client asks the server for a
+#                     name: nameplates, chat, tooltips, the character list, party and raid
+#                     frames, the guild roster, /who and arena teams.
+#                     The name itself is untouched and stays unique on its own; the surname
+#                     lives in `characters`.`surname`, which must be added by hand
+#                     (ALTER TABLE `characters` ADD COLUMN `surname` VARCHAR(12) NOT NULL
+#                     DEFAULT '' AFTER `name`). Without the column this stays off and says so
+#                     in the startup log.
+#                     A name typed back at the server may carry the surname ("Elgrom
+#                     Doomhammer" in an invite or a mail): everything from the first space is
+#                     dropped, so those still resolve.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
 
 Centurion.CharacterSelect.Reorder = 0
 Centurion.CharacterSelect.TournamentZoneId = 0
 Centurion.CharacterCreate.Challenges = 0
+Centurion.Surnames.Enable = 0
 
 #
 #    Centurion.Pvp.WaiveReagentsAndAmmo

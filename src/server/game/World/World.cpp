@@ -25,6 +25,7 @@
 #include "Miscellaneous/CooldownStash.h"
 #include "Miscellaneous/DepletedMarks.h"
 #include "Miscellaneous/Mokgora.h"
+#include "Miscellaneous/Surnames.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "AutoBalance/AutoBalanceConfig.h"
 #include "VanillaRaids/VanillaRaids.h"
@@ -1641,6 +1642,9 @@ void World::LoadConfigSettings(bool reload)
     // challenge modes chosen at creation (Miscellaneous/CharacterScreen.h).
     CharacterScreen::LoadConfig();
 
+    // Family names, picked on the create screen (Miscellaneous/Surnames.h).
+    Surnames::LoadConfig();
+
     // Vanilla 40-player Naxxramas and Onyxia, riding on raid difficulty 2 of
     // maps 533 and 249 so the level 80 versions keep difficulties 0 and 1
     // (VanillaRaids/VanillaRaids.h).
@@ -2156,6 +2160,10 @@ void World::SetInitialWorldSettings()
 
     TC_LOG_INFO("server.loading", "Loading Character List Order...");
     CharacterScreen::LoadOrder();
+
+    // After the character cache: a surname only decorates a name already in it.
+    TC_LOG_INFO("server.loading", "Loading Character Surnames...");
+    Surnames::Load();
 
     TC_LOG_INFO("server.loading", "Loading Exploration BaseXP Data...");
     sObjectMgr->LoadExplorationBaseXP();

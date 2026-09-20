@@ -24,6 +24,7 @@
 #include "Group.h"
 #include "Log.h"
 #include "Map.h"
+#include "Miscellaneous/Surnames.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
@@ -444,7 +445,7 @@ void ArenaTeam::Roster(WorldSession* session)
 
         data << uint64(itr->Guid);                              // guid
         data << uint8((player ? 1 : 0));                        // online flag
-        data << itr->Name;                                      // member name
+        data << Surnames::Decorated(itr->Guid, itr->Name);       // member name, plus the family name
         data << uint32((itr->Guid == GetCaptain() ? 0 : 1));    // captain flag 0 captain 1 member
         data << uint8((player ? player->GetLevel() : 0));       // unknown, level?
         data << uint8(itr->Class);                              // class

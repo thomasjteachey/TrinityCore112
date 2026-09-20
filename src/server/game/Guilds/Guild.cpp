@@ -29,6 +29,7 @@
 #include "GuildPackets.h"
 #include "Language.h"
 #include "Log.h"
+#include "Miscellaneous/Surnames.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
@@ -1266,7 +1267,8 @@ void Guild::HandleRoster(WorldSession* session)
         memberData.ClassID = member.GetClass();
         memberData.Gender = member.GetGender();
 
-        memberData.Name = member.GetName();
+        // Plus the family name, as everywhere else (Miscellaneous/Surnames.h).
+        memberData.Name = Surnames::Decorated(member.GetGUID(), member.GetName());
         memberData.Note = member.GetPublicNote();
         if (sendOfficerNote)
             memberData.OfficerNote = member.GetOfficerNote();

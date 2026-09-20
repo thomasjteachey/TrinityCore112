@@ -37,6 +37,7 @@
 #include "Language.h"
 #include "Log.h"
 #include "Miscellaneous/Mokgora.h"
+#include "Miscellaneous/Surnames.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
@@ -580,6 +581,12 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
                 SendPlayerNotFoundNotice(to);
                 break;
             }
+
+            // "/w Elgrom Doomhammer hi" reached us split on the space inside the
+            // name: the target is already "Elgrom", and the family name is
+            // sitting at the front of the message (Miscellaneous/Surnames.h).
+            if (lang != LANG_ADDON)
+                Surnames::StripLeadingSurname(to, msg);
 
             // A transient clone in the sender's match (battleground fill, a
             // Violet Hold ally, a "Dark" mirror) plays under an internal name

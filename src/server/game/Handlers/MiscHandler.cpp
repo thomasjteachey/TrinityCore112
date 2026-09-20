@@ -38,6 +38,7 @@
 #include "GuildMgr.h"
 #include "Language.h"
 #include "Log.h"
+#include "Miscellaneous/Surnames.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "MapManager.h"
 #include "MiscPackets.h"
@@ -488,7 +489,7 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
         if (targetIsBot && !playerbotWhoTag.empty())
             guildName = guildName.empty() ? playerbotWhoTag : guildName + " " + playerbotWhoTag;
 
-        data << target.GetPlayerName();                   // player name
+        data << Surnames::Decorated(target.GetGuid(), target.GetPlayerName()); // player name, plus the family name
         data << guildName;                                // guild name, tagged for bots
         data << uint32(lvl);                              // player level
         data << uint32(class_);                           // player class

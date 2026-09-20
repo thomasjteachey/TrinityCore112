@@ -27,6 +27,7 @@
 #include "Miscellaneous/CharacterScreen.h"
 #include "Miscellaneous/CooldownStash.h"
 #include "Miscellaneous/Mokgora.h"
+#include "Miscellaneous/Surnames.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "VanillaRaids/VanillaRaids.h"
 #include "AchievementMgr.h"
@@ -1992,7 +1993,8 @@ bool Player::BuildEnumData(PreparedQueryResult result, WorldPacket* data)
     }
 
     *data << ObjectGuid(HighGuid::Player, guid);
-    *data << fields[1].GetString();                         // name
+    // The family name shows on the character list too (Miscellaneous/Surnames.h).
+    *data << Surnames::Decorated(ObjectGuid(HighGuid::Player, guid), fields[1].GetString()); // name
     *data << uint8(plrRace);                                // race
     *data << uint8(plrClass);                               // class
     *data << uint8(gender);                                 // gender

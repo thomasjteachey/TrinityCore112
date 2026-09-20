@@ -40,6 +40,8 @@ class WorldSession;
 //   "ORDER\t<name>,<name>,..."  every character on the account, top to bottom
 //   "CREATE\t<name>\t<mask>"    challenge modes for the character about to be
 //                               created, bit n = ChallengeModeSettings n
+//   "SURNAME\t<name>\t<surname>" the family name for that character, applied
+//                               when it is created (Miscellaneous/Surnames.h)
 // Everything is inert with the keys at their defaults.
 namespace CharacterScreen
 {

@@ -33,6 +33,7 @@
 #include "MapManager.h"
 #include "Log.h"
 #include "LFGMgr.h"
+#include "Miscellaneous/Surnames.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "Random.h"
 #include "SpellAuras.h"
@@ -1762,7 +1763,7 @@ void Group::SendUpdateToPlayer(ObjectGuid playerGUID, MemberSlot* slot)
         uint8 onlineState = (member && !member->GetSession()->PlayerLogout()) ? MEMBER_STATUS_ONLINE : MEMBER_STATUS_OFFLINE;
         onlineState = onlineState | ((isBGGroup() || isBFGroup()) ? MEMBER_STATUS_PVP : 0);
 
-        data << citr->name;
+        data << Surnames::Decorated(citr->guid, citr->name); // name, plus the family name (Miscellaneous/Surnames.h)
         data << uint64(citr->guid);                     // guid
         data << uint8(onlineState);                     // online-state
         data << uint8(citr->group);                     // groupid

@@ -38,6 +38,7 @@ EndScriptData */
 #include "Log.h"
 #include "LootMgr.h"
 #include "MapManager.h"
+#include "Miscellaneous/Surnames.h"
 #include "ObjectMgr.h"
 #include "SkillDiscovery.h"
 #include "SkillExtraItems.h"
@@ -88,6 +89,7 @@ public:
             { "battleground_template",         rbac::RBAC_PERM_COMMAND_RELOAD_BATTLEGROUND_TEMPLATE,            true,  &HandleReloadBattlegroundTemplate,              "" },
             { "broadcast_text",                rbac::RBAC_PERM_COMMAND_RELOAD_BROADCAST_TEXT,                   true,  &HandleReloadBroadcastTextCommand,              "" },
             { "conditions",                    rbac::RBAC_PERM_COMMAND_RELOAD_CONDITIONS,                       true,  &HandleReloadConditions,                        "" },
+            { "character_surname",             rbac::RBAC_PERM_COMMAND_RELOAD_CONFIG,                           true,  &HandleReloadCharacterSurnameCommand,           "" },
             { "config",                        rbac::RBAC_PERM_COMMAND_RELOAD_CONFIG,                           true,  &HandleReloadConfigCommand,                     "" },
             { "creature_text",                 rbac::RBAC_PERM_COMMAND_RELOAD_CREATURE_TEXT,                    true,  &HandleReloadCreatureText,                      "" },
             { "creature_questender",           rbac::RBAC_PERM_COMMAND_RELOAD_CREATURE_QUESTENDER,              true,  &HandleReloadCreatureQuestEnderCommand,         "" },
@@ -329,6 +331,16 @@ public:
         HandleReloadLocalesQuestOfferRewardCommand(handler, "a");
         HandleReloadLocalesQuestRequestItemsCommand(handler, "a");
         HandleReloadLocalesQuestGreetingCommand(handler, "");
+        return true;
+    }
+
+    // Family names are bulk-edited straight in `characters`.`surname`
+    // (Miscellaneous/Surnames.h), so they need a way back into a running realm.
+    static bool HandleReloadCharacterSurnameCommand(ChatHandler* handler, char const* /*args*/)
+    {
+        TC_LOG_INFO("misc", "Re-Loading character surnames...");
+        Surnames::Load();
+        handler->SendGlobalGMSysMessage("Character surnames reloaded. Players already in the world keep the old name until they see the character again.");
         return true;
     }
 
