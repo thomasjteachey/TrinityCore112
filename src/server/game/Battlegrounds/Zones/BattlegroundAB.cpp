@@ -638,7 +638,7 @@ void BattlegroundAB::Reset()
         m_BannerTimers[i].timer = 0;
     }
 
-    for (uint8 i = 0; i < BG_AB_ALL_NODES_COUNT + 5; ++i)//+5 for aura triggers
+    for (uint8 i = 0; i < BG_AB_ALL_NODES_COUNT; ++i)//one spirit guide per node
         if (BgCreatures[i])
             DelCreature(i);
 }
