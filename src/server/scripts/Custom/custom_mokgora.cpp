@@ -29,7 +29,11 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "SpellAuraEffects.h"
+#include "SpellScript.h"
 #include "WorldSession.h"
+
+#include <cmath>
 
 #include "custom_barracks_hardcore.h"
 
@@ -46,6 +50,56 @@ namespace
         return BarracksHardcore::IsPlayerbot(player);
     }
 }
+
+// Coward!'s stat reduction, turned from a percentage into a flat number.
+//
+// Only a FLAT SPELL_AURA_MOD_STAT writes UNIT_FIELD_NEGSTAT, and the character
+// sheet prints a stat in red only when that field is negative
+// (Unit::UpdateStatBuffMod feeds it; PaperDollFrame_SetStat reads it). A
+// percentage aura - 80 MOD_PERCENT_STAT, which Resurrection Sickness uses, or
+// 137 MOD_TOTAL_STAT_PERCENTAGE - only ever MULTIPLIES that field, and
+// multiplying zero leaves zero. So a percentage debuff shrinks the green number
+// and can never redden it, res sickness included.
+//
+// The percentage still lives in the DBC, as those effects' base points: this
+// reads the -20 that arrives in `amount` AS a percent and replaces it with what
+// that percent is worth on this character. One source of truth, and no config
+// key to drift out of step with the spell data.
+//
+// Snapshot, deliberately: canBeRecalculated is left alone but the value is
+// taken once, when the brand lands. Three days of gear changes will drift it,
+// which is the price of the sheet turning red at all.
+class spell_mokgora_coward : public AuraScript
+{
+    PrepareAuraScript(spell_mokgora_coward);
+
+    void CalcFlatStat(AuraEffect const* aurEff, int32& amount, bool& /*canBeRecalculated*/)
+    {
+        // Registered for every effect, so ignore the ones that are not stats -
+        // the same script covers the damage and resistance effects, which are
+        // honest percentages and want no help.
+        if (aurEff->GetAuraType() != SPELL_AURA_MOD_STAT)
+            return;
+
+        Unit* owner = GetUnitOwner();
+        if (!owner)
+            return;
+
+        int32 const miscValue = aurEff->GetMiscValue();
+        if (miscValue < 0 || miscValue >= MAX_STATS)
+            return;
+
+        float const percent = float(amount);                 // the DBC's -20
+        float const current = owner->GetStat(Stats(miscValue));
+
+        amount = int32(std::lround(current * percent / 100.0f));
+    }
+
+    void Register() override
+    {
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_mokgora_coward::CalcFlatStat, EFFECT_ALL, SPELL_AURA_ANY);
+    }
+};
 
 class custom_mokgora_world : public WorldScript
 {
@@ -168,6 +222,7 @@ public:
 
 void AddSC_custom_mokgora()
 {
+    RegisterSpellScript(spell_mokgora_coward);
     new custom_mokgora_world();
     new custom_mokgora_player();
     new custom_mokgora_commands();

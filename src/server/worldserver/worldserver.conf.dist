@@ -2935,11 +2935,11 @@ Battleground.GiveXPForKills = 0
 #        Description: Additional multiplier applied only when arena honor is converted
 #                     into experience below the level cap. This does not change
 #                     battleground experience, arena money, or level-cap arena honor.
-#        Default:     0.2 (one fifth)
+#        Default:     0.4 (two fifths)
 
 Centurion.Battleground.XpInsteadOfHonor = 0
 Centurion.Battleground.XpInsteadOfHonor.HonorPerLevel = 2240
-Centurion.Battleground.ArenaExperienceMultiplier = 0.2
+Centurion.Battleground.ArenaExperienceMultiplier = 0.4
 
 #
 #    Centurion.Battleground.BlockArtifactGear
@@ -3434,11 +3434,25 @@ CharDelete.KeepDays = 30
 #                     fleeing.
 #        Default:     10
 #
-#    Centurion.Mokgora.CowardSpell
-#        Description: The Coward! aura, worn by anyone who leaves the ring or
-#                     logs out of it. Blizzard's is -20% to all attributes,
-#                     damage done, armour and resistances. 0 disables the brand.
-#        Default:     0
+#    Centurion.Mokgora.CowardSpells
+#        Description: The Coward! auras, worn by anyone who leaves the ring or
+#                     logs out of it: -20% to all attributes, damage done,
+#                     armour and resistances. Empty disables the brand.
+#
+#                     A SPACE-SEPARATED LIST, because five stats plus damage
+#                     plus resistance is seven effects and a 3.3.5 spell has
+#                     three slots. The FIRST id is the visible debuff; the rest
+#                     are hidden companions the client is never told about, so
+#                     they need no client patch. All are applied together and
+#                     given the same duration, so the player sees one icon.
+#
+#                     The stat effects are FLAT, not percentage, and that is
+#                     deliberate: only a flat SPELL_AURA_MOD_STAT writes
+#                     UNIT_FIELD_NEGSTAT, and the character sheet prints a stat
+#                     in red only when that field is negative. The percentage
+#                     lives in the spell's own base points and spell_mokgora_coward
+#                     converts it to the flat value when the brand lands.
+#        Default:     (empty)
 #
 #    Centurion.Mokgora.CowardDays
 #        Description: How long Coward! is advertised as lasting, for the text the
@@ -3471,7 +3485,7 @@ Centurion.Mokgora.ChallengeRange = 10
 Centurion.Mokgora.OfferSeconds = 30
 Centurion.Mokgora.BoundsYards = 150
 Centurion.Mokgora.BoundsGraceSeconds = 10
-Centurion.Mokgora.CowardSpell = 0
+Centurion.Mokgora.CowardSpells = ""
 Centurion.Mokgora.CowardDays = 3
 Centurion.Mokgora.RequireDuelArea = 1
 Centurion.Mokgora.AnnounceStart = 1

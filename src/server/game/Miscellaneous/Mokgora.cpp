@@ -41,7 +41,9 @@
 #include "WorldSession.h"
 
 #include <algorithm>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace
 {
@@ -70,7 +72,14 @@ namespace
 
         // Coward!, worn for three days by anyone who runs. -20% to attributes,
         // damage done, armour and resistances.
-        uint32 CowardSpell = 0;
+        //
+        // THREE spell ids, not one. Five stats plus damage plus resistance is
+        // seven effects and a 3.3.5 spell has three slots, so it is split: the
+        // first id is the visible debuff and the rest are hidden companions
+        // (SPELL_ATTR0_HIDDEN_CLIENTSIDE), which the client is never told about
+        // and therefore needs no rows for. All of them are applied and expire
+        // together, so the player sees one icon.
+        std::vector<uint32> CowardSpells;
         uint32 CowardDays = 3;
 
         // Whether the area has to be one duels are allowed in. On by default:
@@ -438,16 +447,22 @@ namespace
     void WearCoward(ObjectGuid loserGuid)
     {
         Player* coward = ObjectAccessor::FindPlayer(loserGuid);
-        if (!coward || !Config.CowardSpell)
+        if (!coward || Config.CowardSpells.empty())
             return;
 
-        coward->CastSpell(coward, Config.CowardSpell, true);
+        int32 const ms = int32(std::max<uint32>(Config.CowardDays, 1)) * DAY * IN_MILLISECONDS;
 
-        if (Aura* brand = coward->GetAura(Config.CowardSpell))
+        // All of them, with the same clock, so the hidden halves cannot outlive
+        // or predecease the icon the player can actually see.
+        for (uint32 spellId : Config.CowardSpells)
         {
-            int32 const days = int32(std::max<uint32>(Config.CowardDays, 1));
-            brand->SetMaxDuration(days * DAY * IN_MILLISECONDS);
-            brand->SetDuration(days * DAY * IN_MILLISECONDS);
+            coward->CastSpell(coward, spellId, true);
+
+            if (Aura* brand = coward->GetAura(spellId))
+            {
+                brand->SetMaxDuration(ms);
+                brand->SetDuration(ms);
+            }
         }
     }
 
@@ -461,7 +476,7 @@ namespace
                 winner->GetName()), nullptr, true);
         }
 
-        if (!Config.CowardSpell)
+        if (Config.CowardSpells.empty())
             return;
 
         // Deferred by a tick: this is reached from inside Player::DuelComplete,
@@ -528,8 +543,14 @@ void LoadConfig()
     Config.BoundsGraceSeconds = uint32(std::clamp(
         sConfigMgr->GetIntDefault("Centurion.Mokgora.BoundsGraceSeconds", 10), 1, 60));
     Config.RequireDuelArea = sConfigMgr->GetBoolDefault("Centurion.Mokgora.RequireDuelArea", true);
-    Config.CowardSpell = uint32(std::max(0,
-        sConfigMgr->GetIntDefault("Centurion.Mokgora.CowardSpell", 0)));
+    Config.CowardSpells.clear();
+    {
+        std::string const raw = sConfigMgr->GetStringDefault("Centurion.Mokgora.CowardSpells", "");
+        for (std::string_view piece : Trinity::Tokenize(raw, ' ', false))
+            if (Optional<uint32> id = Trinity::StringTo<uint32>(piece))
+                if (*id)
+                    Config.CowardSpells.push_back(*id);
+    }
     Config.CowardDays = uint32(std::clamp(
         sConfigMgr->GetIntDefault("Centurion.Mokgora.CowardDays", 3), 0, 30));
     Config.AnnounceStart = sConfigMgr->GetBoolDefault("Centurion.Mokgora.AnnounceStart", true);
@@ -545,7 +566,7 @@ bool IsEnabled()            { return Config.Enabled; }
 float ChallengeRange()      { return Config.ChallengeRange; }
 float BoundsYards()         { return Config.BoundsYards; }
 uint32 BoundsGraceSeconds() { return Config.BoundsGraceSeconds; }
-uint32 CowardSpell()        { return Config.CowardSpell; }
+uint32 CowardSpell()        { return Config.CowardSpells.empty() ? 0 : Config.CowardSpells.front(); }
 
 void SetBotPredicate(PlayerPredicate predicate)
 {
@@ -872,7 +893,7 @@ void OnLogout(Player* player)
     // nothing (Coward! does not stack).
     player->DuelComplete(DUEL_FLED);
 
-    if (Config.CowardSpell && !player->HasAura(Config.CowardSpell))
+    if (!Config.CowardSpells.empty() && !player->HasAura(Config.CowardSpells.front()))
         WearCoward(player->GetGUID());
 }
 
