@@ -68,21 +68,10 @@ namespace
         float BoundsYards = 150.0f;
         uint32 BoundsGraceSeconds = 10;
 
-        // The trophy the winner wears: String of Ears, one stack per kill,
-        // permanent, and kept through the winner's own death.
-        uint32 TrophySpell = 0;
-
         // Coward!, worn for three days by anyone who runs. -20% to attributes,
         // damage done, armour and resistances.
         uint32 CowardSpell = 0;
         uint32 CowardDays = 3;
-
-        // The limits Blizzard puts on the REWARD rather than on the duel: no
-        // trophy below level 10, and none when the two are too far apart in
-        // level. The fight itself is always allowed - you may challenge anyone,
-        // you simply earn nothing for beating a child.
-        uint8 RewardMinLevel = 10;
-        uint8 RewardMaxLevelGap = 10;
 
         // Whether the area has to be one duels are allowed in. On by default:
         // sanctuaries and the other no-duel areas are no-duel for reasons that
@@ -159,8 +148,10 @@ namespace
     // through the ordinary PvP-death hooks in ChallengeModes, as it would to a
     // wolf; anybody else takes an ordinary death.
     //
-    // The winner's real trophy is the String of Ears aura, not this. The tally
-    // is only what `.mokgora why` and the addon read.
+    // This IS the whole record of a win now: the String of Ears aura it used to
+    // back was cut before the feature went to the live realm, so wins and losses
+    // live here and nowhere else, read by `.mokgora why`, `/mokgora stats` and
+    // the addon.
     struct Record
     {
         uint32 Wins = 0;
@@ -316,10 +307,10 @@ namespace
         if (!target->IsAlive())
             return Trinity::StringFormat("{} is dead.", target->GetName());
 
-        // No level gate on the FIGHT. Blizzard puts its level-10 floor and its
-        // level-gap rule on the String of Ears instead: anyone may challenge
-        // anyone, and what a mismatch costs you is the trophy, not the duel.
-        // AwardTrophy holds that end.
+        // No level gate on the FIGHT, and none anywhere else either. Blizzard
+        // hangs its level-10 floor and its level-gap rule on the String of
+        // Ears, and this realm does not grant one - so there is nothing left
+        // for those limits to apply to. Anyone may challenge anyone.
 
         if (challenger->duel || target->duel)
             return "One of you is already in a duel.";
@@ -532,38 +523,6 @@ namespace
         loser->m_Events.AddEventAtOffset([loserGuid]() { WearCoward(loserGuid); }, Milliseconds(1));
     }
 
-    // The trophy, one ear at a time.
-    //
-    // Only for a kill. Blizzard's own description is "trophies gathered as
-    // victories while Dueling to the Death", and the wiki glosses a stack as
-    // somebody "slain to their death" whose ear was collected - a runaway
-    // leaves with both of theirs. The winner keeps the buff through their own
-    // deaths (hotfix 2023-09-06), which is why it is applied as a permanent
-    // stacking aura rather than counted from the tally at login.
-    void AwardTrophy(Player* winner, Player const* loser)
-    {
-        if (!Config.TrophySpell || !winner || !loser)
-            return;
-
-        // The limits sit on the REWARD, not on the fight: you may challenge
-        // anyone, you simply collect nothing for killing someone far below you.
-        if (winner->GetLevel() < Config.RewardMinLevel || loser->GetLevel() < Config.RewardMinLevel)
-            return;
-
-        if (Config.RewardMaxLevelGap)
-        {
-            uint8 const gap = uint8(std::max(winner->GetLevel(), loser->GetLevel()) -
-                                    std::min(winner->GetLevel(), loser->GetLevel()));
-            if (gap > Config.RewardMaxLevelGap)
-                return;
-        }
-
-        if (Aura* trophy = winner->GetAura(Config.TrophySpell, winner->GetGUID()))
-            trophy->ModStackAmount(1);
-        else
-            winner->CastSpell(winner, Config.TrophySpell, true);
-    }
-
     char const* HowItEnded(DuelCompleteType type)
     {
         switch (type)
@@ -629,16 +588,10 @@ void LoadConfig()
     Config.BoundsGraceSeconds = uint32(std::clamp(
         sConfigMgr->GetIntDefault("Centurion.Mokgora.BoundsGraceSeconds", 10), 1, 60));
     Config.RequireDuelArea = sConfigMgr->GetBoolDefault("Centurion.Mokgora.RequireDuelArea", true);
-    Config.TrophySpell = uint32(std::max(0,
-        sConfigMgr->GetIntDefault("Centurion.Mokgora.TrophySpell", 0)));
     Config.CowardSpell = uint32(std::max(0,
         sConfigMgr->GetIntDefault("Centurion.Mokgora.CowardSpell", 0)));
     Config.CowardDays = uint32(std::clamp(
         sConfigMgr->GetIntDefault("Centurion.Mokgora.CowardDays", 3), 0, 30));
-    Config.RewardMinLevel = uint8(std::clamp(
-        sConfigMgr->GetIntDefault("Centurion.Mokgora.RewardMinLevel", 10), 1, 80));
-    Config.RewardMaxLevelGap = uint8(std::clamp(
-        sConfigMgr->GetIntDefault("Centurion.Mokgora.RewardMaxLevelGap", 10), 0, 80));
     Config.AnnounceStart = sConfigMgr->GetBoolDefault("Centurion.Mokgora.AnnounceStart", true);
     Config.AnnounceEnd = sConfigMgr->GetBoolDefault("Centurion.Mokgora.AnnounceEnd", true);
     Config.FlagGameObjectId = uint32(std::max(1,
@@ -652,7 +605,6 @@ bool IsEnabled()            { return Config.Enabled; }
 float ChallengeRange()      { return Config.ChallengeRange; }
 float BoundsYards()         { return Config.BoundsYards; }
 uint32 BoundsGraceSeconds() { return Config.BoundsGraceSeconds; }
-uint32 TrophySpell()        { return Config.TrophySpell; }
 uint32 CowardSpell()        { return Config.CowardSpell; }
 
 void SetBotPredicate(PlayerPredicate predicate)
@@ -932,7 +884,6 @@ void OnDuelEnd(Player* winner, Player* loser, DuelCompleteType type)
         // A corpse, so an ear.
         Say(winner, Banner(Trinity::StringFormat("{} lies dead. The Mok'gora is yours.", loser->GetName())));
         Say(loser, Banner(Trinity::StringFormat("{} has killed you in Mok'gora.", winner->GetName())));
-        AwardTrophy(winner, loser);
     }
 
     if (Config.AnnounceEnd)

@@ -93,11 +93,6 @@ namespace Mokgora
     float BoundsYards();
     uint32 BoundsGraceSeconds();
 
-    // String of Ears - the winner's trophy, one stack per kill, permanent and
-    // kept through the winner's own later deaths. 0 when the realm has no such
-    // spell, in which case nothing is worn and only the tally moves.
-    uint32 TrophySpell();
-
     // Coward! - three days of -20% attributes, damage, armour and resistance,
     // worn by anyone who leaves the ring or logs out of it. 0 disables it.
     uint32 CowardSpell();

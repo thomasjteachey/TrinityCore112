@@ -3395,10 +3395,10 @@ CharDelete.KeepDays = 30
 #    player is asked, and each confirmation is a box you have to TYPE
 #    "I Agree" into - Blizzard's wording, and Blizzard's bar for consent.
 #
-#    Winning a kill grants a stack of String of Ears, a permanent trophy buff
-#    the winner keeps through their own later deaths. Running away - leaving
-#    the ring OR logging out - grants Coward! for three days instead, and does
-#    NOT kill you. There is no /forfeit: it is refused outright.
+#    Running away - leaving the ring OR logging out - grants Coward! for three
+#    days, and does NOT kill you. There is no /forfeit: it is refused outright.
+#    Blizzard also gives the winner a stacking String of Ears trophy; this realm
+#    does not, so a win is recorded in character_mokgora and nothing is worn.
 #
 #    The duel supplies a corpse and nothing more. Whether that death is
 #    permanent is the character's own business: a Hardcore-mode character dies
@@ -3434,12 +3434,6 @@ CharDelete.KeepDays = 30
 #                     fleeing.
 #        Default:     10
 #
-#    Centurion.Mokgora.TrophySpell
-#        Description: The String of Ears aura: one stack per kill, permanent,
-#                     kept through the winner's own later deaths. 0 means the
-#                     realm has no such spell and only the tally moves.
-#        Default:     0
-#
 #    Centurion.Mokgora.CowardSpell
 #        Description: The Coward! aura, worn by anyone who leaves the ring or
 #                     logs out of it. Blizzard's is -20% to all attributes,
@@ -3450,17 +3444,6 @@ CharDelete.KeepDays = 30
 #        Description: How long Coward! is advertised as lasting, for the text the
 #                     warning box shows. The real duration is the spell's own.
 #        Default:     3
-#
-#    Centurion.Mokgora.RewardMinLevel
-#        Description: No String of Ears below this level, on either side. The
-#                     FIGHT is never gated - anyone may challenge anyone; a
-#                     mismatch costs you the trophy, not the duel.
-#        Default:     10
-#
-#    Centurion.Mokgora.RewardMaxLevelGap
-#        Description: No String of Ears when the two are further apart in level
-#                     than this. 0 turns the check off.
-#        Default:     10
 #
 #    Centurion.Mokgora.RequireDuelArea
 #        Description: Whether the area must be one duels are allowed in.
@@ -3488,11 +3471,8 @@ Centurion.Mokgora.ChallengeRange = 10
 Centurion.Mokgora.OfferSeconds = 30
 Centurion.Mokgora.BoundsYards = 150
 Centurion.Mokgora.BoundsGraceSeconds = 10
-Centurion.Mokgora.TrophySpell = 0
 Centurion.Mokgora.CowardSpell = 0
 Centurion.Mokgora.CowardDays = 3
-Centurion.Mokgora.RewardMinLevel = 10
-Centurion.Mokgora.RewardMaxLevelGap = 10
 Centurion.Mokgora.RequireDuelArea = 1
 Centurion.Mokgora.AnnounceStart = 1
 Centurion.Mokgora.AnnounceEnd = 1

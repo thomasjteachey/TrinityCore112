@@ -149,11 +149,10 @@ public:
             return true;
         }
 
-        handler->PSendSysMessage("mokgora: enabled %s, challenge range %u yd, ring %u yd, trophy spell %u, coward spell %u.",
+        handler->PSendSysMessage("mokgora: enabled %s, challenge range %u yd, ring %u yd, coward spell %u.",
             Mokgora::IsEnabled() ? "yes" : "NO",
             uint32(Mokgora::ChallengeRange()),
             uint32(Mokgora::BoundsYards()),
-            Mokgora::TrophySpell(),
             Mokgora::CowardSpell());
 
         handler->PSendSysMessage("  %s -> %s: %s",
