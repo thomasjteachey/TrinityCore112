@@ -5600,6 +5600,18 @@ Centurion.CharacterCreate.Challenges = 0
 Centurion.Surnames.Enable = 0
 
 #
+#    Centurion.NameMarkers.Enable
+#        Description: Give every player a hidden aura saying what they are - 92010 World
+#                     Character, 92011 Tournament Character or 92012 Playerbot - which the
+#                     client-tweaks DLL reads to draw World / Tournament / Bot above the 3D
+#                     name. Needs Tournament mode on and the three spells in Spell.dbc.
+#                     Turning it off strips the auras within ten seconds.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Centurion.NameMarkers.Enable = 0
+
+#
 #    Centurion.Pvp.WaiveReagentsAndAmmo
 #        Description: Every character casts combat spells without reagents and fires without
 #                     using up ammunition in battlegrounds, arenas and duels in progress.
