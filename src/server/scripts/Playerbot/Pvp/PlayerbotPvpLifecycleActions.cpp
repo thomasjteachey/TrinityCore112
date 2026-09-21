@@ -2608,6 +2608,32 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return player->GetClass() == CLASS_ROGUE || IsDruidFeralMeleePositioning(player);
     }
 
+    // Same line the paladin spell picker heals at (Flash of Light / Holy Light
+    // on allies at or below 85%).
+    constexpr float kPaladinHealerStandBackHealthPct = 85.0f;
+
+    // Whether a healer has any reason to hold heal range: a living teammate
+    // hurt enough to be healed. Outside a battleground there is no team to
+    // read, so the healer spacing holds.
+    bool HasTeammateNeedingHeal(Player const* player, float maxHealthPct)
+    {
+        Battleground const* battleground = player->GetBattleground();
+        Map* map = player->FindMap();
+        if (!battleground || !map)
+            return true;
+
+        uint32 const team = battleground->GetPlayerTeam(player->GetGUID());
+        for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+        {
+            Player const* other = itr->GetSource();
+            if (other && other != player && other->IsAlive() && other->GetHealthPct() <= maxHealthPct &&
+                battleground->GetPlayerTeam(other->GetGUID()) == team)
+                return true;
+        }
+
+        return false;
+    }
+
     CombatPositioningProfile GetCombatPositioningProfile(Player const* player)
     {
         if (!player)
@@ -2615,6 +2641,12 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
         if (IsDruidFeralMeleePositioning(player))
             return { 0.0f, 1.5f, 5.0f, false, false, true, "druid-feral-melee" };
+
+        // A holy paladin is still a plate wearer with a weapon: while nobody
+        // on the team needs a heal, hovering at heal range just leaves it idle,
+        // so it fights in melee and drops back only when there is healing to do.
+        if (player->GetClass() == CLASS_PALADIN && !HasTeammateNeedingHeal(player, kPaladinHealerStandBackHealthPct))
+            return { 0.0f, 3.0f, 8.0f, false, false, true, "paladin-nothing-to-heal" };
 
         if (Trinity::Helpers::Entity::IsPlayerHealer(player))
         {
