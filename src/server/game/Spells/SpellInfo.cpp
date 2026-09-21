@@ -1217,6 +1217,15 @@ bool SpellInfo::IsStackableWithRanks() const
                     effect.ApplyAuraName == SPELL_AURA_MOD_SHAPESHIFT)
                     return false;
                 break;
+            case SPELLFAMILY_ROGUE:
+                // Stealth. Stock WotLK has one rank, so it never mattered; the
+                // classic ranks 1784-1787 are copied from the tournament 1784,
+                // which is PowerType mana at cost 0, so the check above let every
+                // rank stay active and the spellbook listed all four.
+                if (effect.Effect == SPELL_EFFECT_APPLY_AURA &&
+                    effect.ApplyAuraName == SPELL_AURA_MOD_STEALTH)
+                    return false;
+                break;
         }
     }
     return true;
