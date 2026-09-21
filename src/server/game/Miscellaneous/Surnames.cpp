@@ -39,6 +39,11 @@ struct PendingSurname
 {
     std::string Name;
     std::string Surname;
+    // Why it was refused, if it was. A refusal is REMEMBERED rather than
+    // dropped: a character created or renamed with a family name the server
+    // will not take has to be told which rule it broke, not quietly given the
+    // one it had before.
+    ResponseCodes Result = CHAR_NAME_SUCCESS;
     time_t Expires = 0;
 };
 
@@ -178,6 +183,30 @@ std::string Decorated(ObjectGuid guid, std::string_view name)
     return decorated;
 }
 
+void AdoptTransient(ObjectGuid cloneGuid, ObjectGuid sourceGuid)
+{
+    if (!Enabled())
+        return;
+
+    std::unique_lock lock(StoreLock);
+    auto itr = Store.find(sourceGuid);
+    if (itr == Store.end())
+    {
+        Store.erase(cloneGuid);
+        return;
+    }
+
+    // Copied before the insert, which may rehash out from under the iterator.
+    std::string const surname = itr->second;
+    Store[cloneGuid] = surname;
+}
+
+void ForgetTransient(ObjectGuid cloneGuid)
+{
+    std::unique_lock lock(StoreLock);
+    Store.erase(cloneGuid);
+}
+
 bool JoinWhisperTarget(std::string& to, std::string& msg)
 {
     if (!Enabled() || to.empty())
@@ -243,16 +272,19 @@ void HandleCreateRequest(WorldSession* session, std::string_view name, std::stri
     uint32 const accountId = session->GetAccountId();
     std::string chosen(surname);
     std::string owner(name);
-    if (chosen.empty() || !normalizePlayerName(owner) || Check(chosen, session->GetSessionDbcLocale()) != CHAR_NAME_SUCCESS)
+    if (!normalizePlayerName(owner))
     {
-        // Nothing (valid) chosen this time: forget an earlier attempt's choice.
+        // Not a name this could ever belong to: forget an earlier attempt.
         PendingByAccount.erase(accountId);
         return;
     }
 
+    ResponseCodes const result = chosen.empty() ? CHAR_NAME_NO_NAME : Check(chosen, session->GetSessionDbcLocale());
+
     PendingSurname& pending = PendingByAccount[accountId];
     pending.Name = std::move(owner);
-    pending.Surname = std::move(chosen);
+    pending.Surname = result == CHAR_NAME_SUCCESS ? std::move(chosen) : "";
+    pending.Result = result;
     pending.Expires = GameTime::GetGameTime() + PendingLifetime;
 }
 
@@ -278,8 +310,11 @@ bool SplitWhisperTarget(std::string& to, std::string& msg, std::string const& ra
     return true;
 }
 
-std::string PeekPending(uint32 accountId, std::string const& name)
+std::string PeekPending(uint32 accountId, std::string const& name, ResponseCodes* why)
 {
+    if (why)
+        *why = CHAR_NAME_SUCCESS;
+
     auto itr = PendingByAccount.find(accountId);
     if (itr == PendingByAccount.end() || !Enabled())
         return "";
@@ -288,6 +323,8 @@ std::string PeekPending(uint32 accountId, std::string const& name)
     if (pending.Expires < GameTime::GetGameTime() || !StringEqualI(pending.Name, name))
         return "";
 
+    if (why)
+        *why = pending.Result;
     return pending.Surname;
 }
 
@@ -300,7 +337,7 @@ void ApplyPending(uint32 accountId, ObjectGuid guid, std::string const& name, ch
     PendingSurname const pending = std::move(itr->second);
     PendingByAccount.erase(itr);
 
-    if (!Enabled() || pending.Expires < GameTime::GetGameTime() || !StringEqualI(pending.Name, name))
+    if (!Enabled() || pending.Result != CHAR_NAME_SUCCESS || pending.Expires < GameTime::GetGameTime() || !StringEqualI(pending.Name, name))
         return;
 
     if (Set(guid, pending.Surname))

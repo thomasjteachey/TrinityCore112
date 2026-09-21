@@ -16,6 +16,7 @@
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "CharacterCache.h"
+#include "Miscellaneous/Surnames.h"
 #include "Configuration/Config.h"
 #include "DataStores/DBCStores.h"
 #include "DatabaseEnv.h"
@@ -925,6 +926,9 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
     std::string const displayName = "Dark " + human->GetName();
     sCharacterCache->AddCharacterCacheEntry(cloneGuid, 0, displayName, clone->GetNativeGender(), clone->GetRace(),
         clone->GetClass(), clone->GetLevel());
+    // It plays under the mirrored player's name, so it wears their family name
+    // too (Miscellaneous/Surnames.h).
+    Surnames::AdoptTransient(cloneGuid, human->GetGUID());
     ObjectAccessor::AddObject(clone);
     bg->AddPlayer(clone);
     // Battleground::AddPlayer runs UnsummonPetTemporaryIfAny() on everyone who
@@ -995,6 +999,7 @@ void TeardownCloneForHuman(ObjectGuid humanGuid)
 
         if (!cachedName.empty())
             sCharacterCache->DeleteCharacterCacheEntry(record.cloneGuid, cachedName);
+            Surnames::ForgetTransient(record.cloneGuid);
     }
 
     TC_LOG_INFO("playerbots.population", "OBC clone: destroyed in-memory clone {} for human {}.",
@@ -1059,6 +1064,7 @@ void TeardownCustomGameClone(ObjectGuid cloneGuid)
 
     if (!cachedName.empty())
         sCharacterCache->DeleteCharacterCacheEntry(cloneGuid, cachedName);
+        Surnames::ForgetTransient(cloneGuid);
 }
 
 void TeardownAllCustomGameClones()
@@ -1206,6 +1212,7 @@ Player* CreateCustomGameLobbyClone(Player* source, uint32 mapId, uint32 lobbyIns
     std::string displayName = displayPrefix + source->GetName();
     sCharacterCache->AddCharacterCacheEntry(cloneGuid, 0, displayName, clone->GetNativeGender(), clone->GetRace(),
         clone->GetClass(), clone->GetLevel(), false);
+    Surnames::AdoptTransient(cloneGuid, source->GetGUID());
     ObjectAccessor::AddObject(clone);
     clone->SetInGameTime(GameTime::GetGameTimeMS());
     // Fallback only: the pre-map AddAura above is the normal path, so this
@@ -1291,6 +1298,7 @@ void TeardownCustomGameLobbyClone(ObjectGuid cloneGuid)
 
     if (!cachedName.empty())
         sCharacterCache->DeleteCharacterCacheEntry(cloneGuid, cachedName);
+        Surnames::ForgetTransient(cloneGuid);
 }
 
 void TeardownAllCustomGameLobbyClones()
@@ -1348,6 +1356,7 @@ void TeardownWorldClone(ObjectGuid cloneGuid)
 
     if (!cachedName.empty())
         sCharacterCache->DeleteCharacterCacheEntry(cloneGuid, cachedName);
+        Surnames::ForgetTransient(cloneGuid);
 }
 
 void TeardownAllWorldClones()
@@ -1760,6 +1769,7 @@ Player* PlayerbotObcCloneManager::CreateCustomGameClone(Player* source, Battlegr
     ObjectGuid const cloneGuid = clone->GetGUID();
     std::string displayName = displayPrefix + source->GetName();
     sCharacterCache->AddCharacterCacheEntry(cloneGuid, 0, displayName, clone->GetNativeGender(), clone->GetRace(), clone->GetClass(), clone->GetLevel(), false);
+    Surnames::AdoptTransient(cloneGuid, source->GetGUID());
     ObjectAccessor::AddObject(clone);
     bg->AddPlayer(clone);
     // Battleground::AddPlayer runs UnsummonPetTemporaryIfAny() on everyone who
@@ -2044,6 +2054,7 @@ Player* PlayerbotObcCloneManager::CreateWorldClone(Player* source, Map* map, Pos
     ObjectGuid const cloneGuid = clone->GetGUID();
     sCharacterCache->AddCharacterCacheEntry(cloneGuid, 0, source->GetName(), clone->GetNativeGender(), clone->GetRace(),
         clone->GetClass(), clone->GetLevel(), false);
+    Surnames::AdoptTransient(cloneGuid, source->GetGUID());
     ObjectAccessor::AddObject(clone);
     clone->SetInGameTime(GameTime::GetGameTimeMS());
     SynchronizeHunterPetMirror(source, clone);

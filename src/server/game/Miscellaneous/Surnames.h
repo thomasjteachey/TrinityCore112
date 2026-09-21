@@ -73,6 +73,13 @@ namespace Surnames
     void Decorate(ObjectGuid guid, std::string& name);
     std::string Decorated(ObjectGuid guid, std::string_view name);
 
+    // A transient copy - a battleground fill clone, a Violet Hold ally, a
+    // "Dark" mirror - has no row of its own and so no family name to load, but
+    // it plays under a real character's name and looks wrong without theirs.
+    // Memory only, and dropped when the copy is.
+    void AdoptTransient(ObjectGuid cloneGuid, ObjectGuid sourceGuid);
+    void ForgetTransient(ObjectGuid cloneGuid);
+
     // A whisper is the one line the client splits for us: "/w Elgrom Fernbloom
     // hi" arrives as the target "Elgrom" and the message "Fernbloom hi". Moves
     // that first word back onto the target when the two together name a real
@@ -88,10 +95,12 @@ namespace Surnames
     // before the name normalization capitalized it.
     bool SplitWhisperTarget(std::string& to, std::string& msg, std::string const& rawWord);
 
-    // The surname waiting for the character about to be created on this
-    // account, without consuming it: the name it will be created under has to
-    // be checked as a pair.
-    std::string PeekPending(uint32 accountId, std::string const& name);
+    // The surname waiting for the character about to be created or renamed on
+    // this account, without consuming it: the name it will carry has to be
+    // checked as a pair. `why` comes back as the reason the screen's choice was
+    // refused, so the refusal can be shown instead of the character quietly
+    // keeping the family name it had.
+    std::string PeekPending(uint32 accountId, std::string const& name, ResponseCodes* why = nullptr);
 
     // Writes `characters`.`surname`, updates the cache and tells every client
     // holding the old name to ask again. An empty surname clears it. False if

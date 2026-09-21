@@ -472,9 +472,18 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
     // query below still catches a first name taken by a character that has no
     // family name of its own.
     bool const surnames = Surnames::Enabled();
-    std::string const pendingSurname = surnames ? Surnames::PeekPending(GetAccountId(), createInfo->Name) : "";
+    ResponseCodes surnameResult = CHAR_NAME_SUCCESS;
+    std::string const pendingSurname = surnames ? Surnames::PeekPending(GetAccountId(), createInfo->Name, &surnameResult) : "";
     if (surnames)
     {
+        // A family name the screen sent and the server will not take: say which
+        // rule it broke rather than refusing for no stated reason.
+        if (surnameResult != CHAR_NAME_SUCCESS)
+        {
+            SendCharCreate(surnameResult);
+            return;
+        }
+
         // Every character has a family name where they are on; the create
         // screen will not send the request without one, so an empty one here
         // is a client that never got the LAST NAME box.
@@ -1400,7 +1409,19 @@ void WorldSession::HandleCharRenameOpcode(WorldPacket& recvData)
     std::string surname;
     if (Surnames::Enabled())
     {
-        surname = Surnames::PeekPending(GetAccountId(), renameInfo->Name);
+        ResponseCodes surnameResult = CHAR_NAME_SUCCESS;
+        surname = Surnames::PeekPending(GetAccountId(), renameInfo->Name, &surnameResult);
+
+        // The prompt sent a family name the server will not take. Refusing the
+        // rename with the reason is the only way the player hears it; keeping
+        // the old family name quietly is what made this look like the new one
+        // was ignored.
+        if (surnameResult != CHAR_NAME_SUCCESS)
+        {
+            SendCharRename(surnameResult, renameInfo.get());
+            return;
+        }
+
         if (surname.empty())
             surname = Surnames::Get(renameInfo->Guid);
 
