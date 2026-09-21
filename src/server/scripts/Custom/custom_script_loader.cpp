@@ -42,6 +42,7 @@ void AddSC_custom_depleted_mark_exchange();
 void AddSC_custom_pvpve_dungeon();
 void AddSC_npc_scarlet_chapel_queue();
 void AddSC_npc_account_banker();
+void AddSC_npc_character_services();
 void AddSC_go_lplus_jump_pad();
 void AddSC_custom_game_lobby();
 void AddSC_npc_transmogrifier();
@@ -99,6 +100,7 @@ void AddCustomScripts()
     AddSC_custom_pvpve_dungeon();
     AddSC_npc_scarlet_chapel_queue();
     AddSC_npc_account_banker();
+    AddSC_npc_character_services();
     AddSC_go_lplus_jump_pad();
     AddSC_custom_game_lobby();
     AddSC_npc_transmogrifier();

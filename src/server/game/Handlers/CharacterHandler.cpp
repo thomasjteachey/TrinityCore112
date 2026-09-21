@@ -40,6 +40,7 @@
 #include "Map.h"
 #include "Metric.h"
 #include "Miscellaneous/CharacterScreen.h"
+#include "Miscellaneous/RaceChange.h"
 #include "Miscellaneous/Surnames.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "MotionMaster.h"
@@ -2014,17 +2015,25 @@ void WorldSession::HandleCharFactionOrRaceChangeCallback(std::shared_ptr<Charact
         }
     }
 
-    // prevent character rename
-    if (sWorld->getBoolConfig(CONFIG_PREVENT_RENAME_CUSTOMIZATION) && (factionChangeInfo->Name != characterInfo->Name))
-    {
-        SendCharFactionChange(CHAR_NAME_FAILURE, factionChangeInfo.get());
-        return;
-    }
-
     // prevent character rename to invalid name
     if (!normalizePlayerName(factionChangeInfo->Name))
     {
         SendCharFactionChange(CHAR_NAME_NO_NAME, factionChangeInfo.get());
+        return;
+    }
+
+    // The paid-change screen fills its name box with the name the character
+    // list shows, family name included (Miscellaneous/Surnames.h), and sends it
+    // back as typed. Only the first name can change here; the family name the
+    // character already has stays.
+    std::string::size_type const nameEnd = factionChangeInfo->Name.find(' ');
+    if (nameEnd != std::string::npos)
+        factionChangeInfo->Name.erase(nameEnd);
+
+    // prevent character rename
+    if (sWorld->getBoolConfig(CONFIG_PREVENT_RENAME_CUSTOMIZATION) && (factionChangeInfo->Name != characterInfo->Name))
+    {
+        SendCharFactionChange(CHAR_NAME_FAILURE, factionChangeInfo.get());
         return;
     }
 
@@ -2042,15 +2051,29 @@ void WorldSession::HandleCharFactionOrRaceChangeCallback(std::shared_ptr<Charact
         return;
     }
 
-    // character with this name already exist
-    ObjectGuid newGuid = sCharacterCache->GetCharacterGuidByName(factionChangeInfo->Name);
-    if (!newGuid.IsEmpty())
+    // character with this name already exist - the whole name, first and family,
+    // as HandleCharRenameOpcode checks it
+    std::string fullName = factionChangeInfo->Name;
+    if (Surnames::Enabled())
+        if (std::string const& surname = Surnames::Get(factionChangeInfo->Guid); !surname.empty())
+            fullName += ' ' + surname;
+
+    if (CharacterCacheEntry const* taken = sCharacterCache->GetCharacterCacheByFullName(fullName))
     {
-        if (newGuid != factionChangeInfo->Guid)
+        if (taken->Guid != factionChangeInfo->Guid)
         {
             SendCharFactionChange(CHAR_CREATE_NAME_IN_USE, factionChangeInfo.get());
             return;
         }
+    }
+
+    // A tournament character is taught its race's kit at every login; a race
+    // without one would leave it with none.
+    bool const tournament = Tournament::IsTournamentCharacter(factionChangeInfo->Guid);
+    if (tournament && !Tournament::GetCreateInfo(factionChangeInfo->Race, playerClass))
+    {
+        SendCharFactionChange(CHAR_CREATE_ERROR, factionChangeInfo.get());
+        return;
     }
 
     if (sArenaTeamMgr->GetArenaTeamByCaptain(factionChangeInfo->Guid))
@@ -2153,6 +2176,9 @@ void WorldSession::HandleCharFactionOrRaceChangeCallback(std::shared_ptr<Charact
 
             trans->Append(stmt);
         }
+
+        // Racials, the start-spell kit and the priest racials (Miscellaneous/RaceChange.h).
+        RaceChange::AppendSpellSwap(trans, factionChangeInfo->Guid, oldRace, factionChangeInfo->Race, playerClass, level, tournament);
 
         if (factionChangeInfo->FactionChange)
         {
