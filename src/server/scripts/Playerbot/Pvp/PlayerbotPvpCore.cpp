@@ -6101,6 +6101,21 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
     Unit const* bearChargeTarget = HasAuraFromSpellChain(player, 5487) && IsSpellReady(player, 16979) ? SelectEnemyGapCloserTarget(player, target, 8.0f, 25.0f, false) : nullptr;
     AddDecisionCandidate(candidates, bearChargeTarget, 28.0f,
         { "druid feral charge", "bear gap close / interrupt from charge range", 16979, playerbot::PvpClassSpellContext::TargetMode::Enemy, bearChargeTarget ? bearChargeTarget->GetGUID() : ObjectGuid::Empty });
+    // What a restoration druid does when there is nothing to heal. Every
+    // offensive spell above it belongs to Balance, and its own moonfire is an
+    // execute that waits for the target to fall below a fifth of its health,
+    // so a resto druid with a healthy enemy in front of it had NOTHING it
+    // could pick and simply stood there watching a base being capped.
+    //
+    // Deliberately the bottom of the list: healing, dispels, faerie fire on a
+    // rogue and dropping to bear under melee all still come first. This is
+    // only the filler for a druid that would otherwise do nothing at all.
+    AddDecisionCandidate(candidates, !isBalanceDruid && !isFeralDruid && HasHostileTarget(player, target) &&
+        !HasAuraFromSpellChain(target, 8921) && IsSpellReady(player, 8921), 27.5f,
+        { "druid moonfire", "put moonfire on the target with nothing to heal", 8921, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, !isBalanceDruid && !isFeralDruid && HasHostileTarget(player, target) &&
+        IsSpellReady(player, 5176), 27.0f,
+        { "druid wrath", "filler nuke with nothing to heal", 5176, playerbot::PvpClassSpellContext::TargetMode::Enemy });
 
         return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
     }

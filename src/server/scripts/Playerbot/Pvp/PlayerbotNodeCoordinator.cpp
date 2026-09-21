@@ -58,8 +58,16 @@ namespace
 
     // Base scores. A base of ours in the enemy's hands outranks the whole map;
     // a free base outranks one that has to be fought for.
-    constexpr int32 kScoreUnderAttack = 200;
-    constexpr int32 kScoreFriendlyContested = 120;
+    constexpr int32 kScoreUnderAttack = 240;
+    // A base whose capture timer is running for us is the most expensive thing
+    // on the map to walk away from: the minute already spent on it is thrown
+    // away by one enemy click, and the bot that clicked it is standing right
+    // there. This has to outrank a free base even when the team is behind and
+    // every base it does not hold is worth more (kScoreNeutral + needBases =
+    // 195) - otherwise the capper is the nearest free body to the next free
+    // base and the greedy walks it off the timer it just started, which is
+    // exactly what it used to do.
+    constexpr int32 kScoreFriendlyContested = 205;
     constexpr int32 kScoreFriendlyControlled = 60;
     constexpr int32 kScoreNeutral = 150;
     constexpr int32 kScoreEnemyContested = 130;
@@ -521,9 +529,18 @@ namespace
                     if (pass == 0 && state.assigned >= state.quota)
                         continue;
 
-                    bool const defensive = IsFriendlySideStatus(state.status) &&
-                        state.status != BattlegroundNodeStatus::FriendlyUnderAttack;
-                    if (defensive && capDefenders && defenders >= maxDefenders)
+                    // Two different questions. Holding ground spreads - a pair
+                    // on a base, then look elsewhere - which is true of any
+                    // base on our side of the ledger. Counting against the
+                    // defender budget is only true of a base we already hold:
+                    // finishing a capture, or taking back one being stolen, is
+                    // how a team that is behind gets ahead, and the budget
+                    // exists to stop it sitting still rather than to stop it
+                    // finishing what it started.
+                    bool const holdsGround = IsFriendlySideStatus(state.status);
+                    bool const countsAsDefender =
+                        state.status == BattlegroundNodeStatus::FriendlyControlled;
+                    if (countsAsDefender && capDefenders && defenders >= maxDefenders)
                         continue;
 
                     float cost = 0.0f;
@@ -532,7 +549,7 @@ namespace
                         continue;
 
                     float score = float(state.score);
-                    score -= float(state.assigned) * float(defensive ? kCrowdPenaltyDefense : kCrowdPenaltyAssault);
+                    score -= float(state.assigned) * float(holdsGround ? kCrowdPenaltyDefense : kCrowdPenaltyAssault);
                     if (state.assigned >= state.quota)
                         score -= float(kOverflowPenalty) * float(state.assigned - state.quota + 1);
                     score -= std::max(0.0f, cost) * kDistanceScoreWeight;
@@ -554,7 +571,7 @@ namespace
             taken[chosenBot] = true;
             ++assignedCount;
             ++chosen->assigned;
-            if (IsFriendlySideStatus(chosen->status) && chosen->status != BattlegroundNodeStatus::FriendlyUnderAttack)
+            if (chosen->status == BattlegroundNodeStatus::FriendlyControlled)
                 ++defenders;
 
             plan.assignments[living[chosenBot]->GetGUID()] = { chosen->nodeId, RoleForStatus(chosen->status) };
