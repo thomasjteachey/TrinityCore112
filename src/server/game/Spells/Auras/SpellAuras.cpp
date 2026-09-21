@@ -1133,7 +1133,8 @@ bool Aura::ModCharges(int32 num, AuraRemoveMode removeMode)
 {
     if (IsUsingCharges())
     {
-        if (num < 0 && GetId() == 1784)
+        // Stealth, every rank (1784-1787)
+        if (num < 0 && GetSpellInfo()->GetFirstRankSpell()->Id == 1784)
         {
             if (Unit* owner = m_owner->ToUnit())
                 if (owner->HasAura(81439) || owner->HasAura(89783))
@@ -1890,8 +1891,8 @@ void Aura::HandleAuraSpecificMods(AuraApplication const* aurApp, Unit* caster, b
                 }
                 break;
             case SPELLFAMILY_ROGUE:
-                // Remove Vanish on stealth remove
-                if (GetId() == 1784)
+                // Remove Vanish on stealth remove (any rank, 1784-1787)
+                if (GetSpellInfo()->GetFirstRankSpell()->Id == 1784)
                     target->RemoveAurasWithFamily(SPELLFAMILY_ROGUE, 0x0000800, 0, 0, target->GetGUID());
                 break;
             case SPELLFAMILY_PALADIN:
@@ -2398,7 +2399,7 @@ void Aura::PrepareProcToTrigger(AuraApplication* aurApp, ProcEventInfo& eventInf
         Unit* target = aurApp->GetTarget();
 
         // Do not consume stealth proc charges when the unit is protected by aura 81439 (Stealth Aura Stalker) or 89783 (Vanish Aura)
-        if (!(GetId() == 1784 && target && (target->HasAura(81439) || target->HasAura(89783))))
+        if (!(GetSpellInfo()->GetFirstRankSpell()->Id == 1784 && target && (target->HasAura(81439) || target->HasAura(89783))))
         {
             --m_procCharges;
             SetNeedClientUpdateForTargets();

@@ -1198,6 +1198,20 @@ class spell_rog_turn_the_tables : public AuraScript
     }
 };
 
+// Stealth is ranked (1784-1787, classic speeds). Vanish and Improved Sap put
+// the rogue back into the best rank they know, not rank 1 - which is capped at
+// level 19 and slows by half.
+static uint32 GetKnownStealthRank(Unit const* unit)
+{
+    uint32 best = SPELL_ROGUE_STEALTH;
+    if (Player const* player = unit->ToPlayer())
+        for (uint32 rank = SPELL_ROGUE_STEALTH; rank; rank = sSpellMgr->GetNextSpellInChain(rank))
+            if (player->HasSpell(rank))
+                best = rank;
+
+    return best;
+}
+
 // -11327 - Vanish
 class spell_rog_vanish : public AuraScript
 {
@@ -1216,14 +1230,15 @@ class spell_rog_vanish : public AuraScript
         unitTarget->CombatStop(true, false);
 
         // See if we already are stealthed. If so, we're done.
-        if (unitTarget->HasAura(SPELL_ROGUE_STEALTH))
+        if (unitTarget->GetAuraOfRankedSpell(SPELL_ROGUE_STEALTH))
             return;
 
         // Reset cooldown on stealth if needed
-        if (unitTarget->GetSpellHistory()->HasCooldown(SPELL_ROGUE_STEALTH))
-            unitTarget->GetSpellHistory()->ResetCooldown(SPELL_ROGUE_STEALTH);
+        uint32 const stealth = GetKnownStealthRank(unitTarget);
+        if (unitTarget->GetSpellHistory()->HasCooldown(stealth))
+            unitTarget->GetSpellHistory()->ResetCooldown(stealth);
 
-        unitTarget->CastSpell(nullptr, SPELL_ROGUE_STEALTH, true);
+        unitTarget->CastSpell(nullptr, stealth, true);
 
         unitTarget->AddAura(SPELL_ROGUE_VANISH_AURA, unitTarget);
 
@@ -1253,14 +1268,15 @@ class spell_rog_imp_sap : public AuraScript
         unitTarget->RemoveAurasByType(SPELL_AURA_MOD_STALKED);
 
         // See if we already are stealthed. If so, we're done.
-        if (unitTarget->HasAura(SPELL_ROGUE_STEALTH))
+        if (unitTarget->GetAuraOfRankedSpell(SPELL_ROGUE_STEALTH))
             return;
 
         // Reset cooldown on stealth if needed
-        if (unitTarget->GetSpellHistory()->HasCooldown(SPELL_ROGUE_STEALTH))
-            unitTarget->GetSpellHistory()->ResetCooldown(SPELL_ROGUE_STEALTH);
+        uint32 const stealth = GetKnownStealthRank(unitTarget);
+        if (unitTarget->GetSpellHistory()->HasCooldown(stealth))
+            unitTarget->GetSpellHistory()->ResetCooldown(stealth);
 
-        unitTarget->CastSpell(nullptr, SPELL_ROGUE_STEALTH, true);
+        unitTarget->CastSpell(nullptr, stealth, true);
     }
 
 
