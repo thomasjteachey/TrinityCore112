@@ -18,9 +18,9 @@ INSERT INTO dbc.wmoareatable_lplus (ID, WMOID, NameSetID, WMOGroupID, SoundProvi
 SELECT 51122, 6831, 0, -1, 0, 0, 0, 0, 0, 4, 6296, 'Tol''Viron Arena', 16712190
 WHERE NOT EXISTS (SELECT 1 FROM dbc.wmoareatable_lplus WHERE WMOID = 6831);
 
--- map 982   Coliseum of Past Echoes        WMOID 75000   (no rows - insert root)
+-- map 982   Colosseum of Past Echoes        WMOID 75000   (no rows - insert root)
 INSERT INTO dbc.wmoareatable_lplus (ID, WMOID, NameSetID, WMOGroupID, SoundProviderPref, SoundProviderPrefUnderwater, AmbienceID, ZoneMusic, IntroSound, Flags, AreaTableID, AreaName_Lang_enUS, AreaName_Lang_Mask)
-SELECT 51123, 75000, 0, -1, 0, 0, 0, 0, 0, 4, 10026, 'Coliseum of Past Echoes', 16712190
+SELECT 51123, 75000, 0, -1, 0, 0, 0, 0, 0, 4, 10026, 'Colosseum of Past Echoes', 16712190
 WHERE NOT EXISTS (SELECT 1 FROM dbc.wmoareatable_lplus WHERE WMOID = 75000);
 
 -- map 983   Imperial Arena of Thakraj      WMOID 25000   (no rows - insert root)
@@ -28,9 +28,9 @@ INSERT INTO dbc.wmoareatable_lplus (ID, WMOID, NameSetID, WMOGroupID, SoundProvi
 SELECT 51124, 25000, 0, -1, 0, 0, 0, 0, 0, 4, 10028, 'Imperial Arena of Thakraj', 16712190
 WHERE NOT EXISTS (SELECT 1 FROM dbc.wmoareatable_lplus WHERE WMOID = 25000);
 
--- map 984   Maldraxxus Coliseum            WMOID 13649   (no rows - insert root)
+-- map 984   Maldraxxus Colosseum            WMOID 13649   (no rows - insert root)
 INSERT INTO dbc.wmoareatable_lplus (ID, WMOID, NameSetID, WMOGroupID, SoundProviderPref, SoundProviderPrefUnderwater, AmbienceID, ZoneMusic, IntroSound, Flags, AreaTableID, AreaName_Lang_enUS, AreaName_Lang_Mask)
-SELECT 51125, 13649, 0, -1, 0, 0, 0, 0, 0, 4, 10032, 'Maldraxxus Coliseum', 16712190
+SELECT 51125, 13649, 0, -1, 0, 0, 0, 0, 0, 4, 10032, 'Maldraxxus Colosseum', 16712190
 WHERE NOT EXISTS (SELECT 1 FROM dbc.wmoareatable_lplus WHERE WMOID = 13649);
 
 -- map 985   Nagrand Arena (Remastered)     WMOID 10834   (no rows - insert root)

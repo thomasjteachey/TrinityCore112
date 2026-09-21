@@ -224,9 +224,9 @@ std::string BattlegroundNameByType(BattlegroundTypeId type)
         case BATTLEGROUND_NL: return "Nefarian's Arena";
         case BATTLEGROUND_TV: return "Tol'Viron Arena";
         case BATTLEGROUND_TTP: return "Tiger's Peak";
-        case BATTLEGROUND_CPE: return "Coliseum of Past Echoes";
+        case BATTLEGROUND_CPE: return "Colosseum of Past Echoes";
         case BATTLEGROUND_IAT: return "Imperial Arena of Thakraj";
-        case BATTLEGROUND_MXC: return "Maldraxxus Coliseum";
+        case BATTLEGROUND_MXC: return "Maldraxxus Colosseum";
         case BATTLEGROUND_NGA: return "Nagrand Arena (Remastered)";
         case BATTLEGROUND_BEA: return "Blade's Edge Arena (Remastered)";
         case BATTLEGROUND_GDH: return "Guardian's Hall";

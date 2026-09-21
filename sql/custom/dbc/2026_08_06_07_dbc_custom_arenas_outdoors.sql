@@ -25,9 +25,9 @@
 UPDATE dbc.areatable_lplus
 SET Flags = (Flags & ~33554432) | 67108864
 WHERE ContinentID IN (
-    982,   -- Coliseum of Past Echoes
+    982,   -- Colosseum of Past Echoes
     983,   -- Imperial Arena of Thakraj
-    984,   -- Maldraxxus Coliseum
+    984,   -- Maldraxxus Colosseum
     985,   -- Nagrand Arena (Remastered)
     986,   -- Blade's Edge Arena (Remastered)
     1007,  -- Guardian's Hall

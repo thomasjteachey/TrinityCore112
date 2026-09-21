@@ -3535,9 +3535,9 @@ enum BattlegroundTypeId : uint32
     // Arena ports. The map ids are deliberately the same as in the source data
     // the terrain came from, the way TV (980) and TTP (1134) already are, so a
     // directory name and a map id never have to be reconciled by hand.
-    BATTLEGROUND_CPE            = 872, // Coliseum of Past Echoes,    map 982
+    BATTLEGROUND_CPE            = 872, // Colosseum of Past Echoes,    map 982
     BATTLEGROUND_IAT            = 873, // Imperial Arena of Thakraj,  map 983
-    BATTLEGROUND_MXC            = 874, // Maldraxxus Coliseum,        map 984
+    BATTLEGROUND_MXC            = 874, // Maldraxxus Colosseum,        map 984
     BATTLEGROUND_NGA            = 875, // Nagrand Arena (remake),     map 985
     BATTLEGROUND_BEA            = 876, // Blade's Edge Arena (remake),map 986
     BATTLEGROUND_GDH            = 877, // Guardian's Hall,            map 1007
