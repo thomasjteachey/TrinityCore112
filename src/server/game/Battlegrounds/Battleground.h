@@ -377,6 +377,12 @@ class TC_GAME_API Battleground
         void ModifyStartDelayTime(int diff) { m_StartDelayTime -= diff; }
         void SetStartDelayTime(int Time)    { m_StartDelayTime = Time; }
         bool SkipStartDelay();
+        // Spawns the battleground's objects and closes its doors. Called as
+        // soon as the map exists, so the gates are already shut when the first
+        // player's loading screen ends; waiting for a player to be inside (and
+        // then for the next once-a-second battleground tick) left the doorways
+        // open long enough to walk through. Idempotent.
+        bool PrepareStartingArea();
 
         void SetMaxPlayersPerTeam(uint32 MaxPlayers) { m_MaxPlayersPerTeam = MaxPlayers; }
         void SetMinPlayersPerTeam(uint32 MinPlayers) { m_MinPlayersPerTeam = MinPlayers; }
@@ -737,6 +743,7 @@ class TC_GAME_API Battleground
 
         // these are important variables used for starting messages
         uint8 m_Events;
+        bool m_StartingAreaPrepared;
         BattlegroundStartTimeIntervals StartDelayTimes[BG_STARTING_EVENT_COUNT];
         // this must be filled in constructors!
         uint32 StartMessageIds[BG_STARTING_EVENT_COUNT];

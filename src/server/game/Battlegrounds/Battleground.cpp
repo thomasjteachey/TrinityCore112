@@ -161,6 +161,7 @@ Battleground::Battleground()
     m_ResetStatTimer    = 0;
     m_ValidStartPositionTimer = 0;
     m_Events            = 0;
+    m_StartingAreaPrepared = false;
     m_StartDelayTime    = 0;
     m_IsRated           = false;
     m_BuffChange        = false;
@@ -539,6 +540,29 @@ inline void Battleground::_ProcessProgress(uint32 diff)
     }
 }
 
+bool Battleground::PrepareStartingArea()
+{
+    if (m_StartingAreaPrepared)
+        return true;
+    m_StartingAreaPrepared = true;
+
+    if (!FindBgMap())
+    {
+        TC_LOG_ERROR("bg.battleground", "Battleground::PrepareStartingArea: map (map id: {}, instance id: {}) is not created!", m_MapId, m_InstanceID);
+        EndNow();
+        return false;
+    }
+
+    if (!SetupBattleground())
+    {
+        EndNow();
+        return false;
+    }
+
+    StartingEventCloseDoors();
+    return true;
+}
+
 inline void Battleground::_ProcessJoin(uint32 diff)
 {
     // *********************************************************
@@ -558,21 +582,10 @@ inline void Battleground::_ProcessJoin(uint32 diff)
     {
         m_Events |= BG_STARTING_EVENT_1;
 
-        if (!FindBgMap())
-        {
-            TC_LOG_ERROR("bg.battleground", "Battleground::_ProcessJoin: map (map id: {}, instance id: {}) is not created!", m_MapId, m_InstanceID);
-            EndNow();
+        // Normally already done when the map was created; this only catches
+        // a battleground whose map came from somewhere else.
+        if (!PrepareStartingArea())
             return;
-        }
-
-        // Setup here, only when at least one player has ported to the map
-        if (!SetupBattleground())
-        {
-            EndNow();
-            return;
-        }
-
-        StartingEventCloseDoors();
 
         // Arena replays are not real matches. As soon as the replay viewer has caused the map to be
         // created and SetupBattleground() has succeeded, immediately advance to IN_PROGRESS so the
@@ -1436,20 +1449,8 @@ bool Battleground::SkipStartDelay()
     {
         m_Events |= BG_STARTING_EVENT_1;
 
-        if (!FindBgMap())
-        {
-            TC_LOG_ERROR("bg.battleground", "Battleground::SkipStartDelay: map (map id: {}, instance id: {}) is not created!", m_MapId, m_InstanceID);
-            EndNow();
+        if (!PrepareStartingArea())
             return false;
-        }
-
-        if (!SetupBattleground())
-        {
-            EndNow();
-            return false;
-        }
-
-        StartingEventCloseDoors();
     }
 
     // Skip remaining countdown warnings.

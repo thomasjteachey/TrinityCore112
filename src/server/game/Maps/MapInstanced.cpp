@@ -139,7 +139,13 @@ Map* MapInstanced::CreateInstanceForPlayer(uint32 mapId, Player* player, uint32 
         if (!map)
         {
             if (Battleground* bg = player->GetBattleground())
+            {
                 map = CreateBattleground(newInstanceId, bg);
+                // Build it now, while the first player is still on their
+                // loading screen, rather than on the first tick after they
+                // arrive - see Battleground::PrepareStartingArea.
+                bg->PrepareStartingArea();
+            }
             else if (player->IsGameMaster())
             {
                 Battleground* debugBg = new Battleground();
