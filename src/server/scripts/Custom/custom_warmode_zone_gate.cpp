@@ -299,6 +299,10 @@ namespace
         bool const capped = ZoneCapStopsXp(player, &top);
         player->SetWarModeXpCapped(capped);
 
+        // The Gurubashi Arena pauses War Mode off the sand whatever the level. It
+        // wears the same badge; only the line spoken on arrival differs.
+        bool const arenaPause = paused && BarracksHardcore::IsInGurubashiArena(player);
+
         uint32 const spell = s_zoneCapAuraSpell.load(std::memory_order_relaxed);
         bool const marked = paused || capped;
         bool const wearing = spell && player->HasAura(spell);
@@ -324,6 +328,12 @@ namespace
 
         if (paused && !wasPaused)
         {
+            if (arenaPause)
+            {
+                handler.PSendSysMessage("War Mode is paused in the Gurubashi Arena: you cannot harm or help other players here. It is live again on the Battle Ring floor.");
+                return;
+            }
+
             handler.PSendSysMessage("%s is below your level. War Mode is paused here: you cannot harm or help other players, and you earn no experience. Travel somewhere your own size, or turn War Mode off.",
                 ZoneNameFor(player));
             return;

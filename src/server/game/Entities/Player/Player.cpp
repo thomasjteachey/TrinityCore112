@@ -1730,11 +1730,12 @@ void Player::Update(uint32 p_time)
                     bool const isCustomGurubashiArea = IsInGurubashiRingArea(m_zoneUpdateId, newarea);
                     bool const isCustomGurubashiFFAArea = IsInGurubashiBattleRing(m_zoneUpdateId, newarea);
 
-                    // Repair stale FFA state when vertical movement keeps the same Battle Ring area id
-                    // but moves between the FFA floor and safe ramp/outer geometry above it.
+                    // Repair stale FFA/sanctuary state when vertical movement keeps the same Battle Ring
+                    // area id but moves between the FFA floor and the sanctuary ramp/outer geometry above it.
                     if (isCustomGurubashiArea &&
                         ((isCustomGurubashiFFAArea && (!pvpInfo.IsInFFAPvPArea || !IsFFAPvP())) ||
-                         (!isCustomGurubashiFFAArea && (pvpInfo.IsInFFAPvPArea || IsFFAPvP()))))
+                         (!isCustomGurubashiFFAArea && (pvpInfo.IsInFFAPvPArea || IsFFAPvP())) ||
+                         (!InBattleground() && isCustomGurubashiFFAArea == pvpInfo.IsInNoPvPArea)))
                         UpdateArea(newarea);
                 }
 
@@ -8771,6 +8772,16 @@ void Player::UpdateArea(uint32 newArea)
     bool const isGurubashiBattleRing = IsInGurubashiBattleRing(m_zoneUpdateId, newArea);
     bool const isGurubashiSafeArea = GetMapId() == 0 && m_zoneUpdateId == 33 && !isGurubashiBattleRing;
 
+    // The Gurubashi Arena off the sand - the grounds (1741), the catacombs
+    // (2177) and the ramps and terraces that share the ring's area id (30232)
+    // above the floor - is a sanctuary. The stands are where people gather to
+    // watch and queue for the hourly fight, and the fight belongs on the sand.
+    // Done here rather than in AreaTable.dbc: 30232 is a WMOAreaTable id with
+    // no AreaTable row, and it is the height, not the id, that tells the ramp
+    // from the ring.
+    bool const isGurubashiSanctuary = isGurubashiSafeArea && !InBattleground() &&
+        (newArea == 1741 || newArea == 2177 || newArea == 30232);
+
     if (isGurubashiBattleRing != m_inGurubashiBattleRing)
     {
         m_inGurubashiBattleRing = isGurubashiBattleRing;
@@ -8818,7 +8829,7 @@ void Player::UpdateArea(uint32 newArea)
 
     // previously this was in UpdateZone (but after UpdateArea) so nothing will break
     pvpInfo.IsInNoPvPArea = false;
-    if (area && area->IsSanctuary())    // in sanctuary
+    if ((area && area->IsSanctuary()) || isGurubashiSanctuary)    // in sanctuary
     {
         SetPvpFlag(UNIT_BYTE2_FLAG_SANCTUARY);
         pvpInfo.IsInNoPvPArea = true;

@@ -687,20 +687,22 @@ namespace BarracksHardcore
         if (!IsWarModeOptedIn(player))
             return false;
 
-        // The Gurubashi Arena is checked FIRST for the same reason IsFfaArmed
-        // checks the ring first: everyone the hourly event drops in there is a
-        // combatant whatever their level, and the arena sits inside Stranglethorn
-        // - a zone most of its entrants have long outlevelled. Pausing them
-        // would leave the one place on the realm that is always a fight full of
-        // people who cannot throw a punch.
+        // The Gurubashi Arena is checked FIRST, before the level bands: it sits
+        // inside Stranglethorn, and what happens there has nothing to do with
+        // how far above Stranglethorn anybody is.
         //
-        // The whole arena, not just the sand: the grounds and the catacombs are
-        // where a fight is opened, broken off and picked back up, and a rule
-        // that only held inside the ropes made the ramp two steps away a place
-        // where nobody could be touched. Somebody who wants out of a fight has
-        // the same way out they have everywhere else, which is to leave.
+        // Inside the ropes War Mode never pauses - everyone the hourly event
+        // drops onto the sand is a combatant whatever their level, the same
+        // reason IsFfaArmed arms the ring before anything else.
+        //
+        // Everywhere else in the arena - the stands, the ramps, the catacombs -
+        // War Mode IS paused, whatever the level. Those are a sanctuary
+        // (Player::UpdateArea), which already stops the hitting and drops any
+        // PvP combat carried out of the ring; the pause adds the half a
+        // sanctuary does not cover, healing and buffing the fighters from the
+        // stands.
         if (IsInGurubashiArena(player))
-            return false;
+            return !player->IsInGurubashiBattleRing();
 
         // Instances, battlegrounds and arenas are not the open world, and the
         // band table has no entry for them anyway.

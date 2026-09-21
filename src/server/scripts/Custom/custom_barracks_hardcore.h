@@ -78,6 +78,9 @@ namespace BarracksHardcore
     // is never paused in a zone that tops out at the cap - which is every zone
     // they have left to play in.
     //
+    // The Gurubashi Arena is the one level-blind case: paused everywhere in it
+    // except on the Battle Ring floor, where everyone fights.
+    //
     // Exported because three separate places need the same answer and none of
     // them may keep its own copy: the FFA ruleset (which disarms), the gate
     // script (which wears the aura and speaks the lines) and, through
