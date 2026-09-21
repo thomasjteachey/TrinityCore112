@@ -144,7 +144,18 @@ ResponseCodes Check(std::string& surname, LocaleConstant locale)
         return CHAR_NAME_INVALID_SPACE;
 
     ResponseCodes const res = sObjectMgr->CheckPlayerName(surname, locale, true);
-    if (res != CHAR_NAME_SUCCESS)
+
+    // Everything that check refuses applies to a family name too - with one
+    // exception. A RESERVED name is one nobody may be CALLED: the realm names
+    // and the like. As a family name it claims nothing, and the list is full of
+    // exactly the words a family name wants - Lightbringer, Shadowmoon. Those
+    // were being refused with a message the rename prompt shows as "That name
+    // is unavailable" against whichever box the player happens to look at,
+    // which is how a perfectly good last name became a bug report.
+    //
+    // First names are still held to both halves, so nobody is called
+    // Lightbringer; they are only FROM the Lightbringers.
+    if (res != CHAR_NAME_SUCCESS && res != CHAR_NAME_RESERVED)
         return res;
 
     normalizePlayerName(surname);
