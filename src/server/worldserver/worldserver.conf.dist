@@ -3631,6 +3631,28 @@ Centurion.Auction.RelistBotHours = 48
 #        Default:     5.0
 #
 Centurion.Hunter.MongooseBite.ScorpidHealPerStrength = 5.0
+
+#
+#    Centurion.BreakableCC.DamageAtCap
+#        Description: Damage that is certain to break a fear, root or Frost Nova
+#                     cast by a level 60 caster. A smaller hit breaks it with
+#                     chance damage / this value. Scales linearly down with
+#                     caster level (level 30 = half). Reloads with .reload config.
+#        Default:     1000
+#
+Centurion.BreakableCC.DamageAtCap = 1000
+
+#
+#    Centurion.BreakableCC.FearOthersBreakInstantly
+#        Description: Fear only. Damage from the fear's caster (or the caster's
+#                     pets and totems) rolls against DamageAtCap as usual; damage
+#                     from anyone else breaks the fear outright. Roots and Frost
+#                     Nova are unaffected. Reloads with .reload config.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled, every hit rolls)
+#
+Centurion.BreakableCC.FearOthersBreakInstantly = 1
+
 #        Description: Death chest lifetime. Default 600.
 #
 #    Centurion.Hardcore.FullLoot.DropChancePercent

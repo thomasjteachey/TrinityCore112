@@ -5932,8 +5932,9 @@ void AuraEffect::HandleBreakableCCAuraProc(AuraApplication* aurApp, ProcEventInf
 
     Unit* caster = GetCaster();
 
-    // Linear from level 1 to 60, arriving at 1200 there - which
-    // is the number a level 60 caster got before, so nothing changes at the top.
+    // Linear from level 1 to 60, arriving at Centurion.BreakableCC.DamageAtCap
+    // there (default 1000; it was a hardcoded 1200, what the old curve gave a
+    // level 60 caster, until fears proved too hard to break).
     //
     // The old curve was (level * 25) - 300, and it did not just get smaller at low
     // level, it CROSSED ZERO at 12. At exactly level 12 maxDamage was 0, the clamp
@@ -5946,7 +5947,7 @@ void AuraEffect::HandleBreakableCCAuraProc(AuraApplication* aurApp, ProcEventInf
     // 60 is the ruleset, not a variable. Both realms are classic-capped and a
     // caster above it should simply sit at the top of the curve.
     constexpr uint32 CapLevel = 60;
-    constexpr int32 MaxThresholdAtCap = 1200;
+    int32 const MaxThresholdAtCap = int32(sWorld->getIntConfig(CONFIG_CENTURION_BREAKABLE_CC_DAMAGE_AT_CAP));
 
     int32 maxDamage = MaxThresholdAtCap;
     if (caster)
@@ -5963,6 +5964,21 @@ void AuraEffect::HandleBreakableCCAuraProc(AuraApplication* aurApp, ProcEventInf
         return;
 
     int32 damage = damageInfo->GetDamage();
+
+    // Only the fear's own caster gets the roll above: anyone else's damage breaks
+    // it outright. The caster's pets and totems count as the caster, so a
+    // warlock's imp does not undo its master's fear.
+    if (GetAuraType() == SPELL_AURA_MOD_FEAR && damage > 0
+        && sWorld->getBoolConfig(CONFIG_CENTURION_FEAR_OTHERS_BREAK_INSTANTLY))
+    {
+        Unit* attacker = damageInfo->GetAttacker();
+        if (!attacker || attacker->GetCharmerOrOwnerOrSelf()->GetGUID() != GetCasterGUID())
+        {
+            aurApp->GetTarget()->RemoveAura(aurApp);
+            return;
+        }
+    }
+
     if (damage > maxDamage)
     {
         damage = maxDamage;
