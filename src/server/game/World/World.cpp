@@ -20,6 +20,7 @@
 */
 
 #include "World.h"
+#include "Miscellaneous/BattlegroundSpoils.h"
 #include "Miscellaneous/BotUpdatePolicy.h"
 #include "Miscellaneous/CharacterScreen.h"
 #include "Miscellaneous/CooldownStash.h"
@@ -1554,6 +1555,13 @@ void World::LoadConfigSettings(bool reload)
     // full level at the bracket's midpoint level.
     m_bool_configs[CONFIG_CENTURION_BG_XP_INSTEAD_OF_HONOR] = sConfigMgr->GetBoolDefault("Centurion.Battleground.XpInsteadOfHonor", false);
     m_int_configs[CONFIG_CENTURION_BG_XP_HONOR_PER_LEVEL] = std::max(1, sConfigMgr->GetIntDefault("Centurion.Battleground.XpInsteadOfHonor.HonorPerLevel", 2240));
+    // A chest of bracket greens for a person below the cap who saw a battleground
+    // to its end (Battleground::AwardSpoilsChest). FirstItem is the 10-19 chest;
+    // each later ten-level bracket is the next entry.
+    m_bool_configs[CONFIG_CENTURION_BG_SPOILS_ENABLE] = sConfigMgr->GetBoolDefault("Centurion.Battleground.Spoils.Enable", false);
+    m_int_configs[CONFIG_CENTURION_BG_SPOILS_FIRST_ITEM] = sConfigMgr->GetIntDefault("Centurion.Battleground.Spoils.FirstItem", 13642);
+    m_int_configs[CONFIG_CENTURION_BG_SPOILS_LOSER_CHANCE] = std::min(100, std::max(0, sConfigMgr->GetIntDefault("Centurion.Battleground.Spoils.LoserChancePercent", 50)));
+    m_int_configs[CONFIG_CENTURION_BG_SPOILS_MIN_PRESENCE] = std::min(100, std::max(0, sConfigMgr->GetIntDefault("Centurion.Battleground.Spoils.MinPresencePercent", 50)));
     // Percent chance a Violet Hold wave mirrors the party itself rather than
     // being drawn from the playerbot population (the 2.5% mono and full-roster
     // specials roll first and are unaffected).
@@ -2184,6 +2192,9 @@ void World::SetInitialWorldSettings()
 
     // Loot tables
     LoadLootTables();
+
+    TC_LOG_INFO("server.loading", "Loading battleground spoils pools...");
+    BattlegroundSpoils::LoadPools();
 
     TC_LOG_INFO("server.loading", "Loading Skill Discovery Table...");
     LoadSkillDiscoveryTable();

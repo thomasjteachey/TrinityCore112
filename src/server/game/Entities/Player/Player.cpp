@@ -24,6 +24,7 @@
 #include <unordered_set>
 #include "AccountMgr.h"
 #include "AccountBankMgr.h"
+#include "Miscellaneous/BattlegroundSpoils.h"
 #include "Miscellaneous/CharacterScreen.h"
 #include "Miscellaneous/CooldownStash.h"
 #include "Miscellaneous/Mokgora.h"
@@ -10509,6 +10510,7 @@ void Player::SendLoot(ObjectGuid guid, LootType loot_type)
             default:
                 loot->generateMoneyLoot(item->GetTemplate()->MinMoneyLoot, item->GetTemplate()->MaxMoneyLoot);
                 loot->FillLoot(item->GetEntry(), LootTemplates_Item, this, true, loot->gold != 0);
+                BattlegroundSpoils::TailorChestLoot(*loot, item->GetEntry(), this);
 
                 // Force save the loot and money items that were just rolled
                 //  Also saves the container item ID in Loot struct (not to DB)

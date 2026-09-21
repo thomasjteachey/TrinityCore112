@@ -48,6 +48,7 @@
 #include "WorldStatePackets.h"
 #include "WorldSession.h"
 #include "Item.h"
+#include "Mail.h"
 #include <algorithm>
 #include <cstdarg>
 #include <vector>
@@ -789,6 +790,80 @@ void Battleground::CenturionRewardHonorToTeam(uint32 Honor, uint32 TeamID)
             player->RewardHonor(nullptr, 1, int32(Honor));
 }
 
+// Below the cap a battleground pays its honor as experience, which is a reward
+// nobody sees. The spoils chest is the thing you can hold: a chest of the
+// bracket's world-drop greens for every PERSON below the cap who was still there
+// when the match ended - always for the winners, LoserChancePercent for the rest.
+//
+// Picked by the character's own level, one chest per ten-level bracket starting
+// at FirstItem (10-19). The contents are ordinary item_loot_template rows, so the
+// loot is data and changes without a build.
+//
+// Not paid in arenas, custom games or Violet Hold (whose "enemies" are summoned
+// clones), nor to bots, bounty hunters, tournament characters or anyone at the
+// cap. A frozen-experience character still gets it: the chest is the reward for
+// playing a bracket, not for levelling through it. Bags full -> it is mailed.
+void Battleground::AwardSpoilsChest(Player* player, bool won)
+{
+    if (!sWorld->getBoolConfig(CONFIG_CENTURION_BG_SPOILS_ENABLE))
+        return;
+
+    if (m_IsCustomGame || !isBattleground() || GetTypeID(true) == BATTLEGROUND_VHR)
+        return;
+
+    WorldSession* session = player->GetSession();
+    if (!session || session->IsVirtualSession() || session->IsTransientPlayerSession())
+        return;
+
+    if (Tournament::IsTournamentCharacter(player))
+        return;
+
+    uint32 const level = player->GetLevel();
+    uint32 const cap = player->GetUInt32Value(PLAYER_FIELD_MAX_LEVEL);
+    if (level < 10 || level >= cap)
+        return;
+
+    // A full run, not the last two minutes of one: whoever arrived late must
+    // still have been here for MinPresencePercent of the match.
+    BattlegroundPlayerMap::const_iterator const bp = m_Players.find(player->GetGUID());
+    if (bp == m_Players.end())
+        return;
+    uint32 const present = GetStartTime() - std::min(GetStartTime(), bp->second.JoinStartTime);
+    if (uint64(present) * 100 < uint64(GetStartTime()) * sWorld->getIntConfig(CONFIG_CENTURION_BG_SPOILS_MIN_PRESENCE))
+        return;
+
+    if (!won && !roll_chance_i(int32(sWorld->getIntConfig(CONFIG_CENTURION_BG_SPOILS_LOSER_CHANCE))))
+        return;
+
+    uint32 const chestEntry = sWorld->getIntConfig(CONFIG_CENTURION_BG_SPOILS_FIRST_ITEM) + (level / 10 - 1);
+    ItemTemplate const* proto = sObjectMgr->GetItemTemplate(chestEntry);
+    if (!proto)
+    {
+        TC_LOG_ERROR("bg.battleground", "Battleground::AwardSpoilsChest: spoils chest {} for level {} does not exist", chestEntry, level);
+        return;
+    }
+
+    ItemPosCountVec dest;
+    if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, chestEntry, 1) == EQUIP_ERR_OK)
+    {
+        if (Item* chest = player->StoreNewItem(dest, chestEntry, true))
+        {
+            player->SendNewItem(chest, 1, true, false);
+            return;
+        }
+    }
+
+    if (Item* chest = Item::CreateItem(chestEntry, 1, player))
+    {
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+        chest->SaveToDB(trans);
+        MailDraft(proto->Name1, "Your bags were full at the end of the battle, so your spoils were sent here.")
+            .AddItem(chest)
+            .SendMailTo(trans, player, MailSender(player, MAIL_STATIONERY_GM), MAIL_CHECK_MASK_COPIED);
+        CharacterDatabase.CommitTransaction(trans);
+    }
+}
+
 void Battleground::RewardHonorToTeam(uint32 Honor, uint32 TeamID)
 {
     if (m_IsCustomGame)
@@ -1030,6 +1105,8 @@ void Battleground::EndBattleground(uint32 winner)
                         && GetTypeID(true) != BATTLEGROUND_VHR;
                     if (canRestoreMark && Trinity::Custom::ConsumeEligibleDepletedMarks(player, 1))
                         player->AddItem(Trinity::Custom::GetRestoredMarkEntry(), 1); // restored mark of honor
+
+                    AwardSpoilsChest(player, true);
                 }
                 player->ModifyMoney(winner_money);
                 if (winner_money)
@@ -1047,7 +1124,10 @@ void Battleground::EndBattleground(uint32 winner)
             else
             {
                 if (!m_IsCustomGame)
+                {
                     player->RewardHonor(nullptr, 1, loser_honor);
+                    AwardSpoilsChest(player, false);
+                }
                 player->ModifyMoney(loser_money);
                 if (loser_money)
                 {
@@ -1486,11 +1566,14 @@ void Battleground::AddPlayer(Player* player)
         player->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
     }
 
+    bool const isInBattleground = IsPlayerInBattleground(player->GetGUID());
+
     BattlegroundPlayer bp;
     bp.OfflineRemoveTime = 0;
     bp.Team = team;
+    // A reconnect keeps the original arrival, so it cannot shorten a stay.
+    bp.JoinStartTime = isInBattleground ? m_Players[player->GetGUID()].JoinStartTime : GetStartTime();
 
-    bool const isInBattleground = IsPlayerInBattleground(player->GetGUID());
     // Add to list/maps
     m_Players[player->GetGUID()] = bp;
 

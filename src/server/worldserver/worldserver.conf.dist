@@ -2942,6 +2942,35 @@ Centurion.Battleground.XpInsteadOfHonor.HonorPerLevel = 2240
 Centurion.Battleground.ArenaExperienceMultiplier = 0.4
 
 #
+#    Centurion.Battleground.Spoils.Enable
+#        Description: A chest of world-drop greens for a person below the level cap
+#                     who saw a battleground to its end. Not paid in arenas, custom
+#                     games or Violet Hold, nor to bots, bounty hunters, tournament
+#                     characters or anyone at the cap. Mailed when the bags are full.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+#
+#    Centurion.Battleground.Spoils.FirstItem
+#        Description: Item entry of the 10-19 chest; each later ten-level bracket is
+#                     the next entry (20-29 = FirstItem + 1, ...). What each chest
+#                     holds is item_loot_template.
+#        Default:     13642
+#
+#    Centurion.Battleground.Spoils.LoserChancePercent
+#        Description: Percent chance the losing side gets a chest too. Winners always do.
+#        Default:     50
+#
+#    Centurion.Battleground.Spoils.MinPresencePercent
+#        Description: Share of the match a player must have been there for. Keeps a
+#                     late backfill from collecting a chest for the last two minutes.
+#        Default:     50
+
+Centurion.Battleground.Spoils.Enable = 0
+Centurion.Battleground.Spoils.FirstItem = 13642
+Centurion.Battleground.Spoils.LoserChancePercent = 50
+Centurion.Battleground.Spoils.MinPresencePercent = 50
+
+#
 #    Centurion.Battleground.BlockArtifactGear
 #        Description: Refuse entry to a battleground or arena to anyone wearing an
 #                     artifact quality item, teleporting them to Gurubashi instead.
