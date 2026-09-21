@@ -1188,6 +1188,20 @@ namespace
     }
 }
 
+// Whether a blow from `attacker` is the duel opponent's own: the opponent, or
+// anything the opponent controls or owns. Control alone is not enough - once
+// the opponent is mind controlled, their body, the DoTs they left ticking,
+// their pet and their totems all report the CHARMER as controlling player, and
+// in a duel the charmer is usually the very player those DoTs are killing.
+static bool IsDuelOpponentsBlow(Unit const* attacker, Player const* opponent)
+{
+    if (!attacker || !opponent)
+        return false;
+
+    return attacker == opponent || attacker->GetControllingPlayer() == opponent ||
+        attacker->GetOwnerGUID() == opponent->GetGUID();
+}
+
 /*static*/ uint32 Unit::DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage const* cleanDamage, DamageEffectType damagetype, SpellSchoolMask damageSchoolMask, SpellInfo const* spellProto, bool durabilityLoss)
 {
     // Applied at the very top so everything downstream agrees on one number:
@@ -1410,7 +1424,7 @@ namespace
             return 0;
 
         // prevent kill only if killed in duel and killed by opponent or opponent controlled creature
-        if (victim->ToPlayer()->duel->Opponent == attacker->GetControllingPlayer())
+        if (IsDuelOpponentsBlow(attacker, victim->ToPlayer()->duel->Opponent))
             damage = health - 1;
 
         duel_hasEnded = true;
@@ -1425,7 +1439,7 @@ namespace
                 return 0;
 
             // prevent kill only if killed in duel and killed by opponent or opponent controlled creature
-            if (victimRider->duel->Opponent == attacker->GetControllingPlayer())
+            if (IsDuelOpponentsBlow(attacker, victimRider->duel->Opponent))
                 damage = health - 1;
 
             duel_wasMounted = true;
@@ -13085,7 +13099,8 @@ bool Unit::InitTamedPet(Pet* pet, uint8 level, uint32 spell_id)
             // interference, and that voids the match exactly the way the stock
             // rule voids an ordinary duel.
             bool const mokgoraSettled = plrVictim->duel->Mokgora &&
-                (!player || player == plrVictim->duel->Opponent);
+                (!player || player == plrVictim->duel->Opponent ||
+                 IsDuelOpponentsBlow(attacker, plrVictim->duel->Opponent));
 
             plrVictim->DuelComplete(mokgoraSettled ? DUEL_WON : DUEL_INTERRUPTED);
         }
