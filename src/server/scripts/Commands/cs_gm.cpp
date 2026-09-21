@@ -230,7 +230,7 @@ public:
         return true;
     }
 
-    static bool HandleGMDiagnosticsCommand(ChatHandler* handler, bool enable, Optional<std::string> categoryArg)
+    static bool HandleGMDiagnosticsCommand(ChatHandler* handler, bool enable, Optional<std::string> categoryArg, Optional<std::string> botArg)
     {
         WorldSession* session = handler->GetSession();
         if (!session)
@@ -261,6 +261,8 @@ public:
             diagnosticCategory = GmDiagnosticCategory::SpellTarget;
         else if (category == "pet")
             diagnosticCategory = GmDiagnosticCategory::Pet;
+        else if (category == "matchbots")
+            diagnosticCategory = GmDiagnosticCategory::MatchBots;
         else
         {
             // Split by blast radius, because the two halves behave very
@@ -269,6 +271,7 @@ public:
             // player on the realm, with no map or distance filter.
             handler->SendSysMessage("Usage: .gm diagnostics on/off [category]");
             handler->SendSysMessage("  About you:       heartbeat, combat, channel, spelltarget, pet");
+            handler->SendSysMessage("  About your match: matchbots [bot name] - the bots in the battleground or arena you are in");
             handler->SendSysMessage("  About the realm: feign, playerbot, customauras, sacrificialaura");
             handler->SendSysMessage("  all - every category. The realm-wide ones are very noisy on a populated realm.");
             handler->SetSentErrorMessage(true);
@@ -277,8 +280,14 @@ public:
 
         session->SetGmDiagnosticEnabled(diagnosticCategory, enable);
 
+        // Narrows matchbots to one bot. Turning it on again with a different
+        // name (or none) re-targets it; the playerbot module notices the change
+        // and prints a fresh snapshot.
+        if (diagnosticCategory == GmDiagnosticCategory::MatchBots || diagnosticCategory == GmDiagnosticCategory::All)
+            session->SetGmDiagnosticBotFilter(enable && botArg ? *botArg : std::string());
+
         handler->PSendSysMessage(
-            "GM diagnostics %s for %s. Current: heartbeat=%s, combat=%s, playerbot=%s, feign=%s, channel=%s, customauras=%s, sacrificialaura=%s, spelltarget=%s, pet=%s.",
+            "GM diagnostics %s for %s. Current: heartbeat=%s, combat=%s, playerbot=%s, feign=%s, channel=%s, customauras=%s, sacrificialaura=%s, spelltarget=%s, pet=%s, matchbots=%s%s%s.",
             enable ? "enabled" : "disabled", category.c_str(),
             session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Heartbeat) ? "on" : "off",
             session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Combat) ? "on" : "off",
@@ -288,7 +297,10 @@ public:
             session->IsGmDiagnosticEnabled(GmDiagnosticCategory::CustomAuras) ? "on" : "off",
             session->IsGmDiagnosticEnabled(GmDiagnosticCategory::SacrificialAura) ? "on" : "off",
             session->IsGmDiagnosticEnabled(GmDiagnosticCategory::SpellTarget) ? "on" : "off",
-            session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Pet) ? "on" : "off");
+            session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Pet) ? "on" : "off",
+            session->IsGmDiagnosticEnabled(GmDiagnosticCategory::MatchBots) ? "on" : "off",
+            session->GetGmDiagnosticBotFilter().empty() ? "" : " for ",
+            session->GetGmDiagnosticBotFilter().c_str());
 
         // Switching the pet trace on prints the pet's state once, immediately.
         // The trace itself only speaks when something changes, so without this

@@ -22,6 +22,7 @@
 #include "Configuration/Config.h"
 #include "Chat.h"
 #include "CharacterCache.h"
+#include "DBCStores.h"
 #include "GameTime.h"
 #include "Globals/ObjectAccessor.h"
 #include "Item.h"
@@ -50,6 +51,7 @@
 #include "ScriptMgr.h"
 #include "WorldSession.h"
 #include "Spell.h"
+#include "SpellAuras.h"
 #include "SpellInfo.h"
 #include "SpellHistory.h"
 #include "SpellMgr.h"
@@ -658,6 +660,411 @@ BattlegroundTypeId ResolveCurrentBgTypeFromPlayerContext(Player const* player)
     return BATTLEGROUND_TYPE_NONE;
 }
 
+// ---------------------------------------------------------------------------
+// Match diagnostics: the bots seated in the battleground or arena the GM is in.
+// A clone carries a generated internal name and its display name lives only in
+// the character cache, so everything here matches and prints by both.
+// ---------------------------------------------------------------------------
+
+std::string BotDisplayName(Player const* bot)
+{
+    std::string displayName;
+    if (!bot)
+        return displayName;
+    if (!sCharacterCache->GetCharacterNameByGuid(bot->GetGUID(), displayName) || displayName.empty())
+        displayName = bot->GetName();
+    return displayName;
+}
+
+std::string UnitDisplayName(Unit const* unit)
+{
+    if (!unit)
+        return "none";
+    if (Player const* player = unit->ToPlayer())
+        return BotDisplayName(player);
+    return unit->GetName();
+}
+
+bool IsMatchBot(Player const* player)
+{
+    return playerbot::PlayerbotObcCloneManager::IsActiveClone(player) || playerbot::IsManagedRandomBot(player);
+}
+
+char const* TeamTag(uint32 team)
+{
+    return team == ALLIANCE ? "A" : (team == HORDE ? "H" : "?");
+}
+
+std::string SpellLabel(uint32 spellId)
+{
+    if (!spellId)
+        return "none";
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    std::ostringstream label;
+    label << (spellInfo && spellInfo->SpellName[0] ? spellInfo->SpellName[0] : "?") << '(' << spellId << ')';
+    return label.str();
+}
+
+// The spell being cast or channelled right now, or 0.
+uint32 CurrentCastSpellId(Unit const* unit)
+{
+    for (uint32 type : { CURRENT_CHANNELED_SPELL, CURRENT_GENERIC_SPELL })
+        if (Spell const* spell = unit->GetCurrentSpell(type))
+            if (spell->GetSpellInfo())
+                return spell->GetSpellInfo()->Id;
+    return 0;
+}
+
+std::string LossOfControlSummary(Unit const* unit)
+{
+    std::string summary;
+    auto add = [&summary](bool condition, char const* label)
+    {
+        if (!condition)
+            return;
+        if (!summary.empty())
+            summary += ',';
+        summary += label;
+    };
+    add(unit->HasUnitState(UNIT_STATE_STUNNED), "stunned");
+    add(unit->HasUnitState(UNIT_STATE_ROOT), "rooted");
+    add(unit->HasUnitState(UNIT_STATE_FLEEING), "fleeing");
+    add(unit->HasUnitState(UNIT_STATE_CONFUSED), "confused");
+    add(unit->HasUnitFlag(UNIT_FLAG_SILENCED), "silenced");
+    add(unit->HasUnitFlag(UNIT_FLAG_PACIFIED), "pacified");
+    add(unit->HasAuraType(SPELL_AURA_MOD_DISARM), "disarmed");
+    add(unit->HasStealthAura(), "stealthed");
+    add(unit->IsMounted(), "mounted");
+    return summary.empty() ? "free" : summary;
+}
+
+Battleground* GetObserverMatch(Player* observer)
+{
+    Map* map = observer ? observer->FindMap() : nullptr;
+    if (!map || !map->IsBattlegroundOrArena())
+        return nullptr;
+    BattlegroundMap* battlegroundMap = map->ToBattlegroundMap();
+    return battlegroundMap ? battlegroundMap->GetBG() : nullptr;
+}
+
+std::vector<Player*> CollectMatchBots(Player* observer)
+{
+    std::vector<Player*> bots;
+    Map* map = observer ? observer->FindMap() : nullptr;
+    if (!map)
+        return bots;
+
+    for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (candidate && candidate != observer && candidate->IsInWorld() && IsMatchBot(candidate))
+            bots.push_back(candidate);
+    }
+
+    Battleground const* battleground = GetObserverMatch(observer);
+    std::sort(bots.begin(), bots.end(), [battleground](Player const* left, Player const* right)
+    {
+        uint32 const leftTeam = battleground ? battleground->GetPlayerTeam(left->GetGUID()) : 0;
+        uint32 const rightTeam = battleground ? battleground->GetPlayerTeam(right->GetGUID()) : 0;
+        if (leftTeam != rightTeam)
+            return leftTeam < rightTeam;
+        return BotDisplayName(left) < BotDisplayName(right);
+    });
+    return bots;
+}
+
+std::string ToLowerCopy(std::string text)
+{
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char character)
+    {
+        return static_cast<char>(std::tolower(character));
+    });
+    return text;
+}
+
+std::string FormatHistoryEntry(playerbot::PvpClassActions::ExecutionHistoryEntry const& entry, uint32 nowMs)
+{
+    std::ostringstream line;
+    line.setf(std::ios::fixed);
+    line.precision(1);
+    line << '-' << (float(nowMs - entry.gameTimeMs) / 1000.0f) << "s " << entry.status;
+    if (entry.repeats > 1)
+        line << " [x" << entry.repeats << ']';
+    if (!entry.targetName.empty())
+        line << " @" << entry.targetName;
+    return line.str();
+}
+
+void ReportMatchBot(ChatHandler* handler, Player* observer, Battleground* battleground, Player* bot)
+{
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32 const team = battleground->GetPlayerTeam(bot->GetGUID());
+
+    std::string sourceName = "-";
+    for (playerbot::PlayerbotObcCloneManager::CustomGameCloneInfo const& clone :
+        playerbot::PlayerbotObcCloneManager::GetCustomGameClones(battleground->GetInstanceID()))
+    {
+        if (clone.cloneGuid != bot->GetGUID())
+            continue;
+        if (!sCharacterCache->GetCharacterNameByGuid(clone.sourceGuid, sourceName))
+            sourceName = clone.sourceGuid.ToString();
+        break;
+    }
+
+    handler->PSendSysMessage("== %s (%s) L%u %s, team %s%s, source %s, %s",
+        BotDisplayName(bot).c_str(), bot->GetName().c_str(), uint32(bot->GetLevel()),
+        GetClassName(bot->GetClass(), handler->GetSessionDbcLocale()),
+        TeamTag(team), team && team == battleground->GetPlayerTeam(observer->GetGUID()) ? " (yours)" : "",
+        sourceName.c_str(),
+        playerbot::PlayerbotObcCloneManager::IsActiveClone(bot) ? "transient clone" : "managed bot");
+
+    handler->PSendSysMessage("vitals: %s hp %u/%u (%.0f%%) power %u/%u (%.0f%%) form=%u dist=%.1f pos=(%.1f,%.1f,%.1f) combat=%s",
+        bot->IsAlive() ? "alive" : "DEAD",
+        bot->GetHealth(), bot->GetMaxHealth(), bot->GetHealthPct(),
+        bot->GetPower(bot->GetPowerType()), bot->GetMaxPower(bot->GetPowerType()), bot->GetPowerPct(bot->GetPowerType()),
+        uint32(bot->GetShapeshiftForm()), observer->GetDistance(bot),
+        bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(),
+        bot->IsInCombat() ? "yes" : "no");
+
+    Unit const* selected = bot->GetTarget().IsEmpty() ? nullptr : ObjectAccessor::GetUnit(*bot, bot->GetTarget());
+    Unit const* victim = bot->GetVictim();
+    MotionMaster const* motionMaster = bot->GetMotionMaster();
+    handler->PSendSysMessage("control: %s casting=%s motion=%s moving=%s",
+        LossOfControlSummary(bot).c_str(), SpellLabel(CurrentCastSpellId(bot)).c_str(),
+        ToString(motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE),
+        bot->isMoving() ? "yes" : "no");
+
+    auto describeTarget = [bot](Unit const* unit) -> std::string
+    {
+        if (!unit)
+            return "none";
+        std::ostringstream text;
+        text.setf(std::ios::fixed);
+        text.precision(1);
+        text << UnitDisplayName(unit) << " d=" << bot->GetDistance(unit)
+             << " hp=" << unit->GetHealthPct() << "% los=" << (bot->IsWithinLOSInMap(unit) ? "yes" : "no")
+             << " front=" << (bot->HasInArc(float(M_PI), unit) ? "yes" : "no")
+             << " cc=" << LossOfControlSummary(unit);
+        return text.str();
+    };
+    handler->PSendSysMessage("selected: %s", describeTarget(selected).c_str());
+    if (victim != selected)
+        handler->PSendSysMessage("melee victim: %s", describeTarget(victim).c_str());
+
+    // Harmful auras in full; helpful ones only by name, they are mostly
+    // passives and buffs.
+    std::string harmful;
+    uint32 helpfulCount = 0;
+    for (auto const& [spellId, application] : bot->GetAppliedAuras())
+    {
+        if (application->IsPositive())
+        {
+            ++helpfulCount;
+            continue;
+        }
+        Aura const* aura = application->GetBase();
+        Unit const* caster = aura->GetCaster();
+        std::ostringstream entry;
+        entry << SpellLabel(spellId);
+        if (aura->GetStackAmount() > 1)
+            entry << 'x' << uint32(aura->GetStackAmount());
+        if (!aura->IsPermanent())
+            entry << ' ' << (aura->GetDuration() / IN_MILLISECONDS) << 's';
+        entry << " by " << UnitDisplayName(caster);
+        if (!harmful.empty())
+            harmful += "; ";
+        harmful += entry.str();
+    }
+    handler->PSendSysMessage("debuffs: %s (+%u helpful auras)", harmful.empty() ? "none" : harmful.c_str(), helpfulCount);
+
+    // What the selector would choose right now. Same call the whisper
+    // diagnostic makes; it does not cast.
+    playerbot::PvpValues const values = playerbot::PvpCore::CollectValues(bot);
+    playerbot::PvpClassSpellContext const context = playerbot::PvpCore::BuildClassSpellContext(bot, values);
+    Unit const* decisionTarget = context.targetGuid.IsEmpty() ? nullptr : ObjectAccessor::GetUnit(*bot, context.targetGuid);
+    Unit const* moveTarget = context.movementTargetGuid.IsEmpty() ? nullptr : ObjectAccessor::GetUnit(*bot, context.movementTargetGuid);
+    handler->PSendSysMessage("now: gate=%s exec=%s action=%s spell=%s reason=%s target(%s)=%s move=%s->%s range=%.1f",
+        context.classSpellsEnabled ? "on" : "off", context.shouldExecute ? "yes" : "no",
+        context.actionName ? context.actionName : "none", SpellLabel(context.spellId).c_str(),
+        context.reason ? context.reason : "none", ToString(context.targetMode), UnitDisplayName(decisionTarget).c_str(),
+        ToString(context.movementDirective), UnitDisplayName(moveTarget).c_str(), context.movementFollowRange);
+
+    std::string const moveDiag = playerbot::PvpClassActions::GetLastMovementDebugStatus(bot);
+    handler->PSendSysMessage("move: %s", moveDiag.c_str());
+    std::string const execDiag = playerbot::PvpClassActions::GetLastExecutionStatus(bot);
+    handler->PSendSysMessage("exec: %s", execDiag.c_str());
+    if (std::string const emfhDiag = playerbot::PvpCore::GetLastEveryManForHimselfDiagnostic(bot); !emfhDiag.empty())
+        handler->PSendSysMessage("emfh: %s", emfhDiag.c_str());
+
+    std::vector<playerbot::PvpClassActions::ExecutionHistoryEntry> const history = playerbot::PvpClassActions::GetExecutionHistory(bot);
+    constexpr size_t kHistoryShown = 12;
+    size_t const first = history.size() > kHistoryShown ? history.size() - kHistoryShown : 0;
+    handler->PSendSysMessage("history (last %u of %u, newest last):", uint32(history.size() - first), uint32(history.size()));
+    for (size_t index = first; index < history.size(); ++index)
+        handler->PSendSysMessage("  %s", FormatHistoryEntry(history[index], nowMs).c_str());
+}
+
+// One line per bot: side (* = yours), class, vitals, loss of control, cast,
+// target, distance and the last thing it decided.
+void ReportMatchRoster(ChatHandler* handler, Player* observer, Battleground* battleground, std::vector<Player*> const& bots)
+{
+    uint32 const myTeam = battleground->GetPlayerTeam(observer->GetGUID());
+    handler->PSendSysMessage("[MatchBots] %s (instance %u, map %u): %u bots. '.gm diagnostics on matchbots <name>' follows one.",
+        battleground->GetName().c_str(), battleground->GetInstanceID(), observer->GetMapId(), uint32(bots.size()));
+
+    for (Player* bot : bots)
+    {
+        uint32 const team = battleground->GetPlayerTeam(bot->GetGUID());
+        Unit const* target = bot->GetTarget().IsEmpty() ? nullptr : ObjectAccessor::GetUnit(*bot, bot->GetTarget());
+        std::string exec = playerbot::PvpClassActions::GetLastExecutionStatus(bot);
+        if (exec.size() > 70)
+            exec = exec.substr(0, 70) + "...";
+
+        handler->PSendSysMessage("[%s%s] %s %s %s hp%.0f%% pw%.0f%% %s%s cast=%s tgt=%s d=%.0f | %s",
+            TeamTag(team), myTeam && team == myTeam ? "*" : "",
+            BotDisplayName(bot).c_str(),
+            GetClassName(bot->GetClass(), handler->GetSessionDbcLocale()),
+            bot->IsAlive() ? "" : "DEAD",
+            bot->GetHealthPct(), bot->GetPowerPct(bot->GetPowerType()),
+            LossOfControlSummary(bot).c_str(),
+            playerbot::PlayerbotObcCloneManager::IsActiveClone(bot) ? "" : " (managed)",
+            SpellLabel(CurrentCastSpellId(bot)).c_str(),
+            UnitDisplayName(target).c_str(),
+            observer->GetDistance(bot),
+            exec.c_str());
+    }
+}
+
+// Display or internal name starts with the filter; an empty filter takes all.
+bool BotMatchesFilter(Player const* bot, std::string const& lowerFilter)
+{
+    if (lowerFilter.empty())
+        return true;
+    std::string const displayName = ToLowerCopy(BotDisplayName(bot));
+    std::string const internalName = ToLowerCopy(bot->GetName());
+    return displayName.compare(0, lowerFilter.size(), lowerFilter) == 0 ||
+        internalName.compare(0, lowerFilter.size(), lowerFilter) == 0;
+}
+
+// ".gm diagnostics on matchbots [name]". The command itself lives in the core
+// scripts, which build without this module, so it only sets a session bit and
+// a name filter; this side notices them from the GM's own player update. On
+// switching on, entering a match or changing the name it prints a snapshot
+// (the full dump when the name picks out one bot, the roster otherwise), then
+// streams every new decision the followed bots make.
+struct MatchBotDiagnosticState
+{
+    bool announced = false;
+    uint32 instanceId = 0;
+    std::string filter;
+    uint32 lastPollMs = 0;
+    std::unordered_map<ObjectGuid, uint64> lastSequenceByBot;
+};
+
+// Keyed by GM; each GM is polled on its own map thread, hence the lock. Held
+// for the whole poll - only GMs with the category on ever take it, and nothing
+// that runs under it takes this lock back.
+std::unordered_map<ObjectGuid, MatchBotDiagnosticState> g_MatchBotDiagnostics;
+std::mutex g_MatchBotDiagnosticsLock;
+std::atomic<bool> g_AnyMatchBotDiagnostics{ false };
+
+void ForgetMatchBotDiagnostics(ObjectGuid observerGuid)
+{
+    std::lock_guard<std::mutex> lock(g_MatchBotDiagnosticsLock);
+    g_MatchBotDiagnostics.erase(observerGuid);
+    g_AnyMatchBotDiagnostics.store(!g_MatchBotDiagnostics.empty(), std::memory_order_relaxed);
+}
+
+void PollMatchBotDiagnostics(Player* observer, WorldSession* session)
+{
+    constexpr uint32 kPollIntervalMs = 250;
+    constexpr size_t kMaxLinesPerPoll = 8;
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    std::lock_guard<std::mutex> lock(g_MatchBotDiagnosticsLock);
+    MatchBotDiagnosticState& state = g_MatchBotDiagnostics[observer->GetGUID()];
+    g_AnyMatchBotDiagnostics.store(true, std::memory_order_relaxed);
+    if (state.announced && nowMs - state.lastPollMs < kPollIntervalMs)
+        return;
+    state.lastPollMs = nowMs;
+
+    ChatHandler handler(session);
+    Battleground* battleground = GetObserverMatch(observer);
+    uint32 const instanceId = battleground ? battleground->GetInstanceID() : 0;
+    std::string const filter = ToLowerCopy(session->GetGmDiagnosticBotFilter());
+
+    if (!state.announced || state.instanceId != instanceId || state.filter != filter)
+    {
+        state.announced = true;
+        state.instanceId = instanceId;
+        state.filter = filter;
+        state.lastSequenceByBot.clear();
+
+        if (!battleground)
+        {
+            handler.PSendSysMessage("[MatchBots] on%s%s - starts when you are in a battleground or arena.",
+                filter.empty() ? "" : " for ", filter.c_str());
+            return;
+        }
+
+        std::vector<Player*> bots = CollectMatchBots(observer);
+        bots.erase(std::remove_if(bots.begin(), bots.end(), [&filter](Player const* bot)
+        {
+            return !BotMatchesFilter(bot, filter);
+        }), bots.end());
+
+        if (!filter.empty() && bots.size() == 1)
+            ReportMatchBot(&handler, observer, battleground, bots.front());
+        else if (!filter.empty() && bots.empty())
+            handler.PSendSysMessage("[MatchBots] no bot named '%s' in your match yet; it is followed if one joins.", filter.c_str());
+        else
+            ReportMatchRoster(&handler, observer, battleground, bots);
+
+        // The snapshot already carries the history; stream only what follows.
+        for (Player* bot : bots)
+        {
+            std::vector<playerbot::PvpClassActions::ExecutionHistoryEntry> const history = playerbot::PvpClassActions::GetExecutionHistory(bot);
+            state.lastSequenceByBot[bot->GetGUID()] = history.empty() ? 0 : history.back().sequence;
+        }
+        return;
+    }
+
+    if (!battleground)
+        return;
+
+    size_t sent = 0;
+    size_t skipped = 0;
+    for (Player* bot : CollectMatchBots(observer))
+    {
+        if (!BotMatchesFilter(bot, filter))
+            continue;
+
+        uint64& lastSequence = state.lastSequenceByBot[bot->GetGUID()];
+        std::vector<playerbot::PvpClassActions::ExecutionHistoryEntry> const entries =
+            playerbot::PvpClassActions::GetExecutionHistory(bot, lastSequence);
+        if (entries.empty())
+            continue;
+        lastSequence = entries.back().sequence;
+
+        std::string const name = BotDisplayName(bot);
+        std::string const control = LossOfControlSummary(bot);
+        for (playerbot::PvpClassActions::ExecutionHistoryEntry const& entry : entries)
+        {
+            if (sent >= kMaxLinesPerPoll)
+            {
+                ++skipped;
+                continue;
+            }
+            handler.PSendSysMessage("[MatchBots] %s %.0f%%hp %s: %s", name.c_str(), bot->GetHealthPct(),
+                control.c_str(), FormatHistoryEntry(entry, nowMs).c_str());
+            ++sent;
+        }
+    }
+
+    if (skipped)
+        handler.PSendSysMessage("[MatchBots] (%u more decisions skipped; name one bot to follow it alone)", uint32(skipped));
+}
+
 class PlayerbotBootstrapWorldScript final : public WorldScript
 {
 public:
@@ -753,6 +1160,15 @@ public:
     void OnUpdate(Player* player, uint32 diff) override
     {
         RecordManagedBotUpdatePulse(player, diff);
+        // Only sessions above player rank can hold the category, so bots and
+        // ordinary players never touch the diagnostic table.
+        if (WorldSession* session = player->GetSession(); session && session->GetSecurity() > SEC_PLAYER)
+        {
+            if (session->IsGmDiagnosticEnabled(GmDiagnosticCategory::MatchBots))
+                PollMatchBotDiagnostics(player, session);
+            else if (g_AnyMatchBotDiagnostics.load(std::memory_order_relaxed))
+                ForgetMatchBotDiagnostics(player->GetGUID());
+        }
         playerbot::RandomBotParticipationManager::ProcessPlayerLifecycle(player);
     }
 
@@ -813,6 +1229,8 @@ public:
     void OnLogout(Player* player) override
     {
         playerbot::RandomBotParticipationManager::NotifyHumanPopulationChanged(player);
+        if (player && g_AnyMatchBotDiagnostics.load(std::memory_order_relaxed))
+            ForgetMatchBotDiagnostics(player->GetGUID());
         playerbot::PveManager::OnBotLogout(player);
         playerbot::RandomBotParticipationManager::OnPlayerLogout(player);
         playerbot::PlayerbotObcCloneManager::OnPlayerLogout(player);

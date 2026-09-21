@@ -20,6 +20,7 @@
 #include "PlayerbotSharedStateGuard.h"
 #include "Playerbot/Pve/PlayerbotPveManager.h"
 #include "Chat.h"
+#include "CharacterCache.h"
 #include "Configuration/Config.h"
 #include "GameTime.h"
 #include "Item.h"
@@ -52,6 +53,7 @@
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#include <deque>
 #include <mutex>
 #include <sstream>
 #include <unordered_map>
@@ -3118,6 +3120,15 @@ std::unordered_map<CasterSpellCooldownKey, std::chrono::steady_clock::time_point
 std::unordered_map<uint64, std::string> g_LastClassExecutionStatusByGuid;
 std::unordered_map<uint64, std::string> g_LastMovementDebugStatusByGuid;
 std::mutex g_ClassDiagnosticStatusLock;
+
+// Battleground/arena only, so the open-world fleet costs nothing. Clones get a
+// fresh guid every match, hence the sweep of histories nobody has written to
+// in a while once the map grows.
+constexpr std::size_t kExecutionHistoryDepth = 24;
+constexpr std::size_t kExecutionHistorySweepThreshold = 256;
+constexpr uint32 kExecutionHistoryStaleMs = 10 * MINUTE * IN_MILLISECONDS;
+std::unordered_map<uint64, std::deque<playerbot::PvpClassActions::ExecutionHistoryEntry>> g_ExecutionHistoryByGuid;
+uint64 g_ExecutionHistorySequence = 0;
 struct LastDirectiveState
 {
     playerbot::PvpClassSpellContext::MovementDirective directive = playerbot::PvpClassSpellContext::MovementDirective::None;
@@ -3173,8 +3184,51 @@ void SetLastExecutionStatus(Player const* player, std::string const& status)
     if (!player)
         return;
 
+    Map const* map = player->FindMap();
+    bool const recordHistory = map && map->IsBattlegroundOrArena();
+    std::string targetName;
+    if (recordHistory && !player->GetTarget().IsEmpty())
+    {
+        if (Unit const* target = ObjectAccessor::GetUnit(*player, player->GetTarget()))
+        {
+            if (!target->IsPlayer() || !sCharacterCache->GetCharacterNameByGuid(target->GetGUID(), targetName) || targetName.empty())
+                targetName = target->GetName();
+        }
+    }
+
     std::lock_guard<std::mutex> statusLock(g_ClassDiagnosticStatusLock);
     g_LastClassExecutionStatusByGuid[player->GetGUID().GetRawValue()] = status;
+    if (!recordHistory)
+        return;
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    auto& history = g_ExecutionHistoryByGuid[player->GetGUID().GetRawValue()];
+    if (!history.empty() && history.back().status == status && history.back().targetName == targetName)
+    {
+        ++history.back().repeats;
+        history.back().gameTimeMs = nowMs;
+        return;
+    }
+
+    playerbot::PvpClassActions::ExecutionHistoryEntry entry;
+    entry.sequence = ++g_ExecutionHistorySequence;
+    entry.gameTimeMs = nowMs;
+    entry.status = status;
+    entry.targetName = std::move(targetName);
+    history.push_back(std::move(entry));
+    if (history.size() > kExecutionHistoryDepth)
+        history.pop_front();
+
+    if (g_ExecutionHistoryByGuid.size() > kExecutionHistorySweepThreshold)
+    {
+        for (auto itr = g_ExecutionHistoryByGuid.begin(); itr != g_ExecutionHistoryByGuid.end();)
+        {
+            if (itr->second.empty() || nowMs - itr->second.back().gameTimeMs > kExecutionHistoryStaleMs)
+                itr = g_ExecutionHistoryByGuid.erase(itr);
+            else
+                ++itr;
+        }
+    }
 }
 
 void SetLastMovementDebugStatus(Player const* player, std::string const& status)
@@ -6022,6 +6076,24 @@ std::string PvpClassActions::GetLastExecutionStatus(Player const* player)
         return "none";
 
     return itr->second;
+}
+
+std::vector<PvpClassActions::ExecutionHistoryEntry> PvpClassActions::GetExecutionHistory(Player const* player, uint64 afterSequence)
+{
+    std::vector<ExecutionHistoryEntry> entries;
+    if (!player)
+        return entries;
+
+    std::lock_guard<std::mutex> statusLock(g_ClassDiagnosticStatusLock);
+    auto const itr = g_ExecutionHistoryByGuid.find(player->GetGUID().GetRawValue());
+    if (itr == g_ExecutionHistoryByGuid.end())
+        return entries;
+
+    for (ExecutionHistoryEntry const& entry : itr->second)
+        if (entry.sequence > afterSequence)
+            entries.push_back(entry);
+
+    return entries;
 }
 
 std::string PvpClassActions::GetLastMovementDebugStatus(Player const* player)

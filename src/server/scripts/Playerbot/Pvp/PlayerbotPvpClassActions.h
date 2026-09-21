@@ -22,6 +22,7 @@
 
 #include <chrono>
 #include <string>
+#include <vector>
 
 class Player;
 class Unit;
@@ -62,6 +63,20 @@ public:
     static void RegisterCasterSpellCooldown(Player const* player, uint32 spellId, std::chrono::milliseconds cooldown);
     static std::string GetLastExecutionStatus(Player const* player);
     static std::string GetLastMovementDebugStatus(Player const* player);
+    // The last execution statuses a bot wrote while seated in a battleground
+    // or arena, oldest first, with a repeat of the same status folded into the
+    // entry before it. The last-status slot above only shows the present; a
+    // bot misbehaving in an arena is usually explained by what it did five
+    // seconds earlier. Read through ".gm diagnostics on matchbots [name]".
+    struct ExecutionHistoryEntry
+    {
+        uint64 sequence = 0;
+        uint32 gameTimeMs = 0;
+        uint32 repeats = 1;
+        std::string status;
+        std::string targetName;
+    };
+    static std::vector<ExecutionHistoryEntry> GetExecutionHistory(Player const* player, uint64 afterSequence = 0);
     static bool HasRecentTargetRelativeMovementOrder(Player const* player, Unit const* target, uint32 maxAgeMs = 1500);
     static bool IsBattlegroundObjectInteractionInProgress(Player const* player);
     static bool IsPetSpellAction(Player const* player, PvpClassSpellContext const& context);

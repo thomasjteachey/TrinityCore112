@@ -76,6 +76,7 @@ enum class GmDiagnosticCategory : uint16
     SacrificialAura = 0x40,
     SpellTarget     = 0x80,
     Pet             = 0x100,
+    MatchBots       = 0x200,
     All             = 0xFFFF
 };
 
@@ -514,6 +515,10 @@ class TC_GAME_API WorldSession
                 _gmDiagnosticMask &= static_cast<uint16>(~mask);
         }
         uint16 GetGmDiagnosticMask() const { return _gmDiagnosticMask; }
+        // Name (or leading letters) of the one bot the matchbots diagnostic
+        // follows; empty follows every bot in the match.
+        std::string const& GetGmDiagnosticBotFilter() const { return _gmDiagnosticBotFilter; }
+        void SetGmDiagnosticBotFilter(std::string filter) { _gmDiagnosticBotFilter = std::move(filter); }
         uint32 GetAccountId() const { return _accountId; }
         std::string const& GetAccountName() const { return _accountName; }
         Player* GetPlayer() const { return _player; }
@@ -1274,6 +1279,7 @@ class TC_GAME_API WorldSession
 
         AccountTypes _security;
         uint16 _gmDiagnosticMask;
+        std::string _gmDiagnosticBotFilter;
         uint32 _accountId;
         uint32 m_sessionMapKey;
         std::string _accountName;
