@@ -278,8 +278,21 @@ void WorldSession::DoLootRelease(ObjectGuid lguid)
     {
         GameObject* go = GetPlayer()->GetMap()->GetGameObject(lguid);
 
+        if (!go)
+            return;
+
         // not check distance for GO in case owned GO (fishing bobber case, for example) or Fishing hole GO
-        if (!go || ((go->GetOwnerGUID() != _player->GetGUID() && go->GetGoType() != GAMEOBJECT_TYPE_FISHINGHOLE) && !go->IsWithinDistInMap(_player)))
+        //
+        // Nor for a chest that has just been EMPTIED. The range test is there so a
+        // release from across the map cannot change a full chest's state, but it
+        // also skipped the deactivation below whenever the last item left from
+        // out of reach - somebody who took everything and walked off with the
+        // window open, or a bot taking an unwatched cache from where it stood.
+        // The chest then sat there empty until its despawn timer, an hour for a
+        // Fallen Adventurer's Cache, and whoever found it next opened nothing.
+        // Retiring an empty chest from afar gives nobody anything.
+        if (go->GetOwnerGUID() != _player->GetGUID() && go->GetGoType() != GAMEOBJECT_TYPE_FISHINGHOLE &&
+            !go->IsWithinDistInMap(_player) && !(go->GetGoType() == GAMEOBJECT_TYPE_CHEST && go->loot.isLooted()))
             return;
 
         loot = &go->loot;
