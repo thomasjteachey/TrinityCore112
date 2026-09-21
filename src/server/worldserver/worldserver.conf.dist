@@ -3633,19 +3633,29 @@ Centurion.Auction.RelistBotHours = 48
 Centurion.Hunter.MongooseBite.ScorpidHealPerStrength = 5.0
 
 #
+#    Centurion.BreakableCC.FearDamageAtCap
+#    Centurion.BreakableCC.EntanglingRootsDamageAtCap
+#    Centurion.BreakableCC.FrostNovaDamageAtCap
 #    Centurion.BreakableCC.DamageAtCap
-#        Description: Damage that is certain to break a fear, root or Frost Nova
-#                     cast by a level 60 caster. A smaller hit breaks it with
-#                     chance damage / this value. Scales linearly down with
-#                     caster level (level 30 = half). Reloads with .reload config.
+#        Description: Damage that is certain to break the CC when a level 60
+#                     caster applied it. A smaller hit breaks it with chance
+#                     damage / this value. Scales linearly with caster level
+#                     from 1 to 60 (level 1 = 1/60, level 30 = half).
+#                     Fear, Entangling Roots and the player Frost Nova each use
+#                     their own value; DamageAtCap covers every other breakable
+#                     CC (stuns, confuses, transforms, other roots, NPC novas).
+#                     Reloads with .reload config.
 #        Default:     1000
 #
+Centurion.BreakableCC.FearDamageAtCap = 1000
+Centurion.BreakableCC.EntanglingRootsDamageAtCap = 1000
+Centurion.BreakableCC.FrostNovaDamageAtCap = 1000
 Centurion.BreakableCC.DamageAtCap = 1000
 
 #
 #    Centurion.BreakableCC.FearOthersBreakInstantly
 #        Description: Fear only. Damage from the fear's caster (or the caster's
-#                     pets and totems) rolls against DamageAtCap as usual; damage
+#                     pets and totems) rolls against FearDamageAtCap; damage
 #                     from anyone else breaks the fear outright. Roots and Frost
 #                     Nova are unaffected. Reloads with .reload config.
 #        Default:     1 - (Enabled)

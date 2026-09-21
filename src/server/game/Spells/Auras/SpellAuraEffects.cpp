@@ -5917,10 +5917,14 @@ void AuraEffect::HandleModAttackPowerOfArmorAuraTick(Unit* target, Unit* caster)
 void AuraEffect::HandleBreakableCCAuraProc(AuraApplication* aurApp, ProcEventInfo& eventInfo)
 {
     static flag96 const EntanglingRootsFamilyMask(0x00000200, 0, 0);
+    static flag96 const FrostNovaFamilyMask(0x00000040, 0, 0);
 
     SpellInfo const* auraInfo = GetSpellInfo();
     bool const isEntanglingRootsAura = auraInfo && auraInfo->SpellFamilyName == SPELLFAMILY_DRUID
         && (auraInfo->SpellFamilyFlags & EntanglingRootsFamilyMask);
+    // The player spell only: NPC Frost Novas carry no family and use the generic value.
+    bool const isFrostNovaAura = auraInfo && auraInfo->SpellFamilyName == SPELLFAMILY_MAGE
+        && (auraInfo->SpellFamilyFlags & FrostNovaFamilyMask);
 
     if (isEntanglingRootsAura)
     {
@@ -5932,9 +5936,11 @@ void AuraEffect::HandleBreakableCCAuraProc(AuraApplication* aurApp, ProcEventInf
 
     Unit* caster = GetCaster();
 
-    // Linear from level 1 to 60, arriving at Centurion.BreakableCC.DamageAtCap
-    // there (default 1000; it was a hardcoded 1200, what the old curve gave a
-    // level 60 caster, until fears proved too hard to break).
+    // Linear from level 1 to 60, arriving at the cap value there: level 1 gets
+    // 1/60 of it, level 30 half. Fear, Entangling Roots and Frost Nova each have
+    // their own Centurion.BreakableCC.*DamageAtCap; every other breakable CC uses
+    // Centurion.BreakableCC.DamageAtCap. (All were a hardcoded 1200 once, what the
+    // old curve gave a level 60 caster.)
     //
     // The old curve was (level * 25) - 300, and it did not just get smaller at low
     // level, it CROSSED ZERO at 12. At exactly level 12 maxDamage was 0, the clamp
@@ -5947,7 +5953,14 @@ void AuraEffect::HandleBreakableCCAuraProc(AuraApplication* aurApp, ProcEventInf
     // 60 is the ruleset, not a variable. Both realms are classic-capped and a
     // caster above it should simply sit at the top of the curve.
     constexpr uint32 CapLevel = 60;
-    int32 const MaxThresholdAtCap = int32(sWorld->getIntConfig(CONFIG_CENTURION_BREAKABLE_CC_DAMAGE_AT_CAP));
+    WorldIntConfigs thresholdConfig = CONFIG_CENTURION_BREAKABLE_CC_DAMAGE_AT_CAP;
+    if (GetAuraType() == SPELL_AURA_MOD_FEAR)
+        thresholdConfig = CONFIG_CENTURION_FEAR_DAMAGE_AT_CAP;
+    else if (isEntanglingRootsAura)
+        thresholdConfig = CONFIG_CENTURION_ENTANGLING_ROOTS_DAMAGE_AT_CAP;
+    else if (isFrostNovaAura)
+        thresholdConfig = CONFIG_CENTURION_FROST_NOVA_DAMAGE_AT_CAP;
+    int32 const MaxThresholdAtCap = int32(sWorld->getIntConfig(thresholdConfig));
 
     int32 maxDamage = MaxThresholdAtCap;
     if (caster)

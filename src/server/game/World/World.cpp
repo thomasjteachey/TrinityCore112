@@ -1609,8 +1609,11 @@ void World::LoadConfigSettings(bool reload)
     m_int_configs[CONFIG_CENTURION_HEARTBEATRESIST_NUMROLLS] = sConfigMgr->GetIntDefault("Centurion.HeartbeatResist.NumberRolls", 4);
     m_int_configs[CONFIG_CENTURION_HEARTBEATRESIST_REGRESSION] = sConfigMgr->GetIntDefault("Centurion.HeartbeatResist.Regression", 30);
     m_float_configs[CONFIG_CENTURION_HEARTBEATRESIST_REGRESSION_LERP] = sConfigMgr->GetFloatDefault("Centurion.HeartbeatResist.RegressionLerp", .2f);
-    // At least 1: HandleBreakableCCAuraProc divides by it.
+    // At least 1: HandleBreakableCCAuraProc divides by these.
     m_int_configs[CONFIG_CENTURION_BREAKABLE_CC_DAMAGE_AT_CAP] = std::max(1, sConfigMgr->GetIntDefault("Centurion.BreakableCC.DamageAtCap", 1000));
+    m_int_configs[CONFIG_CENTURION_FEAR_DAMAGE_AT_CAP] = std::max(1, sConfigMgr->GetIntDefault("Centurion.BreakableCC.FearDamageAtCap", 1000));
+    m_int_configs[CONFIG_CENTURION_ENTANGLING_ROOTS_DAMAGE_AT_CAP] = std::max(1, sConfigMgr->GetIntDefault("Centurion.BreakableCC.EntanglingRootsDamageAtCap", 1000));
+    m_int_configs[CONFIG_CENTURION_FROST_NOVA_DAMAGE_AT_CAP] = std::max(1, sConfigMgr->GetIntDefault("Centurion.BreakableCC.FrostNovaDamageAtCap", 1000));
     m_bool_configs[CONFIG_CENTURION_FEAR_OTHERS_BREAK_INSTANTLY] = sConfigMgr->GetBoolDefault("Centurion.BreakableCC.FearOthersBreakInstantly", true);
 
     // Seal twisting: how long (ms) a paladin seal survives being replaced by
