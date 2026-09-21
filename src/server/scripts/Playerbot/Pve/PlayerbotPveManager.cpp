@@ -15,6 +15,7 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "Miscellaneous/Surnames.h"
 #include "Guild.h"
 #include "GuildMgr.h"
 #include "Custom/custom_barracks_hardcore.h"
@@ -18954,7 +18955,9 @@ namespace playerbot
                 continue;
 
             BotStatsRow row;
-            row.Name = bot->GetName();
+            // First and last: the Bot Stats window shows it, and sends it back
+            // in ".botstats gear <name>", which looks bots up by the pair.
+            row.Name = Surnames::Decorated(bot->GetGUID(), bot->GetName());
             row.ZoneId = bot->GetZoneId();
             row.MapId = bot->GetMapId();
             row.MoneyCopper = bot->GetMoney();

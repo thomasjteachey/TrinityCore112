@@ -44,6 +44,7 @@
 #include "Bag.h"
 #include "Item.h"
 #include "ItemTemplate.h"
+#include "Miscellaneous/Surnames.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
@@ -64,6 +65,23 @@ using namespace Trinity::ChatCommands;
 
 namespace
 {
+    // The name the window shows and keys its panels by: first and last, the
+    // same pair the roster carries, so a gear or bag reply lands on the row the
+    // GM clicked.
+    std::string BotDisplayName(Player const* bot)
+    {
+        return Surnames::Decorated(bot->GetGUID(), bot->GetName());
+    }
+
+    // ".botstats gear <name>" arrives with whatever the window sent - the pair
+    // for a bot that has a family name - and a GM may type just the first name.
+    Player* FindBotByName(std::string_view name)
+    {
+        if (Player* bot = ObjectAccessor::FindConnectedPlayerByFullName(name))
+            return bot;
+        return ObjectAccessor::FindPlayerByName(name);
+    }
+
     bool s_enabled = true;
     uint32 s_intervalMs = 3000;
     uint32 s_rosterIntervalMs = 15000;
@@ -378,7 +396,7 @@ namespace
         if (!data || !data->ModelName || !*data->ModelName)
             return;
 
-        SendTagged(viewer, "BSTM", bot->GetName() + std::string("|") + data->ModelName);
+        SendTagged(viewer, "BSTM", BotDisplayName(bot) + std::string("|") + data->ModelName);
     }
 
     // What the bot is CARRYING, as opposed to wearing.
@@ -394,7 +412,7 @@ namespace
     void SendBagsTo(Player* viewer, Player* bot)
     {
         std::ostringstream out;
-        out << bot->GetName() << '|';
+        out << BotDisplayName(bot) << '|';
 
         uint32 inMessage = 0;
         uint32 sent = 0;
@@ -417,7 +435,7 @@ namespace
                 SendTagged(viewer, "BSTB", out.str());
                 out.str(std::string());
                 out.clear();
-                out << bot->GetName() << '|';
+                out << BotDisplayName(bot) << '|';
                 inMessage = 0;
             }
         };
@@ -445,7 +463,7 @@ namespace
         // A terminator, so the panel can tell "still arriving" from "this bot
         // genuinely carries nothing" - without it an empty pack and a request
         // that never answered look identical.
-        SendTagged(viewer, "BSTC", bot->GetName() + std::string("|") + std::to_string(sent)
+        SendTagged(viewer, "BSTC", BotDisplayName(bot) + std::string("|") + std::to_string(sent)
             + std::string("|") + std::to_string(capacity));
     }
 
@@ -454,7 +472,7 @@ namespace
         SendModelTo(viewer, bot);
 
         std::ostringstream out;
-        out << bot->GetName() << '|';
+        out << BotDisplayName(bot) << '|';
 
         uint32 inMessage = 0;
         for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
@@ -476,7 +494,7 @@ namespace
                 SendTagged(viewer, "BSTG", out.str());
                 out.str(std::string());
                 out.clear();
-                out << bot->GetName() << '|';
+                out << BotDisplayName(bot) << '|';
                 inMessage = 0;
             }
         }
@@ -493,7 +511,7 @@ namespace
         uint8 const spec = uint8(bot->GetActiveSpec());
 
         std::ostringstream taken;
-        taken << bot->GetName() << '|';
+        taken << BotDisplayName(bot) << '|';
         uint32 inTaken = 0;
 
         for (TalentEntry const* talent : sTalentStore)
@@ -552,7 +570,7 @@ namespace
                 SendTagged(viewer, "BSTP", taken.str());
                 taken.str(std::string());
                 taken.clear();
-                taken << bot->GetName() << '|';
+                taken << BotDisplayName(bot) << '|';
                 inTaken = 0;
             }
         }
@@ -561,7 +579,7 @@ namespace
             SendTagged(viewer, "BSTP", taken.str());
 
         std::ostringstream tal;
-        tal << bot->GetName() << '|' << points[0] << ',' << points[1] << ',' << points[2];
+        tal << BotDisplayName(bot) << '|' << points[0] << ',' << points[1] << ',' << points[2];
         SendTagged(viewer, "BSTT", tal.str());
     }
 
@@ -584,7 +602,7 @@ namespace
             return commandTable;
         }
 
-        static bool HandleBotStatsGear(ChatHandler* handler, std::string_view botName)
+        static bool HandleBotStatsGear(ChatHandler* handler, Tail botName)
         {
             Player* viewer = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
             if (!viewer || botName.empty())
@@ -592,7 +610,7 @@ namespace
 
             // By name and across the whole realm: the window lists bots the
             // asker cannot see and often is not on the same continent as.
-            Player* bot = ObjectAccessor::FindPlayerByName(botName);
+            Player* bot = FindBotByName(botName);
             if (!bot || !bot->IsInWorld())
             {
                 handler->PSendSysMessage("botstats: no bot named %s is online.", std::string(botName).c_str());
@@ -603,13 +621,13 @@ namespace
             return true;
         }
 
-        static bool HandleBotStatsBags(ChatHandler* handler, std::string_view botName)
+        static bool HandleBotStatsBags(ChatHandler* handler, Tail botName)
         {
             Player* viewer = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
             if (!viewer || botName.empty())
                 return false;
 
-            Player* bot = ObjectAccessor::FindPlayerByName(botName);
+            Player* bot = FindBotByName(botName);
             if (!bot || !bot->IsInWorld())
             {
                 handler->PSendSysMessage("botstats: no bot named %s is online.", std::string(botName).c_str());

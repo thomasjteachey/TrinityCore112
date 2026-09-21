@@ -78,6 +78,7 @@
 //                                        from memory and its schema is not used
 //   Centurion.GMOnline.BotAccountPrefix  "PLAYERBOT"
 
+#include "CharacterCache.h"
 #include "Chat.h"
 #include "ChatCommand.h"
 #include "Configuration/Config.h"
@@ -85,6 +86,7 @@
 #include "DBCStores.h"
 #include "GameTime.h"
 #include "Log.h"
+#include "Miscellaneous/Surnames.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "QueryCallback.h"
@@ -176,6 +178,16 @@ namespace
     std::string s_authSchema;
     uint32 s_sequence = 0;
 
+    // Which characters tables carry a `surname` column (the Centurion realms
+    // do; the older ones do not), so names go out as "First Last" where there
+    // is a last name and a query never names a column that is not there.
+    // Probed once, lazily, from a command's world-thread turn - never from the
+    // config hook, which can run before the databases are up - and again after
+    // a config reload.
+    bool s_surnameProbed = false;
+    bool s_thisRealmHasSurname = false;
+    std::set<std::string> s_surnameSchemas;
+
     // Realm names from the login database's own realmlist, read once and again
     // after a config reload. Guarded: the command runs on the world thread, but
     // a config reload is its own caller.
@@ -241,8 +253,51 @@ namespace
             s_realms.push_back({ *id, schema });
         }
 
+        s_surnameProbed = false;
+
         std::lock_guard<std::mutex> guard(s_realmNameLock);
         s_realmNamesLoaded = false;
+    }
+
+    void EnsureSurnameProbe()
+    {
+        if (s_surnameProbed)
+            return;
+        s_surnameProbed = true;
+        s_thisRealmHasSurname = false;
+        s_surnameSchemas.clear();
+
+        if (QueryResult result = CharacterDatabase.Query("SELECT TABLE_SCHEMA, CAST(TABLE_SCHEMA = DATABASE() AS UNSIGNED) "
+            "FROM information_schema.COLUMNS WHERE TABLE_NAME = 'characters' AND COLUMN_NAME = 'surname'"))
+        {
+            do
+            {
+                Field* fields = result->Fetch();
+                s_surnameSchemas.insert(fields[0].GetString());
+                if (fields[1].GetUInt32())
+                    s_thisRealmHasSurname = true;
+            } while (result->NextRow());
+        }
+    }
+
+    bool RealmHasSurname(uint32 realmId)
+    {
+        if (realmId == realm.Id.Realm)
+            return s_thisRealmHasSurname;
+        for (OnlineRealm const& entry : s_realms)
+            if (entry.id == realmId)
+                return s_surnameSchemas.count(entry.schema) != 0;
+        return false;
+    }
+
+    // SQL for a character's shown name: "First Last" where the realm has last
+    // names, the bare column where it does not.
+    std::string NameSql(uint32 realmId, char const* alias, char const* column)
+    {
+        std::string const col = std::string(alias) + "." + column;
+        if (!RealmHasSurname(realmId))
+            return col;
+        return "CONCAT_WS(' ', " + col + ", NULLIF(" + alias + ".surname, ''))";
     }
 
     std::string RealmName(uint32 realmId)
@@ -308,7 +363,12 @@ namespace
 
             OnlineRow row;
             row.realmId = thisRealm;
-            row.name = player->GetName();
+            // The name the client knows: the cache name (a battleground clone's
+            // GetName() is its internal Obcm name), with the family name.
+            std::string shown;
+            if (!sCharacterCache->GetCharacterNameByGuid(player->GetGUID(), shown))
+                shown = player->GetName();
+            row.name = Scrub(Surnames::Decorated(player->GetGUID(), shown));
             row.account = Scrub(session->GetAccountName());
             row.level = player->GetLevel();
             row.playerClass = player->GetClass();
@@ -355,7 +415,7 @@ namespace
             // Every computed column is CAST to an integer: an aggregate can come
             // back typed as DECIMAL, which the Field converters read as a string
             // and answer 0 for, silently.
-            sql << "SELECT CAST(" << other.id << " AS UNSIGNED), c.name, a.username, c.level, c.class, c.race, c.zone, c.map, "
+            sql << "SELECT CAST(" << other.id << " AS UNSIGNED), " << NameSql(other.id, "c", "name") << ", a.username, c.level, c.class, c.race, c.zone, c.map, "
                 << "CAST(COALESCE((SELECT MAX(aa.SecurityLevel) FROM `" << s_authSchema << "`.account_access aa "
                 << "WHERE aa.AccountID = a.id AND (aa.RealmID = -1 OR aa.RealmID = " << other.id << ")), 0) AS UNSIGNED), "
                 // Dead: no health, or a released ghost (PLAYER_FLAGS_GHOST) - a
@@ -379,7 +439,7 @@ namespace
             Field* fields = result->Fetch();
             OnlineRow row;
             row.realmId = fields[0].GetUInt32();
-            row.name = fields[1].GetString();
+            row.name = Scrub(fields[1].GetString());
             row.account = Scrub(fields[2].GetString());
             row.level = fields[3].GetUInt8();
             row.playerClass = fields[4].GetUInt8();
@@ -582,19 +642,47 @@ namespace
     // blanks a deleted character's name and account and keeps both in the
     // deleteInfos_ columns. Account names win over character names, and the
     // realms are tried in their configured order.
-    std::string BuildAccountLookupQuery(std::string const& escaped)
+    //
+    // "First Last" names one character by the pair, on the realms that have last
+    // names; an account name never has a space, so the account clause simply
+    // finds nothing for it. A single word is a first name, as it always was.
+    std::string BuildAccountLookupQuery(std::string const& target)
     {
         if (s_authSchema.empty())
             return std::string();
+
+        std::string escaped = target;
+        CharacterDatabase.EscapeString(escaped);
+
+        std::string first = target, last;
+        std::string::size_type const space = target.find(' ');
+        if (space != std::string::npos)
+        {
+            first = target.substr(0, space);
+            last = target.substr(space + 1);
+        }
+        CharacterDatabase.EscapeString(first);
+        CharacterDatabase.EscapeString(last);
 
         std::ostringstream match;
         match << "SELECT a2.id AS id FROM `" << s_authSchema << "`.account a2 WHERE a2.username = '" << escaped << "'";
         for (auto const& entry : RealmTables())
         {
-            match << " UNION ALL SELECT c2.account FROM " << entry.second << " c2"
-                  << " WHERE c2.name = '" << escaped << "' AND c2.account <> 0"
-                  << " UNION ALL SELECT c2.deleteInfos_Account FROM " << entry.second << " c2"
-                  << " WHERE c2.deleteInfos_Name = '" << escaped << "' AND c2.deleteInfos_Account <> 0";
+            if (last.empty())
+            {
+                match << " UNION ALL SELECT c2.account FROM " << entry.second << " c2"
+                      << " WHERE c2.name = '" << first << "' AND c2.account <> 0"
+                      << " UNION ALL SELECT c2.deleteInfos_Account FROM " << entry.second << " c2"
+                      << " WHERE c2.deleteInfos_Name = '" << first << "' AND c2.deleteInfos_Account <> 0";
+            }
+            else if (RealmHasSurname(entry.first))
+            {
+                match << " UNION ALL SELECT c2.account FROM " << entry.second << " c2"
+                      << " WHERE c2.name = '" << first << "' AND c2.surname = '" << last << "' AND c2.account <> 0"
+                      << " UNION ALL SELECT c2.deleteInfos_Account FROM " << entry.second << " c2"
+                      << " WHERE c2.deleteInfos_Name = '" << first << "' AND c2.surname = '" << last << "'"
+                      << " AND c2.deleteInfos_Account <> 0";
+            }
         }
 
         // Same rule as the online feed: every computed column is CAST to an
@@ -648,7 +736,8 @@ namespace
             first = false;
 
             sql << "SELECT CAST(" << entry.first << " AS UNSIGNED),"
-                << " CASE WHEN c.deleteDate IS NULL THEN c.name ELSE c.deleteInfos_Name END,"
+                << " CASE WHEN c.deleteDate IS NULL THEN " << NameSql(entry.first, "c", "name")
+                << " ELSE " << NameSql(entry.first, "c", "deleteInfos_Name") << " END,"
                 << " CAST(c.level AS UNSIGNED), CAST(c.class AS UNSIGNED), CAST(c.race AS UNSIGNED),"
                 << " CAST(c.zone AS UNSIGNED), CAST(c.map AS UNSIGNED), CAST(c.online AS UNSIGNED),"
                 << " CAST(c.logout_time AS UNSIGNED), CAST(c.money AS UNSIGNED), CAST(c.totaltime AS UNSIGNED),"
@@ -927,11 +1016,18 @@ namespace
                     withBots = true;
                 else if (word == "alts" || word == "account")
                     wantAlts = true;    // a keyword; the name follows
-                else if (target.empty())
-                    target = std::string(word);
+                else if (target.size() < 64)
+                {
+                    // Every other word is the name, so "Elgrom Fernbloom" stays
+                    // whole rather than turning into "Elgrom".
+                    if (!target.empty())
+                        target += ' ';
+                    target += std::string(word);
+                }
             }
 
             uint32 const sequence = ++s_sequence;
+            EnsureSurnameProbe();
 
             // A name turns the command into the account listing, with or
             // without the "alts" keyword: ".gmonline Koda" is what a GM types.
@@ -991,8 +1087,6 @@ namespace
             if (target.size() > 32)
                 target.resize(32);
 
-            std::string escaped = target;
-            CharacterDatabase.EscapeString(escaped);
             std::string const asked = Scrub(target);
 
             RealmName(realm.Id.Realm);
@@ -1008,7 +1102,7 @@ namespace
             auto account = std::make_shared<AltAccount>();
 
             handler->GetSession()->GetQueryProcessor().AddCallback(
-                CharacterDatabase.AsyncQuery(BuildAccountLookupQuery(escaped).c_str())
+                CharacterDatabase.AsyncQuery(BuildAccountLookupQuery(target).c_str())
                 .WithChainingCallback([viewerGuid, asked, addon, sequence, account](QueryCallback& chain, QueryResult result)
                 {
                     // Nothing matched: say so and let the chain end here. A
