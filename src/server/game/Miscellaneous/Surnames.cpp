@@ -256,7 +256,7 @@ void HandleCreateRequest(WorldSession* session, std::string_view name, std::stri
     pending.Expires = GameTime::GetGameTime() + PendingLifetime;
 }
 
-bool SplitWhisperTarget(std::string& to, std::string& msg)
+bool SplitWhisperTarget(std::string& to, std::string& msg, std::string const& rawWord)
 {
     std::size_t const space = to.find(' ');
     if (space == std::string::npos)
@@ -265,11 +265,15 @@ bool SplitWhisperTarget(std::string& to, std::string& msg)
     if (sCharacterCache->GetCharacterCacheByFullName(to))
         return false;
 
+    // The first word alone: a character with no family name, or - for somebody
+    // who just typed a first name and a message - the one character that
+    // answers to it. Never a guess between two of them.
     std::string first = to.substr(0, space);
-    if (!sCharacterCache->GetCharacterCacheByFullName(first))
+    if (!sCharacterCache->GetCharacterCacheByName(first))
         return false;
 
-    msg = to.substr(space + 1) + ' ' + msg;
+    // The player's own word, not the capitalized one the name went through.
+    msg = (rawWord.empty() ? to.substr(space + 1) : rawWord) + ' ' + msg;
     to = std::move(first);
     return true;
 }

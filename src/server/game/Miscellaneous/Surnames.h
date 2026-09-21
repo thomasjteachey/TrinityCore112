@@ -80,11 +80,13 @@ namespace Surnames
     bool JoinWhisperTarget(std::string& to, std::string& msg);
 
     // The reverse. The Centurion whisper box keeps TWO words together as the
-    // target, since a name is first and last now, so "/w Bob hello there" to
-    // a character without a family name arrives as "Bob Hello" and "there".
-    // Hands the second word back to the message when the two words name
-    // nobody and the first alone does.
-    bool SplitWhisperTarget(std::string& to, std::string& msg);
+    // target, since a name is first and last now, so "/w Bob hello there" -
+    // whether Bob has no family name or the sender simply did not type it -
+    // arrives as "Bob Hello" and "there". Hands the second word back to the
+    // message when the two words name nobody and the first alone names exactly
+    // one character. `rawWord` is that second word as the sender typed it,
+    // before the name normalization capitalized it.
+    bool SplitWhisperTarget(std::string& to, std::string& msg, std::string const& rawWord);
 
     // The surname waiting for the character about to be created on this
     // account, without consuming it: the name it will be created under has to

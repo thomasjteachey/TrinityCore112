@@ -586,6 +586,12 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
                 return;
             }
 
+            // The second word as the sender typed it, before normalization
+            // capitalizes it: it may be going back into the message.
+            std::string rawSecondWord;
+            if (std::size_t const rawSpace = to.find(' '); rawSpace != std::string::npos)
+                rawSecondWord = to.substr(rawSpace + 1);
+
             if (!normalizePlayerName(to))
             {
                 SendPlayerNotFoundNotice(to);
@@ -595,11 +601,11 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
             // "/w Elgrom Fernbloom hi" reached us split on the space inside the
             // name: the target is "Elgrom" and the family name is at the front
             // of the message (Miscellaneous/Surnames.h). Put them back together.
-            // And the other way round: the whisper box sends two words, so a
-            // character with no family name comes as "Bob Hello". Hand the
+            // And the other way round: the whisper box sends two words, so
+            // "/w Elgrom hi there" comes as the target "Elgrom Hi". Hand that
             // second word back to the message.
             if (lang != LANG_ADDON && !Surnames::JoinWhisperTarget(to, msg))
-                Surnames::SplitWhisperTarget(to, msg);
+                Surnames::SplitWhisperTarget(to, msg, rawSecondWord);
 
             // A transient clone in the sender's match (battleground fill, a
             // Violet Hold ally, a "Dark" mirror) plays under an internal name
@@ -615,6 +621,14 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
             // longer say who is meant.
             if (!receiver)
                 receiver = ObjectAccessor::FindConnectedPlayerByFullName(to);
+
+            // A whisper is not worth refusing over a family name the sender did
+            // not type: a first name only one character answers to still finds
+            // them. Two characters sharing it finds neither, which is the whole
+            // reason the rest of the server asks for the pair.
+            if (!receiver)
+                if (ObjectGuid const guid = sCharacterCache->GetCharacterGuidByName(to))
+                    receiver = ObjectAccessor::FindConnectedPlayer(guid);
             if (!receiver || (lang != LANG_ADDON && !receiver->isAcceptWhispers() && receiver->GetSession()->HasPermission(rbac::RBAC_PERM_CAN_FILTER_WHISPERS) && !receiver->IsInWhisperWhiteList(sender->GetGUID())))
             {
                 SendPlayerNotFoundNotice(to);
