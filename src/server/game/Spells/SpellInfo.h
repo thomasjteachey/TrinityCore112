@@ -332,6 +332,10 @@ class TC_GAME_API SpellInfo
         uint32 MaxLevel;
         uint32 BaseLevel;
         uint32 SpellLevel;
+        // Server-only: a player below this level gets the spell's damage,
+        // healing and absorb amounts scaled by level / LevelScaleDesignLevel.
+        // 0 = off. Set in SpellMgr::LoadSpellInfoCorrections.
+        uint32 LevelScaleDesignLevel = 0;
         SpellDurationEntry const* DurationEntry;
         Powers PowerType;
         uint32 ManaCost;

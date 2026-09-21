@@ -3163,6 +3163,43 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->AttributesEx3 |= SPELL_ATTR3_IGNORE_HIT_RESULT | SPELL_ATTR3_NO_INITIAL_AGGRO;
     });
 
+    // Spells balanced for a level a player can be far below when they get
+    // them: Violet Hold's brokers teach their class spells at any level (a
+    // level-10 shaman could roll the level-60 Lava Burst), Earth Shield and
+    // Dragon's Breath open at 40, Wyrm's Shadow at 10. Below the design level
+    // SpellEffectInfo::CalcValue scales their damage/healing linearly with
+    // the caster's level. Only the spells that carry the numbers are listed:
+    // Penance's channel dummies trigger 47666/47750, and Earth Shield's proc
+    // (379) heals for the already-scaled 974/32593 amount, so 379 must NOT be
+    // here or the heal would be scaled twice. The rest of the Violet Hold
+    // pool is weapon damage, pets (already at the owner's level) or utility.
+    {
+        static constexpr std::pair<uint32, uint32> LevelScaledSpells[] =
+        {
+            { 974,   60 },  // Earth Shield (Rank 1)
+            { 32593, 60 },  // Earth Shield (Rank 2)
+            { 31661, 60 },  // Dragon's Breath (Rank 1)
+            { 33041, 60 },  // Dragon's Breath (Rank 2)
+            { 81357, 60 },  // Wyrm's Shadow
+            { 90261, 60 },  // Lava Burst (Violet Hold level-60 edition)
+            { 90262, 60 },  // Nourish (Violet Hold level-60 edition)
+            { 47666, 60 },  // Penance damage (Rank 1)
+            { 47750, 60 },  // Penance heal (Rank 1)
+            { 30283, 60 },  // Shadowfury (Rank 1)
+            { 30413, 60 },  // Shadowfury (Rank 2)
+            { 52127, 20 },  // Water Shield (Rank 1) - the lowest rank the broker can hand out
+            { 52128, 20 },  // Water Shield (Rank 1) mana return
+        };
+
+        for (auto const& [spellId, designLevel] : LevelScaledSpells)
+        {
+            if (SpellInfo* spellInfo = _GetSpellInfo(spellId))
+                spellInfo->LevelScaleDesignLevel = designLevel;
+            else
+                TC_LOG_ERROR("server.loading", "Level-scaled spell {} does not exist", spellId);
+        }
+    }
+
     // Some spells have no amplitude set
     {
         ApplySpellFix({

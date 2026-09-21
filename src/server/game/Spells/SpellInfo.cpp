@@ -539,6 +539,47 @@ int32 SpellEffectInfo::CalcValue(WorldObject const* caster /*= nullptr*/, int32 
                     value *= casterScaler->Data / spellScaler->Data;
             }
         }
+
+        // Spells a low-level player can get early (Violet Hold teaches
+        // level-60 spells at any level; Earth Shield and Dragon's Breath are
+        // reachable at 40, Wyrm's Shadow at 10) are balanced for their design
+        // level, so below it the magnitude falls off linearly with level.
+        // Only magnitudes - snare/crit/pushback percents are left alone.
+        if (_spellInfo->LevelScaleDesignLevel && casterUnit->IsControlledByPlayer() &&
+            casterUnit->GetLevel() < _spellInfo->LevelScaleDesignLevel)
+        {
+            bool isMagnitude = false;
+            switch (Effect)
+            {
+                case SPELL_EFFECT_SCHOOL_DAMAGE:
+                case SPELL_EFFECT_HEALTH_LEECH:
+                case SPELL_EFFECT_HEAL:
+                case SPELL_EFFECT_ENERGIZE:
+                    isMagnitude = true;
+                    break;
+                default:
+                    break;
+            }
+
+            switch (ApplyAuraName)
+            {
+                case SPELL_AURA_PERIODIC_DAMAGE:
+                case SPELL_AURA_DUMMY:              // Earth Shield's heal per charge
+                case SPELL_AURA_PERIODIC_HEAL:
+                case SPELL_AURA_DAMAGE_SHIELD:
+                case SPELL_AURA_PROC_TRIGGER_DAMAGE:
+                case SPELL_AURA_PERIODIC_LEECH:
+                case SPELL_AURA_SCHOOL_ABSORB:
+                case SPELL_AURA_MOD_POWER_REGEN:
+                    isMagnitude = true;
+                    break;
+                default:
+                    break;
+            }
+
+            if (isMagnitude)
+                value *= float(casterUnit->GetLevel()) / float(_spellInfo->LevelScaleDesignLevel);
+        }
     }
 
     return int32(value);
