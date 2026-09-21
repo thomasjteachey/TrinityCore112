@@ -286,6 +286,24 @@ namespace
         if (player->IsInGurubashiBattleRing())
             return false;
 
+        // A dungeon or a raid costs nobody a copper.
+        //
+        // A wipe is a group failing at PvE content, not somebody losing a fight,
+        // and there is no third party behind an instance portal for the money to
+        // go to: a cache of coin on the floor of Deadmines is reachable only by
+        // the four people who just wiped alongside you, and the flat death tax is
+        // simply the realm charging admission for a boss attempt. The gear rule
+        // already draws exactly this line ("Nothing is taken inside a dungeon or
+        // a raid", custom_barracks_hardcore.cpp); this asks the SAME function so
+        // the two cannot drift into disagreeing about where a dungeon begins.
+        //
+        // It follows - deliberately - that dying in one does not CLEAR a bounty
+        // either, for the same reason the Battle Ring does not: if it did,
+        // stepping through the nearest instance portal and pulling one pack would
+        // be the cheapest way in the game to shed fifty stacks.
+        if (BarracksHardcore::IsInstancedContent(player))
+            return false;
+
         // IsInFFAPvPAreaByMap, NOT IsInFFAPvPArea. The latter is reassigned every
         // tick by the hardcore ruleset to mean 'this unit is FFA armed', and every
         // playerbot is permanently armed - so reading it here asked "is this a
@@ -746,6 +764,16 @@ namespace
         if (!victim || !s_chestEntry)
             return;
 
+        // Never inside an instance, even when a debt is pending. A death in a
+        // dungeon records nothing any more, but a debt earned OUTSIDE one can
+        // still be sitting here unspent - died in Westfall, took a battle rez
+        // instead of releasing, walked into Deadmines and died again - and
+        // paying it out here would drop the coin in the one place this rule
+        // exists to keep it out of. It stays owed, and the next corpse in the
+        // open world settles it.
+        if (BarracksHardcore::IsInstancedContent(victim))
+            return;
+
         CustomLootChests::PlayerChestBuilder chest(victim, s_chestEntry, Seconds(s_chestDespawnSeconds));
         chest.AddMoney(TakePendingChestGold(victim));
         if (chest.HasLoot())
@@ -1184,6 +1212,8 @@ public:
             target->IsGameMaster() ? "YES - blocks everything" : "no",
             (target->InBattleground() || target->InArena()) ? "YES - blocks" : "no",
             target->IsInGurubashiBattleRing() ? "YES - blocks" : "no");
+        handler->PSendSysMessage("  dungeon/raid: %s",
+            BarracksHardcore::IsInstancedContent(target) ? "YES - blocks (no tax, no chest, no clear)" : "no");
         handler->PSendSysMessage("  FFA-by-map area: %s   alive: %s",
             target->pvpInfo.IsInFFAPvPAreaByMap ? "YES - blocks" : "no",
             target->IsAlive() ? "yes" : "NO - blocks");

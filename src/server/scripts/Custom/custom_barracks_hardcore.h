@@ -38,6 +38,16 @@ namespace BarracksHardcore
     // ruleset needs it to decide how much of a corpse's gold burns.
     bool IsPlayerbot(Player const* player);
 
+    // Inside a dungeon or a raid - instance types 1 and 2, so raids count and a
+    // battleground or arena does not.
+    //
+    // Exported because "a death in here takes nothing from you" is one rule with
+    // two halves in two files: the gear the hardcore cache would have staked,
+    // and the coin the bounty ruleset would have taxed and left on the floor. A
+    // second copy of the map test is one edit away from the halves disagreeing
+    // about where a dungeon begins.
+    bool IsInstancedContent(Player const* player);
+
     // A death that must not leave a death chest. Chromie's executions in the
     // Gurubashi Arena (custom_gurubashi_arena.cpp) set it around their
     // Unit::Kill and clear it right after, so the mark never outlives the kill

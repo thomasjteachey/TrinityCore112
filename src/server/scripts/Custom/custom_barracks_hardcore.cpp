@@ -515,11 +515,17 @@ namespace BarracksHardcore
         return s_enabled && player && !player->InBattleground() && !player->InArena();
     }
 
-    // Inside a dungeon or a raid. Deliberately NOT folded into IsWorldContext:
-    // that one also gates the full-loot chest, and death in a dungeon is still
-    // meant to cost you your gear. This is only about the War Mode REWARD - the
-    // doubled experience and loot gold ride the risk of being jumped in the open
-    // world, and there is no such risk behind an instance portal.
+    // Inside a dungeon or a raid. Three rules read it, and they all say the same
+    // thing about the place: nothing behind an instance portal is open-world PvP.
+    //
+    // - No War Mode REWARD. The doubled experience and loot gold ride the risk of
+    //   being jumped out there, and there is no such risk in here.
+    // - Nothing is TAKEN. The full-loot cache stakes no gear (a wipe is a group
+    //   failing at PvE, not somebody losing a fight) and the bounty ruleset
+    //   charges no death tax and leaves no coin on the floor (custom_bounty.cpp).
+    //
+    // Deliberately NOT folded into IsWorldContext: that one means "hardcore is
+    // switched on here at all", and a dungeon is not a battleground.
     //
     // Map::IsDungeon covers raids as well (instance types 1 and 2); a
     // battleground or arena is a different instance type and is handled by

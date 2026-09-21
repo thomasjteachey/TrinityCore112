@@ -3860,6 +3860,10 @@ Centurion.Hardcore.PlayerKill.ExperienceBubbles = 2
 #    Centurion.Bounty.GoldPercentPerStack
 #        Description: Share of the victim's gold that reaches the chest, per stack.
 #                     At the default and a full fifty stacks that is half of it.
+#                     Nothing is dropped inside a dungeon or a raid, and dying in
+#                     one does not clear the bounty either - otherwise the nearest
+#                     instance portal would be the cheapest way to shed fifty
+#                     stacks, the same hole the Battle Ring rule closes.
 #        Default:     1.0
 #
 #    Centurion.Bounty.BotLossMultiplier
@@ -3993,7 +3997,9 @@ Centurion.Bounty.BotLossMultiplier = 2.0
 #                     what the bounty put in the cache on their corpse,
 #                     because only one of the two is recoverable.
 #                     Not charged in a battleground, an arena, the Battle Ring,
-#                     or to a GM.
+#                     a dungeon or raid, or to a GM. A wipe is a group failing
+#                     at PvE content, not somebody losing a fight, and an
+#                     instance takes nothing from anyone - no gear, no coin.
 #        Default:     5.0
 #        Range:       0.0 - 100.0 (0 disables)
 #
