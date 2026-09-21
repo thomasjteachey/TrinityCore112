@@ -861,7 +861,10 @@ void Battleground::AwardSpoilsChest(Player* player, bool won)
     {
         if (Item* chest = player->StoreNewItem(dest, chestEntry, true))
         {
-            player->SendNewItem(chest, 1, true, false);
+            // Sent as "created": once the match has a winner, the stock
+            // WorldStateFrame CHAT_MSG_LOOT filter drops every loot line but
+            // LOOT_ITEM_CREATED_SELF, so "You receive item:" never reaches chat.
+            player->SendNewItem(chest, 1, true, true);
             return;
         }
     }
