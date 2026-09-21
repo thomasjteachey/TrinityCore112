@@ -2294,13 +2294,11 @@ uint32 ResolveKnownPlayerSpellInChain(Player const* player, uint32 spellId)
         return !player->GetSpellHistory()->HasCooldown(resolvedSpellId);
     }
 
-    constexpr uint32 kWarlockSoulShardItemEntry = 6265;
-
     // The demon a warlock can summon before its spec's own is trained:
-    // Voidwalker (10) when there is a shard to pay for it, else the Imp (1).
+    // Voidwalker (10), else the Imp (1).
     uint32 SelectWarlockFallbackSummonSpell(Player const* player)
     {
-        if (ResolveKnownPlayerSpellInChain(player, 697) && player->HasItemCount(kWarlockSoulShardItemEntry))
+        if (ResolveKnownPlayerSpellInChain(player, 697))
             return 697;
         return ResolveKnownPlayerSpellInChain(player, 688) ? 688 : 0;
     }
@@ -8393,15 +8391,11 @@ bool PvpCore::TryCastOpenWorldBuff(Player* player)
     // place pets were summoned).
     if (player->GetClass() == CLASS_WARLOCK && !player->GetPet())
     {
-        // Voidwalker tanks the grind when a soul shard is on hand; the Imp
-        // needs no shard and is the level-1 fallback.
-        uint32 summonSpellId = 0;
-        if (player->HasItemCount(6265, 1) && player->HasSpell(697) && IsSpellReady(player, 697))
-            summonSpellId = 697;
-        else if (player->HasSpell(688) && IsSpellReady(player, 688))
-            summonSpellId = 688;
+        // Voidwalker tanks the grind; the Imp is the level-1 fallback. There
+        // are no soul shard costs on this realm, so no shard check.
+        uint32 const summonSpellId = SelectWarlockFallbackSummonSpell(player);
 
-        if (summonSpellId && player->CastSpell(player, summonSpellId, false) == SPELL_CAST_OK)
+        if (summonSpellId && IsSpellReady(player, summonSpellId) && player->CastSpell(player, summonSpellId, false) == SPELL_CAST_OK)
             return true;
     }
 
