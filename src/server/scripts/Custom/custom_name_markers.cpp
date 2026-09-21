@@ -33,17 +33,19 @@
 // Bot beats the character's mode - a bot is a bot whichever pool it plays in.
 // "Bot" is a session with no socket, which covers the persistent bots, the
 // battleground fill clones and the transient bounty hunters alike, plus
-// anything on a playerbot account.
+// anything on a playerbot account. The clones are only reachable through the
+// maps - see SweepMs.
 //
 // Config (worldserver.conf, `.reload config`):
 //   Centurion.NameMarkers.Enable = 1
 // Turning it off strips the auras on the next sweep.
 
 #include "Config.h"
+#include "Map.h"
+#include "MapManager.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "Player.h"
 #include "ScriptMgr.h"
-#include "World.h"
 #include "WorldSession.h"
 #include "custom_barracks_hardcore.h"
 
@@ -54,9 +56,12 @@ namespace
     constexpr uint32 MarkerBot        = 92012;
     constexpr uint32 Markers[] = { MarkerWorld, MarkerTournament, MarkerBot };
 
-    // Auras only come off through a GM or something that strips everything, so
-    // the sweep is a safety net, not the mechanism.
-    constexpr uint32 SweepMs = 10 * IN_MILLISECONDS;
+    // For real players the login hook does the work and this is a safety net.
+    // For the battleground fill clones it IS the mechanism: they are built on
+    // in-memory sessions that never reach the world's session list and never
+    // log in, so the only way to find them is to walk the maps they stand on.
+    // Five seconds lands the aura well inside a battleground's preparation.
+    constexpr uint32 SweepMs = 5 * IN_MILLISECONDS;
 
     bool Enabled()
     {
@@ -117,9 +122,14 @@ public:
         if (!enabled && _cleared)
             return;
 
-        for (auto const& [id, session] : sWorld->GetAllSessions())
-            if (session)
-                Ensure(session->GetPlayer(), enabled);
+        // Every player on every map, whatever kind of session is behind it.
+        // Runs after sMapMgr->Update has waited for the map threads.
+        sMapMgr->DoForAllMaps([enabled](Map* map)
+        {
+            Map::PlayerList const& players = map->GetPlayers();
+            for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+                Ensure(itr->GetSource(), enabled);
+        });
 
         _cleared = !enabled;
     }
