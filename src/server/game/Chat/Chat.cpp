@@ -21,6 +21,7 @@
 #include "CharacterCache.h"
 #include "GridNotifiersImpl.h"
 #include "Language.h"
+#include "Miscellaneous/Surnames.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Optional.h"
@@ -309,6 +310,11 @@ size_t ChatHandler::BuildChatPacket(WorldPacket& data, ChatMsg chatType, Languag
         {
             chatTag = playerSender->GetChatTag();
             gmMessage = playerSender->GetSession()->HasPermission(rbac::RBAC_PERM_COMMAND_GM_CHAT);
+            // A GM's message carries the name inside the packet instead of
+            // leaving the client to ask for it, so it is the one name on the
+            // realm that would arrive without the family name on it
+            // (Miscellaneous/Surnames.h).
+            Surnames::Decorate(senderGUID, senderName);
         }
     }
 
@@ -316,6 +322,8 @@ size_t ChatHandler::BuildChatPacket(WorldPacket& data, ChatMsg chatType, Languag
     {
         receiverGUID = receiver->GetGUID();
         receiverName = receiver->GetNameForLocaleIdx(locale);
+        if (receiver->ToPlayer())
+            Surnames::Decorate(receiverGUID, receiverName);
     }
 
     return BuildChatPacket(data, chatType, language, senderGUID, receiverGUID, message, chatTag, senderName, receiverName, achievementId, gmMessage, channelName);
