@@ -65,6 +65,42 @@
 #include <algorithm>
 #include <vector>
 
+namespace
+{
+    // The paid-change screens (customize, race, faction) send the first name in
+    // the packet's name field; the family name typed in the box beside it comes
+    // ahead of the request, the way the create screen's does
+    // (Surnames::HandleCreateRequest). A screen without that box sends the name
+    // as the character list shows it, "First Last", in the one field - so
+    // anything after the first space is dropped and the family name on file
+    // kept. `fullName` is what the character will be called afterwards, which is
+    // what has to be free. Runs after normalizePlayerName.
+    ResponseCodes ResolvePaidChangeName(uint32 accountId, ObjectGuid guid, std::string& name, std::string& fullName)
+    {
+        std::string::size_type const nameEnd = name.find(' ');
+        if (nameEnd != std::string::npos)
+            name.erase(nameEnd);
+
+        std::string surname;
+        if (Surnames::Enabled())
+        {
+            ResponseCodes surnameResult = CHAR_NAME_SUCCESS;
+            surname = Surnames::PeekPending(accountId, name, &surnameResult);
+            if (surnameResult != CHAR_NAME_SUCCESS)
+                return surnameResult;
+
+            if (surname.empty())
+                surname = Surnames::Get(guid);
+        }
+
+        fullName = name;
+        if (!surname.empty())
+            fullName += ' ' + surname;
+
+        return CHAR_NAME_SUCCESS;
+    }
+}
+
 bool LoginQueryHolder::Initialize()
 {
     SetSize(MAX_PLAYER_LOGIN_QUERY);
@@ -1732,17 +1768,25 @@ void WorldSession::HandleCharCustomizeCallback(std::shared_ptr<CharacterCustomiz
 
     atLoginFlags &= ~AT_LOGIN_CUSTOMIZE;
 
-    // prevent character rename
-    if (sWorld->getBoolConfig(CONFIG_PREVENT_RENAME_CUSTOMIZATION) && (customizeInfo->Name != oldName))
-    {
-        SendCharCustomize(CHAR_NAME_FAILURE, customizeInfo.get());
-        return;
-    }
-
     // prevent character rename to invalid name
     if (!normalizePlayerName(customizeInfo->Name))
     {
         SendCharCustomize(CHAR_NAME_NO_NAME, customizeInfo.get());
+        return;
+    }
+
+    std::string fullName;
+    if (ResponseCodes const surnameResult = ResolvePaidChangeName(GetAccountId(), customizeInfo->Guid, customizeInfo->Name, fullName);
+        surnameResult != CHAR_NAME_SUCCESS)
+    {
+        SendCharCustomize(surnameResult, customizeInfo.get());
+        return;
+    }
+
+    // prevent character rename
+    if (sWorld->getBoolConfig(CONFIG_PREVENT_RENAME_CUSTOMIZATION) && (customizeInfo->Name != oldName))
+    {
+        SendCharCustomize(CHAR_NAME_FAILURE, customizeInfo.get());
         return;
     }
 
@@ -1760,10 +1804,10 @@ void WorldSession::HandleCharCustomizeCallback(std::shared_ptr<CharacterCustomiz
         return;
     }
 
-    // character with this name already exist
-    if (ObjectGuid newGuid = sCharacterCache->GetCharacterGuidByName(customizeInfo->Name))
+    // character with this name already exist - the whole name, first and family
+    if (CharacterCacheEntry const* taken = sCharacterCache->GetCharacterCacheByFullName(fullName))
     {
-        if (newGuid != customizeInfo->Guid)
+        if (taken->Guid != customizeInfo->Guid)
         {
             SendCharCustomize(CHAR_CREATE_NAME_IN_USE, customizeInfo.get());
             return;
@@ -1796,6 +1840,7 @@ void WorldSession::HandleCharCustomizeCallback(std::shared_ptr<CharacterCustomiz
     CharacterDatabase.CommitTransaction(trans);
 
     sCharacterCache->UpdateCharacterData(customizeInfo->Guid, customizeInfo->Name, customizeInfo->Gender);
+    Surnames::ApplyPending(GetAccountId(), customizeInfo->Guid, customizeInfo->Name, "Customized");
 
     SendCharCustomize(RESPONSE_SUCCESS, customizeInfo.get());
 
@@ -2022,13 +2067,13 @@ void WorldSession::HandleCharFactionOrRaceChangeCallback(std::shared_ptr<Charact
         return;
     }
 
-    // The paid-change screen fills its name box with the name the character
-    // list shows, family name included (Miscellaneous/Surnames.h), and sends it
-    // back as typed. Only the first name can change here; the family name the
-    // character already has stays.
-    std::string::size_type const nameEnd = factionChangeInfo->Name.find(' ');
-    if (nameEnd != std::string::npos)
-        factionChangeInfo->Name.erase(nameEnd);
+    std::string fullName;
+    if (ResponseCodes const surnameResult = ResolvePaidChangeName(GetAccountId(), factionChangeInfo->Guid, factionChangeInfo->Name, fullName);
+        surnameResult != CHAR_NAME_SUCCESS)
+    {
+        SendCharFactionChange(surnameResult, factionChangeInfo.get());
+        return;
+    }
 
     // prevent character rename
     if (sWorld->getBoolConfig(CONFIG_PREVENT_RENAME_CUSTOMIZATION) && (factionChangeInfo->Name != characterInfo->Name))
@@ -2053,11 +2098,6 @@ void WorldSession::HandleCharFactionOrRaceChangeCallback(std::shared_ptr<Charact
 
     // character with this name already exist - the whole name, first and family,
     // as HandleCharRenameOpcode checks it
-    std::string fullName = factionChangeInfo->Name;
-    if (Surnames::Enabled())
-        if (std::string const& surname = Surnames::Get(factionChangeInfo->Guid); !surname.empty())
-            fullName += ' ' + surname;
-
     if (CharacterCacheEntry const* taken = sCharacterCache->GetCharacterCacheByFullName(fullName))
     {
         if (taken->Guid != factionChangeInfo->Guid)
@@ -2486,6 +2526,9 @@ void WorldSession::HandleCharFactionOrRaceChangeCallback(std::shared_ptr<Charact
 
     TC_LOG_DEBUG("entities.player", "{} (IP: {}) changed race from {} to {}", GetPlayerInfo(), GetRemoteAddress(), oldRace, factionChangeInfo->Race);
 
+    // The family name typed beside the first name, if one was (Miscellaneous/Surnames.h).
+    Surnames::ApplyPending(GetAccountId(), factionChangeInfo->Guid, factionChangeInfo->Name, "Race-changed");
+
     SendCharFactionChange(RESPONSE_SUCCESS, factionChangeInfo.get());
 }
 
@@ -2523,7 +2566,8 @@ void WorldSession::SendCharCustomize(ResponseCodes result, CharacterCustomizeInf
     if (result == RESPONSE_SUCCESS)
     {
         data << customizeInfo->Guid;
-        data << customizeInfo->Name;
+        // Shown in the character list as it stands, so with the family name.
+        data << Surnames::Decorated(customizeInfo->Guid, customizeInfo->Name);
         data << uint8(customizeInfo->Gender);
         data << uint8(customizeInfo->Skin);
         data << uint8(customizeInfo->Face);
@@ -2541,7 +2585,8 @@ void WorldSession::SendCharFactionChange(ResponseCodes result, CharacterFactionC
     if (result == RESPONSE_SUCCESS)
     {
         data << factionChangeInfo->Guid;
-        data << factionChangeInfo->Name;
+        // Shown in the character list as it stands, so with the family name.
+        data << Surnames::Decorated(factionChangeInfo->Guid, factionChangeInfo->Name);
         data << uint8(factionChangeInfo->Gender);
         data << uint8(factionChangeInfo->Skin);
         data << uint8(factionChangeInfo->Face);

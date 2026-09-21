@@ -43,15 +43,45 @@ namespace
         ACTION_CANCEL_RACE,
     };
 
-    void FlagForLogin(Player* player, AtLoginFlags flag)
-    {
-        player->SetAtLoginFlag(flag);
+    // Each service, paid when it is flagged and handed back if it is called off
+    // before the character screen has used it.
+    constexpr uint32 SERVICE_PRICE = 100 * GOLD;
 
-        // Written now as well as at logout, so a crash in between keeps it.
-        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_ADD_AT_LOGIN_FLAG);
+    // The flag and the gold are written together and at once, rather than at
+    // the next save, so a crash in between can neither keep the gold and lose
+    // the flag nor the other way round.
+    void WriteNow(Player* player, AtLoginFlags flag, bool add)
+    {
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(add ? CHAR_UPD_ADD_AT_LOGIN_FLAG : CHAR_UPD_REM_AT_LOGIN_FLAG);
         stmt->setUInt16(0, uint16(flag));
         stmt->setUInt32(1, player->GetGUID().GetCounter());
-        CharacterDatabase.Execute(stmt);
+        trans->Append(stmt);
+
+        player->SaveGoldToDB(trans);
+        CharacterDatabase.CommitTransaction(trans);
+    }
+
+    bool Purchase(Player* player, AtLoginFlags flag)
+    {
+        if (!player->HasEnoughMoney(SERVICE_PRICE))
+        {
+            player->SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, nullptr, 0, 0);
+            return false;
+        }
+
+        player->ModifyMoney(-int32(SERVICE_PRICE));
+        player->SetAtLoginFlag(flag);
+        WriteNow(player, flag, true);
+        return true;
+    }
+
+    void Refund(Player* player, AtLoginFlags flag)
+    {
+        player->RemoveAtLoginFlag(flag);
+        player->ModifyMoney(int32(SERVICE_PRICE));
+        WriteNow(player, flag, false);
     }
 }
 
@@ -68,17 +98,19 @@ public:
         {
             ClearGossipMenuFor(player);
 
+            // The popup's money line shows the price and greys the button out
+            // for anyone who cannot pay it.
             if (player->HasAtLoginFlag(AT_LOGIN_RENAME))
-                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Never mind the new name. I will keep the one I have.", GOSSIP_SENDER_MAIN, ACTION_CANCEL_RENAME);
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Never mind the new name. I will keep the one I have. (refund)", GOSSIP_SENDER_MAIN, ACTION_CANCEL_RENAME);
             else
-                AddGossipItemFor(player, GOSSIP_ICON_INTERACT_1, "I would like a new name.", GOSSIP_SENDER_MAIN, ACTION_RENAME,
-                    "Your character will be asked for a new name at the character screen. Your family name stays unless you change it there. Continue?", 0, false);
+                AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, "I would like a new name.", GOSSIP_SENDER_MAIN, ACTION_RENAME,
+                    "Your character will be asked for a new name at the character screen, first and last. Continue?", SERVICE_PRICE, false);
 
             if (player->HasAtLoginFlag(AT_LOGIN_CHANGE_RACE))
-                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Never mind the race change. I will stay as I am.", GOSSIP_SENDER_MAIN, ACTION_CANCEL_RACE);
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Never mind the race change. I will stay as I am. (refund)", GOSSIP_SENDER_MAIN, ACTION_CANCEL_RACE);
             else
-                AddGossipItemFor(player, GOSSIP_ICON_INTERACT_1, "I would like to change my race.", GOSSIP_SENDER_MAIN, ACTION_CHANGE_RACE,
-                    "A Race Change button will appear on this character at the character screen. You trade your racial abilities for the new race's. Continue?", 0, false);
+                AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, "I would like to change my race.", GOSSIP_SENDER_MAIN, ACTION_CHANGE_RACE,
+                    "A Race Change button will appear on this character at the character screen. You trade your racial abilities for the new race's. Continue?", SERVICE_PRICE, false);
 
             SendGossipMenuFor(player, NPC_TEXT_CHARACTER_SERVICES, me);
             return true;
@@ -93,7 +125,8 @@ public:
             switch (action)
             {
                 case ACTION_RENAME:
-                    FlagForLogin(player, AT_LOGIN_RENAME);
+                    if (player->HasAtLoginFlag(AT_LOGIN_RENAME) || !Purchase(player, AT_LOGIN_RENAME))
+                        break;
                     chat.SendSysMessage("Log out to the character screen to choose your new name.");
                     player->GetSession()->SendNotification("Log out to choose your new name.");
                     break;
@@ -105,17 +138,23 @@ public:
                         chat.SendSysMessage("An arena team captain cannot change race. Hand the captaincy to a teammate first.");
                         break;
                     }
-                    FlagForLogin(player, AT_LOGIN_CHANGE_RACE);
+                    if (player->HasAtLoginFlag(AT_LOGIN_CHANGE_RACE) || !Purchase(player, AT_LOGIN_CHANGE_RACE))
+                        break;
                     chat.SendSysMessage("Log out to the character screen and press Race Change on this character.");
                     player->GetSession()->SendNotification("Log out to change your race.");
                     break;
+                // Checked again: the menu may be older than the flag.
                 case ACTION_CANCEL_RENAME:
-                    player->RemoveAtLoginFlag(AT_LOGIN_RENAME, true);
-                    chat.SendSysMessage("Your name stays as it is.");
+                    if (!player->HasAtLoginFlag(AT_LOGIN_RENAME))
+                        break;
+                    Refund(player, AT_LOGIN_RENAME);
+                    chat.SendSysMessage("Your name stays as it is, and your gold is returned.");
                     break;
                 case ACTION_CANCEL_RACE:
-                    player->RemoveAtLoginFlag(AT_LOGIN_CHANGE_RACE, true);
-                    chat.SendSysMessage("Your race stays as it is.");
+                    if (!player->HasAtLoginFlag(AT_LOGIN_CHANGE_RACE))
+                        break;
+                    Refund(player, AT_LOGIN_CHANGE_RACE);
+                    chat.SendSysMessage("Your race stays as it is, and your gold is returned.");
                     break;
                 default:
                     break;
