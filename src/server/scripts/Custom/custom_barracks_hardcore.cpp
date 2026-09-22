@@ -2980,7 +2980,12 @@ public:
             // The same kit the corpse gets, on demand. Not a second system:
             // this calls the identical function the resurrection path does, so
             // "what Grix hands you" and "what you wake up in" can never drift.
-            AddGossipItemFor(player, GOSSIP_ICON_TABARD, "Kit me out.", GOSSIP_SENDER_MAIN, 10);
+            // The bare "Kit me out." left players guessing, so the label says
+            // what it does - and that it never touches gear they earned.
+            AddGossipItemFor(player, GOSSIP_ICON_TABARD,
+                "Kit me out. (Free basic gear for every empty equipment slot, sized to your level. "
+                "Outgrown kit is swapped for new; gear you earned is never touched.)",
+                GOSSIP_SENDER_MAIN, 10);
 
             // The way out, priced like a repair bill. Only shown when there is
             // something to erase, and the price is in the label so nobody clicks
@@ -3040,7 +3045,8 @@ public:
                 // touched.
                 IssueWhiteFieldKit(player);
                 me->Whisper("Then take what the quartermaster leaves out. It is not good, "
-                    "but it is better than bare.", LANG_UNIVERSAL, player);
+                    "but it is better than bare. Any slot you left empty is filled now - and it is "
+                    "the same kit you will wake up in if the wilds strip you.", LANG_UNIVERSAL, player);
                 return true;
             }
             if (action == 9)
