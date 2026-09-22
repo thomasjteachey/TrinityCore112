@@ -2143,12 +2143,13 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
 
         Aura* judgeWisdomAura = victim->GetAuraOfRankedSpell(20186);
         Aura* judgeLightAura = victim->GetAuraOfRankedSpell(20185);
-        // Covers the whole real Judgement of the Crusader chain
-        // (20188 -> 20300 -> 20301 -> 20302 -> 20303), which is what the
-        // Lawbender 3pc applies. Deliberately not 21183: that shares the name
-        // but is the Heart of the Crusader effect on an unrelated chain, and
-        // stock behaviour does not refresh it from auto attacks.
+        // Ranks 2-6 of Judgement of the Crusader are the chain
+        // 20188 -> 20300 -> 20301 -> 20302 -> 20303 (also what the Lawbender
+        // 3pc applies). Rank 1 is 21183, judged by Seal of the Crusader R1
+        // (21082). In stock WotLK 21183 heads the Heart of the Crusader chain,
+        // so it is looked up on its own rather than by rank.
         Aura* judgeCrusaderAura = victim->GetAuraOfRankedSpell(20188);
+        Aura* judgeCrusaderR1Aura = victim->GetAura(21183);
         Aura* judgeJusticeAura = victim->GetAura(20184);
 
         // if paladin that cast judgement hits with auto attack, it refreshes
@@ -2166,6 +2167,7 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
         refreshIfOurs(judgeWisdomAura);
         refreshIfOurs(judgeLightAura);
         refreshIfOurs(judgeCrusaderAura);
+        refreshIfOurs(judgeCrusaderR1Aura);
         refreshIfOurs(judgeJusticeAura);
     }
 

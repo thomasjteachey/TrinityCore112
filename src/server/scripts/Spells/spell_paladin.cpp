@@ -2248,6 +2248,10 @@ class spell_pal_seal_of_righteousness : public AuraScript
         {
             // currently uses same spell damage fetch as flametongue - need to verify whether SP is supposed to be applied pre-triggered spell bonuses or post
             int32 bonusDamage = caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_HOLY);
+            // Holy damage taken by the victim (Judgement of the Crusader) counts as
+            // bonus holy damage at the same coefficient. The proc spell's own
+            // coefficient is 0, so the engine would otherwise drop it.
+            bonusDamage += victim->GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_DAMAGE_TAKEN, SPELL_SCHOOL_MASK_HOLY);
             damagePoint += bonusDamage * coeff;
         }
 
