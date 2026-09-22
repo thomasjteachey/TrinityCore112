@@ -1884,10 +1884,13 @@ public:
 
 }
 
+void AddPlayerbotTickCommandScripts();
+
 void AddPlayerbotScripts()
 {
     new PlayerbotBootstrapWorldScript();
     new PlayerbotDamageUnitScript();
     new PlayerbotLifecyclePlayerScript();
     new PlayerbotLifecycleCommandScript();
+    AddPlayerbotTickCommandScripts();
 }

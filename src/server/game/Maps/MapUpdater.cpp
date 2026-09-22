@@ -20,6 +20,8 @@
 #include "Errors.h"
 #include "Map.h"
 #include "Metric.h"
+#include "TickStats.h"
+#include "Timer.h"
 
 #include <mutex>
 
@@ -41,7 +43,12 @@ class MapUpdateRequest
         void call()
         {
             TC_METRIC_TIMER("map_update_time_diff", TC_METRIC_TAG("map_id", std::to_string(m_map.GetId())));
+            uint32 const startMs = getMSTime();
             m_map.Update (m_diff);
+            // A MapInstanced parent (instanceable, id 0) only hands its
+            // instances to the updater; they record themselves.
+            if (!m_map.Instanceable() || m_map.GetInstanceId())
+                TickStats::RecordMapUpdate(m_map.GetId(), m_map.GetInstanceId(), GetMSTimeDiffToNow(startMs));
             m_updater.update_finished();
         }
 };

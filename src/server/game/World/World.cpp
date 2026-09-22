@@ -97,6 +97,7 @@
 #include "TicketMgr.h"
 #include "TransportMgr.h"
 #include "Unit.h"
+#include "TickStats.h"
 #include "UpdateTime.h"
 #include "VMapFactory.h"
 #include "VMapManager2.h"
@@ -2839,6 +2840,7 @@ void World::Update(uint32 diff)
     }
 
     uint32 const totalUpdateMs = getMSTimeDiff(updateStartMs, getMSTime());
+    TickStats::RecordWorldTick(diff, sessionsUpdateMs, mapUpdateMs, battlegroundUpdateMs, scriptsUpdateMs);
     static uint32 constexpr SlowWorldUpdateThresholdMs = 3000;
     if (totalUpdateMs >= SlowWorldUpdateThresholdMs)
     {

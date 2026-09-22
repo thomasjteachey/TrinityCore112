@@ -36,6 +36,19 @@
 --   GMAC  character rows           <realmId>|<name>,<lvl>,<class>,<race>,<zone>,<flags>,<idleSecs>,<gold>,<hours>;...
 --   GMAE  end of the reply         <seq>
 --
+-- The third page, Server, is the realm's world tick as the playerbot resource
+-- governor sees it: "tick addon" answers on the command channel itself, one
+-- "m" line per record (a different echo, so the two never mix):
+--
+--   T1  world tick     last|avg10|p95_10|max10|ticks10|avg60|p95_60|max60|ticks60|span60s|maps|sessions|bgs|scripts
+--   T2  governor       enabled|level|emaMs|softMs|hardMs|softMatchBotCap|maxTotalCustomMatchBots
+--   T3  online         players|bots
+--   TM  one map        mapId|instanceId|name|avg|max|last|players|bots   (slowest first)
+--   TE  end of the reply
+--
+-- The world tick is the SLOWEST map, not the sum, so the map table is the
+-- answer to "why is it slow".
+--
 -- Either feed is accepted only as a WHISPER whose sender is this character.
 -- The server sends it that way, and nobody else can, so another player cannot
 -- plant rows in the list. A reply is assembled on the side and only swapped in
@@ -49,6 +62,8 @@ local MAX_ROWS = 20
 local AUTO_SECONDS = 15
 local NO_REPLY_SECONDS = 10
 local ECHO = "GMO1"         -- four characters, echoed back by the command channel
+local TICK_ECHO = "GMT1"    -- the Server page's own echo
+local TICK_AUTO_SECONDS = 3
 
 local FLAG_BOT, FLAG_GM, FLAG_BG, FLAG_DEAD = 1, 2, 4, 8
 -- Only an account listing carries these: an online listing is online by
@@ -88,6 +103,16 @@ local accountReply = 0
 local accountName = ""  -- what was typed, echoed back with the reply
 local accountScroll = 0
 
+-- The Server page. Everything it shows comes in one short reply, so it has no
+-- account-style "found" state - only answered, not available, or silent.
+local tick = nil        -- the last complete tick reply
+local incomingTick = nil
+local tickAsked = 0
+local tickReply = 0
+local tickAnswered = false
+local tickUnavailable = false
+local tickScroll = 0
+
 ------------------------------------------------------------------
 -- settings
 ------------------------------------------------------------------
@@ -112,19 +137,25 @@ local function Ask()
 		"WHISPER", UnitName("player"))
 end
 
--- One word, and one the command parser will not read as a keyword. Anything
--- else is a typo that would quietly turn into "list who is online" instead.
--- Not always a string either: a slash command hands over whatever it was given
--- and the minimap button hands over its own frame.
+-- A name the command parser will not read as a keyword: an account name, a
+-- first name, or a character's first and last name ("Elgrom Fernbloom" - the
+-- server looks that up by the pair). Anything else is a typo that would quietly
+-- turn into "list who is online" instead. Not always a string either: a slash
+-- command hands over whatever it was given and the minimap button hands over
+-- its own frame.
 local function CleanName(text)
 	if type(text) ~= "string" then
 		return nil
 	end
-	text = string.match(text, "^%s*(%S*)") or ""
-	if text == "" or text == "addon" or text == "bots" or text == "alts" or text == "account" then
+	local first, last = string.match(text, "^%s*(%S*)%s*(%S*)")
+	first, last = first or "", last or ""
+	if first == "" or first == "addon" or first == "bots" or first == "alts" or first == "account" then
 		return nil
 	end
-	return string.sub(text, 1, 32)
+	if last ~= "" then
+		first = first .. " " .. last
+	end
+	return string.sub(first, 1, 32)
 end
 
 local function AskAccount(who)
@@ -138,6 +169,12 @@ local function AskAccount(who)
 	unavailable = false
 	serverNote = nil
 	SendAddonMessage("TrinityCore", "i" .. ECHO .. "gmonline addon alts " .. who, "WHISPER", UnitName("player"))
+end
+
+local function AskTick()
+	tickAsked = GetTime()
+	tickUnavailable = false
+	SendAddonMessage("TrinityCore", "i" .. TICK_ECHO .. "tick addon", "WHISPER", UnitName("player"))
 end
 
 ------------------------------------------------------------------
@@ -311,6 +348,65 @@ local function CommitAccount(payload)
 end
 
 ------------------------------------------------------------------
+-- parsing: the Server page
+------------------------------------------------------------------
+local function Numbers(text)
+	local list = {}
+	for n in string.gmatch(text or "", "[^|]+") do
+		table.insert(list, tonumber(n) or 0)
+	end
+	return list
+end
+
+-- One "m" line of a tick reply. T1 starts a reply and TE swaps it in, like the
+-- other two pages, so a half-arrived reply never replaces a whole one.
+local function ParseTickLine(line)
+	local kind, rest = string.match(line or "", "^(T[123ME])|?(.*)$")
+	if not kind then
+		return false
+	end
+
+	if kind == "T1" then
+		local n = Numbers(rest)
+		incomingTick = {
+			last = n[1] or 0, avg10 = n[2] or 0, p95_10 = n[3] or 0, max10 = n[4] or 0, ticks10 = n[5] or 0,
+			avg60 = n[6] or 0, p95_60 = n[7] or 0, max60 = n[8] or 0, ticks60 = n[9] or 0, span60 = n[10] or 0,
+			maps = n[11] or 0, sessions = n[12] or 0, battlegrounds = n[13] or 0, scripts = n[14] or 0,
+			gov = nil, players = 0, bots = 0, mapRows = {},
+		}
+	elseif not incomingTick then
+		return true
+	elseif kind == "T2" then
+		local n = Numbers(rest)
+		incomingTick.gov = {
+			enabled = n[1] == 1, level = n[2] or 0, ema = n[3] or 0,
+			soft = n[4] or 110, hard = n[5] or 180, softCap = n[6] or 0, maxTotal = n[7] or 0,
+		}
+	elseif kind == "T3" then
+		local n = Numbers(rest)
+		incomingTick.players, incomingTick.bots = n[1] or 0, n[2] or 0
+	elseif kind == "TM" then
+		local id, instance, name, avg, max, last, players, bots =
+			string.match(rest, "^(%d+)|(%d+)|([^|]*)|(%d+)|(%d+)|(%d+)|(%d+)|(%d+)$")
+		if id then
+			table.insert(incomingTick.mapRows, {
+				id = tonumber(id), instance = tonumber(instance),
+				name = (name ~= "" and name) or ("Map " .. id),
+				avg = tonumber(avg), max = tonumber(max), last = tonumber(last),
+				players = tonumber(players), bots = tonumber(bots),
+			})
+		end
+	elseif kind == "TE" then
+		tick = incomingTick
+		incomingTick = nil
+		tickReply = GetTime()
+		tickAnswered = true
+		tickUnavailable = false
+	end
+	return true
+end
+
+------------------------------------------------------------------
 -- window
 ------------------------------------------------------------------
 local win = CreateFrame("Frame", "CenturionGMOnlineFrame", UIParent)
@@ -340,6 +436,21 @@ title:SetText("Online")
 local closeButton = CreateFrame("Button", nil, win, "UIPanelCloseButton")
 closeButton:SetPoint("TOPRIGHT", win, "TOPRIGHT", -8, -8)
 
+-- Page tabs, top left: the online list (with its account page behind it) and
+-- the Server page. The one you are on is greyed out.
+local function MakeTab(label, x, onClick)
+	local tab = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
+	tab:SetWidth(64)
+	tab:SetHeight(20)
+	tab:SetPoint("TOPLEFT", win, "TOPLEFT", x, -14)
+	tab:SetText(label)
+	tab:SetScript("OnClick", onClick)
+	return tab
+end
+
+local onlineTab = MakeTab("Online", 18, function() CENTURION_GMOnline_ShowOnline() end)
+local serverTab = MakeTab("Server", 84, function() CENTURION_GMOnline_ShowServer() end)
+
 -- One summary line per realm, up to four.
 local summaries = {}
 for i = 1, 4 do
@@ -366,7 +477,7 @@ local function MakeCheck(label, x, getter, setter)
 	return check
 end
 
-MakeCheck("Show bots", 20, function() return DB().showBots end, function(v)
+local showBotsCheck = MakeCheck("Show bots", 20, function() return DB().showBots end, function(v)
 	DB().showBots = v
 	scrollOffset = 0
 	Ask()
@@ -378,7 +489,9 @@ refresh:SetWidth(80)
 refresh:SetHeight(20)
 refresh:SetPoint("TOPRIGHT", win, "TOPRIGHT", -24, -100)
 refresh:SetText("Refresh")
-refresh:SetScript("OnClick", function() Ask() end)
+refresh:SetScript("OnClick", function()
+	if mode == "tick" then AskTick() else Ask() end
+end)
 
 -- Type an account or a character name here and the window turns into that
 -- account's roster. A character name is enough - the server resolves it.
@@ -412,12 +525,18 @@ back:SetScript("OnClick", function() CENTURION_GMOnline_ShowOnline() end)
 -- account name on the online page and, on the account page - where every row
 -- is the same account - when that character was last seen instead.
 local COLUMNS = {
-	{ key = "name",    x = 0,   w = 130, title = "Name" },
-	{ key = "level",   x = 132, w = 30,  title = "Lvl" },
-	{ key = "race",    x = 164, w = 70,  title = "Race" },
-	{ key = "zone",    x = 236, w = 170, title = "Zone" },
+	-- Wide enough for a first AND last name; the zone gave up the room.
+	{ key = "name",    x = 0,   w = 150, title = "Name" },
+	{ key = "level",   x = 152, w = 30,  title = "Lvl" },
+	{ key = "race",    x = 184, w = 70,  title = "Race" },
+	{ key = "zone",    x = 256, w = 150, title = "Zone" },
 	{ key = "account", x = 408, w = 110, title = "Account", altTitle = "Last seen" },
 	{ key = "tags",    x = 520, w = 76,  title = "" },
+}
+
+-- The Server page reuses the same cells for its map table.
+local TICK_TITLES = {
+	name = "Map", level = "Avg", race = "Max", zone = "Players / bots", account = "Last", tags = "",
 }
 
 -- Twenty rows from here end at -462, clear of the footer at the bottom of a
@@ -532,7 +651,9 @@ footer:SetText("/gmo [name]  -  wheel to scroll  -  right-click a row for that a
 win:EnableMouseWheel(true)
 win:SetScript("OnMouseWheel", function(self, delta)
 	local step = (delta or 0) * 3
-	if mode == "account" then
+	if mode == "tick" then
+		tickScroll = tickScroll - step
+	elseif mode == "account" then
 		accountScroll = accountScroll - step
 	else
 		scrollOffset = scrollOffset - step
@@ -631,11 +752,74 @@ local function BuildAccountDisplay()
 	end
 end
 
--- The four lines under the title: one per realm on the online page, and the
--- account itself on the account page.
+-- The Server page's map table, slowest first as the server sent it.
+local function BuildTickDisplay()
+	display = {}
+	if not tick then
+		return
+	end
+	for _, m in ipairs(tick.mapRows) do
+		table.insert(display, { kind = "map", map = m })
+	end
+	if #display == 0 then
+		table.insert(display, { kind = "empty" })
+	end
+end
+
+-- Green well under the governor's soft line, yellow approaching it, orange
+-- past it (matches capped), red past hard (no bots added at all).
+local function TickColor(ms)
+	local soft = tick and tick.gov and tick.gov.soft or 110
+	local hard = tick and tick.gov and tick.gov.hard or 180
+	if ms >= hard then return "|cffff4040" end
+	if ms >= soft then return "|cffff8030" end
+	if ms >= soft * 0.75 then return "|cffffd200" end
+	return "|cff40ff40"
+end
+
+local function Ms(ms)
+	return TickColor(ms) .. ms .. "|r"
+end
+
+local GOVERNOR_LEVEL = { [0] = "|cff40ff40NORMAL|r", [1] = "|cffff8030SOFT|r", [2] = "|cffff4040HARD|r" }
+
+local function GovernorText(gov)
+	if not gov then
+		return ""
+	end
+	if not gov.enabled then
+		return "Governor |cff999999off|r - bot adds are never throttled"
+	end
+	local text = string.format("Governor %s (avg %d ms)  ", GOVERNOR_LEVEL[gov.level] or "?", gov.ema)
+	if gov.level == 2 then
+		return text .. "no new bots; if it holds, bots are shed"
+	elseif gov.level == 1 then
+		return text .. string.format("each match capped at %d bots", gov.softCap)
+	end
+	return text .. string.format("|cff999999soft %d ms caps a match at %d bots, hard %d ms stops bot adds|r",
+		gov.soft, gov.softCap, gov.hard)
+end
+
+-- The four lines under the title: one per realm on the online page, the
+-- account itself on the account page, the world tick on the Server page.
 local function DrawSummaries()
 	for i = 1, #summaries do
 		summaries[i]:SetText("")
+	end
+
+	if mode == "tick" then
+		if not tick then
+			return
+		end
+		summaries[1]:SetText(string.format("|cffffd200World tick|r %s ms   %s, %s online", Ms(tick.last),
+			Plural(tick.players, "player", "players"), Plural(tick.bots, "bot", "bots")))
+		summaries[2]:SetText(string.format("10 s: avg %s, p95 %s, max %s      %d s: avg %s, p95 %s, max %s",
+			Ms(tick.avg10), Ms(tick.p95_10), Ms(tick.max10), math.max(tick.span60, 1),
+			Ms(tick.avg60), Ms(tick.p95_60), Ms(tick.max60)))
+		summaries[3]:SetText(string.format("|cff999999work per tick: maps %d, sessions %d, battlegrounds %d, scripts %d ms|r",
+			tick.maps, tick.sessions, tick.battlegrounds, tick.scripts))
+		summaries[4]:SetText(GovernorText(tick.gov))
+		return
 	end
 
 	if mode == "account" then
@@ -683,6 +867,20 @@ end
 
 local function DrawStatus()
 	local now = GetTime()
+
+	if mode == "tick" then
+		if tickUnavailable then
+			status:SetText("|cffff5050Not available - needs a GM account, on a realm built with .tick.|r")
+		elseif tickAsked > tickReply and now - tickAsked > NO_REPLY_SECONDS then
+			status:SetText(tickAnswered and "no reply, retrying" or "|cffff5050No reply|r")
+		elseif tick then
+			status:SetText(string.format("updated %ds ago", math.floor(now - tickReply)))
+		else
+			status:SetText("asking...")
+		end
+		return
+	end
+
 	local asked = mode == "account" and accountAsked or lastAsked
 	local replied = mode == "account" and accountReply or lastReply
 	local have = mode == "account" and account or data
@@ -706,25 +904,46 @@ function CENTURION_GMOnline_Refresh()
 	end
 
 	local onAccount = mode == "account"
-	title:SetText(onAccount and ("Account: " .. (accountName ~= "" and accountName or "?")) or "Online")
-	headers.account:SetText(onAccount and headerCol.account.altTitle or headerCol.account.title)
+	local onTick = mode == "tick"
+	if onTick then
+		title:SetText("Server")
+	else
+		title:SetText(onAccount and ("Account: " .. (accountName ~= "" and accountName or "?")) or "Online")
+	end
+	for _, col in ipairs(COLUMNS) do
+		if onTick then
+			headers[col.key]:SetText(TICK_TITLES[col.key] or "")
+		elseif col.key == "account" and onAccount then
+			headers[col.key]:SetText(col.altTitle)
+		else
+			headers[col.key]:SetText(col.title)
+		end
+	end
 	if onAccount then back:Show() else back:Hide() end
 	if onAccount then refresh:Hide() else refresh:Show() end
+	if onTick then showBotsCheck:Hide() else showBotsCheck:Show() end
+	if onTick then serverTab:Disable() else serverTab:Enable() end
+	if onTick then onlineTab:Enable() else onlineTab:Disable() end
+	footer:SetText(onTick
+		and "Colours: green fine, yellow nearing the governor's soft line, orange past it, red past hard"
+		or "/gmp [name]  -  wheel to scroll  -  right-click a row for that account's characters")
 
 	DrawSummaries()
 	DrawStatus()
 
-	if onAccount then
+	if onTick then
+		BuildTickDisplay()
+	elseif onAccount then
 		BuildAccountDisplay()
 	else
 		BuildDisplay()
 	end
 
 	local maxOffset = math.max(0, #display - MAX_ROWS)
-	local offset = onAccount and accountScroll or scrollOffset
+	local offset = (onTick and tickScroll) or (onAccount and accountScroll) or scrollOffset
 	if offset > maxOffset then offset = maxOffset end
 	if offset < 0 then offset = 0 end
-	if onAccount then accountScroll = offset else scrollOffset = offset end
+	if onTick then tickScroll = offset elseif onAccount then accountScroll = offset else scrollOffset = offset end
 
 	for i = 1, MAX_ROWS do
 		local row = rows[i]
@@ -743,8 +962,16 @@ function CENTURION_GMOnline_Refresh()
 				if entry.alt and not entry.realm.live then
 					row.cells.account:SetText("|cff999999last save|r")
 				end
+			elseif entry.kind == "map" then
+				local m = entry.map
+				row.cells.name:SetText(m.instance > 0 and (m.name .. " |cff808080#" .. m.instance .. "|r") or m.name)
+				row.cells.level:SetText(Ms(m.avg))
+				row.cells.race:SetText(Ms(m.max))
+				row.cells.zone:SetText(string.format("%d / %d", m.players, m.bots))
+				row.cells.account:SetText(Ms(m.last))
 			elseif entry.kind == "empty" then
-				row.cells.name:SetText(entry.alt and "|cff808080no characters|r" or "|cff808080nobody|r")
+				row.cells.name:SetText((onTick and "|cff808080no map updates recorded|r")
+					or (entry.alt and "|cff808080no characters|r") or "|cff808080nobody|r")
 			else
 				local p = entry.player
 				-- A bot on the online page and a deleted character on the
@@ -813,6 +1040,17 @@ function CENTURION_GMOnline_ShowOnline()
 	CENTURION_GMOnline_Refresh()
 end
 
+function CENTURION_GMOnline_ShowServer()
+	mode = "tick"
+	search:SetText("")
+	search:ClearFocus()
+	if not win:IsShown() then
+		win:Show()
+	end
+	AskTick()
+	CENTURION_GMOnline_Refresh()
+end
+
 ------------------------------------------------------------------
 -- events
 ------------------------------------------------------------------
@@ -823,7 +1061,9 @@ driver:SetScript("OnEvent", function(self, event, prefix, message, channel, send
 	-- A request that went out just as a loading screen began is dropped by the
 	-- server, so ask again the moment the world is back.
 	if event == "PLAYER_ENTERING_WORLD" then
-		if win:IsShown() and answered then
+		if win:IsShown() and mode == "tick" then
+			AskTick()
+		elseif win:IsShown() and answered then
 			if mode == "account" then
 				AskAccount(accountName)
 			else
@@ -839,6 +1079,20 @@ driver:SetScript("OnEvent", function(self, event, prefix, message, channel, send
 
 	-- The core's command channel: "a"/"o" ack and ok, "m" a message, "f" failed.
 	if prefix == "TrinityCore" then
+		-- The command channel only ever answers this character, from itself.
+		if string.sub(message, 2, 5) == TICK_ECHO and sender == UnitName("player") then
+			local opcode = string.sub(message, 1, 1)
+			if opcode == "f" then
+				tickUnavailable = true
+				incomingTick = nil
+			elseif opcode == "m" then
+				ParseTickLine(string.sub(message, 6))
+			end
+			if opcode == "f" or opcode == "o" then
+				CENTURION_GMOnline_Refresh()
+			end
+			return
+		end
 		if string.sub(message, 2, 5) ~= ECHO then
 			return
 		end
@@ -906,6 +1160,17 @@ driver:SetScript("OnUpdate", function(self, elapsed)
 	end
 
 	local now = GetTime()
+
+	-- The Server page asks every few seconds whatever happened last time: its
+	-- whole point is watching the number move.
+	if mode == "tick" then
+		if DB().auto and not tickUnavailable and now - tickAsked >= TICK_AUTO_SECONDS then
+			AskTick()
+		end
+		CENTURION_GMOnline_Refresh()
+		return
+	end
+
 	local asked = mode == "account" and accountAsked or lastAsked
 	local replied = mode == "account" and accountReply or lastReply
 	if not answered and asked > replied and now - asked > NO_REPLY_SECONDS then
@@ -924,6 +1189,11 @@ driver:SetScript("OnUpdate", function(self, elapsed)
 end)
 
 local function ToggleWindow(arg)
+	local word = type(arg) == "string" and string.lower(string.match(arg, "^%s*(%S*)") or "") or ""
+	if word == "server" or word == "tick" then
+		CENTURION_GMOnline_ShowServer()
+		return
+	end
 	local who = CleanName(arg)
 	if who then
 		CENTURION_GMOnline_ShowAccount(who)
@@ -933,7 +1203,9 @@ local function ToggleWindow(arg)
 		win:Hide()
 	else
 		win:Show()
-		if mode == "account" then
+		if mode == "tick" then
+			AskTick()
+		elseif mode == "account" then
 			AskAccount(accountName)
 		else
 			Ask()
@@ -942,9 +1214,14 @@ local function ToggleWindow(arg)
 	end
 end
 
-SLASH_CENTURIONGMONLINE1 = "/gmo"
-SLASH_CENTURIONGMONLINE2 = "/gmonline"
+SLASH_CENTURIONGMONLINE1 = "/gmp"
+SLASH_CENTURIONGMONLINE2 = "/gmpanel"
+SLASH_CENTURIONGMONLINE3 = "/gmo"
+SLASH_CENTURIONGMONLINE4 = "/gmonline"
 SlashCmdList["CENTURIONGMONLINE"] = ToggleWindow
+
+SLASH_CENTURIONGMTICK1 = "/gmtick"
+SlashCmdList["CENTURIONGMTICK"] = function() CENTURION_GMOnline_ShowServer() end
 
 ------------------------------------------------------------------
 -- minimap button
@@ -1006,7 +1283,11 @@ minimapButton:SetScript("OnClick", ToggleWindow)
 -- opening the window.
 minimapButton:SetScript("OnEnter", function(self)
 	GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-	GameTooltip:AddLine("Centurion GM Online")
+	GameTooltip:AddLine("GM Panel")
+	if tick then
+		GameTooltip:AddDoubleLine("World tick", string.format("%s ms (10 s avg %s)", Ms(tick.last), Ms(tick.avg10)),
+			1, 0.82, 0, 1, 1, 1)
+	end
 	if data then
 		for _, realmId in ipairs(data.order) do
 			local realm = data.realms[realmId]
