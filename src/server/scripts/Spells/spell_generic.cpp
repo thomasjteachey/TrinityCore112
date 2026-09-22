@@ -293,6 +293,28 @@ class spell_gen_elemental_vulnerability : public AuraScript
     }
 };
 
+// 28772 - Elemental Vulnerability (debuff)
+class spell_gen_elemental_vulnerability_debuff : public AuraScript
+{
+    PrepareAuraScript(spell_gen_elemental_vulnerability_debuff);
+
+    bool CheckProc(ProcEventInfo& /*eventInfo*/)
+    {
+        // 28771 applies this from the wearer's actor procs, and
+        // Unit::TriggerAurasProcOnEvent gathers the victim's taken procs only
+        // afterwards - so the very hit that applied the debuff would spend its
+        // single charge before any later spell could take the bonus. An aura
+        // still at full duration has not seen an update tick yet: keep the
+        // charge for the next hit.
+        return GetDuration() != GetMaxDuration();
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(spell_gen_elemental_vulnerability_debuff::CheckProc);
+    }
+};
+
 class spell_gen_allow_cast_from_item_only : public SpellScript
 {
     PrepareSpellScript(spell_gen_allow_cast_from_item_only);
@@ -4914,6 +4936,7 @@ void AddSC_generic_spell_scripts()
     RegisterSpellScript(spell_gen_absorb0_hitlimit1);
     RegisterSpellScript(spell_gen_adaptive_warding);
     RegisterSpellScript(spell_gen_elemental_vulnerability);
+    RegisterSpellScript(spell_gen_elemental_vulnerability_debuff);
     RegisterSpellScript(spell_gen_allow_cast_from_item_only);
     RegisterSpellScript(spell_gen_animal_blood);
     RegisterSpellScript(spell_spawn_blood_pool);
