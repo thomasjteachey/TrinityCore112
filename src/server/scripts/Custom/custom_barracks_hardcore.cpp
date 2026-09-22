@@ -603,6 +603,14 @@ namespace BarracksHardcore
         if (Tournament::IsTournamentCharacter(player))
             return false;
 
+        // Nothing behind an instance portal is open-world PvP. Dungeons have no
+        // entry in the band table and so fall through to the level-60 default,
+        // which used to leave a War Mode player FFA-flagged inside - and the
+        // client will not cast a friendly spell on an FFA-flagged player from an
+        // unflagged one, so his own party's heals, buffs and dispels self-cast.
+        if (IsInstancedContent(player))
+            return false;
+
         if (!IsFfaEligibleZone(player))
             return false;
 
