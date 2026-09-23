@@ -208,32 +208,31 @@ namespace Trinity
         {
             float rate;
 
-            if (isRaid)
+            // A raid earns what a party does, per head. The pool is split
+            // between everyone in range, so the stock table - flat at 2.0 from
+            // five members up, and 1.0 inside a raid instance - handed each
+            // member of a ten-man half of a party member's share and each of a
+            // forty-man a fifth of it. Past five the pool now grows with the
+            // headcount, which holds everybody at the five-man share (0.4 of
+            // solo at equal levels). isRaid is no longer consulted for that
+            // reason; it is still passed to the script hook.
+            switch (count)
             {
-                // FIXME: Must apply decrease modifiers depending on raid size.
-                rate = 1.0f;
-            }
-            else
-            {
-                switch (count)
-                {
-                    case 0:
-                    case 1:
-                        rate = 1.0f;
-                        break;
-                    case 2:
-                        rate = 1.25f;
-                        break;
-                    case 3:
-                        rate = 1.5f;
-                        break;
-                    case 4:
-                        rate = 1.75f;
-                        break;
-                    case 5:
-                    default:
-                        rate = 2.0f;
-                }
+                case 0:
+                case 1:
+                    rate = 1.0f;
+                    break;
+                case 2:
+                    rate = 1.25f;
+                    break;
+                case 3:
+                    rate = 1.5f;
+                    break;
+                case 4:
+                    rate = 1.75f;
+                    break;
+                default:
+                    rate = 2.0f * float(count) / 5.0f;
             }
 
             sScriptMgr->OnGroupRateCalculation(rate, count, isRaid);
