@@ -523,10 +523,14 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
 
         // Every character has a family name where they are on; the create
         // screen will not send the request without one, so an empty one here
-        // is a client that never got the LAST NAME box.
+        // is a client that never got the LAST NAME box - almost always one
+        // without the client-tweaks DLL. Not CHAR_NAME_NO_NAME: that reads
+        // "Enter a name for your character" and sends the player retrying
+        // names. The Centurion GlueXML rewrites CHAR_CREATE_FAILED's text to
+        // say what is missing when the DLL is not loaded.
         if (pendingSurname.empty())
         {
-            SendCharCreate(CHAR_NAME_NO_NAME);
+            SendCharCreate(CHAR_CREATE_FAILED);
             return;
         }
 
