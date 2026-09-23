@@ -42,9 +42,8 @@ using namespace Trinity::ChatCommands;
 namespace
 {
     // game/ has no way to recognise a bot - the account set is loaded by the
-    // Hardcore ruleset, over here. Mok'gora asks this before it lets anyone be
-    // challenged, because a bot cannot read a warning box and cannot consent to
-    // dying in one.
+    // Hardcore ruleset, over here. Mok'gora asks this to know who may not
+    // issue a challenge, and who takes one up without being shown the box.
     bool IsPlayerbotForMokgora(Player const* player)
     {
         return BarracksHardcore::IsPlayerbot(player);

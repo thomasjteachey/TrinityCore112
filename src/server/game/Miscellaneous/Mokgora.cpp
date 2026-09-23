@@ -254,8 +254,17 @@ namespace
         if (challenger == target)
             return "You cannot challenge yourself.";
 
-        if (IsBot(challenger) || IsBot(target))
-            return "Mok'gora is between people. A bot cannot answer for its own life.";
+        // A person may throw it at a bot, and the bot takes it up - see
+        // Challenge. A bot never throws one: nothing would be choosing to.
+        if (IsBot(challenger))
+            return "A bot cannot issue a Mok'gora.";
+
+        // Nor a transient copy - a bounty hunter, a battleground fill, a lobby
+        // mannequin. Nobody stands behind it, and it is retired seconds after
+        // it dies, so there is no corpse to settle anything over.
+        if (target->GetSession() && target->GetSession()->IsTransientPlayerSession())
+            return Trinity::StringFormat("{} is not here to stay. There is nothing to settle with them.",
+                target->GetName());
 
         if (challenger->IsGameMaster() || target->IsGameMaster())
             return "A Game Master may not take part in a Mok'gora.";
@@ -629,6 +638,38 @@ bool Challenge(Player* challenger, std::string const& targetName)
     if (std::string const reason = WhyNot(challenger, target); !reason.empty())
     {
         Say(challenger, Banner(reason));
+        return true;
+    }
+
+    // A bot has no box to read and nothing to type into it, so there is no
+    // offer: it takes the challenge up on the spot. The consent that matters
+    // is the challenger's, already given in words before this was sent.
+    if (IsBot(target))
+    {
+        std::string why;
+        if (!StartDuel(challenger, target, why))
+        {
+            Say(challenger, Banner(why));
+            return true;
+        }
+
+        // The fleet answers an ordinary duel request with a countdown of its
+        // own (playerbot_loader's OnDuelRequest), which StartDuel's request
+        // hook has already given it. Whatever that does not reach - a bot the
+        // fleet does not manage - is started here instead, so the challenger
+        // is never left holding a request nobody will ever answer.
+        if (target->duel && challenger->duel && target->duel->State == DUEL_STATE_CHALLENGED)
+        {
+            time_t const start = GameTime::GetGameTime() + 3;
+            target->duel->StartTime = start;
+            challenger->duel->StartTime = start;
+            target->duel->State = DUEL_STATE_COUNTDOWN;
+            challenger->duel->State = DUEL_STATE_COUNTDOWN;
+            target->SendDuelCountdown(3000);
+            challenger->SendDuelCountdown(3000);
+        }
+
+        Say(challenger, Banner(Trinity::StringFormat("{} accepts. One of you will die.", target->GetName())));
         return true;
     }
 

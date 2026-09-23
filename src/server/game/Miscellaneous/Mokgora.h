@@ -95,11 +95,11 @@ namespace Mokgora
     // worn by anyone who leaves the ring or logs out of it. 0 disables it.
     uint32 CowardSpell();
 
-    // A bot cannot be asked whether it consents to die, so it is never a party
-    // to a Mok'gora. game/ has no way to recognise one - the account set lives
-    // in the Hardcore ruleset over in scripts/ - so the Mok'gora script installs
-    // the answer here at startup. Until it does, nobody is a bot, which only
-    // means a challenge thrown at one goes unanswered until it expires.
+    // A bot never issues a Mok'gora, and takes up any a person throws at it on
+    // the spot, with no offer box. game/ has no way to recognise one - the
+    // account set lives in the Hardcore ruleset over in scripts/ - so the
+    // Mok'gora script installs the answer here at startup. Until it does, only
+    // virtual sessions count as bots.
     using PlayerPredicate = bool(*)(Player const*);
     void SetBotPredicate(PlayerPredicate predicate);
 
