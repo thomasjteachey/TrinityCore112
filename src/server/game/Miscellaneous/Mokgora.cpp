@@ -21,6 +21,7 @@
 #include "Config.h"
 #include "DBCStores.h"
 #include "DatabaseEnv.h"
+#include "Formulas.h"
 #include "GameObject.h"
 #include "GameObjectData.h"
 #include "GameTime.h"
@@ -646,6 +647,16 @@ bool Challenge(Player* challenger, std::string const& targetName)
     // is the challenger's, already given in words before this was sent.
     if (IsBot(target))
     {
+        // Same rule as an ordinary duel (playerbot_loader's OnDuelRequest): a
+        // bot takes on anybody orange to it or below and turns down anybody
+        // red. Asked here, before the flag goes in, so a refusal plants nothing.
+        if (Trinity::XP::GetColorCode(target->GetLevel(), challenger->GetLevel()) == XP_RED)
+        {
+            Say(challenger, Banner(Trinity::StringFormat(
+                "{} looks you over and declines. You are far too strong for them.", target->GetName())));
+            return true;
+        }
+
         std::string why;
         if (!StartDuel(challenger, target, why))
         {

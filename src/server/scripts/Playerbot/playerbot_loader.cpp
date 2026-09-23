@@ -21,6 +21,7 @@
 #include "Log.h"
 #include "Configuration/Config.h"
 #include "Chat.h"
+#include "Formulas.h"
 #include "CharacterCache.h"
 #include "DBCStores.h"
 #include "GameTime.h"
@@ -1263,6 +1264,20 @@ public:
 
         if (target->duel->Opponent != challenger || challenger->duel->Opponent != target)
             return;
+
+        // A bot takes on anybody orange to it or below, and turns down anybody
+        // red - five or more levels above it - the way a person would. Refused
+        // outright rather than left hanging, so the challenger is not stuck
+        // with a request nobody will ever answer. Last line of Spell::EffectDuel,
+        // so tearing the duel down from here is safe.
+        if (Trinity::XP::GetColorCode(target->GetLevel(), challenger->GetLevel()) == XP_RED)
+        {
+            target->DuelComplete(DUEL_INTERRUPTED);
+            if (WorldSession* session = challenger->GetSession())
+                ChatHandler(session).PSendSysMessage("%s looks you over and declines. You are far too strong for them.",
+                    target->GetName().c_str());
+            return;
+        }
 
         time_t const now = GameTime::GetGameTime();
         target->duel->StartTime = now + 3;
