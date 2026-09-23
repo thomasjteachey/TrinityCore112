@@ -16965,7 +16965,19 @@ void Player::OnGossipSelect(WorldObject* source, uint32 gossipListId, uint32 men
         break;
     case GOSSIP_OPTION_SPIRITHEALER:
         if (isDead())
-            source->ToCreature()->CastSpell(source->ToCreature(), 17251, GetGUID());
+        {
+            // A free healer's gossip option carries its own confirmation box, so resurrect
+            // directly rather than casting 17251, whose client popup warns of sickness
+            if (source->ToCreature()->GetCreatureTemplate()->flags_extra & CREATURE_FLAG_EXTRA_FREE_RESURRECT)
+            {
+                if (HasUnitState(UNIT_STATE_DIED))
+                    RemoveAurasByType(SPELL_AURA_FEIGN_DEATH);
+                PlayerTalkClass->SendCloseGossip();
+                GetSession()->SendSpiritResurrect(true);
+            }
+            else
+                source->ToCreature()->CastSpell(source->ToCreature(), 17251, GetGUID());
+        }
         break;
     case GOSSIP_OPTION_QUESTGIVER:
         PrepareQuestMenu(guid);
