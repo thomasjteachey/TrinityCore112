@@ -22,6 +22,7 @@
 #include "Containers.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
+#include "DBCfmt.h"
 #include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
@@ -31,6 +32,7 @@
 #include "Spell.h"
 #include "SpellAuraDefines.h"
 #include "SpellInfo.h"
+#include "World.h"
 #include <array>
 
 bool IsNaturesGraspAura(uint32 spellId)
@@ -2711,7 +2713,8 @@ void SpellMgr::LoadSpellInfoCustomAttributes()
             SpellInfo* spellInfo = _GetSpellInfo(spellId);
             if (!spellInfo)
             {
-                TC_LOG_ERROR("sql.sql", "Table `spell_custom_attr` has wrong spell (entry: {}), ignored.", spellId);
+                if (!_hotswapActive)
+                    TC_LOG_ERROR("sql.sql", "Table `spell_custom_attr` has wrong spell (entry: {}), ignored.", spellId);
                 continue;
             }
 
@@ -2737,7 +2740,7 @@ void SpellMgr::LoadSpellInfoCustomAttributes()
         TC_LOG_INFO("server.loading", ">> Loaded {} spell custom attributes from DB in {} ms", count, GetMSTimeDiffToNow(oldMSTime2));
     }
 
-    for (SpellInfo* spellInfo : mSpellInfoMap)
+    for (SpellInfo* spellInfo : _SpellInfosToLoad())
     {
         if (!spellInfo)
             continue;
@@ -2983,7 +2986,7 @@ void SpellMgr::LoadSpellInfoCustomAttributes()
     }
 
     // addition for binary spells, omit spells triggering other spells
-    for (SpellInfo* spellInfo : mSpellInfoMap)
+    for (SpellInfo* spellInfo : _SpellInfosToLoad())
     {
         if (!spellInfo)
             continue;
@@ -3021,7 +3024,7 @@ void SpellMgr::LoadSpellInfoCustomAttributes()
 
     // remove attribute from spells that can't crit
     // and mark triggering spell (instead of triggered spell) for spells with SPELL_ATTR4_INHERIT_CRIT_FROM_AURA
-    for (SpellInfo* spellInfo : mSpellInfoMap)
+    for (SpellInfo* spellInfo : _SpellInfosToLoad())
     {
         if (!spellInfo)
             continue;
@@ -3085,6 +3088,9 @@ inline void ApplySpellFix(std::initializer_list<uint32> spellIds, void(*fix)(Spe
 {
     for (uint32 spellId : spellIds)
     {
+        if (sSpellMgr->IsSpellInfoHotswapSkipped(spellId))
+            continue;
+
         SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
         if (!spellInfo)
         {
@@ -3134,7 +3140,7 @@ void SpellMgr::LoadSpellInfoCorrections()
         13810,      // Frost Trap Aura      - the slow that lands on everyone inside
     };
 
-    for (SpellInfo* spellInfo : mSpellInfoMap)
+    for (SpellInfo* spellInfo : _SpellInfosToLoad())
     {
         if (!spellInfo)
             continue;
@@ -3195,7 +3201,7 @@ void SpellMgr::LoadSpellInfoCorrections()
         {
             if (SpellInfo* spellInfo = _GetSpellInfo(spellId))
                 spellInfo->LevelScaleDesignLevel = designLevel;
-            else
+            else if (!_hotswapActive)
                 TC_LOG_ERROR("server.loading", "Level-scaled spell {} does not exist", spellId);
         }
     }
@@ -5238,9 +5244,8 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->AttributesEx3 |= SPELL_ATTR3_IGNORE_HIT_RESULT;
     });
 
-    for (uint32 i = 0; i < GetSpellInfoStoreSize(); ++i)
+    for (SpellInfo* spellInfo : _SpellInfosToLoad())
     {
-        SpellInfo* spellInfo = mSpellInfoMap[i];
         if (!spellInfo)
             continue;
 
@@ -5289,7 +5294,7 @@ void SpellMgr::LoadSpellInfoCorrections()
             }
 
             // Passive talent auras cannot target pets
-            if (spellInfo->IsPassive() && GetTalentSpellCost(i))
+            if (spellInfo->IsPassive() && GetTalentSpellCost(spellInfo->Id))
                 if (spellEffectInfo.TargetA.GetTarget() == TARGET_UNIT_PET)
                     spellEffectInfo.TargetA = SpellImplicitTargetInfo(TARGET_UNIT_CASTER);
 
@@ -5348,7 +5353,7 @@ void SpellMgr::LoadSpellInfoSpellSpecificAndAuraState()
 {
     uint32 oldMSTime = getMSTime();
 
-    for (SpellInfo* spellInfo : mSpellInfoMap)
+    for (SpellInfo* spellInfo : _SpellInfosToLoad())
     {
         if (!spellInfo)
             continue;
@@ -5365,7 +5370,7 @@ void SpellMgr::LoadSpellInfoDiminishing()
 {
     uint32 oldMSTime = getMSTime();
 
-    for (SpellInfo* spellInfo : mSpellInfoMap)
+    for (SpellInfo* spellInfo : _SpellInfosToLoad())
     {
         if (!spellInfo)
             continue;
@@ -5380,7 +5385,7 @@ void SpellMgr::LoadSpellInfoImmunities()
 {
     uint32 oldMSTime = getMSTime();
 
-    for (SpellInfo* spellInfo : mSpellInfoMap)
+    for (SpellInfo* spellInfo : _SpellInfosToLoad())
     {
         if (!spellInfo)
             continue;
@@ -5389,4 +5394,168 @@ void SpellMgr::LoadSpellInfoImmunities()
     }
 
     TC_LOG_INFO("server.loading", ">> Loaded SpellInfo immunity infos in {} ms", GetMSTimeDiffToNow(oldMSTime));
+}
+
+char const* SpellMgr::_InternHotswapString(char const* str)
+{
+    if (!str)
+        return nullptr;
+
+    return _hotswapStrings.emplace(str).first->c_str();
+}
+
+bool SpellMgr::HotswapSpellInfos(std::vector<uint32> const& spellIds,
+    std::function<void(std::unordered_set<uint32> const&)> const& beforeStructuralChange,
+    SpellInfoHotswapResult& result, std::string& error)
+{
+    uint32 oldMSTime = getMSTime();
+
+    // Read the rows exactly the way LoadDBCStores does: the file, any
+    // localized string files, then the spell_dbc overlay on top. The store
+    // is temporary - SpellInfo copies everything but the name strings,
+    // which are interned below.
+    std::string const dbcPath = sWorld->GetDataPath() + "dbc/";
+    DBCStorage<SpellEntry> store(SpellEntryfmt);
+    if (!store.Load((dbcPath + "Spell.dbc").c_str()))
+    {
+        error = "could not read " + dbcPath + "Spell.dbc";
+        return false;
+    }
+
+    for (uint8 i = 0; i < TOTAL_LOCALES; ++i)
+        store.LoadStringsFrom((dbcPath + localeNames[i] + "/Spell.dbc").c_str());
+
+    store.LoadFromDB("spell_dbc", CustomSpellEntryfmt, CustomSpellEntryIndex);
+
+    std::vector<uint32> ids;
+    if (spellIds.empty())
+    {
+        for (SpellEntry const* spellEntry : store)
+            ids.push_back(spellEntry->ID);
+    }
+    else
+    {
+        std::unordered_set<uint32> seen;
+        for (uint32 spellId : spellIds)
+            if (seen.insert(spellId).second)
+                ids.push_back(spellId);
+    }
+
+    std::vector<SpellInfo*> fresh;
+    uint32 maxId = 0;
+    for (uint32 spellId : ids)
+    {
+        SpellEntry const* spellEntry = store.LookupEntry(spellId);
+        if (!spellEntry)
+        {
+            result.Missing.push_back(spellId);
+            continue;
+        }
+
+        // LoadSpellInfoStore ASSERTs these at boot; here a bad row is skipped
+        bool valid = true;
+        for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
+        {
+            if (spellEntry->Effect[i] >= TOTAL_SPELL_EFFECTS || spellEntry->EffectAura[i] >= TOTAL_AURAS
+                || spellEntry->EffectImplicitTargetA[i] >= TOTAL_SPELL_TARGETS || spellEntry->EffectImplicitTargetB[i] >= TOTAL_SPELL_TARGETS)
+                valid = false;
+        }
+
+        if (!valid)
+        {
+            result.Invalid.push_back(spellId);
+            continue;
+        }
+
+        SpellInfo* spellInfo = new SpellInfo(spellEntry);
+        for (char const*& name : spellInfo->SpellName)
+            name = _InternHotswapString(name);
+        for (char const*& rank : spellInfo->Rank)
+            rank = _InternHotswapString(rank);
+
+        fresh.push_back(spellInfo);
+        maxId = std::max(maxId, spellId);
+    }
+
+    if (fresh.empty())
+        return true;
+
+    if (maxId >= mSpellInfoMap.size())
+        mSpellInfoMap.resize(maxId + 1, nullptr);
+
+    // Replay the boot-time passes over the fresh objects only. They sit in
+    // mSpellInfoMap meanwhile so cross-spell lookups (trigger spells,
+    // positivity) see the new row next to the live rest of the store.
+    std::vector<SpellInfo*> live;
+    live.reserve(fresh.size());
+    _hotswapIds.clear();
+    for (SpellInfo* spellInfo : fresh)
+    {
+        live.push_back(mSpellInfoMap[spellInfo->Id]);
+        mSpellInfoMap[spellInfo->Id] = spellInfo;
+        _hotswapIds.insert(spellInfo->Id);
+    }
+
+    _hotswapScope = fresh;
+    _hotswapActive = true;
+
+    // same order as World::SetInitialWorldSettings; ranks load between the
+    // immunity and SpellSpecific passes there, so the chain node goes in here
+    LoadSpellInfoCorrections();
+    LoadSpellInfoCustomAttributes();
+    LoadSpellInfoDiminishing();
+    LoadSpellInfoImmunities();
+    for (size_t i = 0; i < fresh.size(); ++i)
+        fresh[i]->ChainEntry = live[i] ? live[i]->ChainEntry : nullptr;
+    LoadSpellInfoSpellSpecificAndAuraState();
+
+    _hotswapActive = false;
+    _hotswapScope.clear();
+    _hotswapIds.clear();
+
+    // put the live objects back before anything else can run
+    for (size_t i = 0; i < fresh.size(); ++i)
+    {
+        if (!live[i])
+            continue;
+
+        mSpellInfoMap[fresh[i]->Id] = live[i];
+
+        for (uint8 e = 0; e < MAX_SPELL_EFFECTS; ++e)
+        {
+            SpellEffectInfo const& oldEffect = live[i]->GetEffect(SpellEffIndex(e));
+            SpellEffectInfo const& newEffect = fresh[i]->GetEffect(SpellEffIndex(e));
+            if (oldEffect.Effect != newEffect.Effect || oldEffect.ApplyAuraName != newEffect.ApplyAuraName
+                || oldEffect.MiscValue != newEffect.MiscValue || oldEffect.MiscValueB != newEffect.MiscValueB)
+            {
+                result.Structural.insert(fresh[i]->Id);
+                break;
+            }
+        }
+    }
+
+    if (!result.Structural.empty() && beforeStructuralChange)
+        beforeStructuralChange(result.Structural);
+
+    for (size_t i = 0; i < fresh.size(); ++i)
+    {
+        uint32 const spellId = fresh[i]->Id;
+        if (!live[i])
+        {
+            // brand new id: the fresh object simply becomes the live one
+            result.Added.push_back(spellId);
+            continue;
+        }
+
+        live[i]->_HotswapFrom(std::move(*fresh[i]));
+        delete fresh[i];
+        result.Swapped.push_back(spellId);
+    }
+
+    // spell_proc fills unset columns from the spell's own ProcFlags/ProcChance
+    LoadSpellProcs();
+
+    TC_LOG_INFO("server.loading", ">> Hot swapped {} spell(s) ({} new) from Spell.dbc in {} ms",
+        uint32(result.Swapped.size() + result.Added.size()), uint32(result.Added.size()), GetMSTimeDiffToNow(oldMSTime));
+    return true;
 }

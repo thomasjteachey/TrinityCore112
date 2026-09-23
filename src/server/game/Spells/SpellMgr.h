@@ -26,8 +26,10 @@
 #include "SharedDefines.h"
 #include "Util.h"
 
+#include <functional>
 #include <map>
 #include <set>
+#include <string>
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
@@ -667,8 +669,50 @@ class TC_GAME_API SpellMgr
         }
         uint32 GetSpellInfoStoreSize() const { return mSpellInfoMap.size(); }
 
+        // Hot swap: re-reads Spell.dbc plus the spell_dbc overlay and rebuilds
+        // the given spells (empty = every spell in the file) IN PLACE, so every
+        // aura, cast and cache already holding a SpellInfo pointer sees the new
+        // data. The load-time passes (corrections, custom attributes,
+        // diminishing, immunities, SpellSpecific/AuraState) are replayed for
+        // just those spells, then spell_proc is rebuilt.
+        //
+        // WORLD THREAD ONLY, while maps are idle (CLI/SOAP command context).
+        // beforeStructuralChange runs, with the OLD data still in place, for
+        // spells whose effect types / aura types / misc values changed - an
+        // applied aura would otherwise be unapplied by a different handler
+        // than the one that applied it.
+        struct SpellInfoHotswapResult
+        {
+            std::vector<uint32> Swapped;    // existing spell rebuilt in place
+            std::vector<uint32> Added;      // id was not loaded before
+            std::vector<uint32> Missing;    // not in Spell.dbc / spell_dbc
+            std::vector<uint32> Invalid;    // row has out-of-range enums, skipped
+            std::unordered_set<uint32> Structural;
+        };
+        bool HotswapSpellInfos(std::vector<uint32> const& spellIds,
+            std::function<void(std::unordered_set<uint32> const&)> const& beforeStructuralChange,
+            SpellInfoHotswapResult& result, std::string& error);
+
+        // True while a hot swap is replaying the load passes and spellId is
+        // not one of the spells being rebuilt (corrections must skip it).
+        bool IsSpellInfoHotswapSkipped(uint32 spellId) const { return _hotswapActive && !_hotswapIds.count(spellId); }
+
     private:
-        SpellInfo* _GetSpellInfo(uint32 spellId) { return spellId < GetSpellInfoStoreSize() ?  mSpellInfoMap[spellId] : nullptr; }
+        // Load passes write through this: during a hot swap it only yields the
+        // spells being rebuilt, so non-idempotent fixes never hit a live spell twice.
+        SpellInfo* _GetSpellInfo(uint32 spellId)
+        {
+            if (IsSpellInfoHotswapSkipped(spellId))
+                return nullptr;
+            return spellId < GetSpellInfoStoreSize() ?  mSpellInfoMap[spellId] : nullptr;
+        }
+        std::vector<SpellInfo*> const& _SpellInfosToLoad() const { return _hotswapActive ? _hotswapScope : mSpellInfoMap; }
+        char const* _InternHotswapString(char const* str);
+
+        bool _hotswapActive = false;
+        std::unordered_set<uint32> _hotswapIds;
+        std::vector<SpellInfo*> _hotswapScope;
+        std::unordered_set<std::string> _hotswapStrings;    // node-based: c_str() stays valid for the SpellInfo name arrays
 
     // Modifiers
     public:

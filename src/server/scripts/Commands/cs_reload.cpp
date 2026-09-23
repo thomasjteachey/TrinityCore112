@@ -39,15 +39,24 @@ EndScriptData */
 #include "LootMgr.h"
 #include "MapManager.h"
 #include "Miscellaneous/Surnames.h"
+#include "ObjectAccessor.h"
 #include "ObjectMgr.h"
+#include "Pet.h"
+#include "Player.h"
 #include "SkillDiscovery.h"
 #include "SkillExtraItems.h"
 #include "SmartAI.h"
+#include "SpellAuras.h"
+#include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "StringConvert.h"
 #include "TicketMgr.h"
+#include "TypeContainerVisitor.h"
+#include "Util.h"
 #include "WaypointManager.h"
 #include "World.h"
+#include "WorldSession.h"
+#include <sstream>
 
 #if TRINITY_COMPILER == TRINITY_COMPILER_GNU
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
@@ -74,6 +83,10 @@ public:
             { "spell",                         rbac::RBAC_PERM_COMMAND_RELOAD_ALL_SPELL,                        true,  &HandleReloadAllSpellCommand,                    "" },
             { "",                              rbac::RBAC_PERM_COMMAND_RELOAD_ALL,                              true,  &HandleReloadAllCommand,                         "" },
         };
+        static std::vector<ChatCommand> reloadDbcCommandTable =
+        {
+            { "spell",                         rbac::RBAC_PERM_COMMAND_RELOAD_ALL,                              true,  &HandleReloadDbcSpellCommand,                   "" },
+        };
         static std::vector<ChatCommand> reloadCommandTable =
         {
             { "auctions",                      rbac::RBAC_PERM_COMMAND_RELOAD_AUCTIONS,                         true,  &HandleReloadAuctionsCommand,                   "" },
@@ -91,6 +104,7 @@ public:
             { "conditions",                    rbac::RBAC_PERM_COMMAND_RELOAD_CONDITIONS,                       true,  &HandleReloadConditions,                        "" },
             { "character_surname",             rbac::RBAC_PERM_COMMAND_RELOAD_CONFIG,                           true,  &HandleReloadCharacterSurnameCommand,           "" },
             { "config",                        rbac::RBAC_PERM_COMMAND_RELOAD_CONFIG,                           true,  &HandleReloadConfigCommand,                     "" },
+            { "dbc",                           rbac::RBAC_PERM_COMMAND_RELOAD_ALL,                              true,  nullptr,                                           "", reloadDbcCommandTable },
             { "creature_text",                 rbac::RBAC_PERM_COMMAND_RELOAD_CREATURE_TEXT,                    true,  &HandleReloadCreatureText,                      "" },
             { "creature_questender",           rbac::RBAC_PERM_COMMAND_RELOAD_CREATURE_QUESTENDER,              true,  &HandleReloadCreatureQuestEnderCommand,         "" },
             { "creature_linked_respawn",       rbac::RBAC_PERM_COMMAND_RELOAD_CREATURE_LINKED_RESPAWN,          true,  &HandleReloadLinkedRespawnCommand,              "" },
@@ -850,6 +864,222 @@ public:
         TC_LOG_INFO("misc", "Re-Loading Spell Linked Spells...");
         sSpellMgr->LoadSpellLinked();
         handler->SendGlobalGMSysMessage("DB table `spell_linked_spell` reloaded.");
+        return true;
+    }
+
+    // Gathers every creature and pet stored on a map (players come from
+    // ObjectAccessor) so the spell hot swap can strip auras off them.
+    struct HotswapUnitCollector
+    {
+        std::vector<Unit*>& Units;
+
+        void Visit(std::unordered_map<ObjectGuid, Creature*>& creatures)
+        {
+            for (auto const& [guid, creature] : creatures)
+                Units.push_back(creature);
+        }
+
+        void Visit(std::unordered_map<ObjectGuid, Pet*>& pets)
+        {
+            for (auto const& [guid, pet] : pets)
+                Units.push_back(pet);
+        }
+
+        template<class T>
+        void Visit(std::unordered_map<ObjectGuid, T*>&) { }
+    };
+
+    // In-game output of a hot swap that was handed to the world thread
+    static void HotswapRelayPrint(void* arg, std::string_view text)
+    {
+        if (text.empty() || text == "\r\n")
+            return;
+
+        if (Player* player = ObjectAccessor::FindConnectedPlayer(*static_cast<ObjectGuid*>(arg)))
+            ChatHandler(player->GetSession()).SendSysMessage(text);
+    }
+
+    static void HotswapRelayFinished(void* arg, bool /*success*/)
+    {
+        delete static_cast<ObjectGuid*>(arg);
+    }
+
+    static std::string JoinSpellIds(std::vector<uint32> const& ids)
+    {
+        std::ostringstream out;
+        for (size_t i = 0; i < ids.size() && i < 20; ++i)
+            out << (i ? " " : "") << ids[i];
+        if (ids.size() > 20)
+            out << " ... (+" << (ids.size() - 20) << ")";
+        return out.str();
+    }
+
+    // .reload dbc spell <id> [id...] | all
+    // Rebuilds spells from the server's Spell.dbc + spell_dbc without a
+    // restart. Server side only: the client keeps its own Spell.dbc, so
+    // tooltips/icons/cast bars still need the patch republished.
+    static bool HandleReloadDbcSpellCommand(ChatHandler* handler, char const* args)
+    {
+        if (!args || !*args)
+        {
+            handler->SendSysMessage("Syntax: .reload dbc spell <spellId> [spellId ...] | all");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        // bare ids, "all", or shift-clicked links (|cff..|Hspell:1234|h[Frost Nova]|h|r -
+        // the name can hold spaces, so links are consumed whole rather than tokenized)
+        std::vector<uint32> spellIds;
+        bool all = false;
+        std::string_view rest(args);
+        while (!rest.empty())
+        {
+            if (rest.front() == ' ')
+            {
+                rest.remove_prefix(1);
+                continue;
+            }
+
+            std::string_view token;
+            if (rest.front() == '|')
+            {
+                size_t const key = rest.find("Hspell:");
+                size_t const nameEnd = key == std::string_view::npos ? key : rest.find("]|h", key);
+                if (nameEnd == std::string_view::npos)
+                {
+                    handler->SendSysMessage("Only spell links can be reloaded.");
+                    handler->SetSentErrorMessage(true);
+                    return false;
+                }
+
+                token = rest.substr(key + 7);
+                token = token.substr(0, token.find_first_not_of("0123456789"));
+                size_t end = nameEnd + 3;
+                if (rest.substr(end, 2) == "|r")
+                    end += 2;
+                rest.remove_prefix(end);
+            }
+            else
+            {
+                token = rest.substr(0, rest.find(' '));
+                rest.remove_prefix(token.size());
+                if (token == "all")
+                {
+                    all = true;
+                    continue;
+                }
+            }
+
+            Optional<uint32> spellId = Trinity::StringTo<uint32>(token);
+            if (!spellId || !*spellId)
+            {
+                handler->PSendSysMessage("'%s' is not a spell id.", std::string(token).c_str());
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+            spellIds.push_back(*spellId);
+        }
+
+        if (all)
+            spellIds.clear();
+        else if (spellIds.empty())
+            return false;
+
+        // A player's command runs on a map worker thread while other maps are
+        // mid-update, and every map reads SpellInfo. Re-run it from the world
+        // thread's CLI queue, which drains after all maps have finished.
+        if (WorldSession* session = handler->GetSession())
+        {
+            std::ostringstream command;
+            command << "reload dbc spell";
+            if (all)
+                command << " all";
+            for (uint32 spellId : spellIds)
+                command << ' ' << spellId;
+            sWorld->QueueCliCommand(new CliCommandHolder(new ObjectGuid(session->GetPlayer() ? session->GetPlayer()->GetGUID() : ObjectGuid::Empty),
+                command.str().c_str(), &HotswapRelayPrint, &HotswapRelayFinished));
+            handler->SendSysMessage("Spell hot swap queued for the end of this world tick...");
+            return true;
+        }
+
+        TC_LOG_INFO("misc", "Hot swapping Spell.dbc rows: {}", all ? std::string("all") : JoinSpellIds(spellIds));
+
+        uint32 strippedAuras = 0;
+        std::vector<std::pair<ObjectGuid, uint32>> strippedPassives;
+        auto stripAuras = [&strippedAuras, &strippedPassives](std::unordered_set<uint32> const& ids)
+        {
+            // Aura effects read their aura type and misc value from SpellInfo
+            // live, so an aura applied under the old row would be unapplied
+            // by the new row's handler. Take them off while the old row is
+            // still in place.
+            std::vector<Unit*> units;
+            for (auto const& [guid, player] : ObjectAccessor::GetPlayers())
+                if (player->IsInWorld())
+                    units.push_back(player);
+
+            sMapMgr->DoForAllMaps([&units](Map* map)
+            {
+                HotswapUnitCollector collector{ units };
+                TypeContainerVisitor<HotswapUnitCollector, MapStoredObjectTypesContainer> visitor(collector);
+                visitor.Visit(map->GetObjectsStore());
+            });
+
+            for (Unit* unit : units)
+            {
+                unit->RemoveOwnedAuras([&](Aura const* aura)
+                {
+                    bool const match = ids.count(aura->GetId()) != 0;
+                    strippedAuras += match;
+                    if (match && unit->GetTypeId() == TYPEID_PLAYER && aura->IsPassive())
+                        strippedPassives.emplace_back(unit->GetGUID(), aura->GetId());
+                    return match;
+                });
+                unit->RemoveAppliedAuras([&](AuraApplication const* aurApp)
+                {
+                    bool const match = ids.count(aurApp->GetBase()->GetId()) != 0;
+                    strippedAuras += match;
+                    return match;
+                });
+            }
+        };
+
+        SpellMgr::SpellInfoHotswapResult result;
+        std::string error;
+        if (!sSpellMgr->HotswapSpellInfos(spellIds, stripAuras, result, error))
+        {
+            handler->PSendSysMessage("Spell hot swap failed: %s", error.c_str());
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        // talents and other spellbook passives come straight back under the
+        // new row, the same way Player::addSpell casts them on learn
+        uint32 restoredPassives = 0;
+        for (auto const& [guid, spellId] : strippedPassives)
+        {
+            Player* player = ObjectAccessor::FindPlayer(guid);
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+            if (!player || !spellInfo || !spellInfo->IsPassive() || !player->HasSpell(spellId) || player->HasAura(spellId))
+                continue;
+
+            if (player->HandlePassiveSpellLearn(spellInfo))
+            {
+                player->CastSpell(player, spellId, true);
+                ++restoredPassives;
+            }
+        }
+
+        if (!result.Swapped.empty())
+            handler->PSendSysMessage("Spell.dbc: reloaded %u spell(s): %s", uint32(result.Swapped.size()), JoinSpellIds(result.Swapped).c_str());
+        if (!result.Added.empty())
+            handler->PSendSysMessage("Spell.dbc: added %u new spell(s): %s", uint32(result.Added.size()), JoinSpellIds(result.Added).c_str());
+        if (!result.Missing.empty())
+            handler->PSendSysMessage("Spell.dbc: not found in Spell.dbc or spell_dbc: %s", JoinSpellIds(result.Missing).c_str());
+        if (!result.Invalid.empty())
+            handler->PSendSysMessage("Spell.dbc: skipped, effect/aura/target out of range: %s", JoinSpellIds(result.Invalid).c_str());
+        if (!result.Structural.empty())
+            handler->PSendSysMessage("Spell.dbc: effect/aura types changed on %u spell(s) - removed %u active aura(s) of them first, re-applied %u spellbook passive(s).",
+                uint32(result.Structural.size()), strippedAuras, restoredPassives);
         return true;
     }
 

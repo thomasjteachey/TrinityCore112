@@ -528,6 +528,12 @@ class TC_GAME_API SpellInfo
         // unloading helpers
         void _UnloadImplicitTargetConditionLists();
 
+        // hot swap (SpellMgr::HotswapSpellInfos): take every field from a
+        // freshly built SpellInfo while this object keeps its address, its
+        // spell_ranks chain node and its per-effect condition lists
+        SpellInfo& operator=(SpellInfo&&) = default;
+        void _HotswapFrom(SpellInfo&& fresh);
+
         SpellSpecificType _spellSpecific;
         AuraStateType _auraState;
 

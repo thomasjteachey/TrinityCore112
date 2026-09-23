@@ -4300,6 +4300,26 @@ void SpellInfo::_InitializeSpellPositivity()
     }
 }
 
+void SpellInfo::_HotswapFrom(SpellInfo&& fresh)
+{
+    // conditions come from the `conditions` table and the chain node from
+    // spell_ranks - neither lives in Spell.dbc, so they stay with this object
+    std::array<std::vector<Condition*>*, MAX_SPELL_EFFECTS> conditions;
+    for (size_t i = 0; i < _effects.size(); ++i)
+        conditions[i] = _effects[i].ImplicitTargetConditions;
+    SpellChainNode const* chainEntry = ChainEntry;
+
+    *this = std::move(fresh);
+
+    ChainEntry = chainEntry;
+    for (size_t i = 0; i < _effects.size(); ++i)
+    {
+        _effects[i]._spellInfo = this;
+        _effects[i].ImplicitTargetConditions = conditions[i];
+        fresh._effects[i].ImplicitTargetConditions = nullptr;
+    }
+}
+
 void SpellInfo::_UnloadImplicitTargetConditionLists()
 {
     // find the same instances of ConditionList and delete them.
