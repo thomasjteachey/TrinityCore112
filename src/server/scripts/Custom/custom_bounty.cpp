@@ -514,6 +514,14 @@ namespace
     // A leader who is away, dead-and-released or on another continent carries
     // nothing, and each member answers for their own kills exactly as they
     // would ungrouped.
+    // The gates AddStacks applies, asked up front so a stack is never routed to
+    // somebody who would then be refused it.
+    bool CanEarnBounty(Player const* player)
+    {
+        return player && IsBountyContext(player) && !Tournament::IsTournamentCharacter(player) &&
+            (BarracksHardcore::IsPlayerbot(player) || BarracksHardcore::IsWarModeOptedIn(player));
+    }
+
     Player* BountyCarrierFor(Player* person, Player const* victim)
     {
         if (!s_groupLeaderCarries)
@@ -532,11 +540,47 @@ namespace
         // Nor a leader who could not take the stack: AddStacks would refuse it,
         // and a War Mode-off leader standing nearby would make the whole group
         // bounty-proof.
-        if (!IsBountyContext(leader) || Tournament::IsTournamentCharacter(leader) ||
-            (!BarracksHardcore::IsPlayerbot(leader) && !BarracksHardcore::IsWarModeOptedIn(leader)))
+        if (!CanEarnBounty(leader))
             return person;
 
         return leader;
+    }
+
+    // A playerbot's death is worth ONE stack, full stop, while the leader rule
+    // is on. The leader rule already folds a group into one name, but anybody
+    // it cannot fold - an ungrouped helper, a member whose leader was away -
+    // still took a stack of their own, so a bot mobbed by a crowd still paid
+    // out several.
+    //
+    // The killing blow's carrier gets it. If that person cannot take a bounty
+    // (War Mode off, a tournament character), the first participant who can,
+    // so a bot never dies for free just because the wrong hand landed the
+    // last hit.
+    std::vector<Player*> SingleCreditForBotDeath(std::vector<Player*> const& participants,
+        Player const* victim, Unit* killer)
+    {
+        Player* chosen = nullptr;
+        if (killer)
+            if (Player* person = killer->GetCharmerOrOwnerPlayerOrPlayerItself();
+                person && person != victim && person->IsInWorld())
+            {
+                Player* carrier = BountyCarrierFor(person, victim);
+                if (CanEarnBounty(carrier))
+                    chosen = carrier;
+            }
+
+        if (!chosen)
+            for (Player* participant : participants)
+                if (CanEarnBounty(participant))
+                {
+                    chosen = participant;
+                    break;
+                }
+
+        if (!chosen)
+            return {};
+
+        return { chosen };
     }
 
     std::vector<Player*> CollectParticipants(Player* victim, Unit* killer)
@@ -1005,7 +1049,10 @@ public:
         // participants before anything else touches the victim.
         if (s_stacksPerKill && IsBountyContext(victim))
         {
-            std::vector<Player*> const participants = CollectParticipants(victim, killer);
+            std::vector<Player*> participants = CollectParticipants(victim, killer);
+            if (s_groupLeaderCarries && BarracksHardcore::IsPlayerbot(victim))
+                participants = SingleCreditForBotDeath(participants, victim, killer);
+
             std::string credited;
             for (Player* participant : participants)
             {

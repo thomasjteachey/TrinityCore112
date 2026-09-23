@@ -3869,7 +3869,10 @@ Centurion.Hardcore.PlayerKill.ExperienceBubbles = 2
 #                     per kill. Only when the leader was within group XP range of
 #                     the body and could earn a bounty themselves (War Mode on, not
 #                     a tournament character); otherwise each member is credited
-#                     as if ungrouped. 0 credits every participant separately.
+#                     as if ungrouped. And a PLAYERBOT's death pays out exactly
+#                     one credit in total: to the killing blow's carrier, or, if
+#                     they cannot take a bounty, the first participant who can.
+#                     0 credits every participant separately.
 #        Default:     1
 #
 #    Centurion.Bounty.MaxStacks
