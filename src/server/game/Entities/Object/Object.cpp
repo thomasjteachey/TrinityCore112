@@ -3419,6 +3419,18 @@ namespace
         if (map && map->IsBattlegroundOrArena())
             return false;
 
+        // A duel is consent, and it is between the two of them - nobody else
+        // gets a way in, so it opens nothing the pause is there to shut. The
+        // duel branch in IsValidAttackTarget sits BELOW the pause check, so
+        // without this pass a paused player's duel dies on the countdown: the
+        // flag goes up and neither side can land a blow. Only the opponent is
+        // waived; a friend healing either duellist from the side is still out.
+        if ((actor->duel && actor->duel->Opponent == other &&
+                actor->duel->State == DUEL_STATE_IN_PROGRESS) ||
+            (other->duel && other->duel->Opponent == actor &&
+                other->duel->State == DUEL_STATE_IN_PROGRESS))
+            return false;
+
         return actor->IsWarModePaused() || other->IsWarModePaused();
     }
 
