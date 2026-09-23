@@ -74,6 +74,9 @@ namespace ObjectAccessor
     // these functions return objects if found in whole world
     // ACCESS LIKE THAT IS NOT THREAD SAFE
     TC_GAME_API Player* FindPlayer(ObjectGuid const&);
+    // "First Last", or a first name only one online player answers to (or
+    // the one character without a family name called exactly that). A first
+    // name two players share finds nobody.
     TC_GAME_API Player* FindPlayerByName(std::string_view name);
     TC_GAME_API Player* FindPlayerByLowGUID(ObjectGuid::LowType lowguid);
 
@@ -84,7 +87,7 @@ namespace ObjectAccessor
     // The online player a PLAYER typed the name of: "Elgrom Fernbloom", or
     // "Elgrom" for a character with no family name, and nothing else
     // (Miscellaneous/Surnames.h). Goes through the character cache rather than
-    // the online name map, which only knows first names.
+    // the online name map, which files players by first name.
     TC_GAME_API Player* FindConnectedPlayerByFullName(std::string_view name);
 
     // when using this, you must use the hashmapholder's lock

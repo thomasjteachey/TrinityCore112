@@ -78,6 +78,9 @@ class TC_GAME_API CharacterCache
         // knows characters by their first name - the playerbots above all.
         // Ambiguous first names resolve to nobody rather than to a guess.
         CharacterCacheEntry const* GetCharacterCacheByName(std::string const& name) const;
+        // The full name of every character answering to this first name, for
+        // telling a GM which ones a bare first name could have meant.
+        std::vector<std::string> GetCharacterFullNamesByFirstName(std::string const& name) const;
 
         ObjectGuid GetCharacterGuidByName(std::string const& name) const;
         bool GetCharacterNameByGuid(ObjectGuid guid, std::string& name) const;

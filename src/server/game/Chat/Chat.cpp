@@ -32,10 +32,45 @@
 #include "WorldSession.h"
 #include "Log.h"
 #include <boost/algorithm/string/replace.hpp>
+#include <cstring>
 
 namespace
 {
     constexpr size_t MAX_CHAT_PACKET_MESSAGE_LENGTH = 16 * 1024; // 16 KiB safeguard for outgoing chat text
+
+    // ".appear Skibbly Bibbly": a typed first name may be followed by the
+    // family name (Miscellaneous/Surnames.h), which is the only way to pick one
+    // of two characters sharing a first name. The second word is taken only
+    // when the pair is the full name of a character, because the command reads
+    // its own arguments after the name with strtok; otherwise nothing is
+    // consumed and "" comes back. Links go the usual way.
+    std::string ExtractTypedFullName(char* text)
+    {
+        if (!text)
+            return "";
+
+        while (*text == ' ' || *text == '\t' || *text == '\b')
+            ++text;
+        if (!*text || *text == '|')
+            return "";
+
+        std::size_t const firstLength = std::strcspn(text, " ");
+        char const* second = text + firstLength;
+        while (*second == ' ')
+            ++second;
+        if (!*second || *second == '|')
+            return "";
+
+        std::string fullName(text, firstLength);
+        fullName += ' ';
+        fullName.append(second, std::strcspn(second, " "));
+        if (!normalizePlayerName(fullName) || !sCharacterCache->GetCharacterCacheByFullName(fullName))
+            return "";
+
+        strtok(text, " ");
+        strtok(nullptr, " ");
+        return fullName;
+    }
 }
 
 Player* ChatHandler::GetPlayer() const { return m_session ? m_session->GetPlayer() : nullptr; }
@@ -620,7 +655,9 @@ bool ChatHandler::extractPlayerTarget(char* args, Player** player, ObjectGuid* p
 {
     if (args && *args)
     {
-        std::string name = extractPlayerNameFromLink(args);
+        std::string name = ExtractTypedFullName(args);
+        if (name.empty())
+            name = extractPlayerNameFromLink(args);
         if (name.empty())
         {
             SendSysMessage(LANG_PLAYER_NOT_FOUND);
@@ -630,19 +667,45 @@ bool ChatHandler::extractPlayerTarget(char* args, Player** player, ObjectGuid* p
 
         Player* pl = ObjectAccessor::FindPlayerByName(name);
 
+        // if need guid value from DB (in name case for check player existence)
+        ObjectGuid guid = !pl && (player_guid || player_name) ? sCharacterCache->GetCharacterGuidByName(name) : ObjectGuid::Empty;
+
+        // A bare first name that several characters answer to finds nobody on
+        // purpose; say which ones it could have meant instead of "not found".
+        if (!pl && guid.IsEmpty() && name.find(' ') == std::string::npos)
+        {
+            std::vector<std::string> const sharing = sCharacterCache->GetCharacterFullNamesByFirstName(name);
+            if (sharing.size() > 1)
+            {
+                std::string list;
+                for (std::string const& fullName : sharing)
+                    list += (list.empty() ? "" : ", ") + fullName;
+                PSendSysMessage("More than one character is called %s: %s. Add the family name.", name.c_str(), list.c_str());
+                SetSentErrorMessage(true);
+                return false;
+            }
+        }
+
         // if allowed player pointer
         if (player)
             *player = pl;
-
-        // if need guid value from DB (in name case for check player existence)
-        ObjectGuid guid = !pl && (player_guid || player_name) ? sCharacterCache->GetCharacterGuidByName(name) : ObjectGuid::Empty;
 
         // if allowed player guid (if no then only online players allowed)
         if (player_guid)
             *player_guid = pl ? pl->GetGUID() : guid;
 
+        // The name as players see it, family name included: callers show it
+        // and make links of it, and a link carrying only a shared first name
+        // would find nobody.
         if (player_name)
-            *player_name = pl || guid ? name : "";
+        {
+            player_name->clear();
+            ObjectGuid const found = pl ? pl->GetGUID() : guid;
+            if (CharacterCacheEntry const* entry = found ? sCharacterCache->GetCharacterCacheByGuid(found) : nullptr)
+                *player_name = entry->Surname.empty() ? entry->Name : entry->Name + ' ' + entry->Surname;
+            else if (pl)
+                *player_name = pl->GetName();
+        }
     }
     else
     {

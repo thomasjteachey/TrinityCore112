@@ -30,6 +30,8 @@
 #include "Player.h"
 #include "Transport.h"
 #include "World.h"
+#include <algorithm>
+#include <vector>
 
 template<class T>
 void HashMapHolder<T>::Insert(T* o)
@@ -84,27 +86,76 @@ template class TC_GAME_API HashMapHolder<Transport>;
 
 namespace PlayerNameMapHolder
 {
-    typedef std::unordered_map<std::string, Player*> MapType;
+    // Every online player under their first name. With family names
+    // (Miscellaneous/Surnames.h) two of them may share one, so a first name
+    // holds a list: a logout takes only its own player out, rather than
+    // whoever else is on under the same first name.
+    typedef std::unordered_map<std::string, std::vector<Player*>> MapType;
     static MapType PlayerNameMap;
 
     void Insert(Player* p)
     {
-        PlayerNameMap[p->GetName()] = p;
+        std::vector<Player*>& sharing = PlayerNameMap[p->GetName()];
+        if (std::find(sharing.begin(), sharing.end(), p) == sharing.end())
+            sharing.push_back(p);
+    }
+
+    bool RemoveFrom(MapType::iterator itr, Player* p)
+    {
+        std::vector<Player*>& sharing = itr->second;
+        std::size_t const before = sharing.size();
+        sharing.erase(std::remove(sharing.begin(), sharing.end(), p), sharing.end());
+        bool const removed = sharing.size() != before;
+        if (sharing.empty())
+            PlayerNameMap.erase(itr);
+        return removed;
     }
 
     void Remove(Player* p)
     {
-        PlayerNameMap.erase(p->GetName());
+        auto itr = PlayerNameMap.find(p->GetName());
+        if (itr != PlayerNameMap.end() && RemoveFrom(itr, p))
+            return;
+
+        // Filed under a name it no longer has: .character rename renames an
+        // online player before kicking them. Never leave the pointer behind.
+        for (itr = PlayerNameMap.begin(); itr != PlayerNameMap.end(); ++itr)
+        {
+            if (std::find(itr->second.begin(), itr->second.end(), p) != itr->second.end())
+            {
+                RemoveFrom(itr, p);
+                return;
+            }
+        }
     }
 
+    // The same answers the character cache gives (CharacterCache::
+    // GetCharacterCacheByName): "First Last" names exactly that character; a
+    // first name on its own names the one character without a family name who
+    // is called just that, or else the only player online under it. Two
+    // players sharing a first name make a bare first name answer nobody -
+    // guessing would teleport to, kick or ban the wrong one.
     Player* Find(std::string_view name)
     {
         std::string charName(name);
         if (!normalizePlayerName(charName))
             return nullptr;
 
-        auto itr = PlayerNameMap.find(charName);
-        return (itr != PlayerNameMap.end()) ? itr->second : nullptr;
+        std::string::size_type const space = charName.find(' ');
+        auto itr = PlayerNameMap.find(space == std::string::npos ? charName : charName.substr(0, space));
+        if (itr == PlayerNameMap.end())
+            return nullptr;
+
+        std::vector<Player*> const& sharing = itr->second;
+        if (space == std::string::npos && sharing.size() == 1)
+            return sharing.front();
+
+        ObjectGuid const guid = sCharacterCache->GetCharacterGuidByFullName(charName);
+        if (guid.IsEmpty())
+            return nullptr;
+
+        auto match = std::find_if(sharing.begin(), sharing.end(), [&guid](Player const* p) { return p->GetGUID() == guid; });
+        return match != sharing.end() ? *match : nullptr;
     }
 } // namespace PlayerNameMapHolder
 

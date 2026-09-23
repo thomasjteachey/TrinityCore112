@@ -24,6 +24,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "StringFormat.h"
 #include "World.h"
 #include "WorldSession.h"
 
@@ -127,10 +128,40 @@ ChatCommandResult Trinity::ChatCommands::PlayerIdentifier::TryConsume(ChatHandle
         if (!normalizePlayerName(_name))
             return FormatTrinityString(handler, LANG_CMDPARSER_CHAR_NAME_INVALID, STRING_VIEW_FMT_ARG(_name));
 
+        // A typed first name may be followed by the family name
+        // (Miscellaneous/Surnames.h) - the only way to pick one of two
+        // characters sharing a first name. The next word is taken only when the
+        // pair is the full name of a character, so a command's own arguments
+        // after the name are left alone.
+        if (!val.holds_alternative<Hyperlink<player>>() && _name.find(' ') == std::string::npos)
+        {
+            Trinity::Impl::ChatCommands::TokenizeResult const word = Trinity::Impl::ChatCommands::tokenize(*next);
+            if (!word.token.empty())
+            {
+                std::string fullName = _name + ' ' + std::string(word.token);
+                if (normalizePlayerName(fullName) && sCharacterCache->GetCharacterCacheByFullName(fullName))
+                {
+                    _name = std::move(fullName);
+                    next = ChatCommandResult(word.tail);
+                }
+            }
+        }
+
         if ((_player = ObjectAccessor::FindPlayerByName(_name)))
             _guid = _player->GetGUID();
         else if (!(_guid = sCharacterCache->GetCharacterGuidByName(_name)))
+        {
+            // Several characters answer to this first name, so it names none.
+            std::vector<std::string> const sharing = sCharacterCache->GetCharacterFullNamesByFirstName(_name);
+            if (sharing.size() > 1)
+            {
+                std::string list;
+                for (std::string const& fullName : sharing)
+                    list += (list.empty() ? "" : ", ") + fullName;
+                return Trinity::StringFormat("More than one character is called {}: {}. Add the family name.", _name, list);
+            }
             return FormatTrinityString(handler, LANG_CMDPARSER_CHAR_NAME_NO_EXIST, STRING_VIEW_FMT_ARG(_name));
+        }
         return next;
     }
 }

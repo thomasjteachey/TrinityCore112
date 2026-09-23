@@ -307,6 +307,19 @@ CharacterCacheEntry const* CharacterCache::GetCharacterCacheByName(std::string c
     return nullptr;
 }
 
+std::vector<std::string> CharacterCache::GetCharacterFullNamesByFirstName(std::string const& name) const
+{
+    std::vector<std::string> names;
+    auto itr = _characterCacheByFirstNameStore.find(name);
+    if (itr == _characterCacheByFirstNameStore.end())
+        return names;
+
+    names.reserve(itr->second.size());
+    for (CharacterCacheEntry const* entry : itr->second)
+        names.push_back(FullName(entry->Name, entry->Surname));
+    return names;
+}
+
 ObjectGuid CharacterCache::GetCharacterGuidByName(std::string const& name) const
 {
     CharacterCacheEntry const* entry = GetCharacterCacheByName(name);
