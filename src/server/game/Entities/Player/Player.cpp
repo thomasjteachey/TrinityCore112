@@ -29646,8 +29646,34 @@ void Player::LearnTalentSpellDependencies(uint32 spellid, uint8 levelCap)
     if (!levelCap || levelCap > GetLevel())
         levelCap = GetLevel();
 
-    auto learnNextActivatableRanks = [this, levelCap](uint32 currentRankSpellId)
+    // A same-named class spell OUTSIDE this chain already in the spellbook is a
+    // kit wrapper standing in for the chain's top rank - the tournament
+    // paladin's Consecration Rank 5 is 90530, not 20924. Walking the chain as
+    // well would put a second Consecration next to it.
+    auto heldAsWrapper = [this](SpellInfo const* rank)
     {
+        char const* rankName = rank->SpellName[LOCALE_enUS];
+        if (!rankName || !*rankName)
+            return false;
+        for (auto const& [knownId, known] : m_spells)
+        {
+            if (known.state == PLAYERSPELL_REMOVED || known.disabled)
+                continue;
+            SpellInfo const* other = sSpellMgr->GetSpellInfo(knownId);
+            if (!other || other->SpellFamilyName != rank->SpellFamilyName || other->IsRankOf(rank))
+                continue;
+            if (other->SpellName[LOCALE_enUS] && !strcmp(other->SpellName[LOCALE_enUS], rankName))
+                return true;
+        }
+        return false;
+    };
+
+    auto learnNextActivatableRanks = [this, levelCap, &heldAsWrapper](uint32 currentRankSpellId)
+    {
+        if (SpellInfo const* current = sSpellMgr->GetSpellInfo(currentRankSpellId))
+            if (current->SpellFamilyName != SPELLFAMILY_GENERIC && heldAsWrapper(current))
+                return;
+
         uint32 nextRankSpellId = sSpellMgr->GetNextSpellInChain(currentRankSpellId);
         while (nextRankSpellId)
         {
@@ -29664,6 +29690,18 @@ void Player::LearnTalentSpellDependencies(uint32 spellid, uint8 levelCap)
             nextRankSpellId = sSpellMgr->GetNextSpellInChain(nextRankSpellId);
         }
     };
+
+    // An ability the talent teaches through SPELL_EFFECT_LEARN_SPELL carries its
+    // own trainer ranks, and they hang off THAT spell's chain, not the talent's:
+    // Bloodthirsty Grip teaches Bloodthirst Rank 1, and Ranks 2-4 follow it.
+    for (SpellEffectInfo const& effect : talentSpellInfo->GetEffects())
+    {
+        if (!effect.IsEffect(SPELL_EFFECT_LEARN_SPELL))
+            continue;
+        SpellInfo const* taught = sSpellMgr->GetSpellInfo(effect.TriggerSpell);
+        if (taught && !taught->IsPassive())
+            learnNextActivatableRanks(taught->Id);
+    }
 
     // Only auto-learn ranks and dependencies for activatable spells
     if (talentSpellInfo->IsPassive())
@@ -29687,6 +29725,26 @@ void Player::LearnTalentSpellDependencies(uint32 spellid, uint8 levelCap)
         LearnSpell(dependentSpellId, false);
         learnNextActivatableRanks(dependentSpellId);
     }
+}
+
+void Player::LearnHeldTalentRanks()
+{
+    PlayerTalentMap const* talents = m_talents[m_activeSpec];
+    if (!talents)
+        return;
+
+    // Copied first: LearnSpell below goes through AddSpell, which can touch the
+    // talent map of the very spec being walked.
+    std::vector<uint32> held;
+    held.reserve(talents->size());
+    for (auto const& [spellId, talent] : *talents)
+        if (talent && talent->state != PLAYERSPELL_REMOVED)
+            held.push_back(spellId);
+
+    uint8 const levelCap = VioletHoldBoons::GetBaseLevel(this);
+    for (uint32 spellId : held)
+        if (HasSpell(spellId))
+            LearnTalentSpellDependencies(spellId, levelCap);
 }
 
 // Take back one talent rank learned with LearnTalent: the rank's spell (and
@@ -30753,6 +30811,12 @@ void Player::ActivateSpec(uint8 spec)
 
     m_usedTalentCount = spentTalents;
     InitTalentForLevel();
+
+    // The swap above re-learns only each talent's own spell. A tournament
+    // character never trains, so the ranks its talents bring (Mortal Strike 4,
+    // Bloodthirst 4 through Bloodthirsty Grip) come back with the spec.
+    if (Tournament::IsTournamentCharacter(this))
+        LearnHeldTalentRanks();
 
     // load them asynchronously
     {

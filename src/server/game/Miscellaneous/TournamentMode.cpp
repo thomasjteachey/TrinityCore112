@@ -1031,6 +1031,12 @@ void ApplyCharacterKit(Player* player)
 
         player->LearnSpell(innate.SpellId, false);
     }
+
+    // Tournament characters never visit a trainer, so they hold every rank
+    // their talents bring, up to their level - including characters built from
+    // a kit template or ported from Legionnaire+, whose talents never went
+    // through LearnTalent here (Bloodthirst stayed at Rank 1 that way).
+    player->LearnHeldTalentRanks();
 }
 
 void ClearCharacterKit(Player* player)

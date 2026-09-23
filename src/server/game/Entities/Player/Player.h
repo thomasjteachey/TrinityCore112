@@ -1665,6 +1665,13 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         // refunds its points, restores `previousRankSpellId` if given.
         void UnlearnTalentSpell(uint32 spellId, uint32 previousRankSpellId, uint8 levelCap = 0);
 
+        // Re-teach every rank the active spec's talents bring along, up to the
+        // character's level - what LearnTalent would have given them had each
+        // talent been taken today. For characters whose talents never went
+        // through LearnTalent (tournament kits, ported characters, a talent
+        // whose ability chain was fixed after the fact).
+        void LearnHeldTalentRanks();
+
         // Talent points spent inside a Violet Hold run - see VioletHoldRunTalent.
         std::vector<VioletHoldRunTalent> const& GetVioletHoldRunTalents() const { return m_vhrRunTalents; }
         void RecordVioletHoldRunTalent(uint32 spell, uint32 previousSpell);
