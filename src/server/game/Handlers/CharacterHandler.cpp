@@ -695,8 +695,14 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
                 return;
             }
 
-            // Check name uniqueness in the same step as saving to database
-            if (sCharacterCache->GetCharacterCacheByName(createInfo->Name))
+            // Check name uniqueness in the same step as saving to database. With
+            // family names on it is the pair that has to be free: a first name
+            // on its own answers whenever exactly one character carries it, so
+            // asking by first name refused a second "Skibbly" of any family.
+            std::string const pendingSurname = Surnames::Enabled() ? Surnames::PeekPending(GetAccountId(), createInfo->Name) : "";
+            if (!pendingSurname.empty()
+                ? sCharacterCache->GetCharacterCacheByFullName(createInfo->Name + ' ' + pendingSurname) != nullptr
+                : sCharacterCache->GetCharacterCacheByName(createInfo->Name) != nullptr)
             {
                 SendCharCreate(CHAR_CREATE_NAME_IN_USE);
                 return;
