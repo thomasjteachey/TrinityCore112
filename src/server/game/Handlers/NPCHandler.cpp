@@ -208,13 +208,14 @@ void WorldSession::HandleSpiritHealerActivateOpcode(WorldPacket& recvData)
     if (GetPlayer()->HasUnitState(UNIT_STATE_DIED))
         GetPlayer()->RemoveAurasByType(SPELL_AURA_FEIGN_DEATH);
 
-    SendSpiritResurrect();
+    SendSpiritResurrect((unit->GetCreatureTemplate()->flags_extra & CREATURE_FLAG_EXTRA_FREE_RESURRECT) != 0);
 }
 
-void WorldSession::SendSpiritResurrect()
+void WorldSession::SendSpiritResurrect(bool freeResurrect)
 {
-    _player->ResurrectPlayer(0.5f, true);
-    _player->DurabilityLossAll(0.25f, true);
+    _player->ResurrectPlayer(0.5f, !freeResurrect);
+    if (!freeResurrect)
+        _player->DurabilityLossAll(0.25f, true);
 
     // get corpse nearest graveyard
     WorldSafeLocsEntry const* corpseGrave = nullptr;

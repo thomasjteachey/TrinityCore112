@@ -579,7 +579,7 @@ class TC_GAME_API WorldSession
         bool CanOpenMailBox(ObjectGuid guid);
         void SendShowMailBox(ObjectGuid guid);
         void SendTabardVendorActivate(ObjectGuid guid);
-        void SendSpiritResurrect();
+        void SendSpiritResurrect(bool freeResurrect = false);
         void SendBindPoint(Creature* npc);
 
         void SendAttackStop(Unit const* enemy);
