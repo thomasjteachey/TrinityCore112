@@ -21,6 +21,7 @@
 #include "DatabaseEnvFwd.h"
 #include "Define.h"
 #include "ObjectGuid.h"
+#include <set>
 
 // What a race change has to do to the spellbook, on top of the stock handler
 // (WorldSession::HandleCharFactionOrRaceChangeCallback), which only swaps the
@@ -50,6 +51,10 @@ namespace RaceChange
 {
     void AppendSpellSwap(CharacterDatabaseTransaction trans, ObjectGuid guid, uint8 oldRace, uint8 newRace,
         uint8 playerClass, uint8 level, bool tournament);
+
+    // Every rank of this race and class's quest-rewarded racials that `level`
+    // reaches, from the same table. Empty for a class that has none.
+    std::set<uint32> RacialAbilitiesAtLevel(uint8 race, uint8 playerClass, uint8 level);
 }
 
 #endif // TRINITYCORE_RACE_CHANGE_H

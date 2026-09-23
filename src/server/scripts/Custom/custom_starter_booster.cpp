@@ -2,9 +2,9 @@
  * Starter booster.
  *
  * One gossip click takes a brand new character to level 10, teaches it everything
- * a trainer of its class would sell at that level, and puts it down at the
- * Crossroads. Placed in every starting zone so it is reachable whatever race
- * somebody rolled.
+ * a trainer of its class would sell at that level plus the abilities its class
+ * quests up to that level hand out, and puts it down at the Crossroads. Placed
+ * in every starting zone so it is reachable whatever race somebody rolled.
  *
  * The spell half deliberately reuses the exact walk that ".learn my spells"
  * performs (cs_learn.cpp HandleLearnMySpellsCommand): iterate the class's
@@ -19,12 +19,17 @@
 
 #include "ChallengeModes.h"
 #include "Creature.h"
+#include "ItemTemplate.h"
 #include "Map.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "QuestDef.h"
+#include "RaceChange.h"
 #include "ScriptMgr.h"
 #include "ScriptedCreature.h"
 #include "ScriptedGossip.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "Trainer.h"
 #include "WorldSession.h"
 
@@ -163,6 +168,89 @@ namespace
 
         return learned;
     }
+
+    // The abilities no trainer sells because a class quest hands them out -
+    // Defensive Stance, Tame Beast and Beast Training, the Voidwalker, the
+    // Searing and Stoneskin totems and the totems that cast them, Bear Form -
+    // for every such quest the new level has opened. A boosted character never
+    // walked past those quest givers, so without this a level 10 hunter cannot
+    // tame and a level 10 warrior has one stance.
+    //
+    // Same rule the playerbots use (EnsureEligibleClassQuestSkills): a quest
+    // limited to exactly one class, open to this race, whose MinLevel the
+    // character has reached. Only the wrapper's LEARN_SPELL effects are taken;
+    // the quest stays untouched, so its gear and experience are still there to
+    // earn, and turning it in later just re-teaches something already known.
+    //
+    // Priests are the exception. Their level 10 class quests are the racials,
+    // and the quest rows cannot be trusted with them: their race masks are loose
+    // enough to hand a Human three races' racials, and two more rows still teach
+    // stock racials this realm replaced. RaceChange keeps the settled mapping.
+    uint32 LearnClassQuestAbilitiesForCurrentLevel(Player* player)
+    {
+        uint32 learned = 0;
+        auto learn = [player, &learned](uint32 spellId)
+        {
+            if (!spellId || player->HasSpell(spellId) || !sSpellMgr->GetSpellInfo(spellId))
+                return;
+
+            player->LearnSpell(spellId, false);
+            ++learned;
+        };
+
+        if (player->GetClass() == CLASS_PRIEST)
+        {
+            for (uint32 spellId : RaceChange::RacialAbilitiesAtLevel(player->GetRace(), CLASS_PRIEST, player->GetLevel()))
+                learn(spellId);
+            return learned;
+        }
+
+        uint32 const classMask = player->GetClassMask();
+        uint32 const raceMask = player->GetRaceMask();
+
+        for (auto const& [questId, quest] : sObjectMgr->GetQuestTemplates())
+        {
+            if (quest.GetRequiredClasses() != classMask || quest.GetMinLevel() > player->GetLevel())
+                continue;
+
+            if (quest.GetAllowableRaces() && !(quest.GetAllowableRaces() & raceMask))
+                continue;
+
+            if (quest.IsRepeatable() || quest.IsDaily() || quest.IsWeekly() ||
+                quest.IsMonthly() || quest.IsSeasonal() || quest.IsDFQuest())
+                continue;
+
+            // Normal rows keep the teaching wrapper in RewardSpell; several
+            // imported Classic rows keep it in RewardDisplaySpell instead.
+            for (int32 wrapperId : { quest.GetRewSpellCast(), int32(quest.GetRewSpell()) })
+            {
+                if (wrapperId <= 0)
+                    continue;
+
+                SpellInfo const* wrapper = sSpellMgr->GetSpellInfo(uint32(wrapperId));
+                if (!wrapper)
+                    continue;
+
+                for (SpellEffectInfo const& effect : wrapper->GetEffects())
+                    if (effect.IsEffect(SPELL_EFFECT_LEARN_SPELL))
+                        learn(effect.TriggerSpell);
+            }
+
+            // A totem spell is dead without the totem the same quest hands
+            // over - Searing Totem will not cast without a Fire Totem in the
+            // bags. Of the quest's items, those tools alone come along.
+            for (uint32 itemId : quest.RewardItemId)
+            {
+                ItemTemplate const* proto = itemId ? sObjectMgr->GetItemTemplate(itemId) : nullptr;
+                if (!proto || !proto->TotemCategory || player->HasItemTotemCategory(proto->TotemCategory))
+                    continue;
+
+                player->AddItem(itemId, 1);
+            }
+        }
+
+        return learned;
+    }
 }
 
 class npc_starter_booster : public CreatureScript
@@ -218,7 +306,10 @@ public:
             }
 
             player->GiveLevel(BOOSTER_TARGET_LEVEL);
-            uint32 const learned = LearnClassSpellsForCurrentLevel(player);
+            // Quest abilities first, so a trainer spell that asks for one of
+            // them is already teachable when the trainer walk runs.
+            uint32 learned = LearnClassQuestAbilitiesForCurrentLevel(player);
+            learned += LearnClassSpellsForCurrentLevel(player);
             uint32 const capped = MaxOutCombatSkillsForLevel(player);
 
             if (WorldSession* session = player->GetSession())

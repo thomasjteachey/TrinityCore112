@@ -70,6 +70,23 @@ namespace
         { RACE_TROLL,         CLASS_PRIEST, 20, { 5680, 0    }, { 18137, 19308, 19309, 19310, 19311, 19312 } },     // Shadowguard
     };
 
+    // The ranks of one racial that `level` reaches: the first at the quest's
+    // level, every later one at its own spell level.
+    void InsertRanksAtLevel(RacialAbility const& ability, uint8 level, std::set<uint32>& out)
+    {
+        for (std::size_t i = 0; i < ability.Ranks.size() && ability.Ranks[i]; ++i)
+        {
+            uint32 const spellId = ability.Ranks[i];
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+            if (!spellInfo)
+                continue;
+
+            uint32 const requiredLevel = i == 0 ? ability.Level : spellInfo->SpellLevel;
+            if (level >= requiredLevel)
+                out.insert(spellId);
+        }
+    }
+
     // Whether SkillLineAbility lets this race and class have the spell at all.
     // A spell with no row is nobody's racial.
     bool FitsRace(uint32 spellId, uint32 raceMask, uint32 classMask)
@@ -210,17 +227,7 @@ void RaceChange::AppendSpellSwap(CharacterDatabaseTransaction trans, ObjectGuid 
 
         // Every rank the level reaches: the old race's ranks were paid for,
         // and there is no trainer here that sells these.
-        for (std::size_t i = 0; i < ability.Ranks.size() && ability.Ranks[i]; ++i)
-        {
-            uint32 const spellId = ability.Ranks[i];
-            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
-            if (!spellInfo)
-                continue;
-
-            uint32 const requiredLevel = i == 0 ? ability.Level : spellInfo->SpellLevel;
-            if (level >= requiredLevel)
-                grant.insert(spellId);
-        }
+        InsertRanksAtLevel(ability, level, grant);
 
         for (uint32 questId : ability.Quests)
             if (questId)
@@ -263,4 +270,13 @@ void RaceChange::AppendSpellSwap(CharacterDatabaseTransaction trans, ObjectGuid 
 
     TC_LOG_INFO("entities.player", "Race change {}: race {} -> {}, class {}, level {}{}: {} spell(s) removed, {} granted, {} skill line(s) dropped.",
         guid.ToString(), oldRace, newRace, playerClass, level, tournament ? " (tournament)" : "", drop.size(), grant.size(), dropSkills.size());
+}
+
+std::set<uint32> RaceChange::RacialAbilitiesAtLevel(uint8 race, uint8 playerClass, uint8 level)
+{
+    std::set<uint32> spells;
+    for (RacialAbility const& ability : RacialAbilities)
+        if (ability.Race == race && ability.Class == playerClass && level >= ability.Level)
+            InsertRanksAtLevel(ability, level, spells);
+    return spells;
 }
