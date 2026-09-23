@@ -2458,6 +2458,45 @@ public:
         return false;
     }
 
+    // And again at the accept, against the whole party. The invite check is
+    // not enough on its own: it compares two people at one instant, so an
+    // invite sent while the flags matched could be accepted after either side
+    // flipped theirs, and an invitee on a loading screen was not in the world
+    // to be looked up at all. The flagger's own leave-the-party rule never
+    // sees a pending invite, because the invitee is not in the group yet.
+    //
+    // Every member slot is asked, offline members included, plus the leader
+    // explicitly - a group is not created until its first accept, and until
+    // then the leader is only an inviter, not a slot.
+    bool OnCanGroupAccept(Player* player, Group* group) override
+    {
+        if (!s_enabled || !player || !group)
+            return true;
+
+        ObjectGuid disagreeing;
+        if (MemberDisagreesOnWarMode(player, group->GetLeaderGUID()))
+            disagreeing = group->GetLeaderGUID();
+        else
+            for (Group::MemberSlot const& slot : group->GetMemberSlots())
+                if (slot.guid != player->GetGUID() && MemberDisagreesOnWarMode(player, slot.guid))
+                {
+                    disagreeing = slot.guid;
+                    break;
+                }
+
+        if (disagreeing.IsEmpty())
+            return true;
+
+        std::string name;
+        sCharacterCache->GetCharacterNameByGuid(disagreeing, name);
+        ChatHandler(player->GetSession()).PSendSysMessage(
+            "You have War Mode %s and %s has it %s. You cannot join a party that does "
+            "not share your War Mode setting.",
+            IsWarModeOptedIn(player) ? "on" : "off", name.c_str(),
+            IsWarModeOptedIn(player) ? "off" : "on");
+        return false;
+    }
+
     void OnUpdate(Player* player, uint32 /*diff*/) override
     {
         EnforceAlwaysPvP(player);

@@ -1074,6 +1074,19 @@ Playerbot.Pve.ProactiveMaxLevelsBelow = 4
 
 Playerbot.Pve.ProactiveBountyStacks = 5
 
+#
+#    Playerbot.Pve.ResurrectGraceSeconds
+#        Description: Seconds after a person resurrects in which no bot may START a
+#                     fight with them. A wipe leaves a death chest on every body and
+#                     the bots come to loot them, so without this a party revives
+#                     among the bots that killed it and is killed again. Ends early
+#                     if the person opens on a player first. Self-defence and fights
+#                     already under way are unaffected. 0 disables it.
+#        Default:     60
+#
+
+Playerbot.Pve.ResurrectGraceSeconds = 60
+
 
 #    Playerbot.Pve.RebirthAtMaxLevel.Percent
 #        Description: This percent of the managed fleet (guid-keyed, deterministic) is reborn

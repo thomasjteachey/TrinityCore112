@@ -29,6 +29,7 @@
 #include "Configuration/Config.h"
 #include "Duration.h"
 #include "GameTime.h"
+#include "Group.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Chat.h"
@@ -494,6 +495,44 @@ namespace
     // but a bot's pet or a charmed unit can hold a PvE reference to the same
     // victim, and resolving through GetCharmerOrOwnerPlayerOrPlayerItself puts
     // the credit on the person behind it either way.
+    // Who a participant's share of the kill lands on: their group's leader, if
+    // the leader was there for it.
+    //
+    // A party or raid carries ONE bounty. Crediting every member who touched a
+    // kill gave a ten-man raid ten full bounties for one camp, and since the
+    // fleet answers each bounty separately, ten hunts converged on one spot at
+    // once. Now a group's kill is one stack on one person, and the dedup in
+    // CollectParticipants keeps it at one however many members took part.
+    //
+    // "There" means the same map and within group XP range of the body - the
+    // same reach that decides who shares the experience. Without it the
+    // obvious play is to park the leader in a sanctuary city and let the raid
+    // kill for free while the bounty piles up on somebody nothing may touch.
+    // A leader who is away, dead-and-released or on another continent carries
+    // nothing, and each member answers for their own kills exactly as they
+    // would ungrouped.
+    Player* BountyCarrierFor(Player* person, Player const* victim)
+    {
+        Group const* group = person->GetGroup();
+        if (!group)
+            return person;
+
+        Player* leader = ObjectAccessor::FindPlayer(group->GetLeaderGUID());
+        if (!leader || leader == victim || !leader->IsInWorld() ||
+            leader->GetMap() != victim->GetMap() ||
+            !leader->IsWithinDistInMap(victim, sWorld->getFloatConfig(CONFIG_GROUP_XP_DISTANCE)))
+            return person;
+
+        // Nor a leader who could not take the stack: AddStacks would refuse it,
+        // and a War Mode-off leader standing nearby would make the whole group
+        // bounty-proof.
+        if (!IsBountyContext(leader) || Tournament::IsTournamentCharacter(leader) ||
+            (!BarracksHardcore::IsPlayerbot(leader) && !BarracksHardcore::IsWarModeOptedIn(leader)))
+            return person;
+
+        return leader;
+    }
+
     std::vector<Player*> CollectParticipants(Player* victim, Unit* killer)
     {
         std::vector<Player*> participants;
@@ -508,6 +547,7 @@ namespace
             if (!person || person == victim || !person->IsInWorld())
                 return;
 
+            person = BountyCarrierFor(person, victim);
             if (!seen.insert(person->GetGUID().GetRawValue()).second)
                 return;
 

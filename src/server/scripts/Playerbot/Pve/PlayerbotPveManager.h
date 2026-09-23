@@ -301,6 +301,9 @@ struct PveConfig
     // the waiver is meant for a person who has made a habit of it. 0 means no
     // amount of bounty ever waives the floor.
     uint32 proactiveBountyStacks = 5;
+    // Seconds after a person resurrects in which no bot may start a fight with
+    // them. 0 disables it.
+    uint32 resurrectGraceSeconds = 60;
     // How close a guardian tries to get to a real player. Guardians go to the
     // people rather than waiting to be found: the server already knows where
     // every player is, so this needs no searching. 0 disables the approach and

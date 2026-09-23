@@ -18755,6 +18755,7 @@ namespace playerbot
         g_PveConfig.proactiveMaxLevelsAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveMaxLevelsAbove", 4), 0, 60));
         g_PveConfig.proactiveMaxLevelsBelow = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveMaxLevelsBelow", 4), 0, 60));
         g_PveConfig.proactiveBountyStacks = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveBountyStacks", 5), 0, 255));
+        g_PveConfig.resurrectGraceSeconds = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ResurrectGraceSeconds", 60), 0, 600));
 
         // Accounts whose bots are PvP-only: parked in their sanctuary, never
         // touched by any PvE system (no grind, errands, gear, talents, economy),
@@ -19916,12 +19917,42 @@ namespace playerbot
                     proddableBots.push_back(bot);
             }
 
+            // A breather after resurrecting. A wipe drops a death chest on every
+            // body, every bot within 200 yards comes to loot them, and so the
+            // place a party revives is exactly where the bots that killed it are
+            // standing - they opened on each person the moment they stood up, and
+            // the fight never ended for long enough to send a hunter home. So for
+            // a short while after coming back nobody may START on them: they can
+            // run, rebuff or fight, and the grace ends early the moment they open
+            // on a player themselves.
+            //
+            // Detected here rather than by hook because this pass already sees
+            // every person once a second and drops the dead: seen dead on one
+            // pass and alive on a later one is a resurrection, however it came.
+            // World thread only, so the two maps need no lock.
+            static std::unordered_set<uint64> s_seenDead;
+            static std::unordered_map<uint64, PveTimePoint> s_graceUntil;
+            PveTimePoint const spotNow = PveClock::now();
+            for (auto itr = s_graceUntil.begin(); itr != s_graceUntil.end();)
+                itr = spotNow >= itr->second ? s_graceUntil.erase(itr) : std::next(itr);
+
             std::vector<HumanSpot> spots;
             for (auto const& pair : ObjectAccessor::GetPlayers())
             {
                 Player* human = pair.second;
-                if (!human || !human->IsInWorld() || !human->IsAlive())
+                if (!human || !human->IsInWorld())
                     continue;
+
+                if (!human->IsAlive())
+                {
+                    if (g_PveConfig.resurrectGraceSeconds && !playerbot::IsManagedRandomBot(human))
+                        s_seenDead.insert(human->GetGUID().GetRawValue());
+                    continue;
+                }
+
+                if (s_seenDead.erase(human->GetGUID().GetRawValue()))
+                    s_graceUntil[human->GetGUID().GetRawValue()] =
+                        spotNow + std::chrono::seconds(g_PveConfig.resurrectGraceSeconds);
 
                 if (human->IsGameMaster() || playerbot::IsManagedRandomBot(human))
                     continue;
@@ -19962,8 +19993,20 @@ namespace playerbot
                 // read this flag.
                 //
                 // Never a tournament character: every bot ignores them.
-                bool const huntable = (bounty > 0 || BarracksHardcore::IsWarModeOptedIn(human)) &&
+                bool huntable = (bounty > 0 || BarracksHardcore::IsWarModeOptedIn(human)) &&
                     !Tournament::IsTournamentCharacter(human);
+
+                // Newly resurrected: see s_graceUntil. Opening on a player
+                // yourself ends it.
+                if (auto const grace = s_graceUntil.find(human->GetGUID().GetRawValue());
+                    grace != s_graceUntil.end())
+                {
+                    Unit const* victim = human->GetVictim();
+                    if (victim && victim->GetCharmerOrOwnerPlayerOrPlayerItself())
+                        s_graceUntil.erase(grace);
+                    else
+                        huntable = false;
+                }
 
                 spots.push_back({ human->GetGUID(), human->GetMapId(), human->GetZoneId(), human->GetLevel(),
                     human->GetPositionX(), human->GetPositionY(), human->GetPositionZ(), slotsFree, bounty,
