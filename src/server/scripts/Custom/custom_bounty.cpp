@@ -63,6 +63,8 @@ namespace
     bool s_enabled = false;
     uint32 s_spellId = 0;
     uint32 s_stacksPerKill = 1;
+    // A party or raid carries one bounty, on its leader. See BountyCarrierFor.
+    bool s_groupLeaderCarries = true;
     float s_goldPercentPerStack = 1.0f;
     // The flat cost of dying, owed with or without a bounty. See TakeDeathTax.
     float s_deathTaxPercent = 5.0f;
@@ -162,6 +164,7 @@ namespace
         s_enabled = sConfigMgr->GetBoolDefault("Centurion.Bounty.Enable", false);
         s_spellId = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Bounty.AuraSpell", 90701)));
         s_stacksPerKill = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Bounty.StacksPerKill", 1), 0, 50));
+        s_groupLeaderCarries = sConfigMgr->GetBoolDefault("Centurion.Bounty.GroupLeaderCarries", true);
         s_fallbackMaxStacks = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Bounty.MaxStacks", 50), 1, 255));
         s_goldPercentPerStack = std::clamp(
             sConfigMgr->GetFloatDefault("Centurion.Bounty.GoldPercentPerStack", 1.0f), 0.0f, 10.0f);
@@ -513,6 +516,9 @@ namespace
     // would ungrouped.
     Player* BountyCarrierFor(Player* person, Player const* victim)
     {
+        if (!s_groupLeaderCarries)
+            return person;
+
         Group const* group = person->GetGroup();
         if (!group)
             return person;

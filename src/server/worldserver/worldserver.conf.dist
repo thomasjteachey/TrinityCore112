@@ -3863,6 +3863,15 @@ Centurion.Hardcore.PlayerKill.ExperienceBubbles = 2
 #        Description: Stacks added to every participant per kill.
 #        Default:     1
 #
+#    Centurion.Bounty.GroupLeaderCarries
+#        Description: A party or raid carries ONE bounty, on its leader: every
+#                     grouped participant's share of a kill goes to the leader, once
+#                     per kill. Only when the leader was within group XP range of
+#                     the body and could earn a bounty themselves (War Mode on, not
+#                     a tournament character); otherwise each member is credited
+#                     as if ungrouped. 0 credits every participant separately.
+#        Default:     1
+#
 #    Centurion.Bounty.MaxStacks
 #        Description: Fallback ceiling. Keep it equal to the aura's CumulativeAura.
 #        Default:     50
@@ -3991,6 +4000,7 @@ Playerbot.Pve.MaxUnitsPerConsumable      = 20
 Centurion.Bounty.Enable = 0
 Centurion.Bounty.AuraSpell = 90701
 Centurion.Bounty.StacksPerKill = 1
+Centurion.Bounty.GroupLeaderCarries = 1
 Centurion.Bounty.MaxStacks = 50
 Centurion.Bounty.GoldPercentPerStack = 1.0
 Centurion.Bounty.BotLossMultiplier = 2.0
