@@ -27,6 +27,7 @@
 #include <vector>
 
 class Player;
+class WorldObject;
 
 namespace playerbot
 {
@@ -102,6 +103,13 @@ struct NodeBotOrders
     bool leash = false;
     float leashRange = 0.0f;
 
+    // Held ground, measured from the banner exactly as the leash is. A leashed
+    // bot picks its fights among enemies inside engageRange and follows one no
+    // further than pursueRange, both short of the leash, so a chase ends before
+    // the leash has anything to walk it back from.
+    float engageRange = 0.0f;
+    float pursueRange = 0.0f;
+
     uint32 enemiesAtNode = 0;
 };
 
@@ -113,6 +121,11 @@ public:
 
     // This bot's orders. False, with role None, outside such a match.
     static bool GetOrders(Player const* bot, NodeBotOrders& orders);
+
+    // True when the bot is leashed to a base and the target stands past its
+    // pursueRange. Every approach toward a target asks this, so the spell layer
+    // cannot walk a holder off its base either.
+    static bool IsBeyondHeldGround(Player const* bot, WorldObject const* target);
 
     // One line per base plus a team summary, for .playerbot pvp nodes.
     static std::vector<std::string> DescribeTeams(Player const* observer);

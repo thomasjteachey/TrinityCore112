@@ -17,6 +17,7 @@
 
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotPvpLifecycleActions.h"
+#include "PlayerbotNodeCoordinator.h"
 #include "PlayerbotSharedStateGuard.h"
 #include "Playerbot/Pve/PlayerbotPveManager.h"
 #include "Chat.h"
@@ -1939,6 +1940,11 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     if (!player || !target)
         return;
 
+    // A bot holding a base does not walk off it after a target; the leash
+    // would only walk it straight back. It shoots from where it stands.
+    if (playerbot::NodeCoordinator::IsBeyondHeldGround(player, target))
+        return;
+
     MotionMaster* motionMaster = player->GetMotionMaster();
     if (!motionMaster)
         return;
@@ -2595,6 +2601,10 @@ bool IsBehindTargetRequiredAndMissing(Player const* player, Unit const* target, 
 void IssueMeleeApproachMovement(Player* player, Unit* target)
 {
     if (!player || !target)
+        return;
+
+    // Same rule as IssueRangedApproachMovement: no chase off a held base.
+    if (playerbot::NodeCoordinator::IsBeyondHeldGround(player, target))
         return;
 
     MotionMaster* motionMaster = player->GetMotionMaster();

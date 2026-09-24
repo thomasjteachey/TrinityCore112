@@ -4474,6 +4474,60 @@ namespace playerbot
         return nearestEnemy;
     }
 
+    // Who a bot holding a base should be fighting: the enemy it is already on,
+    // for as long as he stays inside pursueRange of the banner, otherwise the
+    // nearest one standing inside engageRange of it. Measured from the banner,
+    // not from the bot, because the leash is - and a stealthed enemy is left
+    // alone, as the coordinator leaves him out of the threat count.
+    Player* FindEnemyOnHeldGround(Player* player, playerbot::NodeBotOrders const& orders)
+    {
+        if (!player || !player->FindMap() || !orders.hasNode || !orders.leash)
+            return nullptr;
+
+        Battleground* battleground = player->GetBattleground();
+        if (!battleground || battleground->GetStatus() != STATUS_IN_PROGRESS)
+            return nullptr;
+
+        Position const& banner = orders.location;
+        TeamId const playerBgTeam = ResolveBotTeamId(player);
+        auto const isFightableEnemy = [&](Player* candidate) -> bool
+        {
+            return candidate && candidate != player && candidate->IsAlive() &&
+                candidate->GetBattlegroundId() == player->GetBattlegroundId() &&
+                ResolveBotTeamId(candidate) != playerBgTeam &&
+                player->IsValidAttackTarget(candidate) && player->CanSeeOrDetect(candidate) &&
+                !playerbot::PvpCore::IsEffectivelyImmuneTarget(player, candidate);
+        };
+
+        if (Unit* victim = player->GetVictim())
+            if (Player* victimPlayer = victim->ToPlayer(); isFightableEnemy(victimPlayer) &&
+                victimPlayer->IsWithinDist3d(banner.GetPositionX(), banner.GetPositionY(), banner.GetPositionZ(),
+                    orders.pursueRange))
+                return victimPlayer;
+
+        float nearestDistance = std::numeric_limits<float>::max();
+        Player* nearestEnemy = nullptr;
+        Map::PlayerList const& players = player->FindMap()->GetPlayers();
+        for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+        {
+            Player* candidate = itr->GetSource();
+            if (!isFightableEnemy(candidate))
+                continue;
+            if (!candidate->IsWithinDist3d(banner.GetPositionX(), banner.GetPositionY(), banner.GetPositionZ(),
+                orders.engageRange))
+                continue;
+
+            float const distance = player->GetDistance(candidate);
+            if (distance >= nearestDistance)
+                continue;
+
+            nearestDistance = distance;
+            nearestEnemy = candidate;
+        }
+
+        return nearestEnemy;
+    }
+
     void StopDamageAgainstEffectivelyImmuneTarget(Player* player, Unit* target)
     {
         if (!player || !target)
@@ -5628,10 +5682,36 @@ namespace playerbot
         // Checked before the combat branch below: a bot holding a base is worth
         // more standing on it than finishing the fight that walked it away, and
         // that branch chases a hundred yards.
-        if ((context.objective.type == BattlegroundObjectiveType::AssaultNode ||
-            context.objective.type == BattlegroundObjectiveType::DefendNode) &&
-            TryReturnToLeashedNode(player, battleground))
+        bool const nodeObjective = context.objective.type == BattlegroundObjectiveType::AssaultNode ||
+            context.objective.type == BattlegroundObjectiveType::DefendNode;
+        if (nodeObjective && TryReturnToLeashedNode(player, battleground))
             return true;
+
+        // A bot holding a base, or taking back one of ours, fights on that base
+        // and nowhere else. It used to pick its fight by distance from ITSELF -
+        // 35 y out of combat, 100 y in it - while the leash above is measured
+        // from the banner, so any fight 45 to 100 y off the base dragged it out,
+        // the leash walked it home, and the next tick sent it straight back out:
+        // the defender running back and forth. Fights are now picked by distance
+        // from the banner, inside the leash, so there is nothing to walk back
+        // from; and a base with nobody on it is held from the banner.
+        playerbot::NodeBotOrders heldOrders;
+        if (nodeObjective && playerbot::NodeCoordinator::GetOrders(player, heldOrders) &&
+            heldOrders.hasNode && heldOrders.leash)
+        {
+            if (Player* intruder = FindEnemyOnHeldGround(player, heldOrders))
+                if (EngageSelectedEnemyPlayer(player, intruder, "held-base-intruder"))
+                    return true;
+
+            // Whatever it was swinging at has left the base. Stop the swing so
+            // the chase it installed stands down; spells still go out at him
+            // from here if he is in range.
+            if (Unit* victim = player->GetVictim();
+                victim && playerbot::NodeCoordinator::IsBeyondHeldGround(player, victim))
+                player->AttackStop();
+
+            return TryAdvanceNodeObjective(player, battleground);
+        }
 
         if (player->IsInCombat())
         {

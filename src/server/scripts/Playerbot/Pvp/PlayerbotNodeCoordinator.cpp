@@ -52,9 +52,23 @@ namespace
     // How far a fight may drag a bot off the base it is holding.
     constexpr float kDefendLeashRange = 45.0f;
     constexpr float kRecaptureLeashRange = 60.0f;
+    // Held ground inside the leash: fights are picked this far short of it and
+    // followed until the target is this far short of it.
+    constexpr float kHeldGroundEngageMargin = 10.0f;
+    constexpr float kHeldGroundPursueMargin = 5.0f;
     // What the base a bot already has is worth when bodies are handed out, in
     // yards of head start. Without it every rebuild re-sorts the whole team.
     constexpr float kStickinessYards = 60.0f;
+    // Sixty yards of head start is nine points of score, and a base's score
+    // moves by twenty-two a body and sixty an enemy - so the discount alone
+    // never held anybody. A bot keeps the base it was handed at least this
+    // long; only a base of ours with enemies on it may take it back sooner.
+    constexpr uint32 kMinAssignmentHoldMs = 8 * IN_MILLISECONDS;
+    // An enemy who steps back out of a base's threat ring still counts on it
+    // for this long. Without it, one player pacing the edge of the ring
+    // pulled a second bot onto the base and released it again every time he
+    // crossed the line.
+    constexpr uint32 kThreatMemoryMs = 6 * IN_MILLISECONDS;
 
     // Base scores. A base of ours in the enemy's hands outranks the whole map;
     // a free base outranks one that has to be fought for.
@@ -163,6 +177,13 @@ namespace
     {
         uint32 nodeId = kNoNode;
         NodeRole role = NodeRole::None;
+        uint32 sinceMs = 0;     // when the bot was first handed this base
+    };
+
+    struct ThreatMemory
+    {
+        uint32 count = 0;
+        uint32 seenMs = 0;
     };
 
     struct TeamPlan
@@ -170,6 +191,7 @@ namespace
         uint32 lastRefreshMs = 0;
         uint32 lastSeenMs = 0;
         std::unordered_map<ObjectGuid, NodeAssignment> assignments;
+        std::unordered_map<uint32, ThreatMemory> threatMemory;
         std::vector<NodeState> nodes;
         uint32 ownedCount = 0;
         uint32 enemyOwnedCount = 0;
@@ -449,7 +471,19 @@ namespace
         {
             plan.nodes.clear();
             plan.assignments.clear();
+            plan.threatMemory.clear();
             return;
+        }
+
+        // The highest head count seen on each base in the last few seconds,
+        // not just this instant's.
+        for (NodeState& state : nodes)
+        {
+            ThreatMemory& memory = plan.threatMemory[state.nodeId];
+            if (state.enemiesNear >= memory.count || nowMs - memory.seenMs >= kThreatMemoryMs)
+                memory = { state.enemiesNear, nowMs };
+            else
+                state.enemiesNear = memory.count;
         }
 
         uint32 owned = 0;
@@ -489,6 +523,20 @@ namespace
         uint32 assignedCount = 0;
         uint32 defenders = 0;
 
+        // Whether a bot is still bound to the base it was handed a moment ago
+        // and so may not be dealt to this one. A base of ours with enemies on
+        // it always may take it: that is the whole reason bodies move.
+        auto const isBoundElsewhere = [&](NodeAssignment const& had, NodeState const& state) -> bool
+        {
+            if (had.nodeId == state.nodeId || nowMs - had.sinceMs >= kMinAssignmentHoldMs)
+                return false;
+            if (IsFriendlySideStatus(state.status) &&
+                (state.enemiesNear > 0 || state.status == BattlegroundNodeStatus::FriendlyUnderAttack))
+                return false;
+            return std::any_of(nodes.begin(), nodes.end(),
+                [&](NodeState const& other) { return other.nodeId == had.nodeId; });
+        };
+
         auto const findNearestFreeBot = [&](NodeState const& state, float& outCost) -> std::size_t
         {
             std::size_t best = living.size();
@@ -499,6 +547,8 @@ namespace
                     continue;
 
                 auto const previousItr = previous.find(living[i]->GetGUID());
+                if (previousItr != previous.end() && isBoundElsewhere(previousItr->second, state))
+                    continue;
                 float const cost = AssignmentCost(living[i], state,
                     previousItr == previous.end() ? nullptr : &previousItr->second);
                 if (cost < bestCost)
@@ -574,7 +624,11 @@ namespace
             if (chosen->status == BattlegroundNodeStatus::FriendlyControlled)
                 ++defenders;
 
-            plan.assignments[living[chosenBot]->GetGUID()] = { chosen->nodeId, RoleForStatus(chosen->status) };
+            ObjectGuid const chosenGuid = living[chosenBot]->GetGUID();
+            auto const hadItr = previous.find(chosenGuid);
+            uint32 const sinceMs = hadItr != previous.end() && hadItr->second.nodeId == chosen->nodeId ?
+                hadItr->second.sinceMs : nowMs;
+            plan.assignments[chosenGuid] = { chosen->nodeId, RoleForStatus(chosen->status), sinceMs };
         }
 
         // A dead bot keeps the base it had so it walks back to the same place
@@ -592,7 +646,8 @@ namespace
                     { return candidate.nodeId == previousItr->second.nodeId; });
                 if (keptItr != nodes.end())
                 {
-                    plan.assignments[guid] = { keptItr->nodeId, RoleForStatus(keptItr->status) };
+                    plan.assignments[guid] = { keptItr->nodeId, RoleForStatus(keptItr->status),
+                        previousItr->second.sinceMs };
                     continue;
                 }
             }
@@ -611,7 +666,7 @@ namespace
             }
 
             if (nearest)
-                plan.assignments[guid] = { nearest->nodeId, RoleForStatus(nearest->status) };
+                plan.assignments[guid] = { nearest->nodeId, RoleForStatus(nearest->status), nowMs };
         }
 
         if (owned != plan.ownedCount || enemyOwned != plan.enemyOwnedCount)
@@ -720,7 +775,26 @@ bool NodeCoordinator::GetOrders(Player const* bot, NodeBotOrders& orders)
             break;
     }
 
+    if (orders.leash)
+    {
+        orders.engageRange = orders.leashRange - kHeldGroundEngageMargin;
+        orders.pursueRange = orders.leashRange - kHeldGroundPursueMargin;
+    }
+
     return true;
+}
+
+bool NodeCoordinator::IsBeyondHeldGround(Player const* bot, WorldObject const* target)
+{
+    if (!bot || !target || !bot->InBattleground())
+        return false;
+
+    NodeBotOrders orders;
+    if (!GetOrders(bot, orders) || !orders.hasNode || !orders.leash)
+        return false;
+
+    return !target->IsWithinDist3d(orders.location.GetPositionX(), orders.location.GetPositionY(),
+        orders.location.GetPositionZ(), orders.pursueRange);
 }
 
 std::vector<std::string> NodeCoordinator::DescribeTeams(Player const* observer)
