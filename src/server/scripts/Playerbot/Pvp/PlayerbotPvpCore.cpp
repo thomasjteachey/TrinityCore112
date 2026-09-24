@@ -52,6 +52,7 @@
 #include "Totem.h"
 #include "Unit.h"
 #include "Util.h"
+#include "World.h"
 #include "WorldSession.h"
 
 #include <array>
@@ -77,7 +78,7 @@ bool IsSpellReady(Player const* player, uint32 spellId);
 bool MeetsCasterAuraStateRequirements(Player const* player, uint32 spellId);
 bool IsFriendlySupportTarget(Player const* player, Unit const* target);
 bool HasAuraFromSpellChain(Unit const* unit, uint32 baseSpellId);
-bool HasBreakableCrowdControl(Unit const* unit);
+bool HasBreakableCrowdControl(Player const* observer, Unit const* unit);
 uint32 CountNearbyEnemies(Player const* player, float maxDistance);
 SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player);
 SpellDecision SelectRacialSpell(Player const* player, Unit const* target, Unit const* allyTarget);
@@ -747,7 +748,7 @@ bool HasCastTimeSpellTargetingPlayer(Unit const* caster, Player const* target)
                 continue;
             if (!candidate->IsAlive() || !player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 continue;
-            if (HasBreakableCrowdControl(candidate))
+            if (HasBreakableCrowdControl(player, candidate))
                 continue;
             candidates.push_back(candidate);
         }
@@ -1417,7 +1418,7 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
         case RACE_ORC:
         {
             bool const wantsThroughput = player->IsInCombat() &&
-                ((target && HasHostileTarget(player, target) && !HasBreakableCrowdControl(target)) ||
+                ((target && HasHostileTarget(player, target) && !HasBreakableCrowdControl(player, target)) ||
                  (allyTarget && IsFriendlySupportTarget(player, allyTarget) && allyTarget->GetHealthPct() < 85.0f));
             uint32 const bloodFurySpellId = GetOrcBloodFurySpellId(player);
             if (wantsThroughput && IsSpellReady(player, bloodFurySpellId))
@@ -3808,7 +3809,7 @@ bool IsTargetInvalidByImmunity(Player const* player, Unit const* target);
         {
             if (!HasHostileTarget(player, candidate) || IsTargetInvalidByImmunity(player, candidate))
                 return false;
-            if (HasBreakableCrowdControl(candidate))
+            if (HasBreakableCrowdControl(player, candidate))
                 return false;
             if (!player->IsWithinLOSInMap(candidate))
                 return false;
@@ -3907,10 +3908,9 @@ bool IsTargetInvalidByImmunity(Player const* player, Unit const* target);
         return count;
     }
 
-    bool HasBreakableCrowdControl(Unit const* unit)
+    bool HasBreakableCrowdControl(Player const* observer, Unit const* unit)
     {
-        // Approximation list for common "break on damage" PvP CCs.
-        return unit->HasBreakableByDamageCrowdControlAura();
+        return playerbot::PvpCore::HasBreakableCrowdControlFor(observer, unit);
     }
 
     bool IsPolymorphed(Unit const* unit)
@@ -3993,7 +3993,7 @@ bool IsTargetEffectivelyImmune(Player const* player, Unit const* target)
 
 bool IsTargetInvalidByImmunity(Player const* player, Unit const* target)
 {
-    return IsTargetEffectivelyImmune(player, target) || HasBreakableCrowdControl(target);
+    return IsTargetEffectivelyImmune(player, target) || HasBreakableCrowdControl(player, target);
 }
 
 Unit const* SelectClosestEnemyTarget(Player const* player, bool requireReachable)
@@ -4391,7 +4391,7 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
                 return false;
             if (HasAnyAura(candidate, { 2893 })) // Abolish Poison
                 return false;
-            if (HasBreakableCrowdControl(candidate) || HasDotAura(candidate))
+            if (HasBreakableCrowdControl(player, candidate) || HasDotAura(candidate))
                 return false;
             return true;
         };
@@ -4801,7 +4801,7 @@ Unit const* SelectFriendlyCasterTarget(Player const* player, float maxDistance, 
                 continue;
             if (!candidate->HasAuraWithMechanic(mechanicMask))
                 continue;
-            if (HasBreakableCrowdControl(candidate))
+            if (HasBreakableCrowdControl(player, candidate))
                 continue;
             if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
                 continue;
@@ -5479,7 +5479,7 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
         : nullptr;
 
     target = activeTarget;
-    bool const targetBreakableCrowdControl = target && HasBreakableCrowdControl(target);
+    bool const targetBreakableCrowdControl = target && HasBreakableCrowdControl(player, target);
     bool const targetClose = player->IsWithinDistInMap(target, kReferenceHunterSwitchDistance);
     bool const enemyOnTop = HasHostileTarget(player, enemyOnTopTarget);
     bool const trapSetupThreat = HasHostileTarget(player, trapSetupTarget);
@@ -5574,9 +5574,9 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
         { "hunter call pet", "summon active stable pet when no living pet is present", kHunterCallPetSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, shouldRevivePet && IsSpellReady(player, kHunterRevivePetSpellId), 25.0f,
         { "hunter revive pet", "revive dead hunter pet instead of repeatedly calling it", kHunterRevivePetSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, isMarksmanshipHunter && enemyOnTop && enemyOnTopTarget->HasUnitState(UNIT_STATE_CASTING) && !HasBreakableCrowdControl(enemyOnTopTarget) && IsSpellReady(player, 19503), 23.0f,
+    AddDecisionCandidate(candidates, isMarksmanshipHunter && enemyOnTop && enemyOnTopTarget->HasUnitState(UNIT_STATE_CASTING) && !HasBreakableCrowdControl(player, enemyOnTopTarget) && IsSpellReady(player, 19503), 23.0f,
         { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, isMarksmanshipHunter && nearbyCastingTarget && !HasBreakableCrowdControl(nearbyCastingTarget) && IsSpellReady(player, 19503), 23.0f,
+    AddDecisionCandidate(candidates, isMarksmanshipHunter && nearbyCastingTarget && !HasBreakableCrowdControl(player, nearbyCastingTarget) && IsSpellReady(player, 19503), 23.0f,
         { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyCastingTarget ? nearbyCastingTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates,
         enemyOnTop && enemyOnTopTarget && player->IsWithinMeleeRange(enemyOnTopTarget) &&
@@ -5589,7 +5589,7 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
     AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetBreakableCrowdControl && usesSharedShotKit && activeTarget && activeTarget->GetPowerType() != POWER_MANA &&
         !HasHunterStingFromCaster(activeTarget, player->GetGUID()) && IsSpellReady(player, serpentStingSpellId), 19.75f,
         { "hunter serpent sting", "apply ranged dot pressure to non-mana kill target", serpentStingSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !activeTargetDeadZone && rogueTarget && !HasBreakableCrowdControl(rogueTarget) && !HasAuraFromSpellChain(rogueTarget, 25295) && IsSpellReady(player, serpentStingSpellId), 19.5f,
+    AddDecisionCandidate(candidates, !activeTargetDeadZone && rogueTarget && !HasBreakableCrowdControl(player, rogueTarget) && !HasAuraFromSpellChain(rogueTarget, 25295) && IsSpellReady(player, serpentStingSpellId), 19.5f,
         { "hunter serpent sting", "apply ranged dot pressure", serpentStingSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetBreakableCrowdControl && isMarksmanshipHunter && rangedMode && !enemyNear && IsSpellReady(player, 20904), 18.0f,
         { "hunter aimed shot", "long cast pressure from range", 20904, playerbot::PvpClassSpellContext::TargetMode::Enemy });
@@ -5604,9 +5604,9 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
         { "hunter multi-shot", "ranged burst pressure", 25294, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, isMarksmanshipHunter && rangedMode && !inMelee && IsSpellReady(player, 3045), 16.0f,
         { "hunter rapid fire", "burst cooldown while freecasting at range", 3045, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, !readyToBiteKillTarget && !activeTargetDeadZone && manaTarget && !HasBreakableCrowdControl(manaTarget) && manaTarget->GetPowerType() == POWER_MANA && !HasAuraFromSpellChain(manaTarget, 14280) && IsSpellReady(player, 14280), 15.0f,
+    AddDecisionCandidate(candidates, !readyToBiteKillTarget && !activeTargetDeadZone && manaTarget && !HasBreakableCrowdControl(player, manaTarget) && manaTarget->GetPowerType() == POWER_MANA && !HasAuraFromSpellChain(manaTarget, 14280) && IsSpellReady(player, 14280), 15.0f,
         { "hunter viper sting", "drain mana on mana users", 14280, playerbot::PvpClassSpellContext::TargetMode::Enemy, manaTarget ? manaTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, isMarksmanshipHunter && enemyOnTop && (!IsSpellReady(player, 5384) || !IsSpellReady(player, 14311)) && IsSpellReady(player, 19503) && !HasBreakableCrowdControl(enemyOnTopTarget), 14.0f,
+    AddDecisionCandidate(candidates, isMarksmanshipHunter && enemyOnTop && (!IsSpellReady(player, 5384) || !IsSpellReady(player, 14311)) && IsSpellReady(player, 19503) && !HasBreakableCrowdControl(player, enemyOnTopTarget), 14.0f,
         { "hunter scatter shot", "fallback peel when trap setup unavailable", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, enemyOnTop && closeMeleeThreat && (isSurvivalHunter || !IsSpellReady(player, 19503)) && (!IsSpellReady(player, 5384) || !preferredTrapReady) && IsSpellReady(player, 19263), 13.0f,
         { "hunter deterrence", "defensive cooldown under sustained melee pressure", 19263, playerbot::PvpClassSpellContext::TargetMode::Self });
@@ -5629,7 +5629,7 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
         { "hunter outmaneuver", "swap out to the pet while it holds a different enemy", 81297, playerbot::PvpClassSpellContext::TargetMode::Pet });
     AddDecisionCandidate(candidates, hasMongooseBite && enemyOnTop && enemyOnTopTarget && player->IsWithinMeleeRange(enemyOnTopTarget) && IsSpellReady(player, 81285), 24.0f,
         { "hunter mongoose bite", "bite the nearest attacker under melee pressure", 81285, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !hasMongooseBite && hunterMeleeTarget && !HasBreakableCrowdControl(hunterMeleeTarget) &&
+    AddDecisionCandidate(candidates, !hasMongooseBite && hunterMeleeTarget && !HasBreakableCrowdControl(player, hunterMeleeTarget) &&
         IsSpellReady(player, 2973), 20.5f,
         { "hunter raptor strike", "melee attack while an enemy is in melee range", 2973, playerbot::PvpClassSpellContext::TargetMode::Enemy, hunterMeleeTarget ? hunterMeleeTarget->GetGUID() : ObjectGuid::Empty });
     // The old unconditional fallback candidate here (no melee-range check,
@@ -5854,7 +5854,7 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
         SelectEnemyTargetInSpellRange(player, target, 81350) : nullptr;
     Unit const* devouringCurseTarget = (isUndeadPriest && IsSpellReady(player, kPriestDevouringCurseSpellId)) ?
         SelectEnemyTargetInSpellRange(player, target, kPriestDevouringCurseSpellId) : nullptr;
-    if (devouringCurseTarget && (HasBreakableCrowdControl(devouringCurseTarget) ||
+    if (devouringCurseTarget && (HasBreakableCrowdControl(player, devouringCurseTarget) ||
         HasAuraFromSpellChain(devouringCurseTarget, kPriestDevouringCurseSpellId)))
         devouringCurseTarget = nullptr;
     Unit const* wyrmsShadowTarget = (isUndeadPriest && IsSpellReady(player, kPriestWyrmsShadowSpellId)) ?
@@ -5953,7 +5953,7 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
         { "priest holy nova", "aoe pressure and splash healing in melee cluster", 27801, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, CountNearbyEnemies(player, 8.0f) >= 2 && IsSpellReady(player, 10890), 19.5f,
         { "priest psychic scream", "fear nearby enemies when surrounded", 10890, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, hasHostileTarget && target && shadowWordPainReady && !HasBreakableCrowdControl(target) && !HasAuraFromSpellChain(target, kPriestShadowWordPainSpellId), 19.0f,
+    AddDecisionCandidate(candidates, hasHostileTarget && target && shadowWordPainReady && !HasBreakableCrowdControl(player, target) && !HasAuraFromSpellChain(target, kPriestShadowWordPainSpellId), 19.0f,
         { "priest shadow word pain", "fallback pressure on non-breakable crowd-controlled or open targets", kPriestShadowWordPainSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, controlledTarget && !HasAuraFromSpellChain(controlledTarget, kPriestShadowWordPainSpellId), 18.0f,
         { "priest shadow word pain", "fallback pressure on non-breakable crowd-controlled targets", kPriestShadowWordPainSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy, controlledTarget ? controlledTarget->GetGUID() : ObjectGuid::Empty });
@@ -5961,12 +5961,12 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
         { "priest shoot wand", "fallback to wand pressure while low on mana", kWandShootSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, !isShadowPriest && IsSpellReady(player, priestHealSpellId) && player->HealthBelowPct(85), 17.0f,
         { priestHealName, "fallback self-healing while under pressure", priestHealSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, hasHostileTarget && target && !HasBreakableCrowdControl(target) && IsWandShootReadyForDecision(player), 8.0f,
+    AddDecisionCandidate(candidates, hasHostileTarget && target && !HasBreakableCrowdControl(player, target) && IsWandShootReadyForDecision(player), 8.0f,
         { "priest shoot wand", "default offensive fallback when no better priest action is available", kWandShootSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     // Below the wand on purpose: only a priest with no wand and nothing else
     // to do reaches it. Discipline had no nuke at all before Mana Burn (24),
     // and shadow none before Mind Flay (20) outside Mind Blast's cooldown.
-    AddDecisionCandidate(candidates, !isHolyPriest && hasHostileTarget && target && !HasBreakableCrowdControl(target) &&
+    AddDecisionCandidate(candidates, !isHolyPriest && hasHostileTarget && target && !HasBreakableCrowdControl(player, target) &&
         !(isShadowPriest && !shadowHealingFallback && IsSpellReady(player, 18807)) && IsSpellReady(player, 10934), 7.5f,
         { "priest smite", "filler nuke when no wand and nothing better is available", 10934, playerbot::PvpClassSpellContext::TargetMode::Enemy });
 
@@ -6452,7 +6452,7 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
         { "warlock shadow bolt", shadowBoltIsSpecFallback ? "nuke before the spec filler is trained" : "default ranged pressure", shadowBoltSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, isAfflictionWarlock && IsSpellReady(player, 11700), 18.0f,
         { "warlock drain life", "fallback affliction channel", 11700, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, HasHostileTarget(player, target) && target && !HasBreakableCrowdControl(target) && IsWandShootReadyForDecision(player), 8.0f,
+    AddDecisionCandidate(candidates, HasHostileTarget(player, target) && target && !HasBreakableCrowdControl(player, target) && IsWandShootReadyForDecision(player), 8.0f,
         { "warlock shoot wand", "default offensive fallback when no better warlock action is available", kWandShootSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy });
 
         return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
@@ -7859,7 +7859,7 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
                 IsFlagRunSpellCastable(player, kWingClip, meleeChaser, false))
                 return { "hunter wing clip", "flag carrier clips the chaser that caught it", kWingClip, TargetMode::Enemy, meleeChaser->GetGUID() };
 
-            if (meleeChaser && threats.nearestMeleeDistance <= 15.0f && !HasBreakableCrowdControl(meleeChaser) &&
+            if (meleeChaser && threats.nearestMeleeDistance <= 15.0f && !HasBreakableCrowdControl(player, meleeChaser) &&
                 IsFlagRunSpellCastable(player, kScatterShot, meleeChaser, false))
                 return { "hunter scatter shot", "flag carrier disorients a melee chaser", kScatterShot, TargetMode::Enemy, meleeChaser->GetGUID() };
 
@@ -7869,7 +7869,7 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
             if (SpellDecision const trap = SelectHunterFlagRunTrap(player, threats); trap.spellId)
                 return trap;
 
-            if (chaser && threats.nearestEnemyDistance <= 30.0f && !IsRootedOrSnared(chaser) && !HasBreakableCrowdControl(chaser) &&
+            if (chaser && threats.nearestEnemyDistance <= 30.0f && !IsRootedOrSnared(chaser) && !HasBreakableCrowdControl(player, chaser) &&
                 IsFlagRunSpellCastable(player, kConcussiveShot, chaser, false))
                 return { "hunter concussive shot", "flag carrier slows the nearest chaser", kConcussiveShot, TargetMode::Enemy, chaser->GetGUID() };
         }
@@ -7994,7 +7994,7 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
                 constexpr uint32 kDeathCoil = 6789;
                 Unit const* meleeChaser = threats.nearestMeleeEnemy;
                 if (meleeChaser && threats.nearestMeleeDistance <= 20.0f && player->GetHealthPct() < 60.0f &&
-                    !HasBreakableCrowdControl(meleeChaser) && IsFlagRunSpellCastable(player, kDeathCoil, meleeChaser, false))
+                    !HasBreakableCrowdControl(player, meleeChaser) && IsFlagRunSpellCastable(player, kDeathCoil, meleeChaser, false))
                     return { "warlock death coil", "flag carrier horrifies the chaser on it", kDeathCoil, TargetMode::Enemy, meleeChaser->GetGUID() };
                 break;
             }
@@ -8568,6 +8568,41 @@ bool PvpCore::CanHunterBestialWrathOutOfControl(Player const* player)
 bool PvpCore::IsEffectivelyImmuneTarget(Player const* player, Unit const* target)
 {
     return IsTargetEffectivelyImmune(player, target);
+}
+
+// The core's test, Unit::HasBreakableByDamageCrowdControlAura, only knows CCs
+// carrying AURA_INTERRUPT_FLAG_TAKE_DAMAGE. Fear, Howl of Terror, Psychic
+// Scream, Intimidating Shout and Scare Beast carry none on this realm: they
+// break through their damage-taken proc (AuraEffect::HandleBreakableCCAuraProc)
+// instead, so every bot read a fear as unbreakable and hit straight through it.
+// With Centurion.BreakableCC.FearOthersBreakInstantly on, the first point of
+// anybody else's damage ends the fear outright, so to every bot but its caster
+// a fear is as breakable as a Polymorph. The caster only rolls against
+// FearDamageAtCap and keeps fighting it the way it always has. Pets follow the
+// same rule in PetAI (FindFearOthersBreak), where a pet counts as its owner.
+bool PvpCore::HasBreakableCrowdControlFor(Player const* observer, Unit const* target)
+{
+    if (!target)
+        return false;
+
+    if (target->HasBreakableByDamageCrowdControlAura())
+        return true;
+
+    if (!observer || !sWorld->getBoolConfig(CONFIG_CENTURION_FEAR_OTHERS_BREAK_INSTANTLY))
+        return false;
+
+    for (AuraEffect const* fear : target->GetAuraEffectsByType(SPELL_AURA_MOD_FEAR))
+    {
+        if (fear->GetCasterGUID() == observer->GetGUID())
+            continue;
+
+        // A fear with no damage-taken proc never reaches the break rule at all.
+        SpellProcEntry const* procEntry = sSpellMgr->GetSpellProcEntry(fear->GetId());
+        if (procEntry && (procEntry->ProcFlags & TAKEN_HIT_PROC_FLAG_MASK))
+            return true;
+    }
+
+    return false;
 }
 
 bool PvpCore::IsDispelThrottleExempt(Player const* player, uint32 spellId)
@@ -9443,7 +9478,7 @@ PvpValues PvpCore::CollectValues(Player const* player)
             Unit const* fallbackTarget = resolveTargetByGuid(selectedTargetGuid);
             if (fallbackTarget)
             {
-                if (IsWandShootReadyForDecision(player) && !HasBreakableCrowdControl(fallbackTarget))
+                if (IsWandShootReadyForDecision(player) && !HasBreakableCrowdControl(player, fallbackTarget))
                 {
                     context.actionName = "fallback wand";
                     context.reason = "low mana fallback to wand pressure";

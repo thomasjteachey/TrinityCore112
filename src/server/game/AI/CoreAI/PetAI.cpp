@@ -33,6 +33,7 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "Util.h"
+#include "World.h"
 #include "WorldSession.h"
 
 namespace
@@ -119,7 +120,42 @@ namespace
         }
     }
 
-    // Mirrors Unit::HasBreakableByDamageCrowdControlAura - the same five aura
+    // A fear this pet's damage would end on the spot. Fear carries no
+    // AURA_INTERRUPT_FLAG_TAKE_DAMAGE here - it breaks through its damage-taken
+    // proc (AuraEffect::HandleBreakableCCAuraProc) - so the core's test below
+    // never sees it. Under Centurion.BreakableCC.FearOthersBreakInstantly that
+    // proc ends a fear outright on anybody's damage but its caster's, and a
+    // pet's damage counts as its owner's there. So for every pet but the
+    // caster's own, a fear is a trap: break off and leave it alone. The
+    // playerbots read fear the same way (PvpCore::HasBreakableCrowdControlFor).
+    AuraEffect const* FindFearOthersBreak(Unit const* pet, Unit const* victim)
+    {
+        if (!sWorld->getBoolConfig(CONFIG_CENTURION_FEAR_OTHERS_BREAK_INSTANTLY))
+            return nullptr;
+
+        ObjectGuid const masterGuid = pet->GetCharmerOrOwnerOrSelf()->GetGUID();
+        for (AuraEffect const* fear : victim->GetAuraEffectsByType(SPELL_AURA_MOD_FEAR))
+        {
+            if (fear->GetCasterGUID() == masterGuid)
+                continue;
+
+            // A fear with no damage-taken proc never reaches the break rule.
+            SpellProcEntry const* procEntry = sSpellMgr->GetSpellProcEntry(fear->GetId());
+            if (procEntry && (procEntry->ProcFlags & TAKEN_HIT_PROC_FLAG_MASK))
+                return fear;
+        }
+
+        return nullptr;
+    }
+
+    // Unit::HasBreakableByDamageCrowdControlAura, plus the fears above.
+    bool HasBreakableControlForPet(Unit const* pet, Unit const* victim, Unit* excludeCasterChannel)
+    {
+        return victim->HasBreakableByDamageCrowdControlAura(excludeCasterChannel) ||
+            FindFearOthersBreak(pet, victim) != nullptr;
+    }
+
+    // Mirrors HasBreakableControlForPet - the same five aura
     // types, the same "ignore my own channel" rule - but hands back the aura
     // that answered yes instead of a bare bool.
     //
@@ -152,6 +188,13 @@ namespace
                     typeOut = type;
                     return effect;
                 }
+
+        if (excludeCasterChannel)
+            if (AuraEffect const* fear = FindFearOthersBreak(excludeCasterChannel, victim))
+            {
+                typeOut = SPELL_AURA_MOD_FEAR;
+                return fear;
+            }
 
         return nullptr;
     }
@@ -334,7 +377,7 @@ void PetAI::UpdateAI(uint32 diff)
         Unit* victim = me->EnsureVictim();
         // is only necessary to stop casting, the pet must not exit combat
         if (!me->GetCurrentSpell(CURRENT_CHANNELED_SPELL) && // ignore channeled spells (Pin, Seduction)
-            victim->HasBreakableByDamageCrowdControlAura(me))
+            HasBreakableControlForPet(me, victim, me))
         {
             ObjectGuid victimGuid = victim->GetGUID();
             if (_lastCrowdControlledVictim != victimGuid)
@@ -601,7 +644,7 @@ void PetAI::_AttackStart(Unit* target)
     _diagnosticRefusedTarget.Clear();
     _diagnosticRefusalReason = nullptr;
 
-    if (target->HasBreakableByDamageCrowdControlAura(me) && me->GetCharmInfo()->IsCommandAttack())
+    if (HasBreakableControlForPet(me, target, me) && me->GetCharmInfo()->IsCommandAttack())
         _lastCrowdControlledVictim = target->GetGUID();
 
     // Only chase if not commanded to stay or if stay but commanded to attack
@@ -662,7 +705,7 @@ Unit* PetAI::SelectNextTarget(bool allowAutoSelect) const
 
     // Check pet attackers first so we don't drag a bunch of targets to the owner
     if (Unit* myAttacker = me->getAttackerForHelper())
-        if (!myAttacker->HasBreakableByDamageCrowdControlAura())
+        if (!HasBreakableControlForPet(me, myAttacker, nullptr))
             return myAttacker;
 
     // Not sure why we wouldn't have an owner but just in case...
@@ -671,7 +714,7 @@ Unit* PetAI::SelectNextTarget(bool allowAutoSelect) const
 
     // Check owner attackers
     if (Unit* ownerAttacker = me->GetCharmerOrOwner()->getAttackerForHelper())
-        if (!ownerAttacker->HasBreakableByDamageCrowdControlAura())
+        if (!HasBreakableControlForPet(me, ownerAttacker, nullptr))
             return ownerAttacker;
 
     // Check owner victim
@@ -883,7 +926,7 @@ bool PetAI::CanAttack(Unit* target, char const** refusalReason)
     }
 
     // CC - mobs under crowd control can be attacked if owner commanded
-    if (target->HasBreakableByDamageCrowdControlAura())
+    if (HasBreakableControlForPet(me, target, nullptr))
     {
         if (!me->GetCharmInfo()->IsCommandAttack())
             return refuse("the target has a damage-breakable control aura and you did not order the attack");

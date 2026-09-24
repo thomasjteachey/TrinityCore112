@@ -2370,7 +2370,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         Unit* target = autoRepeat ? autoRepeat->m_targets.GetUnitTarget() : nullptr;
         playerbot::HunterAutoShotRangeInfo rangeInfo;
         bool const legalTarget = autoRepeat && autoRepeat->GetSpellInfo() && autoRepeat->GetSpellInfo()->Id == 75 &&
-            target && target->IsAlive() && !target->HasBreakableByDamageCrowdControlAura() &&
+            target && target->IsAlive() && !playerbot::PvpCore::HasBreakableCrowdControlFor(player, target) &&
             playerbot::PvpCore::GetHunterAutoShotRange(player, target, rangeInfo) &&
             player->IsWithinLOSInMap(target) &&
             rangeInfo.exactDistance > rangeInfo.minRange + playerbot::PLAYERBOT_HUNTER_AUTOSHOT_MIN_SAFETY_MARGIN &&
@@ -3396,7 +3396,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         bool const inAutoShotBand = hasLos && exactDistance > safeShootMin && exactDistance <= maxAutoShotRange;
         bool const tooClose = exactDistance <= safeShootMin;
 
-        if (target->HasBreakableByDamageCrowdControlAura())
+        if (playerbot::PvpCore::HasBreakableCrowdControlFor(player, target))
         {
             clearPlantState();
             StopHunterAutoShotForBreakableCrowdControl(player, target, "kite-loop-breakable-cc");
@@ -3416,7 +3416,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
         auto stopFaceAndKeepAutoShot = [&]()
         {
-            if (target->HasBreakableByDamageCrowdControlAura())
+            if (playerbot::PvpCore::HasBreakableCrowdControlFor(player, target))
             {
                 StopHunterAutoShotForBreakableCrowdControl(player, target, "plant-suppressed-breakable-cc");
                 return;
@@ -4954,7 +4954,7 @@ namespace playerbot
             (!profile.primarilyRanged ||
              (profile.meleeFallbackAcceptable && player->IsWithinMeleeRange(target)));
         bool const isStealthedMeleeOpener = IsStealthedMeleeOpener(player);
-        bool const targetInBreakableCrowdControl = target->HasBreakableByDamageCrowdControlAura();
+        bool const targetInBreakableCrowdControl = playerbot::PvpCore::HasBreakableCrowdControlFor(player, target);
         bool const alreadyAttackingTarget = player->GetVictim() && player->GetVictim()->GetGUID() == target->GetGUID();
         bool const meleeAutoAttackActive = player->HasUnitState(UNIT_STATE_MELEE_ATTACKING);
         if (isStealthedMeleeOpener)

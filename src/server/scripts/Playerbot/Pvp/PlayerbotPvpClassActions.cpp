@@ -3359,7 +3359,7 @@ void CommandPetAttackTarget(Player* player, Unit* target)
     if (!player || !target || !target->IsAlive())
         return;
 
-    if (target->HasBreakableByDamageCrowdControlAura())
+    if (playerbot::PvpCore::HasBreakableCrowdControlFor(player, target))
     {
         StopHunterDamageOnBreakableCrowdControl(player, target, "hunter_pet_attack_suppressed_breakable_cc");
         return;
@@ -4658,7 +4658,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     }
 
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
-        target->HasBreakableByDamageCrowdControlAura() &&
+        playerbot::PvpCore::HasBreakableCrowdControlFor(player, target) &&
         SpellAppliesBreakableByDamageCrowdControl(spellInfo))
     {
         failureReason = "target_already_breakable_crowd_controlled";
@@ -4689,7 +4689,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             // is not already in its face. Issue that command before range/LOS
             // validation so an out-of-range pet begins closing immediately
             // instead of spending repeated decision ticks on failed casts.
-            if (target && target->HasBreakableByDamageCrowdControlAura())
+            if (target && playerbot::PvpCore::HasBreakableCrowdControlFor(player, target))
             {
                 StopHunterDamageOnBreakableCrowdControl(player, target, "hunter_pet_spell_suppressed_breakable_cc");
                 failureReason = "target_breakable_crowd_control";
@@ -4897,12 +4897,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             if (CanIssueFollowCommands(player))
                 IssueStealthOpenerMovement(player, target);
         }
-        else if (target && target->HasBreakableByDamageCrowdControlAura())
+        else if (target && playerbot::PvpCore::HasBreakableCrowdControlFor(player, target))
             StopHunterDamageOnBreakableCrowdControl(player, target, "hunter_owner_attack_suppressed_breakable_cc");
         else if (player->GetVictim() != target)
             player->Attack(target, false);
 
-        if (!target || !target->HasBreakableByDamageCrowdControlAura())
+        if (!target || !playerbot::PvpCore::HasBreakableCrowdControlFor(player, target))
             CommandPetAttackTarget(player, target);
 
         // Facing is resolved only after movement/range admission below. Doing
@@ -6300,7 +6300,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
             petAttackTarget = player->GetSelectedUnit();
 
         if (petAttackTarget && petAttackTarget->IsAlive() && player->IsValidAttackTarget(petAttackTarget) &&
-            !petAttackTarget->HasBreakableByDamageCrowdControlAura())
+            !playerbot::PvpCore::HasBreakableCrowdControlFor(player, petAttackTarget))
         {
             CommandPetAttackTarget(player, petAttackTarget);
         }

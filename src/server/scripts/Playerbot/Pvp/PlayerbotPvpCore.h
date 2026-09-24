@@ -300,6 +300,10 @@ public:
     static bool CanMageBlinkOutOfControl(Player const* player);
     static bool CanHunterBestialWrathOutOfControl(Player const* player);
     static bool IsEffectivelyImmuneTarget(Player const* player, Unit const* target);
+    // Whether damage from THIS bot would break crowd control on the target:
+    // the core's take-damage CCs, plus - under
+    // Centurion.BreakableCC.FearOthersBreakInstantly - any fear somebody else cast.
+    static bool HasBreakableCrowdControlFor(Player const* observer, Unit const* target);
     // True when this cast is allowed to ignore - and must not arm - the shared
     // playerbot dispel throttle. Only an enhancement shaman's Purge qualifies:
     // purging on every available global is the point of the spec.
