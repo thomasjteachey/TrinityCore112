@@ -4,6 +4,7 @@
 #   ./import.sh                                  # databases auth, world, characters
 #   AUTH_DB=cauth WORLD_DB=cworld CHAR_DB=cchars ./import.sh
 #   MYSQL="mysql -h 127.0.0.1 -u root -p" ./import.sh
+#   BOTS=0 ./import.sh                           # without the bot accounts and characters
 #
 # The default names match the *DatabaseInfo defaults in worldserver.conf.dist and
 # authserver.conf.dist. Needs MySQL 8.0 (the tables use utf8mb4_0900_ai_ci, which
@@ -46,9 +47,11 @@ echo "loading $AUTH_DB, $CHAR_DB and $WORLD_DB ($(ls world/*.sql | wc -l) world 
     echo "USE \`$AUTH_DB\`;"
     rename auth/auth_schema.sql
     cat auth/auth_data.sql
+    [[ ${BOTS:-1} == 0 ]] || cat auth/auth_bots.sql
     echo "USE \`$CHAR_DB\`;"
     rename characters/characters_schema.sql
     cat characters/characters_seed.sql
+    [[ ${BOTS:-1} == 0 ]] || cat characters/characters_bots.sql
     echo "USE \`$WORLD_DB\`;"
     rename world/_routines.sql
     for f in world/*.sql; do
