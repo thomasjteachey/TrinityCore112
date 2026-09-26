@@ -66,6 +66,8 @@ namespace
     // A party or raid carries one bounty, on its leader. See BountyCarrierFor.
     bool s_groupLeaderCarries = true;
     float s_goldPercentPerStack = 1.0f;
+    // The upside of carrying it. See XpMultiplier.
+    float s_xpPercentPerStack = 5.0f;
     // The flat cost of dying, owed with or without a bounty. See TakeDeathTax.
     float s_deathTaxPercent = 5.0f;
 
@@ -168,6 +170,8 @@ namespace
         s_fallbackMaxStacks = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.Bounty.MaxStacks", 50), 1, 255));
         s_goldPercentPerStack = std::clamp(
             sConfigMgr->GetFloatDefault("Centurion.Bounty.GoldPercentPerStack", 1.0f), 0.0f, 10.0f);
+        s_xpPercentPerStack = std::clamp(
+            sConfigMgr->GetFloatDefault("Centurion.Bounty.XpPercentPerStack", 5.0f), 0.0f, 100.0f);
         s_botLossMultiplier = std::clamp(
             sConfigMgr->GetFloatDefault("Centurion.Bounty.BotLossMultiplier", 2.0f), 1.0f, 10.0f);
         s_deathTaxPercent = std::clamp(
@@ -261,8 +265,8 @@ namespace
             sConfigMgr->GetIntDefault("Centurion.Bounty.GuardLifetimeSeconds", 180), 30, 3600));
 
         TC_LOG_INFO("playerbots.hardcore",
-            "Bounty config: enabled={} spell={} perKill={} goldPerStack={}% botMultiplier={} chest={}",
-            uint32(s_enabled), s_spellId, s_stacksPerKill, s_goldPercentPerStack,
+            "Bounty config: enabled={} spell={} perKill={} goldPerStack={}% xpPerStack={}% botMultiplier={} chest={}",
+            uint32(s_enabled), s_spellId, s_stacksPerKill, s_goldPercentPerStack, s_xpPercentPerStack,
             s_botLossMultiplier, s_chestEntry);
     }
 
@@ -314,6 +318,29 @@ namespace
         // bot" and refused a bounty for every bot kill on the realm, which is the
         // one case the whole feature exists for.
         return !player->pvpInfo.IsInFFAPvPAreaByMap;
+    }
+
+    // What notoriety pays while you carry it: XpPercentPerStack more experience
+    // per stack, on every award - kills, quests, exploration and the people you
+    // put down alike. 1.0 wherever it does not apply.
+    //
+    // Only where the bounty itself applies. The reward rides the risk, and in a
+    // dungeon, a battleground or the ring nobody is coming for you; without this
+    // the play is to run the stacks up outside, step through the nearest portal
+    // and farm at the top rate until the aura lapses.
+    //
+    // People only, as with the War Mode reward: bots level at the normal pace.
+    // A bot's bounty is a payout for whoever puts it down, not a boost for the
+    // fleet.
+    float XpMultiplier(Player const* player)
+    {
+        if (!s_enabled || s_xpPercentPerStack <= 0.0f || !player)
+            return 1.0f;
+
+        if (BarracksHardcore::IsPlayerbot(player) || !IsBountyContext(player))
+            return 1.0f;
+
+        return 1.0f + float(GetStacks(player)) * s_xpPercentPerStack / 100.0f;
     }
 
     void WriteRegistry(Player const* player, uint32 stacks, int32 durationMs)
@@ -1112,6 +1139,23 @@ public:
         }
     }
 
+    // Read at the award rather than carried on the aura: SPELL_AURA_MOD_XP_PCT
+    // only reaches creature kills (KillRewarder), and this is meant to cover
+    // every source. Multiplies, like every other experience hook here, so it
+    // composes with them in any order - and a zeroed award stays zeroed.
+    void OnGiveXP(Player* player, uint32& amount, Unit* /*victim*/) override
+    {
+        if (!amount)
+            return;
+
+        float const multiplier = XpMultiplier(player);
+        if (multiplier <= 1.0f)
+            return;
+
+        amount = uint32(std::min(double(amount) * double(multiplier),
+            double(std::numeric_limits<uint32>::max())));
+    }
+
     // The safety nets, for deaths the hardcore chest does not cover.
     void OnPlayerRepop(Player* player) override
     {
@@ -1312,6 +1356,10 @@ public:
             target->IsAlive() ? "yes" : "NO - blocks");
         handler->PSendSysMessage("  => bounty context: %s",
             IsBountyContext(target) ? "|cff20ff20yes|r" : "|cffff2020NO|r");
+
+        handler->PSendSysMessage("  experience: +%.0f%% (%.1f%% per stack)%s",
+            (XpMultiplier(target) - 1.0f) * 100.0f, s_xpPercentPerStack,
+            BarracksHardcore::IsPlayerbot(target) ? " - bots are never paid it" : "");
 
         // The guard gates.
         handler->PSendSysMessage("  guards at: %u stacks   count: %u   creature: %u   every %us for %us",

@@ -1085,6 +1085,15 @@ public:
             uint32 const levelXp = sObjectMgr->GetXPForLevel(player->GetLevel());
             uint32 const xp = uint32(float(levelXp) * bubbles / 20.0f);
 
+            // Settled BEFORE paying, not after. Notoriety raises every experience
+            // award by the stacks it carries (OnGiveXP in custom_bounty.cpp), and
+            // this payout is already priced off those same stacks through the
+            // tier - paying it with the aura still up would count them twice,
+            // and .notoriety bag would stop telling the truth. Everything above
+            // is worked out from the banked peak, so clearing first costs nothing.
+            if (s_clearStacksOnTurnIn)
+                Bounty::ClearBounty(player);
+
             if (money)
                 player->ModifyMoney(int64(money));
             if (xp)
@@ -1107,9 +1116,6 @@ public:
                 g_cooldownUntil[player->GetGUID().GetRawValue()] =
                     GameTime::GetGameTime() + time_t(s_cooldownSeconds);
             }
-
-            if (s_clearStacksOnTurnIn)
-                Bounty::ClearBounty(player);
 
             me->Whisper("Nobody will hear this from me.", LANG_UNIVERSAL, player);
 

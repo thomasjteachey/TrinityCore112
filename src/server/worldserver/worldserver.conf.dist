@@ -3888,6 +3888,18 @@ Centurion.Hardcore.PlayerKill.ExperienceBubbles = 2
 #                     stacks, the same hole the Battle Ring rule closes.
 #        Default:     1.0
 #
+#    Centurion.Bounty.XpPercentPerStack
+#        Description: Extra experience per stack while carrying notoriety, from
+#                     every source - kills, quests, exploration, other players. At
+#                     the default a full fifty stacks is +250%. Only where the
+#                     bounty itself applies, so nothing extra inside a dungeon,
+#                     raid, battleground, arena or the Battle Ring. People only;
+#                     playerbots level at the normal pace. A Notoriety contract's
+#                     payout is already priced off the stacks, so it is paid after
+#                     they are cleared (Centurion.Notoriety.ClearStacksOnTurnIn).
+#        Default:     5.0
+#                     0 - (no bonus)
+#
 #    Centurion.Bounty.BotLossMultiplier
 #        Description: A playerbot loses this many times what it drops - the rest is
 #                     destroyed rather than transferred. At 2.0 and a full bounty a
@@ -4006,6 +4018,7 @@ Centurion.Bounty.StacksPerKill = 1
 Centurion.Bounty.GroupLeaderCarries = 1
 Centurion.Bounty.MaxStacks = 50
 Centurion.Bounty.GoldPercentPerStack = 1.0
+Centurion.Bounty.XpPercentPerStack = 5.0
 Centurion.Bounty.BotLossMultiplier = 2.0
 
 #
