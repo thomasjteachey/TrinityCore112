@@ -99,7 +99,6 @@
 #include "QuestDef.h"
 #include "QuestPools.h"
 #include "Realm.h"
-#include "RealmTreasury.h"
 #include "ReputationMgr.h"
 #include "SkillDiscovery.h"
 #include "SmartEnum.h"
@@ -4936,7 +4935,6 @@ bool Player::ResetTalents(bool no_cost)
     if (!no_cost)
     {
         ModifyMoney(-(int32)cost);
-        RealmTreasury::Deposit(cost, RealmTreasury::Inflow::TalentReset);
         UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_TALENTS, cost);
         UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_NUMBER_OF_TALENT_RESETS, 1);
 
@@ -5938,7 +5936,6 @@ void Player::DurabilityRepairAll(bool takeCost, float discountMod, bool guildBan
 
         // Take money for repairs from the guild bank
         guild->HandleMemberWithdrawMoney(GetSession(), totalCost, true);
-        RealmTreasury::Deposit(totalCost, RealmTreasury::Inflow::Repair);
     }
     else
     {
@@ -5953,7 +5950,6 @@ void Player::DurabilityRepairAll(bool takeCost, float discountMod, bool guildBan
             return; // silent return, client should display error by itself and not send opcode.
 
         ModifyMoney(-int32(totalCost));
-        RealmTreasury::Deposit(totalCost, RealmTreasury::Inflow::Repair);
 
         // Payment for repair has already been taken, so just repair every item without taking cost.
         for (auto const& [item, cost] : itemRepairCostStore)
@@ -5979,7 +5975,6 @@ void Player::DurabilityRepair(uint16 pos, bool takeCost, float discountMod)
         }
 
         ModifyMoney(-int32(cost));
-        RealmTreasury::Deposit(cost, RealmTreasury::Inflow::Repair);
     }
 
     bool isBroken = item->IsBroken();
@@ -24358,7 +24353,6 @@ bool Player::ActivateTaxiPathTo(std::vector<uint32> const& nodes, Creature* npc 
         ASSERT(lastPathNode);
         m_taxi.ClearTaxiDestinations();
         ModifyMoney(-(int32)totalcost);
-        RealmTreasury::Deposit(totalcost, RealmTreasury::Inflow::Taxi);
         UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_TRAVELLING, totalcost);
         TeleportTo(lastPathNode->ContinentID, lastPathNode->Pos.X, lastPathNode->Pos.Y, lastPathNode->Pos.Z, GetOrientation());
         return false;
@@ -24366,7 +24360,6 @@ bool Player::ActivateTaxiPathTo(std::vector<uint32> const& nodes, Creature* npc 
     else
     {
         ModifyMoney(-(int32)firstcost);
-        RealmTreasury::Deposit(firstcost, RealmTreasury::Inflow::Taxi);
         UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_TRAVELLING, firstcost);
         GetSession()->SendActivateTaxiReply(ERR_TAXIOK);
         GetSession()->SendDoFlight(mount_display_id, sourcepath);
@@ -24539,8 +24532,6 @@ inline bool Player::_StoreOrEquipNewItem(uint32 vendorslot, uint32 item, uint8 c
     }
 
     ModifyMoney(-price);
-    if (price > 0)
-        RealmTreasury::Deposit(uint64(price), RealmTreasury::Inflow::Vendor);
 
     if (crItem->ExtendedCost)                            // case for new honor system
     {

@@ -71,7 +71,6 @@
 #include "RBAC.h"
 #include "Spell.h"
 #include "Random.h"
-#include "RealmTreasury.h"
 #include "SharedDefines.h"
 #include "SpellHistory.h"
 #include "SpellMgr.h"
@@ -652,31 +651,6 @@ namespace
             return false;
 
         return !playerbot::IsManagedRandomBot(player);
-    }
-
-    // Every copper the world hands a bot comes out of the realm treasury (see
-    // RealmTreasury.h): the fleet may only pay people back what people spent.
-    //
-    // Credited first and measured after, because OnMoneyChanged hooks scale
-    // bot loot on the way in - funding the unscaled figure would let the
-    // multiplier mint the difference. Whatever the pool cannot cover is taken
-    // straight back off with SetMoney, which runs no hooks. With the treasury
-    // switched off Withdraw funds everything and this is a plain ModifyMoney.
-    uint64 PayBotFromTreasury(Player* bot, uint64 copper, RealmTreasury::Outflow outflow)
-    {
-        if (!bot || !copper)
-            return 0;
-
-        uint64 const before = bot->GetMoney();
-        bot->ModifyMoney(int32(std::min<uint64>(copper, MAX_MONEY_AMOUNT)));
-        uint64 const gained = bot->GetMoney() > before ? bot->GetMoney() - before : 0;
-        if (!gained)
-            return 0;
-
-        uint64 const funded = RealmTreasury::Withdraw(gained, outflow);
-        if (funded < gained)
-            bot->SetMoney(uint32(bot->GetMoney() - (gained - funded)));
-        return funded;
     }
 
     bool HasRestAura(Player const* player)
@@ -2902,11 +2876,13 @@ namespace
 
     // A skinner that can take a piece of the listed game goes looking for one.
     //
-    // The list is every elite whose skin the economy wants - by default Un'Goro's
-    // devilsaurs, which wander a continent. The ordinary grind scan stops at the
+    // The list is not only dinosaurs, whatever the key is called: it is every
+    // elite whose skin the economy wants. Un'Goro's four devilsaurs wander a
+    // continent; the Barrens deviates are elite on a classic-data realm where
+    // Wrath left them normal. Either way the ordinary grind scan stops at the
     // grind radius and refuses elites, so it never so much as sees them, and the
-    // leather had simply stopped existing - not one Devilsaur Leather on the
-    // realm. This looks much further out
+    // mats had simply stopped existing - not one Devilsaur Leather on the realm,
+    // and three Deviate Scale. This looks much further out
     // (Playerbot.Pve.DevilsaurHunt.SeekYards) for a live one the bot could skin,
     // and hands back the nearest reachable one as its target. It runs on the grind
     // scan's own timer and only for bots that skin, so the wider sweep costs
@@ -5129,7 +5105,7 @@ namespace
             if (!sellable)
                 return;
 
-            PayBotFromTreasury(bot, VendorPayout(bot, proto, item->GetCount()), RealmTreasury::Outflow::BotVendorSale);
+            bot->ModifyMoney(int64(VendorPayout(bot, proto, item->GetCount())));
             bot->DestroyItem(bag, slot, true);
             ++soldCount;
         });
@@ -5803,18 +5779,13 @@ namespace
                                 nearMembers.push_back(member);
 
                     uint32 const share = std::max<uint32>(1, loot->gold / std::max<size_t>(1, nearMembers.size()));
-                    // A person sharing the kill is paid the ordinary way;
-                    // only bot shares come out of the treasury.
                     for (Player* member : nearMembers)
-                        if (IsHumanPlayer(member))
-                            member->ModifyMoney(int32(share));
-                        else
-                            PayBotFromTreasury(member, share, RealmTreasury::Outflow::BotLoot);
+                        member->ModifyMoney(int32(share));
                     if (nearMembers.empty())
-                        PayBotFromTreasury(bot, loot->gold, RealmTreasury::Outflow::BotLoot);
+                        bot->ModifyMoney(int32(loot->gold));
                 }
                 else
-                    PayBotFromTreasury(bot, loot->gold, RealmTreasury::Outflow::BotLoot);
+                    bot->ModifyMoney(int32(loot->gold));
 
                 loot->gold = 0;
                 loot->NotifyMoneyRemoved();
@@ -8371,6 +8342,14 @@ namespace
         float y = 0.0f;
         float z = 0.0f;
         uint32 zoneId = 0;
+        // The inhabited zone this ground is routed FROM, which is not always the
+        // zone it stands in. The Wailing Caverns bowl is the case that proves it:
+        // AreaTable 718 has no parent and names continent 43, because the instance's
+        // own zone id was reused for the outdoor entrance sunk into the Barrens. So
+        // every deviate cell reads zone 718, 718 is in no band of the classic chart,
+        // no bot is ever homed there, and a home-zone match rejected all 26 grounds
+        // while the devilsaurs - standing in Un'Goro, a real zone - routed fine.
+        uint32 routeZoneId = 0;
         uint8 level = 0;
     };
 
@@ -8451,6 +8430,45 @@ namespace
             if (band.zoneId == zoneId)
                 return &band;
         return nullptr;
+    }
+
+    // What a drifter is handed on landing in zoneId, in copper.
+    //
+    // A straight line by the midpoint of the zone's band, anchored to the table
+    // above rather than to level 1 and the cap: the lowest band on the realm (the
+    // starter zones, 1-10) pays exactly Drifters.TeleportGold and the highest
+    // (55-60) exactly Drifters.TeleportGold.Max, so the two config values mean
+    // what they say. Feralas at 40-50 lands about three quarters of the way up.
+    //
+    // A zone with no band - somewhere a person can stand that is not a levelling
+    // zone - pays the floor, which is what every landing paid before this scaled.
+    uint64 DrifterArrivalPayCopper(uint32 zoneId)
+    {
+        uint64 const low = uint64(g_PveConfig.drifterTeleportGold) * GOLD;
+        uint64 const high = uint64(g_PveConfig.drifterTeleportGoldMax) * GOLD;
+        if (high <= low)
+            return low;
+
+        static std::pair<float, float> const span = []
+        {
+            float lowest = 1000.0f;
+            float highest = 0.0f;
+            for (ClassicZoneBand const& band : kClassicZoneBands)
+            {
+                float const mid = (band.minLevel + band.maxLevel) * 0.5f;
+                lowest = std::min(lowest, mid);
+                highest = std::max(highest, mid);
+            }
+            return std::make_pair(lowest, highest);
+        }();
+
+        ClassicZoneBand const* band = FindClassicZoneBand(zoneId);
+        if (!band || span.second <= span.first)
+            return low;
+
+        float const mid = (band->minLevel + band->maxLevel) * 0.5f;
+        float const t = std::clamp((mid - span.first) / (span.second - span.first), 0.0f, 1.0f);
+        return low + uint64(double(high - low) * double(t) + 0.5);
     }
 
     // The cap of a starter zone. Zones topping out here are the ones a brand new
@@ -9536,7 +9554,7 @@ namespace
                 HuntSpot& spot = huntCells[key];
                 if (!spot.level)
                     spot = { uint16(data.mapId), data.spawnPoint.GetPositionX(), data.spawnPoint.GetPositionY(),
-                        data.spawnPoint.GetPositionZ(), /*zoneId*/ 0, /*level*/ 0 };
+                        data.spawnPoint.GetPositionZ(), /*zoneId*/ 0, /*routeZoneId*/ 0, /*level*/ 0 };
 
                 // The toughest of the cell, so the skinning and level tests a bot
                 // passes to be SENT here are the ones it meets on arrival.
@@ -9553,12 +9571,58 @@ namespace
                 if (IsForbiddenGrindZone(spot.zoneId))
                     continue;
 
+                // Whose ground is this, for a bot that lives somewhere? Usually its
+                // own zone - but a zone the classic chart never posts anybody to can
+                // never be anybody's home, so a home-zone match against it refuses
+                // every bot on the realm (see HuntSpot::routeZoneId). Adopt the zone
+                // of the nearest ordinary grind cluster instead: that is the spawn
+                // data's own answer to which inhabited zone this ground sits in, and
+                // it keeps the rule "routing chooses ground, it does not migrate".
+                spot.routeZoneId = spot.zoneId;
+                if (!FindClassicZoneBand(spot.zoneId))
+                {
+                    // Bounded, so a genuinely isolated ground is left alone rather
+                    // than glued to whatever distant zone happens to be closest.
+                    float bestDistanceSq = 500.0f * 500.0f;
+                    for (auto const& [clusterZoneId, clusters] : g_GrindSpotsByZone)
+                    {
+                        if (!FindClassicZoneBand(clusterZoneId))
+                            continue;
+
+                        for (GrindSpot const& cluster : clusters)
+                        {
+                            if (cluster.mapId != spot.mapId)
+                                continue;
+
+                            float const dx = cluster.x - spot.x;
+                            float const dy = cluster.y - spot.y;
+                            float const distanceSq = dx * dx + dy * dy;
+                            if (distanceSq < bestDistanceSq)
+                            {
+                                bestDistanceSq = distanceSq;
+                                spot.routeZoneId = clusterZoneId;
+                            }
+                        }
+                    }
+                }
+
                 g_HuntSpots.push_back(spot);
             }
         }
 
-        TC_LOG_INFO("playerbots.pve", "Hunting grounds: {} cell(s) from {} listed entry(ies).",
-            g_HuntSpots.size(), g_PveConfig.devilsaurHuntEntries.size());
+        uint32 adoptedGrounds = 0;
+        for (HuntSpot const& ground : g_HuntSpots)
+            if (ground.routeZoneId != ground.zoneId)
+                ++adoptedGrounds;
+
+        TC_LOG_INFO("playerbots.pve",
+            "Hunting grounds: {} cell(s) from {} listed entry(ies); {} routed from a neighbouring zone.",
+            g_HuntSpots.size(), g_PveConfig.devilsaurHuntEntries.size(), adoptedGrounds);
+
+        for (HuntSpot const& ground : g_HuntSpots)
+            if (ground.routeZoneId != ground.zoneId)
+                TC_LOG_DEBUG("playerbots.pve", "Hunting ground at ({:.0f}, {:.0f}) stands in zone {} and is routed from zone {}.",
+                    ground.x, ground.y, ground.zoneId, ground.routeZoneId);
 
         // Publish completion only after every derived table is populated. Readers
         // do not take g_GrindSpotLock, so setting this at function entry exposed a
@@ -10317,14 +10381,9 @@ namespace
     // ever put one near the game. The grind cache cannot do it either - it
     // refuses elites by design, which is the whole reason the carve-out exists.
     // So the carve-out shipped, ran for days and produced nothing: Devilsaur
-    // Leather stayed at zero on the house.
-    //
-    // Only grounds STANDING in the zone the bot belongs to. A ground routed from
-    // a neighbouring zone (the Wailing Caverns bowl reads zone 718, sunk into the
-    // Barrens) put a drifter homed in the Barrens somewhere the drifter sweep
-    // calls misplaced: it was sent back to zone 17, landed, routed straight back
-    // to the bowl, and landed again every few seconds - 19,906 landings in a day
-    // and a quarter of a million gold in arrival stipends.
+    // Leather stayed at zero on the house, and Deviate Scale at three units on
+    // the entire realm, every one of them skinned by a bot that was jumped rather
+    // than by one that went hunting.
     //
     // Confined to the zone the bot already belongs to, so this is a choice of
     // ground WITHIN the fleet's existing spread and never a licence to cross the
@@ -10363,7 +10422,7 @@ namespace
 
         std::vector<GrindSpot> grounds;
         for (HuntSpot const& spot : g_HuntSpots)
-            if (spot.zoneId == zoneId && HuntSpotSuitsBot(bot, spot))
+            if (spot.routeZoneId == zoneId && HuntSpotSuitsBot(bot, spot))
                 grounds.push_back(GrindSpot{ spot.mapId, spot.x, spot.y, spot.z, spot.zoneId });
 
         if (grounds.empty())
@@ -10788,7 +10847,6 @@ namespace
             if (cost > uint64(bot->GetMoney()))
                 return 0;
             bot->ModifyMoney(-int32(cost));
-            RealmTreasury::Deposit(cost, RealmTreasury::Inflow::Vendor);
         }
 
         for (uint8 index = 0; index < 2; ++index)
@@ -11961,10 +12019,10 @@ namespace
             uint64 const vendorFloor = VendorPriceFloor(proto, count);
             if (vendorRevenue && uint64(marketPrice) < vendorFloor)
             {
-                uint64 const paid = PayBotFromTreasury(bot, vendorRevenue, RealmTreasury::Outflow::BotVendorSale);
+                bot->ModifyMoney(int64(vendorRevenue));
                 TC_LOG_INFO("playerbots.pve",
                     "Bot {} vendored {} x{} for {} copper: market {} is under the {} floor.",
-                    bot->GetName(), proto->Name1, count, paid, marketPrice, vendorFloor);
+                    bot->GetName(), proto->Name1, count, vendorRevenue, marketPrice, vendorFloor);
                 bot->DestroyItem(item->GetBagSlot(), item->GetSlot(), true);
                 continue;
             }
@@ -12508,9 +12566,10 @@ namespace
                 break;
             }
 
-            // A drifter still owed its landing shops there, AFTER it has sold. A
-            // reborn drifter's fresh state asks for a catch-up shop at once, and
-            // taking it here first had the landing buy the same slots over again - the wins
+            // A drifter still owed its landing shops there, AFTER it has sold and
+            // been paid. A reborn drifter's fresh state asks for a catch-up shop at
+            // once, and taking it here first spent the purse before the stipend
+            // and then had the landing buy the same slots over again - the wins
             // are still in the mailbox, so the old kit is still "in" every slot.
             if (playerbot::IsDrifterLandingPending(*itr))
                 continue;
@@ -16328,10 +16387,7 @@ namespace
                 return;
 
             if (cost)
-            {
                 bot->ModifyMoney(-int64(cost));
-                RealmTreasury::Deposit(cost, RealmTreasury::Inflow::Vendor);
-            }
         }
 
         // A bear cannot hold a tankard. Dropping the form to drink is the same
@@ -18591,7 +18647,7 @@ namespace playerbot
             uint32 value = 0;
             bool inNumber = false;
             for (char ch : sConfigMgr->GetStringDefault("Playerbot.Pve.DevilsaurHunt.Entries",
-                "6498,6499,6500") + ",")
+                "6498,6499,6500,3630,3631,3632,3633,3634,3641") + ",")
             {
                 if (ch >= '0' && ch <= '9')
                 {
@@ -18694,6 +18750,8 @@ namespace playerbot
             sConfigMgr->GetFloatDefault("Playerbot.Pve.IdleProd.DropYards", 210.0f));
         g_PveConfig.idleProdRetrySeconds = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Playerbot.Pve.IdleProd.RetrySeconds", 120), 15, 3600));
+        g_PveConfig.drifterTeleportGold = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.TeleportGold", 10), 0, 10000));
+        g_PveConfig.drifterTeleportGoldMax = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.TeleportGold.Max", 20), 0, 10000));
         g_PveConfig.proactiveMaxLevelsAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveMaxLevelsAbove", 4), 0, 60));
         g_PveConfig.proactiveMaxLevelsBelow = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveMaxLevelsBelow", 4), 0, 60));
         g_PveConfig.proactiveBountyStacks = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveBountyStacks", 5), 0, 255));
@@ -19079,10 +19137,7 @@ namespace playerbot
                 return false;
 
             if (cost)
-            {
                 bot->ModifyMoney(-int64(cost));
-                RealmTreasury::Deposit(cost, RealmTreasury::Inflow::Vendor);
-            }
 
             // Said per bot. The drain's "Resupplied N bot(s)" line counts queue
             // entries, not purchases, and names nobody - which is why this sink
@@ -19109,7 +19164,7 @@ namespace playerbot
     // landing itself. Filled by the arrival check in UpdateDrifterAssignments and
     // drained by ProcessPendingDrifterArrivals, both on the world thread, so it
     // takes no lock. Keyed by bot: a drifter that lands again before its landing
-    // has run is owed the newer one, not two.
+    // has run is owed the newer one, not two stipends.
     struct PendingDrifterArrival
     {
         uint32 zoneId = 0;
@@ -19130,11 +19185,11 @@ namespace playerbot
 
     // The landing itself, for a drifter that is in the world and standing.
     //
-    // SELL, THEN SHOP - all of it at once, where it stands. A
+    // SELL, THEN GET PAID, THEN SHOP - all of it at once, where it stands. A
     // drifter lands straight out of a rebirth, with the gear of the life it just
     // left stripped into its bags, which is when its bags are at their fullest;
     // and the auction pass will not buy for a bot with no room to take the win
-    // home. Queueing a sweep behind the landing was not enough:
+    // home. Paying first and queueing a sweep behind the stipend was not enough:
     // the sweep ran on whatever the bags held at that instant, and was simply
     // dropped if the bot was dead or between maps when its turn came. Orhild
     // landed in the Hinterlands with 258 gold, bought nothing, and walked round
@@ -19142,8 +19197,8 @@ namespace playerbot
     //
     // So the merchant's pass runs first, with no merchant - greys, spare whites,
     // the drink it will never touch - and the house takes whatever the house
-    // wants. Then rations for the level it has just become, and only then the
-    // shopping, with room in the bags. Both
+    // wants. Then the stipend, then rations for the level it has just become, and
+    // only then the shopping, with room in the bags and money in the purse. Both
     // auction runs are forced into their catch-up form: a landing is the one
     // moment the whole kit is wrong at once.
     void RunDrifterArrival(Player* bot, uint32 landedZoneId)
@@ -19166,12 +19221,17 @@ namespace playerbot
         uint32 const junkSold = SellVendorJunk(bot);
         uint64 const junkCopper = bot->GetMoney() > purseBeforeSale ? bot->GetMoney() - purseBeforeSale : 0;
 
+        // 2. Get paid, by the band of where it landed - see DrifterArrivalPayCopper.
+        uint64 const pay = DrifterArrivalPayCopper(landedZoneId);
+        if (pay)
+            bot->ModifyMoney(int64(pay));
+
         // Rations for the level it has just become. Whatever it was carrying is
         // the wrong tier now, and a bot that cannot eat between fights spends the
         // rest of its life at a fraction of its health.
         BuyTravelRations(bot);
 
-        // 2. Shop.
+        // 3. Shop.
         uint64 const purseAtShop = bot->GetMoney();
         uint32 const freeSlotsAtShop = CountFreeBagSlots(bot);
         uint32 bought = 0;
@@ -19206,8 +19266,9 @@ namespace playerbot
             : shopped ? "shopped" : "could not shop";
         TC_LOG_INFO("playerbots.pve",
             "Drifter {} landed in zone {} at level {}: sold {} junk for {} copper, listed {} on the house, "
-            "then {} with {:.2f}g and {} free bag slot(s) - bought {}.",
-            bot->GetName(), landedZoneId, uint32(bot->GetLevel()), junkSold, junkCopper, listed, shopOutcome, double(purseAtShop) / double(GOLD), freeSlotsAtShop, bought);
+            "was paid {:.2f}g, then {} with {:.2f}g and {} free bag slot(s) - bought {}.",
+            bot->GetName(), landedZoneId, uint32(bot->GetLevel()), junkSold, junkCopper, listed,
+            double(pay) / double(GOLD), shopOutcome, double(purseAtShop) / double(GOLD), freeSlotsAtShop, bought);
     }
 
     // Up to two landings per world pass, out of the SAME budget as the ordinary
@@ -19409,8 +19470,8 @@ namespace playerbot
         // out of their zone's band - and the release loop below erases every
         // drifter whose person is not in the list that survives here. So with one
         // flagged player, each of those ordinary gaps would hand the whole fleet
-        // to everybody else - teleported and band-reset - and then take it back
-        // a few seconds later and do it again. The fleet
+        // to everybody else - teleported, band-reset and paid an arrival stipend
+        // - and then take it back a few seconds later and pay again. The fleet
         // would spend its life being re-drafted. When the flagged set has merely
         // gone quiet, the last decision is held instead.
         static uint32 s_warModeSeenMs = 0;
@@ -19758,14 +19819,16 @@ namespace playerbot
         }
 
         // Landed and re-levelled. What a landing is owed - a sale where it stands,
-        // then a shopping trip, in that order - is RunDrifterArrival's
+        // its stipend, then a shopping trip, in that order - is RunDrifterArrival's
         // business, two bots a world pass (ProcessPendingDrifterArrivals). The
         // sweep waits for arrival on purpose, so the bot shops for the character
         // it is becoming rather than the one it left.
         for (auto const& [botGuid, landedZoneId] : arrived)
             g_PendingDrifterArrivals[botGuid] = { landedZoneId, nowMs };
         if (!arrived.empty())
-            TC_LOG_INFO("playerbots.pve", "{} drifters arrived; each will sell, then shop.", uint32(arrived.size()));
+            TC_LOG_INFO("playerbots.pve", "{} drifters arrived; each will sell, collect its stipend ({}g-{}g by zone band), then shop.",
+                uint32(arrived.size()), g_PveConfig.drifterTeleportGold,
+                std::max(g_PveConfig.drifterTeleportGold, g_PveConfig.drifterTeleportGoldMax));
     }
 
     void PveManager::OnWorldUpdate(uint32 /*diffMs*/)

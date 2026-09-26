@@ -341,19 +341,8 @@ void BattlegroundBFG::NodeOccupied(uint8 node)
     ApplyPhaseMask();
 
     // Ensure spirit guide always matches current owner after node control changes.
-    // It stands where GetClosestGraveyard resurrects people - the node's
-    // WorldSafeLocs row - so moving a graveyard in the DBC moves both at once.
     DelCreature(node);
-    float x = GILNEAS_BG_SpiritGuidePos[node][0];
-    float y = GILNEAS_BG_SpiritGuidePos[node][1];
-    float z = GILNEAS_BG_SpiritGuidePos[node][2];
-    if (WorldSafeLocsEntry const* graveyard = sWorldSafeLocsStore.LookupEntry(GILNEAS_BG_GraveyardIds[node]))
-    {
-        x = graveyard->Loc.X;
-        y = graveyard->Loc.Y;
-        z = graveyard->Loc.Z;
-    }
-    AddSpiritGuide(node, x, y, z, GILNEAS_BG_SpiritGuidePos[node][3], _capturePointInfo[node]._ownerTeamId);
+    AddSpiritGuide(node, GILNEAS_BG_SpiritGuidePos[node][0], GILNEAS_BG_SpiritGuidePos[node][1], GILNEAS_BG_SpiritGuidePos[node][2], GILNEAS_BG_SpiritGuidePos[node][3], _capturePointInfo[node]._ownerTeamId);
 
     ++_controlledPoints[_capturePointInfo[node]._ownerTeamId];
     // if (_controlledPoints[_capturePointInfo[node]._ownerTeamId] >= 5)

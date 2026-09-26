@@ -27,7 +27,6 @@
 
 #include "CombatManager.h"
 #include "Configuration/Config.h"
-#include "DatabaseEnv.h"
 #include "Duration.h"
 #include "GameTime.h"
 #include "Group.h"
@@ -35,7 +34,6 @@
 #include "ObjectAccessor.h"
 #include "Chat.h"
 #include "ObjectMgr.h"
-#include "RealmTreasury.h"
 #include "RBAC.h"
 #include "WorldSession.h"
 #include "Creature.h"
@@ -68,25 +66,8 @@ namespace
     // A party or raid carries one bounty, on its leader. See BountyCarrierFor.
     bool s_groupLeaderCarries = true;
     float s_goldPercentPerStack = 1.0f;
-    // The cost of dying, owed with or without a bounty. See TakeDeathTax.
+    // The flat cost of dying, owed with or without a bounty. See TakeDeathTax.
     float s_deathTaxPercent = 5.0f;
-
-    // A PERSON's death tax as a flat sum rather than a share of the purse.
-    //
-    // A percentage is dodged by carrying nothing: mail the gold to an alt, walk
-    // around with two, and dying costs a tenth of a gold. A flat sum cannot be
-    // dodged that way, and what the purse cannot cover becomes a debt that
-    // follows the character and eats half of whatever it earns next - mail and
-    // trades included, so parking the gold on an alt only defers the bill.
-    //
-    // Scaled by the SQUARE of the character's level against the cap, so a
-    // level 10 pays pocket change and only a max-level death costs the full
-    // figure. Zero switches back to the percentage above.
-    float s_deathTaxGoldAtMaxLevel = 0.0f;
-    float s_deathDebtGarnishPercent = 50.0f;
-    // The debt stops growing at this many deaths' worth, so a broke character
-    // who keeps dying is set back, not buried.
-    uint32 s_deathDebtMaxDeaths = 5;
 
     // And the bot version of it, which is progressive rather than flat.
     //
@@ -165,10 +146,6 @@ namespace
     std::mutex g_lock;
     std::unordered_map<uint64, Record> g_stacks;
     std::unordered_map<uint64, Debt> g_debts;
-    // What a person still owes from dying broke, by guid counter. Only people
-    // who owe something have an entry, loaded at login and written through to
-    // character_death_debt on every change.
-    std::unordered_map<uint32, uint64> g_deathDebt;
     // Guards summoned after each victim, so they can be dismissed the moment
     // the bounty is settled rather than loitering out their timer.
     std::unordered_map<uint64, std::vector<ObjectGuid>> g_guards;
@@ -195,12 +172,6 @@ namespace
             sConfigMgr->GetFloatDefault("Centurion.Bounty.BotLossMultiplier", 2.0f), 1.0f, 10.0f);
         s_deathTaxPercent = std::clamp(
             sConfigMgr->GetFloatDefault("Centurion.Hardcore.DeathGoldLossPercent", 5.0f), 0.0f, 100.0f);
-        s_deathTaxGoldAtMaxLevel = std::clamp(
-            sConfigMgr->GetFloatDefault("Centurion.Hardcore.DeathTaxGoldAtMaxLevel", 0.0f), 0.0f, 10000.0f);
-        s_deathDebtGarnishPercent = std::clamp(
-            sConfigMgr->GetFloatDefault("Centurion.Hardcore.DeathDebt.GarnishPercent", 50.0f), 1.0f, 100.0f);
-        s_deathDebtMaxDeaths = uint32(std::clamp(
-            sConfigMgr->GetIntDefault("Centurion.Hardcore.DeathDebt.MaxDeaths", 5), 1, 100));
 
         // "upToGold:percent" pairs, cheapest bracket first. An upTo of 0 means
         // "and everything above", and must be last; without one the purse above
@@ -689,92 +660,17 @@ namespace
         return std::min(taken, money);
     }
 
-    uint64 FlatDeathTaxCopper(Player const* victim)
+    uint32 TakeDeathTax(Player* victim)
     {
-        uint32 const cap = std::max<uint32>(1, sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL));
-        double const share = std::min(1.0, double(victim->GetLevel()) / double(cap));
-        return uint64(double(s_deathTaxGoldAtMaxLevel) * 10000.0 * share * share);
-    }
-
-    uint64 GetDeathDebt(Player const* player)
-    {
-        std::lock_guard<std::mutex> guard(g_lock);
-        auto const itr = g_deathDebt.find(player->GetGUID().GetCounter());
-        return itr == g_deathDebt.end() ? 0 : itr->second;
-    }
-
-    // Caller holds nothing; writes the in-memory figure and the row together.
-    void SetDeathDebt(Player const* player, uint64 copper)
-    {
-        uint32 const guid = player->GetGUID().GetCounter();
-        {
-            std::lock_guard<std::mutex> guard(g_lock);
-            if (copper)
-                g_deathDebt[guid] = copper;
-            else
-                g_deathDebt.erase(guid);
-        }
-
-        if (copper)
-            CharacterDatabase.PExecute("REPLACE INTO character_death_debt (guid, copper) VALUES ({}, {})", guid, copper);
-        else
-            CharacterDatabase.PExecute("DELETE FROM character_death_debt WHERE guid = {}", guid);
-    }
-
-    // A person's flat death tax. Whatever the purse cannot cover is added to
-    // the debt, which stops growing at MaxDeaths deaths' worth. Returns what was
-    // actually taken; *debtAdded is what went on the tab.
-    uint32 TakeFlatDeathTax(Player* victim, uint64* debtAdded)
-    {
-        uint64 const owed = FlatDeathTaxCopper(victim);
-        if (!owed)
-            return 0;
-
-        uint64 const money = victim->GetMoney();
-        uint32 const paid = uint32(std::min(money, owed));
-        if (paid)
-        {
-            victim->ModifyMoney(-int64(paid));
-            RealmTreasury::Deposit(paid, RealmTreasury::Inflow::DeathTax);
-        }
-
-        uint64 added = 0;
-        if (uint64 const shortfall = owed - paid)
-        {
-            uint64 const debt = GetDeathDebt(victim);
-            uint64 const ceiling = owed * s_deathDebtMaxDeaths;
-            uint64 const newDebt = std::max(debt, std::min(ceiling, debt + shortfall));
-            added = newDebt - debt;
-            if (added)
-                SetDeathDebt(victim, newDebt);
-        }
-
-        if (debtAdded)
-            *debtAdded = added;
-
-        TC_LOG_INFO("playerbots.hardcore",
-            "Death tax: {} (level {}) owed {}c flat, paid {}c, {}c added to a debt now at {}c.",
-            victim->GetName(), victim->GetLevel(), owed, paid, added, GetDeathDebt(victim));
-        return paid;
-    }
-
-    uint32 TakeDeathTax(Player* victim, uint64* debtAdded)
-    {
-        if (debtAdded)
-            *debtAdded = 0;
-
         if (!victim)
             return 0;
-
-        // A bot pays the progressive schedule; a person pays the flat rate.
-        bool const bot = BarracksHardcore::IsPlayerbot(victim);
-        if (!bot && s_deathTaxGoldAtMaxLevel > 0.0f)
-            return TakeFlatDeathTax(victim, debtAdded);
 
         uint64 const money = victim->GetMoney();
         if (!money)
             return 0;
 
+        // A bot pays the progressive schedule; a person pays the flat rate.
+        bool const bot = BarracksHardcore::IsPlayerbot(victim);
         bool const progressive = bot && !s_botTaxBrackets.empty();
         if (!progressive && s_deathTaxPercent <= 0.0f)
             return 0;
@@ -788,7 +684,6 @@ namespace
             return 0;
 
         victim->ModifyMoney(-int64(taxed));
-        RealmTreasury::Deposit(taxed, RealmTreasury::Inflow::DeathTax);
 
         TC_LOG_INFO("playerbots.hardcore",
             "Death tax: {} lost {}c of {}c ({:.1f}% effective, {}) on death.",
@@ -846,57 +741,18 @@ namespace
     // around. Reporting one total for both would be a lie about where the money
     // went, and a player who checks their bags against a single number will read
     // the difference as a bug.
-    // Every copper a person in debt receives - loot, quests, merchants, the
-    // auction house, mail, trades - pays GarnishPercent of itself toward the
-    // debt first. Mail and trades are included on purpose: they are how gold
-    // gets parked on an alt, and a debt an alt could pay off tax-free would not
-    // be a debt.
-    void GarnishForDeathDebt(Player* player, int32& amount)
-    {
-        if (amount <= 0 || !player)
-            return;
-
-        uint64 const debt = GetDeathDebt(player);
-        if (!debt)
-            return;
-
-        uint64 const share = std::max<uint64>(1, uint64(double(amount) * double(s_deathDebtGarnishPercent) / 100.0));
-        uint64 const taken = std::min({ share, debt, uint64(amount) });
-        amount -= int32(taken);
-        uint64 const left = debt - taken;
-        SetDeathDebt(player, left);
-        RealmTreasury::Deposit(taken, RealmTreasury::Inflow::DeathDebt);
-
-        if (WorldSession* session = player->GetSession())
-        {
-            ChatHandler handler(session);
-            if (left)
-                handler.PSendSysMessage("|cffffa500%s went to your death debt (%s left).|r",
-                    BarracksHardcore::FormatMoney(uint32(taken)).c_str(),
-                    BarracksHardcore::FormatMoney(uint32(std::min<uint64>(left, MAX_MONEY_AMOUNT))).c_str());
-            else
-                handler.PSendSysMessage("|cff20ff20%s went to your death debt. It is paid off.|r",
-                    BarracksHardcore::FormatMoney(uint32(taken)).c_str());
-        }
-    }
-
-    void ReportDeathCost(Player* victim, uint32 taxed, uint32 toChest, uint64 debtAdded)
+    void ReportDeathCost(Player* victim, uint32 taxed, uint32 toChest)
     {
         if (!victim || !victim->GetSession() || BarracksHardcore::IsPlayerbot(victim))
             return;
 
-        if (!taxed && !toChest && !debtAdded)
+        if (!taxed && !toChest)
             return;
 
         ChatHandler handler(victim->GetSession());
         if (taxed)
             handler.PSendSysMessage("|cffff2020Dying cost you %s.|r",
                 BarracksHardcore::FormatMoney(taxed).c_str());
-        if (debtAdded)
-            handler.PSendSysMessage("|cffff2020You could not pay %s of it. You now owe %s; %u%% of all gold you receive goes to paying it off.|r",
-                BarracksHardcore::FormatMoney(uint32(debtAdded)).c_str(),
-                BarracksHardcore::FormatMoney(uint32(std::min<uint64>(GetDeathDebt(victim), MAX_MONEY_AMOUNT))).c_str(),
-                uint32(s_deathDebtGarnishPercent + 0.5f));
         if (toChest)
             handler.PSendSysMessage("|cffff2020A further %s of yours is in the cache on your corpse. Somebody else can take it.|r",
                 BarracksHardcore::FormatMoney(toChest).c_str());
@@ -1229,10 +1085,9 @@ public:
         // cost a purse either.
         if (IsBountyContext(victim))
         {
-            uint64 debtAdded = 0;
-            uint32 const taxed = TakeDeathTax(victim, &debtAdded);
+            uint32 const taxed = TakeDeathTax(victim);
             uint32 const toChest = RecordDeathDebt(victim);
-            ReportDeathCost(victim, taxed, toChest, debtAdded);
+            ReportDeathCost(victim, taxed, toChest);
         }
 
         // Whatever the zone rules said about the debt, the guards were sent for
@@ -1278,8 +1133,6 @@ public:
         std::lock_guard<std::mutex> guard(g_lock);
         g_stacks.erase(player->GetGUID().GetRawValue());
         g_debts.erase(player->GetGUID().GetRawValue());
-        // The row already holds the death debt; forget the cached copy.
-        g_deathDebt.erase(player->GetGUID().GetCounter());
         // The guards themselves are left to their timed despawn: the player is
         // gone, so there is nothing to resolve them against here.
         g_guards.erase(player->GetGUID().GetRawValue());
@@ -1288,36 +1141,8 @@ public:
     // A bounty survives a logout in the aura table, so the registry has to be
     // told about it again on the way back in - otherwise the player would see
     // the stacks and the bots would not.
-    void OnMoneyChanged(Player* player, int32& amount) override
-    {
-        GarnishForDeathDebt(player, amount);
-    }
-
     void OnLogin(Player* player, bool /*firstLogin*/) override
     {
-        // The death debt is read whether or not the bounty is switched on, so
-        // turning the bounty off never forgives anybody. Bots never owe.
-        if (player && !BarracksHardcore::IsPlayerbot(player))
-        {
-            if (QueryResult result = CharacterDatabase.PQuery(
-                "SELECT copper FROM character_death_debt WHERE guid = {}", player->GetGUID().GetCounter()))
-            {
-                uint64 const copper = result->Fetch()[0].GetUInt64();
-                if (copper)
-                {
-                    {
-                        std::lock_guard<std::mutex> guard(g_lock);
-                        g_deathDebt[player->GetGUID().GetCounter()] = copper;
-                    }
-
-                    ChatHandler(player->GetSession()).PSendSysMessage(
-                        "|cffff2020You owe %s from dying. %u%% of all gold you receive goes to paying it off.|r",
-                        BarracksHardcore::FormatMoney(uint32(std::min<uint64>(copper, MAX_MONEY_AMOUNT))).c_str(),
-                        uint32(s_deathDebtGarnishPercent + 0.5f));
-                }
-            }
-        }
-
         if (!s_enabled || !s_spellId || !player)
             return;
 
@@ -1334,14 +1159,6 @@ public:
     void OnConfigLoad(bool /*reload*/) override
     {
         LoadBountyConfig();
-
-        // Unconditional: OnLogin reads it for every person, and a missing
-        // table is fatal rather than empty.
-        CharacterDatabase.DirectExecute(
-            "CREATE TABLE IF NOT EXISTS character_death_debt ("
-            "guid INT UNSIGNED NOT NULL PRIMARY KEY,"
-            "copper BIGINT UNSIGNED NOT NULL DEFAULT 0"
-            ") ENGINE=InnoDB");
     }
 };
 

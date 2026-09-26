@@ -4030,62 +4030,6 @@ Centurion.Bounty.BotLossMultiplier = 2.0
 Centurion.Hardcore.DeathGoldLossPercent = 5.0
 
 #
-#    Centurion.Hardcore.DeathTaxGoldAtMaxLevel
-#        Description: A PERSON's death tax as a flat sum instead of the percentage
-#                     above, which is ignored for people while this is set (bots
-#                     keep BotDeathTaxBrackets). A percentage is dodged by carrying
-#                     nothing - mail the gold to an alt and dying costs pennies.
-#                     Scaled by the square of level / level cap, so a level 30
-#                     pays a quarter of it and a level 10 about a thirtieth.
-#                     Same places as the percentage: never in a battleground,
-#                     arena, the Battle Ring, a dungeon or raid, or for a GM.
-#                     The tax is paid into the realm treasury (below).
-#        Default:     0 (use DeathGoldLossPercent)
-#
-
-Centurion.Hardcore.DeathTaxGoldAtMaxLevel = 0
-
-#
-#    Centurion.Hardcore.DeathDebt.GarnishPercent
-#    Centurion.Hardcore.DeathDebt.MaxDeaths
-#        Description: What the purse cannot cover of the flat tax becomes a debt
-#                     that follows the character (character_death_debt). Until it
-#                     is paid, GarnishPercent of every copper the character
-#                     receives - loot, quests, merchants, the auction house, mail
-#                     and trades alike - goes to it first. The debt stops growing
-#                     at MaxDeaths deaths' worth of the tax.
-#        Default:     50 / 5
-#
-
-Centurion.Hardcore.DeathDebt.GarnishPercent = 50
-Centurion.Hardcore.DeathDebt.MaxDeaths = 5
-
-#
-#    Centurion.Treasury.Enable
-#    Centurion.Treasury.RefillPercent
-#    Centurion.Treasury.LedgerMinutes
-#        Description: Playerbots stop minting gold. Everything the world pays a
-#                     bot - merchant sales, coin off corpses, the drifter stipend -
-#                     is withdrawn from one realm-wide pool (realm_treasury), and
-#                     a bot is simply not paid when the pool is dry.
-#                     The pool is filled only by gold paid TO the world, by people
-#                     and bots alike: repairs, trainers, merchants, flight
-#                     masters, talent resets, the auction house cut, the death tax
-#                     and death-debt payments. RefillPercent of each payment lands
-#                     in the pool and the rest is destroyed, so the loop drains
-#                     slowly instead of circulating forever.
-#                     Every LedgerMinutes a "Realm treasury:" line in Server.log
-#                     says what came in by source, what went out, what was
-#                     destroyed, and what bots asked for that the pool could not
-#                     pay.
-#        Default:     0 (bots mint as before) / 50 / 10
-#
-
-Centurion.Treasury.Enable = 0
-Centurion.Treasury.RefillPercent = 50
-Centurion.Treasury.LedgerMinutes = 10
-
-#
 #    Centurion.Hardcore.BotDeathTaxBrackets
 #        Description: The same tax for BOTS, progressive instead of flat.
 #
