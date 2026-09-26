@@ -1,4 +1,9 @@
 dbc/*.dbc          binary
 client/*.dll       binary
+patches/*.zip      binary
+patches/*.zip.part[0-9][0-9] binary
+patches/*.version  binary
+patches/*.md5      text eol=lf
+patches/join.sh    text eol=lf
 sql/**/*.sql       text eol=lf -diff linguist-generated
 sql/import.sh      text eol=lf

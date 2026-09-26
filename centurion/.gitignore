@@ -1,2 +1,7 @@
 # The repository root ignores build*/ (CMake output); the launcher's installer art lives in one.
 !/launcher/build/
+
+# What patches/join.sh rebuilds from the .partNN pieces. Each is over GitHub's 100 MB limit.
+/patches/patch-Y.zip
+/patches/patch-enUS-6.zip
+/patches/patch-enUS-A.zip
