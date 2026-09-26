@@ -283,6 +283,17 @@ The zips are byte-identical to what the live download server served on 2026-09-2
 `join.sh` or `join.ps1` puts them back together. The joined zips are git-ignored so
 they cannot be committed by accident.
 
+**Addons.** `addons.zip` is the addon pack every player gets, because the launcher
+treats it as required. It holds the 17 `CENTURION_*` addons (character pane, class boot,
+diminishing returns, energy ticker, Gurubashi timer, heirloom colours, key binding
+profiles, Mok'gora, replays, scoreboard, tooltips, WSG helper, zone bands, bot map,
+auto-auction, temporal tint, default options), TrinketMenu, Cooldowns, and Centurion's
+versions of `Blizzard_TalentUI` and `Blizzard_BattlefieldMinimap`. Two GM-only addons are
+not in it, because players never get them: `CENTURION_GMOnline` (the GM Panel, whose
+Server page reads `.tick addon`) and `CENTURION_BotStats`. They are in
+`clientedits/addons/` at the root of this repository. Copy them into a GM's
+`Interface\AddOns\` by hand.
+
 `patch-Y.zip` keeps its old name because the launcher and the Centurion download server
 still use it. The launcher writes it to disk as `patch-X.MPQ`, which frees the `Y` slot
 for the optional World Terrain pack.
