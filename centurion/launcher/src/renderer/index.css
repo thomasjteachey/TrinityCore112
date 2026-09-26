@@ -1,0 +1,111 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* @font-face {
+	font-family: 'fontin';
+	src: url('./assets/FontinSans-Regular.otf');
+}
+
+@font-face {
+	font-family: 'din';
+	src: url('./assets/DINPro-Regular.otf');
+} */
+
+*,
+*::before,
+*::after {
+	margin: 0;
+	padding: 0;
+	box-sizing: border-box;
+}
+
+html,
+body {
+	height: 100vh;
+}
+
+body,
+dialog {
+	@apply text-sm text-text;
+}
+
+#root {
+	position: relative;
+	width: 100%;
+	height: 100vh;
+	display: flex;
+	flex-direction: column;
+	overflow-x: auto;
+}
+
+*:focus {
+	outline: none;
+}
+
+::-webkit-scrollbar {
+	@apply w-2;
+	@apply h-2;
+
+	&-track {
+		background: transparent;
+	}
+
+	&-thumb {
+		display: none;
+		@apply bg-border/40;
+
+		:hover& {
+			display: initial;
+			cursor: pointer;
+		}
+
+		&:hover {
+			@apply bg-border;
+		}
+	}
+
+	&-corner {
+		display: none;
+	}
+}
+
+@layer components {
+	.color {
+		@apply text-primary;
+	}
+
+	.surface {
+		position: relative;
+		@apply rounded border-2 border-dashed border-border/40 bg-darkBrown/60 p-3;
+		box-shadow: rgb(0 0 0 / 45%) 0px 25px 20px -20px;
+	}
+
+	.dialog {
+		position: relative;
+		@apply rounded border-2 border-dashed border-border/40 bg-darkBrown/60 p-3;
+		box-shadow: rgb(0 0 0 / 45%) 0px 25px 20px -20px;
+		@apply relative flex w-3/5 flex-col items-start gap-3;
+	}
+
+	.hocus {
+		@apply hocus:text-primary;
+	}
+
+	.loading {
+		@apply absolute inset-0 bg-primary transition-all;
+		transition-duration: 300ms;
+		&-wrapper {
+			@apply relative w-full before:absolute;
+			height: 6px;
+			&::before {
+				@apply inset-0 bg-border;
+			}
+		}
+
+		&-unknown {
+			@apply animate-progress bg-textDark opacity-20;
+			background-size: 1rem 100%;
+		}
+	}
+}

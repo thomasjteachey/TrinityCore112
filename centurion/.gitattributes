@@ -1,0 +1,4 @@
+dbc/*.dbc          binary
+client/*.dll       binary
+sql/**/*.sql       text eol=lf -diff linguist-generated
+sql/import.sh      text eol=lf

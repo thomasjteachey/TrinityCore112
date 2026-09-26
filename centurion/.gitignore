@@ -1,0 +1,2 @@
+# The repository root ignores build*/ (CMake output); the launcher's installer art lives in one.
+!/launcher/build/

@@ -1,0 +1,36 @@
+
+/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
+/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
+/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
+/*!50503 SET NAMES utf8mb4 */;
+/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */;
+/*!40103 SET TIME_ZONE='+00:00' */;
+/*!40014 SET @OLD_UNIQUE_CHECKS=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0 */;
+/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;
+/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
+/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
+DROP TABLE IF EXISTS `areatrigger_scripts`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `areatrigger_scripts` (
+  `entry` int NOT NULL,
+  `ScriptName` char(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  PRIMARY KEY (`entry`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+LOCK TABLES `areatrigger_scripts` WRITE;
+/*!40000 ALTER TABLE `areatrigger_scripts` DISABLE KEYS */;
+INSERT INTO `areatrigger_scripts` VALUES (171,'SmartTrigger'),(302,'at_sentry_point'),(962,'at_zumrah'),(1105,'SmartTrigger'),(1125,'SmartTrigger'),(1447,'SmartTrigger'),(1526,'at_ring_of_law'),(1726,'at_scent_larkorwi'),(1727,'at_scent_larkorwi'),(1728,'at_scent_larkorwi'),(1729,'at_scent_larkorwi'),(1730,'at_scent_larkorwi'),(1731,'at_scent_larkorwi'),(1732,'at_scent_larkorwi'),(1733,'at_scent_larkorwi'),(1734,'at_scent_larkorwi'),(1735,'at_scent_larkorwi'),(1736,'at_scent_larkorwi'),(1737,'at_scent_larkorwi'),(1738,'at_scent_larkorwi'),(1739,'at_scent_larkorwi'),(1740,'at_scent_larkorwi'),(1786,'SmartTrigger'),(1946,'at_nearby_scarshield_infiltrator'),(2026,'at_blackrock_stadium'),(2046,'at_dragonspire_hall'),(2066,'at_trigger_the_beast_movement'),(2067,'at_the_beast_room'),(2246,'SmartTrigger'),(2248,'SmartTrigger'),(2250,'SmartTrigger'),(2252,'SmartTrigger'),(2387,'SmartTrigger'),(2626,'SmartTrigger'),(2627,'SmartTrigger'),(2628,'SmartTrigger'),(2629,'SmartTrigger'),(2630,'SmartTrigger'),(2631,'SmartTrigger'),(2632,'SmartTrigger'),(2633,'SmartTrigger'),(2634,'SmartTrigger'),(2635,'SmartTrigger'),(2636,'SmartTrigger'),(2637,'SmartTrigger'),(2848,'onyxia_entrance_trigger'),(3066,'SmartTrigger'),(3546,'at_bring_your_orphan_to'),(3547,'at_bring_your_orphan_to'),(3548,'at_bring_your_orphan_to'),(3549,'at_bring_your_orphan_to'),(3551,'at_bring_your_orphan_to'),(3552,'at_bring_your_orphan_to'),(3587,'at_ancient_leaf'),(3626,'SmartTrigger'),(3746,'SmartTrigger'),(3766,'SmartTrigger'),(3957,'at_zulgurub_entrance'),(3958,'at_zulgurub_entrance'),(3960,'at_zulgurub_entrance'),(4016,'at_malfurion_stormrage'),(4017,'at_twilight_grove'),(4052,'at_aq_battleguard_sartura'),(4112,'at_kelthuzad_center'),(4113,'at_thaddius_entrance'),(4115,'at_faerlina_entrance'),(4119,'at_anubrekhan_entrance'),(4339,'SmartTrigger'),(4356,'at_bring_your_orphan_to'),(4368,'SmartTrigger'),(4369,'SmartTrigger'),(4371,'SmartTrigger'),(4372,'SmartTrigger'),(4389,'SmartTrigger'),(4422,'at_area_52_entrance'),(4425,'SmartTrigger'),(4426,'SmartTrigger'),(4428,'SmartTrigger'),(4429,'SmartTrigger'),(4430,'SmartTrigger'),(4466,'at_area_52_entrance'),(4471,'at_area_52_entrance'),(4472,'at_area_52_entrance'),(4479,'SmartTrigger'),(4485,'SmartTrigger'),(4495,'SmartTrigger'),(4497,'at_commander_dawnforge'),(4498,'SmartTrigger'),(4501,'SmartTrigger'),(4502,'SmartTrigger'),(4503,'SmartTrigger'),(4524,'at_nethekurse_exit'),(4542,'SmartTrigger'),(4546,'SmartTrigger'),(4560,'at_legion_teleporter'),(4591,'at_coilfang_waterfall'),(4665,'at_teron_gorefiend_entrance'),(4724,'SmartTrigger'),(4725,'SmartTrigger'),(4726,'SmartTrigger'),(4752,'at_nats_landing'),(4762,'SmartTrigger'),(4769,'SmartTrigger'),(4770,'SmartTrigger'),(4772,'SmartTrigger'),(4774,'SmartTrigger'),(4778,'SmartTrigger'),(4779,'SmartTrigger'),(4801,'SmartTrigger'),(4802,'SmartTrigger'),(4803,'SmartTrigger'),(4804,'SmartTrigger'),(4820,'at_brewfest'),(4829,'at_brewfest'),(4838,'SmartTrigger'),(4850,'SmartTrigger'),(4857,'SmartTrigger'),(4858,'SmartTrigger'),(4860,'SmartTrigger'),(4871,'SmartTrigger'),(4872,'SmartTrigger'),(4873,'SmartTrigger'),(4894,'SmartTrigger'),(4946,'SmartTrigger'),(4947,'SmartTrigger'),(4948,'SmartTrigger'),(4950,'SmartTrigger'),(4951,'SmartTrigger'),(4956,'SmartTrigger'),(4960,'SmartTrigger'),(4984,'SmartTrigger'),(4987,'SmartTrigger'),(4990,'SmartTrigger'),(4991,'at_skadi_gaunlet'),(5030,'SmartTrigger'),(5046,'at_sholazar_waygate'),(5047,'at_sholazar_waygate'),(5051,'SmartTrigger'),(5056,'SmartTrigger'),(5057,'SmartTrigger'),(5058,'SmartTrigger'),(5059,'SmartTrigger'),(5060,'SmartTrigger'),(5061,'SmartTrigger'),(5079,'SmartTrigger'),(5080,'SmartTrigger'),(5082,'SmartTrigger'),(5083,'SmartTrigger'),(5084,'SmartTrigger'),(5095,'SmartTrigger'),(5096,'SmartTrigger'),(5097,'SmartTrigger'),(5098,'SmartTrigger'),(5108,'SmartTrigger'),(5173,'at_frostgrips_hollow'),(5174,'SmartTrigger'),(5175,'SmartTrigger'),(5176,'SmartTrigger'),(5187,'SmartTrigger'),(5190,'SmartTrigger'),(5191,'at_naxx40_northrend_entrance'),(5192,'at_naxx40_northrend_entrance'),(5193,'at_naxx40_northrend_entrance'),(5194,'at_naxx40_northrend_entrance'),(5196,'at_naxx40_exit'),(5197,'at_naxx40_exit'),(5198,'at_naxx40_exit'),(5199,'at_naxx40_exit'),(5279,'areatrigger_orgrimmar_herald_of_war'),(5284,'SmartTrigger'),(5285,'SmartTrigger'),(5286,'SmartTrigger'),(5287,'SmartTrigger'),(5291,'at_stratholme_inn_stairs_cot'),(5332,'SmartTrigger'),(5334,'SmartTrigger'),(5338,'SmartTrigger'),(5339,'SmartTrigger'),(5340,'SmartTrigger'),(5500,'SmartTrigger'),(5580,'at_pit_cavern_entrance'),(5581,'at_pit_cavern_end'),(5604,'at_sindragosa_lair'),(5605,'at_hor_shadow_throne'),(5611,'at_icc_nerubar_broodkeeper'),(5612,'at_icc_nerubar_broodkeeper'),(5616,'at_icc_start_frostwing_gauntlet'),(5617,'at_icc_start_frostwing_gauntlet'),(5618,'at_icc_start_frostwing_gauntlet'),(5628,'SmartTrigger'),(5629,'SmartTrigger'),(5630,'SmartTrigger'),(5631,'SmartTrigger'),(5632,'at_hor_intro_start'),(5633,'at_tyrannus_event_starter'),(5649,'at_icc_shutdown_traps'),(5650,'SmartTrigger'),(5660,'at_hor_uther_quel_delar_start'),(5697,'at_hor_waves_restarter'),(5698,'at_icc_saurfang_portal'),(5703,'SmartTrigger'),(5704,'SmartTrigger'),(5705,'SmartTrigger'),(5706,'SmartTrigger'),(5708,'at_blood_prince_council_start_intro'),(5709,'at_lady_deathwhisper_entrance'),(5710,'SmartTrigger'),(5711,'SmartTrigger'),(5712,'SmartTrigger'),(5714,'SmartTrigger'),(5715,'SmartTrigger'),(5716,'SmartTrigger'),(5718,'at_frozen_throne_teleport'),(5729,'at_icc_start_blood_quickening'),(5732,'at_lord_marrowgar_entrance'),(5740,'at_hor_impenetrable_door'),(5867,'at_baltharus_plateau');
+/*!40000 ALTER TABLE `areatrigger_scripts` ENABLE KEYS */;
+UNLOCK TABLES;
+/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
+
+/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
+/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;
+/*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;
+/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
+/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
+/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
+/*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
+
