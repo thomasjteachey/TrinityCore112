@@ -303,6 +303,109 @@ The client DLL (`centurion/client/dinput8.dll`, also inside `client-tweaks.zip`)
 prebuilt, so there is nothing to compile for it. Its source is in
 [thomasjteachey/clientedits](https://github.com/thomasjteachey/clientedits).
 
+## Configuring the bots
+
+The bots are the characters from `characters_bots.sql` on the accounts from
+`auth_bots.sql`, and `centurion/conf/playerbots.conf` ties them together. Every key is
+documented in `playerbots.conf.dist`; this section is the map. `.reload config` also
+re-reads `playerbots.conf`, so most changes apply without a restart. The few that need
+one say so in their description.
+
+**Switches.** `Playerbot.Enable` turns the system on. Open-world fighting reuses the PvP
+spell engine, so `Playerbot.PvpClassSpells.Enable` must be on even for PvE. The live realm
+runs with `Playerbot.Enable`, `PvpCore`, `PvpTactics`, `PvpLifecycle`, `PvpClassSpells`,
+`Pve` and `PveGrind` all on (each as `Playerbot.<name>.Enable`); the `.dist` has them
+all off. Looting, questing, vendoring, talents, gear upgrades, professions and the
+auction house each have their own `Playerbot.Pve.*.Enable` key.
+
+**The world population** comes from the accounts in `BotAccountIds`:
+
+| key (`Playerbot.` prefix omitted) | live | what it does |
+|---|---|---|
+| `RandomPopulation.Enable` | 1 | logs bots in and out to hold the target |
+| `RandomPopulation.BotAccountIds` | 76,77,78 | the accounts whose characters are world bots. Everything on them is treated as a bot, so never put a real player's account here |
+| `RandomPopulation.TargetMin`, `TargetMax` | 150 | how many bots are online |
+| `RandomPopulation.MinLevel`, `MaxLevel` | 1, 60 | which characters may be picked |
+| `RandomPopulation.DynamicWorldLoad.Enable` | 1 | each real player online takes one bot's place, so the server load stays flat |
+| `Pve.ZoneGuardians.PerZone` | 1 | bots per classic zone that stay at the zone's level cap and guard it |
+| `Pve.Drifters.Count`, `Pve.Drifters.MaxPerZone` | 30, 15 | bots that travel to wherever real players are, and the most that gather in one zone |
+| `Pve.Rebirth.ZoneBanded` | 1 | each bot lives in one zone and is reborn at its bottom level when it outgrows it, keeping its gear and gold |
+| `Pve.Rebirth.Veterans` | 20 | bots that climb to 60 and stay there instead |
+| `Pve.Rebirth.VeteranFleetSize` | 256 | the fleet size those roles are dealt from. Keep it pinned when you change `TargetMax`, or the roles reshuffle |
+| `Pve.GuildName` | AI Uprising | the world bots' guild |
+| `WhoListVisibility` | 2 | 2 lists bots in `/who` for everyone, 1 only for GMs, 0 never |
+
+**The PvP bots** are the 27 characters on account 79 (`Pve.PvpOnlyAccountIds = "79"`).
+They do no PvE at all; they stay parked and exist to be copied. World bots do not queue
+for battlegrounds themselves (`PvpLifecycle.PersistentBots.Enable = 0`). Instead:
+
+- `BgFill.Enable`: when a real player's battleground or arena skirmish cannot start, it
+  is filled with temporary copies of bot characters. `BgFill.QueueWaitSeconds` (0 live)
+  is how long to wait first, `BgFill.MaxPerTeam` caps the team size, and
+  `BgFill.AllowHumanMirrors` allows "Dark &lt;name&gt;" copies of real players as a last
+  resort.
+- `BgFill.Tier.Easy|Medium|Hard.Characters` and `.BattlegroundTypes`: which PvP bots, by
+  character guid, play at each difficulty, and in which battlegrounds (100 Scarlet
+  Chapel, 101 Blackrock Throne, 102 Obsidian Colosseum). The guids in the live file are
+  the account 79 characters from the seed.
+- `PvpLifecycle.ObsidianColosseum.Clone.Enable`: "Dark &lt;name&gt;" copies of the players who
+  enter the Obsidian Colosseum.
+- `Pve.TransientBountyHunters.Enable`: copies of the PvP bots hunt players with a
+  bounty. It also needs `Centurion.Bounty.Enable` in `worldserver.conf`.
+- `Pvp.GuildName` (default "The Robot Masters"): the guild the PvP bots and their copies
+  wear.
+
+**Adding bots.** Create an account, log in with it and create characters, then add its
+id to `RandomPopulation.BotAccountIds`, or to `Pve.PvpOnlyAccountIds` for PvP-only bots,
+and run `.reload config`. New bots level, train, gear up and spend their talents by
+themselves. To give a PvP bot a difficulty, add its guid to one of the tier lists.
+
+**Cost.** On the live realm, 150 bots take about 2.6 GB of memory and roughly two CPU
+cores. Two `worldserver.conf` keys cut that down, and the live realm runs both:
+`Centurion.Bots.SkipClientPackets = 1` and `Centurion.Bots.GridActivationRange = 90`
+(the `.dist` has them off). The `Playerbot.Governor.*` keys stop adding bots to matches,
+and end bot-only matches, when the server's update time runs long.
+
+**GM commands:**
+
+- `.playerbot population status`, `.playerbot population list` and
+  `.playerbot population rebalance now`: check and nudge the world population.
+- `.playerbot pve status`: what the selected bot is doing.
+- `.playerbot pve summon <name>` and `.playerbot pve dismiss`: take a bot along as a
+  companion, and send it back.
+- `.playerbot pve rehome` sends bots to their home zones; `.playerbot pve respec`
+  re-spends their talents.
+- `.playerbot pvp nodes`: how the bots are dividing up the bases in Arathi Basin and
+  Battle for Gilneas.
+- Careful: `.playerbot pve reset [percent]` sends bots back to level 1, and
+  `.playerbot pve wipe` does that to every bot and also empties the auction house.
+
+## Configuring dungeon scaling
+
+AutoBalance scales creatures in dungeons and raids to the number of players inside. Its
+settings are in `centurion/conf/AutoBalance.conf`, which goes next to `worldserver.conf`.
+Every key is documented in the file, which also links a spreadsheet that plots the
+difficulty curve. `.reload autobalance` re-reads the file. Instances that are already
+open pick up a change the next time someone enters or leaves, or a fight starts or ends.
+
+| key (`AutoBalance.` prefix omitted) | live | what it does |
+|---|---|---|
+| `Enable.Global`, `Enable.5M`, `Enable.10M`, ... | 1 | on or off overall, and per instance size and difficulty |
+| `Disable.PerInstance` | "" | instance ids to leave unscaled |
+| `MinPlayers`, `MinPlayers.Heroic` | 2 | dungeons never scale below two players |
+| `MinPlayers.Raid`, `MinPlayers.RaidHeroic` | 5 | raids never scale below five |
+| `InflectionPoint` (plus `Heroic`, `Raid`, `RaidHeroic` versions) | 0.5 | the shape of the difficulty curve |
+| `StatModifier.*`, `StatModifier.Boss.*` (and per instance size) | 1.0 | multiply health, mana, armor and damage after the curve; bosses separately |
+| `playerCountDifficultyOffset` | 0 | count this many extra players in every instance |
+| `LevelScaling` | 0 | off: creatures keep their built levels |
+| `RewardScaling.XP`, `RewardScaling.Money` | 0 | off: kills give full XP and money, however many players are inside |
+| `PlayerChangeNotify` | 1 | tells everyone in the instance when the player count it scales for changes |
+
+GM commands: `.ab config` prints the settings the server resolved, `.ab mapstat` shows
+how the current map is scaled, and `.ab creaturestat` shows the targeted creature.
+`.ab offset <n>` changes the player-count offset at once and makes every open instance
+recompute on the spot, so avoid it while people are mid-fight.
+
 ## What the databases hold
 
 Snapshot taken 2026-09-26 from the live realm.
