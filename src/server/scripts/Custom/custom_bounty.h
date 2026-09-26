@@ -33,6 +33,9 @@ class Player;
 // and when you finally die a share of your gold is left in a chest for whoever
 // wants it.
 //
+// It pays while you carry it: every stack is more experience from everything
+// (Centurion.Bounty.XpPercentPerStack), for as long as you survive it.
+//
 // It exists to put a natural ceiling on a killing spree. A run that would
 // otherwise compound - the strongest player farming the weakest with nothing
 // pushing back - instead builds its own opposition, and pays out to the people
