@@ -24,3 +24,6 @@ cmake-build-*/
 .vs
 *.user
 /src.zip
+__pycache__/
+*.pyc
+*.pdb
