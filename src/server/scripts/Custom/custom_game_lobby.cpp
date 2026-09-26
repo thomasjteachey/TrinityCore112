@@ -138,6 +138,14 @@ uint32 MakePagedTeamSender(uint32 team, uint32 page)
     return (page << 16) | (team & 0xFFFF);
 }
 
+// "Tournament rules" is offered only on a realm where it changes something.
+// It defaults to on, so where it is not offered - and the host therefore
+// cannot turn it off - it must not apply either.
+bool AreTournamentRulesOffered()
+{
+    return Tournament::IsEnabled() && (Tournament::IsBgLoadoutEnabled() || Tournament::AreMatchConsumablesBanned());
+}
+
 uint32 GetPagedTeam(uint32 sender)
 {
     return sender & 0xFFFF;
@@ -1081,7 +1089,7 @@ public:
         // rules - the gear swap on the way in, the gear back on the way out,
         // the consumable ban in between - reads this one flag, the same flag a
         // match made from the tournament queue pool carries.
-        bg->SetTournamentPool(lobby->Rules.TournamentRules);
+        bg->SetTournamentPool(lobby->Rules.TournamentRules && AreTournamentRulesOffered());
         bg->SetCustomGameBotOnlyPreparation(!hasHumanTeamParticipant);
         bg->SetCustomGamePendingCloneCount(uint32(lobby->CloneRequests.size()));
         // Custom matches enter directly and never use the public queue's arena
@@ -2129,7 +2137,7 @@ public:
             // that changes what the players themselves bring to the match
             // rather than how the map is scored. Hidden on a realm where it
             // would promise rules that nothing applies.
-            if (Tournament::IsEnabled() && (Tournament::IsBgLoadoutEnabled() || Tournament::AreMatchConsumablesBanned()))
+            if (AreTournamentRulesOffered())
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT,
                     std::string("Tournament rules: ") + (lobby->Rules.TournamentRules ? "On" : "Off"),
                     GOSSIP_SENDER_MAIN, ACTION_TOGGLE_TOURNAMENT_RULES);

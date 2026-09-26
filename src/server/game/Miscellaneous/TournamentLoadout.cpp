@@ -871,14 +871,16 @@ namespace
     // food and their class's conjured items still work, and that everything comes
     // back whole however the match ends, goes without saying - the welcome line
     // already promises the gear back, and a brief nobody reads is worse than a
-    // short one.
-    void BriefWorldCharacter(Player* player)
+    // short one. A character below the tournament's level keeps its own gear, so
+    // it hears only the consumable rule.
+    void BriefWorldCharacter(Player* player, bool dressed)
     {
         WorldSession const* session = player->GetSession();
         if (!session || session->IsVirtualSession() || IsTournamentCharacter(player))
             return;
 
-        WhisperAsChromie(player, "Welcome to the tournament. We've made some changes to your gear to keep things competitive. If you were wearing something not on our tournament whitelist, it was replaced and will be given back to you after you leave.");
+        if (dressed)
+            WhisperAsChromie(player, "Welcome to the tournament. We've made some changes to your gear to keep things competitive. If you were wearing something not on our tournament whitelist, it was replaced and will be given back to you after you leave.");
 
         // Only when it is true: with the ban off, everything out of their bags
         // works and telling them otherwise would be a lie.
@@ -1233,6 +1235,18 @@ void ApplyBattlegroundLoadout(Player* player)
     WorldSession const* session = player->GetSession();
     bool const transient = !session || session->IsTransientPlayerSession();
 
+    // A custom game can seat anyone, and every piece the loadout hands out is
+    // level-60 gear. Below the tournament's level a character fights in what it
+    // brought; the match's other rules - the consumable ban, the armour lock,
+    // the free meals and reagents - read IsTournamentPool, not this, and still
+    // hold.
+    if (player->GetLevel() < GetQueueMinLevel())
+    {
+        if (!transient)
+            BriefWorldCharacter(player, false);
+        return;
+    }
+
     if (!transient && !StashTablePresent)
         return;
 
@@ -1274,7 +1288,7 @@ void ApplyBattlegroundLoadout(Player* player)
         CharacterDatabase.CommitTransaction(trans);
         MarkActive(player->GetGUID(), true);
 
-        BriefWorldCharacter(player);
+        BriefWorldCharacter(player, true);
     }
 
     TC_LOG_DEBUG("bg.battleground", "Tournament loadout: dressed {} on map {}: {} issued, {} put away.",
