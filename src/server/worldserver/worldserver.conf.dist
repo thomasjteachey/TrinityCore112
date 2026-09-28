@@ -4330,11 +4330,13 @@ Centurion.Notoriety.CheckpointStacks      = "5:90710,10:90711,15:90712,20:90717,
 
 #    The payout. Money is flat copper; below level 60, experience is counted in
 #    BUBBLES of the seller's own next level. At level 60, those bubbles are valued
-#    at TWO times honor using Centurion.Battleground.XpInsteadOfHonor.HonorPerLevel,
-#    then converted to marks at 100 honor value per Mark of Honor; no regular honor
-#    points are awarded. Each connected party/raid member within 40 yards of the
-#    Quiet Man receives that many Centurion.Marks.RestoredEntry items; full
-#    inventories receive them by mail.
+#    using Centurion.Notoriety.MarkRewardMultiplier times
+#    Centurion.Battleground.XpInsteadOfHonor.HonorPerLevel, then converted to
+#    marks at 100 honor value per Mark of Honor; no regular honor points are
+#    awarded. Each connected party/raid member within 40 yards of the Quiet Man
+#    receives that many Centurion.Marks.RestoredEntry items plus five random
+#    entries from Centurion.Marks.DepletedEntries; full inventories receive them
+#    by mail.
 #    Paid by the fence script, NOT from quest_template - a repeatable quest pays
 #    its template rewards exactly once per character, ever, and silently zero
 #    every time after.
@@ -4342,6 +4344,9 @@ Centurion.Notoriety.MoneyBaseCopper       = 5000
 Centurion.Notoriety.MoneyPerTierCopper    = 3000
 Centurion.Notoriety.XpBubblesBase         = 2.0
 Centurion.Notoriety.XpBubblesPerTier      = 1.0
+#    Multiplier applied to the level-60 honor value before converting it to
+#    restored Mark of Honor items. 2.0 doubles the marks; 1.0 is the base value.
+Centurion.Notoriety.MarkRewardMultiplier  = 2.0
 Centurion.Bounty.GuardLifetimeSeconds = 180
 
 

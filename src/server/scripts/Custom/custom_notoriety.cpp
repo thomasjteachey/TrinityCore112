@@ -44,6 +44,7 @@
 #include "ScriptedCreature.h"
 #include "ScriptMgr.h"
 #include "TemporarySummon.h"
+#include "Util.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -126,12 +127,15 @@ namespace
     uint32 s_moneyPerTier = 3000;
     float s_xpBubblesBase = 2.0f;
     float s_xpBubblesPerTier = 1.0f;
+    // Applied to the level-60 honor value before it is converted to restored
+    // Mark of Honor items. The default preserves the current 2x payout.
+    float s_markRewardMultiplier = 2.0f;
 
     constexpr uint8 kHonorRewardLevel = 60;
-    constexpr float kHonorRewardMultiplier = 2.0f;
     // Centurion runs at half the stock honor rate, so one Mark represents the
     // 100 honor value the quest would produce at the normal 1x rate.
     constexpr uint32 kHonorValuePerMark = 100;
+    constexpr uint32 kDepletedMarksPerRecipient = 5;
 
     struct Contract
     {
@@ -246,6 +250,8 @@ namespace
         s_moneyPerTier = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.Notoriety.MoneyPerTierCopper", 3000)));
         s_xpBubblesBase = std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Notoriety.XpBubblesBase", 2.0f));
         s_xpBubblesPerTier = std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Notoriety.XpBubblesPerTier", 1.0f));
+        s_markRewardMultiplier = std::max(0.0f,
+            sConfigMgr->GetFloatDefault("Centurion.Notoriety.MarkRewardMultiplier", 2.0f));
     }
 
     uint32 TierFor(uint32 stacks)
@@ -269,22 +275,37 @@ namespace
     }
 
     // Every connected party/raid member within 40 yards of the Quiet Man gets
-    // the restored Mark of Honor item, never a regular honor-points award or a
-    // depleted variant. Full bags cannot eat the reward; the Postmaster holds
-    // it instead.
+    // the restored Mark of Honor item and five random configured depleted marks,
+    // never a regular honor-points award. Full bags cannot eat the reward; the
+    // Postmaster holds it instead.
     uint32 GrantNearbyRaidMarks(Player* seller, Creature* quietMan, uint32 markCount)
     {
-        if (!seller || !quietMan || !markCount)
+        if (!seller || !quietMan)
             return 0;
 
         uint32 const markEntry = Trinity::Custom::GetRestoredMarkEntry();
-        if (!markEntry || !sObjectMgr->GetItemTemplate(markEntry))
+        bool const restoredMarkValid = markEntry && sObjectMgr->GetItemTemplate(markEntry);
+        if (markCount && !restoredMarkValid)
         {
             TC_LOG_ERROR("playerbots.hardcore",
-                "Notoriety: configured Mark of Honor item {} does not exist; no party marks were awarded.",
+                "Notoriety: configured Mark of Honor item {} does not exist; no restored party marks were awarded.",
                 markEntry);
-            return 0;
         }
+
+        std::vector<uint32> depletedEntries;
+        for (uint32 const entry : Trinity::Custom::GetDepletedMarkEntries())
+        {
+            if (sObjectMgr->GetItemTemplate(entry))
+                depletedEntries.push_back(entry);
+            else
+                TC_LOG_ERROR("playerbots.hardcore",
+                    "Notoriety: configured depleted Mark of Honor item {} does not exist; it will not be awarded.",
+                    entry);
+        }
+
+        if (depletedEntries.empty())
+            TC_LOG_ERROR("playerbots.hardcore",
+                "Notoriety: no valid depleted Mark of Honor items are configured; the five-mark bonus cannot be awarded.");
 
         uint32 awarded = 0;
         auto grant = [&](Player* recipient)
@@ -292,19 +313,42 @@ namespace
             if (!recipient || !recipient->IsInWorld() || !quietMan->IsWithinDistInMap(recipient, 40.0f))
                 return;
 
-            ItemPosCountVec dest;
-            if (recipient->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, markEntry, markCount) == EQUIP_ERR_OK)
+            bool received = false;
+            auto grantItem = [&](uint32 entry, uint32 count)
             {
-                if (Item* item = recipient->StoreNewItem(dest, markEntry, true))
-                {
-                    recipient->SendNewItem(item, markCount, true, false);
-                    ++awarded;
+                if (!entry || !count)
                     return;
+
+                ItemPosCountVec dest;
+                if (recipient->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, entry, count) == EQUIP_ERR_OK)
+                {
+                    if (Item* item = recipient->StoreNewItem(dest, entry, true))
+                    {
+                        recipient->SendNewItem(item, count, true, false);
+                        received = true;
+                        return;
+                    }
                 }
+
+                recipient->SendItemRetrievalMail(entry, count);
+                received = true;
+            };
+
+            if (markCount && restoredMarkValid)
+                grantItem(markEntry, markCount);
+
+            if (!depletedEntries.empty())
+            {
+                std::unordered_map<uint32, uint32> randomDepletedMarks;
+                for (uint32 i = 0; i < kDepletedMarksPerRecipient; ++i)
+                    ++randomDepletedMarks[depletedEntries[urand(0, uint32(depletedEntries.size() - 1))]];
+
+                for (auto const& [entry, count] : randomDepletedMarks)
+                    grantItem(entry, count);
             }
 
-            recipient->SendItemRetrievalMail(markEntry, markCount);
-            ++awarded;
+            if (received)
+                ++awarded;
         };
 
         if (Group* group = seller->GetGroup())
@@ -1152,7 +1196,7 @@ public:
                 ? uint32(float(levelXp) * bubbles / 20.0f)
                 : 0;
             uint32 const honor = player->GetLevel() >= kHonorRewardLevel
-                ? uint32(float(sWorld->getIntConfig(CONFIG_CENTURION_BG_XP_HONOR_PER_LEVEL)) * bubbles / 20.0f * kHonorRewardMultiplier)
+                ? uint32(float(sWorld->getIntConfig(CONFIG_CENTURION_BG_XP_HONOR_PER_LEVEL)) * bubbles / 20.0f * s_markRewardMultiplier)
                 : 0;
             uint32 const markCount = honor / kHonorValuePerMark;
 
@@ -1206,8 +1250,10 @@ public:
 
             TC_LOG_INFO("playerbots.hardcore",
                 "Notoriety: {} (level {}) sold a contract at {} peak stack(s), tier {}, "
-                "for {}c, {} xp, {} honor value as {} mark(s) to {} nearby member(s) ({} reroll(s)).",
-                player->GetName(), player->GetLevel(), stacks, tier, money, xp, honor, markCount, partyMarks, rerolls);
+                "for {}c, {} xp, {} honor value as {} restored mark(s) plus {} random depleted mark(s) each "
+                "to {} nearby member(s) ({} reroll(s)).",
+                player->GetName(), player->GetLevel(), stacks, tier, money, xp, honor, markCount,
+                kDepletedMarksPerRecipient, partyMarks, rerolls);
         }
     };
 
