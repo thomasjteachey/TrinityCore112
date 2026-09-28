@@ -902,7 +902,16 @@ namespace BarracksHardcore
 
         bool const shouldFfa = IsFfaArmed(player);
         bool const wasFfa = player->IsFFAPvP();
-        if (wasFfa == shouldFfa && player->pvpInfo.IsInFFAPvPArea == shouldFfa)
+        bool const isBot = player->GetSession() && IsBotAccount(player->GetSession()->GetAccountId());
+
+        // The client needs both halves of the bot pseudo-faction: FFA makes the
+        // server treat the pair as hostile, while the ordinary PvP flag makes
+        // the enemy-faction render attackable. Teleport and area-update paths
+        // can clear the latter without touching FFA. Treat that split state as
+        // drift too; otherwise the early return leaves a blue bot able to keep
+        // attacking a player who cannot swing back.
+        bool const botPvpDrift = isBot && player->IsPvP() != shouldFfa;
+        if (wasFfa == shouldFfa && player->pvpInfo.IsInFFAPvPArea == shouldFfa && !botPvpDrift)
             return; // nothing has drifted - the overwhelmingly common case
 
         player->pvpInfo.IsInFFAPvPArea = shouldFfa;
@@ -911,7 +920,7 @@ namespace BarracksHardcore
         // An armed bot also carries the ordinary PvP flag: the enemy-faction
         // render only reads as attackable on the client when the unit is
         // flagged, exactly like a real enemy player standing in the open.
-        if (player->GetSession() && IsBotAccount(player->GetSession()->GetAccountId()))
+        if (isBot)
             player->UpdatePvP(shouldFfa, true);
 
         // Only when the byte actually moved: the bot pseudo-faction render
