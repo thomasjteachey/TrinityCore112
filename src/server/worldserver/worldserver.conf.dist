@@ -4328,8 +4328,12 @@ Centurion.Notoriety.CheckpointAuraBase    = 0
 Centurion.Notoriety.ContractAuraSpell     = 0
 Centurion.Notoriety.CheckpointStacks      = "5:90710,10:90711,15:90712,20:90717,25:90713,30:90714,40:90715,50:90716"
 
-#    The payout. Money is flat copper; experience is counted in BUBBLES of the
-#    seller's own next level, so it stays meaningful at 20 and at 60.
+#    The payout. Money is flat copper; below level 60, experience is counted in
+#    BUBBLES of the seller's own next level. At level 60, those bubbles pay TWO
+#    times honor at Centurion.Battleground.XpInsteadOfHonor.HonorPerLevel instead.
+#    Completing the contract also gives exactly one Centurion.Marks.RestoredEntry
+#    to each connected party/raid member within 40 yards of the Quiet Man; full
+#    inventories receive it by mail.
 #    Paid by the fence script, NOT from quest_template - a repeatable quest pays
 #    its template rewards exactly once per character, ever, and silently zero
 #    every time after.

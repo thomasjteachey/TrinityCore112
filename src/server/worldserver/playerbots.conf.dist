@@ -470,14 +470,14 @@ Playerbot.PvpDecision.GlobalLock = 0
 Playerbot.Pve.Enable = 0
 
 #    Playerbot.GoldGainMultiplier
-#        Description: Multiplies gold a managed playerbot LOOTS FROM KILLS, for bots ABOVE
-#                     the low-level band (see Playerbot.GoldGainMultiplier.LowLevelMaxLevel).
-#                     Loot only: vendor sales, auction settlements, mail and quest rewards
-#                     are all paid at face value, and losses are never scaled either, so
-#                     bots still pay full price for gear, ammunition and food.
-#                     Selling is excluded deliberately - scaling it would MINT gold rather
-#                     than pay it out, since a bot-to-bot sale would credit the seller more
-#                     than it took from the buyer.
+#        Description: Multiplies gold a managed playerbot earns from world faucets, for bots
+#                     ABOVE the low-level band (see Playerbot.GoldGainMultiplier.LowLevelMaxLevel).
+#                     Monster loot and NPC-vendor payouts only: auction settlements, mail
+#                     and quest rewards are all paid at face value, and losses are never
+#                     scaled either, so bots still pay full price for gear, ammunition and
+#                     food. Auction selling is excluded deliberately - scaling it would
+#                     MINT gold, since a bot-to-bot sale would credit the seller more than
+#                     it took from the buyer. NPC vendors have no player counterparty.
 #                     A bot funds its entire economy out of what it earns and has no player
 #                     behind it to subsidise a bad run, so at 1.0 the fleet cannot keep pace
 #                     with the gear it outgrows and ends up grinding in white kit.
@@ -486,7 +486,7 @@ Playerbot.Pve.Enable = 0
 #                     1.0 - (face value, no change)
 #                     0.0 - (bots earn nothing)
 
-Playerbot.GoldGainMultiplier = 1.0
+Playerbot.GoldGainMultiplier = 2.0
 
 #    Playerbot.GoldGainMultiplier.LowLevel
 #        Description: The same multiplier, but for bots at or below
@@ -496,9 +496,9 @@ Playerbot.GoldGainMultiplier = 1.0
 #                     share of everything it has ever earned, so the band is tuned higher.
 #                     The band is chosen from the bot's CURRENT level, so a bot simply
 #                     starts earning at the other rate when it levels out of the band.
-#        Default:     5.0
+#        Default:     2.0
 
-Playerbot.GoldGainMultiplier.LowLevel = 1.0
+Playerbot.GoldGainMultiplier.LowLevel = 2.0
 
 #    Playerbot.GoldGainMultiplier.LowLevelMaxLevel
 #        Description: Highest level that still counts as low-level for the multiplier above.

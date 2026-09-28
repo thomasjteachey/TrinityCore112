@@ -31,8 +31,10 @@
 #include "Duration.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
+#include "Group.h"
 #include "Log.h"
 #include "Map.h"
+#include "Miscellaneous/DepletedMarks.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
@@ -42,6 +44,7 @@
 #include "ScriptedCreature.h"
 #include "ScriptMgr.h"
 #include "TemporarySummon.h"
+#include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
 
@@ -116,13 +119,16 @@ namespace
     // peak before this runs, so clearing costs the seller nothing.
     bool s_clearStacksOnTurnIn = true;
 
-    // Money is copper per tier, experience is a share of the killer's own next
-    // level - the same "a fraction of the bar" shape the rest of the realm
-    // pays in, so it stays meaningful at 20 and at 60.
+    // Money is copper per tier. Below 60, experience is a share of the seller's
+    // own next level; at 60 the same number of bubbles is converted to honor by
+    // the realm's configured honor-per-level rate.
     uint32 s_moneyBase = 5000;
     uint32 s_moneyPerTier = 3000;
     float s_xpBubblesBase = 2.0f;
     float s_xpBubblesPerTier = 1.0f;
+
+    constexpr uint8 kHonorRewardLevel = 60;
+    constexpr float kHonorRewardMultiplier = 2.0f;
 
     struct Contract
     {
@@ -257,6 +263,62 @@ namespace
 
         CharacterDatabase.PExecute("DELETE FROM character_notoriety_contract WHERE guid = {}",
             ObjectGuid(rawGuid).GetCounter());
+    }
+
+    // Every connected party/raid member within 40 yards of the Quiet Man gets
+    // exactly one restored Mark of Honor; depleted mark variants are never
+    // substituted. Full bags cannot eat the reward; the Postmaster holds it
+    // instead.
+    uint32 GrantNearbyRaidMarks(Player* seller, Creature* quietMan)
+    {
+        if (!seller || !quietMan)
+            return 0;
+
+        uint32 const markEntry = Trinity::Custom::GetRestoredMarkEntry();
+        if (!markEntry || !sObjectMgr->GetItemTemplate(markEntry))
+        {
+            TC_LOG_ERROR("playerbots.hardcore",
+                "Notoriety: configured Mark of Honor item {} does not exist; no party marks were awarded.",
+                markEntry);
+            return 0;
+        }
+
+        uint32 awarded = 0;
+        auto grant = [&](Player* recipient)
+        {
+            if (!recipient || !recipient->IsInWorld() || !quietMan->IsWithinDistInMap(recipient, 40.0f))
+                return;
+
+            ItemPosCountVec dest;
+            if (recipient->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, markEntry, 1) == EQUIP_ERR_OK)
+            {
+                if (Item* item = recipient->StoreNewItem(dest, markEntry, true))
+                {
+                    recipient->SendNewItem(item, 1, true, false);
+                    ++awarded;
+                    return;
+                }
+            }
+
+            recipient->SendItemRetrievalMail(markEntry, 1);
+            ++awarded;
+        };
+
+        if (Group* group = seller->GetGroup())
+        {
+            for (GroupReference* itr = group->GetFirstMember(); itr; itr = itr->next())
+                grant(itr->GetSource());
+        }
+        else
+            grant(seller);
+
+        // The seller is necessarily online and standing at the Quiet Man to
+        // complete the quest. Keep their reward even if a stale group reference
+        // list somehow failed to expose any connected member.
+        if (!awarded)
+            grant(seller);
+
+        return awarded;
     }
 
     // -----------------------------------------------------------------------
@@ -1083,7 +1145,12 @@ public:
             uint32 const money = s_moneyBase + s_moneyPerTier * tier;
             float const bubbles = s_xpBubblesBase + s_xpBubblesPerTier * float(tier);
             uint32 const levelXp = sObjectMgr->GetXPForLevel(player->GetLevel());
-            uint32 const xp = uint32(float(levelXp) * bubbles / 20.0f);
+            uint32 const xp = player->GetLevel() < kHonorRewardLevel
+                ? uint32(float(levelXp) * bubbles / 20.0f)
+                : 0;
+            uint32 const honor = player->GetLevel() >= kHonorRewardLevel
+                ? uint32(float(sWorld->getIntConfig(CONFIG_CENTURION_BG_XP_HONOR_PER_LEVEL)) * bubbles / 20.0f * kHonorRewardMultiplier)
+                : 0;
 
             // Settled BEFORE paying, not after. Notoriety raises every experience
             // award by the stacks it carries (OnGiveXP in custom_bounty.cpp), and
@@ -1098,6 +1165,10 @@ public:
                 player->ModifyMoney(int64(money));
             if (xp)
                 player->GiveXP(xp, nullptr);
+            if (honor)
+                player->RewardHonor(nullptr, 1, int32(honor));
+
+            uint32 const partyMarks = GrantNearbyRaidMarks(player, me);
 
             Notoriety::Payout payout;
             payout.Who = player;
@@ -1106,6 +1177,7 @@ public:
             payout.ZoneId = player->GetZoneId();
             payout.MoneyPaid = money;
             payout.XpPaid = xp;
+            payout.HonorPaid = honor;
             payout.Level = player->GetLevel();
             Notoriety::GrantGoodieBag(payout);
 
@@ -1132,8 +1204,8 @@ public:
 
             TC_LOG_INFO("playerbots.hardcore",
                 "Notoriety: {} (level {}) sold a contract at {} peak stack(s), tier {}, "
-                "for {}c and {} xp ({} reroll(s)).",
-                player->GetName(), player->GetLevel(), stacks, tier, money, xp, rerolls);
+                "for {}c, {} xp, {} honor and {} party mark(s) ({} reroll(s)).",
+                player->GetName(), player->GetLevel(), stacks, tier, money, xp, honor, partyMarks, rerolls);
         }
     };
 

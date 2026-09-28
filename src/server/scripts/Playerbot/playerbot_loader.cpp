@@ -223,23 +223,21 @@ std::mutex g_ManagedBotUpdatePulseLock;
 // keep pace with the gear it outgrows, which is what left bots grinding in
 // white kit.
 //
-// Applied to LOOTED gains only - see OnMoneyChanged for why selling is
-// excluded. Split into two bands. The early levels are where a bot is poorest in
-// absolute terms and where every purchase - first bags, first real weapon,
-// ammunition - costs a disproportionate share of everything it has earned,
-// so they get their own, larger multiplier.
-std::atomic<float> g_PlayerbotGoldGainMultiplier{ 1.0f };
-std::atomic<float> g_PlayerbotLowLevelGoldGainMultiplier{ 1.0f };
+// Applied to world-faucet gains only: looted coin here and NPC-vendor payouts
+// in the PvE manager. Auction settlements stay at face value because they have
+// a real buyer on the other side. Split into two configurable level bands.
+std::atomic<float> g_PlayerbotGoldGainMultiplier{ 2.0f };
+std::atomic<float> g_PlayerbotLowLevelGoldGainMultiplier{ 2.0f };
 std::atomic<uint32> g_PlayerbotLowLevelGoldBandMaxLevel{ 10 };
 
 void LoadPlayerbotGoldGainMultiplier()
 {
     g_PlayerbotGoldGainMultiplier.store(
-        std::max(0.0f, sConfigMgr->GetFloatDefault("Playerbot.GoldGainMultiplier", 1.0f)),
+        std::max(0.0f, sConfigMgr->GetFloatDefault("Playerbot.GoldGainMultiplier", 2.0f)),
         std::memory_order_relaxed);
 
     g_PlayerbotLowLevelGoldGainMultiplier.store(
-        std::max(0.0f, sConfigMgr->GetFloatDefault("Playerbot.GoldGainMultiplier.LowLevel", 1.0f)),
+        std::max(0.0f, sConfigMgr->GetFloatDefault("Playerbot.GoldGainMultiplier.LowLevel", 2.0f)),
         std::memory_order_relaxed);
 
     g_PlayerbotLowLevelGoldBandMaxLevel.store(
