@@ -129,6 +129,9 @@ namespace
 
     constexpr uint8 kHonorRewardLevel = 60;
     constexpr float kHonorRewardMultiplier = 2.0f;
+    // Centurion runs at half the stock honor rate, so one Mark represents the
+    // 100 honor value the quest would produce at the normal 1x rate.
+    constexpr uint32 kHonorValuePerMark = 100;
 
     struct Contract
     {
@@ -266,12 +269,12 @@ namespace
     }
 
     // Every connected party/raid member within 40 yards of the Quiet Man gets
-    // exactly one restored Mark of Honor; depleted mark variants are never
-    // substituted. Full bags cannot eat the reward; the Postmaster holds it
-    // instead.
-    uint32 GrantNearbyRaidMarks(Player* seller, Creature* quietMan)
+    // the restored Mark of Honor item, never a regular honor-points award or a
+    // depleted variant. Full bags cannot eat the reward; the Postmaster holds
+    // it instead.
+    uint32 GrantNearbyRaidMarks(Player* seller, Creature* quietMan, uint32 markCount)
     {
-        if (!seller || !quietMan)
+        if (!seller || !quietMan || !markCount)
             return 0;
 
         uint32 const markEntry = Trinity::Custom::GetRestoredMarkEntry();
@@ -290,17 +293,17 @@ namespace
                 return;
 
             ItemPosCountVec dest;
-            if (recipient->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, markEntry, 1) == EQUIP_ERR_OK)
+            if (recipient->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, markEntry, markCount) == EQUIP_ERR_OK)
             {
                 if (Item* item = recipient->StoreNewItem(dest, markEntry, true))
                 {
-                    recipient->SendNewItem(item, 1, true, false);
+                    recipient->SendNewItem(item, markCount, true, false);
                     ++awarded;
                     return;
                 }
             }
 
-            recipient->SendItemRetrievalMail(markEntry, 1);
+            recipient->SendItemRetrievalMail(markEntry, markCount);
             ++awarded;
         };
 
@@ -1151,6 +1154,7 @@ public:
             uint32 const honor = player->GetLevel() >= kHonorRewardLevel
                 ? uint32(float(sWorld->getIntConfig(CONFIG_CENTURION_BG_XP_HONOR_PER_LEVEL)) * bubbles / 20.0f * kHonorRewardMultiplier)
                 : 0;
+            uint32 const markCount = honor / kHonorValuePerMark;
 
             // Settled BEFORE paying, not after. Notoriety raises every experience
             // award by the stacks it carries (OnGiveXP in custom_bounty.cpp), and
@@ -1165,10 +1169,8 @@ public:
                 player->ModifyMoney(int64(money));
             if (xp)
                 player->GiveXP(xp, nullptr);
-            if (honor)
-                player->RewardHonor(nullptr, 1, int32(honor));
 
-            uint32 const partyMarks = GrantNearbyRaidMarks(player, me);
+            uint32 const partyMarks = GrantNearbyRaidMarks(player, me, markCount);
 
             Notoriety::Payout payout;
             payout.Who = player;
@@ -1177,7 +1179,7 @@ public:
             payout.ZoneId = player->GetZoneId();
             payout.MoneyPaid = money;
             payout.XpPaid = xp;
-            payout.HonorPaid = honor;
+            payout.MarksPaid = partyMarks ? markCount : 0;
             payout.Level = player->GetLevel();
             Notoriety::GrantGoodieBag(payout);
 
@@ -1204,8 +1206,8 @@ public:
 
             TC_LOG_INFO("playerbots.hardcore",
                 "Notoriety: {} (level {}) sold a contract at {} peak stack(s), tier {}, "
-                "for {}c, {} xp, {} honor and {} party mark(s) ({} reroll(s)).",
-                player->GetName(), player->GetLevel(), stacks, tier, money, xp, honor, partyMarks, rerolls);
+                "for {}c, {} xp, {} honor value as {} mark(s) to {} nearby member(s) ({} reroll(s)).",
+                player->GetName(), player->GetLevel(), stacks, tier, money, xp, honor, markCount, partyMarks, rerolls);
         }
     };
 

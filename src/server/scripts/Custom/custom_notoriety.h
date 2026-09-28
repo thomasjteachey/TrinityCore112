@@ -122,7 +122,7 @@ namespace Notoriety
         uint32 ZoneId = 0;
         uint32 MoneyPaid = 0;
         uint32 XpPaid = 0;
-        uint32 HonorPaid = 0;
+        uint32 MarksPaid = 0;
         uint8 Level = 0;
     };
 
@@ -160,7 +160,7 @@ namespace Notoriety
     // Drop the sync cache for somebody who has gone. Their auras left with them.
     void ForgetCheckpointSync(ObjectGuid guid);
 
-    // THE SEAM. Money and experience/honor are paid before this is called; this is
+    // THE SEAM. Money and experience/marks are paid before this is called; this is
     // where the bag of level-appropriate loot goes when it exists. Deliberately
     // a no-op today so the shape is already right when it lands.
     void GrantGoodieBag(Payout const& payout);
