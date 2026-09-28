@@ -1011,13 +1011,14 @@ Playerbot.Pve.Drifters.ZoneDwellSeconds = 10
 #                     TeleportGold is what the lowest band pays (the 1-10 starter
 #                     zones), TeleportGold.Max what the highest pays (55-60), and
 #                     every band in between sits on the straight line through the
-#                     two by its midpoint - Feralas (40-50) pays about 18g at the
-#                     defaults. A zone with no band pays TeleportGold. Max at or
-#                     below TeleportGold pays TeleportGold flat; both 0 pays nothing.
-#        Default:     10 (TeleportGold), 20 (TeleportGold.Max)
+#                     two by its midpoint. A zone with no band pays TeleportGold.
+#                     Max at or below TeleportGold pays TeleportGold flat; both 0
+#                     pays nothing. The default is a flat 1g: a bigger stipend
+#                     minted far more gold than the fleet earned (~245k g).
+#        Default:     1 (TeleportGold), 1 (TeleportGold.Max)
 #
-Playerbot.Pve.Drifters.TeleportGold = 10
-Playerbot.Pve.Drifters.TeleportGold.Max = 20
+Playerbot.Pve.Drifters.TeleportGold = 1
+Playerbot.Pve.Drifters.TeleportGold.Max = 1
 
 #    Playerbot.Pve.ProactiveMaxLevelsAbove
 #        Description: How far above its own level a bot will PICK a fight with a person.

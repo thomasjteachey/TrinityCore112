@@ -18750,8 +18750,8 @@ namespace playerbot
             sConfigMgr->GetFloatDefault("Playerbot.Pve.IdleProd.DropYards", 210.0f));
         g_PveConfig.idleProdRetrySeconds = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Playerbot.Pve.IdleProd.RetrySeconds", 120), 15, 3600));
-        g_PveConfig.drifterTeleportGold = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.TeleportGold", 10), 0, 10000));
-        g_PveConfig.drifterTeleportGoldMax = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.TeleportGold.Max", 20), 0, 10000));
+        g_PveConfig.drifterTeleportGold = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.TeleportGold", 1), 0, 10000));
+        g_PveConfig.drifterTeleportGoldMax = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.Drifters.TeleportGold.Max", 1), 0, 10000));
         g_PveConfig.proactiveMaxLevelsAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveMaxLevelsAbove", 4), 0, 60));
         g_PveConfig.proactiveMaxLevelsBelow = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveMaxLevelsBelow", 4), 0, 60));
         g_PveConfig.proactiveBountyStacks = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.ProactiveBountyStacks", 5), 0, 255));

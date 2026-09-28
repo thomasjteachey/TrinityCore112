@@ -285,8 +285,8 @@ struct PveConfig
     // highest pays, and every band in between sits on the straight line through
     // those two by its midpoint. Max at or below the floor pays the floor flat;
     // both zero pays nothing.
-    uint32 drifterTeleportGold = 10;
-    uint32 drifterTeleportGoldMax = 50;
+    uint32 drifterTeleportGold = 1;
+    uint32 drifterTeleportGoldMax = 1;
     // How far above its own level a bot will pick a fight with a person.
     // Four is the orange/red boundary the client draws: a target five or more
     // levels up is painted RED, the standard "you will lose this" signal, and a
