@@ -101,6 +101,25 @@ static uint32 constexpr SPELL_ARCANE_MISSILES_MOVE_AURA_1 = 89777;
 static uint32 constexpr SPELL_ARCANE_MISSILES_MOVE_AURA_2 = 89778;
 static float constexpr ICE_FANG_SPRINT_TURN_SPEED = 0;
 
+// A permanent aura cast by an item the player is wearing - an equip-spell
+// enchant such as the ZG head/leg arcanums. Stock gives those spells the
+// Passive attribute, which is what keeps them through the arena sweep and
+// death; this realm's Spell.dbc dropped it (the helm+legs stacking rules lean
+// on that), so without this they were stripped entering a battleground or on
+// dying and only an unequip/re-equip brought them back.
+bool IsWornItemGearAura(Unit const* owner, Aura const* aura)
+{
+    if (!aura->IsPermanent() || aura->GetCastItemGUID().IsEmpty())
+        return false;
+
+    Player const* player = owner->ToPlayer();
+    if (!player)
+        return false;
+
+    Item const* item = player->GetItemByGuid(aura->GetCastItemGUID());
+    return item && item->IsEquipped();
+}
+
 bool IsIceFangSprintTurnRateAura(SpellInfo const* spellInfo)
 {
     return spellInfo->Id == SPELL_ICE_FANG_SPRINT;
@@ -5496,10 +5515,13 @@ void Unit::RemoveArenaAuras()
 {
     // in join, remove positive buffs, on end, remove negative
     // used to remove positive visible auras in arenas
-    RemoveAppliedAuras([](AuraApplication const* aurApp)
+    RemoveAppliedAuras([this](AuraApplication const* aurApp)
     {
         Aura const* aura = aurApp->GetBase();
         if (aura->GetSpellInfo()->Id == 58553)
+            return false;
+
+        if (IsWornItemGearAura(this, aura))
             return false;
 
         if (aura->GetSpellInfo()->GetSpellSpecific() == SPELL_SPECIFIC_AURA)
@@ -5529,7 +5551,7 @@ void Unit::RemoveAllAurasOnDeath()
     for (AuraApplicationMap::iterator iter = m_appliedAuras.begin(); iter != m_appliedAuras.end();)
     {
         Aura const* aura = iter->second->GetBase();
-        if (!aura->IsPassive() && !aura->IsDeathPersistent())
+        if (!aura->IsPassive() && !aura->IsDeathPersistent() && !IsWornItemGearAura(this, aura))
             _UnapplyAura(iter, AURA_REMOVE_BY_DEATH);
         else
             ++iter;
@@ -5538,7 +5560,7 @@ void Unit::RemoveAllAurasOnDeath()
     for (AuraMap::iterator iter = m_ownedAuras.begin(); iter != m_ownedAuras.end();)
     {
         Aura* aura = iter->second;
-        if (!aura->IsPassive() && !aura->IsDeathPersistent())
+        if (!aura->IsPassive() && !aura->IsDeathPersistent() && !IsWornItemGearAura(this, aura))
             RemoveOwnedAura(iter, AURA_REMOVE_BY_DEATH);
         else
             ++iter;
