@@ -906,7 +906,13 @@ bool CanProcessPlayerLifecycle(Player const* player)
         return false;
     }
 
-    if (!IsPersistentLifecycleEnabled())
+    // A duel is the one PvP fight the persistent lifecycle does not own the
+    // queueing side of, and nothing else fights it: the PvE tick hands the bot
+    // over the moment player->duel exists. Without this pass the bot accepted
+    // the duel and kept walking wherever it was going. ProcessLifecycleEntryPoint
+    // stops after the duel and class-spell passes for these bots, so letting
+    // them through does not start any queueing.
+    if (!IsPersistentLifecycleEnabled() && !player->duel)
     {
         ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
@@ -2767,8 +2773,12 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     // it actually stands inside a battleground - or still holds a queue slot
     // from before it became a companion - the normal lifecycle resumes, so a
     // pending invite is answered instead of stalling the pop.
-    if (!player->InBattleground() && !player->InBattlegroundQueue() &&
-        PveManager::IsExemptFromBattlegroundOrchestration(player))
+    //
+    // A duel is the exception: the PvE tick stands down for it, so the duel
+    // and class-spell passes below must still run - and nothing after them.
+    bool const exemptFromOrchestration = !player->InBattleground() && !player->InBattlegroundQueue() &&
+        PveManager::IsExemptFromBattlegroundOrchestration(player);
+    if (exemptFromOrchestration && !player->duel)
         return;
 
     PvpValues const values = PvpCore::CollectValues(player);
@@ -2814,6 +2824,14 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP cadence bypass applied: guid={} spell={} reason=off-gcd-or-pet-action.",
             guidRaw, classSpellContext.spellId);
+    }
+
+    // Only here for the duel (see CanProcessPlayerLifecycle and the exemption
+    // above): fight it, but do not queue, accept invites or leave anything.
+    if (exemptFromOrchestration || !IsPersistentLifecycleEnabled())
+    {
+        LogLifecycleBranchSummary(guid, "duel-only");
+        return;
     }
 
     BattlegroundLifecycleContext const bgContext = PvpCore::BuildBattlegroundLifecycleContext(player, values);

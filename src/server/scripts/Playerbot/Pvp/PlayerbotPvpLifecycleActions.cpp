@@ -6166,7 +6166,28 @@ namespace playerbot
         if (!CanIssueBotMovement(player))
             return false;
 
-        if (!player->duel || player->duel->State != DUEL_STATE_IN_PROGRESS)
+        if (!player->duel)
+            return false;
+
+        // The PvE tick has already let go of the bot, so without this it keeps
+        // walking its old path through the countdown - and can carry itself out
+        // of the duel area before the fight starts.
+        if (player->duel->State == DUEL_STATE_COUNTDOWN)
+        {
+            // Clear the slot too: a travel/follow generator left in it would
+            // simply relaunch its spline on the next update.
+            MotionMaster* motionMaster = player->GetMotionMaster();
+            bool const hasTravelGenerator = motionMaster->GetCurrentSlot() == MOTION_SLOT_ACTIVE;
+            if (hasTravelGenerator)
+                motionMaster->Clear(MOTION_SLOT_ACTIVE);
+            if (hasTravelGenerator || player->isMoving())
+                StopVirtualPlayerbotMovement(player);
+            if (Player* opponent = player->duel->Opponent)
+                player->SetFacingToObject(opponent);
+            return true;
+        }
+
+        if (player->duel->State != DUEL_STATE_IN_PROGRESS)
             return false;
 
         return EngageNearestEnemyPlayer(player, GetAggressiveCombatScanDistance(player, 100.0f));
