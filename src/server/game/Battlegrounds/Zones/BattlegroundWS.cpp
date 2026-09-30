@@ -1114,12 +1114,17 @@ void BattlegroundWS::FillInitialWorldStates(WorldPackets::WorldState::InitWorldS
     else
         packet.Worldstates.emplace_back(BG_WS_STATE_TIMER_ACTIVE, 0);
 
-    if (_flagState[TEAM_HORDE] == BG_WS_FLAG_STATE_ON_PLAYER)
+    // BG_WS_FLAG_STATE_<team> means "<team> is carrying the enemy flag" (the
+    // Alliance row's HordeFlag icon reads 2339), matching every UpdateFlagState
+    // call. _flagState is indexed by the flag's own team, so it crosses here.
+    // Filling these same-side made a late joiner see the carried flag on the
+    // wrong row while the CWSG snapshot lit the right one: both rows occupied.
+    if (_flagState[TEAM_ALLIANCE] == BG_WS_FLAG_STATE_ON_PLAYER)
         packet.Worldstates.emplace_back(BG_WS_FLAG_STATE_HORDE, 2);
     else
         packet.Worldstates.emplace_back(BG_WS_FLAG_STATE_HORDE, 1);
 
-    if (_flagState[TEAM_ALLIANCE] == BG_WS_FLAG_STATE_ON_PLAYER)
+    if (_flagState[TEAM_HORDE] == BG_WS_FLAG_STATE_ON_PLAYER)
         packet.Worldstates.emplace_back(BG_WS_FLAG_STATE_ALLIANCE, 2);
     else
         packet.Worldstates.emplace_back(BG_WS_FLAG_STATE_ALLIANCE, 1);

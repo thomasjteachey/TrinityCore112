@@ -854,12 +854,14 @@ void BattlegroundTP::FillInitialWorldStates(WorldPackets::WorldState::InitWorldS
   else
       packet.Worldstates.emplace_back(BG_TP_FLAG_UNK_HORDE, 0);
 
-  if (_flagState[TEAM_HORDE] == BG_TP_FLAG_STATE_ON_PLAYER)
+  // BG_TP_FLAG_STATE_<team> = "<team> carries the enemy flag", as every
+  // UpdateFlagState call sets it; _flagState is indexed by the flag's own team.
+  if (_flagState[TEAM_ALLIANCE] == BG_TP_FLAG_STATE_ON_PLAYER)
       packet.Worldstates.emplace_back(BG_TP_FLAG_STATE_HORDE, 2);
   else
       packet.Worldstates.emplace_back(BG_TP_FLAG_STATE_HORDE, 1);
 
-  if (_flagState[TEAM_ALLIANCE] == BG_TP_FLAG_STATE_ON_PLAYER)
+  if (_flagState[TEAM_HORDE] == BG_TP_FLAG_STATE_ON_PLAYER)
       packet.Worldstates.emplace_back(BG_TP_FLAG_STATE_ALLIANCE, 2);
   else
       packet.Worldstates.emplace_back(BG_TP_FLAG_STATE_ALLIANCE, 1);
