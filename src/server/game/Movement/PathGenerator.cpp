@@ -560,7 +560,21 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
     if (_pathPolyRefs[_polyLength - 1] == endPoly && !(_type & PATHFIND_INCOMPLETE))
         _type = PATHFIND_NORMAL;
     else
+    {
         _type = PATHFIND_INCOMPLETE;
+
+        // The corridor stops short of endPoly, so endPoint is somewhere the mesh
+        // cannot reach - typically the far side of a wall. Pull it onto the last
+        // corridor poly: a one-poly corridor makes FindSmoothPath (and the
+        // single-point special case in BuildPointPath) append endPoint verbatim,
+        // which turned "as close as you can get" into a straight line through
+        // the wall. Units retreating from an enemy at an arena edge walked out
+        // of the arena this way.
+        float clampedEnd[VERTEX_SIZE];
+        if (_pathPolyRefs[_polyLength - 1] != endPoly &&
+            dtStatusSucceed(_navMeshQuery->closestPointOnPoly(_pathPolyRefs[_polyLength - 1], endPoint, clampedEnd, nullptr)))
+            dtVcopy(endPoint, clampedEnd);
+    }
 
     AddFarFromPolyFlags(startFarFromPoly, endFarFromPoly);
 
