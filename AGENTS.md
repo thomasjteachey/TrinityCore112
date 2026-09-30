@@ -114,7 +114,7 @@ game. Work the full grid, both columns:
 | surface | Legionnaire+ | Barracks+ |
 |---|---|---|
 | MySQL mirror | `dbc.<table>_lplus` | `dbc.<table>_bplus` |
-| local working copy (Windows) | `C:\Projects\Gamedev\wow\data\dbc\lplus\` | `C:\Projects\Gamedev\wow\data\dbc\bplus\` |
+| local working copy (Windows) | `centurion\dbc\` (shared, see §4) | `centurion\dbc\` (shared, see §4) |
 | PROD server binary | `~/wow/servers/tc-legionnaireplus/data/dbc/` | `~/wow/servers/tc-barracksplus/data/dbc/` |
 | client patch (+ `.version` bump) | `patch-enUS-8` | `patch-enUS-A` |
 | world DB | `lplusworld` | `bplusworld` |
@@ -294,14 +294,20 @@ the client installed, which settles "did my publish reach them" instantly.
 `~/publish_patch.py` is **STALE — do not run it.** It promotes a pre-refactor
 test zip and would republish old data.
 
-### The local `wow\data\dbc\{bplus,lplus}` copies are a REFERENCE and go stale
+### The local DBC copy is `centurion\dbc\` (in this repo) — a REFERENCE that goes stale
 
-Nothing regenerates them. Publish **from the server**, then resync them down —
+The old `wow\data\dbc\{bplus,lplus}` folders were deleted 2026-09-30. Before the
+delete, their local-only rows were merged into `centurion\dbc\`: Goblin Workshop
+(CDI 40000-40002, CMD 4000-4002, GODI 11000/11001, Vehicle 1000, VehicleSeat
+90000), Beast Rider 89799 (Vehicle/VehicleSeat), SpellVisual/Kit 21000-21101 and
+90000, SpellVisualEffectName 9000/9001/21100, and TaxiPath 90241/90242 with their
+33 nodes. The stale L+ `PvpDifficulty` row 91191 was deliberately left out.
+
+Nothing regenerates this copy. Publish **from the server**, then resync it down —
 never the reverse, or you silently revert live data. But **never blind-copy the
-whole folder**: audited 2026-08-20, 3 files were a strict local *superset*
-(`Vehicle.dbc`, `VehicleSeat.dbc` — Beast Rider 89799; `SpellVisualEffectName.dbc`
-— rows 9000/9001) whose rows exist nowhere else, since dbcgen cannot build
-`Vehicle` at all. Compare id sets per file and skip any file with local-only ids.
+whole folder**: some rows (e.g. Vehicle/VehicleSeat, which dbcgen cannot build)
+may exist only locally. Compare id sets per file and skip any file with
+local-only ids.
 
 Art lives in `patch-Y` (base) and `patch-Z` (**registry items only** — user's
 explicit rule). Data lives in `patch-enUS-8` (+ the test `patch-enUS-T`).
