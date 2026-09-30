@@ -6626,9 +6626,17 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
                 break;
             case PvpClassSpellContext::MovementDirective::ResetCombatState:
+                // Creature combat only. CombatStop(true) is the mutual PvP
+                // clear: it ended combat for the player attacking the bot too,
+                // so an out-of-mana healer being Frostbolted dropped out of
+                // combat on both sides, sat down to eat and drink between bolts,
+                // and repeated that every hit. PvP combat never needs a reset -
+                // the core expires it five seconds after the last hostile act -
+                // so leave it for a real fight to end on its own.
                 player->SetSelection(ObjectGuid::Empty);
+                player->InterruptNonMeleeSpells(false);
                 player->AttackStop();
-                player->CombatStop(true);
+                player->GetCombatManager().EndAllPvECombat();
                 break;
             case PvpClassSpellContext::MovementDirective::None:
             default:

@@ -4055,6 +4055,43 @@ Unit const* SelectClosestEnemyTarget(Player const* player, bool requireReachable
     return nullptr;
 }
 
+// The nearest living unit the bot is in real PvP combat with: someone who hit
+// it, or whom it hit, inside the core's five second PvP combat window.
+//
+// Target selection cannot answer "who is fighting me". A caster pelting the bot
+// with Frostbolts never auto-attacks, so it is not the bot's victim or one of
+// its attackers, and the acquisition scan skips it for range, line of sight or
+// engagement consent. The combat references are the core's own record of the
+// fight, so an opponent found here is one the bot really cannot rest through.
+Unit const* FindEngagedPvpOpponent(Player const* player)
+{
+    if (!player)
+        return nullptr;
+
+    Unit const* nearest = nullptr;
+    float nearestDistance = 0.0f;
+    for (auto const& [guid, ref] : player->GetCombatManager().GetPvPCombatRefs())
+    {
+        if (!ref || ref->IsSuppressedFor(player))
+            continue;
+
+        Unit const* other = ref->GetOther(player);
+        if (!other || !other->IsAlive() || !other->IsInMap(player))
+            continue;
+        if (!player->IsValidAttackTarget(other))
+            continue;
+
+        float const distance = player->GetDistance(other);
+        if (!nearest || distance < nearestDistance)
+        {
+            nearest = other;
+            nearestDistance = distance;
+        }
+    }
+
+    return nearest;
+}
+
 uint32 GetCurrentCastSpellId(Unit const* unit)
 {
     if (!unit)
@@ -9062,6 +9099,11 @@ PvpValues PvpCore::CollectValues(Player const* player)
                 disengageTarget = resolveTargetByGuid(selectedTargetGuid);
             if (!disengageTarget && player->GetVictim() && player->GetVictim()->IsAlive())
                 disengageTarget = player->GetVictim();
+            // Nobody targeted, but somebody may still be shooting at it. Run
+            // from them rather than fall through to the reset below, which is
+            // only for a combat flag with no fight behind it.
+            if (!disengageTarget)
+                disengageTarget = FindEngagedPvpOpponent(player);
 
                 if (disengageTarget)
                 {
