@@ -3561,9 +3561,18 @@ void AuraEffect::HandleModBaseResistance(AuraApplication const* aurApp, uint8 mo
     // only players have base stats
     if (target->GetTypeId() != TYPEID_PLAYER)
     {
-        //pets only have base armor
-        if (target->IsPet() && (GetMiscValue() & SPELL_SCHOOL_MASK_NORMAL))
-            target->HandleStatFlatModifier(UNIT_MOD_ARMOR, TOTAL_VALUE, float(GetAmount()), apply);
+        // Pets take armor AND the magic schools. Upstream applied armor only,
+        // which silently dropped the 126-mask resistance of the warlock set
+        // pet buffs (Felheart 21740, Nemesis 21921 "Demonic Ally").
+        if (target->IsPet())
+        {
+            if (GetMiscValue() & SPELL_SCHOOL_MASK_NORMAL)
+                target->HandleStatFlatModifier(UNIT_MOD_ARMOR, TOTAL_VALUE, float(GetAmount()), apply);
+
+            for (uint8 i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
+                if (GetMiscValue() & (1 << i))
+                    target->HandleStatFlatModifier(UnitMods(UNIT_MOD_RESISTANCE_START + i), TOTAL_VALUE, float(GetAmount()), apply);
+        }
     }
     else
     {
