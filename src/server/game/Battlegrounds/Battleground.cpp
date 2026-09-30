@@ -39,6 +39,7 @@
 #include "ReputationMgr.h"
 #include "Miscellaneous/CooldownStash.h"
 #include "Miscellaneous/DepletedMarks.h"
+#include "Miscellaneous/Surnames.h"
 #include "SpellAuras.h"
 #include "TemporarySummon.h"
 #include "Transport.h"
@@ -1916,8 +1917,13 @@ Player* Battleground::FindTransientPlayerByDisplayName(std::string_view name, ui
         if (!player || !player->GetSession() || !player->GetSession()->IsTransientPlayerSession())
             continue;
 
+        // A copy wears its source's family name (Surnames::AdoptTransient), so
+        // the name players see and type is "<name> <surname>". The bare first
+        // name still answers too, as it does for everyone else.
         std::string displayName;
-        if (!sCharacterCache->GetCharacterNameByGuid(guid, displayName) || !StringEqualI(displayName, name))
+        if (!sCharacterCache->GetCharacterNameByGuid(guid, displayName))
+            continue;
+        if (!StringEqualI(displayName, name) && !StringEqualI(Surnames::Decorated(guid, displayName), name))
             continue;
 
         if (participant.Team == preferredTeam)

@@ -615,7 +615,26 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
             // not the unit the sender is looking at. Ask the match first.
             Player* receiver = nullptr;
             if (Battleground* battleground = sender->GetBattleground())
+            {
                 receiver = battleground->FindTransientPlayerByDisplayName(to, sender->GetBGTeam());
+
+                // "/w Elgrom drop" arrives as "Elgrom Drop". SplitWhisperTarget
+                // only hands the word back when the first name is unique across
+                // every character, which a copy's source need not be; the match
+                // itself can still say who "Elgrom" is.
+                std::size_t const space = to.find(' ');
+                if (!receiver && lang != LANG_ADDON && space != std::string::npos &&
+                    !sCharacterCache->GetCharacterCacheByFullName(to))
+                {
+                    if (Player* firstNameMatch = battleground->FindTransientPlayerByDisplayName(
+                        std::string_view(to).substr(0, space), sender->GetBGTeam()))
+                    {
+                        receiver = firstNameMatch;
+                        msg = (rawSecondWord.empty() ? to.substr(space + 1) : rawSecondWord) + ' ' + msg;
+                        to.erase(space);
+                    }
+                }
+            }
             // The whole name (Miscellaneous/Surnames.h): the online name map
             // knows first names only, which since family names arrived no
             // longer say who is meant.
