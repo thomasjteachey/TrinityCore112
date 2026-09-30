@@ -1775,8 +1775,6 @@ class spell_warl_death_coil : public SpellScript
             caster->GetSpellHistory()->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, 6119, 0);
             caster->ToPlayer()->SendDirectMessage(&data);
         }
-
-
     }
 
     void Register() override

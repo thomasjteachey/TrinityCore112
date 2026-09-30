@@ -43,6 +43,7 @@
 #include "WorldSession.h"
 #include "WorldPacket.h"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <functional>
@@ -112,6 +113,10 @@ namespace
     constexpr float HomeRadius = 40.0f;
     // A typo such as "1-900000" must not allocate a set the size of a DBC.
     constexpr uint32 MaxIdRange = 100000;
+    // createTournamentKit clones the class template's saved spellbook. Those
+    // templates are Orcs, so these active racials must be removed again for
+    // every other race instead of surviving beside the recipient's own racial.
+    constexpr std::array<uint32, 3> OrcBloodFurySpells = { 20572, 33697, 33702 };
 
     // Startup data, read-only once loaded.
     std::unordered_map<uint16, CreateInfo> CreateInfoStore;   // race << 8 | class
@@ -1009,10 +1014,47 @@ bool IsTournamentNameMarker(std::string const& rawName)
     return true;
 }
 
+static void StripForeignBloodFury(Player* player)
+{
+    if (!player || player->GetRace() == RACE_ORC)
+        return;
+
+    uint32 removedSpells = 0;
+    for (uint32 spellId : OrcBloodFurySpells)
+    {
+        if (!player->HasSpell(spellId))
+            continue;
+
+        player->RemoveSpell(spellId, false, false);
+        ++removedSpells;
+    }
+
+    uint32 removedButtons = 0;
+    for (uint8 button = 0; button < MAX_ACTION_BUTTONS; ++button)
+    {
+        ActionButton const* action = player->GetActionButton(button);
+        if (!action || action->GetType() != ACTION_BUTTON_SPELL ||
+            std::find(OrcBloodFurySpells.begin(), OrcBloodFurySpells.end(), action->GetAction()) == OrcBloodFurySpells.end())
+            continue;
+
+        player->removeActionButton(button);
+        ++removedButtons;
+    }
+
+    if (removedSpells || removedButtons)
+    {
+        player->SendInitialActionButtons();
+        TC_LOG_INFO("entities.player", "Tournament racial repair: removed {} foreign Blood Fury spell(s) and {} action button(s) from {} (race {}, class {}).",
+            removedSpells, removedButtons, player->GetName(), uint32(player->GetRace()), uint32(player->GetClass()));
+    }
+}
+
 void ApplyCharacterKit(Player* player)
 {
     if (!IsTournamentCharacter(player))
         return;
+
+    StripForeignBloodFury(player);
 
     uint32 const classMask = player->GetClassMask();
     for (InnateSpell const& innate : Config.InnateSpells)
@@ -1360,6 +1402,21 @@ void RunKitProcedure(Player const* newCharacter)
 
     CharacterDatabase.DirectPExecute("CALL createTournamentKit({}, {}, {}, '{}')",
         uint32(newCharacter->GetClass()), uint32(newCharacter->GetRace()), newCharacter->GetGUID().GetCounter(), petIds);
+
+    // The stored procedure copies an Orc class template before installing the
+    // recipient's own racial action button. Do not leave the template's active
+    // Blood Fury spell (or one of its copied buttons) on a non-Orc until their
+    // first login repair.
+    if (newCharacter->GetRace() != RACE_ORC)
+    {
+        uint32 const guid = newCharacter->GetGUID().GetCounter();
+        CharacterDatabase.DirectPExecute(
+            "DELETE FROM character_spell WHERE guid = {} AND spell IN ({}, {}, {})",
+            guid, OrcBloodFurySpells[0], OrcBloodFurySpells[1], OrcBloodFurySpells[2]);
+        CharacterDatabase.DirectPExecute(
+            "DELETE FROM character_action WHERE guid = {} AND type = 0 AND action IN ({}, {}, {})",
+            guid, OrcBloodFurySpells[0], OrcBloodFurySpells[1], OrcBloodFurySpells[2]);
+    }
 }
 
 bool AlwaysMaxWeaponSkill(Player const* player)
