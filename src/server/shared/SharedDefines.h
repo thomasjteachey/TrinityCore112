@@ -3605,12 +3605,15 @@ constexpr bool IsDataDrivenArena(BattlegroundTypeId bgTypeId)
 // Both routes in BattlegroundMgr::GetRandomBG - the pool table and the
 // BattlemasterList.dbc fallback - ask this. They used to spell the list out
 // separately, so an arena added to one was still rolled by the other.
-constexpr bool IsArenaUnfitForBots(BattlegroundTypeId bgTypeId)
+//
+// Empty since 0e9857c4a6: Nagrand (remake), Ruins of Lordaeron, Tol'Viron and
+// Ashamane's Fall were listed because bots backing away from an enemy walked
+// through their walls. That was PathGenerator appending an unreachable
+// endpoint to a one-poly corridor, not the arenas. Kept as the one place to
+// list an arena again should a map-specific problem turn up.
+constexpr bool IsArenaUnfitForBots(BattlegroundTypeId /*bgTypeId*/)
 {
-    return bgTypeId == BATTLEGROUND_NGA
-        || bgTypeId == BATTLEGROUND_RL
-        || bgTypeId == BATTLEGROUND_TV
-        || bgTypeId == BATTLEGROUND_ASF;
+    return false;
 }
 
 enum BattlefieldBattleId : uint8
