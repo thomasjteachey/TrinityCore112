@@ -1272,10 +1272,12 @@ void AddSC_bba_bosses()
 
 void AddSC_instance_blood_beneath_arena();
 void AddSC_bba_npcs();
+void AddSC_bba_commands();
 
 void AddSC_blood_beneath_arena()
 {
     AddSC_instance_blood_beneath_arena();
     AddSC_bba_npcs();
     AddSC_bba_bosses();
+    AddSC_bba_commands();
 }

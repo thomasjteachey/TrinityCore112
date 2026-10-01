@@ -154,7 +154,8 @@ enum BBAActions
     ACTION_FINALE_DONE          = 6,    // instance -> Var'jun / Blightblood
     ACTION_TWIN_FELL            = 7,    // twin -> twin
     ACTION_TWIN_DIED            = 8,    // twin -> twin
-    ACTION_BETRAYED             = 9     // instance -> Vraka'ti
+    ACTION_BETRAYED             = 9,    // instance -> Vraka'ti
+    ACTION_RESYNC               = 10    // .bba stage -> Var'jun: re-place for the current stage
 };
 
 // Fixed points (the mock-up the customer built on map 0; map 1685 shares the coordinates)

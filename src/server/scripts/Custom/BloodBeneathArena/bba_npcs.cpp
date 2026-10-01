@@ -182,9 +182,19 @@ struct npc_bba_varjun : public ScriptedAI
     void JustAppeared() override
     {
         ScriptedAI::JustAppeared();
+        Resync();
+    }
+
+    // place Var'jun where the run's stage says he should be (spawn, reload, .bba stage)
+    void Resync()
+    {
         uint32 const stage = _instance->GetData(DATA_STAGE);
+        if (stage >= STAGE_FREED)
+            if (GameObject* cage = me->FindNearestGameObject(GO_APOTHECARY_CAGE, 4.0f))
+                cage->SetGoState(GO_STATE_ACTIVE);
         if (stage >= STAGE_RITUAL && stage < STAGE_COMPLETE)
         {
+            me->GetMotionMaster()->Clear();
             me->NearTeleportTo(BBAPillarPos);
             _events.ScheduleEvent(EVENT_START_CHANNEL, 2s);
         }
@@ -335,6 +345,9 @@ struct npc_bba_varjun : public ScriptedAI
                 break;
             case ACTION_FINALE_DONE:
                 _events.ScheduleEvent(EVENT_GO_TO_EXIT, 6s);
+                break;
+            case ACTION_RESYNC:
+                Resync();
                 break;
             default:
                 break;
