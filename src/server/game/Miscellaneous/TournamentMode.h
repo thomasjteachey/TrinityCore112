@@ -142,6 +142,11 @@ namespace Tournament
     // area must be listed in Centurion.Tournament.AllowedZones.
     bool IsLocationAllowed(uint32 mapId, uint32 zoneId, uint32 areaId);
     bool IsLocationAllowed(uint32 mapId, float x, float y, float z);
+
+    // Centurion.Tournament.OpenDungeons: dungeon maps exempt from the no-PvE rule.
+    // Inside one a tournament character may enter, stay, talk to every NPC, take
+    // its quests and loot, like a world character.
+    bool IsOpenDungeon(uint32 mapId);
     bool HasConfinement();
     bool GetHomeLocation(WorldLocation& out);
     // Sends a tournament character that stands somewhere it may not back home.

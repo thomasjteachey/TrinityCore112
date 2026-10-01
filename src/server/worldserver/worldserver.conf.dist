@@ -5503,6 +5503,14 @@ Centurion.Items.QuiversHoldAnyItem = 0
 #                     no entry here.
 #        Default:     "" - (none)
 #
+#    Centurion.Tournament.OpenDungeons
+#        Description: Comma-separated dungeon map ids tournament characters may run anyway. Inside
+#                     one they are not confined, may talk to every NPC, take its quests and loot,
+#                     like a world character. The NPC that leads in from the tournament grounds
+#                     still needs its entry in AllowedCreatures.
+#        Example:     "1685" - Blood Beneath the Arena
+#        Default:     "" - (none)
+#
 #    Centurion.Tournament.InnateSpells
 #        Description: Spells every tournament character knows, as spell[:classmask]. Taught
 #                     at each of its logins and taken back if it is ever made a world
@@ -5602,6 +5610,7 @@ Centurion.Tournament.WaiveReagents = 1
 Centurion.Tournament.ResetDuelCooldowns = 1
 Centurion.Tournament.ResetDuelHealthMana = 1
 Centurion.Tournament.AllowedLootObjects = ""
+Centurion.Tournament.OpenDungeons = ""
 Centurion.Tournament.InnateSpells = "29073,18610,22734:1494"
 Centurion.Tournament.QueueMinLevel = 60
 Centurion.Tournament.ForceQueueAtMinLevel = 1

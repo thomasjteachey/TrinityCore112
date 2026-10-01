@@ -3911,7 +3911,7 @@ Map::EnterState InstanceMap::CannotEnter(Player* player)
     // Tournament characters never enter dungeons or raids (TournamentMode.h) -
     // this is the check a login inside an instance and a finished loading screen
     // run, MapManager::PlayerCannotEnter the one every teleport runs.
-    if (Tournament::IsTournamentCharacter(player) && IsDungeon())
+    if (Tournament::IsTournamentCharacter(player) && IsDungeon() && !Tournament::IsOpenDungeon(GetId()))
         return CANNOT_ENTER_UNSPECIFIED_REASON;
 
     // cannot enter if the instance is full (player cap), GMs don't count

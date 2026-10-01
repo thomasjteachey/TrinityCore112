@@ -82,6 +82,7 @@ namespace
         std::unordered_set<uint32> AllowedZones;
         std::unordered_set<uint32> AllowedCreatures;
         std::unordered_set<uint32> AllowedLootObjects;
+        std::unordered_set<uint32> OpenDungeons;
         std::vector<InnateSpell> InnateSpells;
         uint32 PhaseMask = 0;
         uint32 WorldPhaseMask = 0;
@@ -304,6 +305,9 @@ void LoadConfig()
 
     for (uint32 id : ParseIdList("Centurion.Tournament.AllowedLootObjects", sConfigMgr->GetStringDefault("Centurion.Tournament.AllowedLootObjects", "")))
         loaded.AllowedLootObjects.insert(id);
+
+    for (uint32 id : ParseIdList("Centurion.Tournament.OpenDungeons", sConfigMgr->GetStringDefault("Centurion.Tournament.OpenDungeons", "")))
+        loaded.OpenDungeons.insert(id);
 
     // "spell[:classmask]"
     std::string const rawInnate = sConfigMgr->GetStringDefault("Centurion.Tournament.InnateSpells", "29073,18610,22734:1494");
@@ -762,16 +766,23 @@ bool HasConfinement()
     return Config.Enabled && !Config.AllowedZones.empty();
 }
 
+bool IsOpenDungeon(uint32 mapId)
+{
+    return Config.Enabled && Config.OpenDungeons.count(mapId);
+}
+
 bool IsLocationAllowed(uint32 mapId, uint32 zoneId, uint32 areaId)
 {
     if (!HasConfinement())
         return true;
 
     // Queued matches carry their own rules; a battleground or arena is never
-    // "leaving" the tournament grounds.
+    // "leaving" the tournament grounds. Neither is an open dungeon.
     if (MapEntry const* entry = sMapStore.LookupEntry(mapId))
         if (entry->IsBattlegroundOrArena())
             return true;
+    if (IsOpenDungeon(mapId))
+        return true;
 
     return Config.AllowedZones.count(zoneId) || Config.AllowedZones.count(areaId);
 }
@@ -784,6 +795,8 @@ bool IsLocationAllowed(uint32 mapId, float x, float y, float z)
     if (MapEntry const* entry = sMapStore.LookupEntry(mapId))
         if (entry->IsBattlegroundOrArena())
             return true;
+    if (IsOpenDungeon(mapId))
+        return true;
 
     // The home location is always a legal destination, so a misconfigured zone
     // list can never bounce a character between two refusals.
@@ -906,7 +919,7 @@ bool CanInteractWithCreature(Player const* player, Creature const* creature, uin
     // match furniture belong to the match, not to the world; the custom-game
     // lobby's staff belong to custom games, which are open to everyone.
     if (Map const* map = player->FindMap())
-        if (map->IsBattlegroundOrArena())
+        if (map->IsBattlegroundOrArena() || IsOpenDungeon(map->GetId()))
             return true;
     if (player->IsInCustomGameLobby())
         return true;
@@ -974,8 +987,9 @@ bool MayReceiveGroupLoot(Player const* player)
     if (!IsTournamentCharacter(player) || player->IsGameMaster())
         return true;
 
+    // ... and everything inside an open dungeon (Centurion.Tournament.OpenDungeons).
     Map const* map = player->FindMap();
-    return map && map->IsBattlegroundOrArena();
+    return map && (map->IsBattlegroundOrArena() || IsOpenDungeon(map->GetId()));
 }
 
 bool CanUseGuildBank(Player const* player)

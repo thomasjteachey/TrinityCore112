@@ -215,9 +215,10 @@ Map::EnterState MapManager::PlayerCannotEnter(uint32 mapid, Player* player, bool
     if (player->IsGameMaster())
         return Map::CAN_ENTER;
 
-    // Tournament characters never enter dungeons or raids (TournamentMode.h).
+    // Tournament characters never enter dungeons or raids (TournamentMode.h),
+    // except the ones listed in Centurion.Tournament.OpenDungeons.
     // Battlegrounds and arenas are not dungeons and returned above.
-    if (Tournament::IsTournamentCharacter(player))
+    if (Tournament::IsTournamentCharacter(player) && !Tournament::IsOpenDungeon(mapid))
     {
         Tournament::SendRefusal(player, "enter dungeons or raids");
         return Map::CANNOT_ENTER_UNSPECIFIED_REASON;
