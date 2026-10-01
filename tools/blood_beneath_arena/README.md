@@ -35,8 +35,31 @@ patch-enUS-A 1.00154. It does nothing in game until a CenturionDev build.
    spiderling swarm, Drain Life tether, a kickable self-heal at 50%, enrage at 10%). Anok's death
    completes the quest; Var'jun and Blightblood wait at the start.
 
-Abilities use stock spells with base-point overrides (`CastSpellExtraArgs.AddSpellBP0/1`); ground
-effects are an invisible level-61 trigger (`BBASpawnZone`) casting persistent stock spells.
+Ground effects are an invisible level-61 trigger (`BBASpawnZone`) casting persistent spells.
+
+## Phase 4: named ability spells
+
+`bba_ability_spells.py` appends 38 rows (92110-92151), each a clone of the stock spell phase 3
+used, renamed to the design doc's ability and re-tuned (`bp`, duration, cast time, school,
+stacks), so cast bars, auras and the combat log say Sand Slash, Grave Rot, Blood Reunion, Web
+Cocoon... and the tooltip numbers are what lands. Aura-shaped abilities replaced script hacks:
+Ritual Rhythm (8 sec), Blood Frenzy (+25%), Blood-Fed (+10% per stack, 10 stacks), Blood Reunion
+(+25% and 1%/s heal, refreshed every second while the twins stand together), The Last Thread.
+Applied to CenturionDev `data/dbc/Spell.dbc` and patch-enUS-A 1.00155 (each its own lineage).
+Still stock on purpose: trash bolts/heals, Frostbolt, Frost Nova, Entangling Roots, Gouge, Blind
+(Thraxia), Vanish, Curse of Agony, Fear, Immolate, Rain of Fire, Drain Life (Zalvaxa/Malizzia) -
+their stock names already match the design.
+
+## Testing: `.bba` GM commands (inside the instance)
+
+| command | does |
+|---|---|
+| `.bba status` | stage, each encounter's state, boons earned/handed out |
+| `.bba stage <n>` | jump forward: 1 freed, 3 at the pillar (gong armed), 4 trials done, 6 Zalvaxa done, 7 twins done |
+| `.bba trial` | start the next trial as if the gong rang |
+| `.bba boons` | hand out every earned boon |
+
+Going backwards: `.instance unbind` and re-enter.
 
 | piece | what | where it ran |
 |---|---|---|
