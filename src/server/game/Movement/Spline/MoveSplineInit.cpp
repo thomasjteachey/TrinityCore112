@@ -138,8 +138,16 @@ namespace Movement
 
         if (!transport)
         {
-            Player const* moverPlayer = unit->ToPlayer();
-            WorldSession const* session = moverPlayer ? moverPlayer->GetSession() : nullptr;
+            // The bot itself, or a unit a bot charms or owns: the shadow
+            // priest's Shadow Wraith (89784) is a possessed creature whose
+            // flee order fell through to a raw spline when no path reached its
+            // point, and Fade's expiry then teleported the priest to it - out
+            // of Blackrock Throne. Pets come along for the same reason.
+            Player const* driver = unit->ToPlayer();
+            if (!driver)
+                if (Unit const* controller = unit->GetCharmerOrOwner())
+                    driver = controller->ToPlayer();
+            WorldSession const* session = driver ? driver->GetSession() : nullptr;
             uint32 blockedLeg = 0;
             if (session && (session->IsVirtualSession() || session->IsTransientPlayerSession()) &&
                 FindBotSplineWallCrossing(unit, args.path, blockedLeg))
@@ -158,9 +166,9 @@ namespace Movement
                     Vector3 const& to = args.path[blockedLeg];
                     MotionMaster const* motionMaster = unit->GetMotionMaster();
                     TC_LOG_WARN("playerbots.movement.spline",
-                        "PB spline: bot={} outcome=held-wall-crossing map={} motion_type={} points={} leg={} parabolic={} "
+                        "PB spline: bot={} mover={} outcome=held-wall-crossing map={} motion_type={} points={} leg={} parabolic={} "
                         "leg_from=({}, {}, {}) leg_to=({}, {}, {}) final=({}, {}, {}).",
-                        unit->GetGUID().ToString(), unit->GetMapId(),
+                        driver->GetGUID().ToString(), unit->GetGUID().ToString(), unit->GetMapId(),
                         motionMaster ? uint32(motionMaster->GetCurrentMovementGeneratorType()) : 0u,
                         uint32(args.path.size()), blockedLeg, args.flags.parabolic ? 1 : 0,
                         from.x, from.y, from.z, to.x, to.y, to.z,

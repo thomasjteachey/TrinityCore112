@@ -6197,22 +6197,53 @@ bool PvpClassActions::TryIssueShadowWraithFleeMovement(Player* player, Unit* thr
     // appearance - lurching a yard or two in a new direction, over and over,
     // while her real body stood rooted somewhere else entirely.
     float const awayAngle = wraith->GetAbsoluteAngle(threat->GetPosition()) + static_cast<float>(M_PI);
-    Position destination(
-        wraith->GetPositionX() + std::cos(awayAngle) * kWraithFleeDistance,
-        wraith->GetPositionY() + std::sin(awayAngle) * kWraithFleeDistance,
-        wraith->GetPositionZ(),
-        wraith->GetOrientation());
-
-    float adjustedZ = destination.GetPositionZ();
-    wraith->UpdateAllowedPositionZ(destination.GetPositionX(), destination.GetPositionY(), adjustedZ);
-    destination.Relocate(destination.GetPositionX(), destination.GetPositionY(), adjustedZ, destination.GetOrientation());
 
     MotionMaster* wraithMotionMaster = wraith->GetMotionMaster();
     if (!wraithMotionMaster)
         return false;
 
-    wraithMotionMaster->MovePoint(0, destination, true);
-    return true;
+    // Straight away from the threat is often through a wall - the wraith is
+    // fleeing because it is cornered. A creature whose MovePoint finds no
+    // navmesh route falls through to a raw spline, and Fade's expiry then
+    // teleports the priest to wherever the wraith ended up: that is how a
+    // priest left Blackrock Throne. Fan out from the ideal heading and take
+    // the first direction with a real route, moving only as far as the route
+    // actually reaches.
+    std::array<float, 7> const headingOffsets =
+    {
+        0.0f,
+        static_cast<float>(M_PI_4), -static_cast<float>(M_PI_4),
+        static_cast<float>(M_PI_2), -static_cast<float>(M_PI_2),
+        static_cast<float>(3.0f * M_PI_4), -static_cast<float>(3.0f * M_PI_4)
+    };
+
+    for (float const offset : headingOffsets)
+    {
+        float const angle = awayAngle + offset;
+        float x = wraith->GetPositionX() + std::cos(angle) * kWraithFleeDistance;
+        float y = wraith->GetPositionY() + std::sin(angle) * kWraithFleeDistance;
+        float z = wraith->GetPositionZ();
+        wraith->UpdateAllowedPositionZ(x, y, z);
+
+        PathGenerator path(wraith);
+        if (!path.CalculatePath(x, y, z, false))
+            continue;
+
+        uint32 const forbidden = PATHFIND_NOPATH | PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_SHORT;
+        if (path.GetPathType() & forbidden)
+            continue;
+
+        G3D::Vector3 const& end = path.GetActualEndPosition();
+        // A route that stops short against the wall right behind the wraith
+        // gains nothing; try the next heading instead.
+        if (threat->GetExactDist(end.x, end.y, end.z) < wraith->GetDistance(threat) + 3.0f)
+            continue;
+
+        wraithMotionMaster->MovePoint(0, end.x, end.y, end.z, true);
+        return true;
+    }
+
+    return false;
 }
 
 bool PvpClassActions::IsBattlegroundObjectInteractionInProgress(Player const* player)
