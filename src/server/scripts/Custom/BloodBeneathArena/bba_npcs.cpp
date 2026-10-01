@@ -267,7 +267,7 @@ struct npc_bba_varjun : public ScriptedAI
                     cage->SetGoState(GO_STATE_ACTIVE);
                 _instance->SetData(DATA_STAGE, STAGE_FREED);
                 Talk(SAY_VARJUN_FREED);
-                _events.ScheduleEvent(EVENT_SAY_BASE + SAY_VARJUN_QUEST, 5s);
+                _events.ScheduleEvent(uint32(EVENT_SAY_BASE) + SAY_VARJUN_QUEST, 5s);
                 break;
             case ACTION_GOSSIP_LEAD:
                 CloseGossipMenuFor(player);
@@ -306,10 +306,10 @@ struct npc_bba_varjun : public ScriptedAI
             if (Creature* blight = _instance->GetCreature(DATA_BLIGHTBLOOD))
                 me->SetFacingToObject(blight);
             Talk(SAY_VARJUN_MEET_BLIGHT);
-            _events.ScheduleEvent(EVENT_BLIGHT_SAY_BASE + SAY_BLIGHT_REPLY, 4s);
-            _events.ScheduleEvent(EVENT_BLIGHT_SAY_BASE + SAY_BLIGHT_GREET, 8s);
-            _events.ScheduleEvent(EVENT_SAY_BASE + SAY_VARJUN_REPLY_BLIGHT, 12s);
-            _events.ScheduleEvent(EVENT_BLIGHT_SAY_BASE + SAY_BLIGHT_EXPLAIN, 16s);
+            _events.ScheduleEvent(uint32(EVENT_BLIGHT_SAY_BASE) + SAY_BLIGHT_REPLY, 4s);
+            _events.ScheduleEvent(uint32(EVENT_BLIGHT_SAY_BASE) + SAY_BLIGHT_GREET, 8s);
+            _events.ScheduleEvent(uint32(EVENT_SAY_BASE) + SAY_VARJUN_REPLY_BLIGHT, 12s);
+            _events.ScheduleEvent(uint32(EVENT_BLIGHT_SAY_BASE) + SAY_BLIGHT_EXPLAIN, 16s);
             _events.ScheduleEvent(EVENT_MOVE_PILLAR, 22s);
         }
         else if (id == POINT_PILLAR)
@@ -322,7 +322,7 @@ struct npc_bba_varjun : public ScriptedAI
         if (_instance->GetData(DATA_STAGE) == STAGE_ESCORT)
             _instance->SetData(DATA_STAGE, STAGE_RITUAL);
         Talk(SAY_VARJUN_BEFORE_RITUAL);
-        _events.ScheduleEvent(EVENT_SAY_BASE + SAY_VARJUN_GONG, 7s);
+        _events.ScheduleEvent(uint32(EVENT_SAY_BASE) + SAY_VARJUN_GONG, 7s);
         _events.ScheduleEvent(EVENT_START_CHANNEL, 9s);
     }
 
@@ -406,7 +406,7 @@ struct npc_bba_varjun : public ScriptedAI
             _instance->SetData(DATA_BOONS_EARNED, 1);
             if (Creature* support = me->FindNearestCreature(t.Support, 200.0f))
                 support->DespawnOrUnsummon(3s);
-            _events.ScheduleEvent(EVENT_SAY_BASE + t.VarjunDoneText, 4s);
+            _events.ScheduleEvent(uint32(EVENT_SAY_BASE) + t.VarjunDoneText, 4s);
             _trial = -1;
             return;
         }
