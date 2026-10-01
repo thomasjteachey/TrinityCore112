@@ -17,7 +17,11 @@
 
 #include "MoveSplineInit.h"
 #include "Creature.h"
+#include "GameTime.h"
 #include "Log.h"
+#include "Map.h"
+#include "ModelIgnoreFlags.h"
+#include "MotionMaster.h"
 #include "MoveSpline.h"
 #include "MovementPacketBuilder.h"
 #include "Unit.h"
@@ -27,6 +31,7 @@
 #include "Opcodes.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+#include <unordered_map>
 
 namespace Movement
 {
@@ -57,6 +62,42 @@ namespace Movement
         // Flying creatures use MOVEMENTFLAG_CAN_FLY or MOVEMENTFLAG_DISABLE_GRAVITY
         // Run speed is their default flight speed.
         return MOVE_RUN;
+    }
+
+    // Last-line wall guard for socketless playerbots in battlegrounds and
+    // arenas. A real player is held in by their own client's collision; a bot
+    // goes wherever its spline says, so any route that crosses static geometry
+    // walks it straight through the wall. Every server-driven move - chase,
+    // follow, fear, retreat, knockback, jump - passes through Launch(), so
+    // checking each leg here covers routes no generator-level guard sees.
+    //
+    // Only WMO collision is tested: arena bounds are WMOs, and M2 props are
+    // what navmesh corners hug at agent radius, so including them would trip
+    // on legal paths. Gameobjects (gates) are left out for the same reason.
+    // The ray runs at chest height so stairs and floor seams do not count.
+    static bool FindBotSplineWallCrossing(Unit const* unit, PointsArray const& path, uint32& blockedLeg)
+    {
+        Map const* map = unit->FindMap();
+        if (!map || !map->IsBattlegroundOrArena())
+            return false;
+
+        constexpr float RayHeight = 1.5f;
+        for (uint32 i = 1; i < path.size(); ++i)
+        {
+            Vector3 const& from = path[i - 1];
+            Vector3 const& to = path[i];
+            if ((to - from).squaredLength() < 0.25f)
+                continue;
+
+            if (!map->isInLineOfSight(from.x, from.y, from.z + RayHeight, to.x, to.y, to.z + RayHeight,
+                unit->GetPhaseMask(), LINEOFSIGHT_CHECK_VMAP, VMAP::ModelIgnoreFlags::M2))
+            {
+                blockedLeg = i;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     int32 MoveSplineInit::Launch()
@@ -94,6 +135,47 @@ namespace Movement
         args.initialOrientation = real_position.orientation;
         args.flags.enter_cycle = args.flags.cyclic;
         move_spline.onTransport = transport;
+
+        if (!transport)
+        {
+            Player const* moverPlayer = unit->ToPlayer();
+            WorldSession const* session = moverPlayer ? moverPlayer->GetSession() : nullptr;
+            uint32 blockedLeg = 0;
+            if (session && (session->IsVirtualSession() || session->IsTransientPlayerSession()) &&
+                FindBotSplineWallCrossing(unit, args.path, blockedLeg))
+            {
+                // Map updates run one map per thread and a bot is on one map,
+                // so a thread-local throttle needs no lock. One line per bot
+                // per five seconds: a generator that keeps re-requesting the
+                // same blocked route would otherwise log every tick.
+                thread_local std::unordered_map<uint64, uint32> lastLogMsByGuid;
+                uint32 const nowMs = GameTime::GetGameTimeMS();
+                uint32& lastLogMs = lastLogMsByGuid[unit->GetGUID().GetRawValue()];
+                if (!lastLogMs || nowMs - lastLogMs >= 5000)
+                {
+                    lastLogMs = nowMs;
+                    Vector3 const& from = args.path[blockedLeg - 1];
+                    Vector3 const& to = args.path[blockedLeg];
+                    MotionMaster const* motionMaster = unit->GetMotionMaster();
+                    TC_LOG_WARN("playerbots.movement.spline",
+                        "PB spline: bot={} outcome=held-wall-crossing map={} motion_type={} points={} leg={} parabolic={} "
+                        "leg_from=({}, {}, {}) leg_to=({}, {}, {}) final=({}, {}, {}).",
+                        unit->GetGUID().ToString(), unit->GetMapId(),
+                        motionMaster ? uint32(motionMaster->GetCurrentMovementGeneratorType()) : 0u,
+                        uint32(args.path.size()), blockedLeg, args.flags.parabolic ? 1 : 0,
+                        from.x, from.y, from.z, to.x, to.y, to.z,
+                        args.path.back().x, args.path.back().y, args.path.back().z);
+                }
+
+                // Hold position: the same two-point stay spline MoveTo builds
+                // for a rejected route, minus any jump arc.
+                args.path_Idx_offset = 0;
+                args.path.resize(2);
+                args.path[1] = args.path[0];
+                args.flags.parabolic = false;
+                args.flags.animation = false;
+            }
+        }
 
         uint32 moveFlags = unit->m_movementInfo.GetMovementFlags();
         moveFlags |= MOVEMENTFLAG_SPLINE_ENABLED;
