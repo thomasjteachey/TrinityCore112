@@ -112,6 +112,7 @@ enum BBACreatures
     NPC_VRAKATI                 = 922070,
     NPC_ANOKSUTEN               = 922071,
     NPC_ZEALOT                  = 922072,
+    NPC_BLOOD_PROWLER           = 922075,   // the catlords' companion cats
     NPC_SPIDERLING              = 922073,
     NPC_WEB_COCOON              = 922074,
     NPC_BBA_TRIGGER             = 922080
@@ -167,6 +168,20 @@ Position const BBABlightExitPos     = { -13236.00f, 210.50f, -67.00f, 4.70f };
 Position const BBAZalvaxaMiddlePos  = { -13160.00f, 297.50f, -79.00f, 2.00f };
 Position const BBAVrakatiPos        = { -13218.90f, 285.30f, -58.20f, 0.22f };
 Position const BBAEntrancePos       = { -13277.40f, 127.372f, 26.1418f, 4.25f };   // map 0
+
+// Var'jun's escort route, laid over the cave's navmesh (tools/blood_beneath_arena/mmpath.py):
+// up the west corridor and down the ramp to Blightblood, then down to the pillar. Walking it
+// point by point keeps every leg short enough that pathfinding can never cut through rock.
+Position const BBAEscortToBlight[] =
+{
+    { -13248.5f, 208.7f, -66.9f }, { -13257.3f, 221.3f, -66.8f }, { -13269.3f, 228.1f, -66.8f },
+    { -13274.8f, 234.7f, -66.7f }, { -13282.4f, 277.3f, -66.3f }, { -13279.5f, 286.0f, -67.3f },
+    { -13267.9f, 294.7f, -70.3f }, { -13255.6f, 294.0f, -76.0f }, { -13252.8f, 262.7f, -79.5f }
+};
+Position const BBAEscortToPillar[] =
+{
+    { -13248.0f, 266.7f, -81.1f }, { -13226.7f, 266.7f, -90.5f }, { -13224.5f, 268.6f, -93.0f }
+};
 
 Position const BBARisenSpawns[6] =
 {

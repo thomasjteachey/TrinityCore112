@@ -21,6 +21,7 @@
 #include "TemporarySummon.h"
 #include "Random.h"
 #include <algorithm>
+#include <iterator>
 #include <list>
 
 namespace
@@ -45,7 +46,9 @@ enum BBACommonSpells
     SPELL_GRASPING_VINES        = 92123,
     SPELL_VENOMOUS_BREATH       = 92124,
     SPELL_SPORE_BURST           = 92125,
+    SPELL_WAND_SHOT             = 92152,    // casters' filler, costs no mana
     // stock
+    SPELL_CLEANSE_ALLY          = 65546,    // NPC Dispel Magic: strips CC off a friend
     SPELL_HEALING_WAVE          = 15982,
     SPELL_HEALING_TOUCH         = 23381,
     SPELL_MEDIC_HEAL            = 12491,
@@ -117,8 +120,7 @@ enum BBAGossipActions
 
 enum BBAPoints
 {
-    POINT_BLIGHT                = 1,
-    POINT_PILLAR                = 2
+    POINT_ESCORT                = 1
 };
 
 // npc_bba_zone SetData keys
@@ -275,16 +277,14 @@ struct npc_bba_varjun : public ScriptedAI
                     break;
                 _instance->SetData(DATA_STAGE, STAGE_ESCORT);
                 Talk(SAY_VARJUN_AFTER_PATROLS);
-                me->SetWalk(false);
-                me->GetMotionMaster()->MovePoint(POINT_BLIGHT, BBABlightMeetPos);
-                _events.ScheduleEvent(EVENT_ESCORT_TIMEOUT, 40s);
+                StartLeg(1);
                 break;
             case ACTION_GOSSIP_CALL_ZALVAXA:
                 CloseGossipMenuFor(player);
                 if (stage != STAGE_RITUAL_DONE)
                     break;
                 _instance->SetData(DATA_STAGE, STAGE_ZALVAXA);
-                me->InterruptNonMeleeSpells(false);
+                StopChannel();
                 Talk(SAY_VARJUN_ZALVAXA_TAUNT);
                 _events.ScheduleEvent(EVENT_CALL_ZALVAXA, 4s);
                 break;
@@ -295,29 +295,67 @@ struct npc_bba_varjun : public ScriptedAI
         return true;
     }
 
+    // leg 1 = cage -> Blightblood, leg 2 = Blightblood -> pillar
+    void StartLeg(uint8 leg)
+    {
+        _leg = leg;
+        _waypoint = 0;
+        me->SetWalk(false);
+        MoveToWaypoint();
+    }
+
+    Position const& Waypoint(uint8 i) const
+    {
+        return _leg == 1 ? BBAEscortToBlight[i] : BBAEscortToPillar[i];
+    }
+
+    uint8 WaypointCount() const
+    {
+        return _leg == 1 ? uint8(std::size(BBAEscortToBlight)) : uint8(std::size(BBAEscortToPillar));
+    }
+
+    void MoveToWaypoint()
+    {
+        me->GetMotionMaster()->MovePoint(POINT_ESCORT, Waypoint(_waypoint));
+        _events.RescheduleEvent(EVENT_ESCORT_TIMEOUT, 15s);
+    }
+
+    void WaypointReachedEscort()
+    {
+        if (++_waypoint < WaypointCount())
+        {
+            MoveToWaypoint();
+            return;
+        }
+        _events.CancelEvent(EVENT_ESCORT_TIMEOUT);
+        if (_leg == 1)
+            ArriveAtBlightblood();
+        else
+            ArriveAtPillar();
+    }
+
     void MovementInform(uint32 type, uint32 id) override
     {
-        if (type != POINT_MOTION_TYPE)
+        if (type != POINT_MOTION_TYPE || id != POINT_ESCORT || !_leg)
             return;
+        WaypointReachedEscort();
+    }
 
-        if (id == POINT_BLIGHT)
-        {
-            _events.CancelEvent(EVENT_ESCORT_TIMEOUT);
-            if (Creature* blight = _instance->GetCreature(DATA_BLIGHTBLOOD))
-                me->SetFacingToObject(blight);
-            Talk(SAY_VARJUN_MEET_BLIGHT);
-            _events.ScheduleEvent(uint32(EVENT_BLIGHT_SAY_BASE) + SAY_BLIGHT_REPLY, 4s);
-            _events.ScheduleEvent(uint32(EVENT_BLIGHT_SAY_BASE) + SAY_BLIGHT_GREET, 8s);
-            _events.ScheduleEvent(uint32(EVENT_SAY_BASE) + SAY_VARJUN_REPLY_BLIGHT, 12s);
-            _events.ScheduleEvent(uint32(EVENT_BLIGHT_SAY_BASE) + SAY_BLIGHT_EXPLAIN, 16s);
-            _events.ScheduleEvent(EVENT_MOVE_PILLAR, 22s);
-        }
-        else if (id == POINT_PILLAR)
-            ArriveAtPillar();
+    void ArriveAtBlightblood()
+    {
+        if (Creature* blight = _instance->GetCreature(DATA_BLIGHTBLOOD))
+            me->SetFacingToObject(blight);
+        Talk(SAY_VARJUN_MEET_BLIGHT);
+        _events.ScheduleEvent(uint32(EVENT_BLIGHT_SAY_BASE) + SAY_BLIGHT_REPLY, 4s);
+        _events.ScheduleEvent(uint32(EVENT_BLIGHT_SAY_BASE) + SAY_BLIGHT_GREET, 8s);
+        _events.ScheduleEvent(uint32(EVENT_SAY_BASE) + SAY_VARJUN_REPLY_BLIGHT, 12s);
+        _events.ScheduleEvent(uint32(EVENT_BLIGHT_SAY_BASE) + SAY_BLIGHT_EXPLAIN, 16s);
+        _events.ScheduleEvent(EVENT_MOVE_PILLAR, 22s);
     }
 
     void ArriveAtPillar()
     {
+        _leg = 0;
         _events.CancelEvent(EVENT_ESCORT_TIMEOUT);
         if (_instance->GetData(DATA_STAGE) == STAGE_ESCORT)
             _instance->SetData(DATA_STAGE, STAGE_RITUAL);
@@ -354,10 +392,29 @@ struct npc_bba_varjun : public ScriptedAI
         }
     }
 
+    // the cleansing ritual: channel visual plus the channelling stance while the pillar runs
+    void StartChannel()
+    {
+        if (_instance->GetData(DATA_STAGE) >= STAGE_ZALVAXA || _leg)
+            return;
+        me->SetFacingTo(BBAPillarPos.GetOrientation());
+        if (!me->HasAura(SPELL_CLEANSING_CHANNEL))
+            DoCastSelf(SPELL_CLEANSING_CHANNEL);
+        me->SetEmoteState(EMOTE_STATE_SPELL_CHANNEL_OMNI);
+    }
+
+    void StopChannel()
+    {
+        me->InterruptNonMeleeSpells(false);
+        me->RemoveAurasDueToSpell(SPELL_CLEANSING_CHANNEL);
+        me->SetEmoteState(EMOTE_ONESHOT_NONE);
+    }
+
     void StartTrial()
     {
         if (_trial >= 0 || _instance->GetData(DATA_STAGE) != STAGE_RITUAL)
             return;
+        StartChannel();
         for (int8 i = 0; i < 3; ++i)
         {
             if (_instance->GetBossState(BBATrials[i].BossData) == DONE)
@@ -378,9 +435,17 @@ struct npc_bba_varjun : public ScriptedAI
         uint32 const wave2[4] = { t.Berserker, t.Berserker, t.Hexer, t.Medic };
         uint32 const* entries = _wave == 1 ? wave1 : wave2;
         uint8 const count = _wave == 1 ? 3 : 4;
+        // Only the berserker and hexer spots are known-good ground (the medic spots of the Ice
+        // and Forest tribes put them inside rock); everyone else spawns a few yards off one of
+        // those two, stopped short of any collision.
         for (uint8 i = 0; i < count; ++i)
-            if (me->SummonCreature(entries[i], t.WavePos[i], TEMPSUMMON_CORPSE_TIMED_DESPAWN, 60s))
+        {
+            Position pos = t.WavePos[i % 2];
+            if (i >= 2)
+                me->MovePositionToFirstCollision(pos, 2.5f, float(i) * 1.6f - me->GetOrientation());
+            if (me->SummonCreature(entries[i], pos, TEMPSUMMON_CORPSE_TIMED_DESPAWN, 60s))
                 ++_alive;
+        }
     }
 
     void JustSummoned(Creature* summon) override
@@ -454,19 +519,18 @@ struct npc_bba_varjun : public ScriptedAI
         switch (eventId)
         {
             case EVENT_MOVE_PILLAR:
-                me->GetMotionMaster()->MovePoint(POINT_PILLAR, BBAPillarPos);
-                _events.ScheduleEvent(EVENT_ESCORT_TIMEOUT, 40s);
+                StartLeg(2);
                 break;
             case EVENT_ESCORT_TIMEOUT:
-                // pathing failed somewhere in the cave: finish the walk by teleport
+                // stuck on a leg: hop to the waypoint he was walking to and carry on
+                if (!_leg)
+                    break;
                 me->GetMotionMaster()->Clear();
-                me->NearTeleportTo(BBAPillarPos);
-                ArriveAtPillar();
+                me->NearTeleportTo(Waypoint(_waypoint));
+                WaypointReachedEscort();
                 break;
             case EVENT_START_CHANNEL:
-                me->SetFacingTo(BBAPillarPos.GetOrientation());
-                if (_instance->GetData(DATA_STAGE) < STAGE_ZALVAXA)
-                    DoCastSelf(SPELL_CLEANSING_CHANNEL);
+                StartChannel();
                 break;
             case EVENT_NEXT_WAVE:
                 if (_trial >= 0)
@@ -486,7 +550,7 @@ struct npc_bba_varjun : public ScriptedAI
                         zalvaxa->AI()->DoAction(ACTION_ZALVAXA_CALLED);
                 break;
             case EVENT_GO_TO_EXIT:
-                me->InterruptNonMeleeSpells(false);
+                StopChannel();
                 me->NearTeleportTo(BBAExitPos);
                 Talk(SAY_VARJUN_EXIT);
                 break;
@@ -502,6 +566,8 @@ private:
     int8 _trial = -1;
     uint8 _wave = 0;
     uint8 _alive = 0;
+    uint8 _leg = 0;
+    uint8 _waypoint = 0;
 };
 
 // ---------------------------------------------------------------------------------------
@@ -577,7 +643,7 @@ private:
 struct npc_bba_trash : public ScriptedAI
 {
     enum Role { ROLE_BERSERKER, ROLE_HEXER, ROLE_MEDIC, ROLE_SWARM };
-    enum Events { EVENT_PRIMARY = 1, EVENT_SECONDARY };
+    enum Events { EVENT_PRIMARY = 1, EVENT_SECONDARY, EVENT_CLEANSE, EVENT_WAND };
 
     npc_bba_trash(Creature* creature) : ScriptedAI(creature)
     {
@@ -588,7 +654,7 @@ struct npc_bba_trash : public ScriptedAI
                 _role = ROLE_HEXER; break;
             case NPC_SAND_MEDIC: case NPC_ICE_MEDIC: case NPC_FOREST_MEDIC: case NPC_ORACLE:
                 _role = ROLE_MEDIC; break;
-            case NPC_SPIDERLING:
+            case NPC_SPIDERLING: case NPC_BLOOD_PROWLER:
                 _role = ROLE_SWARM; break;
             default:
                 _role = ROLE_BERSERKER; break;
@@ -606,6 +672,20 @@ struct npc_bba_trash : public ScriptedAI
         DoZoneInCombat();
     }
 
+    bool IsCaster() const { return _role == ROLE_HEXER || _role == ROLE_MEDIC; }
+
+    // casters fight from range and never walk into melee
+    void AttackStart(Unit* who) override
+    {
+        if (!IsCaster())
+        {
+            ScriptedAI::AttackStart(who);
+            return;
+        }
+        if (who && me->Attack(who, false))
+            me->GetMotionMaster()->MoveChase(who, 20.0f);
+    }
+
     void JustEngagedWith(Unit* /*who*/) override
     {
         switch (_role)
@@ -616,10 +696,13 @@ struct npc_bba_trash : public ScriptedAI
             case ROLE_HEXER:
                 _events.ScheduleEvent(EVENT_PRIMARY, 1s, 3s);
                 _events.ScheduleEvent(EVENT_SECONDARY, 8s, 12s);
+                _events.ScheduleEvent(EVENT_WAND, 2s);
                 break;
             case ROLE_MEDIC:
                 _events.ScheduleEvent(EVENT_PRIMARY, 5s, 7s);
                 _events.ScheduleEvent(EVENT_SECONDARY, 3s, 6s);
+                _events.ScheduleEvent(EVENT_CLEANSE, 4s);
+                _events.ScheduleEvent(EVENT_WAND, 2s);
                 break;
             default:
                 break;
@@ -652,6 +735,25 @@ struct npc_bba_trash : public ScriptedAI
 
         while (uint32 eventId = _events.ExecuteEvent())
         {
+            if (eventId == EVENT_WAND)
+            {
+                // the filler between real spells, and all a caster has left once it is dry
+                DoCastVictim(SPELL_WAND_SHOT);
+                _events.Repeat(2500ms);
+                if (me->HasUnitState(UNIT_STATE_CASTING))
+                    return;
+                continue;
+            }
+            if (eventId == EVENT_CLEANSE)
+            {
+                std::list<Creature*> held = DoFindFriendlyCC(30.0f);
+                if (!held.empty())
+                    DoCast(held.front(), SPELL_CLEANSE_ALLY);
+                _events.Repeat(6s);
+                if (me->HasUnitState(UNIT_STATE_CASTING))
+                    return;
+                continue;
+            }
             switch (_role)
             {
                 case ROLE_BERSERKER:
@@ -693,7 +795,8 @@ struct npc_bba_trash : public ScriptedAI
                 return;
         }
 
-        DoMeleeAttackIfReady();
+        if (!IsCaster())
+            DoMeleeAttackIfReady();
     }
 
 private:
@@ -928,6 +1031,13 @@ struct npc_bba_support : public ScriptedAI
         return _trial ? me->FindNearestCreature(_trial->Champion, 200.0f) : nullptr;
     }
 
+    // the drummer stands back from the fight
+    void AttackStart(Unit* who) override
+    {
+        if (who && me->Attack(who, false))
+            me->GetMotionMaster()->MoveChase(who, 20.0f);
+    }
+
     bool Controlled() const
     {
         return me->HasUnitState(UNIT_STATE_CONTROLLED) || me->HasAuraType(SPELL_AURA_MOD_SILENCE) || me->HasAuraType(SPELL_AURA_MOD_PACIFY_SILENCE);
@@ -1031,8 +1141,6 @@ struct npc_bba_support : public ScriptedAI
                 return;
         }
 
-        if (!_evocating)
-            DoMeleeAttackIfReady();
     }
 
 private:

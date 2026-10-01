@@ -225,6 +225,9 @@ struct boss_bba_zalvaxa : public BossAI
         events.Reset();
         me->InterruptNonMeleeSpells(false);
         me->RemoveAurasDueToSpell(SPELL_ENDLESS_DEAD);
+        // she has to be stunnable to be woken; once awake she is not
+        for (Mechanics m : { MECHANIC_STUN, MECHANIC_KNOCKOUT, MECHANIC_ROOT })
+            me->ApplySpellImmune(0, IMMUNITY_MECHANIC, m, true);
         Talk(SAY_ZAL_INTERRUPTED);
         events.ScheduleEvent(EVENT_AWAKEN_MOVE, 2s);
     }

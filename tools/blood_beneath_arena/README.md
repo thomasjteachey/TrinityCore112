@@ -78,6 +78,29 @@ The cave's own WMOs (ruin stairs 431, excavation platforms 887/889, a railing 81
 WMOAreaTable rows with area 0, so they fall back to 30609. Only the arena WMO on the surface (568)
 keeps 1741/30232.
 
+## ⚠ The customer edits spawns on CenturionDev in game
+
+Since 2026-10-01 the customer moves, adds and deletes spawns in map 1685 on dev (`.npc add`,
+`.npc move`, waypoints). **Never re-run `gen_bba_sql.py` / `bba_content.sql` on dev**: its first
+block deletes guid ranges 922000-922299 and would wipe that work. Fix things with targeted SQL. Rows
+added after playtest 1 use guids 923000+ (prowlers) and path 92214801 (catlord patrol); the
+customer's own `.npc add` spawns take max(guid)+1. When promoting to live, copy dev's map-1685 rows
+across.
+
+## Playtest 1 (customer sheet, 2026-10-01)
+
+| item | fix |
+|---|---|
+| Catlord too easy | 14000 HP, two Bloodbound Prowlers (922075) in formation per catlord, 922148 patrols the west corridor (path 92214801) |
+| Var'jun runs off route | walks a fixed waypoint list laid over the navmesh (`mmpath.py`), short pathfound legs, a stuck leg hops to its waypoint |
+| Var'jun at the cauldron | channelling stance (emote 468) + Water Channeling while the ritual / gong trials run |
+| medics / hexers melee | casters chase at 20 yd and never melee; Wand Shot (92152, no mana) filler; medics Dispel (65546) CC off allies; mana x4 |
+| Ice / Forest medic stuck in rock | wave mobs spawn on the berserker/hexer spots (known good) or 2.5 yd off them, collision-checked |
+| bosses CC-able | champions, twins, Vraka'ti, Anok'Suten immune to stun, knockout, root; Zalvaxa becomes so once awake |
+| Venomous Breath 160 vs 360 tooltip | not a bug: AutoBalance scales boss damage by party size (2 of 5 players = ~0.44) |
+| mini bosses small | champions scale 1.5, supports 1.25 |
+| Forcefield | deleted (gameobject 5331187) |
+
 ## Ids
 
 | range | used for |

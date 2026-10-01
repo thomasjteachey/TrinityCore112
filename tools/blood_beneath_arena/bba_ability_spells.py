@@ -1,4 +1,4 @@
-"""Append the dungeon's named ability spells (92110-92151) to a Spell.dbc.
+"""Append the dungeon's named ability spells (92110-92152) to a Spell.dbc.
 
   python3 bba_ability_spells.py <dir holding Spell.dbc> [--dry-run]
 
@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dbcrow import DBC
 
 # SpellDuration ids: 21 = infinite, 39 = 2s, 28 = 5s, 31 = 8s, 29 = 12s
-# SpellCastTimes ids: 1 = instant, 5 = 2s, 20 = 2.5s.  SpellRadius 14 = 8 yd.
+# SpellCastTimes ids: 1 = instant, 16 = 1.5s, 5 = 2s, 20 = 2.5s.  SpellRadius 14 = 8 yd.
 ABILITIES = [
     # --- tribal trials ---
     (92110, 8599, 'Ritual Rhythm', 'The drums drive the champion on. Attack speed increased by 30%.',
@@ -69,6 +69,8 @@ ABILITIES = [
      dict(cast=1, bp={0: 900})),
     (92151, 8599, 'Blade Flurry', 'Attack speed increased by 30%.',
      dict(dur=29, effect={0: 0}, bp={1: 30})),
+    (92152, 9613, 'Wand Shot', 'Shoots a wand for 110 Shadow damage.',
+     dict(cast=16, bp={0: 110}, mana=0)),
     # --- Vraka'ti ---
     (92138, 15232, 'Blood Bolt', 'Hurls a bolt of blood for 500 Shadow damage.', dict(bp={0: 500})),
     (92139, 15654, 'Sacrificial Mark', 'Marked for the cauldron. In 5 sec, blood erupts around you.',
@@ -132,6 +134,9 @@ def build_overrides(sp, src_row, spec):
         ints[225] = spec['school']
     if 'stack' in spec:
         ints[49] = spec['stack']
+    if 'mana' in spec:
+        ints[42] = spec['mana']         # manaCost
+        ints[204] = 0                   # ManaCostPercentage
     return ints, floats
 
 
