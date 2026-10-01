@@ -67,6 +67,7 @@ void AddSC_custom_spell_propagate();
 void AddSC_custom_tournament_mode();
 void AddSC_custom_mokgora();
 void AddSC_custom_name_markers();
+void AddSC_blood_beneath_arena();
 
 void AddCustomScripts()
 {
@@ -117,4 +118,5 @@ void AddCustomScripts()
     AddSC_GOEditor();
     AddSC_rts_building();
     AddSC_violet_hold_boons();
+    AddSC_blood_beneath_arena();
 }
