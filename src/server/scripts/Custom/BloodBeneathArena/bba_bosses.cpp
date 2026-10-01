@@ -26,28 +26,44 @@ namespace
 {
 enum BBABossSpells
 {
-    SPELL_SHADOW_BOLT           = 12739,
+    // named abilities (custom rows, bba_ability_spells.py)
+    SPELL_BLOOD_FRENZY          = 92111,
+    SPELL_BONE_SPEAR            = 92126,
+    SPELL_GRAVE_ROT             = 92127,
+    SPELL_VOODOO_HEX            = 92128,
+    SPELL_CORPSE_EXPLOSION      = 92129,
+    SPELL_BLOOD_FED             = 92130,    // stacks to 10, +10% damage each
+    SPELL_ENDLESS_DEAD          = 92131,    // Zalvaxa's ritual channel (visual)
+    SPELL_GARROTE               = 92132,
+    SPELL_CRIMSON_STEP          = 92133,
+    SPELL_BLOOD_REUNION         = 92135,    // 2 sec, refreshed while the twins stand together
+    SPELL_SHADOWBURN            = 92136,
+    SPELL_BLADE_FLURRY          = 92151,
+    SPELL_BLOOD_BOLT            = 92138,
+    SPELL_SACRIFICIAL_MARK      = 92139,
+    SPELL_SACRIFICIAL_ERUPTION  = 92140,
+    SPELL_BLOOD_CHAINS          = 92141,
+    SPELL_BLOOD_DRAIN           = 92142,
+    SPELL_BLOOD_NOVA            = 92143,
+    SPELL_WEB_COCOON            = 92144,    // stun + DoT; cast by the victim on itself
+    SPELL_SHADOW_WEB            = 92145,
+    SPELL_PIERCING_LEGS         = 92146,
+    SPELL_BLOOD_WEB             = 92147,
+    SPELL_BLOOD_HARVEST         = 92148,
+    SPELL_LAST_THREAD           = 92149,
+    // stock
     SPELL_SHADOW_BOLT_HEAVY     = 15232,
     SPELL_SHADOW_WORD_PAIN      = 15654,
-    SPELL_VEIL_OF_SHADOW        = 17820,    // -75% healing taken, r8 around the caster
     SPELL_DRAIN_LIFE            = 17238,
-    SPELL_SHADOW_CHANNELING     = 12380,    // self channel visual for Zalvaxa's ritual
     SPELL_FEAR                  = 12096,
-    SPELL_SHADOW_NOVA           = 1112,
     SPELL_SINISTER_STRIKE       = 15581,
     SPELL_GOUGE                 = 12540,
     SPELL_BLIND                 = 21060,
     SPELL_EVISCERATE            = 15691,
     SPELL_VANISH                = 24699,
-    SPELL_ENRAGE                = 8599,
     SPELL_CURSE_OF_AGONY        = 18266,
     SPELL_IMMOLATE              = 15570,
     SPELL_RAIN_OF_FIRE          = 4629,
-    SPELL_FEL_SHACKLES          = 38051,
-    SPELL_WEB_WRAP              = 28622,    // stun + DoT; cast by the victim on itself
-    SPELL_DEATH_AND_DECAY       = 60160,
-    SPELL_CLEAVE                = 15496,
-    SPELL_HEAL                  = 22883
 };
 
 enum BBABossActions
@@ -181,6 +197,7 @@ struct boss_bba_zalvaxa : public BossAI
         else if (action == ACTION_FED)
         {
             ++_stacks;
+            DoCastSelf(SPELL_BLOOD_FED, true);
             me->SetObjectScale(me->GetCreatureTemplate()->scale * (1.0f + 0.05f * std::min<uint32>(_stacks, 10)));
         }
     }
@@ -207,7 +224,7 @@ struct boss_bba_zalvaxa : public BossAI
         _awake = true;
         events.Reset();
         me->InterruptNonMeleeSpells(false);
-        me->RemoveAurasDueToSpell(SPELL_SHADOW_CHANNELING);
+        me->RemoveAurasDueToSpell(SPELL_ENDLESS_DEAD);
         Talk(SAY_ZAL_INTERRUPTED);
         events.ScheduleEvent(EVENT_AWAKEN_MOVE, 2s);
     }
@@ -230,12 +247,6 @@ struct boss_bba_zalvaxa : public BossAI
         }
         if (!_desperate && me->HealthBelowPctDamaged(15, damage))
             _desperate = true;
-    }
-
-    void DamageDealt(Unit* /*victim*/, uint32& damage, DamageEffectType /*type*/) override
-    {
-        if (_stacks)
-            damage = damage * (100 + 10 * std::min<uint32>(_stacks, 10)) / 100;
     }
 
     void JustSummoned(Creature* summon) override
@@ -311,8 +322,8 @@ struct boss_bba_zalvaxa : public BossAI
                     break;
                 case EVENT_PRE_CHANNEL:
                     // the ritual visual; what wakes her is the player's interrupt landing (SpellHit)
-                    if (!me->HasAura(SPELL_SHADOW_CHANNELING))
-                        DoCastSelf(SPELL_SHADOW_CHANNELING);
+                    if (!me->HasAura(SPELL_ENDLESS_DEAD))
+                        DoCastSelf(SPELL_ENDLESS_DEAD);
                     events.Repeat(1s);
                     break;
                 case EVENT_AWAKEN_MOVE:
@@ -331,7 +342,7 @@ struct boss_bba_zalvaxa : public BossAI
                     {
                         if (_talk.Should(SAY_ZAL_BONE_SPEAR))
                             Talk(SAY_ZAL_BONE_SPEAR);
-                        DoCast(target, SPELL_SHADOW_BOLT, CastSpellExtraArgs().AddSpellBP0(420));
+                        DoCast(target, SPELL_BONE_SPEAR);
                     }
                     events.Repeat(8s);
                     break;
@@ -340,7 +351,7 @@ struct boss_bba_zalvaxa : public BossAI
                     {
                         if (_talk.Should(SAY_ZAL_GRAVE_ROT))
                             Talk(SAY_ZAL_GRAVE_ROT);
-                        DoCast(target, SPELL_SHADOW_WORD_PAIN, CastSpellExtraArgs(true).AddSpellBP0(110));
+                        DoCast(target, SPELL_GRAVE_ROT, true);
                         _rot[target->GetGUID()] = 18000;
                     }
                     events.Repeat(18s);
@@ -348,7 +359,7 @@ struct boss_bba_zalvaxa : public BossAI
                 case EVENT_HEX:
                     if (_talk.Should(SAY_ZAL_HEX))
                         Talk(SAY_ZAL_HEX);
-                    DoCastSelf(SPELL_VEIL_OF_SHADOW);
+                    DoCastSelf(SPELL_VOODOO_HEX);
                     events.Repeat(20s);
                     break;
                 case EVENT_RAISE:
@@ -419,7 +430,7 @@ struct npc_bba_risen : public ScriptedAI
     void JustDied(Unit* /*killer*/) override
     {
         if (!_crawling && roll_chance_i(25))
-            BBASpawnZone(me, me->GetPosition(), SPELL_SHADOW_NOVA, 300, -1, 1500, 4s, 0);
+            BBASpawnZone(me, me->GetPosition(), SPELL_CORPSE_EXPLOSION, -1, -1, 1500, 4s, 0);
     }
 
     void UpdateAI(uint32 /*diff*/) override
@@ -479,7 +490,6 @@ struct boss_bba_twin : public ScriptedAI
     {
         _events.Reset();
         _fallen = false;
-        _reunion = false;
         _vanished = false;
         me->SetStandState(UNIT_STAND_STATE_STAND);
         me->RemoveUnitFlag(UNIT_FLAG_UNINTERACTIBLE);
@@ -509,7 +519,7 @@ struct boss_bba_twin : public ScriptedAI
                 // the sister is down: frenzy and start the clock on her return
                 if (!_thraxia)
                     Talk(SAY_TWIN_FELL);
-                DoCastSelf(SPELL_ENRAGE, true);
+                DoCastSelf(SPELL_BLOOD_FRENZY, true);
                 _events.ScheduleEvent(EVENT_REVIVE, 30s);
                 break;
             case ACTION_TWIN_REVIVE:
@@ -544,9 +554,12 @@ struct boss_bba_twin : public ScriptedAI
             if (sibling->IsAlive() && !sibling->IsInCombat() && sibling->IsAIEnabled())
                 sibling->AI()->AttackStart(who);
         DoZoneInCombat();
-        if (_thraxia)
-            Talk(SAY_TWIN_ABILITY_0);
         ScheduleAbilities();
+        if (_thraxia)
+        {
+            Talk(SAY_TWIN_ABILITY_0);
+            DoCastVictim(SPELL_GARROTE, true);
+        }
     }
 
     void ScheduleAbilities()
@@ -623,12 +636,6 @@ struct boss_bba_twin : public ScriptedAI
             sibling->AI()->DoAction(ACTION_TWIN_FELL);
     }
 
-    void DamageDealt(Unit* /*victim*/, uint32& damage, DamageEffectType /*type*/) override
-    {
-        if (_reunion)
-            damage = damage * 125 / 100;
-    }
-
     void JustDied(Unit* /*killer*/) override
     {
         Talk(SAY_TWIN_DEATH);
@@ -680,9 +687,9 @@ struct boss_bba_twin : public ScriptedAI
                 {
                     Creature* sibling = Sibling();
                     boss_bba_twin* sibAI = sibling && sibling->IsAIEnabled() ? dynamic_cast<boss_bba_twin*>(sibling->AI()) : nullptr;
-                    _reunion = sibling && sibling->IsAlive() && sibAI && !sibAI->_fallen && me->IsWithinDist(sibling, 15.0f);
-                    if (_reunion)
-                        me->ModifyHealth(int32(me->CountPctFromMaxHealth(1)));
+                    // together within 15 yards: Blood Reunion (+25% damage, 1% health a second)
+                    if (sibling && sibling->IsAlive() && sibAI && !sibAI->_fallen && me->IsWithinDist(sibling, 15.0f))
+                        DoCastSelf(SPELL_BLOOD_REUNION, true);
                     _events.Repeat(1s);
                     break;
                 }
@@ -690,7 +697,7 @@ struct boss_bba_twin : public ScriptedAI
                     if (Creature* sibling = Sibling())
                         if (sibling->IsAIEnabled())
                             sibling->AI()->DoAction(ACTION_TWIN_REVIVE);
-                    me->RemoveAurasDueToSpell(SPELL_ENRAGE);
+                    me->RemoveAurasDueToSpell(SPELL_BLOOD_FRENZY);
                     break;
                 // Thraxia
                 case EVENT_SINISTER:
@@ -715,7 +722,7 @@ struct boss_bba_twin : public ScriptedAI
                 case EVENT_FLURRY:
                     if (_talk.Should(SAY_TWIN_ABILITY_3))
                         Talk(SAY_TWIN_ABILITY_3);
-                    DoCastSelf(SPELL_ENRAGE, true);
+                    DoCastSelf(SPELL_BLADE_FLURRY, true);
                     _events.Repeat(36s);
                     break;
                 case EVENT_EVISCERATE:
@@ -728,7 +735,7 @@ struct boss_bba_twin : public ScriptedAI
                     {
                         Talk(SAY_TWIN_ABILITY_2);
                         me->NearTeleportTo(target->GetPositionX(), target->GetPositionY(), target->GetPositionZ(), target->GetOrientation());
-                        DoCast(target, SPELL_SINISTER_STRIKE, CastSpellExtraArgs(true).AddSpellBP0(650));
+                        DoCast(target, SPELL_CRIMSON_STEP, true);
                     }
                     break;
                 // Malizzia
@@ -783,7 +790,7 @@ struct boss_bba_twin : public ScriptedAI
                     for (Player* player : players)
                         if (player->IsAlive() && !player->IsGameMaster() && player->GetHealthPct() < 35.0f)
                         {
-                            DoCast(player, SPELL_SHADOW_BOLT, CastSpellExtraArgs(true).AddSpellBP0(900));
+                            DoCast(player, SPELL_SHADOWBURN, true);
                             _events.Repeat(30s);
                             return;
                         }
@@ -812,7 +819,6 @@ private:
     InstanceScript* _instance;
     EventMap _events;
     bool _thraxia = false;
-    bool _reunion = false;
     bool _vanished = false;
     TalkLimiter _talk;
 };
@@ -1010,7 +1016,7 @@ struct boss_bba_vrakati : public ScriptedAI
             {
                 case EVENT_BLOOD_BOLT:
                     if (Unit* target = SelectTarget(SelectTargetMethod::Random, 0, 40.0f, true))
-                        DoCast(target, SPELL_SHADOW_BOLT_HEAVY, CastSpellExtraArgs().AddSpellBP0(500));
+                        DoCast(target, SPELL_BLOOD_BOLT);
                     _events.Repeat(5s, 7s);
                     break;
                 case EVENT_PAIN:
@@ -1023,6 +1029,7 @@ struct boss_bba_vrakati : public ScriptedAI
                     {
                         _marked = target->GetGUID();
                         Talk(SAY_VRA_MARK, target);
+                        DoCast(target, SPELL_SACRIFICIAL_MARK, true);
                         _events.ScheduleEvent(EVENT_MARK_BURST, 5s);
                     }
                     _events.Repeat(20s);
@@ -1030,12 +1037,12 @@ struct boss_bba_vrakati : public ScriptedAI
                 case EVENT_MARK_BURST:
                     if (Unit* target = ObjectAccessor::GetUnit(*me, _marked))
                         if (target->IsAlive())
-                            BBASpawnZone(me, target->GetPosition(), SPELL_SHADOW_NOVA, 260, -1, 0, 3s, 0);
+                            BBASpawnZone(me, target->GetPosition(), SPELL_SACRIFICIAL_ERUPTION, -1, -1, 0, 3s, 0);
                     break;
                 case EVENT_CHAINS:
                     for (uint8 i = 0; i < 2; ++i)
                         if (Unit* target = SelectTarget(SelectTargetMethod::Random, 0, 30.0f, true))
-                            DoCast(target, SPELL_FEL_SHACKLES, true);
+                            DoCast(target, SPELL_BLOOD_CHAINS, true);
                     _events.Repeat(24s);
                     break;
                 case EVENT_DRAIN:
@@ -1046,7 +1053,7 @@ struct boss_bba_vrakati : public ScriptedAI
                     if (target)
                     {
                         Talk(SAY_VRA_DRAIN);
-                        DoCast(target, SPELL_DRAIN_LIFE, CastSpellExtraArgs().AddSpellBP0(180));
+                        DoCast(target, SPELL_BLOOD_DRAIN);
                     }
                     _events.Repeat(26s);
                     break;
@@ -1062,7 +1069,7 @@ struct boss_bba_vrakati : public ScriptedAI
                     _events.Repeat(35s);
                     break;
                 case EVENT_NOVA:
-                    DoCastSelf(SPELL_SHADOW_NOVA, CastSpellExtraArgs().AddSpellBP0(350));
+                    DoCastSelf(SPELL_BLOOD_NOVA);
                     _events.Repeat(30s);
                     break;
                 default:
@@ -1123,20 +1130,14 @@ struct boss_bba_anoksuten : public BossAI
         {
             // Blood Harvest: an interruptible self-heal
             _harvested = true;
-            DoCastSelf(SPELL_HEAL, CastSpellExtraArgs().AddSpellBP0(int32(me->CountPctFromMaxHealth(8))));
+            DoCastSelf(SPELL_BLOOD_HARVEST, CastSpellExtraArgs().AddSpellBP0(int32(me->CountPctFromMaxHealth(8))));
         }
         if (!_enraged && me->HealthBelowPctDamaged(10, damage))
         {
             _enraged = true;
             Talk(SAY_ANOK_ENRAGE);
-            DoCastSelf(SPELL_ENRAGE, true);
+            DoCastSelf(SPELL_LAST_THREAD, true);
         }
-    }
-
-    void DamageDealt(Unit* /*victim*/, uint32& damage, DamageEffectType /*type*/) override
-    {
-        if (_enraged)
-            damage = damage * 130 / 100;
     }
 
     void ReleaseCocoon(ObjectGuid cocoon)
@@ -1145,7 +1146,7 @@ struct boss_bba_anoksuten : public BossAI
         if (itr == _cocoons.end())
             return;
         if (Player* player = ObjectAccessor::GetPlayer(*me, itr->second))
-            player->RemoveAurasDueToSpell(SPELL_WEB_WRAP);
+            player->RemoveAurasDueToSpell(SPELL_WEB_COCOON);
         _cocoons.erase(itr);
     }
 
@@ -1194,7 +1195,7 @@ struct boss_bba_anoksuten : public BossAI
                 if (Unit* target = SelectTarget(SelectTargetMethod::Random, 1, 40.0f, true))
                 {
                     Talk(SAY_ANOK_COCOON);
-                    target->CastSpell(target, SPELL_WEB_WRAP, CastSpellExtraArgs(true).AddSpellBP1(150));
+                    target->CastSpell(target, SPELL_WEB_COCOON, true);
                     if (Creature* cocoon = me->SummonCreature(NPC_WEB_COCOON, target->GetPosition(), TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, 20s))
                         _cocoons[cocoon->GetGUID()] = target->GetGUID();
                 }
@@ -1204,7 +1205,7 @@ struct boss_bba_anoksuten : public BossAI
                 if (Unit* target = SelectTarget(SelectTargetMethod::Random, 0, 40.0f, true))
                 {
                     Talk(SAY_ANOK_WEB);
-                    BBASpawnZone(me, target->GetPosition(), SPELL_DEATH_AND_DECAY, 150, -1, 1500, 12s, 6);
+                    BBASpawnZone(me, target->GetPosition(), SPELL_SHADOW_WEB, -1, -1, 1500, 12s, 6);
                 }
                 events.Repeat(18s);
                 break;
@@ -1223,14 +1224,14 @@ struct boss_bba_anoksuten : public BossAI
             case EVENT_LEGS:
                 if (roll_chance_i(20))
                     Talk(SAY_ANOK_LEGS);
-                DoCastVictim(SPELL_CLEAVE, CastSpellExtraArgs(true).AddSpellBP0(300));
+                DoCastVictim(SPELL_PIERCING_LEGS, true);
                 events.Repeat(12s);
                 break;
             case EVENT_BLOOD_WEB:
                 if (Unit* target = SelectTarget(SelectTargetMethod::Random, 1, 20.0f, true))
                 {
                     Talk(SAY_ANOK_BLOOD_WEB);
-                    DoCast(target, SPELL_DRAIN_LIFE, CastSpellExtraArgs().AddSpellBP0(220));
+                    DoCast(target, SPELL_BLOOD_WEB);
                 }
                 events.Repeat(32s);
                 break;

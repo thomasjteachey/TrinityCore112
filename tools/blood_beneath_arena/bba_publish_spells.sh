@@ -1,5 +1,5 @@
 #!/bin/bash
-# Publish the eight boon spells (92100-92107) into patch-enUS-A's OWN Spell.dbc.
+# Publish the boon spells (92100-92107) and named abilities (92110-92151) into patch-enUS-A's OWN Spell.dbc.
 #   bash bba_publish_spells.sh <expected current version> check|publish
 # Refuses if patch-enUS-A moved past the expected version (someone else published).
 set -euo pipefail
@@ -14,7 +14,8 @@ unzip -q $P/patch-enUS-A.zip
 fv=$(od -An -tu2 -j12 -N2 patch-enUS-A.MPQ | tr -d ' ')
 ( cd stage && smpq -x ../patch-enUS-A.MPQ DBFilesClient/Spell.dbc )
 python3 /tmp/bba/bba_spells.py $W/stage/DBFilesClient
-rm -f stage/DBFilesClient/*.bak-bba
+python3 /tmp/bba/bba_ability_spells.py $W/stage/DBFilesClient
+rm -f stage/DBFilesClient/*.bak-bba*
 ( cd stage && smpq -a -f ../patch-enUS-A.MPQ DBFilesClient/Spell.dbc )
 fv2=$(od -An -tu2 -j12 -N2 patch-enUS-A.MPQ | tr -d ' ')
 [ "$fv2" = "$fv" ] || { echo "formatVersion changed $fv -> $fv2"; exit 1; }

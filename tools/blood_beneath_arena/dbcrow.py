@@ -8,7 +8,7 @@ Append (used as a library): DBC(path).append(template_id, new_id, ints={idx: v},
 floats={idx: v}, strings={idx: 'text'}) then .save(path). Strings are APPENDED to the
 string block, never edited in place, so no other record moves.
 """
-import struct, sys
+import os, struct, sys
 
 
 class DBC:
@@ -80,7 +80,10 @@ class DBC:
         for r in self.recs:
             out += r
         out += self.strings
-        open(path, 'wb').write(out)
+        tmp = path + '.tmp-write'
+        with open(tmp, 'wb') as f:
+            f.write(out)
+        os.replace(tmp, path)   # atomic: a reader never sees a half-written file
 
     def show(self, rid):
         r = self.row(rid)

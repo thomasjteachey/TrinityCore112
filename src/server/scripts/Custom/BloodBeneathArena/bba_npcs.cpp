@@ -28,8 +28,24 @@ namespace
 enum BBACommonSpells
 {
     SPELL_CLEANSING_CHANNEL     = 12508,    // Water Channeling (visual)
-    SPELL_RITUAL_RHYTHM         = 8599,     // Enrage: the drummer's buff on the champion
-    SPELL_EVOCATION             = 45052,    // NPC Evocation, cannot be kicked
+    SPELL_ENRAGE                = 8599,     // trash berserkers at 30%
+    // named abilities (custom rows, bba_ability_spells.py)
+    SPELL_RITUAL_RHYTHM         = 92110,    // drummer -> champion, 8 sec
+    SPELL_BLOOD_FRENZY          = 92111,
+    SPELL_EVOCATION             = 92112,    // Desperate Evocation, cannot be kicked
+    SPELL_SAND_SLASH            = 92113,
+    SPELL_BURROWING_AMBUSH      = 92114,
+    SPELL_SANDSTORM             = 92115,
+    SPELL_BLINDING_SAND         = 92116,
+    SPELL_SAND_TRAP             = 92117,
+    SPELL_ICEBLOOD_STRIKE       = 92118,
+    SPELL_FROZEN_GROUND         = 92120,
+    SPELL_ICE_SPEAR             = 92121,
+    SPELL_THORNED_STRIKE        = 92122,
+    SPELL_GRASPING_VINES        = 92123,
+    SPELL_VENOMOUS_BREATH       = 92124,
+    SPELL_SPORE_BURST           = 92125,
+    // stock
     SPELL_HEALING_WAVE          = 15982,
     SPELL_HEALING_TOUCH         = 23381,
     SPELL_MEDIC_HEAL            = 12491,
@@ -38,17 +54,8 @@ enum BBACommonSpells
     SPELL_CURSE_OF_AGONY        = 18266,
     SPELL_SHADOW_WORD_PAIN      = 15654,
     SPELL_CLEAVE                = 15496,
-    SPELL_MORTAL_STRIKE         = 16856,
-    SPELL_SINISTER_STRIKE       = 15581,
-    SPELL_DUST_FIELD            = 21868,    // E0 nature AoE r20, E1 knockback (zeroed)
-    SPELL_BLIND                 = 21060,
     SPELL_FROST_NOVA            = 15531,
-    SPELL_BLIZZARD_ZONE         = 19099,
     SPELL_ENTANGLING_ROOTS      = 22127,
-    SPELL_POISON_CLOUD_ZONE     = 24840,
-    SPELL_ACID_BREATH           = 12533,    // E0 DoT, E1 cone hit
-    SPELL_MUTATED_SPORES        = 30111,
-    SPELL_SHADOW_NOVA           = 1112,
     SPELL_DAZED                 = 1604
 };
 
@@ -118,7 +125,7 @@ enum BBAPoints
 enum BBAZoneData
 {
     ZONE_SPELL                  = 1,
-    ZONE_BP0                    = 2,
+    ZONE_BP0                    = 2,    // value + 1, so 0 means "leave the DBC value"
     ZONE_BP1                    = 3,    // value + 1, so 0 means "leave the DBC value"
     ZONE_DELAY                  = 4,
     ZONE_DAZE                   = 5,    // pulse Dazed on players within this many yards
@@ -144,7 +151,7 @@ Creature* BBASpawnZone(WorldObject* summoner, Position const& pos, uint32 spellI
     if (!trigger || !trigger->IsAIEnabled())
         return trigger;
     trigger->AI()->SetData(ZONE_SPELL, spellId);
-    trigger->AI()->SetData(ZONE_BP0, uint32(bp0));
+    trigger->AI()->SetData(ZONE_BP0, bp0 >= 0 ? uint32(bp0 + 1) : 0);
     trigger->AI()->SetData(ZONE_BP1, bp1 >= 0 ? uint32(bp1 + 1) : 0);
     trigger->AI()->SetData(ZONE_DELAY, delayMs);
     trigger->AI()->SetData(ZONE_DAZE, dazeRange);
@@ -617,7 +624,7 @@ struct npc_bba_trash : public ScriptedAI
         if (_role == ROLE_BERSERKER && !_enraged && me->HealthBelowPctDamaged(30, damage))
         {
             _enraged = true;
-            DoCastSelf(SPELL_RITUAL_RHYTHM, true);
+            DoCastSelf(SPELL_ENRAGE, true);
         }
     }
 
@@ -692,8 +699,7 @@ struct npc_bba_champion : public BossAI
     {
         EVENT_STRIKE = 1, EVENT_AMBUSH, EVENT_SANDSTORM, EVENT_SANDSTORM_PULSE, EVENT_BLIND, EVENT_SAND_TRAP,
         EVENT_FROSTBOLT, EVENT_NOVA, EVENT_FROZEN_GROUND, EVENT_ICE_SPEAR,
-        EVENT_ROOTS, EVENT_VINES, EVENT_BREATH, EVENT_SPORES,
-        EVENT_RHYTHM_FADE
+        EVENT_ROOTS, EVENT_VINES, EVENT_BREATH, EVENT_SPORES
     };
 
     npc_bba_champion(Creature* creature) : BossAI(creature, BBAGetTrialByChampion(creature->GetEntry()) ? BBAGetTrialByChampion(creature->GetEntry())->BossData : DATA_SAND_TRIAL)
@@ -746,31 +752,19 @@ struct npc_bba_champion : public BossAI
         }
     }
 
-    void SpellHit(WorldObject* /*caster*/, SpellInfo const* spellInfo) override
-    {
-        // Ritual Rhythm is temporary: the drummer has to keep it going
-        if (spellInfo->Id == SPELL_RITUAL_RHYTHM)
-            events.RescheduleEvent(EVENT_RHYTHM_FADE, 8s);
-    }
-
     void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*type*/, SpellInfo const* /*spellInfo*/) override
     {
         if (!_frenzy && me->HealthBelowPctDamaged(30, damage))
         {
             _frenzy = true;
             Talk(SAY_CHAMPION_FRENZY);
+            DoCastSelf(SPELL_BLOOD_FRENZY, true);
             me->SetObjectScale(me->GetCreatureTemplate()->scale * 1.15f);
             if (_trial)
                 if (Creature* support = me->FindNearestCreature(_trial->Support, 200.0f))
                     if (support->IsAIEnabled())
                         support->AI()->DoAction(ACTION_SUPPORT_HEAL_MODE);
         }
-    }
-
-    void DamageDealt(Unit* /*victim*/, uint32& damage, DamageEffectType /*type*/) override
-    {
-        if (_frenzy)
-            damage = damage * 125 / 100;
     }
 
     void JustDied(Unit* /*killer*/) override
@@ -795,16 +789,16 @@ struct npc_bba_champion : public BossAI
         {
             case EVENT_STRIKE:
                 if (me->GetEntry() == NPC_ROKTHUL)
-                    DoCastVictim(SPELL_FROSTBOLT, CastSpellExtraArgs(true).AddSpellBP0(450));
+                    DoCastVictim(SPELL_ICEBLOOD_STRIKE, true);
                 else
-                    DoCastVictim(SPELL_MORTAL_STRIKE, CastSpellExtraArgs(true).AddSpellBP0(me->GetEntry() == NPC_MOKRA ? 430 : 420));
+                    DoCastVictim(me->GetEntry() == NPC_MOKRA ? SPELL_THORNED_STRIKE : SPELL_SAND_SLASH, true);
                 events.Repeat(9s);
                 break;
             case EVENT_AMBUSH:
                 if (Unit* target = RandomTarget(true))
                 {
                     me->NearTeleportTo(target->GetPositionX(), target->GetPositionY(), target->GetPositionZ(), target->GetOrientation());
-                    DoCast(target, SPELL_SINISTER_STRIKE, CastSpellExtraArgs(true).AddSpellBP0(650));
+                    DoCast(target, SPELL_BURROWING_AMBUSH, true);
                 }
                 events.Repeat(22s);
                 break;
@@ -814,18 +808,18 @@ struct npc_bba_champion : public BossAI
                 events.Repeat(26s);
                 break;
             case EVENT_SANDSTORM_PULSE:
-                DoCastSelf(SPELL_DUST_FIELD, CastSpellExtraArgs(true).AddSpellBP0(180).AddSpellBP1(0));
+                DoCastSelf(SPELL_SANDSTORM, true);
                 if (--_pulses)
                     events.Repeat(1s);
                 break;
             case EVENT_BLIND:
                 if (Unit* target = RandomTarget(true))
-                    DoCast(target, SPELL_BLIND, true);
+                    DoCast(target, SPELL_BLINDING_SAND, true);
                 events.Repeat(30s);
                 break;
             case EVENT_SAND_TRAP:
                 if (Unit* target = RandomTarget(false))
-                    BBASpawnZone(me, target->GetPosition(), SPELL_DUST_FIELD, 300, 0, 1500, 4s, 0);
+                    BBASpawnZone(me, target->GetPosition(), SPELL_SAND_TRAP, -1, -1, 1500, 4s, 0);
                 events.Repeat(18s);
                 break;
             case EVENT_FROSTBOLT:
@@ -839,12 +833,12 @@ struct npc_bba_champion : public BossAI
                 break;
             case EVENT_FROZEN_GROUND:
                 if (Unit* target = RandomTarget(false))
-                    BBASpawnZone(me, target->GetPosition(), SPELL_BLIZZARD_ZONE, 120, -1, 1500, 13s, 0);
+                    BBASpawnZone(me, target->GetPosition(), SPELL_FROZEN_GROUND, -1, -1, 1500, 13s, 0);
                 events.Repeat(20s);
                 break;
             case EVENT_ICE_SPEAR:
                 if (Unit* target = SelectTarget(SelectTargetMethod::MaxDistance, 0, 50.0f, true))
-                    DoCast(target, SPELL_FROSTBOLT, CastSpellExtraArgs().AddSpellBP0(700));
+                    DoCast(target, SPELL_ICE_SPEAR);
                 events.Repeat(28s);
                 break;
             case EVENT_ROOTS:
@@ -854,20 +848,17 @@ struct npc_bba_champion : public BossAI
                 break;
             case EVENT_VINES:
                 if (Unit* target = RandomTarget(false))
-                    BBASpawnZone(me, target->GetPosition(), SPELL_POISON_CLOUD_ZONE, 140, -1, 2000, 13s, 0);
+                    BBASpawnZone(me, target->GetPosition(), SPELL_GRASPING_VINES, -1, -1, 2000, 13s, 0);
                 events.Repeat(24s);
                 break;
             case EVENT_BREATH:
-                DoCastVictim(SPELL_ACID_BREATH, CastSpellExtraArgs(true).AddSpellBP0(40).AddSpellBP1(360));
+                DoCastVictim(SPELL_VENOMOUS_BREATH, true);
                 events.Repeat(18s);
                 break;
             case EVENT_SPORES:
                 if (Unit* target = RandomTarget(false))
-                    BBASpawnZone(me, target->GetPosition(), SPELL_MUTATED_SPORES, 220, -1, 1500, 4s, 0);
+                    BBASpawnZone(me, target->GetPosition(), SPELL_SPORE_BURST, -1, -1, 1500, 4s, 0);
                 events.Repeat(30s);
-                break;
-            case EVENT_RHYTHM_FADE:
-                me->RemoveAurasDueToSpell(SPELL_RITUAL_RHYTHM);
                 break;
             default:
                 break;
@@ -1058,7 +1049,7 @@ struct npc_bba_zone : public ScriptedAI
         switch (id)
         {
             case ZONE_SPELL: _spell = value; break;
-            case ZONE_BP0:   _bp0 = int32(value); break;
+            case ZONE_BP0:   _bp0 = int32(value) - 1; _hasBp0 = value != 0; break;
             case ZONE_BP1:   _bp1 = int32(value) - 1; _hasBp1 = value != 0; break;
             case ZONE_DELAY: _delay = value; break;
             case ZONE_DAZE:  _daze = value; break;
@@ -1083,7 +1074,8 @@ struct npc_bba_zone : public ScriptedAI
             if (eventId == EVENT_FIRE && _spell)
             {
                 CastSpellExtraArgs args(true);
-                args.AddSpellBP0(_bp0);
+                if (_hasBp0)
+                    args.AddSpellBP0(_bp0);
                 if (_hasBp1)
                     args.AddSpellBP1(_bp1);
                 me->CastSpell(me->GetPosition(), _spell, args);
@@ -1104,6 +1096,7 @@ private:
     EventMap _events;
     uint32 _spell = 0;
     int32 _bp0 = 0;
+    bool _hasBp0 = false;
     int32 _bp1 = 0;
     bool _hasBp1 = false;
     uint32 _delay = 0;
