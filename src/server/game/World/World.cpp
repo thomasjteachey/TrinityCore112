@@ -1626,6 +1626,12 @@ void World::LoadConfigSettings(bool reload)
     uint32 const worldPriceRevision = Tournament::GetWorldPriceRevision();
     Tournament::LoadConfig();
 
+    // Legionnaire Mark of Honor item ids for this realm, and what vendors charge
+    // for the restored one (Miscellaneous/DepletedMarks.h). Read before the
+    // vendor reload below, which prices the mark off Rate.Honor (read above).
+    uint32 const markPriceRevision = Trinity::Custom::GetMarkPriceRevision();
+    Trinity::Custom::LoadMarkConfig();
+
     // World hub prices are stamped into the vendor and quest caches as those are
     // filled, so a re-tune only reaches players once they are rebuilt. Doing it
     // here is what makes `.reload config` alone enough to move the economy; a
@@ -1636,6 +1642,12 @@ void World::LoadConfigSettings(bool reload)
         sObjectMgr->LoadVendors();
         sObjectMgr->LoadQuests();
         sObjectMgr->InitializeQueriesData(QUERY_DATA_QUESTS);
+    }
+    // The same for the mark's price, which a Rate.Honor change alone moves.
+    else if (reload && markPriceRevision != Trinity::Custom::GetMarkPriceRevision())
+    {
+        TC_LOG_INFO("server.loading", "Rate.Honor or Centurion.Marks.* changed: reloading `npc_vendor` to re-price the Mark of Honor.");
+        sObjectMgr->LoadVendors();
     }
 
     // The world cooldowns a character keeps while it fights a battleground or an
@@ -1649,9 +1661,6 @@ void World::LoadConfigSettings(bool reload)
     // Centurion.Mokgora.Enable = 1, and it probes for its own table here rather
     // than assuming a realm on this branch has been given one.
     Mokgora::LoadConfig();
-
-    // Legionnaire Mark of Honor item ids for this realm (Miscellaneous/DepletedMarks.h).
-    Trinity::Custom::LoadMarkConfig();
 
     // Character select/create screen extras: reordering, the tournament badge,
     // challenge modes chosen at creation (Miscellaneous/CharacterScreen.h).

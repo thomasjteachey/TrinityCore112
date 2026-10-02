@@ -48,6 +48,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -216,7 +217,10 @@ namespace
     // Built once. The DBC store is read-only after startup, and everything here
     // runs on the world thread (ObjectMgr::LoadVendors, at startup or from
     // `.reload`), never under a map tick.
-    std::unordered_map<uint32, uint32> HonorOnlyCosts;
+    //
+    // Ordered, so FindHonorOnlyCost can step up to the next rung when no row
+    // carries a computed price exactly.
+    std::map<uint32, uint32> HonorOnlyCosts;
     bool HonorOnlyCostsBuilt = false;
 
     void BuildHonorOnlyCosts()
@@ -1696,6 +1700,20 @@ uint32 GetWorldVendorCost(uint32 extendedCost)
 
     auto const itr = ResolvedVendorCosts.find(extendedCost);
     return itr != ResolvedVendorCosts.end() ? itr->second : extendedCost;
+}
+
+uint32 FindHonorOnlyCost(uint32 honor, uint32* charged)
+{
+    if (!HonorOnlyCostsBuilt)
+        BuildHonorOnlyCosts();
+
+    auto const row = HonorOnlyCosts.lower_bound(honor);
+    if (row == HonorOnlyCosts.end())
+        return 0;
+
+    if (charged)
+        *charged = row->first;
+    return row->second;
 }
 
 uint32 GetWorldQuestItemCount(uint32 questId, uint32 dbValue)

@@ -17,13 +17,19 @@
 
 #include "Miscellaneous/DepletedMarks.h"
 #include "Config.h"
+#include "DBCStores.h"
 #include "Entities/Player/Player.h"
 #include "Log.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "ObjectMgr.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "StringConvert.h"
 #include "Util.h"
+#include "World.h"
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <string_view>
 
 namespace Trinity::Custom
@@ -38,9 +44,100 @@ struct MarkConfig
     std::array<uint32, MAX_DEPLETED_MARK_ENTRIES> DepletedEntries = { 20559, 20560, 20561, 20562, 20563, 20564, 20565, 20566, 20567,
                                                                       20568, 20569, 20570, 20571, 20572, 20573, 20574, 20575 };
     std::size_t DepletedCount = 17;
+    // Vendor price of the restored mark as a multiple of what it pays; 0 = the
+    // npc_vendor row's own price stands.
+    float HonorCostMultiplier = 0.0f;
+    // Rate.Honor as of this load. The payout the price is a multiple of.
+    float HonorRate = 1.0f;
+    uint32 PriceRevision = 0;
 };
 
 MarkConfig Marks;
+
+// The restored mark's price, resolved against the DBCs and item templates on
+// first use after a config change - at startup the config is read before
+// either is loaded. World thread only (ObjectMgr::LoadVendors).
+uint32 ResolvedMarkCost = 0;   // 0 = leave the npc_vendor price alone
+uint32 ResolvedMarkPriceRevision = uint32(-1);
+
+void ResolveMarkPrice()
+{
+    ResolvedMarkCost = 0;
+    ResolvedMarkPriceRevision = Marks.PriceRevision;
+
+    if (Marks.HonorCostMultiplier <= 0.0f)
+        return;
+
+    ItemTemplate const* proto = sObjectMgr->GetItemTemplate(Marks.RestoredEntry);
+    if (!proto)
+    {
+        TC_LOG_ERROR("server.loading", "Centurion.Marks.HonorCostMultiplier: mark item {} does not exist; vendors keep their npc_vendor price.", Marks.RestoredEntry);
+        return;
+    }
+
+    // What the mark's on-use honor spell pays before any scaling - the
+    // `damage` Spell::EffectAddHonor hands to RewardHonor. A die roll is taken
+    // at its top, so the price never undercuts a lucky mark.
+    int32 basePayout = 0;
+    for (_Spell const& itemSpell : proto->Spells)
+    {
+        if (itemSpell.SpellId <= 0)
+            continue;
+
+        if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(uint32(itemSpell.SpellId)))
+            for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+                if (effect.IsEffect(SPELL_EFFECT_ADD_HONOR))
+                    basePayout += effect.BasePoints + std::max(effect.DieSides, 0);
+    }
+
+    if (basePayout <= 0)
+    {
+        TC_LOG_ERROR("server.loading", "Centurion.Marks.HonorCostMultiplier: mark item {} casts no honor spell; vendors keep their npc_vendor price.", Marks.RestoredEntry);
+        return;
+    }
+
+    // RewardHonor's own arithmetic: float, times Rate.Honor, truncated. The
+    // personal honor-gain auras are left out - a vendor price is one number
+    // for everyone.
+    int32 const payout = int32(float(basePayout) * Marks.HonorRate);
+    if (payout <= 0)
+    {
+        TC_LOG_ERROR("server.loading", "Centurion.Marks.HonorCostMultiplier: at Rate.Honor {} the mark pays no honor; vendors keep their npc_vendor price.", Marks.HonorRate);
+        return;
+    }
+
+    // The honor number lives in ItemExtendedCost.dbc, which the client reads
+    // for itself, so the price is the cheapest honor-only row at or above the
+    // wanted amount - rounded up, never down, so a mark can never be bought
+    // back for less than the multiple. Centurion's ladder runs every 1 to 50,
+    // every 5 to 200, every 10 to 1000.
+    uint32 const wanted = uint32(std::ceil(float(payout) * Marks.HonorCostMultiplier));
+    uint32 charged = 0;
+    uint32 const costId = ::Tournament::FindHonorOnlyCost(wanted, &charged);
+    if (!costId)
+    {
+        TC_LOG_ERROR("server.loading", "Centurion.Marks.HonorCostMultiplier: no ItemExtendedCost row asks for {} honor or more and nothing else; "
+            "vendors keep their npc_vendor price.", wanted);
+        return;
+    }
+
+    ResolvedMarkCost = costId;
+    TC_LOG_INFO("server.loading", "Centurion Mark of Honor {}: pays {} honor at Rate.Honor {}, so vendors charge {} honor (ItemExtendedCost {}, {}x = {}).",
+        Marks.RestoredEntry, payout, Marks.HonorRate, charged, costId, Marks.HonorCostMultiplier, wanted);
+}
+
+bool IsHonorOnlyCost(uint32 extendedCost)
+{
+    ItemExtendedCostEntry const* cost = sItemExtendedCostStore.LookupEntry(extendedCost);
+    if (!cost || !cost->HonorPoints || cost->ArenaPoints || cost->ArenaBracket || cost->RequiredArenaRating)
+        return false;
+
+    for (uint8 slot = 0; slot < MAX_ITEM_EXTENDED_COST_REQUIREMENTS; ++slot)
+        if (cost->ItemID[slot])
+            return false;
+
+    return true;
+}
 
 std::string_view TrimToken(std::string_view token)
 {
@@ -116,12 +213,38 @@ void LoadMarkConfig()
     if (!loaded.DepletedCount)
         TC_LOG_ERROR("server.loading", "Centurion.Marks.DepletedEntries is empty: battleground wins restore no marks and the Mark Transmuter converts nothing.");
 
+    // Called from World::LoadConfigSettings after the rates, so this is the
+    // Rate.Honor the reload just read.
+    loaded.HonorCostMultiplier = std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Marks.HonorCostMultiplier", 0.0f));
+    loaded.HonorRate = sWorld->getRate(RATE_HONOR);
+    loaded.PriceRevision = Marks.PriceRevision;
+    if (loaded.RestoredEntry != Marks.RestoredEntry || loaded.HonorCostMultiplier != Marks.HonorCostMultiplier || loaded.HonorRate != Marks.HonorRate)
+        ++loaded.PriceRevision;
+
     Marks = loaded;
 }
 
 uint32 GetRestoredMarkEntry()
 {
     return Marks.RestoredEntry;
+}
+
+uint32 GetMarkVendorCost(uint32 itemId, uint32 extendedCost)
+{
+    // Only an honor price is re-priced in honor: a row selling the mark for
+    // items, arena points or gold is served as the database wrote it.
+    if (!extendedCost || itemId != Marks.RestoredEntry || !IsHonorOnlyCost(extendedCost))
+        return extendedCost;
+
+    if (ResolvedMarkPriceRevision != Marks.PriceRevision)
+        ResolveMarkPrice();
+
+    return ResolvedMarkCost ? ResolvedMarkCost : extendedCost;
+}
+
+uint32 GetMarkPriceRevision()
+{
+    return Marks.PriceRevision;
 }
 
 std::span<uint32 const> GetDepletedMarkEntries()

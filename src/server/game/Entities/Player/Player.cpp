@@ -8135,6 +8135,19 @@ void Player::UpdateHonorFields()
 ///Calculate the amount of honor gained based on the victim
 ///and the size of the group for which the honor is divided
 ///An exact honor value can also be given (overriding the calcs)
+int32 Player::ScaleHonorGain(float honor) const
+{
+    if (honor > 0.0f)
+    {
+        // apply honor multiplier from aura (not stacking-get highest)
+        AddPct(honor, GetMaxPositiveAuraModifier(SPELL_AURA_MOD_HONOR_GAIN_PCT));
+    }
+
+    honor *= sWorld->getRate(RATE_HONOR);
+    // Back to int now
+    return int32(honor);
+}
+
 bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvptoken)
 {
     if (Battleground const* bg = GetBattleground(); bg && bg->IsCustomGame())
@@ -8223,15 +8236,7 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
             honor_f /= groupsize;
     }
 
-    if (honor_f > 0.0f)
-    {
-        // apply honor multiplier from aura (not stacking-get highest)
-        AddPct(honor_f, GetMaxPositiveAuraModifier(SPELL_AURA_MOD_HONOR_GAIN_PCT));
-    }
-
-    honor_f *= sWorld->getRate(RATE_HONOR);
-    // Back to int now
-    honor = int32(honor_f);
+    honor = ScaleHonorGain(honor_f);
 
     // Below the level cap there is no honor: every award is paid as EXPERIENCE
     // instead, or not at all.

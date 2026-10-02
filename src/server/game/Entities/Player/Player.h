@@ -2119,6 +2119,10 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void SetArenaFaction(uint8 arenaFaction) { SetByteValue(PLAYER_BYTES_3, PLAYER_BYTES_3_OFFSET_ARENA_FACTION, arenaFaction); }
         void UpdateHonorFields();
         bool RewardHonor(Unit* victim, uint32 groupsize, int32 honor = -1, bool pvptoken = false);
+        // What an award of `honor` actually pays this character: the strongest
+        // honor-gain aura, then Rate.Honor, truncated. RewardHonor's own
+        // arithmetic, shared so a cap check can test the real payout.
+        int32 ScaleHonorGain(float honor) const;
         uint32 GetHonorPoints() const { return GetUInt32Value(PLAYER_FIELD_HONOR_CURRENCY); }
         uint32 GetMaxHonorPoints() const;
         // The next rung of the honor cap ladder: the lowest cap above the one

@@ -6220,8 +6220,12 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
         {
             case SPELL_EFFECT_ADD_HONOR:
             {
+                // Tested against what the spell will actually pay, after
+                // Rate.Honor and honor-gain auras, not its raw value: at a
+                // 0.75 rate a 100-point mark pays 75, and was being refused
+                // whenever the purse had less than 100 of room.
                 if (Player* playerCaster = m_caster->ToPlayer())
-                    if (spellEffectInfo.BasePoints + 1 + playerCaster->GetHonorPoints() > playerCaster->GetMaxHonorPoints())
+                    if (int64(playerCaster->ScaleHonorGain(float(spellEffectInfo.BasePoints + 1))) + playerCaster->GetHonorPoints() > int64(playerCaster->GetMaxHonorPoints()))
                     {
                         // A mark of honor worth more than the purse has room for
                         // is refused whole, and "You can't do that right now" is

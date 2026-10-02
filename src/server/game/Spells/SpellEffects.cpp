@@ -3021,7 +3021,9 @@ void Spell::EffectAddHonor()
         return;
 
     Player* target = unitTarget->ToPlayer();
-    int64 value = int64(target->GetHonorPoints()) + damage;
+    // The scaled payout, as Spell::CheckCast tests it; RewardHonor scales the
+    // raw value itself below.
+    int64 value = int64(target->GetHonorPoints()) + target->ScaleHonorGain(float(damage));
     if (value > int64(target->GetMaxHonorPoints()))
         return;
 

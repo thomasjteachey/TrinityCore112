@@ -5752,9 +5752,22 @@ Centurion.Pvp.WaiveReagentsAndAmmo = 0
 #        Description: Item ids of the depleted marks, comma-separated or as first-last ranges, at
 #                     most 32. Each is matched to characters by its AllowableClass/AllowableRace.
 #        Default:     "20559-20575"
+#
+#    Centurion.Marks.HonorCostMultiplier
+#        Description: What a vendor charges for the restored mark, as a multiple of the honor
+#                     the mark pays when used. The payout is read from the mark's own honor
+#                     spell and scaled by Rate.Honor exactly as the award is, so re-tuning
+#                     Rate.Honor re-prices the mark by itself - `.reload config` is enough.
+#                     Only npc_vendor rows selling the mark for honor alone are re-priced.
+#                     The honor number lives in ItemExtendedCost.dbc, which the client reads
+#                     for itself, so the price is the cheapest honor-only row asking for at
+#                     least the wanted amount (rounded UP to the next rung of the ladder).
+#        Example:     2.0 - a mark paying 75 honor costs 150.
+#        Default:     0 - (Disabled, the npc_vendor price stands)
 
 Centurion.Marks.RestoredEntry = 20558
 Centurion.Marks.DepletedEntries = "20559-20575"
+Centurion.Marks.HonorCostMultiplier = 0
 
 
 

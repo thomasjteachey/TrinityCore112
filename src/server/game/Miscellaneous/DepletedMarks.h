@@ -38,6 +38,19 @@ namespace Trinity::Custom
     uint32 GetRestoredMarkEntry();
     std::span<uint32 const> GetDepletedMarkEntries();
 
+    // What a vendor charges for the restored mark follows what the mark pays
+    // (Centurion.Marks.HonorCostMultiplier). Using one casts an honor spell
+    // that Player::RewardHonor scales by Rate.Honor, so a fixed npc_vendor
+    // price drifts every time the rate is tuned. Returns the ItemExtendedCost a
+    // vendor row should be served with: for the restored mark on an honor-only
+    // price, the cheapest honor-only row costing at least multiplier x payout;
+    // for anything else, or with the multiplier off, extendedCost unchanged.
+    // ObjectMgr::LoadVendors calls it as it fills the vendor cache.
+    uint32 GetMarkVendorCost(uint32 itemId, uint32 extendedCost);
+    // Bumped when a `.reload config` changes anything that price depends on,
+    // so World knows the vendor cache is stale.
+    uint32 GetMarkPriceRevision();
+
     uint32 GetTotalDepletedMarkCount(Player const* player, bool includeBank = false);
     bool HasEnoughDepletedMarks(Player const* player, uint32 requiredCount, bool includeBank = false);
     bool ConsumeDepletedMarks(Player* player, uint32 amount);

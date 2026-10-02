@@ -438,6 +438,13 @@ namespace Tournament
     // the DBC rows speak for themselves.
     uint32 GetWorldVendorCost(uint32 extendedCost);
 
+    // The cheapest ItemExtendedCost row that asks for honor and nothing else,
+    // and at least `honor` of it - the same ladder GetWorldVendorCost swaps
+    // into, for a price computed rather than configured. Writes the honor the
+    // row actually asks for to *charged. 0 when no row asks for that much.
+    // World thread only, like the vendor load that calls it.
+    uint32 FindHonorOnlyCost(uint32 honor, uint32* charged = nullptr);
+
     // The price in Warchief's Socks (item 40752, the honor mirror) of a world
     // hub teleport quest, from Centurion.WorldPrices.QuestSocks. Overrides the
     // first objective's RequiredItemCount; returns dbValue for a quest that is

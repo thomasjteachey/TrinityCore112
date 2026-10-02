@@ -38,6 +38,7 @@
 #include "LootMgr.h"
 #include "Mail.h"
 #include "MapManager.h"
+#include "Miscellaneous/DepletedMarks.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "MotionMaster.h"
 #include "ObjectAccessor.h"
@@ -9803,6 +9804,9 @@ uint32 ObjectMgr::LoadReferenceVendor(int32 vendor, int32 item, std::set<uint32>
             // here, before the row is validated and cached, so the packet, the
             // purchase check, the charge and the refund all see one id.
             uint32 ExtendedCost = Tournament::GetWorldVendorCost(fields[3].GetUInt32());
+            // And the restored Mark of Honor is priced off what it pays
+            // (Miscellaneous/DepletedMarks.h), so it follows Rate.Honor.
+            ExtendedCost = Trinity::Custom::GetMarkVendorCost(uint32(item_id), ExtendedCost);
 
             if (!IsVendorItemValid(vendor, item_id, maxcount, incrtime, ExtendedCost, nullptr, skip_vendors))
                 continue;
@@ -9854,6 +9858,7 @@ void ObjectMgr::LoadVendors()
             uint32 incrtime     = fields[3].GetUInt32();
             // Centurion world prices, as in LoadReferenceVendor above.
             uint32 ExtendedCost = Tournament::GetWorldVendorCost(fields[4].GetUInt32());
+            ExtendedCost = Trinity::Custom::GetMarkVendorCost(uint32(item_id), ExtendedCost);
 
             if (!IsVendorItemValid(entry, item_id, maxcount, incrtime, ExtendedCost, nullptr, &skip_vendors))
                 continue;
