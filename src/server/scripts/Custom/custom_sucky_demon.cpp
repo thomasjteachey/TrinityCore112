@@ -22,9 +22,14 @@
  *                                    SPELLMOD_NOT_LOSE_CASTING_TIME masked to
  *                                    Drain Life and Drain Mana.
  *   5pc  90616 Efficient Gluttony  - pure Spell.dbc: -30% SPELLMOD_COST, same mask.
- *   8pc  90617 All Fear the Sucky  - teaches Sucky Demon Form (90618).
+ *   8pc  90617 All Fear the Sucky  - tooltip only. The form is FORCED on the
+ *                                    wearer by custom_hidden_itemset_bonus
+ *                                    (1078, 8 -> 90618), the same way Odr's
+ *                                    Battlegear forces Hungry.
  *        90618 Sucky Demon Form    - shapeshift 22 (the Metamorphosis graphic)
- *                                    plus the two bundles below.
+ *                                    plus the two bundles below. CANT_CANCEL,
+ *                                    death-persistent and kept in arenas, so
+ *                                    taking a piece off is the only way out.
  *        90619                       -90% speed, +200 magic resistance, +200% Stamina.
  *        90620                       +30% drain effect and the allowed-ability mask.
  *
@@ -59,7 +64,6 @@ namespace
 {
     enum SuckyDemonSpells
     {
-        SPELL_SUCKY_CARRIER_8PC = 90617,
         SPELL_SUCKY_FORM        = 90618,
         SPELL_SUCKY_FORM_STATS  = 90619,
         SPELL_SUCKY_FORM_HUNGER = 90620,
@@ -83,39 +87,6 @@ namespace
         return unit && unit->HasAura(SPELL_SUCKY_FORM);
     }
 }
-
-// 90617 - the 8-piece carrier. Owns nothing but the ability itself, so taking a
-// piece off takes the form away with it.
-class spell_sucky_demon_carrier : public AuraScript
-{
-    PrepareAuraScript(spell_sucky_demon_carrier);
-
-    void OnApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
-    {
-        if (Player* player = GetTarget()->ToPlayer())
-            if (!player->HasSpell(SPELL_SUCKY_FORM))
-                player->LearnSpell(SPELL_SUCKY_FORM, false);
-    }
-
-    void OnRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
-    {
-        Player* player = GetTarget()->ToPlayer();
-        if (!player)
-            return;
-
-        // Drop the form first: leaving it applied after the ability is gone
-        // would strand the player as a demon they can no longer cancel.
-        player->RemoveAurasDueToSpell(SPELL_SUCKY_FORM);
-        if (player->HasSpell(SPELL_SUCKY_FORM))
-            player->RemoveSpell(SPELL_SUCKY_FORM);
-    }
-
-    void Register() override
-    {
-        AfterEffectApply += AuraEffectApplyFn(spell_sucky_demon_carrier::OnApply, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
-        AfterEffectRemove += AuraEffectRemoveFn(spell_sucky_demon_carrier::OnRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
-    }
-};
 
 // 90618 - the form. Carries the shapeshift itself; the two stat/behaviour
 // bundles ride along so they can be retuned in Spell.dbc independently.
@@ -206,7 +177,6 @@ class spell_sucky_demon_drain : public SpellScript
 
 void AddSC_custom_sucky_demon()
 {
-    RegisterSpellScript(spell_sucky_demon_carrier);
     RegisterSpellScript(spell_sucky_demon_form);
     // Bound to every Drain Life / Drain Mana rank through
     // spell_script_names, so it attaches to the core spells rather than
