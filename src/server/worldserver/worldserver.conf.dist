@@ -3749,6 +3749,26 @@ Centurion.WarMode.BotMapPerMessage = 12
 
 ###################################################################################################
 #
+#    Centurion.AbsorbFeed.Enable
+#    Centurion.AbsorbFeed.PollMs
+#    Centurion.AbsorbFeed.RefreshMs
+#        Description: Tells each player how much damage their shields still absorb, for the
+#                     CENTURION_AbsorbBar addon (a translucent bar over the player frame's
+#                     health bar). A 3.3.5 client is never sent aura amounts, so it cannot
+#                     work this out alone. The total is checked every PollMs, sent when it
+#                     changes, and re-sent every RefreshMs while a shield is up so a /reload
+#                     catches up. Bots are skipped.
+#                     Without the addon the messages are simply ignored.
+#        Default:     1 / 100 / 3000
+#
+###################################################################################################
+
+Centurion.AbsorbFeed.Enable = 1
+Centurion.AbsorbFeed.PollMs = 100
+Centurion.AbsorbFeed.RefreshMs = 3000
+
+###################################################################################################
+#
 #    Centurion.GMOnline.Enable
 #        Description: The GM command .gmonline and the CENTURION_GMOnline addon: who is
 #                     online on every realm - names, levels, zones and ACCOUNT names, with
