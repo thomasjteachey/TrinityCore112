@@ -1,6 +1,6 @@
 ## Interface: 30300
 ## Title: Centurion Absorb Bar
-## Notes: Draws your absorb shields (Power Word: Shield, Ice Barrier, Mana Shield...) as a translucent bar over your health bar.
+## Notes: Draws absorb shields (Power Word: Shield, Ice Barrier, Mana Shield...) and their amount as a translucent bar over your health bar and your target's.
 ## Author: Centurion
 ## Version: 1.0
 ## DefaultState: Enabled
