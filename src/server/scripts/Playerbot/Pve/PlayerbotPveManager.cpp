@@ -57,6 +57,7 @@
 #include "Loot.h"
 #include "MapManager.h"
 #include "Map.h"
+#include "ModelIgnoreFlags.h"
 #include "MotionMaster.h"
 #include "PathGenerator.h"
 #include "MoveSpline.h"
@@ -398,6 +399,19 @@ namespace
         float deathSpotX = 0.0f;
         float deathSpotY = 0.0f;
         float deathSpotZ = 0.0f;
+        // The last few places this bot died, newest over oldest. The deathSpot
+        // fields above belong to the chest walk and are wiped the moment the
+        // chest is claimed or gone; these are kept for the stuck rescue and the
+        // relocation, which must not put the bot straight back on the camp that
+        // has just killed it.
+        struct RecentDeath
+        {
+            PveTimePoint at{};
+            uint16 mapId = 0;
+            float x = 0.0f;
+            float y = 0.0f;
+        };
+        std::array<RecentDeath, 4> recentDeaths{};
         // Taming: guards the 20s tame/capture channel against every other
         // activity, and paces the tameable-beast scan.
         PveTimePoint tamingUntil{};
@@ -9047,6 +9061,71 @@ namespace
     // stuck watchdog uses this to stay in the bot's current zone even when none
     // of that zone's creatures fall inside the bot's preferred level bracket.
     std::unordered_map<uint32, std::vector<GrindSpot>> g_GrindSpotsByZone;
+    // Every spawn on the relocation maps that could pick a fight, bucketed by
+    // fifty-yard cell. Built beside the grind clusters, under the same lock and
+    // the same one-shot guard, and read by FindGrindLanding: a GrindSpot is the
+    // exact spawn point of its cell's first creature, so landing on it put the
+    // bot inside that creature and every one around it. This is what the
+    // landing search asks to find ground none of them can see.
+    //
+    // Spawn records, not live creatures: the destination grid is often not
+    // loaded yet, and a spawn's own wander radius covers most of where it can
+    // be standing.
+    struct LandingThreat
+    {
+        float x = 0.0f;
+        float y = 0.0f;
+        float wanderYards = 0.0f;
+        uint32 faction = 0;
+        uint8 level = 0;
+    };
+    std::unordered_map<uint64, std::vector<LandingThreat>> g_LandingThreatsByCell;
+
+    constexpr float kLandingCellYards = 50.0f;
+
+    int32 LandingCell(float coordinate)
+    {
+        return int32(std::floor(coordinate / kLandingCellYards));
+    }
+
+    uint64 LandingCellKey(uint16 mapId, int32 cellX, int32 cellY)
+    {
+        return (uint64(mapId) << 32) | (uint64(uint16(int16(cellX))) << 16) | uint64(uint16(int16(cellY)));
+    }
+
+    // Caller holds g_GrindSpotLock. Elites, rares and long-respawn spawns are
+    // recorded too - the grind filters reject them as targets, and they are
+    // every bit as dangerous to land beside.
+    void RecordLandingThreat(CreatureData const& data)
+    {
+        CreatureTemplate const* proto = sObjectMgr->GetCreatureTemplate(data.id);
+        if (!proto || proto->type == CREATURE_TYPE_CRITTER || proto->type == CREATURE_TYPE_TOTEM)
+            return;
+
+        if (proto->flags_extra & (CREATURE_FLAG_EXTRA_CIVILIAN | CREATURE_FLAG_EXTRA_TRIGGER))
+            return;
+
+        uint32 const unitFlags = proto->unit_flags | data.unit_flags;
+        if (unitFlags & (UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_UNINTERACTIBLE))
+            return;
+
+        // Who it is hostile to is the bot's question, asked at landing time; a
+        // faction hostile to nobody can be dropped now.
+        FactionTemplateEntry const* faction = sFactionTemplateStore.LookupEntry(proto->faction);
+        if (!faction)
+            return;
+        bool hostileToSomebody = faction->EnemyGroup != 0;
+        for (uint32 enemy : faction->Enemies)
+            hostileToSomebody = hostileToSomebody || enemy != 0;
+        if (!hostileToSomebody)
+            return;
+
+        float const x = data.spawnPoint.GetPositionX();
+        float const y = data.spawnPoint.GetPositionY();
+        g_LandingThreatsByCell[LandingCellKey(uint16(data.mapId), LandingCell(x), LandingCell(y))].push_back(
+            { x, y, data.wander_distance, proto->faction, uint8(std::min<uint32>(proto->maxlevel, 255)) });
+    }
+
     // zoneId -> how many grind clusters the zone has in total. Compared against
     // how many of them serve a given level, which is what actually answers "is
     // there anything here for me".
@@ -9368,6 +9447,10 @@ namespace
             // change needs a restart.)
             if (!std::binary_search(g_PveConfig.relocateMaps.begin(), g_PveConfig.relocateMaps.end(), data.mapId))
                 continue;
+
+            // Before every grind filter below: what is too dangerous to target
+            // is not too dangerous to land beside.
+            RecordLandingThreat(data);
 
             if (data.spawntimesecs >= 1000)
                 continue;
@@ -14385,6 +14468,200 @@ namespace
             bot->SetSwim(false);
     }
 
+    // How far a creature notices a bot: Creature::GetAttackDistance's own rule,
+    // without the per-creature auras and combat reach a spawn record does not
+    // carry. Leaving combat reach out errs on the wide side.
+    float LandingAggroRadius(uint8 creatureLevel, uint8 botLevel)
+    {
+        float const radius = 20.0f + float(int32(creatureLevel) - int32(botLevel));
+        return std::clamp(radius, 5.0f, 45.0f) * sWorld->getRate(RATE_CREATURE_AGGRO);
+    }
+
+    struct GrindLanding
+    {
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        float offsetYards = 0.0f; // from the cluster's anchor spawn
+        bool clear = false;       // outside every hostile spawn's aggro radius
+    };
+
+    // Where a teleport onto a grind cluster should actually put the bot.
+    //
+    // A GrindSpot is the exact spawn point of the first creature in its cell,
+    // and both the stuck rescue and the relocation teleport landed on it - inside
+    // that creature and, in a dense camp, inside everything around it. Between
+    // 2026-10-01 and 10-04 about 2,200 of 16,700 bot deaths came within two
+    // minutes of one of those teleports, nearly always opening with "engaging X
+    // at 0y". Kelfyn, a level 45 mage rescued onto the same Dark Iron Geologist
+    // camp in Searing Gorge over and over, died 221 times that way.
+    //
+    // So walk out from the anchor in rings and take the nearest ground no
+    // hostile spawn can see: close enough that the camp is still the bot's to
+    // pull from the edge, far enough that arriving is not the pull. The ground
+    // must be on the anchor's own floor, dry, in the anchor's zone and in sight
+    // of it - a point behind a wall or up a cliff is not the edge of the camp,
+    // and would only feed the stuck watchdog.
+    //
+    // Nowhere in reach clear: the point whose nearest threat is farthest off
+    // wins, provided it beats the anchor. Returns false when the anchor itself
+    // is still the best ground there is; the caller keeps it.
+    bool FindGrindLanding(Player const* bot, Map const* map, GrindSpot const& spot, float anchorGround,
+        GrindLanding& landing)
+    {
+        FactionTemplateEntry const* botFaction = bot->GetFactionTemplateEntry();
+        if (!botFaction)
+            return false;
+
+        static constexpr std::array<float, 6> kRings = { 15.0f, 22.0f, 30.0f, 38.0f, 46.0f, 55.0f };
+        constexpr uint32 kBearings = 12;
+        // A spawn walks a little past its wander radius chasing nothing at all,
+        // and a bot arriving at a run covers a few yards before it stops.
+        constexpr float kThreatMargin = 5.0f;
+
+        struct NearThreat
+        {
+            float x;
+            float y;
+            float radius;
+        };
+        std::vector<NearThreat> threats;
+        {
+            std::lock_guard<std::mutex> guard(g_GrindSpotLock);
+            uint8 const botLevel = uint8(std::min<uint32>(bot->GetLevel(), 255));
+            int32 const anchorCellX = LandingCell(spot.x);
+            int32 const anchorCellY = LandingCell(spot.y);
+            // Three cells is 150 yards: the outermost ring plus the widest aggro
+            // radius plus a generous wander.
+            for (int32 cellX = anchorCellX - 3; cellX <= anchorCellX + 3; ++cellX)
+                for (int32 cellY = anchorCellY - 3; cellY <= anchorCellY + 3; ++cellY)
+                {
+                    auto const itr = g_LandingThreatsByCell.find(LandingCellKey(spot.mapId, cellX, cellY));
+                    if (itr == g_LandingThreatsByCell.end())
+                        continue;
+
+                    for (LandingThreat const& threat : itr->second)
+                    {
+                        FactionTemplateEntry const* faction = sFactionTemplateStore.LookupEntry(threat.faction);
+                        if (!faction || !faction->IsHostileTo(*botFaction))
+                            continue;
+
+                        float const radius = LandingAggroRadius(threat.level, botLevel) + threat.wanderYards + kThreatMargin;
+                        float const reach = kRings.back() + radius;
+                        float const dx = threat.x - spot.x;
+                        float const dy = threat.y - spot.y;
+                        if (dx * dx + dy * dy <= reach * reach)
+                            threats.push_back({ threat.x, threat.y, radius });
+                    }
+                }
+        }
+
+        // How far outside the nearest threat's radius a point stands; negative
+        // means inside one.
+        auto clearance = [&threats](float x, float y)
+        {
+            float nearest = std::numeric_limits<float>::max();
+            for (NearThreat const& threat : threats)
+            {
+                float const dx = x - threat.x;
+                float const dy = y - threat.y;
+                nearest = std::min(nearest, std::sqrt(dx * dx + dy * dy) - threat.radius);
+            }
+            return nearest;
+        };
+
+        float bestClearance = clearance(spot.x, spot.y);
+        if (bestClearance >= 0.0f)
+            return false; // nothing hostile can see the anchor itself
+
+        bool haveBest = false;
+        float const firstBearing = frand(0.0f, 6.28f);
+        for (float ring : kRings)
+            for (uint32 step = 0; step < kBearings; ++step)
+            {
+                float const bearing = firstBearing + float(step) * (6.2831853f / float(kBearings));
+                float const x = spot.x + ring * std::cos(bearing);
+                float const y = spot.y + ring * std::sin(bearing);
+
+                // Arithmetic first; the terrain and collision queries only for a
+                // point that could actually win.
+                float const pointClearance = clearance(x, y);
+                if (pointClearance < 0.0f && pointClearance <= bestClearance)
+                    continue;
+
+                float const z = map->GetHeight(PHASEMASK_NORMAL, x, y, anchorGround + 5.0f, true, 15.0f);
+                if (z <= INVALID_HEIGHT || std::fabs(z - anchorGround) > 8.0f)
+                    continue;
+                if (map->IsInWater(PHASEMASK_NORMAL, x, y, z))
+                    continue;
+                if (spot.zoneId && map->GetZoneId(PHASEMASK_NORMAL, x, y, z) != spot.zoneId)
+                    continue;
+                if (!map->isInLineOfSight(x, y, z + 2.0f, spot.x, spot.y, anchorGround + 2.0f, PHASEMASK_NORMAL,
+                    LINEOFSIGHT_CHECK_VMAP, VMAP::ModelIgnoreFlags::Nothing))
+                    continue;
+
+                landing = { x, y, z, ring, pointClearance >= 0.0f };
+                if (landing.clear)
+                    return true; // rings run outward, so the first clear point is the nearest
+                bestClearance = pointClearance;
+                haveBest = true;
+            }
+
+        return haveBest;
+    }
+
+    // Not straight back onto a camp that has just killed it.
+    //
+    // Kelfyn again: he died twice, rose at the further graveyard with nothing in
+    // reach, stood there until the stuck watchdog fired, and was rescued onto the
+    // Dark Iron Geologist camp that had just killed him. A cluster within
+    // seventy-five yards of any death in the last twenty minutes is dropped -
+    // unless that would leave nowhere at all, because a rescue to a known-bad
+    // camp still beats none, and FindGrindLanding keeps it off the camp's middle
+    // either way.
+    void DropCandidatesNearRecentDeaths(Player const* bot, uint64 botRawGuid, std::vector<GrindSpot>& candidates)
+    {
+        constexpr float kRecentDeathYards = 75.0f;
+        constexpr auto kRecentDeathWindow = std::chrono::minutes(20);
+
+        std::array<PveBotState::RecentDeath, 4> deaths;
+        {
+            PveBotState& state = playerbot::LockedGetOrCreate(g_PveBotStateByGuid, botRawGuid);
+            deaths = state.recentDeaths;
+        }
+
+        PveTimePoint const now = PveClock::now();
+        std::vector<GrindSpot> kept;
+        kept.reserve(candidates.size());
+        for (GrindSpot const& spot : candidates)
+        {
+            bool nearDeath = false;
+            for (PveBotState::RecentDeath const& death : deaths)
+            {
+                if (death.at == PveTimePoint{} || now - death.at > kRecentDeathWindow || death.mapId != spot.mapId)
+                    continue;
+
+                float const dx = death.x - spot.x;
+                float const dy = death.y - spot.y;
+                if (dx * dx + dy * dy <= kRecentDeathYards * kRecentDeathYards)
+                {
+                    nearDeath = true;
+                    break;
+                }
+            }
+
+            if (!nearDeath)
+                kept.push_back(spot);
+        }
+
+        if (kept.empty() || kept.size() == candidates.size())
+            return;
+
+        TC_LOG_INFO("playerbots.pve", "Bot {} passes over {} cluster(s) within {:.0f}y of where it died in the last {} minutes.",
+            bot->GetName(), uint32(candidates.size() - kept.size()), kRecentDeathYards, uint32(kRecentDeathWindow.count()));
+        candidates.swap(kept);
+    }
+
     void ProcessPendingGrindRelocations()
     {
         std::unordered_set<uint64> drained;
@@ -14674,6 +14951,8 @@ namespace
                 candidates.swap(quiet);
             }
 
+            DropCandidatesNearRecentDeaths(bot, botRawGuid, candidates);
+
             bool const isGuardian = GetGuardianZoneId(botRawGuid) != 0;
             uint8 const maxAttempts = uint8(std::min<size_t>(10, candidates.size()));
             for (uint8 attempt = 0; attempt < maxAttempts; ++attempt)
@@ -14776,7 +15055,25 @@ namespace
                 if (!BotCanTeleportNow(bot))
                     break;
 
-                if (!bot->TeleportTo(spot.mapId, spot.x, spot.y, ground + 0.05f, frand(0.0f, 6.28f)))
+                // The edge of the camp, not the middle of it - see FindGrindLanding.
+                // Moved off the anchor, the bot arrives facing the camp it came for.
+                float landX = spot.x;
+                float landY = spot.y;
+                float landZ = ground;
+                float landFacing = frand(0.0f, 6.28f);
+                std::string landingNote = "on the cluster";
+                GrindLanding landing;
+                if (FindGrindLanding(bot, map, spot, ground, landing))
+                {
+                    landX = landing.x;
+                    landY = landing.y;
+                    landZ = landing.z;
+                    landFacing = std::atan2(spot.y - landY, spot.x - landX);
+                    landingNote = Trinity::StringFormat("{:.0f}y off the cluster, {}", landing.offsetYards,
+                        landing.clear ? "out of every aggro radius" : "nowhere clear, least exposed");
+                }
+
+                if (!bot->TeleportTo(spot.mapId, landX, landY, landZ + 0.05f, landFacing))
                     continue;
 
                 RestorePlayerbotTeleportVitals(bot);
@@ -14798,12 +15095,12 @@ namespace
                     state.dryWanderCount = 0;
                     state.nextWanderAt = {};
                     TC_LOG_INFO("playerbots.pve",
-                        "Recovered stuck bot {} within zone {} at map {} {:.0f} {:.0f}.",
-                        bot->GetName(), stuckZoneId, spot.mapId, spot.x, spot.y);
+                        "Recovered stuck bot {} within zone {} at map {} {:.0f} {:.0f} ({}).",
+                        bot->GetName(), stuckZoneId, spot.mapId, landX, landY, landingNote);
                 }
                 else
-                    TC_LOG_INFO("playerbots.pve", "Relocated grind bot {} (level {}) to map {} {:.0f} {:.0f}.",
-                        bot->GetName(), bot->GetLevel(), spot.mapId, spot.x, spot.y);
+                    TC_LOG_INFO("playerbots.pve", "Relocated grind bot {} (level {}) to map {} {:.0f} {:.0f} ({}).",
+                        bot->GetName(), bot->GetLevel(), spot.mapId, landX, landY, landingNote);
                 break;
             }
         }
@@ -15754,6 +16051,14 @@ namespace
             state.deathObserved = true;
             state.deathObservedAt = now;
             MarkTimidAfterPlayerDefeat(bot, state, cfg, now);
+            // For the rescue and relocation passes (DropCandidatesNearRecentDeaths),
+            // whatever the hardcore chest rules say about this death.
+            {
+                auto const oldest = std::min_element(state.recentDeaths.begin(), state.recentDeaths.end(),
+                    [](PveBotState::RecentDeath const& left, PveBotState::RecentDeath const& right)
+                    { return left.at < right.at; });
+                *oldest = { now, uint16(bot->GetMapId()), bot->GetPositionX(), bot->GetPositionY() };
+            }
             // The body still lies where we fell: remember the spot, the hardcore
             // drop chest stands on it (release teleports us to the graveyard).
             if (cfg.hardcoreLootChestEntry)
