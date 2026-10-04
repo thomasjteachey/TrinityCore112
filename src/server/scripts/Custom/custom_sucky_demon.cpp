@@ -137,19 +137,32 @@ class spell_sucky_demon_drain : public SpellScript
         return SPELL_CAST_OK;
     }
 
-    // Every drain tick is mirrored onto every other hostile inside the leash.
-    // The mirror is cast as a triggered copy on each extra victim rather than by
-    // re-targeting the channel, so the original channel - and the mana or health
-    // it returns - behaves exactly as it always did.
-    void HandleSplash(SpellEffIndex /*effIndex*/)
+    // Every other hostile inside the leash joins the cast as an extra target of
+    // the SAME channel. Each one gets its own drain aura ticking alongside the
+    // primary's, the healing or mana from all of them returns to the caster, and
+    // the whole thing ends when the one channel does.
+    //
+    // This used to re-cast the drain as a triggered copy on each extra victim.
+    // Every copy was a channel of its own, so each one replaced the last as the
+    // caster's current channel, and each copy's hit splashed again - a burst of
+    // separate Drain Lifes instead of one drain spread across the cast time.
+    void HandleSplash()
     {
         Unit* caster = GetCaster();
         if (!InSuckyDemonForm(caster))
             return;
 
-        Unit* primary = GetHitUnit();
+        Unit* primary = GetExplTargetUnit();
         SpellInfo const* spellInfo = GetSpellInfo();
         if (!primary || !spellInfo)
+            return;
+
+        // The effects that land on the chosen enemy - the drain aura itself.
+        uint32 effectMask = 0;
+        for (SpellEffectInfo const& spellEffectInfo : spellInfo->GetEffects())
+            if (spellEffectInfo.IsEffect() && spellEffectInfo.TargetA.GetTarget() == TARGET_UNIT_TARGET_ENEMY)
+                effectMask |= 1 << spellEffectInfo.EffectIndex;
+        if (!effectMask)
             return;
 
         std::vector<Unit*> nearby;
@@ -164,14 +177,17 @@ class spell_sucky_demon_drain : public SpellScript
             if (!caster->IsValidAttackTarget(extra))
                 continue;
 
-            caster->CastSpell(extra, spellInfo->Id, true);
+            // AddUnitTarget runs the usual target, line-of-sight, immunity and
+            // hit/resist checks, so an extra can still miss or be immune.
+            AddUnitTarget(extra, effectMask);
         }
     }
 
     void Register() override
     {
         OnCheckCast += SpellCheckCastFn(spell_sucky_demon_drain::CheckRange);
-        OnEffectHitTarget += SpellEffectFn(spell_sucky_demon_drain::HandleSplash, EFFECT_0, SPELL_EFFECT_APPLY_AURA);
+        // OnCast runs after target selection and before any target is hit.
+        OnCast += SpellCastFn(spell_sucky_demon_drain::HandleSplash);
     }
 };
 

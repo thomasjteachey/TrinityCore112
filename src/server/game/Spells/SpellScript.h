@@ -514,6 +514,11 @@ class TC_GAME_API SpellScript : public _SpellScript
         // Creates item. Calls Spell::DoCreateItem method.
         void CreateItem(uint32 itemId);
 
+        // Adds a unit to this spell's own target list, as if target selection had
+        // picked it. Only meaningful before targets are processed (OnCast or
+        // earlier); for a channel the unit then belongs to the one channel.
+        void AddUnitTarget(Unit* target, uint32 effectMask);
+
         // Returns SpellInfo from the spell that triggered the current one
         SpellInfo const* GetTriggeringSpell() const;
 

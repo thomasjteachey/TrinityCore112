@@ -716,6 +716,11 @@ void SpellScript::CreateItem(uint32 itemId)
     m_spell->DoCreateItem(itemId);
 }
 
+void SpellScript::AddUnitTarget(Unit* target, uint32 effectMask)
+{
+    m_spell->AddUnitTarget(target, effectMask);
+}
+
 SpellInfo const* SpellScript::GetTriggeringSpell() const
 {
     return m_spell->m_triggeredByAuraSpell;

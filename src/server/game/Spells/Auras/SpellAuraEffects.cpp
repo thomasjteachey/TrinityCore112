@@ -1203,6 +1203,19 @@ void AuraEffect::HandleShapeshiftBoosts(Unit* target, bool apply) const
         case FORM_METAMORPHOSIS:
             spellId  = 54817;
             spellId2 = 54879;
+            // Only Metamorphosis (47241) itself earns these. Custom forms borrow
+            // form 22 for its look - Sucky Demon Form 90618 - and 54879 is
+            // MOD_IGNORE_SHAPESHIFT for every warlock spell, which let those
+            // forms cast Soul Fire and anything else past their own whitelist.
+            // Removal still names both, so a copy saved with the character
+            // before this check existed goes when the form does.
+            if (apply && GetId() != 47241)
+            {
+                target->RemoveOwnedAura(spellId, target->GetGUID());
+                target->RemoveOwnedAura(spellId2, target->GetGUID());
+                spellId = 0;
+                spellId2 = 0;
+            }
             break;
         case FORM_SPIRITOFREDEMPTION:
             spellId  = 27792;
