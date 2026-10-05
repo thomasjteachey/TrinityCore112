@@ -16,7 +16,8 @@
  */
 
 /*
- * South Park "No Life" mage set (ItemSet 1077, items 100986-100989).
+ * South Park "No Life" mage set (ItemSet 1077, items 100986-100989;
+ * tournament copies ItemSet 2190, items 203690-203693).
  *
  *   3pc  90607 No Life          - spells and melee have a 10% chance to summon
  *                                 three Scorpions for 30 sec.
@@ -99,6 +100,14 @@ namespace
         ITEM_NOLIFE_GLOVES = 100987,
         ITEM_NOLIFE_BOOTS  = 100988,
         ITEM_NOLIFE_KNIFE  = 100989,
+
+        // Centurion tournament copies (ItemSet 2190), sold by the tournament
+        // Coldarra vendor: the same pieces, soulbound and with no level
+        // requirement. Either version satisfies the strict loadout.
+        ITEM_NOLIFE_HELM_COPY   = 203690,
+        ITEM_NOLIFE_GLOVES_COPY = 203691,
+        ITEM_NOLIFE_BOOTS_COPY  = 203692,
+        ITEM_NOLIFE_KNIFE_COPY  = 203693,
     };
 
     constexpr uint32 NOLIFE_SCORPION_ENTRY = 900118;
@@ -113,6 +122,12 @@ namespace
         return item ? item->GetEntry() : 0;
     }
 
+    bool WearsPiece(Player const* player, uint8 slot, uint32 original, uint32 copy)
+    {
+        uint32 entry = EquippedEntry(player, slot);
+        return entry == original || entry == copy;
+    }
+
     // "If you are ONLY wearing these 3 pieces." Every equipment slot must be
     // empty except the three set pieces and the ones the bonus explicitly
     // allows: a weapon, an off-hand, a wand and two trinkets.
@@ -125,12 +140,12 @@ namespace
         if (!player)
             return false;
 
-        if (EquippedEntry(player, EQUIPMENT_SLOT_HEAD) != ITEM_NOLIFE_HELM ||
-            EquippedEntry(player, EQUIPMENT_SLOT_HANDS) != ITEM_NOLIFE_GLOVES ||
-            EquippedEntry(player, EQUIPMENT_SLOT_FEET) != ITEM_NOLIFE_BOOTS)
+        if (!WearsPiece(player, EQUIPMENT_SLOT_HEAD, ITEM_NOLIFE_HELM, ITEM_NOLIFE_HELM_COPY) ||
+            !WearsPiece(player, EQUIPMENT_SLOT_HANDS, ITEM_NOLIFE_GLOVES, ITEM_NOLIFE_GLOVES_COPY) ||
+            !WearsPiece(player, EQUIPMENT_SLOT_FEET, ITEM_NOLIFE_BOOTS, ITEM_NOLIFE_BOOTS_COPY))
             return false;
 
-        if (requireKnife && EquippedEntry(player, EQUIPMENT_SLOT_MAINHAND) != ITEM_NOLIFE_KNIFE)
+        if (requireKnife && !WearsPiece(player, EQUIPMENT_SLOT_MAINHAND, ITEM_NOLIFE_KNIFE, ITEM_NOLIFE_KNIFE_COPY))
             return false;
 
         for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
