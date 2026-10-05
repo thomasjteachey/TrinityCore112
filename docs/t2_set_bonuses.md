@@ -115,15 +115,17 @@ category 19 and re‑syncs the client cooldown after SPELL_GO.*
 | | Bonus | Ids |
 |---|---|---|
 | 3 | Your Shadow Bolt is now fire damage and uses firebolt's graphic | **90318** + wrappers `90420‑90432`, clones, SpellVisual `90000` ⚠ |
-| 5 | Your Imp has 100% more mana and 10% more health | **90319** + `90374` ⚠ |
-| 8 | If you die before your Imp, you revive with his hp at his location. This effect can only happen once every 120 seconds | **90320** + `90525`, `90538`, `90375` ⚠ |
+| 5 | Your Imp has 100% more mana and 25% more health (10% until 2026-10-05) | **90319** + `90374` ⚠ |
+| 8 | If you die before your Imp, you revive with his hp at his location. This effect can only happen once every 60 seconds (120 until 2026-10-05) | **90320** + `90525`, `90538`, `90375` ⚠ |
 
 > Regular warlock stats with reduced budget allocated to stamina
 
 *The 8pc is **death prevention**, not resurrection: `T2UnitHooks::OnWouldBeLethalDamage`
 runs from `Unit::DealDamage` before `Kill()`. Mana is untouched because he never
 dies. `90538` carries `DEATH_PERSISTENT` + `UNAFFECTED_BY_INVULNERABILITY` and is
-the authoritative cooldown, not just an indicator. `90375` also scales the imp 2×.*
+the authoritative cooldown, not just an indicator — the in-memory guard in
+`T2UnitHooks` reads its window from 90538's duration, so a retune is a DBC edit.
+`90375` also scales the imp 2×.*
 
 ### The Life Tap Set
 | | Bonus | Ids |
@@ -154,8 +156,15 @@ the authoritative cooldown, not just an indicator. `90375` also scales the imp 2
 | | Bonus | Ids |
 |---|---|---|
 | 3 | Your mangle effect increases the damage the target takes from your spells | **90327** + `90377` ⚠ |
-| 5 | Your moonfire generates 1 combo point if the target isn't already affected by your moonfire. Your moonfire increases the damage your target takes from your melee abilities | **90328** + `90378` ⚠ |
+| 4 | Your moonfire generates 1 combo point if the target isn't already affected by your moonfire. Your moonfire increases the damage your target takes from your melee abilities | **90328** + `90378` ⚠ |
+| 5 | Your Starfire consumes your combo points, casting 0.3 sec faster for each one. If it hits, 10% of its mana cost is refunded per point | **90630** + `90631` (stacking cast-time aura = combo points) |
 | 8 | Shifting from moonkin directly to catform is free | **90329** + `90484` ⚠ |
+
+*Set 1064 "Moonkitty's Yarn". The 5pc was 0.25 sec per point with no mana return
+until 2026-10-05. Per-point values live only in the DBC: cast time in 90631 effect 1
+(the macro-cast path in `T2SpellHooks` reads it from there), refund % in 90630 effect 1
+(read by `spell_t2_moonkitty_starfire`). The discount and the refund apply only to a
+Starfire aimed at the combo-point target (`T2SpellHooks::MoonkittyModReachesCast`).*
 
 > All of the gear has pure, balanced rainbow stats with no critical strike or hit on it. (no green text)
 

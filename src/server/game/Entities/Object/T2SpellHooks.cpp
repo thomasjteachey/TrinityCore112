@@ -11,6 +11,8 @@
  *   OnCancelAuraRequest       WorldSession::HandleCancelAuraOpcode (first statement)
  *   OnCastSpellRequest        WorldSession::HandleCastSpellOpcode (before prepare)
  *   WaivesShapeshiftRestriction Spell::CheckCast (CheckShapeshift refusal)
+ *   MoonkittyMouseoverCastTimeCutMs WorldObject::ModSpellCastTime
+ *   MoonkittyModReachesCast         Player::IsAffectedBySpellmod
  *
  * Every body is a cheap early-out for anyone who does not carry the set-bonus
  * aura it keys on.
@@ -23,6 +25,7 @@
 #include "Player.h"
 #include "Spell.h"
 #include "SpellAuraEffects.h"
+#include "SpellAuras.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "StringFormat.h"
@@ -31,6 +34,7 @@
 #include "Util.h"
 #include "World.h"
 #include "WorldSession.h"
+#include <algorithm>
 #include <atomic>
 #include <mutex>
 #include <unordered_map>
@@ -742,28 +746,72 @@ void T2SpellHooks::SyncMoonkittyComboStacks(Unit* who)
         haste->SetStackAmount(points);
 }
 
+namespace
+{
+    // One effect of 90631 as a positive per-point amount. The DBC stores the
+    // reductions negative; CalcValue resolves the die (bp -301, die 1 -> -300).
+    int32 MoonkittyPerPointCut(SpellEffIndex effIndex)
+    {
+        SpellInfo const* info = sSpellMgr->GetSpellInfo(T2SpellHooks::SPELL_MOONKITTY_COMBO_HASTE);
+        if (!info)
+            return 0;
+        return std::max(0, -info->GetEffect(effIndex).CalcValue());
+    }
+
+    // The combo points a macro-aimed Starfire is owed, or 0 when it is owed
+    // nothing here - including when the aura is already covering the cast, so
+    // the two paths can never both pay.
+    uint8 MoonkittyMouseoverComboPoints(Unit const* caster, SpellInfo const* spellInfo, Spell const* spell)
+    {
+        if (!caster || !spellInfo || !spell)
+            return 0;
+
+        if (!spellInfo->IsStarfire())
+            return 0;
+
+        if (!caster->HasAura(T2SpellHooks::SPELL_MOONKITTY_LUNAR_MOMENTUM))
+            return 0;
+
+        // The aura is already doing it - do not pay twice.
+        if (caster->HasAura(T2SpellHooks::SPELL_MOONKITTY_COMBO_HASTE))
+            return 0;
+
+        uint8 const points = caster->GetComboPoints();
+        if (!points)
+            return 0;
+
+        ObjectGuid const comboTarget = caster->GetComboTargetGUID();
+        if (comboTarget.IsEmpty() || spell->m_targets.GetUnitTargetGUID() != comboTarget)
+            return 0;
+
+        return points;
+    }
+}
+
+bool T2SpellHooks::MoonkittyModReachesCast(Aura const* ownerAura, Spell const* spell)
+{
+    if (!ownerAura || ownerAura->GetId() != SPELL_MOONKITTY_COMBO_HASTE)
+        return true;
+
+    // Nothing to judge: a query with no cast, or a cast the mask will turn
+    // away anyway.
+    if (!spell || !spell->GetSpellInfo()->IsStarfire() || ownerAura->GetType() != UNIT_AURA_TYPE)
+        return true;
+
+    // The same test spell_t2_moonkitty_starfire uses to decide whether the cast
+    // spends the points, so a discount is given exactly when it is paid for.
+    ObjectGuid const comboTarget = ownerAura->GetUnitOwner()->GetComboTargetGUID();
+    return !comboTarget.IsEmpty() && spell->m_targets.GetUnitTargetGUID() == comboTarget;
+}
+
+int32 T2SpellHooks::MoonkittyCastTimeCutPerPointMs()
+{
+    return MoonkittyPerPointCut(EFFECT_0);
+}
+
 int32 T2SpellHooks::MoonkittyMouseoverCastTimeCutMs(Unit const* caster, SpellInfo const* spellInfo, Spell* spell)
 {
-    if (!caster || !spellInfo || !spell)
-        return 0;
-
-    if (!spellInfo->IsStarfire())
-        return 0;
-
-    if (!caster->HasAura(T2SpellHooks::SPELL_MOONKITTY_LUNAR_MOMENTUM))
-        return 0;
-
-    // The aura is already doing it - do not pay twice.
-    if (caster->HasAura(T2SpellHooks::SPELL_MOONKITTY_COMBO_HASTE))
-        return 0;
-
-    uint8 const points = caster->GetComboPoints();
-    if (!points)
-        return 0;
-
-    ObjectGuid const comboTarget = caster->GetComboTargetGUID();
-    if (comboTarget.IsEmpty() || spell->m_targets.GetUnitTargetGUID() != comboTarget)
-        return 0;
-
-    return int32(points) * 250;
+    if (uint8 const points = MoonkittyMouseoverComboPoints(caster, spellInfo, spell))
+        return int32(points) * MoonkittyCastTimeCutPerPointMs();
+    return 0;
 }

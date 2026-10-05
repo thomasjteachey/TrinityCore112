@@ -53,21 +53,33 @@ namespace
     // Legion of One's escape: 90320 is the 8pc carrier, 90525 the rebirth flash.
     constexpr uint32 SPELL_LEGION_OF_ONE         = 90320;
     constexpr uint32 SPELL_LEGION_REBIRTH_VISUAL = 90525;
-    // The visible 2 minute cooldown, and the SOURCE OF TRUTH for it. Carries
+    // The visible 1 minute cooldown, and the SOURCE OF TRUTH for it. Carries
     // DEATH_PERSISTENT and UNAFFECTED_BY_INVULNERABILITY so neither dying nor
     // Ice Block / Divine Shield / a trinket can hand back a free rebirth.
     constexpr uint32 SPELL_LEGION_REBIRTH_CD     = 90538;
 
-    // "This effect can only happen once every 120 seconds" - the design doc.
+    // "This effect can only happen once a minute" (2 minutes until 2026-10-05).
     // Tracked here rather than as a spell cooldown because nothing is ever CAST
     // to trigger it: the save happens inside Unit::DealDamage, so there is no
     // cast to hang a cooldown on. Keyed by player guid, and the entry is only
     // written when a save actually fires.
-    constexpr uint32 LEGION_REBIRTH_COOLDOWN_MS = 120 * IN_MILLISECONDS;
+    //
+    // The window is 90538's own duration, so the debuff and this map cannot
+    // disagree and a retune is a Spell.dbc edit alone. The fallback only
+    // matters if the row is missing, in which case no debuff lands either.
+    constexpr uint32 LEGION_REBIRTH_FALLBACK_COOLDOWN_MS = 60 * IN_MILLISECONDS;
     std::mutex s_legionMutex;
     std::unordered_map<ObjectGuid, uint32> s_legionLastRebirth;   // guid -> GameTime ms
 
-    // True (and stamps it) when the warlock's 120 s window has elapsed.
+    uint32 LegionRebirthCooldownMs()
+    {
+        if (SpellInfo const* info = sSpellMgr->GetSpellInfo(SPELL_LEGION_REBIRTH_CD))
+            if (info->GetMaxDuration() > 0)
+                return uint32(info->GetMaxDuration());
+        return LEGION_REBIRTH_FALLBACK_COOLDOWN_MS;
+    }
+
+    // True (and stamps it) when the warlock's window has elapsed.
     //
     // The DEBUFF 90538 is the real cooldown - it is what the player sees, it
     // survives death and immunities, and it is saved across a relog. This map
@@ -77,9 +89,10 @@ namespace
     bool TakeLegionRebirth(ObjectGuid guid)
     {
         uint32 const now = GameTime::GetGameTimeMS();
+        uint32 const cooldownMs = LegionRebirthCooldownMs();
         std::lock_guard<std::mutex> guard(s_legionMutex);
         auto itr = s_legionLastRebirth.find(guid);
-        if (itr != s_legionLastRebirth.end() && getMSTimeDiff(itr->second, now) < LEGION_REBIRTH_COOLDOWN_MS)
+        if (itr != s_legionLastRebirth.end() && getMSTimeDiff(itr->second, now) < cooldownMs)
             return false;
         s_legionLastRebirth[guid] = now;
         return true;

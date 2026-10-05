@@ -11,6 +11,7 @@
 
 #include "Define.h"
 
+class Aura;
 class Player;
 class Spell;
 class SpellInfo;
@@ -138,7 +139,9 @@ namespace T2SpellHooks
     uint32 DamageSchoolThatBroke(Unit const* victim);
 
     // MOONKITTY 5pc (90630 Lunar Momentum): mirror the druid's combo points onto
-    // a stacking cast-time aura, 90631, worth 0.25 sec off Starfire per stack.
+    // a stacking cast-time aura, 90631, worth 0.3 sec off Starfire per stack.
+    // (The 5pc's mana refund on a hit is not here - it is paid by
+    // spell_t2_moonkitty_starfire, which knows whether the cast landed.)
     //
     // IT HAS TO BE AN AURA, not a server-side subtraction. The cast bar is drawn
     // by the CLIENT from its own Spell.dbc plus the spellmods it can see, so a
@@ -157,6 +160,24 @@ namespace T2SpellHooks
     constexpr uint32 SPELL_MOONKITTY_LUNAR_MOMENTUM = 90630;   // the 5pc carrier
     constexpr uint32 SPELL_MOONKITTY_COMBO_HASTE    = 90631;   // the stacking cast-time aura
     void SyncMoonkittyComboStacks(Unit* who);
+
+    // The TARGET gate on 90631, asked by Player::IsAffectedBySpellmod for each
+    // of its modifiers. The selection gate above is only what the client can be
+    // told; on its own it let a druid keep the combo target selected and
+    // mouseover-cast a discounted Starfire at a different enemy, over and over,
+    // without spending the points. False when the cast is a Starfire whose unit
+    // target is not the combo target. With no cast to judge (a query made
+    // without a Spell) the selection gate stands.
+    //
+    // The client still applies the aura in that case, so it draws the short bar
+    // while the server takes the full cast time. That only affects a Starfire
+    // aimed away from the combo target.
+    bool MoonkittyModReachesCast(Aura const* ownerAura, Spell const* spell);
+
+    // What one combo point is worth, read from 90631's own effect so a retune
+    // is a Spell.dbc edit alone and the macro path below always agrees with
+    // the aura. A positive amount: 300 (ms).
+    int32 MoonkittyCastTimeCutPerPointMs();
 
     // The mouseover / focus-macro half of the same bonus. The aura above is
     // gated on SELECTION, because that is all the client can know when it draws

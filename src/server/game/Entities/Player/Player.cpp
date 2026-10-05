@@ -111,6 +111,7 @@
 #include "SpellPackets.h"
 #include "StringConvert.h"
 #include "StringFormat.h"
+#include "T2SpellHooks.h"
 #include "T2UnitHooks.h"
 #include "TicketMgr.h"
 #include "TradeData.h"
@@ -23975,6 +23976,12 @@ bool Player::IsAffectedBySpellmod(SpellInfo const* spellInfo, SpellModifier* mod
 
     // mod crit to spells that can't crit
     if (mod->op == SPELLMOD_CRITICAL_CHANCE && !spellInfo->HasAttribute(SPELL_ATTR0_CU_CAN_CRIT))
+        return false;
+
+    // Moonkitty 5pc: the combo-point discount only reaches a Starfire aimed at
+    // the target holding the points. The id test keeps this off the hot path.
+    if (mod->ownerAura->GetId() == T2SpellHooks::SPELL_MOONKITTY_COMBO_HASTE
+        && !T2SpellHooks::MoonkittyModReachesCast(mod->ownerAura, spell))
         return false;
 
     return spellInfo->IsAffectedBySpellMod(mod);

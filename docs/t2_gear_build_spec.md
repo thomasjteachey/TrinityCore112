@@ -173,8 +173,8 @@ https://www.wowhead.com/wotlk/dressing-room#fM80z0zN89c8u8VkZ8G8VRs8I8VRh8N8VRp8
 | Threshold | Spell id | Bonus |
 |---|---|---|
 | 3 | 90318 | Your Shadow Bolt is now fire damage and uses firebolt's graphic |
-| 5 | 90319 | Your Imp has 100% more mana and 10% more health |
-| 8 | 90320 | If you die before your Imp, you revive with his hp at his location. This effect can only happen once every 120 seconds |
+| 5 | 90319 | Your Imp has 100% more mana and 25% more health |
+| 8 | 90320 | If you die before your Imp, you revive with his hp at his location. This effect can only happen once every 60 seconds |
 
 **Stats:** Regular warlock stats with reduced budget allocated to stamina
 

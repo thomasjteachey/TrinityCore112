@@ -60,6 +60,7 @@
 #include "T2SpellHooks.h"
 #include "World.h"
 #include "WorldSession.h"
+#include <algorithm>
 
 namespace
 {
@@ -71,7 +72,7 @@ namespace
         SPELL_T2_PROWLING_MOONFIRE      = 90328,   // 5pc carrier (inert dummy)
         SPELL_T2_MOONLIT_PREY           = 90378,   // +5% melee damage taken, rides the Moonfire DoT
         SPELL_T2_FELINE_GRACE           = 90329,   // 8pc carrier (inert dummy)
-        SPELL_T2_LUNAR_MOMENTUM         = 90630,   // 5pc carrier (inert dummy)
+        SPELL_T2_LUNAR_MOMENTUM         = 90630,   // 5pc carrier; effect 0 amount = mana refund % per point
         SPELL_T2_FELINE_GRACE_HELPER    = 90484,   // hidden: Cat Form costs -100% (lives while in Moonkin Form)
         SPELL_DRUID_MOONFIRE            = 8921,    // rank 1, for the ranked lookup
         SPELL_DRUID_MOONKIN_FORM        = 24858,
@@ -501,9 +502,22 @@ class spell_t2_feline_grace : public AuraScript
 // 2912 .. 48465 Starfire - Moonkitty 5pc (90630 Lunar Momentum).
 //
 // The CAST TIME is not here: it is fixed in Spell::prepare before any script
-// cast hook runs, so it comes off in WorldObject::ModSpellCastTime via
-// T2SpellHooks::MoonkittyStarfireCastTimeCutMs. This half spends the points and
-// makes the spend count as a finishing move.
+// cast hook runs, so it comes off through the stacking aura 90631 (and, for
+// macro casts, T2SpellHooks::MoonkittyMouseoverCastTimeCutMs). This half
+// spends the points - which is what takes 90631 off again - makes the spend
+// count as a finishing move, and refunds mana when the Starfire lands.
+//
+// THE REFUND, not a cost cut (user, 2026-10-05: "refund the mana on successful
+// hits instead of reducing the mana cost"). The full cost is taken; a cast that
+// lands gives back 90630 effect 0's amount (10%) of what it cost, per point
+// spent. A miss, full resist, immune or reflect gives nothing back, and the
+// points are spent all the same, like any finisher. Read from the spell's hit
+// mask in AfterHit, which is written before the AfterHit handlers run.
+//
+// The points are captured at OnCast, ahead of the hit: a Starfire that kills
+// its target loses them to Unit::setDeathState (it clears every holder) before
+// AfterCast runs, and the killing blow is still a hit that earns its refund
+// and its Predatory Strikes roll.
 //
 // PREDATORY STRIKES IS ROLLED BY HAND, deliberately. The talent's own path is
 // generic - SPELL_AURA_ADD_TARGET_TRIGGER, resolved in Spell.cpp against
@@ -523,8 +537,10 @@ class spell_t2_moonkitty_starfire : public SpellScript
     static constexpr uint32 PREDATORY_STRIKES_RANKS[] = { 16972, 16974, 16975 };
     static constexpr uint32 SPELL_PREDATORS_SWIFTNESS = 69369;
 
-    void HandleAfterCast()
+    void HandleOnCast()
     {
+        _pointsSpent = 0;
+
         Player* druid = GetCaster() ? GetCaster()->ToPlayer() : nullptr;
         if (!druid || !druid->HasAura(SPELL_T2_LUNAR_MOMENTUM))
             return;
@@ -534,16 +550,70 @@ class spell_t2_moonkitty_starfire : public SpellScript
             return;
 
         // Read from the SPELL, not from the player's selection, so a mouseover
-        // or focus macro counts. T2SpellHooks::MoonkittyMouseoverCastTimeCutMs
-        // gates the discount the same way, and the two must agree: a Starfire
-        // at some other enemy gets no discount, so it must not eat the points.
+        // or focus macro counts. T2SpellHooks::MoonkittyModReachesCast (the
+        // aura) and MoonkittyMouseover* (macros) gate the discount the same
+        // way, and they must agree: a Starfire at some other enemy gets no
+        // discount, so it must not eat the points.
         Unit const* comboTarget = druid->GetComboTarget();
         Unit const* hit = GetExplTargetUnit();
         if (!comboTarget || !hit || hit->GetGUID() != comboTarget->GetGUID())
             return;
 
-        // Rolled BEFORE the points are cleared - the chance is per point.
-        TryPredatoryStrikes(druid, combo);
+        _pointsSpent = combo;
+        _comboTarget = comboTarget->GetGUID();
+    }
+
+    void HandleAfterHit()
+    {
+        if (!_pointsSpent || _refunded)
+            return;
+
+        Player* druid = GetCaster() ? GetCaster()->ToPlayer() : nullptr;
+        Unit const* target = GetHitUnit();
+        if (!druid || !target || target->GetGUID() != _comboTarget)
+            return;
+
+        // Landed = a normal or critical hit. Partial resists and absorbs still
+        // count; a miss, full resist, immune or reflect sets neither bit.
+        if (!(GetSpell()->GetHitMask() & (PROC_HIT_NORMAL | PROC_HIT_CRITICAL)))
+        {
+            SendCustomAuraDiag(Trinity::StringFormat(
+                "[CustomAuras] {}: Lunar Momentum - Starfire did not land (hitMask 0x{:X}), no refund",
+                druid->GetName(), GetSpell()->GetHitMask()));
+            return;
+        }
+
+        _refunded = true;
+
+        SpellInfo const* carrier = sSpellMgr->GetSpellInfo(SPELL_T2_LUNAR_MOMENTUM);
+        if (!carrier || GetSpellInfo()->PowerType != POWER_MANA)
+            return;
+
+        int32 const pct = std::min(100, int32(_pointsSpent) * carrier->GetEffect(EFFECT_0).CalcValue());
+        int32 const cost = GetSpell()->GetPowerCost();
+        int32 const refund = CalculatePct(cost, pct);
+        if (refund <= 0)
+            return;
+
+        // Credited to Lunar Momentum, so the combat log names the set bonus.
+        druid->EnergizeBySpell(druid, carrier, refund, POWER_MANA);
+
+        SendCustomAuraDiag(Trinity::StringFormat(
+            "[CustomAuras] {}: Lunar Momentum - Starfire landed, refunded {} of {} mana ({}%)",
+            druid->GetName(), refund, cost, pct));
+    }
+
+    void HandleAfterCast()
+    {
+        if (!_pointsSpent)
+            return;
+
+        Player* druid = GetCaster() ? GetCaster()->ToPlayer() : nullptr;
+        if (!druid)
+            return;
+
+        // The chance is per point, so it uses the count captured at OnCast.
+        TryPredatoryStrikes(druid, _pointsSpent);
 
         // Spent on cast, not on hit, which is how every other finishing move
         // behaves: a resisted Ferocious Bite still eats its combo points.
@@ -551,7 +621,8 @@ class spell_t2_moonkitty_starfire : public SpellScript
 
         SendCustomAuraDiag(Trinity::StringFormat(
             "[CustomAuras] {}: Lunar Momentum - Starfire spent {} combo point(s) ({} ms off the cast)",
-            druid->GetName(), uint32(combo), uint32(combo) * 250));
+            druid->GetName(), uint32(_pointsSpent),
+            int32(_pointsSpent) * T2SpellHooks::MoonkittyCastTimeCutPerPointMs()));
     }
 
     static void TryPredatoryStrikes(Player* druid, uint8 combo)
@@ -573,8 +644,14 @@ class spell_t2_moonkitty_starfire : public SpellScript
 
     void Register() override
     {
+        OnCast += SpellCastFn(spell_t2_moonkitty_starfire::HandleOnCast);
+        AfterHit += SpellHitFn(spell_t2_moonkitty_starfire::HandleAfterHit);
         AfterCast += SpellCastFn(spell_t2_moonkitty_starfire::HandleAfterCast);
     }
+
+    uint8 _pointsSpent = 0;
+    bool _refunded = false;
+    ObjectGuid _comboTarget;
 };
 
 // ===========================================================================
