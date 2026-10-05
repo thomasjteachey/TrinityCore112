@@ -9426,6 +9426,16 @@ namespace
     // friendly/guard factions, critters and unattackable flags; clusters of 3+
     // spawns in a 50yd cell become one candidate spot for bot levels
     // [meanLevel-1 .. meanLevel+3].
+    //
+    // Built a slice per call, not in one go. Every cluster needs a zone lookup,
+    // and the lookup loads that grid's terrain from disk: on a cold start that
+    // took 60-300 s inside the first world update, past MaxCoreStuckTime, so
+    // the freeze detector aborted the realm before the cache was ever built.
+    // The scan is kept between calls, the lookups resume where the last call
+    // stopped, and nothing is published until the last one is done - readers
+    // see "not built yet" until then, as they always did.
+    constexpr std::chrono::milliseconds kGrindSpotSliceBudget{ 250 };
+
     void BuildGrindSpotCacheOnce()
     {
         std::lock_guard<std::mutex> guard(g_GrindSpotLock);
@@ -9438,63 +9448,98 @@ namespace
             GrindSpot spot;
             uint8 meanLevel = 0;
         };
-        std::map<std::tuple<uint16, int32, int32>, SpotBucket> buckets;
+        static std::map<std::tuple<uint16, int32, int32>, SpotBucket> buckets;
+        static decltype(buckets)::iterator zoneCursor;
+        static bool bucketsScanned = false;
+        static PveTimePoint buildStart;
+        static uint32 slices = 0;
+        static uint32 zoneLookups = 0;
 
-        for (auto const& [spawnId, data] : sObjectMgr->GetAllCreatureData())
+        PveTimePoint const sliceStart = PveClock::now();
+        ++slices;
+
+        if (!bucketsScanned)
         {
-            // Configurable per realm: B+ stays on the vanilla continents,
-            // L+ can add 530/571. (The cache builds once per process, so a map
-            // change needs a restart.)
-            if (!std::binary_search(g_PveConfig.relocateMaps.begin(), g_PveConfig.relocateMaps.end(), data.mapId))
-                continue;
-
-            // Before every grind filter below: what is too dangerous to target
-            // is not too dangerous to land beside.
-            RecordLandingThreat(data);
-
-            if (data.spawntimesecs >= 1000)
-                continue;
-
-            CreatureTemplate const* proto = sObjectMgr->GetCreatureTemplate(data.id);
-            if (!proto || proto->npcflag || !proto->lootid || proto->rank != CREATURE_ELITE_NORMAL)
-                continue;
-
-            if (proto->maxlevel < proto->minlevel || proto->maxlevel - proto->minlevel >= 3)
-                continue;
-
-            if (proto->type == CREATURE_TYPE_CRITTER || proto->type == CREATURE_TYPE_TOTEM)
-                continue;
-
-            if (proto->flags_extra & (CREATURE_FLAG_EXTRA_CIVILIAN | CREATURE_FLAG_EXTRA_TRIGGER))
-                continue;
-
-            // Friendly/guard factions the reference excludes explicitly.
-            switch (proto->faction)
+            buildStart = sliceStart;
+            for (auto const& [spawnId, data] : sObjectMgr->GetAllCreatureData())
             {
-            case 11: case 71: case 79: case 85: case 188: case 1575:
-                continue;
-            default:
-                break;
+                // Configurable per realm: B+ stays on the vanilla continents,
+                // L+ can add 530/571. (The cache builds once per process, so a map
+                // change needs a restart.)
+                if (!std::binary_search(g_PveConfig.relocateMaps.begin(), g_PveConfig.relocateMaps.end(), data.mapId))
+                    continue;
+
+                // Before every grind filter below: what is too dangerous to target
+                // is not too dangerous to land beside.
+                RecordLandingThreat(data);
+
+                if (data.spawntimesecs >= 1000)
+                    continue;
+
+                CreatureTemplate const* proto = sObjectMgr->GetCreatureTemplate(data.id);
+                if (!proto || proto->npcflag || !proto->lootid || proto->rank != CREATURE_ELITE_NORMAL)
+                    continue;
+
+                if (proto->maxlevel < proto->minlevel || proto->maxlevel - proto->minlevel >= 3)
+                    continue;
+
+                if (proto->type == CREATURE_TYPE_CRITTER || proto->type == CREATURE_TYPE_TOTEM)
+                    continue;
+
+                if (proto->flags_extra & (CREATURE_FLAG_EXTRA_CIVILIAN | CREATURE_FLAG_EXTRA_TRIGGER))
+                    continue;
+
+                // Friendly/guard factions the reference excludes explicitly.
+                switch (proto->faction)
+                {
+                case 11: case 71: case 79: case 85: case 188: case 1575:
+                    continue;
+                default:
+                    break;
+                }
+
+                uint32 const unitFlags = proto->unit_flags | data.unit_flags;
+                if (unitFlags & (UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_UNINTERACTIBLE))
+                    continue;
+
+                uint8 const meanLevel = uint8((proto->minlevel + proto->maxlevel + 1) / 2);
+                if (!meanLevel || meanLevel > 83)
+                    continue;
+
+                auto const key = std::make_tuple(uint16(data.mapId),
+                    int32(data.spawnPoint.GetPositionX()) / 50, int32(data.spawnPoint.GetPositionY()) / 50);
+                SpotBucket& bucket = buckets[key];
+                if (!bucket.count)
+                {
+                    bucket.spot = { uint16(data.mapId), data.spawnPoint.GetPositionX(),
+                        data.spawnPoint.GetPositionY(), data.spawnPoint.GetPositionZ() };
+                    bucket.meanLevel = meanLevel;
+                }
+                ++bucket.count;
             }
 
-            uint32 const unitFlags = proto->unit_flags | data.unit_flags;
-            if (unitFlags & (UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_UNINTERACTIBLE))
+            zoneCursor = buckets.begin();
+            bucketsScanned = true;
+        }
+
+        // The zone id is kept: guardians relocate by it. sMapMgr->GetZoneId
+        // creates the base map on demand - FindMap returns null for every
+        // map not already loaded at cache-build time, which left almost
+        // every spot stamped zone 0 and guardians unable to find their way
+        // home. It is also what loads the terrain, so this is the loop that
+        // stops when the slice is spent and picks up here on the next call.
+        for (; zoneCursor != buckets.end(); ++zoneCursor)
+        {
+            if (PveClock::now() - sliceStart >= kGrindSpotSliceBudget)
+                return;
+
+            SpotBucket& bucket = zoneCursor->second;
+            if (bucket.count < 3)
                 continue;
 
-            uint8 const meanLevel = uint8((proto->minlevel + proto->maxlevel + 1) / 2);
-            if (!meanLevel || meanLevel > 83)
-                continue;
-
-            auto const key = std::make_tuple(uint16(data.mapId),
-                int32(data.spawnPoint.GetPositionX()) / 50, int32(data.spawnPoint.GetPositionY()) / 50);
-            SpotBucket& bucket = buckets[key];
-            if (!bucket.count)
-            {
-                bucket.spot = { uint16(data.mapId), data.spawnPoint.GetPositionX(),
-                    data.spawnPoint.GetPositionY(), data.spawnPoint.GetPositionZ() };
-                bucket.meanLevel = meanLevel;
-            }
-            ++bucket.count;
+            bucket.spot.zoneId = sMapMgr->GetZoneId(PHASEMASK_NORMAL, bucket.spot.mapId,
+                bucket.spot.x, bucket.spot.y, bucket.spot.z);
+            ++zoneLookups;
         }
 
         g_GrindSpotsByZone.clear();
@@ -9506,13 +9551,6 @@ namespace
 
             // Zone screen at the source, so forbidden clusters never exist for
             // any travel arm (walk, taxi or teleport) to deliver bots into.
-            // The zone id is kept: guardians relocate by it. sMapMgr->GetZoneId
-            // creates the base map on demand - FindMap returns null for every
-            // map not already loaded at cache-build time, which left almost
-            // every spot stamped zone 0 and guardians unable to find their way
-            // home.
-            bucket.spot.zoneId = sMapMgr->GetZoneId(PHASEMASK_NORMAL, bucket.spot.mapId,
-                bucket.spot.x, bucket.spot.y, bucket.spot.z);
             if (IsForbiddenGrindZone(bucket.spot.zoneId))
                 continue;
 
@@ -9712,8 +9750,13 @@ namespace
         // partially-built cache to map-thread suitability checks.
         g_GrindSpotsBuilt = true;
 
-        TC_LOG_INFO("playerbots.pve", "Grind spot cache built: {} clusters across {} level buckets, {} zones counted.",
-            spotCount, g_GrindSpotsByLevel.size(), g_ZoneSpotCount.size());
+        TC_LOG_INFO("playerbots.pve", "Grind spot cache built: {} clusters across {} level buckets, {} zones counted; "
+            "{} zone lookups in {} ms over {} world updates.",
+            spotCount, g_GrindSpotsByLevel.size(), g_ZoneSpotCount.size(), zoneLookups,
+            uint64(std::chrono::duration_cast<std::chrono::milliseconds>(PveClock::now() - buildStart).count()), slices);
+
+        // Only the scan's own copy; everything readers need was copied out above.
+        buckets.clear();
     }
 
     // Is there still enough here to be worth staying for?
@@ -14664,6 +14707,12 @@ namespace
 
     void ProcessPendingGrindRelocations()
     {
+        // Every landing is picked from the grind spot cache. While it is still
+        // being built (PveManager::OnWorldUpdate) the requests wait in the queue
+        // rather than being drained against an empty cache and lost.
+        if (!g_GrindSpotsBuilt)
+            return;
+
         std::unordered_set<uint64> drained;
         std::unordered_map<uint64, uint32> stuckDrained;
         {
@@ -14685,8 +14734,6 @@ namespace
 
         if (drained.empty())
             return;
-
-        BuildGrindSpotCacheOnce();
 
         for (uint64 botRawGuid : drained)
         {
@@ -20141,17 +20188,21 @@ namespace playerbot
         if (!g_PveConfig.enabled)
             return;
 
+        // Build relocation/suitability data before a bot asks whether its current
+        // zone fits. Previously this cache was first built by the relocation
+        // executor, but a relocation was only queued AFTER the suitability test;
+        // an empty cache therefore made every zone look suitable forever.
+        // One slice per world update, ahead of the once-a-second gate below, so
+        // the build takes about as long as it did in one piece while no single
+        // update holds the world thread for more than the slice budget.
+        if (!g_GrindSpotsBuilt)
+            BuildGrindSpotCacheOnce();
+
         static uint32 lastPassMs = 0;
         uint32 const nowMs = GameTime::GetGameTimeMS();
         if (lastPassMs && nowMs < lastPassMs + 1000)
             return;
         lastPassMs = nowMs;
-
-        // Build relocation/suitability data before a bot asks whether its current
-        // zone fits. Previously this cache was first built by the relocation
-        // executor, but a relocation was only queued AFTER the suitability test;
-        // an empty cache therefore made every zone look suitable forever.
-        BuildGrindSpotCacheOnce();
 
         // Build stable class-balanced home-zone assignments from the complete
         // configured bot roster. This retries until population configuration is
