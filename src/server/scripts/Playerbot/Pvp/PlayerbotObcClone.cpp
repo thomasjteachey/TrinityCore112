@@ -843,10 +843,11 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
         .SetOutfitId(0);
 
     ObjectGuid::LowType const cloneLowGuid = sObjectMgr->GetGenerator<HighGuid::Player>().Generate();
-    // This mirrors an existing character's live appearance, which may include
-    // barber-shop-only sections that are valid in game but unavailable during
-    // initial character creation.
-    if (!clone->Create(cloneLowGuid, &createInfo, false, false))
+    // This mirrors an existing character's live appearance as it is. Even the
+    // barbershop check refuses some of them (a non-death-knight wearing a
+    // death-knight face, a tauren hair style CharSections lacks), and every
+    // copy refused that way silently left a seat empty.
+    if (!clone->Create(cloneLowGuid, &createInfo, false, Player::AppearanceCheck::None))
     {
         DestroyUnseatedClone(session, clone);
         return false;
@@ -1132,7 +1133,7 @@ Player* CreateCustomGameLobbyClone(Player* source, uint32 mapId, uint32 lobbyIns
         .SetHairColor(source->GetHairColorId()).SetFacialHair(source->GetFacialStyle()).SetOutfitId(0);
 
     ObjectGuid::LowType const cloneLowGuid = sObjectMgr->GetGenerator<HighGuid::Player>().Generate();
-    if (!clone->Create(cloneLowGuid, &createInfo, false, false))
+    if (!clone->Create(cloneLowGuid, &createInfo, false, Player::AppearanceCheck::None))
     {
         DestroyUnseatedClone(session, clone);
         return nullptr;
@@ -1702,7 +1703,7 @@ Player* PlayerbotObcCloneManager::CreateCustomGameClone(Player* source, Battlegr
         .SetHairColor(source->GetHairColorId()).SetFacialHair(source->GetFacialStyle()).SetOutfitId(0);
 
     ObjectGuid::LowType const cloneLowGuid = sObjectMgr->GetGenerator<HighGuid::Player>().Generate();
-    if (!clone->Create(cloneLowGuid, &createInfo, false, false))
+    if (!clone->Create(cloneLowGuid, &createInfo, false, Player::AppearanceCheck::None))
     {
         DestroyUnseatedClone(session, clone);
         return nullptr;
@@ -1996,7 +1997,7 @@ Player* PlayerbotObcCloneManager::CreateWorldClone(Player* source, Map* map, Pos
         .SetHairColor(source->GetHairColorId()).SetFacialHair(source->GetFacialStyle()).SetOutfitId(0);
 
     ObjectGuid::LowType const cloneLowGuid = sObjectMgr->GetGenerator<HighGuid::Player>().Generate();
-    if (!clone->Create(cloneLowGuid, &createInfo, false, false))
+    if (!clone->Create(cloneLowGuid, &createInfo, false, Player::AppearanceCheck::None))
     {
         DestroyUnseatedClone(session, clone);
         return nullptr;

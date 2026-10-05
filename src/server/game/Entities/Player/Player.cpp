@@ -883,7 +883,7 @@ void Player::CleanupsBeforeDelete(bool finalCleanup)
 }
 
 bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo, bool createStarterItems,
-    bool validateAppearanceAsNewCharacter)
+    AppearanceCheck appearanceCheck)
 {
     //FIXME: outfitId not used in player creating
     /// @todo need more checks against packet modifications
@@ -940,8 +940,9 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
         return false;
     }
 
-    if (!ValidateAppearance(createInfo->Race, createInfo->Class, createInfo->Gender, createInfo->HairStyle, createInfo->HairColor,
-        createInfo->Face, createInfo->FacialHair, createInfo->Skin, validateAppearanceAsNewCharacter))
+    if (appearanceCheck != AppearanceCheck::None &&
+        !ValidateAppearance(createInfo->Race, createInfo->Class, createInfo->Gender, createInfo->HairStyle, createInfo->HairColor,
+            createInfo->Face, createInfo->FacialHair, createInfo->Skin, appearanceCheck == AppearanceCheck::NewCharacter))
     {
         TC_LOG_ERROR("entities.player.cheat", "Player::Create: Possible hacking attempt: Account {} tried to create a character named '{}' with invalid appearance attributes - refusing to do so",
             GetSession()->GetAccountId(), m_name);

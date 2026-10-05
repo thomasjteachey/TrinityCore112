@@ -991,8 +991,19 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void SendSummonRequestFrom(Unit* summoner);
         void SummonIfPossible(bool agree);
 
+        // How strictly Create judges the requested hair, face, skin and facial
+        // hair. A copy of a character that already exists takes that
+        // character's looks as they are: LoadFromDB never validates them
+        // either, and plenty of bots carry sections the check refuses.
+        enum class AppearanceCheck : uint8
+        {
+            NewCharacter,   // the character-creation screen's choices only
+            Barbershop,     // anything a living character may wear
+            None            // a copy of an existing character
+        };
+
         bool Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo, bool createStarterItems = true,
-            bool validateAppearanceAsNewCharacter = true);
+            AppearanceCheck appearanceCheck = AppearanceCheck::NewCharacter);
 
         void Update(uint32 time) override;
         void NotifyDirectSpellCast(uint32 spellId);
