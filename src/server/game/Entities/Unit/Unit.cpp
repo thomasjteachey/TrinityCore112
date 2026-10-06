@@ -50,6 +50,7 @@
 #include "Item.h"
 #include "Log.h"
 #include "LootMgr.h"
+#include "Miscellaneous/BotPvePower.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "MotionMaster.h"
 #include "MovementGenerator.h"
@@ -1186,6 +1187,10 @@ namespace
         if (IsDevilsaurHuntPair(bot, victim))
             bonus += GetDevilsaurHuntTuning().damageDonePct;
 
+        // And a bot that keeps dying to wildlife hits it harder for a while
+        // (Miscellaneous/BotPvePower.h).
+        bonus += BotPvePower::GetDamageDoneBonusPct(bot);
+
         return 100 + bonus;
     }
 
@@ -1226,11 +1231,19 @@ static bool IsDuelOpponentsBlow(Unit const* attacker, Player const* opponent)
     // Applied at the very top so everything downstream agrees on one number:
     // the AI hooks, the rage the blow generates, threat, the PvP damage share
     // and the log all read the damage that was actually taken.
-    if (damage && (CreatureDamageToPlayerbotPct() < 100 || GetDevilsaurHuntTuning().markerAura) &&
-        IsMonsterHittingPlayerbot(attacker, victim))
+    if (damage && (CreatureDamageToPlayerbotPct() < 100 || GetDevilsaurHuntTuning().markerAura ||
+        BotPvePower::IsEnabled()) && IsMonsterHittingPlayerbot(attacker, victim))
     {
         if (CreatureDamageToPlayerbotPct() < 100)
             damage = CalculatePct(damage, CreatureDamageToPlayerbotPct());
+
+        // A bot that keeps dying to wildlife takes less of it for a while, on
+        // top of the general cut (Miscellaneous/BotPvePower.h). Its pet too,
+        // like every rule here.
+        if (damage && BotPvePower::IsEnabled())
+            if (Player const* bot = ManagedPlayerbotBehind(victim))
+                if (uint32 const pct = BotPvePower::GetDamageTakenPct(bot); pct < 100)
+                    damage = CalculatePct(damage, pct);
 
         // ...and a hunted dinosaur hits its hunter (or the hunter's pet) for
         // DamageTakenPct of THAT - ON TOP of the general cut, by design: with both

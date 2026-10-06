@@ -21,6 +21,7 @@
 
 #include "World.h"
 #include "Miscellaneous/BattlegroundSpoils.h"
+#include "Miscellaneous/BotPvePower.h"
 #include "Miscellaneous/BotUpdatePolicy.h"
 #include "Miscellaneous/CharacterScreen.h"
 #include "Miscellaneous/CooldownStash.h"
@@ -1656,6 +1657,8 @@ void World::LoadConfigSettings(bool reload)
 
     // How much per-tick work a client-less bot session gets (Miscellaneous/BotUpdatePolicy.h).
     BotUpdatePolicy::LoadConfig();
+    // What a bot earns against wildlife by dying to it (Miscellaneous/BotPvePower.h).
+    BotPvePower::LoadConfig();
 
     // The duel to the death (Miscellaneous/Mokgora.h). Inert unless
     // Centurion.Mokgora.Enable = 1, and it probes for its own table here rather

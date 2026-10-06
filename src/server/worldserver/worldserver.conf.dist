@@ -2389,6 +2389,39 @@ Centurion.Bots.SkipClientPackets = 0
 Centurion.Bots.GridActivationRange = 0
 
 #
+#    Centurion.Playerbot.PvePower.Enable
+#    Centurion.Playerbot.PvePower.StartLevel
+#    Centurion.Playerbot.PvePower.FullLevel
+#    Centurion.Playerbot.PvePower.DamageDonePctPerDeath
+#    Centurion.Playerbot.PvePower.DamageTakenCutPctPerDeath
+#    Centurion.Playerbot.PvePower.MaxDeaths
+#    Centurion.Playerbot.PvePower.HalfLifeMinutes
+#        Description: Power a world bot earns against wildlife by dying to it. Each open-world
+#                     death (not battlegrounds, arenas or duels) adds one stack, up to MaxDeaths,
+#                     and stacks fade with a half-life of HalfLifeMinutes. Each stack adds
+#                     DamageDonePctPerDeath to what the bot and its pet deal to ownerless
+#                     creatures and cuts DamageTakenCutPctPerDeath from what those creatures deal
+#                     to them (never below 5%, and on top of Centurion.Playerbot.CreatureDamagePct).
+#                     Scaled by the bot's current level: nothing at StartLevel or below, full
+#                     strength from FullLevel. Players are never affected on either side.
+#                     Every key applies on `.reload config`.
+#        Default:     1   - (Enable)
+#                     30  - (StartLevel)
+#                     50  - (FullLevel)
+#                     15  - (DamageDonePctPerDeath)
+#                     8   - (DamageTakenCutPctPerDeath)
+#                     5   - (MaxDeaths: up to +75% dealt / -40% taken)
+#                     60  - (HalfLifeMinutes, 0 = never fades)
+
+Centurion.Playerbot.PvePower.Enable = 1
+Centurion.Playerbot.PvePower.StartLevel = 30
+Centurion.Playerbot.PvePower.FullLevel = 50
+Centurion.Playerbot.PvePower.DamageDonePctPerDeath = 15
+Centurion.Playerbot.PvePower.DamageTakenCutPctPerDeath = 8
+Centurion.Playerbot.PvePower.MaxDeaths = 5
+Centurion.Playerbot.PvePower.HalfLifeMinutes = 60
+
+#
 #    Centurion.Playerbot.BattlegroundFence.Enable
 #        Description: Keep playerbots inside the arena they are fighting in. A player is held in
 #                     by their own client's collision; a bot moves by server splines, which

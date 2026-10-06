@@ -28,6 +28,7 @@
 #include "Globals/ObjectAccessor.h"
 #include "Item.h"
 #include "Map.h"
+#include "Miscellaneous/BotPvePower.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "MotionMaster.h"
 #include "Optional.h"
@@ -1154,6 +1155,21 @@ public:
     void OnUpdateZone(Player* player, uint32 /*newZone*/, uint32 /*newArea*/) override
     {
         playerbot::RandomBotParticipationManager::NotifyHumanPopulationChanged(player);
+    }
+
+    // Every open-world death of a world bot buys it a step of PvE power
+    // (Miscellaneous/BotPvePower.h). Battlegrounds, arenas and duels are fights it
+    // chose, and PvP-only bots never grind wildlife, so none of those count.
+    void OnPlayerJustDied(Player* victim, Unit* /*killer*/) override
+    {
+        if (!BotPvePower::IsEnabled() || !playerbot::IsManagedRandomBot(victim) ||
+            playerbot::PveManager::IsPvpOnlyBot(victim) || victim->duel)
+            return;
+
+        if (Map const* map = victim->FindMap(); !map || map->IsBattlegroundOrArena())
+            return;
+
+        BotPvePower::RecordDeath(victim);
     }
 
     void OnUpdate(Player* player, uint32 diff) override
