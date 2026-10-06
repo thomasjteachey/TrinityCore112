@@ -4232,6 +4232,17 @@ namespace
         return cap ? std::min<uint32>(20u, cap) : 20u;
     }
 
+    // What a bot actually pays for food or water that costs counterPrice at the
+    // vendor: Playerbot.Pve.RationPricePct of it, rounded up so a priced ration
+    // never quietly becomes free at a low percentage.
+    uint64 BotRationPrice(uint64 counterPrice)
+    {
+        uint32 const pct = g_PveConfig.rationPricePct;
+        if (!counterPrice || !pct)
+            return 0;
+        return (counterPrice * pct + 99) / 100;
+    }
+
     // Ammo the bot's ranged weapon feeds on, or 0 when none is needed.
     //
     // Hunters only. This helper is the single question the whole ammunition
@@ -4369,7 +4380,7 @@ namespace
             }
         }
 
-        auto buyUnits = [&](int32 slot, ItemTemplate const* proto, uint32 desiredUnits)
+        auto buyUnits = [&](int32 slot, ItemTemplate const* proto, uint32 desiredUnits, bool ration = false)
         {
             if (slot < 0 || !proto)
                 return;
@@ -4385,15 +4396,27 @@ namespace
             // vendor every couple of minutes forever.
             uint32 const perLot = std::max<uint32>(1, proto->BuyCount);
             uint32 const lots = std::max<uint32>(1, (desiredUnits + perLot - 1) / perLot);
-            bot->BuyItemFromVendorSlot(vendor->GetGUID(), uint32(slot), proto->ItemId,
+            uint64 const moneyBefore = bot->GetMoney();
+            bool const bought = bot->BuyItemFromVendorSlot(vendor->GetGUID(), uint32(slot), proto->ItemId,
                 uint8(std::min<uint32>(lots, 250)), NULL_BAG, NULL_SLOT);
+
+            // Food and water cost a bot the same here as in BuyTravelRations. The
+            // counter charges full price, so the difference is handed back after;
+            // a bot holding the discounted price but not the full one still waits
+            // for the next pass, which only ever delays it to the free fallback.
+            if (bought && ration && bot->GetMoney() < moneyBefore)
+            {
+                uint64 const paid = moneyBefore - bot->GetMoney();
+                if (uint64 const refund = paid - BotRationPrice(paid))
+                    bot->ModifyMoney(int32(refund));
+            }
         };
 
         // A bot that can conjure its own food or water never buys that kind.
         if (bestFood && CountConsumableUnits(bot, false) < RationRestockTarget() && !ConjureSpellId(bot, false))
-            buyUnits(bestFoodSlot, bestFood, RationPurchaseUnits());
+            buyUnits(bestFoodSlot, bestFood, RationPurchaseUnits(), true);
         if (bestDrink && CountConsumableUnits(bot, true) < RationRestockTarget() && !ConjureSpellId(bot, true))
-            buyUnits(bestDrinkSlot, bestDrink, RationPurchaseUnits());
+            buyUnits(bestDrinkSlot, bestDrink, RationPurchaseUnits(), true);
         if (bestAmmo)
         {
             // Count what is actually in the pack, not just the loaded type. Asking
@@ -18917,6 +18940,8 @@ namespace playerbot
             sConfigMgr->GetIntDefault("Playerbot.Pve.MaxSlotsPerItem", 3)));
         g_PveConfig.maxUnitsPerConsumable = uint32(std::max(0,
             sConfigMgr->GetIntDefault("Playerbot.Pve.MaxUnitsPerConsumable", 20)));
+        g_PveConfig.rationPricePct = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Playerbot.Pve.RationPricePct", 50), 0, 100));
         g_PveConfig.thistleTeaItemId = uint32(std::max(0,
             sConfigMgr->GetIntDefault("Playerbot.Pve.ThistleTeaItemId", 7676)));
         g_PveConfig.thistleTeaEnergyBelow = uint32(std::clamp(
@@ -19434,7 +19459,8 @@ namespace playerbot
             uint32 const perLot = std::max<uint32>(1, proto->BuyCount);
             uint32 const lots = std::max<uint32>(1, (kStack + perLot - 1) / perLot);
             uint32 const units = lots * perLot;
-            uint64 const cost = uint64(proto->BuyPrice) * lots;
+            // Charged at the bot ration price (Playerbot.Pve.RationPricePct).
+            uint64 const cost = BotRationPrice(uint64(proto->BuyPrice) * lots);
             if (cost && bot->GetMoney() < cost)
                 return false;
 

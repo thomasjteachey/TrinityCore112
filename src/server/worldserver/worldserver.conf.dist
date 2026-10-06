@@ -4032,6 +4032,20 @@ Playerbot.Pve.DeathChestAuctionHoldSeconds = 600
 Playerbot.Pve.MaxSlotsPerItem            = 3
 Playerbot.Pve.MaxUnitsPerConsumable      = 20
 
+#
+#    Playerbot.Pve.RationPricePct
+#        Description: What a bot pays for food and water, as a percentage of the
+#                     vendor price. Covers both the rations a bot buys where it
+#                     stands and the food and water it buys on a supply run.
+#                     A bot that cannot afford rations eats and drinks for free
+#                     at its level's rate, so this is purely a gold sink.
+#        Default:     50  - (half price)
+#                     100 - (full vendor price)
+#                     0   - (free)
+#
+
+Playerbot.Pve.RationPricePct = 50
+
 Centurion.Bounty.Enable = 0
 Centurion.Bounty.AuraSpell = 90701
 Centurion.Bounty.StacksPerKill = 1

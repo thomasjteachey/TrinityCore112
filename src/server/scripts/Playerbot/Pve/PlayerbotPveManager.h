@@ -100,6 +100,11 @@ struct PveConfig
     // bot shuttled between the merchant and the bin forever. See
     // RationRestockTarget / RationPurchaseUnits.
     uint32 maxUnitsPerConsumable = 5;
+    // What a bot pays for food and water, as a percentage of the counter price.
+    // Rations were the fleet's largest gold sink (~2,200g a day, most of a level
+    // 60's income), and a bot that cannot afford them eats for free at the same
+    // level-scaled rate anyway. 0 makes them free.
+    uint32 rationPricePct = 50;
     // The rogue energy consumable, and the energy level below which it is
     // worth drinking mid-fight. 0 disables.
     uint32 thistleTeaItemId = 7676;
