@@ -785,6 +785,44 @@ bool PathGenerator::HaveTile(const G3D::Vector3& p) const
     return (_navMesh->getTileAt(tx, ty, 0) != nullptr);
 }
 
+// Path points sit on the real floor, which on a stair can be a whole navmesh
+// step (1.6 yards) off the mesh surface, hence the tall search box; sideways
+// it stays within a yard so a point beyond a wall cannot borrow the floor on
+// the near side of it.
+bool PathGenerator::IsNavMeshConnected(G3D::Vector3 const& from, G3D::Vector3 const& to) const
+{
+    // The pointers belong to the map and instance they were resolved for; see
+    // CalculatePath. A const query cannot re-resolve them, so it declines.
+    if (!_navMesh || !_navMeshQuery || _navMapId != _source->GetMapId() || _navInstanceId != _source->GetInstanceId())
+        return false;
+
+    if (!HaveTile(from) || !HaveTile(to))
+        return false;
+
+    float const extents[VERTEX_SIZE] = { 1.0f, 2.5f, 1.0f };
+    float const startPoint[VERTEX_SIZE] = { from.y, from.z, from.x };
+    float const endPoint[VERTEX_SIZE] = { to.y, to.z, to.x };
+    float startNearest[VERTEX_SIZE];
+    float endNearest[VERTEX_SIZE];
+    dtPolyRef startPoly = INVALID_POLYREF;
+    dtPolyRef endPoly = INVALID_POLYREF;
+    if (dtStatusFailed(_navMeshQuery->findNearestPoly(startPoint, extents, &_filter, &startPoly, startNearest)) || startPoly == INVALID_POLYREF)
+        return false;
+    if (dtStatusFailed(_navMeshQuery->findNearestPoly(endPoint, extents, &_filter, &endPoly, endNearest)) || endPoly == INVALID_POLYREF)
+        return false;
+
+    if (startPoly == endPoly)
+        return true;
+
+    // An unreachable end still gets a partial corridor, to the polygon nearest
+    // it; only one that ends on the end polygon joins the two.
+    dtPolyRef corridor[MAX_PATH_LENGTH];
+    int corridorLength = 0;
+    dtStatus const result = _navMeshQuery->findPath(startPoly, endPoly, startNearest, endNearest, &_filter,
+        corridor, &corridorLength, MAX_PATH_LENGTH);
+    return dtStatusSucceed(result) && corridorLength > 0 && corridor[corridorLength - 1] == endPoly;
+}
+
 uint32 PathGenerator::FixupCorridor(dtPolyRef* path, uint32 npath, uint32 maxPath, dtPolyRef const* visited, uint32 nvisited)
 {
     int32 furthestPath = -1;

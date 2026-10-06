@@ -31,6 +31,7 @@
 #include "Opcodes.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+#include <optional>
 #include <unordered_map>
 
 namespace Movement
@@ -74,14 +75,39 @@ namespace Movement
     // Only WMO collision is tested: arena bounds are WMOs, and M2 props are
     // what navmesh corners hug at agent radius, so including them would trip
     // on legal paths. Gameobjects (gates) are left out for the same reason.
-    // The ray runs at chest height so stairs and floor seams do not count.
+    //
+    // In an arena the chest-height ray alone decides, because arena walls are
+    // what keeps bots in. Several arena perimeters are parapets only 1.5 to
+    // 2.5 yards tall over a void or a drop (Obelisk of the Stars, Baradin
+    // Hold, Thakraj by its east start), and the arenas built inside open maps
+    // (Nefarian's, the Inventor's Library, the Amphitheater of Anguish) have
+    // navmesh on both sides of them.
+    //
+    // A battleground leg the chest ray blocks still goes ahead when the space
+    // above the head is open AND the navmesh joins its two ends. The navmesh
+    // climbs up to 1.6 yards in a single step, so between two path points the
+    // floor can rise past a ray drawn 1.5 yards over both ends: the Scarlet
+    // Chapel dais puts 2.3 yards of floor under a 4-yard leg, and that one ray
+    // read the dais lip and top as walls and froze bots on its steps for over
+    // a minute at a time. A step, a ledge lip or a floor the leg climbs over
+    // leaves the space above the head open, and the navmesh walks it. A point
+    // past a low wall is off the mesh or on an island of its own.
     static bool FindBotSplineWallCrossing(Unit const* unit, PointsArray const& path, uint32& blockedLeg)
     {
         Map const* map = unit->FindMap();
         if (!map || !map->IsBattlegroundOrArena())
             return false;
 
-        constexpr float RayHeight = 1.5f;
+        auto const blockedAt = [map, unit](Vector3 const& from, Vector3 const& to, float height)
+        {
+            return !map->isInLineOfSight(from.x, from.y, from.z + height, to.x, to.y, to.z + height,
+                unit->GetPhaseMask(), LINEOFSIGHT_CHECK_VMAP, VMAP::ModelIgnoreFlags::M2);
+        };
+
+        constexpr float ChestHeight = 1.5f;
+        constexpr float OverheadHeight = 2.5f;
+        bool const arena = map->IsBattleArena();
+        std::optional<PathGenerator> navmesh;
         for (uint32 i = 1; i < path.size(); ++i)
         {
             Vector3 const& from = path[i - 1];
@@ -89,12 +115,19 @@ namespace Movement
             if ((to - from).squaredLength() < 0.25f)
                 continue;
 
-            if (!map->isInLineOfSight(from.x, from.y, from.z + RayHeight, to.x, to.y, to.z + RayHeight,
-                unit->GetPhaseMask(), LINEOFSIGHT_CHECK_VMAP, VMAP::ModelIgnoreFlags::M2))
+            if (!blockedAt(from, to, ChestHeight))
+                continue;
+
+            if (!arena && !blockedAt(from, to, OverheadHeight))
             {
-                blockedLeg = i;
-                return true;
+                if (!navmesh)
+                    navmesh.emplace(unit);
+                if (navmesh->IsNavMeshConnected(from, to))
+                    continue;
             }
+
+            blockedLeg = i;
+            return true;
         }
 
         return false;
@@ -166,20 +199,30 @@ namespace Movement
                     Vector3 const& to = args.path[blockedLeg];
                     MotionMaster const* motionMaster = unit->GetMotionMaster();
                     TC_LOG_WARN("playerbots.movement.spline",
-                        "PB spline: bot={} mover={} outcome=held-wall-crossing map={} motion_type={} points={} leg={} parabolic={} "
+                        "PB spline: bot={} mover={} outcome=held-wall-crossing map={} motion_type={} points={} leg={} kept_legs={} parabolic={} "
                         "leg_from=({}, {}, {}) leg_to=({}, {}, {}) final=({}, {}, {}).",
                         driver->GetGUID().ToString(), unit->GetGUID().ToString(), unit->GetMapId(),
                         motionMaster ? uint32(motionMaster->GetCurrentMovementGeneratorType()) : 0u,
-                        uint32(args.path.size()), blockedLeg, args.flags.parabolic ? 1 : 0,
+                        uint32(args.path.size()), blockedLeg, blockedLeg - 1, args.flags.parabolic ? 1 : 0,
                         from.x, from.y, from.z, to.x, to.y, to.z,
                         args.path.back().x, args.path.back().y, args.path.back().z);
                 }
 
-                // Hold position: the same two-point stay spline MoveTo builds
-                // for a rejected route, minus any jump arc.
+                // Walk the legs before the blocked one and stop where it
+                // starts. Holding at the first point instead froze the bot for
+                // as long as its generator kept asking: a repath from the same
+                // spot draws the same route through the same wall, while a few
+                // yards on it usually draws a different one. A blocked first
+                // leg still gets the two-point stay spline MoveTo builds for a
+                // rejected route, minus any jump arc.
                 args.path_Idx_offset = 0;
-                args.path.resize(2);
-                args.path[1] = args.path[0];
+                if (blockedLeg > 1)
+                    args.path.resize(blockedLeg);
+                else
+                {
+                    args.path.resize(2);
+                    args.path[1] = args.path[0];
+                }
                 args.flags.parabolic = false;
                 args.flags.animation = false;
             }

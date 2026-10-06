@@ -1114,14 +1114,36 @@ void Battleground::EndBattleground(uint32 winner)
 
                     player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_WIN_BG, player->GetMapId());
 
+                    // Every arena and battleground win restores one depleted
+                    // mark. This used to be an allow-list (arenas, WSG, the
+                    // custom maps), and every battleground added after it -
+                    // Arathi Basin, Battle for Gilneas, Twin Peaks - restored
+                    // nothing while the player kept the depleted mark.
+                    //
                     // Violet Hold survival is explicitly barred from restoring
                     // marks: its enemy team is summoned clones, so a "win"
                     // requires no opposing players and must not feed the mark
-                    // economy - even if VHR ever joins IsCustomBattleground().
-                    bool canRestoreMark = (isArena() || GetTypeID(true) == BATTLEGROUND_WS || IsCustomBattleground(GetTypeID(true)))
-                        && GetTypeID(true) != BATTLEGROUND_VHR;
+                    // economy.
+                    bool const canRestoreMark = GetTypeID(true) != BATTLEGROUND_VHR;
                     if (canRestoreMark && Trinity::Custom::ConsumeEligibleDepletedMarks(player, 1))
-                        player->AddItem(Trinity::Custom::GetRestoredMarkEntry(), 1); // restored mark of honor
+                    {
+                        // The depleted mark is already gone, so a full bag (or
+                        // the restored mark's carry limit) must not eat the
+                        // reward - the Postmaster holds it instead.
+                        uint32 const markEntry = Trinity::Custom::GetRestoredMarkEntry();
+                        ItemPosCountVec dest;
+                        Item* mark = nullptr;
+                        if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, markEntry, 1) == EQUIP_ERR_OK)
+                            mark = player->StoreNewItem(dest, markEntry, true);
+
+                        // "Created" for the same reason as the spoils chest:
+                        // the end-of-match loot filter drops a plain receive
+                        // line, so the restore used to happen silently.
+                        if (mark)
+                            player->SendNewItem(mark, 1, true, true);
+                        else
+                            player->SendItemRetrievalMail(markEntry, 1);
+                    }
 
                     AwardSpoilsChest(player, true);
                 }
