@@ -4870,7 +4870,25 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
+    // An offensive dispel at somebody other than the enemy the bot is already
+    // swinging at is a side action - a real enhancement shaman's mouseover
+    // Purge. It must not take over the fight. Everything below hands the cast
+    // target the victim and the selection, and Attack(target, false) on a new
+    // victim turns the swings OFF; the selection is then what the next
+    // decision tick and the lifecycle's engage both read as the kill target.
+    // So every Purge at a passing buff walked the bot off its fight, swings
+    // off, to stand next to whoever it had just purged.
+    Unit* const meleeVictim = player->GetVictim();
+    bool const sideDispel = context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        target && meleeVictim && meleeVictim != target && meleeVictim->IsAlive() &&
+        player->HasUnitState(UNIT_STATE_MELEE_ATTACKING) && player->IsValidAttackTarget(meleeVictim) &&
+        IsPlayerbotDispelSpell(resolvedSpellId);
+    // ...and it keeps facing that victim when the spell does not ask for the
+    // target in front (Purge does not), so the next swing is not facing away.
+    bool const sideDispelKeepsFacing = sideDispel && !(spellInfo->FacingCasterFlags & SPELL_FACING_FLAG_INFRONT);
+
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        !sideDispel &&
         target &&
         player->IsValidAttackTarget(target) &&
         (player->GetVictim() != target || !player->IsInCombat()))
@@ -4888,32 +4906,37 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             return false;
         }
 
-        // Keep explicit enemy selection/victim linkage for virtual sessions so
-        // cast checks and AI follow-up consistently reference the same hostile.
-        player->SetSelection(target->GetGUID());
-        bool const preserveStealthForOpener = player->HasStealthAura();
-        if (preserveStealthForOpener)
+        // A side dispel leaves the selection, the victim and the pet on the
+        // fight they are already in; see sideDispel above.
+        if (!sideDispel)
         {
-            // While stealthed, keep auto-attack disabled so we do not break
-            // stealth early, but continue issuing movement so rogues still
-            // close to opener distance instead of idling in place.
-            //
-            // AttackStop can clear victim linkage that MoveChase relies on.
-            // Only stop attacks when already in melee contact where an actual
-            // swing could break stealth; keep victim linkage while closing.
-            if (player->GetVictim() && target && player->IsWithinMeleeRange(target))
-                player->AttackStop();
+            // Keep explicit enemy selection/victim linkage for virtual sessions so
+            // cast checks and AI follow-up consistently reference the same hostile.
+            player->SetSelection(target->GetGUID());
+            bool const preserveStealthForOpener = player->HasStealthAura();
+            if (preserveStealthForOpener)
+            {
+                // While stealthed, keep auto-attack disabled so we do not break
+                // stealth early, but continue issuing movement so rogues still
+                // close to opener distance instead of idling in place.
+                //
+                // AttackStop can clear victim linkage that MoveChase relies on.
+                // Only stop attacks when already in melee contact where an actual
+                // swing could break stealth; keep victim linkage while closing.
+                if (player->GetVictim() && target && player->IsWithinMeleeRange(target))
+                    player->AttackStop();
 
-            if (CanIssueFollowCommands(player))
-                IssueStealthOpenerMovement(player, target);
+                if (CanIssueFollowCommands(player))
+                    IssueStealthOpenerMovement(player, target);
+            }
+            else if (target && playerbot::PvpCore::HasBreakableCrowdControlFor(player, target))
+                StopHunterDamageOnBreakableCrowdControl(player, target, "hunter_owner_attack_suppressed_breakable_cc");
+            else if (player->GetVictim() != target)
+                player->Attack(target, false);
+
+            if (!target || !playerbot::PvpCore::HasBreakableCrowdControlFor(player, target))
+                CommandPetAttackTarget(player, target);
         }
-        else if (target && playerbot::PvpCore::HasBreakableCrowdControlFor(player, target))
-            StopHunterDamageOnBreakableCrowdControl(player, target, "hunter_owner_attack_suppressed_breakable_cc");
-        else if (player->GetVictim() != target)
-            player->Attack(target, false);
-
-        if (!target || !playerbot::PvpCore::HasBreakableCrowdControlFor(player, target))
-            CommandPetAttackTarget(player, target);
 
         // Facing is resolved only after movement/range admission below. Doing
         // it here would replace an active movement spline even when the spell
@@ -4953,8 +4976,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     bool const isGapCloserDiagnosticSpell = IsGapCloserSpell(resolvedSpellId);
     // A bot on a flag route - carrying, sent for a flag, or holding its flag
     // room - never walks after a cast target. A refused cast just waits; the
-    // route is worth more than the spell.
-    bool const castMayMoveBot = !context.preserveFlagObjectiveMovement;
+    // route is worth more than the spell. Nor does a side dispel: the fight it
+    // is in is worth more than the Purge, and every approach helper below also
+    // re-points the victim at whoever it walks to.
+    bool const castMayMoveBot = !context.preserveFlagObjectiveMovement && !sideDispel;
 
     if (!itemTarget && !player->IsWithinLOSInMap(target))
     {
@@ -5320,6 +5345,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // only while running, so the route spline is untouched), as does a carrier
     // holding its flag room.
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        !sideDispelKeepsFacing &&
         (!context.preserveFlagObjectiveMovement || context.flagManeuver || context.flagCarrierHolding) &&
         !player->isInFront(target))
     {
@@ -5353,7 +5379,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // front destination to mirror client cast payload semantics.
     bool const isInstantCast = spellInfo->CalcCastTime() == 0 && !isHunterStationaryCastTimeAction;
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast &&
-        !context.preserveFlagObjectiveMovement)
+        !context.preserveFlagObjectiveMovement && !sideDispelKeepsFacing)
     {
         FaceTargetForInstantCast(player, target, spellInfo);
 

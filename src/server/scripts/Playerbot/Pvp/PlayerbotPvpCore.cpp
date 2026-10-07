@@ -8647,6 +8647,11 @@ bool PvpCore::IsDispelThrottleExempt(Player const* player, uint32 spellId)
     return IsDispelThrottleExemptCast(player, spellId);
 }
 
+bool PvpCore::UsesMeleeSpacing(Player const* player)
+{
+    return player && UsesMeleeSpacingProfile(player, DetectClassicClassProfile(player));
+}
+
 uint32 PvpCore::GetRogueStealthOpenerSpellId(Player const* player)
 {
     return SelectRogueStealthOpenerSpellId(player);

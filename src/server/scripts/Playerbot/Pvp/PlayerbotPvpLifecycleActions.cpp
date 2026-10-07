@@ -2677,7 +2677,17 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         case CLASS_WARRIOR: return { 0.0f, 1.5f, 5.0f, false, false, true, "warrior-melee" };
         case CLASS_ROGUE: return { 0.0f, 1.5f, 5.0f, false, false, true, "rogue-melee" };
         case CLASS_PALADIN: return { 0.0f, 3.0f, 8.0f, false, false, true, "paladin-hybrid" };
-        case CLASS_SHAMAN: return { 5.0f, 20.0f, 30.0f, true, true, true, "shaman-hybrid" };
+        case CLASS_SHAMAN:
+            // Enhancement is a melee spec, and the class selector already plays
+            // it as one. The hybrid band below parked it twenty to thirty yards
+            // out - the hold-band branch stops it there, and the engage call
+            // turns its swings off at that range - so whenever an enemy within
+            // Purge's thirty yards had a buff to strip, it stood still and
+            // purged with nothing else going on. Ask the selector instead of
+            // keeping a second opinion here.
+            if (playerbot::PvpCore::UsesMeleeSpacing(player))
+                return { 0.0f, 1.5f, 5.0f, false, false, true, "shaman-enhancement-melee" };
+            return { 5.0f, 20.0f, 30.0f, true, true, true, "shaman-hybrid" };
         case CLASS_DRUID: return { 4.0f, 18.0f, 28.0f, true, true, true, "druid-hybrid" };
         default: return { 0.0f, 3.0f, 8.0f, false, false, true, "default-melee" };
         }

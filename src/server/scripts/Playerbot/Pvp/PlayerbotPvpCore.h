@@ -308,6 +308,11 @@ public:
     // playerbot dispel throttle. Only an enhancement shaman's Purge qualifies:
     // purging on every available global is the point of the spec.
     static bool IsDispelThrottleExempt(Player const* player, uint32 spellId);
+    // Whether the class selector fights this bot from melee range (its
+    // spec's melee spacing profile). One answer for the selector and the
+    // lifecycle's positioning profile, so the two can never disagree about
+    // where an enhancement shaman stands.
+    static bool UsesMeleeSpacing(Player const* player);
     static bool IsMovementPreventedByRoot(Player const* player);
     // The spell a stealthed rogue opens with (Garrote 703 or Cheap Shot 1833),
     // or 0 when it knows neither. One answer for the class selector and the
