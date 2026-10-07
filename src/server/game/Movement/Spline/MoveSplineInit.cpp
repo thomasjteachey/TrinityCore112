@@ -92,42 +92,124 @@ namespace Movement
     // a minute at a time. A step, a ledge lip or a floor the leg climbs over
     // leaves the space above the head open, and the navmesh walks it. A point
     // past a low wall is off the mesh or on an island of its own.
-    static bool FindBotSplineWallCrossing(Unit const* unit, PointsArray const& path, uint32& blockedLeg)
+    static bool IsBotSplineLegBlocked(Unit const* unit, Map const* map, std::optional<PathGenerator>& navmesh,
+        Vector3 const& from, Vector3 const& to)
     {
-        Map const* map = unit->FindMap();
-        if (!map || !map->IsBattlegroundOrArena())
-            return false;
-
-        auto const blockedAt = [map, unit](Vector3 const& from, Vector3 const& to, float height)
+        auto const blockedAt = [map, unit](Vector3 const& a, Vector3 const& b, float height)
         {
-            return !map->isInLineOfSight(from.x, from.y, from.z + height, to.x, to.y, to.z + height,
+            return !map->isInLineOfSight(a.x, a.y, a.z + height, b.x, b.y, b.z + height,
                 unit->GetPhaseMask(), LINEOFSIGHT_CHECK_VMAP, VMAP::ModelIgnoreFlags::M2);
         };
 
         constexpr float ChestHeight = 1.5f;
         constexpr float OverheadHeight = 2.5f;
-        bool const arena = map->IsBattleArena();
-        std::optional<PathGenerator> navmesh;
+        if ((to - from).squaredLength() < 0.25f)
+            return false;
+
+        if (!blockedAt(from, to, ChestHeight))
+            return false;
+
+        if (!map->IsBattleArena() && !blockedAt(from, to, OverheadHeight))
+        {
+            if (!navmesh)
+                navmesh.emplace(unit);
+            if (navmesh->IsNavMeshConnected(from, to))
+                return false;
+        }
+
+        return true;
+    }
+
+    static bool FindBotSplineWallCrossing(Unit const* unit, PointsArray const& path, uint32& blockedLeg,
+        std::optional<PathGenerator>& navmesh)
+    {
+        Map const* map = unit->FindMap();
+        if (!map || !map->IsBattlegroundOrArena())
+            return false;
+
         for (uint32 i = 1; i < path.size(); ++i)
         {
-            Vector3 const& from = path[i - 1];
-            Vector3 const& to = path[i];
-            if ((to - from).squaredLength() < 0.25f)
-                continue;
-
-            if (!blockedAt(from, to, ChestHeight))
-                continue;
-
-            if (!arena && !blockedAt(from, to, OverheadHeight))
+            if (IsBotSplineLegBlocked(unit, map, navmesh, path[i - 1], path[i]))
             {
-                if (!navmesh)
-                    navmesh.emplace(unit);
-                if (navmesh->IsNavMeshConnected(from, to))
-                    continue;
+                blockedLeg = i;
+                return true;
             }
+        }
 
-            blockedLeg = i;
-            return true;
+        return false;
+    }
+
+    // A route held on its FIRST leg has no clean prefix to walk, so the bot
+    // stays where it stands, and a repath from there draws the same first leg.
+    // That happens when a bot ends up hard against a wall corner: navmesh
+    // corners can sit closer to a wall than the agent radius, and the straight
+    // line on to the next corner then clips the wall. Durgan stopped 0.2 yards
+    // off the end of a two-yard wall just inside the Horde gate of Nefarian's
+    // Arena and was held there for 80 seconds while his team fought 2v3.
+    //
+    // So try a short step onto the navmesh beside the bot and route on from
+    // there. The step and every leg after it go through the same leg test, so
+    // this never lets a bot walk a leg the guard would refuse; it only changes
+    // where the route starts. Steps that bend the route least are tried first.
+    static bool TryBotSplineSidestep(Unit const* unit, PointsArray& path, uint32& blockedLeg,
+        std::optional<PathGenerator>& navmesh)
+    {
+        Map const* map = unit->FindMap();
+        if (!map || path.size() < 2)
+            return false;
+
+        Vector3 const from = path[0];
+        Vector3 const next = path[1];
+        Vector3 heading(next.x - from.x, next.y - from.y, 0.0f);
+        float const headingLength = heading.length();
+        if (headingLength < 0.1f)
+            return false;
+        heading /= headingLength;
+
+        if (!navmesh)
+            navmesh.emplace(unit);
+
+        constexpr float StepLengths[] = { 0.8f, 1.6f };
+        constexpr float StepAngles[] = { float(M_PI) / 4, -float(M_PI) / 4, float(M_PI) / 2, -float(M_PI) / 2,
+            3 * float(M_PI) / 4, -3 * float(M_PI) / 4, float(M_PI) };
+        // Shorter than this is no step at all, and the leg test skips it.
+        constexpr float MinStep = 0.5f;
+        // Snapping to a floor this far above or below is a climb or a drop.
+        constexpr float MaxStepRise = 1.0f;
+
+        for (float stepLength : StepLengths)
+        {
+            for (float angle : StepAngles)
+            {
+                float const c = std::cos(angle);
+                float const s = std::sin(angle);
+                Vector3 const candidate(from.x + (heading.x * c - heading.y * s) * stepLength,
+                    from.y + (heading.x * s + heading.y * c) * stepLength, from.z);
+
+                Vector3 step;
+                if (!navmesh->FindNearestNavMeshPoint(candidate, 0.5f, step))
+                    continue;
+
+                if (std::fabs(step.z - from.z) > MaxStepRise)
+                    continue;
+
+                float const stepX = step.x - from.x;
+                float const stepY = step.y - from.y;
+                if (stepX * stepX + stepY * stepY < MinStep * MinStep)
+                    continue;
+
+                if (IsBotSplineLegBlocked(unit, map, navmesh, from, step) ||
+                    IsBotSplineLegBlocked(unit, map, navmesh, step, next))
+                    continue;
+
+                if (!navmesh->IsNavMeshConnected(step, next))
+                    continue;
+
+                path.insert(path.begin() + 1, step);
+                blockedLeg = 0;
+                FindBotSplineWallCrossing(unit, path, blockedLeg, navmesh);
+                return true;
+            }
         }
 
         return false;
@@ -182,9 +264,17 @@ namespace Movement
                     driver = controller->ToPlayer();
             WorldSession const* session = driver ? driver->GetSession() : nullptr;
             uint32 blockedLeg = 0;
+            std::optional<PathGenerator> navmesh;
             if (session && (session->IsVirtualSession() || session->IsTransientPlayerSession()) &&
-                FindBotSplineWallCrossing(unit, args.path, blockedLeg))
+                FindBotSplineWallCrossing(unit, args.path, blockedLeg, navmesh))
             {
+                // Only a plain run is bent around a corner. A jump, knockback
+                // or fall keeps its own arc, so it is held as before.
+                Vector3 const heldTo = args.path[1];
+                bool const sidestepped = blockedLeg == 1 && args.flags.isLinear() && !args.flags.parabolic &&
+                    !args.flags.falling && !args.flags.animation && !args.flags.cyclic &&
+                    TryBotSplineSidestep(unit, args.path, blockedLeg, navmesh);
+
                 // Map updates run one map per thread and a bot is on one map,
                 // so a thread-local throttle needs no lock. One line per bot
                 // per five seconds: a generator that keeps re-requesting the
@@ -195,36 +285,53 @@ namespace Movement
                 if (!lastLogMs || nowMs - lastLogMs >= 5000)
                 {
                     lastLogMs = nowMs;
-                    Vector3 const& from = args.path[blockedLeg - 1];
-                    Vector3 const& to = args.path[blockedLeg];
                     MotionMaster const* motionMaster = unit->GetMotionMaster();
-                    TC_LOG_WARN("playerbots.movement.spline",
-                        "PB spline: bot={} mover={} outcome=held-wall-crossing map={} motion_type={} points={} leg={} kept_legs={} parabolic={} "
-                        "leg_from=({}, {}, {}) leg_to=({}, {}, {}) final=({}, {}, {}).",
-                        driver->GetGUID().ToString(), unit->GetGUID().ToString(), unit->GetMapId(),
-                        motionMaster ? uint32(motionMaster->GetCurrentMovementGeneratorType()) : 0u,
-                        uint32(args.path.size()), blockedLeg, blockedLeg - 1, args.flags.parabolic ? 1 : 0,
-                        from.x, from.y, from.z, to.x, to.y, to.z,
-                        args.path.back().x, args.path.back().y, args.path.back().z);
+                    uint32 const motionType = motionMaster ? uint32(motionMaster->GetCurrentMovementGeneratorType()) : 0u;
+                    Vector3 const& end = args.path.back();
+                    if (blockedLeg)
+                    {
+                        Vector3 const& from = args.path[blockedLeg - 1];
+                        Vector3 const& to = args.path[blockedLeg];
+                        TC_LOG_WARN("playerbots.movement.spline",
+                            "PB spline: bot={} mover={} outcome=held-wall-crossing map={} motion_type={} points={} leg={} kept_legs={} sidestep={} parabolic={} "
+                            "leg_from=({}, {}, {}) leg_to=({}, {}, {}) final=({}, {}, {}).",
+                            driver->GetGUID().ToString(), unit->GetGUID().ToString(), unit->GetMapId(), motionType,
+                            uint32(args.path.size()), blockedLeg, blockedLeg - 1, sidestepped ? 1 : 0, args.flags.parabolic ? 1 : 0,
+                            from.x, from.y, from.z, to.x, to.y, to.z, end.x, end.y, end.z);
+                    }
+                    else
+                    {
+                        Vector3 const& from = args.path[0];
+                        Vector3 const& step = args.path[1];
+                        TC_LOG_WARN("playerbots.movement.spline",
+                            "PB spline: bot={} mover={} outcome=sidestep-wall-crossing map={} motion_type={} points={} "
+                            "leg_from=({}, {}, {}) step=({}, {}, {}) held_to=({}, {}, {}) final=({}, {}, {}).",
+                            driver->GetGUID().ToString(), unit->GetGUID().ToString(), unit->GetMapId(), motionType,
+                            uint32(args.path.size()),
+                            from.x, from.y, from.z, step.x, step.y, step.z, heldTo.x, heldTo.y, heldTo.z, end.x, end.y, end.z);
+                    }
                 }
 
                 // Walk the legs before the blocked one and stop where it
                 // starts. Holding at the first point instead froze the bot for
                 // as long as its generator kept asking: a repath from the same
                 // spot draws the same route through the same wall, while a few
-                // yards on it usually draws a different one. A blocked first
-                // leg still gets the two-point stay spline MoveTo builds for a
-                // rejected route, minus any jump arc.
-                args.path_Idx_offset = 0;
-                if (blockedLeg > 1)
-                    args.path.resize(blockedLeg);
-                else
+                // yards on it usually draws a different one. A first leg no
+                // sidestep gets around still gets the two-point stay spline
+                // MoveTo builds for a rejected route, minus any jump arc.
+                if (blockedLeg)
                 {
-                    args.path.resize(2);
-                    args.path[1] = args.path[0];
+                    args.path_Idx_offset = 0;
+                    if (blockedLeg > 1)
+                        args.path.resize(blockedLeg);
+                    else
+                    {
+                        args.path.resize(2);
+                        args.path[1] = args.path[0];
+                    }
+                    args.flags.parabolic = false;
+                    args.flags.animation = false;
                 }
-                args.flags.parabolic = false;
-                args.flags.animation = false;
             }
         }
 

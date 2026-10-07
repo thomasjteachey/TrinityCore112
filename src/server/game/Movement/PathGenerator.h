@@ -71,6 +71,10 @@ class TC_GAME_API PathGenerator
         // under it and a corridor runs from the one polygon to the other.
         bool IsNavMeshConnected(G3D::Vector3 const& from, G3D::Vector3 const& to) const;
 
+        // The navmesh point nearest an arbitrary point, searching up to
+        // horizontalRange yards to either side of it.
+        bool FindNearestNavMeshPoint(G3D::Vector3 const& point, float horizontalRange, G3D::Vector3& nearest) const;
+
         // option setters - use optional
         void SetUseStraightPath(bool useStraightPath) { _useStraightPath = useStraightPath; }
         void SetPathLengthLimit(float distance) { _pointPathLimit = std::min<uint32>(uint32(distance/SMOOTH_PATH_STEP_SIZE), MAX_POINT_PATH_LENGTH); }

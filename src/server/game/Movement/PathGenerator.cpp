@@ -823,6 +823,26 @@ bool PathGenerator::IsNavMeshConnected(G3D::Vector3 const& from, G3D::Vector3 co
     return dtStatusSucceed(result) && corridorLength > 0 && corridor[corridorLength - 1] == endPoly;
 }
 
+bool PathGenerator::FindNearestNavMeshPoint(G3D::Vector3 const& point, float horizontalRange, G3D::Vector3& nearest) const
+{
+    // Same staleness rule as IsNavMeshConnected.
+    if (!_navMesh || !_navMeshQuery || _navMapId != _source->GetMapId() || _navInstanceId != _source->GetInstanceId())
+        return false;
+
+    if (!HaveTile(point))
+        return false;
+
+    float const extents[VERTEX_SIZE] = { horizontalRange, 2.5f, horizontalRange };
+    float const searchPoint[VERTEX_SIZE] = { point.y, point.z, point.x };
+    float closest[VERTEX_SIZE];
+    dtPolyRef poly = INVALID_POLYREF;
+    if (dtStatusFailed(_navMeshQuery->findNearestPoly(searchPoint, extents, &_filter, &poly, closest)) || poly == INVALID_POLYREF)
+        return false;
+
+    nearest = G3D::Vector3(closest[2], closest[0], closest[1]);
+    return true;
+}
+
 uint32 PathGenerator::FixupCorridor(dtPolyRef* path, uint32 npath, uint32 maxPath, dtPolyRef const* visited, uint32 nvisited)
 {
     int32 furthestPath = -1;
