@@ -212,12 +212,18 @@ namespace MMAP
             std::set<uint32>* tiles = (*itr).m_tiles;
             mapID = (*itr).m_mapId;
 
-            sprintf(filter, "%u*.vmtile", mapID);
+            // The files are named with %03u ("001_42_46.vmtile", "0014246.map",
+            // "1007_30_30.vmtile"), so the filter is too: "%u" made map 1 look
+            // for "1*" and miss its own "001..." files. The filter is still only
+            // a prefix ("100*" matches map 1007), so each file's own map id is
+            // checked, and parsed into fileMapID so mapID is not overwritten.
+            uint32 fileMapID;
+            sprintf(filter, "%03u_*.vmtile", mapID);
             files.clear();
             getDirContents(files, "vmaps", filter);
             for (uint32 i = 0; i < files.size(); ++i)
             {
-                if (!ParseVMapTileFileName(files[i], mapID, tileY, tileX))
+                if (!ParseVMapTileFileName(files[i], fileMapID, tileY, tileX) || fileMapID != mapID)
                     continue;
 
                 tileID = StaticMapTree::packTileID(tileY, tileX);
@@ -226,12 +232,12 @@ namespace MMAP
                 count++;
             }
 
-            sprintf(filter, "%u*", mapID);
+            sprintf(filter, "%03u*", mapID);
             files.clear();
             getDirContents(files, "maps", filter);
             for (uint32 i = 0; i < files.size(); ++i)
             {
-                if (!ParseMapFileName(files[i], mapID, tileY, tileX))
+                if (!ParseMapFileName(files[i], fileMapID, tileY, tileX) || fileMapID != mapID)
                     continue;
 
                 tileID = StaticMapTree::packTileID(tileX, tileY);
@@ -669,8 +675,10 @@ namespace MMAP
         dtNavMesh* navMesh)
     {
         // console output
-        char tileString[20];
-        sprintf(tileString, "[Map %03i] [%02i,%02i]: ", mapID, tileX, tileY);
+        // "[Map 1007] [30,30]: " is 21 bytes with its NUL: a four-digit map id
+        // overflowed the old char[20] (glibc's fortify check aborts the tool).
+        char tileString[48];
+        snprintf(tileString, sizeof(tileString), "[Map %03u] [%02u,%02u]: ", mapID, tileX, tileY);
         printf("%s Building movemap tiles...\n", tileString);
 
         IntermediateValues iv;
