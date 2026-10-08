@@ -792,7 +792,10 @@ public:
         if (!handler->extractPlayerTarget((char*)args, &target, &targetGuid))
             return false;
 
-        bool resurrectWithFullHealth = handler->GetSession()->HasPermission(rbac::RBAC_PERM_RESURRECT_WITH_FULL_HPS);
+        // Console, SOAP and RA commands have no session; treat them as full permission
+        // instead of reading through a null pointer.
+        WorldSession* session = handler->GetSession();
+        bool resurrectWithFullHealth = !session || session->HasPermission(rbac::RBAC_PERM_RESURRECT_WITH_FULL_HPS);
         if (target)
         {
             target->ResurrectPlayer(resurrectWithFullHealth ? 1.0f : 0.5f);
