@@ -4548,9 +4548,7 @@ Centurion.Hardcore.PlayerKill.MaxLevelHonor = 10
 #                     to everybody online. It is deleted as soon as it is read.
 #
 #                     Written by a deploy as, for example:
-#                         printf '600
-A new patch is on the way...
-' > FILE
+#                         printf '600\nA new patch is on the way...\n' > FILE
 #
 #                     The realm then runs TrinityCore's own countdown, which
 #                     warns clients, blocks new logins near the end and saves
