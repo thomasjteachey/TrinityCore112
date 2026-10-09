@@ -93,6 +93,21 @@ TEST_CASE("Socketless pure vertical knock-up uses a closed client-timed spline",
     CHECK(source.find("2.f * VerticalKnockupSplineRadius / airTime") != std::string::npos);
 }
 
+TEST_CASE("Socketless knockback measures its arc from the launch position", "[playerbot][movement]")
+{
+    // Launch() pins the first vertex to where the bot is a tick after the hit;
+    // a start captured at hit time adds a leg the arc's velocity never paid for.
+    std::string const source = ReadFile("src/server/game/Movement/MotionMaster.cpp");
+    std::size_t const knockbackPos = source.find("void MotionMaster::MoveKnockbackFrom(");
+    REQUIRE(knockbackPos != std::string::npos);
+    std::string const body = source.substr(knockbackPos, source.find("void MotionMaster::MoveJumpTo(", knockbackPos) - knockbackPos);
+    std::size_t const initializerPos = body.find("initializer = [=](Movement::MoveSplineInit& init)");
+    REQUIRE(initializerPos != std::string::npos);
+    std::size_t const startPos = body.find("Position const start = owner->GetPosition();");
+    REQUIRE(startPos != std::string::npos);
+    CHECK(startPos > initializerPos);
+}
+
 TEST_CASE("Socketless playerbot equivalent point orders are centrally preserved", "[playerbot][movement]")
 {
     std::string const motionMaster = ReadFile("src/server/game/Movement/MotionMaster.cpp");
