@@ -1021,12 +1021,24 @@ void MotionMaster::MoveKnockbackFrom(float srcX, float srcY, float speedXY, floa
             {
                 // A real client can resolve a zero-horizontal-speed knock-up
                 // directly, but MoveSpline needs a path with nonzero length to
-                // assign it a duration. Use a closed, imperceptibly small
-                // horizontal path whose total length is traversed in the
-                // client's ballistic airtime. The bot therefore follows the same
-                // gravity parabola and lands at its exact starting point instead
-                // of drifting or crawling across terrain.
-                static constexpr float VerticalKnockupSplineRadius = 0.05f;
+                // assign it a duration. Use a closed, barely visible horizontal
+                // path whose total length is traversed in the client's
+                // ballistic airtime. The bot therefore follows the same gravity
+                // parabola and lands at its exact starting point instead of
+                // drifting or crawling across terrain.
+                //
+                // The loop must be big enough for observers to see. They draw
+                // it from SMSG_MONSTER_MOVE, which sends the loop's middle point
+                // as an offset packed in whole 0.25 yd steps
+                // (ByteBuffer::appendPackXYZ truncates). The old 0.05 yd loop
+                // arrived as start, start, start: a zero-length path the client
+                // never plays, so the server flew the arc while every screen
+                // showed the bot standing still. At 0.4 yd the larger axis of
+                // the offset is at least 0.28 yd whatever the direction, and
+                // each leg stays under the 0.5 yd the battleground wall guard
+                // (MoveSplineInit.cpp) starts testing at, so a wall the bot is
+                // pressed against cannot cancel the arc.
+                static constexpr float VerticalKnockupSplineRadius = 0.4f;
 
                 float const awayAngle = owner->GetAbsoluteAngle(srcX, srcY) + float(M_PI);
                 G3D::Vector3 const startPoint(start.GetPositionX(), start.GetPositionY(), start.GetPositionZ());

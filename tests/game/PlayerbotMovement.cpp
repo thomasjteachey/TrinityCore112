@@ -93,6 +93,21 @@ TEST_CASE("Socketless pure vertical knock-up uses a closed client-timed spline",
     CHECK(source.find("2.f * VerticalKnockupSplineRadius / airTime") != std::string::npos);
 }
 
+TEST_CASE("Socketless vertical knock-up loop survives MONSTER_MOVE packing", "[playerbot][movement]")
+{
+    // Observers get the loop's middle point as an offset packed in 0.25 yd
+    // steps. Every direction needs radius / sqrt(2) >= 0.25, or the client is
+    // sent a zero-length path and never draws the arc. Staying under 0.5 yd
+    // keeps both legs below the shortest leg the battleground wall guard tests.
+    std::string const source = ReadFile("src/server/game/Movement/MotionMaster.cpp");
+    std::string const needle = "static constexpr float VerticalKnockupSplineRadius = ";
+    std::size_t const radiusPos = source.find(needle);
+    REQUIRE(radiusPos != std::string::npos);
+    float const radius = std::stof(source.substr(radiusPos + needle.size()));
+    CHECK(radius >= 0.3536f);
+    CHECK(radius < 0.5f);
+}
+
 TEST_CASE("Socketless knockback measures its arc from the launch position", "[playerbot][movement]")
 {
     // Launch() pins the first vertex to where the bot is a tick after the hit;
