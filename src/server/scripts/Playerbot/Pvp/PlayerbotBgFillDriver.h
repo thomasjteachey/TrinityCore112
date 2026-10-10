@@ -32,9 +32,11 @@ namespace playerbot
 // is over. Real players come first at every turn: a person queuing alone gets a
 // match after BattlegroundMgr::BotFillPolicy's applicable wait (the queue's
 // TryStartBotFilledMatch). In battlegrounds, a later person can displace a clone
-// and a vacated seat is refilled. Arena rosters instead lock at creation: no
-// replacements enter after the skirmish pops. The last person leaving ends a
-// bot-filled match through the stock no-humans rule.
+// and a vacated seat is refilled. In an arena a later person can take a clone's
+// seat only while the gates are shut (BattlegroundQueue::OfferPreparationSeats):
+// the clone stands down when they arrive and the countdown starts over. Once the
+// gates open the roster is locked. The last person leaving ends a bot-filled
+// match through the stock no-humans rule.
 //
 // Each half-second the driver visits every live public battleground of an
 // enabled type and, once at least one real player has actually entered, tops

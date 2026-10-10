@@ -434,6 +434,18 @@ class TC_GAME_API Battleground
         // else's business and counts as a participant.
         bool IsBotFillMatch() const { return m_IsBotFillMatch; }
         void SetBotFillMatch(bool enabled) { m_IsBotFillMatch = enabled; }
+        // Until its gates open, a bot-filled match keeps its clones' seats open
+        // to the queue (BattlegroundQueue::OfferPreparationSeats). The queue
+        // reserves one clone per person it invites; the clone stands down when
+        // that person arrives, and the preparation countdown starts over. The
+        // countdown is held while anyone with a reservation is still on the way
+        // in, which the invite's own expiry bounds.
+        //
+        // Seats a person could still take from a clone on `team`: its clones
+        // less the ones already promised. Zero once the gates are open.
+        uint32 CountPreparationSeatsHeldByClones(uint32 team);
+        void ReservePreparationSeat(ObjectGuid guid, uint32 team) { m_PreparationSeatTakers[guid] = team; }
+        bool HasPreparationSeatReservation(ObjectGuid guid) const { return m_PreparationSeatTakers.count(guid) != 0; }
         // CENTURION queue pool (Miscellaneous/TournamentMode.h): the queue only
         // ever seats tournament-pool groups in a tournament-pool match and world
         // groups in a world match. Set by BattlegroundQueue when it creates the
@@ -715,6 +727,11 @@ class TC_GAME_API Battleground
         void _ProcessJoin(uint32 diff);
         void _CheckSafePositions(uint32 diff);
 
+        // See CountPreparationSeatsHeldByClones.
+        void PrunePreparationSeatTakers();
+        void HandOverPreparationSeat(Player* player, uint32 team);
+        void RestartPreparationCountdown();
+
         uint32 GetConfiguredResurrectionInterval(uint32 defaultValue) const { return m_IsCustomGame && m_CustomRules.ResurrectionIntervalMs ? m_CustomRules.ResurrectionIntervalMs : defaultValue; }
         virtual uint32 GetResurrectionInterval() const { return GetConfiguredResurrectionInterval(RESURRECTION_INTERVAL); }
         virtual uint32 GetBuffRespawnTime(uint32 type) const { return BUFF_RESPAWN_TIME; }
@@ -778,6 +795,7 @@ class TC_GAME_API Battleground
         uint32 m_CustomGamePendingCloneCount;
         BattlegroundCustomRules m_CustomRules;
         bool   m_IsBotFillMatch;                            // padded with transient clones, see IsBotFillMatch()
+        std::map<ObjectGuid, uint32> m_PreparationSeatTakers; // invited into a clone's seat -> team, see CountPreparationSeatsHeldByClones()
         bool   m_IsTournamentPool;                          // made from the tournament queue pool, see IsTournamentPool()
         bool   m_IsArena;
         PvPTeamId _winnerTeamId;

@@ -569,7 +569,12 @@ inline void Battleground::_ProcessJoin(uint32 diff)
     // *********************************************************
     // ***           BATTLEGROUND STARTING SYSTEM            ***
     // *********************************************************
-    ModifyStartDelayTime(diff);
+    // Somebody invited into a clone's seat is still deciding or still loading
+    // in. The gates wait for them; HandOverPreparationSeat restarts the
+    // countdown when they arrive, and an invite left to lapse lets it run on.
+    PrunePreparationSeatTakers();
+    if (m_PreparationSeatTakers.empty())
+        ModifyStartDelayTime(diff);
 
     if (m_ResetStatTimer > 5000)
     {
@@ -645,7 +650,7 @@ inline void Battleground::_ProcessJoin(uint32 diff)
             SendBroadcastText(StartMessageIds[BG_STARTING_EVENT_THIRD], CHAT_MSG_BG_SYSTEM_NEUTRAL);
     }
     // Delay expired (after 2 or 1 minute)
-    else if (GetStartDelayTime() <= 0 && !(m_Events & BG_STARTING_EVENT_4))
+    else if (GetStartDelayTime() <= 0 && !(m_Events & BG_STARTING_EVENT_4) && m_PreparationSeatTakers.empty())
         SkipStartDelay();
 }
 
@@ -1434,6 +1439,7 @@ void Battleground::Reset()
     m_InBGFreeSlotQueue = false;
     m_HasEverHadNonVirtualHumanParticipant = false;
     m_NoNonVirtualHumanElapsed = 0;
+    m_PreparationSeatTakers.clear();
 
     m_Players.clear();
 
@@ -1612,6 +1618,11 @@ void Battleground::AddPlayer(Player* player)
     // sees the true remaining capacity.
     if (!isInBattleground)
         DecreaseInvitedCount(team);
+
+    // Before the raid is touched: the clone has to leave the team's group to
+    // make room in it.
+    if (!isInBattleground)
+        HandOverPreparationSeat(player, team);
 
     if (WorldSession const* session = player->GetSession(); session && !IsBotParticipantSession(session))
     {
@@ -1920,6 +1931,105 @@ bool Battleground::IsBotParticipantSession(WorldSession const* session) const
         return true;
 
     return m_IsBotFillMatch && session->IsTransientPlayerSession();
+}
+
+uint32 Battleground::CountPreparationSeatsHeldByClones(uint32 team)
+{
+    if (!m_IsBotFillMatch || GetStatus() != STATUS_WAIT_JOIN)
+        return 0;
+
+    PrunePreparationSeatTakers();
+    uint32 promised = 0;
+    for (auto const& reservation : m_PreparationSeatTakers)
+        if (reservation.second == team)
+            ++promised;
+
+    uint32 clones = 0;
+    for (auto const& [guid, participant] : m_Players)
+    {
+        if (participant.Team != team)
+            continue;
+
+        Player const* player = ObjectAccessor::FindConnectedPlayer(guid);
+        if (player && player->GetSession() && player->GetSession()->IsTransientPlayerSession())
+            ++clones;
+    }
+
+    return clones > promised ? clones - promised : 0;
+}
+
+// A reservation lasts while its holder is still invited here and not yet in:
+// through the invite, the click on Enter Battle and the loading screen. A
+// lapsed invite, a logout or the arrival itself ends it.
+void Battleground::PrunePreparationSeatTakers()
+{
+    for (auto itr = m_PreparationSeatTakers.begin(); itr != m_PreparationSeatTakers.end();)
+    {
+        Player const* player = ObjectAccessor::FindConnectedPlayer(itr->first);
+        if (!player || !player->IsInvitedForBattlegroundInstance(GetInstanceID()) || IsPlayerInBattleground(itr->first))
+            itr = m_PreparationSeatTakers.erase(itr);
+        else
+            ++itr;
+    }
+}
+
+// Called on arrival, with the newcomer already on the roster: a team is never
+// left empty, which would hand the other side the arena on the spot.
+void Battleground::HandOverPreparationSeat(Player* player, uint32 team)
+{
+    auto const reservation = m_PreparationSeatTakers.find(player->GetGUID());
+    if (reservation == m_PreparationSeatTakers.end())
+        return;
+
+    m_PreparationSeatTakers.erase(reservation);
+
+    ObjectGuid cloneGuid;
+    for (auto const& [guid, participant] : m_Players)
+    {
+        if (participant.Team != team)
+            continue;
+
+        Player const* candidate = ObjectAccessor::FindConnectedPlayer(guid);
+        if (candidate && candidate->GetSession() && candidate->GetSession()->IsTransientPlayerSession())
+        {
+            cloneGuid = guid;
+            break;
+        }
+    }
+
+    if (cloneGuid.IsEmpty())
+        TC_LOG_ERROR("bg.battleground", "Battleground::HandOverPreparationSeat: {} arrived in {} instance {} for a clone's seat on team {}, and that team has no clone left to stand down.",
+            player->GetName(), GetName(), GetInstanceID(), team);
+    else
+    {
+        // A clone has no entry point and no client, so it is only unseated;
+        // the playerbot clone manager takes it down on its next pass. Leaving
+        // gives back an invite the clone never held - restore whatever that
+        // took from the people still on their way in.
+        uint32 const invitedBefore = GetInvitedCount(team);
+        RemovePlayerAtLeave(cloneGuid, false, false);
+        while (GetInvitedCount(team) < invitedBefore)
+            IncreaseInvitedCount(team);
+
+        TC_LOG_DEBUG("bg.battleground", "Battleground::HandOverPreparationSeat: {} took clone {}'s seat on team {} of {} instance {}.",
+            player->GetName(), cloneGuid.ToString(), team, GetName(), GetInstanceID());
+    }
+
+    RestartPreparationCountdown();
+}
+
+// Back to the first warning, as though the gates had just shut behind
+// everyone: the full preparation for whoever walked in, later warnings re-armed.
+void Battleground::RestartPreparationCountdown()
+{
+    // Not begun (it starts from the top on its own), or already over.
+    if (GetStatus() != STATUS_WAIT_JOIN || !(m_Events & BG_STARTING_EVENT_1) || (m_Events & BG_STARTING_EVENT_4))
+        return;
+
+    m_Events &= uint8(~(BG_STARTING_EVENT_2 | BG_STARTING_EVENT_3));
+    SetStartDelayTime(StartDelayTimes[BG_STARTING_EVENT_FIRST]);
+    if (StartMessageIds[BG_STARTING_EVENT_FIRST])
+        SendBroadcastText(StartMessageIds[BG_STARTING_EVENT_FIRST], CHAT_MSG_BG_SYSTEM_NEUTRAL);
 }
 
 std::string Battleground::GetPlayerDisplayName(Player const* player)

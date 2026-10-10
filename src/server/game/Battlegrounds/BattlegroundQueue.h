@@ -151,6 +151,14 @@ class TC_GAME_API BattlegroundQueue
         // rest of both teams afterwards. Rated groups are never selected.
         bool TryStartBotFilledMatch(BattlegroundTypeId bgTypeId, PvPDifficultyEntry const* bracketEntry,
             BattlegroundBracketId bracket_id, uint32 maxPlayersPerTeam, uint8 arenaType, uint32 queueWaitMs);
+        // Real groups waiting the same wait are invited into bot-filled
+        // skirmishes whose gates are still shut, each in the place of clones
+        // (Battleground::CountPreparationSeatsHeldByClones).
+        void OfferPreparationSeats(BattlegroundTypeId bgTypeId, BattlegroundBracketId bracket_id, uint8 arenaType,
+            uint32 queueWaitMs);
+        // After ginfo->Team has been switched: moves the group to that side's
+        // list, premade or normal as it was.
+        void MoveGroupToSeatedSide(GroupQueueInfo* ginfo, BattlegroundBracketId bracket_id);
         uint32 m_WaitTimes[PVP_TEAMS_COUNT][MAX_BATTLEGROUND_BRACKETS][COUNT_OF_PLAYERS_TO_AVERAGE_WAIT_TIME];
         uint32 m_WaitTimeLastPlayer[PVP_TEAMS_COUNT][MAX_BATTLEGROUND_BRACKETS];
         uint32 m_SumOfWaitTimes[PVP_TEAMS_COUNT][MAX_BATTLEGROUND_BRACKETS];

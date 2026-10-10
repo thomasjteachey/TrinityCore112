@@ -584,6 +584,25 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPacket &recvData)
         if (!_player->IsInvitedForBattlegroundQueueType(bgQueueTypeId))
             return;                                 // cheating?
 
+        // A clone's seat is only on offer behind closed gates, and only to
+        // somebody with "Arena bot matches" ticked. The queue checked the box
+        // when it made the offer, but it can be flipped at any time, so it is
+        // read again here. The countdown is held while this invite is out, so
+        // the gates can only have opened by a forced start (.gm bgstart).
+        // Either way the invite is treated as lapsed.
+        if (bg->HasPreparationSeatReservation(_player->GetGUID()) &&
+            (bg->GetStatus() != STATUS_WAIT_JOIN || _player->HasArenaBotFillOptOut()))
+        {
+            if (_player->HasArenaBotFillOptOut())
+                ChatHandler(this).SendSysMessage("Arena bot matches is unticked, so you were not seated in place of a bot.");
+
+            _player->RemoveBattlegroundQueueId(bgQueueTypeId);
+            bgQueue.RemovePlayer(_player->GetGUID(), true);
+            sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, bg, queueSlot, STATUS_NONE, 0, 0, 0, 0);
+            _player->SendDirectMessage(&data);
+            return;
+        }
+
         if (!_player->InBattleground())
             _player->SetBattlegroundEntryPoint();
 

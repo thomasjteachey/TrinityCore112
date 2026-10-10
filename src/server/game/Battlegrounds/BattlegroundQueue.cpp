@@ -138,6 +138,24 @@ uint32 CountVirtualPlayersOnTeam(Battleground* battleground, uint32 team)
     return count;
 }
 
+// People on a team or on their way to it: every occupant who is not a bot (a
+// disconnected person keeps their seat) and every invite still out.
+uint32 CountPeopleOnTeam(Battleground* battleground, uint32 team)
+{
+    uint32 count = battleground->GetInvitedCount(team);
+    for (auto const& [memberGuid, bgPlayer] : battleground->GetPlayers())
+    {
+        if (bgPlayer.Team != team)
+            continue;
+
+        Player* candidate = ObjectAccessor::FindConnectedPlayer(memberGuid);
+        if (!candidate || !battleground->IsBotParticipantSession(candidate->GetSession()))
+            ++count;
+    }
+
+    return count;
+}
+
 uint32 GetDesiredSelectionCount(BattlegroundQueue::SelectionPool const& selectionPool, GroupQueueInfo const* ginfo,
     Battleground* bg, uint32 team, int32 freeSlots)
 {
@@ -175,10 +193,11 @@ bool RemoveVirtualPlayersFromTeam(Battleground* battleground, uint32 team, uint3
     if (!battleground || !count)
         return false;
 
-    // A transient arena roster is final once its instance exists. Do not
-    // displace a clone for a late invite during preparation or combat; the
-    // queued person must be matched into a different arena instead. Persistent
-    // virtual bots retain the old displacement policy.
+    // Never unseat an arena clone at invite time: a team left empty during
+    // preparation hands the other side the arena. A skirmish still preparing
+    // gives the seat up when the person it was promised to arrives
+    // (Battleground::HandOverPreparationSeat); one already fighting admits
+    // nobody. Persistent virtual bots retain the old displacement policy.
     bool const protectTransientArenaRoster = battleground->isArena() &&
         (battleground->GetStatus() == STATUS_WAIT_JOIN || battleground->GetStatus() == STATUS_IN_PROGRESS);
 
@@ -1175,25 +1194,8 @@ bool BattlegroundQueue::TryStartBotFilledMatch(BattlegroundTypeId bgTypeId, PvPD
         return false;
     }
 
-    // A group that crossed over belongs in the other side's queue list, the way
-    // CheckSkirmishForSameFaction moves one, so that everything reading those
-    // lists by side agrees with the team the group is about to play on.
     for (GroupQueueInfo* ginfo : crossedOver)
-    {
-        TeamId const seatedSide = ginfo->Team == HORDE ? TEAM_HORDE : TEAM_ALLIANCE;
-        TeamId const queuedSide = seatedSide == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
-        for (uint32 base : { uint32(BG_QUEUE_PREMADE_ALLIANCE), uint32(BG_QUEUE_NORMAL_ALLIANCE) })
-        {
-            GroupsQueueType& from = m_QueuedGroups[bracket_id][base + queuedSide];
-            GroupsQueueType::iterator itr = std::find(from.begin(), from.end(), ginfo);
-            if (itr == from.end())
-                continue;
-
-            from.erase(itr);
-            m_QueuedGroups[bracket_id][base + seatedSide].push_front(ginfo);
-            break;
-        }
-    }
+        MoveGroupToSeatedSide(ginfo, bracket_id);
 
     // Flagged before anyone is invited so the first person's entry is
     // accounted as a human's under the bot-fill reading of the roster.
@@ -1214,6 +1216,108 @@ bool BattlegroundQueue::TryStartBotFilledMatch(BattlegroundTypeId bgTypeId, PvPD
     m_SelectionPools[TEAM_ALLIANCE].Init();
     m_SelectionPools[TEAM_HORDE].Init();
     return true;
+}
+
+// Arenas never enter the free-slot queue, so they are found here by type. Only
+// clones' seats are offered, never an empty one: a seat still empty may have a
+// clone loading into it, and the person taking it would make the team one too
+// many. The countdown is held while anyone is on the way in and restarts when
+// they arrive (Battleground::HandOverPreparationSeat).
+void BattlegroundQueue::OfferPreparationSeats(BattlegroundTypeId bgTypeId, BattlegroundBracketId bracket_id,
+    uint8 arenaType, uint32 queueWaitMs)
+{
+    BattlegroundContainer const* instances = sBattlegroundMgr->GetBattlegroundsByType(bgTypeId);
+    if (!instances)
+        return;
+
+    // Oldest first. Entry 0 is the template.
+    std::vector<Battleground*> arenas;
+    for (auto const& [instanceId, bg] : *instances)
+        if (instanceId && bg->isArena() && !bg->isRated() && !bg->IsCustomGame() && bg->IsBotFillMatch() &&
+            bg->GetArenaType() == arenaType && bg->GetBracketId() == bracket_id && InActivePool(bg) &&
+            bg->GetStatus() == STATUS_WAIT_JOIN)
+            arenas.push_back(bg);
+
+    if (arenas.empty())
+        return;
+
+    // The same groups TryStartBotFilledMatch would seat, collected before any
+    // of them is moved to the other side's list. That includes the "Arena bot
+    // matches" box: a group is offered a clone's seat only when every real
+    // member has it ticked (re-checked at Enter Battle, since it can change).
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    std::vector<GroupQueueInfo*> waiting;
+    for (uint32 queueIndex = BG_QUEUE_PREMADE_ALLIANCE; queueIndex < BG_QUEUE_GROUP_TYPES_COUNT; ++queueIndex)
+        for (GroupQueueInfo* ginfo : m_QueuedGroups[bracket_id][queueIndex])
+            if (!ginfo->IsInvitedToBGInstanceGUID && !ginfo->IsRated && InActivePool(ginfo) &&
+                ginfo->ArenaType == arenaType && getMSTimeDiff(ginfo->JoinTime, nowMs) >= queueWaitMs &&
+                GroupHasRealPlayerInvitee(ginfo) && GroupAllowsArenaBotFill(ginfo))
+                waiting.push_back(ginfo);
+
+    for (GroupQueueInfo* ginfo : waiting)
+    {
+        // A group is a team: all of it goes to one side or none of it does.
+        uint32 const groupSize = uint32(ginfo->Players.size());
+        Battleground* target = nullptr;
+        uint32 targetTeam = 0;
+        uint32 targetPeople = 0;
+        for (Battleground* bg : arenas)
+        {
+            for (uint32 team : { uint32(ALLIANCE), uint32(HORDE) })
+            {
+                if (bg->CountPreparationSeatsHeldByClones(team) < groupSize)
+                    continue;
+
+                // The side with fewer people on it, so somebody queuing alone
+                // is set against the person already waiting, not beside them.
+                uint32 const people = CountPeopleOnTeam(bg, team);
+                if (!target || people < targetPeople)
+                {
+                    target = bg;
+                    targetTeam = team;
+                    targetPeople = people;
+                }
+            }
+        }
+
+        if (!target)
+            continue;
+
+        if (ginfo->Team != targetTeam)
+        {
+            ginfo->Team = targetTeam;
+            MoveGroupToSeatedSide(ginfo, bracket_id);
+        }
+
+        if (!InviteGroupToBG(ginfo, target, targetTeam))
+            continue;
+
+        for (auto const& playerEntry : ginfo->Players)
+            target->ReservePreparationSeat(playerEntry.first, targetTeam);
+
+        TC_LOG_DEBUG("bg.battleground", "BattlegroundQueue::OfferPreparationSeats: invited {} player(s) into clones' seats on team {} of preparing arena instance {} (bracket {}, arenaType {}).",
+            groupSize, targetTeam, target->GetInstanceID(), uint32(bracket_id), uint32(arenaType));
+    }
+}
+
+// A group seated opposite the side it queued on belongs in that side's list,
+// the way CheckSkirmishForSameFaction moves one, so that everything reading the
+// lists by side - RemovePlayer among them - agrees with the team it plays on.
+void BattlegroundQueue::MoveGroupToSeatedSide(GroupQueueInfo* ginfo, BattlegroundBracketId bracket_id)
+{
+    TeamId const seatedSide = ginfo->Team == HORDE ? TEAM_HORDE : TEAM_ALLIANCE;
+    TeamId const queuedSide = seatedSide == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
+    for (uint32 base : { uint32(BG_QUEUE_PREMADE_ALLIANCE), uint32(BG_QUEUE_NORMAL_ALLIANCE) })
+    {
+        GroupsQueueType& from = m_QueuedGroups[bracket_id][base + queuedSide];
+        GroupsQueueType::iterator itr = std::find(from.begin(), from.end(), ginfo);
+        if (itr == from.end())
+            continue;
+
+        from.erase(itr);
+        m_QueuedGroups[bracket_id][base + seatedSide].push_front(ginfo);
+        break;
+    }
 }
 
 /*
@@ -1319,9 +1423,9 @@ void BattlegroundQueue::UpdatePool(BattlegroundTypeId bgTypeId, BattlegroundBrac
         if (!InActivePool(bg))
             continue;
 
-        // A skirmish roster locks when its instance is created. Humans who
-        // queue after a bot-filled arena pops must wait for their own match;
-        // arena combat never admits replacements or backfills.
+        // A bot-filled skirmish admits latecomers only into its clones' seats
+        // and only before its gates open (OfferPreparationSeats); never as a
+        // free-slot backfill.
         if (bg->isArena() && bg->IsBotFillMatch())
             continue;
 
@@ -1466,8 +1570,15 @@ void BattlegroundQueue::UpdatePool(BattlegroundTypeId bgTypeId, BattlegroundBrac
             TryStartBotFilledMatch(bgTypeId, bracketEntry, bracket_id, MaxPlayersPerTeam, 0,
                 sBattlegroundMgr->GetBotFillQueueWaitMs());
         else if (bg_template->isArena() && sBattlegroundMgr->IsBotFillSkirmishArena(arenaType))
+        {
+            // A clone's seat in a skirmish still preparing comes first, so the
+            // people waiting meet the ones already behind the gates instead of
+            // each being handed clones of their own. Whoever it cannot place
+            // gets a new match.
+            OfferPreparationSeats(bgTypeId, bracket_id, arenaType, sBattlegroundMgr->GetBotFillQueueWaitMs(arenaType));
             TryStartBotFilledMatch(bgTypeId, bracketEntry, bracket_id, MaxPlayersPerTeam, arenaType,
                 sBattlegroundMgr->GetBotFillQueueWaitMs(arenaType));
+        }
     }
     else if (bg_template->isArena())
     {
