@@ -69,55 +69,35 @@ same table, so the two cannot drift.
 Both fall back to the DBC array if the table is empty, so a database that has
 not run the migration still works.
 
-### Held back
+### Every arena is back (2026-10-15)
 
-Four of the ported arenas are switched off for now, through the same `disables`
-mechanism. Nothing is deleted — DBC rows, terrain, gates and minimaps all stay
-in place.
+Nine arenas had been switched off: Dalaran Sewers (10) and the Ring of Valor (11)
+in `disables`, Guardian's Hall (877) and Spark of Creator (878) only in the pool,
+and Baradin Hold Arena (879), Obelisk of the Stars (880), The Twisting Nether
+(881), The Inventor's Library (884) and Amphitheater of Anguish (885) in both.
+All nine are in the All Arenas rotation again. What each needed:
 
-| BG | Map | Name |
-|---|---|---|
-| 880 | 1402 | Obelisk of the Stars |
-| 881 | 1403 | The Twisting Nether |
-| 884 | 1683 | The Inventor's Library |
-| 885 | 1684 | Amphitheater of Anguish |
+| BG | Map | What was wrong | Fix |
+|---|---|---|---|
+| 10 | 617 | **Players and pets dropped under the floor.** The art patch carried the *3.0* Dalaran Sewers WMO (common-2.MPQ) with only its indoor flags edited, shadowing the final 3.3.5 one in patch.MPQ. The 3.0 centre platform has two holes (at 1305,778 and 1279,806) straight down to a basin at z -4..-17; the live server's collision had been extracted from the same file. Blizzard's own rescue trigger (5326) puts you back at z 8.11 - inside the 3.0 platform (top 9.34), so you fell again. Its exterior flag edit also left it with no minimap. | patch-Y 1.00027 drops the override, so clients load the 3.3.5 WMO (solid floor at 7.11, interior groups so Blizzard's WMO minimap draws; outdoors still comes from WMOAreaTable flag 4). Server vmaps/mmaps for 617 rebuilt from it - byte-identical to the old Barracks+ extraction CenturionDev still had - with off-mesh links from both start pipes down to the ring, so bots can leave the pipes. Starts (WSL 1362/1363) moved onto the pipe axis; Blizzard's points sat inside the tube wall. Area triggers 5326/5328-5331 now land on the south ring (1292, 760, 7), floor in both geometries. |
+| 11 | 618 | The elevators are type 11 transports the server never moves: pets and bots stay in the shafts below the floor when the gates open. | `battleground_bounds`: after 20.5 s anyone below z 27 is lifted to 28.28 where they stand (what AzerothCore does by hand). |
+| 877 | 1007 | Held back for its minimap (untextured mesh render). | Textured top-down render from the client's own WMO + doodad textures (`topdown/make_tiles.py`), patch-Y 1.00027. |
+| 878 | 1008 | Same, and the old render was rotated 180 degrees (local WMO X/Y added to world X/Y instead of subtracted). | Same. |
+| 879 | 1401 | No start rooms; the two gates were "derived" placeholders standing in the courtyard. | Placeholder gates removed, `StartMaxDist` 12 holds both teams (and their pets) at their start until the gates would open; shadowsight in the NE/SW corners. Enclosed by its walls. |
+| 880 | 1402 | Same; the starts are just inside two wall gaps closed by invisible collision panes. | Same; shadowsight in the north/south gaps. Enclosed. |
+| 881 | 1403 | The shipped starts (Ascension's WSL 2037/2038) are two balcony alcoves on the Kil'jaeden ship that nothing connects to - the navmesh from each reaches its own alcove only. | Starts moved onto the Legion arena platform's north/south edges (WSL 52618/52619), leash + bounds outline: falling off the platform (or being knocked off) puts you back on its nearest edge. |
+| 884 | 1683 | Open terrace: the north stairs and south hillside lead off it, the navmesh reaches the whole map. | Leash, shadowsight, bounds outline traced from the top collision surface (excludes the buildings); MinZ 945. |
+| 885 | 1684 | Open pit: tunnels at pit level under the 286-high ring lead out of the arena. | Leash, shadowsight, bounds outline = the pit and the lower stairs; MinZ 266. |
 
-Three of them (880, 884, 885) are also the ones whose terrain is mostly area id
-0, so they show a stale zone name out in the open; 881 is a pure-WMO map with no
-terrain textures at all. Worth knowing if the question of why comes up.
+**`battleground_bounds`** (code: `Battleground::_CheckBounds`, commit 9df5f27056) is
+generic: per battleground type a MinZ, an optional outline in world X/Y, and where to put
+someone back (the floor under the nearest inside point, the same X/Y at a fixed height, or
+a safe point). Checked twice a second for every combatant and every pet, guardian and
+totem they control, once the gates open plus GraceMs. Edit rows and `.reload
+battleground_template`.
 
-To bring one back:
-
-```sql
-DELETE FROM disables WHERE sourceType = 3 AND entry = 880;
-UPDATE battleground_random_pool SET Enabled = 1 WHERE PoolBgTypeId = 6 AND MemberBgTypeId = 880;
-```
-
-then `.reload battleground_template` and restart — templates are built at
-startup, so a reload alone will not resurrect one.
-
-That leaves **16 arenas live**: 6 stock and 10 ported.
-
-### Disabled arenas
-
-Dalaran Sewers (10) and the Ring of Valor (11) are turned off in `disables`
-(sourceType 3, alongside Alterac Valley), so neither has a battleground template
-and neither can be created. They must never be offered — picking one starts a
-match the server cannot build.
-
-Three guards, because "listed as an arena" and "actually runnable" are different
-questions:
-
-- **The pool seed** carries both as rows with `Enabled = 0` rather than omitting
-  them, so the reason is recorded instead of being an unexplained absence.
-- **`BattlegroundMgr::IsPoolMemberSelectable`** re-checks `disables` *and* the
-  template at selection time, so a row switched on by hand still cannot roll
-  them. Used by both `GetRandomBG` and `GetRandomPoolMembers`.
-- **The Chromie menu and `SelectBattleground`** apply the same check, so they are
-  neither listed nor accepted if an action id arrives from a stale gossip page.
-
-If they are ever re-enabled in `disables`, they come back on their own — nothing
-here hardcodes them as forbidden.
+How the data was chosen - navmesh reachability from the starts, the outlines, the buff
+spots - is in `topdown/README.md`; the shapes are measured, so a rerun reproduces them.
 
 ## WorldStateUI
 
@@ -273,7 +253,7 @@ DELETE FROM dbc.worldstateui_lplus     WHERE ID BETWEEN 90100 AND 90127;
 -- binaries:       <file>.dbc.bak-arenas, or  python arena_dbc.py --restore <dir>
 ```
 
-## Still to do
+## Still to do (August 2026 - all done since; kept for the record)
 
 **1. Terrain.** Nothing will load until the 14 maps exist on both sides. None of
 it is present yet — `maps/`, `vmaps/` and `mmaps/` have zero files for all 14

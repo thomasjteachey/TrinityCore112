@@ -228,17 +228,51 @@ MEASURED = {
         ],
         "drop_gameobject_guids": [2136081, 2136082],
     },
+    # 879, 880, 881, 884 and 885 have no start rooms: each team starts in the open
+    # (a courtyard corner, a gap in a wall, the edge of a pit or a terrace), so there
+    # is no doorway to put a gate in. "gates": [] says so - without it gates_for()
+    # derives two from the starts, which put a gate in the middle of the floor
+    # blocking nothing. The teams are kept apart before the start by start_max_dist
+    # instead (a leash on the players and their pets), and the arena itself is
+    # held by a `battleground_bounds` row where its walls do not do it.
+    #
+    # Buffs: open floor, the same distance from both starts, reachable on the
+    # navmesh from both and clear of walls - picked by the 2026-10-15 pass that
+    # brought these five back.
     879: {  # Baradin Hold Arena, map 1401  (WSL 2033/2034)
         "alliance": (-1176.300049, 1043.319946, 121.000000, 3.948866),
         "horde":    (-1288.290039, 926.320007, 121.000000, 0.807273),
+        "gates": [],
+        "start_max_dist": 12,
+        "buffs": [
+            (184663, -1176.30, 926.32, 119.73, 0.0),
+            (184664, -1288.29, 1043.32, 119.73, 0.0),
+        ],
     },
     880: {  # Obelisk of the Stars, map 1402  (WSL 2035/2036)
         "alliance": (-9254.530273, -1473.119995, 68.000000, 4.650473),
         "horde":    (-9264.080078, -1627.160034, 68.000000, 1.508880),
+        "gates": [],
+        "start_max_dist": 12,
+        "buffs": [
+            (184663, -9205.40, -1553.50, 65.45, 0.0),
+            (184664, -9313.20, -1546.80, 65.45, 0.0),
+        ],
     },
-    881: {  # The Twisting Nether, map 1403  (WSL 2037/2038)
-        "alliance": (4566.959961, -1428.469971, 387.000000, 3.136064),
-        "horde":    (4431.299805, -1427.719971, 387.000000, 6.277657),
+    881: {  # The Twisting Nether, map 1403
+        # NOT Ascension's WSL 2037/2038: those are two balcony alcoves on the
+        # Kil'jaeden ship that no floor connects to - the navmesh from each reaches
+        # its own alcove and nothing else. The fight is on the Legion arena
+        # platform east of the ship (95 x 93 yd, z 386, three pillars mirrored
+        # north/south), so the teams start at its north and south edges.
+        "alliance": (4540.700000, -1510.500000, 386.200000, 3.136064),
+        "horde":    (4460.700000, -1510.500000, 386.200000, 6.277657),
+        "gates": [],
+        "start_max_dist": 12,
+        "buffs": [
+            (184663, 4500.70, -1545.00, 385.64, 0.0),
+            (184664, 4500.70, -1472.00, 385.64, 0.0),
+        ],
     },
     882: {  # Black Rook Hold Arena, map 1504
         # starts from Ascension's WorldSafeLocs 5121/5122; the rest surveyed.
@@ -291,10 +325,22 @@ MEASURED = {
     884: {  # The Inventor's Library, map 1683  (WSL 2013/2014)
         "alliance": (8115.540039, -960.760010, 958.000000, 1.318947),
         "horde":    (8165.160156, -767.919983, 958.000000, 4.460540),
+        "gates": [],
+        "start_max_dist": 12,
+        "buffs": [
+            (184663, 8126.79, -860.85, 956.10, 0.0),
+            (184664, 8169.40, -871.82, 955.66, 0.0),
+        ],
     },
     885: {  # Amphitheater of Anguish, map 1684  (WSL 2010/2011)
         "alliance": (5812.209961, -2977.669922, 274.000000, 3.576462),
         "horde":    (5748.359863, -3007.330078, 274.000000, 0.434869),
+        "gates": [],
+        "start_max_dist": 12,
+        "buffs": [
+            (184663, 5787.87, -3008.82, 272.86, 0.0),
+            (184664, 5767.65, -2965.29, 273.99, 0.0),
+        ],
     },
     873: {  # Imperial Arena of Thakraj, map 983
         # starts from Ascension's WorldSafeLocs 6066/6067; gates and buffs
@@ -363,20 +409,15 @@ GO_TEMPLATE_CLONES = [
 # 880/884/885 are also the three whose terrain is mostly area id 0, so they show
 # a stale zone name in the open; 881 is a pure-WMO map with no terrain textures
 # at all. Worth knowing if the question of why comes up later.
+#
+# 2026-10-15: all seven are back. 877/878 were held back for their minimaps (the
+# untextured mesh render was not good enough, and 878's was drawn rotated 180
+# degrees); they now have textured top-down tiles from the client's own WMO and
+# doodad textures. 879-885 needed start pens they do not have (see MEASURED), the
+# Twisting Nether needed starts that reach the floor, and the open ones needed
+# `battleground_bounds` outlines. The mechanism stays for the next arena that has
+# to be parked.
 DISABLED = {
-    # No minimap exists for these two and none can easily be made: both are a
-    # single WMO with no terrain, so there is nothing for a minimap generator to
-    # draw. Rendering one from the WMO mesh works (tools/arenas/make_minimap.py,
-    # and the tiles are already packed) but the result was not good enough to
-    # ship. The tiles are left in the patch -- harmless, and there if these come
-    # back.
-    877: "Guardian's Hall",
-    878: "Spark of Creator",
-    879: "Baradin Hold Arena",
-    880: "Obelisk of the Stars",
-    881: "The Twisting Nether",
-    884: "The Inventor's Library",
-    885: "Amphitheater of Anguish",
 }
 
 
@@ -413,7 +454,7 @@ def gates_for(bg, cx, cy, cz):
     from the team starts, which is far better than guessing from the terrain."""
     import math
     m = measured(bg)
-    if m and m.get("gates"):
+    if m and "gates" in m:
         return m["gates"]
 
     (ax, ay, az, _ao), (hx, hy, hz, _ho) = start_positions(bg, cx, cy, cz)
@@ -704,8 +745,9 @@ def gen_world():
     rows = []
     for i, (bg, mid, d, name, cx, cy, cz, conf, ev) in enumerate(ARENAS):
         (_ax, _ay, _az, ao), (_hx, _hy, _hz, ho) = start_positions(bg, cx, cy, cz)
-        rows.append("  (%d, 0, 5, 10, 80, %d, %.6f, %d, %.6f, 0, 1, '', '%s')"
-                    % (bg, WSL_BASE + i * 2, ao, WSL_BASE + i * 2 + 1, ho, esc(name)))
+        leash = (measured(bg) or {}).get("start_max_dist", 0)
+        rows.append("  (%d, 0, 5, 10, 80, %d, %.6f, %d, %.6f, %g, 1, '', '%s')"
+                    % (bg, WSL_BASE + i * 2, ao, WSL_BASE + i * 2 + 1, ho, leash, esc(name)))
     L.append(",\n".join(rows) + ";")
     L.append("")
 
@@ -754,8 +796,8 @@ def gen_world():
         (4,  1, "Nagrand Arena"),
         (5,  1, "Blade's Edge Arena"),
         (8,  1, "Ruins of Lordaeron"),
-        (10, 0, "Dalaran Sewers - DISABLED in `disables`"),
-        (11, 0, "The Ring of Valor - DISABLED in `disables`"),
+        (10, 1, "Dalaran Sewers"),
+        (11, 1, "The Ring of Valor"),
         (103, 1, "Nefarian's Arena"),
         (870, 1, "Tol'Viron Arena"),
         (871, 1, "The Tiger's Peak"),
@@ -785,15 +827,16 @@ def gen_world():
     L.append("--     WHERE PoolBgTypeId = 6 AND MemberBgTypeId = <bgTypeId>;")
     L.append("--   then `.reload battleground_template` and restart, since templates are")
     L.append("--   built at startup.")
-    ids = ",".join(str(b) for b in sorted(DISABLED))
-    L.append("DELETE FROM disables WHERE sourceType = 3 AND entry IN (%s);" % ids)
-    L.append("INSERT INTO disables (sourceType, entry, flags, params_0, params_1, comment) VALUES")
-    rows = []
-    by_bg = {a[0]: a[1] for a in ARENAS}
-    for bg in sorted(DISABLED):
-        rows.append("  (3, %d, 0, '', '', '%s (map %d) - held back')"
-                    % (bg, esc(DISABLED[bg]), by_bg.get(bg, 0)))
-    L.append(",\n".join(rows) + ";")
+    ported = ",".join(str(a[0]) for a in ARENAS)
+    L.append("DELETE FROM disables WHERE sourceType = 3 AND entry IN (%s);" % ported)
+    if DISABLED:
+        L.append("INSERT INTO disables (sourceType, entry, flags, params_0, params_1, comment) VALUES")
+        rows = []
+        by_bg = {a[0]: a[1] for a in ARENAS}
+        for bg in sorted(DISABLED):
+            rows.append("  (3, %d, 0, '', '', '%s (map %d) - held back')"
+                        % (bg, esc(DISABLED[bg]), by_bg.get(bg, 0)))
+        L.append(",\n".join(rows) + ";")
     L.append("")
 
     # ---------------- arena objects

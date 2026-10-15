@@ -1,0 +1,5 @@
+# A local copy of a realm's map data (see README.md) and the images the tools write.
+srv/
+mm/
+tiles/
+__pycache__/
