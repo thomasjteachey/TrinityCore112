@@ -109,6 +109,13 @@ struct PveConfig
     // worth drinking mid-fight. 0 disables.
     uint32 thistleTeaItemId = 7676;
     uint32 thistleTeaEnergyBelow = 25;
+    // Stat scrolls (Agility, Strength, Stamina, Intellect, Spirit, Protection).
+    // A bot reads one onto itself or a nearby bot every IntervalSeconds, but only
+    // a scroll the auction house already has up; one that is not on the house is
+    // listed instead, so people can always buy one. ShareYards 0 = itself only.
+    bool buffScrollsEnabled = true;
+    uint32 buffScrollIntervalSeconds = 60;
+    float buffScrollShareYards = 20.0f;
     float grindWanderRadius = 40.0f;
     uint32 grindMaxLevelAbove = 3;
     uint32 grindMaxLevelBelow = 5;

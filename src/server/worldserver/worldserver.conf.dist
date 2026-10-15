@@ -4079,6 +4079,27 @@ Playerbot.Pve.MaxUnitsPerConsumable      = 20
 
 Playerbot.Pve.RationPricePct = 50
 
+#
+#    Playerbot.Pve.BuffScrolls.Enable
+#    Playerbot.Pve.BuffScrolls.IntervalSeconds
+#    Playerbot.Pve.BuffScrolls.ShareYards
+#        Description: What bots do with stat scrolls (Agility, Strength, Stamina,
+#                     Intellect, Spirit, Protection). One of each stays on the
+#                     auction house: a scroll the house has none of is listed, and
+#                     while it has one the bot reads its own copies, out of combat,
+#                     onto itself or a bot within ShareYards, one every
+#                     IntervalSeconds. A scroll the bot is too low to read goes to
+#                     the merchant once the house has its copy. Enable 0 stops the
+#                     reading only; the listing and merchant rules stay.
+#        Default:     1  - (Enable)
+#                     60 - (IntervalSeconds, 5-3600)
+#                     20 - (ShareYards, 0 = itself only, max 30)
+#
+
+Playerbot.Pve.BuffScrolls.Enable          = 1
+Playerbot.Pve.BuffScrolls.IntervalSeconds = 60
+Playerbot.Pve.BuffScrolls.ShareYards      = 20
+
 Centurion.Bounty.Enable = 0
 Centurion.Bounty.AuraSpell = 90701
 Centurion.Bounty.StacksPerKill = 1

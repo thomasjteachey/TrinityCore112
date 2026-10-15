@@ -394,6 +394,8 @@ namespace
         // Re-ask throttle for the rogue's Thistle Tea; the item's own cooldown
         // is the real limit.
         PveTimePoint nextThistleTeaAt{};
+        // Next chance to read a stat scroll onto itself or a nearby bot.
+        PveTimePoint nextBuffScrollAt{};
         // Hardcore reclaim: where we last fell - the drop chest stands there.
         uint16 deathSpotMapId = 0;
         float deathSpotX = 0.0f;
@@ -1353,6 +1355,17 @@ namespace
         if (!bot || !proto)
             return false;
 
+        // Keys, before every test below that would spare one. A bot never opens
+        // a lock with an item - its chest code only knows skill locks - so a key
+        // is dead weight however it is priced. But each key carries the opening
+        // spell it unlocks with, and some have a sell price (Kolkar Booty Key,
+        // 3 copper), so the use-spell and sell-price tests both let it through,
+        // the auction house refuses keys outright, and no merchant arm takes
+        // one. Measured 2026-10-15: 221 keys in bot bags, Wooden Key and Kolkar
+        // Booty Key the most of them. A key an accepted quest asks for stays.
+        if (proto->Class == ITEM_CLASS_KEY)
+            return !bot->HasQuestForItem(proto->ItemId);
+
         // Only the bottom of the range. Anything green or better is somebody's
         // business even if this bot cannot use it.
         if (proto->Quality > ITEM_QUALITY_NORMAL)
@@ -1422,6 +1435,262 @@ namespace
         bot->CastItemUseSpell(tea, targets, 0, 0);
     }
 
+    // ---------------------------------------------------------------------------
+    // Stat scrolls.
+    //
+    // Scrolls of Agility, Strength, Stamina, Intellect, Spirit and Protection
+    // drop off half the humanoids in the world, and nothing a bot did ever got
+    // rid of one: the auction house refused every consumable, no merchant arm
+    // sold them, and the per-item slot cap never bit because they are two dozen
+    // different items (six stats, four ranks). Measured 2026-10-15: ~13,000
+    // scrolls in ~3,900 bag slots across the fleet - a sixth of everything in
+    // bot bags - and not one on the house for a person to buy.
+    //
+    // Stonedsoul's rule, which is what this implements: keep one of each on the
+    // auction house and read the rest, onto the bot itself or a bot beside it.
+    // So a scroll is LISTED while the house has none of it (IsAuctionableSurplus),
+    // READ while it has one (MaybeUseBuffScroll), and one the bot is too low to
+    // read goes to the merchant once the house has its copy (SellVendorJunk).
+    //
+    // Recognised by what it does, not by name: a Consumable/Scroll whose on-use
+    // spell is a timed positive aura raising one stat, or armour. That aura's
+    // type and misc value make its "family", so each stat is one family whatever
+    // the rank.
+    // ---------------------------------------------------------------------------
+
+    struct BuffScrollInfo
+    {
+        uint32 spellId = 0;
+        uint32 family = 0;
+    };
+
+    // Built once from the item store, which is never reloaded at runtime. A
+    // function-local static, so the first caller builds it and every thread
+    // after sees it whole.
+    std::unordered_map<uint32, BuffScrollInfo> const& BuffScrollTable()
+    {
+        static std::unordered_map<uint32, BuffScrollInfo> const table = []
+        {
+            std::unordered_map<uint32, BuffScrollInfo> built;
+            for (auto const& [entry, proto] : sObjectMgr->GetItemTemplateStore())
+            {
+                if (proto.Class != ITEM_CLASS_CONSUMABLE || proto.SubClass != ITEM_SUBCLASS_SCROLL)
+                    continue;
+
+                for (uint8 index = 0; index < MAX_ITEM_PROTO_SPELLS; ++index)
+                {
+                    if (proto.Spells[index].SpellId <= 0 || proto.Spells[index].SpellTrigger != ITEM_SPELLTRIGGER_ON_USE)
+                        continue;
+
+                    SpellInfo const* info = sSpellMgr->GetSpellInfo(uint32(proto.Spells[index].SpellId));
+                    if (!info || !info->IsPositive() || info->GetMaxDuration() <= 0)
+                        break;
+
+                    for (SpellEffectInfo const& effect : info->GetEffects())
+                    {
+                        bool const stat = effect.IsAura(SPELL_AURA_MOD_STAT);
+                        bool const armour = effect.IsAura(SPELL_AURA_MOD_RESISTANCE) &&
+                            effect.MiscValue == SPELL_SCHOOL_MASK_NORMAL;
+                        if (!stat && !armour)
+                            continue;
+
+                        BuffScrollInfo scroll;
+                        scroll.spellId = info->Id;
+                        scroll.family = (uint32(effect.ApplyAuraName) << 16) | (uint32(effect.MiscValue) & 0xFFFF);
+                        built[entry] = scroll;
+                        break;
+                    }
+                    break;
+                }
+            }
+            return built;
+        }();
+        return table;
+    }
+
+    BuffScrollInfo const* GetBuffScroll(uint32 itemEntry)
+    {
+        std::unordered_map<uint32, BuffScrollInfo> const& table = BuffScrollTable();
+        auto const itr = table.find(itemEntry);
+        return itr != table.end() ? &itr->second : nullptr;
+    }
+
+    // Which scrolls each auction house has up. Refreshed on the world thread
+    // (RefreshScrollsOnAuction, from OnWorldUpdate) because the scroll reader
+    // runs in the bot's map-update tick, where walking the house itself would
+    // race the world thread posting, buying and expiring lots.
+    std::mutex g_ScrollsOnAuctionLock;
+    std::unordered_map<AuctionHouseObject const*, std::unordered_set<uint32>> g_ScrollsOnAuction;
+
+    void RefreshScrollsOnAuction()
+    {
+        std::unordered_map<AuctionHouseObject const*, std::unordered_set<uint32>> fresh;
+        for (uint8 houseId : { uint8(AUCTIONHOUSE_ALLIANCE), uint8(AUCTIONHOUSE_HORDE), uint8(AUCTIONHOUSE_NEUTRAL) })
+        {
+            // One shared house when cross-faction trading is on: all three ids
+            // answer the same object, and it is walked once.
+            AuctionHouseObject* house = sAuctionMgr->GetAuctionsMapByHouseId(houseId);
+            if (!house || fresh.count(house))
+                continue;
+
+            std::unordered_set<uint32>& listed = fresh[house];
+            for (auto itr = house->GetAuctionsBegin(); itr != house->GetAuctionsEnd(); ++itr)
+                if (itr->second && GetBuffScroll(itr->second->itemEntry))
+                    listed.insert(itr->second->itemEntry);
+        }
+
+        std::lock_guard<std::mutex> guard(g_ScrollsOnAuctionLock);
+        g_ScrollsOnAuction.swap(fresh);
+    }
+
+    bool IsScrollOnAuction(Player const* bot, uint32 itemEntry)
+    {
+        AuctionHouseObject const* house = sAuctionMgr->GetAuctionsMap(bot->GetFaction());
+        std::lock_guard<std::mutex> guard(g_ScrollsOnAuctionLock);
+        auto const itr = g_ScrollsOnAuction.find(house);
+        return itr != g_ScrollsOnAuction.end() && itr->second.count(itemEntry);
+    }
+
+    // A listing pass has just posted one. The next stack in the same pass, and
+    // the next bot before the refresh comes round, must already see it - or
+    // every bot holding the scroll lists one in the same breath.
+    void NoteScrollListed(AuctionHouseObject const* house, uint32 itemEntry)
+    {
+        std::lock_guard<std::mutex> guard(g_ScrollsOnAuctionLock);
+        g_ScrollsOnAuction[house].insert(itemEntry);
+    }
+
+    // Any rank of this family already on the target.
+    bool HasScrollFamily(Unit const* target, uint32 family)
+    {
+        for (auto const& [entry, scroll] : BuffScrollTable())
+            if (scroll.family == family && target->HasAura(scroll.spellId))
+                return true;
+        return false;
+    }
+
+    // A stronger buff of the same kind (Fortitude over Stamina, Arcane Intellect
+    // over Intellect) refuses the scroll with "a more powerful spell is already
+    // active". Asked up front through the same spell-group rules, so the turn is
+    // spent on a scroll that will land instead.
+    bool ScrollWouldBounce(Unit const* target, SpellInfo const* scroll)
+    {
+        for (auto const& [spellId, application] : target->GetAppliedAuras())
+            if (application && application->GetBase() &&
+                sSpellMgr->CheckSpellGroupStackRules(scroll, application->GetBase()->GetSpellInfo()) !=
+                    SPELL_GROUP_STACK_RULE_DEFAULT)
+                return true;
+        return false;
+    }
+
+    // One scroll per IntervalSeconds, read onto the bot or a bot beside it,
+    // picked at random so the fleet's scrolls spread rather than every bot
+    // starting with Agility on itself.
+    void MaybeUseBuffScroll(Player* bot, PveBotState& state, PveTimePoint now)
+    {
+        playerbot::PveConfig const& cfg = g_PveConfig;
+        if (!cfg.buffScrollsEnabled || now < state.nextBuffScrollAt)
+            return;
+        state.nextBuffScrollAt = now + std::chrono::seconds(cfg.buffScrollIntervalSeconds);
+
+        // Only at rest in the open. Reading one mounted, shapeshifted,
+        // stealthed, mid-cast or sat eating would knock the bot out of
+        // whichever of those it was in, and a fight has better uses for the
+        // global cooldown.
+        if (!bot->IsAlive() || bot->IsInCombat() || bot->IsMounted() || bot->IsInFlight() ||
+            bot->GetShapeshiftForm() != FORM_NONE || bot->HasStealthAura() || bot->HasInvisibilityAura() ||
+            bot->IsSitState() || bot->HasUnitState(UNIT_STATE_CASTING) || bot->IsNonMeleeSpellCast(false) ||
+            now < state.restingUntil)
+            return;
+
+        // The highest rank of each family the bot is high enough to read - and
+        // only of scrolls the house already has a copy of. The copy it does not
+        // have is the listing pass's to put up first. With selling switched off
+        // there is no house to keep stocked, so everything is fair game.
+        std::unordered_map<uint32, std::pair<Item*, BuffScrollInfo const*>> bestByFamily;
+        ForEachBagItem(bot, [&](Item* item, uint8 /*bag*/, uint8 /*slot*/)
+        {
+            ItemTemplate const* proto = item->GetTemplate();
+            BuffScrollInfo const* scroll = proto ? GetBuffScroll(proto->ItemId) : nullptr;
+            if (!scroll || bot->CanUseItem(proto) != EQUIP_ERR_OK)
+                return;
+
+            // Somebody's death-chest loot, kept whole so they can buy it back.
+            if (IsHeldFromAuction(item->GetGUID()))
+                return;
+
+            if (cfg.auctionSellEnabled && !IsScrollOnAuction(bot, proto->ItemId))
+                return;
+
+            std::pair<Item*, BuffScrollInfo const*>& best = bestByFamily[scroll->family];
+            if (!best.first || proto->RequiredLevel > best.first->GetTemplate()->RequiredLevel)
+                best = { item, scroll };
+        });
+
+        if (bestByFamily.empty())
+            return;
+
+        std::vector<std::pair<Item*, BuffScrollInfo const*>> scrolls;
+        scrolls.reserve(bestByFamily.size());
+        for (auto const& [family, pick] : bestByFamily)
+            scrolls.push_back(pick);
+
+        // Itself, and bots close by that are not busy. Same map, so this is the
+        // map thread's own player list, as in PickBotAssistTarget.
+        std::vector<Unit*> targets{ bot };
+        if (cfg.buffScrollShareYards > 0.0f)
+            if (Map* map = bot->FindMap())
+                for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+                {
+                    Player* ally = itr->GetSource();
+                    if (!ally || ally == bot || !ally->IsAlive() || ally->IsInCombat() || ally->IsInFlight())
+                        continue;
+
+                    if (!playerbot::IsManagedRandomBot(ally) || playerbot::PveManager::IsPvpOnlyBot(ally))
+                        continue;
+
+                    if (!bot->IsWithinDistInMap(ally, cfg.buffScrollShareYards) || !bot->IsValidAssistTarget(ally) ||
+                        !bot->IsWithinLOSInMap(ally))
+                        continue;
+
+                    targets.push_back(ally);
+                }
+
+        Trinity::Containers::RandomShuffle(scrolls);
+        Trinity::Containers::RandomShuffle(targets);
+
+        for (auto const& [item, scroll] : scrolls)
+        {
+            SpellInfo const* info = sSpellMgr->GetSpellInfo(scroll->spellId);
+            if (!info)
+                continue;
+
+            for (Unit* target : targets)
+            {
+                if (HasScrollFamily(target, scroll->family) || ScrollWouldBounce(target, info))
+                    continue;
+
+                // The read may use up the last of the stack and delete the item;
+                // take its name first.
+                std::string const scrollName = item->GetTemplate()->Name1;
+                std::string const targetName = target == bot ? std::string("itself") : target->GetName();
+
+                SpellCastTargets castTargets;
+                castTargets.SetUnitTarget(target);
+                bot->CastItemUseSpell(item, castTargets, 0, 0);
+
+                // CastItemUseSpell reports nothing, but an instant cast resolves
+                // inside it (Spell::prepare), so the aura is the answer.
+                if (target->HasAura(scroll->spellId))
+                    TC_LOG_INFO("playerbots.pve", "Bot {} read {} onto {}.", bot->GetName(), scrollName, targetName);
+                else if (cfg.combatDiagnostics)
+                    TC_LOG_INFO("playerbots.pve", "Bot {} could not read {} onto {} (spell {} did not land).",
+                        bot->GetName(), scrollName, targetName, scroll->spellId);
+                return;
+            }
+        }
+    }
+
     void DiscardWorthlessClutter(Player* bot)
     {
         if (!bot)
@@ -1433,6 +1702,13 @@ namespace
             if (IsWorthlessClutter(bot, item->GetTemplate()))
                 doomed.emplace_back(bag, slot);
         });
+
+        // The keyring too. ForEachBagItem walks the backpack and bags only, and
+        // keys whose template carries the keys bag family go to the keyring.
+        for (uint8 slot = KEYRING_SLOT_START; slot < KEYRING_SLOT_END; ++slot)
+            if (Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                if (IsWorthlessClutter(bot, item->GetTemplate()))
+                    doomed.emplace_back(INVENTORY_SLOT_BAG_0, slot);
 
         for (auto const& [bag, slot] : doomed)
             if (Item* item = bot->GetItemByPos(bag, slot))
@@ -5130,6 +5406,13 @@ namespace
             // because a merchant pays for them and the bot will never drink one.
             if (!sellable && IsUselessManaConsumable(bot, proto) &&
                 !IsQuestRequiredItem(bot, proto->ItemId))
+                sellable = true;
+
+            // A stat scroll the bot is too low to read - but only once the house
+            // has a copy up for people to buy. Until then it waits for the
+            // listing pass, which puts one there. See BuffScrollTable.
+            if (!sellable && GetBuffScroll(proto->ItemId) && proto->RequiredLevel > bot->GetLevel() &&
+                (!playerbot::PveManager::GetConfig().auctionSellEnabled || IsScrollOnAuction(bot, proto->ItemId)))
                 sellable = true;
 
             // Every bottle but the one stack it keeps. A bot needs no cellar -
@@ -11659,6 +11942,12 @@ namespace
         switch (proto->Class)
         {
         case ITEM_CLASS_CONSUMABLE:
+            // ...with one exception: a stat scroll the house has none of. One
+            // goes up so a person can always buy one; the rest are read (see
+            // BuffScrollTable).
+            if (GetBuffScroll(proto->ItemId) && !IsScrollOnAuction(bot, proto->ItemId))
+                break;
+            return false;
         case ITEM_CLASS_QUEST:
         case ITEM_CLASS_KEY:
         case ITEM_CLASS_PROJECTILE:
@@ -12276,6 +12565,11 @@ namespace
             TC_LOG_INFO("playerbots.pve", "Bot {} listed {} x{} for {} copper (deposit {}).",
                 bot->GetName(), proto->Name1, count, buyout, deposit);
             ++listed;
+
+            // One copy of a scroll is the whole point: the re-check at the top of
+            // this loop must refuse the bot's next stack of the same one.
+            if (GetBuffScroll(proto->ItemId))
+                NoteScrollListed(auctionHouse, proto->ItemId);
 
             // THE FIRST POINT AT WHICH THIS IS TRUE.
             //
@@ -17262,6 +17556,10 @@ namespace
         // drinking, so this is asked in combat rather than beside the campfire.
         MaybeDrinkThistleTea(bot, state, now);
 
+        // Stat scrolls: read onto itself or a bot beside it, out of combat, on
+        // its own cadence. See BuffScrollTable.
+        MaybeUseBuffScroll(bot, state, now);
+
         // Naked recovery: shop the auction house with the whole purse, and when
         // that has had its chance, issue green field kit. Ordered this way so a
         // bot that can afford real gear buys it rather than taking handouts.
@@ -18993,6 +19291,11 @@ namespace playerbot
             sConfigMgr->GetIntDefault("Playerbot.Pve.ThistleTeaItemId", 7676)));
         g_PveConfig.thistleTeaEnergyBelow = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Playerbot.Pve.ThistleTeaEnergyBelow", 25), 0, 100));
+        g_PveConfig.buffScrollsEnabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.BuffScrolls.Enable", true);
+        g_PveConfig.buffScrollIntervalSeconds = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Playerbot.Pve.BuffScrolls.IntervalSeconds", 60), 5, 3600));
+        g_PveConfig.buffScrollShareYards = std::clamp(
+            sConfigMgr->GetFloatDefault("Playerbot.Pve.BuffScrolls.ShareYards", 20.0f), 0.0f, 30.0f);
         g_PveConfig.grindWanderRadius = sConfigMgr->GetFloatDefault("Playerbot.PveGrind.WanderRadius", 40.0f);
         g_PveConfig.grindMaxLevelAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelAbove", 3), 0, 10));
         g_PveConfig.grindMaxLevelBelow = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelBelow", 5), 0, 80));
@@ -20463,6 +20766,19 @@ namespace playerbot
         // mailbox on this same tick. The auction passes after it share one budget
         // with the landings - two catch-up sellers and two shoppers a pass - so a
         // landing takes the place of one of each rather than adding to them.
+        // Which scrolls the houses hold, for the scroll reader in the map-thread
+        // tick and for the listing and merchant passes. Before the landings and
+        // the auction passes, so the first of them after a restart already sees
+        // the house rather than an empty snapshot.
+        {
+            static uint32 nextScrollRefreshMs = 0;
+            if (!nextScrollRefreshMs || nowMs >= nextScrollRefreshMs)
+            {
+                nextScrollRefreshMs = nowMs + 15000;
+                RefreshScrollsOnAuction();
+            }
+        }
+
         uint32 const landingsRun = ProcessPendingDrifterArrivals();
         uint32 const auctionScansLeft = landingsRun < 2 ? 2 - landingsRun : 0;
         ProcessPendingMailCollections();
