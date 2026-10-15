@@ -21,6 +21,7 @@
 #include "Define.h"
 
 class Player;
+struct ItemTemplate;
 struct Loot;
 
 // The battleground spoils chests (Centurion.Battleground.Spoils.*). The chest
@@ -41,6 +42,12 @@ namespace BattlegroundSpoils
 
     // Called from Player::SendLoot on first opening, before the loot is stored.
     TC_GAME_API void TailorChestLoot(Loot& loot, uint32 chestEntry, Player const* opener);
+
+    // The same fit for an item with fixed stats: something the character
+    // wears (their best armour type) or wields, with no primary stat the class
+    // cannot use. A random-stat item is judged on its armour or weapon type
+    // alone, since its stats are not rolled yet. The goodie bags use it.
+    TC_GAME_API bool SuitsCharacter(ItemTemplate const* proto, Player const* player);
 }
 
 #endif

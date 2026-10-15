@@ -23,6 +23,7 @@
 #include "Guild.h"
 #include "GuildMgr.h"
 #include "InstanceScript.h"
+#include "Miscellaneous/GoodieBags.h"
 #include "Pet.h"
 #include "Player.h"
 #include "ObjectMgr.h"
@@ -270,7 +271,12 @@ void KillRewarder::Reward()
 
     // 5. Credit instance encounter.
     if (Creature* victim = _victim->ToCreature())
+    {
         if (victim->IsDungeonBoss())
             if (InstanceScript* instance = _victim->GetInstanceScript())
                 instance->UpdateEncounterStateForKilledCreature(_victim->GetEntry(), _victim);
+
+        // 6. A last boss with no encounter data finishes its instance too.
+        GoodieBags::OnCreatureKilled(victim);
+    }
 }

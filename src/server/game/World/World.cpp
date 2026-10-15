@@ -26,6 +26,7 @@
 #include "Miscellaneous/CharacterScreen.h"
 #include "Miscellaneous/CooldownStash.h"
 #include "Miscellaneous/DepletedMarks.h"
+#include "Miscellaneous/GoodieBags.h"
 #include "Miscellaneous/Mokgora.h"
 #include "Miscellaneous/Surnames.h"
 #include "Miscellaneous/TournamentMode.h"
@@ -1640,6 +1641,10 @@ void World::LoadConfigSettings(bool reload)
     uint32 const markPriceRevision = Trinity::Custom::GetMarkPriceRevision();
     Trinity::Custom::LoadMarkConfig();
 
+    // A bag of boss loot, gold and marks for a level 60 who finishes a
+    // dungeon or raid (Miscellaneous/GoodieBags.h).
+    GoodieBags::LoadConfig();
+
     // World hub prices are stamped into the vendor and quest caches as those are
     // filled, so a re-tune only reaches players once they are rebuilt. Doing it
     // here is what makes `.reload config` alone enough to move the economy; a
@@ -2221,6 +2226,9 @@ void World::SetInitialWorldSettings()
 
     TC_LOG_INFO("server.loading", "Loading battleground spoils pools...");
     BattlegroundSpoils::LoadPools();
+
+    TC_LOG_INFO("server.loading", "Loading goodie bag pools...");
+    GoodieBags::LoadPools();
 
     TC_LOG_INFO("server.loading", "Loading Skill Discovery Table...");
     LoadSkillDiscoveryTable();

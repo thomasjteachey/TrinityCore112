@@ -282,6 +282,22 @@ void BattlegroundSpoils::LoadPools()
     TC_LOG_INFO("server.loading", ">> Loaded {} battleground spoils pools ({} items).", uint32(Pools.size()), count);
 }
 
+bool BattlegroundSpoils::SuitsCharacter(ItemTemplate const* proto, Player const* player)
+{
+    if (!proto || !player || !IsForThisCharacter(proto, player, BestArmorSubclass(player)))
+        return false;
+
+    if (HasRandomStats(proto))
+        return true;
+
+    uint32 const usefulMask = UsefulPrimaryMask(player->GetClass());
+    StatFit fit;
+    for (uint32 i = 0; i < proto->StatsCount && i < MAX_ITEM_PROTO_STATS; ++i)
+        fit.Add(proto->ItemStat[i].ItemStatType, proto->ItemStat[i].ItemStatValue, usefulMask);
+
+    return !fit.unfit;
+}
+
 void BattlegroundSpoils::TailorChestLoot(Loot& loot, uint32 chestEntry, Player const* opener)
 {
     auto const itr = Pools.find(chestEntry);

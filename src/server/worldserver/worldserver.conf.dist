@@ -3004,6 +3004,48 @@ Centurion.Battleground.Spoils.LoserChancePercent = 50
 Centurion.Battleground.Spoils.MinPresencePercent = 50
 
 #
+#    Centurion.GoodieBag.Enable
+#        Description: A goodie bag for every character in a dungeon or raid when its
+#                     last boss dies: a random piece of that instance's boss loot that
+#                     the character can use, plus whatever gold and marks the bag's
+#                     item_template / item_loot_template rows hold. Not paid to bots,
+#                     bounty hunters or tournament characters. Mailed when the bags
+#                     are full.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+#
+#    Centurion.GoodieBag.MinLevel
+#        Description: Lowest character level that gets a bag.
+#        Default:     60
+#
+#    Centurion.GoodieBag.DungeonItem
+#    Centurion.GoodieBag.RaidItem
+#        Description: Item entries of the dungeon bag and the raid bag.
+#        Default:     3746, 22152
+#
+#    Centurion.GoodieBag.SkipGreyBosses
+#        Description: No bag when the last boss is grey to the character (the level
+#                     at which it would pay no experience), so outlevelled dungeons
+#                     cannot be farmed for marks.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+#
+#    Centurion.GoodieBag.FinalBosses
+#        Description: Creature entries whose death also finishes their instance, for
+#                     content with no last encounter in instance_encounters (the
+#                     40-player Onyxia 301000 and Kel'Thuzad 351019). Separate with
+#                     spaces or commas. Do not list a boss that already has one, or
+#                     its instance pays twice.
+#        Default:     ""
+
+Centurion.GoodieBag.Enable = 0
+Centurion.GoodieBag.MinLevel = 60
+Centurion.GoodieBag.DungeonItem = 3746
+Centurion.GoodieBag.RaidItem = 22152
+Centurion.GoodieBag.SkipGreyBosses = 1
+Centurion.GoodieBag.FinalBosses = ""
+
+#
 #    Centurion.Battleground.BlockArtifactGear
 #        Description: Refuse entry to a battleground or arena to anyone wearing an
 #                     artifact quality item, teleporting them to Gurubashi instead.

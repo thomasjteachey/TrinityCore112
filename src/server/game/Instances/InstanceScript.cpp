@@ -27,6 +27,7 @@
 #include "LFGMgr.h"
 #include "Log.h"
 #include "Map.h"
+#include "Miscellaneous/GoodieBags.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "Pet.h"
@@ -733,18 +734,20 @@ void InstanceScript::SendEncounterUnit(uint32 type, Unit* unit /*= nullptr*/, ui
     instance->SendToPlayers(&data);
 }
 
-void InstanceScript::UpdateEncounterState(EncounterCreditType type, uint32 creditEntry, Unit* /*source*/)
+void InstanceScript::UpdateEncounterState(EncounterCreditType type, uint32 creditEntry, Unit* source)
 {
     DungeonEncounterList const* encounters = sObjectMgr->GetDungeonEncounterList(instance->GetId(), instance->GetDifficulty());
     if (!encounters)
         return;
 
     uint32 dungeonId = 0;
+    bool creditedBefore = false;
 
     for (auto const& encounter : *encounters)
     {
         if (encounter->creditType == type && encounter->creditEntry == creditEntry)
         {
+            creditedBefore = (completedEncounters & (1 << encounter->dbcEntry->Bit)) != 0;
             completedEncounters |= 1 << encounter->dbcEntry->Bit;
             if (encounter->lastEncounterDungeon)
             {
@@ -757,6 +760,13 @@ void InstanceScript::UpdateEncounterState(EncounterCreditType type, uint32 credi
 
     if (dungeonId)
     {
+        // The dungeon is finished whether or not the group came through the
+        // dungeon finder - the LFG reward below is only for those that did.
+        // Once per instance: the mask is saved with it, so a last boss that
+        // comes back (or is credited twice) pays no second round of bags.
+        if (!creditedBefore)
+            GoodieBags::OnInstanceFinished(instance, source);
+
         Map::PlayerList const& players = instance->GetPlayers();
         for (auto const& ref : players)
         {
