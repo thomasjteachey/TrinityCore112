@@ -45,6 +45,11 @@ connections, and BFSes from a start. Use the **detail mesh** height range of a
 polygon, not its vertices: a curved floor (the Dalaran pipes) has polygon vertices
 3 yards above the surface you stand on.
 
+`fence.py` replays `BattlegroundFence::BuildFence` (the bots-only containment) for a pair
+of team starts against the server collision: whether the fence will exist and how many
+yards a start may still move outward before the fence refuses the arena. Run it before
+moving any arena start in WorldSafeLocs.
+
 `outline.py` turns "the floor reachable from both starts within a height band" into a
 simplified polygon for `battleground_bounds.Boundary`. Where the navmesh leaks under
 the walls (Amphitheater of Anguish has pit-level tunnels under its ring) take the
@@ -61,6 +66,11 @@ which is what the 884 and 885 outlines are.
   `vmap4assembler Buildings vmaps -m 617`, and the fixed Linux
   `mmaps_generator 617 --offMeshInput` with the two pipe drops
   (`617 30,29 (x y z) (x y z) 2.0`; the tile pair is tileX,tileY = Y-index,X-index).
+* **Dalaran Sewers' gates** - the gate models (`Dalaran_SewerDoor_01.m2`, scale 1.62) are
+  1.5 yd slabs that plug each pipe at X 1349-1351.5 (east) and 1232-1234.4 (west).
+  Blizzard's spawn points stand on the ARENA side of them, so the starts were moved
+  1.5 yd behind each gate. That is as far as they can go: `fence.py` puts the
+  bot fence's limit at 67.8 yd from the centre, and the new starts are at 66.6.
 * **The Twisting Nether** - `slice.py` over the whole map showed the start alcoves as
   islands and the Legion platform 40 yards east with its own navmesh.
 * **Buff spots** - points on the perpendicular bisector of the two starts (so equally
