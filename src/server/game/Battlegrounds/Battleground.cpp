@@ -26,6 +26,7 @@
 #include "Creature.h"
 #include "CreatureTextMgr.h"
 #include "DatabaseEnv.h"
+#include "DBCStores.h"
 #include "Formulas.h"
 #include "GameTime.h"
 #include "GridNotifiersImpl.h"
@@ -182,6 +183,7 @@ Battleground::Battleground()
     m_CustomGamePendingCloneCount = 0;
     m_CustomRules       = BattlegroundCustomRules();
     m_IsBotFillMatch    = false;
+    m_IsBotFillRefused  = false;
     m_IsTournamentPool  = false;
 
     m_MaxPlayersPerTeam = 0;
@@ -205,8 +207,14 @@ Battleground::Battleground()
     m_ArenaTeamMMR[TEAM_ALLIANCE]   = 0;
     m_ArenaTeamMMR[TEAM_HORDE]      = 0;
 
-    m_BgRaids[TEAM_ALLIANCE]         = nullptr;
-    m_BgRaids[TEAM_HORDE]            = nullptr;
+    for (uint8 slot = 0; slot < MAX_BATTLEGROUND_SQUADS; ++slot)
+    {
+        m_BgRaids[slot] = nullptr;
+        m_SquadArenaTeamIds[slot] = 0;
+        m_SquadArenaMMR[slot] = 0;
+        m_SquadScoreboardRival[slot] = BATTLEGROUND_NO_SQUAD;
+    }
+    m_WinnerSquad = BATTLEGROUND_NO_SQUAD;
 
     m_PlayersCount[TEAM_ALLIANCE]    = 0;
     m_PlayersCount[TEAM_HORDE]       = 0;
@@ -327,7 +335,7 @@ void Battleground::Update(uint32 diff)
             {
                 if (GetStartTime() >= 20 * MINUTE*IN_MILLISECONDS)
                 {
-                    EndBattleground(0);
+                    EndAtTimeLimit();
                     return;
                 }
             }
@@ -387,7 +395,7 @@ inline void Battleground::_CheckSafePositions(uint32 diff)
                     continue;
 
                 Position pos = player->GetPosition();
-                Position const* startPos = GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(player->GetBGTeam()));
+                Position const* startPos = GetStartPositionFor(player->GetGUID(), player->GetBGTeam());
                 if (pos.GetExactDistSq(startPos) > maxDist)
                 {
                     TC_LOG_DEBUG("bg.battleground", "BATTLEGROUND: Sending {} back to start location (map: {}) (possible exploit)", player->GetName(), GetMapId());
@@ -1046,6 +1054,226 @@ Position const* Battleground::GetTeamStartPosition(TeamId teamId) const
     return &StartPosition[teamId];
 }
 
+uint32 Battleground::GetSquadSize() const
+{
+    if (!IsSquadMatch())
+        return GetMaxPlayersPerTeam();
+
+    if (GetArenaType())
+        return GetArenaType();
+
+    uint32 const squadsPerSide = (GetSquadCount() + 1) / 2;
+    return std::max<uint32>(1, GetMaxPlayersPerTeam() / squadsPerSide);
+}
+
+std::string const& Battleground::GetSquadName(uint8 squad) const
+{
+    static std::string const unknown = "unknown";
+    return squad < m_SquadStarts.size() ? m_SquadStarts[squad].Name : unknown;
+}
+
+uint8 Battleground::GetPlayerSquad(ObjectGuid guid) const
+{
+    auto const itr = m_SquadSeats.find(guid);
+    return itr != m_SquadSeats.end() ? itr->second : BATTLEGROUND_NO_SQUAD;
+}
+
+void Battleground::SetSquadSeat(ObjectGuid guid, uint8 squad)
+{
+    if (squad < GetSquadCount())
+        m_SquadSeats[guid] = squad;
+}
+
+uint8 Battleground::ClaimSquadSeat(ObjectGuid guid, uint32 team)
+{
+    if (!IsSquadMatch())
+        return BATTLEGROUND_NO_SQUAD;
+
+    uint8 const held = GetPlayerSquad(guid);
+    if (held != BATTLEGROUND_NO_SQUAD)
+        return held;
+
+    // The emptiest squad on this side. A full one still takes the seat when
+    // the whole side is full: a crowded corner beats nowhere to stand, and the
+    // queue and the bot fill never ask for more seats than a side has.
+    uint8 best = BATTLEGROUND_NO_SQUAD;
+    uint32 bestTaken = 0;
+    for (uint8 squad = 0; squad < GetSquadCount(); ++squad)
+    {
+        if (GetSquadSide(squad) != team)
+            continue;
+
+        uint32 const taken = CountSquadSeats(squad);
+        if (best == BATTLEGROUND_NO_SQUAD || taken < bestTaken)
+        {
+            best = squad;
+            bestTaken = taken;
+        }
+    }
+
+    if (best == BATTLEGROUND_NO_SQUAD)
+        best = 0;
+
+    m_SquadSeats[guid] = best;
+    return best;
+}
+
+void Battleground::ReleaseSquadSeat(ObjectGuid guid)
+{
+    m_SquadSeats.erase(guid);
+}
+
+uint32 Battleground::CountSquadSeats(uint8 squad) const
+{
+    return uint32(std::count_if(m_SquadSeats.begin(), m_SquadSeats.end(),
+        [squad](std::pair<ObjectGuid const, uint8> const& seat) { return seat.second == squad; }));
+}
+
+bool Battleground::AreTeammates(ObjectGuid left, ObjectGuid right) const
+{
+    uint32 const leftTeam = GetPlayerTeam(left);
+    uint32 const rightTeam = GetPlayerTeam(right);
+    if (!leftTeam || !rightTeam)
+        return false;
+
+    if (IsSquadMatch())
+    {
+        uint8 const leftSquad = GetPlayerSquad(left);
+        return leftSquad != BATTLEGROUND_NO_SQUAD && leftSquad == GetPlayerSquad(right);
+    }
+
+    return leftTeam == rightTeam;
+}
+
+Position const* Battleground::GetStartPositionFor(ObjectGuid guid, uint32 team) const
+{
+    if (IsSquadMatch())
+    {
+        uint8 const squad = GetPlayerSquad(guid);
+        if (squad < GetSquadCount())
+            return &m_SquadStarts[squad].Start;
+    }
+
+    return GetTeamStartPosition(GetTeamIndexByTeamId(team));
+}
+
+Position const* Battleground::TakeStartPosition(ObjectGuid guid, uint32 team)
+{
+    ClaimSquadSeat(guid, team);
+    return GetStartPositionFor(guid, team);
+}
+
+Position Battleground::GetSquadArenaCentre() const
+{
+    if (!IsSquadMatch())
+    {
+        Position const* alliance = GetTeamStartPosition(TEAM_ALLIANCE);
+        Position const* horde = GetTeamStartPosition(TEAM_HORDE);
+        return Position((alliance->GetPositionX() + horde->GetPositionX()) / 2.0f,
+            (alliance->GetPositionY() + horde->GetPositionY()) / 2.0f,
+            (alliance->GetPositionZ() + horde->GetPositionZ()) / 2.0f);
+    }
+
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+    for (BattlegroundSquadStart const& squad : m_SquadStarts)
+    {
+        x += squad.Start.GetPositionX();
+        y += squad.Start.GetPositionY();
+        z += squad.Start.GetPositionZ();
+    }
+
+    float const count = float(m_SquadStarts.size());
+    return Position(x / count, y / count, z / count);
+}
+
+namespace
+{
+    // The two squads a viewer and someone else play in, when they share a
+    // squad match and sit on the same side without being the same squad - the
+    // only pairing whose real faction and arena byte read "friendly" when they
+    // are not. Squads on opposite sides already carry the enemy's values.
+    bool GetSameSideRivalSquads(Player const* other, Player const* viewer, Battleground const*& battleground)
+    {
+        if (!other || !viewer || other == viewer)
+            return false;
+
+        battleground = viewer->GetBattleground();
+        if (!battleground || !battleground->IsSquadMatch() || battleground != other->GetBattleground())
+            return false;
+
+        uint8 const viewerSquad = battleground->GetPlayerSquad(viewer->GetGUID());
+        uint8 const otherSquad = battleground->GetPlayerSquad(other->GetGUID());
+        return viewerSquad != BATTLEGROUND_NO_SQUAD && otherSquad != BATTLEGROUND_NO_SQUAD &&
+            viewerSquad != otherSquad &&
+            Battleground::GetSquadSide(viewerSquad) == Battleground::GetSquadSide(otherSquad);
+    }
+
+    // The faction a battleground hands the side `team` plays on: the same race
+    // factions Battleground::AddPlayer uses.
+    uint32 GetBattlegroundSideFaction(uint32 team)
+    {
+        ChrRacesEntry const* race = sChrRacesStore.LookupEntry(team == HORDE ? RACE_BLOODELF : RACE_HUMAN);
+        return race ? race->FactionID : 0;
+    }
+}
+
+bool Battleground::GetSquadViewFaction(Unit const* unit, Player const* viewer, uint32& faction)
+{
+    Player const* owner = unit ? unit->GetAffectingPlayer() : nullptr;
+    Battleground const* battleground = nullptr;
+    if (!GetSameSideRivalSquads(owner, viewer, battleground))
+        return false;
+
+    uint32 const viewerTeam = battleground->GetPlayerTeam(viewer->GetGUID());
+    faction = GetBattlegroundSideFaction(viewerTeam == HORDE ? ALLIANCE : HORDE);
+    return faction != 0;
+}
+
+bool Battleground::GetSquadViewArenaFaction(Player const* player, Player const* viewer, uint8& arenaFaction)
+{
+    Battleground const* battleground = nullptr;
+    if (!GetSameSideRivalSquads(player, viewer, battleground))
+        return false;
+
+    // Player::SetBGTeam: Alliance 1, Horde 0. The viewer's client compares
+    // everyone against its own, so the rival squad gets the other one.
+    arenaFaction = battleground->GetPlayerTeam(viewer->GetGUID()) == ALLIANCE ? 0 : 1;
+    return true;
+}
+
+void Battleground::SetSquadArenaTeam(uint8 squad, uint32 arenaTeamId, uint32 matchmakerRating)
+{
+    if (squad >= MAX_BATTLEGROUND_SQUADS)
+        return;
+
+    m_SquadArenaTeamIds[squad] = arenaTeamId;
+    m_SquadArenaMMR[squad] = matchmakerRating;
+}
+
+uint32 Battleground::GetSquadOpponentsMatchmakerRating(uint8 squad) const
+{
+    uint64 sum = 0;
+    uint32 count = 0;
+    for (uint8 other = 0; other < MAX_BATTLEGROUND_SQUADS; ++other)
+    {
+        if (other == squad || !m_SquadArenaTeamIds[other])
+            continue;
+
+        sum += m_SquadArenaMMR[other];
+        ++count;
+    }
+
+    return count ? uint32(sum / count) : GetSquadMatchmakerRating(squad);
+}
+
+bool Battleground::IsWinningParticipant(ObjectGuid guid, uint32 team, uint32 winner) const
+{
+    if (IsSquadMatch())
+        return m_WinnerSquad != BATTLEGROUND_NO_SQUAD && GetPlayerSquad(guid) == m_WinnerSquad;
+
+    return team == winner;
+}
+
 void Battleground::SendPacketToAll(WorldPacket const* packet)
 {
     for (BattlegroundPlayerMap::const_iterator itr = m_Players.begin(); itr != m_Players.end(); ++itr)
@@ -1349,6 +1577,9 @@ void Battleground::EndBattleground(uint32 winner)
         if (!player)
             continue;
 
+        // In a squad match only one squad of the winning side won.
+        bool const won = IsWinningParticipant(itr->first, team, winner);
+
         // should remove spirit of redemption
         if (player->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION))
             player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
@@ -1382,7 +1613,7 @@ void Battleground::EndBattleground(uint32 winner)
 
                 stmt->setUInt32(0,  battlegroundId);
                 stmt->setUInt32(1,  player->GetGUID().GetCounter());
-                stmt->setBool  (2,  team == winner);
+                stmt->setBool  (2,  won);
                 stmt->setUInt32(3,  score->second->GetKillingBlows());
                 stmt->setUInt32(4,  score->second->GetDeaths());
                 stmt->setUInt32(5,  score->second->GetHonorableKills());
@@ -1434,7 +1665,7 @@ void Battleground::EndBattleground(uint32 winner)
         // only grant rewards if battle has lasted 15 seconds
         if (GetStartDelayTime() <= 0 && GetStartTime() >= 15 * IN_MILLISECONDS)
         {
-            if (team == winner)
+            if (won)
             {
                 // Private custom games retain the normal gold payout, but
                 // never grant progression rewards that can be farmed.
@@ -1516,7 +1747,14 @@ void Battleground::EndBattleground(uint32 winner)
 
         BlockMovement(player);
 
-        player->SendDirectMessage(&pvpLogData);
+        if (IsSquadMatch())
+        {
+            WorldPacket squadLogData;
+            BuildPvPLogDataPacket(squadLogData, player);
+            player->SendDirectMessage(&squadLogData);
+        }
+        else
+            player->SendDirectMessage(&pvpLogData);
 
         WorldPacket data;
         sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, this, player->GetBattlegroundQueueIndex(bgQueueTypeId), STATUS_IN_PROGRESS, TIME_TO_AUTOREMOVE, GetStartTime(), GetArenaType(), player->GetBGTeam());
@@ -1700,10 +1938,11 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
         }
 
         // remove from raid group if player is member
-        if (Group* group = GetBgRaid(team))
+        uint8 const raidSlot = GetBgRaidSlot(guid, team);
+        if (Group* group = GetBgRaidBySlot(raidSlot))
         {
             if (!group->RemoveMember(guid))                // group was disbanded
-                SetBgRaid(team, nullptr);
+                SetBgRaidBySlot(raidSlot, nullptr);
         }
         DecreaseInvitedCount(team);
         //we should update battleground queue, but only if bg isn't ending
@@ -1747,6 +1986,11 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
         }
     }
 
+    // After everything above that reads the squad: the raid it played in, and
+    // RemovePlayer's last-squad-standing check, which must still count this
+    // player's squad as one that took part.
+    ReleaseSquadSeat(guid);
+
     if (player)
     {
         // Do next only if found in battleground
@@ -1789,6 +2033,15 @@ void Battleground::Reset()
     m_HasEverHadNonVirtualHumanParticipant = false;
     m_NoNonVirtualHumanElapsed = 0;
     m_PreparationSeatTakers.clear();
+    m_SquadSeats.clear();
+    m_WinnerSquad = BATTLEGROUND_NO_SQUAD;
+    for (uint8 squad = 0; squad < MAX_BATTLEGROUND_SQUADS; ++squad)
+    {
+        m_SquadArenaTeamIds[squad] = 0;
+        m_SquadArenaMMR[squad] = 0;
+        m_SquadScoreboardRival[squad] = BATTLEGROUND_NO_SQUAD;
+        _squadArenaScores[squad].Reset();
+    }
 
     m_Players.clear();
 
@@ -1961,6 +2214,28 @@ void Battleground::AddPlayer(Player* player)
     // Add to list/maps
     m_Players[player->GetGUID()] = bp;
 
+    if (IsSquadMatch())
+    {
+        // The queue seated people when it invited them; anyone who came in
+        // another way - a clone placed by its own code, a GM - is seated now.
+        ClaimSquadSeat(player->GetGUID(), team);
+
+        // Faction and arena byte are sent per viewer in a squad match (see
+        // BattlegroundSquadStart), and nothing in them changed just because a
+        // squad was given out. Resend both ways, so the newcomer and everyone
+        // already here see each other as the right squad whichever of them the
+        // other's client met first.
+        for (auto const& [otherGuid, otherPlayer] : m_Players)
+        {
+            (void)otherPlayer;
+            if (Player* other = ObjectAccessor::FindPlayer(otherGuid))
+            {
+                other->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
+                other->ForceValuesUpdateAtIndex(PLAYER_BYTES_3);
+            }
+        }
+    }
+
     if (!isInBattleground)
         UpdatePlayersCountByTeam(team, false);                  // +1 player
 
@@ -2075,12 +2350,13 @@ void Battleground::SendSpectatorBattlefieldStatusTo(Player* player)
 void Battleground::AddOrSetPlayerToCorrectBgGroup(Player* player, uint32 team)
 {
     ObjectGuid playerGuid = player->GetGUID();
-    Group* group = GetBgRaid(team);
+    uint8 const raidSlot = GetBgRaidSlot(playerGuid, team);
+    Group* group = GetBgRaidBySlot(raidSlot);
     bool const joiningPlayerIsNonVirtual = player->GetSession() && !player->GetSession()->IsVirtualSession();
     if (!group)                                      // first player joined
     {
         group = new Group;
-        SetBgRaid(team, group);
+        SetBgRaidBySlot(raidSlot, group);
         group->Create(player);
         sGroupMgr->AddGroup(group);
     }
@@ -2419,9 +2695,17 @@ Player* Battleground::FindTransientPlayerByDisplayName(std::string_view name, ui
     return otherSide;
 }
 
-void Battleground::BuildPvPLogDataPacket(WorldPacket& data)
+void Battleground::BuildPvPLogDataPacket(WorldPacket& data, Player const* viewer)
 {
     uint8 type = (isArena() ? 1 : 0);
+
+    // A squad match is shown to each player as two teams, their squad and
+    // everyone else, the same way the rest of their client sees it: the
+    // packet only has room for two. Without a viewer the sides are sent.
+    bool const squadView = IsSquadMatch() && viewer && GetPlayerSquad(viewer->GetGUID()) != BATTLEGROUND_NO_SQUAD;
+    uint8 const viewerSquad = squadView ? GetPlayerSquad(viewer->GetGUID()) : BATTLEGROUND_NO_SQUAD;
+    PvPTeamId const viewerSide = squadView && GetPlayerTeam(viewer->GetGUID()) == HORDE ? PVP_TEAM_HORDE : PVP_TEAM_ALLIANCE;
+    PvPTeamId const otherSide = viewerSide == PVP_TEAM_ALLIANCE ? PVP_TEAM_HORDE : PVP_TEAM_ALLIANCE;
 
     // Battleground subclasses may create a score entry after the base AddPlayer
     // rejected a spectator. Only active participants belong in the client
@@ -2438,17 +2722,31 @@ void Battleground::BuildPvPLogDataPacket(WorldPacket& data)
 
     if (type)                                           // arena
     {
-        for (uint8 i = 0; i < PVP_TEAMS_COUNT; ++i)
-            _arenaTeamScores[i].BuildRatingInfoBlock(data);
+        // A rated squad match: the viewer's squad in their side's block, and
+        // opposite it the squad its scoreboard is set against.
+        ArenaTeamScore* blocks[PVP_TEAMS_COUNT] = { &_arenaTeamScores[0], &_arenaTeamScores[1] };
+        if (squadView && isRated())
+        {
+            blocks[viewerSide] = &_squadArenaScores[viewerSquad];
+            uint8 const rival = m_SquadScoreboardRival[viewerSquad];
+            if (rival < MAX_BATTLEGROUND_SQUADS)
+                blocks[otherSide] = &_squadArenaScores[rival];
+        }
 
         for (uint8 i = 0; i < PVP_TEAMS_COUNT; ++i)
-            _arenaTeamScores[i].BuildTeamInfoBlock(data);
+            blocks[i]->BuildRatingInfoBlock(data);
+
+        for (uint8 i = 0; i < PVP_TEAMS_COUNT; ++i)
+            blocks[i]->BuildTeamInfoBlock(data);
     }
 
     if (GetStatus() == STATUS_WAIT_LEAVE)
     {
         data << uint8(1);                      // bg ended
-        data << uint8(GetWinner());            // who win
+        if (squadView && m_WinnerSquad != BATTLEGROUND_NO_SQUAD)
+            data << uint8(m_WinnerSquad == viewerSquad ? viewerSide : otherSide);
+        else
+            data << uint8(GetWinner());        // who win
     }
     else
         data << uint8(0);                      // bg not ended
@@ -2456,6 +2754,18 @@ void Battleground::BuildPvPLogDataPacket(WorldPacket& data)
     data << uint32(participantScores.size());
     for (BattlegroundScore* score : participantScores)
     {
+        if (squadView)
+        {
+            if (ArenaScore* arenaScore = dynamic_cast<ArenaScore*>(score))
+            {
+                uint8 const realTeam = arenaScore->TeamId;
+                arenaScore->TeamId = GetPlayerSquad(score->PlayerGuid) == viewerSquad ? viewerSide : otherSide;
+                score->AppendToPacket(data);
+                arenaScore->TeamId = realTeam;
+                continue;
+            }
+        }
+
         // A battleground row carries no side on the wire, so the client takes
         // it from the race - Alliance for nearly everyone on this realm. Our
         // scoreboard (WorldStateFrame.lua) reads the side from the bonus-honor
@@ -3112,12 +3422,46 @@ int32 Battleground::GetObjectType(ObjectGuid guid)
 
 void Battleground::SetBgRaid(uint32 TeamID, Group* bg_raid)
 {
-    Group*& old_raid = TeamID == ALLIANCE ? m_BgRaids[TEAM_ALLIANCE] : m_BgRaids[TEAM_HORDE];
+    SetBgRaidBySlot(uint8(GetTeamIndexByTeamId(TeamID)), bg_raid);
+}
+
+uint8 Battleground::GetBgRaidSlot(ObjectGuid guid, uint32 team) const
+{
+    if (IsSquadMatch())
+    {
+        uint8 const squad = GetPlayerSquad(guid);
+        if (squad < GetSquadCount())
+            return squad;
+    }
+
+    return uint8(GetTeamIndexByTeamId(team));
+}
+
+void Battleground::SetBgRaidBySlot(uint8 slot, Group* bg_raid)
+{
+    if (slot >= MAX_BATTLEGROUND_SQUADS)
+        return;
+
+    Group*& old_raid = m_BgRaids[slot];
     if (old_raid)
         old_raid->SetBattlegroundGroup(nullptr);
     if (bg_raid)
         bg_raid->SetBattlegroundGroup(this);
     old_raid = bg_raid;
+}
+
+bool Battleground::UnlinkBgRaid(Group const* bg_raid)
+{
+    for (Group*& raid : m_BgRaids)
+    {
+        if (raid && raid == bg_raid)
+        {
+            raid = nullptr;
+            return true;
+        }
+    }
+
+    return false;
 }
 
 WorldSafeLocsEntry const* Battleground::GetClosestGraveyard(Player* player)

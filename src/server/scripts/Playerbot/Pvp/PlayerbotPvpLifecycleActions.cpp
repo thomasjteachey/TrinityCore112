@@ -2625,12 +2625,11 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (!battleground || !map)
             return true;
 
-        uint32 const team = battleground->GetPlayerTeam(player->GetGUID());
         for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
         {
             Player const* other = itr->GetSource();
             if (other && other != player && other->IsAlive() && other->GetHealthPct() <= maxHealthPct &&
-                battleground->GetPlayerTeam(other->GetGUID()) == team)
+                battleground->AreTeammates(player->GetGUID(), other->GetGUID()))
                 return true;
         }
 
@@ -4926,7 +4925,10 @@ namespace playerbot
             if (candidate->GetBattlegroundId() != player->GetBattlegroundId())
                 continue;
             TeamId const candidateBgTeam = ResolveBotTeamId(candidate);
-            if (candidateBgTeam == playerBgTeam)
+            // A squad match seats two squads a side, and the other one on this
+            // side is as much an enemy as the other side's.
+            if (battleground->IsSquadMatch() ? battleground->AreTeammates(player->GetGUID(), candidate->GetGUID()) :
+                candidateBgTeam == playerBgTeam)
                 continue;
             if (!player->IsValidAttackTarget(candidate))
                 continue;
@@ -5578,6 +5580,15 @@ namespace playerbot
             // Midfield brawl behavior for WSG: collapse both teams toward center map.
             Position const midfieldAnchor(1239.40f, 1543.60f, 306.00f, 0.0f);
             destination = midfieldAnchor;
+            ApplyDeterministicObjectiveOffset(battleground, player, destination);
+            return true;
+        }
+
+        // A squad match has no far side: four corners close on the middle,
+        // which is where the fights are.
+        if (battleground->IsSquadMatch())
+        {
+            destination = battleground->GetSquadArenaCentre();
             ApplyDeterministicObjectiveOffset(battleground, player, destination);
             return true;
         }

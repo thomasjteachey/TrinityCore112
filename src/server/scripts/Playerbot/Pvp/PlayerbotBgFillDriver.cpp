@@ -177,7 +177,9 @@ MatchTally TallyMatch(Battleground const* bg)
 
 bool IsFillCandidate(Battleground const* bg, uint32 instanceId)
 {
-    if (!instanceId || !bg || bg->IsCustomGame() || bg->isRated())
+    // A squad match the queue made of real squads only (BattlegroundQueue::
+    // UpdateSquadPool) is closed to bots: its empty corners stay empty.
+    if (!instanceId || !bg || bg->IsCustomGame() || bg->isRated() || bg->IsBotFillRefused())
         return false;
 
     if (bg->isArena())

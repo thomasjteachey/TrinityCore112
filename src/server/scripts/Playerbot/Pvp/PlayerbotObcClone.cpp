@@ -1769,9 +1769,18 @@ Player* PlayerbotObcCloneManager::CreateCustomGameClone(Player* source, Battlegr
         clone->SetFullPower(Powers(power));
 
     BattlegroundQueueTypeId const queueTypeId = BattlegroundMgr::BGQueueTypeId(bg->GetTypeID(), bg->GetArenaType());
-    Position const* start = bg->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(team));
-    if (queueTypeId == BATTLEGROUND_QUEUE_NONE || !start || clone->AddBattlegroundQueueId(queueTypeId) >= PLAYER_MAX_BATTLEGROUND_QUEUES)
+    if (queueTypeId == BATTLEGROUND_QUEUE_NONE || clone->AddBattlegroundQueueId(queueTypeId) >= PLAYER_MAX_BATTLEGROUND_QUEUES)
     {
+        DestroyUnseatedClone(session, clone);
+        return nullptr;
+    }
+
+    // The team's start, or in a squad match the corner of the squad on that
+    // side with the most seats free - claimed now, so the next clone counts it.
+    Position const* start = bg->TakeStartPosition(clone->GetGUID(), team);
+    if (!start)
+    {
+        bg->ReleaseSquadSeat(clone->GetGUID());
         DestroyUnseatedClone(session, clone);
         return nullptr;
     }
@@ -1787,6 +1796,7 @@ Player* PlayerbotObcCloneManager::CreateCustomGameClone(Player* source, Battlegr
     if (!bg->GetBgMap()->AddPlayerToMap(clone))
     {
         bg->DecreaseInvitedCount(team);
+        bg->ReleaseSquadSeat(clone->GetGUID());
         DestroyUnseatedClone(session, clone);
         return nullptr;
     }

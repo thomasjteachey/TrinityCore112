@@ -3024,7 +3024,14 @@ ReputationRank WorldObject::GetReactionTo(WorldObject const* target) const
                     bool const selfHasBattlegroundSide = selfBattlegroundTeam == ALLIANCE || selfBattlegroundTeam == HORDE;
                     bool const targetHasBattlegroundSide = targetBattlegroundTeam == ALLIANCE || targetBattlegroundTeam == HORDE;
                     if (selfHasBattlegroundSide && targetHasBattlegroundSide)
+                    {
+                        // A squad match seats two squads on each side; the
+                        // squad is the team (Battleground::AreTeammates).
+                        if (battleground->IsSquadMatch())
+                            return battleground->AreTeammates(selfPlayerOwner->GetGUID(), targetPlayerOwner->GetGUID()) ? REP_FRIENDLY : REP_HOSTILE;
+
                         return selfBattlegroundTeam == targetBattlegroundTeam ? REP_FRIENDLY : REP_HOSTILE;
+                    }
                 }
 
                 // same group - checks dependant only on our faction - skip FFA_PVP for example

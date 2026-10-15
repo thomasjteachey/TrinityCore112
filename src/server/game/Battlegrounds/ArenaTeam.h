@@ -22,6 +22,7 @@
 #include "ObjectGuid.h"
 #include <list>
 #include <map>
+#include <vector>
 
 class WorldSession;
 class WorldPacket;
@@ -178,6 +179,21 @@ class TC_GAME_API ArenaTeam
         int32 LostAgainst(uint32 Own_MMRating, uint32 Opponent_MMRating, int32& rating_change);
         void MemberLost(Player* player, uint32 againstMatchmakerRating, int32 MatchmakerRatingChange = -12);
         void OfflineMemberLost(ObjectGuid guid, uint32 againstMatchmakerRating, int32 MatchmakerRatingChange = -12);
+
+        // A rated match of more than two teams (Baradin Hold: Four Corners). The
+        // result is read against every other team in finishing order - Score 1
+        // for finishing above it, 0 below, 0.5 level - and each change is the
+        // average of those pairwise ones, so beating three teams moves a rating
+        // about as far as one ordinary win and the field's changes cancel out.
+        // One call per team and one per member, so games and wins count once.
+        struct PlacedOpponent
+        {
+            uint32 MatchmakerRating;
+            float Score;
+        };
+        int32 PlacedAgainst(uint32 ownMatchmakerRating, std::vector<PlacedOpponent> const& opponents, bool won, int32& ratingChange);
+        // `player` may be null for a member who is offline.
+        void MemberPlaced(Player* player, ObjectGuid guid, std::vector<PlacedOpponent> const& opponents, int32 matchmakerRatingChange, bool won);
 
         void UpdateArenaPointsHelper(std::map<uint32, uint32> & PlayerPoints);
 

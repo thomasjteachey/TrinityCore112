@@ -3054,6 +3054,10 @@ bool IsFriendlySupportTarget(Player const* player, Unit const* target, SpellInfo
     if (player->GetBattlegroundId() != targetPlayer->GetBattlegroundId())
         return false;
 
+    // A squad match seats two squads a side; the squad is the team.
+    if (Battleground const* battleground = player->GetBattleground(); battleground && battleground->IsSquadMatch())
+        return battleground->AreTeammates(player->GetGUID(), targetPlayer->GetGUID());
+
     uint32 const playerTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
     uint32 const targetTeam = targetPlayer->GetBGTeam() ? targetPlayer->GetBGTeam() : targetPlayer->GetTeam();
     return playerTeam == targetTeam;

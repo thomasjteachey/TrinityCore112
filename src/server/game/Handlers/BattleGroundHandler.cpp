@@ -59,6 +59,27 @@ namespace
         return player && player->IsInCustomGameLobby();
     }
 
+    // Which arena queue the arena battlemaster's window is about to show,
+    // told to the client's ArenaFrame.lua ahead of the window itself:
+    //
+    //   CCGAME ARENAQUEUE:0   the ordinary one
+    //   CCGAME ARENAQUEUE:<n> a squad match of up to n squads, rated and
+    //                         skirmish, each row a squad size (Baradin Hold:
+    //                         Four Corners)
+    //
+    // Sent before every arena window so a client never keeps the last mode.
+    void SendArenaQueueMode(Player* player, uint32 squads)
+    {
+        if (!player || !player->GetSession() || player->GetSession()->IsVirtualSession())
+            return;
+
+        std::string const message = "CCGAME\tARENAQUEUE:" + std::to_string(squads);
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player->GetGUID(), player->GetGUID(),
+            message, 0, player->GetName(), player->GetName());
+        player->SendDirectMessage(&data);
+    }
+
     bool RejectNormalBattlegroundQueueFromCustomLobby(WorldSession* session)
     {
         if (!session || !IsPlayerInsideCustomGameLobby(session->GetPlayer()))
@@ -146,6 +167,17 @@ void WorldSession::HandleBattlemasterHelloOpcode(WorldPacket& recvData)
 
 void WorldSession::SendBattleGroundList(ObjectGuid guid, BattlegroundTypeId bgTypeId)
 {
+    // A squad match's battlemaster opens the arena window - the client shows
+    // that for the All Arenas list - and the window is told which queue it is
+    // for. Its joins name the battlemaster, which is how
+    // HandleBattlemasterJoinArena tells the two apart.
+    if (bgTypeId == BATTLEGROUND_AA || sBattlegroundMgr->IsSquadBattleground(bgTypeId))
+    {
+        Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
+        SendArenaQueueMode(_player, bgTemplate && bgTemplate->IsSquadMatch() ? bgTemplate->GetSquadCount() : 0);
+        bgTypeId = BATTLEGROUND_AA;
+    }
+
     WorldPacket data;
     sBattlegroundMgr->BuildBattlegroundListPacket(&data, guid, _player, bgTypeId, 0);
     SendPacket(&data);
@@ -835,15 +867,24 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
             return;
     }
 
+    // The arena battlemaster queues for All Arenas. One standing for a squad
+    // match (Baradin Hold: Four Corners) queues for that, rated or skirmish,
+    // each row of the window being a squad size - an arena team of that size
+    // is one squad.
+    BattlegroundTypeId queueBgTypeId = BATTLEGROUND_AA;
+    if (BattlegroundTypeId const masterBgTypeId = sBattlegroundMgr->GetBattleMasterBG(unit->GetEntry());
+        sBattlegroundMgr->IsSquadBattleground(masterBgTypeId))
+        queueBgTypeId = masterBgTypeId;
+
     //check existance
-    Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(BATTLEGROUND_AA);
+    Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(queueBgTypeId);
     if (!bg)
     {
-        TC_LOG_ERROR("network", "Battleground: template bg (all arenas) not found");
+        TC_LOG_ERROR("network", "Battleground: template bg {} not found", uint32(queueBgTypeId));
         return;
     }
 
-    if (DisableMgr::IsDisabledFor(DISABLE_TYPE_BATTLEGROUND, BATTLEGROUND_AA, nullptr))
+    if (DisableMgr::IsDisabledFor(DISABLE_TYPE_BATTLEGROUND, queueBgTypeId, nullptr))
     {
         ChatHandler(this).PSendSysMessage(LANG_ARENA_DISABLED);
         return;

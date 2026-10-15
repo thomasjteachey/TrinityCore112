@@ -2541,7 +2541,8 @@ bool TryRecoverPlayerbotOutsideFence(Player* player)
     // created. Put it back on its own start position, which is always inside.
     breachStartMs = 0;
 
-    Position const* startPosition = bg->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(player->GetBGTeam()));
+    // Its squad's corner, in a squad match.
+    Position const* startPosition = bg->GetStartPositionFor(player->GetGUID(), player->GetBGTeam());
     if (!startPosition)
         return true;
 

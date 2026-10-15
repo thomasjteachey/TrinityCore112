@@ -674,7 +674,13 @@ void BattlegroundQueue::RemovePlayer(ObjectGuid guid, bool decreaseInvitedCount)
     // if invited to bg, and should decrease invited count, then do it
     if (decreaseInvitedCount && group->IsInvitedToBGInstanceGUID)
         if (Battleground* bg = sBattlegroundMgr->GetBattleground(group->IsInvitedToBGInstanceGUID, group->BgTypeId))
+        {
             bg->DecreaseInvitedCount(group->Team);
+            // An invite turned down or left to expire: the squad seat held
+            // for it goes back to the match.
+            if (!bg->IsPlayerInBattleground(guid))
+                bg->ReleaseSquadSeat(guid);
+        }
 
     // remove player queue info
     m_QueuedPlayers.erase(itr);
@@ -1320,6 +1326,290 @@ void BattlegroundQueue::MoveGroupToSeatedSide(GroupQueueInfo* ginfo, Battlegroun
     }
 }
 
+// The queue of a squad match (Baradin Hold: Four Corners). Groups are made into
+// squads of the arena size here - a party is never split, people queuing alone
+// make up squads with each other - and a match starts in one of three ways:
+//
+//   1. Every squad can be filled with people: at once, nobody else needed.
+//   2. Where this realm fills skirmishes with bots, once someone who has "Arena
+//      bot matches" on has waited the skirmish wait: everyone waiting who has it
+//      on plays now, spread over the squads, and the bot fill finishes every
+//      squad - so a lone player gets a full four-squad match.
+//   3. Otherwise, two or more squads full of people that have waited
+//      kSquadGatherMs, so a third and fourth have a chance to form: just those.
+//      The match is closed to bots, and the corners nobody came for stay empty.
+//
+// Squads are numbered as the corners are in `battleground_squad_start`; the
+// even ones are seated on the Alliance side and the odd ones on the Horde side
+// (Battleground::GetSquadSide), so a two-squad match uses opposite corners.
+namespace
+{
+    constexpr uint32 kSquadGatherMs = 60 * IN_MILLISECONDS;
+}
+
+void BattlegroundQueue::UpdateSquadPool(BattlegroundTypeId bgTypeId, BattlegroundBracketId bracket_id, uint8 arenaType)
+{
+    Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
+    if (!bgTemplate || !bgTemplate->IsSquadMatch() || !arenaType)
+        return;
+
+    PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketById(bgTemplate->GetMapId(), bracket_id);
+    if (!bracketEntry)
+    {
+        TC_LOG_ERROR("bg.battleground", "BattlegroundQueue::UpdateSquadPool: no bracket {} for map {}", uint32(bracket_id), bgTemplate->GetMapId());
+        return;
+    }
+
+    uint8 const squadCount = bgTemplate->GetSquadCount();
+    uint32 const squadSize = arenaType;
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+
+    UpdateRatedSquadPool(bgTypeId, bracketEntry, bracket_id, squadCount, arenaType);
+
+    // Everyone waiting for this squad size, longest-waiting first.
+    std::vector<GroupQueueInfo*> waiting;
+    for (uint32 queueIndex = BG_QUEUE_PREMADE_ALLIANCE; queueIndex < BG_QUEUE_GROUP_TYPES_COUNT; ++queueIndex)
+        for (GroupQueueInfo* ginfo : m_QueuedGroups[bracket_id][queueIndex])
+            if (!ginfo->IsInvitedToBGInstanceGUID && !ginfo->IsRated && InActivePool(ginfo) &&
+                ginfo->ArenaType == arenaType && !ginfo->Players.empty() && ginfo->Players.size() <= squadSize)
+                waiting.push_back(ginfo);
+
+    if (waiting.empty())
+        return;
+
+    std::stable_sort(waiting.begin(), waiting.end(),
+        [](GroupQueueInfo const* left, GroupQueueInfo const* right) { return left->JoinTime < right->JoinTime; });
+
+    // Into the fullest squad a group still fits when the point is to finish
+    // squads; into the emptiest when bots will finish them anyway, so the
+    // people waiting are spread over the corners rather than stacked in one.
+    auto const makeSquads = [&](std::vector<GroupQueueInfo*> const& groups, bool spread)
+    {
+        std::vector<QueuedSquad> squads(squadCount);
+        for (GroupQueueInfo* ginfo : groups)
+        {
+            uint32 const groupSize = uint32(ginfo->Players.size());
+            QueuedSquad* target = nullptr;
+            for (QueuedSquad& squad : squads)
+            {
+                if (squad.Size + groupSize > squadSize)
+                    continue;
+
+                if (!target || (spread ? squad.Size < target->Size : squad.Size > target->Size))
+                    target = &squad;
+            }
+
+            if (target)
+            {
+                target->Groups.push_back(ginfo);
+                target->Size += groupSize;
+            }
+        }
+
+        return squads;
+    };
+
+    auto const waitedLongest = [nowMs](QueuedSquad const& squad)
+    {
+        uint32 longest = 0;
+        for (GroupQueueInfo const* ginfo : squad.Groups)
+            longest = std::max(longest, getMSTimeDiff(ginfo->JoinTime, nowMs));
+        return longest;
+    };
+
+    // 1. Full squads all round.
+    {
+        std::vector<QueuedSquad> const squads = makeSquads(waiting, false);
+        if (std::all_of(squads.begin(), squads.end(), [squadSize](QueuedSquad const& squad) { return squad.Size == squadSize; }))
+        {
+            StartSquadMatch(bgTypeId, bracketEntry, bracket_id, arenaType, squads, false);
+            return;
+        }
+    }
+
+    // 2. Bots finish the squads.
+    if (sBattlegroundMgr->IsBotFillSkirmishArena(arenaType))
+    {
+        uint32 const queueWaitMs = sBattlegroundMgr->GetBotFillQueueWaitMs(arenaType);
+        std::vector<GroupQueueInfo*> botsWelcome;
+        bool someoneHasWaitedLongEnough = false;
+        for (GroupQueueInfo* ginfo : waiting)
+        {
+            if (!GroupHasRealPlayerInvitee(ginfo) || !GroupAllowsArenaBotFill(ginfo))
+                continue;
+
+            botsWelcome.push_back(ginfo);
+            if (getMSTimeDiff(ginfo->JoinTime, nowMs) >= queueWaitMs)
+                someoneHasWaitedLongEnough = true;
+        }
+
+        if (someoneHasWaitedLongEnough)
+        {
+            StartSquadMatch(bgTypeId, bracketEntry, bracket_id, arenaType, makeSquads(botsWelcome, true), true);
+            return;
+        }
+    }
+
+    // 3. The full squads there are, once they have given others time to form.
+    std::vector<QueuedSquad> fullSquads;
+    bool gathered = false;
+    for (QueuedSquad const& squad : makeSquads(waiting, false))
+    {
+        if (squad.Size != squadSize)
+            continue;
+
+        if (waitedLongest(squad) >= kSquadGatherMs)
+            gathered = true;
+        fullSquads.push_back(squad);
+    }
+
+    if (fullSquads.size() >= 2 && gathered)
+        StartSquadMatch(bgTypeId, bracketEntry, bracket_id, arenaType, fullSquads, false);
+}
+
+// Rated: each arena team is a whole squad, so this is matchmaking proper. The
+// longest-waiting team picks the field: teams within the arena rating window of
+// it (CONFIG_ARENA_MAX_RATING_DIFFERENCE, or anyone once they have waited out
+// the rating discard timer), closest first, never two of the same arena team.
+// A full field starts at once; two or three teams start once the first has
+// waited kSquadGatherMs. A rated match is never padded with bots.
+void BattlegroundQueue::UpdateRatedSquadPool(BattlegroundTypeId bgTypeId, PvPDifficultyEntry const* bracketEntry,
+    BattlegroundBracketId bracket_id, uint8 squadCount, uint8 arenaType)
+{
+    std::vector<GroupQueueInfo*> teams;
+    for (uint32 queueIndex = BG_QUEUE_PREMADE_ALLIANCE; queueIndex < BG_QUEUE_GROUP_TYPES_COUNT; ++queueIndex)
+        for (GroupQueueInfo* ginfo : m_QueuedGroups[bracket_id][queueIndex])
+            if (!ginfo->IsInvitedToBGInstanceGUID && ginfo->IsRated && InActivePool(ginfo) &&
+                ginfo->ArenaType == arenaType && ginfo->Players.size() == arenaType)
+                teams.push_back(ginfo);
+
+    if (teams.size() < 2)
+        return;
+
+    std::stable_sort(teams.begin(), teams.end(),
+        [](GroupQueueInfo const* left, GroupQueueInfo const* right) { return left->JoinTime < right->JoinTime; });
+
+    GroupQueueInfo* anchor = teams.front();
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32 const maxDifference = sBattlegroundMgr->GetMaxRatingDifference();
+    int32 const discardTime = int32(nowMs) - int32(sBattlegroundMgr->GetRatingDiscardTimer());
+    auto const difference = [anchor](GroupQueueInfo const* ginfo)
+    {
+        return uint32(std::abs(int32(ginfo->ArenaMatchmakerRating) - int32(anchor->ArenaMatchmakerRating)));
+    };
+
+    std::vector<GroupQueueInfo*> candidates;
+    for (auto itr = std::next(teams.begin()); itr != teams.end(); ++itr)
+        if (difference(*itr) <= maxDifference || int32((*itr)->JoinTime) < discardTime || int32(anchor->JoinTime) < discardTime)
+            candidates.push_back(*itr);
+
+    std::stable_sort(candidates.begin(), candidates.end(),
+        [&difference](GroupQueueInfo const* left, GroupQueueInfo const* right) { return difference(left) < difference(right); });
+
+    std::vector<QueuedSquad> field(1);
+    field.back().Groups.push_back(anchor);
+    field.back().Size = arenaType;
+    for (GroupQueueInfo* ginfo : candidates)
+    {
+        if (field.size() >= squadCount)
+            break;
+
+        bool const sameTeam = std::any_of(field.begin(), field.end(),
+            [ginfo](QueuedSquad const& squad) { return squad.Groups.front()->ArenaTeamId == ginfo->ArenaTeamId; });
+        if (sameTeam)
+            continue;
+
+        field.emplace_back();
+        field.back().Groups.push_back(ginfo);
+        field.back().Size = arenaType;
+    }
+
+    if (field.size() < 2)
+        return;
+
+    if (field.size() < squadCount && getMSTimeDiff(anchor->JoinTime, nowMs) < kSquadGatherMs)
+        return;
+
+    StartSquadMatch(bgTypeId, bracketEntry, bracket_id, arenaType, field, false, true);
+}
+
+void BattlegroundQueue::StartSquadMatch(BattlegroundTypeId bgTypeId, PvPDifficultyEntry const* bracketEntry,
+    BattlegroundBracketId bracket_id, uint8 arenaType, std::vector<QueuedSquad> const& squads, bool botFill, bool rated)
+{
+    Battleground* bg = sBattlegroundMgr->CreateNewBattleground(bgTypeId, bracketEntry, arenaType, rated, false, botFill);
+    if (!bg)
+    {
+        TC_LOG_ERROR("bg.battleground", "BattlegroundQueue::StartSquadMatch: cannot create battleground {}", uint32(bgTypeId));
+        return;
+    }
+
+    bg->SetTournamentPool(m_ActiveTournamentPool);
+    // Flagged before anyone is invited, as TryStartBotFilledMatch does, so the
+    // first person in is accounted as a person among bots.
+    bg->SetBotFillMatch(botFill);
+    bg->SetBotFillRefused(!botFill);
+
+    // A rated match knows every team before anyone is invited, so each can be
+    // told who it plays against: the others' average, which is what anyone who
+    // refuses the invite is counted as losing to (RemovePlayer).
+    if (rated)
+    {
+        for (uint8 squad = 0; squad < squads.size() && squad < bg->GetSquadCount(); ++squad)
+            if (!squads[squad].Groups.empty())
+                bg->SetSquadArenaTeam(squad, squads[squad].Groups.front()->ArenaTeamId, squads[squad].Groups.front()->ArenaMatchmakerRating);
+
+        for (uint8 squad = 0; squad < squads.size() && squad < bg->GetSquadCount(); ++squad)
+        {
+            if (squads[squad].Groups.empty())
+                continue;
+
+            uint32 teamRatingSum = 0;
+            uint32 others = 0;
+            for (uint8 other = 0; other < squads.size(); ++other)
+            {
+                if (other == squad || squads[other].Groups.empty())
+                    continue;
+                teamRatingSum += squads[other].Groups.front()->ArenaTeamRating;
+                ++others;
+            }
+
+            GroupQueueInfo* ginfo = squads[squad].Groups.front();
+            ginfo->OpponentsMatchmakerRating = bg->GetSquadOpponentsMatchmakerRating(squad);
+            ginfo->OpponentsTeamRating = others ? teamRatingSum / others : ginfo->ArenaTeamRating;
+        }
+    }
+
+    uint32 invited = 0;
+    for (uint8 squad = 0; squad < squads.size() && squad < bg->GetSquadCount(); ++squad)
+    {
+        uint32 const side = Battleground::GetSquadSide(squad);
+        for (GroupQueueInfo* ginfo : squads[squad].Groups)
+        {
+            if (ginfo->Team != side)
+            {
+                ginfo->Team = side;
+                MoveGroupToSeatedSide(ginfo, bracket_id);
+            }
+
+            for (auto const& [playerGuid, playerInfo] : ginfo->Players)
+            {
+                (void)playerInfo;
+                bg->SetSquadSeat(playerGuid, squad);
+            }
+
+            if (InviteGroupToBG(ginfo, bg, side))
+                invited += uint32(ginfo->Players.size());
+        }
+    }
+
+    TC_LOG_DEBUG("bg.battleground", "BattlegroundQueue::StartSquadMatch: started {} instance {} ({}, squads of {}, bracket {}) for {} player(s), bot fill {}.",
+        bg->GetName(), bg->GetInstanceID(), rated ? "rated" : "skirmish", uint32(arenaType), uint32(bracket_id), invited, botFill ? "on" : "off");
+
+    bg->StartBattleground();
+    // An arena admits nobody once it is made; latecomers wait for the next.
+    bg->RemoveFromBGFreeSlotQueue();
+}
+
 /*
 this method is called when group is inserted, or player / group is removed from BG Queue - there is only one player's status changed, so we don't use while (true) cycles to invite whole queue
 it must be called after fully adding the members of a group to ensure group joining
@@ -1410,6 +1700,12 @@ void BattlegroundQueue::UpdatePool(BattlegroundTypeId bgTypeId, BattlegroundBrac
             }
         }
 
+        return;
+    }
+
+    if (sBattlegroundMgr->IsSquadBattleground(bgTypeId))
+    {
+        UpdateSquadPool(bgTypeId, bracket_id, arenaType);
         return;
     }
 

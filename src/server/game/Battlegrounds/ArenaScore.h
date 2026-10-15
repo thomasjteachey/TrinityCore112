@@ -24,6 +24,7 @@
 struct TC_GAME_API ArenaScore : public BattlegroundScore
 {
     friend class Arena;
+    friend class Battleground; // a squad match shows each viewer their own squad's rows as their team
 
     protected:
         ArenaScore(ObjectGuid playerGuid, uint32 team) : BattlegroundScore(playerGuid), TeamId(team == ALLIANCE ? PVP_TEAM_ALLIANCE : PVP_TEAM_HORDE) { }

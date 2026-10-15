@@ -2984,6 +2984,10 @@ bool MeetsCasterAuraStateRequirements(Player const* player, uint32 spellId)
         if (player->GetBattlegroundId() != targetPlayer->GetBattlegroundId())
             return false;
 
+        // A squad match seats two squads a side; the squad is the team.
+        if (Battleground const* battleground = player->GetBattleground(); battleground && battleground->IsSquadMatch())
+            return battleground->AreTeammates(player->GetGUID(), targetPlayer->GetGUID());
+
         uint32 const playerTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
         uint32 const targetTeam = targetPlayer->GetBGTeam() ? targetPlayer->GetBGTeam() : targetPlayer->GetTeam();
         return playerTeam == targetTeam;
@@ -8612,7 +8616,8 @@ namespace playerbot
                 continue;
 
             uint32 const teammateBgTeam = teammate->GetBGTeam() ? teammate->GetBGTeam() : teammate->GetTeam();
-            if (teammateBgTeam != botBgTeam)
+            if (battleground->IsSquadMatch() ? !battleground->AreTeammates(player->GetGUID(), teammate->GetGUID()) :
+                teammateBgTeam != botBgTeam)
                 continue;
 
             if (!IsManagedRandomBot(teammate))

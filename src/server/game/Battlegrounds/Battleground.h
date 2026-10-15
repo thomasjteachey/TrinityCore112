@@ -192,6 +192,37 @@ struct BattlegroundBounds
     std::vector<BattlegroundBoundaryPoint> Boundary;
 };
 
+// A match fought by more than two teams: Baradin Hold: Four Corners puts up to
+// four squads in the arena, one per corner, every one of them hostile to the
+// others.
+//
+// The engine underneath stays two-sided. Every queue list, invite counter and
+// player count is per side, and so is everything the client is told, so squads
+// are a layer over the sides rather than a third and fourth side: even squads
+// sit on the Alliance side and odd ones on the Horde side, which keeps the side
+// counts honest. What makes them squads:
+//
+//   * friend or foe is decided by squad (WorldObject::GetReactionTo),
+//   * each squad is its own raid group,
+//   * each squad starts in its own corner,
+//   * the match is won by the last squad standing (Arena::CheckWinConditions),
+//   * every client is shown its own squad against everyone else: the faction
+//     and arena-team byte of each participant are sent per viewer (Unit's
+//     values update), so nameplates, the client's own spell-target checks and
+//     the arena frames all agree with the server without a client patch.
+//
+// A battleground type is a squad match when `battleground_squad_start` has rows
+// for it: one per squad, numbered from 0, read with the templates.
+uint8 constexpr MAX_BATTLEGROUND_SQUADS = 4;
+uint8 constexpr BATTLEGROUND_NO_SQUAD = 0xFF;
+
+struct BattlegroundSquadStart
+{
+    Position Start;
+    // How the squad is named to everyone, e.g. "North-East".
+    std::string Name;
+};
+
 enum class BattlegroundCustomWeather : uint8
 {
     Normal,
@@ -559,6 +590,10 @@ class TC_GAME_API Battleground
         // else's business and counts as a participant.
         bool IsBotFillMatch() const { return m_IsBotFillMatch; }
         void SetBotFillMatch(bool enabled) { m_IsBotFillMatch = enabled; }
+        // A match the queue made for people who would not have bots (a squad
+        // match of real squads only): the bot fill leaves its empty seats empty.
+        bool IsBotFillRefused() const { return m_IsBotFillRefused; }
+        void SetBotFillRefused(bool refused) { m_IsBotFillRefused = refused; }
         // Until its gates open, a bot-filled match keeps its clones' seats open
         // to the queue (BattlegroundQueue::OfferPreparationSeats). The queue
         // reserves one clone per person it invites; the clone stands down when
@@ -668,6 +703,54 @@ class TC_GAME_API Battleground
         void SetDropExits(std::vector<BattlegroundDropExit> const& exits) { m_DropExits = exits; }
         void SetStartExit(TeamId teamId, BattlegroundStartExit const& exit) { m_StartExits[teamId] = exit; }
 
+        // Squads - see BattlegroundSquadStart. Everything below answers for a
+        // two-team match exactly as before: no squads, sides decide.
+        void SetSquadStarts(std::vector<BattlegroundSquadStart> const& starts) { m_SquadStarts = starts; }
+        bool IsSquadMatch() const { return !m_SquadStarts.empty(); }
+        uint8 GetSquadCount() const { return uint8(m_SquadStarts.size()); }
+        // Seats in one squad: the arena size the match was made for.
+        uint32 GetSquadSize() const;
+        static uint32 GetSquadSide(uint8 squad) { return (squad % 2) == 0 ? ALLIANCE : HORDE; }
+        std::string const& GetSquadName(uint8 squad) const;
+        // The squad a participant plays in, or BATTLEGROUND_NO_SQUAD. A seat is
+        // held from the moment the queue invites someone (or a clone is placed)
+        // until they leave, so this already answers on the way in.
+        uint8 GetPlayerSquad(ObjectGuid guid) const;
+        // Seat `guid` in `squad`. The queue does this for each group it invites
+        // so a party arrives together.
+        void SetSquadSeat(ObjectGuid guid, uint8 squad);
+        // Seat `guid` in the emptiest squad on `team`'s side, unless it already
+        // has a seat. Returns the squad.
+        uint8 ClaimSquadSeat(ObjectGuid guid, uint32 team);
+        void ReleaseSquadSeat(ObjectGuid guid);
+        // Seats in `squad` held by somebody, arrived or not.
+        uint32 CountSquadSeats(uint8 squad) const;
+        // Whether two participants fight on the same side: the same squad in a
+        // squad match, the same team otherwise. False when either one is not a
+        // participant (a spectator, someone gone).
+        bool AreTeammates(ObjectGuid left, ObjectGuid right) const;
+        // Where `guid` starts: its squad's corner in a squad match, its team's
+        // start otherwise. Take... claims a squad seat on the way.
+        Position const* GetStartPositionFor(ObjectGuid guid, uint32 team) const;
+        Position const* TakeStartPosition(ObjectGuid guid, uint32 team);
+        // The middle of the squads' corners, where a squad match converges.
+        Position GetSquadArenaCentre() const;
+        // What `viewer` is told about `unit` in a squad match (see
+        // BattlegroundSquadStart): the faction a squad-mate or anything they
+        // control shows, and a player's arena-team byte. False when this is not
+        // a squad match the two share, and the real value stands.
+        static bool GetSquadViewFaction(Unit const* unit, Player const* viewer, uint32& faction);
+        static bool GetSquadViewArenaFaction(Player const* player, Player const* viewer, uint8& arenaFaction);
+        uint8 GetWinnerSquad() const { return m_WinnerSquad; }
+        // A rated squad match: each squad's arena team and matchmaker rating,
+        // set by the queue as it invites them.
+        void SetSquadArenaTeam(uint8 squad, uint32 arenaTeamId, uint32 matchmakerRating);
+        uint32 GetSquadArenaTeamId(uint8 squad) const { return squad < MAX_BATTLEGROUND_SQUADS ? m_SquadArenaTeamIds[squad] : 0; }
+        uint32 GetSquadMatchmakerRating(uint8 squad) const { return squad < MAX_BATTLEGROUND_SQUADS ? m_SquadArenaMMR[squad] : 0; }
+        // The average matchmaker rating of the other rated squads: what someone
+        // leaving or refusing the match is counted as losing to.
+        uint32 GetSquadOpponentsMatchmakerRating(uint8 squad) const;
+
         // Packet Transfer
         // method that should fill worldpacket with actual world states (not yet implemented for all battlegrounds!)
         virtual void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& /*packet*/) { }
@@ -700,8 +783,18 @@ class TC_GAME_API Battleground
         // Raid Group
         Group* GetBgRaid(uint32 TeamID) const { return TeamID == ALLIANCE ? m_BgRaids[TEAM_ALLIANCE] : m_BgRaids[TEAM_HORDE]; }
         void SetBgRaid(uint32 TeamID, Group* bg_raid);
+        // A squad match keeps a raid per squad; otherwise this is the team's.
+        // Slots 0 and 1 are the two teams', so a two-team match is unchanged.
+        uint8 GetBgRaidSlot(ObjectGuid guid, uint32 team) const;
+        Group* GetBgRaidBySlot(uint8 slot) const { return slot < MAX_BATTLEGROUND_SQUADS ? m_BgRaids[slot] : nullptr; }
+        void SetBgRaidBySlot(uint8 slot, Group* bg_raid);
+        // A raid being deleted lets go of whichever slot holds it. False when
+        // no slot did.
+        bool UnlinkBgRaid(Group const* bg_raid);
 
-        void BuildPvPLogDataPacket(WorldPacket& data);
+        // `viewer`, when given, is who the packet is for: a squad match is
+        // shown to each player as their squad against everyone else.
+        void BuildPvPLogDataPacket(WorldPacket& data, Player const* viewer = nullptr);
         virtual bool UpdatePlayerScore(Player* player, uint32 type, uint32 value, bool doAddHonor = true);
 
         static TeamId GetTeamIndexByTeamId(uint32 Team) { return Team == ALLIANCE ? TEAM_ALLIANCE : TEAM_HORDE; }
@@ -917,6 +1010,15 @@ class TC_GAME_API Battleground
         // Hold sits at zero enemies between waves - opt out here.
         virtual bool AllowsPrematureFinish() const { return true; }
 
+        // An arena still undecided when its time runs out. Stock ends it with no
+        // winner; a squad match picks the squad that is ahead.
+        virtual void EndAtTimeLimit() { EndBattleground(0); }
+
+        void SetWinnerSquad(uint8 squad) { m_WinnerSquad = squad; }
+        // Whether the participant `guid` on `team` won a match that ended with
+        // `winner`: their squad won, in a squad match.
+        bool IsWinningParticipant(ObjectGuid guid, uint32 team, uint32 winner) const;
+
 
         // Scorekeeping
         BattlegroundScoreMap PlayerScores;                // Player scores
@@ -949,6 +1051,11 @@ class TC_GAME_API Battleground
         int32 m_TeamScores[PVP_TEAMS_COUNT];
 
         ArenaTeamScore _arenaTeamScores[PVP_TEAMS_COUNT];
+        // A rated squad match's result per squad, and which other squad each
+        // squad's scoreboard shows opposite its own (the winner, or for the
+        // winner the runner-up).
+        ArenaTeamScore _squadArenaScores[MAX_BATTLEGROUND_SQUADS];
+        uint8 m_SquadScoreboardRival[MAX_BATTLEGROUND_SQUADS];
 
     private:
         // Battleground
@@ -964,6 +1071,11 @@ class TC_GAME_API Battleground
         uint32 m_BoundsCheckTimer;
         uint32 m_BoundsElapsed;                             // time since the gates opened
         std::vector<BattlegroundDropExit> m_DropExits;      // from `battleground_drop_exit`, see GetDropExits()
+        std::vector<BattlegroundSquadStart> m_SquadStarts;  // from `battleground_squad_start`, see IsSquadMatch()
+        std::map<ObjectGuid, uint8> m_SquadSeats;           // participant (or invitee) -> squad
+        uint8 m_WinnerSquad;
+        uint32 m_SquadArenaTeamIds[MAX_BATTLEGROUND_SQUADS];
+        uint32 m_SquadArenaMMR[MAX_BATTLEGROUND_SQUADS];
         BattlegroundStartExit m_StartExits[PVP_TEAMS_COUNT]; // from `battleground_start_exit`, see _CheckStartExits()
         bool m_StartExitDone[PVP_TEAMS_COUNT];
         uint32 m_StartExitElapsed;                          // time since the gates opened
@@ -978,6 +1090,7 @@ class TC_GAME_API Battleground
         uint32 m_CustomGamePendingCloneCount;
         BattlegroundCustomRules m_CustomRules;
         bool   m_IsBotFillMatch;                            // padded with transient clones, see IsBotFillMatch()
+        bool   m_IsBotFillRefused;                          // see IsBotFillRefused()
         std::map<ObjectGuid, uint32> m_PreparationSeatTakers; // invited into a clone's seat -> team, see CountPreparationSeatsHeldByClones()
         bool   m_IsTournamentPool;                          // made from the tournament queue pool, see IsTournamentPool()
         bool   m_IsArena;
@@ -1034,7 +1147,7 @@ class TC_GAME_API Battleground
         uint32 m_InvitedHorde;
 
         // Raid Group
-        Group* m_BgRaids[PVP_TEAMS_COUNT];                   // 0 - alliance, 1 - horde
+        Group* m_BgRaids[MAX_BATTLEGROUND_SQUADS];           // 0 - alliance, 1 - horde; a squad match: one per squad
 
         // Players count by team
         uint32 m_PlayersCount[PVP_TEAMS_COUNT];

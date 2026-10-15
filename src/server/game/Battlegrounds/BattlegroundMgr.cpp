@@ -223,6 +223,70 @@ namespace
         TC_LOG_INFO("server.loading", ">> Loaded {} battleground start exits for {} battlegrounds", count, uint32(exits.size()));
         return exits;
     }
+
+    // `battleground_squad_start`: the squads of a battleground played by more
+    // than two teams (see BattlegroundSquadStart), one row per squad. Optional
+    // the same way `battleground_bounds` is. A type is only given squads when
+    // its rows are 0..N-1 with no gap and 2 <= N <= MAX_BATTLEGROUND_SQUADS;
+    // anything else is reported and the type stays a two-team battleground.
+    std::unordered_map<uint32, std::vector<BattlegroundSquadStart>> LoadBattlegroundSquadStarts()
+    {
+        std::unordered_map<uint32, std::vector<BattlegroundSquadStart>> squads;
+
+        if (!WorldDatabase.Query("SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'battleground_squad_start' LIMIT 1"))
+        {
+            TC_LOG_INFO("server.loading", ">> Loaded 0 battleground squads. DB table `battleground_squad_start` does not exist.");
+            return squads;
+        }
+
+        //                                                   0         1      2  3  4  5  6
+        QueryResult result = WorldDatabase.Query("SELECT BgTypeId, Squad, X, Y, Z, O, Name FROM battleground_squad_start ORDER BY BgTypeId, Squad");
+        if (!result)
+        {
+            TC_LOG_INFO("server.loading", ">> Loaded 0 battleground squads. DB table `battleground_squad_start` is empty.");
+            return squads;
+        }
+
+        std::unordered_map<uint32, bool> broken;
+        do
+        {
+            Field* fields = result->Fetch();
+            uint32 const bgTypeId = fields[0].GetUInt32();
+            uint8 const squad = fields[1].GetUInt8();
+            std::vector<BattlegroundSquadStart>& starts = squads[bgTypeId];
+            if (squad != starts.size() || squad >= MAX_BATTLEGROUND_SQUADS)
+            {
+                TC_LOG_ERROR("sql.sql", "Table `battleground_squad_start` has Squad {} for BgTypeId {}; squads must be numbered 0..{} without gaps. The battleground keeps two teams.",
+                    uint32(squad), bgTypeId, MAX_BATTLEGROUND_SQUADS - 1);
+                broken[bgTypeId] = true;
+                continue;
+            }
+
+            BattlegroundSquadStart start;
+            start.Start.Relocate(fields[2].GetFloat(), fields[3].GetFloat(), fields[4].GetFloat(), fields[5].GetFloat());
+            start.Name = fields[6].GetString();
+            starts.push_back(std::move(start));
+        }
+        while (result->NextRow());
+
+        uint32 count = 0;
+        for (auto itr = squads.begin(); itr != squads.end();)
+        {
+            if (broken.count(itr->first) || itr->second.size() < 2)
+            {
+                if (!broken.count(itr->first))
+                    TC_LOG_ERROR("sql.sql", "Table `battleground_squad_start` has a single squad for BgTypeId {}; a squad match needs at least two. The battleground keeps two teams.", itr->first);
+                itr = squads.erase(itr);
+                continue;
+            }
+
+            count += uint32(itr->second.size());
+            ++itr;
+        }
+
+        TC_LOG_INFO("server.loading", ">> Loaded {} battleground squads for {} battlegrounds", count, uint32(squads.size()));
+        return squads;
+    }
 }
 
 /*********************************************************/
@@ -313,6 +377,13 @@ void BattlegroundMgr::Update(uint32 diff)
             uint8 arenaType = scheduled[i] >> 24 & 255;
             BattlegroundQueueTypeId bgQueueTypeId = BattlegroundQueueTypeId(scheduled[i] >> 16 & 255);
             BattlegroundTypeId bgTypeId = BattlegroundTypeId((scheduled[i] >> 8) & 255);
+            // Only the low byte of the type id fits the schedule. A queue that
+            // serves one type names it whole, which is what restores ids past
+            // 255 (Four Corners is 887); All Arenas and every type under 256
+            // decode exactly as before.
+            if (BattlegroundTypeId const queueTemplate = BGTemplateId(bgQueueTypeId);
+                queueTemplate != BATTLEGROUND_TYPE_NONE && (uint32(queueTemplate) & 255) == uint32(bgTypeId))
+                bgTypeId = queueTemplate;
             BattlegroundBracketId bracket_id = BattlegroundBracketId(scheduled[i] & 255);
             m_BattlegroundQueues[bgQueueTypeId].BattlegroundQueueUpdate(diff, bgTypeId, bracket_id, arenaType, arenaMMRating > 0, arenaMMRating);
         }
@@ -325,13 +396,16 @@ void BattlegroundMgr::Update(uint32 diff)
         for (int qtype = BATTLEGROUND_QUEUE_NONE; qtype < MAX_BATTLEGROUND_QUEUE_TYPES; ++qtype)
         {
             BattlegroundTypeId const bgTypeId = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(qtype));
-            if (bgTypeId == BATTLEGROUND_TYPE_NONE || IsArenaType(bgTypeId))
+            // A squad match's queue waits for squads to form (UpdateSquadPool)
+            // and so needs the sweep, as battlegrounds do, to notice the wait
+            // running out when nobody else joins.
+            if (bgTypeId == BATTLEGROUND_TYPE_NONE || (IsArenaType(bgTypeId) && !IsSquadBattleground(bgTypeId)))
                 continue;
 
             for (int bracket = BG_BRACKET_ID_FIRST; bracket < MAX_BATTLEGROUND_BRACKETS; ++bracket)
             {
                 m_BattlegroundQueues[qtype].BattlegroundQueueUpdate(BATTLEGROUND_QUEUE_UPDATE_INTERVAL, bgTypeId,
-                    BattlegroundBracketId(bracket));
+                    BattlegroundBracketId(bracket), BGArenaType(BattlegroundQueueTypeId(qtype)));
             }
         }
 
@@ -678,6 +752,11 @@ Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundTypeId original
                 break;
         }
 
+        // The arena size is a squad's. A side holds every squad seated on it:
+        // two of the four in Four Corners.
+        if (bg->IsSquadMatch())
+            maxPlayersPerTeam *= (bg->GetSquadCount() + 1) / 2;
+
         bg->SetMaxPlayersPerTeam(maxPlayersPerTeam);
         bg->SetMaxPlayers(maxPlayersPerTeam * 2);
     }
@@ -795,6 +874,7 @@ bool BattlegroundMgr::CreateBattleground(BattlegroundTemplate const* bgTemplate)
     bg->SetDropExits(bgTemplate->DropExits);
     bg->SetStartExit(TEAM_ALLIANCE, bgTemplate->StartExits[TEAM_ALLIANCE]);
     bg->SetStartExit(TEAM_HORDE, bgTemplate->StartExits[TEAM_HORDE]);
+    bg->SetSquadStarts(bgTemplate->SquadStarts);
     bg->SetLevelRange(bgTemplate->MinLevel, bgTemplate->MaxLevel);
     bg->SetScriptId(bgTemplate->ScriptId);
 
@@ -814,6 +894,7 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
     std::unordered_map<uint32, BattlegroundBounds> const bounds = LoadBattlegroundBounds();
     std::unordered_map<uint32, std::vector<BattlegroundDropExit>> const dropExits = LoadBattlegroundDropExits();
     std::unordered_map<uint32, std::array<BattlegroundStartExit, PVP_TEAMS_COUNT>> const startExits = LoadBattlegroundStartExits();
+    std::unordered_map<uint32, std::vector<BattlegroundSquadStart>> const squadStarts = LoadBattlegroundSquadStarts();
 
     _battlegroundMapTemplates.clear();
     _battlegroundTemplates.clear();
@@ -867,6 +948,9 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
             for (uint8 i = 0; i < PVP_TEAMS_COUNT; ++i)
                 bgTemplate.StartExits[i] = itr->second[i];
 
+        if (auto itr = squadStarts.find(uint32(bgTypeId)); itr != squadStarts.end())
+            bgTemplate.SquadStarts = itr->second;
+
         if (bgTemplate.MaxPlayersPerTeam == 0 || bgTemplate.MinPlayersPerTeam > bgTemplate.MaxPlayersPerTeam)
         {
             TC_LOG_ERROR("sql.sql", "Table `battleground_template` for id {} contains bad values for MinPlayersPerTeam ({}) and MaxPlayersPerTeam({}).",
@@ -911,7 +995,10 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
 
         _battlegroundTemplates[bgTypeId] = bgTemplate;
 
-        if (bgTemplate.BattlemasterEntry->MapID[1] == -1) // in this case we have only one mapId
+        // in this case we have only one mapId. A squad match is the second way
+        // to play a map that already has its own two-team battleground (Four
+        // Corners is Baradin Hold's), so the map stays that one's.
+        if (bgTemplate.BattlemasterEntry->MapID[1] == -1 && bgTemplate.SquadStarts.empty())
             _battlegroundMapTemplates[bgTemplate.BattlemasterEntry->MapID[0]] = &_battlegroundTemplates[bgTypeId];
 
         ++count;
@@ -1014,7 +1101,8 @@ void BattlegroundMgr::SendToBattleground(Player* player, uint32 instanceId, Batt
         if (team == 0)
             team = player->GetTeam();
 
-        Position const* pos = bg->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(team));
+        // A squad match: the corner of the squad the queue seated them in.
+        Position const* pos = bg->TakeStartPosition(player->GetGUID(), team);
         TC_LOG_DEBUG("bg.battleground", "BattlegroundMgr::SendToBattleground: Sending {} to map {}, {} (bgType {})", player->GetName(), mapid, pos->ToString(), bgTypeId);
         player->TeleportTo(mapid, pos->GetPositionX(), pos->GetPositionY(), pos->GetPositionZ(), pos->GetOrientation());
     }
@@ -1104,6 +1192,22 @@ BattlegroundQueueTypeId BattlegroundMgr::BGQueueTypeId(BattlegroundTypeId bgType
             return BATTLEGROUND_QUEUE_BFG;
         case BATTLEGROUND_SV:
             return BATTLEGROUND_QUEUE_SV;
+        case BATTLEGROUND_BHF:
+            // An arena, but one played by four squads: its own queue per squad
+            // size, never the shared skirmish queues below.
+            switch (arenaType)
+            {
+                case ARENA_TYPE_2v2:
+                    return BATTLEGROUND_QUEUE_BHF_2;
+                case ARENA_TYPE_3v3:
+                    return BATTLEGROUND_QUEUE_BHF_3;
+                case ARENA_TYPE_4v4:
+                    return BATTLEGROUND_QUEUE_BHF_4;
+                case ARENA_TYPE_5v5:
+                    return BATTLEGROUND_QUEUE_BHF_5;
+                default:
+                    return BATTLEGROUND_QUEUE_NONE;
+            }
         default:
             // Arenas do not get a queue per arena -- every arena of a given team
             // size shares one queue, which is what lets All Arenas mix them. The
@@ -1169,6 +1273,11 @@ BattlegroundTypeId BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId bgQueue
         case BATTLEGROUND_QUEUE_4v4:
         case BATTLEGROUND_QUEUE_5v5:
             return BATTLEGROUND_AA;
+        case BATTLEGROUND_QUEUE_BHF_2:
+        case BATTLEGROUND_QUEUE_BHF_3:
+        case BATTLEGROUND_QUEUE_BHF_4:
+        case BATTLEGROUND_QUEUE_BHF_5:
+            return BATTLEGROUND_BHF;
         default:
             return BattlegroundTypeId(0);                   // used for unknown template (it exists and does nothing)
     }
@@ -1179,16 +1288,26 @@ uint8 BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId bgQueueTypeId)
     switch (bgQueueTypeId)
     {
         case BATTLEGROUND_QUEUE_2v2:
+        case BATTLEGROUND_QUEUE_BHF_2:
             return ARENA_TYPE_2v2;
         case BATTLEGROUND_QUEUE_3v3:
+        case BATTLEGROUND_QUEUE_BHF_3:
             return ARENA_TYPE_3v3;
         case BATTLEGROUND_QUEUE_4v4:
+        case BATTLEGROUND_QUEUE_BHF_4:
             return ARENA_TYPE_4v4;
         case BATTLEGROUND_QUEUE_5v5:
+        case BATTLEGROUND_QUEUE_BHF_5:
             return ARENA_TYPE_5v5;
         default:
             return 0;
     }
+}
+
+bool BattlegroundMgr::IsSquadBattleground(BattlegroundTypeId bgTypeId) const
+{
+    auto const itr = _battlegroundTemplates.find(bgTypeId);
+    return itr != _battlegroundTemplates.end() && !itr->second.SquadStarts.empty();
 }
 
 void BattlegroundMgr::ToggleTesting()
@@ -1423,6 +1542,12 @@ BattlegroundTypeId BattlegroundMgr::GetRandomBG(BattlegroundTypeId bgTypeId, boo
     std::vector<double> weights;
     ids.reserve(32);
     weights.reserve(32);
+
+    // A squad match is never a roll: its one map belongs to another type
+    // (Four Corners plays Baradin Hold's), and the BattlemasterList route below
+    // finds the template by map, which would hand back that one instead.
+    if (IsSquadBattleground(bgTypeId))
+        return bgTypeId;
 
     // Prefer the world-DB pool over BattlemasterList.dbc.
     //

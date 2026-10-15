@@ -15979,7 +15979,17 @@ void Unit::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player const* t
                     IsManagedPlayerbotAccountIdForDisplay(ffaBotOwner->GetSession()->GetAccountId()) &&
                     (!target->GetSession() || !IsManagedPlayerbotAccountIdForDisplay(target->GetSession()->GetAccountId()));
 
-                if (index == UNIT_FIELD_FACTIONTEMPLATE && target != this && isArmedBotUnit &&
+                uint32 squadViewFaction = 0;
+                if (index == UNIT_FIELD_FACTIONTEMPLATE && target != this &&
+                    Battleground::GetSquadViewFaction(this, target, squadViewFaction))
+                {
+                    // A squad match: a rival squad seated on the viewer's own
+                    // side - and its pets and totems - is shown the other
+                    // side's faction, so this viewer's client paints it red
+                    // and lets them fight (BattlegroundSquadStart).
+                    fieldBuffer << squadViewFaction;
+                }
+                else if (index == UNIT_FIELD_FACTIONTEMPLATE && target != this && isArmedBotUnit &&
                     (!target->IsFFAPvP() || Tournament::IsTournamentCharacter(target)))
                 {
                     // War Mode off, or a tournament character, whom the fleet
@@ -16028,6 +16038,21 @@ void Unit::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player const* t
                 }
                 else
                     fieldBuffer << m_uint32Values[index];
+            }
+            // The arena-team byte decides who the viewer's client puts in its
+            // arena1-5 frames. In a squad match a rival squad on the viewer's
+            // own side is given the other side's byte (BattlegroundSquadStart).
+            else if (index == PLAYER_BYTES_3 && GetTypeId() == TYPEID_PLAYER && target != this)
+            {
+                uint32 value = m_uint32Values[PLAYER_BYTES_3];
+                uint8 arenaFaction = 0;
+                if (Battleground::GetSquadViewArenaFaction(ToPlayer(), target, arenaFaction))
+                {
+                    uint32 const shift = PLAYER_BYTES_3_OFFSET_ARENA_FACTION * 8;
+                    value = (value & ~(uint32(0xFF) << shift)) | (uint32(arenaFaction) << shift);
+                }
+
+                fieldBuffer << value;
             }
             // transmogrification: the field holds the real item, the appearance the
             // observer is entitled to see is resolved here (only the entry half of

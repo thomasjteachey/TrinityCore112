@@ -159,6 +159,20 @@ class TC_GAME_API BattlegroundQueue
         // After ginfo->Team has been switched: moves the group to that side's
         // list, premade or normal as it was.
         void MoveGroupToSeatedSide(GroupQueueInfo* ginfo, BattlegroundBracketId bracket_id);
+        // A squad match (Battleground::IsSquadMatch) cannot be made by pairing
+        // two sides, so its queue builds the squads itself - see the comment
+        // on the definition for when a match starts.
+        void UpdateSquadPool(BattlegroundTypeId bgTypeId, BattlegroundBracketId bracket_id, uint8 arenaType);
+        struct QueuedSquad
+        {
+            std::vector<GroupQueueInfo*> Groups;
+            uint32 Size = 0;
+        };
+        void StartSquadMatch(BattlegroundTypeId bgTypeId, PvPDifficultyEntry const* bracketEntry, BattlegroundBracketId bracket_id,
+            uint8 arenaType, std::vector<QueuedSquad> const& squads, bool botFill, bool rated = false);
+        // Arena teams queued rated for a squad match: one team is one squad.
+        void UpdateRatedSquadPool(BattlegroundTypeId bgTypeId, PvPDifficultyEntry const* bracketEntry, BattlegroundBracketId bracket_id,
+            uint8 squadCount, uint8 arenaType);
         uint32 m_WaitTimes[PVP_TEAMS_COUNT][MAX_BATTLEGROUND_BRACKETS][COUNT_OF_PLAYERS_TO_AVERAGE_WAIT_TIME];
         uint32 m_WaitTimeLastPlayer[PVP_TEAMS_COUNT][MAX_BATTLEGROUND_BRACKETS];
         uint32 m_SumOfWaitTimes[PVP_TEAMS_COUNT][MAX_BATTLEGROUND_BRACKETS];

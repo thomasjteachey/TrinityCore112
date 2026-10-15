@@ -3550,10 +3550,15 @@ enum BattlegroundTypeId : uint32
     BATTLEGROUND_ASF            = 883, // Ashamane's Fall,            map 1552
     BATTLEGROUND_INL            = 884, // The Inventor's Library,     map 1683
     BATTLEGROUND_AOA            = 885, // Amphitheater of Anguish,    map 1684
-    BATTLEGROUND_EOE            = 886  // The Eye of Eternity,        map 1616 cloned from 616 (tools/eoe_arena)
+    BATTLEGROUND_EOE            = 886, // The Eye of Eternity,        map 1616 cloned from 616 (tools/eoe_arena)
+    // Baradin Hold's map again, played by up to four squads, one per corner.
+    // Deliberately outside the custom arena block below: it shares 879's map,
+    // is never rolled by All Arenas and is not offered in the custom-game lobby.
+    // Its squads come from `battleground_squad_start` (Battleground::IsSquadMatch).
+    BATTLEGROUND_BHF            = 887  // Baradin Hold: Four Corners, map 1401
 };
 
-#define MAX_BATTLEGROUND_TYPE_ID 887
+#define MAX_BATTLEGROUND_TYPE_ID 888
 
 // First and last of the contiguous block above. Kept as named constants so the
 // range checks below and the registration loops in BattlegroundMgr do not each
@@ -3584,6 +3589,7 @@ constexpr bool IsCustomArena(BattlegroundTypeId bgTypeId)
 {
     return bgTypeId == BATTLEGROUND_TV
         || bgTypeId == BATTLEGROUND_TTP
+        || bgTypeId == BATTLEGROUND_BHF
         || (bgTypeId >= BATTLEGROUND_CUSTOM_ARENA_FIRST
             && bgTypeId <= BATTLEGROUND_CUSTOM_ARENA_LAST);
 }
@@ -3595,8 +3601,9 @@ constexpr bool IsCustomArena(BattlegroundTypeId bgTypeId)
 // enum line, with no new C++ file.
 constexpr bool IsDataDrivenArena(BattlegroundTypeId bgTypeId)
 {
-    return bgTypeId >= BATTLEGROUND_CUSTOM_ARENA_FIRST
-        && bgTypeId <= BATTLEGROUND_CUSTOM_ARENA_LAST;
+    return bgTypeId == BATTLEGROUND_BHF
+        || (bgTypeId >= BATTLEGROUND_CUSTOM_ARENA_FIRST
+            && bgTypeId <= BATTLEGROUND_CUSTOM_ARENA_LAST);
 }
 
 // Arenas a managed bot cannot be trusted to stay inside - it walks off the
@@ -3786,6 +3793,13 @@ enum BattlegroundQueueTypeId
     BATTLEGROUND_QUEUE_TRT      = 18,
     BATTLEGROUND_QUEUE_VHR      = 19,
     BATTLEGROUND_QUEUE_TOK      = 20,
+    // Baradin Hold: Four Corners, one queue per squad size. Kept apart from the
+    // 2v2..5v5 skirmish queues so a four-squad match is only ever made from
+    // people who asked for one.
+    BATTLEGROUND_QUEUE_BHF_2    = 21,
+    BATTLEGROUND_QUEUE_BHF_3    = 22,
+    BATTLEGROUND_QUEUE_BHF_4    = 23,
+    BATTLEGROUND_QUEUE_BHF_5    = 24,
     MAX_BATTLEGROUND_QUEUE_TYPES
 };
 

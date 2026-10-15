@@ -21,6 +21,8 @@
 #include "Battleground.h"
 
 #include <set>
+#include <string>
+#include <vector>
 
 enum ArenaBroadcastTexts
 {
@@ -66,6 +68,22 @@ class TC_GAME_API Arena : public Battleground
         void RemovePlayerAtLeave(ObjectGuid guid, bool transport, bool sendPacket) override;
         void CheckWinConditions() override;
         void EndBattleground(uint32 winner) override;
+        void EndAtTimeLimit() override;
+
+        // Squad matches (see BattlegroundSquadStart). Alive is counted the way
+        // GetArenaAlivePlayersCountByTeam counts it, per squad.
+        bool IsArenaAlive(ObjectGuid guid) const;
+        uint32 GetArenaAlivePlayersCountBySquad(uint8 squad) const;
+        void CheckSquadWinConditions();
+        void EndSquadMatch(uint8 winnerSquad, std::string const& announcement);
+        // A rated squad match's ratings, by finishing place (ArenaTeam::PlacedAgainst).
+        void EndRatedSquadMatch();
+        // Each player's "alive" readout is their squad against everyone else.
+        void UpdateSquadWorldStates();
+        // Squads that had people when the gates opened and have since been
+        // wiped out, in the order they fell.
+        std::vector<uint8> _eliminatedSquads;
+        uint32 _squadsAtStart = 0;
 
         // In-memory custom-game clones are authoritative battleground-roster
         // participants even when the global connected-player accessor cannot

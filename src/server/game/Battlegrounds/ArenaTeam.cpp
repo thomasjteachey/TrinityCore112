@@ -31,6 +31,8 @@
 #include "World.h"
 #include "WorldSession.h"
 
+#include <cmath>
+
 ArenaTeam::ArenaTeam()
     : TeamId(0), Type(0), TeamName(), CaptainGuid(), BackgroundColor(0), EmblemStyle(0), EmblemColor(0),
     BorderStyle(0), BorderColor(0), PreviousOpponents(0)
@@ -870,6 +872,74 @@ void ArenaTeam::MemberWon(Player* player, uint32 againstMatchmakerRating, int32 
             player->SetArenaTeamInfoField(GetSlot(), ARENA_TEAM_GAMES_SEASON, itr->SeasonGames);
             return;
         }
+    }
+}
+
+namespace
+{
+    // The average of a rating change over several opponents, each weighted by
+    // how the result against it went (see ArenaTeam::PlacedOpponent).
+    template<class Mod>
+    int32 AveragePlacedMod(std::vector<ArenaTeam::PlacedOpponent> const& opponents, Mod mod)
+    {
+        if (opponents.empty())
+            return 0;
+
+        float sum = 0.0f;
+        for (ArenaTeam::PlacedOpponent const& opponent : opponents)
+            sum += opponent.Score * float(mod(opponent.MatchmakerRating, true)) +
+                (1.0f - opponent.Score) * float(mod(opponent.MatchmakerRating, false));
+
+        return int32(std::lround(sum / float(opponents.size())));
+    }
+}
+
+int32 ArenaTeam::PlacedAgainst(uint32 ownMatchmakerRating, std::vector<PlacedOpponent> const& opponents, bool won, int32& ratingChange)
+{
+    int32 const matchmakerChange = AveragePlacedMod(opponents,
+        [this, ownMatchmakerRating](uint32 opponentRating, bool beat) { return GetMatchmakerRatingMod(ownMatchmakerRating, opponentRating, beat); });
+
+    uint32 const teamRating = Stats.Rating;
+    ratingChange = AveragePlacedMod(opponents,
+        [this, teamRating](uint32 opponentRating, bool beat) { return GetRatingMod(teamRating, opponentRating, beat); });
+
+    FinishGame(ratingChange);
+    if (won)
+    {
+        Stats.WeekWins += 1;
+        Stats.SeasonWins += 1;
+    }
+
+    return matchmakerChange;
+}
+
+void ArenaTeam::MemberPlaced(Player* player, ObjectGuid guid, std::vector<PlacedOpponent> const& opponents, int32 matchmakerRatingChange, bool won)
+{
+    for (MemberList::iterator itr = Members.begin(); itr != Members.end(); ++itr)
+    {
+        if (itr->Guid != guid)
+            continue;
+
+        uint32 const personalRating = itr->PersonalRating;
+        int32 const mod = AveragePlacedMod(opponents,
+            [this, personalRating](uint32 opponentRating, bool beat) { return GetRatingMod(personalRating, opponentRating, beat); });
+        itr->ModifyPersonalRating(player, mod, GetType());
+        itr->ModifyMatchmakerRating(matchmakerRatingChange, GetSlot());
+
+        itr->WeekGames += 1;
+        itr->SeasonGames += 1;
+        if (won)
+        {
+            itr->WeekWins += 1;
+            itr->SeasonWins += 1;
+        }
+
+        if (player)
+        {
+            player->SetArenaTeamInfoField(GetSlot(), ARENA_TEAM_GAMES_WEEK, itr->WeekGames);
+            player->SetArenaTeamInfoField(GetSlot(), ARENA_TEAM_GAMES_SEASON, itr->SeasonGames);
+        }
+        return;
     }
 }
 

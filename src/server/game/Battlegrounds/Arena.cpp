@@ -18,9 +18,11 @@
 #include "Arena.h"
 #include "ArenaScore.h"
 #include "ArenaTeamMgr.h"
+#include "Chat.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "StringFormat.h"
 #include "World.h"
 #include "WorldSession.h"
 #include "WorldStatePackets.h"
@@ -119,6 +121,12 @@ void Arena::FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& pa
 
 void Arena::UpdateArenaWorldState()
 {
+    if (IsSquadMatch())
+    {
+        UpdateSquadWorldStates();
+        return;
+    }
+
     UpdateWorldState(ARENA_WORLD_STATE_ALIVE_PLAYERS_GREEN, GetArenaAlivePlayersCountByTeam(HORDE));
     UpdateWorldState(ARENA_WORLD_STATE_ALIVE_PLAYERS_GOLD, GetArenaAlivePlayersCountByTeam(ALLIANCE));
 }
@@ -142,7 +150,21 @@ void Arena::RemovePlayerAtLeave(ObjectGuid guid, bool transport, bool sendPacket
     if (isRated() && GetStatus() == STATUS_IN_PROGRESS)
     {
         BattlegroundPlayerMap::const_iterator itr = m_Players.find(guid);
-        if (itr != m_Players.end()) // check if the player was a participant of the match, or only entered through gm command (appear)
+        if (itr != m_Players.end() && IsSquadMatch())
+        {
+            // Left a rated squad match while it was being fought: lost, against
+            // the other squads taken together.
+            uint8 const squad = GetPlayerSquad(guid);
+            if (ArenaTeam* arenaTeam = sArenaTeamMgr->GetArenaTeamById(GetSquadArenaTeamId(squad)))
+            {
+                uint32 const against = GetSquadOpponentsMatchmakerRating(squad);
+                if (Player* player = _GetPlayer(itr->first, itr->second.OfflineRemoveTime != 0, "Arena::RemovePlayerAtLeave"))
+                    arenaTeam->MemberLost(player, against);
+                else
+                    arenaTeam->OfflineMemberLost(guid, against);
+            }
+        }
+        else if (itr != m_Players.end()) // check if the player was a participant of the match, or only entered through gm command (appear)
         {
             // if the player was a match participant, calculate rating
             uint32 team = itr->second.Team;
@@ -171,10 +193,237 @@ void Arena::CheckWinConditions()
     {
         return;
     }
+    if (IsSquadMatch())
+    {
+        CheckSquadWinConditions();
+        return;
+    }
     if (!GetArenaAlivePlayersCountByTeam(ALLIANCE) && GetPlayersCountByTeam(HORDE))
         EndBattleground(HORDE);
     else if (GetPlayersCountByTeam(ALLIANCE) && !GetArenaAlivePlayersCountByTeam(HORDE))
         EndBattleground(ALLIANCE);
+}
+
+namespace
+{
+    void AnnounceToArena(Battleground* arena, std::string const& text)
+    {
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_BG_SYSTEM_NEUTRAL, LANG_UNIVERSAL, ObjectGuid::Empty, ObjectGuid::Empty, text, 0);
+        arena->SendPacketToAll(&data);
+    }
+
+    char const* CountWord(uint32 count)
+    {
+        switch (count)
+        {
+            case 1: return "One";
+            case 2: return "Two";
+            case 3: return "Three";
+            case 4: return "Four";
+            default: return "No";
+        }
+    }
+}
+
+bool Arena::IsArenaAlive(ObjectGuid guid) const
+{
+    BattlegroundPlayerMap::const_iterator const itr = m_Players.find(guid);
+    if (itr == m_Players.end())
+        return false;
+
+    if (IsCustomGame())
+        return !itr->second.OfflineRemoveTime &&
+            _customGameEliminatedPlayers.find(guid) == _customGameEliminatedPlayers.end();
+
+    Player* player = ObjectAccessor::FindPlayer(guid);
+    return player && player->IsAlive() && player->GetShapeshiftForm() != FORM_SPIRITOFREDEMPTION;
+}
+
+uint32 Arena::GetArenaAlivePlayersCountBySquad(uint8 squad) const
+{
+    uint32 aliveCount = 0;
+    for (auto const& [guid, participant] : m_Players)
+    {
+        (void)participant;
+        if (GetPlayerSquad(guid) == squad && IsArenaAlive(guid))
+            ++aliveCount;
+    }
+
+    return aliveCount;
+}
+
+void Arena::UpdateSquadWorldStates()
+{
+    uint32 aliveBySquad[MAX_BATTLEGROUND_SQUADS] = { };
+    uint32 aliveTotal = 0;
+    for (uint8 squad = 0; squad < GetSquadCount(); ++squad)
+    {
+        aliveBySquad[squad] = GetArenaAlivePlayersCountBySquad(squad);
+        aliveTotal += aliveBySquad[squad];
+    }
+
+    for (auto const& [guid, participant] : m_Players)
+    {
+        Player* player = _GetPlayer(guid, participant.OfflineRemoveTime != 0, "Arena::UpdateSquadWorldStates");
+        if (!player)
+            continue;
+
+        uint8 const squad = GetPlayerSquad(guid);
+        uint32 const ours = squad < GetSquadCount() ? aliveBySquad[squad] : 0;
+        uint32 const theirs = aliveTotal - ours;
+        // The arena frame shows the viewer's own side as gold (Alliance) or
+        // green (Horde) - see Player::SetBGTeam - so "ours" goes in that slot.
+        bool const gold = participant.Team == ALLIANCE;
+        player->SendUpdateWorldState(ARENA_WORLD_STATE_ALIVE_PLAYERS_GOLD, gold ? ours : theirs);
+        player->SendUpdateWorldState(ARENA_WORLD_STATE_ALIVE_PLAYERS_GREEN, gold ? theirs : ours);
+    }
+}
+
+void Arena::CheckSquadWinConditions()
+{
+    // Before the gates open nobody can be beaten. Whoever is missing then is
+    // settled when they open (SkipStartDelay runs this again), the way a
+    // two-team arena hands the match to the side that turned up.
+    if (GetStatus() != STATUS_IN_PROGRESS)
+        return;
+
+    uint32 present[MAX_BATTLEGROUND_SQUADS] = { };
+    for (auto const& [guid, participant] : m_Players)
+    {
+        (void)participant;
+        uint8 const squad = GetPlayerSquad(guid);
+        if (squad < GetSquadCount())
+            ++present[squad];
+    }
+
+    // The squads in this fight are the ones standing in their corner when the
+    // gates opened. A squad nobody came for never took part, so it is never
+    // announced as beaten.
+    if (!_squadsAtStart)
+    {
+        for (uint8 squad = 0; squad < GetSquadCount(); ++squad)
+            if (present[squad])
+                _squadsAtStart |= 1u << squad;
+
+        uint32 squadCount = 0;
+        for (uint8 squad = 0; squad < GetSquadCount(); ++squad)
+            if (_squadsAtStart & (1u << squad))
+                ++squadCount;
+
+        if (squadCount > 1)
+            AnnounceToArena(this, Trinity::StringFormat("{} teams, one to a corner. The last team standing wins.", CountWord(squadCount)));
+    }
+
+    uint8 lastStanding = BATTLEGROUND_NO_SQUAD;
+    uint32 standing = 0;
+    std::vector<uint8> fallen;
+    for (uint8 squad = 0; squad < GetSquadCount(); ++squad)
+    {
+        if (!(_squadsAtStart & (1u << squad)))
+            continue;
+
+        if (GetArenaAlivePlayersCountBySquad(squad))
+        {
+            lastStanding = squad;
+            ++standing;
+            continue;
+        }
+
+        if (std::find(_eliminatedSquads.begin(), _eliminatedSquads.end(), squad) != _eliminatedSquads.end())
+            continue;
+
+        _eliminatedSquads.push_back(squad);
+        fallen.push_back(squad);
+        TC_LOG_DEBUG("bg.arena", "Arena::CheckSquadWinConditions: squad {} ({}) eliminated in instance {}.",
+            uint32(squad), GetSquadName(squad), GetInstanceID());
+    }
+
+    // Only while the fight goes on: a squad wiped out by the blow that ends the
+    // match hears who won instead.
+    if (standing > 1)
+        for (uint8 squad : fallen)
+            AnnounceToArena(this, Trinity::StringFormat("The {} team has been eliminated. {} teams remain.",
+                GetSquadName(squad), CountWord(standing)));
+
+    if (standing == 1)
+    {
+        EndSquadMatch(lastStanding, Trinity::StringFormat("The {} team is the last one standing and wins!", GetSquadName(lastStanding)));
+        return;
+    }
+
+    if (!standing)
+    {
+        // The last two fell to the same blow, or nobody turned up at all.
+        SetWinnerSquad(BATTLEGROUND_NO_SQUAD);
+        AnnounceToArena(this, "Nobody is left standing. The match is a draw.");
+        EndBattleground(0);
+    }
+}
+
+void Arena::EndSquadMatch(uint8 winnerSquad, std::string const& announcement)
+{
+    SetWinnerSquad(winnerSquad);
+    AnnounceToArena(this, announcement);
+    // The side the winning squad sits on. Rewards and the scoreboard ask the
+    // squad (Battleground::IsWinningParticipant), so its side-mate squad, which
+    // lost, is not paid as a winner.
+    EndBattleground(GetSquadSide(winnerSquad));
+}
+
+void Arena::EndAtTimeLimit()
+{
+    if (!IsSquadMatch())
+    {
+        EndBattleground(0);
+        return;
+    }
+
+    // Time up in a squad match: the squad with the most still standing takes
+    // it, and between equal numbers the one with the most health left between
+    // them. Still level is a draw, as a two-team arena's time limit always is.
+    uint8 best = BATTLEGROUND_NO_SQUAD;
+    uint32 bestAlive = 0;
+    uint64 bestHealth = 0;
+    bool level = false;
+    for (uint8 squad = 0; squad < GetSquadCount(); ++squad)
+    {
+        uint32 alive = 0;
+        uint64 health = 0;
+        for (auto const& [guid, participant] : m_Players)
+        {
+            (void)participant;
+            if (GetPlayerSquad(guid) != squad || !IsArenaAlive(guid))
+                continue;
+
+            ++alive;
+            if (Player* player = ObjectAccessor::FindPlayer(guid))
+                health += player->GetHealth();
+        }
+
+        if (!alive)
+            continue;
+
+        if (best == BATTLEGROUND_NO_SQUAD || alive > bestAlive || (alive == bestAlive && health > bestHealth))
+        {
+            best = squad;
+            bestAlive = alive;
+            bestHealth = health;
+            level = false;
+        }
+        else if (alive == bestAlive && health == bestHealth)
+            level = true;
+    }
+
+    if (best == BATTLEGROUND_NO_SQUAD || level)
+    {
+        SetWinnerSquad(BATTLEGROUND_NO_SQUAD);
+        AnnounceToArena(this, "Time is up and no team is ahead. The match is a draw.");
+        EndBattleground(0);
+        return;
+    }
+
+    EndSquadMatch(best, Trinity::StringFormat("Time is up. The {} team has the most left standing and wins!", GetSquadName(best)));
 }
 
 uint32 Arena::GetArenaAlivePlayersCountByTeam(uint32 team) const
@@ -191,8 +440,151 @@ uint32 Arena::GetArenaAlivePlayersCountByTeam(uint32 team) const
     return aliveCount;
 }
 
+void Arena::EndRatedSquadMatch()
+{
+    std::vector<uint8> squads;
+    for (uint8 squad = 0; squad < GetSquadCount(); ++squad)
+        if (sArenaTeamMgr->GetArenaTeamById(GetSquadArenaTeamId(squad)))
+            squads.push_back(squad);
+
+    if (squads.size() < 2)
+        return;
+
+    uint8 const winnerSquad = GetWinnerSquad();
+
+    // Nobody won - time ran out level, or the last two fell together. A
+    // two-team arena takes ARENA_TIMELIMIT_POINTS_LOSS off both teams then, and
+    // so does this, off every team, and counts it a loss for everyone.
+    if (winnerSquad == BATTLEGROUND_NO_SQUAD)
+    {
+        for (uint8 squad : squads)
+        {
+            ArenaTeam* arenaTeam = sArenaTeamMgr->GetArenaTeamById(GetSquadArenaTeamId(squad));
+            uint32 const against = GetSquadOpponentsMatchmakerRating(squad);
+            arenaTeam->FinishGame(ARENA_TIMELIMIT_POINTS_LOSS);
+            _squadArenaScores[squad].Assign(ARENA_TIMELIMIT_POINTS_LOSS, GetSquadMatchmakerRating(squad), arenaTeam->GetName());
+            for (auto const& [guid, participant] : m_Players)
+            {
+                if (GetPlayerSquad(guid) != squad)
+                    continue;
+
+                if (Player* player = _GetPlayer(guid, participant.OfflineRemoveTime != 0, "Arena::EndRatedSquadMatch"))
+                {
+                    arenaTeam->MemberLost(player, against, 0);
+                    player->ResetAchievementCriteria(ACHIEVEMENT_CRITERIA_CONDITION_NO_LOSE, 0);
+                }
+                else
+                    arenaTeam->OfflineMemberLost(guid, against, 0);
+            }
+
+            m_SquadScoreboardRival[squad] = squads.front() != squad ? squads.front() : squads.back();
+            arenaTeam->SaveToDB();
+            arenaTeam->NotifyStatsChanged();
+        }
+        return;
+    }
+
+    // Finishing places, lower is better: the winner; then any squad still on
+    // its feet when time ran out, level with each other; then the eliminated,
+    // the last to fall first; then, level and last, any team that never came
+    // in (its members already lost when they let the invite go).
+    uint32 place[MAX_BATTLEGROUND_SQUADS];
+    for (uint8 squad = 0; squad < MAX_BATTLEGROUND_SQUADS; ++squad)
+        place[squad] = MAX_BATTLEGROUND_SQUADS;
+
+    auto const tookPart = [this](uint8 squad) { return (_squadsAtStart & (1u << squad)) != 0; };
+    auto const eliminated = [this](uint8 squad)
+    {
+        return std::find(_eliminatedSquads.begin(), _eliminatedSquads.end(), squad) != _eliminatedSquads.end();
+    };
+
+    place[winnerSquad] = 0;
+    uint32 next = 1;
+    bool survivors = false;
+    for (uint8 squad : squads)
+    {
+        if (squad != winnerSquad && tookPart(squad) && !eliminated(squad))
+        {
+            place[squad] = next;
+            survivors = true;
+        }
+    }
+    if (survivors)
+        ++next;
+    for (auto itr = _eliminatedSquads.rbegin(); itr != _eliminatedSquads.rend(); ++itr)
+        if (*itr != winnerSquad)
+            place[*itr] = next++;
+    for (uint8 squad : squads)
+        if (squad != winnerSquad && !tookPart(squad))
+            place[squad] = next;
+
+    // Everyone's opponents are read before any rating moves.
+    std::vector<ArenaTeam::PlacedOpponent> opponents[MAX_BATTLEGROUND_SQUADS];
+    for (uint8 squad : squads)
+    {
+        for (uint8 other : squads)
+        {
+            if (other == squad)
+                continue;
+
+            float const score = place[squad] < place[other] ? 1.0f : (place[squad] > place[other] ? 0.0f : 0.5f);
+            opponents[squad].push_back({ GetSquadMatchmakerRating(other), score });
+        }
+
+        // The scoreboard sets each squad against the winner, and the winner
+        // against whoever finished closest to it.
+        uint8 rival = BATTLEGROUND_NO_SQUAD;
+        for (uint8 other : squads)
+            if (other != squad && (rival == BATTLEGROUND_NO_SQUAD || place[other] < place[rival]))
+                rival = other;
+        m_SquadScoreboardRival[squad] = rival;
+    }
+
+    for (uint8 squad : squads)
+    {
+        ArenaTeam* arenaTeam = sArenaTeamMgr->GetArenaTeamById(GetSquadArenaTeamId(squad));
+        bool const won = squad == winnerSquad;
+        int32 ratingChange = 0;
+        int32 const matchmakerChange = arenaTeam->PlacedAgainst(GetSquadMatchmakerRating(squad), opponents[squad], won, ratingChange);
+        _squadArenaScores[squad].Assign(ratingChange, GetSquadMatchmakerRating(squad), arenaTeam->GetName());
+
+        TC_LOG_DEBUG("bg.arena", "Four Corners rated: squad {} ({}) team {} placed {} of {}, rating {:+}, MMR {:+}.",
+            uint32(squad), GetSquadName(squad), arenaTeam->GetId(), place[squad] + 1, uint32(squads.size()), ratingChange, matchmakerChange);
+
+        for (auto const& [guid, participant] : m_Players)
+        {
+            if (GetPlayerSquad(guid) != squad)
+                continue;
+
+            Player* player = _GetPlayer(guid, participant.OfflineRemoveTime != 0, "Arena::EndRatedSquadMatch");
+            if (player && won)
+            {
+                // achievement BEFORE the personal rating moves, as for a two-team win
+                uint32 const rating = player->GetArenaPersonalRating(arenaTeam->GetSlot());
+                player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_WIN_RATED_ARENA, rating ? rating : 1);
+                player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_WIN_ARENA, GetMapId());
+            }
+            else if (player)
+                player->ResetAchievementCriteria(ACHIEVEMENT_CRITERIA_CONDITION_NO_LOSE, 0);
+
+            arenaTeam->MemberPlaced(player, guid, opponents[squad], matchmakerChange, won);
+        }
+
+        arenaTeam->SaveToDB();
+        arenaTeam->NotifyStatsChanged();
+    }
+}
+
 void Arena::EndBattleground(uint32 winner)
 {
+    // A rated squad match is settled by finishing place, not by two sides.
+    if (isRated() && IsSquadMatch())
+    {
+        EndRatedSquadMatch();
+        Battleground::EndBattleground(winner);
+        return;
+    }
+
     // arena rating calculation
     if (isRated())
     {

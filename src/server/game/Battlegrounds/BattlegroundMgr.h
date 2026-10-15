@@ -62,6 +62,7 @@ struct BattlegroundTemplate
     BattlegroundBounds Bounds;
     std::vector<BattlegroundDropExit> DropExits;
     BattlegroundStartExit StartExits[PVP_TEAMS_COUNT];
+    std::vector<BattlegroundSquadStart> SquadStarts;    // `battleground_squad_start`; empty = two teams
 
     bool IsArena() const;
 };
@@ -114,6 +115,9 @@ class TC_GAME_API BattlegroundMgr
         std::vector<BattlegroundTypeId> GetRandomPoolMembers(BattlegroundTypeId poolBgTypeId);
 
         void SendToBattleground(Player* player, uint32 InstanceID, BattlegroundTypeId bgTypeId);
+
+        // A type whose matches are played by squads (`battleground_squad_start`).
+        bool IsSquadBattleground(BattlegroundTypeId bgTypeId) const;
 
         /* Battleground queues */
         BattlegroundQueue& GetBattlegroundQueue(BattlegroundQueueTypeId bgQueueTypeId) { return m_BattlegroundQueues[bgQueueTypeId]; }
