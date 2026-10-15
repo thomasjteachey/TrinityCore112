@@ -1145,7 +1145,7 @@ class spell_t1_mana_shield : public AuraScript
 };
 
 // 90152 - Prismatic Insight stack buff. The mana-cost cut (effect 1) is the
-// 3pc and always live; the +1% damage per stack (effect 2) belongs to the
+// 3pc and always live; the damage per stack (effect 2) belongs to the
 // 5pc, so it calculates to zero unless Prismatic Resonance is worn.
 class spell_t1_prismatic_buff : public AuraScript
 {
