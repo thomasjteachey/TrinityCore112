@@ -2,17 +2,20 @@
 
 #include "BattlegroundMgr.h"
 #include "CharacterCache.h"
+#include "CombatManager.h"
 #include "Creature.h"
 #include "DBCStores.h"
 #include "GameObject.h"
 #include "Log.h"
 #include "Map.h"
+#include "MotionMaster.h"
 // Map.h only forward-declares VMAP::ModelIgnoreFlags, and PickBuffPosition
 // names one of its values.
 #include "ModelIgnoreFlags.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "Random.h"
+#include "StringFormat.h"
 #include "VioletHoldBoons.h"
 #include "World.h"
 #include "WorldPacket.h"
@@ -676,6 +679,9 @@ void BattlegroundVHR::NotifyCloneSource(ObjectGuid cloneGuid, ObjectGuid sourceG
 
 void BattlegroundVHR::RefreshWaveBoonCopies()
 {
+    if (!sWorld->getBoolConfig(CONFIG_CENTURION_VHR_COPIES_INHERIT_BOONS))
+        return;
+
     for (auto const& [cloneGuid, sourceGuid] : _waveCloneSources)
     {
         Player* clone = ObjectAccessor::FindPlayer(cloneGuid);
@@ -703,7 +709,7 @@ void BattlegroundVHR::OpenWaveCell()
     ReleaseWaveFromPreparation();
 
     // Anything the party bought from the brokers during the countdown is on
-    // their reflections too, as of this moment.
+    // their reflections too, as of this moment (when copies inherit boons).
     RefreshWaveBoonCopies();
 
     // The Menagerie walks out with the wave: last wave's guardians go, this
@@ -1120,6 +1126,67 @@ void BattlegroundVHR::DespawnMenagerie()
                 guardian->DespawnOrUnsummon();
 
     _menagerie.clear();
+    _menagerieTraceLast.clear();
+}
+
+// Written to find out why the scripted Menagerie guardians (the Greater Earth
+// and Fire Elementals, ScriptedAI) stand idle while the PetAI ones (treants,
+// wolves) fight. Every gate the owner-assist / select-victim path consults is
+// printed against what the owner is fighting. Only CHANGES are logged: the
+// distance is printed but left out of the comparison, or every sample would
+// differ.
+void BattlegroundVHR::TraceMenagerie()
+{
+    Map* map = FindBgMap();
+    if (!map)
+        return;
+
+    for (ObjectGuid guid : _menagerie)
+    {
+        Creature* guardian = map->GetCreature(guid);
+        if (!guardian)
+            continue;
+
+        Unit* owner = guardian->GetOwner();
+        Unit* victim = guardian->GetVictim();
+        // What it should be fighting: the owner's target, else whoever is on
+        // the owner.
+        Unit* wanted = owner ? owner->GetVictim() : nullptr;
+        if (!wanted && owner)
+            wanted = owner->getAttackerForHelper();
+
+        std::string state = Trinity::StringFormat(
+            "ai={} react={} engaged={} combat={} victim={} motion={} evade={} root={} stun={} casting={} pvp=0x{:X} faction={} level={}",
+            guardian->GetScriptName().empty() ? std::string("PetAI") : guardian->GetScriptName(),
+            uint32(guardian->GetReactState()), guardian->IsEngaged(), guardian->IsInCombat(),
+            victim ? victim->GetName() : std::string("-"),
+            uint32(guardian->GetMotionMaster()->GetCurrentMovementGeneratorType()),
+            guardian->HasUnitState(UNIT_STATE_EVADE), guardian->HasUnitState(UNIT_STATE_ROOT),
+            guardian->HasUnitState(UNIT_STATE_STUNNED), guardian->HasUnitState(UNIT_STATE_CASTING),
+            uint32(guardian->GetPvpFlags()), guardian->GetFaction(), uint32(guardian->GetLevel()));
+
+        if (wanted)
+            state += Trinity::StringFormat(
+                " | wanted={} valid={} friendly={}/{} hostile={}/{} acceptable={} canAttack={} startForced={} los={} canBeginCombat={} inCombatWith={}",
+                wanted->GetName(), guardian->IsValidAttackTarget(wanted),
+                guardian->IsFriendlyTo(wanted), wanted->IsFriendlyTo(guardian),
+                guardian->IsHostileTo(wanted), wanted->IsHostileTo(guardian),
+                guardian->_IsTargetAcceptable(wanted), guardian->CanCreatureAttack(wanted),
+                guardian->CanStartAttack(wanted, true), guardian->IsWithinLOSInMap(wanted),
+                CombatManager::CanBeginCombat(guardian, wanted), guardian->IsInCombatWith(wanted));
+        else
+            state += " | wanted=-";
+
+        std::string& last = _menagerieTraceLast[guid];
+        if (state == last)
+            continue;
+        last = state;
+
+        TC_LOG_INFO("bg.battleground", "VHR menagerie trace: instance {} wave {} {} ({} {}) owner {} distToWanted={:.1f} distToOwner={:.1f}: {}",
+            GetInstanceID(), _waveNumber, guardian->GetName(), guardian->GetEntry(), guid.GetCounter(),
+            owner ? owner->GetName() : std::string("-"),
+            wanted ? guardian->GetDistance(wanted) : -1.0f, owner ? guardian->GetDistance(owner) : -1.0f, state);
+    }
 }
 
 void BattlegroundVHR::PostUpdateImpl(uint32 diff)
@@ -1136,6 +1203,16 @@ void BattlegroundVHR::PostUpdateImpl(uint32 diff)
 
     if (GetStatus() != STATUS_IN_PROGRESS)
         return;
+
+    if (!_menagerie.empty() && sWorld->getBoolConfig(CONFIG_CENTURION_VHR_MENAGERIE_TRACE))
+    {
+        _menagerieTraceTimerMs += diff;
+        if (_menagerieTraceTimerMs >= 500)
+        {
+            _menagerieTraceTimerMs = 0;
+            TraceMenagerie();
+        }
+    }
 
     if (_allyRetryMs)
         _allyRetryMs = _allyRetryMs <= diff ? 0 : _allyRetryMs - diff;

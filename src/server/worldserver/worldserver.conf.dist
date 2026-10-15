@@ -5855,10 +5855,24 @@ Centurion.Marks.HonorCostMultiplier = 0
 #        Description: Percent chance a wave mirrors the party itself instead of being drawn
 #                     from the playerbot population.
 #        Default:     10
+#
+#    Centurion.VioletHold.CopiesInheritBoons
+#        Description: Whether a party member's "Dark" wave copy carries that member's boons.
+#                     Off, the copy is the bare character, so every boon is an edge over it.
+#                     Live: `.reload config` applies from the next cell opening.
+#        Default:     0 - (Copies get no boons)
+#                     1 - (Copies get every boon their source holds)
+#
+#    Centurion.VioletHold.MenagerieTrace
+#        Description: Diagnostic. Logs (bg.battleground, INFO) every change in a Menagerie
+#                     guardian's combat state and each gate on its owner's target. Dev only.
+#        Default:     0 - (Disabled)
 
 Centurion.VioletHold.PrepSeconds = 30
 Centurion.VioletHold.CountdownFromSeconds = 15
 Centurion.VioletHold.PartyWaveChancePercent = 10
+Centurion.VioletHold.CopiesInheritBoons = 0
+Centurion.VioletHold.MenagerieTrace = 0
 
 ###############################################################################
 

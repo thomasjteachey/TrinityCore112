@@ -1575,6 +1575,13 @@ void World::LoadConfigSettings(bool reload)
     // the next wave. Sanitised: window >= 1s, countdown start clamped to it.
     m_int_configs[CONFIG_CENTURION_VHR_PREP_SECONDS] = std::max<int32>(1, sConfigMgr->GetIntDefault("Centurion.VioletHold.PrepSeconds", 30));
     m_int_configs[CONFIG_CENTURION_VHR_COUNTDOWN_FROM_SECONDS] = std::clamp<int32>(sConfigMgr->GetIntDefault("Centurion.VioletHold.CountdownFromSeconds", 15), 0, int32(m_int_configs[CONFIG_CENTURION_VHR_PREP_SECONDS]));
+    // Whether a party member's wave copy carries that member's boons. Off, a
+    // copy is the bare character, so every boon the party buys is an edge over
+    // its own reflections. Read as each wave is dressed and as its cells open.
+    m_bool_configs[CONFIG_CENTURION_VHR_COPIES_INHERIT_BOONS] = sConfigMgr->GetBoolDefault("Centurion.VioletHold.CopiesInheritBoons", false);
+    // Diagnostic: log every change in a Menagerie guardian's combat state, and
+    // why it would or would not take on its owner's target. Dev realms only.
+    m_bool_configs[CONFIG_CENTURION_VHR_MENAGERIE_TRACE] = sConfigMgr->GetBoolDefault("Centurion.VioletHold.MenagerieTrace", false);
     m_float_configs[CONFIG_CENTURION_BG_ARENA_REWARD_MULTIPLIER] = sConfigMgr->GetFloatDefault("Centurion.Battleground.ArenaRewardMultiplier", .2f);
     m_float_configs[CONFIG_CENTURION_BG_ARENA_EXPERIENCE_MULTIPLIER] = std::max(0.0f,
         sConfigMgr->GetFloatDefault("Centurion.Battleground.ArenaExperienceMultiplier", .4f));

@@ -34,6 +34,7 @@
 #include "Random.h"
 #include "SharedDefines.h"
 #include "SpellAuras.h"
+#include "World.h"
 #include "WorldSession.h"
 
 #include <algorithm>
@@ -453,13 +454,17 @@ void FulfilAllyRequests(BattlegroundVHR* bg)
 void DressWaveClone(BattlegroundVHR* bg, Player* clone, Player* source, bool isActualHuman, uint32 waveNumber,
     uint8 diminishedStacks)
 {
-    // A clone of a party member is that member, boons included - the
-    // clone manager copies the spellbook and gear but wipes auras. The
-    // pairing goes to the battleground as well, which re-copies as the
-    // cells open so boons bought during the countdown still land.
+    // A clone of a party member is that member. Its boons too only when
+    // Centurion.VioletHold.CopiesInheritBoons says so (off by default: a
+    // boon should be an edge over your own reflection, not cancelled by
+    // it) - the clone manager copies the spellbook and gear but wipes
+    // auras. The pairing goes to the battleground either way, which
+    // re-copies as the cells open so boons bought during the countdown
+    // still land.
     if (isActualHuman)
     {
-        VioletHoldBoons::CopyBoonsTo(source, clone);
+        if (sWorld->getBoolConfig(CONFIG_CENTURION_VHR_COPIES_INHERIT_BOONS))
+            VioletHoldBoons::CopyBoonsTo(source, clone);
         bg->NotifyCloneSource(clone->GetGUID(), source->GetGUID());
     }
 

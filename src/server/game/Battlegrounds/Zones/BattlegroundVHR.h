@@ -46,6 +46,8 @@
 #include "Common.h"
 #include "Position.h"
 
+#include <map>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -478,6 +480,9 @@ private:
     // previous wave's down first (and at the end of the run).
     void SummonMenagerie();
     void DespawnMenagerie();
+    // Centurion.VioletHold.MenagerieTrace: log each guardian's combat state
+    // and the verdict on its owner's target, whenever either changes.
+    void TraceMenagerie();
     // Everyone alive who is not a real party member and needs no rez.
     void ResurrectAllies(float restore);
 
@@ -548,6 +553,9 @@ private:
     GuidSet _allies;
     // Menagerie guardians alive for the current wave.
     std::vector<ObjectGuid> _menagerie;
+    // MenagerieTrace: the last line logged per guardian, and its sampling clock.
+    std::map<ObjectGuid, std::string> _menagerieTraceLast;
+    uint32 _menagerieTraceTimerMs = 0;
     // clone -> the party member it was copied from, for the current wave only.
     std::vector<std::pair<ObjectGuid, ObjectGuid>> _waveCloneSources;
 };
