@@ -21,6 +21,7 @@
 #include "Battleground.h"
 #include "BattlegroundScore.h"
 #include "Object.h"
+#include <unordered_map>
 
 #define BG_SA_FLAG_AMOUNT           3
 #define BG_SA_DEMOLISHER_AMOUNT     4
@@ -634,6 +635,7 @@ class BattlegroundSA : public Battleground
         void GetSiegeVehicles(ObjectGuid playerGuid, GuidVector& vehicles) const override;
         void GetStandingGates(GuidVector& gates) const override;
         void GetTeleporters(ObjectGuid playerGuid, std::vector<BattlegroundTeleporter>& teleporters) const override;
+        bool OwnsPreparationState(Player const* player) const override;
 
     private:
         /// A round is being fought: not a warmup, not between rounds
@@ -702,6 +704,19 @@ class BattlegroundSA : public Battleground
         /// Send packet to player for destroy boats (client part)
         void SendTransportsRemove(Player* player);
 
+        /// A bot carried across on a boat somebody with a client is riding
+        struct BoatRider
+        {
+            uint8 Boat = 0;                 // 0 or 1: BG_SA_BOAT_ONE + Boat
+            Position Offset;                // its place on the deck
+            GuidVector Hidden;              // its pets, out of sight until it lands
+        };
+        /// Puts the attacker bots on the boats the people are riding, keeps them there, and lands them with the round
+        void UpdateBoatRiders(uint32 diff);
+        void PlaceBoatRider(Player* bot, BoatRider& rider, Player const* anchor);
+        void ReleaseBoatRider(Player* bot, BoatRider const& rider, bool land);
+        void ReleaseBoatRiders(bool land);
+
         /// Id of attacker team
         TeamId Attackers;
 
@@ -736,5 +751,8 @@ class BattlegroundSA : public Battleground
 
         // Achievement: Not Even a Scratch
         bool _allVehiclesAlive[PVP_TEAMS_COUNT];
+
+        std::unordered_map<ObjectGuid, BoatRider> _boatRiders;
+        uint32 _boatRiderTimer;
 };
 #endif

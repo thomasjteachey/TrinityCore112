@@ -1246,6 +1246,11 @@ class TC_GAME_API Unit : public WorldObject
         void SetFacingToObject(WorldObject const* object, bool force = true);
 
         void BuildHeartBeatMsg(WorldPacket* data) const;
+        // Tells the clients that see this unit where the server has put it -
+        // transport and place on it included - the way a client's own heartbeat
+        // would. For a unit the server places itself, such as a playerbot set
+        // on a boat that only clients animate (BattlegroundSA).
+        void BroadcastServerPlacedMovement();
 
         bool IsAlive() const { return (m_deathState == ALIVE); }
         bool isDying() const { return (m_deathState == JUST_DIED); }

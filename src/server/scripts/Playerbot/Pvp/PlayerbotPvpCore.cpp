@@ -8862,11 +8862,19 @@ PvpValues PvpCore::CollectValues(Player const* player)
     // bot sent for a flag - the runner, a bot standing near one, a bot
     // returning ours - was sent for it BECAUSE it matters more than the fight
     // around it, so it keeps its route and fires what it can on the move.
-    context.preserveFlagObjectiveMovement = inActiveBattleground &&
+    //
+    // A bot fetching or carrying a siege charge, or on its way to the siege
+    // vehicle it is to drive, was sent the same way: the gate it is to bring
+    // down matters more than the defenders it passes, who otherwise pull it
+    // into every fight on the way and it never gets there.
+    bool const siegeDutyOwnsRoute =
+        values.objectiveDuty == uint8(playerbot::ObjectiveDuty::CarryCharge) ||
+        values.objectiveDuty == uint8(playerbot::ObjectiveDuty::DriveSiege);
+    context.preserveFlagObjectiveMovement = inActiveBattleground && (siegeDutyOwnsRoute ||
         (values.ctfRole != 0
             ? (values.playerHasFlag || values.flagPickupAvailable)
             : (values.playerHasFlag || values.flagPickupNearby ||
-                (values.flagPickupAvailable && !values.nearbyEnemyActive)));
+                (values.flagPickupAvailable && !values.nearbyEnemyActive))));
     context.preserveFlagCarrierMovement = inActiveBattleground && values.playerHasFlag;
     // A carrier waiting in its own flag room for our flag to come home still
     // must not wander off, but it is not running either: it may stop and cast.

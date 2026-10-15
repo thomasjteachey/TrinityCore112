@@ -12285,6 +12285,28 @@ void Unit::SendMovementFlagUpdate(bool self /* = false */)
     SendMessageToSet(&data, self);
 }
 
+void Unit::BroadcastServerPlacedMovement()
+{
+    if (!IsInWorld())
+        return;
+
+    // A playerbot's packets leave out what it has no client to settle (see
+    // SOCKETLESS_OBSERVER_STRIPPED_MOVEMENT_FLAGS); a root above all would
+    // outlive its unroot on every observer.
+    MovementInfo movementInfo = m_movementInfo;
+    if (IsSocketlessServerDrivenPlayer(this))
+    {
+        movementInfo.RemoveMovementFlag(SOCKETLESS_OBSERVER_STRIPPED_MOVEMENT_FLAGS);
+        movementInfo.fallTime = 0;
+    }
+    movementInfo.pos.Relocate(GetPositionX(), GetPositionY(), GetPositionZ(), GetOrientation());
+
+    WorldPacket data(MSG_MOVE_HEARTBEAT, 64);
+    data << GetPackGUID();
+    Unit::BuildMovementPacket(movementInfo.pos, movementInfo.transport.pos, movementInfo, &data);
+    SendMessageToSet(&data, false);
+}
+
 bool Unit::IsSitState() const
 {
     uint8 s = GetStandState();

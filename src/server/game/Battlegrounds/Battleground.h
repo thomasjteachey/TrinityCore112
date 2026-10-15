@@ -760,6 +760,9 @@ class TC_GAME_API Battleground
         // Violet Hold does that per WAVE, mid-match - and the playerbot
         // lifecycle otherwise strips preparation from every bot the moment a
         // match reads STATUS_IN_PROGRESS, which is Violet Hold's entire life.
+        // Strand of the Ancients answers it for its first round's attackers,
+        // still at sea while the match already reads in progress. The playerbot
+        // lifecycle holds a bot in place for as long as this is true.
         virtual bool OwnsPreparationState(Player const* /*player*/) const { return false; }
 
         void SetHoliday(bool is_holiday);
