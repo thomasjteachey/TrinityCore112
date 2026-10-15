@@ -21,15 +21,23 @@
 #include "ArenaTeamMgr.h"
 #include "CharacterCache.h"
 #include "Chat.h"
+#include "Containers.h"
+#include "DBCStores.h"
 #include "Log.h"
 #include "Map.h"
 #include "ObjectAccessor.h"
+#include "Pet.h"
 #include "Player.h"
+#include "Random.h"
 #include "StringFormat.h"
 #include "Surnames.h"
+#include "TemporarySummon.h"
 #include "World.h"
 #include "WorldSession.h"
 #include "WorldStatePackets.h"
+
+#include <algorithm>
+#include <cmath>
 
 void ArenaScore::AppendToPacket(WorldPacket& data)
 {
@@ -87,12 +95,32 @@ void Arena::AddPlayer(Player* player)
     if (!isInBattleground)
         PlayerScores[player->GetGUID().GetCounter()] = new ArenaScore(player->GetGUID(), player->GetBGTeam());
 
+    ApplyArenaFlag(player);
+
+    UpdateArenaWorldState();
+}
+
+void Arena::RemoveArenaFlags(Player* player)
+{
+    for (uint32 spellId : { uint32(SPELL_ALLIANCE_GOLD_FLAG), uint32(SPELL_ALLIANCE_GREEN_FLAG),
+        uint32(SPELL_HORDE_GOLD_FLAG), uint32(SPELL_HORDE_GREEN_FLAG) })
+        player->RemoveAurasDueToSpell(spellId);
+}
+
+void Arena::ApplyArenaFlag(Player* player)
+{
     // A squad match: each squad carries its own flag (battleground_squad_start
     // FlagSpell) - two squads share each side, so the side's flag would make
     // two of them look alike.
     if (uint32 const squadFlag = GetSquadFlagSpell(GetPlayerSquad(player->GetGUID())))
+    {
         player->CastSpell(player, squadFlag, true);
-    else if (player->GetBGTeam() == ALLIANCE)   // gold
+        return;
+    }
+
+    // The side's, and only that one: a shuffle changes sides between rounds.
+    RemoveArenaFlags(player);
+    if (player->GetBGTeam() == ALLIANCE)        // gold
     {
         if (player->GetTeam() == HORDE)
             player->CastSpell(player, SPELL_HORDE_GOLD_FLAG, true);
@@ -106,8 +134,6 @@ void Arena::AddPlayer(Player* player)
         else
             player->CastSpell(player, SPELL_ALLIANCE_GREEN_FLAG, true);
     }
-
-    UpdateArenaWorldState();
 }
 
 void Arena::RemovePlayer(Player* player, ObjectGuid guid, uint32 /*team*/)
@@ -123,11 +149,17 @@ void Arena::RemovePlayer(Player* player, ObjectGuid guid, uint32 /*team*/)
 
     // Their enemy frames go with them; the others see the roster change on
     // the feed's next look.
-    if (player && IsSquadMatch())
+    if (player && UsesSquadFeed())
         SendSquadFeedLine(player, "SQ:-");
+    _squadFeedMine.erase(guid);
 
     if (GetStatus() == STATUS_WAIT_LEAVE)
         return;
+
+    // Gone for good (not just logged out, which keeps the seat): the rounds
+    // still to come are dealt without them.
+    if (IsSoloShuffle() && !IsPlayerInBattleground(guid))
+        DropFromShuffle(guid);
 
     UpdateArenaWorldState();
     CheckWinConditions();
@@ -180,13 +212,35 @@ Arena::SquadFeedPlayers Arena::GetSquadFeedPlayers() const
     return players;
 }
 
+uint8 Arena::GetFeedSquad(ObjectGuid guid) const
+{
+    if (IsSquadMatch())
+        return GetPlayerSquad(guid);
+
+    if (!IsSoloShuffle())
+        return BATTLEGROUND_NO_SQUAD;
+
+    if (_shufflePhase == ShufflePhase::Finished)
+        return WonSoloShuffle(guid) ? 0 : 1;
+
+    uint32 const team = GetPlayerTeam(guid);
+    return team == ALLIANCE ? 0 : (team == HORDE ? 1 : BATTLEGROUND_NO_SQUAD);
+}
+
+uint8 Arena::GetFeedSquadCount() const
+{
+    if (IsSquadMatch())
+        return GetSquadCount();
+    return IsSoloShuffle() ? 2 : 0;
+}
+
 std::vector<ObjectGuid> Arena::GetSquadFeedMembers(uint8 squad) const
 {
     std::vector<ObjectGuid> members;
     for (auto const& [guid, participant] : m_Players)
     {
         (void)participant;
-        if (GetPlayerSquad(guid) == squad)
+        if (GetFeedSquad(guid) == squad)
             members.push_back(guid);
     }
     return members;
@@ -267,6 +321,11 @@ std::string Arena::BuildSquadFeedStates(uint8 squad, std::vector<ObjectGuid> con
 
 std::string Arena::BuildSquadFeedWinner() const
 {
+    // A shuffle's "winning squad" is everyone who won more rounds than they
+    // lost (feed squad 0), if anyone did.
+    if (IsSoloShuffle())
+        return GetWinner() == PVP_TEAM_ALLIANCE ? std::string("SQW:0") : std::string("SQW:-");
+
     uint8 const winner = GetWinnerSquad();
     return winner < GetSquadCount() ? Trinity::StringFormat("SQW:{}", winner) : std::string("SQW:-");
 }
@@ -285,11 +344,32 @@ void Arena::BroadcastSquadFeedLine(std::string const& line, SquadFeedPlayers con
 
 void Arena::UpdateSquadFeed()
 {
-    if (!IsSquadMatch() || !FindBgMap())
+    if (!UsesSquadFeed() || !FindBgMap())
         return;
 
     SquadFeedPlayers const players = GetSquadFeedPlayers();
-    for (uint8 squad = 0; squad < GetSquadCount() && squad < MAX_BATTLEGROUND_SQUADS; ++squad)
+
+    // A shuffle moves people from one side to the other between rounds, and
+    // their client has to be told which side it is now on before the rosters.
+    if (IsSoloShuffle())
+    {
+        for (auto const& [guid, player] : players)
+        {
+            if (!IsPlayerInBattleground(guid))
+                continue;
+
+            uint8 const mine = GetFeedSquad(guid);
+            auto const known = _squadFeedMine.find(guid);
+            if (known != _squadFeedMine.end() && known->second == mine)
+                continue;
+
+            _squadFeedMine[guid] = mine;
+            SendSquadFeedLine(player, Trinity::StringFormat("SQ:{}:{}",
+                mine < GetFeedSquadCount() ? std::to_string(mine) : std::string("-"), uint32(GetFeedSquadCount())));
+        }
+    }
+
+    for (uint8 squad = 0; squad < GetFeedSquadCount() && squad < MAX_BATTLEGROUND_SQUADS; ++squad)
     {
         std::vector<ObjectGuid> const members = GetSquadFeedMembers(squad);
         std::string roster = BuildSquadFeedRoster(squad, members, players);
@@ -318,7 +398,7 @@ void Arena::UpdateSquadFeed()
 
 void Arena::SendSquadFeedTo(Player* player)
 {
-    if (!IsSquadMatch())
+    if (!UsesSquadFeed())
     {
         Battleground::SendSquadFeedTo(player);
         return;
@@ -326,12 +406,14 @@ void Arena::SendSquadFeedTo(Player* player)
     if (!player)
         return;
 
-    uint8 const mine = GetPlayerSquad(player->GetGUID());
+    uint8 const mine = GetFeedSquad(player->GetGUID());
+    if (IsSoloShuffle() && IsPlayerInBattleground(player->GetGUID()))
+        _squadFeedMine[player->GetGUID()] = mine;
     SendSquadFeedLine(player, Trinity::StringFormat("SQ:{}:{}",
-        mine < GetSquadCount() ? std::to_string(mine) : std::string("-"), uint32(GetSquadCount())));
+        mine < GetFeedSquadCount() ? std::to_string(mine) : std::string("-"), uint32(GetFeedSquadCount())));
 
     SquadFeedPlayers const players = GetSquadFeedPlayers();
-    for (uint8 squad = 0; squad < GetSquadCount() && squad < MAX_BATTLEGROUND_SQUADS; ++squad)
+    for (uint8 squad = 0; squad < GetFeedSquadCount() && squad < MAX_BATTLEGROUND_SQUADS; ++squad)
     {
         std::vector<ObjectGuid> const members = GetSquadFeedMembers(squad);
         SendSquadFeedLine(player, BuildSquadFeedRoster(squad, members, players));
@@ -424,6 +506,11 @@ void Arena::CheckWinConditions()
 {
     if (IsReplay())
     {
+        return;
+    }
+    if (IsSoloShuffle())
+    {
+        CheckShuffleRound();
         return;
     }
     if (IsSquadMatch())
@@ -938,4 +1025,708 @@ void Arena::EndBattleground(uint32 winner)
 
     // end battleground
     Battleground::EndBattleground(winner);
+}
+
+// ---------------------------------------------------------------- solo shuffle
+//
+// See SOLO_SHUFFLE_ROUNDS in Arena.h for the shape of the match. The rounds are
+// driven from Battleground::Update through UpdateRounds, and a round is decided
+// by CheckWinConditions, the same call every arena makes on a death or a leave.
+
+namespace
+{
+    // From a round being decided to the next one's teams being dealt: long
+    // enough to see who won it.
+    constexpr uint32 SHUFFLE_INTERMISSION_MS = 4 * IN_MILLISECONDS;
+    // Behind the gates before every round after the first: time to buff and
+    // call a pet again, every cast instant and free (SPELL_ARENA_PREPARATION).
+    constexpr uint32 SHUFFLE_PREPARATION_MS = 20 * IN_MILLISECONDS;
+    // A round still undecided this long goes to the side with the most still
+    // standing, then the most health between them; level is a draw.
+    constexpr uint32 SHUFFLE_ROUND_TIME_LIMIT_MS = 5 * MINUTE * IN_MILLISECONDS;
+    // More than this many in one shuffle cannot happen through the queue or the
+    // bot fill (three a side); past it the sides are simply kept every round.
+    constexpr uint32 SHUFFLE_MAX_ROSTER = 10;
+
+    uint32 CountBits(uint32 mask)
+    {
+        uint32 count = 0;
+        for (; mask; mask &= mask - 1)
+            ++count;
+        return count;
+    }
+
+    // Deals the rounds of a shuffle. Roster member i plays a round on the gold
+    // (Alliance) side when bit i of its mask is set.
+    //
+    // A round puts the healers as evenly over the two sides as they will go -
+    // with two, one each. Among the splits that do, it takes, round by round,
+    // one not played yet (while any is left) that keeps who has teamed with whom
+    // the most even. `played` are the rounds already fought, which count towards
+    // that; `first`, when it is one of the allowed splits, opens what is dealt.
+    std::vector<uint32> DealShuffleRounds(std::vector<bool> const& healers, std::vector<uint32> const& played,
+        uint32 first, uint32 rounds)
+    {
+        std::vector<uint32> dealt;
+        uint32 const n = uint32(healers.size());
+        if (!rounds)
+            return dealt;
+
+        if (n < 2 || n > SHUFFLE_MAX_ROSTER)
+        {
+            dealt.assign(rounds, first ? first : (played.empty() ? 0 : played.back()));
+            return dealt;
+        }
+
+        uint32 const full = (1u << n) - 1;
+        uint32 healerMask = 0;
+        for (uint32 i = 0; i < n; ++i)
+            if (healers[i])
+                healerMask |= 1u << i;
+        uint32 const healerCount = CountBits(healerMask);
+
+        // With an even roster a split and its mirror are the same two teams;
+        // they are counted once, as the one with member 0 on gold.
+        auto const canonical = [n, full](uint32 mask) { return (n % 2 == 0 && !(mask & 1)) ? (full & ~mask) : mask; };
+        auto const imbalance = [healerMask, healerCount](uint32 mask)
+        {
+            int32 const gold = int32(CountBits(mask & healerMask));
+            return uint32(std::abs(gold - (int32(healerCount) - gold)));
+        };
+
+        // Gold always gets n / 2, so an odd roster plays one short on gold.
+        std::vector<uint32> splits;
+        uint32 bestImbalance = ~0u;
+        for (uint32 mask = 1; mask < full; ++mask)
+        {
+            if (CountBits(mask) != n / 2 || canonical(mask) != mask)
+                continue;
+            splits.push_back(mask);
+            bestImbalance = std::min(bestImbalance, imbalance(mask));
+        }
+        splits.erase(std::remove_if(splits.begin(), splits.end(),
+            [&](uint32 mask) { return imbalance(mask) != bestImbalance; }), splits.end());
+        Trinity::Containers::RandomShuffle(splits);
+
+        std::vector<uint32> together(n * n, 0);
+        std::vector<uint32> used;
+        auto const sameSide = [](uint32 mask, uint32 a, uint32 b) { return ((mask >> a) & 1) == ((mask >> b) & 1); };
+        auto const record = [&](uint32 mask)
+        {
+            for (uint32 a = 0; a < n; ++a)
+                for (uint32 b = a + 1; b < n; ++b)
+                    if (sameSide(mask, a, b))
+                        ++together[a * n + b];
+            used.push_back(canonical(mask & full));
+        };
+
+        for (uint32 mask : played)
+            record(mask);
+
+        if (first && std::find(splits.begin(), splits.end(), canonical(first & full)) != splits.end())
+        {
+            dealt.push_back(first & full);
+            record(first);
+        }
+
+        while (dealt.size() < rounds)
+        {
+            uint32 best = 0;
+            uint32 bestUses = ~0u;
+            uint32 bestMost = ~0u;
+            uint64 bestSquares = ~uint64(0);
+            for (uint32 mask : splits)
+            {
+                uint32 const uses = uint32(std::count(used.begin(), used.end(), mask));
+                uint32 most = 0;
+                uint64 squares = 0;
+                for (uint32 a = 0; a < n; ++a)
+                {
+                    for (uint32 b = a + 1; b < n; ++b)
+                    {
+                        uint32 const count = together[a * n + b] + (sameSide(mask, a, b) ? 1 : 0);
+                        most = std::max(most, count);
+                        squares += uint64(count) * count;
+                    }
+                }
+
+                if (uses < bestUses || (uses == bestUses && (most < bestMost || (most == bestMost && squares < bestSquares))))
+                {
+                    best = mask;
+                    bestUses = uses;
+                    bestMost = most;
+                    bestSquares = squares;
+                }
+            }
+
+            // Which of the two teams wears gold changes nothing about who plays
+            // with whom; toss for it, so nobody always starts from one end.
+            if (n % 2 == 0 && roll_chance_i(50))
+                best = full & ~best;
+
+            dealt.push_back(best);
+            record(best);
+        }
+
+        return dealt;
+    }
+
+    std::string ShuffleName(ObjectGuid guid, std::unordered_map<ObjectGuid, Player*> const& players)
+    {
+        auto const itr = players.find(guid);
+        if (itr != players.end())
+            return Battleground::GetPlayerDisplayName(itr->second);
+        if (CharacterCacheEntry const* entry = sCharacterCache->GetCharacterCacheByGuid(guid))
+            return Surnames::Decorated(guid, entry->Name);
+        return "someone";
+    }
+
+    // "A", "A and B", "A, B and C".
+    std::string JoinNames(std::vector<std::string> const& names)
+    {
+        std::string joined;
+        for (size_t i = 0; i < names.size(); ++i)
+        {
+            if (i)
+                joined += i + 1 == names.size() ? " and " : ", ";
+            joined += names[i];
+        }
+        return joined;
+    }
+}
+
+bool Arena::IsSoloShuffleHealer(Player const* player)
+{
+    if (!player)
+        return false;
+
+    // TalentTab.dbc's healing trees: Discipline and Holy (priest), Holy
+    // (paladin), Restoration (shaman, druid). The same ids the AzerothCore
+    // solo queue sorts roles by.
+    static constexpr uint32 HealingTabs[] = { 201, 202, 382, 262, 282 };
+
+    std::map<uint32, uint32> pointsByTab;
+    for (uint32 talentId = 0; talentId < sTalentStore.GetNumRows(); ++talentId)
+    {
+        TalentEntry const* talent = sTalentStore.LookupEntry(talentId);
+        if (!talent)
+            continue;
+
+        for (int8 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
+        {
+            if (talent->SpellRank[rank] && player->HasTalent(talent->SpellRank[rank], player->GetActiveSpec()))
+            {
+                pointsByTab[talent->TabID] += uint32(rank) + 1;
+                break;
+            }
+        }
+    }
+
+    uint32 bestTab = 0;
+    uint32 bestPoints = 0;
+    for (auto const& [tab, points] : pointsByTab)
+    {
+        if (points > bestPoints)
+        {
+            bestTab = tab;
+            bestPoints = points;
+        }
+    }
+
+    return bestPoints && std::find(std::begin(HealingTabs), std::end(HealingTabs), bestTab) != std::end(HealingTabs);
+}
+
+bool Arena::IsBetweenRounds() const
+{
+    return IsSoloShuffle() && (_shufflePhase == ShufflePhase::Intermission || _shufflePhase == ShufflePhase::Preparation);
+}
+
+bool Arena::OwnsPreparationState(Player const* /*player*/) const
+{
+    // The playerbots hold where they stand while this is true, and keep the
+    // preparation aura that has them buff and call their pets rather than fight.
+    return IsBetweenRounds();
+}
+
+bool Arena::IsWinningParticipant(ObjectGuid guid, uint32 team, uint32 winner) const
+{
+    if (IsSoloShuffle())
+        return WonSoloShuffle(guid);
+
+    return Battleground::IsWinningParticipant(guid, team, winner);
+}
+
+bool Arena::WonSoloShuffle(ObjectGuid guid) const
+{
+    auto const itr = _shuffleWins.find(guid);
+    return itr != _shuffleWins.end() && _shuffleRoundsPlayed && itr->second * 2 > _shuffleRoundsPlayed;
+}
+
+uint32 Arena::GetShuffleSideMask() const
+{
+    uint32 mask = 0;
+    for (size_t i = 0; i < _shuffleRoster.size() && i < 32; ++i)
+        if (GetPlayerTeam(_shuffleRoster[i]) == ALLIANCE)
+            mask |= 1u << i;
+    return mask;
+}
+
+std::string Arena::GetShuffleTeams(uint32 team) const
+{
+    SquadFeedPlayers const players = GetSquadFeedPlayers();
+    std::vector<std::string> names;
+    for (ObjectGuid guid : _shuffleRoster)
+        if (GetPlayerTeam(guid) == team)
+            names.push_back(ShuffleName(guid, players));
+    return names.empty() ? std::string("nobody") : JoinNames(names);
+}
+
+std::string Arena::GetShuffleStandings() const
+{
+    SquadFeedPlayers const players = GetSquadFeedPlayers();
+    std::vector<std::pair<uint32, std::string>> standings;
+    for (ObjectGuid guid : _shuffleRoster)
+    {
+        auto const wins = _shuffleWins.find(guid);
+        standings.emplace_back(wins != _shuffleWins.end() ? wins->second : 0, ShuffleName(guid, players));
+    }
+
+    std::stable_sort(standings.begin(), standings.end(),
+        [](std::pair<uint32, std::string> const& left, std::pair<uint32, std::string> const& right) { return left.first > right.first; });
+
+    std::string line;
+    for (auto const& [wins, name] : standings)
+    {
+        if (!line.empty())
+            line += ", ";
+        line += Trinity::StringFormat("{} {}", name, wins);
+    }
+    return line;
+}
+
+void Arena::UpdateRounds(uint32 diff)
+{
+    switch (_shufflePhase)
+    {
+        case ShufflePhase::NotStarted:
+            // SkipStartDelay asks CheckWinConditions as the gates open, which
+            // begins the shuffle; this only catches a start that went round it.
+            if (GetStatus() == STATUS_IN_PROGRESS)
+                CheckShuffleRound();
+            break;
+        case ShufflePhase::Fighting:
+            _shuffleTimer += diff;
+            if (_shuffleTimer >= SHUFFLE_ROUND_TIME_LIMIT_MS)
+                EndShuffleRoundAtTimeLimit();
+            break;
+        case ShufflePhase::Intermission:
+            if (_shuffleTimer > diff)
+                _shuffleTimer -= diff;
+            else
+                PrepareShuffleRound();
+            break;
+        case ShufflePhase::Preparation:
+            KeepPlayersAtStarts(diff);
+            if (_shuffleTimer > diff)
+            {
+                _shuffleTimer -= diff;
+                if (!_shuffleTenSecondsSent && _shuffleTimer <= 10 * IN_MILLISECONDS)
+                {
+                    _shuffleTenSecondsSent = true;
+                    SendBroadcastText(ARENA_TEXT_START_TEN_SECONDS, CHAT_MSG_BG_SYSTEM_NEUTRAL);
+                }
+            }
+            else
+                StartShuffleRound();
+            break;
+        default:
+            break;
+    }
+}
+
+void Arena::CheckShuffleRound()
+{
+    if (GetStatus() != STATUS_IN_PROGRESS)
+        return;
+
+    if (_shufflePhase == ShufflePhase::NotStarted)
+        BeginSoloShuffle();
+
+    if (_shufflePhase != ShufflePhase::Fighting)
+        return;
+
+    uint32 const goldStanding = GetArenaAlivePlayersCountByTeam(ALLIANCE);
+    uint32 const greenStanding = GetArenaAlivePlayersCountByTeam(HORDE);
+    if (goldStanding && greenStanding)
+        return;
+
+    if (!goldStanding && !greenStanding)
+        EndShuffleRound(0, "Both teams fell together. ");
+    else
+        EndShuffleRound(goldStanding ? ALLIANCE : HORDE, "");
+}
+
+void Arena::BeginSoloShuffle()
+{
+    _shuffleRoster.clear();
+    _shuffleWins.clear();
+    _shuffleHealers.clear();
+    _shuffleRoundsPlayed = 0;
+
+    SquadFeedPlayers const players = GetSquadFeedPlayers();
+    std::vector<bool> healers;
+    for (auto const& [guid, participant] : m_Players)
+    {
+        (void)participant;
+        auto const itr = players.find(guid);
+        bool const healer = itr != players.end() && IsSoloShuffleHealer(itr->second);
+        _shuffleRoster.push_back(guid);
+        _shuffleWins[guid] = 0;
+        healers.push_back(healer);
+        if (healer)
+            _shuffleHealers.insert(guid);
+    }
+
+    if (_shuffleRoster.size() < 2)
+    {
+        // Nobody to play against: nobody came for the other seats.
+        _shufflePhase = ShufflePhase::Finished;
+        AnnounceToArena(this, "Nobody else came to the shuffle. The match is over.");
+        EndBattleground(0);
+        return;
+    }
+
+    // Round 1 is fought as the queue and the bot fill seated it, unless that
+    // left the sides uneven or the healers on one side.
+    uint32 const seated = GetShuffleSideMask();
+    _shuffleSchedule = DealShuffleRounds(healers, {}, seated, SOLO_SHUFFLE_ROUNDS);
+    _shuffleRound = 1;
+
+    if (_shuffleSchedule.front() != seated)
+    {
+        for (size_t i = 0; i < _shuffleRoster.size(); ++i)
+        {
+            ObjectGuid const guid = _shuffleRoster[i];
+            uint32 const team = (_shuffleSchedule.front() & (1u << i)) ? ALLIANCE : HORDE;
+            if (GetPlayerTeam(guid) == team)
+                continue;
+
+            auto const itr = players.find(guid);
+            Player* player = itr != players.end() ? itr->second : nullptr;
+            MoveParticipantToTeam(guid, player, team);
+            if (!player)
+                continue;
+
+            ApplyArenaFlag(player);
+            SendToShuffleStart(player);
+            SendInProgressStatusTo(player);
+        }
+        UpdateArenaWorldState();
+    }
+
+    _shufflePhase = ShufflePhase::Fighting;
+    _shuffleTimer = 0;
+
+    TC_LOG_DEBUG("bg.arena", "Solo Shuffle: instance {} on map {} begins with {} players ({} healers).",
+        GetInstanceID(), GetMapId(), uint32(_shuffleRoster.size()), uint32(_shuffleHealers.size()));
+
+    AnnounceToArena(this, Trinity::StringFormat("Solo Shuffle: {} rounds, and new teams before each one. Win more rounds than you lose.",
+        uint32(_shuffleSchedule.size())));
+    AnnounceToArena(this, Trinity::StringFormat("Round 1 - Gold: {}. Green: {}.", GetShuffleTeams(ALLIANCE), GetShuffleTeams(HORDE)));
+}
+
+void Arena::EndShuffleRound(uint32 winner, std::string const& why)
+{
+    ++_shuffleRoundsPlayed;
+
+    for (ObjectGuid guid : _shuffleRoster)
+        if (winner && GetPlayerTeam(guid) == winner)
+            ++_shuffleWins[guid];
+
+    uint32 const rounds = uint32(_shuffleSchedule.size());
+    if (winner)
+        AnnounceToArena(this, Trinity::StringFormat("{}{} wins round {} of {}: {}.", why, winner == ALLIANCE ? "Gold" : "Green",
+            uint32(_shuffleRound), rounds, GetShuffleTeams(winner)));
+    else
+        AnnounceToArena(this, Trinity::StringFormat("{}Round {} of {} is a draw.", why, uint32(_shuffleRound), rounds));
+
+    TC_LOG_DEBUG("bg.arena", "Solo Shuffle: instance {} round {} -> {}.", GetInstanceID(), uint32(_shuffleRound),
+        winner == ALLIANCE ? "gold" : (winner == HORDE ? "green" : "draw"));
+
+    if (_shuffleRound >= rounds || _shuffleRoster.size() < 2)
+    {
+        FinishSoloShuffle();
+        return;
+    }
+
+    AnnounceToArena(this, "Rounds won: " + GetShuffleStandings() + ".");
+    _shufflePhase = ShufflePhase::Intermission;
+    _shuffleTimer = SHUFFLE_INTERMISSION_MS;
+}
+
+void Arena::EndShuffleRoundAtTimeLimit()
+{
+    SquadFeedPlayers const players = GetSquadFeedPlayers();
+    uint32 standing[PVP_TEAMS_COUNT] = { };
+    float health[PVP_TEAMS_COUNT] = { };
+    for (auto const& [guid, participant] : m_Players)
+    {
+        if (!IsArenaAlive(guid))
+            continue;
+
+        TeamId const side = GetTeamIndexByTeamId(participant.Team);
+        ++standing[side];
+        auto const itr = players.find(guid);
+        if (itr != players.end())
+            health[side] += itr->second->GetHealthPct();
+    }
+
+    uint32 winner = 0;
+    if (standing[TEAM_ALLIANCE] != standing[TEAM_HORDE])
+        winner = standing[TEAM_ALLIANCE] > standing[TEAM_HORDE] ? ALLIANCE : HORDE;
+    else if (std::abs(health[TEAM_ALLIANCE] - health[TEAM_HORDE]) >= 1.0f)
+        winner = health[TEAM_ALLIANCE] > health[TEAM_HORDE] ? ALLIANCE : HORDE;
+
+    EndShuffleRound(winner, winner ? "Time is up, and the side with the most left standing takes it. " : "Time is up and neither side is ahead. ");
+}
+
+void Arena::ResetForShuffleRound(Player* player)
+{
+    // Spirit of Redemption is a shapeshift into a body that is not dead yet.
+    if (player->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION))
+        player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
+
+    if (!player->IsAlive())
+    {
+        player->ResurrectPlayer(1.0f);
+        player->SpawnCorpseBones(false);
+    }
+
+    player->CombatStopWithPets(true);
+    ClearCombatControl(player);
+
+    // What coming into the arena did (Player::TeleportTo): the round's buffs
+    // and debuffs off, and every cooldown back.
+    player->RemoveArenaAuras();
+    player->RemoveArenaSpellCooldowns(true);
+
+    // What the round left lying about: totems, ground effects, traps, and every
+    // summon but the pet.
+    player->UnsummonAllTotems();
+    player->RemoveAllDynObjects();
+    player->RemoveAllGameObjects();
+
+    Pet* pet = player->GetPet();
+    std::vector<Unit*> const controlled(player->m_Controlled.begin(), player->m_Controlled.end());
+    for (Unit* unit : controlled)
+        if (unit && unit != pet && unit->GetTypeId() == TYPEID_UNIT && unit->IsSummon() && !unit->IsTotem())
+            unit->ToTempSummon()->UnSummon();
+
+    if (pet && pet->IsAlive())
+    {
+        pet->RemoveArenaAuras();
+        pet->CombatStop(true);
+        pet->SetFullHealth();
+        for (uint8 i = POWER_MANA; i < MAX_POWERS; ++i)
+            if (pet->GetMaxPower(Powers(i)))
+                pet->SetFullPower(Powers(i));
+    }
+    else
+        // A hunter's companion comes back with him; anyone else calls theirs
+        // again behind the gates, where it costs nothing.
+        player->ResurrectPetAtSpiritGuide();
+
+    player->SetFullHealth();
+    player->ResetAllPowers();
+    player->ClearComboPoints();
+}
+
+void Arena::SendToShuffleStart(Player* player)
+{
+    Position const* start = GetStartPositionFor(player->GetGUID(), player->GetBGTeam());
+    if (!start)
+        return;
+
+    // Pets first, as a start exit moves them (Battleground::_CheckStartExits):
+    // already standing at the start, they are not sent away by their owner's
+    // teleport for being out of range - and a bot's pet has nowhere to be
+    // called back from.
+    std::vector<Unit*> const controlled(player->m_Controlled.begin(), player->m_Controlled.end());
+    for (Unit* unit : controlled)
+        if (unit && unit->GetTypeId() != TYPEID_PLAYER && !unit->IsTotem() && unit->IsInWorld() && unit->IsAlive() && unit->GetMapId() == GetMapId())
+            unit->NearTeleportTo(start->GetPositionX(), start->GetPositionY(), start->GetPositionZ(), start->GetOrientation());
+
+    player->TeleportTo(GetMapId(), start->GetPositionX(), start->GetPositionY(), start->GetPositionZ(), start->GetOrientation());
+}
+
+void Arena::PrepareShuffleRound()
+{
+    SyncShuffleRoster();
+
+    ++_shuffleRound;
+    if (_shuffleRound > _shuffleSchedule.size() || _shuffleRoster.size() < 2)
+    {
+        FinishSoloShuffle();
+        return;
+    }
+
+    uint32 const mask = _shuffleSchedule[_shuffleRound - 1];
+    SquadFeedPlayers const players = GetSquadFeedPlayers();
+    for (size_t i = 0; i < _shuffleRoster.size(); ++i)
+    {
+        ObjectGuid const guid = _shuffleRoster[i];
+        uint32 const team = (mask & (1u << i)) ? ALLIANCE : HORDE;
+        auto const itr = players.find(guid);
+        Player* player = itr != players.end() ? itr->second : nullptr;
+
+        if (player)
+            ResetForShuffleRound(player);
+
+        // Offline, their seat still moves, so they come back to the right side.
+        MoveParticipantToTeam(guid, player, team);
+        if (!player)
+            continue;
+
+        ApplyArenaFlag(player);
+        SendToShuffleStart(player);
+        player->CastSpell(player, SPELL_ARENA_PREPARATION, true);
+        player->CastSpell(player, SPELL_INSTANT_CAST, true);
+        player->ResetAllPowers();
+        SendInProgressStatusTo(player);
+    }
+
+    ResetStartingAreaForRound();
+    UpdateArenaWorldState();
+
+    _shufflePhase = ShufflePhase::Preparation;
+    _shuffleTimer = SHUFFLE_PREPARATION_MS;
+    _shuffleTenSecondsSent = false;
+
+    AnnounceToArena(this, Trinity::StringFormat("Round {} of {} - Gold: {}. Green: {}. The gates open in {} seconds.",
+        uint32(_shuffleRound), uint32(_shuffleSchedule.size()), GetShuffleTeams(ALLIANCE), GetShuffleTeams(HORDE),
+        SHUFFLE_PREPARATION_MS / IN_MILLISECONDS));
+}
+
+void Arena::StartShuffleRound()
+{
+    StartingEventOpenDoors();
+    if (StartMessageIds[BG_STARTING_EVENT_FOURTH])
+        SendBroadcastText(StartMessageIds[BG_STARTING_EVENT_FOURTH], CHAT_MSG_BG_SYSTEM_NEUTRAL);
+
+    for (auto const& [guid, player] : GetSquadFeedPlayers())
+        if (IsPlayerInBattleground(guid))
+            ClearArenaPreparation(player);
+
+    _shufflePhase = ShufflePhase::Fighting;
+    _shuffleTimer = 0;
+
+    // Somebody may have left while the gates were shut.
+    CheckShuffleRound();
+}
+
+void Arena::FinishSoloShuffle()
+{
+    if (_shufflePhase == ShufflePhase::Finished || GetStatus() != STATUS_IN_PROGRESS)
+        return;
+
+    _shufflePhase = ShufflePhase::Finished;
+
+    // The scoreboard sets the winners - more rounds won than lost - on gold
+    // against everyone else on green, and the banner names gold if anyone won.
+    SquadFeedPlayers const players = GetSquadFeedPlayers();
+    std::vector<std::string> winners;
+    for (auto const& [guid, participant] : m_Players)
+    {
+        (void)participant;
+        bool const won = WonSoloShuffle(guid);
+        if (won)
+            winners.push_back(ShuffleName(guid, players));
+
+        BattlegroundScoreMap::iterator const score = PlayerScores.find(guid.GetCounter());
+        if (score != PlayerScores.end())
+            if (ArenaScore* arenaScore = dynamic_cast<ArenaScore*>(score->second))
+                arenaScore->TeamId = won ? PVP_TEAM_ALLIANCE : PVP_TEAM_HORDE;
+    }
+
+    AnnounceToArena(this, Trinity::StringFormat("The shuffle is over after {} rounds. Rounds won: {}.",
+        _shuffleRoundsPlayed, GetShuffleStandings()));
+    AnnounceToArena(this, winners.empty()
+        ? std::string("Nobody won more rounds than they lost.")
+        : Trinity::StringFormat("Won more rounds than they lost: {}.", JoinNames(winners)));
+
+    TC_LOG_DEBUG("bg.arena", "Solo Shuffle: instance {} finished after {} rounds, {} winner(s).",
+        GetInstanceID(), _shuffleRoundsPlayed, uint32(winners.size()));
+
+    EndBattleground(winners.empty() ? 0 : ALLIANCE);
+}
+
+void Arena::RedealRemainingShuffleRounds()
+{
+    std::vector<bool> healers;
+    for (ObjectGuid guid : _shuffleRoster)
+        healers.push_back(_shuffleHealers.count(guid) != 0);
+
+    // Through the round being fought or prepared: its sides are already set.
+    std::vector<uint32> kept(_shuffleSchedule.begin(),
+        _shuffleSchedule.begin() + std::min<size_t>(_shuffleRound, _shuffleSchedule.size()));
+    if (!kept.empty())
+        kept.back() = GetShuffleSideMask();
+
+    uint32 const remaining = SOLO_SHUFFLE_ROUNDS > kept.size() ? uint32(SOLO_SHUFFLE_ROUNDS - kept.size()) : 0;
+    std::vector<uint32> const rest = DealShuffleRounds(healers, kept, 0, remaining);
+    _shuffleSchedule = kept;
+    _shuffleSchedule.insert(_shuffleSchedule.end(), rest.begin(), rest.end());
+}
+
+void Arena::DropFromShuffle(ObjectGuid guid)
+{
+    if (_shufflePhase == ShufflePhase::NotStarted || _shufflePhase == ShufflePhase::Finished)
+        return;
+
+    auto const itr = std::find(_shuffleRoster.begin(), _shuffleRoster.end(), guid);
+    if (itr == _shuffleRoster.end())
+        return;
+
+    uint32 const index = uint32(itr - _shuffleRoster.begin());
+    _shuffleRoster.erase(itr);
+    _shuffleWins.erase(guid);
+    _shuffleHealers.erase(guid);
+
+    // The rounds played keep their sides, without the bit of whoever left.
+    for (uint32& mask : _shuffleSchedule)
+        mask = (mask & ((1u << index) - 1)) | ((mask >> (index + 1)) << index);
+
+    if (_shuffleRoster.size() < 2)
+    {
+        FinishSoloShuffle();
+        return;
+    }
+
+    RedealRemainingShuffleRounds();
+    AnnounceToArena(this, "A player has left the shuffle. The rounds still to come are dealt again without them.");
+}
+
+void Arena::SyncShuffleRoster()
+{
+    bool joined = false;
+    SquadFeedPlayers const players = GetSquadFeedPlayers();
+    for (auto const& [guid, participant] : m_Players)
+    {
+        (void)participant;
+        if (std::find(_shuffleRoster.begin(), _shuffleRoster.end(), guid) != _shuffleRoster.end())
+            continue;
+
+        if (_shuffleRoster.size() >= SHUFFLE_MAX_ROSTER)
+            break;
+
+        _shuffleRoster.push_back(guid);
+        _shuffleWins[guid] = 0;
+        auto const itr = players.find(guid);
+        if (itr != players.end() && IsSoloShuffleHealer(itr->second))
+            _shuffleHealers.insert(guid);
+        joined = true;
+    }
+
+    if (joined)
+        RedealRemainingShuffleRounds();
 }

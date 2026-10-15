@@ -62,18 +62,20 @@ namespace
     // Which arena queue the arena battlemaster's window is about to show,
     // told to the client's ArenaFrame.lua ahead of the window itself:
     //
-    //   CCGAME ARENAQUEUE:0   the ordinary one
-    //   CCGAME ARENAQUEUE:<n> a squad match of up to n squads, rated and
-    //                         skirmish, each row a squad size (Baradin Hold:
-    //                         Four Corners)
+    //   CCGAME ARENAQUEUE:0       the ordinary one
+    //   CCGAME ARENAQUEUE:<n>     a squad match of up to n squads, rated and
+    //                             skirmish, each row a squad size (Baradin Hold:
+    //                             Four Corners)
+    //   CCGAME ARENAQUEUE:SHUFFLE Solo Shuffle: the 3v3 skirmish row only,
+    //                             queued alone
     //
     // Sent before every arena window so a client never keeps the last mode.
-    void SendArenaQueueMode(Player* player, uint32 squads)
+    void SendArenaQueueMode(Player* player, std::string const& mode)
     {
         if (!player || !player->GetSession() || player->GetSession()->IsVirtualSession())
             return;
 
-        std::string const message = "CCGAME\tARENAQUEUE:" + std::to_string(squads);
+        std::string const message = "CCGAME\tARENAQUEUE:" + mode;
         WorldPacket data;
         ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player->GetGUID(), player->GetGUID(),
             message, 0, player->GetName(), player->GetName());
@@ -171,10 +173,13 @@ void WorldSession::SendBattleGroundList(ObjectGuid guid, BattlegroundTypeId bgTy
     // that for the All Arenas list - and the window is told which queue it is
     // for. Its joins name the battlemaster, which is how
     // HandleBattlemasterJoinArena tells the two apart.
-    if (bgTypeId == BATTLEGROUND_AA || sBattlegroundMgr->IsSquadBattleground(bgTypeId))
+    if (bgTypeId == BATTLEGROUND_AA || bgTypeId == BATTLEGROUND_SSH || sBattlegroundMgr->IsSquadBattleground(bgTypeId))
     {
         Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
-        SendArenaQueueMode(_player, bgTemplate && bgTemplate->IsSquadMatch() ? bgTemplate->GetSquadCount() : 0);
+        if (bgTypeId == BATTLEGROUND_SSH)
+            SendArenaQueueMode(_player, "SHUFFLE");
+        else
+            SendArenaQueueMode(_player, std::to_string(bgTemplate && bgTemplate->IsSquadMatch() ? bgTemplate->GetSquadCount() : 0));
         bgTypeId = BATTLEGROUND_AA;
     }
 
@@ -873,8 +878,17 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
     // is one squad.
     BattlegroundTypeId queueBgTypeId = BATTLEGROUND_AA;
     if (BattlegroundTypeId const masterBgTypeId = sBattlegroundMgr->GetBattleMasterBG(unit->GetEntry());
-        sBattlegroundMgr->IsSquadBattleground(masterBgTypeId))
+        sBattlegroundMgr->IsSquadBattleground(masterBgTypeId) || masterBgTypeId == BATTLEGROUND_SSH)
         queueBgTypeId = masterBgTypeId;
+
+    // Solo Shuffle's battlemaster takes one queue: a 3v3 skirmish, alone. Its
+    // window only offers that row, so anything else is an old client or a
+    // party leader pressing Join as Group.
+    if (queueBgTypeId == BATTLEGROUND_SSH && (asGroup || isRated || arenatype != ARENA_TYPE_3v3))
+    {
+        ChatHandler(this).SendSysMessage("Solo Shuffle is a 3v3 skirmish you queue for alone.");
+        return;
+    }
 
     //check existance
     Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(queueBgTypeId);

@@ -327,13 +327,20 @@ void Battleground::Update(uint32 diff)
 
             _ProcessOfflineQueue();
             // Ahead of the bounds: a start exit is the way off a start the bounds
-            // would otherwise count as outside the arena.
-            _CheckStartExits(diff);
-            _CheckBounds(diff);
+            // would otherwise count as outside the arena. Between two rounds
+            // everyone is back behind the gates, where neither applies yet.
+            if (!IsBetweenRounds())
+            {
+                _CheckStartExits(diff);
+                _CheckBounds(diff);
+            }
             // after 20 minutes without one team losing, the arena closes with no winner and no rating change
             if (isArena())
             {
-                if (GetStartTime() >= 20 * MINUTE*IN_MILLISECONDS)
+                // A shuffle is several matches in a row: its limit is per round.
+                if (IsSoloShuffle())
+                    UpdateRounds(diff);
+                else if (GetStartTime() >= 20 * MINUTE*IN_MILLISECONDS)
                 {
                     EndAtTimeLimit();
                     return;
@@ -2113,22 +2120,7 @@ bool Battleground::SkipStartDelay()
                 sBattlegroundMgr->BuildBattlegroundStatusPacket(&status, this, queueSlot, STATUS_IN_PROGRESS, 0, GetStartTime(), GetArenaType(), player->GetBGTeam());
                 player->SendDirectMessage(&status);
 
-                player->RemoveAurasDueToSpell(SPELL_ARENA_PREPARATION);
-                player->RemoveAurasDueToSpell(SPELL_INSTANT_CAST);
-                player->ResetAllPowers();
-                if (!player->IsGameMaster())
-                {
-                    // remove auras with duration lower than 30s
-                    player->RemoveAppliedAuras([](AuraApplication const* aurApp)
-                    {
-                        Aura* aura = aurApp->GetBase();
-                        return !aura->IsPermanent()
-                            && aura->GetDuration() <= 30 * IN_MILLISECONDS
-                            && aurApp->IsPositive()
-                            && !aura->GetSpellInfo()->HasAttribute(SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY)
-                            && !aura->HasEffectType(SPELL_AURA_MOD_INVISIBILITY);
-                    });
-                }
+                ClearArenaPreparation(player);
             }
 
         CheckWinConditions();
@@ -2152,6 +2144,98 @@ bool Battleground::SkipStartDelay()
     return true;
 }
 
+void Battleground::ClearArenaPreparation(Player* player)
+{
+    player->RemoveAurasDueToSpell(SPELL_ARENA_PREPARATION);
+    player->RemoveAurasDueToSpell(SPELL_INSTANT_CAST);
+    player->ResetAllPowers();
+    if (player->IsGameMaster())
+        return;
+
+    // remove auras with duration lower than 30s
+    player->RemoveAppliedAuras([](AuraApplication const* aurApp)
+    {
+        Aura* aura = aurApp->GetBase();
+        return !aura->IsPermanent()
+            && aura->GetDuration() <= 30 * IN_MILLISECONDS
+            && aurApp->IsPositive()
+            && !aura->GetSpellInfo()->HasAttribute(SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY)
+            && !aura->HasEffectType(SPELL_AURA_MOD_INVISIBILITY);
+    });
+}
+
+void Battleground::SendInProgressStatusTo(Player* player)
+{
+    if (!player || !player->GetSession() || player->GetSession()->IsVirtualSession())
+        return;
+
+    WorldPacket status;
+    uint32 const queueSlot = player->GetBattlegroundQueueIndex(BattlegroundMgr::BGQueueTypeId(m_TypeID, GetArenaType()));
+    sBattlegroundMgr->BuildBattlegroundStatusPacket(&status, this, queueSlot, STATUS_IN_PROGRESS, 0, GetStartTime(), GetArenaType(), player->GetBGTeam());
+    player->SendDirectMessage(&status);
+}
+
+void Battleground::MoveParticipantToTeam(ObjectGuid guid, Player* player, uint32 team)
+{
+    BattlegroundPlayerMap::iterator const itr = m_Players.find(guid);
+    if (itr == m_Players.end() || (team != ALLIANCE && team != HORDE))
+        return;
+
+    uint32 const oldTeam = itr->second.Team;
+    if (oldTeam != team)
+    {
+        // Out of the old side's raid first: AddOrSetPlayerToCorrectBgGroup
+        // keeps whatever raid a player is already in.
+        uint8 const oldSlot = GetBgRaidSlot(guid, oldTeam);
+        if (Group* group = GetBgRaidBySlot(oldSlot))
+            if (group->IsMember(guid) && !group->RemoveMember(guid))   // group was disbanded
+                SetBgRaidBySlot(oldSlot, nullptr);
+
+        itr->second.Team = team;
+        UpdatePlayersCountByTeam(oldTeam, true);
+        UpdatePlayersCountByTeam(team, false);
+    }
+
+    BattlegroundScoreMap::iterator const score = PlayerScores.find(guid.GetCounter());
+    if (score != PlayerScores.end())
+        if (ArenaScore* arenaScore = dynamic_cast<ArenaScore*>(score->second))
+            arenaScore->TeamId = team == ALLIANCE ? PVP_TEAM_ALLIANCE : PVP_TEAM_HORDE;
+
+    if (!player)
+        return;
+
+    // What the port handler and AddPlayer give someone arriving on this side:
+    // the arena byte, the side's race faction, and its reputation reactions.
+    player->SetBGTeam(team);
+    player->SetFactionForRace(team == HORDE ? RACE_BLOODELF : RACE_HUMAN);
+    SetBattlegroundSideReactions(player, team);
+
+    // A pet or totem took its owner's faction when it was summoned.
+    std::vector<Unit*> const controlled(player->m_Controlled.begin(), player->m_Controlled.end());
+    for (Unit* unit : controlled)
+        if (unit && unit->GetTypeId() != TYPEID_PLAYER)
+            unit->SetFaction(player->GetFaction());
+
+    AddOrSetPlayerToCorrectBgGroup(player, team);
+}
+
+void Battleground::ResetStartingAreaForRound()
+{
+    StartingEventCloseDoors();
+
+    m_ValidStartPositionTimer = 0;
+    m_BoundsElapsed = 0;
+    m_BoundsCheckTimer = 0;
+    m_StartExitElapsed = 0;
+    for (uint8 i = 0; i < PVP_TEAMS_COUNT; ++i)
+        m_StartExitDone[i] = false;
+}
+
+void Battleground::KeepPlayersAtStarts(uint32 diff)
+{
+    _CheckSafePositions(diff);
+}
+
 void Battleground::AddPlayer(Player* player)
 {
     if (m_IsCustomGame && player->IsSpectator())
@@ -2171,6 +2255,19 @@ void Battleground::AddPlayer(Player* player)
         player->ToggleAFK();
 
     uint32 team = player->GetBGTeam();
+
+    // Somebody coming back to a shuffle may have had their seat moved to the
+    // other side while they were away (MoveParticipantToTeam): the seat, not
+    // the team they left on, is where they play.
+    if (IsSoloShuffle())
+    {
+        BattlegroundPlayerMap::const_iterator const seat = m_Players.find(player->GetGUID());
+        if (seat != m_Players.end() && seat->second.Team && seat->second.Team != team)
+        {
+            team = seat->second.Team;
+            player->SetBGTeam(team);
+        }
+    }
 
     player->SetFactionForRace(RACE_HUMAN);
 
@@ -2444,7 +2541,9 @@ void Battleground::EventPlayerLoggedOut(Player* player)
         RemovePlayer(player, guid, GetPlayerTeam(guid));
 
         // 1 player is logging out, if it is the last alive, then end arena!
-        if (isArena() && player->IsAlive())
+        // A shuffle only loses the round that way: RemovePlayer above has
+        // already asked it.
+        if (isArena() && !IsSoloShuffle() && player->IsAlive())
             if (GetAlivePlayersCountByTeam(player->GetBGTeam()) <= 1 && GetPlayersCountByTeam(GetOtherTeam(player->GetBGTeam())))
                 EndBattleground(GetOtherTeam(player->GetBGTeam()));
     }

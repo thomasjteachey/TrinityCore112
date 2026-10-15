@@ -550,7 +550,7 @@ namespace
             record.RecordStartMs = getMSTime();
 
         record.TypeId = bg->GetTypeID(false);
-        if (record.TypeId == BATTLEGROUND_AA)
+        if (record.TypeId == BATTLEGROUND_AA || record.TypeId == BATTLEGROUND_SSH)
             record.TypeId = bg->GetTypeID(true);
 
         record.ArenaTypeId = bg->GetArenaType();

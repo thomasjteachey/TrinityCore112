@@ -765,6 +765,29 @@ class TC_GAME_API Battleground
         virtual void SendSquadFeedTo(Player* player);
         static void SendSquadFeedLine(Player* player, std::string const& line);
 
+        // Solo Shuffle (BATTLEGROUND_SSH): one arena, several rounds, the teams
+        // dealt again before each (Arena.h has the rounds). A shuffle stays
+        // STATUS_IN_PROGRESS from the first gates to the end; between rounds
+        // it shuts the gates and counts down again on its own.
+        bool IsSoloShuffle() const { return m_TypeID == BATTLEGROUND_SSH; }
+        // Between two rounds of a match fought in rounds: the last one is
+        // decided and the next has not begun. The start-of-match checks (bounds,
+        // start exits) wait for the gates as they do before the first round,
+        // and the playerbots hold where they stand (OwnsPreparationState).
+        virtual bool IsBetweenRounds() const { return false; }
+        // Puts a participant on `team` partway through a match, which is what a
+        // shuffle does between rounds: the roster and its counts, the raid, the
+        // side's faction and reputation reactions, the arena-team byte and the
+        // scoreboard row, and the faction of everything they control. `player`
+        // may be null for someone offline; their seat moves all the same.
+        void MoveParticipantToTeam(ObjectGuid guid, Player* player, uint32 team);
+        // The in-progress status again, carrying the side `player` is on: the
+        // client reads its own arena side from it, nowhere else.
+        void SendInProgressStatusTo(Player* player);
+        // What leaving the starting room takes off a combatant: the preparation
+        // auras, and the short buffs cast behind the gates.
+        static void ClearArenaPreparation(Player* player);
+
         // Packet Transfer
         // method that should fill worldpacket with actual world states (not yet implemented for all battlegrounds!)
         virtual void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& /*packet*/) { }
@@ -1030,8 +1053,19 @@ class TC_GAME_API Battleground
 
         void SetWinnerSquad(uint8 squad) { m_WinnerSquad = squad; }
         // Whether the participant `guid` on `team` won a match that ended with
-        // `winner`: their squad won, in a squad match.
-        bool IsWinningParticipant(ObjectGuid guid, uint32 team, uint32 winner) const;
+        // `winner`: their squad won, in a squad match; in a shuffle, they won
+        // more rounds than they lost.
+        virtual bool IsWinningParticipant(ObjectGuid guid, uint32 team, uint32 winner) const;
+
+        // A match fought in rounds keeps its own clock (Arena::UpdateRounds):
+        // the time limit is a round's, not the whole match's.
+        virtual void UpdateRounds(uint32 /*diff*/) { }
+        // The gates shut again and the start-of-match clocks (bounds grace,
+        // start exits) back at zero, for another round in the same arena.
+        void ResetStartingAreaForRound();
+        // Sends anyone who has wandered off their start back to it, the check
+        // every match runs behind closed gates.
+        void KeepPlayersAtStarts(uint32 diff);
 
 
         // Scorekeeping

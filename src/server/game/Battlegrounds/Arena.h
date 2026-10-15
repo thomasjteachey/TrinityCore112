@@ -20,6 +20,7 @@
 
 #include "Battleground.h"
 
+#include <map>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -55,8 +56,29 @@ enum ArenaWorldStates
     ARENA_WORLD_STATE_SQUAD_ALIVE_FIRST     = 9441
 };
 
+// Solo Shuffle (BATTLEGROUND_SSH). Six people queue alone and are put in one
+// 3v3 arena for six rounds. Before every round the teams are dealt again, so
+// over the match everyone fights beside and against everyone else, and each
+// player is scored by the rounds they won: more won than lost is a win.
+//
+// The match stays STATUS_IN_PROGRESS throughout. Between rounds the dead are
+// raised, everyone is put back to full and cleaned of the round, moved to the
+// side the schedule gives them for the next round (Battleground::
+// MoveParticipantToTeam) and back to that side's start, and the gates shut for
+// a short countdown. With two healers they are always on opposite teams, which
+// with four others gives exactly six different rounds.
+uint8 constexpr SOLO_SHUFFLE_ROUNDS = 6;
+
 class TC_GAME_API Arena : public Battleground
 {
+    public:
+        // Whether a player plays Solo Shuffle as a healer: most talent points in
+        // a healing tree (Discipline, Holy, Restoration).
+        static bool IsSoloShuffleHealer(Player const* player);
+
+        bool IsBetweenRounds() const override;
+        bool OwnsPreparationState(Player const* player) const override;
+
     protected:
         Arena();
 
@@ -70,6 +92,10 @@ class TC_GAME_API Arena : public Battleground
 
         void UpdateSquadFeed() override;
         void SendSquadFeedTo(Player* player) override;
+
+        // Solo Shuffle's rounds; see SOLO_SHUFFLE_ROUNDS.
+        void UpdateRounds(uint32 diff) override;
+        bool IsWinningParticipant(ObjectGuid guid, uint32 team, uint32 winner) const override;
 
     private:
         uint32 GetArenaAlivePlayersCountByTeam(uint32 team) const;
@@ -108,6 +134,65 @@ class TC_GAME_API Arena : public Battleground
         // wiped out, in the order they fell.
         std::vector<uint8> _eliminatedSquads;
         uint32 _squadsAtStart = 0;
+
+        // Solo Shuffle.
+        enum class ShufflePhase : uint8
+        {
+            NotStarted,     // round 1's gates have not opened yet
+            Fighting,
+            Intermission,   // a round is decided; the next is about to be dealt
+            Preparation,    // the next round's teams behind shut gates
+            Finished
+        };
+        // The team each roster member plays a round on, one entry per round:
+        // bit i set means _shuffleRoster[i] plays on the Alliance (gold) side.
+        typedef std::vector<uint32> ShuffleSchedule;
+        void BeginSoloShuffle();
+        void CheckShuffleRound();
+        void EndShuffleRound(uint32 winner, std::string const& why);
+        void EndShuffleRoundAtTimeLimit();
+        void PrepareShuffleRound();
+        void StartShuffleRound();
+        void FinishSoloShuffle();
+        void ResetForShuffleRound(Player* player);
+        // A participant who has left the match for good drops out of the
+        // roster; the rounds still to come are dealt again without them.
+        void DropFromShuffle(ObjectGuid guid);
+        // Anyone seated after the roster was made (a bot whose load finished
+        // late) joins it, and the rounds to come are dealt again with them.
+        void SyncShuffleRoster();
+        // Deals the rounds after the current one again for the roster as it
+        // stands, the rounds already fought counting towards who has teamed
+        // with whom.
+        void RedealRemainingShuffleRounds();
+        uint32 GetShuffleSideMask() const;
+        void SendToShuffleStart(Player* player);
+        std::string GetShuffleTeams(uint32 team) const;
+        std::string GetShuffleStandings() const;
+        bool WonSoloShuffle(ObjectGuid guid) const;
+        // The team flag of the side a player is on (or, in a squad match, of
+        // their squad).
+        void ApplyArenaFlag(Player* player);
+        void RemoveArenaFlags(Player* player);
+        ShufflePhase _shufflePhase = ShufflePhase::NotStarted;
+        uint8 _shuffleRound = 0;             // the round being played or prepared, from 1
+        uint32 _shuffleTimer = 0;
+        bool _shuffleTenSecondsSent = false;
+        uint32 _shuffleRoundsPlayed = 0;
+        std::vector<ObjectGuid> _shuffleRoster;
+        ShuffleSchedule _shuffleSchedule;    // index 0 is round 1
+        std::map<ObjectGuid, uint32> _shuffleWins;
+        std::set<ObjectGuid> _shuffleHealers;  // read when the roster is made
+
+        // The squad feed reads a shuffle as two squads: its two sides while it
+        // is fought (0 gold, 1 green), and once it is over the winners (0) and
+        // everyone else (1). A squad match reads its own squads.
+        uint8 GetFeedSquad(ObjectGuid guid) const;
+        uint8 GetFeedSquadCount() const;
+        bool UsesSquadFeed() const { return IsSquadMatch() || IsSoloShuffle(); }
+        // The squad each player's client was last told is theirs (SQ:), so a
+        // shuffle can tell them again when a new round moves them.
+        std::map<ObjectGuid, uint8> _squadFeedMine;
 
         // In-memory custom-game clones are authoritative battleground-roster
         // participants even when the global connected-player accessor cannot

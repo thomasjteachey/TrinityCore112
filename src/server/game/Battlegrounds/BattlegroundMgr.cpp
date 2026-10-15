@@ -378,7 +378,9 @@ void BattlegroundMgr::Update(uint32 diff)
         m_SquadFeedTimer = 0;
         for (auto const& [bgTypeId, data] : bgDataStore)
         {
-            if (!IsSquadBattleground(bgTypeId))
+            // Solo Shuffle feeds the same frames: its two sides change every
+            // round, which the stock arena frames cannot follow.
+            if (!IsSquadBattleground(bgTypeId) && bgTypeId != BATTLEGROUND_SSH)
                 continue;
 
             for (auto const& [instanceId, bg] : data.m_Battlegrounds)
@@ -430,10 +432,12 @@ void BattlegroundMgr::Update(uint32 diff)
         for (int qtype = BATTLEGROUND_QUEUE_NONE; qtype < MAX_BATTLEGROUND_QUEUE_TYPES; ++qtype)
         {
             BattlegroundTypeId const bgTypeId = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(qtype));
-            // A squad match's queue waits for squads to form (UpdateSquadPool)
-            // and so needs the sweep, as battlegrounds do, to notice the wait
+            // A squad match's queue waits for squads to form (UpdateSquadPool),
+            // and Solo Shuffle's for a lobby to form (UpdateSoloShufflePool),
+            // so both need the sweep, as battlegrounds do, to notice the wait
             // running out when nobody else joins.
-            if (bgTypeId == BATTLEGROUND_TYPE_NONE || (IsArenaType(bgTypeId) && !IsSquadBattleground(bgTypeId)))
+            if (bgTypeId == BATTLEGROUND_TYPE_NONE ||
+                (IsArenaType(bgTypeId) && !IsSquadBattleground(bgTypeId) && bgTypeId != BATTLEGROUND_SSH))
                 continue;
 
             for (int bracket = BG_BRACKET_ID_FIRST; bracket < MAX_BATTLEGROUND_BRACKETS; ++bracket)
@@ -879,6 +883,7 @@ bool BattlegroundMgr::CreateBattleground(BattlegroundTemplate const* bgTemplate)
                 bg = new BattlegroundTTP();
                 break;
             case BATTLEGROUND_AA:
+            case BATTLEGROUND_SSH:
                 bg = new Battleground();
                 break;
             case BATTLEGROUND_RB:
@@ -999,7 +1004,7 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
             continue;
         }
 
-        if (bgTemplate.Id != BATTLEGROUND_AA && bgTemplate.Id != BATTLEGROUND_RB)
+        if (bgTemplate.Id != BATTLEGROUND_AA && bgTemplate.Id != BATTLEGROUND_RB && bgTemplate.Id != BATTLEGROUND_SSH)
         {
             uint32 startId = fields[5].GetUInt32();
             if (WorldSafeLocsEntry const* start = sWorldSafeLocsStore.LookupEntry(startId))
@@ -1181,6 +1186,7 @@ bool BattlegroundMgr::IsBotFillSkirmishArena(uint8 arenaType) const
 bool BattlegroundMgr::IsArenaType(BattlegroundTypeId bgTypeId)
 {
     return bgTypeId == BATTLEGROUND_AA
+        || bgTypeId == BATTLEGROUND_SSH
         || bgTypeId == BATTLEGROUND_BE
         || bgTypeId == BATTLEGROUND_NA
         || bgTypeId == BATTLEGROUND_DS
@@ -1242,6 +1248,9 @@ BattlegroundQueueTypeId BattlegroundMgr::BGQueueTypeId(BattlegroundTypeId bgType
                 default:
                     return BATTLEGROUND_QUEUE_NONE;
             }
+        case BATTLEGROUND_SSH:
+            // 3v3 only: six people, two teams of three each round.
+            return arenaType == ARENA_TYPE_3v3 ? BATTLEGROUND_QUEUE_SSH : BATTLEGROUND_QUEUE_NONE;
         default:
             // Arenas do not get a queue per arena -- every arena of a given team
             // size shares one queue, which is what lets All Arenas mix them. The
@@ -1312,6 +1321,8 @@ BattlegroundTypeId BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId bgQueue
         case BATTLEGROUND_QUEUE_BHF_4:
         case BATTLEGROUND_QUEUE_BHF_5:
             return BATTLEGROUND_BHF;
+        case BATTLEGROUND_QUEUE_SSH:
+            return BATTLEGROUND_SSH;
         default:
             return BattlegroundTypeId(0);                   // used for unknown template (it exists and does nothing)
     }
@@ -1326,6 +1337,7 @@ uint8 BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId bgQueueTypeId)
             return ARENA_TYPE_2v2;
         case BATTLEGROUND_QUEUE_3v3:
         case BATTLEGROUND_QUEUE_BHF_3:
+        case BATTLEGROUND_QUEUE_SSH:
             return ARENA_TYPE_3v3;
         case BATTLEGROUND_QUEUE_4v4:
         case BATTLEGROUND_QUEUE_BHF_4:
@@ -1596,7 +1608,14 @@ BattlegroundTypeId BattlegroundMgr::GetRandomBG(BattlegroundTypeId bgTypeId, boo
     // arena however many were installed. The pool table has no such ceiling and
     // is editable live: change a row and `.reload battleground_template` picks it
     // up without a restart or a DBC rebuild.
+    //
+    // Solo Shuffle rolls from rows of its own (pool 889): its later rounds shut
+    // the gates again, which not every arena can do. With none it rolls All
+    // Arenas'.
+    bool const arenaRoll = bgTypeId == BATTLEGROUND_AA || bgTypeId == BATTLEGROUND_SSH;
     auto poolItr = _randomPools.find(bgTypeId);
+    if (poolItr == _randomPools.end() && bgTypeId == BATTLEGROUND_SSH)
+        poolItr = _randomPools.find(BATTLEGROUND_AA);
     if (poolItr != _randomPools.end())
     {
         for (auto const& [memberId, weight] : poolItr->second)
@@ -1605,7 +1624,7 @@ BattlegroundTypeId BattlegroundMgr::GetRandomBG(BattlegroundTypeId bgTypeId, boo
             // Exclude them only from an All Arenas roll for a public match that
             // contains (or will be filled by) bots. Human-only rolls and manual
             // or private Custom Games selections retain the full arena list.
-            if (hasBotParticipants && bgTypeId == BATTLEGROUND_AA && IsArenaUnfitForBots(memberId))
+            if (hasBotParticipants && arenaRoll && IsArenaUnfitForBots(memberId))
                 continue;
 
             // Disabled, or no template: configured in the pool but not runnable.
@@ -1635,7 +1654,7 @@ BattlegroundTypeId BattlegroundMgr::GetRandomBG(BattlegroundTypeId bgTypeId, boo
 
             if (BattlegroundTemplate const* bg = GetBattlegroundTemplateByMapId(mapId))
             {
-                if (hasBotParticipants && bgTypeId == BATTLEGROUND_AA && IsArenaUnfitForBots(bg->Id))
+                if (hasBotParticipants && arenaRoll && IsArenaUnfitForBots(bg->Id))
                     continue;
 
                 ids.push_back(bg->Id);

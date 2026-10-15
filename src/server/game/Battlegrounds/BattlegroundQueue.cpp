@@ -16,6 +16,7 @@
  */
 
 #include "BattlegroundQueue.h"
+#include "Arena.h"
 #include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
 #include "BattlegroundMgr.h"
@@ -1610,6 +1611,215 @@ void BattlegroundQueue::StartSquadMatch(BattlegroundTypeId bgTypeId, PvPDifficul
     bg->RemoveFromBGFreeSlotQueue();
 }
 
+// Solo Shuffle's queue: people queued alone, made into one match of six (three
+// a side for the first round; the match deals the rest). A match starts
+//
+//   1. as soon as two healers and four others are waiting - one healer to a
+//      side every round, the way the rounds are dealt;
+//   2. where this realm fills skirmishes with bots, once someone with "Arena
+//      bot matches" ticked has waited the skirmish wait: everyone waiting with
+//      it ticked plays now, up to six, and the bot fill takes the other seats.
+//      A shuffle still behind its first gates is offered first, in place of
+//      its clones (OfferPreparationSeats), so people meet rather than each
+//      getting a match of bots;
+//   3. otherwise, once the longest-waiting has waited kShuffleAnyLobbyMs, any
+//      six: two healers at most while others are there to take the seats.
+//
+// Rated Solo Shuffle does not exist: the window only offers the skirmish.
+namespace
+{
+    constexpr uint32 kShuffleAnyLobbyMs = 60 * IN_MILLISECONDS;
+    constexpr uint32 kShuffleHealers = 2;
+
+    struct ShuffleCandidate
+    {
+        GroupQueueInfo* Group;
+        bool Healer;
+    };
+
+    // Up to `count` of `from` (longest-waiting first), with at most `maxHealers`
+    // healers unless there are not enough others to fill the seats.
+    std::vector<ShuffleCandidate> PickShuffleLobby(std::vector<ShuffleCandidate> const& from, uint32 count, uint32 maxHealers)
+    {
+        std::vector<ShuffleCandidate> healers;
+        std::vector<ShuffleCandidate> others;
+        for (ShuffleCandidate const& candidate : from)
+            (candidate.Healer ? healers : others).push_back(candidate);
+
+        std::vector<ShuffleCandidate> picked;
+        size_t takenHealers = 0;
+        for (; takenHealers < healers.size() && takenHealers < maxHealers && picked.size() < count; ++takenHealers)
+            picked.push_back(healers[takenHealers]);
+        for (size_t i = 0; i < others.size() && picked.size() < count; ++i)
+            picked.push_back(others[i]);
+        for (; takenHealers < healers.size() && picked.size() < count; ++takenHealers)
+            picked.push_back(healers[takenHealers]);
+        return picked;
+    }
+}
+
+void BattlegroundQueue::UpdateSoloShufflePool(BattlegroundTypeId bgTypeId, BattlegroundBracketId bracket_id, uint8 arenaType)
+{
+    Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
+    if (!bgTemplate || !arenaType)
+        return;
+
+    PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketById(bgTemplate->GetMapId(), bracket_id);
+    if (!bracketEntry)
+    {
+        TC_LOG_ERROR("bg.battleground", "BattlegroundQueue::UpdateSoloShufflePool: no bracket {} for map {}", uint32(bracket_id), bgTemplate->GetMapId());
+        return;
+    }
+
+    uint32 const seats = uint32(arenaType) * 2;
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+
+    // Everyone waiting alone, longest-waiting first, with the role they would
+    // play now: talents can be changed in the queue.
+    auto const collect = [&]()
+    {
+        std::vector<ShuffleCandidate> waiting;
+        for (uint32 queueIndex = BG_QUEUE_PREMADE_ALLIANCE; queueIndex < BG_QUEUE_GROUP_TYPES_COUNT; ++queueIndex)
+        {
+            for (GroupQueueInfo* ginfo : m_QueuedGroups[bracket_id][queueIndex])
+            {
+                if (ginfo->IsInvitedToBGInstanceGUID || ginfo->IsRated || !InActivePool(ginfo) ||
+                    ginfo->ArenaType != arenaType || ginfo->Players.size() != 1)
+                    continue;
+
+                Player const* player = ObjectAccessor::FindConnectedPlayer(ginfo->Players.begin()->first);
+                if (!player)
+                    continue;
+
+                waiting.push_back({ ginfo, Arena::IsSoloShuffleHealer(player) });
+            }
+        }
+
+        std::stable_sort(waiting.begin(), waiting.end(),
+            [](ShuffleCandidate const& left, ShuffleCandidate const& right) { return left.Group->JoinTime < right.Group->JoinTime; });
+        return waiting;
+    };
+
+    auto const start = [&](std::vector<ShuffleCandidate> const& picked, bool botFill)
+    {
+        std::vector<GroupQueueInfo*> groups;
+        std::vector<bool> healers;
+        for (ShuffleCandidate const& candidate : picked)
+        {
+            groups.push_back(candidate.Group);
+            healers.push_back(candidate.Healer);
+        }
+        StartSoloShuffle(bgTypeId, bracketEntry, bracket_id, arenaType, groups, healers, botFill);
+    };
+
+    std::vector<ShuffleCandidate> waiting = collect();
+    if (waiting.empty())
+        return;
+
+    // 1. Two healers and four others.
+    {
+        uint32 healers = 0;
+        for (ShuffleCandidate const& candidate : waiting)
+            if (candidate.Healer)
+                ++healers;
+
+        if (healers >= kShuffleHealers && waiting.size() - healers >= seats - kShuffleHealers)
+        {
+            start(PickShuffleLobby(waiting, seats, kShuffleHealers), false);
+            return;
+        }
+    }
+
+    // 2. Bots take the seats nobody is waiting for.
+    if (sBattlegroundMgr->IsBotFillSkirmishArena(arenaType))
+    {
+        uint32 const queueWaitMs = sBattlegroundMgr->GetBotFillQueueWaitMs(arenaType);
+        OfferPreparationSeats(bgTypeId, bracket_id, arenaType, queueWaitMs);
+
+        std::vector<ShuffleCandidate> botsWelcome;
+        bool someoneHasWaitedLongEnough = false;
+        for (ShuffleCandidate const& candidate : collect())
+        {
+            if (!GroupHasRealPlayerInvitee(candidate.Group) || !GroupAllowsArenaBotFill(candidate.Group))
+                continue;
+
+            botsWelcome.push_back(candidate);
+            if (getMSTimeDiff(candidate.Group->JoinTime, nowMs) >= queueWaitMs)
+                someoneHasWaitedLongEnough = true;
+        }
+
+        if (someoneHasWaitedLongEnough)
+        {
+            start(PickShuffleLobby(botsWelcome, seats, kShuffleHealers), true);
+            return;
+        }
+
+        waiting = collect();
+        if (waiting.empty())
+            return;
+    }
+
+    // 3. Any six, once the first in line has waited for a better mix.
+    if (waiting.size() >= seats && getMSTimeDiff(waiting.front().Group->JoinTime, nowMs) >= kShuffleAnyLobbyMs)
+        start(PickShuffleLobby(waiting, seats, kShuffleHealers), false);
+}
+
+void BattlegroundQueue::StartSoloShuffle(BattlegroundTypeId bgTypeId, PvPDifficultyEntry const* bracketEntry,
+    BattlegroundBracketId bracket_id, uint8 arenaType, std::vector<GroupQueueInfo*> players, std::vector<bool> const& healers, bool botFill)
+{
+    if (players.empty())
+        return;
+
+    bool hasBotParticipants = botFill;
+    for (GroupQueueInfo const* ginfo : players)
+        if (GroupHasBotInvitee(ginfo))
+            hasBotParticipants = true;
+
+    Battleground* bg = sBattlegroundMgr->CreateNewBattleground(bgTypeId, bracketEntry, arenaType, false, false, hasBotParticipants);
+    if (!bg)
+    {
+        TC_LOG_ERROR("bg.battleground", "BattlegroundQueue::StartSoloShuffle: cannot create battleground {}", uint32(bgTypeId));
+        return;
+    }
+
+    bg->SetTournamentPool(m_ActiveTournamentPool);
+    // Flagged before anyone is invited, as TryStartBotFilledMatch does, so the
+    // first person in is accounted as a person among bots.
+    bg->SetBotFillMatch(botFill);
+    bg->SetBotFillRefused(!botFill);
+
+    // Round 1's sides: healers first, then everyone else, dealt alternately -
+    // healers apart and the sides level. People waiting together on a bot
+    // match are set against each other, not beside each other.
+    std::vector<size_t> order(players.size());
+    for (size_t i = 0; i < order.size(); ++i)
+        order[i] = i;
+    std::stable_partition(order.begin(), order.end(), [&healers](size_t i) { return i < healers.size() && healers[i]; });
+
+    uint32 invited = 0;
+    for (size_t seat = 0; seat < order.size(); ++seat)
+    {
+        GroupQueueInfo* ginfo = players[order[seat]];
+        uint32 const side = (seat % 2) == 0 ? ALLIANCE : HORDE;
+        if (ginfo->Team != side)
+        {
+            ginfo->Team = side;
+            MoveGroupToSeatedSide(ginfo, bracket_id);
+        }
+
+        if (InviteGroupToBG(ginfo, bg, side))
+            invited += uint32(ginfo->Players.size());
+    }
+
+    TC_LOG_DEBUG("bg.battleground", "BattlegroundQueue::StartSoloShuffle: started instance {} (bracket {}) for {} player(s), bot fill {}.",
+        bg->GetInstanceID(), uint32(bracket_id), invited, botFill ? "on" : "off");
+
+    bg->StartBattleground();
+    // An arena admits nobody once it is made; latecomers wait for the next,
+    // or take a clone's seat while the first gates are shut.
+    bg->RemoveFromBGFreeSlotQueue();
+}
+
 /*
 this method is called when group is inserted, or player / group is removed from BG Queue - there is only one player's status changed, so we don't use while (true) cycles to invite whole queue
 it must be called after fully adding the members of a group to ensure group joining
@@ -1706,6 +1916,12 @@ void BattlegroundQueue::UpdatePool(BattlegroundTypeId bgTypeId, BattlegroundBrac
     if (sBattlegroundMgr->IsSquadBattleground(bgTypeId))
     {
         UpdateSquadPool(bgTypeId, bracket_id, arenaType);
+        return;
+    }
+
+    if (bgTypeId == BATTLEGROUND_SSH)
+    {
+        UpdateSoloShufflePool(bgTypeId, bracket_id, arenaType);
         return;
     }
 
