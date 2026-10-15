@@ -35,6 +35,7 @@ WSUI_GREEN = 90128             # next after the ported arenas' 90100-90127
 WSUI_GOLD = 90129
 LIGHT_ID = 3616                # free in patch-enUS-A (max 3566), world-terrain and both servers
 LIGHT_SOURCE = 1773            # the Eye's own map-wide light: NexusRaid_StarrySky
+MAPDIFF_ID = 760               # next after Blood Beneath the Arena's 759; shaped like 617's
 
 # ---------------------------------------------------------- the client files
 PLATFORM_WMO = "world\\wmo\\dungeon\\nexus\\platforms\\nexus_raid_floating_platform.wmo"
@@ -116,6 +117,18 @@ BUFFS = [
     (184663,) + _at(ALLIANCE_BEARING + 90.0, LANDING_DISTANCE) + (FLOOR_RING_Z,),
     (184664,) + _at(HORDE_BEARING + 90.0, LANDING_DISTANCE) + (FLOOR_RING_Z,),
 ]
+
+# Line-of-sight pillars (pillars/): an equilateral triangle round the centre.
+# One corner on the square axis (315), the other two mirrored across it (75 and
+# 195): the mirror across 135/315 is the one that swaps the teams, so each team
+# sees the same arena. Each pillar is 30 deg off its own team's line to the
+# centre and faces the centre. r 20 keeps them on the inner floor (to r 28).
+PILLAR_RADIUS = 20.0
+PILLAR_BEARINGS = (HORDE_BEARING + 90.0, ALLIANCE_BEARING + 30.0, HORDE_BEARING - 30.0)   # 315, 75, 195
+
+
+def pillar_points():
+    return [_at(b, PILLAR_RADIUS) + (b,) for b in PILLAR_BEARINGS]
 
 # battleground_bounds: below MinZ (well under both pads and the Eye's floor) or
 # outside the circle, back onto the Eye. ProbeZ looks for the floor from under

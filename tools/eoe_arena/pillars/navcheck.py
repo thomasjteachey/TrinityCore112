@@ -42,10 +42,11 @@ def on_mesh(polys, x, y, z, dz=2.5):
 before, after = load(sys.argv[1]), load(sys.argv[2])
 cx, cy = L.CENTRE_X, L.CENTRE_Y
 pts = []
-centres = [(cx, cy, "centre pillar")]
-for b in (135.0, 315.0):
-    a = math.radians(b)
-    centres.append((cx + 20 * math.cos(a), cy + 20 * math.sin(a), "flank pillar %d" % b))
+centres = [(x, y, "pillar %d" % (b % 360)) for x, y, b in L.pillar_points()]
+# Where the first layout (a line: the centre and r 20 on 135) stood: floor again.
+for x, y, n in ((cx, cy, "old centre pillar"),
+                (cx + 20 * math.cos(math.radians(135)), cy + 20 * math.sin(math.radians(135)), "old pillar 135")):
+    pts.append((x, y, L.FLOOR_CENTRE_Z, n + " - middle", True))
 for x, y, n in centres:
     pts.append((x, y, L.FLOOR_CENTRE_Z, n + " - middle", False))
     for r in (2.0, 3.0):

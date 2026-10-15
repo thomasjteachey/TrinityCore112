@@ -2,17 +2,18 @@
 
 Nexus_PillarA (GameObjectDisplayInfo 11970, the Nexus's own pillar - same JLO_NEX_* textures as
 the Eye's floor) at scale 2.5, static `gameobject` spawns on map 1616. Layout, from
-tools/eoe_arena/layout.py so it moves with the arena:
-
-  * one at the centre, on the teams' axis (45/225): no line of sight between the landings
-    when the gates open;
-  * two at r 20 on the square axis (135/315), between the centre and each Shadow Sight.
+tools/eoe_arena/layout.py (PILLAR_BEARINGS / PILLAR_RADIUS) so it moves with the arena: an
+equilateral triangle at r 20 round the centre, one corner on the square axis (315) and the
+other two mirrored across it (75 and 195).
 
 Fair by the mirror across the 135/315 axis, the one that swaps the teams: the model is
-symmetric only across its own front-back plane, so every pillar has that plane on the axis -
-the flanks face the centre, the centre one faces the 135 buff. Spawns put the column (base and
-waist, centred 0.06 model units behind the origin) on the intended point; only the capital and
-spire lean forward, well above head height.
+symmetric only across its own front-back plane, so every pillar faces the centre - the corner
+on the axis has its plane on it, and the other two are each other's mirror images. Spawns put
+the column (base and waist, centred 0.06 model units behind the origin) on the intended point;
+only the capital and spire lean forward, well above head height.
+
+The rows only load because map 1616 has a MapDifficulty row (../eoe_dbc.py): a map with none
+accepts no static spawn ("wrong spawn mask ... unsupported difficulty modes").
 """
 import math, os, sys
 
@@ -25,7 +26,6 @@ SCALE = 2.5
 NAME = "Nexus Pillar"
 BBOX = (-1.6639766693115234, -1.1887866258621216, -0.05296637490391731,
         1.663975715637207, 1.80129873752594, 5.183651924133301)
-FLANK_RADIUS = 20.0
 
 cx, cy, cz = L.CENTRE_X, L.CENTRE_Y, L.FLOOR_CENTRE_Z
 lcx = 0.0
@@ -40,11 +40,9 @@ def spawn(px, py, orientation_deg, comment):
     return ox, oy, cz, o, math.sin(o / 2), math.cos(o / 2), comment
 
 
-spawns = [spawn(cx, cy, L.ALLIANCE_BEARING, "centre, front to the 135 buff")]
-for b in (L.ALLIANCE_BEARING + 90.0, L.HORDE_BEARING + 90.0):
-    a = math.radians(b)
-    spawns.append(spawn(cx + FLANK_RADIUS * math.cos(a), cy + FLANK_RADIUS * math.sin(a), b + 90.0,
-                        "flank at bearing %d, front to the centre" % b))
+# The model's front is its +y, so orientation = bearing + 90 turns it to the centre.
+spawns = [spawn(x, y, b + 90.0, "corner at bearing %d, front to the centre" % (b % 360))
+          for x, y, b in L.pillar_points()]
 
 out = []
 for db in ("centurionworld", "centuriondevworld"):

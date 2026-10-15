@@ -20,6 +20,13 @@ same bytes:
     Light 3616             the Eye's own map-wide light (1773) for map 1616: the
                            NexusRaid_StarrySky skybox. Without a Light row a map
                            falls back to the default daytime sky.
+    MapDifficulty 760      server only: (1616, difficulty 0), the row stock
+                           Dalaran Sewers (617) has. ObjectMgr allows a map only
+                           the spawn modes MapDifficulty lists, so without it every
+                           static `gameobject` row on 1616 (the pillars) is skipped
+                           as "wrong spawn mask". An arena runs in its PvpDifficulty
+                           bracket's difficulty, 0. The client never needs it for an
+                           arena, so eoe_patch.py does not ship it.
 
 `apply` only touches files that exist in the directory (a patch that does not
 carry a table is not given one), backs each one up once as <file>.bak-eoe, and
@@ -53,6 +60,7 @@ SPECS = {
     "WorldSafeLocs": (22, loc(5)),
     "WorldStateUI": (63, [4] + loc(5) + loc(22) + [41] + loc(42) + [59]),
     "Light": (15, []),
+    "MapDifficulty": (23, loc(3) + [22]),
 }
 
 
@@ -140,6 +148,8 @@ def build_rows():
     rows["WorldStateUI"].append(client_row("WorldStateUI", 90119, f0=L.WSUI_GOLD, f1=L.MAP_ID))
 
     rows["Light"].append(client_row("Light", L.LIGHT_SOURCE, f0=L.LIGHT_ID, f1=L.MAP_ID))
+
+    rows["MapDifficulty"].append(client_row("MapDifficulty", 112, f0=L.MAPDIFF_ID, f1=L.MAP_ID))
     return rows
 
 
