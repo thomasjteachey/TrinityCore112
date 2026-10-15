@@ -13,6 +13,7 @@
 #include "WorldStatePackets.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace
 {
@@ -34,6 +35,24 @@ TokOrbSpawn constexpr TOK_ORBS[BG_TOK_ORB_COUNT] =
 };
 
 float constexpr TOK_PEDESTAL_BASE_Z = 10.643f;
+
+struct TokGateSpawn
+{
+    uint32 type;
+    float x, y, z, o;
+};
+
+// Each start is a walled platform at the top of a ramp inside an MG_NORTHGATEB
+// gatehouse; the ramp's only way out is the arch at its foot. The gatehouse's own
+// doodad set marks where its door belongs - it places the door's open-state
+// collision at local (166.46, -26.20, -32.58), scale 1, unrotated - and these are
+// that point carried through the two gatehouse placements (yaw 91.5 and 269.5
+// degrees). The door is 27 x 52 at scale 1, so it sinks into the arch's frame.
+TokGateSpawn constexpr TOK_GATES[] =
+{
+    { BG_TOK_OBJECT_GATE_ALLIANCE, 1783.74f, 1104.96f, 19.50f, 1.5970f },
+    { BG_TOK_OBJECT_GATE_HORDE,    1780.17f, 1565.32f, 23.19f, 4.7037f }
+};
 float constexpr TOK_ORB_Z           = 13.571f;
 
 // Scoring rings, from the temple's WMO placements. The centre is the sunken
@@ -135,6 +154,16 @@ bool BattlegroundTOK::SetupBattleground()
         }
     }
 
+    for (TokGateSpawn const& gate : TOK_GATES)
+    {
+        if (!AddObject(gate.type, BG_TOK_ENTRY_GATE, gate.x, gate.y, gate.z, gate.o,
+                0.0f, 0.0f, std::sin(gate.o / 2.0f), std::cos(gate.o / 2.0f), RESPAWN_IMMEDIATELY))
+        {
+            TC_LOG_ERROR("bg.battleground", "BattlegroundTOK::SetupBattleground: failed to spawn start gate (type {}).", gate.type);
+            return false;
+        }
+    }
+
     struct SpiritSpawn
     {
         uint32 type;
@@ -168,14 +197,24 @@ bool BattlegroundTOK::SetupBattleground()
 
 void BattlegroundTOK::StartingEventCloseDoors()
 {
-    // No gates: battleground_template.StartMaxDist holds everyone in their start
-    // area until the doors would open. The orbs appear with the start.
+    for (TokGateSpawn const& gate : TOK_GATES)
+    {
+        DoorClose(gate.type);
+        SpawnBGObject(gate.type, RESPAWN_IMMEDIATELY);
+        if (GameObject* door = GetBGObject(gate.type, false))
+            door->SetFlag(GO_FLAG_NOT_SELECTABLE);
+    }
+
+    // The orbs appear with the start.
     for (uint8 orb = 0; orb < BG_TOK_ORB_COUNT; ++orb)
         ShowOrbOnPedestal(orb, false);
 }
 
 void BattlegroundTOK::StartingEventOpenDoors()
 {
+    for (TokGateSpawn const& gate : TOK_GATES)
+        DoorOpen(gate.type);
+
     for (uint8 orb = 0; orb < BG_TOK_ORB_COUNT; ++orb)
     {
         _orbs[orb] = OrbState();

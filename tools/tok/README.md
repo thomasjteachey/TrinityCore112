@@ -19,6 +19,14 @@ Battleground type **106** (`BATTLEGROUND_TOK`, queue type 20) on map **998**
   mounts, turns immune (Divine Shield, Ice Block), gets into a vehicle or
   otherwise loses the holder aura. Carriers cannot stealth.
 - Custom games: the lobby's resource limit and resource-rate rules apply.
+- Each team starts on a walled platform at the top of a ramp inside an
+  MG_NORTHGATEB gatehouse. A gate (mogu_northgate_door_03, entry 300228) closes
+  the arch at the foot of the ramp until the match opens. Its spot is the
+  gatehouse's own: the WMO's doodad set places the door's open-state collision
+  at local (166.46, -26.20, -32.58), carried through each gatehouse placement.
+- No loading screen: Map 998's LoadingScreenID is 0 (owner's call), so the
+  client shows its default. LoadingScreens row 334 is still in the archives,
+  unused.
 
 Scoring rings are rectangles from the temple's WMO placements, with a height
 test for the sunken centre (floor z 5.56 against 10.56 for the courtyard).
@@ -33,11 +41,11 @@ test for the sunken centre (floor z 5.56 against 10.56 for the courtyard).
 | WorldSafeLocs | 52700/52701 starts, 52702-52705 graveyards (Ascension 5978/5979, 6034-6037) |
 | WorldStateUI | 90028/90029, states 9500-9505 |
 | WorldMapArea | 9534 (art `Interface\WorldMap\TempleofKotmogu\`, terrain-style) |
-| LoadingScreens | 334 |
+| LoadingScreens | 334 (row present, not referenced - Map 998 uses none) |
 | Spell | 92300-92303 stack debuff, 92304-92307 hidden holder (Ascension 8445xx) |
 | SpellIcon / SpellVisual / Kit / KitModelAttach / EffectName | Ascension's own: 6182-6185 / 82278-82281 / 80003-80006 / 80003-80013 / 80024-80028 |
-| GameObjectDisplayInfo | 11533 orb, 11960-11963 coloured light columns |
-| gameobject_template | 300220-300223 orbs (lockless flag stands), 300224-300227 light columns |
+| GameObjectDisplayInfo | 11533 orb, 11960-11963 coloured light columns, 11964 start gate |
+| gameobject_template | 300220-300223 orbs (lockless flag stands), 300224-300227 light columns, 300228 start gate (door, faction 114, flags 32) |
 | trinity_string | 20120, 20121 |
 
 ## Tools

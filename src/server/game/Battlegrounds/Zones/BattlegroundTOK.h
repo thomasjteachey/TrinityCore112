@@ -75,7 +75,10 @@ enum BG_TOK_Objects
     // The coloured light column standing over each waiting orb. The balls
     // share one neutral texture, so the column is what tells them apart.
     BG_TOK_OBJECT_BEAM_FIRST = BG_TOK_OBJECT_ORB_FIRST + BG_TOK_ORB_COUNT,
-    BG_TOK_OBJECT_MAX        = BG_TOK_OBJECT_BEAM_FIRST + BG_TOK_ORB_COUNT
+    // The start gates, closing the arch at the foot of each team's start ramp.
+    BG_TOK_OBJECT_GATE_ALLIANCE = BG_TOK_OBJECT_BEAM_FIRST + BG_TOK_ORB_COUNT,
+    BG_TOK_OBJECT_GATE_HORDE,
+    BG_TOK_OBJECT_MAX
 };
 
 enum BG_TOK_ObjectEntries
@@ -83,7 +86,9 @@ enum BG_TOK_ObjectEntries
     // gameobject_template. Orbs are lockless GAMEOBJECT_TYPE_FLAGSTAND, so a
     // click reaches EventPlayerClickedOnFlag directly; beams are scenery.
     BG_TOK_ENTRY_ORB_FIRST  = 300220,
-    BG_TOK_ENTRY_BEAM_FIRST = 300224
+    BG_TOK_ENTRY_BEAM_FIRST = 300224,
+    // GAMEOBJECT_TYPE_DOOR, mogu_northgate_door_03 (display 11964).
+    BG_TOK_ENTRY_GATE       = 300228
 };
 
 enum BG_TOK_Spells

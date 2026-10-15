@@ -174,6 +174,10 @@ AURA_INTERRUPT_ORB = 0x1A0000              # mount | change map | immune or lost
 DURATION_INFINITE = 21
 ORB_DISPLAY = 11533                        # murderball_pedestal_ball.m2
 BEAM_DISPLAYS = (11960, 11961, 11962, 11963)
+# The start gate: mogu_northgate_door_03 (Stand / Open / Opened), the door the
+# MG_NORTHGATEB gatehouse is built around. Ascension's display 1013068, renumbered.
+GATE_DISPLAY = 11964
+ASC_GATE_DISPLAY = 1013068
 BEAM_MODELS = ("spells\\auracyanverytall_v2.m2", "spells\\aurapurpleverytall_v2.m2",
                "spells\\auragreenverytall_v2.m2", "spells\\auraorangeverytall_v2.m2")
 # Bounding box of the beam models, read out of the M2 (all four share it).
@@ -183,8 +187,10 @@ BEAM_BOX = (-0.92, -0.93, 0.37, 0.95, 0.94, 65.16)
 def build_rows():
     rows = {name: [] for name in SPECS}
 
-    # Map: Ascension's row, pointed at its own zone and loading screen.
-    rows["Map"].append(asc_row("Map", MAP_ID, f22=AREA_IDS[0], f57=LOADING_SCREEN))
+    # Map: Ascension's row, pointed at its own zone. No loading screen (owner,
+    # 2026-10-15): LoadingScreenID 0 gives the client's default one. Row 334
+    # below stays, unused, because the published archives already carry it.
+    rows["Map"].append(asc_row("Map", MAP_ID, f22=AREA_IDS[0], f57=0))
 
     # AreaTable: Ascension's four rows. AreaBit renumbered (see header); the
     # ambience and music ids are Ascension's own and do not exist here, so the
@@ -243,6 +249,10 @@ def build_rows():
         rows["SpellVisualEffectName"].append(asc_row("SpellVisualEffectName", effect))
 
     rows["GameObjectDisplayInfo"].append(asc_row("GameObjectDisplayInfo", ORB_DISPLAY))
+    # Its sound slots name Ascension's SoundEntries (28949...), which this client
+    # does not have, so they are cleared.
+    rows["GameObjectDisplayInfo"].append(asc_row("GameObjectDisplayInfo", ASC_GATE_DISPLAY, f0=GATE_DISPLAY,
+                                                 **{"f%d" % f: 0 for f in range(2, 12)}))
     for display, model in zip(BEAM_DISPLAYS, BEAM_MODELS):
         rows["GameObjectDisplayInfo"].append(
             [display, model] + [0] * 10 + [f32(v) for v in BEAM_BOX] + [0])
