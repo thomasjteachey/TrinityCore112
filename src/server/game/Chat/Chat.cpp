@@ -189,10 +189,19 @@ void ChatHandler::SendSysMessage(uint32 entry)
     SendSysMessage(GetTrinityString(entry));
 }
 
+// The commands a regular player account may type. Everything else stays
+// GM-only no matter what the player role is granted, so opening one up takes
+// both a name here and its permission linked to that role.
+static bool IsPlayerCommand(std::string_view text)
+{
+    std::string_view const token = text.substr(0, text.find(Trinity::Impl::ChatCommands::COMMAND_DELIMITER));
+    return StringEqualI(token, "info");
+}
+
 bool ChatHandler::_ParseCommands(std::string_view text)
 {
     // Prevent regular player accounts from executing any chat command.
-    if (m_session && AccountMgr::IsPlayerAccount(m_session->GetSecurity()))
+    if (m_session && AccountMgr::IsPlayerAccount(m_session->GetSecurity()) && !IsPlayerCommand(text))
         return false;
 
     if (Trinity::ChatCommands::TryExecuteCommand(*this, text))

@@ -194,6 +194,11 @@ ChallengeModes* ChallengeModes::instance()
     return &instance;
 }
 
+char const* ChallengeModes::GetDisplayName(ChallengeModeSettings setting)
+{
+    return GetChallengeDisplayName(setting);
+}
+
 void ChallengeModes::LoadStringToMap(RewardMap& mapToLoad, std::string const& configString)
 {
     mapToLoad.clear();

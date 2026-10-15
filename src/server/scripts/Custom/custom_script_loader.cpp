@@ -66,6 +66,7 @@ void AddSC_violet_hold_boons();
 void AddSC_custom_spell_propagate();
 void AddSC_custom_tournament_mode();
 void AddSC_custom_mokgora();
+void AddSC_custom_info_command();
 void AddSC_custom_name_markers();
 void AddSC_custom_absorb_feed();
 void AddSC_blood_beneath_arena();
@@ -83,6 +84,7 @@ void AddCustomScripts()
     AddSC_custom_spell_propagate();
     AddSC_custom_tournament_mode();
     AddSC_custom_mokgora();
+    AddSC_custom_info_command();
     AddSC_custom_name_markers();
     AddSC_custom_absorb_feed();
     AddBGReplayScripts();

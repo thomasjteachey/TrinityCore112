@@ -44,6 +44,9 @@ public:
     bool CanActivate(Player const* player) const;
     bool CanActivateMode(Player const* player, ChallengeModeSettings setting, std::string* error = nullptr) const;
 
+    // The name a player is shown for a mode: "Hardcore", "Self Crafted", ...
+    static char const* GetDisplayName(ChallengeModeSettings setting);
+
     uint32 GetDisableLevel(ChallengeModeSettings setting) const;
     float GetXpMultiplier(ChallengeModeSettings setting) const;
     uint32 GetItemRewardAmount(ChallengeModeSettings setting) const;
