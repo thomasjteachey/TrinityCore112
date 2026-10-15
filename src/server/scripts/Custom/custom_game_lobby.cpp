@@ -1301,8 +1301,12 @@ public:
     void OnPlayerUpdate(Player* player)
     {
         CustomGameLobby* lobby = GetLobby(player);
-        if (!lobby || player->GetMapId() != CUSTOM_GAME_MAP_ID || player->GetInstanceId() != lobby->InstanceId)
+        if (!lobby || player->GetMapId() != CUSTOM_GAME_MAP_ID || player->GetInstanceId() != lobby->InstanceId ||
+            lobby->Members.find(player->GetGUID()) == lobby->Members.end())
+        {
+            ReturnIfStranded(player);
             return;
+        }
 
         ApplyLobbySafetyFlags(player);
         if (!player->IsAlive())
@@ -1728,13 +1732,30 @@ private:
             }
         };
 
+        // Between SMSG_NEW_WORLD and the client's ack a player is in no map,
+        // and the map it still points at can be the battleground map that has
+        // since been deleted - so nothing that touches the map, TeleportTo
+        // included, may run on it until it lands. Where it lands is resolved
+        // only then, from its world sub-map (MapManager::CreateMap).
+        auto isOnWayToLobby = [](Player* player)
+        {
+            return player->IsBeingTeleportedFar() && player->GetTeleportDest().GetMapId() == CUSTOM_GAME_MAP_ID;
+        };
+
+        // Who comes back: everyone still in the match, and everyone who left it
+        // for this lobby - standing in the old box already, or still on the
+        // loading screen into it. Leaving is what ends a match whose last
+        // person walks out (Battleground::RemovePlayerAtLeave), and the leave
+        // sends them to their entry point, the old box, so this pass normally
+        // runs while they are still loading. Dropped from the roster then, they
+        // landed in a box no lobby would ever come back for.
         std::vector<ObjectGuid> returningGuids;
-        bool const isSoloLobby = lobby.Members.size() == 1 && lobby.Members.find(lobby.OwnerGuid) != lobby.Members.end();
         for (auto const& [guid, member] : lobby.Members)
             if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
                 if (player->GetBattlegroundId() == battlegroundId ||
-                    (isSoloLobby && guid == lobby.OwnerGuid && player->GetMapId() == CUSTOM_GAME_MAP_ID &&
-                        player->GetInstanceId() == oldInstanceId))
+                    (player->GetWorldSubMapInstanceId(CUSTOM_GAME_MAP_ID) == oldInstanceId &&
+                        (isOnWayToLobby(player) ||
+                            (player->GetMapId() == CUSTOM_GAME_MAP_ID && player->GetInstanceId() == oldInstanceId))))
                     returningGuids.push_back(guid);
 
         if (returningGuids.empty())
@@ -1752,6 +1773,12 @@ private:
             for (ObjectGuid guid : returningGuids)
                 if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
                 {
+                    // Not sendable home yet. It lands in the old box, which
+                    // OnPlayerUpdate empties to Gurubashi - or at its homebind,
+                    // if the box is torn down before it arrives.
+                    if (isOnWayToLobby(player))
+                        continue;
+
                     detachFromMatch(player);
                     player->ClearWorldSubMap();
                     player->TeleportTo(lobby.Members.at(guid).ReturnLocation);
@@ -1771,6 +1798,9 @@ private:
             for (ObjectGuid guid : returningGuids)
                 if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
                 {
+                    if (isOnWayToLobby(player))
+                        continue;
+
                     detachFromMatch(player);
                     player->ClearWorldSubMap();
                     player->TeleportTo(lobby.Members.at(guid).ReturnLocation);
@@ -1808,6 +1838,16 @@ private:
         for (ObjectGuid guid : returningGuids)
             if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
             {
+                // Already loading into the lobby, out of the match the way
+                // RemovePlayerAtLeave takes everyone out. Rebinding is the whole
+                // job: the transfer it is on now lands in the new box, behind
+                // the one loading screen it is already looking at.
+                if (isOnWayToLobby(player))
+                {
+                    player->SetWorldSubMap(CUSTOM_GAME_MAP_ID, newInstanceId);
+                    continue;
+                }
+
                 detachFromMatch(player);
 
                 player->SetWorldSubMap(CUSTOM_GAME_MAP_ID, newInstanceId);
@@ -1820,6 +1860,47 @@ private:
         if (Map* oldLobbyMap = sMapMgr->FindMap(CUSTOM_GAME_MAP_ID, oldInstanceId))
             if (!oldLobbyMap->HavePlayers())
                 sMapMgr->DestroyWorldSubMap(CUSTOM_GAME_MAP_ID, oldInstanceId);
+    }
+
+    // Someone standing in a staging box that is not their lobby's, or whose
+    // lobby no longer has them on its roster. The box has no way out on foot and
+    // its NPCs only serve the roster - Chromie's "close and return everyone"
+    // returns nobody - so a teleport or a relog was the only exit. Send them
+    // where a relog would have (OnBeforeMapLoad). Lobby preview clones stand in
+    // the box off the roster on purpose, so only real sessions are looked at.
+    void ReturnIfStranded(Player* player)
+    {
+        if (player->GetMapId() != CUSTOM_GAME_MAP_ID || player->IsBeingTeleported())
+            return;
+
+        Map const* map = player->FindMap();
+        if (!map || !map->IsServerOnlyWorldSubMap())
+            return;
+
+        WorldSession const* session = player->GetSession();
+        if (!session || session->IsVirtualSession() || session->IsTransientPlayerSession())
+            return;
+
+        TC_LOG_INFO("custom.lobby", "STRANDED player='{}' guid={} instance={} boundTo={} - returning to Gurubashi",
+            player->GetName(), player->GetGUID().ToString(), player->GetInstanceId(),
+            player->GetWorldSubMapInstanceId(CUSTOM_GAME_MAP_ID));
+
+        // The box revives only its roster, and a ghost has no corpse to walk to.
+        if (!player->IsAlive())
+        {
+            player->ResurrectPlayer(1.0f);
+            player->SpawnCorpseBones();
+        }
+
+        ApplyTeamVisual(player, 0);
+        player->SetVisible(true);
+        player->RemoveUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
+        if (player->IsSpectator())
+            player->SetIsSpectator(false);
+        player->SetPendingSpectatorForBG(0);
+        player->ClearWorldSubMap();
+        Notify(player, "Your custom-game lobby is no longer active. You have been returned to Gurubashi Arena.");
+        player->TeleportTo(GurubashiGamesmasterLocation);
     }
 
     static void ApplyLobbySafetyFlags(Player* player)
