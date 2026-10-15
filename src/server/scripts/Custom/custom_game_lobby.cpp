@@ -11,6 +11,7 @@
 #include "DBCStores.h"
 #include "DisableMgr.h"
 #include "Group.h"
+#include "GroupMgr.h"
 #include "GameTime.h"
 #include "GameObject.h"
 #include "Log.h"
@@ -203,6 +204,10 @@ struct CustomGameLobby
     bool ClonesSpawned = false;
     bool Closing = false;
     uint32 LastBotShedNoticeMs = 0;
+    // The raids the lobby keeps its roster in, oldest first, each with the side
+    // it holds: ALLIANCE (Blue), HORDE (Red) or 0 (spectators). By id rather
+    // than pointer, because a raid can be disbanded out from under the lobby.
+    std::vector<std::pair<ObjectGuid::LowType, uint32>> Raids;
 };
 
 char const* TeamName(uint32 team)
@@ -460,6 +465,8 @@ public:
         if (importGroup)
             group->Disband();
 
+        SyncLobbyRaids(*_lobbies[instanceId]);
+
         for (ObjectGuid guid : memberGuids)
             if (Player* member = ObjectAccessor::FindConnectedPlayer(guid))
             {
@@ -572,6 +579,7 @@ public:
             invited->UninviteFromGroup();
         if (invited->GetGroup())
             invited->RemoveFromGroup(GROUP_REMOVEMETHOD_LEAVE);
+        SyncLobbyRaids(*lobby);
 
         invited->CombatStopWithPets(true);
         invited->SetWorldSubMap(CUSTOM_GAME_MAP_ID, lobby->InstanceId);
@@ -628,6 +636,7 @@ public:
 
         lobby->Teams[playerGuid] = team;
         ApplyTeamVisual(player, team);
+        SyncLobbyRaids(*lobby);
         Notify(player, std::string("You joined team ") + TeamName(team) + ".");
     }
 
@@ -639,6 +648,7 @@ public:
 
         lobby->Teams.erase(player->GetGUID());
         ApplyTeamVisual(player, 0);
+        SyncLobbyRaids(*lobby);
         Notify(player, "You are now unteamed and will spectate when the match starts.");
     }
 
@@ -1283,6 +1293,9 @@ public:
 
             auto teamItr = lobby->Teams.find(player->GetGUID());
             ApplyTeamVisual(player, teamItr == lobby->Teams.end() ? 0 : teamItr->second);
+            // Raid changes wait out loading screens (IsRaidSettled), so each
+            // landing is a chance to catch up on them.
+            SyncLobbyRaids(*lobby);
             return;
         }
 
@@ -1402,7 +1415,16 @@ public:
             }
 
         if (_pendingGurubashiReturn.erase(player->GetGUID()))
+        {
+            // The lobby's raids are ordinary groups, saved like any other, so a
+            // restart that loses the lobby can leave one behind. A lobby
+            // member is in no other group (joining a lobby leaves the old one,
+            // and an invite from inside a lobby is a lobby invite), so the
+            // group someone wakes up in here is that leftover.
+            if (Group* group = player->GetGroup(); group && IsRaidSettled(group))
+                player->RemoveFromGroup(GROUP_REMOVEMETHOD_LEAVE);
             Notify(player, "Your custom-game lobby is no longer active. You have been returned to Gurubashi Arena.");
+        }
     }
 
     void Update()
@@ -1414,6 +1436,7 @@ public:
             else
                 ++itr;
 
+        DisbandSettledRaids();
         CullCustomMatchesForResources();
 
         std::vector<uint32> eraseIds;
@@ -1462,6 +1485,7 @@ public:
             if (lobby.Closing)
             {
                 playerbot::PlayerbotObcCloneManager::DestroyCustomGameLobbyClones(instanceId);
+                DisbandLobbyRaids(lobby);
                 for (auto const& [guid, member] : lobby.Members)
                     if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
                         if (player->HasWorldSubMap())
@@ -1678,6 +1702,9 @@ private:
         bool const wasOwner = lobby.OwnerGuid == player->GetGUID();
         lobby.Members.erase(memberItr);
         lobby.Teams.erase(player->GetGUID());
+        // Directly, not through SyncLobbyRaids: that one leaves the raids alone
+        // while a match is on, and a departure has to be handled then too.
+        LeaveLobbyRaid(player, lobby);
 
         ClearTeamVisual(player);
         player->SetVisible(true);
@@ -1699,6 +1726,9 @@ private:
         }
         else if (lobby.Members.empty())
             lobby.Closing = true;
+
+        // One fewer spectator can mean one raid fewer.
+        SyncLobbyRaids(lobby);
     }
 
     void RecreateLobbyAfterMatch(uint32 oldInstanceId)
@@ -1863,6 +1893,10 @@ private:
             }
 
         RefreshLobbyClonePreviews(lobby);
+        // Out of the battleground raids, the teams are back in the lobby's own
+        // (their original groups); this drops whoever did not come back from
+        // any raid not still loading, and OnMapChanged does the rest as they land.
+        SyncLobbyRaids(lobby);
 
         if (Map* oldLobbyMap = sMapMgr->FindMap(CUSTOM_GAME_MAP_ID, oldInstanceId))
             if (!oldLobbyMap->HavePlayers())
@@ -1946,9 +1980,231 @@ private:
         player->RemoveAurasDueToSpell(SPECTATOR_MARKER);
     }
 
+    // Which of the lobby's raids a member belongs in: their team's, or 0 for
+    // the spectators'.
+    static uint32 RaidSideOf(CustomGameLobby const& lobby, ObjectGuid guid)
+    {
+        auto const teamItr = lobby.Teams.find(guid);
+        return teamItr == lobby.Teams.end() ? 0 : teamItr->second;
+    }
+
+    // The ordinary group a player is in. Inside a match GetGroup() is the
+    // battleground's raid, and the lobby's waits behind it as the original.
+    static Group* LobbyGroupOf(Player* player)
+    {
+        Group* group = player->GetGroup();
+        if (group && (group->isBGGroup() || group->isBFGroup()))
+            group = player->GetOriginalGroup();
+        return group;
+    }
+
+    // Adding, removing and disbanding all run map work on the members they
+    // touch (the raid's quest objects, instance validity), and someone on a
+    // loading screen has no map to run it on: the one it still points at can
+    // be a battleground map deleted since. A raid with anyone in that state is
+    // left alone until they land - the lobby goes over it again then.
+    static bool IsRaidSettled(Group const* raid)
+    {
+        for (Group::MemberSlot const& slot : raid->GetMemberSlots())
+            if (Player* member = ObjectAccessor::FindConnectedPlayer(slot.guid))
+                if (member->IsBeingTeleportedFar())
+                    return false;
+        return true;
+    }
+
+    // Blue in one raid, Red in another and the spectators in their own - as
+    // many raids as it takes at forty a raid, split evenly so the forty-first
+    // spectator does not sit alone in a raid of one. A side of one has no raid.
+    // Runs whenever the roster changes while the lobby is staging, and as
+    // members land in the box. Inside a match the battleground puts each team
+    // in a raid of its own and these wait as the players' original groups until
+    // they leave it; the spectators never join a battleground raid, so they stay
+    // in theirs and can see each other in it.
+    void SyncLobbyRaids(CustomGameLobby& lobby)
+    {
+        if (lobby.ActiveBattlegroundId || lobby.Closing)
+            return;
+
+        struct Side
+        {
+            std::vector<Player*> Players;
+            uint32 RaidCount = 0;
+            uint32 RaidCap = 0;
+        };
+
+        std::unordered_map<uint32, Side> sides = { { ALLIANCE, {} }, { HORDE, {} }, { 0, {} } };
+        for (auto const& [guid, member] : lobby.Members)
+            if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
+                sides[RaidSideOf(lobby, guid)].Players.push_back(player);
+
+        for (auto& [side, plan] : sides)
+        {
+            uint32 const members = uint32(plan.Players.size());
+            plan.RaidCount = members < 2 ? 0 : (members + MAX_RAID_SIZE - 1) / MAX_RAID_SIZE;
+            plan.RaidCap = plan.RaidCount ? (members + plan.RaidCount - 1) / plan.RaidCount : 0;
+        }
+
+        // Out first: whoever a raid no longer has a place for - someone who
+        // left the lobby or changed sides, everyone in a raid past the number
+        // their side now needs, the latest arrivals over an even split.
+        std::unordered_map<uint32, uint32> raidsKept;
+        for (auto raidItr = lobby.Raids.begin(); raidItr != lobby.Raids.end();)
+        {
+            Group* raid = sGroupMgr->GetGroupByGUID(raidItr->first);
+            uint32 const side = raidItr->second;
+            Side const& plan = sides[side];
+
+            if (raid && IsRaidSettled(raid))
+            {
+                if (raidsKept[side] >= plan.RaidCount)
+                {
+                    raid->Disband();
+                    raid = nullptr;
+                }
+                else
+                {
+                    std::vector<ObjectGuid> leaving;
+                    uint32 staying = 0;
+                    for (Group::MemberSlot const& slot : raid->GetMemberSlots())
+                    {
+                        if (lobby.Members.count(slot.guid) && RaidSideOf(lobby, slot.guid) == side && staying < plan.RaidCap)
+                            ++staying;
+                        else
+                            leaving.push_back(slot.guid);
+                    }
+
+                    for (ObjectGuid guid : leaving)
+                    {
+                        // Taking out the second-to-last member disbands it.
+                        Player::RemoveFromGroup(raid, guid);
+                        raid = sGroupMgr->GetGroupByGUID(raidItr->first);
+                        if (!raid)
+                            break;
+                    }
+                }
+            }
+
+            if (!raid)
+            {
+                raidItr = lobby.Raids.erase(raidItr);
+                continue;
+            }
+
+            ++raidsKept[side];
+            ++raidItr;
+        }
+
+        // Then in: everyone not in one of their side's raids joins the first
+        // with room, or starts the next. The host goes first, so a raid the
+        // host starts is theirs to lead.
+        for (auto& sideEntry : sides)
+        {
+            // Plain locals, not a structured binding: a lambda below captures
+            // the plan, which C++17 does not allow of a binding.
+            uint32 const side = sideEntry.first;
+            Side& plan = sideEntry.second;
+            if (!plan.RaidCount)
+                continue;
+
+            std::stable_partition(plan.Players.begin(), plan.Players.end(),
+                [&lobby](Player const* player) { return player->GetGUID() == lobby.OwnerGuid; });
+
+            for (Player* player : plan.Players)
+            {
+                if (player->IsBeingTeleportedFar())
+                    continue;
+
+                std::vector<Group*> raids;
+                for (auto const& [raidId, raidSide] : lobby.Raids)
+                    if (raidSide == side)
+                        if (Group* raid = sGroupMgr->GetGroupByGUID(raidId))
+                            raids.push_back(raid);
+
+                Group* current = LobbyGroupOf(player);
+                if (current && std::find(raids.begin(), raids.end(), current) != raids.end())
+                    continue;
+
+                // The other side's raid, passed over above while someone in it
+                // was loading. (Joining a lobby leaves any other group, and an
+                // invite from inside one is a lobby invite.)
+                if (current)
+                {
+                    if (!IsRaidSettled(current))
+                        continue;
+                    Player::RemoveFromGroup(current, player->GetGUID());
+                }
+                if (player->GetGroupInvite())
+                    player->UninviteFromGroup();
+
+                auto const roomItr = std::find_if(raids.begin(), raids.end(), [&plan](Group const* raid)
+                {
+                    return raid->GetMembersCount() < plan.RaidCap && IsRaidSettled(raid);
+                });
+                if (roomItr != raids.end())
+                {
+                    (*roomItr)->AddMember(player);
+                    continue;
+                }
+
+                if (raids.size() >= plan.RaidCount)
+                    continue;
+
+                Group* raid = new Group;
+                if (!raid->Create(player))
+                {
+                    delete raid;
+                    continue;
+                }
+                sGroupMgr->AddGroup(raid);
+                raid->ConvertToRaid();
+                lobby.Raids.emplace_back(raid->GetLowGUID(), side);
+            }
+        }
+    }
+
+    // A member leaving the lobby leaves its raid with it, match or no match.
+    static void LeaveLobbyRaid(Player* player, CustomGameLobby const& lobby)
+    {
+        Group* group = LobbyGroupOf(player);
+        if (!group || !IsRaidSettled(group))
+            return;
+
+        ObjectGuid::LowType const groupId = group->GetLowGUID();
+        if (std::any_of(lobby.Raids.begin(), lobby.Raids.end(),
+            [groupId](auto const& raid) { return raid.first == groupId; }))
+            Player::RemoveFromGroup(group, player->GetGUID());
+    }
+
+    // A closing lobby's raids go with it, each as soon as it is settled
+    // (Update drains the queue).
+    void DisbandLobbyRaids(CustomGameLobby& lobby)
+    {
+        for (auto const& [raidId, side] : lobby.Raids)
+            _raidsToDisband.push_back(raidId);
+        lobby.Raids.clear();
+    }
+
+    void DisbandSettledRaids()
+    {
+        for (auto itr = _raidsToDisband.begin(); itr != _raidsToDisband.end();)
+        {
+            Group* raid = sGroupMgr->GetGroupByGUID(*itr);
+            if (raid && !IsRaidSettled(raid))
+            {
+                ++itr;
+                continue;
+            }
+
+            if (raid)
+                raid->Disband();
+            itr = _raidsToDisband.erase(itr);
+        }
+    }
+
     std::unordered_map<uint32, std::unique_ptr<CustomGameLobby>> _lobbies;
     std::unordered_map<ObjectGuid, PendingLobbyInvite> _pendingInvites;
     std::unordered_set<ObjectGuid> _pendingGurubashiReturn;
+    std::vector<ObjectGuid::LowType> _raidsToDisband;
 };
 
 class custom_game_lobby_npc : public CreatureScript

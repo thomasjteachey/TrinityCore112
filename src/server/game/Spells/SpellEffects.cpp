@@ -3938,6 +3938,13 @@ void Spell::EffectSummonObjectWild()
 
     uint32 gameobject_id = effectInfo->MiscValue;
 
+    // What a custom-game spectator casts is hidden from the match by its owner
+    // (WorldObject::CanSeeOrDetect), and a wild object has none - it would
+    // stand in the match for everybody. So a spectator makes none.
+    if (Player const* casterPlayer = m_caster->ToPlayer(); casterPlayer && casterPlayer->IsSpectator())
+        if (Battleground const* battleground = casterPlayer->GetBattleground(); battleground && battleground->IsCustomGame())
+            return;
+
     GameObject* pGameObj = new GameObject();
 
     WorldObject* target = focusObject;

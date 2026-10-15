@@ -1633,6 +1633,41 @@ float WorldObject::GetSightRange(WorldObject const* target) const
     return 0.0f;
 }
 
+namespace
+{
+    // The spectator `object` is, or the one behind it: whoever owns, controls
+    // or summoned it - a pet, a totem, a guardian, a summoned object, or the
+    // ground effect of a spell (a Blizzard is a DynamicObject of its caster's).
+    // One step further for what a spectator's pet or guardian makes in turn.
+    Player const* GetSpectatorBehind(WorldObject const* object)
+    {
+        Player const* player = object->ToPlayer();
+        if (!player)
+        {
+            ObjectGuid ownerGuid = object->GetCharmerOrOwnerGUID();
+            if (ownerGuid.IsEmpty())
+                if (Creature const* creature = object->ToCreature())
+                    if (TempSummon const* summon = creature->ToTempSummon())
+                        ownerGuid = summon->GetSummonerGUID();
+
+            if (ownerGuid.IsEmpty())
+                return nullptr;
+
+            if (!ownerGuid.IsPlayer())
+            {
+                Unit const* owner = ObjectAccessor::GetUnit(*object, ownerGuid);
+                ownerGuid = owner ? owner->GetCharmerOrOwnerGUID() : ObjectGuid::Empty;
+                if (!ownerGuid.IsPlayer())
+                    return nullptr;
+            }
+
+            player = ObjectAccessor::GetPlayer(*object, ownerGuid);
+        }
+
+        return player && player->IsSpectator() ? player : nullptr;
+    }
+}
+
 bool WorldObject::CanSeeOrDetect(WorldObject const* obj, bool implicitDetect, bool distanceCheck, bool checkAlert) const
 {
     if (this == obj)
@@ -1640,6 +1675,31 @@ bool WorldObject::CanSeeOrDetect(WorldObject const* obj, bool implicitDetect, bo
 
     if (obj->IsNeverVisible(implicitDetect) || CanNeverSee(obj))
         return false;
+
+    // Custom-game spectators watch the match together and from outside it:
+    // they, and everything they bring or cast - pets, totems, summons, the
+    // ground effect of a Blizzard - are seen by the other spectators and by
+    // game masters, never by the players or the map's creatures. The lobby
+    // makes a spectator game-master invisible (Unit::SetVisible), which hid
+    // the spectator but nothing they made; the same flag is what fellow
+    // spectators see past, below.
+    // Cheapest tests first: this runs for every pair in range, and the owner
+    // lookup is only worth paying where a spectator could be behind it.
+    bool spectatorPeers = false;
+    if (BattlegroundMap* battlegroundMap = GetMap()->ToBattlegroundMap())
+        if (Battleground* battleground = battlegroundMap->GetBG();
+            battleground && battleground->IsCustomGame() && battleground->HaveSpectators())
+            if (Player const* spectator = GetSpectatorBehind(obj))
+            {
+                Player const* seer = ToPlayer();
+                if (!seer || !seer->IsSpectator())
+                {
+                    if (m_serverSideVisibilityDetect.GetValue(SERVERSIDE_VISIBILITY_GM) < SEC_GAMEMASTER)
+                        return false;
+                }
+                else
+                    spectatorPeers = !spectator->IsGameMaster();
+            }
 
     if (obj->IsAlwaysVisibleFor(this) || CanAlwaysSee(obj))
         return true;
@@ -1696,7 +1756,7 @@ bool WorldObject::CanSeeOrDetect(WorldObject const* obj, bool implicitDetect, bo
         if (m_serverSideVisibilityDetect.GetValue(SERVERSIDE_VISIBILITY_GM))
             return true;
     }
-    else
+    else if (!spectatorPeers)
         return m_serverSideVisibilityDetect.GetValue(SERVERSIDE_VISIBILITY_GM) >= obj->m_serverSideVisibility.GetValue(SERVERSIDE_VISIBILITY_GM);
 
     // Ghost players, Spirit Healers, and some other NPCs
