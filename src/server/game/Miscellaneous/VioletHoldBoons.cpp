@@ -1357,9 +1357,9 @@ void CopyBoonsTo(Player const* source, Player* target)
             copy->SetStackAmount(held->GetStackAmount());
     };
 
-    for (BoonInfo const& info : kBoons)
+    auto copiesAcross = [](Boon boon)
     {
-        switch (info.boon)
+        switch (boon)
         {
             // Bookkeeping the battleground does itself, for the party only.
             case Boon::Greed:
@@ -1369,16 +1369,17 @@ void CopyBoonsTo(Player const* source, Player* target)
             // The clone is built at the source's CURRENT level, borrowed
             // levels included, so the marker has nothing left to mark.
             case Boon::Level:
-                continue;
             // Alacrity lives in a per-class variant, not the table's id.
             case Boon::Cooldown:
-                continue;
+                return false;
             default:
-                break;
+                return true;
         }
+    };
 
-        copyOne(info.spellId);
-    }
+    for (BoonInfo const& info : kBoons)
+        if (copiesAcross(info.boon))
+            copyOne(info.spellId);
 
     // The clone shares the source's class, so the same variant fits.
     copyOne(GetBoonSpellFor(Boon::Cooldown, source->GetClass()));
@@ -1388,7 +1389,7 @@ void CopyBoonsTo(Player const* source, Player* target)
     // otherwise completely silent - the copy has no return value and the
     // players only find out by inspecting a clone mid-fight.
     for (BoonInfo const& info : kBoons)
-        if (source->HasAura(info.spellId) && !target->HasAura(info.spellId))
+        if (copiesAcross(info.boon) && source->HasAura(info.spellId) && !target->HasAura(info.spellId))
             TC_LOG_ERROR("bg.battleground", "VioletHoldBoons::CopyBoonsTo: boon {} ({}) did not copy from {} to clone {}.",
                 info.spellId, info.name, source->GetGUID().ToString(), target->GetGUID().ToString());
 
