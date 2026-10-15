@@ -2679,7 +2679,7 @@ std::string Battleground::GetPlayerDisplayName(Player const* player)
     std::string name;
     if (!sCharacterCache->GetCharacterNameByGuid(player->GetGUID(), name))
         name = player->GetName();
-    return name;
+    return Surnames::Decorated(player->GetGUID(), name);
 }
 
 Player* Battleground::FindTransientPlayerByDisplayName(std::string_view name, uint32 preferredTeam) const

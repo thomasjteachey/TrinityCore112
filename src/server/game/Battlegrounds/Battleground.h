@@ -623,9 +623,10 @@ class TC_GAME_API Battleground
         bool IsBotParticipantSession(WorldSession const* session) const;
         // The name clients know a participant by. A transient clone (bot fill,
         // "Dark" mirror) plays under an internal "Obcm..." Player name and is
-        // shown under the one in the character cache, so any name sent in an
-        // addon payload must come from here or the client can neither show it
-        // nor /target it.
+        // shown under the one in the character cache, and every name query
+        // answers with the family name after it ("Jahzir Frostmask",
+        // Miscellaneous/Surnames.h), so any name sent in an addon payload must
+        // come from here or the client can neither show it nor /targetexact it.
         static std::string GetPlayerDisplayName(Player const* player);
         // The other direction: the transient clone seated in this match that
         // clients know as `name`. Nothing indexes that name - the name map holds

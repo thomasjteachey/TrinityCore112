@@ -3748,17 +3748,24 @@ std::vector<uint8> payload(packet.size());
         return out;
     }
 
+    // A name carries the family name after a space ("Jahzir Frostmask"), so the
+    // names are set apart by commas, and the list stops at the last whole name
+    // that fits the varchar(255) team-name column of character_arena_replays.
     std::string JoinActorNameList(MatchRecord const& match, uint32 team)
     {
+        constexpr size_t kTeamNameColumnSize = 255;
+
         std::string out;
         for (ReplayActor const& actor : match.Actors)
         {
             if (actor.Team != team)
                 continue;
 
-            if (!out.empty())
-                out += " ";
+            std::string_view const separator = out.empty() ? "" : ", ";
+            if (out.size() + separator.size() + actor.Name.size() > kTeamNameColumnSize)
+                break;
 
+            out += separator;
             out += actor.Name;
         }
 

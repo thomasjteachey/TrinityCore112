@@ -217,13 +217,11 @@ std::string Arena::BuildSquadFeedRoster(uint8 squad, std::vector<ObjectGuid> con
         }
         else if (CharacterCacheEntry const* entry = sCharacterCache->GetCharacterCacheByGuid(guid))
         {
-            name = entry->Name;
+            name = Surnames::Decorated(guid, entry->Name);
             playerClass = entry->Class;
         }
         if (name.empty())
             name = "?";
-        else
-            name = Surnames::Decorated(guid, name);
 
         if (!first)
             line += ';';
