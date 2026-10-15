@@ -3833,6 +3833,14 @@ bool IsPlayerbotMovableCastTimeSpell(Player const* player, SpellInfo const* spel
     // re-selected forever. Pairs with the matching allowance in
     // Unit::IsMovementPreventedByCasting - this stops the bot choosing to halt,
     // that stops the movement generator freezing it. Both are needed.
+    //
+    // A mount is the exception: its DBC movement bit is cleared for the
+    // client's sake only, and Spell::prepare/update put the rule back, so a
+    // mount cast on the move fails and one cast standing is cancelled by the
+    // next step. Reading the bit alone left bots on a long run never mounting.
+    if (spellInfo->HasAura(SPELL_AURA_MOUNTED))
+        return false;
+
     return (spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) == 0;
 }
 

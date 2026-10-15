@@ -1154,6 +1154,20 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
     }
 
 
+    // Mounting parks the pet (Unit::Mount -> UnsummonPetTemporaryIfAny) and
+    // dismounting brings it back by itself, so a mounted owner whose pet is
+    // parked is not missing one. Answering "summon/call it" was a loop: the
+    // summon is a cast the mount refuses, PvpClassActions::Execute dismounts
+    // for exactly that, the dismount returns the pet, and the out-of-combat
+    // mount rule puts the bot straight back in the saddle. Hunters rode at a
+    // far target doing nothing else; warlocks did it all through preparation
+    // and, mid-match, burned Fel Domination or stood through a ten-second
+    // replacement summon on every enemy that came near.
+    bool IsPetParkedByMount(Player const* player)
+    {
+        return player->IsMounted() && player->GetTemporaryUnsummonedPetNumber();
+    }
+
     struct HunterPetDecisionState
     {
         bool hasActivePet = false;
@@ -1181,14 +1195,8 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
             return state;
         }
 
-        // Mounting parks the pet (Unit::Mount -> UnsummonPetTemporaryIfAny) and
-        // dismounting brings it back by itself, so it is not missing and there is
-        // nothing to call or revive. Answering "call it" was a loop: Call Pet is a
-        // cast the mount refuses, PvpClassActions::Execute dismounts for exactly
-        // that, the dismount returns the pet, and the out-of-combat mount rule puts
-        // the bot straight back in the saddle. A hunter riding at a target more
-        // than a hundred yards off did nothing else.
-        if (player->IsMounted() && player->GetTemporaryUnsummonedPetNumber())
+        // Parked by the mount: nothing to call or revive (IsPetParkedByMount).
+        if (IsPetParkedByMount(player))
             return state;
 
         PetStable const* petStable = player->GetPetStable();
@@ -2355,6 +2363,16 @@ uint32 ResolveKnownPlayerSpellInChain(Player const* player, uint32 spellId)
         return ResolveKnownPlayerSpellInChain(player, 688) ? 688 : 0;
     }
 
+    // The demon the warlock's spec runs with, else the best one trained so
+    // far - the same pick SelectWarlockSpell makes.
+    uint32 SelectWarlockSpecSummonSpell(Player const* player)
+    {
+        ClassicProfileSelection const profileSelection = DetectClassicClassProfile(player);
+        uint32 const specPetSpell = profileSelection.profile == ClassicClassProfile::PrimaryClassic ? 691 :
+            (profileSelection.profile == ClassicClassProfile::TertiaryClassic ? 712 : 697);
+        return ResolveKnownPlayerSpellInChain(player, specPetSpell) ? specPetSpell : SelectWarlockFallbackSummonSpell(player);
+    }
+
     // Shadow Bolt lives in two unrelated rank chains: the stock one (686 up
     // to 25307) and the T2 wrapper (90420 up to 90429). Warlocks on the realm
     // hold either, and some hold low wrapper ranks beside high stock ones, so
@@ -2887,6 +2905,19 @@ bool MeetsCasterAuraStateRequirements(Player const* player, uint32 spellId)
     // practical engage range.
     if (!inBattlegroundPreparation && HasNearbyAttackableEnemyPlayer(player, playerbot::PLAYERBOT_MOUNT_ENEMY_AWARENESS_RANGE))
         return decision;
+
+        // A warlock summons its demon before it rides. The class pass only
+        // summons with an enemy in sight, so one that lost its pet rode off
+        // without it and then got off in front of the enemy to stand through
+        // a ten-second summon. A pet the mount parked is not lost.
+        if (player->GetClass() == CLASS_WARLOCK)
+        {
+            Pet const* pet = player->GetPet();
+            if ((!pet || !pet->IsAlive()) && !IsPetParkedByMount(player))
+                if (uint32 const summonSpellId = SelectWarlockSpecSummonSpell(player); summonSpellId && IsSpellReady(player, summonSpellId))
+                    return { "warlock summon demon before mounting", "summon the demon before riding off without it", summonSpellId,
+                        playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+        }
 
         return SelectMountSpell(player, mountReason);
     }
@@ -3523,7 +3554,7 @@ SpellDecision SelectPreparationBuffSpell(Player const* player)
         case CLASS_WARLOCK:
         {
             Pet const* pet = player->GetPet();
-            if (!pet || !pet->IsAlive())
+            if ((!pet || !pet->IsAlive()) && !IsPetParkedByMount(player))
             {
                 ClassicProfileSelection const profileSelection = DetectClassicClassProfile(player);
                 bool const isAfflictionWarlock = profileSelection.profile == ClassicClassProfile::PrimaryClassic;
@@ -4047,6 +4078,34 @@ bool IsTargetInvalidByImmunity(Player const* player, Unit const* target)
     return IsTargetEffectivelyImmune(player, target) || HasBreakableCrowdControl(player, target);
 }
 
+// A ledge the battleground says players jump off (Eye of the Storm's start
+// platforms) has no way back up it on the navmesh. Something standing on one
+// is out of reach of anybody who is not on it too: a bot put down off its
+// platform at the start, without the healthstone it would have taken in a full
+// preparation, otherwise walks back for the platform's soulwell 50 yards up
+// and stands under the ledge for the rest of the match. A fight picked with
+// somebody waiting up there ends the same way.
+static bool IsOnDropIslandApartFrom(Player const* player, WorldObject const* object)
+{
+    Battleground const* battleground = player->GetBattleground();
+    if (!battleground)
+        return false;
+
+    std::vector<BattlegroundDropExit> exits;
+    battleground->GetDropExits(player->GetGUID(), exits);
+    auto const isOn = [](BattlegroundDropExit const& exit, WorldObject const* who)
+    {
+        return who->GetPositionZ() >= exit.IslandMinZ &&
+            who->GetExactDist2d(exit.IslandCentre.GetPositionX(), exit.IslandCentre.GetPositionY()) <= exit.IslandRadius;
+    };
+
+    for (BattlegroundDropExit const& exit : exits)
+        if (isOn(exit, object) && !isOn(exit, player))
+            return true;
+
+    return false;
+}
+
 Unit const* SelectClosestEnemyTarget(Player const* player, bool requireReachable)
 {
     if (!player || !player->FindMap())
@@ -4083,6 +4142,9 @@ Unit const* SelectClosestEnemyTarget(Player const* player, bool requireReachable
             float const distance = player->GetDistance(candidate);
             if (requireReachable && distance > 35.0f)
                 continue;
+
+        if (IsOnDropIslandApartFrom(player, candidate))
+            continue;
 
         candidates.emplace_back(distance, candidate);
     }
@@ -6559,7 +6621,7 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
     bool const isDestructionWarlock = profileSelection.profile == ClassicClassProfile::TertiaryClassic;
     Pet const* pet = player->GetPet();
     bool const hasLivingPet = pet && pet->IsAlive();
-    bool const needsPetSummon = !hasLivingPet;
+    bool const needsPetSummon = !hasLivingPet && !IsPetParkedByMount(player);
     uint32 const specPetSpell = isAfflictionWarlock ? 691 : (isDestructionWarlock ? 712 : 697);
     // Felhunter is trained at 30 and Succubus at 20; until then summon the
     // best demon this warlock actually has.
@@ -8531,6 +8593,9 @@ GameObject* PvpCore::FindUsableSoulwell(Player const* player, float maxDistance)
             if (!ownerPlayer || !player->IsInSameRaidWith(ownerPlayer))
                 continue;
 
+            if (IsOnDropIslandApartFrom(player, soulwell))
+                continue;
+
             float const distance = player->GetExactDist(soulwell);
             if (distance <= nearestDistance)
             {
@@ -8626,7 +8691,7 @@ bool PvpCore::TryCastOpenWorldBuff(Player* player)
     // Pet upkeep before buffs: a petless warlock or hunter in the open world
     // is missing half its class (battleground preparation used to be the only
     // place pets were summoned).
-    if (player->GetClass() == CLASS_WARLOCK && !player->GetPet())
+    if (player->GetClass() == CLASS_WARLOCK && !player->GetPet() && !IsPetParkedByMount(player))
     {
         // Voidwalker tanks the grind; the Imp is the level-1 fallback. There
         // are no soul shard costs on this realm, so no shard check.
@@ -8636,7 +8701,7 @@ bool PvpCore::TryCastOpenWorldBuff(Player* player)
             return true;
     }
 
-    if (player->GetClass() == CLASS_HUNTER && !player->GetPet() &&
+    if (player->GetClass() == CLASS_HUNTER && !player->GetPet() && !IsPetParkedByMount(player) &&
         player->HasSpell(883) && IsSpellReady(player, 883))
     {
         if (player->CastSpell(player, 883, false) == SPELL_CAST_OK)

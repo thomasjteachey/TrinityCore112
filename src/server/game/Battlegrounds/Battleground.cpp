@@ -526,6 +526,12 @@ void Battleground::_CheckBounds(uint32 diff)
     }
 }
 
+// A start exit carries people across a void, so it is shown as the teleport it
+// is: the Twin Emperors' flash on each of them as they go and where they land.
+// The flash at the landing is cast by an invisible World Trigger.
+constexpr uint32 SPELL_START_EXIT_TELEPORT_VISUAL = 26638; // Twin Teleport Visual
+constexpr uint32 NPC_START_EXIT_VISUAL_TRIGGER = 22515;    // World Trigger
+
 // Once per team, when the gates have been open for the exit's delay: whoever is
 // still at the team's start goes to its exit, with what they brought. See
 // BattlegroundStartExit.
@@ -577,9 +583,20 @@ void Battleground::_CheckStartExits(uint32 diff)
                     unit->GetMapId() == GetMapId() && unit->GetExactDist(start) <= exit.Radius)
                     unit->NearTeleportTo(exit.Exit.GetPositionX(), exit.Exit.GetPositionY(), exit.Exit.GetPositionZ(), exit.Exit.GetOrientation());
 
+            player->CastSpell(player, SPELL_START_EXIT_TELEPORT_VISUAL, TRIGGERED_FULL_MASK);
             player->TeleportTo(GetMapId(), exit.Exit.GetPositionX(), exit.Exit.GetPositionY(), exit.Exit.GetPositionZ(), exit.Exit.GetOrientation());
             ++moved;
         }
+
+        // And where they come down. A person lands when their client answers
+        // the teleport, a moment after this, so the flash waits for them.
+        if (moved)
+            if (Map* map = FindBgMap())
+                if (TempSummon* flash = map->SummonCreature(NPC_START_EXIT_VISUAL_TRIGGER, exit.Exit, nullptr, 5 * IN_MILLISECONDS))
+                    flash->m_Events.AddEventAtOffset([flash]()
+                    {
+                        flash->CastSpell(flash, SPELL_START_EXIT_TELEPORT_VISUAL, TRIGGERED_FULL_MASK);
+                    }, Milliseconds(500));
 
         TC_LOG_DEBUG("bg.battleground", "Battleground::_CheckStartExits: map {} instance {}: moved {} of team {} from their start to ({:.1f}, {:.1f}, {:.1f}).",
             GetMapId(), GetInstanceID(), moved, team, exit.Exit.GetPositionX(), exit.Exit.GetPositionY(), exit.Exit.GetPositionZ());

@@ -207,6 +207,25 @@ Playerbot.BgFill.UseOfflineBots = 1
 
 Playerbot.BgFill.AllowHumanMirrors = 1
 
+#    Playerbot.BgFill.DuplicateSources.MinTeamSize
+#        Description: A battleground (never an arena) whose template seats at least this many a
+#                     side may deal the same character in more than once, once every character
+#                     in the bracket's pool is already in the match. Each side repeats a name only
+#                     after all of the pool is on it. The level-60 pool is the PvP-only accounts
+#                     (27 characters), so without this Alterac Valley and Isle of Conquest stop
+#                     near 13 a side. Such a battleground also fills up to
+#                     Playerbot.BgFill.DuplicateSources.MaxPerTeam instead of
+#                     Playerbot.BgFill.MaxPerTeam. 0 = never.
+#        Default:     40
+#
+#    Playerbot.BgFill.DuplicateSources.MaxPerTeam
+#        Description: Team size the clones fill up to in a battleground that allows duplicates,
+#                     capped by the battleground's own maximum. 0 = the battleground's maximum.
+#        Default:     0
+
+Playerbot.BgFill.DuplicateSources.MinTeamSize = 40
+Playerbot.BgFill.DuplicateSources.MaxPerTeam = 0
+
 #    Playerbot.BgObjectives.SiegeVehicles
 #        Description: Bots drive the siege vehicles a battleground offers (Strand of the Ancients'
 #                     demolishers, Isle of Conquest's siege engines and demolishers) at the gate

@@ -74,6 +74,12 @@ struct BgFillConfig
     uint32 clonesPerTick = 2;
     bool useOfflineBots = true;
     bool allowHumanMirrors = true;
+    // Playerbot.BgFill.DuplicateSources.*: a battleground whose template seats
+    // at least this many a side may deal one character in more than once, and
+    // fills up to duplicateMaxPerTeam (0 = the template's own size) instead of
+    // maxPerTeam. 0 turns duplicates off.
+    uint32 duplicateMinTeamSize = 40;
+    uint32 duplicateMaxPerTeam = 0;
     // Playerbot.BgFill.Tier.*: the tier of each listed character (low guid) and
     // the tier each listed battleground type is filled for.
     std::unordered_map<uint32, uint8> tierByCharacter;
@@ -110,6 +116,10 @@ struct PendingOfflineClone
     uint32 team = 0;
     ObjectGuid sourceGuid;
     uint32 requestedMs = 0;
+    // Copies of sourceGuid live in the instance once this one has arrived. A
+    // character dealt in twice already has a copy there before its second
+    // load finishes, so "any copy is live" would close the request early.
+    uint32 expectedLive = 1;
 };
 
 std::vector<PendingOfflineClone> g_PendingOfflineClones;
@@ -180,13 +190,41 @@ bool IsFillCandidate(Battleground const* bg, uint32 instanceId)
         sBattlegroundMgr->IsBotFillBattleground(bg->GetTypeID(true));
 }
 
+// A battleground seating more a side than the bracket's pool has characters:
+// at level 60 that pool is the 27 PvP-only characters, so Alterac Valley and
+// Isle of Conquest dealt one copy per character stopped near 13 a side. Read
+// from the template's size, never from which battleground it is; arenas seat
+// five at most and keep one copy per character.
+bool AllowsDuplicateSources(Battleground const* bg)
+{
+    return g_Config.duplicateMinTeamSize && !bg->isArena() &&
+        bg->GetMaxPlayersPerTeam() >= g_Config.duplicateMinTeamSize;
+}
+
 uint32 FillCapForMatch(Battleground const* bg)
 {
     uint32 const battlegroundMax = bg->GetMaxPlayersPerTeam();
-    if (!g_Config.maxPerTeam)
+    uint32 const configured = AllowsDuplicateSources(bg) ? g_Config.duplicateMaxPerTeam : g_Config.maxPerTeam;
+    if (!configured)
         return battlegroundMax;
 
-    return std::min(g_Config.maxPerTeam, battlegroundMax);
+    return std::min(configured, battlegroundMax);
+}
+
+// Copies of one character in an instance, live and still loading.
+uint32 CountCopiesOfSource(uint32 instanceId, ObjectGuid const& sourceGuid,
+    std::vector<playerbot::PlayerbotObcCloneManager::CustomGameCloneInfo> const& clones)
+{
+    uint32 count = 0;
+    for (auto const& clone : clones)
+        if (clone.sourceGuid == sourceGuid)
+            ++count;
+
+    for (PendingOfflineClone const& pending : g_PendingOfflineClones)
+        if (pending.instanceId == instanceId && pending.sourceGuid == sourceGuid)
+            ++count;
+
+    return count;
 }
 
 // Sources already represented in this match, so nobody is dealt twice into one
@@ -400,12 +438,13 @@ void ReconcilePendingOfflineClones(uint32 nowMs)
             if (!sBattlegroundMgr->GetBattleground(itr->instanceId, BATTLEGROUND_TYPE_NONE))
                 done = true;
             else
+            {
+                uint32 live = 0;
                 for (auto const& clone : playerbot::PlayerbotObcCloneManager::GetCustomGameClones(itr->instanceId))
                     if (clone.sourceGuid == itr->sourceGuid)
-                    {
-                        done = true;
-                        break;
-                    }
+                        ++live;
+                done = live >= itr->expectedLive;
+            }
         }
 
         if (done)
@@ -468,9 +507,12 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
     uint8 const matchTier = TierOfBattleground(bg);
 
     uint32 added = 0;
+    // The governor wants this match's bots and everyone else's; totalClones
+    // already holds this match's, which counted them twice and stopped a
+    // full Alterac Valley at half the server-wide limit.
     auto governorAllows = [&]()
     {
-        return playerbot::ResourceGovernor::CanAddCustomMatchBot(matchClones, totalClones);
+        return playerbot::ResourceGovernor::CanAddCustomMatchBot(matchClones, totalClones - std::min(totalClones, matchClones));
     };
 
     // 1. Online bots in the bracket.
@@ -530,6 +572,103 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
             ++totalClones;
             TC_LOG_DEBUG("playerbots.bgfill", "PlayerbotBgFillDriver: requested a copy of offline character {} for team {} of instance {}.",
                 sourceGuid.ToString(), team, bg->GetInstanceID());
+        }
+    }
+
+    // 2b. The pool is spent and the battleground is bigger than it: deal
+    // characters in again. Fewest copies on this team first, then fewest in
+    // the match, then tier, so a side repeats a name only once every
+    // character is on it, and the two sides share names evenly.
+    if (added < wanted && AllowsDuplicateSources(bg))
+    {
+        uint32 const instanceId = bg->GetInstanceID();
+        std::vector<playerbot::PlayerbotObcCloneManager::CustomGameCloneInfo> const clones =
+            playerbot::PlayerbotObcCloneManager::GetCustomGameClones(instanceId);
+        std::unordered_map<ObjectGuid, uint32> copiesOnTeam;
+        std::unordered_map<ObjectGuid, uint32> copiesInMatch;
+        for (auto const& clone : clones)
+        {
+            ++copiesInMatch[clone.sourceGuid];
+            if (clone.team == team)
+                ++copiesOnTeam[clone.sourceGuid];
+        }
+        for (PendingOfflineClone const& pending : g_PendingOfflineClones)
+        {
+            if (pending.instanceId != instanceId)
+                continue;
+
+            ++copiesInMatch[pending.sourceGuid];
+            if (pending.team == team)
+                ++copiesOnTeam[pending.sourceGuid];
+        }
+
+        std::vector<ObjectGuid> sources = CollectOnlineSources(minLevel, maxLevel, {});
+        if (g_Config.useOfflineBots)
+        {
+            RefreshOfflinePoolIfStale(nowMs);
+            std::vector<ObjectGuid> const offline = CollectOfflineSources(minLevel, maxLevel, {});
+            sources.insert(sources.end(), offline.begin(), offline.end());
+        }
+
+        OrderSourcesByTier(sources, matchTier);
+        auto const copies = [](std::unordered_map<ObjectGuid, uint32> const& counts, ObjectGuid const& guid)
+        {
+            auto const itr = counts.find(guid);
+            return itr != counts.end() ? itr->second : 0u;
+        };
+        std::stable_sort(sources.begin(), sources.end(), [&](ObjectGuid const& left, ObjectGuid const& right)
+        {
+            uint32 const leftOnTeam = copies(copiesOnTeam, left);
+            uint32 const rightOnTeam = copies(copiesOnTeam, right);
+            if (leftOnTeam != rightOnTeam)
+                return leftOnTeam < rightOnTeam;
+
+            return copies(copiesInMatch, left) < copies(copiesInMatch, right);
+        });
+
+        WorldSession* callbackSession = nullptr;
+        bool callbackSessionLooked = false;
+        for (ObjectGuid const& sourceGuid : sources)
+        {
+            if (added >= wanted || !governorAllows())
+                break;
+
+            if (Player* source = ObjectAccessor::FindConnectedPlayer(sourceGuid))
+            {
+                Player* clone = playerbot::PlayerbotObcCloneManager::CreateCustomGameClone(source, bg, team, "");
+                if (!clone)
+                    continue;
+            }
+            else
+            {
+                if (!callbackSessionLooked)
+                {
+                    callbackSession = FindCallbackSession(tally, teamIndex);
+                    callbackSessionLooked = true;
+                }
+
+                if (!callbackSession)
+                    continue;
+
+                uint32 const expectedLive = CountCopiesOfSource(instanceId, sourceGuid, clones) + 1;
+                if (!playerbot::PlayerbotObcCloneManager::QueueCustomGameClone(sourceGuid, callbackSession, bg, team, ""))
+                    continue;
+
+                PendingOfflineClone pending;
+                pending.instanceId = instanceId;
+                pending.team = team;
+                pending.sourceGuid = sourceGuid;
+                pending.requestedMs = nowMs;
+                pending.expectedLive = expectedLive;
+                g_PendingOfflineClones.push_back(pending);
+            }
+
+            usedSources.insert(sourceGuid);
+            ++added;
+            ++matchClones;
+            ++totalClones;
+            TC_LOG_DEBUG("playerbots.bgfill", "PlayerbotBgFillDriver: dealt {} in again ({} cop(ies) on team {}) for instance {}.",
+                sourceGuid.ToString(), copies(copiesOnTeam, sourceGuid) + 1, team, instanceId);
         }
     }
 
@@ -805,6 +944,8 @@ void PlayerbotBgFillDriver::LoadConfig()
     config.clonesPerTick = uint32(std::max<int32>(sConfigMgr->GetIntDefault("Playerbot.BgFill.ClonesPerTick", 2), 1));
     config.useOfflineBots = sConfigMgr->GetBoolDefault("Playerbot.BgFill.UseOfflineBots", true);
     config.allowHumanMirrors = sConfigMgr->GetBoolDefault("Playerbot.BgFill.AllowHumanMirrors", true);
+    config.duplicateMinTeamSize = uint32(std::max<int32>(sConfigMgr->GetIntDefault("Playerbot.BgFill.DuplicateSources.MinTeamSize", 40), 0));
+    config.duplicateMaxPerTeam = uint32(std::max<int32>(sConfigMgr->GetIntDefault("Playerbot.BgFill.DuplicateSources.MaxPerTeam", 0), 0));
 
     std::string const types = sConfigMgr->GetStringDefault("Playerbot.BgFill.BattlegroundTypes", "");
     for (std::string_view token : Trinity::Tokenize(types, ',', false))
@@ -856,11 +997,12 @@ void PlayerbotBgFillDriver::LoadConfig()
             TC_LOG_WARN("server.loading", "Playerbot battleground fill is enabled but the PvP core/lifecycle modules are off; clones would stand idle.");
     }
 
-    TC_LOG_INFO("server.loading", "Playerbot battleground fill config: enabled={}, types={}, queueWait={} ms, skirmishArenas={}, skirmishQueueWait={} ms, maxPerTeam={}, clonesPerTick={}, offlineBots={}, humanMirrors={}.",
+    TC_LOG_INFO("server.loading", "Playerbot battleground fill config: enabled={}, types={}, queueWait={} ms, skirmishArenas={}, skirmishQueueWait={} ms, maxPerTeam={}, clonesPerTick={}, offlineBots={}, humanMirrors={}, duplicatesFromTeamSize={}, duplicateMaxPerTeam={}.",
         g_Config.enabled ? "true" : "false", g_Config.battlegroundTypes.empty() ? "all" : types,
         g_Config.queueWaitMs, g_Config.skirmishArenasEnabled ? "true" : "false", g_Config.skirmishArenaQueueWaitMs,
         g_Config.maxPerTeam, g_Config.clonesPerTick,
-        g_Config.useOfflineBots ? "true" : "false", g_Config.allowHumanMirrors ? "true" : "false");
+        g_Config.useOfflineBots ? "true" : "false", g_Config.allowHumanMirrors ? "true" : "false",
+        g_Config.duplicateMinTeamSize, g_Config.duplicateMaxPerTeam);
 
     if (!g_Config.tierByCharacter.empty() || !g_Config.tierByBattleground.empty())
         TC_LOG_INFO("server.loading", "Playerbot battleground fill tiers (bots/battlegrounds): easy {}/{}, medium {}/{}, hard {}/{}.",

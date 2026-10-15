@@ -4157,9 +4157,14 @@ bool Unit::IsMovementPreventedByCasting() const
     //
     // Creature overrides this method outright, so the scope is players (and
     // therefore playerbots) only - no NPC behaviour changes.
+    //
+    // Mounts are not such a cast: their DBC bit is cleared for the client and
+    // Spell::prepare/update re-impose the movement rule, so a generator that
+    // stepped a bot during its mount cast cancelled the mount every time.
     if (Spell* spell = m_currentSpells[CURRENT_GENERIC_SPELL])
         if (spell->getState() != SPELL_STATE_FINISHED &&
-            !(spell->GetSpellInfo()->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT))
+            !(spell->GetSpellInfo()->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) &&
+            !spell->GetSpellInfo()->HasAura(SPELL_AURA_MOUNTED))
             return false;
 
     // prohibit movement for all other spell casts

@@ -532,6 +532,15 @@ void Object::BuildMovementUpdate(ByteBuffer* data, uint16 flags) const
         */
         if (go && go->ToTransport())
             *data << uint32(go->GetGOValue()->Transport.PathProgress);
+        // A lift that stops (Ring of Valor's elevators and pillars) is put by
+        // the client at this point of its animation and run on from there to
+        // the stop its state names: frame 0 when READY, the pause frame when
+        // ACTIVE. Server uptime put it anywhere in the cycle, so the elevator
+        // under a team's start reached the bottom up to a full cycle late -
+        // after the people standing on it had dropped into the shaft, who
+        // then had to jump onto it. Send it already at its stop.
+        else if (go && go->GetGoType() == GAMEOBJECT_TYPE_TRANSPORT && go->GetGOInfo()->transport.pause)
+            *data << uint32(go->GetGoState() == GO_STATE_READY ? 0 : go->GetGOInfo()->transport.pause);
         else
             *data << uint32(GameTime::GetGameTimeMS());
     }
