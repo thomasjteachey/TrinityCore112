@@ -59,10 +59,82 @@
 #include "Player.h"
 #include "World.h"
 #include "WorldPacket.h"
+#include "StringConvert.h"
+#include "Util.h"
 
 bool BattlegroundTemplate::IsArena() const
 {
     return BattlemasterEntry->InstanceType == MAP_ARENA;
+}
+
+namespace
+{
+    // `battleground_bounds` is optional: a world database that has never had it
+    // just runs every battleground without bounds. Asked through
+    // information_schema first because querying a table that does not exist is
+    // not an empty result in this core - errno 1146 aborts the worldserver.
+    std::unordered_map<uint32, BattlegroundBounds> LoadBattlegroundBounds()
+    {
+        std::unordered_map<uint32, BattlegroundBounds> bounds;
+
+        if (!WorldDatabase.Query("SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'battleground_bounds' LIMIT 1"))
+        {
+            TC_LOG_INFO("server.loading", ">> Loaded 0 battleground bounds. DB table `battleground_bounds` does not exist.");
+            return bounds;
+        }
+
+        //                                                   0         1     2       3       4      5      6      7        8
+        QueryResult result = WorldDatabase.Query("SELECT BgTypeId, MinZ, ProbeZ, KeepXY, SafeX, SafeY, SafeZ, GraceMs, Boundary FROM battleground_bounds");
+        if (!result)
+        {
+            TC_LOG_INFO("server.loading", ">> Loaded 0 battleground bounds. DB table `battleground_bounds` is empty.");
+            return bounds;
+        }
+
+        do
+        {
+            Field* fields = result->Fetch();
+            uint32 const bgTypeId = fields[0].GetUInt32();
+
+            BattlegroundBounds entry;
+            entry.Enabled = true;
+            entry.MinZ    = fields[1].GetFloat();
+            entry.ProbeZ  = fields[2].GetFloat();
+            entry.KeepXY  = fields[3].GetUInt8() != 0;
+            entry.SafePosition.Relocate(fields[4].GetFloat(), fields[5].GetFloat(), fields[6].GetFloat());
+            entry.GraceMs = fields[7].GetUInt32();
+
+            // "x y, x y, x y ..." in world coordinates; fewer than three points
+            // is no outline at all, and a malformed one is refused whole rather
+            // than half-used.
+            std::string const outline = fields[8].GetString();
+            bool valid = true;
+            for (std::string_view point : Trinity::Tokenize(outline, ',', false))
+            {
+                std::vector<std::string_view> xy = Trinity::Tokenize(point, ' ', false);
+                Optional<float> x = xy.size() == 2 ? Trinity::StringTo<float>(xy[0]) : Optional<float>();
+                Optional<float> y = xy.size() == 2 ? Trinity::StringTo<float>(xy[1]) : Optional<float>();
+                if (!x || !y)
+                {
+                    valid = false;
+                    break;
+                }
+                entry.Boundary.push_back({ *x, *y });
+            }
+
+            if (!valid || (!entry.Boundary.empty() && entry.Boundary.size() < 3))
+            {
+                TC_LOG_ERROR("sql.sql", "Table `battleground_bounds` has an unusable Boundary for BgTypeId {}: \"{}\". The outline is ignored; the height check still applies.", bgTypeId, outline);
+                entry.Boundary.clear();
+            }
+
+            bounds[bgTypeId] = std::move(entry);
+        }
+        while (result->NextRow());
+
+        TC_LOG_INFO("server.loading", ">> Loaded {} battleground bounds", uint32(bounds.size()));
+        return bounds;
+    }
 }
 
 /*********************************************************/
@@ -631,6 +703,7 @@ bool BattlegroundMgr::CreateBattleground(BattlegroundTemplate const* bgTemplate)
     bg->SetTeamStartPosition(TEAM_ALLIANCE, bgTemplate->StartLocation[TEAM_ALLIANCE]);
     bg->SetTeamStartPosition(TEAM_HORDE,    bgTemplate->StartLocation[TEAM_HORDE]);
     bg->SetStartMaxDist(bgTemplate->MaxStartDistSq);
+    bg->SetBounds(bgTemplate->Bounds);
     bg->SetLevelRange(bgTemplate->MinLevel, bgTemplate->MaxLevel);
     bg->SetScriptId(bgTemplate->ScriptId);
 
@@ -647,6 +720,7 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
     // and these three tables are always edited together anyway.
     LoadRandomBattlegroundPools();
     BattlegroundCustomArena::LoadObjects();
+    std::unordered_map<uint32, BattlegroundBounds> const bounds = LoadBattlegroundBounds();
 
     _battlegroundMapTemplates.clear();
     _battlegroundTemplates.clear();
@@ -689,6 +763,9 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
         bgTemplate.Weight            = fields[10].GetUInt8();
         bgTemplate.ScriptId          = sObjectMgr->GetScriptId(fields[11].GetString());
         bgTemplate.BattlemasterEntry = bl;
+
+        if (auto itr = bounds.find(uint32(bgTypeId)); itr != bounds.end())
+            bgTemplate.Bounds = itr->second;
 
         if (bgTemplate.MaxPlayersPerTeam == 0 || bgTemplate.MinPlayersPerTeam > bgTemplate.MaxPlayersPerTeam)
         {

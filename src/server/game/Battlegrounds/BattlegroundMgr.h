@@ -59,6 +59,7 @@ struct BattlegroundTemplate
     uint8 Weight;
     uint32 ScriptId;
     BattlemasterListEntry const* BattlemasterEntry;
+    BattlegroundBounds Bounds;
 
     bool IsArena() const;
 };

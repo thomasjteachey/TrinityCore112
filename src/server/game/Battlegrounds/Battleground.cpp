@@ -51,7 +51,9 @@
 #include "Item.h"
 #include "Mail.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdarg>
+#include <limits>
 #include <vector>
 #include "Miscellaneous/TournamentMode.h"
 
@@ -190,6 +192,8 @@ Battleground::Battleground()
     m_MapId             = 0;
     m_Map               = nullptr;
     m_StartMaxDist      = 0.0f;
+    m_BoundsCheckTimer  = 0;
+    m_BoundsElapsed     = 0;
     ScriptId            = 0;
 
     m_ArenaTeamIds[TEAM_ALLIANCE]   = 0;
@@ -308,6 +312,7 @@ void Battleground::Update(uint32 diff)
             }
 
             _ProcessOfflineQueue();
+            _CheckBounds(diff);
             // after 20 minutes without one team losing, the arena closes with no winner and no rating change
             if (isArena())
             {
@@ -379,9 +384,190 @@ inline void Battleground::_CheckSafePositions(uint32 diff)
                     TC_LOG_DEBUG("bg.battleground", "BATTLEGROUND: Sending {} back to start location (map: {}) (possible exploit)", player->GetName(), GetMapId());
                     player->TeleportTo(GetMapId(), startPos->GetPositionX(), startPos->GetPositionY(), startPos->GetPositionZ(), startPos->GetOrientation());
                 }
+
+                // An arena without gates relies on this distance alone to keep
+                // the teams apart until the start, and a pet sent across is as
+                // much an early start as its owner walking over.
+                if (isArena())
+                {
+                    std::vector<Unit*> const controlled(player->m_Controlled.begin(), player->m_Controlled.end());
+                    for (Unit* unit : controlled)
+                    {
+                        if (!unit || unit->GetTypeId() == TYPEID_PLAYER || !unit->IsInWorld() || unit->GetMapId() != GetMapId())
+                            continue;
+
+                        if (unit->GetPosition().GetExactDistSq(startPos) > maxDist)
+                            unit->NearTeleportTo(startPos->GetPositionX(), startPos->GetPositionY(), startPos->GetPositionZ(), startPos->GetOrientation());
+                    }
+                }
             }
         }
     }
+}
+
+bool Battleground::IsInsideBoundary(float x, float y) const
+{
+    std::vector<BattlegroundBoundaryPoint> const& poly = m_Bounds.Boundary;
+    if (poly.size() < 3)
+        return true;
+
+    bool inside = false;
+    for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++)
+    {
+        if ((poly[i].Y > y) != (poly[j].Y > y)
+            && x < (poly[j].X - poly[i].X) * (y - poly[i].Y) / (poly[j].Y - poly[i].Y) + poly[i].X)
+            inside = !inside;
+    }
+    return inside;
+}
+
+// Moves (x, y) to the nearest point of the boundary's edge, then a couple of
+// yards in from it, so whoever is put there is not straight back outside.
+bool Battleground::_ClosestPointInsideBoundary(float& x, float& y) const
+{
+    std::vector<BattlegroundBoundaryPoint> const& poly = m_Bounds.Boundary;
+    if (poly.size() < 3)
+        return true;
+
+    float constexpr inset = 2.0f;
+    float bestDistSq = std::numeric_limits<float>::max();
+    float bestX = x, bestY = y, edgeX = 0.0f, edgeY = 0.0f;
+
+    for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++)
+    {
+        float const ax = poly[j].X, ay = poly[j].Y;
+        float const dx = poly[i].X - ax, dy = poly[i].Y - ay;
+        float const lenSq = dx * dx + dy * dy;
+        if (lenSq < 0.0001f)
+            continue;
+
+        float t = ((x - ax) * dx + (y - ay) * dy) / lenSq;
+        t = std::max(0.0f, std::min(1.0f, t));
+        float const px = ax + t * dx, py = ay + t * dy;
+        float const distSq = (px - x) * (px - x) + (py - y) * (py - y);
+        if (distSq < bestDistSq)
+        {
+            bestDistSq = distSq;
+            bestX = px;
+            bestY = py;
+            edgeX = dx;
+            edgeY = dy;
+        }
+    }
+
+    // Step off the edge along whichever of its two normals lands inside. The
+    // outline's winding is not something the rows have to get right.
+    float const len = std::sqrt(edgeX * edgeX + edgeY * edgeY);
+    if (len < 0.0001f)
+        return false;
+
+    float const nx = -edgeY / len, ny = edgeX / len;
+    for (float sign : { 1.0f, -1.0f })
+    {
+        float const cx = bestX + sign * nx * inset, cy = bestY + sign * ny * inset;
+        if (IsInsideBoundary(cx, cy))
+        {
+            x = cx;
+            y = cy;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Returns a unit that is below the arena's floor or outside its outline. Only
+// after the gates open: before that everyone is behind their own gate, which in
+// the Ring of Valor is a lift shaft well below the floor this would test for.
+void Battleground::_CheckBounds(uint32 diff)
+{
+    if (!m_Bounds.Enabled)
+        return;
+
+    m_BoundsElapsed += diff;
+    if (m_BoundsElapsed < m_Bounds.GraceMs)
+        return;
+
+    m_BoundsCheckTimer += diff;
+    if (m_BoundsCheckTimer < BOUNDS_CHECK_INTERVAL)
+        return;
+    m_BoundsCheckTimer = 0;
+
+    for (auto const& itr : GetPlayers())
+    {
+        Player* player = ObjectAccessor::FindPlayer(itr.first);
+        // A teleport already in flight will fix the position by itself;
+        // issuing another one on top of it just fights the first.
+        if (!player || !player->IsInWorld() || player->IsBeingTeleported() || player->GetMapId() != GetMapId())
+            continue;
+
+        if (player->IsGameMaster() || player->IsSpectator())
+            continue;
+
+        if (player->IsAlive())
+            _ReturnInsideBounds(player);
+
+        // The server moves these itself, so nothing on a client is keeping
+        // them out of the floor. Players among them (a mind-controlled enemy)
+        // are on the roster and handled as themselves.
+        std::vector<Unit*> const controlled(player->m_Controlled.begin(), player->m_Controlled.end());
+        for (Unit* unit : controlled)
+            if (unit && unit->GetTypeId() != TYPEID_PLAYER && unit->IsInWorld() && unit->IsAlive() && unit->GetMapId() == GetMapId())
+                _ReturnInsideBounds(unit);
+    }
+}
+
+bool Battleground::_ReturnInsideBounds(Unit* unit)
+{
+    float x = unit->GetPositionX();
+    float y = unit->GetPositionY();
+    bool const fallen = unit->GetPositionZ() < m_Bounds.MinZ;
+    bool const outside = !IsInsideBoundary(x, y);
+    if (!fallen && !outside)
+        return false;
+
+    Position dest = m_Bounds.SafePosition;
+    bool placed = false;
+
+    if (!outside || _ClosestPointInsideBoundary(x, y))
+    {
+        if (m_Bounds.ProbeZ > m_Bounds.MinZ)
+        {
+            float const floorZ = GetBgMap()->GetHeight(unit->GetPhaseMask(), x, y, m_Bounds.ProbeZ, true, m_Bounds.ProbeZ - m_Bounds.MinZ);
+            if (floorZ > m_Bounds.MinZ && floorZ <= m_Bounds.ProbeZ)
+            {
+                dest.Relocate(x, y, floorZ + 0.5f);
+                placed = true;
+            }
+        }
+
+        if (!placed && m_Bounds.KeepXY)
+        {
+            dest.Relocate(x, y, m_Bounds.SafePosition.GetPositionZ());
+            placed = true;
+        }
+    }
+
+    TC_LOG_DEBUG("bg.battleground", "Battleground::_ReturnInsideBounds: map {} instance {}: {} at ({:.1f}, {:.1f}, {:.1f}) {} - returned to ({:.1f}, {:.1f}, {:.1f})",
+        GetMapId(), GetInstanceID(), unit->GetName(), unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ(),
+        fallen ? "fell below the floor" : "left the arena", dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ());
+
+    if (Player* player = unit->ToPlayer())
+        player->TeleportTo(GetMapId(), dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), player->GetOrientation());
+    else
+        unit->NearTeleportTo(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), unit->GetOrientation());
+
+    return true;
+}
+
+bool Battleground::HandlePlayerUnderMap(Player* player)
+{
+    if (!m_Bounds.Enabled || !player)
+        return false;
+
+    Position const& safe = m_Bounds.SafePosition;
+    player->TeleportTo(GetMapId(), safe.GetPositionX(), safe.GetPositionY(), safe.GetPositionZ(), player->GetOrientation());
+    return true;
 }
 
 inline void Battleground::_ProcessOfflineQueue()

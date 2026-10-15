@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <deque>
 #include <map>
+#include <vector>
 
 namespace WorldPackets
 {
@@ -66,6 +67,41 @@ struct BattlegroundNodeObjective
     BattlegroundNodeStatus Status = BattlegroundNodeStatus::Neutral;
     Position Location;
     ObjectGuid BannerGuid = ObjectGuid::Empty;
+};
+
+// Where a match's combatants - and the pets, guardians and totems they brought -
+// are allowed to be once the gates are open, and where they go when they are not.
+//
+// The client keeps a player out of the walls; nothing keeps the server's own
+// movers there. A pet knocked through a crack, a bot left behind by an elevator
+// the server never moves, a player who fell through a hole in the floor: each is
+// returned rather than left stranded under the arena for the rest of the match.
+//
+// Rows in `battleground_bounds`, one per battleground type; a type with no row
+// gets none of this. Read alongside the templates, so `.reload
+// battleground_template` picks up an edit.
+struct BattlegroundBoundaryPoint
+{
+    float X;
+    float Y;
+};
+
+struct BattlegroundBounds
+{
+    bool Enabled = false;
+    // Anyone below this has fallen out of the arena.
+    float MinZ = 0.0f;
+    // Where to look down from for the floor at the point someone is returned
+    // to. 0 = do not look: use the safe point (or its height, see KeepXY).
+    float ProbeZ = 0.0f;
+    // Keep the returned unit's own X/Y and only correct its height (SafeZ),
+    // for a unit that is in the right place but on the wrong floor.
+    bool KeepXY = false;
+    Position SafePosition;
+    // Time after the gates open before any of this applies.
+    uint32 GraceMs = 0;
+    // Optional outline, in world X/Y. Leaving it returns you just inside it.
+    std::vector<BattlegroundBoundaryPoint> Boundary;
 };
 
 enum class BattlegroundCustomWeather : uint8
@@ -197,6 +233,7 @@ enum BattlegroundSpells
 enum BattlegroundTimeIntervals
 {
     CHECK_PLAYER_POSITION_INVERVAL  = 1000,                 // ms
+    BOUNDS_CHECK_INTERVAL           = 500,                  // ms, see BattlegroundBounds
     RESURRECTION_INTERVAL           = 30000,                // ms
     NODE_FLAG_INTERACTION_TIME      = 10000,                // ms, AB/BFG banner click unless a custom game's lobby sets its own
     //REMIND_INTERVAL                 = 10000,                // ms
@@ -536,6 +573,10 @@ class TC_GAME_API Battleground
         void SetStartMaxDist(float startMaxDist) { m_StartMaxDist = startMaxDist; }
         float GetStartMaxDist() const { return m_StartMaxDist; }
 
+        void SetBounds(BattlegroundBounds const& bounds) { m_Bounds = bounds; }
+        BattlegroundBounds const& GetBounds() const { return m_Bounds; }
+        bool IsInsideBoundary(float x, float y) const;
+
         // Packet Transfer
         // method that should fill worldpacket with actual world states (not yet implemented for all battlegrounds!)
         virtual void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& /*packet*/) { }
@@ -668,7 +709,9 @@ class TC_GAME_API Battleground
         void DoorOpen(uint32 type);
         void DoorClose(uint32 type);
 
-        virtual bool HandlePlayerUnderMap(Player* /*player*/) { return false; }
+        // A battleground with bounds sends anyone who falls out of the world to
+        // its safe point; one without has nowhere to put them.
+        virtual bool HandlePlayerUnderMap(Player* player);
 
         // since arenas can be AvA or Hvh, we have to get the "temporary" team of a player
         uint32 GetPlayerTeam(ObjectGuid guid) const;
@@ -740,6 +783,9 @@ class TC_GAME_API Battleground
         void _ProcessLeave(uint32 diff);
         void _ProcessJoin(uint32 diff);
         void _CheckSafePositions(uint32 diff);
+        void _CheckBounds(uint32 diff);
+        bool _ReturnInsideBounds(Unit* unit);
+        bool _ClosestPointInsideBoundary(float& x, float& y) const;
 
         // See CountPreparationSeatsHeldByClones.
         void PrunePreparationSeatTakers();
@@ -798,6 +844,9 @@ class TC_GAME_API Battleground
         uint32 m_StartTime;
         uint32 m_ResetStatTimer;
         uint32 m_ValidStartPositionTimer;
+        BattlegroundBounds m_Bounds;
+        uint32 m_BoundsCheckTimer;
+        uint32 m_BoundsElapsed;                             // time since the gates opened
         int32 m_EndTime;                                    // it is set to 120000 when bg is ending and it decreases itself
         uint32 m_LastResurrectTime;
         BattlegroundBracketId m_BracketId;
