@@ -3549,16 +3549,17 @@ enum BattlegroundTypeId : uint32
     BATTLEGROUND_BRH            = 882, // Black Rook Hold Arena,      map 1504
     BATTLEGROUND_ASF            = 883, // Ashamane's Fall,            map 1552
     BATTLEGROUND_INL            = 884, // The Inventor's Library,     map 1683
-    BATTLEGROUND_AOA            = 885  // Amphitheater of Anguish,    map 1684
+    BATTLEGROUND_AOA            = 885, // Amphitheater of Anguish,    map 1684
+    BATTLEGROUND_EOE            = 886  // The Eye of Eternity,        map 1616 cloned from 616 (tools/eoe_arena)
 };
 
-#define MAX_BATTLEGROUND_TYPE_ID 886
+#define MAX_BATTLEGROUND_TYPE_ID 887
 
 // First and last of the contiguous block above. Kept as named constants so the
 // range checks below and the registration loops in BattlegroundMgr do not each
 // repeat the literals.
 #define BATTLEGROUND_CUSTOM_ARENA_FIRST BATTLEGROUND_CPE
-#define BATTLEGROUND_CUSTOM_ARENA_LAST  BATTLEGROUND_AOA
+#define BATTLEGROUND_CUSTOM_ARENA_LAST  BATTLEGROUND_EOE
 
 // The custom battlegrounds share behaviour the stock ones do not: synthetic
 // cross-faction queue sides, free-slot refill and saturation, mid-match gear

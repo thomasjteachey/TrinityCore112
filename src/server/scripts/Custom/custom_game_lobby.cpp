@@ -109,7 +109,7 @@ enum GossipAction : uint32
     // the action id is this base plus the arena's offset within
     // BATTLEGROUND_CUSTOM_ARENA_FIRST..LAST. Adding an arena then costs nothing
     // here, nothing in the menu builder and nothing in the select handler.
-    // Occupies 330..343 today; the block above ends at 321 and the next starts
+    // Occupies 330..344 today; the block above ends at 321 and the next starts
     // at 380, so there is room for 50 arenas before this needs revisiting.
     ACTION_SELECT_CUSTOM_ARENA_BASE = 330,
     ACTION_BATTLEGROUND_OPTIONS = 380,
@@ -252,6 +252,7 @@ std::string BattlegroundNameByType(BattlegroundTypeId type)
         case BATTLEGROUND_ASF: return "Ashamane's Fall";
         case BATTLEGROUND_INL: return "The Inventor's Library";
         case BATTLEGROUND_AOA: return "Amphitheater of Anguish";
+        case BATTLEGROUND_EOE: return "The Eye of Eternity";
         default: return "Unknown";
     }
 }

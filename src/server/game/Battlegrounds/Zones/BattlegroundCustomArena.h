@@ -76,6 +76,12 @@ class BattlegroundCustomArena : public Arena
         bool SetupBattleground() override;
         void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet) override;
 
+        // A ghost stays in the arena, as in Blizzard's. The base class asks
+        // graveyard_zone about the zone the terrain reports, and a ported or
+        // cloned arena reports its source's: The Eye of Eternity's 4500 names
+        // the Coldarra graveyard, so releasing there would leave the map.
+        WorldSafeLocsEntry const* GetClosestGraveyard(Player* /*player*/) override { return nullptr; }
+
         // Loaded once from the world DB and shared by every instance. Rebuilt by
         // `.reload battleground_template`; running matches keep the objects they
         // already spawned and pick the new layout up next match.
