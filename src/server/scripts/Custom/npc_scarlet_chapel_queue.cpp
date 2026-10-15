@@ -170,22 +170,43 @@ public:
         bool OnGossipHello(Player* player) override
         {
             ClearGossipMenuFor(player);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Scarlet Chapel", GOSSIP_SENDER_MAIN, ACTION_QUEUE_SCARLET_REGULAR);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Scarlet Chapel (Force Alliance side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_SCARLET_ALLIANCE);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Scarlet Chapel (Force Horde side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_SCARLET_HORDE);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Blackrock Throne", GOSSIP_SENDER_MAIN, ACTION_QUEUE_BLACKROCK_REGULAR);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Blackrock Throne (Force Alliance side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_BLACKROCK_ALLIANCE);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Blackrock Throne (Force Horde side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_BLACKROCK_HORDE);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Obsidian Colosseum", GOSSIP_SENDER_MAIN, ACTION_QUEUE_OBSIDIAN_REGULAR);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Obsidian Colosseum (Force Alliance side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_OBSIDIAN_ALLIANCE);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Obsidian Colosseum (Force Horde side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_OBSIDIAN_HORDE);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Tanaris Deathmatch", GOSSIP_SENDER_MAIN, ACTION_QUEUE_TANARIS_REGULAR);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Tanaris Deathmatch (Force Alliance side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_TANARIS_ALLIANCE);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Tanaris Deathmatch (Force Horde side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_TANARIS_HORDE);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for the Violet Hold (survival)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_VIOLET_HOLD);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Temple of Kotmogu", GOSSIP_SENDER_MAIN, ACTION_QUEUE_KOTMOGU_REGULAR);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Temple of Kotmogu (Force Alliance side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_KOTMOGU_ALLIANCE);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Temple of Kotmogu (Force Horde side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_KOTMOGU_HORDE);
+            // A battleground is offered only once its data is loaded: code can
+            // ship ahead of its rows, and QueueSinglePlayer would refuse it anyway.
+            auto queueable = [](BattlegroundTypeId type) { return sBattlegroundMgr->GetBattlegroundTemplate(type) != nullptr; };
+            if (queueable(BATTLEGROUND_SCM))
+            {
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Scarlet Chapel", GOSSIP_SENDER_MAIN, ACTION_QUEUE_SCARLET_REGULAR);
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Scarlet Chapel (Force Alliance side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_SCARLET_ALLIANCE);
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Scarlet Chapel (Force Horde side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_SCARLET_HORDE);
+            }
+            if (queueable(BATTLEGROUND_BRT))
+            {
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Blackrock Throne", GOSSIP_SENDER_MAIN, ACTION_QUEUE_BLACKROCK_REGULAR);
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Blackrock Throne (Force Alliance side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_BLACKROCK_ALLIANCE);
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Blackrock Throne (Force Horde side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_BLACKROCK_HORDE);
+            }
+            if (queueable(BATTLEGROUND_OBC))
+            {
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Obsidian Colosseum", GOSSIP_SENDER_MAIN, ACTION_QUEUE_OBSIDIAN_REGULAR);
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Obsidian Colosseum (Force Alliance side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_OBSIDIAN_ALLIANCE);
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Obsidian Colosseum (Force Horde side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_OBSIDIAN_HORDE);
+            }
+            if (queueable(BATTLEGROUND_TRT))
+            {
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Tanaris Deathmatch", GOSSIP_SENDER_MAIN, ACTION_QUEUE_TANARIS_REGULAR);
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Tanaris Deathmatch (Force Alliance side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_TANARIS_ALLIANCE);
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Tanaris Deathmatch (Force Horde side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_TANARIS_HORDE);
+            }
+            if (queueable(BATTLEGROUND_VHR))
+            {
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for the Violet Hold (survival)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_VIOLET_HOLD);
+            }
+            if (queueable(BATTLEGROUND_TOK))
+            {
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Temple of Kotmogu", GOSSIP_SENDER_MAIN, ACTION_QUEUE_KOTMOGU_REGULAR);
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Temple of Kotmogu (Force Alliance side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_KOTMOGU_ALLIANCE);
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Temple of Kotmogu (Force Horde side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_KOTMOGU_HORDE);
+            }
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Maybe later", GOSSIP_SENDER_MAIN, ACTION_CLOSE);
             SendGossipMenuFor(player, player->GetGossipTextId(me), me);
             return true;

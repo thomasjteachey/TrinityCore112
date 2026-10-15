@@ -2116,19 +2116,28 @@ public:
             if (!lobby || !CustomGameLobbyManager::Instance().IsOwner(player, lobby))
                 return;
 
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Warsong Gulch", GOSSIP_SENDER_MAIN, ACTION_SELECT_WS);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Twin Peaks", GOSSIP_SENDER_MAIN, ACTION_SELECT_TP);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Arathi Basin", GOSSIP_SENDER_MAIN, ACTION_SELECT_AB);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Eye of the Storm", GOSSIP_SENDER_MAIN, ACTION_SELECT_EY);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Scarlet Chapel Deathmatch", GOSSIP_SENDER_MAIN, ACTION_SELECT_SCM);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Blackrock Throne Deathmatch", GOSSIP_SENDER_MAIN, ACTION_SELECT_BRT);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Obsidian Colosseum", GOSSIP_SENDER_MAIN, ACTION_SELECT_OBC);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Tanaris Deathmatch", GOSSIP_SENDER_MAIN, ACTION_SELECT_TRT);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Temple of Kotmogu", GOSSIP_SENDER_MAIN, ACTION_SELECT_TOK);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Battle for Gilneas", GOSSIP_SENDER_MAIN, ACTION_SELECT_BFG);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Alterac Valley", GOSSIP_SENDER_MAIN, ACTION_SELECT_AV);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Strand of the Ancients", GOSSIP_SENDER_MAIN, ACTION_SELECT_SA);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Isle of Conquest", GOSSIP_SENDER_MAIN, ACTION_SELECT_IC);
+            // Only what this realm can start, the same test SelectBattleground
+            // applies: a disabled battleground, or one whose data is not loaded
+            // (code shipped ahead of its rows), would only be refused on click.
+            auto offer = [player](char const* name, BattlegroundTypeId type, uint32 action)
+            {
+                if (!DisableMgr::IsDisabledFor(DISABLE_TYPE_BATTLEGROUND, type, nullptr) &&
+                    sBattlegroundMgr->GetBattlegroundTemplate(type))
+                    AddGossipItemFor(player, GOSSIP_ICON_BATTLE, name, GOSSIP_SENDER_MAIN, action);
+            };
+            offer("Warsong Gulch", BATTLEGROUND_WS, ACTION_SELECT_WS);
+            offer("Twin Peaks", BATTLEGROUND_TP, ACTION_SELECT_TP);
+            offer("Arathi Basin", BATTLEGROUND_AB, ACTION_SELECT_AB);
+            offer("Eye of the Storm", BATTLEGROUND_EY, ACTION_SELECT_EY);
+            offer("Scarlet Chapel Deathmatch", BATTLEGROUND_SCM, ACTION_SELECT_SCM);
+            offer("Blackrock Throne Deathmatch", BATTLEGROUND_BRT, ACTION_SELECT_BRT);
+            offer("Obsidian Colosseum", BATTLEGROUND_OBC, ACTION_SELECT_OBC);
+            offer("Tanaris Deathmatch", BATTLEGROUND_TRT, ACTION_SELECT_TRT);
+            offer("Temple of Kotmogu", BATTLEGROUND_TOK, ACTION_SELECT_TOK);
+            offer("Battle for Gilneas", BATTLEGROUND_BFG, ACTION_SELECT_BFG);
+            offer("Alterac Valley", BATTLEGROUND_AV, ACTION_SELECT_AV);
+            offer("Strand of the Ancients", BATTLEGROUND_SA, ACTION_SELECT_SA);
+            offer("Isle of Conquest", BATTLEGROUND_IC, ACTION_SELECT_IC);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Back", GOSSIP_SENDER_MAIN, ACTION_SELECT_LIST_BACK);
             SendGossipMenuFor(player, 1, me->GetGUID());
         }
