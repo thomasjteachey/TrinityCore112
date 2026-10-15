@@ -534,7 +534,9 @@ void GameObject::Update(uint32 diff)
                     if (!m_goValue.Transport.AnimationInfo)
                         break;
 
-                    if (GetGoState() == GO_STATE_READY)
+                    // A lift with a pause keeps the time its current leg began
+                    // instead (SetGoState), see the GAMEOBJECT_DYNAMIC builder.
+                    if (GetGoState() == GO_STATE_READY && !GetGOInfo()->transport.pause)
                     {
                         m_goValue.Transport.PathProgress += diff;
                         /* TODO: Fix movement in unloaded grid - currently GO will just disappear
@@ -2717,6 +2719,11 @@ void GameObject::SetLootGenerationTime()
 
 void GameObject::SetGoState(GOState state)
 {
+    // A lift with a pause starts a new leg on every state change; when, is what
+    // a client that sees it for the first time mid-leg needs (GAMEOBJECT_DYNAMIC).
+    if (GetGoType() == GAMEOBJECT_TYPE_TRANSPORT && GetGOInfo()->transport.pause && GetGoState() != state)
+        m_goValue.Transport.PathProgress = GameTime::GetGameTimeMS();
+
     SetByteValue(GAMEOBJECT_BYTES_1, 0, state);
     if (AI())
         AI()->OnStateChanged(state);
@@ -2898,7 +2905,25 @@ void GameObject::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player co
                     case GAMEOBJECT_TYPE_TRANSPORT:
                     case GAMEOBJECT_TYPE_MO_TRANSPORT:
                     {
-                        if (uint32 transportPeriod = GetTransportPeriod())
+                        // A lift with a pause (Ring of Valor's elevators and
+                        // pillars) runs in two legs: up to the pause frame while
+                        // ACTIVE, on round to frame 0 while READY. A client reads
+                        // this word once, when it first sees the lift, as how far
+                        // through the CURRENT leg it is (Wow.exe 0x7105D0, leg
+                        // lengths 0x710570) and then follows state changes on its
+                        // own. The share of the whole cycle since spawn that this
+                        // sent put a READY elevator part-way down from the top, so
+                        // it reached the bottom mid-preparation, after the team
+                        // standing on it had dropped into the shaft.
+                        if (GetGoType() == GAMEOBJECT_TYPE_TRANSPORT && GetGOInfo()->transport.pause)
+                        {
+                            uint32 const period = GetTransportPeriod();
+                            uint32 const pause = GetGOInfo()->transport.pause;
+                            uint32 const leg = GetGoState() == GO_STATE_ACTIVE ? pause : (period > pause ? period - pause : 0);
+                            uint32 const elapsed = GameTime::GetGameTimeMS() - m_goValue.Transport.PathProgress;
+                            pathProgress = int16(uint16(leg && elapsed < leg ? uint64(elapsed) * 65535 / leg : 65535));
+                        }
+                        else if (uint32 transportPeriod = GetTransportPeriod())
                         {
                             float timer = float(m_goValue.Transport.PathProgress % transportPeriod);
                             pathProgress = int16(timer / float(transportPeriod) * 65535.0f);
