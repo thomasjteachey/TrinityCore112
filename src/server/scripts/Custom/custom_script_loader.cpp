@@ -56,6 +56,7 @@ void AddSC_custom_wrapped_spells();
 void AddSC_custom_southpark_nolife();
 void AddSC_custom_sucky_demon();
 void AddSC_custom_starter_booster();
+void AddSC_custom_recruit_resolve();
 void AddSC_GOMove_commandscript();
 void AddSC_GOEditor();
 void AddSC_rts_building();
@@ -120,6 +121,7 @@ void AddCustomScripts()
     AddSC_custom_southpark_nolife();
     AddSC_custom_sucky_demon();
     AddSC_custom_starter_booster();
+    AddSC_custom_recruit_resolve();
     AddSC_GOMove_commandscript();
     AddSC_GOEditor();
     AddSC_rts_building();
