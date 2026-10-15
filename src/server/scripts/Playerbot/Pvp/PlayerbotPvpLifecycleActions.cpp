@@ -4044,6 +4044,36 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return true;
     }
 
+    // Put a bot standing at a ledge's edge down at its landing, with the pets
+    // and guardians bringAlong picks. A teleport rather than a fall:
+    // server-driven splines have no gravity (see TryLeaveDropIsland).
+    template <typename BringAlong>
+    void SetDownAtDropLanding(Player* player, BattlegroundDropExit const& exit, BringAlong bringAlong)
+    {
+        // Settle on the real ground under the landing point; the declared
+        // height is the navmesh's, which a slope can put a little off.
+        float landingZ = exit.Landing.GetPositionZ() + 1.0f;
+        player->UpdateAllowedPositionZ(exit.Landing.GetPositionX(), exit.Landing.GetPositionY(), landingZ);
+        if (landingZ > exit.Landing.GetPositionZ() + 3.0f || landingZ < exit.Landing.GetPositionZ() - 3.0f)
+            landingZ = exit.Landing.GetPositionZ();
+
+        if (MotionMaster* motionMaster = player->GetMotionMaster())
+            motionMaster->Clear();
+        StopVirtualPlayerbotMovement(player);
+        player->NearTeleportTo(exit.Landing.GetPositionX(), exit.Landing.GetPositionY(), landingZ, player->GetOrientation());
+
+        std::vector<Unit*> const controlled(player->m_Controlled.begin(), player->m_Controlled.end());
+        for (Unit* unit : controlled)
+            if (unit && unit->GetTypeId() != TYPEID_PLAYER && !unit->IsTotem() && unit->IsInWorld() && unit->IsAlive() &&
+                unit->GetMapId() == player->GetMapId() && bringAlong(unit))
+                unit->NearTeleportTo(exit.Landing.GetPositionX(), exit.Landing.GetPositionY(), landingZ, unit->GetOrientation());
+
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot put down from a battleground ledge: guid={} edge=({}, {}, {}) landing=({}, {}, {}).",
+            player->GetGUID().ToString(), exit.Edge.GetPositionX(), exit.Edge.GetPositionY(),
+            exit.Edge.GetPositionZ(), exit.Landing.GetPositionX(), exit.Landing.GetPositionY(), landingZ);
+    }
+
     // A ledge the battleground says players jump off (Eye of the Storm's
     // start platforms). Nothing a bot is sent for is on such an island and the
     // navmesh has no way off it, so a bot standing on one walks to the ledge
@@ -4082,32 +4112,94 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (chosenDistance > EdgeReach)
             return IssueMovePointThrottled(player, chosen->Edge, 2.0f, 500) || player->isMoving();
 
-        // Settle on the real ground under the landing point; the declared
-        // height is the navmesh's, which a slope can put a little off.
-        float landingZ = chosen->Landing.GetPositionZ() + 1.0f;
-        player->UpdateAllowedPositionZ(chosen->Landing.GetPositionX(), chosen->Landing.GetPositionY(), landingZ);
-        if (landingZ > chosen->Landing.GetPositionZ() + 3.0f || landingZ < chosen->Landing.GetPositionZ() - 3.0f)
-            landingZ = chosen->Landing.GetPositionZ();
-
-        if (MotionMaster* motionMaster = player->GetMotionMaster())
-            motionMaster->Clear();
-        StopVirtualPlayerbotMovement(player);
-        player->NearTeleportTo(chosen->Landing.GetPositionX(), chosen->Landing.GetPositionY(), landingZ,
-            player->GetOrientation());
-
         // Its pet comes down with it: a pet follows by navmesh too, and has no
         // more way off the island than the bot did.
-        std::vector<Unit*> const controlled(player->m_Controlled.begin(), player->m_Controlled.end());
-        for (Unit* unit : controlled)
-            if (unit && unit->GetTypeId() != TYPEID_PLAYER && !unit->IsTotem() && unit->IsInWorld() && unit->IsAlive() &&
-                unit->GetMapId() == player->GetMapId() && unit->GetPositionZ() >= chosen->IslandMinZ &&
-                unit->GetExactDist2d(chosen->IslandCentre.GetPositionX(), chosen->IslandCentre.GetPositionY()) <= chosen->IslandRadius)
-                unit->NearTeleportTo(chosen->Landing.GetPositionX(), chosen->Landing.GetPositionY(), landingZ, unit->GetOrientation());
+        SetDownAtDropLanding(player, *chosen, [chosen](Unit const* unit)
+        {
+            return unit->GetPositionZ() >= chosen->IslandMinZ &&
+                unit->GetExactDist2d(chosen->IslandCentre.GetPositionX(), chosen->IslandCentre.GetPositionY()) <= chosen->IslandRadius;
+        });
+        return true;
+    }
 
-        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot left a battleground drop island: guid={} edge=({}, {}, {}) landing=({}, {}, {}).",
-            player->GetGUID().ToString(), chosen->Edge.GetPositionX(), chosen->Edge.GetPositionY(),
-            chosen->Edge.GetPositionZ(), chosen->Landing.GetPositionX(), chosen->Landing.GetPositionY(), landingZ);
+    // A ledge to get past one's own gate while it still stands: Strand of the
+    // Ancients' defenders start behind every wall they are sent out of, the
+    // Defender's Portals only lead back in, and the way out is off the walls
+    // by the turrets. Declared like an island exit but with no island
+    // (IslandRadius 0), so TryLeaveDropIsland never takes one; a bot uses it
+    // only when the walking route to where it is going runs into a standing
+    // gate, picks one it can walk to that puts it down nearer the place, and
+    // drops again from the next wall if one still stands in the way.
+    struct DropLedgeRoute
+    {
+        uint32 decidedMs = 0;
+        Position destination;
+        int32 ledge = -1;
+    };
+
+    std::unordered_map<uint64, DropLedgeRoute> g_DropLedgeRouteByBot;
+
+    bool TryRouteOverDropLedge(Player* player, Battleground* battleground, Position const& destination)
+    {
+        std::vector<BattlegroundDropExit> exits;
+        battleground->GetDropExits(player->GetGUID(), exits);
+        if (std::none_of(exits.begin(), exits.end(), [](BattlegroundDropExit const& exit) { return exit.IslandRadius <= 0.0f; }))
+            return false;
+
+        uint64 const botKey = player->GetGUID().GetRawValue();
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        DropLedgeRoute route;
+        bool const known = playerbot::LockedGetCopy(g_DropLedgeRouteByBot, botKey, route);
+        if (!known || nowMs - route.decidedMs >= PLAYERBOT_TELEPORTER_ROUTE_RECHECK_MS ||
+            route.destination.GetExactDist2d(&destination) > PLAYERBOT_TELEPORTER_ROUTE_REDECIDE_DISTANCE)
+        {
+            route = DropLedgeRoute();
+            route.decidedMs = nowMs;
+            route.destination = destination;
+
+            GuidVector gates;
+            battleground->GetStandingGates(gates);
+            if (IsRouteThroughStandingGate(player, gates, destination))
+            {
+                // Cheapest first, so usually only the first candidate pays for
+                // a path search.
+                float const remaining = player->GetExactDist2d(&destination);
+                std::vector<std::pair<float, int32>> candidates;
+                for (std::size_t i = 0; i < exits.size(); ++i)
+                {
+                    BattlegroundDropExit const& exit = exits[i];
+                    float const after = exit.Landing.GetExactDist2d(&destination);
+                    if (exit.IslandRadius <= 0.0f && after < remaining)
+                        candidates.emplace_back(player->GetExactDist(&exit.Edge) + after, int32(i));
+                }
+                std::sort(candidates.begin(), candidates.end());
+                for (std::pair<float, int32> const& candidate : candidates)
+                {
+                    if (!IsWalkableRoute(player, gates, exits[candidate.second].Edge))
+                        continue;
+                    route.ledge = candidate.second;
+                    break;
+                }
+            }
+
+            playerbot::LockedSet(g_DropLedgeRouteByBot, botKey, route);
+        }
+
+        if (route.ledge < 0 || std::size_t(route.ledge) >= exits.size())
+            return false;
+
+        BattlegroundDropExit const& exit = exits[route.ledge];
+        constexpr float EdgeReach = 3.0f;
+        if (player->GetExactDist2d(exit.Edge.GetPositionX(), exit.Edge.GetPositionY()) > EdgeReach)
+            return IssueMovePointThrottled(player, exit.Edge, 2.0f, 500) || player->isMoving();
+
+        // Decided afresh from wherever it lands.
+        playerbot::LockedErase(g_DropLedgeRouteByBot, botKey);
+        SetDownAtDropLanding(player, exit, [&exit](Unit const* unit)
+        {
+            return unit->GetExactDist(&exit.Edge) <= 30.0f;
+        });
+        EmitBattlegroundGmDebug(player, "objective-route=ledge", 1500);
         return true;
     }
 
@@ -4116,6 +4208,9 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
     bool MoveToBattlegroundObjective(Player* player, Battleground* battleground, Position const& destination)
     {
         if (battleground && TryRouteThroughTeleporter(player, battleground, destination))
+            return true;
+
+        if (battleground && TryRouteOverDropLedge(player, battleground, destination))
             return true;
 
         return IssueMovePointThrottled(player, destination, 6.0f, 500);
