@@ -2867,7 +2867,13 @@ void Map::GetFullTerrainStatusForPosition(uint32 phaseMask, float x, float y, fl
     // land on "indoors" everywhere - which blocks mounts and every
     // outdoors-only spell. The mode wants open-arena rules, so this map
     // overrides whatever the WMO and ADT flags say.
-    if (GetId() == 1608)
+    //
+    // Every arena plays by the same rules: mounts and outdoors-only spells
+    // anywhere on the map. Most of them are built from dungeon, raid and city
+    // interiors (Dalaran's sewers, the Ring of Valor, the ported arenas), whose
+    // groups read as indoors. The client makes the same call from its own
+    // WMOAreaTable, which is given matching rows.
+    if (GetId() == 1608 || IsBattleArena())
         data.outdoors = true;
 
     if (!data.areaId)

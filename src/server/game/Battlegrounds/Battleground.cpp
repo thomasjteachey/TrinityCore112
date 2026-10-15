@@ -297,7 +297,10 @@ void Battleground::Update(uint32 diff)
             }
             break;
         case STATUS_IN_PROGRESS:
-            if (isBattleground() && m_HasEverHadNonVirtualHumanParticipant)
+            // Arenas too (skirmishes - nobody rated plays bots): one whose last
+            // person disconnected, or never came in for the seat they were
+            // offered, is not left running for the bots.
+            if ((isBattleground() || (isArena() && !isRated())) && m_HasEverHadNonVirtualHumanParticipant)
             {
                 if (HasAnyNonVirtualHumanParticipant(this))
                     m_NoNonVirtualHumanElapsed = 0;
@@ -1581,6 +1584,24 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
                 "Battleground::RemovePlayerAtLeave forced end: map={} instance={} no non-virtual participants or custom-game spectators remain.",
                 GetMapId(), GetInstanceID());
             EndBattleground(PVP_TEAM_NEUTRAL);
+        }
+        // An arena left to bots is torn down on the spot, gates shut or open.
+        // Kept alive, a bot-filled one still in preparation is offered straight
+        // back to whoever walked out of it (BattlegroundQueue::OfferPreparationSeats),
+        // so queueing again lands them in the same map and line-up they just
+        // left. Not while somebody else is still on the way in to a seat.
+        else if (isArena() && !isRated() && removedNonVirtualHuman && m_HasEverHadNonVirtualHumanParticipant &&
+            (GetStatus() == STATUS_IN_PROGRESS || GetStatus() == STATUS_WAIT_JOIN) &&
+            !HasAnyNonVirtualHumanParticipant(this))
+        {
+            PrunePreparationSeatTakers();
+            if (m_PreparationSeatTakers.empty())
+            {
+                TC_LOG_DEBUG("bg.battleground",
+                    "Battleground::RemovePlayerAtLeave closing arena: map={} instance={} has only bots left.",
+                    GetMapId(), GetInstanceID());
+                EndNow();
+            }
         }
     }
 
