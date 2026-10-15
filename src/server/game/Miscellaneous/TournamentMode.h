@@ -396,6 +396,13 @@ namespace Tournament
     // talent it was told to learn and never sees learned.
     bool RefuseTalentChangeInMatch(Player* player, char const* what);
 
+    // Spending free points, as opposed to unlearning or swapping specs. The
+    // same refusal, except in a Violet Hold run: its Boon of Ascension hands out
+    // levels mid-match, and the point each one carries is only worth anything if
+    // it can be spent there (Player::LearnTalent records it so the run's
+    // rollback can take it back).
+    bool RefuseTalentSpendInMatch(Player* player);
+
     // --- Legionnaire+ realm rules, per character --------------------------
 
     // Legionnaire+ ran these realm-wide; on a mixed realm tournament characters

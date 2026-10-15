@@ -1751,6 +1751,15 @@ bool RefuseTalentChangeInMatch(Player* player, char const* what)
     return true;
 }
 
+bool RefuseTalentSpendInMatch(Player* player)
+{
+    if (Battleground const* battleground = player ? player->GetBattleground() : nullptr)
+        if (battleground->GetTypeID() == BATTLEGROUND_VHR)
+            return false;
+
+    return RefuseTalentChangeInMatch(player, "spend talent points");
+}
+
 bool IsFreeReagentContext(Player const* player)
 {
     if (!Config.WaiveReagents || !player)

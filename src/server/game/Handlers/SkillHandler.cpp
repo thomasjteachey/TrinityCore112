@@ -32,7 +32,7 @@ void WorldSession::HandleLearnTalentOpcode(WorldPacket& recvData)
 
     // Spending a point held back for the match is a respec by instalments, so
     // it is refused by the same rule (TournamentMode.h).
-    if (Tournament::RefuseTalentChangeInMatch(_player, "spend talent points"))
+    if (Tournament::RefuseTalentSpendInMatch(_player))
         return;
 
     _player->LearnTalent(talent_id, requested_rank);
@@ -46,7 +46,7 @@ void WorldSession::HandleLearnPreviewTalents(WorldPacket& recvPacket)
     uint32 talentsCount;
     recvPacket >> talentsCount;
 
-    if (Tournament::RefuseTalentChangeInMatch(_player, "spend talent points"))
+    if (Tournament::RefuseTalentSpendInMatch(_player))
     {
         recvPacket.rfinish();
         return;
