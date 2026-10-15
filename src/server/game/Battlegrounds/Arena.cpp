@@ -26,6 +26,7 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "StringFormat.h"
+#include "Surnames.h"
 #include "World.h"
 #include "WorldSession.h"
 #include "WorldStatePackets.h"
@@ -202,7 +203,10 @@ std::string Arena::BuildSquadFeedRoster(uint8 squad, std::vector<ObjectGuid> con
     bool first = true;
     for (ObjectGuid guid : members)
     {
-        // The name the client knows them by (a clone's own name is internal).
+        // The name the client knows them by: the display name (a clone's own
+        // name is internal) with the family name after it, as every name query
+        // answers. The scoreboard matches rows by it and the frames target by
+        // it, so "Jahzir" for "Jahzir Frostmask" missed both.
         std::string name;
         uint32 playerClass = 0;
         SquadFeedPlayers::const_iterator const itr = players.find(guid);
@@ -218,6 +222,8 @@ std::string Arena::BuildSquadFeedRoster(uint8 squad, std::vector<ObjectGuid> con
         }
         if (name.empty())
             name = "?";
+        else
+            name = Surnames::Decorated(guid, name);
 
         if (!first)
             line += ';';
