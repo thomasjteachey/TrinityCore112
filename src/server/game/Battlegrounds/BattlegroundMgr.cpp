@@ -135,6 +135,47 @@ namespace
         TC_LOG_INFO("server.loading", ">> Loaded {} battleground bounds", uint32(bounds.size()));
         return bounds;
     }
+
+    // `battleground_drop_exit`: ledges that bots are put down from (see
+    // BattlegroundDropExit). Optional the same way `battleground_bounds` is.
+    std::unordered_map<uint32, std::vector<BattlegroundDropExit>> LoadBattlegroundDropExits()
+    {
+        std::unordered_map<uint32, std::vector<BattlegroundDropExit>> exits;
+
+        if (!WorldDatabase.Query("SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'battleground_drop_exit' LIMIT 1"))
+        {
+            TC_LOG_INFO("server.loading", ">> Loaded 0 battleground drop exits. DB table `battleground_drop_exit` does not exist.");
+            return exits;
+        }
+
+        //                                                   0         1        2        3             4           5      6      7      8         9         10
+        QueryResult result = WorldDatabase.Query("SELECT BgTypeId, IslandX, IslandY, IslandRadius, IslandMinZ, EdgeX, EdgeY, EdgeZ, LandingX, LandingY, LandingZ FROM battleground_drop_exit ORDER BY BgTypeId, Idx");
+        if (!result)
+        {
+            TC_LOG_INFO("server.loading", ">> Loaded 0 battleground drop exits. DB table `battleground_drop_exit` is empty.");
+            return exits;
+        }
+
+        uint32 count = 0;
+        do
+        {
+            Field* fields = result->Fetch();
+
+            BattlegroundDropExit exit;
+            exit.IslandCentre.Relocate(fields[1].GetFloat(), fields[2].GetFloat(), fields[4].GetFloat());
+            exit.IslandRadius = fields[3].GetFloat();
+            exit.IslandMinZ   = fields[4].GetFloat();
+            exit.Edge.Relocate(fields[5].GetFloat(), fields[6].GetFloat(), fields[7].GetFloat());
+            exit.Landing.Relocate(fields[8].GetFloat(), fields[9].GetFloat(), fields[10].GetFloat());
+
+            exits[fields[0].GetUInt32()].push_back(exit);
+            ++count;
+        }
+        while (result->NextRow());
+
+        TC_LOG_INFO("server.loading", ">> Loaded {} battleground drop exits for {} battlegrounds", count, uint32(exits.size()));
+        return exits;
+    }
 }
 
 /*********************************************************/
@@ -704,6 +745,7 @@ bool BattlegroundMgr::CreateBattleground(BattlegroundTemplate const* bgTemplate)
     bg->SetTeamStartPosition(TEAM_HORDE,    bgTemplate->StartLocation[TEAM_HORDE]);
     bg->SetStartMaxDist(bgTemplate->MaxStartDistSq);
     bg->SetBounds(bgTemplate->Bounds);
+    bg->SetDropExits(bgTemplate->DropExits);
     bg->SetLevelRange(bgTemplate->MinLevel, bgTemplate->MaxLevel);
     bg->SetScriptId(bgTemplate->ScriptId);
 
@@ -721,6 +763,7 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
     LoadRandomBattlegroundPools();
     BattlegroundCustomArena::LoadObjects();
     std::unordered_map<uint32, BattlegroundBounds> const bounds = LoadBattlegroundBounds();
+    std::unordered_map<uint32, std::vector<BattlegroundDropExit>> const dropExits = LoadBattlegroundDropExits();
 
     _battlegroundMapTemplates.clear();
     _battlegroundTemplates.clear();
@@ -766,6 +809,9 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
 
         if (auto itr = bounds.find(uint32(bgTypeId)); itr != bounds.end())
             bgTemplate.Bounds = itr->second;
+
+        if (auto itr = dropExits.find(uint32(bgTypeId)); itr != dropExits.end())
+            bgTemplate.DropExits = itr->second;
 
         if (bgTemplate.MaxPlayersPerTeam == 0 || bgTemplate.MinPlayersPerTeam > bgTemplate.MaxPlayersPerTeam)
         {

@@ -4094,6 +4094,16 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         StopVirtualPlayerbotMovement(player);
         player->NearTeleportTo(chosen->Landing.GetPositionX(), chosen->Landing.GetPositionY(), landingZ,
             player->GetOrientation());
+
+        // Its pet comes down with it: a pet follows by navmesh too, and has no
+        // more way off the island than the bot did.
+        std::vector<Unit*> const controlled(player->m_Controlled.begin(), player->m_Controlled.end());
+        for (Unit* unit : controlled)
+            if (unit && unit->GetTypeId() != TYPEID_PLAYER && !unit->IsTotem() && unit->IsInWorld() && unit->IsAlive() &&
+                unit->GetMapId() == player->GetMapId() && unit->GetPositionZ() >= chosen->IslandMinZ &&
+                unit->GetExactDist2d(chosen->IslandCentre.GetPositionX(), chosen->IslandCentre.GetPositionY()) <= chosen->IslandRadius)
+                unit->NearTeleportTo(chosen->Landing.GetPositionX(), chosen->Landing.GetPositionY(), landingZ, unit->GetOrientation());
+
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot left a battleground drop island: guid={} edge=({}, {}, {}) landing=({}, {}, {}).",
             player->GetGUID().ToString(), chosen->Edge.GetPositionX(), chosen->Edge.GetPositionY(),

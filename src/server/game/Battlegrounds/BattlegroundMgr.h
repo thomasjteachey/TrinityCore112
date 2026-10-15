@@ -60,6 +60,7 @@ struct BattlegroundTemplate
     uint32 ScriptId;
     BattlemasterListEntry const* BattlemasterEntry;
     BattlegroundBounds Bounds;
+    std::vector<BattlegroundDropExit> DropExits;
 
     bool IsArena() const;
 };

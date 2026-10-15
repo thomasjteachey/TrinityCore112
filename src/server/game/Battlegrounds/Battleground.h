@@ -648,6 +648,8 @@ class TC_GAME_API Battleground
         BattlegroundBounds const& GetBounds() const { return m_Bounds; }
         bool IsInsideBoundary(float x, float y) const;
 
+        void SetDropExits(std::vector<BattlegroundDropExit> const& exits) { m_DropExits = exits; }
+
         // Packet Transfer
         // method that should fill worldpacket with actual world states (not yet implemented for all battlegrounds!)
         virtual void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& /*packet*/) { }
@@ -838,7 +840,9 @@ class TC_GAME_API Battleground
         virtual uint32 GetBossObjectiveCount() const { return 0; }
         virtual bool GetBossObjectiveInfo(ObjectGuid /*playerGuid*/, uint32 /*index*/, BattlegroundBossObjective& /*boss*/) const { return false; }
         virtual void GetTeleporters(ObjectGuid /*playerGuid*/, std::vector<BattlegroundTeleporter>& /*teleporters*/) const { }
-        virtual void GetDropExits(ObjectGuid /*playerGuid*/, std::vector<BattlegroundDropExit>& /*exits*/) const { }
+        // Rows in `battleground_drop_exit` for this battleground type (Dalaran
+        // Sewers' start pipes); a battleground with its own in code overrides.
+        virtual void GetDropExits(ObjectGuid /*playerGuid*/, std::vector<BattlegroundDropExit>& exits) const { exits.insert(exits.end(), m_DropExits.begin(), m_DropExits.end()); }
         virtual void HandleQuestComplete(uint32 /*questid*/, Player* /*player*/) { }
         virtual bool CanActivateGO(int32 /*entry*/, uint32 /*team*/) const { return true; }
         virtual bool IsSpellAllowed(uint32 /*spellId*/, Player const* /*player*/) const { return true; }
@@ -937,6 +941,7 @@ class TC_GAME_API Battleground
         BattlegroundBounds m_Bounds;
         uint32 m_BoundsCheckTimer;
         uint32 m_BoundsElapsed;                             // time since the gates opened
+        std::vector<BattlegroundDropExit> m_DropExits;      // from `battleground_drop_exit`, see GetDropExits()
         int32 m_EndTime;                                    // it is set to 120000 when bg is ending and it decreases itself
         uint32 m_LastResurrectTime;
         BattlegroundBracketId m_BracketId;
