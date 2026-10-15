@@ -4633,6 +4633,28 @@ namespace playerbot
         return true;
     }
 
+    // Behind a closed gate: every bot before a battleground starts, and, mid-
+    // match, the bots a battleground is preparing behind a gate of its own
+    // (Violet Hold's next wave in its cells). A gate is a game object, which
+    // the navmesh does not know about, so a bot that is handed a destination
+    // on the far side - a teammate to buff in the next cell, an enemy to
+    // chase - paths straight through it. The movement lock is what holds it.
+    bool IsHeldBehindGate(Battleground const* battleground, Player const* player)
+    {
+        if (!battleground)
+            return false;
+
+        switch (battleground->GetStatus())
+        {
+            case STATUS_WAIT_JOIN:
+                return true;
+            case STATUS_IN_PROGRESS:
+                return battleground->OwnsPreparationState(player);
+            default:
+                return false;
+        }
+    }
+
     std::unordered_set<uint64> g_WaitJoinLockedBots;
 
     void SetWaitJoinMovementLock(Player* player, bool locked)
@@ -4662,7 +4684,11 @@ namespace playerbot
         if (MotionMaster* motionMaster = player->GetMotionMaster())
             motionMaster->Clear();
 
-        if (!alreadyLocked)
+        // Re-assert the root, not only the bookkeeping. UNIT_STATE_ROOT is one
+        // bit shared with root auras: one of those ending, or Battleground::
+        // ClearCombatControl, clears it, and a bot this set still called locked
+        // would then walk free for the rest of the hold.
+        if (!alreadyLocked || !player->HasUnitState(UNIT_STATE_ROOT))
         {
             player->SetControlled(true, UNIT_STATE_ROOT);
             playerbot::LockedInsert(g_WaitJoinLockedBots, botGuid);
@@ -4678,7 +4704,7 @@ namespace playerbot
         if (!battleground)
             return false;
 
-        if (battleground->GetStatus() != STATUS_WAIT_JOIN)
+        if (!IsHeldBehindGate(battleground, player))
         {
             SetWaitJoinMovementLock(player, false);
             return false;
@@ -5616,8 +5642,17 @@ namespace playerbot
         if (!battleground)
             return false;
 
-        if (battleground->GetStatus() != STATUS_WAIT_JOIN)
+        // A battleground that prepares part of a team mid-match holds those
+        // bots exactly as the whole field is held before the start: Violet
+        // Hold's next wave stands in its cells, buffing, while the battleground
+        // reads in progress. The fast tick runs this before any tactical or
+        // class movement, so the hold is in place before anything can walk the
+        // bot out, and comes off on the first tick after the battleground takes
+        // the preparation back.
+        if (!IsHeldBehindGate(battleground, player))
             SetWaitJoinMovementLock(player, false);
+        else if (battleground->GetStatus() == STATUS_IN_PROGRESS)
+            SetWaitJoinMovementLock(player, true);
 
         if (battleground->GetStatus() == STATUS_WAIT_JOIN)
         {
@@ -5895,7 +5930,10 @@ namespace playerbot
         {
             // During prep phase only process the explicit start-position action.
             // This prevents competing tactical actions from pulling bots back/forth.
-            if (battleground->GetStatus() == STATUS_WAIT_JOIN)
+            // A bot held behind a gate mid-match gets no tactical order at all:
+            // its battleground reads in progress, so the selector hands it live
+            // pursuit, and the lifecycle tick is already holding it.
+            if (IsHeldBehindGate(battleground, player))
             {
                 if (IsTacticalAction(context.actionName, "bg move to start"))
                     return MoveToStartPrimitive(player);

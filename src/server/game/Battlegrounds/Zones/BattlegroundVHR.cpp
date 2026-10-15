@@ -695,10 +695,24 @@ void BattlegroundVHR::RefreshWaveBoonCopies()
 
 bool BattlegroundVHR::OwnsPreparationState(Player const* player) const
 {
-    if (!player || _waveState != WaveState::Preparing)
+    if (!player)
         return false;
 
-    return std::find(_waveEnemies.begin(), _waveEnemies.end(), player->GetGUID()) != _waveEnemies.end();
+    switch (_waveState)
+    {
+        case WaveState::AwaitingSpawn:
+            // Seated ahead of the rest of its wave. A wave that borrows offline
+            // bots waits on their character loads - up to the driver's timeout -
+            // before the window starts, and the clones already in the world sit
+            // that out behind a shut door with no preparation, no immunity and
+            // live bot AI. The previous wave's bodies are still on this team
+            // until the driver clears them, hence the living only.
+            return player->IsAlive() && player->GetBGTeam() == _enemyTeam;
+        case WaveState::Preparing:
+            return std::find(_waveEnemies.begin(), _waveEnemies.end(), player->GetGUID()) != _waveEnemies.end();
+        default:
+            return false;
+    }
 }
 
 void BattlegroundVHR::OpenWaveCell()

@@ -378,7 +378,10 @@ public:
     bool AllowsPrematureFinish() const override { return false; }
 
     // The wave behind the gates is mid-preparation and its clones are holding
-    // the preparation aura and flag this battleground gave them.
+    // the preparation aura and flag this battleground gave them - or the wave
+    // is still being seated, and the clones already in are behind the same
+    // shut doors waiting for it. Either way the playerbot lifecycle holds them
+    // where they stand until the cells open.
     bool OwnsPreparationState(Player const* player) const override;
 
     // --- script-side clone driver interface -------------------------------
