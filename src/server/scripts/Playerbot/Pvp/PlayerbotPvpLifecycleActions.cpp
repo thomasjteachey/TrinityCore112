@@ -4738,16 +4738,37 @@ namespace playerbot
         return true;
     }
 
+    // On a lift that is carrying it from one stop to the next (GameObject::
+    // BoardLiftRiders): Ring of Valor's elevators, which take both teams up
+    // from their start shafts when the gates open.
+    bool IsRidingLift(Player const* player)
+    {
+        if (!player->HasUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT) || !player->m_movementInfo.transport.guid.IsGameObject())
+            return false;
+
+        Map* map = player->FindMap();
+        GameObject const* lift = map ? map->GetGameObject(player->m_movementInfo.transport.guid) : nullptr;
+        return lift && lift->IsCarryingLiftRider(player->GetGUID());
+    }
+
     // Behind a closed gate: every bot before a battleground starts, and, mid-
     // match, the bots a battleground is preparing behind a gate of its own
     // (Violet Hold's next wave in its cells). A gate is a game object, which
     // the navmesh does not know about, so a bot that is handed a destination
     // on the far side - a teammate to buff in the next cell, an enemy to
     // chase - paths straight through it. The movement lock is what holds it.
+    //
+    // A bot riding a lift is held the same way until the lift stops. The
+    // navmesh has no deck under it either: the move the gates opening hands it
+    // is drawn from the bottom of the shaft, and walking it would take the bot
+    // off the lift that is carrying it.
     bool IsHeldBehindGate(Battleground const* battleground, Player const* player)
     {
         if (!battleground)
             return false;
+
+        if (IsRidingLift(player))
+            return true;
 
         switch (battleground->GetStatus())
         {

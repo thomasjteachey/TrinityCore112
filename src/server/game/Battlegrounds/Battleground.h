@@ -160,9 +160,10 @@ struct BattlegroundStartExit
 // are allowed to be once the gates are open, and where they go when they are not.
 //
 // The client keeps a player out of the walls; nothing keeps the server's own
-// movers there. A pet knocked through a crack, a bot left behind by an elevator
-// the server never moves, a player who fell through a hole in the floor: each is
-// returned rather than left stranded under the arena for the rest of the match.
+// movers there. A pet knocked through a crack, a bot that missed the elevator
+// (GameObject::BoardLiftRiders carries the ones on it), a player who fell
+// through a hole in the floor: each is returned rather than left stranded under
+// the arena for the rest of the match.
 //
 // Rows in `battleground_bounds`, one per battleground type; a type with no row
 // gets none of this. Read alongside the templates, so `.reload

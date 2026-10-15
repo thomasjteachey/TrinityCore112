@@ -191,3 +191,23 @@ TEST_CASE("PvE playerbot long-stall recovery is conservative and same-zone", "[p
     CHECK(config.find("Playerbot.PveGrind.StuckRecovery.DistanceYards = 15.0") != std::string::npos);
     CHECK(config.find("Playerbot.PveGrind.StuckRecovery.TimeoutSeconds = 120") != std::string::npos);
 }
+
+TEST_CASE("Playerbots ride the lifts that only clients animate", "[playerbot][movement]")
+{
+    std::string const goSource = ReadFile("src/server/game/Entities/GameObject/GameObject.cpp");
+    // A lift with a pause boards the bots on its deck when it starts a leg,
+    // carries them every update, and lets them go when it stops or leaves.
+    CHECK(goSource.find("if (liftLegStarts && IsInWorld())") != std::string::npos);
+    CHECK(CountOccurrences(goSource, "CarryLiftRiders();") >= 2);
+    CHECK(goSource.find("ReleaseLiftRiders();") != std::string::npos);
+    // Only bots: a client carries its own player.
+    CHECK(goSource.find("!IsServerDrivenLiftRider(player)") != std::string::npos);
+    // The clients are told the bot is on the lift, as a passenger's own
+    // heartbeat would, and that it is off again when it stops.
+    CHECK(CountOccurrences(goSource, "BroadcastServerPlacedMovement();") >= 2);
+
+    std::string const lifecycleSource = ReadFile("src/server/scripts/Playerbot/Pvp/PlayerbotPvpLifecycleActions.cpp");
+    std::size_t const holdPos = lifecycleSource.find("bool IsHeldBehindGate(Battleground const* battleground, Player const* player)");
+    REQUIRE(holdPos != std::string::npos);
+    CHECK(lifecycleSource.find("if (IsRidingLift(player))", holdPos) != std::string::npos);
+}

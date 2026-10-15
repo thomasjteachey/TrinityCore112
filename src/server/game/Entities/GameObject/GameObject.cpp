@@ -34,6 +34,7 @@
 #include "LootMgr.h"
 #include "Map.h"
 #include "MapManager.h"
+#include "MoveSpline.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "OutdoorPvPMgr.h"
@@ -46,6 +47,7 @@
 #include "Transport.h"
 #include "UpdateFieldFlags.h"
 #include "World.h"
+#include "WorldSession.h"
 #include <G3D/Box.h>
 #include <G3D/CoordinateFrame.h>
 #include <G3D/Quat.h>
@@ -276,6 +278,9 @@ void GameObject::RemoveFromWorld()
         if (m_zoneScript)
             m_zoneScript->OnGameObjectRemove(this);
 
+        // Nobody is left riding a lift that is gone.
+        ReleaseLiftRiders();
+
         RemoveFromOwner();
         if (m_model)
             if (GetMap()->ContainsGameObjectModel(*m_model))
@@ -496,6 +501,9 @@ void GameObject::Update(uint32 diff)
         AI()->UpdateAI(diff);
     else if (!AIM_Initialize())
         TC_LOG_ERROR("misc", "Could not initialize GameObjectAI");
+
+    if (!m_liftRiders.empty())
+        CarryLiftRiders();
 
     if (m_despawnDelay)
     {
@@ -2721,12 +2729,18 @@ void GameObject::SetGoState(GOState state)
 {
     // A lift with a pause starts a new leg on every state change; when, is what
     // a client that sees it for the first time mid-leg needs (GAMEOBJECT_DYNAMIC).
-    if (GetGoType() == GAMEOBJECT_TYPE_TRANSPORT && GetGOInfo()->transport.pause && GetGoState() != state)
+    bool const liftLegStarts = GetGoType() == GAMEOBJECT_TYPE_TRANSPORT && GetGOInfo()->transport.pause && GetGoState() != state;
+    if (liftLegStarts)
         m_goValue.Transport.PathProgress = GameTime::GetGameTimeMS();
 
     SetByteValue(GAMEOBJECT_BYTES_1, 0, state);
     if (AI())
         AI()->OnStateChanged(state);
+
+    // ...and takes the playerbots standing on its deck along.
+    if (liftLegStarts && IsInWorld())
+        BoardLiftRiders();
+
     if (m_model && !IsTransport())
     {
         if (!IsInWorld())
@@ -2748,6 +2762,308 @@ uint32 GameObject::GetTransportPeriod() const
         return m_goValue.Transport.AnimationInfo->TotalTime;
 
     return 0;
+}
+
+namespace
+{
+    // How far past the sides of its box a lift's deck is stood on, and how far
+    // below or above its top. Below, because the server keeps the lift's
+    // collision where it was spawned and the navmesh floor of a shaft can lie
+    // inside the deck: a bot waiting at the bottom of a Ring of Valor shaft
+    // stands 1.2 yards into it.
+    constexpr float LiftDeckMargin = 0.5f;
+    constexpr float LiftDeckBelow = 2.5f;
+    constexpr float LiftDeckAbove = 2.5f;
+    // A rider found this far from its place on the deck was taken off it.
+    constexpr float LiftRiderLeaveDistance = 5.0f;
+    // How often the clients are told again that a rider is on the lift: a
+    // facing turn or a move order is sent in world coordinates and takes it
+    // off the lift on every client until then.
+    constexpr uint32 LiftRiderBroadcastMs = 500;
+
+    bool IsServerDrivenLiftRider(Player const* player)
+    {
+        WorldSession const* session = player->GetSession();
+        return session && (session->IsVirtualSession() || session->IsTransientPlayerSession());
+    }
+
+    Position LiftDeckToWorld(Position const& deck, Position const& offset)
+    {
+        float const c = std::cos(deck.GetOrientation());
+        float const s = std::sin(deck.GetOrientation());
+        return Position(deck.GetPositionX() + offset.GetPositionX() * c - offset.GetPositionY() * s,
+            deck.GetPositionY() + offset.GetPositionX() * s + offset.GetPositionY() * c,
+            deck.GetPositionZ() + offset.GetPositionZ(),
+            Position::NormalizeOrientation(deck.GetOrientation() + offset.GetOrientation()));
+    }
+
+    // A lift's lines go with the rest of its battleground's, where there is one.
+    char const* LiftLogFilter(GameObject const* lift)
+    {
+        return lift->GetMap()->IsBattlegroundOrArena() ? "bg.battleground" : "entities.gameobject";
+    }
+
+    Position WorldToLiftDeck(Position const& deck, WorldObject const* object)
+    {
+        float const c = std::cos(deck.GetOrientation());
+        float const s = std::sin(deck.GetOrientation());
+        float const dx = object->GetPositionX() - deck.GetPositionX();
+        float const dy = object->GetPositionY() - deck.GetPositionY();
+        return Position(dx * c + dy * s, dy * c - dx * s, object->GetPositionZ() - deck.GetPositionZ(),
+            Position::NormalizeOrientation(object->GetOrientation() - deck.GetOrientation()));
+    }
+}
+
+bool GameObject::IsCarryingLiftRider(ObjectGuid const& guid) const
+{
+    return std::any_of(m_liftRiders.begin(), m_liftRiders.end(), [&guid](LiftRider const& ride) { return ride.Guid == guid; });
+}
+
+// A lift that stops, with a deck to stand on: at least twice as wide as it is
+// tall. A column that rises out of the floor (Ring of Valor's pillars) is not
+// one - its box does not say where its top is, and a bot beside it is not on it.
+bool GameObject::IsLiftWithDeck(GameObjectDisplayInfoEntry const** infoOut /*= nullptr*/) const
+{
+    if (GetGoType() != GAMEOBJECT_TYPE_TRANSPORT || !GetGOInfo()->transport.pause || !m_goValue.Transport.AnimationInfo)
+        return false;
+
+    GameObjectDisplayInfoEntry const* info = sGameObjectDisplayInfoStore.LookupEntry(GetDisplayId());
+    if (!info)
+        return false;
+
+    float const width = std::min(info->GeoBoxMax.X - info->GeoBoxMin.X, info->GeoBoxMax.Y - info->GeoBoxMin.Y);
+    float const height = info->GeoBoxMax.Z - info->GeoBoxMin.Z;
+    if (width <= 0.0f || height * 2.0f > width)
+        return false;
+
+    if (infoOut)
+        *infoOut = info;
+    return true;
+}
+
+// The leg a lift with a pause is on: up to the pause frame while ACTIVE, on
+// round to frame 0 (the end of the period) while READY. See the GAMEOBJECT_DYNAMIC
+// builder, which tells the clients the same.
+uint32 GameObject::GetLiftLegLength() const
+{
+    uint32 const period = GetTransportPeriod();
+    uint32 const pause = GetGOInfo()->transport.pause;
+    return GetGoState() == GO_STATE_ACTIVE ? pause : (period > pause ? period - pause : 0);
+}
+
+uint32 GameObject::GetLiftAnimTime(uint32 legElapsed) const
+{
+    uint32 const leg = std::min(legElapsed, GetLiftLegLength());
+    return GetGoState() == GO_STATE_ACTIVE ? leg : GetGOInfo()->transport.pause + leg;
+}
+
+// Where the lift's animation has it at animTime: the origin of its own frame,
+// facing the way the lift faces. TransportAnimation rows are offsets in that
+// frame, between which the client moves it in a straight line.
+Position GameObject::GetLiftDeck(uint32 animTime) const
+{
+    auto const toVector = [](TransportAnimationEntry const* node) { return G3D::Vector3(node->Pos.X, node->Pos.Y, node->Pos.Z); };
+
+    G3D::Vector3 offset = G3D::Vector3::zero();
+    TransportPathContainer const& path = m_goValue.Transport.AnimationInfo->Path;
+    auto const next = path.lower_bound(animTime);
+    if (next == path.end())
+    {
+        if (!path.empty())
+            offset = toVector(path.rbegin()->second);
+    }
+    else if (next == path.begin() || next->first == animTime)
+        offset = toVector(next->second);
+    else
+    {
+        auto const prev = std::prev(next);
+        float const along = float(animTime - prev->first) / float(next->first - prev->first);
+        offset = toVector(prev->second).lerp(toVector(next->second), along);
+    }
+
+    float const o = GetOrientation();
+    float const c = std::cos(o);
+    float const s = std::sin(o);
+    return Position(GetPositionX() + offset.x * c - offset.y * s, GetPositionY() + offset.x * s + offset.y * c,
+        GetPositionZ() + offset.z, o);
+}
+
+bool GameObject::IsOnLiftDeck(WorldObject const* object, Position const& deck, GameObjectDisplayInfoEntry const* info) const
+{
+    float const scale = GetObjectScale();
+    Position const local = WorldToLiftDeck(deck, object);
+    float const aboveTop = local.GetPositionZ() - info->GeoBoxMax.Z * scale;
+    return local.GetPositionX() >= info->GeoBoxMin.X * scale - LiftDeckMargin && local.GetPositionX() <= info->GeoBoxMax.X * scale + LiftDeckMargin &&
+        local.GetPositionY() >= info->GeoBoxMin.Y * scale - LiftDeckMargin && local.GetPositionY() <= info->GeoBoxMax.Y * scale + LiftDeckMargin &&
+        aboveTop >= -LiftDeckBelow && aboveTop <= LiftDeckAbove;
+}
+
+// When a lift starts a leg, the playerbots on its deck board it: each keeps
+// its place on the deck, standing on top of it, and stands still (rooted) for
+// the ride - a bot that walked would walk off a deck that is not where the
+// server thinks the floor is. A client carries its own player, so people are
+// left alone.
+void GameObject::BoardLiftRiders()
+{
+    GameObjectDisplayInfoEntry const* info = nullptr;
+    if (!IsLiftWithDeck(&info))
+        return;
+
+    // The deck sets out from where the last leg left it.
+    Position const deck = GetLiftDeck(GetLiftAnimTime(0));
+    float const scale = GetObjectScale();
+    float const reach = 2.0f * scale * std::max({ -info->GeoBoxMin.X, info->GeoBoxMax.X, -info->GeoBoxMin.Y, info->GeoBoxMax.Y });
+
+    std::vector<Player*> players;
+    GetPlayerListInGrid(players, reach + std::fabs(deck.GetPositionZ() - GetPositionZ()) + info->GeoBoxMax.Z * scale + LiftDeckAbove);
+
+    uint32 const now = GameTime::GetGameTimeMS();
+    bool boarded = false;
+    for (Player* player : players)
+    {
+        if (!IsServerDrivenLiftRider(player) || IsCarryingLiftRider(player->GetGUID()) || player->IsBeingTeleported() ||
+            player->GetTransport() || player->GetVehicle() || player->HasUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT) ||
+            player->IsFlying() || !IsOnLiftDeck(player, deck, info))
+            continue;
+
+        LiftRider ride;
+        ride.Guid = player->GetGUID();
+        ride.Offset = WorldToLiftDeck(deck, player);
+        ride.Offset.m_positionZ = info->GeoBoxMax.Z * scale;
+
+        player->StopMoving();
+        if (!player->HasUnitState(UNIT_STATE_ROOT))
+        {
+            player->SetControlled(true, UNIT_STATE_ROOT);
+            ride.OwnsRoot = true;
+        }
+
+        MovementInfo::TransportInfo& transport = player->m_movementInfo.transport;
+        transport.Reset();
+        transport.guid = GetGUID();
+        transport.pos.Relocate(ride.Offset);
+        transport.time = now;
+        player->AddUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
+
+        m_liftRiders.push_back(ride);
+        boarded = true;
+
+        TC_LOG_DEBUG(LiftLogFilter(this), "GameObject::BoardLiftRiders: {} ({}) carries {} from ({:.1f}, {:.1f}, {:.1f}), {} ms to its stop.",
+            GetGUID().ToString(), GetEntry(), player->GetName(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
+            GetLiftLegLength());
+    }
+
+    // On the deck, on every client, from the start.
+    if (boarded)
+        CarryLiftRiders();
+}
+
+// Every update while a lift carries playerbots: each is put where its place on
+// the deck now is, and let off where the lift stops.
+void GameObject::CarryLiftRiders()
+{
+    uint32 const now = GameTime::GetGameTimeMS();
+    uint32 const legElapsed = now - m_goValue.Transport.PathProgress;
+    bool const arrived = legElapsed >= GetLiftLegLength();
+    Position const deck = GetLiftDeck(GetLiftAnimTime(legElapsed));
+
+    for (size_t i = 0; i < m_liftRiders.size();)
+    {
+        LiftRider& ride = m_liftRiders[i];
+        Position const spot = LiftDeckToWorld(deck, ride.Offset);
+
+        // Off the lift some other way: teleported (Player::TeleportTo takes
+        // everyone off a transport but a ship they stay on), or gone from the map.
+        Player* rider = ObjectAccessor::GetPlayer(*this, ride.Guid);
+        bool const left = !rider || !rider->IsInWorld() || rider->IsBeingTeleported() ||
+            !rider->HasUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT) || rider->m_movementInfo.transport.guid != GetGUID() ||
+            rider->GetExactDist(spot) > LiftRiderLeaveDistance;
+        if (left || arrived)
+        {
+            if (rider && rider->IsInWorld())
+            {
+                if (!left)
+                    rider->UpdatePosition(spot.GetPositionX(), spot.GetPositionY(), spot.GetPositionZ(), rider->GetOrientation(), true);
+                ReleaseLiftRider(rider, ride, !left);
+            }
+            m_liftRiders.erase(m_liftRiders.begin() + i);
+            continue;
+        }
+
+        // Something set it walking, or freed it, after it boarded.
+        bool resend = now >= ride.NextBroadcastMs;
+        if (!rider->movespline->Finalized())
+        {
+            rider->StopMoving();
+            resend = true;
+        }
+        if (!rider->HasUnitState(UNIT_STATE_ROOT))
+        {
+            rider->SetControlled(true, UNIT_STATE_ROOT);
+            ride.OwnsRoot = true;
+        }
+
+        rider->UpdatePosition(spot.GetPositionX(), spot.GetPositionY(), spot.GetPositionZ(), rider->GetOrientation(), true);
+
+        // The clients move it with the lift themselves, as they do the people
+        // riding it, once they are told it is on it - and its place on the deck.
+        if (resend)
+        {
+            MovementInfo::TransportInfo& transport = rider->m_movementInfo.transport;
+            transport.pos.Relocate(ride.Offset.GetPositionX(), ride.Offset.GetPositionY(), ride.Offset.GetPositionZ(),
+                Position::NormalizeOrientation(rider->GetOrientation() - deck.GetOrientation()));
+            transport.time = now;
+            rider->BroadcastServerPlacedMovement();
+            ride.NextBroadcastMs = now + LiftRiderBroadcastMs;
+        }
+
+        ++i;
+    }
+}
+
+void GameObject::ReleaseLiftRider(Player* rider, LiftRider const& ride, bool arrived)
+{
+    if (rider->m_movementInfo.transport.guid == GetGUID())
+    {
+        rider->m_movementInfo.transport.Reset();
+        rider->RemoveUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
+        // Off the lift on every client too, where the server has it.
+        if (!rider->IsBeingTeleported())
+            rider->BroadcastServerPlacedMovement();
+    }
+
+    if (ride.OwnsRoot)
+        rider->SetControlled(false, UNIT_STATE_ROOT);
+
+    if (!arrived)
+        return;
+
+    // Its pets and guardians come along: the server walks them by navmesh,
+    // which has no way from one stop of a lift to the next, so they are still
+    // where the deck set out.
+    GameObjectDisplayInfoEntry const* info = nullptr;
+    if (!IsLiftWithDeck(&info))
+        return;
+
+    Position const start = GetLiftDeck(GetLiftAnimTime(0));
+    std::vector<Unit*> const controlled(rider->m_Controlled.begin(), rider->m_Controlled.end());
+    for (Unit* unit : controlled)
+        if (unit && unit->GetTypeId() != TYPEID_PLAYER && !unit->IsTotem() && unit->IsInWorld() && unit->IsAlive() &&
+            unit->GetMapId() == rider->GetMapId() && IsOnLiftDeck(unit, start, info))
+            unit->NearTeleportTo(rider->GetPositionX(), rider->GetPositionY(), rider->GetPositionZ(), unit->GetOrientation());
+
+    TC_LOG_DEBUG(LiftLogFilter(this), "GameObject::ReleaseLiftRider: {} ({}) set {} down at ({:.1f}, {:.1f}, {:.1f}).",
+        GetGUID().ToString(), GetEntry(), rider->GetName(), rider->GetPositionX(), rider->GetPositionY(), rider->GetPositionZ());
+}
+
+void GameObject::ReleaseLiftRiders()
+{
+    for (LiftRider const& ride : m_liftRiders)
+        if (Player* rider = ObjectAccessor::GetPlayer(*this, ride.Guid))
+            if (rider->IsInWorld())
+                ReleaseLiftRider(rider, ride, false);
+
+    m_liftRiders.clear();
 }
 
 void GameObject::SetDisplayId(uint32 displayid)
@@ -2917,9 +3233,7 @@ void GameObject::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player co
                         // standing on it had dropped into the shaft.
                         if (GetGoType() == GAMEOBJECT_TYPE_TRANSPORT && GetGOInfo()->transport.pause)
                         {
-                            uint32 const period = GetTransportPeriod();
-                            uint32 const pause = GetGOInfo()->transport.pause;
-                            uint32 const leg = GetGoState() == GO_STATE_ACTIVE ? pause : (period > pause ? period - pause : 0);
+                            uint32 const leg = GetLiftLegLength();
                             uint32 const elapsed = GameTime::GetGameTimeMS() - m_goValue.Transport.PathProgress;
                             pathProgress = int16(uint16(leg && elapsed < leg ? uint64(elapsed) * 65535 / leg : 65535));
                         }

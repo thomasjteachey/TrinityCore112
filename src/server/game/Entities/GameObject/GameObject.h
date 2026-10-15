@@ -31,6 +31,7 @@ class Group;
 class OPvPCapturePoint;
 class Transport;
 class Unit;
+struct GameObjectDisplayInfoEntry;
 struct TransportAnimation;
 enum SpellTargetCheckTypes : uint8;
 enum TriggerCastFlags : uint32;
@@ -178,6 +179,9 @@ class TC_GAME_API GameObject : public WorldObject, public GridObject<GameObject>
         GOState GetGoState() const { return GOState(GetByteValue(GAMEOBJECT_BYTES_1, 0)); }
         void SetGoState(GOState state);
         virtual uint32 GetTransportPeriod() const;
+        // A playerbot this lift is carrying from one stop to the next (see
+        // BoardLiftRiders).
+        bool IsCarryingLiftRider(ObjectGuid const& guid) const;
         uint8 GetGoArtKit() const { return GetByteValue(GAMEOBJECT_BYTES_1, 2); }
         void SetGoArtKit(uint8 artkit);
         uint8 GetGoAnimProgress() const { return GetByteValue(GAMEOBJECT_BYTES_1, 3); }
@@ -355,6 +359,33 @@ class TC_GAME_API GameObject : public WorldObject, public GridObject<GameObject>
         void RemoveFromOwner();
         void SwitchDoorOrButton(bool activate, bool alternative = false);
         void UpdatePackedRotation();
+
+        // A lift that stops (type 11 with a pause: Ring of Valor's elevators)
+        // moves only on the clients, and a client carries its own player with
+        // it. Nothing carries a playerbot: it stayed where the lift set out,
+        // at the bottom of the shaft, while the people beside it rode up. So
+        // when such a lift starts a leg, the playerbots standing on its deck
+        // ride it: the server moves them with the deck, and every client is
+        // told they are on the lift and draws them there, until it stops.
+        struct LiftRider
+        {
+            ObjectGuid Guid;
+            Position Offset;                                // on the deck, in the lift's own frame
+            uint32 NextBroadcastMs = 0;
+            bool OwnsRoot = false;                          // the root holding it still is the ride's
+        };
+
+        bool IsLiftWithDeck(GameObjectDisplayInfoEntry const** info = nullptr) const;
+        uint32 GetLiftAnimTime(uint32 legElapsed) const;
+        uint32 GetLiftLegLength() const;
+        Position GetLiftDeck(uint32 animTime) const;
+        bool IsOnLiftDeck(WorldObject const* object, Position const& deck, GameObjectDisplayInfoEntry const* info) const;
+        void BoardLiftRiders();
+        void CarryLiftRiders();
+        void ReleaseLiftRider(Player* rider, LiftRider const& ride, bool arrived);
+        void ReleaseLiftRiders();
+
+        std::vector<LiftRider> m_liftRiders;
 
         //! Object distance/size - overridden from Object::_IsWithinDist. Needs to take in account proper GO size.
         bool _IsWithinDist(WorldObject const* obj, float dist2compare, bool /*is3D*/, bool /*incOwnRadius*/, bool /*incTargetRadius*/) const override
