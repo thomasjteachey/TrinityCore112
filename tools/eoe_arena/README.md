@@ -23,7 +23,7 @@ Served by the data-driven `BattlegroundCustomArena`; everything positional is in
   `battleground_bounds` (MinZ 240, a 50 yd circle) is the safety net, and it is
   also what brings anyone left on a pad after the gates onto the Eye.
 - Shadow Sight on the axis square to the teams'. No gates: the void is the gate.
-- Three Nexus pillars in a triangle round the centre break line of sight
+- Four Nexus pillars on a square round the centre break line of sight
   (`pillars/`): gameobjects for spell LoS, carved into the navmesh for bots. Any
   regen of 1616's mmaps must redo the carve.
 - The sky is the Eye's own: Light 3616 is a copy of 616's map-wide light 1773 for
@@ -59,7 +59,7 @@ placement no chunk references. The rewrite is verified against the source
 | Light | 3616 (copy of 1773) |
 | MapDifficulty | 760 (1616, difficulty 0; server only - without it no static spawn on 1616 loads) |
 | ADT placements | uniqueId 3616001/3616002 for the pads |
-| Pillars | gameobject_template 300405, three spawns in a triangle (`pillars/README.md`) |
+| Pillars | gameobject_template 300405, four spawns on a square (`pillars/README.md`) |
 
 ## Tools
 

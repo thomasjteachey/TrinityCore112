@@ -1,4 +1,4 @@
-"""Scratch-only: put the three EoE arena pillars into map 1616's vmaps so mmaps_generator carves them.
+"""Scratch-only: put the EoE arena pillars into map 1616's vmaps so mmaps_generator carves them.
 
 The vmaps written here feed ONE navmesh generation run and are never deployed: at runtime the
 pillars are gameobjects (spell LoS through the dynamic tree), and the navmesh only has to know
@@ -13,6 +13,8 @@ import math, os, re, shutil, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import vmtile as V  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import layout as L  # noqa: E402
 
 work = sys.argv[1]               # nav1616 dir holding vmaps/
 sql = sys.argv[2]                # pillars.sql, the spawn rows actually applied
@@ -24,9 +26,9 @@ BBOX = (-1.6639766693115234, -1.1887866258621216, -0.05296637490391731,
         1.663975715637207, 1.80129873752594, 5.183651924133301)
 NAME = "Nexus_PillarA_nav"
 
-rows = re.findall(r"INSERT INTO centurionworld\.gameobject \(.*?\) VALUES \(300405, 1616, 0, 0, 1, 1, "
+rows = re.findall(r"INSERT INTO centurionworld\.gameobject \(.*?\) VALUES \((?:\d+, )?300405, 1616, 0, 0, 1, 1, "
                   r"([-\d.]+), ([-\d.]+), ([-\d.]+), ([-\d.]+),", open(sql).read())
-assert len(rows) == 3, rows
+assert len(rows) == len(L.PILLAR_BEARINGS), rows
 shutil.copy(pillar_vmo, os.path.join(work, "vmaps", NAME + ".vmo"))
 
 tile = os.path.join(work, "vmaps", "1616_29_30.vmtile")

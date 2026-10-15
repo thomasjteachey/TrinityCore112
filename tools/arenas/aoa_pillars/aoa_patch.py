@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Server side: GameObjectDisplayInfo 11971 (the Amphitheater's columns) into patch-enUS-A.
+"""Server side: GameObjectDisplayInfo 11971/11972 (the Amphitheater's columns and walls) into patch-enUS-A.
+
+Pass an ABSOLUTE <work>: smpq runs from a subdirectory of it, so a relative path makes extract
+fail with "no DBFilesClient/... to add rows to".
 
     aoa_patch.py extract <work>     # live zip -> <work>/patch-enUS-A/dbc/patch-enUS-A.MPQ/GameObjectDisplayInfo.dbc
     (download it, aoa_pillars.py dbc <dir>, upload to <work>/patch-enUS-A/dbc-new/patch-enUS-A.MPQ/)

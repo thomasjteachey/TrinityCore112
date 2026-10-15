@@ -43,10 +43,15 @@ before, after = load(sys.argv[1]), load(sys.argv[2])
 cx, cy = L.CENTRE_X, L.CENTRE_Y
 pts = []
 centres = [(x, y, "pillar %d" % (b % 360)) for x, y, b in L.pillar_points()]
-# Where the first layout (a line: the centre and r 20 on 135) stood: floor again.
-for x, y, n in ((cx, cy, "old centre pillar"),
-                (cx + 20 * math.cos(math.radians(135)), cy + 20 * math.sin(math.radians(135)), "old pillar 135")):
-    pts.append((x, y, L.FLOOR_CENTRE_Z, n + " - middle", True))
+# Where earlier layouts stood - a line (the centre and r 20 on 135), then a triangle (315, 75,
+# 195): floor again. 75 and 195 are only 5.2 yd from the square's 90 and 180, at the edge of
+# their carve, so they are reported but not judged.
+for x, y, n, want in ((cx, cy, "old centre pillar", True),
+                      (cx + 20 * math.cos(math.radians(135)), cy + 20 * math.sin(math.radians(135)), "old pillar 135", True),
+                      (cx + 20 * math.cos(math.radians(315)), cy + 20 * math.sin(math.radians(315)), "old pillar 315", True),
+                      (cx + 20 * math.cos(math.radians(75)), cy + 20 * math.sin(math.radians(75)), "old pillar 75", None),
+                      (cx + 20 * math.cos(math.radians(195)), cy + 20 * math.sin(math.radians(195)), "old pillar 195", None)):
+    pts.append((x, y, L.FLOOR_CENTRE_Z, n + " - middle", want))
 for x, y, n in centres:
     pts.append((x, y, L.FLOOR_CENTRE_Z, n + " - middle", False))
     for r in (2.0, 3.0):

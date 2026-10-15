@@ -118,13 +118,16 @@ BUFFS = [
     (184664,) + _at(HORDE_BEARING + 90.0, LANDING_DISTANCE) + (FLOOR_RING_Z,),
 ]
 
-# Line-of-sight pillars (pillars/): an equilateral triangle round the centre.
-# One corner on the square axis (315), the other two mirrored across it (75 and
-# 195): the mirror across 135/315 is the one that swaps the teams, so each team
-# sees the same arena. Each pillar is 30 deg off its own team's line to the
-# centre and faces the centre. r 20 keeps them on the inner floor (to r 28).
+# Line-of-sight pillars (pillars/): four on a square round the centre, each 45
+# deg off the teams' line (0, 90, 180, 270), so every landing and both Shadow
+# Sights look out through a gap with a pillar either side. The square is its own
+# image under the half turn and both mirrors that swap the teams, so each team
+# sees the same arena. Each pillar faces the centre. r 20 keeps them on the inner
+# floor (to r 28). Earlier layouts: a line through the centre, then a triangle
+# (315, 75, 195) - "3 seems funky" (owner, 2026-10-15).
 PILLAR_RADIUS = 20.0
-PILLAR_BEARINGS = (HORDE_BEARING + 90.0, ALLIANCE_BEARING + 30.0, HORDE_BEARING - 30.0)   # 315, 75, 195
+PILLAR_BEARINGS = (ALLIANCE_BEARING - 45.0, ALLIANCE_BEARING + 45.0,
+                   HORDE_BEARING - 45.0, HORDE_BEARING + 45.0)                               # 0, 90, 180, 270
 
 
 def pillar_points():
