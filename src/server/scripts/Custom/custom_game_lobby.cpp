@@ -52,6 +52,10 @@ constexpr uint32 CUSTOM_GAME_MAX_PLAYERS_PER_TEAM = 40;
 constexpr uint32 CUSTOM_GAME_GOSSIP_PAGE_SIZE = 28;
 constexpr uint32 BLUE_FLAG_VISUAL = 32609;
 constexpr uint32 RED_FLAG_VISUAL = 32610;
+// Hidden dummy aura on every lobby member who is on neither team (and so will
+// spectate): the client-tweaks DLL draws their names grey, as it draws the
+// Blue team's blue and the Red team's red by the two flag visuals above.
+constexpr uint32 SPECTATOR_MARKER = 92324;
 
 Position const LobbyArrival = { 16218.700195f, 16403.599609f, -64.378899f, 6.283140f };
 Position const BlueNpcPosition = { 16229.862305f, 16415.587891f, -64.378716f, 3.132112f };
@@ -1128,7 +1132,7 @@ public:
             if (!player || player->GetMapId() != CUSTOM_GAME_MAP_ID || player->GetInstanceId() != lobby->InstanceId)
                 continue;
 
-            ApplyTeamVisual(player, 0);
+            ClearTeamVisual(player);
             player->SetVisible(true);
             player->RemoveUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE |
                 UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
@@ -1199,7 +1203,7 @@ public:
         for (auto const& [guid, member] : lobby->Members)
             if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
             {
-                ApplyTeamVisual(player, 0);
+                ClearTeamVisual(player);
                 player->SetVisible(true);
                 player->RemoveUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE |
                     UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
@@ -1462,7 +1466,7 @@ public:
                     if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
                         if (player->HasWorldSubMap())
                         {
-                            ApplyTeamVisual(player, 0);
+                            ClearTeamVisual(player);
                             player->SetVisible(true);
                             player->RemoveUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE |
                                 UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
@@ -1675,7 +1679,7 @@ private:
         lobby.Members.erase(memberItr);
         lobby.Teams.erase(player->GetGUID());
 
-        ApplyTeamVisual(player, 0);
+        ClearTeamVisual(player);
         player->SetVisible(true);
         player->RemoveUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
         if (player->IsSpectator())
@@ -1895,7 +1899,7 @@ private:
             player->SpawnCorpseBones();
         }
 
-        ApplyTeamVisual(player, 0);
+        ClearTeamVisual(player);
         player->SetVisible(true);
         player->RemoveUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
         if (player->IsSpectator())
@@ -1917,16 +1921,29 @@ private:
         player->ClearUnitState(UNIT_STATE_UNATTACKABLE);
     }
 
+    // A member's look in the lobby: the Blue or Red flag, or with no team the
+    // spectator marker. team 0 is "no team", NOT "leaving" - that is
+    // ClearTeamVisual, or a departing member would leave wearing the marker.
     static void ApplyTeamVisual(Player* player, uint32 team)
+    {
+        if (!player)
+            return;
+        ClearTeamVisual(player);
+        if (team == ALLIANCE)
+            player->CastSpell(player, BLUE_FLAG_VISUAL, true);
+        else if (team == HORDE)
+            player->CastSpell(player, RED_FLAG_VISUAL, true);
+        else
+            player->AddAura(SPECTATOR_MARKER, player);
+    }
+
+    static void ClearTeamVisual(Player* player)
     {
         if (!player)
             return;
         player->RemoveAurasDueToSpell(BLUE_FLAG_VISUAL);
         player->RemoveAurasDueToSpell(RED_FLAG_VISUAL);
-        if (team == ALLIANCE)
-            player->CastSpell(player, BLUE_FLAG_VISUAL, true);
-        else if (team == HORDE)
-            player->CastSpell(player, RED_FLAG_VISUAL, true);
+        player->RemoveAurasDueToSpell(SPECTATOR_MARKER);
     }
 
     std::unordered_map<uint32, std::unique_ptr<CustomGameLobby>> _lobbies;

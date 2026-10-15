@@ -3068,8 +3068,10 @@ void SpellMgr::LoadSpellInfoCustomAttributes()
     // character_aura - and the lobby only strips them in its OnPlayerLogout
     // hook, which runs AFTER Player::SaveToDB. That let the visual survive to
     // the DB and reappear on the next login/zone. They are transient by nature
-    // (a real flag is always dropped before logout), so never save them.
-    for (uint32 flagVisual : { 32609u, 32610u })
+    // (a real flag is always dropped before logout), so never save them. The
+    // same goes for the lobby's spectator marker (92324), worn by whoever is on
+    // neither team.
+    for (uint32 flagVisual : { 32609u, 32610u, 92324u })
         if (SpellInfo* spellInfo = _GetSpellInfo(flagVisual))
             spellInfo->AttributesCu |= SPELL_ATTR0_CU_AURA_CANNOT_BE_SAVED;
 
