@@ -118,7 +118,7 @@ namespace
     {
         uint32 Wrapper;
         uint32 Original;
-        uint32 Clone;      // identical but SpellVisual 21101 (PersistentAreaKit 0)
+        uint32 Clone;      // identical but SpellVisualID 0: the dynobject draws no ring
     };
 
     constexpr ConsecrationRank CONSECRATION_RANKS[] =
@@ -135,6 +135,14 @@ namespace
     {
         for (ConsecrationRank const& rank : CONSECRATION_RANKS)
             if (rank.Wrapper == wrapperId)
+                return &rank;
+        return nullptr;
+    }
+
+    ConsecrationRank const* FindConsecrationRankByOriginal(uint32 originalId)
+    {
+        for (ConsecrationRank const& rank : CONSECRATION_RANKS)
+            if (rank.Original == originalId)
                 return &rank;
         return nullptr;
     }
@@ -884,6 +892,52 @@ class spell_t2_consecration_wrapper : public SpellScript
     }
 };
 
+// 26573 and ranks - the STOCK Consecration, the other half of the wrapper swap.
+//
+// Durli's 8pc drew two rings in the live test: one left on the floor where the
+// paladin cast it, and 90523's following one. The wrapper never ran. Rank 1
+// is the Holy talent here, so every paladin who took it holds a stock rank,
+// and the tournament kit's 90530 sits beside it as a second button. Pressing
+// the stock one put down a dynobject with SpellVisual 5600,
+// whose ring cannot move, while the poll below still dragged the damage along
+// and gave the paladin 90523. Same gap as Cinderbite's stock Serpent Sting.
+//
+// The fix reads the wrapper backwards: the rank's own dynobject is prevented
+// and the clone is cast at the same spot. The cost, cooldown and GCD were
+// already paid by the rank, so the clone goes out triggered. The cast flash
+// from the rank's SPELL_GO still plays, but only the persistent area kit
+// lasts, and it belongs to the clone's dynobject, which has none.
+//
+// Ranks 7-8 (48818/48819) are in the chain but have no clone, so they are
+// left alone.
+class spell_t2_consecration_direct : public SpellScript
+{
+    PrepareSpellScript(spell_t2_consecration_direct);
+
+    void HandleAreaAura(SpellEffIndex effIndex)
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !caster->HasAura(SPELL_T2_WALKING_SANCTUARY))
+            return;
+
+        ConsecrationRank const* rank = FindConsecrationRankByOriginal(GetSpellInfo()->Id);
+        if (!rank)
+            return;
+
+        PreventHitDefaultEffect(effIndex);
+
+        if (WorldLocation const* dest = GetHitDest())
+            caster->CastSpell(*dest, rank->Clone, true);
+        else
+            caster->CastSpell(caster->GetPosition(), rank->Clone, true);
+    }
+
+    void Register() override
+    {
+        OnEffectHit += SpellEffectFn(spell_t2_consecration_direct::HandleAreaAura, EFFECT_0, SPELL_EFFECT_PERSISTENT_AREA_AURA);
+    }
+};
+
 // 90308 - Walking Sanctuary (Consecration 8pc): drags the paladin's
 // Consecration dynobject along with them twice a second. DynObjAura::FillTargetMap
 // picks its victims from the dynobject's position, so moving the object is the
@@ -1035,6 +1089,7 @@ void AddSC_custom_t2_warrior_paladin()
     RegisterSpellScript(spell_t2_bareknuckle_flurry_flag);
     RegisterSpellScript(spell_t2_bareknuckle_stun);
     RegisterSpellScript(spell_t2_consecration_wrapper);
+    RegisterSpellScript(spell_t2_consecration_direct);
     RegisterSpellScript(spell_t2_walking_consecration);
     RegisterSpellScript(spell_t2_second_shock);
     new t2_unarmed_login();
