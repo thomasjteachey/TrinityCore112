@@ -52,7 +52,10 @@ struct PvpCoreConfig
     float longRange = 35.0f;
     uint32 interruptReactionMinMs = 200;
     uint32 interruptReactionMaxMs = 1000;
-    uint32 interruptCommitWindowMs = 200;
+    uint32 interruptJitterMs = 100;
+    uint32 interruptCommitWindowMs = 350;
+    uint32 interruptOffTargetExtraMs = 500;
+    uint32 interruptOffTargetNoticePct = 50;
 };
 
 enum class BattlegroundState : uint8
@@ -311,6 +314,11 @@ public:
     // playerbot dispel throttle. Only an enhancement shaman's Purge qualifies:
     // purging on every available global is the point of the spec.
     static bool IsDispelThrottleExempt(Player const* player, uint32 spellId);
+    // True when this decision is the interrupt (or stun/silence/incapacitate)
+    // the reaction model released this tick, at the caster it released it for.
+    // The battleground fast tick delivers it at once instead of waiting for the
+    // class decision cadence, so a bot's kick lands at its own steady time.
+    static bool IsInterruptPressDecision(Player const* player, PvpClassSpellContext const& context);
     // Whether the class selector fights this bot from melee range (its
     // spec's melee spacing profile). One answer for the selector and the
     // lifecycle's positioning profile, so the two can never disagree about

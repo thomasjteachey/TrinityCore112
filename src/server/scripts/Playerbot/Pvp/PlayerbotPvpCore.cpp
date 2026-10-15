@@ -172,16 +172,33 @@ std::unordered_map<ObjectGuid, uint8> g_CombatNoTargetTicksByBot;
 std::mutex g_CombatNoTargetTicksByBotLock;
 std::unordered_map<ObjectGuid, std::unordered_map<ObjectGuid, bool>> g_HumanPerceptionStealthStateByBot;
 std::mutex g_HumanPerceptionStealthStateLock;
-// Per-bot interrupt reaction tracking (see ApplyHumanInterruptReaction): which
-// enemy cast the bot is currently "watching", when it noticed it, and the
-// randomized reaction time rolled for that cast.
+// Per-bot interrupt reaction tracking (see ApplyHumanInterruptReaction). Each
+// enemy cast the bot has seen is watched on its own, keyed by the caster, so
+// two call sites with different ranges (Pummel at 8 yards, Scatter Shot at 5)
+// share one reaction per cast instead of overwriting each other's.
+struct InterruptCastWatch
+{
+    uint32 castSpellId = 0;
+    // GetCastTimeElapsed() at the last sighting. It only ever grows during one
+    // cast (pushback aside), so a drop means the caster started over.
+    uint32 lastSeenCastElapsedMs = 0;
+    uint32 lastSeenCastingMs = 0;
+    // The moment the bot presses its interrupt for this cast.
+    uint32 pressAtMs = 0;
+    // False when the cast slipped past the bot's attention altogether: it is
+    // never answered, and never baits a press either.
+    bool noticed = false;
+    // Noticed as the bot's own target (full speed), not a caster off to the side.
+    bool focused = false;
+};
 struct InterruptReactionState
 {
-    ObjectGuid castTargetGuid;
-    uint32 castSpellId = 0;
-    uint32 noticedAtMs = 0;
-    uint32 reactionDelayMs = 0;
-    uint32 lastSeenCastingMs = 0;
+    std::unordered_map<ObjectGuid, InterruptCastWatch> watchesByCaster;
+    // The casters SelectEnemyCastingTarget answered with on its last tick (one
+    // per ability that asked), and when. Lets the battleground fast tick deliver
+    // that press on time (IsInterruptPressDecision).
+    std::vector<ObjectGuid> pressCasterGuids;
+    uint32 pressReturnedAtMs = 0;
 };
 std::unordered_map<ObjectGuid, InterruptReactionState> g_InterruptReactionStateByBot;
 std::mutex g_InterruptReactionStateLock;
@@ -4142,94 +4159,237 @@ uint32 GetCurrentCastSpellId(Unit const* unit)
     return 0;
 }
 
+// Milliseconds the unit's current cast has spent on its cast bar, or -1 when
+// it is not on a timed cast bar (a channel, or nothing at all).
+int32 GetCurrentCastElapsedMs(Unit const* unit)
+{
+    Spell const* spell = unit ? unit->GetCurrentSpell(CURRENT_GENERIC_SPELL) : nullptr;
+    if (!spell || spell->GetCastTime() <= 0)
+        return -1;
+
+    return std::max(spell->GetCastTimeElapsed(), 0);
+}
+
 // How long a committed "button press" stays live waiting for a decision tick
 // to actually deliver it. Must cover at least one battleground fast tick, but
 // stay short enough that a stale press never fires visibly late.
 constexpr uint32 kInterruptPressSlopMs = 300;
 // Maximum unobserved gap after which a same-spell cast by the same enemy is
-// treated as a brand-new cast (fresh reaction roll) instead of a continuation.
+// treated as a brand-new cast (fresh reaction) instead of a continuation.
 // Sized above the 500ms world decision cadence so coarse ticking alone never
 // splits one cast into two.
 constexpr uint32 kInterruptCastContinuityGapMs = 750;
+// Bots that stop asking - a battleground copy whose match ended - leave their
+// last watches behind. Past this many tracked bots, the idle ones are swept.
+constexpr size_t kInterruptReactionSweepThreshold = 256;
+constexpr uint32 kInterruptReactionIdleMs = 30000;
 
-// Humanizes bot interrupt reflexes. A bot that notices an enemy cast does not
-// become interrupt-eligible until a per-cast randomized reaction time has
-// passed. Once that reaction time arrives the bot is treated as having
-// committed to pressing the button: if the cast vanishes within the commit
-// window just before the press, the interrupt still goes out at the now-idle
-// target and is wasted. A well-timed fake cast can therefore bait the
-// interrupt, while cancelling early just makes the bot hold it.
-Unit const* ApplyHumanInterruptReaction(Player const* player, Unit const* candidate, float maxDistance)
+// This bot's own steady reaction time: where in [ReactionMinMs, ReactionMaxMs]
+// it sits. Keyed on the name players see rather than the guid - a battleground
+// fill copy is a fresh guid under an internal name every match, and the point
+// is that the same mage kicks the same way every time players meet it, so they
+// can learn its timing and fake it out.
+uint32 GetInterruptBaseReactionMs(Player const* player)
 {
     uint32 const reactionMaxMs = g_PvpCoreConfig.interruptReactionMaxMs;
-    if (reactionMaxMs == 0)
-        return candidate; // humanization disabled: legacy instant reflexes
+    uint32 const reactionMinMs = std::min(g_PvpCoreConfig.interruptReactionMinMs, reactionMaxMs);
+    if (reactionMaxMs == reactionMinMs)
+        return reactionMinMs;
+
+    uint32 hash = 2166136261u; // FNV-1a
+    for (char const c : Battleground::GetPlayerDisplayName(player))
+    {
+        hash ^= uint8(c);
+        hash *= 16777619u;
+    }
+
+    return reactionMinMs + hash % (reactionMaxMs - reactionMinMs + 1);
+}
+
+// One cast's reaction: the bot's steady time give or take the jitter, kept
+// inside [ReactionMinMs, ReactionMaxMs]. A caster that is not the bot's own
+// target is noticed later on top of that.
+uint32 RollInterruptReactionMs(Player const* player, bool focused)
+{
+    uint32 const reactionMaxMs = g_PvpCoreConfig.interruptReactionMaxMs;
+    uint32 const reactionMinMs = std::min(g_PvpCoreConfig.interruptReactionMinMs, reactionMaxMs);
+    int32 const jitterMs = int32(g_PvpCoreConfig.interruptJitterMs);
+    int32 const reactionMs = std::clamp(
+        int32(GetInterruptBaseReactionMs(player)) + (jitterMs ? irand(-jitterMs, jitterMs) : 0),
+        int32(reactionMinMs), int32(reactionMaxMs));
+    return uint32(reactionMs) + (focused ? 0 : g_PvpCoreConfig.interruptOffTargetExtraMs);
+}
+
+// Humanizes bot interrupt reflexes. Every enemy cast the bot sees is watched
+// on its own, and the bot presses its interrupt at its own steady reaction
+// time (GetInterruptBaseReactionMs), not the instant the cast appears.
+//
+// Attention: the bot's own target (`focus`) is always noticed, at full speed.
+// A caster it is not fighting is noticed only Interrupt.OffTargetNoticePct of
+// the time, and Interrupt.OffTargetExtraMs later, so a mage busy with a warrior
+// does not lock out the healer behind it on reflex. Turning to a caster
+// mid-cast counts as noticing it as the target from that moment.
+//
+// Commitment: once the press moment arrives the button is on its way down. If
+// the cast vanishes within the commit window just before that moment, the
+// interrupt still goes out at the now-idle caster and is wasted; if the caster
+// restarts without a pause, the press lands on the new cast. A player who has
+// learned a bot's timing can fake it out, while cancelling early just makes it
+// hold the kick.
+//
+// `casters` is every caster usable for this ability, the focus first. Returns
+// the one to interrupt now, if any.
+Unit const* ApplyHumanInterruptReaction(Player const* player, Unit const* focus,
+    std::vector<Unit const*> const& casters, float maxDistance)
+{
+    // The bot's own target first, then the nearest.
+    Unit const* pick = nullptr;
+    float pickRank = std::numeric_limits<float>::max();
+    auto consider = [&](Unit const* caster)
+    {
+        float const rank = caster == focus ? -1.0f : player->GetDistance(caster);
+        if (rank < pickRank)
+        {
+            pick = caster;
+            pickRank = rank;
+        }
+    };
+
+    if (g_PvpCoreConfig.interruptReactionMaxMs == 0)
+    {
+        for (Unit const* caster : casters)
+            consider(caster);
+        return pick; // humanization disabled: legacy instant reflexes
+    }
 
     uint32 const now = GameTime::GetGameTimeMS();
+    uint32 const commitWindowMs = g_PvpCoreConfig.interruptCommitWindowMs;
     std::lock_guard<std::mutex> lock(g_InterruptReactionStateLock);
-    auto stateItr = g_InterruptReactionStateByBot.find(player->GetGUID());
 
-    if (candidate)
+    if (g_InterruptReactionStateByBot.size() > kInterruptReactionSweepThreshold)
     {
-        uint32 const castSpellId = GetCurrentCastSpellId(candidate);
-        bool const continuesTrackedCast = stateItr != g_InterruptReactionStateByBot.end() &&
-            stateItr->second.castTargetGuid == candidate->GetGUID() &&
-            stateItr->second.castSpellId == castSpellId &&
-            now - stateItr->second.lastSeenCastingMs <= kInterruptCastContinuityGapMs;
-        if (!continuesTrackedCast)
+        for (auto itr = g_InterruptReactionStateByBot.begin(); itr != g_InterruptReactionStateByBot.end();)
         {
-            uint32 const reactionMinMs = std::min(g_PvpCoreConfig.interruptReactionMinMs, reactionMaxMs);
-            InterruptReactionState& state = g_InterruptReactionStateByBot[player->GetGUID()];
-            state.castTargetGuid = candidate->GetGUID();
-            state.castSpellId = castSpellId;
-            state.noticedAtMs = now;
-            state.reactionDelayMs = urand(reactionMinMs, reactionMaxMs);
-            state.lastSeenCastingMs = now;
+            InterruptReactionState const& idleCandidate = itr->second;
+            bool const active = now - idleCandidate.pressReturnedAtMs <= kInterruptReactionIdleMs ||
+                std::any_of(idleCandidate.watchesByCaster.begin(), idleCandidate.watchesByCaster.end(),
+                    [now](auto const& entry) { return now - entry.second.lastSeenCastingMs <= kInterruptReactionIdleMs; });
+            itr = active ? std::next(itr) : g_InterruptReactionStateByBot.erase(itr);
+        }
+    }
+
+    auto stateItr = g_InterruptReactionStateByBot.find(player->GetGUID());
+    if (stateItr == g_InterruptReactionStateByBot.end())
+    {
+        if (casters.empty())
             return nullptr;
+        stateItr = g_InterruptReactionStateByBot.try_emplace(player->GetGUID()).first;
+    }
+    InterruptReactionState& state = stateItr->second;
+
+    // Whether the caster is still on the very cast this watch was opened for:
+    // the same spell, not out of sight too long, and begun before the last
+    // sighting (cast-bar time only ever grows within one cast, pushback aside).
+    auto continuesWatchedCast = [now](InterruptCastWatch const& watch, Unit const* caster)
+    {
+        if (GetCurrentCastSpellId(caster) != watch.castSpellId)
+            return false;
+
+        uint32 const unseenMs = now - watch.lastSeenCastingMs;
+        if (unseenMs > kInterruptCastContinuityGapMs)
+            return false;
+
+        int32 const castElapsedMs = GetCurrentCastElapsedMs(caster);
+        return castElapsedMs < 0 || uint32(castElapsedMs) >= unseenMs;
+    };
+    // The cast was still up when the press moment came, or left inside the
+    // commit window just before it.
+    auto isCommittedAtCastEnd = [commitWindowMs](InterruptCastWatch const& watch)
+    {
+        return watch.noticed && watch.pressAtMs <= watch.lastSeenCastingMs + commitWindowMs;
+    };
+
+    for (Unit const* caster : casters)
+    {
+        bool const isFocus = caster == focus;
+        auto [watchItr, isNewWatch] = state.watchesByCaster.try_emplace(caster->GetGUID());
+        InterruptCastWatch& watch = watchItr->second;
+        if (isNewWatch || !continuesWatchedCast(watch, caster))
+        {
+            // A new cast. A press already on its way lands on it anyway.
+            bool const pressInFlight = !isNewWatch && isCommittedAtCastEnd(watch) &&
+                (now <= watch.pressAtMs || now - watch.pressAtMs <= kInterruptPressSlopMs);
+            uint32 const pressAtMs = pressInFlight ? watch.pressAtMs : now + RollInterruptReactionMs(player, isFocus);
+            watch = InterruptCastWatch();
+            watch.castSpellId = GetCurrentCastSpellId(caster);
+            watch.pressAtMs = pressAtMs;
+            watch.noticed = pressInFlight || isFocus ||
+                roll_chance_i(int32(g_PvpCoreConfig.interruptOffTargetNoticePct));
+            watch.focused = isFocus;
+        }
+        else if (isFocus && !watch.focused)
+        {
+            // The bot turned to this caster mid-cast: from here on it is
+            // watching the cast bar directly.
+            uint32 const focusedPressAtMs = now + RollInterruptReactionMs(player, true);
+            watch.pressAtMs = watch.noticed ? std::min(watch.pressAtMs, focusedPressAtMs) : focusedPressAtMs;
+            watch.noticed = true;
+            watch.focused = true;
         }
 
-        InterruptReactionState& state = stateItr->second;
-        state.lastSeenCastingMs = now;
-        if (now - state.noticedAtMs >= state.reactionDelayMs)
-            return candidate;
-        return nullptr;
+        watch.lastSeenCastingMs = now;
+        if (watch.noticed && now >= watch.pressAtMs)
+            consider(caster);
     }
 
-    if (stateItr == g_InterruptReactionStateByBot.end())
-        return nullptr;
-
-    InterruptReactionState& state = stateItr->second;
-    Unit const* tracked = ObjectAccessor::GetUnit(*player, state.castTargetGuid);
-    if (tracked && GetCurrentCastSpellId(tracked) == state.castSpellId && IsInterruptibleCast(tracked))
+    for (auto itr = state.watchesByCaster.begin(); itr != state.watchesByCaster.end();)
     {
-        // The tracked cast is still running, merely outside this particular
-        // ability's range/immunity filter. Keep watching without deciding.
-        state.lastSeenCastingMs = now;
-        return nullptr;
-    }
+        InterruptCastWatch& watch = itr->second;
+        if (watch.lastSeenCastingMs == now)
+        {
+            ++itr; // seen casting this tick, by this call or one for another ability
+            continue;
+        }
 
-    // The tracked cast is gone (finished or cancelled).
-    uint32 const elapsedMs = now - state.noticedAtMs;
-    uint32 const castVisibleMs = state.lastSeenCastingMs - state.noticedAtMs;
-    bool const reactionElapsed = elapsedMs >= state.reactionDelayMs;
-    bool const withinPressSlop = elapsedMs <= state.reactionDelayMs + kInterruptPressSlopMs;
-    bool const committedAtCastEnd = state.reactionDelayMs <= castVisibleMs + g_PvpCoreConfig.interruptCommitWindowMs;
+        Unit const* tracked = ObjectAccessor::GetUnit(*player, itr->first);
+        if (tracked && continuesWatchedCast(watch, tracked) && IsInterruptibleCast(tracked))
+        {
+            // Still on the same cast, merely outside this ability's range or
+            // filter. Keep watching without deciding.
+            watch.lastSeenCastingMs = now;
+            ++itr;
+            continue;
+        }
 
-    if (reactionElapsed && withinPressSlop && committedAtCastEnd)
-    {
-        // The cast disappeared inside the commit window: the press happens
-        // anyway. Do not erase the state here - the enclosing context build
-        // may be one that never executes a decision, so keep answering until
-        // the press slop expires; spell cooldown gating prevents double casts.
-        if (tracked && HasHostileTarget(player, tracked) && !IsTargetInvalidByImmunity(player, tracked) &&
+        // The watched cast is gone: finished, cancelled, or the caster left.
+        if (!tracked || !isCommittedAtCastEnd(watch) || now > watch.pressAtMs + kInterruptPressSlopMs)
+        {
+            itr = state.watchesByCaster.erase(itr); // saw the cancel in time (hold it) or the moment passed
+            continue;
+        }
+
+        // The cast left inside the commit window: the press happens anyway, at
+        // its moment. Keep the watch - the enclosing context build may be one
+        // that never executes a decision, so keep answering until the slop runs
+        // out; spell cooldown gating prevents a double cast.
+        if (now >= watch.pressAtMs && HasHostileTarget(player, tracked) && !IsTargetInvalidByImmunity(player, tracked) &&
             player->IsWithinDistInMap(tracked, maxDistance) && player->IsWithinLOSInMap(tracked))
-            return tracked;
+            consider(tracked);
+        ++itr;
     }
 
-    if (!withinPressSlop || !committedAtCastEnd)
-        g_InterruptReactionStateByBot.erase(stateItr); // saw the cancel in time (hold it) or the moment passed
+    if (pick)
+    {
+        if (state.pressReturnedAtMs != now)
+            state.pressCasterGuids.clear();
+        state.pressReturnedAtMs = now;
+        if (std::find(state.pressCasterGuids.begin(), state.pressCasterGuids.end(), pick->GetGUID()) == state.pressCasterGuids.end())
+            state.pressCasterGuids.push_back(pick->GetGUID());
+    }
+    else if (state.watchesByCaster.empty() && state.pressReturnedAtMs != now)
+        g_InterruptReactionStateByBot.erase(stateItr);
 
-    return nullptr;
+    return pick;
 }
 
 Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Unit const* preferredTarget = nullptr)
@@ -4243,36 +4403,34 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
                 !IsTargetInvalidByImmunity(player, candidate) &&
                 candidate->HasUnitState(UNIT_STATE_CASTING) &&
                 IsInterruptibleCast(candidate) &&
-                player->IsWithinLOSInMap(candidate) &&
-                player->IsWithinDistInMap(candidate, maxDistance);
+                player->IsWithinDistInMap(candidate, maxDistance) &&
+                player->IsWithinLOSInMap(candidate);
         };
 
+    // Every caster this ability could answer, the bot's own target first. When
+    // - and whether - the bot answers one is the reaction model's call, its own
+    // target included: a usable preferred target used to be returned straight
+    // from here, so a bot kicked whoever it was fighting on its next decision
+    // tick and the reaction delay only ever applied to bystanders.
+    //
+    // While its own target's cast is one this ability can answer, the bot has
+    // eyes for that cast bar alone: nobody else's cast is noticed meanwhile.
+    std::vector<Unit const*> casters;
     if (isCandidateUsable(preferredTarget))
-        return preferredTarget;
-
-    Unit const* best = nullptr;
-    float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
-    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+        casters.push_back(preferredTarget);
+    else
     {
-        Player* candidate = itr->GetSource();
-        if (!isCandidateUsable(candidate))
-            continue;
-
-        float const distance = player->GetDistance(candidate);
-        if (distance < bestDistance)
-        {
-            best = candidate;
-            bestDistance = distance;
-        }
+        Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+        for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+            if (Player const* candidate = itr->GetSource(); isCandidateUsable(candidate))
+                casters.push_back(candidate);
     }
 
-    // Route the pick through the reaction delay / jukeable commit window. The
-    // playerbot pvp core merge dropped this call and the follow-up build fix only
-    // restored the function body, so ApplyHumanInterruptReaction sat with zero
-    // callers: bots kicked frame-perfect and unjukeable, and the three
+    // Route the pick through the reaction delay / jukeable commit window. A
+    // playerbot pvp core merge once dropped this call, and with no caller bots
+    // kicked frame-perfect and unjukeable while the
     // Playerbot.PvpClassSpells.Interrupt.* keys were silent no-ops.
-    return ApplyHumanInterruptReaction(player, best, maxDistance);
+    return ApplyHumanInterruptReaction(player, preferredTarget, casters, maxDistance);
 }
 
     bool AnyEnemyPolymorphed(Player const* player, float maxDistance)
@@ -5645,8 +5803,8 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
         { "hunter call pet", "summon active stable pet when no living pet is present", kHunterCallPetSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, shouldRevivePet && IsSpellReady(player, kHunterRevivePetSpellId), 25.0f,
         { "hunter revive pet", "revive dead hunter pet instead of repeatedly calling it", kHunterRevivePetSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, isMarksmanshipHunter && enemyOnTop && enemyOnTopTarget->HasUnitState(UNIT_STATE_CASTING) && !HasBreakableCrowdControl(player, enemyOnTopTarget) && IsSpellReady(player, 19503), 23.0f,
-        { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, isMarksmanshipHunter && scatterPointBlankTarget && !HasBreakableCrowdControl(player, scatterPointBlankTarget), 23.0f,
+        { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, scatterPointBlankTarget ? scatterPointBlankTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isMarksmanshipHunter && nearbyCastingTarget && !HasBreakableCrowdControl(player, nearbyCastingTarget) && IsSpellReady(player, 19503), 23.0f,
         { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyCastingTarget ? nearbyCastingTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates,
@@ -8590,8 +8748,44 @@ void PvpCore::LoadConfig()
         sConfigMgr->GetIntDefault("Playerbot.PvpClassSpells.Interrupt.ReactionMaxMs", 1000), 0, 5000));
     if (g_PvpCoreConfig.interruptReactionMaxMs < g_PvpCoreConfig.interruptReactionMinMs)
         g_PvpCoreConfig.interruptReactionMaxMs = g_PvpCoreConfig.interruptReactionMinMs;
+    g_PvpCoreConfig.interruptJitterMs = uint32(std::clamp(
+        sConfigMgr->GetIntDefault("Playerbot.PvpClassSpells.Interrupt.JitterMs", 100), 0, 1000));
     g_PvpCoreConfig.interruptCommitWindowMs = uint32(std::clamp(
-        sConfigMgr->GetIntDefault("Playerbot.PvpClassSpells.Interrupt.CommitWindowMs", 200), 0, 2000));
+        sConfigMgr->GetIntDefault("Playerbot.PvpClassSpells.Interrupt.CommitWindowMs", 350), 0, 2000));
+    g_PvpCoreConfig.interruptOffTargetExtraMs = uint32(std::clamp(
+        sConfigMgr->GetIntDefault("Playerbot.PvpClassSpells.Interrupt.OffTargetExtraMs", 500), 0, 5000));
+    g_PvpCoreConfig.interruptOffTargetNoticePct = uint32(std::clamp(
+        sConfigMgr->GetIntDefault("Playerbot.PvpClassSpells.Interrupt.OffTargetNoticePct", 50), 0, 100));
+}
+
+bool PvpCore::IsInterruptPressDecision(Player const* player, PvpClassSpellContext const& context)
+{
+    if (!player || !context.shouldExecute || !context.spellId || context.targetGuid.IsEmpty())
+        return false;
+
+    // Interrupts, plus the stuns, silences and incapacitates the class selectors
+    // also aim at a caster (Hammer of Justice, Silence, Repentance, Scatter
+    // Shot). Anything else aimed at that caster keeps the normal cadence.
+    uint32 constexpr castStoppingMechanics = (1 << MECHANIC_INTERRUPT) | (1 << MECHANIC_SILENCE) |
+        (1 << MECHANIC_STUN) | (1 << MECHANIC_KNOCKOUT) | (1 << MECHANIC_DISORIENTED);
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(context.spellId);
+    if (!spellInfo || (!spellInfo->HasEffect(SPELL_EFFECT_INTERRUPT_CAST) &&
+        !(spellInfo->GetAllEffectsMechanicMask() & castStoppingMechanics)))
+        return false;
+
+    // Only when the press can actually go out now. A bot finishing its own
+    // cast, or waiting out the global cooldown, presses on the first tick after.
+    if (player->IsNonMeleeSpellCast(false, false, true) || player->GetSpellHistory()->HasGlobalCooldown(spellInfo))
+        return false;
+
+    std::lock_guard<std::mutex> lock(g_InterruptReactionStateLock);
+    auto const stateItr = g_InterruptReactionStateByBot.find(player->GetGUID());
+    if (stateItr == g_InterruptReactionStateByBot.end() ||
+        stateItr->second.pressReturnedAtMs != GameTime::GetGameTimeMS())
+        return false;
+
+    std::vector<ObjectGuid> const& pressCasterGuids = stateItr->second.pressCasterGuids;
+    return std::find(pressCasterGuids.begin(), pressCasterGuids.end(), context.targetGuid) != pressCasterGuids.end();
 }
 
     PvpCoreConfig const& PvpCore::GetConfig()

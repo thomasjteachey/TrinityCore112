@@ -1145,6 +1145,12 @@ void ProcessBattlegroundPlayerbotTick(Player* player)
     bool const shouldForcePetSpellTick = classContext.classSpellsEnabled &&
         classContext.shouldExecute &&
         playerbot::PvpClassActions::IsPetSpellAction(player, classContext);
+    // An interrupt the reaction model just released goes out now. Left to the
+    // class decision cadence it would land anywhere up to half a second late -
+    // more noise than a bot's whole reaction jitter, so players could never
+    // learn a bot's timing to fake it out.
+    bool const shouldForceInterruptPress = classContext.classSpellsEnabled &&
+        playerbot::PvpCore::IsInterruptPressDecision(player, classContext);
 
     // Persistent bots reach the full lifecycle below on its normal cadence.
     // Transient custom-game copies deliberately return before queue/lifecycle
@@ -1152,7 +1158,7 @@ void ProcessBattlegroundPlayerbotTick(Player* player)
     // here instead of limiting them to autoattacks and movement/pet actions.
     bool const runCloneClassDecision = activeClone && ConsumeCloneClassDecisionCadence(player);
 
-    if (runCloneClassDecision || shouldForceClassMovementTick || shouldForcePetSpellTick)
+    if (runCloneClassDecision || shouldForceClassMovementTick || shouldForcePetSpellTick || shouldForceInterruptPress)
         playerbot::PvpClassActions::Execute(player, classContext);
 }
 
