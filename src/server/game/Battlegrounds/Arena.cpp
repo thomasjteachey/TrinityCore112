@@ -83,7 +83,12 @@ void Arena::AddPlayer(Player* player)
     if (!isInBattleground)
         PlayerScores[player->GetGUID().GetCounter()] = new ArenaScore(player->GetGUID(), player->GetBGTeam());
 
-    if (player->GetBGTeam() == ALLIANCE)        // gold
+    // A squad match: each squad carries its own flag (battleground_squad_start
+    // FlagSpell) - two squads share each side, so the side's flag would make
+    // two of them look alike.
+    if (uint32 const squadFlag = GetSquadFlagSpell(GetPlayerSquad(player->GetGUID())))
+        player->CastSpell(player, squadFlag, true);
+    else if (player->GetBGTeam() == ALLIANCE)   // gold
     {
         if (player->GetTeam() == HORDE)
             player->CastSpell(player, SPELL_HORDE_GOLD_FLAG, true);
@@ -106,6 +111,12 @@ void Arena::RemovePlayer(Player* player, ObjectGuid guid, uint32 /*team*/)
     if (IsCustomGame())
         _customGameEliminatedPlayers.erase(guid);
 
+    // SpellInfo::CheckLocation would drop a squad flag once the player is
+    // out of the arena; take it off on the way out so it never lingers.
+    if (player)
+        if (uint32 const squadFlag = GetSquadFlagSpell(GetPlayerSquad(guid)))
+            player->RemoveAurasDueToSpell(squadFlag);
+
     if (GetStatus() == STATUS_WAIT_LEAVE)
         return;
 
@@ -115,8 +126,28 @@ void Arena::RemovePlayer(Player* player, ObjectGuid guid, uint32 /*team*/)
 
 void Arena::FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet)
 {
+    if (IsSquadMatch())
+    {
+        for (uint8 squad = 0; squad < GetSquadCount(); ++squad)
+        {
+            packet.Worldstates.emplace_back(ARENA_WORLD_STATE_SQUAD_SHOW_FIRST + squad, IsSquadInMatch(squad) ? 1 : 0);
+            packet.Worldstates.emplace_back(ARENA_WORLD_STATE_SQUAD_ALIVE_FIRST + squad, GetArenaAlivePlayersCountBySquad(squad));
+        }
+        return;
+    }
+
     packet.Worldstates.emplace_back(ARENA_WORLD_STATE_ALIVE_PLAYERS_GREEN, GetArenaAlivePlayersCountByTeam(HORDE));
     packet.Worldstates.emplace_back(ARENA_WORLD_STATE_ALIVE_PLAYERS_GOLD, GetArenaAlivePlayersCountByTeam(ALLIANCE));
+}
+
+bool Arena::IsSquadInMatch(uint8 squad) const
+{
+    // Once the gates are open, the squads that were there; before, anyone
+    // seated or on the way in. A corner nobody came for stays off the readout.
+    if (_squadsAtStart)
+        return (_squadsAtStart & (1u << squad)) != 0;
+
+    return CountSquadSeats(squad) != 0;
 }
 
 void Arena::UpdateArenaWorldState()
@@ -255,28 +286,13 @@ uint32 Arena::GetArenaAlivePlayersCountBySquad(uint8 squad) const
 
 void Arena::UpdateSquadWorldStates()
 {
-    uint32 aliveBySquad[MAX_BATTLEGROUND_SQUADS] = { };
-    uint32 aliveTotal = 0;
+    // One line per squad in the top frame ("Blue Team: 2 Players Remaining"):
+    // the WorldStateUI rows for the map read these, in place of the gold and
+    // green pair the side-based rows show.
     for (uint8 squad = 0; squad < GetSquadCount(); ++squad)
     {
-        aliveBySquad[squad] = GetArenaAlivePlayersCountBySquad(squad);
-        aliveTotal += aliveBySquad[squad];
-    }
-
-    for (auto const& [guid, participant] : m_Players)
-    {
-        Player* player = _GetPlayer(guid, participant.OfflineRemoveTime != 0, "Arena::UpdateSquadWorldStates");
-        if (!player)
-            continue;
-
-        uint8 const squad = GetPlayerSquad(guid);
-        uint32 const ours = squad < GetSquadCount() ? aliveBySquad[squad] : 0;
-        uint32 const theirs = aliveTotal - ours;
-        // The arena frame shows the viewer's own side as gold (Alliance) or
-        // green (Horde) - see Player::SetBGTeam - so "ours" goes in that slot.
-        bool const gold = participant.Team == ALLIANCE;
-        player->SendUpdateWorldState(ARENA_WORLD_STATE_ALIVE_PLAYERS_GOLD, gold ? ours : theirs);
-        player->SendUpdateWorldState(ARENA_WORLD_STATE_ALIVE_PLAYERS_GREEN, gold ? theirs : ours);
+        UpdateWorldState(ARENA_WORLD_STATE_SQUAD_SHOW_FIRST + squad, IsSquadInMatch(squad) ? 1 : 0);
+        UpdateWorldState(ARENA_WORLD_STATE_SQUAD_ALIVE_FIRST + squad, GetArenaAlivePlayersCountBySquad(squad));
     }
 }
 

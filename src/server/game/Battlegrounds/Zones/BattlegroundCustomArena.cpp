@@ -192,8 +192,9 @@ void BattlegroundCustomArena::FillInitialWorldStates(WorldPackets::WorldState::I
 {
     // Turns on the "N players remaining" readout in the arena frame. Without it
     // the client receives the alive counts that Arena::FillInitialWorldStates
-    // sends but never displays them.
-    packet.Worldstates.emplace_back(3610, 1); // ARENA_WORLD_STATE_ALIVE_PLAYERS_SHOW
+    // sends but never displays them. A squad match keeps the gold/green pair
+    // off: it shows one line per squad instead (ARENA_WORLD_STATE_SQUAD_*).
+    packet.Worldstates.emplace_back(3610, IsSquadMatch() ? 0 : 1); // ARENA_WORLD_STATE_ALIVE_PLAYERS_SHOW
 
     Arena::FillInitialWorldStates(packet);
 }

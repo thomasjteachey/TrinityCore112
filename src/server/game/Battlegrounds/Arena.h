@@ -46,7 +46,12 @@ enum ArenaSpellIds
 enum ArenaWorldStates
 {
     ARENA_WORLD_STATE_ALIVE_PLAYERS_GREEN   = 3600,
-    ARENA_WORLD_STATE_ALIVE_PLAYERS_GOLD    = 3601
+    ARENA_WORLD_STATE_ALIVE_PLAYERS_GOLD    = 3601,
+    // A squad match's readout: squad N (from 0) has a WorldStateUI row shown
+    // while SHOW_FIRST + N is 1, reading ALIVE_FIRST + N (patch-enUS-A rows
+    // 90170-90173 for Baradin Hold: Four Corners).
+    ARENA_WORLD_STATE_SQUAD_SHOW_FIRST      = 9431,
+    ARENA_WORLD_STATE_SQUAD_ALIVE_FIRST     = 9441
 };
 
 class TC_GAME_API Arena : public Battleground
@@ -78,8 +83,10 @@ class TC_GAME_API Arena : public Battleground
         void EndSquadMatch(uint8 winnerSquad, std::string const& announcement);
         // A rated squad match's ratings, by finishing place (ArenaTeam::PlacedAgainst).
         void EndRatedSquadMatch();
-        // Each player's "alive" readout is their squad against everyone else.
+        // One "N Players Remaining" line per squad (ARENA_WORLD_STATE_SQUAD_*),
+        // for every squad that is in the match.
         void UpdateSquadWorldStates();
+        bool IsSquadInMatch(uint8 squad) const;
         // Squads that had people when the gates opened and have since been
         // wiped out, in the order they fell.
         std::vector<uint8> _eliminatedSquads;

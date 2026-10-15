@@ -219,8 +219,11 @@ uint8 constexpr BATTLEGROUND_NO_SQUAD = 0xFF;
 struct BattlegroundSquadStart
 {
     Position Start;
-    // How the squad is named to everyone, e.g. "North-East".
+    // How the squad is named to everyone, e.g. "Blue".
     std::string Name;
+    // The team flag its members carry in an arena, in place of the side's
+    // gold or green one (Arena::AddPlayer). 0 = the side's.
+    uint32 FlagSpell = 0;
 };
 
 enum class BattlegroundCustomWeather : uint8
@@ -712,6 +715,7 @@ class TC_GAME_API Battleground
         uint32 GetSquadSize() const;
         static uint32 GetSquadSide(uint8 squad) { return (squad % 2) == 0 ? ALLIANCE : HORDE; }
         std::string const& GetSquadName(uint8 squad) const;
+        uint32 GetSquadFlagSpell(uint8 squad) const { return squad < m_SquadStarts.size() ? m_SquadStarts[squad].FlagSpell : 0; }
         // The squad a participant plays in, or BATTLEGROUND_NO_SQUAD. A seat is
         // held from the moment the queue invites someone (or a clone is placed)
         // until they leave, so this already answers on the way in.

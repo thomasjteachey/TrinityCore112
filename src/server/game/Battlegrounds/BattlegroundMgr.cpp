@@ -57,6 +57,7 @@
 #include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "Player.h"
+#include "SpellMgr.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "StringConvert.h"
@@ -239,8 +240,8 @@ namespace
             return squads;
         }
 
-        //                                                   0         1      2  3  4  5  6
-        QueryResult result = WorldDatabase.Query("SELECT BgTypeId, Squad, X, Y, Z, O, Name FROM battleground_squad_start ORDER BY BgTypeId, Squad");
+        //                                                   0         1      2  3  4  5  6     7
+        QueryResult result = WorldDatabase.Query("SELECT BgTypeId, Squad, X, Y, Z, O, Name, FlagSpell FROM battleground_squad_start ORDER BY BgTypeId, Squad");
         if (!result)
         {
             TC_LOG_INFO("server.loading", ">> Loaded 0 battleground squads. DB table `battleground_squad_start` is empty.");
@@ -265,6 +266,13 @@ namespace
             BattlegroundSquadStart start;
             start.Start.Relocate(fields[2].GetFloat(), fields[3].GetFloat(), fields[4].GetFloat(), fields[5].GetFloat());
             start.Name = fields[6].GetString();
+            start.FlagSpell = fields[7].GetUInt32();
+            if (start.FlagSpell && !sSpellMgr->GetSpellInfo(start.FlagSpell))
+            {
+                TC_LOG_ERROR("sql.sql", "Table `battleground_squad_start` has FlagSpell {} for BgTypeId {} squad {}, which does not exist. The squad carries its side's flag.",
+                    start.FlagSpell, bgTypeId, uint32(squad));
+                start.FlagSpell = 0;
+            }
             starts.push_back(std::move(start));
         }
         while (result->NextRow());
