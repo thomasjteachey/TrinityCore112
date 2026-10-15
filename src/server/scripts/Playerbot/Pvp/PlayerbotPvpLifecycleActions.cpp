@@ -3678,7 +3678,28 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return nullptr;
         };
 
-        return findNeutralFlagCarrierForDirective(battleground->GetFlagPickerGUID());
+        // Several players can carry at once where a battleground has more than
+        // one neutral objective (Temple of Kotmogu's four orbs): go for the
+        // nearest carrier the directive applies to.
+        std::vector<ObjectGuid> carriers;
+        battleground->GetObjectiveCarriers(carriers);
+        Player* nearest = nullptr;
+        float nearestDistance = 0.0f;
+        for (ObjectGuid const& carrierGuid : carriers)
+        {
+            Player* carrier = findNeutralFlagCarrierForDirective(carrierGuid);
+            if (!carrier || carrier->GetMapId() != player->GetMapId())
+                continue;
+
+            float const distance = player->GetExactDist2dSq(carrier);
+            if (!nearest || distance < nearestDistance)
+            {
+                nearest = carrier;
+                nearestDistance = distance;
+            }
+        }
+
+        return nearest;
     }
 
     bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)

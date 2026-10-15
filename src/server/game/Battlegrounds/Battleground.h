@@ -683,6 +683,20 @@ class TC_GAME_API Battleground
 
         virtual ObjectGuid GetFlagPickerGUID(int32 /*team*/ = -1) const { return ObjectGuid::Empty; }
         virtual void SetDroppedFlagGUID(ObjectGuid /*guid*/, int32 /*team*/ = -1) { }
+        // Everyone carrying an objective right now. The flag battlegrounds hold
+        // at most one carrier per team and answer through the picker slots
+        // above, which is what this collects by default; Temple of Kotmogu has
+        // four orbs any players can hold at once, so code asking "who carries"
+        // asks this rather than the picker slots.
+        virtual void GetObjectiveCarriers(std::vector<ObjectGuid>& carriers) const
+        {
+            for (int32 team : { int32(TEAM_ALLIANCE), int32(TEAM_HORDE), -1 })
+            {
+                ObjectGuid const guid = GetFlagPickerGUID(team);
+                if (!guid.IsEmpty() && std::find(carriers.begin(), carriers.end(), guid) == carriers.end())
+                    carriers.push_back(guid);
+            }
+        }
         // Flag battlegrounds can expose their currently available pickup and
         // the scoring destination for a specific carrier. Keeping
         // this in the battleground contract lets objective consumers remain

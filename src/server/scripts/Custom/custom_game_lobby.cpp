@@ -102,11 +102,12 @@ enum GossipAction : uint32
     ACTION_SELECT_TV,
     ACTION_SELECT_TTP,
     ACTION_SELECT_RANDOM_ARENA,
+    ACTION_SELECT_TOK,
     // The ported arenas are addressed as a block instead of one constant each:
     // the action id is this base plus the arena's offset within
     // BATTLEGROUND_CUSTOM_ARENA_FIRST..LAST. Adding an arena then costs nothing
     // here, nothing in the menu builder and nothing in the select handler.
-    // Occupies 330..343 today; the block above ends at 318 and the next starts
+    // Occupies 330..343 today; the block above ends at 319 and the next starts
     // at 380, so there is room for 50 arenas before this needs revisiting.
     ACTION_SELECT_CUSTOM_ARENA_BASE = 330,
     ACTION_BATTLEGROUND_OPTIONS = 380,
@@ -222,6 +223,7 @@ std::string BattlegroundNameByType(BattlegroundTypeId type)
         case BATTLEGROUND_BRT: return "Blackrock Throne Deathmatch";
         case BATTLEGROUND_OBC: return "Obsidian Colosseum";
         case BATTLEGROUND_TRT: return "Tanaris Deathmatch";
+        case BATTLEGROUND_TOK: return "Temple of Kotmogu";
         case BATTLEGROUND_BFG: return "Battle for Gilneas";
         case BATTLEGROUND_AV: return "Alterac Valley";
         case BATTLEGROUND_SA: return "Strand of the Ancients";
@@ -304,7 +306,8 @@ uint32 DefaultResourceLimit(BattlegroundTypeId type)
     switch (type)
     {
         case BATTLEGROUND_AB:
-        case BATTLEGROUND_EY: return 1600;
+        case BATTLEGROUND_EY:
+        case BATTLEGROUND_TOK: return 1600;
         case BATTLEGROUND_BFG: return 2000;
         default: return 0;
     }
@@ -315,6 +318,8 @@ uint32 DefaultDeathmatchKillLimit(BattlegroundTypeId type)
     switch (type)
     {
         case BATTLEGROUND_OBC: return 50;
+        // Scored by holding orbs; kills only add to it.
+        case BATTLEGROUND_TOK: return 0;
         default: return 30;
     }
 }
@@ -2119,6 +2124,7 @@ public:
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Blackrock Throne Deathmatch", GOSSIP_SENDER_MAIN, ACTION_SELECT_BRT);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Obsidian Colosseum", GOSSIP_SENDER_MAIN, ACTION_SELECT_OBC);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Tanaris Deathmatch", GOSSIP_SENDER_MAIN, ACTION_SELECT_TRT);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Temple of Kotmogu", GOSSIP_SENDER_MAIN, ACTION_SELECT_TOK);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Battle for Gilneas", GOSSIP_SENDER_MAIN, ACTION_SELECT_BFG);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Alterac Valley", GOSSIP_SENDER_MAIN, ACTION_SELECT_AV);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Strand of the Ancients", GOSSIP_SENDER_MAIN, ACTION_SELECT_SA);
@@ -2166,9 +2172,9 @@ public:
                     GOSSIP_SENDER_MAIN, ACTION_RULE_RESOURCE_RATE, "Percent (100 is normal)", 0, true);
             }
 
-            // Every custom battleground is scored by kills, so they all expose
-            // the kill-limit rule.
-            if (IsCustomBattleground(lobby->SelectedType))
+            // The custom battlegrounds are scored by kills, so they expose the
+            // kill-limit rule - all but the ones with no kill limit to set.
+            if (IsCustomBattleground(lobby->SelectedType) && DefaultDeathmatchKillLimit(lobby->SelectedType))
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT,
                     "Deathmatch kills: " + ConfiguredValue(lobby->Rules.DeathmatchKillLimit, DefaultDeathmatchKillLimit(lobby->SelectedType)),
                     GOSSIP_SENDER_MAIN, ACTION_RULE_KILLS, "Winning kill total (0 restores default)", 0, true);
@@ -2303,6 +2309,7 @@ public:
                 case ACTION_SELECT_BRT: manager.SelectBattleground(player, BATTLEGROUND_BRT, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_OBC: manager.SelectBattleground(player, BATTLEGROUND_OBC, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_TRT: manager.SelectBattleground(player, BATTLEGROUND_TRT, 0); ShowChromieMenu(player); return true;
+                case ACTION_SELECT_TOK: manager.SelectBattleground(player, BATTLEGROUND_TOK, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_BFG: manager.SelectBattleground(player, BATTLEGROUND_BFG, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_AV: manager.SelectBattleground(player, BATTLEGROUND_AV, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_SA: manager.SelectBattleground(player, BATTLEGROUND_SA, 0); ShowChromieMenu(player); return true;

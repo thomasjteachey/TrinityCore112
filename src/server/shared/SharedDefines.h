@@ -3528,6 +3528,7 @@ enum BattlegroundTypeId : uint32
     BATTLEGROUND_NL             = 103, // Nefarian's Arena
     BATTLEGROUND_TRT            = 104, // Tanaris, map 1620 cloned from 1
     BATTLEGROUND_VHR            = 105, // Violet Hold survival, map 1608 cloned from 608
+    BATTLEGROUND_TOK            = 106, // Temple of Kotmogu, map 998 (Ascension's id; retail's 699 cannot queue, see ScheduleQueueUpdate)
     BATTLEGROUND_TP             = 108, // Twin Peaks
     BATTLEGROUND_BFG            = 120, // Battle for Gilneas
     BATTLEGROUND_TV             = 870, // Tol'Viron Arena,            map 980
@@ -3570,7 +3571,8 @@ constexpr bool IsCustomBattleground(BattlegroundTypeId bgTypeId)
     return bgTypeId == BATTLEGROUND_SCM
         || bgTypeId == BATTLEGROUND_BRT
         || bgTypeId == BATTLEGROUND_OBC
-        || bgTypeId == BATTLEGROUND_TRT;
+        || bgTypeId == BATTLEGROUND_TRT
+        || bgTypeId == BATTLEGROUND_TOK;
 }
 
 // Every arena that is not one of Blizzard's five. Same reasoning as
@@ -3782,6 +3784,7 @@ enum BattlegroundQueueTypeId
     BATTLEGROUND_QUEUE_OBC      = 17,
     BATTLEGROUND_QUEUE_TRT      = 18,
     BATTLEGROUND_QUEUE_VHR      = 19,
+    BATTLEGROUND_QUEUE_TOK      = 20,
     MAX_BATTLEGROUND_QUEUE_TYPES
 };
 

@@ -1331,12 +1331,16 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
             return;
         }
 
+    // Called once per carrier, so every value only ever turns on: a battleground
+    // with several carriers at once (Temple of Kotmogu's orbs) must not let a
+    // later carrier clear what an earlier one set.
     auto populateNeutralFlagCarrierValues = [&](ObjectGuid const& carrierGuid)
     {
         if (carrierGuid.IsEmpty())
             return;
 
-            values.playerHasFlag = (carrierGuid == playerGuid);
+            if (carrierGuid == playerGuid)
+                values.playerHasFlag = true;
             Player const* carrier = ObjectAccessor::FindConnectedPlayer(carrierGuid);
             if (!carrier || !carrier->IsAlive() || carrier->GetMapId() != player->GetMapId())
                 return;
@@ -1345,15 +1349,22 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
         TeamId const carrierTeam = assignedCarrierTeam == ALLIANCE ? TEAM_ALLIANCE :
             assignedCarrierTeam == HORDE ? TEAM_HORDE : carrier->GetTeamId();
         if (carrierTeam == botTeam)
-            values.teamFlagCarrierNear = player->IsWithinDistInMap(carrier, 200.0f);
+        {
+            if (player->IsWithinDistInMap(carrier, 200.0f))
+                values.teamFlagCarrierNear = true;
+        }
         else
         {
             values.enemyFlagCarrierActive = true;
-            values.enemyFlagCarrierNear = player->IsWithinDistInMap(carrier, 100.0f);
+            if (player->IsWithinDistInMap(carrier, 100.0f))
+                values.enemyFlagCarrierNear = true;
         }
     };
 
-    populateNeutralFlagCarrierValues(battleground->GetFlagPickerGUID());
+    std::vector<ObjectGuid> carriers;
+    battleground->GetObjectiveCarriers(carriers);
+    for (ObjectGuid const& carrierGuid : carriers)
+        populateNeutralFlagCarrierValues(carrierGuid);
 }
 
     struct SpellDecision
@@ -8351,10 +8362,9 @@ bool PvpCore::IsBattlegroundFlagCarrier(Player const* player)
     if (!battleground)
         return false;
 
-    ObjectGuid const playerGuid = player->GetGUID();
-    if (battleground->GetFlagPickerGUID(TEAM_ALLIANCE) == playerGuid ||
-        battleground->GetFlagPickerGUID(TEAM_HORDE) == playerGuid ||
-        battleground->GetFlagPickerGUID() == playerGuid)
+    std::vector<ObjectGuid> carriers;
+    battleground->GetObjectiveCarriers(carriers);
+    if (std::find(carriers.begin(), carriers.end(), player->GetGUID()) != carriers.end())
         return true;
 
     return std::any_of(kBattlegroundFlagCarrierAuraIds.begin(), kBattlegroundFlagCarrierAuraIds.end(),
