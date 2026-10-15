@@ -40,6 +40,9 @@ ARCHIVES = {
     "world-terrain": {"patch-Y.MPQ": ["Light"]},
 }
 TERRAIN_INTO = ("patch-enUS-A", "patch-enUS-A.MPQ")
+# Other tools reuse this one by overriding ARCHIVES / TERRAIN_INTO (None: no terrain) / BACKUP_TAG
+# before calling extract, pack and publish (tools/arenas/aoa_pillars).
+BACKUP_TAG = "eoe"
 
 
 def md5(path):
@@ -230,8 +233,8 @@ def publish(work, only):
             raise SystemExit("REFUSING %s: staged zip changed since pack" % zipname)
         major, minor = live_ver.strip().split(".")
         new_ver = "%s.%05d" % (major, int(minor) + 1)
-        shutil.copy2(zpath, "%s.bak-eoe-%s" % (zpath, live_ver))
-        shutil.copy2(vpath, "%s.bak-eoe-%s" % (vpath, live_ver))
+        shutil.copy2(zpath, "%s.bak-%s-%s" % (zpath, BACKUP_TAG, live_ver))
+        shutil.copy2(vpath, "%s.bak-%s-%s" % (vpath, BACKUP_TAG, live_ver))
         tmp = zpath + ".tmp-eoe"
         shutil.copy2(staged, tmp)
         if md5(tmp) != entry["staged_md5"]:
