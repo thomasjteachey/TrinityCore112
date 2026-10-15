@@ -22,6 +22,7 @@
 
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 enum ArenaBroadcastTexts
@@ -67,6 +68,9 @@ class TC_GAME_API Arena : public Battleground
 
         void HandleKillPlayer(Player* player, Player* killer) override;
 
+        void UpdateSquadFeed() override;
+        void SendSquadFeedTo(Player* player) override;
+
     private:
         uint32 GetArenaAlivePlayersCountByTeam(uint32 team) const;
 
@@ -87,6 +91,19 @@ class TC_GAME_API Arena : public Battleground
         // for every squad that is in the match.
         void UpdateSquadWorldStates();
         bool IsSquadInMatch(uint8 squad) const;
+        // The squad feed's pieces (see UpdateSquadFeed in Arena.cpp). Members
+        // come in seat order - m_Players order - in both the roster and the
+        // states, which is what lets the client pair them up.
+        typedef std::unordered_map<ObjectGuid, Player*> SquadFeedPlayers;
+        SquadFeedPlayers GetSquadFeedPlayers() const;
+        std::vector<ObjectGuid> GetSquadFeedMembers(uint8 squad) const;
+        std::string BuildSquadFeedRoster(uint8 squad, std::vector<ObjectGuid> const& members, SquadFeedPlayers const& players) const;
+        std::string BuildSquadFeedStates(uint8 squad, std::vector<ObjectGuid> const& members, SquadFeedPlayers const& players) const;
+        std::string BuildSquadFeedWinner() const;
+        void BroadcastSquadFeedLine(std::string const& line, SquadFeedPlayers const& players) const;
+        std::string _squadFeedRoster[MAX_BATTLEGROUND_SQUADS];
+        std::string _squadFeedStates[MAX_BATTLEGROUND_SQUADS];
+        bool _squadFeedWinnerSent = false;
         // Squads that had people when the gates opened and have since been
         // wiped out, in the order they fell.
         std::vector<uint8> _eliminatedSquads;

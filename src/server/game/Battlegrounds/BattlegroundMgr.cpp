@@ -305,7 +305,7 @@ BattlegroundMgr::BattlegroundMgr() :
     m_NextPeriodicQueueUpdateTime(BATTLEGROUND_QUEUE_UPDATE_INTERVAL),
     m_NextRatedArenaUpdate(sWorld->getIntConfig(CONFIG_ARENA_RATED_UPDATE_TIMER)),
     m_NextAutoDistributionTime(0),
-    m_AutoDistributionTimeChecker(0), m_UpdateTimer(0), m_ArenaTesting(false), m_Testing(false)
+    m_AutoDistributionTimeChecker(0), m_UpdateTimer(0), m_SquadFeedTimer(0), m_ArenaTesting(false), m_Testing(false)
 { }
 
 BattlegroundMgr::~BattlegroundMgr()
@@ -367,6 +367,27 @@ void BattlegroundMgr::Update(uint32 diff)
         }
 
         m_UpdateTimer = 0;
+    }
+
+    // A squad match's enemy frames want health more often than the objective
+    // tick above gives it. Only the squad types are walked; the template of
+    // each has no map and is skipped by the feed itself.
+    m_SquadFeedTimer += diff;
+    if (m_SquadFeedTimer >= BATTLEGROUND_SQUAD_FEED_INTERVAL)
+    {
+        m_SquadFeedTimer = 0;
+        for (auto const& [bgTypeId, data] : bgDataStore)
+        {
+            if (!IsSquadBattleground(bgTypeId))
+                continue;
+
+            for (auto const& [instanceId, bg] : data.m_Battlegrounds)
+            {
+                (void)instanceId;
+                if (bg && !bg->ToBeDeleted())
+                    bg->UpdateSquadFeed();
+            }
+        }
     }
 
     // update events timer

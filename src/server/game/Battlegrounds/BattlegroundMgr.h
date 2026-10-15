@@ -37,6 +37,8 @@ enum BattlegroundMisc
     BATTLEGROUND_ARENA_POINT_DISTRIBUTION_DAY   = 86400,    // seconds in a day
 
     BATTLEGROUND_OBJECTIVE_UPDATE_INTERVAL      = 1000,
+    // How often a squad match's enemy-frame feed is looked at (Arena::UpdateSquadFeed).
+    BATTLEGROUND_SQUAD_FEED_INTERVAL            = 250,
     BATTLEGROUND_QUEUE_UPDATE_INTERVAL          = 15 * IN_MILLISECONDS
 };
 
@@ -200,6 +202,7 @@ class TC_GAME_API BattlegroundMgr
         time_t m_NextAutoDistributionTime;
         uint32 m_AutoDistributionTimeChecker;
         uint32 m_UpdateTimer;
+        uint32 m_SquadFeedTimer;
         bool   m_ArenaTesting;
         bool   m_Testing;
         BattleMastersMap mBattleMastersMap;

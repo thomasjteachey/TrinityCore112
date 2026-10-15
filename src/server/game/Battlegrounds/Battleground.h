@@ -754,6 +754,15 @@ class TC_GAME_API Battleground
         // The average matchmaker rating of the other rated squads: what someone
         // leaving or refusing the match is counted as losing to.
         uint32 GetSquadOpponentsMatchmakerRating(uint8 squad) const;
+        // The multi-team arena enemy frames and the scoreboard's squad colours
+        // (client CenturionSquadFrames.lua) learn every squad's roster and state
+        // from CCGAME addon lines, since arena1-5 cannot hold three enemy
+        // squads. Arena implements both; BattlegroundMgr ticks the feed and a
+        // client that has just loaded asks for everything (CCGAMEREQ SQUADS).
+        // Anywhere else the answer is "SQ:-", which clears the frames.
+        virtual void UpdateSquadFeed() { }
+        virtual void SendSquadFeedTo(Player* player);
+        static void SendSquadFeedLine(Player* player, std::string const& line);
 
         // Packet Transfer
         // method that should fill worldpacket with actual world states (not yet implemented for all battlegrounds!)

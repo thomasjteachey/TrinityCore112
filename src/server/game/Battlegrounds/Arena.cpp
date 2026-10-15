@@ -17,9 +17,12 @@
 
 #include "Arena.h"
 #include "ArenaScore.h"
+#include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
+#include "CharacterCache.h"
 #include "Chat.h"
 #include "Log.h"
+#include "Map.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "StringFormat.h"
@@ -117,6 +120,11 @@ void Arena::RemovePlayer(Player* player, ObjectGuid guid, uint32 /*team*/)
         if (uint32 const squadFlag = GetSquadFlagSpell(GetPlayerSquad(guid)))
             player->RemoveAurasDueToSpell(squadFlag);
 
+    // Their enemy frames go with them; the others see the roster change on
+    // the feed's next look.
+    if (player && IsSquadMatch())
+        SendSquadFeedLine(player, "SQ:-");
+
     if (GetStatus() == STATUS_WAIT_LEAVE)
         return;
 
@@ -138,6 +146,196 @@ void Arena::FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& pa
 
     packet.Worldstates.emplace_back(ARENA_WORLD_STATE_ALIVE_PLAYERS_GREEN, GetArenaAlivePlayersCountByTeam(HORDE));
     packet.Worldstates.emplace_back(ARENA_WORLD_STATE_ALIVE_PLAYERS_GOLD, GetArenaAlivePlayersCountByTeam(ALLIANCE));
+}
+
+// ---------------------------------------------------------------- squad feed
+//
+// What the multi-team arena enemy frames (client CenturionSquadFrames.lua)
+// draw, and what colours the scoreboard by squad - all CCGAME addon lines:
+//
+//   SQ:<mine>:<squads>        you are in squad <mine> (0-3, "-" for none) of <squads>
+//   SQ:-                      not a squad match, or you left it: clear everything
+//   SQR:<s>:<team>:<members>  squad s's roster in seat order, "name,class;...",
+//                             <team> being its arena team's name (rated only)
+//   SQH:<s>:<states>          the same members' states, comma-separated:
+//                             <health%>.<power%>.<power type>, or d (dead),
+//                             s (stealthed or invisible), o (not on the map)
+//   SQW:<s> / SQW:-           the winning squad, or a draw, once it is over
+//
+// A line goes out when it changes, looked at every BATTLEGROUND_SQUAD_FEED_INTERVAL;
+// a client that has just loaded asks for all of it (CCGAMEREQ SQUADS). A member
+// in stealth is "s" to everyone, the way the stock frames lose an opponent who
+// stealths: their health is not sent while they cannot be seen.
+
+Arena::SquadFeedPlayers Arena::GetSquadFeedPlayers() const
+{
+    // From the map rather than ObjectAccessor: it holds the bot clones too, and
+    // it asks nothing of anyone who has already gone.
+    SquadFeedPlayers players;
+    if (BattlegroundMap* map = FindBgMap())
+        for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+            if (Player* player = itr->GetSource())
+                players[player->GetGUID()] = player;
+    return players;
+}
+
+std::vector<ObjectGuid> Arena::GetSquadFeedMembers(uint8 squad) const
+{
+    std::vector<ObjectGuid> members;
+    for (auto const& [guid, participant] : m_Players)
+    {
+        (void)participant;
+        if (GetPlayerSquad(guid) == squad)
+            members.push_back(guid);
+    }
+    return members;
+}
+
+std::string Arena::BuildSquadFeedRoster(uint8 squad, std::vector<ObjectGuid> const& members, SquadFeedPlayers const& players) const
+{
+    std::string line = Trinity::StringFormat("SQR:{}:", squad);
+    if (uint32 const arenaTeamId = GetSquadArenaTeamId(squad))
+        if (ArenaTeam* arenaTeam = sArenaTeamMgr->GetArenaTeamById(arenaTeamId))
+            line += arenaTeam->GetName();
+    line += ':';
+
+    bool first = true;
+    for (ObjectGuid guid : members)
+    {
+        // The name the client knows them by (a clone's own name is internal).
+        std::string name;
+        uint32 playerClass = 0;
+        SquadFeedPlayers::const_iterator const itr = players.find(guid);
+        if (itr != players.end())
+        {
+            name = GetPlayerDisplayName(itr->second);
+            playerClass = itr->second->GetClass();
+        }
+        else if (CharacterCacheEntry const* entry = sCharacterCache->GetCharacterCacheByGuid(guid))
+        {
+            name = entry->Name;
+            playerClass = entry->Class;
+        }
+        if (name.empty())
+            name = "?";
+
+        if (!first)
+            line += ';';
+        first = false;
+        line += name;
+        line += ',';
+        line += std::to_string(playerClass);
+    }
+    return line;
+}
+
+std::string Arena::BuildSquadFeedStates(uint8 squad, std::vector<ObjectGuid> const& members, SquadFeedPlayers const& players) const
+{
+    std::string line = Trinity::StringFormat("SQH:{}:", squad);
+    bool first = true;
+    for (ObjectGuid guid : members)
+    {
+        if (!first)
+            line += ',';
+        first = false;
+
+        SquadFeedPlayers::const_iterator const itr = players.find(guid);
+        Player* player = itr != players.end() ? itr->second : nullptr;
+        if (!player)
+            line += 'o';
+        else if (!IsArenaAlive(guid))
+            line += 'd';
+        else if (player->HasStealthAura() || player->HasInvisibilityAura())
+            line += 's';
+        else
+        {
+            // Rounded up, so nobody alive reads 0%.
+            uint64 const maxHealth = std::max<uint32>(player->GetMaxHealth(), 1);
+            uint32 const health = uint32(std::min<uint64>((uint64(player->GetHealth()) * 100 + maxHealth - 1) / maxHealth, 100));
+            Powers const powerType = player->GetPowerType();
+            uint64 const maxPower = player->GetMaxPower(powerType);
+            uint32 const power = maxPower ? uint32(std::min<uint64>(uint64(player->GetPower(powerType)) * 100 / maxPower, 100)) : 0;
+            line += Trinity::StringFormat("{}.{}.{}", std::max<uint32>(health, 1), power, uint32(powerType));
+        }
+    }
+    return line;
+}
+
+std::string Arena::BuildSquadFeedWinner() const
+{
+    uint8 const winner = GetWinnerSquad();
+    return winner < GetSquadCount() ? Trinity::StringFormat("SQW:{}", winner) : std::string("SQW:-");
+}
+
+void Arena::BroadcastSquadFeedLine(std::string const& line, SquadFeedPlayers const& players) const
+{
+    WorldPacket data;
+    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, "CCGAME\t" + line, 0);
+    for (auto const& [guid, player] : players)
+    {
+        (void)guid;
+        if (player->GetSession() && !player->GetSession()->IsVirtualSession())
+            player->SendDirectMessage(&data);
+    }
+}
+
+void Arena::UpdateSquadFeed()
+{
+    if (!IsSquadMatch() || !FindBgMap())
+        return;
+
+    SquadFeedPlayers const players = GetSquadFeedPlayers();
+    for (uint8 squad = 0; squad < GetSquadCount() && squad < MAX_BATTLEGROUND_SQUADS; ++squad)
+    {
+        std::vector<ObjectGuid> const members = GetSquadFeedMembers(squad);
+        std::string roster = BuildSquadFeedRoster(squad, members, players);
+        if (roster != _squadFeedRoster[squad])
+        {
+            _squadFeedRoster[squad] = std::move(roster);
+            // The states are read in the roster's order, so they follow it out.
+            _squadFeedStates[squad].clear();
+            BroadcastSquadFeedLine(_squadFeedRoster[squad], players);
+        }
+
+        std::string states = BuildSquadFeedStates(squad, members, players);
+        if (states != _squadFeedStates[squad])
+        {
+            _squadFeedStates[squad] = std::move(states);
+            BroadcastSquadFeedLine(_squadFeedStates[squad], players);
+        }
+    }
+
+    if (GetStatus() == STATUS_WAIT_LEAVE && !_squadFeedWinnerSent)
+    {
+        _squadFeedWinnerSent = true;
+        BroadcastSquadFeedLine(BuildSquadFeedWinner(), players);
+    }
+}
+
+void Arena::SendSquadFeedTo(Player* player)
+{
+    if (!IsSquadMatch())
+    {
+        Battleground::SendSquadFeedTo(player);
+        return;
+    }
+    if (!player)
+        return;
+
+    uint8 const mine = GetPlayerSquad(player->GetGUID());
+    SendSquadFeedLine(player, Trinity::StringFormat("SQ:{}:{}",
+        mine < GetSquadCount() ? std::to_string(mine) : std::string("-"), uint32(GetSquadCount())));
+
+    SquadFeedPlayers const players = GetSquadFeedPlayers();
+    for (uint8 squad = 0; squad < GetSquadCount() && squad < MAX_BATTLEGROUND_SQUADS; ++squad)
+    {
+        std::vector<ObjectGuid> const members = GetSquadFeedMembers(squad);
+        SendSquadFeedLine(player, BuildSquadFeedRoster(squad, members, players));
+        SendSquadFeedLine(player, BuildSquadFeedStates(squad, members, players));
+    }
+
+    if (_squadFeedWinnerSent)
+        SendSquadFeedLine(player, BuildSquadFeedWinner());
 }
 
 bool Arena::IsSquadInMatch(uint8 squad) const

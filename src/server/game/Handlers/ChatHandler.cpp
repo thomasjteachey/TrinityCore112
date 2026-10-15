@@ -248,6 +248,21 @@ bool HandleWSGFlagSyncRequest(Player* sender, uint32 type, uint32 lang, std::str
     return true;
 }
 
+// The multi-team arena frames (CenturionSquadFrames.lua) ask for the whole
+// picture once their UI is up: every squad's roster and state, or "SQ:-"
+// outside a squad match, which clears them.
+bool HandleSquadFeedRequest(Player* sender, uint32 lang, std::string const& msg)
+{
+    if (!sender || lang != LANG_ADDON || msg != "CCGAMEREQ\tSQUADS")
+        return false;
+
+    if (Battleground* battleground = sender->GetBattleground())
+        battleground->SendSquadFeedTo(sender);
+    else
+        Battleground::SendSquadFeedLine(sender, "SQ:-");
+    return true;
+}
+
 bool HandleCustomGameRulesRequest(Player* sender, uint32 type, uint32 lang, std::string const& msg)
 {
     if (!sender || lang != LANG_ADDON || type != CHAT_MSG_BATTLEGROUND || msg != "CCGAMEREQ\tRULES")
@@ -453,6 +468,8 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
         if (HandleWSGFlagSyncRequest(sender, type, lang, msg))
             return;
         if (HandleCustomGameRulesRequest(sender, type, lang, msg))
+            return;
+        if (HandleSquadFeedRequest(sender, lang, msg))
             return;
         if (Tournament::HandleAddonRequest(sender, lang, msg))
             return;

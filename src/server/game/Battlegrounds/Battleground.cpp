@@ -2315,6 +2315,21 @@ void Battleground::SendCustomGameRulesTo(Player* player) const
     player->SendDirectMessage(&data);
 }
 
+void Battleground::SendSquadFeedTo(Player* player)
+{
+    SendSquadFeedLine(player, "SQ:-");
+}
+
+void Battleground::SendSquadFeedLine(Player* player, std::string const& line)
+{
+    if (!player || !player->GetSession() || player->GetSession()->IsVirtualSession())
+        return;
+
+    WorldPacket data;
+    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, "CCGAME\t" + line, 0);
+    player->SendDirectMessage(&data);
+}
+
 void Battleground::SendSpectatorBattlefieldStatusTo(Player* player)
 {
     if (!player || !player->GetSession() || player->GetSession()->IsVirtualSession())
