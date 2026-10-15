@@ -24,14 +24,17 @@ rays actually crossing the building pay. If profiling ever shows this hot,
 port BIH::buildHierarchy; the file format needs no change.
 
 Usage:
-  python build_go_vmo.py <model.m2> <name> <dtree> <outdir> <displayId> [<displayId>...]
+  python build_go_vmo.py [--doodad] <model.m2> <name> <dtree> <outdir> <displayId> [<displayId>...]
 
   <name>   the model name to register, e.g. WgWorkshopBGCol.m2 - the vmo is
            written as <outdir>/<name>.vmo
   <dtree>  path to an existing GameObjectModels.dtree (rewritten in place)
 
 isWmo is written as 1: converted buildings are WMO-class blockers, and the
-flag also keeps area-info queries treating them as structures.
+flag also keeps area-info queries treating them as structures. --doodad
+writes 0 instead, for a stock M2 prop (a pillar, a crystal): it blocks rays
+all the same - GameObjectModel::intersectRay never looks at the flag - but
+stays out of the area/indoor lookups, which only map objects take part in.
 """
 import struct
 import sys
@@ -100,8 +103,13 @@ def rewrite_dtree(dtree_path, entries):
     return existing, len(kept)
 
 def main():
-    m2_path, name, dtree, outdir = sys.argv[1:5]
-    display_ids = [int(a) for a in sys.argv[5:]]
+    args = sys.argv[1:]
+    is_wmo = 1
+    if args and args[0] == "--doodad":
+        is_wmo = 0
+        args = args[1:]
+    m2_path, name, dtree, outdir = args[0:4]
+    display_ids = [int(a) for a in args[4:]]
     assert display_ids, "need at least one displayId"
 
     verts, tris = read_collision(m2_path)
@@ -112,8 +120,9 @@ def main():
     print(f"{out_path}: {len(verts)} verts, {len(tris)} tris, "
           f"bounds ({lo[0]:.1f},{lo[1]:.1f},{lo[2]:.1f})..({hi[0]:.1f},{hi[1]:.1f},{hi[2]:.1f})")
 
-    entries = [(d, 1, name, lo, hi) for d in display_ids]
+    entries = [(d, is_wmo, name, lo, hi) for d in display_ids]
     existing, kept = rewrite_dtree(dtree, entries)
-    print(f"{dtree}: {existing} entries read, {kept} kept, {len(entries)} of ours written")
+    print(f"{dtree}: {existing} entries read, {kept} kept, {len(entries)} of ours written (isWmo {is_wmo})")
 
-main()
+if __name__ == "__main__":
+    main()
