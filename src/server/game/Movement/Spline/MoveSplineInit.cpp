@@ -16,7 +16,9 @@
  */
 
 #include "MoveSplineInit.h"
+#include "Battleground.h"
 #include "Creature.h"
+#include "GameObject.h"
 #include "GameTime.h"
 #include "Log.h"
 #include "Map.h"
@@ -31,8 +33,10 @@
 #include "Opcodes.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+#include <algorithm>
 #include <optional>
 #include <unordered_map>
+#include <vector>
 
 namespace Movement
 {
@@ -74,7 +78,8 @@ namespace Movement
     //
     // Only WMO collision is tested: arena bounds are WMOs, and M2 props are
     // what navmesh corners hug at agent radius, so including them would trip
-    // on legal paths. Gameobjects (gates) are left out for the same reason.
+    // on legal paths. Gameobjects are left out for the same reason, except
+    // the gates a battleground reports still standing (IsBotSplineLegThroughGate).
     //
     // In an arena the chest-height ray alone decides, because arena walls are
     // what keeps bots in. Several arena perimeters are parapets only 1.5 to
@@ -92,6 +97,86 @@ namespace Movement
     // a minute at a time. A step, a ledge lip or a floor the leg climbs over
     // leaves the space above the head open, and the navmesh walks it. A point
     // past a low wall is off the mesh or on an island of its own.
+    // The gates a battleground still has standing, by position. Gates are
+    // gameobjects and the navmesh holds none, so the pathfinder draws its
+    // routes straight through a closed Strand of the Ancients or Isle of
+    // Conquest gate, and without this the bot walks through it. Read once per
+    // map update at most: a route is tested leg by leg.
+    static std::vector<Vector3> const& GetStandingGatePositions(Unit const* unit)
+    {
+        struct GateCache
+        {
+            Map const* map = nullptr;
+            uint32 readMs = 0;
+            std::vector<Vector3> positions;
+        };
+        thread_local GateCache cache;
+
+        Map* map = unit->FindMap();
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        if (cache.map == map && nowMs - cache.readMs < 250)
+            return cache.positions;
+
+        cache.map = map;
+        cache.readMs = nowMs;
+        cache.positions.clear();
+
+        BattlegroundMap* battlegroundMap = map ? map->ToBattlegroundMap() : nullptr;
+        Battleground* battleground = battlegroundMap ? battlegroundMap->GetBG() : nullptr;
+        if (!battleground)
+            return cache.positions;
+
+        GuidVector gates;
+        battleground->GetStandingGates(gates);
+        for (ObjectGuid const& gateGuid : gates)
+            if (GameObject const* gate = map->GetGameObject(gateGuid))
+                cache.positions.emplace_back(gate->GetPositionX(), gate->GetPositionY(), gate->GetPositionZ());
+
+        return cache.positions;
+    }
+
+    // A leg is refused at a standing gate when gameobject collision blocks it
+    // both at chest height and well above the head: a gate does, the crate or
+    // banner that navmesh corners hug beside it does not. Only legs passing
+    // near a gate are tested, since gameobject collision is otherwise left out
+    // on purpose (see below).
+    static bool IsBotSplineLegThroughGate(Unit const* unit, Map const* map, Vector3 const& from, Vector3 const& to)
+    {
+        std::vector<Vector3> const& gates = GetStandingGatePositions(unit);
+        if (gates.empty())
+            return false;
+
+        // The widest gate model (Isle of Conquest's Alliance gate) spans 37
+        // yards either side of its origin.
+        constexpr float GateReach = 40.0f;
+        Vector3 const leg(to.x - from.x, to.y - from.y, 0.0f);
+        float const legLengthSq = leg.squaredLength();
+        bool nearGate = false;
+        for (Vector3 const& gate : gates)
+        {
+            Vector3 const toGate(gate.x - from.x, gate.y - from.y, 0.0f);
+            float const t = legLengthSq > 0.0f ? std::clamp(toGate.dot(leg) / legLengthSq, 0.0f, 1.0f) : 0.0f;
+            Vector3 const closest(from.x + leg.x * t, from.y + leg.y * t, 0.0f);
+            Vector3 const offset(gate.x - closest.x, gate.y - closest.y, 0.0f);
+            if (offset.squaredLength() <= GateReach * GateReach)
+            {
+                nearGate = true;
+                break;
+            }
+        }
+
+        if (!nearGate)
+            return false;
+
+        auto const blockedAt = [map, unit, &from, &to](float height)
+        {
+            return !map->isInLineOfSight(from.x, from.y, from.z + height, to.x, to.y, to.z + height,
+                unit->GetPhaseMask(), LINEOFSIGHT_CHECK_GOBJECT, VMAP::ModelIgnoreFlags::Nothing);
+        };
+
+        return blockedAt(1.5f) && blockedAt(4.0f);
+    }
+
     static bool IsBotSplineLegBlocked(Unit const* unit, Map const* map, std::optional<PathGenerator>& navmesh,
         Vector3 const& from, Vector3 const& to)
     {
@@ -105,6 +190,9 @@ namespace Movement
         constexpr float OverheadHeight = 2.5f;
         if ((to - from).squaredLength() < 0.25f)
             return false;
+
+        if (IsBotSplineLegThroughGate(unit, map, from, to))
+            return true;
 
         if (!blockedAt(from, to, ChestHeight))
             return false;

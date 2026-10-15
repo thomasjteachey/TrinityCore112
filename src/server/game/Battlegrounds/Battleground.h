@@ -67,6 +67,77 @@ struct BattlegroundNodeObjective
     BattlegroundNodeStatus Status = BattlegroundNodeStatus::Neutral;
     Position Location;
     ObjectGuid BannerGuid = ObjectGuid::Empty;
+    // A base held by standing on it rather than by clicking a banner (the Eye
+    // of the Storm towers): the radius around Location a body counts from.
+    // Zero for a banner base, which is taken through BannerGuid.
+    float CaptureRadius = 0.0f;
+};
+
+// The objectives below describe a battleground to anything that has to play it
+// without knowing which one it is - today the playerbot module. Each is
+// answered for the asking player's team, like the node objectives above.
+
+// A gate or wall that only siege damage brings down (Strand of the Ancients,
+// Isle of Conquest).
+struct BattlegroundSiegeObjective
+{
+    uint32 Id = 0;
+    ObjectGuid GateGuid = ObjectGuid::Empty;
+    // Open ground in front of the gate on the attackers' side, where a charge
+    // is planted, a ram stands, and the defenders meet them.
+    Position Location;
+    // The asking player's team holds it.
+    bool Friendly = false;
+    // Bringing it down is useful now: it stands, and nothing still standing in
+    // front of it has to fall first.
+    bool Breachable = false;
+};
+
+// Explosives the asking player's team can plant against an enemy gate.
+struct BattlegroundSiegeChargeInfo
+{
+    // The charge, used from the bag next to the gate.
+    uint32 ItemId = 0;
+    // The game objects that hand one out to this player right now.
+    GuidVector Sources;
+};
+
+// A commander whose death decides or swings the match.
+struct BattlegroundBossObjective
+{
+    uint32 Id = 0;
+    ObjectGuid BossGuid = ObjectGuid::Empty;
+    // The asking player's team fights for it.
+    bool Friendly = false;
+    // The attackers should go for it now.
+    bool Engageable = false;
+    // A spot to reach before heading for the boss - the gate the attackers
+    // broke into its keep through - when the straight route runs into a wall
+    // still standing. Ignored while HasApproach is false.
+    bool HasApproach = false;
+    Position Approach;
+};
+
+// A one-way shortcut used by clicking it: a keep teleporter, a defender portal.
+struct BattlegroundTeleporter
+{
+    ObjectGuid GoGuid = ObjectGuid::Empty;
+    // Where the user stands to click it, and where it puts them.
+    Position Entrance;
+    Position Exit;
+};
+
+// A ledge players leave by jumping off it, which the navmesh does not join to
+// the ground below: Eye of the Storm's start platforms. Somebody on the island
+// - within IslandRadius of IslandCentre, horizontally, and no lower than
+// IslandMinZ - leaves by Edge and comes down at Landing.
+struct BattlegroundDropExit
+{
+    Position IslandCentre;
+    float IslandRadius = 0.0f;
+    float IslandMinZ = 0.0f;
+    Position Edge;
+    Position Landing;
 };
 
 // Where a match's combatants - and the pets, guardians and totems they brought -
@@ -746,9 +817,28 @@ class TC_GAME_API Battleground
         // independent of individual battleground layouts.
         virtual ObjectGuid GetFlagPickupGUID(ObjectGuid /*playerGuid*/) const { return ObjectGuid::Empty; }
         virtual bool GetFlagCapturePosition(ObjectGuid /*carrierGuid*/, Position& /*position*/) const { return false; }
+        // The area trigger a carrier has to be standing in for the capture to
+        // count, or 0 when GetFlagCapturePosition is only a place to wait.
+        // Clientless players never send CMSG_AREATRIGGER, so whoever moves them
+        // reproduces the client's report once they are inside it.
+        virtual uint32 GetFlagCaptureAreaTrigger(ObjectGuid /*carrierGuid*/) const { return 0; }
         virtual uint32 GetDynamicNodeCount() const { return 0; }
         virtual bool GetDynamicNodeInfo(ObjectGuid /*playerGuid*/, uint32 /*nodeId*/, BattlegroundNodeObjective& /*node*/) const { return false; }
         bool GetNodeObjective(ObjectGuid playerGuid, BattlegroundNodeObjective& objective) const;
+        // Siege, commanders and shortcuts: see the objective structs above.
+        virtual uint32 GetSiegeObjectiveCount() const { return 0; }
+        virtual bool GetSiegeObjectiveInfo(ObjectGuid /*playerGuid*/, uint32 /*index*/, BattlegroundSiegeObjective& /*objective*/) const { return false; }
+        virtual bool GetSiegeChargeInfo(ObjectGuid /*playerGuid*/, BattlegroundSiegeChargeInfo& /*charge*/) const { return false; }
+        // Living siege vehicles the asking player's team may drive at a gate.
+        virtual void GetSiegeVehicles(ObjectGuid /*playerGuid*/, GuidVector& /*vehicles*/) const { }
+        // Every gate still standing that nobody walks through, whichever side
+        // holds it. Navmesh does not contain gameobjects, so a route the
+        // pathfinder draws through one has to be refused by whoever follows it.
+        virtual void GetStandingGates(GuidVector& /*gates*/) const { }
+        virtual uint32 GetBossObjectiveCount() const { return 0; }
+        virtual bool GetBossObjectiveInfo(ObjectGuid /*playerGuid*/, uint32 /*index*/, BattlegroundBossObjective& /*boss*/) const { return false; }
+        virtual void GetTeleporters(ObjectGuid /*playerGuid*/, std::vector<BattlegroundTeleporter>& /*teleporters*/) const { }
+        virtual void GetDropExits(ObjectGuid /*playerGuid*/, std::vector<BattlegroundDropExit>& /*exits*/) const { }
         virtual void HandleQuestComplete(uint32 /*questid*/, Player* /*player*/) { }
         virtual bool CanActivateGO(int32 /*entry*/, uint32 /*team*/) const { return true; }
         virtual bool IsSpellAllowed(uint32 /*spellId*/, Player const* /*player*/) const { return true; }

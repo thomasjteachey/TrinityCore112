@@ -98,6 +98,23 @@ enum SAGameObjectIds
     GO_CHAMBER_OF_ANCIENT_RELICS            = 192549,
 };
 
+enum SAItemIds
+{
+    // Handed out by the Seaforium Bomb piles (spell 52415).
+    ITEM_MASSIVE_SEAFORIUM_CHARGE           = 39213
+};
+
+// Node ids of BattlegroundSA::GetDynamicNodeInfo: the three graveyards the
+// attackers can take, then the Titan Relic.
+enum BG_SA_DynamicNodes
+{
+    BG_SA_NODE_RIGHT_GY = 0,
+    BG_SA_NODE_LEFT_GY,
+    BG_SA_NODE_CENTRAL_GY,
+    BG_SA_NODE_TITAN_RELIC,
+    BG_SA_DYNAMIC_NODE_COUNT
+};
+
 enum BG_SA_Timers
 {
     BG_SA_BOAT_START    =  60 * IN_MILLISECONDS,
@@ -608,7 +625,26 @@ class BattlegroundSA : public Battleground
         // Control Phase Shift
         bool IsSpellAllowed(uint32 spellId, Player const* player) const override;
 
+        /* Objectives for players without a client (Battleground.h) */
+        uint32 GetDynamicNodeCount() const override { return BG_SA_DYNAMIC_NODE_COUNT; }
+        bool GetDynamicNodeInfo(ObjectGuid playerGuid, uint32 nodeId, BattlegroundNodeObjective& node) const override;
+        uint32 GetSiegeObjectiveCount() const override { return MAX_GATES; }
+        bool GetSiegeObjectiveInfo(ObjectGuid playerGuid, uint32 index, BattlegroundSiegeObjective& objective) const override;
+        bool GetSiegeChargeInfo(ObjectGuid playerGuid, BattlegroundSiegeChargeInfo& charge) const override;
+        void GetSiegeVehicles(ObjectGuid playerGuid, GuidVector& vehicles) const override;
+        void GetStandingGates(GuidVector& gates) const override;
+        void GetTeleporters(ObjectGuid playerGuid, std::vector<BattlegroundTeleporter>& teleporters) const override;
+
     private:
+        /// A round is being fought: not a warmup, not between rounds
+        bool IsRoundInProgress() const;
+        /// The team `playerGuid` plays for in this match; false when it is not in it
+        bool GetParticipantTeamId(ObjectGuid playerGuid, TeamId& teamId) const;
+        /// The gate stands and every wall in front of it is open
+        bool IsGateBreachable(uint32 gateId) const;
+        /// GetBGObject / GetBGCreature for const callers, without the error log
+        GameObject* FindMatchObject(uint32 type) const;
+        Creature* FindMatchCreature(uint32 type) const;
 
         /**
          * \brief Called on setup and between the two round
@@ -632,7 +668,7 @@ class BattlegroundSA : public Battleground
         /// Set selectable or not demolisher, called on battle start, when boats arrive to dock
         void DemolisherStartState(bool start);
         /// Checks if a player can interact with the given object
-        bool CanInteractWithObject(uint32 objectId);
+        bool CanInteractWithObject(uint32 objectId) const;
         /// Updates interaction flags of specific objects
         void UpdateObjectInteractionFlags(uint32 objectId);
         void UpdateObjectInteractionFlags();

@@ -207,6 +207,15 @@ Playerbot.BgFill.UseOfflineBots = 1
 
 Playerbot.BgFill.AllowHumanMirrors = 1
 
+#    Playerbot.BgObjectives.SiegeVehicles
+#        Description: Bots drive the siege vehicles a battleground offers (Strand of the Ancients'
+#                     demolishers, Isle of Conquest's siege engines and demolishers) at the gate
+#                     their team is breaking. Off: they carry charges instead, and a bot already in
+#                     a vehicle climbs out. Picked up by .reload config.
+#        Default:     1
+
+Playerbot.BgObjectives.SiegeVehicles = 1
+
 #    Playerbot.BgFill.Tier.Easy.Characters
 #    Playerbot.BgFill.Tier.Medium.Characters
 #    Playerbot.BgFill.Tier.Hard.Characters

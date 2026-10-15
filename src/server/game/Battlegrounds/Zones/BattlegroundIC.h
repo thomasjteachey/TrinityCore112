@@ -974,6 +974,18 @@ class BattlegroundIC : public Battleground
 
         bool IsSpellAllowed(uint32 spellId, Player const* player) const override;
 
+        /* Objectives, for whoever plays the match without knowing which battleground it is */
+        uint32 GetDynamicNodeCount() const override { return MAX_NODE_TYPES; }
+        bool GetDynamicNodeInfo(ObjectGuid playerGuid, uint32 nodeId, BattlegroundNodeObjective& node) const override;
+        uint32 GetSiegeObjectiveCount() const override { return MAX_FORTRESS_GATES_SPAWNS; }
+        bool GetSiegeObjectiveInfo(ObjectGuid playerGuid, uint32 index, BattlegroundSiegeObjective& objective) const override;
+        bool GetSiegeChargeInfo(ObjectGuid playerGuid, BattlegroundSiegeChargeInfo& charge) const override;
+        void GetSiegeVehicles(ObjectGuid playerGuid, GuidVector& vehicles) const override;
+        void GetStandingGates(GuidVector& gates) const override;
+        uint32 GetBossObjectiveCount() const override { return PVP_TEAMS_COUNT; }
+        bool GetBossObjectiveInfo(ObjectGuid playerGuid, uint32 index, BattlegroundBossObjective& boss) const override;
+        void GetTeleporters(ObjectGuid playerGuid, std::vector<BattlegroundTeleporter>& teleporters) const override;
+
     private:
         uint32 closeFortressDoorsTimer;
         bool doorsClosed;
@@ -1035,6 +1047,12 @@ class BattlegroundIC : public Battleground
         void UpdateNodeWorldState(ICNodePoint* node);
         void HandleCapturedNodes(ICNodePoint* node, bool recapture);
         void HandleContestedNodes(ICNodePoint* node);
+
+        // The asking player's side while the match runs; false for anyone not in it.
+        bool GetObjectiveTeam(ObjectGuid playerGuid, TeamId& teamId) const;
+        // Siege objective index of the first of that keep's gates to be down,
+        // or -1 while all three stand.
+        int32 GetFirstDestroyedGate(TeamId keepTeam) const;
 };
 
 #endif

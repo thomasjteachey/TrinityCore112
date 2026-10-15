@@ -42,6 +42,7 @@
 #include "Playerbot/Pvp/PlayerbotBgFillDriver.h"
 #include "Playerbot/Pvp/PlayerbotCtfCoordinator.h"
 #include "Playerbot/Pvp/PlayerbotNodeCoordinator.h"
+#include "Playerbot/Pvp/PlayerbotObjectiveCoordinator.h"
 #include "Playerbot/Pvp/PlayerbotObcClone.h"
 #include "Playerbot/Pvp/PlayerbotVhrWaveDriver.h"
 #include "Playerbot/Pvp/PlayerbotPvpClassActions.h"
@@ -1073,6 +1074,7 @@ public:
     void OnConfigLoad(bool /*reload*/) override
     {
         playerbot::PvpCore::LoadConfig();
+        playerbot::ObjectiveCoordinator::LoadConfig();
         playerbot::RandomBotParticipationManager::ResetCadence();
         playerbot::RandomBotParticipationManager::LoadPopulationConfig();
         playerbot::PlayerbotObcCloneManager::LoadConfig();
@@ -1085,6 +1087,7 @@ public:
     void OnStartup() override
     {
         playerbot::PvpCore::LoadConfig();
+        playerbot::ObjectiveCoordinator::LoadConfig();
         playerbot::RandomBotParticipationManager::ResetCadence();
         playerbot::RandomBotParticipationManager::LoadPopulationConfig();
         playerbot::RandomBotParticipationManager::OnStartupBootstrap();
@@ -1450,6 +1453,7 @@ public:
             { "movediag", HandlePlayerbotPvpMoveDiagCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
             { "ctf", HandlePlayerbotPvpCtfCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
             { "nodes", HandlePlayerbotPvpNodesCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
+            { "duties", HandlePlayerbotPvpDutiesCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
         };
 
         static ChatCommandTable playerbotRandomPopulationTable =
@@ -1533,6 +1537,42 @@ public:
             else
                 handler->PSendSysMessage("%s: %s, no base assigned.",
                     selected->GetName().c_str(), playerbot::GetNodeRoleName(orders.role));
+        }
+
+        return true;
+    }
+
+    // Gates, siege vehicles, commanders and the neutral flag of a base match:
+    // which gate each side is breaking, who is on which duty. Select a bot to
+    // see its own.
+    static bool HandlePlayerbotPvpDutiesCommand(ChatHandler* handler)
+    {
+        if (!handler)
+            return false;
+
+        Player* player = handler->GetPlayer();
+        if (!player)
+            return false;
+
+        // Only a bot on the GM's own map: asking for another map's orders would
+        // rebuild its plan from this thread.
+        Player* selected = handler->getSelectedPlayer();
+        if (selected && selected->FindMap() != player->FindMap())
+            selected = nullptr;
+        Player* observer = selected && selected->GetBattleground() ? selected : player;
+        for (std::string const& line : playerbot::ObjectiveCoordinator::DescribeTeams(observer))
+            handler->PSendSysMessage("%s", line.c_str());
+
+        if (selected && selected != player)
+        {
+            playerbot::ObjectiveBotOrders orders;
+            if (playerbot::ObjectiveCoordinator::GetOrders(selected, orders))
+                handler->PSendSysMessage("%s: %s, gate %u, vehicle %s, boss %s.", selected->GetName().c_str(),
+                    playerbot::GetObjectiveDutyName(orders.duty), orders.siegeId,
+                    orders.vehicleGuid.IsEmpty() ? "none" : orders.vehicleGuid.ToString().c_str(),
+                    orders.bossGuid.IsEmpty() ? "none" : orders.bossGuid.ToString().c_str());
+            else
+                handler->PSendSysMessage("%s: no duty.", selected->GetName().c_str());
         }
 
         return true;

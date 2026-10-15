@@ -186,7 +186,7 @@ void BattlegroundIC::PostUpdateImpl(uint32 diff)
                 float cords[4] = {banner->GetPositionX(), banner->GetPositionY(), banner->GetPositionZ(), banner->GetOrientation() };
 
                 DelObject(nodePoint[i].gameobject_type);
-                AddObject(nodePoint[i].gameobject_type, nodePoint[i].gameobject_entry, cords[0], cords[1], cords[2], cords[3], 0, 0, 0, 0, RESPAWN_ONE_DAY);
+                AddObject(nodePoint[i].gameobject_type, nodePoint[i].gameobject_entry, cords[0], cords[1], cords[2], cords[3], 0, 0, 0, 0, RESPAWN_IMMEDIATELY);
 
                 GetBGObject(nodePoint[i].gameobject_type)->SetFaction(nodePoint[i].faction == TEAM_ALLIANCE ? BG_IC_Factions[1] : BG_IC_Factions[0]);
 
@@ -309,11 +309,15 @@ void BattlegroundIC::FillInitialWorldStates(WorldPackets::WorldState::InitWorldS
         packet.Worldstates.emplace_back(nodePoint[itr].worldStates[nodePoint[itr].nodeState], 1);
 }
 
+// Every object here is placed live. Battleground::AddObject now honours its
+// respawn time (an object added with one starts despawned and waits it out),
+// where it used to ignore it; Isle of Conquest never calls SpawnBGObject, so
+// with RESPAWN_ONE_DAY its banners, teleporters and doors never appeared.
 bool BattlegroundIC::SetupBattleground()
 {
     for (uint8 i = 0; i < MAX_NORMAL_GAMEOBJECTS_SPAWNS; ++i)
     {
-        if (!AddObject(BG_IC_ObjSpawnlocs[i].type, BG_IC_ObjSpawnlocs[i].entry, BG_IC_ObjSpawnlocs[i].x, BG_IC_ObjSpawnlocs[i].y, BG_IC_ObjSpawnlocs[i].z, BG_IC_ObjSpawnlocs[i].o, 0, 0, 0, 0, RESPAWN_ONE_DAY))
+        if (!AddObject(BG_IC_ObjSpawnlocs[i].type, BG_IC_ObjSpawnlocs[i].entry, BG_IC_ObjSpawnlocs[i].x, BG_IC_ObjSpawnlocs[i].y, BG_IC_ObjSpawnlocs[i].z, BG_IC_ObjSpawnlocs[i].o, 0, 0, 0, 0, RESPAWN_IMMEDIATELY))
         {
             TC_LOG_ERROR("bg.battleground", "Isle of Conquest: There was an error spawning gameobject {}", BG_IC_ObjSpawnlocs[i].entry);
             return false;
@@ -322,7 +326,7 @@ bool BattlegroundIC::SetupBattleground()
 
     for (uint8 i = 0; i < MAX_FORTRESS_TELEPORTERS_SPAWNS; ++i)
     {
-        if (!AddObject(BG_IC_Teleporters[i].type, BG_IC_Teleporters[i].entry, BG_IC_Teleporters[i].x, BG_IC_Teleporters[i].y, BG_IC_Teleporters[i].z, BG_IC_Teleporters[i].o, 0, 0, 0, 0, RESPAWN_ONE_DAY))
+        if (!AddObject(BG_IC_Teleporters[i].type, BG_IC_Teleporters[i].entry, BG_IC_Teleporters[i].x, BG_IC_Teleporters[i].y, BG_IC_Teleporters[i].z, BG_IC_Teleporters[i].o, 0, 0, 0, 0, RESPAWN_IMMEDIATELY))
         {
             TC_LOG_ERROR("bg.battleground", "Isle of Conquest | Starting Event Open Doors: There was an error spawning gameobject {}", BG_IC_Teleporters[i].entry);
             return false;
@@ -331,7 +335,7 @@ bool BattlegroundIC::SetupBattleground()
 
     for (uint8 i = 0; i < MAX_FORTRESS_TELEPORTER_EFFECTS_SPAWNS; ++i)
     {
-        if (!AddObject(BG_IC_TeleporterEffects[i].type, BG_IC_TeleporterEffects[i].entry, BG_IC_TeleporterEffects[i].x, BG_IC_TeleporterEffects[i].y, BG_IC_TeleporterEffects[i].z, BG_IC_TeleporterEffects[i].o, 0, 0, 0, 0, RESPAWN_ONE_DAY))
+        if (!AddObject(BG_IC_TeleporterEffects[i].type, BG_IC_TeleporterEffects[i].entry, BG_IC_TeleporterEffects[i].x, BG_IC_TeleporterEffects[i].y, BG_IC_TeleporterEffects[i].z, BG_IC_TeleporterEffects[i].o, 0, 0, 0, 0, RESPAWN_IMMEDIATELY))
         {
             TC_LOG_ERROR("bg.battleground", "Isle of Conquest | Starting Event Open Doors: There was an error spawning gameobject {}", BG_IC_Teleporters[i].entry);
             return false;
@@ -486,7 +490,7 @@ void BattlegroundIC::EventPlayerClickedOnFlag(Player* player, GameObject* target
             float cords[4] = {banner->GetPositionX(), banner->GetPositionY(), banner->GetPositionZ(), banner->GetOrientation() };
 
             DelObject(nodePoint[i].gameobject_type);
-            if (!AddObject(nodePoint[i].gameobject_type, nodePoint[i].gameobject_entry, cords[0], cords[1], cords[2], cords[3], 0, 0, 0, 0, RESPAWN_ONE_DAY))
+            if (!AddObject(nodePoint[i].gameobject_type, nodePoint[i].gameobject_entry, cords[0], cords[1], cords[2], cords[3], 0, 0, 0, 0, RESPAWN_IMMEDIATELY))
             {
                 TC_LOG_ERROR("bg.battleground", "Isle of Conquest: There was an error spawning a banner (type: {}, entry: {}). Isle of Conquest BG cancelled.", nodePoint[i].gameobject_type, nodePoint[i].gameobject_entry);
                 EndBattleground(0);
@@ -619,14 +623,14 @@ void BattlegroundIC::HandleCapturedNodes(ICNodePoint* node, bool recapture)
                 for (uint8 u = 0; u < MAX_HANGAR_TELEPORTERS_SPAWNS; ++u)
                 {
                     uint8 type = BG_IC_GO_HANGAR_TELEPORTER_1 + u;
-                    if (!AddObject(type, (node->faction == TEAM_ALLIANCE ? GO_ALLIANCE_GUNSHIP_PORTAL : GO_HORDE_GUNSHIP_PORTAL), BG_IC_HangarTeleporters[u], 0, 0, 0, 0, RESPAWN_ONE_DAY))
+                    if (!AddObject(type, (node->faction == TEAM_ALLIANCE ? GO_ALLIANCE_GUNSHIP_PORTAL : GO_HORDE_GUNSHIP_PORTAL), BG_IC_HangarTeleporters[u], 0, 0, 0, 0, RESPAWN_IMMEDIATELY))
                         TC_LOG_ERROR("bg.battleground", "Isle of Conquest: There was an error spawning a gunship portal. Type: {}", BG_IC_GO_HANGAR_TELEPORTER_1 + u);
                 }
 
                 for (uint8 u = 0; u < MAX_HANGAR_TELEPORTER_EFFECTS_SPAWNS; ++u)
                 {
                     uint8 type = BG_IC_GO_HANGAR_TELEPORTER_EFFECT_1 + u;
-                    if (!AddObject(type, (node->faction == TEAM_ALLIANCE ? GO_ALLIANCE_GUNSHIP_PORTAL_EFFECTS : GO_HORDE_GUNSHIP_PORTAL_EFFECTS), BG_IC_HangarTeleporterEffects[u], 0, 0, 0, 0, RESPAWN_ONE_DAY, GO_STATE_ACTIVE))
+                    if (!AddObject(type, (node->faction == TEAM_ALLIANCE ? GO_ALLIANCE_GUNSHIP_PORTAL_EFFECTS : GO_HORDE_GUNSHIP_PORTAL_EFFECTS), BG_IC_HangarTeleporterEffects[u], 0, 0, 0, 0, RESPAWN_IMMEDIATELY, GO_STATE_ACTIVE))
                         TC_LOG_ERROR("bg.battleground", "Isle of Conquest: There was an error spawning a gunship portal effects. Type: {}", BG_IC_GO_HANGAR_TELEPORTER_1 + u);
                 }
 
@@ -932,4 +936,386 @@ bool BattlegroundIC::IsSpellAllowed(uint32 spellId, Player const* player) const
     }
 
     return true;
+}
+
+namespace
+{
+    // "Seaforium Bombs": the workshop's bomb piles (GO_SEAFORIUM_BOMBS) hand
+    // it out through spell 66265, and using it beside a gate plants the
+    // charge (GO 195235) that brings the gate down.
+    uint32 const ITEM_IC_SEAFORIUM_BOMBS = 46847;
+
+    // How far out in front of its gate a siege objective stands.
+    float const IC_GATE_FRONT_DISTANCE = 10.0f;
+
+    struct ICSiegeGate
+    {
+        uint32 ObjectType; // BG_IC_GOs
+        uint32 DoorIndex;  // ICDoorList, the GateStatus[] slot
+        TeamId Team;
+    };
+
+    // Siege objective order: each keep's front, west and east gate, the
+    // Alliance keep first. The slots follow GetGateIDFromEntry.
+    ICSiegeGate const ICSiegeGates[MAX_FORTRESS_GATES_SPAWNS] =
+    {
+        { BG_IC_GO_ALLIANCE_GATE_3, BG_IC_A_FRONT, TEAM_ALLIANCE },
+        { BG_IC_GO_ALLIANCE_GATE_1, BG_IC_A_WEST,  TEAM_ALLIANCE },
+        { BG_IC_GO_ALLIANCE_GATE_2, BG_IC_A_EAST,  TEAM_ALLIANCE },
+        { BG_IC_GO_HORDE_GATE_1,    BG_IC_H_FRONT, TEAM_HORDE    },
+        { BG_IC_GO_HORDE_GATE_2,    BG_IC_H_WEST,  TEAM_HORDE    },
+        { BG_IC_GO_HORDE_GATE_3,    BG_IC_H_EAST,  TEAM_HORDE    }
+    };
+
+    // Plain doors, which block while closed: the closed-gate effects that
+    // fill the gateways until the match starts, the starting portcullises,
+    // and the inner keep portcullises DestroyGate raises.
+    // Doodad_PortcullisActive01 is left out - its spawn row lost its X
+    // coordinate, so it stands nowhere near the keeps.
+    uint32 const ICDoors[] =
+    {
+        BG_IC_GO_DOODAD_ND_HUMAN_GATE_CLOSEDFX_DOOR01,
+        BG_IC_GO_DOODAD_ND_HUMAN_GATE_CLOSEDFX_DOOR02,
+        BG_IC_GO_DOODAD_ND_HUMAN_GATE_CLOSEDFX_DOOR03,
+        BG_IC_GO_DOODAD_ND_WINTERORC_WALL_GATEFX_DOOR01,
+        BG_IC_GO_DOODAD_ND_WINTERORC_WALL_GATEFX_DOOR02,
+        BG_IC_GO_DOODAD_ND_WINTERORC_WALL_GATEFX_DOOR03,
+        BG_IC_GO_DOODAD_HU_PORTCULLIS01_1,
+        BG_IC_GO_DOODAD_HU_PORTCULLIS01_2,
+        BG_IC_GO_DOODAD_VR_PORTCULLIS01_1,
+        BG_IC_GO_DOODAD_VR_PORTCULLIS01_2,
+        BG_IC_GO_DOODAD_PORTCULLISACTIVE02,
+        BG_IC_GO_HORDE_KEEP_PORTCULLIS
+    };
+
+    // The World Trigger (22515) spawns of map 628. They live in the world
+    // database's `creature` table, not in this script, and are where the
+    // keep teleporters land: 66548/66549 trigger 66550/66551, which
+    // `conditions` aim at the nearest trigger MORE than 10 yards away - the
+    // one on the other side of the wall from the teleporter clicked.
+    Position const ICTeleportTriggers[] =
+    {
+        // Alliance keep
+        { 326.214f, -744.024f, 49.4358f },
+        { 325.917f, -781.899f, 49.0052f },
+        { 430.601f, -857.005f, 48.3118f },
+        { 392.496f, -859.458f, 48.9987f },
+        { 323.496f, -883.802f, 48.9996f },
+        { 313.234f, -918.045f, 48.856f },
+        { 279.87f, -832.807f, 51.5509f },
+        // Horde keep
+        { 1296.53f, -766.182f, 50.7029f },
+        { 1232.39f, -861.024f, 48.9996f },
+        { 1233.11f, -838.316f, 48.9996f },
+        { 1232.52f, -666.325f, 48.134f },
+        { 1234.3f, -688.299f, 49.223f },
+        { 1162.91f, -745.908f, 48.7151f },
+        { 1139.5f, -779.474f, 48.735f }
+    };
+
+    float const IC_TELEPORT_MIN_DISTANCE = 10.0f;
+
+    Position GetICObjectSpawnPosition(uint32 type)
+    {
+        for (ICGo const& spawn : BG_IC_ObjSpawnlocs)
+            if (spawn.type == type)
+                return Position(spawn.x, spawn.y, spawn.z, spawn.o);
+
+        return Position();
+    }
+
+    // Open ground IC_GATE_FRONT_DISTANCE outside the gate, facing it.
+    Position GetICGateFront(uint32 siegeIndex)
+    {
+        ICSiegeGate const& gate = ICSiegeGates[siegeIndex];
+        Position const gatePos = GetICObjectSpawnPosition(gate.ObjectType);
+
+        // The keep's middle, taken as the mean of its gates, only says which
+        // side of the wall is outside.
+        float centreX = 0.0f;
+        float centreY = 0.0f;
+        uint32 keepGates = 0;
+        for (ICSiegeGate const& other : ICSiegeGates)
+        {
+            if (other.Team != gate.Team)
+                continue;
+
+            Position const otherPos = GetICObjectSpawnPosition(other.ObjectType);
+            centreX += otherPos.GetPositionX();
+            centreY += otherPos.GetPositionY();
+            ++keepGates;
+        }
+
+        centreX /= float(keepGates);
+        centreY /= float(keepGates);
+
+        // The way out is along the gate's own facing: every gate model stands
+        // square across its wall. Pushing along (gate - centre) itself would
+        // slide the side gates' spot some three yards along the wall, as they
+        // sit well off the keep's centre line.
+        float dirX = std::cos(gatePos.GetOrientation());
+        float dirY = std::sin(gatePos.GetOrientation());
+        if (dirX * (gatePos.GetPositionX() - centreX) + dirY * (gatePos.GetPositionY() - centreY) < 0.0f)
+        {
+            dirX = -dirX;
+            dirY = -dirY;
+        }
+
+        return Position(gatePos.GetPositionX() + dirX * IC_GATE_FRONT_DISTANCE,
+            gatePos.GetPositionY() + dirY * IC_GATE_FRONT_DISTANCE,
+            gatePos.GetPositionZ(), std::atan2(-dirY, -dirX));
+    }
+}
+
+bool BattlegroundIC::GetObjectiveTeam(ObjectGuid playerGuid, TeamId& teamId) const
+{
+    if (GetStatus() != STATUS_IN_PROGRESS || !FindBgMap())
+        return false;
+
+    uint32 const playerTeam = GetPlayerTeam(playerGuid);
+    if (playerTeam != ALLIANCE && playerTeam != HORDE)
+        return false;
+
+    teamId = GetTeamIndexByTeamId(playerTeam);
+    return true;
+}
+
+int32 BattlegroundIC::GetFirstDestroyedGate(TeamId keepTeam) const
+{
+    for (uint32 i = 0; i < MAX_FORTRESS_GATES_SPAWNS; ++i)
+        if (ICSiegeGates[i].Team == keepTeam && GateStatus[ICSiegeGates[i].DoorIndex] == BG_IC_GATE_DESTROYED)
+            return int32(i);
+
+    return -1;
+}
+
+bool BattlegroundIC::GetDynamicNodeInfo(ObjectGuid playerGuid, uint32 nodeId, BattlegroundNodeObjective& node) const
+{
+    TeamId teamId = TEAM_NEUTRAL;
+    if (nodeId >= MAX_NODE_TYPES || !GetObjectiveTeam(playerGuid, teamId))
+        return false;
+
+    ICNodePoint const& point = nodePoint[nodeId];
+    GameObject* banner = FindBgMap()->GetGameObject(BgObjects[point.gameobject_type]);
+
+    // A keep's graveyard banner cannot be clicked until one of that keep's
+    // gates is down (DestroyGate lifts its GO_FLAG_NOT_SELECTABLE), and the
+    // keep's own banner brings the flag back from its template whenever it
+    // is put up again.
+    if (point.nodeType == NODE_TYPE_GRAVEYARD_A || point.nodeType == NODE_TYPE_GRAVEYARD_H)
+    {
+        TeamId const keepTeam = point.nodeType == NODE_TYPE_GRAVEYARD_A ? TEAM_ALLIANCE : TEAM_HORDE;
+        if (GetFirstDestroyedGate(keepTeam) < 0 || !banner || banner->HasFlag(GO_FLAG_NOT_SELECTABLE))
+            return false;
+    }
+
+    node.NodeId = nodeId;
+    node.BannerGuid = banner ? banner->GetGUID() : ObjectGuid::Empty;
+    node.Location = banner ? banner->GetPosition() : GetICObjectSpawnPosition(point.gameobject_type);
+    node.CaptureRadius = 0.0f;
+
+    // nodeState follows the banner on show. While a capture timer runs,
+    // `faction` is the side the node falls to when it expires - which is not
+    // always the side nodeState names, since GetNextBanner can hand an
+    // assaulted grey banner back to the neutral one - and last_entry is the
+    // banner that stood before the last click.
+    if (point.nodeState == NODE_STATE_CONTROLLED_A || point.nodeState == NODE_STATE_CONTROLLED_H)
+    {
+        TeamId const owner = point.nodeState == NODE_STATE_CONTROLLED_A ? TEAM_ALLIANCE : TEAM_HORDE;
+        node.Status = owner == teamId ? BattlegroundNodeStatus::FriendlyControlled : BattlegroundNodeStatus::EnemyControlled;
+    }
+    else if (point.faction != TEAM_ALLIANCE && point.faction != TEAM_HORDE)
+        node.Status = BattlegroundNodeStatus::Neutral;
+    else if (point.faction == teamId)
+        node.Status = BattlegroundNodeStatus::FriendlyContested;
+    else if (point.last_entry == point.banners[teamId == TEAM_ALLIANCE ? BANNER_A_CONTROLLED : BANNER_H_CONTROLLED])
+        node.Status = BattlegroundNodeStatus::FriendlyUnderAttack;
+    else
+        node.Status = BattlegroundNodeStatus::EnemyContested;
+
+    return true;
+}
+
+bool BattlegroundIC::GetSiegeObjectiveInfo(ObjectGuid playerGuid, uint32 index, BattlegroundSiegeObjective& objective) const
+{
+    TeamId teamId = TEAM_NEUTRAL;
+    if (index >= MAX_FORTRESS_GATES_SPAWNS || !GetObjectiveTeam(playerGuid, teamId))
+        return false;
+
+    ICSiegeGate const& gate = ICSiegeGates[index];
+    objective.Id = index;
+    objective.GateGuid = BgObjects[gate.ObjectType];
+    objective.Location = GetICGateFront(index);
+    objective.Friendly = gate.Team == teamId;
+    // The gates stand open for the first CLOSE_DOORS_TIME of the match. Once
+    // one gate of a keep is down the keep is open - DestroyGate raises its
+    // inner portcullis - and its other two gates guard nothing.
+    objective.Breachable = doorsClosed && GetFirstDestroyedGate(gate.Team) < 0;
+    return true;
+}
+
+bool BattlegroundIC::GetSiegeChargeInfo(ObjectGuid playerGuid, BattlegroundSiegeChargeInfo& charge) const
+{
+    TeamId teamId = TEAM_NEUTRAL;
+    if (!GetObjectiveTeam(playerGuid, teamId))
+        return false;
+
+    // HandleCapturedNodes puts the bomb piles up, in the holder's faction,
+    // whenever the workshop is captured or defended, and HandleContestedNodes
+    // takes them away as soon as it is assaulted.
+    if (nodePoint[NODE_TYPE_WORKSHOP].nodeState != (teamId == TEAM_ALLIANCE ? NODE_STATE_CONTROLLED_A : NODE_STATE_CONTROLLED_H))
+        return false;
+
+    GuidVector sources;
+    for (uint32 type = BG_IC_GO_SEAFORIUM_BOMBS_1; type <= BG_IC_GO_SEAFORIUM_BOMBS_2; ++type)
+    {
+        GameObject* bombs = FindBgMap()->GetGameObject(BgObjects[type]);
+        if (!bombs || !bombs->IsInWorld() || !bombs->isSpawned() || bombs->HasFlag(GO_FLAG_NOT_SELECTABLE) ||
+            bombs->GetFaction() != BG_IC_Factions[teamId])
+            continue;
+
+        sources.push_back(bombs->GetGUID());
+    }
+
+    if (sources.empty())
+        return false;
+
+    charge.ItemId = ITEM_IC_SEAFORIUM_BOMBS;
+    charge.Sources = sources;
+    return true;
+}
+
+void BattlegroundIC::GetSiegeVehicles(ObjectGuid playerGuid, GuidVector& vehicles) const
+{
+    TeamId teamId = TEAM_NEUTRAL;
+    if (!GetObjectiveTeam(playerGuid, teamId))
+        return;
+
+    // The workshop's machines, the ones built to batter gates; the docks'
+    // catapults and glaive throwers are not sent at them.
+    uint32 const firstDemolisher = teamId == TEAM_ALLIANCE ? BG_IC_NPC_DEMOLISHER_1_A : BG_IC_NPC_DEMOLISHER_1_H;
+    uint32 const types[] =
+    {
+        uint32(teamId == TEAM_ALLIANCE ? BG_IC_NPC_SIEGE_ENGINE_A : BG_IC_NPC_SIEGE_ENGINE_H),
+        firstDemolisher,
+        firstDemolisher + 1,
+        firstDemolisher + 2,
+        firstDemolisher + 3
+    };
+
+    for (uint32 type : types)
+    {
+        // A new siege engine is UNINTERACTIBLE and immune to players until
+        // the workshop's next three-minute tick in PostUpdateImpl. A driven
+        // vehicle takes on its driver's faction, so the faction test also
+        // drops the ones somebody already sits in.
+        Creature* vehicle = FindBgMap()->GetCreature(BgCreatures[type]);
+        if (!vehicle || !vehicle->IsInWorld() || !vehicle->IsAlive() ||
+            vehicle->HasUnitFlag(UNIT_FLAG_UNINTERACTIBLE) || vehicle->IsImmuneToPC() ||
+            vehicle->GetFaction() != BG_IC_Factions[teamId])
+            continue;
+
+        vehicles.push_back(vehicle->GetGUID());
+    }
+}
+
+void BattlegroundIC::GetStandingGates(GuidVector& gates) const
+{
+    BattlegroundMap* map = FindBgMap();
+    if (!map)
+        return;
+
+    // The siege gates stand in their intact model - an open gateway - until
+    // PostUpdateImpl swings them shut CLOSE_DOORS_TIME into the match.
+    if (doorsClosed)
+    {
+        for (ICSiegeGate const& gate : ICSiegeGates)
+        {
+            if (GateStatus[gate.DoorIndex] == BG_IC_GATE_DESTROYED)
+                continue;
+
+            if (GameObject* go = map->GetGameObject(BgObjects[gate.ObjectType]))
+                if (go->GetDestructibleState() != GO_DESTRUCTIBLE_DESTROYED)
+                    gates.push_back(go->GetGUID());
+        }
+    }
+
+    // A despawned door is neither shown to clients nor collided with, so
+    // only a spawned one still closed (DoorOpen sets GO_STATE_ACTIVE) blocks.
+    for (uint32 type : ICDoors)
+        if (GameObject* door = map->GetGameObject(BgObjects[type]))
+            if (door->IsInWorld() && door->isSpawned() && door->GetGoState() == GO_STATE_READY)
+                gates.push_back(door->GetGUID());
+}
+
+bool BattlegroundIC::GetBossObjectiveInfo(ObjectGuid playerGuid, uint32 index, BattlegroundBossObjective& boss) const
+{
+    TeamId teamId = TEAM_NEUTRAL;
+    if (index >= PVP_TEAMS_COUNT || !GetObjectiveTeam(playerGuid, teamId))
+        return false;
+
+    // Index 0 is the Alliance commander, 1 the Horde's. Neither exists until
+    // DestroyGate spawns them as the first gate of their keep falls.
+    TeamId const bossTeam = TeamId(index);
+    uint32 const bossType = bossTeam == TEAM_ALLIANCE ? BG_IC_NPC_HIGH_COMMANDER_HALFORD_WYRMBANE : BG_IC_NPC_OVERLORD_AGMAR;
+    Creature* commander = FindBgMap()->GetCreature(BgCreatures[bossType]);
+    bool const alive = commander && commander->IsInWorld() && commander->IsAlive();
+    int32 const breach = GetFirstDestroyedGate(bossTeam);
+
+    boss.Id = index;
+    boss.BossGuid = alive ? commander->GetGUID() : ObjectGuid::Empty;
+    boss.Friendly = bossTeam == teamId;
+    boss.Engageable = !boss.Friendly && alive && breach >= 0;
+    // In through the broken gate: the straight line to the commander runs
+    // into the gates still standing.
+    boss.HasApproach = breach >= 0;
+    if (boss.HasApproach)
+        boss.Approach = GetICGateFront(uint32(breach));
+
+    return true;
+}
+
+void BattlegroundIC::GetTeleporters(ObjectGuid playerGuid, std::vector<BattlegroundTeleporter>& teleporters) const
+{
+    TeamId teamId = TEAM_NEUTRAL;
+    if (!GetObjectiveTeam(playerGuid, teamId))
+        return;
+
+    for (ICGo const& spawn : BG_IC_Teleporters)
+    {
+        // Each keep has its own pair of teleporter entries, in its faction.
+        bool const allianceKeep = spawn.entry == GO_TELEPORTER_3 || spawn.entry == GO_TELEPORTER_4;
+        if (allianceKeep != (teamId == TEAM_ALLIANCE))
+            continue;
+
+        // StartingEventOpenDoors makes them selectable.
+        GameObject* teleporter = FindBgMap()->GetGameObject(BgObjects[spawn.type]);
+        if (!teleporter || !teleporter->IsInWorld() || !teleporter->isSpawned() || teleporter->HasFlag(GO_FLAG_NOT_SELECTABLE))
+            continue;
+
+        Position const entrance(spawn.x, spawn.y, spawn.z, spawn.o);
+        Position const* landing = nullptr;
+        float landingDistSq = 0.0f;
+        for (Position const& trigger : ICTeleportTriggers)
+        {
+            float const distSq = entrance.GetExactDistSq(trigger);
+            if (distSq <= IC_TELEPORT_MIN_DISTANCE * IC_TELEPORT_MIN_DISTANCE)
+                continue;
+
+            if (!landing || distSq < landingDistSq)
+            {
+                landing = &trigger;
+                landingDistSq = distSq;
+            }
+        }
+
+        if (!landing)
+            continue;
+
+        BattlegroundTeleporter shortcut;
+        shortcut.GoGuid = teleporter->GetGUID();
+        shortcut.Entrance = teleporter->GetPosition();
+        shortcut.Exit = *landing;
+        teleporters.push_back(shortcut);
+    }
 }

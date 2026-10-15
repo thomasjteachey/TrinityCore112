@@ -1565,6 +1565,16 @@ struct BG_AV_NodeInfo
 
 inline BG_AV_Nodes &operator++(BG_AV_Nodes& i) { return i = BG_AV_Nodes(i + 1); }
 
+// The commanders GetBossObjectiveInfo answers for, in this order.
+enum BG_AV_BossObjectives
+{
+    BG_AV_BOSS_OBJECTIVE_A_CAPTAIN = 0, // Captain Balinda Stonehearth
+    BG_AV_BOSS_OBJECTIVE_H_CAPTAIN = 1, // Captain Galvangar
+    BG_AV_BOSS_OBJECTIVE_A_GENERAL = 2, // Vanndar Stormpike
+    BG_AV_BOSS_OBJECTIVE_H_GENERAL = 3, // Drek'Thar
+    BG_AV_BOSS_OBJECTIVES_COUNT    = 4
+};
+
 struct BattlegroundAVScore final : public BattlegroundScore
 {
     friend class BattlegroundAV;
@@ -1648,6 +1658,12 @@ class BattlegroundAV : public Battleground
 
         uint32 GetPrematureWinner() override;
 
+        // Objectives for players without a client; see Battleground.h.
+        uint32 GetDynamicNodeCount() const override { return BG_AV_NODES_MAX; }
+        bool GetDynamicNodeInfo(ObjectGuid playerGuid, uint32 nodeId, BattlegroundNodeObjective& node) const override;
+        uint32 GetBossObjectiveCount() const override { return BG_AV_BOSS_OBJECTIVES_COUNT; }
+        bool GetBossObjectiveInfo(ObjectGuid playerGuid, uint32 index, BattlegroundBossObjective& boss) const override;
+
     private:
         void PostUpdateImpl(uint32 diff) override;
 
@@ -1674,6 +1690,9 @@ class BattlegroundAV : public Battleground
 
         BG_AV_Nodes GetNodeThroughObject(uint32 object);
         uint32 GetObjectThroughNode(BG_AV_Nodes node);
+        // The BgObjects index of the banner standing at a node in its current
+        // state, or BG_AV_OBJECT_MAX when there is none (a burnt tower).
+        uint32 GetNodeBannerObject(BG_AV_Nodes node) const;
         bool IsTower(BG_AV_Nodes node) { return m_Nodes[node].Tower; }
 
         /*mine*/

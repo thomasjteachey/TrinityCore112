@@ -409,6 +409,14 @@ class BattlegroundEY : public Battleground
         void SetDroppedFlagGUID(ObjectGuid guid, int32 /*TeamID*/ = -1) override  { m_DroppedFlagGUID = guid; }
         ObjectGuid GetDroppedFlagGUID() const { return m_DroppedFlagGUID; }
 
+        /* Objectives for players without a client, see Battleground.h */
+        ObjectGuid GetFlagPickupGUID(ObjectGuid playerGuid) const override;
+        bool GetFlagCapturePosition(ObjectGuid carrierGuid, Position& position) const override;
+        uint32 GetFlagCaptureAreaTrigger(ObjectGuid carrierGuid) const override;
+        uint32 GetDynamicNodeCount() const override { return EY_POINTS_MAX; }
+        bool GetDynamicNodeInfo(ObjectGuid playerGuid, uint32 nodeId, BattlegroundNodeObjective& node) const override;
+        void GetDropExits(ObjectGuid playerGuid, std::vector<BattlegroundDropExit>& exits) const override;
+
         /* Battleground Events */
         void EventPlayerClickedOnFlag(Player* Source, GameObject* target_obj) override;
         void EventPlayerDroppedFlag(Player* Source) override;
@@ -430,6 +438,13 @@ class BattlegroundEY : public Battleground
         void CheckSomeoneLeftPoint();
         void CheckSomeoneJoinedPoint();
         void UpdatePointStatuses();
+
+        // Living, visible bodies of one team on a tower at the last tower tick.
+        uint8 GetPointPlayersCount(uint32 point, uint32 team) const { return m_CurrentPointPlayersCount[2 * point + GetTeamIndexByTeamId(team)]; }
+        // The tower a flag carrier is sent to. GetFlagCapturePosition and
+        // GetFlagCaptureAreaTrigger both ask this, so they can never disagree.
+        // EY_POINTS_MAX when the guid is not carrying the flag.
+        uint32 SelectFlagCaptureTower(ObjectGuid carrierGuid, bool& controlled) const;
 
         /* Scorekeeping */
         void AddPoints(uint32 Team, uint32 Points);

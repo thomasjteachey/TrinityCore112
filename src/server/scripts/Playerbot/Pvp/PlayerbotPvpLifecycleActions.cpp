@@ -19,6 +19,7 @@
 #include "PlayerbotCtfCoordinator.h"
 #include "PlayerbotNodeCoordinator.h"
 #include "PlayerbotObcClone.h"
+#include "PlayerbotObjectiveCoordinator.h"
 #include "Playerbot/Pve/PlayerbotPveManager.h"
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotRandomBotParticipation.h"
@@ -38,9 +39,11 @@
 #include "CharacterCache.h"
 #include "Creature.h"
 #include "Chat.h"
+#include "Vehicle.h"
 #include "Log.h"
 #include "Map.h"
 #include "Miscellaneous/TournamentMode.h"
+#include "ModelIgnoreFlags.h"
 #include "MotionMaster.h"
 #include "Movement/AbstractFollower.h"
 #include "MoveSpline.h"
@@ -3770,16 +3773,10 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             playerbot::LockedErase(g_DroppedFlagPickupDelayByBotGuid, botGuidRaw);
 
             // Playerbots move entirely on the server and do not send the
-            // client's CMSG_AREATRIGGER packet when they enter a CTF capture
+            // client's CMSG_AREATRIGGER packet when they enter a capture
             // trigger. Reproduce the normal client path once the carrier is
-            // physically inside its team's real capture trigger.
-            uint32 captureTriggerId = 0;
-            uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
-            if (dynamic_cast<BattlegroundWS*>(battleground))
-                captureTriggerId = assignedTeam == ALLIANCE ? 3646 : assignedTeam == HORDE ? 3647 : 0;
-            else if (dynamic_cast<BattlegroundTP*>(battleground))
-                captureTriggerId = assignedTeam == ALLIANCE ? 5904 : assignedTeam == HORDE ? 5905 : 0;
-
+            // physically inside the trigger the battleground scores in.
+            uint32 const captureTriggerId = battleground->GetFlagCaptureAreaTrigger(player->GetGUID());
             if (captureTriggerId)
             {
                 AreaTriggerEntry const* captureTrigger = sAreaTriggerStore.LookupEntry(captureTriggerId);
@@ -3861,6 +3858,259 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return true;
     }
 
+    // True when the straight line between the two points runs through a gate
+    // the battleground still has standing. Gates are gameobjects and the
+    // navmesh holds none; a gate is what blocks gameobject collision both at
+    // chest height and well above the head near one (the same test the spline
+    // guard in MoveSplineInit applies to every bot leg).
+    bool CrossesStandingGate(Player const* player, GuidVector const& gates, Position const& from, Position const& to)
+    {
+        Map* map = player->FindMap();
+        if (!map || gates.empty())
+            return false;
+
+        constexpr float GateReach = 40.0f;
+        float const legX = to.GetPositionX() - from.GetPositionX();
+        float const legY = to.GetPositionY() - from.GetPositionY();
+        float const legLengthSq = legX * legX + legY * legY;
+        bool nearGate = false;
+        for (ObjectGuid const& gateGuid : gates)
+        {
+            GameObject const* gate = map->GetGameObject(gateGuid);
+            if (!gate)
+                continue;
+
+            float const toGateX = gate->GetPositionX() - from.GetPositionX();
+            float const toGateY = gate->GetPositionY() - from.GetPositionY();
+            float const t = legLengthSq > 0.0f ? std::clamp((toGateX * legX + toGateY * legY) / legLengthSq, 0.0f, 1.0f) : 0.0f;
+            float const offX = toGateX - legX * t;
+            float const offY = toGateY - legY * t;
+            if (offX * offX + offY * offY <= GateReach * GateReach)
+            {
+                nearGate = true;
+                break;
+            }
+        }
+
+        if (!nearGate)
+            return false;
+
+        auto const blockedAt = [&](float height)
+        {
+            return !map->isInLineOfSight(from.GetPositionX(), from.GetPositionY(), from.GetPositionZ() + height,
+                to.GetPositionX(), to.GetPositionY(), to.GetPositionZ() + height, player->GetPhaseMask(),
+                LINEOFSIGHT_CHECK_GOBJECT, VMAP::ModelIgnoreFlags::Nothing);
+        };
+        return blockedAt(1.5f) && blockedAt(4.0f);
+    }
+
+    // Whether the walking route the pathfinder gives this bot to the point
+    // runs into a standing gate somewhere along it.
+    bool IsRouteThroughStandingGate(Player* player, GuidVector const& gates, Position const& destination)
+    {
+        if (gates.empty())
+            return false;
+
+        PathGenerator path(player);
+        path.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
+        Movement::PointsArray const& points = path.GetPath();
+        if (points.size() < 2)
+            return CrossesStandingGate(player, gates, player->GetPosition(), destination);
+
+        for (std::size_t i = 1; i < points.size(); ++i)
+        {
+            Position const from(points[i - 1].x, points[i - 1].y, points[i - 1].z);
+            Position const to(points[i].x, points[i].y, points[i].z);
+            if (CrossesStandingGate(player, gates, from, to))
+                return true;
+        }
+
+        return false;
+    }
+
+    // Whether the pathfinder gives this bot a route that actually arrives
+    // within a few yards of the point and passes no standing gate. A complete
+    // route matters for things picked among many (charge piles): one perched
+    // on a crate, or across water the mesh does not cross, comes back partial.
+    bool IsWalkableRoute(Player* player, GuidVector const& gates, Position const& destination)
+    {
+        PathGenerator path(player);
+        path.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
+        if (path.GetPathType() & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE | PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT |
+            PATHFIND_FARFROMPOLY_END))
+            return false;
+
+        Movement::PointsArray const& points = path.GetPath();
+        if (points.size() < 2)
+            return false;
+
+        G3D::Vector3 const& end = points.back();
+        if (destination.GetExactDist(end.x, end.y, end.z) > 4.0f)
+            return false;
+
+        for (std::size_t i = 1; i < points.size(); ++i)
+        {
+            Position const from(points[i - 1].x, points[i - 1].y, points[i - 1].z);
+            Position const to(points[i].x, points[i].y, points[i].z);
+            if (CrossesStandingGate(player, gates, from, to))
+                return false;
+        }
+
+        return true;
+    }
+
+    struct TeleporterRoute
+    {
+        uint32 decidedMs = 0;
+        Position destination;
+        ObjectGuid teleporterGuid;
+    };
+
+    std::unordered_map<uint64, TeleporterRoute> g_TeleporterRouteByBot;
+    // A route is decided again this often, or as soon as the destination moves.
+    constexpr uint32 PLAYERBOT_TELEPORTER_ROUTE_RECHECK_MS = 3 * IN_MILLISECONDS;
+    constexpr float PLAYERBOT_TELEPORTER_ROUTE_REDECIDE_DISTANCE = 15.0f;
+
+    // A bot inside a keep (Isle of Conquest, after a respawn) or behind its
+    // own walls (Strand of the Ancients' defenders) would otherwise stand at
+    // the closed gate forever: the spline guard refuses the route through it.
+    // When the walking route is blocked and the battleground has a teleporter
+    // whose exit is clear of the gates, the bot walks to it and uses it.
+    // Returns true while it owns the bot's movement.
+    bool TryRouteThroughTeleporter(Player* player, Battleground* battleground, Position const& destination)
+    {
+        std::vector<BattlegroundTeleporter> teleporters;
+        battleground->GetTeleporters(player->GetGUID(), teleporters);
+        if (teleporters.empty())
+            return false;
+
+        uint64 const botKey = player->GetGUID().GetRawValue();
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        TeleporterRoute route;
+        bool const known = playerbot::LockedGetCopy(g_TeleporterRouteByBot, botKey, route);
+        if (!known || nowMs - route.decidedMs >= PLAYERBOT_TELEPORTER_ROUTE_RECHECK_MS ||
+            route.destination.GetExactDist2d(&destination) > PLAYERBOT_TELEPORTER_ROUTE_REDECIDE_DISTANCE)
+        {
+            route = TeleporterRoute();
+            route.decidedMs = nowMs;
+            route.destination = destination;
+
+            GuidVector gates;
+            battleground->GetStandingGates(gates);
+            if (IsRouteThroughStandingGate(player, gates, destination))
+            {
+                float bestCost = std::numeric_limits<float>::max();
+                for (BattlegroundTeleporter const& teleporter : teleporters)
+                {
+                    // Both straight stretches have to be clear of the gates:
+                    // a teleporter on the far side of the wall is no way out.
+                    if (CrossesStandingGate(player, gates, player->GetPosition(), teleporter.Entrance) ||
+                        CrossesStandingGate(player, gates, teleporter.Exit, destination))
+                        continue;
+
+                    float const cost = player->GetExactDist(&teleporter.Entrance) + teleporter.Exit.GetExactDist(&destination);
+                    if (cost < bestCost)
+                    {
+                        bestCost = cost;
+                        route.teleporterGuid = teleporter.GoGuid;
+                    }
+                }
+            }
+
+            playerbot::LockedSet(g_TeleporterRouteByBot, botKey, route);
+        }
+
+        if (route.teleporterGuid.IsEmpty())
+            return false;
+
+        GameObject* teleporter = player->FindMap() ? player->FindMap()->GetGameObject(route.teleporterGuid) : nullptr;
+        if (!teleporter || !teleporter->IsInWorld() || !teleporter->isSpawned())
+        {
+            playerbot::LockedErase(g_TeleporterRouteByBot, botKey);
+            return false;
+        }
+
+        if (!teleporter->IsAtInteractDistance(player))
+            return IssueMovePointThrottled(player, teleporter->GetPosition(), 3.0f, 500) || player->isMoving();
+
+        if (player->IsMounted())
+            ForcePlayerbotDismount(player);
+
+        StopVirtualPlayerbotMovement(player);
+        teleporter->Use(player);
+        // Decided afresh from wherever it puts the bot.
+        playerbot::LockedErase(g_TeleporterRouteByBot, botKey);
+        EmitBattlegroundGmDebug(player, "objective-route=teleporter guid=" + route.teleporterGuid.ToString(), 1500);
+        return true;
+    }
+
+    // A ledge the battleground says players jump off (Eye of the Storm's
+    // start platforms). Nothing a bot is sent for is on such an island and the
+    // navmesh has no way off it, so a bot standing on one walks to the ledge
+    // and is put down on the ground below. A teleport rather than a fall:
+    // server-driven splines have no gravity, and the falls tried before
+    // (2026-05 direct-drop shortcut, 2026-07 floor-drop probes) floated bots
+    // down the air or dove them through floors. Only a declared island ever
+    // takes this path. Returns true while it owns the bot's movement.
+    bool TryLeaveDropIsland(Player* player, Battleground* battleground)
+    {
+        std::vector<BattlegroundDropExit> exits;
+        battleground->GetDropExits(player->GetGUID(), exits);
+        if (exits.empty())
+            return false;
+
+        BattlegroundDropExit const* chosen = nullptr;
+        float chosenDistance = 0.0f;
+        for (BattlegroundDropExit const& exit : exits)
+        {
+            if (player->GetPositionZ() < exit.IslandMinZ ||
+                player->GetExactDist2d(exit.IslandCentre.GetPositionX(), exit.IslandCentre.GetPositionY()) > exit.IslandRadius)
+                continue;
+
+            float const distance = player->GetExactDist2d(exit.Edge.GetPositionX(), exit.Edge.GetPositionY());
+            if (!chosen || distance < chosenDistance)
+            {
+                chosen = &exit;
+                chosenDistance = distance;
+            }
+        }
+
+        if (!chosen)
+            return false;
+
+        constexpr float EdgeReach = 3.0f;
+        if (chosenDistance > EdgeReach)
+            return IssueMovePointThrottled(player, chosen->Edge, 2.0f, 500) || player->isMoving();
+
+        // Settle on the real ground under the landing point; the declared
+        // height is the navmesh's, which a slope can put a little off.
+        float landingZ = chosen->Landing.GetPositionZ() + 1.0f;
+        player->UpdateAllowedPositionZ(chosen->Landing.GetPositionX(), chosen->Landing.GetPositionY(), landingZ);
+        if (landingZ > chosen->Landing.GetPositionZ() + 3.0f || landingZ < chosen->Landing.GetPositionZ() - 3.0f)
+            landingZ = chosen->Landing.GetPositionZ();
+
+        if (MotionMaster* motionMaster = player->GetMotionMaster())
+            motionMaster->Clear();
+        StopVirtualPlayerbotMovement(player);
+        player->NearTeleportTo(chosen->Landing.GetPositionX(), chosen->Landing.GetPositionY(), landingZ,
+            player->GetOrientation());
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot left a battleground drop island: guid={} edge=({}, {}, {}) landing=({}, {}, {}).",
+            player->GetGUID().ToString(), chosen->Edge.GetPositionX(), chosen->Edge.GetPositionY(),
+            chosen->Edge.GetPositionZ(), chosen->Landing.GetPositionX(), chosen->Landing.GetPositionY(), landingZ);
+        return true;
+    }
+
+    // Objective travel: through a teleporter when the walking route is shut by
+    // a gate, on foot otherwise.
+    bool MoveToBattlegroundObjective(Player* player, Battleground* battleground, Position const& destination)
+    {
+        if (battleground && TryRouteThroughTeleporter(player, battleground, destination))
+            return true;
+
+        return IssueMovePointThrottled(player, destination, 6.0f, 500);
+    }
+
     // The base the coordinator planned for this bot, or, where it does not
     // plan - a battleground with capturable bases it does not cover, or a bot
     // it has no assignment for - the battleground's own per-bot answer.
@@ -3883,6 +4133,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         orders.status = objective.Status;
         orders.location = objective.Location;
         orders.bannerGuid = objective.BannerGuid;
+        orders.captureRadius = objective.CaptureRadius;
         orders.role = isDefense ? playerbot::NodeRole::Defend : playerbot::NodeRole::Assault;
         orders.interact = !isDefense || objective.Status == BattlegroundNodeStatus::FriendlyUnderAttack;
         return true;
@@ -3928,7 +4179,20 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         {
             playerbot::ApplyDeterministicObjectiveOffset(battleground, player, destination);
             if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
-                return IssueMovePointThrottled(player, destination, 6.0f, 500) || player->isMoving();
+                return MoveToBattlegroundObjective(player, battleground, destination) || player->isMoving();
+
+            return true;
+        }
+
+        // A base taken by standing on it (Eye of the Storm) has no banner: the
+        // bodies inside its radius are the capture. Stand well inside it, so a
+        // step back in a fight does not drop the bot off the count.
+        if (orders.bannerGuid.IsEmpty() && orders.captureRadius > 0.0f)
+        {
+            float const holdRadius = std::min(orders.captureRadius * 0.35f, 20.0f);
+            playerbot::ApplyDeterministicObjectiveOffset(battleground, player, destination);
+            if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), holdRadius))
+                return MoveToBattlegroundObjective(player, battleground, destination) || player->isMoving();
 
             return true;
         }
@@ -3944,7 +4208,32 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         bool const isAtInteractDistance = interactionSpell ? banner->IsAtInteractDistance(player, interactionSpell) :
             banner->IsAtInteractDistance(player);
         if (!isAtInteractDistance)
-            return IssueMovePointThrottled(player, banner->GetPosition(), 6.0f, 500) || player->isMoving();
+        {
+            // Walk to the battleground's spot for the base, which is on the
+            // ground; the object itself can float well above it (Strand of the
+            // Ancients' relic, 7.7 yards over the floor). For a banner the two
+            // are the same place.
+            bool const atSpot = player->IsWithinDist2d(&orders.location, 2.5f) &&
+                std::fabs(player->GetPositionZ() - orders.location.GetPositionZ()) < 4.0f;
+            if (!atSpot)
+                return MoveToBattlegroundObjective(player, battleground, orders.location) || player->isMoving();
+
+            // On the spot and still outside the lock's reach of a floating
+            // object: a goober is used the way its own click would use it. A
+            // banner (a button) never gets here - its spot is its foot.
+            if (banner->GetGoType() != GAMEOBJECT_TYPE_GOOBER)
+                return true;
+
+            if (player->IsMounted())
+                ForcePlayerbotDismount(player);
+            StopVirtualPlayerbotMovement(player);
+            player->AttackStop();
+            banner->Use(player);
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                "Playerbot PvP node used from its spot: guid={} node={} object={}.",
+                player->GetGUID().ToString(), orders.nodeId, banner->GetEntry());
+            return true;
+        }
 
         if (playerbot::PvpClassActions::IsBattlegroundObjectInteractionInProgress(player))
             return true;
@@ -5490,6 +5779,12 @@ namespace playerbot
         if (!player->IsAlive())
             return false;
 
+        // In a vehicle seat every primitive below would move the bot itself,
+        // which means nothing there; the objective duty drives the vehicle or
+        // climbs out of it.
+        if (player->GetVehicle())
+            return ObjectiveDutyPrimitive(player);
+
         // The battleground fast tactical tick runs every 50 ms and is a
         // separate entry point from lifecycle combat positioning. It must
         // yield at its top-level boundary while an effect-driven charge/leap
@@ -5528,6 +5823,12 @@ namespace playerbot
         // is interrupted by normal spell rules. Tactical movement and combat
         // otherwise restart/cancel the ten-second interaction every fast tick.
         if (playerbot::PvpClassActions::IsBattlegroundObjectInteractionInProgress(player))
+            return true;
+
+        // Off a start platform first: nothing on it is worth doing, and no
+        // route the navmesh draws can leave it.
+        if (Battleground* battleground = player->GetBattleground();
+            battleground && battleground->GetStatus() == STATUS_IN_PROGRESS && TryLeaveDropIsland(player, battleground))
             return true;
 
         // Combat does not make a nearby flag optional. Once an eligible flag
@@ -5624,6 +5925,8 @@ namespace playerbot
             return DefendFlagRoomPrimitive(player);
         if (IsTacticalAction(context.actionName, "bg flag runner stage"))
             return FlagRunnerStagePrimitive(player);
+        if (IsTacticalAction(context.actionName, "bg objective duty"))
+            return ObjectiveDutyPrimitive(player);
 
         return false;
     }
@@ -5836,6 +6139,533 @@ namespace playerbot
         }
 
         return false;
+    }
+
+    namespace
+    {
+        // Within this of the ground in front of a gate a charge goes down, and
+        // a vehicle stops to use its siege spells. The battleground puts that
+        // ground a few yards off the gate's face.
+        constexpr float kDutyGateStandRange = 4.0f;
+        constexpr float kDutyGateReachRange = 10.0f;
+        // A charge burns for ten seconds and the defenders can click it away
+        // (GameObject trap type 2, Seaforium): the bot that planted it stays
+        // and fights for it that long.
+        constexpr uint32 kDutyChargeWatchMs = 10 * IN_MILLISECONDS;
+        constexpr float kDutyChargeWatchRange = 25.0f;
+        // A guard holds the ground in front of its gate and fights what comes
+        // within this of it.
+        constexpr float kDutyGateGuardRange = 45.0f;
+        constexpr float kDutyGateGuardHold = 12.0f;
+        // A commander is engaged from here; further out the bot travels.
+        constexpr float kDutyBossEngageRange = 40.0f;
+        constexpr uint32 kDutyVehicleCastIntervalMs = 1000;
+
+        std::unordered_map<uint64, uint32> g_ChargePlantedMsByBot;
+        std::unordered_map<uint64, uint32> g_VehicleCastMsByBot;
+
+        // A drive that stops getting closer to its gate for this long is given
+        // up: the vehicle is left (and left alone for a while), so a driver
+        // cannot sit in a stuck ram for the rest of the match.
+        constexpr uint32 kDutyVehicleStuckMs = 15 * IN_MILLISECONDS;
+        constexpr float kDutyVehicleProgressYards = 2.0f;
+        constexpr uint32 kDutyVehicleReissueMs = 1000;
+
+        struct VehicleDriveState
+        {
+            ObjectGuid vehicleGuid;
+            float bestDistance = 0.0f;
+            uint32 progressMs = 0;
+            uint32 issuedMs = 0;
+        };
+        std::unordered_map<uint64, VehicleDriveState> g_VehicleDriveByBot;
+
+        // The charge source a bot settled on, re-chosen this often: picking one
+        // walks a navmesh route to each of the nearest few.
+        constexpr uint32 kDutyChargeSourceRecheckMs = 5 * IN_MILLISECONDS;
+        constexpr uint32 kDutyChargeSourceCandidates = 4;
+        struct ChargeSourceChoice
+        {
+            ObjectGuid sourceGuid;
+            uint32 chosenMs = 0;
+        };
+        std::unordered_map<uint64, ChargeSourceChoice> g_ChargeSourceByBot;
+
+        // The ground a guard holds: the front of its gate when it can walk
+        // there, else the same distance behind the gate - the inside of a wall
+        // its own side still holds closed (Strand of the Ancients' defenders,
+        // who start behind every gate and have no way out through them).
+        struct GuardSpotChoice
+        {
+            ObjectGuid gateGuid;
+            Position spot;
+            uint32 chosenMs = 0;
+        };
+        std::unordered_map<uint64, GuardSpotChoice> g_GuardSpotByBot;
+        constexpr uint32 kDutyGuardSpotRecheckMs = 5 * IN_MILLISECONDS;
+
+        // The vehicle spells that damage gameobjects, directly (a ram) or by
+        // launching something that does (a boulder).
+        void CollectSiegeSpells(Creature const* vehicle, std::vector<SpellInfo const*>& spells)
+        {
+            for (uint32 spellId : vehicle->m_spells)
+            {
+                SpellInfo const* spellInfo = spellId ? sSpellMgr->GetSpellInfo(spellId) : nullptr;
+                if (!spellInfo)
+                    continue;
+
+                bool damagesObjects = false;
+                for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+                {
+                    if (effect.IsEffect(SPELL_EFFECT_GAMEOBJECT_DAMAGE))
+                        damagesObjects = true;
+                    else if ((effect.IsEffect(SPELL_EFFECT_TRIGGER_MISSILE) || effect.IsEffect(SPELL_EFFECT_TRIGGER_SPELL)) &&
+                        effect.TriggerSpell)
+                        if (SpellInfo const* triggered = sSpellMgr->GetSpellInfo(effect.TriggerSpell))
+                            for (SpellEffectInfo const& triggeredEffect : triggered->GetEffects())
+                                if (triggeredEffect.IsEffect(SPELL_EFFECT_GAMEOBJECT_DAMAGE))
+                                    damagesObjects = true;
+                }
+
+                if (damagesObjects)
+                    spells.push_back(spellInfo);
+            }
+        }
+
+        // The nearest enemy at a piece of ground: a vehicle someone is driving
+        // first (it is what brings a gate down), then a player.
+        Unit* FindEnemyAtGround(Player* player, Position const& ground, float range)
+        {
+            Map* map = player->FindMap();
+            if (!map)
+                return nullptr;
+
+            Unit* bestVehicle = nullptr;
+            Player* bestPlayer = nullptr;
+            float bestVehicleDistance = std::numeric_limits<float>::max();
+            float bestPlayerDistance = std::numeric_limits<float>::max();
+            Map::PlayerList const& players = map->GetPlayers();
+            for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+            {
+                Player* candidate = itr->GetSource();
+                if (!candidate || candidate == player || !candidate->IsAlive() || candidate->IsGameMaster() ||
+                    candidate->IsSpectator())
+                    continue;
+                if (!candidate->IsWithinDist3d(ground.GetPositionX(), ground.GetPositionY(), ground.GetPositionZ(), range))
+                    continue;
+
+                // Line of sight counts gates: an enemy on the far side of a gate
+                // still standing is somebody else's fight, and chasing him only
+                // presses the bot against the gate.
+                float const distance = player->GetExactDist(candidate);
+                if (Unit* vehicle = candidate->GetVehicleBase())
+                {
+                    if (vehicle->IsAlive() && player->IsValidAttackTarget(vehicle) && distance < bestVehicleDistance &&
+                        player->IsWithinLOSInMap(vehicle))
+                    {
+                        bestVehicleDistance = distance;
+                        bestVehicle = vehicle;
+                    }
+                    continue;
+                }
+
+                if (!player->IsValidAttackTarget(candidate) || !player->CanSeeOrDetect(candidate) ||
+                    !player->IsWithinLOSInMap(candidate))
+                    continue;
+
+                if (distance < bestPlayerDistance)
+                {
+                    bestPlayerDistance = distance;
+                    bestPlayer = candidate;
+                }
+            }
+
+            return bestVehicle ? bestVehicle : bestPlayer;
+        }
+
+        // Driving: up to the ground in front of the gate, square to it, then
+        // every siege spell the vehicle has as it comes off cooldown.
+        bool DriveSiegeVehicle(Player* player, Unit* vehicleBase, playerbot::ObjectiveBotOrders const& orders)
+        {
+            Creature* vehicle = vehicleBase->ToCreature();
+            Map* map = player->FindMap();
+            // Only the driver moves it: a bot that somehow sits in another seat
+            // leaves the vehicle to whoever has its controls.
+            if (!vehicle || vehicle->GetCharmerGUID() != player->GetGUID())
+                return true;
+
+            uint64 const botKey = player->GetGUID().GetRawValue();
+            uint32 const nowMs = GameTime::GetGameTimeMS();
+
+            // Between gates (the one it was hitting just fell) the driver waits
+            // in its seat for the plan to name the next one.
+            GameObject* gate = map ? map->GetGameObject(orders.gateGuid) : nullptr;
+            if (!gate)
+            {
+                if (vehicle->isMoving())
+                    vehicle->StopMoving();
+                playerbot::LockedErase(g_VehicleDriveByBot, botKey);
+                return true;
+            }
+
+            // The front of the gate itself, not merely near the gate: a ram is
+            // a cone off the vehicle's nose.
+            Position const& ground = orders.gateLocation;
+            if (!vehicle->IsWithinDist2d(&ground, kDutyGateStandRange))
+            {
+                float const distance = vehicle->GetExactDist2d(ground.GetPositionX(), ground.GetPositionY());
+                VehicleDriveState drive;
+                bool const known = playerbot::LockedGetCopy(g_VehicleDriveByBot, botKey, drive) &&
+                    drive.vehicleGuid == vehicle->GetGUID();
+                if (!known)
+                {
+                    drive = VehicleDriveState();
+                    drive.vehicleGuid = vehicle->GetGUID();
+                    drive.bestDistance = distance;
+                    drive.progressMs = nowMs;
+                }
+                else if (distance < drive.bestDistance - kDutyVehicleProgressYards)
+                {
+                    drive.bestDistance = distance;
+                    drive.progressMs = nowMs;
+                }
+                else if (nowMs - drive.progressMs >= kDutyVehicleStuckMs)
+                {
+                    playerbot::LockedErase(g_VehicleDriveByBot, botKey);
+                    playerbot::ObjectiveCoordinator::GiveUpVehicle(vehicle->GetGUID());
+                    if (MotionMaster* motionMaster = vehicle->GetMotionMaster())
+                        motionMaster->Clear();
+                    vehicle->StopMoving();
+                    player->ExitVehicle();
+                    EmitBattlegroundGmDebug(player, "objective-duty=vehicle-stuck entry=" + std::to_string(vehicle->GetEntry()), 1500);
+                    return true;
+                }
+
+                MotionMaster* motionMaster = vehicle->GetMotionMaster();
+                bool const alreadyGoing = motionMaster->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE &&
+                    vehicle->isMoving();
+                if (!alreadyGoing && nowMs - drive.issuedMs >= kDutyVehicleReissueMs)
+                {
+                    motionMaster->MovePoint(0, ground);
+                    drive.issuedMs = nowMs;
+                }
+                playerbot::LockedSet(g_VehicleDriveByBot, botKey, drive);
+                return true;
+            }
+
+            playerbot::LockedErase(g_VehicleDriveByBot, botKey);
+            if (vehicle->isMoving())
+                vehicle->StopMoving();
+
+            // Squared up in the same tick it fires: a turn that never took on a
+            // player-controlled vehicle must not hold its guns forever, and a
+            // ram aimed slightly off is simply tried again next time round.
+            if (!vehicle->HasInArc(float(M_PI) / 6, gate))
+                vehicle->SetFacingToObject(gate);
+
+            uint32& lastCastMs = playerbot::LockedGetOrCreate(g_VehicleCastMsByBot, botKey);
+            if (lastCastMs && nowMs - lastCastMs < kDutyVehicleCastIntervalMs)
+                return true;
+            lastCastMs = nowMs;
+
+            std::vector<SpellInfo const*> spells;
+            CollectSiegeSpells(vehicle, spells);
+            for (SpellInfo const* spellInfo : spells)
+            {
+                if (!vehicle->GetSpellHistory()->IsReady(spellInfo))
+                    continue;
+
+                // Aimed at the gate; a ram ignores the point and hits what is
+                // in front of it.
+                SpellCastTargets targets;
+                targets.SetSrc(vehicle->GetPositionX(), vehicle->GetPositionY(), vehicle->GetPositionZ());
+                targets.SetDst(*gate);
+                if (vehicle->CastSpell(CastSpellTargetArg(std::move(targets)), spellInfo->Id) == SPELL_CAST_OK)
+                    break;
+            }
+
+            return true;
+        }
+
+        bool AdvanceDriveSiegeDuty(Player* player, Battleground* battleground, playerbot::ObjectiveBotOrders const& orders)
+        {
+            Map* map = player->FindMap();
+            Creature* vehicle = map ? map->GetCreature(orders.vehicleGuid) : nullptr;
+            Vehicle* kit = vehicle && vehicle->IsAlive() ? vehicle->GetVehicleKit() : nullptr;
+            int8 const controlSeat = playerbot::GetVehicleControlSeat(vehicle);
+            if (!kit || controlSeat < 0)
+                return false;
+
+            // The seat that drives it, empty. Not seat 0 by assumption, and an
+            // occupied seat is never clicked for: the seat-specific spell-click
+            // path asserts on a passenger it cannot resolve.
+            auto const seatItr = kit->Seats.find(controlSeat);
+            if (seatItr == kit->Seats.end() || !seatItr->second.IsEmpty())
+                return false;
+
+            if (!player->IsWithinDistInMap(vehicle, INTERACTION_DISTANCE))
+                return MoveToBattlegroundObjective(player, battleground, vehicle->GetPosition()) || player->isMoving();
+
+            if (player->IsMounted())
+                ForcePlayerbotDismount(player);
+            StopVirtualPlayerbotMovement(player);
+            player->AttackStop();
+
+            // The vehicle's own spell-click: its conditions and Ride Vehicle
+            // spell, exactly as a player's click.
+            vehicle->HandleSpellClick(player, controlSeat);
+            EmitBattlegroundGmDebug(player, "objective-duty=board-vehicle entry=" + std::to_string(vehicle->GetEntry()), 1500);
+            return true;
+        }
+
+        bool AdvanceCarryChargeDuty(Player* player, Battleground* battleground, playerbot::ObjectiveBotOrders const& orders)
+        {
+            Map* map = player->FindMap();
+            GameObject* gate = map ? map->GetGameObject(orders.gateGuid) : nullptr;
+            if (!gate)
+                return false;
+
+            uint64 const botKey = player->GetGUID().GetRawValue();
+            uint32 const nowMs = GameTime::GetGameTimeMS();
+
+            // Stay with a charge just planted: the defenders can click it away.
+            uint32 plantedMs = 0;
+            if (playerbot::LockedGetCopy(g_ChargePlantedMsByBot, botKey, plantedMs) && nowMs - plantedMs < kDutyChargeWatchMs)
+            {
+                if (Unit* enemy = FindEnemyAtGround(player, orders.gateLocation, kDutyChargeWatchRange))
+                    if (playerbot::EngageSelectedEnemyPlayer(player, enemy, "charge-watch"))
+                        return true;
+                return true;
+            }
+
+            uint32 const itemId = orders.chargeItemId;
+            if (itemId && player->HasItemCount(itemId, 1))
+            {
+                bool const atGate = player->IsWithinDist2d(&orders.gateLocation, kDutyGateStandRange) ||
+                    player->IsWithinDist2d(gate, kDutyGateReachRange);
+                if (!atGate)
+                    return MoveToBattlegroundObjective(player, battleground, orders.gateLocation) || player->isMoving();
+
+                Item* charge = player->GetItemByEntry(itemId);
+                if (!charge || player->IsNonMeleeSpellCast(false))
+                    return true;
+
+                if (player->IsMounted())
+                    ForcePlayerbotDismount(player);
+                StopVirtualPlayerbotMovement(player);
+                player->SetFacingToObject(gate);
+
+                // The client's own item-use path, so the charge is consumed
+                // and the bomb placed exactly as for a player.
+                SpellCastTargets targets;
+                player->CastItemUseSpell(charge, targets, 1, 0);
+                if (!player->HasItemCount(itemId, 1) || player->IsNonMeleeSpellCast(false))
+                    playerbot::LockedSet(g_ChargePlantedMsByBot, botKey, nowMs);
+                EmitBattlegroundGmDebug(player, "objective-duty=plant-charge item=" + std::to_string(itemId), 1500);
+                return true;
+            }
+
+            // No room for one: a pile is used up whether or not the charge
+            // fits, so a full bag would empty every pile on the beach.
+            ItemPosCountVec dest;
+            if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, orders.chargeItemId, 1) != EQUIP_ERR_OK)
+                return false;
+
+            // Fetch one from the nearest source the bot can walk to: the
+            // nearest by distance can sit behind a gate still standing.
+            GameObject* nearest = nullptr;
+            ChargeSourceChoice choice;
+            if (playerbot::LockedGetCopy(g_ChargeSourceByBot, botKey, choice) &&
+                nowMs - choice.chosenMs < kDutyChargeSourceRecheckMs &&
+                std::find(orders.chargeSources.begin(), orders.chargeSources.end(), choice.sourceGuid) != orders.chargeSources.end())
+            {
+                nearest = map->GetGameObject(choice.sourceGuid);
+                if (nearest && (!nearest->IsInWorld() || !nearest->isSpawned()))
+                    nearest = nullptr;
+            }
+
+            if (!nearest)
+            {
+                std::vector<std::pair<float, GameObject*>> candidates;
+                for (ObjectGuid const& sourceGuid : orders.chargeSources)
+                {
+                    GameObject* source = map->GetGameObject(sourceGuid);
+                    if (source && source->IsInWorld() && source->isSpawned())
+                        candidates.emplace_back(player->GetExactDist(source), source);
+                }
+                std::sort(candidates.begin(), candidates.end(),
+                    [](auto const& a, auto const& b) { return a.first < b.first; });
+
+                GuidVector gates;
+                battleground->GetStandingGates(gates);
+                uint32 checked = 0;
+                for (auto const& candidate : candidates)
+                {
+                    if (checked++ >= kDutyChargeSourceCandidates)
+                        break;
+                    if (!IsWalkableRoute(player, gates, candidate.second->GetPosition()))
+                        continue;
+                    nearest = candidate.second;
+                    break;
+                }
+
+                if (!nearest)
+                {
+                    playerbot::LockedErase(g_ChargeSourceByBot, botKey);
+                    return false;
+                }
+
+                playerbot::LockedSet(g_ChargeSourceByBot, botKey, ChargeSourceChoice{ nearest->GetGUID(), nowMs });
+            }
+
+            if (!nearest->IsAtInteractDistance(player))
+                return MoveToBattlegroundObjective(player, battleground, nearest->GetPosition()) || player->isMoving();
+
+            if (player->IsMounted())
+                ForcePlayerbotDismount(player);
+            StopVirtualPlayerbotMovement(player);
+            nearest->Use(player);
+            playerbot::LockedErase(g_ChargeSourceByBot, botKey);
+            EmitBattlegroundGmDebug(player, "objective-duty=fetch-charge source=" + std::to_string(nearest->GetEntry()), 1500);
+            return true;
+        }
+
+        // The ground a guard holds for this gate, re-decided now and then.
+        Position ResolveGuardSpot(Player* player, Battleground* battleground, playerbot::ObjectiveBotOrders const& orders)
+        {
+            uint64 const botKey = player->GetGUID().GetRawValue();
+            uint32 const nowMs = GameTime::GetGameTimeMS();
+            GuardSpotChoice choice;
+            if (playerbot::LockedGetCopy(g_GuardSpotByBot, botKey, choice) && choice.gateGuid == orders.gateGuid &&
+                nowMs - choice.chosenMs < kDutyGuardSpotRecheckMs)
+                return choice.spot;
+
+            choice = GuardSpotChoice();
+            choice.gateGuid = orders.gateGuid;
+            choice.chosenMs = nowMs;
+            choice.spot = orders.gateLocation;
+
+            GameObject* gate = player->FindMap() ? player->FindMap()->GetGameObject(orders.gateGuid) : nullptr;
+            if (gate)
+            {
+                GuidVector gates;
+                battleground->GetStandingGates(gates);
+                bool reachable = !IsRouteThroughStandingGate(player, gates, orders.gateLocation);
+                if (!reachable)
+                {
+                    // A teleporter whose exit is clear of the gates counts as
+                    // a way there (Isle of Conquest's keeps).
+                    std::vector<BattlegroundTeleporter> teleporters;
+                    battleground->GetTeleporters(player->GetGUID(), teleporters);
+                    for (BattlegroundTeleporter const& teleporter : teleporters)
+                        if (!CrossesStandingGate(player, gates, player->GetPosition(), teleporter.Entrance) &&
+                            !CrossesStandingGate(player, gates, teleporter.Exit, orders.gateLocation))
+                            reachable = true;
+                }
+
+                if (!reachable)
+                    choice.spot.Relocate(2.0f * gate->GetPositionX() - orders.gateLocation.GetPositionX(),
+                        2.0f * gate->GetPositionY() - orders.gateLocation.GetPositionY(), orders.gateLocation.GetPositionZ());
+            }
+
+            playerbot::LockedSet(g_GuardSpotByBot, botKey, choice);
+            return choice.spot;
+        }
+
+        bool AdvanceGuardGateDuty(Player* player, Battleground* battleground, playerbot::ObjectiveBotOrders const& orders)
+        {
+            Position const ground = ResolveGuardSpot(player, battleground, orders);
+            if (Unit* enemy = FindEnemyAtGround(player, ground, kDutyGateGuardRange))
+                if (playerbot::EngageSelectedEnemyPlayer(player, enemy, "gate-guard"))
+                    return true;
+
+            // Nobody at the gate: whatever the bot was fighting has gone, so
+            // the chase it installed stands down and the bot walks back.
+            if (Unit* victim = player->GetVictim();
+                victim && !victim->IsWithinDist3d(ground.GetPositionX(), ground.GetPositionY(), ground.GetPositionZ(),
+                    kDutyGateGuardRange))
+                player->AttackStop();
+
+            Position destination = ground;
+            playerbot::ApplyDeterministicObjectiveOffset(battleground, player, destination);
+            if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(),
+                kDutyGateGuardHold))
+                return MoveToBattlegroundObjective(player, battleground, destination) || player->isMoving();
+
+            return true;
+        }
+
+        bool AdvanceAssaultBossDuty(Player* player, Battleground* battleground, playerbot::ObjectiveBotOrders const& orders)
+        {
+            Map* map = player->FindMap();
+            Creature* boss = map ? map->GetCreature(orders.bossGuid) : nullptr;
+            if (!boss || !boss->IsAlive())
+                return false;
+
+            // Into the keep through the hole the team broke in it: a bot still
+            // further from the commander than that hole goes to the hole first,
+            // so it does not path into a wall still standing.
+            if (orders.bossHasApproach &&
+                player->GetExactDist(boss) > orders.bossApproach.GetExactDist(boss) + 5.0f &&
+                !player->IsWithinDist2d(&orders.bossApproach, kDutyGateStandRange))
+                return MoveToBattlegroundObjective(player, battleground, orders.bossApproach) || player->isMoving();
+
+            if (player->IsWithinDistInMap(boss, kDutyBossEngageRange) && player->IsWithinLOSInMap(boss))
+                if (playerbot::EngageSelectedEnemyPlayer(player, boss, "battleground-commander"))
+                    return true;
+
+            return MoveToBattlegroundObjective(player, battleground, boss->GetPosition()) || player->isMoving();
+        }
+    }
+
+    bool BattlegroundTacticalActions::ObjectiveDutyPrimitive(Player* player)
+    {
+        if (!player || !player->InBattleground())
+            return false;
+
+        Battleground* battleground = player->GetBattleground();
+        if (!battleground || battleground->GetStatus() != STATUS_IN_PROGRESS)
+            return false;
+
+        playerbot::ObjectiveBotOrders orders;
+        bool const hasOrders = playerbot::ObjectiveCoordinator::GetOrders(player, orders);
+
+        // In a seat, the only thing a bot does is drive its siege vehicle. A
+        // vehicle it no longer has a duty for it climbs out of - only one of
+        // the battleground's, never a mount of its own.
+        if (Unit* vehicleBase = player->GetVehicleBase())
+        {
+            if (hasOrders && orders.duty == playerbot::ObjectiveDuty::DriveSiege && vehicleBase->GetGUID() == orders.vehicleGuid)
+                return DriveSiegeVehicle(player, vehicleBase, orders);
+
+            if (vehicleBase->GetTypeId() == TYPEID_UNIT && battleground->GetSiegeObjectiveCount() > 0)
+            {
+                if (MotionMaster* motionMaster = vehicleBase->GetMotionMaster())
+                    motionMaster->Clear();
+                vehicleBase->StopMoving();
+                player->ExitVehicle();
+                return true;
+            }
+
+            return false;
+        }
+
+        if (!hasOrders)
+            return false;
+
+        switch (orders.duty)
+        {
+            case playerbot::ObjectiveDuty::CarryCharge:
+                return AdvanceCarryChargeDuty(player, battleground, orders);
+            case playerbot::ObjectiveDuty::DriveSiege:
+                return AdvanceDriveSiegeDuty(player, battleground, orders);
+            case playerbot::ObjectiveDuty::GuardGate:
+                return AdvanceGuardGateDuty(player, battleground, orders);
+            case playerbot::ObjectiveDuty::AssaultBoss:
+                return AdvanceAssaultBossDuty(player, battleground, orders);
+            default:
+                return false;
+        }
     }
 
     bool BattlegroundTacticalActions::PursueEnemyPrimitive(Player* player)

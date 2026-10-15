@@ -99,6 +99,9 @@ struct PvpValues
     // one of ours that the enemy is taking right now.
     uint8 nodeRole = 0;
     bool nodeUrgent = false;
+    // An ObjectiveDuty from ObjectiveCoordinator: a gate to bring down or
+    // guard, a commander to kill, the neutral flag to take or hunt. 0 = none.
+    uint8 objectiveDuty = 0;
     uint32 battlegroundTeamHumanCount = 0;
     bool battlegroundTeamHasHumans = false;
 

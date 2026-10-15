@@ -232,6 +232,7 @@ class BattlegroundWS : public Battleground
         uint8 GetFlagState(uint32 team)             { return _flagState[GetTeamIndexByTeamId(team)]; }
         ObjectGuid GetFlagPickupGUID(ObjectGuid playerGuid) const override;
         bool GetFlagCapturePosition(ObjectGuid carrierGuid, Position& position) const override;
+        uint32 GetFlagCaptureAreaTrigger(ObjectGuid carrierGuid) const override;
 
         /* Battleground Events */
         void EventPlayerDroppedFlag(Player* player) override;

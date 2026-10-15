@@ -17,6 +17,7 @@
 
 #include "PlayerbotNodeCoordinator.h"
 #include "PlayerbotObcClone.h"
+#include "PlayerbotObjectiveCoordinator.h"
 #include "PlayerbotRandomBotParticipation.h"
 #include "PlayerbotSharedStateGuard.h"
 #include "Battleground.h"
@@ -496,6 +497,14 @@ namespace
                 ++enemyOwned;
         }
 
+        // A bot the duty plan has sent at a gate, a commander or the flag is
+        // not a body for the bases. The duty plan is brought up to date first,
+        // so the two plans built in the same tick agree about who is where.
+        bots.erase(std::remove_if(bots.begin(), bots.end(), [&](Player const* bot)
+            {
+                return playerbot::ObjectiveCoordinator::IsOnDuty(battleground, map, team, referenceGuid, bot->GetGUID());
+            }), bots.end());
+
         std::vector<Player*> living;
         living.reserve(bots.size());
         for (Player* bot : bots)
@@ -749,6 +758,7 @@ bool NodeCoordinator::GetOrders(Player const* bot, NodeBotOrders& orders)
     orders.status = objective.Status;
     orders.location = objective.Location;
     orders.bannerGuid = objective.BannerGuid;
+    orders.captureRadius = objective.CaptureRadius;
     orders.role = RoleForStatus(objective.Status);
     orders.interact = orders.role != NodeRole::Defend;
 

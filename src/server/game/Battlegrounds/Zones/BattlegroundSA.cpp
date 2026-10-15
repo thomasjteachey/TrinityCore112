@@ -26,6 +26,7 @@
 #include "Player.h"
 #include "ScriptedCreature.h"
 #include "UpdateData.h"
+#include "Vehicle.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
@@ -151,9 +152,15 @@ bool BattlegroundSA::ResetObjs()
         }
     }
 
+    // The sigils, flagpoles, graveyard flags and bomb piles are added with no
+    // respawn time. Battleground::AddObject leaves an object despawned for the
+    // respawn time it is given, and unlike the gates and portals above nothing
+    // spawns these afterwards, so with RESPAWN_ONE_DAY nobody could see a
+    // graveyard flag or take a bomb. Added this way a bomb pile keeps the
+    // default respawn delay (5 min) after it hands out its one charge.
     for (uint8 i = BG_SA_SIGIL_1; i <= BG_SA_LEFT_FLAGPOLE; i++)
     {
-        if (!AddObject(i, BG_SA_ObjEntries[i], BG_SA_ObjSpawnlocs[i], 0, 0, 0, 0, RESPAWN_ONE_DAY))
+        if (!AddObject(i, BG_SA_ObjEntries[i], BG_SA_ObjSpawnlocs[i], 0, 0, 0, 0, RESPAWN_IMMEDIATELY))
         {
             TC_LOG_ERROR("bg.battleground", "SOTA: couldn't spawn Sigil, Entry: {}", BG_SA_ObjEntries[i]);
             continue;
@@ -219,7 +226,7 @@ bool BattlegroundSA::ResetObjs()
     //GY capture points
     for (uint8 i = BG_SA_CENTRAL_FLAG; i <= BG_SA_LEFT_FLAG; i++)
     {
-        if (!AddObject(i, (BG_SA_ObjEntries[i] - (Attackers == TEAM_ALLIANCE ? 1 : 0)), BG_SA_ObjSpawnlocs[i], 0, 0, 0, 0, RESPAWN_ONE_DAY))
+        if (!AddObject(i, (BG_SA_ObjEntries[i] - (Attackers == TEAM_ALLIANCE ? 1 : 0)), BG_SA_ObjSpawnlocs[i], 0, 0, 0, 0, RESPAWN_IMMEDIATELY))
         {
             TC_LOG_ERROR("bg.battleground", "SOTA: couldn't spawn Central Flag Entry: {}", BG_SA_ObjEntries[i] - (Attackers == TEAM_ALLIANCE ? 1 : 0));
             continue;
@@ -231,7 +238,7 @@ bool BattlegroundSA::ResetObjs()
 
     for (uint8 i = BG_SA_BOMB; i < BG_SA_MAXOBJ; i++)
     {
-        if (!AddObject(i, BG_SA_ObjEntries[BG_SA_BOMB], BG_SA_ObjSpawnlocs[i], 0, 0, 0, 0, RESPAWN_ONE_DAY))
+        if (!AddObject(i, BG_SA_ObjEntries[BG_SA_BOMB], BG_SA_ObjSpawnlocs[i], 0, 0, 0, 0, RESPAWN_IMMEDIATELY))
         {
             TC_LOG_ERROR("bg.battleground", "SOTA: couldn't spawn SA Bomb Entry: {}", BG_SA_ObjEntries[BG_SA_BOMB] + i);
             continue;
@@ -533,7 +540,13 @@ void BattlegroundSA::TeleportToEntrancePosition(Player* player)
 {
     if (player->GetTeamId() == Attackers)
     {
-        if (!ShipsStarted)
+        // Only a client rides the boat: the client animates it and carries its
+        // passengers along, so a bot put on the deck stays where the boat set
+        // out and is left in the sea. A bot lands straight on the beach instead,
+        // where the boats put everyone else ashore. No head start: the bot module
+        // holds bots in place while the match is still in STATUS_WAIT_JOIN,
+        // which covers both warmups.
+        if (!ShipsStarted && !IsBotParticipantSession(player->GetSession()))
         {
             player->AddUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
 
@@ -737,7 +750,7 @@ void BattlegroundSA::SendTime()
     UpdateWorldState(BG_SA_TIMER_SEC_DECS, ((end_of_round%60000)%10000)/1000);
 }
 
-bool BattlegroundSA::CanInteractWithObject(uint32 objectId)
+bool BattlegroundSA::CanInteractWithObject(uint32 objectId) const
 {
     switch (objectId)
     {
@@ -822,13 +835,14 @@ void BattlegroundSA::CaptureGraveyard(BG_SA_Graveyards i, Player* Source)
     uint32 npc = 0;
     uint32 flag = 0;
 
+    // The new flag is added spawned, like the first one (see ResetObjs).
     switch (i)
     {
         case BG_SA_LEFT_CAPTURABLE_GY:
             flag = BG_SA_LEFT_FLAG;
             DelObject(flag);
             AddObject(flag, (BG_SA_ObjEntries[flag] - (Source->GetTeamId() == TEAM_ALLIANCE ? 0 : 1)),
-                BG_SA_ObjSpawnlocs[flag], 0, 0, 0, 0, RESPAWN_ONE_DAY);
+                BG_SA_ObjSpawnlocs[flag], 0, 0, 0, 0, RESPAWN_IMMEDIATELY);
 
             npc = BG_SA_NPC_RIGSPARK;
             if (Creature* rigspark = AddCreature(BG_SA_NpcEntries[npc], npc, BG_SA_NpcSpawnlocs[npc], Attackers))
@@ -853,7 +867,7 @@ void BattlegroundSA::CaptureGraveyard(BG_SA_Graveyards i, Player* Source)
             flag = BG_SA_RIGHT_FLAG;
             DelObject(flag);
             AddObject(flag, (BG_SA_ObjEntries[flag] - (Source->GetTeamId() == TEAM_ALLIANCE ? 0 : 1)),
-                BG_SA_ObjSpawnlocs[flag], 0, 0, 0, 0, RESPAWN_ONE_DAY);
+                BG_SA_ObjSpawnlocs[flag], 0, 0, 0, 0, RESPAWN_IMMEDIATELY);
 
             npc = BG_SA_NPC_SPARKLIGHT;
             if (Creature* sparklight = AddCreature(BG_SA_NpcEntries[npc], npc, BG_SA_NpcSpawnlocs[npc], Attackers))
@@ -878,7 +892,7 @@ void BattlegroundSA::CaptureGraveyard(BG_SA_Graveyards i, Player* Source)
             flag = BG_SA_CENTRAL_FLAG;
             DelObject(flag);
             AddObject(flag, (BG_SA_ObjEntries[flag] - (Source->GetTeamId() == TEAM_ALLIANCE ? 0 : 1)),
-              BG_SA_ObjSpawnlocs[flag], 0, 0, 0, 0, RESPAWN_ONE_DAY);
+              BG_SA_ObjSpawnlocs[flag], 0, 0, 0, 0, RESPAWN_IMMEDIATELY);
 
             UpdateWorldState(BG_SA_CENTER_GY_ALLIANCE, GraveyardStatus[i] == TEAM_ALLIANCE);
             UpdateWorldState(BG_SA_CENTER_GY_HORDE, GraveyardStatus[i] == TEAM_HORDE);
@@ -1063,4 +1077,305 @@ bool BattlegroundSA::IsSpellAllowed(uint32 spellId, Player const* /*player*/) co
     }
 
     return true;
+}
+
+// The match described to players without a client (the playerbot module, which
+// never names a battleground) through the objective calls of Battleground.h.
+
+namespace
+{
+    // The graveyard nodes of GetDynamicNodeInfo, by the flag that takes each.
+    struct SAGraveyardNode
+    {
+        uint32 Flag;
+        BG_SA_Graveyards Graveyard;
+    };
+
+    SAGraveyardNode const SAGraveyardNodes[BG_SA_NODE_TITAN_RELIC] =
+    {
+        { BG_SA_RIGHT_FLAG,   BG_SA_RIGHT_CAPTURABLE_GY   },
+        { BG_SA_LEFT_FLAG,    BG_SA_LEFT_CAPTURABLE_GY    },
+        { BG_SA_CENTRAL_FLAG, BG_SA_CENTRAL_CAPTURABLE_GY }
+    };
+
+    // How far in front of a gate's origin its siege objective stands. Every
+    // gate faces the side its attackers come from (the outer pair look at the
+    // beach, the yellow gate and the chamber straight down the road away from
+    // the relic), and the gate model (WG_Gate01) reaches 5.9 yards out along
+    // that facing, so this is open ground a few yards clear of its face.
+    float const SAGateFrontDistance = 10.0f;
+
+    // The ground under each gate's front spot, in gate order, from the live
+    // navmesh (2026-10-15). A gate's origin is not at its foot - the chamber's
+    // stands 8.3 yards above the road - and the server's path search only
+    // reaches about five yards up or down, so a spot at gate height left
+    // nobody able to walk to it.
+    float const SAGateFrontGroundZ[MAX_GATES] = { 26.91f, 83.46f, 28.11f, 53.82f, 50.45f, 109.59f };
+
+    // The relic floats 7.7 yards over the chamber floor, which is level all
+    // around it; players click it from there.
+    float const SATitanRelicFloorZ = 112.5f;
+
+    // The spawns of World Trigger (Large AOI, Not Immune PC/NPC), NPC 23472, on
+    // map 607 in the world database. Using a Defender's Portal has the user cast
+    // 54640 on themselves, whose spell_scripts row has them cast 54643, and
+    // 54643 sends its caster to the 23472 nearest to it
+    // (TARGET_DEST_NEARBY_ENTRY): a portal leads to the trigger nearest to it.
+    // Each portal stands outside its gate, and that trigger is behind the gate.
+    Position const SADefenderPortalExits[] =
+    {
+        { 1043.52f,  -87.8507f, 87.197f  },
+        { 1193.76f,   69.9405f, 58.1295f },
+        { 1227.89f, -235.458f,  60.1112f },
+        { 1389.06f,  102.941f,  34.5742f },
+        { 1441.08f, -240.594f,  35.3471f }
+    };
+
+    Position const& GetDefenderPortalExit(Position const& portal)
+    {
+        Position const* exit = &SADefenderPortalExits[0];
+        for (Position const& trigger : SADefenderPortalExits)
+            if (portal.GetExactDistSq(trigger) < portal.GetExactDistSq(*exit))
+                exit = &trigger;
+
+        return *exit;
+    }
+}
+
+bool BattlegroundSA::IsRoundInProgress() const
+{
+    // ResetObjs puts the match back in STATUS_WAIT_JOIN between the rounds,
+    // and nothing can be taken during either warmup.
+    return GetStatus() == STATUS_IN_PROGRESS && (Status == BG_SA_ROUND_ONE || Status == BG_SA_ROUND_TWO);
+}
+
+bool BattlegroundSA::GetParticipantTeamId(ObjectGuid playerGuid, TeamId& teamId) const
+{
+    uint32 const team = GetPlayerTeam(playerGuid);
+    if (team != ALLIANCE && team != HORDE)
+        return false;
+
+    teamId = GetTeamIndexByTeamId(team);
+    return true;
+}
+
+bool BattlegroundSA::IsGateBreachable(uint32 gateId) const
+{
+    if (gateId >= MAX_GATES || GateStatus[gateId] == BG_SA_GATE_DESTROYED)
+        return false;
+
+    // The chain CanInteractWithObject walks: either gate of a wall opens the
+    // ground behind that whole wall.
+    bool const outerWallOpen = GateStatus[BG_SA_GREEN_GATE] == BG_SA_GATE_DESTROYED || GateStatus[BG_SA_BLUE_GATE] == BG_SA_GATE_DESTROYED;
+    bool const middleWallOpen = GateStatus[BG_SA_RED_GATE] == BG_SA_GATE_DESTROYED || GateStatus[BG_SA_PURPLE_GATE] == BG_SA_GATE_DESTROYED;
+
+    switch (gateId)
+    {
+        case BG_SA_GREEN_GATE:
+        case BG_SA_BLUE_GATE:
+            return true;
+        case BG_SA_RED_GATE:
+        case BG_SA_PURPLE_GATE:
+            return outerWallOpen;
+        case BG_SA_YELLOW_GATE:
+            return outerWallOpen && middleWallOpen;
+        case BG_SA_ANCIENT_GATE:
+            return outerWallOpen && middleWallOpen && GateStatus[BG_SA_YELLOW_GATE] == BG_SA_GATE_DESTROYED;
+        default:
+            return false;
+    }
+}
+
+GameObject* BattlegroundSA::FindMatchObject(uint32 type) const
+{
+    BattlegroundMap* map = FindBgMap();
+    if (!map || type >= BgObjects.size() || !BgObjects[type])
+        return nullptr;
+
+    return map->GetGameObject(BgObjects[type]);
+}
+
+Creature* BattlegroundSA::FindMatchCreature(uint32 type) const
+{
+    BattlegroundMap* map = FindBgMap();
+    if (!map || type >= BgCreatures.size() || !BgCreatures[type])
+        return nullptr;
+
+    return map->GetCreature(BgCreatures[type]);
+}
+
+bool BattlegroundSA::GetDynamicNodeInfo(ObjectGuid playerGuid, uint32 nodeId, BattlegroundNodeObjective& node) const
+{
+    if (nodeId >= BG_SA_DYNAMIC_NODE_COUNT || !IsRoundInProgress())
+        return false;
+
+    // Only the attackers take anything here: a graveyard is never taken back
+    // and the relic answers only them. The defenders get no nodes and play
+    // the gates (GetSiegeObjectiveInfo) instead.
+    TeamId teamId = TEAM_NEUTRAL;
+    if (!GetParticipantTeamId(playerGuid, teamId) || teamId != Attackers)
+        return false;
+
+    uint32 objectId = BG_SA_TITAN_RELIC;
+    if (nodeId != BG_SA_NODE_TITAN_RELIC)
+    {
+        // Nobody has to stand on a graveyard the attackers already hold, and
+        // once the relic can be clicked it ends the round: nobody is sent to
+        // a graveyard instead.
+        if (GraveyardStatus[SAGraveyardNodes[nodeId].Graveyard] == Attackers ||
+            CanInteractWithObject(BG_SA_TITAN_RELIC))
+            return false;
+
+        objectId = SAGraveyardNodes[nodeId].Flag;
+    }
+
+    // A flag, and the relic, open once the gates in front of it are down.
+    if (!CanInteractWithObject(objectId))
+        return false;
+
+    GameObject* objective = FindMatchObject(objectId);
+    if (!objective || !objective->isSpawned())
+        return false;
+
+    node.NodeId = nodeId;
+    node.Status = BattlegroundNodeStatus::EnemyControlled;
+    node.Location = objective->GetPosition();
+    if (nodeId == BG_SA_NODE_TITAN_RELIC)
+        node.Location.m_positionZ = SATitanRelicFloorZ;
+    node.BannerGuid = objective->GetGUID();
+    return true;
+}
+
+bool BattlegroundSA::GetSiegeObjectiveInfo(ObjectGuid playerGuid, uint32 index, BattlegroundSiegeObjective& objective) const
+{
+    if (index >= MAX_GATES || GetStatus() != STATUS_IN_PROGRESS)
+        return false;
+
+    TeamId teamId = TEAM_NEUTRAL;
+    if (!GetParticipantTeamId(playerGuid, teamId) || !BgObjects[index])
+        return false;
+
+    // Gate objects and GateStatus share the BG_SA_*_GATE numbering.
+    Position const& gate = BG_SA_ObjSpawnlocs[index];
+    float const facing = gate.GetOrientation();
+
+    objective.Id = index;
+    objective.GateGuid = BgObjects[index];
+    // Facing the gate, as a charge is set down in front of whoever plants it
+    // (52410, TARGET_DEST_CASTER_FRONT).
+    objective.Location.Relocate(gate.GetPositionX() + SAGateFrontDistance * std::cos(facing),
+        gate.GetPositionY() + SAGateFrontDistance * std::sin(facing), SAGateFrontGroundZ[index], facing + float(M_PI));
+    objective.Friendly = teamId != Attackers;
+    objective.Breachable = IsRoundInProgress() && IsGateBreachable(index);
+    return true;
+}
+
+bool BattlegroundSA::GetSiegeChargeInfo(ObjectGuid playerGuid, BattlegroundSiegeChargeInfo& charge) const
+{
+    if (!IsRoundInProgress())
+        return false;
+
+    // The bomb piles carry the attackers' faction (ResetObjs).
+    TeamId teamId = TEAM_NEUTRAL;
+    if (!GetParticipantTeamId(playerGuid, teamId) || teamId != Attackers)
+        return false;
+
+    charge.Sources.clear();
+    for (uint32 i = BG_SA_BOMB; i < BG_SA_MAXOBJ; ++i)
+    {
+        GameObject* bomb = FindMatchObject(i);
+        if (!bomb || !bomb->isSpawned() || bomb->HasFlag(GO_FLAG_NOT_SELECTABLE))
+            continue;
+
+        // A pile hands out a single charge and only goes on its respawn timer
+        // at its next update, so one emptied this tick is already gone.
+        uint32 const charges = bomb->GetGOInfo()->GetCharges();
+        if (charges && bomb->GetUseCount() >= charges)
+            continue;
+
+        charge.Sources.push_back(bomb->GetGUID());
+    }
+
+    if (charge.Sources.empty())
+        return false;
+
+    charge.ItemId = ITEM_MASSIVE_SEAFORIUM_CHARGE;
+    return true;
+}
+
+void BattlegroundSA::GetSiegeVehicles(ObjectGuid playerGuid, GuidVector& vehicles) const
+{
+    if (!IsRoundInProgress())
+        return;
+
+    // Demolishers carry the attackers' faction (OverrideGunFaction,
+    // CaptureGraveyard), and their spellclick seats only a friendly clicker.
+    TeamId teamId = TEAM_NEUTRAL;
+    if (!GetParticipantTeamId(playerGuid, teamId) || teamId != Attackers)
+        return;
+
+    for (uint32 i = BG_SA_DEMOLISHER_1; i <= BG_SA_DEMOLISHER_8; ++i)
+    {
+        // The workshop four exist once their graveyard is taken, a dead one
+        // waits on UpdateDemolisherSpawns, and DemolisherStartState keeps the
+        // beach four uninteractible until the round starts. A vehicle with no
+        // seat left to click loses its spellclick flag.
+        Creature* demolisher = FindMatchCreature(i);
+        if (!demolisher || !demolisher->IsAlive() || demolisher->HasUnitFlag(UNIT_FLAG_UNINTERACTIBLE) ||
+            !demolisher->HasNpcFlag(UNIT_NPC_FLAG_SPELLCLICK))
+            continue;
+
+        Vehicle const* vehicle = demolisher->GetVehicleKit();
+        if (!vehicle)
+            continue;
+
+        // Free to drive while its driver's seat is: the other two seats of
+        // vehicle 158 only carry passengers.
+        bool driverSeatFree = false;
+        for (SeatMap::value_type const& seat : vehicle->Seats)
+        {
+            if (seat.second.SeatInfo && seat.second.SeatInfo->HasFlag(VEHICLE_SEAT_FLAG_CAN_CONTROL))
+            {
+                driverSeatFree = seat.second.IsEmpty();
+                break;
+            }
+        }
+
+        if (driverSeatFree)
+            vehicles.push_back(demolisher->GetGUID());
+    }
+}
+
+void BattlegroundSA::GetStandingGates(GuidVector& gates) const
+{
+    // A damaged gate still blocks the way; only a destroyed one is open.
+    for (uint8 i = 0; i < MAX_GATES; ++i)
+        if (GateStatus[i] != BG_SA_GATE_DESTROYED && !BgObjects[i].IsEmpty())
+            gates.push_back(BgObjects[i]);
+}
+
+void BattlegroundSA::GetTeleporters(ObjectGuid playerGuid, std::vector<BattlegroundTeleporter>& teleporters) const
+{
+    if (!IsRoundInProgress())
+        return;
+
+    // The portals carry the defenders' faction (ResetObjs), which is all that
+    // keeps an attacker off them: 54640's script checks teams only in
+    // Wintergrasp.
+    TeamId teamId = TEAM_NEUTRAL;
+    if (!GetParticipantTeamId(playerGuid, teamId) || teamId == Attackers)
+        return;
+
+    for (uint32 i = BG_SA_PORTAL_DEFFENDER_BLUE; i <= BG_SA_PORTAL_DEFFENDER_RED; ++i)
+    {
+        GameObject* portal = FindMatchObject(i);
+        if (!portal || !portal->isSpawned())
+            continue;
+
+        BattlegroundTeleporter teleporter;
+        teleporter.GoGuid = portal->GetGUID();
+        teleporter.Entrance = portal->GetPosition();
+        teleporter.Exit = GetDefenderPortalExit(*portal);
+        teleporters.push_back(teleporter);
+    }
 }

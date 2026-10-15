@@ -135,6 +135,16 @@ bool BattlegroundTP::GetFlagCapturePosition(ObjectGuid carrierGuid, Position& po
     return true;
 }
 
+uint32 BattlegroundTP::GetFlagCaptureAreaTrigger(ObjectGuid carrierGuid) const
+{
+    Position capturePosition;
+    if (!GetFlagCapturePosition(carrierGuid, capturePosition))
+        return 0;
+
+    // The carrier's own flag room, the trigger HandleAreaTrigger scores in.
+    return GetPlayerTeam(carrierGuid) == ALLIANCE ? 5904 : 5905;
+}
+
 char const* BattlegroundTP::GetCTFFlagStateToken(uint8 flagState) const
 {
     switch (flagState)

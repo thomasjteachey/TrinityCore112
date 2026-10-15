@@ -21,6 +21,7 @@
 #include "DBCStores.h"
 #include "GameObject.h"
 #include "Log.h"
+#include "Map.h"
 #include "MotionMaster.h"
 #include "ObjectMgr.h"
 #include "Player.h"
@@ -67,6 +68,186 @@ BattlegroundAV::BattlegroundAV()
 }
 
 BattlegroundAV::~BattlegroundAV() { }
+
+namespace
+{
+    // A general fights beside the marshals or warmasters of his side's four
+    // towers, each of whom only leaves when its own tower burns, and with two
+    // or more of them still at his side the fight wipes a level-60 raid.
+    constexpr uint32 BG_AV_GENERAL_ENGAGE_TOWERS_DESTROYED = 3;
+
+    // The captains and generals in BG_AV_BossObjectives order. All four are
+    // static creatures, spawned from row StaticPlace of BG_AV_StaticCreaturePos
+    // into BgCreatures[AV_CPLACE_MAX + StaticPlace]; NpcInfo names the entry
+    // HandleKillUnit pays out on.
+    struct AVBossObjectiveInfo
+    {
+        uint16 StaticPlace;
+        BG_AV_CreatureIds NpcInfo;
+        uint32 Team;
+        bool General;
+    };
+
+    AVBossObjectiveInfo const AVBossObjectiveInfos[BG_AV_BOSS_OBJECTIVES_COUNT] =
+    {
+        {  61, AV_NPC_A_CAPTAIN, ALLIANCE, false }, // Captain Balinda Stonehearth
+        {  59, AV_NPC_H_CAPTAIN, HORDE,    false }, // Captain Galvangar
+        {  60, AV_NPC_A_BOSS,    ALLIANCE, true  }, // Vanndar Stormpike
+        { 122, AV_NPC_H_BOSS,    HORDE,    true  }, // Drek'Thar
+    };
+}
+
+uint32 BattlegroundAV::GetNodeBannerObject(BG_AV_Nodes node) const
+{
+    BG_AV_NodeInfo const& info = m_Nodes[node];
+    if (info.State == POINT_DESTROYED)
+        return BG_AV_OBJECT_MAX;
+
+    // Snowfall before its first capture has a banner of its own.
+    if (info.Owner == AV_NEUTRAL_TEAM)
+        return BG_AV_OBJECT_FLAG_N_SNOWFALL_GRAVE;
+
+    // The banners come in four families - Alliance held, Alliance assault,
+    // Horde assault, Horde held - each numbered over the graveyards and then
+    // over the towers that can carry it: the Alliance bunkers for Alliance held
+    // and Horde assault, the Horde towers for the other two.
+    // GetObjectThroughNode draws the same map but aborts where this answers
+    // "none".
+    bool const assaulted = info.State == POINT_ASSAULTED;
+    uint32 const index = uint32(node);
+    if (node <= BG_AV_NODES_FROSTWOLF_HUT)
+    {
+        if (info.Owner == ALLIANCE)
+            return (assaulted ? BG_AV_OBJECT_FLAG_C_A_FIRSTAID_STATION : BG_AV_OBJECT_FLAG_A_FIRSTAID_STATION) + index;
+        return (assaulted ? BG_AV_OBJECT_FLAG_C_H_FIRSTAID_STATION : BG_AV_OBJECT_FLAG_H_FIRSTAID_STATION) + index;
+    }
+
+    // A tower burns instead of changing hands, so it only ever carries its own
+    // side's banner or the other side's assault banner.
+    if (node <= BG_AV_NODES_STONEHEART_BUNKER)
+    {
+        if (info.Owner == ALLIANCE && !assaulted)
+            return BG_AV_OBJECT_FLAG_A_FIRSTAID_STATION + index;
+        if (info.Owner == HORDE && assaulted)
+            return BG_AV_OBJECT_FLAG_C_H_FIRSTAID_STATION + index;
+        return BG_AV_OBJECT_MAX;
+    }
+
+    uint32 const tower = index - uint32(BG_AV_NODES_ICEBLOOD_TOWER);
+    if (info.Owner == HORDE && !assaulted)
+        return BG_AV_OBJECT_FLAG_H_ICEBLOOD_TOWER + tower;
+    if (info.Owner == ALLIANCE && assaulted)
+        return BG_AV_OBJECT_FLAG_C_A_ICEBLOOD_TOWER + tower;
+    return BG_AV_OBJECT_MAX;
+}
+
+bool BattlegroundAV::GetDynamicNodeInfo(ObjectGuid playerGuid, uint32 nodeId, BattlegroundNodeObjective& node) const
+{
+    if (nodeId >= BG_AV_NODES_MAX || GetStatus() != STATUS_IN_PROGRESS)
+        return false;
+
+    uint32 const playerTeam = GetPlayerTeam(playerGuid);
+    if (playerTeam != ALLIANCE && playerTeam != HORDE)
+        return false;
+
+    // A burnt tower is nobody's objective any more.
+    BG_AV_NodeInfo const& info = m_Nodes[nodeId];
+    if (info.State == POINT_DESTROYED)
+        return false;
+
+    node.NodeId = nodeId;
+    node.Location = BG_AV_ObjectPos[nodeId];
+
+    // Only a banner that is standing: a click on a despawned one does nothing.
+    node.BannerGuid = ObjectGuid::Empty;
+    uint32 const bannerObject = GetNodeBannerObject(BG_AV_Nodes(nodeId));
+    if (bannerObject < BG_AV_OBJECT_MAX)
+        if (BattlegroundMap* map = FindBgMap())
+            if (GameObject const* banner = map->GetGameObject(BgObjects[bannerObject]))
+                if (banner->isSpawned())
+                    node.BannerGuid = banner->GetGUID();
+
+    // Owner is whoever has a banner up: the holder of a controlled node, the
+    // attacker of an assaulted one. While assaulted, PrevOwner is who held it
+    // before the click, and only they can click it back. Until Snowfall's
+    // first capture either side may click over the other's assault banner,
+    // restarting the clock for the clicker, so "under attack" there still
+    // means "click it before the timer ends". A tower's attackers hold it
+    // until it burns rather than until it turns, which "contested" covers.
+    if (info.Owner == AV_NEUTRAL_TEAM)
+        node.Status = BattlegroundNodeStatus::Neutral;
+    else if (info.State == POINT_ASSAULTED)
+    {
+        if (info.Owner == playerTeam)
+            node.Status = BattlegroundNodeStatus::FriendlyContested;
+        else if (info.PrevOwner == playerTeam)
+            node.Status = BattlegroundNodeStatus::FriendlyUnderAttack;
+        else
+            node.Status = BattlegroundNodeStatus::EnemyContested;
+    }
+    else if (info.Owner == playerTeam)
+        node.Status = BattlegroundNodeStatus::FriendlyControlled;
+    else
+        node.Status = BattlegroundNodeStatus::EnemyControlled;
+
+    return true;
+}
+
+bool BattlegroundAV::GetBossObjectiveInfo(ObjectGuid playerGuid, uint32 index, BattlegroundBossObjective& boss) const
+{
+    if (index >= BG_AV_BOSS_OBJECTIVES_COUNT || GetStatus() != STATUS_IN_PROGRESS)
+        return false;
+
+    uint32 const playerTeam = GetPlayerTeam(playerGuid);
+    if (playerTeam != ALLIANCE && playerTeam != HORDE)
+        return false;
+
+    AVBossObjectiveInfo const& info = AVBossObjectiveInfos[index];
+
+    // HandleKillUnit pays for a captain once, so one a GM brought back is no
+    // objective.
+    if (!info.General && !m_CaptainAlive[GetTeamIndexByTeamId(info.Team)])
+        return false;
+
+    BattlegroundMap* map = FindBgMap();
+    if (!map)
+        return false;
+
+    Creature const* creature = map->GetCreature(BgCreatures[AV_CPLACE_MAX + info.StaticPlace]);
+    if (!creature || !creature->IsAlive() || creature->GetEntry() != BG_AV_CreatureInfo[info.NpcInfo])
+        return false;
+
+    boss.Id = index;
+    boss.BossGuid = creature->GetGUID();
+    boss.Friendly = info.Team == playerTeam;
+    boss.HasApproach = false;
+    boss.Engageable = false;
+    if (boss.Friendly)
+        return true;
+
+    // A captain holds her outpost with its guards around her. A handful of
+    // bots sent in from the opening only feed the other side's reinforcements,
+    // so she is fought once both towers beside the outpost have burned and the
+    // attack has reached her anyway: Stonehearth and Icewing for Balinda,
+    // Iceblood and Tower Point for Galvangar.
+    if (!info.General)
+    {
+        BG_AV_Nodes const firstGuard = info.Team == ALLIANCE ? BG_AV_NODES_ICEWING_BUNKER : BG_AV_NODES_ICEBLOOD_TOWER;
+        BG_AV_Nodes const secondGuard = info.Team == ALLIANCE ? BG_AV_NODES_STONEHEART_BUNKER : BG_AV_NODES_TOWER_POINT;
+        boss.Engageable = m_Nodes[firstGuard].State == POINT_DESTROYED && m_Nodes[secondGuard].State == POINT_DESTROYED;
+        return true;
+    }
+
+    BG_AV_Nodes const firstTower = info.Team == ALLIANCE ? BG_AV_NODES_DUNBALDAR_SOUTH : BG_AV_NODES_ICEBLOOD_TOWER;
+    BG_AV_Nodes const lastTower = info.Team == ALLIANCE ? BG_AV_NODES_STONEHEART_BUNKER : BG_AV_NODES_FROSTWOLF_WTOWER;
+    uint32 destroyedTowers = 0;
+    for (BG_AV_Nodes tower = firstTower; tower <= lastTower; ++tower)
+        if (m_Nodes[tower].State == POINT_DESTROYED)
+            ++destroyedTowers;
+
+    boss.Engageable = destroyedTowers >= BG_AV_GENERAL_ENGAGE_TOWERS_DESTROYED;
+    return true;
+}
 
 void BattlegroundAV::HandleKillPlayer(Player* player, Player* killer)
 {

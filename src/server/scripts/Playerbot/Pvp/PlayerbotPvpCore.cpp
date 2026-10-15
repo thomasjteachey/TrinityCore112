@@ -19,6 +19,7 @@
 #include "PlayerbotPvpCore.h"
 #include "PlayerbotCtfCoordinator.h"
 #include "PlayerbotNodeCoordinator.h"
+#include "PlayerbotObjectiveCoordinator.h"
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotRandomBotParticipation.h"
 #include "Playerbot/Pve/PlayerbotPveManager.h"
@@ -1301,6 +1302,13 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
         values.nodeAssaultAvailable = !isDefense;
     }
 
+    // Gates, commanders and the neutral flag of a base match (Strand of the
+    // Ancients, Isle of Conquest, Alterac Valley, Eye of the Storm). The bots
+    // given a duty were left out of the base plan above.
+    playerbot::ObjectiveBotOrders dutyOrders;
+    if (playerbot::ObjectiveCoordinator::GetOrders(player, dutyOrders))
+        values.objectiveDuty = uint8(dutyOrders.duty);
+
     if (BattlegroundWS* bgWs = dynamic_cast<BattlegroundWS*>(battleground))
     {
         ObjectGuid const enemyCarrierGuid = bgWs->GetFlagPickerGUID(botTeam);
@@ -1365,6 +1373,21 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
     battleground->GetObjectiveCarriers(carriers);
     for (ObjectGuid const& carrierGuid : carriers)
         populateNeutralFlagCarrierValues(carrierGuid);
+
+    // The neutral flag of a base match (Eye of the Storm) is played by the
+    // bots the duty plan sends for it. Everybody else stays on the bases,
+    // which are where that flag is scored: it picks the flag up only when it
+    // is standing on it, turns on an enemy carrier only when he is close, and
+    // escorts ours only when it is already beside him.
+    if (playerbot::NodeCoordinator::IsNodeBattleground(battleground) &&
+        !values.playerHasFlag && values.objectiveDuty != uint8(playerbot::ObjectiveDuty::FlagRunner))
+    {
+        values.flagPickupAvailable = values.flagPickupNearby;
+        values.enemyFlagCarrierActive = values.objectiveDuty == uint8(playerbot::ObjectiveDuty::FlagHunt) ||
+            values.enemyFlagCarrierNear;
+        values.teamFlagCarrierNear = values.teamFlagCarrierNear &&
+            IsFlagCarrierNear(player, battleground->GetFlagPickerGUID(), 40.0f);
+    }
 }
 
     struct SpellDecision
@@ -8187,12 +8210,21 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
             return decision;
         }
 
-    std::array<TacticalRule, 12> const rules =
+    // A gate to bring down or hold and a commander to kill are what the bot
+    // was sent for; the flag duties travel through the flag rules instead.
+    bool const siegeOrCommanderDuty =
+        values.objectiveDuty == uint8(playerbot::ObjectiveDuty::CarryCharge) ||
+        values.objectiveDuty == uint8(playerbot::ObjectiveDuty::DriveSiege) ||
+        values.objectiveDuty == uint8(playerbot::ObjectiveDuty::GuardGate) ||
+        values.objectiveDuty == uint8(playerbot::ObjectiveDuty::AssaultBoss);
+
+    std::array<TacticalRule, 13> const rules =
     {{
         { "bg waiting", bgWaiting, "bg move to start", 50.0f },
         { "player has flag", bgActive && values.playerHasFlag, "bg move to objective", 100.0f },
         { "flag pickup nearby", bgActive && values.flagPickupNearby, "bg move to objective", 99.0f },
         { "enemy flag carrier active", bgActive && enemyFlagCarrierActive, "attack enemy flag carrier", 95.0f },
+        { "objective duty", bgActive && siegeOrCommanderDuty, "bg objective duty", 93.0f },
         { "flag pickup available", bgActive && values.flagPickupAvailable, "bg move to objective", 90.0f },
         // A base of ours being taken is the cheapest base on the map and it is
         // lost on a timer, so it outranks escorting a carrier around.
@@ -8813,6 +8845,11 @@ PvpValues PvpCore::CollectValues(Player const* player)
         context.classSpellsEnabled = IsClassSpellGateEnabled(g_PvpCoreConfig);
         if (!context.classSpellsEnabled || !player)
             return context;
+
+    // A bot in a vehicle seat fights with the vehicle - its objective duty
+    // drives it - and its own spells and movement mean nothing in a seat.
+    if (player->GetVehicle())
+        return context;
 
     bool const inActiveBattleground = values.inBattleground && IsTriggerActive(PvpTrigger::BgActive, values);
     // A carrier always owns its capture route. A midfield bot owns its live

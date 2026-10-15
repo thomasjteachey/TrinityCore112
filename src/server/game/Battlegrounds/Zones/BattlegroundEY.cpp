@@ -37,6 +37,16 @@ uint32 BG_EY_HonorScoreTicks[BG_HONOR_MODE_NUM] =
     160  // holiday
 };
 
+// The area triggers HandleAreaTrigger scores the flag on, indexed like
+// EYBattlegroundPoints and BG_EY_TriggerPositions.
+uint32 const BG_EY_FlagCaptureTriggers[EY_POINTS_MAX] =
+{
+    TR_FEL_REAVER_POINT,
+    TR_BLOOD_ELF_POINT,
+    TR_DRAENEI_RUINS_POINT,
+    TR_MAGE_TOWER_POINT
+};
+
 void BattlegroundEYScore::BuildObjectivesBlock(WorldPacket& data)
 {
     data << uint32(1); // Objectives Count
@@ -77,6 +87,188 @@ BattlegroundEY::BattlegroundEY()
 }
 
 BattlegroundEY::~BattlegroundEY() { }
+
+bool BattlegroundEY::GetDynamicNodeInfo(ObjectGuid playerGuid, uint32 nodeId, BattlegroundNodeObjective& node) const
+{
+    if (nodeId >= EY_POINTS_MAX || GetStatus() != STATUS_IN_PROGRESS)
+        return false;
+
+    uint32 const playerTeam = GetPlayerTeam(playerGuid);
+    if (playerTeam != ALLIANCE && playerTeam != HORDE)
+        return false;
+
+    // A tower is held by standing near it, not by clicking a banner:
+    // CheckSomeoneJoinedPoint counts everyone within BG_EY_POINT_RADIUS of the
+    // tower cap object. The cap can sit up on the tower, off the ground anyone
+    // walks, so the node is placed on the tower's flag spot instead: walkable
+    // by construction (the flag is carried there) and 21-29 yards from the
+    // cap, well inside the radius.
+    node.NodeId = nodeId;
+    node.BannerGuid = ObjectGuid::Empty;
+    node.CaptureRadius = float(BG_EY_POINT_RADIUS);
+    node.Location = BG_EY_TriggerPositions[nodeId];
+
+    // UpdatePointStatuses moves the bar toward whichever team has more bodies
+    // on the tower, so the counts from the last tower tick say which way it is
+    // going. Owner and state always change together: a holder loses the tower
+    // as soon as the bar is back in the neutral middle, so a tower that is not
+    // under control never has an owner.
+    uint8 const friendlyCount = GetPointPlayersCount(nodeId, playerTeam);
+    uint8 const enemyCount = GetPointPlayersCount(nodeId, GetOtherTeam(playerTeam));
+    if (m_PointState[nodeId] == EY_POINT_UNDER_CONTROL)
+    {
+        if (m_PointOwnedByTeam[nodeId] != playerTeam)
+            node.Status = BattlegroundNodeStatus::EnemyControlled;
+        else if (enemyCount > friendlyCount)
+            node.Status = BattlegroundNodeStatus::FriendlyUnderAttack;
+        else
+            node.Status = BattlegroundNodeStatus::FriendlyControlled;
+    }
+    else if (friendlyCount > enemyCount)
+        node.Status = BattlegroundNodeStatus::FriendlyContested;
+    else if (enemyCount > friendlyCount)
+        node.Status = BattlegroundNodeStatus::EnemyContested;
+    else
+    {
+        // Nobody is moving the bar. An empty tower keeps it wherever it was
+        // left, which takes nothing until someone stands on it again.
+        node.Status = BattlegroundNodeStatus::Neutral;
+    }
+
+    return true;
+}
+
+ObjectGuid BattlegroundEY::GetFlagPickupGUID(ObjectGuid playerGuid) const
+{
+    if (GetStatus() != STATUS_IN_PROGRESS || playerGuid.IsEmpty() || IsFlagPickedup())
+        return ObjectGuid::Empty;
+
+    uint32 const playerTeam = GetPlayerTeam(playerGuid);
+    if (playerTeam != ALLIANCE && playerTeam != HORDE)
+        return ObjectGuid::Empty;
+
+    // There is one neutral flag both teams race for: the flag stand in the
+    // middle while it is home (RespawnFlag spawns it and a click despawns it),
+    // or the flag a carrier dropped. Between a capture and the respawn there
+    // is nothing to take.
+    ObjectGuid flagGuid;
+    if (m_FlagState == BG_EY_FLAG_STATE_ON_BASE)
+        flagGuid = BgObjects[BG_EY_OBJECT_FLAG_NETHERSTORM];
+    else if (m_FlagState == BG_EY_FLAG_STATE_ON_GROUND)
+        flagGuid = m_DroppedFlagGUID;
+
+    BattlegroundMap* map = FindBgMap();
+    if (flagGuid.IsEmpty() || !map)
+        return ObjectGuid::Empty;
+
+    // GameObject::Use refuses the flag to the dead, the immune and anyone
+    // still under Recently Dropped Flag. Sending them to it would only park
+    // them on a flag they cannot take.
+    Player const* player = ObjectAccessor::GetPlayer(map, playerGuid);
+    GameObject* flag = map->GetGameObject(flagGuid);
+    if (!player || !flag || !player->CanUseBattlegroundObject(flag))
+        return ObjectGuid::Empty;
+
+    return flagGuid;
+}
+
+uint32 BattlegroundEY::SelectFlagCaptureTower(ObjectGuid carrierGuid, bool& controlled) const
+{
+    controlled = false;
+    if (GetStatus() != STATUS_IN_PROGRESS || carrierGuid.IsEmpty() || carrierGuid != m_FlagKeeper)
+        return EY_POINTS_MAX;
+
+    uint32 const carrierTeam = GetPlayerTeam(carrierGuid);
+    if (carrierTeam != ALLIANCE && carrierTeam != HORDE)
+        return EY_POINTS_MAX;
+
+    BattlegroundMap* map = FindBgMap();
+    Player const* carrier = map ? ObjectAccessor::GetPlayer(map, carrierGuid) : nullptr;
+    if (!carrier)
+        return EY_POINTS_MAX;
+
+    // The flag only scores at a tower the carrier's team holds, so the nearest
+    // of those wins. Holding none, the carrier still needs somewhere to go:
+    // the nearest tower its team is taking (more of them on it than enemies,
+    // so the bar is moving their way), else the nearest tower at all. Waiting
+    // there adds the carrier's own body to the capture, because every trigger
+    // lies well inside its tower's BG_EY_POINT_RADIUS.
+    uint32 const enemyTeam = GetOtherTeam(carrierTeam);
+    uint32 bestPoint = EY_POINTS_MAX;
+    uint8 bestRank = 0;
+    float bestDistSq = 0.0f;
+    for (uint32 point = 0; point < EY_POINTS_MAX; ++point)
+    {
+        // Lower is better: 0 held, 1 being taken, 2 anything else.
+        uint8 rank = 2;
+        if (m_PointState[point] == EY_POINT_UNDER_CONTROL && m_PointOwnedByTeam[point] == carrierTeam)
+            rank = 0;
+        else if (GetPointPlayersCount(point, carrierTeam) > GetPointPlayersCount(point, enemyTeam))
+            rank = 1;
+
+        float const distSq = carrier->GetExactDistSq(BG_EY_TriggerPositions[point]);
+        if (bestPoint == EY_POINTS_MAX || rank < bestRank || (rank == bestRank && distSq < bestDistSq))
+        {
+            bestPoint = point;
+            bestRank = rank;
+            bestDistSq = distSq;
+        }
+    }
+
+    controlled = bestRank == 0;
+    return bestPoint;
+}
+
+bool BattlegroundEY::GetFlagCapturePosition(ObjectGuid carrierGuid, Position& position) const
+{
+    bool controlled = false;
+    uint32 const point = SelectFlagCaptureTower(carrierGuid, controlled);
+    if (point >= EY_POINTS_MAX)
+        return false;
+
+    // Aim at the trigger's own centre, which is what IsInAreaTriggerRadius
+    // measures from. BG_EY_TriggerPositions sits a few tenths of a yard off it.
+    if (AreaTriggerEntry const* trigger = sAreaTriggerStore.LookupEntry(BG_EY_FlagCaptureTriggers[point]))
+        position.Relocate(trigger->Pos.X, trigger->Pos.Y, trigger->Pos.Z, 0.0f);
+    else
+        position.Relocate(BG_EY_TriggerPositions[point]);
+
+    return true;
+}
+
+// Both start platforms float above the field: players leave them by jumping
+// off, and the navmesh has nothing joining a platform (22 polygons each) to the
+// ground below, so a pathfinder can never walk off one. The ledges are the
+// lowest drop off each platform onto the region holding all four towers, found
+// by scanning the live mmtiles (2026-10-15): 29.7 yards for the Alliance, 27.6
+// for the Horde. Above IslandMinZ is the platform; the field under it never
+// rises past 1230 there.
+BattlegroundDropExit const BG_EY_StartPlatformExits[2] =
+{
+    // Alliance platform
+    { { 2526.8f, 1596.7f, 1265.0f }, 50.0f, 1245.0f, { 2500.9f, 1616.0f, 1258.9f }, { 2499.4f, 1618.5f, 1229.7f } },
+    // Horde platform
+    { { 1804.7f, 1539.3f, 1265.0f }, 50.0f, 1245.0f, { 1830.8f, 1521.5f, 1257.5f }, { 1831.7f, 1520.3f, 1230.3f } }
+};
+
+void BattlegroundEY::GetDropExits(ObjectGuid /*playerGuid*/, std::vector<BattlegroundDropExit>& exits) const
+{
+    // Either side's own graveyard of last resort is up on its platform too, so
+    // this holds all match long, not only at the gates.
+    exits.insert(exits.end(), std::begin(BG_EY_StartPlatformExits), std::end(BG_EY_StartPlatformExits));
+}
+
+uint32 BattlegroundEY::GetFlagCaptureAreaTrigger(ObjectGuid carrierGuid) const
+{
+    // HandleAreaTrigger only scores at a tower the carrier's team holds; any
+    // other choice is just a place to wait.
+    bool controlled = false;
+    uint32 const point = SelectFlagCaptureTower(carrierGuid, controlled);
+    if (point >= EY_POINTS_MAX || !controlled)
+        return 0;
+
+    return BG_EY_FlagCaptureTriggers[point];
+}
 
 void BattlegroundEY::PostUpdateImpl(uint32 diff)
 {

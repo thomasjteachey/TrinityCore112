@@ -219,6 +219,7 @@ class BattlegroundTP : public Battleground
         uint8 GetFlagState(TeamId teamId) const { return _flagState[teamId]; }
         ObjectGuid GetFlagPickupGUID(ObjectGuid playerGuid) const override;
         bool GetFlagCapturePosition(ObjectGuid carrierGuid, Position& position) const override;
+        uint32 GetFlagCaptureAreaTrigger(ObjectGuid carrierGuid) const override;
 
         /* Battleground Events */
         void EventPlayerDroppedFlag(Player* player) override;

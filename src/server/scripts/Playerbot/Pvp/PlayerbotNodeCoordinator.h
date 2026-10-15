@@ -97,6 +97,10 @@ struct NodeBotOrders
     // the enemy is taking it.
     bool interact = false;
 
+    // A base taken by standing on it (Eye of the Storm): the battleground's
+    // capture radius around location. Zero for a banner base.
+    float captureRadius = 0.0f;
+
     // Hold this base rather than follow the fight across the map. A bot
     // dragged past leashRange walks back to the banner instead of chasing -
     // pulling the guard off a base was the other half of the solo cap.

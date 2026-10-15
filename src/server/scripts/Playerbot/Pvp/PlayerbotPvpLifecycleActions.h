@@ -56,6 +56,10 @@ public:
     static bool ProtectFlagCarrierPrimitive(Player* player, BattlegroundTacticalContext const& context);
     static void DelayFlagPickup(Player* player, uint32 delayMs);
 
+    // Gates, siege vehicles and commanders (ObjectiveCoordinator duties). A
+    // bot sitting in a vehicle seat runs nothing else.
+    static bool ObjectiveDutyPrimitive(Player* player);
+
     // Warsong Gulch / Twin Peaks team play (CtfCoordinator orders).
     static bool FlagHandoffPrimitive(Player* player);
     static bool EscortFlagRunnerPrimitive(Player* player);
