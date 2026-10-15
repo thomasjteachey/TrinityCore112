@@ -384,6 +384,11 @@ void BattlegroundMgr::Update(uint32 diff)
             uint32 arenaMMRating = scheduled[i] >> 32;
             uint8 arenaType = scheduled[i] >> 24 & 255;
             BattlegroundQueueTypeId bgQueueTypeId = BattlegroundQueueTypeId(scheduled[i] >> 16 & 255);
+            if (bgQueueTypeId >= MAX_BATTLEGROUND_QUEUE_TYPES)
+            {
+                TC_LOG_ERROR("bg.battleground", "BattlegroundMgr::Update: scheduled update for queue {} (of {}) dropped", uint32(bgQueueTypeId), uint32(MAX_BATTLEGROUND_QUEUE_TYPES));
+                continue;
+            }
             BattlegroundTypeId bgTypeId = BattlegroundTypeId((scheduled[i] >> 8) & 255);
             // Only the low byte of the type id fits the schedule. A queue that
             // serves one type names it whole, which is what restores ids past
@@ -1347,7 +1352,12 @@ void BattlegroundMgr::ScheduleQueueUpdate(uint32 arenaMatchmakerRating, uint8 ar
 {
     //This method must be atomic, @todo add mutex
     //we will use only 1 number created of bgTypeId and bracket_id
-    uint64 const scheduleId = ((uint64)arenaMatchmakerRating << 32) | ((uint64)arenaType << 24) | ((uint64)bgQueueTypeId << 16) | ((uint64)bgTypeId << 8) | (uint64)bracket_id;
+    // The type id gets eight bits: the update loop puts one past 255 back
+    // together from its queue. Unmasked, Four Corners' 887 (0x377) ran into
+    // the queue byte, so a join updated the wrong queue (2v2v2v2 the
+    // 4v4v4v4 one, 5v5v5v5 one past the end of m_BattlegroundQueues) and
+    // only the periodic sweep ever popped it.
+    uint64 const scheduleId = ((uint64)arenaMatchmakerRating << 32) | ((uint64)arenaType << 24) | ((uint64)bgQueueTypeId << 16) | ((uint64)(uint32(bgTypeId) & 0xFF) << 8) | (uint64)bracket_id;
     if (std::find(m_QueueUpdateScheduler.begin(), m_QueueUpdateScheduler.end(), scheduleId) == m_QueueUpdateScheduler.end())
         m_QueueUpdateScheduler.push_back(scheduleId);
 }
