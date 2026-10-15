@@ -61,6 +61,7 @@ struct BattlegroundTemplate
     BattlemasterListEntry const* BattlemasterEntry;
     BattlegroundBounds Bounds;
     std::vector<BattlegroundDropExit> DropExits;
+    BattlegroundStartExit StartExits[PVP_TEAMS_COUNT];
 
     bool IsArena() const;
 };

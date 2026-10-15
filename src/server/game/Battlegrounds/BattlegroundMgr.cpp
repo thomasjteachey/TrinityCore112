@@ -61,6 +61,7 @@
 #include "WorldPacket.h"
 #include "StringConvert.h"
 #include "Util.h"
+#include <array>
 
 bool BattlegroundTemplate::IsArena() const
 {
@@ -174,6 +175,52 @@ namespace
         while (result->NextRow());
 
         TC_LOG_INFO("server.loading", ">> Loaded {} battleground drop exits for {} battlegrounds", count, uint32(exits.size()));
+        return exits;
+    }
+
+    // `battleground_start_exit`: where a team is put when the gates open (see
+    // BattlegroundStartExit). Optional the same way `battleground_bounds` is.
+    std::unordered_map<uint32, std::array<BattlegroundStartExit, PVP_TEAMS_COUNT>> LoadBattlegroundStartExits()
+    {
+        std::unordered_map<uint32, std::array<BattlegroundStartExit, PVP_TEAMS_COUNT>> exits;
+
+        if (!WorldDatabase.Query("SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'battleground_start_exit' LIMIT 1"))
+        {
+            TC_LOG_INFO("server.loading", ">> Loaded 0 battleground start exits. DB table `battleground_start_exit` does not exist.");
+            return exits;
+        }
+
+        //                                                   0         1       2  3  4  5  6       7        8
+        QueryResult result = WorldDatabase.Query("SELECT BgTypeId, TeamId, X, Y, Z, O, Radius, DelayMs, BotsOnly FROM battleground_start_exit");
+        if (!result)
+        {
+            TC_LOG_INFO("server.loading", ">> Loaded 0 battleground start exits. DB table `battleground_start_exit` is empty.");
+            return exits;
+        }
+
+        uint32 count = 0;
+        do
+        {
+            Field* fields = result->Fetch();
+            uint32 const bgTypeId = fields[0].GetUInt32();
+            uint8 const teamId = fields[1].GetUInt8();
+            if (teamId >= PVP_TEAMS_COUNT)
+            {
+                TC_LOG_ERROR("sql.sql", "Table `battleground_start_exit` has TeamId {} for BgTypeId {}; only 0 (Alliance start) and 1 (Horde start) exist. Skipped.", uint32(teamId), bgTypeId);
+                continue;
+            }
+
+            BattlegroundStartExit& exit = exits[bgTypeId][teamId];
+            exit.Enabled  = true;
+            exit.Exit.Relocate(fields[2].GetFloat(), fields[3].GetFloat(), fields[4].GetFloat(), fields[5].GetFloat());
+            exit.Radius   = fields[6].GetFloat();
+            exit.DelayMs  = fields[7].GetUInt32();
+            exit.BotsOnly = fields[8].GetUInt8() != 0;
+            ++count;
+        }
+        while (result->NextRow());
+
+        TC_LOG_INFO("server.loading", ">> Loaded {} battleground start exits for {} battlegrounds", count, uint32(exits.size()));
         return exits;
     }
 }
@@ -746,6 +793,8 @@ bool BattlegroundMgr::CreateBattleground(BattlegroundTemplate const* bgTemplate)
     bg->SetStartMaxDist(bgTemplate->MaxStartDistSq);
     bg->SetBounds(bgTemplate->Bounds);
     bg->SetDropExits(bgTemplate->DropExits);
+    bg->SetStartExit(TEAM_ALLIANCE, bgTemplate->StartExits[TEAM_ALLIANCE]);
+    bg->SetStartExit(TEAM_HORDE, bgTemplate->StartExits[TEAM_HORDE]);
     bg->SetLevelRange(bgTemplate->MinLevel, bgTemplate->MaxLevel);
     bg->SetScriptId(bgTemplate->ScriptId);
 
@@ -764,6 +813,7 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
     BattlegroundCustomArena::LoadObjects();
     std::unordered_map<uint32, BattlegroundBounds> const bounds = LoadBattlegroundBounds();
     std::unordered_map<uint32, std::vector<BattlegroundDropExit>> const dropExits = LoadBattlegroundDropExits();
+    std::unordered_map<uint32, std::array<BattlegroundStartExit, PVP_TEAMS_COUNT>> const startExits = LoadBattlegroundStartExits();
 
     _battlegroundMapTemplates.clear();
     _battlegroundTemplates.clear();
@@ -812,6 +862,10 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
 
         if (auto itr = dropExits.find(uint32(bgTypeId)); itr != dropExits.end())
             bgTemplate.DropExits = itr->second;
+
+        if (auto itr = startExits.find(uint32(bgTypeId)); itr != startExits.end())
+            for (uint8 i = 0; i < PVP_TEAMS_COUNT; ++i)
+                bgTemplate.StartExits[i] = itr->second[i];
 
         if (bgTemplate.MaxPlayersPerTeam == 0 || bgTemplate.MinPlayersPerTeam > bgTemplate.MaxPlayersPerTeam)
         {

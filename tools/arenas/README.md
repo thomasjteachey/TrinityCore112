@@ -125,6 +125,15 @@ spots - is in `topdown/README.md`; the shapes are measured, so a rerun reproduce
   WMOAreaTable rows are global and those WMOs stand in the open world too.
 - **A skirmish left to bots closes** the moment its last person leaves (gates shut or
   open), so queueing again rolls a new match instead of re-seating you in the old one.
+- **The Twisting Nether starts on the ship's balconies again** (Ascension's spawns,
+  WSL 52618/52619), and `battleground_start_exit` - a team's exit when the gates open,
+  data per battleground and team - puts everyone, pets included, onto their own edge of
+  the platform. The bots-only fence refuses this arena with balcony starts (they reach
+  67.8 yd of a 54.0 yd limit), so nothing pulls a bot back up; the platform's bounds
+  outline still holds everyone once they are down.
+- **Dalaran Sewers and the Ring of Valor are in the custom-game arena list** (the
+  ported arenas were already offered as a block; these two were left out while
+  disabled).
 
 ## WorldStateUI
 

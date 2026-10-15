@@ -282,13 +282,15 @@ MEASURED = {
         ],
     },
     881: {  # The Twisting Nether, map 1403
-        # NOT Ascension's WSL 2037/2038: those are two balcony alcoves on the
-        # Kil'jaeden ship that no floor connects to - the navmesh from each reaches
-        # its own alcove and nothing else. The fight is on the Legion arena
-        # platform east of the ship (95 x 93 yd, z 386, three pillars mirrored
-        # north/south), so the teams start at its north and south edges.
-        "alliance": (4540.700000, -1510.500000, 386.200000, 3.136064),
-        "horde":    (4460.700000, -1510.500000, 386.200000, 6.277657),
+        # Ascension's own spawns (WSL 2037/2038, here 52618/52619): two balconies
+        # on the Kil'jaeden ship, 35-40 yards across the void from the Legion arena
+        # platform where the fight is (95 x 93 yd, z 386, three pillars). Nothing
+        # walkable joins them, so a `battleground_start_exit` row per team puts
+        # everyone - people, bots, pets - onto their own edge of the platform
+        # (4540.7 / 4460.7, -1510.5) when the gates open. Restored at the owner's
+        # request 2026-10-15; the platform edges were the starts in between.
+        "alliance": (4566.960000, -1428.470000, 387.000000, 4.402600),
+        "horde":    (4431.300000, -1427.720000, 387.000000, 5.053600),
         "gates": [],
         "start_max_dist": 12,
         "buffs": [

@@ -194,6 +194,9 @@ Battleground::Battleground()
     m_StartMaxDist      = 0.0f;
     m_BoundsCheckTimer  = 0;
     m_BoundsElapsed     = 0;
+    m_StartExitDone[TEAM_ALLIANCE] = false;
+    m_StartExitDone[TEAM_HORDE]    = false;
+    m_StartExitElapsed  = 0;
     ScriptId            = 0;
 
     m_ArenaTeamIds[TEAM_ALLIANCE]   = 0;
@@ -315,6 +318,9 @@ void Battleground::Update(uint32 diff)
             }
 
             _ProcessOfflineQueue();
+            // Ahead of the bounds: a start exit is the way off a start the bounds
+            // would otherwise count as outside the arena.
+            _CheckStartExits(diff);
             _CheckBounds(diff);
             // after 20 minutes without one team losing, the arena closes with no winner and no rating change
             if (isArena())
@@ -517,6 +523,66 @@ void Battleground::_CheckBounds(uint32 diff)
         for (Unit* unit : controlled)
             if (unit && unit->GetTypeId() != TYPEID_PLAYER && unit->IsInWorld() && unit->IsAlive() && unit->GetMapId() == GetMapId())
                 _ReturnInsideBounds(unit);
+    }
+}
+
+// Once per team, when the gates have been open for the exit's delay: whoever is
+// still at the team's start goes to its exit, with what they brought. See
+// BattlegroundStartExit.
+void Battleground::_CheckStartExits(uint32 diff)
+{
+    if (!m_StartExits[TEAM_ALLIANCE].Enabled && !m_StartExits[TEAM_HORDE].Enabled)
+        return;
+
+    m_StartExitElapsed += diff;
+
+    for (uint8 i = 0; i < PVP_TEAMS_COUNT; ++i)
+    {
+        BattlegroundStartExit const& exit = m_StartExits[i];
+        if (!exit.Enabled || m_StartExitDone[i] || m_StartExitElapsed < exit.DelayMs)
+            continue;
+
+        m_StartExitDone[i] = true;
+
+        Position const* start = GetTeamStartPosition(TeamId(i));
+        if (!start)
+            continue;
+
+        uint32 const team = i == TEAM_ALLIANCE ? ALLIANCE : HORDE;
+        uint32 moved = 0;
+        for (auto const& [guid, bgPlayer] : GetPlayers())
+        {
+            if (bgPlayer.Team != team)
+                continue;
+
+            Player* player = ObjectAccessor::FindPlayer(guid);
+            if (!player || !player->IsInWorld() || player->IsBeingTeleported() || player->GetMapId() != GetMapId())
+                continue;
+
+            if (player->IsGameMaster() || player->IsSpectator() || !player->IsAlive())
+                continue;
+
+            if (exit.BotsOnly && !IsBotParticipantSession(player->GetSession()))
+                continue;
+
+            if (player->GetExactDist(start) > exit.Radius)
+                continue;
+
+            // Pets first: the server moves them by navmesh, and there is none
+            // from the start to the fight. Already standing at the exit, they are
+            // also not unsummoned by their owner's teleport for being far away.
+            std::vector<Unit*> const controlled(player->m_Controlled.begin(), player->m_Controlled.end());
+            for (Unit* unit : controlled)
+                if (unit && unit->GetTypeId() != TYPEID_PLAYER && !unit->IsTotem() && unit->IsInWorld() && unit->IsAlive() &&
+                    unit->GetMapId() == GetMapId() && unit->GetExactDist(start) <= exit.Radius)
+                    unit->NearTeleportTo(exit.Exit.GetPositionX(), exit.Exit.GetPositionY(), exit.Exit.GetPositionZ(), exit.Exit.GetOrientation());
+
+            player->TeleportTo(GetMapId(), exit.Exit.GetPositionX(), exit.Exit.GetPositionY(), exit.Exit.GetPositionZ(), exit.Exit.GetOrientation());
+            ++moved;
+        }
+
+        TC_LOG_DEBUG("bg.battleground", "Battleground::_CheckStartExits: map {} instance {}: moved {} of team {} from their start to ({:.1f}, {:.1f}, {:.1f}).",
+            GetMapId(), GetInstanceID(), moved, team, exit.Exit.GetPositionX(), exit.Exit.GetPositionY(), exit.Exit.GetPositionZ());
     }
 }
 

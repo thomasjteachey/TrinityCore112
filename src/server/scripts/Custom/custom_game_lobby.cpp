@@ -103,11 +103,13 @@ enum GossipAction : uint32
     ACTION_SELECT_TTP,
     ACTION_SELECT_RANDOM_ARENA,
     ACTION_SELECT_TOK,
+    ACTION_SELECT_DS,
+    ACTION_SELECT_RV,
     // The ported arenas are addressed as a block instead of one constant each:
     // the action id is this base plus the arena's offset within
     // BATTLEGROUND_CUSTOM_ARENA_FIRST..LAST. Adding an arena then costs nothing
     // here, nothing in the menu builder and nothing in the select handler.
-    // Occupies 330..343 today; the block above ends at 319 and the next starts
+    // Occupies 330..343 today; the block above ends at 321 and the next starts
     // at 380, so there is room for 50 arenas before this needs revisiting.
     ACTION_SELECT_CUSTOM_ARENA_BASE = 330,
     ACTION_BATTLEGROUND_OPTIONS = 380,
@@ -234,6 +236,8 @@ std::string BattlegroundNameByType(BattlegroundTypeId type)
         case BATTLEGROUND_NL: return "Nefarian's Arena";
         case BATTLEGROUND_TV: return "Tol'Viron Arena";
         case BATTLEGROUND_TTP: return "Tiger's Peak";
+        case BATTLEGROUND_DS: return "Dalaran Sewers";
+        case BATTLEGROUND_RV: return "The Ring of Valor";
         case BATTLEGROUND_CPE: return "Colosseum of Past Echoes";
         case BATTLEGROUND_IAT: return "Imperial Arena of Thakraj";
         case BATTLEGROUND_MXC: return "Maldraxxus Colosseum";
@@ -2077,11 +2081,10 @@ public:
 
             // Every arena goes through one guard rather than being listed
             // unconditionally, because "which arenas exist" and "which arenas
-            // are playable" are not the same question. Dalaran Sewers and the
-            // Ring of Valor are disabled in `disables`, so they have no template
-            // and must never be offered -- picking one would start a match the
-            // server cannot create. Same guard covers an arena whose terrain is
-            // not on this realm yet.
+            // are playable" are not the same question. An arena disabled in
+            // `disables` has no template and must never be offered -- picking one
+            // would start a match the server cannot create. Same guard covers an
+            // arena whose terrain is not on this realm yet.
             auto offerArena = [&](BattlegroundTypeId bgTypeId, uint32 action)
             {
                 if (DisableMgr::IsDisabledFor(DISABLE_TYPE_BATTLEGROUND, bgTypeId, nullptr))
@@ -2099,6 +2102,8 @@ public:
             offerArena(BATTLEGROUND_NL,  ACTION_SELECT_NL);
             offerArena(BATTLEGROUND_TV,  ACTION_SELECT_TV);
             offerArena(BATTLEGROUND_TTP, ACTION_SELECT_TTP);
+            offerArena(BATTLEGROUND_DS,  ACTION_SELECT_DS);
+            offerArena(BATTLEGROUND_RV,  ACTION_SELECT_RV);
 
             // The ported arenas are a contiguous id range, so they are walked
             // rather than listed: adding one needs no edit here.
@@ -2329,6 +2334,8 @@ public:
                 case ACTION_SELECT_NL: manager.SelectBattleground(player, BATTLEGROUND_NL, ARENA_TYPE_5v5); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_TV: manager.SelectBattleground(player, BATTLEGROUND_TV, ARENA_TYPE_5v5); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_TTP: manager.SelectBattleground(player, BATTLEGROUND_TTP, ARENA_TYPE_5v5); ShowChromieMenu(player); return true;
+                case ACTION_SELECT_DS: manager.SelectBattleground(player, BATTLEGROUND_DS, ARENA_TYPE_5v5); ShowChromieMenu(player); return true;
+                case ACTION_SELECT_RV: manager.SelectBattleground(player, BATTLEGROUND_RV, ARENA_TYPE_5v5); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_RANDOM_ARENA: manager.SelectRandomArena(player); ShowChromieMenu(player); return true;
                 // Counterpart to the block of gossip entries built above. A
                 // switch cannot express a range, so this is handled ahead of it

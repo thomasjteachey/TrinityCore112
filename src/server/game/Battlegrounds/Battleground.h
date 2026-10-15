@@ -140,6 +140,22 @@ struct BattlegroundDropExit
     Position Landing;
 };
 
+// Where a team is put when the gates open, for a start nothing walkable joins
+// to the fight: The Twisting Nether's teams wait on two balconies of the ship,
+// across the void from the arena platform. Whoever is still within Radius of
+// the team's start once the gates have been open DelayMs is moved to Exit,
+// with the pets and guardians they brought. BotsOnly limits it to playerbots,
+// for a start people leave on their own. Rows in `battleground_start_exit`,
+// one per battleground type and team, read alongside the templates.
+struct BattlegroundStartExit
+{
+    bool Enabled = false;
+    Position Exit;
+    float Radius = 25.0f;
+    uint32 DelayMs = 0;
+    bool BotsOnly = false;
+};
+
 // Where a match's combatants - and the pets, guardians and totems they brought -
 // are allowed to be once the gates are open, and where they go when they are not.
 //
@@ -649,6 +665,7 @@ class TC_GAME_API Battleground
         bool IsInsideBoundary(float x, float y) const;
 
         void SetDropExits(std::vector<BattlegroundDropExit> const& exits) { m_DropExits = exits; }
+        void SetStartExit(TeamId teamId, BattlegroundStartExit const& exit) { m_StartExits[teamId] = exit; }
 
         // Packet Transfer
         // method that should fill worldpacket with actual world states (not yet implemented for all battlegrounds!)
@@ -881,6 +898,7 @@ class TC_GAME_API Battleground
         void _ProcessJoin(uint32 diff);
         void _CheckSafePositions(uint32 diff);
         void _CheckBounds(uint32 diff);
+        void _CheckStartExits(uint32 diff);
         bool _ReturnInsideBounds(Unit* unit);
         bool _ClosestPointInsideBoundary(float& x, float& y) const;
 
@@ -945,6 +963,9 @@ class TC_GAME_API Battleground
         uint32 m_BoundsCheckTimer;
         uint32 m_BoundsElapsed;                             // time since the gates opened
         std::vector<BattlegroundDropExit> m_DropExits;      // from `battleground_drop_exit`, see GetDropExits()
+        BattlegroundStartExit m_StartExits[PVP_TEAMS_COUNT]; // from `battleground_start_exit`, see _CheckStartExits()
+        bool m_StartExitDone[PVP_TEAMS_COUNT];
+        uint32 m_StartExitElapsed;                          // time since the gates opened
         int32 m_EndTime;                                    // it is set to 120000 when bg is ending and it decreases itself
         uint32 m_LastResurrectTime;
         BattlegroundBracketId m_BracketId;
