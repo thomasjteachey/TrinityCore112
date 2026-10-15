@@ -43,21 +43,21 @@ PVPDIFF_FIRST = 93260          # 16 brackets, next after the Eye of Eternity's 9
 WSUI_GREEN = 90130             # next after the Eye of Eternity's 90128/90129
 WSUI_GOLD = 90131
 MAPDIFF_ID = 762               # server only; next after the Amphitheater's 761
-BOOKCASE_DISPLAY = 11973       # GameObjectDisplayInfo, next after the Amphitheater's 11972
+BOOKCASE_DISPLAY = 11973       # GameObjectDisplayInfo: the second layout's bookcase, unused since
+GATE_DISPLAY = 7320            # BT_GATE, the Black Temple gate every other custom arena closes with
 
 # gameobject_template entries and the fixed guids of the static spawns (never AUTO_INCREMENT:
 # see tools/arenas/aoa_pillars/README.md - every guid here is below every running server's
-# start MAX). 300408 was the corner portcullis, removed with the start teleport.
-OLD_PORTCULLIS_ENTRY = 300408
+# start MAX). Gone: 300408 the first layout's corner portcullis and 300414 the second layout's
+# side-window bookcase (300412 and 300413 were its middle bookcase and its stage door).
+OLD_ENTRIES = (300408, 300414)
 HALL_DOOR_ENTRY = 300409       # display 6628 Karazahn_chessroomdoors, as 184276 / 184277
 KNIGHT_ENTRY = 300410          # display 6820 statueHMpaladin
 BISHOP_ENTRY = 300411          # display 1527 statueHMpriest
-BOOKCASE_ENTRY = 300412        # display 11973 KarazahnBookshelfXtralarge, size 0.42 (middle window)
-SIDE_DOOR_ENTRY = 300413       # display 6633 Karazahn_stageDoor, the start gates
-BOOKCASE_SIDE_ENTRY = 300414   # display 11973 again, size 0.335 (the two side windows)
+WINDOW_GATE_ENTRY = 300412     # display 7320 BT_GATE, size 0.106: the balcony windows
+STAIR_GATE_ENTRY = 300413      # display 7320 BT_GATE, size 0.213: the long stairways' top landings
 HALL_DOOR_GUIDS = (5530564, 5530565)
 STATUE_GUID_FIRST = 5530566    # 5530566-69
-BOOKCASE_GUIDS = (5530560, 5530561, 5530562, 5530563, 5530576, 5530577)   # the portcullises' four + two free
 
 # ------------------------------------------------------------------ frame
 CX, CY = -11080.71, -1876.25
@@ -83,13 +83,14 @@ def facing(a, b, ta=0.0, tb=0.0):
 
 
 # ------------------------------------------------------------------ starts
-# Each team waits on a balcony, 4.8 yd back from its front, facing down the hall. Bookcases fill
-# its three windows and a shut door each of its two side arches, so until the match begins the
-# balcony and the short stairs down to those doors are all there is; the leash (StartMaxDist)
-# covers both (a door is 7.9 yd from the start) and stops anyone wandering up the stair or into
-# the room behind. When the match begins the doors open onto the long stairways, which lead down
-# the end wall to the corner landings and the corner flights to the hall floor - or anyone can
-# drop into the hall through the stairways' arches. Nothing teleports anyone.
+# Each team waits on a balcony, 4.8 yd back from its front, facing down the hall. A gate shuts
+# each of its three windows and the top of each long stairway beyond its two side arches, so
+# until the match begins the balcony, its short side stairs and the first yard of each landing
+# are all there is; the leash (StartMaxDist) covers them (a stairway gate is 8.8 yd from the
+# start) and stops anyone wandering into the room behind. When the match begins every gate
+# sinks: a balcony can drop through its windows into the hall, or take the long stairways down
+# the end wall to the corner landings and the corner flights to the floor - or drop into the
+# hall through the stairways' arches. Nothing teleports anyone.
 START_A = 43.0
 ALLIANCE_START = xy(START_A, 0.0) + (BALCONY_Z, facing(START_A, 0.0))       # SW balcony
 HORDE_START = xy(-START_A, 0.0) + (BALCONY_Z, facing(-START_A, 0.0))        # NE balcony
@@ -119,62 +120,60 @@ def statues():
     return out
 
 
-# ------------------------------------------------------------------ bookcases
-# Karazhan's tall library bookcase stood in each of a balcony's three windows, against their
-# inner face (the window bays are 2.6 yd deep, the side ones with a 0.76 yd rail at |a|
-# 39.25-39.85), so nobody jumps or casts from a balcony down into the hall. Books on both faces:
-# the hall sees them too. Each fills its window's width (2.24 and 1.79 yd); with the column
-# plinths and the slender columns above them that leaves no gap wider than 0.46 yd. Local X
-# along +b; the model's origin is at mid-height (z -6.66..6.64), so z is the floor plus 6.66 x
-# the scale. 5.6 and 4.5 yd tall: over anyone's head and eyes, under the window arches.
-BOOKCASE_MODEL = "World\\AZEROTH\\KARAZAHN\\PASSIVEDOODADS\\BookShelves\\KarazahnBookshelfXtralarge.mdx"
-BOOKCASE_GEO_BOX = (-2.68, -0.76, -6.66, 2.65, 0.80, 6.64)     # the model's bounds, for the GODI row
-BOOKCASE_SLOTS = [  # (label, entry, b, a, scale)
-    ("middle", BOOKCASE_ENTRY, 0.0, 40.10, 0.42),
-    ("+b", BOOKCASE_SIDE_ENTRY, 3.495, 40.12, 0.335),
-    ("-b", BOOKCASE_SIDE_ENTRY, -3.495, 40.12, 0.335),
-]
+# ------------------------------------------------------------------ the start gates
+# Every way off a balcony is shut by the Black Temple gate the other custom arenas close with
+# (BT_GATE, display 7320: ten spiked bars, 29.1 yd square at scale 1). They are
+# battleground_custom_arena_object ObjectType 0: shut through the preparation, opened when the
+# match begins - the bars sink straight down into the floor, 29.8 x the scale. Local X (the
+# width) runs along the opening; the model's base is 0.30 x the scale under its origin.
+
+# The windows: one gate in each of a balcony's three, just behind the slender columns (the
+# column backs are at |a| 39.9; the window bays are 2.6 yd deep, open to the floor between 1.08
+# yd plinths, the side ones with a 0.76 yd rail at |a| 39.25-39.85). 3.08 wide - column face to
+# column face in the middle window, so the outer bars of all three stand behind the columns -
+# and 3.1 tall: a jump off a plinth top peaks 0.5 under the bars' tops. Sunk, the bars sit in
+# the masonry under the window bays, and a balcony can drop straight into the hall.
+WINDOW_GATE_SCALE = 0.106
+WINDOW_GATE_A = 40.15
+WINDOW_GATE_B = (0.0, 3.495, -3.495)
 
 
-def bookcases():
-    """[(label, entry, x, y, z, o, scale)]"""
+def window_gates():
+    """[(label, x, y, z, o)]"""
     out = []
     for side, sa in (("SW", 1), ("NE", -1)):
-        for label, entry, b, a, scale in BOOKCASE_SLOTS:
-            x, y = xy(sa * a, b)
-            out.append(("%s balcony, %s window" % (side, label), entry, x, y, BALCONY_Z + 6.66 * scale, B_ORIENT, scale))
+        for b, label in zip(WINDOW_GATE_B, ("middle", "+b", "-b")):
+            x, y = xy(sa * WINDOW_GATE_A, b)
+            out.append(("%s balcony, %s window" % (side, label), x, y, BALCONY_Z + 0.30 * WINDOW_GATE_SCALE, B_ORIENT))
     return out
 
 
-# ------------------------------------------------------------------ side doors
-# The start gates: Karazhan's own stage door (Karazahn_stageDoor, display 6633) in each of a
-# balcony's two side arches. The doorway is |a| 40.74-44.53 (3.79 yd) by |b| 6.9-7.75, its floor
-# 226.69 at the outer face (the foot of the short stair down from the balcony), its round head
-# springing at 232.0 and peaking at 233.4-233.9. At scale 1.15 the leaf is 4.29 x 6.66: its
-# edges tucked 0.25 into the jambs, its top at the crown. Local +X points out of the balcony,
-# along the long stairway, so the door swings open onto that stairway's flat top (the Opened
-# pose lies 4.6 yd along +X, flat against the side the hinge is on) and never into the stair
-# behind it. The leaf spans local Y -1.73..2.00, so the origin sits 0.155 off the doorway's
-# middle. ObjectType 0 in battleground_custom_arena_object: shut through the preparation and
-# opened when the match begins.
-SIDE_DOOR_DISPLAY = 6633
-SIDE_DOOR_SCALE = 1.15
-DOOR_A = (40.74 + 44.53) / 2
-DOOR_B = 7.32
-DOOR_FLOOR_Z = 226.69
+# The side arches: past each one the long stairway starts with a flat top landing (226.68,
+# |b| 7.75-9.0) between two octagonal columns, 5.66 yd clear (|a| 39.28-44.94) under a 234.38
+# ceiling. The gate stands across it on the column line, 6.2 x 6.2 yd: its ends 0.3 into the
+# walls on both sides, its top 1.5 under the ceiling, far over anything a jump down the
+# balcony's short stair reaches. The doorway itself sits in a thin partition with open space on
+# both flanks - nothing wider than its 3.79 yd fits in it without jutting out, which is what the
+# second layout's stage doors did. Sunk, the bars sit under the landing.
+STAIR_GATE_SCALE = 0.213
+STAIR_GATE_A = 42.08
+STAIR_GATE_B = 8.36
+LANDING_Z = 226.68
 
 
-def side_doors():
+def stair_gates():
     """[(label, x, y, z, o)]"""
     out = []
     for side, sa in (("SW", 1), ("NE", -1)):
         for edge, sb in (("+b", 1), ("-b", -1)):
-            o = B_ORIENT if sb > 0 else (B_ORIENT - math.pi) % (2 * math.pi)
-            # local +Y is -a when local +X is +b, and +a when it is -b
-            a = sa * DOOR_A + (0.135 if sb > 0 else -0.135) * SIDE_DOOR_SCALE
-            x, y = xy(a, sb * DOOR_B)
-            out.append(("%s balcony, %s arch" % (side, edge), x, y, DOOR_FLOOR_Z + 1.99 * SIDE_DOOR_SCALE, o))
+            x, y = xy(sa * STAIR_GATE_A, sb * STAIR_GATE_B)
+            out.append(("%s balcony, %s stairway" % (side, edge), x, y, LANDING_Z + 0.30 * STAIR_GATE_SCALE, A_ORIENT))
     return out
+
+
+# The second layout's bookcase, kept only because its display row is published.
+BOOKCASE_MODEL = "World\\AZEROTH\\KARAZAHN\\PASSIVEDOODADS\\BookShelves\\KarazahnBookshelfXtralarge.mdx"
+BOOKCASE_GEO_BOX = (-2.68, -0.76, -6.66, 2.65, 0.80, 6.64)
 
 
 # The two doors at the back of the balconies' far rooms, where Karazhan's own stand on map 532
@@ -212,10 +211,10 @@ if __name__ == "__main__":
     print("buffs       %s" % [tuple(round(v, 3) for v in b) for b in BUFFS])
     for s in statues():
         print("statue      %-10s entry %d (%.3f, %.3f, %.3f) o %.4f" % s)
-    for s in bookcases():
-        print("bookcase    %-26s entry %d (%.3f, %.3f, %.3f) o %.4f x%.3f" % s)
-    for d in side_doors():
-        print("side door   %-20s (%.3f, %.3f, %.3f) o %.4f" % d)
+    for g in window_gates():
+        print("window gate %-26s (%.3f, %.3f, %.3f) o %.4f" % g)
+    for g in stair_gates():
+        print("stair gate  %-26s (%.3f, %.3f, %.3f) o %.4f" % g)
     for d in HALL_DOORS:
         print("hall door   %s (%.2f, %.2f, %.2f)" % d[:4])
     print("bounds      %s" % ", ".join("%.1f %.1f" % p for p in bounds_outline()))

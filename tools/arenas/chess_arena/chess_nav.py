@@ -1,20 +1,18 @@
-"""The Gamesman's Hall arena's navmesh: carve the statues, the hall doors and the bookcases into
-map 1532's hall tile.
+"""The Gamesman's Hall arena's navmesh: carve the statues and the hall doors into map 1532's
+hall tile.
 
     python chess_nav.py carve <work>                   # add them to a SCRATCH copy of the vmaps
     python chess_nav.py check <old.mmtile> <new.mmtile>
 
-<work> holds the four M2s (Karazahn_chessroomdoors, statueHMpaladin, statueHMpriest,
-KarazahnBookshelfXtralarge, from the client) and vmaps/ with copies of 1532.vmtree and
-1532_35_52.vmtile (the hall's tile; 532's own, renamed) plus each model's <name>_nav.vmo from
-tools/eoe_arena/pillars/build_nav_vmo.py (the bookcases share one, built at the smaller scale).
+<work> holds the three M2s (Karazahn_chessroomdoors, statueHMpaladin, statueHMpriest, from
+the client) and vmaps/ with copies of 1532.vmtree and 1532_35_52.vmtile (the hall's tile; 532's
+own, renamed) plus each model's <name>_nav.vmo from tools/eoe_arena/pillars/build_nav_vmo.py.
 The generator then runs in a server dir holding these vmaps, maps/1532*.map and dbc/:
     mmaps_generator 1532 --tile 35,52 --allowDebug
 (the realm's binary; it skips a tile whose .mmtile already exists - delete it first). A
 gameobject is invisible to the navmesh, so without this a bot or pet walks straight through a
-statue or a shut door. The balconies' side doors are NOT carved: they open when the match
-begins, and the way down from a balcony runs through them. ANY later regen of 1532's mmaps
-drops the carve.
+statue or a shut hall door. The start gates are NOT carved: they sink when the match begins, and
+the way down from a balcony runs through them. ANY later regen of 1532's mmaps drops the carve.
 """
 import math
 import os
@@ -32,7 +30,6 @@ import vmtile as V  # noqa: E402
 
 TILE = "%d_35_52.vmtile" % L.MAP_ID
 ZEROPOINT = 32.0 * 533.3333
-BOOKCASE_M2 = "KarazahnBookshelfXtralarge"
 
 
 def items():
@@ -43,8 +40,6 @@ def items():
         out.append((label + " statue", x, y, z, o, model, L.STATUE_SCALE))
     for label, x, y, z, o, rot in L.HALL_DOORS:
         out.append((label, x, y, z, o, "Karazahn_chessroomdoors", L.HALL_DOOR_SIZE))
-    for label, entry, x, y, z, o, scale in L.bookcases():
-        out.append((label + " bookcase", x, y, z, o, BOOKCASE_M2, scale))
     return out
 
 
@@ -112,7 +107,7 @@ def cmd_check(old, new):
     and both Shadow Sights are in it - the way up runs through the corner flights, the corner
     landings, the long stairways and the balconies' side doorways, and every one of those is
     walked; nothing in it lies outside the bounds outline (the rooms past Karazhan's own doors
-    are cut off); the statues, the hall doors and the bookcases are off the mesh."""
+    are cut off); the statues and the hall doors are off the mesh."""
     poly = L.bounds_outline()
     bad = 0
     for tag, path in (("before", old), ("after", new)):
@@ -139,8 +134,10 @@ def cmd_check(old, new):
                     ("%s %s corner flight" % (end, edge), L.xy(sa * 34.5, sb * 23.5) + (222.3,)),
                     ("%s %s corner landing" % (end, edge), L.xy(sa * 41.0, sb * 23.5) + (L.FLIGHT_TOP_Z,)),
                     ("%s %s long stairway" % (end, edge), L.xy(sa * 42.6, sb * 14.0) + (225.4,)),
-                    ("%s %s side doorway" % (end, edge), L.xy(sa * L.DOOR_A, sb * 7.4) + (226.9,)),
+                    ("%s %s side doorway" % (end, edge), L.xy(sa * 42.6, sb * 7.4) + (226.9,)),
+                    ("%s %s stairway landing (gate)" % (end, edge), L.xy(sa * L.STAIR_GATE_A, sb * L.STAIR_GATE_B) + (L.LANDING_Z,)),
                 ]
+            named.append(("%s middle window bay (gate)" % end, L.xy(sa * L.WINDOW_GATE_A, 0.0) + (L.BALCONY_Z,)))
         for name, (x, y, z) in named:
             ok = find(x, y, z) in reach
             bad += not ok
@@ -152,8 +149,7 @@ def cmd_check(old, new):
             bad += not ok
             print("    %-36s %s" % (name, "off the mesh" if g is None else ("cut off" if ok else "REACHABLE <-- UNEXPECTED")))
         for label, x, y, z, o, model, scale in items():
-            zz = z + 0.5 if model != BOOKCASE_M2 else L.BALCONY_Z + 0.5
-            g = find(x, y, zz, 1.0)
+            g = find(x, y, z + 0.5, 1.0)
             ok = g is None or g not in reach
             bad += not ok
             print("    %-36s middle %s" % (label, "off the mesh" if g is None else ("cut off" if g not in reach else "REACHABLE <-- UNEXPECTED")))
