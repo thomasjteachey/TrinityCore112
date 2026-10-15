@@ -3552,19 +3552,23 @@ enum BattlegroundTypeId : uint32
     BATTLEGROUND_AOA            = 885, // Amphitheater of Anguish,    map 1684
     BATTLEGROUND_EOE            = 886, // The Eye of Eternity,        map 1616 cloned from 616 (tools/eoe_arena)
     // Baradin Hold's map again, played by up to four squads, one per corner.
-    // Deliberately outside the custom arena block below: it shares 879's map,
-    // is never rolled by All Arenas and is not offered in the custom-game lobby.
+    // Not one of the custom arenas below, though its id now sits inside their
+    // block: it shares 879's map, is never rolled by All Arenas and is not
+    // offered in the custom-game lobby (which skips it by name).
     // Its squads come from `battleground_squad_start` (Battleground::IsSquadMatch).
-    BATTLEGROUND_BHF            = 887  // Baradin Hold: Four Corners, map 1401
+    BATTLEGROUND_BHF            = 887, // Baradin Hold: Four Corners, map 1401
+    BATTLEGROUND_GMH            = 888  // The Gamesman's Hall,       map 1532 cloned from 532 (tools/arenas/chess_arena)
 };
 
-#define MAX_BATTLEGROUND_TYPE_ID 888
+#define MAX_BATTLEGROUND_TYPE_ID 889
 
-// First and last of the contiguous block above. Kept as named constants so the
-// range checks below and the registration loops in BattlegroundMgr do not each
-// repeat the literals.
+// First and last of the custom arena block above. Kept as named constants so
+// the range checks below and the registration loops in BattlegroundMgr do not
+// each repeat the literals. BATTLEGROUND_BHF (887) falls inside the range; both
+// helpers below already count it as a data-driven custom arena, and the lobby's
+// arena list leaves it out.
 #define BATTLEGROUND_CUSTOM_ARENA_FIRST BATTLEGROUND_CPE
-#define BATTLEGROUND_CUSTOM_ARENA_LAST  BATTLEGROUND_EOE
+#define BATTLEGROUND_CUSTOM_ARENA_LAST  BATTLEGROUND_GMH
 
 // The custom battlegrounds share behaviour the stock ones do not: synthetic
 // cross-faction queue sides, free-slot refill and saturation, mid-match gear
