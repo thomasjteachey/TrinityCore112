@@ -3558,7 +3558,7 @@ enum BattlegroundTypeId : uint32
     // Its squads come from `battleground_squad_start` (Battleground::IsSquadMatch).
     BATTLEGROUND_BHF            = 887, // Baradin Hold: Four Corners, map 1401
     BATTLEGROUND_GMH            = 888, // The Gamesman's Hall,       map 1532 cloned from 532 (tools/arenas/chess_arena)
-    // Solo Shuffle: six people who queued alone play six rounds of 3v3 in one
+    // Solo Shuffle: people who queued alone play rounds of 2v2 or 3v3 in one
     // arena, the teams dealt again before every round (Arena.h). Not a map of
     // its own: like All Arenas it is rolled onto an arena when a match is made,
     // from the `battleground_random_pool` rows for 889 (All Arenas' when it has
@@ -3810,9 +3810,10 @@ enum BattlegroundQueueTypeId
     BATTLEGROUND_QUEUE_BHF_3    = 22,
     BATTLEGROUND_QUEUE_BHF_4    = 23,
     BATTLEGROUND_QUEUE_BHF_5    = 24,
-    // Solo Shuffle (3v3, people queuing alone). Its own queue, so a shuffle is
-    // only ever made from people who asked for one.
-    BATTLEGROUND_QUEUE_SSH      = 25,
+    // Solo Shuffle, one queue per size, people queuing alone. Its own queues,
+    // so a shuffle is only ever made from people who asked for one.
+    BATTLEGROUND_QUEUE_SSH_3    = 25,
+    BATTLEGROUND_QUEUE_SSH_2    = 26,
     MAX_BATTLEGROUND_QUEUE_TYPES
 };
 

@@ -1029,7 +1029,7 @@ void Arena::EndBattleground(uint32 winner)
 
 // ---------------------------------------------------------------- solo shuffle
 //
-// See SOLO_SHUFFLE_ROUNDS in Arena.h for the shape of the match. The rounds are
+// See SOLO_SHUFFLE_MAX_ROUNDS in Arena.h for the shape of the match. The rounds are
 // driven from Battleground::Update through UpdateRounds, and a round is decided
 // by CheckWinConditions, the same call every arena makes on a death or a leave.
 
@@ -1056,13 +1056,48 @@ namespace
         return count;
     }
 
+    // The different ways to deal a roster's teams, each once: gold gets n / 2
+    // (so an odd roster plays one short on gold), and with an even roster a
+    // split and its mirror are the same two teams, counted once as the one with
+    // member 0 on gold. Only the splits that spread the healers as evenly as
+    // they will go - with two, one each. Empty past SHUFFLE_MAX_ROSTER.
+    std::vector<uint32> ShuffleSplits(std::vector<bool> const& healers)
+    {
+        std::vector<uint32> splits;
+        uint32 const n = uint32(healers.size());
+        if (n < 2 || n > SHUFFLE_MAX_ROSTER)
+            return splits;
+
+        uint32 const full = (1u << n) - 1;
+        uint32 healerMask = 0;
+        for (uint32 i = 0; i < n; ++i)
+            if (healers[i])
+                healerMask |= 1u << i;
+        uint32 const healerCount = CountBits(healerMask);
+        auto const imbalance = [healerMask, healerCount](uint32 mask)
+        {
+            int32 const gold = int32(CountBits(mask & healerMask));
+            return uint32(std::abs(gold - (int32(healerCount) - gold)));
+        };
+
+        uint32 bestImbalance = ~0u;
+        for (uint32 mask = 1; mask < full; ++mask)
+        {
+            if (CountBits(mask) != n / 2 || (n % 2 == 0 && !(mask & 1)))
+                continue;
+            splits.push_back(mask);
+            bestImbalance = std::min(bestImbalance, imbalance(mask));
+        }
+        splits.erase(std::remove_if(splits.begin(), splits.end(),
+            [&](uint32 mask) { return imbalance(mask) != bestImbalance; }), splits.end());
+        return splits;
+    }
+
     // Deals the rounds of a shuffle. Roster member i plays a round on the gold
     // (Alliance) side when bit i of its mask is set.
     //
-    // A round puts the healers as evenly over the two sides as they will go -
-    // with two, one each. Among the splits that do, it takes, round by round,
-    // one not played yet (while any is left) that keeps who has teamed with whom
-    // the most even. `played` are the rounds already fought, which count towards
+    // A round uses one of ShuffleSplits: round by round, one not played yet
+    // (while any is left) that keeps who has teamed with whom the most even. `played` are the rounds already fought, which count towards
     // that; `first`, when it is one of the allowed splits, opens what is dealt.
     std::vector<uint32> DealShuffleRounds(std::vector<bool> const& healers, std::vector<uint32> const& played,
         uint32 first, uint32 rounds)
@@ -1079,33 +1114,10 @@ namespace
         }
 
         uint32 const full = (1u << n) - 1;
-        uint32 healerMask = 0;
-        for (uint32 i = 0; i < n; ++i)
-            if (healers[i])
-                healerMask |= 1u << i;
-        uint32 const healerCount = CountBits(healerMask);
-
-        // With an even roster a split and its mirror are the same two teams;
-        // they are counted once, as the one with member 0 on gold.
+        // A split and its mirror (an even roster) are counted as one.
         auto const canonical = [n, full](uint32 mask) { return (n % 2 == 0 && !(mask & 1)) ? (full & ~mask) : mask; };
-        auto const imbalance = [healerMask, healerCount](uint32 mask)
-        {
-            int32 const gold = int32(CountBits(mask & healerMask));
-            return uint32(std::abs(gold - (int32(healerCount) - gold)));
-        };
 
-        // Gold always gets n / 2, so an odd roster plays one short on gold.
-        std::vector<uint32> splits;
-        uint32 bestImbalance = ~0u;
-        for (uint32 mask = 1; mask < full; ++mask)
-        {
-            if (CountBits(mask) != n / 2 || canonical(mask) != mask)
-                continue;
-            splits.push_back(mask);
-            bestImbalance = std::min(bestImbalance, imbalance(mask));
-        }
-        splits.erase(std::remove_if(splits.begin(), splits.end(),
-            [&](uint32 mask) { return imbalance(mask) != bestImbalance; }), splits.end());
+        std::vector<uint32> splits = ShuffleSplits(healers);
         Trinity::Containers::RandomShuffle(splits);
 
         std::vector<uint32> together(n * n, 0);
@@ -1396,10 +1408,16 @@ void Arena::BeginSoloShuffle()
         return;
     }
 
+    // As many rounds as there are different ways to deal the teams, up to the
+    // most a match plays: six for a full 3v3, three for a 2v2 (two with two
+    // healers). Kept for the whole match, whoever leaves.
+    size_t const splits = ShuffleSplits(healers).size();
+    _shuffleRoundCount = uint8(splits ? std::min<size_t>(splits, SOLO_SHUFFLE_MAX_ROUNDS) : SOLO_SHUFFLE_MAX_ROUNDS);
+
     // Round 1 is fought as the queue and the bot fill seated it, unless that
     // left the sides uneven or the healers on one side.
     uint32 const seated = GetShuffleSideMask();
-    _shuffleSchedule = DealShuffleRounds(healers, {}, seated, SOLO_SHUFFLE_ROUNDS);
+    _shuffleSchedule = DealShuffleRounds(healers, {}, seated, _shuffleRoundCount);
     _shuffleRound = 1;
 
     if (_shuffleSchedule.front() != seated)
@@ -1427,8 +1445,9 @@ void Arena::BeginSoloShuffle()
     _shufflePhase = ShufflePhase::Fighting;
     _shuffleTimer = 0;
 
-    TC_LOG_DEBUG("bg.arena", "Solo Shuffle: instance {} on map {} begins with {} players ({} healers).",
-        GetInstanceID(), GetMapId(), uint32(_shuffleRoster.size()), uint32(_shuffleHealers.size()));
+    TC_LOG_DEBUG("bg.arena", "Solo Shuffle: instance {} on map {} ({}v{}) begins with {} players ({} healers), {} rounds.",
+        GetInstanceID(), GetMapId(), uint32(GetArenaType()), uint32(GetArenaType()), uint32(_shuffleRoster.size()),
+        uint32(_shuffleHealers.size()), uint32(_shuffleRoundCount));
 
     AnnounceToArena(this, Trinity::StringFormat("Solo Shuffle: {} rounds, and new teams before each one. Win more rounds than you lose.",
         uint32(_shuffleSchedule.size())));
@@ -1672,7 +1691,7 @@ void Arena::RedealRemainingShuffleRounds()
     if (!kept.empty())
         kept.back() = GetShuffleSideMask();
 
-    uint32 const remaining = SOLO_SHUFFLE_ROUNDS > kept.size() ? uint32(SOLO_SHUFFLE_ROUNDS - kept.size()) : 0;
+    uint32 const remaining = _shuffleRoundCount > kept.size() ? uint32(_shuffleRoundCount - kept.size()) : 0;
     std::vector<uint32> const rest = DealShuffleRounds(healers, kept, 0, remaining);
     _shuffleSchedule = kept;
     _shuffleSchedule.insert(_shuffleSchedule.end(), rest.begin(), rest.end());

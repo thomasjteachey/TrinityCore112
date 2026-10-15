@@ -56,18 +56,23 @@ enum ArenaWorldStates
     ARENA_WORLD_STATE_SQUAD_ALIVE_FIRST     = 9441
 };
 
-// Solo Shuffle (BATTLEGROUND_SSH). Six people queue alone and are put in one
-// 3v3 arena for six rounds. Before every round the teams are dealt again, so
-// over the match everyone fights beside and against everyone else, and each
-// player is scored by the rounds they won: more won than lost is a win.
+// Solo Shuffle (BATTLEGROUND_SSH). People queue alone and are put in one arena,
+// four to a 2v2 or six to a 3v3, for a series of rounds. Before every round the
+// teams are dealt again, so over the match everyone fights beside and against
+// everyone else, and each player is scored by the rounds they won: more won
+// than lost is a win.
 //
 // The match stays STATUS_IN_PROGRESS throughout. Between rounds the dead are
 // raised, everyone is put back to full and cleaned of the round, moved to the
 // side the schedule gives them for the next round (Battleground::
 // MoveParticipantToTeam) and back to that side's start, and the gates shut for
-// a short countdown. With two healers they are always on opposite teams, which
-// with four others gives exactly six different rounds.
-uint8 constexpr SOLO_SHUFFLE_ROUNDS = 6;
+// a short countdown. With two healers they are always on opposite teams.
+//
+// A match plays as many rounds as there are different ways to deal its teams,
+// up to SOLO_SHUFFLE_MAX_ROUNDS. 3v3 with two healers and four others has
+// exactly six (each healer with each pair of the others); 2v2 has three, or
+// two with two healers (each healer with each of the others once).
+uint8 constexpr SOLO_SHUFFLE_MAX_ROUNDS = 6;
 
 class TC_GAME_API Arena : public Battleground
 {
@@ -93,7 +98,7 @@ class TC_GAME_API Arena : public Battleground
         void UpdateSquadFeed() override;
         void SendSquadFeedTo(Player* player) override;
 
-        // Solo Shuffle's rounds; see SOLO_SHUFFLE_ROUNDS.
+        // Solo Shuffle's rounds; see SOLO_SHUFFLE_MAX_ROUNDS.
         void UpdateRounds(uint32 diff) override;
         bool IsWinningParticipant(ObjectGuid guid, uint32 team, uint32 winner) const override;
 
@@ -176,6 +181,7 @@ class TC_GAME_API Arena : public Battleground
         void RemoveArenaFlags(Player* player);
         ShufflePhase _shufflePhase = ShufflePhase::NotStarted;
         uint8 _shuffleRound = 0;             // the round being played or prepared, from 1
+        uint8 _shuffleRoundCount = 0;        // how many the match plays, set when it begins
         uint32 _shuffleTimer = 0;
         bool _shuffleTenSecondsSent = false;
         uint32 _shuffleRoundsPlayed = 0;

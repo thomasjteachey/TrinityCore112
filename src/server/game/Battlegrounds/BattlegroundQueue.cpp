@@ -1611,19 +1611,21 @@ void BattlegroundQueue::StartSquadMatch(BattlegroundTypeId bgTypeId, PvPDifficul
     bg->RemoveFromBGFreeSlotQueue();
 }
 
-// Solo Shuffle's queue: people queued alone, made into one match of six (three
-// a side for the first round; the match deals the rest). A match starts
+// Solo Shuffle's queues, one per size: people queued alone, made into one match
+// of four (2v2) or six (3v3), two or three a side for the first round; the
+// match deals the rest. A match starts
 //
-//   1. as soon as two healers and four others are waiting - one healer to a
-//      side every round, the way the rounds are dealt;
+//   1. as soon as two healers and enough others to fill it are waiting - one
+//      healer to a side every round, the way the rounds are dealt;
 //   2. where this realm fills skirmishes with bots, once someone with "Arena
 //      bot matches" ticked has waited the skirmish wait: everyone waiting with
-//      it ticked plays now, up to six, and the bot fill takes the other seats.
+//      it ticked plays now, up to a full match, and the bot fill takes the
+//      other seats.
 //      A shuffle still behind its first gates is offered first, in place of
 //      its clones (OfferPreparationSeats), so people meet rather than each
 //      getting a match of bots;
 //   3. otherwise, once the longest-waiting has waited kShuffleAnyLobbyMs, any
-//      six: two healers at most while others are there to take the seats.
+//      full match: two healers at most while others are there to take the seats.
 //
 // Rated Solo Shuffle does not exist: the window only offers the skirmish.
 namespace
@@ -1716,7 +1718,7 @@ void BattlegroundQueue::UpdateSoloShufflePool(BattlegroundTypeId bgTypeId, Battl
     if (waiting.empty())
         return;
 
-    // 1. Two healers and four others.
+    // 1. Two healers and the others to fill the match.
     {
         uint32 healers = 0;
         for (ShuffleCandidate const& candidate : waiting)
@@ -1759,7 +1761,7 @@ void BattlegroundQueue::UpdateSoloShufflePool(BattlegroundTypeId bgTypeId, Battl
             return;
     }
 
-    // 3. Any six, once the first in line has waited for a better mix.
+    // 3. A full match of anyone, once the first in line has waited for a better mix.
     if (waiting.size() >= seats && getMSTimeDiff(waiting.front().Group->JoinTime, nowMs) >= kShuffleAnyLobbyMs)
         start(PickShuffleLobby(waiting, seats, kShuffleHealers), false);
 }

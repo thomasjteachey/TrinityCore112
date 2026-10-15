@@ -173,8 +173,8 @@ class TC_GAME_API BattlegroundQueue
         // Arena teams queued rated for a squad match: one team is one squad.
         void UpdateRatedSquadPool(BattlegroundTypeId bgTypeId, PvPDifficultyEntry const* bracketEntry, BattlegroundBracketId bracket_id,
             uint8 squadCount, uint8 arenaType);
-        // Solo Shuffle (Arena.h) is made from people queuing alone, six to a
-        // match, by role - see the comment on the definition.
+        // Solo Shuffle (Arena.h) is made from people queuing alone, four or six
+        // to a match, by role - see the comment on the definition.
         void UpdateSoloShufflePool(BattlegroundTypeId bgTypeId, BattlegroundBracketId bracket_id, uint8 arenaType);
         void StartSoloShuffle(BattlegroundTypeId bgTypeId, PvPDifficultyEntry const* bracketEntry, BattlegroundBracketId bracket_id,
             uint8 arenaType, std::vector<GroupQueueInfo*> players, std::vector<bool> const& healers, bool botFill);

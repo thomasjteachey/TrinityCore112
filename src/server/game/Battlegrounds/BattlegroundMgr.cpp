@@ -1249,8 +1249,16 @@ BattlegroundQueueTypeId BattlegroundMgr::BGQueueTypeId(BattlegroundTypeId bgType
                     return BATTLEGROUND_QUEUE_NONE;
             }
         case BATTLEGROUND_SSH:
-            // 3v3 only: six people, two teams of three each round.
-            return arenaType == ARENA_TYPE_3v3 ? BATTLEGROUND_QUEUE_SSH : BATTLEGROUND_QUEUE_NONE;
+            // 2v2 or 3v3: four or six people, two teams each round.
+            switch (arenaType)
+            {
+                case ARENA_TYPE_2v2:
+                    return BATTLEGROUND_QUEUE_SSH_2;
+                case ARENA_TYPE_3v3:
+                    return BATTLEGROUND_QUEUE_SSH_3;
+                default:
+                    return BATTLEGROUND_QUEUE_NONE;
+            }
         default:
             // Arenas do not get a queue per arena -- every arena of a given team
             // size shares one queue, which is what lets All Arenas mix them. The
@@ -1321,7 +1329,8 @@ BattlegroundTypeId BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId bgQueue
         case BATTLEGROUND_QUEUE_BHF_4:
         case BATTLEGROUND_QUEUE_BHF_5:
             return BATTLEGROUND_BHF;
-        case BATTLEGROUND_QUEUE_SSH:
+        case BATTLEGROUND_QUEUE_SSH_2:
+        case BATTLEGROUND_QUEUE_SSH_3:
             return BATTLEGROUND_SSH;
         default:
             return BattlegroundTypeId(0);                   // used for unknown template (it exists and does nothing)
@@ -1334,10 +1343,11 @@ uint8 BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId bgQueueTypeId)
     {
         case BATTLEGROUND_QUEUE_2v2:
         case BATTLEGROUND_QUEUE_BHF_2:
+        case BATTLEGROUND_QUEUE_SSH_2:
             return ARENA_TYPE_2v2;
         case BATTLEGROUND_QUEUE_3v3:
         case BATTLEGROUND_QUEUE_BHF_3:
-        case BATTLEGROUND_QUEUE_SSH:
+        case BATTLEGROUND_QUEUE_SSH_3:
             return ARENA_TYPE_3v3;
         case BATTLEGROUND_QUEUE_4v4:
         case BATTLEGROUND_QUEUE_BHF_4:

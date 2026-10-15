@@ -66,8 +66,8 @@ namespace
     //   CCGAME ARENAQUEUE:<n>     a squad match of up to n squads, rated and
     //                             skirmish, each row a squad size (Baradin Hold:
     //                             Four Corners)
-    //   CCGAME ARENAQUEUE:SHUFFLE Solo Shuffle: the 3v3 skirmish row only,
-    //                             queued alone
+    //   CCGAME ARENAQUEUE:SHUFFLE Solo Shuffle: the 2v2 and 3v3 skirmish rows
+    //                             only, queued alone
     //
     // Sent before every arena window so a client never keeps the last mode.
     void SendArenaQueueMode(Player* player, std::string const& mode)
@@ -881,12 +881,13 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
         sBattlegroundMgr->IsSquadBattleground(masterBgTypeId) || masterBgTypeId == BATTLEGROUND_SSH)
         queueBgTypeId = masterBgTypeId;
 
-    // Solo Shuffle's battlemaster takes one queue: a 3v3 skirmish, alone. Its
-    // window only offers that row, so anything else is an old client or a
-    // party leader pressing Join as Group.
-    if (queueBgTypeId == BATTLEGROUND_SSH && (asGroup || isRated || arenatype != ARENA_TYPE_3v3))
+    // Solo Shuffle's battlemaster takes two queues: a 2v2 or a 3v3 skirmish,
+    // alone. Its window only offers those rows, so anything else is an old
+    // client or a party leader pressing Join as Group.
+    if (queueBgTypeId == BATTLEGROUND_SSH &&
+        (asGroup || isRated || (arenatype != ARENA_TYPE_2v2 && arenatype != ARENA_TYPE_3v3)))
     {
-        ChatHandler(this).SendSysMessage("Solo Shuffle is a 3v3 skirmish you queue for alone.");
+        ChatHandler(this).SendSysMessage("Solo Shuffle is a 2v2 or 3v3 skirmish you queue for alone.");
         return;
     }
 
