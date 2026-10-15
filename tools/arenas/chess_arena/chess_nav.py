@@ -1,17 +1,20 @@
-"""The Gamesman's Hall arena's navmesh: carve the doors and statues into map 1532's hall tile.
+"""The Gamesman's Hall arena's navmesh: carve the statues, the hall doors and the bookcases into
+map 1532's hall tile.
 
     python chess_nav.py carve <work>                   # add them to a SCRATCH copy of the vmaps
     python chess_nav.py check <old.mmtile> <new.mmtile>
 
-<work> holds the four M2s (KarazahnPortcullis, Karazahn_chessroomdoors, statueHMpaladin,
-statueHMpriest from the client) and vmaps/ with copies of 1532.vmtree and 1532_35_52.vmtile
-(the hall's tile; 532's own, renamed) plus each model's <name>_nav.vmo from
-tools/eoe_arena/pillars/build_nav_vmo.py at the scale it is spawned at. The generator then runs in
-a server dir holding these vmaps, maps/1532*.map and dbc/:
+<work> holds the four M2s (Karazahn_chessroomdoors, statueHMpaladin, statueHMpriest,
+KarazahnBookshelfXtralarge, from the client) and vmaps/ with copies of 1532.vmtree and
+1532_35_52.vmtile (the hall's tile; 532's own, renamed) plus each model's <name>_nav.vmo from
+tools/eoe_arena/pillars/build_nav_vmo.py (the bookcases share one, built at the smaller scale).
+The generator then runs in a server dir holding these vmaps, maps/1532*.map and dbc/:
     mmaps_generator 1532 --tile 35,52 --allowDebug
 (the realm's binary; it skips a tile whose .mmtile already exists - delete it first). A
 gameobject is invisible to the navmesh, so without this a bot or pet walks straight through a
-closed portcullis or a statue. ANY later regen of 1532's mmaps drops the carve.
+statue or a shut door. The balconies' side doors are NOT carved: they open when the match
+begins, and the way down from a balcony runs through them. ANY later regen of 1532's mmaps
+drops the carve.
 """
 import math
 import os
@@ -29,6 +32,7 @@ import vmtile as V  # noqa: E402
 
 TILE = "%d_35_52.vmtile" % L.MAP_ID
 ZEROPOINT = 32.0 * 533.3333
+BOOKCASE_M2 = "KarazahnBookshelfXtralarge"
 
 
 def items():
@@ -37,10 +41,10 @@ def items():
     for label, entry, x, y, z, o in L.statues():
         model = "statueHMpaladin" if entry == L.KNIGHT_ENTRY else "statueHMpriest"
         out.append((label + " statue", x, y, z, o, model, L.STATUE_SCALE))
-    for label, x, y, z, o in L.portcullises():
-        out.append((label + " portcullis", x, y, z, o, "KarazahnPortcullis", 1.0))
     for label, x, y, z, o, rot in L.HALL_DOORS:
         out.append((label, x, y, z, o, "Karazahn_chessroomdoors", L.HALL_DOOR_SIZE))
+    for label, entry, x, y, z, o, scale in L.bookcases():
+        out.append((label + " bookcase", x, y, z, o, BOOKCASE_M2, scale))
     return out
 
 
@@ -53,8 +57,8 @@ def cmd_carve(work):
     if any(s["id"] in ours or s["name"].endswith("_nav") for s in spawns):
         raise SystemExit("%s already holds the carve or uses one of the ids %s - start from the realm's copy" % (tile, sorted(ours)))
     tiled, (lo, hi, nodes, objs), rest = V.read_vmtree(tree)
-    # The generator collects every loaded instance and never walks the tree: the new instances
-    # only need slots in the object list.
+    # The generator collects every loaded instance and never walks the tree: the new
+    # instances only need slots in the object list.
     lo, hi = list(lo), list(hi)
     boxes = {}
     for i, (label, x, y, z, o, model, scale) in enumerate(items()):
@@ -78,7 +82,7 @@ def cmd_carve(work):
         objs.append(ref)
         lo = [min(lo[k], blo[k]) for k in range(3)]
         hi = [max(hi[k], bhi[k]) for k in range(3)]
-        print("%-42s (%.2f, %.2f, %.2f) yaw %.1f %s x%.2f -> ref %d" % (label, x, y, z, yaw, nav, scale, ref))
+        print("%-42s (%.2f, %.2f, %.2f) yaw %.1f %s x%.3f -> ref %d" % (label, x, y, z, yaw, nav, scale, ref))
     V.write_vmtile(tile, spawns)
     V.write_vmtree(tree, tiled, (tuple(lo), tuple(hi), nodes, objs), rest)
     print("%s now %d spawns; tree objects %d" % (TILE, len(V.read_vmtile(tile)), len(V.read_vmtree(tree)[1][3])))
@@ -104,10 +108,11 @@ def load(path):
 
 
 def cmd_check(old, new):
-    """One walk from the middle of the board over each tile. After the carve: both landings and
-    both Shadow Sights are in it, the statues, portcullises and doors are off the mesh, nothing
-    in it lies outside the bounds outline (the balconies and the rest of Karazhan are cut off),
-    each corner flight is walkable to its portcullis and its landing beyond is not reachable."""
+    """One walk from the middle of the board over each tile. After the carve: both balcony starts
+    and both Shadow Sights are in it - the way up runs through the corner flights, the corner
+    landings, the long stairways and the balconies' side doorways, and every one of those is
+    walked; nothing in it lies outside the bounds outline (the rooms past Karazhan's own doors
+    are cut off); the statues, the hall doors and the bookcases are off the mesh."""
     poly = L.bounds_outline()
     bad = 0
     for tag, path in (("before", old), ("after", new)):
@@ -126,27 +131,32 @@ def cmd_check(old, new):
         if outside:
             bad += 1
             print("    <-- UNEXPECTED: still a way out, e.g. poly at (%.1f, %.1f)" % cent[outside[0]])
-        named = [("alliance landing", L.ALLIANCE_LANDING[:3]), ("horde landing", L.HORDE_LANDING[:3])] + \
+        named = [("alliance start (SW balcony)", L.ALLIANCE_START[:3]), ("horde start (NE balcony)", L.HORDE_START[:3])] + \
                 [("shadow sight %d" % b[0], b[1:4]) for b in L.BUFFS]
+        for sa, end in ((1, "SW"), (-1, "NE")):
+            for sb, edge in ((1, "+b"), (-1, "-b")):
+                named += [
+                    ("%s %s corner flight" % (end, edge), L.xy(sa * 34.5, sb * 23.5) + (222.3,)),
+                    ("%s %s corner landing" % (end, edge), L.xy(sa * 41.0, sb * 23.5) + (L.FLIGHT_TOP_Z,)),
+                    ("%s %s long stairway" % (end, edge), L.xy(sa * 42.6, sb * 14.0) + (225.4,)),
+                    ("%s %s side doorway" % (end, edge), L.xy(sa * L.DOOR_A, sb * 7.4) + (226.9,)),
+                ]
         for name, (x, y, z) in named:
             ok = find(x, y, z) in reach
             bad += not ok
             print("    %-36s %s" % (name, "reachable" if ok else "CUT OFF <-- UNEXPECTED"))
+        for name, (a, z) in (("SW room past the hall door", (64.5, 238.27)), ("NE room past the exit door", (-57.0, 232.26))):
+            x, y = L.xy(a, 0.0)
+            g = find(x, y, z)
+            ok = g is None or g not in reach
+            bad += not ok
+            print("    %-36s %s" % (name, "off the mesh" if g is None else ("cut off" if ok else "REACHABLE <-- UNEXPECTED")))
         for label, x, y, z, o, model, scale in items():
-            g = find(x, y, z + 0.5, 1.0)
+            zz = z + 0.5 if model != BOOKCASE_M2 else L.BALCONY_Z + 0.5
+            g = find(x, y, zz, 1.0)
             ok = g is None or g not in reach
             bad += not ok
             print("    %-36s middle %s" % (label, "off the mesh" if g is None else ("cut off" if g not in reach else "REACHABLE <-- UNEXPECTED")))
-        for side, a in (("SW", 1), ("NE", -1)):
-            for edge, b in (("SE", 1), ("NW", -1)):
-                below = L.xy(a * 34.5, b * L.ARCH_B)          # on the flight, 2 steps up
-                beyond = L.xy(a * 40.0, b * L.ARCH_B)         # the corner landing behind the portcullis
-                gb, gl = find(below[0], below[1], 222.3, 1.5), find(beyond[0], beyond[1], L.FLIGHT_TOP_Z, 1.5)
-                ok = gb in reach and (gl is None or gl not in reach)
-                bad += not ok
-                print("    %s end %s corner flight: on the stair %s, beyond the portcullis %s%s" % (
-                    side, edge, "reachable" if gb in reach else "CUT OFF", "off" if gl is None else
-                    ("cut off" if gl not in reach else "REACHABLE"), "" if ok else "  <-- UNEXPECTED"))
     return 1 if bad else 0
 
 

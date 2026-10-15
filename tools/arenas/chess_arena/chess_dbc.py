@@ -19,6 +19,9 @@ changed field by field, so every layer gets the same bytes.
     MapDifficulty 762      server only: (1532, difficulty 0). Without it every static
                            `gameobject` row on 1532 (the doors and statues) is skipped as
                            "wrong spawn mask". chess_patch.py does not ship it.
+    GameObjectDisplayInfo  11973, Karazhan's tall library bookcase
+                           (KarazahnBookshelfXtralarge), which no display row named: the
+                           bookcases barring the balcony windows. The client needs it too.
 
 `apply` only touches files present in the directory, backs each one up once as
 <file>.bak-eoe (the shared writer's suffix), and is idempotent; an id already present with
@@ -34,7 +37,8 @@ sys.path.insert(0, HERE)
 import eoe_dbc as D  # noqa: E402
 import chess_layout as L  # noqa: E402
 
-TABLES = ("Map", "BattlemasterList", "PvpDifficulty", "WorldSafeLocs", "WorldStateUI", "MapDifficulty")
+TABLES = ("Map", "BattlemasterList", "PvpDifficulty", "WorldSafeLocs", "WorldStateUI", "MapDifficulty",
+          "GameObjectDisplayInfo")
 
 
 def build_rows():
@@ -72,6 +76,10 @@ def build_rows():
     rows["WorldStateUI"].append(D.client_row("WorldStateUI", 90129, f0=L.WSUI_GOLD, f1=L.MAP_ID))
 
     rows["MapDifficulty"].append(D.client_row("MapDifficulty", 112, f0=L.MAPDIFF_ID, f1=L.MAP_ID))
+
+    D.SPECS.setdefault("GameObjectDisplayInfo", (19, [1]))
+    rows["GameObjectDisplayInfo"].append([L.BOOKCASE_DISPLAY, L.BOOKCASE_MODEL] + [0] * 10 +
+                                         [float(v) for v in L.BOOKCASE_GEO_BOX] + [0])
     return rows
 
 
