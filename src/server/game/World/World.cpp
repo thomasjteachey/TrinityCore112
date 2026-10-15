@@ -3451,6 +3451,48 @@ void World::ProcessCliCommands()
     }
 }
 
+// Answer a command that is never going to run. SOAP and RA block on a promise
+// that only m_commandFinished sets, so a command dropped without calling it
+// leaves that thread waiting for ever - and main joins the SOAP thread on the
+// way out, which is how the 2026-10-15 deploy hung after "Halting process...".
+static void RefuseCliCommand(CliCommandHolder* command)
+{
+    if (command->m_print)
+        command->m_print(command->m_callbackArg, "The server is shutting down; the command was not run.\r\n");
+    if (command->m_commandFinished)
+        command->m_commandFinished(command->m_callbackArg, false);
+    delete command;
+}
+
+void World::QueueCliCommand(CliCommandHolder* commandHolder)
+{
+    {
+        std::lock_guard<std::mutex> lock(_cliCmdQueueCloseLock);
+        if (!_cliCmdQueueClosed)
+        {
+            cliCmdQueue.add(commandHolder);
+            return;
+        }
+    }
+
+    RefuseCliCommand(commandHolder);
+}
+
+void World::CloseCliCommandQueue()
+{
+    // The SOAP accept loop only re-checks IsStopped() between 3 second accepts,
+    // so a request can still be queued after the last tick's ProcessCliCommands.
+    // Once closed under the lock nothing else can be added, so this drain is final.
+    {
+        std::lock_guard<std::mutex> lock(_cliCmdQueueCloseLock);
+        _cliCmdQueueClosed = true;
+    }
+
+    CliCommandHolder* command = nullptr;
+    while (cliCmdQueue.next(command))
+        RefuseCliCommand(command);
+}
+
 void World::SendAutoBroadcast()
 {
     if (m_Autobroadcasts.empty())

@@ -460,6 +460,12 @@ extern int main(int argc, char** argv)
 
     WorldUpdateLoop();
 
+    // The world loop was the only thing that ran queued console/SOAP/RA commands.
+    // Answer whatever is still waiting before anything below joins a thread that
+    // may be blocked on one: the soapThread handle joins the SOAP thread, and an RA
+    // session waits on the io pool that threadPool.reset() joins.
+    sWorld->CloseCliCommandQueue();
+
     // Shutdown starts here
     ioContextStopHandle.reset();
 

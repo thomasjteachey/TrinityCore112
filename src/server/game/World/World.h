@@ -33,6 +33,7 @@
 #include <atomic>
 #include <list>
 #include <map>
+#include <mutex>
 #include <unordered_map>
 
 class Player;
@@ -817,7 +818,10 @@ class TC_GAME_API World
         static int32 GetVisibilityNotifyPeriodInArenas()    { return m_visibility_notify_periodInArenas;     }
 
         void ProcessCliCommands();
-        void QueueCliCommand(CliCommandHolder* commandHolder) { cliCmdQueue.add(commandHolder); }
+        void QueueCliCommand(CliCommandHolder* commandHolder);
+        // World thread only, once WorldUpdateLoop has returned: nothing runs a
+        // queued command after that, so refuse new ones and answer the waiting ones.
+        void CloseCliCommandQueue();
 
         void ForceGameEventUpdate();
 
@@ -920,6 +924,10 @@ class TC_GAME_API World
 
         // CLI command holder to be thread safe
         LockedQueue<CliCommandHolder*> cliCmdQueue;
+        // Guards the closed check together with the add, so no command can slip
+        // into the queue after CloseCliCommandQueue has drained it.
+        std::mutex _cliCmdQueueCloseLock;
+        bool _cliCmdQueueClosed = false;
 
         // next daily quests and random bg reset time
         time_t m_NextDailyQuestReset;
