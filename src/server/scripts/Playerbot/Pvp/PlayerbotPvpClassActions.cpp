@@ -2570,31 +2570,11 @@ void IssueBehindTargetMeleeMovement(Player* player, Unit* target)
     SetLastMovementDebugStatus(player, diag.str());
 }
 
-// Whether walking around behind this target can ever succeed.
-//
-// A creature in melee turns to face whoever is hitting it, every tick, so
-// circling one is a dance that never ends and never lands the strike - the bot
-// slides around the mob forever while its Backstab stays unusable. Against a
-// PLAYER, flanking is real and worth the walk.
-//
-// This suppresses only the MOVEMENT. PlayerbotPvpCore already refuses a
-// behind-requiring spell whose target has the caster in arc, so the selector
-// falls through to the next usable ability by itself - Sinister Strike for a
-// rogue - and no ability list needs a special case.
-//
-// An opener from stealth is untouched: a target that has not turned yet is not
-// in arc, so no repositioning was ever asked for and Backstab and Ambush stay
-// usable. Only the futile circling goes.
-bool CanBeFlankedMeaningfully(Unit const* target)
-{
-    return target && target->GetTypeId() == TYPEID_PLAYER;
-}
-
 bool IsBehindTargetRequiredAndMissing(Player const* player, Unit const* target, SpellInfo const* spellInfo)
 {
     return player && target && spellInfo &&
         spellInfo->HasAttribute(SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET) &&
-        CanBeFlankedMeaningfully(target) &&
+        playerbot::PvpClassActions::CanFlankTarget(player, target) &&
         target->HasInArc(static_cast<float>(M_PI), player);
 }
 
@@ -4972,7 +4952,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     bool const shouldMoveBehindForEnemySpell =
         shouldUseMeleeApproachForEnemySpell &&
         spellInfo->HasAttribute(SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET) &&
-        CanBeFlankedMeaningfully(target);
+        playerbot::PvpClassActions::CanFlankTarget(player, target);
     // TEMPORARY diagnostic: the warrior/shaman gap closers (Charge, Intercept,
     // Heroic Leap, Rehgar's Fury) were reported as producing zero whisper output
     // during live kiting tests. NotifyDuelDecision only fires after an actual
@@ -6027,6 +6007,31 @@ void PvpClassActions::DismountToFight(Player* player, Unit const* victim)
     TC_LOG_DEBUG("playerbots.pvp.classspell", "Bot {} gets off its mount to fight {}.",
         player->GetName(), victim->GetName());
     ForcePlayerbotDismount(player);
+}
+
+// Whether walking around behind this target can ever succeed.
+//
+// A unit faces what it is fighting, every tick - a mob turns to its victim and
+// so does a bot. Circling something that is fighting THIS bot is a dance that
+// never ends and never lands the strike: the bot slides around it forever while
+// its Backstab stays unusable. That is as true of a player as of a creature.
+//
+// Something fighting someone else faces them instead, and its back stays where
+// it is long enough to reach - the arena target hitting your healer, the mob on
+// the tank. So does anything stunned, which cannot turn at all: the Cheap Shot
+// and Kidney Shot windows a rogue walks around in to Backstab.
+//
+// An opener from stealth is untouched: a target that has not noticed the bot is
+// fighting nobody, so the walk is allowed, as it always was for a player.
+bool PvpClassActions::CanFlankTarget(Unit const* attacker, Unit const* target)
+{
+    if (!attacker || !target)
+        return false;
+
+    if (target->HasUnitState(UNIT_STATE_STUNNED))
+        return true;
+
+    return target->GetVictim() != attacker && target->GetTarget() != attacker->GetGUID();
 }
 
 bool PvpClassActions::IsCastWastedOnTargetImmunity(Unit const* caster, Unit const* target, SpellInfo const* spellInfo)

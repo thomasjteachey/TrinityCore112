@@ -6264,6 +6264,93 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
         return SelectHighestPriorityCastableDecision(candidates, player, target, allyTarget);
     }
 
+    // How long a Backstab rogue or a Shred cat walks for its target's back
+    // before settling for the frontal builder, and how long it then builds from
+    // the front before trying again.
+    constexpr uint32 kFlankAttemptMs = 3000;
+    constexpr uint32 kFlankRetryAfterGiveUpMs = 10000;
+    // Inside this the walk round to the back is short. Farther out the ordinary
+    // melee chase closes the gap first.
+    constexpr float kFlankEngageRange = 10.0f;
+    // A try the selector stopped asking about for this long - stealth held for
+    // an opener after a Vanish, a stretch in bear form - is over, and the next
+    // one gets its full kFlankAttemptMs.
+    constexpr uint32 kFlankAttemptStaleMs = 2000;
+
+    struct FlankAttemptState
+    {
+        ObjectGuid targetGuid;
+        bool attempting = false;
+        uint32 attemptStartMs = 0;
+        uint32 lastAskedMs = 0;
+        uint32 retryNotBeforeMs = 0;
+    };
+
+    std::unordered_map<uint64, FlankAttemptState> g_FlankAttemptByGuid;
+
+    // Whether a Backstab or Shred bot should hold back its frontal builder this
+    // tick and walk for the target's back instead.
+    //
+    // The selectors used to offer the positional strike only once the bot was
+    // ALREADY behind. From the front the frontal builder (Sinister Strike,
+    // Claw) was always castable, so it always won, and the walk round to the
+    // back - which CastDirectSpell only does when the chosen strike fails "not
+    // behind" - was never asked for. Holding the frontal builder back makes the
+    // positional strike the decision, and its not-behind failure does the
+    // walking.
+    //
+    // A target that keeps turning would hold the builder back forever, so each
+    // try gets kFlankAttemptMs, then the bot builds from the front for
+    // kFlankRetryAfterGiveUpMs. Getting behind, by the walk or by luck, ends
+    // both.
+    bool ShouldHoldFrontalBuilderForFlank(Player const* player, Unit const* target, bool positionalStrikeReady)
+    {
+        if (!player || !target)
+            return false;
+
+        FlankAttemptState& state = playerbot::LockedGetOrCreate(g_FlankAttemptByGuid, player->GetGUID().GetRawValue());
+        if (state.targetGuid != target->GetGUID())
+        {
+            state = FlankAttemptState();
+            state.targetGuid = target->GetGUID();
+        }
+
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        if (state.attempting && nowMs - state.lastAskedMs > kFlankAttemptStaleMs)
+            state.attempting = false;
+        state.lastAskedMs = nowMs;
+
+        if (!target->HasInArc(static_cast<float>(M_PI), player))
+        {
+            state.attempting = false;
+            state.retryNotBeforeMs = 0;
+            return false;
+        }
+
+        if (!positionalStrikeReady || !player->IsWithinDistInMap(target, kFlankEngageRange) ||
+            !playerbot::PvpClassActions::CanFlankTarget(player, target))
+        {
+            state.attempting = false;
+            return false;
+        }
+
+        if (nowMs < state.retryNotBeforeMs)
+            return false;
+
+        if (!state.attempting)
+        {
+            state.attempting = true;
+            state.attemptStartMs = nowMs;
+        }
+
+        if (nowMs - state.attemptStartMs < kFlankAttemptMs)
+            return true;
+
+        state.attempting = false;
+        state.retryNotBeforeMs = nowMs + kFlankRetryAfterGiveUpMs;
+        return false;
+    }
+
     SpellDecision SelectDruidSpell(Player const* player, Unit const* target, ClassicProfileSelection const& profileSelection)
     {
         SpellDecision decision;
@@ -6372,20 +6459,32 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
                 { "druid thinnervate", "restore mana with combo points", 89758, playerbot::PvpClassSpellContext::TargetMode::Enemy });
             AddDecisionCandidate(feralCandidates, inCat && player->GetComboPoints() >= 5 && IsSpellReady(player, 9896), 55.0f,
                 { "druid rip", "feral combo point bleed finisher", 9896, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-            AddDecisionCandidate(feralCandidates, inCat && !HasAuraFromSpellChain(target, 33876) && IsSpellReady(player, 9850), 54.0f,
+            // Shred is positional like Backstab, and a mob the cat holds
+            // aggro on re-faces it every AI tick - momentary "behind"
+            // windows just bait an endless flanking dance. Claw is the
+            // builder whenever the target is fixated on the bot; otherwise
+            // the cat walks for the back (ShouldHoldFrontalBuilderForFlank)
+            // and Shreds.
+            //
+            // Worked out here, above the mangle Claw, because that Claw
+            // outranks Shred and no character on the realm knows Mangle
+            // (checked 2026-10-15): it won every time, so Shred never went
+            // off at all.
+            bool const flankForShred = inCat &&
+                ShouldHoldFrontalBuilderForFlank(player, target, IsSpellReady(player, 9830));
+            bool const shredViable = flankForShred ||
+                (!target->HasInArc(static_cast<float>(M_PI), player) && playerbot::PvpClassActions::CanFlankTarget(player, target));
+            AddDecisionCandidate(feralCandidates, inCat && !shredViable && !HasAuraFromSpellChain(target, 33876) && IsSpellReady(player, 9850), 54.0f,
                 { "druid claw", "build combo points when mangle is missing", 9850, playerbot::PvpClassSpellContext::TargetMode::Enemy });
             AddDecisionCandidate(feralCandidates, inCat && !HasAuraFromSpellChain(target, 9904) && IsSpellReady(player, 9904), 53.0f,
                 { "druid rake", "maintain rake bleed", 9904, playerbot::PvpClassSpellContext::TargetMode::Enemy });
             AddDecisionCandidate(feralCandidates, inFeralForm && !isProwling && target && !HasAuraFromSpellChain(target, 17392) && !HasAuraFromSpellChain(target, 9907) && IsSpellReady(player, 17392), 52.0f,
                 { "druid faerie fire feral", "feral armor debuff filler", 17392, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-            // Shred is positional like Backstab, and a mob the cat holds
-            // aggro on re-faces it every AI tick - momentary "behind"
-            // windows just bait an endless flanking dance. Claw is the
-            // builder whenever the target is fixated on the bot.
-            bool const shredViable = target && !target->HasInArc(static_cast<float>(M_PI), player) &&
-                target->GetVictim() != player;
+            // While walking for the back, Shred cannot land from the front, so
+            // it stays the decision and its not-behind failure in
+            // CastDirectSpell walks the cat round.
             AddDecisionCandidate(feralCandidates, inCat && shredViable && IsSpellReady(player, 9830), 51.0f,
-                { "druid shred", "behind-target combo point builder", 9830, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+                { "druid shred", flankForShred ? "walk behind the target to shred" : "behind-target combo point builder", 9830, playerbot::PvpClassSpellContext::TargetMode::Enemy });
             AddDecisionCandidate(feralCandidates, inCat && !shredViable && IsSpellReady(player, 9850), 50.8f,
                 { "druid claw", "frontal fallback builder while holding aggro", 9850, playerbot::PvpClassSpellContext::TargetMode::Enemy });
 
@@ -7192,19 +7291,26 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         IsSpellReady(player, 11300), 42.9f,
         { "rogue eviscerate", "finish a low-health target before full combo points", 11300, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     // Improved Backstab lets Assassination use Backstab as its combo builder
-    // instead of Hemorrhage. Backstab also carries the behind-target attribute,
-    // so the shared reposition-on-cast-failure handling keeps the bot flanking.
-    // Backstab is positional: only usable from behind. A rogue holding the
-    // target's aggro (creature facing it) must build with Sinister Strike
-    // instead of spamming an impossible Backstab.
+    // instead of Hemorrhage. Backstab is positional: only usable from behind.
+    // A rogue whose target is fighting it (and so keeps facing it) must build
+    // with Sinister Strike instead of spamming an impossible Backstab.
     bool const behindTarget = target && !target->HasInArc(static_cast<float>(M_PI), player);
     // Plain Backstab (level 4) is the better builder for any dagger rogue
     // that finds itself behind the target; it no longer waits on the talent.
     Item const* rogueMainHand = player->GetWeaponForAttack(BASE_ATTACK, true);
     bool const holdsDagger = rogueMainHand && rogueMainHand->GetTemplate() &&
         rogueMainHand->GetTemplate()->SubClass == ITEM_SUBCLASS_WEAPON_DAGGER;
-    AddDecisionCandidate(candidates, (hasImprovedBackstab || holdsDagger) && behindTarget && player->IsWithinMeleeRange(target) && IsSpellReady(player, 53), 20.5f,
-        { "rogue backstab", hasImprovedBackstab ? "improved backstab combo point builder" : "backstab from behind with a dagger", 53, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    // From the front, walk for the back (ShouldHoldFrontalBuilderForFlank).
+    // Only with a dagger in hand - Backstab cannot be cast without one, so
+    // there would be no strike at the end of the walk - and never while
+    // stealth is being held for the opener.
+    bool const flankForBackstab = holdsDagger && !holdStealthForOpener &&
+        ShouldHoldFrontalBuilderForFlank(player, target, IsSpellReady(player, 53));
+    AddDecisionCandidate(candidates, (hasImprovedBackstab || holdsDagger) &&
+        ((behindTarget && player->IsWithinMeleeRange(target)) || flankForBackstab) && IsSpellReady(player, 53), 20.5f,
+        { "rogue backstab", flankForBackstab ? "walk behind the target to backstab" :
+            (hasImprovedBackstab ? "improved backstab combo point builder" : "backstab from behind with a dagger"),
+          53, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     // Hemorrhage if the rogue actually HAS it, rather than if its spec suggests
     // it should. IsSpellReady resolves the rank chain and returns false for a
     // spell the player never learned, so this asks the only question that
@@ -7221,6 +7327,18 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     // it from level one, so nothing can fall through this.
     AddDecisionCandidate(candidates, IsSpellReady(player, 11294), 20.0f,
         { "rogue sinister strike", "universal combo point builder", 11294, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+
+    // While walking for the back, Backstab is the only builder on offer. It
+    // cannot land from the front, so it stays the decision, and its not-behind
+    // failure in CastDirectSpell is what walks the rogue round. Everything that
+    // does not care about facing - Kick, Kidney Shot, Eviscerate, Blind - still
+    // goes first.
+    if (flankForBackstab)
+        candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+            [](PrioritizedSpellDecision const& candidate)
+            {
+                return candidate.decision.spellId == 11294 || candidate.decision.spellId == 16511;
+            }), candidates.end());
 
     // While the opener is on offer, nothing else is.
     //

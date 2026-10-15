@@ -52,6 +52,13 @@ public:
     // same answer, and two copies of a rule like this drift.
     static bool IsCastWastedOnTargetImmunity(Unit const* caster, Unit const* target, SpellInfo const* spellInfo);
 
+    // Whether walking around behind this target can land a positional strike
+    // (Backstab, Shred). Shared for the same reason: the rogue and cat
+    // selectors decide whether to go for the back, the cast path does the
+    // walking, and a selector that asked for a walk the cast path refused
+    // would leave the bot standing still with no builder.
+    static bool CanFlankTarget(Unit const* attacker, Unit const* target);
+
     // Get a bot off its mount COMPLETELY - flag, model, auras and speed.
     // Unit::Dismount alone does not: see the definition.
     static void ForceDismount(Player* player);
