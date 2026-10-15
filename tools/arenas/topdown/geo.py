@@ -74,7 +74,7 @@ def parse_modf(blob, names, ids):
         flags, dset, nset, scale = struct.unpack_from("<4H", blob, b + 56)
         name = names.get(ids[nid], "?") if nid < len(ids) else "?"
         out.append({"name": name, "uid": uniq, "pos": pos, "rot": rot, "flags": flags,
-                    "doodadset": dset})
+                    "doodadset": dset, "nameset": nset})
     return out
 
 

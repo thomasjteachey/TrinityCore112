@@ -99,6 +99,33 @@ battleground_template`.
 How the data was chosen - navmesh reachability from the starts, the outlines, the buff
 spots - is in `topdown/README.md`; the shapes are measured, so a rerun reproduces them.
 
+### Later the same day, at the owner's request
+
+- **Real start gates for 879, 880 and 885** (`MEASURED` in `gen_arena_sql.py`): rows of
+  the Black Temple gate cut to fit (templates 300402-300404), wall to wall, closing a pen
+  around each start - under the two bridges of each Baradin Hold corner, across the
+  recess between two Obelisk wall towers, at the foot of both staircases and across the
+  front of each Amphitheater landing. Each pen was checked closed on the navmesh with
+  the real segment extents. The leash stays, widened to the pen (38 / 24 / 13 yd): it
+  only ever catches a pet or bot the server walks through a shut gate.
+  The Inventor's Library has none yet - there is no doorway or small room near its
+  starts in the client or server geometry, and an open-floor pen there is ~70 yd of gate.
+- **Bots drop out of Dalaran Sewers' pipes**: `battleground_drop_exit` rows (data-driven
+  `BattlegroundDropExit`, the mechanism Eye of the Storm's start platforms use): a bot
+  in a pipe walks to the mouth and is set down on the ring below, its pet with it.
+- **Every arena is open sky**: the server treats any arena map as outdoors
+  (`Map::GetFullTerrainStatusForPosition`), and the client's own WMOAreaTable was given
+  Flags 4 on every indoor WMO group people stand on or in (patch-enUS-A 1.00170):
+  Nefarian's Arena (5 BWL floor groups), the Imperial Arena of Thakraj (3 Azjol-Nerub
+  roof groups) and two new rows for Obelisk's Uldum titan micro (NameSet 1). Dalaran
+  Sewers and the Ring of Valor already had them. The survey (navmesh points within
+  90 yd of each arena's centre, topmost WMO surface under them, plus interior-group
+  boxes they stand inside) is scratchpad `stood_groups.py`; scenery groups that nobody
+  reaches - the Duskwood inn on Ruins of Lordaeron's map, say - are left alone, because
+  WMOAreaTable rows are global and those WMOs stand in the open world too.
+- **A skirmish left to bots closes** the moment its last person leaves (gates shut or
+  open), so queueing again rolls a new match instead of re-seating you in the old one.
+
 ## WorldStateUI
 
 Two things had to be true, and both are done:

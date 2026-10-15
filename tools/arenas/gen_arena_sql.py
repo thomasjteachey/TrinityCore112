@@ -229,12 +229,20 @@ MEASURED = {
         "drop_gameobject_guids": [2136081, 2136082],
     },
     # 879, 880, 881, 884 and 885 have no start rooms: each team starts in the open
-    # (a courtyard corner, a gap in a wall, the edge of a pit or a terrace), so there
-    # is no doorway to put a gate in. "gates": [] says so - without it gates_for()
-    # derives two from the starts, which put a gate in the middle of the floor
-    # blocking nothing. The teams are kept apart before the start by start_max_dist
-    # instead (a leash on the players and their pets), and the arena itself is
-    # held by a `battleground_bounds` row where its walls do not do it.
+    # (a courtyard corner, a gap in a wall, the edge of a pit or a terrace). "gates":
+    # [] means none - without it gates_for() derives two from the starts, which put
+    # a gate in the middle of the floor blocking nothing - and the teams are kept
+    # apart before the start by start_max_dist (a leash on players and their pets).
+    #
+    # 2026-10-15, at the owner's request: 879, 880 and 885 now have real gates that
+    # close a pen around each start - rows of the Black Temple gate (185483) at a
+    # size that fits, from wall to wall: under the two bridges that bound each
+    # courtyard corner (879), across the recess between two wall towers (880), at
+    # the foot of the two staircases and across the front of each landing (885).
+    # Lines measured by ray against the server collision, and every pen checked
+    # closed on the navmesh (scratchpad pencheck.py: nothing walks out past a gate
+    # line). start_max_dist is widened to the pen, so it only ever catches a pet or
+    # bot the server walks through a shut gate - the navmesh has no gameobjects.
     #
     # Buffs: open floor, the same distance from both starts, reachable on the
     # navmesh from both and clear of walls - picked by the 2026-10-15 pass that
@@ -242,8 +250,17 @@ MEASURED = {
     879: {  # Baradin Hold Arena, map 1401  (WSL 2033/2034)
         "alliance": (-1176.300049, 1043.319946, 121.000000, 3.948866),
         "horde":    (-1288.290039, 926.320007, 121.000000, 0.807273),
-        "gates": [],
-        "start_max_dist": 12,
+        "gates": [
+            (300402, -1168.804, 1019.050, 119.627, 3.141593, 0.0, 0.0, 1.000000, 0.000000),  # Alliance north-bridge gate 1/2
+            (300402, -1182.715, 1018.450, 119.627, 3.141593, 0.0, 0.0, 1.000000, 0.000000),  # Alliance north-bridge gate 2/2
+            (300402, -1206.000, 1050.966, 119.627, 4.712389, 0.0, 0.0, 0.707107, -0.707107),  # Alliance west-bridge gate 1/2
+            (300402, -1205.400, 1035.255, 119.627, 4.712389, 0.0, 0.0, 0.707107, -0.707107),  # Alliance west-bridge gate 2/2
+            (300402, -1293.556, 950.590, 119.627, 0.000000, 0.0, 0.0, 0.000000, 1.000000),  # Horde north-bridge gate 1/2
+            (300402, -1286.895, 951.190, 119.627, 0.000000, 0.0, 0.0, 0.000000, 1.000000),  # Horde north-bridge gate 2/2
+            (300402, -1258.590, 912.534, 119.627, 1.570796, 0.0, 0.0, 0.707107, 0.707107),  # Horde west-bridge gate 1/2
+            (300402, -1259.190, 926.915, 119.627, 1.570796, 0.0, 0.0, 0.707107, 0.707107),  # Horde west-bridge gate 2/2
+        ],
+        "start_max_dist": 38,
         "buffs": [
             (184663, -1176.30, 926.32, 119.73, 0.0),
             (184664, -1288.29, 1043.32, 119.73, 0.0),
@@ -252,8 +269,13 @@ MEASURED = {
     880: {  # Obelisk of the Stars, map 1402  (WSL 2035/2036)
         "alliance": (-9254.530273, -1473.119995, 68.000000, 4.650473),
         "horde":    (-9264.080078, -1627.160034, 68.000000, 1.508880),
-        "gates": [],
-        "start_max_dist": 12,
+        "gates": [
+            (300403, -9253.277, -1479.320, 65.669, 3.141593, 0.0, 0.0, 1.000000, 0.000000),  # Alliance recess gate 1/2
+            (300403, -9271.781, -1479.920, 65.354, 3.141593, 0.0, 0.0, 1.000000, 0.000000),  # Alliance recess gate 2/2
+            (300403, -9254.047, -1620.360, 65.351, 3.141593, 0.0, 0.0, 1.000000, 0.000000),  # Horde recess gate 1/2
+            (300403, -9271.741, -1620.960, 65.351, 3.141593, 0.0, 0.0, 1.000000, 0.000000),  # Horde recess gate 2/2
+        ],
+        "start_max_dist": 24,
         "buffs": [
             (184663, -9205.40, -1553.50, 65.45, 0.0),
             (184664, -9313.20, -1546.80, 65.45, 0.0),
@@ -335,8 +357,17 @@ MEASURED = {
     885: {  # Amphitheater of Anguish, map 1684  (WSL 2010/2011)
         "alliance": (5812.209961, -2977.669922, 274.000000, 3.576462),
         "horde":    (5748.359863, -3007.330078, 274.000000, 0.434869),
-        "gates": [],
-        "start_max_dist": 12,
+        "gates": [
+            (300404, 5809.588, -2970.507, 273.470, 3.737083, 0.0, 0.0, 0.956000, -0.293365),  # Alliance stairs-left gate 1/1
+            (300404, 5817.361, -2984.086, 273.410, 3.737083, 0.0, 0.0, 0.956000, -0.293365),  # Alliance stairs-right gate 1/1
+            (300404, 5808.159, -2978.466, 273.470, 5.307879, 0.0, 0.0, 0.468554, -0.883435),  # Alliance front gate 1/2
+            (300404, 5810.981, -2981.561, 273.440, 5.307879, 0.0, 0.0, 0.468554, -0.883435),  # Alliance front gate 2/2
+            (300404, 5750.811, -3014.609, 273.410, 0.595490, 0.0, 0.0, 0.293365, 0.956000),  # Horde stairs-left gate 1/1
+            (300404, 5743.039, -3001.029, 273.800, 0.595490, 0.0, 0.0, 0.293365, 0.956000),  # Horde stairs-right gate 1/1
+            (300404, 5752.411, -3006.534, 273.077, 2.166286, 0.0, 0.0, 0.883435, 0.468554),  # Horde front gate 1/2
+            (300404, 5749.589, -3003.439, 273.470, 2.166286, 0.0, 0.0, 0.883435, 0.468554),  # Horde front gate 2/2
+        ],
+        "start_max_dist": 13,
         "buffs": [
             (184663, 5787.87, -3008.82, 272.86, 0.0),
             (184664, 5767.65, -2965.29, 273.99, 0.0),
@@ -395,6 +426,11 @@ MEASURED = {
 GO_TEMPLATE_CLONES = [
     (300400, 183977, 1.25, "Nagrand Arena HD Gate 1"),
     (300401, 183979, 1.25, "Nagrand Arena HD Gate 2"),
+    # The Black Temple gate (185483, 0.85 = 29.5 x 26 yd) cut down to the openings
+    # of the start pens added 2026-10-15; each line takes one or two segments.
+    (300402, 185483, 0.47, "Arena Gate (Baradin Hold)"),           # 16.3 x 14.5 yd
+    (300403, 185483, 0.55, "Arena Gate (Obelisk of the Stars)"),   # 19.1 x 17.0 yd
+    (300404, 185483, 0.33, "Arena Gate (Amphitheater)"),           # 11.5 x 10.2 yd
 ]
 
 
@@ -723,6 +759,12 @@ def gen_world():
             L.append("UPDATE _arena_go_clone SET entry = %d, size = %s, name = '%s';"
                      % (new_entry, size, esc(name)))
             L.append("INSERT INTO gameobject_template SELECT * FROM _arena_go_clone;")
+            L.append("DROP TEMPORARY TABLE _arena_go_clone;")
+            # and its addon row, if it has one (185483: faction 114, GO_FLAG_NODESPAWN)
+            L.append("DELETE FROM gameobject_template_addon WHERE entry = %d;" % new_entry)
+            L.append("CREATE TEMPORARY TABLE _arena_go_clone AS SELECT * FROM gameobject_template_addon WHERE entry = %d;" % src_entry)
+            L.append("UPDATE _arena_go_clone SET entry = %d;" % new_entry)
+            L.append("INSERT INTO gameobject_template_addon SELECT * FROM _arena_go_clone;")
             L.append("DROP TEMPORARY TABLE _arena_go_clone;")
         L.append("")
 
