@@ -58,6 +58,7 @@
 #include "Util.h"
 #include "Vehicle.h"
 #include "World.h"
+#include "WrappedSpells.h"
 
 ScriptMapMap sSpellScripts;
 ScriptMapMap sEventScripts;
@@ -9579,6 +9580,24 @@ void ObjectMgr::LoadTrainers()
             spell.ReqAbility[1] = fields[6].GetUInt32();
             spell.ReqAbility[2] = fields[7].GetUInt32();
             spell.ReqLevel = fields[8].GetUInt8();
+
+            // Never teach what a wrapper casts (WrappedSpells.h). A row names the
+            // stock rank either directly or through the vanilla teach spell that
+            // LEARN_SPELLs it (26574 -> Consecration Rank 2), so both teach the
+            // wrapper instead, and the rank a row requires is the wrapper's too.
+            // Left as a teach spell, the row could never read as known (the
+            // stock rank never is) and its previous rank never as held.
+            if (uint32 const wrapperId = WrappedSpells::GetWrapper(spell.SpellId))
+                spell.SpellId = wrapperId;
+            else if (SpellInfo const* teachInfo = sSpellMgr->GetSpellInfo(spell.SpellId))
+                for (SpellEffectInfo const& effect : teachInfo->GetEffects())
+                    if (effect.IsEffect(SPELL_EFFECT_LEARN_SPELL))
+                        if (uint32 const taughtWrapperId = WrappedSpells::GetWrapper(effect.TriggerSpell))
+                            spell.SpellId = taughtWrapperId;
+
+            for (uint32& requiredSpell : spell.ReqAbility)
+                if (uint32 const wrapperId = WrappedSpells::GetWrapper(requiredSpell))
+                    requiredSpell = wrapperId;
 
             SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spell.SpellId);
             if (!spellInfo)

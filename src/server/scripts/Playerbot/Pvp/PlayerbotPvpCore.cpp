@@ -2374,10 +2374,9 @@ uint32 ResolveKnownPlayerSpellInChain(Player const* player, uint32 spellId)
     }
 
     // Shadow Bolt lives in two unrelated rank chains: the stock one (686 up
-    // to 25307) and the T2 wrapper (90420 up to 90429). Warlocks on the realm
-    // hold either, and some hold low wrapper ranks beside high stock ones, so
-    // take whichever chain gives the higher rank. Naming only the wrapper
-    // left every stock-chain warlock without Shadow Bolt.
+    // to 25307) and the T2 wrapper (90420 up to 90429). Warlocks hold only the
+    // wrapper now (WrappedSpells.h); the stock chain is still read so a
+    // character the startup move missed keeps its Shadow Bolt.
     uint32 SelectWarlockShadowBoltSpell(Player const* player)
     {
         auto knownRank = [player](uint32 chainSpellId) -> uint8
@@ -5833,9 +5832,9 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
             (target->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) ||
                 target->HasAuraWithMechanic((1 << MECHANIC_ROOT) | (1 << MECHANIC_STUN)));
 
-    // The T2 wrapper chain (90460-90471) is only learned by hunters holding
-    // the set; everyone else still has the stock Serpent Sting ranks, and
-    // naming only the wrapper left them with no sting at any level.
+    // Hunters hold the T2 wrapper chain (90460-90471), not the stock ranks it
+    // casts (WrappedSpells.h); the stock fallback covers a character the
+    // startup move missed.
     uint32 const serpentStingSpellId = ResolveKnownPlayerSpellInChain(player, 90468) ? 90468 : 25295;
     // Marksmanship is also where an untalented hunter lands, and its own
     // shots (Aimed Shot is a talent, Rapid Fire 26) arrive late. Until Aimed
@@ -6677,8 +6676,9 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
         !HasAuraFromSpellChain(sacrificeTarget, 1022) &&
         !HasAuraFromSpellChain(sacrificeTarget, 1044), 53.0f,
         { "paladin hand of sacrifice", "keep hand of sacrifice cycling on allies", 6940, playerbot::PvpClassSpellContext::TargetMode::Ally, sacrificeTarget ? sacrificeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, CountNearbyEnemies(player, 8.0f) >= 2 && IsSpellReady(player, 26573), 52.0f,
-        { "paladin consecration", "aoe pressure under close melee collapse", 26573, playerbot::PvpClassSpellContext::TargetMode::Self });
+    // 90526, not 26573: paladins hold the wrapper chain 90526-90531 (WrappedSpells.h).
+    AddDecisionCandidate(candidates, CountNearbyEnemies(player, 8.0f) >= 2 && IsSpellReady(player, 90526), 52.0f,
+        { "paladin consecration", "aoe pressure under close melee collapse", 90526, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, protectionTarget, 53.5f,
         { "paladin hand of protection", "protect low-health ally under melee pressure", 10278, playerbot::PvpClassSpellContext::TargetMode::Ally, protectionTarget ? protectionTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, repentanceTarget, 52.5f,
@@ -7251,20 +7251,10 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "rogue kick", isCombatRogue ? "interrupt nearby enemy cast" : "interrupt enemy cast", 1766, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyCastingTarget ? nearbyCastingTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, player->HealthBelowPct(40) && IsSpellReady(player, 5277), 47.0f,
         { "rogue evasion", "defensive survival in melee", 5277, playerbot::PvpClassSpellContext::TargetMode::Self });
-    // Sprint lives in TWO separate rank chains on this realm and the table only
-    // knew one of them, so no rogue has ever sprinted.
-    //
-    // spell_ranks has 2983 -> 8696 -> 11305 (the stock chain, and the one the
-    // trainer actually teaches: 2984 at level 10, 8697 at 34, 11318 at 58) and a
-    // SEPARATE 90514 -> 90515 -> 90516 chain for the T2 wrapper. Asking for
-    // 90516 resolves down its OWN chain and finds nothing, because
-    // ResolveKnownPlayerSpellInChain cannot cross into a chain the id does not
-    // belong to. Measured live: 16 rogues know 8696, 8 know 2983, and not one
-    // knows any id in the 90514 chain.
-    //
-    // So ask for whichever chain this rogue actually has, top rank first, and
-    // let the resolver walk down to the rank they own.
-    uint32 const sprintSpellId = IsSpellReady(player, 90516) ? 90516u : 11305u;
+    // Sprint is the T2 wrapper chain 90514 -> 90515 -> 90516; the stock chain
+    // 2983 -> 8696 -> 11305 it casts is never held (WrappedSpells.h). Ask for
+    // the top rank and let the resolver walk down to the one the rogue owns.
+    uint32 const sprintSpellId = 90516;
     AddDecisionCandidate(candidates, (isCombatRogue ? rootedOrSnared : (!player->HealthBelowPct(50) && !player->IsWithinMeleeRange(target) && player->IsWithinDistInMap(target, 30.0f))) && IsSpellReady(player, sprintSpellId), 46.0f,
         { "rogue sprint", "close gap for melee pressure", sprintSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isCombatRogue && rootedOrSnared && !IsSpellReady(player, sprintSpellId) && IsSpellReady(player, 26889), 45.8f,
@@ -7451,8 +7441,8 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "shaman lightning shield", "maintain shield buff out of combat", 10432, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, earthShockCastingTarget && IsSpellReady(player, 10414), 60.0f,
         { "shaman earth shock", "interrupt enemy cast with shock", 10414, playerbot::PvpClassSpellContext::TargetMode::Enemy, earthShockCastingTarget ? earthShockCastingTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, inCombat && !isRestoShaman && !isEnhancementShaman && !partyBenefitsFromWindfury && hasHostileTarget && manaEnemyNearby && !HasActiveAirTotem(player) && IsSpellReady(player, 8177), 59.0f,
-        { "shaman grounding totem", "counter incoming caster pressure from a mana user within 50 yards", 8177, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, inCombat && !isRestoShaman && !isEnhancementShaman && !partyBenefitsFromWindfury && hasHostileTarget && manaEnemyNearby && !HasActiveAirTotem(player) && IsSpellReady(player, 81478), 59.0f,
+        { "shaman grounding totem", "counter incoming caster pressure from a mana user within 50 yards", 81478, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !isRestoShaman && IsSpellReady(player, 16166), 58.0f,
         { "shaman elemental mastery", "trigger burst throughput cooldown", 16166, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isRestoShaman && nsHealTarget && !player->HasAura(16188), 59.5f,
@@ -7508,8 +7498,8 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     Unit const* poisonedAllyInTotemRange = inCombat && IsSpellReady(player, 8170) ? SelectFriendlyDispelTarget(player, DISPEL_POISON, 20.0f) : nullptr;
     AddDecisionCandidate(candidates, inCombat && poisonedAllyInTotemRange && poisonEnemyNearby && !HasActiveWaterTotem(player), 54.0f,
         { "shaman poison cleansing totem", "answer rogue/hunter poison pressure with a nearby water totem", 8170, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, inCombat && fearCasterEnemyNearby && !HasActiveEarthTotem(player) && IsSpellReady(player, 8143), 53.0f,
-        { "shaman tremor totem", "mitigate fear pressure from a warrior/warlock/priest within 50 yards", 8143, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, inCombat && fearCasterEnemyNearby && !HasActiveEarthTotem(player) && IsSpellReady(player, 81476), 53.0f,
+        { "shaman tremor totem", "mitigate fear pressure from a warrior/warlock/priest within 50 yards", 81476, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, inCombat && isRestoShaman && player->GetPowerPct(POWER_MANA) < 50.0f && !HasActiveWaterTotem(player) && IsSpellReady(player, 16190), 52.8f,
         { "shaman mana tide totem", "restore mana below half", 16190, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, inCombat && fearCasterEnemyNearby && !HasActiveEarthTotem(player) && IsSpellReady(player, 81476), 52.7f,
@@ -8366,9 +8356,11 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
         {
             case CLASS_ROGUE:
             {
-                constexpr uint32 kSprint = 2983;
+                // Cast through the wrapper chain; the aura is the stock Sprint it casts.
+                constexpr uint32 kSprint = 90516;
+                constexpr uint32 kSprintAura = 2983;
                 constexpr uint32 kEvasion = 5277;
-                if (pursued && !HasAuraFromSpellChain(player, kSprint) && IsFlagRunSpellCastable(player, kSprint, nullptr, false))
+                if (pursued && !HasAuraFromSpellChain(player, kSprintAura) && IsFlagRunSpellCastable(player, kSprint, nullptr, false))
                     return { "rogue sprint", "flag carrier sprints away from pursuit", kSprint, TargetMode::Self, player->GetGUID() };
                 if (threats.nearestMeleeDistance <= 5.0f && player->GetHealthPct() < 70.0f &&
                     IsFlagRunSpellCastable(player, kEvasion, nullptr, false))

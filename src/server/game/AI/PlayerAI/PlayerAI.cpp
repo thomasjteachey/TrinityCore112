@@ -72,7 +72,7 @@ enum Spells
     SPELL_DEVASTATE         = 20243,
     SPELL_SHOCKWAVE         = 46968,
     SPELL_CONCUSSION_BLOW   = 12809,
-    SPELL_DISARM            =   676,
+    SPELL_DISARM            = 81492, // wrapper: 676 is never held (WrappedSpells.h)
     SPELL_LAST_STAND        = 12975,
     SPELL_SHIELD_BLOCK      =  2565,
     SPELL_SHIELD_SLAM       = 47488,
@@ -95,7 +95,7 @@ enum Spells
     PASSIVE_ILLUMINATION        = 20215,
     SPELL_HOLY_SHOCK            = 20473,
     SPELL_BEACON_OF_LIGHT       = 53563,
-    SPELL_CONSECRATION          = 48819,
+    SPELL_CONSECRATION          = 90531, // wrapper chain 90526-90531: the stock ranks are never held
     SPELL_FLASH_OF_LIGHT        = 48785,
     SPELL_HOLY_LIGHT            = 48782,
     SPELL_DIVINE_FAVOR          = 20216,
@@ -252,7 +252,7 @@ enum Spells
     /* Shaman - Generic */
     SPELL_HEROISM           = 32182,
     SPELL_BLOODLUST         =  2825,
-    SPELL_GROUNDING_TOTEM   =  8177,
+    SPELL_GROUNDING_TOTEM   = 81478, // wrapper: 8177 is never held
 
     /* Shaman - Elemental*/
     PASSIVE_ELEMENTAL_FOCUS = 16164,

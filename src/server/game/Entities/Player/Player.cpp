@@ -127,6 +127,7 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include "WorldStatePackets.h"
+#include "WrappedSpells.h"
 
 namespace
 {
@@ -3976,6 +3977,26 @@ void DeleteSpellFromAllPlayers(uint32 spellId)
 
 bool Player::AddTalent(uint32 spellId, uint8 spec, bool learning)
 {
+    // A talent rank that LoadDBCStores swapped for its wrapper, still saved
+    // under the old id. Startup moves these rows (custom_wrapped_spells.cpp);
+    // this catches one it missed. Dropping it instead would read as an unspent
+    // point, and an over-cap count resets every talent.
+    if (!GetTalentSpellPos(spellId))
+    {
+        uint32 const wrapperId = WrappedSpells::GetWrapper(spellId);
+        if (wrapperId && GetTalentSpellPos(wrapperId))
+        {
+            if (!learning && m_talents[spec]->find(spellId) == m_talents[spec]->end())
+            {
+                PlayerTalent* stale = new PlayerTalent();
+                stale->state = PLAYERSPELL_REMOVED;
+                stale->spec = spec;
+                (*m_talents[spec])[spellId] = stale;
+            }
+            return AddTalent(wrapperId, spec, true);
+        }
+    }
+
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
 
     if (!spellInfo)
@@ -4066,6 +4087,27 @@ static bool IsUnlearnSpellsPacketNeededForSpell(uint32 spellId)
 
 bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent, bool disabled, bool loading /*= false*/, uint32 fromSkill /*= 0*/)
 {
+    // Never hold what a wrapper casts - hold the wrapper (WrappedSpells.h).
+    // This is the one call every learn path ends in: trainers, talent ranks,
+    // skill auto-learn (Shadow Bolt Rank 1 has AcquireMethod 2), books, .learn.
+    if (uint32 const wrapperId = WrappedSpells::GetWrapper(spellId))
+    {
+        // A character_spell row saved before the swap. Startup moves these
+        // (custom_wrapped_spells.cpp); one it missed is deleted at the next
+        // save and the wrapper is saved in its place.
+        if (loading && m_spells.find(spellId) == m_spells.end())
+        {
+            PlayerSpell& stale = m_spells[spellId];
+            stale.state = PLAYERSPELL_REMOVED;
+            stale.active = active;
+            stale.dependent = dependent;
+            stale.disabled = disabled;
+            return AddSpell(wrapperId, active, true, dependent, disabled, false, fromSkill);
+        }
+
+        return AddSpell(wrapperId, active, learning, dependent, disabled, loading, fromSkill);
+    }
+
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
     if (!spellInfo)
     {
@@ -4228,8 +4270,15 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
                 }
             }
         }
-        // non talent spell: learn low ranks (recursive call)
-        else if (uint32 prev_spell = sSpellMgr->GetPrevSpellInChain(spellId))
+        // non talent spell: learn low ranks (recursive call). A talent's own spell
+        // only when the talent is taken: the tournament kit hands paladins
+        // Consecration Rank 5 (90530) with or without the Holy talent whose spell
+        // is Rank 1 (90526), and learning that as a low rank would grant the
+        // talent free. Talents load before spells, so HasTalent is valid here at
+        // login, where this walk is what puts a taken talent's rank back after
+        // the supersede path dropped its row.
+        else if (uint32 prev_spell = sSpellMgr->GetPrevSpellInChain(spellId);
+            prev_spell && (!GetTalentSpellPos(prev_spell) || HasTalent(prev_spell, GetActiveSpec())))
         {
             if (!IsInWorld() || disabled)                    // at spells loading, no output, but allow save
                 AddSpell(prev_spell, active, true, true, disabled, false, fromSkill);
@@ -4495,6 +4544,11 @@ bool Player::HandlePassiveSpellLearn(SpellInfo const* spellInfo)
 
 void Player::LearnSpell(uint32 spell_id, bool dependent, uint32 fromSkill /*= 0*/)
 {
+    // Before AddSpell would, so the client is told about the wrapper it now
+    // holds and the learn hooks see the same id.
+    if (uint32 const wrapperId = WrappedSpells::GetWrapper(spell_id))
+        spell_id = wrapperId;
+
     PlayerSpellMap::iterator itr = m_spells.find(spell_id);
 
     bool disabled = (itr != m_spells.end()) ? itr->second.disabled : false;

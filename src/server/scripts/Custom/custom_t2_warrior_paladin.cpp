@@ -895,12 +895,15 @@ class spell_t2_consecration_wrapper : public SpellScript
 // 26573 and ranks - the STOCK Consecration, the other half of the wrapper swap.
 //
 // Durli's 8pc drew two rings in the live test: one left on the floor where the
-// paladin cast it, and 90523's following one. The wrapper never ran. Rank 1
-// is the Holy talent here, so every paladin who took it holds a stock rank,
-// and the tournament kit's 90530 sits beside it as a second button. Pressing
-// the stock one put down a dynobject with SpellVisual 5600,
-// whose ring cannot move, while the poll below still dragged the damage along
-// and gave the paladin 90523. Same gap as Cinderbite's stock Serpent Sting.
+// paladin cast it, and 90523's following one. The wrapper never ran: the paladin
+// held stock Rank 1 (then the Holy talent's own spell) beside the kit's 90530,
+// and pressing it put down a dynobject with SpellVisual 5600, whose ring cannot
+// move, while the poll below still dragged the damage along and gave the
+// paladin 90523. Same gap as Cinderbite's stock Serpent Sting.
+//
+// Players no longer hold a stock rank at all (WrappedSpells.h: the talent now
+// teaches 90526, and existing characters were moved at startup), so this is the
+// safety net for any other way a stock rank still gets cast.
 //
 // The fix reads the wrapper backwards: the rank's own dynobject is prevented
 // and the clone is cast at the same spot. The cost, cooldown and GCD were

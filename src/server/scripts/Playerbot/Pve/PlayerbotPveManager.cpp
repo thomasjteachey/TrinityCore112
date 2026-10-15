@@ -725,7 +725,7 @@ namespace
         {
         case CLASS_PRIEST:  firstRank = 585;  break; // Smite
         case CLASS_MAGE:    firstRank = 133;  break; // Fireball
-        case CLASS_WARLOCK: firstRank = 686;  break; // Shadow Bolt
+        case CLASS_WARLOCK: firstRank = 90420; break; // Shadow Bolt (the wrapper chain; 686 is never held)
         case CLASS_SHAMAN:  firstRank = 403;  break; // Lightning Bolt
         case CLASS_DRUID:   firstRank = 5176; break; // Wrath
         default:
@@ -756,7 +756,7 @@ namespace
         case CLASS_PRIEST:  opener = 585;   break; // Smite
         case CLASS_SHAMAN:  opener = 403;   break; // Lightning Bolt
         case CLASS_MAGE:    opener = 133;   break; // Fireball
-        case CLASS_WARLOCK: opener = 686;   break; // Shadow Bolt
+        case CLASS_WARLOCK: opener = 90420; break; // Shadow Bolt (the wrapper chain; 686 is never held)
         case CLASS_DRUID:   opener = 5176;  break; // Wrath
         default:
             return;

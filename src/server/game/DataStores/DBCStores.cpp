@@ -27,6 +27,7 @@
 #include "SharedDefines.h"
 #include "SpellMgr.h"
 #include "Timer.h"
+#include "WrappedSpells.h"
 
 // temporary hack until includes are sorted out (don't want to pull in Windows.h)
 #ifdef GetClassName
@@ -527,6 +528,14 @@ void LoadDBCStores(const std::string& dataPath)
             if (newEntry.DifficultySpellID[x])
                 sSpellMgr->SetSpellDifficultyId(uint32(newEntry.DifficultySpellID[x]), spellDiff->ID);
     }
+
+    // A talent rank a wrapper stands in for teaches the wrapper (WrappedSpells.h):
+    // the Holy talent Consecration is 90526 here, not 26573. Before the map
+    // below, which is built from these ranks.
+    for (TalentEntry const* talentInfo : sTalentStore)
+        for (uint8 j = 0; j < MAX_TALENT_RANK; ++j)
+            if (uint32 const wrapperId = WrappedSpells::GetWrapper(talentInfo->SpellRank[j]))
+                const_cast<TalentEntry*>(talentInfo)->SpellRank[j] = wrapperId;
 
     // create talent spells set
     for (TalentEntry const* talentInfo : sTalentStore)

@@ -23,10 +23,10 @@
 #include "SpellScript.h"
 #include "VioletHoldBoons.h"
 #include "WorldSession.h"
+#include "WrappedSpells.h"
 
 #include <algorithm>
 #include <iterator>
-#include <unordered_map>
 #include <vector>
 
 using namespace VioletHoldBoons;
@@ -246,42 +246,12 @@ namespace
 // this table it would skip the wrapper (a dummy, nothing to double - correct)
 // and then skip the inner cast too (unknown id - wrong), and neither spell
 // would ever echo for anyone, wearer or not. Inner id -> the wrapper that
-// stands for it in the spellbook. Ids from the two scripts and
-// sql/custom/dbc/2026_08_19_04_dbc_t2_shaman_warlock.sql /
-// 2026_08_19_05_dbc_t2_druid_hunter.sql.
+// stands for it in the spellbook: the shared table in WrappedSpells.h, which
+// since every class holds wrappers also covers Consecration, Sprint, Purge and
+// the totems - stock spells that used to echo as known ranks.
 uint32 WrapperForInnerSpell(uint32 spellId)
 {
-    static std::unordered_map<uint32, uint32> const innerToWrapper = []()
-    {
-        std::unordered_map<uint32, uint32> map;
-
-        // Shadow Bolt: wrapper 90420+r, inner = stock rank, shadow clone
-        // 90433+r (instant/free/GCD-less rebuild of the rank) or fire clone
-        // 90446+r (the Felflame wearer's bolt).
-        constexpr uint32 shadowBoltRanks[] = { 686, 695, 705, 1088, 1106, 7641, 11659, 11660, 11661, 25307, 27209, 47808, 47809 };
-        for (uint32 r = 0; r < std::size(shadowBoltRanks); ++r)
-        {
-            uint32 const wrapper = 90420 + r;
-            map.emplace(shadowBoltRanks[r], wrapper);
-            map.emplace(90433 + r, wrapper);
-            map.emplace(90446 + r, wrapper);
-        }
-
-        // Serpent Sting: wrapper 90460+r, inner = stock rank or fire clone
-        // 90472+r (the Cinderbite wearer's sting).
-        constexpr uint32 serpentStingRanks[] = { 1978, 13549, 13550, 13551, 13552, 13553, 13554, 13555, 25295, 27016, 49000, 49001 };
-        for (uint32 r = 0; r < std::size(serpentStingRanks); ++r)
-        {
-            uint32 const wrapper = 90460 + r;
-            map.emplace(serpentStingRanks[r], wrapper);
-            map.emplace(90472 + r, wrapper);
-        }
-
-        return map;
-    }();
-
-    auto itr = innerToWrapper.find(spellId);
-    return itr != innerToWrapper.end() ? itr->second : 0;
+    return WrappedSpells::GetWrapper(spellId);
 }
 
 // Set for the duration of the echo's own CastSpell. TRIGGERED_FULL_MASK casts

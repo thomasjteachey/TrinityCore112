@@ -52,6 +52,7 @@ void AddSC_custom_t2_shaman_warlock();
 void AddSC_custom_t2_druid_hunter();
 void AddSC_custom_t2_priest_mage();
 void AddSC_custom_t2_rogue_armor();
+void AddSC_custom_wrapped_spells();
 void AddSC_custom_southpark_nolife();
 void AddSC_custom_sucky_demon();
 void AddSC_custom_starter_booster();
@@ -115,6 +116,7 @@ void AddCustomScripts()
     AddSC_custom_t2_druid_hunter();
     AddSC_custom_t2_priest_mage();
     AddSC_custom_t2_rogue_armor();
+    AddSC_custom_wrapped_spells();
     AddSC_custom_southpark_nolife();
     AddSC_custom_sucky_demon();
     AddSC_custom_starter_booster();
