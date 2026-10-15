@@ -526,6 +526,46 @@ void Battleground::_CheckBounds(uint32 diff)
     }
 }
 
+// This realm is factionless: a troll can fight for Stormpike. But a reputation
+// faction's NPCs are judged by the player's standing with it - the client's
+// colouring and attack check, and the NPC's side of the server's - and a race's
+// standings are its own side's (a troll starts at war with Stormpike Guard and
+// at peace with the Frostwolves). So while somebody plays a match, every
+// reputation faction of the Alliance and Horde trees (Faction.dbc parents
+// 469/891 and 67/892: the cities and the battleground factions) is forced
+// friendly to their side and hostile to the other. team 0 takes it off again.
+static void SetBattlegroundSideReactions(Player* player, uint32 team)
+{
+    static std::vector<std::pair<uint32, uint32>> const sideFactions = []
+    {
+        auto sideOf = [](FactionEntry const* faction) -> uint32
+        {
+            for (uint8 depth = 0; faction && depth < 4; ++depth)
+            {
+                if (faction->ID == 469 || faction->ID == 891)
+                    return ALLIANCE;
+                if (faction->ID == 67 || faction->ID == 892)
+                    return HORDE;
+                faction = sFactionStore.LookupEntry(faction->ParentFactionID);
+            }
+            return 0;
+        };
+
+        std::vector<std::pair<uint32, uint32>> factions;
+        for (FactionEntry const* faction : sFactionStore)
+            if (faction->CanHaveReputation())
+                if (uint32 side = sideOf(faction))
+                    factions.emplace_back(faction->ID, side);
+        return factions;
+    }();
+
+    ReputationMgr& reputation = player->GetReputationMgr();
+    bool const onSide = team == ALLIANCE || team == HORDE;
+    for (auto const& [factionId, side] : sideFactions)
+        reputation.ApplyForceReaction(factionId, side == team ? REP_FRIENDLY : REP_HOSTILE, onSide);
+    reputation.SendForceReactions();
+}
+
 // A start exit carries people across a void, so it is shown as the teleport it
 // is, with the flash the Gurubashi ring's teleports use: Teleport.mdx at double
 // size on everyone moved, pets included, and on the ground both where they
@@ -1604,6 +1644,8 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
         // a character that is not here to be handed them: its next login.
         CooldownStash::RestoreAfterMatch(player);
 
+        SetBattlegroundSideReactions(player, 0);
+
         RemoveSpectator(player);
 
         // should remove spirit of redemption
@@ -1883,6 +1925,8 @@ void Battleground::AddPlayer(Player* player)
     {
         player->SetFactionForRace(RACE_BLOODELF);
     }
+
+    SetBattlegroundSideReactions(player, team);
 
     // Battleground participation itself is authoritative PvP state. Do not
     // rely on a later zone update to force the flag: transient playerbots and
@@ -2411,7 +2455,17 @@ void Battleground::BuildPvPLogDataPacket(WorldPacket& data)
 
     data << uint32(participantScores.size());
     for (BattlegroundScore* score : participantScores)
+    {
+        // A battleground row carries no side on the wire, so the client takes
+        // it from the race - Alliance for nearly everyone on this realm. Our
+        // scoreboard (WorldStateFrame.lua) reads the side from the bonus-honor
+        // column instead: 1 for Horde. A few battlegrounds set that marker as
+        // they add a player and the rest (Eye of the Storm among them) never
+        // did, which showed every row as Alliance; set it here for all.
+        if (!type)
+            score->BonusHonor = m_Players.find(score->PlayerGuid)->second.Team == HORDE ? 1 : 0;
         score->AppendToPacket(data);
+    }
 }
 
 bool Battleground::UpdatePlayerScore(Player* player, uint32 type, uint32 value, bool doAddHonor)
