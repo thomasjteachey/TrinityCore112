@@ -1799,6 +1799,8 @@ SpellCastResult SpellInfo::CheckLocation(uint32 map_id, uint32 zone_id, uint32 a
         case 35775:                                         // Green Team (Horde)
         case 92320:                                         // Blue Team (Baradin Hold: Four Corners)
         case 92321:                                         // Purple Team (Baradin Hold: Four Corners)
+        case 92322:                                         // Gold Team (Baradin Hold: Four Corners)
+        case 92323:                                         // Green Team (Baradin Hold: Four Corners)
         {
             MapEntry const* mapEntry = sMapStore.LookupEntry(map_id);
             if (!mapEntry)
