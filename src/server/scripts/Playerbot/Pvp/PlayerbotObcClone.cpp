@@ -715,6 +715,13 @@ void SynchronizeHunterPetMirror(Player* human, Player* clone)
     {
         if (Pet* orphanedPet = clone->GetPet())
             clone->RemovePet(orphanedPet, PET_SAVE_NOT_IN_SLOT);
+
+        // A real hunter gets the pet back free at the spirit guide
+        // (ResurrectPetAtSpiritGuide), which skips clones. Forget the old
+        // record - dead or alive - so the dead-pet check below cannot leave
+        // the clone petless after its own res; it gets a fresh mirror instead.
+        if (PetStable* cloneStable = clone->GetPetStable())
+            cloneStable->UnslottedPets.clear();
         return;
     }
 
@@ -755,6 +762,23 @@ void SynchronizeHunterPetMirror(Player* human, Player* clone)
     // Already mirroring the right pet: leave it completely alone.
     if (clonePet)
         return;
+
+    // No pet out, and the clone's own record says it died (its corpse
+    // despawned, or it was parked dead by a mount): it stays dead until the
+    // clone casts Revive Pet. Rebuilding here handed back a full-health pet
+    // for free, which is what Call Pet did too before Pet::SavePetToDB kept
+    // a clone's record current.
+    if (PetStable* cloneStable = clone->GetPetStable())
+    {
+        PetStable::PetInfo const* ownInfo = Pet::GetLoadPetInfo(*cloneStable, 0, 0, false).first;
+        if (ownInfo && ownInfo->Type == HUNTER_PET && !ownInfo->Health)
+            return;
+
+        // Whatever is left over is an earlier mirror. Call Pet and Revive Pet
+        // load the OLDEST unslotted pet, so a stale live one there would be
+        // a free resurrection of its own; the clone only ever owns one pet.
+        cloneStable->UnslottedPets.clear();
+    }
 
     if (sourcePet)
     {

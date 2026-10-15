@@ -479,8 +479,6 @@ void Pet::SavePetToDB(PetSaveMode mode)
         return;
 
     Player* owner = GetOwner();
-    if (owner && owner->GetSession() && owner->GetSession()->IsTransientPlayerSession())
-        return;
 
     // not save pet as current if another pet temporary unsummoned
     if (mode == PET_SAVE_AS_CURRENT && owner->GetTemporaryUnsummonedPetNumber() &&
@@ -492,6 +490,20 @@ void Pet::SavePetToDB(PetSaveMode mode)
 
         // for warlock case
         mode = PET_SAVE_NOT_IN_SLOT;
+    }
+
+    // A transient (clone) owner has no character_pet rows, but its PetStable is
+    // still the pet's record: Call Pet's "your pet is dead" check, the dead
+    // reload in LoadPetFromDB and the bots' own pet state all read Health from
+    // it. Skipping the save left it at the full health the mirror was built
+    // with, so a clone whose pet corpse despawned whistled it back whole.
+    if (owner->GetSession() && owner->GetSession()->IsTransientPlayerSession())
+    {
+        if (mode >= PET_SAVE_AS_CURRENT)
+            if (PetStable* petStable = owner->GetPetStable())
+                if (petStable->CurrentPet && petStable->CurrentPet->PetNumber == m_charmInfo->GetPetNumber())
+                    FillPetInfo(&petStable->CurrentPet.value());
+        return;
     }
 
     uint32 curhealth = GetHealth();
