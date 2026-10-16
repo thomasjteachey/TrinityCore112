@@ -557,6 +557,7 @@ uint32 SeatOnlineWaveSlots(BattlegroundVHR* bg, uint32 waveNumber, uint32 enemyT
         }
 
         DressWaveClone(bg, clone, source, isActualHuman, waveNumber, i < handicap.size() ? handicap[i] : 0);
+        bg->NotifyCloneSeated(waveNumber, uint32(i), clone->GetGUID());
         ++spawned;
     }
 
@@ -736,16 +737,17 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
     BattlegroundTypeId const bgType = bg->GetTypeID();
     for (auto const& entry : offlineSlots)
     {
+        std::vector<size_t> const slotIndices = entry.second;
         std::vector<Position> slotPositions;
         std::vector<uint8> slotHandicap;
-        for (size_t index : entry.second)
+        for (size_t index : slotIndices)
         {
             slotPositions.push_back(positions[index]);
             slotHandicap.push_back(index < handicap.size() ? handicap[index] : 0);
         }
 
         bool const queued = playerbot::PlayerbotObcCloneManager::LoadOfflineCloneSource(entry.first, loadSession,
-            [instanceId, bgType, waveNumber, enemyTeam, loadOwnerGuid, slotPositions, slotHandicap](Player* loaded)
+            [instanceId, bgType, waveNumber, enemyTeam, loadOwnerGuid, slotIndices, slotPositions, slotHandicap](Player* loaded)
             {
                 uint32 fielded = 0;
                 BattlegroundVHR* target = loaded ? FindWaveAwaitingSpawn(instanceId, bgType, waveNumber) : nullptr;
@@ -763,6 +765,7 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
                         }
 
                         DressWaveClone(target, clone, loaded, false, waveNumber, slotHandicap[slot]);
+                        target->NotifyCloneSeated(waveNumber, uint32(slotIndices[slot]), clone->GetGUID());
                         ++fielded;
                     }
                 }

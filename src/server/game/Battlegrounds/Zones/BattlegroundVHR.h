@@ -16,16 +16,21 @@
  * (BG_VHR_REINFORCE_FROM_WAVE), while clones OF a party member carry that
  * member's boons.
  *
+ * Not every clone walks out when the gates open. Only as many as the party
+ * has players do, plus one more every BG_VHR_RESERVE_PROMOTION_WAVES waves;
+ * the rest - the curve's extras - wait in cells of their own. Half of those
+ * come out one at a time, one for every clone that dies, and the other half
+ * together BG_VHR_TIMED_RESERVE_DELAY_MS after the gates. See VhrCloneRelease.
+ *
  * Three things make this different from the other custom battlegrounds here:
  *
  * 1. There is no opposing queue. The enemy side is spawned on demand, so the
  *    match pops the instant a group queues and never waits for a second team.
  *
  * 2. It is an arena in the sense that matters: no spirit guides are placed and
- *    map 1608 deliberately has no graveyard rows, so the dead stay dead for the
- *    rest of the run. Between waves the survivors are NOT healed, resurrected,
- *    mana-restored, or given their cooldowns back. Attrition across waves is the
- *    entire difficulty curve, so anything that undoes it has to stay out.
+ *    map 1608 deliberately has no graveyard rows, so the dead stay dead until
+ *    the wave they fell in is cleared. Then everyone on the party's side is put
+ *    back on their feet at full health and mana. Cooldowns are NOT given back.
  *
  * 3. The thirty-second gap between waves is a preparation window for the clones
  *    only. They get Arena Preparation - which is also what drives the playerbot
@@ -133,8 +138,21 @@ enum BG_VHR_Constants
     BG_VHR_MAX_ENEMIES = 40,
 
     // Cells hold at most ten players each in the stock instance, so a late
-    // wave has to be spread over several. One cell per ten clones, rounded up.
+    // wave has to be spread over several. One cell per ten clones, rounded up,
+    // counted separately for each VhrCloneRelease group: a held-back clone
+    // never shares a cell with one that walks out at the gates.
     BG_VHR_CLONES_PER_CELL = 10,
+
+    // The wave's extras - every clone past the party's own head count - are
+    // held back in their cells when the gates open. One more of them joins
+    // the opening group on every wave that is a multiple of this one: one
+    // from wave 8, two from 16, and so on. Only full-strength clones are moved
+    // up; the Diminished partial clone always stays back.
+    BG_VHR_RESERVE_PROMOTION_WAVES = 8,
+
+    // How long after the gates open the timed half of the held-back clones
+    // comes out, all together.
+    BG_VHR_TIMED_RESERVE_DELAY_MS = 30 * IN_MILLISECONDS,
 
     // Defaults for the gates-closed preparation window and the second the
     // per-second countdown starts at; the live values are
@@ -231,14 +249,13 @@ enum BG_VHR_Constants
     // GetHonorRewardForRun); gold does not. This is the single knob for the
     // mode's overall generosity rather than a per-wave tweak.
     BG_VHR_REWARD_DIVISOR = 5,
-    BG_VHR_HONOR_COMPOUND_PERCENT = 1,
-
-    // Clearing a wave puts every casualty back on their feet at this fraction
-    // of health and mana. Being brought back weakened is the cost of dying; the
-    // run's difficulty comes from the party getting more fragile as the waves
-    // climb, not from anyone sitting the rest of it out.
-    BG_VHR_WAVE_END_REZ_PERCENT = 75
+    BG_VHR_HONOR_COMPOUND_PERCENT = 1
 };
+
+// Every group a wave is split into gets cells of its own, and the wave can
+// never need more than the room has.
+static_assert((BG_VHR_MAX_ENEMIES + BG_VHR_CLONES_PER_CELL - 1) / BG_VHR_CLONES_PER_CELL + 2 <= BG_VHR_OBJECT_CELL_MAX,
+    "a full wave split three ways must fit in the Violet Hold's cells");
 
 // Nothing in the Hold is walkable this low. The chamber floor sits at z 38 and
 // the bed of Ichoron's flooded cell - the lowest ground anyone can be on - at
@@ -273,6 +290,21 @@ enum class VhrWaveComposition : uint8
     // any, and uses the fallback when it cannot (an empty bot roster must
     // never stall a wave).
     BotSourced = 3
+};
+
+// When a wave clone joins the fight. The opening group is the party's head
+// count plus the extras promoted so far (BG_VHR_RESERVE_PROMOTION_WAVES); every
+// other clone is held back, and the held-back clones are split in half - the
+// odd one goes to OnEnemyDeath. They wait behind the shut doors of cells of
+// their own, still under the preparation hold, and a cell opens the moment the
+// first clone in it is let out.
+enum class VhrCloneRelease : uint8
+{
+    WithGates = 0,
+    // One comes out each time a clone of the wave dies.
+    OnEnemyDeath = 1,
+    // All come out together BG_VHR_TIMED_RESERVE_DELAY_MS after the gates.
+    AfterDelay = 2
 };
 
 // Published by the battleground and fulfilled by the script-side clone driver.
@@ -365,7 +397,7 @@ public:
     // Same rule as an arena: you cannot walk back to your own corpse. Being
     // raised by someone else is untouched - Rebirth, soulstones and
     // Reincarnation are the intended way back mid-wave, and
-    // ResurrectWaveCasualties is the guaranteed one at the end of it.
+    // RestorePartyAfterWave is the guaranteed one at the end of it.
     bool AllowsCorpseReclaim() const override { return false; }
     // Puts a fallen player back on valid ground (see GetRescuePosition).
     // Reached from the engine's MinHeight check and, well before that, from
@@ -380,8 +412,9 @@ public:
     // The wave behind the gates is mid-preparation and its clones are holding
     // the preparation aura and flag this battleground gave them - or the wave
     // is still being seated, and the clones already in are behind the same
-    // shut doors waiting for it. Either way the playerbot lifecycle holds them
-    // where they stand until the cells open.
+    // shut doors waiting for it - or the gates are open and this clone is one
+    // of the held-back ones (VhrCloneRelease). In every case the playerbot
+    // lifecycle holds them where they stand until they are let out.
     bool OwnsPreparationState(Player const* player) const override;
 
     // --- script-side clone driver interface -------------------------------
@@ -392,6 +425,12 @@ public:
     // does not start, so a slow spawn never eats into the players' warning.
     VhrWaveSpawnRequest const* GetPendingWaveSpawnRequest() const;
     void NotifyWaveSpawnFulfilled(uint32 waveNumber, uint32 spawnedCount);
+
+    // Reported for every clone the driver seats, with the index of the
+    // request slot it fills. The slot decides when the clone is let out
+    // (VhrCloneRelease) - the driver does not need to know. A clone that is
+    // never reported walks out with the gates.
+    void NotifyCloneSeated(uint32 waveNumber, uint32 slot, ObjectGuid cloneGuid);
 
     // Reported per clone as the driver builds the wave, for clones copied from
     // a party member. The pairing is what lets the boons be refreshed when the
@@ -444,12 +483,33 @@ private:
     void UpdateScoreWorldStates();
     void ClearPlayersFromSpawn();
     void ApplyPreparationToWave();
+    // Takes the hold off everything that walks out with the gates. The
+    // held-back clones keep it (and get it here if the wave had no window).
     void ReleaseWaveFromPreparation();
     // Centre-screen "Next wave in N..." notification, once per whole second.
     void AnnounceWaveCountdown();
     uint32 GetPrepWindowMs() const;
-    void SetWaveEnemyImmunity(bool immune);
+    // One clone into, or out of, the state the cells keep it in: preparation
+    // aura and flag, fresh powers, and untouchable from outside.
+    void HoldWaveClone(Player* enemy);
+    void FreeWaveClone(Player* enemy);
     void CheckRunState();
+
+    // The held-back clones (VhrCloneRelease) still waiting in their cells.
+    struct VhrHeldClone
+    {
+        ObjectGuid guid;
+        uint32 cell = 0;
+        VhrCloneRelease release = VhrCloneRelease::WithGates;
+    };
+    bool IsHeldClone(ObjectGuid guid) const;
+    // Lets one out: opens its cell (a no-op if already open), frees it, and
+    // tops up the boons of a party copy. Unknown or vanished clones are just
+    // dropped from the list.
+    void ReleaseHeldClone(size_t index);
+    // The first one waiting on `release`, if any.
+    bool ReleaseNextHeldClone(VhrCloneRelease release);
+    void ReleaseHeldClones(VhrCloneRelease release);
 
     // Fall-through guard: everyone in the instance below BG_VHR_MIN_SAFE_Z is
     // handed to HandlePlayerUnderMap. Runs on BG_VHR_FLOOR_CHECK_INTERVAL from
@@ -465,19 +525,26 @@ private:
     // Denominator for the players readout - the party size the run started
     // with, or the live head count before that is fixed.
     uint32 GetPartyStrength() const;
-    uint32 CountAliveEnemies() const;
+    // Held-back clones are alive and part of the wave - it is not cleared
+    // while any are still in their cells - but not yet in the fight.
+    uint32 CountAliveEnemies(bool includeHeld = true) const;
     std::vector<ObjectGuid> GetHumanRoster(bool livingOnly) const;
     uint32 GetEnemyCountForWave(uint32 wave) const;
     // Full-strength clones only, ignoring the partial one.
     uint32 GetFullStrengthCountForWave(uint32 wave) const;
+    // The clones that walk out as the gates open: the party's head count plus
+    // one per BG_VHR_RESERVE_PROMOTION_WAVES waves, never more than the wave's
+    // full-strength clones. Everything past it is held back.
+    uint32 GetOpeningCountForWave(uint32 wave) const;
     // Diminished stacks for the wave's partial clone. 0 when the wave is made
     // entirely of full-strength clones: every fourth wave during the quarter
     // ramp, and every wave past BG_VHR_QUARTER_RAMP_LAST_WAVE.
     static uint8 GetPartialCloneStacks(uint32 wave);
 
     // Re-copy every party member's boons onto the clones made from them, as
-    // the cells open. Idempotent: CopyBoonsTo only tops up what is missing.
-    void RefreshWaveBoonCopies();
+    // the cells open - or onto just `onlyClone`, as a held-back one comes out.
+    // Idempotent: CopyBoonsTo only tops up what is missing.
+    void RefreshWaveBoonCopies(ObjectGuid onlyClone = ObjectGuid::Empty);
 
     // Menagerie: summon each holder's guardians as the cells open, take the
     // previous wave's down first (and at the end of the run).
@@ -486,16 +553,17 @@ private:
     // Centurion.VioletHold.MenagerieTrace: log each guardian's combat state
     // and the verdict on its owner's target, whenever either changes.
     void TraceMenagerie();
-    // Everyone alive who is not a real party member and needs no rez.
-    void ResurrectAllies(float restore);
+    // RestorePartyAfterWave for the Fellowship allies, who are not on the
+    // human roster.
+    void RestoreAllies();
+
+    // Called once as a wave falls: the party's dead stand back up, and every
+    // player on its side - and their pets - is put at full health and mana.
+    // This is the only route back from death in this mode.
+    void RestorePartyAfterWave();
 
     // Reward powerups, dropped when a wave is cleared and taken back after
     // BG_VHR_BUFF_LIFETIME_MS.
-    // Puts every dead player back on their feet at BG_VHR_WAVE_END_REZ_PERCENT
-    // health and mana. Called once as a wave falls, and is the only route back
-    // from death in this mode.
-    void ResurrectWaveCasualties();
-
     void SpawnWaveRewardBuffs();
     void DespawnWaveRewardBuffs();
     bool PickBuffPosition(std::vector<Position> const& taken, Position& out) const;
@@ -535,8 +603,24 @@ private:
     uint32 _stateCheckTimerMs;
     uint32 _floorCheckTimerMs;
 
-    // Cells in use by the current wave, as BG_VHR_OBJECT_* indices.
+    // Cells in use by the current wave, as BG_VHR_OBJECT_* indices - every
+    // group's, the held-back ones included.
     std::vector<uint32> _waveCells;
+    // Per request slot, as composed: which cell it is in and when it comes
+    // out. Parallel to the published request's sourceGuids.
+    struct VhrWaveSlot
+    {
+        uint32 cell = 0;
+        VhrCloneRelease release = VhrCloneRelease::WithGates;
+    };
+    std::vector<VhrWaveSlot> _waveSlots;
+    // (slot, clone) as the driver reports them, until the wave is fulfilled.
+    std::vector<std::pair<uint32, ObjectGuid>> _waveSeatedSlots;
+    // The held-back clones still in their cells, in slot order.
+    std::vector<VhrHeldClone> _heldClones;
+    // Counts down from the gates to the AfterDelay release; 0 when there is
+    // nothing waiting on it.
+    uint32 _timedReleaseMs;
     // Clones belonging to the current wave, in spawn order.
     std::vector<ObjectGuid> _waveEnemies;
     // Everyone eliminated so far. Counting survivors from the roster minus this
