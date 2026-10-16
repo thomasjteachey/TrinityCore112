@@ -2857,35 +2857,71 @@ uint32 GameObject::GetLiftAnimTime(uint32 legElapsed) const
     return GetGoState() == GO_STATE_ACTIVE ? leg : GetGOInfo()->transport.pause + leg;
 }
 
-// Where the lift's animation has it at animTime: the origin of its own frame,
-// facing the way the lift faces. TransportAnimation rows are offsets in that
-// frame, between which the client moves it in a straight line.
-Position GameObject::GetLiftDeck(uint32 animTime) const
+namespace
 {
-    auto const toVector = [](TransportAnimationEntry const* node) { return G3D::Vector3(node->Pos.X, node->Pos.Y, node->Pos.Z); };
+    // How far a transport's animation has moved it from its spawn at animTime:
+    // TransportAnimation rows are offsets, between which the client moves it
+    // in a straight line.
+    G3D::Vector3 GetTransportAnimOffset(TransportPathContainer const& path, uint32 animTime)
+    {
+        auto const toVector = [](TransportAnimationEntry const* node) { return G3D::Vector3(node->Pos.X, node->Pos.Y, node->Pos.Z); };
 
-    G3D::Vector3 offset = G3D::Vector3::zero();
-    TransportPathContainer const& path = m_goValue.Transport.AnimationInfo->Path;
-    auto const next = path.lower_bound(animTime);
-    if (next == path.end())
-    {
-        if (!path.empty())
-            offset = toVector(path.rbegin()->second);
-    }
-    else if (next == path.begin() || next->first == animTime)
-        offset = toVector(next->second);
-    else
-    {
+        auto const next = path.lower_bound(animTime);
+        if (next == path.end())
+            return path.empty() ? G3D::Vector3::zero() : toVector(path.rbegin()->second);
+
+        if (next == path.begin() || next->first == animTime)
+            return toVector(next->second);
+
         auto const prev = std::prev(next);
         float const along = float(animTime - prev->first) / float(next->first - prev->first);
-        offset = toVector(prev->second).lerp(toVector(next->second), along);
+        return toVector(prev->second).lerp(toVector(next->second), along);
     }
+}
+
+// Where the lift's animation has it at animTime: the origin of its own frame,
+// facing the way the lift faces. TransportAnimation rows are offsets in that
+// frame.
+Position GameObject::GetLiftDeck(uint32 animTime) const
+{
+    G3D::Vector3 const offset = GetTransportAnimOffset(m_goValue.Transport.AnimationInfo->Path, animTime);
 
     float const o = GetOrientation();
     float const c = std::cos(o);
     float const s = std::sin(o);
     return Position(GetPositionX() + offset.x * c - offset.y * s, GetPositionY() + offset.x * s + offset.y * c,
         GetPositionZ() + offset.z, o);
+}
+
+// The parent rotation turns the path, not the transport's own facing: Strand
+// of the Ancients' boats sail on a half turn whichever way they face, and so
+// run up the beach - the second boat stops within a yard of the beach
+// graveyard (WorldSafeLocs 1351) - where turned by their facing they would end
+// up inland. The frame faces both turns, the way each bow points along its
+// course.
+bool GameObject::GetTransportFrame(Position& frame) const
+{
+    if (GetGoType() != GAMEOBJECT_TYPE_TRANSPORT || !GetGOInfo()->transport.pause || !m_goValue.Transport.AnimationInfo)
+        return false;
+
+    uint32 const animTime = GetLiftAnimTime(GameTime::GetGameTimeMS() - m_goValue.Transport.PathProgress);
+    G3D::Vector3 offset = GetTransportAnimOffset(m_goValue.Transport.AnimationInfo->Path, animTime);
+
+    G3D::Quat const parent(GetFloatValue(GAMEOBJECT_PARENTROTATION + 0), GetFloatValue(GAMEOBJECT_PARENTROTATION + 1),
+        GetFloatValue(GAMEOBJECT_PARENTROTATION + 2), GetFloatValue(GAMEOBJECT_PARENTROTATION + 3));
+    float parentYaw = 0.0f;
+    if (parent.magnitude() > 0.0f)
+    {
+        G3D::Matrix3 const turn = parent.toRotationMatrix();
+        offset = turn * offset;
+        float pitch = 0.0f;
+        float roll = 0.0f;
+        turn.toEulerAnglesZYX(parentYaw, pitch, roll);
+    }
+
+    frame.Relocate(GetPositionX() + offset.x, GetPositionY() + offset.y, GetPositionZ() + offset.z,
+        Position::NormalizeOrientation(GetOrientation() + parentYaw));
+    return true;
 }
 
 bool GameObject::IsOnLiftDeck(WorldObject const* object, Position const& deck, GameObjectDisplayInfoEntry const* info) const

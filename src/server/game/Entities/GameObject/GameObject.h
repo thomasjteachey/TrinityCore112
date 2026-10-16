@@ -182,6 +182,12 @@ class TC_GAME_API GameObject : public WorldObject, public GridObject<GameObject>
         // A playerbot this lift is carrying from one stop to the next (see
         // BoardLiftRiders).
         bool IsCarryingLiftRider(ObjectGuid const& guid) const;
+        // Where a transport that stops (type 11 with a pause) has its frame
+        // right now, in world coordinates: the origin and facing its
+        // passengers' places on board are measured from. It moves only on the
+        // clients, so this is the server's one way to know. False for anything
+        // else.
+        bool GetTransportFrame(Position& frame) const;
         uint8 GetGoArtKit() const { return GetByteValue(GAMEOBJECT_BYTES_1, 2); }
         void SetGoArtKit(uint8 artkit);
         uint8 GetGoAnimProgress() const { return GetByteValue(GAMEOBJECT_BYTES_1, 3); }

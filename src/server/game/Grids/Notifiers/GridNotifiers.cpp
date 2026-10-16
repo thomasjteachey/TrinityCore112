@@ -22,10 +22,30 @@
 #include "WorldSession.h"
 #include "UpdateData.h"
 #include "Transport.h"
+#include "Map.h"
 #include "ObjectAccessor.h"
 #include "CellImpl.h"
 
 using namespace Trinity;
+
+namespace
+{
+    // A GAMEOBJECT_TYPE_TRANSPORT moves only on the clients: the server keeps
+    // it where it was spawned, so how far that spot is from a player says
+    // nothing about whether they can see it. In a battleground one carries its
+    // passengers right across the map - Strand of the Ancients' boats sail
+    // 1,300 yards to the beach - and calling it out of range there made the
+    // boat vanish under the people on it, or the moment they stepped ashore.
+    // A transport a player has been sent stays theirs while they are on its map.
+    bool KeepsTransportInSight(Player& player, ObjectGuid const& guid)
+    {
+        if (!guid.IsGameObject() || !player.GetMap()->IsBattlegroundOrArena())
+            return false;
+
+        GameObject const* transport = player.GetMap()->GetGameObject(guid);
+        return transport && transport->GetGoType() == GAMEOBJECT_TYPE_TRANSPORT && player.CanSeeOrDetect(transport);
+    }
+}
 
 void VisibleNotifier::SendToSelf()
 {
@@ -64,6 +84,9 @@ void VisibleNotifier::SendToSelf()
 
     for (auto it = vis_guids.begin(); it != vis_guids.end(); ++it)
     {
+        if (KeepsTransportInSight(i_player, *it))
+            continue;
+
         i_player.m_clientGUIDs.erase(*it);
         i_data.AddOutOfRangeGUID(*it);
 

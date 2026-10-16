@@ -21,6 +21,7 @@
 #include "GameTime.h"
 #include "Log.h"
 #include "Map.h"
+#include "MotionMaster.h"
 #include "MoveSpline.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
@@ -36,8 +37,11 @@
 namespace
 {
     // Where a bot comes ashore: put there instead of on a boat it cannot ride
-    // by itself, or off the boat it was carried across on.
+    // by itself, or off the first boat, which runs up the beach beside it.
     Position const SABeachLanding = { 1600.381f, -106.263f, 8.8745f, 3.78f };
+    // Off the second boat, which stops 115 yards up the beach from the first:
+    // the Horde's start point (WorldSafeLocs 1368), beside where it lies.
+    Position const SABoatTwoLanding = { 1617.17f, 67.13f, 8.06f, 3.78f };
 }
 
 void BattlegroundSAScore::BuildObjectivesBlock(WorldPacket& data)
@@ -64,7 +68,6 @@ BattlegroundSA::BattlegroundSA()
     EndRoundTimer = 0;
     ShipsStarted = false;
     Status = BG_SA_NOT_STARTED;
-    _boatRiderTimer = 0;
 
     for (uint8 i = 0; i < MAX_GATES; ++i)
         GateStatus[i] = BG_SA_GATE_OK;
@@ -341,7 +344,7 @@ void BattlegroundSA::StartShips()
 
 void BattlegroundSA::PostUpdateImpl(uint32 diff)
 {
-    UpdateBoatRiders(diff);
+    UpdateBoatRiders();
 
     if (InitSecondRound)
     {
@@ -374,6 +377,8 @@ void BattlegroundSA::PostUpdateImpl(uint32 diff)
             ToggleTimer();
             DemolisherStartState(false);
             Status = BG_SA_ROUND_ONE;
+            // Ashore now, before the bots are given anything to do from the deck.
+            ReleaseBoatRiders(true);
             StartTimedAchievement(ACHIEVEMENT_TIMED_TYPE_EVENT, (Attackers == TEAM_ALLIANCE) ? 23748 : 21702);
         }
         if (TotalTime >= BG_SA_BOAT_START)
@@ -396,6 +401,7 @@ void BattlegroundSA::PostUpdateImpl(uint32 diff)
             ToggleTimer();
             DemolisherStartState(false);
             Status = BG_SA_ROUND_TWO;
+            ReleaseBoatRiders(true);
             StartTimedAchievement(ACHIEVEMENT_TIMED_TYPE_EVENT, (Attackers == TEAM_ALLIANCE) ? 23748 : 21702);
             // status was set to STATUS_WAIT_JOIN manually for Preparation, set it back now
             SetStatus(STATUS_IN_PROGRESS);
@@ -1432,21 +1438,39 @@ bool BattlegroundSA::OwnsPreparationState(Player const* player) const
     return GetParticipantTeamId(player->GetGUID(), teamId) && teamId == Attackers;
 }
 
-// Bots on the boats. A boat (GAMEOBJECT_TYPE_TRANSPORT) only moves on the
-// clients, and a client riding one names the boat and its place on the deck in
-// every movement packet it sends (MovementHandler keeps both). A bot given that
-// boat and a place beside such a passenger is drawn on the deck, and carried
-// along, by every client that sees it. Server-side it stays next to the
-// passenger, so the two stay in sight of each other, and its pets within their
-// leash, all the way across.
+// The boats. A boat (GAMEOBJECT_TYPE_TRANSPORT) moves only on the clients, and
+// a client riding one names the boat and its place on the deck in each movement
+// packet it sends (MovementHandler keeps both) - but it sends none while its
+// player stands still. So the server kept every passenger wherever they last
+// moved, out at sea, while the boat sailed 1,300 yards to the beach; and once
+// that spot was more than a grid (533 yards) behind, MovementHandler threw away
+// whatever the passenger did send as a stale packet from before a teleport.
+// Bots placed beside a passenger shared that stale spot. When the round began
+// and they were set down on the beach, the server saw them leave the sight of
+// the people still out at sea, and those people's clients deleted them.
+//
+// The server works the boats out from their animation instead
+// (GameObject::GetTransportFrame) and keeps everybody aboard where the boat has
+// them: the people, by the place on the deck their client last named, and the
+// attackers' bots, which every client draws on the deck once told the boat and
+// their place on it. A bot takes its place beside a passenger with a client,
+// whose place is known to be on the deck, and keeps it to the beach.
+//
+// It runs with the battleground, once a second, so at full sail (27 yards a
+// second) the server has them up to a second's sailing behind: well inside
+// anybody's sight. Each time, the clients are told again that the bots are on
+// board: anything the server says about a bot in world coordinates (a facing
+// turn) takes it off the boat on every client until then, and puts it down
+// where the server has it, which is now beside the boat rather than out at sea.
 namespace
 {
-    uint32 const SABoatRiderUpdateMs = 1000;
     // Riders stand in rows of four beside the passenger whose place on the deck
     // they share, this far apart: tight enough to stay on the deck whichever
     // way its length runs, which nothing here knows.
     float const SABoatRiderSpacing = 1.5f;
-    float const SABoatRiderFollowRange = 5.0f;
+    // A rider's pets ride hidden; they are brought along once this far behind,
+    // well inside their leash.
+    float const SABoatRiderFollowRange = 10.0f;
 
     Position GetBoatRiderOffset(Position const& passenger, uint32 slot)
     {
@@ -1459,6 +1483,17 @@ namespace
             passenger.GetOrientation());
     }
 
+    // Where a place on a boat's deck is in the world, with the boat's frame
+    // where GameObject::GetTransportFrame has it.
+    Position GetDeckPosition(Position const& boatFrame, Position const& place)
+    {
+        float const c = std::cos(boatFrame.GetOrientation());
+        float const s = std::sin(boatFrame.GetOrientation());
+        return Position(boatFrame.GetPositionX() + place.GetPositionX() * c - place.GetPositionY() * s,
+            boatFrame.GetPositionY() + place.GetPositionX() * s + place.GetPositionY() * c,
+            boatFrame.GetPositionZ() + place.GetPositionZ());
+    }
+
     // What follows a bot about: its pet and guardians, not its totems.
     void CollectFollowers(Player* bot, std::vector<Unit*>& followers)
     {
@@ -1469,58 +1504,71 @@ namespace
     }
 }
 
-void BattlegroundSA::UpdateBoatRiders(uint32 diff)
+void BattlegroundSA::UpdateBoatRiders()
 {
-    // Everybody comes off when the round starts.
+    // The bots come off when the round starts (or the match ends at sea).
     bool const crossing = (Status == BG_SA_WARMUP || Status == BG_SA_SECOND_WARMUP) &&
         (GetStatus() == STATUS_WAIT_JOIN || GetStatus() == STATUS_IN_PROGRESS);
-    if (!crossing)
-    {
-        if (!_boatRiders.empty())
-            ReleaseBoatRiders(Status == BG_SA_ROUND_ONE || Status == BG_SA_ROUND_TWO);
-        return;
-    }
-
-    if (_boatRiderTimer > diff)
-    {
-        _boatRiderTimer -= diff;
-        return;
-    }
-    _boatRiderTimer = SABoatRiderUpdateMs;
+    if (!crossing && !_boatRiders.empty())
+        ReleaseBoatRiders(Status == BG_SA_ROUND_ONE || Status == BG_SA_ROUND_TWO);
 
     BattlegroundMap* map = FindBgMap();
     if (!map)
         return;
 
-    // A passenger with a client on each boat, and the attackers' bots.
+    // Where each boat is now.
+    Position boatFrames[2];
+    bool afloat[2] = { false, false };
+    for (uint8 boat = 0; boat < 2; ++boat)
+        if (GameObject* go = GetBGObject(BG_SA_BOAT_ONE + boat, false))
+            afloat[boat] = go->GetTransportFrame(boatFrames[boat]);
+
+    if (!afloat[0] && !afloat[1])
+        return;
+
+    // The people aboard, kept where the boat has them for as long as their
+    // client says they are on it - docked too, until they step ashore. A
+    // passenger with a client on each boat for the bots to stand beside, and
+    // the attackers' bots.
     Player* passengers[2] = { nullptr, nullptr };
     std::vector<Player*> bots;
     for (auto const& entry : GetPlayers())
     {
-        TeamId teamId = TEAM_NEUTRAL;
         Player* player = ObjectAccessor::GetPlayer(map, entry.first);
-        if (!player || !player->IsInWorld() || !GetParticipantTeamId(entry.first, teamId) || teamId != Attackers)
+        if (!player || !player->IsInWorld())
             continue;
+
+        TeamId teamId = TEAM_NEUTRAL;
+        bool const attacker = GetParticipantTeamId(entry.first, teamId) && teamId == Attackers;
 
         if (IsBotParticipantSession(player->GetSession()))
         {
-            bots.push_back(player);
+            if (crossing && attacker)
+                bots.push_back(player);
             continue;
         }
 
-        if (!player->HasUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT))
+        if (!player->HasUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT) || player->IsBeingTeleported() || player->GetVehicle())
             continue;
 
         for (uint8 boat = 0; boat < 2; ++boat)
-            if (!passengers[boat] && !BgObjects[BG_SA_BOAT_ONE + boat].IsEmpty() &&
-                player->m_movementInfo.transport.guid == BgObjects[BG_SA_BOAT_ONE + boat])
+        {
+            if (!afloat[boat] || player->m_movementInfo.transport.guid != BgObjects[BG_SA_BOAT_ONE + boat])
+                continue;
+
+            Position const aboard = GetDeckPosition(boatFrames[boat], player->m_movementInfo.transport.pos);
+            player->UpdatePosition(aboard.GetPositionX(), aboard.GetPositionY(), aboard.GetPositionZ(), player->GetOrientation());
+
+            if (attacker && !passengers[boat])
                 passengers[boat] = player;
+        }
     }
 
     uint32 riders[2] = { 0, 0 };
     for (auto const& entry : _boatRiders)
         ++riders[entry.second.Boat];
 
+    uint32 const now = GameTime::GetGameTimeMS();
     for (Player* bot : bots)
     {
         auto itr = _boatRiders.find(bot->GetGUID());
@@ -1542,27 +1590,35 @@ void BattlegroundSA::UpdateBoatRiders(uint32 diff)
 
             BoatRider rider;
             rider.Boat = uint8(boat);
-            rider.Offset = GetBoatRiderOffset(passengers[boat]->m_movementInfo.transport.pos, riders[boat]++);
+            rider.Slot = riders[boat]++;
+            rider.Offset = GetBoatRiderOffset(passengers[boat]->m_movementInfo.transport.pos, rider.Slot);
             itr = _boatRiders.emplace(bot->GetGUID(), rider).first;
         }
 
-        PlaceBoatRider(bot, itr->second, passengers[itr->second.Boat]);
+        // Its boat gone (the match ending) or a teleport under way: not this time.
+        if (!afloat[itr->second.Boat] || bot->IsBeingTeleported())
+            continue;
+
+        CarryBoatRider(bot, itr->second, boatFrames[itr->second.Boat], now);
     }
 }
 
-void BattlegroundSA::PlaceBoatRider(Player* bot, BoatRider& rider, Player const* passenger)
+void BattlegroundSA::CarryBoatRider(Player* bot, BoatRider& rider, Position const& boatFrame, uint32 now)
 {
     MovementInfo::TransportInfo& transport = bot->m_movementInfo.transport;
     transport.guid = BgObjects[BG_SA_BOAT_ONE + rider.Boat];
     transport.pos.Relocate(rider.Offset);
     transport.seat = -1;
-    if (passenger)
-        transport.time = passenger->m_movementInfo.transport.time;
+    transport.time = now;
     bot->AddUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
 
-    if (passenger && bot->movespline->Finalized() && bot->GetExactDist(passenger) > SABoatRiderFollowRange)
-        bot->UpdatePosition(passenger->GetPositionX(), passenger->GetPositionY(), passenger->GetPositionZ(),
-            passenger->GetOrientation(), true);
+    // Something set it walking: its spline would carry it off the deck here
+    // as well as on the clients.
+    if (!bot->movespline->Finalized())
+        bot->StopMoving();
+
+    Position const aboard = GetDeckPosition(boatFrame, rider.Offset);
+    bot->UpdatePosition(aboard.GetPositionX(), aboard.GetPositionY(), aboard.GetPositionZ(), bot->GetOrientation());
 
     // Its pets ride hidden, kept with it: nothing draws a creature on the deck,
     // and one left on the beach would be dismissed for straying from its master.
@@ -1580,8 +1636,7 @@ void BattlegroundSA::PlaceBoatRider(Player* bot, BoatRider& rider, Player const*
             follower->NearTeleportTo(bot->GetPosition());
     }
 
-    // Anything the server says about the bot in world coordinates (a facing
-    // spline) takes it off the boat on the clients; this puts it back.
+    // On the deck, at its place, on every client that sees it.
     bot->BroadcastServerPlacedMovement();
 }
 
@@ -1590,9 +1645,24 @@ void BattlegroundSA::ReleaseBoatRider(Player* bot, BoatRider const& rider, bool 
     bot->m_movementInfo.transport.Reset();
     bot->RemoveUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
 
-    // Ashore where a bot comes ashore, and off the boat on every client.
+    // Ashore beside its boat, a pace from the others as they stood on deck, and
+    // off the boat on every client. The people still aboard are where the boat
+    // lies too, so they see it happen.
     if (land && bot->IsAlive())
-        bot->UpdatePosition(SABeachLanding, true);
+    {
+        Position ashore = GetBoatRiderOffset(rider.Boat ? SABoatTwoLanding : SABeachLanding, rider.Slot);
+        bot->UpdateAllowedPositionZ(ashore.GetPositionX(), ashore.GetPositionY(), ashore.m_positionZ);
+
+        // An order the round's start handed it before it was set down would
+        // walk it from the deck.
+        if (!bot->movespline->Finalized())
+        {
+            bot->StopMoving();
+            bot->GetMotionMaster()->Clear(MOTION_SLOT_ACTIVE);
+        }
+
+        bot->UpdatePosition(ashore, true);
+    }
     bot->BroadcastServerPlacedMovement();
 
     for (ObjectGuid const& guid : rider.Hidden)

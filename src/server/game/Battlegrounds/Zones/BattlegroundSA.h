@@ -708,12 +708,14 @@ class BattlegroundSA : public Battleground
         struct BoatRider
         {
             uint8 Boat = 0;                 // 0 or 1: BG_SA_BOAT_ONE + Boat
+            uint32 Slot = 0;                // its place in the rows beside the passenger, and ashore
             Position Offset;                // its place on the deck
             GuidVector Hidden;              // its pets, out of sight until it lands
         };
-        /// Puts the attacker bots on the boats the people are riding, keeps them there, and lands them with the round
-        void UpdateBoatRiders(uint32 diff);
-        void PlaceBoatRider(Player* bot, BoatRider& rider, Player const* anchor);
+        /// Keeps everybody on a boat where the boat is, puts the attacker bots on the boats the people are riding,
+        /// and lands them with the round
+        void UpdateBoatRiders();
+        void CarryBoatRider(Player* bot, BoatRider& rider, Position const& boatFrame, uint32 now);
         void ReleaseBoatRider(Player* bot, BoatRider const& rider, bool land);
         void ReleaseBoatRiders(bool land);
 
@@ -753,6 +755,5 @@ class BattlegroundSA : public Battleground
         bool _allVehiclesAlive[PVP_TEAMS_COUNT];
 
         std::unordered_map<ObjectGuid, BoatRider> _boatRiders;
-        uint32 _boatRiderTimer;
 };
 #endif
