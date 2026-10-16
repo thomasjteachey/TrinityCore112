@@ -6015,22 +6015,24 @@ void PvpClassActions::DismountToFight(Player* player, Unit const* victim)
 
 // Whether walking around behind this target can ever succeed.
 //
-// A unit faces what it is fighting, every tick - a mob turns to its victim and
-// so does a bot. Circling something that is fighting THIS bot is a dance that
-// never ends and never lands the strike: the bot slides around it forever while
-// its Backstab stays unusable. That is as true of a player as of a creature.
+// Any player can be flanked, human or playerbot, whoever it is fighting. Going
+// for a player's back is the rogue's job in PvP, and the walk is already capped
+// (ShouldHoldFrontalBuilderForFlank gives each try 3 seconds, then builds from
+// the front). Sorrel never once tried it in an arena while players were ruled
+// out for targeting her - and the player she hits is nearly always targeting
+// her.
 //
-// Something fighting someone else faces them instead, and its back stays where
-// it is long enough to reach - the arena target hitting your healer, the mob on
-// the tank. So does anything stunned, which cannot turn at all: the Cheap Shot
-// and Kidney Shot windows a rogue walks around in to Backstab.
-//
-// An opener from stealth is untouched: a target that has not noticed the bot is
-// fighting nobody, so the walk is allowed, as it always was for a player.
+// A mob is different. It re-faces its victim every AI tick, so circling a mob
+// that is fighting THIS bot is a dance that never ends and never lands the
+// strike. A mob fighting someone else - the one on the tank - keeps its back
+// where it is, and a stunned one cannot turn at all, so both are worth the walk.
 bool PvpClassActions::CanFlankTarget(Unit const* attacker, Unit const* target)
 {
     if (!attacker || !target)
         return false;
+
+    if (target->GetTypeId() == TYPEID_PLAYER)
+        return true;
 
     if (target->HasUnitState(UNIT_STATE_STUNNED))
         return true;

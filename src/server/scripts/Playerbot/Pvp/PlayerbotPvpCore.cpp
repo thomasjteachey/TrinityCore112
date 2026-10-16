@@ -6465,9 +6465,9 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
             // Shred is positional like Backstab, and a mob the cat holds
             // aggro on re-faces it every AI tick - momentary "behind"
             // windows just bait an endless flanking dance. Claw is the
-            // builder whenever the target is fixated on the bot; otherwise
-            // the cat walks for the back (ShouldHoldFrontalBuilderForFlank)
-            // and Shreds.
+            // builder whenever a mob is fixated on the bot; against a
+            // player, or a mob busy with someone else, the cat walks for the
+            // back (ShouldHoldFrontalBuilderForFlank) and Shreds.
             //
             // Worked out here, above the mangle Claw, because that Claw
             // outranks Shred and no character on the realm knows Mangle
