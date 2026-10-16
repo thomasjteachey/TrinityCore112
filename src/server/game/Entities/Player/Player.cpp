@@ -1915,6 +1915,18 @@ void Player::Update(uint32 p_time)
             SetDelayedTeleportFlag(false);
             SetSemaphoreTeleportNear(false);
         }
+        // A ghost's teleport, though, was asked for by the ghost. Releasing
+        // replaces whatever was parked while the body was alive (RepopAtGraveyard
+        // runs TeleportTo outside Unit::Update, which clears the flag), so one
+        // parked now is new - in practice Unstuck: Stuck (7355) has a 10 second
+        // cast, finishes inside Unit::Update, and for the dead calls
+        // RepopAtGraveyard. Left parked, nothing had told the client; the next
+        // movement packet used to "resolve" it with a server-side worldport ack,
+        // moving the player onto another map while the client stayed on the old
+        // one. A ghost who unstuck in Ragefire Chasm was left in a broken
+        // Orgrimmar, spirit healer missing, until a relog. Perform it now.
+        else if (HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+            TeleportTo(m_teleport_dest, m_teleport_options);
     }
 }
 

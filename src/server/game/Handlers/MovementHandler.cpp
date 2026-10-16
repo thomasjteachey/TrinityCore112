@@ -149,6 +149,38 @@ bool WorldSession::ResolvePendingTeleport(bool forceNearFallback /*= true*/)
     if (!player || !player->IsBeingTeleported())
         return true;
 
+    // TeleportTo only PARKS a teleport asked for from inside Unit::Update
+    // (IsHasDelayedTeleport): it stores the destination and sets the semaphore
+    // but sends the client nothing, and a far one leaves the player on its old
+    // map. Faking the client's ack for that moves the player on the server only -
+    // for a far one onto another map, while the client stays on the old one and
+    // draws the new map's objects into it, until a relog (a ghost's Unstuck in
+    // Ragefire Chasm: "still in world when teleported", a broken Orgrimmar, no
+    // spirit healer). So do the teleport for real, as Player::Update would, and
+    // let the client ack it. Bots have no client to fall out of step with, and
+    // completing their teleports here is what this function exists for.
+    if (player->IsHasDelayedTeleport() && !IsVirtualSession() && !IsTransientPlayerSession())
+    {
+        // An unreleased body keeps it: Player::Update holds it until the player
+        // is alive again, and releasing replaces it.
+        if (!player->IsAlive() && !player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+            return false;
+
+        // If TeleportTo refuses it (cannot enter the map, and so on), that is
+        // what Player::Update has been retrying every tick. Drop it rather than
+        // leave the player pinned mid-teleport: it never happened, so where they
+        // stand is consistent with what their client shows.
+        WorldLocation const dest = player->GetTeleportDest();
+        if (!player->TeleportTo(dest, player->GetTeleportOptions()))
+        {
+            player->SetDelayedTeleportFlag(false);
+            player->SetSemaphoreTeleportFar(false);
+            player->SetSemaphoreTeleportNear(false);
+        }
+
+        return !player->IsBeingTeleported();
+    }
+
     if (player->IsBeingTeleportedFar())
         HandleMoveWorldportAck();
 
