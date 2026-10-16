@@ -1032,6 +1032,46 @@ bool ConsumeBattlegroundFastTickCadence(Player const* player)
     return true;
 }
 
+// TEMPORARY (2026-10-16), remove once answered: where a clone's tick goes while
+// a Solo Shuffle has its gates shut between rounds. A warlock clone summoned its
+// demon before round 1 and never between rounds; each line names the step that
+// ended the tick, or what the bot decided and what came of it. Clones only,
+// between rounds only, one line per bot and step every two seconds.
+void LogShuffleBetweenRounds(Player* player, char const* stage, std::string const& detail = std::string())
+{
+    if (!player || !playerbot::PlayerbotObcCloneManager::IsActiveClone(player) || !player->InBattleground())
+        return;
+
+    Battleground const* battleground = player->GetBattleground();
+    if (!battleground || !battleground->IsSoloShuffle() || !battleground->IsBetweenRounds())
+        return;
+
+    {
+        static std::mutex throttleLock;
+        static std::unordered_map<std::string, uint32> lastLoggedMs;
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        std::lock_guard<std::mutex> guard(throttleLock);
+        if (lastLoggedMs.size() > 4096)
+            lastLoggedMs.clear();
+
+        uint32& last = lastLoggedMs[std::to_string(player->GetGUID().GetCounter()) + stage];
+        if (last && nowMs - last < 2000)
+            return;
+        last = nowMs;
+    }
+
+    Pet const* pet = player->GetPet();
+    std::string const petState = !pet ? std::string("none") :
+        (std::to_string(pet->GetEntry()) + (pet->IsAlive() ? "" : " dead"));
+    TC_LOG_INFO("playerbots.pvp.lifecycle",
+        "Shuffle between rounds: {} ({}) class {} instance {} stage={} alive={} prep={} pet={} combat={} rooted={} casting={} mana={}/{}{}{}",
+        Battleground::GetPlayerDisplayName(player), player->GetGUID().GetCounter(), uint32(player->GetClass()),
+        battleground->GetInstanceID(), stage, player->IsAlive() ? 1 : 0, player->HasAura(SPELL_ARENA_PREPARATION) ? 1 : 0,
+        petState, player->IsInCombat() ? 1 : 0, player->HasUnitState(UNIT_STATE_ROOT) ? 1 : 0,
+        player->IsNonMeleeSpellCast(false, false, true) ? 1 : 0, player->GetPower(POWER_MANA), player->GetMaxPower(POWER_MANA),
+        detail.empty() ? "" : " ", detail);
+}
+
 void ProcessBattlegroundPlayerbotTick(Player* player)
 {
     if (!player || !IsLifecycleGateEnabled())
@@ -1052,7 +1092,10 @@ void ProcessBattlegroundPlayerbotTick(Player* player)
         return;
 
     if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
+    {
+        LogShuffleBetweenRounds(player, "teleporting");
         return;
+    }
 
     if (battleground->GetStatus() == STATUS_WAIT_JOIN)
     {
@@ -1094,6 +1137,8 @@ void ProcessBattlegroundPlayerbotTick(Player* player)
     if (battleground->GetStatus() != STATUS_IN_PROGRESS)
         return;
 
+    LogShuffleBetweenRounds(player, "tick");
+
     if (!ConsumeBattlegroundFastTickCadence(player))
         return;
 
@@ -1102,7 +1147,10 @@ void ProcessBattlegroundPlayerbotTick(Player* player)
     // recovery fires it issues a near teleport; end this tick so no movement
     // launches from the stale mid-air position before the teleport is acked.
     if (RecoverAirborneStrandedBot(player))
+    {
+        LogShuffleBetweenRounds(player, "airborne-recovery");
         return;
+    }
 
     // Release the preparation-room movement root before selecting the first
     // live tactical order. Previously the gate-opening tick could install a
@@ -1126,6 +1174,7 @@ void ProcessBattlegroundPlayerbotTick(Player* player)
 
     if (IsCrowdControlledForLifecyclePause(player))
     {
+        LogShuffleBetweenRounds(player, "cc-pause");
         ClearActiveMovementForControlLoss(player);
         bool const didBlink = TryMageBlinkOutOfControl(player);
         EmitLifecycleGmDebug(player, didBlink ? "bg-fasttick escaped crowd-control with Blink" : "bg-fasttick paused crowd-controlled", 1000);
@@ -1159,7 +1208,15 @@ void ProcessBattlegroundPlayerbotTick(Player* player)
     bool const runCloneClassDecision = activeClone && ConsumeCloneClassDecisionCadence(player);
 
     if (runCloneClassDecision || shouldForceClassMovementTick || shouldForcePetSpellTick || shouldForceInterruptPress)
-        playerbot::PvpClassActions::Execute(player, classContext);
+    {
+        bool const executed = playerbot::PvpClassActions::Execute(player, classContext);
+        LogShuffleBetweenRounds(player, "decision", Trinity::StringFormat(
+            "gate={} exec={} action={} spell={} reason={} returned={} status={}",
+            classContext.classSpellsEnabled ? 1 : 0, classContext.shouldExecute ? 1 : 0,
+            classContext.actionName ? classContext.actionName : "none", classContext.spellId,
+            classContext.reason ? classContext.reason : "none", executed ? 1 : 0,
+            playerbot::PvpClassActions::GetLastExecutionStatus(player)));
+    }
 }
 
 bool TryFinalizePendingVirtualPlayerTeleport(Player* player)
@@ -2584,21 +2641,30 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
     // Issuing combat movement immediately after the synthetic ACK can launch
     // observer-visible movement from both the old and new positions.
     if (TryFinalizePendingVirtualPlayerTeleport(player))
+    {
+        LogShuffleBetweenRounds(player, "teleport-ack");
         return;
+    }
     // After the teleport finalizer, so a bot whose fence teleport is still
     // waiting for its synthetic ACK is judged on where it has arrived rather
     // than on the stale position it is being moved from. Owns the tick while
     // it is bringing the bot back: a bot outside the arena has no business
     // picking targets or casting until it is inside again.
     if (TryRecoverPlayerbotOutsideFence(player))
+    {
+        LogShuffleBetweenRounds(player, "fence");
         return;
+    }
     TryUsePlayerbotInsigniaBreaker(player);
     TryUsePlayerbotStoneformBreaker(player);
     TryCastPriestSpiritOfRedemption(player);
 
     if (isTransientClone && player && player->InBattleground() &&
         BattlegroundLifecycleActions::HandleDeathPrimitive(player))
+    {
+        LogShuffleBetweenRounds(player, "death-handler");
         return;
+    }
 
     ProcessBattlegroundPlayerbotTick(player);
 
