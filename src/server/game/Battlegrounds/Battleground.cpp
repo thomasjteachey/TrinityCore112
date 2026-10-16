@@ -2216,7 +2216,10 @@ void Battleground::MoveParticipantToTeam(ObjectGuid guid, Player* player, uint32
         if (unit && unit->GetTypeId() != TYPEID_PLAYER)
             unit->SetFaction(player->GetFaction());
 
-    AddOrSetPlayerToCorrectBgGroup(player, team);
+    // Into the new side's raid - only when the side changed: someone staying
+    // put is already in the right one.
+    if (oldTeam != team)
+        AddOrSetPlayerToCorrectBgGroup(player, team);
 }
 
 void Battleground::ResetStartingAreaForRound()
@@ -2476,8 +2479,17 @@ void Battleground::AddOrSetPlayerToCorrectBgGroup(Player* player, uint32 team)
     {
         if (group->IsMember(playerGuid))
         {
-            uint8 subgroup = group->GetMemberGroup(playerGuid);
-            player->SetBattlegroundOrBattlefieldRaid(group, subgroup);
+            // Not when they are linked to it already: SetBattlegroundOrBattlefieldRaid
+            // keeps the group they are in as the one to go back to, and that
+            // would be this raid itself. Leaving it later would then put them
+            // straight back into the raid being disbanded, and their client
+            // would be sent that raid - with only them in it - in place of
+            // their own group, and keep showing it after it is gone.
+            if (player->GetGroup() != group)
+            {
+                uint8 subgroup = group->GetMemberGroup(playerGuid);
+                player->SetBattlegroundOrBattlefieldRaid(group, subgroup);
+            }
         }
         else
         {
