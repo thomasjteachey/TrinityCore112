@@ -1613,10 +1613,12 @@ void BattlegroundQueue::StartSquadMatch(BattlegroundTypeId bgTypeId, PvPDifficul
 
 // Solo Shuffle's queues, one per size: people queued alone, made into one match
 // of four (2v2) or six (3v3), two or three a side for the first round; the
-// match deals the rest. A match starts
+// match deals the rest. Roles count only with Centurion.SoloShuffle.
+// BalanceHealers on; off, every waiting player is taken as a non-healer and a
+// full lobby is just the longest-waiting four or six. A match starts
 //
-//   1. as soon as two healers and enough others to fill it are waiting - one
-//      healer to a side every round, the way the rounds are dealt;
+//   1. as soon as enough are waiting to fill it - with healers balanced, two
+//      healers and the others, one healer to a side every round;
 //   2. where this realm fills skirmishes with bots, once someone with "Arena
 //      bot matches" ticked has waited the skirmish wait: everyone waiting with
 //      it ticked plays now, up to a full match, and the bot fill takes the
@@ -1624,8 +1626,9 @@ void BattlegroundQueue::StartSquadMatch(BattlegroundTypeId bgTypeId, PvPDifficul
 //      A shuffle still behind its first gates is offered first, in place of
 //      its clones (OfferPreparationSeats), so people meet rather than each
 //      getting a match of bots;
-//   3. otherwise, once the longest-waiting has waited kShuffleAnyLobbyMs, any
-//      full match: two healers at most while others are there to take the seats.
+//   3. otherwise (healers balanced, and not two of them waiting), once the
+//      longest-waiting has waited kShuffleAnyLobbyMs, any full match: two
+//      healers at most while others are there to take the seats.
 //
 // Rated Solo Shuffle does not exist: the window only offers the skirmish.
 namespace
@@ -1675,6 +1678,7 @@ void BattlegroundQueue::UpdateSoloShufflePool(BattlegroundTypeId bgTypeId, Battl
 
     uint32 const seats = uint32(arenaType) * 2;
     uint32 const nowMs = GameTime::GetGameTimeMS();
+    bool const balanceHealers = sWorld->getBoolConfig(CONFIG_CENTURION_SOLO_SHUFFLE_BALANCE_HEALERS);
 
     // Everyone waiting alone, longest-waiting first, with the role they would
     // play now: talents can be changed in the queue.
@@ -1693,7 +1697,7 @@ void BattlegroundQueue::UpdateSoloShufflePool(BattlegroundTypeId bgTypeId, Battl
                 if (!player)
                     continue;
 
-                waiting.push_back({ ginfo, Arena::IsSoloShuffleHealer(player) });
+                waiting.push_back({ ginfo, balanceHealers && Arena::IsSoloShuffleHealer(player) });
             }
         }
 
@@ -1718,14 +1722,17 @@ void BattlegroundQueue::UpdateSoloShufflePool(BattlegroundTypeId bgTypeId, Battl
     if (waiting.empty())
         return;
 
-    // 1. Two healers and the others to fill the match.
+    // 1. A full match: any, or with healers balanced two healers and the others.
     {
         uint32 healers = 0;
         for (ShuffleCandidate const& candidate : waiting)
             if (candidate.Healer)
                 ++healers;
 
-        if (healers >= kShuffleHealers && waiting.size() - healers >= seats - kShuffleHealers)
+        bool const full = balanceHealers
+            ? healers >= kShuffleHealers && waiting.size() - healers >= seats - kShuffleHealers
+            : waiting.size() >= seats;
+        if (full)
         {
             start(PickShuffleLobby(waiting, seats, kShuffleHealers), false);
             return;

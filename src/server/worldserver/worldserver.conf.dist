@@ -3004,6 +3004,21 @@ Centurion.Battleground.Spoils.LoserChancePercent = 50
 Centurion.Battleground.Spoils.MinPresencePercent = 50
 
 #
+#    Centurion.SoloShuffle.BalanceHealers
+#        Description: Whether Solo Shuffle cares about roles.
+#                     1 - a match starts at once only when two healers (and the
+#                         others to fill it) are queued, anyone else waiting up to a
+#                         minute for them, and the two healers never share a team -
+#                         which also leaves a 2v2 with two healers only two rounds.
+#                     0 - roles are ignored: a full lobby starts at once, 3v3 plays
+#                         six rounds and 2v2 three, and every two players share a
+#                         team at least once.
+#                     Read when a match is made and when it begins; .reload config.
+#        Default:     0
+
+Centurion.SoloShuffle.BalanceHealers = 0
+
+#
 #    Centurion.GoodieBag.Enable
 #        Description: A goodie bag for every character in a dungeon or raid when its
 #                     last boss dies: a random piece of that instance's boss loot that

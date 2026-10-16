@@ -1047,6 +1047,22 @@ namespace
     // More than this many in one shuffle cannot happen through the queue or the
     // bot fill (three a side); past it the sides are simply kept every round.
     constexpr uint32 SHUFFLE_MAX_ROSTER = 10;
+    // Whole schedules weighed against each other before falling back to dealing
+    // one round at a time. Six players have 210 at most.
+    constexpr uint64 SHUFFLE_MAX_SCHEDULES = 20000;
+
+    // n choose k, stopping as soon as it passes SHUFFLE_MAX_SCHEDULES.
+    uint64 CountSchedules(uint32 n, uint32 k)
+    {
+        uint64 count = 1;
+        for (uint32 i = 1; i <= k; ++i)
+        {
+            count = count * (n - k + i) / i;
+            if (count > SHUFFLE_MAX_SCHEDULES)
+                break;
+        }
+        return count;
+    }
 
     uint32 CountBits(uint32 mask)
     {
@@ -1096,9 +1112,16 @@ namespace
     // Deals the rounds of a shuffle. Roster member i plays a round on the gold
     // (Alliance) side when bit i of its mask is set.
     //
-    // A round uses one of ShuffleSplits: round by round, one not played yet
-    // (while any is left) that keeps who has teamed with whom the most even. `played` are the rounds already fought, which count towards
-    // that; `first`, when it is one of the allowed splits, opens what is dealt.
+    // A round uses one of ShuffleSplits, and the rounds are chosen together,
+    // never repeating a split while an unplayed one is left: of every such set,
+    // the one that gives the two players who share a team least often the most
+    // rounds together - so everybody plays beside everybody else at least once
+    // whenever that can be done - then the fewest repeats of the most frequent
+    // pairing, then the most even spread. Picking round by round instead left
+    // about one 3v3 in eight with a pair that never met. `played` are the rounds
+    // already fought, which count towards all of it; `first`, when it is one of
+    // the allowed splits, opens what is dealt. Rounds beyond the unplayed splits
+    // are dealt one at a time on the same terms.
     std::vector<uint32> DealShuffleRounds(std::vector<bool> const& healers, std::vector<uint32> const& played,
         uint32 first, uint32 rounds)
     {
@@ -1120,16 +1143,62 @@ namespace
         std::vector<uint32> splits = ShuffleSplits(healers);
         Trinity::Containers::RandomShuffle(splits);
 
-        std::vector<uint32> together(n * n, 0);
-        std::vector<uint32> used;
         auto const sameSide = [](uint32 mask, uint32 a, uint32 b) { return ((mask >> a) & 1) == ((mask >> b) & 1); };
+
+        // The pairs some allowed split puts on one team. Two healers kept apart
+        // never are, and do not count against a schedule.
+        std::vector<std::pair<uint32, uint32>> pairs;
+        for (uint32 a = 0; a < n; ++a)
+            for (uint32 b = a + 1; b < n; ++b)
+                if (std::any_of(splits.begin(), splits.end(), [&](uint32 mask) { return sameSide(mask, a, b); }))
+                    pairs.emplace_back(a, b);
+
+        std::vector<uint32> together(pairs.size(), 0);
+        std::vector<uint32> used;
+        auto const addPairs = [&](std::vector<uint32>& counts, uint32 mask)
+        {
+            for (size_t i = 0; i < pairs.size(); ++i)
+                if (sameSide(mask, pairs[i].first, pairs[i].second))
+                    ++counts[i];
+        };
         auto const record = [&](uint32 mask)
         {
-            for (uint32 a = 0; a < n; ++a)
-                for (uint32 b = a + 1; b < n; ++b)
-                    if (sameSide(mask, a, b))
-                        ++together[a * n + b];
+            addPairs(together, mask);
             used.push_back(canonical(mask & full));
+        };
+        // How good a set of pair counts is: the pair that teams least, as often
+        // as possible; then the pair that teams most, as rarely as possible;
+        // then the least uneven. True when `counts` beats the best so far.
+        uint32 bestLeast = 0;
+        uint32 bestMost = 0;
+        uint64 bestSquares = 0;
+        bool haveBest = false;
+        auto const better = [&](std::vector<uint32> const& counts)
+        {
+            uint32 least = counts.empty() ? 0 : *std::min_element(counts.begin(), counts.end());
+            uint32 most = counts.empty() ? 0 : *std::max_element(counts.begin(), counts.end());
+            uint64 squares = 0;
+            for (uint32 count : counts)
+                squares += uint64(count) * count;
+
+            if (haveBest && (least < bestLeast || (least == bestLeast && (most > bestMost ||
+                (most == bestMost && squares >= bestSquares)))))
+                return false;
+
+            haveBest = true;
+            bestLeast = least;
+            bestMost = most;
+            bestSquares = squares;
+            return true;
+        };
+        // Which of the two teams wears gold changes nothing about who plays with
+        // whom; toss for it, so nobody always starts from one end.
+        auto const deal = [&](uint32 mask)
+        {
+            if (n % 2 == 0 && roll_chance_i(50))
+                mask = full & ~mask;
+            dealt.push_back(mask);
+            record(mask);
         };
 
         for (uint32 mask : played)
@@ -1141,43 +1210,75 @@ namespace
             record(first);
         }
 
+        // Every set of unplayed splits as large as what is left to deal (the
+        // splits are in random order, so equal sets are a toss-up).
+        std::vector<uint32> unused;
+        for (uint32 mask : splits)
+            if (std::find(used.begin(), used.end(), mask) == used.end())
+                unused.push_back(mask);
+
+        uint32 const need = rounds > dealt.size() ? uint32(rounds - dealt.size()) : 0;
+        uint32 const take = std::min<uint32>(need, uint32(unused.size()));
+        if (take && CountSchedules(uint32(unused.size()), take) <= SHUFFLE_MAX_SCHEDULES)
+        {
+            std::vector<uint32> pick(take);
+            for (uint32 i = 0; i < take; ++i)
+                pick[i] = i;
+
+            std::vector<uint32> best;
+            std::vector<uint32> counts;
+            for (;;)
+            {
+                counts = together;
+                for (uint32 index : pick)
+                    addPairs(counts, unused[index]);
+                if (better(counts))
+                    best = pick;
+
+                // the next combination, in order
+                int32 i = int32(take) - 1;
+                while (i >= 0 && pick[i] == uint32(unused.size()) - take + uint32(i))
+                    --i;
+                if (i < 0)
+                    break;
+                ++pick[i];
+                for (uint32 j = uint32(i) + 1; j < take; ++j)
+                    pick[j] = pick[j - 1] + 1;
+            }
+
+            std::vector<uint32> chosen;
+            for (uint32 index : best)
+                chosen.push_back(unused[index]);
+            Trinity::Containers::RandomShuffle(chosen);
+            for (uint32 mask : chosen)
+                deal(mask);
+        }
+
         while (dealt.size() < rounds)
         {
-            uint32 best = 0;
+            // One at a time: the split played least so far, then as above.
+            haveBest = false;
+            uint32 bestMask = 0;
             uint32 bestUses = ~0u;
-            uint32 bestMost = ~0u;
-            uint64 bestSquares = ~uint64(0);
+            std::vector<uint32> counts;
             for (uint32 mask : splits)
             {
                 uint32 const uses = uint32(std::count(used.begin(), used.end(), mask));
-                uint32 most = 0;
-                uint64 squares = 0;
-                for (uint32 a = 0; a < n; ++a)
+                if (uses > bestUses)
+                    continue;
+                if (uses < bestUses)
                 {
-                    for (uint32 b = a + 1; b < n; ++b)
-                    {
-                        uint32 const count = together[a * n + b] + (sameSide(mask, a, b) ? 1 : 0);
-                        most = std::max(most, count);
-                        squares += uint64(count) * count;
-                    }
+                    haveBest = false;
+                    bestUses = uses;
                 }
 
-                if (uses < bestUses || (uses == bestUses && (most < bestMost || (most == bestMost && squares < bestSquares))))
-                {
-                    best = mask;
-                    bestUses = uses;
-                    bestMost = most;
-                    bestSquares = squares;
-                }
+                counts = together;
+                addPairs(counts, mask);
+                if (better(counts))
+                    bestMask = mask;
             }
 
-            // Which of the two teams wears gold changes nothing about who plays
-            // with whom; toss for it, so nobody always starts from one end.
-            if (n % 2 == 0 && roll_chance_i(50))
-                best = full & ~best;
-
-            dealt.push_back(best);
-            record(best);
+            deal(bestMask);
         }
 
         return dealt;
@@ -1385,13 +1486,16 @@ void Arena::BeginSoloShuffle()
     _shuffleHealers.clear();
     _shuffleRoundsPlayed = 0;
 
+    // Roles count only with Centurion.SoloShuffle.BalanceHealers on; otherwise
+    // nobody is dealt as a healer.
+    bool const balanceHealers = sWorld->getBoolConfig(CONFIG_CENTURION_SOLO_SHUFFLE_BALANCE_HEALERS);
     SquadFeedPlayers const players = GetSquadFeedPlayers();
     std::vector<bool> healers;
     for (auto const& [guid, participant] : m_Players)
     {
         (void)participant;
         auto const itr = players.find(guid);
-        bool const healer = itr != players.end() && IsSoloShuffleHealer(itr->second);
+        bool const healer = balanceHealers && itr != players.end() && IsSoloShuffleHealer(itr->second);
         _shuffleRoster.push_back(guid);
         _shuffleWins[guid] = 0;
         healers.push_back(healer);
@@ -1410,7 +1514,7 @@ void Arena::BeginSoloShuffle()
 
     // As many rounds as there are different ways to deal the teams, up to the
     // most a match plays: six for a full 3v3, three for a 2v2 (two with two
-    // healers). Kept for the whole match, whoever leaves.
+    // healers kept apart). Kept for the whole match, whoever leaves.
     size_t const splits = ShuffleSplits(healers).size();
     _shuffleRoundCount = uint8(splits ? std::min<size_t>(splits, SOLO_SHUFFLE_MAX_ROUNDS) : SOLO_SHUFFLE_MAX_ROUNDS);
 
@@ -1741,7 +1845,8 @@ void Arena::SyncShuffleRoster()
         _shuffleRoster.push_back(guid);
         _shuffleWins[guid] = 0;
         auto const itr = players.find(guid);
-        if (itr != players.end() && IsSoloShuffleHealer(itr->second))
+        if (sWorld->getBoolConfig(CONFIG_CENTURION_SOLO_SHUFFLE_BALANCE_HEALERS) &&
+            itr != players.end() && IsSoloShuffleHealer(itr->second))
             _shuffleHealers.insert(guid);
         joined = true;
     }

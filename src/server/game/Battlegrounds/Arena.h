@@ -66,12 +66,15 @@ enum ArenaWorldStates
 // raised, everyone is put back to full and cleaned of the round, moved to the
 // side the schedule gives them for the next round (Battleground::
 // MoveParticipantToTeam) and back to that side's start, and the gates shut for
-// a short countdown. With two healers they are always on opposite teams.
+// a short countdown. The rounds are dealt so that every two players share a
+// team at least once whenever that can be done.
 //
 // A match plays as many rounds as there are different ways to deal its teams,
-// up to SOLO_SHUFFLE_MAX_ROUNDS. 3v3 with two healers and four others has
-// exactly six (each healer with each pair of the others); 2v2 has three, or
-// two with two healers (each healer with each of the others once).
+// up to SOLO_SHUFFLE_MAX_ROUNDS: six for 3v3, three for 2v2. With
+// Centurion.SoloShuffle.BalanceHealers on, two healers are never on the same
+// team, which leaves 3v3 with exactly six ways (each healer with each pair of
+// the others) and a 2v2 with two healers only two (each healer with each of the
+// others once); off, roles play no part.
 uint8 constexpr SOLO_SHUFFLE_MAX_ROUNDS = 6;
 
 class TC_GAME_API Arena : public Battleground
