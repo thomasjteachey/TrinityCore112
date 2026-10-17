@@ -788,6 +788,23 @@ namespace
         TC_LOG_INFO("playerbots.pve", "Bot {} knew no Auto Shot; taught it.", bot->GetName());
     }
 
+    // A rebirth removes every spell and keeps every skill, and the restore
+    // misses what a skill grants: LearnDefaultSkills skips a skill the bot
+    // already has, and the trainer catch-up only teaches trainer ranks. A
+    // login replays every skill through LearnSkillRewardedSpells, so those
+    // spells were gone only until the bot next logged in - which for a bot is
+    // the next restart. Battle Stance is one of them. Every warrior reborn
+    // since its last login sat in Defensive Stance, picked Charge on every
+    // approach and had it refused (SPELL_FAILED_ONLY_SHAPESHIFT), while the
+    // warriors that had logged in since charged normally. Do what the login
+    // does.
+    void RelearnSkillLineSpells(Player* bot)
+    {
+        for (SkillLineEntry const* skillLine : sSkillLineStore)
+            if (bot->HasSkill(skillLine->ID))
+                bot->LearnSkillRewardedSpells(skillLine->ID, bot->GetPureSkillValue(skillLine->ID));
+    }
+
     // Mages provision themselves: highest known Conjure Water / Conjure Food
     // rank, or 0 when the bot can't conjure that kind.
     uint32 ConjureSpellId(Player* bot, bool drink)
@@ -21860,6 +21877,7 @@ namespace playerbot
         bot->SetUInt32Value(PLAYER_XP, 0);
         bot->LearnDefaultSkills();
         bot->LearnCustomSpells();
+        RelearnSkillLineSpells(bot);
 
         // Now take off anything this level cannot wear.
         //
@@ -22064,6 +22082,7 @@ namespace playerbot
             bot->SetUInt32Value(PLAYER_XP, 0);
             bot->LearnDefaultSkills();
             bot->LearnCustomSpells();
+            RelearnSkillLineSpells(bot);
             bot->SetFullHealth();
             if (bot->GetMaxPower(POWER_MANA))
                 bot->SetPower(POWER_MANA, bot->GetMaxPower(POWER_MANA));

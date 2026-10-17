@@ -373,6 +373,10 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 // read by SelectDruidFlagRunSpell.
 constexpr uint32 kPlayerbotFlagRunFormShiftToken = 900008;
 constexpr std::chrono::milliseconds kPlayerbotFlagRunFormShiftSpacing(2500);
+// Same value in PlayerbotPvpCore.cpp: armed when the core refuses a charge's
+// path, read by SelectWarriorSpell.
+constexpr uint32 kPlayerbotChargePathRefusedToken = 900010;
+constexpr std::chrono::seconds kPlayerbotChargePathRefusedHold(5);
 // Environmental Magma periodically damages units standing on hazardous ground.
 // Some custom terrain does not expose the matching liquid flags, so the aura is
 // also a generic signal that the bot is currently standing in a hazard.
@@ -5602,6 +5606,19 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             if (castResult == SPELL_FAILED_NOTHING_TO_DISPEL && IsPlayerbotDispelSpell(resolvedSpellId) &&
                 !playerbot::PvpCore::IsDispelThrottleExempt(player, resolvedSpellId))
                 playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kPlayerbotDispelCooldownToken, kPlayerbotDispelCooldown);
+
+            // A charge the core will not path is refused the same way every
+            // tick from where the bot stands: SPELL_FAILED_NOPATH, or a route
+            // longer than a charge may run, which it reports as out of range
+            // from inside the spell's range. Nothing above moves the bot for
+            // the first, and since the target is in range and in sight the next
+            // attempt even clears the chase the PvE tick issued - warriors stood
+            // frozen at eight to nineteen yards for minutes re-picking it. Hold
+            // charges off for a few seconds so the bot walks in instead.
+            if (spellInfo->HasEffect(SPELL_EFFECT_CHARGE) &&
+                (castResult == SPELL_FAILED_NOPATH ||
+                 (castResult == SPELL_FAILED_OUT_OF_RANGE && target && maxRange > 0.0f && player->IsWithinDistInMap(target, maxRange))))
+                playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kPlayerbotChargePathRefusedToken, kPlayerbotChargePathRefusedHold);
 
             NotifySpellCastFailureToDiagnosticObservers(player, context, castResult);
             EnumText const reasonText = EnumUtils::ToString(castResult);

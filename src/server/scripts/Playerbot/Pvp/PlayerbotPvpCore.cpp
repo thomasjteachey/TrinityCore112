@@ -106,6 +106,9 @@ constexpr uint32 kPlayerbotFlagRunFormShiftToken = 900008;
 // Armed when an open-world demon summon the bot stopped for is refused anyway;
 // see TryCastOpenWorldBuff.
 constexpr uint32 kWarlockOpenWorldSummonRetryToken = 900009;
+// Armed by the executor when the core refuses a charge's path. Same value in
+// PlayerbotPvpClassActions.cpp.
+constexpr uint32 kPlayerbotChargePathRefusedToken = 900010;
 constexpr uint32 kWandShootSpellId = 5019;
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
@@ -6975,7 +6978,11 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     float const interceptMinRange = interceptInfo ? interceptInfo->GetMinRange(false) : 8.0f;
     bool const canChargeByRange = !player->IsWithinDistInMap(gapCloseTarget, chargeMinRange);
     bool const canInterceptByRange = !player->IsWithinDistInMap(gapCloseTarget, interceptMinRange);
-    bool const shouldUseChargeGapCloser = !player->IsWithinMeleeRange(gapCloseTarget) && !player->IsInCombat() && canChargeByRange && IsSpellReady(player, 11578);
+    // The core refused a charge's path a moment ago (CastDirectSpell arms
+    // this). Picked again it is refused again, and the bot stands still at
+    // range instead of walking in.
+    bool const chargePathRefused = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotChargePathRefusedToken);
+    bool const shouldUseChargeGapCloser = !chargePathRefused && !player->IsWithinMeleeRange(gapCloseTarget) && !player->IsInCombat() && canChargeByRange && IsSpellReady(player, 11578);
     // "Wants" = range and cooldown allow it; "should" additionally requires the
     // rage to pay for it. Intercept and Heroic Leap cost 10 rage, and a warrior
     // pulled into combat at range (a Moonfire landing before Charge goes off) has
@@ -6991,7 +6998,7 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     // than jogging the whole way.
     bool const knowsHeroicLeap = ResolveKnownPlayerSpellInChain(player, 81271) != 0;
     bool const interceptIsThisSpecGapCloser = !isFuryWarrior || !knowsHeroicLeap;
-    bool const wantsInterceptGapCloser = interceptIsThisSpecGapCloser && !player->IsWithinMeleeRange(gapCloseTarget) && player->IsInCombat() && canInterceptByRange && IsSpellReady(player, 20617);
+    bool const wantsInterceptGapCloser = !chargePathRefused && interceptIsThisSpecGapCloser && !player->IsWithinMeleeRange(gapCloseTarget) && player->IsInCombat() && canInterceptByRange && IsSpellReady(player, 20617);
     bool const shouldUseInterceptGapCloser = wantsInterceptGapCloser && CanAffordSpellPowerCost(player, 20617);
     // Fury uses Heroic Leap (ground-targeted, same range band as Intercept)
     // instead of Intercept. This was missing the same min-range gate
