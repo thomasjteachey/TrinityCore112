@@ -41,6 +41,66 @@ namespace Trinity
     TC_COMMON_API void SetCrashContext(std::string context);
     TC_COMMON_API void ClearCrashContext();
 
+    // The same breadcrumb for paths that run every tick or once per aura. The
+    // phase, field names and raw values are stored as they are and only turned
+    // into text by the crash logger, so setting one costs a few stores where
+    // SetCrashContext pays for an ostringstream (~40% of map update time when
+    // every aura did it, profiled 2026-10-17). Setting either kind replaces the
+    // other. Phase and field names must be string literals: the crash logger
+    // reads them after the fact. A GUID goes in as its raw value through Hex.
+    class CrashBreadcrumb
+    {
+    public:
+        static constexpr uint8 MaxFields = 20;
+
+        CrashBreadcrumb& Begin(char const* phase)
+        {
+            _count = 0;
+            _phase = phase;
+            return *this;
+        }
+
+        void Reset()
+        {
+            _phase = nullptr;
+            _count = 0;
+        }
+
+        CrashBreadcrumb& Dec(char const* name, uint64 value) { return Add(name, value, false); }
+        CrashBreadcrumb& Hex(char const* name, uint64 value) { return Add(name, value, true); }
+        CrashBreadcrumb& Ptr(char const* name, void const* pointer) { return Add(name, uint64(reinterpret_cast<uintptr_t>(pointer)), true); }
+
+        char const* GetPhase() const { return _phase; }
+
+        // Writes "<phase> name=value ..." into output, NUL-terminated and cut
+        // to size, without allocating, so the fatal signal handler can call it.
+        // Returns the length written.
+        TC_COMMON_API std::size_t Format(char* output, std::size_t size) const;
+
+    private:
+        CrashBreadcrumb& Add(char const* name, uint64 value, bool hex)
+        {
+            if (_count < MaxFields)
+            {
+                _names[_count] = name;
+                _values[_count] = value;
+                _hex[_count] = hex;
+                ++_count;
+            }
+
+            return *this;
+        }
+
+        char const* _phase = nullptr;
+        char const* _names[MaxFields] = {};
+        uint64 _values[MaxFields] = {};
+        bool _hex[MaxFields] = {};
+        uint8 _count = 0;
+    };
+
+    // Starts the calling thread's breadcrumb; chain Dec/Hex/Ptr onto it.
+    TC_COMMON_API CrashBreadcrumb& SetCrashBreadcrumb(char const* phase);
+
     [[noreturn]] TC_COMMON_API void AbortHandler(int sigval);
     // On Unix this installs the calling thread's alternate fatal-signal stack.
     // It is a no-op on Windows so worker entry points can call it portably.

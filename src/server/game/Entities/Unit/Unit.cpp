@@ -3733,17 +3733,13 @@ void Unit::_DeleteRemovedAuras()
 
 void Unit::_UpdateSpells(uint32 time)
 {
-    {
-        std::ostringstream crashContext;
-        crashContext << "Unit::_UpdateSpells enter"
-            << " unitPtr=" << static_cast<void const*>(this)
-            << " unitGuid=" << GetGUID().ToString()
-            << " mapId=" << GetMapId()
-            << " time=" << time
-            << " ownedAuraCount=" << m_ownedAuras.size()
-            << " removedAuraCount=" << m_removedAuras.size();
-        Trinity::SetCrashContext(crashContext.str());
-    }
+    Trinity::SetCrashBreadcrumb("Unit::_UpdateSpells enter")
+        .Ptr("unitPtr", this)
+        .Hex("unitGuid", GetGUID().GetRawValue())
+        .Dec("mapId", GetMapId())
+        .Dec("time", time)
+        .Dec("ownedAuraCount", m_ownedAuras.size())
+        .Dec("removedAuraCount", m_removedAuras.size());
 
     if (m_currentSpells[CURRENT_AUTOREPEAT_SPELL])
         _UpdateAutoRepeatSpell();
@@ -3765,17 +3761,13 @@ void Unit::_UpdateSpells(uint32 time)
         Aura* i_aura = current->second;
         ++m_auraUpdateIterator;                            // need shift to next for allow update if need into aura update
 
-        {
-            std::ostringstream crashContext;
-            crashContext << "Unit::_UpdateSpells owned aura update"
-                << " unitPtr=" << static_cast<void const*>(this)
-                << " unitGuid=" << GetGUID().ToString()
-                << " mapId=" << GetMapId()
-                << " time=" << time
-                << " auraMapKey=" << current->first
-                << " auraPtr=" << static_cast<void const*>(i_aura);
-            Trinity::SetCrashContext(crashContext.str());
-        }
+        Trinity::SetCrashBreadcrumb("Unit::_UpdateSpells owned aura update")
+            .Ptr("unitPtr", this)
+            .Hex("unitGuid", GetGUID().GetRawValue())
+            .Dec("mapId", GetMapId())
+            .Dec("time", time)
+            .Dec("auraMapKey", current->first)
+            .Ptr("auraPtr", i_aura);
 
         if (!i_aura)
         {
@@ -3810,19 +3802,15 @@ void Unit::_UpdateSpells(uint32 time)
             continue;
         }
 
-        {
-            std::ostringstream crashContext;
-            crashContext << "Unit::_UpdateSpells calling Aura::UpdateOwner"
-                << " unitPtr=" << static_cast<void const*>(this)
-                << " unitGuid=" << GetGUID().ToString()
-                << " mapId=" << GetMapId()
-                << " time=" << time
-                << " spellId=" << (i_aura->GetSpellInfo() ? i_aura->GetSpellInfo()->Id : 0)
-                << " auraPtr=" << static_cast<void const*>(i_aura)
-                << " casterGuid=" << i_aura->GetCasterGUID().ToString()
-                << " effectMask=" << uint32(i_aura->GetEffectMask());
-            Trinity::SetCrashContext(crashContext.str());
-        }
+        Trinity::SetCrashBreadcrumb("Unit::_UpdateSpells calling Aura::UpdateOwner")
+            .Ptr("unitPtr", this)
+            .Hex("unitGuid", GetGUID().GetRawValue())
+            .Dec("mapId", GetMapId())
+            .Dec("time", time)
+            .Dec("spellId", i_aura->GetSpellInfo() ? i_aura->GetSpellInfo()->Id : 0)
+            .Ptr("auraPtr", i_aura)
+            .Hex("casterGuid", i_aura->GetCasterGUID().GetRawValue())
+            .Dec("effectMask", i_aura->GetEffectMask());
 
         i_aura->UpdateOwner(time, this);
     }
@@ -3850,15 +3838,11 @@ void Unit::_UpdateSpells(uint32 time)
 
     _DeleteRemovedAuras();
 
-    {
-        std::ostringstream crashContext;
-        crashContext << "Unit::_UpdateSpells after aura updates"
-            << " unitPtr=" << static_cast<void const*>(this)
-            << " unitGuid=" << GetGUID().ToString()
-            << " mapId=" << GetMapId()
-            << " time=" << time;
-        Trinity::SetCrashContext(crashContext.str());
-    }
+    Trinity::SetCrashBreadcrumb("Unit::_UpdateSpells after aura updates")
+        .Ptr("unitPtr", this)
+        .Hex("unitGuid", GetGUID().GetRawValue())
+        .Dec("mapId", GetMapId())
+        .Dec("time", time);
 
     if (!m_gameObj.empty())
     {
@@ -4643,21 +4627,17 @@ void Unit::_UnapplyAura(AuraApplicationMap::iterator& i, AuraRemoveMode removeMo
 
     ++m_removedAurasCount;
 
-    {
-        std::stringstream crashContext;
-        crashContext << "Unit::_UnapplyAura before GetCaster"
-            << " unitPtr=" << static_cast<void const*>(this)
-            << " unitGuid=" << GetGUID().ToString()
-            << " unitMapId=" << GetMapId()
-            << " unitHasMap=" << (FindMap() ? 1 : 0)
-            << " auraAppPtr=" << static_cast<void const*>(aurApp)
-            << " auraPtr=" << static_cast<void const*>(aura)
-            << " spellId=" << (aura && aura->GetSpellInfo() ? aura->GetSpellInfo()->Id : 0)
-            << " auraOwnerPtr=" << static_cast<void const*>(aura ? aura->GetOwner() : nullptr)
-            << " casterGuid=" << (aura ? aura->GetCasterGUID().ToString() : "none")
-            << " removeMode=" << uint32(removeMode);
-        Trinity::SetCrashContext(crashContext.str());
-    }
+    Trinity::SetCrashBreadcrumb("Unit::_UnapplyAura before GetCaster")
+        .Ptr("unitPtr", this)
+        .Hex("unitGuid", GetGUID().GetRawValue())
+        .Dec("unitMapId", GetMapId())
+        .Dec("unitHasMap", FindMap() ? 1 : 0)
+        .Ptr("auraAppPtr", aurApp)
+        .Ptr("auraPtr", aura)
+        .Dec("spellId", aura && aura->GetSpellInfo() ? aura->GetSpellInfo()->Id : 0)
+        .Ptr("auraOwnerPtr", aura ? aura->GetOwner() : nullptr)
+        .Hex("casterGuid", aura ? aura->GetCasterGUID().GetRawValue() : 0)
+        .Dec("removeMode", uint32(removeMode));
 
     Unit* caster = aura->GetCaster();
 

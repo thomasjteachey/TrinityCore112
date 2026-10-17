@@ -54,6 +54,10 @@ extern "C" { TC_COMMON_API char const* TrinityAssertionFailedMessage = nullptr; 
 namespace
 {
     thread_local std::string ThreadCrashContext;
+    // Constant-initialized and trivially destructible, so the signal handler
+    // can read it without a TLS init guard.
+    thread_local Trinity::CrashBreadcrumb ThreadCrashBreadcrumb;
+    constexpr std::size_t CrashBreadcrumbTextSize = 2048;
 #if TRINITY_PLATFORM != TRINITY_PLATFORM_WINDOWS
     constexpr std::size_t EmergencyCrashContextSize = 2048;
     thread_local char EmergencyCrashContext[EmergencyCrashContextSize] = {};
@@ -232,7 +236,18 @@ namespace
         char line[256];
         char* cursor = line;
 
-        if (EmergencyCrashContext[0])
+        // Whichever breadcrumb this thread set last: a string, or a lazy one
+        // formatted here. Format does not allocate.
+        char breadcrumbText[CrashBreadcrumbTextSize];
+        char const* crashContext = EmergencyCrashContext;
+        std::size_t crashContextLength = EmergencyStringLength(EmergencyCrashContext, EmergencyCrashContextSize);
+        if (!crashContextLength && ThreadCrashBreadcrumb.GetPhase())
+        {
+            crashContextLength = ThreadCrashBreadcrumb.Format(breadcrumbText, sizeof(breadcrumbText));
+            crashContext = breadcrumbText;
+        }
+
+        if (crashContextLength)
         {
             // POSSIBLY STALE, and labelled so because it has already misled a real
             // investigation. SetCrashContext has around twenty call sites and
@@ -246,7 +261,7 @@ namespace
             //
             // The resolved frames below are the truth. Read them first.
             EmergencyWriteLiteral("Last crash context (MAY BE STALE - trust the frames below):\n  ");
-            EmergencyWrite(EmergencyCrashContext, EmergencyStringLength(EmergencyCrashContext, EmergencyCrashContextSize));
+            EmergencyWrite(crashContext, crashContextLength);
             EmergencyWriteLiteral("\n");
         }
 
@@ -307,10 +322,17 @@ namespace
 
     void LogCrashContext()
     {
-        if (ThreadCrashContext.empty())
+        std::string crashContext = ThreadCrashContext;
+        if (crashContext.empty() && ThreadCrashBreadcrumb.GetPhase())
+        {
+            char breadcrumbText[CrashBreadcrumbTextSize];
+            crashContext.assign(breadcrumbText, ThreadCrashBreadcrumb.Format(breadcrumbText, sizeof(breadcrumbText)));
+        }
+
+        if (crashContext.empty())
             return;
 
-        std::string formattedMessage = "\nLast crash context:\n  " + ThreadCrashContext + '\n';
+        std::string formattedMessage = "\nLast crash context:\n  " + crashContext + '\n';
         LogCrashMessage(formattedMessage);
         fprintf(stderr, "%s", formattedMessage.c_str());
         fflush(stderr);
@@ -380,6 +402,7 @@ namespace Trinity
 
 void SetCrashContext(std::string context)
 {
+    ThreadCrashBreadcrumb.Reset();
     ThreadCrashContext = std::move(context);
 #if TRINITY_PLATFORM != TRINITY_PLATFORM_WINDOWS
     std::size_t length = ThreadCrashContext.size();
@@ -392,10 +415,73 @@ void SetCrashContext(std::string context)
 
 void ClearCrashContext()
 {
+    ThreadCrashBreadcrumb.Reset();
     ThreadCrashContext.clear();
 #if TRINITY_PLATFORM != TRINITY_PLATFORM_WINDOWS
     EmergencyCrashContext[0] = '\0';
 #endif
+}
+
+CrashBreadcrumb& SetCrashBreadcrumb(char const* phase)
+{
+    // clear() keeps the string's buffer, so this never allocates.
+    ThreadCrashContext.clear();
+#if TRINITY_PLATFORM != TRINITY_PLATFORM_WINDOWS
+    EmergencyCrashContext[0] = '\0';
+#endif
+    return ThreadCrashBreadcrumb.Begin(phase);
+}
+
+std::size_t CrashBreadcrumb::Format(char* output, std::size_t size) const
+{
+    if (!output || !size)
+        return 0;
+
+    std::size_t length = 0;
+    auto const put = [&](char character)
+    {
+        if (length + 1 < size)
+            output[length++] = character;
+    };
+    auto const putText = [&](char const* text)
+    {
+        for (; *text; ++text)
+            put(*text);
+    };
+    auto const putNumber = [&](uint64 value, bool hex)
+    {
+        static char constexpr Digits[] = "0123456789abcdef";
+        uint64 const base = hex ? 16 : 10;
+        char reversed[24];
+        std::size_t count = 0;
+        do
+        {
+            reversed[count++] = Digits[value % base];
+            value /= base;
+        } while (value);
+
+        if (hex)
+        {
+            put('0');
+            put('x');
+        }
+
+        while (count)
+            put(reversed[--count]);
+    };
+
+    putText(_phase ? _phase : "(no phase)");
+    uint8 const count = _count < MaxFields ? _count : MaxFields;
+    for (uint8 i = 0; i < count; ++i)
+    {
+        put(' ');
+        putText(_names[i] ? _names[i] : "?");
+        put('=');
+        putNumber(_values[i], _hex[i]);
+    }
+
+    output[length] = '\0';
+    return length;
 }
 
 void Assert(char const* file, int line, char const* function, std::string debugInfo, char const* message)

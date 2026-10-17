@@ -126,6 +126,44 @@ namespace
 
         return sstr.str();
     }
+
+    // BuildAuraCrashContext's fields as a lazy breadcrumb, for the paths that
+    // run for every aura on every tick. GUIDs are raw values here. The string
+    // version stays for the error paths, which log it as well.
+    void SetAuraCrashBreadcrumb(char const* phase, Aura const* aura, WorldObject const* ownerArg = nullptr, Unit const* caster = nullptr, Unit const* target = nullptr, AuraApplication const* aurApp = nullptr)
+    {
+        Trinity::CrashBreadcrumb& breadcrumb = Trinity::SetCrashBreadcrumb(phase).Ptr("auraPtr", aura);
+
+        if (aura)
+        {
+            SpellInfo const* spellInfo = aura->GetSpellInfo();
+            breadcrumb.Dec("spellId", spellInfo ? spellInfo->Id : 0)
+                .Ptr("auraOwnerPtr", aura->GetOwner())
+                .Hex("casterGuid", aura->GetCasterGUID().GetRawValue())
+                .Dec("removed", aura->IsRemoved())
+                .Dec("effectMask", aura->GetEffectMask());
+        }
+
+        if (ownerArg)
+            breadcrumb.Ptr("ownerArgPtr", ownerArg)
+                .Hex("ownerArgGuid", ownerArg->GetGUID().GetRawValue())
+                .Dec("ownerArgMapId", ownerArg->GetMapId());
+
+        if (caster)
+            breadcrumb.Ptr("casterPtr", caster)
+                .Hex("casterGuid", caster->GetGUID().GetRawValue())
+                .Dec("casterMapId", caster->GetMapId());
+
+        if (target)
+            breadcrumb.Ptr("targetPtr", target)
+                .Hex("targetGuid", target->GetGUID().GetRawValue())
+                .Dec("targetMapId", target->GetMapId());
+
+        if (aurApp)
+            breadcrumb.Ptr("aurAppPtr", aurApp)
+                .Dec("aurAppEffectMask", aurApp->GetEffectMask())
+                .Dec("aurAppEffectsToApply", aurApp->GetEffectsToApply());
+    }
 }
 
 AuraCreateInfo::AuraCreateInfo(SpellInfo const* spellInfo, uint8 auraEffMask, WorldObject* owner) :
@@ -771,7 +809,7 @@ void Aura::UpdateTargetMap(Unit* caster, bool apply)
         {
             // needs readding - remove now, will be applied in next update cycle
             // (dbcs do not have auras which apply on same type of targets but have different radius, so this is not really needed)
-            Trinity::SetCrashContext(BuildAuraCrashContext("Aura::UpdateTargetMap existing target full-immunity check", this, GetOwner(), caster, itr->first, applicationPair.second));
+            SetAuraCrashBreadcrumb("Aura::UpdateTargetMap existing target full-immunity check", this, GetOwner(), caster, itr->first, applicationPair.second);
             if (itr->first->IsImmunedToSpell(GetSpellInfo(), caster, true) || !CanBeAppliedOn(itr->first))
             {
                 targetsToRemove.push_back(applicationPair.second->GetTarget());
@@ -781,7 +819,7 @@ void Aura::UpdateTargetMap(Unit* caster, bool apply)
             // check target immunities (for existing targets)
             for (SpellEffectInfo const& spellEffectInfo : GetSpellInfo()->GetEffects())
             {
-                Trinity::SetCrashContext(BuildAuraCrashContext("Aura::UpdateTargetMap existing target effect-immunity check", this, GetOwner(), caster, itr->first, applicationPair.second));
+                SetAuraCrashBreadcrumb("Aura::UpdateTargetMap existing target effect-immunity check", this, GetOwner(), caster, itr->first, applicationPair.second);
                 if (itr->first->IsImmunedToSpellEffect(GetSpellInfo(), spellEffectInfo, caster, true))
                     itr->second &= ~(1 << spellEffectInfo.EffectIndex);
             }
@@ -806,12 +844,12 @@ void Aura::UpdateTargetMap(Unit* caster, bool apply)
             // check target immunities (for new targets)
             for (SpellEffectInfo const& spellEffectInfo : GetSpellInfo()->GetEffects())
             {
-                Trinity::SetCrashContext(BuildAuraCrashContext("Aura::UpdateTargetMap new target effect-immunity check", this, GetOwner(), caster, itr->first, nullptr));
+                SetAuraCrashBreadcrumb("Aura::UpdateTargetMap new target effect-immunity check", this, GetOwner(), caster, itr->first, nullptr);
                 if (itr->first->IsImmunedToSpellEffect(GetSpellInfo(), spellEffectInfo, caster))
                     itr->second &= ~(1 << spellEffectInfo.EffectIndex);
             }
 
-            Trinity::SetCrashContext(BuildAuraCrashContext("Aura::UpdateTargetMap new target full-immunity/apply check", this, GetOwner(), caster, itr->first, nullptr));
+            SetAuraCrashBreadcrumb("Aura::UpdateTargetMap new target full-immunity/apply check", this, GetOwner(), caster, itr->first, nullptr);
             if (!itr->second || itr->first->IsImmunedToSpell(GetSpellInfo(), caster) || !CanBeAppliedOn(itr->first))
                 addUnit = false;
         }
@@ -920,7 +958,7 @@ void Aura::_ApplyEffectForTargets(uint8 effIndex)
 }
 void Aura::UpdateOwner(uint32 diff, WorldObject* owner)
 {
-    Trinity::SetCrashContext(BuildAuraCrashContext("Aura::UpdateOwner enter", this, owner, nullptr));
+    SetAuraCrashBreadcrumb("Aura::UpdateOwner enter", this, owner, nullptr);
 
     if (owner != m_owner)
     {
@@ -937,7 +975,7 @@ void Aura::UpdateOwner(uint32 diff, WorldObject* owner)
     }
 
     Unit* caster = GetCaster();
-    Trinity::SetCrashContext(BuildAuraCrashContext("Aura::UpdateOwner before Update", this, owner, caster));
+    SetAuraCrashBreadcrumb("Aura::UpdateOwner before Update", this, owner, caster);
     // Apply spellmods for channeled auras
     // used for example when triggered spell of spell:10 is modded
     Spell* modSpell = nullptr;
@@ -957,7 +995,7 @@ void Aura::UpdateOwner(uint32 diff, WorldObject* owner)
 
     if (m_updateTargetMapInterval <= int32(diff))
     {
-        Trinity::SetCrashContext(BuildAuraCrashContext("Aura::UpdateOwner before UpdateTargetMap", this, owner, caster));
+        SetAuraCrashBreadcrumb("Aura::UpdateOwner before UpdateTargetMap", this, owner, caster);
         UpdateTargetMap(caster);
     }
     else
@@ -967,7 +1005,7 @@ void Aura::UpdateOwner(uint32 diff, WorldObject* owner)
     for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
         if (m_effects[i])
         {
-            Trinity::SetCrashContext(BuildAuraCrashContext("Aura::UpdateOwner before AuraEffect::Update", this, owner, caster));
+            SetAuraCrashBreadcrumb("Aura::UpdateOwner before AuraEffect::Update", this, owner, caster);
             m_effects[i]->Update(diff, caster);
         }
 
