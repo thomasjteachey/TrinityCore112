@@ -103,6 +103,9 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 // Armed by the executor after a flag runner changes form; see
 // SelectDruidFlagRunSpell. Same value in PlayerbotPvpClassActions.cpp.
 constexpr uint32 kPlayerbotFlagRunFormShiftToken = 900008;
+// Armed when an open-world demon summon the bot stopped for is refused anyway;
+// see TryCastOpenWorldBuff.
+constexpr uint32 kWarlockOpenWorldSummonRetryToken = 900009;
 constexpr uint32 kWandShootSpellId = 5019;
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
@@ -2960,6 +2963,31 @@ bool MeetsCasterAuraStateRequirements(Player const* player, uint32 spellId)
         // already fighting, which in a battleground is answered before it and in
         // the open world is a handful of people at most.
         return playerbot::PveManager::MayProactivelyEngage(player, person);
+    }
+
+    // A person within reach whom the bot is fighting or free to start on -
+    // HasHostileTarget's rule, consent included. HasNearbyAttackableEnemyPlayer
+    // asks only IsValidAttackTarget, which an armed bot in the open world
+    // passes against everybody, War Mode or not.
+    bool HasNearbyHostilePlayer(Player const* player, float maxDistance, bool requireLineOfSight)
+    {
+        if (!player || !player->IsInWorld() || !player->FindMap())
+            return false;
+
+        Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+        for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+        {
+            Player* candidate = itr->GetSource();
+            if (!candidate || candidate == player || !player->IsWithinDistInMap(candidate, maxDistance))
+                continue;
+            if (!HasHostileTarget(player, candidate))
+                continue;
+            if (requireLineOfSight && !player->IsWithinLOSInMap(candidate))
+                continue;
+            return true;
+        }
+
+        return false;
     }
 
     bool IsFriendlySupportTarget(Player const* player, Unit const* target)
@@ -6734,10 +6762,20 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
     char const* summonPetReasonIdle = isAfflictionWarlock ? "maintain felhunter pet while out of combat" : (isDestructionWarlock ? "maintain succubus pet while out of combat" : "maintain voidwalker pet while out of combat");
     char const* summonPetReasonRecover = isAfflictionWarlock ? "recover felhunter out of combat when absent" : (isDestructionWarlock ? "recover succubus out of combat when absent" : "recover voidwalker out of combat when absent");
     bool const hasHostileTarget = HasHostileTarget(player, target);
+    // A summon is a ten second cast, and the recovery below outranks every
+    // offensive spell, so a warlock that came into a fight without its demon
+    // stood through the whole cast in front of whoever it had just found -
+    // a hunter at thirty yards killed it before the Voidwalker arrived. With
+    // somebody that close it fights without the pet instead. Fel Domination
+    // is how a warlock resummons under pressure, so a summon it has already
+    // shortened still goes ahead.
+    constexpr float kWarlockSummonThreatYards = 60.0f;
+    bool const summonUnderThreat = needsPetSummon && !player->HasAura(18708) &&
+        HasNearbyHostilePlayer(player, kWarlockSummonThreatYards, true);
 
     if (!hasHostileTarget)
     {
-        if (needsPetSummon && !player->IsInCombat() && summonPetSpell && IsSpellReady(player, summonPetSpell))
+        if (needsPetSummon && !summonUnderThreat && !player->IsInCombat() && summonPetSpell && IsSpellReady(player, summonPetSpell))
             return { summonPetName, summonPetReasonIdle, summonPetSpell, playerbot::PvpClassSpellContext::TargetMode::Self };
 
             return decision;
@@ -6783,7 +6821,7 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
         { "warlock fear", "prioritize fear control on paladin/priest targets in range", 6215, playerbot::PvpClassSpellContext::TargetMode::Enemy, fearTarget ? fearTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !isAfflictionWarlock && !player->IsInCombat() && needsPetSummon && !player->HasAura(18708) && IsSpellReady(player, 18708), 52.0f,
         { "warlock fel domination", "prepare instant out-of-combat pet recovery before demon summon", 18708, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, needsPetSummon && !player->IsInCombat() && summonPetSpell && IsSpellReady(player, summonPetSpell), 51.0f,
+    AddDecisionCandidate(candidates, needsPetSummon && !summonUnderThreat && !player->IsInCombat() && summonPetSpell && IsSpellReady(player, summonPetSpell), 51.0f,
         { summonPetName, summonPetReasonRecover, summonPetSpell, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !isAfflictionWarlock && !player->HasAura(25228) && IsSpellReady(player, 19028), 45.0f,
         { "warlock soul link", "maintain soul link when pet is available", 19028, playerbot::PvpClassSpellContext::TargetMode::Self });
@@ -7055,7 +7093,14 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "warrior disarm", "disarm threatening melee weapon users", 81492, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyMeleeTarget ? nearbyMeleeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !warriorGapCloserInFlight && canDisarmNearbyMeleeThreat && !inDefensiveStance && IsSpellReady(player, 81492) && IsSpellReady(player, 71) && player->GetPower(POWER_RAGE) >= 200, 57.0f,
         { "warrior defensive stance", "swap defensive before disarm against melee", 71, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, !warriorGapCloserInFlight && tauntTarget && !inDefensiveStance && !shouldUseInterceptGapCloser && IsSpellReady(player, 71), 57.2f,
+    // Not while a gap closer is wanted. SelectWarriorTauntTarget falls back to
+    // the kill target whenever it is not attacking the warrior - the whole of
+    // an out-of-combat approach - and this swap outranks the Battle Stance one
+    // Charge waits on. Taunt needs Defensive Stance and Charge needs Battle, so
+    // a protection warrior swapped back and forth all the way in and arrived
+    // without ever charging. Intercept was already exempt, but only once the
+    // rage was there; "wanted" is what drives the stance swaps (see above).
+    AddDecisionCandidate(candidates, !warriorGapCloserInFlight && tauntTarget && !inDefensiveStance && !gapCloseWanted && IsSpellReady(player, 71), 57.2f,
         { "warrior defensive stance", "swap defensive before taunt", 71, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !warriorGapCloserInFlight && revengeReady && !inDefensiveStance && IsSpellReady(player, 71), 57.1f,
         { "warrior defensive stance", "swap defensive before revenge", 71, playerbot::PvpClassSpellContext::TargetMode::Self });
@@ -8811,9 +8856,33 @@ bool PvpCore::TryCastOpenWorldBuff(Player* player)
         // Voidwalker tanks the grind; the Imp is the level-1 fallback. There
         // are no soul shard costs on this realm, so no shard check.
         uint32 const summonSpellId = SelectWarlockFallbackSummonSpell(player);
+        SpellInfo const* summonSpellInfo = summonSpellId ? sSpellMgr->GetSpellInfo(summonSpellId) : nullptr;
 
-        if (summonSpellId && IsSpellReady(player, summonSpellId) && player->CastSpell(player, summonSpellId, false) == SPELL_CAST_OK)
-            return true;
+        // Ten seconds of cast time, and Spell::prepare refuses cast time on the
+        // move. A bot out here is nearly always walking somewhere, so this
+        // failed almost every time and the warlock met its next fight without
+        // a demon. Stop for it the way the bot stops to eat - only with nobody
+        // around who could use the ten seconds (the mount rule's range), never
+        // in the saddle, mid-fall or on a flight path, and not inside the
+        // global cooldown the last buff started. A stop the core refuses
+        // anyway is not tried again for a while: one repeated every tick would
+        // hold the bot still until its walk gave up on it.
+        if (summonSpellInfo && IsSpellReady(player, summonSpellId) &&
+            !player->GetSpellHistory()->HasGlobalCooldown(summonSpellInfo) &&
+            !player->IsMounted() && !player->IsInFlight() && !player->Unit::IsFalling() &&
+            !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kWarlockOpenWorldSummonRetryToken) &&
+            !HasNearbyHostilePlayer(player, playerbot::PLAYERBOT_MOUNT_ENEMY_AWARENESS_RANGE, false))
+        {
+            // Only the spline: the walk's own movement order waits out the
+            // cast and carries on by itself afterwards.
+            if (player->isMoving())
+                player->StopMoving();
+
+            if (player->CastSpell(player, summonSpellId, false) == SPELL_CAST_OK)
+                return true;
+
+            playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kWarlockOpenWorldSummonRetryToken, std::chrono::seconds(30));
+        }
     }
 
     if (player->GetClass() == CLASS_HUNTER && !player->GetPet() && !IsPetParkedByMount(player) &&
