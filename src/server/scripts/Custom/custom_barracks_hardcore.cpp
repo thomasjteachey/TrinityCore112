@@ -2306,7 +2306,7 @@ namespace BarracksHardcore
         // with its lid shut, so each further cache sits on the lid of the one
         // below it.
         constexpr float cacheStackHeight = 1.3f;
-        for (CustomLootChests::PlayerChestBuilder const& cache : chests)
+        for (CustomLootChests::PlayerChestBuilder& cache : chests)
         {
             itemsChested += cache.GetItemCount();
             if (cache.HasLoot() && cache.Summon(float(chestsSpawned) * cacheStackHeight))

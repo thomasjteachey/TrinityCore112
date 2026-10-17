@@ -484,8 +484,14 @@ void WorldSession::HandleLootMasterGiveOpcode(WorldPacket& recvData)
 
     LootItem& item = slotid >= loot->items.size() ? loot->quest_items[slotid - loot->items.size()] : loot->items[slotid];
 
+    // A row backed by a real item goes to the target as that item (Loot::HoldItem).
+    Item* held = slotid < loot->items.size() ? loot->GetHeldItem(slotid) : nullptr;
+    uint32 const count = held ? held->GetCount() : uint32(item.count);
+
     ItemPosCountVec dest;
-    InventoryResult msg = target->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, item.itemid, item.count);
+    InventoryResult msg = held
+        ? target->CanStoreItem(NULL_BAG, NULL_SLOT, dest, held)
+        : target->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, item.itemid, item.count);
     if (!item.AllowedForPlayer(target, true))
         msg = EQUIP_ERR_YOU_CAN_NEVER_USE_THAT_ITEM;
     if (msg != EQUIP_ERR_OK)
@@ -503,8 +509,10 @@ void WorldSession::HandleLootMasterGiveOpcode(WorldPacket& recvData)
     GuidSet looters = item.GetAllowedLooters();
 
     // now move item from loot to target inventory
-    Item* newitem = target->StoreNewItem(dest, item.itemid, true, item.randomPropertyId, looters);
-    target->SendNewItem(newitem, uint32(item.count), false, false, true);
+    Item* newitem = held
+        ? target->StoreLootedItem(dest, loot->TakeHeldItem(slotid))
+        : target->StoreNewItem(dest, item.itemid, true, item.randomPropertyId, looters);
+    target->SendNewItem(newitem, count, false, false, true);
     target->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_LOOT_ITEM, item.itemid, item.count);
     target->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_LOOT_TYPE, loot->loot_type, item.count);
     target->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_LOOT_EPIC_ITEM, item.itemid, item.count);

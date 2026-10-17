@@ -50,6 +50,7 @@ struct FactionEntry;
 struct ItemSetEffect;
 struct ItemTemplate;
 struct Loot;
+struct LootHeldItem;
 struct Mail;
 struct ScalingStatDistributionEntry;
 struct ScalingStatValuesEntry;
@@ -1282,6 +1283,9 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         InventoryResult CanUseAmmo(uint32 item) const;
         InventoryResult CanRollForItemInLFG(ItemTemplate const* item, WorldObject const* lootedObject) const;
         Item* StoreNewItem(ItemPosCountVec const& pos, uint32 item, bool update, int32 randomPropertyId = 0, GuidSet const& allowedLooters = GuidSet());
+        // StoreNewItem for a loot row backed by a real item (Loot::HoldItem):
+        // takes ownership of held.item and returns what now holds it.
+        Item* StoreLootedItem(ItemPosCountVec const& pos, LootHeldItem const& held);
         Item* StoreItem(ItemPosCountVec const& pos, Item* pItem, bool update);
         Item* EquipNewItem(uint16 pos, uint32 item, bool update);
         Item* EquipItem(uint16 pos, Item* pItem, bool update);

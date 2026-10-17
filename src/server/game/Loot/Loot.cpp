@@ -17,6 +17,7 @@
 
 #include "Loot.h"
 #include "Group.h"
+#include "Item.h"
 #include "ItemEnchantmentMgr.h"
 #include "ItemTemplate.h"
 #include "Log.h"
@@ -138,6 +139,12 @@ void Loot::clear()
         delete itr->second;
     PlayerNonQuestNonFFAConditionalItems.clear();
 
+    // Nobody took these, and nothing else knows they exist: no owner, no update
+    // queue, no database row.
+    for (auto const& held : HeldItems)
+        delete held.second.item;
+    HeldItems.clear();
+
     PlayersLooting.clear();
     items.clear();
     quest_items.clear();
@@ -160,6 +167,36 @@ void Loot::PreparePublicViewer(Player* player)
         return;
 
     FillNotNormalLootFor(player, true);
+}
+
+bool Loot::HoldItem(uint32 lootIndex, Item* item, uint32 transmogEntry)
+{
+    if (!item || lootIndex >= items.size() || HeldItems.count(lootIndex))
+        return false;
+
+    LootItem const& row = items[lootIndex];
+    if (row.freeforall || row.itemid != item->GetEntry())
+        return false;
+
+    HeldItems[lootIndex] = { item, transmogEntry };
+    return true;
+}
+
+Item* Loot::GetHeldItem(uint32 lootIndex) const
+{
+    auto const itr = HeldItems.find(lootIndex);
+    return itr != HeldItems.end() ? itr->second.item : nullptr;
+}
+
+LootHeldItem Loot::TakeHeldItem(uint32 lootIndex)
+{
+    auto const itr = HeldItems.find(lootIndex);
+    if (itr == HeldItems.end())
+        return {};
+
+    LootHeldItem const held = itr->second;
+    HeldItems.erase(itr);
+    return held;
 }
 
 // Inserts the item into the loot (called by LootTemplate processors)

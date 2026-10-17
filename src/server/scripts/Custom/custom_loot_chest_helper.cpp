@@ -55,10 +55,12 @@ void PlayerChestBuilder::AddStackableItem(uint32 itemId, uint32 count)
         return;
 
     // First, try to top off any existing stacks of the same item instead of
-    // creating additional entries in the loot list.
-    for (LootItem& item : _items)
+    // creating additional entries in the loot list. Never a row holding a real
+    // item: its count is that item's, and the extra would never be handed out.
+    for (ChestItem& entry : _items)
     {
-        if (item.itemid != itemId || item.count >= 255)
+        LootItem& item = entry.Listing;
+        if (entry.Instance || item.itemid != itemId || item.count >= 255)
             continue;
 
         uint32 const room = 255 - item.count;
@@ -73,8 +75,46 @@ void PlayerChestBuilder::AddStackableItem(uint32 itemId, uint32 count)
     while (count && _items.size() < MAX_NR_LOOT_ITEMS)
     {
         uint8 const stack = static_cast<uint8>(std::min<uint32>(count, 255));
-        _items.push_back(CreateLootItem(itemId, stack, 0, 0));
+        ChestItem entry;
+        entry.Listing = CreateLootItem(itemId, stack, 0, 0);
+        _items.push_back(std::move(entry));
         count -= stack;
+    }
+}
+
+namespace
+{
+    // A copy of one real item that belongs to nobody yet: every per-item field
+    // it carries, under a fresh guid.
+    //
+    // Item::CloneItem is not this. It copies the maker, the flags and the
+    // duration and nothing else, so the enchantments, gems, durability, charges
+    // and suffix - the whole point - would be lost. The fields are copied raw
+    // on purpose: SetEnchantment and SetItemRandomProperties talk to the item's
+    // owner and queue it for a save, and this copy must have no owner and sit
+    // in no update queue until a looter stores it. A queued item with no slot
+    // is deleted by the next _SaveInventory while the chest still points at it.
+    Item* CopyItemInstance(Item const* source)
+    {
+        Item* copy = Item::CreateItem(source->GetEntry(), source->GetCount());
+        if (!copy)
+            return nullptr;
+
+        // Everything after the owner and container guids, which the looter's
+        // store fills in: maker, gift maker, stack count, duration, spell
+        // charges, flags, all twelve enchantment slots (gems, socket bonus and
+        // temporary enchants among them), suffix factor, random property,
+        // durability and played time.
+        for (uint16 index = ITEM_FIELD_CREATOR; index < ITEM_END; ++index)
+            copy->SetUInt32Value(index, source->GetUInt32Value(index));
+
+        // Binding, refund and the BoP trade window belong to the old owner, not
+        // to the item. The looter's store binds it again by its template,
+        // exactly as it binds a fresh drop.
+        copy->RemoveFlag(ITEM_FIELD_FLAGS, ITEM_FIELD_FLAG_SOULBOUND | ITEM_FIELD_FLAG_REFUNDABLE | ITEM_FIELD_FLAG_BOP_TRADEABLE);
+
+        copy->SetText(source->GetText());
+        return copy;
     }
 }
 
@@ -90,7 +130,19 @@ bool PlayerChestBuilder::AddItem(Item* item)
     if (!item || _items.size() >= MAX_NR_LOOT_ITEMS)
         return false;
 
-    _items.push_back(CreateLootItem(item->GetEntry(), item->GetCount(), item->GetItemSuffixFactor(), item->GetItemRandomPropertyId()));
+    ChestItem entry;
+    entry.Listing = CreateLootItem(item->GetEntry(), item->GetCount(), item->GetItemSuffixFactor(), item->GetItemRandomPropertyId());
+
+    // A wrapped gift keeps what is inside it in character_gifts under its own
+    // guid, which a copy cannot have. It goes in by template, as it always did.
+    if (!item->IsWrapped())
+    {
+        entry.Instance.reset(CopyItemInstance(item));
+        if (entry.Instance && _player)
+            entry.TransmogEntry = _player->GetTransmogEntry(item->GetGUID());
+    }
+
+    _items.push_back(std::move(entry));
     return true;
 }
 
@@ -168,7 +220,7 @@ namespace
     }
 }
 
-GameObject* PlayerChestBuilder::Summon(float heightOffset) const
+GameObject* PlayerChestBuilder::Summon(float heightOffset)
 {
     if (!_player || !_chestEntry || (_items.empty() && !_money))
         return nullptr;
@@ -219,11 +271,20 @@ GameObject* PlayerChestBuilder::Summon(float heightOffset) const
     loot.loot_type = LOOT_CORPSE;
     loot.lootOwnerGUID.Clear();
 
-    for (LootItem& item : _items)
+    for (ChestItem& entry : _items)
     {
+        LootItem& item = entry.Listing;
         item.itemIndex = static_cast<uint32>(loot.items.size());
         loot.items.push_back(item);
         ++loot.unlootedCount;
+
+        // The row hands over the copy of the real item rather than a fresh one
+        // from the template. From here the chest's loot owns it. Should the loot
+        // refuse it, the row still pays out by template and the copy dies with
+        // this builder.
+        if (Item* copy = entry.Instance.release())
+            if (!loot.HoldItem(item.itemIndex, copy, entry.TransmogEntry))
+                entry.Instance.reset(copy);
     }
 
     // Coin is not an item and does not count towards unlootedCount; the

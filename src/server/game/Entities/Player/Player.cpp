@@ -14217,6 +14217,36 @@ Item* Player::StoreNewItem(ItemPosCountVec const& dest, uint32 item, bool update
     return pItem;
 }
 
+Item* Player::StoreLootedItem(ItemPosCountVec const& dest, LootHeldItem const& held)
+{
+    Item* item = held.item;
+    if (!item)
+        return nullptr;
+
+    // Read before the store: a merge into an existing stack deletes `item`.
+    uint32 const entry = item->GetEntry();
+    uint32 const count = item->GetCount();
+
+    // The item arrives with no owner, no binding and no database row yet
+    // (ITEM_NEW), and _StoreItem does the rest: owner, the template's binding,
+    // enchant and item durations, and the queue entry whose save inserts it
+    // under this player.
+    Item* stored = StoreItem(dest, item, true);
+
+    // The appearance follows the item, as it does through trade and mail.
+    if (stored == item && held.transmogEntry)
+        SetTransmog(stored, held.transmogEntry);
+
+    ItemAddedQuestCheck(entry, count);
+    UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_RECEIVE_EPIC_ITEM, entry, count);
+    UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_OWN_ITEM, entry, count);
+
+    if (stored)
+        DireMaulBeads::OnItemStored(this, entry, count);
+
+    return stored;
+}
+
 Item* Player::StoreItem(ItemPosCountVec const& dest, Item* pItem, bool update)
 {
     if (!pItem)
@@ -29208,12 +29238,25 @@ void Player::StoreLootItem(uint8 lootSlot, Loot* loot)
         return;
     }
 
+    // A row backed by a real item - a dead player's gear in their cache - hands
+    // over that item, enchants and all, rather than a fresh one from the template.
+    Item* held = (!qitem && !ffaitem) ? loot->GetHeldItem(lootSlot) : nullptr;
+    uint32 const count = held ? held->GetCount() : uint32(item->count);
+
     ItemPosCountVec dest;
-    InventoryResult msg = CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, item->itemid, item->count);
+    InventoryResult msg = held
+        ? CanStoreItem(NULL_BAG, NULL_SLOT, dest, held)
+        : CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, item->itemid, item->count);
     if (msg == EQUIP_ERR_OK)
     {
-        GuidSet looters = item->GetAllowedLooters();
-        Item* newitem = StoreNewItem(dest, item->itemid, true, item->randomPropertyId, looters);
+        Item* newitem = nullptr;
+        if (held)
+            newitem = StoreLootedItem(dest, loot->TakeHeldItem(lootSlot));
+        else
+        {
+            GuidSet looters = item->GetAllowedLooters();
+            newitem = StoreNewItem(dest, item->itemid, true, item->randomPropertyId, looters);
+        }
 
         if (qitem)
         {
@@ -29247,7 +29290,7 @@ void Player::StoreLootItem(uint8 lootSlot, Loot* loot)
 
         --loot->unlootedCount;
 
-        SendNewItem(newitem, uint32(item->count), false, false, true);
+        SendNewItem(newitem, count, false, false, true);
         DireMaulBeads::OnItemLooted(this, item->itemid);
         UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_LOOT_ITEM, item->itemid, item->count);
         UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_LOOT_TYPE, loot->loot_type, item->count);

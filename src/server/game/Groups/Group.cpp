@@ -1542,13 +1542,20 @@ void Group::CountTheRoll(Rolls::iterator rollI, Map* allowedMap)
 
                     ItemPosCountVec dest;
                     LootItem* item = &(roll->itemSlot >= roll->getLoot()->items.size() ? roll->getLoot()->quest_items[roll->itemSlot - roll->getLoot()->items.size()] : roll->getLoot()->items[roll->itemSlot]);
-                    InventoryResult msg = player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, roll->itemid, item->count);
+                    // A row backed by a real item goes to the winner as that item (Loot::HoldItem).
+                    Item* held = roll->itemSlot < roll->getLoot()->items.size() ? roll->getLoot()->GetHeldItem(roll->itemSlot) : nullptr;
+                    InventoryResult msg = held
+                        ? player->CanStoreItem(NULL_BAG, NULL_SLOT, dest, held)
+                        : player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, roll->itemid, item->count);
                     if (msg == EQUIP_ERR_OK)
                     {
                         item->is_looted = true;
                         roll->getLoot()->NotifyItemRemoved(roll->itemSlot);
                         roll->getLoot()->unlootedCount--;
-                        player->StoreNewItem(dest, roll->itemid, true, item->randomPropertyId, item->GetAllowedLooters());
+                        if (held)
+                            player->StoreLootedItem(dest, roll->getLoot()->TakeHeldItem(roll->itemSlot));
+                        else
+                            player->StoreNewItem(dest, roll->itemid, true, item->randomPropertyId, item->GetAllowedLooters());
                     }
                     else
                     {
@@ -1609,13 +1616,19 @@ void Group::CountTheRoll(Rolls::iterator rollI, Map* allowedMap)
                     if (rollvote == GREED)
                     {
                         ItemPosCountVec dest;
-                        InventoryResult msg = player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, roll->itemid, item->count);
+                        Item* held = roll->itemSlot < roll->getLoot()->items.size() ? roll->getLoot()->GetHeldItem(roll->itemSlot) : nullptr;
+                        InventoryResult msg = held
+                            ? player->CanStoreItem(NULL_BAG, NULL_SLOT, dest, held)
+                            : player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, roll->itemid, item->count);
                         if (msg == EQUIP_ERR_OK)
                         {
                             item->is_looted = true;
                             roll->getLoot()->NotifyItemRemoved(roll->itemSlot);
                             roll->getLoot()->unlootedCount--;
-                            player->StoreNewItem(dest, roll->itemid, true, item->randomPropertyId, item->GetAllowedLooters());
+                            if (held)
+                                player->StoreLootedItem(dest, roll->getLoot()->TakeHeldItem(roll->itemSlot));
+                            else
+                                player->StoreNewItem(dest, roll->itemid, true, item->randomPropertyId, item->GetAllowedLooters());
                         }
                         else
                         {

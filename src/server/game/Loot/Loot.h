@@ -157,6 +157,16 @@ struct TC_GAME_API LootItem
     GuidSet const& GetAllowedLooters() const { return allowedGUIDs; }
 };
 
+// A real item standing behind a loot row (Loot::HoldItem): taking the row hands
+// over this item, enchants, gems, wear and all, instead of a fresh one built from
+// the row's template. transmogEntry is the appearance it wore, which lives on
+// its owner rather than on the item.
+struct LootHeldItem
+{
+    Item* item = nullptr;
+    uint32 transmogEntry = 0;
+};
+
 struct NotNormalLootItem
 {
     uint8   index;                                          // position in quest_items or items;
@@ -258,6 +268,19 @@ struct TC_GAME_API Loot
     bool hasItemFor(Player const* player) const;
     bool hasOverThresholdItem() const;
 
+    // Back the row at lootIndex in `items` with a real item. On success the loot
+    // owns it: StoreLootItem, master loot and a won roll hand it over whole, and
+    // clear() (or the loot's own destruction) deletes whatever nobody took. The
+    // item must be out of the world, in no player's update queue and in no DB row.
+    //
+    // Refused for a free-for-all row, which every looter takes a copy of, so it
+    // has no one real item to give. The caller keeps the item when this returns
+    // false.
+    bool HoldItem(uint32 lootIndex, Item* item, uint32 transmogEntry = 0);
+    Item* GetHeldItem(uint32 lootIndex) const;
+    // Gives up ownership; the caller must store or delete the item.
+    LootHeldItem TakeHeldItem(uint32 lootIndex);
+
     private:
         void FillNotNormalLootFor(Player* player, bool presentAtLooting);
         NotNormalLootItemList* FillFFALoot(Player* player);
@@ -268,6 +291,9 @@ struct TC_GAME_API Loot
         NotNormalLootItemMap PlayerQuestItems;
         NotNormalLootItemMap PlayerFFAItems;
         NotNormalLootItemMap PlayerNonQuestNonFFAConditionalItems;
+
+        // Rows backed by a real item, by index in `items`. Owned; see HoldItem.
+        std::unordered_map<uint32, LootHeldItem> HeldItems;
 
         // All rolls are registered here. They need to know, when the loot is not valid anymore
         LootValidatorRefManager i_LootValidatorRefManager;

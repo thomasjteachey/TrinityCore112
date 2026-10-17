@@ -20,9 +20,11 @@
 
 #include "Duration.h"
 #include "GameObject.h"
+#include "Item.h"
 #include "Loot.h"
 #include "Player.h"
 #include "SharedDefines.h"
+#include <memory>
 #include <unordered_set>
 #include <vector>
 
@@ -49,6 +51,11 @@ public:
     uint32 GetItemCount() const { return uint32(_items.size()); }
     bool IsFull() const { return _items.size() >= MAX_NR_LOOT_ITEMS; }
     void AddStackableItem(uint32 itemId, uint32 count);
+    // Puts a copy of this exact item in the chest - enchants, gems, wear,
+    // charges, random suffix, maker's name and transmog - and the looter gets
+    // that copy, not a fresh one from the template. The original is untouched:
+    // whether it is destroyed is still the caller's decision.
+    //
     // FALSE when the chest refused it. A caller that destroys the item on the
     // assumption this succeeded is deleting it outright.
     bool AddItem(Item* item);
@@ -60,16 +67,29 @@ public:
     // heightOffset lifts the chest that far above the ground it lands on, so a
     // death that fills several chests can stack them instead of spawning them
     // inside each other.
-    GameObject* Summon(float heightOffset = 0.0f) const;
+    //
+    // The item copies move into the chest's loot, which deletes any nobody
+    // takes; a builder that never summons deletes its own.
+    GameObject* Summon(float heightOffset = 0.0f);
 
 private:
+    struct ChestItem
+    {
+        // The row as the loot window lists it.
+        LootItem Listing;
+        // The copy the row hands over; null for a row built from a template
+        // (beads, tokens, keys).
+        std::unique_ptr<Item> Instance;
+        uint32 TransmogEntry = 0;
+    };
+
     LootItem CreateLootItem(uint32 itemId, uint8 count, uint32 randomSuffix, int32 randomPropertyId) const;
 
     Player* _player = nullptr;
     uint32 _chestEntry = 0;
     Seconds _despawnTime = Seconds(0);
     uint32 _money = 0;
-    mutable std::vector<LootItem> _items;
+    std::vector<ChestItem> _items;
 };
 
 void CollectItemsWithQuality(Player* player, ItemQualities quality, PlayerChestBuilder& chest, std::vector<ItemLocation>& removedItems,
