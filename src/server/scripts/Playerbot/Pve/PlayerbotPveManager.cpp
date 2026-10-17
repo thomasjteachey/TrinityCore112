@@ -241,6 +241,11 @@ namespace
     // materialize inside 210 yards of the player they are approaching; after
     // landing, normal combat movement walks the remaining distance.
     constexpr float PvePlayerTeleportMinimumDistance = 210.0f;
+    // A held creature that is not fighting the bot is let go once it is this many
+    // times farther off than the picker that chose it reaches. Room for it to
+    // wander and for a path to bend, and nowhere near the hundreds of yards a
+    // stale selection turns up at.
+    constexpr float PveHeldCreatureLeashFactor = 2.0f;
 
     playerbot::PveConfig g_PveConfig;
 
@@ -14843,6 +14848,17 @@ namespace
         // no-ops, and the walk splines catch that case on the next move.
         if (bot->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING) && !(bot->GetLiquidStatus() & MAP_LIQUID_STATUS_IN_CONTACT))
             bot->SetSwim(false);
+
+        // Nor still holding whatever it had selected where it left. The fast
+        // tick resumes a held target before it looks for anything new, and on a
+        // near teleport that target still resolves, so the bot turned round and
+        // "engaged" the creature it had been grinding from where it landed: Fenel
+        // was sent at Roger six times on 2026-10-17 and went back for the same
+        // Fleeting Plainstrider every time, at 364 to 914 yards. Supply runs,
+        // relocations and trips home did the same. With nothing held, the tick
+        // drops a stale engagement by itself and picks afresh where it landed.
+        // Player::SetTarget is empty; selection only changes through this.
+        bot->SetSelection(ObjectGuid::Empty);
     }
 
     // How far a creature notices a bot: Creature::GetAttackDistance's own rule,
@@ -17952,6 +17968,38 @@ namespace
                 DisengagePveCombat(bot, state);
                 return;
             }
+
+        // Let go of a held creature that is nowhere near, unless it is fighting
+        // the bot.
+        //
+        // The held target is resumed before anything new is looked for, and
+        // nothing asked how far off it had got. Teleports clear the selection
+        // themselves (RestorePlayerbotTeleportVitals); this is for every other
+        // way of ending up far from it - a flight, an errand walk, a chase that
+        // never closed - which otherwise "engages" it from hundreds of yards.
+        //
+        // Measured against the picker that could have chosen it: the grind scan,
+        // or the devilsaur hunt's much wider sweep when this bot may hunt this
+        // one. Anything actually fighting the bot is kept however far it runs - a
+        // mob fleeing at low health, one being kited - and players are left to
+        // their own rules below. Companions are excluded for the same reason as
+        // there: their master's orders own their target, and "attack" may name
+        // anything the master can see.
+        if (target && target->GetTypeId() != TYPEID_PLAYER && state.masterGuid.IsEmpty() &&
+            !IsEngagedWithBot(bot, target) && !bot->IsInCombatWith(target))
+        {
+            Creature const* heldCreature = target->ToCreature();
+            float const pickReach = heldCreature && CanHuntDevilsaur(bot, heldCreature)
+                ? std::max(cfg.grindSearchRadius, cfg.devilsaurHuntSeekYards)
+                : cfg.grindSearchRadius;
+            if (!bot->IsWithinDistInMap(target, pickReach * PveHeldCreatureLeashFactor))
+            {
+                TC_LOG_DEBUG("playerbots.pve", "Bot {} lets go of {} at {:.0f}y; nothing that far off is its fight.",
+                    bot->GetName(), target->GetName(), bot->GetDistance(target));
+                DisengagePveCombat(bot, state);
+                return;
+            }
+        }
 
         // Zone guardians hunt: an intruder outranks whatever creature is being
         // farmed. Without this the guardian only ever notices players between
