@@ -2711,6 +2711,29 @@ uint32 Battleground::CountPreparationSeatsHeldByClones(uint32 team)
     return clones > promised ? clones - promised : 0;
 }
 
+uint32 Battleground::CountUnclaimedPreparationSeats(uint32 team) const
+{
+    if (!m_IsBotFillMatch || GetStatus() != STATUS_WAIT_JOIN || (team != ALLIANCE && team != HORDE))
+        return 0;
+
+    // Everyone in counts, clones included, then everyone on the way: people
+    // invited and clones still loading. The same sum the bot fill keeps under
+    // the team size, so a seat counted free here is one it will not fill.
+    uint32 held = GetInvitedCount(team) + m_BotFillSeatsOnTheWay[GetTeamIndexByTeamId(team)];
+    for (auto const& [guid, participant] : m_Players)
+        if (participant.Team == team)
+            ++held;
+
+    uint32 const seats = GetMaxPlayersPerTeam();
+    return seats > held ? seats - held : 0;
+}
+
+void Battleground::SetBotFillSeatsOnTheWay(uint32 team, uint32 count)
+{
+    if (team == ALLIANCE || team == HORDE)
+        m_BotFillSeatsOnTheWay[GetTeamIndexByTeamId(team)] = count;
+}
+
 // A reservation lasts while its holder is still invited here and not yet in:
 // through the invite, the click on Enter Battle and the loading screen. A
 // lapsed invite, a logout or the arrival itself ends it.

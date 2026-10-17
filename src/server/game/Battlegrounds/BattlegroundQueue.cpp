@@ -1225,11 +1225,13 @@ bool BattlegroundQueue::TryStartBotFilledMatch(BattlegroundTypeId bgTypeId, PvPD
     return true;
 }
 
-// Arenas never enter the free-slot queue, so they are found here by type. Only
-// clones' seats are offered, never an empty one: a seat still empty may have a
-// clone loading into it, and the person taking it would make the team one too
-// many. The countdown is held while anyone is on the way in and restarts when
-// they arrive (Battleground::HandOverPreparationSeat).
+// Arenas never enter the free-slot queue, so they are found here by type. A
+// clone's seat is offered, and so is a seat nobody holds yet - not even a clone
+// still loading into it (Battleground::CountUnclaimedPreparationSeats), which
+// is what lets two people who queue a second apart meet: the first one's match
+// has no clones yet when the second clicks. A clone's seat holds the countdown
+// while its taker is on the way in and restarts it when they arrive
+// (Battleground::HandOverPreparationSeat).
 void BattlegroundQueue::OfferPreparationSeats(BattlegroundTypeId bgTypeId, BattlegroundBracketId bracket_id,
     uint8 arenaType, uint32 queueWaitMs)
 {
@@ -1268,21 +1270,39 @@ void BattlegroundQueue::OfferPreparationSeats(BattlegroundTypeId bgTypeId, Battl
         Battleground* target = nullptr;
         uint32 targetTeam = 0;
         uint32 targetPeople = 0;
+        uint32 targetMatchPeople = 0;
+        bool targetUnclaimed = false;
         for (Battleground* bg : arenas)
         {
+            // A shuffle deals its own sides every round, so what matters is
+            // that people end up in one match: the one with the most already
+            // in or on the way.
+            uint32 const matchPeople = bg->IsSoloShuffle() ? CountPeopleOnTeam(bg, ALLIANCE) + CountPeopleOnTeam(bg, HORDE) : 0;
             for (uint32 team : { uint32(ALLIANCE), uint32(HORDE) })
             {
-                if (bg->CountPreparationSeatsHeldByClones(team) < groupSize)
+                // Seats nobody holds first, so no clone has to stand down.
+                bool const unclaimed = bg->CountUnclaimedPreparationSeats(team) >= groupSize;
+                if (!unclaimed && bg->CountPreparationSeatsHeldByClones(team) < groupSize)
                     continue;
 
-                // The side with fewer people on it, so somebody queuing alone
-                // is set against the person already waiting, not beside them.
+                // Then the side with fewer people on it, so somebody queuing
+                // alone is set against the person already waiting, not beside them.
                 uint32 const people = CountPeopleOnTeam(bg, team);
-                if (!target || people < targetPeople)
+                bool better = !target;
+                if (!better && matchPeople != targetMatchPeople)
+                    better = matchPeople > targetMatchPeople;
+                else if (!better && people != targetPeople)
+                    better = people < targetPeople;
+                else if (!better)
+                    better = unclaimed && !targetUnclaimed;
+
+                if (better)
                 {
                     target = bg;
                     targetTeam = team;
                     targetPeople = people;
+                    targetMatchPeople = matchPeople;
+                    targetUnclaimed = unclaimed;
                 }
             }
         }
@@ -1299,11 +1319,12 @@ void BattlegroundQueue::OfferPreparationSeats(BattlegroundTypeId bgTypeId, Battl
         if (!InviteGroupToBG(ginfo, target, targetTeam))
             continue;
 
-        for (auto const& playerEntry : ginfo->Players)
-            target->ReservePreparationSeat(playerEntry.first, targetTeam);
+        if (!targetUnclaimed)
+            for (auto const& playerEntry : ginfo->Players)
+                target->ReservePreparationSeat(playerEntry.first, targetTeam);
 
-        TC_LOG_DEBUG("bg.battleground", "BattlegroundQueue::OfferPreparationSeats: invited {} player(s) into clones' seats on team {} of preparing arena instance {} (bracket {}, arenaType {}).",
-            groupSize, targetTeam, target->GetInstanceID(), uint32(bracket_id), uint32(arenaType));
+        TC_LOG_DEBUG("bg.battleground", "BattlegroundQueue::OfferPreparationSeats: invited {} player(s) into {} on team {} of preparing arena instance {} (bracket {}, arenaType {}).",
+            groupSize, targetUnclaimed ? "open seats" : "clones' seats", targetTeam, target->GetInstanceID(), uint32(bracket_id), uint32(arenaType));
     }
 }
 

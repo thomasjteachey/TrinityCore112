@@ -759,10 +759,20 @@ std::vector<LiveMatch> CollectLiveMatches()
     return matches;
 }
 
+// The queue seats people in a preparing arena's open seats
+// (Battleground::CountUnclaimedPreparationSeats), so it has to know which of
+// them a clone is already loading into.
+void PublishSeatsOnTheWay(Battleground* bg, uint32 instanceId)
+{
+    for (uint32 team : { uint32(ALLIANCE), uint32(HORDE) })
+        bg->SetBotFillSeatsOnTheWay(team, CountPendingOfflineClones(instanceId, team));
+}
+
 void FillMatch(LiveMatch& match, uint32& totalClones, uint32 nowMs)
 {
     Battleground* bg = match.bg;
     uint32 const cap = FillCapForMatch(bg);
+    PublishSeatsOnTheWay(bg, match.instanceId);
 
     if (!bg->IsBotFillMatch())
     {
@@ -818,6 +828,8 @@ void FillMatch(LiveMatch& match, uint32& totalClones, uint32 nowMs)
             AddClonesToTeam(bg, team, wanted, match.tally, usedSources, matchClones, totalClones, nowMs);
         }
     }
+
+    PublishSeatsOnTheWay(bg, match.instanceId);
 }
 
 // Under sustained hard pressure the governor asks for one bot at a time to go;

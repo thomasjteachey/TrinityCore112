@@ -607,6 +607,14 @@ class TC_GAME_API Battleground
         // Seats a person could still take from a clone on `team`: its clones
         // less the ones already promised. Zero once the gates are open.
         uint32 CountPreparationSeatsHeldByClones(uint32 team);
+        // Seats on `team` that nobody holds yet, until the gates open: no
+        // person in or invited, no bot in, and no clone the bot fill has asked
+        // for and is still loading (SetBotFillSeatsOnTheWay). A person can be
+        // invited straight into one; no clone has to stand down for them.
+        uint32 CountUnclaimedPreparationSeats(uint32 team) const;
+        // How many clones the bot fill has requested for `team` that have not
+        // arrived yet (PlayerbotBgFillDriver keeps it current).
+        void SetBotFillSeatsOnTheWay(uint32 team, uint32 count);
         void ReservePreparationSeat(ObjectGuid guid, uint32 team) { m_PreparationSeatTakers[guid] = team; }
         bool HasPreparationSeatReservation(ObjectGuid guid) const { return m_PreparationSeatTakers.count(guid) != 0; }
         // CENTURION queue pool (Miscellaneous/TournamentMode.h): the queue only
@@ -1140,7 +1148,8 @@ class TC_GAME_API Battleground
         bool   m_IsBotFillMatch;                            // padded with transient clones, see IsBotFillMatch()
         bool   m_IsBotFillRefused;                          // see IsBotFillRefused()
         std::map<ObjectGuid, uint32> m_PreparationSeatTakers; // invited into a clone's seat -> team, see CountPreparationSeatsHeldByClones()
-        bool   m_IsTournamentPool;                          // made from the tournament queue pool, see IsTournamentPool()
+        uint32 m_BotFillSeatsOnTheWay[PVP_TEAMS_COUNT] = { }; // see SetBotFillSeatsOnTheWay()
+        bool   m_IsTournamentPool;                         // made from the tournament queue pool, see IsTournamentPool()
         bool   m_IsArena;
         PvPTeamId _winnerTeamId;
         int32  m_StartDelayTime;
