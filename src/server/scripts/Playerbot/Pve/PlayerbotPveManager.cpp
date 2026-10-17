@@ -2571,7 +2571,7 @@ namespace
 
                 // A stale SWIMMING flag from a just-left pond would run the whole
                 // retreat at swim speed (MoveTowardThrottled guards this too).
-                if (bot->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING) && !bot->IsInWater())
+                if (bot->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING) && !(bot->GetLiquidStatus() & MAP_LIQUID_STATUS_IN_CONTACT))
                     bot->SetSwim(false);
 
                 // Straight back from the target, not around it.
@@ -4058,7 +4058,7 @@ namespace
             // The stabilization pass toggles the swim flag from terrain state,
             // but it can lag a hop: a spline launched with a stale SWIMMING
             // flag runs its entire land leg at swim speed.
-            if (bot->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING) && !bot->IsInWater())
+            if (bot->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING) && !(bot->GetLiquidStatus() & MAP_LIQUID_STATUS_IN_CONTACT))
                 bot->SetSwim(false);
 
             WalkPathResult const pathResult = CheckWalkPath(bot, stepX, stepY, stepZ);
@@ -4148,7 +4148,7 @@ namespace
         playerbot::PvpClassActions::PrepareForExplicitMovement(bot);
         // A stale SWIMMING flag from a just-left pond would run the whole
         // spline at swim speed.
-        if (bot->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING) && !bot->IsInWater())
+        if (bot->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING) && !(bot->GetLiquidStatus() & MAP_LIQUID_STATUS_IN_CONTACT))
             bot->SetSwim(false);
         bot->GetMotionMaster()->MovePoint(0, destination, true);
     }
@@ -14841,7 +14841,7 @@ namespace
         // cleared outright, because a relocation can legitimately land a bot in
         // a lake; on a far teleport the test simply reads the old map and
         // no-ops, and the walk splines catch that case on the next move.
-        if (bot->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING) && !bot->IsInWater())
+        if (bot->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING) && !(bot->GetLiquidStatus() & MAP_LIQUID_STATUS_IN_CONTACT))
             bot->SetSwim(false);
     }
 

@@ -1392,25 +1392,20 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             // the surrounding floor until it surfaces next to the target -
             // Violet Hold's flooded cell showed this as bots "teleporting under
             // the arena". Surface the bot first (a player would be treading
-            // water there). Then: if the straight swim is unobstructed keep it,
-            // exactly as before - open water, and no walking-on-the-surface
-            // look from riding water polys. If geometry is in the way, walk the
-            // same mmap segments the land movers use: water polys are walkable
-            // for players and join the shore, so a real route normally exists.
-            // Only when Detour has nothing to offer either does the old direct
-            // spline go out, so no bot ends up worse off than before.
+            // water there), then walk the same mmap segments the land movers
+            // use: water polys are walkable for players and join the shore, so
+            // a real route normally exists. A bot riding those polys at the
+            // surface counts as swimming (Unit::ProcessTerrainStatusUpdate), so
+            // this is every river and lake crossing, not only a bot below the
+            // surface. A straight swim used to win whenever line of sight was
+            // clear, but that test sees WMOs and gameobjects, not terrain: a
+            // line to a target up the bank ran through the bank. Only when
+            // Detour has nothing to offer does the direct spline go out.
             SurfacePlayerbotInDeepWater(player);
-
-            Map const* map = player->FindMap();
-            bool const straightSwimClear = map && map->isInLineOfSight(
-                player->GetPositionX(), player->GetPositionY(), player->GetPositionZ() + 1.0f,
-                safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ() + 1.0f,
-                player->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing);
 
             Position segmentDestination;
             PathType pathType = PathType(0);
-            if (!straightSwimClear &&
-                TryBuildBattlegroundSegmentDestination(player, BuildCollisionSafeDestination(player, destination), segmentDestination, &pathType))
+            if (TryBuildBattlegroundSegmentDestination(player, BuildCollisionSafeDestination(player, destination), segmentDestination, &pathType))
             {
                 motionMaster->MovePoint(0, segmentDestination, true);
                 EmitBattlegroundGmDebug(player,
@@ -1421,7 +1416,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             {
                 motionMaster->MovePoint(0, safeDestination, false);
                 EmitBattlegroundGmDebug(player,
-                    std::string("movepoint=swim-direct reason=") + (straightSwimClear ? "clear" : "no-nav") +
+                    std::string("movepoint=swim-direct reason=no-nav") +
                     " destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 0);
             }
         }
