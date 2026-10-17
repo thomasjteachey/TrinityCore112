@@ -641,6 +641,22 @@ namespace
             guid, uint32(kind), id, uint32(position)).c_str());
     }
 
+    // Player::EquipItem gives a dead character an item but not its stats, and
+    // taking an item off always takes them away - so a swap on a dead
+    // character (logged in as a ghost, restored from the GM command) would
+    // leave it short until it relogged. What EquipItem holds back from the
+    // dead, given here. Leaving a match resurrects before the swap.
+    void ApplyStatsIfDead(Player* player, Item* item)
+    {
+        if (!item || player->IsAlive() || !item->IsEquipped())
+            return;
+
+        if (ItemTemplate const* proto = item->GetTemplate(); proto && proto->ItemSet)
+            AddItemsSetItem(player, item);
+
+        player->_ApplyItemMods(item, item->GetSlot(), true);
+    }
+
     // The character keeps the item; the item simply stops being in its bags for
     // the length of the match. The same moves as an account bank deposit: out of
     // the inventory, out of `character_inventory`, and its own row written back,
@@ -705,7 +721,10 @@ namespace
             }
 
             if (wanted)
+            {
                 issued = player->EquipNewItem(dest, wanted, true);
+                ApplyStatsIfDead(player, issued);
+            }
         }
         else
         {
@@ -929,7 +948,7 @@ namespace
             uint16 dest = 0;
             if (player->CanEquipItem(slot, dest, item, false, false) == EQUIP_ERR_OK)
             {
-                player->EquipItem(dest, item, true);
+                ApplyStatsIfDead(player, player->EquipItem(dest, item, true));
                 return;
             }
         }

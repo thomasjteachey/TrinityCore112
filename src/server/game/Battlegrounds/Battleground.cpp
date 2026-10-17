@@ -1879,6 +1879,21 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
 
     if (player)
     {
+        // Alive before the gear goes back on: Player::EquipItem gives a dead
+        // character an item but not its stats, while taking the loadout off
+        // takes its stats away all the same - so leaving a match dead left the
+        // character short its own gear's stats until it relogged, and the next
+        // match's loadout took them off a second time (Stonedsoul fought a
+        // shuffle at 2k health). Spirit of Redemption is a body that is not
+        // dead yet; it goes first, as below.
+        if (player->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION))
+            player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
+        if (!player->IsAlive())
+        {
+            player->ResurrectPlayer(1.0f);
+            player->SpawnCorpseBones();
+        }
+
         // Its own gear back, before anything else undoes the join. A character
         // that is not here to be handed it - logged out, disconnected, cut off
         // by a crash - is given it at its next login instead.
@@ -1893,19 +1908,9 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
 
         RemoveSpectator(player);
 
-        // should remove spirit of redemption
-        if (player->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION))
-            player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
-
         player->RemoveAurasByType(SPELL_AURA_MOUNTED);
 
         ClearCombatControl(player);
-
-        if (!player->IsAlive())                              // resurrect on exit
-        {
-            player->ResurrectPlayer(1.0f);
-            player->SpawnCorpseBones();
-        }
     }
     else
     {
