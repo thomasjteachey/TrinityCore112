@@ -12196,7 +12196,16 @@ namespace
 bool ShouldLogPlayerbotMotionStop(Unit const* unit)
 {
     Player const* player = unit ? unit->ToPlayer() : nullptr;
-    return player && player->InBattleground() && player->GetName().rfind("Bot", 0) == 0;
+    if (!player || !player->InBattleground())
+        return false;
+
+    // A bot never holds a socket: the persistent ones run on a virtual session,
+    // the battleground fill clones on a transient one. Mirrors the MotionMaster
+    // copy. Deliberately not a name test - the PvP bots are being renamed by the
+    // community campaign, and the clones that actually fight a battleground carry
+    // a generated "Obcm..." name rather than their source character's anyway.
+    WorldSession const* session = player->GetSession();
+    return session && (session->IsVirtualSession() || session->IsTransientPlayerSession());
 }
 
 void LogPlayerbotStopMovingTrace(Unit const* unit, char const* phase)

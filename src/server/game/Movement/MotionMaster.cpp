@@ -61,10 +61,25 @@ inline bool IsStatic(MovementGenerator* movement)
     return (movement == GetIdleMovementGenerator());
 }
 
+namespace
+{
+// A bot never holds a socket: the persistent ones run on a virtual session,
+// the battleground fill clones on a transient one. Deliberately not a name
+// test - the PvP bots are being renamed by the community campaign, and the
+// clones that actually fight a battleground carry a generated "Obcm..." name
+// rather than their source character's anyway.
+bool IsSocketlessPlayerbotMover(Unit const* owner)
+{
+    Player const* player = owner ? owner->ToPlayer() : nullptr;
+    WorldSession const* session = player ? player->GetSession() : nullptr;
+    return session && (session->IsVirtualSession() || session->IsTransientPlayerSession());
+}
+}
+
 bool ShouldLogPlayerbotMotionMaster(Unit const* owner)
 {
     Player const* player = owner ? owner->ToPlayer() : nullptr;
-    return player && player->InBattleground() && player->GetName().rfind("Bot", 0) == 0;
+    return player && player->InBattleground() && IsSocketlessPlayerbotMover(owner);
 }
 
 void LogPlayerbotMotionMasterTrace(Unit const* owner, char const* phase, MovementGenerator const* movement = nullptr, MovementSlot slot = MAX_MOTION_SLOT)
@@ -91,13 +106,6 @@ void LogPlayerbotMotionMasterTrace(Unit const* owner, char const* phase, Movemen
 
 namespace
 {
-bool IsSocketlessPlayerbotMover(Unit const* owner)
-{
-    Player const* player = owner ? owner->ToPlayer() : nullptr;
-    WorldSession const* session = player ? player->GetSession() : nullptr;
-    return session && (session->IsVirtualSession() || session->IsTransientPlayerSession());
-}
-
 bool NearlyEqual(float lhs, float rhs, float epsilon = 0.05f)
 {
     return std::fabs(lhs - rhs) <= epsilon;
