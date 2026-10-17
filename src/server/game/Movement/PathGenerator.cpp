@@ -74,7 +74,11 @@ bool PathGenerator::CalculatePath(float destX, float destY, float destZ, bool fo
 {
     float x, y, z;
     _source->GetPosition(x, y, z);
+    return CalculatePath(x, y, z, destX, destY, destZ, forceDest);
+}
 
+bool PathGenerator::CalculatePath(float x, float y, float z, float destX, float destY, float destZ, bool forceDest)
+{
     if (!Trinity::IsValidMapCoord(destX, destY, destZ) || !Trinity::IsValidMapCoord(x, y, z))
         return false;
 

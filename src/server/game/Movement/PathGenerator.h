@@ -64,6 +64,9 @@ class TC_GAME_API PathGenerator
         // Calculate the path from owner to given destination
         // return: true if new path was calculated, false otherwise (no change needed)
         bool CalculatePath(float destX, float destY, float destZ, bool forceDest = false);
+        // The same from an arbitrary start on the owner's map: the route the
+        // owner would get if it stood there.
+        bool CalculatePath(float x, float y, float z, float destX, float destY, float destZ, bool forceDest = false);
         bool IsInvalidDestinationZ(Unit const* target) const;
         bool HasNavigationData() const;
 

@@ -3898,28 +3898,41 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return blockedAt(1.5f) && blockedAt(4.0f);
     }
 
-    // Whether the walking route the pathfinder gives this bot to the point
-    // runs into a standing gate somewhere along it.
-    bool IsRouteThroughStandingGate(Player* player, GuidVector const& gates, Position const& destination)
+    // How many standing gates the walking route the pathfinder gives from the
+    // start to the point runs into, a gate counted once however many legs
+    // touch it. When the route has to arrive, -1 unless it reaches the point;
+    // otherwise whatever route there is counts, and with none the straight
+    // line decides.
+    int32 CountRouteGateCrossings(Player* player, GuidVector const& gates, Position const& start,
+        Position const& destination, bool mustArrive)
     {
-        if (gates.empty())
-            return false;
+        if (gates.empty() && !mustArrive)
+            return 0;
 
         PathGenerator path(player);
-        path.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
+        path.CalculatePath(start.GetPositionX(), start.GetPositionY(), start.GetPositionZ(),
+            destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
         Movement::PointsArray const& points = path.GetPath();
-        if (points.size() < 2)
-            return CrossesStandingGate(player, gates, player->GetPosition(), destination);
+        if (mustArrive && (points.size() < 2 || (path.GetPathType() & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE |
+            PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT | PATHFIND_FARFROMPOLY_END))))
+            return -1;
 
+        if (points.size() < 2)
+            return CrossesStandingGate(player, gates, start, destination) ? 1 : 0;
+
+        int32 crossings = 0;
+        bool atGate = false;
         for (std::size_t i = 1; i < points.size(); ++i)
         {
             Position const from(points[i - 1].x, points[i - 1].y, points[i - 1].z);
             Position const to(points[i].x, points[i].y, points[i].z);
-            if (CrossesStandingGate(player, gates, from, to))
-                return true;
+            bool const crosses = CrossesStandingGate(player, gates, from, to);
+            if (crosses && !atGate)
+                ++crossings;
+            atGate = crosses;
         }
 
-        return false;
+        return crossings;
     }
 
     // Whether the pathfinder gives this bot a route that actually arrives
@@ -3953,74 +3966,126 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return true;
     }
 
-    struct TeleporterRoute
+    // How a bot gets past the gates still standing between it and a place. A
+    // bot inside a keep (Isle of Conquest, after a respawn) or behind its own
+    // walls (Strand of the Ancients' defenders) would otherwise stand at the
+    // closed gate forever: the spline guard refuses the route through it. So
+    // when its walking route runs into a standing gate, it takes a teleporter,
+    // or a ledge to drop off (a drop exit declared with no island), that it can
+    // walk to without meeting a gate and that leaves fewer gates on the rest
+    // of the way. Behind several walls it gets past them one hop at a time.
+    //
+    // Both stretches are walking routes. Straight lines, tested only against
+    // the gates, took the Defender's Portals for ways out: each stands outside
+    // its gate, and the line to it from inside slips past the gate's edge
+    // through a wall the test does not see, so defenders walked into their
+    // own Mauve Amethyst and Yellow Moon gates on the way to them.
+    struct GateBypassRoute
     {
         uint32 decidedMs = 0;
         Position destination;
+        // The walking route to the destination runs into a standing gate.
+        bool blocked = false;
         ObjectGuid teleporterGuid;
+        int32 ledge = -1;
+
+        bool HasWayPast() const { return !teleporterGuid.IsEmpty() || ledge >= 0; }
     };
 
-    std::unordered_map<uint64, TeleporterRoute> g_TeleporterRouteByBot;
+    std::unordered_map<uint64, GateBypassRoute> g_GateBypassByBot;
     // A route is decided again this often, or as soon as the destination moves.
-    constexpr uint32 PLAYERBOT_TELEPORTER_ROUTE_RECHECK_MS = 3 * IN_MILLISECONDS;
-    constexpr float PLAYERBOT_TELEPORTER_ROUTE_REDECIDE_DISTANCE = 15.0f;
+    constexpr uint32 PLAYERBOT_GATE_BYPASS_RECHECK_MS = 3 * IN_MILLISECONDS;
+    constexpr float PLAYERBOT_GATE_BYPASS_REDECIDE_DISTANCE = 15.0f;
+    // Each way tried costs up to two path searches, so only the cheapest few
+    // are. The cheap ones are often across the very walls in the way:
+    // Strand's defenders reach the Green Emerald's front by the fourth.
+    constexpr std::size_t PLAYERBOT_GATE_BYPASS_CANDIDATES = 6;
 
-    // A bot inside a keep (Isle of Conquest, after a respawn) or behind its
-    // own walls (Strand of the Ancients' defenders) would otherwise stand at
-    // the closed gate forever: the spline guard refuses the route through it.
-    // When the walking route is blocked and the battleground has a teleporter
-    // whose exit is clear of the gates, the bot walks to it and uses it.
-    // Returns true while it owns the bot's movement.
-    bool TryRouteThroughTeleporter(Player* player, Battleground* battleground, Position const& destination)
+    GateBypassRoute DecideGateBypass(Player* player, Battleground* battleground, Position const& destination)
     {
-        std::vector<BattlegroundTeleporter> teleporters;
-        battleground->GetTeleporters(player->GetGUID(), teleporters);
-        if (teleporters.empty())
-            return false;
+        GuidVector gates;
+        battleground->GetStandingGates(gates);
+        if (gates.empty())
+            return GateBypassRoute();
 
         uint64 const botKey = player->GetGUID().GetRawValue();
         uint32 const nowMs = GameTime::GetGameTimeMS();
-        TeleporterRoute route;
-        bool const known = playerbot::LockedGetCopy(g_TeleporterRouteByBot, botKey, route);
-        if (!known || nowMs - route.decidedMs >= PLAYERBOT_TELEPORTER_ROUTE_RECHECK_MS ||
-            route.destination.GetExactDist2d(&destination) > PLAYERBOT_TELEPORTER_ROUTE_REDECIDE_DISTANCE)
+        GateBypassRoute previous;
+        bool const known = playerbot::LockedGetCopy(g_GateBypassByBot, botKey, previous) &&
+            previous.destination.GetExactDist2d(&destination) <= PLAYERBOT_GATE_BYPASS_REDECIDE_DISTANCE;
+        if (known && nowMs - previous.decidedMs < PLAYERBOT_GATE_BYPASS_RECHECK_MS)
+            return previous;
+
+        GateBypassRoute route;
+        route.decidedMs = nowMs;
+        route.destination = destination;
+
+        int32 const crossings = CountRouteGateCrossings(player, gates, player->GetPosition(), destination, false);
+        route.blocked = crossings > 0;
+        if (route.blocked)
         {
-            route = TeleporterRoute();
-            route.decidedMs = nowMs;
-            route.destination = destination;
-
-            GuidVector gates;
-            battleground->GetStandingGates(gates);
-            if (IsRouteThroughStandingGate(player, gates, destination))
+            struct Way
             {
-                float bestCost = std::numeric_limits<float>::max();
-                for (BattlegroundTeleporter const& teleporter : teleporters)
-                {
-                    // Both straight stretches have to be clear of the gates:
-                    // a teleporter on the far side of the wall is no way out.
-                    if (CrossesStandingGate(player, gates, player->GetPosition(), teleporter.Entrance) ||
-                        CrossesStandingGate(player, gates, teleporter.Exit, destination))
-                        continue;
+                float cost;
+                ObjectGuid teleporterGuid;
+                int32 ledge;
+                Position entrance;
+                Position exit;
+            };
+            std::vector<Way> ways;
 
-                    float const cost = player->GetExactDist(&teleporter.Entrance) + teleporter.Exit.GetExactDist(&destination);
-                    if (cost < bestCost)
-                    {
-                        bestCost = cost;
-                        route.teleporterGuid = teleporter.GoGuid;
-                    }
-                }
+            std::vector<BattlegroundTeleporter> teleporters;
+            battleground->GetTeleporters(player->GetGUID(), teleporters);
+            for (BattlegroundTeleporter const& teleporter : teleporters)
+                ways.push_back({ player->GetExactDist(&teleporter.Entrance) + teleporter.Exit.GetExactDist(&destination),
+                    teleporter.GoGuid, -1, teleporter.Entrance, teleporter.Exit });
+
+            std::vector<BattlegroundDropExit> exits;
+            battleground->GetDropExits(player->GetGUID(), exits);
+            for (std::size_t i = 0; i < exits.size(); ++i)
+                if (exits[i].IslandRadius <= 0.0f)
+                    ways.push_back({ player->GetExactDist(&exits[i].Edge) + exits[i].Landing.GetExactDist(&destination),
+                        ObjectGuid::Empty, int32(i), exits[i].Edge, exits[i].Landing });
+
+            // Cheapest first, but the way taken last time ahead of the rest
+            // while it still holds: two ledges about as cheap would otherwise
+            // trade places as the bot walks between them.
+            std::sort(ways.begin(), ways.end(), [](Way const& a, Way const& b) { return a.cost < b.cost; });
+            if (known && previous.HasWayPast())
+                std::stable_partition(ways.begin(), ways.end(), [&previous](Way const& way)
+                    { return way.teleporterGuid == previous.teleporterGuid && way.ledge == previous.ledge; });
+
+            std::size_t tried = 0;
+            for (Way const& way : ways)
+            {
+                if (tried++ >= PLAYERBOT_GATE_BYPASS_CANDIDATES)
+                    break;
+                if (!IsWalkableRoute(player, gates, way.entrance))
+                    continue;
+
+                int32 const after = CountRouteGateCrossings(player, gates, way.exit, destination, true);
+                if (after < 0 || after >= crossings)
+                    continue;
+
+                route.teleporterGuid = way.teleporterGuid;
+                route.ledge = way.ledge;
+                break;
             }
-
-            playerbot::LockedSet(g_TeleporterRouteByBot, botKey, route);
         }
 
-        if (route.teleporterGuid.IsEmpty())
-            return false;
+        playerbot::LockedSet(g_GateBypassByBot, botKey, route);
+        return route;
+    }
 
-        GameObject* teleporter = player->FindMap() ? player->FindMap()->GetGameObject(route.teleporterGuid) : nullptr;
+    // Walks to the teleporter DecideGateBypass chose and uses it. Returns
+    // true while it owns the bot's movement.
+    bool UseBypassTeleporter(Player* player, ObjectGuid const& teleporterGuid)
+    {
+        uint64 const botKey = player->GetGUID().GetRawValue();
+        GameObject* teleporter = player->FindMap() ? player->FindMap()->GetGameObject(teleporterGuid) : nullptr;
         if (!teleporter || !teleporter->IsInWorld() || !teleporter->isSpawned())
         {
-            playerbot::LockedErase(g_TeleporterRouteByBot, botKey);
+            playerbot::LockedErase(g_GateBypassByBot, botKey);
             return false;
         }
 
@@ -4033,8 +4098,8 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         StopVirtualPlayerbotMovement(player);
         teleporter->Use(player);
         // Decided afresh from wherever it puts the bot.
-        playerbot::LockedErase(g_TeleporterRouteByBot, botKey);
-        EmitBattlegroundGmDebug(player, "objective-route=teleporter guid=" + route.teleporterGuid.ToString(), 1500);
+        playerbot::LockedErase(g_GateBypassByBot, botKey);
+        EmitBattlegroundGmDebug(player, "objective-route=teleporter guid=" + teleporterGuid.ToString(), 1500);
         return true;
     }
 
@@ -4120,75 +4185,27 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
     // Ancients' defenders start behind every wall they are sent out of, the
     // Defender's Portals only lead back in, and the way out is off the walls
     // by the turrets. Declared like an island exit but with no island
-    // (IslandRadius 0), so TryLeaveDropIsland never takes one; a bot uses it
-    // only when the walking route to where it is going runs into a standing
-    // gate, picks one it can walk to that puts it down nearer the place, and
-    // drops again from the next wall if one still stands in the way.
-    struct DropLedgeRoute
-    {
-        uint32 decidedMs = 0;
-        Position destination;
-        int32 ledge = -1;
-    };
-
-    std::unordered_map<uint64, DropLedgeRoute> g_DropLedgeRouteByBot;
-
-    bool TryRouteOverDropLedge(Player* player, Battleground* battleground, Position const& destination)
+    // (IslandRadius 0), so TryLeaveDropIsland never takes one. The bot walks
+    // to the edge of the ledge DecideGateBypass chose and is set down at its
+    // landing. Returns true while it owns the bot's movement.
+    bool TakeBypassLedge(Player* player, Battleground* battleground, int32 ledge)
     {
         std::vector<BattlegroundDropExit> exits;
         battleground->GetDropExits(player->GetGUID(), exits);
-        if (std::none_of(exits.begin(), exits.end(), [](BattlegroundDropExit const& exit) { return exit.IslandRadius <= 0.0f; }))
-            return false;
-
         uint64 const botKey = player->GetGUID().GetRawValue();
-        uint32 const nowMs = GameTime::GetGameTimeMS();
-        DropLedgeRoute route;
-        bool const known = playerbot::LockedGetCopy(g_DropLedgeRouteByBot, botKey, route);
-        if (!known || nowMs - route.decidedMs >= PLAYERBOT_TELEPORTER_ROUTE_RECHECK_MS ||
-            route.destination.GetExactDist2d(&destination) > PLAYERBOT_TELEPORTER_ROUTE_REDECIDE_DISTANCE)
+        if (std::size_t(ledge) >= exits.size() || exits[ledge].IslandRadius > 0.0f)
         {
-            route = DropLedgeRoute();
-            route.decidedMs = nowMs;
-            route.destination = destination;
-
-            GuidVector gates;
-            battleground->GetStandingGates(gates);
-            if (IsRouteThroughStandingGate(player, gates, destination))
-            {
-                // Cheapest first, so usually only the first candidate pays for
-                // a path search.
-                float const remaining = player->GetExactDist2d(&destination);
-                std::vector<std::pair<float, int32>> candidates;
-                for (std::size_t i = 0; i < exits.size(); ++i)
-                {
-                    BattlegroundDropExit const& exit = exits[i];
-                    float const after = exit.Landing.GetExactDist2d(&destination);
-                    if (exit.IslandRadius <= 0.0f && after < remaining)
-                        candidates.emplace_back(player->GetExactDist(&exit.Edge) + after, int32(i));
-                }
-                std::sort(candidates.begin(), candidates.end());
-                for (std::pair<float, int32> const& candidate : candidates)
-                {
-                    if (!IsWalkableRoute(player, gates, exits[candidate.second].Edge))
-                        continue;
-                    route.ledge = candidate.second;
-                    break;
-                }
-            }
-
-            playerbot::LockedSet(g_DropLedgeRouteByBot, botKey, route);
+            playerbot::LockedErase(g_GateBypassByBot, botKey);
+            return false;
         }
 
-        if (route.ledge < 0 || std::size_t(route.ledge) >= exits.size())
-            return false;
-
-        BattlegroundDropExit const& exit = exits[route.ledge];
+        BattlegroundDropExit const& exit = exits[ledge];
         constexpr float EdgeReach = 3.0f;
         if (player->GetExactDist2d(exit.Edge.GetPositionX(), exit.Edge.GetPositionY()) > EdgeReach)
             return IssueMovePointThrottled(player, exit.Edge, 2.0f, 500) || player->isMoving();
 
         // Decided afresh from wherever it lands.
-        playerbot::LockedErase(g_DropLedgeRouteByBot, botKey);
+        playerbot::LockedErase(g_GateBypassByBot, botKey);
         SetDownAtDropLanding(player, exit, [&exit](Unit const* unit)
         {
             return unit->GetExactDist(&exit.Edge) <= 30.0f;
@@ -4197,15 +4214,18 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return true;
     }
 
-    // Objective travel: through a teleporter when the walking route is shut by
-    // a gate, on foot otherwise.
+    // Objective travel: on foot, or through the teleporter or off the ledge
+    // that gets the bot past a gate standing in its way.
     bool MoveToBattlegroundObjective(Player* player, Battleground* battleground, Position const& destination)
     {
-        if (battleground && TryRouteThroughTeleporter(player, battleground, destination))
-            return true;
-
-        if (battleground && TryRouteOverDropLedge(player, battleground, destination))
-            return true;
+        if (battleground)
+        {
+            GateBypassRoute const route = DecideGateBypass(player, battleground, destination);
+            if (!route.teleporterGuid.IsEmpty() && UseBypassTeleporter(player, route.teleporterGuid))
+                return true;
+            if (route.ledge >= 0 && TakeBypassLedge(player, battleground, route.ledge))
+                return true;
+        }
 
         return IssueMovePointThrottled(player, destination, 6.0f, 500);
     }
@@ -6327,6 +6347,8 @@ namespace playerbot
         // within this of it.
         constexpr float kDutyGateGuardRange = 45.0f;
         constexpr float kDutyGateGuardHold = 12.0f;
+        // On its way past a gate, a guard keeps fighting only what is this close.
+        constexpr float kDutyGatePassFightRange = 8.0f;
         // A commander is engaged from here; further out the bot travels.
         constexpr float kDutyBossEngageRange = 40.0f;
         constexpr uint32 kDutyVehicleCastIntervalMs = 1000;
@@ -6718,22 +6740,12 @@ namespace playerbot
             GameObject* gate = player->FindMap() ? player->FindMap()->GetGameObject(orders.gateGuid) : nullptr;
             if (gate)
             {
-                GuidVector gates;
-                battleground->GetStandingGates(gates);
-                bool reachable = !IsRouteThroughStandingGate(player, gates, orders.gateLocation);
-                if (!reachable)
-                {
-                    // A teleporter whose exit is clear of the gates counts as
-                    // a way there (Isle of Conquest's keeps).
-                    std::vector<BattlegroundTeleporter> teleporters;
-                    battleground->GetTeleporters(player->GetGUID(), teleporters);
-                    for (BattlegroundTeleporter const& teleporter : teleporters)
-                        if (!CrossesStandingGate(player, gates, player->GetPosition(), teleporter.Entrance) &&
-                            !CrossesStandingGate(player, gates, teleporter.Exit, orders.gateLocation))
-                            reachable = true;
-                }
-
-                if (!reachable)
+                // A teleporter (Isle of Conquest's keeps) or a ledge off the
+                // walls (Strand of the Ancients) past the gates in between
+                // counts as a way there: a guard behind its own gate sees none
+                // of the attackers planting charges at it.
+                GateBypassRoute const route = DecideGateBypass(player, battleground, orders.gateLocation);
+                if (route.blocked && !route.HasWayPast())
                     choice.spot.Relocate(2.0f * gate->GetPositionX() - orders.gateLocation.GetPositionX(),
                         2.0f * gate->GetPositionY() - orders.gateLocation.GetPositionY(), orders.gateLocation.GetPositionZ());
             }
@@ -6745,21 +6757,30 @@ namespace playerbot
         bool AdvanceGuardGateDuty(Player* player, Battleground* battleground, playerbot::ObjectiveBotOrders const& orders)
         {
             Position const ground = ResolveGuardSpot(player, battleground, orders);
-            if (Unit* enemy = FindEnemyAtGround(player, ground, kDutyGateGuardRange))
-                if (playerbot::EngageSelectedEnemyPlayer(player, enemy, "gate-guard"))
-                    return true;
+            Position destination = ground;
+            playerbot::ApplyDeterministicObjectiveOffset(battleground, player, destination);
+            bool const atGround = player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(),
+                destination.GetPositionZ(), kDutyGateGuardHold);
+
+            // Still on its way past a gate of its own (over a wall to the ledge
+            // off it, or to a teleporter), the fight at its ground is on the
+            // far side of that gate. Taking on an enemy seen from the wall top
+            // would only walk the bot back down into the gate; it fights there
+            // once it gets there, and only what is at arm's length on the way.
+            bool const passingGate = !atGround && DecideGateBypass(player, battleground, destination).HasWayPast();
+            if (!passingGate)
+                if (Unit* enemy = FindEnemyAtGround(player, ground, kDutyGateGuardRange))
+                    if (playerbot::EngageSelectedEnemyPlayer(player, enemy, "gate-guard"))
+                        return true;
 
             // Nobody at the gate: whatever the bot was fighting has gone, so
             // the chase it installed stands down and the bot walks back.
-            if (Unit* victim = player->GetVictim();
-                victim && !victim->IsWithinDist3d(ground.GetPositionX(), ground.GetPositionY(), ground.GetPositionZ(),
-                    kDutyGateGuardRange))
+            if (Unit* victim = player->GetVictim(); victim && (passingGate
+                ? !player->IsWithinDistInMap(victim, kDutyGatePassFightRange)
+                : !victim->IsWithinDist3d(ground.GetPositionX(), ground.GetPositionY(), ground.GetPositionZ(), kDutyGateGuardRange)))
                 player->AttackStop();
 
-            Position destination = ground;
-            playerbot::ApplyDeterministicObjectiveOffset(battleground, player, destination);
-            if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(),
-                kDutyGateGuardHold))
+            if (!atGround)
                 return MoveToBattlegroundObjective(player, battleground, destination) || player->isMoving();
 
             return true;
