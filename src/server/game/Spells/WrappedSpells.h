@@ -2,7 +2,8 @@
  * Wrapped spells: abilities a player holds as a WRAPPER that casts the real
  * spell for them - the untouched stock rank, or a set-bonus alternate when the
  * set is worn (spell_warr_disarm_wrapper, spell_sha_*_totem_wrapper, the T2
- * wrappers in scripts/Custom, and the Purge TRIGGER_SPELL pair).
+ * wrappers in scripts/Custom, the Purge TRIGGER_SPELL pair, and the Health
+ * Funnel wrappers that change target in Sucky Demon Form).
  *
  * Nothing a wrapper casts is ever held itself. Every path that would teach one
  * teaches its wrapper instead - Player::LearnSpell / AddSpell, the trainer
@@ -82,6 +83,16 @@ namespace WrappedSpells
         { 20923, 90529 }, { 90535, 90529 },
         { 20924, 90530 }, { 90536, 90530 },
         { 27173, 90531 }, { 90537, 90531 },
+
+        // Health Funnel ranks 1-7, and their Sucky Demon Form versions
+        // (custom_sucky_demon.cpp). Ranks 8-9 have no wrapper.
+        {   755, 93000 }, { 93007, 93000 },
+        {  3698, 93001 }, { 93008, 93001 },
+        {  3699, 93002 }, { 93009, 93002 },
+        {  3700, 93003 }, { 93010, 93003 },
+        { 11693, 93004 }, { 93011, 93004 },
+        { 11694, 93005 }, { 93012, 93005 },
+        { 11695, 93006 }, { 93013, 93006 },
     };
 
     // The wrapper a player holds instead of spellId, or 0 when spellId is not
