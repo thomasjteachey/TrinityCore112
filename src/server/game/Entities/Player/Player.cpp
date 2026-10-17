@@ -5567,6 +5567,15 @@ void Player::BuildPlayerRepop()
         CastSpell(this, 20584, true);
     CastSpell(this, 8326, true);
 
+    // A battleground that dies like an arena on a map the client draws as a
+    // battleground (Violet Hold): the client would put up the ghost screen,
+    // which it skips only in an arena. An aura with effect 260 SCREEN_EFFECT
+    // outranks that choice, and this one's effect is none, so the dead watch
+    // the rest of the run as they would in an arena. ResurrectPlayer takes it off.
+    if (Battleground const* bg = GetBattleground())
+        if (bg->UsesArenaDeathRules() && !bg->isArena())
+            AddAura(SPELL_LAST_STAND_SPECTATOR, this);
+
     // there must be SMSG.FORCE_RUN_SPEED_CHANGE, SMSG.FORCE_SWIM_SPEED_CHANGE, SMSG.MOVE_WATER_WALK
     // there must be SMSG.STOP_MIRROR_TIMER
 
@@ -5625,6 +5634,7 @@ void Player::ResurrectPlayer(float restore_percent, bool applySickness)
     // This must be called always even on Players with race != RACE_NIGHTELF in case of faction change
     RemoveAurasDueToSpell(20584);                           // RACE_NIGHTELF speed bonuses
     RemoveAurasDueToSpell(8326);                            // SPELL_AURA_GHOST
+    RemoveAurasDueToSpell(SPELL_LAST_STAND_SPECTATOR);      // see BuildPlayerRepop
 
     if (GetSession()->IsARecruiter() || (GetSession()->GetRecruiterId() != 0))
         SetDynamicFlag(UNIT_DYNFLAG_REFER_A_FRIEND);

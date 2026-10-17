@@ -5735,6 +5735,13 @@ Centurion.Items.QuiversHoldAnyItem = 0
 #                     Alliance and Horde Battle Standards off the Caverns of Time hub,
 #                     which are consumables by item class and would otherwise be banned
 #                     along with the potions)
+#
+#    Centurion.Tournament.BgConsumablesFreeIn
+#        Description: Battleground type ids where a tournament match does not ban
+#                     consumables at all, comma separated. The gear loadout and the other
+#                     tournament rules still apply there.
+#        Default:     "105" - (Violet Hold, which is fought against waves of clones, not
+#                     against another side)
 
 Centurion.Tournament.Enable = 0
 Centurion.Tournament.StartLevel = 60
@@ -5761,6 +5768,7 @@ Centurion.Tournament.WorldMaxHonorPoints = 2147483647
 Centurion.Tournament.BgLoadout = 1
 Centurion.Tournament.BgBanConsumables = 1
 Centurion.Tournament.BgConsumables = "200026,200030,200041,200991,200992,203640,203641"
+Centurion.Tournament.BgConsumablesFreeIn = "105"
 Centurion.Tournament.BgKeepItems = "5522,13602,13603,1254,13699,13700,13701"
 Centurion.Tournament.BgStarterVendors = "Starter %"
 

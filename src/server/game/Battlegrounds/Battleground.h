@@ -349,7 +349,10 @@ enum BattlegroundSpells
     SPELL_INSTANT_CAST              = 45813,                // instant cast spells in arena
     SPELL_SPIRIT_HEAL_MANA          = 44535,                // Spirit Heal
     SPELL_RECENTLY_DROPPED_FLAG     = 42792,                // Recently Dropped Flag
-    SPELL_AURA_PLAYER_INACTIVE      = 43681                 // Inactive
+    SPELL_AURA_PLAYER_INACTIVE      = 43681,                // Inactive
+    // Centurion "Spectator Mode": hidden SCREEN_EFFECT 0, for the released dead of
+    // a battleground that dies like an arena (Player::BuildPlayerRepop).
+    SPELL_LAST_STAND_SPECTATOR      = 92335
 };
 
 enum BattlegroundTimeIntervals

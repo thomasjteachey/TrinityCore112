@@ -134,6 +134,8 @@ namespace
         bool Enabled = true;
         bool BanConsumables = true;
         std::unordered_set<uint32> AllowedConsumables;
+        // Battleground types whose tournament matches ban no consumables at all.
+        std::unordered_set<uint32> ConsumablesFreeIn;
         // Equippable items the loadout does not touch at all - the whitelist a
         // character's own gear can be on. A warlock's spellstones and firestones
         // are conjured out of a soul shard rather than bought, so no vendor
@@ -901,9 +903,12 @@ namespace
         if (dressed)
             WhisperAsChromie(player, "Welcome to the tournament. We've made some changes to your gear to keep things competitive. If you were wearing something not on our tournament whitelist, it was replaced and will be given back to you after you leave.");
 
-        // Only when it is true: with the ban off, everything out of their bags
-        // works and telling them otherwise would be a lie.
-        if (LoadoutConfig.BanConsumables)
+        // Only when it is true: with the ban off, or in a battleground it does
+        // not reach (Centurion.Tournament.BgConsumablesFreeIn), everything out of
+        // their bags works and telling them otherwise would be a lie.
+        Battleground const* battleground = player->GetBattleground();
+        bool const consumablesFree = battleground && LoadoutConfig.ConsumablesFreeIn.count(uint32(battleground->GetTypeID())) != 0;
+        if (LoadoutConfig.BanConsumables && !consumablesFree)
             WhisperAsChromie(player, "No potions, flasks, scrolls or grenades out of your bags work in here. Only our special PvP Consumables.");
     }
 
@@ -1077,6 +1082,11 @@ void LoadLoadoutConfig()
     // one is listed - resolved where the rule is asked rather than here, see
     // IsConsumableAllowedInMatch.
     ReadEntryList("Centurion.Tournament.BgConsumables", "200026,200030,200041,200991,200992,203640,203641", loaded.AllowedConsumables);
+
+    // Violet Hold is fought against waves of clones, not against another side:
+    // the ban is there to keep one side from out-buying the other, and there is
+    // no other side to out-buy. The rest of the tournament's rules still hold.
+    ReadEntryList("Centurion.Tournament.BgConsumablesFreeIn", "105", loaded.ConsumablesFreeIn);
 
     // The gear whitelist: every rank of the warlock's spellstone (5522, 13602,
     // 13603) and firestone (1254, 13699, 13700, 13701). They are armour by item
@@ -1479,6 +1489,9 @@ bool IsConsumableAllowedInMatch(Player const* player, ItemTemplate const* proto)
 
     Battleground const* battleground = player->GetBattleground();
     if (!battleground || !battleground->IsTournamentPool())
+        return true;
+
+    if (LoadoutConfig.ConsumablesFreeIn.count(uint32(battleground->GetTypeID())) != 0)
         return true;
 
     if (player->IsGameMaster())
