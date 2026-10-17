@@ -823,7 +823,8 @@ bool PathGenerator::IsNavMeshConnected(G3D::Vector3 const& from, G3D::Vector3 co
     return dtStatusSucceed(result) && corridorLength > 0 && corridor[corridorLength - 1] == endPoly;
 }
 
-bool PathGenerator::FindNearestNavMeshPoint(G3D::Vector3 const& point, float horizontalRange, G3D::Vector3& nearest) const
+bool PathGenerator::FindNearestNavMeshPoint(G3D::Vector3 const& point, float horizontalRange, G3D::Vector3& nearest,
+    float verticalRange) const
 {
     // Same staleness rule as IsNavMeshConnected.
     if (!_navMesh || !_navMeshQuery || _navMapId != _source->GetMapId() || _navInstanceId != _source->GetInstanceId())
@@ -832,7 +833,7 @@ bool PathGenerator::FindNearestNavMeshPoint(G3D::Vector3 const& point, float hor
     if (!HaveTile(point))
         return false;
 
-    float const extents[VERTEX_SIZE] = { horizontalRange, 2.5f, horizontalRange };
+    float const extents[VERTEX_SIZE] = { horizontalRange, verticalRange, horizontalRange };
     float const searchPoint[VERTEX_SIZE] = { point.y, point.z, point.x };
     float closest[VERTEX_SIZE];
     dtPolyRef poly = INVALID_POLYREF;

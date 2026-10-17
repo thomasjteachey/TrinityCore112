@@ -159,6 +159,14 @@ namespace
     // than DEFAULT_HEIGHT_SEARCH's fifty yards.
     constexpr float CHEST_GROUND_SEARCH = 500.0f;
 
+    // The box around the body searched for somewhere to stand before anything
+    // else. Tall enough for a body several yards into the ground - a bot cut
+    // off halfway along a straight line under a hill, or set down under a
+    // slope - and narrow, so it answers "the ground over this body" and not
+    // "somewhere nearby".
+    constexpr float CHEST_STAND_SEARCH_SIDE = 3.0f;
+    constexpr float CHEST_STAND_SEARCH_HEIGHT = 8.0f;
+
     // Where the chest should actually land.
     //
     // It used to be summoned at exactly the position the player died at, and
@@ -192,6 +200,32 @@ namespace
         float x = startX;
         float y = startY;
         float z = spot.GetPositionZ();
+
+        // A body under the ground. A bot has no client holding it to the
+        // terrain, so it can stand - and die - waist-deep or worse, and the two
+        // steps below cannot see up: GetHeight looks only beneath the body, and
+        // a path from the body to its own position keeps the body's height, as
+        // Detour hands an endpoint inside a polygon back unchanged. Every such
+        // cache came up under the ground.
+        //
+        // So the navmesh is asked first for the nearest place anything can stand,
+        // above or below. That is the floor a body lying on a floor is already
+        // on, the ground over a buried one, and the cave floor under a body in a
+        // cave with the hillside a few yards over it. Nothing in the box - high
+        // in the air, or no mmaps here - leaves it to the two steps below.
+        {
+            PathGenerator mesh(player);
+            G3D::Vector3 standable;
+            if (mesh.FindNearestNavMeshPoint(G3D::Vector3(x, y, z), CHEST_STAND_SEARCH_SIDE, standable,
+                CHEST_STAND_SEARCH_HEIGHT))
+            {
+                // The mesh is within inches of the real surface; settle onto it.
+                float standZ = standable.z;
+                player->UpdateAllowedPositionZ(standable.x, standable.y, standZ);
+                spot.Relocate(standable.x, standable.y, standZ, spot.GetOrientation());
+                return;
+            }
+        }
 
         float const floorZ = map->GetHeight(player->GetPhaseMask(), x, y, z, true, CHEST_GROUND_SEARCH);
         if (floorZ > INVALID_HEIGHT && floorZ < z)

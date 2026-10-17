@@ -72,8 +72,10 @@ class TC_GAME_API PathGenerator
         bool IsNavMeshConnected(G3D::Vector3 const& from, G3D::Vector3 const& to) const;
 
         // The navmesh point nearest an arbitrary point, searching up to
-        // horizontalRange yards to either side of it.
-        bool FindNearestNavMeshPoint(G3D::Vector3 const& point, float horizontalRange, G3D::Vector3& nearest) const;
+        // horizontalRange yards to either side of it and verticalRange above
+        // and below.
+        bool FindNearestNavMeshPoint(G3D::Vector3 const& point, float horizontalRange, G3D::Vector3& nearest,
+            float verticalRange = 2.5f) const;
 
         // option setters - use optional
         void SetUseStraightPath(bool useStraightPath) { _useStraightPath = useStraightPath; }

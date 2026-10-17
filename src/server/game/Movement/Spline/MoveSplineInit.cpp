@@ -303,6 +303,99 @@ namespace Movement
         return false;
     }
 
+    // A route is a point every four yards or so, each one on the ground, and a
+    // spline runs - and every client draws it - in a straight line between
+    // them. Over a bump in the terrain that line goes through the hill. A
+    // player never shows it because each client holds its own character to
+    // the ground every frame; a bot has no client, so it ran visibly waist-deep
+    // over every rise sharp enough, on the server as much as on screen, and a
+    // bot killed there left its cache in the ground. Measured around the live
+    // fleet, one four-yard leg in thirty sank half a yard or more, and one in
+    // seven in Searing Gorge.
+    //
+    // So where the terrain stands above a leg, the leg gets a point on the
+    // ground at its highest spot, and each half is looked at again. Only legs
+    // with both ends on open terrain: a bridge deck, a building floor or a cave
+    // passes under or over the heightmap legitimately and is left exactly as
+    // the navmesh drew it.
+    static constexpr float TerrainHugLegEndSlack = 0.5f;   // a leg end this near the terrain is on it
+    static constexpr float TerrainHugMinRise = 0.25f;      // terrain this little over the line is left alone
+    static constexpr float TerrainHugSampleStep = 1.0f;
+    static constexpr uint32 TerrainHugMaxDepth = 4;
+    static constexpr uint32 TerrainHugMaxPoints = 512;
+
+    static bool IsOnTerrain(Map const* map, Vector3 const& point)
+    {
+        float const ground = map->GetGridHeight(point.x, point.y);
+        return ground > INVALID_HEIGHT && std::fabs(point.z - ground) <= TerrainHugLegEndSlack;
+    }
+
+    static void AppendTerrainHuggingLeg(Unit const* unit, Map const* map, Vector3 const& from, Vector3 const& to,
+        uint32 depth, PointsArray& out)
+    {
+        float const dx = to.x - from.x;
+        float const dy = to.y - from.y;
+        uint32 const samples = uint32(std::sqrt(dx * dx + dy * dy) / TerrainHugSampleStep);
+        if (samples >= 2 && depth < TerrainHugMaxDepth && out.size() + 2 < TerrainHugMaxPoints)
+        {
+            float bestRise = TerrainHugMinRise;
+            Vector3 best;
+            bool found = false;
+            for (uint32 s = 1; s < samples; ++s)
+            {
+                float const t = float(s) / float(samples);
+                float const x = from.x + dx * t;
+                float const y = from.y + dy * t;
+                // A hole in the heightmap is a cave mouth or a building's own
+                // floor; the terrain says nothing about the line there.
+                float const ground = map->GetGridHeight(x, y);
+                if (ground <= INVALID_HEIGHT)
+                    continue;
+
+                float const rise = ground - (from.z + (to.z - from.z) * t);
+                if (rise > bestRise)
+                {
+                    bestRise = rise;
+                    best = Vector3(x, y, ground);
+                    found = true;
+                }
+            }
+
+            if (found)
+            {
+                // Onto whatever stands on the terrain there, as the route's own
+                // points were.
+                unit->UpdateAllowedPositionZ(best.x, best.y, best.z);
+                AppendTerrainHuggingLeg(unit, map, from, best, depth + 1, out);
+                AppendTerrainHuggingLeg(unit, map, best, to, depth + 1, out);
+                return;
+            }
+        }
+
+        out.push_back(to);
+    }
+
+    static void HugBotSplineToTerrain(Unit const* unit, PointsArray& path)
+    {
+        Map const* map = unit->FindMap();
+        if (!map || path.size() < 2)
+            return;
+
+        PointsArray hugged;
+        hugged.reserve(path.size() * 2);
+        hugged.push_back(path[0]);
+        for (uint32 i = 1; i < path.size(); ++i)
+        {
+            if (IsOnTerrain(map, path[i - 1]) && IsOnTerrain(map, path[i]))
+                AppendTerrainHuggingLeg(unit, map, path[i - 1], path[i], 0, hugged);
+            else
+                hugged.push_back(path[i]);
+        }
+
+        if (hugged.size() != path.size())
+            path.swap(hugged);
+    }
+
     int32 MoveSplineInit::Launch()
     {
         MoveSpline& move_spline = *unit->movespline;
@@ -351,10 +444,19 @@ namespace Movement
                 if (Unit const* controller = unit->GetCharmerOrOwner())
                     driver = controller->ToPlayer();
             WorldSession const* session = driver ? driver->GetSession() : nullptr;
+            bool const serverDriven = session && (session->IsVirtualSession() || session->IsTransientPlayerSession());
+
+            // A plain run on the ground only: an arc, a fall, a swim or a flight
+            // is not meant to follow the terrain, and a waypoint route's point
+            // indexes must stay the ones it was given.
+            if (serverDriven && args.path_Idx_offset == 0 && args.flags.isLinear() && !args.flags.parabolic &&
+                !args.flags.falling && !args.flags.animation && !args.flags.cyclic && !args.flags.flying &&
+                !unit->IsFlying() && !unit->IsHovering() && !unit->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING))
+                HugBotSplineToTerrain(unit, args.path);
+
             uint32 blockedLeg = 0;
             std::optional<PathGenerator> navmesh;
-            if (session && (session->IsVirtualSession() || session->IsTransientPlayerSession()) &&
-                FindBotSplineWallCrossing(unit, args.path, blockedLeg, navmesh))
+            if (serverDriven && FindBotSplineWallCrossing(unit, args.path, blockedLeg, navmesh))
             {
                 // Only a plain run is bent around a corner. A jump, knockback
                 // or fall keeps its own arc, so it is held as before.
