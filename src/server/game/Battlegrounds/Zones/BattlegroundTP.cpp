@@ -253,6 +253,8 @@ void BattlegroundTP::SendCTFFlagAddonMessage(std::string const& payload)
 
 void BattlegroundTP::BroadcastCTFFlagFullState()
 {
+    SendFlagCarrierPositionsToPlayers();
+
     if (IsCustomGame())
     {
         for (auto const& entry : GetPlayers())

@@ -3467,6 +3467,18 @@ bool Battleground::ShouldShowFlagOnMapTo(Player const* viewer, TeamId flagTeam) 
     return flagTeam == viewerTeamId ? m_CustomRules.ShowAllyFlagOnMap : m_CustomRules.ShowEnemyFlagOnMap;
 }
 
+// The 3.3.5 client asks for flag carrier positions only from its map UI, at most once
+// every 5 seconds (Wow.exe 0x54CF60), and is never told when a flag changes hands, so
+// its maps kept showing a flag on the previous carrier. Flag events push fresh
+// positions instead; the client applies MSG_BATTLEGROUND_PLAYER_POSITIONS unasked.
+void Battleground::SendFlagCarrierPositionsToPlayers()
+{
+    for (auto const& entry : GetPlayers())
+        if (Player* player = ObjectAccessor::FindPlayer(entry.first))
+            if (WorldSession* session = player->GetSession())
+                session->SendBattlegroundPlayerPositions();
+}
+
 bool Battleground::GetNodeObjective(ObjectGuid playerGuid, BattlegroundNodeObjective& objective) const
 {
     if (playerGuid.IsEmpty())

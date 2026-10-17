@@ -267,6 +267,8 @@ void BattlegroundWS::SendWSGFlagAddonMessage(std::string const& payload)
 
 void BattlegroundWS::BroadcastWSGFlagFullState()
 {
+    SendFlagCarrierPositionsToPlayers();
+
     if (IsCustomGame())
     {
         for (auto const& entry : GetPlayers())

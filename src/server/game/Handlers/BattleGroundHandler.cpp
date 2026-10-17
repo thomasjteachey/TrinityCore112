@@ -383,6 +383,11 @@ void WorldSession::HandleBattlegroundPlayerPositionsOpcode(WorldPacket& /*recvDa
 {
     TC_LOG_DEBUG("network", "WORLD: Recvd MSG_BATTLEGROUND_PLAYER_POSITIONS Message");
 
+    SendBattlegroundPlayerPositions();
+}
+
+void WorldSession::SendBattlegroundPlayerPositions()
+{
     Battleground* bg = _player->GetBattleground();
     if (!bg)                                                 // can't be received if player not in battleground
         return;
