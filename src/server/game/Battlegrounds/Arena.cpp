@@ -167,15 +167,24 @@ void Arena::RemovePlayer(Player* player, ObjectGuid guid, uint32 /*team*/)
 
 void Arena::FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet)
 {
-    if (IsSquadMatch())
+    // Every arena sends all the squad switches, off unless this is a squad
+    // match with that squad in it. The client keeps a world state's value until
+    // it logs out: SMSG_INIT_WORLD_STATES only overwrites the states it carries
+    // (Wow.exe 0x526937 -> 0x549440; the value table at 0xBE8F58 is emptied
+    // only by the leave-world teardown, 0x548B20). Baradin Hold Arena and Four
+    // Corners share map 1401 and its WorldStateUI rows, so without this anyone
+    // who had played Four Corners saw its squad lines under the gold/green pair
+    // of every later match there - Solo Shuffle included - until they relogged.
+    for (uint8 squad = 0; squad < MAX_BATTLEGROUND_SQUADS; ++squad)
     {
-        for (uint8 squad = 0; squad < GetSquadCount(); ++squad)
-        {
-            packet.Worldstates.emplace_back(ARENA_WORLD_STATE_SQUAD_SHOW_FIRST + squad, IsSquadInMatch(squad) ? 1 : 0);
+        bool const inMatch = squad < GetSquadCount() && IsSquadInMatch(squad);
+        packet.Worldstates.emplace_back(ARENA_WORLD_STATE_SQUAD_SHOW_FIRST + squad, inMatch ? 1 : 0);
+        if (squad < GetSquadCount())
             packet.Worldstates.emplace_back(ARENA_WORLD_STATE_SQUAD_ALIVE_FIRST + squad, GetArenaAlivePlayersCountBySquad(squad));
-        }
-        return;
     }
+
+    if (IsSquadMatch())
+        return;
 
     packet.Worldstates.emplace_back(ARENA_WORLD_STATE_ALIVE_PLAYERS_GREEN, GetArenaAlivePlayersCountByTeam(HORDE));
     packet.Worldstates.emplace_back(ARENA_WORLD_STATE_ALIVE_PLAYERS_GOLD, GetArenaAlivePlayersCountByTeam(ALLIANCE));
