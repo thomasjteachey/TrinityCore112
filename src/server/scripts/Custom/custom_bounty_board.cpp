@@ -20,7 +20,7 @@
 // Every inn in a contested zone has a board. Reading it shows the bots in that
 // zone - and, a click away, in every other contested zone - with exactly what
 // killing each one would win: the gear the full-loot cache would take off the
-// corpse, the talents behind it, and how many people it has killed.
+// corpse, the spec behind it, and how many people it has killed.
 //
 // It is the GM Bot Stats window cut down to what a death actually pays out.
 // Where a bot stands, how aggressive or timid it is and the coin it carries
@@ -42,7 +42,7 @@
 //                     BBRS:<zoneId>|<notice>;...             one zone's notices (chunked)
 //                     BBRE:<zoneId>|<count>                  end of them
 //                     BBPI:<guid>|<spoil>;...                one bot's spoils (chunked)
-//                     BBPT:<guid>|<t1>,<t2>,<t3>|<spell>,... talent split, signature talents
+//                     BBPT:<guid>|<t1>,<t2>,<t3>|          the talent split - nothing finer
 //                     BBPE:<guid>|<1 still here, 0 gone>
 //                     BBCL:far                               walked away from the board
 //
@@ -308,27 +308,17 @@ namespace
         return spoils;
     }
 
+    // Points per tree and which one leads - the spec. The talents themselves
+    // are not on a notice: that was more than a wanted poster should know.
     struct TalentSplit
     {
         uint32 Points[3] = { 0, 0, 0 };
         uint32 MainTree = 0;
-        // The rank spells taken in the main tree, deepest tier first: what the
-        // build is known for, the way an armory headline reads it.
-        std::vector<uint32> Signature;
     };
 
     TalentSplit ReadTalents(Player const* bot)
     {
-        struct Pick
-        {
-            uint32 Tree;
-            uint32 Tier;
-            uint32 Column;
-            uint32 Spell;
-        };
-
         TalentSplit split;
-        std::vector<Pick> picks;
         uint32 const classMask = 1 << (bot->GetClass() - 1);
         uint8 const spec = uint8(bot->GetActiveSpec());
 
@@ -348,7 +338,6 @@ namespace
                     continue;
 
                 split.Points[tab->OrderIndex] += uint32(rank) + 1;
-                picks.push_back({ tab->OrderIndex, talent->TierID, talent->ColumnIndex, talent->SpellRank[rank] });
                 break;
             }
         }
@@ -356,17 +345,6 @@ namespace
         for (uint32 tree = 1; tree < 3; ++tree)
             if (split.Points[tree] > split.Points[split.MainTree])
                 split.MainTree = tree;
-
-        std::sort(picks.begin(), picks.end(), [](Pick const& a, Pick const& b)
-        {
-            if (a.Tier != b.Tier)
-                return a.Tier > b.Tier;
-            return a.Column < b.Column;
-        });
-
-        for (Pick const& pick : picks)
-            if (pick.Tree == split.MainTree && split.Signature.size() < 12)
-                split.Signature.push_back(pick.Spell);
 
         return split;
     }
@@ -447,12 +425,11 @@ namespace
         }
         items.Flush();
 
+        // The trailing pipe is where the talent list used to follow; the first
+        // addon release still expects the separator.
         TalentSplit const talents = ReadTalents(bot);
-        std::ostringstream tal;
-        tal << head << talents.Points[0] << ',' << talents.Points[1] << ',' << talents.Points[2] << '|';
-        for (size_t i = 0; i < talents.Signature.size(); ++i)
-            tal << (i ? "," : "") << talents.Signature[i];
-        SendTagged(viewer, "BBPT", tal.str());
+        SendTagged(viewer, "BBPT", Trinity::StringFormat("{}{},{},{}|", head,
+            talents.Points[0], talents.Points[1], talents.Points[2]));
 
         SendTagged(viewer, "BBPE", head + "1");
     }
