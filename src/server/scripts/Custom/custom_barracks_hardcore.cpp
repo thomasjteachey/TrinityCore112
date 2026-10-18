@@ -910,7 +910,14 @@ namespace BarracksHardcore
         // can clear the latter without touching FFA. Treat that split state as
         // drift too; otherwise the early return leaves a blue bot able to keep
         // attacking a player who cannot swing back.
-        bool const botPvpDrift = isBot && player->IsPvP() != shouldFfa;
+        //
+        // One direction only: an ARMED bot missing the flag. A disarmed bot's
+        // PvP flag is not ours to clear - EnforceAlwaysPvP lights it for
+        // everyone on every tick, and on this PvP realm UpdateZone lights it
+        // again in every zone the bot's team does not own. Demanding it off
+        // here fought both: cleared on one tick, lit on the next, logged every
+        // time, for every bot standing in a starter zone or a capital.
+        bool const botPvpDrift = isBot && shouldFfa && !player->IsPvP();
         if (wasFfa == shouldFfa && player->pvpInfo.IsInFFAPvPArea == shouldFfa && !botPvpDrift)
             return; // nothing has drifted - the overwhelmingly common case
 
@@ -920,8 +927,10 @@ namespace BarracksHardcore
         // An armed bot also carries the ordinary PvP flag: the enemy-faction
         // render only reads as attackable on the client when the unit is
         // flagged, exactly like a real enemy player standing in the open.
-        if (isBot)
-            player->UpdatePvP(shouldFfa, true);
+        // Disarming leaves it lit, the same as every player on the realm: the
+        // bot's own faction shows through again, and that alone reads friendly.
+        if (isBot && shouldFfa)
+            player->UpdatePvP(true, true);
 
         // Only when the byte actually moved: the bot pseudo-faction render
         // (Unit::BuildValuesUpdate) keys on it, and the faction field is never
@@ -953,7 +962,9 @@ namespace BarracksHardcore
             player->ValidateAttackersAndOwnTarget();
         }
 
-        // Transitions only - this cannot spam.
+        // Transitions only: the early return above holds whenever every owner
+        // of these flags agrees. A line here every tick for the same character
+        // means something else keeps undoing this - find it, do not silence it.
         TC_LOG_INFO("playerbots.hardcore", "FFA {} for {} (zone {} area {} account {}): armed={} byteNow={} wasByte={}",
             shouldFfa ? "ARM" : "disarm", player->GetName(), player->GetZoneId(), player->GetAreaId(),
             player->GetSession() ? player->GetSession()->GetAccountId() : 0,
