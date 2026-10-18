@@ -32,6 +32,7 @@
 #include "PlayerbotPvpCore.h"
 #include "PlayerbotRandomBotParticipation.h"
 #include "PlayerbotResourceGovernor.h"
+#include "Random.h"
 #include "SharedDefines.h"
 #include "StringConvert.h"
 #include "Timer.h"
@@ -39,6 +40,7 @@
 #include "WorldSession.h"
 
 #include <algorithm>
+#include <array>
 #include <set>
 #include <shared_mutex>
 #include <string>
@@ -84,6 +86,11 @@ struct BgFillConfig
     // the tier each listed battleground type is filled for.
     std::unordered_map<uint32, uint8> tierByCharacter;
     std::unordered_map<uint32, uint8> tierByBattleground;
+    // Playerbot.BgFill.ClassVariety.*: how much less likely a bot is to be dealt
+    // for every copy of its class already on the team / anywhere in the match.
+    // A weight, not a rule: 0 and 0 deal in plain tier order.
+    float classVarietyTeamPenalty = 4.0f;
+    float classVarietyMatchPenalty = 1.0f;
 };
 
 BgFillConfig g_Config;
@@ -97,6 +104,7 @@ struct OfflineCandidate
     uint32 lowGuid = 0;
     uint32 accountId = 0;
     uint8 level = 1;
+    uint8 classId = 0;
 };
 
 struct OfflinePool
@@ -104,6 +112,7 @@ struct OfflinePool
     bool loaded = false;
     uint32 loadedMs = 0;
     std::vector<OfflineCandidate> entries;
+    std::unordered_map<uint32, uint8> classByGuid;
 };
 
 OfflinePool g_OfflinePool;
@@ -269,22 +278,107 @@ uint8 TierOfSource(ObjectGuid const& guid)
 // easy bots on the bench and put hard ones in the easy battleground. Sources
 // arrive shuffled and the sort is stable, so bots of equal rank stay in random
 // order.
+uint8 TierRank(ObjectGuid const& guid, uint8 matchTier)
+{
+    if (matchTier == kNoTier)
+        return 0;
+
+    uint8 const tier = TierOfSource(guid);
+    if (tier == kNoTier)
+        return kTierCount;
+
+    return tier > matchTier ? uint8(tier - matchTier) : uint8(matchTier - tier);
+}
+
 void OrderSourcesByTier(std::vector<ObjectGuid>& sources, uint8 matchTier)
 {
     if (matchTier == kNoTier)
         return;
 
-    auto const rank = [matchTier](ObjectGuid const& guid) -> uint8
+    std::stable_sort(sources.begin(), sources.end(), [matchTier](ObjectGuid const& left, ObjectGuid const& right)
     {
-        uint8 const tier = TierOfSource(guid);
-        if (tier == kNoTier)
-            return kTierCount;
+        return TierRank(left, matchTier) < TierRank(right, matchTier);
+    });
+}
 
-        return tier > matchTier ? uint8(tier - matchTier) : uint8(matchTier - tier);
-    };
+// An online source answers for itself; an offline one from the pool's read.
+uint8 ClassOfSource(ObjectGuid const& guid)
+{
+    if (Player const* player = ObjectAccessor::FindConnectedPlayer(guid))
+        return player->GetClass();
 
-    std::stable_sort(sources.begin(), sources.end(),
-        [&rank](ObjectGuid const& left, ObjectGuid const& right) { return rank(left) < rank(right); });
+    auto const itr = g_OfflinePool.classByGuid.find(guid.GetCounter());
+    return itr != g_OfflinePool.classByGuid.end() ? itr->second : 0;
+}
+
+// Classes already seated, or on their way, on one team and in the whole match.
+struct ClassMix
+{
+    std::array<uint32, MAX_CLASSES> onTeam = {};
+    std::array<uint32, MAX_CLASSES> inMatch = {};
+
+    void Add(uint8 classId, bool sameTeam)
+    {
+        if (!classId || classId >= MAX_CLASSES)
+            return;
+
+        ++inMatch[classId];
+        if (sameTeam)
+            ++onTeam[classId];
+    }
+};
+
+ClassMix CountClasses(Battleground const* bg, uint32 team)
+{
+    ClassMix mix;
+    for (auto const& [guid, bgPlayer] : bg->GetPlayers())
+        if (Player const* player = ObjectAccessor::FindConnectedPlayer(guid))
+            mix.Add(player->GetClass(), bgPlayer.Team == team);
+
+    // A copy still loading holds a seat and will be that class in a moment;
+    // without it a slow load lets the next tick deal the same class again.
+    for (PendingOfflineClone const& pending : g_PendingOfflineClones)
+        if (pending.instanceId == bg->GetInstanceID())
+            mix.Add(ClassOfSource(pending.sourceGuid), pending.team == team);
+
+    return mix;
+}
+
+// Scarlet Chapel seats its easy tier around one player, and three easy mages in
+// a 3v3 or on five Scarlet Chapel seats is a bad draw however fair. So the next
+// few seats are drawn one at a time from the best tier band still available,
+// each bot weighted down for every copy of its class already on the team and,
+// more gently, in the match. A nudge, not a rule: the tier order is never
+// broken, and a repeat class can still come up. `mix` is advanced as if every
+// draw succeeds; a source that then fails to load only skews the weights.
+void OrderSourcesForVariety(std::vector<ObjectGuid>& sources, uint8 matchTier, ClassMix mix, uint32 draws)
+{
+    float const teamPenalty = g_Config.classVarietyTeamPenalty;
+    float const matchPenalty = g_Config.classVarietyMatchPenalty;
+    if (teamPenalty <= 0.0f && matchPenalty <= 0.0f)
+        return;
+
+    std::vector<double> weights;
+    for (std::size_t position = 0; position < sources.size() && position < draws; ++position)
+    {
+        uint8 const bandRank = TierRank(sources[position], matchTier);
+        std::size_t bandEnd = position;
+        while (bandEnd < sources.size() && TierRank(sources[bandEnd], matchTier) == bandRank)
+            ++bandEnd;
+
+        weights.clear();
+        for (std::size_t index = position; index < bandEnd; ++index)
+        {
+            uint8 const classId = ClassOfSource(sources[index]);
+            bool const known = classId && classId < MAX_CLASSES;
+            weights.push_back(1.0 / (1.0 +
+                (known ? teamPenalty * mix.onTeam[classId] + matchPenalty * mix.inMatch[classId] : 0.0)));
+        }
+
+        std::size_t const chosen = position + urandweighted(weights.size(), weights.data());
+        std::rotate(sources.begin() + position, sources.begin() + chosen, sources.begin() + chosen + 1);
+        mix.Add(ClassOfSource(sources[position]), true);
+    }
 }
 
 // Online managed bots whose level sits inside the bracket, shuffled. A bot
@@ -338,6 +432,7 @@ void RefreshOfflinePoolIfStale(uint32 nowMs)
     g_OfflinePool.loaded = true;
     g_OfflinePool.loadedMs = nowMs;
     g_OfflinePool.entries.clear();
+    g_OfflinePool.classByGuid.clear();
 
     // The random population's accounts plus the PvP-only pool. The PvP-only
     // accounts are deliberately left out of Playerbot.RandomPopulation.BotAccountIds
@@ -363,7 +458,7 @@ void RefreshOfflinePoolIfStale(uint32 nowMs)
     // Same shape as the population manager's own pool query. The Obcc names
     // are the legacy on-disk Obsidian Colosseum clones: not real characters.
     QueryResult result = CharacterDatabase.PQuery(
-        "SELECT guid, account, level FROM characters WHERE online = 0 AND account IN ({}) AND name NOT LIKE 'Obcc%'", accountList);
+        "SELECT guid, account, level, class FROM characters WHERE online = 0 AND account IN ({}) AND name NOT LIKE 'Obcc%'", accountList);
     if (!result)
         return;
 
@@ -374,7 +469,9 @@ void RefreshOfflinePoolIfStale(uint32 nowMs)
         candidate.lowGuid = fields[0].GetUInt32();
         candidate.accountId = fields[1].GetUInt32();
         candidate.level = fields[2].GetUInt8();
+        candidate.classId = fields[3].GetUInt8();
         g_OfflinePool.entries.push_back(candidate);
+        g_OfflinePool.classByGuid[candidate.lowGuid] = candidate.classId;
     } while (result->NextRow());
 
     TC_LOG_DEBUG("playerbots.bgfill", "PlayerbotBgFillDriver: offline bot pool refreshed, {} characters.", uint32(g_OfflinePool.entries.size()));
@@ -517,9 +614,15 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
         return playerbot::ResourceGovernor::CanAddCustomMatchBot(matchClones, totalClones - std::min(totalClones, matchClones));
     };
 
+    // Draw a few more than wanted: a source that fails to clone is skipped, and
+    // the one after it should still be a varied pick.
+    uint32 const draws = wanted * 2 + 2;
+    ClassMix mix = CountClasses(bg, team);
+
     // 1. Online bots in the bracket.
     std::vector<ObjectGuid> online = CollectOnlineSources(minLevel, maxLevel, usedSources);
     OrderSourcesByTier(online, matchTier);
+    OrderSourcesForVariety(online, matchTier, mix, draws);
     for (ObjectGuid const& sourceGuid : online)
     {
         if (added >= wanted || !governorAllows())
@@ -539,6 +642,7 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
         }
 
         usedSources.insert(sourceGuid);
+        mix.Add(source->GetClass(), true);
         ++added;
         ++matchClones;
         ++totalClones;
@@ -552,6 +656,7 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
         RefreshOfflinePoolIfStale(nowMs);
         std::vector<ObjectGuid> offline = CollectOfflineSources(minLevel, maxLevel, usedSources);
         OrderSourcesByTier(offline, matchTier);
+        OrderSourcesForVariety(offline, matchTier, mix, draws);
         WorldSession* callbackSession = offline.empty() ? nullptr : FindCallbackSession(tally, teamIndex);
         for (ObjectGuid const& sourceGuid : offline)
         {
@@ -569,6 +674,7 @@ uint32 AddClonesToTeam(Battleground* bg, uint32 team, uint32 wanted, MatchTally 
             g_PendingOfflineClones.push_back(pending);
 
             usedSources.insert(sourceGuid);
+            mix.Add(ClassOfSource(sourceGuid), true);
             ++added;
             ++matchClones;
             ++totalClones;
@@ -960,6 +1066,8 @@ void PlayerbotBgFillDriver::LoadConfig()
     config.allowHumanMirrors = sConfigMgr->GetBoolDefault("Playerbot.BgFill.AllowHumanMirrors", true);
     config.duplicateMinTeamSize = uint32(std::max<int32>(sConfigMgr->GetIntDefault("Playerbot.BgFill.DuplicateSources.MinTeamSize", 40), 0));
     config.duplicateMaxPerTeam = uint32(std::max<int32>(sConfigMgr->GetIntDefault("Playerbot.BgFill.DuplicateSources.MaxPerTeam", 0), 0));
+    config.classVarietyTeamPenalty = std::max(sConfigMgr->GetFloatDefault("Playerbot.BgFill.ClassVariety.TeamPenalty", 4.0f), 0.0f);
+    config.classVarietyMatchPenalty = std::max(sConfigMgr->GetFloatDefault("Playerbot.BgFill.ClassVariety.MatchPenalty", 1.0f), 0.0f);
 
     std::string const types = sConfigMgr->GetStringDefault("Playerbot.BgFill.BattlegroundTypes", "");
     for (std::string_view token : Trinity::Tokenize(types, ',', false))
@@ -1011,12 +1119,13 @@ void PlayerbotBgFillDriver::LoadConfig()
             TC_LOG_WARN("server.loading", "Playerbot battleground fill is enabled but the PvP core/lifecycle modules are off; clones would stand idle.");
     }
 
-    TC_LOG_INFO("server.loading", "Playerbot battleground fill config: enabled={}, types={}, queueWait={} ms, skirmishArenas={}, skirmishQueueWait={} ms, maxPerTeam={}, clonesPerTick={}, offlineBots={}, humanMirrors={}, duplicatesFromTeamSize={}, duplicateMaxPerTeam={}.",
+    TC_LOG_INFO("server.loading", "Playerbot battleground fill config: enabled={}, types={}, queueWait={} ms, skirmishArenas={}, skirmishQueueWait={} ms, maxPerTeam={}, clonesPerTick={}, offlineBots={}, humanMirrors={}, duplicatesFromTeamSize={}, duplicateMaxPerTeam={}, classVariety={}/{}.",
         g_Config.enabled ? "true" : "false", g_Config.battlegroundTypes.empty() ? "all" : types,
         g_Config.queueWaitMs, g_Config.skirmishArenasEnabled ? "true" : "false", g_Config.skirmishArenaQueueWaitMs,
         g_Config.maxPerTeam, g_Config.clonesPerTick,
         g_Config.useOfflineBots ? "true" : "false", g_Config.allowHumanMirrors ? "true" : "false",
-        g_Config.duplicateMinTeamSize, g_Config.duplicateMaxPerTeam);
+        g_Config.duplicateMinTeamSize, g_Config.duplicateMaxPerTeam,
+        g_Config.classVarietyTeamPenalty, g_Config.classVarietyMatchPenalty);
 
     if (!g_Config.tierByCharacter.empty() || !g_Config.tierByBattleground.empty())
         TC_LOG_INFO("server.loading", "Playerbot battleground fill tiers (bots/battlegrounds): easy {}/{}, medium {}/{}, hard {}/{}.",

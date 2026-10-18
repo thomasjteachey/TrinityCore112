@@ -252,16 +252,30 @@ Playerbot.BgFill.Tier.Hard.Characters = ""
 #    Playerbot.BgFill.Tier.Hard.BattlegroundTypes
 #        Description: Battleground type IDs that belong to each tier (100 Scarlet Chapel,
 #                     101 Blackrock Throne, 102 Obsidian Colosseum, ...). When one of these is
-#                     filled, the team the real players are fighting is dealt that tier's bots
-#                     first, then the tier next to it, then the far one; the players' own team
-#                     gets that tier's bots only once nobody else is left. A battleground in no
-#                     tier draws its bots at random. An arena skirmish matches its own arena's
+#                     filled, BOTH teams are dealt that tier's bots first, then the tier next
+#                     to it, then the far one, then bots in no tier. A battleground in no tier
+#                     draws its bots at random. An arena skirmish matches its own arena's
 #                     type, or 6 for every arena.
 #        Default:     "" (no tiers)
 
 Playerbot.BgFill.Tier.Easy.BattlegroundTypes = ""
 Playerbot.BgFill.Tier.Medium.BattlegroundTypes = ""
 Playerbot.BgFill.Tier.Hard.BattlegroundTypes = ""
+
+#    Playerbot.BgFill.ClassVariety.TeamPenalty
+#    Playerbot.BgFill.ClassVariety.MatchPenalty
+#        Description: Nudge the fill toward a mix of classes. Each seat is drawn at random
+#                     from the best tier still available, and a bot's chance is divided by
+#                     1 + TeamPenalty x (copies of its class already on that team)
+#                       + MatchPenalty x (copies of its class anywhere in the match).
+#                     The defaults make a class already on the team about five times less
+#                     likely to be dealt again - rare, never impossible. Tier order is never
+#                     broken. Arenas and untiered battlegrounds are nudged the same way.
+#                     0 and 0 deal in plain tier order. Picked up by .reload config.
+#        Default:     4 / 1
+
+Playerbot.BgFill.ClassVariety.TeamPenalty = 4
+Playerbot.BgFill.ClassVariety.MatchPenalty = 1
 
 #    Playerbot.PvpClassSpells.Enable
 #        Description: Enables Phase-4 class/spec PvP spell decision slices.
