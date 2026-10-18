@@ -189,9 +189,10 @@ constexpr uint32 MASK_TANK      = ClassBit(CLASS_WARRIOR) | ClassBit(CLASS_PALAD
 // The two real-world legendaries MUST stay at indices 0 and 1 - their guids
 // live in the cache marker's slots by index (checked below MARKER_SLOTS).
 //
-// The run-only six are their own rows (item_template 160801-160806, Map 1608):
-// five on the Kael'thas weapons' names and models, plus the Sunwell feral
-// staff for cat and bear druids. The tuning, in short: a one-hander is cut a
+// The run-only seven are their own rows (item_template 160801-160807, Map 1608):
+// five on the Kael'thas weapons' names and models, the Sunwell feral staff for
+// cat and bear druids, and classic's unreleased Shard of the Defiler, a
+// main-hand dagger for Backstab rogues. The tuning, in short: a one-hander is cut a
 // little below the best AQ40/BWL piece of its kind and carries a proc worth
 // about what Thunderfury's is (~30 damage per second, or ~5% of healing), a
 // two-hander matches its tier's best and adds 30 resistance and a minor proc,
@@ -206,7 +207,8 @@ constexpr ItemGrantInfo kItemGrants[ITEM_GRANT_COUNT] =
     { 160803, MASK_HEALER,            SPEC_HEALER,              2, ENCHANT_HEALING_55,       true, "Cosmic Infuser" },
     { 160804, MASK_TANK,              SPEC_TANK,                2, ENCHANT_SHIELD_STAMINA_7, true, "Phaseshift Bulwark" },
     { 160805, ClassBit(CLASS_HUNTER), SPEC_ANY,                 2, ENCHANT_SCOPE_HIT_3,      true, "Netherstrand Longbow" },
-    { 160806, ClassBit(CLASS_DRUID),  SPEC_MELEE | SPEC_TANK,   2, ENCHANT_AGILITY_25,       true, "Stanchion of Primal Instinct" }
+    { 160806, ClassBit(CLASS_DRUID),  SPEC_MELEE | SPEC_TANK,   2, ENCHANT_AGILITY_25,       true, "Stanchion of Primal Instinct" },
+    { 160807, ClassBit(CLASS_ROGUE),  SPEC_ANY,                 2, ENCHANT_CRUSADER,         true, "Shard of the Defiler" }
 };
 
 // Mechanics that count as crowd control for Boon of Resolve. Disarms are

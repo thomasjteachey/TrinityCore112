@@ -21,14 +21,15 @@
  *    itself; StripAll() unlearns them for every other exit.
  *
  *  - Legendaries: one per archetype - Thunderfury (one-hand melee),
- *    Sulfuras (two-hand melee), and six run-only items: five wearing the
+ *    Sulfuras (two-hand melee), and seven run-only items: five wearing the
  *    Kael'thas weapons' names and models - Infinity Blade (caster one-hand),
  *    Staff of Disintegration (caster staff), Cosmic Infuser (healer),
- *    Phaseshift Bulwark (tank shield), Netherstrand Longbow (hunter) - and
- *    the Sunwell feral staff, Stanchion of Primal Instinct (cat and bear).
+ *    Phaseshift Bulwark (tank shield), Netherstrand Longbow (hunter, needs
+ *    no ammo) - the Sunwell feral staff, Stanchion of Primal Instinct (cat
+ *    and bear), and Shard of the Defiler (Backstab rogue dagger).
  *    One-hand pieces are tuned against Thunderfury, two-handers against
  *    Sulfuras: the same stat cut against their tier's best epic, and a
- *    signature proc (custom spells 94101-94113) worth about what
+ *    signature proc (custom spells 94101-94114) worth about what
  *    Thunderfury's (or Sulfuras') is.
  *
  * The pool is filtered by the run's roster, not by whoever is clicking: an
@@ -283,7 +284,7 @@ namespace VioletHoldBoons
         char const* name;
     };
 
-    constexpr uint8 ITEM_GRANT_COUNT = 8;
+    constexpr uint8 ITEM_GRANT_COUNT = 9;
     // Every class spell rolls at this weight. Three per present class add up
     // fast, so it sits at the bottom of the scale (with the legendaries):
     // a full party's spells make up well under a fifth of the pool.
