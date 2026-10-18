@@ -6244,6 +6244,21 @@ namespace playerbot
                     if (EngageSelectedEnemyPlayer(player, enemyCarrier, "enemy-flag-carrier"))
                         return true;
 
+            // A bot sent to take a base fights what stands in its way, as it
+            // does out of combat below, and then takes the base. The chase
+            // that follows scans a hundred yards, and in a fight that never
+            // lets up it never let go: Strand of the Ancients' defenders stand
+            // at every gate the attackers have just broken, so an attacker
+            // sent for the graveyard behind that gate stayed on them and the
+            // attackers took no graveyards at all.
+            if (context.objective.type == BattlegroundObjectiveType::AssaultNode)
+            {
+                if (EngageNearestEnemyPlayer(player, 35.0f))
+                    return true;
+                if (TryAdvanceNodeObjective(player, battleground))
+                    return true;
+            }
+
             return EngageNearestEnemyPlayer(player, GetAggressiveCombatScanDistance(player, 100.0f));
         }
 
@@ -6425,8 +6440,9 @@ namespace playerbot
         }
 
         // The nearest enemy at a piece of ground: a vehicle someone is driving
-        // first (it is what brings a gate down), then a player.
-        Unit* FindEnemyAtGround(Player* player, Position const& ground, float range)
+        // first (it is what brings a gate down), then a player. One closer to
+        // the ground than minRange is passed over (inside a gun's dead zone).
+        Unit* FindEnemyAtGround(Player* player, Position const& ground, float range, float minRange = 0.0f)
         {
             Map* map = player->FindMap();
             if (!map)
@@ -6444,6 +6460,8 @@ namespace playerbot
                     candidate->IsSpectator())
                     continue;
                 if (!candidate->IsWithinDist3d(ground.GetPositionX(), ground.GetPositionY(), ground.GetPositionZ(), range))
+                    continue;
+                if (minRange > 0.0f && candidate->IsWithinDist3d(ground.GetPositionX(), ground.GetPositionY(), ground.GetPositionZ(), minRange))
                     continue;
 
                 // Line of sight counts gates: an enemy on the far side of a gate
@@ -6579,7 +6597,59 @@ namespace playerbot
             return true;
         }
 
-        bool AdvanceDriveSiegeDuty(Player* player, Battleground* battleground, playerbot::ObjectiveBotOrders const& orders)
+        // Manning a gun: turned on the nearest enemy it can hit, and every
+        // spell it has that hurts people as each comes off cooldown, aimed at
+        // where he stands - fired the way a driver fires at a gate.
+        bool ManTurretVehicle(Player* player, Unit* vehicleBase)
+        {
+            Creature* turret = vehicleBase->ToCreature();
+            if (!turret || turret->GetCharmerGUID() != player->GetGUID())
+                return true;
+
+            uint64 const botKey = player->GetGUID().GetRawValue();
+            uint32 const nowMs = GameTime::GetGameTimeMS();
+            uint32& lastCastMs = playerbot::LockedGetOrCreate(g_VehicleCastMsByBot, botKey);
+            if (lastCastMs && nowMs - lastCastMs < kDutyVehicleCastIntervalMs)
+                return true;
+
+            std::vector<SpellInfo const*> spells;
+            playerbot::CollectTurretSpells(turret, spells);
+            float reach = 0.0f;
+            float minRange = std::numeric_limits<float>::max();
+            for (SpellInfo const* spellInfo : spells)
+            {
+                reach = std::max(reach, spellInfo->GetMaxRange(false));
+                minRange = std::min(minRange, spellInfo->GetMinRange(false));
+            }
+            if (spells.empty())
+                return true;
+
+            Unit* target = FindEnemyAtGround(player, turret->GetPosition(), reach, minRange);
+            if (!target)
+                return true;
+
+            if (!turret->HasInArc(float(M_PI) / 6, target))
+                turret->SetFacingToObject(target);
+            lastCastMs = nowMs;
+
+            for (SpellInfo const* spellInfo : spells)
+            {
+                if (!turret->GetSpellHistory()->IsReady(spellInfo))
+                    continue;
+
+                SpellCastTargets targets;
+                targets.SetSrc(turret->GetPositionX(), turret->GetPositionY(), turret->GetPositionZ());
+                targets.SetDst(*target);
+                if (turret->CastSpell(CastSpellTargetArg(std::move(targets)), spellInfo->Id) == SPELL_CAST_OK)
+                    break;
+            }
+
+            return true;
+        }
+
+        // Up to the vehicle a duty gave the bot, and into the seat that drives
+        // it: a siege vehicle to drive at a gate, or a gun to man.
+        bool BoardDutyVehicle(Player* player, Battleground* battleground, playerbot::ObjectiveBotOrders const& orders)
         {
             Map* map = player->FindMap();
             Creature* vehicle = map ? map->GetCreature(orders.vehicleGuid) : nullptr;
@@ -6828,6 +6898,8 @@ namespace playerbot
         {
             if (hasOrders && orders.duty == playerbot::ObjectiveDuty::DriveSiege && vehicleBase->GetGUID() == orders.vehicleGuid)
                 return DriveSiegeVehicle(player, vehicleBase, orders);
+            if (hasOrders && orders.duty == playerbot::ObjectiveDuty::ManTurret && vehicleBase->GetGUID() == orders.vehicleGuid)
+                return ManTurretVehicle(player, vehicleBase);
 
             if (vehicleBase->GetTypeId() == TYPEID_UNIT && battleground->GetSiegeObjectiveCount() > 0)
             {
@@ -6849,7 +6921,8 @@ namespace playerbot
             case playerbot::ObjectiveDuty::CarryCharge:
                 return AdvanceCarryChargeDuty(player, battleground, orders);
             case playerbot::ObjectiveDuty::DriveSiege:
-                return AdvanceDriveSiegeDuty(player, battleground, orders);
+            case playerbot::ObjectiveDuty::ManTurret:
+                return BoardDutyVehicle(player, battleground, orders);
             case playerbot::ObjectiveDuty::GuardGate:
                 return AdvanceGuardGateDuty(player, battleground, orders);
             case playerbot::ObjectiveDuty::AssaultBoss:

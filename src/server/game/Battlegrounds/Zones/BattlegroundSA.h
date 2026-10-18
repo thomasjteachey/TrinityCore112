@@ -633,6 +633,7 @@ class BattlegroundSA : public Battleground
         bool GetSiegeObjectiveInfo(ObjectGuid playerGuid, uint32 index, BattlegroundSiegeObjective& objective) const override;
         bool GetSiegeChargeInfo(ObjectGuid playerGuid, BattlegroundSiegeChargeInfo& charge) const override;
         void GetSiegeVehicles(ObjectGuid playerGuid, GuidVector& vehicles) const override;
+        void GetTurrets(ObjectGuid playerGuid, GuidVector& turrets) const override;
         void GetStandingGates(GuidVector& gates) const override;
         void GetTeleporters(ObjectGuid playerGuid, std::vector<BattlegroundTeleporter>& teleporters) const override;
         bool OwnsPreparationState(Player const* player) const override;

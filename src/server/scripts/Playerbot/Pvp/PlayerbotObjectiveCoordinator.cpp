@@ -29,6 +29,8 @@
 #include "Map.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "Vehicle.h"
 
 #include <algorithm>
@@ -61,6 +63,12 @@ namespace
     // An enemy this close to the ground in front of one of our gates is a
     // threat to it.
     constexpr float kGateThreatRange = 60.0f;
+    // Gunners, as a share of the team: the guns cover the ground in front of
+    // the gates, and the gates still need the bodies at them.
+    constexpr uint32 kTurretSharePct = 30;
+    // A gunner already in its seat keeps the gun this far past its reach, so
+    // an enemy on the edge of it does not have the bot in and out of the seat.
+    constexpr float kTurretKeepMargin = 15.0f;
     constexpr uint32 kFlagHunters = 2;
     // What the duty a bot already has is worth, in yards of head start, so a
     // rebuild does not re-deal the whole team; and how long a bot keeps a duty
@@ -554,7 +562,120 @@ namespace
             plan.summary.push_back(line.str());
         }
 
-        // 3. Our gates under siege. A side with bases to play sends what the
+        // 3. Our guns: one gunner for each that has an enemy in its reach, the
+        //    busiest first, up to a share of the team. A gunner already seated
+        //    keeps its gun while there is anything near it to shoot at.
+        GuidVector turretGuids;
+        battleground->GetTurrets(referenceGuid, turretGuids);
+        if (!turretGuids.empty() && livingCount && untakenCount())
+        {
+            struct TurretView
+            {
+                Creature* turret = nullptr;
+                float reach = 0.0f;
+                uint32 inReach = 0;
+                uint32 nearReach = 0;
+                bool manned = false;
+            };
+
+            std::vector<TurretView> turrets;
+            for (ObjectGuid const& turretGuid : turretGuids)
+            {
+                Creature* turret = map->GetCreature(turretGuid);
+                if (!turret || !turret->IsAlive() || IsVehicleGivenUp(turretGuid, nowMs))
+                    continue;
+
+                TurretView view;
+                view.turret = turret;
+                view.reach = playerbot::GetTurretReach(turret);
+                if (view.reach <= 0.0f)
+                    continue;
+
+                for (Player const* enemy : enemies)
+                {
+                    float const distance = turret->GetExactDist(enemy);
+                    if (distance <= view.reach)
+                        ++view.inReach;
+                    if (distance <= view.reach + kTurretKeepMargin)
+                        ++view.nearReach;
+                }
+
+                if (view.nearReach)
+                    turrets.push_back(view);
+            }
+
+            std::sort(turrets.begin(), turrets.end(), [](TurretView const& a, TurretView const& b)
+                { return a.inReach > b.inReach; });
+
+            uint32 budget = std::min(untakenCount(), share(kTurretSharePct));
+            for (std::size_t i = 0; i < living.size() && budget; ++i)
+            {
+                if (taken[i])
+                    continue;
+
+                Creature const* seated = GetDrivenVehicle(living[i]);
+                if (!seated)
+                    continue;
+
+                for (TurretView& view : turrets)
+                {
+                    if (view.turret != seated || view.manned)
+                        continue;
+
+                    view.manned = true;
+                    assign(i, ObjectiveDuty::ManTurret, kNoTarget, seated->GetGUID());
+                    --budget;
+                    break;
+                }
+            }
+
+            uint32 manned = 0;
+            for (TurretView& view : turrets)
+            {
+                if (view.manned)
+                {
+                    ++manned;
+                    continue;
+                }
+                if (!budget)
+                    break;
+                if (!view.inReach || !IsControlSeatFree(view.turret))
+                    continue;
+
+                std::size_t best = living.size();
+                float bestCost = std::numeric_limits<float>::max();
+                for (std::size_t i = 0; i < living.size(); ++i)
+                {
+                    if (taken[i] || living[i]->GetVehicle())
+                        continue;
+
+                    float const cost = dutyCost(i, ObjectiveDuty::ManTurret, kNoTarget, view.turret->GetGUID(),
+                        view.turret->GetPosition());
+                    if (cost < bestCost)
+                    {
+                        bestCost = cost;
+                        best = i;
+                    }
+                }
+
+                if (best == living.size() || bestCost > kVehicleClaimRange)
+                    continue;
+
+                view.manned = true;
+                assign(best, ObjectiveDuty::ManTurret, kNoTarget, view.turret->GetGUID());
+                --budget;
+                ++manned;
+            }
+
+            if (manned)
+            {
+                std::ostringstream line;
+                line << "man " << manned << " of " << turretGuids.size() << " guns";
+                plan.summary.push_back(line.str());
+            }
+        }
+
+        // 4. Our gates under siege. A side with bases to play sends what the
         //    threat asks for; a side with none spreads everybody over its
         //    gates, the threatened ones first and heaviest.
         std::vector<SiegeView const*> ours;
@@ -591,7 +712,7 @@ namespace
             }
         }
 
-        // 4. The neutral flag of a base-capture match (Eye of the Storm). One
+        // 5. The neutral flag of a base-capture match (Eye of the Storm). One
         //    bot takes it and two run down an enemy carrying it; the rest
         //    keep the bases, which are where that flag is scored.
         if (battleground->GetDynamicNodeCount() > 0 && livingCount)
@@ -664,7 +785,7 @@ namespace
         {
             std::ostringstream line;
             line << "duties:";
-            for (uint8 duty = uint8(ObjectiveDuty::CarryCharge); duty <= uint8(ObjectiveDuty::FlagHunt); ++duty)
+            for (uint8 duty = uint8(ObjectiveDuty::CarryCharge); duty <= uint8(ObjectiveDuty::ManTurret); ++duty)
                 if (perDuty[duty])
                     line << " " << playerbot::GetObjectiveDutyName(ObjectiveDuty(duty)) << "=" << perDuty[duty];
             plan.summary.push_back(line.str());
@@ -743,6 +864,18 @@ namespace
                 if (orders.flagCarrierGuid.IsEmpty())
                     return false;
                 break;
+            case ObjectiveDuty::ManTurret:
+            {
+                // Still standing, and its seat empty or this bot's own: a player
+                // who climbed in first has the gun.
+                Map* map = bot->FindMap();
+                Creature* turret = map ? map->GetCreature(assignment.vehicleGuid) : nullptr;
+                if (!turret || !turret->IsAlive() || (bot->GetVehicleBase() != turret && !IsControlSeatFree(turret)))
+                    return false;
+
+                orders.vehicleGuid = assignment.vehicleGuid;
+                break;
+            }
             case ObjectiveDuty::None:
             default:
                 return false;
@@ -782,6 +915,7 @@ char const* GetObjectiveDutyName(ObjectiveDuty duty)
         case ObjectiveDuty::AssaultBoss: return "assault-boss";
         case ObjectiveDuty::FlagRunner:  return "flag-runner";
         case ObjectiveDuty::FlagHunt:    return "flag-hunt";
+        case ObjectiveDuty::ManTurret:   return "man-turret";
         case ObjectiveDuty::None:
         default:                         return "none";
     }
@@ -867,6 +1001,49 @@ int8 GetVehicleControlSeat(Unit const* vehicle)
             return seat.first;
 
     return -1;
+}
+
+void CollectTurretSpells(Creature const* turret, std::vector<SpellInfo const*>& spells)
+{
+    if (!turret)
+        return;
+
+    auto const hurtsPeople = [](SpellInfo const* spellInfo)
+    {
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+            if (effect.IsEffect(SPELL_EFFECT_SCHOOL_DAMAGE))
+                return true;
+        return false;
+    };
+
+    for (uint32 spellId : turret->m_spells)
+    {
+        SpellInfo const* spellInfo = spellId ? sSpellMgr->GetSpellInfo(spellId) : nullptr;
+        if (!spellInfo)
+            continue;
+
+        // Directly, or by the missile or spell it launches (Rocket Blast).
+        bool hurts = hurtsPeople(spellInfo);
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+            if (!hurts && (effect.IsEffect(SPELL_EFFECT_TRIGGER_MISSILE) || effect.IsEffect(SPELL_EFFECT_TRIGGER_SPELL)) &&
+                effect.TriggerSpell)
+                if (SpellInfo const* triggered = sSpellMgr->GetSpellInfo(effect.TriggerSpell))
+                    hurts = hurtsPeople(triggered);
+
+        if (hurts)
+            spells.push_back(spellInfo);
+    }
+}
+
+float GetTurretReach(Creature const* turret)
+{
+    std::vector<SpellInfo const*> spells;
+    CollectTurretSpells(turret, spells);
+
+    float reach = 0.0f;
+    for (SpellInfo const* spellInfo : spells)
+        reach = std::max(reach, spellInfo->GetMaxRange(false));
+    return reach;
 }
 
 std::vector<std::string> ObjectiveCoordinator::DescribeTeams(Player const* observer)

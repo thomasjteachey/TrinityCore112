@@ -987,6 +987,10 @@ class TC_GAME_API Battleground
         virtual bool GetSiegeChargeInfo(ObjectGuid /*playerGuid*/, BattlegroundSiegeChargeInfo& /*charge*/) const { return false; }
         // Living siege vehicles the asking player's team may drive at a gate.
         virtual void GetSiegeVehicles(ObjectGuid /*playerGuid*/, GuidVector& /*vehicles*/) const { }
+        // Living guns the asking player's team may man, whoever sits in them:
+        // vehicles that never move and shoot people (Strand of the Ancients'
+        // anti-personnel cannons).
+        virtual void GetTurrets(ObjectGuid /*playerGuid*/, GuidVector& /*turrets*/) const { }
         // Every gate still standing that nobody walks through, whichever side
         // holds it. Navmesh does not contain gameobjects, so a route the
         // pathfinder draws through one has to be refused by whoever follows it.

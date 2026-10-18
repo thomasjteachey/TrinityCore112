@@ -27,8 +27,10 @@
 #include <string>
 #include <vector>
 
+class Creature;
 class Map;
 class Player;
+class SpellInfo;
 class Unit;
 
 namespace playerbot
@@ -52,6 +54,8 @@ namespace playerbot
 //   - DriveSiege / CarryCharge: half the team (all of it on a side with no
 //     bases to play) works on the breachable enemy gate - one driver per free
 //     siege vehicle first, the rest fetching charges.
+//   - ManTurret: a gun of ours with an enemy in its reach gets a gunner, up to
+//     a share of the team; the rest still go to the gates.
 //   - GuardGate: a gate of ours under siege pulls its defenders off whatever
 //     else they were doing; a side with no bases to play guards all of them.
 //   - FlagRunner / FlagHunt: one bot takes the neutral flag, two run down an
@@ -65,7 +69,8 @@ enum class ObjectiveDuty : uint8
     GuardGate,
     AssaultBoss,
     FlagRunner,
-    FlagHunt
+    FlagHunt,
+    ManTurret
 };
 
 char const* GetObjectiveDutyName(ObjectiveDuty duty);
@@ -73,6 +78,11 @@ char const* GetObjectiveDutyName(ObjectiveDuty duty);
 // The seat that drives a vehicle (VEHICLE_SEAT_FLAG_CAN_CONTROL), or -1. Not
 // every vehicle keeps its driver in seat 0.
 int8 GetVehicleControlSeat(Unit const* vehicle);
+
+// A gun's spells that hurt people, directly or by what they launch, and how
+// far the furthest of them reaches (0 for a vehicle with none).
+void CollectTurretSpells(Creature const* turret, std::vector<SpellInfo const*>& spells);
+float GetTurretReach(Creature const* turret);
 
 struct ObjectiveBotOrders
 {
@@ -87,7 +97,7 @@ struct ObjectiveBotOrders
     uint32 chargeItemId = 0;
     GuidVector chargeSources;
 
-    // DriveSiege: the vehicle this bot was given.
+    // DriveSiege, ManTurret: the vehicle this bot was given.
     ObjectGuid vehicleGuid;
 
     // AssaultBoss.

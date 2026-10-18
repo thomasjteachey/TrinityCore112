@@ -1410,6 +1410,27 @@ void BattlegroundSA::GetSiegeVehicles(ObjectGuid playerGuid, GuidVector& vehicle
     }
 }
 
+void BattlegroundSA::GetTurrets(ObjectGuid playerGuid, GuidVector& turrets) const
+{
+    // Manned from the warmup on, so the guns are crewed when the boats land.
+    if (GetStatus() != STATUS_IN_PROGRESS || (!IsRoundInProgress() && Status != BG_SA_WARMUP && Status != BG_SA_SECOND_WARMUP))
+        return;
+
+    // The cannons carry the defenders' faction (OverrideGunFaction), and their
+    // spellclick seats only a friendly clicker.
+    TeamId teamId = TEAM_NEUTRAL;
+    if (!GetParticipantTeamId(playerGuid, teamId) || teamId == Attackers)
+        return;
+
+    for (uint32 i = BG_SA_GUN_1; i <= BG_SA_GUN_10; ++i)
+    {
+        Creature* gun = FindMatchCreature(i);
+        if (gun && gun->IsAlive() && gun->GetVehicleKit() && !gun->HasUnitFlag(UNIT_FLAG_UNINTERACTIBLE) &&
+            gun->HasNpcFlag(UNIT_NPC_FLAG_SPELLCLICK))
+            turrets.push_back(gun->GetGUID());
+    }
+}
+
 void BattlegroundSA::GetStandingGates(GuidVector& gates) const
 {
     // A damaged gate still blocks the way; only a destroyed one is open.
