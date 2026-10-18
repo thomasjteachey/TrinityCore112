@@ -57,7 +57,9 @@
 #include "Log.h"
 #include "Item.h"
 #include "ItemTemplate.h"
+#include "InstanceScript.h"
 #include "Map.h"
+#include "mod_pvpve_dungeon.h"
 #include "Group.h"
 #include "ObjectMgr.h"
 #include "Optional.h"
@@ -536,6 +538,26 @@ namespace BarracksHardcore
         return map && map->IsDungeon();
     }
 
+    // Inside an instance that is hosting a PvPvE run right now (the Stockades,
+    // mod_pvpve_dungeon). Nobody else is let in: the instance turns away anyone
+    // who did not come through the queue.
+    //
+    // Asked of the player's own instance rather than of PvpveDungeonMgr. This
+    // is read on map threads for every player on every tick, and the manager's
+    // run tables are unlocked maps that a boss kill in another instance can
+    // rewrite mid-lookup. The instance script belongs to the map that is
+    // updating this player.
+    bool IsInPvpveRun(Player const* player)
+    {
+        Map const* map = player ? player->FindMap() : nullptr;
+        InstanceMap const* instance = map ? map->ToInstanceMap() : nullptr;
+        if (!instance)
+            return false;
+
+        PvpveDungeonInstance const* pvpve = dynamic_cast<PvpveDungeonInstance const*>(instance->GetInstanceScript());
+        return pvpve && pvpve->HasActivePvpveRun();
+    }
+
     // Classic zone level caps. AreaTableEntry::ExplorationLevel is ZERO for
     // every zone in this realm's rebuilt DBC, so reading it armed nothing,
     // anywhere - the whole FFA system (and every bot's red name) was inert.
@@ -934,6 +956,15 @@ namespace BarracksHardcore
     void ApplyFfaState(Player* player, bool areaUpdate = false)
     {
         if (!s_enabled || !player || !player->IsInWorld())
+            return;
+
+        // A PvPvE run owns the byte for everyone in it: mod_pvpve_dungeon
+        // forces FFA on its players every world tick. Disarming them here as
+        // instanced content fought that - cleared each player tick, forced
+        // back each world tick, with a faction re-send and a log line every
+        // time, for every player in the run. Once the run ends the instance
+        // says so, and the instanced-content disarm below takes over again.
+        if (IsInPvpveRun(player))
             return;
 
         // Read before anything below can move it. On an area update the core

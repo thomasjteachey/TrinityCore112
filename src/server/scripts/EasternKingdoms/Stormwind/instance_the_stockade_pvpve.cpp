@@ -646,6 +646,11 @@ public:
             _pvpveRunId = 0;
         }
 
+        bool HasActivePvpveRun() const override
+        {
+            return _pvpveRunId != 0;
+        }
+
         void OnUnitDeath(Unit* unit) override
         {
             InstanceScript::OnUnitDeath(unit);

@@ -57,6 +57,12 @@ class PvpveDungeonInstance
 public:
     virtual ~PvpveDungeonInstance() = default;
     virtual void OnPvpveRunFinished(uint32 runId, PvpveTeam const& winningTeam) = 0;
+
+    // Whether this instance is hosting a run right now. Answered from the
+    // instance's own state, so it is safe to ask from the instance map's own
+    // update thread - unlike PvpveDungeonMgr's run tables, which are unlocked
+    // and rewritten by a boss kill in whichever instance it happens.
+    virtual bool HasActivePvpveRun() const = 0;
 };
 
 struct PvpveDungeonRun
