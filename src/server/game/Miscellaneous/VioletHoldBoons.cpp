@@ -192,7 +192,7 @@ constexpr uint32 MASK_TANK      = ClassBit(CLASS_WARRIOR) | ClassBit(CLASS_PALAD
 // The run-only seven are their own rows (item_template 160801-160807, Map 1608):
 // five on the Kael'thas weapons' names and models, the Sunwell feral staff for
 // cat and bear druids, and classic's unreleased Shard of the Defiler, a
-// main-hand dagger for Backstab rogues. The tuning, in short: a one-hander is cut a
+// one-hand dagger for Backstab rogues. The tuning, in short: a one-hander is cut a
 // little below the best AQ40/BWL piece of its kind and carries a proc worth
 // about what Thunderfury's is (~30 damage per second, or ~5% of healing), a
 // two-hander matches its tier's best and adds 30 resistance and a minor proc,
