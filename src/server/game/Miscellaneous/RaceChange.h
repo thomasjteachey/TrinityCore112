@@ -34,8 +34,9 @@
 //
 //  - SkillLineAbility rows gated on the OLD race and not the new one: the
 //    racial skill lines, Plainsrunning, the class-flavoured Every Man for
-//    Himself, and the engineering mounts, which trade for their counterpart
-//    through player_factionchange_spells rather than simply vanishing.
+//    Himself, and the engineering mounts, which a character that knows one
+//    trades for its counterpart through player_factionchange_spells rather
+//    than simply losing.
 //  - The start-spell list the character is taught at every login
 //    (playercreateinfo_spell_custom, or the tournament kit), where it differs
 //    between the two races.

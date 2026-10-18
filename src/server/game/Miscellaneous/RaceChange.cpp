@@ -26,6 +26,7 @@
 #include "TournamentMode.h"
 #include "World.h"
 #include <array>
+#include <map>
 #include <set>
 #include <string>
 
@@ -150,6 +151,7 @@ void RaceChange::AppendSpellSwap(CharacterDatabaseTransaction trans, ObjectGuid 
 
     std::set<uint32> drop;
     std::set<uint32> grant;
+    std::map<uint32, uint32> trade; // dropped spell -> its counterpart
     std::set<uint32> dropSkills;
     std::set<uint32> forgetQuests;
     std::set<uint32> rewardQuests;
@@ -175,7 +177,10 @@ void RaceChange::AppendSpellSwap(CharacterDatabaseTransaction trans, ObjectGuid 
     // The engineering mounts and the like have a counterpart for the other
     // side in player_factionchange_spells. Every race is one team here, so the
     // stock faction change never runs; trade them the same way instead.
-    for (uint32 spellId : std::set<uint32>(drop))
+    // `drop` holds every old-race row, known or not, so the counterpart is
+    // only a candidate here: the SQL below hands it over only to a character
+    // that knows the spell it replaces.
+    for (uint32 spellId : drop)
     {
         uint32 counterpart = 0;
         for (auto const& [allianceSpell, hordeSpell] : sObjectMgr->FactionChangeSpells)
@@ -189,7 +194,7 @@ void RaceChange::AppendSpellSwap(CharacterDatabaseTransaction trans, ObjectGuid 
         }
 
         if (counterpart && !drop.count(counterpart) && FitsRace(counterpart, newRaceMask, classMask))
-            grant.insert(counterpart);
+            trade[spellId] = counterpart;
     }
 
     // 2. The login start list, where the two races' lists differ. The new
@@ -237,6 +242,15 @@ void RaceChange::AppendSpellSwap(CharacterDatabaseTransaction trans, ObjectGuid 
     for (uint32 spellId : grant)
         drop.erase(spellId);
 
+    // Ahead of the DELETE below, which takes the original away. character_spell
+    // is keyed on (guid, spell), so each SELECT yields one row at most.
+    for (auto const& [spellId, counterpart] : trade)
+    {
+        drop.erase(counterpart);
+        trans->PAppend("INSERT IGNORE INTO `character_spell` (`guid`, `spell`, `active`, `disabled`) "
+            "SELECT {}, {}, 1, 0 FROM `character_spell` WHERE `guid` = {} AND `spell` = {}", lowGuid, counterpart, lowGuid, spellId);
+    }
+
     if (!drop.empty())
     {
         std::string const ids = Join(drop);
@@ -268,8 +282,8 @@ void RaceChange::AppendSpellSwap(CharacterDatabaseTransaction trans, ObjectGuid 
         trans->PAppend("INSERT IGNORE INTO `character_queststatus_rewarded` (`guid`, `quest`, `active`) VALUES ({}, {}, 1)", lowGuid, questId);
     }
 
-    TC_LOG_INFO("entities.player", "Race change {}: race {} -> {}, class {}, level {}{}: {} spell(s) removed, {} granted, {} skill line(s) dropped.",
-        guid.ToString(), oldRace, newRace, playerClass, level, tournament ? " (tournament)" : "", drop.size(), grant.size(), dropSkills.size());
+    TC_LOG_INFO("entities.player", "Race change {}: race {} -> {}, class {}, level {}{}: {} spell(s) removed, {} granted, {} counterpart(s) traded if known, {} skill line(s) dropped.",
+        guid.ToString(), oldRace, newRace, playerClass, level, tournament ? " (tournament)" : "", drop.size(), grant.size(), trade.size(), dropSkills.size());
 }
 
 std::set<uint32> RaceChange::RacialAbilitiesAtLevel(uint8 race, uint8 playerClass, uint8 level)
