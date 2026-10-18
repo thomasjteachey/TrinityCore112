@@ -3196,59 +3196,6 @@ bool HasHunterStingFromCaster(Unit const* unit, ObjectGuid casterGuid)
             HasAuraFromSpellChain(player, 31892);      // Seal of Blood / Seal of the Martyr
     }
 
-    ObjectGuid SelectFriendlyWithoutAuraFromSpellChain(Player const* player, uint32 baseSpellId, float maxDistance, bool includeSelf)
-    {
-        if (!player || !player->FindMap() || !baseSpellId)
-            return ObjectGuid::Empty;
-
-        auto isEligible = [&](Player* candidate)
-        {
-            if (!candidate || !candidate->IsAlive())
-                return false;
-            if (!IsFriendlySupportTarget(player, candidate))
-                return false;
-            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
-                return false;
-            if (HasAuraFromSpellChain(candidate, baseSpellId))
-                return false;
-
-            return true;
-        };
-
-        if (includeSelf &&
-            player->IsAlive() &&
-            player->IsWithinLOSInMap(player) &&
-            player->IsWithinDistInMap(player, maxDistance) &&
-            !HasAuraFromSpellChain(player, baseSpellId))
-        {
-            return player->GetGUID();
-        }
-
-    Player* bestTarget = nullptr;
-    float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
-    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
-    {
-        Player* candidate = itr->GetSource();
-        // see the note in SelectFriendlyWithManaAndWithoutAuraFromSpellChain:
-        // includeSelf must gate this sweep too, or the caster (distance 0)
-        // always wins and the flag does nothing.
-        if (!includeSelf && candidate == player)
-            continue;
-        if (!isEligible(candidate))
-            continue;
-
-            float const distance = player->GetDistance(candidate);
-            if (distance < bestDistance)
-            {
-                bestDistance = distance;
-                bestTarget = candidate;
-            }
-        }
-
-        return bestTarget ? bestTarget->GetGUID() : ObjectGuid::Empty;
-    }
-
 ObjectGuid SelectFriendlyWithoutManaAndAuraFromSpellChain(Player const* player, uint32 baseSpellId, float maxDistance)
 {
     if (!player || !player->FindMap() || !baseSpellId)
@@ -3327,27 +3274,23 @@ ObjectGuid SelectFriendlyWithManaAndWithoutAuraFromSpellChain(Player const* play
     return bestTarget ? bestTarget->GetGUID() : ObjectGuid::Empty;
 }
 
-ObjectGuid SelectFriendlyWithoutAnyAuraFromSpellChain(Player const* player, std::initializer_list<uint32> baseSpellIds, float maxDistance, bool includeSelf)
+// Every raid buff below is TARGET_UNIT_CASTER_AREA_RAID: it lands on the
+// caster's raid members in range that the spell's own target check accepts,
+// whoever the bot "aimed" it at. The support-target test the other selectors
+// use also takes same-team players that check refuses - outside the caster's
+// raid, a GM, someone the caster cannot see or assist - so one of them in
+// range kept the buff "missing" forever. Every buffer then recast it on every
+// pass, and each cast replaced the copy the rest of the raid already had:
+// Greater Blessing of Kings changing hands between paladins nonstop on
+// Strand's boats. Only a player the cast would actually reach counts.
+ObjectGuid SelectRaidBuffRecipientWithoutAnyAuraFromSpellChain(Player const* player, uint32 castSpellId, std::initializer_list<uint32> baseSpellIds, float maxDistance)
 {
-    if (!player || !player->FindMap() || baseSpellIds.size() == 0)
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(castSpellId);
+    if (!player || !player->FindMap() || !spellInfo || baseSpellIds.size() == 0)
         return ObjectGuid::Empty;
 
-        auto isEligible = [&](Player* candidate)
-        {
-            if (!candidate || !candidate->IsAlive())
-                return false;
-            if (!IsFriendlySupportTarget(player, candidate))
-                return false;
-            if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
-                return false;
-            if (HasAnyAuraFromSpellChain(candidate, baseSpellIds))
-                return false;
-
-            return true;
-        };
-
-        if (includeSelf && isEligible(const_cast<Player*>(player)))
-            return player->GetGUID();
+    if (player->IsAlive() && !HasAnyAuraFromSpellChain(player, baseSpellIds))
+        return player->GetGUID();
 
     Player* bestTarget = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
@@ -3355,19 +3298,25 @@ ObjectGuid SelectFriendlyWithoutAnyAuraFromSpellChain(Player const* player, std:
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
-        if (!isEligible(candidate))
+        if (!candidate || candidate == player || !candidate->IsAlive() || candidate->IsSpectator())
+            continue;
+        if (!player->IsInRaidWith(candidate) || !player->IsValidAssistTarget(candidate, spellInfo))
+            continue;
+        if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
+            continue;
+        if (HasAnyAuraFromSpellChain(candidate, baseSpellIds))
             continue;
 
-            float const distance = player->GetDistance(candidate);
-            if (distance < bestDistance)
-            {
-                bestDistance = distance;
-                bestTarget = candidate;
-            }
+        float const distance = player->GetDistance(candidate);
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            bestTarget = candidate;
         }
-
-        return bestTarget ? bestTarget->GetGUID() : ObjectGuid::Empty;
     }
+
+    return bestTarget ? bestTarget->GetGUID() : ObjectGuid::Empty;
+}
 
 SpellDecision SelectMissingBattlegroundRaidBuff(Player const* player)
 {
@@ -3409,13 +3358,13 @@ SpellDecision SelectMissingBattlegroundRaidBuff(Player const* player)
         case CLASS_DRUID:
         {
             if (IsZeroManaCostSpellReady(player, 21850))
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { 9885, 21850 }, 45.0f, true); !targetGuid.IsEmpty())
+                if (ObjectGuid targetGuid = SelectRaidBuffRecipientWithoutAnyAuraFromSpellChain(player, 21850, { 9885, 21850 }, 45.0f); !targetGuid.IsEmpty())
                     return makeDecision("druid gift of the wild raid", "apply free raid-wide stat buff", 21850,
                         playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID());
 
             if (IsZeroManaCostSpellReady(player, kDruidMassThornsSpellId))
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player,
-                    { kDruidThornsSpellId, kDruidMassThornsSpellId }, 45.0f, true); !targetGuid.IsEmpty())
+                if (ObjectGuid targetGuid = SelectRaidBuffRecipientWithoutAnyAuraFromSpellChain(player, kDruidMassThornsSpellId,
+                    { kDruidThornsSpellId, kDruidMassThornsSpellId }, 45.0f); !targetGuid.IsEmpty())
                     return makeDecision("druid mass thorns raid", "apply free raid-wide thorns buff", kDruidMassThornsSpellId,
                         playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID());
 
@@ -3424,17 +3373,17 @@ SpellDecision SelectMissingBattlegroundRaidBuff(Player const* player)
         case CLASS_PRIEST:
         {
             if (IsZeroManaCostSpellReady(player, 21564))
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { 10938, 21564 }, 45.0f, true); !targetGuid.IsEmpty())
+                if (ObjectGuid targetGuid = SelectRaidBuffRecipientWithoutAnyAuraFromSpellChain(player, 21564, { 10938, 21564 }, 45.0f); !targetGuid.IsEmpty())
                     return makeDecision("priest prayer of fortitude raid", "apply free raid-wide fortitude buff", 21564,
                         playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID());
 
             if (IsZeroManaCostSpellReady(player, 27683))
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { 10958, 27683 }, 45.0f, true); !targetGuid.IsEmpty())
+                if (ObjectGuid targetGuid = SelectRaidBuffRecipientWithoutAnyAuraFromSpellChain(player, 27683, { 10958, 27683 }, 45.0f); !targetGuid.IsEmpty())
                     return makeDecision("priest prayer of shadow protection raid", "apply free raid-wide shadow protection buff", 27683,
                         playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID());
 
             if (IsZeroManaCostSpellReady(player, 27681))
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { 27841, 27681 }, 45.0f, true); !targetGuid.IsEmpty())
+                if (ObjectGuid targetGuid = SelectRaidBuffRecipientWithoutAnyAuraFromSpellChain(player, 27681, { 27841, 27681 }, 45.0f); !targetGuid.IsEmpty())
                     return makeDecision("priest prayer of spirit raid", "apply free raid-wide spirit buff", 27681,
                         playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID());
 
@@ -3443,7 +3392,7 @@ SpellDecision SelectMissingBattlegroundRaidBuff(Player const* player)
         case CLASS_MAGE:
         {
             if (IsZeroManaCostSpellReady(player, 23028))
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { 10157, 23028 }, 45.0f, true); !targetGuid.IsEmpty())
+                if (ObjectGuid targetGuid = SelectRaidBuffRecipientWithoutAnyAuraFromSpellChain(player, 23028, { 10157, 23028 }, 45.0f); !targetGuid.IsEmpty())
                     return makeDecision("mage arcane brilliance raid", "apply free raid-wide intellect buff", 23028,
                         playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID());
 
@@ -3453,7 +3402,7 @@ SpellDecision SelectMissingBattlegroundRaidBuff(Player const* player)
         {
             bool const isRetPaladin = DetectClassicClassProfile(player).profile == ClassicClassProfile::TertiaryClassic;
             if (!isRetPaladin && IsZeroManaCostSpellReady(player, 25898))
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 25898, 45.0f, true); !targetGuid.IsEmpty())
+                if (ObjectGuid targetGuid = SelectRaidBuffRecipientWithoutAnyAuraFromSpellChain(player, 25898, { 20217, 25898 }, 45.0f); !targetGuid.IsEmpty())
                     return makeDecision("paladin greater blessing of kings raid", "apply free greater blessing to an unbuffed class", 25898,
                         playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid);
 
