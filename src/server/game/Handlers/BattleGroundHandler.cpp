@@ -887,12 +887,13 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
         queueBgTypeId = masterBgTypeId;
 
     // Solo Shuffle's battlemaster takes two queues: a 2v2 or a 3v3 skirmish,
-    // alone. Its window only offers those rows, so anything else is an old
-    // client or a party leader pressing Join as Group.
-    if (queueBgTypeId == BATTLEGROUND_SSH &&
-        (asGroup || isRated || (arenatype != ARENA_TYPE_2v2 && arenatype != ARENA_TYPE_3v3)))
+    // alone or with a party of up to a whole match - four or six, who are
+    // dealt into the teams like anyone else. Its window only offers those
+    // rows, so anything else is an old client.
+    bool const shuffle = queueBgTypeId == BATTLEGROUND_SSH;
+    if (shuffle && (isRated || (arenatype != ARENA_TYPE_2v2 && arenatype != ARENA_TYPE_3v3)))
     {
-        ChatHandler(this).SendSysMessage("Solo Shuffle is a 2v2 or 3v3 skirmish you queue for alone.");
+        ChatHandler(this).SendSysMessage("Solo Shuffle is a 2v2 or 3v3 skirmish.");
         return;
     }
 
@@ -953,7 +954,8 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
             return;
         if (grp->GetLeaderGUID() != _player->GetGUID())
             return;
-        err = grp->CanJoinBattlegroundQueue(bg, bgQueueTypeId, arenatype, arenatype, isRated != 0, arenaslot);
+        uint32 const partySize = shuffle ? uint32(arenatype) * 2 : uint32(arenatype);
+        err = grp->CanJoinBattlegroundQueue(bg, bgQueueTypeId, partySize, partySize, isRated != 0, arenaslot);
     }
 
     uint32 ateamId = 0;
@@ -983,6 +985,7 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
     if (asGroup)
     {
         uint32 avgTime = 0;
+        uint32 shuffleParty = 0;
 
         if (err > 0)
         {
@@ -995,8 +998,15 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
             else
                 bg->SetRated(false);
 
-            GroupQueueInfo* ginfo = bgQueue.AddGroup(_player, grp, bgTypeId, bracketEntry, arenatype, isRated != 0, false, arenaRating, matchmakerRating, ateamId, previousOpponents);
-            avgTime = bgQueue.GetAverageQueueWaitTime(ginfo, bracketEntry->GetBracketId());
+            // A shuffle deals its sides per person, so a party is queued as
+            // one entry per member below, tied together to arrive in one match.
+            if (shuffle)
+                shuffleParty = bgQueue.NewShuffleParty();
+            else
+            {
+                GroupQueueInfo* ginfo = bgQueue.AddGroup(_player, grp, bgTypeId, bracketEntry, arenatype, isRated != 0, false, arenaRating, matchmakerRating, ateamId, previousOpponents);
+                avgTime = bgQueue.GetAverageQueueWaitTime(ginfo, bracketEntry->GetBracketId());
+            }
         }
 
         for (GroupReference* itr = grp->GetFirstMember(); itr != nullptr; itr = itr->next())
@@ -1012,6 +1022,13 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
                 sBattlegroundMgr->BuildGroupJoinedBattlegroundPacket(&data, err);
                 member->SendDirectMessage(&data);
                 continue;
+            }
+
+            if (shuffleParty)
+            {
+                GroupQueueInfo* ginfo = bgQueue.AddGroup(member, nullptr, bgTypeId, bracketEntry, arenatype, false, false, 0, 0);
+                ginfo->ShuffleParty = shuffleParty;
+                avgTime = bgQueue.GetAverageQueueWaitTime(ginfo, bracketEntry->GetBracketId());
             }
 
             // add to queue

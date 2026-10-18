@@ -561,8 +561,9 @@ bool Group::RemoveMember(ObjectGuid guid, RemoveMethod const& method /*= GROUP_R
                 if (!bgQueue.GetPlayerGroupInfoData(guid, &ginfo))
                     continue;
 
-                // Keep solo queues intact; only remove entries that still represent a grouped queue.
-                if (ginfo.Players.size() <= 1)
+                // Keep solo queues intact; only remove entries that still represent a grouped queue
+                // (a Solo Shuffle party is one entry per member, tied by ShuffleParty).
+                if (ginfo.Players.size() <= 1 && !ginfo.ShuffleParty)
                     continue;
 
                 uint32 queueSlot = player->GetBattlegroundQueueIndex(bgQueueTypeId);
@@ -2079,7 +2080,9 @@ GroupJoinBattlegroundResult Group::CanJoinBattlegroundQueue(Battleground const* 
     // check for min / max count
     uint32 memberscount = GetMembersCount();
 
-    if (memberscount > bgEntry->MaxGroupSize)                // no MinPlayerCount for battlegrounds
+    // An arena party is sized by the arena rule at the end instead: Solo
+    // Shuffle takes a whole match's six where the arena row says five.
+    if (!bgOrTemplate->isArena() && memberscount > bgEntry->MaxGroupSize) // no MinPlayerCount for battlegrounds
         return ERR_BATTLEGROUND_NONE;                        // ERR_GROUP_JOIN_BATTLEGROUND_TOO_MANY handled on client side
 
     // get a player as reference, to compare other players' stats to (arena team id, queue id based on level, etc.)
@@ -2155,7 +2158,8 @@ GroupJoinBattlegroundResult Group::CanJoinBattlegroundQueue(Battleground const* 
     // where the realm fills skirmishes - exactly as it already does for the lone
     // player who queues with no party at all. Only an oversized party is still
     // refused: no side has room for it, so the queue would hold it forever
-    // without ever saying why.
+    // without ever saying why. (Solo Shuffle passes a whole match's size: it
+    // seats a party over both sides.)
     if (bgOrTemplate->isArena() && (isRated ? memberscount != MinPlayerCount : memberscount > MinPlayerCount))
         return ERR_ARENA_TEAM_PARTY_SIZE;
 
