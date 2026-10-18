@@ -4670,7 +4670,11 @@ namespace
                 bestAmmo = proto;
                 bestAmmoSlot = slot;
             }
+            // The biggest bag it can PAY for: picking the biggest outright chose a
+            // 2g Heavy Brown Bag over the 25s satchel beside it, the purchase
+            // failed, and a bot short of 2g never bought a bag at all.
             else if (hasEmptyBagSlot && proto->Class == ITEM_CLASS_CONTAINER && proto->SubClass == ITEM_SUBCLASS_CONTAINER &&
+                bot->HasEnoughMoney(uint32(proto->BuyPrice)) &&
                 (!bestBag || proto->ContainerSlots > bestBag->ContainerSlots))
             {
                 bestBag = proto;
@@ -5284,7 +5288,9 @@ namespace
         }
     }
 
-    uint32 SellVendorJunk(Player* bot)
+    // dryRun counts what a merchant would take without selling it, so the errand
+    // scan can ask whether a trip would empty anything before it walks there.
+    uint32 SellVendorJunk(Player* bot, bool dryRun = false)
     {
         // For its side effect: a hunter's stale Auto Shot holder would otherwise
         // have CanEquipItem refuse every probe below, and the white-gear branch
@@ -5447,6 +5453,12 @@ namespace
             if (!sellable)
                 return;
 
+            if (dryRun)
+            {
+                ++soldCount;
+                return;
+            }
+
             bot->ModifyMoney(int64(VendorPayout(bot, proto, item->GetCount())));
             bot->DestroyItem(bag, slot, true);
             ++soldCount;
@@ -5455,7 +5467,7 @@ namespace
         // ...and the survivor is capped at one stack. Done after the loop so the
         // count is measured against what is actually left, and by entry only once
         // the duplicates are already gone.
-        if (!keepBooze.IsEmpty() && keepCount > BOOZE_CARRY_LIMIT)
+        if (!dryRun && !keepBooze.IsEmpty() && keepCount > BOOZE_CARRY_LIMIT)
             if (Item const* kept = bot->GetItemByGuid(keepBooze))
                 bot->DestroyItemCount(kept->GetEntry(), keepCount - BOOZE_CARRY_LIMIT, true);
 
@@ -6508,8 +6520,17 @@ namespace
                 (UsesMana(bot) && CountConsumableUnits(bot, true) == 0 && !ConjureSpellId(bot, true)) ||
                 (RequiredAmmoSubclass(bot) &&
                     (!bot->GetUInt32Value(PLAYER_AMMO_ID) || bot->GetItemCount(bot->GetUInt32Value(PLAYER_AMMO_ID)) == 0)));
+        // A tight pack is a reason to walk only when the merchant would take
+        // something out of it. Trade goods wait for the auction house until the
+        // pack is down to its last slot (SellVendorJunk), so a bot at two or
+        // three free slots holding herbs and ore had nothing to sell and still
+        // "needed a vendor": every merchant in town got visited in turn, each
+        // one marked recent, selling nothing - Holmer pacing Tarren Mill on a
+        // bare backpack it could not afford a bag for.
+        bool const packNeedsMerchant = cfg.vendorEnabled && CountFreeBagSlots(bot) < 4 &&
+            SellVendorJunk(bot, true) > 0;
         bool const needVendor = cfg.vendorEnabled &&
-            (CountFreeBagSlots(bot) < 4 || needRepair || needSupplies);
+            (packNeedsMerchant || needRepair || needSupplies);
 
         // A guardian walks to a merchant for ONE reason: a pack filling up with
         // greys a merchant will buy. Its rations are bought on the spot at rest
@@ -6602,7 +6623,7 @@ namespace
             {
                 // A pure supplies need demands a vendor that stocks them; junk
                 // selling and repair accept any merchant.
-                bool const otherNeeds = CountFreeBagSlots(bot) < 4 || needRepair;
+                bool const otherNeeds = packNeedsMerchant || needRepair;
                 if (otherNeeds || !needSupplies || VendorStocksNeededSupplies(bot, npc))
                     return beginErrand(npc, PveErrandKind::Vendor);
             }
