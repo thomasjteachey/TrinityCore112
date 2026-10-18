@@ -30156,7 +30156,7 @@ void Player::ResurrectPetAtSpiritGuide()
 
 void Player::SaveGuardianActionBar(Unit const* guardian)
 {
-    CharmInfo* charmInfo = guardian->GetCharmInfo();
+    CharmInfo const* charmInfo = guardian->GetCharmInfo();
     if (!charmInfo || guardian->IsPet() || !guardian->HasUnitTypeMask(UNIT_MASK_CONTROLABLE_GUARDIAN))
         return;
 

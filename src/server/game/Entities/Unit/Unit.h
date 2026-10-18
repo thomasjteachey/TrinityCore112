@@ -1313,6 +1313,7 @@ class TC_GAME_API Unit : public WorldObject
         bool isPossessing(Unit* u) const;
 
         CharmInfo* GetCharmInfo() { return m_charmInfo; }
+        CharmInfo const* GetCharmInfo() const { return m_charmInfo; }
         CharmInfo* InitCharmInfo();
         void DeleteCharmInfo();
         void SetPetNumberForClient(uint32 petNumber) { SetUInt32Value(UNIT_FIELD_PETNUMBER, petNumber); }
