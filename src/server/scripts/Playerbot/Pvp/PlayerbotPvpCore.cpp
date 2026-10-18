@@ -7268,6 +7268,20 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "rogue kick", isCombatRogue ? "interrupt nearby enemy cast" : "interrupt enemy cast", 1766, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyCastingTarget ? nearbyCastingTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, player->HealthBelowPct(40) && IsSpellReady(player, 5277), 47.0f,
         { "rogue evasion", "defensive survival in melee", 5277, playerbot::PvpClassSpellContext::TargetMode::Self });
+    // Shadowstep (36554, the Subtlety tier-6 talent) puts the rogue behind its
+    // target from up to 25 yards without breaking stealth, so it is both the gap
+    // closer and the way into the opener: from stealth it lands the rogue behind
+    // the target and the opener, out of reach until then, fires next. It sits
+    // just over Sprint so the step goes first and Sprint is kept for when it is
+    // down. Only ever the current target - stepping to whoever else is nearest
+    // would abandon the kill. A rogue without the talent gets false from
+    // IsSpellReady, and a bot's near teleport lands inline (Player::TeleportTo).
+    constexpr uint32 kRogueShadowstepSpellId = 36554;
+    bool const shadowstepToTarget = IsSpellReady(player, kRogueShadowstepSpellId) &&
+        SelectEnemyGapCloserTarget(player, target, 8.0f, 25.0f, false) == target;
+    AddDecisionCandidate(candidates, shadowstepToTarget, 46.5f,
+        { "rogue shadowstep", holdStealthForOpener ? "step behind the target for the stealth opener" : "close the gap behind the target",
+          kRogueShadowstepSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy, target->GetGUID() });
     // Sprint is the T2 wrapper chain 90514 -> 90515 -> 90516; the stock chain
     // 2983 -> 8696 -> 11305 it casts is never held (WrappedSpells.h). Ask for
     // the top rank and let the resolver walk down to the one the rogue owns.
@@ -7360,12 +7374,14 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     // still closing. That is how Quinfyn walked up to a player and opened with
     // Sinister Strike. Now the rogue opens or keeps closing: the fallback keeps
     // the opener as the decision, which drives the approach and waits out the
-    // energy. Sprint stays - it closes the gap without breaking stealth.
+    // energy. Sprint and Shadowstep stay - both close the gap without breaking
+    // stealth.
     if (holdStealthForOpener)
         candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
             [stealthOpenerSpellId, sprintSpellId](PrioritizedSpellDecision const& candidate)
             {
-                return candidate.decision.spellId != stealthOpenerSpellId && candidate.decision.spellId != sprintSpellId;
+                return candidate.decision.spellId != stealthOpenerSpellId && candidate.decision.spellId != sprintSpellId &&
+                    candidate.decision.spellId != kRogueShadowstepSpellId;
             }), candidates.end());
 
         return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
