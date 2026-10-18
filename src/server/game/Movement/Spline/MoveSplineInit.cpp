@@ -561,6 +561,19 @@ namespace Movement
         unit->m_movementInfo.SetMovementFlags(moveFlags);
         move_spline.Initialize(args);
 
+        // A bot standing on a boat or lift that only the clients animate. Sent
+        // in world coordinates, the move would take it off the deck on every
+        // client and put it where the server has it - up to a second's sailing
+        // behind a Strand boat - until its next placement brought it back: bots
+        // blinking in and out along the crossing. The clients keep it at its
+        // place on the deck instead; whoever carries it takes the spline off
+        // the server (BattlegroundSA::CarryBoatRider, GameObject::CarryLiftRiders).
+        if (unit->IsServerPlacedGameObjectPassenger())
+        {
+            unit->BroadcastServerPlacedMovement();
+            return move_spline.Duration();
+        }
+
         WorldPacket data(SMSG_MONSTER_MOVE, 64);
         data << unit->GetPackGUID();
         if (transport)
@@ -606,6 +619,14 @@ namespace Movement
         unit->m_movementInfo.RemoveMovementFlag(MOVEMENTFLAG_FORWARD | MOVEMENTFLAG_SPLINE_ENABLED);
         move_spline.onTransport = transport;
         move_spline.Initialize(args);
+
+        // See Launch: on a boat or lift the clients animate, a stop sent in
+        // world coordinates takes the bot off the deck just the same.
+        if (unit->IsServerPlacedGameObjectPassenger())
+        {
+            unit->BroadcastServerPlacedMovement();
+            return;
+        }
 
         WorldPacket data(SMSG_MONSTER_MOVE, 64);
         data << unit->GetPackGUID();

@@ -12362,6 +12362,12 @@ void Unit::BroadcastServerPlacedMovement()
     SendMessageToSet(&data, false);
 }
 
+bool Unit::IsServerPlacedGameObjectPassenger() const
+{
+    return IsSocketlessServerDrivenPlayer(this) && HasUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT) &&
+        m_movementInfo.transport.guid.IsGameObject() && GetTransGUID().IsEmpty();
+}
+
 bool Unit::IsSitState() const
 {
     uint8 s = GetStandState();

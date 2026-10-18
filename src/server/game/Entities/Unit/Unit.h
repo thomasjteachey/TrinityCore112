@@ -1251,6 +1251,11 @@ class TC_GAME_API Unit : public WorldObject
         // would. For a unit the server places itself, such as a playerbot set
         // on a boat that only clients animate (BattlegroundSA).
         void BroadcastServerPlacedMovement();
+        // A playerbot the server stands on a GAMEOBJECT_TYPE_TRANSPORT (Strand's
+        // boats, the arena lifts): only its movement info names the transport,
+        // since no Transport object carries it. Clients draw it on the deck from
+        // that, so a spline for it must not reach them in world coordinates.
+        bool IsServerPlacedGameObjectPassenger() const;
 
         bool IsAlive() const { return (m_deathState == ALIVE); }
         bool isDying() const { return (m_deathState == JUST_DIED); }
