@@ -129,9 +129,6 @@ class TC_GAME_API BattlegroundMgr
         void ToggleArenaTesting();
         void ToggleTesting();
 
-        void ResetHolidays();
-        void SetHolidayActive(uint32 battlegroundId);
-
         bool isArenaTesting() const { return m_ArenaTesting; }
         bool isTesting() const { return m_Testing; }
 
@@ -166,10 +163,6 @@ class TC_GAME_API BattlegroundMgr
         static BattlegroundQueueTypeId BGQueueTypeId(BattlegroundTypeId bgTypeId, uint8 arenaType);
         static BattlegroundTypeId BGTemplateId(BattlegroundQueueTypeId bgQueueTypeId);
         static uint8 BGArenaType(BattlegroundQueueTypeId bgQueueTypeId);
-
-        static HolidayIds BGTypeToWeekendHolidayId(BattlegroundTypeId bgTypeId);
-        static BattlegroundTypeId WeekendHolidayIdToBGType(HolidayIds holiday);
-        static bool IsBGWeekend(BattlegroundTypeId bgTypeId);
 
         uint32 GetMaxRatingDifference() const;
         uint32 GetRatingDiscardTimer()  const;

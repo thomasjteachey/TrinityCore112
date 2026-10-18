@@ -504,8 +504,8 @@ void BattlegroundBFG::Init()
         _capturePointInfo[node]._captured = false;
     }
 
-    _honorTics = BattlegroundMgr::IsBGWeekend(GetTypeID()) ? GILNEAS_BG_BGWeekendHonorTicks : GILNEAS_BG_NotBGWeekendHonorTicks;
-    _reputationTics = BattlegroundMgr::IsBGWeekend(GetTypeID()) ? GILNEAS_BG_BGWeekendRepTicks : GILNEAS_BG_NotBGWeekendRepTicks;
+    _honorTics = GILNEAS_BG_HonorTicks;
+    _reputationTics = GILNEAS_BG_RepTicks;
 
     _capturePointInfo[GILNEAS_BG_NODE_LIGHTHOUSE]._iconNone    = GILNEAS_BG_OP_LIGHTHOUSE_ICON;
     _capturePointInfo[GILNEAS_BG_NODE_WATERWORKS]._iconNone    = GILNEAS_BG_OP_WATERWORKS_ICON;
@@ -518,9 +518,9 @@ void BattlegroundBFG::Init()
 void BattlegroundBFG::EndBattleground(uint32 winnerTeamId)
 {
     // End-of-match honor is the flat Centurion.Battleground.RewardHonorWinner /
-    // _LOSER that Battleground::EndBattleground pays every participant, doubled
-    // there on a Call to Arms. The stock per-kill awards that used to sit here
-    // paid a second, unconfigurable amount on top of it.
+    // _LOSER that Battleground::EndBattleground pays every participant. The
+    // stock per-kill awards that used to sit here paid a second, unconfigurable
+    // amount on top of it.
     Battleground::EndBattleground(winnerTeamId);
     _bgEvents.Reset();
 }

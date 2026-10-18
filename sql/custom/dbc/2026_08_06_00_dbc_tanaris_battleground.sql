@@ -81,7 +81,7 @@ INSERT INTO dbc.battlemasterlist_lplus
 VALUES
   (104, 1620, -1, -1, -1, -1, -1, -1, -1,
    3, 1, 'Tanaris', 16712190,
-   10, 1942, 10, 80);
+   10, 0, 10, 80);
 
 -- ------------------------------------------------------- PvpDifficulty.dbc
 -- Miss this and the queue silently refuses everyone:

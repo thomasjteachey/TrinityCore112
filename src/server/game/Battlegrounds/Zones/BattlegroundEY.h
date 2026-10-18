@@ -217,8 +217,7 @@ enum EYBattlegroundObjectTypes
     BG_EY_OBJECT_MAX                            = 59
 };
 
-#define BG_EY_NotEYWeekendHonorTicks    260
-#define BG_EY_EYWeekendHonorTicks       160
+#define BG_EY_HonorTicks                260
 
 enum BG_EY_Score
 {

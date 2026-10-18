@@ -207,8 +207,7 @@ enum BG_AB_Objectives
     AB_OBJECTIVE_DEFEND_BASE            = 123
 };
 
-#define BG_AB_NotABBGWeekendReputationTicks 160
-#define BG_AB_ABBGWeekendReputationTicks    120
+#define BG_AB_ReputationTicks               160
 
 #define AB_EVENT_START_BATTLE               9158 // Achievement: Let's Get This Done
 

@@ -33,9 +33,7 @@ enum BG_BFG_Misc
     BG_BFG_QUEST_CREDIT_BASE             = 15001,
 
     BG_BFG_HONOR_TICK_NORMAL             = 260,
-    BG_BFG_HONOR_TICK_WEEKEND            = 160,
     BG_BFG_REP_TICK_NORMAL               = 160,
-    BG_BFG_REP_TICK_WEEKEND              = 120,
 
     BG_BFG_FLAG_CAPTURING_TIME           = 60000,
     BG_BFG_BANNER_UPDATE_TIME            = 2000
@@ -219,10 +217,8 @@ enum GILNEAS_BG_Objectives
     GILNEAS_BG_OBJECTIVE_DEFEND_BASE  = 371
 };
 
-#define GILNEAS_BG_NotBGWeekendHonorTicks   260
-#define GILNEAS_BG_BGWeekendHonorTicks      160
-#define GILNEAS_BG_NotBGWeekendRepTicks     160
-#define GILNEAS_BG_BGWeekendRepTicks        120
+#define GILNEAS_BG_HonorTicks               260
+#define GILNEAS_BG_RepTicks                 160
 
 #define BG_EVENT_START_BATTLE               9158
 

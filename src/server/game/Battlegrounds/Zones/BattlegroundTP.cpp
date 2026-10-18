@@ -37,25 +37,6 @@ namespace
     }
 }
 
-// these variables aren't used outside of this file, so declare them only here
-enum BG_TP_Rewards
-{
-    BG_TP_WIN = 0,
-    BG_TP_FLAG_CAP,
-    BG_TP_MAP_COMPLETE,
-    BG_TP_REWARD_NUM
-};
-
-uint32 BG_TP_Honor[BG_HONOR_MODE_NUM][BG_TP_REWARD_NUM] = {
-    {20, 40, 40}, // normal honor
-    {60, 40, 80}  // holiday
-};
-
-uint32 BG_TP_Reputation[BG_HONOR_MODE_NUM][BG_TP_REWARD_NUM] = {
-    {0, 35, 0},   // normal honor
-    {0, 45, 0}    // holiday
-};
-
 void BattlegroundTPScore::BuildObjectivesBlock(WorldPacket& data)
 {
     data << uint32(2); // Objectives Count
@@ -799,8 +780,8 @@ void BattlegroundTP::Init()
 void BattlegroundTP::EndBattleground(uint32 winnerTeamId)
 {
     // End-of-match honor is the flat Centurion.Battleground.RewardHonorWinner /
-    // _LOSER paid centrally by Battleground::EndBattleground, doubled there on a
-    // Call to Arms. The awards that stood here were dead twice over anyway: they
+    // _LOSER paid centrally by Battleground::EndBattleground. The awards that
+    // stood here were dead twice over anyway: they
     // passed a TeamId where RewardHonorToTeam matches on Team (ALLIANCE 469 /
     // HORDE 67), and BattlegroundTP::Init - the only thing that ever set the two
     // counters above zero - has no caller anywhere in the tree.

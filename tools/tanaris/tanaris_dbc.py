@@ -150,7 +150,7 @@ ROWS = {
          1,             # GroupsAllowed
          ] + loc(BG_NAME) + [
          10,            # MaxGroupSize
-         1942,          # HolidayWorldState: same as the other custom BGs
+         0,             # HolidayWorldState: no Call to Arms on this realm
          10,            # Minlevel
          80],           # Maxlevel
     ],

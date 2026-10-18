@@ -33,21 +33,6 @@
 #include <sstream>
 #include <string>
 
-// these variables aren't used outside of this file, so declare them only here
-enum BG_WSG_Rewards
-{
-    BG_WSG_WIN = 0,
-    BG_WSG_FLAG_CAP,
-    BG_WSG_MAP_COMPLETE,
-    BG_WSG_REWARD_NUM
-};
-
-uint32 BG_WSG_Honor[BG_HONOR_MODE_NUM][BG_WSG_REWARD_NUM] =
-{
-    {20, 40, 40}, // normal honor
-    {60, 40, 80}  // holiday
-};
-
 BattlegroundWS::BattlegroundWS()
 {
     BgObjects.resize(BG_WS_OBJECT_MAX);
@@ -621,7 +606,6 @@ void BattlegroundWS::EventPlayerCapturedFlag(Player* player)
         UpdateWorldState(BG_WS_FLAG_STATE_HORDE, 1);
         UpdateWorldState(BG_WS_STATE_TIMER_ACTIVE, 0);
 
-        //RewardHonorToTeam(BG_WSG_Honor[m_HonorMode][BG_WSG_WIN], winner);
         EndBattleground(winner);
     }
     else
@@ -1021,10 +1005,7 @@ void BattlegroundWS::Reset()
     m_TeamScores[TEAM_ALLIANCE]      = 0;
     m_TeamScores[TEAM_HORDE]         = 0;
 
-    // Only reputation still varies on a Call to Arms here - the honor counters
-    // this used to set had no reader left, and honor is doubled once, centrally,
-    // in Battleground::EndBattleground.
-    m_ReputationCapture = sBattlegroundMgr->IsBGWeekend(GetTypeID()) ? 45 : 35;
+    m_ReputationCapture = 35;
     _minutesElapsed                  = 0;
     _lastFlagCaptureTeam             = 0;
     _bothFlagsKept                   = false;
@@ -1039,9 +1020,9 @@ void BattlegroundWS::Reset()
 void BattlegroundWS::EndBattleground(uint32 winner)
 {
     // End-of-match honor is the flat Centurion.Battleground.RewardHonorWinner /
-    // _LOSER that Battleground::EndBattleground pays every participant, doubled
-    // there on a Call to Arms. The stock per-kill awards that used to sit here
-    // paid a second, unconfigurable amount on top of it.
+    // _LOSER that Battleground::EndBattleground pays every participant. The
+    // stock per-kill awards that used to sit here paid a second, unconfigurable
+    // amount on top of it.
     Battleground::EndBattleground(winner);
 }
 

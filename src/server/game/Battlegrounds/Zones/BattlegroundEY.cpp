@@ -30,13 +30,6 @@
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
 
-// these variables aren't used outside of this file, so declare them only here
-uint32 BG_EY_HonorScoreTicks[BG_HONOR_MODE_NUM] =
-{
-    260, // normal honor
-    160  // holiday
-};
-
 // The area triggers HandleAreaTrigger scores the flag on, indexed like
 // EYBattlegroundPoints and BG_EY_TriggerPositions.
 uint32 const BG_EY_FlagCaptureTriggers[EY_POINTS_MAX] =
@@ -509,9 +502,9 @@ void BattlegroundEY::UpdateTeamScore(uint32 Team)
 void BattlegroundEY::EndBattleground(uint32 winner)
 {
     // End-of-match honor is the flat Centurion.Battleground.RewardHonorWinner /
-    // _LOSER that Battleground::EndBattleground pays every participant, doubled
-    // there on a Call to Arms. The stock per-kill awards that used to sit here
-    // paid a second, unconfigurable amount on top of it.
+    // _LOSER that Battleground::EndBattleground pays every participant. The
+    // stock per-kill awards that used to sit here paid a second, unconfigurable
+    // amount on top of it.
     Battleground::EndBattleground(winner);
 }
 
@@ -738,8 +731,7 @@ void BattlegroundEY::Reset()
     m_DroppedFlagGUID.Clear();
     m_PointAddingTimer = 0;
     m_TowerCapCheckTimer = 0;
-    bool isBGWeekend = sBattlegroundMgr->IsBGWeekend(GetTypeID());
-    m_HonorTics = (isBGWeekend) ? BG_EY_EYWeekendHonorTicks : BG_EY_NotEYWeekendHonorTicks;
+    m_HonorTics = BG_EY_HonorTicks;
 
     for (uint8 i = 0; i < EY_POINTS_MAX; ++i)
     {

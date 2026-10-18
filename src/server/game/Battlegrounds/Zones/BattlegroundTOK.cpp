@@ -136,7 +136,7 @@ void BattlegroundTOK::Reset()
     _carrierCheckTimer = 0;
     _honorScoreTicks[TEAM_ALLIANCE] = 0;
     _honorScoreTicks[TEAM_HORDE] = 0;
-    _honorTicks = sBattlegroundMgr->IsBGWeekend(GetTypeID()) ? BG_TOK_HONOR_TICKS_WEEKEND : BG_TOK_HONOR_TICKS;
+    _honorTicks = BG_TOK_HONOR_TICKS;
 }
 
 bool BattlegroundTOK::SetupBattleground()

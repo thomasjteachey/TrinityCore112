@@ -127,8 +127,7 @@ enum BG_TOK_Constants
     BG_TOK_POINT_TICK_TIME        = (5 * IN_MILLISECONDS),
     BG_TOK_CARRIER_CHECK_TIME     = 250,
     // Same honor cadence as Eye of the Storm, the other 1600-point race.
-    BG_TOK_HONOR_TICKS            = 260,
-    BG_TOK_HONOR_TICKS_WEEKEND    = 160
+    BG_TOK_HONOR_TICKS            = 260
 };
 
 struct BattlegroundTOKScore final : public BattlegroundScore

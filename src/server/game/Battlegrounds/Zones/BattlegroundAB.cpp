@@ -625,8 +625,7 @@ void BattlegroundAB::Reset()
     m_ReputationScoreTics[TEAM_ALLIANCE] = 0;
     m_ReputationScoreTics[TEAM_HORDE]    = 0;
     m_IsInformedNearVictory                 = false;
-    bool isBGWeekend = sBattlegroundMgr->IsBGWeekend(GetTypeID());
-    m_ReputationTics = (isBGWeekend) ? BG_AB_ABBGWeekendReputationTicks : BG_AB_NotABBGWeekendReputationTicks;
+    m_ReputationTics = BG_AB_ReputationTicks;
     m_TeamScores500Disadvantage[TEAM_ALLIANCE] = false;
     m_TeamScores500Disadvantage[TEAM_HORDE]    = false;
 
@@ -646,9 +645,9 @@ void BattlegroundAB::Reset()
 void BattlegroundAB::EndBattleground(uint32 winner)
 {
     // End-of-match honor is the flat Centurion.Battleground.RewardHonorWinner /
-    // _LOSER that Battleground::EndBattleground pays every participant, doubled
-    // there on a Call to Arms. The stock per-kill awards that used to sit here
-    // paid a second, unconfigurable amount on top of it.
+    // _LOSER that Battleground::EndBattleground pays every participant. The
+    // stock per-kill awards that used to sit here paid a second, unconfigurable
+    // amount on top of it.
     Battleground::EndBattleground(winner);
 }
 
