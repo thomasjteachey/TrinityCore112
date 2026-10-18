@@ -24,9 +24,11 @@
 #include "PassiveAI.h"
 #include "Player.h"
 #include "ScriptedCreature.h"
+#include "SpellAuraEffects.h"
 #include "SpellInfo.h"
 #include "SpellScript.h"
 #include "Vehicle.h"
+#include <unordered_map>
 
 // TO-DO: This should be done with SmartAI, but yet it does not correctly support vehicles's AIs.
 //        Even adding ReactState Passive we still have issues using SmartAI.
@@ -149,22 +151,95 @@ class spell_ioc_gunship_portal : public SpellScript
 };
 
 // 66656 - Parachute
+// An area aura worn by everyone within 99 yd of the ship's world trigger (20212 and
+// 20213 carry it in creature_template_addon), so one aura object serves every
+// wearer and anything kept per player is keyed by guid. The chute used to wait for
+// the client to report 2 s of falling AND for the player to be off the transport.
+// A client that still counts itself on the ship never passes the second test, and
+// 2 s below a moving ship can already be out of the aura's reach, so players fell
+// the whole way with the buff on.
 class spell_ioc_parachute_ic : public AuraScript
 {
     PrepareAuraScript(spell_ioc_parachute_ic);
 
-    void HandleTriggerSpell(AuraEffect const* /*aurEff*/)
+    // Longer than any jump on the deck (under a second in the air), short enough
+    // that the ship's trigger is still in range.
+    static constexpr uint32 OPEN_AFTER_FALL_MS = 1200;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_PARACHUTE_IC });
+    }
+
+    static bool IsFalling(Player const* player)
+    {
+        return player->HasUnitMovementFlag(MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR);
+    }
+
+    // The client's own fall timer, or how long the server has watched the player
+    // fall, for a client that sends nothing between the jump and the landing.
+    uint32 FallDuration(Player const* player) const
+    {
+        uint32 watched = 0;
+        auto itr = _fallingMs.find(player->GetGUID());
+        if (itr != _fallingMs.end())
+            watched = itr->second;
+        return std::max(player->m_movementInfo.fallTime, watched);
+    }
+
+    void HandleTriggerSpell(AuraEffect const* aurEff)
     {
         PreventDefaultAction();
-        if (Player* target = GetTarget()->ToPlayer())
-            if (target->m_movementInfo.fallTime > 2000 && !target->GetTransport())
+        Player* target = GetTarget()->ToPlayer();
+        if (!target)
+            return;
+
+        if (!IsFalling(target))
+        {
+            _fallingMs.erase(target->GetGUID());
+            return;
+        }
+
+        _fallingMs[target->GetGUID()] += uint32(std::max(aurEff->GetAmplitude(), 0));
+        if (FallDuration(target) > OPEN_AFTER_FALL_MS && !target->HasAura(SPELL_PARACHUTE_IC))
+        {
+            _fallingMs.erase(target->GetGUID());
+            target->CastSpell(target, SPELL_PARACHUTE_IC, true);
+        }
+    }
+
+    // Losing the aura mid-fall means the ship flew on without the player: open now
+    // rather than never. Deferred to the player's own update, because this also
+    // runs while the trigger itself is leaving the world.
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Player* target = GetTarget()->ToPlayer();
+        if (!target)
+            return;
+
+        uint32 const fallen = FallDuration(target);
+        _fallingMs.erase(target->GetGUID());
+
+        if (GetTargetApplication()->GetRemoveMode() != AURA_REMOVE_BY_DEFAULT)
+            return;
+
+        if (!target->IsInWorld() || !target->IsAlive() || !IsFalling(target) || fallen <= OPEN_AFTER_FALL_MS)
+            return;
+
+        target->m_Events.AddEventAtOffset([target]()
+        {
+            if (target->IsInWorld() && target->IsAlive() && IsFalling(target) && !target->HasAura(SPELL_PARACHUTE_IC))
                 target->CastSpell(target, SPELL_PARACHUTE_IC, true);
+        }, 0ms);
     }
 
     void Register() override
     {
         OnEffectPeriodic += AuraEffectPeriodicFn(spell_ioc_parachute_ic::HandleTriggerSpell, EFFECT_0, SPELL_AURA_PERIODIC_TRIGGER_SPELL);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_ioc_parachute_ic::HandleRemove, EFFECT_0, SPELL_AURA_PERIODIC_TRIGGER_SPELL, AURA_EFFECT_HANDLE_REAL);
     }
+
+    std::unordered_map<ObjectGuid, uint32> _fallingMs;
 };
 
 class StartLaunchEvent : public BasicEvent

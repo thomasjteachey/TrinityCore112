@@ -814,11 +814,29 @@ bool BattlegroundSA::CanInteractWithObject(uint32 objectId) const
     return true;
 }
 
+// The graveyard a capture flag takes, or BG_SA_MAX_GY for anything that is not one.
+static BG_SA_Graveyards GetFlagGraveyard(uint32 objectId)
+{
+    switch (objectId)
+    {
+        case BG_SA_LEFT_FLAG:    return BG_SA_LEFT_CAPTURABLE_GY;
+        case BG_SA_RIGHT_FLAG:   return BG_SA_RIGHT_CAPTURABLE_GY;
+        case BG_SA_CENTRAL_FLAG: return BG_SA_CENTRAL_CAPTURABLE_GY;
+        default:                 return BG_SA_MAX_GY;
+    }
+}
+
 void BattlegroundSA::UpdateObjectInteractionFlags(uint32 objectId)
 {
     if (GameObject* go = GetBGObject(objectId))
     {
-        if (CanInteractWithObject(objectId))
+        // A graveyard the attackers have taken is theirs for the rest of the
+        // round (CaptureGraveyard ignores any later click), so its flag stops
+        // offering a capture cast that could only be wasted.
+        BG_SA_Graveyards const graveyard = GetFlagGraveyard(objectId);
+        bool const heldByAttackers = graveyard != BG_SA_MAX_GY && GraveyardStatus[graveyard] == Attackers;
+
+        if (CanInteractWithObject(objectId) && !heldByAttackers)
             go->RemoveFlag(GO_FLAG_NOT_SELECTABLE);
         else
             go->SetFlag(GO_FLAG_NOT_SELECTABLE);
@@ -944,6 +962,9 @@ void BattlegroundSA::CaptureGraveyard(BG_SA_Graveyards i, Player* Source)
             ABORT();
             break;
     };
+
+    // The respawned flag comes with its template's flags; settle who can click it.
+    UpdateObjectInteractionFlags(flag);
 }
 
 void BattlegroundSA::TitanRelicActivated(Player* clicker)
