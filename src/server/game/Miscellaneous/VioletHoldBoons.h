@@ -20,10 +20,24 @@
  *    which Player::_SaveSpells never writes, so a logout drops them by
  *    itself; StripAll() unlearns them for every other exit.
  *
+ *  - Legendaries: one per archetype - Thunderfury (one-hand melee),
+ *    Sulfuras (two-hand melee), and six run-only items: five wearing the
+ *    Kael'thas weapons' names and models - Infinity Blade (caster one-hand),
+ *    Staff of Disintegration (caster staff), Cosmic Infuser (healer),
+ *    Phaseshift Bulwark (tank shield), Netherstrand Longbow (hunter) - and
+ *    the Sunwell feral staff, Stanchion of Primal Instinct (cat and bear).
+ *    One-hand pieces are tuned against Thunderfury, two-handers against
+ *    Sulfuras: the same stat cut against their tier's best epic, and a
+ *    signature proc (custom spells 94101-94113) worth about what
+ *    Thunderfury's (or Sulfuras') is.
+ *
  * The pool is filtered by the run's roster, not by whoever is clicking: an
  * offer only rolls while someone on the human team could still use it (a
  * class spell needs a member of that class who does not already know it, a
- * boon needs a matching member below the cap). Whoever clicks an offer meant
+ * boon needs a matching member below the cap; the swing and spell boons and
+ * the legendaries also need a member whose talent spec uses them, so a
+ * Balance druid alone rolls neither Flurry nor Sulfuras). Whoever clicks an
+ * offer meant
  * for another class gets an error and the broker stays put for the right
  * person.
  *
@@ -176,10 +190,11 @@ namespace VioletHoldBoons
         // them (dependent spells themselves are never saved).
         SPELL_KNOWLEDGE_MARKER = 90248,
 
-        // Same idea for the legendary weapons the broker hands out: effect base
-        // amounts hold the low guids of the granted items, one slot per entry
-        // in the item table, so StripAll destroys exactly those items and never
-        // a copy the character genuinely owns.
+        // Same idea for the two legendaries a character can also own for real
+        // (Thunderfury, Sulfuras): effect base amounts hold the low guids of the
+        // granted copies, one slot per table index, so StripAll destroys exactly
+        // those items and never a copy the character genuinely owns. The
+        // run-only legendaries do not need it - see ItemGrantInfo::runOnly.
         SPELL_CACHE_MARKER = 90257,
 
         // The extra swing granted by SPELL_BOON_EXTRA_ATTACK's proc.
@@ -235,17 +250,40 @@ namespace VioletHoldBoons
 
     constexpr uint8 CLASS_SPELL_COUNT = 27;
 
-    // A weapon the broker can hand out for the run (a real item, destroyed on
-    // the way out - its guid is kept in SPELL_CACHE_MARKER's slot `index`).
+    // A legendary the broker can hand out for the run. It is a real item,
+    // soulbound on the way into the bags and destroyed on the way out.
+    //
+    // `runOnly` items exist for nothing but this: their own entries (1608xx),
+    // limited to map 1608 in item_template, so nobody can own one outside the
+    // Hold and StripAll removes them by entry. The others are real-world
+    // legendaries a character may also own, so their granted copy is tracked
+    // by guid in SPELL_CACHE_MARKER's slot `index` - which is why those must
+    // keep the first table indices (the marker has three slots).
+    // Talent specs, as read off the tree with the most points. Only the classes
+    // whose trees split roles get one (druid, paladin, priest, shaman); every
+    // other class, and anyone with no talents spent, has none and suits all.
+    enum SpecRole : uint8
+    {
+        SPEC_NONE   = 0x00,
+        SPEC_MELEE  = 0x01,
+        SPEC_TANK   = 0x02,
+        SPEC_CASTER = 0x04,
+        SPEC_HEALER = 0x08,
+        SPEC_ANY    = 0x0F
+    };
+
     struct ItemGrantInfo
     {
         uint32 itemEntry;
         uint32 classMask;   // who it is offered to (who could wield it)
+        uint8 specs;        // which of those classes' specs it rolls for (SpecRole bits)
         uint8 weight;
+        uint32 enchantId;   // permanent enchant it comes with (SpellItemEnchantment)
+        bool runOnly;
         char const* name;
     };
 
-    constexpr uint8 ITEM_GRANT_COUNT = 2;
+    constexpr uint8 ITEM_GRANT_COUNT = 8;
     // Every class spell rolls at this weight. Three per present class add up
     // fast, so it sits at the bottom of the scale (with the legendaries):
     // a full party's spells make up well under a fifth of the pool.
@@ -275,6 +313,7 @@ namespace VioletHoldBoons
         LevelCeiling,   // the level boon at LEVEL_BOON_CEILING
         TooLowLevel,    // the picker is below what this boon or item is for
         NoRoom,         // the item does not fit in the picker's bags
+        NoProficiency,  // the picker has not trained the item's weapon or shield skill
         Failed          // the grant itself did not take
     };
 

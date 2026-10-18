@@ -45,6 +45,9 @@ constexpr uint32 MASK_ALL = CLASSMASK_ALL_PLAYABLE;
 
 // Pure casters have no melee to speak of, so the swing-based boons skip them.
 constexpr uint32 MASK_MELEE = MASK_ALL & ~(ClassBit(CLASS_PRIEST) | ClassBit(CLASS_MAGE) | ClassBit(CLASS_WARLOCK));
+// Flurry's proc only answers melee swings (ProcTypeMask 0x14), so hunters,
+// whose crit and haste boons do reach their shots, get nothing from it.
+constexpr uint32 MASK_SWING = MASK_MELEE & ~ClassBit(CLASS_HUNTER);
 
 // Classes with real spellcasting: cast time, spell crit and doublecast. Hunters
 // are out - their shots are ranged-class and scale off ranged haste/crit.
@@ -78,7 +81,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::RageCost,     SPELL_BOON_RAGE_COST,   10,  75, MASK_RAGE,    7, "Boon of Fury",         "cheaper rage costs",                      "%" },
     { Boon::EnergyCost,   SPELL_BOON_ENERGY_COST, 10,  75, MASK_ENERGY,  7, "Boon of Finesse",      "cheaper energy costs",                    "%" },
     { Boon::Stamina,      SPELL_BOON_STAMINA,      5, 255, MASK_ALL,     10, "Boon of Vitality",     "Stamina",                                 "%" },
-    { Boon::ExtraAttack,  SPELL_BOON_EXTRA_ATTACK, 3, 100, MASK_MELEE,   6, "Boon of Flurry",       "chance for attacks to swing again",       "%" },
+    { Boon::ExtraAttack,  SPELL_BOON_EXTRA_ATTACK, 3, 100, MASK_SWING,   6, "Boon of Flurry",       "chance for attacks to swing again",       "%" },
     { Boon::Doublecast,   SPELL_BOON_DOUBLECAST,   3, 100, MASK_CASTER,  5, "Boon of Echoes",       "chance for damage/heal spells to double", "%" },
     { Boon::Crit,         SPELL_BOON_CRIT,         3, 100, MASK_MELEE,    5, "Boon of Precision",    "melee and ranged crit",                   "%" },
     { Boon::SpellCrit,    SPELL_BOON_SPELL_CRIT,   3, 100, MASK_CASTER,   5, "Boon of Insight",      "spell crit",                              "%" },
@@ -161,17 +164,50 @@ ClassSpellInfo const kClassSpells[CLASS_SPELL_COUNT] =
     { CLASS_WARRIOR, 60970, 0,     0,     "Heroic Fury" }
 };
 
-// Legendary weapons for the run. Offered while someone of a listed class is
-// in the party; the item is a real one in the bags (soulbound, so it cannot be
-// traded away inside) and is destroyed on the way out via SPELL_CACHE_MARKER.
-ItemGrantInfo const kItemGrants[ITEM_GRANT_COUNT] =
-{
-    { 19019, ClassBit(CLASS_WARRIOR) | ClassBit(CLASS_ROGUE) | ClassBit(CLASS_HUNTER) | ClassBit(CLASS_PALADIN), 2, "Thunderfury, Blessed Blade of the Windseeker" },
-    { 17182, ClassBit(CLASS_WARRIOR) | ClassBit(CLASS_PALADIN) | ClassBit(CLASS_SHAMAN),                          2, "Sulfuras, Hand of Ragnaros" }
-};
+// Each legendary comes with its archetype's best classic weapon or shield
+// enchant on it, the way the melee pair always came with Crusader.
+constexpr uint32 ENCHANT_CRUSADER         = 1900;
+constexpr uint32 ENCHANT_SPELL_DAMAGE_30  = 2504;
+constexpr uint32 ENCHANT_HEALING_55       = 2505;
+constexpr uint32 ENCHANT_SCOPE_HIT_3      = 2523;   // Biznicks 247x128 Accurascope
+constexpr uint32 ENCHANT_SHIELD_STAMINA_7 = 929;
+// Crusader's chance is computed off the weapon's own speed (3.0 on the feral
+// staff), so a cat swinging every second would proc it three times as often.
+constexpr uint32 ENCHANT_AGILITY_25       = 2646;
 
-// Both weapons come with Crusader on them (SpellItemEnchantment 1900).
-constexpr uint32 ENCHANT_CRUSADER = 1900;
+// Classes that both cast for damage and can wield a dagger or a staff
+// (paladins can do neither).
+constexpr uint32 MASK_SPELL_DPS = ClassBit(CLASS_PRIEST) | ClassBit(CLASS_SHAMAN) | ClassBit(CLASS_MAGE)
+                                | ClassBit(CLASS_WARLOCK) | ClassBit(CLASS_DRUID);
+constexpr uint32 MASK_HEALER    = ClassBit(CLASS_PALADIN) | ClassBit(CLASS_PRIEST) | ClassBit(CLASS_SHAMAN)
+                                | ClassBit(CLASS_DRUID);
+constexpr uint32 MASK_TANK      = ClassBit(CLASS_WARRIOR) | ClassBit(CLASS_PALADIN);
+
+// Legendary weapons for the run, one per archetype. Offered while someone of
+// a listed class is in the party; the item is a real one in the bags,
+// soulbound so it cannot be traded away inside, and destroyed on the way out.
+// The two real-world legendaries MUST stay at indices 0 and 1 - their guids
+// live in the cache marker's slots by index (checked below MARKER_SLOTS).
+//
+// The run-only six are their own rows (item_template 160801-160806, Map 1608):
+// five on the Kael'thas weapons' names and models, plus the Sunwell feral
+// staff for cat and bear druids. The tuning, in short: a one-hander is cut a
+// little below the best AQ40/BWL piece of its kind and carries a proc worth
+// about what Thunderfury's is (~30 damage per second, or ~5% of healing), a
+// two-hander matches its tier's best and adds 30 resistance and a minor proc,
+// as Sulfuras does. The procs are custom spells 94101-94113 (chains, a void
+// pool, a bouncing heal, a damage-shift buff, slows, a bleed).
+constexpr ItemGrantInfo kItemGrants[ITEM_GRANT_COUNT] =
+{
+    { 19019,  ClassBit(CLASS_WARRIOR) | ClassBit(CLASS_ROGUE) | ClassBit(CLASS_HUNTER) | ClassBit(CLASS_PALADIN), SPEC_MELEE | SPEC_TANK, 2, ENCHANT_CRUSADER, false, "Thunderfury, Blessed Blade of the Windseeker" },
+    { 17182,  ClassBit(CLASS_WARRIOR) | ClassBit(CLASS_PALADIN) | ClassBit(CLASS_SHAMAN),                          SPEC_MELEE | SPEC_TANK, 2, ENCHANT_CRUSADER, false, "Sulfuras, Hand of Ragnaros" },
+    { 160801, MASK_SPELL_DPS,         SPEC_CASTER,              2, ENCHANT_SPELL_DAMAGE_30,  true, "Infinity Blade" },
+    { 160802, MASK_SPELL_DPS,         SPEC_CASTER,              2, ENCHANT_SPELL_DAMAGE_30,  true, "Staff of Disintegration" },
+    { 160803, MASK_HEALER,            SPEC_HEALER,              2, ENCHANT_HEALING_55,       true, "Cosmic Infuser" },
+    { 160804, MASK_TANK,              SPEC_TANK,                2, ENCHANT_SHIELD_STAMINA_7, true, "Phaseshift Bulwark" },
+    { 160805, ClassBit(CLASS_HUNTER), SPEC_ANY,                 2, ENCHANT_SCOPE_HIT_3,      true, "Netherstrand Longbow" },
+    { 160806, ClassBit(CLASS_DRUID),  SPEC_MELEE | SPEC_TANK,   2, ENCHANT_AGILITY_25,       true, "Stanchion of Primal Instinct" }
+};
 
 // Mechanics that count as crowd control for Boon of Resolve. Disarms are
 // left out; snares and dazes (Crippling Poison, Hamstring, Frostbolt's slow,
@@ -372,10 +408,25 @@ void RecordTaught(Player* player, uint32 tableSpellId)
         player->GetGUID().ToString(), tableSpellId);
 }
 
-// The item the cache marker says was granted for table slot `index`, if the
-// character still has it anywhere in inventory or bank.
+// Every legendary tracked by guid needs a cache-marker slot of its own.
+constexpr bool GuidTrackedGrantsFitTheMarker()
+{
+    for (uint8 i = 0; i < ITEM_GRANT_COUNT; ++i)
+        if (!kItemGrants[i].runOnly && i >= MARKER_SLOTS)
+            return false;
+    return true;
+}
+static_assert(GuidTrackedGrantsFitTheMarker(), "a real-world legendary in kItemGrants sits past the cache marker's slots");
+
+// The broker's copy of table entry `index`, if the character still has it: by
+// the cache marker's guid for a real-world legendary (anywhere in inventory or
+// bank), by entry for a run-only one (nobody owns those any other way).
 Item* GetGrantedItem(Player* player, uint8 index)
 {
+    if (index >= ITEM_GRANT_COUNT)
+        return nullptr;
+    if (kItemGrants[index].runOnly)
+        return player->GetItemByEntry(kItemGrants[index].itemEntry);
     if (index >= MARKER_SLOTS)
         return nullptr;
     uint32 const low = ReadMarker(player, SPELL_CACHE_MARKER)[index];
@@ -598,11 +649,19 @@ PickResult CanTake(Player const* player, Offer offer)
         if (!(info.classMask & player->GetClassMask()))
             return PickResult::WrongClass;
 
-        // The item states its own requirement - both legendaries are 60 - so the
+        // The item states its own requirement - every legendary is 60 - so the
         // number is never repeated here and cannot drift from the item.
-        if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(info.itemEntry))
-            if (player->GetLevel() < proto->RequiredLevel)
-                return PickResult::TooLowLevel;
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(info.itemEntry);
+        if (!proto)
+            return PickResult::Failed;
+        if (player->GetLevel() < proto->RequiredLevel)
+            return PickResult::TooLowLevel;
+
+        // A dagger nobody trained cannot be equipped, and the grant cannot
+        // teach the skill, so it is not on offer to that character at all.
+        if (uint32 const skill = proto->GetSkill())
+            if (!player->GetSkillValue(skill))
+                return PickResult::NoProficiency;
 
         // One each: a broker copy still in the bags, or a genuinely owned one
         // (the legendaries are unique anyway).
@@ -629,6 +688,97 @@ PickResult CanTake(Player const* player, Offer offer)
     return PickResult::Ok;
 }
 
+namespace
+{
+// A member's spec, off the talent tree with the most points (TalentTab
+// OrderIndex: druid Balance/Feral/Restoration, paladin Holy/Protection/
+// Retribution, priest Discipline/Holy/Shadow, shaman Elemental/Enhancement/
+// Restoration). Classes whose trees do not split roles, and anyone with no
+// talents spent, get SPEC_NONE and suit everything.
+uint8 GetSpecRole(Player const* player)
+{
+    static uint8 const kRoles[MAX_CLASSES][MAX_TALENT_TABS] =
+    {
+        { },                                            // none
+        { },                                            // warrior
+        { SPEC_HEALER, SPEC_TANK,   SPEC_MELEE  },      // paladin
+        { },                                            // hunter
+        { },                                            // rogue
+        { SPEC_HEALER, SPEC_HEALER, SPEC_CASTER },      // priest
+        { },                                            // death knight
+        { SPEC_CASTER, SPEC_MELEE,  SPEC_HEALER },      // shaman
+        { },                                            // mage
+        { },                                            // warlock
+        { },                                            // unused
+        { SPEC_CASTER, SPEC_MELEE,  SPEC_HEALER },      // druid
+    };
+
+    uint8 const classId = player->GetClass();
+    if (classId >= MAX_CLASSES || !kRoles[classId][0])
+        return SPEC_NONE;
+
+    uint32 const* tabs = GetTalentTabPages(classId);
+    uint32 points[MAX_TALENT_TABS] = { };
+    for (uint32 talentId = 0; talentId < sTalentStore.GetNumRows(); ++talentId)
+    {
+        TalentEntry const* talent = sTalentStore.LookupEntry(talentId);
+        if (!talent)
+            continue;
+        for (uint8 tab = 0; tab < MAX_TALENT_TABS; ++tab)
+        {
+            if (talent->TabID != tabs[tab])
+                continue;
+            for (int8 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
+            {
+                if (talent->SpellRank[rank] && player->HasTalent(talent->SpellRank[rank], player->GetActiveSpec()))
+                {
+                    points[tab] += rank + 1;
+                    break;
+                }
+            }
+            break;
+        }
+    }
+
+    uint8 top = 0;
+    for (uint8 tab = 1; tab < MAX_TALENT_TABS; ++tab)
+        if (points[tab] > points[top])
+            top = tab;
+    return points[top] ? kRoles[classId][top] : SPEC_NONE;
+}
+
+// Roll-time only: CanTake still lets a member take an off-spec offer somebody
+// else's spec put on the table.
+bool SuitsSpec(Player const* player, Offer const& offer)
+{
+    if (offer.kind == Offer::Kind::Item)
+    {
+        if (offer.index >= ITEM_GRANT_COUNT)
+            return true;
+        uint8 const role = GetSpecRole(player);
+        return role == SPEC_NONE || (kItemGrants[offer.index].specs & role);
+    }
+
+    if (offer.kind != Offer::Kind::Boon || offer.index >= uint8(Boon::Max))
+        return true;
+
+    // The swing and spell halves: a Balance druid stops pulling Flurry, Haste,
+    // Fury or Vigor into the pool and a Feral one stops pulling Echoes. Rage
+    // and energy are the druid's cat and bear forms, so they go with melee.
+    // Mana stays for everyone: a Feral druid still shifts on it.
+    uint32 const mask = kBoons[offer.index].classMask;
+    bool const meleeBoon = mask == MASK_MELEE || mask == MASK_SWING || mask == MASK_RAGE || mask == MASK_ENERGY;
+    if (!meleeBoon && mask != MASK_CASTER)
+        return true;
+
+    uint8 const role = GetSpecRole(player);
+    if (role == SPEC_NONE)
+        return true;
+    return meleeBoon == bool(role & (SPEC_MELEE | SPEC_TANK));
+}
+
+}
+
 uint32 GetOfferWeight(Offer const& offer)
 {
     switch (offer.kind)
@@ -648,7 +798,7 @@ std::vector<Offer> RollOffers(std::vector<Player const*> const& roster, uint8 co
     auto anyoneCan = [&roster](Offer const& offer)
     {
         for (Player const* member : roster)
-            if (member && CanTake(member, offer) == PickResult::Ok)
+            if (member && CanTake(member, offer) == PickResult::Ok && SuitsSpec(member, offer))
                 return true;
         return false;
     };
@@ -740,14 +890,22 @@ PickResult Take(Player* player, Offer offer)
             return PickResult::Failed;
         }
 
-        // Crusader, as a permanent enchant. It is applied when the weapon is
-        // equipped, exactly like a scroll would be.
-        item->SetEnchantment(PERM_ENCHANTMENT_SLOT, ENCHANT_CRUSADER, 0, 0, player->GetGUID());
+        // Soulbound whatever the row says. Thunderfury and Sulfuras are
+        // bonding 0 here, and an unbound copy could be traded to a party
+        // member, whose own strip would not know to take it back.
+        item->SetBinding(true);
+
+        // The archetype's enchant, as a permanent one. It is applied when the
+        // item is equipped, exactly like a scroll would be.
+        if (info.enchantId)
+            item->SetEnchantment(PERM_ENCHANTMENT_SLOT, info.enchantId, 0, 0, player->GetGUID());
+        item->SetState(ITEM_CHANGED, player);
         player->SendNewItem(item, 1, true, false);
 
         // The guid, not the entry: StripAll must never touch a Thunderfury the
-        // character actually owns.
-        RecordGranted(player, offer.index, item->GetGUID());
+        // character actually owns. Run-only items are found by entry instead.
+        if (!info.runOnly)
+            RecordGranted(player, offer.index, item->GetGUID());
         return PickResult::Ok;
     }
 
@@ -836,6 +994,7 @@ char const* GetPickResultText(PickResult result)
         case PickResult::LevelCeiling: return "You cannot be raised any higher.";
         case PickResult::TooLowLevel:  return "You are not yet ready for that.";
         case PickResult::NoRoom:       return "You have no room for that.";
+        case PickResult::NoProficiency: return "You have not trained that kind of weapon.";
         default:                       return "The broker's offer fizzles.";
     }
 }
@@ -862,9 +1021,18 @@ void StripAll(Player* player)
     player->ClearVioletHoldRunTalents();
 
     // Granted weapons go back, wherever they ended up (equipped, bags, bank).
+    // Every copy of a run-only entry goes. There is only ever one, but the
+    // loop costs nothing and the guard keeps it finite.
     for (uint8 i = 0; i < ITEM_GRANT_COUNT; ++i)
-        if (Item* item = GetGrantedItem(player, i))
+        for (uint8 guard = 0; guard < 8; ++guard)
+        {
+            Item* item = GetGrantedItem(player, i);
+            if (!item)
+                break;
             player->DestroyItem(item->GetBagSlot(), item->GetSlot(), true);
+            if (!kItemGrants[i].runOnly)
+                break;
+        }
 
     // Taught class spells: ONLY the chains the knowledge marker says the broker
     // taught (read before the marker goes), top rank first so RemoveSpell's
@@ -1030,6 +1198,11 @@ void OnLogin(Player* player)
 
     bool carrying = player->HasAura(SPELL_KNOWLEDGE_MARKER) || player->HasAura(SPELL_CACHE_MARKER)
         || player->HasAura(GetBoonSpellFor(Boon::Cooldown, player->GetClass()));
+    // The map limit on the run-only legendaries already deletes them at login
+    // for a living character; a dead one keeps them until this sweep.
+    for (ItemGrantInfo const& info : kItemGrants)
+        if (info.runOnly && player->GetItemByEntry(info.itemEntry))
+            carrying = true;
     for (BoonInfo const& info : kBoons)
         if (carrying || player->HasAura(info.spellId))
         {
@@ -1061,6 +1234,7 @@ static char const* OfferBlockedSuffix(Player const* viewer, Offer offer)
         case PickResult::LevelCeiling: return " - you can go no higher";
         case PickResult::TooLowLevel:  return " - not yet";
         case PickResult::NoRoom:       return " - your bags are full";
+        case PickResult::NoProficiency: return " - weapon skill not trained";
         default:                       return "";
     }
 }
@@ -1077,7 +1251,11 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
         char const* name = info.name;
         if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(info.itemEntry))
             name = proto->Name1.c_str();
-        return Trinity::StringFormat("Take up {} (with Crusader){}", name, blocked);
+        // "Crusader", "Spell Damage +30", "+3% Hit" - the enchant's own name.
+        SpellItemEnchantmentEntry const* enchant = sSpellItemEnchantmentStore.LookupEntry(info.enchantId);
+        if (!enchant || !*enchant->Name[LOCALE_enUS])
+            return Trinity::StringFormat("Take up {}{}", name, blocked);
+        return Trinity::StringFormat("Take up {} (with {}){}", name, enchant->Name[LOCALE_enUS], blocked);
     }
 
     if (offer.kind == Offer::Kind::ClassSpell)
