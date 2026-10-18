@@ -1,8 +1,9 @@
 ## Interface: 30300
 ## Title: Centurion Bot Map
-## Notes: Shows playerbots on the world map for War Mode players, the way party members are shown.
+## Notes: Shows playerbots on the world map for War Mode players, the way party members are shown, and every zone's graveyards.
 ## Author: Centurion
-## Version: 1.0
+## Version: 1.1
 ## DefaultState: Enabled
 
+CENTURION_BotMap_Graveyards.lua
 CENTURION_BotMap.lua

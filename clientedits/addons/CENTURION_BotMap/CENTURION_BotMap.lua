@@ -22,13 +22,26 @@
 --
 -- The icon is Blizzard's own party icon tinted red, so a bot reads as the same
 -- kind of thing as a party member at a glance without being mistaken for one.
+--
+-- Graveyards ride along on the same surfaces. Unlike bots they never move, so
+-- they are not fed by the server at all: CENTURION_BotMap_Graveyards.lua is a
+-- baked table of every zone's graveyards in the same 0..1 space, and they draw
+-- for everyone, on any zone the map is turned to, War Mode or not.
 
 local BOT_ICON  = "Interface\\WorldMap\\WorldMapPartyIcon"
 local MAX_BLIPS = 80
 
+-- The grey battleground tombstone - grey because no graveyard here belongs to a
+-- side - which is landmark 7 on the map's own POI sheet. Cropped by hand rather
+-- than through WorldMap_GetPOITextureCoords(7): that one starts at column 127,
+-- where the banner of landmark 6 still has a pixel, and draws it as a stripe
+-- down the stone's left edge. Columns 128-143 hold the stone and nothing else.
+local GRAVE_ICON   = "Interface\\Minimap\\POIIcons"
+local GRAVE_COORDS = { 128 / 256, 144 / 256, 0, 16 / 256 }
+
 local bots     = {}     -- the completed set: { name, x, y }
 local pending  = {}     -- chunks still arriving
-local surfaces = {}     -- { frame = <Frame>, size = <px>, blips = {} }
+local surfaces = {}     -- see AddSurface
 local lastPush = 0      -- GetTime() of the last COMPLETE set
 
 -- The server pushes about every two seconds and says nothing when it stops -
@@ -45,7 +58,11 @@ local frame = CreateFrame("Frame", "CenturionBotMapFrame", UIParent)
 -- A surface is any frame whose corners are the corners of the zone. Both the
 -- world map's detail frame and the battlefield minimap qualify, which is the
 -- whole reason one set of coordinates serves both.
-local function AddSurface(mapFrame, iconSize)
+--
+-- graves says how that surface draws graveyards: size, the frame the stones
+-- are parented to, and, where the stones should answer the mouse, the tooltip
+-- to show and what a click on one should do instead.
+local function AddSurface(mapFrame, iconSize, graves)
 	if not mapFrame then
 		return
 	end
@@ -54,7 +71,8 @@ local function AddSurface(mapFrame, iconSize)
 			return
 		end
 	end
-	table.insert(surfaces, { frame = mapFrame, size = iconSize, blips = {} })
+	graves.pool = {}
+	table.insert(surfaces, { frame = mapFrame, size = iconSize, blips = {}, graves = graves })
 end
 
 local function AcquireBlip(surface, index)
@@ -73,6 +91,116 @@ end
 local function HideFrom(surface, index)
 	for i = index, #surface.blips do
 		surface.blips[i]:Hide()
+	end
+end
+
+------------------------------------------------------------------
+-- graveyards
+------------------------------------------------------------------
+local function Grave_OnEnter(self)
+	local tooltip = self.tooltip
+	-- Open away from the nearer edge, as WorldMapUnit_OnEnter does.
+	if self:GetCenter() > self:GetParent():GetCenter() then
+		tooltip:SetOwner(self, "ANCHOR_LEFT")
+	else
+		tooltip:SetOwner(self, "ANCHOR_RIGHT")
+	end
+	tooltip:SetText("Graveyard")
+	tooltip:AddLine(self.label, 1, 1, 1)
+	tooltip:Show()
+end
+
+local function Grave_OnLeave(self)
+	self.tooltip:Hide()
+end
+
+-- A stone can vanish under the cursor when the map is turned to another zone;
+-- its tooltip must not outlive it.
+local function Grave_OnHide(self)
+	if self.tooltip:IsOwned(self) then
+		self.tooltip:Hide()
+	end
+end
+
+-- Taking the mouse for the tooltip also means catching the map's clicks, so
+-- hand them to the map underneath: right-click still zooms out over a stone.
+local function Grave_OnMouseUp(self, mouseButton)
+	self.onClick(mouseButton)
+end
+
+local function AcquireGrave(surface, index)
+	local graves = surface.graves
+	local stone = graves.pool[index]
+	if not stone then
+		stone = CreateFrame("Frame", nil, graves.parent)
+		stone:SetWidth(graves.size)
+		stone:SetHeight(graves.size)
+		local icon = stone:CreateTexture(nil, "ARTWORK")
+		icon:SetAllPoints(stone)
+		icon:SetTexture(GRAVE_ICON)
+		icon:SetTexCoord(unpack(GRAVE_COORDS))
+
+		if graves.tooltip then
+			stone.tooltip = graves.tooltip
+			stone.onClick = graves.onClick
+			stone:EnableMouse(true)
+			stone:SetScript("OnEnter", Grave_OnEnter)
+			stone:SetScript("OnLeave", Grave_OnLeave)
+			stone:SetScript("OnHide", Grave_OnHide)
+			stone:SetScript("OnMouseUp", Grave_OnMouseUp)
+		end
+		graves.pool[index] = stone
+	end
+	return stone
+end
+
+-- The WorldMapArea row the map is showing, or nil when what it shows is not
+-- drawn in a zone's rectangle.
+local function ShownMapArea()
+	if type(GetCurrentMapAreaID) ~= "function" then
+		return nil
+	end
+
+	-- A floor of a multi-level map is drawn in that floor's own space, not the
+	-- zone's. The one exception is a map whose first "floor" is the terrain
+	-- itself, which WorldMapFrame_Update draws as the plain zone map.
+	local level = GetCurrentMapDungeonLevel()
+	if level > 0 and not (level == 1 and DungeonUsesTerrainMap()) then
+		return nil
+	end
+
+	-- This client answers WorldMapArea.ID + 1, which is why its own
+	-- WORLDMAP_WINTERGRASP_ID is 502 for row 501 and why
+	-- WorldMapFrame_ToggleWindowSize subtracts one before using it.
+	return GetCurrentMapAreaID() - 1
+end
+
+local function DrawGraves(surface)
+	local mapFrame = surface.frame
+	local pool = surface.graves.pool
+
+	local list
+	if mapFrame:IsShown() and CENTURION_BOTMAP_GRAVEYARDS then
+		local area = ShownMapArea()
+		list = area and CENTURION_BOTMAP_GRAVEYARDS[area]
+	end
+
+	local shown = 0
+	if list then
+		local width  = mapFrame:GetWidth()
+		local height = mapFrame:GetHeight()
+		for i = 1, #list do
+			local grave = list[i]
+			local stone = AcquireGrave(surface, i)
+			stone.label = grave[3]
+			stone:SetPoint("CENTER", mapFrame, "TOPLEFT", grave[1] * width, -grave[2] * height)
+			stone:Show()
+		end
+		shown = #list
+	end
+
+	for i = shown + 1, #pool do
+		pool[i]:Hide()
 	end
 end
 
@@ -171,6 +299,7 @@ end
 local function Redraw()
 	for i = 1, #surfaces do
 		DrawOn(surfaces[i])
+		DrawGraves(surfaces[i])
 	end
 end
 
@@ -200,7 +329,17 @@ end
 ------------------------------------------------------------------
 -- wiring
 ------------------------------------------------------------------
-AddSurface(WorldMapDetailFrame, 12)
+-- Stones on the world map go on WorldMapButton, the click layer over the detail
+-- frame where Blizzard keeps its own landmarks and party icons, so they can
+-- carry a tooltip.
+AddSurface(WorldMapDetailFrame, 12, {
+	size    = 16,
+	parent  = WorldMapButton,
+	tooltip = WorldMapTooltip,
+	onClick = function(mouseButton)
+		WorldMapButton_OnClick(WorldMapButton, mouseButton)
+	end,
+})
 
 -- The battlefield minimap is LOAD ON DEMAND - it does not exist until the
 -- player opens it or enters a battleground - so it is picked up when it
@@ -211,7 +350,8 @@ local function TryAttachBattlefieldMinimap()
 		if BattlefieldMinimap then
 			-- Smaller icon: the battlefield minimap is a fraction of the world
 			-- map's size, and a 12px blip on it covers half a zone.
-			AddSurface(BattlefieldMinimap, 8)
+			-- Its stones take no mouse: the frame is dragged by its body.
+			AddSurface(BattlefieldMinimap, 8, { size = 10, parent = BattlefieldMinimap })
 			BattlefieldMinimap:HookScript("OnShow", Redraw)
 			BattlefieldMinimap.CENTURION_hooked = true
 		end
