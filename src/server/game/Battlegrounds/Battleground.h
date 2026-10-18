@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <deque>
 #include <map>
+#include <unordered_map>
 #include <vector>
 
 namespace WorldPackets
@@ -580,6 +581,16 @@ class TC_GAME_API Battleground
         bool isBattleground() const { return !m_IsArena; }
         bool isRated() const        { return m_IsRated; }
         bool IsCustomGame() const   { return m_IsCustomGame; }
+        // Honor paid to a participant during the match - objectives, kills,
+        // anything through Player::RewardHonor - counted before it is turned
+        // into experience below the cap. The end-of-match payout is not
+        // included; EndBattleground reads this before paying it.
+        void NoteMatchHonor(ObjectGuid guid, uint32 honor) { m_MatchHonor[guid] += honor; }
+        uint32 GetMatchHonor(ObjectGuid guid) const
+        {
+            auto itr = m_MatchHonor.find(guid);
+            return itr != m_MatchHonor.end() ? itr->second : 0;
+        }
         // A public match padded with transient clones by the playerbot module
         // (see PlayerbotBgFillDriver). In such a match the clones are bots for
         // every purpose the queue and the empty-match rules care about, so a
@@ -1084,6 +1095,10 @@ class TC_GAME_API Battleground
         // paid (arena multiplier already applied for arenas), before the
         // 15-second minimum-duration gate.
         virtual void ModifyEndOfMatchMoneyRewards(uint32 /*winner*/, uint32 /*team*/, uint32& /*winnerMoney*/, uint32& /*loserMoney*/) const { }
+        // Whether this match is recorded and its end-of-match honor evened out
+        // to the realm's honor per hour (BattlegroundMgr::GetHourlyHonorPayout).
+        // Off for a mode whose payout already measures its own effort.
+        virtual bool PaysHourlyHonor() const { return true; }
 
         // Player lists, those need to be accessible by inherited classes
         BattlegroundPlayerMap m_Players;
@@ -1120,6 +1135,7 @@ class TC_GAME_API Battleground
         uint32 m_ClientInstanceID;                          // the instance-id which is sent to the client and without any other internal use
         uint32 m_StartTime;
         uint32 m_ResetStatTimer;
+        std::unordered_map<ObjectGuid, uint32> m_MatchHonor;   // NoteMatchHonor
         uint32 m_ValidStartPositionTimer;
         BattlegroundBounds m_Bounds;
         uint32 m_BoundsCheckTimer;

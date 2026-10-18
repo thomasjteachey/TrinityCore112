@@ -1574,6 +1574,19 @@ void Battleground::EndBattleground(uint32 winner)
 
     BattlegroundQueueTypeId bgQueueTypeId = BattlegroundMgr::BGQueueTypeId(GetTypeID(), GetArenaType());
 
+    // Only a match that has run long enough pays out (the gate in the loop
+    // below), and only such a match is recorded. Its end-of-match honor is
+    // what evens its kind out to the realm's honor per hour, from the medians
+    // of the matches before it (BattlegroundMgr::GetHourlyHonorPayout).
+    bool const paysOut = GetStartDelayTime() <= 0 && GetStartTime() >= 15 * IN_MILLISECONDS;
+    bool const recordedMatch = paysOut && !m_IsCustomGame && !IsReplay() && PaysHourlyHonor();
+    BattlegroundMgr::HourlyHonorPayout hourlyPayout{};
+    bool const hourlyHonor = recordedMatch && sBattlegroundMgr->GetHourlyHonorPayout(this, hourlyPayout);
+    uint32 recordedPlayers = 0;
+    uint32 recordedHumans = 0;
+    std::vector<uint32> winnersMatchHonor;
+    std::vector<uint32> losersMatchHonor;
+
     for (BattlegroundPlayerMap::iterator itr = m_Players.begin(); itr != m_Players.end(); ++itr)
     {
         uint32 team = itr->second.Team;
@@ -1581,6 +1594,11 @@ void Battleground::EndBattleground(uint32 winner)
         Player* player = _GetPlayer(itr, "EndBattleground");
         if (!player)
             continue;
+
+        ++recordedPlayers;
+        if (WorldSession const* session = player->GetSession())
+            if (!session->IsVirtualSession() && !session->IsTransientPlayerSession())
+                ++recordedHumans;
 
         // In a squad match only one squad of the winning side won.
         bool const won = IsWinningParticipant(itr->first, team, winner);
@@ -1647,12 +1665,24 @@ void Battleground::EndBattleground(uint32 winner)
             loser_money *= arenaMultiplier;
         }
 
+        // The hourly payout replaces the flat one outright, arenas included:
+        // it already answers for their length (and ArenaEffort for the rest).
+        if (hourlyHonor)
+        {
+            winner_honor = hourlyPayout.Winner;
+            loser_honor = hourlyPayout.Loser;
+        }
+
+        // Honor earned in play. The payout below is not part of it: the match
+        // has already left STATUS_IN_PROGRESS, so NoteMatchHonor ignores it.
+        (won ? winnersMatchHonor : losersMatchHonor).push_back(GetMatchHonor(player->GetGUID()));
+
         ModifyEndOfMatchHonorRewards(winner, team, winner_honor, loser_honor);
         ModifyEndOfMatchMoneyRewards(winner, team, winner_money, loser_money);
 
         // Rewards
         // only grant rewards if battle has lasted 15 seconds
-        if (GetStartDelayTime() <= 0 && GetStartTime() >= 15 * IN_MILLISECONDS)
+        if (paysOut)
         {
             if (won)
             {
@@ -1751,6 +1781,26 @@ void Battleground::EndBattleground(uint32 winner)
         if (!m_IsCustomGame)
             player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_BATTLEGROUND, player->GetMapId());
         sScriptMgr->OnBattlegroundEnd(this, winner);
+    }
+
+    // Start time runs from the gates' countdown, so the preparation is part of
+    // the length: it is part of what a player spends on the match.
+    if (recordedMatch)
+    {
+        auto medianOf = [](std::vector<uint32>& values) -> int32
+        {
+            if (values.empty())
+                return -1;
+            std::sort(values.begin(), values.end());
+            size_t const middle = values.size() / 2;
+            return int32(values.size() % 2 ? values[middle] : (values[middle - 1] + values[middle]) / 2);
+        };
+
+        uint32 const configWinner = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_WINNER);
+        uint32 const configLoser = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_LOSER);
+        sBattlegroundMgr->RecordMatchDuration(this, GetStartTime() / IN_MILLISECONDS, recordedHumans, recordedPlayers,
+            medianOf(winnersMatchHonor), medianOf(losersMatchHonor),
+            hourlyHonor ? hourlyPayout.Winner : configWinner, hourlyHonor ? hourlyPayout.Loser : configLoser);
     }
 
     // Custom-game spectators live outside m_Players, so the loop above never
@@ -2016,6 +2066,7 @@ void Battleground::Reset()
     SetEndTime(0);
     SetLastResurrectTime(0);
     m_Events = 0;
+    m_MatchHonor.clear();
 
     if (m_InvitedAlliance > 0 || m_InvitedHorde > 0)
         TC_LOG_ERROR("bg.battleground", "Battleground::Reset: one of the counters is not 0 (alliance: {}, horde: {}) for BG (map: {}, instance id: {})!",

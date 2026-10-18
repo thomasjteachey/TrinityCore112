@@ -22,7 +22,10 @@
 #include "DBCEnums.h"
 #include "Battleground.h"
 #include "BattlegroundQueue.h"
+#include <deque>
+#include <mutex>
 #include <set>
+#include <tuple>
 #include <unordered_map>
 
 struct BattlemasterListEntry;
@@ -177,6 +180,59 @@ class TC_GAME_API BattlegroundMgr
             return BATTLEGROUND_TYPE_NONE;
         }
 
+        // Battleground and arena honor per hour, evened out between kinds of
+        // match (Centurion.Battleground.HourlyHonor). A kind is the
+        // battleground actually played - or for an arena the format queued for
+        // (All Arenas, Solo Shuffle) - by team size and level bracket. Every
+        // match that pays out with a real person in it is recorded in
+        // `centurion_pvp_match_duration`: its length and the median honor its
+        // winners and its losers earned during play. The last Window of each
+        // kind are kept here, so the medians move as the kind is played.
+        struct MatchDurationKey
+        {
+            uint32 TypeId;
+            uint8 ArenaType;
+            uint8 MinLevel;
+
+            bool operator<(MatchDurationKey const& other) const
+            {
+                return std::tie(TypeId, ArenaType, MinLevel) < std::tie(other.TypeId, other.ArenaType, other.MinLevel);
+            }
+        };
+        struct MatchDurationStats
+        {
+            MatchDurationKey Key;
+            uint8 MaxLevel;
+            bool Arena;
+            uint32 Samples;
+            uint32 MedianSeconds;
+            uint32 MedianWinHonor;       // earned during play, end-of-match payout excluded
+            uint32 MedianLossHonor;
+        };
+        // What a kind's end-of-match payout should be so that a match of its
+        // median length, with its median in-match honor, earns HonorPerHour.
+        struct HourlyHonorPayout
+        {
+            uint32 Winner;
+            uint32 Loser;
+        };
+        static MatchDurationKey GetMatchDurationKey(Battleground const* bg);
+        void LoadMatchDurations();
+        // winHonor/lossHonor: the median in-match honor of each side, or -1
+        // when the side had nobody in it at the end.
+        void RecordMatchDuration(Battleground const* bg, uint32 seconds, uint32 humans, uint32 players,
+            int32 winHonor, int32 lossHonor, uint32 paidWinner, uint32 paidLoser);
+        // False while the feature is off, the kind or the battleground pool is
+        // still short of samples, or there is no rate to pay; the configured
+        // flat payout then stands.
+        bool GetHourlyHonorPayout(Battleground const* bg, HourlyHonorPayout& payout) const;
+        HourlyHonorPayout HourlyHonorPayoutFor(MatchDurationStats const& stats, uint32 honorPerHour) const;
+        // HonorPerHour, or when that is 0, what battlegrounds pay per hour
+        // today: the configured payout plus their median in-match honor, over
+        // their median length. 0 when there is not yet enough to say.
+        uint32 GetHonorPerHour() const;
+        std::vector<MatchDurationStats> GetMatchDurationStats() const;
+
     private:
         bool CreateBattleground(BattlegroundTemplate const* bgTemplate);
         bool IsPoolMemberSelectable(BattlegroundTypeId bgTypeId);
@@ -232,6 +288,31 @@ class TC_GAME_API BattlegroundMgr
         BattlegroundTemplateMap _battlegroundTemplates;
         BattlegroundMapTemplateContainer _battlegroundMapTemplates;
         BotFillPolicy _botFillPolicy;
+
+        struct MatchDurationSample
+        {
+            time_t EndedAt;
+            uint32 Seconds;
+            int32 WinHonor;     // -1: no winners at the end
+            int32 LossHonor;    // -1: no losers at the end
+        };
+        struct MatchDurationWindow
+        {
+            uint8 MaxLevel = 0;
+            bool Arena = false;
+            std::deque<MatchDurationSample> Samples;     // oldest first
+        };
+        void AddMatchDurationSample(MatchDurationKey const& key, uint8 maxLevel, bool arena, MatchDurationSample sample);
+        // The window's samples still inside MaxAgeDays, newest first, at most Window.
+        static void CollectRecentSamples(MatchDurationWindow const& window, time_t cutoff, std::vector<MatchDurationSample>& out);
+        static MatchDurationStats MakeStats(MatchDurationKey const& key, MatchDurationWindow const& window,
+            std::vector<MatchDurationSample> const& samples);
+        static time_t GetMatchDurationCutoff();
+        static uint32 Median(std::vector<uint32>& values);
+        uint32 GetHonorPerHourLocked() const;
+        std::map<MatchDurationKey, MatchDurationWindow> _matchDurations;
+        bool _matchDurationTableExists = false;
+        mutable std::mutex _matchDurationLock;
 };
 
 #define sBattlegroundMgr BattlegroundMgr::instance()

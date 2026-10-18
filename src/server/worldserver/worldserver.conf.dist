@@ -2975,6 +2975,61 @@ Centurion.Battleground.XpInsteadOfHonor.HonorPerLevel = 2240
 Centurion.Battleground.ArenaExperienceMultiplier = 0.4
 
 #
+#    Centurion.Battleground.HourlyHonor.Enable
+#        Description: Even out honor per hour across every kind of battleground and
+#                     arena match. A kind is the battleground played (for an arena,
+#                     the format queued: All Arenas, Solo Shuffle) by team size and
+#                     level bracket. Paid matches with a real player in them are
+#                     recorded in characters.centurion_pvp_match_duration whether or
+#                     not this is on: their length and the median honor winners and
+#                     losers earned in play. A kind is assumed to last its median
+#                     length and earn its median in-play honor, and its end-of-match
+#                     payout is whatever tops that up to HonorPerHour. The match's own
+#                     length plays no part. .bghonor shows the medians. Read at every
+#                     match end, so .reload config applies to the next one.
+#        Default:     0 - (Disabled, flat RewardHonorWinner/Loser)
+#                     1 - (Enabled)
+#
+#    Centurion.Battleground.HourlyHonor.HonorPerHour
+#        Description: The rate every kind is evened out to. 0 = what battlegrounds pay
+#                     per hour today: the configured payout plus their median in-play
+#                     honor, over their median length, all battlegrounds pooled.
+#        Default:     0
+#
+#    Centurion.Battleground.HourlyHonor.MinSamples
+#        Description: Recorded matches a kind needs before its payout is evened out;
+#                     below it the kind pays the flat payout. Also what the automatic
+#                     rate needs from battlegrounds.
+#        Default:     10
+#
+#    Centurion.Battleground.HourlyHonor.Window
+#        Description: The most recent matches of a kind its medians are taken over (1-1000).
+#        Default:     50
+#
+#    Centurion.Battleground.HourlyHonor.MaxAgeDays
+#        Description: Matches older than this are ignored. 0 = no age limit.
+#        Default:     30
+#
+#    Centurion.Battleground.HourlyHonor.MinFactor
+#    Centurion.Battleground.HourlyHonor.MaxFactor
+#        Description: Bounds of the payout, as multiples of RewardHonorWinner/Loser. A
+#                     kind whose in-play honor alone beats the rate gets the floor.
+#        Default:     0.0, 4.0
+#
+#    Centurion.Battleground.HourlyHonor.ArenaEffort
+#        Description: What an hour of arena is worth against an hour of battleground.
+#        Default:     1.0
+
+Centurion.Battleground.HourlyHonor.Enable = 0
+Centurion.Battleground.HourlyHonor.HonorPerHour = 0
+Centurion.Battleground.HourlyHonor.MinSamples = 10
+Centurion.Battleground.HourlyHonor.Window = 50
+Centurion.Battleground.HourlyHonor.MaxAgeDays = 30
+Centurion.Battleground.HourlyHonor.MinFactor = 0.0
+Centurion.Battleground.HourlyHonor.MaxFactor = 4.0
+Centurion.Battleground.HourlyHonor.ArenaEffort = 1.0
+
+#
 #    Centurion.Battleground.Spoils.Enable
 #        Description: A chest of world-drop greens for a person below the level cap
 #                     who saw a battleground to its end. Not paid in arenas, custom

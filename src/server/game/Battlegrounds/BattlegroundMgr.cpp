@@ -62,6 +62,7 @@
 #include "WorldPacket.h"
 #include "StringConvert.h"
 #include "Util.h"
+#include <algorithm>
 #include <array>
 
 bool BattlegroundTemplate::IsArena() const
@@ -1181,6 +1182,279 @@ bool BattlegroundMgr::IsBotFillSkirmishArena(uint8 arenaType) const
 
     return arenaType == ARENA_TYPE_2v2 || arenaType == ARENA_TYPE_3v3 ||
         arenaType == ARENA_TYPE_4v4 || arenaType == ARENA_TYPE_5v5;
+}
+
+// Honor per hour, the same for every kind of match.
+//
+// The end-of-match payout (RewardHonorWinner/Loser) used to be one flat figure
+// for every match, so a short 2v2 paid exactly what a long Warsong Gulch did,
+// and a battleground with rich objective honor paid more per hour than one
+// without. Here each kind of match is assumed to last its median length and to
+// pay its median in-match honor, and its end-of-match payout is whatever tops
+// that up to HonorPerHour for that length. The match's own timer plays no
+// part: a short or long game of a kind pays the kind's payout. The medians are
+// re-measured with every match played, so the payouts follow the realm.
+namespace
+{
+    // Kept in memory per kind. Window is applied when the medians are taken,
+    // so it can be changed by a config reload in either direction.
+    constexpr size_t MATCH_DURATION_MEMORY = 1000;
+}
+
+BattlegroundMgr::MatchDurationKey BattlegroundMgr::GetMatchDurationKey(Battleground const* bg)
+{
+    // A battleground by the map actually played (Random Battleground rolls
+    // one); an arena by the format queued for, since one All Arenas map plays
+    // much like the next and splitting them by map would starve every median.
+    uint32 const typeId = bg->isArena() ? uint32(bg->GetTypeID()) : uint32(bg->GetTypeID(true));
+    return { typeId, bg->GetArenaType(), uint8(bg->GetMinLevel()) };
+}
+
+time_t BattlegroundMgr::GetMatchDurationCutoff()
+{
+    uint32 const maxAgeDays = sWorld->getIntConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_MAX_AGE_DAYS);
+    if (!maxAgeDays)
+        return 0;
+
+    return GameTime::GetGameTime() - time_t(maxAgeDays) * DAY;
+}
+
+uint32 BattlegroundMgr::Median(std::vector<uint32>& values)
+{
+    if (values.empty())
+        return 0;
+
+    std::sort(values.begin(), values.end());
+    size_t const middle = values.size() / 2;
+    if (values.size() % 2)
+        return values[middle];
+
+    return (values[middle - 1] + values[middle]) / 2;
+}
+
+void BattlegroundMgr::CollectRecentSamples(MatchDurationWindow const& window, time_t cutoff, std::vector<MatchDurationSample>& out)
+{
+    size_t const limit = std::max<uint32>(1, sWorld->getIntConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_WINDOW));
+    size_t taken = 0;
+    for (auto itr = window.Samples.rbegin(); itr != window.Samples.rend() && taken < limit; ++itr)
+    {
+        if (itr->EndedAt < cutoff)
+            break;
+
+        out.push_back(*itr);
+        ++taken;
+    }
+}
+
+BattlegroundMgr::MatchDurationStats BattlegroundMgr::MakeStats(MatchDurationKey const& key, MatchDurationWindow const& window,
+    std::vector<MatchDurationSample> const& samples)
+{
+    std::vector<uint32> seconds, winHonor, lossHonor;
+    for (MatchDurationSample const& sample : samples)
+    {
+        seconds.push_back(sample.Seconds);
+        if (sample.WinHonor >= 0)
+            winHonor.push_back(uint32(sample.WinHonor));
+        if (sample.LossHonor >= 0)
+            lossHonor.push_back(uint32(sample.LossHonor));
+    }
+
+    uint32 const samplesCount = uint32(samples.size());
+    return { key, window.MaxLevel, window.Arena, samplesCount, Median(seconds), Median(winHonor), Median(lossHonor) };
+}
+
+void BattlegroundMgr::AddMatchDurationSample(MatchDurationKey const& key, uint8 maxLevel, bool arena, MatchDurationSample sample)
+{
+    MatchDurationWindow& window = _matchDurations[key];
+    window.MaxLevel = maxLevel;
+    window.Arena = arena;
+    window.Samples.push_back(sample);
+    while (window.Samples.size() > MATCH_DURATION_MEMORY)
+        window.Samples.pop_front();
+}
+
+void BattlegroundMgr::LoadMatchDurations()
+{
+    uint32 oldMSTime = getMSTime();
+
+    std::lock_guard<std::mutex> lock(_matchDurationLock);
+    _matchDurations.clear();
+
+    // A query against a missing table is fatal here (errno 1146 aborts the
+    // realm), and custom tables are applied by hand, so ask first. Without it
+    // nothing is recorded and every match pays its configured honor.
+    _matchDurationTableExists = bool(CharacterDatabase.Query(
+        "SELECT 1 FROM information_schema.TABLES "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'centurion_pvp_match_duration' LIMIT 1"));
+    if (!_matchDurationTableExists)
+    {
+        TC_LOG_ERROR("server.loading", ">> Table `centurion_pvp_match_duration` is missing: matches are not recorded and match honor stays flat.");
+        return;
+    }
+
+    // Only matches a real person played in: those are the ones whose honor
+    // anybody is paid, and a bot-only match would say nothing about them.
+    QueryResult result = CharacterDatabase.PQuery(
+        "SELECT type_id, arena_type, min_level, max_level, arena, duration_sec, ended_at, "
+        "CAST(IFNULL(honor_win, -1) AS SIGNED), CAST(IFNULL(honor_loss, -1) AS SIGNED) "
+        "FROM centurion_pvp_match_duration WHERE humans > 0 AND ended_at >= {} ORDER BY ended_at, id",
+        uint64(GetMatchDurationCutoff()));
+
+    uint32 count = 0;
+    if (result)
+    {
+        do
+        {
+            Field* fields = result->Fetch();
+            MatchDurationKey const key{ fields[0].GetUInt32(), fields[1].GetUInt8(), fields[2].GetUInt8() };
+            AddMatchDurationSample(key, fields[3].GetUInt8(), fields[4].GetBool(),
+                { time_t(fields[6].GetUInt32()), fields[5].GetUInt32(), int32(fields[7].GetInt64()), int32(fields[8].GetInt64()) });
+            ++count;
+        } while (result->NextRow());
+    }
+
+    TC_LOG_INFO("server.loading", ">> Loaded {} recorded matches for {} kinds of battleground and arena match in {} ms",
+        count, _matchDurations.size(), GetMSTimeDiffToNow(oldMSTime));
+}
+
+void BattlegroundMgr::RecordMatchDuration(Battleground const* bg, uint32 seconds, uint32 humans, uint32 players,
+    int32 winHonor, int32 lossHonor, uint32 paidWinner, uint32 paidLoser)
+{
+    std::lock_guard<std::mutex> lock(_matchDurationLock);
+    if (!_matchDurationTableExists)
+        return;
+
+    MatchDurationKey const key = GetMatchDurationKey(bg);
+    time_t const now = GameTime::GetGameTime();
+
+    std::string const win = winHonor >= 0 ? std::to_string(winHonor) : "NULL";
+    std::string const loss = lossHonor >= 0 ? std::to_string(lossHonor) : "NULL";
+    CharacterDatabase.PExecute(
+        "INSERT INTO centurion_pvp_match_duration (ended_at, type_id, arena_type, min_level, max_level, arena, "
+        "duration_sec, winner, humans, players, honor_win, honor_loss, paid_win, paid_loss) "
+        "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+        uint64(now), key.TypeId, uint32(key.ArenaType), uint32(key.MinLevel), bg->GetMaxLevel(), bg->isArena() ? 1 : 0,
+        seconds, uint32(bg->GetWinner()), humans, players, win, loss, paidWinner, paidLoser);
+
+    if (humans)
+        AddMatchDurationSample(key, uint8(bg->GetMaxLevel()), bg->isArena(), { now, seconds, winHonor, lossHonor });
+}
+
+uint32 BattlegroundMgr::GetHonorPerHourLocked() const
+{
+    if (uint32 const configured = sWorld->getIntConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_RATE))
+        return configured;
+
+    // What a typical battleground pays per hour today: the configured payout
+    // (averaged over winning and losing) plus the median honor earned in
+    // play, over the median length - every battleground match pooled. The
+    // payout this sets never feeds back in: in-match honor excludes it.
+    time_t const cutoff = GetMatchDurationCutoff();
+    std::vector<MatchDurationSample> samples;
+    for (auto const& [key, window] : _matchDurations)
+        if (!window.Arena)
+            CollectRecentSamples(window, cutoff, samples);
+
+    if (samples.empty() || samples.size() < sWorld->getIntConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_MIN_SAMPLES))
+        return 0;
+
+    std::vector<uint32> seconds, earned;
+    for (MatchDurationSample const& sample : samples)
+    {
+        seconds.push_back(sample.Seconds);
+        if (sample.WinHonor >= 0 && sample.LossHonor >= 0)
+            earned.push_back(uint32((sample.WinHonor + sample.LossHonor) / 2));
+        else if (sample.WinHonor >= 0 || sample.LossHonor >= 0)
+            earned.push_back(uint32(std::max(sample.WinHonor, sample.LossHonor)));
+    }
+
+    uint32 const medianSeconds = Median(seconds);
+    if (!medianSeconds)
+        return 0;
+
+    double const payout = (double(sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_WINNER)) +
+        double(sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_LOSER))) / 2.0;
+    return uint32(std::lround((payout + double(Median(earned))) * double(HOUR) / double(medianSeconds)));
+}
+
+uint32 BattlegroundMgr::GetHonorPerHour() const
+{
+    std::lock_guard<std::mutex> lock(_matchDurationLock);
+    return GetHonorPerHourLocked();
+}
+
+BattlegroundMgr::HourlyHonorPayout BattlegroundMgr::HourlyHonorPayoutFor(MatchDurationStats const& stats, uint32 honorPerHour) const
+{
+    // A match of the kind's median length earns honorPerHour pro rata, on
+    // average over its two sides. What the kind already pays in play counts
+    // towards it; the payout is the rest. One top-up for the kind, split in
+    // the configured winner/loser proportion (equal by default), so a side
+    // that earns more in play - winners capturing objectives - keeps that
+    // lead instead of both sides being levelled to the same total.
+    double target = double(honorPerHour) * double(stats.MedianSeconds) / double(HOUR);
+    if (stats.Arena)
+        target *= sWorld->getFloatConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_ARENA_EFFORT);
+
+    double const earned = (double(stats.MedianWinHonor) + double(stats.MedianLossHonor)) / 2.0;
+    double const topUp = target - earned;
+
+    double const configWinner = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_WINNER);
+    double const configLoser = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_LOSER);
+    double const configSum = configWinner + configLoser;
+    double const winnerShare = configSum > 0.0 ? 2.0 * configWinner / configSum : 1.0;
+    double const loserShare = configSum > 0.0 ? 2.0 * configLoser / configSum : 1.0;
+
+    // Kept inside MinFactor..MaxFactor of the configured payout. A kind whose
+    // in-play honor alone beats the rate is paid the floor: honor already
+    // earned is not taken back.
+    double const low = sWorld->getFloatConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_MIN_FACTOR);
+    double const high = std::max(low, double(sWorld->getFloatConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_MAX_FACTOR)));
+    auto bounded = [low, high](double wanted, double configured)
+    {
+        return uint32(std::lround(std::clamp(wanted, configured * low, configured * high)));
+    };
+
+    return { bounded(topUp * winnerShare, configWinner), bounded(topUp * loserShare, configLoser) };
+}
+
+bool BattlegroundMgr::GetHourlyHonorPayout(Battleground const* bg, HourlyHonorPayout& payout) const
+{
+    if (!sWorld->getBoolConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_ENABLE))
+        return false;
+
+    std::lock_guard<std::mutex> lock(_matchDurationLock);
+    auto const itr = _matchDurations.find(GetMatchDurationKey(bg));
+    if (itr == _matchDurations.end())
+        return false;
+
+    std::vector<MatchDurationSample> samples;
+    CollectRecentSamples(itr->second, GetMatchDurationCutoff(), samples);
+    if (samples.empty() || samples.size() < sWorld->getIntConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_MIN_SAMPLES))
+        return false;
+
+    uint32 const honorPerHour = GetHonorPerHourLocked();
+    if (!honorPerHour)
+        return false;
+
+    payout = HourlyHonorPayoutFor(MakeStats(itr->first, itr->second, samples), honorPerHour);
+    return true;
+}
+
+std::vector<BattlegroundMgr::MatchDurationStats> BattlegroundMgr::GetMatchDurationStats() const
+{
+    std::lock_guard<std::mutex> lock(_matchDurationLock);
+
+    time_t const cutoff = GetMatchDurationCutoff();
+    std::vector<MatchDurationStats> stats;
+    for (auto const& [key, window] : _matchDurations)
+    {
+        std::vector<MatchDurationSample> samples;
+        CollectRecentSamples(window, cutoff, samples);
+        if (!samples.empty())
+            stats.push_back(MakeStats(key, window, samples));
+    }
+
+    return stats;
 }
 
 bool BattlegroundMgr::IsArenaType(BattlegroundTypeId bgTypeId)

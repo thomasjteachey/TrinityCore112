@@ -1589,6 +1589,22 @@ void World::LoadConfigSettings(bool reload)
     m_float_configs[CONFIG_CENTURION_BG_ARENA_REWARD_MULTIPLIER] = sConfigMgr->GetFloatDefault("Centurion.Battleground.ArenaRewardMultiplier", .2f);
     m_float_configs[CONFIG_CENTURION_BG_ARENA_EXPERIENCE_MULTIPLIER] = std::max(0.0f,
         sConfigMgr->GetFloatDefault("Centurion.Battleground.ArenaExperienceMultiplier", .4f));
+    // End-of-match honor set so every kind of battleground and arena match
+    // earns the same honor per hour at its median length
+    // (BattlegroundMgr::GetHourlyHonorPayout). Read at every match end, so
+    // `.reload config` applies to the next one. Matches are recorded whether
+    // or not this is on; `.bghonor` shows the medians.
+    m_bool_configs[CONFIG_CENTURION_BG_HOURLY_HONOR_ENABLE] = sConfigMgr->GetBoolDefault("Centurion.Battleground.HourlyHonor.Enable", false);
+    m_int_configs[CONFIG_CENTURION_BG_HOURLY_HONOR_RATE] = std::max(0, sConfigMgr->GetIntDefault("Centurion.Battleground.HourlyHonor.HonorPerHour", 0));
+    m_int_configs[CONFIG_CENTURION_BG_HOURLY_HONOR_MIN_SAMPLES] = std::max(1, sConfigMgr->GetIntDefault("Centurion.Battleground.HourlyHonor.MinSamples", 10));
+    m_int_configs[CONFIG_CENTURION_BG_HOURLY_HONOR_WINDOW] = std::clamp(sConfigMgr->GetIntDefault("Centurion.Battleground.HourlyHonor.Window", 50), 1, 1000);
+    m_int_configs[CONFIG_CENTURION_BG_HOURLY_HONOR_MAX_AGE_DAYS] = std::max(0, sConfigMgr->GetIntDefault("Centurion.Battleground.HourlyHonor.MaxAgeDays", 30));
+    m_float_configs[CONFIG_CENTURION_BG_HOURLY_HONOR_MIN_FACTOR] = std::max(0.0f,
+        sConfigMgr->GetFloatDefault("Centurion.Battleground.HourlyHonor.MinFactor", 0.0f));
+    m_float_configs[CONFIG_CENTURION_BG_HOURLY_HONOR_MAX_FACTOR] = std::max(m_float_configs[CONFIG_CENTURION_BG_HOURLY_HONOR_MIN_FACTOR],
+        sConfigMgr->GetFloatDefault("Centurion.Battleground.HourlyHonor.MaxFactor", 4.0f));
+    m_float_configs[CONFIG_CENTURION_BG_HOURLY_HONOR_ARENA_EFFORT] = std::max(0.0f,
+        sConfigMgr->GetFloatDefault("Centurion.Battleground.HourlyHonor.ArenaEffort", 1.0f));
 
     m_int_configs[CONFIG_CENTURION_LEAP_XY_SPEED] = sConfigMgr->GetIntDefault("Centurion.LeapXYSpeed", 100);
     m_int_configs[CONFIG_CENTURION_LEAP_Z_SPEED] = sConfigMgr->GetIntDefault("Centurion.LeapZSpeed", 20);
@@ -2456,6 +2472,9 @@ void World::SetInitialWorldSettings()
     ///- Initialize Battlegrounds
     TC_LOG_INFO("server.loading", "Starting Battleground System");
     sBattlegroundMgr->LoadBattlegroundTemplates();
+
+    TC_LOG_INFO("server.loading", "Loading recorded Battleground and Arena matches...");
+    sBattlegroundMgr->LoadMatchDurations();
     sBattlegroundMgr->InitAutomaticArenaPointDistribution();
 
     ///- Initialize outdoor pvp

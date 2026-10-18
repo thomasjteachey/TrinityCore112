@@ -577,6 +577,8 @@ private:
     void ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, uint32& winnerHonor, uint32& loserHonor) const override;
     uint32 GetMoneyRewardForRun() const;
     void ModifyEndOfMatchMoneyRewards(uint32 winner, uint32 team, uint32& winnerMoney, uint32& loserMoney) const override;
+    // A run is already paid by the wave it reached, which is its length.
+    bool PaysHourlyHonor() const override { return false; }
 
     uint32 _humanTeam;
     uint32 _enemyTeam;

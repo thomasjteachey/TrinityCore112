@@ -22,6 +22,9 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "RBAC.h"
+#include "World.h"
+#include <algorithm>
+#include <cmath>
 
 using namespace Trinity::ChatCommands;
 
@@ -35,6 +38,7 @@ public:
         static ChatCommandTable commandTable =
         {
             { "bgqueue", HandleBgQueueCommand, rbac::RBAC_PERM_COMMAND_LFG_QUEUE, Console::Yes },
+            { "bghonor", HandleBgHonorCommand, rbac::RBAC_PERM_COMMAND_LFG_QUEUE, Console::Yes },
         };
 
         return commandTable;
@@ -55,14 +59,14 @@ public:
 
             std::string queueName;
             if (uint8 arenaType = BattlegroundMgr::BGArenaType(bgQueueTypeId))
-                queueName = Trinity::StringFormat("Arena %uv%u", arenaType, arenaType);
+                queueName = Trinity::StringFormat("Arena {}v{}", arenaType, arenaType);
             else
             {
                 BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(bgQueueTypeId);
                 if (Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId))
                     queueName = bgTemplate->GetName();
                 else
-                    queueName = Trinity::StringFormat("Battleground type %u", bgTypeId);
+                    queueName = Trinity::StringFormat("Battleground type {}", uint32(bgTypeId));
             }
 
             handler->PSendSysMessage("%s queue (%zu players):", queueName.c_str(), queue.m_QueuedPlayers.size());
@@ -92,6 +96,79 @@ public:
         if (!hasQueuedPlayers)
             handler->SendSysMessage("No players are currently queued for battlegrounds or arenas.");
 
+        return true;
+    }
+
+    // Every kind of match on record: its median length, the median honor its
+    // winners and losers earn in play, the end-of-match payout that evens it
+    // out to the realm's honor per hour, and the hourly rate a player of it
+    // actually gets (Centurion.Battleground.HourlyHonor). Honor is shown
+    // before any battleground's own adjustment (Tanaris and the other custom
+    // maps trim theirs) and before it is turned into experience below the cap.
+    static bool HandleBgHonorCommand(ChatHandler* handler)
+    {
+        bool const enabled = sWorld->getBoolConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_ENABLE);
+        uint32 const minSamples = sWorld->getIntConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_MIN_SAMPLES);
+        uint32 const honorPerHour = sBattlegroundMgr->GetHonorPerHour();
+        bool const autoRate = !sWorld->getIntConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_RATE);
+
+        handler->PSendSysMessage("Hourly match honor is %s. Rate: %s (%s), %u matches needed per kind.",
+            enabled ? "ON" : "OFF",
+            honorPerHour ? Trinity::StringFormat("{} honor/hour", honorPerHour).c_str() : "not enough data",
+            autoRate ? "what battlegrounds pay today" : "configured", minSamples);
+
+        std::vector<BattlegroundMgr::MatchDurationStats> stats = sBattlegroundMgr->GetMatchDurationStats();
+        if (stats.empty())
+        {
+            handler->SendSysMessage("No matches have been recorded yet.");
+            return true;
+        }
+
+        std::sort(stats.begin(), stats.end(), [](BattlegroundMgr::MatchDurationStats const& a, BattlegroundMgr::MatchDurationStats const& b)
+        {
+            if (a.Arena != b.Arena)
+                return !a.Arena;
+            return a.Key < b.Key;
+        });
+
+        uint32 const configWinner = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_WINNER);
+        uint32 const configLoser = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_LOSER);
+        uint32 const arenaFlagHonor = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP) * 3;
+        float const arenaFlat = sWorld->getFloatConfig(CONFIG_CENTURION_BG_ARENA_REWARD_MULTIPLIER);
+
+        for (BattlegroundMgr::MatchDurationStats const& stat : stats)
+        {
+            std::string name;
+            if (Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(BattlegroundTypeId(stat.Key.TypeId)))
+                name = bgTemplate->GetName();
+            else
+                name = Trinity::StringFormat("Type {}", stat.Key.TypeId);
+            if (stat.Key.ArenaType)
+                name += Trinity::StringFormat(" {}v{}", uint32(stat.Key.ArenaType), uint32(stat.Key.ArenaType));
+
+            bool const balanced = enabled && honorPerHour && stat.Samples >= minSamples;
+            BattlegroundMgr::HourlyHonorPayout payout;
+            if (balanced)
+                payout = sBattlegroundMgr->HourlyHonorPayoutFor(stat, honorPerHour);
+            else if (stat.Arena)
+                payout = { uint32((configWinner + arenaFlagHonor) * arenaFlat), uint32(configLoser * arenaFlat) };
+            else
+                payout = { configWinner, configLoser };
+
+            auto perHour = [&stat](uint32 earned, uint32 paid)
+            {
+                return stat.MedianSeconds ? uint32(uint64(earned + paid) * HOUR / stat.MedianSeconds) : 0u;
+            };
+
+            handler->PSendSysMessage(" - %s %u-%u: %u matches, median %u:%02u, in play %u/%u, payout %u/%u%s = %u/%u per hour",
+                name.c_str(), uint32(stat.Key.MinLevel), uint32(stat.MaxLevel), stat.Samples,
+                stat.MedianSeconds / MINUTE, stat.MedianSeconds % MINUTE,
+                stat.MedianWinHonor, stat.MedianLossHonor, payout.Winner, payout.Loser,
+                balanced ? "" : (stat.Samples < minSamples ? " (flat, too few)" : " (flat)"),
+                perHour(stat.MedianWinHonor, payout.Winner), perHour(stat.MedianLossHonor, payout.Loser));
+        }
+
+        handler->SendSysMessage("Pairs are win/loss.");
         return true;
     }
 };

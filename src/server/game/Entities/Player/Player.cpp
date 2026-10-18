@@ -8316,6 +8316,12 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
 
     honor = ScaleHonorGain(honor_f);
 
+    // Counted for the match's honor-per-hour balance before any of it becomes
+    // experience: a leveling character earns the same award as one at the cap.
+    if (honor > 0)
+        if (Battleground* bg = GetBattleground(); bg && bg->GetStatus() == STATUS_IN_PROGRESS)
+            bg->NoteMatchHonor(GetGUID(), uint32(honor));
+
     // Below the level cap there is no honor: every award is paid as EXPERIENCE
     // instead, or not at all.
     //
