@@ -160,17 +160,18 @@ namespace
     // rather than through the badge aura.
     // How long the feed keeps running after the byte last read as armed.
     //
-    // Crossing a SUB-AREA boundary strips the FFA byte for at least a tick:
-    // Player::UpdateArea recomputes pvpInfo.IsInFFAPvPArea from the area alone
-    // and re-runs UpdatePvPState, and only the next per-player tick of
-    // ApplyFfaState puts it back. There is no area-change script hook to do it
-    // sooner. Asking the raw byte therefore drops the feed for a second or two
-    // every time somebody walks between two sub-areas of the same zone, which
-    // reads as every bot icon blinking off the map and back.
+    // Crossing a SUB-AREA boundary used to strip the FFA byte for at least a
+    // tick: Player::UpdateArea recomputed pvpInfo.IsInFFAPvPArea from the area
+    // alone and re-ran UpdatePvPState, and only the next per-player tick of
+    // ApplyFfaState put it back, so the raw byte dropped the feed for a second
+    // or two on every crossing and every bot icon blinked off the map and back.
+    // The hardcore ruleset now re-asserts the byte from OnUpdateArea, before
+    // the core applies it, so a crossing no longer drops it at all.
     //
-    // A short grace covers the gap without changing what the gate MEANS: walk
-    // into a capital and disarm properly and the feed still stops, just a couple
-    // of seconds later than it used to.
+    // The grace stays as a cushion for a disarm that is undone moments later -
+    // cutting through a sanctuary sub-area, say. It does not change what the
+    // gate MEANS: walk into a capital and disarm properly and the feed still
+    // stops, just a couple of seconds later.
     constexpr uint32 kArmedGraceMs = 5000;
     std::unordered_map<uint64, uint32> s_lastArmedAtMs;
 

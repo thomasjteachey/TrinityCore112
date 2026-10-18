@@ -785,6 +785,12 @@ class TC_GAME_API PlayerScript : public ScriptObject
         // Called when a player switches to a new zone
         virtual void OnUpdateZone(Player* player, uint32 newZone, uint32 newArea);
 
+        // Called when a player's area state (sanctuary, FFA area) has been
+        // recomputed, just BEFORE the FFA PvP flag is applied from it - the
+        // place for a script that owns pvpInfo.IsInFFAPvPArea to re-assert it.
+        // Fires on every sub-area crossing and from inside every UpdateZone.
+        virtual void OnUpdateArea(Player* player, uint32 newArea);
+
         // Called when a player changes to a new map (after moving to new map)
         virtual void OnMapChanged(Player* player);
 
@@ -1128,6 +1134,7 @@ class TC_GAME_API ScriptMgr
         void OnPlayerBindToInstance(Player* player, Difficulty difficulty, uint32 mapid, bool permanent, uint8 extendState);
         void OnPlayerUpdate(Player* player, uint32 diff);
         void OnPlayerUpdateZone(Player* player, uint32 newZone, uint32 newArea);
+        void OnPlayerUpdateArea(Player* player, uint32 newArea);
         void OnQuestObjectiveProgress(Player* player, Quest const* quest, uint32 objectiveIndex, uint16 progress);
         void OnQuestStatusChange(Player* player, uint32 questId);
         void OnMovieComplete(Player* player, uint32 movieId);

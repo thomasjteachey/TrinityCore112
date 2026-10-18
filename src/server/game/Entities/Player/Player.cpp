@@ -8934,6 +8934,13 @@ void Player::UpdateArea(uint32 newArea)
     else
         RemoveRestFlag(REST_FLAG_IN_FACTION_AREA);
 
+    // A script that owns IsInFFAPvPArea (the hardcore ruleset arms players in
+    // the middle of ordinary zones) re-asserts it here, BEFORE it is applied.
+    // Asked afterwards, the line below strips an armed player's FFA byte on
+    // every sub-area crossing and the script can only put it back a tick
+    // later, by which time clients have seen the flag drop.
+    sScriptMgr->OnPlayerUpdateArea(this, newArea);
+
     // Re-apply FFA PvP after sanctuary/no-PvP state has been recalculated.
     UpdatePvPState(true);
 }

@@ -2072,6 +2072,11 @@ void ScriptMgr::OnPlayerUpdateZone(Player* player, uint32 newZone, uint32 newAre
     FOREACH_SCRIPT(PlayerScript)->OnUpdateZone(player, newZone, newArea);
 }
 
+void ScriptMgr::OnPlayerUpdateArea(Player* player, uint32 newArea)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnUpdateArea(player, newArea);
+}
+
 void ScriptMgr::OnQuestStatusChange(Player* player, uint32 questId)
 {
     FOREACH_SCRIPT(PlayerScript)->OnQuestStatusChange(player, questId);
@@ -2915,6 +2920,10 @@ void PlayerScript::OnUpdate(Player* /*player*/, uint32 /*diff*/)
 }
 
 void PlayerScript::OnUpdateZone(Player* /*player*/, uint32 /*newZone*/, uint32 /*newArea*/)
+{
+}
+
+void PlayerScript::OnUpdateArea(Player* /*player*/, uint32 /*newArea*/)
 {
 }
 

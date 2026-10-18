@@ -642,12 +642,13 @@ namespace BarracksHardcore
         return IsOptedIn(player->GetGUID().GetCounter());
     }
 
-    // Called on login, zone change and every player tick: Player::UpdateArea
-    // recomputes the FFA byte on every sub-area crossing and never dirties the
-    // faction field when it does, so the state has to be re-asserted rather
-    // than set once. MUST CONVERGE: it runs per player per world tick, and a
-    // branch that cannot satisfy its own condition would re-dirty the faction
-    // field forever, rebuilding a values block for every observer each tick.
+    // Called on login, on area and zone changes and every player tick:
+    // Player::UpdateArea recomputes the FFA byte on every sub-area crossing and
+    // never dirties the faction field when it does, so the state has to be
+    // re-asserted rather than set once. MUST CONVERGE: it runs per player per
+    // world tick, and a branch that cannot satisfy its own condition would
+    // re-dirty the faction field forever, rebuilding a values block for every
+    // observer each tick.
     // This realm is always at war. The PvP flag stays lit for everyone and
     // /pvp cannot put it out: the toggle is simply overwritten on the next
     // tick, and the five-minute cool-down timer never gets to expire. GMs are
@@ -878,10 +879,68 @@ namespace BarracksHardcore
             player->RemoveAurasDueToSpell(s_warModeAuraSpell);
     }
 
-    void ApplyFfaState(Player* player)
+    // Re-sends every view an FFA flip changes, whoever made the flip.
+    //
+    // The bot pseudo-faction render (Unit::BuildValuesUpdate) keys on the byte,
+    // and the faction field is never dirtied by the core, so a flip nobody
+    // follows up leaves clients colouring by the old state: a red nameplate on
+    // something that can no longer be hit, or a green one on something that is
+    // hitting you. Transitions only - forcing it on a tick where nothing changed
+    // is pure broadcast cost.
+    void RefreshFfaViews(Player* player, bool isBot)
+    {
+        // The player, and the pets, minions and totems that inherit its byte
+        // and render through it as their affecting player.
+        player->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
+        for (Unit* controlled : player->m_Controlled)
+            controlled->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
+
+        // The bot render override branches on the OBSERVER's byte, but
+        // dirtying this player only rebuilds THIS player's values block.
+        // Bots already on screen keep the colour they were last sent, so
+        // after arming they stay green - and the client refuses to swing at
+        // a friendly unit, leaving a player hunted by bots they cannot hit
+        // until each one happens to re-send. Re-dirty the bots this flip
+        // just re-coloured. Dead ones too, or a corpse keeps a stale colour
+        // through its whole rez.
+        //
+        // A bot's own flip re-colours no other bot: bot observers are never
+        // shown the override, so there is nothing of theirs to re-send.
+        if (!isBot)
+        {
+            std::vector<Player*> nearby;
+            player->GetPlayerListInGrid(nearby, player->GetVisibilityRange(), false);
+            for (Player* other : nearby)
+            {
+                if (!other->GetSession() || !IsBotAccount(other->GetSession()->GetAccountId()))
+                    continue;
+
+                other->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
+                for (Unit* controlled : other->m_Controlled)
+                    controlled->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
+            }
+        }
+
+        // Nothing re-checks a fight already under way: the auto-attack swing
+        // loop and periodic aura ticks never re-ask IsValidAttackTarget.
+        // Without this a player engages a bot, steps into a sanctuary or
+        // disarms, and keeps swinging at something that can no longer swing
+        // back. This is the core's own tool for exactly that.
+        player->ValidateAttackersAndOwnTarget();
+    }
+
+    // areaUpdate: called from inside Player::UpdateArea (OnUpdateArea), before
+    // the core applies the area's own FFA answer.
+    void ApplyFfaState(Player* player, bool areaUpdate = false)
     {
         if (!s_enabled || !player || !player->IsInWorld())
             return;
+
+        // Read before anything below can move it. On an area update the core
+        // has not touched the byte yet either, so this is the state clients
+        // were last sent.
+        bool const wasFfa = player->IsFFAPvP();
+        bool const isBot = player->GetSession() && IsBotAccount(player->GetSession()->GetAccountId());
 
         // Sanctuaries, arena areas and GM mode own the flag outright: the core
         // REFUSES to set the FFA byte there (Player::UpdatePvPState), so a
@@ -898,11 +957,23 @@ namespace BarracksHardcore
         bool const inBattleRing = player->IsInGurubashiBattleRing();
         if (player->pvpInfo.IsInNoPvPArea || player->IsGameMaster() ||
             (!inBattleRing && area && (area->Flags & AREA_FLAG_ARENA)))
+        {
+            // The core is about to apply its own answer for this area - strip
+            // the byte on the way into a sanctuary, set it in an arena area -
+            // and nothing would re-send the views that flip changes. Make the
+            // same call it makes next (a no-op for it then) so the flip is
+            // seen here. Area updates only: on a plain tick there is nothing
+            // new for the core to apply.
+            if (areaUpdate)
+            {
+                player->UpdatePvPState(true);
+                if (player->IsFFAPvP() != wasFfa)
+                    RefreshFfaViews(player, isBot);
+            }
             return;
+        }
 
         bool const shouldFfa = IsFfaArmed(player);
-        bool const wasFfa = player->IsFFAPvP();
-        bool const isBot = player->GetSession() && IsBotAccount(player->GetSession()->GetAccountId());
 
         // The client needs both halves of the bot pseudo-faction: FFA makes the
         // server treat the pair as hostile, while the ordinary PvP flag makes
@@ -932,39 +1003,20 @@ namespace BarracksHardcore
         if (isBot && shouldFfa)
             player->UpdatePvP(true, true);
 
-        // Only when the byte actually moved: the bot pseudo-faction render
-        // (Unit::BuildValuesUpdate) keys on it, and the faction field is never
-        // dirtied by the core, but forcing it on a tick where nothing changed
-        // is pure broadcast cost.
-        if (player->IsFFAPvP() != wasFfa)
-        {
-            player->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
+        bool const flipped = player->IsFFAPvP() != wasFfa;
+        if (flipped)
+            RefreshFfaViews(player, isBot);
 
-            // The bot render override branches on the OBSERVER's byte, but
-            // dirtying this player only rebuilds THIS player's values block.
-            // Bots already on screen keep the colour they were last sent, so
-            // after arming they stay green - and the client refuses to swing at
-            // a friendly unit, leaving a player hunted by bots they cannot hit
-            // until each one happens to re-send. Re-dirty the bots this flip
-            // just re-coloured. Dead ones too, or a corpse keeps a stale colour
-            // through its whole rez. Transitions only: not a hot path.
-            std::vector<Player*> nearby;
-            player->GetPlayerListInGrid(nearby, player->GetVisibilityRange(), false);
-            for (Player* other : nearby)
-                if (other->GetSession() && IsBotAccount(other->GetSession()->GetAccountId()))
-                    other->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
+        // Every area update re-states IsInFFAPvPArea from the map, so that
+        // field alone disagreeing is the core's bookkeeping, put straight
+        // above, and no transition: an armed player crossing into the next
+        // sub-area keeps the byte throughout and has nothing to report.
+        if (!flipped && !botPvpDrift)
+            return;
 
-            // Nothing re-checks a fight already under way: the auto-attack swing
-            // loop and periodic aura ticks never re-ask IsValidAttackTarget.
-            // Without this a player engages a bot, steps into a sanctuary or
-            // disarms, and keeps swinging at something that can no longer swing
-            // back. This is the core's own tool for exactly that.
-            player->ValidateAttackersAndOwnTarget();
-        }
-
-        // Transitions only: the early return above holds whenever every owner
-        // of these flags agrees. A line here every tick for the same character
-        // means something else keeps undoing this - find it, do not silence it.
+        // Transitions only: the byte moved or a bot's PvP flag was put back.
+        // A line here every tick for the same character means something else
+        // keeps undoing this - find it, do not silence it.
         TC_LOG_INFO("playerbots.hardcore", "FFA {} for {} (zone {} area {} account {}): armed={} byteNow={} wasByte={}",
             shouldFfa ? "ARM" : "disarm", player->GetName(), player->GetZoneId(), player->GetAreaId(),
             player->GetSession() ? player->GetSession()->GetAccountId() : 0,
@@ -2456,11 +2508,18 @@ public:
         ApplyWarModeAura(player);
     }
 
-    // Player::UpdateArea strips the FFA byte on every sub-area crossing and
-    // there is no area-change script hook, so the state is re-asserted here.
-    // No throttle: a PlayerScript is a singleton shared by every player, so a
-    // member timer would only ever service one of them. ApplyFfaState costs a
-    // couple of hash lookups and does nothing when nothing has drifted.
+    // Player::UpdateArea re-states IsInFFAPvPArea from the map on every
+    // sub-area crossing and then applies it, which on its own strips an armed
+    // player's FFA byte. This runs between the two, so the byte never drops:
+    // no flag blinking off for a tick on every client, no faction re-send, no
+    // log line. It is also the one place that sees the byte BEFORE the core
+    // moves it on the way into a starter zone, a capital or a sanctuary, which
+    // is what lets those flips re-send the views they change.
+    void OnUpdateArea(Player* player, uint32 /*newArea*/) override
+    {
+        ApplyFfaState(player, true);
+    }
+
     // War Mode is a decision about whether you can be attacked, so a party
     // split down the middle on it cannot work: half of it is fair game in the
     // open world and half is not.
@@ -2526,6 +2585,9 @@ public:
         return false;
     }
 
+    // No throttle: a PlayerScript is a singleton shared by every player, so a
+    // member timer would only ever service one of them. ApplyFfaState costs a
+    // couple of hash lookups and does nothing when nothing has drifted.
     void OnUpdate(Player* player, uint32 /*diff*/) override
     {
         EnforceAlwaysPvP(player);
