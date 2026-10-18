@@ -7495,6 +7495,9 @@ void Unit::SetMinion(Minion *minion, bool apply)
             return;
         }
 
+        if (Player* player = ToPlayer())
+            player->SaveGuardianActionBar(minion);
+
         m_Controlled.erase(minion);
 
         if (minion->m_Properties && minion->m_Properties->Title == SUMMON_TYPE_MINIPET)

@@ -2429,6 +2429,12 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void ResummonPetTemporaryUnSummonedIfAny();
         bool IsPetNeedBeTemporaryUnsummoned() const;
 
+        // Controllable guardians (Water Elemental, Feral Spirit, Shadowfiend...)
+        // never reach character_pet, so their bar would reset on every summon.
+        // Remembered per creature entry for as long as the character is loaded.
+        void SaveGuardianActionBar(Unit const* guardian);
+        void RestoreGuardianActionBar(Unit* guardian) const;
+
         void SendCinematicStart(uint32 CinematicSequenceId) const;
         void SendMovieStart(uint32 movieId);
 
@@ -2997,6 +3003,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
 
         // Temporary removed pet cache
         uint32 m_temporaryUnsummonedPetNumber;
+        std::unordered_map<uint32 /*creature entry*/, std::array<uint32, MAX_UNIT_ACTION_BAR_INDEX>> m_guardianActionBars;
         uint32 m_oldpetspell;
 
         AchievementMgr* m_achievementMgr;

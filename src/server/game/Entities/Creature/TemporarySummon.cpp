@@ -405,6 +405,9 @@ void Guardian::InitStats(uint32 duration)
 
         if (HasUnitTypeMask(UNIT_MASK_CONTROLABLE_GUARDIAN) || hasCreatureSpells)
             InitCharmInfo()->InitCharmCreateSpells();
+
+        // Put back the bar the owner arranged for the last one of these.
+        GetOwner()->ToPlayer()->RestoreGuardianActionBar(this);
     }
 
     SetReactState(REACT_AGGRESSIVE);

@@ -30154,6 +30154,41 @@ void Player::ResurrectPetAtSpiritGuide()
     }
 }
 
+void Player::SaveGuardianActionBar(Unit const* guardian)
+{
+    CharmInfo* charmInfo = guardian->GetCharmInfo();
+    if (!charmInfo || guardian->IsPet() || !guardian->HasUnitTypeMask(UNIT_MASK_CONTROLABLE_GUARDIAN))
+        return;
+
+    std::array<uint32, MAX_UNIT_ACTION_BAR_INDEX>& bar = m_guardianActionBars[guardian->GetEntry()];
+    for (uint8 i = 0; i < MAX_UNIT_ACTION_BAR_INDEX; ++i)
+        bar[i] = charmInfo->GetActionBarEntry(i)->packedData;
+}
+
+void Player::RestoreGuardianActionBar(Unit* guardian) const
+{
+    CharmInfo* charmInfo = guardian->GetCharmInfo();
+    if (!charmInfo || guardian->IsPet() || !guardian->HasUnitTypeMask(UNIT_MASK_CONTROLABLE_GUARDIAN))
+        return;
+
+    auto itr = m_guardianActionBars.find(guardian->GetEntry());
+    if (itr == m_guardianActionBars.end())
+        return;
+
+    for (uint8 i = 0; i < MAX_UNIT_ACTION_BAR_INDEX; ++i)
+    {
+        uint32 action = UNIT_ACTION_BUTTON_ACTION(itr->second[i]);
+        ActiveStates type = ActiveStates(UNIT_ACTION_BUTTON_TYPE(itr->second[i]));
+        charmInfo->SetActionBar(i, action, type);
+
+        // The guardian's AI reads autocast from its charm spells, not the bar,
+        // so a remembered autocast toggle has to reach both.
+        if (action && (type == ACT_ENABLED || type == ACT_DISABLED))
+            if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(action))
+                charmInfo->ToggleCreatureAutocast(spellInfo, type == ACT_ENABLED);
+    }
+}
+
 void Player::UnsummonPetTemporaryIfAny()
 {
     Pet* pet = GetPet();
