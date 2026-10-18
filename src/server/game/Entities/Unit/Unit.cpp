@@ -1054,6 +1054,51 @@ namespace
         return pressed && bot->GetCombatManager().HasPvECombat();
     }
 
+    // Whether a PERSON is fighting this bot: a real player at a keyboard, or
+    // that player's pet, totem or mind-controlled thrall.
+    //
+    // HasPvPCombat cannot answer it - every bot is player-controlled, so a bot
+    // skirmishing with another bot reads as PvP too, and the fleet hunts itself
+    // constantly. So the PvP references are walked and the other end asked who
+    // is behind it. A playerbot account, a PvP-only bot or a transient copy
+    // (battleground fill, a bounty hunter) runs on a socketless session and is
+    // not a person; only a real connection is.
+    //
+    // The bot's pets answer as well, for the same reason IsPlayerbotFightingBoth
+    // lets them: a player who opens on the minion is on the bot.
+    bool IsPlayerbotEngagedByPerson(Player const* bot)
+    {
+        if (!bot)
+            return false;
+
+        auto const engaged = [](Unit const* unit)
+        {
+            for (auto const& entry : unit->GetCombatManager().GetPvPCombatRefs())
+            {
+                PvPCombatReference const* ref = entry.second;
+                if (!ref || ref->IsSuppressedFor(unit))
+                    continue;
+
+                Unit const* other = ref->GetOther(unit);
+                Player const* behind = other ? other->GetCharmerOrOwnerPlayerOrPlayerItself() : nullptr;
+                WorldSession const* session = behind ? behind->GetSession() : nullptr;
+                if (session && !session->IsVirtualSession() && !session->IsTransientPlayerSession() &&
+                    !ManagedPlayerbotBehind(behind))
+                    return true;
+            }
+            return false;
+        };
+
+        if (engaged(bot))
+            return true;
+
+        for (Unit const* controlled : bot->m_Controlled)
+            if (controlled && engaged(controlled))
+                return true;
+
+        return false;
+    }
+
     // What a bot, or its pet, hits an ordinary creature for, as a percentage.
     //
     // Three bonuses on top of 100, added rather than multiplied so the result
@@ -1231,8 +1276,14 @@ static bool IsDuelOpponentsBlow(Unit const* attacker, Player const* opponent)
     // Applied at the very top so everything downstream agrees on one number:
     // the AI hooks, the rage the blow generates, threat, the PvP damage share
     // and the log all read the damage that was actually taken.
+    //
+    // None of it while a person is fighting the bot. The cuts exist because a
+    // bot grinds wildlife for hours with nobody to help it; they were never
+    // meant to make it shrug off the mobs a player drags into the fight, so the
+    // moment somebody engages it, wildlife hits it for full damage again.
     if (damage && (CreatureDamageToPlayerbotPct() < 100 || GetDevilsaurHuntTuning().markerAura ||
-        BotPvePower::IsEnabled()) && IsMonsterHittingPlayerbot(attacker, victim))
+        BotPvePower::IsEnabled()) && IsMonsterHittingPlayerbot(attacker, victim) &&
+        !IsPlayerbotEngagedByPerson(ManagedPlayerbotBehind(victim)))
     {
         if (CreatureDamageToPlayerbotPct() < 100)
             damage = CalculatePct(damage, CreatureDamageToPlayerbotPct());
