@@ -1003,6 +1003,43 @@ namespace BarracksHardcore
                          proto->InventoryType == INVTYPE_TABARD);
     }
 
+    bool IsStakedOnDeath(ItemTemplate const* proto, bool carried)
+    {
+        // The floor survives every death; only green and above is ever lost,
+        // so nobody is ever left unable to fight back.
+        //
+        // The kit's own duplicates are asked about directly rather than by
+        // colour. They read artifact quality now, so the quality test alone
+        // put the floor itself at stake - and a kit piece is exempt whatever
+        // colour it reads, which makes it the stronger claim of the two.
+        if (!proto || IsFieldKitDuplicate(proto->ItemId) || proto->Quality < ITEM_QUALITY_UNCOMMON)
+            return false;
+
+        // Only weapons and armour leave a pack. Bags themselves, trade goods,
+        // consumables and reagents are untouched - a bot stripped of its
+        // containers could not carry the field kit it is about to be issued.
+        if (carried && proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR)
+            return false;
+
+        // Shirts and tabards are not gear, they are who you are. Nothing
+        // about a tabard makes the wearer harder to kill, so taking one is
+        // pure loss with no deflation behind it - and a guild tabard or a
+        // rare shirt is not something the winner can hand back.
+        if (IsCosmeticOnly(proto))
+            return false;
+
+        // The insignia every innkeeper gives away is not a prize. Taking it
+        // transfers nothing - the loser walks to an inn and asks for another -
+        // and burning it leaves them without a trinket break for the fight
+        // that follows, which is the one thing a death here should not decide.
+        return !IsDeathProofItem(proto->ItemId);
+    }
+
+    bool IsFullLootEnabled()
+    {
+        return s_enabled && s_chestEntry && s_dropChancePercent > 0;
+    }
+
     // When each character's bags were last swept for stray kit pieces.
     //
     // thread_local, not shared-plus-mutex. A player is updated by exactly one
@@ -2202,30 +2239,10 @@ namespace BarracksHardcore
             if (!item)
                 continue;
 
-            // The floor survives every death; only green and above is ever
-            // lost, so nobody is ever left unable to fight back.
-            //
-            // The kit's own duplicates are asked about directly rather than by
-            // colour. They read artifact quality now, so the quality test alone
-            // put the floor itself at stake - and a kit piece is exempt whatever
-            // colour it reads, which makes it the stronger claim of the two.
-            ItemTemplate const* proto = item->GetTemplate();
-            if (!proto || IsFieldKitDuplicate(proto->ItemId) ||
-                proto->Quality < ITEM_QUALITY_UNCOMMON)
-                continue;
-
-            // Shirts and tabards are not gear, they are who you are. Nothing
-            // about a tabard makes the wearer harder to kill, so taking one is
-            // pure loss with no deflation behind it - and a guild tabard or a
-            // rare shirt is not something the winner can hand back.
-            if (IsCosmeticOnly(proto))
-                continue;
-
-            // The insignia every innkeeper gives away is not a prize. Taking it
-            // transfers nothing - the loser walks to an inn and asks for another -
-            // and burning it leaves them without a trinket break for the fight
-            // that follows, which is the one thing a death here should not decide.
-            if (IsDeathProofItem(proto->ItemId))
+            // Green and better, no kit, no shirt or tabard, no insignia - the
+            // rule is IsStakedOnDeath's, because the inn bounty boards list a
+            // bot's spoils by it and must never promise what this leaves behind.
+            if (!IsStakedOnDeath(item->GetTemplate(), false))
                 continue;
 
             // Losing the roll still BURNS the piece - that is the deflation and
@@ -2247,20 +2264,12 @@ namespace BarracksHardcore
         // straight into them. Left safe, that gear leaves the economy for good.
         //
         // Only weapons and armour, and only green and above, matching the worn
-        // rule exactly. Bags themselves, trade goods, consumables and reagents
-        // are untouched - a bot stripped of its containers could not carry the
-        // field kit it is about to be issued.
+        // rule exactly - IsStakedOnDeath with carried set.
         if (IsPlayerbot(victim))
         {
             auto stakeCarriedGear = [&](Item* item, uint8 bag, uint8 slot)
             {
-                ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
-                if (!proto || IsFieldKitDuplicate(proto->ItemId) ||
-                    proto->Quality < ITEM_QUALITY_UNCOMMON)
-                    return;
-                if (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR)
-                    return;
-                if (IsCosmeticOnly(proto) || IsDeathProofItem(proto->ItemId))
+                if (!item || !IsStakedOnDeath(item->GetTemplate(), true))
                     return;
 
                 bool const burns = urand(0, 99) >= s_dropChancePercent;

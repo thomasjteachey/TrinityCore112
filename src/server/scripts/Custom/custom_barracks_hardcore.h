@@ -23,6 +23,7 @@
 #include <string>
 
 class Player;
+struct ItemTemplate;
 
 namespace BarracksHardcore
 {
@@ -131,6 +132,19 @@ namespace BarracksHardcore
     // Semi-Hardcore penalty lives in ChallengeModes.cpp and has to answer this
     // the same way the cache does; two lists would drift.
     bool IsDeathProofItem(uint32 itemId);
+
+    // Whether a death puts this item at stake - staked into the full-loot cache
+    // or burned by the deflation roll. Worn gear and a bot's carried gear follow
+    // the same rule, except that only weapons and armour ever leave a pack.
+    //
+    // Exported for the inn bounty boards (custom_bounty_board.cpp), which list a
+    // bot's spoils by it and must never promise an item the cache would leave
+    // on the corpse. DropFullLootChest asks it too, so the two cannot drift.
+    bool IsStakedOnDeath(ItemTemplate const* proto, bool carried);
+
+    // Whether the full-loot cache exists at all here, so a board on a realm
+    // without it promises nothing rather than gear that will never drop.
+    bool IsFullLootEnabled();
 
     // Fill every empty equipment slot with the white field kit, and replace worn
     // kit that has fallen too far behind the wearer. Gear the character actually

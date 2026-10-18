@@ -4716,6 +4716,38 @@ Centurion.MostDeaths.Enable = 0
 
 Centurion.WeeklyHonorWarchief.Enable = 1
 
+#
+#    Centurion.BountyBoard.Enable
+#        Description: The wanted board in every contested-zone inn (custom_bounty_board.cpp,
+#                     client addon CENTURION_BountyBoard). Reading one lists the playerbots in
+#                     each contested zone with their talents, their lifetime player kills and
+#                     every piece of gear the full-loot cache would take off them - by the
+#                     cache's own rule, so nothing listed fails to drop. Without the addon the
+#                     board is a gossip menu that writes the notices into chat.
+#                     Lifetime player kills are counted in the characters table
+#                     character_player_kills; without it nothing is counted and every notice
+#                     reads 0.
+#        Default:     1
+#
+#    Centurion.BountyBoard.GameObjectEntry
+#        Description: The board's gameobject entry. A request from the addon is answered only
+#                     for somebody standing within ReachYards of one.
+#        Default:     900310
+#
+#    Centurion.BountyBoard.ReachYards
+#        Description: How close to a board a player must stand for it to answer.
+#        Default:     15
+#
+#    Centurion.BountyBoard.GossipTextId
+#        Description: The npc_text a board shows as its gossip page.
+#        Default:     900310
+#
+
+Centurion.BountyBoard.Enable = 1
+Centurion.BountyBoard.GameObjectEntry = 900310
+Centurion.BountyBoard.ReachYards = 15
+Centurion.BountyBoard.GossipTextId = 900310
+
 DireMaulBeads.ItemId = 21982
 DireMaulBeads.AuraId = 90002
 DireMaulBeads.AreaIds = 495,496,498,2557,3217

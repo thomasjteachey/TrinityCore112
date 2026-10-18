@@ -36,6 +36,7 @@
 #include "GuildMgr.h"
 #include "Language.h"
 #include "Log.h"
+#include "Miscellaneous/AddonRequestRoutes.h"
 #include "Miscellaneous/Mokgora.h"
 #include "Miscellaneous/Surnames.h"
 #include "Miscellaneous/TournamentMode.h"
@@ -474,6 +475,10 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
         if (Tournament::HandleAddonRequest(sender, lang, msg))
             return;
         if (ClientTweaksAttest::HandleToken(sender, type, lang, msg))
+            return;
+        // CCGAMEREQ verbs a script registered - the inn bounty boards, which
+        // need the playerbot fleet and the hardcore rules to answer.
+        if (AddonRequestRoutes::Dispatch(sender, lang, msg))
             return;
         // Above the command parser on purpose: Mok'gora is a player-facing
         // feature and _ParseCommands refuses regular accounts outright, so a
