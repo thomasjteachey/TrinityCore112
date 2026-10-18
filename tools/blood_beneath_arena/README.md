@@ -28,7 +28,7 @@ patch-enUS-A 1.00154. It does nothing in game until a CenturionDev build.
    stacks (+10% damage each); a quarter of Risen burst on death.
 5. **Twins** (unlocked by Zalvaxa's death): Thraxia halves magic, Malizzia halves physical; within
    15 yd of each other they heal 1%/s and hit 25% harder. The first to "die" lies down for 30 s;
-   kill the other in time or she stands up at 30%.
+   kill the other in time or she stands up at 20%.
 6. **Vraka'ti** (unlocked by the twins): parleys as friendly. Opening **Vraka'ti's Offering**
    (900302) gives that player 50g, fails the quest for everyone inside and expels the party. Choosing
    to fight: at 25% she unmasks and **Anok'Suten** takes over (Web Wrap cocoons, Shadow Web zones,
@@ -100,6 +100,43 @@ across.
 | Venomous Breath 160 vs 360 tooltip | not a bug: AutoBalance scales boss damage by party size (2 of 5 players = ~0.44) |
 | mini bosses small | champions scale 1.5, supports 1.25 |
 | Forcefield | deleted (gameobject 5331187) |
+
+## Balance pass (2026-10-18)
+
+Owner: some mobs were tank-and-spank and some bosses very spongey.
+
+**HP** (`creature_template.HealthModifier`, 5-player values; AutoBalance scales smaller groups).
+Applied to `centuriondevworld` 2026-10-18; backups of both realms' old values are
+`~/bba-balance-20261018/restore_*.sql` on the box.
+
+| mob | old | new |
+|---|---|---|
+| Zul'kash / Rok'thul / Mok'ra | 70k / 72k / 75k | 50k / 52k / 54k |
+| drummers | 25k | 16k |
+| wave berserker / hexer / medic | 9k / 7k / 7.5k | 6k / 4.5k / 4.5k |
+| Cutthroat, Headhunter | 8k | 6k |
+| Hexxer, Witch, Shadowcaster, Oracle | 6.5-7k | 4.5k |
+| Catlord / Prowler | 14k / 5k | 10k / 3.5k |
+| Zealot / Web Cocoon | 8k / 3k | 4.5k / 2k |
+| Zalvaxa | 95k | 62k |
+| Thraxia / Malizzia | 90k / 88k | 55k / 50k |
+| Vraka'ti / Anok'Suten | 110k / 65k | 75k / 55k |
+
+A missed twin window now brings the fallen twin back at 20% instead of 30%.
+
+**Trash signatures** (`npc_bba_trash::Signature`, stock spells), one per type so no pull is pure
+tank-and-spank:
+
+| mob | move |
+|---|---|
+| Cutthroat | Gouge (12540) on the tank: 4 s out, he turns on the next in line |
+| Headhunter | Mortal Strike (16856) on the tank, Throw (10277) at whoever stands 8-30 yd back |
+| Catlord | marks a player (Fixate 40892, visual only) and his prowlers fixate them for 8 s; with no cats left he Charges (22911) them himself |
+| Prowler | opens with Charge (2 s stun) into someone 8-25 yd back; Rake (54668) bleed |
+| Zealot | fixates a random player for 10 s at a time, then picks again; the tank cannot pull it off |
+| wave berserkers | Charge into someone 8-25 yd back every 15-20 s |
+| Witch, Hexxer | Hex (11641) on a random player: dispel it or break it with a hit |
+| Shadowcaster | Shadow Bolt Volley (22665), 2 s cast, kickable |
 
 ## Ids
 

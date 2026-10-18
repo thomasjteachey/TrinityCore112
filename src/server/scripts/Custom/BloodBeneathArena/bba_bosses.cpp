@@ -468,7 +468,7 @@ private:
 // ---------------------------------------------------------------------------------------
 // The twins. Thraxia takes half damage from magic, Malizzia half from physical. Together
 // within 15 yards they heal and hit harder. The first to fall lies in a pool of blood for
-// 30 seconds: kill the other in that window or she rises again at 30%.
+// 30 seconds: kill the other in that window or she rises again at 20%.
 // ---------------------------------------------------------------------------------------
 struct boss_bba_twin : public ScriptedAI
 {
@@ -532,7 +532,7 @@ struct boss_bba_twin : public ScriptedAI
                 me->SetStandState(UNIT_STAND_STATE_STAND);
                 me->RemoveUnitFlag(UNIT_FLAG_UNINTERACTIBLE);
                 me->SetReactState(REACT_AGGRESSIVE);
-                me->SetHealth(me->CountPctFromMaxHealth(30));
+                me->SetHealth(me->CountPctFromMaxHealth(20));
                 DoZoneInCombat();
                 ScheduleAbilities();
                 break;

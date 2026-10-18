@@ -59,7 +59,16 @@ enum BBACommonSpells
     SPELL_CLEAVE                = 15496,
     SPELL_FROST_NOVA            = 15531,
     SPELL_ENTANGLING_ROOTS      = 22127,
-    SPELL_DAZED                 = 1604
+    SPELL_DAZED                 = 1604,
+    // stock trash signatures, one per mob type, so no pull is pure tank-and-spank
+    SPELL_GOUGE                 = 12540,    // Cutthroat: the tank is out for 4 sec
+    SPELL_MORTAL_STRIKE         = 16856,    // Headhunter
+    SPELL_THROW                 = 10277,    // Headhunter, at whoever stands back
+    SPELL_CHARGE                = 22911,    // berserkers, prowlers, a catlord without cats: 2 sec stun
+    SPELL_RAKE                  = 54668,    // prowlers
+    SPELL_FIXATE                = 40892,    // the visible mark on a fixated player (no script)
+    SPELL_HEX                   = 11641,    // Witch, Hexxer
+    SPELL_SHADOW_BOLT_VOLLEY    = 22665     // Shadowcaster, 2 sec cast, kickable
 };
 
 enum BBAGossipTexts
@@ -638,12 +647,14 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------
-// Trash: wave mobs, patrols, Vraka'ti's zealots and Anok'Suten's spiderlings.
+// Trash: wave mobs, patrols, Vraka'ti's zealots and Anok'Suten's spiderlings. Besides its
+// role kit, every mob type but the spiderlings has a signature move the party must answer.
 // ---------------------------------------------------------------------------------------
 struct npc_bba_trash : public ScriptedAI
 {
     enum Role { ROLE_BERSERKER, ROLE_HEXER, ROLE_MEDIC, ROLE_SWARM };
-    enum Events { EVENT_PRIMARY = 1, EVENT_SECONDARY, EVENT_CLEANSE, EVENT_WAND };
+    enum Events { EVENT_PRIMARY = 1, EVENT_SECONDARY, EVENT_CLEANSE, EVENT_WAND, EVENT_SIGNATURE, EVENT_SIGNATURE_2, EVENT_FIXATE_END };
+    enum { GUID_HUNT = 1 };     // Catlord -> prowler: go for this player
 
     npc_bba_trash(Creature* creature) : ScriptedAI(creature)
     {
@@ -707,6 +718,155 @@ struct npc_bba_trash : public ScriptedAI
             default:
                 break;
         }
+
+        switch (me->GetEntry())
+        {
+            case NPC_CUTTHROAT:
+            case NPC_CATLORD:
+            case NPC_SHADOWCASTER:
+                _events.ScheduleEvent(EVENT_SIGNATURE, 7s, 10s);
+                break;
+            case NPC_HEADHUNTER:
+                _events.ScheduleEvent(EVENT_SIGNATURE, 5s, 8s);
+                _events.ScheduleEvent(EVENT_SIGNATURE_2, 3s, 5s);
+                break;
+            case NPC_BLOOD_PROWLER:
+                _events.ScheduleEvent(EVENT_SIGNATURE, 500ms, 1500ms);
+                _events.ScheduleEvent(EVENT_SIGNATURE_2, 4s, 6s);
+                break;
+            case NPC_ZEALOT:
+                _events.ScheduleEvent(EVENT_SIGNATURE, 1s);
+                break;
+            case NPC_SAND_BERSERKER:
+            case NPC_ICE_BERSERKER:
+            case NPC_FOREST_BERSERKER:
+                _events.ScheduleEvent(EVENT_SIGNATURE, 1s, 3s);
+                break;
+            case NPC_HEXXER:
+            case NPC_WITCH:
+                _events.ScheduleEvent(EVENT_SIGNATURE, 5s, 8s);
+                break;
+            default:
+                break;
+        }
+    }
+
+    // a player other than the one we are hitting, between minDist and maxDist yards away
+    Unit* SomeoneElse(float minDist, float maxDist)
+    {
+        Unit* victim = me->GetVictim();
+        return SelectTarget(SelectTargetMethod::Random, 0, [this, victim, minDist, maxDist](Unit const* target)
+        {
+            if (target == victim || target->GetTypeId() != TYPEID_PLAYER)
+                return false;
+            float const dist = me->GetDistance(target);
+            return dist >= minDist && dist <= maxDist;
+        });
+    }
+
+    // Catlord -> prowler: hunt this player for 8 sec, whatever the threat says
+    void SetGUID(ObjectGuid const& guid, int32 id) override
+    {
+        if (id != GUID_HUNT)
+            return;
+        if (Unit* target = ObjectAccessor::GetUnit(*me, guid))
+        {
+            me->EngageWithTarget(target);   // fixate needs them on this cat's threat list
+            me->GetThreatManager().FixateTarget(target);
+            _events.RescheduleEvent(EVENT_FIXATE_END, 8s);
+        }
+    }
+
+    // the Catlord points out a player and his cats go for them; with no cats left he charges them himself
+    void CallTheHunt()
+    {
+        std::list<Creature*> cats;
+        me->GetCreatureListWithEntryInGrid(cats, NPC_BLOOD_PROWLER, 40.0f);
+        cats.remove_if([](Creature* cat) { return !cat->IsAlive() || !cat->IsInCombat() || !cat->IsAIEnabled(); });
+        if (cats.empty())
+        {
+            if (Unit* target = SomeoneElse(8.0f, 25.0f))
+                DoCast(target, SPELL_CHARGE);
+            return;
+        }
+        Unit* target = SomeoneElse(0.0f, 40.0f);
+        if (!target)
+            return;
+        DoCast(target, SPELL_FIXATE, true);
+        for (Creature* cat : cats)
+            cat->AI()->SetGUID(target->GetGUID(), GUID_HUNT);
+    }
+
+    void Signature(uint32 eventId)
+    {
+        switch (me->GetEntry())
+        {
+            case NPC_CUTTHROAT:
+                // the tank is out for 4 sec and the Cutthroat turns on the next in line
+                DoCastVictim(SPELL_GOUGE, CastSpellExtraArgs().AddSpellBP0(300));
+                _events.Repeat(14s, 18s);
+                break;
+            case NPC_HEADHUNTER:
+                if (eventId == EVENT_SIGNATURE)
+                {
+                    DoCastVictim(SPELL_MORTAL_STRIKE);
+                    _events.Repeat(10s, 13s);
+                }
+                else
+                {
+                    if (Unit* target = SomeoneElse(8.0f, 30.0f))
+                        DoCast(target, SPELL_THROW, CastSpellExtraArgs().AddSpellBP0(380));
+                    _events.Repeat(7s, 9s);
+                }
+                break;
+            case NPC_CATLORD:
+                CallTheHunt();
+                _events.Repeat(16s, 20s);
+                break;
+            case NPC_BLOOD_PROWLER:
+                if (eventId == EVENT_SIGNATURE)
+                {
+                    // the opening pounce, into whoever hangs back
+                    if (Unit* target = SomeoneElse(8.0f, 25.0f))
+                        DoCast(target, SPELL_CHARGE);
+                }
+                else
+                {
+                    DoCastVictim(SPELL_RAKE, CastSpellExtraArgs().AddSpellBP0(160).AddSpellBP1(90));
+                    _events.Repeat(9s, 12s);
+                }
+                break;
+            case NPC_ZEALOT:
+                // hunts one player at a time and the tank cannot pull it off: kill it, CC it or kite it
+                me->GetThreatManager().ClearFixate();
+                if (Unit* target = SomeoneElse(0.0f, 40.0f))
+                {
+                    DoCast(target, SPELL_FIXATE, true);
+                    me->GetThreatManager().FixateTarget(target);
+                }
+                _events.Repeat(10s);
+                break;
+            case NPC_SAND_BERSERKER:
+            case NPC_ICE_BERSERKER:
+            case NPC_FOREST_BERSERKER:
+                if (Unit* target = SomeoneElse(8.0f, 25.0f))
+                    DoCast(target, SPELL_CHARGE);
+                _events.Repeat(15s, 20s);
+                break;
+            case NPC_HEXXER:
+            case NPC_WITCH:
+                // dispel it, or let a hit break it
+                if (Unit* target = SomeoneElse(0.0f, 30.0f))
+                    DoCast(target, SPELL_HEX);
+                _events.Repeat(16s, 22s);
+                break;
+            case NPC_SHADOWCASTER:
+                DoCastAOE(SPELL_SHADOW_BOLT_VOLLEY, CastSpellExtraArgs().AddSpellBP0(240));
+                _events.Repeat(12s, 16s);
+                break;
+            default:
+                break;
+        }
     }
 
     void EnterEvadeMode(EvadeReason why) override
@@ -735,6 +895,18 @@ struct npc_bba_trash : public ScriptedAI
 
         while (uint32 eventId = _events.ExecuteEvent())
         {
+            if (eventId == EVENT_FIXATE_END)
+            {
+                me->GetThreatManager().ClearFixate();
+                continue;
+            }
+            if (eventId == EVENT_SIGNATURE || eventId == EVENT_SIGNATURE_2)
+            {
+                Signature(eventId);
+                if (me->HasUnitState(UNIT_STATE_CASTING))
+                    return;
+                continue;
+            }
             if (eventId == EVENT_WAND)
             {
                 // the filler between real spells, and all a caster has left once it is dry
