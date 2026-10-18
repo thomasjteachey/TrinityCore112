@@ -3152,6 +3152,22 @@ bool MeetsCasterAuraStateRequirements(Player const* player, uint32 spellId)
         return false;
     }
 
+    // Lightning, Water and Earth Shield share one elemental-shield slot, so
+    // casting Lightning Shield over an Earth Shield (the shaman's own or one
+    // a resto shaman placed on it) throws the better shield away. Matched by
+    // spell specific rather than chain ids so custom wrappers count too.
+    bool HasElementalShield(Unit const* unit)
+    {
+        if (!unit)
+            return false;
+
+        for (auto const& [spellId, aurApp] : unit->GetAppliedAuras())
+            if (aurApp->GetBase()->GetSpellInfo()->GetSpellSpecific() == SPELL_SPECIFIC_ELEMENTAL_SHIELD)
+                return true;
+
+        return false;
+    }
+
 bool HasHunterDamagingStingFromCaster(Unit const* unit, ObjectGuid casterGuid)
 {
     return HasAuraFromSpellChain(unit, 1978, casterGuid) || // Serpent Sting
@@ -7489,7 +7505,7 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
 
     std::vector<PrioritizedSpellDecision> candidates;
     // Disabled: auto-casting Windfury Weapon from PvP loop while investigating weapon-dependent aura crashes.
-    AddDecisionCandidate(candidates, !player->IsInCombat() && !HasAuraFromSpellChain(player, 10432) && IsSpellReady(player, 10432), 34.0f,
+    AddDecisionCandidate(candidates, !player->IsInCombat() && !HasElementalShield(player) && IsSpellReady(player, 10432), 34.0f,
         { "shaman lightning shield", "maintain shield buff out of combat", 10432, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, earthShockCastingTarget && IsSpellReady(player, 10414), 60.0f,
         { "shaman earth shock", "interrupt enemy cast with shock", 10414, playerbot::PvpClassSpellContext::TargetMode::Enemy, earthShockCastingTarget ? earthShockCastingTarget->GetGUID() : ObjectGuid::Empty });
@@ -8930,7 +8946,8 @@ bool PvpCore::TryCastOpenWorldBuff(Player* player)
             candidates.push_back({ 14752, 0 });  // Divine Spirit
             break;
         case CLASS_SHAMAN:
-            candidates.push_back({ 324, 0 });    // Lightning Shield
+            if (!HasElementalShield(player))     // never over an Earth Shield
+                candidates.push_back({ 324, 0 }); // Lightning Shield
             break;
         case CLASS_MAGE:
             candidates.push_back({ 1459, 0 });   // Arcane Intellect
