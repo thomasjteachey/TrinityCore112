@@ -84,6 +84,17 @@ namespace
         uint32 Tier = 0;
     };
 
+    struct SavedButton
+    {
+        uint8 Button = 0;
+        uint32 Action = 0;
+        uint8 Type = 0;
+    };
+
+    // Where a newly unlocked spell goes when its own button is taken: the main
+    // bar, then the bottom-left, bottom-right, right and right-2 bars.
+    uint8 constexpr BAR_ORDER[] = { 0, 60, 48, 24, 36 };
+
     struct State
     {
         uint8 RealLevel = 1;
@@ -102,6 +113,7 @@ namespace
         uint32 PendingPicks = 0;
 
         std::vector<LearnedTalent> RealTalents;   // the active spec's build, put back on the way out
+        std::vector<SavedButton> RealButtons;     // the action bars it walked in with
     };
 
     // Recursive: GiveLevel, called with the lock held, comes straight back through
@@ -231,6 +243,52 @@ namespace
         player->SendTalentsInfoData(false);
     }
 
+    std::string ButtonsToString(std::vector<SavedButton> const& buttons)
+    {
+        std::string out;
+        for (SavedButton const& b : buttons)
+            out += (out.empty() ? "" : ",") + std::to_string(b.Button) + ":" + std::to_string(b.Action) + ":" + std::to_string(b.Type);
+        return out;
+    }
+
+    std::vector<SavedButton> ButtonsFromString(std::string const& text)
+    {
+        std::vector<SavedButton> out;
+        for (std::string_view part : Trinity::Tokenize(text, ',', false))
+        {
+            std::vector<std::string_view> const f = Trinity::Tokenize(part, ':', false);
+            if (f.size() != 3)
+                continue;
+            Optional<uint32> const button = Trinity::StringTo<uint32>(f[0]);
+            Optional<uint32> const action = Trinity::StringTo<uint32>(f[1]);
+            Optional<uint32> const type = Trinity::StringTo<uint32>(f[2]);
+            if (button && action && type && *button < MAX_ACTION_BUTTONS)
+                out.push_back({ uint8(*button), *action, uint8(*type) });
+        }
+        return out;
+    }
+
+    std::vector<SavedButton> SnapshotButtons(Player* player)
+    {
+        std::vector<SavedButton> out;
+        for (uint32 button = 0; button < MAX_ACTION_BUTTONS; ++button)
+            if (ActionButton const* ab = player->GetActionButton(uint8(button)))
+                out.push_back({ uint8(button), ab->GetAction(), uint8(ab->GetType()) });
+        return out;
+    }
+
+    // The bars exactly as they were: whatever the match put on them comes off,
+    // and every saved button goes back (its spell is known again by now - the
+    // talents are restored first).
+    void RestoreButtons(Player* player, std::vector<SavedButton> const& buttons)
+    {
+        for (uint32 button = 0; button < MAX_ACTION_BUTTONS; ++button)
+            player->removeActionButton(uint8(button));
+        for (SavedButton const& b : buttons)
+            player->addActionButton(b.Button, b.Action, b.Type);
+        player->SendActionButtons(1);
+    }
+
     uint32 TotalSteps(State const& state)
     {
         uint32 total = 0;
@@ -272,6 +330,55 @@ namespace
                 offers.push_back(chain.Ranks[have]);
         }
         return offers;
+    }
+
+    // A spell button the match takes off the bars: a class spell none of whose
+    // ranks is unlocked yet, or a spell the character no longer knows (taught
+    // by a talent the match reset).
+    bool HiddenInMatch(Player const* player, State const& state, uint32 spell)
+    {
+        if (!player->HasSpell(spell))
+            return true;
+        auto const chain = state.SpellToChain.find(spell);
+        if (chain == state.SpellToChain.end())
+            return false;
+        auto const unlocked = state.Unlocked.find(chain->second);
+        return unlocked == state.Unlocked.end() || !unlocked->second;
+    }
+
+    void HideLockedButtons(Player* player, State const& state)
+    {
+        for (SavedButton const& b : state.RealButtons)
+            if (b.Type == ACTION_BUTTON_SPELL && HiddenInMatch(player, state, b.Action))
+                player->removeActionButton(b.Button);
+        player->SendActionButtons(1);
+    }
+
+    // A chain's first unlock puts the spell on the bars: back on its own button
+    // when that is free, otherwise on the first free button of the usual bars.
+    void PlaceUnlockedSpell(Player* player, State const& state, uint32 first, uint32 spell)
+    {
+        for (SavedButton const& b : state.RealButtons)
+        {
+            if (b.Type != ACTION_BUTTON_SPELL)
+                continue;
+            auto const chain = state.SpellToChain.find(b.Action);
+            if (chain == state.SpellToChain.end() || chain->second != first)
+                continue;
+            if (!player->GetActionButton(b.Button) && player->addActionButton(b.Button, b.Action, ACTION_BUTTON_SPELL))
+            {
+                player->SendActionButtons(1);
+                return;
+            }
+        }
+        for (uint8 start : BAR_ORDER)
+            for (uint8 button = start; button < start + 12; ++button)
+                if (!player->GetActionButton(button))
+                {
+                    if (player->addActionButton(button, spell, ACTION_BUTTON_SPELL))
+                        player->SendActionButtons(1);
+                    return;
+                }
     }
 
     void SendLine(Player* player, std::string const& line)
@@ -385,12 +492,14 @@ void Enter(Player* player)
     state.RealMoney = player->GetMoney();
     state.Persistent = !IsTransient(player);
     BuildState(player, state);
+    state.RealButtons = SnapshotButtons(player);
 
     // Written down before anything changes: from here on every way out restores.
     if (state.Persistent)
     {
-        CharacterDatabase.DirectPExecute("REPLACE INTO custom_rift_stash (guid, real_level, real_xp, money, talents) VALUES ({}, {}, {}, {}, '{}')",
-            player->GetGUID().GetCounter(), uint32(state.RealLevel), state.RealXp, state.RealMoney, TalentsToString(state.RealTalents));
+        CharacterDatabase.DirectPExecute("REPLACE INTO custom_rift_stash (guid, real_level, real_xp, money, talents, actions) VALUES ({}, {}, {}, {}, '{}', '{}')",
+            player->GetGUID().GetCounter(), uint32(state.RealLevel), state.RealXp, state.RealMoney, TalentsToString(state.RealTalents),
+            ButtonsToString(state.RealButtons));
         Stashed.insert(player->GetGUID().GetCounter());
     }
 
@@ -423,6 +532,7 @@ void Enter(Player* player)
     state.PendingPicks = PicksForLevel(state, state.StartLevel);
     player->GiveLevel(state.StartLevel, true);
     player->SendTalentsInfoData(false);
+    HideLockedButtons(player, state);
     player->SetFullHealth();
     player->SetFullPower(player->GetPowerType());
     ShowProgress(player, state);
@@ -452,6 +562,7 @@ void Leave(Player* player)
     player->GiveLevel(state.RealLevel, true);
     player->SetUInt32Value(PLAYER_XP, state.RealXp);
     RestoreTalents(player, state.RealTalents);
+    RestoreButtons(player, state.RealButtons);
     player->SetMoney(state.RealMoney);
 
     if (state.Persistent)
@@ -472,7 +583,7 @@ void OnLogin(Player* player)
             return;   // BattlegroundSRF::AddPlayer re-applies the rules on the way back in
     }
 
-    QueryResult row = CharacterDatabase.PQuery("SELECT real_level, real_xp, money, talents FROM custom_rift_stash WHERE guid = {}", player->GetGUID().GetCounter());
+    QueryResult row = CharacterDatabase.PQuery("SELECT real_level, real_xp, money, talents, actions FROM custom_rift_stash WHERE guid = {}", player->GetGUID().GetCounter());
     {
         std::lock_guard<std::recursive_mutex> lock(StateMutex);
         States.erase(player->GetGUID().GetCounter());
@@ -490,6 +601,7 @@ void OnLogin(Player* player)
     player->SetUInt32Value(PLAYER_XP, fields[1].GetUInt32());
     player->SetMoney(fields[2].GetUInt32());
     RestoreTalents(player, TalentsFromString(fields[3].GetString()));
+    RestoreButtons(player, ButtonsFromString(fields[4].GetString()));
     CharacterDatabase.PExecute("DELETE FROM custom_rift_stash WHERE guid = {}", player->GetGUID().GetCounter());
     TC_LOG_INFO("bg.battleground", "Rift: {} logged in outside the match it left; level {}, experience, money and talents restored.", player->GetName(), realLevel);
 }
@@ -604,7 +716,9 @@ void HandlePickRequest(Player* player, std::string_view argument)
         std::vector<uint32> const offers = Offers(*state);
         if (std::find(offers.begin(), offers.end(), *spellId) != offers.end())
         {
-            ++state->Unlocked[state->SpellToChain.at(*spellId)];
+            uint32 const first = state->SpellToChain.at(*spellId);
+            if (++state->Unlocked[first] == 1)
+                PlaceUnlockedSpell(player, *state, first, *spellId);
             --state->PendingPicks;
         }
     }

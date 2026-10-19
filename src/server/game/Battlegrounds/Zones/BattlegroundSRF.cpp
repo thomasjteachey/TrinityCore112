@@ -266,6 +266,10 @@ float constexpr SRF_FOUNTAIN_FACING[PVP_TEAMS_COUNT] = { 5.4978f, 2.3562f };
 
 float constexpr SRF_TURRET_RANGE        = Yards(750.0f);
 float constexpr SRF_MINION_AGGRO_RANGE  = Yards(400.0f);
+// With no enemy unit near, a minion takes on an enemy structure in a turret's
+// range of it: a wave walking down a lane stops at the first turret standing.
+float constexpr SRF_MINION_STRUCTURE_RANGE = Yards(750.0f);
+uint32 constexpr SRF_REPORT_TICK        = 30 * IN_MILLISECONDS;
 float constexpr SRF_FOUNTAIN_HEAL_RANGE = Yards(600.0f);
 float constexpr SRF_FOUNTAIN_BURN_RANGE = Yards(700.0f);
 // Turret shots as shares of the target's maximum health: minions die to a few
@@ -382,6 +386,10 @@ BattlegroundSRF::BattlegroundSRF()
     _dragonsSlain.fill(0);
     _baronTimer.fill(0);
     _jungleTimer = 0;
+    _reportTimer = 0;
+    _boltsCast = 0;
+    _boltsRefused = 0;
+    _lastRefusal = 0;
 }
 
 void BattlegroundSRF::AddPlayer(Player* player)
@@ -432,6 +440,10 @@ void BattlegroundSRF::Reset()
     _dragonsSlain.fill(0);
     _baronTimer.fill(0);
     _jungleTimer = 0;
+    _reportTimer = 0;
+    _boltsCast = 0;
+    _boltsRefused = 0;
+    _lastRefusal = 0;
 }
 
 bool BattlegroundSRF::SetupBattleground()
@@ -562,6 +574,7 @@ void BattlegroundSRF::PostUpdateImpl(uint32 diff)
     }
 
     UpdateProgression(diff);
+    Report(diff);
 }
 
 // ---------------------------------------------------------------- structures
@@ -589,6 +602,9 @@ void BattlegroundSRF::OnStructureDestroyed(uint8 slot)
     StructureState& st = _structures[slot];
     st.Destroyed = true;
     st.Vulnerable = false;
+    if (Map* map = FindBgMap())
+        if (Creature* eye = map->GetCreature(_turrets[slot].Eye))
+            eye->DespawnOrUnsummon();
     _turrets[slot] = TurretState();
 
     TeamId const owner = SlotTeam(slot);
@@ -738,19 +754,22 @@ Unit* BattlegroundSRF::FindMinionTarget(Creature* minion, TeamId team, float ran
             consider(map->GetCreature(other.Guid));
 
     TeamId const enemy = OtherTeam(team);
+    for (auto const& [guid, bgPlayer] : GetPlayers())
+        if (bgPlayer.Team == TeamValue(enemy))
+            if (Player* player = ObjectAccessor::FindPlayer(guid))
+                if (player->GetMap() == map)
+                    consider(player);
+    if (best)
+        return best;
+
+    // Nothing to fight: the enemy structure the wave has walked up to.
+    bestDist = std::max(range, SRF_MINION_STRUCTURE_RANGE);
     for (uint8 i = 0; i < BG_SRF_STRUCTURES_PER_TEAM; ++i)
     {
         uint8 const slot = SlotOf(enemy, i);
         if (_structures[slot].Vulnerable && !_structures[slot].Destroyed)
             consider(map->GetCreature(BgCreatures[slot]));
     }
-
-    for (auto const& [guid, bgPlayer] : GetPlayers())
-        if (bgPlayer.Team == TeamValue(enemy))
-            if (Player* player = ObjectAccessor::FindPlayer(guid))
-                if (player->GetMap() == map)
-                    consider(player);
-
     return best;
 }
 
@@ -1120,14 +1139,64 @@ void BattlegroundSRF::UpdateTurrets()
             share = std::min(SRF_TURRET_PLAYER_SHARE + SRF_TURRET_PLAYER_RAMP * ts.ConsecutiveHits, SRF_TURRET_PLAYER_MAX);
             ++ts.ConsecutiveHits;
         }
-        FireBolt(turret, target, team == TEAM_ALLIANCE ? BG_SRF_SPELL_ORDER_TURRET_SHOT : BG_SRF_SPELL_CHAOS_TURRET_SHOT,
+        Creature* eye = TurretEye(slot, turret);
+        FireBolt(eye ? static_cast<Unit*>(eye) : turret, target, team == TEAM_ALLIANCE ? BG_SRF_SPELL_ORDER_TURRET_SHOT : BG_SRF_SPELL_CHAOS_TURRET_SHOT,
             std::max<int32>(1, int32(target->GetMaxHealth() * share)));
     }
 }
 
 void BattlegroundSRF::FireBolt(Unit* source, Unit* target, uint32 spellId, int32 damage)
 {
-    source->CastSpell(target, spellId, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(damage));
+    SpellCastResult const result = source->CastSpell(target, spellId, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(damage));
+    if (result == SPELL_CAST_OK)
+        ++_boltsCast;
+    else
+    {
+        ++_boltsRefused;
+        _lastRefusal = uint32(result);
+    }
+}
+
+// The turret's eye, summoned on first use: just over the top of the turret,
+// with the turret's faction and level, unattackable and unselectable.
+Creature* BattlegroundSRF::TurretEye(uint8 slot, Creature* turret)
+{
+    TurretState& ts = _turrets[slot];
+    if (Creature* eye = !ts.Eye.IsEmpty() ? turret->GetMap()->GetCreature(ts.Eye) : nullptr)
+        if (eye->IsAlive())
+            return eye;
+
+    Position const top(turret->GetPositionX(), turret->GetPositionY(),
+        turret->GetPositionZ() + turret->GetCollisionHeight() + 1.0f, turret->GetOrientation());
+    TempSummon* eye = turret->SummonCreature(BG_SRF_ENTRY_TURRET_EYE, top, TEMPSUMMON_MANUAL_DESPAWN);
+    if (!eye)
+        return nullptr;
+    eye->SetFaction(turret->GetFaction());
+    eye->SetImmuneToAll(false);
+    eye->SetUnitFlag(UnitFlags(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_UNINTERACTIBLE));
+    eye->SetDisableGravity(true);
+    eye->SetReactState(REACT_PASSIVE);
+    eye->SetLevel(turret->GetLevel());
+    ts.Eye = eye->GetGUID();
+    return eye;
+}
+
+// Every half minute, one line on what the match is doing - so a report from the
+// field ("the turrets do not fire", "no jungle") can be read off the log.
+void BattlegroundSRF::Report(uint32 diff)
+{
+    _reportTimer += diff;
+    if (_reportTimer < SRF_REPORT_TICK)
+        return;
+    _reportTimer = 0;
+    uint32 campsUp = 0;
+    for (CampState const& cs : _camps)
+        campsUp += cs.Up ? 1 : 0;
+    TC_LOG_INFO("bg.battleground", "Summoner's Rift {}: {} players, {} minions, {} waves, bolts {} cast / {} refused (last refusal {}), camps up {}/{}.",
+        GetInstanceID(), GetPlayersSize(), _minions.size(), _wavesSpawned, _boltsCast, _boltsRefused, _lastRefusal,
+        campsUp, uint32(BG_SRF_JUNGLE_CAMPS));
+    _boltsCast = 0;
+    _boltsRefused = 0;
 }
 
 // A caster minion fights at range: it holds at League's 550 units and sends a
@@ -1161,6 +1230,8 @@ void BattlegroundSRF::UpdateCasterAttack(Creature* caster, Minion& minion, Unit*
 void BattlegroundSRF::SpawnCamp(uint8 camp)
 {
     Map* map = FindBgMap();
+    uint32 spawned = 0;
+    Position where;
     for (uint8 i = 0; i < BG_SRF_JUNGLE_MONSTERS; ++i)
     {
         SrfMonster const& m = SRF_MONSTERS[i];
@@ -1184,8 +1255,12 @@ void BattlegroundSRF::SpawnCamp(uint8 camp)
         // Neutral until struck; the scuttler never fights back.
         creature->SetReactState(SRF_CAMPS[camp].kind == SRF_CAMP_SCUTTLE ? REACT_PASSIVE : REACT_DEFENSIVE);
         ApplyUnitLevel(creature, AverageMatchLevel(), 1.0f);
+        where = creature->GetPosition();
+        ++spawned;
     }
     _camps[camp].Up = true;
+    TC_LOG_INFO("bg.battleground", "Summoner's Rift {}: camp {} is up, {} monster(s), one at {:.1f} {:.1f} {:.1f}.",
+        GetInstanceID(), uint32(camp), spawned, where.GetPositionX(), where.GetPositionY(), where.GetPositionZ());
     if (SRF_CAMPS[camp].kind == SRF_CAMP_DRAGON)
         PSendMessageToAll(BG_SRF_STRING_DRAGON_SPAWNED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr);
     else if (SRF_CAMPS[camp].kind == SRF_CAMP_BARON)

@@ -67,6 +67,10 @@ enum BG_SRF_CreatureEntries
     BG_SRF_ENTRY_ORDER_CASTER    = 922111,
     BG_SRF_ENTRY_CHAOS_MELEE     = 922112,
     BG_SRF_ENTRY_CHAOS_CASTER    = 922113,
+    // A turret's eye: an invisible caster hovering over its crystal. Turret shots
+    // leave from it - clear of the turret's own collision shell, which blocks a
+    // shot's line of sight from inside, and from where the shot should start.
+    BG_SRF_ENTRY_TURRET_EYE      = 922120,
     // The jungle: neutral monsters, attackable by both teams.
     BG_SRF_ENTRY_BLUE_SENTINEL     = 922130,
     BG_SRF_ENTRY_RED_BRAMBLEBACK   = 922131,
@@ -225,6 +229,7 @@ private:
     struct TurretState
     {
         ObjectGuid Target;
+        ObjectGuid Eye;
         uint8 ConsecutiveHits = 0;
     };
 
@@ -243,6 +248,8 @@ private:
     void UpdateTurrets();
     Unit* PickTurretTarget(Creature* turret, TeamId team) const;
     void FireBolt(Unit* source, Unit* target, uint32 spellId, int32 damage);
+    Creature* TurretEye(uint8 slot, Creature* turret);
+    void Report(uint32 diff);
     void UpdateCasterAttack(Creature* caster, Minion& minion, Unit* victim);
 
     void UpdateFountains();
@@ -273,6 +280,11 @@ private:
     std::array<uint8, PVP_TEAMS_COUNT> _dragonsSlain;
     std::array<uint32, PVP_TEAMS_COUNT> _baronTimer;   // ms of Baron's empowerment left
     uint32 _jungleTimer;
+    // What the match did, for the periodic log line (Report).
+    uint32 _reportTimer;
+    uint32 _boltsCast;
+    uint32 _boltsRefused;
+    uint32 _lastRefusal;
     uint32 _waveTimer;
     uint32 _minionTimer;
     uint32 _turretTimer;
