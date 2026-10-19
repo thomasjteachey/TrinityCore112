@@ -67,7 +67,7 @@ namespace
         { RACE_NIGHTELF,      CLASS_PRIEST, 20, { 5674, 0    }, { 81351 } },                                        // Elune's Grace
         { RACE_UNDEAD_PLAYER, CLASS_PRIEST, 10, { 5658, 0    }, { 81357 } },                                        // Wyrm's Shadow
         { RACE_UNDEAD_PLAYER, CLASS_PRIEST, 20, { 5679, 0    }, { 2944, 19276, 19277, 19278, 19279, 19280 } },      // Devouring Curse
-        { RACE_TROLL,         CLASS_PRIEST, 10, { 5652, 0    }, { 9035, 19281, 19282, 19283, 19284, 19285 } },      // Hex of Weakness
+        { RACE_TROLL,         CLASS_PRIEST, 10, { 5652, 0    }, { 9035 } },                                         // Hex of Weakness (one rank since 2026-10-19)
         { RACE_TROLL,         CLASS_PRIEST, 20, { 5680, 0    }, { 18137, 19308, 19309, 19310, 19311, 19312 } },     // Shadowguard
     };
 
