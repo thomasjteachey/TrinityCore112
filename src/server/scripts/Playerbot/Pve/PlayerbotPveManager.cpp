@@ -13863,6 +13863,40 @@ namespace
         return false;
     }
 
+    // Whether the bot is in a fight with a real person right now: dueling one, or
+    // in combat with one (or their pet) on either end of the swing.
+    //
+    // Unlike IsWatchedByAnyPerson this is a VETO on every path that re-levels a
+    // bot. Being watched only makes a reset look like machinery; a reset in the
+    // middle of a fight DECIDES the fight. The reported case: a level 11 druid in
+    // the Barrens was drafted as a Silithus drifter while fighting a level 11
+    // player, reborn at 59 with fifty talent points, and killed them with the next
+    // Moonfire - a skull on their target frame mid-duel. A fight is over in
+    // seconds, so waiting for it costs the destination nothing.
+    bool IsFightingAPerson(Player const* bot)
+    {
+        if (!bot)
+            return false;
+
+        if (bot->duel && bot->duel->Opponent)
+            return true;
+
+        if (!bot->IsInCombat())
+            return false;
+
+        auto const isPerson = [](Unit const* unit)
+        {
+            return unit && IsHumanPlayer(unit->GetCharmerOrOwnerPlayerOrPlayerItself());
+        };
+
+        if (isPerson(bot->GetVictim()))
+            return true;
+        for (Unit const* attacker : bot->getAttackers())
+            if (isPerson(attacker))
+                return true;
+        return false;
+    }
+
     // Whose level is theirs, and not the ground's to set.
     //
     // A levy re-levels, and for most of the fleet that is harmless: an ordinary
@@ -13953,6 +13987,10 @@ namespace
         // that leaves the bot untouched - every other path through it has already
         // re-levelled and SaveToDB'd by the time it returns.
         if (!bot->IsInWorld() || bot->IsBeingTeleportedFar() || bot->IsBeingTeleportedNear())
+            return false;
+
+        // Nor out of a fight with somebody: the reset would decide it for them.
+        if (IsFightingAPerson(bot))
             return false;
 
         LeviedBot record;
@@ -20933,10 +20971,11 @@ namespace playerbot
                     // Same guard as the rebirth drain below, for the same reason:
                     // teleporting a bot that is already mid-teleport walks into
                     // RemoveFromGrid's IsInGrid assert and takes the server down.
-                    // A skipped guardian is requeued by the next tick.
+                    // A skipped guardian is requeued by the next tick - which is
+                    // also how one in a fight with somebody waits for it to end.
                     if (bot->IsInWorld() && playerbot::IsManagedRandomBot(bot) &&
                         !bot->IsBeingTeleportedFar() && !bot->IsBeingTeleportedNear() &&
-                        bot->GetLevel() > targetLevel)
+                        !IsFightingAPerson(bot) && bot->GetLevel() > targetLevel)
                     {
                         if (uint32 const zoneId = GetGuardianZoneId(botRawGuid))
                         {
@@ -20993,6 +21032,17 @@ namespace playerbot
                         // back to a level 1 with no gear, no bags and no bank.
                         if (KeepsItsOwnLevel(bot))
                             continue;
+
+                        // Not in the middle of a fight with somebody - see
+                        // IsFightingAPerson. Put back rather than dropped, and
+                        // before the once-a-minute stamp below, so the rebirth
+                        // lands the moment the fight is over.
+                        if (IsFightingAPerson(bot))
+                        {
+                            std::lock_guard<std::mutex> pendingGuard(g_PvePendingLock);
+                            g_PendingRebirths.insert(botRawGuid);
+                            continue;
+                        }
 
                         // No bot is reborn twice inside a minute, whatever the
                         // flag says. A rebirth costs a teleport, a re-kit and a
