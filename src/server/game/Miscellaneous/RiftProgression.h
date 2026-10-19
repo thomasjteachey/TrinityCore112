@@ -93,6 +93,10 @@ namespace RiftProgression
     // The League level the character has reached this match (1..18).
     TC_GAME_API uint8 GetLeagueLevel(Player const* player);
 
+    // Player::GiveLevel, whatever called it: a level above the match level
+    // becomes the match level, with the picks of every level gained.
+    TC_GAME_API void OnLevelChanged(Player* player);
+
     // BattlegroundSRF's update, every few seconds per player (nothing to do at
     // present: the match's talents are the character's own).
     TC_GAME_API void Maintain(Player* player);

@@ -706,6 +706,29 @@ uint8 GetLeagueLevel(Player const* player)
     return state ? state->LeagueLevel : 1;
 }
 
+void OnLevelChanged(Player* player)
+{
+    if (!player)
+        return;
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State* state = Find(player);
+    if (!state)
+        return;
+    // SetMatchLevel's own GiveLevel comes back here with the level already matched.
+    uint8 const level = std::min<uint8>(player->GetLevel(), state->RealLevel);
+    if (level <= state->MatchLevel)
+        return;
+    while (state->MatchLevel < level)
+    {
+        ++state->MatchLevel;
+        state->PendingPicks += PicksForLevel(*state, state->MatchLevel);
+    }
+    ShowProgress(player, *state);
+    SendState(player, *state);
+    if (state->PendingPicks)
+        ChatHandler(player->GetSession()).PSendSysMessage("You have %u skill pick(s) to spend: type /rift.", state->PendingPicks);
+}
+
 void Maintain(Player* /*player*/)
 {
     // Talents are the character's own in the match now (spent from its own

@@ -3521,6 +3521,10 @@ void Player::GiveLevel(uint8 level, bool borrowed /*= false*/)
 
     SendQuestGiverStatusMultiple();
 
+    // A Summoner's Rift match follows the character's level however it moves
+    // (match experience, a GM's .level): the levels gained bring their picks.
+    RiftProgression::OnLevelChanged(this);
+
     if (!borrowed)
         sScriptMgr->OnPlayerLevelChanged(this, oldLevel);
 }

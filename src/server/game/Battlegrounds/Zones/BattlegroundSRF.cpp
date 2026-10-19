@@ -303,7 +303,10 @@ uint32 constexpr SRF_STRUCTURE_LEVEL_TICK  = 30 * IN_MILLISECONDS;
 uint32 constexpr SRF_MAINTAIN_TICK         = 3 * IN_MILLISECONDS;
 // The denying rule: under this share of its health a minion turns neutral.
 float constexpr SRF_DENY_HEALTH_PCT     = 50.0f;
-uint32 constexpr SRF_FACTION_DENIABLE   = 7;       // "Creature": neutral, attackable by everyone
+// Hostile to everyone (players, both sides' minions), friendly to none: its own
+// side can last-hit it, and it keeps fighting the other - a neutral minion could
+// neither attack nor be attacked by a creature, and stood there for good.
+uint32 constexpr SRF_FACTION_DENIABLE   = 1620;
 float constexpr SRF_FOUNTAIN_HEAL_SHARE = 0.10f;
 float constexpr SRF_FOUNTAIN_BURN_SHARE = 0.30f;
 
@@ -708,7 +711,10 @@ void BattlegroundSRF::SpawnWave()
                     TEMPSUMMON_CORPSE_TIMED_DESPAWN, 3s);
                 if (!minion)
                     continue;
-                minion->SetReactState(REACT_AGGRESSIVE);
+                // The battleground picks every minion's target (FindMinionTarget):
+                // left to aggro on sight, a wave would turn on its own deniable
+                // minions, which are hostile to everyone.
+                minion->SetReactState(REACT_DEFENSIVE);
                 // Baron's empowerment: the team's minions come out tougher while it lasts.
                 float const empowered = _baronTimer[team] ? SRF_BARON_MINION_HEALTH : 1.0f;
                 ApplyUnitLevel(minion, AverageMatchLevel(), (1.0f + SRF_MINION_GROWTH_PER_WAVE * float(_wavesSpawned)) * empowered);
