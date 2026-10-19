@@ -112,10 +112,28 @@ public:
         uint32 const honorPerHour = sBattlegroundMgr->GetHonorPerHour();
         bool const autoRate = !sWorld->getIntConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_RATE);
 
+        std::string rateSource = "configured";
+        if (autoRate)
+        {
+            uint32 const anchorType = sWorld->getIntConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_ANCHOR_TYPE);
+            uint32 const anchorArenaType = sWorld->getIntConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_ANCHOR_ARENA_TYPE);
+            if (!anchorType)
+                rateSource = "what battlegrounds pay today";
+            else
+            {
+                std::string anchorName = Trinity::StringFormat("type {}", anchorType);
+                if (Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(BattlegroundTypeId(anchorType)))
+                    anchorName = bgTemplate->GetName();
+                if (anchorArenaType)
+                    anchorName += Trinity::StringFormat(" {}v{}", anchorArenaType, anchorArenaType);
+                rateSource = "what " + anchorName + " pays today";
+            }
+        }
+
         handler->PSendSysMessage("Hourly match honor is %s. Rate: %s (%s), %u matches needed per kind.",
             enabled ? "ON" : "OFF",
             honorPerHour ? Trinity::StringFormat("{} honor/hour", honorPerHour).c_str() : "not enough data",
-            autoRate ? "what battlegrounds pay today" : "configured", minSamples);
+            rateSource.c_str(), minSamples);
 
         std::vector<BattlegroundMgr::MatchDurationStats> stats = sBattlegroundMgr->GetMatchDurationStats();
         if (stats.empty())
@@ -131,11 +149,6 @@ public:
             return a.Key < b.Key;
         });
 
-        uint32 const configWinner = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_WINNER);
-        uint32 const configLoser = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_LOSER);
-        uint32 const arenaFlagHonor = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP) * 3;
-        float const arenaFlat = sWorld->getFloatConfig(CONFIG_CENTURION_BG_ARENA_REWARD_MULTIPLIER);
-
         for (BattlegroundMgr::MatchDurationStats const& stat : stats)
         {
             std::string name;
@@ -147,13 +160,8 @@ public:
                 name += Trinity::StringFormat(" {}v{}", uint32(stat.Key.ArenaType), uint32(stat.Key.ArenaType));
 
             bool const balanced = enabled && honorPerHour && stat.Samples >= minSamples;
-            BattlegroundMgr::HourlyHonorPayout payout;
-            if (balanced)
-                payout = sBattlegroundMgr->HourlyHonorPayoutFor(stat, honorPerHour);
-            else if (stat.Arena)
-                payout = { uint32((configWinner + arenaFlagHonor) * arenaFlat), uint32(configLoser * arenaFlat) };
-            else
-                payout = { configWinner, configLoser };
+            BattlegroundMgr::HourlyHonorPayout const payout = balanced ?
+                sBattlegroundMgr->HourlyHonorPayoutFor(stat, honorPerHour) : BattlegroundMgr::GetFlatPayout(stat.Arena);
 
             auto perHour = [&stat](uint32 earned, uint32 paid)
             {

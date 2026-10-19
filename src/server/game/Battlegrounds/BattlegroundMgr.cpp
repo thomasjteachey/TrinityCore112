@@ -1340,20 +1340,52 @@ void BattlegroundMgr::RecordMatchDuration(Battleground const* bg, uint32 seconds
         AddMatchDurationSample(key, uint8(bg->GetMaxLevel()), bg->isArena(), { now, seconds, winHonor, lossHonor });
 }
 
+BattlegroundMgr::HourlyHonorPayout BattlegroundMgr::GetFlatPayout(bool arena)
+{
+    uint32 const winner = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_WINNER);
+    uint32 const loser = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_LOSER);
+    if (!arena)
+        return { winner, loser };
+
+    float const arenaMultiplier = sWorld->getFloatConfig(CONFIG_CENTURION_BG_ARENA_REWARD_MULTIPLIER);
+    uint32 const flagHonor = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP) * 3;
+    return { uint32((winner + flagHonor) * arenaMultiplier), uint32(loser * arenaMultiplier) };
+}
+
+bool BattlegroundMgr::IsHourlyHonorAnchorArena()
+{
+    uint32 const anchorType = sWorld->getIntConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_ANCHOR_TYPE);
+    return anchorType ? sWorld->getIntConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_ANCHOR_ARENA_TYPE) != 0 : false;
+}
+
 uint32 BattlegroundMgr::GetHonorPerHourLocked() const
 {
     if (uint32 const configured = sWorld->getIntConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_RATE))
         return configured;
 
-    // What a typical battleground pays per hour today: the configured payout
-    // (averaged over winning and losing) plus the median honor earned in
-    // play, over the median length - every battleground match pooled. The
-    // payout this sets never feeds back in: in-match honor excludes it.
+    // What the anchor pays per hour today: its flat payout (averaged over
+    // winning and losing) plus the median honor earned in play, over its
+    // median length, every level bracket pooled. Only the anchor has to be
+    // played enough for the rate to exist; every other kind is then measured
+    // against it as its own matches come in. The rate never feeds back into
+    // itself: it is built from the FLAT payout, and in-match honor excludes
+    // the end-of-match payout.
+    //
+    // AnchorTypeId 0: every battleground (not arena) match pooled instead.
+    uint32 const anchorType = sWorld->getIntConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_ANCHOR_TYPE);
+    uint32 const anchorArenaType = sWorld->getIntConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_ANCHOR_ARENA_TYPE);
+    bool const anchorArena = IsHourlyHonorAnchorArena();
+
     time_t const cutoff = GetMatchDurationCutoff();
     std::vector<MatchDurationSample> samples;
     for (auto const& [key, window] : _matchDurations)
-        if (!window.Arena)
+    {
+        bool const isAnchor = anchorType ?
+            key.TypeId == anchorType && (!anchorArenaType || key.ArenaType == anchorArenaType) :
+            !window.Arena;
+        if (isAnchor)
             CollectRecentSamples(window, cutoff, samples);
+    }
 
     if (samples.empty() || samples.size() < sWorld->getIntConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_MIN_SAMPLES))
         return 0;
@@ -1372,8 +1404,8 @@ uint32 BattlegroundMgr::GetHonorPerHourLocked() const
     if (!medianSeconds)
         return 0;
 
-    double const payout = (double(sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_WINNER)) +
-        double(sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_LOSER))) / 2.0;
+    HourlyHonorPayout const flat = GetFlatPayout(anchorArena);
+    double const payout = (double(flat.Winner) + double(flat.Loser)) / 2.0;
     return uint32(std::lround((payout + double(Median(earned))) * double(HOUR) / double(medianSeconds)));
 }
 
@@ -1386,35 +1418,41 @@ uint32 BattlegroundMgr::GetHonorPerHour() const
 BattlegroundMgr::HourlyHonorPayout BattlegroundMgr::HourlyHonorPayoutFor(MatchDurationStats const& stats, uint32 honorPerHour) const
 {
     // A match of the kind's median length earns honorPerHour pro rata, on
-    // average over its two sides. What the kind already pays in play counts
-    // towards it; the payout is the rest. One top-up for the kind, split in
-    // the configured winner/loser proportion (equal by default), so a side
-    // that earns more in play - winners capturing objectives - keeps that
-    // lead instead of both sides being levelled to the same total.
+    // average over its two sides. ArenaEffort weighs an arena hour against a
+    // battleground hour, relative to whichever the anchor is, so the anchor
+    // itself always earns exactly the rate.
     double target = double(honorPerHour) * double(stats.MedianSeconds) / double(HOUR);
-    if (stats.Arena)
-        target *= sWorld->getFloatConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_ARENA_EFFORT);
+    double const effort = sWorld->getFloatConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_ARENA_EFFORT);
+    bool const anchorArena = IsHourlyHonorAnchorArena();
+    if (stats.Arena && !anchorArena)
+        target *= effort;
+    else if (!stats.Arena && anchorArena && effort > 0.0)
+        target /= effort;
 
+    // What the kind already pays in play counts towards it; the payout is the
+    // rest. One top-up for the kind, split in the proportion its flat payout
+    // already splits winning and losing, so a side that earns more in play -
+    // winners capturing objectives - keeps that lead instead of both sides
+    // being levelled to the same total.
     double const earned = (double(stats.MedianWinHonor) + double(stats.MedianLossHonor)) / 2.0;
     double const topUp = target - earned;
 
-    double const configWinner = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_WINNER);
-    double const configLoser = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_LOSER);
-    double const configSum = configWinner + configLoser;
-    double const winnerShare = configSum > 0.0 ? 2.0 * configWinner / configSum : 1.0;
-    double const loserShare = configSum > 0.0 ? 2.0 * configLoser / configSum : 1.0;
+    HourlyHonorPayout const flat = GetFlatPayout(stats.Arena);
+    double const flatSum = double(flat.Winner) + double(flat.Loser);
+    double const winnerShare = flatSum > 0.0 ? 2.0 * flat.Winner / flatSum : 1.0;
+    double const loserShare = flatSum > 0.0 ? 2.0 * flat.Loser / flatSum : 1.0;
 
-    // Kept inside MinFactor..MaxFactor of the configured payout. A kind whose
+    // Kept inside MinFactor..MaxFactor of the flat payout. A kind whose
     // in-play honor alone beats the rate is paid the floor: honor already
     // earned is not taken back.
     double const low = sWorld->getFloatConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_MIN_FACTOR);
     double const high = std::max(low, double(sWorld->getFloatConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_MAX_FACTOR)));
-    auto bounded = [low, high](double wanted, double configured)
+    auto bounded = [low, high](double wanted, double flatAmount)
     {
-        return uint32(std::lround(std::clamp(wanted, configured * low, configured * high)));
+        return uint32(std::lround(std::clamp(wanted, flatAmount * low, flatAmount * high)));
     };
 
-    return { bounded(topUp * winnerShare, configWinner), bounded(topUp * loserShare, configLoser) };
+    return { bounded(topUp * winnerShare, flat.Winner), bounded(topUp * loserShare, flat.Loser) };
 }
 
 bool BattlegroundMgr::GetHourlyHonorPayout(Battleground const* bg, HourlyHonorPayout& payout) const

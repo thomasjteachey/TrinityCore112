@@ -222,15 +222,22 @@ class TC_GAME_API BattlegroundMgr
         // when the side had nobody in it at the end.
         void RecordMatchDuration(Battleground const* bg, uint32 seconds, uint32 humans, uint32 players,
             int32 winHonor, int32 lossHonor, uint32 paidWinner, uint32 paidLoser);
-        // False while the feature is off, the kind or the battleground pool is
-        // still short of samples, or there is no rate to pay; the configured
-        // flat payout then stands.
+        // False while the feature is off, the kind or the anchor is still short
+        // of samples, or there is no rate to pay; the flat payout then stands.
         bool GetHourlyHonorPayout(Battleground const* bg, HourlyHonorPayout& payout) const;
         HourlyHonorPayout HourlyHonorPayoutFor(MatchDurationStats const& stats, uint32 honorPerHour) const;
-        // HonorPerHour, or when that is 0, what battlegrounds pay per hour
-        // today: the configured payout plus their median in-match honor, over
-        // their median length. 0 when there is not yet enough to say.
+        // What a match pays at the end without the hourly balance: the
+        // configured winner/loser honor, for an arena plus three flag captures
+        // and cut by ArenaRewardMultiplier (Battleground::EndBattleground).
+        static HourlyHonorPayout GetFlatPayout(bool arena);
+        // HonorPerHour, or when that is 0, what the anchor kind pays per hour
+        // today (AnchorTypeId/AnchorArenaType, 3v3 All Arenas by default): its
+        // flat payout plus its median in-match honor, over its median length,
+        // all its level brackets pooled. 0 when there is not yet enough to say.
         uint32 GetHonorPerHour() const;
+        // Whether the anchor is an arena format, which sets what ArenaEffort
+        // is measured against.
+        static bool IsHourlyHonorAnchorArena();
         std::vector<MatchDurationStats> GetMatchDurationStats() const;
 
     private:

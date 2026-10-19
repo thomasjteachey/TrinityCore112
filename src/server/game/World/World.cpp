@@ -1599,6 +1599,11 @@ void World::LoadConfigSettings(bool reload)
     m_int_configs[CONFIG_CENTURION_BG_HOURLY_HONOR_MIN_SAMPLES] = std::max(1, sConfigMgr->GetIntDefault("Centurion.Battleground.HourlyHonor.MinSamples", 10));
     m_int_configs[CONFIG_CENTURION_BG_HOURLY_HONOR_WINDOW] = std::clamp(sConfigMgr->GetIntDefault("Centurion.Battleground.HourlyHonor.Window", 50), 1, 1000);
     m_int_configs[CONFIG_CENTURION_BG_HOURLY_HONOR_MAX_AGE_DAYS] = std::max(0, sConfigMgr->GetIntDefault("Centurion.Battleground.HourlyHonor.MaxAgeDays", 30));
+    // The kind of match whose honor per hour today sets the rate everything
+    // else is evened out to: All Arenas (6) at 3v3 unless configured.
+    // AnchorTypeId 0 pools every battleground instead.
+    m_int_configs[CONFIG_CENTURION_BG_HOURLY_HONOR_ANCHOR_TYPE] = std::max(0, sConfigMgr->GetIntDefault("Centurion.Battleground.HourlyHonor.AnchorTypeId", 6));
+    m_int_configs[CONFIG_CENTURION_BG_HOURLY_HONOR_ANCHOR_ARENA_TYPE] = std::max(0, sConfigMgr->GetIntDefault("Centurion.Battleground.HourlyHonor.AnchorArenaType", 3));
     m_float_configs[CONFIG_CENTURION_BG_HOURLY_HONOR_MIN_FACTOR] = std::max(0.0f,
         sConfigMgr->GetFloatDefault("Centurion.Battleground.HourlyHonor.MinFactor", 0.0f));
     m_float_configs[CONFIG_CENTURION_BG_HOURLY_HONOR_MAX_FACTOR] = std::max(m_float_configs[CONFIG_CENTURION_BG_HOURLY_HONOR_MIN_FACTOR],

@@ -2991,10 +2991,19 @@ Centurion.Battleground.ArenaExperienceMultiplier = 0.4
 #                     1 - (Enabled)
 #
 #    Centurion.Battleground.HourlyHonor.HonorPerHour
-#        Description: The rate every kind is evened out to. 0 = what battlegrounds pay
-#                     per hour today: the configured payout plus their median in-play
-#                     honor, over their median length, all battlegrounds pooled.
+#        Description: The rate every kind is evened out to. 0 = what the anchor kind
+#                     pays per hour today: its flat payout plus its median in-play
+#                     honor, over its median length, every level bracket pooled.
 #        Default:     0
+#
+#    Centurion.Battleground.HourlyHonor.AnchorTypeId
+#    Centurion.Battleground.HourlyHonor.AnchorArenaType
+#        Description: The anchor kind for HonorPerHour 0: battleground type id (for an
+#                     arena, the format queued) and team size (0 = any). Only the
+#                     anchor needs MinSamples matches for the rate to exist, and it
+#                     always earns exactly the rate. 6 / 3 = 3v3 All Arenas.
+#                     AnchorTypeId 0 pools every battleground instead.
+#        Default:     6, 3
 #
 #    Centurion.Battleground.HourlyHonor.MinSamples
 #        Description: Recorded matches a kind needs before its payout is evened out;
@@ -3012,16 +3021,19 @@ Centurion.Battleground.ArenaExperienceMultiplier = 0.4
 #
 #    Centurion.Battleground.HourlyHonor.MinFactor
 #    Centurion.Battleground.HourlyHonor.MaxFactor
-#        Description: Bounds of the payout, as multiples of RewardHonorWinner/Loser. A
+#        Description: Bounds of the payout, as multiples of the kind's flat payout. A
 #                     kind whose in-play honor alone beats the rate gets the floor.
 #        Default:     0.0, 4.0
 #
 #    Centurion.Battleground.HourlyHonor.ArenaEffort
-#        Description: What an hour of arena is worth against an hour of battleground.
+#        Description: What an hour of arena is worth against an hour of battleground,
+#                     relative to whichever the anchor is (the anchor always earns the rate).
 #        Default:     1.0
 
 Centurion.Battleground.HourlyHonor.Enable = 0
 Centurion.Battleground.HourlyHonor.HonorPerHour = 0
+Centurion.Battleground.HourlyHonor.AnchorTypeId = 6
+Centurion.Battleground.HourlyHonor.AnchorArenaType = 3
 Centurion.Battleground.HourlyHonor.MinSamples = 10
 Centurion.Battleground.HourlyHonor.Window = 50
 Centurion.Battleground.HourlyHonor.MaxAgeDays = 30
