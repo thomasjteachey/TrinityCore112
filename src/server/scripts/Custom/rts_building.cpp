@@ -56,6 +56,12 @@ namespace
     constexpr RtsBuildingShell RTS_BUILDING_SHELLS[] =
     {
         { 900116, 900001 }, // Goblin Workshop
+        { 922100, 300600 }, // Summoner's Rift: Order Turret
+        { 922101, 300601 }, // Summoner's Rift: Chaos Turret
+        { 922102, 300602 }, // Summoner's Rift: Order Inhibitor
+        { 922103, 300603 }, // Summoner's Rift: Chaos Inhibitor
+        { 922104, 300604 }, // Summoner's Rift: Order Nexus
+        { 922105, 300605 }, // Summoner's Rift: Chaos Nexus
     };
 
     uint32 ShellEntryFor(uint32 creatureEntry)
