@@ -279,6 +279,8 @@ float constexpr SRF_FOUNTAIN_HEAL_RANGE = Yards(600.0f);
 // League's brush (BattlegroundSRFBrush.h): attacking from it reveals for a moment.
 uint32 constexpr SRF_BRUSH_TICK         = 250;
 uint32 constexpr SRF_BRUSH_REVEAL       = 1500;
+// Centurion spell 94142 "Brush": the buff a hidden champion wears, so they can see it.
+uint32 constexpr SRF_SPELL_BRUSH        = 94142;
 
 // The brush patch at a world position, 0 for none.
 uint8 BrushPatchAt(Position const& pos)
@@ -486,7 +488,10 @@ void BattlegroundSRF::RemovePlayer(Player* player, ObjectGuid guid, uint32 /*tea
     _brush.erase(guid);
     // Gone without a Player (logged out) is OnLogin's to restore.
     if (player)
+    {
+        player->RemoveAurasDueToSpell(SRF_SPELL_BRUSH);
         RiftProgression::Leave(player);
+    }
 }
 
 void BattlegroundSRF::Reset()
@@ -714,6 +719,14 @@ void BattlegroundSRF::UpdateBrush(uint32 elapsed)
             st.Patch = patch;
             st.Hidden = hidden;
             player->UpdateObjectVisibility();
+        }
+        // Checked every tick, not only on a change: death or a zone-in can strip it.
+        if (hidden != player->HasAura(SRF_SPELL_BRUSH))
+        {
+            if (hidden)
+                player->AddAura(SRF_SPELL_BRUSH, player);
+            else
+                player->RemoveAurasDueToSpell(SRF_SPELL_BRUSH);
         }
     }
 }
