@@ -32,12 +32,12 @@ local BOT_ICON  = "Interface\\WorldMap\\WorldMapPartyIcon"
 local MAX_BLIPS = 80
 
 -- The grey battleground tombstone - grey because no graveyard here belongs to a
--- side - which is landmark 7 on the map's own POI sheet. Cropped by hand rather
--- than through WorldMap_GetPOITextureCoords(7): that one starts at column 127,
--- where the banner of landmark 6 still has a pixel, and draws it as a stripe
--- down the stone's left edge. Columns 128-143 hold the stone and nothing else.
+-- side - which is landmark 8 on the map's own POI sheet. The sheet is laid out
+-- on an 18-pixel grid, not 16: landmark 7 at 126-144 is the red Horde banner,
+-- and a 16-pixel crop at 128 lands on that flag. Cell 8 spans 144-162 and its
+-- neighbours' pixels stop at 142 and start at 163, so the cell crops clean.
 local GRAVE_ICON   = "Interface\\Minimap\\POIIcons"
-local GRAVE_COORDS = { 128 / 256, 144 / 256, 0, 16 / 256 }
+local GRAVE_COORDS = { 144 / 256, 162 / 256, 0, 18 / 256 }
 
 local bots     = {}     -- the completed set: { name, x, y }
 local pending  = {}     -- chunks still arriving
