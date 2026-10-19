@@ -218,6 +218,11 @@ private:
         uint32 StartDelay = 0;     // ms before it leaves the barracks
         bool Denied = false;       // turned neutral under half health (the denying rule)
         bool Paid = false;         // its gold went to a last hit already
+        Position LastPos;          // where it stood at the last tick that moved it
+        uint32 StillMs = 0;        // how long it has stood there without fighting
+        ObjectGuid Target;         // the target the battleground last sent it after
+        ObjectGuid Ignore;         // a target it could not get to, left alone for a while
+        uint32 IgnoreMs = 0;
     };
 
     struct CampState
@@ -243,7 +248,8 @@ private:
     std::vector<Position> const& LanePath(TeamId team, uint8 lane);
     void UpdateMinions();
     void DespawnMinions();
-    Unit* FindMinionTarget(Creature* minion, TeamId team, float range) const;
+    Unit* FindMinionTarget(Creature* minion, TeamId team, float range, ObjectGuid ignore = ObjectGuid::Empty) const;
+    bool UnstickMinion(Creature* creature, Minion& m);
 
     void UpdateTurrets();
     Unit* PickTurretTarget(Creature* turret, TeamId team) const;
@@ -285,6 +291,8 @@ private:
     uint32 _boltsCast;
     uint32 _boltsRefused;
     uint32 _lastRefusal;
+    uint32 _unstuckTargets;        // since the last report: unreachable targets given up
+    uint32 _unstuckPlaced;         // since the last report: minions put back on their lane
     uint32 _waveTimer;
     uint32 _minionTimer;
     uint32 _turretTimer;

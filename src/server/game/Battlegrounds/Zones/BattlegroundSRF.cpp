@@ -318,6 +318,13 @@ float constexpr SRF_PATH_STEP           = 6.0f;
 uint32 constexpr SRF_SPLINE_POINTS      = 40;
 uint32 constexpr SRF_SPLINE_RELAUNCH    = 6;     // points before the end
 uint32 constexpr SRF_PATH_LOOKAHEAD     = 25;
+// A minion that stands still this long without landing a blow is stuck: on a
+// target it cannot get to (it gives that one up for SRF_MINION_IGNORE_MS) or
+// on its lane (it is put back on the lane a little further on).
+uint32 constexpr SRF_MINION_STUCK_MS    = 4 * IN_MILLISECONDS;
+uint32 constexpr SRF_MINION_IGNORE_MS   = 10 * IN_MILLISECONDS;
+float constexpr SRF_MINION_STILL_DIST   = 0.5f;
+uint32 constexpr SRF_UNSTICK_ADVANCE    = 2;     // path points past where it stands
 uint32 constexpr SRF_LANE_SPLINE_ID     = 1;
 // A wave walks as League's does, strung out rather than stacked: melee in front,
 // casters behind, three files across the lane, each minion leaving the barracks
@@ -393,6 +400,8 @@ BattlegroundSRF::BattlegroundSRF()
     _boltsCast = 0;
     _boltsRefused = 0;
     _lastRefusal = 0;
+    _unstuckTargets = 0;
+    _unstuckPlaced = 0;
 }
 
 void BattlegroundSRF::AddPlayer(Player* player)
@@ -447,6 +456,8 @@ void BattlegroundSRF::Reset()
     _boltsCast = 0;
     _boltsRefused = 0;
     _lastRefusal = 0;
+    _unstuckTargets = 0;
+    _unstuckPlaced = 0;
 }
 
 bool BattlegroundSRF::SetupBattleground()
@@ -738,14 +749,14 @@ void BattlegroundSRF::SpawnWave()
     }
 }
 
-Unit* BattlegroundSRF::FindMinionTarget(Creature* minion, TeamId team, float range) const
+Unit* BattlegroundSRF::FindMinionTarget(Creature* minion, TeamId team, float range, ObjectGuid ignore) const
 {
     Map* map = minion->GetMap();
     Unit* best = nullptr;
     float bestDist = range;
     auto consider = [&](Unit* unit)
     {
-        if (!unit || !unit->IsAlive() || !minion->IsValidAttackTarget(unit))
+        if (!unit || !unit->IsAlive() || unit->GetGUID() == ignore || !minion->IsValidAttackTarget(unit))
             return;
         float const dist = minion->GetExactDist2d(unit) - unit->GetCombatReach();
         if (dist < bestDist)
@@ -849,6 +860,30 @@ void BattlegroundSRF::UpdateMinions()
             creature->SetFaction(SRF_FACTION_DENIABLE);
         }
 
+        if (m.IgnoreMs)
+        {
+            m.IgnoreMs = m.IgnoreMs > BG_SRF_MINION_TICK ? m.IgnoreMs - BG_SRF_MINION_TICK : 0;
+            if (!m.IgnoreMs)
+                m.Ignore.Clear();
+        }
+
+        // Standing still is only right for a minion that is landing blows, or
+        // one still waiting at the barracks. Anything else for SRF_MINION_STUCK_MS
+        // is a minion stuck - and the core's own answer, evading after a
+        // chase with no path, only had the battleground hand it the same target.
+        if (creature->GetExactDist2d(&m.LastPos) > SRF_MINION_STILL_DIST)
+        {
+            m.LastPos = creature->GetPosition();
+            m.StillMs = 0;
+        }
+        else if (!m.StartDelay)
+            m.StillMs += BG_SRF_MINION_TICK;
+        if (Unit* victim = creature->GetVictim())
+            if (m.Caster ? creature->GetExactDist2d(victim) <= SRF_CASTER_RANGE : creature->IsWithinMeleeRange(victim))
+                m.StillMs = 0;
+        if (m.StillMs >= SRF_MINION_STUCK_MS && UnstickMinion(creature, m))
+            continue;
+
         // A minion never walks back after a fight: its home is wherever it is
         // standing, so leaving combat costs nothing and it carries on down the lane.
         if (creature->IsInCombat() && creature->GetVictim())
@@ -861,12 +896,14 @@ void BattlegroundSRF::UpdateMinions()
         if (!creature->IsInEvadeMode())
             creature->SetHomePosition(creature->GetPosition());
 
-        if (Unit* target = FindMinionTarget(creature, m.Team, SRF_MINION_AGGRO_RANGE))
+        if (Unit* target = FindMinionTarget(creature, m.Team, SRF_MINION_AGGRO_RANGE, m.Ignore))
         {
             creature->AI()->AttackStart(target);
+            m.Target = target->GetGUID();
             m.Walking = false;
             continue;
         }
+        m.Target.Clear();
 
         // Still waiting its turn to leave the barracks.
         if (m.StartDelay)
@@ -912,6 +949,50 @@ void BattlegroundSRF::UpdateMinions()
         m.Walking = true;
         m.SplineEnd = end - 1;
     }
+}
+
+// A minion stuck on a target gives it up for a while and goes on with whatever
+// else is near, or down its lane; one stuck on the lane itself is put back on it
+// a couple of points further on - a declared way out, not a guess at the ground.
+bool BattlegroundSRF::UnstickMinion(Creature* creature, Minion& m)
+{
+    m.StillMs = 0;
+    m.LastPos = creature->GetPosition();
+
+    Unit* victim = creature->GetVictim();
+    ObjectGuid const target = victim ? victim->GetGUID() : m.Target;
+    if (!target.IsEmpty())
+    {
+        if (_unstuckTargets + _unstuckPlaced < 3)
+            TC_LOG_INFO("bg.battleground", "Summoner's Rift {}: minion {} (lane {}, point {}) at {:.1f} {:.1f} {:.1f} cannot get to {} - leaving it alone.",
+                GetInstanceID(), creature->GetEntry(), m.Lane, m.PathIndex, creature->GetPositionX(), creature->GetPositionY(),
+                creature->GetPositionZ(), target.ToString());
+        m.Ignore = target;
+        m.IgnoreMs = SRF_MINION_IGNORE_MS;
+        m.Target.Clear();
+        m.Walking = false;
+        creature->AI()->EnterEvadeMode(CreatureAI::EVADE_REASON_NO_PATH);
+        ++_unstuckTargets;
+        return true;
+    }
+
+    std::vector<Position> const& path = LanePath(m.Team, m.Lane);
+    if (path.size() < 2 || m.PathIndex + 1 >= path.size())
+        return false;   // at the enemy nexus: nowhere further to go
+    uint32 const to = std::min<uint32>(uint32(path.size()) - 1, m.PathIndex + SRF_UNSTICK_ADVANCE);
+    Position const at = InFile(path, to, FileOffset(m.Slot));
+    float const facing = path[std::min<uint32>(uint32(path.size()) - 1, to + 1)].GetAbsoluteAngle(&path[to]) + float(M_PI);
+    if (_unstuckTargets + _unstuckPlaced < 3)
+        TC_LOG_INFO("bg.battleground", "Summoner's Rift {}: minion {} (lane {}, point {}) stuck at {:.1f} {:.1f} {:.1f} - back on the lane at point {}.",
+            GetInstanceID(), creature->GetEntry(), m.Lane, m.PathIndex, creature->GetPositionX(), creature->GetPositionY(),
+            creature->GetPositionZ(), to);
+    creature->GetMotionMaster()->Clear();
+    creature->NearTeleportTo(at.GetPositionX(), at.GetPositionY(), at.GetPositionZ() + 0.5f, facing);
+    m.PathIndex = to;
+    m.Walking = false;
+    m.LastPos = at;
+    ++_unstuckPlaced;
+    return true;
 }
 
 void BattlegroundSRF::DespawnMinions()
@@ -1198,11 +1279,13 @@ void BattlegroundSRF::Report(uint32 diff)
     uint32 campsUp = 0;
     for (CampState const& cs : _camps)
         campsUp += cs.Up ? 1 : 0;
-    TC_LOG_INFO("bg.battleground", "Summoner's Rift {}: {} players, {} minions, {} waves, bolts {} cast / {} refused (last refusal {}), camps up {}/{}.",
+    TC_LOG_INFO("bg.battleground", "Summoner's Rift {}: {} players, {} minions, {} waves, bolts {} cast / {} refused (last refusal {}), camps up {}/{}, unstuck {} from a target / {} onto the lane.",
         GetInstanceID(), GetPlayersSize(), _minions.size(), _wavesSpawned, _boltsCast, _boltsRefused, _lastRefusal,
-        campsUp, uint32(BG_SRF_JUNGLE_CAMPS));
+        campsUp, uint32(BG_SRF_JUNGLE_CAMPS), _unstuckTargets, _unstuckPlaced);
     _boltsCast = 0;
     _boltsRefused = 0;
+    _unstuckTargets = 0;
+    _unstuckPlaced = 0;
 }
 
 // A caster minion fights at range: it holds at League's 550 units and sends a
