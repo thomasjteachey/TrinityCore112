@@ -18,6 +18,8 @@
 #include "RiftProgression.h"
 
 #include "Battleground.h"
+#include "Chat.h"
+#include "WorldPacket.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
 #include "Log.h"
@@ -381,10 +383,16 @@ namespace
                 }
     }
 
+    // An addon whisper from the character to itself, as Mok'gora's are: the
+    // client hands CENTURION_Rift its own name as the sender.
     void SendLine(Player* player, std::string const& line)
     {
-        if (!IsTransient(player))
-            Battleground::SendSquadFeedLine(player, line);
+        if (IsTransient(player) || !player->GetSession())
+            return;
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player->GetGUID(), player->GetGUID(),
+            "CCGAME\t" + line, 0, player->GetName(), player->GetName());
+        player->SendDirectMessage(&data);
     }
 
     void SendState(Player* player, State const& state)
@@ -433,6 +441,8 @@ namespace
         player->SetFullHealth();
         ShowProgress(player, state);
         SendState(player, state);
+        if (state.PendingPicks && !Offers(state).empty())
+            ChatHandler(player->GetSession()).PSendSysMessage("You have %u skill pick(s) to spend: type /rift.", state.PendingPicks);
     }
 
     State* Find(Player const* player)

@@ -19,12 +19,22 @@
 //   CCGAMEREQ\tRIFTPICK:<spellId>   learn or rank up that spell with a skill pick
 //   CCGAMEREQ\tRIFTSTATE:           send the match state again (after a /reload)
 //
+// League's lane minions (npc_rift_minion, creature_template 922110-922113) never
+// evade. The stock AI evades the moment its target dies: it turns immune, walks
+// back to where the fight started and heals to full there - so waves ran back
+// up their lane after every kill, never died, and shrugged off turret shots.
+// A minion that runs out of enemies stops where it stands instead, and
+// BattlegroundSRF picks its next target or walks it on down its lane.
+//
 // And League's recall: on Summoner's Rift the Hearthstone (and a shaman's Astral
 // Recall) takes its caster to its own fountain instead of home - the same cast,
 // broken by damage the same way - and is ready again at once.
 
 #include "AddonRequestRoutes.h"
 #include "Battleground.h"
+#include "Creature.h"
+#include "CreatureAI.h"
+#include "MotionMaster.h"
 #include "DBCStores.h"
 #include "Player.h"
 #include "RiftProgression.h"
@@ -42,6 +52,26 @@ namespace
         return bg && bg->GetTypeID(true) == BATTLEGROUND_SRF && player->GetMapId() == bg->GetMapId() ? bg : nullptr;
     }
 }
+
+struct npc_rift_minion : public CreatureAI
+{
+    explicit npc_rift_minion(Creature* creature) : CreatureAI(creature) { }
+
+    void UpdateAI(uint32 /*diff*/) override
+    {
+        if (!UpdateVictim())
+            return;
+        DoMeleeAttackIfReady();
+    }
+
+    void EnterEvadeMode(EvadeReason /*why*/) override
+    {
+        me->CombatStop(true);
+        me->SetTarget(ObjectGuid::Empty);
+        me->GetMotionMaster()->Clear();
+        me->StopMoving();
+    }
+};
 
 // 8690 Hearthstone, 556 Astral Recall
 class spell_rift_recall : public SpellScript
@@ -77,4 +107,5 @@ void AddSC_custom_rift_progression()
     AddonRequestRoutes::Register("RIFTPICK", &RiftProgression::HandlePickRequest);
     AddonRequestRoutes::Register("RIFTSTATE", &RiftProgression::HandleStateRequest);
     RegisterSpellScript(spell_rift_recall);
+    RegisterCreatureAI(npc_rift_minion);
 }
