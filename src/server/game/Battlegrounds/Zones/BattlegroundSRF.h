@@ -65,7 +65,10 @@ enum BG_SRF_CreatureEntries
     BG_SRF_ENTRY_ORDER_SHOT        = 922120,
     BG_SRF_ENTRY_CHAOS_SHOT        = 922121,
     BG_SRF_ENTRY_ORDER_SHOT_IMPACT = 922122,
-    BG_SRF_ENTRY_CHAOS_SHOT_IMPACT = 922123
+    BG_SRF_ENTRY_CHAOS_SHOT_IMPACT = 922123,
+    // The caster minions' bolts.
+    BG_SRF_ENTRY_ORDER_CASTER_BOLT = 922124,
+    BG_SRF_ENTRY_CHAOS_CASTER_BOLT = 922125
 };
 
 enum BG_SRF_Spells
@@ -148,10 +151,14 @@ public:
     ~BattlegroundSRF() override = default;
 
     void AddPlayer(Player* player) override;
+    void RemovePlayer(Player* player, ObjectGuid guid, uint32 team) override;
     void Reset() override;
     bool SetupBattleground() override;
     void PostUpdateImpl(uint32 diff) override;
     void StartingEventOpenDoors() override;
+
+    void HandleKillUnit(Creature* creature, Player* killer) override;
+    void HandleKillPlayer(Player* victim, Player* killer) override;
 
     WorldSafeLocsEntry const* GetClosestGraveyard(Player* player) override;
     bool HandlePlayerUnderMap(Player* player) override;
@@ -173,6 +180,12 @@ private:
         uint32 PathIndex = 0;      // how far along its lane path (LanePath) it has come
         uint32 SplineEnd = 0;      // the last path point of the spline it is walking
         bool Walking = false;
+        bool Caster = false;
+        uint8 Slot = 0;            // its place in the wave: rank (melee first) and file
+        uint32 AttackTimer = 0;    // casters: ms until the next bolt
+        uint32 StartDelay = 0;     // ms before it leaves the barracks
+        bool Denied = false;       // turned neutral under half health (the denying rule)
+        bool Paid = false;         // its gold went to a last hit already
     };
 
     struct TurretState
@@ -181,12 +194,14 @@ private:
         uint8 ConsecutiveHits = 0;
     };
 
-    // A turret shot in flight: the orb creature, who fired it and at whom.
+    // A projectile in flight - a turret's shot or a caster minion's bolt: the
+    // orb creature that is the missile, who fired it and at whom.
     struct Shot
     {
         ObjectGuid Orb;
         ObjectGuid Target;
-        uint8 TurretSlot = 0;
+        ObjectGuid Source;
+        uint32 ImpactEntry = 0;    // the burst where it lands, or 0
         int32 Damage = 0;
         uint32 Age = 0;
     };
@@ -205,11 +220,24 @@ private:
 
     void UpdateTurrets();
     Unit* PickTurretTarget(Creature* turret, TeamId team) const;
-    void FireShot(uint8 slot, Creature* turret, Unit* target, int32 damage);
+    void FireProjectile(Unit* source, Unit* target, uint32 orbEntry, uint32 impactEntry,
+        float originHeight, float speed, int32 damage);
+    void UpdateCasterAttack(Creature* caster, Minion& minion, Unit* victim);
     void UpdateShots(uint32 elapsed);
     void DespawnShots();
 
     void UpdateFountains();
+
+    // Progression (RiftProgression): experience and gold, and keeping the
+    // units' levels with the players'.
+    std::vector<Player*> TeamPlayers(TeamId team) const;
+    std::vector<Player*> TeamPlayersNear(TeamId team, WorldObject const* where, float range) const;
+    void AwardExperience(TeamId team, WorldObject const* where, float leagueXp);
+    void AwardGold(TeamId team, WorldObject const* where, uint32 leagueGold);
+    void OnMinionDied(Minion const& minion, Creature const* corpse);
+    uint8 AverageMatchLevel() const;
+    void ApplyUnitLevel(Creature* creature, uint8 level, float healthScale);
+    void UpdateProgression(uint32 diff);
 
     std::array<StructureState, 2 * BG_SRF_STRUCTURES_PER_TEAM> _structures;
     std::array<TurretState, 2 * BG_SRF_STRUCTURES_PER_TEAM> _turrets;
@@ -222,6 +250,10 @@ private:
     uint32 _shotTimer;
     uint32 _fountainTimer;
     uint32 _structureTimer;
+    uint32 _passiveGoldTimer;
+    uint32 _maintainTimer;
+    uint32 _structureLevelTimer;
+    uint32 _wavesSpawned;
     bool _wavesStarted;
 };
 

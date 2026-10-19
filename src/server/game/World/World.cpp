@@ -22,6 +22,7 @@
 #include "World.h"
 #include "Miscellaneous/BattlegroundSpoils.h"
 #include "Miscellaneous/BotPvePower.h"
+#include "Miscellaneous/RiftProgression.h"
 #include "Miscellaneous/BotUpdatePolicy.h"
 #include "Miscellaneous/CharacterScreen.h"
 #include "Miscellaneous/CooldownStash.h"
@@ -2220,6 +2221,9 @@ void World::SetInitialWorldSettings()
 
     TC_LOG_INFO("server.loading", "Checking Battleground Cooldown Stash...");
     CooldownStash::ProbeStorage();
+
+    TC_LOG_INFO("server.loading", "Checking Summoner's Rift progression stash...");
+    RiftProgression::ProbeStorage();
 
     TC_LOG_INFO("server.loading", "Loading Character List Order...");
     CharacterScreen::LoadOrder();

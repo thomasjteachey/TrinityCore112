@@ -132,6 +132,9 @@ enum GossipAction : uint32
     ACTION_TOGGLE_ALLY_FLAG,
     ACTION_CYCLE_WEATHER,
     ACTION_TOGGLE_TOURNAMENT_RULES,
+    ACTION_TOGGLE_RIFT_LAST_HIT,
+    ACTION_TOGGLE_RIFT_DENYING,
+    ACTION_TOGGLE_RIFT_SHARED_XP,
     ACTION_KICK_PLAYER = 470,
     ACTION_START = 500,
     ACTION_CLOSE,
@@ -964,6 +967,15 @@ public:
             case ACTION_TOGGLE_TOURNAMENT_RULES:
                 lobby->Rules.TournamentRules = !lobby->Rules.TournamentRules;
                 break;
+            case ACTION_TOGGLE_RIFT_LAST_HIT:
+                lobby->Rules.RiftLastHitGold = !lobby->Rules.RiftLastHitGold;
+                break;
+            case ACTION_TOGGLE_RIFT_DENYING:
+                lobby->Rules.RiftDenying = !lobby->Rules.RiftDenying;
+                break;
+            case ACTION_TOGGLE_RIFT_SHARED_XP:
+                lobby->Rules.RiftSharedExperience = !lobby->Rules.RiftSharedExperience;
+                break;
             case ACTION_CYCLE_WEATHER:
             {
                 uint8 next = uint8(lobby->Rules.Weather) + 1;
@@ -1119,7 +1131,8 @@ public:
         // rules - the gear swap on the way in, the gear back on the way out,
         // the consumable ban in between - reads this one flag, the same flag a
         // match made from the tournament queue pool carries.
-        bg->SetTournamentPool(lobby->Rules.TournamentRules && AreTournamentRulesOffered());
+        // Summoner's Rift has its own rules for everything a character brings in.
+        bg->SetTournamentPool(lobby->Rules.TournamentRules && AreTournamentRulesOffered() && lobby->SelectedType != BATTLEGROUND_SRF);
         bg->SetCustomGameBotOnlyPreparation(!hasHumanTeamParticipant);
         bg->SetCustomGamePendingCloneCount(uint32(lobby->CloneRequests.size()));
         // Custom matches enter directly and never use the public queue's arena
@@ -2521,10 +2534,23 @@ public:
             // that changes what the players themselves bring to the match
             // rather than how the map is scored. Hidden on a realm where it
             // would promise rules that nothing applies.
-            if (AreTournamentRulesOffered())
+            if (AreTournamentRulesOffered() && lobby->SelectedType != BATTLEGROUND_SRF)
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT,
                     std::string("Tournament rules: ") + (lobby->Rules.TournamentRules ? "On" : "Off"),
                     GOSSIP_SENDER_MAIN, ACTION_TOGGLE_TOURNAMENT_RULES);
+
+            if (lobby->SelectedType == BATTLEGROUND_SRF)
+            {
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    std::string("Last hitting: ") + (lobby->Rules.RiftLastHitGold ? "On (gold for the killing blow only)" : "Off (gold shared by players nearby)"),
+                    GOSSIP_SENDER_MAIN, ACTION_TOGGLE_RIFT_LAST_HIT);
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    std::string("Denying: ") + (lobby->Rules.RiftDenying ? "On (finish your own minions for no reward)" : "Off"),
+                    GOSSIP_SENDER_MAIN, ACTION_TOGGLE_RIFT_DENYING);
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    std::string("Shared experience: ") + (lobby->Rules.RiftSharedExperience ? "On (the team levels together)" : "Off (shared with players nearby)"),
+                    GOSSIP_SENDER_MAIN, ACTION_TOGGLE_RIFT_SHARED_XP);
+            }
 
             if (lobby->SelectedType == BATTLEGROUND_WS || lobby->SelectedType == BATTLEGROUND_TP)
             {
@@ -2712,6 +2738,9 @@ public:
                 case ACTION_TOGGLE_ENEMY_FLAG:
                 case ACTION_TOGGLE_ALLY_FLAG:
                 case ACTION_TOGGLE_TOURNAMENT_RULES:
+                case ACTION_TOGGLE_RIFT_LAST_HIT:
+                case ACTION_TOGGLE_RIFT_DENYING:
+                case ACTION_TOGGLE_RIFT_SHARED_XP:
                 case ACTION_CYCLE_WEATHER:
                     manager.ToggleRule(player, action);
                     ShowBattlegroundOptions(player);

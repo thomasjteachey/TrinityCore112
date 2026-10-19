@@ -257,6 +257,14 @@ struct BattlegroundCustomRules
     // it off.
     bool TournamentRules = true;
     BattlegroundCustomWeather Weather = BattlegroundCustomWeather::Normal;
+    // Summoner's Rift. Last hitting: minion gold goes only to the player who
+    // lands the killing blow (off: it is shared by the killing side's players
+    // nearby). Denying: a minion under half health turns neutral, so its own
+    // side can finish it and nobody is paid for it. Shared experience: the
+    // whole team earns every award together, as in Heroes of the Storm.
+    bool RiftLastHitGold = true;
+    bool RiftDenying = true;
+    bool RiftSharedExperience = false;
 };
 
 enum BattlegroundDesertionType

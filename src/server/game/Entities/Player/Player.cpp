@@ -394,6 +394,7 @@ namespace
 }
 #include "ArenaSpectator.h"
 #include "VioletHoldBoons.h"
+#include "RiftProgression.h"
 
 #include <array>
 
@@ -3611,11 +3612,17 @@ void Player::RecountUsedTalentsFromTalentMap()
 void Player::InitTalentForLevel()
 {
     uint8 level = GetLevel();
+    // A Summoner's Rift match plays from level 1 with the character's talents
+    // still learned (RiftProgression): resetting them here would wipe them and
+    // save the wipe. The match switches their effects off instead.
+    bool const riftKeepsTalents = RiftProgression::SuppressTalentReset(this);
     // talents base at level diff (talents = level - 9 but some can be used already)
     if (level < 10)
     {
         // Remove all talent points
-        if (m_usedTalentCount > 0)                           // Free any used talents
+        if (m_usedTalentCount > 0 && riftKeepsTalents)
+            SetFreeTalentPoints(0);
+        else if (m_usedTalentCount > 0)                      // Free any used talents
         {
             ResetTalents(true); /// @todo: Has to (collectively) be renamed to ResetTalents
             SetFreeTalentPoints(0);
@@ -3634,7 +3641,7 @@ void Player::InitTalentForLevel()
         // if used more that have then reset
         if (m_usedTalentCount > talentPointsForLevel)
         {
-            if (!GetSession()->HasPermission(rbac::RBAC_PERM_SKIP_CHECK_MORE_TALENTS_THAN_ALLOWED))
+            if (!riftKeepsTalents && !GetSession()->HasPermission(rbac::RBAC_PERM_SKIP_CHECK_MORE_TALENTS_THAN_ALLOWED))
                 ResetTalents(true);
             else
                 SetFreeTalentPoints(0);

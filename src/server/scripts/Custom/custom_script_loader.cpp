@@ -61,6 +61,7 @@ void AddSC_custom_recruit_resolve();
 void AddSC_GOMove_commandscript();
 void AddSC_GOEditor();
 void AddSC_rts_building();
+void AddSC_custom_rift_progression();
 void AddSC_custom_los_blocker();
 void AddSC_custom_player_collision();
 void AddSC_custom_global_collision();
@@ -127,6 +128,7 @@ void AddCustomScripts()
     AddSC_GOMove_commandscript();
     AddSC_GOEditor();
     AddSC_rts_building();
+    AddSC_custom_rift_progression();
     AddSC_violet_hold_boons();
     AddSC_blood_beneath_arena();
 }

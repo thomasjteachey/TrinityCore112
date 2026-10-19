@@ -10,6 +10,7 @@
 #include "MoveSpline.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "RiftProgression.h"
 #include "SpellDefines.h"
 #include "TemporarySummon.h"
 #include "WorldPacket.h"
@@ -168,6 +169,34 @@ float constexpr SRF_SHOT_ORIGIN_HEIGHT  = Yards(475.0f);
 float constexpr SRF_SHOT_SPEED          = Yards(1200.0f);
 float constexpr SRF_SHOT_HIT_DISTANCE   = Yards(75.0f);
 float constexpr SRF_SHOT_AIM_HEIGHT     = Yards(60.0f);
+// Caster minions: League's 550 range and 650-unit-a-second bolt, one every 1.6 s.
+float constexpr SRF_CASTER_RANGE        = Yards(550.0f);
+float constexpr SRF_CASTER_BOLT_SPEED   = Yards(650.0f);
+float constexpr SRF_CASTER_BOLT_HEIGHT  = Yards(55.0f);
+uint32 constexpr SRF_CASTER_ATTACK_TIME = 1600;
+// League's rewards (Season 3), in League gold and experience. Experience goes
+// to the enemy champions within 1600 units of a minion that dies, shared
+// between them.
+float constexpr SRF_XP_RANGE            = Yards(1600.0f);
+float constexpr SRF_XP_MELEE_MINION     = 58.88f;
+float constexpr SRF_XP_CASTER_MINION    = 29.44f;
+uint32 constexpr SRF_GOLD_MELEE_MINION  = 20;
+uint32 constexpr SRF_GOLD_CASTER_MINION = 15;
+uint32 constexpr SRF_GOLD_KILL          = 300;
+uint32 constexpr SRF_GOLD_STRUCTURE     = 150;     // to every player of the side that destroys it
+uint32 constexpr SRF_GOLD_PASSIVE       = 10;      // every SRF_PASSIVE_GOLD_TICK: League's ~1.9 a second
+uint32 constexpr SRF_PASSIVE_GOLD_TICK  = 5 * IN_MILLISECONDS;
+float constexpr SRF_XP_KILL_BASE        = 140.0f;
+float constexpr SRF_XP_KILL_PER_LEVEL   = 20.0f;   // per League level of the victim
+// Units follow the players' level: a level-60 minion would miss nobody and be
+// missed by everybody a level-1 match starts with. Minions also grow a little
+// with every wave, League's scaling over the course of a match.
+float constexpr SRF_MINION_GROWTH_PER_WAVE = 0.03f;
+uint32 constexpr SRF_STRUCTURE_LEVEL_TICK  = 30 * IN_MILLISECONDS;
+uint32 constexpr SRF_MAINTAIN_TICK         = 3 * IN_MILLISECONDS;
+// The denying rule: under this share of its health a minion turns neutral.
+float constexpr SRF_DENY_HEALTH_PCT     = 50.0f;
+uint32 constexpr SRF_FACTION_DENIABLE   = 7;       // "Creature": neutral, attackable by everyone
 float constexpr SRF_FOUNTAIN_HEAL_SHARE = 0.10f;
 float constexpr SRF_FOUNTAIN_BURN_SHARE = 0.30f;
 
@@ -180,6 +209,28 @@ uint32 constexpr SRF_SPLINE_POINTS      = 40;
 uint32 constexpr SRF_SPLINE_RELAUNCH    = 6;     // points before the end
 uint32 constexpr SRF_PATH_LOOKAHEAD     = 25;
 uint32 constexpr SRF_LANE_SPLINE_ID     = 1;
+// A wave walks as League's does, strung out rather than stacked: melee in front,
+// casters behind, three files across the lane, each minion leaving the barracks
+// a moment after the one before it.
+float constexpr SRF_WAVE_FILE_SPACING   = 2.5f;     // yards between files, across the lane
+float constexpr SRF_WAVE_RANK_SPACING   = 3.0f;     // yards between ranks, along it
+uint32 constexpr SRF_WAVE_START_STAGGER = 600;      // ms between departures
+
+// Its file's offset across the lane: -1, 0 or +1 files from the middle.
+float FileOffset(uint8 slot) { return (float(slot % 3) - 1.0f) * SRF_WAVE_FILE_SPACING; }
+float RankOffset(uint8 slot) { return float(slot / 3) * SRF_WAVE_RANK_SPACING; }
+
+// The lane point shifted sideways into a minion's file, square to the lane there.
+Position InFile(std::vector<Position> const& path, uint32 i, float offset)
+{
+    Position const& p = path[i];
+    if (offset == 0.0f || path.size() < 2)
+        return p;
+    Position const& a = path[std::min<uint32>(i, uint32(path.size()) - 2)];
+    Position const& b = path[std::min<uint32>(i, uint32(path.size()) - 2) + 1];
+    float const angle = a.GetAbsoluteAngle(&b) + float(M_PI) / 2.0f;
+    return Position(p.GetPositionX() + std::cos(angle) * offset, p.GetPositionY() + std::sin(angle) * offset, p.GetPositionZ());
+}
 
 TeamId SlotTeam(uint8 slot) { return slot < BG_SRF_STRUCTURES_PER_TEAM ? TEAM_ALLIANCE : TEAM_HORDE; }
 uint8 SlotIndex(uint8 slot) { return slot % BG_SRF_STRUCTURES_PER_TEAM; }
@@ -221,6 +272,10 @@ BattlegroundSRF::BattlegroundSRF()
     _shotTimer = 0;
     _fountainTimer = 0;
     _structureTimer = 0;
+    _passiveGoldTimer = 0;
+    _maintainTimer = 0;
+    _structureLevelTimer = 0;
+    _wavesSpawned = 0;
     _wavesStarted = false;
 }
 
@@ -235,6 +290,17 @@ void BattlegroundSRF::AddPlayer(Player* player)
         uint32 const scoreboardTeamMarker = (player->GetBGTeam() == HORDE) ? 1u : 0u;
         PlayerScores[player->GetGUID().GetCounter()] = new BattlegroundSRFScore(player->GetGUID(), scoreboardTeamMarker);
     }
+
+    // Level 1, a fixed purse, spells and talents to earn back; a player coming
+    // back to the match it left picks up where it was.
+    RiftProgression::Enter(player);
+}
+
+void BattlegroundSRF::RemovePlayer(Player* player, ObjectGuid /*guid*/, uint32 /*team*/)
+{
+    // Gone without a Player (logged out) is OnLogin's to restore.
+    if (player)
+        RiftProgression::Leave(player);
 }
 
 void BattlegroundSRF::Reset()
@@ -254,6 +320,10 @@ void BattlegroundSRF::Reset()
     _shotTimer = 0;
     _fountainTimer = 0;
     _structureTimer = 0;
+    _passiveGoldTimer = 0;
+    _maintainTimer = 0;
+    _structureLevelTimer = 0;
+    _wavesSpawned = 0;
     _wavesStarted = false;
 }
 
@@ -300,6 +370,7 @@ bool BattlegroundSRF::SpawnStructure(uint8 slot)
     }
     _structures[slot] = StructureState();
     _turrets[slot] = TurretState();
+    ApplyUnitLevel(GetBGCreature(slot, false), AverageMatchLevel(), 1.0f);
     return true;
 }
 
@@ -376,6 +447,8 @@ void BattlegroundSRF::PostUpdateImpl(uint32 diff)
         _fountainTimer = 0;
         UpdateFountains();
     }
+
+    UpdateProgression(diff);
 }
 
 // ---------------------------------------------------------------- structures
@@ -422,6 +495,8 @@ void BattlegroundSRF::OnStructureDestroyed(uint8 slot)
             RewardHonorToTeam(BG_SRF_HONOR_TURRET, TeamValue(destroyer));
             break;
     }
+    for (Player* player : TeamPlayers(destroyer))
+        RiftProgression::AddGold(player, SRF_GOLD_STRUCTURE);
 
     RefreshVulnerability();
 }
@@ -496,18 +571,25 @@ void BattlegroundSRF::SpawnWave()
             float const facing = gate.GetAbsoluteAngle(&path[1]);
             for (uint8 i = 0; i < BG_SRF_MELEE_PER_WAVE + BG_SRF_CASTERS_PER_WAVE; ++i)
             {
-                // a small block, melee in front, so the wave does not spawn stacked
-                float const ox = float(i % 3) - 1.0f, oy = float(i / 3);
-                Position const pos(gate.GetPositionX() + ox * 2.0f, gate.GetPositionY() + oy * 2.0f, gate.GetPositionZ() + 1.0f, facing);
+                // In its file across the lane and its rank behind the gate: melee
+                // (slots 0-2) in front, casters (3-5) behind.
+                float const back = facing + float(M_PI);
+                Position const filed = InFile(path, 0, FileOffset(i));
+                Position const pos(filed.GetPositionX() + std::cos(back) * RankOffset(i),
+                    filed.GetPositionY() + std::sin(back) * RankOffset(i), gate.GetPositionZ() + 1.0f, facing);
                 TempSummon* minion = nexus->SummonCreature(i < BG_SRF_MELEE_PER_WAVE ? melee : caster, pos,
                     TEMPSUMMON_CORPSE_TIMED_DESPAWN, 3s);
                 if (!minion)
                     continue;
                 minion->SetReactState(REACT_AGGRESSIVE);
+                ApplyUnitLevel(minion, AverageMatchLevel(), 1.0f + SRF_MINION_GROWTH_PER_WAVE * float(_wavesSpawned));
                 Minion m;
                 m.Guid = minion->GetGUID();
                 m.Team = team;
                 m.Lane = lane;
+                m.Caster = i >= BG_SRF_MELEE_PER_WAVE;
+                m.Slot = i;
+                m.StartDelay = uint32(i) * SRF_WAVE_START_STAGGER;
                 _minions.push_back(m);
                 spawned = true;
             }
@@ -515,7 +597,10 @@ void BattlegroundSRF::SpawnWave()
     }
 
     if (spawned)
+    {
+        ++_wavesSpawned;
         PSendMessageToAll(BG_SRF_STRING_MINIONS_SPAWNED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr);
+    }
 }
 
 Unit* BattlegroundSRF::FindMinionTarget(Creature* minion, TeamId team, float range) const
@@ -611,6 +696,7 @@ void BattlegroundSRF::UpdateMinions()
         Creature* creature = map->GetCreature(it->Guid);
         if (!creature || !creature->IsAlive())
         {
+            OnMinionDied(*it, creature);
             it = _minions.erase(it);
             continue;
         }
@@ -618,11 +704,20 @@ void BattlegroundSRF::UpdateMinions()
         Minion& m = *it;
         ++it;
 
+        // The denying rule: a minion close to death is fair game for its own side.
+        if (!m.Denied && GetCustomRules().RiftDenying && creature->GetHealthPct() < SRF_DENY_HEALTH_PCT)
+        {
+            m.Denied = true;
+            creature->SetFaction(SRF_FACTION_DENIABLE);
+        }
+
         // A minion never walks back after a fight: its home is wherever it is
         // standing, so leaving combat costs nothing and it carries on down the lane.
         if (creature->IsInCombat() && creature->GetVictim())
         {
             m.Walking = false;
+            if (m.Caster)
+                UpdateCasterAttack(creature, m, creature->GetVictim());
             continue;
         }
         if (!creature->IsInEvadeMode())
@@ -632,6 +727,13 @@ void BattlegroundSRF::UpdateMinions()
         {
             creature->AI()->AttackStart(target);
             m.Walking = false;
+            continue;
+        }
+
+        // Still waiting its turn to leave the barracks.
+        if (m.StartDelay)
+        {
+            m.StartDelay = m.StartDelay > BG_SRF_MINION_TICK ? m.StartDelay - BG_SRF_MINION_TICK : 0;
             continue;
         }
 
@@ -667,7 +769,7 @@ void BattlegroundSRF::UpdateMinions()
         points.push_back(creature->GetPosition());
         uint32 const end = std::min<uint32>(uint32(path.size()), m.PathIndex + 1 + SRF_SPLINE_POINTS);
         for (uint32 i = m.PathIndex + 1; i < end; ++i)
-            points.push_back(path[i]);
+            points.push_back(InFile(path, i, FileOffset(m.Slot)));
         creature->GetMotionMaster()->MoveSmoothPath(SRF_LANE_SPLINE_ID, points.data(), points.size(), false);
         m.Walking = true;
         m.SplineEnd = end - 1;
@@ -681,6 +783,157 @@ void BattlegroundSRF::DespawnMinions()
             if (Creature* creature = map->GetCreature(m.Guid))
                 creature->DespawnOrUnsummon();
     _minions.clear();
+}
+
+// --------------------------------------------------------------- progression
+
+std::vector<Player*> BattlegroundSRF::TeamPlayers(TeamId team) const
+{
+    std::vector<Player*> out;
+    for (auto const& [guid, bgPlayer] : GetPlayers())
+        if (bgPlayer.Team == TeamValue(team))
+            if (Player* player = ObjectAccessor::FindPlayer(guid))
+                if (player->GetMapId() == GetMapId())
+                    out.push_back(player);
+    return out;
+}
+
+std::vector<Player*> BattlegroundSRF::TeamPlayersNear(TeamId team, WorldObject const* where, float range) const
+{
+    std::vector<Player*> out;
+    for (Player* player : TeamPlayers(team))
+        if (player->IsAlive() && player->GetExactDist2d(where) <= range)
+            out.push_back(player);
+    return out;
+}
+
+// League shares experience between the champions near what died; with the
+// shared-experience rule the whole team earns all of it, as one.
+void BattlegroundSRF::AwardExperience(TeamId team, WorldObject const* where, float leagueXp)
+{
+    if (GetCustomRules().RiftSharedExperience)
+    {
+        for (Player* player : TeamPlayers(team))
+            RiftProgression::AddExperience(player, leagueXp);
+        return;
+    }
+    std::vector<Player*> const near = TeamPlayersNear(team, where, SRF_XP_RANGE);
+    for (Player* player : near)
+        RiftProgression::AddExperience(player, leagueXp / float(near.size()));
+}
+
+void BattlegroundSRF::AwardGold(TeamId team, WorldObject const* where, uint32 leagueGold)
+{
+    std::vector<Player*> const near = TeamPlayersNear(team, where, SRF_XP_RANGE);
+    if (near.empty())
+        return;
+    uint32 const share = std::max<uint32>(1, leagueGold / uint32(near.size()));
+    for (Player* player : near)
+        RiftProgression::AddGold(player, share);
+}
+
+void BattlegroundSRF::OnMinionDied(Minion const& minion, Creature const* corpse)
+{
+    if (!corpse || GetStatus() != STATUS_IN_PROGRESS)
+        return;
+    TeamId const enemy = OtherTeam(minion.Team);
+    // A denied minion is worth nothing to anybody.
+    if (minion.Denied && minion.Paid)
+        return;
+    AwardExperience(enemy, corpse, minion.Caster ? SRF_XP_CASTER_MINION : SRF_XP_MELEE_MINION);
+    if (!GetCustomRules().RiftLastHitGold && !minion.Paid)
+        AwardGold(enemy, corpse, minion.Caster ? SRF_GOLD_CASTER_MINION : SRF_GOLD_MELEE_MINION);
+}
+
+void BattlegroundSRF::HandleKillUnit(Creature* creature, Player* killer)
+{
+    if (!creature || !killer || GetStatus() != STATUS_IN_PROGRESS)
+        return;
+    auto const it = std::find_if(_minions.begin(), _minions.end(), [creature](Minion const& m) { return m.Guid == creature->GetGUID(); });
+    if (it == _minions.end())
+        return;
+    // Marked paid either way: the last hit's gold is the killer's, or - on its
+    // own side - a deny, worth nothing at all.
+    it->Paid = true;
+    if (GetTeamIndexByTeamId(GetPlayerTeam(killer->GetGUID())) == it->Team)
+    {
+        it->Denied = true;
+        return;
+    }
+    if (GetCustomRules().RiftLastHitGold)
+        RiftProgression::AddGold(killer, it->Caster ? SRF_GOLD_CASTER_MINION : SRF_GOLD_MELEE_MINION);
+}
+
+void BattlegroundSRF::HandleKillPlayer(Player* victim, Player* killer)
+{
+    Battleground::HandleKillPlayer(victim, killer);
+    if (!victim || !killer || killer == victim || GetStatus() != STATUS_IN_PROGRESS)
+        return;
+    TeamId const killerTeam = GetTeamIndexByTeamId(GetPlayerTeam(killer->GetGUID()));
+    if (killerTeam == GetTeamIndexByTeamId(GetPlayerTeam(victim->GetGUID())))
+        return;
+    RiftProgression::AddGold(killer, SRF_GOLD_KILL);
+    AwardExperience(killerTeam, victim, SRF_XP_KILL_BASE + SRF_XP_KILL_PER_LEVEL * float(RiftProgression::GetLeagueLevel(victim)));
+}
+
+uint8 BattlegroundSRF::AverageMatchLevel() const
+{
+    uint32 total = 0, count = 0;
+    for (TeamId team : { TEAM_ALLIANCE, TEAM_HORDE })
+        for (Player* player : TeamPlayers(team))
+        {
+            total += player->GetLevel();
+            ++count;
+        }
+    return count ? uint8(std::clamp<uint32>((total + count / 2) / count, 1, DEFAULT_MAX_LEVEL)) : 1;
+}
+
+// A unit takes the players' level (and so their hit and miss odds) and keeps
+// the share of its health it had.
+void BattlegroundSRF::ApplyUnitLevel(Creature* creature, uint8 level, float healthScale)
+{
+    if (!creature || !creature->IsAlive())
+        return;
+    float const pct = creature->GetHealthPct();
+    creature->SetLevel(level);
+    creature->UpdateLevelDependantStats();
+    if (healthScale != 1.0f)
+        creature->SetMaxHealth(uint32(float(creature->GetMaxHealth()) * healthScale));
+    creature->SetHealth(std::max<uint32>(1, uint32(float(creature->GetMaxHealth()) * pct / 100.0f)));
+}
+
+void BattlegroundSRF::UpdateProgression(uint32 diff)
+{
+    _passiveGoldTimer += diff;
+    if (_passiveGoldTimer >= SRF_PASSIVE_GOLD_TICK)
+    {
+        _passiveGoldTimer -= SRF_PASSIVE_GOLD_TICK;
+        if (_wavesSpawned)
+            for (TeamId team : { TEAM_ALLIANCE, TEAM_HORDE })
+                for (Player* player : TeamPlayers(team))
+                    RiftProgression::AddGold(player, SRF_GOLD_PASSIVE);
+    }
+
+    _maintainTimer += diff;
+    if (_maintainTimer >= SRF_MAINTAIN_TICK)
+    {
+        _maintainTimer = 0;
+        for (TeamId team : { TEAM_ALLIANCE, TEAM_HORDE })
+            for (Player* player : TeamPlayers(team))
+                RiftProgression::Maintain(player);
+    }
+
+    _structureLevelTimer += diff;
+    if (_structureLevelTimer >= SRF_STRUCTURE_LEVEL_TICK)
+    {
+        _structureLevelTimer = 0;
+        uint8 const level = AverageMatchLevel();
+        for (uint8 slot = 0; slot < _structures.size(); ++slot)
+            if (!_structures[slot].Destroyed)
+                if (Creature* creature = GetBGCreature(slot, false))
+                    if (creature->GetLevel() != level)
+                        ApplyUnitLevel(creature, level, 1.0f);
+    }
 }
 
 // ------------------------------------------------------------------- turrets
@@ -751,32 +1004,61 @@ void BattlegroundSRF::UpdateTurrets()
             share = std::min(SRF_TURRET_PLAYER_SHARE + SRF_TURRET_PLAYER_RAMP * ts.ConsecutiveHits, SRF_TURRET_PLAYER_MAX);
             ++ts.ConsecutiveHits;
         }
-        FireShot(slot, turret, target, std::max<int32>(1, int32(target->GetMaxHealth() * share)));
+        bool const order = team == TEAM_ALLIANCE;
+        FireProjectile(turret, target, order ? BG_SRF_ENTRY_ORDER_SHOT : BG_SRF_ENTRY_CHAOS_SHOT,
+            order ? BG_SRF_ENTRY_ORDER_SHOT_IMPACT : BG_SRF_ENTRY_CHAOS_SHOT_IMPACT,
+            SRF_SHOT_ORIGIN_HEIGHT, SRF_SHOT_SPEED, std::max<int32>(1, int32(target->GetMaxHealth() * share)));
     }
 }
 
-void BattlegroundSRF::FireShot(uint8 slot, Creature* turret, Unit* target, int32 damage)
+void BattlegroundSRF::FireProjectile(Unit* source, Unit* target, uint32 orbEntry, uint32 impactEntry,
+    float originHeight, float speed, int32 damage)
 {
-    bool const order = SlotTeam(slot) == TEAM_ALLIANCE;
-    Position const from(turret->GetPositionX(), turret->GetPositionY(), turret->GetPositionZ() + SRF_SHOT_ORIGIN_HEIGHT);
-    TempSummon* orb = turret->SummonCreature(order ? BG_SRF_ENTRY_ORDER_SHOT : BG_SRF_ENTRY_CHAOS_SHOT, from,
-        TEMPSUMMON_TIMED_DESPAWN, Milliseconds(BG_SRF_SHOT_LIFETIME));
+    Position const from(source->GetPositionX(), source->GetPositionY(), source->GetPositionZ() + originHeight);
+    TempSummon* orb = source->SummonCreature(orbEntry, from, TEMPSUMMON_TIMED_DESPAWN, Milliseconds(BG_SRF_SHOT_LIFETIME));
     if (!orb)
     {
         // No orb, no flight: the shot still lands.
-        turret->CastSpell(target, BG_SRF_SPELL_TURRET_SHOT, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(damage));
+        source->CastSpell(target, BG_SRF_SPELL_TURRET_SHOT, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(damage));
         return;
     }
     orb->SetDisableGravity(true);
-    orb->SetSpeedRate(MOVE_RUN, SRF_SHOT_SPEED / baseMoveSpeed[MOVE_RUN]);
+    orb->SetSpeedRate(MOVE_RUN, speed / baseMoveSpeed[MOVE_RUN]);
     orb->GetMotionMaster()->MovePoint(1, target->GetPositionX(), target->GetPositionY(), target->GetPositionZ() + SRF_SHOT_AIM_HEIGHT, false);
 
     Shot shot;
     shot.Orb = orb->GetGUID();
     shot.Target = target->GetGUID();
-    shot.TurretSlot = slot;
+    shot.Source = source->GetGUID();
+    shot.ImpactEntry = impactEntry;
     shot.Damage = damage;
     _shots.push_back(shot);
+}
+
+// A caster minion fights at range: it holds at League's 550 units and sends a
+// bolt every 1.6 seconds, carrying its own melee damage, instead of walking up.
+void BattlegroundSRF::UpdateCasterAttack(Creature* caster, Minion& minion, Unit* victim)
+{
+    if (caster->GetExactDist2d(victim) > SRF_CASTER_RANGE)
+    {
+        if (caster->GetMotionMaster()->GetCurrentMovementGeneratorType() != CHASE_MOTION_TYPE)
+            caster->GetMotionMaster()->MoveChase(victim, SRF_CASTER_RANGE * 0.8f);
+        return;
+    }
+    if (caster->isMoving())
+        caster->StopMoving();
+    caster->SetFacingToObject(victim);
+
+    minion.AttackTimer = minion.AttackTimer > BG_SRF_MINION_TICK ? minion.AttackTimer - BG_SRF_MINION_TICK : 0;
+    if (minion.AttackTimer)
+        return;
+    minion.AttackTimer = SRF_CASTER_ATTACK_TIME;
+
+    float const low = caster->GetWeaponDamageRange(BASE_ATTACK, MINDAMAGE);
+    float const high = caster->GetWeaponDamageRange(BASE_ATTACK, MAXDAMAGE);
+    bool const order = minion.Team == TEAM_ALLIANCE;
+    FireProjectile(caster, victim, order ? BG_SRF_ENTRY_ORDER_CASTER_BOLT : BG_SRF_ENTRY_CHAOS_CASTER_BOLT, 0,
+        SRF_CASTER_BOLT_HEIGHT, SRF_CASTER_BOLT_SPEED, std::max<int32>(1, int32((low + high) / 2.0f)));
 }
 
 // Shots home on their target and land on arrival: the damage, from the turret,
@@ -809,12 +1091,12 @@ void BattlegroundSRF::UpdateShots(uint32 elapsed)
             continue;
         }
 
-        bool const order = SlotTeam(shot.TurretSlot) == TEAM_ALLIANCE;
-        if (Creature* turret = GetBGCreature(shot.TurretSlot, false))
-            if (turret->IsAlive())
-                turret->CastSpell(target, BG_SRF_SPELL_TURRET_SHOT, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(shot.Damage));
-        orb->SummonCreature(order ? BG_SRF_ENTRY_ORDER_SHOT_IMPACT : BG_SRF_ENTRY_CHAOS_SHOT_IMPACT, aim,
-            TEMPSUMMON_TIMED_DESPAWN, 450ms);
+        // Landed: the damage comes from whoever fired it, if it is still standing.
+        if (Unit* source = ObjectAccessor::GetUnit(*orb, shot.Source))
+            if (source->IsAlive())
+                source->CastSpell(target, BG_SRF_SPELL_TURRET_SHOT, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(shot.Damage));
+        if (shot.ImpactEntry)
+            orb->SummonCreature(shot.ImpactEntry, aim, TEMPSUMMON_TIMED_DESPAWN, 450ms);
         orb->DespawnOrUnsummon();
         it = _shots.erase(it);
     }

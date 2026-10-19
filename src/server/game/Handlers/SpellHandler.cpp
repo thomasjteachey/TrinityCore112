@@ -41,6 +41,7 @@
 #include "TotemPackets.h"
 #include "World.h"
 #include "WorldPacket.h"
+#include "RiftProgression.h"
 #include <cstddef>
 
 void WorldSession::HandleClientCastFlags(WorldPacket& recvPacket, uint8 castFlags, SpellCastTargets& targets)
@@ -431,6 +432,20 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
                 return;
             }
         }
+    }
+
+    // Summoner's Rift: a spell the match has not given back yet is refused, and a
+    // higher rank than the one it has casts that one instead.
+    if (RiftProgression::IsInMatch(_player))
+    {
+        SpellInfo const* riftRank = RiftProgression::AdjustCast(_player, spellInfo);
+        if (!riftRank)
+        {
+            Spell::SendCastResult(_player, spellInfo, castCount, SPELL_FAILED_SPELL_UNAVAILABLE);
+            recvPacket.rfinish();
+            return;
+        }
+        spellInfo = riftRank;
     }
 
     // auto-selection buff level base at target level (in spellInfo)

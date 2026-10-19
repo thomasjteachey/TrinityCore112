@@ -61,6 +61,7 @@
 #include "SystemPackets.h"
 #include "QueryHolder.h"
 #include "VioletHoldBoons.h"
+#include "RiftProgression.h"
 #include "World.h"
 #include <algorithm>
 #include <vector>
@@ -1318,6 +1319,11 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     // strip, so it happens here. After m_playerLoading is cleared, so the
     // level rollback's talent packet actually goes out.
     VioletHoldBoons::OnLogin(pCurrChar);
+
+    // A Summoner's Rift match left without Leave() - a crash, a restart, a
+    // logout timed out of the match - hands back the real level, experience
+    // and money here.
+    RiftProgression::OnLogin(pCurrChar);
 
     sScriptMgr->OnPlayerLogin(pCurrChar, firstLogin);
 

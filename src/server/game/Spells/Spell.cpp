@@ -72,6 +72,7 @@
 #include "Util.h"
 #include "Vehicle.h"
 #include "VioletHoldBoons.h"
+#include "RiftProgression.h"
 #include "VMapFactory.h"
 #include "VMapManager2.h"
 #include "World.h"
@@ -5770,6 +5771,13 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
     if (Player* playerCaster = m_caster->ToPlayer())
         if (playerCaster->IsInCustomGameLobby() && m_spellInfo->WouldDropBattlegroundFlag())
             return SPELL_FAILED_NOT_HERE;
+
+    // Summoner's Rift: spells and talents come back as the match levels up. The
+    // cast opcode already refuses them; this covers every other way to cast.
+    if (!IsTriggered())
+        if (Player* playerCaster = m_caster->ToPlayer())
+            if (RiftProgression::IsSpellLocked(playerCaster, m_spellInfo))
+                return SPELL_FAILED_SPELL_UNAVAILABLE;
 
     // check death state
     if (m_caster->ToUnit() && !m_caster->ToUnit()->IsAlive() && !m_spellInfo->IsPassive() && !(m_spellInfo->HasAttribute(SPELL_ATTR0_CASTABLE_WHILE_DEAD) || (IsTriggered() && !m_triggeredByAuraSpell)))
