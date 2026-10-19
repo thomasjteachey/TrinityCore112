@@ -52,6 +52,18 @@ namespace
 
     uint32 constexpr ITEM_HEARTHSTONE = 6948;
 
+    // The fountain shops' League items (import/rift/scripts/rift_shop.py): bought
+    // for the match, gone with it.
+    uint32 constexpr SHOP_ITEM_FIRST = 991000;
+    uint32 constexpr SHOP_ITEM_LAST = 991099;
+
+    void TakeShopItems(Player* player)
+    {
+        for (uint32 entry = SHOP_ITEM_FIRST; entry <= SHOP_ITEM_LAST; ++entry)
+            if (uint32 const count = player->GetItemCount(entry, true))
+                player->DestroyItemCount(entry, count, true, false);
+    }
+
     // League's experience curve (Season 3): from level n to n+1 takes 180 + 100n,
     // and 18 is the cap. The character's real level is reached at League 18.
     uint8 constexpr LEAGUE_MAX_LEVEL = 18;
@@ -436,6 +448,7 @@ void Leave(Player* player)
         Stashed.erase(player->GetGUID().GetCounter());
     }
 
+    TakeShopItems(player);
     player->GiveLevel(state.RealLevel, true);
     player->SetUInt32Value(PLAYER_XP, state.RealXp);
     RestoreTalents(player, state.RealTalents);
@@ -472,6 +485,7 @@ void OnLogin(Player* player)
     // level first, so the character can wear it again.
     Field* fields = row->Fetch();
     uint8 const realLevel = fields[0].GetUInt8();
+    TakeShopItems(player);
     player->GiveLevel(realLevel, true);
     player->SetUInt32Value(PLAYER_XP, fields[1].GetUInt32());
     player->SetMoney(fields[2].GetUInt32());
