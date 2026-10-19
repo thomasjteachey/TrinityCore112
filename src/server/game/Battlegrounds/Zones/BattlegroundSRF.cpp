@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <limits>
 
 namespace
 {
@@ -269,6 +270,8 @@ float constexpr SRF_MINION_AGGRO_RANGE  = Yards(400.0f);
 // With no enemy unit near, a minion takes on an enemy structure in a turret's
 // range of it: a wave walking down a lane stops at the first turret standing.
 float constexpr SRF_MINION_STRUCTURE_RANGE = Yards(750.0f);
+// Further than this from its target, a minion lets it go and takes the closest again.
+float constexpr SRF_MINION_LEASH        = Yards(1100.0f);
 uint32 constexpr SRF_REPORT_TICK        = 30 * IN_MILLISECONDS;
 float constexpr SRF_FOUNTAIN_HEAL_RANGE = Yards(600.0f);
 float constexpr SRF_FOUNTAIN_BURN_RANGE = Yards(700.0f);
@@ -751,15 +754,18 @@ void BattlegroundSRF::SpawnWave()
 
 Unit* BattlegroundSRF::FindMinionTarget(Creature* minion, TeamId team, float range, ObjectGuid ignore) const
 {
+    // League's rule: the closest enemy, whatever it is - minion, champion or
+    // structure - measured edge to edge. A structure is in reach from further
+    // off (a wave walking up to a turret stops at it).
     Map* map = minion->GetMap();
     Unit* best = nullptr;
-    float bestDist = range;
-    auto consider = [&](Unit* unit)
+    float bestDist = std::numeric_limits<float>::max();
+    auto consider = [&](Unit* unit, float reach)
     {
         if (!unit || !unit->IsAlive() || unit->GetGUID() == ignore || !minion->IsValidAttackTarget(unit))
             return;
         float const dist = minion->GetExactDist2d(unit) - unit->GetCombatReach();
-        if (dist < bestDist)
+        if (dist <= reach && dist < bestDist)
         {
             best = unit;
             bestDist = dist;
@@ -768,24 +774,21 @@ Unit* BattlegroundSRF::FindMinionTarget(Creature* minion, TeamId team, float ran
 
     for (Minion const& other : _minions)
         if (other.Team != team)
-            consider(map->GetCreature(other.Guid));
+            consider(map->GetCreature(other.Guid), range);
 
     TeamId const enemy = OtherTeam(team);
     for (auto const& [guid, bgPlayer] : GetPlayers())
         if (bgPlayer.Team == TeamValue(enemy))
             if (Player* player = ObjectAccessor::FindPlayer(guid))
                 if (player->GetMap() == map)
-                    consider(player);
-    if (best)
-        return best;
+                    consider(player, range);
 
-    // Nothing to fight: the enemy structure the wave has walked up to.
-    bestDist = std::max(range, SRF_MINION_STRUCTURE_RANGE);
+    float const structureReach = std::max(range, SRF_MINION_STRUCTURE_RANGE);
     for (uint8 i = 0; i < BG_SRF_STRUCTURES_PER_TEAM; ++i)
     {
         uint8 const slot = SlotOf(enemy, i);
         if (_structures[slot].Vulnerable && !_structures[slot].Destroyed)
-            consider(map->GetCreature(BgCreatures[slot]));
+            consider(map->GetCreature(BgCreatures[slot]), structureReach);
     }
     return best;
 }
@@ -886,19 +889,25 @@ void BattlegroundSRF::UpdateMinions()
 
         // A minion never walks back after a fight: its home is wherever it is
         // standing, so leaving combat costs nothing and it carries on down the lane.
-        if (creature->IsInCombat() && creature->GetVictim())
+        // A minion keeps its target until it dies or gets away - no threat,
+        // nothing that hits it pulls it off.
+        if (Unit* victim = creature->GetVictim())
         {
-            m.Walking = false;
-            if (m.Caster)
-                UpdateCasterAttack(creature, m, creature->GetVictim());
-            continue;
+            if (creature->GetExactDist2d(victim) - victim->GetCombatReach() <= SRF_MINION_LEASH)
+            {
+                m.Walking = false;
+                if (m.Caster)
+                    UpdateCasterAttack(creature, m, victim);
+                continue;
+            }
+            creature->AI()->SetGUID(ObjectGuid::Empty, 0);
         }
         if (!creature->IsInEvadeMode())
             creature->SetHomePosition(creature->GetPosition());
 
         if (Unit* target = FindMinionTarget(creature, m.Team, SRF_MINION_AGGRO_RANGE, m.Ignore))
         {
-            creature->AI()->AttackStart(target);
+            creature->AI()->SetGUID(target->GetGUID(), m.Caster ? 1 : 0);
             m.Target = target->GetGUID();
             m.Walking = false;
             continue;

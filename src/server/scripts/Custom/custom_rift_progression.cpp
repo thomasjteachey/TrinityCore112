@@ -26,6 +26,10 @@
 // A minion that runs out of enemies stops where it stands instead, and
 // BattlegroundSRF picks its next target or walks it on down its lane.
 //
+// And no threat, League's way: a minion fights the target the battleground
+// names (SetGUID) - the closest enemy - and nothing else moves it. Being hit,
+// seeing someone, or whoever did the most damage play no part.
+//
 // And League's recall: on Summoner's Rift the Hearthstone (and a shaman's Astral
 // Recall) takes its caster to its own fountain instead of home - the same cast,
 // broken by damage the same way - and is ready again at once.
@@ -35,6 +39,7 @@
 #include "Creature.h"
 #include "CreatureAI.h"
 #include "MotionMaster.h"
+#include "ObjectAccessor.h"
 #include "DBCStores.h"
 #include "Player.h"
 #include "RiftProgression.h"
@@ -53,24 +58,61 @@ namespace
     }
 }
 
+// SetGUID id: a caster keeps its own distance (BattlegroundSRF moves it).
+int32 constexpr RIFT_MINION_TARGET_MELEE = 0;
+int32 constexpr RIFT_MINION_TARGET_RANGED = 1;
+
 struct npc_rift_minion : public CreatureAI
 {
     explicit npc_rift_minion(Creature* creature) : CreatureAI(creature) { }
 
+    // Only the battleground picks a target.
+    void AttackStart(Unit* /*who*/) override { }
+    void MoveInLineOfSight(Unit* /*who*/) override { }
+
+    void SetGUID(ObjectGuid const& guid, int32 id) override
+    {
+        _target = guid;
+        Unit* victim = guid.IsEmpty() ? nullptr : ObjectAccessor::GetUnit(*me, guid);
+        if (!victim)
+        {
+            me->AttackStop();
+            return;
+        }
+        if (me->GetVictim() == victim)
+            return;
+        me->Attack(victim, true);
+        if (id == RIFT_MINION_TARGET_MELEE)
+            me->GetMotionMaster()->MoveChase(victim);
+    }
+
     void UpdateAI(uint32 /*diff*/) override
     {
-        if (!UpdateVictim())
+        if (_target.IsEmpty())
             return;
+        Unit* victim = ObjectAccessor::GetUnit(*me, _target);
+        if (!victim || !victim->IsAlive() || !me->IsValidAttackTarget(victim))
+        {
+            _target.Clear();
+            me->AttackStop();
+            return;
+        }
+        if (me->GetVictim() != victim)
+            me->Attack(victim, true);
         DoMeleeAttackIfReady();
     }
 
     void EnterEvadeMode(EvadeReason /*why*/) override
     {
+        _target.Clear();
         me->CombatStop(true);
         me->SetTarget(ObjectGuid::Empty);
         me->GetMotionMaster()->Clear();
         me->StopMoving();
     }
+
+private:
+    ObjectGuid _target;
 };
 
 // 8690 Hearthstone, 556 Astral Recall
