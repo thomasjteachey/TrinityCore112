@@ -78,7 +78,9 @@
 #include "Item.h"
 #include "ItemTemplate.h"
 #include "Log.h"
+#include "MapManager.h"
 #include "Miscellaneous/AddonRequestRoutes.h"
+#include "ObjectMgr.h"
 #include "Miscellaneous/Surnames.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
@@ -97,6 +99,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -201,16 +204,40 @@ namespace
 
     // --------------------------------------------------------------- who is on a board
 
-    // Contested exactly as Blizzard drew it: a top-level zone on the two old
-    // continents that AreaTable gives to neither faction. On this realm every
-    // faction's home zones read Alliance, so this is Stranglethorn, Tanaris, the
-    // Plaguelands and the rest - and never a starter zone or a capital.
+    // Zones a board stands in. Read from the spawns at startup, and added to by
+    // any board clicked since - one placed by hand while the realm runs. Written
+    // from map threads (a click is), read from the world thread.
+    std::mutex s_boardZonesLock;
+    std::unordered_set<uint32> s_boardZones;
+
+    void AddBoardZone(uint32 zoneId)
+    {
+        if (!zoneId)
+            return;
+        std::lock_guard<std::mutex> guard(s_boardZonesLock);
+        s_boardZones.insert(zoneId);
+    }
+
+    bool HasABoard(uint32 zoneId)
+    {
+        std::lock_guard<std::mutex> guard(s_boardZonesLock);
+        return s_boardZones.count(zoneId) != 0;
+    }
+
+    // Contested as Blizzard drew it: a top-level zone on the two old continents
+    // that AreaTable gives to neither faction. On this realm every faction's home
+    // zones read Alliance, so this is Stranglethorn, Tanaris, the Plaguelands and
+    // the rest - never a starter zone or a capital. A zone a board was put up in
+    // counts too, whatever AreaTable says of it: a board there is the owner
+    // saying it is hunting ground, and one that lists nobody reads as broken.
     bool IsContestedZone(uint32 zoneId)
     {
         AreaTableEntry const* zone = sAreaTableStore.LookupEntry(zoneId);
-        return zone && !zone->ParentAreaID && zone->FactionGroupMask == AREATEAM_NONE &&
-            (zone->ContinentID == 0 || zone->ContinentID == 1) &&
-            !(zone->Flags & (AREA_FLAG_CAPITAL | AREA_FLAG_SANCTUARY));
+        if (!zone || zone->ParentAreaID || (zone->Flags & (AREA_FLAG_CAPITAL | AREA_FLAG_SANCTUARY)))
+            return false;
+        if (HasABoard(zoneId))
+            return true;
+        return zone->FactionGroupMask == AREATEAM_NONE && (zone->ContinentID == 0 || zone->ContinentID == 1);
     }
 
     // The world fleet, alive and standing in a contested zone. A dead bot has
@@ -596,6 +623,13 @@ public:
     {
         LoadBountyBoardConfig();
 
+        // The zone each board stands in, worked out the way a player's own zone
+        // is - the spawn row's zoneId is 0 for a board placed in game.
+        for (auto const& [spawnId, data] : sObjectMgr->GetAllGameObjectData())
+            if (data.id == s_boardEntry)
+                AddBoardZone(sMapMgr->GetZoneId(data.phaseMask, data.mapId, data.spawnPoint));
+        TC_LOG_INFO("server.loading", "Bounty boards: boards stand in {} zones.", s_boardZones.size());
+
         s_killTableExists = bool(CharacterDatabase.Query(
             "SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'character_player_kills'"));
         if (!s_killTableExists)
@@ -668,6 +702,7 @@ public:
         bool OnGossipHello(Player* player) override
         {
             ClearGossipMenuFor(player);
+            AddBoardZone(me->GetZoneId());
             if (s_enabled)
             {
                 SendTagged(player, "BBOP", std::to_string(me->GetZoneId()));
