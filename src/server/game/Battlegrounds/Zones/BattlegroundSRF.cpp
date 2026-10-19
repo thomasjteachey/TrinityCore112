@@ -1,4 +1,5 @@
 #include "BattlegroundSRF.h"
+#include "BattlegroundSRFBrush.h"
 
 #include "BattlegroundMgr.h"
 #include "Creature.h"
@@ -274,6 +275,41 @@ float constexpr SRF_MINION_STRUCTURE_RANGE = Yards(750.0f);
 float constexpr SRF_MINION_LEASH        = Yards(1100.0f);
 uint32 constexpr SRF_REPORT_TICK        = 30 * IN_MILLISECONDS;
 float constexpr SRF_FOUNTAIN_HEAL_RANGE = Yards(600.0f);
+// League's brush (BattlegroundSRFBrush.h): attacking from it reveals for a moment.
+uint32 constexpr SRF_BRUSH_TICK         = 250;
+uint32 constexpr SRF_BRUSH_REVEAL       = 1500;
+
+// The brush patch at a world position, 0 for none.
+uint8 BrushPatchAt(Position const& pos)
+{
+    float const lx = SRF_LEAGUE_CENTRE - pos.GetPositionY() / SRF_YARDS_PER_UNIT;
+    float const lz = SRF_LEAGUE_CENTRE + pos.GetPositionX() / SRF_YARDS_PER_UNIT;
+    int32 const ix = int32(std::floor((lx - SRF_BRUSH_MIN_X) / SRF_BRUSH_CELL));
+    int32 const iz = int32(std::floor((lz - SRF_BRUSH_MIN_Z) / SRF_BRUSH_CELL));
+    if (ix < 0 || iz < 0 || ix >= int32(SRF_BRUSH_WIDTH) || iz >= int32(SRF_BRUSH_DEPTH))
+        return 0;
+    uint32 const key = uint32(iz) * SRF_BRUSH_WIDTH + uint32(ix);
+    auto const itr = std::lower_bound(std::begin(SRF_BRUSH), std::end(SRF_BRUSH), key,
+        [](SrfBrushCell const& cell, uint32 k) { return cell.key < k; });
+    return itr != std::end(SRF_BRUSH) && itr->key == key ? itr->patch : 0;
+}
+
+// A Rift creature's side, from its faction (a deniable minion's, from its entry).
+// -1: neither side's (a jungle monster).
+int32 CreatureSide(Creature const* creature)
+{
+    switch (creature->GetFaction())
+    {
+        case 1732: return TEAM_ALLIANCE;
+        case 1735: return TEAM_HORDE;
+        default: break;
+    }
+    uint32 const entry = creature->GetEntry();
+    if (entry >= BG_SRF_ENTRY_ORDER_MELEE && entry <= BG_SRF_ENTRY_CHAOS_CASTER)
+        return entry <= BG_SRF_ENTRY_ORDER_CASTER ? TEAM_ALLIANCE : TEAM_HORDE;
+    return -1;
+}
+
 // The base: the fountain and the shop beside it.
 float constexpr SRF_BASE_RANGE          = Yards(1000.0f);
 // The shops: League's orderShop01 / chaosShop01 stand outside the walkable area
@@ -444,8 +480,9 @@ void BattlegroundSRF::AddPlayer(Player* player)
     RiftProgression::Enter(player);
 }
 
-void BattlegroundSRF::RemovePlayer(Player* player, ObjectGuid /*guid*/, uint32 /*team*/)
+void BattlegroundSRF::RemovePlayer(Player* player, ObjectGuid guid, uint32 /*team*/)
 {
+    _brush.erase(guid);
     // Gone without a Player (logged out) is OnLogin's to restore.
     if (player)
         RiftProgression::Leave(player);
@@ -640,6 +677,65 @@ void BattlegroundSRF::PostUpdateImpl(uint32 diff)
 
     UpdateProgression(diff);
     Report(diff);
+
+    _brushTimer += diff;
+    if (_brushTimer >= SRF_BRUSH_TICK)
+    {
+        UpdateBrush(_brushTimer);
+        _brushTimer = 0;
+    }
+}
+
+// Who stands in which brush patch, and whether that hides them. A change is
+// pushed to everyone at once (UpdateObjectVisibility both ways), so a champion
+// stepping into a bush vanishes from the enemies outside it - and an enemy
+// stepping into the same bush sees it again.
+void BattlegroundSRF::UpdateBrush(uint32 elapsed)
+{
+    for (auto const& [guid, bgPlayer] : GetPlayers())
+    {
+        Player* player = ObjectAccessor::FindPlayer(guid);
+        if (!player || player->GetMapId() != GetMapId())
+        {
+            _brush.erase(guid);
+            continue;
+        }
+        BrushState& st = _brush[guid];
+        uint8 const patch = player->IsAlive() ? BrushPatchAt(player->GetPosition()) : 0;
+        if (patch && AttackOf(player))
+            st.RevealMs = SRF_BRUSH_REVEAL;
+        else
+            st.RevealMs = st.RevealMs > elapsed ? st.RevealMs - elapsed : 0;
+        bool const hidden = patch && !st.RevealMs;
+        if (patch != st.Patch || hidden != st.Hidden)
+        {
+            st.Patch = patch;
+            st.Hidden = hidden;
+            player->UpdateObjectVisibility();
+        }
+    }
+}
+
+bool BattlegroundSRF::HidesFrom(Player const* target, WorldObject const* seer) const
+{
+    auto const itr = _brush.find(target->GetGUID());
+    if (itr == _brush.end() || !itr->second.Hidden)
+        return false;
+    uint32 const targetTeam = GetPlayerTeam(target->GetGUID());
+    if (Player const* player = seer->ToPlayer())
+    {
+        if (player->IsGameMaster() || GetPlayerTeam(player->GetGUID()) == targetTeam)
+            return false;
+        auto const seen = _brush.find(player->GetGUID());
+        return seen == _brush.end() || seen->second.Patch != itr->second.Patch;
+    }
+    if (Creature const* creature = seer->ToCreature())
+    {
+        // the enemy side's minions, turrets and their eyes; never a jungle monster
+        int32 const side = CreatureSide(creature);
+        return side >= 0 && TeamValue(TeamId(side)) != targetTeam;
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------- structures

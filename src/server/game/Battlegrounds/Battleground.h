@@ -959,6 +959,9 @@ class TC_GAME_API Battleground
         // A battleground with bounds sends anyone who falls out of the world to
         // its safe point; one without has nowhere to put them.
         virtual bool HandlePlayerUnderMap(Player* player);
+        // WorldObject::CanSeeOrDetect: true when this battleground hides `target`
+        // from `seer` (Summoner's Rift brush). Cheap and side-effect free.
+        virtual bool HidesFrom(Player const* /*target*/, WorldObject const* /*seer*/) const { return false; }
 
         // since arenas can be AvA or Hvh, we have to get the "temporary" team of a player
         uint32 GetPlayerTeam(ObjectGuid guid) const;

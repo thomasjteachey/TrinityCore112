@@ -44,6 +44,7 @@
 #include "Object.h"
 
 #include <array>
+#include <unordered_map>
 #include <vector>
 
 enum BG_SRF_Graveyards
@@ -203,6 +204,10 @@ public:
     // At its own base - the fountain and its shop - the one place a character
     // spends skill picks and talent points (RiftProgression).
     bool IsAtBase(Player const* player) const;
+
+    // League's brush: a champion in a brush patch is unseen by every enemy - player,
+    // minion, turret - outside that patch, until it attacks.
+    bool HidesFrom(Player const* target, WorldObject const* seer) const override;
     void EndBattleground(uint32 winner) override;
 
 private:
@@ -308,6 +313,16 @@ private:
     uint32 _boltsRefused;
     uint32 _lastRefusal;
     uint32 _matchClock;            // ms since the gates opened (wave cadence)
+
+    struct BrushState
+    {
+        uint8 Patch = 0;           // the brush patch it stands in, 0 = none
+        uint32 RevealMs = 0;       // attacked from the brush: seen until this runs out
+        bool Hidden = false;
+    };
+    std::unordered_map<ObjectGuid, BrushState> _brush;
+    uint32 _brushTimer = 0;
+    void UpdateBrush(uint32 elapsed);
     uint32 _unstuckTargets;        // since the last report: unreachable targets given up
     uint32 _unstuckPlaced;         // since the last report: minions put back on their lane
     uint32 _waveTimer;

@@ -1676,6 +1676,14 @@ bool WorldObject::CanSeeOrDetect(WorldObject const* obj, bool implicitDetect, bo
     if (obj->IsNeverVisible(implicitDetect) || CanNeverSee(obj))
         return false;
 
+    // A battleground can hide a player from some of the map (Summoner's Rift:
+    // a champion in the brush is unseen by the enemies outside it).
+    if (Player const* hidden = obj->ToPlayer())
+        if (hidden->GetMap() && hidden->GetMap()->IsBattleground())
+            if (Battleground const* bg = hidden->GetBattleground())
+                if (bg->HidesFrom(hidden, this))
+                    return false;
+
     // Custom-game spectators watch the match together and from outside it:
     // they, and everything they bring or cast - pets, totems, summons, the
     // ground effect of a Blizzard - are seen by the other spectators and by
