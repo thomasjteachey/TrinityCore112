@@ -29657,6 +29657,14 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
     if (CurTalentPoints == 0)
         return;
 
+    // Summoner's Rift: talent points are spent at the character's own base.
+    // The frame already shows the point spent, so it is told otherwise.
+    if (!RiftProgression::CanSpendPoints(this, true))
+    {
+        SendTalentsInfoData(false);
+        return;
+    }
+
     if (talentRank >= MAX_TALENT_RANK)
         return;
 

@@ -44,6 +44,14 @@ namespace
 {
     constexpr uint32 RTS_BUILDING_COMBAT_DROP_MS = 5 * IN_MILLISECONDS;
 
+    // Summoner's Rift structures (922100-922105: Order even, Chaos odd) and the
+    // lane minions (melee, then caster: Order 922110/1, Chaos 922112/3).
+    constexpr uint32 RIFT_STRUCTURE_FIRST = 922100;
+    constexpr uint32 RIFT_STRUCTURE_LAST = 922105;
+    constexpr uint32 RIFT_ORDER_MELEE = 922110;
+    constexpr uint32 RIFT_CHAOS_MELEE = 922112;
+    constexpr float RIFT_REINFORCED_RANGE = 30.0f;   // League's 1000 units at the Rift's scale
+
     // Building creature -> its invisible collision-shell gameobject (the
     // --collision-only conversion of the same model). The AI summons the
     // shell itself, co-located and co-oriented, so placing a building is ONE
@@ -120,10 +128,21 @@ struct RtsBuildingAI : public CreatureAI
         _shellGuid.Clear();
     }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& /*damage*/,
+    void DamageTaken(Unit* /*attacker*/, uint32& damage,
                      DamageEffectType /*damageType*/, SpellInfo const* /*spellInfo*/) override
     {
         _sinceLastHit = 0;
+
+        // Summoner's Rift: League's Reinforced Armor - a structure with no enemy
+        // minion near takes 80% less damage, so it cannot be backdoored.
+        uint32 const entry = me->GetEntry();
+        if (entry >= RIFT_STRUCTURE_FIRST && entry <= RIFT_STRUCTURE_LAST)
+        {
+            bool const order = (entry - RIFT_STRUCTURE_FIRST) % 2 == 0;
+            uint32 const enemyMelee = order ? RIFT_CHAOS_MELEE : RIFT_ORDER_MELEE;
+            if (!me->FindNearestCreature(enemyMelee, RIFT_REINFORCED_RANGE) && !me->FindNearestCreature(enemyMelee + 1, RIFT_REINFORCED_RANGE))
+                damage = damage / 5;
+        }
     }
 
     void UpdateAI(uint32 diff) override

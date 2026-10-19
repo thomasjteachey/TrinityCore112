@@ -94,6 +94,11 @@ namespace RiftProgression
     // The League level the character has reached this match (1..18).
     TC_GAME_API uint8 GetLeagueLevel(Player const* player);
 
+    // Skill picks and talent points are spent at the character's own base only
+    // (Player::LearnTalent, HandlePickRequest). True outside a match. When it is
+    // false and `tell` is set, the character is told where to go.
+    TC_GAME_API bool CanSpendPoints(Player* player, bool tell);
+
     // Player::GiveLevel, whatever called it: a level above the match level
     // becomes the match level, with the picks of every level gained.
     TC_GAME_API void OnLevelChanged(Player* player);

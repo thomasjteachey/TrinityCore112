@@ -274,16 +274,33 @@ float constexpr SRF_MINION_STRUCTURE_RANGE = Yards(750.0f);
 float constexpr SRF_MINION_LEASH        = Yards(1100.0f);
 uint32 constexpr SRF_REPORT_TICK        = 30 * IN_MILLISECONDS;
 float constexpr SRF_FOUNTAIN_HEAL_RANGE = Yards(600.0f);
+// The base: the fountain and the shop beside it.
+float constexpr SRF_BASE_RANGE          = Yards(1000.0f);
+// The shops (orderShop01 / chaosShop01), facing the middle of the map.
+SrfPoint constexpr SRF_SHOP_AT[PVP_TEAMS_COUNT] = { { 206.8f, 115.2f, 1044.5f }, { 13732.8f, 132.1f, 14595.3f } };
+float constexpr SRF_SHOP_FACING[PVP_TEAMS_COUNT] = { 5.44f, 2.42f };
 float constexpr SRF_FOUNTAIN_BURN_RANGE = Yards(700.0f);
 // Turret shots as shares of the target's maximum health: minions die to a few
 // shots, and a player who stays under a turret takes a little more every shot.
-float constexpr SRF_TURRET_MINION_SHARE = 0.45f;
+// League's turret shots on minions are shares of their maximum health: a melee
+// minion takes 3 shots (45%), a caster 2 (70%).
+float constexpr SRF_TURRET_MELEE_SHARE  = 0.45f;
+float constexpr SRF_TURRET_CASTER_SHARE = 0.70f;
+// On champions: a base share, and League's Warming Up - +50% per champion hit in
+// a row, up to +150%, gone 5 s after the last champion hit.
 float constexpr SRF_TURRET_PLAYER_SHARE = 0.20f;
-float constexpr SRF_TURRET_PLAYER_RAMP  = 0.10f;
-float constexpr SRF_TURRET_PLAYER_MAX   = 0.60f;
+float constexpr SRF_TURRET_WARMUP_STEP  = 0.50f;
+uint8 constexpr SRF_TURRET_WARMUP_MAX   = 3;
+uint32 constexpr SRF_TURRET_WARMUP_RESET = 5 * IN_MILLISECONDS;
+// A champion damaging an allied champion within 1400 of a turret pulls its fire.
+float constexpr SRF_TURRET_CALL_RANGE   = Yards(1400.0f);
+// Minions: League acquires within 500; an allied champion under attack calls
+// for help from up to 1000 away.
+float constexpr SRF_MINION_ACQUIRE_RANGE = Yards(500.0f);
+float constexpr SRF_MINION_CALL_RANGE    = Yards(1000.0f);
 // Caster minions: League's 550 range, a bolt every 1.6 s.
 float constexpr SRF_CASTER_RANGE        = Yards(550.0f);
-uint32 constexpr SRF_CASTER_ATTACK_TIME = 1600;
+uint32 constexpr SRF_CASTER_ATTACK_TIME = 1500;    // League's 0.667 attacks a second
 // League's rewards (Season 3), in League gold and experience. Experience goes
 // to the enemy champions within 1600 units of a minion that dies, shared
 // between them.
@@ -334,7 +351,7 @@ uint32 constexpr SRF_LANE_SPLINE_ID     = 1;
 // a moment after the one before it.
 float constexpr SRF_WAVE_FILE_SPACING   = 2.5f;     // yards between files, across the lane
 float constexpr SRF_WAVE_RANK_SPACING   = 3.0f;     // yards between ranks, along it
-uint32 constexpr SRF_WAVE_START_STAGGER = 600;      // ms between departures
+uint32 constexpr SRF_WAVE_START_STAGGER = 792;      // ms between departures: League's 0.792 s
 
 // Its file's offset across the lane: -1, 0 or +1 files from the middle.
 float FileOffset(uint8 slot) { return (float(slot % 3) - 1.0f) * SRF_WAVE_FILE_SPACING; }
@@ -405,6 +422,7 @@ BattlegroundSRF::BattlegroundSRF()
     _lastRefusal = 0;
     _unstuckTargets = 0;
     _unstuckPlaced = 0;
+    _matchClock = 0;
 }
 
 void BattlegroundSRF::AddPlayer(Player* player)
@@ -461,6 +479,7 @@ void BattlegroundSRF::Reset()
     _lastRefusal = 0;
     _unstuckTargets = 0;
     _unstuckPlaced = 0;
+    _matchClock = 0;
 }
 
 bool BattlegroundSRF::SetupBattleground()
@@ -492,8 +511,34 @@ bool BattlegroundSRF::SetupBattleground()
             return false;
     }
 
+    // The shopkeepers, spawned with the match rather than kept in `creature`:
+    // a static spawn on a battleground map is no part of the match's own copy.
+    Map* map = FindBgMap();
+    for (TeamId team : { TEAM_ALLIANCE, TEAM_HORDE })
+    {
+        SrfPoint const& at = SRF_SHOP_AT[team];
+        Position pos = ToWorld(at.x, at.y, at.z, SRF_SHOP_FACING[team]);
+        if (map)
+        {
+            float const ground = map->GetHeight(pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ() + 10.0f, true);
+            if (ground > INVALID_HEIGHT)
+                pos.Relocate(pos.GetPositionX(), pos.GetPositionY(), ground);
+        }
+        if (!AddCreature(team == TEAM_ALLIANCE ? BG_SRF_ENTRY_ORDER_SHOP : BG_SRF_ENTRY_CHAOS_SHOP,
+                team == TEAM_ALLIANCE ? BG_SRF_CREATURE_SHOP_ORDER : BG_SRF_CREATURE_SHOP_CHAOS, pos, team))
+            TC_LOG_ERROR("bg.battleground", "BattlegroundSRF: failed to spawn the {} shopkeeper.", TeamName(team));
+    }
+
     RefreshVulnerability();
     return true;
+}
+
+bool BattlegroundSRF::IsAtBase(Player const* player) const
+{
+    if (!player || player->GetMapId() != GetMapId())
+        return false;
+    uint32 const team = GetPlayerTeam(player->GetGUID()) ? GetPlayerTeam(player->GetGUID()) : player->GetTeam();
+    return player->GetExactDist2d(FountainPos(GetTeamIndexByTeamId(team))) <= SRF_BASE_RANGE;
 }
 
 bool BattlegroundSRF::SpawnStructure(uint8 slot)
@@ -553,10 +598,11 @@ void BattlegroundSRF::PostUpdateImpl(uint32 diff)
 
     if (_wavesStarted)
     {
+        _matchClock += diff;
         _waveTimer += diff;
-        if (_waveTimer >= BG_SRF_WAVE_INTERVAL)
+        if (_waveTimer >= WaveInterval())
         {
-            _waveTimer -= BG_SRF_WAVE_INTERVAL;
+            _waveTimer -= WaveInterval();
             SpawnWave();
         }
     }
@@ -620,8 +666,14 @@ void BattlegroundSRF::OnStructureDestroyed(uint8 slot)
     st.Destroyed = true;
     st.Vulnerable = false;
     if (Map* map = FindBgMap())
+    {
         if (Creature* eye = map->GetCreature(_turrets[slot].Eye))
             eye->DespawnOrUnsummon();
+        // The models have no death: a fallen structure stood there as if alive.
+        // It goes, as League's crumble (an inhibitor comes back by SpawnStructure).
+        if (Creature* corpse = map->GetCreature(BgCreatures[slot]))
+            corpse->DespawnOrUnsummon(1500ms);
+    }
     _turrets[slot] = TurretState();
 
     TeamId const owner = SlotTeam(slot);
@@ -754,36 +806,42 @@ void BattlegroundSRF::SpawnWave()
 
 Unit* BattlegroundSRF::FindMinionTarget(Creature* minion, TeamId team, float range, ObjectGuid ignore) const
 {
-    // League's rule: the closest enemy, whatever it is - minion, champion or
-    // structure - measured edge to edge. A structure is in reach from further
-    // off (a wave walking up to a turret stops at it).
+    // League's priority list (MinionPriority), closest first within a tier,
+    // measured edge to edge. A structure is in reach from further off: a wave
+    // walking up to a turret stops at it.
     Map* map = minion->GetMap();
     Unit* best = nullptr;
+    uint8 bestTier = 0xFF;
     float bestDist = std::numeric_limits<float>::max();
     auto consider = [&](Unit* unit, float reach)
     {
         if (!unit || !unit->IsAlive() || unit->GetGUID() == ignore || !minion->IsValidAttackTarget(unit))
             return;
         float const dist = minion->GetExactDist2d(unit) - unit->GetCombatReach();
-        if (dist <= reach && dist < bestDist)
+        if (dist > reach)
+            return;
+        uint8 const tier = MinionPriority(minion, team, unit);
+        if (tier < bestTier || (tier == bestTier && dist < bestDist))
         {
             best = unit;
+            bestTier = tier;
             bestDist = dist;
         }
     };
 
+    float const acquire = std::max(range, SRF_MINION_ACQUIRE_RANGE);
     for (Minion const& other : _minions)
         if (other.Team != team)
-            consider(map->GetCreature(other.Guid), range);
+            consider(map->GetCreature(other.Guid), acquire);
 
     TeamId const enemy = OtherTeam(team);
     for (auto const& [guid, bgPlayer] : GetPlayers())
         if (bgPlayer.Team == TeamValue(enemy))
             if (Player* player = ObjectAccessor::FindPlayer(guid))
                 if (player->GetMap() == map)
-                    consider(player, range);
+                    consider(player, acquire);
 
-    float const structureReach = std::max(range, SRF_MINION_STRUCTURE_RANGE);
+    float const structureReach = std::max(acquire, SRF_MINION_STRUCTURE_RANGE);
     for (uint8 i = 0; i < BG_SRF_STRUCTURES_PER_TEAM; ++i)
     {
         uint8 const slot = SlotOf(enemy, i);
@@ -791,6 +849,79 @@ Unit* BattlegroundSRF::FindMinionTarget(Creature* minion, TeamId team, float ran
             consider(map->GetCreature(BgCreatures[slot]), structureReach);
     }
     return best;
+}
+
+// Who a unit is attacking: a creature's victim, a turret's target, a player's
+// victim - or, for a caster, the hostile unit it has selected while fighting.
+Unit* BattlegroundSRF::AttackOf(Unit* unit) const
+{
+    if (!unit)
+        return nullptr;
+    if (Creature* creature = unit->ToCreature())
+    {
+        for (uint8 slot = 0; slot < _structures.size(); ++slot)
+            if (BgCreatures[slot] == creature->GetGUID())
+                return !_turrets[slot].Target.IsEmpty() ? ObjectAccessor::GetUnit(*creature, _turrets[slot].Target) : nullptr;
+        return creature->GetVictim();
+    }
+    Player* player = unit->ToPlayer();
+    if (!player)
+        return nullptr;
+    if (Unit* victim = player->GetVictim())
+        return victim;
+    if (!player->IsInCombat())
+        return nullptr;
+    Unit* selected = player->GetSelectedUnit();
+    return selected && selected->IsAlive() && player->IsValidAttackTarget(selected) ? selected : nullptr;
+}
+
+bool BattlegroundSRF::IsAlly(Unit* unit, TeamId team) const
+{
+    if (!unit)
+        return false;
+    if (Player* player = unit->ToPlayer())
+        return GetPlayerTeam(player->GetGUID()) == TeamValue(team);
+    for (Minion const& m : _minions)
+        if (m.Guid == unit->GetGUID())
+            return m.Team == team;
+    return false;
+}
+
+// League's minion target priority, 1 highest:
+//   1 an enemy champion attacking an allied champion (the ally within 1000)
+//   2 an enemy minion attacking an allied champion
+//   3 an enemy minion attacking an allied minion
+//   4 an enemy turret attacking an allied minion
+//   5 the closest enemy minion
+//   6 the closest enemy champion
+//   7 a structure
+uint8 BattlegroundSRF::MinionPriority(Creature* minion, TeamId team, Unit* target) const
+{
+    Unit* attacking = AttackOf(target);
+    bool const alliedChampion = attacking && attacking->GetTypeId() == TYPEID_PLAYER && IsAlly(attacking, team)
+        && minion->GetExactDist2d(attacking) <= SRF_MINION_CALL_RANGE;
+    bool const alliedMinion = attacking && attacking->GetTypeId() == TYPEID_UNIT && IsAlly(attacking, team);
+
+    if (target->GetTypeId() == TYPEID_PLAYER)
+        return alliedChampion ? 1 : 6;
+    for (Minion const& m : _minions)
+        if (m.Guid == target->GetGUID())
+            return alliedChampion ? 2 : alliedMinion ? 3 : 5;
+    // a structure: a turret firing on an allied minion comes before the minions
+    for (uint8 slot = 0; slot < _structures.size(); ++slot)
+        if (BgCreatures[slot] == target->GetGUID())
+            return StructureAt(slot).kind == BG_SRF_KIND_TURRET && alliedMinion ? 4 : 7;
+    return 7;
+}
+
+// League's cadence: a wave every 30 s, every 25 s from 14:00, every 20 s from 30:00.
+uint32 BattlegroundSRF::WaveInterval() const
+{
+    if (_matchClock >= 30 * MINUTE * IN_MILLISECONDS)
+        return 20 * IN_MILLISECONDS;
+    if (_matchClock >= 14 * MINUTE * IN_MILLISECONDS)
+        return 25 * IN_MILLISECONDS;
+    return BG_SRF_WAVE_INTERVAL;
 }
 
 // League's markers, joined up and stood on the ground: barracks, the lane in the
@@ -895,6 +1026,21 @@ void BattlegroundSRF::UpdateMinions()
         {
             if (creature->GetExactDist2d(victim) - victim->GetCombatReach() <= SRF_MINION_LEASH)
             {
+                // League: a minion switches only to a higher priority target -
+                // and one hitting a tower ignores calls for help about champions.
+                uint8 const current = MinionPriority(creature, m.Team, victim);
+                if (current > 1)
+                    if (Unit* better = FindMinionTarget(creature, m.Team, SRF_MINION_AGGRO_RANGE, m.Ignore))
+                    {
+                        uint8 const tier = MinionPriority(creature, m.Team, better);
+                        bool const onTower = current == 4 || current == 7;
+                        if (tier < current && !(onTower && (tier == 1 || better->GetTypeId() == TYPEID_PLAYER)))
+                        {
+                            creature->AI()->SetGUID(better->GetGUID(), m.Caster ? 1 : 0);
+                            m.Target = better->GetGUID();
+                            victim = better;
+                        }
+                    }
                 m.Walking = false;
                 if (m.Caster)
                     UpdateCasterAttack(creature, m, victim);
@@ -1169,37 +1315,59 @@ void BattlegroundSRF::UpdateProgression(uint32 diff)
 
 // ------------------------------------------------------------------- turrets
 
-// League's rule, simplified: minions first, then players, holding a target while
-// it stays in range.
+// League's turret priority: melee minions, then casters, then champions,
+// closest first within each; the target is held while it stays in range.
 Unit* BattlegroundSRF::PickTurretTarget(Creature* turret, TeamId team) const
 {
     Map* map = turret->GetMap();
     Unit* best = nullptr;
-    float bestDist = SRF_TURRET_RANGE;
-    auto consider = [&](Unit* unit)
+    uint8 bestTier = 0xFF;
+    float bestDist = std::numeric_limits<float>::max();
+    auto consider = [&](Unit* unit, uint8 tier)
     {
         if (!unit || !unit->IsAlive() || !turret->IsValidAttackTarget(unit))
             return;
         float const dist = turret->GetExactDist2d(unit);
-        if (dist <= bestDist)
+        if (dist > SRF_TURRET_RANGE)
+            return;
+        if (tier < bestTier || (tier == bestTier && dist < bestDist))
         {
             best = unit;
+            bestTier = tier;
             bestDist = dist;
         }
     };
 
     for (Minion const& m : _minions)
         if (m.Team != team)
-            consider(map->GetCreature(m.Guid));
-    if (best)
-        return best;
+            consider(map->GetCreature(m.Guid), m.Caster ? 2 : 1);
 
     for (auto const& [guid, bgPlayer] : GetPlayers())
         if (bgPlayer.Team == TeamValue(OtherTeam(team)))
             if (Player* player = ObjectAccessor::FindPlayer(guid))
                 if (player->GetMap() == map)
-                    consider(player);
+                    consider(player, 3);
     return best;
+}
+
+// League's call for help: an enemy champion damaging an allied champion within
+// 1400 of the turret draws its fire.
+Unit* BattlegroundSRF::TurretCallForHelp(Creature* turret, TeamId team) const
+{
+    Map* map = turret->GetMap();
+    for (auto const& [guid, bgPlayer] : GetPlayers())
+    {
+        if (bgPlayer.Team != TeamValue(OtherTeam(team)))
+            continue;
+        Player* enemy = ObjectAccessor::FindPlayer(guid);
+        if (!enemy || enemy->GetMap() != map || !enemy->IsAlive() || turret->GetExactDist2d(enemy) > SRF_TURRET_RANGE
+            || !turret->IsValidAttackTarget(enemy))
+            continue;
+        Unit* victim = AttackOf(enemy);
+        if (victim && victim->GetTypeId() == TYPEID_PLAYER && IsAlly(victim, team) && turret->GetExactDist2d(victim) <= SRF_TURRET_CALL_RANGE)
+            return enemy;
+    }
+    return nullptr;
 }
 
 void BattlegroundSRF::UpdateTurrets()
@@ -1224,17 +1392,35 @@ void BattlegroundSRF::UpdateTurrets()
         {
             target = PickTurretTarget(turret, team);
             ts.Target = target ? target->GetGUID() : ObjectGuid::Empty;
-            ts.ConsecutiveHits = 0;
         }
+        // Not already on a champion: a champion hitting an allied one takes its fire.
+        if (!target || target->GetTypeId() != TYPEID_PLAYER)
+            if (Unit* caller = TurretCallForHelp(turret, team))
+            {
+                target = caller;
+                ts.Target = caller->GetGUID();
+            }
+
+        ts.SinceChampionShot += BG_SRF_TURRET_TICK;
+        if (ts.SinceChampionShot >= SRF_TURRET_WARMUP_RESET)
+            ts.WarmStacks = 0;
         if (!target)
             continue;
 
-        float share = SRF_TURRET_MINION_SHARE;
+        float share = SRF_TURRET_MELEE_SHARE;
         if (target->GetTypeId() == TYPEID_PLAYER)
         {
-            share = std::min(SRF_TURRET_PLAYER_SHARE + SRF_TURRET_PLAYER_RAMP * ts.ConsecutiveHits, SRF_TURRET_PLAYER_MAX);
-            ++ts.ConsecutiveHits;
+            share = SRF_TURRET_PLAYER_SHARE * (1.0f + SRF_TURRET_WARMUP_STEP * float(ts.WarmStacks));
+            ts.WarmStacks = std::min<uint8>(ts.WarmStacks + 1, SRF_TURRET_WARMUP_MAX);
+            ts.SinceChampionShot = 0;
         }
+        else
+            for (Minion const& m : _minions)
+                if (m.Guid == target->GetGUID())
+                {
+                    share = m.Caster ? SRF_TURRET_CASTER_SHARE : SRF_TURRET_MELEE_SHARE;
+                    break;
+                }
         Creature* eye = TurretEye(slot, turret);
         FireBolt(eye ? static_cast<Unit*>(eye) : turret, target, team == TEAM_ALLIANCE ? BG_SRF_SPELL_ORDER_TURRET_SHOT : BG_SRF_SPELL_CHAOS_TURRET_SHOT,
             std::max<int32>(1, int32(target->GetMaxHealth() * share)));

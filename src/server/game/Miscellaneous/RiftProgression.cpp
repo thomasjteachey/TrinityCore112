@@ -18,6 +18,7 @@
 #include "RiftProgression.h"
 
 #include "Battleground.h"
+#include "BattlegroundSRF.h"
 #include "Chat.h"
 #include "WorldPacket.h"
 #include "DatabaseEnv.h"
@@ -46,9 +47,9 @@
 namespace
 {
     // League's starting purse, and its gold to the character's money: one League
-    // gold is one silver, so prices read the same in both games.
+    // gold is one gold, so prices and the "+N gold" popups read as the bags do.
     uint32 constexpr START_GOLD = 475;
-    uint32 constexpr COPPER_PER_LEAGUE_GOLD = 100;
+    uint32 constexpr COPPER_PER_LEAGUE_GOLD = GOLD;
 
     // The match starts at level 10, where the first talent point comes, and
     // climbs to the character's real level.
@@ -778,6 +779,18 @@ uint8 GetLeagueLevel(Player const* player)
     return state ? state->LeagueLevel : 1;
 }
 
+bool CanSpendPoints(Player* player, bool tell)
+{
+    if (!player || !IsInMatch(player))
+        return true;
+    Battleground* bg = player->GetBattleground();
+    if (bg && bg->GetTypeID(true) == BATTLEGROUND_SRF && static_cast<BattlegroundSRF const*>(bg)->IsAtBase(player))
+        return true;
+    if (tell && player->GetSession())
+        ChatHandler(player->GetSession()).SendSysMessage("Skill picks and talent points are spent at your base: return to your fountain.");
+    return false;
+}
+
 void OnLevelChanged(Player* player)
 {
     if (!player)
@@ -816,7 +829,7 @@ void HandlePickRequest(Player* player, std::string_view argument)
     State* state = Find(player);
     if (!state || !spellId)
         return;
-    if (state->PendingPicks)
+    if (state->PendingPicks && CanSpendPoints(player, true))
     {
         std::vector<uint32> const offers = Offers(*state);
         if (std::find(offers.begin(), offers.end(), *spellId) != offers.end())

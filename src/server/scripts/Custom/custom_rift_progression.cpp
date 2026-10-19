@@ -58,6 +58,12 @@ namespace
     }
 }
 
+// BattlegroundSRF's entries: turrets, inhibitors and nexuses; the lane minions.
+uint32 constexpr RIFT_STRUCTURE_FIRST = 922100;
+uint32 constexpr RIFT_STRUCTURE_LAST = 922105;
+uint32 constexpr RIFT_MINION_FIRST = 922110;
+uint32 constexpr RIFT_MINION_LAST = 922113;
+
 // SetGUID id: a caster keeps its own distance (BattlegroundSRF moves it).
 int32 constexpr RIFT_MINION_TARGET_MELEE = 0;
 int32 constexpr RIFT_MINION_TARGET_RANGED = 1;
@@ -100,6 +106,17 @@ struct npc_rift_minion : public CreatureAI
         if (me->GetVictim() != victim)
             me->Attack(victim, true);
         DoMeleeAttackIfReady();
+    }
+
+    // League's damage: 60% against champions and structures, and 2% of a lane
+    // minion's current health on top against other minions.
+    void DamageDealt(Unit* victim, uint32& damage, DamageEffectType /*damageType*/) override
+    {
+        uint32 const entry = victim->GetTypeId() == TYPEID_UNIT ? victim->GetEntry() : 0;
+        if (victim->GetTypeId() == TYPEID_PLAYER || (entry >= RIFT_STRUCTURE_FIRST && entry <= RIFT_STRUCTURE_LAST))
+            damage = damage * 60 / 100;
+        else if (entry >= RIFT_MINION_FIRST && entry <= RIFT_MINION_LAST)
+            damage += victim->GetHealth() * 2 / 100;
     }
 
     void EnterEvadeMode(EvadeReason /*why*/) override

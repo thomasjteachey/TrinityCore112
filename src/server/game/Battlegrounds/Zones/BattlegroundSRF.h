@@ -83,7 +83,10 @@ enum BG_SRF_CreatureEntries
     BG_SRF_ENTRY_GROMP             = 922138,
     BG_SRF_ENTRY_RIFT_SCUTTLER     = 922139,
     BG_SRF_ENTRY_DRAGON            = 922140,
-    BG_SRF_ENTRY_BARON_NASHOR      = 922141
+    BG_SRF_ENTRY_BARON_NASHOR      = 922141,
+    // The fountain shopkeepers (their stock: import/rift/scripts/rift_shop.py).
+    BG_SRF_ENTRY_ORDER_SHOP        = 922150,
+    BG_SRF_ENTRY_CHAOS_SHOP        = 922151
 };
 
 enum BG_SRF_Spells
@@ -138,6 +141,8 @@ enum BG_SRF_StructureSlots
     BG_SRF_STRUCTURES_PER_TEAM = 3 * 4 + 3,
     BG_SRF_CREATURE_SPIRIT_ORDER = 2 * BG_SRF_STRUCTURES_PER_TEAM,
     BG_SRF_CREATURE_SPIRIT_CHAOS,
+    BG_SRF_CREATURE_SHOP_ORDER,
+    BG_SRF_CREATURE_SHOP_CHAOS,
     BG_SRF_CREATURE_JUNGLE_FIRST,
     // per side Blue, Red, Gromp, 3 wolves, 6 raptors, 2 krugs; two scuttlers, Dragon, Baron
     BG_SRF_JUNGLE_MONSTERS = 2 * 14 + 2 + 1 + 1,
@@ -194,6 +199,10 @@ public:
 
     WorldSafeLocsEntry const* GetClosestGraveyard(Player* player) override;
     bool HandlePlayerUnderMap(Player* player) override;
+
+    // At its own base - the fountain and its shop - the one place a character
+    // spends skill picks and talent points (RiftProgression).
+    bool IsAtBase(Player const* player) const;
     void EndBattleground(uint32 winner) override;
 
 private:
@@ -235,7 +244,8 @@ private:
     {
         ObjectGuid Target;
         ObjectGuid Eye;
-        uint8 ConsecutiveHits = 0;
+        uint8 WarmStacks = 0;          // League's Warming Up: champion hits in a row
+        uint32 SinceChampionShot = 0;  // ms since the last shot at a champion
     };
 
     bool SpawnStructure(uint8 slot);
@@ -253,6 +263,12 @@ private:
 
     void UpdateTurrets();
     Unit* PickTurretTarget(Creature* turret, TeamId team) const;
+    Unit* TurretCallForHelp(Creature* turret, TeamId team) const;
+    // League's targeting: who a unit is attacking, and how much a minion wants a target.
+    Unit* AttackOf(Unit* unit) const;
+    bool IsAlly(Unit* unit, TeamId team) const;
+    uint8 MinionPriority(Creature* minion, TeamId team, Unit* target) const;
+    uint32 WaveInterval() const;
     void FireBolt(Unit* source, Unit* target, uint32 spellId, int32 damage);
     Creature* TurretEye(uint8 slot, Creature* turret);
     void Report(uint32 diff);
@@ -291,6 +307,7 @@ private:
     uint32 _boltsCast;
     uint32 _boltsRefused;
     uint32 _lastRefusal;
+    uint32 _matchClock;            // ms since the gates opened (wave cadence)
     uint32 _unstuckTargets;        // since the last report: unreachable targets given up
     uint32 _unstuckPlaced;         // since the last report: minions put back on their lane
     uint32 _waveTimer;
