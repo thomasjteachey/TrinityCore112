@@ -110,12 +110,13 @@ enum GossipAction : uint32
     ACTION_SELECT_TOK,
     ACTION_SELECT_DS,
     ACTION_SELECT_RV,
+    ACTION_SELECT_SRF,
     // The ported arenas are addressed as a block instead of one constant each:
     // the action id is this base plus the arena's offset within
     // BATTLEGROUND_CUSTOM_ARENA_FIRST..LAST. Adding an arena then costs nothing
     // here, nothing in the menu builder and nothing in the select handler.
     // Occupies 330..346 today (345 is Four Corners' slot, never offered); the
-    // block above ends at 321 and the next starts at 380, so there is room for
+    // block above ends at 322 and the next starts at 380, so there is room for
     // 50 arenas before this needs revisiting.
     ACTION_SELECT_CUSTOM_ARENA_BASE = 330,
     ACTION_BATTLEGROUND_OPTIONS = 380,
@@ -236,6 +237,7 @@ std::string BattlegroundNameByType(BattlegroundTypeId type)
         case BATTLEGROUND_OBC: return "Obsidian Colosseum";
         case BATTLEGROUND_TRT: return "Tanaris Deathmatch";
         case BATTLEGROUND_TOK: return "Temple of Kotmogu";
+        case BATTLEGROUND_SRF: return "Summoner's Rift";
         case BATTLEGROUND_BFG: return "Battle for Gilneas";
         case BATTLEGROUND_AV: return "Alterac Valley";
         case BATTLEGROUND_SA: return "Strand of the Ancients";
@@ -336,6 +338,8 @@ uint32 DefaultDeathmatchKillLimit(BattlegroundTypeId type)
         case BATTLEGROUND_OBC: return 50;
         // Scored by holding orbs; kills only add to it.
         case BATTLEGROUND_TOK: return 0;
+        // Won by destroying the enemy nexus.
+        case BATTLEGROUND_SRF: return 0;
         default: return 30;
     }
 }
@@ -2498,6 +2502,7 @@ public:
             offer("Obsidian Colosseum", BATTLEGROUND_OBC, ACTION_SELECT_OBC);
             offer("Tanaris Deathmatch", BATTLEGROUND_TRT, ACTION_SELECT_TRT);
             offer("Temple of Kotmogu", BATTLEGROUND_TOK, ACTION_SELECT_TOK);
+            offer("Summoner's Rift", BATTLEGROUND_SRF, ACTION_SELECT_SRF);
             offer("Battle for Gilneas", BATTLEGROUND_BFG, ACTION_SELECT_BFG);
             offer("Alterac Valley", BATTLEGROUND_AV, ACTION_SELECT_AV);
             offer("Strand of the Ancients", BATTLEGROUND_SA, ACTION_SELECT_SA);
@@ -2685,6 +2690,7 @@ public:
                 case ACTION_SELECT_OBC: manager.SelectBattleground(player, BATTLEGROUND_OBC, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_TRT: manager.SelectBattleground(player, BATTLEGROUND_TRT, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_TOK: manager.SelectBattleground(player, BATTLEGROUND_TOK, 0); ShowChromieMenu(player); return true;
+                case ACTION_SELECT_SRF: manager.SelectBattleground(player, BATTLEGROUND_SRF, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_BFG: manager.SelectBattleground(player, BATTLEGROUND_BFG, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_AV: manager.SelectBattleground(player, BATTLEGROUND_AV, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_SA: manager.SelectBattleground(player, BATTLEGROUND_SA, 0); ShowChromieMenu(player); return true;

@@ -3523,6 +3523,7 @@ enum BattlegroundTypeId : uint32
     BATTLEGROUND_TRT            = 104, // Tanaris, map 1620 cloned from 1
     BATTLEGROUND_VHR            = 105, // Violet Hold survival, map 1608 cloned from 608
     BATTLEGROUND_TOK            = 106, // Temple of Kotmogu, map 998 (Ascension's id; retail's 699 cannot queue, see ScheduleQueueUpdate)
+    BATTLEGROUND_SRF            = 107, // Summoner's Rift (MOBA), map 1690 (wow/import/rift)
     BATTLEGROUND_TP             = 108, // Twin Peaks
     BATTLEGROUND_BFG            = 120, // Battle for Gilneas
     BATTLEGROUND_TV             = 870, // Tol'Viron Arena,            map 980
@@ -3582,7 +3583,8 @@ constexpr bool IsCustomBattleground(BattlegroundTypeId bgTypeId)
         || bgTypeId == BATTLEGROUND_BRT
         || bgTypeId == BATTLEGROUND_OBC
         || bgTypeId == BATTLEGROUND_TRT
-        || bgTypeId == BATTLEGROUND_TOK;
+        || bgTypeId == BATTLEGROUND_TOK
+        || bgTypeId == BATTLEGROUND_SRF;
 }
 
 // Every arena that is not one of Blizzard's five. Same reasoning as
@@ -3808,6 +3810,7 @@ enum BattlegroundQueueTypeId
     // so a shuffle is only ever made from people who asked for one.
     BATTLEGROUND_QUEUE_SSH_3    = 25,
     BATTLEGROUND_QUEUE_SSH_2    = 26,
+    BATTLEGROUND_QUEUE_SRF      = 27,
     MAX_BATTLEGROUND_QUEUE_TYPES
 };
 
