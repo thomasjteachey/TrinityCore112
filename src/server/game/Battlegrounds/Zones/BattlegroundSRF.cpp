@@ -664,16 +664,14 @@ void BattlegroundSRF::SetVulnerable(uint8 slot, bool vulnerable)
     Creature* creature = GetBGCreature(slot, false);
     if (!creature)
         return;
+    // Locked by NON_ATTACKABLE alone: nothing can target it, and it can still
+    // target others. Immunity flags would also stop a locked turret firing -
+    // a unit immune to PCs or NPCs is no valid attacker of them either.
+    creature->SetImmuneToAll(false);
     if (vulnerable)
-    {
         creature->RemoveUnitFlag(UNIT_FLAG_NON_ATTACKABLE);
-        creature->SetImmuneToAll(false);
-    }
     else
-    {
         creature->SetUnitFlag(UNIT_FLAG_NON_ATTACKABLE);
-        creature->SetImmuneToAll(true);
-    }
 }
 
 // ------------------------------------------------------------------- minions
