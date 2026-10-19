@@ -33,9 +33,11 @@
 #include "WorldSession.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <map>
 #include <mutex>
+#include <string>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -112,6 +114,8 @@ namespace
         std::map<uint32 /*first rank*/, Chain> Chains;
         std::unordered_map<uint32 /*spell*/, uint32 /*first rank*/> SpellToChain;
         std::map<uint32 /*first rank*/, uint8 /*ranks unlocked*/> Unlocked;
+        std::unordered_set<uint32> FreeChains;     // whitelisted free: usable from the start
+        std::unordered_set<uint32> Removed;        // class spells off the whitelist: out of the match
         uint32 PendingPicks = 0;
 
         std::vector<LearnedTalent> RealTalents;   // the active spec's build, put back on the way out
@@ -128,6 +132,48 @@ namespace
     // be protected while it loads.
     std::unordered_set<ObjectGuid::LowType> Stashed;
     bool StoragePresent = false;
+
+    // The core abilities (world `rift_ability_whitelist`): per class, the class
+    // spells a skill pick can learn, by Spell.dbc name. A class with no rows keeps
+    // every class spell (and a realm without the table, every class's).
+    struct WhitelistEntry
+    {
+        std::string Name;            // lower case; Prefix: Name is the start of the spell's name
+        bool Prefix = false;
+        bool Free = false;
+    };
+    std::unordered_map<uint8, std::vector<WhitelistEntry>> Whitelist;
+
+    std::string Normalised(std::string text)
+    {
+        std::string out;
+        for (size_t i = 0; i < text.size(); ++i)
+        {
+            // a typographic apostrophe (U+2019, as typed in the owner's list) is an apostrophe
+            if (i + 2 < text.size() && uint8(text[i]) == 0xE2 && uint8(text[i + 1]) == 0x80 && uint8(text[i + 2]) == 0x99)
+            {
+                out += '\'';
+                i += 2;
+                continue;
+            }
+            out += char(std::tolower(uint8(text[i])));
+        }
+        return out;
+    }
+
+    // -1: the class keeps no list (everything allowed); 0: off the list; 1: a
+    // pick learns it; 2: free.
+    int32 WhitelistStatus(uint8 playerClass, SpellInfo const* spell)
+    {
+        auto const itr = Whitelist.find(playerClass);
+        if (itr == Whitelist.end())
+            return -1;
+        std::string const name = Normalised(spell->SpellName[LOCALE_enUS] ? spell->SpellName[LOCALE_enUS] : "");
+        for (WhitelistEntry const& e : itr->second)
+            if (e.Prefix ? name.compare(0, e.Name.size(), e.Name) == 0 : name == e.Name)
+                return e.Free ? 2 : 1;
+        return 0;
+    }
 
     bool IsTransient(Player const* player)
     {
@@ -194,14 +240,27 @@ namespace
             uint32 const first = sSpellMgr->GetFirstSpellInChain(spellId);
             state.Chains[first ? first : spellId].Ranks.push_back(spellId);
         }
-        for (auto& [first, chain] : state.Chains)
+        for (auto itr = state.Chains.begin(); itr != state.Chains.end();)
         {
+            Chain& chain = itr->second;
             std::sort(chain.Ranks.begin(), chain.Ranks.end(), [](uint32 a, uint32 b)
             {
                 return sSpellMgr->GetSpellRank(a) < sSpellMgr->GetSpellRank(b);
             });
+            // Off the core list: out of the match altogether.
+            SpellInfo const* first = sSpellMgr->GetSpellInfo(itr->first);
+            int32 const status = first ? WhitelistStatus(player->GetClass(), first) : -1;
+            if (status == 0)
+            {
+                state.Removed.insert(chain.Ranks.begin(), chain.Ranks.end());
+                itr = state.Chains.erase(itr);
+                continue;
+            }
+            if (status == 2)
+                state.FreeChains.insert(itr->first);
             for (uint32 spell : chain.Ranks)
-                state.SpellToChain[spell] = first;
+                state.SpellToChain[spell] = itr->first;
+            ++itr;
         }
     }
 
@@ -307,14 +366,9 @@ namespace
         return total;
     }
 
-    // Picks for reaching match level `level`, spread over the levels still to come
-    // so the last one unlocks the last rank.
-    uint32 PicksForLevel(State const& state, uint8 level)
-    {
-        uint32 const remaining = TotalSteps(state) - std::min(TotalSteps(state), UnlockedSteps(state) + state.PendingPicks);
-        uint32 const levelsLeft = state.RealLevel >= level ? uint32(state.RealLevel - level + 1) : 1;
-        return remaining ? (remaining + levelsLeft - 1) / levelsLeft : 0;
-    }
+    // One skill pick per level, League's skill point: the starting level's, then
+    // one for every level after it.
+    uint32 constexpr PICKS_PER_LEVEL = 1;
 
     // What can be chosen now: each chain's next rank, once the match level has
     // reached the level it is trained at.
@@ -339,7 +393,7 @@ namespace
     // by a talent the match reset).
     bool HiddenInMatch(Player const* player, State const& state, uint32 spell)
     {
-        if (!player->HasSpell(spell))
+        if (!player->HasSpell(spell) || state.Removed.count(spell))
             return true;
         auto const chain = state.SpellToChain.find(spell);
         if (chain == state.SpellToChain.end())
@@ -434,7 +488,7 @@ namespace
         while (state.MatchLevel < level)
         {
             ++state.MatchLevel;
-            state.PendingPicks += PicksForLevel(state, state.MatchLevel);
+            state.PendingPicks += PICKS_PER_LEVEL;
         }
         // InitTalentForLevel hands out the new level's talent point.
         player->GiveLevel(state.MatchLevel, true);
@@ -462,6 +516,29 @@ namespace RiftProgression
 {
 void ProbeStorage()
 {
+    {
+        std::lock_guard<std::recursive_mutex> lock(StateMutex);
+        Whitelist.clear();
+        if (WorldDatabase.Query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'rift_ability_whitelist'"))
+            if (QueryResult rows = WorldDatabase.Query("SELECT class, name, free FROM rift_ability_whitelist"))
+            {
+                do
+                {
+                    Field* f = rows->Fetch();
+                    WhitelistEntry e;
+                    e.Name = Normalised(f[1].GetString());
+                    if (!e.Name.empty() && e.Name.back() == '*')
+                    {
+                        e.Prefix = true;
+                        e.Name.pop_back();
+                    }
+                    e.Free = f[2].GetUInt8() != 0;
+                    Whitelist[f[0].GetUInt8()].push_back(e);
+                } while (rows->NextRow());
+            }
+        TC_LOG_INFO("server.loading", ">> Summoner's Rift core abilities: lists for {} class(es).", Whitelist.size());
+    }
+
     StoragePresent = CharacterDatabase.Query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'custom_rift_stash'") != nullptr;
     if (!StoragePresent)
     {
@@ -522,24 +599,13 @@ void Enter(Player* player)
     player->SetMoney(START_GOLD * COPPER_PER_LEAGUE_GOLD);
     player->ResetTalents(true);
 
-    // Everything a character of the starting level would know comes with it;
-    // the rest is earned back pick by pick.
+    // Only what the core list makes free comes with it (stances, forms, the
+    // pet's call); everything else is a skill pick - one now, one a level.
     state.StartLevel = std::min<uint8>(START_LEVEL, state.RealLevel);
     state.MatchLevel = state.StartLevel;
-    for (auto const& [first, chain] : state.Chains)
-    {
-        uint8 have = 0;
-        while (have < chain.Ranks.size())
-        {
-            SpellInfo const* rank = sSpellMgr->GetSpellInfo(chain.Ranks[have]);
-            if (!rank || rank->SpellLevel > state.StartLevel)
-                break;
-            ++have;
-        }
-        if (have)
-            state.Unlocked[first] = have;
-    }
-    state.PendingPicks = PicksForLevel(state, state.StartLevel);
+    for (uint32 first : state.FreeChains)
+        state.Unlocked[first] = uint8(state.Chains.at(first).Ranks.size());
+    state.PendingPicks = PICKS_PER_LEVEL;
     player->GiveLevel(state.StartLevel, true);
     player->SendTalentsInfoData(false);
     HideLockedButtons(player, state);
@@ -633,6 +699,8 @@ SpellInfo const* AdjustCast(Player const* player, SpellInfo const* spellInfo)
     State const* state = Find(player);
     if (!state)
         return spellInfo;
+    if (state->Removed.count(spellInfo->Id))
+        return nullptr;
     auto const chain = state->SpellToChain.find(spellInfo->Id);
     if (chain == state->SpellToChain.end())
         return spellInfo;
@@ -657,6 +725,8 @@ bool IsSpellLocked(Player const* player, SpellInfo const* spellInfo)
     State const* state = Find(player);
     if (!state)
         return false;
+    if (state->Removed.count(spellInfo->Id))
+        return true;
     auto const chain = state->SpellToChain.find(spellInfo->Id);
     if (chain == state->SpellToChain.end())
         return false;
@@ -721,7 +791,7 @@ void OnLevelChanged(Player* player)
     while (state->MatchLevel < level)
     {
         ++state->MatchLevel;
-        state->PendingPicks += PicksForLevel(*state, state->MatchLevel);
+        state->PendingPicks += PICKS_PER_LEVEL;
     }
     ShowProgress(player, *state);
     SendState(player, *state);
