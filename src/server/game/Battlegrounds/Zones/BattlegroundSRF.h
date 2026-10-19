@@ -25,9 +25,16 @@
  * size the map was converted at). The fountains
  * heal their own team and burn the other.
  *
+ * The jungle is League's: its camps at League's own spots, neutral to both teams,
+ * fighting as one camp and leashing home, first up 90 seconds after the gates open
+ * and back a League respawn time after they are cleared. The buff camps give their
+ * killer a buff, the Dragon gives its whole team a stack of the Dragonslayer's cry
+ * for the rest of the match, and Baron Nashor, from 20 minutes, gives the living
+ * members of its team three minutes of Zandalar's spirit and their minions more
+ * health. League's buffs are stood in for by stock spells with the values set here.
+ *
  * Units, structures and the shot effects are League's own models and textures,
- * converted by wow/import/rift/scripts. This is still the skeleton: caster minions
- * fight in melee, there are no super minions, jungle camps, gold or items yet.
+ * converted by wow/import/rift/scripts.
  */
 
 #ifndef __BATTLEGROUNDSRF_H
@@ -68,14 +75,32 @@ enum BG_SRF_CreatureEntries
     BG_SRF_ENTRY_CHAOS_SHOT_IMPACT = 922123,
     // The caster minions' bolts.
     BG_SRF_ENTRY_ORDER_CASTER_BOLT = 922124,
-    BG_SRF_ENTRY_CHAOS_CASTER_BOLT = 922125
+    BG_SRF_ENTRY_CHAOS_CASTER_BOLT = 922125,
+    // The jungle: neutral monsters, attackable by both teams.
+    BG_SRF_ENTRY_BLUE_SENTINEL     = 922130,
+    BG_SRF_ENTRY_RED_BRAMBLEBACK   = 922131,
+    BG_SRF_ENTRY_GREATER_MURK_WOLF = 922132,
+    BG_SRF_ENTRY_MURK_WOLF         = 922133,
+    BG_SRF_ENTRY_CRIMSON_RAPTOR    = 922134,
+    BG_SRF_ENTRY_RAPTOR            = 922135,
+    BG_SRF_ENTRY_ANCIENT_KRUG      = 922136,
+    BG_SRF_ENTRY_KRUG              = 922137,
+    BG_SRF_ENTRY_GROMP             = 922138,
+    BG_SRF_ENTRY_RIFT_SCUTTLER     = 922139,
+    BG_SRF_ENTRY_DRAGON            = 922140,
+    BG_SRF_ENTRY_BARON_NASHOR      = 922141
 };
 
 enum BG_SRF_Spells
 {
     // "dmg": instant school damage with no visual of its own, cast when a turret
     // shot lands. The damage is set per shot.
-    BG_SRF_SPELL_TURRET_SHOT = 7482
+    BG_SRF_SPELL_TURRET_SHOT = 7482,
+    // Stand-ins for League's buffs, their values and durations set when cast.
+    BG_SRF_SPELL_BLUE_BUFF   = 18194, // "Mana Regeneration": periodic mana
+    BG_SRF_SPELL_RED_BUFF    = 22817, // "Fengus' Ferocity": attack power
+    BG_SRF_SPELL_DRAGON_BUFF = 22888, // "Rallying Cry of the Dragonslayer": crit, attack power
+    BG_SRF_SPELL_BARON_BUFF  = 24425  // "Spirit of Zandalar": speed, all stats
 };
 
 enum BG_SRF_TrinityStrings
@@ -83,7 +108,11 @@ enum BG_SRF_TrinityStrings
     BG_SRF_STRING_TURRET_DESTROYED    = 20130, // "%s has destroyed a turret!"
     BG_SRF_STRING_INHIBITOR_DESTROYED = 20131, // "%s has destroyed an inhibitor!"
     BG_SRF_STRING_INHIBITOR_RESPAWNED = 20132, // "%s's inhibitor is respawning."
-    BG_SRF_STRING_MINIONS_SPAWNED     = 20133  // "Minions have spawned!"
+    BG_SRF_STRING_MINIONS_SPAWNED     = 20133, // "Minions have spawned!"
+    BG_SRF_STRING_DRAGON_SPAWNED      = 20134, // "The Dragon has spawned!"
+    BG_SRF_STRING_BARON_SPAWNED       = 20135, // "Baron Nashor has spawned!"
+    BG_SRF_STRING_DRAGON_SLAIN        = 20136, // "%s has slain the Dragon!"
+    BG_SRF_STRING_BARON_SLAIN         = 20137  // "%s has slain Baron Nashor!"
 };
 
 enum BG_SRF_Lanes
@@ -104,12 +133,18 @@ enum BG_SRF_StructureKind
 
 // Structure slots in BgCreatures, per team: three lanes of outer, inner and
 // inhibitor turret plus the inhibitor, then the two nexus turrets and the nexus.
+// After them the spirit guides and the jungle's monsters (SRF_MONSTERS order).
 enum BG_SRF_StructureSlots
 {
     BG_SRF_STRUCTURES_PER_TEAM = 3 * 4 + 3,
     BG_SRF_CREATURE_SPIRIT_ORDER = 2 * BG_SRF_STRUCTURES_PER_TEAM,
     BG_SRF_CREATURE_SPIRIT_CHAOS,
-    BG_SRF_CREATURE_MAX
+    BG_SRF_CREATURE_JUNGLE_FIRST,
+    // per side Blue, Red, Gromp, 3 wolves, 6 raptors, 2 krugs; two scuttlers, Dragon, Baron
+    BG_SRF_JUNGLE_MONSTERS = 2 * 14 + 2 + 1 + 1,
+    // per side Blue, wolves, raptors, Red, krugs, Gromp; the two scuttlers, Dragon, Baron
+    BG_SRF_JUNGLE_CAMPS = 2 * 6 + 2 + 1 + 1,
+    BG_SRF_CREATURE_MAX = BG_SRF_CREATURE_JUNGLE_FIRST + BG_SRF_JUNGLE_MONSTERS
 };
 
 enum BG_SRF_Constants
@@ -188,6 +223,12 @@ private:
         bool Paid = false;         // its gold went to a last hit already
     };
 
+    struct CampState
+    {
+        bool Up = false;
+        uint32 Timer = 0;          // ms until it spawns, while it is not up
+    };
+
     struct TurretState
     {
         ObjectGuid Target;
@@ -228,6 +269,13 @@ private:
 
     void UpdateFountains();
 
+    void SpawnCamp(uint8 camp);
+    void UpdateJungle(uint32 elapsed);
+    bool HandleJungleKill(Creature* creature, Player* killer);
+    void ApplyBuff(Player* player, uint32 spellId, int32 bp0, int32 bp1, int32 bp2, int32 durationMs);
+    void ApplyDragonBuff(Player* player, TeamId team);
+    void MaintainObjectiveBuffs();
+
     // Progression (RiftProgression): experience and gold, and keeping the
     // units' levels with the players'.
     std::vector<Player*> TeamPlayers(TeamId team) const;
@@ -244,6 +292,10 @@ private:
     std::vector<Minion> _minions;
     std::array<std::array<std::vector<Position>, BG_SRF_LANE_COUNT>, PVP_TEAMS_COUNT> _lanePaths;
     std::vector<Shot> _shots;
+    std::array<CampState, BG_SRF_JUNGLE_CAMPS> _camps;
+    std::array<uint8, PVP_TEAMS_COUNT> _dragonsSlain;
+    std::array<uint32, PVP_TEAMS_COUNT> _baronTimer;   // ms of Baron's empowerment left
+    uint32 _jungleTimer;
     uint32 _waveTimer;
     uint32 _minionTimer;
     uint32 _turretTimer;

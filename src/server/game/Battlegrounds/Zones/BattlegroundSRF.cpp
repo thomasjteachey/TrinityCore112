@@ -11,6 +11,7 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "RiftProgression.h"
+#include "SpellAuras.h"
 #include "SpellDefines.h"
 #include "TemporarySummon.h"
 #include "WorldPacket.h"
@@ -89,6 +90,116 @@ SrfStructure constexpr SRF_STRUCTURES[PVP_TEAMS_COUNT][BG_SRF_STRUCTURES_PER_TEA
         { BG_SRF_KIND_NEXUS,     BG_SRF_LANE_NONE,  13243.00f,   91.00f,  13235.00f, 0.0000f }  // HQ_T2
     }
 };
+
+// The jungle. Camps are League's, in BG_SRF_JUNGLE_CAMPS order, with League's
+// first spawn (after the gates open) and respawn times.
+enum SrfCampKind : uint8
+{
+    SRF_CAMP_BLUE,
+    SRF_CAMP_RED,
+    SRF_CAMP_WOLVES,
+    SRF_CAMP_RAPTORS,
+    SRF_CAMP_KRUGS,
+    SRF_CAMP_GROMP,
+    SRF_CAMP_SCUTTLE,
+    SRF_CAMP_DRAGON,
+    SRF_CAMP_BARON
+};
+
+struct SrfCamp
+{
+    SrfCampKind kind;
+    uint32 firstSpawn;   // ms after the gates open
+    uint32 respawn;      // ms after the camp is cleared
+};
+
+uint32 constexpr SRF_JUNGLE_START = 90 * IN_MILLISECONDS;
+uint32 constexpr SRF_SMALL_CAMP_RESPAWN = 135 * IN_MILLISECONDS;
+uint32 constexpr SRF_BUFF_CAMP_RESPAWN = 5 * MINUTE * IN_MILLISECONDS;
+
+SrfCamp constexpr SRF_CAMPS[BG_SRF_JUNGLE_CAMPS] =
+{
+    // Order's side of the jungle (0-5), then Chaos's (6-11)
+    { SRF_CAMP_BLUE,    SRF_JUNGLE_START, SRF_BUFF_CAMP_RESPAWN },
+    { SRF_CAMP_WOLVES,  SRF_JUNGLE_START, SRF_SMALL_CAMP_RESPAWN },
+    { SRF_CAMP_RAPTORS, SRF_JUNGLE_START, SRF_SMALL_CAMP_RESPAWN },
+    { SRF_CAMP_RED,     SRF_JUNGLE_START, SRF_BUFF_CAMP_RESPAWN },
+    { SRF_CAMP_KRUGS,   SRF_JUNGLE_START, SRF_SMALL_CAMP_RESPAWN },
+    { SRF_CAMP_GROMP,   SRF_JUNGLE_START, SRF_SMALL_CAMP_RESPAWN },
+    { SRF_CAMP_BLUE,    SRF_JUNGLE_START, SRF_BUFF_CAMP_RESPAWN },
+    { SRF_CAMP_WOLVES,  SRF_JUNGLE_START, SRF_SMALL_CAMP_RESPAWN },
+    { SRF_CAMP_RAPTORS, SRF_JUNGLE_START, SRF_SMALL_CAMP_RESPAWN },
+    { SRF_CAMP_RED,     SRF_JUNGLE_START, SRF_BUFF_CAMP_RESPAWN },
+    { SRF_CAMP_KRUGS,   SRF_JUNGLE_START, SRF_SMALL_CAMP_RESPAWN },
+    { SRF_CAMP_GROMP,   SRF_JUNGLE_START, SRF_SMALL_CAMP_RESPAWN },
+    // the river
+    { SRF_CAMP_SCUTTLE, 210 * IN_MILLISECONDS, 150 * IN_MILLISECONDS },
+    { SRF_CAMP_SCUTTLE, 210 * IN_MILLISECONDS, 150 * IN_MILLISECONDS },
+    { SRF_CAMP_DRAGON,  5 * MINUTE * IN_MILLISECONDS, 5 * MINUTE * IN_MILLISECONDS },
+    { SRF_CAMP_BARON,   20 * MINUTE * IN_MILLISECONDS, 6 * MINUTE * IN_MILLISECONDS }
+};
+
+struct SrfMonster
+{
+    uint8 camp;
+    uint32 entry;
+    float x, y, z;   // League units
+    float o;         // WoW facing
+    uint32 gold;     // League gold, to the killer
+    float xp;        // League experience, shared like a minion's
+};
+
+// League's MapLocators (OrderBlueBuff1, OrderWolves1-3, OrderVultures1-6, ...,
+// DragonEelCamp, BaronEelCamp, Dragon, Baron1), in BgCreatures slot order.
+SrfMonster constexpr SRF_MONSTERS[BG_SRF_JUNGLE_MONSTERS] =
+{
+    {  0, BG_SRF_ENTRY_BLUE_SENTINEL,      3821.5f,  51.9f,  7901.1f, 5.4978f, 100, 120.0f },
+    {  1, BG_SRF_ENTRY_GREATER_MURK_WOLF,  3780.6f,  45.0f,  6444.0f, 3.9270f,  55,  55.0f },
+    {  1, BG_SRF_ENTRY_MURK_WOLF,          3980.6f,  45.0f,  6444.0f, 3.9270f,  16,  16.0f },
+    {  1, BG_SRF_ENTRY_MURK_WOLF,          3730.6f,  45.0f,  6594.0f, 3.9270f,  16,  16.0f },
+    {  2, BG_SRF_ENTRY_CRIMSON_RAPTOR,     6706.7f,  50.3f,  5521.0f, 1.5708f,  35,  30.0f },
+    {  2, BG_SRF_ENTRY_RAPTOR,             6929.6f,  50.3f,  5647.9f, 3.1416f,   9,   9.0f },
+    {  2, BG_SRF_ENTRY_RAPTOR,             7060.5f,  50.3f,  5499.3f, 4.7124f,   9,   9.0f },
+    {  2, BG_SRF_ENTRY_RAPTOR,             6962.7f,  51.1f,  5354.4f, 1.8200f,   9,   9.0f },
+    {  2, BG_SRF_ENTRY_RAPTOR,             6852.2f,  48.1f,  5227.1f, 2.3562f,   9,   9.0f },
+    {  2, BG_SRF_ENTRY_RAPTOR,             7106.2f,  48.1f,  5266.1f, 3.9270f,   9,   9.0f },
+    {  3, BG_SRF_ENTRY_RED_BRAMBLEBACK,    7765.2f,  50.4f,  4020.2f, 3.9270f, 100, 120.0f },
+    {  4, BG_SRF_ENTRY_ANCIENT_KRUG,       8482.5f,  50.7f,  2705.9f, 3.1416f,  60,  60.0f },
+    {  4, BG_SRF_ENTRY_KRUG,               8275.5f,  50.7f,  2688.9f, 3.1416f,  40,  40.0f },
+    {  5, BG_SRF_ENTRY_GROMP,              2110.6f,  54.0f,  8451.0f, 1.1100f,  80,  90.0f },
+    {  6, BG_SRF_ENTRY_BLUE_SENTINEL,     11031.7f,  51.7f,  6990.8f, 2.3562f, 100, 120.0f },
+    {  7, BG_SRF_ENTRY_GREATER_MURK_WOLF, 11008.2f,  51.2f,  8387.4f, 0.7854f,  55,  55.0f },
+    {  7, BG_SRF_ENTRY_MURK_WOLF,         11058.2f,  51.2f,  8217.4f, 0.7854f,  16,  16.0f },
+    {  7, BG_SRF_ENTRY_MURK_WOLF,         10808.2f,  51.2f,  8387.4f, 0.7854f,  16,  16.0f },
+    {  8, BG_SRF_ENTRY_CRIMSON_RAPTOR,     7987.0f,  48.8f,  9471.4f, 4.7124f,  35,  30.0f },
+    {  8, BG_SRF_ENTRY_RAPTOR,             7887.0f,  48.8f,  9312.4f, 0.0000f,   9,   9.0f },
+    {  8, BG_SRF_ENTRY_RAPTOR,             7757.0f,  48.8f,  9451.4f, 1.5708f,   9,   9.0f },
+    {  8, BG_SRF_ENTRY_RAPTOR,             7854.4f,  52.2f,  9610.5f, 4.9532f,   9,   9.0f },
+    {  8, BG_SRF_ENTRY_RAPTOR,             7997.2f,  52.1f,  9772.1f, 5.4978f,   9,   9.0f },
+    {  8, BG_SRF_ENTRY_RAPTOR,             7724.2f,  52.1f,  9724.1f, 0.7854f,   9,   9.0f },
+    {  9, BG_SRF_ENTRY_RED_BRAMBLEBACK,    7101.9f,  51.3f, 10900.5f, 0.7854f, 100, 120.0f },
+    { 10, BG_SRF_ENTRY_ANCIENT_KRUG,       6317.1f,  47.6f, 12146.5f, 0.0000f,  60,  60.0f },
+    { 10, BG_SRF_ENTRY_KRUG,               6547.1f,  47.6f, 12156.5f, 0.0000f,  40,  40.0f },
+    { 11, BG_SRF_ENTRY_GROMP,             12703.6f,  54.0f,  6444.0f, 4.2500f,  80,  90.0f },
+    { 12, BG_SRF_ENTRY_RIFT_SCUTTLER,     10500.0f, -62.0f,  5170.0f, 5.4978f,  55, 100.0f },
+    { 13, BG_SRF_ENTRY_RIFT_SCUTTLER,      4400.0f, -62.0f,  9600.0f, 2.3562f,  55, 100.0f },
+    { 14, BG_SRF_ENTRY_DRAGON,             9866.1f, -69.8f,  4414.0f, 0.7854f,  25, 200.0f },
+    { 15, BG_SRF_ENTRY_BARON_NASHOR,       5007.1f,  24.4f, 10471.4f, 3.9270f, 300, 600.0f }
+};
+
+// League's buff durations, and what the stand-in spells are set to.
+int32 constexpr SRF_BUFF_DURATION         = 2 * MINUTE * IN_MILLISECONDS;   // Blue and Red
+int32 constexpr SRF_BARON_BUFF_DURATION   = 3 * MINUTE * IN_MILLISECONDS;
+float constexpr SRF_BLUE_MANA_PER_TICK    = 0.02f;   // of maximum mana
+int32 constexpr SRF_RED_AP_PER_LEVEL      = 3;
+int32 constexpr SRF_DRAGON_CRIT_PER_STACK = 2;       // spell and melee crit, percent
+int32 constexpr SRF_DRAGON_AP_PER_STACK   = 30;
+int32 constexpr SRF_BARON_STATS_PCT       = 15;
+uint32 constexpr SRF_GOLD_BARON_TEAM      = 300;     // to every player of the team
+float constexpr SRF_BARON_MINION_HEALTH   = 1.5f;
+// Long enough that the core never brings a jungle corpse back on its own: the
+// battleground respawns its camps itself.
+uint32 constexpr SRF_JUNGLE_CORE_RESPAWN  = DAY;
 
 uint8 constexpr SRF_SLOT_NEXUS_TURRET_1 = 12;
 uint8 constexpr SRF_SLOT_NEXUS_TURRET_2 = 13;
@@ -277,6 +388,9 @@ BattlegroundSRF::BattlegroundSRF()
     _structureLevelTimer = 0;
     _wavesSpawned = 0;
     _wavesStarted = false;
+    _dragonsSlain.fill(0);
+    _baronTimer.fill(0);
+    _jungleTimer = 0;
 }
 
 void BattlegroundSRF::AddPlayer(Player* player)
@@ -325,6 +439,10 @@ void BattlegroundSRF::Reset()
     _structureLevelTimer = 0;
     _wavesSpawned = 0;
     _wavesStarted = false;
+    _camps.fill(CampState());
+    _dragonsSlain.fill(0);
+    _baronTimer.fill(0);
+    _jungleTimer = 0;
 }
 
 bool BattlegroundSRF::SetupBattleground()
@@ -378,6 +496,11 @@ void BattlegroundSRF::StartingEventOpenDoors()
 {
     _wavesStarted = true;
     _waveTimer = BG_SRF_WAVE_INTERVAL - BG_SRF_FIRST_WAVE_TIME;
+    for (uint8 camp = 0; camp < BG_SRF_JUNGLE_CAMPS; ++camp)
+    {
+        _camps[camp].Up = false;
+        _camps[camp].Timer = SRF_CAMPS[camp].firstSpawn;
+    }
 }
 
 void BattlegroundSRF::PostUpdateImpl(uint32 diff)
@@ -425,6 +548,14 @@ void BattlegroundSRF::PostUpdateImpl(uint32 diff)
     {
         _minionTimer = 0;
         UpdateMinions();
+    }
+
+    _jungleTimer += diff;
+    if (_jungleTimer >= BG_SRF_MINION_TICK)
+    {
+        if (_wavesStarted)
+            UpdateJungle(_jungleTimer);
+        _jungleTimer = 0;
     }
 
     _turretTimer += diff;
@@ -582,7 +713,9 @@ void BattlegroundSRF::SpawnWave()
                 if (!minion)
                     continue;
                 minion->SetReactState(REACT_AGGRESSIVE);
-                ApplyUnitLevel(minion, AverageMatchLevel(), 1.0f + SRF_MINION_GROWTH_PER_WAVE * float(_wavesSpawned));
+                // Baron's empowerment: the team's minions come out tougher while it lasts.
+                float const empowered = _baronTimer[team] ? SRF_BARON_MINION_HEALTH : 1.0f;
+                ApplyUnitLevel(minion, AverageMatchLevel(), (1.0f + SRF_MINION_GROWTH_PER_WAVE * float(_wavesSpawned)) * empowered);
                 Minion m;
                 m.Guid = minion->GetGUID();
                 m.Team = team;
@@ -849,6 +982,8 @@ void BattlegroundSRF::HandleKillUnit(Creature* creature, Player* killer)
 {
     if (!creature || !killer || GetStatus() != STATUS_IN_PROGRESS)
         return;
+    if (HandleJungleKill(creature, killer))
+        return;
     auto const it = std::find_if(_minions.begin(), _minions.end(), [creature](Minion const& m) { return m.Guid == creature->GetGUID(); });
     if (it == _minions.end())
         return;
@@ -921,6 +1056,7 @@ void BattlegroundSRF::UpdateProgression(uint32 diff)
         for (TeamId team : { TEAM_ALLIANCE, TEAM_HORDE })
             for (Player* player : TeamPlayers(team))
                 RiftProgression::Maintain(player);
+        MaintainObjectiveBuffs();
     }
 
     _structureLevelTimer += diff;
@@ -1109,6 +1245,182 @@ void BattlegroundSRF::DespawnShots()
             if (Creature* orb = map->GetCreature(shot.Orb))
                 orb->DespawnOrUnsummon();
     _shots.clear();
+}
+
+// -------------------------------------------------------------------- jungle
+
+void BattlegroundSRF::SpawnCamp(uint8 camp)
+{
+    Map* map = FindBgMap();
+    for (uint8 i = 0; i < BG_SRF_JUNGLE_MONSTERS; ++i)
+    {
+        SrfMonster const& m = SRF_MONSTERS[i];
+        if (m.camp != camp)
+            continue;
+        uint32 const slot = BG_SRF_CREATURE_JUNGLE_FIRST + i;
+        DelCreature(slot);
+        Position pos = ToWorld(m.x, m.y, m.z, m.o);
+        if (map)
+        {
+            float const ground = map->GetHeight(pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ() + 10.0f, true);
+            if (ground > INVALID_HEIGHT)
+                pos.Relocate(pos.GetPositionX(), pos.GetPositionY(), ground);
+        }
+        Creature* creature = AddCreature(m.entry, slot, pos, TEAM_NEUTRAL, SRF_JUNGLE_CORE_RESPAWN);
+        if (!creature)
+        {
+            TC_LOG_ERROR("bg.battleground", "BattlegroundSRF: failed to spawn jungle monster {} (entry {}).", i, m.entry);
+            continue;
+        }
+        // Neutral until struck; the scuttler never fights back.
+        creature->SetReactState(SRF_CAMPS[camp].kind == SRF_CAMP_SCUTTLE ? REACT_PASSIVE : REACT_DEFENSIVE);
+        ApplyUnitLevel(creature, AverageMatchLevel(), 1.0f);
+    }
+    _camps[camp].Up = true;
+    if (SRF_CAMPS[camp].kind == SRF_CAMP_DRAGON)
+        PSendMessageToAll(BG_SRF_STRING_DRAGON_SPAWNED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr);
+    else if (SRF_CAMPS[camp].kind == SRF_CAMP_BARON)
+        PSendMessageToAll(BG_SRF_STRING_BARON_SPAWNED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr);
+}
+
+// Camps come up on their timers, fight as one - a monster struck pulls its
+// campmates in - and start their respawn timer once every monster is dead.
+// Leashing home is the creature's own: it gives up a target that leaves its
+// camp's threat radius.
+void BattlegroundSRF::UpdateJungle(uint32 elapsed)
+{
+    for (uint32& left : _baronTimer)
+        left = left > elapsed ? left - elapsed : 0;
+
+    Map* map = FindBgMap();
+    if (!map)
+        return;
+
+    for (uint8 camp = 0; camp < BG_SRF_JUNGLE_CAMPS; ++camp)
+    {
+        CampState& cs = _camps[camp];
+        if (!cs.Up)
+        {
+            if (cs.Timer > elapsed)
+                cs.Timer -= elapsed;
+            else
+                SpawnCamp(camp);
+            continue;
+        }
+
+        std::vector<Creature*> alive;
+        Unit* victim = nullptr;
+        for (uint8 i = 0; i < BG_SRF_JUNGLE_MONSTERS; ++i)
+        {
+            if (SRF_MONSTERS[i].camp != camp)
+                continue;
+            Creature* creature = map->GetCreature(BgCreatures[BG_SRF_CREATURE_JUNGLE_FIRST + i]);
+            if (!creature || !creature->IsAlive())
+                continue;
+            alive.push_back(creature);
+            if (!victim && creature->IsInCombat() && creature->GetVictim())
+                victim = creature->GetVictim();
+        }
+        if (alive.empty())
+        {
+            cs.Up = false;
+            cs.Timer = SRF_CAMPS[camp].respawn;
+            continue;
+        }
+        if (victim && SRF_CAMPS[camp].kind != SRF_CAMP_SCUTTLE)
+            for (Creature* creature : alive)
+                if (!creature->IsInCombat() && creature->IsValidAttackTarget(victim))
+                    creature->AI()->AttackStart(victim);
+    }
+}
+
+// The killer takes the gold (League's last hit) and its side the experience; the
+// buff camps buff their killer, the Dragon and Baron the killer's whole team.
+bool BattlegroundSRF::HandleJungleKill(Creature* creature, Player* killer)
+{
+    uint8 index = 0;
+    while (index < BG_SRF_JUNGLE_MONSTERS && BgCreatures[BG_SRF_CREATURE_JUNGLE_FIRST + index] != creature->GetGUID())
+        ++index;
+    if (index == BG_SRF_JUNGLE_MONSTERS)
+        return false;
+
+    SrfMonster const& m = SRF_MONSTERS[index];
+    TeamId const team = GetTeamIndexByTeamId(GetPlayerTeam(killer->GetGUID()));
+    RiftProgression::AddGold(killer, m.gold);
+    AwardExperience(team, creature, m.xp);
+
+    switch (SRF_CAMPS[m.camp].kind)
+    {
+        case SRF_CAMP_BLUE:
+            ApplyBuff(killer, BG_SRF_SPELL_BLUE_BUFF,
+                std::max<int32>(1, int32(float(killer->GetMaxPower(POWER_MANA)) * SRF_BLUE_MANA_PER_TICK)), 0, 0, SRF_BUFF_DURATION);
+            break;
+        case SRF_CAMP_RED:
+            ApplyBuff(killer, BG_SRF_SPELL_RED_BUFF, SRF_RED_AP_PER_LEVEL * int32(killer->GetLevel()), 0, 0, SRF_BUFF_DURATION);
+            break;
+        case SRF_CAMP_DRAGON:
+            ++_dragonsSlain[team];
+            for (Player* player : TeamPlayers(team))
+                ApplyDragonBuff(player, team);
+            PSendMessageToAll(BG_SRF_STRING_DRAGON_SLAIN, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, TeamName(team));
+            break;
+        case SRF_CAMP_BARON:
+            _baronTimer[team] = SRF_BARON_BUFF_DURATION;
+            for (Player* player : TeamPlayers(team))
+            {
+                RiftProgression::AddGold(player, SRF_GOLD_BARON_TEAM);
+                // League's Hand of Baron: the living only, and lost on death.
+                if (player->IsAlive())
+                    ApplyBuff(player, BG_SRF_SPELL_BARON_BUFF, 0, 0, SRF_BARON_STATS_PCT, SRF_BARON_BUFF_DURATION);
+            }
+            PSendMessageToAll(BG_SRF_STRING_BARON_SLAIN, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, TeamName(team));
+            break;
+        default:
+            break;
+    }
+    return true;
+}
+
+// A stock spell with League's values: base points 0 keep the spell's own.
+void BattlegroundSRF::ApplyBuff(Player* player, uint32 spellId, int32 bp0, int32 bp1, int32 bp2, int32 durationMs)
+{
+    player->RemoveAurasDueToSpell(spellId);
+    CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+    if (bp0)
+        args.AddSpellMod(SPELLVALUE_BASE_POINT0, bp0);
+    if (bp1)
+        args.AddSpellMod(SPELLVALUE_BASE_POINT1, bp1);
+    if (bp2)
+        args.AddSpellMod(SPELLVALUE_BASE_POINT2, bp2);
+    player->CastSpell(player, spellId, args);
+    if (durationMs > 0)
+        if (Aura* aura = player->GetAura(spellId))
+        {
+            aura->SetMaxDuration(durationMs);
+            aura->SetDuration(durationMs);
+        }
+}
+
+// The Dragonslayer's cry grows with every dragon the team has slain and lasts
+// the match (the spell's own two hours).
+void BattlegroundSRF::ApplyDragonBuff(Player* player, TeamId team)
+{
+    int32 const stacks = _dragonsSlain[team];
+    if (!stacks || !player->IsAlive())
+        return;
+    ApplyBuff(player, BG_SRF_SPELL_DRAGON_BUFF, SRF_DRAGON_CRIT_PER_STACK * stacks, SRF_DRAGON_AP_PER_STACK * stacks,
+        SRF_DRAGON_CRIT_PER_STACK * stacks, 0);
+}
+
+// Dying strips the stand-in auras, but League's dragon buffs are kept for the
+// match: put them back on whoever lacks them.
+void BattlegroundSRF::MaintainObjectiveBuffs()
+{
+    for (TeamId team : { TEAM_ALLIANCE, TEAM_HORDE })
+        if (_dragonsSlain[team])
+            for (Player* player : TeamPlayers(team))
+                if (player->IsAlive() && !player->HasAura(BG_SRF_SPELL_DRAGON_BUFF))
+                    ApplyDragonBuff(player, team);
 }
 
 // ----------------------------------------------------------------- fountains
