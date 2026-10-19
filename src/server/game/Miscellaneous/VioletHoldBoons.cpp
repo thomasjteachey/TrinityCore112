@@ -110,7 +110,8 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Hoarder,      SPELL_BOON_HOARDER,      1,   1, MASK_ALL,      2, "Boon of the Hoarder",  "extra broker after every wave from now on (run-wide, unique)", "" },
     { Boon::Beastmaster,  SPELL_BOON_BEASTMASTER, 20, 100, MASK_PETS,     5, "Boon of the Beastmaster", "pet and guardian damage and health",  "%" },
     { Boon::Menagerie,    SPELL_BOON_MENAGERIE,    1,   20, MASK_ALL,     4, "Boon of the Menagerie", "random guardian fights beside you each wave", "" },
-    { Boon::Fellowship,   SPELL_BOON_FELLOWSHIP,   1,   3, MASK_ALL,      3, "Boon of Fellowship",   "a random champion joins your side for the rest of the run (run-wide)", "" }
+    { Boon::Fellowship,   SPELL_BOON_FELLOWSHIP,   1,   3, MASK_ALL,      3, "Boon of Fellowship",   "a random champion joins your side for the rest of the run (run-wide)", "" },
+    { Boon::Respite,      SPELL_BOON_RESPITE,      1,   4, MASK_ALL,      5, "Boon of Respite",      "sooner out of combat",                    "s" }
 };
 
 // Three per class. spellId is the FIRST rank where a chain exists
@@ -551,6 +552,7 @@ bool IsBoonSpell(uint32 spellId)
         || (spellId >= SPELL_BOON_EXTRA_FIRST && spellId <= SPELL_BOON_EXTRA_LAST)
         || (spellId >= SPELL_BOON_COOLDOWN_CLASS_FIRST && spellId <= SPELL_BOON_COOLDOWN_CLASS_LAST)
         || (spellId >= SPELL_BOON_BATCH2_FIRST && spellId <= SPELL_BOON_BATCH2_LAST)
+        || spellId == SPELL_BOON_RESPITE
         || spellId == SPELL_KNOWLEDGE_MARKER
         || spellId == SPELL_BOON_EXTRA_ATTACK_SWING;
 }
@@ -1316,6 +1318,11 @@ bool AllowsMountingInCombat(Unit const* caster)
 int32 GetRageGenerationPct(Unit const* unit)
 {
     return AmountOf(unit, SPELL_BOON_RAGE_GEN, 100);
+}
+
+uint32 GetCombatDropReductionMs(Unit const* unit)
+{
+    return uint32(AmountOf(unit, SPELL_BOON_RESPITE, RESPITE_MAX_SECONDS)) * IN_MILLISECONDS;
 }
 
 // --- second batch ------------------------------------------------------------

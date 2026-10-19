@@ -109,6 +109,8 @@ namespace VioletHoldBoons
         Menagerie,      // random guardians summoned as each wave opens
         Fellowship,     // RUN-WIDE: a random playerbot joins the party for the run
 
+        Respite,        // leave PvP combat 1 sec sooner per stack (CombatManager)
+
         Max
     };
 
@@ -180,6 +182,9 @@ namespace VioletHoldBoons
         SPELL_BOON_FELLOWSHIP   = 90297,
         SPELL_BOON_BATCH2_FIRST = 90287,
         SPELL_BOON_BATCH2_LAST  = 90297,
+
+        // 90298 is taken (Reinforced), so Respite sits on its own past it.
+        SPELL_BOON_RESPITE      = 90299,
 
         // Stock "Resurrection Impact Visual", played on a Phoenix rescue.
         SPELL_PHOENIX_VISUAL    = 24171,
@@ -419,6 +424,11 @@ namespace VioletHoldBoons
     TC_GAME_API bool AllowsMountingInCombat(Unit const* caster);
     // Percent added to rage gained from dealing and taking damage (Unit::RewardRage).
     TC_GAME_API int32 GetRageGenerationPct(Unit const* unit);
+    // Milliseconds sooner `unit` drops out of PvP combat - the clones are
+    // players, so that 5 sec timer is the one that ends a Violet Hold fight
+    // (PvPCombatReference::RefreshTimer).
+    TC_GAME_API uint32 GetCombatDropReductionMs(Unit const* unit);
+    constexpr uint8 RESPITE_MAX_SECONDS = 4;
 
     // --- second-batch hooks -------------------------------------------------
     // Ricochet, Reflection and Vampire are aura procs (scripts/Custom). These

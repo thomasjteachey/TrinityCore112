@@ -84,12 +84,18 @@ protected:
         static const uint32 PVP_COMBAT_TIMEOUT = 5 * IN_MILLISECONDS;
 
     private:
-        PvPCombatReference(Unit* first, Unit* second) : CombatReference(first, second, true) { }
+        PvPCombatReference(Unit* first, Unit* second) : CombatReference(first, second, true) { RefreshTimer(); }
 
     bool Update(uint32 tdiff);
     void RefreshTimer();
+    // Violet Hold's Boon of Respite: a side holding it stops counting this
+    // reference (suppressed, like vanish) once the timer is within its
+    // reduction of running out. Re-read on every refresh.
+    bool IsDueEarlyDropFor(Unit const* who) const;
 
     uint32 _combatTimer = PVP_COMBAT_TIMEOUT;
+    uint32 _earlyDropFirst = 0;
+    uint32 _earlyDropSecond = 0;
 
     friend class CombatManager;
 };

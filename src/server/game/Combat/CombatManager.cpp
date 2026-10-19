@@ -23,6 +23,8 @@
 #include "CreatureAI.h"
 #include "Player.h"
 #include "Totem.h"
+#include "VioletHoldBoons.h"
+#include <vector>
 
 /*static*/ bool CombatManager::CanBeginCombat(Unit const* a, Unit const* b)
 {
@@ -127,6 +129,14 @@ bool PvPCombatReference::Update(uint32 tdiff)
 void PvPCombatReference::RefreshTimer()
 {
     _combatTimer = PVP_COMBAT_TIMEOUT;
+    _earlyDropFirst = VioletHoldBoons::GetCombatDropReductionMs(first);
+    _earlyDropSecond = VioletHoldBoons::GetCombatDropReductionMs(second);
+}
+
+bool PvPCombatReference::IsDueEarlyDropFor(Unit const* who) const
+{
+    uint32 const early = (who == first) ? _earlyDropFirst : _earlyDropSecond;
+    return early && _combatTimer <= early && !IsSuppressedFor(who);
 }
 
 CombatManager::~CombatManager()
@@ -137,6 +147,10 @@ CombatManager::~CombatManager()
 
 void CombatManager::Update(uint32 tdiff)
 {
+    // Boon of Respite early drops, applied after the loop: leaving combat runs
+    // AI and exit-combat hooks that may end other references of ours.
+    std::vector<ObjectGuid> earlyDrops;
+
     auto it = _pvpRefs.begin(), end = _pvpRefs.end();
     while (it != end)
     {
@@ -147,7 +161,26 @@ void CombatManager::Update(uint32 tdiff)
             ref->EndCombat(); // this will remove it from the other side
         }
         else
+        {
+            if (ref->first == _owner && (ref->IsDueEarlyDropFor(ref->first) || ref->IsDueEarlyDropFor(ref->second)))
+                earlyDrops.push_back(it->first);
             ++it;
+        }
+    }
+
+    for (ObjectGuid const& guid : earlyDrops)
+    {
+        auto found = _pvpRefs.find(guid);
+        if (found == _pvpRefs.end())
+            continue;
+        PvPCombatReference* const ref = found->second;
+        Unit* const second = ref->second;
+        if (ref->IsDueEarlyDropFor(_owner))
+            ref->SuppressFor(_owner);
+        // the first drop's hooks may have ended this reference
+        found = _pvpRefs.find(guid);
+        if (found != _pvpRefs.end() && found->second == ref && ref->IsDueEarlyDropFor(second))
+            ref->SuppressFor(second);
     }
 }
 
