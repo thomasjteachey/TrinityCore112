@@ -19,8 +19,10 @@
  * with a burst, and only then deals its damage. A fallen inhibitor stands back up
  * after five minutes.
  *
- * Minion waves leave both bases every 30 seconds down all three lanes, following
- * League's own lane waypoints, and fight whatever enemy they meet. The fountains
+ * Minion waves leave both bases every 30 seconds down all three lanes, walking
+ * League's own lane waypoints as one smooth path, and fight whatever enemy they
+ * meet. Positions, ranges and speeds are League's, scaled by SRF_MAP_SCALE (the
+ * size the map was converted at). The fountains
  * heal their own team and burn the other.
  *
  * Units, structures and the shot effects are League's own models and textures,
@@ -168,7 +170,8 @@ private:
         ObjectGuid Guid;
         TeamId Team = TEAM_ALLIANCE;
         uint8 Lane = BG_SRF_LANE_TOP;
-        uint8 Waypoint = 0;        // index into the team's walk order of the lane
+        uint32 PathIndex = 0;      // how far along its lane path (LanePath) it has come
+        uint32 SplineEnd = 0;      // the last path point of the spline it is walking
         bool Walking = false;
     };
 
@@ -195,6 +198,7 @@ private:
     void OnStructureDestroyed(uint8 slot);
 
     void SpawnWave();
+    std::vector<Position> const& LanePath(TeamId team, uint8 lane);
     void UpdateMinions();
     void DespawnMinions();
     Unit* FindMinionTarget(Creature* minion, TeamId team, float range) const;
@@ -210,6 +214,7 @@ private:
     std::array<StructureState, 2 * BG_SRF_STRUCTURES_PER_TEAM> _structures;
     std::array<TurretState, 2 * BG_SRF_STRUCTURES_PER_TEAM> _turrets;
     std::vector<Minion> _minions;
+    std::array<std::array<std::vector<Position>, BG_SRF_LANE_COUNT>, PVP_TEAMS_COUNT> _lanePaths;
     std::vector<Shot> _shots;
     uint32 _waveTimer;
     uint32 _minionTimer;

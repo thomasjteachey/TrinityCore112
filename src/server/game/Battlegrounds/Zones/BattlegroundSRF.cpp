@@ -7,6 +7,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "MoveSpline.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "SpellDefines.h"
@@ -19,53 +20,72 @@
 
 namespace
 {
+// The Rift's size. League units become yards at SRF_MAP_SCALE / 50, the same mapping
+// the map, its terrain and every model were converted with (wow/import/rift/scripts/
+// rift_scale.py): change one, change both. Everything below is League's own
+// numbers - placements in League units, ranges and speeds as League has them - so
+// the battleground follows the map whatever its size.
+float constexpr SRF_MAP_SCALE = 1.5f;
+float constexpr SRF_YARDS_PER_UNIT = SRF_MAP_SCALE / 50.0f;
+float constexpr SRF_LEAGUE_CENTRE = 7400.0f;
+
+constexpr float Yards(float units) { return units * SRF_YARDS_PER_UNIT; }
+
+// League space is x east, y up, z north; WoW is +X north, +Y west, +Z up, the
+// map centre on the world origin.
+Position ToWorld(float x, float y, float z, float o = 0.0f)
+{
+    return Position((z - SRF_LEAGUE_CENTRE) * SRF_YARDS_PER_UNIT, -(x - SRF_LEAGUE_CENTRE) * SRF_YARDS_PER_UNIT,
+        y * SRF_YARDS_PER_UNIT, o);
+}
+
 struct SrfStructure
 {
     BG_SRF_StructureKind kind;
     uint8 lane;
-    float x, y, z, o;
+    float x, y, z;   // League units
+    float o;         // WoW facing, from the placement's forward axis
 };
 
 // League's own placements (GdsMapObject transforms in base.materials.bin, read by
 // wow/import/rift/scripts/layout_extract.py), in slot order: per lane the outer,
 // inner and inhibitor turret and the inhibitor, then the two nexus turrets and
-// the nexus. League names: Turret_T1_L_03 / L_02 / C_06, Barracks_T1_L1 for
-// Order's top lane, and so on.
+// the nexus.
 SrfStructure constexpr SRF_STRUCTURES[PVP_TEAMS_COUNT][BG_SRF_STRUCTURES_PER_TEAM] =
 {
     { // Order (Alliance), the south-west base
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_TOP,   60.820f,  128.380f, 0.740f, 6.1959f },
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_TOP,  -14.020f,  117.760f, 0.840f, 6.2657f },
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_TOP,  -62.260f,  124.620f, 1.815f, 0.0524f },
-        { BG_SRF_KIND_INHIBITOR, BG_SRF_LANE_TOP,  -76.536f,  124.614f, 1.895f, 1.5708f },
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_MID,  -20.080f,   31.080f, 0.880f, 5.4629f },
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_MID,  -51.760f,   47.040f, 0.860f, 5.5676f },
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_MID,  -74.080f,   74.980f, 1.820f, 5.4978f },
-        { BG_SRF_KIND_INHIBITOR, BG_SRF_LANE_MID,  -83.840f,   83.940f, 1.840f, 0.7854f },
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_BOT, -127.420f,  -62.080f, 0.820f, 4.7085f },
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_BOT, -118.340f,    9.620f, 0.860f, 4.6949f },
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_BOT, -122.940f,   62.380f, 1.720f, 4.6251f },
-        { BG_SRF_KIND_INHIBITOR, BG_SRF_LANE_BOT, -123.165f,   78.902f, 1.780f, 0.0000f },
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_NONE, -102.600f, 113.040f, 1.760f, 5.7596f },
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_NONE, -111.860f, 104.460f, 1.780f, 5.2360f },
-        { BG_SRF_KIND_NEXUS,     BG_SRF_LANE_NONE, -114.820f, 116.980f, 1.720f, 0.7854f }
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_TOP,    981.00f,   37.00f,  10441.00f, 6.1959f }, // Turret_T1_L_03
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_TOP,   1512.00f,   42.00f,   6699.00f, 6.2657f }, // Turret_T1_L_02
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_TOP,   1169.00f,   90.73f,   4287.00f, 0.0524f }, // Turret_T1_C_06
+        { BG_SRF_KIND_INHIBITOR, BG_SRF_LANE_TOP,   1169.28f,   94.73f,   3573.22f, 1.5708f }, // Barracks_T1_L1
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_MID,   5846.00f,   44.00f,   6396.00f, 5.4629f }, // Turret_T1_C_05
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_MID,   5048.00f,   43.00f,   4812.00f, 5.5676f }, // Turret_T1_C_04
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_MID,   3651.00f,   91.00f,   3696.00f, 5.4978f }, // Turret_T1_C_03
+        { BG_SRF_KIND_INHIBITOR, BG_SRF_LANE_MID,   3203.00f,   92.00f,   3208.00f, 0.7854f }, // Barracks_T1_C1
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_BOT,  10504.00f,   41.00f,   1029.00f, 4.7085f }, // Turret_T1_R_03
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_BOT,   6919.00f,   43.00f,   1483.00f, 4.6949f }, // Turret_T1_R_02
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_BOT,   4281.00f,   86.00f,   1253.00f, 4.6251f }, // Turret_T1_C_07
+        { BG_SRF_KIND_INHIBITOR, BG_SRF_LANE_BOT,   3454.88f,   89.00f,   1241.76f, 0.0000f }, // Barracks_T1_R1
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_NONE,   1748.00f,   88.00f,   2270.00f, 5.7596f }, // Turret_T1_C_01
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_NONE,   2177.00f,   89.00f,   1807.00f, 5.2360f }, // Turret_T1_C_02
+        { BG_SRF_KIND_NEXUS,     BG_SRF_LANE_NONE,   1551.00f,   86.00f,   1659.00f, 0.7854f }  // HQ_T1
     },
     { // Chaos (Horde), the north-east base
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_TOP,  129.500f,   61.640f, 0.760f, 2.0071f },
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_TOP,  120.220f,  -10.860f, 0.760f, 1.6598f },
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_TOP,  125.000f,  -61.620f, 1.760f, 1.6252f },
-        { BG_SRF_KIND_INHIBITOR, BG_SRF_LANE_TOP,  125.199f,  -77.220f, 1.760f, 4.7124f },
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_MID,   22.200f,  -31.100f, 0.760f, 2.2965f },
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_MID,   54.260f,  -47.340f, 0.760f, 2.3562f },
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_MID,   76.140f,  -74.680f, 1.760f, 2.3562f },
-        { BG_SRF_KIND_INHIBITOR, BG_SRF_LANE_MID,   85.340f,  -84.061f, 1.780f, 5.4978f },
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_BOT,  -57.900f, -129.320f, 0.760f, 3.1174f },
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_BOT,   16.520f, -118.540f, 0.760f, 3.1416f },
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_BOT,   63.440f, -124.480f, 1.760f, 3.1416f },
-        { BG_SRF_KIND_INHIBITOR, BG_SRF_LANE_BOT,   78.323f, -123.963f, 1.780f, 0.0000f },
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_NONE,  104.240f, -113.040f, 1.760f, 2.6005f },
-        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_NONE,  113.680f, -104.220f, 1.760f, 2.0769f },
-        { BG_SRF_KIND_NEXUS,     BG_SRF_LANE_NONE,  116.700f, -116.860f, 1.820f, 0.0000f }
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_TOP,   4318.00f,   38.00f,  13875.00f, 2.0071f }, // Turret_T2_L_03
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_TOP,   7943.00f,   38.00f,  13411.00f, 1.6598f }, // Turret_T2_L_02
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_TOP,  10481.00f,   88.00f,  13650.00f, 1.6252f }, // Turret_T2_L_01
+        { BG_SRF_KIND_INHIBITOR, BG_SRF_LANE_TOP,  11261.00f,   88.00f,  13659.96f, 4.7124f }, // Barracks_T2_L1
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_MID,   8955.00f,   38.00f,   8510.00f, 2.2965f }, // Turret_T2_C_05
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_MID,   9767.00f,   38.00f,  10113.00f, 2.3562f }, // Turret_T2_C_04
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_MID,  11134.00f,   88.00f,  11207.00f, 2.3562f }, // Turret_T2_C_03
+        { BG_SRF_KIND_INHIBITOR, BG_SRF_LANE_MID,  11603.07f,   89.00f,  11667.00f, 5.4978f }, // Barracks_T2_C1
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_BOT,  13866.00f,   38.00f,   4505.00f, 3.1174f }, // Turret_T2_R_03
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_BOT,  13327.00f,   38.00f,   8226.00f, 3.1416f }, // Turret_T2_R_02
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_BOT,  13624.00f,   88.00f,  10572.00f, 3.1416f }, // Turret_T2_R_01
+        { BG_SRF_KIND_INHIBITOR, BG_SRF_LANE_BOT,  13598.14f,   89.00f,  11316.13f, 0.0000f }, // Barracks_T2_R1
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_NONE,  13052.00f,   88.00f,  12612.00f, 2.6005f }, // Turret_T2_C_01
+        { BG_SRF_KIND_TURRET,    BG_SRF_LANE_NONE,  12611.00f,   88.00f,  13084.00f, 2.0769f }, // Turret_T2_C_02
+        { BG_SRF_KIND_NEXUS,     BG_SRF_LANE_NONE,  13243.00f,   91.00f,  13235.00f, 0.0000f }  // HQ_T2
     }
 };
 
@@ -75,31 +95,36 @@ uint8 constexpr SRF_SLOT_NEXUS          = 14;
 
 struct SrfPoint
 {
-    float x, y;
+    float x, y, z;   // League units
 };
 
 // League's __NAV_<lane>02..17 lane markers, Order's end first. Chaos minions
 // walk the same list backwards.
 SrfPoint constexpr SRF_LANE_TOP[] =
 {
-    { -76.06f, 117.84f }, { -49.80f, 120.36f }, { -13.70f, 124.60f }, {   7.74f, 123.86f },
-    {  33.44f, 123.42f }, {  60.46f, 122.30f }, {  84.02f, 117.84f }, { 101.18f, 108.64f },
-    { 114.00f,  93.60f }, { 121.46f,  78.28f }, { 123.94f,  60.82f }, { 124.16f,  37.92f },
-    { 124.94f,  14.64f }, { 125.30f, -14.26f }, { 120.94f, -49.78f }, { 118.88f, -78.96f }
+    {   1508.0f,  133.0f,   3597.0f }, {   1382.0f,   92.0f,   4910.0f }, {   1170.0f,   16.0f,   6715.0f },
+    {   1207.0f,   13.0f,   7787.0f }, {   1229.0f,    0.0f,   9072.0f }, {   1285.0f,   11.0f,  10423.0f },
+    {   1508.0f,   10.0f,  11601.0f }, {   1968.0f,   10.0f,  12459.0f }, {   2720.0f,   10.0f,  13100.0f },
+    {   3486.0f,   10.0f,  13473.0f }, {   4359.0f,   10.0f,  13597.0f }, {   5504.0f,   10.0f,  13608.0f },
+    {   6668.0f,   10.0f,  13647.0f }, {   8113.0f,   10.0f,  13665.0f }, {   9889.0f,   91.0f,  13447.0f },
+    {  11348.0f,  145.0f,  13344.0f }
 };
 SrfPoint constexpr SRF_LANE_MID[] =
 {
-    { -78.52f,  88.96f }, { -64.60f,  70.88f }, { -45.18f,  50.52f }, { -36.22f,  40.50f },
-    { -29.44f,  31.54f }, { -20.68f,  22.60f }, { -10.72f,  12.72f }, {   0.10f,  -0.16f },
-    {  12.44f, -13.58f }, {  24.94f, -24.36f }, {  34.10f, -34.98f }, {  42.86f, -44.50f },
-    {  52.70f, -55.86f }, {  64.92f, -68.44f }, {  81.58f, -88.16f }
+    {   2952.0f,  146.0f,   3474.0f }, {   3856.0f,  107.0f,   4170.0f }, {   4874.0f,   43.0f,   5141.0f },
+    {   5375.0f,   58.0f,   5589.0f }, {   5823.0f,   87.0f,   5928.0f }, {   6270.0f,   31.0f,   6366.0f },
+    {   6764.0f,   41.0f,   6864.0f }, {   7408.0f,   51.0f,   7405.0f }, {   8079.0f,  147.0f,   8022.0f },
+    {   8618.0f,  147.0f,   8647.0f }, {   9149.0f,  147.0f,   9105.0f }, {   9625.0f,  147.0f,   9543.0f },
+    {  10193.0f,  147.0f,  10035.0f }, {  10822.0f,  147.0f,  10646.0f }, {  11808.0f,  147.0f,  11479.0f }
 };
 SrfPoint constexpr SRF_LANE_BOT[] =
 {
-    { -116.22f,  78.58f }, { -119.20f,  51.12f }, { -124.74f,   9.50f }, { -123.40f, -11.50f },
-    { -123.76f, -29.40f }, { -121.98f, -62.12f }, { -118.56f, -80.64f }, { -109.74f, -97.88f },
-    {  -95.44f, -112.02f }, { -74.12f, -122.58f }, { -52.20f, -127.02f }, { -31.78f, -126.82f },
-    {   -4.46f, -126.20f }, {  24.16f, -125.92f }, {  52.80f, -119.28f }, {  78.68f, -117.06f }
+    {   3471.0f,  114.0f,   1589.0f }, {   4844.0f,  112.0f,   1440.0f }, {   6925.0f,   -7.0f,   1163.0f },
+    {   7975.0f,  -30.0f,   1230.0f }, {   8870.0f,    9.0f,   1212.0f }, {  10506.0f,   17.0f,   1301.0f },
+    {  11432.0f,   17.0f,   1472.0f }, {  12294.0f,   -3.0f,   1913.0f }, {  13001.0f,   -3.0f,   2628.0f },
+    {  13529.0f,   -7.0f,   3694.0f }, {  13751.0f,   -7.0f,   4790.0f }, {  13741.0f,   -7.0f,   5811.0f },
+    {  13710.0f,  -13.0f,   7177.0f }, {  13696.0f,  -13.0f,   8608.0f }, {  13364.0f,   89.0f,  10040.0f },
+    {  13253.0f,   95.0f,  11334.0f }
 };
 
 struct SrfLane
@@ -118,26 +143,19 @@ SrfLane constexpr SRF_LANES[BG_SRF_LANE_COUNT] =
 // C01 / R01).
 SrfPoint constexpr SRF_BARRACKS[PVP_TEAMS_COUNT][BG_SRF_LANE_COUNT] =
 {
-    { { -106.18f,  125.82f }, { -106.42f,  107.84f }, { -124.58f,  107.32f } },
-    { {  126.90f, -108.00f }, {  107.68f, -107.52f }, {  108.90f, -126.38f } }
+    { {   1109.0f,  124.0f,   2091.0f }, {   2008.0f,  119.0f,   2079.0f }, {   2034.0f,  128.0f,   1171.0f } },
+    { {  12800.0f,  128.0f,  13745.0f }, {  12776.0f,  110.0f,  12784.0f }, {  13719.0f,  119.0f,  12845.0f } }
 };
 
-// The fountains (__Spawn_T1 / T2). The same spots are WorldSafeLocs 52710/52711.
-Position const SRF_FOUNTAIN[PVP_TEAMS_COUNT] =
-{
-    { -138.78f,  140.12f, 3.42f, 5.4978f },
-    {  139.82f, -138.80f, 3.58f, 2.3562f }
-};
+// The fountains (__Spawn_T1 / T2), facing the middle. The same spots are
+// WorldSafeLocs 52710/52711.
+SrfPoint constexpr SRF_FOUNTAIN_AT[PVP_TEAMS_COUNT] = { { 394.0f, 171.0f, 461.0f }, { 14340.0f, 179.0f, 14391.0f } };
+float constexpr SRF_FOUNTAIN_FACING[PVP_TEAMS_COUNT] = { 5.4978f, 2.3562f };
 
-// Lanes and fountains sit within a couple of yards of this height; the path
-// generator snaps a point onto the navmesh below it.
-float constexpr SRF_LANE_Z = 1.0f;
-
-float constexpr SRF_TURRET_RANGE        = 15.0f;   // League's 750 units
-float constexpr SRF_MINION_AGGRO_RANGE  = 8.0f;
-float constexpr SRF_WAYPOINT_REACHED    = 3.0f;
-float constexpr SRF_FOUNTAIN_HEAL_RANGE = 12.0f;
-float constexpr SRF_FOUNTAIN_BURN_RANGE = 14.0f;
+float constexpr SRF_TURRET_RANGE        = Yards(750.0f);
+float constexpr SRF_MINION_AGGRO_RANGE  = Yards(400.0f);
+float constexpr SRF_FOUNTAIN_HEAL_RANGE = Yards(600.0f);
+float constexpr SRF_FOUNTAIN_BURN_RANGE = Yards(700.0f);
 // Turret shots as shares of the target's maximum health: minions die to a few
 // shots, and a player who stays under a turret takes a little more every shot.
 float constexpr SRF_TURRET_MINION_SHARE = 0.45f;
@@ -146,17 +164,33 @@ float constexpr SRF_TURRET_PLAYER_RAMP  = 0.10f;
 float constexpr SRF_TURRET_PLAYER_MAX   = 0.60f;
 // A shot leaves from the turret's crystal and flies at League's 1200 units a
 // second, homing on its target; it lands when it reaches the target's chest.
-float constexpr SRF_SHOT_ORIGIN_HEIGHT  = 9.5f;
-float constexpr SRF_SHOT_SPEED          = 24.0f;
-float constexpr SRF_SHOT_HIT_DISTANCE   = 1.5f;
-float constexpr SRF_SHOT_AIM_HEIGHT     = 1.2f;
+float constexpr SRF_SHOT_ORIGIN_HEIGHT  = Yards(475.0f);
+float constexpr SRF_SHOT_SPEED          = Yards(1200.0f);
+float constexpr SRF_SHOT_HIT_DISTANCE   = Yards(75.0f);
+float constexpr SRF_SHOT_AIM_HEIGHT     = Yards(60.0f);
 float constexpr SRF_FOUNTAIN_HEAL_SHARE = 0.10f;
 float constexpr SRF_FOUNTAIN_BURN_SHARE = 0.30f;
+
+// Lane paths: League's markers joined up in steps of SRF_PATH_STEP, each point
+// stood on the ground, and walked as one smooth spline of up to SRF_SPLINE_POINTS
+// at a time. The next stretch is laid down before the current one runs out, so a
+// minion never stops in the middle of its lane.
+float constexpr SRF_PATH_STEP           = 6.0f;
+uint32 constexpr SRF_SPLINE_POINTS      = 40;
+uint32 constexpr SRF_SPLINE_RELAUNCH    = 6;     // points before the end
+uint32 constexpr SRF_PATH_LOOKAHEAD     = 25;
+uint32 constexpr SRF_LANE_SPLINE_ID     = 1;
 
 TeamId SlotTeam(uint8 slot) { return slot < BG_SRF_STRUCTURES_PER_TEAM ? TEAM_ALLIANCE : TEAM_HORDE; }
 uint8 SlotIndex(uint8 slot) { return slot % BG_SRF_STRUCTURES_PER_TEAM; }
 uint8 SlotOf(TeamId team, uint8 index) { return uint8(team) * BG_SRF_STRUCTURES_PER_TEAM + index; }
 SrfStructure const& StructureAt(uint8 slot) { return SRF_STRUCTURES[SlotTeam(slot)][SlotIndex(slot)]; }
+Position StructurePos(uint8 slot) { SrfStructure const& s = StructureAt(slot); return ToWorld(s.x, s.y, s.z, s.o); }
+Position FountainPos(TeamId team)
+{
+    SrfPoint const& f = SRF_FOUNTAIN_AT[team];
+    return ToWorld(f.x, f.y, f.z, SRF_FOUNTAIN_FACING[team]);
+}
 uint32 TeamValue(TeamId team) { return team == TEAM_ALLIANCE ? ALLIANCE : HORDE; }
 TeamId OtherTeam(TeamId team) { return team == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE; }
 char const* TeamName(TeamId team) { return team == TEAM_ALLIANCE ? "The Alliance" : "The Horde"; }
@@ -170,19 +204,6 @@ uint32 StructureEntry(uint8 slot)
         case BG_SRF_KIND_NEXUS:     return order ? BG_SRF_ENTRY_ORDER_NEXUS : BG_SRF_ENTRY_CHAOS_NEXUS;
         default:                    return order ? BG_SRF_ENTRY_ORDER_TURRET : BG_SRF_ENTRY_CHAOS_TURRET;
     }
-}
-
-// The lane's index-th point in the team's walking direction, then the enemy nexus.
-Position LanePoint(TeamId team, uint8 lane, uint8 index)
-{
-    SrfLane const& l = SRF_LANES[lane];
-    if (index >= l.count)
-    {
-        SrfStructure const& nexus = SRF_STRUCTURES[OtherTeam(team)][SRF_SLOT_NEXUS];
-        return Position(nexus.x, nexus.y, SRF_LANE_Z);
-    }
-    SrfPoint const& p = l.points[team == TEAM_ALLIANCE ? index : l.count - 1 - index];
-    return Position(p.x, p.y, SRF_LANE_Z);
 }
 }
 
@@ -224,6 +245,9 @@ void BattlegroundSRF::Reset()
     _turrets.fill(TurretState());
     _minions.clear();
     _shots.clear();
+    for (auto& team : _lanePaths)
+        for (std::vector<Position>& lane : team)
+            lane.clear();
     _waveTimer = 0;
     _minionTimer = 0;
     _turretTimer = 0;
@@ -258,7 +282,7 @@ bool BattlegroundSRF::SetupBattleground()
             TC_LOG_ERROR("bg.battleground", "BattlegroundSRF::SetupBattleground: WorldSafeLocs {} is missing.", spirit.safeLoc);
             return false;
         }
-        if (!AddSpiritGuide(spirit.type, loc->Loc.X, loc->Loc.Y, loc->Loc.Z, SRF_FOUNTAIN[spirit.team].GetOrientation(), spirit.team))
+        if (!AddSpiritGuide(spirit.type, loc->Loc.X, loc->Loc.Y, loc->Loc.Z, FountainPos(spirit.team).GetOrientation(), spirit.team))
             return false;
     }
 
@@ -268,9 +292,8 @@ bool BattlegroundSRF::SetupBattleground()
 
 bool BattlegroundSRF::SpawnStructure(uint8 slot)
 {
-    SrfStructure const& s = StructureAt(slot);
     DelCreature(slot);
-    if (!AddCreature(StructureEntry(slot), slot, s.x, s.y, s.z, s.o, SlotTeam(slot)))
+    if (!AddCreature(StructureEntry(slot), slot, StructurePos(slot), SlotTeam(slot)))
     {
         TC_LOG_ERROR("bg.battleground", "BattlegroundSRF: failed to spawn structure slot {} (entry {}).", slot, StructureEntry(slot));
         return false;
@@ -466,14 +489,16 @@ void BattlegroundSRF::SpawnWave()
         uint32 const caster = team == TEAM_ALLIANCE ? BG_SRF_ENTRY_ORDER_CASTER : BG_SRF_ENTRY_CHAOS_CASTER;
         for (uint8 lane = 0; lane < BG_SRF_LANE_COUNT; ++lane)
         {
-            SrfPoint const& gate = SRF_BARRACKS[team][lane];
-            Position const first = LanePoint(team, lane, 0);
-            float const facing = std::atan2(first.GetPositionY() - gate.y, first.GetPositionX() - gate.x);
+            std::vector<Position> const& path = LanePath(team, lane);
+            if (path.size() < 2)
+                continue;
+            Position const gate = path[0];
+            float const facing = gate.GetAbsoluteAngle(&path[1]);
             for (uint8 i = 0; i < BG_SRF_MELEE_PER_WAVE + BG_SRF_CASTERS_PER_WAVE; ++i)
             {
                 // a small block, melee in front, so the wave does not spawn stacked
                 float const ox = float(i % 3) - 1.0f, oy = float(i / 3);
-                Position const pos(gate.x + ox * 1.5f, gate.y + oy * 1.5f, SRF_LANE_Z + 1.5f, facing);
+                Position const pos(gate.GetPositionX() + ox * 2.0f, gate.GetPositionY() + oy * 2.0f, gate.GetPositionZ() + 1.0f, facing);
                 TempSummon* minion = nexus->SummonCreature(i < BG_SRF_MELEE_PER_WAVE ? melee : caster, pos,
                     TEMPSUMMON_CORPSE_TIMED_DESPAWN, 3s);
                 if (!minion)
@@ -531,6 +556,50 @@ Unit* BattlegroundSRF::FindMinionTarget(Creature* minion, TeamId team, float ran
     return best;
 }
 
+// League's markers, joined up and stood on the ground: barracks, the lane in the
+// team's walking direction, then the enemy nexus. Built once per match, on first
+// use, because it needs the map's heights.
+std::vector<Position> const& BattlegroundSRF::LanePath(TeamId team, uint8 lane)
+{
+    std::vector<Position>& path = _lanePaths[team][lane];
+    if (!path.empty())
+        return path;
+    Map* map = FindBgMap();
+    if (!map)
+        return path;
+
+    std::vector<Position> nodes;
+    SrfPoint const& gate = SRF_BARRACKS[team][lane];
+    nodes.push_back(ToWorld(gate.x, gate.y, gate.z));
+    SrfLane const& l = SRF_LANES[lane];
+    for (uint8 i = 0; i < l.count; ++i)
+    {
+        SrfPoint const& p = l.points[team == TEAM_ALLIANCE ? i : l.count - 1 - i];
+        nodes.push_back(ToWorld(p.x, p.y, p.z));
+    }
+    nodes.push_back(StructurePos(SlotOf(OtherTeam(team), SRF_SLOT_NEXUS)));
+
+    path.push_back(nodes[0]);
+    for (size_t n = 1; n < nodes.size(); ++n)
+    {
+        Position const& a = nodes[n - 1];
+        Position const& b = nodes[n];
+        uint32 const steps = std::max<uint32>(1, uint32(std::ceil(a.GetExactDist2d(&b) / SRF_PATH_STEP)));
+        for (uint32 k = 1; k <= steps; ++k)
+        {
+            float const f = float(k) / float(steps);
+            float const x = a.GetPositionX() + (b.GetPositionX() - a.GetPositionX()) * f;
+            float const y = a.GetPositionY() + (b.GetPositionY() - a.GetPositionY()) * f;
+            float z = a.GetPositionZ() + (b.GetPositionZ() - a.GetPositionZ()) * f;
+            float const ground = map->GetHeight(x, y, z + 10.0f, true);
+            if (ground > INVALID_HEIGHT)
+                z = ground;
+            path.emplace_back(x, y, z);
+        }
+    }
+    return path;
+}
+
 void BattlegroundSRF::UpdateMinions()
 {
     Map* map = FindBgMap();
@@ -566,15 +635,42 @@ void BattlegroundSRF::UpdateMinions()
             continue;
         }
 
-        Position dest = LanePoint(m.Team, m.Lane, m.Waypoint);
-        while (m.Waypoint < SRF_LANES[m.Lane].count && creature->GetExactDist2d(dest) < SRF_WAYPOINT_REACHED)
-            dest = LanePoint(m.Team, m.Lane, ++m.Waypoint);
+        std::vector<Position> const& path = LanePath(m.Team, m.Lane);
+        if (path.size() < 2)
+            continue;
 
-        if (!m.Walking || creature->GetMotionMaster()->GetCurrentMovementGeneratorType() != POINT_MOTION_TYPE)
+        // How far along the lane it is: the nearest point a little ahead of where
+        // it last was, so a minion pulled sideways by a fight rejoins further on
+        // rather than walking back.
+        uint32 best = m.PathIndex;
+        float bestDist = creature->GetExactDist2dSq(&path[best]);
+        uint32 const last = std::min<uint32>(uint32(path.size()), m.PathIndex + SRF_PATH_LOOKAHEAD);
+        for (uint32 i = m.PathIndex + 1; i < last; ++i)
         {
-            creature->GetMotionMaster()->MovePoint(1, dest);
-            m.Walking = true;
+            float const d = creature->GetExactDist2dSq(&path[i]);
+            if (d < bestDist)
+            {
+                best = i;
+                bestDist = d;
+            }
         }
+        m.PathIndex = best;
+        if (m.PathIndex + 1 >= path.size())
+            continue;   // at the enemy nexus
+
+        bool const onSpline = m.Walking && !creature->movespline->Finalized()
+            && creature->GetMotionMaster()->GetCurrentMovementGeneratorType() == EFFECT_MOTION_TYPE;
+        if (onSpline && m.PathIndex + SRF_SPLINE_RELAUNCH < m.SplineEnd)
+            continue;
+
+        std::vector<Position> points;
+        points.push_back(creature->GetPosition());
+        uint32 const end = std::min<uint32>(uint32(path.size()), m.PathIndex + 1 + SRF_SPLINE_POINTS);
+        for (uint32 i = m.PathIndex + 1; i < end; ++i)
+            points.push_back(path[i]);
+        creature->GetMotionMaster()->MoveSmoothPath(SRF_LANE_SPLINE_ID, points.data(), points.size(), false);
+        m.Walking = true;
+        m.SplineEnd = end - 1;
     }
 }
 
@@ -744,13 +840,13 @@ void BattlegroundSRF::UpdateFountains()
             continue;
 
         TeamId const team = GetTeamIndexByTeamId(bgPlayer.Team);
-        if (player->GetExactDist2d(SRF_FOUNTAIN[team]) <= SRF_FOUNTAIN_HEAL_RANGE)
+        if (player->GetExactDist2d(FountainPos(team)) <= SRF_FOUNTAIN_HEAL_RANGE)
         {
             player->ModifyHealth(int32(player->GetMaxHealth() * SRF_FOUNTAIN_HEAL_SHARE));
             Powers const power = player->GetPowerType();
             player->ModifyPower(power, int32(player->GetMaxPower(power) * SRF_FOUNTAIN_HEAL_SHARE));
         }
-        else if (player->GetExactDist2d(SRF_FOUNTAIN[OtherTeam(team)]) <= SRF_FOUNTAIN_BURN_RANGE)
+        else if (player->GetExactDist2d(FountainPos(OtherTeam(team))) <= SRF_FOUNTAIN_BURN_RANGE)
             player->EnvironmentalDamage(DAMAGE_FIRE, uint32(player->GetMaxHealth() * SRF_FOUNTAIN_BURN_SHARE));
     }
 }
@@ -770,7 +866,7 @@ bool BattlegroundSRF::HandlePlayerUnderMap(Player* player)
     if (!player)
         return false;
     TeamId const team = GetTeamIndexByTeamId(GetPlayerTeam(player->GetGUID()) ? GetPlayerTeam(player->GetGUID()) : player->GetTeam());
-    Position const& fountain = SRF_FOUNTAIN[team];
+    Position const fountain = FountainPos(team);
     player->TeleportTo(GetMapId(), fountain.GetPositionX(), fountain.GetPositionY(), fountain.GetPositionZ() + 1.0f, fountain.GetOrientation());
     return true;
 }
